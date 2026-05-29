@@ -635,6 +635,28 @@ C++ plugin is responsible for populating it from OpenFOAM cell field data.
 
 ---
 
+## Development workflow
+
+Code review goes through GitHub PRs. The Claude Code sandbox doesn't
+have an SSH key for the repo's `git@github.com:...` remote and `gh`
+isn't installed, so Claude can't push branches or open PRs directly.
+The convention is:
+
+1. Claude commits changes on a sensibly-named local branch (e.g.
+   `fix-<thing>`, `add-<feature>`, `<area>-<change>`) — not on
+   `main`, not on the `claude/<worktree-name>` scratch branch.
+2. The user pushes that branch from their own checkout and opens
+   the PR. From a Claude worktree the branch can be picked up with
+   `git fetch <worktree-path> <branch>:<branch>` and then
+   `git push -u origin <branch>` from the main checkout, or by
+   `cd`-ing into the worktree and pushing if the user's shell has
+   the SSH key.
+
+Don't try to `git push` from inside the sandbox; it fails with
+"Permission denied (publickey)" and wastes a turn.
+
+---
+
 ## Post-Change Checklist
 
 After **every code change**, before considering the task complete, review and
