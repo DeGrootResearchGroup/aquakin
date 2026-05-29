@@ -260,7 +260,10 @@ function theorem at each step, like a CFD discrete adjoint). Capping `dtmax` to
 a small multiple of the fastest reaction timescale fixes it; the resulting
 gradients match finite differences. For `wats_sewer` at the reference
 stiffness (biofilm reactions ~1000 d⁻¹, timescale ~1e-3 d) the gradient is
-non-finite uncapped and correct for `dtmax ≲ 2e-3` d. A future alternative is a
+non-finite uncapped and correct for `dtmax ≲ 5e-4` d (the calibrated low
+sulfur-oxidation saturation constants keep those reactions fast even as nitrate
+falls, so a tighter cap than the bulk timescale suggests is needed). A future
+alternative is a
 quasi-steady-state (QSS) reduction of the near-instantaneous fast reactions,
 which would remove the stiff modes entirely and avoid needing the cap.
 

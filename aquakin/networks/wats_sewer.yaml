@@ -104,7 +104,7 @@ expressions:
 parameters:
   mu_h:        {value: 6.7,   units: "1/d"}
   k_12_o2:     {value: 18.0,  units: "gO2^0.5 m^-0.5 d^-1"}
-  k_12_no:     {value: 12.0,  units: "gN^0.5 m^-0.5 d^-1"}
+  k_12_no:     {value: 7.95,  units: "gN^0.5 m^-0.5 d^-1", bounds: [1.0, 30.0]}
   eps:         {value: 0.15,  units: "-"}
   k_sw:        {value: 1.0,   units: "gCOD/m3"}
   k_sf:        {value: 5.0,   units: "gCOD/m3"}
@@ -139,11 +139,18 @@ parameters:
   n1:          {value: 0.9,   units: "-"}                   # reaction order in sulfide (chem/bio ox)
   n2:          {value: 0.15,  units: "-"}                   # reaction order in oxygen (chem/bio ox)
   k_sII_ox_f:  {value: 12.0,  units: "gS/m2/d"}
-  k_sII_anox_f: {value: 19.3, units: "gS/m2/d"}
+  k_sII_anox_f: {value: 18.45, units: "gS/m2/d", bounds: [1.0, 40.0]}
   k_s0_acid:   {value: 0.2,   units: "gS/m2/d"}
   k_s0_hyd:    {value: 0.0,   units: "gS/m2/d"}     # elemental-S reduction by H2 (0 at defaults)
   k_s0_ox_f:   {value: 0.0,   units: "gS/m2/d"}     # aerobic elemental-S oxidation (0 at defaults)
-  k_s0_anox_f: {value: 4.23,  units: "gS/m2/d"}
+  k_s0_anox_f: {value: 2.64,  units: "gS/m2/d", bounds: [0.1, 30.0]}
+  # Saturation constants that the published study CALIBRATED (the reference C
+  # hardcoded them). Defaults are the manuscript's calibrated values. Exposed
+  # as parameters so they can be (re)fit -- see examples/wats_sewer_calibration.py.
+  K_NO_f:      {value: 14.40, units: "gN/m3",  bounds: [1.0, 30.0]}   # nitrate sat., biofilm anoxic growth
+  K_S2:        {value: 0.15,  units: "gS/m3",  bounds: [0.05, 5.0]}   # sulfide sat., sulfide oxidation
+  K_NO_S_f:    {value: 0.25,  units: "gN/m3",  bounds: [0.05, 8.0]}   # nitrate sat., sulfide & S0 oxidation
+  K_S0:        {value: 1.0,   units: "gS/m3",  bounds: [0.1, 5.0]}    # elemental-S sat., S0 oxidation & reduction
   y_hw:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}
   y_hf:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}
   y_aob:       {value: 0.24,  units: "-",        bounds: [0.1, 0.4]}
@@ -219,11 +226,11 @@ reactions:
       S_NH:  "0.0 - i_n_bio"
       S_PO4: "0.0 - i_p_bio"
       S_SO4: "(1.0 / y_hf) * i_s_sb - i_s_bio"
-      S_CO2: "i_cit_sb / y_hf - i_cit_bio"
+      S_CO2: "i_cit_sb / y_hw - i_cit_bio"
 
   - name: anox_growth_SB_biofilm
     description: "Anoxic heterotrophic growth on S_B, biofilm."
-    rate: "k_12_no * [S_NO] / (15.0 + [S_NO]) * 2.86 * y_hf / (1.0 - y_hf) * [S_B] / (k_sf + [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * theta_f * {A_V}"
+    rate: "k_12_no * [S_NO] / (K_NO_f + [S_NO]) * 2.86 * y_hf / (1.0 - y_hf) * [S_B] / (k_sf + [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * theta_f * {A_V}"
     stoichiometry:
       S_B:   "0.0 - 1.0 / y_hf"
       X_BH:  1
@@ -231,7 +238,7 @@ reactions:
       S_NH:  "0.0 - i_n_bio"
       S_PO4: "0.0 - i_p_bio"
       S_SO4: "(1.0 / y_hf) * i_s_sb - i_s_bio"
-      S_CO2: "i_cit_sb / y_hf - i_cit_bio"
+      S_CO2: "i_cit_sb / y_hw - i_cit_bio"
 
   - name: aer_growth_VFA_biofilm
     description: "Aerobic heterotrophic growth on VFA, biofilm."
@@ -243,11 +250,11 @@ reactions:
       S_NH:  "0.0 - i_n_bio"
       S_PO4: "0.0 - i_p_bio"
       S_SO4: "0.0 - i_s_bio"
-      S_CO2: "i_cit_sb / y_hf - i_cit_bio"
+      S_CO2: "i_cit_sb / y_hw - i_cit_bio"
 
   - name: anox_growth_VFA_biofilm
     description: "Anoxic heterotrophic growth on VFA, biofilm."
-    rate: "k_12_no * [S_NO] / (15.0 + [S_NO]) * 2.86 * y_hf / (1.0 - y_hf) * [S_VFA] / (k_sf + [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * theta_f * {A_V}"
+    rate: "k_12_no * [S_NO] / (K_NO_f + [S_NO]) * 2.86 * y_hf / (1.0 - y_hf) * [S_VFA] / (k_sf + [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * theta_f * {A_V}"
     stoichiometry:
       S_VFA: "0.0 - 1.0 / y_hf"
       X_BH:  1
@@ -255,7 +262,7 @@ reactions:
       S_NH:  "0.0 - i_n_bio"
       S_PO4: "0.0 - i_p_bio"
       S_SO4: "0.0 - i_s_bio"
-      S_CO2: "i_cit_sb / y_hf - i_cit_bio"
+      S_CO2: "i_cit_sb / y_hw - i_cit_bio"
 
   # ============================ HYDROLYSIS (XS1) ========================
   - name: aer_hydrolysis_XS1_bulk
@@ -427,12 +434,12 @@ reactions:
   # ============================ ELEMENTAL SULFUR REDUCTION ==============
   - name: elemental_S_reduction_VFA_biofilm
     description: "Reduction of elemental sulfur to sulfide on VFA, biofilm."
-    rate: "k_s0_acid * [S_VFA] / ([S_VFA] + [S_H2] + k_srb) * monod([X_S0], k_so4) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
+    rate: "k_s0_acid * [S_VFA] / ([S_VFA] + [S_H2] + k_srb) * monod([X_S0], K_S0) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
     stoichiometry: {S_VFA: -0.75, sumS: 1, X_S0: -1}
 
   - name: elemental_S_reduction_H2_biofilm
     description: "Reduction of elemental sulfur to sulfide on H2, biofilm (0 at default k_s0_hyd)."
-    rate: "k_s0_hyd * [S_H2] / ([S_VFA] + [S_H2] + k_srb) * monod([X_S0], k_so4) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * theta_s * {A_V}"
+    rate: "k_s0_hyd * [S_H2] / ([S_VFA] + [S_H2] + k_srb) * monod([X_S0], K_S0) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * theta_s * {A_V}"
     stoichiometry: {S_H2: -0.75, sumS: 1, X_S0: -1}
 
   # ============================ SULFIDE / S0 OXIDATION ==================
@@ -457,7 +464,7 @@ reactions:
 
   - name: sulfide_biooxidation_anoxic_biofilm
     description: "Nitrate-driven biological sulfide oxidation to elemental sulfur, biofilm (soNRB)."
-    rate: "k_sII_anox_f * monod([sumS], 2.0) * monod([S_NO], 4.0) * {A_V}"
+    rate: "k_sII_anox_f * monod([sumS], K_S2) * monod([S_NO], K_NO_S_f) * {A_V}"
     stoichiometry: {sumS: -1, X_S0: 1, S_NO: -0.225}
 
   - name: elemental_S_oxidation_aerobic_biofilm
@@ -467,5 +474,5 @@ reactions:
 
   - name: elemental_S_oxidation_anoxic_biofilm
     description: "Nitrate-driven oxidation of elemental sulfur to sulfate, biofilm."
-    rate: "k_s0_anox_f * monod([X_S0], 1.0) * monod([S_NO], 4.0) * {A_V}"
+    rate: "k_s0_anox_f * monod([X_S0], K_S0) * monod([S_NO], K_NO_S_f) * {A_V}"
     stoichiometry: {X_S0: -1, S_SO4: 1, S_NO: -0.525}

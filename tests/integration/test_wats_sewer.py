@@ -57,7 +57,7 @@ def test_rhs_jacobian_wrt_params_is_finite(net, cond):
         return net.dCdt(C0, p, cond.fields, 0, stoich=net.compute_stoich(p))
 
     J = jax.jacobian(rhs)(net.default_parameters())
-    assert J.shape == (18, 57)
+    assert J.shape == (18, 61)
     assert np.all(np.isfinite(np.asarray(J)))
 
 
@@ -110,7 +110,7 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
     C0 = net.default_concentrations().at[net.species_index["S_NO"]].set(20.0)
     p = net.default_parameters()
     ia = net.param_index["k_sII_anox_f"]
-    reactor = aquakin.BatchReactor(net, cond, rtol=1e-6, atol=1e-9, dtmax=2.0e-3)
+    reactor = aquakin.BatchReactor(net, cond, rtol=1e-6, atol=1e-9, dtmax=5.0e-4)
 
     def final_sumS(pp):
         return reactor.solve(C0, pp, t_span=(0.0, 0.1)).C_named("sumS")[-1]
@@ -125,7 +125,7 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
 
     # forward mode must agree with reverse mode at the same cap
     fwd_reactor = aquakin.BatchReactor(
-        net, cond, rtol=1e-6, atol=1e-9, dtmax=2.0e-3, adjoint=diffrax.ForwardMode()
+        net, cond, rtol=1e-6, atol=1e-9, dtmax=5.0e-4, adjoint=diffrax.ForwardMode()
     )
     tangent = jnp.zeros_like(p).at[ia].set(1.0)
     _, jvp = jax.jvp(
