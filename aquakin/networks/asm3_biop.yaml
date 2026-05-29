@@ -1,0 +1,376 @@
+network:
+  name: asm3_biop
+  version: "1.0"
+  description: >
+    Imported from ASM3_BioP.xlsm
+  references:
+    - ""
+
+species:
+  - {name: SO, default_concentration: 1.0, units: "-g COD.m-3", description: "Dissolved oxygen (O2)"}
+  - {name: SS, default_concentration: 1.0, units: "g COD.m-3", description: "Soluble biodegradable organics"}
+  - {name: SNH4, default_concentration: 1.0, units: "g N.m-3", description: "Ammonia (NH4+ + NH3)"}
+  - {name: SNO, default_concentration: 1.0, units: "g N.m-3", description: "Nitrate and nitrite (NO3 + NO2)"}
+  - {name: SN2, default_concentration: 1.0, units: "g N.m-3", description: "Dissolved nitrogen (N2)"}
+  - {name: SPO4, default_concentration: 1.0, units: "g P.m-3", description: "Orthophosphate (PO4)"}
+  - {name: SHCO, default_concentration: 1.0, units: "kmol HCO3-.m-3", description: "Alkalinity (HCO3-)"}
+  - {name: SI, default_concentration: 1.0, units: "g COD.m-3", description: "Soluble undegradable organics"}
+  - {name: XI, default_concentration: 1.0, units: "g COD.m-3", description: "Particulate unbiodegradable organics"}
+  - {name: XS, default_concentration: 1.0, units: "g COD.m-3", description: "Particulate biodegradable organics"}
+  - {name: XH, default_concentration: 1.0, units: "g COD.m-3", description: "Ordinary heterotrophic organisms (OHO)"}
+  - {name: XSTO, default_concentration: 1.0, units: "g COD.m-3", description: "Storage compound in OHOs"}
+  - {name: XPAO, default_concentration: 1.0, units: "g COD.m-3", description: "Phosphorus accumulating organisms (PAO)"}
+  - {name: XPP, default_concentration: 1.0, units: "g P.m-3", description: "Stored polyphosphate (PP)"}
+  - {name: XPHA, default_concentration: 1.0, units: "g COD.m-3", description: "Stored polyhydroxyalkanoates (PHA)"}
+  - {name: XA, default_concentration: 1.0, units: "g COD.m-3", description: "Autotrophic nitrifying organisms (NH4+ to NO3-)"}
+  - {name: XTSS, default_concentration: 1.0, units: "g TSS.m-3", description: "Total suspended solids (TSS)"}
+
+conditions:
+  - {name: T, default: 293.15, description: "Temperature (K)."}
+
+parameters:
+  KHCO_H: {value: 0.0001, transform: positive_log, bounds: [1e-06, 0.01], units: "0"}
+  KNH_H: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "0"}
+  KNO_H: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "0"}
+  KO_A: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "0"}
+  KO_H: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
+  KO_PAO: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
+  KPHA: {value: 0.1, transform: positive_log, bounds: [0.001, 10.0], units: "0"}
+  KPO4_H: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "0"}
+  KPP_PAO: {value: 0.05, transform: positive_log, bounds: [0.0005, 5.0], units: "0"}
+  KSS_H: {value: 10.0, transform: positive_log, bounds: [0.1, 1000.0], units: "0"}
+  KSTO_H: {value: 0.1, transform: positive_log, bounds: [0.001, 10.0], units: "0"}
+  KX: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "0"}
+  KiPP_PAO: {value: 0.05, transform: positive_log, bounds: [0.0005, 5.0], units: "0"}
+  YAUT: {value: 0.24, transform: positive_log, bounds: [0.0024, 24.0], units: "0"}
+  YH_NO: {value: 0.65, transform: positive_log, bounds: [0.006500000000000001, 65.0], units: "0"}
+  YH_O2: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "0"}
+  YPAO_NO: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "0"}
+  YPAO_O2: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "0"}
+  YPHA: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
+  YPO4: {value: 0.35, transform: positive_log, bounds: [0.0034999999999999996, 35.0], units: "0"}
+  YSTO_NO: {value: 0.7, transform: positive_log, bounds: [0.006999999999999999, 70.0], units: "0"}
+  YSTO_O2: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "0"}
+  bA: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
+  bH: {value: 0.3, transform: positive_log, bounds: [0.003, 30.0], units: "0"}
+  bPAO: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
+  bPHA: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
+  bPP: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
+  bSto: {value: 0.3, transform: positive_log, bounds: [0.003, 30.0], units: "0"}
+  etaNO_H: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "0"}
+  etaNO_PAO: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "0"}
+  etaNO_end_A: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "0"}
+  etaNO_end_H: {value: 0.33, transform: positive_log, bounds: [0.0033, 33.0], units: "0"}
+  etaNO_end_PAO: {value: 0.33, transform: positive_log, bounds: [0.0033, 33.0], units: "0"}
+  etaNO_lys_PP: {value: 0.33, transform: positive_log, bounds: [0.0033, 33.0], units: "0"}
+  etaNO_resp_PHA: {value: 0.33, transform: positive_log, bounds: [0.0033, 33.0], units: "0"}
+  fSI: {value: 0.0, transform: none, bounds: [0.0, 1e-09], units: "0"}
+  fXI: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
+  iCOD_NO3: {value: -4.57142857142857, transform: none, bounds: [-9.14285714285714, 1e-09], units: "-BigNumber"}
+  iCharge_SNHx: {value: 7.14285714285714e-05, transform: positive_log, bounds: [7.142857142857139e-07, 0.007142857142857139], units: "0"}
+  iCharge_SNOx: {value: -7.14285714285714e-05, transform: none, bounds: [-0.0001428571428571428, 1e-09], units: "-BigNumber"}
+  iCharge_SPO4: {value: -4.83870967741935e-05, transform: none, bounds: [-9.6774193548387e-05, 1e-09], units: "-BigNumber"}
+  iCharge_XPAO_PP: {value: -3.2258064516129e-05, transform: none, bounds: [-6.4516129032258e-05, 1e-09], units: "-BigNumber"}
+  iNO3_N2: {value: 2.857142857142857, transform: positive_log, bounds: [0.02857142857142857, 285.7142857142857], units: "0"}
+  iN_BM: {value: 0.07, transform: positive_log, bounds: [0.0007000000000000001, 7.000000000000001], units: "0"}
+  iN_SI: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "0"}
+  iN_SS: {value: 0.03, transform: positive_log, bounds: [0.0003, 3.0], units: "0"}
+  iN_XI: {value: 0.03, transform: positive_log, bounds: [0.0003, 3.0], units: "0"}
+  iN_XS: {value: 0.035, transform: positive_log, bounds: [0.00035000000000000005, 3.5000000000000004], units: "0"}
+  iP_BM: {value: 0.014, transform: positive_log, bounds: [0.00014000000000000001, 1.4000000000000001], units: "0"}
+  iP_SI: {value: 0.0, transform: none, bounds: [0.0, 1e-09], units: "0"}
+  iP_SS: {value: 0.0, transform: none, bounds: [0.0, 1e-09], units: "0"}
+  iP_XI: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "0"}
+  iP_XS: {value: 0.005, transform: positive_log, bounds: [5e-05, 0.5], units: "0"}
+  iTSS_BM: {value: 0.9, transform: positive_log, bounds: [0.009000000000000001, 90.0], units: "0"}
+  iTSS_XI: {value: 0.75, transform: positive_log, bounds: [0.0075, 75.0], units: "0"}
+  iTSS_XPP: {value: 3.23, transform: positive_log, bounds: [0.0323, 323.0], units: "0"}
+  iTSS_XS: {value: 0.75, transform: positive_log, bounds: [0.0075, 75.0], units: "0"}
+  iTSS_XSTO: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "0"}
+  kH: {value: 9.0, transform: positive_log, bounds: [0.09, 900.0], units: "0"}
+  kSTO: {value: 12.5, transform: positive_log, bounds: [0.125, 1250.0], units: "0"}
+  muA: {value: 0.9, transform: positive_log, bounds: [0.009000000000000001, 90.0], units: "0"}
+  muH: {value: 3.0, transform: positive_log, bounds: [0.03, 300.0], units: "0"}
+  muPAO: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "0"}
+  qPHA: {value: 6.0, transform: positive_log, bounds: [0.06, 600.0], units: "0"}
+  qPP: {value: 1.5, transform: positive_log, bounds: [0.015, 150.0], units: "0"}
+
+expressions:
+  Monod_XS_over_XH: "monod_ratio([XS], [XH], KX)"
+  Monod_SO: "monod([SO], KO_H)"
+  Monod_SS: "monod([SS], KSS_H)"
+  Monod_KO_H: "monod_inh([SO], KO_H)"
+  Monod_SNO: "monod([SNO], KNO_H)"
+  Monod_SNH4: "monod([SNH4], KNH_H)"
+  Monod_SHCO: "monod([SHCO], KHCO_H)"
+  Monod_SPO4: "monod([SPO4], KPO4_H)"
+  Monod_XSTO_over_XH: "monod_ratio([XSTO], [XH], KSTO_H)"
+  Monod_KO_A: "monod_inh([SO], KO_A)"
+  Monod_XPP_over_XPAO: "monod_ratio([XPP], [XPAO], KPP_PAO)"
+  Monod_XPHA_over_XPAO: "monod_ratio([XPHA], [XPAO], KPHA)"
+  Monod_KO_PAO: "monod_inh([SO], KO_PAO)"
+
+reactions:
+  - name: Hydrolysis
+    description: "Hydrolysis"
+    rate: "kH * Monod_XS_over_XH * [XH]"
+    stoichiometry:
+      SS: "1 - fSI"
+      SNH4: "(-1) * (1 - fSI) * iN_SS - fSI * iN_SI + iN_XS"
+      SPO4: "(-1) * (1 - fSI) * iP_SS - fSI * iP_SI + iP_XS"
+      SHCO: "((-1) * (1 - fSI) * iN_SS - fSI * iN_SI + iN_XS) * iCharge_SNHx + ((-1) * (1 - fSI) * iP_SS - fSI * iP_SI + iP_XS) * iCharge_SPO4"
+      SI: "fSI"
+      XS: -1.0
+      XTSS: "(-1) * iTSS_XS"
+
+  - name: Aerobic_storage_of_XSTO
+    description: "Aerobic storage of XSTO"
+    rate: "kSTO * Monod_SO * Monod_SS * [XH]"
+    stoichiometry:
+      SO: "(-1) * (1 - YSTO_O2)"
+      SS: -1.0
+      SNH4: "iN_SS"
+      SPO4: "iP_SS"
+      SHCO: "iN_SS * iCharge_SNHx + iP_SS * iCharge_SPO4"
+      XSTO: "YSTO_O2"
+      XTSS: "YSTO_O2 * iTSS_XSTO"
+
+  - name: Anoxic_storage_of_XSTO
+    description: "Anoxic storage of XSTO"
+    rate: "kSTO * etaNO_H * Monod_KO_H * Monod_SNO * Monod_SS * [XH]"
+    stoichiometry:
+      SS: -1.0
+      SNH4: "iN_SS"
+      SNO: "(-1) * (1 - YSTO_NO) / iNO3_N2"
+      SN2: "(1 - YSTO_NO) / iNO3_N2"
+      SPO4: "iP_SS"
+      SHCO: "iN_SS * iCharge_SNHx + (-1) * (1 - YSTO_NO) / iNO3_N2 * iCharge_SNOx + iP_SS * iCharge_SPO4"
+      XSTO: "YSTO_NO"
+      XTSS: "YSTO_NO * iTSS_XSTO"
+
+  - name: Aerobic_growth_of_XH
+    description: "Aerobic growth of XH"
+    rate: "muH * Monod_SO * Monod_SNH4 * Monod_SHCO * Monod_SPO4 * Monod_XSTO_over_XH * [XH]"
+    stoichiometry:
+      SO: "(-1) * (1 - YH_O2) / YH_O2"
+      SNH4: "(-1) * iN_BM"
+      SPO4: "(-1) * iP_BM"
+      SHCO: "(-1) * iN_BM * iCharge_SNHx + (-1) * iP_BM * iCharge_SPO4"
+      XH: 1.0
+      XSTO: "(-1) / YH_O2"
+      XTSS: "(-1) / YH_O2 * iTSS_XSTO + iTSS_BM"
+
+  - name: Anoxic_growth_of_XH_denitrification
+    description: "Anoxic growth of XH (denitrification)"
+    rate: "muH * etaNO_H * Monod_KO_H * Monod_SNO * Monod_SNH4 * Monod_SHCO * Monod_SPO4 * Monod_XSTO_over_XH * [XH]"
+    stoichiometry:
+      SNH4: "(-1) * iN_BM"
+      SNO: "(-1) * (1 - YH_NO) / YH_NO * 1 / iNO3_N2"
+      SN2: "(1 - YH_NO) / YH_NO * 1 / iNO3_N2"
+      SPO4: "(-1) * iP_BM"
+      SHCO: "(-1) * iN_BM * iCharge_SNHx + (-1) * (1 - YH_NO) / YH_NO * 1 / iNO3_N2 * iCharge_SNOx + (-1) * iP_BM * iCharge_SPO4"
+      XH: 1.0
+      XSTO: "(-1) / YH_NO"
+      XTSS: "(-1) / YH_NO * iTSS_XSTO + iTSS_BM"
+
+  - name: Aerobic_endogenous_respiration_of_XH
+    description: "Aerobic endogenous respiration of XH"
+    rate: "bH * Monod_SO * [XH]"
+    stoichiometry:
+      SO: "(-1) * (1 - fXI)"
+      SNH4: "(-1) * fXI * iN_XI + iN_BM"
+      SPO4: "iP_BM - fXI * iP_XI"
+      SHCO: "((-1) * fXI * iN_XI + iN_BM) * iCharge_SNHx + (iP_BM - fXI * iP_XI) * iCharge_SPO4"
+      XI: "fXI"
+      XH: -1.0
+      XTSS: "(-1) * iTSS_BM + fXI * iTSS_XI"
+
+  - name: Anoxic_endogenous_respiration_of_XH
+    description: "Anoxic endogenous respiration of XH"
+    rate: "bH * etaNO_end_H * Monod_KO_H * Monod_SNO * [XH]"
+    stoichiometry:
+      SNH4: "(-1) * fXI * iN_XI + iN_BM"
+      SNO: "(-1) * (1 - fXI) / iNO3_N2"
+      SN2: "(1 - fXI) / iNO3_N2"
+      SPO4: "iP_BM - fXI * iP_XI"
+      SHCO: "(-1) * (1 - fXI) / iNO3_N2 * iCharge_SNOx + ((-1) * fXI * iN_XI + iN_BM) * iCharge_SNHx + (iP_BM - fXI * iP_XI) * iCharge_SPO4"
+      XI: "fXI"
+      XH: -1.0
+      XTSS: "(-1) * iTSS_BM + fXI * iTSS_XI"
+
+  - name: Aerobic_respiration_of_XSTO
+    description: "Aerobic respiration of XSTO"
+    rate: "bSto * Monod_SO * [XSTO]"
+    stoichiometry:
+      SO: -1.0
+      XSTO: -1.0
+      XTSS: "(-1) * iTSS_XSTO"
+
+  - name: Anoxic_respiration_of_XSTO
+    description: "Anoxic respiration of XSTO"
+    rate: "bSto * etaNO_end_H * Monod_KO_H * Monod_SNO * [XSTO]"
+    stoichiometry:
+      SNO: "(-1) / iNO3_N2"
+      SN2: "1 / iNO3_N2"
+      SHCO: "(-1) / iNO3_N2 * iCharge_SNOx"
+      XSTO: -1.0
+      XTSS: "(-1) * iTSS_XSTO"
+
+  - name: Growth_of_autotrophic_nitrifying_organisms
+    description: "Growth of autotrophic nitrifying organisms"
+    rate: "muA * Monod_SO * Monod_SNH4 * Monod_SHCO * Monod_SPO4 * [XA]"
+    stoichiometry:
+      SO: "(-1) * ((-1) * iCOD_NO3 - YAUT) / YAUT"
+      SNH4: "(-1) / YAUT - iN_BM"
+      SNO: "1 / YAUT"
+      SPO4: "(-1) * iP_BM"
+      SHCO: "((-1) / YAUT - iN_BM) * iCharge_SNHx + 1 / YAUT * iCharge_SNOx + (-1) * iP_BM * iCharge_SPO4"
+      XA: 1.0
+      XTSS: "iTSS_BM"
+
+  - name: Aerobic_endogenous_respiration_of_XAUT
+    description: "Aerobic endogenous respiration of XAUT"
+    rate: "bA * Monod_SO * [XA]"
+    stoichiometry:
+      SO: "(-1) * (1 - fXI)"
+      SNH4: "(-1) * fXI * iN_XI + iN_BM"
+      SPO4: "iP_BM - fXI * iP_XI"
+      SHCO: "((-1) * fXI * iN_XI + iN_BM) * iCharge_SNHx + (iP_BM - fXI * iP_XI) * iCharge_SPO4"
+      XI: "fXI"
+      XA: -1.0
+      XTSS: "(-1) * iTSS_BM + fXI * iTSS_XI"
+
+  - name: Anoxic_endogenous_respiration_of_XAUT
+    description: "Anoxic endogenous respiration of XAUT"
+    rate: "bA * etaNO_end_A * Monod_KO_A * Monod_SNO * [XA]"
+    stoichiometry:
+      SNH4: "(-1) * fXI * iN_XI + iN_BM"
+      SNO: "(-1) * (1 - fXI) / iNO3_N2"
+      SN2: "(1 - fXI) / iNO3_N2"
+      SPO4: "iP_BM - fXI * iP_XI"
+      SHCO: "((-1) * fXI * iN_XI + iN_BM) * iCharge_SNHx + (-1) * (1 - fXI) / iNO3_N2 * iCharge_SNOx + (iP_BM - fXI * iP_XI) * iCharge_SPO4"
+      XI: "fXI"
+      XA: -1.0
+      XTSS: "(-1) * iTSS_BM + fXI * iTSS_XI"
+
+  - name: Storage_of_XPHA
+    description: "Storage of XPHA"
+    rate: "qPHA * Monod_SS * Monod_SHCO * Monod_XPP_over_XPAO * [XPAO]"
+    stoichiometry:
+      SS: -1.0
+      SNH4: "iN_SS"
+      SPO4: "YPO4 + iP_SS"
+      SHCO: "iN_SS * iCharge_SNHx + (YPO4 + iP_SS) * iCharge_SPO4 + (-1) * YPO4 * iCharge_XPAO_PP"
+      XPP: "(-1) * YPO4"
+      XPHA: 1.0
+      XTSS: "iTSS_XSTO - iTSS_XPP * YPO4"
+
+  - name: Aerobic_storage_of_XPP
+    description: "Aerobic storage of XPP"
+    rate: "qPP * Monod_SO * Monod_SPO4 * Monod_SHCO * Monod_XPHA_over_XPAO * monod_inh_ratio([XPP], [XPAO], KiPP_PAO) * [XPAO]"
+    stoichiometry:
+      SO: "(-1) * YPHA"
+      SPO4: -1.0
+      SHCO: "(-1) * iCharge_SPO4 + 1 * iCharge_XPAO_PP"
+      XPP: 1.0
+      XPHA: "(-1) * YPHA"
+      XTSS: "(-1) * YPHA * iTSS_XSTO + iTSS_XPP"
+
+  - name: Anoxic_storage_of_XPP
+    description: "Anoxic storage of XPP"
+    rate: "qPP * etaNO_PAO * Monod_KO_PAO * Monod_SNO * Monod_SPO4 * Monod_SHCO * Monod_XPHA_over_XPAO * monod_inh_ratio([XPP], [XPAO], KiPP_PAO) * [XPAO]"
+    stoichiometry:
+      SNO: "(-1) * YPHA / iNO3_N2"
+      SN2: "YPHA / iNO3_N2"
+      SPO4: -1.0
+      SHCO: "(-1) * YPHA / iNO3_N2 * iCharge_SNOx + (-1) * iCharge_SPO4 + 1 * iCharge_XPAO_PP"
+      XPP: 1.0
+      XPHA: "(-1) * YPHA"
+      XTSS: "(-1) * YPHA * iTSS_XSTO + iTSS_XPP"
+
+  - name: Aerobic_growth_of_XPAO
+    description: "Aerobic growth of XPAO"
+    rate: "muPAO * Monod_SO * Monod_SNH4 * Monod_SPO4 * Monod_SHCO * Monod_XPHA_over_XPAO * [XPAO]"
+    stoichiometry:
+      SO: "(-1) * (1 - YPAO_O2) / YPAO_O2"
+      SNH4: "(-1) * iN_BM"
+      SPO4: "(-1) * iP_BM"
+      SHCO: "(-1) * iN_BM * iCharge_SNHx + (-1) * iP_BM * iCharge_SPO4"
+      XPAO: 1.0
+      XPHA: "(-1) / YPAO_O2"
+      XTSS: "(-1) * 1 / YPAO_O2 * iTSS_XSTO + iTSS_BM"
+
+  - name: Anoxic_growth_of_XPAO
+    description: "Anoxic growth of XPAO"
+    rate: "muPAO * etaNO_PAO * Monod_KO_PAO * Monod_SNO * Monod_SNH4 * Monod_SPO4 * Monod_SHCO * Monod_XPHA_over_XPAO * [XPAO]"
+    stoichiometry:
+      SNH4: "(-1) * iN_BM"
+      SNO: "(-1) * (1 - YPAO_NO) / YPAO_NO * 1 / iNO3_N2"
+      SN2: "(1 - YPAO_NO) / YPAO_NO * 1 / iNO3_N2"
+      SPO4: "(-1) * iP_BM"
+      SHCO: "(-1) * iN_BM * iCharge_SNHx + (-1) * (1 - YPAO_NO) / YPAO_NO * 1 / iNO3_N2 * iCharge_SNOx + (-1) * iP_BM * iCharge_SPO4"
+      XPAO: 1.0
+      XPHA: "(-1) / YPAO_NO"
+      XTSS: "(-1) * 1 / YPAO_NO * iTSS_XSTO + iTSS_BM"
+
+  - name: Aerobic_endogenous_respiration_of_XPAO
+    description: "Aerobic endogenous respiration of XPAO"
+    rate: "bPAO * Monod_SO * [XPAO]"
+    stoichiometry:
+      SO: "(-1) * (1 - fXI)"
+      SNH4: "(-1) * fXI * iN_XI + iN_BM"
+      SPO4: "(-1) * fXI * iP_XI + iP_BM"
+      SHCO: "((-1) * fXI * iN_XI + iN_BM) * iCharge_SNHx + ((-1) * fXI * iP_XI + iP_BM) * iCharge_SPO4"
+      XI: "fXI"
+      XPAO: -1.0
+      XTSS: "(-1) * iTSS_BM + fXI * iTSS_XI"
+
+  - name: Anoxic_endogenous_respiration_of_XPAO
+    description: "Anoxic endogenous respiration of XPAO"
+    rate: "bPAO * etaNO_end_PAO * Monod_KO_PAO * Monod_SNO * [XPAO]"
+    stoichiometry:
+      SNH4: "(-1) * fXI * iN_XI + iN_BM"
+      SNO: "(-1) * (1 - fXI) / iNO3_N2"
+      SN2: "(1 - fXI) / iNO3_N2"
+      SPO4: "(-1) * fXI * iP_XI + iP_BM"
+      SHCO: "((-1) * fXI * iN_XI + iN_BM) * iCharge_SNHx + (-1) * (1 - fXI) / iNO3_N2 * iCharge_SNOx + ((-1) * fXI * iP_XI + iP_BM) * iCharge_SPO4"
+      XI: "fXI"
+      XPAO: -1.0
+      XTSS: "(-1) * iTSS_BM + fXI * iTSS_XI"
+
+  - name: Aerobic_lysis_of_XPP
+    description: "Aerobic lysis of XPP"
+    rate: "bPP * Monod_SO * [XPP]"
+    stoichiometry:
+      SPO4: 1.0
+      SHCO: "1 * iCharge_SPO4 + (-1) * iCharge_XPAO_PP"
+      XPP: -1.0
+      XTSS: "(-1) * iTSS_XPP"
+
+  - name: Anoxic_lysis_of_XPP
+    description: "Anoxic lysis of XPP"
+    rate: "bPP * etaNO_lys_PP * Monod_KO_PAO * Monod_SNO * [XPP]"
+    stoichiometry:
+      SPO4: 1.0
+      SHCO: "1 * iCharge_SPO4 + (-1) * iCharge_XPAO_PP"
+      XPP: -1.0
+      XTSS: "(-1) * iTSS_XPP"
+
+  - name: Aerobic_respiration_of_XPHA
+    description: "Aerobic respiration of XPHA"
+    rate: "bPHA * Monod_SO * [XPHA]"
+    stoichiometry:
+      SO: -1.0
+      XPHA: -1.0
+      XTSS: "(-1) * iTSS_XSTO"
+
+  - name: Anoxic_respiration_of_XPHA
+    description: "Anoxic respiration of XPHA"
+    rate: "bPHA * etaNO_resp_PHA * Monod_KO_PAO * Monod_SNO * [XPHA]"
+    stoichiometry:
+      SNO: "(-1) / iNO3_N2"
+      SN2: "1 / iNO3_N2"
+      SHCO: "(-1) / iNO3_N2 * iCharge_SNOx"
+      XPHA: -1.0
+      XTSS: "(-1) * iTSS_XSTO"
+

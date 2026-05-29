@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aquakin"
+version = "0.1.0"
+description = "Reactive scalar transport kinetics for aqueous environmental systems"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "aquakin contributors" }]
+keywords = ["chemistry", "kinetics", "ozone", "bromate", "jax", "diffrax"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+dependencies = [
+    "jax>=0.4.30",
+    "jaxlib>=0.4.30",
+    "diffrax>=0.5",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["aquakin*"]
+
+[tool.setuptools.package-data]
+"aquakin.networks" = ["*.yaml"]
+"aquakin.plant.bsm.data" = ["*.csv"]
+
+[tool.pytest.ini_options]
+markers = [
+    "validation: scientific validation tests against published data (slow)",
+]
+testpaths = ["tests"]

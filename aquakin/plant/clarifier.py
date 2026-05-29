@@ -1,0 +1,149 @@
+"""Ideal point separator — a simpler alternative to the full Takács model.
+
+The :class:`IdealClarifier` assumes instantaneous, perfect separation:
+particulates split between overflow and underflow such that the underflow
+is concentrated by a fixed *thickening ratio* relative to the inlet (or,
+equivalently, the overflow has a fixed *capture efficiency* of particulates).
+Solubles pass through unchanged.
+
+This is appropriate for BSM1-style demos where the focus is the upstream
+biology and the clarifier serves mainly to recycle biomass via the RAS.
+It produces deterministic, stable behaviour without the per-layer
+mass-balance dynamics. For literature-comparable BSM1 effluent metrics,
+swap in :class:`aquakin.plant.takacs.TakacsClarifier` once its numerical
+behaviour is hardened.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+import jax.numpy as jnp
+
+from aquakin.plant.streams import Stream
+
+if TYPE_CHECKING:  # pragma: no cover
+    from aquakin.core.network import CompiledNetwork
+
+
+@dataclass
+class IdealClarifier:
+    """Stateless ideal solid/liquid separator.
+
+    Soluble species pass through to both outflow streams at the inlet
+    concentration. Particulate species are split:
+
+    - ``capture_efficiency`` (default 0.998): fraction of inflowing
+      particulate mass that goes to the underflow.
+    - The overflow gets the remainder.
+
+    The underflow's particulate concentrations are determined by mass
+    balance: ``C_under = capture * Q_in * C_in / Q_under`` per species.
+    The overflow concentrations follow similarly with ``(1 - capture)``.
+
+    Parameters
+    ----------
+    name : str
+    network : CompiledNetwork
+    overflow_Q : float
+        Overflow (effluent) volumetric flow rate. Underflow takes the
+        remainder of the inlet.
+    capture_efficiency : float
+        Fraction of inflowing particulate mass directed to the underflow.
+        Default 0.998 (typical BSM1 clarifier; corresponds to ~99.8% of
+        biomass returned via RAS).
+    particulate_species : list[str]
+        Species names treated as particulates. Default is the ASM1 set.
+    input_port : str
+    overflow_port : str
+    underflow_port : str
+    """
+
+    name: str
+    network: "CompiledNetwork"
+    overflow_Q: float
+    capture_efficiency: float = 0.998
+    particulate_species: list[str] = field(default_factory=lambda: [
+        "XS", "XI", "XB_H", "XB_A", "XP", "XND"
+    ])
+    input_port: str = "inlet"
+    overflow_port: str = "overflow"
+    underflow_port: str = "underflow"
+
+    state_size: int = 0
+
+    def __post_init__(self) -> None:
+        if not (0.0 <= self.capture_efficiency <= 1.0):
+            raise ValueError(
+                f"capture_efficiency must be in [0, 1]; got {self.capture_efficiency}"
+            )
+        self._part_indices = [
+            self.network.species_index[s] for s in self.particulate_species
+            if s in self.network.species_index
+        ]
+        # Pre-build a (n_species,) mask: 1.0 for particulates, 0.0 for solubles.
+        mask = jnp.zeros((self.network.n_species,))
+        for i in self._part_indices:
+            mask = mask.at[i].set(1.0)
+        object.__setattr__(self, "_particulate_mask", mask)
+
+    @property
+    def input_ports(self) -> list[str]:
+        return [self.input_port]
+
+    @property
+    def output_ports(self) -> list[str]:
+        return [self.overflow_port, self.underflow_port]
+
+    def initial_state(self) -> jnp.ndarray:
+        return jnp.zeros((0,))
+
+    def compute_outputs(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+    ) -> dict[str, Stream]:
+        s_in = inputs[self.input_port]
+        Q_in = s_in.Q
+        Q_over = jnp.asarray(self.overflow_Q)
+        Q_under = Q_in - Q_over
+        cap = jnp.asarray(self.capture_efficiency)
+
+        # Per-species partitioning. Solubles split with flow ratio.
+        # Particulates: ``cap`` fraction of mass goes to underflow.
+        mass_in = Q_in * s_in.C  # (n_species,) g/d
+        part_mask = self._particulate_mask
+        sol_mask = 1.0 - part_mask
+
+        # Soluble outflow concentrations: same as inlet (pass through).
+        sol_C_under = s_in.C * sol_mask
+        sol_C_over = s_in.C * sol_mask
+
+        # Particulate outflow concentrations: mass partitioned by capture.
+        # mass_under_p = cap * mass_in_p
+        # mass_over_p = (1 - cap) * mass_in_p
+        mass_under_p = cap * mass_in * part_mask
+        mass_over_p = (1.0 - cap) * mass_in * part_mask
+
+        part_C_under = mass_under_p / (Q_under + 1e-12)
+        part_C_over = mass_over_p / (Q_over + 1e-12)
+
+        C_over = sol_C_over + part_C_over
+        C_under = sol_C_under + part_C_under
+
+        return {
+            self.overflow_port: Stream(Q=Q_over, C=C_over, network=self.network),
+            self.underflow_port: Stream(Q=Q_under, C=C_under, network=self.network),
+        }
+
+    def rhs(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+    ) -> jnp.ndarray:
+        return jnp.zeros((0,))

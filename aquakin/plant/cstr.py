@@ -1,0 +1,163 @@
+"""Continuous-flow stirred-tank reactor (CSTR) with kinetics + aeration.
+
+The CSTR is the workhorse unit for activated-sludge plants: each ASM tank
+in BSM1 is a CSTR. The mass-balance equation for species i is::
+
+    dC_i/dt = (Q_in / V) * (C_in,i - C_i)        # convection
+              + S^T r(C, p, conditions)[i]       # chemistry
+              + kLa_i * (C_sat,i - C_i)          # mass transfer (DO in aerobic)
+
+Per-species ``kLa`` and ``C_sat`` make it trivial to model both anoxic
+tanks (kLa=0 everywhere) and aerobic tanks (kLa_DO > 0) with the same
+unit class.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+import jax.numpy as jnp
+
+from aquakin.plant.streams import Stream
+
+if TYPE_CHECKING:  # pragma: no cover
+    from aquakin.core.network import CompiledNetwork
+
+
+@dataclass
+class CSTRUnit:
+    """A single continuous-flow stirred tank with kinetics + aeration.
+
+    Parameters
+    ----------
+    name : str
+        Unit identifier.
+    network : CompiledNetwork
+        Kinetic network whose rate functions provide the chemistry term.
+    volume : float
+        Tank liquid volume.
+    input_port_names : list[str]
+        Names of the incoming-stream ports. Multiple inflows are summed
+        (treated as a built-in mixer) before the mass balance.
+    conditions : dict[str, float]
+        Spatially-uniform condition values (e.g. ``{"T": 293.15}``). One
+        value per condition declared by the network.
+    kla : dict[str, float], optional
+        Per-species ``kLa`` mass-transfer coefficients ``(1/time)``.
+        Defaults to no aeration on any species. Typically only ``"SO"``
+        is set for ASM1 / ASM2D / ASM3.
+    C_sat : dict[str, float], optional
+        Per-species saturation concentrations used in the aeration term.
+        Defaults to 0 for any species without an entry.
+    output_port : str
+        Name of the single output port.
+    """
+
+    name: str
+    network: "CompiledNetwork"
+    volume: float
+    input_port_names: list[str]
+    conditions: dict[str, float] = field(default_factory=dict)
+    kla: dict[str, float] = field(default_factory=dict)
+    C_sat: dict[str, float] = field(default_factory=dict)
+    output_port: str = "out"
+
+    def __post_init__(self) -> None:
+        missing = set(self.network.conditions_required) - set(self.conditions)
+        if missing:
+            raise ValueError(
+                f"CSTRUnit '{self.name}' is missing required condition values "
+                f"for: {sorted(missing)}. Provided: {sorted(self.conditions)}"
+            )
+        for sp in self.kla:
+            if sp not in self.network.species_index:
+                raise ValueError(
+                    f"CSTRUnit '{self.name}' kla refers to unknown species '{sp}'"
+                )
+        for sp in self.C_sat:
+            if sp not in self.network.species_index:
+                raise ValueError(
+                    f"CSTRUnit '{self.name}' C_sat refers to unknown species '{sp}'"
+                )
+
+        # Precompute (n_species,) aeration arrays once. These vectors are
+        # used inside rhs() and don't change per integration step.
+        kla_vec = jnp.zeros((self.network.n_species,))
+        sat_vec = jnp.zeros((self.network.n_species,))
+        for sp, val in self.kla.items():
+            kla_vec = kla_vec.at[self.network.species_index[sp]].set(float(val))
+        for sp, val in self.C_sat.items():
+            sat_vec = sat_vec.at[self.network.species_index[sp]].set(float(val))
+        object.__setattr__(self, "_kla_vec", kla_vec)
+        object.__setattr__(self, "_sat_vec", sat_vec)
+
+        # Condition arrays for the kinetics call: each declared condition
+        # broadcast to a length-1 array so the rate functions index with
+        # loc_idx=0 — same convention as BatchReactor.
+        cond_arrays = {
+            name: jnp.asarray([float(self.conditions[name])])
+            for name in self.network.conditions_required
+        }
+        object.__setattr__(self, "_condition_arrays", cond_arrays)
+
+    @property
+    def state_size(self) -> int:
+        return self.network.n_species
+
+    @property
+    def input_ports(self) -> list[str]:
+        return list(self.input_port_names)
+
+    @property
+    def output_ports(self) -> list[str]:
+        return [self.output_port]
+
+    def initial_state(self) -> jnp.ndarray:
+        return self.network.default_concentrations()
+
+    def compute_outputs(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+    ) -> dict[str, Stream]:
+        # Total inflow Q. The outflow equals the total inflow (constant
+        # volume assumption; no accumulation of water).
+        Q_total = jnp.zeros(())
+        for name in self.input_port_names:
+            Q_total = Q_total + inputs[name].Q
+        return {
+            self.output_port: Stream(Q=Q_total, C=state, network=self.network)
+        }
+
+    def rhs(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+    ) -> jnp.ndarray:
+        # Mix inflows (Q-weighted).
+        Q_total = jnp.zeros(())
+        mass_total = jnp.zeros((self.network.n_species,))
+        for name in self.input_port_names:
+            s = inputs[name]
+            Q_total = Q_total + s.Q
+            mass_total = mass_total + s.Q * s.C
+        C_in = mass_total / (Q_total + 1e-12)
+
+        # Convection.
+        convection = (Q_total / self.volume) * (C_in - state)
+
+        # Chemistry. Hoist the stoich matrix (cheap closure; matches the
+        # pattern used in the existing reactors).
+        stoich = self.network.compute_stoich(params)
+        rates = self.network.rates(state, params, self._condition_arrays, 0)
+        chemistry = stoich.T @ rates
+
+        # Aeration (mass transfer). Zero on species without a kLa entry.
+        aeration = self._kla_vec * (self._sat_vec - state)
+
+        return convection + chemistry + aeration

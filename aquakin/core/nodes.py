@@ -1,0 +1,442 @@
+"""AST node types for rate expressions."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, Callable, ClassVar
+
+import jax
+import jax.numpy as jnp
+
+from aquakin.core.context import CompileContext
+
+RateCallable = Callable[[jnp.ndarray, jnp.ndarray, dict, jnp.ndarray], jnp.ndarray]
+
+GAS_CONSTANT = 8.314462618  # J / (mol K)
+
+
+class ASTNode(ABC):
+    """
+    Base class for rate-expression AST nodes.
+
+    Each subclass implements :meth:`compile`, which returns a closure with the
+    canonical rate-callable signature ``(C, params, condition_arrays, loc_idx)
+    -> scalar`` using only JAX operations.
+    """
+
+    @abstractmethod
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        """Return a JAX-compatible callable for this node."""
+
+    def species(self) -> set[str]:
+        """Names of species referenced anywhere in this subtree."""
+        return set()
+
+    def param_names(self) -> set[str]:
+        """Local (un-namespaced) rate-constant names referenced in this subtree."""
+        return set()
+
+    def condition_names(self) -> set[str]:
+        """Condition field names referenced in this subtree."""
+        return set()
+
+
+# --- Leaf nodes ---------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ConstantNode(ASTNode):
+    """Literal numeric constant."""
+
+    value: float
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        v = jnp.asarray(self.value)
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            return v
+
+        return _eval
+
+
+@dataclass(frozen=True)
+class SpeciesNode(ASTNode):
+    """Looks up a species concentration by index from ``C``."""
+
+    name: str
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        if self.name not in ctx.species_index:
+            raise KeyError(
+                f"Species '{self.name}' is referenced in a rate expression but "
+                f"not declared. Declared species: {sorted(ctx.species_index)}"
+            )
+        idx = ctx.species_index[self.name]
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            return C[idx]
+
+        return _eval
+
+    def species(self) -> set[str]:
+        return {self.name}
+
+
+@dataclass(frozen=True)
+class ParamNode(ASTNode):
+    """Looks up a rate constant by name from ``params``.
+
+    Resolution order: reaction-local (``<reaction>.<name>``) first, then
+    network-level (bare ``<name>``).
+    """
+
+    name: str  # local (un-namespaced) name
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        if ctx.reaction_name:
+            local_key = f"{ctx.reaction_name}.{self.name}"
+            if local_key in ctx.param_index:
+                idx = ctx.param_index[local_key]
+
+                def _eval_local(C, params, condition_arrays, loc_idx):
+                    return params[idx]
+
+                return _eval_local
+        if self.name in ctx.param_index:
+            idx = ctx.param_index[self.name]
+
+            def _eval_global(C, params, condition_arrays, loc_idx):
+                return params[idx]
+
+            return _eval_global
+        raise KeyError(
+            f"Parameter '{self.name}' is referenced in a rate expression but "
+            f"not declared (neither as a reaction-local parameter on "
+            f"'{ctx.reaction_name}' nor as a network-level parameter). "
+            f"Declared parameters: {sorted(ctx.param_index)}"
+        )
+
+    def param_names(self) -> set[str]:
+        return {self.name}
+
+
+@dataclass(frozen=True)
+class ConditionNode(ASTNode):
+    """Indexes into ``condition_arrays[field_name][loc_idx]``."""
+
+    field_name: str
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        if self.field_name not in ctx.condition_fields:
+            raise KeyError(
+                f"Condition field '{self.field_name}' is referenced in a rate "
+                f"expression but not declared. Declared conditions: "
+                f"{sorted(ctx.condition_fields)}"
+            )
+        name = self.field_name
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            return condition_arrays[name][loc_idx]
+
+        return _eval
+
+    def condition_names(self) -> set[str]:
+        return {self.field_name}
+
+
+# --- Binary operations --------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _BinaryNode(ASTNode):
+    """Shared implementation for binary arithmetic AST nodes."""
+
+    left: ASTNode
+    right: ASTNode
+
+    # Subclasses override _op with a JAX-compatible scalar op (l, r) -> scalar.
+    _op: ClassVar[Callable[[Any, Any], Any]]
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        lf = self.left.compile(ctx)
+        rf = self.right.compile(ctx)
+        op = type(self)._op
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            return op(
+                lf(C, params, condition_arrays, loc_idx),
+                rf(C, params, condition_arrays, loc_idx),
+            )
+
+        return _eval
+
+    def species(self) -> set[str]:
+        return self.left.species() | self.right.species()
+
+    def param_names(self) -> set[str]:
+        return self.left.param_names() | self.right.param_names()
+
+    def condition_names(self) -> set[str]:
+        return self.left.condition_names() | self.right.condition_names()
+
+
+class AddNode(_BinaryNode):
+    _op = staticmethod(lambda l, r: l + r)
+
+
+class SubtractNode(_BinaryNode):
+    _op = staticmethod(lambda l, r: l - r)
+
+
+class MultiplyNode(_BinaryNode):
+    _op = staticmethod(lambda l, r: l * r)
+
+
+class DivideNode(_BinaryNode):
+    _op = staticmethod(lambda l, r: l / r)
+
+
+class PowerNode(_BinaryNode):
+    _op = staticmethod(lambda l, r: l ** r)
+
+
+@dataclass(frozen=True)
+class NegateNode(ASTNode):
+    """Unary minus."""
+
+    operand: ASTNode
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        f = self.operand.compile(ctx)
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            return -f(C, params, condition_arrays, loc_idx)
+
+        return _eval
+
+    def species(self) -> set[str]:
+        return self.operand.species()
+
+    def param_names(self) -> set[str]:
+        return self.operand.param_names()
+
+    def condition_names(self) -> set[str]:
+        return self.operand.condition_names()
+
+
+# --- Domain-specific function nodes ------------------------------------
+
+
+@dataclass(frozen=True)
+class ArrheniusNode(ASTNode):
+    """
+    Temperature-dependent rate factor: ``A * exp(-Ea / (R * T))``.
+
+    Requires a condition field named ``T`` (in Kelvin).
+    """
+
+    A: ASTNode
+    Ea: ASTNode
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        if "T" not in ctx.condition_fields:
+            raise KeyError(
+                "arrhenius(...) requires a condition field named 'T' (Kelvin)."
+            )
+        af = self.A.compile(ctx)
+        ef = self.Ea.compile(ctx)
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            T = condition_arrays["T"][loc_idx]
+            return af(C, params, condition_arrays, loc_idx) * jnp.exp(
+                -ef(C, params, condition_arrays, loc_idx) / (GAS_CONSTANT * T)
+            )
+
+        return _eval
+
+    def species(self) -> set[str]:
+        return self.A.species() | self.Ea.species()
+
+    def param_names(self) -> set[str]:
+        return self.A.param_names() | self.Ea.param_names()
+
+    def condition_names(self) -> set[str]:
+        return {"T"} | self.A.condition_names() | self.Ea.condition_names()
+
+
+@dataclass(frozen=True)
+class MonodNode(ASTNode):
+    """Saturation Monod term: ``X / (K + X)``.
+
+    Standard in microbial kinetics: substrate-limited growth fraction.
+    Equivalent to writing ``[X] / (K + [X])`` inline, but more compact.
+    """
+
+    X: ASTNode
+    K: ASTNode
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        xf = self.X.compile(ctx)
+        kf = self.K.compile(ctx)
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            x = xf(C, params, condition_arrays, loc_idx)
+            k = kf(C, params, condition_arrays, loc_idx)
+            return x / (k + x)
+
+        return _eval
+
+    def species(self) -> set[str]:
+        return self.X.species() | self.K.species()
+
+    def param_names(self) -> set[str]:
+        return self.X.param_names() | self.K.param_names()
+
+    def condition_names(self) -> set[str]:
+        return self.X.condition_names() | self.K.condition_names()
+
+
+@dataclass(frozen=True)
+class MonodInhibitionNode(ASTNode):
+    """Inhibition Monod term: ``K / (K + X)``.
+
+    Equal to ``1 - monod(X, K)``. Used as an aerobic-off / anoxic-on
+    switch in ASM-family models.
+    """
+
+    X: ASTNode
+    K: ASTNode
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        xf = self.X.compile(ctx)
+        kf = self.K.compile(ctx)
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            x = xf(C, params, condition_arrays, loc_idx)
+            k = kf(C, params, condition_arrays, loc_idx)
+            return k / (k + x)
+
+        return _eval
+
+    def species(self) -> set[str]:
+        return self.X.species() | self.K.species()
+
+    def param_names(self) -> set[str]:
+        return self.X.param_names() | self.K.param_names()
+
+    def condition_names(self) -> set[str]:
+        return self.X.condition_names() | self.K.condition_names()
+
+
+@dataclass(frozen=True)
+class MonodRatioNode(ASTNode):
+    """Surface-ratio Monod term: ``(A/B) / (K + A/B)``.
+
+    The kinetic form used in ASM1/2/3 hydrolysis where the rate-limiting
+    quantity is the substrate-to-biomass ratio (``XS/XH``) rather than
+    bulk substrate concentration. Written mathematically equivalently as
+    ``A / (K*B + A)`` to avoid the ``B=0`` singularity at startup.
+    """
+
+    A: ASTNode
+    B: ASTNode
+    K: ASTNode
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        af = self.A.compile(ctx)
+        bf = self.B.compile(ctx)
+        kf = self.K.compile(ctx)
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            a = af(C, params, condition_arrays, loc_idx)
+            b = bf(C, params, condition_arrays, loc_idx)
+            k = kf(C, params, condition_arrays, loc_idx)
+            return a / (k * b + a)
+
+        return _eval
+
+    def species(self) -> set[str]:
+        return self.A.species() | self.B.species() | self.K.species()
+
+    def param_names(self) -> set[str]:
+        return self.A.param_names() | self.B.param_names() | self.K.param_names()
+
+    def condition_names(self) -> set[str]:
+        return self.A.condition_names() | self.B.condition_names() | self.K.condition_names()
+
+
+@dataclass(frozen=True)
+class MonodInhibitionRatioNode(ASTNode):
+    """Inhibition ratio Monod term: ``K / (K + A/B)``.
+
+    The inhibition counterpart of :class:`MonodRatioNode`. Appears in
+    ASM-family bio-P models as a saturation gate on the storage-to-biomass
+    ratio (e.g. PHA/PAO). Stable form: ``K*B / (K*B + A)``.
+    """
+
+    A: ASTNode
+    B: ASTNode
+    K: ASTNode
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        af = self.A.compile(ctx)
+        bf = self.B.compile(ctx)
+        kf = self.K.compile(ctx)
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            a = af(C, params, condition_arrays, loc_idx)
+            b = bf(C, params, condition_arrays, loc_idx)
+            k = kf(C, params, condition_arrays, loc_idx)
+            kb = k * b
+            return kb / (kb + a)
+
+        return _eval
+
+    def species(self) -> set[str]:
+        return self.A.species() | self.B.species() | self.K.species()
+
+    def param_names(self) -> set[str]:
+        return self.A.param_names() | self.B.param_names() | self.K.param_names()
+
+    def condition_names(self) -> set[str]:
+        return self.A.condition_names() | self.B.condition_names() | self.K.condition_names()
+
+
+@dataclass(frozen=True)
+class pHSwitchNode(ASTNode):
+    """
+    Acid/base speciation fraction: ``1 / (1 + 10^(pH - pKa))``.
+
+    Returns the fraction of the conjugate-acid form. The deprotonated form is
+    ``1 - pH_switch(pKa)``. Requires a condition field named ``pH``.
+
+    Implemented as a sigmoid for numerical stability at extreme pH:
+    ``sigmoid(-ln(10) * (pH - pKa))``.
+    """
+
+    pKa: ASTNode
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        if "pH" not in ctx.condition_fields:
+            raise KeyError(
+                "pH_switch(...) requires a condition field named 'pH'."
+            )
+        kf = self.pKa.compile(ctx)
+        ln10 = float(jnp.log(10.0))
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            pH = condition_arrays["pH"][loc_idx]
+            pKa = kf(C, params, condition_arrays, loc_idx)
+            return jax.nn.sigmoid(-ln10 * (pH - pKa))
+
+        return _eval
+
+    def species(self) -> set[str]:
+        return self.pKa.species()
+
+    def param_names(self) -> set[str]:
+        return self.pKa.param_names()
+
+    def condition_names(self) -> set[str]:
+        return {"pH"} | self.pKa.condition_names()

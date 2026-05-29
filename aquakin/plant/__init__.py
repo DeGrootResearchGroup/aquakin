@@ -1,0 +1,39 @@
+"""Plant-wide simulation: compose kinetic reactors with non-reactive unit ops.
+
+Provides the :class:`Plant` flowsheet that integrates a network of
+:class:`Unit`-Protocol-conforming components (CSTRs, clarifiers, mixers,
+splitters, controllers) under one monolithic Diffrax integration. The
+plant graph supports recycles natively (recycle streams are functions of
+current state, not future state, so no fixed-point iteration is needed).
+
+BSM1 (Copp 2002 / Alex et al. 2008) is the first plant-wide validation
+target — see :mod:`aquakin.plant.bsm.bsm1`.
+"""
+
+from aquakin.plant.cstr import CSTRUnit
+from aquakin.plant.influent import InfluentSeries
+from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.plant import (
+    Connection,
+    ParameterLayout,
+    Plant,
+    PlantSolution,
+)
+from aquakin.plant.streams import Stream
+from aquakin.plant.translators import IdentityTranslator, StateTranslator
+from aquakin.plant.units import Unit
+
+__all__ = [
+    "CSTRUnit",
+    "Connection",
+    "IdentityTranslator",
+    "InfluentSeries",
+    "MixerUnit",
+    "ParameterLayout",
+    "Plant",
+    "PlantSolution",
+    "SplitterUnit",
+    "StateTranslator",
+    "Stream",
+    "Unit",
+]
