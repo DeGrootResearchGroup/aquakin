@@ -80,6 +80,7 @@ class PlugFlowReactor:
         *,
         rtol: float = 1e-6,
         atol=1e-9,
+        dtmax: Optional[float] = None,
     ) -> None:
         conditions.validate_required(network.conditions_required)
         if n_points < 2:
@@ -95,6 +96,7 @@ class PlugFlowReactor:
         self.velocity = float(velocity)
         self.rtol = rtol
         self.atol = _coerce_atol(atol, network.n_species)
+        self.dtmax = dtmax
 
         n_loc = max(conditions.n_locations, 1)
         if n_loc == 1:
@@ -164,6 +166,7 @@ class PlugFlowReactor:
         length = self.length
         rtol = self.rtol
         atol = self.atol
+        dtmax = self.dtmax
         x_eval = jnp.linspace(0.0, length, self.n_points)
 
         @jax.jit
@@ -188,6 +191,7 @@ class PlugFlowReactor:
                 saveat=diffrax.SaveAt(ts=x_eval),
                 rtol=rtol,
                 atol=atol,
+                dtmax=dtmax,
             )
             return sol.ts, sol.ys
 

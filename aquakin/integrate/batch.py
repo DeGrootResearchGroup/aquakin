@@ -62,6 +62,15 @@ class BatchReactor:
         :class:`diffrax.RecursiveCheckpointAdjoint` (memory-efficient for
         long integrations and parameter estimation). For short
         integrations, ``diffrax.DirectAdjoint()`` is cheaper.
+    dtmax : float, optional
+        Maximum integrator step size. ``None`` (default) leaves the step
+        uncapped, which is fastest for forward solves. Set it when
+        *differentiating* a stiff network: an L-stable solver can step over
+        the fastest reaction timescale and damp those modes in the primal,
+        but their sensitivity is then ill-resolved and ``jax.grad`` /
+        ``jax.jvp`` return non-finite values. Capping ``dtmax`` to a small
+        multiple of the fastest reaction timescale fixes it (both AD modes)
+        and the gradients match finite differences.
     """
 
     def __init__(
@@ -72,6 +81,7 @@ class BatchReactor:
         rtol: float = 1e-6,
         atol=1e-9,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
+        dtmax: Optional[float] = None,
     ) -> None:
         conditions.validate_required(network.conditions_required)
         self.network = network
@@ -79,6 +89,7 @@ class BatchReactor:
         self.rtol = rtol
         self.atol = _coerce_atol(atol, network.n_species)
         self.adjoint = adjoint
+        self.dtmax = dtmax
         # Cache jit-compiled inner solve keyed on (t0, t1, t_eval_shape).
         # First call with a new signature pays the trace cost; subsequent
         # calls reuse the compiled graph.
@@ -159,6 +170,7 @@ class BatchReactor:
         rtol = self.rtol
         atol = self.atol
         adjoint = self.adjoint
+        dtmax = self.dtmax
 
         if has_t_eval:
             @jax.jit
@@ -181,6 +193,7 @@ class BatchReactor:
                     rtol=rtol,
                     atol=atol,
                     adjoint=adjoint,
+                    dtmax=dtmax,
                 )
                 return sol.ts, sol.ys
 
@@ -203,6 +216,7 @@ class BatchReactor:
                 rtol=rtol,
                 atol=atol,
                 adjoint=adjoint,
+                dtmax=dtmax,
             )
             return sol.ts, sol.ys
 

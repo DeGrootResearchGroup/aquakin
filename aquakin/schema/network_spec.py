@@ -125,6 +125,80 @@ class ReactionSpec(BaseModel):
         return self
 
 
+class TotalSpec(BaseModel):
+    """One acid/base total in a ``speciation.totals`` entry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    species: str
+    molar_mass: float = Field(gt=0.0)
+
+
+class StrongAnionSpec(BaseModel):
+    """One fully-dissociated strong anion in ``speciation.strong_anions``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    species: str
+    molar_mass: float = Field(gt=0.0)
+    charge: float = Field(gt=0.0)
+
+
+_VALID_TOTAL_KEYS = ("carbonate", "acetate", "ammonia", "phosphate", "sulfide")
+
+
+class SpeciationSpec(BaseModel):
+    """Optional ``speciation:`` block declaring a state-derived pH field.
+
+    Maps state species onto the acid/base totals consumed by the
+    charge-balance pH solver. The produced field (default ``pH``) is computed
+    from the instantaneous state on every RHS evaluation and made available to
+    ``{pH}`` / ``pH_switch(...)`` rate expressions.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str = "pH"
+    temperature_field: str = "T"
+    temperature_units: str = "celsius"
+    z_cation_eq: Union[float, dict[str, str]] = 0.0
+    n_iter: int = Field(default=40, ge=1)
+    totals: dict[str, TotalSpec] = Field(default_factory=dict)
+    strong_anions: list[StrongAnionSpec] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "SpeciationSpec":
+        if self.temperature_units not in ("celsius", "kelvin"):
+            raise ValueError(
+                f"temperature_units must be 'celsius' or 'kelvin', "
+                f"got {self.temperature_units!r}"
+            )
+        unknown = set(self.totals) - set(_VALID_TOTAL_KEYS)
+        if unknown:
+            raise ValueError(
+                f"speciation.totals has unknown systems {sorted(unknown)}; "
+                f"valid keys are {_VALID_TOTAL_KEYS}"
+            )
+        if isinstance(self.z_cation_eq, dict) and set(self.z_cation_eq) != {"condition"}:
+            raise ValueError(
+                "speciation.z_cation_eq mapping must have exactly the key "
+                "'condition'"
+            )
+        return self
+
+
+class PositivityLimiterSpec(BaseModel):
+    """Optional ``positivity_limiter:`` block.
+
+    Throttles each species' net reaction term as its concentration approaches
+    ``threshold``, preventing negative states and the stiffness they cause.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    threshold: float = Field(default=1.0e-3, gt=0.0)
+
+
 class NetworkSpec(BaseModel):
     """Top-level YAML network file schema."""
 
@@ -135,6 +209,8 @@ class NetworkSpec(BaseModel):
     conditions: list[ConditionSpec] = Field(default_factory=list)
     parameters: dict[str, ParameterSpec] = Field(default_factory=dict)
     expressions: dict[str, str] = Field(default_factory=dict)
+    speciation: Optional[SpeciationSpec] = None
+    positivity_limiter: Optional[PositivityLimiterSpec] = None
     reactions: list[ReactionSpec] = Field(min_length=1)
 
     @model_validator(mode="after")

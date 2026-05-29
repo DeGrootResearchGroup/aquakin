@@ -80,6 +80,7 @@ class CFDReactor:
         atol=1e-9,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
         on_nan: str = "raise",
+        dtmax: Optional[float] = None,
     ) -> None:
         if on_nan not in ("raise", "ignore"):
             raise ValueError(
@@ -90,6 +91,7 @@ class CFDReactor:
         self.atol = _coerce_atol(atol, network.n_species)
         self.adjoint = adjoint
         self.on_nan = on_nan
+        self.dtmax = dtmax
         # Cache jit-compiled vmapped step keyed on n_cells.
         self._jit_cache: dict[int, callable] = {}
 
@@ -202,6 +204,7 @@ class CFDReactor:
         rtol = self.rtol
         atol = self.atol
         adjoint = self.adjoint
+        dtmax = self.dtmax
 
         def _per_cell(C_cell, cond_cell, dt, params):
             # cond_cell has scalar values (vmap stripped the cells axis);
@@ -226,6 +229,7 @@ class CFDReactor:
                 rtol=rtol,
                 atol=atol,
                 adjoint=adjoint,
+                dtmax=dtmax,
             )
             return sol.ys[-1]
 

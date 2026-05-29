@@ -233,6 +233,19 @@ class CompiledNetwork:
     stoich_dynamic: list[tuple[int, int, "Callable"]] = field(default_factory=list)
     _stoich_dynamic_rows: "jnp.ndarray | None" = None
     _stoich_dynamic_cols: "jnp.ndarray | None" = None
+    # Optional state-derived condition fields (e.g. a charge-balance pH).
+    # ``derived_condition_fn(C, params, condition_arrays, loc_idx)`` returns a
+    # mapping of extra condition-field name -> scalar, computed from the
+    # instantaneous state. These are merged into ``condition_arrays`` before
+    # the rate callables run, so ordinary ``{pH}`` / ``pH_switch`` expressions
+    # see the derived value. ``derived_fields`` lists the names it produces.
+    derived_condition_fn: "Callable | None" = None
+    derived_fields: list[str] = field(default_factory=list)
+    # Optional positivity limiter on the net reaction term. When set, each
+    # species' net reaction rate is throttled as its concentration approaches
+    # zero, so consumption cannot drive a state negative. Applied to the
+    # reaction term only (transport is added by the reactor afterwards).
+    positivity_threshold: "float | None" = None
 
     @property
     def n_species(self) -> int:
@@ -290,9 +303,40 @@ class CompiledNetwork:
         jnp.ndarray
             Reaction rate vector, shape ``(n_reactions,)``.
         """
+        if self.derived_condition_fn is not None:
+            condition_arrays = self._augment_conditions(
+                C, params, condition_arrays, loc_idx
+            )
         return jnp.stack(
             [f(C, params, condition_arrays, loc_idx) for f in self.rate_callables]
         )
+
+    def _augment_conditions(
+        self,
+        C: jnp.ndarray,
+        params: jnp.ndarray,
+        condition_arrays: dict[str, jnp.ndarray],
+        loc_idx,
+    ) -> dict[str, jnp.ndarray]:
+        """Merge state-derived condition fields into ``condition_arrays``.
+
+        Each derived scalar is broadcast across all spatial locations so that
+        the existing ``condition_arrays[name][loc_idx]`` indexing used by
+        :class:`~aquakin.core.nodes.ConditionNode` returns it unchanged. The
+        derived value is computed from the local state ``C`` (the state at
+        ``loc_idx``), so the entry read at ``loc_idx`` is the correct one;
+        other indices are never consulted within this call.
+        """
+        derived = self.derived_condition_fn(C, params, condition_arrays, loc_idx)
+        if condition_arrays:
+            template = next(iter(condition_arrays.values()))
+            shape = jnp.shape(template)
+        else:
+            shape = (1,)
+        merged = dict(condition_arrays)
+        for name, value in derived.items():
+            merged[name] = jnp.broadcast_to(jnp.asarray(value), shape)
+        return merged
 
     def compute_stoich(self, params: jnp.ndarray) -> jnp.ndarray:
         """Evaluate the stoichiometry matrix at the given parameter vector.
@@ -334,7 +378,30 @@ class CompiledNetwork:
         r = self.rates(C, params, condition_arrays, loc_idx)
         if stoich is None:
             stoich = self.compute_stoich(params)
-        return stoich.T @ r
+        R = stoich.T @ r
+        if self.positivity_threshold is not None:
+            R = self._apply_positivity_limiter(R, C)
+        return R
+
+    def _apply_positivity_limiter(
+        self, R: jnp.ndarray, C: jnp.ndarray
+    ) -> jnp.ndarray:
+        """Throttle net consumption as a species approaches zero.
+
+            R_lim = max(R, 0) + min(R, 0) * C / max(C, threshold)
+
+        Positive (production) terms pass through unchanged; negative
+        (consumption) terms are scaled by ``C / max(C, threshold)``, which is
+        1 well away from zero and decays to 0 as ``C`` falls below
+        ``threshold`` — preventing the state from crossing into negative
+        values and removing the associated stiffness. Smooth enough for AD
+        (uses only ``maximum``/``minimum``).
+        """
+        thr = self.positivity_threshold
+        pos = jnp.maximum(R, 0.0)
+        neg = jnp.minimum(R, 0.0)
+        scale = C / jnp.maximum(C, thr)
+        return pos + neg * scale
 
     def summary(self) -> str:
         """Return a human-readable table summarising the network."""
@@ -393,7 +460,40 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     species_names = [s.name for s in spec.species]
     species_index = {name: i for i, name in enumerate(species_names)}
 
-    condition_fields = frozenset(c.name for c in spec.conditions)
+    declared_conditions = frozenset(c.name for c in spec.conditions)
+    condition_fields = declared_conditions
+
+    # --- Optional speciation / state-derived pH ---------------------
+    derived_condition_fn = None
+    derived_fields: list[str] = []
+    speciation_cfg = getattr(spec, "speciation", None)
+    if speciation_cfg is not None:
+        from aquakin.core.speciation import build_ph_derived_fn
+
+        # Accept either a plain dict or a Pydantic model (duck-typed).
+        cfg = (
+            speciation_cfg
+            if isinstance(speciation_cfg, dict)
+            else speciation_cfg.model_dump()
+        )
+        derived_condition_fn, produced_field, required_fields = build_ph_derived_fn(
+            cfg, species_index
+        )
+        missing = sorted(required_fields - declared_conditions)
+        if missing:
+            raise ValueError(
+                f"speciation block reads condition field(s) {missing} that are "
+                f"not declared in the network's 'conditions:' block."
+            )
+        if produced_field in declared_conditions:
+            raise ValueError(
+                f"speciation produces condition field '{produced_field}', which "
+                f"must not also be declared in 'conditions:' (it is computed, "
+                f"not supplied)."
+            )
+        derived_fields = [produced_field]
+        # Make the derived field visible to rate-expression validation.
+        condition_fields = declared_conditions | {produced_field}
 
     # Build parameter index by walking reactions in declaration order so that
     # parameter ordering is deterministic.
@@ -564,6 +664,16 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     conditions_required = [c.name for c in spec.conditions]
     condition_defaults = {c.name: float(c.default) for c in spec.conditions}
 
+    # --- Optional positivity limiter --------------------------------
+    positivity_threshold = None
+    limiter_cfg = getattr(spec, "positivity_limiter", None)
+    if limiter_cfg is not None:
+        positivity_threshold = float(
+            limiter_cfg["threshold"]
+            if isinstance(limiter_cfg, dict)
+            else limiter_cfg.threshold
+        )
+
     stoich = jnp.asarray(stoich_np)
     if stoich_dynamic:
         dyn_rows = jnp.asarray([i for (i, _, _) in stoich_dynamic])
@@ -593,4 +703,7 @@ def compile_network(spec: "Any") -> CompiledNetwork:
         stoich_dynamic=stoich_dynamic,
         _stoich_dynamic_rows=dyn_rows,
         _stoich_dynamic_cols=dyn_cols,
+        derived_condition_fn=derived_condition_fn,
+        derived_fields=derived_fields,
+        positivity_threshold=positivity_threshold,
     )

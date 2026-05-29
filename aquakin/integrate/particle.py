@@ -104,6 +104,7 @@ class ParticleTrackReactor:
         n_save: int | None = None,
         rtol: float = 1e-6,
         atol=1e-9,
+        dtmax: float | None = None,
     ) -> None:
         missing = sorted(set(network.conditions_required) - set(track.fields))
         if missing:
@@ -118,6 +119,7 @@ class ParticleTrackReactor:
             raise ValueError(f"n_save must be >= 2, got {self.n_save}")
         self.rtol = rtol
         self.atol = _coerce_atol(atol, network.n_species)
+        self.dtmax = dtmax
         # Single jitted variant: the track structure is fixed for the
         # reactor's lifetime, so one cache slot is enough.
         self._jitted_solve = None
@@ -163,6 +165,7 @@ class ParticleTrackReactor:
         t_save = jnp.linspace(t0, t1, self.n_save)
         rtol = self.rtol
         atol = self.atol
+        dtmax = self.dtmax
 
         @jax.jit
         def _solve(C0, params):
@@ -182,6 +185,7 @@ class ParticleTrackReactor:
                 saveat=diffrax.SaveAt(ts=t_save),
                 rtol=rtol,
                 atol=atol,
+                dtmax=dtmax,
             )
             return sol.ts, sol.ys
 
