@@ -37,6 +37,22 @@ def test_compiles_with_expected_shape(net):
     assert net.positivity_threshold == pytest.approx(1.0e-3)
 
 
+@pytest.mark.parametrize(
+    "variant", ["wats_sewer_v0", "wats_sewer_halforder", "wats_sewer_directsulfate"]
+)
+def test_structural_variants_compile(variant):
+    """The model-structure-study variant networks load and compile."""
+    import os
+    ndir = os.path.join(os.path.dirname(aquakin.__file__), "networks")
+    v = aquakin.load_network_from_file(os.path.join(ndir, variant + ".yaml"))
+    assert v.name == variant
+    assert v.n_species == 18
+    assert v.n_reactions == 46
+    cond = aquakin.SpatialConditions.uniform(1, T=20.0, A_V=56.7, X_BF=10.0)
+    r = v.rates(v.default_concentrations(), v.default_parameters(), cond.fields, 0)
+    assert bool(jnp.all(jnp.isfinite(r)))
+
+
 def test_parameter_priors_loaded(net):
     """Literature ranges / measured uncertainties load as Gaussian priors."""
     pr = net.parameter_priors
