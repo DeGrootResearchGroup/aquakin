@@ -42,18 +42,16 @@ _BASE_IC = dict(
     S_NH=40.0, S_PO4=46.0, S_CH4=0.0, S_H2=0.0, S_CO2=20.0, S_I=50.0,
     X_I=33.04, X_S0=15.0,
 )
+# Both batches use the same network parameters (the published calibrated set);
+# they differ only in initial conditions.
 CASES = {
     "calibration": {
         "ic": {**_BASE_IC, "S_VFA": 28.2, "S_NO": 30.0, "sumS": 9.0, "S_SO4": 4.0},
-        # calibration uses the network's default (calibrated) rate constants
         "params": {},
     },
     "validation": {
         "ic": {**_BASE_IC, "S_VFA": 16.0, "S_NO": 33.0, "sumS": 16.0, "S_SO4": 2.0},
-        # the published validation run re-tuned four constants
-        "params": {
-            "k_12_no": 8.0, "k_h2s_acid": 2.5, "k_sII_ox_f": 18.0, "k_sII_anox_f": 25.3,
-        },
+        "params": {},
     },
 }
 
