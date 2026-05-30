@@ -27,8 +27,12 @@ network:
     exact for x >> eps and zero-valued at x=0. Quantitative validation against
     the published model is still outstanding.
   references:
-    - "Sharma, Yuan, et al. Extended WATS sewer process model."
-    - "Hvitved-Jacobsen, T. et al. Sewer Processes (WATS), 2nd ed."
+    - "Khalil et al. (2025). Optimizing nitrate dosing strategies for sulfide control. Water Environ. Res."
+    - "Hvitved-Jacobsen, Vollertsen & Nielsen (2013). Sewer Processes (WATS), 2nd ed. (hydrolysis, growth, saturation constants, temperature coefficients)."
+    - "Calabro, Mannina & Viviani (2009). In-sewer processes: model development and sensitivity analysis. Water Sci. Technol. (fermentation, anaerobic correction)."
+    - "Guisasola, Sharma, Keller & Yuan (2009). Development of a model for assessing methane formation in rising main sewers. Water Res. (methanogenesis, sulfate reduction)."
+    - "Jiang, Leung, Li, Chen & Okabe (2009). A biofilm model for prediction of pollutant transformation in sewers. Water Res."
+    - "Jiang, Sharma & Yuan (2009). Sulfur transformation in rising main sewers receiving nitrate dosage. Water Res. 43(17), 4430-4440 (anoxic sulfide/elemental-sulfur oxidation and reduction rates)."
 
 # --- State species. Inert fractions (S_I, X_I) advect but do not react.
 species:
@@ -100,72 +104,79 @@ expressions:
   ho_XS0_half:  "[X_S0] * ([X_S0] + 1.0e-3) ** (0.0 - 0.5)"
 
 # --- Shared kinetic + stoichiometric parameters (global; referenced by bare
-#     name in rate and stoichiometry expressions).
+#     name in rate and stoichiometry expressions). Each value carries its
+#     literature source so the provenance is unambiguous. Source key:
+#       WATS      = Hvitved-Jacobsen, Vollertsen & Nielsen (2013), Sewer Processes (Table 9.6)
+#       Calabro   = Calabro, Mannina & Viviani (2009)
+#       Guisasola = Guisasola, Sharma, Keller & Yuan (2009)
+#       JiangBF   = Jiang, Leung, Li, Chen & Okabe (2009), sewer biofilm model (orig. IWA, 2000)
+#       JiangS    = Jiang, Sharma & Yuan (2009), sulfur transformation in rising mains
+#       calib     = this study's calibration to the batch nitrate-dosing data (Table 4)
 parameters:
-  mu_h:        {value: 6.7,   units: "1/d"}
-  k_12_o2:     {value: 18.0,  units: "gO2^0.5 m^-0.5 d^-1"}
-  k_12_no:     {value: 7.95,  units: "gN^0.5 m^-0.5 d^-1", bounds: [1.0, 30.0]}
-  eps:         {value: 0.15,  units: "-"}
-  k_sw:        {value: 1.0,   units: "gCOD/m3"}
-  k_sf:        {value: 5.0,   units: "gCOD/m3"}
-  k_o:         {value: 0.05,  units: "gO2/m3"}
-  k_no:        {value: 0.5,   units: "gN/m3"}
-  k_h1:        {value: 5.0,   units: "1/d"}
-  k_h2:        {value: 0.5,   units: "1/d"}
-  k_x1:        {value: 1.5,   units: "gCOD/gCOD"}
-  k_x2:        {value: 0.5,   units: "gCOD/gCOD"}
-  eta_no:      {value: 0.6,   units: "-"}
-  eta_an:      {value: 0.21,  units: "-"}
-  q_m:         {value: 1.0,   units: "1/d"}
-  q_ferm:      {value: 3.0,   units: "gCOD/gCOD/d"}
-  k_fe:        {value: 10.0,  units: "gCOD/m3"}
-  mu_a:        {value: 0.8,   units: "1/d"}
-  b_a:         {value: 0.08,  units: "1/d"}
-  k_nh:        {value: 1.0,   units: "gN/m3"}
-  k_ch4_acid:  {value: 4.44,  units: "gCOD/m2/d"}
-  k_ch4_hyd:   {value: 1.92,  units: "gCOD/m2/d"}
-  k_vfa_mb:    {value: 1.0,   units: "gCOD/m3"}
-  k_h2_mb:     {value: 0.002, units: "gCOD/m3"}
-  mu_h2s_acid: {value: 0.0,   units: "gS/gCOD/d"}   # bulk acetoclastic SRB (0 at defaults)
-  mu_h2s_hyd:  {value: 0.0,   units: "gS/gCOD/d"}   # bulk hydrogenotrophic SRB (0 at defaults)
-  k_h2s_acid:  {value: 1.36,  units: "gS/m2/d"}     # biofilm acetoclastic SRB
-  k_h2s_hyd:   {value: 0.0,   units: "gS/m2/d"}     # biofilm hydrogenotrophic SRB (0 at defaults)
-  k_srb:       {value: 5.0,   units: "gCOD/m3"}
-  k_so4:       {value: 2.0,   units: "gS/m3"}
-  k_h2sc:      {value: 0.96,  units: "(gS/m3)(gO2/m3) /d"}  # chemical sulfide oxidation, molecular H2S
-  k_hsc:       {value: 12.0,  units: "(gS/m3)(gO2/m3) /d"}  # chemical sulfide oxidation, ionic HS-
-  k_sII_b_pHopt: {value: 19.92, units: "(gS/m3)(gO2/m3) /d"} # bulk biological sulfide ox at pH optimum
+  mu_h:        {value: 6.7,   units: "1/d"}                  # WATS/Calabro muH (WATS range 4-8)
+  k_12_o2:     {value: 18.0,  units: "gO2^0.5 m^-0.5 d^-1"}  # half-order aerobic biofilm growth const
+  k_12_no:     {value: 7.95,  units: "gN^0.5 m^-0.5 d^-1", bounds: [1.0, 30.0]}  # calib (k_1/2,NO)
+  eps:         {value: 0.15,  units: "-"}                    # WATS biofilm efficiency eps (range 0.1-0.2)
+  k_sw:        {value: 1.0,   units: "gCOD/m3"}              # WATS K_Sw (range 0.5-2.0)
+  k_sf:        {value: 5.0,   units: "gCOD/m3"}              # WATS K_sf
+  k_o:         {value: 0.05,  units: "gO2/m3"}               # WATS K_O (range 0.01-0.5)
+  k_no:        {value: 0.5,   units: "gN/m3"}                # WATS K_NO3 (0.5-1.0; JiangBF/IWA use 2)
+  k_h1:        {value: 5.0,   units: "1/d"}                  # WATS k_h1 fast hydrolysis = 5
+  k_h2:        {value: 0.5,   units: "1/d"}                  # WATS k_h2 slow hydrolysis = 0.5
+  k_x1:        {value: 1.5,   units: "gCOD/gCOD"}            # WATS/Calabro K_X1 fast = 1.5
+  k_x2:        {value: 0.5,   units: "gCOD/gCOD"}            # WATS/Calabro K_X2 slow = 0.5
+  eta_no:      {value: 0.6,   units: "-"}                    # JiangBF anoxic correction (~0.51)
+  eta_an:      {value: 0.21,  units: "-"}                    # Calabro anaerobic correction (range 0.14-0.21)
+  q_m:         {value: 1.0,   units: "1/d"}                  # WATS q_m (range 0.5-1.0)
+  q_ferm:      {value: 3.0,   units: "gCOD/gCOD/d"}          # Calabro q_fe (range 1.0-3.0)
+  k_fe:        {value: 10.0,  units: "gCOD/m3"}              # WATS/Calabro K_fe
+  mu_a:        {value: 0.8,   units: "1/d"}                  # autotroph max growth rate
+  b_a:         {value: 0.08,  units: "1/d"}                  # autotroph decay rate
+  k_nh:        {value: 1.0,   units: "gN/m3"}                # ammonia saturation, nitrification
+  k_ch4_acid:  {value: 4.44,  units: "gCOD/m2/d"}           # Guisasola k_CH4,AC = 4.44
+  k_ch4_hyd:   {value: 1.92,  units: "gCOD/m2/d"}           # Guisasola k_CH4,H2 = 1.92
+  k_vfa_mb:    {value: 1.0,   units: "gCOD/m3"}              # Guisasola K_AC,MA = 1.0
+  k_h2_mb:     {value: 0.002, units: "gCOD/m3"}             # Guisasola K_H2,MA = 0.002
+  mu_h2s_acid: {value: 0.0,   units: "gS/gCOD/d"}            # bulk acetoclastic SRB (inactive)
+  mu_h2s_hyd:  {value: 0.0,   units: "gS/gCOD/d"}            # bulk hydrogenotrophic SRB (inactive)
+  k_h2s_acid:  {value: 1.36,  units: "gS/m2/d"}             # Guisasola k_H2S,AC = 1.36 (biofilm SRB)
+  k_h2s_hyd:   {value: 0.0,   units: "gS/m2/d"}             # Guisasola k_H2S,H2 < 0.001 -> 0
+  k_srb:       {value: 5.0,   units: "gCOD/m3"}              # Guisasola K_AC,SRB = 5
+  k_so4:       {value: 2.0,   units: "gS/m3"}                # Guisasola K_SO4 (~1.8)
+  k_h2sc:      {value: 0.96,  units: "(gS/m3)(gO2/m3) /d"}  # aerobic chemical sulfide ox, molecular H2S
+  k_hsc:       {value: 12.0,  units: "(gS/m3)(gO2/m3) /d"}  # aerobic chemical sulfide ox, ionic HS-
+  k_sII_b_pHopt: {value: 19.92, units: "(gS/m3)(gO2/m3) /d"} # aerobic biological bulk sulfide ox at pH optimum
   omega_sII_b: {value: 25.0,  units: "-"}                   # pH-sensitivity width, bulk bio sulfide ox
   pH_optimum:  {value: 8.0,   units: "-"}                   # optimum pH for bulk bio sulfide ox
-  n1:          {value: 0.9,   units: "-"}                   # reaction order in sulfide (chem/bio ox)
-  n2:          {value: 0.15,  units: "-"}                   # reaction order in oxygen (chem/bio ox)
-  k_sII_ox_f:  {value: 12.0,  units: "gS/m2/d"}
-  k_sII_anox_f: {value: 18.45, units: "gS/m2/d", bounds: [1.0, 40.0]}
-  k_s0_acid:   {value: 0.1,   units: "gS/m2/d"}
-  k_s0_hyd:    {value: 0.0,   units: "gS/m2/d"}     # elemental-S reduction by H2 (0 at defaults)
-  k_s0_ox_f:   {value: 0.0,   units: "gS/m2/d"}     # aerobic elemental-S oxidation (0 at defaults)
-  k_s0_anox_f: {value: 2.64,  units: "gS/m2/d", bounds: [0.1, 30.0]}
-  # Saturation constants that the published study CALIBRATED (the reference C
-  # hardcoded them). Defaults are the manuscript's calibrated values. Exposed
-  # as parameters so they can be (re)fit -- see examples/wats_sewer_calibration.py.
-  K_NO_f:      {value: 14.40, units: "gN/m3",  bounds: [1.0, 30.0]}   # nitrate sat., biofilm anoxic growth
-  K_S2:        {value: 0.15,  units: "gS/m3",  bounds: [0.05, 5.0]}   # sulfide sat., sulfide oxidation
-  K_NO_S_f:    {value: 0.25,  units: "gN/m3",  bounds: [0.05, 8.0]}   # nitrate sat., sulfide & S0 oxidation
-  K_S0:        {value: 1.0,   units: "gS/m3",  bounds: [0.1, 5.0]}    # elemental-S sat., S0 oxidation & reduction
-  y_hw:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}
-  y_hf:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}
-  y_aob:       {value: 0.24,  units: "-",        bounds: [0.1, 0.4]}
-  i_n_bio:     {value: 0.07,  units: "gN/gCOD"}
-  i_n_xb:      {value: 0.07,  units: "gN/gCOD"}
-  i_p_bio:     {value: 0.02,  units: "gP/gCOD"}
-  i_s_bio:     {value: 0.01,  units: "gS/gCOD"}
-  i_s_sb:      {value: 0.0015, units: "gS/gCOD"}
-  i_s_xb:      {value: 0.0015, units: "gS/gCOD"}
-  i_cit_bio:   {value: 0.35,  units: "gC/gCOD"}
-  i_cit_sb:    {value: 0.29,  units: "gC/gCOD"}
-  a_w:         {value: 1.07,  units: "-"}
-  a_f:         {value: 1.05,  units: "-"}
-  a_s:         {value: 1.05,  units: "-"}
+  n1:          {value: 0.9,   units: "-"}                   # WATS reaction order in sulfide (0.8-1.0)
+  n2:          {value: 0.15,  units: "-"}                   # WATS reaction order in oxygen (0.1-0.2)
+  k_sII_ox_f:  {value: 12.0,  units: "gS/m2/d"}             # aerobic biofilm sulfide ox rate
+  k_sII_anox_f: {value: 18.45, units: "gS/m2/d", bounds: [1.0, 40.0]}  # calib (k_ox,S2-; JiangS nominal 17.1)
+  k_s0_acid:   {value: 0.1,   units: "gS/m2/d"}             # JiangS elemental-S reduction = 0.1 (NOT 15.5)
+  k_s0_hyd:    {value: 0.0,   units: "gS/m2/d"}             # elemental-S reduction by H2 (inactive)
+  k_s0_ox_f:   {value: 0.0,   units: "gS/m2/d"}             # aerobic elemental-S oxidation (inactive)
+  k_s0_anox_f: {value: 2.64,  units: "gS/m2/d", bounds: [0.1, 30.0]}   # calib (k_ox,So; JiangS nominal 2.2)
+  # Saturation constants the study CALIBRATED (defaults = manuscript Table 4).
+  # The sulfur/nitrate saturation values strongly affect the nitrate split, so
+  # they are exposed as parameters -- see examples/wats_sewer_calibration.py.
+  K_NO_f:      {value: 14.40, units: "gN/m3",  bounds: [1.0, 30.0]}   # calib: nitrate sat., biofilm anoxic growth
+  K_S2:        {value: 0.15,  units: "gS/m3",  bounds: [0.05, 5.0]}   # calib: sulfide sat., sulfide oxidation
+  K_NO_S_f:    {value: 0.25,  units: "gN/m3",  bounds: [0.05, 8.0]}   # calib: nitrate sat., sulfide & S0 oxidation
+  K_S0:        {value: 1.0,   units: "gS/m3",  bounds: [0.1, 5.0]}    # calib/WATS: elemental-S sat. (ox & reduction)
+  y_hw:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}  # JiangBF heterotroph yield (Y_H=0.55)
+  y_hf:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}  # biofilm heterotroph yield
+  y_aob:       {value: 0.24,  units: "-",        bounds: [0.1, 0.4]}  # autotroph yield
+  i_n_bio:     {value: 0.07,  units: "gN/gCOD"}             # N content of biomass
+  i_n_xb:      {value: 0.07,  units: "gN/gCOD"}             # N content of particulate substrate
+  i_p_bio:     {value: 0.02,  units: "gP/gCOD"}             # P content of biomass
+  i_s_bio:     {value: 0.01,  units: "gS/gCOD"}             # S content of biomass
+  i_s_sb:      {value: 0.0015, units: "gS/gCOD"}            # S content of soluble substrate
+  i_s_xb:      {value: 0.0015, units: "gS/gCOD"}            # S content of particulate substrate
+  i_cit_bio:   {value: 0.35,  units: "gC/gCOD"}             # inorganic-C content of biomass
+  i_cit_sb:    {value: 0.29,  units: "gC/gCOD"}             # inorganic-C content of substrate
+  a_w:         {value: 1.07,  units: "-"}                   # WATS alpha_w = 1.07 (water-phase processes)
+  a_f:         {value: 1.05,  units: "-"}                   # WATS alpha_f = 1.05 (biofilm processes)
+  a_s:         {value: 1.05,  units: "-"}                   # WATS alpha_sf ~ 1.03 (sulfur/anaerobic)
 
 reactions:
   # ============================ HETEROTROPHIC GROWTH ====================
