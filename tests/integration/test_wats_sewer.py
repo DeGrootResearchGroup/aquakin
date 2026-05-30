@@ -44,6 +44,7 @@ def test_compiles_with_expected_shape(net):
         "wats_sewer_halforder",
         "wats_sewer_directsulfate",
         "wats_sewer_srbsubstrate",
+        "wats_sewer_combined",
     ],
 )
 def test_structural_variants_compile(variant):
