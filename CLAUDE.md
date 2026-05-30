@@ -598,6 +598,15 @@ sens.doutput_dparams                 # (n_params,)
 sens.doutput_dconditions["pH"]       # (n_locations,) — dict access
 sens.ranked_params()
 
+# Derivative-based global sensitivity (DGSM) — AD-accelerated Sobol replacement.
+# fn maps an uncertain-input vector to a scalar output (it builds params / C0
+# and calls reactor.solve internally). Scrambled-Sobol QMC; seed makes it
+# exactly reproducible; bounds the Sobol total-order index per input.
+res = aquakin.dgsm(fn, ranges, input_names=names, n_samples=64, seed=0)
+res.sobol_total_bound                # (d,) upper bound on Sobol S_j^tot
+res.std_error                        # (d,) MC standard error (convergence)
+res.ranked()                         # [(name, bound), ...] sorted
+
 # Point-estimate fit (SciPy box-constrained least squares)
 result = aquakin.fit(reactor, C0, observations, t_obs, free_params, method="adjoint")
 result.params

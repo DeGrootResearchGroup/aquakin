@@ -179,3 +179,65 @@ def test_fit_recovers_known_rate(simple_network):
 
     assert result.converged
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
+# --- DGSM (derivative-based global sensitivity) ------------------------
+
+
+def test_dgsm_ranks_influential_input():
+    """A linear output sensitive only to z0 ranks z0 far above z1."""
+    res = aquakin.dgsm(
+        lambda z: 3.0 * z[0] + 0.0 * z[1],
+        [(0.0, 1.0), (0.0, 1.0)],
+        input_names=["a", "b"],
+        n_samples=32,
+    )
+    ranked = res.ranked()
+    assert ranked[0][0] == "a"
+    assert ranked[0][1] > 10.0 * max(ranked[1][1], 1e-12)
+
+
+def test_dgsm_matches_analytic_nu():
+    """For f = c*z0, nu_0 = c^2 exactly (gradient is constant c)."""
+    c = 2.5
+    res = aquakin.dgsm(lambda z: c * z[0], [(-1.0, 1.0)], n_samples=16)
+    assert float(res.dgsm[0]) == pytest.approx(c ** 2, rel=1e-6)
+
+
+def test_dgsm_reproducible_with_seed():
+    fn = lambda z: jnp.sin(z[0]) * z[1] ** 2
+    rng = [(0.0, 2.0), (0.0, 2.0)]
+    a = aquakin.dgsm(fn, rng, n_samples=32, seed=7)
+    b = aquakin.dgsm(fn, rng, n_samples=32, seed=7)
+    c = aquakin.dgsm(fn, rng, n_samples=32, seed=8)
+    assert np.array_equal(np.asarray(a.sobol_total_bound), np.asarray(b.sobol_total_bound))
+    assert not np.array_equal(np.asarray(a.sobol_total_bound), np.asarray(c.sobol_total_bound))
+
+
+def test_dgsm_n_rounded_to_power_of_two():
+    res = aquakin.dgsm(lambda z: z[0], [(0.0, 1.0)], n_samples=30)
+    assert res.n_samples == 32  # nearest power of two
+
+
+def test_dgsm_rejects_bad_ranges():
+    with pytest.raises(ValueError):
+        aquakin.dgsm(lambda z: z[0], [(1.0, 0.0)], n_samples=8)  # upper <= lower
+
+
+def test_dgsm_through_reactor(simple_network):
+    """DGSM flows through reactor.solve and finds the rate constant influential."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    C0 = jnp.asarray([1.0, 0.0])
+    p_def = simple_network.default_parameters()
+    t_eval = jnp.linspace(0.0, 10.0, 11)
+
+    def fn(z):
+        p = p_def.at[0].set(z[0])
+        sol = reactor.solve(C0, p, t_span=(0.0, 10.0), t_eval=t_eval)
+        return sol.C_named("B")[-1]
+
+    res = aquakin.dgsm(fn, [(0.1, 0.5)], input_names=["A_to_B.k"], n_samples=8)
+    assert res.n_valid >= 2
+    assert float(res.dgsm[0]) > 0.0
