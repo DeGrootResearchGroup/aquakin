@@ -141,7 +141,7 @@ parameters:
   n2:          {value: 0.15,  units: "-"}                   # reaction order in oxygen (chem/bio ox)
   k_sII_ox_f:  {value: 12.0,  units: "gS/m2/d"}
   k_sII_anox_f: {value: 18.45, units: "gS/m2/d", bounds: [1.0, 40.0]}
-  k_s0_acid:   {value: 0.2,   units: "gS/m2/d"}
+  k_s0_acid:   {value: 0.1,   units: "gS/m2/d"}
   k_s0_hyd:    {value: 0.0,   units: "gS/m2/d"}     # elemental-S reduction by H2 (0 at defaults)
   k_s0_ox_f:   {value: 0.0,   units: "gS/m2/d"}     # aerobic elemental-S oxidation (0 at defaults)
   k_s0_anox_f: {value: 2.64,  units: "gS/m2/d", bounds: [0.1, 30.0]}
