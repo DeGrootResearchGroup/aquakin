@@ -122,8 +122,8 @@ parameters:
   mu_a:        {value: 0.8,   units: "1/d"}
   b_a:         {value: 0.08,  units: "1/d"}
   k_nh:        {value: 1.0,   units: "gN/m3"}
-  k_ch4_acid:  {value: 2.8,   units: "gCOD/m2/d"}
-  k_ch4_hyd:   {value: 1.0,   units: "gCOD/m2/d"}
+  k_ch4_acid:  {value: 4.44,  units: "gCOD/m2/d"}
+  k_ch4_hyd:   {value: 1.92,  units: "gCOD/m2/d"}
   k_vfa_mb:    {value: 1.0,   units: "gCOD/m3"}
   k_h2_mb:     {value: 0.002, units: "gCOD/m3"}
   mu_h2s_acid: {value: 0.0,   units: "gS/gCOD/d"}   # bulk acetoclastic SRB (0 at defaults)
