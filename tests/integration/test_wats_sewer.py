@@ -38,7 +38,13 @@ def test_compiles_with_expected_shape(net):
 
 
 @pytest.mark.parametrize(
-    "variant", ["wats_sewer_v0", "wats_sewer_halforder", "wats_sewer_directsulfate"]
+    "variant",
+    [
+        "wats_sewer_v0",
+        "wats_sewer_halforder",
+        "wats_sewer_directsulfate",
+        "wats_sewer_srbsubstrate",
+    ],
 )
 def test_structural_variants_compile(variant):
     """The model-structure-study variant networks load and compile."""
