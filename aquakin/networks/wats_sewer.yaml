@@ -115,9 +115,9 @@ parameters:
   k_x1:        {value: 1.5,   units: "gCOD/gCOD"}
   k_x2:        {value: 0.5,   units: "gCOD/gCOD"}
   eta_no:      {value: 0.6,   units: "-"}
-  eta_an:      {value: 1.0,   units: "-"}
+  eta_an:      {value: 0.21,  units: "-"}
   q_m:         {value: 1.0,   units: "1/d"}
-  q_ferm:      {value: 20.0,  units: "gCOD/gCOD/d"}
+  q_ferm:      {value: 3.0,   units: "gCOD/gCOD/d"}
   k_fe:        {value: 10.0,  units: "gCOD/m3"}
   mu_a:        {value: 0.8,   units: "1/d"}
   b_a:         {value: 0.08,  units: "1/d"}
