@@ -211,6 +211,52 @@ def test_priors_ignored_when_not_free(setup):
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
 
 
+# ---------- joint multi-batch fit ----------
+
+
+def test_joint_multibatch_recovers_known_parameter(simple_network):
+    """Two batches with different C0 / time grids, fit jointly, recover k."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    true_k = 0.3
+    true_params = simple_network.default_parameters().at[0].set(true_k)
+    C0a = jnp.asarray([1.0, 0.0])
+    C0b = jnp.asarray([2.0, 0.0])
+    ta = jnp.linspace(0.5, 8.0, 12)
+    tb = jnp.linspace(0.3, 10.0, 15)
+    obsa = reactor.solve(C0a, true_params, t_span=(0.0, 8.0), t_eval=ta).C_named("B")
+    obsb = reactor.solve(C0b, true_params, t_span=(0.0, 10.0), t_eval=tb).C_named("B")
+    result = aquakin.calibrate(
+        reactor,
+        [C0a, C0b],
+        observations=[obsa, obsb],
+        t_obs=[ta, tb],
+        free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"],
+        loss="mse",
+        laplace=False,
+    )
+    assert result.converged
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
+def test_multibatch_length_mismatch_rejected(simple_network):
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    C0a = jnp.asarray([1.0, 0.0])
+    t = jnp.asarray([0.0, 1.0])
+    obs = jnp.asarray([0.0, 0.5])
+    with pytest.raises(ValueError):
+        aquakin.calibrate(
+            reactor, [C0a, C0a], observations=[obs], t_obs=[t, t],
+            free_params=["A_to_B.k"], observed_species=["B"], loss="mse",
+            laplace=False,
+        )
+
+
 def test_rejects_empty_free_params(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
     with pytest.raises(ValueError):

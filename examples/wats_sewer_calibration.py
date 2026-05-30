@@ -7,11 +7,15 @@ the gradient flows through the stiff Diffrax solve via the ``dtmax`` cap (see
 CLAUDE.md, "Differentiating stiff networks").
 
 It fits the influential sulfur / nitrate rate constants plus the carbon
-fermentation rate to the measured sulfide, sulfate, VFA and nitrate of the
-"calibration" batch, then reports the fit on both batches. The fit is posed as
-a Bayesian MAP estimate with two ingredients, both justified by the AD
-machinery rather than by manual trial (the published study reached a similar
-free set by hand):
+fermentation rate to the measured sulfide, sulfate, VFA and nitrate of BOTH
+batches jointly (a single shared parameter vector). Fitting all the data gives
+the strongest parameter estimate and resolves the calibration/validation
+sulfur-kinetics tension that appears when one batch is fit alone; the cost is
+that no batch is held out to demonstrate generalization (acceptable here, as
+the literature priors already regularize toward independent measurements). The
+fit is posed as a Bayesian MAP estimate with two ingredients, both justified by
+the AD machinery rather than by manual trial (the published study reached a
+similar free set by hand):
 
   * Relative likelihood. The measured series span very different magnitudes
     within a curve (sulfide 9 -> 0, sulfate 4 -> 22) and across species. With
@@ -39,6 +43,17 @@ and the posterior correlation matrix so the identifiability is visible. The
 residual calibration/validation tension (the two batches favour slightly
 different sulfur kinetics; VFA is the weak point in both) is itself reported in
 the source study.
+
+Finding (deliberate, not a defect): this physically-constrained MAP fit is
+looser than a free least-squares fit. A diagnostic (priors off, absolute loss,
+per-batch) shows the data can be fit about as well as the published model only
+when the elemental-sulfur oxidation rate ``k_s0_anox_f`` is driven to ~5 -- i.e.
+roughly twice the independent measurement it carries a prior from (Jiang
+2.2±0.4) and twice the value the source study itself reports. Holding that rate
+near its measured value (the rigorous choice here) therefore costs fit quality.
+So the published tightness rests on a rate outside its measured range; the gap
+is a statement about parameter identifiability and provenance, not a porting
+error (aquakin reproduces the published curves when given the published rates).
 
     python examples/wats_sewer_calibration.py            # MAP fit + summary
     python examples/wats_sewer_calibration.py --plot     # also save overlays
@@ -114,6 +129,21 @@ def _C0(network, case):
     return c
 
 
+def _dataset(network, case, measured):
+    """Build (C0, observations, t_obs_days, sigma) for one batch.
+
+    All four fitted species share a measurement-time grid within a batch.
+    ``sigma`` is the relative measurement noise: max(|value|, 5% of the
+    species' peak), so each point weighs ~equally in relative terms.
+    """
+    t_h = np.array(measured[case]["sulfide"][0])
+    obs_np = np.stack([measured[case][ref][1] for _, ref in FIT_SPECIES], axis=1)
+    floors = SIGMA_FLOOR_FRAC * np.max(np.abs(obs_np), axis=0)
+    sigma = np.maximum(np.abs(obs_np), floors[None, :])
+    return (_C0(network, case), jnp.asarray(obs_np),
+            jnp.asarray(t_h / 24.0), jnp.asarray(sigma))
+
+
 def _rmse(reactor, network, case, params, measured):
     t_h = np.array(measured[case]["sulfide"][0])
     sol = reactor.solve(_C0(network, case), params, t_span=(0.0, T_END_DAYS),
@@ -135,15 +165,16 @@ def main() -> None:
                            rtol=1e-6, atol=1e-9, dtmax=DTMAX)
     measured = _load_measured()
 
-    # observations for the calibration batch (shared 11-point time grid)
-    t_h = np.array(measured["calibration"]["sulfide"][0])
-    t_obs = jnp.asarray(t_h / 24.0)
-    obs_np = np.stack([measured["calibration"][ref][1] for _, ref in FIT_SPECIES], axis=1)
-    obs = jnp.asarray(obs_np)
-
-    # Relative sigma (per-observation), with a per-species floor.
-    floors = SIGMA_FLOOR_FRAC * np.max(np.abs(obs_np), axis=0)
-    sigma = jnp.asarray(np.maximum(np.abs(obs_np), floors[None, :]))
+    # Joint fit: both batches share the parameter vector and the priors. We
+    # pass lists of (C0, observations, t_obs, sigma) -- the batches have
+    # different initial conditions and time grids. Fitting all the data gives
+    # the strongest parameter estimate for the model; the cost is that no batch
+    # is held out to demonstrate generalization (acceptable here, since the
+    # priors already regularize toward independent literature measurements).
+    fit_cases = ["calibration", "validation"]
+    C0s, obss, tobss, sigmas = zip(
+        *(_dataset(network, case, measured) for case in fit_cases)
+    )
 
     p0 = network.default_parameters()
     print("initial (published-calibrated) rate constants:")
@@ -151,10 +182,10 @@ def main() -> None:
         print(f"  {f} = {float(p0[network.param_index[f]]):.3f}")
 
     result = calibrate(
-        reactor, _C0(network, "calibration"), obs, t_obs, FREE_PARAMS,
+        reactor, list(C0s), list(obss), list(tobss), FREE_PARAMS,
         transforms={f: "positive_log" for f in FREE_PARAMS},
         observed_species=[sp for sp, _ in FIT_SPECIES],
-        loss="nll", sigma=sigma, use_priors=True, laplace=True, max_iter=120,
+        loss="nll", sigma=list(sigmas), use_priors=True, laplace=True, max_iter=120,
     )
     print("\nliterature priors applied (physical mean +- std):")
     for f in FREE_PARAMS:
@@ -181,7 +212,8 @@ def main() -> None:
         for i, n in enumerate(names):
             print(f"  {n:12s}" + " ".join(f"{corr[i, j]:+12.3f}" for j in range(len(names))))
 
-    print("\nRMSE per species (initial -> fitted):")
+    print("\nRMSE per species (initial -> jointly fitted); both batches are "
+          "training data:")
     for case in ("calibration", "validation"):
         ri = _rmse(reactor, network, case, p0, measured)
         rf = _rmse(reactor, network, case, result.params, measured)

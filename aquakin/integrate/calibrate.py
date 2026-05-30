@@ -193,14 +193,19 @@ def calibrate(
     reactor : Reactor
         Batch reactor (or anything with a compatible ``solve``). Same usage
         contract as :func:`fit`.
-    C0 : jnp.ndarray
-        Initial concentration vector.
-    observations : jnp.ndarray
+    C0 : jnp.ndarray or list of jnp.ndarray
+        Initial concentration vector. Pass a *list* of vectors for a joint
+        multi-batch fit: each entry is one dataset's initial state, the
+        batches share the parameter vector and prior, and their data terms are
+        summed. ``observations`` and ``t_obs`` must then be matching lists.
+    observations : jnp.ndarray or list of jnp.ndarray
         Observed values, shape ``(n_t,)`` for a single species or
-        ``(n_t, n_observed)``.
-    t_obs : jnp.ndarray
+        ``(n_t, n_observed)``. In multi-batch mode, a list of such arrays (one
+        per dataset; the datasets may have different ``n_t``).
+    t_obs : jnp.ndarray or list of jnp.ndarray
         Observation times, shape ``(n_t,)``. ``C0`` is taken at ``t=0``;
-        the solver integrates from ``0`` to ``t_obs[-1]``.
+        the solver integrates from ``0`` to ``t_obs[-1]``. In multi-batch mode,
+        a list of time grids, one per dataset.
     free_params : list[str]
         Namespaced parameter names to calibrate. Others held fixed.
     transforms : dict[str, str], optional
@@ -217,7 +222,9 @@ def calibrate(
         Loss function.
     sigma : jnp.ndarray, optional
         Per-observation standard deviation for ``"wmse"`` / ``"nll"``.
-        Scalar, ``(n_observed,)``, or ``(n_t, n_observed)``.
+        Scalar, ``(n_observed,)``, or ``(n_t, n_observed)``. In multi-batch
+        mode, either a single value/array shared across datasets or a list with
+        one entry per dataset.
     priors : dict[str, tuple[float, float]], optional
         Gaussian priors as ``name -> (mean, std)`` in physical space, added to
         the objective as ``0.5 * sum(((p - mean) / std) ** 2)``. Overrides any
@@ -296,23 +303,39 @@ def calibrate(
                 f"{v} is not in (0, 1)."
             )
 
-    # Observation prep.
-    t_obs = jnp.asarray(t_obs)
-    if t_obs.ndim != 1 or t_obs.shape[0] < 1:
-        raise ValueError(f"t_obs must be a non-empty 1-D array, got shape {t_obs.shape}.")
-    if float(t_obs[0]) < 0.0:
-        raise ValueError(f"t_obs must be non-negative; got t_obs[0] = {float(t_obs[0])}.")
-    if t_obs.shape[0] > 1 and not bool(jnp.all(jnp.diff(t_obs) > 0)):
-        raise ValueError("t_obs must be strictly ascending.")
-
-    observations = jnp.asarray(observations)
-    if observations.ndim == 1:
-        observations = observations[:, None]
-    if observations.shape[0] != t_obs.shape[0]:
-        raise ValueError(
-            f"observations has {observations.shape[0]} rows but t_obs has "
-            f"{t_obs.shape[0]} entries."
+    # --- Datasets (one or several batches sharing the parameter vector) ---
+    # A single-batch call passes plain arrays. A multi-batch call passes lists
+    # of arrays for C0 / observations / t_obs (and optionally sigma); the
+    # batches share one parameter vector and one prior, and their data terms
+    # are summed -- a joint maximum-a-posteriori fit. Multi-batch mode is a
+    # list/tuple whose elements are themselves vectors.
+    def _is_multi(x) -> bool:
+        return (
+            isinstance(x, (list, tuple))
+            and len(x) > 0
+            and isinstance(x[0], (list, tuple, np.ndarray, jnp.ndarray))
         )
+
+    multi = _is_multi(C0)
+    C0_list = list(C0) if multi else [C0]
+    obs_list = list(observations) if multi else [observations]
+    tobs_list = list(t_obs) if multi else [t_obs]
+    n_datasets = len(C0_list)
+    if not (len(obs_list) == len(tobs_list) == n_datasets):
+        raise ValueError(
+            "In multi-dataset mode, C0, observations and t_obs must be lists of "
+            f"equal length; got {n_datasets}, {len(obs_list)}, {len(tobs_list)}."
+        )
+    if isinstance(sigma, (list, tuple)):
+        sigma_list = list(sigma)
+        if len(sigma_list) != n_datasets:
+            raise ValueError(
+                f"sigma list has {len(sigma_list)} entries but there are "
+                f"{n_datasets} datasets."
+            )
+    else:
+        sigma_list = [sigma] * n_datasets
+
     if observed_species is None:
         obs_species_indices = jnp.arange(network.n_species)
         n_observed = network.n_species
@@ -321,14 +344,42 @@ def calibrate(
             [network.species_index[s] for s in observed_species]
         )
         n_observed = len(observed_species)
-    if observations.shape[1] != n_observed:
-        raise ValueError(
-            f"observations has {observations.shape[1]} columns but {n_observed} "
-            f"species were specified."
-        )
 
-    if sigma is not None:
-        sigma = jnp.asarray(sigma)
+    # Validate each dataset and build its (C0, t_eval, t_span, loss) tuple.
+    datasets = []
+    for ds, (C0_i, obs_i, tobs_i, sig_i) in enumerate(
+        zip(C0_list, obs_list, tobs_list, sigma_list)
+    ):
+        C0_i = jnp.asarray(C0_i)
+        tobs_i = jnp.asarray(tobs_i)
+        if tobs_i.ndim != 1 or tobs_i.shape[0] < 1:
+            raise ValueError(
+                f"dataset {ds}: t_obs must be a non-empty 1-D array, got shape "
+                f"{tobs_i.shape}."
+            )
+        if float(tobs_i[0]) < 0.0:
+            raise ValueError(
+                f"dataset {ds}: t_obs must be non-negative; got {float(tobs_i[0])}."
+            )
+        if tobs_i.shape[0] > 1 and not bool(jnp.all(jnp.diff(tobs_i) > 0)):
+            raise ValueError(f"dataset {ds}: t_obs must be strictly ascending.")
+        obs_i = jnp.asarray(obs_i)
+        if obs_i.ndim == 1:
+            obs_i = obs_i[:, None]
+        if obs_i.shape[0] != tobs_i.shape[0]:
+            raise ValueError(
+                f"dataset {ds}: observations has {obs_i.shape[0]} rows but t_obs "
+                f"has {tobs_i.shape[0]} entries."
+            )
+        if obs_i.shape[1] != n_observed:
+            raise ValueError(
+                f"dataset {ds}: observations has {obs_i.shape[1]} columns but "
+                f"{n_observed} species were specified."
+            )
+        sig_arr = jnp.asarray(sig_i) if sig_i is not None else None
+        datasets.append(
+            (C0_i, tobs_i, (0.0, float(tobs_i[-1])), _build_loss(loss, obs_i, sig_arr))
+        )
 
     # Resolve Gaussian priors for the free parameters. Network-declared priors
     # apply by default (use_priors); the explicit ``priors`` argument overrides
@@ -354,8 +405,6 @@ def calibrate(
     )
     has_priors = bool(active_priors)
 
-    t_span = (0.0, float(t_obs[-1]))
-    loss_fn_pred = _build_loss(loss, observations, sigma)
     transform_array = resolved_transforms  # captured as Python list (static)
 
     # --- The objective in unconstrained space --------------------------
@@ -368,14 +417,15 @@ def calibrate(
     def objective(theta: jnp.ndarray) -> jnp.ndarray:
         physical = physical_from_theta(theta)
         p = p0_full.at[free_indices].set(physical)
-        sol = reactor.solve(C0, p, t_span=t_span, t_eval=t_obs)
-        pred = sol.C[:, obs_species_indices]
-        data_term = loss_fn_pred(pred)
+        # Sum the data terms over every dataset (the batches share ``p``).
+        data_term = 0.0
+        for C0_i, tobs_i, tspan_i, loss_fn_i in datasets:
+            sol = reactor.solve(C0_i, p, t_span=tspan_i, t_eval=tobs_i)
+            data_term = data_term + loss_fn_i(sol.C[:, obs_species_indices])
         if has_priors:
-            prior_term = 0.5 * jnp.sum(
+            data_term = data_term + 0.5 * jnp.sum(
                 prior_mask * ((physical - prior_mean) / prior_std) ** 2
             )
-            return data_term + prior_term
         return data_term
 
     obj_value_and_grad = jax.jit(jax.value_and_grad(objective))
