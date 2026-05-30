@@ -143,6 +143,9 @@ class CalibrationResult:
         delta method (``|dp/dtheta| * std_unconstrained``).
     hessian_unconstrained : jnp.ndarray, optional
         Raw FD Hessian of the loss at the MAP, unconstrained-space.
+    priors_applied : dict[str, tuple[float, float]], optional
+        Gaussian priors (physical-space ``(mean, std)``) that were added to the
+        objective, by free-parameter name. Empty if no priors were active.
     """
 
     params: jnp.ndarray
@@ -157,6 +160,7 @@ class CalibrationResult:
     posterior_std_unconstrained: Optional[jnp.ndarray] = None
     params_named_std: Optional[dict[str, float]] = field(default=None)
     hessian_unconstrained: Optional[jnp.ndarray] = None
+    priors_applied: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
 # --- Main entry point --------------------------------------------------
@@ -174,6 +178,8 @@ def calibrate(
     observed_species: Optional[list[str]] = None,
     loss: str = "mse",
     sigma: Optional[jnp.ndarray] = None,
+    priors: Optional[dict[str, tuple[float, float]]] = None,
+    use_priors: bool = True,
     laplace: bool = True,
     laplace_ridge: float = 1e-6,
     laplace_fd_step: float = 1e-3,
@@ -212,6 +218,21 @@ def calibrate(
     sigma : jnp.ndarray, optional
         Per-observation standard deviation for ``"wmse"`` / ``"nll"``.
         Scalar, ``(n_observed,)``, or ``(n_t, n_observed)``.
+    priors : dict[str, tuple[float, float]], optional
+        Gaussian priors as ``name -> (mean, std)`` in physical space, added to
+        the objective as ``0.5 * sum(((p - mean) / std) ** 2)``. Overrides any
+        prior declared on the network for the same parameter. Only entries whose
+        name is in ``free_params`` are used.
+    use_priors : bool, optional
+        If ``True`` (default), parameters whose network declaration carries a
+        ``prior:`` block contribute their Gaussian prior to the objective (for
+        the free parameters), in addition to any passed via ``priors``. Set
+        ``False`` to ignore the network-declared priors. Priors regularise
+        otherwise non-identifiable parameter combinations toward literature
+        values; for a proper Bayesian MAP / posterior, combine them with
+        ``loss="nll"`` and a measurement ``sigma`` so the data term is a true
+        negative log-likelihood (the prior curvature then enters the Laplace
+        covariance automatically).
     laplace : bool, optional
         If ``True``, compute the Laplace covariance approximation at the
         MAP. The result is interpretable as a Bayesian posterior only when
@@ -309,6 +330,30 @@ def calibrate(
     if sigma is not None:
         sigma = jnp.asarray(sigma)
 
+    # Resolve Gaussian priors for the free parameters. Network-declared priors
+    # apply by default (use_priors); the explicit ``priors`` argument overrides
+    # per parameter. Build aligned (mean, std, mask) arrays in free-param order.
+    active_priors: dict[str, tuple[float, float]] = {}
+    if use_priors:
+        net_priors = getattr(network, "parameter_priors", {})
+        for name in free_params:
+            if name in net_priors:
+                active_priors[name] = net_priors[name]
+    if priors:
+        for name, ms in priors.items():
+            if name in free_params:
+                active_priors[name] = (float(ms[0]), float(ms[1]))
+    prior_mean = jnp.asarray(
+        [active_priors.get(n, (0.0, 1.0))[0] for n in free_params]
+    )
+    prior_std = jnp.asarray(
+        [active_priors.get(n, (0.0, 1.0))[1] for n in free_params]
+    )
+    prior_mask = jnp.asarray(
+        [1.0 if n in active_priors else 0.0 for n in free_params]
+    )
+    has_priors = bool(active_priors)
+
     t_span = (0.0, float(t_obs[-1]))
     loss_fn_pred = _build_loss(loss, observations, sigma)
     transform_array = resolved_transforms  # captured as Python list (static)
@@ -325,7 +370,13 @@ def calibrate(
         p = p0_full.at[free_indices].set(physical)
         sol = reactor.solve(C0, p, t_span=t_span, t_eval=t_obs)
         pred = sol.C[:, obs_species_indices]
-        return loss_fn_pred(pred)
+        data_term = loss_fn_pred(pred)
+        if has_priors:
+            prior_term = 0.5 * jnp.sum(
+                prior_mask * ((physical - prior_mean) / prior_std) ** 2
+            )
+            return data_term + prior_term
+        return data_term
 
     obj_value_and_grad = jax.jit(jax.value_and_grad(objective))
 
@@ -405,4 +456,5 @@ def calibrate(
         posterior_std_unconstrained=posterior_std_unconstrained,
         params_named_std=params_named_std,
         hessian_unconstrained=hessian_unconstrained,
+        priors_applied=dict(active_priors),
     )

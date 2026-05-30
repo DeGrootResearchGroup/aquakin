@@ -225,6 +225,10 @@ class CompiledNetwork:
     _condition_defaults: dict[str, float] = field(default_factory=dict)
     parameter_bounds: dict[str, tuple[float, float]] = field(default_factory=dict)
     parameter_transforms: dict[str, str] = field(default_factory=dict)
+    # Gaussian priors per namespaced parameter name, as ``(mean, std)`` in
+    # physical space. Parameters without a declared prior are absent. Consumed
+    # by ``aquakin.calibrate`` to regularise the fit toward literature values.
+    parameter_priors: dict[str, tuple[float, float]] = field(default_factory=dict)
     # Parameter-dependent stoichiometry. Each tuple is (row, col, callable)
     # where ``callable(params) -> scalar`` computes the coefficient from the
     # current parameter vector. ``stoich_matrix`` holds zeros at these
@@ -502,6 +506,7 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     parameter_defaults: list[float] = []
     parameter_bounds: dict[str, tuple[float, float]] = {}
     parameter_transforms: dict[str, str] = {}
+    parameter_priors: dict[str, tuple[float, float]] = {}
 
     def _record_param(key: str, pspec) -> None:
         param_index[key] = len(parameters)
@@ -513,6 +518,9 @@ def compile_network(spec: "Any") -> CompiledNetwork:
                 float(pspec.bounds[1]),
             )
         parameter_transforms[key] = pspec.transform
+        prior = getattr(pspec, "prior", None)
+        if prior is not None:
+            parameter_priors[key] = prior.resolved()
 
     # Network-level shared parameters first; reaction-local parameters next.
     for local_name, pspec in getattr(spec, "parameters", {}).items():
@@ -700,6 +708,7 @@ def compile_network(spec: "Any") -> CompiledNetwork:
         _condition_defaults=condition_defaults,
         parameter_bounds=parameter_bounds,
         parameter_transforms=parameter_transforms,
+        parameter_priors=parameter_priors,
         stoich_dynamic=stoich_dynamic,
         _stoich_dynamic_rows=dyn_rows,
         _stoich_dynamic_cols=dyn_cols,

@@ -365,6 +365,17 @@ reactions:
 - `transform` on parameters is optional (default `"none"`); valid values
   are `"none"`, `"positive_log"` (for `p > 0`), and `"logit"` (for
   `0 < p < 1`). Used by `calibrate()` to optimise in unconstrained space.
+- `prior` on parameters is optional — a Gaussian prior in physical space
+  declared either as `prior: {mean: m, std: s}` (a measured value with
+  reported uncertainty) or `prior: {range: [lo, hi]}` (a literature range,
+  converted to a Gaussian centred on the midpoint with `std = (hi-lo)/4`,
+  i.e. the range ≈ ±2σ). `calibrate()` adds `0.5·((p-mean)/std)²` to its
+  objective for any free parameter carrying a prior (default
+  `use_priors=True`; override per-parameter via the `priors=` argument).
+  Priors regularise otherwise non-identifiable parameter combinations toward
+  literature values; for a proper Bayesian MAP/posterior pair them with
+  `loss="nll"` and a measurement `sigma` so the data term is a true negative
+  log-likelihood and the prior curvature enters the Laplace covariance.
 - Parameters can live at the network level (a single shared slot used by
   any reaction that references them by bare name) or inside a reaction's
   `parameters:` block (namespaced as `<reaction>.<name>`). Network-level

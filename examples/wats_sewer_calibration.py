@@ -6,39 +6,41 @@ the same with gradient-based optimization through ``aquakin.calibrate()`` —
 the gradient flows through the stiff Diffrax solve via the ``dtmax`` cap (see
 CLAUDE.md, "Differentiating stiff networks").
 
-It fits the three influential RATE constants (sulfide and elemental-S anoxic
-oxidation, biofilm denitrification) to the measured sulfide, sulfate and
-nitrate of the "calibration" batch, then reports the fit on both batches.
+It fits the influential sulfur / nitrate rate constants plus the carbon
+fermentation rate to the measured sulfide, sulfate, VFA and nitrate of the
+"calibration" batch, then reports the fit on both batches. The fit is posed as
+a Bayesian MAP estimate with two ingredients, both justified by the AD
+machinery rather than by manual trial (the published study reached a similar
+free set by hand):
 
-Two methodological choices, both justified by the AD machinery rather than by
-manual trial (the published study reached the same free set by hand):
+  * Relative likelihood. The measured series span very different magnitudes
+    within a curve (sulfide 9 -> 0, sulfate 4 -> 22) and across species. With
+    ``loss="nll"`` and a per-observation sigma proportional to the measured
+    value (floored), the low-value tails (late-time sulfide rebuild) are not
+    drowned out by the high-value fronts.
 
-  * Relative loss. The measured series span very different magnitudes within a
-    curve (sulfide 9 -> 0, sulfate 4 -> 22) and across species. A plain
-    absolute-error loss is dominated by the high-value fronts and ignores the
-    low-value tails (late-time sulfide rebuild). We use a weighted loss with a
-    per-observation sigma proportional to the measured value (with a floor), so
-    every point contributes comparably in relative terms.
+  * Literature priors. Gaussian priors are declared per parameter in the YAML
+    from the published ranges / measured uncertainties (WATS, Calabro, Jiang)
+    and applied automatically (``use_priors=True``). They matter because a
+    single batch does not identify the absolute sulfur / nitrate rates on its
+    own: a Laplace posterior over an unconstrained fit shows marginal stds
+    exceeding the values and a strongly correlated rate/saturation pair
+    (``k_12_no`` / ``K_NO_f`` enter as a near-degenerate ratio, so ``K_NO_f``
+    is fixed and only the ratio, carried by ``k_12_no``, is fit). With the
+    priors, the influential parameters — including the fermentation rate
+    ``q_ferm``, which runs to an unphysical value (~5) when fit freely against
+    this batch — stay within their measured ranges (``q_ferm`` -> ~2, in the
+    Calabro 1-3 range; ``k_sII_anox_f`` is pulled toward the Jiang 17.1±2.3
+    measurement). Yields are stoichiometric COD-balance coefficients and are
+    fixed, not calibrated.
 
-  * Identifiability-driven free set. Only the three rate constants are freed;
-    their nitrate / sulfide saturation constants and the upstream carbon
-    parameters are held fixed. This is not arbitrary: a Laplace posterior
-    (``laplace=True``) over a larger free set shows WHY. The biofilm
-    denitrification rate and its nitrate-saturation constant
-    (``k_12_no`` / ``K_NO_f``) enter as a near-degenerate ratio — their Laplace
-    correlation is ~+1.0 and they run off to ~1e7 together — so ``K_NO_f`` is
-    fixed and only the ratio (carried by ``k_12_no``) is fit. Freeing the
-    carbon levers (``q_ferm``, ``k_ch4_acid``) lets them reach the VFA curve by
-    running to unphysical values (q_ferm ~ 90, vs a literature 1-3) while
-    wrecking sulfate. The yields are stoichiometric COD-balance coefficients
-    (fixed from the literature, not calibrated). This script prints the Laplace
-    correlation matrix for the fitted set so the identifiability is visible.
-
-The residual calibration/validation tension (the two batches favour slightly
+The script prints the applied priors, the fitted values ± Laplace marginal std,
+and the posterior correlation matrix so the identifiability is visible. The
+residual calibration/validation tension (the two batches favour slightly
 different sulfur kinetics; VFA is the weak point in both) is itself reported in
 the source study.
 
-    python examples/wats_sewer_calibration.py            # fit + summary
+    python examples/wats_sewer_calibration.py            # MAP fit + summary
     python examples/wats_sewer_calibration.py --plot     # also save overlays
 """
 
@@ -71,14 +73,16 @@ CONDITIONS = dict(T=20.0, A_V=56.7, X_BF=10.0)
 T_END_DAYS = 5.0 / 24.0
 DTMAX = 5.0e-4  # cap needed for finite gradients through the stiff solve
 
-# Fit these influential rate constants; saturation constants and carbon levers
-# stay fixed (identifiability — see module docstring). ``k_12_no`` carries the
-# identifiable ``k_12_no / K_NO_f`` ratio with ``K_NO_f`` fixed.
-FREE_PARAMS = ["k_sII_anox_f", "k_s0_anox_f", "k_12_no"]
-FIT_SPECIES = [("sumS", "sulfide"), ("S_SO4", "sulfate"), ("S_NO", "nitrate")]
-# Relative weighting: sigma_i = max(|measured_i|, floor_species). The floor
-# (5% of each species' peak) keeps near-zero points from dominating; otherwise
-# every point weighs ~equally in relative terms.
+# Free set: the influential sulfur/nitrate rates plus the carbon fermentation
+# rate. The sulfur rates and q_ferm carry literature priors (declared in the
+# YAML), which keep them physical; k_12_no is free (it carries the identifiable
+# k_12_no / K_NO_f ratio, with K_NO_f fixed). Saturation constants stay fixed.
+FREE_PARAMS = ["k_sII_anox_f", "k_s0_anox_f", "k_12_no", "q_ferm"]
+FIT_SPECIES = [("sumS", "sulfide"), ("S_SO4", "sulfate"),
+               ("S_VFA", "VFA"), ("S_NO", "nitrate")]
+# Relative measurement sigma: sigma_i = max(|measured_i|, floor_species). The
+# floor (5% of each species' peak) keeps near-zero points from dominating;
+# otherwise every point weighs ~equally in relative terms.
 SIGMA_FLOOR_FRAC = 0.05
 
 # (panel title, aquakin species, y-label, reference species)
@@ -150,13 +154,17 @@ def main() -> None:
         reactor, _C0(network, "calibration"), obs, t_obs, FREE_PARAMS,
         transforms={f: "positive_log" for f in FREE_PARAMS},
         observed_species=[sp for sp, _ in FIT_SPECIES],
-        loss="wmse", sigma=sigma, laplace=True, max_iter=120,
+        loss="nll", sigma=sigma, use_priors=True, laplace=True, max_iter=120,
     )
+    print("\nliterature priors applied (physical mean +- std):")
+    for f in FREE_PARAMS:
+        pr = result.priors_applied.get(f)
+        print(f"  {f:14s} {'N(%.3g, %.3g)' % pr if pr else '(none -- data only)'}")
     print(f"\nconverged={result.converged}  n_iter={result.n_iter}  loss={result.loss:.4g}")
-    print("fitted rate constants (physical, +- Laplace marginal std):")
+    print("fitted parameters (physical, +- Laplace marginal std):")
     for f in FREE_PARAMS:
         std = result.params_named_std.get(f) if result.params_named_std else None
-        line = f"  {f} = {result.params_named[f]:.3f}"
+        line = f"  {f:14s} = {result.params_named[f]:.3f}"
         if std is not None:
             line += f"  +- {std:.3f}"
         print(line)

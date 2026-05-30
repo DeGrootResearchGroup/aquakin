@@ -119,22 +119,22 @@ expressions:
 #       JiangS    = Jiang, Sharma & Yuan (2009), sulfur transformation in rising mains
 #       calib     = this study's calibration to the batch nitrate-dosing data (Table 4)
 parameters:
-  mu_h:        {value: 6.7,   units: "1/d"}                  # WATS/Calabro muH (WATS range 4-8)
+  mu_h:        {value: 6.7,   units: "1/d", prior: {range: [4.0, 8.0]}}      # WATS/Calabro muH (WATS range 4-8)
   k_12_o2:     {value: 18.0,  units: "gO2^0.5 m^-0.5 d^-1"}  # half-order aerobic biofilm growth const
   k_12_no:     {value: 7.95,  units: "gN^0.5 m^-0.5 d^-1", bounds: [1.0, 30.0]}  # calib (k_1/2,NO)
-  eps:         {value: 0.15,  units: "-"}                    # WATS biofilm efficiency eps (range 0.1-0.2)
-  k_sw:        {value: 1.0,   units: "gCOD/m3"}              # WATS K_Sw (range 0.5-2.0)
+  eps:         {value: 0.15,  units: "-", prior: {range: [0.1, 0.2]}}        # WATS biofilm efficiency eps (range 0.1-0.2)
+  k_sw:        {value: 1.0,   units: "gCOD/m3", prior: {range: [0.5, 2.0]}}  # WATS K_Sw (range 0.5-2.0)
   k_sf:        {value: 5.0,   units: "gCOD/m3"}              # WATS K_sf
-  k_o:         {value: 0.05,  units: "gO2/m3"}               # WATS K_O (range 0.01-0.5)
-  k_no:        {value: 0.5,   units: "gN/m3"}                # WATS K_NO3 (0.5-1.0; JiangBF/IWA use 2)
+  k_o:         {value: 0.05,  units: "gO2/m3", prior: {range: [0.01, 0.5]}}  # WATS K_O (range 0.01-0.5)
+  k_no:        {value: 0.5,   units: "gN/m3", prior: {range: [0.5, 1.0]}}    # WATS K_NO3 (0.5-1.0; JiangBF/IWA use 2)
   k_h1:        {value: 5.0,   units: "1/d"}                  # WATS k_h1 fast hydrolysis = 5
   k_h2:        {value: 0.5,   units: "1/d"}                  # WATS k_h2 slow hydrolysis = 0.5
   k_x1:        {value: 1.5,   units: "gCOD/gCOD"}            # WATS/Calabro K_X1 fast = 1.5
   k_x2:        {value: 0.5,   units: "gCOD/gCOD"}            # WATS/Calabro K_X2 slow = 0.5
   eta_no:      {value: 0.6,   units: "-"}                    # JiangBF anoxic correction (~0.51)
-  eta_an:      {value: 0.21,  units: "-"}                    # Calabro anaerobic correction (range 0.14-0.21)
-  q_m:         {value: 1.0,   units: "1/d"}                  # WATS q_m (range 0.5-1.0)
-  q_ferm:      {value: 3.0,   units: "gCOD/gCOD/d"}          # Calabro q_fe (range 1.0-3.0)
+  eta_an:      {value: 0.21,  units: "-", prior: {range: [0.14, 0.21]}}      # Calabro anaerobic correction (range 0.14-0.21)
+  q_m:         {value: 1.0,   units: "1/d", prior: {range: [0.5, 1.0]}}      # WATS q_m (range 0.5-1.0)
+  q_ferm:      {value: 3.0,   units: "gCOD/gCOD/d", prior: {range: [1.0, 3.0]}}  # Calabro q_fe (range 1.0-3.0)
   k_fe:        {value: 10.0,  units: "gCOD/m3"}              # WATS/Calabro K_fe
   mu_a:        {value: 0.8,   units: "1/d"}                  # autotroph max growth rate
   b_a:         {value: 0.08,  units: "1/d"}                  # autotroph decay rate
@@ -157,11 +157,11 @@ parameters:
   n1:          {value: 0.9,   units: "-"}                   # WATS reaction order in sulfide (0.8-1.0)
   n2:          {value: 0.15,  units: "-"}                   # WATS reaction order in oxygen (0.1-0.2)
   k_sII_ox_f:  {value: 12.0,  units: "gS/m2/d"}             # aerobic biofilm sulfide ox rate
-  k_sII_anox_f: {value: 18.45, units: "gS/m2/d", bounds: [1.0, 40.0]}  # calib (k_ox,S2-; JiangS nominal 17.1)
-  k_s0_acid:   {value: 0.1,   units: "gS/m2/d"}             # JiangS elemental-S reduction = 0.1 (NOT 15.5)
+  k_sII_anox_f: {value: 18.45, units: "gS/m2/d", bounds: [1.0, 40.0], prior: {mean: 17.1, std: 2.3}}  # calib (k_ox,S2-; JiangS 17.1+-2.3)
+  k_s0_acid:   {value: 0.1,   units: "gS/m2/d", prior: {mean: 0.1, std: 0.01}}  # JiangS elemental-S reduction 0.1+-0.01 (NOT 15.5)
   k_s0_hyd:    {value: 0.0,   units: "gS/m2/d"}             # elemental-S reduction by H2 (inactive)
   k_s0_ox_f:   {value: 0.0,   units: "gS/m2/d"}             # aerobic elemental-S oxidation (inactive)
-  k_s0_anox_f: {value: 2.64,  units: "gS/m2/d", bounds: [0.1, 30.0]}   # calib (k_ox,So; JiangS nominal 2.2)
+  k_s0_anox_f: {value: 2.64,  units: "gS/m2/d", bounds: [0.1, 30.0], prior: {mean: 2.2, std: 0.4}}   # calib (k_ox,So; JiangS 2.2+-0.4)
   # Saturation constants the study CALIBRATED (defaults = manuscript Table 4).
   # The sulfur/nitrate saturation values strongly affect the nitrate split, so
   # they are exposed as parameters -- see examples/wats_sewer_calibration.py.

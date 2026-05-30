@@ -11,6 +11,8 @@ from aquakin.integrate.calibrate import (
     _jacobian_physical_wrt_theta,
     _to_unconstrained,
 )
+from aquakin.schema.network_spec import PriorSpec
+from pydantic import ValidationError
 
 
 # ---------- transform roundtrips ----------
@@ -152,6 +154,61 @@ def test_falls_back_to_schema_transform_when_omitted(simple_network):
     )
     # The fixture network declares no explicit transform -> defaults to "none".
     assert result.transforms == ["none"]
+
+
+# ---------- Gaussian priors ----------
+
+
+def test_priorspec_range_to_gaussian():
+    """A literature range maps to N(midpoint, (hi-lo)/4)."""
+    assert PriorSpec(range=(4.0, 8.0)).resolved() == (6.0, 1.0)
+    assert PriorSpec(range=(0.5, 1.0)).resolved() == (0.75, 0.125)
+
+
+def test_priorspec_mean_std_direct():
+    assert PriorSpec(mean=17.1, std=2.3).resolved() == (17.1, 2.3)
+
+
+def test_priorspec_rejects_both_and_neither():
+    with pytest.raises(ValidationError):
+        PriorSpec(mean=1.0, std=1.0, range=(0.0, 2.0))
+    with pytest.raises(ValidationError):
+        PriorSpec()
+    with pytest.raises(ValidationError):
+        PriorSpec(mean=1.0, std=-1.0)  # std must be > 0
+
+
+def test_prior_pulls_estimate_toward_prior_mean(setup):
+    """A Gaussian prior centred above the data optimum pulls the MAP up."""
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False,
+    )
+    no_prior = aquakin.calibrate(reactor, C0, **common)
+    # Prior mean well above the data-optimal true_k (~0.25), moderately tight.
+    with_prior = aquakin.calibrate(
+        reactor, C0, priors={"A_to_B.k": (2.0, 0.05)}, **common
+    )
+    k_no = no_prior.params_named["A_to_B.k"]
+    k_pr = with_prior.params_named["A_to_B.k"]
+    assert k_no == pytest.approx(true_k, rel=1e-2)
+    assert k_pr > k_no  # prior drags the estimate upward
+    assert with_prior.priors_applied == {"A_to_B.k": (2.0, 0.05)}
+
+
+def test_priors_ignored_when_not_free(setup):
+    """A prior on a parameter that is not being fit has no effect/record."""
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs_clean, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="mse", laplace=False,
+        priors={"some_other_param": (1.0, 0.1)},
+    )
+    assert result.priors_applied == {}
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
 
 
 def test_rejects_empty_free_params(setup):

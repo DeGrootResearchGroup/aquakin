@@ -37,6 +37,20 @@ def test_compiles_with_expected_shape(net):
     assert net.positivity_threshold == pytest.approx(1.0e-3)
 
 
+def test_parameter_priors_loaded(net):
+    """Literature ranges / measured uncertainties load as Gaussian priors."""
+    pr = net.parameter_priors
+    # range [4, 8] -> N(midpoint, (hi-lo)/4)
+    assert pr["mu_h"] == pytest.approx((6.0, 1.0))
+    assert pr["k_no"] == pytest.approx((0.75, 0.125))
+    # measured value +- reported std, used directly
+    assert pr["k_sII_anox_f"] == pytest.approx((17.1, 2.3))
+    assert pr["k_s0_anox_f"] == pytest.approx((2.2, 0.4))
+    assert pr["k_s0_acid"] == pytest.approx((0.1, 0.01))
+    # yields are stoichiometric / fixed -> no prior
+    assert "y_h_anox" not in pr
+
+
 def test_pH_is_state_derived_and_physical(net, cond):
     C0 = net.default_concentrations()
     derived = net.derived_condition_fn(C0, net.default_parameters(), cond.fields, 0)
