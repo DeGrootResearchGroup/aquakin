@@ -160,7 +160,7 @@ parameters:
   k_s0_anox_f: {value: 2.64,  units: "gS/m2/d", bounds: [0.1, 30.0]}
   # Saturation constants that the published study CALIBRATED (the reference C
   # hardcoded them). Defaults are the manuscript's calibrated values. Exposed
-  # as parameters so they can be (re)fit -- see examples/wats_sewer_calibration.py.
+  # as parameters so they can be (re)fit.
   K_NO_f:      {value: 14.40, units: "gN/m3",  bounds: [1.0, 30.0]}   # nitrate sat., biofilm anoxic growth
   K_S2:        {value: 0.15,  units: "gS/m3",  bounds: [0.05, 5.0]}   # sulfide sat., sulfide oxidation
   K_NO_S_f:    {value: 0.25,  units: "gN/m3",  bounds: [0.05, 8.0]}   # nitrate sat., sulfide & S0 oxidation

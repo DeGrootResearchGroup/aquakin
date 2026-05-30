@@ -197,7 +197,7 @@ parameters:
   k_s0_anox_f: {value: 2.64,  units: "gS/m2/d", bounds: [0.1, 30.0], prior: {mean: 2.2, std: 0.4}}   # calib (k_ox,So; JiangS 2.2+-0.4)
   # Saturation constants the study CALIBRATED (defaults = manuscript Table 4).
   # The sulfur/nitrate saturation values strongly affect the nitrate split, so
-  # they are exposed as parameters -- see examples/wats_sewer_calibration.py.
+  # they are exposed as parameters.
   K_NO_f:      {value: 14.40, units: "gN/m3",  bounds: [1.0, 30.0]}   # calib: nitrate sat., biofilm anoxic growth
   K_S2:        {value: 0.15,  units: "gS/m3",  bounds: [0.05, 5.0]}   # calib: sulfide sat., sulfide oxidation
   K_NO_S_f:    {value: 0.25,  units: "gN/m3",  bounds: [0.05, 8.0]}   # calib: nitrate sat., sulfide & S0 oxidation
