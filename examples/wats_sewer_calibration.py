@@ -10,15 +10,33 @@ It fits the three influential RATE constants (sulfide and elemental-S anoxic
 oxidation, biofilm denitrification) to the measured sulfide, sulfate and
 nitrate of the "calibration" batch, then reports the fit on both batches.
 
-Two findings the run reproduces (both consistent with the paper):
-  * Identifiability — fitting the rate constants together with their nitrate /
-    sulfide saturation constants is ill-posed (a rate and its saturation
-    constant trade off), so the saturation constants are held fixed at the
-    published calibrated values and only the three rates are freed. Freeing all
-    six lets correlated pairs run off to absurd magnitudes.
-  * Calibration/validation tension — the two batches favour slightly different
-    sulfur kinetics, so a fit to one overshoots the other's sulfate. VFA is the
-    weak point in both (as reported in the source study).
+Two methodological choices, both justified by the AD machinery rather than by
+manual trial (the published study reached the same free set by hand):
+
+  * Relative loss. The measured series span very different magnitudes within a
+    curve (sulfide 9 -> 0, sulfate 4 -> 22) and across species. A plain
+    absolute-error loss is dominated by the high-value fronts and ignores the
+    low-value tails (late-time sulfide rebuild). We use a weighted loss with a
+    per-observation sigma proportional to the measured value (with a floor), so
+    every point contributes comparably in relative terms.
+
+  * Identifiability-driven free set. Only the three rate constants are freed;
+    their nitrate / sulfide saturation constants and the upstream carbon
+    parameters are held fixed. This is not arbitrary: a Laplace posterior
+    (``laplace=True``) over a larger free set shows WHY. The biofilm
+    denitrification rate and its nitrate-saturation constant
+    (``k_12_no`` / ``K_NO_f``) enter as a near-degenerate ratio — their Laplace
+    correlation is ~+1.0 and they run off to ~1e7 together — so ``K_NO_f`` is
+    fixed and only the ratio (carried by ``k_12_no``) is fit. Freeing the
+    carbon levers (``q_ferm``, ``k_ch4_acid``) lets them reach the VFA curve by
+    running to unphysical values (q_ferm ~ 90, vs a literature 1-3) while
+    wrecking sulfate. The yields are stoichiometric COD-balance coefficients
+    (fixed from the literature, not calibrated). This script prints the Laplace
+    correlation matrix for the fitted set so the identifiability is visible.
+
+The residual calibration/validation tension (the two batches favour slightly
+different sulfur kinetics; VFA is the weak point in both) is itself reported in
+the source study.
 
     python examples/wats_sewer_calibration.py            # fit + summary
     python examples/wats_sewer_calibration.py --plot     # also save overlays
@@ -53,11 +71,15 @@ CONDITIONS = dict(T=20.0, A_V=56.7, X_BF=10.0)
 T_END_DAYS = 5.0 / 24.0
 DTMAX = 5.0e-4  # cap needed for finite gradients through the stiff solve
 
-# Fit these influential rate constants; saturation constants stay fixed
-# (identifiability). Per-species weights balance the disparate scales.
+# Fit these influential rate constants; saturation constants and carbon levers
+# stay fixed (identifiability — see module docstring). ``k_12_no`` carries the
+# identifiable ``k_12_no / K_NO_f`` ratio with ``K_NO_f`` fixed.
 FREE_PARAMS = ["k_sII_anox_f", "k_s0_anox_f", "k_12_no"]
 FIT_SPECIES = [("sumS", "sulfide"), ("S_SO4", "sulfate"), ("S_NO", "nitrate")]
-FIT_SIGMA = jnp.asarray([1.0, 2.0, 1.5])  # mgS, mgS, mgN
+# Relative weighting: sigma_i = max(|measured_i|, floor_species). The floor
+# (5% of each species' peak) keeps near-zero points from dominating; otherwise
+# every point weighs ~equally in relative terms.
+SIGMA_FLOOR_FRAC = 0.05
 
 # (panel title, aquakin species, y-label, reference species)
 PLOT_SPECIES = [
@@ -112,7 +134,12 @@ def main() -> None:
     # observations for the calibration batch (shared 11-point time grid)
     t_h = np.array(measured["calibration"]["sulfide"][0])
     t_obs = jnp.asarray(t_h / 24.0)
-    obs = jnp.asarray(np.stack([measured["calibration"][ref][1] for _, ref in FIT_SPECIES], axis=1))
+    obs_np = np.stack([measured["calibration"][ref][1] for _, ref in FIT_SPECIES], axis=1)
+    obs = jnp.asarray(obs_np)
+
+    # Relative sigma (per-observation), with a per-species floor.
+    floors = SIGMA_FLOOR_FRAC * np.max(np.abs(obs_np), axis=0)
+    sigma = jnp.asarray(np.maximum(np.abs(obs_np), floors[None, :]))
 
     p0 = network.default_parameters()
     print("initial (published-calibrated) rate constants:")
@@ -123,12 +150,28 @@ def main() -> None:
         reactor, _C0(network, "calibration"), obs, t_obs, FREE_PARAMS,
         transforms={f: "positive_log" for f in FREE_PARAMS},
         observed_species=[sp for sp, _ in FIT_SPECIES],
-        loss="wmse", sigma=FIT_SIGMA, laplace=False, max_iter=120,
+        loss="wmse", sigma=sigma, laplace=True, max_iter=120,
     )
     print(f"\nconverged={result.converged}  n_iter={result.n_iter}  loss={result.loss:.4g}")
-    print("fitted rate constants:")
-    for k, v in result.params_named.items():
-        print(f"  {k} = {v:.3f}")
+    print("fitted rate constants (physical, +- Laplace marginal std):")
+    for f in FREE_PARAMS:
+        std = result.params_named_std.get(f) if result.params_named_std else None
+        line = f"  {f} = {result.params_named[f]:.3f}"
+        if std is not None:
+            line += f"  +- {std:.3f}"
+        print(line)
+
+    # Identifiability: the Laplace posterior correlation. |corr| -> 1 between two
+    # parameters means the data constrain only their combination, not each one.
+    if result.posterior_cov is not None:
+        cov = np.asarray(result.posterior_cov)
+        d = np.sqrt(np.clip(np.diag(cov), 1e-300, None))
+        corr = cov / np.outer(d, d)
+        names = [n[:12] for n in result.parameter_names]
+        print("\nLaplace posterior correlation (identifiability):")
+        print("            " + " ".join(f"{n:>12s}" for n in names))
+        for i, n in enumerate(names):
+            print(f"  {n:12s}" + " ".join(f"{corr[i, j]:+12.3f}" for j in range(len(names))))
 
     print("\nRMSE per species (initial -> fitted):")
     for case in ("calibration", "validation"):

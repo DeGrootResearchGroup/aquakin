@@ -57,7 +57,7 @@ def test_rhs_jacobian_wrt_params_is_finite(net, cond):
         return net.dCdt(C0, p, cond.fields, 0, stoich=net.compute_stoich(p))
 
     J = jax.jacobian(rhs)(net.default_parameters())
-    assert J.shape == (18, 62)
+    assert J.shape == (18, len(net.parameters))
     assert np.all(np.isfinite(np.asarray(J)))
 
 

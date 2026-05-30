@@ -20,6 +20,12 @@ network:
     biological, aerobic & nitrate-driven biofilm). Some pathways are zero at
     the literature default rate constants but are retained for completeness.
 
+    Deviation from the original published sewer model: anoxic (denitrifying)
+    heterotrophic growth uses the proper lower WATS anoxic yield
+    Y_H,NO3 = 0.30-0.40 (parameter `y_h_anox`, default 0.35) instead of reusing
+    the aerobic yield 0.55. Y_H is a stoichiometric COD/electron-balance
+    coefficient, so it is fixed from the literature, not calibrated.
+
     Numerical hardening: the `positivity_limiter` block throttles net
     consumption as a species approaches zero. Half-order (sqrt-type) oxidation
     kinetics use an AD-safe form `x*(x+eps)^(p-1)` (eps=1e-3) so the
@@ -163,8 +169,20 @@ parameters:
   K_S2:        {value: 0.15,  units: "gS/m3",  bounds: [0.05, 5.0]}   # calib: sulfide sat., sulfide oxidation
   K_NO_S_f:    {value: 0.25,  units: "gN/m3",  bounds: [0.05, 8.0]}   # calib: nitrate sat., sulfide & S0 oxidation
   K_S0:        {value: 1.0,   units: "gS/m3",  bounds: [0.1, 5.0]}    # calib/WATS: elemental-S sat. (ox & reduction)
-  y_hw:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}  # JiangBF heterotroph yield (Y_H=0.55)
-  y_hf:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}  # biofilm heterotroph yield
+  y_hw:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}  # JiangBF aerobic heterotroph yield (Y_H=0.55)
+  y_hf:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}  # biofilm aerobic heterotroph yield
+  # Anoxic (denitrifying) heterotroph yield. The WATS reference gives a
+  # distinctly LOWER yield for anoxic growth, Y_H,NO3 = 0.30-0.40, than the
+  # aerobic Y_H = 0.55 -- less biomass is formed per unit substrate when
+  # nitrate rather than oxygen is the electron acceptor. Y_H is a stoichiometric
+  # (COD/electron-balance) coefficient, not a kinetic rate, so it is fixed from
+  # the literature rather than calibrated. DEVIATION FROM THE ORIGINAL PUBLISHED
+  # MODEL: that implementation reused the single aerobic yield (0.55) for the
+  # denitrifying growth terms; aquakin applies the proper lower anoxic yield to
+  # every anoxic heterotrophic growth reaction (bulk + biofilm). Because these
+  # nitrate-dosing batches are almost entirely anoxic, this shifts the
+  # nitrate / COD / sulfate partition relative to the original model.
+  y_h_anox:    {value: 0.35,  units: "-",        bounds: [0.3, 0.7]}  # WATS Y_H,NO3 anoxic yield (range 0.30-0.40)
   y_aob:       {value: 0.24,  units: "-",        bounds: [0.1, 0.4]}  # autotroph yield
   i_n_bio:     {value: 0.07,  units: "gN/gCOD"}             # N content of biomass
   i_n_xb:      {value: 0.07,  units: "gN/gCOD"}             # N content of particulate substrate
@@ -193,16 +211,17 @@ reactions:
       S_CO2: "i_cit_sb / y_hw - i_cit_bio"
 
   - name: anox_growth_SB_bulk
+    # Uses the anoxic yield y_h_anox (not the aerobic y_hw); see y_h_anox note.
     description: "Anoxic (denitrifying) heterotrophic growth on S_B, bulk water."
     rate: "eta_no * mu_h * [S_B] / (k_sw + [S_B] + [S_VFA]) * monod([S_NO], k_no) * monod_inh([S_O], k_o) * [X_BH] * theta_w"
     stoichiometry:
-      S_B:   "0.0 - 1.0 / y_hw"
+      S_B:   "0.0 - 1.0 / y_h_anox"
       X_BH:  1
-      S_NO:  "(y_hw - 1.0) / (2.86 * y_hw)"
+      S_NO:  "(y_h_anox - 1.0) / (2.86 * y_h_anox)"
       S_NH:  "0.0 - i_n_bio"
       S_PO4: "0.0 - i_p_bio"
-      S_SO4: "(1.0 / y_hw) * i_s_sb - i_s_bio"
-      S_CO2: "i_cit_sb / y_hw - i_cit_bio"
+      S_SO4: "(1.0 / y_h_anox) * i_s_sb - i_s_bio"
+      S_CO2: "i_cit_sb / y_h_anox - i_cit_bio"
 
   - name: aer_growth_VFA_bulk
     description: "Aerobic heterotrophic growth on VFA, bulk water."
@@ -217,16 +236,17 @@ reactions:
       S_CO2: "i_cit_sb / y_hw - i_cit_bio"
 
   - name: anox_growth_VFA_bulk
+    # Uses the anoxic yield y_h_anox (not the aerobic y_hw); see y_h_anox note.
     description: "Anoxic heterotrophic growth on VFA, bulk water."
     rate: "eta_no * mu_h * [S_VFA] / (k_sw + [S_B] + [S_VFA]) * monod([S_NO], k_no) * monod_inh([S_O], k_o) * [X_BH] * theta_w"
     stoichiometry:
-      S_VFA: "0.0 - 1.0 / y_hw"
+      S_VFA: "0.0 - 1.0 / y_h_anox"
       X_BH:  1
-      S_NO:  "(y_hw - 1.0) / (2.86 * y_hw)"
+      S_NO:  "(y_h_anox - 1.0) / (2.86 * y_h_anox)"
       S_NH:  "0.0 - i_n_bio"
       S_PO4: "0.0 - i_p_bio"
       S_SO4: "0.0 - i_s_bio"
-      S_CO2: "i_cit_sb / y_hw - i_cit_bio"
+      S_CO2: "i_cit_sb / y_h_anox - i_cit_bio"
 
   - name: aer_growth_SB_biofilm
     description: "Aerobic heterotrophic growth on S_B, biofilm (half-order in O2 via Monod S_O/(2+S_O))."
@@ -241,16 +261,17 @@ reactions:
       S_CO2: "i_cit_sb / y_hw - i_cit_bio"
 
   - name: anox_growth_SB_biofilm
+    # Uses the anoxic yield y_h_anox (not the aerobic y_hf); see y_h_anox note.
     description: "Anoxic heterotrophic growth on S_B, biofilm."
-    rate: "k_12_no * [S_NO] / (K_NO_f + [S_NO]) * 2.86 * y_hf / (1.0 - y_hf) * [S_B] / (k_sf + [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * theta_f * {A_V}"
+    rate: "k_12_no * [S_NO] / (K_NO_f + [S_NO]) * 2.86 * y_h_anox / (1.0 - y_h_anox) * [S_B] / (k_sf + [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * theta_f * {A_V}"
     stoichiometry:
-      S_B:   "0.0 - 1.0 / y_hf"
+      S_B:   "0.0 - 1.0 / y_h_anox"
       X_BH:  1
-      S_NO:  "(y_hf - 1.0) / (2.86 * y_hf)"
+      S_NO:  "(y_h_anox - 1.0) / (2.86 * y_h_anox)"
       S_NH:  "0.0 - i_n_bio"
       S_PO4: "0.0 - i_p_bio"
-      S_SO4: "(1.0 / y_hf) * i_s_sb - i_s_bio"
-      S_CO2: "i_cit_sb / y_hw - i_cit_bio"
+      S_SO4: "(1.0 / y_h_anox) * i_s_sb - i_s_bio"
+      S_CO2: "i_cit_sb / y_h_anox - i_cit_bio"
 
   - name: aer_growth_VFA_biofilm
     description: "Aerobic heterotrophic growth on VFA, biofilm."
@@ -265,16 +286,17 @@ reactions:
       S_CO2: "i_cit_sb / y_hw - i_cit_bio"
 
   - name: anox_growth_VFA_biofilm
+    # Uses the anoxic yield y_h_anox (not the aerobic y_hf); see y_h_anox note.
     description: "Anoxic heterotrophic growth on VFA, biofilm."
-    rate: "k_12_no * [S_NO] / (K_NO_f + [S_NO]) * 2.86 * y_hf / (1.0 - y_hf) * [S_VFA] / (k_sf + [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * theta_f * {A_V}"
+    rate: "k_12_no * [S_NO] / (K_NO_f + [S_NO]) * 2.86 * y_h_anox / (1.0 - y_h_anox) * [S_VFA] / (k_sf + [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * theta_f * {A_V}"
     stoichiometry:
-      S_VFA: "0.0 - 1.0 / y_hf"
+      S_VFA: "0.0 - 1.0 / y_h_anox"
       X_BH:  1
-      S_NO:  "(y_hf - 1.0) / (2.86 * y_hf)"
+      S_NO:  "(y_h_anox - 1.0) / (2.86 * y_h_anox)"
       S_NH:  "0.0 - i_n_bio"
       S_PO4: "0.0 - i_p_bio"
       S_SO4: "0.0 - i_s_bio"
-      S_CO2: "i_cit_sb / y_hw - i_cit_bio"
+      S_CO2: "i_cit_sb / y_h_anox - i_cit_bio"
 
   # ============================ HYDROLYSIS (XS1) ========================
   - name: aer_hydrolysis_XS1_bulk
