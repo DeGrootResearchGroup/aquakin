@@ -5,8 +5,12 @@ aqueous environmental systems. Reaction networks are declared at runtime in
 YAML and compiled to JAX-native, automatic-differentiable rate functions
 integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
 
-The first demonstration network is ozone/bromate formation after Acero & von
-Gunten (2001). Future networks include UV/H₂O₂ and chlorine decay.
+Shipped networks span chemistry (ozonation/bromate after Acero & von Gunten,
+2001; UV/H₂O₂) and biology (the ASM activated-sludge family; the WATS
+sewer-process models `wats_sewer` and the paper-faithful `wats_sewer_khalil`,
+the latter with structural variants for model-structure studies). The network
+YAML files live under `aquakin/networks/`; see `CLAUDE.md` for the full list.
+Future networks include UV/TiO₂, chlorine decay, and ADM1.
 
 ## Features
 
