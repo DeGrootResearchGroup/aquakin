@@ -26,7 +26,18 @@ The shipped networks currently are:
 - `asm2d_tud` — Delft TUD variant of ASM2D with revised bio-P stoichiometry.
 - `asm3` — ASM3, ASM1 with internal storage products replacing hydrolysis.
 - `asm3_biop` — ASM3 + bio-P extension.
-- `wats_sewer` — extended WATS sewer-process model (carbon/sulfur/nitrogen
+- `wats_sewer` — the **original reference-book WATS model** (Hvitved-Jacobsen,
+  Vollertsen & Nielsen 2013, process matrices Tables 9.1–9.4): aerobic/anoxic/
+  anaerobic heterotrophic carbon turnover (growth bulk+biofilm, endogenous
+  maintenance, fast/slow hydrolysis in all three redox regimes, fermentation)
+  plus the sulfur cycle — sulfate reduction (H₂S formation, Eq 6.24) and chemical
+  + biological sulfide oxidation to sulfate (bulk Eqs 5.13–5.15; biofilm Eq 5.16).
+  State-derived (charge-balance) pH. 34 reactions, 15 species. This is the base
+  model **without** any nitrate-dosing / methane / elemental-sulfur extensions;
+  `wats_sewer_extended` and the Khalil paper/thesis models build on it. (The two
+  authored sulfur-cycle rate constants `a_h2s`, `k_sox_f` are flagged PROVISIONAL
+  pending confirmation against the book parameter tables.)
+- `wats_sewer_extended` — extended WATS sewer-process model (carbon/sulfur/nitrogen
   turnover with a two-step sulfide→S⁰→sulfate cycle and nitrate-driven sulfide
   control). The full reaction structure (46 reactions) covers heterotrophic
   growth, hydrolysis, endogenous maintenance, fermentation, nitrification,
@@ -58,21 +69,61 @@ The shipped networks currently are:
   `k_12_no`/`K_NO_f` are a near-degenerate ratio, so `K_NO_f` is fixed) rather
   than by manual trial — the AD analogue of the source study's pairwise
   calibration.
-- `wats_sewer_khalil` — paper-faithful re-implementation of the *published*
-  Khalil et al. (2025) sewer nitrate-dosing model (its Table 2/3): a compact
-  anoxic/anaerobic network (13 reactions, 11 species) with anoxic heterotrophic
-  growth, anaerobic hydrolysis, fermentation, methanogenesis, VFA-driven sulfate
-  and elemental-sulfur reduction, and the two-step nitrate-driven sulfur
-  oxidation. Unlike `wats_sewer` (the larger, code-derived model) it has **no pH
-  solver, energy maintenance, aerobic growth or nitrification**, and its
-  fermentation is not nitrate-inhibited. Ships with four structural variants
-  (`_halforder`, `_directsulfate`, `_srbsubstrate`, `_combined`) generated
-  reproducibly by [`networks/_make_khalil_variants.py`](aquakin/networks/_make_khalil_variants.py).
+- `wats_sewer_khalil_paper` — paper-faithful re-implementation of the *published*
+  Khalil et al. (2025) sewer nitrate-dosing model. **It is the FULL WATS model
+  (Hvitved-Jacobsen et al. 2013, Tables 9.1–9.4: carbon backbone + complete
+  sulfur cycle) plus the paper's stated additions and modifications**, not a
+  hand-trimmed subset — the paper says the model is "based on the WATS model"
+  with extensions. This network (27 reactions, 18 species) includes aerobic +
+  anoxic heterotrophic growth (bulk + biofilm), aerobic + anoxic maintenance,
+  anaerobic fast/slow hydrolysis, fermentation, methanogenesis, VFA-driven
+  sulfate and elemental-sulfur reduction, the two-step nitrate-driven sulfur
+  oxidation (paper additions), **and the base-WATS aerobic sulfur cycle**:
+  pH-dependent chemical and biological *bulk* sulfide oxidation (Table 9.4) and
+  biological *biofilm* sulfide / elemental-S oxidation. The **aerobic backbone
+  and the aerobic sulfur-oxidation pathway are O2-gated and therefore dormant**
+  under the air-sealed anoxic batch (`S_O ~ 0`) — they carry zero rate and do
+  not change the batch trajectories, but make the network the structurally
+  complete WATS model. Paper modifications: half-order WATS biofilm terms →
+  Monod (so the aerobic biofilm oxidation is Monod-ized); no temperature
+  correction (batch at 20 °C); pH supplied as a **fixed operating condition**
+  (not the charge-balance solver); removes chemical oxidation of sulfide *by
+  nitrate* (anoxic oxidation is biological only). Carries the full WATS species
+  vector; the N/P/inorganic-carbon/inert/autotroph pools are present but largely
+  inert in the batch. The paper-active core is augmented with the dormant
+  full-WATS aerobic pieces by
+  [`networks/_make_khalil_paper.py`](aquakin/networks/_make_khalil_paper.py)
+  (comment-preserving ruamel splice from `wats_sewer_extended.yaml`). Ships with four
+  structural variants (`_halforder`, `_directsulfate`, `_srbsubstrate`,
+  `_combined`) generated reproducibly by
+  [`networks/_make_khalil_variants.py`](aquakin/networks/_make_khalil_variants.py).
   The half-order variants' square-root kinetics need a tighter `dtmax` (≈1e-4)
   for the reverse-mode adjoint to stay finite. Built for the JRN-055
   identifiability study, which finds the elemental-sulfur oxidation rate and the
   unmeasured initial carbon pools to be non-identifiable (they trade off through
   the shared dosed-nitrate budget).
+- `wats_sewer_khalil_thesis` — the same complete WATS model + nitrate-dosing
+  additions as specified in Khalil's *thesis* (the base WATS model of thesis
+  Ch. 3 plus the Table 4-1 additions): the full WATS process matrix
+  (Hvitved-Jacobsen Tables 9.1–9.4 — aerobic/anoxic/anaerobic carbon turnover
+  plus the sulfur cycle, including the chemical/biological **aerobic** sulfide
+  oxidation with **half-order** biofilm kinetics) extended with methanogenesis,
+  elemental-sulfur reduction and the two-step nitrate-driven sulfur oxidation.
+  Generated by [`networks/_make_khalil_thesis.py`](aquakin/networks/_make_khalil_thesis.py)
+  from `wats_sewer_extended.yaml` by dropping the charge-balance pH solver (→ a fixed
+  operating-pH condition, since the thesis uses a fixed pH) and
+  nitrification/autotrophs, and reverting parameters to thesis/paper values
+  (single yield 0.55; faster hydrolysis `k_h1=12`, `k_h2=5`; `q_ferm=2`). Used to
+  test whether the published-fidelity model reproduces the batch nitrate-dosing
+  data: it matches sulfide well but not VFA/sulfate, consistent with the
+  published curves coming from the continuous 4-CSTR runs rather than an
+  isolated batch. Now that `wats_sewer_khalil_paper` is also the full WATS model
+  (same 18-species state, same aerobic sulfur-oxidation branch, fixed pH), the
+  two differ chiefly in **half-order (thesis) vs Monod-ized (paper) biofilm
+  kinetics**, the temperature correction (thesis keeps `theta^(T-20)`; paper
+  omits it), and the parameter values — i.e. the paper model is essentially the
+  thesis model with the `_halforder`→Monod structural choice and paper Table-3
+  parameters.
 
 The four SUMO-derived ASM networks were generated by
 [`scripts/sumo_to_aquakin.py`](scripts/sumo_to_aquakin.py) from JSON dumps
@@ -291,7 +342,7 @@ forward (`jax.jvp`) and reverse (`jax.grad`) mode (it is not a reverse-only
 adjoint issue, and not a singular operator — JAX already uses the implicit
 function theorem at each step, like a CFD discrete adjoint). Capping `dtmax` to
 a small multiple of the fastest reaction timescale fixes it; the resulting
-gradients match finite differences. For `wats_sewer` at the reference
+gradients match finite differences. For `wats_sewer_extended` at the reference
 stiffness (biofilm reactions ~1000 d⁻¹, timescale ~1e-3 d) the gradient is
 non-finite uncapped and correct for `dtmax ≲ 5e-4` d (the calibrated low
 sulfur-oxidation saturation constants keep those reactions fast even as nitrate
@@ -526,10 +577,16 @@ aquakin/
 │   │   ├── asm2d_tud.yaml           # Delft TUD variant of ASM2D
 │   │   ├── asm3.yaml                # ASM3 (storage products replace hydrolysis)
 │   │   ├── asm3_biop.yaml           # ASM3 + bio-P extension
-│   │   ├── wats_sewer.yaml          # extended WATS sewer model (state-derived pH)
-│   │   └── wats_sewer_khalil*.yaml  # paper-faithful Khalil (2025) model + variants
+│   │   ├── wats_sewer.yaml          # original reference-book WATS (Tables 9.1-9.4)
+│   │   ├── wats_sewer_extended.yaml  # extended WATS (+ nitrate/methane/elemental-S, state-derived pH)
+│   │   ├── wats_sewer_extended_*.yaml # extended-model structural variants + v0
+│   │   ├── wats_sewer_khalil_paper*.yaml # paper-faithful Khalil (2025) model + variants
+│   │   └── wats_sewer_khalil_thesis.yaml # thesis-faithful Khalil model
 │   │
-│   │   # wats_sewer_khalil structural variants are generated by
+│   │   # wats_sewer_khalil_paper (paper) is the paper-active core augmented with the
+│   │   #   dormant full-WATS aerobic pieces by networks/_make_khalil_paper.py;
+│   │   # wats_sewer_khalil_thesis is generated from wats_sewer_extended.yaml by
+│   │   #   networks/_make_khalil_thesis.py; the structural variants by
 │   │   #   networks/_make_khalil_variants.py
 │   │
 │   └── utils/
@@ -554,7 +611,7 @@ aquakin/
 │   ├── batch_bromate.py
 │   ├── lagrangian_demo.py
 │   └── sensitivity_demo.py
-│   # NOTE: the wats_sewer batch-fitting / calibration / sensitivity scripts and
+│   # NOTE: the wats_sewer_extended batch-fitting / calibration / sensitivity scripts and
 │   # their measurement data live in the separate paper-reproduction repository,
 │   # not here (this repo ships only the reusable library + networks).
 │

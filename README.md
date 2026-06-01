@@ -7,7 +7,7 @@ integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
 
 Shipped networks span chemistry (ozonation/bromate after Acero & von Gunten,
 2001; UV/H₂O₂) and biology (the ASM activated-sludge family; the WATS
-sewer-process models `wats_sewer` and the paper-faithful `wats_sewer_khalil`,
+sewer-process models `wats_sewer_extended` and the paper-faithful `wats_sewer_khalil_paper`,
 the latter with structural variants for model-structure studies). The network
 YAML files live under `aquakin/networks/`; see `CLAUDE.md` for the full list.
 Future networks include UV/TiO₂, chlorine decay, and ADM1.

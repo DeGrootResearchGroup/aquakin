@@ -1,37 +1,31 @@
 network:
-  name: wats_sewer_combined
+  name: wats_sewer_extended_halforder
   version: "0.2"
   description: >
-    COMBINED STRUCTURAL VARIANT of `wats_sewer` -- all three peer-review /
-    AD-diagnosed structural fixes applied together, the capstone of the
-    model-structure study. Tests whether fixing every structural critique at
-    once rescues the model (a good fit AND literature-consistent rates) or
-    whether the fit-vs-physical-rate tension persists in the fully restructured
-    model. The three changes (each isolated in its own variant YAML):
-      1. half-order (from wats_sewer_halforder): the nitrate-driven biofilm
-         sulfur-oxidation reactions use WATS half-order kinetics, not Monod.
-      2. direct-sulfate (from wats_sewer_directsulfate): nitrate-driven sulfide
-         oxidation goes directly to sulfate in one step (sumS -> S_SO4, 0.75 N
-         per S), not via the elemental-sulfur intermediate; the pre-existing
-         elemental-sulfur pool keeps its own (now half-order) oxidation.
-      3. SRB-substrate (from wats_sewer_srbsubstrate): the active biofilm
-         sulfate-reduction and elemental-S-reduction reactions consume S_B
-         (fermentable substrate), not VFA, so VFA accumulates as a byproduct.
-    Everything else is identical to `wats_sewer`.
+    STRUCTURAL VARIANT of `wats_sewer_extended` for the model-structure study. The ONLY
+    change from the `wats_sewer_extended` baseline is the kinetic FORM of the two
+    nitrate-driven biofilm sulfur-oxidation reactions
+    (`sulfide_biooxidation_anoxic_biofilm`,
+    `elemental_S_oxidation_anoxic_biofilm`): Monod saturation terms are replaced
+    with WATS-style HALF-ORDER terms in the bulk substrate and in nitrate
+    (mirroring the model's own aerobic biofilm sulfur-oxidation reactions).
+    Rationale: peer review (and WATS theory) hold that sewer-biofilm kinetics
+    are half-order in the bulk-water concentration, not saturating; a Monod form
+    saturates at the high sulfide/sulfur/nitrate concentrations of these batches
+    and so requires an inflated rate constant (~2x the independently measured
+    value) to reproduce the sulfate. This variant tests whether the half-order
+    form recovers the sulfate with literature-consistent rates. Everything else
+    (species, conditions, speciation, all other reactions, parameters) is
+    identical to `wats_sewer_extended`.
 
-    Result (unconstrained best fit to the calibration batch): combining all
-    three structural fixes does NOT rescue the model. Sulfate is the worst fit
-    of any variant (RMSE ~4.1 vs 2.78 for the baseline), sulfide is worse, while
-    VFA stays realistic and the effective elemental-S oxidation rate falls
-    toward (but not to) the measured value (~1.6x vs 2.5x for the baseline).
-    Across the whole variant chain the baseline fits best ONLY with an
-    unphysical rate, and every move toward physical defensibility degrades the
-    fit -- the fit-vs-physical-rate tension is irreducible within this reaction
-    network. Conclusion: no physically-defensible version of this structure
-    reproduces the single-batch data well; the model needs either fundamental
-    restructuring or much richer data. This is the central AD-derived finding of
-    the model-structure study (caveat: unconstrained best-fits may sit in local
-    minima, but the pattern is consistent across all five variants).
+    Result (unconstrained best fit to the calibration batch): the half-order
+    form does NOT fix the sulfate misfit -- it slightly improves sulfide/nitrate
+    but worsens sulfate, and the effective areal elemental-S oxidation rate
+    stays ~2.5-3x the measured value. The required effective rate is set by the
+    data and the pathway, not by the saturation shape, so Monod-vs-half-order is
+    not the lever for the literature-inconsistency. Kept as a documented
+    (negative) result in the structural study; a larger dataset might yet
+    distinguish the forms.
 
     Extended WATS sewer-process model: anaerobic/anoxic/aerobic carbon
     turnover, fermentation, methanogenesis, sulfate reduction and a two-step
@@ -139,7 +133,8 @@ expressions:
   ho_sumS_half: "[sumS] * ([sumS] + 1.0e-3) ** (0.0 - 0.5)"
   ho_SO_half:   "[S_O] * ([S_O] + 1.0e-3) ** (0.0 - 0.5)"
   ho_XS0_half:  "[X_S0] * ([X_S0] + 1.0e-3) ** (0.0 - 0.5)"
-  # Half-order in nitrate, for the half-order nitrate-driven sulfur oxidation.
+  # Half-order in nitrate, for the half-order variant of the nitrate-driven
+  # sulfur-oxidation reactions (replaces their Monod-in-nitrate term).
   ho_SNO_half:  "[S_NO] * ([S_NO] + 1.0e-3) ** (0.0 - 0.5)"
 
 # --- Shared kinetic + stoichiometric parameters (global; referenced by bare
@@ -489,11 +484,10 @@ reactions:
     rate: "mu_h2s_hyd * [X_BH] * [S_H2] / ([S_VFA] + [S_H2] + k_srb) * monod([S_SO4], k_so4) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * theta_s"
     stoichiometry: {S_H2: -2, sumS: 1, S_SO4: -1}
 
-  - name: sulfate_reduction_SB_biofilm
-    # COMBINED: sulfate reduction on S_B (fermentable), not VFA, so VFA accumulates.
-    description: "Sulfate reduction on S_B (fermentable substrate), biofilm (sulfide generation)."
-    rate: "k_h2s_acid * [S_B] / ([S_B] + [S_H2] + k_srb) * monod([S_SO4], k_so4) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
-    stoichiometry: {S_B: -2, sumS: 1, S_SO4: -1, S_CO2: 0.38}
+  - name: sulfate_reduction_VFA_biofilm
+    description: "Sulfate reduction on VFA, biofilm (sulfide generation)."
+    rate: "k_h2s_acid * [S_VFA] / ([S_VFA] + [S_H2] + k_srb) * monod([S_SO4], k_so4) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
+    stoichiometry: {S_VFA: -2, sumS: 1, S_SO4: -1, S_CO2: 0.38}
 
   - name: sulfate_reduction_H2_biofilm
     description: "Sulfate reduction on H2, biofilm (0 at default k_h2s_hyd)."
@@ -501,11 +495,10 @@ reactions:
     stoichiometry: {S_H2: -2, sumS: 1, S_SO4: -1}
 
   # ============================ ELEMENTAL SULFUR REDUCTION ==============
-  - name: elemental_S_reduction_SB_biofilm
-    # COMBINED: elemental-S reduction on S_B instead of VFA.
-    description: "Reduction of elemental sulfur to sulfide on S_B (fermentable substrate), biofilm."
-    rate: "k_s0_acid * [S_B] / ([S_B] + [S_H2] + k_srb) * monod([X_S0], K_S0) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
-    stoichiometry: {S_B: -0.75, sumS: 1, X_S0: -1}
+  - name: elemental_S_reduction_VFA_biofilm
+    description: "Reduction of elemental sulfur to sulfide on VFA, biofilm."
+    rate: "k_s0_acid * [S_VFA] / ([S_VFA] + [S_H2] + k_srb) * monod([X_S0], K_S0) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
+    stoichiometry: {S_VFA: -0.75, sumS: 1, X_S0: -1}
 
   - name: elemental_S_reduction_H2_biofilm
     description: "Reduction of elemental sulfur to sulfide on H2, biofilm (0 at default k_s0_hyd)."
@@ -533,10 +526,11 @@ reactions:
     stoichiometry: {sumS: -1, X_S0: 1, S_O: -0.42}
 
   - name: sulfide_biooxidation_anoxic_biofilm
-    # COMBINED: direct sulfide -> sulfate (one step, 0.75 N/S) AND half-order form.
-    description: "Nitrate-driven biological sulfide oxidation directly to sulfate, biofilm (soNRB), half-order direct form."
+    # HALF-ORDER variant: half-order in sulfide and nitrate (mirrors the aerobic
+    # biofilm reaction above), replacing the baseline Monod-in-sumS/Monod-in-NO.
+    description: "Nitrate-driven biological sulfide oxidation to elemental sulfur, biofilm (soNRB), half-order form."
     rate: "k_sII_anox_f * ho_sumS_half * ho_SNO_half * {A_V}"
-    stoichiometry: {sumS: -1, S_SO4: 1, S_NO: -0.75}
+    stoichiometry: {sumS: -1, X_S0: 1, S_NO: -0.225}
 
   - name: elemental_S_oxidation_aerobic_biofilm
     description: "Aerobic oxidation of elemental sulfur to sulfate, biofilm (0 at default k_s0_ox_f)."
@@ -544,7 +538,8 @@ reactions:
     stoichiometry: {X_S0: -1, S_SO4: 1, S_O: -1.22}
 
   - name: elemental_S_oxidation_anoxic_biofilm
-    # COMBINED: half-order form (oxidises the pre-existing elemental-sulfur pool).
+    # HALF-ORDER variant: half-order in elemental sulfur and nitrate (mirrors the
+    # aerobic biofilm reaction above), replacing the baseline Monod-in-X_S0/NO.
     description: "Nitrate-driven oxidation of elemental sulfur to sulfate, biofilm, half-order form."
     rate: "k_s0_anox_f * ho_XS0_half * ho_SNO_half * {A_V}"
     stoichiometry: {X_S0: -1, S_SO4: 1, S_NO: -0.525}

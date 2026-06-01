@@ -1,34 +1,34 @@
 network:
-  name: wats_sewer_srbsubstrate
+  name: wats_sewer_extended_directsulfate
   version: "0.2"
   description: >
-    STRUCTURAL VARIANT of `wats_sewer` for the model-structure study. The ONLY
-    change from the `wats_sewer` baseline is the SULFATE-REDUCER SUBSTRATE: the
-    active biofilm sulfate-reduction and elemental-sulfur-reduction reactions
-    consume readily-biodegradable substrate S_B (fermentable) instead of VFA.
-    Rationale: peer review holds that sulfide-forming organisms in force mains
-    use fermentable substrate (and H2), NOT acetate/VFA -- which is precisely
-    why VFA accumulates in real force mains. The baseline lets sulfate reducers
-    feed on VFA only, which both reviewers (and the AD diagnosis: VFA is the one
-    species never fit at any parameter set) flag as wrong. With the substrate
-    switched to S_B, VFA is produced by fermentation but no longer consumed by
-    sulfate reduction, so it accumulates as a byproduct. This variant tests
-    whether that fixes the persistent VFA misfit (and how it shifts the
-    carbon -> sulfide -> sulfate flux). The H2 sulfate-reduction paths (a
-    legitimate substrate per the review) are unchanged; the inactive bulk VFA
-    sulfate-reduction reactions (rate 0 at the default rate constants) are left
-    as-is. Everything else is identical to `wats_sewer`.
+    STRUCTURAL VARIANT of `wats_sewer_extended` for the model-structure study. The ONLY
+    change from the `wats_sewer_extended` baseline is the nitrate-driven sulfide
+    oxidation PATHWAY: sulfide is oxidized DIRECTLY to sulfate in one step
+    (sumS -> S_SO4, consuming the same total nitrate the two-step route did,
+    0.225 + 0.525 = 0.75 N per S), instead of the two-step route
+    sulfide -> elemental sulfur -> sulfate. The pre-existing elemental-sulfur
+    pool keeps its own nitrate-driven oxidation reaction. Rationale: peer review
+    doubts that elemental sulfur is appreciably oxidized to sulfate (not
+    energetically favorable) and notes the source does not describe anoxic
+    sulfide oxidation as two-step; our AD diagnosis shows the two-step route
+    requires the elemental-S oxidation step to run ~3x its measured rate to
+    supply the observed sulfate. This variant tests whether a direct
+    sulfide -> sulfate route reproduces the sulfate with a literature-consistent
+    rate (bypassing the slow elemental-S oxidation bottleneck). Everything else
+    is identical to `wats_sewer_extended`.
 
-    Result (unconstrained best fit to the calibration batch): routing sulfate
-    reduction onto S_B reproduces a realistic VFA trajectory (28.2 -> ~13
-    plateau, matching the measured shape) with VFA no longer over-consumed, so
-    the substrate structure is the more defensible one. For this single batch
-    the per-species RMSE is similar to the VFA-substrate baseline, and the
-    sulfur-oxidation rate inflation (k_s0_anox_f ~5.5, 2.5x measured) is
-    unchanged -- that is a sulfur-pathway issue, not a carbon-substrate one.
-    Like the other single-change variants it addresses its targeted critique
-    without resolving the overall fit-vs-physical-rate tension; the structural
-    defects are intertwined (see a combined variant, and richer VFA data).
+    Result (unconstrained best fit to the calibration batch): the direct pathway
+    DOES make the elemental-S oxidation rate literature-consistent
+    (k_s0_anox_f -> ~2.3 ~= the measured 2.2, vs ~5.5 = 2.5x in the two-step
+    baseline), confirming the two-step route was the source of the inflated
+    rate. HOWEVER the overall fit is worse (sulfate and sulfide RMSE both rise).
+    Together with the half-order result this reveals a fit-vs-physical-rate
+    tension that no single structural change resolves: the data are reproduced
+    well only with an unphysical rate, or with physical rates only at a worse
+    fit -- quantitative support for the reviewer's structural-inadequacy /
+    over-parametrization critique. Next variant to test: sulfate-reducer
+    substrate (S_B + H2, not VFA-only) with VFA accumulating as byproduct.
 
     Extended WATS sewer-process model: anaerobic/anoxic/aerobic carbon
     turnover, fermentation, methanogenesis, sulfate reduction and a two-step
@@ -484,12 +484,10 @@ reactions:
     rate: "mu_h2s_hyd * [X_BH] * [S_H2] / ([S_VFA] + [S_H2] + k_srb) * monod([S_SO4], k_so4) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * theta_s"
     stoichiometry: {S_H2: -2, sumS: 1, S_SO4: -1}
 
-  - name: sulfate_reduction_SB_biofilm
-    # SRB-SUBSTRATE variant: sulfate reduction on readily-biodegradable
-    # substrate S_B (fermentable) instead of VFA, so VFA accumulates.
-    description: "Sulfate reduction on S_B (fermentable substrate), biofilm (sulfide generation)."
-    rate: "k_h2s_acid * [S_B] / ([S_B] + [S_H2] + k_srb) * monod([S_SO4], k_so4) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
-    stoichiometry: {S_B: -2, sumS: 1, S_SO4: -1, S_CO2: 0.38}
+  - name: sulfate_reduction_VFA_biofilm
+    description: "Sulfate reduction on VFA, biofilm (sulfide generation)."
+    rate: "k_h2s_acid * [S_VFA] / ([S_VFA] + [S_H2] + k_srb) * monod([S_SO4], k_so4) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
+    stoichiometry: {S_VFA: -2, sumS: 1, S_SO4: -1, S_CO2: 0.38}
 
   - name: sulfate_reduction_H2_biofilm
     description: "Sulfate reduction on H2, biofilm (0 at default k_h2s_hyd)."
@@ -497,11 +495,10 @@ reactions:
     stoichiometry: {S_H2: -2, sumS: 1, S_SO4: -1}
 
   # ============================ ELEMENTAL SULFUR REDUCTION ==============
-  - name: elemental_S_reduction_SB_biofilm
-    # SRB-SUBSTRATE variant: elemental-S reduction on S_B instead of VFA.
-    description: "Reduction of elemental sulfur to sulfide on S_B (fermentable substrate), biofilm."
-    rate: "k_s0_acid * [S_B] / ([S_B] + [S_H2] + k_srb) * monod([X_S0], K_S0) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
-    stoichiometry: {S_B: -0.75, sumS: 1, X_S0: -1}
+  - name: elemental_S_reduction_VFA_biofilm
+    description: "Reduction of elemental sulfur to sulfide on VFA, biofilm."
+    rate: "k_s0_acid * [S_VFA] / ([S_VFA] + [S_H2] + k_srb) * monod([X_S0], K_S0) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
+    stoichiometry: {S_VFA: -0.75, sumS: 1, X_S0: -1}
 
   - name: elemental_S_reduction_H2_biofilm
     description: "Reduction of elemental sulfur to sulfide on H2, biofilm (0 at default k_s0_hyd)."
@@ -529,9 +526,12 @@ reactions:
     stoichiometry: {sumS: -1, X_S0: 1, S_O: -0.42}
 
   - name: sulfide_biooxidation_anoxic_biofilm
-    description: "Nitrate-driven biological sulfide oxidation to elemental sulfur, biofilm (soNRB)."
+    # DIRECT-SULFATE variant: sulfide -> sulfate in one step (product S_SO4, not
+    # X_S0), consuming the full two-step nitrate (0.75 N/S). Bypasses the slow
+    # elemental-S -> sulfate bottleneck.
+    description: "Nitrate-driven biological sulfide oxidation directly to sulfate, biofilm (soNRB), one-step form."
     rate: "k_sII_anox_f * monod([sumS], K_S2) * monod([S_NO], K_NO_S_f) * {A_V}"
-    stoichiometry: {sumS: -1, X_S0: 1, S_NO: -0.225}
+    stoichiometry: {sumS: -1, S_SO4: 1, S_NO: -0.75}
 
   - name: elemental_S_oxidation_aerobic_biofilm
     description: "Aerobic oxidation of elemental sulfur to sulfate, biofilm (0 at default k_s0_ox_f)."

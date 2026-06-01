@@ -425,6 +425,7 @@ class Plant:
         rtol: float = 1e-6,
         atol: Union[float, jnp.ndarray] = 1e-9,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
+        dtmax: Optional[float] = None,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
 
@@ -438,6 +439,14 @@ class Plant:
             Flat plant parameter vector. Defaults to :meth:`default_parameters`.
         rtol, atol : solver tolerances.
         adjoint : diffrax adjoint strategy.
+        dtmax : float, optional
+            Maximum integrator step (threaded into the PIDController). Default
+            ``None`` (uncapped) is fastest for forward solves. Set it for a
+            stiff plant when *differentiating* through the solve: the
+            reverse-mode adjoint of stiff biofilm reactions returns non-finite
+            values uncapped, and capping ``dtmax`` to a small multiple of the
+            fastest reaction timescale restores finite gradients (same as the
+            reactor ``dtmax``; see the stiff-network discussion in CLAUDE.md).
 
         Returns
         -------
@@ -482,5 +491,6 @@ class Plant:
             rtol=rtol,
             atol=atol_eff,
             adjoint=adjoint,
+            dtmax=dtmax,
         )
         return PlantSolution(t=sol.ts, state=sol.ys, plant=self)
