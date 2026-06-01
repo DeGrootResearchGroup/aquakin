@@ -27,8 +27,8 @@ def cond():
 
 
 def test_compiles_with_expected_shape(net):
-    assert net.n_species == 18
-    assert net.n_reactions == 46
+    assert net.n_species == 20
+    assert net.n_reactions == 47
     # pH is produced, not required from the user.
     assert "pH" not in net.conditions_required
     assert net.derived_fields == ["pH"]
@@ -83,7 +83,7 @@ def test_pH_is_state_derived_and_physical(net, cond):
 
 def test_rates_finite(net, cond):
     r = net.rates(net.default_concentrations(), net.default_parameters(), cond.fields, 0)
-    assert r.shape == (46,)
+    assert r.shape == (47,)
     assert bool(jnp.all(jnp.isfinite(r)))
 
 
@@ -94,7 +94,7 @@ def test_rhs_jacobian_wrt_params_is_finite(net, cond):
         return net.dCdt(C0, p, cond.fields, 0, stoich=net.compute_stoich(p))
 
     J = jax.jacobian(rhs)(net.default_parameters())
-    assert J.shape == (18, len(net.parameters))
+    assert J.shape == (20, len(net.parameters))
     assert np.all(np.isfinite(np.asarray(J)))
 
 

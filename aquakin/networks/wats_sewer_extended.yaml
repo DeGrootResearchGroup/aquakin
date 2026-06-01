@@ -60,6 +60,8 @@ species:
   - {name: S_I,   description: "Inert soluble COD (non-reactive)",           units: gCOD/m3, default_concentration: 20.0}
   - {name: X_I,   description: "Inert particulate COD (non-reactive)",       units: gCOD/m3, default_concentration: 20.0}
   - {name: X_S0,  description: "Elemental sulfur (as S)",                    units: gS/m3,   default_concentration: 0.0}
+  - {name: S_Fe2, description: "Dissolved ferrous iron Fe(II)",              units: gFe/m3,  default_concentration: 0.0}
+  - {name: X_FeS, description: "Precipitated iron sulfide FeS (solid)",      units: gFeS/m3, default_concentration: 0.0}
 
 # --- Conditions supplied at runtime. pH is produced by the speciation block.
 conditions:
@@ -121,14 +123,14 @@ expressions:
 parameters:
   mu_h:        {value: 6.7,   units: "1/d", prior: {range: [4.0, 8.0]}}      # WATS/Calabro muH (WATS range 4-8)
   k_12_o2:     {value: 18.0,  units: "gO2^0.5 m^-0.5 d^-1"}  # half-order aerobic biofilm growth const
-  k_12_no:     {value: 7.95,  units: "gN^0.5 m^-0.5 d^-1", bounds: [1.0, 30.0]}  # calib (k_1/2,NO)
+  k_12_no:     {value: 7.95,  units: "gN^0.5 m^-0.5 d^-1", bounds: [1.0, 30.0], prior: {mean: 7.95, std: 2.0}}  # calib (k_1/2,NO); Khalil Table 4 = 7.95 (95% CI 7.93-8.11), prior keeps it from running off
   eps:         {value: 0.15,  units: "-", prior: {range: [0.1, 0.2]}}        # WATS biofilm efficiency eps (range 0.1-0.2)
   k_sw:        {value: 1.0,   units: "gCOD/m3", prior: {range: [0.5, 2.0]}}  # WATS K_Sw (range 0.5-2.0)
   k_sf:        {value: 5.0,   units: "gCOD/m3"}              # WATS K_sf
   k_o:         {value: 0.05,  units: "gO2/m3", prior: {range: [0.01, 0.5]}}  # WATS K_O (range 0.01-0.5)
   k_no:        {value: 0.5,   units: "gN/m3", prior: {range: [0.5, 1.0]}}    # WATS K_NO3 (0.5-1.0; JiangBF/IWA use 2)
-  k_h1:        {value: 5.0,   units: "1/d", prior: {range: [3.0, 8.0]}}     # WATS k_h1 fast hydrolysis = 5 (book typical; range keeps calibration physical)
-  k_h2:        {value: 0.5,   units: "1/d", prior: {mean: 1.15, std: 1.2}}  # slow hydrolysis; value 0.5 is a calibration choice (book gives kh1=5 but no explicit kh2; Khalil paper 1.5, thesis 5). Prior centered 1.15, widened so the fit MAY drift toward thesis-like values at a penalty
+  k_h1:        {value: 5.0,   units: "1/d", prior: {mean: 5.5, std: 4.0}}   # fast hydrolysis; book 5, Khalil paper 5, thesis 12 (SAME lab system). Wide std so the fit can reach the thesis value the data demand, at a penalty
+  k_h2:        {value: 0.5,   units: "1/d", prior: {mean: 1.15, std: 3.0}}  # slow hydrolysis; book 0.5, Khalil paper 1.5, thesis 5 (same system). Wide std lets the fit reach thesis-like values the effluent sCOD requires
   k_x1:        {value: 1.5,   units: "gCOD/gCOD"}            # WATS/Calabro K_X1 fast = 1.5
   k_x2:        {value: 0.5,   units: "gCOD/gCOD"}            # WATS/Calabro K_X2 slow = 0.5
   eta_no:      {value: 0.6,   units: "-"}                    # JiangBF anoxic correction (~0.51)
@@ -165,10 +167,11 @@ parameters:
   # Saturation constants the study CALIBRATED (defaults = manuscript Table 4).
   # The sulfur/nitrate saturation values strongly affect the nitrate split, so
   # they are exposed as parameters.
-  K_NO_f:      {value: 14.40, units: "gN/m3",  bounds: [1.0, 30.0]}   # calib: nitrate sat., biofilm anoxic growth
-  K_S2:        {value: 0.15,  units: "gS/m3",  bounds: [0.05, 5.0]}   # calib: sulfide sat., sulfide oxidation
-  K_NO_S_f:    {value: 0.25,  units: "gN/m3",  bounds: [0.05, 8.0]}   # calib: nitrate sat., sulfide & S0 oxidation
+  K_NO_f:      {value: 14.40, units: "gN/m3",  bounds: [1.0, 30.0], prior: {mean: 14.40, std: 4.0}}   # calib: nitrate sat., biofilm anoxic growth (Khalil Table 4 = 14.40)
+  K_S2:        {value: 0.15,  units: "gS/m3",  bounds: [0.05, 5.0], prior: {mean: 0.15, std: 0.1}}   # calib: sulfide sat., sulfide oxidation (Khalil Table 4 = 0.15)
+  K_NO_S_f:    {value: 0.25,  units: "gN/m3",  bounds: [0.05, 8.0], prior: {mean: 0.25, std: 0.2}}   # calib: nitrate sat., sulfide & S0 oxidation (Khalil Table 4 = 0.25)
   K_S0:        {value: 1.0,   units: "gS/m3",  bounds: [0.1, 5.0]}    # calib/WATS: elemental-S sat. (ox & reduction)
+  k_fes_p:     {value: 1.0,   units: "m3/g/d", bounds: [0.01, 100.0]} # FeS precipitation rate (iron-limited 2nd-order; fast => Fe-limited equilibrium sink)
   y_hw:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}  # JiangBF aerobic heterotroph yield (Y_H=0.55)
   y_hf:        {value: 0.55,  units: "-",        bounds: [0.3, 0.7]}  # biofilm aerobic heterotroph yield
   # Anoxic (denitrifying) heterotroph yield. The WATS reference gives a
@@ -470,12 +473,12 @@ reactions:
   - name: elemental_S_reduction_VFA_biofilm
     description: "Reduction of elemental sulfur to sulfide on VFA, biofilm."
     rate: "k_s0_acid * [S_VFA] / ([S_VFA] + [S_H2] + k_srb) * monod([X_S0], K_S0) * monod_inh([S_O], k_o) * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}"
-    stoichiometry: {S_VFA: -0.75, sumS: 1, X_S0: -1}
+    stoichiometry: {S_VFA: -0.5, sumS: 1, X_S0: -1}
 
   - name: elemental_S_reduction_H2_biofilm
     description: "Reduction of elemental sulfur to sulfide on H2, biofilm (0 at default k_s0_hyd)."
     rate: "k_s0_hyd * [S_H2] / ([S_VFA] + [S_H2] + k_srb) * monod([X_S0], K_S0) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * theta_s * {A_V}"
-    stoichiometry: {S_H2: -0.75, sumS: 1, X_S0: -1}
+    stoichiometry: {S_H2: -0.5, sumS: 1, X_S0: -1}
 
   # ============================ SULFIDE / S0 OXIDATION ==================
   # Aerobic bulk chemical + biological oxidation (pH dependent, half-order),
@@ -485,17 +488,17 @@ reactions:
     rate: "(k_h2sc * pH_switch(pKa) + k_hsc * (1.0 - pH_switch(pKa))) * ho_sumS_n1 * ho_SO_n2"
     parameters:
       pKa: {value: 7.1, units: "-"}   # H2S/HS- pKa weighting the chemical-oxidation rate
-    stoichiometry: {sumS: -1, S_SO4: 1, S_O: -0.8}
+    stoichiometry: {sumS: -1, S_SO4: 1, S_O: -2.0}
 
   - name: sulfide_biooxidation_bulk
     description: "Aerobic biological sulfide oxidation, bulk (bell-shaped pH dependence about pH_optimum)."
     rate: "k_sII_b_pHopt * omega_sII_b / (omega_sII_b + 10.0 ** ((({pH} - pH_optimum) ** 2 + 1.0e-12) ** 0.5) - 1.0) * ho_sumS_n1 * ho_SO_n2"
-    stoichiometry: {sumS: -1, S_SO4: 1, S_O: -1.62}
+    stoichiometry: {sumS: -1, S_SO4: 1, S_O: -2.0}
 
   - name: sulfide_biooxidation_aerobic_biofilm
     description: "Aerobic biological sulfide oxidation to elemental sulfur, biofilm."
     rate: "k_sII_ox_f * ho_sumS_half * ho_SO_half * {A_V}"
-    stoichiometry: {sumS: -1, X_S0: 1, S_O: -0.42}
+    stoichiometry: {sumS: -1, X_S0: 1, S_O: -0.5}
 
   - name: sulfide_biooxidation_anoxic_biofilm
     description: "Nitrate-driven biological sulfide oxidation to elemental sulfur, biofilm (soNRB)."
@@ -505,9 +508,17 @@ reactions:
   - name: elemental_S_oxidation_aerobic_biofilm
     description: "Aerobic oxidation of elemental sulfur to sulfate, biofilm (0 at default k_s0_ox_f)."
     rate: "k_s0_ox_f * ho_XS0_half * ho_SO_half * {A_V}"
-    stoichiometry: {X_S0: -1, S_SO4: 1, S_O: -1.22}
+    stoichiometry: {X_S0: -1, S_SO4: 1, S_O: -1.5}
 
   - name: elemental_S_oxidation_anoxic_biofilm
     description: "Nitrate-driven oxidation of elemental sulfur to sulfate, biofilm."
     rate: "k_s0_anox_f * monod([X_S0], K_S0) * monod([S_NO], K_NO_S_f) * {A_V}"
     stoichiometry: {X_S0: -1, S_SO4: 1, S_NO: -0.525}
+
+  - name: FeS_precipitation
+    description: "Precipitation of dissolved sulfide with ferrous iron to solid
+      FeS (Nielsen et al. 2005; SeweX/SUMO sulfide-iron chemistry). Iron-limited
+      second-order rate; removes dissolved sulfide as a solid sink. Mass
+      fractions per g FeS: Fe 56/88 = 0.636, S 32/88 = 0.364."
+    rate: "k_fes_p * [S_Fe2] * [sumS]"
+    stoichiometry: {S_Fe2: -0.6364, sumS: -0.3636, X_FeS: 1}

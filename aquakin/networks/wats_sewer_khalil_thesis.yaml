@@ -140,6 +140,9 @@ parameters:
     bounds:
     - 1.0
     - 30.0
+    prior:
+      mean: 7.95
+      std: 2.0
   eps:
     value: 0.15
     units: '-'
@@ -175,15 +178,14 @@ parameters:
     value: 12.0
     units: 1/d
     prior:
-      range:
-      - 3.0
-      - 8.0
+      mean: 5.5
+      std: 4.0
   k_h2:
     value: 5.0
     units: 1/d
     prior:
       mean: 1.15
-      std: 1.2
+      std: 3.0
   k_x1:
     value: 1.5
     units: gCOD/gCOD
@@ -318,18 +320,27 @@ parameters:
     bounds:
     - 1.0
     - 30.0
+    prior:
+      mean: 14.4
+      std: 4.0
   K_S2:
     value: 0.15
     units: gS/m3
     bounds:
     - 0.05
     - 5.0
+    prior:
+      mean: 0.15
+      std: 0.1
   K_NO_S_f:
     value: 0.25
     units: gN/m3
     bounds:
     - 0.05
     - 8.0
+    prior:
+      mean: 0.25
+      std: 0.2
   K_S0:
     value: 1.0
     units: gS/m3
@@ -726,7 +737,7 @@ reactions:
   rate: k_s0_acid * [S_VFA] / ([S_VFA] + [S_H2] + k_srb) * monod([X_S0], K_S0) * monod_inh([S_O], k_o)
     * (0.01 / ([S_NO] + 0.01)) * theta_s * {A_V}
   stoichiometry:
-    S_VFA: -0.75
+    S_VFA: -0.5
     sumS: 1
     X_S0: -1
 - name: elemental_S_reduction_H2_biofilm
@@ -734,7 +745,7 @@ reactions:
   rate: k_s0_hyd * [S_H2] / ([S_VFA] + [S_H2] + k_srb) * monod([X_S0], K_S0) * monod_inh([S_O], k_o) *
     monod_inh([S_NO], k_no) * theta_s * {A_V}
   stoichiometry:
-    S_H2: -0.75
+    S_H2: -0.5
     sumS: 1
     X_S0: -1
 - name: sulfide_chemoxidation_bulk
@@ -747,7 +758,7 @@ reactions:
   stoichiometry:
     sumS: -1
     S_SO4: 1
-    S_O: -0.8
+    S_O: -2.0
 - name: sulfide_biooxidation_bulk
   description: Aerobic biological sulfide oxidation, bulk (bell-shaped pH dependence about pH_optimum).
   rate: k_sII_b_pHopt * omega_sII_b / (omega_sII_b + 10.0 ** ((({pH} - pH_optimum) ** 2 + 1.0e-12) **
@@ -755,14 +766,14 @@ reactions:
   stoichiometry:
     sumS: -1
     S_SO4: 1
-    S_O: -1.62
+    S_O: -2.0
 - name: sulfide_biooxidation_aerobic_biofilm
   description: Aerobic biological sulfide oxidation to elemental sulfur, biofilm.
   rate: k_sII_ox_f * ho_sumS_half * ho_SO_half * {A_V}
   stoichiometry:
     sumS: -1
     X_S0: 1
-    S_O: -0.42
+    S_O: -0.5
 - name: sulfide_biooxidation_anoxic_biofilm
   description: Nitrate-driven biological sulfide oxidation to elemental sulfur, biofilm (soNRB).
   rate: k_sII_anox_f * monod([sumS], K_S2) * monod([S_NO], K_NO_S_f) * {A_V}
@@ -776,7 +787,7 @@ reactions:
   stoichiometry:
     X_S0: -1
     S_SO4: 1
-    S_O: -1.22
+    S_O: -1.5
 - name: elemental_S_oxidation_anoxic_biofilm
   description: Nitrate-driven oxidation of elemental sulfur to sulfate, biofilm.
   rate: k_s0_anox_f * monod([X_S0], K_S0) * monod([S_NO], K_NO_S_f) * {A_V}

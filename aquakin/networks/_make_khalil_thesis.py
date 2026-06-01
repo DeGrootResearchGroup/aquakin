@@ -37,7 +37,11 @@ OUT = os.path.join(HERE, "wats_sewer_khalil_thesis.yaml")
 # Reactions in wats_sewer_extended that are NOT part of the WATS process matrix
 # (Tables 9.1-9.4) or the thesis heterotrophic base model -- nitrification and
 # autotroph decay are autotrophic nitrogen processes the thesis does not model.
-DROP_REACTIONS = {"nitrification", "nitrifier_decay"}
+# FeS precipitation is an improvement beyond the published thesis model (iron was
+# commented out of Khalil's code); it lives only in wats_sewer_extended and the
+# _balanced variant, not in the faithful thesis reproduction.
+DROP_REACTIONS = {"nitrification", "nitrifier_decay", "FeS_precipitation"}
+DROP_SPECIES = {"S_Fe2", "X_FeS"}
 
 # Fixed operating pH for the batch (thesis uses a fixed pH, not a charge-balance
 # solver). Near-neutral wastewater; below the biological-oxidation optimum (8.0).
@@ -97,6 +101,9 @@ def main():
     #     or the thesis heterotrophic model).
     net["reactions"] = [rx for rx in net["reactions"]
                         if rx["name"] not in DROP_REACTIONS]
+    net["species"] = [sp for sp in net["species"]
+                      if sp["name"] not in DROP_SPECIES]
+    net["parameters"].pop("k_fes_p", None)
 
     # (3) Revert kinetic parameters to thesis/paper values.
     for k, v in THESIS.items():

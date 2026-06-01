@@ -41,8 +41,9 @@ def cond():
 
 
 def test_compiles_with_expected_shape(net):
-    # Full WATS model: 18-species state vector, 27 reactions (23 active +
+    # Faithful published model: 18-species state vector, 27 reactions (23 active +
     # 4 dormant aerobic sulfur-oxidation), fixed operating pH, no temperature.
+    # FeS precipitation and N tracking are extensions in the _balanced model only.
     assert net.n_species == 18
     assert net.n_reactions == 27
     assert set(net.conditions_required) == {"A_V", "X_BF", "pH"}
@@ -91,9 +92,9 @@ def test_parameter_priors_loaded(net):
 # bounded. Each is checked for presence; a few are pinned to their exact Gaussian
 # (a range [lo, hi] loads as mean (lo+hi)/2, std (hi-lo)/4).
 _PROPAGATED_PRIORS = {
-    "k_h1": (5.5, 1.25),     # range [3, 8]
+    "k_h1": (5.5, 4.0),      # mean/std, widened to allow the thesis value (12)
     "mu_h": (6.0, 1.0),      # range [4, 8]
-    "k_h2": (1.15, 1.2),     # explicit mean/std (widened so the fit may drift)
+    "k_h2": (1.15, 3.0),     # explicit mean/std (widened so the fit may drift)
     "q_ferm": (2.0, 1.2),
     "k_ch4_acid": (4.44, 5.0),
 }

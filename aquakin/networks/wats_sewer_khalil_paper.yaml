@@ -131,13 +131,13 @@ parameters:
   eta_no: {value: 0.6, units: "-"}                           # Table 3 eta_NO
   k_sw: {value: 1.0, units: "gCOD/m3", prior: {range: [0.5, 2.0]}} # Table 3 K_sw
   k_no: {value: 2.0, units: "gN/m3"}                         # Table 3 K_NO (bulk)
-  k_12_no: {value: 7.95, units: "gN/m2/d", bounds: [1.0, 30.0]}         # Table 4 k_1/2,NO (nominal 8.0)
+  k_12_no: {value: 7.95, units: "gN/m2/d", prior: {mean: 7.95, std: 2.0}, bounds: [1.0, 30.0]} # Table 4 k_1/2,NO (nominal 8.0)
   k_sf: {value: 5.0, units: "gCOD/m3"}                       # Table 3 K_sf
-  K_NO_f: {value: 14.40, units: "gN/m3", bounds: [1.0, 30.0]}           # Table 4 K_NO,f (nominal 20)
+  K_NO_f: {value: 14.40, units: "gN/m3", prior: {mean: 14.40, std: 4.0}, bounds: [1.0, 30.0]} # Table 4 K_NO,f (nominal 20)
   y_h: {value: 0.55, units: "-"}                             # heterotroph yield (not reported; WATS/ASM standard)
   eta_fe: {value: 0.21, units: "-"}                          # Table 3 eta_fe (anaerobic correction)
-  k_h1: {value: 5.0, units: "1/d", prior: {range: [3.0, 8.0]}} # Table 3 k_h1 (fast hydrolysis)
-  k_h2: {value: 1.5, units: "1/d", prior: {mean: 1.15, std: 1.2}} # Table 3 k_h2 (slow hydrolysis)
+  k_h1: {value: 5.0, units: "1/d", prior: {mean: 5.5, std: 4.0}} # Table 3 k_h1 (fast hydrolysis)
+  k_h2: {value: 1.5, units: "1/d", prior: {mean: 1.15, std: 3.0}} # Table 3 k_h2 (slow hydrolysis)
   k_x1: {value: 1.5, units: "gCOD/gCOD"}                     # Table 3 K_X1
   k_x2: {value: 0.5, units: "gCOD/gCOD"}                     # Table 3 K_X2
   k_o: {value: 0.05, units: "gO2/m3", prior: {range: [0.01, 0.5]}} # Table 3 K_O2
@@ -154,8 +154,8 @@ parameters:
   k_ch4_hyd: {value: 1.92, units: "gCOD/m2/d"}               # Table 3 k_CH4,H2 (hydrogenotrophic)
   k_h2_mb: {value: 0.002, units: "gCOD/m3"}                  # Table 3 K_H2,MA
   k_sII_anox_f: {value: 18.45, units: "gS/m2/d", prior: {mean: 17.1, std: 2.3}, bounds: [1.0, 40.0]}  # Table 4 k_ox,S2- (Jiang 17.1+-2.3)
-  K_S2: {value: 0.15, units: "gS/m3", bounds: [0.05, 5.0]}              # Table 4 K_S2- (nominal 2)
-  K_NO_S_f: {value: 0.25, units: "gN/m3", bounds: [0.05, 8.0]}          # Table 4 K_NO,S,f (nominal 5)
+  K_S2: {value: 0.15, units: "gS/m3", prior: {mean: 0.15, std: 0.1}, bounds: [0.05, 5.0]} # Table 4 K_S2- (nominal 2)
+  K_NO_S_f: {value: 0.25, units: "gN/m3", prior: {mean: 0.25, std: 0.2}, bounds: [0.05, 8.0]} # Table 4 K_NO,S,f (nominal 5)
   k_s0_anox_f: {value: 2.64, units: "gS/m2/d", prior: {mean: 2.2, std: 0.4}, bounds: [0.1, 30.0]}     # Table 4 k_ox,So (Jiang 2.2+-0.4)
 
   k_h2sc: {value: 0.96, units: "(gS/m3)(gO2/m3) /d"}        # aerobic chemical sulfide ox, molecular H2S
@@ -283,7 +283,7 @@ reactions:
 - name: elemental_S_reduction_VFA_biofilm
   description: "VFA-driven reduction of elemental sulfur to sulfide, biofilm."
   rate: "k_s0_acid * monod([S_VFA], k_srb) * monod([X_S0], K_S0) * no_gate * {A_V}"
-  stoichiometry: {S_VFA: -0.75, sumS: 1, X_S0: -1}
+  stoichiometry: {S_VFA: -0.5, sumS: 1, X_S0: -1}
 - name: methanogenesis_VFA
   description: "Acetoclastic methane formation from VFA, biofilm."
   rate: "k_ch4_acid * monod([S_VFA], k_vfa_mb) * monod_inh([S_NO], K_NO_f) * {A_V}"
@@ -305,16 +305,16 @@ reactions:
   rate: "(k_h2sc * pH_switch(pKa) + k_hsc * (1.0 - pH_switch(pKa))) * ho_sumS_n1 * ho_SO_n2"
   parameters:
     pKa: {value: 7.1, units: "-"}     # H2S/HS- pKa weighting the chemical-oxidation rate
-  stoichiometry: {sumS: -1, S_SO4: 1, S_O: -0.8}
+  stoichiometry: {sumS: -1, S_SO4: 1, S_O: -2.0}
 - name: sulfide_biooxidation_bulk
   description: "Aerobic biological sulfide oxidation, bulk (bell-shaped pH dependence about pH_optimum)."
   rate: "k_sII_b_pHopt * omega_sII_b / (omega_sII_b + 10.0 ** ((({pH} - pH_optimum) ** 2 + 1.0e-12) ** 0.5) - 1.0) * ho_sumS_n1 * ho_SO_n2"
-  stoichiometry: {sumS: -1, S_SO4: 1, S_O: -1.62}
+  stoichiometry: {sumS: -1, S_SO4: 1, S_O: -2.0}
 - name: sulfide_biooxidation_aerobic_biofilm
   description: "Aerobic biological sulfide oxidation to elemental sulfur, biofilm."
   rate: "k_sII_ox_f * monod([sumS], K_S2) * monod([S_O], k_o) * {A_V}"
-  stoichiometry: {sumS: -1, X_S0: 1, S_O: -0.42}
+  stoichiometry: {sumS: -1, X_S0: 1, S_O: -0.5}
 - name: elemental_S_oxidation_aerobic_biofilm
   description: "Aerobic oxidation of elemental sulfur to sulfate, biofilm (0 at default k_s0_ox_f)."
   rate: "k_s0_ox_f * monod([X_S0], K_S0) * monod([S_O], k_o) * {A_V}"
-  stoichiometry: {X_S0: -1, S_SO4: 1, S_O: -1.22}
+  stoichiometry: {X_S0: -1, S_SO4: 1, S_O: -1.5}
