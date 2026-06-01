@@ -463,20 +463,20 @@ reactions:
     S_B: -1
     S_VFA: 0.667
     S_H2: 0.333
-- name: sulfate_reduction_VFA_biofilm
-  description: VFA-driven sulfate reduction to sulfide, biofilm.
-  rate: k_h2s_acid * monod([S_VFA], k_srb) * monod([S_SO4], k_so4) * no_gate * {A_V}
+- name: sulfate_reduction_SB_biofilm
+  description: Sulfide formation on fermentable substrate S_B (VFA accumulates as byproduct; peer review).
+  rate: k_h2s_acid * monod([S_B], k_srb) * monod([S_SO4], k_so4) * no_gate * {A_V}
   stoichiometry:
-    S_VFA: -2
     sumS: 1
     S_SO4: -1
-- name: elemental_S_reduction_VFA_biofilm
-  description: VFA-driven reduction of elemental sulfur to sulfide, biofilm.
-  rate: k_s0_acid * monod([S_VFA], k_srb) * monod([X_S0], K_S0) * no_gate * {A_V}
+    S_B: -2
+- name: elemental_S_reduction_SB_biofilm
+  description: Sulfide formation on fermentable substrate S_B (VFA accumulates as byproduct; peer review).
+  rate: k_s0_acid * monod([S_B], k_srb) * monod([X_S0], K_S0) * no_gate * {A_V}
   stoichiometry:
-    S_VFA: -0.5
     sumS: 1
     X_S0: -1
+    S_B: -0.5
 - name: methanogenesis_VFA
   description: Acetoclastic methane formation from VFA, biofilm.
   rate: k_ch4_acid * monod([S_VFA], k_vfa_mb) * monod_inh([S_NO], K_NO_f) * {A_V}

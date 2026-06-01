@@ -91,7 +91,28 @@ def main():
         elif (_num(st.get("X_S1")) or 0) < 0 or (_num(st.get("X_S2")) or 0) < 0:
             st.setdefault("S_NH", "i_n_xb")             # hydrolysis: ammonia release
 
-    # (3) Add FeS precipitation (species + reaction).
+    # (3) Peer-review structural corrections (Reviewer 1 / Batstone, Khalil 2025):
+    #   (a) Sulfide formers consume FERMENTABLE substrate S_B, not VFA -- so VFA
+    #       (acetate) accumulates as a byproduct, as observed. Khalil's published
+    #       model used VFA-only, which the reviewers called "simply wrong".
+    #   (b) Revert Khalil's undocumented anoxic-VFA-uptake throttle (0.01/Y, found
+    #       only in his code) to the standard 1/Y yield. The balanced model
+    #       conserves COD and does not rely on that non-conservative hack.
+    for rx in net["reactions"]:
+        nm = rx["name"]
+        if nm in ("sulfate_reduction_VFA_biofilm", "elemental_S_reduction_VFA_biofilm"):
+            rx["name"] = nm.replace("_VFA_", "_SB_")
+            rx["rate"] = rx["rate"].replace("[S_VFA]", "[S_B]")
+            st = rx["stoichiometry"]
+            st["S_B"] = st.pop("S_VFA")
+            rx["description"] = ("Sulfide formation on fermentable substrate S_B "
+                                 "(VFA accumulates as byproduct; peer review).")
+        if nm.startswith("anox_growth_VFA"):
+            st = rx["stoichiometry"]
+            if isinstance(st.get("S_VFA"), str) and "0.01" in st["S_VFA"]:
+                st["S_VFA"] = "0.0 - 1.0 / y_h"
+
+    # (4) Add FeS precipitation (species + reaction).
     net["species"].extend(FES_SPECIES)
     net["reactions"].append(FES_REACTION)
 

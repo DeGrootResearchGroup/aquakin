@@ -180,7 +180,7 @@ reactions:
   description: "Anoxic heterotrophic growth on VFA, bulk water."
   rate: "eta_no * mu_h * [S_VFA] / (k_sw + [S_B] + [S_VFA]) * monod([S_NO], k_no) * [X_BH]"
   stoichiometry:
-    S_VFA: "0.0 - 1.0 / y_h"
+    S_VFA: "0.0 - 0.01 / y_h"
     X_BH: 1
     S_NO: "(y_h - 1.0) / (2.86 * y_h)"
 
@@ -196,7 +196,7 @@ reactions:
   description: "Anoxic heterotrophic growth on VFA, biofilm (areal, hNRB)."
   rate: "k_12_no * 2.86 * y_h / (1.0 - y_h) * [S_VFA] / (k_sf + [S_B] + [S_VFA]) * monod([S_NO], K_NO_f) * {A_V}"
   stoichiometry:
-    S_VFA: "0.0 - 1.0 / y_h"
+    S_VFA: "0.0 - 0.01 / y_h"
     X_BH: 1
     S_NO: "(y_h - 1.0) / (2.86 * y_h)"
 
@@ -277,7 +277,7 @@ reactions:
   rate: "q_ferm * [S_B] / (k_fe + [S_B]) * monod_inh([S_O], k_o) * bio_hf"
   stoichiometry: {S_B: -1, S_VFA: 0.667, S_H2: 0.333}
 - name: sulfate_reduction_VFA_biofilm
-  description: "VFA-driven sulfate reduction to sulfide, biofilm."
+  description: "VFA-driven sulfate reduction to sulfide, biofilm (as in Khalil's published model; the peer review argued this should be fermentable substrate S_B instead -- see the _balanced model)."
   rate: "k_h2s_acid * monod([S_VFA], k_srb) * monod([S_SO4], k_so4) * no_gate * {A_V}"
   stoichiometry: {S_VFA: -2, sumS: 1, S_SO4: -1}
 - name: elemental_S_reduction_VFA_biofilm

@@ -72,6 +72,20 @@ _MODELS = [
 # are excluded from the COD check only.
 _COD_EXCLUDED = {"nitrification", "nitrifier_decay"}
 
+# The faithful Khalil model reproduces his undocumented anoxic-VFA-uptake throttle
+# (0.01/Y, present only in his source code, not the paper), which lets
+# denitrification consume nitrate without the matching VFA -- this does NOT
+# conserve COD. The _balanced model reverts it to the standard 1/Y. Excluded from
+# the faithful's COD check (and asserted separately below as a documented finding).
+_KHALIL_THROTTLE_RXNS = {"anox_growth_VFA_bulk", "anox_growth_VFA_biofilm"}
+
+
+def _cod_excluded(model):
+    excl = set(_COD_EXCLUDED)
+    if model == "wats_sewer_khalil_paper":
+        excl |= _KHALIL_THROTTLE_RXNS
+    return excl
+
 # Generous absolute tolerance: published coefficients are rounded to 2-3 decimals
 # (e.g. nitrate demand 0.175 vs the exact 0.1748), so true imbalances (order
 # 0.1-1) are flagged while rounding (order 1e-3) is not.
@@ -85,11 +99,27 @@ def _net(name):
 @pytest.mark.parametrize("model", _MODELS)
 def test_cod_electron_balance(model):
     net = _net(model)
+    excl = _cod_excluded(model)
     viol = [(r, q, v) for r, q, v in check_conservation(net, WATS_COMPOSITION,
                                                         tol=_TOL, quantities=["COD"])
-            if r not in _COD_EXCLUDED]
+            if r not in excl]
     assert not viol, f"{model} COD imbalance: " + "; ".join(
         f"{r} {v:+.3f}" for r, _, v in viol)
+
+
+def test_faithful_reproduces_khalil_nonconserving_throttle():
+    """The faithful model reproduces Khalil's undocumented anoxic-VFA throttle,
+    which does not conserve COD; the _balanced model reverts it and conserves.
+    This documents the contrast (and guards it against regression)."""
+    cod = {r: v for r, q, v in check_conservation(
+        _net("wats_sewer_khalil_paper"), WATS_COMPOSITION, tol=_TOL, quantities=["COD"])}
+    for rxn in _KHALIL_THROTTLE_RXNS:
+        assert rxn in cod, f"faithful model should NOT conserve COD on {rxn!r} " \
+                           "(reproduces Khalil's throttle)"
+    bal = [r for r, q, v in check_conservation(
+        _net("wats_sewer_khalil_paper_balanced"), WATS_COMPOSITION, tol=_TOL,
+        quantities=["COD"]) if r not in _COD_EXCLUDED]
+    assert not bal, f"balanced model COD imbalance: {bal}"
 
 
 @pytest.mark.parametrize("model", _MODELS)

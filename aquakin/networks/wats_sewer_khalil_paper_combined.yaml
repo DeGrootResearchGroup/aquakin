@@ -319,7 +319,7 @@ reactions:
   description: Anoxic heterotrophic growth on VFA, bulk water.
   rate: eta_no * mu_h * [S_VFA] / (k_sw + [S_B] + [S_VFA]) * monod([S_NO], k_no) * [X_BH]
   stoichiometry:
-    S_VFA: 0.0 - 1.0 / y_h
+    S_VFA: 0.0 - 0.01 / y_h
     X_BH: 1
     S_NO: (y_h - 1.0) / (2.86 * y_h)
 - name: anox_growth_SB_biofilm
@@ -335,7 +335,7 @@ reactions:
   rate: k_12_no * 2.86 * y_h / (1.0 - y_h) * [S_VFA] / (k_sf + [S_B] + [S_VFA]) * monod([S_NO], K_NO_f)
     * {A_V}
   stoichiometry:
-    S_VFA: 0.0 - 1.0 / y_h
+    S_VFA: 0.0 - 0.01 / y_h
     X_BH: 1
     S_NO: (y_h - 1.0) / (2.86 * y_h)
 - name: aer_growth_SB_bulk
