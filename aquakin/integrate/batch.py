@@ -59,9 +59,23 @@ class BatchReactor:
         magnitude below the bulk concentrations.
     adjoint : diffrax.AbstractAdjoint, optional
         Adjoint strategy. Defaults to
-        :class:`diffrax.RecursiveCheckpointAdjoint` (memory-efficient for
-        long integrations and parameter estimation). For short
-        integrations, ``diffrax.DirectAdjoint()`` is cheaper.
+        :class:`diffrax.RecursiveCheckpointAdjoint`, the right choice for
+        reverse-mode parameter estimation: its memory grows only
+        logarithmically with the number of steps (binomial checkpointing),
+        so it is preferred for long or stiff integrations and for
+        ``jax.grad``-based fitting.
+
+        Pass ``diffrax.DirectAdjoint()`` only when you need **forward-mode**
+        autodiff (``jax.jvp`` / ``jax.jacfwd``) through the solve --- for
+        example a forward-mode sensitivity Jacobian or a Gauss-Newton /
+        Fisher information matrix. ``RecursiveCheckpointAdjoint`` registers a
+        ``custom_vjp`` (a reverse-mode rule only), so forward-mode is rejected
+        with "can't apply forward-mode autodiff (jvp) to a custom_vjp
+        function"; ``DirectAdjoint`` is plainly differentiable in both modes.
+        Its drawback is memory: it stores/unrolls the whole solve (cost grows
+        with the number of steps), so reserve it for short integrations or
+        when forward-mode is actually required. Either way, cap ``dtmax`` when
+        differentiating a stiff network (see below).
     dtmax : float, optional
         Maximum integrator step size. ``None`` (default) leaves the step
         uncapped, which is fastest for forward solves. Set it when

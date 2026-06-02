@@ -137,6 +137,44 @@ def test_laplace_returns_positive_definite_cov(setup):
     assert np.all(eigvals > 0)
 
 
+def test_gauss_newton_laplace_matches_fd(setup):
+    """The Gauss-Newton Laplace Hessian (AD ``J^T J``, first-order reverse-mode)
+    must agree with the finite-difference Hessian and be positive-definite. With
+    a near-exact fit the residuals vanish at the optimum, so Gauss-Newton equals
+    the full Hessian up to FD truncation noise."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    common = dict(
+        observations=obs_clean,
+        t_obs=t_obs,
+        free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"],
+        loss="nll",
+        sigma=jnp.asarray(0.02),
+        laplace=True,
+    )
+    fd = aquakin.calibrate(reactor, C0, laplace_method="fd", **common)
+    gn = aquakin.calibrate(reactor, C0, laplace_method="gauss_newton", **common)
+
+    cov_fd = float(np.asarray(fd.posterior_cov)[0, 0])
+    cov_gn = float(np.asarray(gn.posterior_cov)[0, 0])
+    assert cov_gn > 0.0
+    assert cov_gn == pytest.approx(cov_fd, rel=0.1)
+    assert gn.params_named_std["A_to_B.k"] == pytest.approx(
+        fd.params_named_std["A_to_B.k"], rel=0.1
+    )
+
+
+def test_unknown_laplace_method_rejected(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(ValueError):
+        aquakin.calibrate(
+            reactor, C0, observations=obs_clean, t_obs=t_obs,
+            free_params=["A_to_B.k"], observed_species=["B"],
+            loss="mse", laplace=True, laplace_method="bogus",
+        )
+
+
 def test_falls_back_to_schema_transform_when_omitted(simple_network):
     """If transforms={} is passed, the per-parameter declared transform is used."""
     reactor = aquakin.BatchReactor(

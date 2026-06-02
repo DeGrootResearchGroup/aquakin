@@ -10,16 +10,23 @@ This is the richer companion to :func:`aquakin.fit`. Differences from
   ``"nll"`` (Gaussian negative log-likelihood). The last two accept a
   per-observation ``sigma``.
 - Optional Laplace covariance — a Gaussian approximation of the posterior
-  around the MAP, via a finite-difference Hessian of the loss in
-  unconstrained space. Marginal standard deviations are then propagated
-  back to physical space via the transform's first derivative (delta
-  method).
+  around the MAP, from a Hessian of the loss in unconstrained space.
+  Marginal standard deviations are then propagated back to physical space
+  via the transform's first derivative (delta method).
 
 The optimiser is SciPy L-BFGS-B with the gradient supplied by ``jax.grad``
-through Diffrax's adjoint, same as :func:`fit`. The Hessian is FD because
-``jax.hessian`` is incompatible with Diffrax's ``while_loop``-based
-adjoint (this is documented in the WastewaterAD prior art that this code
-ports from).
+through Diffrax's adjoint, same as :func:`fit`. The Laplace Hessian is
+available two ways (``laplace_method``):
+
+- ``"fd"`` (default): finite-difference the gradient. General, but carries a
+  step-size choice and FD noise.
+- ``"gauss_newton"``: ``H = J^T J`` with ``J`` the residual Jacobian by
+  reverse-mode AD. Exact, PSD by construction, and for ``loss="nll"`` the
+  Fisher information. It needs only first-order AD, so it works with the
+  default ``RecursiveCheckpointAdjoint``. The *full* AD Hessian is avoided
+  on purpose: ``jax.hessian`` (forward-over-reverse) hits the adjoint's
+  ``custom_vjp`` (reverse-only), and computing second derivatives through the
+  stiff implicit solve is unreliable even with ``DirectAdjoint``.
 """
 
 from __future__ import annotations
@@ -108,6 +115,44 @@ def _build_loss(
     )
 
 
+def _build_residual(
+    loss_type: str,
+    observations: jnp.ndarray,
+    sigma: Optional[jnp.ndarray],
+):
+    """Return ``residual(pred) -> 1-D array`` whose half-sum-of-squares equals
+    the (theta-dependent part of the) scalar loss from :func:`_build_loss`.
+
+    This lets the Laplace covariance use the Gauss-Newton / Fisher Hessian
+    ``H = J^T J`` (``J`` the residual Jacobian), which needs only first-order
+    AD through the solve --- unlike the full Hessian, whose forward-over-reverse
+    pass hits the adjoint's ``custom_vjp`` and whose second-order solve is
+    unreliable. For ``nll`` this ``H`` is exactly the Fisher information.
+    """
+    obs = observations
+    if loss_type == "mse":
+        scale = jnp.sqrt(2.0 / obs.size)
+        def _resid(pred):
+            return (scale * (pred - obs)).reshape(-1)
+        return _resid
+    if loss_type == "wmse":
+        if sigma is None:
+            raise ValueError("loss='wmse' requires a sigma argument.")
+        scale = jnp.sqrt(2.0 / obs.size)
+        def _resid(pred):
+            return (scale * (pred - obs) / sigma).reshape(-1)
+        return _resid
+    if loss_type == "nll":
+        if sigma is None:
+            raise ValueError("loss='nll' requires a sigma argument.")
+        def _resid(pred):
+            return ((pred - obs) / sigma).reshape(-1)
+        return _resid
+    raise ValueError(
+        f"Unknown loss {loss_type!r}; choose one of {_VALID_LOSSES}."
+    )
+
+
 # --- Result dataclass --------------------------------------------------
 
 
@@ -181,6 +226,7 @@ def calibrate(
     priors: Optional[dict[str, tuple[float, float]]] = None,
     use_priors: bool = True,
     laplace: bool = True,
+    laplace_method: str = "fd",
     laplace_ridge: float = 1e-6,
     laplace_fd_step: float = 1e-3,
     max_iter: int = 500,
@@ -248,10 +294,18 @@ def calibrate(
         ``"wmse"`` the covariance is the inverse loss curvature, which has
         the right shape but not the right absolute scale for posterior
         inference. See :func:`fit` if you only need point estimates.
+    laplace_method : {"fd", "gauss_newton"}, optional
+        How to form the Laplace Hessian. ``"fd"`` (default) finite-differences
+        the gradient. ``"gauss_newton"`` uses ``H = J^T J`` with ``J`` the
+        residual Jacobian by reverse-mode AD (``jax.jacrev``) -- exact (no FD
+        step), PSD by construction, and for ``loss="nll"`` the Fisher
+        information. It needs only first-order AD through the solve, so it works
+        with the default ``RecursiveCheckpointAdjoint``; the full Hessian does
+        not (see module docstring).
     laplace_ridge : float
         Diagonal ridge added to the Hessian for positive-definiteness.
     laplace_fd_step : float
-        Relative finite-difference step for the Hessian rows.
+        Relative finite-difference step for the Hessian rows (``"fd"`` only).
     max_iter, tol : passed through to SciPy ``L-BFGS-B``.
 
     Returns
@@ -378,7 +432,9 @@ def calibrate(
             )
         sig_arr = jnp.asarray(sig_i) if sig_i is not None else None
         datasets.append(
-            (C0_i, tobs_i, (0.0, float(tobs_i[-1])), _build_loss(loss, obs_i, sig_arr))
+            (C0_i, tobs_i, (0.0, float(tobs_i[-1])),
+             _build_loss(loss, obs_i, sig_arr),
+             _build_residual(loss, obs_i, sig_arr))
         )
 
     # Resolve Gaussian priors for the free parameters. Network-declared priors
@@ -419,7 +475,7 @@ def calibrate(
         p = p0_full.at[free_indices].set(physical)
         # Sum the data terms over every dataset (the batches share ``p``).
         data_term = 0.0
-        for C0_i, tobs_i, tspan_i, loss_fn_i in datasets:
+        for C0_i, tobs_i, tspan_i, loss_fn_i, _resid_fn_i in datasets:
             sol = reactor.solve(C0_i, p, t_span=tspan_i, t_eval=tobs_i)
             data_term = data_term + loss_fn_i(sol.C[:, obs_species_indices])
         if has_priors:
@@ -462,19 +518,45 @@ def calibrate(
     params_named_std = None
     hessian_unconstrained = None
     if laplace:
-        # FD Hessian of the loss at theta_opt.
-        grad_fn = jax.jit(jax.grad(objective))
-
         d = int(theta_opt.shape[0])
-        H_rows = []
-        for i in range(d):
-            step = max(abs(float(theta_opt[i])), 1.0) * laplace_fd_step
-            e_i = jnp.zeros(d).at[i].set(step)
-            g_plus = grad_fn(theta_opt + e_i)
-            g_minus = grad_fn(theta_opt - e_i)
-            H_rows.append((g_plus - g_minus) / (2.0 * step))
-        H = jnp.stack(H_rows)
-        H = 0.5 * (H + H.T)  # symmetrise away FD noise
+        if laplace_method == "gauss_newton":
+            # Gauss-Newton / Fisher Hessian H = J^T J, with J the Jacobian of the
+            # scaled residuals (0.5||r||^2 == the loss). Only FIRST-order AD
+            # through the solve (jax.jacrev), which works with the default
+            # reverse-mode adjoint; the full Hessian does not (its
+            # forward-over-reverse pass hits the adjoint's custom_vjp, and the
+            # second-order solve is unreliable). For loss='nll' this is the
+            # exact Fisher information; it is PSD by construction.
+            def _residual_vec(theta):
+                physical = physical_from_theta(theta)
+                p = p0_full.at[free_indices].set(physical)
+                parts = []
+                for C0_i, tobs_i, tspan_i, _loss_i, resid_fn_i in datasets:
+                    sol = reactor.solve(C0_i, p, t_span=tspan_i, t_eval=tobs_i)
+                    parts.append(resid_fn_i(sol.C[:, obs_species_indices]))
+                if has_priors:
+                    parts.append(prior_mask * (physical - prior_mean) / prior_std)
+                return jnp.concatenate(parts)
+
+            J = jax.jacrev(_residual_vec)(theta_opt)
+            H = J.T @ J
+        elif laplace_method == "fd":
+            # FD Hessian of the loss at theta_opt (finite-difference the gradient).
+            grad_fn = jax.jit(jax.grad(objective))
+            H_rows = []
+            for i in range(d):
+                step = max(abs(float(theta_opt[i])), 1.0) * laplace_fd_step
+                e_i = jnp.zeros(d).at[i].set(step)
+                g_plus = grad_fn(theta_opt + e_i)
+                g_minus = grad_fn(theta_opt - e_i)
+                H_rows.append((g_plus - g_minus) / (2.0 * step))
+            H = jnp.stack(H_rows)
+        else:
+            raise ValueError(
+                f"laplace_method must be 'fd' or 'gauss_newton'; got "
+                f"{laplace_method!r}."
+            )
+        H = 0.5 * (H + H.T)  # symmetrise away asymmetry / FD noise
 
         H_ridge = H + laplace_ridge * jnp.eye(d)
         posterior_cov = jnp.linalg.inv(H_ridge)
