@@ -64,6 +64,18 @@ _MODELS = [
     "wats_sewer_khalil_paper",
     "wats_sewer_khalil_paper_balanced",
     "wats_sewer_khalil_thesis",
+    # Structural variants of both Khalil bases (reviewer-feedback alternatives).
+    # The faithful variants carry the faithful base's VFA throttle (excluded from
+    # the COD check); the balanced variants conserve everything. These guard the
+    # variant-generator stoichiometry (the directsulfate one-step nitrate demand
+    # and the S_B-driven elemental-S reduction coefficient).
+    "wats_sewer_khalil_paper_halforder",
+    "wats_sewer_khalil_paper_directsulfate",
+    "wats_sewer_khalil_paper_srbsubstrate",
+    "wats_sewer_khalil_paper_combined",
+    "wats_sewer_khalil_paper_balanced_halforder",
+    "wats_sewer_khalil_paper_balanced_directsulfate",
+    "wats_sewer_khalil_paper_balanced_combined",
 ]
 
 # Nitrification / autotroph decay oxidise nitrogen (NH3 -> NO3), which is not
@@ -82,7 +94,9 @@ _KHALIL_THROTTLE_RXNS = {"anox_growth_VFA_bulk", "anox_growth_VFA_biofilm"}
 
 def _cod_excluded(model):
     excl = set(_COD_EXCLUDED)
-    if model == "wats_sewer_khalil_paper":
+    # The faithful base and all its structural variants carry the throttle; the
+    # _balanced base and its variants revert it.
+    if model.startswith("wats_sewer_khalil_paper") and "_balanced" not in model:
         excl |= _KHALIL_THROTTLE_RXNS
     return excl
 

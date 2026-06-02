@@ -1,10 +1,22 @@
-"""Generate the structural variants of the paper-faithful `wats_sewer_khalil_paper`
-network. Mirrors the extension chain applied to the extended model, but on the
-faithful base. Run from this directory:
+"""Generate the structural variants of the Khalil sewer model, for BOTH the
+paper-faithful base (`wats_sewer_khalil_paper`) and the mass/electron-balanced
+base (`wats_sewer_khalil_paper_balanced`). Run from this directory:
 
     python _make_khalil_variants.py
 
-Produces wats_sewer_khalil_paper_{halforder,directsulfate,srbsubstrate,combined}.yaml.
+The structural changes come from reviewer feedback on the original model:
+  - halforder     : half-order (square-root) biofilm sulfur-oxidation kinetics.
+  - directsulfate : nitrate-driven sulfide oxidation goes straight to sulfate,
+                    bypassing the elemental-sulfur intermediate.
+  - srbsubstrate  : sulfate / elemental-S reduction consume readily-biodegradable
+                    substrate (S_B) rather than VFA (faithful base only -- the
+                    balanced base already makes this change by design).
+  - combined      : all of the base's variants applied together.
+
+Produces, for each base, wats_sewer_khalil_paper[_balanced]_{halforder,
+directsulfate,srbsubstrate,combined}.yaml. The directsulfate nitrate demand is
+computed from the base's own two-step coefficients, so it stays electron-balanced
+on whichever base it is applied to.
 """
 from __future__ import annotations
 
@@ -14,7 +26,6 @@ import os
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BASE = os.path.join(HERE, "wats_sewer_khalil_paper.yaml")
 
 # AD-safe half-order (sqrt) terms: x * (x + eps)^(-1/2) ~= sqrt(x), finite at 0.
 # eps=1e-2 (rather than 1e-3) softens the steep slope at low concentration so the
@@ -42,10 +53,15 @@ def apply_halforder(net):
 
 
 def apply_directsulfate(net):
-    # Sulfide is oxidized straight to sulfate in one step (same total nitrate,
-    # -0.225 - 0.525 = -0.75), bypassing the elemental-sulfur intermediate.
+    # Sulfide is oxidized straight to sulfate in one step, bypassing the
+    # elemental-sulfur intermediate. The nitrate demand is the sum of the two
+    # steps' coefficients, taken from the base itself so the one-step reaction
+    # carries the same total electron acceptance (and stays electron-balanced).
+    s1 = rxn(net, "sulfide_oxidation_anoxic_biofilm")["stoichiometry"]
+    s2 = rxn(net, "elemental_S_oxidation_anoxic_biofilm")["stoichiometry"]
+    total_no = s1["S_NO"] + s2["S_NO"]
     rxn(net, "sulfide_oxidation_anoxic_biofilm")["stoichiometry"] = \
-        {"sumS": -1, "S_SO4": 1, "S_NO": -0.75}
+        {"sumS": -1, "S_SO4": 1, "S_NO": total_no}
 
 
 def apply_srbsubstrate(net):
@@ -62,43 +78,60 @@ def apply_srbsubstrate(net):
         {"name": "elemental_S_reduction_SB_biofilm",
          "description": "S_B-driven reduction of elemental sulfur to sulfide, biofilm.",
          "rate": "k_s0_acid * monod([S_B], k_srb) * monod([X_S0], K_S0) * no_gate * {A_V}",
-         "stoichiometry": {"S_B": -0.75, "sumS": 1, "X_S0": -1}},
+         # X_S0 (COD 1.5) -> sulfide (COD 2) needs 0.5 gCOD of donor per gS.
+         "stoichiometry": {"S_B": -0.5, "sumS": 1, "X_S0": -1}},
     ]
 
 
-VARIANTS = {
+VARIANT_FNS = {
+    "halforder": apply_halforder,
+    "directsulfate": apply_directsulfate,
+    "srbsubstrate": apply_srbsubstrate,
+}
+VARIANT_DESC = {
     "halforder": ("Half-order (square-root) kinetics for the nitrate-driven biofilm "
-                  "sulfur-oxidation reactions, in place of the Monod terms.",
-                  [apply_halforder]),
+                  "sulfur-oxidation reactions, in place of the Monod terms."),
     "directsulfate": ("Nitrate-driven sulfide oxidation proceeds directly to sulfate "
-                      "in one step, bypassing the elemental-sulfur intermediate.",
-                      [apply_directsulfate]),
+                      "in one step, bypassing the elemental-sulfur intermediate."),
     "srbsubstrate": ("Sulfate and elemental-sulfur reduction consume readily-"
-                     "biodegradable substrate (S_B) rather than VFA.",
-                     [apply_srbsubstrate]),
-    "combined": ("All three structural changes applied together.",
-                 [apply_halforder, apply_directsulfate, apply_srbsubstrate]),
+                     "biodegradable substrate (S_B) rather than VFA."),
+    "combined": "All of the base's structural changes applied together.",
+}
+
+# Per base: which single-change variants to emit. The combined variant applies
+# all of them. The balanced base already makes the srbsubstrate change, so it is
+# omitted there.
+BASES = {
+    "wats_sewer_khalil_paper": ["halforder", "directsulfate", "srbsubstrate"],
+    "wats_sewer_khalil_paper_balanced": ["halforder", "directsulfate"],
 }
 
 
-def main():
-    base = yaml.safe_load(open(BASE))
-    for key, (desc, fns) in VARIANTS.items():
+def build(base_name, variant_keys):
+    base = yaml.safe_load(open(os.path.join(HERE, base_name + ".yaml")))
+    # single-change variants, plus a combined variant applying all of them
+    for key in variant_keys + ["combined"]:
         net = copy.deepcopy(base)
-        net["network"]["name"] = f"wats_sewer_khalil_paper_{key}"
+        net["network"]["name"] = f"{base_name}_{key}"
         net["network"]["description"] = (
-            f"Structural variant of wats_sewer_khalil_paper. {desc} "
-            f"All other reactions, parameters, species and conditions are "
-            f"identical to the faithful base model. Auto-generated by "
-            f"_make_khalil_variants.py.")
+            f"Structural variant of {base_name}. {VARIANT_DESC[key]} All other "
+            f"reactions, parameters, species and conditions are identical to the "
+            f"base model. Auto-generated by _make_khalil_variants.py.")
+        fns = ([VARIANT_FNS[key]] if key != "combined"
+               else [VARIANT_FNS[k] for k in variant_keys])
         for fn in fns:
             fn(net)
-        out = os.path.join(HERE, f"wats_sewer_khalil_paper_{key}.yaml")
+        out = os.path.join(HERE, f"{base_name}_{key}.yaml")
         with open(out, "w") as f:
-            f.write("# Auto-generated from wats_sewer_khalil_paper.yaml by "
+            f.write(f"# Auto-generated from {base_name}.yaml by "
                     "_make_khalil_variants.py -- do not edit by hand.\n")
             yaml.safe_dump(net, f, sort_keys=False, default_flow_style=False, width=100)
         print(f"wrote {os.path.basename(out)}  ({len(net['reactions'])} reactions)")
+
+
+def main():
+    for base_name, variant_keys in BASES.items():
+        build(base_name, variant_keys)
 
 
 if __name__ == "__main__":
