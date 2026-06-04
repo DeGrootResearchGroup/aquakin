@@ -241,3 +241,89 @@ def test_dgsm_through_reactor(simple_network):
     res = aquakin.dgsm(fn, [(0.1, 0.5)], input_names=["A_to_B.k"], n_samples=8)
     assert res.n_valid >= 2
     assert float(res.dgsm[0]) > 0.0
+
+
+def test_dgsm_rejects_bad_mode():
+    with pytest.raises(ValueError):
+        aquakin.dgsm(lambda z: z[0], [(0.0, 1.0)], n_samples=8, mode="sideways")
+
+
+def test_dgsm_forward_matches_reverse():
+    """Forward and reverse modes give identical sensitivities (mode is only a
+    performance choice)."""
+    fn = lambda z: jnp.sin(z[0]) * z[1] ** 2 + 0.3 * z[0] * z[1]
+    rng = [(0.2, 1.5), (0.2, 1.5)]
+    rev = aquakin.dgsm(fn, rng, n_samples=32, seed=3, mode="reverse")
+    fwd = aquakin.dgsm(fn, rng, n_samples=32, seed=3, mode="forward")
+    np.testing.assert_allclose(
+        np.asarray(fwd.sobol_total_bound), np.asarray(rev.sobol_total_bound), rtol=1e-9
+    )
+
+
+def test_dgsm_vector_output_returns_per_output_results():
+    """A vector-valued fn returns one result per output, each with its name and
+    the right input ranking."""
+    # output 0 depends on z0, output 1 on z1.
+    fn = lambda z: jnp.array([2.0 * z[0], 5.0 * z[1]])
+    rng = [(0.0, 1.0), (0.0, 1.0)]
+    out = aquakin.dgsm(
+        fn, rng, input_names=["a", "b"], output_names=["o0", "o1"],
+        n_samples=16, mode="forward",
+    )
+    assert isinstance(out, list) and len(out) == 2
+    assert [r.output_name for r in out] == ["o0", "o1"]
+    assert out[0].ranked()[0][0] == "a"   # o0 most sensitive to a
+    assert out[1].ranked()[0][0] == "b"   # o1 most sensitive to b
+    # nu equals the squared (constant) partial derivative.
+    assert float(out[0].dgsm[0]) == pytest.approx(4.0, rel=1e-6)
+    assert float(out[1].dgsm[1]) == pytest.approx(25.0, rel=1e-6)
+
+
+def test_dgsm_forward_through_reactor_matches_reverse(simple_network):
+    """Forward mode (via DirectAdjoint) through a reactor solve agrees with the
+    reverse-mode result to machine precision."""
+    import diffrax
+
+    conds = aquakin.SpatialConditions.uniform(1, T=293.15)
+    C0 = jnp.asarray([1.0, 0.0])
+    p_def = simple_network.default_parameters()
+    t_eval = jnp.linspace(0.0, 10.0, 11)
+
+    def make_fn(reactor):
+        def fn(z):
+            p = p_def.at[0].set(z[0])
+            sol = reactor.solve(C0, p, t_span=(0.0, 10.0), t_eval=t_eval)
+            return sol.C_named("B")[-1]
+        return fn
+
+    rev = aquakin.dgsm(
+        make_fn(aquakin.BatchReactor(simple_network, conds)),
+        [(0.1, 0.5)], n_samples=8, mode="reverse",
+    )
+    fwd = aquakin.dgsm(
+        make_fn(aquakin.BatchReactor(simple_network, conds, adjoint=diffrax.DirectAdjoint())),
+        [(0.1, 0.5)], n_samples=8, mode="forward",
+    )
+    np.testing.assert_allclose(
+        np.asarray(fwd.sobol_total_bound), np.asarray(rev.sobol_total_bound), rtol=1e-8
+    )
+
+
+def test_dgsm_forward_through_default_adjoint_errors():
+    """Forward mode through the default RecursiveCheckpointAdjoint raises a
+    helpful error pointing to DirectAdjoint."""
+    net = aquakin.load_network_from_file(
+        str(__import__("pathlib").Path(__file__).parents[1] / "fixtures" / "simple_network.yaml")
+    )
+    conds = aquakin.SpatialConditions.uniform(1, T=293.15)
+    reactor = aquakin.BatchReactor(net, conds)  # default reverse-only adjoint
+    C0 = jnp.asarray([1.0, 0.0])
+    p_def = net.default_parameters()
+
+    def fn(z):
+        p = p_def.at[0].set(z[0])
+        sol = reactor.solve(C0, p, t_span=(0.0, 10.0))
+        return sol.C[-1, 1]
+
+    with pytest.raises(RuntimeError, match="DirectAdjoint"):
+        aquakin.dgsm(fn, [(0.1, 0.5)], n_samples=8, mode="forward")

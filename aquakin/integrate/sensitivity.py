@@ -322,6 +322,7 @@ class DGSMResult:
     n_valid: int
     seed: int
     ranges: jnp.ndarray
+    output_name: Optional[str] = None
 
     def ranked(self) -> list[tuple[str, float]]:
         """Return ``(name, sobol_total_bound)`` pairs sorted by decreasing bound."""
@@ -336,36 +337,63 @@ def dgsm(
     ranges: Any,
     *,
     input_names: Optional[list[str]] = None,
+    output_names: Optional[list[str]] = None,
     n_samples: int = 64,
     seed: int = 0,
-) -> DGSMResult:
+    mode: str = "reverse",
+) -> Any:
     """Derivative-based global sensitivity measure via autodiff + Sobol QMC.
 
     Estimates, for each uncertain input ``z_j``,
 
         ``nu_j = E_z[ (d fn / d z_j)^2 ]``
 
-    by averaging the squared gradient over scrambled-Sobol quasi-random points
-    in the input ranges. The gradient at each point is a single reverse-mode AD
-    pass, so all ``d`` sensitivities come from one solve per sample -- far fewer
-    model evaluations than a finite-difference variance-based Sobol analysis,
-    which needs ``~(d+2) N`` solves. ``nu_j`` bounds the Sobol total-order index
-    (see :attr:`DGSMResult.sobol_total_bound`), giving an AD-accelerated global
-    sensitivity ranking.
+    by averaging the squared partial derivative over scrambled-Sobol
+    quasi-random points in the input ranges. ``nu_j`` bounds the Sobol
+    total-order index (see :attr:`DGSMResult.sobol_total_bound`), so it is the
+    AD analogue of a variance-based Sobol total index, obtained from
+    derivatives rather than a variance decomposition.
+
+    The derivatives are exact (no finite-difference truncation) and reuse the
+    differentiable model, so the same machinery serves the calibration and
+    identifiability analyses. The cost depends on ``mode`` and on the number of
+    outputs ``m`` and inputs ``d``:
+
+    - ``mode="reverse"`` (default) forms the per-sample sensitivities with
+      ``m`` reverse-mode passes (one per output), each independent of ``d``.
+      Best when there are few outputs relative to inputs **and** the adjoint is
+      cheap. Works with any reactor adjoint.
+    - ``mode="forward"`` forms them with ``d`` forward-mode tangents pushed
+      through a single solve, independent of ``m``. Best when there are many
+      outputs, or when the reverse adjoint is expensive -- e.g. a stiff solve
+      whose differentiated step must be capped (``dtmax``), which inflates the
+      reverse pass. **The reactor inside ``fn`` must then be built with**
+      ``adjoint=diffrax.DirectAdjoint()``: the default
+      ``RecursiveCheckpointAdjoint`` registers a ``custom_vjp`` that rejects
+      forward-mode autodiff.
+
+    Both modes return identical sensitivities (to machine precision); ``mode``
+    is purely a performance choice. For a single scalar output ``reverse`` is
+    almost always cheaper; the ``forward`` advantage appears for multi-output
+    screening of a stiff model.
 
     Parameters
     ----------
     fn : callable
-        Maps an input vector (shape ``(d,)``) to a scalar JAX value. Must be
-        ``jax``-differentiable. For a reactor study, ``fn`` typically maps the
+        Maps an input vector (shape ``(d,)``) to either a scalar JAX value or a
+        vector of ``m`` outputs (shape ``(m,)``). Must be ``jax``-differentiable
+        in the requested ``mode``. For a reactor study, ``fn`` typically maps the
         uncertain inputs into a parameter vector / initial state, calls
-        ``reactor.solve`` and reduces the solution to a scalar output. If the
+        ``reactor.solve`` and reduces the solution to the output(s). If the
         network is stiff, build the reactor with a suitable ``dtmax`` so the
         differentiated solve stays finite.
     ranges : array-like, shape (d, 2)
         ``[lower, upper]`` bound for each input; sampling is uniform within.
     input_names : list[str], optional
         Names for reporting; defaults to ``["z0", "z1", ...]``.
+    output_names : list[str], optional
+        Names for the ``m`` outputs when ``fn`` is vector-valued; defaults to
+        ``["output0", ...]``. Ignored for a scalar ``fn``.
     n_samples : int, optional
         Target number of quasi-random points; rounded to the nearest power of
         two (Sobol sequences are balanced at powers of two). Increase until
@@ -373,10 +401,15 @@ def dgsm(
     seed : int, optional
         Seed for the scrambled-Sobol sampler. Fixing it (the default ``0``)
         makes the analysis exactly reproducible.
+    mode : {"reverse", "forward"}, optional
+        Autodiff mode used to form the per-sample sensitivities (see above).
 
     Returns
     -------
-    DGSMResult
+    DGSMResult or list[DGSMResult]
+        A single :class:`DGSMResult` when ``fn`` is scalar-valued, or a list of
+        results (one per output, in order, each carrying its ``output_name``)
+        when ``fn`` is vector-valued.
 
     Examples
     --------
@@ -387,6 +420,9 @@ def dgsm(
     'a'
     """
     from scipy.stats import qmc
+
+    if mode not in ("reverse", "forward"):
+        raise ValueError(f"mode must be 'reverse' or 'forward'; got {mode!r}.")
 
     ranges_np = np.asarray(ranges, dtype=float)
     if ranges_np.ndim != 2 or ranges_np.shape[1] != 2:
@@ -402,45 +438,90 @@ def dgsm(
             f"input_names has {len(input_names)} entries but ranges has d={d}."
         )
 
-    m = max(1, round(math.log2(max(n_samples, 2))))
-    U = qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(m)
+    n_pow = max(1, round(math.log2(max(n_samples, 2))))
+    U = qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(n_pow)
     Z = lo[None, :] + (hi - lo)[None, :] * U
     n_drawn = int(Z.shape[0])
 
-    value_and_grad = jax.jit(jax.value_and_grad(lambda z: jnp.asarray(fn(z))))
-    f_vals: list[float] = []
-    grads: list[np.ndarray] = []
-    for z in Z:
-        v, g = value_and_grad(jnp.asarray(z))
-        vf = float(v)
-        gf = np.asarray(g)
-        if np.isfinite(vf) and np.all(np.isfinite(gf)):
+    # Detect scalar vs vector output cheaply (no solve), then build the
+    # value-and-Jacobian callable for the requested mode. The Jacobian is shape
+    # (d,) for a scalar output and (m, d) for a vector output.
+    f_arr = lambda z: jnp.asarray(fn(z))
+    out_shape = jax.eval_shape(f_arr, jnp.asarray(Z[0])).shape
+    vector = len(out_shape) == 1
+    m_out = int(out_shape[0]) if vector else 1
+
+    if mode == "reverse":
+        if vector:
+            value_and_jac = jax.jit(lambda z: (f_arr(z), jax.jacrev(f_arr)(z)))
+        else:
+            value_and_jac = jax.jit(jax.value_and_grad(f_arr))
+    else:  # forward
+        value_and_jac = jax.jit(lambda z: (f_arr(z), jax.jacfwd(f_arr)(z)))
+
+    f_vals: list[np.ndarray] = []
+    jacs: list[np.ndarray] = []
+    for k, z in enumerate(Z):
+        try:
+            v, J = value_and_jac(jnp.asarray(z))
+        except Exception as exc:  # pragma: no cover - guidance path
+            if mode == "forward" and k == 0:
+                raise RuntimeError(
+                    "mode='forward' requires forward-mode autodiff through the "
+                    "solve. Build the reactor inside fn with "
+                    "adjoint=diffrax.DirectAdjoint(); the default "
+                    "RecursiveCheckpointAdjoint registers a custom_vjp that "
+                    "rejects forward mode."
+                ) from exc
+            raise
+        vf = np.asarray(v)
+        Jf = np.asarray(J)
+        if np.all(np.isfinite(vf)) and np.all(np.isfinite(Jf)):
             f_vals.append(vf)
-            grads.append(gf)
+            jacs.append(Jf)
     if len(f_vals) < 2:
         raise RuntimeError(
             f"DGSM needs >= 2 finite samples; got {len(f_vals)}/{n_drawn}. The "
             "output or its gradient is non-finite over the sampled ranges -- for "
             "a stiff network, cap the integrator step via the reactor's dtmax."
         )
+    n = len(f_vals)
 
-    G = np.asarray(grads)
-    fv = np.asarray(f_vals)
-    n = len(fv)
-    g2 = G ** 2
-    nu = np.mean(g2, axis=0)
-    var_f = float(np.var(fv))
-    scale = (hi - lo) ** 2 / (math.pi ** 2 * var_f) if var_f > 0 else np.zeros(d)
-    bound = nu * scale
-    bound_se = (np.std(g2, axis=0) / math.sqrt(n)) * scale
-    return DGSMResult(
-        input_names=list(input_names),
-        dgsm=jnp.asarray(nu),
-        sobol_total_bound=jnp.asarray(bound),
-        std_error=jnp.asarray(bound_se),
-        output_variance=var_f,
-        n_samples=n_drawn,
-        n_valid=n,
-        seed=seed,
-        ranges=jnp.asarray(ranges_np),
-    )
+    def _assemble(fv: np.ndarray, g2: np.ndarray, name: Optional[str]) -> DGSMResult:
+        # fv: (n,) output values; g2: (n, d) squared partials.
+        nu = np.mean(g2, axis=0)
+        var_f = float(np.var(fv))
+        scale = (hi - lo) ** 2 / (math.pi ** 2 * var_f) if var_f > 0 else np.zeros(d)
+        bound = nu * scale
+        bound_se = (np.std(g2, axis=0) / math.sqrt(n)) * scale
+        return DGSMResult(
+            input_names=list(input_names),
+            dgsm=jnp.asarray(nu),
+            sobol_total_bound=jnp.asarray(bound),
+            std_error=jnp.asarray(bound_se),
+            output_variance=var_f,
+            n_samples=n_drawn,
+            n_valid=n,
+            seed=seed,
+            ranges=jnp.asarray(ranges_np),
+            output_name=name,
+        )
+
+    if not vector:
+        fv = np.asarray(f_vals)              # (n,)
+        g2 = np.asarray(jacs) ** 2           # (n, d)
+        return _assemble(fv, g2, None)
+
+    if output_names is None:
+        output_names = [f"output{i}" for i in range(m_out)]
+    elif len(output_names) != m_out:
+        raise ValueError(
+            f"output_names has {len(output_names)} entries but fn returns "
+            f"m={m_out} outputs."
+        )
+    F = np.asarray(f_vals)                    # (n, m)
+    Jstack = np.asarray(jacs)                 # (n, m, d)
+    return [
+        _assemble(F[:, i], Jstack[:, i, :] ** 2, output_names[i])
+        for i in range(m_out)
+    ]

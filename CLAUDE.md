@@ -524,9 +524,18 @@ registers a `custom_vjp`, so `jax.grad`/`jacrev` work but `jax.jvp`/`jacfwd`
 custom_vjp function"*. When you need forward-mode AD through the solve — e.g. a
 forward-mode sensitivity Jacobian or a Gauss–Newton/Fisher matrix — construct the
 reactor with `adjoint=diffrax.DirectAdjoint()`, which is plainly differentiable
-in both modes. Its drawback is memory (it stores/unrolls the whole solve, cost
-growing with step count), so keep `RecursiveCheckpointAdjoint` as the default and
-switch to `DirectAdjoint` only when forward-mode is actually required. The
+in both modes. Its drawback is *usually* memory (it stores/unrolls the whole
+solve, cost growing with step count), so keep `RecursiveCheckpointAdjoint` as the
+default and switch to `DirectAdjoint` only when forward-mode is actually required.
+`dgsm(..., mode="forward")` is the first-class consumer of this (see the DGSM API
+below): for a **multi-output sensitivity screen of a stiff network** forward mode
+can be *faster and lighter* than reverse — the reverse adjoint is paid once per
+output and is inflated by the `dtmax` step cap, whereas forward pushes all `d`
+tangents through one solve, independent of the output count. (Benchmarked at
+~2× faster, less memory, for the 4-output/17-input Khalil batch screen; for a
+single scalar output reverse still wins. Forward and reverse agree to machine
+precision — the choice is purely performance, and the right one depends on the
+output/input counts and the adjoint stiffness, so both are exposed.) The
 **full** second-order AD Hessian (`jax.hessian`) is best avoided entirely: with
 the default adjoint it hits the `custom_vjp` wall, and even with `DirectAdjoint`
 the second derivatives through the stiff implicit solve are unreliable
@@ -883,14 +892,30 @@ sens.doutput_dparams                 # (n_params,)
 sens.doutput_dconditions["pH"]       # (n_locations,) — dict access
 sens.ranked_params()
 
-# Derivative-based global sensitivity (DGSM) — AD-accelerated Sobol replacement.
-# fn maps an uncertain-input vector to a scalar output (it builds params / C0
-# and calls reactor.solve internally). Scrambled-Sobol QMC; seed makes it
-# exactly reproducible; bounds the Sobol total-order index per input.
+# Derivative-based global sensitivity (DGSM) — AD Sobol-total-index analogue.
+# fn maps an uncertain-input vector to a scalar OR vector output (it builds
+# params / C0 and calls reactor.solve internally). Scrambled-Sobol QMC; seed
+# makes it exactly reproducible; bounds the Sobol total-order index per input.
 res = aquakin.dgsm(fn, ranges, input_names=names, n_samples=64, seed=0)
 res.sobol_total_bound                # (d,) upper bound on Sobol S_j^tot
 res.std_error                        # (d,) MC standard error (convergence)
 res.ranked()                         # [(name, bound), ...] sorted
+
+# mode= selects the AD direction used to form the per-sample sensitivities
+# (identical results to machine precision — purely a performance choice):
+#   "reverse" (default) — m reverse passes (one per output), each d-independent.
+#                         Best for few outputs and a cheap adjoint.
+#   "forward"           — d forward-mode tangents through one solve, m-independent.
+#                         Best for many outputs, or when the reverse adjoint is
+#                         stiff-inflated (dtmax-capped). REQUIRES the reactor in
+#                         fn to use adjoint=diffrax.DirectAdjoint().
+# If fn returns a vector of m outputs, dgsm returns a list[DGSMResult], one per
+# output (each carrying .output_name) — screen all outputs in a single call.
+outs = aquakin.dgsm(fn_vec, ranges, output_names=[...], mode="forward")
+# Benchmark (tests/ + the JRN-055 reproduction): for a 4-output, 17-input stiff
+# batch screen, forward mode is ~2x faster (and lighter on memory) than reverse,
+# because reverse pays the stiff adjoint once per output while forward pushes all
+# d tangents through one solve. For a single scalar output, reverse is cheaper.
 
 # Point-estimate fit (SciPy box-constrained least squares)
 result = aquakin.fit(reactor, C0, observations, t_obs, free_params, method="adjoint")
