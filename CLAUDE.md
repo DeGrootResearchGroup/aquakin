@@ -548,23 +548,36 @@ Every reactor takes an optional `dtmax` (maximum integrator step), threaded
 into the `PIDController`. Default `None` (uncapped) — fastest for plain forward
 solves.
 
-**Set `dtmax` when differentiating a very stiff network.** `Kvaerno5` is
-L-stable, so a forward solve can take steps far larger than the fastest
+**Set `dtmax` when taking a *reverse-mode* gradient of a very stiff network.**
+`Kvaerno5` is L-stable, so a solve can take steps far larger than the fastest
 reaction timescale and simply damp the unresolved fast modes — the primal is
-fine. But the *sensitivity* of those quasi-equilibrium fast modes is then
-ill-resolved, and the differentiated solve returns non-finite values in **both**
-forward (`jax.jvp`) and reverse (`jax.grad`) mode (it is not a reverse-only
-adjoint issue, and not a singular operator — JAX already uses the implicit
-function theorem at each step, like a CFD discrete adjoint). Capping `dtmax` to
-a small multiple of the fastest reaction timescale fixes it; the resulting
-gradients match finite differences. For `wats_sewer_extended` at the reference
-stiffness (biofilm reactions ~1000 d⁻¹, timescale ~1e-3 d) the gradient is
-non-finite uncapped and correct for `dtmax ≲ 5e-4` d (the calibrated low
-sulfur-oxidation saturation constants keep those reactions fast even as nitrate
-falls, so a tighter cap than the bulk timescale suggests is needed). A future
-alternative is a
-quasi-steady-state (QSS) reduction of the near-instantaneous fast reactions,
-which would remove the stiff modes entirely and avoid needing the cap.
+fine at any step. Differentiation splits by mode: **forward mode**
+(`jax.jvp`/`jax.jacfwd` via `DirectAdjoint`) stays **finite at any step**,
+losing only accuracy when the fast modes are unresolved; **reverse mode**
+(`jax.grad`, the discrete adjoint) returns **non-finite** values above a
+step-size threshold. The reverse failure is a genuinely **singular linear solve
+inside the adjoint** (lineax reports the operator is "nearly singular"): the
+reaction Jacobian is stiff *and* ill-conditioned (condition number ~1e20 at t=0
+for the Khalil/extended sewer models, |eig| up to ~1e5 d⁻¹), so the implicit
+operator the reverse adjoint must invert goes near-singular at large steps;
+forward-mode tangent propagation never forms that inverse. Capping `dtmax` to a
+small multiple of the fastest reaction timescale keeps the operator
+well-conditioned; the resulting reverse gradient is finite and matches both
+forward mode and finite differences. This is **reverse-mode-specific and
+independent of the adjoint flavour** — `RecursiveCheckpointAdjoint` and
+`DirectAdjoint` reverse both fail identically, so it is not the checkpointing.
+(It is also *not* the positivity limiter, *not* the zero-valued initial
+species, and *not* stiffness alone: a 2–3 species stiff toy differentiates
+finitely in reverse even at 1e7 d⁻¹ — the failure needs the full coupled,
+ill-conditioned system.) The threshold is model-dependent: ~5e-3 d for the
+Khalil Monod biofilm, ~10× tighter (~5e-4 d) for the half-order variants whose
+√C kinetics steepen the Jacobian; the study uses `dtmax = 1e-4` d (3e-5 d for
+the stiffer balanced base) — inside both. Because calibration needs the reverse
+adjoint (one pass for the whole parameter gradient), the cap matters there; a
+forward-mode sensitivity screen is unaffected, and is also faster (see
+`dgsm(mode="forward")`). A future alternative is a quasi-steady-state (QSS)
+reduction of the near-instantaneous fast reactions, which would remove the
+stiff modes entirely and avoid needing the cap.
 
 ### Operator Splitting
 
