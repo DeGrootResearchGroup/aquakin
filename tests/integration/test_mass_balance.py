@@ -136,6 +136,30 @@ def test_faithful_reproduces_khalil_nonconserving_throttle():
     assert not bal, f"balanced model COD imbalance: {bal}"
 
 
+def test_yield_change_preserves_conservation():
+    """Lowering the anoxic growth yield must not break conservation: the growth
+    coefficients are derived from the COD/electron balance (S_B = -1/Y_H,
+    S_NO = (Y_H-1)/(2.86 Y_H)), so they conserve for any Y_H. Guards the
+    yield-robustness check (a lower WATS denitrifying yield Y_H=0.35 leaves the
+    balanced model fully conserving and the faithful model's only COD imbalance
+    the documented VFA throttle)."""
+    import numpy as np
+    for model, conserves_n in [("wats_sewer_khalil_paper_balanced", True),
+                               ("wats_sewer_khalil_paper_directsulfate", False)]:
+        net = _net(model)
+        p = np.array(net.default_parameters())
+        p[net.param_index["y_h"]] = 0.35
+        excl = _cod_excluded(model)
+        cod = [(r, v) for r, q, v in check_conservation(
+            net, WATS_COMPOSITION, tol=_TOL, params=p, quantities=["COD"]) if r not in excl]
+        S = check_conservation(net, WATS_COMPOSITION, tol=_TOL, params=p, quantities=["S"])
+        assert not cod, f"{model} COD imbalance at Y_H=0.35: {cod}"
+        assert not S, f"{model} S imbalance at Y_H=0.35: {S}"
+        if conserves_n:
+            assert not check_nitrogen(net, WATS_COMPOSITION, tol=_TOL, params=p), \
+                f"{model} N imbalance at Y_H=0.35"
+
+
 @pytest.mark.parametrize("model", _MODELS)
 def test_sulfur_balance(model):
     net = _net(model)
