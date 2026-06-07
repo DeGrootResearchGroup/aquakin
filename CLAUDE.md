@@ -1140,8 +1140,23 @@ Key types:
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `MixerUnit`,
 `SplitterUnit`, `IdealClarifier` (fast, stateless separator),
-`TakacsClarifier` (10-layer 1-D model — works in isolation but needs
-further numerical hardening for the BSM1 operating point).
+`TakacsClarifier` (10-layer 1-D Takács 1991 model). Its settling physics
+are correct and verified in isolation at BSM1 solids loading: the
+clarification-zone flux limiting (above the feed, the downward flux is
+limited by the layer below only when that layer exceeds `X_threshold`) and
+the per-species flux apportioning (each species settles at the bulk
+velocity, `flux_tss · X_k/TSS`, conserving total settleable solids) produce
+a monotone sludge blanket, a strongly clarified effluent, a thickened
+underflow, and tight solids mass balance. `build_bsm1(use_takacs=True)`
+selects it in the full plant (both clarifiers expose the same ports), and
+`Plant.solve` takes `max_steps`. **Known limitation:** the *coupled* BSM1
+plant transient is severely stiff — the non-smooth Takács flux (the `min` /
+`where` / `clip` kinks) plus the strong recycle feedback drive the adaptive
+stepper into tiny steps, so the full plant does not yet integrate
+efficiently to steady state (the default uses `IdealClarifier`). Making the
+full plant tractable needs further numerical hardening (smoothing the flux
+kinks and/or warm-starting from a steady-state initialization), tracked
+separately.
 
 The first plant-wide demonstration target is **BSM1** (Copp 2002 / Alex
 2008) — built by `aquakin.plant.bsm.build_bsm1()`. Three synthesised

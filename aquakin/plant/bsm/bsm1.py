@@ -54,6 +54,7 @@ def build_bsm1(
     closed_loop_do: bool = False,
     do_setpoint_tank5: float = 2.0,
     conditions: Optional[dict[str, float]] = None,
+    use_takacs: bool = False,
 ) -> Plant:
     """Assemble the canonical BSM1 plant.
 
@@ -73,6 +74,13 @@ def build_bsm1(
     conditions : dict[str, float], optional
         Override the per-tank conditions vector (e.g. set ``T=288.15`` for
         winter). Defaults to network's declared defaults.
+    use_takacs : bool
+        If True, use the full Takács 1-D layered secondary clarifier (the BSM1
+        reference settler, with its own per-layer solids state). If False
+        (default), use the fast stateless ``IdealClarifier``. The Takács settler
+        is stiffer, so its ``solve()`` needs a larger ``max_steps`` (the
+        clarifier alone is cheap, but the full plant with recycles benefits from
+        ``max_steps`` of a few hundred thousand).
 
     Returns
     -------
@@ -154,18 +162,29 @@ def build_bsm1(
     )
 
     # ----- Clarifier -----
-    # We default to the IdealClarifier (instantaneous ~99.8% capture)
-    # because the full Takács 1-D model needs further numerical hardening
-    # for the BSM1 operating point. Swap in TakacsClarifier once that
-    # work is done; the rest of the plant graph is identical.
-    plant.add_unit(
-        IdealClarifier(
-            name="clarifier",
-            network=network,
-            overflow_Q=Q_avg - BSM1_WASTAGE_FLOW,
-            capture_efficiency=0.998,
+    # ``use_takacs`` selects the full Takács 1-D layered secondary clarifier
+    # (the BSM1 reference model); the default ``IdealClarifier`` is a fast,
+    # stateless ~99.8%-capture separator. Both expose the same overflow /
+    # underflow ports, so the rest of the plant graph is identical.
+    if use_takacs:
+        plant.add_unit(
+            TakacsClarifier(
+                name="clarifier",
+                network=network,
+                area=BSM1_CLARIFIER_AREA,
+                height=BSM1_CLARIFIER_HEIGHT,
+                overflow_Q=Q_avg - BSM1_WASTAGE_FLOW,
+            )
         )
-    )
+    else:
+        plant.add_unit(
+            IdealClarifier(
+                name="clarifier",
+                network=network,
+                overflow_Q=Q_avg - BSM1_WASTAGE_FLOW,
+                capture_efficiency=0.998,
+            )
+        )
 
     # ----- Underflow splitter (RAS + wastage) -----
     # Underflow = Q_r + Q_w. RAS goes back to tank 1; wastage leaves.
