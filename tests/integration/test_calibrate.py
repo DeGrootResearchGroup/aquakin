@@ -370,6 +370,101 @@ def test_predictive_band_requires_laplace(setup):
         result.predictive_band(reactor, C0, t_obs)
 
 
+# ---------- free initial conditions ----------
+
+
+def test_free_ic_recovers_initial_condition(simple_network):
+    """Fit an unknown initial A0 jointly with the rate; recover both."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    true_k, true_A0 = 0.25, 1.7
+    true_params = simple_network.default_parameters().at[0].set(true_k)
+    C0_true = jnp.asarray([true_A0, 0.0])
+    t_obs = jnp.linspace(0.5, 12.0, 25)
+    sol = reactor.solve(C0_true, true_params, t_span=(0.0, 12.0), t_eval=t_obs)
+    obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
+
+    # Start from the wrong A0 (1.0); free it.
+    C0_start = jnp.asarray([1.0, 0.0])
+    result = aquakin.calibrate(
+        reactor, C0_start, observations=obs, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["A", "B"], loss="mse", laplace=False,
+        free_ic=["A"], ic_bounds=(0.1, 10.0), n_starts=3, seed=0,
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+    assert result.ic_named[0]["A"] == pytest.approx(true_A0, rel=1e-2)
+    assert float(result.C0_fitted[0][0]) == pytest.approx(true_A0, rel=1e-2)
+
+
+def test_free_ic_per_dataset_in_multibatch(simple_network):
+    """Two batches with different (unknown) A0 but a shared k; each batch's
+    initial pool is fitted separately."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    true_k = 0.3
+    true_params = simple_network.default_parameters().at[0].set(true_k)
+    A0a, A0b = 1.2, 2.4
+    ta = jnp.linspace(0.5, 10.0, 20)
+    tb = jnp.linspace(0.5, 10.0, 20)
+    sola = reactor.solve(jnp.asarray([A0a, 0.0]), true_params, t_span=(0.0, 10.0), t_eval=ta)
+    solb = reactor.solve(jnp.asarray([A0b, 0.0]), true_params, t_span=(0.0, 10.0), t_eval=tb)
+    obsa = jnp.stack([sola.C_named("A"), sola.C_named("B")], axis=1)
+    obsb = jnp.stack([solb.C_named("A"), solb.C_named("B")], axis=1)
+    start = jnp.asarray([1.0, 0.0])
+    result = aquakin.calibrate(
+        reactor, [start, start], observations=[obsa, obsb], t_obs=[ta, tb],
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["A", "B"], loss="mse", laplace=False,
+        free_ic=["A"], ic_bounds=(0.1, 10.0), n_starts=3, seed=0,
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+    assert result.ic_named[0]["A"] == pytest.approx(A0a, rel=2e-2)
+    assert result.ic_named[1]["A"] == pytest.approx(A0b, rel=2e-2)
+
+
+def test_free_ic_laplace_is_over_rates_only(simple_network):
+    """With free_ic + laplace, the posterior covers the rate parameters only
+    (pools held at their MAP), so its shape matches the rate count."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    true_params = simple_network.default_parameters().at[0].set(0.25)
+    t_obs = jnp.linspace(0.5, 12.0, 25)
+    sol = reactor.solve(jnp.asarray([1.5, 0.0]), true_params, t_span=(0.0, 12.0), t_eval=t_obs)
+    obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
+    result = aquakin.calibrate(
+        reactor, jnp.asarray([1.0, 0.0]), observations=obs, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["A", "B"], loss="nll", sigma=jnp.asarray(0.02),
+        laplace=True, free_ic=["A"], ic_bounds=(0.1, 10.0),
+    )
+    assert np.asarray(result.posterior_cov).shape == (1, 1)
+    assert "A_to_B.k" in result.params_named_std
+
+
+def test_free_ic_unknown_species_rejected(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(KeyError):
+        aquakin.calibrate(
+            reactor, C0, observations=obs_clean, t_obs=t_obs,
+            free_params=["A_to_B.k"], observed_species=["B"], loss="mse",
+            laplace=False, free_ic=["NotASpecies"],
+        )
+
+
+def test_free_ic_bad_bounds_rejected(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(ValueError):
+        aquakin.calibrate(
+            reactor, C0, observations=obs_clean, t_obs=t_obs,
+            free_params=["A_to_B.k"], observed_species=["B"], loss="mse",
+            laplace=False, free_ic=["A"], ic_bounds=(5.0, 1.0),
+        )
+
+
 # ---------- joint multi-batch fit ----------
 
 
