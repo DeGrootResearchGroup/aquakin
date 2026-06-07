@@ -14,6 +14,12 @@ jobs:
   test:
     name: tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    # Pin XLA/BLAS to a single thread per process so pytest-xdist workers do not
+    # oversubscribe the CI runner's CPUs (each JAX process otherwise grabs every
+    # core, and N workers x M cores thrashes). With this, -n auto scales cleanly.
+    env:
+      OMP_NUM_THREADS: "1"
+      XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false"
     strategy:
       fail-fast: false
       matrix:
@@ -34,11 +40,14 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run unit and integration tests
-        run: pytest -m "not validation" -q --durations=15
+        run: pytest -m "not validation" -q -n auto --durations=15
 
   validation:
     name: validation suite
     runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: "1"
+      XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false"
     steps:
       - uses: actions/checkout@v4
 
@@ -55,4 +64,4 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run validation suite (against published data)
-        run: pytest -m validation -q --durations=15
+        run: pytest -m validation -q -n auto --durations=15
