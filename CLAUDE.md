@@ -800,9 +800,11 @@ aquakin/
 │   │   ├── particle.py              # Track, ParticleTrackReactor, integrate_ensemble
 │   │   ├── cfd.py                   # CFDReactor (Option C runtime coupling)
 │   │   ├── sensitivity.py           # sensitivity(), fit()
-│   │   └── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
-│   │                                #   multistart, free initial conditions, Gauss-Newton
-│   │                                #   optimizer, posterior-predictive bands
+│   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
+│   │   │                            #   multistart, free initial conditions, Gauss-Newton
+│   │   │                            #   optimizer, posterior-predictive bands
+│   │   └── profile.py               # profile_likelihood(): parameter / initial-condition
+│   │                                #   profile-likelihood identifiability analysis
 │   │
 │   ├── transport/
 │   │   └── openfoam/
@@ -977,6 +979,27 @@ band.median, band.lo, band.hi        # (n_t, n_species) envelopes -> PredictiveB
 # adjoint=diffrax.DirectAdjoint() (finite at any step, for very stiff networks
 # whose reverse-mode adjoint is non-finite), else reverse-mode. It is markedly
 # more robust than L-BFGS-B on the multimodal landscapes of stiff network fits.
+
+# Profile-likelihood identifiability analysis (the exact companion to the local
+# Laplace covariance). Fix one quantity -- a parameter OR an initial condition --
+# at each value on a grid, re-optimise all the OTHER free quantities (each grid
+# point is a calibrate() fit, so multistart / Gauss-Newton / free_ic flow
+# through), and trace the best attainable objective. The 95% interval is where
+# that profile rises by the one-DOF likelihood-ratio threshold (delta=1.92).
+prof = aquakin.profile_likelihood(
+    reactor, C0, observations, t_obs, free_params,
+    grid=grid, profile_param="k_s0_anox_f",   # or profile_ic="X_S0"
+    loss="nll", sigma=sigma, n_starts=8,
+    warm_start=True,   # continuation sweep keeps consecutive points in one basin
+    polish=True,       # re-fit any point a better-fitting neighbour can improve
+)
+prof.mle                             # grid value at the profile minimum
+prof.ci                              # (lo, hi); None on a side => open/unidentified
+prof.delta_loss                      # profile relative to its minimum (vs delta)
+prof.fits                            # the re-optimised CalibrationResult per grid point
+# Unlike Laplace, the profile is exact for non-quadratic / non-identifiable
+# parameters: a parameter the data cannot pin gives a flat profile and an open
+# (None) interval -- a diagnosis the quadratic approximation cannot give.
 ```
 
 Internal implementation details (`ASTNode` subclasses, `CompileContext`,
