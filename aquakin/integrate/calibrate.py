@@ -394,9 +394,11 @@ def calibrate(
     free_ic: Optional[list[str]] = None,
     ic_bounds: tuple[float, float] = (1e-3, 1e4),
     ic_prior_log_std: Optional[float] = None,
+    param_halfwidth: Optional[float] = None,
     optimizer: str = "lbfgsb",
     n_starts: int = 1,
     jitter: float = 0.5,
+    jitter_schedule: Optional[tuple] = None,
     seed: int = 0,
     max_iter: int = 500,
     tol: float = 1e-6,
@@ -491,6 +493,13 @@ def calibrate(
         If given, a weak Gaussian prior in log space tethering each fitted pool
         to its supplied starting value, with this standard deviation. ``None``
         (default) leaves the pools governed only by the data and ``ic_bounds``.
+    param_halfwidth : float, optional
+        If given, box-bound each free *rate* parameter to ``theta0 +/-
+        param_halfwidth`` in unconstrained (transformed) space --- a symmetric
+        log-space box around the starting value that keeps the optimiser from
+        wandering to extreme values. ``None`` (default) leaves rates unbounded
+        (positivity is still enforced by the transform). Free initial pools are
+        always bounded by ``ic_bounds`` regardless.
     optimizer : {"lbfgsb", "gauss_newton"}, optional
         Optimisation backend. ``"lbfgsb"`` (default) minimises the scalar loss
         with SciPy L-BFGS-B (reverse-mode gradient). ``"gauss_newton"`` minimises
@@ -515,11 +524,18 @@ def calibrate(
     jitter : float, optional
         Standard deviation (in unconstrained / transformed space) of the
         Gaussian perturbation applied to each multistart start after the first.
-        Ignored when ``n_starts == 1``.
+        Ignored when ``n_starts == 1`` or when ``jitter_schedule`` is given.
+    jitter_schedule : tuple of float, optional
+        Cyclic per-start jitter scales. When given, start ``s`` (>= 1) uses scale
+        ``jitter_schedule[(s-1) % len]`` and its own ``RandomState(seed + s)``,
+        instead of the single ``jitter`` scale with one shared stream. A wider
+        schedule explores farther from the start (useful when the global basin is
+        only reached by larger perturbations). Default ``None`` (use ``jitter``).
     seed : int, optional
         Seed for the multistart perturbations, so a re-run reproduces the same
         starts and therefore the same optimum.
-    max_iter, tol : passed through to SciPy ``L-BFGS-B``.
+    max_iter, tol : passed through to the optimiser (L-BFGS-B ``maxiter``/``gtol``,
+        or least-squares ``max_nfev``/``xtol``/``ftol``).
 
     Returns
     -------
@@ -763,16 +779,29 @@ def calibrate(
     )
     theta0 = jnp.concatenate([rate_theta0, ic_center_full]) if m_ic else rate_theta0
 
-    # Box bounds: rate dims unconstrained (transforms handle positivity), free-IC
-    # dims bounded in log space.
-    if m_ic:
-        n_ic = m_ic * n_datasets
-        bounds = (
-            [(None, None)] * n_rate
-            + [(float(np.log(ic_bounds[0])), float(np.log(ic_bounds[1])))] * n_ic
-        )
-        _lb = np.array([-np.inf] * n_rate + [np.log(ic_bounds[0])] * n_ic)
-        _ub = np.array([np.inf] * n_rate + [np.log(ic_bounds[1])] * n_ic)
+    # Box bounds (unconstrained space). Rate dims are bounded to
+    # theta0 +/- param_halfwidth when param_halfwidth is given (a symmetric box
+    # in transformed space around the start), else unbounded; free-IC dims are
+    # always bounded in log space by ic_bounds.
+    rate_th0 = np.asarray(rate_theta0, dtype=float)
+    if param_halfwidth is not None:
+        rate_lb = list(rate_th0 - param_halfwidth)
+        rate_ub = list(rate_th0 + param_halfwidth)
+    else:
+        rate_lb = [-np.inf] * n_rate
+        rate_ub = [np.inf] * n_rate
+    n_ic = m_ic * n_datasets
+    ic_lb = [float(np.log(ic_bounds[0]))] * n_ic
+    ic_ub = [float(np.log(ic_bounds[1]))] * n_ic
+    _lb = np.array(rate_lb + ic_lb)
+    _ub = np.array(rate_ub + ic_ub)
+    _has_bounds = (param_halfwidth is not None) or m_ic
+    if _has_bounds:
+        bounds = [
+            (None if not np.isfinite(lo) else float(lo),
+             None if not np.isfinite(hi) else float(hi))
+            for lo, hi in zip(_lb, _ub)
+        ]
     else:
         bounds = None
 
@@ -807,7 +836,8 @@ def calibrate(
         _jac = jax.jacfwd(_full_residual) if _use_forward else jax.jacrev(_full_residual)
         _res_j = jax.jit(_full_residual)
         _jac_j = jax.jit(_jac)
-        _ls_bounds = (_lb, _ub) if m_ic else (-np.inf, np.inf)
+        # trust-region least-squares accepts +/-inf bounds (= unbounded dims).
+        _ls_bounds = (_lb, _ub)
 
     def _run_from(x_start):
         if optimizer == "lbfgsb":
@@ -835,10 +865,21 @@ def calibrate(
     # jittered restarts. Keep the lowest finite loss (multimodal landscapes).
     result = _run_from(theta0)
     if n_starts > 1:
-        rng = np.random.RandomState(seed)
         theta0_np = np.asarray(theta0)
-        for _ in range(1, n_starts):
-            perturbed = theta0_np + rng.normal(0.0, jitter, size=theta0_np.shape)
+        # Two jitter schemes. Default: a single Gaussian stream of scale
+        # ``jitter`` seeded once. ``jitter_schedule`` (a tuple of scales):
+        # start s uses scale schedule[(s-1) % len] with its own RandomState
+        # (seed + s), so the per-start perturbations match a per-start-seeded
+        # cyclic-jitter multistart (and a wider schedule explores farther).
+        seq_rng = None if jitter_schedule else np.random.RandomState(seed)
+        for s in range(1, n_starts):
+            if jitter_schedule:
+                jit = jitter_schedule[(s - 1) % len(jitter_schedule)]
+                noise = np.random.RandomState(seed + s).normal(
+                    0.0, jit, size=theta0_np.shape)
+            else:
+                noise = seq_rng.normal(0.0, jitter, size=theta0_np.shape)
+            perturbed = theta0_np + noise
             if bounds is not None:
                 perturbed = np.clip(perturbed, _lb, _ub)
             cand = _run_from(perturbed)

@@ -306,6 +306,40 @@ def test_multistart_keeps_best_loss(setup):
     assert multi.loss <= single.loss + 1e-9
 
 
+def test_param_halfwidth_bounds_the_rate(setup):
+    """param_halfwidth box-bounds the rate in log space around the start, so a
+    tight halfwidth keeps the fit from reaching a far-away true value, while the
+    default (None) lets it reach it."""
+    reactor, C0, t_obs, obs_clean, true_k = setup   # true_k=0.25
+    k_start = float(reactor.network.default_parameters()[0])   # 0.1
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False,
+    )
+    bounded = aquakin.calibrate(reactor, C0, param_halfwidth=0.2, **common)
+    unbounded = aquakin.calibrate(reactor, C0, **common)
+    kb = bounded.params_named["A_to_B.k"]
+    # Within the log-space box around the start, and short of the true value.
+    assert abs(np.log(kb) - np.log(k_start)) <= 0.2 + 1e-6
+    assert kb < true_k
+    assert unbounded.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+
+
+def test_jitter_schedule_reproducible(setup):
+    """Cyclic jitter_schedule with a fixed seed is reproducible."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False, n_starts=4, jitter_schedule=(0.3, 0.5, 0.8),
+        seed=2,
+    )
+    r1 = aquakin.calibrate(reactor, C0, **common)
+    r2 = aquakin.calibrate(reactor, C0, **common)
+    assert r1.params_named["A_to_B.k"] == r2.params_named["A_to_B.k"]
+
+
 def test_multistart_invalid_n_starts_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
     with pytest.raises(ValueError):
