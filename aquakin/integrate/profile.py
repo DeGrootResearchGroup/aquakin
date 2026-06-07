@@ -128,9 +128,11 @@ def profile_likelihood(
     free_ic: Optional[list[str]] = None,
     ic_bounds: tuple[float, float] = (1e-3, 1e4),
     ic_prior_log_std: Optional[float] = None,
+    param_halfwidth: Optional[float] = None,
     optimizer: str = "lbfgsb",
     n_starts: int = 8,
     jitter: float = 0.5,
+    jitter_schedule: Optional[tuple] = None,
     seed: int = 0,
     max_iter: int = 500,
     tol: float = 1e-6,
@@ -175,8 +177,8 @@ def profile_likelihood(
         Grid value to start the continuation sweep from. Defaults to the grid
         midpoint. Ignored when ``warm_start=False``.
     initial_params, transforms, observed_species, loss, sigma, priors,
-    use_priors, free_ic, ic_bounds, ic_prior_log_std, optimizer, n_starts,
-    jitter, seed, max_iter, tol
+    use_priors, free_ic, ic_bounds, ic_prior_log_std, param_halfwidth,
+    optimizer, n_starts, jitter, jitter_schedule, seed, max_iter, tol
         Forwarded to each inner :func:`aquakin.calibrate` call. ``n_starts``
         applies to the cold anchor (and to every point when
         ``warm_start=False``); warm-started points use a single start.
@@ -239,7 +241,8 @@ def profile_likelihood(
         transforms=transforms, observed_species=observed_species, loss=loss,
         sigma=sigma, priors=priors, use_priors=use_priors,
         free_ic=(inner_free_ic or None), ic_bounds=ic_bounds,
-        ic_prior_log_std=ic_prior_log_std, optimizer=optimizer, jitter=jitter,
+        ic_prior_log_std=ic_prior_log_std, param_halfwidth=param_halfwidth,
+        optimizer=optimizer, jitter=jitter, jitter_schedule=jitter_schedule,
         seed=seed, max_iter=max_iter, tol=tol, laplace=False,
     )
 
