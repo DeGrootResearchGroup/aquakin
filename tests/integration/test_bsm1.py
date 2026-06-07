@@ -122,9 +122,14 @@ def test_bsm1_grad_through_plant(asm1, constant_influent):
     plant.connect(None, "feed", "inlet_mix", "fresh")
 
     def loss(params):
+        # Cap the integrator step. The reverse-mode adjoint of this stiff plant
+        # is right at the edge of finiteness uncapped and tips to non-finite on
+        # some floating-point environments; capping dtmax to a small multiple of
+        # the fastest reaction timescale bounds the per-step stiffness and keeps
+        # the reverse accumulation finite (see the dtmax discussion in CLAUDE.md).
         sol = plant.solve(
             t_span=(0.0, 5.0), t_eval=jnp.asarray([0.0, 5.0]),
-            params=params, rtol=1e-3, atol=1e-2,
+            params=params, rtol=1e-3, atol=1e-2, dtmax=0.005,
         )
         # Sum SNO across all tanks at endpoint (a quantity that depends
         # on every nitrification-related parameter).
