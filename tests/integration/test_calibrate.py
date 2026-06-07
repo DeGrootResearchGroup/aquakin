@@ -1,5 +1,6 @@
 """Tests for MAP calibration + Laplace posterior."""
 
+import diffrax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -368,6 +369,87 @@ def test_predictive_band_requires_laplace(setup):
     )
     with pytest.raises(ValueError):
         result.predictive_band(reactor, C0, t_obs)
+
+
+# ---------- Gauss-Newton optimiser ----------
+
+
+def test_gauss_newton_recovers_known_parameter(setup):
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs_clean, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="mse", laplace=False,
+        optimizer="gauss_newton",
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
+def test_gauss_newton_matches_lbfgsb_on_easy_fit(setup):
+    """On a convex (single-minimum) fit both optimisers reach the same optimum."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False,
+    )
+    lb = aquakin.calibrate(reactor, C0, optimizer="lbfgsb", **common)
+    gn = aquakin.calibrate(reactor, C0, optimizer="gauss_newton", **common)
+    assert gn.params_named["A_to_B.k"] == pytest.approx(
+        lb.params_named["A_to_B.k"], rel=1e-3
+    )
+
+
+def test_gauss_newton_forward_mode_with_direct_adjoint(simple_network):
+    """With a DirectAdjoint reactor the GN Jacobian is formed in forward mode
+    (jacfwd); it must still recover the parameter."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15),
+        adjoint=diffrax.DirectAdjoint(),
+    )
+    C0 = jnp.asarray([1.0, 0.0])
+    true_k = 0.25
+    true_params = simple_network.default_parameters().at[0].set(true_k)
+    t_obs = jnp.linspace(0.5, 10.0, 20)
+    obs = reactor.solve(C0, true_params, t_span=(0.0, 10.0), t_eval=t_obs).C_named("B")
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="mse", laplace=False,
+        optimizer="gauss_newton",
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
+def test_gauss_newton_with_free_ic_and_multistart(simple_network):
+    """GN composes with free_ic and multistart: recover both k and A0."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    true_k, true_A0 = 0.25, 1.6
+    true_params = simple_network.default_parameters().at[0].set(true_k)
+    t_obs = jnp.linspace(0.5, 12.0, 25)
+    sol = reactor.solve(jnp.asarray([true_A0, 0.0]), true_params, t_span=(0.0, 12.0), t_eval=t_obs)
+    obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
+    result = aquakin.calibrate(
+        reactor, jnp.asarray([1.0, 0.0]), observations=obs, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["A", "B"], loss="mse", laplace=False,
+        optimizer="gauss_newton", free_ic=["A"], ic_bounds=(0.1, 10.0),
+        n_starts=3, seed=0,
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+    assert result.ic_named[0]["A"] == pytest.approx(true_A0, rel=1e-2)
+
+
+def test_unknown_optimizer_rejected(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(ValueError):
+        aquakin.calibrate(
+            reactor, C0, observations=obs_clean, t_obs=t_obs,
+            free_params=["A_to_B.k"], observed_species=["B"], loss="mse",
+            laplace=False, optimizer="newton",
+        )
 
 
 # ---------- free initial conditions ----------

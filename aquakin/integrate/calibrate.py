@@ -31,19 +31,26 @@ available two ways (``laplace_method``):
 
 from __future__ import annotations
 
+from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+import diffrax
 import jax
 import jax.numpy as jnp
 import numpy as np
-from scipy.optimize import minimize
+from scipy.optimize import least_squares, minimize
 
 from aquakin.integrate._common import Reactor
 
 # --- Parameter transforms ----------------------------------------------
 
 _VALID_LOSSES = ("mse", "wmse", "nll")
+_VALID_OPTIMIZERS = ("lbfgsb", "gauss_newton")
+
+# Uniform optimiser output so the multistart loop and downstream code are
+# agnostic to which backend (L-BFGS-B or Gauss-Newton least-squares) ran.
+_OptOut = namedtuple("_OptOut", "x fun success message nit")
 
 
 def _to_unconstrained(value: jnp.ndarray, transform: str) -> jnp.ndarray:
@@ -387,6 +394,7 @@ def calibrate(
     free_ic: Optional[list[str]] = None,
     ic_bounds: tuple[float, float] = (1e-3, 1e4),
     ic_prior_log_std: Optional[float] = None,
+    optimizer: str = "lbfgsb",
     n_starts: int = 1,
     jitter: float = 0.5,
     seed: int = 0,
@@ -483,6 +491,18 @@ def calibrate(
         If given, a weak Gaussian prior in log space tethering each fitted pool
         to its supplied starting value, with this standard deviation. ``None``
         (default) leaves the pools governed only by the data and ``ic_bounds``.
+    optimizer : {"lbfgsb", "gauss_newton"}, optional
+        Optimisation backend. ``"lbfgsb"`` (default) minimises the scalar loss
+        with SciPy L-BFGS-B (reverse-mode gradient). ``"gauss_newton"`` minimises
+        the residual *vector* with SciPy ``least_squares`` (trust-region
+        reflective) -- a Gauss-Newton method that exploits the least-squares
+        structure and is markedly more robust on the multimodal landscapes of
+        stiff reaction-network fits. The residual Jacobian is formed by AD:
+        forward mode (``jacfwd``) when ``reactor`` was built with
+        ``adjoint=diffrax.DirectAdjoint()``, otherwise reverse mode (``jacrev``).
+        Forward mode stays finite at any integrator step, so for very stiff
+        networks whose reverse-mode adjoint is non-finite, pass a
+        ``DirectAdjoint`` reactor and use ``"gauss_newton"``.
     n_starts : int, optional
         Number of optimiser starts (default ``1``). With ``n_starts > 1`` the
         calibration is run from several starting points and the lowest-loss
@@ -513,6 +533,10 @@ def calibrate(
         )
     if n_starts < 1:
         raise ValueError(f"n_starts must be >= 1; got {n_starts}.")
+    if optimizer not in _VALID_OPTIMIZERS:
+        raise ValueError(
+            f"optimizer must be one of {_VALID_OPTIMIZERS}; got {optimizer!r}."
+        )
 
     network = reactor.network
     for name in free_params:
@@ -757,15 +781,55 @@ def calibrate(
         val, grad = obj_value_and_grad(x)
         return float(val), np.asarray(grad)
 
-    def _run_from(x_start):
-        return minimize(
-            _np_loss_and_grad,
-            np.asarray(x_start),
-            jac=True,
-            method="L-BFGS-B",
-            bounds=bounds,
-            options={"maxiter": max_iter, "gtol": tol},
+    if optimizer == "gauss_newton":
+        # Minimise the residual vector (0.5||r||^2 == the scalar objective) with
+        # trust-region least-squares. The residual Jacobian is by forward-mode AD
+        # if the reactor is forward-capable (DirectAdjoint), else reverse-mode.
+        def _full_residual(theta):
+            rate_thetas = theta[:n_rate]
+            ic_thetas = theta[n_rate:]
+            physical = physical_from_theta(rate_thetas)
+            p = p0_full.at[free_indices].set(physical)
+            parts = []
+            for (_C0, _t, _ts, _loss_i, resid_fn_i), pred in zip(
+                datasets, _predict(p, ic_thetas)
+            ):
+                parts.append(resid_fn_i(pred))
+            if has_priors:
+                parts.append(prior_mask * (physical - prior_mean) / prior_std)
+            if m_ic and ic_prior_log_std:
+                parts.append((ic_thetas - ic_center_full) / ic_prior_log_std)
+            return jnp.concatenate(parts)
+
+        _use_forward = isinstance(
+            getattr(reactor, "adjoint", None), diffrax.DirectAdjoint
         )
+        _jac = jax.jacfwd(_full_residual) if _use_forward else jax.jacrev(_full_residual)
+        _res_j = jax.jit(_full_residual)
+        _jac_j = jax.jit(_jac)
+        _ls_bounds = (_lb, _ub) if m_ic else (-np.inf, np.inf)
+
+    def _run_from(x_start):
+        if optimizer == "lbfgsb":
+            r = minimize(
+                _np_loss_and_grad,
+                np.asarray(x_start),
+                jac=True,
+                method="L-BFGS-B",
+                bounds=bounds,
+                options={"maxiter": max_iter, "gtol": tol},
+            )
+            return _OptOut(np.asarray(r.x), float(r.fun), bool(r.success),
+                           str(r.message), int(r.nit))
+        r = least_squares(
+            lambda x: np.asarray(_res_j(jnp.asarray(x)), dtype=float),
+            np.asarray(x_start),
+            jac=lambda x: np.asarray(_jac_j(jnp.asarray(x)), dtype=float),
+            method="trf", bounds=_ls_bounds, max_nfev=max_iter,
+            xtol=tol, ftol=tol,
+        )
+        return _OptOut(np.asarray(r.x), float(r.cost), bool(r.success),
+                       str(r.message), int(r.nfev))
 
     # Start 0 is the supplied/default initial point; the rest are deterministic
     # jittered restarts. Keep the lowest finite loss (multimodal landscapes).
