@@ -800,7 +800,9 @@ aquakin/
 │   │   ├── particle.py              # Track, ParticleTrackReactor, integrate_ensemble
 │   │   ├── cfd.py                   # CFDReactor (Option C runtime coupling)
 │   │   ├── sensitivity.py           # sensitivity(), fit()
-│   │   └── calibrate.py             # calibrate() with transforms + Laplace posterior
+│   │   └── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
+│   │                                #   multistart, free initial conditions, Gauss-Newton
+│   │                                #   optimizer, posterior-predictive bands
 │   │
 │   ├── transport/
 │   │   └── openfoam/
@@ -952,14 +954,29 @@ calib = aquakin.calibrate(
     loss="nll", sigma=sigma,                              # for proper posterior interpretation
     laplace=True,
     laplace_method="gauss_newton",   # AD Fisher H=JᵀJ (exact, PSD); or "fd" (default)
+    optimizer="gauss_newton",        # robust trust-region least-squares; or "lbfgsb" (default)
+    n_starts=24, jitter=0.5, seed=0, # deterministic multistart (escapes local minima); default n_starts=1
+    free_ic=["X_S2"],                # fit unmeasured initial pools (per batch) alongside rates
+    ic_bounds=(1e-3, 1e4), ic_prior_log_std=0.7,   # bounds + optional weak log-prior for free ICs
 )
 calib.params_named                   # MAP estimate in physical space
 calib.params_named_std               # marginal std devs (delta-method projected)
-calib.posterior_cov                  # (d, d) covariance in unconstrained space
+calib.posterior_cov                  # (d, d) covariance in unconstrained space (rates only when free_ic used)
+calib.C0_fitted                      # per-batch fitted initial states (when free_ic used)
+calib.ic_named                       # per-batch fitted free pools by species name
 result.converged
-# Posterior-predictive curve bands: sample params ~ N(MAP, posterior_cov),
-# propagate each through reactor.solve (drop near-null/non-identifiable
-# eigen-directions so draws stay finite), take per-timepoint percentiles.
+# Posterior-predictive curve bands: a first-class method that samples the Laplace
+# posterior, drops near-null (non-identifiable) eigen-directions so draws stay
+# finite, propagates each through a solve, and returns per-timepoint percentiles.
+# The C0 passed in may differ from calibration (e.g. a held-out validation batch).
+band = calib.predictive_band(reactor, C0, t_eval, n_draw=200, percentiles=(2.5, 97.5))
+band.median, band.lo, band.hi        # (n_t, n_species) envelopes -> PredictiveBand
+
+# optimizer="gauss_newton" minimises the residual vector with scipy.least_squares
+# (trf), forming the Jacobian by forward-mode AD when the reactor uses
+# adjoint=diffrax.DirectAdjoint() (finite at any step, for very stiff networks
+# whose reverse-mode adjoint is non-finite), else reverse-mode. It is markedly
+# more robust than L-BFGS-B on the multimodal landscapes of stiff network fits.
 ```
 
 Internal implementation details (`ASTNode` subclasses, `CompileContext`,

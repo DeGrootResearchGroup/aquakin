@@ -1,5 +1,6 @@
 """Tests for MAP calibration + Laplace posterior."""
 
+import diffrax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -247,6 +248,303 @@ def test_priors_ignored_when_not_free(setup):
     )
     assert result.priors_applied == {}
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+
+
+# ---------- multistart ----------
+
+
+def test_multistart_reproducible(setup):
+    """Same seed -> identical multistart result (deterministic restarts)."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False, n_starts=6, jitter=0.8,
+    )
+    r1 = aquakin.calibrate(reactor, C0, seed=3, **common)
+    r2 = aquakin.calibrate(reactor, C0, seed=3, **common)
+    assert r1.params_named["A_to_B.k"] == r2.params_named["A_to_B.k"]
+
+
+def test_multistart_recovers_from_bad_initial(setup):
+    """A start far from the truth still recovers k with several restarts."""
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    bad = reactor.network.default_parameters().at[0].set(40.0)
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs_clean, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="mse", laplace=False,
+        initial_params=bad, n_starts=8, jitter=1.5, seed=0,
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+
+
+def test_multistart_default_is_single_start(setup):
+    """n_starts defaults to 1, reproducing the single-start result exactly."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False,
+    )
+    default = aquakin.calibrate(reactor, C0, **common)
+    one = aquakin.calibrate(reactor, C0, n_starts=1, **common)
+    assert default.params_named["A_to_B.k"] == one.params_named["A_to_B.k"]
+
+
+def test_multistart_keeps_best_loss(setup):
+    """The reported loss is no worse than the unperturbed single start (start 0
+    is always included), so multistart never degrades the fit."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False,
+    )
+    single = aquakin.calibrate(reactor, C0, n_starts=1, **common)
+    multi = aquakin.calibrate(reactor, C0, n_starts=5, jitter=1.0, seed=1, **common)
+    assert multi.loss <= single.loss + 1e-9
+
+
+def test_multistart_invalid_n_starts_rejected(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(ValueError):
+        aquakin.calibrate(
+            reactor, C0, observations=obs_clean, t_obs=t_obs,
+            free_params=["A_to_B.k"], observed_species=["B"],
+            loss="mse", laplace=False, n_starts=0,
+        )
+
+
+# ---------- posterior-predictive band ----------
+
+
+def _band_setup(setup):
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs_clean, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="nll", sigma=jnp.asarray(0.02), laplace=True,
+    )
+    return reactor, C0, t_obs, obs_clean, result
+
+
+def test_predictive_band_brackets_truth(setup):
+    """The 95% band envelopes lo <= median <= hi and contains the (noise-free)
+    truth at essentially every observation time."""
+    reactor, C0, t_obs, obs_clean, result = _band_setup(setup)
+    band = result.predictive_band(
+        reactor, C0, t_obs, observed_species=["B"], n_draw=200, seed=0
+    )
+    assert band.lo.shape == band.hi.shape == band.median.shape == (len(t_obs), 1)
+    assert band.n_valid > 0
+    assert np.all(band.lo <= band.median + 1e-9)
+    assert np.all(band.median <= band.hi + 1e-9)
+    truth = np.asarray(obs_clean).reshape(-1, 1)
+    inside = (truth >= band.lo - 1e-6) & (truth <= band.hi + 1e-6)
+    assert inside.mean() > 0.8
+
+
+def test_predictive_band_reproducible(setup):
+    reactor, C0, t_obs, _, result = _band_setup(setup)
+    b1 = result.predictive_band(reactor, C0, t_obs, observed_species=["B"], seed=7)
+    b2 = result.predictive_band(reactor, C0, t_obs, observed_species=["B"], seed=7)
+    assert np.allclose(b1.lo, b2.lo) and np.allclose(b1.hi, b2.hi)
+
+
+def test_predictive_band_all_species_shape(setup):
+    reactor, C0, t_obs, _, result = _band_setup(setup)
+    band = result.predictive_band(reactor, C0, t_obs, n_draw=50, seed=0)
+    # No observed_species -> all network species (A and B) as columns.
+    assert band.median.shape == (len(t_obs), reactor.network.n_species)
+    assert band.species is None
+
+
+def test_predictive_band_requires_laplace(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs_clean, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="mse", laplace=False,
+    )
+    with pytest.raises(ValueError):
+        result.predictive_band(reactor, C0, t_obs)
+
+
+# ---------- Gauss-Newton optimiser ----------
+
+
+def test_gauss_newton_recovers_known_parameter(setup):
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs_clean, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="mse", laplace=False,
+        optimizer="gauss_newton",
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
+def test_gauss_newton_matches_lbfgsb_on_easy_fit(setup):
+    """On a convex (single-minimum) fit both optimisers reach the same optimum."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False,
+    )
+    lb = aquakin.calibrate(reactor, C0, optimizer="lbfgsb", **common)
+    gn = aquakin.calibrate(reactor, C0, optimizer="gauss_newton", **common)
+    assert gn.params_named["A_to_B.k"] == pytest.approx(
+        lb.params_named["A_to_B.k"], rel=1e-3
+    )
+
+
+def test_gauss_newton_forward_mode_with_direct_adjoint(simple_network):
+    """With a DirectAdjoint reactor the GN Jacobian is formed in forward mode
+    (jacfwd); it must still recover the parameter."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15),
+        adjoint=diffrax.DirectAdjoint(),
+    )
+    C0 = jnp.asarray([1.0, 0.0])
+    true_k = 0.25
+    true_params = simple_network.default_parameters().at[0].set(true_k)
+    t_obs = jnp.linspace(0.5, 10.0, 20)
+    obs = reactor.solve(C0, true_params, t_span=(0.0, 10.0), t_eval=t_obs).C_named("B")
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="mse", laplace=False,
+        optimizer="gauss_newton",
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
+def test_gauss_newton_with_free_ic_and_multistart(simple_network):
+    """GN composes with free_ic and multistart: recover both k and A0."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    true_k, true_A0 = 0.25, 1.6
+    true_params = simple_network.default_parameters().at[0].set(true_k)
+    t_obs = jnp.linspace(0.5, 12.0, 25)
+    sol = reactor.solve(jnp.asarray([true_A0, 0.0]), true_params, t_span=(0.0, 12.0), t_eval=t_obs)
+    obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
+    result = aquakin.calibrate(
+        reactor, jnp.asarray([1.0, 0.0]), observations=obs, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["A", "B"], loss="mse", laplace=False,
+        optimizer="gauss_newton", free_ic=["A"], ic_bounds=(0.1, 10.0),
+        n_starts=3, seed=0,
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+    assert result.ic_named[0]["A"] == pytest.approx(true_A0, rel=1e-2)
+
+
+def test_unknown_optimizer_rejected(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(ValueError):
+        aquakin.calibrate(
+            reactor, C0, observations=obs_clean, t_obs=t_obs,
+            free_params=["A_to_B.k"], observed_species=["B"], loss="mse",
+            laplace=False, optimizer="newton",
+        )
+
+
+# ---------- free initial conditions ----------
+
+
+def test_free_ic_recovers_initial_condition(simple_network):
+    """Fit an unknown initial A0 jointly with the rate; recover both."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    true_k, true_A0 = 0.25, 1.7
+    true_params = simple_network.default_parameters().at[0].set(true_k)
+    C0_true = jnp.asarray([true_A0, 0.0])
+    t_obs = jnp.linspace(0.5, 12.0, 25)
+    sol = reactor.solve(C0_true, true_params, t_span=(0.0, 12.0), t_eval=t_obs)
+    obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
+
+    # Start from the wrong A0 (1.0); free it.
+    C0_start = jnp.asarray([1.0, 0.0])
+    result = aquakin.calibrate(
+        reactor, C0_start, observations=obs, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["A", "B"], loss="mse", laplace=False,
+        free_ic=["A"], ic_bounds=(0.1, 10.0), n_starts=3, seed=0,
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+    assert result.ic_named[0]["A"] == pytest.approx(true_A0, rel=1e-2)
+    assert float(result.C0_fitted[0][0]) == pytest.approx(true_A0, rel=1e-2)
+
+
+def test_free_ic_per_dataset_in_multibatch(simple_network):
+    """Two batches with different (unknown) A0 but a shared k; each batch's
+    initial pool is fitted separately."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    true_k = 0.3
+    true_params = simple_network.default_parameters().at[0].set(true_k)
+    A0a, A0b = 1.2, 2.4
+    ta = jnp.linspace(0.5, 10.0, 20)
+    tb = jnp.linspace(0.5, 10.0, 20)
+    sola = reactor.solve(jnp.asarray([A0a, 0.0]), true_params, t_span=(0.0, 10.0), t_eval=ta)
+    solb = reactor.solve(jnp.asarray([A0b, 0.0]), true_params, t_span=(0.0, 10.0), t_eval=tb)
+    obsa = jnp.stack([sola.C_named("A"), sola.C_named("B")], axis=1)
+    obsb = jnp.stack([solb.C_named("A"), solb.C_named("B")], axis=1)
+    start = jnp.asarray([1.0, 0.0])
+    result = aquakin.calibrate(
+        reactor, [start, start], observations=[obsa, obsb], t_obs=[ta, tb],
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["A", "B"], loss="mse", laplace=False,
+        free_ic=["A"], ic_bounds=(0.1, 10.0), n_starts=3, seed=0,
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+    assert result.ic_named[0]["A"] == pytest.approx(A0a, rel=2e-2)
+    assert result.ic_named[1]["A"] == pytest.approx(A0b, rel=2e-2)
+
+
+def test_free_ic_laplace_is_over_rates_only(simple_network):
+    """With free_ic + laplace, the posterior covers the rate parameters only
+    (pools held at their MAP), so its shape matches the rate count."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    true_params = simple_network.default_parameters().at[0].set(0.25)
+    t_obs = jnp.linspace(0.5, 12.0, 25)
+    sol = reactor.solve(jnp.asarray([1.5, 0.0]), true_params, t_span=(0.0, 12.0), t_eval=t_obs)
+    obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
+    result = aquakin.calibrate(
+        reactor, jnp.asarray([1.0, 0.0]), observations=obs, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["A", "B"], loss="nll", sigma=jnp.asarray(0.02),
+        laplace=True, free_ic=["A"], ic_bounds=(0.1, 10.0),
+    )
+    assert np.asarray(result.posterior_cov).shape == (1, 1)
+    assert "A_to_B.k" in result.params_named_std
+
+
+def test_free_ic_unknown_species_rejected(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(KeyError):
+        aquakin.calibrate(
+            reactor, C0, observations=obs_clean, t_obs=t_obs,
+            free_params=["A_to_B.k"], observed_species=["B"], loss="mse",
+            laplace=False, free_ic=["NotASpecies"],
+        )
+
+
+def test_free_ic_bad_bounds_rejected(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(ValueError):
+        aquakin.calibrate(
+            reactor, C0, observations=obs_clean, t_obs=t_obs,
+            free_params=["A_to_B.k"], observed_species=["B"], loss="mse",
+            laplace=False, free_ic=["A"], ic_bounds=(5.0, 1.0),
+        )
 
 
 # ---------- joint multi-batch fit ----------

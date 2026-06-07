@@ -31,19 +31,26 @@ available two ways (``laplace_method``):
 
 from __future__ import annotations
 
+from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+import diffrax
 import jax
 import jax.numpy as jnp
 import numpy as np
-from scipy.optimize import minimize
+from scipy.optimize import least_squares, minimize
 
 from aquakin.integrate._common import Reactor
 
 # --- Parameter transforms ----------------------------------------------
 
 _VALID_LOSSES = ("mse", "wmse", "nll")
+_VALID_OPTIMIZERS = ("lbfgsb", "gauss_newton")
+
+# Uniform optimiser output so the multistart loop and downstream code are
+# agnostic to which backend (L-BFGS-B or Gauss-Newton least-squares) ran.
+_OptOut = namedtuple("_OptOut", "x fun success message nit")
 
 
 def _to_unconstrained(value: jnp.ndarray, transform: str) -> jnp.ndarray:
@@ -153,7 +160,38 @@ def _build_residual(
     )
 
 
-# --- Result dataclass --------------------------------------------------
+# --- Result dataclasses ------------------------------------------------
+
+
+@dataclass
+class PredictiveBand:
+    """Posterior-predictive band from :meth:`CalibrationResult.predictive_band`.
+
+    Attributes
+    ----------
+    t : np.ndarray
+        Output time grid, shape ``(n_t,)`` (the ``t_eval`` passed in).
+    median : np.ndarray
+        Pointwise median over the posterior draws, shape ``(n_t, n_species)``
+        (or ``(n_t, n_observed)`` if ``observed_species`` was given).
+    lo, hi : np.ndarray
+        Lower / upper percentile envelopes, same shape as ``median``.
+    percentiles : tuple[float, float]
+        The ``(lo, hi)`` percentiles used.
+    n_valid : int
+        Number of posterior draws that solved to a finite trajectory and were
+        included in the percentiles.
+    species : list[str] or None
+        Observed-species labels for the columns, or ``None`` for all species.
+    """
+
+    t: np.ndarray
+    median: np.ndarray
+    lo: np.ndarray
+    hi: np.ndarray
+    percentiles: tuple[float, float]
+    n_valid: int
+    species: Optional[list[str]] = None
 
 
 @dataclass
@@ -191,6 +229,13 @@ class CalibrationResult:
     priors_applied : dict[str, tuple[float, float]], optional
         Gaussian priors (physical-space ``(mean, std)``) that were added to the
         objective, by free-parameter name. Empty if no priors were active.
+    C0_fitted : list[jnp.ndarray], optional
+        When ``free_ic`` is used, the fitted initial-state vector for each
+        dataset (full species vectors, free pools set to their fitted values).
+        ``None`` if no initial conditions were fit.
+    ic_named : list[dict[str, float]], optional
+        When ``free_ic`` is used, the fitted free initial pools per dataset, by
+        species name. ``None`` if no initial conditions were fit.
     """
 
     params: jnp.ndarray
@@ -206,6 +251,123 @@ class CalibrationResult:
     params_named_std: Optional[dict[str, float]] = field(default=None)
     hessian_unconstrained: Optional[jnp.ndarray] = None
     priors_applied: dict[str, tuple[float, float]] = field(default_factory=dict)
+    C0_fitted: Optional[list] = None
+    ic_named: Optional[list] = None
+
+    def predictive_band(
+        self,
+        reactor: Reactor,
+        C0: jnp.ndarray,
+        t_eval: jnp.ndarray,
+        *,
+        n_draw: int = 200,
+        percentiles: tuple[float, float] = (2.5, 97.5),
+        seed: int = 0,
+        eig_keep: float = 1e-2,
+        observed_species: Optional[list[str]] = None,
+    ) -> PredictiveBand:
+        """Posterior-predictive band by propagating Laplace draws through a solve.
+
+        Samples the calibrated parameters from the Laplace posterior
+        ``N(MAP, H^{-1})`` (``H`` the Hessian stored on this result), inverse-
+        transforms each draw to physical space, sets it into the fitted parameter
+        vector, integrates ``reactor`` from ``C0`` over ``t_eval``, and returns
+        the pointwise percentile envelope across draws. Near-null Hessian
+        directions (non-identifiable parameter combinations) are dropped so the
+        draws stay finite: only eigenvectors with eigenvalue above
+        ``eig_keep * max_eigenvalue`` are sampled.
+
+        Requires that the calibration was run with ``laplace=True`` (so a Hessian
+        is available). The supplied ``C0`` may differ from the calibration
+        initial state --- e.g. propagate the calibrated-rate uncertainty through a
+        held-out / validation batch.
+
+        Parameters
+        ----------
+        reactor : Reactor
+            Reactor to integrate (forward solves only; any adjoint is fine).
+        C0 : jnp.ndarray
+            Initial state to propagate.
+        t_eval : jnp.ndarray
+            Output times; the band is reported at these points.
+        n_draw : int
+            Number of posterior draws.
+        percentiles : tuple[float, float]
+            Lower / upper band percentiles (default the central 95%).
+        seed : int
+            Seed for the draws (reproducible).
+        eig_keep : float
+            Relative eigenvalue threshold for the identifiable subspace.
+        observed_species : list[str], optional
+            Restrict the returned band to these species. ``None`` returns all.
+
+        Returns
+        -------
+        PredictiveBand
+        """
+        if self.hessian_unconstrained is None:
+            raise ValueError(
+                "predictive_band requires a Laplace posterior; call "
+                "calibrate(..., laplace=True)."
+            )
+        network = reactor.network
+        names = self.parameter_names
+        free_idx = jnp.asarray([network.param_index[n] for n in names])
+        theta_map = np.array([
+            float(_to_unconstrained(jnp.asarray(self.params_named[n]), t))
+            for n, t in zip(names, self.transforms)
+        ])
+
+        # Identifiable-subspace draws: eigen-decompose H, keep high-curvature
+        # directions, sample with std = 1/sqrt(eigenvalue) along each.
+        H = np.asarray(self.hessian_unconstrained)
+        w, V = np.linalg.eigh(0.5 * (H + H.T))
+        keep = w > eig_keep * max(w.max(), 1.0)
+        if not np.any(keep):
+            raise ValueError(
+                "No identifiable directions above eig_keep; posterior is "
+                "degenerate (try a smaller eig_keep or more informative data)."
+            )
+        std_k = 1.0 / np.sqrt(w[keep])
+        rng = np.random.RandomState(seed)
+        draws = theta_map[None, :] + (
+            rng.standard_normal((n_draw, int(keep.sum()))) * std_k[None, :]
+        ) @ V[:, keep].T
+
+        base = self.params
+        C0_j = jnp.asarray(C0)
+        t_eval_j = jnp.asarray(t_eval)
+        t_end = float(np.asarray(t_eval)[-1])
+        transforms = self.transforms
+        curves = []
+        for theta in draws:
+            physical = jnp.stack([
+                _from_unconstrained(jnp.asarray(theta[i]), transforms[i])
+                for i in range(len(names))
+            ])
+            p = base.at[free_idx].set(physical)
+            try:
+                cc = np.asarray(
+                    reactor.solve(C0_j, p, t_span=(0.0, t_end), t_eval=t_eval_j).C
+                )
+            except Exception:
+                continue
+            if np.all(np.isfinite(cc)):
+                curves.append(cc)
+        if not curves:
+            raise RuntimeError("All posterior draws failed to solve.")
+        curves = np.array(curves)
+        lo = np.percentile(curves, percentiles[0], axis=0)
+        hi = np.percentile(curves, percentiles[1], axis=0)
+        median = np.percentile(curves, 50.0, axis=0)
+        if observed_species is not None:
+            sp_idx = [network.species_index[s] for s in observed_species]
+            lo, hi, median = lo[:, sp_idx], hi[:, sp_idx], median[:, sp_idx]
+        return PredictiveBand(
+            t=np.asarray(t_eval), median=median, lo=lo, hi=hi,
+            percentiles=tuple(percentiles), n_valid=len(curves),
+            species=list(observed_species) if observed_species is not None else None,
+        )
 
 
 # --- Main entry point --------------------------------------------------
@@ -229,6 +391,13 @@ def calibrate(
     laplace_method: str = "fd",
     laplace_ridge: float = 1e-6,
     laplace_fd_step: float = 1e-3,
+    free_ic: Optional[list[str]] = None,
+    ic_bounds: tuple[float, float] = (1e-3, 1e4),
+    ic_prior_log_std: Optional[float] = None,
+    optimizer: str = "lbfgsb",
+    n_starts: int = 1,
+    jitter: float = 0.5,
+    seed: int = 0,
     max_iter: int = 500,
     tol: float = 1e-6,
 ) -> CalibrationResult:
@@ -306,6 +475,50 @@ def calibrate(
         Diagonal ridge added to the Hessian for positive-definiteness.
     laplace_fd_step : float
         Relative finite-difference step for the Hessian rows (``"fd"`` only).
+    free_ic : list[str], optional
+        Species whose *initial* concentration is fitted in addition to the rate
+        parameters. The pools are fitted per dataset (each batch gets its own
+        initial values, in log space, box-bounded by ``ic_bounds``) while the
+        rate parameters remain shared. Useful when an unmeasured initial state
+        (e.g. a biofilm reservoir) is not known. The Laplace posterior is taken
+        over the rate parameters with the fitted pools held at their optimum.
+        The fitted pools are returned on ``CalibrationResult.C0_fitted`` /
+        ``ic_named``.
+    ic_bounds : tuple[float, float], optional
+        ``(lo, hi)`` box bounds (physical concentration) for every free initial
+        pool. Default ``(1e-3, 1e4)``.
+    ic_prior_log_std : float, optional
+        If given, a weak Gaussian prior in log space tethering each fitted pool
+        to its supplied starting value, with this standard deviation. ``None``
+        (default) leaves the pools governed only by the data and ``ic_bounds``.
+    optimizer : {"lbfgsb", "gauss_newton"}, optional
+        Optimisation backend. ``"lbfgsb"`` (default) minimises the scalar loss
+        with SciPy L-BFGS-B (reverse-mode gradient). ``"gauss_newton"`` minimises
+        the residual *vector* with SciPy ``least_squares`` (trust-region
+        reflective) -- a Gauss-Newton method that exploits the least-squares
+        structure and is markedly more robust on the multimodal landscapes of
+        stiff reaction-network fits. The residual Jacobian is formed by AD:
+        forward mode (``jacfwd``) when ``reactor`` was built with
+        ``adjoint=diffrax.DirectAdjoint()``, otherwise reverse mode (``jacrev``).
+        Forward mode stays finite at any integrator step, so for very stiff
+        networks whose reverse-mode adjoint is non-finite, pass a
+        ``DirectAdjoint`` reactor and use ``"gauss_newton"``.
+    n_starts : int, optional
+        Number of optimiser starts (default ``1``). With ``n_starts > 1`` the
+        calibration is run from several starting points and the lowest-loss
+        result is kept --- a deterministic multistart that escapes local minima
+        on the multimodal landscapes typical of stiff reaction-network fits.
+        Start 0 is the supplied / default ``initial_params`` (unperturbed); the
+        remaining starts perturb the unconstrained start vector by Gaussian noise
+        of scale ``jitter``. The Laplace posterior is computed once, at the
+        winning optimum. Fully reproducible given ``seed``.
+    jitter : float, optional
+        Standard deviation (in unconstrained / transformed space) of the
+        Gaussian perturbation applied to each multistart start after the first.
+        Ignored when ``n_starts == 1``.
+    seed : int, optional
+        Seed for the multistart perturbations, so a re-run reproduces the same
+        starts and therefore the same optimum.
     max_iter, tol : passed through to SciPy ``L-BFGS-B``.
 
     Returns
@@ -317,6 +530,12 @@ def calibrate(
     if loss not in _VALID_LOSSES:
         raise ValueError(
             f"loss must be one of {_VALID_LOSSES}; got {loss!r}."
+        )
+    if n_starts < 1:
+        raise ValueError(f"n_starts must be >= 1; got {n_starts}.")
+    if optimizer not in _VALID_OPTIMIZERS:
+        raise ValueError(
+            f"optimizer must be one of {_VALID_OPTIMIZERS}; got {optimizer!r}."
         )
 
     network = reactor.network
@@ -462,25 +681,73 @@ def calibrate(
     has_priors = bool(active_priors)
 
     transform_array = resolved_transforms  # captured as Python list (static)
+    n_rate = len(free_params)
+
+    # --- Free initial conditions (optional) ----------------------------
+    # When free_ic is given, each dataset additionally fits the initial
+    # concentration of those species (log space, box-bounded by ic_bounds),
+    # appended to the optimisation vector after the rate block. The rate
+    # parameters stay shared across datasets; the initial pools are per-dataset.
+    free_ic_list = list(free_ic or [])
+    for s in free_ic_list:
+        if s not in network.species_index:
+            raise KeyError(
+                f"Unknown free_ic species '{s}'. Available: {network.species}"
+            )
+    m_ic = len(free_ic_list)
+    if m_ic and not (0.0 < ic_bounds[0] < ic_bounds[1]):
+        raise ValueError(f"ic_bounds must satisfy 0 < lo < hi; got {ic_bounds}.")
+    ic_species_idx = jnp.asarray(
+        [network.species_index[s] for s in free_ic_list], dtype=int
+    )
+    ic_center_blocks = []
+    if m_ic:
+        ic_np_idx = [network.species_index[s] for s in free_ic_list]
+        for C0_i, *_rest in datasets:
+            vals = np.clip(np.asarray(C0_i)[ic_np_idx], ic_bounds[0], ic_bounds[1])
+            ic_center_blocks.append(np.log(vals))
+    ic_center_full = (
+        jnp.asarray(np.concatenate(ic_center_blocks)) if m_ic else jnp.zeros(0)
+    )
 
     # --- The objective in unconstrained space --------------------------
 
-    def physical_from_theta(theta: jnp.ndarray) -> jnp.ndarray:
+    def physical_from_theta(rate_thetas: jnp.ndarray) -> jnp.ndarray:
         return jnp.stack(
-            [_from_unconstrained(theta[i], transform_array[i]) for i in range(theta.shape[0])]
+            [_from_unconstrained(rate_thetas[i], transform_array[i])
+             for i in range(n_rate)]
         )
 
+    def _predict(p, ic_thetas):
+        """Predicted observed-species trajectory per dataset, applying the
+        per-dataset free initial pools (if any)."""
+        preds = []
+        for k, (C0_i, tobs_i, tspan_i, _loss_i, _resid_i) in enumerate(datasets):
+            C0_k = C0_i
+            if m_ic:
+                C0_k = C0_i.at[ic_species_idx].set(
+                    jnp.exp(ic_thetas[k * m_ic:(k + 1) * m_ic])
+                )
+            sol = reactor.solve(C0_k, p, t_span=tspan_i, t_eval=tobs_i)
+            preds.append(sol.C[:, obs_species_indices])
+        return preds
+
     def objective(theta: jnp.ndarray) -> jnp.ndarray:
-        physical = physical_from_theta(theta)
+        rate_thetas = theta[:n_rate]
+        ic_thetas = theta[n_rate:]
+        physical = physical_from_theta(rate_thetas)
         p = p0_full.at[free_indices].set(physical)
         # Sum the data terms over every dataset (the batches share ``p``).
         data_term = 0.0
-        for C0_i, tobs_i, tspan_i, loss_fn_i, _resid_fn_i in datasets:
-            sol = reactor.solve(C0_i, p, t_span=tspan_i, t_eval=tobs_i)
-            data_term = data_term + loss_fn_i(sol.C[:, obs_species_indices])
+        for (_C0, _t, _ts, loss_fn_i, _r), pred in zip(datasets, _predict(p, ic_thetas)):
+            data_term = data_term + loss_fn_i(pred)
         if has_priors:
             data_term = data_term + 0.5 * jnp.sum(
                 prior_mask * ((physical - prior_mean) / prior_std) ** 2
+            )
+        if m_ic and ic_prior_log_std:
+            data_term = data_term + 0.5 * jnp.sum(
+                ((ic_thetas - ic_center_full) / ic_prior_log_std) ** 2
             )
         return data_term
 
@@ -488,37 +755,124 @@ def calibrate(
 
     # --- Run SciPy L-BFGS-B in unconstrained space ---------------------
 
-    theta0 = jnp.stack(
+    rate_theta0 = jnp.stack(
         [
             _to_unconstrained(p0_full[network.param_index[name]], t)
             for name, t in zip(free_params, resolved_transforms)
         ]
     )
+    theta0 = jnp.concatenate([rate_theta0, ic_center_full]) if m_ic else rate_theta0
+
+    # Box bounds: rate dims unconstrained (transforms handle positivity), free-IC
+    # dims bounded in log space.
+    if m_ic:
+        n_ic = m_ic * n_datasets
+        bounds = (
+            [(None, None)] * n_rate
+            + [(float(np.log(ic_bounds[0])), float(np.log(ic_bounds[1])))] * n_ic
+        )
+        _lb = np.array([-np.inf] * n_rate + [np.log(ic_bounds[0])] * n_ic)
+        _ub = np.array([np.inf] * n_rate + [np.log(ic_bounds[1])] * n_ic)
+    else:
+        bounds = None
 
     def _np_loss_and_grad(x_np):
         x = jnp.asarray(x_np)
         val, grad = obj_value_and_grad(x)
         return float(val), np.asarray(grad)
 
-    result = minimize(
-        _np_loss_and_grad,
-        np.asarray(theta0),
-        jac=True,
-        method="L-BFGS-B",
-        options={"maxiter": max_iter, "gtol": tol},
-    )
+    if optimizer == "gauss_newton":
+        # Minimise the residual vector (0.5||r||^2 == the scalar objective) with
+        # trust-region least-squares. The residual Jacobian is by forward-mode AD
+        # if the reactor is forward-capable (DirectAdjoint), else reverse-mode.
+        def _full_residual(theta):
+            rate_thetas = theta[:n_rate]
+            ic_thetas = theta[n_rate:]
+            physical = physical_from_theta(rate_thetas)
+            p = p0_full.at[free_indices].set(physical)
+            parts = []
+            for (_C0, _t, _ts, _loss_i, resid_fn_i), pred in zip(
+                datasets, _predict(p, ic_thetas)
+            ):
+                parts.append(resid_fn_i(pred))
+            if has_priors:
+                parts.append(prior_mask * (physical - prior_mean) / prior_std)
+            if m_ic and ic_prior_log_std:
+                parts.append((ic_thetas - ic_center_full) / ic_prior_log_std)
+            return jnp.concatenate(parts)
+
+        _use_forward = isinstance(
+            getattr(reactor, "adjoint", None), diffrax.DirectAdjoint
+        )
+        _jac = jax.jacfwd(_full_residual) if _use_forward else jax.jacrev(_full_residual)
+        _res_j = jax.jit(_full_residual)
+        _jac_j = jax.jit(_jac)
+        _ls_bounds = (_lb, _ub) if m_ic else (-np.inf, np.inf)
+
+    def _run_from(x_start):
+        if optimizer == "lbfgsb":
+            r = minimize(
+                _np_loss_and_grad,
+                np.asarray(x_start),
+                jac=True,
+                method="L-BFGS-B",
+                bounds=bounds,
+                options={"maxiter": max_iter, "gtol": tol},
+            )
+            return _OptOut(np.asarray(r.x), float(r.fun), bool(r.success),
+                           str(r.message), int(r.nit))
+        r = least_squares(
+            lambda x: np.asarray(_res_j(jnp.asarray(x)), dtype=float),
+            np.asarray(x_start),
+            jac=lambda x: np.asarray(_jac_j(jnp.asarray(x)), dtype=float),
+            method="trf", bounds=_ls_bounds, max_nfev=max_iter,
+            xtol=tol, ftol=tol,
+        )
+        return _OptOut(np.asarray(r.x), float(r.cost), bool(r.success),
+                       str(r.message), int(r.nfev))
+
+    # Start 0 is the supplied/default initial point; the rest are deterministic
+    # jittered restarts. Keep the lowest finite loss (multimodal landscapes).
+    result = _run_from(theta0)
+    if n_starts > 1:
+        rng = np.random.RandomState(seed)
+        theta0_np = np.asarray(theta0)
+        for _ in range(1, n_starts):
+            perturbed = theta0_np + rng.normal(0.0, jitter, size=theta0_np.shape)
+            if bounds is not None:
+                perturbed = np.clip(perturbed, _lb, _ub)
+            cand = _run_from(perturbed)
+            if np.isfinite(cand.fun) and cand.fun < result.fun:
+                result = cand
     theta_opt = jnp.asarray(result.x)
-    physical_opt = physical_from_theta(theta_opt)
+    rate_theta_opt = theta_opt[:n_rate]
+    ic_opt = theta_opt[n_rate:]
+    physical_opt = physical_from_theta(rate_theta_opt)
     full_params = p0_full.at[free_indices].set(physical_opt)
 
-    # --- Laplace posterior --------------------------------------------
+    # Fitted per-dataset initial states (when free_ic is active).
+    C0_fitted = None
+    ic_named = None
+    if m_ic:
+        C0_fitted = []
+        ic_named = []
+        for k, (C0_i, *_rest) in enumerate(datasets):
+            vals = np.exp(np.asarray(ic_opt)[k * m_ic:(k + 1) * m_ic])
+            C0_fitted.append(C0_i.at[ic_species_idx].set(jnp.asarray(vals)))
+            ic_named.append({s: float(v) for s, v in zip(free_ic_list, vals)})
+
+    # --- Laplace posterior (over the rate parameters; pools held at MAP) ---
+    # The free initial pools are fixed at their fitted values and the Laplace
+    # covariance is taken over the rate constants, so the posterior and
+    # predictive_band describe rate uncertainty (matching the established
+    # practice for these fits).
 
     posterior_cov = None
     posterior_std_unconstrained = None
     params_named_std = None
     hessian_unconstrained = None
     if laplace:
-        d = int(theta_opt.shape[0])
+        d = n_rate
         if laplace_method == "gauss_newton":
             # Gauss-Newton / Fisher Hessian H = J^T J, with J the Jacobian of the
             # scaled residuals (0.5||r||^2 == the loss). Only FIRST-order AD
@@ -527,28 +881,32 @@ def calibrate(
             # forward-over-reverse pass hits the adjoint's custom_vjp, and the
             # second-order solve is unreliable). For loss='nll' this is the
             # exact Fisher information; it is PSD by construction.
-            def _residual_vec(theta):
-                physical = physical_from_theta(theta)
+            def _residual_vec(rate_thetas):
+                physical = physical_from_theta(rate_thetas)
                 p = p0_full.at[free_indices].set(physical)
                 parts = []
-                for C0_i, tobs_i, tspan_i, _loss_i, resid_fn_i in datasets:
-                    sol = reactor.solve(C0_i, p, t_span=tspan_i, t_eval=tobs_i)
-                    parts.append(resid_fn_i(sol.C[:, obs_species_indices]))
+                for (_C0, _t, _ts, _loss_i, resid_fn_i), pred in zip(
+                    datasets, _predict(p, ic_opt)
+                ):
+                    parts.append(resid_fn_i(pred))
                 if has_priors:
                     parts.append(prior_mask * (physical - prior_mean) / prior_std)
                 return jnp.concatenate(parts)
 
-            J = jax.jacrev(_residual_vec)(theta_opt)
+            J = jax.jacrev(_residual_vec)(rate_theta_opt)
             H = J.T @ J
         elif laplace_method == "fd":
-            # FD Hessian of the loss at theta_opt (finite-difference the gradient).
-            grad_fn = jax.jit(jax.grad(objective))
+            # FD Hessian of the loss over the rates (pools fixed at MAP).
+            def _objective_rate(rate_thetas):
+                return objective(jnp.concatenate([rate_thetas, ic_opt]))
+
+            grad_fn = jax.jit(jax.grad(_objective_rate))
             H_rows = []
             for i in range(d):
-                step = max(abs(float(theta_opt[i])), 1.0) * laplace_fd_step
+                step = max(abs(float(rate_theta_opt[i])), 1.0) * laplace_fd_step
                 e_i = jnp.zeros(d).at[i].set(step)
-                g_plus = grad_fn(theta_opt + e_i)
-                g_minus = grad_fn(theta_opt - e_i)
+                g_plus = grad_fn(rate_theta_opt + e_i)
+                g_minus = grad_fn(rate_theta_opt - e_i)
                 H_rows.append((g_plus - g_minus) / (2.0 * step))
             H = jnp.stack(H_rows)
         else:
@@ -566,7 +924,7 @@ def calibrate(
         # Delta-method projection to physical space.
         jac = jnp.stack(
             [
-                _jacobian_physical_wrt_theta(theta_opt[i], resolved_transforms[i])
+                _jacobian_physical_wrt_theta(rate_theta_opt[i], resolved_transforms[i])
                 for i in range(d)
             ]
         )
@@ -589,4 +947,6 @@ def calibrate(
         params_named_std=params_named_std,
         hessian_unconstrained=hessian_unconstrained,
         priors_applied=dict(active_priors),
+        C0_fitted=C0_fitted,
+        ic_named=ic_named,
     )
