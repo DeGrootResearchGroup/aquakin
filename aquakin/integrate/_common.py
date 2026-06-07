@@ -77,15 +77,26 @@ def _run_diffeqsolve(
     atol,
     adjoint: diffrax.AbstractAdjoint | None = None,
     max_steps: int = 100_000,
+    dtmax: float | None = None,
 ):
     """Wrapper around the canonical Kvaerno5 + PIDController + adjoint setup.
 
     All reactors call this with their own ``rhs``. Adjusting the default
     solver, controller, or adjoint here changes behaviour for every reactor.
+
+    ``dtmax`` caps the integrator step size. It is ``None`` (uncapped) by
+    default, which is fastest for plain forward solves. For *differentiating*
+    a stiff network it must be set: an L-stable solver may take steps far
+    larger than the fastest reaction timescale and silently damp the
+    unresolved fast modes in the primal, but the sensitivity of those modes is
+    then ill-resolved and the differentiated solve returns non-finite values
+    (in both forward and reverse mode). Capping ``dtmax`` to a small multiple
+    of the fastest reaction timescale resolves it; the resulting gradients
+    match finite differences.
     """
     term = diffrax.ODETerm(rhs)
     solver = diffrax.Kvaerno5()
-    controller = diffrax.PIDController(rtol=rtol, atol=atol)
+    controller = diffrax.PIDController(rtol=rtol, atol=atol, dtmax=dtmax)
     return diffrax.diffeqsolve(
         term,
         solver,

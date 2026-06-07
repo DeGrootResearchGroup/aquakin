@@ -18,8 +18,10 @@ from aquakin.integrate.particle import (
 )
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.sensitivity import (
+    DGSMResult,
     FitResult,
     SensitivityResult,
+    dgsm,
     fit,
     sensitivity,
 )
@@ -57,12 +59,14 @@ __all__ = [
     "StateTranslator",
     "Stream",
     "Unit",
+    "DGSMResult",
     "SensitivityResult",
     "SpatialConditions",
     "Track",
     "TrackSolution",
     "calibrate",
     "compile_network",
+    "dgsm",
     "fit",
     "integrate_ensemble",
     "load_network",

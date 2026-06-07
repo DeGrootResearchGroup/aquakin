@@ -59,9 +59,32 @@ class BatchReactor:
         magnitude below the bulk concentrations.
     adjoint : diffrax.AbstractAdjoint, optional
         Adjoint strategy. Defaults to
-        :class:`diffrax.RecursiveCheckpointAdjoint` (memory-efficient for
-        long integrations and parameter estimation). For short
-        integrations, ``diffrax.DirectAdjoint()`` is cheaper.
+        :class:`diffrax.RecursiveCheckpointAdjoint`, the right choice for
+        reverse-mode parameter estimation: its memory grows only
+        logarithmically with the number of steps (binomial checkpointing),
+        so it is preferred for long or stiff integrations and for
+        ``jax.grad``-based fitting.
+
+        Pass ``diffrax.DirectAdjoint()`` only when you need **forward-mode**
+        autodiff (``jax.jvp`` / ``jax.jacfwd``) through the solve --- for
+        example a forward-mode sensitivity Jacobian or a Gauss-Newton /
+        Fisher information matrix. ``RecursiveCheckpointAdjoint`` registers a
+        ``custom_vjp`` (a reverse-mode rule only), so forward-mode is rejected
+        with "can't apply forward-mode autodiff (jvp) to a custom_vjp
+        function"; ``DirectAdjoint`` is plainly differentiable in both modes.
+        Its drawback is memory: it stores/unrolls the whole solve (cost grows
+        with the number of steps), so reserve it for short integrations or
+        when forward-mode is actually required. Either way, cap ``dtmax`` when
+        differentiating a stiff network (see below).
+    dtmax : float, optional
+        Maximum integrator step size. ``None`` (default) leaves the step
+        uncapped, which is fastest for forward solves. Set it when
+        *differentiating* a stiff network: an L-stable solver can step over
+        the fastest reaction timescale and damp those modes in the primal,
+        but their sensitivity is then ill-resolved and ``jax.grad`` /
+        ``jax.jvp`` return non-finite values. Capping ``dtmax`` to a small
+        multiple of the fastest reaction timescale fixes it (both AD modes)
+        and the gradients match finite differences.
     """
 
     def __init__(
@@ -72,6 +95,7 @@ class BatchReactor:
         rtol: float = 1e-6,
         atol=1e-9,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
+        dtmax: Optional[float] = None,
     ) -> None:
         conditions.validate_required(network.conditions_required)
         self.network = network
@@ -79,6 +103,7 @@ class BatchReactor:
         self.rtol = rtol
         self.atol = _coerce_atol(atol, network.n_species)
         self.adjoint = adjoint
+        self.dtmax = dtmax
         # Cache jit-compiled inner solve keyed on (t0, t1, t_eval_shape).
         # First call with a new signature pays the trace cost; subsequent
         # calls reuse the compiled graph.
@@ -159,6 +184,7 @@ class BatchReactor:
         rtol = self.rtol
         atol = self.atol
         adjoint = self.adjoint
+        dtmax = self.dtmax
 
         if has_t_eval:
             @jax.jit
@@ -181,6 +207,7 @@ class BatchReactor:
                     rtol=rtol,
                     atol=atol,
                     adjoint=adjoint,
+                    dtmax=dtmax,
                 )
                 return sol.ts, sol.ys
 
@@ -203,6 +230,7 @@ class BatchReactor:
                 rtol=rtol,
                 atol=atol,
                 adjoint=adjoint,
+                dtmax=dtmax,
             )
             return sol.ts, sol.ys
 

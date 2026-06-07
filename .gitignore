@@ -45,4 +45,6 @@ coverage.xml
 Thumbs.db
 
 # Project-local settings
-.claude/settings.local.json
+.claude/
+reference/
+figures/

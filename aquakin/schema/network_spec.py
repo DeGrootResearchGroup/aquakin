@@ -47,6 +47,51 @@ class ConditionSpec(BaseModel):
 _VALID_TRANSFORMS = ("none", "positive_log", "logit")
 
 
+class PriorSpec(BaseModel):
+    """Optional Gaussian prior on a parameter, in physical space.
+
+    Declare the prior either with an explicit ``mean`` + ``std`` (e.g. a
+    measured value with reported uncertainty), or with a literature
+    ``range: [lo, hi]`` which is converted to a Gaussian centred on the range
+    midpoint with ``std = (hi - lo) / 4`` (so the reported range spans about
+    ``+-2 sigma``, i.e. ~95% of the prior mass). Used by
+    :func:`aquakin.calibrate` to regularise the fit toward literature values,
+    which makes otherwise non-identifiable parameter combinations well-posed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dist: str = "gaussian"
+    mean: Optional[float] = None
+    std: Optional[float] = None
+    range: Optional[tuple[float, float]] = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> "PriorSpec":
+        if self.dist != "gaussian":
+            raise ValueError(f"prior.dist must be 'gaussian', got {self.dist!r}")
+        has_mean_std = self.mean is not None and self.std is not None
+        has_range = self.range is not None
+        if has_mean_std == has_range:
+            raise ValueError(
+                "prior must declare exactly one of {mean and std} or {range}"
+            )
+        if has_mean_std and self.std <= 0.0:
+            raise ValueError(f"prior std must be > 0, got {self.std}")
+        if has_range:
+            low, high = self.range
+            if not (low < high):
+                raise ValueError(f"prior range must satisfy low < high, got {self.range}")
+        return self
+
+    def resolved(self) -> tuple[float, float]:
+        """Return the Gaussian ``(mean, std)`` in physical space."""
+        if self.range is not None:
+            low, high = self.range
+            return (0.5 * (low + high), (high - low) / 4.0)
+        return (float(self.mean), float(self.std))
+
+
 class ParameterSpec(BaseModel):
     """One entry of a reaction's ``parameters:`` block."""
 
@@ -56,6 +101,7 @@ class ParameterSpec(BaseModel):
     units: str = ""
     bounds: Optional[tuple[float, float]] = None
     transform: str = "none"
+    prior: Optional[PriorSpec] = None
 
     @model_validator(mode="after")
     def _bounds_bracket_value(self) -> "ParameterSpec":
@@ -125,6 +171,80 @@ class ReactionSpec(BaseModel):
         return self
 
 
+class TotalSpec(BaseModel):
+    """One acid/base total in a ``speciation.totals`` entry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    species: str
+    molar_mass: float = Field(gt=0.0)
+
+
+class StrongAnionSpec(BaseModel):
+    """One fully-dissociated strong anion in ``speciation.strong_anions``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    species: str
+    molar_mass: float = Field(gt=0.0)
+    charge: float = Field(gt=0.0)
+
+
+_VALID_TOTAL_KEYS = ("carbonate", "acetate", "ammonia", "phosphate", "sulfide")
+
+
+class SpeciationSpec(BaseModel):
+    """Optional ``speciation:`` block declaring a state-derived pH field.
+
+    Maps state species onto the acid/base totals consumed by the
+    charge-balance pH solver. The produced field (default ``pH``) is computed
+    from the instantaneous state on every RHS evaluation and made available to
+    ``{pH}`` / ``pH_switch(...)`` rate expressions.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str = "pH"
+    temperature_field: str = "T"
+    temperature_units: str = "celsius"
+    z_cation_eq: Union[float, dict[str, str]] = 0.0
+    n_iter: int = Field(default=40, ge=1)
+    totals: dict[str, TotalSpec] = Field(default_factory=dict)
+    strong_anions: list[StrongAnionSpec] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "SpeciationSpec":
+        if self.temperature_units not in ("celsius", "kelvin"):
+            raise ValueError(
+                f"temperature_units must be 'celsius' or 'kelvin', "
+                f"got {self.temperature_units!r}"
+            )
+        unknown = set(self.totals) - set(_VALID_TOTAL_KEYS)
+        if unknown:
+            raise ValueError(
+                f"speciation.totals has unknown systems {sorted(unknown)}; "
+                f"valid keys are {_VALID_TOTAL_KEYS}"
+            )
+        if isinstance(self.z_cation_eq, dict) and set(self.z_cation_eq) != {"condition"}:
+            raise ValueError(
+                "speciation.z_cation_eq mapping must have exactly the key "
+                "'condition'"
+            )
+        return self
+
+
+class PositivityLimiterSpec(BaseModel):
+    """Optional ``positivity_limiter:`` block.
+
+    Throttles each species' net reaction term as its concentration approaches
+    ``threshold``, preventing negative states and the stiffness they cause.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    threshold: float = Field(default=1.0e-3, gt=0.0)
+
+
 class NetworkSpec(BaseModel):
     """Top-level YAML network file schema."""
 
@@ -135,6 +255,8 @@ class NetworkSpec(BaseModel):
     conditions: list[ConditionSpec] = Field(default_factory=list)
     parameters: dict[str, ParameterSpec] = Field(default_factory=dict)
     expressions: dict[str, str] = Field(default_factory=dict)
+    speciation: Optional[SpeciationSpec] = None
+    positivity_limiter: Optional[PositivityLimiterSpec] = None
     reactions: list[ReactionSpec] = Field(min_length=1)
 
     @model_validator(mode="after")
