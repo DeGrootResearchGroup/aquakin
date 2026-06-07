@@ -249,6 +249,72 @@ def test_priors_ignored_when_not_free(setup):
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
 
 
+# ---------- multistart ----------
+
+
+def test_multistart_reproducible(setup):
+    """Same seed -> identical multistart result (deterministic restarts)."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False, n_starts=6, jitter=0.8,
+    )
+    r1 = aquakin.calibrate(reactor, C0, seed=3, **common)
+    r2 = aquakin.calibrate(reactor, C0, seed=3, **common)
+    assert r1.params_named["A_to_B.k"] == r2.params_named["A_to_B.k"]
+
+
+def test_multistart_recovers_from_bad_initial(setup):
+    """A start far from the truth still recovers k with several restarts."""
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    bad = reactor.network.default_parameters().at[0].set(40.0)
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs_clean, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="mse", laplace=False,
+        initial_params=bad, n_starts=8, jitter=1.5, seed=0,
+    )
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+
+
+def test_multistart_default_is_single_start(setup):
+    """n_starts defaults to 1, reproducing the single-start result exactly."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False,
+    )
+    default = aquakin.calibrate(reactor, C0, **common)
+    one = aquakin.calibrate(reactor, C0, n_starts=1, **common)
+    assert default.params_named["A_to_B.k"] == one.params_named["A_to_B.k"]
+
+
+def test_multistart_keeps_best_loss(setup):
+    """The reported loss is no worse than the unperturbed single start (start 0
+    is always included), so multistart never degrades the fit."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False,
+    )
+    single = aquakin.calibrate(reactor, C0, n_starts=1, **common)
+    multi = aquakin.calibrate(reactor, C0, n_starts=5, jitter=1.0, seed=1, **common)
+    assert multi.loss <= single.loss + 1e-9
+
+
+def test_multistart_invalid_n_starts_rejected(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(ValueError):
+        aquakin.calibrate(
+            reactor, C0, observations=obs_clean, t_obs=t_obs,
+            free_params=["A_to_B.k"], observed_species=["B"],
+            loss="mse", laplace=False, n_starts=0,
+        )
+
+
 # ---------- joint multi-batch fit ----------
 
 

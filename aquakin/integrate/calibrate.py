@@ -229,6 +229,9 @@ def calibrate(
     laplace_method: str = "fd",
     laplace_ridge: float = 1e-6,
     laplace_fd_step: float = 1e-3,
+    n_starts: int = 1,
+    jitter: float = 0.5,
+    seed: int = 0,
     max_iter: int = 500,
     tol: float = 1e-6,
 ) -> CalibrationResult:
@@ -306,6 +309,22 @@ def calibrate(
         Diagonal ridge added to the Hessian for positive-definiteness.
     laplace_fd_step : float
         Relative finite-difference step for the Hessian rows (``"fd"`` only).
+    n_starts : int, optional
+        Number of optimiser starts (default ``1``). With ``n_starts > 1`` the
+        calibration is run from several starting points and the lowest-loss
+        result is kept --- a deterministic multistart that escapes local minima
+        on the multimodal landscapes typical of stiff reaction-network fits.
+        Start 0 is the supplied / default ``initial_params`` (unperturbed); the
+        remaining starts perturb the unconstrained start vector by Gaussian noise
+        of scale ``jitter``. The Laplace posterior is computed once, at the
+        winning optimum. Fully reproducible given ``seed``.
+    jitter : float, optional
+        Standard deviation (in unconstrained / transformed space) of the
+        Gaussian perturbation applied to each multistart start after the first.
+        Ignored when ``n_starts == 1``.
+    seed : int, optional
+        Seed for the multistart perturbations, so a re-run reproduces the same
+        starts and therefore the same optimum.
     max_iter, tol : passed through to SciPy ``L-BFGS-B``.
 
     Returns
@@ -318,6 +337,8 @@ def calibrate(
         raise ValueError(
             f"loss must be one of {_VALID_LOSSES}; got {loss!r}."
         )
+    if n_starts < 1:
+        raise ValueError(f"n_starts must be >= 1; got {n_starts}.")
 
     network = reactor.network
     for name in free_params:
@@ -500,13 +521,26 @@ def calibrate(
         val, grad = obj_value_and_grad(x)
         return float(val), np.asarray(grad)
 
-    result = minimize(
-        _np_loss_and_grad,
-        np.asarray(theta0),
-        jac=True,
-        method="L-BFGS-B",
-        options={"maxiter": max_iter, "gtol": tol},
-    )
+    def _run_from(x_start):
+        return minimize(
+            _np_loss_and_grad,
+            np.asarray(x_start),
+            jac=True,
+            method="L-BFGS-B",
+            options={"maxiter": max_iter, "gtol": tol},
+        )
+
+    # Start 0 is the supplied/default initial point; the rest are deterministic
+    # jittered restarts. Keep the lowest finite loss (multimodal landscapes).
+    result = _run_from(theta0)
+    if n_starts > 1:
+        rng = np.random.RandomState(seed)
+        theta0_np = np.asarray(theta0)
+        for _ in range(1, n_starts):
+            perturbed = theta0_np + rng.normal(0.0, jitter, size=theta0_np.shape)
+            cand = _run_from(perturbed)
+            if np.isfinite(cand.fun) and cand.fun < result.fun:
+                result = cand
     theta_opt = jnp.asarray(result.x)
     physical_opt = physical_from_theta(theta_opt)
     full_params = p0_full.at[free_indices].set(physical_opt)
