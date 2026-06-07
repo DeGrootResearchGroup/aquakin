@@ -93,9 +93,12 @@ The shipped networks currently are:
   inert in the batch. The paper-active core is augmented with the dormant
   full-WATS aerobic pieces by
   [`networks/_make_khalil_paper.py`](aquakin/networks/_make_khalil_paper.py)
-  (comment-preserving ruamel splice from `wats_sewer_extended.yaml`). Ships with four
+  (comment-preserving ruamel splice from `wats_sewer_extended.yaml`). Ships with
   structural variants (`_halforder`, `_directsulfate`, `_srbsubstrate`,
-  `_combined`) generated reproducibly by
+  `_combined`, and the standalone falsification variant `_stopatS0` — the
+  nitrate-driven oxidation stops at elemental sulfur, the S⁰→sulfate step
+  removed, which is mutually exclusive with `_directsulfate` and so is NOT folded
+  into `_combined`) generated reproducibly by
   [`networks/_make_khalil_variants.py`](aquakin/networks/_make_khalil_variants.py).
   That generator now produces the same structural variants for **both** the
   faithful base and the `_balanced` base (`wats_sewer_khalil_paper_balanced_{halforder,
@@ -555,21 +558,28 @@ fine at any step. Differentiation splits by mode: **forward mode**
 (`jax.jvp`/`jax.jacfwd` via `DirectAdjoint`) stays **finite at any step**,
 losing only accuracy when the fast modes are unresolved; **reverse mode**
 (`jax.grad`, the discrete adjoint) returns **non-finite** values above a
-step-size threshold. The reverse failure is a genuinely **singular linear solve
-inside the adjoint** (lineax reports the operator is "nearly singular"): the
-reaction Jacobian is stiff *and* ill-conditioned (condition number ~1e20 at t=0
-for the Khalil/extended sewer models, |eig| up to ~1e5 d⁻¹), so the implicit
-operator the reverse adjoint must invert goes near-singular at large steps;
-forward-mode tangent propagation never forms that inverse. Capping `dtmax` to a
-small multiple of the fastest reaction timescale keeps the operator
-well-conditioned; the resulting reverse gradient is finite and matches both
-forward mode and finite differences. This is **reverse-mode-specific and
+step-size threshold. The reverse failure is **not** a near-singular
+per-step solve, despite the bare reaction Jacobian being stiff *and*
+ill-conditioned (condition number ~1e20 at t=0 for the Khalil/extended sewer
+models, |eig| up to ~1e5 d⁻¹). That cond(J) is dominated by structurally
+near-zero eigenvalues of depleted/dormant species; the operator the implicit
+step and its adjoint actually invert, `I − γ·dt·J` (γ≈0.26 for Kvaerno5),
+regularizes those directions and stays **well-conditioned** across the failing
+step range (cond ~650 at dt=1e-2, ≤~3e4 at dt=1e-1). The failure is instead an
+**overflow in the reverse (backward) accumulation**, controlled by the per-step
+stiffness `γ·dt·‖J‖` (fast-mode timescales per step), not by operator
+conditioning — consistent with the threshold scaling below (the steeper-Jacobian
+half-order variants need a tighter cap). Forward-mode tangent propagation, in the
+same direction as the primal and through the same well-conditioned operator,
+stays finite. Capping `dtmax` to a small multiple of the fastest reaction
+timescale bounds `γ·dt·‖J‖`; the resulting reverse gradient is finite and matches
+both forward mode and finite differences. This is **reverse-mode-specific and
 independent of the adjoint flavour** — `RecursiveCheckpointAdjoint` and
 `DirectAdjoint` reverse both fail identically, so it is not the checkpointing.
 (It is also *not* the positivity limiter, *not* the zero-valued initial
 species, and *not* stiffness alone: a 2–3 species stiff toy differentiates
 finitely in reverse even at 1e7 d⁻¹ — the failure needs the full coupled,
-ill-conditioned system.) The threshold is model-dependent: ~5e-3 d for the
+many-species system.) The threshold is model-dependent: ~5e-3 d for the
 Khalil Monod biofilm, ~10× tighter (~5e-4 d) for the half-order variants whose
 √C kinetics steepen the Jacobian; the study uses `dtmax = 1e-4` d (3e-5 d for
 the stiffer balanced base) — inside both. Because calibration needs the reverse

@@ -73,9 +73,11 @@ _MODELS = [
     "wats_sewer_khalil_paper_directsulfate",
     "wats_sewer_khalil_paper_srbsubstrate",
     "wats_sewer_khalil_paper_combined",
+    "wats_sewer_khalil_paper_stopatS0",
     "wats_sewer_khalil_paper_balanced_halforder",
     "wats_sewer_khalil_paper_balanced_directsulfate",
     "wats_sewer_khalil_paper_balanced_combined",
+    "wats_sewer_khalil_paper_balanced_stopatS0",
 ]
 
 # Nitrification / autotroph decay oxidise nitrogen (NH3 -> NO3), which is not
