@@ -1192,6 +1192,18 @@ The convention is:
 Don't try to `git push` from inside the sandbox; it fails with
 "Permission denied (publickey)" and wastes a turn.
 
+### Continuous integration
+
+GitHub Actions runs the test suite on every push to `main` and every
+pull request (`.github/workflows/ci.yml`). The `test` job runs
+`pytest -m "not validation"` across Python 3.10/3.11/3.12; a separate
+`validation` job runs `pytest -m validation` (the slower published-data
+checks) on 3.12. A green CI is the merge gate. When adding a runtime
+dependency, add it to `pyproject.toml` `dependencies` so the CI install
+(`pip install -e ".[test]"`) picks it up — the `_make_*` network
+generators' `ruamel` need is intentionally *not* a runtime dep (they are
+run manually, never imported by the package or tests).
+
 ---
 
 ## Post-Change Checklist
