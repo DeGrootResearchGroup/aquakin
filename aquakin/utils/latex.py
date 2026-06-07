@@ -23,9 +23,28 @@ from aquakin.core.nodes import (
 )
 
 
+# LaTeX text-mode special characters that must be escaped when a species or
+# condition name is rendered literally (e.g. the underscore in ``S_NO``, which
+# would otherwise be read as a subscript operator and mis-render the name).
+_LATEX_ESCAPES = {
+    "_": r"\_", "#": r"\#", "%": r"\%", "&": r"\&",
+    "$": r"\$", "{": r"\{", "}": r"\}",
+}
+
+
+def _escape_latex(name: str) -> str:
+    """Escape LaTeX text-mode specials so an identifier renders literally."""
+    return "".join(_LATEX_ESCAPES.get(ch, ch) for ch in name)
+
+
 def _species_latex(name: str) -> str:
-    """Render a species name as ``[\\mathrm{...}]``, escaping charges."""
-    escaped = name.replace("+", "^{+}").replace("-", "^{-}")
+    """Render a species name as ``[\\mathrm{...}]``.
+
+    LaTeX specials (e.g. the underscore in ``S_NO``) are escaped so the name
+    renders literally, and a trailing ionic charge (``+`` / ``-``) is raised to
+    a superscript (e.g. ``Br-`` -> ``[\\mathrm{Br^{-}}]``).
+    """
+    escaped = _escape_latex(name).replace("+", "^{+}").replace("-", "^{-}")
     return r"[\mathrm{" + escaped + r"}]"
 
 
@@ -46,7 +65,7 @@ def to_latex(node: ASTNode) -> str:
             return r"\mathrm{pH}"
         if node.field_name == "T":
             return "T"
-        return rf"\mathit{{{node.field_name}}}"
+        return rf"\mathit{{{_escape_latex(node.field_name)}}}"
     if isinstance(node, NegateNode):
         return f"-{to_latex(node.operand)}"
     if isinstance(node, AddNode):
@@ -58,7 +77,7 @@ def to_latex(node: ASTNode) -> str:
     if isinstance(node, DivideNode):
         return rf"\frac{{{to_latex(node.left)}}}{{{to_latex(node.right)}}}"
     if isinstance(node, PowerNode):
-        return f"{_maybe_paren_addsub(node.left)}^{{{to_latex(node.right)}}}"
+        return f"{_paren_pow_base(node.left)}^{{{to_latex(node.right)}}}"
     if isinstance(node, ArrheniusNode):
         A = to_latex(node.A)
         Ea = to_latex(node.Ea)
@@ -85,3 +104,22 @@ def _maybe_paren_addsub(node: ASTNode) -> str:
     if isinstance(node, (AddNode, SubtractNode)):
         return _paren(rendered)
     return rendered
+
+
+def _paren_pow_base(node: ASTNode) -> str:
+    """Parenthesise the base of a power unless it is a single self-delimiting
+    atom, so the exponent binds to the whole base.
+
+    Without this, ``(k * [A]) ** 2`` renders as ``k \\cdot [A]^{2}`` (the
+    exponent binds only to ``[A]``) and ``(-x) ** 2`` as ``-x^{2}`` (i.e.
+    ``-(x^2)``). Atoms that need no parentheses are species, parameters,
+    conditions, and non-negative constants; everything else (products,
+    quotients, sums, negations, nested powers, negative constants, ...) is
+    wrapped.
+    """
+    rendered = to_latex(node)
+    atomic = (
+        isinstance(node, (SpeciesNode, ParamNode, ConditionNode))
+        or (isinstance(node, ConstantNode) and node.value >= 0)
+    )
+    return rendered if atomic else _paren(rendered)

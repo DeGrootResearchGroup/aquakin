@@ -42,7 +42,10 @@ def test_condition_T_special_cased():
 
 
 def test_condition_other_rendered_italic():
-    assert "fluence_rate" in to_latex(ConditionNode("fluence_rate"))
+    out = to_latex(ConditionNode("fluence_rate"))
+    assert out.startswith(r"\mathit{")
+    # The underscore is escaped so the name renders literally (not as a subscript).
+    assert r"fluence\_rate" in out
 
 
 def test_negate():
@@ -84,6 +87,43 @@ def test_pH_switch():
 def test_multiply_with_add_left_parenthesises():
     out = to_latex(MultiplyNode(AddNode(ConstantNode(1), ConstantNode(2)), ParamNode("k")))
     assert r"\left(" in out and r"\right)" in out
+
+
+def test_species_underscore_escaped():
+    """Underscore-delimited names (S_NO, X_BH) must escape the underscore so it
+    renders literally rather than as a LaTeX subscript operator."""
+    assert to_latex(SpeciesNode("S_NO")) == r"[\mathrm{S\_NO}]"
+    assert to_latex(SpeciesNode("X_BH")) == r"[\mathrm{X\_BH}]"
+
+
+def test_power_atomic_base_not_parenthesised():
+    # Species / param / non-negative constant bases need no parentheses.
+    assert to_latex(PowerNode(SpeciesNode("A"), ConstantNode(2))) == r"[\mathrm{A}]^{2}"
+    assert to_latex(PowerNode(ParamNode("k"), ConstantNode(2))) == "k^{2}"
+
+
+def test_power_parenthesises_multiply_base():
+    """(k * [A]) ** 2 must wrap the product so the exponent binds to all of it."""
+    base = MultiplyNode(ParamNode("k"), SpeciesNode("A"))
+    out = to_latex(PowerNode(base, ConstantNode(2)))
+    assert out == r"\left(k \cdot [\mathrm{A}]\right)^{2}"
+
+
+def test_power_parenthesises_negate_base():
+    """(-x) ** 2 must wrap the negation so it is not read as -(x^2)."""
+    out = to_latex(PowerNode(NegateNode(ParamNode("x")), ConstantNode(2)))
+    assert out == r"\left(-x\right)^{2}"
+
+
+def test_power_parenthesises_negative_constant_base():
+    out = to_latex(PowerNode(ConstantNode(-3.0), ConstantNode(2)))
+    assert out == r"\left(-3\right)^{2}"
+
+
+def test_power_parenthesises_divide_base():
+    base = DivideNode(ParamNode("a"), ParamNode("b"))
+    out = to_latex(PowerNode(base, ConstantNode(2)))
+    assert out.startswith(r"\left(\frac") and out.endswith(r"\right)^{2}")
 
 
 def test_unknown_node_raises():
