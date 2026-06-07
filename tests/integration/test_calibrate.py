@@ -166,6 +166,29 @@ def test_gauss_newton_laplace_matches_fd(setup):
     )
 
 
+def test_laplace_dtmax_reconstructs_tighter_reactor(simple_network):
+    """laplace_dtmax computes the Laplace Hessian with a separately (tighter)
+    capped reactor; it reconstructs the reactor and gives a finite posterior. On
+    this non-stiff problem the tighter cap barely changes the result."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15), dtmax=0.5)
+    C0 = jnp.asarray([1.0, 0.0])
+    tp = simple_network.default_parameters().at[0].set(0.25)
+    t = jnp.linspace(0.5, 10.0, 20)
+    obs = reactor.solve(C0, tp, t_span=(0.0, 10.0), t_eval=t).C_named("B")
+    common = dict(
+        observations=obs, t_obs=t, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="nll", sigma=jnp.asarray(0.02), laplace=True,
+        laplace_method="gauss_newton",
+    )
+    base = aquakin.calibrate(reactor, C0, **common)
+    tight = aquakin.calibrate(reactor, C0, laplace_dtmax=0.05, **common)
+    assert np.all(np.isfinite(np.asarray(tight.posterior_cov)))
+    assert tight.params_named_std["A_to_B.k"] == pytest.approx(
+        base.params_named_std["A_to_B.k"], rel=0.1)
+
+
 def test_unknown_laplace_method_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
     with pytest.raises(ValueError):

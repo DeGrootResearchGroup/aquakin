@@ -391,6 +391,7 @@ def calibrate(
     laplace_method: str = "fd",
     laplace_ridge: float = 1e-6,
     laplace_fd_step: float = 1e-3,
+    laplace_dtmax: Optional[float] = None,
     free_ic: Optional[list[str]] = None,
     ic_bounds: tuple[float, float] = (1e-3, 1e4),
     ic_prior_log_std: Optional[float] = None,
@@ -477,6 +478,15 @@ def calibrate(
         Diagonal ridge added to the Hessian for positive-definiteness.
     laplace_fd_step : float
         Relative finite-difference step for the Hessian rows (``"fd"`` only).
+    laplace_dtmax : float, optional
+        Integrator-step cap used only for the Laplace Hessian. The Hessian (a
+        Jacobian/gradient through the solve) is more step-sensitive than the fit
+        itself, so for very stiff networks it can need a tighter cap than the fit
+        reactor uses -- pass the fit reactor at a loose cap (fast) and set
+        ``laplace_dtmax`` to a tighter one. ``None`` (default) reuses the fit
+        reactor. Requires a ``BatchReactor``-style reactor (it is reconstructed
+        with the new cap from ``network``/``conditions``/``rtol``/``atol``/
+        ``adjoint``).
     free_ic : list[str], optional
         Species whose *initial* concentration is fitted in addition to the rate
         parameters. The pools are fitted per dataset (each batch gets its own
@@ -734,9 +744,11 @@ def calibrate(
              for i in range(n_rate)]
         )
 
-    def _predict(p, ic_thetas):
+    def _predict(p, ic_thetas, rctr=None):
         """Predicted observed-species trajectory per dataset, applying the
-        per-dataset free initial pools (if any)."""
+        per-dataset free initial pools (if any). ``rctr`` defaults to the fit
+        reactor; the Laplace pass can supply a tighter-capped one."""
+        rctr = reactor if rctr is None else rctr
         preds = []
         for k, (C0_i, tobs_i, tspan_i, _loss_i, _resid_i) in enumerate(datasets):
             C0_k = C0_i
@@ -744,7 +756,7 @@ def calibrate(
                 C0_k = C0_i.at[ic_species_idx].set(
                     jnp.exp(ic_thetas[k * m_ic:(k + 1) * m_ic])
                 )
-            sol = reactor.solve(C0_k, p, t_span=tspan_i, t_eval=tobs_i)
+            sol = rctr.solve(C0_k, p, t_span=tspan_i, t_eval=tobs_i)
             preds.append(sol.C[:, obs_species_indices])
         return preds
 
@@ -914,6 +926,16 @@ def calibrate(
     hessian_unconstrained = None
     if laplace:
         d = n_rate
+        # The Laplace Hessian (a Jacobian/gradient through the solve) is more
+        # step-sensitive than the fit, so it can use a tighter integrator cap.
+        # Reconstruct the reactor at laplace_dtmax when given; else reuse the fit
+        # reactor.
+        if laplace_dtmax is not None and laplace_dtmax != getattr(reactor, "dtmax", None):
+            lap_reactor = type(reactor)(
+                reactor.network, reactor.conditions, rtol=reactor.rtol,
+                atol=reactor.atol, adjoint=reactor.adjoint, dtmax=laplace_dtmax)
+        else:
+            lap_reactor = reactor
         if laplace_method == "gauss_newton":
             # Gauss-Newton / Fisher Hessian H = J^T J, with J the Jacobian of the
             # scaled residuals (0.5||r||^2 == the loss). Only FIRST-order AD
@@ -927,19 +949,32 @@ def calibrate(
                 p = p0_full.at[free_indices].set(physical)
                 parts = []
                 for (_C0, _t, _ts, _loss_i, resid_fn_i), pred in zip(
-                    datasets, _predict(p, ic_opt)
+                    datasets, _predict(p, ic_opt, lap_reactor)
                 ):
                     parts.append(resid_fn_i(pred))
                 if has_priors:
                     parts.append(prior_mask * (physical - prior_mean) / prior_std)
                 return jnp.concatenate(parts)
 
-            J = jax.jacrev(_residual_vec)(rate_theta_opt)
+            _use_fwd_lap = isinstance(
+                getattr(lap_reactor, "adjoint", None), diffrax.DirectAdjoint)
+            J = (jax.jacfwd if _use_fwd_lap else jax.jacrev)(_residual_vec)(rate_theta_opt)
             H = J.T @ J
         elif laplace_method == "fd":
-            # FD Hessian of the loss over the rates (pools fixed at MAP).
+            # FD Hessian of the loss over the rates (pools fixed at MAP), using
+            # the (possibly tighter-capped) Laplace reactor.
             def _objective_rate(rate_thetas):
-                return objective(jnp.concatenate([rate_thetas, ic_opt]))
+                physical = physical_from_theta(rate_thetas)
+                p = p0_full.at[free_indices].set(physical)
+                total = 0.0
+                for (_C0, _t, _ts, loss_fn_i, _r), pred in zip(
+                    datasets, _predict(p, ic_opt, lap_reactor)
+                ):
+                    total = total + loss_fn_i(pred)
+                if has_priors:
+                    total = total + 0.5 * jnp.sum(
+                        prior_mask * ((physical - prior_mean) / prior_std) ** 2)
+                return total
 
             grad_fn = jax.jit(jax.grad(_objective_rate))
             H_rows = []
