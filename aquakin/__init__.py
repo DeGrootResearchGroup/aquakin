@@ -8,7 +8,7 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork, compile_network
 from aquakin.core.parser import parse_rate_expression
 from aquakin.integrate.batch import BatchReactor, BatchSolution
-from aquakin.integrate.calibrate import CalibrationResult, calibrate
+from aquakin.integrate.calibrate import CalibrationResult, PredictiveBand, calibrate
 from aquakin.integrate.cfd import CFDReactor
 from aquakin.integrate.particle import (
     ParticleTrackReactor,
@@ -45,6 +45,7 @@ __all__ = [
     "CFDReactor",
     "CSTRUnit",
     "CalibrationResult",
+    "PredictiveBand",
     "CompiledNetwork",
     "FitResult",
     "IdentityTranslator",

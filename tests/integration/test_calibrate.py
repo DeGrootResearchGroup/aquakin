@@ -315,6 +315,61 @@ def test_multistart_invalid_n_starts_rejected(setup):
         )
 
 
+# ---------- posterior-predictive band ----------
+
+
+def _band_setup(setup):
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs_clean, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="nll", sigma=jnp.asarray(0.02), laplace=True,
+    )
+    return reactor, C0, t_obs, obs_clean, result
+
+
+def test_predictive_band_brackets_truth(setup):
+    """The 95% band envelopes lo <= median <= hi and contains the (noise-free)
+    truth at essentially every observation time."""
+    reactor, C0, t_obs, obs_clean, result = _band_setup(setup)
+    band = result.predictive_band(
+        reactor, C0, t_obs, observed_species=["B"], n_draw=200, seed=0
+    )
+    assert band.lo.shape == band.hi.shape == band.median.shape == (len(t_obs), 1)
+    assert band.n_valid > 0
+    assert np.all(band.lo <= band.median + 1e-9)
+    assert np.all(band.median <= band.hi + 1e-9)
+    truth = np.asarray(obs_clean).reshape(-1, 1)
+    inside = (truth >= band.lo - 1e-6) & (truth <= band.hi + 1e-6)
+    assert inside.mean() > 0.8
+
+
+def test_predictive_band_reproducible(setup):
+    reactor, C0, t_obs, _, result = _band_setup(setup)
+    b1 = result.predictive_band(reactor, C0, t_obs, observed_species=["B"], seed=7)
+    b2 = result.predictive_band(reactor, C0, t_obs, observed_species=["B"], seed=7)
+    assert np.allclose(b1.lo, b2.lo) and np.allclose(b1.hi, b2.hi)
+
+
+def test_predictive_band_all_species_shape(setup):
+    reactor, C0, t_obs, _, result = _band_setup(setup)
+    band = result.predictive_band(reactor, C0, t_obs, n_draw=50, seed=0)
+    # No observed_species -> all network species (A and B) as columns.
+    assert band.median.shape == (len(t_obs), reactor.network.n_species)
+    assert band.species is None
+
+
+def test_predictive_band_requires_laplace(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    result = aquakin.calibrate(
+        reactor, C0, observations=obs_clean, t_obs=t_obs,
+        free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"], loss="mse", laplace=False,
+    )
+    with pytest.raises(ValueError):
+        result.predictive_band(reactor, C0, t_obs)
+
+
 # ---------- joint multi-batch fit ----------
 
 

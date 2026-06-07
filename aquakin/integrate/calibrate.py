@@ -153,7 +153,38 @@ def _build_residual(
     )
 
 
-# --- Result dataclass --------------------------------------------------
+# --- Result dataclasses ------------------------------------------------
+
+
+@dataclass
+class PredictiveBand:
+    """Posterior-predictive band from :meth:`CalibrationResult.predictive_band`.
+
+    Attributes
+    ----------
+    t : np.ndarray
+        Output time grid, shape ``(n_t,)`` (the ``t_eval`` passed in).
+    median : np.ndarray
+        Pointwise median over the posterior draws, shape ``(n_t, n_species)``
+        (or ``(n_t, n_observed)`` if ``observed_species`` was given).
+    lo, hi : np.ndarray
+        Lower / upper percentile envelopes, same shape as ``median``.
+    percentiles : tuple[float, float]
+        The ``(lo, hi)`` percentiles used.
+    n_valid : int
+        Number of posterior draws that solved to a finite trajectory and were
+        included in the percentiles.
+    species : list[str] or None
+        Observed-species labels for the columns, or ``None`` for all species.
+    """
+
+    t: np.ndarray
+    median: np.ndarray
+    lo: np.ndarray
+    hi: np.ndarray
+    percentiles: tuple[float, float]
+    n_valid: int
+    species: Optional[list[str]] = None
 
 
 @dataclass
@@ -206,6 +237,121 @@ class CalibrationResult:
     params_named_std: Optional[dict[str, float]] = field(default=None)
     hessian_unconstrained: Optional[jnp.ndarray] = None
     priors_applied: dict[str, tuple[float, float]] = field(default_factory=dict)
+
+    def predictive_band(
+        self,
+        reactor: Reactor,
+        C0: jnp.ndarray,
+        t_eval: jnp.ndarray,
+        *,
+        n_draw: int = 200,
+        percentiles: tuple[float, float] = (2.5, 97.5),
+        seed: int = 0,
+        eig_keep: float = 1e-2,
+        observed_species: Optional[list[str]] = None,
+    ) -> PredictiveBand:
+        """Posterior-predictive band by propagating Laplace draws through a solve.
+
+        Samples the calibrated parameters from the Laplace posterior
+        ``N(MAP, H^{-1})`` (``H`` the Hessian stored on this result), inverse-
+        transforms each draw to physical space, sets it into the fitted parameter
+        vector, integrates ``reactor`` from ``C0`` over ``t_eval``, and returns
+        the pointwise percentile envelope across draws. Near-null Hessian
+        directions (non-identifiable parameter combinations) are dropped so the
+        draws stay finite: only eigenvectors with eigenvalue above
+        ``eig_keep * max_eigenvalue`` are sampled.
+
+        Requires that the calibration was run with ``laplace=True`` (so a Hessian
+        is available). The supplied ``C0`` may differ from the calibration
+        initial state --- e.g. propagate the calibrated-rate uncertainty through a
+        held-out / validation batch.
+
+        Parameters
+        ----------
+        reactor : Reactor
+            Reactor to integrate (forward solves only; any adjoint is fine).
+        C0 : jnp.ndarray
+            Initial state to propagate.
+        t_eval : jnp.ndarray
+            Output times; the band is reported at these points.
+        n_draw : int
+            Number of posterior draws.
+        percentiles : tuple[float, float]
+            Lower / upper band percentiles (default the central 95%).
+        seed : int
+            Seed for the draws (reproducible).
+        eig_keep : float
+            Relative eigenvalue threshold for the identifiable subspace.
+        observed_species : list[str], optional
+            Restrict the returned band to these species. ``None`` returns all.
+
+        Returns
+        -------
+        PredictiveBand
+        """
+        if self.hessian_unconstrained is None:
+            raise ValueError(
+                "predictive_band requires a Laplace posterior; call "
+                "calibrate(..., laplace=True)."
+            )
+        network = reactor.network
+        names = self.parameter_names
+        free_idx = jnp.asarray([network.param_index[n] for n in names])
+        theta_map = np.array([
+            float(_to_unconstrained(jnp.asarray(self.params_named[n]), t))
+            for n, t in zip(names, self.transforms)
+        ])
+
+        # Identifiable-subspace draws: eigen-decompose H, keep high-curvature
+        # directions, sample with std = 1/sqrt(eigenvalue) along each.
+        H = np.asarray(self.hessian_unconstrained)
+        w, V = np.linalg.eigh(0.5 * (H + H.T))
+        keep = w > eig_keep * max(w.max(), 1.0)
+        if not np.any(keep):
+            raise ValueError(
+                "No identifiable directions above eig_keep; posterior is "
+                "degenerate (try a smaller eig_keep or more informative data)."
+            )
+        std_k = 1.0 / np.sqrt(w[keep])
+        rng = np.random.RandomState(seed)
+        draws = theta_map[None, :] + (
+            rng.standard_normal((n_draw, int(keep.sum()))) * std_k[None, :]
+        ) @ V[:, keep].T
+
+        base = self.params
+        C0_j = jnp.asarray(C0)
+        t_eval_j = jnp.asarray(t_eval)
+        t_end = float(np.asarray(t_eval)[-1])
+        transforms = self.transforms
+        curves = []
+        for theta in draws:
+            physical = jnp.stack([
+                _from_unconstrained(jnp.asarray(theta[i]), transforms[i])
+                for i in range(len(names))
+            ])
+            p = base.at[free_idx].set(physical)
+            try:
+                cc = np.asarray(
+                    reactor.solve(C0_j, p, t_span=(0.0, t_end), t_eval=t_eval_j).C
+                )
+            except Exception:
+                continue
+            if np.all(np.isfinite(cc)):
+                curves.append(cc)
+        if not curves:
+            raise RuntimeError("All posterior draws failed to solve.")
+        curves = np.array(curves)
+        lo = np.percentile(curves, percentiles[0], axis=0)
+        hi = np.percentile(curves, percentiles[1], axis=0)
+        median = np.percentile(curves, 50.0, axis=0)
+        if observed_species is not None:
+            sp_idx = [network.species_index[s] for s in observed_species]
+            lo, hi, median = lo[:, sp_idx], hi[:, sp_idx], median[:, sp_idx]
+        return PredictiveBand(
+            t=np.asarray(t_eval), median=median, lo=lo, hi=hi,
+            percentiles=tuple(percentiles), n_valid=len(curves),
+            species=list(observed_species) if observed_species is not None else None,
+        )
 
 
 # --- Main entry point --------------------------------------------------
