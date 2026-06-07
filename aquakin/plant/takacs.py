@@ -55,7 +55,10 @@ _BSM1_TAKACS_DEFAULTS = dict(
     rh=5.76e-4,      # hindered settling parameter, m³/g
     rp=2.86e-3,      # flocculant settling parameter, m³/g
     fns=2.28e-3,     # non-settleable fraction
-    X_threshold=3000.0,  # threshold below which v_s = 0, g/m³
+    # Clarification-zone flux-limiting threshold (g/m³): above the feed, the
+    # downward settling flux is limited by the layer below only when that layer
+    # exceeds this concentration (Takács 1991). NOT a settling-velocity cutoff.
+    X_threshold=3000.0,
 )
 
 
@@ -188,28 +191,6 @@ class TakacsClarifier:
         # Clamp to [0, vmax].
         return jnp.clip(v_takacs, 0.0, self._vmax)
 
-    def _settling_flux(
-        self,
-        X_above: jnp.ndarray,
-        X_below: jnp.ndarray,
-        X_min: jnp.ndarray,
-    ) -> jnp.ndarray:
-        """Bürger-Diehl-style flux across the boundary between two layers.
-
-        Returns flux density (g/m²/d) — positive flux is downward.
-        Standard Takács-flux at a boundary is min of the upper and lower
-        layer fluxes, with a threshold-based suppression below X_threshold.
-        """
-        v_above = self._settling_velocity(X_above, X_min)
-        v_below = self._settling_velocity(X_below, X_min)
-        f_above = v_above * X_above
-        f_below = v_below * X_below
-        # Standard minimum-flux assumption (Takács 1991 eq. 11).
-        flux = jnp.minimum(f_above, f_below)
-        # Suppress the flux through layers above the feed when X is below
-        # the threshold (prevents back-mixing into the clarification zone).
-        return jnp.where(X_above < self._X_threshold, f_above, flux)
-
     def compute_outputs(
         self,
         t: jnp.ndarray,
@@ -271,26 +252,38 @@ class TakacsClarifier:
         # Per-layer TSS and settling velocities.
         tss_per_layer = jnp.sum(layered * factors[None, :], axis=1)  # (n_layers,)
 
-        # Interface settling-flux density at boundary i (between layers i
-        # and i+1). Downward positive. Computed pairwise via vectorised
-        # min-flux assumption.
-        tss_above = tss_per_layer[1:]   # (n_layers - 1,)
-        tss_below = tss_per_layer[:-1]  # (n_layers - 1,)
-        v_above = self._settling_velocity(tss_above, X_min)
-        v_below = self._settling_velocity(tss_below, X_min)
-        f_above = v_above * tss_above
-        f_below = v_below * tss_below
-        # Pure Takács minimum-flux assumption (1991 paper). Both layers'
-        # potential settling fluxes are computed; the boundary takes the
-        # limiting (smaller) one. This keeps the model self-stabilising:
-        # when the layer below grows very dense, its settling velocity
-        # collapses, and the inflowing flux from above is throttled to
-        # match — preventing unbounded accumulation in the underflow.
-        flux_tss = jnp.minimum(f_above, f_below)  # (n_layers - 1,)
+        # Interface settling-flux density at boundary i (between layer i below
+        # and layer i+1 above). Downward positive. ``f_above``/``f_below`` are
+        # the two layers' potential settling fluxes v_s(X)*X.
+        tss_above = tss_per_layer[1:]   # upper layer at each interface (n-1,)
+        tss_below = tss_per_layer[:-1]  # lower (receiving) layer at each interface
+        f_above = self._settling_velocity(tss_above, X_min) * tss_above
+        f_below = self._settling_velocity(tss_below, X_min) * tss_below
 
-        # Per-species settling flux: tss_flux × (X_species_above / TSS_above) × factor.
-        species_ratio_above = layered[1:, :] / (tss_above[:, None] + 1e-12)
-        flux_per_species = flux_tss[:, None] * species_ratio_above * factors[None, :]
+        # Takács flux limiting (1991). The boundary flux is the limiting
+        # (minimum) of the two layers' fluxes -- EXCEPT in the clarification
+        # zone (interfaces above the feed), where the downward flux out of the
+        # upper layer is NOT limited by the layer below while that layer is
+        # dilute (<= X_threshold). Solids then settle freely out of the clear
+        # zone instead of being held up by the min-flux rule, which is what
+        # keeps the effluent clean; below the feed the min-flux rule applies
+        # everywhere so a dense sludge blanket self-limits its own loading.
+        min_flux = jnp.minimum(f_above, f_below)
+        interface_idx = jnp.arange(self.n_layers - 1)
+        is_clarification = interface_idx >= self.feed_layer        # static bool
+        below_threshold = tss_below <= self._X_threshold
+        flux_tss = jnp.where(is_clarification & below_threshold, f_above, min_flux)
+
+        # Per-species settling flux (in each species' own units). All
+        # particulates in a layer settle at the same bulk velocity, so species
+        # k's flux is the interface TSS flux apportioned by the upper (source)
+        # layer's composition: flux_tss * X_k(upper) / TSS(upper). No extra TSS
+        # factor -- multiplying by the factor would give the species' TSS flux,
+        # not its native flux, and mis-scale settling. Summing
+        # flux_per_species * factor over species recovers flux_tss exactly, so
+        # total settleable solids are conserved.
+        species_frac_above = layered[1:, :] / (tss_above[:, None] + 1e-12)
+        flux_per_species = flux_tss[:, None] * species_frac_above
         # (n_layers - 1, n_part) — downward positive, at interface i between layers i and i+1.
 
         # Convection. Use jnp.zeros((n_layers, n_part)) for "no flux at top/bottom".

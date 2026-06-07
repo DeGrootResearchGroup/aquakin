@@ -426,6 +426,7 @@ class Plant:
         atol: Union[float, jnp.ndarray] = 1e-9,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
         dtmax: Optional[float] = None,
+        max_steps: int = 100_000,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
 
@@ -447,6 +448,11 @@ class Plant:
             values uncapped, and capping ``dtmax`` to a small multiple of the
             fastest reaction timescale restores finite gradients (same as the
             reactor ``dtmax``; see the stiff-network discussion in CLAUDE.md).
+        max_steps : int, optional
+            Maximum number of internal solver steps (default 100000). Increase
+            it for stiff, long-horizon plants -- notably BSM1 with the Takács
+            clarifier, whose 10-layer settling dynamics need a larger budget than
+            the stateless ``IdealClarifier``.
 
         Returns
         -------
@@ -492,5 +498,6 @@ class Plant:
             atol=atol_eff,
             adjoint=adjoint,
             dtmax=dtmax,
+            max_steps=max_steps,
         )
         return PlantSolution(t=sol.ts, state=sol.ys, plant=self)

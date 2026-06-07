@@ -112,6 +112,58 @@ def test_overall_mass_balance(asm1):
     assert mass_out == pytest.approx(mass_in, rel=0.15)
 
 
+def test_takacs_blanket_profile_and_clarification(asm1):
+    """At a realistic (BSM1) solids loading the corrected Takács model must
+    build a monotone sludge blanket (dense bottom, clear top), clarify the
+    effluent strongly, thicken the underflow, and conserve solids tightly.
+
+    This exercises the clarification-zone flux limiting (without it the effluent
+    is poorly clarified) and the per-species flux apportioning (settling moves
+    each species at the bulk velocity, conserving total settleable solids)."""
+    from aquakin.plant.metrics import derived_TSS
+    from aquakin.plant.streams import Stream
+
+    C = asm1.default_concentrations()
+    feed = {"XB_H": 2200.0, "XB_A": 120.0, "XS": 80.0, "XI": 1100.0,
+            "XP": 600.0, "XND": 5.0}
+    for s, v in feed.items():
+        C = C.at[asm1.species_index[s]].set(v)
+    Q_in, overflow = 36892.0, 18061.0   # ~BSM1 clarifier loading
+
+    plant = Plant("clar_load")
+    clar = TakacsClarifier(name="clar", network=asm1, area=1500.0,
+                           height=4.0, overflow_Q=overflow)
+    plant.add_unit(clar)
+    plant.add_influent("feed", InfluentSeries(
+        t=jnp.asarray([0.0, 50.0]), Q=jnp.full((2,), Q_in),
+        C=jnp.stack([C, C]), network=asm1))
+    plant.connect(None, "feed", "clar", "inlet")
+    sol = plant.solve(t_span=(0.0, 5.0), t_eval=jnp.asarray([0.0, 5.0]),
+                      rtol=1e-5, atol=1e-3, max_steps=200_000)
+    assert jnp.all(jnp.isfinite(sol.state))
+
+    st0, sz = plant._state_layout["clar"]
+    lay = sol.state[-1, st0:st0 + sz].reshape((clar.n_layers, clar._n_part))
+    tss = jnp.sum(lay * jnp.asarray(clar._part_tss_factors), axis=1)  # bottom->top
+    # A settled blanket: bottom much denser than top, monotone non-increasing up.
+    assert float(tss[0]) > 10.0 * float(tss[-1])
+    assert bool(jnp.all(jnp.diff(tss) <= 1e-6))
+
+    out = clar.compute_outputs(
+        jnp.asarray(5.0), sol.state[-1, st0:st0 + sz],
+        {"inlet": Stream(Q=jnp.asarray(Q_in), C=C, network=asm1)},
+        plant.default_parameters())
+    feed_tss = float(derived_TSS(C, asm1))
+    eff_tss = float(derived_TSS(out["overflow"].C, asm1))
+    und_tss = float(derived_TSS(out["underflow"].C, asm1))
+    assert eff_tss < 0.05 * feed_tss       # strongly clarified effluent
+    assert und_tss > 1.5 * feed_tss        # thickened underflow
+    # Tight solids mass balance (corrected apportioning conserves TSS).
+    mass_in = Q_in * feed_tss
+    mass_out = overflow * eff_tss + (Q_in - overflow) * und_tss
+    assert mass_out == pytest.approx(mass_in, rel=0.03)
+
+
 def test_no_inflow_no_dynamics(asm1):
     """Initially the clarifier is at uniform default concentrations. With
     zero inflow (Q=0) and zero overflow, the clarifier should reach a
