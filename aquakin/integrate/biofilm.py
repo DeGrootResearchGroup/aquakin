@@ -18,13 +18,14 @@ diffusion--reaction system:
   ``D_eff`` per species) and exchange with the bulk across an external boundary
   layer (mass-transfer coefficient ``k_L``). They also react in every
   compartment.
-- **Particulates** (biomass and particulate substrate) do not diffuse and are
-  **held fixed** in this version: a mature biofilm grown over months is
-  effectively at steady state over a short experiment, so its biomass
-  distribution and its particulate-substrate inventory are treated as a
-  sustained, non-depleting source. This is the "fixed stratified biomass"
-  approximation; it makes hydrolysis of a particulate pool a continuous source
-  rather than a draining batch reservoir.
+- **Particulates** (biomass and particulate substrate) do not diffuse. Whether
+  each one is *held fixed* (net rate zeroed -- a sustained, non-depleting
+  "mature biofilm" source/sink) or *evolves* (grows, decays, drains) is a
+  separate choice governed by ``fixed_mask`` (see below), decoupled from
+  diffusion. The default holds every particulate fixed; but a reactive
+  particulate (a draining substrate pool, a growing biomass, elemental sulfur,
+  precipitated FeS) must be left out of ``fixed_mask`` so it reacts -- otherwise
+  it becomes a non-depleting source/sink and silently breaks mass balance.
 
 The same :class:`~aquakin.core.network.CompiledNetwork` runs in every
 compartment --- the point is that identical chemistry behaves differently once
@@ -32,10 +33,18 @@ depth is resolved. A network intended for this reactor should express its rates
 per unit volume with the local biomass as an explicit reactant (so a compartment
 with little biomass carries little rate), rather than lumping the biofilm into an
 area-to-volume multiplier.
+
+The diffusion operator conserves the volume-weighted total exactly. Element
+(COD/S/N) conservation across reactions is exact only when the network's
+``positivity_limiter`` is *off*: the limiter throttles a species' net rate near
+zero independently of its reaction partners, so it trades a small (~1e-3)
+mass-balance residual for guaranteed positivity. Per-reaction stoichiometric
+balance (checked by ``aquakin.utils.balance``) is unaffected.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 
@@ -189,13 +198,18 @@ class BiofilmReactor:
         Adjoint strategy (see :class:`~aquakin.integrate.batch.BatchReactor`).
     dtmax : float, optional
         Maximum integrator step (see :class:`~aquakin.integrate.batch.BatchReactor`).
+    max_steps : int, optional
+        Maximum number of solver steps (default 100000). A stiff per-layer-biomass
+        network with a tight ``dtmax`` can exceed the default; raise this if the
+        solve raises a max-steps error.
 
     Notes
     -----
     The state is a ``(n_layers + 1, n_species)`` array: row 0 is the bulk, rows
     1..``n_layers`` are the biofilm layers from surface to wall. The wall is a
-    no-flux boundary. Particulate rows are held fixed (zero net rate) under the
-    mature-biofilm assumption.
+    no-flux boundary. Species in ``fixed_mask`` have their net rate zeroed
+    everywhere (held fixed); all others evolve. Diffusion is governed separately
+    by ``soluble_mask``.
     """
 
     def __init__(
@@ -216,6 +230,7 @@ class BiofilmReactor:
         atol: float = 1e-9,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
         dtmax: Optional[float] = None,
+        max_steps: int = 100_000,
     ) -> None:
         conditions.validate_required(network.conditions_required)
         if n_layers < 1:
@@ -234,6 +249,7 @@ class BiofilmReactor:
         self.atol = float(atol)
         self.adjoint = adjoint
         self.dtmax = dtmax
+        self.max_steps = int(max_steps)
 
         n = network.n_species
         if soluble_mask is None:
@@ -247,6 +263,7 @@ class BiofilmReactor:
         # Which species are held fixed (net rate zeroed). Decoupled from
         # diffusion: a reactive particulate diffuses (soluble_mask False) yet must
         # still react (fixed_mask False). Default: every particulate fixed.
+        fixed_defaulted = fixed_mask is None
         if fixed_mask is None:
             fixed_mask = ~self.soluble_mask
         self.fixed_mask = jnp.asarray(fixed_mask, dtype=bool)
@@ -254,6 +271,29 @@ class BiofilmReactor:
             raise ValueError(
                 f"fixed_mask must have shape ({n},); got {self.fixed_mask.shape}"
             )
+        # Footgun guard: the default freezes every particulate, which is wrong for
+        # a REACTIVE particulate (one that some reaction produces/consumes) -- a
+        # frozen reactive particulate becomes a non-depleting source/sink and
+        # silently breaks mass balance (e.g. elemental sulfur feeding a sulfate
+        # source). Only warn for the default; an explicit fixed_mask is a
+        # deliberate choice (a particulate may be frozen on purpose as a sustained
+        # "mature biofilm" source).
+        if fixed_defaulted:
+            stoich = network.compute_stoich(network.default_parameters())
+            reactive = jnp.any(stoich != 0.0, axis=0)            # (n_species,)
+            frozen_reactive = reactive & self.fixed_mask
+            offenders = [s for s, f in zip(network.species,
+                                           list(map(bool, frozen_reactive))) if f]
+            if offenders:
+                warnings.warn(
+                    "BiofilmReactor is holding reactive particulate(s) "
+                    f"{offenders} fixed by the default fixed_mask: their reactions "
+                    "are zeroed everywhere, so they act as non-depleting "
+                    "source/sinks and can break mass balance. Pass an explicit "
+                    "fixed_mask that leaves reactive particulates free (only inert "
+                    "biomass/solids held fixed).",
+                    stacklevel=2,
+                )
 
         # Per-reaction phase mask: which reactions are biofilm processes (run in
         # the layers only) vs bulk/chemical (run in the bulk only). ``None`` ->
@@ -376,6 +416,7 @@ class BiofilmReactor:
         # inside the jit below.
         network = self.network
         rtol, atol, adjoint, dtmax = self.rtol, self.atol, self.adjoint, self.dtmax
+        max_steps = self.max_steps
         fixed_mask = self.fixed_mask            # (n_species,)
         biofilm_mask = self._biofilm_mask       # (n_reactions,) or None
         D, kL, dz = self._D, self._kL, self._dz
@@ -418,6 +459,7 @@ class BiofilmReactor:
                     t0=t0, t1=t1, y0=y0, args=params,
                     saveat=diffrax.SaveAt(ts=t_eval),
                     rtol=rtol, atol=atol, adjoint=adjoint, dtmax=dtmax,
+                    max_steps=max_steps,
                 )
                 return sol.ts, sol.ys
             return _solve
@@ -429,6 +471,7 @@ class BiofilmReactor:
                 t0=t0, t1=t1, y0=y0, args=params,
                 saveat=diffrax.SaveAt(t1=True),
                 rtol=rtol, atol=atol, adjoint=adjoint, dtmax=dtmax,
+                max_steps=max_steps,
             )
             return sol.ts, sol.ys
         return _solve

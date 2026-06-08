@@ -44,17 +44,24 @@ all reactions everywhere), a stratified initial state (high ``X_BH`` in the
 layers, low in the bulk), and ``fixed_mask`` holding only the truly inert solids
 (``X_I``); ``X_BH`` then grows/decays and the gradient evolves.
 
-Scale note: the lumped areal factor was ``{A_V} = 1/thickness ~ 1250`` per layer,
-so seeding the biofilm layers with ``X_BH ~ 1250`` keeps the converted
-``[X_BH]``-scaled rates near the original areal magnitudes; the rate constants
-are nonetheless areal-calibrated and a re-calibration of this variant is
-expected.
+Scale note (IMPORTANT): this conversion does NOT preserve the original rate
+magnitudes, and the rate constants MUST be re-calibrated before any quantitative
+use. The lumped biofilm activity was ``eps*{X_BF}*{A_V}`` with the base defaults
+``eps=0.15, X_BF=10, A_V=56.7`` (so ~85 for hydrolysis/fermentation; ~56.7 for
+the bare-``{A_V}`` sulfur/methane terms), whereas a biofilm-density biomass seed
+is O(1e3) gCOD/m^3 -- so the converted ``[X_BH]``-scaled rates are inflated by
+~1-2 orders of magnitude. Only the PRODUCT (areal rate constant x biofilm biomass
+density) is grounded by the lumped calibration, not the split; the biomass
+density and the rate constant are confounded. Treat absolute concentrations from
+this variant as uncalibrated and rely only on qualitative penetration /
+stratification behaviour until it is re-calibrated against the data.
 
 Run from this directory:  python _make_khalil_balanced_biofilm_biomass.py
 """
 from __future__ import annotations
 
 import os
+import re
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -126,6 +133,26 @@ def main():
     names = [r["name"] for r in net["reactions"]]
     assert len(names) == len(set(names)), "duplicate reaction names after suffix strip"
 
+    # Prune network-level parameters orphaned by the transform. Dropping the four
+    # biofilm growth duplicates orphans their areal rate constants (k_12_no,
+    # k_12_o2, k_sf), and inlining bio_hf orphans eps. A dead but calibratable
+    # parameter is a trap (e.g. k_12_no is in the lumped model's free-rate list),
+    # so remove any network-level parameter no longer referenced by a rate, a
+    # string stoichiometry coefficient, or an expression.
+    referenced = set()
+    for rx in net["reactions"]:
+        referenced |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", rx["rate"]))
+        for v in rx.get("stoichiometry", {}).values():
+            if isinstance(v, str):
+                referenced |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", v))
+    for v in (net.get("expressions") or {}).values():
+        referenced |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", v))
+    n_pruned = 0
+    if isinstance(net.get("parameters"), dict):
+        for pname in [p for p in net["parameters"] if p not in referenced]:
+            del net["parameters"][pname]
+            n_pruned += 1
+
     with open(OUT, "w") as f:
         f.write("# Auto-generated from wats_sewer_khalil_paper_balanced.yaml by "
                 "_make_khalil_balanced_biofilm_biomass.py -- do not edit by hand.\n")
@@ -134,7 +161,7 @@ def main():
     print(f"wrote {os.path.basename(OUT)} "
           f"({len(net['reactions'])} reactions, {len(net['species'])} species; "
           f"dropped {n_drop} growth duplicates, converted {n_av} {{A_V}} + "
-          f"{n_hf} bio_hf rates to {LOCAL_BIOMASS})")
+          f"{n_hf} bio_hf rates to {LOCAL_BIOMASS}, pruned {n_pruned} dead params)")
     biomass_rxns = [r["name"] for r in net["reactions"] if "[X_BH]" in r["rate"]]
     print(f"  reactions on [X_BH] ({len(biomass_rxns)}): {biomass_rxns}")
 

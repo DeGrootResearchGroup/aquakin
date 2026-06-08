@@ -79,10 +79,14 @@ def test_variant_solves_and_stratifies(variant, biofilm_rxns):
         variant.species_index["S_NO"]
     ].set(15.0)
     cond = aquakin.SpatialConditions.uniform(1, A_V=1.0 / L_F, X_BF=10.0, pH=7.5)
+    # This areal {A_V} variant intentionally holds every particulate fixed (the
+    # "mature biofilm" lumped approximation); pass it explicitly so the test
+    # documents the choice and does not trip the reactive-particulate warning.
+    fixed = jnp.array([s.startswith("X") for s in variant.species])
     bio = aquakin.BiofilmReactor(
         variant, cond, n_layers=6, thickness=L_F, area_per_volume=A_V_LUMPED,
         diffusivity=1e-4, boundary_layer=1e-4, biofilm_reactions=biofilm_rxns,
-        dtmax=3e-5,
+        fixed_mask=fixed, dtmax=3e-5,
     )
     sol = bio.solve(C0, variant.default_parameters(), t_span=(0.0, 5.0 / 24.0))
     assert bool(jnp.all(jnp.isfinite(sol.profile)))

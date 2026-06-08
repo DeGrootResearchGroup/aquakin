@@ -129,9 +129,6 @@ parameters:
       range:
       - 0.5
       - 1.0
-  k_12_o2:
-    value: 18.0
-    units: gO2^0.5/m/d
   eta_no:
     value: 0.6
     units: '-'
@@ -145,18 +142,6 @@ parameters:
   k_no:
     value: 2.0
     units: gN/m3
-  k_12_no:
-    value: 7.95
-    units: gN/m2/d
-    prior:
-      mean: 7.95
-      std: 2.0
-    bounds:
-    - 1.0
-    - 30.0
-  k_sf:
-    value: 5.0
-    units: gCOD/m3
   K_NO_f:
     value: 14.4
     units: gN/m3
@@ -197,13 +182,6 @@ parameters:
       range:
       - 0.01
       - 0.5
-  eps:
-    value: 0.15
-    units: '-'
-    prior:
-      range:
-      - 0.1
-      - 0.2
   q_ferm:
     value: 3.0
     units: 1/d

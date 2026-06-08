@@ -854,20 +854,34 @@ aquakin/
 │   │   #   BiofilmReactor with biofilm_reactions=None, a stratified C0, and
 │   │   #   fixed_mask holding only the inert solids; the biomass gradient then
 │   │   #   evolves. INCREMENT 1 (heterotroph): the sulfur/methane processes are
-│   │   #   interim-coupled to [X_BH] pending their own functional-group biomass
-│   │   #   (X_SRB, methanogens, S-oxidizers). FINDING (JRN-055): with a real
-│   │   #   per-layer biomass gradient, depth resolution still does NOT reproduce
-│   │   #   the measured bulk VFA plateau, across biofilm thickness 0.8-3 mm. Where
-│   │   #   nitrate penetrates, denitrification consumes VFA; in the nitrate-free
-│   │   #   deep zone, methanogenesis (nitrate-inhibited elsewhere) consumes it --
-│   │   #   and even with methanogenesis disabled the deep VFA accumulates to the
-│   │   #   Jiang (2009) Fig 8 mid-film peak (~20 gCOD/m3) yet cannot EXPORT across
-│   │   #   the denitrifying zone to the bulk (bulk VFA <=0.2, reproducing Jiang's
-│   │   #   bulk S_A ~ 0). So the measured bulk VFA plateau is NOT a biofilm-depth
-│   │   #   phenomenon; it is a bulk-phase effect (rapidly mobilized biofilm
-│   │   #   substrate fermented in the bulk), which is exactly what the lumped
-│   │   #   model's elevated effective k_h2 represents -- not a lumping artifact
-│   │   #   masking missing depth structure.
+│   │   #   interim-coupled to [X_BH] -- a stand-in pending their own
+│   │   #   functional-group biomass (X_SRB, methanogens, S-oxidizers), which in
+│   │   #   reality stratify DIFFERENTLY from heterotrophs (Sun 2014: SRB outer,
+│   │   #   methanogens inner). So NO sulfur/sulfate conclusions may be drawn from
+│   │   #   this increment -- only the heterotroph/VFA result. FINDING (JRN-055,
+│   │   #   increment 1, reviewer-checked): with a real per-layer biomass gradient,
+│   │   #   depth resolution still does NOT reproduce the measured bulk VFA plateau
+│   │   #   (flat ~13 mgCOD/L held while nitrate->0), across biofilm thickness
+│   │   #   0.8-3 mm. There is a hard VFA-vs-nitrate trade-off: every configuration
+│   │   #   that consumes the dosed nitrate (as the data require) crashes bulk VFA
+│   │   #   to ~0, because VFA is consumed wherever nitrate persists
+│   │   #   (denitrification) and, in any nitrate-free deep zone, by methanogenesis
+│   │   #   (nitrate-inhibited elsewhere). [CORRECTION: an earlier note here claimed
+│   │   #   the deep VFA is "trapped behind the denitrifying zone and cannot export
+│   │   #   to the bulk (bulk VFA <=0.2), reproducing Jiang Fig 8". That was
+│   │   #   OVERSTATED -- a transient of the donor-limited regime: in the CLOSED
+│   │   #   batch the dosed 30 mgN is not globally cleared within 5 h, so the outer
+│   │   #   denitrifying zone persists and consumes exported VFA; it is not a steady
+│   │   #   export barrier, and the closed batch does not reproduce Jiang's
+│   │   #   continuous-flow Fig 8 (deep S_A peak + bulk S_A~0) as a SIMULTANEOUS
+│   │   #   state.] The robust conclusion is the negative empirical one: sparing
+│   │   #   VFA enough to match the plateau requires producing enough donor that
+│   │   #   nitrate clears early -- i.e. the same supra-literature hydrolysis the
+│   │   #   lumped model needs -- so the plateau is consistent with a bulk-phase
+│   │   #   mobilization effect, not with biofilm depth structure. A genuinely
+│   │   #   decisive test (deferred) is to run the model continuous-feed / CSTR-
+│   │   #   coupled (sustained nitrate, as in Jiang/Sun and the real sewer) rather
+│   │   #   than as the closed pump-off batch.
 │   │
 │   └── utils/
 │       ├── latex.py                 # AST -> LaTeX rate expressions

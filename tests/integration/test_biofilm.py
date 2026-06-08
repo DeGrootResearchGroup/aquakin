@@ -116,6 +116,43 @@ def test_reactive_particulate_evolves_and_conserves(net, cond):
     assert tot1 == pytest.approx(tot0, rel=1e-5)
 
 
+def test_default_fixed_mask_warns_on_reactive_particulate(net, cond):
+    # The toy network A -> B; mark B a (reactive) particulate via soluble_mask.
+    # The DEFAULT fixed_mask freezes every particulate, which would silently turn
+    # the reactive B into a non-depleting sink -> the reactor must warn. An
+    # explicit fixed_mask is a deliberate choice and must NOT warn.
+    soluble = jnp.array([True, False])  # A diffuses, B is particulate
+    with pytest.warns(UserWarning, match="reactive particulate"):
+        _reactor(net, cond, soluble_mask=soluble)  # fixed_mask defaulted
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.simplefilter("error")  # any warning would raise
+        _reactor(net, cond, soluble_mask=soluble,
+                 fixed_mask=jnp.array([False, False]))  # explicit -> no warning
+
+
+def test_max_steps_is_enforced(net, cond):
+    # ``max_steps`` is a construction-time attribute threaded into BOTH solve
+    # paths (with and without t_eval). A budget far too small for the adaptive
+    # solve makes it fail; the generous default completes finite. (This also
+    # guards the no-t_eval path, where the knob was once silently dropped.)
+    C0 = jnp.array([1.0, 0.0])
+    p = net.default_parameters()
+    assert _reactor(net, cond, max_steps=7).max_steps == 7
+
+    r_tight = _reactor(net, cond, max_steps=4)
+    capped = False
+    try:
+        sol = r_tight.solve(C0, p, t_span=(0.0, 5.0))     # no t_eval path
+        capped = not np.all(np.isfinite(np.asarray(sol.C)))
+    except Exception:
+        capped = True
+    assert capped
+
+    sol = _reactor(net, cond, max_steps=100_000).solve(C0, p, t_span=(0.0, 5.0))
+    assert np.all(np.isfinite(np.asarray(sol.C)))
+
+
 def test_well_mixed_limit_matches_batch(net, cond):
     # Started uniform with a uniform reaction, every compartment stays identical
     # and transport is zero, so the bulk must follow the batch first-order decay.
