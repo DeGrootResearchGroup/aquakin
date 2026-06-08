@@ -61,6 +61,61 @@ def test_pure_diffusion_conserves_and_equilibrates(net, cond):
     assert total1 == pytest.approx(total0, rel=1e-4)
 
 
+def test_boundary_diffusivity_sets_transfer_and_defaults(net, cond):
+    # The external boundary layer is liquid: its mass-transfer coefficient k_L
+    # must come from the supplied (free-water) boundary diffusivity, not the
+    # density-reduced in-biofilm value. Passing it equal to ``diffusivity``
+    # reproduces the default (None) behaviour; a larger value speeds bulk<->film
+    # exchange.
+    d_film = 1e-4
+    r_default = _reactor(net, cond, diffusivity=d_film)
+    r_equal = _reactor(net, cond, diffusivity=d_film, boundary_diffusivity=d_film)
+    r_fast = _reactor(net, cond, diffusivity=d_film, boundary_diffusivity=10 * d_film)
+    # k_L = D_bl / boundary_layer, applied to solubles only.
+    sidx = net.species_index["A"]  # A is soluble in the toy network
+    assert float(r_default._kL[sidx]) == pytest.approx(float(r_equal._kL[sidx]))
+    assert float(r_fast._kL[sidx]) == pytest.approx(10 * float(r_default._kL[sidx]))
+
+    # A faster boundary layer equilibrates the bulk with the film sooner. Bulk
+    # full, film empty, reaction off: the bulk drains faster with the larger k_L.
+    p = net.default_parameters().at[net.param_index["A_to_B.k"]].set(0.0)
+    n_comp = r_default.n_layers + 1
+    y0 = jnp.zeros((n_comp, net.n_species)).at[0, sidx].set(1.0)
+    bulk_default = float(r_default.solve(y0, p, t_span=(0.0, 0.5)).C_named("A")[-1])
+    bulk_fast = float(r_fast.solve(y0, p, t_span=(0.0, 0.5)).C_named("A")[-1])
+    assert bulk_fast < bulk_default
+
+
+def test_reactive_particulate_evolves_and_conserves(net, cond):
+    # A reactive particulate does not diffuse (soluble_mask False) but must still
+    # react (fixed_mask False) -- the two roles are decoupled. Freezing such a
+    # species (the old default) turns it into a non-depleting source/sink and
+    # breaks mass balance. Here B is made a non-diffusing reactive product of
+    # A -> B; with B reactive it accumulates, frozen it cannot.
+    ia, ib = net.species_index["A"], net.species_index["B"]
+    soluble = jnp.array([True, False])  # A diffuses, B does not
+    p = net.default_parameters()  # A_to_B.k > 0
+    n_comp = cond_layers = 5
+    y0 = jnp.zeros((n_comp, net.n_species)).at[:, ia].set(1.0)
+
+    reactive = _reactor(net, cond, n_layers=n_comp - 1,
+                        soluble_mask=soluble, fixed_mask=jnp.array([False, False]))
+    frozen = _reactor(net, cond, n_layers=n_comp - 1,
+                      soluble_mask=soluble, fixed_mask=jnp.array([False, True]))
+    sr = reactive.solve(y0, p, t_span=(0.0, 1.0))
+    sf = frozen.solve(y0, p, t_span=(0.0, 1.0))
+    # Reactive B grows from zero; frozen B stays put.
+    assert float(sr.profile[-1, 0, ib]) > 0.05
+    assert float(sf.profile[-1, 0, ib]) == pytest.approx(0.0, abs=1e-12)
+    # A -> B is 1:1, so the volume-weighted total A+B is conserved when B reacts.
+    dz = reactive.thickness / reactive.n_layers
+    w = np.array([1.0 / reactive.area_per_volume] + [dz] * reactive.n_layers)
+    tot0 = float(np.sum(w * np.asarray(y0[:, ia] + y0[:, ib])))  # from the IC
+    tot1 = float(np.sum(w * (np.asarray(sr.profile[-1, :, ia])
+                             + np.asarray(sr.profile[-1, :, ib]))))
+    assert tot1 == pytest.approx(tot0, rel=1e-5)
+
+
 def test_well_mixed_limit_matches_batch(net, cond):
     # Started uniform with a uniform reaction, every compartment stays identical
     # and transport is zero, so the bulk must follow the batch first-order decay.

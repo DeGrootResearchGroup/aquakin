@@ -78,6 +78,10 @@ _MODELS = [
     "wats_sewer_khalil_paper_balanced_directsulfate",
     "wats_sewer_khalil_paper_balanced_combined",
     "wats_sewer_khalil_paper_balanced_stopatS0",
+    # Per-layer-biomass biofilm variant: biofilm processes driven by local
+    # volumetric [X_BH] instead of the areal {A_V} lump. Same stoichiometry as
+    # the balanced base, so it conserves COD/S/Fe identically.
+    "wats_sewer_khalil_paper_balanced_biofilm_biomass",
 ]
 
 # Nitrification / autotroph decay oxidise nitrogen (NH3 -> NO3), which is not

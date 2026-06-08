@@ -147,11 +147,31 @@ class BiofilmReactor:
     boundary_layer : float
         External boundary-layer thickness ``L_bl`` (metres) across which the
         bulk exchanges with the surface layer. The per-species mass-transfer
-        coefficient is ``k_L = D_eff / L_bl``.
+        coefficient is ``k_L = D_bl / L_bl``.
+    boundary_diffusivity : float or jnp.ndarray, optional
+        Diffusivity used in the external boundary layer (m^2/day). The boundary
+        layer is *liquid* (outside the biofilm matrix), so it should carry the
+        free-water diffusivity ``D_w``, not the density-reduced in-biofilm
+        ``D_eff``. Same shape rules as ``diffusivity``. ``None`` (default) reuses
+        ``diffusivity`` for backward compatibility, which understates the
+        bulk<->film transfer by the biofilm reduction factor; pass the water
+        values to model the boundary layer correctly.
     soluble_mask : jnp.ndarray, optional
-        Boolean ``(n_species,)`` mask: ``True`` for solubles (diffuse and
-        evolve), ``False`` for particulates (held fixed everywhere). Defaults to
-        the ``S``/``X`` name heuristic.
+        Boolean ``(n_species,)`` mask: ``True`` for solubles (which diffuse),
+        ``False`` for particulates (which do not). Defaults to the ``S``/``X``
+        name heuristic. This controls **diffusion only** --- whether a species is
+        held fixed is a separate question governed by ``fixed_mask``.
+    fixed_mask : jnp.ndarray, optional
+        Boolean ``(n_species,)`` mask: ``True`` for species **held fixed** (net
+        rate zeroed everywhere --- the "mature biofilm" sustained source/sink),
+        ``False`` for species that evolve. Defaults to ``~soluble_mask`` (every
+        particulate held fixed), which is correct for *inert* particulates
+        (biomass, inert solids) but **wrong for reactive particulates** that do
+        not diffuse yet must still react --- e.g. elemental sulfur or precipitated
+        FeS, whose inventory genuinely drains and fills. For such species pass a
+        ``fixed_mask`` that holds only the inert biomass/solids fixed and lets the
+        reactive particulates evolve; otherwise a held-fixed reactive particulate
+        becomes a non-depleting source/sink and silently breaks mass balance.
     biofilm_reactions : list of str or jnp.ndarray, optional
         Which reactions are biofilm processes --- they run in the biofilm
         **layers** only, never in the well-mixed bulk. Given as a list of
@@ -188,7 +208,9 @@ class BiofilmReactor:
         area_per_volume: float,
         diffusivity,
         boundary_layer: float,
+        boundary_diffusivity=None,
         soluble_mask: Optional[jnp.ndarray] = None,
+        fixed_mask: Optional[jnp.ndarray] = None,
         biofilm_reactions=None,
         rtol: float = 1e-6,
         atol: float = 1e-9,
@@ -222,6 +244,17 @@ class BiofilmReactor:
                 f"soluble_mask must have shape ({n},); got {self.soluble_mask.shape}"
             )
 
+        # Which species are held fixed (net rate zeroed). Decoupled from
+        # diffusion: a reactive particulate diffuses (soluble_mask False) yet must
+        # still react (fixed_mask False). Default: every particulate fixed.
+        if fixed_mask is None:
+            fixed_mask = ~self.soluble_mask
+        self.fixed_mask = jnp.asarray(fixed_mask, dtype=bool)
+        if self.fixed_mask.shape != (n,):
+            raise ValueError(
+                f"fixed_mask must have shape ({n},); got {self.fixed_mask.shape}"
+            )
+
         # Per-reaction phase mask: which reactions are biofilm processes (run in
         # the layers only) vs bulk/chemical (run in the bulk only). ``None`` ->
         # every reaction runs in every compartment (a single-phase network).
@@ -249,7 +282,14 @@ class BiofilmReactor:
         # Particulates do not diffuse: zero their diffusivity regardless.
         self._D = jnp.where(self.soluble_mask, D, 0.0)          # (n_species,)
         self._dz = self.thickness / self.n_layers
-        self._kL = self._D / self.boundary_layer                # (n_species,)
+        # Boundary layer is liquid: use the free-water diffusivity if supplied,
+        # else fall back to the in-biofilm value (backward compatible).
+        if boundary_diffusivity is None:
+            D_bl = self._D
+        else:
+            D_bl = jnp.broadcast_to(jnp.asarray(boundary_diffusivity, dtype=float), (n,))
+            D_bl = jnp.where(self.soluble_mask, D_bl, 0.0)
+        self._kL = D_bl / self.boundary_layer                   # (n_species,)
         # Mid-point depth of each layer from the surface (for reporting).
         self._depth = (jnp.arange(self.n_layers) + 0.5) * self._dz
         self._jit_cache: dict = {}
@@ -336,7 +376,7 @@ class BiofilmReactor:
         # inside the jit below.
         network = self.network
         rtol, atol, adjoint, dtmax = self.rtol, self.atol, self.adjoint, self.dtmax
-        soluble_mask = self.soluble_mask        # (n_species,)
+        fixed_mask = self.fixed_mask            # (n_species,)
         biofilm_mask = self._biofilm_mask       # (n_reactions,) or None
         D, kL, dz = self._D, self._kL, self._dz
         area_per_volume = self.area_per_volume
@@ -363,8 +403,10 @@ class BiofilmReactor:
                 dydt = react + _diffusion_transport(
                     y, D, kL, dz, area_per_volume, n_species
                 )
-                # Particulates are held fixed (mature biofilm): zero their rate.
-                return jnp.where(soluble_mask[None, :], dydt, 0.0)
+                # Held-fixed species (mature-biofilm sustained sources/sinks)
+                # have their net rate zeroed; everything else evolves. Reactive
+                # particulates (D==0, not in fixed_mask) react but do not diffuse.
+                return jnp.where(fixed_mask[None, :], 0.0, dydt)
 
             return rhs
 
