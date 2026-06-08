@@ -796,6 +796,7 @@ aquakin/
 │   ├── integrate/
 │   │   ├── _common.py               # shared helpers (atol coercion, jit'd solve, Reactor Protocol)
 │   │   ├── batch.py                 # BatchReactor, BatchSolution
+│   │   ├── biofilm.py               # BiofilmReactor (layered 1-D diffusion-reaction)
 │   │   ├── pfr.py                   # PlugFlowReactor, PFRSolution
 │   │   ├── particle.py              # Track, ParticleTrackReactor, integrate_ensemble
 │   │   ├── cfd.py                   # CFDReactor (Option C runtime coupling)
@@ -912,6 +913,27 @@ reactor = aquakin.PlugFlowReactor(network, conditions, n_points, length, velocit
 solution = reactor.solve(C0, params)
 solution.x                           # (n_points,)
 solution.C                           # (n_points, n_species)
+
+# Layered biofilm reactor (1-D diffusion-reaction over biofilm depth)
+# Resolves the biofilm into n_layers between a well-mixed bulk and the (no-flux)
+# wall, so penetration-controlled processes are captured (an acceptor consumed in
+# the outer layers never reaches deep organisms; deep uptake is diffusion-limited)
+# -- the lumped area-to-volume reactor cannot represent this. Solubles diffuse
+# (Fick, D_eff) + exchange with the bulk across a boundary layer; particulates are
+# held fixed (the "mature biofilm" assumption: stable biomass + a sustained,
+# non-depleting particulate-substrate source). The same CompiledNetwork runs in
+# every compartment, so identical chemistry behaves differently once depth is
+# resolved (Wanner & Gujer 1986; Jiang et al. 2009; Sun et al. 2014). Species are
+# soluble (S*/sumS, diffuse) vs particulate (X*, fixed) by name, overridable via
+# soluble_mask. In the well-mixed limit it reduces exactly to BatchReactor.
+reactor = aquakin.BiofilmReactor(
+    network, conditions, n_layers=6, thickness=8e-4, area_per_volume=50.0,
+    diffusivity=1e-4, boundary_layer=1e-4)
+solution = reactor.solve(C0, params, t_span, t_eval)  # C0 (n_species,) or (n_layers+1, n_species)
+solution.C                           # (n_t, n_species) -- BULK (measurable) trajectory
+solution.profile                     # (n_t, n_layers+1, n_species) -- depth-resolved (0=bulk)
+solution.depth                       # (n_layers,) layer mid-depths from the surface
+solution.profile_named("S_NO")       # (n_t, n_layers+1) depth profile over time
 
 # Sensitivity and fitting
 sens = aquakin.sensitivity(reactor, C0, params, output_fn)

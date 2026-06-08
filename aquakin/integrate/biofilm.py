@@ -1,0 +1,342 @@
+"""Layered (1-D) biofilm reactor: depth-resolved diffusion--reaction.
+
+A lumped reactor (:class:`~aquakin.integrate.batch.BatchReactor`) applies the
+biofilm chemistry to a single well-mixed bulk concentration scaled by an
+area-to-volume ratio. That cannot represent processes that are controlled by how
+far a solute *penetrates* the biofilm --- e.g. an electron acceptor that is
+consumed in the outer layers and never reaches organisms deeper in, while those
+deep organisms keep turning over a substrate that diffuses in freely. Resolving
+the biofilm in the direction normal to the wall is required to capture this
+(Wanner & Gujer 1986; the 1-D multispecies sewer-biofilm model of Jiang et al.
+2009; the stratified sulfide/methane sewer biofilms of Sun et al. 2014).
+
+:class:`BiofilmReactor` discretises the biofilm into ``n_layers`` layers between
+a well-mixed bulk compartment and the (no-flux) wall, and integrates a
+diffusion--reaction system:
+
+- **Solubles** diffuse between adjacent layers (Fick's law, effective diffusivity
+  ``D_eff`` per species) and exchange with the bulk across an external boundary
+  layer (mass-transfer coefficient ``k_L``). They also react in every
+  compartment.
+- **Particulates** (biomass and particulate substrate) do not diffuse and are
+  **held fixed** in this version: a mature biofilm grown over months is
+  effectively at steady state over a short experiment, so its biomass
+  distribution and its particulate-substrate inventory are treated as a
+  sustained, non-depleting source. This is the "fixed stratified biomass"
+  approximation; it makes hydrolysis of a particulate pool a continuous source
+  rather than a draining batch reservoir.
+
+The same :class:`~aquakin.core.network.CompiledNetwork` runs in every
+compartment --- the point is that identical chemistry behaves differently once
+depth is resolved. A network intended for this reactor should express its rates
+per unit volume with the local biomass as an explicit reactant (so a compartment
+with little biomass carries little rate), rather than lumping the biofilm into an
+area-to-volume multiplier.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+import diffrax
+import jax
+import jax.numpy as jnp
+
+from aquakin.core.conditions import SpatialConditions
+from aquakin.core.network import CompiledNetwork
+from aquakin.integrate._common import _HasNamedSpecies, _run_diffeqsolve
+
+
+@dataclass
+class BiofilmSolution(_HasNamedSpecies):
+    """Solution returned by :meth:`BiofilmReactor.solve`.
+
+    Attributes
+    ----------
+    t : jnp.ndarray
+        Times at which the solution was recorded, shape ``(n_t,)``.
+    C : jnp.ndarray
+        **Bulk** concentration trajectory, shape ``(n_t, n_species)``. This is
+        the measurable (well-mixed liquid) signal; :meth:`C_named` reads it.
+    profile : jnp.ndarray
+        Full depth-resolved trajectory, shape ``(n_t, n_compartments,
+        n_species)``, where compartment 0 is the bulk and 1..``n_layers`` run
+        from the biofilm surface (adjacent to the bulk) to the wall.
+    depth : jnp.ndarray
+        Mid-point depth of each biofilm layer from the surface, shape
+        ``(n_layers,)`` (metres). Bulk has no depth and is omitted.
+    network : CompiledNetwork
+        The network that produced this solution.
+    """
+
+    t: jnp.ndarray
+    C: jnp.ndarray
+    profile: jnp.ndarray
+    depth: jnp.ndarray
+    network: CompiledNetwork
+
+    def profile_named(self, species: str) -> jnp.ndarray:
+        """Depth profile of one species over time, shape ``(n_t, n_compartments)``."""
+        if species not in self.network.species_index:
+            raise KeyError(
+                f"Unknown species '{species}'. Available: {self.network.species}"
+            )
+        return self.profile[:, :, self.network.species_index[species]]
+
+
+def _default_soluble_mask(network: CompiledNetwork) -> jnp.ndarray:
+    """Classify species as soluble (diffuses, evolves) vs particulate (fixed).
+
+    Heuristic for the WATS/ASM naming convention: soluble names start with
+    ``S`` (``S_*``, ``sumS``), particulate names start with ``X``. Callers can
+    override with an explicit mask.
+    """
+    return jnp.asarray(
+        [not s.startswith("X") for s in network.species], dtype=bool
+    )
+
+
+class BiofilmReactor:
+    """Stateless 1-D layered biofilm reactor (diffusion--reaction over depth).
+
+    Parameters
+    ----------
+    network : CompiledNetwork
+        Compiled reaction network, run in every compartment.
+    conditions : SpatialConditions
+        Condition fields. The same conditions are used in every compartment
+        (location ``loc_idx=0``).
+    n_layers : int
+        Number of biofilm layers between the bulk and the wall.
+    thickness : float
+        Total biofilm thickness ``L_f`` (metres). Layer thickness is
+        ``thickness / n_layers``.
+    area_per_volume : float
+        Biofilm-area-to-bulk-volume ratio ``A_V`` (m^2 biofilm per m^3 bulk,
+        i.e. 1/m). Sets how strongly the (small) biofilm exchange moves the
+        (large) bulk pool.
+    diffusivity : float or jnp.ndarray
+        Effective diffusivity ``D_eff`` of solubles inside the biofilm
+        (m^2/day). A scalar applies to every soluble; an array of shape
+        ``(n_species,)`` gives a per-species value (entries for particulates are
+        ignored). Particulates never diffuse.
+    boundary_layer : float
+        External boundary-layer thickness ``L_bl`` (metres) across which the
+        bulk exchanges with the surface layer. The per-species mass-transfer
+        coefficient is ``k_L = D_eff / L_bl``.
+    soluble_mask : jnp.ndarray, optional
+        Boolean ``(n_species,)`` mask: ``True`` for solubles (diffuse and
+        evolve), ``False`` for particulates (held fixed everywhere). Defaults to
+        the ``S``/``X`` name heuristic.
+    rtol, atol : float
+        Solver tolerances (scalar; applied across the whole layered state).
+    adjoint : diffrax.AbstractAdjoint, optional
+        Adjoint strategy (see :class:`~aquakin.integrate.batch.BatchReactor`).
+    dtmax : float, optional
+        Maximum integrator step (see :class:`~aquakin.integrate.batch.BatchReactor`).
+
+    Notes
+    -----
+    The state is a ``(n_layers + 1, n_species)`` array: row 0 is the bulk, rows
+    1..``n_layers`` are the biofilm layers from surface to wall. The wall is a
+    no-flux boundary. Particulate rows are held fixed (zero net rate) under the
+    mature-biofilm assumption.
+    """
+
+    def __init__(
+        self,
+        network: CompiledNetwork,
+        conditions: SpatialConditions,
+        *,
+        n_layers: int,
+        thickness: float,
+        area_per_volume: float,
+        diffusivity,
+        boundary_layer: float,
+        soluble_mask: Optional[jnp.ndarray] = None,
+        rtol: float = 1e-6,
+        atol: float = 1e-9,
+        adjoint: Optional[diffrax.AbstractAdjoint] = None,
+        dtmax: Optional[float] = None,
+    ) -> None:
+        conditions.validate_required(network.conditions_required)
+        if n_layers < 1:
+            raise ValueError(f"n_layers must be >= 1; got {n_layers}.")
+        if not (thickness > 0 and boundary_layer > 0 and area_per_volume > 0):
+            raise ValueError(
+                "thickness, boundary_layer and area_per_volume must be positive."
+            )
+        self.network = network
+        self.conditions = conditions
+        self.n_layers = int(n_layers)
+        self.thickness = float(thickness)
+        self.area_per_volume = float(area_per_volume)
+        self.boundary_layer = float(boundary_layer)
+        self.rtol = rtol
+        self.atol = float(atol)
+        self.adjoint = adjoint
+        self.dtmax = dtmax
+
+        n = network.n_species
+        if soluble_mask is None:
+            soluble_mask = _default_soluble_mask(network)
+        self.soluble_mask = jnp.asarray(soluble_mask, dtype=bool)
+        if self.soluble_mask.shape != (n,):
+            raise ValueError(
+                f"soluble_mask must have shape ({n},); got {self.soluble_mask.shape}"
+            )
+
+        D = jnp.broadcast_to(jnp.asarray(diffusivity, dtype=float), (n,))
+        # Particulates do not diffuse: zero their diffusivity regardless.
+        self._D = jnp.where(self.soluble_mask, D, 0.0)          # (n_species,)
+        self._dz = self.thickness / self.n_layers
+        self._kL = self._D / self.boundary_layer                # (n_species,)
+        # Mid-point depth of each layer from the surface (for reporting).
+        self._depth = (jnp.arange(self.n_layers) + 0.5) * self._dz
+        self._jit_cache: dict = {}
+
+    # -- transport ---------------------------------------------------------
+    def _transport(self, C: jnp.ndarray) -> jnp.ndarray:
+        """Diffusive transport term for the whole state, shape ``(n_comp, n_species)``.
+
+        ``C[0]`` is the bulk; ``C[1:]`` the layers (surface..wall). Returns the
+        per-compartment rate of change due to diffusion only. Particulate
+        columns are zero (``D == 0``).
+        """
+        bulk = C[0]                       # (n_species,)
+        layers = C[1:]                    # (n_layers, n_species)
+        dz = self._dz
+        # Internal interface fluxes between layer j and j+1 (g m^-2 d^-1),
+        # positive downward (toward the wall): D * (C_j - C_{j+1}) / dz.
+        if self.n_layers > 1:
+            f_internal = self._D[None, :] * (layers[:-1] - layers[1:]) / dz
+        else:
+            f_internal = jnp.zeros((0, self.network.n_species))
+        # Bulk <-> surface flux across the boundary layer (positive into film).
+        f_bs = self._kL * (bulk - layers[0])                    # (n_species,)
+        # Flux entering the top of each layer and leaving its bottom.
+        flux_in = jnp.concatenate([f_bs[None, :], f_internal], axis=0)
+        zero = jnp.zeros((1, self.network.n_species))
+        flux_out = jnp.concatenate([f_internal, zero], axis=0)  # wall: no flux out
+        d_layers = (flux_in - flux_out) / dz                    # (n_layers, n_species)
+        # Bulk loses the surface flux, scaled to the bulk volume by A_V.
+        d_bulk = -self.area_per_volume * f_bs                   # (n_species,)
+        return jnp.concatenate([d_bulk[None, :], d_layers], axis=0)
+
+    def solve(
+        self,
+        C0: jnp.ndarray,
+        params: jnp.ndarray,
+        t_span: tuple[float, float],
+        t_eval: Optional[jnp.ndarray] = None,
+        *,
+        conditions: Optional[SpatialConditions] = None,
+    ) -> BiofilmSolution:
+        """Integrate the layered biofilm over a time span.
+
+        Parameters
+        ----------
+        C0 : jnp.ndarray
+            Initial state. Either ``(n_species,)`` --- the same composition in
+            the bulk and every layer --- or ``(n_layers + 1, n_species)`` to set
+            the bulk and each layer explicitly (row 0 bulk, rows 1.. surface to
+            wall). The latter sets the stratified particulate (biomass) profile.
+        params : jnp.ndarray
+            Rate constant vector, shape ``(n_params,)``.
+        t_span : tuple of float
+            ``(t_start, t_end)`` integration interval.
+        t_eval : jnp.ndarray, optional
+            Times at which to record the solution. If ``None`` only the endpoint.
+        conditions : SpatialConditions, optional
+            Override the reactor conditions for this call.
+
+        Returns
+        -------
+        BiofilmSolution
+        """
+        params = jnp.asarray(params)
+        n = self.network.n_species
+        if params.shape != (self.network.n_params,):
+            raise ValueError(
+                f"params has shape {params.shape}, expected ({self.network.n_params},)"
+            )
+        C0 = jnp.asarray(C0)
+        n_comp = self.n_layers + 1
+        if C0.shape == (n,):
+            y0 = jnp.broadcast_to(C0, (n_comp, n))
+        elif C0.shape == (n_comp, n):
+            y0 = C0
+        else:
+            raise ValueError(
+                f"C0 has shape {C0.shape}, expected ({n},) or ({n_comp}, {n})."
+            )
+
+        t0, t1 = float(t_span[0]), float(t_span[1])
+        if not (t1 > t0):
+            raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
+        active = conditions if conditions is not None else self.conditions
+        condition_arrays = active.fields
+
+        if t_eval is None:
+            t_eval_arr, cache_key = None, (t0, t1, None)
+        else:
+            t_eval_arr = jnp.asarray(t_eval)
+            cache_key = (t0, t1, tuple(t_eval_arr.shape))
+
+        jitted = self._jit_cache.get(cache_key)
+        if jitted is None:
+            jitted = self._build_jitted_solve(t0, t1, t_eval_arr is not None)
+            self._jit_cache[cache_key] = jitted
+
+        if t_eval_arr is None:
+            ts, ys = jitted(y0, params, condition_arrays)
+        else:
+            ts, ys = jitted(y0, params, condition_arrays, t_eval_arr)
+        # ys: (n_t, n_comp, n_species). Bulk is compartment 0.
+        return BiofilmSolution(
+            t=ts, C=ys[:, 0, :], profile=ys, depth=self._depth, network=self.network
+        )
+
+    def _build_jitted_solve(self, t0: float, t1: float, has_t_eval: bool):
+        network = self.network
+        rtol, atol, adjoint, dtmax = self.rtol, self.atol, self.adjoint, self.dtmax
+        smask = self.soluble_mask[None, :]      # (1, n_species) broadcast over compartments
+        transport = self._transport
+
+        def make_rhs(condition_arrays, params):
+            stoich = network.compute_stoich(params)
+
+            def rhs(t, y, args):
+                # Reaction in every compartment (vmap over compartments).
+                react = jax.vmap(
+                    lambda c: network.dCdt(c, args, condition_arrays, 0, stoich=stoich)
+                )(y)
+                dydt = react + transport(y)
+                # Particulates are held fixed (mature biofilm): zero their rate.
+                return jnp.where(smask, dydt, 0.0)
+
+            return rhs
+
+        if has_t_eval:
+            @jax.jit
+            def _solve(y0, params, condition_arrays, t_eval):
+                sol = _run_diffeqsolve(
+                    make_rhs(condition_arrays, params),
+                    t0=t0, t1=t1, y0=y0, args=params,
+                    saveat=diffrax.SaveAt(ts=t_eval),
+                    rtol=rtol, atol=atol, adjoint=adjoint, dtmax=dtmax,
+                )
+                return sol.ts, sol.ys
+            return _solve
+
+        @jax.jit
+        def _solve(y0, params, condition_arrays):
+            sol = _run_diffeqsolve(
+                make_rhs(condition_arrays, params),
+                t0=t0, t1=t1, y0=y0, args=params,
+                saveat=diffrax.SaveAt(t1=True),
+                rtol=rtol, atol=atol, adjoint=adjoint, dtmax=dtmax,
+            )
+            return sol.ts, sol.ys
+        return _solve

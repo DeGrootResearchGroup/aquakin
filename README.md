@@ -21,6 +21,9 @@ Future networks include UV/TiO₂, chlorine decay, and ADM1.
 - JAX-native stiff ODE integration via Diffrax (`Kvaerno5` by default).
 - Safe rate expression evaluation via a custom AST (no `eval()`).
 - Decoupled transport / reaction operator splitting at all scales (0D, 1D, 3D).
+- Reactors for batch (0D), plug flow (1D), Lagrangian particle tracks, and a
+  layered biofilm (`BiofilmReactor`: 1-D diffusion-reaction over biofilm depth,
+  for penetration-controlled processes).
 
 ## Installation
 
