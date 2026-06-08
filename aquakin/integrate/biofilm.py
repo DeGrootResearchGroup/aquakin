@@ -85,6 +85,29 @@ class BiofilmSolution(_HasNamedSpecies):
         return self.profile[:, :, self.network.species_index[species]]
 
 
+def _diffusion_transport(C, D, kL, dz, area_per_volume, n_species):
+    """Diffusive transport for the whole state, shape ``(n_comp, n_species)``.
+
+    Pure function (no reactor ``self``) so it can be closed over by a jit-compiled
+    solve without leaking trace-created state. ``C[0]`` is the bulk; ``C[1:]`` the
+    layers (surface..wall). Particulate columns are zero where ``D == 0``. Uses
+    the conservative finite-volume (face-flux) form: only first-order face
+    differences, so the volume-weighted total is conserved exactly.
+    """
+    bulk = C[0]                       # (n_species,)
+    layers = C[1:]                    # (n_layers, n_species)
+    # Internal interface fluxes between layer j and j+1 (positive toward the wall).
+    f_internal = D[None, :] * (layers[:-1] - layers[1:]) / dz   # (n_layers-1, n_species)
+    # Bulk <-> surface flux across the boundary layer (positive into the film).
+    f_bs = kL * (bulk - layers[0])                              # (n_species,)
+    flux_in = jnp.concatenate([f_bs[None, :], f_internal], axis=0)
+    zero = jnp.zeros((1, n_species))
+    flux_out = jnp.concatenate([f_internal, zero], axis=0)      # wall: no flux out
+    d_layers = (flux_in - flux_out) / dz                        # (n_layers, n_species)
+    d_bulk = -area_per_volume * f_bs                            # bulk loses surface flux
+    return jnp.concatenate([d_bulk[None, :], d_layers], axis=0)
+
+
 def _default_soluble_mask(network: CompiledNetwork) -> jnp.ndarray:
     """Classify species as soluble (diffuses, evolves) vs particulate (fixed).
 
@@ -231,34 +254,6 @@ class BiofilmReactor:
         self._depth = (jnp.arange(self.n_layers) + 0.5) * self._dz
         self._jit_cache: dict = {}
 
-    # -- transport ---------------------------------------------------------
-    def _transport(self, C: jnp.ndarray) -> jnp.ndarray:
-        """Diffusive transport term for the whole state, shape ``(n_comp, n_species)``.
-
-        ``C[0]`` is the bulk; ``C[1:]`` the layers (surface..wall). Returns the
-        per-compartment rate of change due to diffusion only. Particulate
-        columns are zero (``D == 0``).
-        """
-        bulk = C[0]                       # (n_species,)
-        layers = C[1:]                    # (n_layers, n_species)
-        dz = self._dz
-        # Internal interface fluxes between layer j and j+1 (g m^-2 d^-1),
-        # positive downward (toward the wall): D * (C_j - C_{j+1}) / dz.
-        if self.n_layers > 1:
-            f_internal = self._D[None, :] * (layers[:-1] - layers[1:]) / dz
-        else:
-            f_internal = jnp.zeros((0, self.network.n_species))
-        # Bulk <-> surface flux across the boundary layer (positive into film).
-        f_bs = self._kL * (bulk - layers[0])                    # (n_species,)
-        # Flux entering the top of each layer and leaving its bottom.
-        flux_in = jnp.concatenate([f_bs[None, :], f_internal], axis=0)
-        zero = jnp.zeros((1, self.network.n_species))
-        flux_out = jnp.concatenate([f_internal, zero], axis=0)  # wall: no flux out
-        d_layers = (flux_in - flux_out) / dz                    # (n_layers, n_species)
-        # Bulk loses the surface flux, scaled to the bulk volume by A_V.
-        d_bulk = -self.area_per_volume * f_bs                   # (n_species,)
-        return jnp.concatenate([d_bulk[None, :], d_layers], axis=0)
-
     def solve(
         self,
         C0: jnp.ndarray,
@@ -334,12 +329,18 @@ class BiofilmReactor:
         )
 
     def _build_jitted_solve(self, t0: float, t1: float, has_t_eval: bool):
+        # Capture only pre-existing concrete arrays/scalars (set in __init__),
+        # never values created in this scope: solve() builds and CACHES the jitted
+        # function lazily, possibly inside a caller's trace (e.g. calibrate), so
+        # anything created here would escape that trace. All new arrays are formed
+        # inside the jit below.
         network = self.network
         rtol, atol, adjoint, dtmax = self.rtol, self.atol, self.adjoint, self.dtmax
-        smask = self.soluble_mask[None, :]      # (1, n_species) broadcast over compartments
-        transport = self._transport
-
-        biofilm_mask = self._biofilm_mask
+        soluble_mask = self.soluble_mask        # (n_species,)
+        biofilm_mask = self._biofilm_mask       # (n_reactions,) or None
+        D, kL, dz = self._D, self._kL, self._dz
+        area_per_volume = self.area_per_volume
+        n_species = network.n_species
 
         def make_rhs(condition_arrays, params):
             stoich = network.compute_stoich(params)
@@ -359,9 +360,11 @@ class BiofilmReactor:
                     lambda c: network.dCdt(c, args, condition_arrays, 0, stoich=stoich_film)
                 )(y[1:])
                 react = jnp.concatenate([bulk[None, :], layers], axis=0)
-                dydt = react + transport(y)
+                dydt = react + _diffusion_transport(
+                    y, D, kL, dz, area_per_volume, n_species
+                )
                 # Particulates are held fixed (mature biofilm): zero their rate.
-                return jnp.where(smask, dydt, 0.0)
+                return jnp.where(soluble_mask[None, :], dydt, 0.0)
 
             return rhs
 
