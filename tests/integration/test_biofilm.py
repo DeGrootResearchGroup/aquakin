@@ -92,6 +92,26 @@ def test_diffusion_limitation_starves_deep_layers(net, cond):
     assert deep_fast > deep_slow + 0.3
 
 
+def test_phase_mask_confines_reaction_to_biofilm(net, cond):
+    # With A_to_B marked biofilm-only, the bulk compartment has no reaction, so
+    # the (large) bulk A pool falls only by diffusion into the (small) reacting
+    # biofilm -- much slower than when the reaction also runs in the bulk. And
+    # bulk B is then produced only in the layers, so it lags.
+    p = net.default_parameters()
+    C0 = jnp.array([1.0, 0.0])  # uniform A everywhere
+    everywhere = _reactor(net, cond)                       # runs in every compartment
+    film_only = _reactor(net, cond, biofilm_reactions=["A_to_B"])
+    se = everywhere.solve(C0, p, t_span=(0.0, 2.0))
+    sf = film_only.solve(C0, p, t_span=(0.0, 2.0))
+    assert float(sf.C_named("A")[-1]) > float(se.C_named("A")[-1]) + 1e-2
+    assert float(sf.C_named("B")[-1]) < float(se.C_named("B")[-1])
+
+
+def test_unknown_biofilm_reaction_name_raises(net, cond):
+    with pytest.raises(ValueError, match="Unknown biofilm reaction"):
+        _reactor(net, cond, biofilm_reactions=["not_a_reaction"])
+
+
 def test_solution_shapes_and_named_accessors(net, cond):
     r = _reactor(net, cond)
     p = net.default_parameters()

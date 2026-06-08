@@ -129,6 +129,17 @@ class BiofilmReactor:
         Boolean ``(n_species,)`` mask: ``True`` for solubles (diffuse and
         evolve), ``False`` for particulates (held fixed everywhere). Defaults to
         the ``S``/``X`` name heuristic.
+    biofilm_reactions : list of str or jnp.ndarray, optional
+        Which reactions are biofilm processes --- they run in the biofilm
+        **layers** only, never in the well-mixed bulk. Given as a list of
+        reaction names or a boolean ``(n_reactions,)`` mask. The remaining
+        reactions (bulk-suspended and bulk-chemical) run in the **bulk** only.
+        ``None`` (default) runs every reaction in every compartment, appropriate
+        for a single-phase network. For a WATS-style network the biofilm
+        reactions are those carrying the ``A_V`` area factor; bulk reactions
+        carry the suspended biomass ``[X_BH]`` or are abiotic. This separation,
+        not a zeroed biomass state, is what keeps the two phases from leaking
+        into each other.
     rtol, atol : float
         Solver tolerances (scalar; applied across the whole layered state).
     adjoint : diffrax.AbstractAdjoint, optional
@@ -155,6 +166,7 @@ class BiofilmReactor:
         diffusivity,
         boundary_layer: float,
         soluble_mask: Optional[jnp.ndarray] = None,
+        biofilm_reactions=None,
         rtol: float = 1e-6,
         atol: float = 1e-9,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
@@ -186,6 +198,29 @@ class BiofilmReactor:
             raise ValueError(
                 f"soluble_mask must have shape ({n},); got {self.soluble_mask.shape}"
             )
+
+        # Per-reaction phase mask: which reactions are biofilm processes (run in
+        # the layers only) vs bulk/chemical (run in the bulk only). ``None`` ->
+        # every reaction runs in every compartment (a single-phase network).
+        # Accepts a list of reaction names or a boolean ``(n_reactions,)`` array.
+        if biofilm_reactions is None:
+            self._biofilm_mask = None
+        elif all(isinstance(x, str) for x in biofilm_reactions):
+            names = set(biofilm_reactions)
+            unknown = names - set(network.reaction_names)
+            if unknown:
+                raise ValueError(f"Unknown biofilm reaction names: {sorted(unknown)}")
+            self._biofilm_mask = jnp.asarray(
+                [rn in names for rn in network.reaction_names], dtype=bool
+            )
+        else:
+            bm = jnp.asarray(biofilm_reactions, dtype=bool)
+            if bm.shape != (network.n_reactions,):
+                raise ValueError(
+                    f"biofilm_reactions mask must have shape ({network.n_reactions},);"
+                    f" got {bm.shape}"
+                )
+            self._biofilm_mask = bm
 
         D = jnp.broadcast_to(jnp.asarray(diffusivity, dtype=float), (n,))
         # Particulates do not diffuse: zero their diffusivity regardless.
@@ -304,14 +339,26 @@ class BiofilmReactor:
         smask = self.soluble_mask[None, :]      # (1, n_species) broadcast over compartments
         transport = self._transport
 
+        biofilm_mask = self._biofilm_mask
+
         def make_rhs(condition_arrays, params):
             stoich = network.compute_stoich(params)
+            # Phase split: zeroing a reaction's stoichiometry row removes its
+            # contribution to dCdt (which is stoich.T @ rates), so the positivity
+            # limiter still sees the correct per-compartment net term. Bulk
+            # reactions run only in the bulk; biofilm reactions only in the layers.
+            if biofilm_mask is None:
+                stoich_bulk = stoich_film = stoich
+            else:
+                stoich_bulk = stoich * (~biofilm_mask)[:, None]   # bulk + chemical
+                stoich_film = stoich * biofilm_mask[:, None]      # biofilm only
 
             def rhs(t, y, args):
-                # Reaction in every compartment (vmap over compartments).
-                react = jax.vmap(
-                    lambda c: network.dCdt(c, args, condition_arrays, 0, stoich=stoich)
-                )(y)
+                bulk = network.dCdt(y[0], args, condition_arrays, 0, stoich=stoich_bulk)
+                layers = jax.vmap(
+                    lambda c: network.dCdt(c, args, condition_arrays, 0, stoich=stoich_film)
+                )(y[1:])
+                react = jnp.concatenate([bulk[None, :], layers], axis=0)
                 dydt = react + transport(y)
                 # Particulates are held fixed (mature biofilm): zero their rate.
                 return jnp.where(smask, dydt, 0.0)

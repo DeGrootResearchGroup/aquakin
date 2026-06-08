@@ -926,9 +926,18 @@ solution.C                           # (n_points, n_species)
 # resolved (Wanner & Gujer 1986; Jiang et al. 2009; Sun et al. 2014). Species are
 # soluble (S*/sumS, diffuse) vs particulate (X*, fixed) by name, overridable via
 # soluble_mask. In the well-mixed limit it reduces exactly to BatchReactor.
+# A WATS-style network has two phases: bulk-suspended reactions (carry [X_BH]) and
+# biofilm reactions (carry the {A_V} area factor). biofilm_reactions=[names...]
+# runs those reactions in the LAYERS only and the rest in the BULK only -- an
+# explicit per-reaction phase split (no reliance on a zeroed biomass state). A
+# composite term like bio_hf=[X_BH]+eps*{X_BF}*{A_V} is handled by splitting the
+# reaction into _bulk ([X_BH]) and _biofilm (eps*{X_BF}*{A_V}) halves in the
+# network YAML; biofilm rate constants are areal (per m^2), so set A_V=1/thickness
+# per layer (the lumped model is then the well-mixed limit, conserving mass).
 reactor = aquakin.BiofilmReactor(
     network, conditions, n_layers=6, thickness=8e-4, area_per_volume=50.0,
-    diffusivity=1e-4, boundary_layer=1e-4)
+    diffusivity=1e-4, boundary_layer=1e-4,
+    biofilm_reactions=[...])             # names of the {A_V} reactions (run in layers only)
 solution = reactor.solve(C0, params, t_span, t_eval)  # C0 (n_species,) or (n_layers+1, n_species)
 solution.C                           # (n_t, n_species) -- BULK (measurable) trajectory
 solution.profile                     # (n_t, n_layers+1, n_species) -- depth-resolved (0=bulk)
