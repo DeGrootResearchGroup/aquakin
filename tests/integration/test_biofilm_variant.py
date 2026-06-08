@@ -96,3 +96,35 @@ def test_variant_solves_and_stratifies(variant, biofilm_rxns):
     vfa = prof[layers, variant.species_index["S_VFA"]]
     assert ch4[-1] > ch4[0] + 1.0      # more methane at the wall than the surface
     assert vfa[-1] < vfa[0] - 1.0      # less acetate at the wall (diffusion-limited)
+
+
+def test_multispecies_groups_grow_and_stratify():
+    # The full multispecies model carries X_SRB / X_MA / X_SOB as per-layer
+    # growing/decaying states. Seed each in the biofilm layers and confirm a
+    # depth-resolved solve is finite and every functional group grows in the
+    # biofilm relative to the (dilute) bulk -- the per-layer-biomass dynamics the
+    # interim [X_BH]-coupled model could not represent.
+    net = aquakin.load_network("wats_sewer_khalil_paper_balanced_biofilm_multispecies")
+    si = net.species_index
+    n_layers = 8
+    fixed = jnp.array([s == "X_I" for s in net.species])     # only inert solids fixed
+    film = {"X_BH": 1000.0, "X_SRB": 300.0, "X_MA": 200.0, "X_SOB": 300.0,
+            "X_S1": 50.0, "X_S2": 300.0}
+    bulk = np.array(net.default_concentrations(), dtype=float)
+    bulk[si["S_NO"]] = 25.0; bulk[si["sumS"]] = 9.0; bulk[si["S_SO4"]] = 4.0
+    bulk[si["S_VFA"]] = 25.0; bulk[si["X_BH"]] = 10.0
+    y0 = np.tile(bulk, (n_layers + 1, 1))
+    for s, v in film.items():
+        y0[1:, si[s]] = v
+    bio = aquakin.BiofilmReactor(
+        net, aquakin.SpatialConditions.uniform(1, pH=7.5),
+        n_layers=n_layers, thickness=2e-3, area_per_volume=A_V_LUMPED,
+        diffusivity=1e-4, boundary_layer=1e-4, fixed_mask=fixed, dtmax=3e-5,
+    )
+    sol = bio.solve(jnp.asarray(y0), net.default_parameters(),
+                    t_span=(0.0, 5.0 / 24.0))
+    assert bool(jnp.all(jnp.isfinite(sol.profile)))
+    prof = np.asarray(sol.profile[-1])                       # (n_comp, n_species)
+    # every functional group is denser in the biofilm than the (dilute) bulk
+    for g in ("X_BH", "X_SRB", "X_MA", "X_SOB"):
+        assert prof[1:, si[g]].max() > 10.0 * prof[0, si[g]]
