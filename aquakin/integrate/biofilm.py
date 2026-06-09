@@ -512,6 +512,103 @@ class BiofilmReactor:
             t=ts, C=ys[:, 0, :], profile=ys, depth=self._depth, network=self.network
         )
 
+    def solve_sensitivity(
+        self,
+        C0: jnp.ndarray,
+        params: jnp.ndarray,
+        t_span: tuple[float, float],
+        t_eval: Optional[jnp.ndarray] = None,
+        *,
+        sens_params,
+        conditions: Optional[SpatialConditions] = None,
+        sens_rtol: Optional[float] = None,
+        sens_atol=None,
+        param_scale=None,
+        shared_factor: bool = False,
+    ) -> tuple["BiofilmSolution", jnp.ndarray]:
+        """Solve and return the forward sensitivity of the **bulk** ``dC/dtheta``.
+
+        Integrates the augmented ``[y; S]`` system over the full layered state
+        with adaptive control over both, so the sensitivity is exact and finite
+        without the ``dtmax`` cap that ordinary AD through this stiff
+        diffusion--reaction solve needs (see
+        :mod:`aquakin.integrate.forward_sensitivity`). This is the canonical use
+        case: the biofilm networks are stiff enough that capping ``dtmax`` for a
+        reverse-mode gradient is an ~10x penalty, and this removes it.
+
+        Parameters
+        ----------
+        C0, params, t_span, t_eval, conditions
+            As for :meth:`solve` (``C0`` may be ``(n_species,)`` or
+            ``(n_layers + 1, n_species)``).
+        sens_params : list of str or int
+            Namespaced parameter names (or integer indices into ``params``).
+        sens_rtol, sens_atol, param_scale
+            Sensitivity error-control tolerances (CVODES defaults; see
+            :func:`~aquakin.integrate.forward_sensitivity.augmented_forward_sensitivity`).
+        shared_factor : bool
+            Option A factorisation sharing; not yet implemented.
+
+        Returns
+        -------
+        sol : BiofilmSolution
+            The usual solution (bulk ``C`` and full ``profile``).
+        S : jnp.ndarray
+            Sensitivity of the **bulk** (measurable) concentration,
+            ``dC_bulk/dtheta``, shape ``(n_t, n_species, n_sens_params)`` --
+            aligned with ``sol.C``.
+        """
+        from aquakin.integrate.forward_sensitivity import (
+            augmented_forward_sensitivity,
+            resolve_sens_indices,
+        )
+
+        params = jnp.asarray(params)
+        n = self.network.n_species
+        if params.shape != (self.network.n_params,):
+            raise ValueError(
+                f"params has shape {params.shape}, expected ({self.network.n_params},)"
+            )
+        C0 = jnp.asarray(C0)
+        n_comp = self.n_layers + 1
+        if C0.shape == (n,):
+            y0 = jnp.broadcast_to(C0, (n_comp, n))
+        elif C0.shape == (n_comp, n):
+            y0 = C0
+        else:
+            raise ValueError(
+                f"C0 has shape {C0.shape}, expected ({n},) or ({n_comp}, {n})."
+            )
+        t0, t1 = float(t_span[0]), float(t_span[1])
+        if not (t1 > t0):
+            raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
+
+        free_idx = resolve_sens_indices(self.network, sens_params)
+        active = conditions if conditions is not None else self.conditions
+        cond = active.fields
+        ndof = n_comp * n
+
+        def f_flat(t, y_flat, p):
+            rhs = self._make_rhs(cond, p)
+            return rhs(0.0, y_flat.reshape(n_comp, n), p).reshape(-1)
+
+        atol_y = jnp.full((ndof,), float(self.atol))
+        ts, y_traj, S_traj = augmented_forward_sensitivity(
+            f_flat, y0.reshape(-1), params, free_idx,
+            t0=t0, t1=t1, t_eval=None if t_eval is None else jnp.asarray(t_eval),
+            rtol=self.rtol, atol_y=atol_y,
+            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
+            dtmax=self.dtmax, max_steps=self.max_steps, shared_factor=shared_factor,
+        )
+        n_t = ts.shape[0]
+        profile = y_traj.reshape(n_t, n_comp, n)
+        S_full = S_traj.reshape(n_t, n_comp, n, free_idx.shape[0])
+        sol = BiofilmSolution(
+            t=ts, C=profile[:, 0, :], profile=profile,
+            depth=self._depth, network=self.network,
+        )
+        return sol, S_full[:, 0, :, :]
+
     def _make_rhs(self, condition_arrays, params):
         """Build the depth-resolved diffusion--reaction RHS ``f(t, y, args)``.
 

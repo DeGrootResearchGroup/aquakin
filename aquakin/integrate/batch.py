@@ -178,6 +178,91 @@ class BatchReactor:
             ts, ys = jitted(C0, params, condition_arrays, t_eval_arr)
         return BatchSolution(t=ts, C=ys, network=self.network)
 
+    def solve_sensitivity(
+        self,
+        C0: jnp.ndarray,
+        params: jnp.ndarray,
+        t_span: tuple[float, float],
+        t_eval: Optional[jnp.ndarray] = None,
+        *,
+        sens_params,
+        conditions: Optional[SpatialConditions] = None,
+        sens_rtol: Optional[float] = None,
+        sens_atol=None,
+        param_scale=None,
+        shared_factor: bool = False,
+    ) -> tuple["BatchSolution", jnp.ndarray]:
+        """Solve and return the forward sensitivity ``dC/dtheta`` alongside ``C``.
+
+        Integrates the augmented ``[C; S]`` system (state plus sensitivity) with
+        adaptive control over both, so the sensitivity is exact and finite
+        without the ``dtmax`` cap that ordinary AD through a stiff solve needs
+        (see :mod:`aquakin.integrate.forward_sensitivity`).
+
+        Parameters
+        ----------
+        C0, params, t_span, t_eval, conditions
+            As for :meth:`solve`.
+        sens_params : list of str or int
+            Namespaced parameter names (or integer indices into ``params``) to
+            differentiate with respect to.
+        sens_rtol, sens_atol, param_scale
+            Sensitivity error-control tolerances. Defaults follow CVODES:
+            ``rtol_S = rtol`` and ``atol_S = atol / |theta_k|``. See
+            :func:`~aquakin.integrate.forward_sensitivity.augmented_forward_sensitivity`.
+        shared_factor : bool
+            CVODES simultaneous-corrector factorisation sharing (Option A). Not
+            yet implemented; leave ``False``.
+
+        Returns
+        -------
+        sol : BatchSolution
+            The usual state trajectory (uncapped, exact).
+        S : jnp.ndarray
+            Sensitivity ``dC/dtheta`` at the saved times, shape
+            ``(n_t, n_species, n_sens_params)``.
+        """
+        from aquakin.integrate.forward_sensitivity import (
+            augmented_forward_sensitivity,
+            resolve_sens_indices,
+        )
+
+        C0 = jnp.asarray(C0)
+        params = jnp.asarray(params)
+        if C0.shape != (self.network.n_species,):
+            raise ValueError(
+                f"C0 has shape {C0.shape}, expected ({self.network.n_species},)"
+            )
+        if params.shape != (self.network.n_params,):
+            raise ValueError(
+                f"params has shape {params.shape}, expected ({self.network.n_params},)"
+            )
+        t0, t1 = float(t_span[0]), float(t_span[1])
+        if not (t1 > t0):
+            raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
+
+        free_idx = resolve_sens_indices(self.network, sens_params)
+        active = conditions if conditions is not None else self.conditions
+        cond = active.fields
+        network = self.network
+
+        def f_flat(t, y, p):
+            # dCdt computes the (possibly parameter-dependent) stoichiometry from
+            # ``p`` internally, so the JVP captures sensitivity through it too.
+            return network.dCdt(y, p, cond, 0)
+
+        atol_y = jnp.broadcast_to(jnp.asarray(self.atol, dtype=float),
+                                  (network.n_species,))
+        ts, y_traj, S_traj = augmented_forward_sensitivity(
+            f_flat, C0, params, free_idx,
+            t0=t0, t1=t1, t_eval=None if t_eval is None else jnp.asarray(t_eval),
+            rtol=self.rtol, atol_y=atol_y,
+            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
+            dtmax=self.dtmax, shared_factor=shared_factor,
+        )
+        sol = BatchSolution(t=ts, C=y_traj, network=network)
+        return sol, S_traj
+
     def _build_jitted_solve(self, t0: float, t1: float, has_t_eval: bool):
         """Build a jit-compiled inner solver for a specific call signature."""
         network = self.network

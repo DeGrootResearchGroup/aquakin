@@ -589,6 +589,33 @@ forward-mode sensitivity screen is unaffected, and is also faster (see
 reduction of the near-instantaneous fast reactions, which would remove the
 stiff modes entirely and avoid needing the cap.
 
+**Cap-free alternative — forward-sensitivity solve.** For the sensitivity
+`dC/dθ` itself there is now a way that needs **no cap at all**:
+`reactor.solve_sensitivity(...)` (and the free function
+`aquakin.forward_sensitivity(...)`). Instead of differentiating *through* the
+stiff solve, it integrates the variational equation `dS/dt = J·S + f_θ`
+*alongside* the state — one augmented `[y; S]` system, stock `Kvaerno5` +
+`PIDController` whose error norm now also bounds `S` — so the adaptive
+controller tightens the step only where the *sensitivity* is stiff and runs
+free elsewhere. The primal stays uncapped and the returned `S` is finite and
+exact (it matches a tightly-capped `jacfwd` to ~1e-8; validated against the
+closed-form sensitivity of first-order decay and against capped `jacfwd` on the
+stiff Khalil biofilm in `tests/integration/test_forward_sensitivity.py`). The
+augmented RHS is `f(y)` plus one JVP of `f` per sensitivity parameter (the
+JVP's primal gives `f(y)` for free; the JVP also differentiates through the
+state-derived-pH speciation solver, the positivity limiter and the density-cap
+throttle, so no special-casing). Implemented in
+[`integrate/forward_sensitivity.py`](aquakin/integrate/forward_sensitivity.py)
+on `BatchReactor`, `PlugFlowReactor` and `BiofilmReactor`. This is **Option B**
+of the spec (dense per-step implicit solve): exact and cap-free, and the right
+choice for one or a few sensitivity parameters and for scalar-loss gradients.
+The CVODES *simultaneous-corrector* factorisation sharing that additionally
+speeds up the many-parameter case (`shared_factor=True`, Option A) is **not yet
+implemented** (it raises `NotImplementedError`), and `calibrate` does not yet
+expose a `jacobian="forward_sensitivity"` hook — both remain follow-ups; the
+`dtmax` cap is still required for the reverse-mode `calibrate` gradient until
+then.
+
 ### Operator Splitting
 
 Transport and reaction are decoupled at all scales:
@@ -801,6 +828,9 @@ aquakin/
 │   │   ├── particle.py              # Track, ParticleTrackReactor, integrate_ensemble
 │   │   ├── cfd.py                   # CFDReactor (Option C runtime coupling)
 │   │   ├── sensitivity.py           # sensitivity(), fit()
+│   │   ├── forward_sensitivity.py   # solve_sensitivity / forward_sensitivity:
+│   │   │                            #   augmented [y; S] variational solve giving
+│   │   │                            #   cap-free exact stiff sensitivities
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands
@@ -1064,6 +1094,24 @@ sens = aquakin.sensitivity(reactor, C0, params, output_fn)
 sens.doutput_dparams                 # (n_params,)
 sens.doutput_dconditions["pH"]       # (n_locations,) — dict access
 sens.ranked_params()
+
+# Forward (variational) sensitivity — integrate S = dC/dθ ALONGSIDE the state,
+# with the adaptive controller bounding S too, so the sensitivity is exact and
+# finite WITHOUT a dtmax cap (the cap-free alternative for stiff networks; see
+# "Differentiating stiff networks" above). Each reactor exposes solve_sensitivity:
+sol, S = reactor.solve_sensitivity(
+    C0, params, t_span, t_eval,
+    sens_params=["mu_h", "q_m"],     # names or int indices of the free params
+    sens_rtol=None, sens_atol=None,  # default: rtol_S=rtol, atol_S=atol/|θ_k| (CVODES)
+    param_scale=None,                # override the |θ_k| error-control scale
+    shared_factor=False,             # True (CVODES simultaneous corrector) not yet implemented
+)
+# sol : the usual Solution (uncapped primal); S : dC/dθ at the saved times,
+#       shape (n_t, n_species, n_sens_params). For a BiofilmReactor S is the
+#       BULK (measurable) sensitivity, aligned with sol.C.
+res = aquakin.forward_sensitivity(reactor, C0, params, sens_params=[...], t_span=..., t_eval=...)
+res.S_named("S_SO4")                 # (n_t, n_sens_params)
+res.dC_dparam("S_SO4", "mu_h")       # (n_t,)
 
 # Derivative-based global sensitivity (DGSM) — AD Sobol-total-index analogue.
 # fn maps an uncertain-input vector to a scalar OR vector output (it builds

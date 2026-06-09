@@ -18,6 +18,10 @@ from aquakin.integrate.particle import (
     TrackSolution,
     integrate_ensemble,
 )
+from aquakin.integrate.forward_sensitivity import (
+    ForwardSensitivityResult,
+    forward_sensitivity,
+)
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.sensitivity import (
     DGSMResult,
@@ -66,6 +70,7 @@ __all__ = [
     "Stream",
     "Unit",
     "DGSMResult",
+    "ForwardSensitivityResult",
     "SensitivityResult",
     "SpatialConditions",
     "Track",
@@ -75,6 +80,7 @@ __all__ = [
     "compile_network",
     "dgsm",
     "fit",
+    "forward_sensitivity",
     "integrate_ensemble",
     "load_network",
     "load_network_from_file",
