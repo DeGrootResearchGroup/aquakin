@@ -1071,7 +1071,9 @@ aquakin/
 ├── examples/
 │   ├── batch_bromate.py
 │   ├── lagrangian_demo.py
-│   └── sensitivity_demo.py
+│   ├── sensitivity_demo.py
+│   ├── bsm1_dry_weather.py
+│   └── adjoint_speed_benchmark.py  # stable_adjoint vs capped jax_adjoint timing
 │   # NOTE: the wats_sewer_extended batch-fitting / calibration / sensitivity scripts and
 │   # their measurement data live in the separate paper-reproduction repository,
 │   # not here (this repo ships only the reusable library + networks).
