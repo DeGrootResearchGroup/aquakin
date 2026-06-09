@@ -106,6 +106,7 @@ class PlugFlowReactor:
         # PFR solve takes no varying signature args, so we only ever need one
         # jitted variant; build it lazily on first solve.
         self._jitted_solve = None
+        self._sens_jit_cache: dict = {}
 
     def solve(
         self,
@@ -167,7 +168,7 @@ class PlugFlowReactor:
         sens_rtol: Optional[float] = None,
         sens_atol=None,
         param_scale=None,
-        shared_factor: bool = False,
+        shared_factor: Optional[bool] = None,
     ) -> tuple["PFRSolution", jnp.ndarray]:
         """Solve and return the forward sensitivity ``dC/dtheta`` along the axis.
 
@@ -184,8 +185,10 @@ class PlugFlowReactor:
             Namespaced parameter names (or integer indices into ``params``).
         sens_rtol, sens_atol, param_scale
             Sensitivity error-control tolerances (CVODES defaults).
-        shared_factor : bool
-            Option A factorisation sharing; not yet implemented.
+        shared_factor : bool, optional
+            CVODES simultaneous-corrector linear solve. ``None`` (default)
+            auto-selects ``True`` for more than one sensitivity parameter, else
+            ``False``.
 
         Returns
         -------
@@ -198,6 +201,7 @@ class PlugFlowReactor:
         from aquakin.integrate._common import _interp_fields_to_scalar
         from aquakin.integrate.forward_sensitivity import (
             augmented_forward_sensitivity,
+            build_jitted_sensitivity_solve,
             resolve_sens_indices,
         )
 
@@ -219,28 +223,51 @@ class PlugFlowReactor:
             )
 
         free_idx = resolve_sens_indices(self.network, sens_params)
+        if shared_factor is None:
+            shared_factor = free_idx.shape[0] > 1
         fields = active.fields
         network = self.network
         velocity = self.velocity
         x_grid = self._x_grid
         single_loc = self.conditions.n_locations <= 1
         x_eval = jnp.linspace(0.0, self.length, self.n_points)
-
-        def f_flat(x, C, p):
-            cond = fields if single_loc else _interp_fields_to_scalar(x, x_grid, fields)
-            return network.dCdt(C, p, cond, 0) / velocity
-
         atol_y = jnp.broadcast_to(jnp.asarray(self.atol, dtype=float),
                                   (network.n_species,))
-        xs, y_traj, S_traj = augmented_forward_sensitivity(
-            f_flat, C0, params, free_idx,
-            t0=0.0, t1=self.length, t_eval=x_eval,
-            rtol=self.rtol, atol_y=atol_y,
-            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
-            dtmax=self.dtmax, shared_factor=shared_factor,
+
+        def make_f_flat(cond_arrays):
+            def f_flat(x, C, p):
+                cond = (
+                    cond_arrays if single_loc
+                    else _interp_fields_to_scalar(x, x_grid, cond_arrays)
+                )
+                return network.dCdt(C, p, cond, 0) / velocity
+            return f_flat
+
+        if sens_atol is not None or param_scale is not None:
+            xs, y_traj, S_traj = augmented_forward_sensitivity(
+                make_f_flat(fields), C0, params, free_idx,
+                t0=0.0, t1=self.length, t_eval=x_eval,
+                rtol=self.rtol, atol_y=atol_y,
+                sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
+                dtmax=self.dtmax, shared_factor=shared_factor,
+            )
+            return PFRSolution(x=xs, C=y_traj, network=network), S_traj
+
+        cache_key = (
+            tuple(int(i) for i in free_idx), bool(shared_factor),
+            None if sens_rtol is None else float(sens_rtol),
         )
-        sol = PFRSolution(x=xs, C=y_traj, network=network)
-        return sol, S_traj
+        jitted = self._sens_jit_cache.get(cache_key)
+        if jitted is None:
+            jitted = build_jitted_sensitivity_solve(
+                make_f_flat, free_idx, t0=0.0, t1=self.length, has_t_eval=True,
+                rtol=self.rtol, atol_y=atol_y, sens_rtol=sens_rtol,
+                dtmax=self.dtmax, max_steps=100_000, shared_factor=shared_factor,
+            )
+            self._sens_jit_cache[cache_key] = jitted
+
+        xs, y_traj, S_traj = jitted(C0, params, fields, x_eval)
+        return PFRSolution(x=xs, C=y_traj, network=network), S_traj
 
     def _build_jitted_solve(self):
         """Build a jit-compiled inner PFR solver. Single signature suffices."""

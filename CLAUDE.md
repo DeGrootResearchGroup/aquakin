@@ -606,15 +606,55 @@ JVP's primal gives `f(y)` for free; the JVP also differentiates through the
 state-derived-pH speciation solver, the positivity limiter and the density-cap
 throttle, so no special-casing). Implemented in
 [`integrate/forward_sensitivity.py`](aquakin/integrate/forward_sensitivity.py)
-on `BatchReactor`, `PlugFlowReactor` and `BiofilmReactor`. This is **Option B**
-of the spec (dense per-step implicit solve): exact and cap-free, and the right
-choice for one or a few sensitivity parameters and for scalar-loss gradients.
-The CVODES *simultaneous-corrector* factorisation sharing that additionally
-speeds up the many-parameter case (`shared_factor=True`, Option A) is **not yet
-implemented** (it raises `NotImplementedError`), and `calibrate` does not yet
-expose a `jacobian="forward_sensitivity"` hook — both remain follow-ups; the
-`dtmax` cap is still required for the reverse-mode `calibrate` gradient until
-then.
+on `BatchReactor`, `PlugFlowReactor` and `BiofilmReactor`.
+
+**`shared_factor` — dense (Option B) vs simultaneous corrector (Option A).**
+The per-step implicit solve has two implementations, selected by
+`solve_sensitivity(..., shared_factor=...)`:
+
+- `shared_factor=False` (**Option B**, dense): hand the augmented `[y; S]`
+  system to a stock `Kvaerno5`, which factorises the full
+  `n(1+p)×n(1+p)` implicit operator each step. Exact and cap-free; the right
+  choice for **one** sensitivity parameter and for scalar-loss gradients.
+- `shared_factor=True` (**Option A**, CVODES simultaneous corrector): the
+  augmented Jacobian is block-lower-triangular "arrow" form — every diagonal
+  block is the same `D = I − γ·dt·J`, each `S_j` column couples only to `y`.
+  A custom `lineax` solver
+  ([`integrate/_simultaneous_corrector.py`](aquakin/integrate/_simultaneous_corrector.py))
+  injected into the `Kvaerno5` `VeryChord` root-finder **factorises `D` once
+  per step (`O(n³)`) and forward-substitutes across the `S` columns**, instead
+  of the dense `O((n(1+p))³)`. The Newton step is identical to the dense
+  solve, so results are **bit-equivalent** to Option B (verified to ~5e-14) —
+  only the linear-algebra cost differs.
+
+`shared_factor` **defaults to `None`**, which auto-selects Option A for more
+than one sensitivity parameter and Option B for a single one (Option A has no
+advantage at `p=1`).
+
+**Measured (stiff `wats_sewer_khalil_paper_balanced`, biofilm, jitted, `p=5`):**
+Option A beats Option B by **3.8× at ndof=100 and 6.9× at ndof=180** — the win
+grows with system size, as the `(1+p)³`→`1` factorisation saving predicts.
+Versus the *capped `jacfwd`* workaround the comparison depends on the
+integration span: the uncapped augmented solve's adaptive sensitivity control
+actually takes **more** steps than a capped primal-only solve over a short
+window (the sensitivity transient is what it must resolve), but its step count
+**plateaus** (~4300) while the capped step count grows linearly with the span.
+So `jacfwd` is faster for short solves and Option A overtakes it for long ones
+(measured crossover ≈ 8–10 days: `0.78× → 0.92× → 1.16×` at 2/5/10 d), with a
+large Option-A win expected at the multi-week maturation spans the cap was
+introduced for. Net guidance: **for a multi-parameter sensitivity of a stiff
+network, `shared_factor=True` (the default) is the best forward-sensitivity
+option; whether it also beats capped `jacfwd` depends on the span.**
+
+The known cost of the non-invasive design (a custom *solver*, not a custom
+diffrax RK stage): the solver only sees the augmented operator, so materialising
+`D` and the off-diagonal coupling blocks `L_j` costs `n` probes of the augmented
+`M.mv` (`n·(1+p)` f-JVPs per step) — the `L_j` blocks that an ideal CVODES with
+direct access to `f` would not form. A zero-redundancy variant (a custom operator
+carrying `f`, needing a `Kvaerno5` stage subclass) is the documented future
+optimisation. `calibrate` does not yet expose a
+`jacobian="forward_sensitivity"` hook, so the `dtmax` cap is still required for
+the reverse-mode `calibrate` gradient until that lands.
 
 ### Operator Splitting
 
@@ -831,6 +871,9 @@ aquakin/
 │   │   ├── forward_sensitivity.py   # solve_sensitivity / forward_sensitivity:
 │   │   │                            #   augmented [y; S] variational solve giving
 │   │   │                            #   cap-free exact stiff sensitivities
+│   │   ├── _simultaneous_corrector.py # CVODES simultaneous-corrector lineax
+│   │   │                            #   solver (shared_factor=True, Option A):
+│   │   │                            #   factorise the shared diagonal block once
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands

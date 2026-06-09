@@ -172,15 +172,82 @@ def test_free_function_and_accessors():
     assert res.solution.C.shape == (6, net.n_species)
 
 
-def test_shared_factor_not_implemented(simple_network):
+def test_shared_factor_matches_dense_single_param(simple_network):
+    # The simultaneous corrector solves the same Newton system as the dense
+    # path, so shared_factor=True must reproduce shared_factor=False exactly.
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
-    reactor = aquakin.BatchReactor(simple_network, cond)
+    reactor = aquakin.BatchReactor(simple_network, cond, rtol=1e-11, atol=1e-13)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_network.default_parameters()
-    with pytest.raises(NotImplementedError):
-        reactor.solve_sensitivity(
-            C0, p, (0.0, 5.0), sens_params=["A_to_B.k"], shared_factor=True
-        )
+    k = float(p[0])
+    t_eval = jnp.linspace(0.0, 20.0, 11)
+    _, S_dense = reactor.solve_sensitivity(
+        C0, p, (0.0, 20.0), t_eval, sens_params=["A_to_B.k"], shared_factor=False
+    )
+    _, S_shared = reactor.solve_sensitivity(
+        C0, p, (0.0, 20.0), t_eval, sens_params=["A_to_B.k"], shared_factor=True
+    )
+    assert float(jnp.max(jnp.abs(S_dense - S_shared))) < 1e-12
+    # and still exact against the closed form
+    dA = -t_eval * jnp.exp(-k * t_eval)
+    assert float(jnp.max(jnp.abs(S_shared[:, 0, 0] - dA))) < 1e-7
+
+
+def test_shared_factor_matches_dense_multi_param():
+    # Several parameters: the block-arrow forward substitution must match the
+    # dense augmented solve to machine precision.
+    net = aquakin.load_network("uv_h2o2")
+    cond = net.default_conditions(1)
+    C0 = net.default_concentrations()
+    p = net.default_parameters()
+    names = list(net.parameters)
+    t_eval = jnp.linspace(0.0, 5.0, 6)
+    r = aquakin.BatchReactor(net, cond)
+    _, S_dense = r.solve_sensitivity(
+        C0, p, (0.0, 5.0), t_eval, sens_params=names, shared_factor=False
+    )
+    _, S_shared = r.solve_sensitivity(
+        C0, p, (0.0, 5.0), t_eval, sens_params=names, shared_factor=True
+    )
+    assert S_dense.shape == S_shared.shape == (6, net.n_species, len(names))
+    assert float(jnp.max(jnp.abs(S_dense - S_shared))) < 1e-12
+
+
+def test_simultaneous_corrector_solver_matches_dense_lu():
+    # Unit test of the custom linear solver in isolation: on a hand-built
+    # block-arrow operator M (identical diagonal D, S-blocks coupling only to y),
+    # the simultaneous-corrector solve must equal a dense solve of M.
+    import lineax as lx
+
+    from aquakin.integrate._simultaneous_corrector import SimultaneousCorrector
+
+    key = jax.random.PRNGKey(0)
+    n, k = 4, 3
+    kd, *kl = jax.random.split(key, 1 + k)
+    D = jnp.eye(n) + 0.1 * jax.random.normal(kd, (n, n))   # well-conditioned
+    Ls = [0.1 * jax.random.normal(kl[j], (n, n)) for j in range(k)]
+    N = n * (1 + k)
+    M = jnp.zeros((N, N))
+    # diagonal blocks = D
+    for b in range(1 + k):
+        M = M.at[b * n:(b + 1) * n, b * n:(b + 1) * n].set(D)
+    # off-diagonal: S_j block (row b=j+1) couples to y block (col 0) via L_j
+    for j in range(k):
+        M = M.at[(j + 1) * n:(j + 2) * n, 0:n].set(Ls[j])
+
+    rng_b = jax.random.normal(jax.random.PRNGKey(1), (N,))
+    operator = lx.MatrixLinearOperator(M)
+    solver = SimultaneousCorrector(ndof=n, n_sens=k)
+    # Forward solve M x = b via lineax (calls init then compute).
+    sol = lx.linear_solve(operator, rng_b, solver)
+    x_ref = jnp.linalg.solve(M, rng_b)
+    assert float(jnp.max(jnp.abs(sol.value - x_ref))) < 1e-9
+    # Transpose method: init -> transpose -> compute must solve M^T x = b.
+    state = solver.init(operator, {})
+    state_T, _ = solver.transpose(state, {})
+    xT, result, _ = solver.compute(state_T, rng_b, {})
+    xT_ref = jnp.linalg.solve(M.T, rng_b)
+    assert float(jnp.max(jnp.abs(xT - xT_ref))) < 1e-9
 
 
 def test_bad_sens_params_raise(simple_network):
@@ -246,6 +313,37 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
     _, S = r.solve_sensitivity(C0, p, (0.0, 0.1), t_eval, sens_params=names)
     assert bool(jnp.all(jnp.isfinite(S)))
     assert float(jnp.max(jnp.abs(S - J_cap))) < 1e-6
+
+
+@pytest.mark.validation
+def test_shared_factor_biofilm_matches_dense():
+    # On the stiff layered biofilm -- the regime the simultaneous corrector is
+    # built for (ndof = n_comp * n_species is large, so sharing the diagonal-block
+    # factorization across the sensitivity columns is the point) -- it must
+    # reproduce the dense augmented solve to machine precision.
+    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    cond = net.default_conditions(1)
+    n = net.n_species
+    soluble = jnp.asarray([not s.startswith("X") for s in net.species])
+    fixed = jnp.asarray([s == "X_I" for s in net.species])
+    r = aquakin.BiofilmReactor(
+        net, cond, n_layers=3, thickness=8e-4, area_per_volume=50.0,
+        diffusivity=1e-4, boundary_layer=1e-4,
+        soluble_mask=soluble, fixed_mask=fixed,
+    )
+    C0 = net.default_concentrations()
+    p = net.default_parameters()
+    names = ["mu_h", "q_m", "k_h2"]
+    t_eval = jnp.array([0.0, 0.05])
+    _, S_dense = r.solve_sensitivity(
+        C0, p, (0.0, 0.05), t_eval, sens_params=names, shared_factor=False
+    )
+    _, S_shared = r.solve_sensitivity(
+        C0, p, (0.0, 0.05), t_eval, sens_params=names, shared_factor=True
+    )
+    assert bool(jnp.all(jnp.isfinite(S_shared)))
+    assert S_shared.shape == (2, n, 3)
+    assert float(jnp.max(jnp.abs(S_dense - S_shared))) < 1e-8
 
 
 @pytest.mark.validation

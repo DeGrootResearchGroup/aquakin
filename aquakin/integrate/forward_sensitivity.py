@@ -160,8 +160,13 @@ def augmented_forward_sensitivity(
     max_steps : int, optional
         Maximum solver steps.
     shared_factor : bool, optional
-        If ``True``, use the CVODES simultaneous-corrector factorisation sharing
-        across the ``S`` columns. Not yet implemented (raises).
+        If ``True``, solve each stiff Newton step with the CVODES
+        simultaneous-corrector (:class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`):
+        factorise the shared diagonal block ``D = I - gamma.dt.J`` once and
+        forward-substitute across the ``S`` columns, instead of factorising the
+        full ``n(1+k)`` augmented system. Exact (the Newton step is identical to
+        the dense solve) and markedly cheaper for several parameters; for one or
+        two parameters the dense ``False`` path is usually as fast or faster.
 
     Returns
     -------
@@ -172,15 +177,6 @@ def augmented_forward_sensitivity(
     S_traj : jnp.ndarray
         Sensitivity trajectory ``dy/dtheta``, shape ``(n_t, ndof, k)``.
     """
-    if shared_factor:
-        raise NotImplementedError(
-            "shared_factor=True (the CVODES simultaneous-corrector factorisation "
-            "sharing across sensitivity columns) is not yet implemented. Use "
-            "shared_factor=False, which integrates the augmented [y; S] system "
-            "with a dense implicit step -- exact and cap-free, and the right "
-            "choice for one or a few sensitivity parameters."
-        )
-
     ndof = int(y0_flat.shape[0])
     k = int(free_idx.shape[0])
     n_params = int(params.shape[0])
@@ -188,16 +184,19 @@ def augmented_forward_sensitivity(
     # Unit parameter tangents: row j selects free parameter free_idx[j].
     E = jnp.zeros((k, n_params)).at[jnp.arange(k), free_idx].set(1.0)
 
+    # Column-major augmented layout: z = [y (ndof); S_0 (ndof); ...; S_{k-1}].
+    # Each sensitivity column is a contiguous ndof block, which is what makes the
+    # block-arrow structure the simultaneous corrector exploits contiguous.
     def aug_rhs(t, z, args):
         p = args
         y = z[:ndof]
-        S = z[ndof:].reshape(ndof, k)
+        S = z[ndof:].reshape(k, ndof)        # row j = sensitivity column j
         # Linearise f once at the shared point (y, theta): dy = f(y) (the primal,
         # computed once) and each sensitivity column is the same linear map
-        # applied to (S[:, j], e_j). This is the variational RHS
-        # dS[:, j]/dt = J . S[:, j] + f_theta[:, j] without forming J.
+        # applied to (S_j, e_j). This is the variational RHS
+        # dS_j/dt = J . S_j + f_theta_j without forming J.
         dy, f_jvp = jax.linearize(lambda yy, pp: f_flat(t, yy, pp), y, p)
-        dS = jax.vmap(f_jvp, in_axes=(1, 0))(S, E).T   # (ndof, k)
+        dS = jax.vmap(f_jvp, in_axes=(0, 0))(S, E)   # (k, ndof)
         return jnp.concatenate([dy, dS.reshape(-1)])
 
     z0 = jnp.concatenate([y0_flat, jnp.zeros(ndof * k)])
@@ -210,18 +209,31 @@ def augmented_forward_sensitivity(
     else:
         scale = jnp.broadcast_to(jnp.asarray(param_scale, dtype=float), (k,))
 
+    # atol_S (k, ndof), row j = atol_y / scale_j -- column-major to match z.
     if sens_atol is None:
-        atol_S = atol_y[:, None] / scale[None, :]          # (ndof, k)
+        atol_S = atol_y[None, :] / scale[:, None]          # (k, ndof)
     else:
         atol_S = jnp.broadcast_to(
             jnp.asarray(sens_atol, dtype=float), (k,)
-        )[None, :] * jnp.ones((ndof, 1))
+        )[:, None] * jnp.ones((1, ndof))
     sens_rtol_v = rtol if sens_rtol is None else float(sens_rtol)
 
     atol_aug = jnp.concatenate([atol_y, atol_S.reshape(-1)])
     rtol_aug = jnp.concatenate(
         [jnp.full((ndof,), float(rtol)), jnp.full((ndof * k,), sens_rtol_v)]
     )
+
+    if shared_factor:
+        from diffrax import VeryChord, with_stepsize_controller_tols
+
+        from aquakin.integrate._simultaneous_corrector import SimultaneousCorrector
+
+        root_finder = with_stepsize_controller_tols(VeryChord)(
+            linear_solver=SimultaneousCorrector(ndof=ndof, n_sens=k)
+        )
+        solver = diffrax.Kvaerno5(root_finder=root_finder)
+    else:
+        solver = diffrax.Kvaerno5()
 
     saveat = (
         diffrax.SaveAt(t1=True)
@@ -231,7 +243,7 @@ def augmented_forward_sensitivity(
     controller = diffrax.PIDController(rtol=rtol_aug, atol=atol_aug, dtmax=dtmax)
     sol = diffrax.diffeqsolve(
         diffrax.ODETerm(aug_rhs),
-        diffrax.Kvaerno5(),
+        solver,
         t0=float(t0),
         t1=float(t1),
         dt0=None,
@@ -243,8 +255,57 @@ def augmented_forward_sensitivity(
     )
     ts = sol.ts
     y_traj = sol.ys[:, :ndof]
-    S_traj = sol.ys[:, ndof:].reshape(sol.ys.shape[0], ndof, k)
+    # Column-major -> (n_t, ndof, k).
+    S_traj = sol.ys[:, ndof:].reshape(sol.ys.shape[0], k, ndof).transpose(0, 2, 1)
     return ts, y_traj, S_traj
+
+
+def build_jitted_sensitivity_solve(
+    make_f_flat,
+    free_idx: jnp.ndarray,
+    *,
+    t0: float,
+    t1: float,
+    has_t_eval: bool,
+    rtol: float,
+    atol_y: jnp.ndarray,
+    sens_rtol,
+    dtmax,
+    max_steps: int,
+    shared_factor: bool,
+):
+    """Build a ``jax.jit``-compiled forward-sensitivity solve for reuse.
+
+    Mirrors the per-call-signature jit caching of ``reactor.solve`` so repeated
+    evaluations (a calibration loop, an ensemble) compile once and then run
+    without re-tracing -- which is what makes the simultaneous-corrector speedup
+    visible in practice.
+
+    ``make_f_flat(condition_arrays) -> f_flat`` rebuilds the flat RHS from the
+    (traced) condition arrays, so condition overrides do not stale the cache.
+    ``t_eval`` is passed as a runtime argument (not closed over), so different
+    sample times of the same shape reuse the same compiled function.
+    """
+    if has_t_eval:
+        @jax.jit
+        def _solve(y0_flat, params, condition_arrays, t_eval):
+            return augmented_forward_sensitivity(
+                make_f_flat(condition_arrays), y0_flat, params, free_idx,
+                t0=t0, t1=t1, t_eval=t_eval, rtol=rtol, atol_y=atol_y,
+                sens_rtol=sens_rtol, dtmax=dtmax, max_steps=max_steps,
+                shared_factor=shared_factor,
+            )
+        return _solve
+
+    @jax.jit
+    def _solve(y0_flat, params, condition_arrays):
+        return augmented_forward_sensitivity(
+            make_f_flat(condition_arrays), y0_flat, params, free_idx,
+            t0=t0, t1=t1, t_eval=None, rtol=rtol, atol_y=atol_y,
+            sens_rtol=sens_rtol, dtmax=dtmax, max_steps=max_steps,
+            shared_factor=shared_factor,
+        )
+    return _solve
 
 
 @dataclass

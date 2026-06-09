@@ -93,7 +93,13 @@ res.dC_dparam("target", "H2O2_photolysis.k_photo")   # (n_t,)
 ```
 
 `solve_sensitivity` is available on `BatchReactor`, `PlugFlowReactor` and
-`BiofilmReactor`.
+`BiofilmReactor`. For more than one parameter it defaults to a CVODES-style
+*simultaneous corrector* (`shared_factor=True`): the augmented Jacobian is
+block-lower-triangular with one shared diagonal block, so that block is
+factorised once per step and reused across the sensitivity columns instead of
+factorising the full augmented system. This is several times faster than the
+dense augmented solve on large stiff systems (e.g. the layered biofilm) and
+gives bit-identical results.
 
 ## Testing
 
