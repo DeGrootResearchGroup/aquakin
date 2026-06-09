@@ -19,7 +19,10 @@ import pytest
 import diffrax
 
 import aquakin
-from aquakin.integrate.discrete_adjoint import implicit_euler_adjoint_solve
+from aquakin.integrate.discrete_adjoint import (
+    esdirk_adjoint_solve,
+    implicit_euler_adjoint_solve,
+)
 
 
 def _decay_rhs(simple_network):
@@ -174,6 +177,97 @@ def test_stiff_finite_uncapped_and_matches_capped():
     assert rel < 1e-5
 
 
+def test_esdirk_analytic_trajectory_gradient(simple_network):
+    # The high-order (Kvaerno5) discrete adjoint on the closed-form decay
+    # trajectory loss; Kvaerno5's 5th order makes the primal -- and so the
+    # gradient -- tighter than implicit Euler at the same tolerance.
+    rhs = _decay_rhs(simple_network)
+    C0 = jnp.array([1.0, 0.0])
+    p = simple_network.default_parameters()
+    k = float(p[0])
+    t_obs = jnp.array([2.0, 5.0, 9.0, 15.0])
+
+    def loss(pp):
+        ys = esdirk_adjoint_solve(rhs, C0, pp, (0.0, 15.0), t_obs)
+        return jnp.sum(ys[:, 0] ** 2)
+
+    g = jax.grad(loss)(p)[0]
+    exact = sum(
+        2 * math.exp(-k * ti) * (-ti * math.exp(-k * ti)) for ti in [2.0, 5.0, 9.0, 15.0]
+    )
+    assert jnp.isfinite(g)
+    assert abs(float(g) - exact) / abs(exact) < 1e-5
+
+
+def test_esdirk_equals_autodiff_through_same_solve(simple_network):
+    # Same machine-precision guard as the implicit-Euler one, but for the
+    # Kvaerno5 discrete adjoint: it must equal jax.grad through the identical
+    # forced-step Kvaerno5 solve on a small network.
+    rhs = _decay_rhs(simple_network)
+    C0 = jnp.array([1.0, 0.0])
+    p = simple_network.default_parameters()
+    t_obs = jnp.array([1.0, 4.0, 8.0])
+    rtol, atol = 1e-9, 1e-11
+
+    def loss_stable(pp):
+        return jnp.sum(
+            esdirk_adjoint_solve(rhs, C0, pp, (0.0, 8.0), t_obs, rtol=rtol, atol=atol) ** 2
+        )
+
+    def loss_autodiff(pp):
+        ctrl = diffrax.ClipStepSizeController(
+            diffrax.PIDController(rtol=rtol, atol=atol), step_ts=t_obs
+        )
+        sol = diffrax.diffeqsolve(
+            diffrax.ODETerm(lambda t, y, a: rhs(t, y, a)), diffrax.Kvaerno5(),
+            0.0, 8.0, 1e-6, C0, args=pp, stepsize_controller=ctrl,
+            adjoint=diffrax.RecursiveCheckpointAdjoint(),
+            saveat=diffrax.SaveAt(ts=t_obs), max_steps=100_000,
+        )
+        return jnp.sum(sol.ys ** 2)
+
+    assert jnp.allclose(jax.grad(loss_stable)(p), jax.grad(loss_autodiff)(p),
+                        rtol=1e-6, atol=1e-9)
+
+
+@pytest.mark.validation
+def test_esdirk_stiff_trajectory_matches_capped_kvaerno5():
+    # The Kvaerno5 discrete adjoint on the stiff network: finite uncapped, and
+    # matching the capped-Kvaerno5 jax-adjoint of the same forced-step forward.
+    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    cond = net.default_conditions(1)
+    C0 = net.default_concentrations()
+    p = net.default_parameters()
+    fields = cond.fields
+    rhs = lambda t, y, pp: net.dCdt(y, pp, fields, 0)
+    t_obs = jnp.array([0.05, 0.1, 0.2, 0.3])
+    si = net.species_index["S_SO4"]
+
+    def loss(pp):
+        ys = esdirk_adjoint_solve(rhs, C0, pp, (0.0, 0.3), t_obs,
+                                  rtol=1e-7, atol=1e-10, max_steps=50_000)
+        return jnp.sum(ys[:, si] ** 2) + 1e-3 * jnp.sum(ys ** 2)
+
+    g = jax.jit(jax.grad(loss))(p)
+    assert bool(jnp.all(jnp.isfinite(g)))
+
+    def loss_ref(pp):
+        ctrl = diffrax.ClipStepSizeController(
+            diffrax.PIDController(rtol=1e-7, atol=1e-10, dtmax=3e-4), step_ts=t_obs
+        )
+        sol = diffrax.diffeqsolve(
+            diffrax.ODETerm(lambda t, y, a: rhs(t, y, a)), diffrax.Kvaerno5(),
+            0.0, 0.3, 1e-6, C0, args=pp, stepsize_controller=ctrl,
+            adjoint=diffrax.RecursiveCheckpointAdjoint(),
+            saveat=diffrax.SaveAt(ts=t_obs), max_steps=200_000,
+        )
+        return jnp.sum(sol.ys[:, si] ** 2) + 1e-3 * jnp.sum(sol.ys ** 2)
+
+    g_ref = jax.jit(jax.grad(loss_ref))(p)
+    rel = float(jnp.linalg.norm(g - g_ref) / (jnp.linalg.norm(g_ref) + 1e-30))
+    assert rel < 1e-3
+
+
 @pytest.mark.validation
 def test_calibrate_stable_adjoint_matches_jax_adjoint():
     # End-to-end: a Khalil-model calibration with gradient="stable_adjoint"
@@ -198,17 +292,10 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint():
         :, [net.species_index[s] for s in obs_species]
     ]
 
-    # size the discrete-adjoint trajectory buffer from the actual step count
-    ctrl = diffrax.ClipStepSizeController(
-        diffrax.PIDController(rtol=rtol, atol=atol), step_ts=t_obs
-    )
-    sol = diffrax.diffeqsolve(
-        diffrax.ODETerm(lambda t, y, a: net.dCdt(y, a, cond.fields, 0)),
-        diffrax.ImplicitEuler(), 0.0, span[1], 1e-6, C0, args=p_def,
-        stepsize_controller=ctrl, saveat=diffrax.SaveAt(steps=True), max_steps=300_000,
-    )
-    max_steps = int(jnp.sum(jnp.isfinite(sol.ts))) * 2 + 50
-
+    # Generous buffer: the backward skips padded slots (lax.cond), so the cost
+    # tracks the actual Kvaerno5 step count, while the buffer stays large enough
+    # for the forward across all params the optimiser explores.
+    max_steps = 4000
     common = dict(observed_species=obs_species, loss="mse", laplace=False,
                   max_iter=150, tol=1e-9)
     r_ref = aquakin.calibrate(

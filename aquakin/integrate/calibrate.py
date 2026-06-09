@@ -532,15 +532,15 @@ def calibrate(
         networks this reverse-mode pass goes non-finite above a step-size
         threshold, so the reactor must carry a ``dtmax`` cap. ``"stable_adjoint"``
         keeps the autodiff model derivatives but replaces the integrator's
-        adjoint with an explicit per-step transposed solve
-        (:func:`~aquakin.implicit_euler_adjoint_solve`) -- a robust adaptive
-        implicit-Euler forward whose backward is finite with no cap. It is
-        reverse-mode only, so it forces a reverse-mode residual Jacobian under
-        ``optimizer="gauss_newton"``. Built from the reactor's network and
-        (single-location) ``conditions`` at the reactor's ``rtol``/``atol``;
-        supported for batch reactors. The forward is implicit Euler (first
-        order), so tighten ``rtol``/``atol`` for accuracy parity with the
-        reactor's high-order solver.
+        adjoint with an explicit per-step transposed-stage solve
+        (:func:`~aquakin.esdirk_adjoint_solve`) -- a robust adaptive ESDIRK
+        forward (Kvaerno5, the same high-order method the reactors use) whose
+        backward is finite with no cap. It is reverse-mode only, so it forces a
+        reverse-mode residual Jacobian under ``optimizer="gauss_newton"``. Built
+        from the reactor's network and (single-location) ``conditions`` at the
+        reactor's ``rtol``/``atol``; supported for batch reactors. Because it
+        matches the reactor's forward solver, its gradients agree with the
+        capped ``"jax_adjoint"`` path to the optimiser's tolerance.
     stable_adjoint_max_steps : int, optional
         Maximum (and allocated) number of forward steps for the
         ``gradient="stable_adjoint"`` solve. The backward scan walks this whole
@@ -791,13 +791,14 @@ def calibrate(
              for i in range(n_rate)]
         )
 
-    # Stable-adjoint backend: predictions come from the cap-free implicit-Euler
-    # solve whose integrator adjoint is an explicit per-step transposed solve
-    # (model derivatives still by autodiff), instead of differentiating the
-    # reactor's diffrax solve. Built from the reactor's network +
-    # (single-location) conditions, matching the reactor's tolerances.
+    # Stable-adjoint backend: predictions come from the cap-free ESDIRK
+    # (Kvaerno5, matching the reactor's forward solver) solve whose integrator
+    # adjoint is an explicit per-step transposed-stage solve (model derivatives
+    # still by autodiff), instead of differentiating the reactor's diffrax solve.
+    # Built from the reactor's network + (single-location) conditions, matching
+    # the reactor's tolerances.
     if gradient == "stable_adjoint":
-        from aquakin.integrate.discrete_adjoint import implicit_euler_adjoint_solve
+        from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 
         _da_fields = reactor.conditions.fields
         _da_rhs = lambda t, y, p: network.dCdt(y, p, _da_fields, 0)
@@ -816,7 +817,7 @@ def calibrate(
                     jnp.exp(ic_thetas[k * m_ic:(k + 1) * m_ic])
                 )
             if gradient == "stable_adjoint":
-                ys = implicit_euler_adjoint_solve(
+                ys = esdirk_adjoint_solve(
                     _da_rhs, C0_k, p, tspan_i, tobs_i,
                     rtol=reactor.rtol, atol=reactor.atol,
                     max_steps=stable_adjoint_max_steps,

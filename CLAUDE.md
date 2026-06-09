@@ -699,15 +699,25 @@ stable backend forces a reverse-mode residual Jacobian under
 `stable_adjoint_max_steps` bounds the saved-trajectory buffer the backward scan
 walks (set it to a tight upper bound on the step count). Verified end-to-end: a
 synthetic Khalil calibration reaches the **same optimum** as the capped-Kvaerno5
-`gradient="jax_adjoint"` path (fitted params agree to `rel ≈ 7e-4`; the small gap
-is the implicit-Euler vs Kvaerno5 forward difference) — see
-`test_calibrate_stable_adjoint_matches_jax_adjoint`.
-**Status / limitation:** this cut uses **implicit Euler** (first order: accurate
-but more adaptive steps than a high-order method), and the backward scan's cost
-scales with `discrete_adjoint_max_steps` (the padded trajectory length). The
-remaining step is a high-order SDIRK/ESDIRK discrete adjoint (recompute the
-stage values in the backward and apply the transposed stage tableau) for
-efficiency.
+`gradient="jax_adjoint"` path — see `test_calibrate_stable_adjoint_matches_jax_adjoint`.
+
+**Two solvers, low- and high-order.** `implicit_euler_adjoint_solve` (first
+order) is the simple, robust baseline. `esdirk_adjoint_solve` is the high-order
+version: a general s-stage ESDIRK forward (default **`Kvaerno5`, the same method
+the reactors use**) whose discrete adjoint recomputes the stage values in the
+backward pass (diffrax saves only step states) and applies the transposed-stage
+recurrence `(I − dt·γ·Jᵢᵀ)⁻¹` per stage — the FATODE/Sandu construction (verified
+to reduce to the implicit-Euler case for s=1). **`calibrate(gradient=
+"stable_adjoint")` now uses the Kvaerno5 ESDIRK adjoint**, so its forward matches
+the reactor exactly and its gradients agree with the capped `jax_adjoint` path to
+the optimiser tolerance (analytic decay `rel ≈ 1e-6`; stiff network
+finite-uncapped, matching capped Kvaerno5 to `rel ≈ 2.5e-5`, the residual being
+the capped-vs-uncapped *forward* difference, FD-confirmed). **Cost note:** the
+backward scan's cost scales with `stable_adjoint_max_steps` (the padded
+trajectory length), and the ESDIRK backward recomputes the 7 stages per step
+(Newton + transposed solves), so keep `max_steps` tight; Kvaerno5's high order
+keeps the step count low. The autonomous reaction RHS is assumed (the ESDIRK
+stage times `c` do not enter).
 
 ### Operator Splitting
 
@@ -927,7 +937,8 @@ aquakin/
 │   │   ├── _simultaneous_corrector.py # CVODES simultaneous-corrector lineax
 │   │   │                            #   solver (shared_factor=True, Option A):
 │   │   │                            #   factorise the shared diagonal block once
-│   │   ├── discrete_adjoint.py      # implicit_euler_adjoint_solve: cap-free
+│   │   ├── discrete_adjoint.py      # implicit_euler_adjoint_solve /
+│   │   │                            #   esdirk_adjoint_solve (Kvaerno5): cap-free
 │   │   │                            #   REVERSE-mode gradient via a hand-written
 │   │   │                            #   discrete adjoint (no autodiff through the solve)
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
