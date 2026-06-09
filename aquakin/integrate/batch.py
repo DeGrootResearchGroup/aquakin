@@ -108,6 +108,8 @@ class BatchReactor:
         # First call with a new signature pays the trace cost; subsequent
         # calls reuse the compiled graph.
         self._jit_cache: dict = {}
+        # Separate cache for the forward-sensitivity solves.
+        self._sens_jit_cache: dict = {}
 
     def solve(
         self,
@@ -177,6 +179,122 @@ class BatchReactor:
         else:
             ts, ys = jitted(C0, params, condition_arrays, t_eval_arr)
         return BatchSolution(t=ts, C=ys, network=self.network)
+
+    def solve_sensitivity(
+        self,
+        C0: jnp.ndarray,
+        params: jnp.ndarray,
+        t_span: tuple[float, float],
+        t_eval: Optional[jnp.ndarray] = None,
+        *,
+        sens_params,
+        conditions: Optional[SpatialConditions] = None,
+        sens_rtol: Optional[float] = None,
+        sens_atol=None,
+        param_scale=None,
+        shared_factor: Optional[bool] = None,
+    ) -> tuple["BatchSolution", jnp.ndarray]:
+        """Solve and return the forward sensitivity ``dC/dtheta`` alongside ``C``.
+
+        Integrates the augmented ``[C; S]`` system (state plus sensitivity) with
+        adaptive control over both, so the sensitivity is exact and finite
+        without the ``dtmax`` cap that ordinary AD through a stiff solve needs
+        (see :mod:`aquakin.integrate.forward_sensitivity`).
+
+        Parameters
+        ----------
+        C0, params, t_span, t_eval, conditions
+            As for :meth:`solve`.
+        sens_params : list of str or int
+            Namespaced parameter names (or integer indices into ``params``) to
+            differentiate with respect to.
+        sens_rtol, sens_atol, param_scale
+            Sensitivity error-control tolerances. Defaults follow CVODES:
+            ``rtol_S = rtol`` and ``atol_S = atol / |theta_k|``. See
+            :func:`~aquakin.integrate.forward_sensitivity.augmented_forward_sensitivity`.
+        shared_factor : bool, optional
+            Use the CVODES simultaneous-corrector linear solve (factorise the
+            shared diagonal block once, forward-substitute across the
+            sensitivity columns). ``None`` (default) auto-selects: ``True`` for
+            more than one sensitivity parameter (where it is markedly cheaper
+            than the dense augmented solve), ``False`` for a single parameter.
+
+        Returns
+        -------
+        sol : BatchSolution
+            The usual state trajectory (uncapped, exact).
+        S : jnp.ndarray
+            Sensitivity ``dC/dtheta`` at the saved times, shape
+            ``(n_t, n_species, n_sens_params)``.
+        """
+        from aquakin.integrate.forward_sensitivity import (
+            augmented_forward_sensitivity,
+            build_jitted_sensitivity_solve,
+            resolve_sens_indices,
+        )
+
+        C0 = jnp.asarray(C0)
+        params = jnp.asarray(params)
+        if C0.shape != (self.network.n_species,):
+            raise ValueError(
+                f"C0 has shape {C0.shape}, expected ({self.network.n_species},)"
+            )
+        if params.shape != (self.network.n_params,):
+            raise ValueError(
+                f"params has shape {params.shape}, expected ({self.network.n_params},)"
+            )
+        t0, t1 = float(t_span[0]), float(t_span[1])
+        if not (t1 > t0):
+            raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
+
+        free_idx = resolve_sens_indices(self.network, sens_params)
+        if shared_factor is None:
+            shared_factor = free_idx.shape[0] > 1
+        active = conditions if conditions is not None else self.conditions
+        cond = active.fields
+        network = self.network
+        atol_y = jnp.broadcast_to(jnp.asarray(self.atol, dtype=float),
+                                  (network.n_species,))
+        t_eval_arr = None if t_eval is None else jnp.asarray(t_eval)
+
+        # Non-default sensitivity tolerances bypass the compile cache (they would
+        # bloat the key); the common default path is cached like ``solve``.
+        if sens_atol is not None or param_scale is not None:
+            def f_flat(t, y, p):
+                return network.dCdt(y, p, cond, 0)
+
+            ts, y_traj, S_traj = augmented_forward_sensitivity(
+                f_flat, C0, params, free_idx,
+                t0=t0, t1=t1, t_eval=t_eval_arr,
+                rtol=self.rtol, atol_y=atol_y,
+                sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
+                dtmax=self.dtmax, shared_factor=shared_factor,
+            )
+            return BatchSolution(t=ts, C=y_traj, network=network), S_traj
+
+        cache_key = (
+            t0, t1, None if t_eval_arr is None else tuple(t_eval_arr.shape),
+            tuple(int(i) for i in free_idx), bool(shared_factor),
+            None if sens_rtol is None else float(sens_rtol),
+        )
+        jitted = self._sens_jit_cache.get(cache_key)
+        if jitted is None:
+            def make_f_flat(condition_arrays):
+                return lambda t, y, p: network.dCdt(y, p, condition_arrays, 0)
+
+            jitted = build_jitted_sensitivity_solve(
+                make_f_flat, free_idx, t0=t0, t1=t1,
+                has_t_eval=t_eval_arr is not None, rtol=self.rtol, atol_y=atol_y,
+                sens_rtol=sens_rtol, dtmax=self.dtmax, max_steps=1_000_000,
+                shared_factor=shared_factor,
+            )
+            self._sens_jit_cache[cache_key] = jitted
+
+        if t_eval_arr is None:
+            ts, y_traj, S_traj = jitted(C0, params, cond)
+        else:
+            ts, y_traj, S_traj = jitted(C0, params, cond, t_eval_arr)
+        return BatchSolution(t=ts, C=y_traj, network=network), S_traj
 
     def _build_jitted_solve(self, t0: float, t1: float, has_t_eval: bool):
         """Build a jit-compiled inner solver for a specific call signature."""

@@ -589,6 +589,73 @@ forward-mode sensitivity screen is unaffected, and is also faster (see
 reduction of the near-instantaneous fast reactions, which would remove the
 stiff modes entirely and avoid needing the cap.
 
+**Cap-free alternative — forward-sensitivity solve.** For the sensitivity
+`dC/dθ` itself there is now a way that needs **no cap at all**:
+`reactor.solve_sensitivity(...)` (and the free function
+`aquakin.forward_sensitivity(...)`). Instead of differentiating *through* the
+stiff solve, it integrates the variational equation `dS/dt = J·S + f_θ`
+*alongside* the state — one augmented `[y; S]` system, stock `Kvaerno5` +
+`PIDController` whose error norm now also bounds `S` — so the adaptive
+controller tightens the step only where the *sensitivity* is stiff and runs
+free elsewhere. The primal stays uncapped and the returned `S` is finite and
+exact (it matches a tightly-capped `jacfwd` to ~1e-8; validated against the
+closed-form sensitivity of first-order decay and against capped `jacfwd` on the
+stiff Khalil biofilm in `tests/integration/test_forward_sensitivity.py`). The
+augmented RHS is `f(y)` plus one JVP of `f` per sensitivity parameter (the
+JVP's primal gives `f(y)` for free; the JVP also differentiates through the
+state-derived-pH speciation solver, the positivity limiter and the density-cap
+throttle, so no special-casing). Implemented in
+[`integrate/forward_sensitivity.py`](aquakin/integrate/forward_sensitivity.py)
+on `BatchReactor`, `PlugFlowReactor` and `BiofilmReactor`.
+
+**`shared_factor` — dense (Option B) vs simultaneous corrector (Option A).**
+The per-step implicit solve has two implementations, selected by
+`solve_sensitivity(..., shared_factor=...)`:
+
+- `shared_factor=False` (**Option B**, dense): hand the augmented `[y; S]`
+  system to a stock `Kvaerno5`, which factorises the full
+  `n(1+p)×n(1+p)` implicit operator each step. Exact and cap-free; the right
+  choice for **one** sensitivity parameter and for scalar-loss gradients.
+- `shared_factor=True` (**Option A**, CVODES simultaneous corrector): the
+  augmented Jacobian is block-lower-triangular "arrow" form — every diagonal
+  block is the same `D = I − γ·dt·J`, each `S_j` column couples only to `y`.
+  A custom `lineax` solver
+  ([`integrate/_simultaneous_corrector.py`](aquakin/integrate/_simultaneous_corrector.py))
+  injected into the `Kvaerno5` `VeryChord` root-finder **factorises `D` once
+  per step (`O(n³)`) and forward-substitutes across the `S` columns**, instead
+  of the dense `O((n(1+p))³)`. The Newton step is identical to the dense
+  solve, so results are **bit-equivalent** to Option B (verified to ~5e-14) —
+  only the linear-algebra cost differs.
+
+`shared_factor` **defaults to `None`**, which auto-selects Option A for more
+than one sensitivity parameter and Option B for a single one (Option A has no
+advantage at `p=1`).
+
+**Measured (stiff `wats_sewer_khalil_paper_balanced`, biofilm, jitted, `p=5`):**
+Option A beats Option B by **3.8× at ndof=100 and 6.9× at ndof=180** — the win
+grows with system size, as the `(1+p)³`→`1` factorisation saving predicts.
+Versus the *capped `jacfwd`* workaround the comparison depends on the
+integration span: the uncapped augmented solve's adaptive sensitivity control
+actually takes **more** steps than a capped primal-only solve over a short
+window (the sensitivity transient is what it must resolve), but its step count
+**plateaus** (~4300) while the capped step count grows linearly with the span.
+So `jacfwd` is faster for short solves and Option A overtakes it for long ones
+(measured crossover ≈ 8–10 days: `0.78× → 0.92× → 1.16×` at 2/5/10 d), with a
+large Option-A win expected at the multi-week maturation spans the cap was
+introduced for. Net guidance: **for a multi-parameter sensitivity of a stiff
+network, `shared_factor=True` (the default) is the best forward-sensitivity
+option; whether it also beats capped `jacfwd` depends on the span.**
+
+The known cost of the non-invasive design (a custom *solver*, not a custom
+diffrax RK stage): the solver only sees the augmented operator, so materialising
+`D` and the off-diagonal coupling blocks `L_j` costs `n` probes of the augmented
+`M.mv` (`n·(1+p)` f-JVPs per step) — the `L_j` blocks that an ideal CVODES with
+direct access to `f` would not form. A zero-redundancy variant (a custom operator
+carrying `f`, needing a `Kvaerno5` stage subclass) is the documented future
+optimisation. `calibrate` does not yet expose a
+`jacobian="forward_sensitivity"` hook, so the `dtmax` cap is still required for
+the reverse-mode `calibrate` gradient until that lands.
+
 ### Operator Splitting
 
 Transport and reaction are decoupled at all scales:
@@ -796,10 +863,17 @@ aquakin/
 │   ├── integrate/
 │   │   ├── _common.py               # shared helpers (atol coercion, jit'd solve, Reactor Protocol)
 │   │   ├── batch.py                 # BatchReactor, BatchSolution
+│   │   ├── biofilm.py               # BiofilmReactor (layered 1-D diffusion-reaction)
 │   │   ├── pfr.py                   # PlugFlowReactor, PFRSolution
 │   │   ├── particle.py              # Track, ParticleTrackReactor, integrate_ensemble
 │   │   ├── cfd.py                   # CFDReactor (Option C runtime coupling)
 │   │   ├── sensitivity.py           # sensitivity(), fit()
+│   │   ├── forward_sensitivity.py   # solve_sensitivity / forward_sensitivity:
+│   │   │                            #   augmented [y; S] variational solve giving
+│   │   │                            #   cap-free exact stiff sensitivities
+│   │   ├── _simultaneous_corrector.py # CVODES simultaneous-corrector lineax
+│   │   │                            #   solver (shared_factor=True, Option A):
+│   │   │                            #   factorise the shared diagonal block once
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands
@@ -823,13 +897,90 @@ aquakin/
 │   │   ├── wats_sewer_extended.yaml  # extended WATS (+ nitrate/methane/elemental-S, state-derived pH)
 │   │   ├── wats_sewer_extended_*.yaml # extended-model structural variants + v0
 │   │   ├── wats_sewer_khalil_paper*.yaml # paper-faithful Khalil (2025) model + variants
-│   │   └── wats_sewer_khalil_thesis.yaml # thesis-faithful Khalil model
+│   │   ├── wats_sewer_khalil_thesis.yaml # thesis-faithful Khalil model
+│   │   ├── wats_sewer_khalil_paper_balanced_biofilm.yaml  # layered-biofilm variant ({A_V} areal)
+│   │   ├── wats_sewer_khalil_paper_balanced_biofilm_biomass.yaml  # per-layer-biomass biofilm (heterotroph)
+│   │   └── wats_sewer_khalil_paper_balanced_biofilm_multispecies.yaml  # + X_SRB/X_MA/X_SOB groups
 │   │
 │   │   # wats_sewer_khalil_paper (paper) is the paper-active core augmented with the
 │   │   #   dormant full-WATS aerobic pieces by networks/_make_khalil_paper.py;
 │   │   # wats_sewer_khalil_thesis is generated from wats_sewer_extended.yaml by
 │   │   #   networks/_make_khalil_thesis.py; the structural variants by
-│   │   #   networks/_make_khalil_variants.py
+│   │   #   networks/_make_khalil_variants.py;
+│   │   # wats_sewer_khalil_paper_balanced_biofilm is generated by
+│   │   #   networks/_make_khalil_balanced_biofilm.py -- it splits the 3 composite
+│   │   #   bulk+biofilm reactions (fermentation, fast/slow hydrolysis) into
+│   │   #   _bulk ([X_BH]) and _biofilm (eps*{X_BF}*{A_V}) halves so the depth-
+│   │   #   resolved BiofilmReactor can run bulk reactions in the bulk and biofilm
+│   │   #   reactions in the layers. Same chemistry; the lumped balanced model is
+│   │   #   its well-mixed limit. Depth-resolved, nitrate is consumed in the outer
+│   │   #   layers and never reaches the deep methanogens (Sun et al. 2014), so
+│   │   #   methane accumulates toward the wall and acetate is diffusion-limited --
+│   │   #   the stratification the lumped model cannot represent. This variant keeps
+│   │   #   the areal {A_V} device: biofilm activity is spatially UNIFORM, so it
+│   │   #   cannot represent a biomass GRADIENT (the next variant does).
+│   │   # wats_sewer_khalil_paper_balanced_biofilm_biomass is generated by
+│   │   #   networks/_make_khalil_balanced_biofilm_biomass.py -- biomass is an
+│   │   #   explicit per-layer growing/decaying STATE: every biofilm process is
+│   │   #   driven by the LOCAL volumetric [X_BH] (no {A_V}/{X_BF}), run in every
+│   │   #   compartment (no phase split; the biomass concentration -- low in bulk,
+│   │   #   high in the layers -- carries the bulk/biofilm distinction). Run in
+│   │   #   BiofilmReactor with biofilm_reactions=None, a stratified C0, and
+│   │   #   fixed_mask holding only the inert solids; the biomass gradient then
+│   │   #   evolves. INCREMENT 1 (heterotroph): the sulfur/methane processes are
+│   │   #   interim-coupled to [X_BH] -- a stand-in pending their own
+│   │   #   functional-group biomass (X_SRB, methanogens, S-oxidizers), which in
+│   │   #   reality stratify DIFFERENTLY from heterotrophs (Sun 2014: SRB outer,
+│   │   #   methanogens inner). So NO sulfur/sulfate conclusions may be drawn from
+│   │   #   this increment -- only the heterotroph/VFA result. FINDING (JRN-055,
+│   │   #   increment 1, reviewer-checked): with a real per-layer biomass gradient,
+│   │   #   depth resolution still does NOT reproduce the measured bulk VFA plateau
+│   │   #   (flat ~13 mgCOD/L held while nitrate->0), across biofilm thickness
+│   │   #   0.8-3 mm. There is a hard VFA-vs-nitrate trade-off: every configuration
+│   │   #   that consumes the dosed nitrate (as the data require) crashes bulk VFA
+│   │   #   to ~0, because VFA is consumed wherever nitrate persists
+│   │   #   (denitrification) and, in any nitrate-free deep zone, by methanogenesis
+│   │   #   (nitrate-inhibited elsewhere). [CORRECTION: an earlier note here claimed
+│   │   #   the deep VFA is "trapped behind the denitrifying zone and cannot export
+│   │   #   to the bulk (bulk VFA <=0.2), reproducing Jiang Fig 8". That was
+│   │   #   OVERSTATED -- a transient of the donor-limited regime: in the CLOSED
+│   │   #   batch the dosed 30 mgN is not globally cleared within 5 h, so the outer
+│   │   #   denitrifying zone persists and consumes exported VFA; it is not a steady
+│   │   #   export barrier, and the closed batch does not reproduce Jiang's
+│   │   #   continuous-flow Fig 8 (deep S_A peak + bulk S_A~0) as a SIMULTANEOUS
+│   │   #   state.] The robust conclusion is the negative empirical one: sparing
+│   │   #   VFA enough to match the plateau requires producing enough donor that
+│   │   #   nitrate clears early -- i.e. the same supra-literature hydrolysis the
+│   │   #   lumped model needs -- so the plateau is consistent with a bulk-phase
+│   │   #   mobilization effect, not with biofilm depth structure. A genuinely
+│   │   #   decisive test (deferred) is to run the model continuous-feed / CSTR-
+│   │   #   coupled (sustained nitrate, as in Jiang/Sun and the real sewer) rather
+│   │   #   than as the closed pump-off batch.
+│   │   # wats_sewer_khalil_paper_balanced_biofilm_multispecies is generated by
+│   │   #   networks/_make_khalil_balanced_biofilm_multispecies.py from the
+│   │   #   increment-1 _biofilm_biomass model. It resolves the interim-coupling
+│   │   #   confounder: the sulfur/methane processes now grow their OWN per-layer
+│   │   #   functional-group biomass instead of riding on [X_BH] -- X_SRB (sulfate
+│   │   #   + elemental-S reducers on S_B), X_MA (acetoclastic + hydrogenotrophic
+│   │   #   methanogens), X_SOB (nitrate-driven + aerobic sulfide/S0 oxidisers).
+│   │   #   Each process keeps its Monod form but is driven by [X_group] and
+│   │   #   produces biomass at a literature YIELD with COD/S/N-conserving
+│   │   #   stoichiometry (-> the original electron balance as Y->0); each group
+│   │   #   decays first-order to inert X_I. The old areal rate constants
+│   │   #   (k_h2s_acid, k_sII_anox_f, ...) are superseded by growth rates mu_* and
+│   │   #   auto-pruned. Yields/electron-stoichiometry are fixed from the
+│   │   #   literature (Jiang 2009 Table 2 for SRB; ADM1/Sun 2014 for X_MA;
+│   │   #   Mohanakrishnan 2009 / Nielsen 2005 for X_SOB); the mu_* are
+│   │   #   literature-range placeholders (mu and biofilm biomass density are
+│   │   #   confounded -- only their product is grounded) and the variant is
+│   │   #   meant to be re-calibrated. Run in BiofilmReactor with
+│   │   #   biofilm_reactions=None, a stratified C0 (X_BH/X_SRB/X_MA/X_SOB high in
+│   │   #   the layers), fixed_mask holding only X_I. Conserves COD/S/Fe/P (N lost
+│   │   #   only via denitrification N2). Built so the calibration is PHYSICAL:
+│   │   #   the optimizer can no longer abuse an [X_BH]-coupled sulfur term to fit
+│   │   #   sulfide/sulfate, since each process has its own biomass that grows,
+│   │   #   decays and stratifies by its own kinetics (SRB/methanogens stratify
+│   │   #   differently from heterotrophs -- Sun 2014).
 │   │
 │   └── utils/
 │       ├── latex.py                 # AST -> LaTeX rate expressions
@@ -913,11 +1064,97 @@ solution = reactor.solve(C0, params)
 solution.x                           # (n_points,)
 solution.C                           # (n_points, n_species)
 
+# Layered biofilm reactor (1-D diffusion-reaction over biofilm depth)
+# Resolves the biofilm into n_layers between a well-mixed bulk and the (no-flux)
+# wall, so penetration-controlled processes are captured (an acceptor consumed in
+# the outer layers never reaches deep organisms; deep uptake is diffusion-limited)
+# -- the lumped area-to-volume reactor cannot represent this. Solubles diffuse
+# (Fick, D_eff) + exchange with the bulk across a boundary layer. The boundary
+# layer is liquid, so its mass-transfer coefficient uses the free-water
+# diffusivity (boundary_diffusivity=D_w); leaving it None reuses the reduced
+# in-biofilm D_eff and understates bulk<->film exchange. Two species roles are
+# DECOUPLED: diffusion (soluble_mask: S*/sumS diffuse, X* do not) is separate
+# from being held fixed (fixed_mask: the "mature biofilm" sustained, non-depleting
+# source/sink). The default fixed_mask = ~soluble_mask (every particulate fixed)
+# is right for INERT particulates (biomass, inert solids) but WRONG for REACTIVE
+# particulates that do not diffuse yet must still react -- elemental sulfur X_S0,
+# precipitated FeS -- whose inventory genuinely drains/fills. Freezing such a
+# species turns it into an unbounded source/sink and silently breaks mass balance
+# (e.g. a frozen X_S0 makes the nitrate-driven X_S0->SO4 oxidation a non-depleting
+# sulfate source). For those networks pass fixed_mask holding only the inert
+# biomass/solids fixed. The same CompiledNetwork runs in every compartment, so
+# identical chemistry behaves differently once depth is resolved (Wanner & Gujer
+# 1986; Jiang et al. 2009; Sun et al. 2014). In the well-mixed limit it reduces to
+# BatchReactor *under the fixed-particulate assumption* (exact only for species
+# that are fixed on both sides; particulates that evolve in a plain BatchReactor
+# but are held fixed here diverge over finite time).
+# A WATS-style network has two phases: bulk-suspended reactions (carry [X_BH]) and
+# biofilm reactions (carry the {A_V} area factor). biofilm_reactions=[names...]
+# runs those reactions in the LAYERS only and the rest in the BULK only -- an
+# explicit per-reaction phase split (no reliance on a zeroed biomass state). A
+# composite term like bio_hf=[X_BH]+eps*{X_BF}*{A_V} is handled by splitting the
+# reaction into _bulk ([X_BH]) and _biofilm (eps*{X_BF}*{A_V}) halves in the
+# network YAML; biofilm rate constants are areal (per m^2), so set A_V=1/thickness
+# per layer (the lumped model is then the well-mixed limit, conserving mass).
+#
+# BIOFILM-GROWTH / MATURATION features (all off by default; used to mature a
+# multispecies biofilm to its operating state before a downstream experiment):
+#   - max_density (per-species rho_i^f, gCOD/m^3) + packing_fraction: the
+#     Jiang 2009 Eqs 8-10 density cap. Biomass GROWTH (the whole reaction, so
+#     mass-conserving) is throttled by the remaining space (1 - sum X_i/rho_i /
+#     packing). A physical UPPER BOUND only -- on its own it gives NO reachable
+#     steady state (biomass drifts to the cap over many months), so it is not the
+#     closure.
+#   - k_att / attach_mask (Eq 1): bulk particulates attach to the surface layer
+#     (k_att*X_bulk), seeding the groups. k_det / detach_mask (Eqs 2-3, lumped to
+#     first order): biofilm particulates erode back to the bulk (k_det*X), where
+#     they wash out with the feed. DETACHMENT, not the cap, is the steady-state
+#     closure: growth = decay + detachment is a chemostat-like fixed point, sets
+#     the weeks-to-months maturation timescale, and (as a -k_det Jacobian-diagonal
+#     term) conditions the steady state. With no sewer shear data k_det is a
+#     calibration knob (low shear -> low k_det -> thicker, denser biofilm).
+#   - feed (influent vector) + dilution_rate (Q/V, 1/d): a CSTR feed on the bulk
+#     (d_bulk += dilution*(feed-bulk)); the steady bulk is the predicted effluent.
+#   - clamp_bulk: hold the bulk as a fixed reservoir (Dirichlet) instead.
+#   - steady_state(C0, params, warmup=...): Newton/Levenberg-Marquardt root-find
+#     on RHS=0 with implicit-diff for AD (optimistix). Works for well-conditioned
+#     steady states; for a VERY stiff/slow biofilm (the multispecies maturation,
+#     whose asymptotic fixed point is hundreds of days out) it stalls -- there,
+#     integrate forward to the physical maturation time (~90 d for the Khalil rig)
+#     and use that profile as the IC instead.
+reactor = aquakin.BiofilmReactor(
+    network, conditions, n_layers=6, thickness=8e-4, area_per_volume=50.0,
+    diffusivity=1e-4, boundary_layer=1e-4,
+    biofilm_reactions=[...])             # names of the {A_V} reactions (run in layers only)
+solution = reactor.solve(C0, params, t_span, t_eval)  # C0 (n_species,) or (n_layers+1, n_species)
+solution.C                           # (n_t, n_species) -- BULK (measurable) trajectory
+solution.profile                     # (n_t, n_layers+1, n_species) -- depth-resolved (0=bulk)
+solution.depth                       # (n_layers,) layer mid-depths from the surface
+solution.profile_named("S_NO")       # (n_t, n_layers+1) depth profile over time
+
 # Sensitivity and fitting
 sens = aquakin.sensitivity(reactor, C0, params, output_fn)
 sens.doutput_dparams                 # (n_params,)
 sens.doutput_dconditions["pH"]       # (n_locations,) — dict access
 sens.ranked_params()
+
+# Forward (variational) sensitivity — integrate S = dC/dθ ALONGSIDE the state,
+# with the adaptive controller bounding S too, so the sensitivity is exact and
+# finite WITHOUT a dtmax cap (the cap-free alternative for stiff networks; see
+# "Differentiating stiff networks" above). Each reactor exposes solve_sensitivity:
+sol, S = reactor.solve_sensitivity(
+    C0, params, t_span, t_eval,
+    sens_params=["mu_h", "q_m"],     # names or int indices of the free params
+    sens_rtol=None, sens_atol=None,  # default: rtol_S=rtol, atol_S=atol/|θ_k| (CVODES)
+    param_scale=None,                # override the |θ_k| error-control scale
+    shared_factor=False,             # True (CVODES simultaneous corrector) not yet implemented
+)
+# sol : the usual Solution (uncapped primal); S : dC/dθ at the saved times,
+#       shape (n_t, n_species, n_sens_params). For a BiofilmReactor S is the
+#       BULK (measurable) sensitivity, aligned with sol.C.
+res = aquakin.forward_sensitivity(reactor, C0, params, sens_params=[...], t_span=..., t_eval=...)
+res.S_named("S_SO4")                 # (n_t, n_sens_params)
+res.dC_dparam("S_SO4", "mu_h")       # (n_t,)
 
 # Derivative-based global sensitivity (DGSM) — AD Sobol-total-index analogue.
 # fn maps an uncertain-input vector to a scalar OR vector output (it builds

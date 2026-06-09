@@ -8,6 +8,7 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork, compile_network
 from aquakin.core.parser import parse_rate_expression
 from aquakin.integrate.batch import BatchReactor, BatchSolution
+from aquakin.integrate.biofilm import BiofilmReactor, BiofilmSolution
 from aquakin.integrate.calibrate import CalibrationResult, PredictiveBand, calibrate
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
 from aquakin.integrate.cfd import CFDReactor
@@ -16,6 +17,10 @@ from aquakin.integrate.particle import (
     Track,
     TrackSolution,
     integrate_ensemble,
+)
+from aquakin.integrate.forward_sensitivity import (
+    ForwardSensitivityResult,
+    forward_sensitivity,
 )
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.sensitivity import (
@@ -43,6 +48,8 @@ from aquakin.schema.loader import load_network, load_network_from_file
 __all__ = [
     "BatchReactor",
     "BatchSolution",
+    "BiofilmReactor",
+    "BiofilmSolution",
     "CFDReactor",
     "CSTRUnit",
     "CalibrationResult",
@@ -63,6 +70,7 @@ __all__ = [
     "Stream",
     "Unit",
     "DGSMResult",
+    "ForwardSensitivityResult",
     "SensitivityResult",
     "SpatialConditions",
     "Track",
@@ -72,6 +80,7 @@ __all__ = [
     "compile_network",
     "dgsm",
     "fit",
+    "forward_sensitivity",
     "integrate_ensemble",
     "load_network",
     "load_network_from_file",

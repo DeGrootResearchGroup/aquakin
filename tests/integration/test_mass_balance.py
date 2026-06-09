@@ -39,6 +39,10 @@ WATS_COMPOSITION = {
     "X_S2":  {"COD": 1.0, "S": _I_S_XB, "N": _I_N_XB},
     "X_BH":  {"COD": 1.0, "N": _I_N_BIO, "P": _I_P_BIO, "S": _I_S_BIO},
     "X_BA":  {"COD": 1.0, "N": _I_N_BIO, "P": _I_P_BIO, "S": _I_S_BIO},
+    # multispecies-biofilm functional-group biomass (same composition as biomass)
+    "X_SRB": {"COD": 1.0, "N": _I_N_BIO, "P": _I_P_BIO, "S": _I_S_BIO},
+    "X_MA":  {"COD": 1.0, "N": _I_N_BIO, "P": _I_P_BIO, "S": _I_S_BIO},
+    "X_SOB": {"COD": 1.0, "N": _I_N_BIO, "P": _I_P_BIO, "S": _I_S_BIO},
     "S_CH4": {"COD": 1.0},
     "S_H2":  {"COD": 1.0},
     "S_I":   {"COD": 1.0},
@@ -78,6 +82,14 @@ _MODELS = [
     "wats_sewer_khalil_paper_balanced_directsulfate",
     "wats_sewer_khalil_paper_balanced_combined",
     "wats_sewer_khalil_paper_balanced_stopatS0",
+    # Per-layer-biomass biofilm variant: biofilm processes driven by local
+    # volumetric [X_BH] instead of the areal {A_V} lump. Same stoichiometry as
+    # the balanced base, so it conserves COD/S/Fe identically.
+    "wats_sewer_khalil_paper_balanced_biofilm_biomass",
+    # Full multispecies biofilm: sulfur/methane processes grow their own
+    # functional-group biomass (X_SRB/X_MA/X_SOB) at literature yields with
+    # COD/S/N-conserving stoichiometry.
+    "wats_sewer_khalil_paper_balanced_biofilm_multispecies",
 ]
 
 # Nitrification / autotroph decay oxidise nitrogen (NH3 -> NO3), which is not

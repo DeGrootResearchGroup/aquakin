@@ -22,6 +22,7 @@ dependencies = [
     "jax>=0.4.30",
     "jaxlib>=0.4.30",
     "diffrax>=0.5",
+    "optimistix>=0.0.6",
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "numpy>=1.24",
