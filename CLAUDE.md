@@ -687,12 +687,22 @@ without differentiating through dense interpolation, the forward is forced to
 land steps exactly on `t_eval` (`diffrax.ClipStepSizeController(step_ts=t_eval)`),
 so every observation is a step boundary (verified vs a closed-form
 multi-observation gradient and vs the capped reference using the same
-forced-step forward, `rel ≈ 6e-8`). **Status / limitation:** this cut uses
-**implicit Euler** (first order: accurate but more adaptive steps than a
-high-order method). The remaining steps are (a) a high-order SDIRK/ESDIRK
-discrete adjoint (recompute the stage values in the backward and apply the
-transposed stage tableau) for efficiency, and (b) wiring it into `calibrate` as
-a reverse-mode Jacobian option so the cap is dropped end-to-end.
+forced-step forward, `rel ≈ 6e-8`). **Wired into `calibrate`** via `calibrate(..., gradient="discrete_adjoint")`: the
+data-term predictions are then taken with this cap-free solve instead of
+differentiating the reactor's diffrax solve (it forces a reverse-mode residual
+Jacobian under `optimizer="gauss_newton"`, being a reverse-only `custom_vjp`;
+`discrete_adjoint_max_steps` bounds the saved-trajectory buffer the backward
+scan walks, so set it to a tight upper bound on the step count). Verified
+end-to-end: a synthetic Khalil calibration reaches the **same optimum** as the
+existing capped-Kvaerno5 `gradient="ad"` path (fitted params agree to
+`rel ≈ 7e-4`; the small gap is the implicit-Euler vs Kvaerno5 forward
+difference) — see `test_calibrate_discrete_adjoint_matches_capped_ad`.
+**Status / limitation:** this cut uses **implicit Euler** (first order: accurate
+but more adaptive steps than a high-order method), and the backward scan's cost
+scales with `discrete_adjoint_max_steps` (the padded trajectory length). The
+remaining step is a high-order SDIRK/ESDIRK discrete adjoint (recompute the
+stage values in the backward and apply the transposed stage tableau) for
+efficiency.
 
 ### Operator Splitting
 

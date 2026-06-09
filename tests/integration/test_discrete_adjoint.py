@@ -139,6 +139,59 @@ def test_stiff_finite_uncapped_and_matches_capped():
 
 
 @pytest.mark.validation
+def test_calibrate_discrete_adjoint_matches_capped_ad():
+    # End-to-end: a Khalil-model calibration with gradient="discrete_adjoint"
+    # (cap-free) must reach the same optimum as the existing capped-Kvaerno5
+    # gradient="ad" path. Synthetic recovery; compare the fitted parameters.
+    import diffrax
+
+    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    cond = net.default_conditions(1)
+    C0 = net.default_concentrations()
+    p_def = net.default_parameters()
+    free = ["mu_h", "q_ferm"]
+    obs_species = ["S_SO4", "sumS", "S_VFA", "S_NO"]
+    t_obs = jnp.linspace(0.04, 0.2, 5)
+    span = (0.0, float(t_obs[-1]))
+    rtol, atol = 1e-5, 1e-8
+
+    idx = [net.param_index[n] for n in free]
+    p_true = p_def.at[jnp.array(idx)].multiply(jnp.array([1.4, 0.6]))
+    gen = aquakin.BatchReactor(net, cond, rtol=1e-9, atol=1e-11)
+    obs = gen.solve(C0, p_true, t_span=span, t_eval=t_obs).C[
+        :, [net.species_index[s] for s in obs_species]
+    ]
+
+    # size the discrete-adjoint trajectory buffer from the actual step count
+    ctrl = diffrax.ClipStepSizeController(
+        diffrax.PIDController(rtol=rtol, atol=atol), step_ts=t_obs
+    )
+    sol = diffrax.diffeqsolve(
+        diffrax.ODETerm(lambda t, y, a: net.dCdt(y, a, cond.fields, 0)),
+        diffrax.ImplicitEuler(), 0.0, span[1], 1e-6, C0, args=p_def,
+        stepsize_controller=ctrl, saveat=diffrax.SaveAt(steps=True), max_steps=300_000,
+    )
+    max_steps = int(jnp.sum(jnp.isfinite(sol.ts))) * 2 + 50
+
+    common = dict(observed_species=obs_species, loss="mse", laplace=False,
+                  max_iter=150, tol=1e-9)
+    r_ref = aquakin.calibrate(
+        aquakin.BatchReactor(net, cond, rtol=rtol, atol=atol, dtmax=5e-4),
+        C0, obs, t_obs, free, gradient="ad", **common,
+    )
+    r_da = aquakin.calibrate(
+        aquakin.BatchReactor(net, cond, rtol=rtol, atol=atol),
+        C0, obs, t_obs, free, gradient="discrete_adjoint",
+        discrete_adjoint_max_steps=max_steps, **common,
+    )
+    assert r_ref.converged and r_da.converged
+    v_ref = jnp.array([r_ref.params_named[n] for n in free])
+    v_da = jnp.array([r_da.params_named[n] for n in free])
+    rel = float(jnp.max(jnp.abs(v_da - v_ref) / jnp.abs(v_ref)))
+    assert rel < 5e-3
+
+
+@pytest.mark.validation
 def test_stiff_trajectory_loss_matches_capped():
     # A multi-observation (trajectory) loss -- the calibration shape -- must be
     # finite uncapped and match the capped reference using the same forced-step
