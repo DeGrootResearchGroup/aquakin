@@ -47,11 +47,17 @@ from aquakin.integrate._common import Reactor
 
 _VALID_LOSSES = ("mse", "wmse", "nll")
 _VALID_OPTIMIZERS = ("lbfgsb", "gauss_newton")
-# Gradient backend: "ad" differentiates through the reactor's diffrax solve
-# (RecursiveCheckpointAdjoint -- needs a dtmax cap for stiff networks);
-# "discrete_adjoint" uses the cap-free hand-written implicit-Euler discrete
-# adjoint (aquakin.implicit_euler_adjoint_solve) for the predictions.
-_VALID_GRADIENTS = ("ad", "discrete_adjoint")
+# Gradient backend. Both compute a discrete adjoint and both use JAX autodiff
+# for the model derivatives (d f/d y, d f/d theta); they differ in how the
+# integrator's adjoint is formed:
+#   "jax_adjoint"    -- JAX/diffrax differentiate the whole solve
+#                       (RecursiveCheckpointAdjoint). Needs a dtmax cap for stiff
+#                       networks (reverse-mode overflows above a step threshold).
+#   "stable_adjoint" -- AD for the model, plus an explicit per-step transposed
+#                       solve for the integrator's adjoint
+#                       (aquakin.implicit_euler_adjoint_solve). Cap-free and
+#                       numerically stable for stiff networks.
+_VALID_GRADIENTS = ("jax_adjoint", "stable_adjoint")
 
 # Uniform optimiser output so the multistart loop and downstream code are
 # agnostic to which backend (L-BFGS-B or Gauss-Newton least-squares) ran.
@@ -402,8 +408,8 @@ def calibrate(
     ic_prior_log_std: Optional[float] = None,
     param_halfwidth: Optional[float] = None,
     optimizer: str = "lbfgsb",
-    gradient: str = "ad",
-    discrete_adjoint_max_steps: int = 100_000,
+    gradient: str = "jax_adjoint",
+    stable_adjoint_max_steps: int = 100_000,
     n_starts: int = 1,
     jitter: float = 0.5,
     jitter_schedule: Optional[tuple] = None,
@@ -517,28 +523,30 @@ def calibrate(
         wandering to extreme values. ``None`` (default) leaves rates unbounded
         (positivity is still enforced by the transform). Free initial pools are
         always bounded by ``ic_bounds`` regardless.
-    gradient : {"ad", "discrete_adjoint"}, optional
-        How parameter gradients of the data term are taken. ``"ad"`` (default)
-        differentiates through the reactor's diffrax solve
-        (``RecursiveCheckpointAdjoint``); for stiff networks this is the
-        reverse-mode pass that goes non-finite above a step-size threshold, so
-        the reactor must carry a ``dtmax`` cap. ``"discrete_adjoint"`` instead
-        evaluates the predictions with the cap-free hand-written implicit-Euler
-        discrete adjoint
+    gradient : {"jax_adjoint", "stable_adjoint"}, optional
+        How parameter gradients of the data term are taken. Both compute a
+        discrete adjoint and both use JAX autodiff for the model derivatives
+        (``df/dy``, ``df/dtheta``); they differ only in how the *integrator's*
+        adjoint is formed. ``"jax_adjoint"`` (default) lets JAX/diffrax
+        differentiate the whole solve (``RecursiveCheckpointAdjoint``); for stiff
+        networks this reverse-mode pass goes non-finite above a step-size
+        threshold, so the reactor must carry a ``dtmax`` cap. ``"stable_adjoint"``
+        keeps the autodiff model derivatives but replaces the integrator's
+        adjoint with an explicit per-step transposed solve
         (:func:`~aquakin.implicit_euler_adjoint_solve`) -- a robust adaptive
-        implicit-Euler forward differentiated by an exact per-step transposed
-        solve, finite with no cap. It is reverse-mode only, so it forces a
-        reverse-mode residual Jacobian under ``optimizer="gauss_newton"``. Built
-        from the reactor's network and (single-location) ``conditions`` at the
-        reactor's ``rtol``/``atol``; supported for batch reactors. The forward
-        is implicit Euler (first order), so tighten ``rtol``/``atol`` for
-        accuracy parity with the reactor's high-order solver.
-    discrete_adjoint_max_steps : int, optional
+        implicit-Euler forward whose backward is finite with no cap. It is
+        reverse-mode only, so it forces a reverse-mode residual Jacobian under
+        ``optimizer="gauss_newton"``. Built from the reactor's network and
+        (single-location) ``conditions`` at the reactor's ``rtol``/``atol``;
+        supported for batch reactors. The forward is implicit Euler (first
+        order), so tighten ``rtol``/``atol`` for accuracy parity with the
+        reactor's high-order solver.
+    stable_adjoint_max_steps : int, optional
         Maximum (and allocated) number of forward steps for the
-        ``gradient="discrete_adjoint"`` solve. The backward scan walks this whole
+        ``gradient="stable_adjoint"`` solve. The backward scan walks this whole
         saved-trajectory buffer, so its cost scales with this value -- set it to
         a tight upper bound on the actual step count, not far above it. Ignored
-        for ``gradient="ad"``.
+        for ``gradient="jax_adjoint"``.
     optimizer : {"lbfgsb", "gauss_newton"}, optional
         Optimisation backend. ``"lbfgsb"`` (default) minimises the scalar loss
         with SciPy L-BFGS-B (reverse-mode gradient). ``"gauss_newton"`` minimises
@@ -596,9 +604,9 @@ def calibrate(
         raise ValueError(
             f"gradient must be one of {_VALID_GRADIENTS}; got {gradient!r}."
         )
-    if gradient == "discrete_adjoint" and not hasattr(reactor, "conditions"):
+    if gradient == "stable_adjoint" and not hasattr(reactor, "conditions"):
         raise ValueError(
-            "gradient='discrete_adjoint' is implemented for batch reactors "
+            "gradient='stable_adjoint' is implemented for batch reactors "
             "(those exposing a single-location `conditions`); got a reactor "
             f"without one ({type(reactor).__name__})."
         )
@@ -783,11 +791,12 @@ def calibrate(
              for i in range(n_rate)]
         )
 
-    # Discrete-adjoint backend: predictions come from the cap-free hand-written
-    # implicit-Euler discrete adjoint instead of differentiating the reactor's
-    # diffrax solve. Built from the reactor's network + (single-location)
-    # conditions, matching the reactor's tolerances.
-    if gradient == "discrete_adjoint":
+    # Stable-adjoint backend: predictions come from the cap-free implicit-Euler
+    # solve whose integrator adjoint is an explicit per-step transposed solve
+    # (model derivatives still by autodiff), instead of differentiating the
+    # reactor's diffrax solve. Built from the reactor's network +
+    # (single-location) conditions, matching the reactor's tolerances.
+    if gradient == "stable_adjoint":
         from aquakin.integrate.discrete_adjoint import implicit_euler_adjoint_solve
 
         _da_fields = reactor.conditions.fields
@@ -797,7 +806,7 @@ def calibrate(
         """Predicted observed-species trajectory per dataset, applying the
         per-dataset free initial pools (if any). ``rctr`` defaults to the fit
         reactor; the Laplace pass can supply a tighter-capped one (ignored by
-        the discrete-adjoint backend, which needs no cap)."""
+        the stable-adjoint backend, which needs no cap)."""
         rctr = reactor if rctr is None else rctr
         preds = []
         for k, (C0_i, tobs_i, tspan_i, _loss_i, _resid_i) in enumerate(datasets):
@@ -806,11 +815,11 @@ def calibrate(
                 C0_k = C0_i.at[ic_species_idx].set(
                     jnp.exp(ic_thetas[k * m_ic:(k + 1) * m_ic])
                 )
-            if gradient == "discrete_adjoint":
+            if gradient == "stable_adjoint":
                 ys = implicit_euler_adjoint_solve(
                     _da_rhs, C0_k, p, tspan_i, tobs_i,
                     rtol=reactor.rtol, atol=reactor.atol,
-                    max_steps=discrete_adjoint_max_steps,
+                    max_steps=stable_adjoint_max_steps,
                 )
                 preds.append(ys[:, obs_species_indices])
             else:
@@ -900,9 +909,9 @@ def calibrate(
                 parts.append((ic_thetas - ic_center_full) / ic_prior_log_std)
             return jnp.concatenate(parts)
 
-        # The discrete adjoint is a reverse-only custom_vjp, so its residual
+        # The stable adjoint is a reverse-only custom_vjp, so its residual
         # Jacobian must be reverse-mode regardless of the reactor's adjoint.
-        _use_forward = gradient != "discrete_adjoint" and isinstance(
+        _use_forward = gradient != "stable_adjoint" and isinstance(
             getattr(reactor, "adjoint", None), diffrax.DirectAdjoint
         )
         _jac = jax.jacfwd(_full_residual) if _use_forward else jax.jacrev(_full_residual)
@@ -1016,7 +1025,7 @@ def calibrate(
                     parts.append(prior_mask * (physical - prior_mean) / prior_std)
                 return jnp.concatenate(parts)
 
-            _use_fwd_lap = gradient != "discrete_adjoint" and isinstance(
+            _use_fwd_lap = gradient != "stable_adjoint" and isinstance(
                 getattr(lap_reactor, "adjoint", None), diffrax.DirectAdjoint)
             J = (jax.jacfwd if _use_fwd_lap else jax.jacrev)(_residual_vec)(rate_theta_opt)
             H = J.T @ J

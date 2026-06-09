@@ -139,10 +139,10 @@ def test_stiff_finite_uncapped_and_matches_capped():
 
 
 @pytest.mark.validation
-def test_calibrate_discrete_adjoint_matches_capped_ad():
-    # End-to-end: a Khalil-model calibration with gradient="discrete_adjoint"
+def test_calibrate_stable_adjoint_matches_jax_adjoint():
+    # End-to-end: a Khalil-model calibration with gradient="stable_adjoint"
     # (cap-free) must reach the same optimum as the existing capped-Kvaerno5
-    # gradient="ad" path. Synthetic recovery; compare the fitted parameters.
+    # gradient="jax_adjoint" path. Synthetic recovery; compare the fitted params.
     import diffrax
 
     net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
@@ -177,12 +177,12 @@ def test_calibrate_discrete_adjoint_matches_capped_ad():
                   max_iter=150, tol=1e-9)
     r_ref = aquakin.calibrate(
         aquakin.BatchReactor(net, cond, rtol=rtol, atol=atol, dtmax=5e-4),
-        C0, obs, t_obs, free, gradient="ad", **common,
+        C0, obs, t_obs, free, gradient="jax_adjoint", **common,
     )
     r_da = aquakin.calibrate(
         aquakin.BatchReactor(net, cond, rtol=rtol, atol=atol),
-        C0, obs, t_obs, free, gradient="discrete_adjoint",
-        discrete_adjoint_max_steps=max_steps, **common,
+        C0, obs, t_obs, free, gradient="stable_adjoint",
+        stable_adjoint_max_steps=max_steps, **common,
     )
     assert r_ref.converged and r_da.converged
     v_ref = jnp.array([r_ref.params_named[n] for n in free])

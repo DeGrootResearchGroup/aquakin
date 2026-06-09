@@ -687,16 +687,21 @@ without differentiating through dense interpolation, the forward is forced to
 land steps exactly on `t_eval` (`diffrax.ClipStepSizeController(step_ts=t_eval)`),
 so every observation is a step boundary (verified vs a closed-form
 multi-observation gradient and vs the capped reference using the same
-forced-step forward, `rel ≈ 6e-8`). **Wired into `calibrate`** via `calibrate(..., gradient="discrete_adjoint")`: the
-data-term predictions are then taken with this cap-free solve instead of
-differentiating the reactor's diffrax solve (it forces a reverse-mode residual
-Jacobian under `optimizer="gauss_newton"`, being a reverse-only `custom_vjp`;
-`discrete_adjoint_max_steps` bounds the saved-trajectory buffer the backward
-scan walks, so set it to a tight upper bound on the step count). Verified
-end-to-end: a synthetic Khalil calibration reaches the **same optimum** as the
-existing capped-Kvaerno5 `gradient="ad"` path (fitted params agree to
-`rel ≈ 7e-4`; the small gap is the implicit-Euler vs Kvaerno5 forward
-difference) — see `test_calibrate_discrete_adjoint_matches_capped_ad`.
+forced-step forward, `rel ≈ 6e-8`). **Wired into `calibrate`** via `calibrate(..., gradient="stable_adjoint")`. Both
+gradient backends compute a discrete adjoint and both use JAX autodiff for the
+**model** derivatives (`∂f/∂y` via `jacfwd`, `∂f/∂θ` via `vjp`); they differ only
+in how the *integrator's* adjoint is formed — `gradient="jax_adjoint"` (default)
+lets JAX/diffrax differentiate the whole solve (`RecursiveCheckpointAdjoint`,
+needs the cap for stiff), while `gradient="stable_adjoint"` replaces only the
+integrator's adjoint with the explicit per-step transposed solve (cap-free). The
+stable backend forces a reverse-mode residual Jacobian under
+`optimizer="gauss_newton"` (it is a reverse-only `custom_vjp`), and
+`stable_adjoint_max_steps` bounds the saved-trajectory buffer the backward scan
+walks (set it to a tight upper bound on the step count). Verified end-to-end: a
+synthetic Khalil calibration reaches the **same optimum** as the capped-Kvaerno5
+`gradient="jax_adjoint"` path (fitted params agree to `rel ≈ 7e-4`; the small gap
+is the implicit-Euler vs Kvaerno5 forward difference) — see
+`test_calibrate_stable_adjoint_matches_jax_adjoint`.
 **Status / limitation:** this cut uses **implicit Euler** (first order: accurate
 but more adaptive steps than a high-order method), and the backward scan's cost
 scales with `discrete_adjoint_max_steps` (the padded trajectory length). The
