@@ -153,6 +153,60 @@ def test_max_steps_is_enforced(net, cond):
     assert np.all(np.isfinite(np.asarray(sol.C)))
 
 
+def test_attachment_detachment_conserve_particulate(net, cond):
+    # Attachment (bulk -> surface) and detachment (layers -> bulk) are pure
+    # transport: with the reaction off they must conserve the volume-weighted
+    # total of the particulate they move. B is the particulate here.
+    ib = net.species_index["B"]
+    soluble = jnp.array([True, False])      # A diffuses, B is particulate
+    pmask = jnp.array([False, True])        # move/transport B
+    p = net.default_parameters().at[net.param_index["A_to_B.k"]].set(0.0)
+    n_comp = 1 + 5
+
+    def total_B(sol):
+        dz = r.thickness / r.n_layers
+        w = np.array([1.0 / r.area_per_volume] + [dz] * r.n_layers)
+        return float(np.sum(w * np.asarray(sol.profile[-1, :, ib])))
+
+    for kw in (dict(k_att=2.0, attach_mask=pmask),
+               dict(k_det=2.0, detach_mask=pmask)):
+        r = _reactor(net, cond, n_layers=5, soluble_mask=soluble,
+                     fixed_mask=jnp.array([False, False]), **kw)
+        # start with B only in the bulk (attachment) or only in the film (detach)
+        y0 = jnp.zeros((n_comp, net.n_species))
+        if "k_att" in kw:
+            y0 = y0.at[0, ib].set(1.0)
+        else:
+            y0 = y0.at[1:, ib].set(1.0)
+        sol = r.solve(y0, p, t_span=(0.0, 0.5))
+        tot0 = (1.0 / r.area_per_volume) * 1.0 if "k_att" in kw else \
+            (r.thickness / r.n_layers) * r.n_layers * 1.0
+        assert total_B(sol) == pytest.approx(tot0, rel=1e-5)
+        # and transport actually happened: the source compartment lost B (the bulk
+        # for attachment, the layers for detachment -- the destination's *concen-
+        # tration* is volume-diluted, so check the source, which is unambiguous).
+        if "k_att" in kw:
+            assert float(np.asarray(sol.profile[-1, 0, ib])) < 0.95   # bulk drained
+        else:
+            assert float(np.asarray(sol.profile[-1, 1:, ib]).max()) < 0.95  # film drained
+
+
+def test_density_cap_throttles_growth(net, cond):
+    # With a max-density cap, an autocatalytic A->B growth (B feeds back) cannot
+    # push the capped species past the packing limit. Here cap B at rho with
+    # packing 1.0 so the ceiling is rho; reaction A->B with B uncapped would run
+    # to A_0; capped, B saturates at rho.
+    ib = net.species_index["B"]
+    rho = 0.3
+    maxd = jnp.array([jnp.inf, rho])        # cap B only
+    r = _reactor(net, cond, n_layers=3, max_density=maxd, packing_fraction=1.0)
+    C0 = jnp.array([1.0, 0.0])              # all A; A->B
+    sol = r.solve(C0, net.default_parameters(), t_span=(0.0, 50.0))
+    b_final = np.asarray(sol.profile[-1, :, ib])
+    assert np.all(b_final <= rho + 1e-6)    # never exceeds the cap
+    assert np.max(b_final) > 0.5 * rho      # but does fill toward it
+
+
 def test_well_mixed_limit_matches_batch(net, cond):
     # Started uniform with a uniform reaction, every compartment stays identical
     # and transport is zero, so the bulk must follow the batch first-order decay.

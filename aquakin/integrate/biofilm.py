@@ -117,6 +117,39 @@ def _diffusion_transport(C, D, kL, dz, area_per_volume, n_species):
     return jnp.concatenate([d_bulk[None, :], d_layers], axis=0)
 
 
+def _attachment_transport(C, k_att, attach_mask, dz, area_per_volume, n_species):
+    """Particulate attachment from the bulk onto the biofilm surface (Eq 1).
+
+    ``r_att = k_att * X_i^bulk`` (per bulk volume, 1/d * conc) removes particulate
+    from the bulk and deposits it in the surface layer. Mass-conserving: the bulk
+    loss ``k_att*X_bulk`` over the bulk volume equals the surface-layer gain
+    ``k_att*X_bulk/(A_V*dz)`` over the layer volume (A*dz). Returns a
+    ``(n_comp, n_species)`` rate; zero everywhere if ``k_att == 0``.
+    """
+    bulk = C[0]                                              # (n_species,)
+    r = (k_att * bulk) * attach_mask                         # (n_species,) bulk loss rate
+    d = jnp.zeros((C.shape[0], n_species))
+    d = d.at[0].add(-r)                                      # bulk loses attached mass
+    d = d.at[1].add(r / (area_per_volume * dz))             # surface layer gains it
+    return d
+
+
+def _detachment_transport(C, k_det, detach_mask, dz, area_per_volume, n_species):
+    """Biofilm particulate detachment back to the bulk (Eqs 2-3, first order).
+
+    Each biofilm layer loses ``k_det * X_i,j``; the eroded mass enters the bulk
+    (where it then washes out with the feed). Mass-conserving: the per-layer loss
+    over the layer volume (A*dz) equals the bulk gain over the bulk volume. Zero
+    if ``k_det == 0``.
+    """
+    layers = C[1:]                                          # (n_layers, n_species)
+    r = (k_det * layers) * detach_mask[None, :]            # per-layer loss rate
+    d = jnp.zeros((C.shape[0], n_species))
+    d = d.at[1:].add(-r)                                    # layers lose biomass
+    d = d.at[0].add(r.sum(axis=0) * dz * area_per_volume)  # bulk gains it
+    return d
+
+
 def _default_soluble_mask(network: CompiledNetwork) -> jnp.ndarray:
     """Classify species as soluble (diffuses, evolves) vs particulate (fixed).
 
@@ -225,6 +258,15 @@ class BiofilmReactor:
         boundary_diffusivity=None,
         soluble_mask: Optional[jnp.ndarray] = None,
         fixed_mask: Optional[jnp.ndarray] = None,
+        max_density=None,
+        packing_fraction: float = 0.8,
+        k_att: float = 0.0,
+        attach_mask: Optional[jnp.ndarray] = None,
+        k_det: float = 0.0,
+        detach_mask: Optional[jnp.ndarray] = None,
+        clamp_bulk: bool = False,
+        feed=None,
+        dilution_rate: float = 0.0,
         biofilm_reactions=None,
         rtol: float = 1e-6,
         atol: float = 1e-9,
@@ -332,6 +374,68 @@ class BiofilmReactor:
         self._kL = D_bl / self.boundary_layer                   # (n_species,)
         # Mid-point depth of each layer from the surface (for reporting).
         self._depth = (jnp.arange(self.n_layers) + 0.5) * self._dz
+
+        # Biofilm-growth closure (Jiang 2009 Eqs 8-10): a per-species maximum
+        # density rho_i^f caps the solid volume fraction. The inverse density
+        # 1/rho_i (0 where uncapped) gives the volume fraction X_i/rho_i; biomass
+        # GROWTH is throttled as the layer's total solid fraction approaches the
+        # packing limit ``packing_fraction`` (= 1 - eps_l, taken constant since
+        # Jiang Eq 9 varies only at cm scale). Without this closure a growing
+        # biofilm has no unique steady state. ``max_density=None`` -> no cap.
+        self.packing_fraction = float(packing_fraction)
+        self._has_cap = max_density is not None
+        if max_density is None:
+            self._inv_rho = jnp.zeros((n,))
+        else:
+            rho = jnp.broadcast_to(jnp.asarray(max_density, dtype=float), (n,))
+            # Uncapped (rho<=0 or inf) contribute no volume fraction.
+            self._inv_rho = jnp.where(jnp.isfinite(rho) & (rho > 0), 1.0 / rho, 0.0)
+
+        # Attachment (Jiang 2009 Eq 1): bulk particulates attach to the biofilm
+        # surface at rate k_att * X_i^bulk, seeding the layers. ``k_att=0`` -> off.
+        self._k_att = float(k_att)
+        self._has_att = self._k_att != 0.0
+
+        # Detachment (Jiang 2009 Eqs 2-3, lumped to first order): biofilm
+        # particulates erode back to the bulk at rate k_det * X_i,j, where they
+        # then wash out with the feed. This -- not the density cap -- is what sets
+        # the steady state (growth = decay + detachment, a chemostat-like fixed
+        # point), gives the weeks-to-months maturation timescale, and (as a
+        # -k_det Jacobian-diagonal term) regularizes the steady-state solve. With
+        # no sewer shear data, k_det is a calibration knob (low shear -> low k_det
+        # -> thicker, denser biofilm). ``k_det=0`` -> off.
+        self._k_det = float(k_det)
+        self._has_det = self._k_det != 0.0
+        if detach_mask is None:
+            detach_mask = ~self.soluble_mask          # particulates detach
+        self._detach_mask = jnp.asarray(detach_mask, dtype=bool)
+        if self._detach_mask.shape != (n,):
+            raise ValueError(
+                f"detach_mask must have shape ({n},); got {self._detach_mask.shape}"
+            )
+
+        # Hold the bulk (compartment 0) fixed as a reservoir at its initial value
+        # -- a Dirichlet boundary representing a sustained operating condition
+        # against which the biofilm matures. The biofilm still exchanges with it.
+        self.clamp_bulk = bool(clamp_bulk)
+
+        # Continuous feed into the bulk: d_bulk += dilution_rate*(feed - bulk),
+        # a CSTR mass balance (dilution_rate = Q/V, 1/d). The steady bulk is then
+        # the predicted effluent. ``feed=None`` or dilution_rate=0 -> off.
+        self.dilution_rate = float(dilution_rate)
+        self._has_feed = feed is not None and self.dilution_rate != 0.0
+        if feed is None:
+            self._feed = jnp.zeros((n,))
+        else:
+            self._feed = jnp.broadcast_to(jnp.asarray(feed, dtype=float), (n,))
+        if attach_mask is None:
+            attach_mask = ~self.soluble_mask          # particulates attach
+        self._attach_mask = jnp.asarray(attach_mask, dtype=bool)
+        if self._attach_mask.shape != (n,):
+            raise ValueError(
+                f"attach_mask must have shape ({n},); got {self._attach_mask.shape}"
+            )
+
         self._jit_cache: dict = {}
 
     def solve(
@@ -408,48 +512,90 @@ class BiofilmReactor:
             t=ts, C=ys[:, 0, :], profile=ys, depth=self._depth, network=self.network
         )
 
-    def _build_jitted_solve(self, t0: float, t1: float, has_t_eval: bool):
-        # Capture only pre-existing concrete arrays/scalars (set in __init__),
-        # never values created in this scope: solve() builds and CACHES the jitted
-        # function lazily, possibly inside a caller's trace (e.g. calibrate), so
-        # anything created here would escape that trace. All new arrays are formed
-        # inside the jit below.
+    def _make_rhs(self, condition_arrays, params):
+        """Build the depth-resolved diffusion--reaction RHS ``f(t, y, args)``.
+
+        Shared by the time-stepping solve and :meth:`steady_state`. Reads only
+        concrete ``__init__`` arrays on ``self``, so it bakes as constants when
+        traced/jitted (no trace leak). ``args`` carries the (possibly traced)
+        parameter vector for the rate evaluation; the stoichiometry is built from
+        ``params`` so the whole RHS depends on the parameters through both.
+        """
         network = self.network
-        rtol, atol, adjoint, dtmax = self.rtol, self.atol, self.adjoint, self.dtmax
-        max_steps = self.max_steps
-        fixed_mask = self.fixed_mask            # (n_species,)
-        biofilm_mask = self._biofilm_mask       # (n_reactions,) or None
+        fixed_mask = self.fixed_mask
+        biofilm_mask = self._biofilm_mask
         D, kL, dz = self._D, self._kL, self._dz
         area_per_volume = self.area_per_volume
         n_species = network.n_species
+        inv_rho, packing = self._inv_rho, self.packing_fraction
+        has_cap, has_att = self._has_cap, self._has_att
+        k_att, attach_mask = self._k_att, self._attach_mask
+        has_det, k_det, detach_mask = self._has_det, self._k_det, self._detach_mask
+        clamp_bulk = self.clamp_bulk
+        has_feed, feed, dilution = self._has_feed, self._feed, self.dilution_rate
+        thr = network.positivity_threshold
 
-        def make_rhs(condition_arrays, params):
-            stoich = network.compute_stoich(params)
-            # Phase split: zeroing a reaction's stoichiometry row removes its
-            # contribution to dCdt (which is stoich.T @ rates), so the positivity
-            # limiter still sees the correct per-compartment net term. Bulk
-            # reactions run only in the bulk; biofilm reactions only in the layers.
-            if biofilm_mask is None:
-                stoich_bulk = stoich_film = stoich
-            else:
-                stoich_bulk = stoich * (~biofilm_mask)[:, None]   # bulk + chemical
-                stoich_film = stoich * biofilm_mask[:, None]      # biofilm only
+        stoich = network.compute_stoich(params)
+        # Phase split: zeroing a reaction's stoichiometry row removes its
+        # contribution to dCdt (= stoich.T @ rates), so the positivity limiter
+        # still sees the correct per-compartment net term. Bulk reactions run only
+        # in the bulk; biofilm reactions only in the layers.
+        if biofilm_mask is None:
+            stoich_bulk = stoich_film = stoich
+        else:
+            stoich_bulk = stoich * (~biofilm_mask)[:, None]   # bulk + chemical
+            stoich_film = stoich * biofilm_mask[:, None]      # biofilm only
+        # Growth reactions: those producing a density-capped species. The cap
+        # throttles the WHOLE reaction (not the net per-species rate), so substrate
+        # uptake and biomass production scale together -- mass-conserving.
+        if has_cap:
+            capped = inv_rho > 0
+            growth_rxn = jnp.any((stoich > 0) & capped[None, :], axis=1)
 
-            def rhs(t, y, args):
-                bulk = network.dCdt(y[0], args, condition_arrays, 0, stoich=stoich_bulk)
-                layers = jax.vmap(
-                    lambda c: network.dCdt(c, args, condition_arrays, 0, stoich=stoich_film)
-                )(y[1:])
-                react = jnp.concatenate([bulk[None, :], layers], axis=0)
-                dydt = react + _diffusion_transport(
-                    y, D, kL, dz, area_per_volume, n_species
+        def cell(c, st, args):
+            # chemistry in one compartment, with the optional growth throttle
+            r = network.rates(c, args, condition_arrays, 0)
+            if has_cap:
+                # space availability: 1 when empty, 0 at the packing limit
+                s = jnp.clip(1.0 - (c @ inv_rho) / packing, 0.0, 1.0)
+                r = r * jnp.where(growth_rxn, s, 1.0)
+            R = st.T @ r
+            if thr is not None:
+                R = network._apply_positivity_limiter(R, c)
+            return R
+
+        def rhs(t, y, args):
+            bulk = cell(y[0], stoich_bulk, args)
+            layers = jax.vmap(lambda c: cell(c, stoich_film, args))(y[1:])
+            react = jnp.concatenate([bulk[None, :], layers], axis=0)
+            transport = _diffusion_transport(
+                y, D, kL, dz, area_per_volume, n_species
+            )
+            if has_att:
+                transport = transport + _attachment_transport(
+                    y, k_att, attach_mask, dz, area_per_volume, n_species
                 )
-                # Held-fixed species (mature-biofilm sustained sources/sinks)
-                # have their net rate zeroed; everything else evolves. Reactive
-                # particulates (D==0, not in fixed_mask) react but do not diffuse.
-                return jnp.where(fixed_mask[None, :], 0.0, dydt)
+            if has_det:
+                transport = transport + _detachment_transport(
+                    y, k_det, detach_mask, dz, area_per_volume, n_species
+                )
+            if has_feed:
+                transport = transport.at[0].add(dilution * (feed - y[0]))
+            dydt = react + transport
+            # Held-fixed species (mature-biofilm sustained sources/sinks) have
+            # their net rate zeroed; everything else evolves. Reactive particulates
+            # (D==0, not in fixed_mask) react but do not diffuse.
+            dydt = jnp.where(fixed_mask[None, :], 0.0, dydt)
+            if clamp_bulk:
+                dydt = dydt.at[0].set(0.0)   # bulk held as a fixed reservoir
+            return dydt
 
-            return rhs
+        return rhs
+
+    def _build_jitted_solve(self, t0: float, t1: float, has_t_eval: bool):
+        make_rhs = self._make_rhs
+        rtol, atol, adjoint, dtmax = self.rtol, self.atol, self.adjoint, self.dtmax
+        max_steps = self.max_steps
 
         if has_t_eval:
             @jax.jit
@@ -475,3 +621,116 @@ class BiofilmReactor:
             )
             return sol.ts, sol.ys
         return _solve
+
+    def steady_state(
+        self,
+        C0: jnp.ndarray,
+        params: jnp.ndarray,
+        *,
+        conditions: Optional[SpatialConditions] = None,
+        warmup: float = 20.0,
+        rtol: float = 1e-6,
+        atol: float = 1e-8,
+        newton_steps: int = 50,
+    ) -> BiofilmSolution:
+        """Solve for the steady-state profile via a Newton root-find on ``RHS=0``.
+
+        Instead of integrating to steady state (slow for a maturing biofilm), this
+        finds ``y*`` such that ``f(y*, params) = 0`` directly. A short forward
+        integration to ``warmup`` seeds the Newton iteration (the seed is detached
+        from the gradient). The result is differentiable w.r.t. ``params`` via the
+        implicit function theorem (optimistix ``ImplicitAdjoint``), so it composes
+        with :func:`~aquakin.calibrate` -- the intended use is the continuous-feed
+        maturation (``feed=...``, ``dilution_rate>0``) whose steady bulk is the
+        predicted effluent and whose biofilm profile is a downstream batch IC.
+
+        Parameters
+        ----------
+        C0 : jnp.ndarray
+            Initial guess, ``(n_species,)`` (broadcast) or ``(n_layers+1,
+            n_species)``.
+        params : jnp.ndarray
+            Rate constant vector.
+        conditions : SpatialConditions, optional
+            Override the reactor conditions for this call.
+        warmup : float
+            Forward-integration time used to seed Newton. ``0`` uses ``C0``
+            directly.
+        rtol, atol : float
+            Newton convergence tolerances.
+        newton_steps : int
+            Maximum Newton iterations.
+
+        Returns
+        -------
+        BiofilmSolution
+            With ``t = [inf]`` and a single time slice holding the steady profile.
+
+        Notes
+        -----
+        Not compatible with ``clamp_bulk`` or held-fixed species (their RHS rows
+        are identically zero, making the residual Jacobian singular). Use the
+        continuous feed to drive the bulk instead.
+        """
+        import lineax as lx
+        import optimistix as optx
+
+        params = jnp.asarray(params)
+        n = self.network.n_species
+        n_comp = self.n_layers + 1
+        C0 = jnp.asarray(C0)
+        if C0.shape == (n,):
+            y0 = jnp.broadcast_to(C0, (n_comp, n))
+        elif C0.shape == (n_comp, n):
+            y0 = C0
+        else:
+            raise ValueError(
+                f"C0 has shape {C0.shape}, expected ({n},) or ({n_comp}, {n})."
+            )
+        active = conditions if conditions is not None else self.conditions
+        condition_arrays = active.fields
+
+        if warmup and warmup > 0.0:
+            seed = self.solve(
+                y0, params, t_span=(0.0, float(warmup)), conditions=active
+            ).profile[-1]
+        else:
+            seed = y0
+        seed = jax.lax.stop_gradient(seed)        # Newton seed: no path gradient
+
+        # Scale the residual to a relative rate (RHS / |concentration|) so the
+        # least-squares objective weighs every species comparably. Biomass
+        # production terms are O(1e3) while soluble terms are O(1); unscaled, the
+        # solver only ever sees the biomass modes and stalls. ``scale_floor``
+        # bounds the denominator for near-zero species.
+        scale_floor = 1.0
+
+        def residual(y_flat, p):
+            rhs = self._make_rhs(condition_arrays, p)
+            y = y_flat.reshape(n_comp, n)
+            r = rhs(0.0, y, p)
+            return (r / jnp.maximum(jnp.abs(y), scale_floor)).reshape(-1)
+
+        # Solve RHS=0 as a least-squares problem with Levenberg--Marquardt. LM's
+        # trust-region damping is robust to the two difficulties of the biofilm
+        # steady state that defeat a plain Newton step: (i) a generically singular
+        # Jacobian (dormant species S_O/S_NO under an anaerobic feed, or a fully
+        # density-capped layer give zero rows), and (ii) unbounded Newton steps
+        # that overshoot into non-physical states where the rates are non-finite.
+        # The minimum of ||RHS||^2 is the steady state. A pseudoinverse linear
+        # solver handles the rank deficiency in the implicit-diff adjoint.
+        lin = lx.AutoLinearSolver(well_posed=False)
+        solver = optx.LevenbergMarquardt(rtol=rtol, atol=atol)
+        sol = optx.least_squares(
+            residual, solver, seed.reshape(-1), args=params,
+            max_steps=newton_steps, throw=False,
+            adjoint=optx.ImplicitAdjoint(linear_solver=lin),
+        )
+        y_star = sol.value.reshape(n_comp, n)
+        return BiofilmSolution(
+            t=jnp.asarray([jnp.inf]),
+            C=y_star[0][None, :],
+            profile=y_star[None, :, :],
+            depth=self._depth,
+            network=self.network,
+        )

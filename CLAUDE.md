@@ -1023,6 +1023,32 @@ solution.C                           # (n_points, n_species)
 # reaction into _bulk ([X_BH]) and _biofilm (eps*{X_BF}*{A_V}) halves in the
 # network YAML; biofilm rate constants are areal (per m^2), so set A_V=1/thickness
 # per layer (the lumped model is then the well-mixed limit, conserving mass).
+#
+# BIOFILM-GROWTH / MATURATION features (all off by default; used to mature a
+# multispecies biofilm to its operating state before a downstream experiment):
+#   - max_density (per-species rho_i^f, gCOD/m^3) + packing_fraction: the
+#     Jiang 2009 Eqs 8-10 density cap. Biomass GROWTH (the whole reaction, so
+#     mass-conserving) is throttled by the remaining space (1 - sum X_i/rho_i /
+#     packing). A physical UPPER BOUND only -- on its own it gives NO reachable
+#     steady state (biomass drifts to the cap over many months), so it is not the
+#     closure.
+#   - k_att / attach_mask (Eq 1): bulk particulates attach to the surface layer
+#     (k_att*X_bulk), seeding the groups. k_det / detach_mask (Eqs 2-3, lumped to
+#     first order): biofilm particulates erode back to the bulk (k_det*X), where
+#     they wash out with the feed. DETACHMENT, not the cap, is the steady-state
+#     closure: growth = decay + detachment is a chemostat-like fixed point, sets
+#     the weeks-to-months maturation timescale, and (as a -k_det Jacobian-diagonal
+#     term) conditions the steady state. With no sewer shear data k_det is a
+#     calibration knob (low shear -> low k_det -> thicker, denser biofilm).
+#   - feed (influent vector) + dilution_rate (Q/V, 1/d): a CSTR feed on the bulk
+#     (d_bulk += dilution*(feed-bulk)); the steady bulk is the predicted effluent.
+#   - clamp_bulk: hold the bulk as a fixed reservoir (Dirichlet) instead.
+#   - steady_state(C0, params, warmup=...): Newton/Levenberg-Marquardt root-find
+#     on RHS=0 with implicit-diff for AD (optimistix). Works for well-conditioned
+#     steady states; for a VERY stiff/slow biofilm (the multispecies maturation,
+#     whose asymptotic fixed point is hundreds of days out) it stalls -- there,
+#     integrate forward to the physical maturation time (~90 d for the Khalil rig)
+#     and use that profile as the IC instead.
 reactor = aquakin.BiofilmReactor(
     network, conditions, n_layers=6, thickness=8e-4, area_per_volume=50.0,
     diffusivity=1e-4, boundary_layer=1e-4,
