@@ -18,6 +18,7 @@ from aquakin.integrate.particle import (
     TrackSolution,
     integrate_ensemble,
 )
+from aquakin.integrate.discrete_adjoint import implicit_euler_adjoint_solve
 from aquakin.integrate.forward_sensitivity import (
     ForwardSensitivityResult,
     forward_sensitivity,
@@ -81,6 +82,7 @@ __all__ = [
     "dgsm",
     "fit",
     "forward_sensitivity",
+    "implicit_euler_adjoint_solve",
     "integrate_ensemble",
     "load_network",
     "load_network_from_file",

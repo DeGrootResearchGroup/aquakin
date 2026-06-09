@@ -656,6 +656,38 @@ optimisation. `calibrate` does not yet expose a
 `jacobian="forward_sensitivity"` hook, so the `dtmax` cap is still required for
 the reverse-mode `calibrate` gradient until that lands.
 
+**Cap-free *reverse* mode — hand-written discrete adjoint.** The forward
+sensitivity above scales with the parameter count, so for a scalar-loss gradient
+of many parameters (the calibration case) reverse mode is still wanted — and
+that is the mode the `dtmax` cap exists for. `aquakin.implicit_euler_adjoint_solve`
+([`integrate/discrete_adjoint.py`](aquakin/integrate/discrete_adjoint.py))
+removes the cap there too, by **not differentiating through the solve at all**:
+the forward pass is an ordinary robust adaptive diffrax `ImplicitEuler` solve,
+and the reverse pass is the **discrete adjoint written out by hand** as a
+per-step backward scan over the saved trajectory — each step a single
+*transposed* solve through the same well-conditioned `I − dt·J` (a contraction,
+so the cotangent stays bounded and nothing overflows). This is the classical
+implicit-RK discrete adjoint (Sandu 2006; FATODE, Zhang & Sandu 2014); it is the
+*exact* gradient of the discrete solve and is **verified two ways**: against the
+closed-form gradient of first-order decay, and against the (correct but capped)
+`RecursiveCheckpointAdjoint` gradient of the same implicit-Euler solve
+(`rel ≈ 5e-8`, uncapped — see `tests/integration/test_discrete_adjoint.py`).
+**Why earlier attempts failed and this works:** the overflow is in reverse-mode
+AD forming cotangents of the large stored stage vector-field values `f_i ∼ ‖J‖·y`
+(confirmed by reading the diffrax/optimistix source — the per-step Newton solve
+is *already* IFT-differentiated by optimistix; the overflow is in the explicit
+stage-combination arithmetic on the tape). Writing the per-step adjoint as the
+analytic transposed solve never forms those large cotangents. Empirically
+checked dead-ends, for the record: a stiffness-aware `dt·‖J‖` step controller
+(finite but no faster than the cap), and k-space stage storage (shifts the
+threshold out but does not remove the overflow). **Status / limitation:** this
+first cut uses **implicit Euler** (first order: accurate but more adaptive steps
+than a high-order method) and differentiates a **final-state** loss. Extending
+to (a) a high-order SDIRK/ESDIRK discrete adjoint (recompute the stage values in
+the backward and apply the transposed stage tableau) for efficiency, and (b) a
+trajectory loss (inject the loss cotangent at observation times) for `calibrate`
+integration, are the next steps.
+
 ### Operator Splitting
 
 Transport and reaction are decoupled at all scales:
@@ -874,6 +906,9 @@ aquakin/
 │   │   ├── _simultaneous_corrector.py # CVODES simultaneous-corrector lineax
 │   │   │                            #   solver (shared_factor=True, Option A):
 │   │   │                            #   factorise the shared diagonal block once
+│   │   ├── discrete_adjoint.py      # implicit_euler_adjoint_solve: cap-free
+│   │   │                            #   REVERSE-mode gradient via a hand-written
+│   │   │                            #   discrete adjoint (no autodiff through the solve)
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands
