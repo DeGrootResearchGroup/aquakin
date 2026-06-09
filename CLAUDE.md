@@ -680,13 +680,19 @@ stage-combination arithmetic on the tape). Writing the per-step adjoint as the
 analytic transposed solve never forms those large cotangents. Empirically
 checked dead-ends, for the record: a stiffness-aware `dt·‖J‖` step controller
 (finite but no faster than the cap), and k-space stage storage (shifts the
-threshold out but does not remove the overflow). **Status / limitation:** this
-first cut uses **implicit Euler** (first order: accurate but more adaptive steps
-than a high-order method) and differentiates a **final-state** loss. Extending
-to (a) a high-order SDIRK/ESDIRK discrete adjoint (recompute the stage values in
-the backward and apply the transposed stage tableau) for efficiency, and (b) a
-trajectory loss (inject the loss cotangent at observation times) for `calibrate`
-integration, are the next steps.
+threshold out but does not remove the overflow). **Trajectory loss** is
+supported: passing `t_eval` returns the states at those times and the backward
+scan injects each observation's cotangent at its step; to keep that exact
+without differentiating through dense interpolation, the forward is forced to
+land steps exactly on `t_eval` (`diffrax.ClipStepSizeController(step_ts=t_eval)`),
+so every observation is a step boundary (verified vs a closed-form
+multi-observation gradient and vs the capped reference using the same
+forced-step forward, `rel ≈ 6e-8`). **Status / limitation:** this cut uses
+**implicit Euler** (first order: accurate but more adaptive steps than a
+high-order method). The remaining steps are (a) a high-order SDIRK/ESDIRK
+discrete adjoint (recompute the stage values in the backward and apply the
+transposed stage tableau) for efficiency, and (b) wiring it into `calibrate` as
+a reverse-mode Jacobian option so the cap is dropped end-to-end.
 
 ### Operator Splitting
 

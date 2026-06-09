@@ -47,6 +47,42 @@ def test_analytic_decay_gradient(simple_network):
     assert abs(float(g) - exact) / abs(exact) < 1e-4
 
 
+def test_trajectory_loss_gradient(simple_network):
+    # Loss over several observation times: L = sum_i A(t_i)^2, with the closed
+    # form dL/dk = sum_i 2 A(t_i) (-t_i A(t_i)), A(t)=e^{-kt}.
+    rhs = _decay_rhs(simple_network)
+    C0 = jnp.array([1.0, 0.0])
+    p = simple_network.default_parameters()
+    k = float(p[0])
+    t_obs = jnp.array([2.0, 5.0, 9.0, 15.0])
+
+    def loss(pp):
+        ys = implicit_euler_adjoint_solve(
+            rhs, C0, pp, (0.0, 15.0), t_obs, rtol=1e-10, atol=1e-12
+        )
+        return jnp.sum(ys[:, 0] ** 2)
+
+    g = jax.grad(loss)(p)[0]
+    exact = sum(
+        2 * math.exp(-k * ti) * (-ti * math.exp(-k * ti)) for ti in [2.0, 5.0, 9.0, 15.0]
+    )
+    assert jnp.isfinite(g)
+    assert abs(float(g) - exact) / abs(exact) < 1e-4
+
+
+def test_t_eval_returns_states_at_times(simple_network):
+    # With t_eval the solve returns the state at each observation time, matching
+    # a plain diffrax solve sampled at those times.
+    rhs = _decay_rhs(simple_network)
+    C0 = jnp.array([1.0, 0.0])
+    p = simple_network.default_parameters()
+    t_obs = jnp.array([1.0, 3.0, 7.0])
+    ys = implicit_euler_adjoint_solve(rhs, C0, p, (0.0, 7.0), t_obs, rtol=1e-9, atol=1e-11)
+    assert ys.shape == (3, 2)
+    k = float(p[0])
+    assert jnp.allclose(ys[:, 0], jnp.exp(-k * t_obs), atol=1e-5, rtol=1e-4)
+
+
 def test_gradient_wrt_y0_finite(simple_network):
     rhs = _decay_rhs(simple_network)
     p = simple_network.default_parameters()
@@ -98,5 +134,43 @@ def test_stiff_finite_uncapped_and_matches_capped():
 
     g_ref = jax.jit(jax.grad(loss_ref))(p)
     assert bool(jnp.all(jnp.isfinite(g_ref)))
+    rel = float(jnp.linalg.norm(g - g_ref) / (jnp.linalg.norm(g_ref) + 1e-30))
+    assert rel < 1e-5
+
+
+@pytest.mark.validation
+def test_stiff_trajectory_loss_matches_capped():
+    # A multi-observation (trajectory) loss -- the calibration shape -- must be
+    # finite uncapped and match the capped reference using the same forced-step
+    # forward solve.
+    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    cond = net.default_conditions(1)
+    C0 = net.default_concentrations()
+    p = net.default_parameters()
+    fields = cond.fields
+    rhs = lambda t, y, pp: net.dCdt(y, pp, fields, 0)
+    t_obs = jnp.array([0.05, 0.1, 0.2, 0.35, 0.5])
+    si = net.species_index["S_SO4"]
+
+    def loss(pp):
+        ys = implicit_euler_adjoint_solve(rhs, C0, pp, (0.0, 0.5), t_obs, rtol=1e-6, atol=1e-9)
+        return jnp.sum(ys[:, si] ** 2) + 1e-3 * jnp.sum(ys ** 2)
+
+    g = jax.jit(jax.grad(loss))(p)
+    assert bool(jnp.all(jnp.isfinite(g)))
+
+    def loss_ref(pp):
+        ctrl = diffrax.ClipStepSizeController(
+            diffrax.PIDController(rtol=1e-6, atol=1e-9, dtmax=1e-3), step_ts=t_obs
+        )
+        sol = diffrax.diffeqsolve(
+            diffrax.ODETerm(lambda t, y, a: rhs(t, y, a)), diffrax.ImplicitEuler(),
+            0.0, 0.5, 1e-6, C0, args=pp, stepsize_controller=ctrl,
+            adjoint=diffrax.RecursiveCheckpointAdjoint(),
+            saveat=diffrax.SaveAt(ts=t_obs), max_steps=200_000,
+        )
+        return jnp.sum(sol.ys[:, si] ** 2) + 1e-3 * jnp.sum(sol.ys ** 2)
+
+    g_ref = jax.jit(jax.grad(loss_ref))(p)
     rel = float(jnp.linalg.norm(g - g_ref) / (jnp.linalg.norm(g_ref) + 1e-30))
     assert rel < 1e-5
