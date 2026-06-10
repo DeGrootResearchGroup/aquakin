@@ -208,3 +208,63 @@ def test_ph_inhibit_grad_finite():
 
     g = jax.grad(f)(jnp.asarray([4.0, 5.5, 0.0, 0.0]))
     assert jnp.all(jnp.isfinite(g))
+
+
+# ---------- generic children() / map_children() ----------
+
+
+def test_children_leaf_nodes_have_none():
+    for leaf in (ConstantNode(1.0), SpeciesNode("A"), ParamNode("k"),
+                 ConditionNode("pH")):
+        assert leaf.children() == ()
+
+
+def test_children_returns_subnodes_in_field_order():
+    a, b = SpeciesNode("A"), ParamNode("k")
+    assert MultiplyNode(a, b).children() == (a, b)
+    assert NegateNode(a).children() == (a,)
+    from aquakin.core.nodes import MonodRatioNode
+    x, y, kk = SpeciesNode("X"), SpeciesNode("Y"), ParamNode("K")
+    assert MonodRatioNode(x, y, kk).children() == (x, y, kk)
+
+
+def test_map_children_rewrites_and_preserves_identity():
+    tree = MultiplyNode(ParamNode("a"), AddNode(ParamNode("b"), ConstantNode(2.0)))
+
+    # Replace every ParamNode 'b' with a constant; rebuild generically.
+    def rw(node):
+        if isinstance(node, ParamNode) and node.name == "b":
+            return ConstantNode(9.0)
+        return node.map_children(rw)
+
+    out = rw(tree)
+    # 'a' subtree unchanged -> identity preserved; 'b' replaced.
+    assert out.left is tree.left
+    assert isinstance(out.right.left, ConstantNode) and out.right.left.value == 9.0
+    # No-op rewrite returns the very same object.
+    assert tree.map_children(lambda n: n) is tree
+
+
+def test_children_covers_every_node_type():
+    """A new node type is automatically traversable: children() must descend
+    into every AST node without a per-type branch. Build one of each and check
+    the reported children match the dataclass's AST-valued fields."""
+    import dataclasses
+    from aquakin.core import nodes as _nodes
+
+    leaf = ConstantNode(1.0)
+    samples = [
+        AddNode(leaf, leaf), MultiplyNode(leaf, leaf), DivideNode(leaf, leaf),
+        SubtractNode(leaf, leaf), PowerNode(leaf, leaf), NegateNode(leaf),
+        ArrheniusNode(leaf, leaf), pHSwitchNode(leaf),
+        _nodes.pHInhibitNode(leaf, leaf), _nodes.MonodNode(leaf, leaf),
+        _nodes.MonodInhibitionNode(leaf, leaf),
+        _nodes.MonodRatioNode(leaf, leaf, leaf),
+        _nodes.MonodInhibitionRatioNode(leaf, leaf, leaf),
+    ]
+    for node in samples:
+        expected = tuple(
+            getattr(node, f.name) for f in dataclasses.fields(node)
+            if hasattr(getattr(node, f.name), "compile")  # is an ASTNode
+        )
+        assert node.children() == expected
