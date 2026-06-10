@@ -127,14 +127,20 @@ def _run_diffeqsolve(
     solver, controller, or adjoint here changes behaviour for every reactor.
 
     ``dtmax`` caps the integrator step size. It is ``None`` (uncapped) by
-    default, which is fastest for plain forward solves. For *differentiating*
-    a stiff network it must be set: an L-stable solver may take steps far
-    larger than the fastest reaction timescale and silently damp the
-    unresolved fast modes in the primal, but the sensitivity of those modes is
-    then ill-resolved and the differentiated solve returns non-finite values
-    (in both forward and reverse mode). Capping ``dtmax`` to a small multiple
-    of the fastest reaction timescale resolves it; the resulting gradients
-    match finite differences.
+    default, which is fastest for plain forward solves. For *reverse-mode*
+    differentiation of a stiff network it must be set. An L-stable solver may
+    take steps far larger than the fastest reaction timescale and simply damp
+    the unresolved fast modes in the primal (which stays accurate). The two AD
+    modes then diverge: **forward mode** (``jax.jvp`` / ``jax.jacfwd``) stays
+    finite at any step, losing only accuracy when the fast modes are
+    unresolved; **reverse mode** (``jax.grad``, the discrete adjoint) returns
+    **non-finite** values above a step-size threshold, an overflow in the
+    backward accumulation governed by the per-step stiffness ``gamma*dt*||J||``
+    (not by operator conditioning). Capping ``dtmax`` to a small multiple of
+    the fastest reaction timescale bounds that product; the resulting reverse
+    gradient is finite and matches both forward mode and finite differences.
+    This is reverse-mode-specific and independent of the adjoint flavour. See
+    the "Differentiating stiff networks" discussion in CLAUDE.md.
     """
     term = diffrax.ODETerm(rhs)
     solver = diffrax.Kvaerno5()

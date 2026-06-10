@@ -79,13 +79,16 @@ class BatchReactor:
         differentiating a stiff network (see below).
     dtmax : float, optional
         Maximum integrator step size. ``None`` (default) leaves the step
-        uncapped, which is fastest for forward solves. Set it when
-        *differentiating* a stiff network: an L-stable solver can step over
-        the fastest reaction timescale and damp those modes in the primal,
-        but their sensitivity is then ill-resolved and ``jax.grad`` /
-        ``jax.jvp`` return non-finite values. Capping ``dtmax`` to a small
-        multiple of the fastest reaction timescale fixes it (both AD modes)
-        and the gradients match finite differences.
+        uncapped, which is fastest for forward solves. Set it for
+        *reverse-mode* differentiation of a stiff network: an L-stable solver
+        can step over the fastest reaction timescale and damp those modes in
+        the primal (which stays accurate). Forward mode (``jax.jvp`` /
+        ``jax.jacfwd``) then stays finite at any step, but reverse mode
+        (``jax.grad``) returns non-finite values above a step-size threshold
+        (a backward-accumulation overflow set by the per-step stiffness).
+        Capping ``dtmax`` to a small multiple of the fastest reaction
+        timescale restores a finite reverse gradient that matches forward mode
+        and finite differences.
     max_steps : int, optional
         Maximum number of internal solver steps (default 100000). Raise it for
         long or very stiff forward solves that exhaust the default budget.
