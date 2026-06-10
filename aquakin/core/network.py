@@ -27,6 +27,7 @@ from aquakin.core.nodes import (
     RateCallable,
     SpeciesNode,
     SubtractNode,
+    pHInhibitNode,
     pHSwitchNode,
     _BinaryNode,
 )
@@ -75,6 +76,8 @@ def _collect_param_refs(node: ASTNode) -> set[str]:
         return _collect_param_refs(node.A) | _collect_param_refs(node.Ea)
     if isinstance(node, pHSwitchNode):
         return _collect_param_refs(node.pKa)
+    if isinstance(node, pHInhibitNode):
+        return _collect_param_refs(node.pH_LL) | _collect_param_refs(node.pH_UL)
     if isinstance(node, (MonodNode, MonodInhibitionNode)):
         return _collect_param_refs(node.X) | _collect_param_refs(node.K)
     if isinstance(node, (MonodRatioNode, MonodInhibitionRatioNode)):
@@ -116,6 +119,12 @@ def _substitute(node: ASTNode, expr_asts: dict[str, ASTNode]) -> ASTNode:
         if new_pKa is node.pKa:
             return node
         return pHSwitchNode(new_pKa)
+    if isinstance(node, pHInhibitNode):
+        new_ll = _substitute(node.pH_LL, expr_asts)
+        new_ul = _substitute(node.pH_UL, expr_asts)
+        if new_ll is node.pH_LL and new_ul is node.pH_UL:
+            return node
+        return pHInhibitNode(new_ll, new_ul)
     if isinstance(node, (MonodNode, MonodInhibitionNode)):
         new_X = _substitute(node.X, expr_asts)
         new_K = _substitute(node.K, expr_asts)

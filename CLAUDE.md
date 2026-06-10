@@ -439,6 +439,7 @@ tree itself is not walked repeatedly.
 **Domain-specific function nodes**
 - `ArrheniusNode(A, Ea)` — temperature-dependent rate: `A * exp(-Ea / (R * T))`
 - `pHSwitchNode(pKa)` — acid/base speciation fraction: `1 / (1 + 10^(pH - pKa))`
+- `pHInhibitNode(pH_LL, pH_UL)` — ADM1 lower-pH Hill inhibition `pHLim^n/(S_H^n+pHLim^n)` (stable sigmoid form); 1 at high pH, 0 at low pH. Needs `pH`.
 - `MonodNode(X, K)` — saturation Monod: `X / (K + X)`
 - `MonodInhibitionNode(X, K)` — inhibition Monod: `K / (K + X)`
 - `MonodRatioNode(A, B, K)` — ratio-saturation Monod: `(A/B) / (K + A/B)`
@@ -960,6 +961,9 @@ aquakin/
 │   │   ├── asm2d_tud.yaml           # Delft TUD variant of ASM2D
 │   │   ├── asm3.yaml                # ASM3 (storage products replace hydrolysis)
 │   │   ├── asm3_biop.yaml           # ASM3 + bio-P extension
+│   │   ├── adm1.yaml                # ADM1 anaerobic digestion (BSM2 form, Rosen-Jeppsson
+│   │   │                            #   2006); FIRST CUT: liquid phase + fixed pH. TODO
+│   │   │                            #   extensions: gas headspace, state-derived pH, ions
 │   │   ├── wats_sewer.yaml          # original reference-book WATS (Tables 9.1-9.4)
 │   │   ├── wats_sewer_extended.yaml  # extended WATS (+ nitrate/methane/elemental-S, state-derived pH)
 │   │   ├── wats_sewer_extended_*.yaml # extended-model structural variants + v0

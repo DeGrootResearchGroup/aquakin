@@ -22,6 +22,8 @@ _ASM_NETWORKS = [
     ("asm2d_tud", 18, 22, 73),
     ("asm3", 13, 12, 39),
     ("asm3_biop", 17, 23, 65),
+    # ADM1 (anaerobic digestion) -- first cut: liquid phase, fixed pH.
+    ("adm1", 24, 19, 78),
 ]
 
 

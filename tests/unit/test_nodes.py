@@ -183,3 +183,28 @@ def test_grad_through_params():
 
     g = jax.grad(f)(jnp.asarray([0.5, 1.0, 5000.0, 8.8]))
     assert float(g[0]) == pytest.approx(1.0)
+
+
+def test_ph_inhibit_node():
+    # ADM1 lower-pH Hill inhibition: 0.5 at the midpoint, ->1 above, ->0 below.
+    from aquakin.core.nodes import pHInhibitNode
+
+    node = pHInhibitNode(ConstantNode(4.0), ConstantNode(5.5))
+    assert _eval(node, pH=4.75) == pytest.approx(0.5, abs=1e-6)
+    assert _eval(node, pH=8.0) > 0.999
+    assert _eval(node, pH=3.0) < 0.01
+    # monotone increasing in pH
+    assert _eval(node, pH=5.0) > _eval(node, pH=4.5)
+
+
+def test_ph_inhibit_grad_finite():
+    from aquakin.core.nodes import pHInhibitNode
+
+    node = pHInhibitNode(ParamNode("r.k"), ParamNode("r.A"))  # LL, UL as params
+    fn = node.compile(_ctx())
+
+    def f(p):
+        return fn(jnp.zeros(2), p, {"pH": jnp.asarray([5.0]), "T": jnp.asarray([293.15])}, 0)
+
+    g = jax.grad(f)(jnp.asarray([4.0, 5.5, 0.0, 0.0]))
+    assert jnp.all(jnp.isfinite(g))
