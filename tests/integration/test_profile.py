@@ -1,5 +1,6 @@
 """Tests for profile-likelihood identifiability analysis."""
 
+import warnings
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -176,10 +177,52 @@ def test_profile_unknown_target_rejected(simple_network):
                                    observed_species=["B"])
 
 
+def test_interp_ci_clean_bowl():
+    """A symmetric bowl crossing the threshold on both sides gives a finite CI
+    and no warning."""
+    from aquakin.integrate.profile import _interp_ci
+
+    grid = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    delta_loss = np.array([4.0, 1.0, 0.0, 1.0, 4.0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any warning fails
+        lo, hi = _interp_ci(grid, delta_loss, delta=1.92)
+    assert lo is not None and hi is not None
+    assert 0.0 < lo < 1.0 and 3.0 < hi < 4.0
+
+
+def test_interp_ci_nan_in_crossing_region_warns_and_is_open():
+    """A failed inner fit (NaN) between the minimum and the lower edge blocks
+    that side: it returns None but WARNS, so it is not silently read as
+    non-identifiability."""
+    from aquakin.integrate.profile import _interp_ci
+
+    grid = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    delta_loss = np.array([4.0, np.nan, 0.0, 1.0, 4.0])  # NaN on the lower side
+    with pytest.warns(UserWarning, match="lower confidence bound is indeterminate"):
+        lo, hi = _interp_ci(grid, delta_loss, delta=1.92)
+    assert lo is None              # blocked by the NaN
+    assert hi is not None          # upper side is clean
+
+
+def test_interp_ci_genuinely_open_does_not_warn():
+    """A flat profile that never crosses the threshold is genuinely open and
+    must NOT warn (no NaNs in the way)."""
+    from aquakin.integrate.profile import _interp_ci
+
+    grid = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    delta_loss = np.array([0.0, 0.0, 0.0, 0.0, 0.0])  # below delta everywhere
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        lo, hi = _interp_ci(grid, delta_loss, delta=1.92)
+    assert lo is None and hi is None
+
+
 def test_profile_all_failed_returns_unidentified(simple_network, monkeypatch):
     """If every inner fit fails, the profile is all-NaN: return a clean
     'unidentified' result (mle=nan, open CI) rather than raising on nanmin/
-    nanargmin of an all-NaN array."""
+    nanargmin of an all-NaN array. Each failure must also surface as a warning
+    carrying the exception type (so a config bug is not silently swallowed)."""
     from aquakin.integrate import profile as profile_mod
 
     def _always_fail(*args, **kwargs):
@@ -190,11 +233,12 @@ def test_profile_all_failed_returns_unidentified(simple_network, monkeypatch):
         simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     grid = np.linspace(0.1, 0.4, 5)
-    pr = aquakin.profile_likelihood(
-        reactor, jnp.asarray([1.0, 0.0]), jnp.asarray([0.0, 0.5]),
-        jnp.asarray([0.0, 1.0]), ["A_to_B.k"], grid=grid,
-        profile_ic="A", observed_species=["B"], n_starts=2,
-    )
+    with pytest.warns(UserWarning, match="inner fit failed.*RuntimeError"):
+        pr = aquakin.profile_likelihood(
+            reactor, jnp.asarray([1.0, 0.0]), jnp.asarray([0.0, 0.5]),
+            jnp.asarray([0.0, 1.0]), ["A_to_B.k"], grid=grid,
+            profile_ic="A", observed_species=["B"], n_starts=2,
+        )
     assert np.isnan(pr.mle)
     assert pr.ci == (None, None)
     assert np.all(np.isnan(pr.loss))
