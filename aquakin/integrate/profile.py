@@ -23,6 +23,7 @@ re-fits any point a better-fitting neighbour can improve.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 
@@ -83,22 +84,49 @@ def _lin_cross(x0, y0, x1, y1, yt):
 
 def _interp_ci(grid, delta_loss, delta):
     """Confidence bounds = interpolated crossings of ``delta`` either side of the
-    profile minimum. A side that never reaches ``delta`` returns ``None``."""
+    profile minimum.
+
+    A side that runs to the grid edge with every point below ``delta`` is
+    genuinely open and returns ``None``. A side whose outward scan hits a NaN
+    (a failed inner fit) *before* a crossing is **indeterminate** --- the
+    crossing may be hidden in the failed region --- so it also returns ``None``
+    but emits a warning, so a numerical failure is not silently reported as
+    non-identifiability.
+    """
     if not np.any(np.isfinite(delta_loss)):
         return (None, None)
     imin = int(np.nanargmin(delta_loss))
-    lo = None
-    for i in range(imin, 0, -1):
-        y_in, y_out = delta_loss[i], delta_loss[i - 1]
-        if np.isfinite(y_out) and y_in < delta <= y_out:
-            lo = _lin_cross(grid[i - 1], y_out, grid[i], y_in, delta)
-            break
-    hi = None
-    for i in range(imin, len(grid) - 1):
-        y_in, y_out = delta_loss[i], delta_loss[i + 1]
-        if np.isfinite(y_out) and y_in < delta <= y_out:
-            hi = _lin_cross(grid[i], y_in, grid[i + 1], y_out, delta)
-            break
+
+    def _scan(indices):
+        # Walk outward from the minimum over adjacent (inner, outer) pairs.
+        # Stop at the first crossing, or at the first NaN (which blocks the
+        # side). Returns (bound_or_None, blocked_by_nan).
+        for inner, outer in indices:
+            y_in, y_out = delta_loss[inner], delta_loss[outer]
+            if not (np.isfinite(y_in) and np.isfinite(y_out)):
+                return None, True
+            if y_in < delta <= y_out:
+                return _lin_cross(grid[outer], y_out, grid[inner], y_in, delta), False
+        return None, False
+
+    lo, lo_blocked = _scan([(i, i - 1) for i in range(imin, 0, -1)])
+    hi, hi_blocked = _scan([(i, i + 1) for i in range(imin, len(grid) - 1)])
+    if lo is None and lo_blocked:
+        warnings.warn(
+            "profile lower confidence bound is indeterminate: a failed inner "
+            "fit (NaN loss) lies between the minimum and the lower grid edge, "
+            "so the open bound may reflect a solver failure rather than "
+            "non-identifiability.",
+            stacklevel=2,
+        )
+    if hi is None and hi_blocked:
+        warnings.warn(
+            "profile upper confidence bound is indeterminate: a failed inner "
+            "fit (NaN loss) lies between the minimum and the upper grid edge, "
+            "so the open bound may reflect a solver failure rather than "
+            "non-identifiability.",
+            stacklevel=2,
+        )
     return (lo, hi)
 
 
@@ -268,7 +296,18 @@ def profile_likelihood(
                 reactor, C0_pt, observations, t_obs, inner_free,
                 initial_params=init_p, n_starts=n, **inner_kw,
             )
-        except Exception:
+        except Exception as exc:
+            # Record this point as a gap (NaN) but surface the failure: a real
+            # bug (bad parameter/species name, shape mismatch) fails identically
+            # at every grid point and would otherwise masquerade as a string of
+            # legitimate solver failures. The exception type makes that visible.
+            warnings.warn(
+                f"profile inner fit failed at {profiled}={float(value):g} "
+                f"({type(exc).__name__}: {exc}); recorded as a gap. A failure "
+                f"at every grid point usually indicates a configuration error, "
+                f"not a numerical limit.",
+                stacklevel=2,
+            )
             return None
 
     n = len(grid)
