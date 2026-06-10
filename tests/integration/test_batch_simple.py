@@ -28,6 +28,25 @@ def test_first_order_decay_matches_analytical(simple_network):
     assert jnp.allclose(sol.C_named("B"), analytical_B, atol=1e-5, rtol=1e-4)
 
 
+def test_max_steps_is_exposed_and_enforced(simple_network):
+    # max_steps is now a constructor knob on BatchReactor (it used to be hardwired
+    # to 100k in _run_diffeqsolve). A budget far too small must make the solve
+    # raise; the generous default completes.
+    conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
+    C0 = jnp.asarray([1.0, 0.0])
+    params = simple_network.default_parameters()
+    t_eval = jnp.linspace(0.0, 20.0, 21)
+
+    r_tight = aquakin.BatchReactor(simple_network, conditions, max_steps=2)
+    assert r_tight.max_steps == 2
+    with pytest.raises(Exception):
+        r_tight.solve(C0, params, t_span=(0.0, 20.0), t_eval=t_eval)
+
+    r_ok = aquakin.BatchReactor(simple_network, conditions, max_steps=100_000)
+    sol = r_ok.solve(C0, params, t_span=(0.0, 20.0), t_eval=t_eval)
+    assert jnp.all(jnp.isfinite(sol.C))
+
+
 def test_grad_through_solve_finite(simple_network):
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.BatchReactor(simple_network, conditions)

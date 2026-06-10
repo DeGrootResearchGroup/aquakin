@@ -105,6 +105,7 @@ class ParticleTrackReactor:
         rtol: float = 1e-6,
         atol=1e-9,
         dtmax: float | None = None,
+        max_steps: int = 100_000,
     ) -> None:
         missing = sorted(set(network.conditions_required) - set(track.fields))
         if missing:
@@ -120,6 +121,7 @@ class ParticleTrackReactor:
         self.rtol = rtol
         self.atol = _coerce_atol(atol, network.n_species)
         self.dtmax = dtmax
+        self.max_steps = int(max_steps)
         # Single jitted variant: the track structure is fixed for the
         # reactor's lifetime, so one cache slot is enough.
         self._jitted_solve = None
@@ -166,6 +168,7 @@ class ParticleTrackReactor:
         rtol = self.rtol
         atol = self.atol
         dtmax = self.dtmax
+        max_steps = self.max_steps
 
         @jax.jit
         def _solve(C0, params):
@@ -186,6 +189,7 @@ class ParticleTrackReactor:
                 rtol=rtol,
                 atol=atol,
                 dtmax=dtmax,
+                max_steps=max_steps,
             )
             return sol.ts, sol.ys
 
@@ -201,6 +205,7 @@ def integrate_ensemble(
     rtol: float = 1e-6,
     atol=1e-9,
     n_save: int | None = None,
+    max_steps: int = 100_000,
 ) -> dict[int, TrackSolution]:
     """
     Integrate the network along an ensemble of particle tracks.
@@ -215,7 +220,8 @@ def integrate_ensemble(
         ``lambda pid: network.default_concentrations()``.
     params : jnp.ndarray
         Flat parameter vector shared across all particles.
-    rtol, atol, n_save : passed through to each :class:`ParticleTrackReactor`.
+    rtol, atol, n_save, max_steps : passed through to each
+        :class:`ParticleTrackReactor`.
 
     Returns
     -------
@@ -225,7 +231,8 @@ def integrate_ensemble(
     results: dict[int, TrackSolution] = {}
     for pid, track in tracks.items():
         reactor = ParticleTrackReactor(
-            network, track, n_save=n_save, rtol=rtol, atol=atol
+            network, track, n_save=n_save, rtol=rtol, atol=atol,
+            max_steps=max_steps,
         )
         results[pid] = reactor.solve(C0_fn(pid), params)
     return results

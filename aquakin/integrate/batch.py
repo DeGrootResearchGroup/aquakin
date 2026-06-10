@@ -86,6 +86,9 @@ class BatchReactor:
         ``jax.jvp`` return non-finite values. Capping ``dtmax`` to a small
         multiple of the fastest reaction timescale fixes it (both AD modes)
         and the gradients match finite differences.
+    max_steps : int, optional
+        Maximum number of internal solver steps (default 100000). Raise it for
+        long or very stiff forward solves that exhaust the default budget.
     """
 
     def __init__(
@@ -97,6 +100,7 @@ class BatchReactor:
         atol=1e-9,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
         dtmax: Optional[float] = None,
+        max_steps: int = 100_000,
     ) -> None:
         conditions.validate_required(network.conditions_required)
         self.network = network
@@ -105,6 +109,7 @@ class BatchReactor:
         self.atol = _coerce_atol(atol, network.n_species)
         self.adjoint = adjoint
         self.dtmax = dtmax
+        self.max_steps = int(max_steps)
         # Cache jit-compiled inner solve keyed on (t0, t1, t_eval_shape).
         # First call with a new signature pays the trace cost; subsequent
         # calls reuse the compiled graph.
@@ -309,6 +314,7 @@ class BatchReactor:
         atol = self.atol
         adjoint = self.adjoint
         dtmax = self.dtmax
+        max_steps = self.max_steps
 
         if has_t_eval:
             @jax.jit
@@ -332,6 +338,7 @@ class BatchReactor:
                     atol=atol,
                     adjoint=adjoint,
                     dtmax=dtmax,
+                    max_steps=max_steps,
                 )
                 return sol.ts, sol.ys
 
@@ -355,6 +362,7 @@ class BatchReactor:
                 atol=atol,
                 adjoint=adjoint,
                 dtmax=dtmax,
+                max_steps=max_steps,
             )
             return sol.ts, sol.ys
 
