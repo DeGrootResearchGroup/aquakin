@@ -26,11 +26,14 @@ class SensitivityResult:
     output : float
         The scalar output value at the evaluation point.
     doutput_dparams : jnp.ndarray
-        Gradient w.r.t. the flat ``params`` vector, shape ``(n_params,)``.
+        Gradient w.r.t. the **full** flat ``params`` vector, shape
+        ``(n_params,)`` --- every network parameter, not a free subset (unlike
+        :func:`fit` / :func:`~aquakin.calibrate`, which optimise a chosen
+        ``free_params`` list).
     doutput_dconditions : dict[str, jnp.ndarray]
         Gradient w.r.t. each condition field, ``field_name -> (n_locations,)``.
     parameter_names : list[str]
-        Namespaced parameter names matching ``doutput_dparams``.
+        Namespaced parameter names matching ``doutput_dparams`` (all of them).
     """
 
     output: float

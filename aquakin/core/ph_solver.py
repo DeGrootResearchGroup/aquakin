@@ -312,10 +312,19 @@ def solve_ph(
     def dresidual_dh(h):
         return charge_balance_residual_deriv(h, K=K, **totals)
 
-    u = jnp.broadcast_to(
-        jnp.asarray(jnp.log(h_init)),
-        jnp.shape(residual(jnp.asarray(h_init))),
-    ).astype(float)
+    # The Newton state ``u = ln[H+]`` broadcasts to the shape of the residual,
+    # which is the broadcast of every input it depends on (the totals, the
+    # strong-ion / fixed-cation charges, and -- via the temperature-corrected
+    # equilibrium constants -- ``T_kelvin``). Compute that shape directly rather
+    # than evaluating the full residual once just to read its shape.
+    out_shape = jnp.broadcast_shapes(
+        jnp.shape(jnp.asarray(h_init)),
+        jnp.shape(strong_anion_eq),
+        jnp.shape(z_cation_eq),
+        jnp.shape(T_kelvin),
+        *(jnp.shape(v) for v in totals.values()),
+    )
+    u = jnp.broadcast_to(jnp.asarray(jnp.log(h_init)), out_shape).astype(float)
 
     def body(u, _):
         h = jnp.exp(u)
