@@ -17,6 +17,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Union
 
+import jax
 import jax.numpy as jnp
 
 from aquakin.plant.streams import Stream
@@ -79,11 +80,9 @@ class InfluentSeries:
         to the endpoint values (``jnp.interp`` semantics).
         """
         Q_t = jnp.interp(t, self.t, self.Q)
-        # Interpolate each species column separately, then stack.
-        n_species = self.network.n_species
-        C_t = jnp.stack(
-            [jnp.interp(t, self.t, self.C[:, j]) for j in range(n_species)]
-        )
+        # Interpolate every species column in one vmapped op (over the species
+        # axis) rather than a Python loop of n_species separate interp calls.
+        C_t = jax.vmap(lambda col: jnp.interp(t, self.t, col), in_axes=1)(self.C)
         return Stream(Q=Q_t, C=C_t, network=self.network)
 
 
