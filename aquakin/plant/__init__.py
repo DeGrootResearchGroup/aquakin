@@ -19,6 +19,8 @@ from aquakin.plant.plant import (
     Plant,
     PlantSolution,
 )
+from aquakin.plant.primary_clarifier import PrimaryClarifier
+from aquakin.plant.separators import IdealThickener
 from aquakin.plant.streams import Stream
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
 from aquakin.plant.units import Unit
@@ -27,11 +29,13 @@ __all__ = [
     "CSTRUnit",
     "Connection",
     "IdentityTranslator",
+    "IdealThickener",
     "InfluentSeries",
     "MixerUnit",
     "ParameterLayout",
     "Plant",
     "PlantSolution",
+    "PrimaryClarifier",
     "SplitterUnit",
     "StateTranslator",
     "Stream",
