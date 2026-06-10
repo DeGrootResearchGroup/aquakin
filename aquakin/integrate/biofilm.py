@@ -54,7 +54,11 @@ import jax.numpy as jnp
 
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
-from aquakin.integrate._common import _HasNamedSpecies, _run_diffeqsolve
+from aquakin.integrate._common import (
+    _HasNamedSpecies,
+    _run_diffeqsolve,
+    validate_t_eval,
+)
 
 
 @dataclass
@@ -497,6 +501,7 @@ class BiofilmReactor:
             t_eval_arr, cache_key = None, (t0, t1, None)
         else:
             t_eval_arr = jnp.asarray(t_eval)
+            validate_t_eval(t_eval_arr, t0, t1)
             cache_key = (t0, t1, tuple(t_eval_arr.shape))
 
         jitted = self._jit_cache.get(cache_key)
@@ -598,6 +603,8 @@ class BiofilmReactor:
         atol_y = jnp.full((ndof,), float(self.atol))
         y0_flat = y0.reshape(-1)
         t_eval_arr = None if t_eval is None else jnp.asarray(t_eval)
+        if t_eval_arr is not None:
+            validate_t_eval(t_eval_arr, t0, t1)
 
         def _finish(ts, y_traj, S_traj):
             n_t = ts.shape[0]
