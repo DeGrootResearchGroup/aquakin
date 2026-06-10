@@ -163,19 +163,39 @@ def test_bsm1_takacs_reaches_steady_state(asm1, constant_influent):
     assert float(sol.C_named("tank5", "SNO")[-1]) > 1.0
 
 
-@pytest.mark.skip(
-    reason="Dynamic (time-varying) influent integration is stiff once the "
-    "recycle flows are resolved at full strength (the under-resolved flows used "
-    "to make the plant artificially mild). Steady-state runs work; the dynamic "
-    "diurnal-forcing transient is the open plant-hardening item tracked in #30."
-)
 def test_bsm1_dry_weather_runs(asm1):
-    """The dry-weather influent CSV drives the plant without solver failure."""
+    """The dry-weather influent CSV drives the plant efficiently to a healthy
+    state. This is the dynamic-influent counterpart of the steady-state test
+    and the regression guard for the recycle-flow-control fix: the recycle
+    pumps (internal recycle, RAS, wastage) deliver fixed setpoint flows, so the
+    throughput tracks the influent smoothly instead of the near-singular
+    fixed-fraction gain that blew the throughput up to ~20x Qin and made the
+    monolithic solve hit the step ceiling under diurnal forcing (issue #30)."""
     plant = build_bsm1(network=asm1)
     plant.add_influent("feed", load_bsm1_influent("dry", asm1))
     plant.connect(None, "feed", "inlet_mix", "fresh")
-    sol = _run(plant, t_end=10.0, n_save=5)
+    sol = _run(plant, t_end=14.0, n_save=8)
     assert jnp.all(jnp.isfinite(sol.state))
+    # Healthy plant under the diurnal load: biomass sustained, nitrified.
+    assert float(sol.C_named("tank5", "XB_H")[-1]) > 1000.0
+    assert float(sol.C_named("tank5", "SNH")[-1]) < 5.0
+    assert float(sol.C_named("tank5", "SNO")[-1]) > 1.0
+
+
+def test_bsm1_takacs_dry_weather_runs(asm1):
+    """The full Takács 1-D clarifier plant also integrates the dynamic dry
+    influent to a healthy state (issue #30): the fixed-setpoint recycle pumps
+    keep the layered settler's flows bounded under diurnal forcing."""
+    plant = build_bsm1(network=asm1, use_takacs=True)
+    plant.add_influent("feed", load_bsm1_influent("dry", asm1))
+    plant.connect(None, "feed", "inlet_mix", "fresh")
+    sol = plant.solve(
+        t_span=(0.0, 14.0), t_eval=jnp.linspace(0.0, 14.0, 8),
+        rtol=1e-4, atol=1e-3, max_steps=200_000,
+    )
+    assert jnp.all(jnp.isfinite(sol.state))
+    assert float(sol.C_named("tank5", "XB_H")[-1]) > 1000.0
+    assert float(sol.C_named("tank5", "SNH")[-1]) < 5.0
 
 
 def test_metrics_compute_finite(asm1, constant_influent):

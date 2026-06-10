@@ -82,9 +82,16 @@ class TakacsClarifier:
         Index of the layer where the inlet enters (0-based from the
         bottom; BSM1 uses index 5 for a 10-layer clarifier, counting
         from the bottom).
-    overflow_Q : float
-        Overflow (clarified effluent) volumetric flow rate, m³/d.
-        Underflow takes ``Q_in - overflow_Q``.
+    overflow_Q : float, optional
+        Fixed overflow (clarified effluent) flow rate, m³/d; underflow takes
+        ``Q_in - overflow_Q``. Supply exactly one of ``overflow_Q`` /
+        ``underflow_Q``.
+    underflow_Q : float, optional
+        Fixed underflow flow rate, m³/d (the controlled RAS+wastage pump flow
+        ``Q_r + Q_w``); the effluent overflow is then the remainder and tracks
+        the feed (``Q_e = Q_f - Q_u``). Preferred under dynamic influent -- a
+        fixed overflow forces a near-singular recycle-flow gain. Supply exactly
+        one of ``overflow_Q`` / ``underflow_Q``.
     particulate_species : list[str]
         Species names that settle. Defaults to ASM1's standard set:
         XS, XI, XB_H, XB_A, XP, XND.
@@ -100,7 +107,8 @@ class TakacsClarifier:
     network: "CompiledNetwork"
     area: float
     height: float
-    overflow_Q: float
+    overflow_Q: "float | None" = None
+    underflow_Q: "float | None" = None
     n_layers: int = 10
     feed_layer: int = 5
     # Initial-condition operating point for a settled-blanket start (state-point
@@ -140,8 +148,15 @@ class TakacsClarifier:
             raise ValueError(
                 f"feed_layer must be in [0, {self.n_layers}); got {self.feed_layer}"
             )
-        if self.overflow_Q < 0:
+        if (self.overflow_Q is None) == (self.underflow_Q is None):
+            raise ValueError(
+                f"TakacsClarifier '{self.name}': supply exactly one of "
+                f"overflow_Q or underflow_Q."
+            )
+        if self.overflow_Q is not None and self.overflow_Q < 0:
             raise ValueError(f"overflow_Q must be non-negative; got {self.overflow_Q}")
+        if self.underflow_Q is not None and self.underflow_Q < 0:
+            raise ValueError(f"underflow_Q must be non-negative; got {self.underflow_Q}")
         # Soluble = everything not in particulate.
         self._soluble_indices = [
             i for i in range(self.network.n_species) if i not in self._part_indices
@@ -193,8 +208,14 @@ class TakacsClarifier:
         # Thickening ratio Q_feed / Q_underflow. For a well-functioning
         # clarifier (clean effluent) a solids balance puts the underflow at
         # X_u = X_f * Q_feed / Q_underflow; here Q_feed = Q_overflow + Q_under.
+        # In underflow-controlled mode the design overflow is not given, so use
+        # the blanket underflow as a stand-in (ratio ~2, right for BSM loading) --
+        # this only seeds the initial profile, which then relaxes.
         Q_u = float(self.init_underflow_Q)
-        ratio = (self.overflow_Q + Q_u) / Q_u
+        design_over = (
+            self.overflow_Q if self.overflow_Q is not None else self.init_underflow_Q
+        )
+        ratio = (float(design_over) + Q_u) / Q_u
         X_u = X_f * ratio
         # Clarification (above-feed) layers sit at the non-settleable floor.
         X_clar = max(self._fns * X_f, 1.0)
@@ -234,6 +255,23 @@ class TakacsClarifier:
         # Clamp to [0, vmax].
         return jnp.clip(v_takacs, 0.0, self._vmax)
 
+    def _split_flows(self, Q_in: jnp.ndarray, clamp: bool):
+        """Return ``(Q_over, Q_under)`` from the inlet flow.
+
+        The *controlled* flow is fixed (``underflow_Q`` for a flow-controlled
+        RAS+wastage pump, else ``overflow_Q``) and the other is the remainder, so
+        the free flow tracks the feed (``Q_e = Q_f - Q_u``, the BSM convention).
+        ``clamp=True`` keeps both flows in ``[0, Q_in]`` (concentration/settling
+        stage); ``clamp=False`` leaves the split affine for ``_resolve_flows``.
+        """
+        if self.underflow_Q is not None:
+            Q_over = Q_in - jnp.asarray(float(self.underflow_Q))
+        else:
+            Q_over = jnp.asarray(float(self.overflow_Q))
+        if clamp:
+            Q_over = jnp.clip(Q_over, 0.0, Q_in)
+        return Q_over, Q_in - Q_over
+
     def compute_outputs(
         self,
         t: jnp.ndarray,
@@ -245,12 +283,10 @@ class TakacsClarifier:
         layered = self._layered(state)  # (n_layers, n_part)
         # Overflow = top layer (index n_layers - 1). Underflow = bottom (0).
         # Soluble species pass through (same concentration in both outlets).
-        # Overflow cannot exceed the feed (during the recycle-flow startup the
-        # feed is transiently below the design overflow); clamping keeps the
-        # underflow non-negative, so the RAS never carries a negative flow that
-        # would make the downstream mixer produce negative concentrations.
-        overflow_Q = jnp.minimum(self.overflow_Q, s_in.Q)
-        underflow_Q = s_in.Q - overflow_Q
+        # The controlled flow is fixed and the other is the remainder, clamped
+        # into [0, Q_in] so neither outflow goes negative (a negative RAS would
+        # make the downstream mixer produce negative concentrations).
+        overflow_Q, underflow_Q = self._split_flows(s_in.Q, clamp=True)
 
         # Build the per-species C vectors for the two outputs.
         n_species = self.network.n_species
@@ -271,12 +307,14 @@ class TakacsClarifier:
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
-        """Linear flow rule for the recycle-flow solve (constant overflow, the
-        remainder to underflow); the ``min`` guard in compute_outputs is the
-        concentration-stage safeguard, inactive at the steady-state feed."""
+        """Linear flow rule for the recycle-flow solve: the controlled flow
+        (``underflow_Q`` or ``overflow_Q``) is constant and the other outflow is
+        the remainder, so the map stays affine and ``_resolve_flows`` is exact.
+        The clamp in compute_outputs/rhs is the concentration-stage safeguard,
+        inactive at the steady-state feed."""
         Q_in = input_flows[self.input_port]
-        Q_over = jnp.asarray(self.overflow_Q)
-        return {self.overflow_port: Q_over, self.underflow_port: Q_in - Q_over}
+        Q_over, Q_under = self._split_flows(Q_in, clamp=False)
+        return {self.overflow_port: Q_over, self.underflow_port: Q_under}
 
     def rhs(
         self,
@@ -287,12 +325,11 @@ class TakacsClarifier:
     ) -> jnp.ndarray:
         s_in = inputs[self.input_port]
         Q_in = s_in.Q
-        # Clamp overflow to the feed so underflow stays non-negative (see
-        # compute_outputs): the recycle-flow startup transiently drives the feed
-        # below the design overflow, and a negative underflow flow would make the
-        # RAS recycle a negative-flow stream and destabilise the solve.
-        overflow_Q = jnp.minimum(self.overflow_Q, Q_in)
-        underflow_Q = Q_in - overflow_Q
+        # Controlled flow fixed, the other the remainder, clamped into [0, Q_in]
+        # so the up/down convective velocities stay non-negative (see
+        # compute_outputs): a negative underflow would make the RAS recycle a
+        # negative-flow stream and destabilise the solve.
+        overflow_Q, underflow_Q = self._split_flows(Q_in, clamp=True)
 
         layered = self._layered(state)  # (n_layers, n_part)
         # Particulate inlet concentrations — gather via index array (vectorised).
