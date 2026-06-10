@@ -34,6 +34,11 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import (
+    ASM1_SETTLING_SPECIES,
+    ASM1_TSS_FACTOR,
+    ASM1_TSS_SPECIES,
+)
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -43,9 +48,11 @@ if TYPE_CHECKING:  # pragma: no cover
 # A standard ASM1 ↔ TSS conversion used to identify the "particulate
 # mass" that settles. Each particulate species contributes to the
 # settling solid concentration in proportion to its COD-to-TSS factor.
+# XND settles with XS but is N attached to it, not separate solids, so it
+# carries a zero TSS factor.
 _DEFAULT_TSS_FACTORS = {
-    "XS": 0.75, "XI": 0.75, "XB_H": 0.75, "XB_A": 0.75, "XP": 0.75,
-    "XND": 0.0,  # XND is N attached to XS, not separate solids
+    **{sp: ASM1_TSS_FACTOR for sp in ASM1_TSS_SPECIES},
+    "XND": 0.0,
 }
 
 # Standard BSM1 Takács parameter set (Alex et al. 2008, Table 1.7).
@@ -112,9 +119,9 @@ class TakacsClarifier:
     # is taken from the network's default particulate concentrations.
     init_underflow_Q: "float | None" = None
     init_feed_tss: "float | None" = None
-    particulate_species: list[str] = field(default_factory=lambda: [
-        "XS", "XI", "XB_H", "XB_A", "XP", "XND"
-    ])
+    particulate_species: list[str] = field(
+        default_factory=lambda: list(ASM1_SETTLING_SPECIES)
+    )
     settling_params: dict[str, float] = field(default_factory=lambda: dict(_BSM1_TAKACS_DEFAULTS))
     tss_factors: dict[str, float] = field(default_factory=lambda: dict(_DEFAULT_TSS_FACTORS))
     input_port: str = "inlet"

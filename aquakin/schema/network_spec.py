@@ -192,16 +192,10 @@ class StrongIonSpec(BaseModel):
     charge: float = Field(gt=0.0)
 
 
-_VALID_TOTAL_KEYS = (
-    "carbonate",
-    "acetate",
-    "propionate",
-    "butyrate",
-    "valerate",
-    "ammonia",
-    "phosphate",
-    "sulfide",
-)
+# Single source of truth lives in core/speciation.py (the runtime consumer);
+# import it here so the schema validator and the runtime builder can never
+# disagree on the valid acid/base total keys.
+from aquakin.core.speciation import VALID_TOTAL_KEYS as _VALID_TOTAL_KEYS
 
 
 class SpeciationSpec(BaseModel):

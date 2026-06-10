@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import ASM1_SETTLING_SPECIES
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -64,9 +65,9 @@ class IdealClarifier:
     network: "CompiledNetwork"
     overflow_Q: float
     capture_efficiency: float = 0.998
-    particulate_species: list[str] = field(default_factory=lambda: [
-        "XS", "XI", "XB_H", "XB_A", "XP", "XND"
-    ])
+    particulate_species: list[str] = field(
+        default_factory=lambda: list(ASM1_SETTLING_SPECIES)
+    )
     input_port: str = "inlet"
     overflow_port: str = "overflow"
     underflow_port: str = "underflow"

@@ -8,9 +8,33 @@ import pytest
 import aquakin  # noqa: F401  (enables x64)
 from aquakin.core.ph_solver import (
     charge_balance_residual,
+    charge_balance_residual_deriv,
     equilibrium_constants,
     solve_ph,
 )
+
+
+def test_analytic_derivative_matches_autodiff():
+    """The hand-written charge_balance_residual_deriv is kept in closed form so
+    the Newton iteration carries no nested autodiff, but it must stay in sync
+    with the residual it differentiates. Pin it to jax.grad of the residual
+    across a range of [H+] and buffer loadings so the two cannot silently
+    desync (the duplication risk in the audit)."""
+    totals = dict(
+        tot_carbonate=2e-3, tot_acetate=1e-3, tot_propionate=5e-4,
+        tot_butyrate=3e-4, tot_valerate=2e-4, tot_ammonia=1.5e-3,
+        tot_phosphate=8e-4, tot_sulfide=4e-4,
+    )
+    for T in (283.15, 293.15, 308.15):
+        K = equilibrium_constants(jnp.asarray(T))
+        for pH in (4.0, 6.0, 7.0, 8.5, 11.0, 13.0):
+            h = jnp.asarray(10.0 ** (-pH))
+            analytic = float(charge_balance_residual_deriv(h, K=K, **totals))
+            auto = float(jax.grad(
+                lambda hh: charge_balance_residual(
+                    hh, strong_anion_eq=0.0, z_cation_eq=0.0, K=K, **totals)
+            )(h))
+            assert analytic == pytest.approx(auto, rel=1e-6, abs=1e-9)
 
 
 def _bisection_reference(totals, T_kelvin=293.15, n=200):
