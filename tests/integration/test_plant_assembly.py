@@ -303,3 +303,20 @@ def test_distinct_networks_sharing_a_name_rejected():
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     with pytest.raises(ValueError, match="share the name"):
         plant.default_parameters()
+
+
+def test_unit_ports_are_lists(simple_net):
+    """Every unit exposes input_ports/output_ports as list[str] (the Unit
+    Protocol type), so Mixer/Splitter match CSTR/clarifier rather than leaking
+    tuple fields."""
+    from aquakin.plant.units import Unit
+
+    mixer = MixerUnit(name="m", input_port_names=["a", "b"], network=simple_net)
+    splitter = SplitterUnit(
+        name="s", output_port_ratios={"x": 0.5, "y": 0.5}, network=simple_net)
+    cstr = CSTRUnit(name="t", network=simple_net, volume=1.0,
+                    input_port_names=["inlet"], conditions={"T": 293.15})
+    for u in (mixer, splitter, cstr):
+        assert isinstance(u, Unit)
+        assert isinstance(u.input_ports, list)
+        assert isinstance(u.output_ports, list)
