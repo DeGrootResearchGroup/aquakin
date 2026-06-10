@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7", "pytest-xdist>=3"]
+test = ["pytest>=7", "pytest-xdist>=3", "pytest-timeout>=2"]
 
 [tool.setuptools.packages.find]
 include = ["aquakin*"]
