@@ -57,6 +57,31 @@ def test_t_span_must_be_ascending(simple_network):
         reactor.solve(jnp.asarray([1.0, 0.0]), simple_network.default_parameters(), (2.0, 1.0))
 
 
+def test_t_eval_out_of_span_rejected(simple_network):
+    reactor = aquakin.BatchReactor(simple_network, aquakin.SpatialConditions.uniform(1, T=293.15))
+    C0, p = jnp.asarray([1.0, 0.0]), simple_network.default_parameters()
+    with pytest.raises(ValueError):   # below t0
+        reactor.solve(C0, p, (0.0, 10.0), t_eval=jnp.asarray([-1.0, 5.0]))
+    with pytest.raises(ValueError):   # above t1
+        reactor.solve(C0, p, (0.0, 10.0), t_eval=jnp.asarray([5.0, 11.0]))
+
+
+def test_t_eval_must_be_ascending(simple_network):
+    reactor = aquakin.BatchReactor(simple_network, aquakin.SpatialConditions.uniform(1, T=293.15))
+    C0, p = jnp.asarray([1.0, 0.0]), simple_network.default_parameters()
+    with pytest.raises(ValueError):   # not ascending
+        reactor.solve(C0, p, (0.0, 10.0), t_eval=jnp.asarray([5.0, 2.0, 8.0]))
+    with pytest.raises(ValueError):   # repeated (not strictly ascending)
+        reactor.solve(C0, p, (0.0, 10.0), t_eval=jnp.asarray([2.0, 2.0]))
+
+
+def test_t_eval_valid_accepted(simple_network):
+    reactor = aquakin.BatchReactor(simple_network, aquakin.SpatialConditions.uniform(1, T=293.15))
+    C0, p = jnp.asarray([1.0, 0.0]), simple_network.default_parameters()
+    sol = reactor.solve(C0, p, (0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 6))
+    assert jnp.all(jnp.isfinite(sol.C))
+
+
 def test_uniform_rejects_zero_locations():
     with pytest.raises(ValueError):
         aquakin.SpatialConditions.uniform(0, T=293.15)
