@@ -8,6 +8,7 @@ from typing import Optional
 import diffrax
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
@@ -167,6 +168,7 @@ class BatchReactor:
             cache_key = (t0, t1, None)
         else:
             t_eval_arr = jnp.asarray(t_eval)
+            self._validate_t_eval(t_eval_arr, t0, t1)
             cache_key = (t0, t1, tuple(t_eval_arr.shape))
 
         jitted = self._jit_cache.get(cache_key)
@@ -256,6 +258,8 @@ class BatchReactor:
         atol_y = jnp.broadcast_to(jnp.asarray(self.atol, dtype=float),
                                   (network.n_species,))
         t_eval_arr = None if t_eval is None else jnp.asarray(t_eval)
+        if t_eval_arr is not None:
+            self._validate_t_eval(t_eval_arr, t0, t1)
 
         # Non-default sensitivity tolerances bypass the compile cache (they would
         # bloat the key); the common default path is cached like ``solve``.
@@ -295,6 +299,33 @@ class BatchReactor:
         else:
             ts, y_traj, S_traj = jitted(C0, params, cond, t_eval_arr)
         return BatchSolution(t=ts, C=y_traj, network=network), S_traj
+
+    @staticmethod
+    def _validate_t_eval(t_eval_arr: jnp.ndarray, t0: float, t1: float) -> None:
+        """Validate output times before handing them to ``SaveAt(ts=...)``.
+
+        Diffrax silently returns NaN for save times outside ``[t0, t1]`` or a
+        non-ascending sequence, so check here for a clear error instead. Value
+        checks run only for concrete (non-traced) ``t_eval``; a traced array
+        (e.g. differentiating with respect to the save times) skips them.
+        """
+        if t_eval_arr.ndim != 1:
+            raise ValueError(
+                f"t_eval must be 1-D; got shape {tuple(t_eval_arr.shape)}."
+            )
+        if isinstance(t_eval_arr, jax.core.Tracer):
+            return
+        t_eval_np = np.asarray(t_eval_arr)
+        if t_eval_np.size == 0:
+            return
+        lo, hi = float(t_eval_np.min()), float(t_eval_np.max())
+        if lo < t0 or hi > t1:
+            raise ValueError(
+                f"t_eval must lie within t_span [{t0}, {t1}]; got values in "
+                f"[{lo}, {hi}]."
+            )
+        if t_eval_np.size > 1 and not np.all(np.diff(t_eval_np) > 0):
+            raise ValueError("t_eval must be strictly ascending.")
 
     def _build_jitted_solve(self, t0: float, t1: float, has_t_eval: bool):
         """Build a jit-compiled inner solver for a specific call signature."""
