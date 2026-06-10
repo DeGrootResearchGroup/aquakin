@@ -1507,7 +1507,12 @@ Key types:
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `MixerUnit`,
 `SplitterUnit`, `IdealClarifier` (fast, stateless separator),
-`TakacsClarifier` (10-layer 1-D Takács 1991 model). Its settling physics
+`PrimaryClarifier` (BSM2 Otterpohl–Freund: a well-mixed holding tank split by
+an HRT-dependent particulate-removal efficiency, fixed underflow `f_PS·Q`),
+`IdealThickener` (BSM2 thickener / dewatering — a stateless ideal `%TSS`
+separator, concentration-dependent underflow flow), `ADM1DigesterUnit`
+(continuously-fed ADM1 CSTR with gas headspace, dilution masked to the liquid
+states), and `TakacsClarifier` (10-layer 1-D Takács 1991 model). Its settling physics
 are correct and verified in isolation at BSM1 solids loading: the
 clarification-zone flux limiting (above the feed, the downward flux is
 limited by the layer below only when that layer exceeds `X_threshold`) and
@@ -1571,6 +1576,49 @@ synthesised files match BSM1's *statistical* profile but are not the
 canonical IWA files; for quantitative comparison to Alex 2008's
 published EQI / OCI values, users should replace them with the
 official files.
+
+**BSM2 — open-loop plant (Gernaey et al. 2014 / Jeppsson et al. 2007).**
+`aquakin.plant.bsm.build_bsm2()` wraps the BSM1 activated-sludge core with the
+full sludge train: a **primary clarifier** ahead of the reactors, and
+downstream a **thickener**, an **ADM1 anaerobic digester** (35 °C, 3400 m³
+liquid + headspace) with the **ASM1↔ADM1 interfaces**, and a **dewatering**
+unit, with the two reject-water streams (thickener overflow + dewatering reject)
+recycled to the plant front. This is a genuinely **two-network** plant (ASM1
+water line + ADM1 digester); the interfaces ride on the cross-network
+connections as `StateTranslator`s, so the whole thing still integrates under one
+monolithic Diffrax solve with `jax.grad` flowing end to end. All controlled
+flows (internal recycle `Qintr=3·Q_ref`, RAS `Qr=Q_ref`, wastage `Qw=300`,
+primary sludge `f_PS·Q`) are fixed-flow pumps (the BSM1 flow-control fix carries
+over); the thickener/dewatering underflows are concentration-dependent but sit
+on the low-gain reject loop, which the concentration sweep resolves (their
+`flow_outputs` seed the linear pre-solve with a nominal fraction). **It reaches
+a healthy open-loop steady state in ~20 s** — nitrifying AS (tank-5 SNH ≈ 0,
+SNO produced, biomass sustained) and a methanogenic digester whose headspace
+methane matches the published BSM2 value to <1% — with all three recycle loops
+(AS internal, RAS, reject) and the flow balance closing
+(`tests/integration/test_bsm2.py`). The **storage tank, hydraulic delay,
+influent bypass, sensors and controllers are omitted** (open-loop steady state
+is the implemented scope); a canonical BSM2 influent file is not shipped, so the
+plant-level test asserts *qualitative* behaviour (the digester is *quantitatively*
+validated at the unit level in `tests/validation/test_bsm2_digester_unit.py`).
+
+The **ASM1↔ADM1 interfaces** (`aquakin/plant/interfaces.py`, `ASM1toADM1` /
+`ADM1toASM1`) are the continuity-based BSM2 interfaces (Nopens et al. 2009 /
+Rosen & Jeppsson 2006). `asm2adm` removes the COD demand of O₂/NO₃, then
+partitions the remaining ASM COD into ADM substrates under a nitrogen budget
+drawn greedily from a priority-ordered list of N pools, with inorganic carbon
+and the strong-ion difference (`S_cat`/`S_an`) from a charge balance at the
+digester pH; `adm2asm` maps biomass→XS+XP, solubles→SS (H₂/CH₄ stripped),
+inerts→XI/SI and inorganic N→SNH. The reference's deeply nested `if/else`
+nitrogen cascades are written here **branch-free with `jnp.minimum`** (the
+unrolled conditionals are mathematically a greedy allocation), so the maps are
+AD-clean. Both **conserve total COD** (`asm2adm` minus the electron-acceptor
+demand; `adm2asm` minus the stripped `S_h2`+`S_ch4`) **and total nitrogen** —
+verified to `rel 1e-6` in `tests/integration/test_interfaces.py`. Only the BSM2
+`fdegrade = 0` case is implemented (other values raise `NotImplementedError`).
+The digester pH used in the charge balance is a fixed parameter (default 7.0);
+the digester's own charge-balance speciation solver sets the actual pH from the
+state, so a representative fixed value is sufficient for the steady state.
 
 ---
 
