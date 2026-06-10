@@ -26,6 +26,29 @@ The shipped networks currently are:
 - `asm2d_tud` — Delft TUD variant of ASM2D with revised bio-P stoichiometry.
 - `asm3` — ASM3, ASM1 with internal storage products replacing hydrolysis.
 - `asm3_biop` — ASM3 + bio-P extension.
+- `adm1` — Anaerobic Digestion Model No. 1 (Batstone et al. 2002), BSM2
+  implementation form (Rosen & Jeppsson 2006). 29 states (26 liquid + 3 gas
+  headspace), 25 processes: disintegration, the three hydrolyses, seven
+  substrate-uptake reactions (with pH / hydrogen / free-ammonia /
+  inorganic-N inhibition, the lower-pH inhibition via the new `pHInhibitNode`),
+  seven biomass decays, and the gas headspace (kLa transfer of H₂/CH₄/CO₂ plus
+  overpressure-driven biogas outflow). Inorganic-carbon and -nitrogen
+  stoichiometry are symbolic parameter-expressions (the ADM1 elemental
+  balances), so a calibrated yield/composition flows through them. pH is
+  **state-derived** through the charge-balance `speciation:` solver (extended to
+  the four ADM1 volatile fatty acids), with the strong-ion difference carried by
+  explicit conservative `S_cat`/`S_an` ion states (via the solver's
+  `strong_cations`/`strong_anions` terms); the free-ammonia and dissolved-CO₂
+  pH-switch fractions therefore track the instantaneous state. This is the
+  complete ADM1 in BSM2 form, **validated** against the published BSM2
+  open-loop steady-state digester: run as the benchmark CSTR (3400 m³ liquid /
+  300 m³ headspace, fed at ~178 m³/d, HRT ~19 d) it reproduces the reference
+  steady state to ~1–3% on substrates/biomass/biogas, with a charge-balance pH
+  (~7.27) matching the reference electroneutrality relation
+  (`tests/validation/test_adm1_bsm2_steadystate.py`). Note: the BSM2 init file
+  lists hydrolysis `k_hyd = 0.3` d⁻¹, but that is inconsistent with its own
+  steady state (which needs ~10, the canonical value, for the observed ~99.5%
+  particulate conversion at HRT 19 d); the network ships `k_hyd = 10`.
 - `wats_sewer` — the **original reference-book WATS model** (Hvitved-Jacobsen,
   Vollertsen & Nielsen 2013, process matrices Tables 9.1–9.4): aerobic/anoxic/
   anaerobic heterotrophic carbon turnover (growth bulk+biofilm, endogenous
@@ -324,8 +347,7 @@ produced by WastewaterAD's `wastewaterad.tools.sumo_import`. Stoichiometric
 coefficients that depend on yield / N-content / fraction parameters are
 precomputed at literature defaults; kinetic parameters remain free.
 
-Future networks include UV/TiO₂, chlorine decay, and ADM1 (anaerobic
-digestion).
+Future networks include UV/TiO₂ and chlorine decay.
 
 **The library is a standalone scientific contribution.** It is not tied to any
 specific application project.
@@ -439,6 +461,7 @@ tree itself is not walked repeatedly.
 **Domain-specific function nodes**
 - `ArrheniusNode(A, Ea)` — temperature-dependent rate: `A * exp(-Ea / (R * T))`
 - `pHSwitchNode(pKa)` — acid/base speciation fraction: `1 / (1 + 10^(pH - pKa))`
+- `pHInhibitNode(pH_LL, pH_UL)` — ADM1 lower-pH Hill inhibition `pHLim^n/(S_H^n+pHLim^n)` (stable sigmoid form); 1 at high pH, 0 at low pH. Needs `pH`.
 - `MonodNode(X, K)` — saturation Monod: `X / (K + X)`
 - `MonodInhibitionNode(X, K)` — inhibition Monod: `K / (K + X)`
 - `MonodRatioNode(A, B, K)` — ratio-saturation Monod: `(A/B) / (K + A/B)`
@@ -881,7 +904,7 @@ speciation:
   field: pH                 # produced condition field (default "pH")
   temperature_field: T      # condition giving temperature
   temperature_units: celsius # or "kelvin"
-  z_cation_eq: 3.28e-3      # net fixed cation charge (eq/L); literal or {condition: name}
+  z_cation_eq: 3.28e-3      # net fixed cation-charge OFFSET (eq/L); literal or {condition: name}
   n_iter: 40
   totals:                   # species -> acid/base total (molar_mass converts mg/L -> mol/L)
     carbonate: {species: S_CO2, molar_mass: 12000}
@@ -892,13 +915,21 @@ speciation:
   strong_anions:            # fully dissociated: charge * conc/molar_mass eq/L
     - {species: S_SO4, molar_mass: 32000, charge: 2}
     - {species: S_NO,  molar_mass: 14000, charge: 1}
+  strong_cations:           # same form; summed into the net cation charge
+    - {species: S_cat, molar_mass: 1.0, charge: 1}
 ```
 
 `build_ph_derived_fn` (in `core/speciation.py`, no Pydantic) turns the
 validated declaration plus `species_index` into the derived-condition
 callable. Negative concentrations are clamped to zero before conversion
 (mirrors the reference). Valid `totals` keys: `carbonate`, `acetate`,
-`ammonia`, `phosphate`, `sulfide`.
+`propionate`, `butyrate`, `valerate`, `ammonia`, `phosphate`, `sulfide`
+(`propionate`/`butyrate`/`valerate` are the additional monoprotic ADM1
+volatile fatty acids, treated exactly like `acetate`). The net cation charge
+passed to the solver is `z_cation_eq` (a literal/condition *offset*, default
+0) **plus** the `strong_cations` sum — so a strong-cation *state* (e.g. ADM1's
+`S_cat`, paired with `S_an` in `strong_anions`) drives pH dynamically, the same
+way `strong_anions` already does for anions.
 
 ---
 
@@ -960,6 +991,9 @@ aquakin/
 │   │   ├── asm2d_tud.yaml           # Delft TUD variant of ASM2D
 │   │   ├── asm3.yaml                # ASM3 (storage products replace hydrolysis)
 │   │   ├── asm3_biop.yaml           # ASM3 + bio-P extension
+│   │   ├── adm1.yaml                # ADM1 anaerobic digestion (BSM2 form, Rosen-Jeppsson
+│   │   │                            #   2006); complete: liquid + gas headspace, state-derived
+│   │   │                            #   pH with explicit S_cat/S_an strong-ion states
 │   │   ├── wats_sewer.yaml          # original reference-book WATS (Tables 9.1-9.4)
 │   │   ├── wats_sewer_extended.yaml  # extended WATS (+ nitrate/methane/elemental-S, state-derived pH)
 │   │   ├── wats_sewer_extended_*.yaml # extended-model structural variants + v0
@@ -1064,7 +1098,8 @@ aquakin/
 │   │   ├── test_batch_simple.py     # validates against analytical solution
 │   │   └── test_pfr_simple.py
 │   ├── validation/
-│   │   └── test_bromate_vongunten.py# validates against published data
+│   │   ├── test_bromate_vongunten.py# validates against published data
+│   │   └── test_adm1_bsm2_steadystate.py # ADM1 vs published BSM2 AD steady state
 │   └── fixtures/
 │       └── simple_network.yaml      # minimal 2-species toy network for unit tests
 │

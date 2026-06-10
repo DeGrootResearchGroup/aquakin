@@ -40,6 +40,7 @@ from aquakin.core.nodes import (
     PowerNode,
     SpeciesNode,
     SubtractNode,
+    pHInhibitNode,
     pHSwitchNode,
 )
 
@@ -292,6 +293,12 @@ class _Parser:
                     f"pH_switch() takes 1 argument (pKa), got {len(args)}"
                 )
             return pHSwitchNode(args[0])
+        if name == "pH_inhibit":
+            if len(args) != 2:
+                raise ParseError(
+                    f"pH_inhibit() takes 2 arguments (pH_LL, pH_UL), got {len(args)}"
+                )
+            return pHInhibitNode(args[0], args[1])
         if name == "monod":
             if len(args) != 2:
                 raise ParseError(

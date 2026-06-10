@@ -26,7 +26,16 @@ import jax.numpy as jnp
 from aquakin.core.ph_solver import solve_ph
 
 # Total acid/base systems understood by the pH solver, in solver-argument terms.
-_TOTAL_KEYS = ("carbonate", "acetate", "ammonia", "phosphate", "sulfide")
+_TOTAL_KEYS = (
+    "carbonate",
+    "acetate",
+    "propionate",
+    "butyrate",
+    "valerate",
+    "ammonia",
+    "phosphate",
+    "sulfide",
+)
 
 
 def build_ph_derived_fn(
@@ -47,7 +56,8 @@ def build_ph_derived_fn(
         ``temperature_units`` : ``"celsius"`` or ``"kelvin"``
             How to interpret ``temperature_field`` (default ``"celsius"``).
         ``z_cation_eq`` : float or ``{"condition": name}``
-            Net fixed cation charge (eq/L), literal or read from a condition.
+            Net fixed cation-charge *offset* (eq/L), literal or read from a
+            condition. Added to the ``strong_cations`` sum (default 0.0).
         ``n_iter`` : int
             Newton iteration count (default 40).
         ``totals`` : dict
@@ -57,7 +67,13 @@ def build_ph_derived_fn(
             ``max(C[species], 0) / molar_mass``.
         ``strong_anions`` : list
             Each ``{"species": name, "molar_mass": .., "charge": ..}``;
-            contributes ``charge * max(C, 0) / molar_mass`` eq/L.
+            contributes ``charge * max(C, 0) / molar_mass`` eq/L of anionic
+            charge.
+        ``strong_cations`` : list
+            Same form as ``strong_anions``; contributes
+            ``charge * max(C, 0) / molar_mass`` eq/L of cationic charge (summed
+            into the net cation charge). Lets a state species drive pH, e.g.
+            ADM1's ``S_cat`` / ``S_an`` dynamic ion states.
     species_index : dict[str, int]
         Map from species name to index in ``C``.
 
@@ -111,7 +127,21 @@ def build_ph_derived_fn(
             )
         )
 
-    # Net fixed cation charge: literal or read from a condition field.
+    # Strong cations -> (index, molar_mass, charge). These are summed into the
+    # net cation charge alongside the literal/condition offset below, so a
+    # state cation species (e.g. ADM1's S_cat) drives pH dynamically.
+    cation_terms: list[tuple[int, float, float]] = []
+    for entry in config.get("strong_cations", []):
+        cation_terms.append(
+            (
+                _species_idx(entry["species"]),
+                float(entry["molar_mass"]),
+                float(entry["charge"]),
+            )
+        )
+
+    # Net fixed cation charge offset: literal or read from a condition field.
+    # The total cation charge is this offset plus the strong_cations sum.
     z_spec = config.get("z_cation_eq", 0.0)
     z_condition: str | None = None
     z_literal = 0.0
@@ -139,7 +169,9 @@ def build_ph_derived_fn(
         if z_condition is not None:
             z_cation_eq = condition_arrays[z_condition][loc_idx]
         else:
-            z_cation_eq = z_literal
+            z_cation_eq = jnp.asarray(z_literal)
+        for idx, mm, charge in cation_terms:
+            z_cation_eq = z_cation_eq + charge * jnp.maximum(C[idx], 0.0) / mm
 
         pH = solve_ph(
             strong_anion_eq=strong_anion_eq,

@@ -440,3 +440,47 @@ class pHSwitchNode(ASTNode):
 
     def condition_names(self) -> set[str]:
         return {"pH"} | self.pKa.condition_names()
+
+
+@dataclass(frozen=True)
+class pHInhibitNode(ASTNode):
+    """
+    ADM1 lower-pH (Hill) inhibition factor
+
+        I_pH = pHLim^n / (S_H^n + pHLim^n),
+        pHLim = 10^(-(pH_UL + pH_LL)/2),  n = 3/(pH_UL - pH_LL),  S_H = 10^(-pH)
+
+    (Batstone et al. 2002; Rosen & Jeppsson 2006). Implemented in the equivalent,
+    numerically stable sigmoid form
+    ``I_pH = sigmoid(ln(10) * n * (pH - (pH_UL + pH_LL)/2))`` -- 1 at high pH (no
+    inhibition), 0 at low pH (full inhibition). Requires a condition field named
+    ``pH``. Arguments are the lower and upper pH limits (parameters or constants).
+    """
+
+    pH_LL: ASTNode
+    pH_UL: ASTNode
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        if "pH" not in ctx.condition_fields:
+            raise KeyError("pH_inhibit(...) requires a condition field named 'pH'.")
+        ll_f = self.pH_LL.compile(ctx)
+        ul_f = self.pH_UL.compile(ctx)
+        ln10 = float(jnp.log(10.0))
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            pH = condition_arrays["pH"][loc_idx]
+            ll = ll_f(C, params, condition_arrays, loc_idx)
+            ul = ul_f(C, params, condition_arrays, loc_idx)
+            n = 3.0 / (ul - ll)
+            return jax.nn.sigmoid(ln10 * n * (pH - 0.5 * (ul + ll)))
+
+        return _eval
+
+    def species(self) -> set[str]:
+        return self.pH_LL.species() | self.pH_UL.species()
+
+    def param_names(self) -> set[str]:
+        return self.pH_LL.param_names() | self.pH_UL.param_names()
+
+    def condition_names(self) -> set[str]:
+        return {"pH"} | self.pH_LL.condition_names() | self.pH_UL.condition_names()

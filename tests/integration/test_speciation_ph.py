@@ -116,3 +116,71 @@ def test_grad_flows_through_pH():
     g = jax.grad(final_X)(C0)
     assert np.all(np.isfinite(np.asarray(g)))
     assert abs(float(g[net.species_index["S_CO2"]])) > 0.0
+
+
+# A network whose net cation charge comes from a strong-cation STATE (S_cat),
+# in addition to the strong-anion state (S_an) -- the ADM1 explicit-ion pattern.
+YAML_IONS = """
+network:
+  name: ph_ions_toy
+  version: "1.0"
+  description: "Toy network with explicit strong-ion states driving pH."
+
+species:
+  - {name: S_CO2, units: mgC/L, default_concentration: 24.0}
+  - {name: S_cat, units: mol/L, default_concentration: 3.0e-3}
+  - {name: S_an,  units: mol/L, default_concentration: 1.0e-3}
+
+conditions:
+  - {name: T, description: "Temperature (degC)", default: 20.0}
+
+speciation:
+  field: pH
+  temperature_field: T
+  temperature_units: celsius
+  n_iter: 40
+  totals:
+    carbonate: {species: S_CO2, molar_mass: 12000}
+  strong_cations:
+    - {species: S_cat, molar_mass: 1.0, charge: 1}
+  strong_anions:
+    - {species: S_an,  molar_mass: 1.0, charge: 1}
+
+reactions:
+  - name: co2_decay
+    description: "First-order CO2 removal; the ion states stay conservative."
+    rate: "k * [S_CO2]"
+    parameters:
+      k: {value: 0.1}
+    stoichiometry:
+      S_CO2: -1
+"""
+
+
+def test_strong_cation_state_drives_pH():
+    """A strong-cation STATE feeds the net cation charge, equivalent to a
+    z_cation_eq offset of (S_cat - S_an); raising S_cat raises pH."""
+    spec = NetworkSpec.model_validate(yaml.safe_load(YAML_IONS))
+    net = compile_network(spec)
+    si = net.species_index
+    C0 = net.default_concentrations()
+    p = net.default_parameters()
+    cond = SpatialConditions.uniform(1, T=20.0)
+
+    pH = float(net.derived_condition_fn(C0, p, cond.fields, 0)["pH"])
+    # The S_cat (+3 mM) / S_an (-1 mM) split is a net +2 mM cation charge.
+    expected = float(
+        solve_ph(tot_carbonate=24.0 / 12000, z_cation_eq=2.0e-3, T_kelvin=293.15)
+    )
+    assert pH == pytest.approx(expected, abs=1e-9)
+
+    # More strong cation -> higher pH; differentiable through the solver.
+    C_more = C0.at[si["S_cat"]].add(2.0e-3)
+    pH_more = float(net.derived_condition_fn(C_more, p, cond.fields, 0)["pH"])
+    assert pH_more > pH
+    g = jax.grad(
+        lambda scat: net.derived_condition_fn(
+            C0.at[si["S_cat"]].set(scat), p, cond.fields, 0
+        )["pH"]
+    )(3.0e-3)
+    assert np.isfinite(float(g)) and float(g) > 0.0
