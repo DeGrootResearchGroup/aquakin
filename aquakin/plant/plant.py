@@ -133,10 +133,24 @@ class Plant:
     Parameters
     ----------
     name : str
+    recycle_passes : int, optional
+        Number of Gauss-Seidel passes used per RHS evaluation to propagate
+        concentrations around recycle loops (default 3). The recycle *flows*
+        are resolved exactly (:meth:`_resolve_flows`); this only bounds the
+        concentration sweep. It is a *fixed* count (not iterate-to-tolerance)
+        because the RHS is jitted and differentiated, so a data-dependent loop
+        is not permitted. For BSM-family topologies the streams reach a fixed
+        point in 2 passes (verified to machine precision), so the default of 3
+        is a safe margin; raise it only for unusual topologies with a long
+        chain of concentration-transforming units (mixers/splitters/clarifiers)
+        inside a recycle loop.
     """
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, recycle_passes: int = 3) -> None:
         self.name = name
+        if recycle_passes < 1:
+            raise ValueError(f"recycle_passes must be >= 1; got {recycle_passes}")
+        self.recycle_passes = int(recycle_passes)
         self.units: dict[str, Unit] = {}
         self._unit_order: list[str] = []
         self.connections: list[Connection] = []
@@ -379,17 +393,20 @@ class Plant:
 
         # Step 3: traverse units in evaluation order, computing outputs.
         # Recycle edges (downstream → upstream) create cyclic data
-        # dependencies. We resolve them by iterating the full set of unit
-        # output computations multiple times: each iteration improves the
-        # stream estimates on recycle edges. For typical BSM-family
-        # topologies with 1-2 recycle loops, 3 passes are sufficient for
-        # the streams to converge to consistent values within solver
-        # tolerance. The iteration is cheap because every unit's
-        # compute_outputs is a pure function of its (current-pass) inputs
-        # and its known internal state.
+        # dependencies. We resolve them with a fixed number of Gauss-Seidel
+        # passes (``recycle_passes``, default 3) over the unit-output
+        # computations: each pass refines the stream estimates on recycle edges.
+        # The count is fixed, not iterate-to-tolerance, because this RHS is
+        # jitted and differentiated -- a data-dependent loop is not allowed.
+        # Convergence is fast because most recycle-stream concentrations are a
+        # source unit's *state* (read directly, e.g. a CSTR's output is its own
+        # tank concentration), so the only iterated chain is the short
+        # mixer/splitter/clarifier path. For BSM-family topologies the streams
+        # reach a fixed point in 2 passes (verified to machine precision in
+        # tests/integration/test_bsm1.py), so the default 3 is a safe margin.
         all_outputs: dict[tuple[str, str], Stream] = {}
         all_outputs.update(seeded)
-        for _pass in range(3):
+        for _pass in range(self.recycle_passes):
             for name in self._unit_order:
                 unit = self.units[name]
                 inputs = self._collect_inputs(name, all_outputs, streams)
