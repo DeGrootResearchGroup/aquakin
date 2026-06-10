@@ -39,7 +39,6 @@ VALID_TOTAL_KEYS = (
     "phosphate",
     "sulfide",
 )
-_TOTAL_KEYS = VALID_TOTAL_KEYS  # internal alias (kept for the existing references)
 
 
 def build_ph_derived_fn(
@@ -108,11 +107,11 @@ def build_ph_derived_fn(
 
     # Resolve total-system species -> (solver_kw, index, molar_mass).
     totals_cfg = config.get("totals", {})
-    unknown = set(totals_cfg) - set(_TOTAL_KEYS)
+    unknown = set(totals_cfg) - set(VALID_TOTAL_KEYS)
     if unknown:
         raise ValueError(
             f"speciation 'totals' has unknown systems {sorted(unknown)}; "
-            f"valid keys are {_TOTAL_KEYS}"
+            f"valid keys are {VALID_TOTAL_KEYS}"
         )
     total_terms: list[tuple[str, int, float]] = []
     for key, entry in totals_cfg.items():
@@ -162,7 +161,7 @@ def build_ph_derived_fn(
         T = condition_arrays[temp_field][loc_idx]
         T_kelvin = T + 273.15 if temp_units == "celsius" else T
 
-        kwargs = {k: 0.0 for k in (f"tot_{key}" for key in _TOTAL_KEYS)}
+        kwargs = {k: 0.0 for k in (f"tot_{key}" for key in VALID_TOTAL_KEYS)}
         for solver_kw, idx, mm in total_terms:
             kwargs[solver_kw] = jnp.maximum(C[idx], 0.0) / mm
 
