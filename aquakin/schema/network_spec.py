@@ -180,8 +180,10 @@ class TotalSpec(BaseModel):
     molar_mass: float = Field(gt=0.0)
 
 
-class StrongAnionSpec(BaseModel):
-    """One fully-dissociated strong anion in ``speciation.strong_anions``."""
+class StrongIonSpec(BaseModel):
+    """One fully-dissociated strong ion in ``speciation.strong_anions`` or
+    ``speciation.strong_cations``. ``charge`` is the magnitude (positive); the
+    list it appears in fixes the sign (anionic vs cationic)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -219,7 +221,8 @@ class SpeciationSpec(BaseModel):
     z_cation_eq: Union[float, dict[str, str]] = 0.0
     n_iter: int = Field(default=40, ge=1)
     totals: dict[str, TotalSpec] = Field(default_factory=dict)
-    strong_anions: list[StrongAnionSpec] = Field(default_factory=list)
+    strong_anions: list[StrongIonSpec] = Field(default_factory=list)
+    strong_cations: list[StrongIonSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate(self) -> "SpeciationSpec":

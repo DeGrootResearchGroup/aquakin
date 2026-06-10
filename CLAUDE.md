@@ -27,7 +27,7 @@ The shipped networks currently are:
 - `asm3` — ASM3, ASM1 with internal storage products replacing hydrolysis.
 - `asm3_biop` — ASM3 + bio-P extension.
 - `adm1` — Anaerobic Digestion Model No. 1 (Batstone et al. 2002), BSM2
-  implementation form (Rosen & Jeppsson 2006). 27 states (24 liquid + 3 gas
+  implementation form (Rosen & Jeppsson 2006). 29 states (26 liquid + 3 gas
   headspace), 25 processes: disintegration, the three hydrolyses, seven
   substrate-uptake reactions (with pH / hydrogen / free-ammonia /
   inorganic-N inhibition, the lower-pH inhibition via the new `pHInhibitNode`),
@@ -36,10 +36,11 @@ The shipped networks currently are:
   stoichiometry are symbolic parameter-expressions (the ADM1 elemental
   balances), so a calibrated yield/composition flows through them. pH is
   **state-derived** through the charge-balance `speciation:` solver (extended to
-  the four ADM1 volatile fatty acids), with the strong-ion difference supplied
-  by the `S_cat_net` condition; the free-ammonia and dissolved-CO₂ pH-switch
-  fractions therefore track the instantaneous state. Promoting `S_cat`/`S_an` to
-  explicit dynamic ion states is the documented next extension.
+  the four ADM1 volatile fatty acids), with the strong-ion difference carried by
+  explicit conservative `S_cat`/`S_an` ion states (via the solver's
+  `strong_cations`/`strong_anions` terms); the free-ammonia and dissolved-CO₂
+  pH-switch fractions therefore track the instantaneous state. This is the
+  complete ADM1 in BSM2 form.
 - `wats_sewer` — the **original reference-book WATS model** (Hvitved-Jacobsen,
   Vollertsen & Nielsen 2013, process matrices Tables 9.1–9.4): aerobic/anoxic/
   anaerobic heterotrophic carbon turnover (growth bulk+biofilm, endogenous
@@ -895,7 +896,7 @@ speciation:
   field: pH                 # produced condition field (default "pH")
   temperature_field: T      # condition giving temperature
   temperature_units: celsius # or "kelvin"
-  z_cation_eq: 3.28e-3      # net fixed cation charge (eq/L); literal or {condition: name}
+  z_cation_eq: 3.28e-3      # net fixed cation-charge OFFSET (eq/L); literal or {condition: name}
   n_iter: 40
   totals:                   # species -> acid/base total (molar_mass converts mg/L -> mol/L)
     carbonate: {species: S_CO2, molar_mass: 12000}
@@ -906,6 +907,8 @@ speciation:
   strong_anions:            # fully dissociated: charge * conc/molar_mass eq/L
     - {species: S_SO4, molar_mass: 32000, charge: 2}
     - {species: S_NO,  molar_mass: 14000, charge: 1}
+  strong_cations:           # same form; summed into the net cation charge
+    - {species: S_cat, molar_mass: 1.0, charge: 1}
 ```
 
 `build_ph_derived_fn` (in `core/speciation.py`, no Pydantic) turns the
@@ -914,7 +917,11 @@ callable. Negative concentrations are clamped to zero before conversion
 (mirrors the reference). Valid `totals` keys: `carbonate`, `acetate`,
 `propionate`, `butyrate`, `valerate`, `ammonia`, `phosphate`, `sulfide`
 (`propionate`/`butyrate`/`valerate` are the additional monoprotic ADM1
-volatile fatty acids, treated exactly like `acetate`).
+volatile fatty acids, treated exactly like `acetate`). The net cation charge
+passed to the solver is `z_cation_eq` (a literal/condition *offset*, default
+0) **plus** the `strong_cations` sum — so a strong-cation *state* (e.g. ADM1's
+`S_cat`, paired with `S_an` in `strong_anions`) drives pH dynamically, the same
+way `strong_anions` already does for anions.
 
 ---
 
@@ -977,8 +984,8 @@ aquakin/
 │   │   ├── asm3.yaml                # ASM3 (storage products replace hydrolysis)
 │   │   ├── asm3_biop.yaml           # ASM3 + bio-P extension
 │   │   ├── adm1.yaml                # ADM1 anaerobic digestion (BSM2 form, Rosen-Jeppsson
-│   │   │                            #   2006); liquid + gas headspace, state-derived pH. TODO
-│   │   │                            #   extension: explicit ion/cation/anion dynamic states
+│   │   │                            #   2006); complete: liquid + gas headspace, state-derived
+│   │   │                            #   pH with explicit S_cat/S_an strong-ion states
 │   │   ├── wats_sewer.yaml          # original reference-book WATS (Tables 9.1-9.4)
 │   │   ├── wats_sewer_extended.yaml  # extended WATS (+ nitrate/methane/elemental-S, state-derived pH)
 │   │   ├── wats_sewer_extended_*.yaml # extended-model structural variants + v0

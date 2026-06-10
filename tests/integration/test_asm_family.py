@@ -22,8 +22,9 @@ _ASM_NETWORKS = [
     ("asm2d_tud", 18, 22, 73),
     ("asm3", 13, 12, 39),
     ("asm3_biop", 17, 23, 65),
-    # ADM1 (anaerobic digestion): liquid phase + gas headspace, fixed pH.
-    ("adm1", 27, 25, 88),
+    # ADM1 (anaerobic digestion): liquid + gas headspace, state-derived pH,
+    # explicit strong-ion (S_cat / S_an) states.
+    ("adm1", 29, 25, 88),
 ]
 
 
@@ -104,7 +105,10 @@ def test_adm1_ph_is_state_derived():
     # pH is produced, not required as an input.
     assert "pH" in net.derived_fields
     assert "pH" not in net.conditions_required
-    assert "S_cat_net" in net.conditions_required
+    # The strong-ion difference is carried by explicit states, not a condition.
+    assert net.conditions_required == ["T"]
+    assert "S_cat" in net.species_index
+    assert "S_an" in net.species_index
 
     cond = net.default_conditions()
     C0 = net.default_concentrations()
@@ -114,29 +118,42 @@ def test_adm1_ph_is_state_derived():
     # BSM2 reference digester operating point.
     assert pH0 == pytest.approx(7.47, abs=0.05)
 
-    # Adding volatile fatty acid must lower the pH (more acid).
     si = net.species_index
+    # Adding volatile fatty acid must lower the pH (more acid).
     C_acid = C0.at[si["S_ac"]].add(5.0)
-    pH_acid = float(net.derived_condition_fn(C_acid, p, cond.fields, 0)["pH"])
-    assert pH_acid < pH0
+    assert float(net.derived_condition_fn(C_acid, p, cond.fields, 0)["pH"]) < pH0
+    # Adding strong cation (alkalinity) must raise the pH.
+    C_alk = C0.at[si["S_cat"]].add(5.0e-3)
+    assert float(net.derived_condition_fn(C_alk, p, cond.fields, 0)["pH"]) > pH0
+
+
+def test_adm1_strong_ions_are_conservative():
+    """S_cat / S_an carry no reaction stoichiometry, so they are constant
+    over a batch (they change only by transport in a flow reactor)."""
+    net = aquakin.load_network("adm1")
+    si = net.species_index
+    C0 = net.default_concentrations()
+    p = net.default_parameters()
+    dC = net.dCdt(C0, p, net.default_conditions().fields, 0)
+    assert float(dC[si["S_cat"]]) == 0.0
+    assert float(dC[si["S_an"]]) == 0.0
 
 
 def test_adm1_ph_operating_point_is_differentiable():
-    """The strong-ion difference S_cat_net sets the pH operating point and
-    must flow differentiably through a solve into a downstream output."""
+    """The explicit S_cat ion state sets the pH operating point and must flow
+    differentiably through a solve into a downstream output."""
     net = aquakin.load_network("adm1")
     si = net.species_index
     C0 = net.default_concentrations().at[si["S_ac"]].set(2.0).at[si["X_ac"]].set(0.76)
     p = net.default_parameters()
+    reactor = aquakin.BatchReactor(net, net.default_conditions())
     t_eval = jnp.linspace(0.0, 2.0, 5)
 
-    def loss(z):
-        fields = {"T": jnp.array([308.15]), "S_cat_net": z.reshape(1)}
-        reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions(fields=fields))
-        sol = reactor.solve(C0, p, (0.0, 2.0), t_eval)
+    def loss(scat0):
+        sol = reactor.solve(C0.at[si["S_cat"]].set(scat0), p, (0.0, 2.0), t_eval)
         return jnp.sum(sol.C_named("S_ch4"))
 
-    g = jax.grad(loss)(jnp.array(-9.330944e-4))
+    g = jax.grad(loss)(0.040)
     assert jnp.isfinite(g)
 
 
