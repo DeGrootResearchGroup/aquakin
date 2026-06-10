@@ -425,10 +425,16 @@ class CompiledNetwork:
             f"  Conditions required: {', '.join(self.conditions_required) or '(none)'}",
             f"  Reactions ({self.n_reactions}):",
         ]
+        # Render against the stoichiometry evaluated at the default parameters,
+        # not ``self.stoich_matrix`` (the static base, which holds zeros at every
+        # parameter-dependent cell). Networks with symbolic coefficients
+        # (ASM1/ASM2d/ASM3/ADM1 yields, N-content, fractions) would otherwise
+        # have those species silently dropped from the summary.
+        stoich = self.compute_stoich(self._default_parameters)
         for i, rname in enumerate(self.reaction_names):
             stoich_terms = []
             for j, sp in enumerate(self.species):
-                coef = float(self.stoich_matrix[i, j])
+                coef = float(stoich[i, j])
                 if coef == 0:
                     continue
                 sign = "+" if coef > 0 else "-"
