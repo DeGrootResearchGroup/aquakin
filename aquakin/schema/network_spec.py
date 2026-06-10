@@ -269,6 +269,12 @@ class NetworkSpec(BaseModel):
     expressions: dict[str, str] = Field(default_factory=dict)
     speciation: Optional[SpeciationSpec] = None
     positivity_limiter: Optional[PositivityLimiterSpec] = None
+    # Clamp concentrations to >= 0 when evaluating reaction rates (and any
+    # state-derived condition). Protects the nonlinear kinetics from a
+    # transiently-negative state; the raw state still drives transport and
+    # outputs, so it is identity at feasible states. Mirrors the reference
+    # IWA/BSM S-function ``xtemp = max(x, 0)`` convention.
+    clip_negative_states: bool = False
     reactions: list[ReactionSpec] = Field(min_length=1)
 
     @model_validator(mode="after")

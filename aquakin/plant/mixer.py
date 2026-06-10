@@ -64,6 +64,17 @@ class MixerUnit:
         C_out = mass_total / (Q_total + _EPS_Q)
         return {"out": Stream(Q=Q_total, C=C_out, network=self.network)}
 
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+        """Output port flows from input port flows (the linear flow rule).
+
+        Used by ``Plant`` to resolve the recycle-flow network cheaply and
+        exactly, decoupled from the (expensive) concentration computation.
+        """
+        Q_total = jnp.zeros(())
+        for name in self.input_port_names:
+            Q_total = Q_total + input_flows[name]
+        return {"out": Q_total}
+
     def rhs(
         self,
         t: jnp.ndarray,
@@ -128,6 +139,12 @@ class SplitterUnit:
                 network=self.network,
             )
         return outputs
+
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+        """Output port flows = inlet flow times each split ratio."""
+        Q_in = input_flows["in"]
+        return {port: Q_in * jnp.asarray(ratio)
+                for port, ratio in self.output_port_ratios.items()}
 
     def rhs(
         self,

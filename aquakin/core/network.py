@@ -259,6 +259,17 @@ class CompiledNetwork:
     # zero, so consumption cannot drive a state negative. Applied to the
     # reaction term only (transport is added by the reactor afterwards).
     positivity_threshold: "float | None" = None
+    # Optional clamp of the concentration vector to >= 0 when evaluating the
+    # reaction rates (and any state-derived condition such as pH). This protects
+    # the nonlinear kinetics (Monod / ratio terms) from evaluating at a
+    # transiently-negative state, where they produce large/garbage rates and a
+    # stiff blow-up. The clamp applies ONLY to rate evaluation: the raw state is
+    # still what the reactor's (linear) transport term and the unit outputs see,
+    # so the linear washout stays self-correcting and the inter-unit mass balance
+    # stays exact. This mirrors the reference IWA/BSM S-function convention
+    # (``xtemp = max(x, 0)`` before the process rates). Identity at feasible
+    # (non-negative) states, so it does not change the physical solution.
+    clip_negative_states: bool = False
 
     @property
     def n_species(self) -> int:
@@ -316,6 +327,10 @@ class CompiledNetwork:
         jnp.ndarray
             Reaction rate vector, shape ``(n_reactions,)``.
         """
+        if self.clip_negative_states:
+            # Clamp to >= 0 for rate evaluation only; the reactor's transport
+            # term and the unit outputs still use the raw, un-clamped state.
+            C = jnp.maximum(C, 0.0)
         if self.derived_condition_fn is not None:
             condition_arrays = self._augment_conditions(
                 C, params, condition_arrays, loc_idx
@@ -730,4 +745,5 @@ def compile_network(spec: "Any") -> CompiledNetwork:
         derived_condition_fn=derived_condition_fn,
         derived_fields=derived_fields,
         positivity_threshold=positivity_threshold,
+        clip_negative_states=bool(getattr(spec, "clip_negative_states", False)),
     )
