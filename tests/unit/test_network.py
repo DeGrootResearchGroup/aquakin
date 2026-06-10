@@ -57,3 +57,26 @@ def test_to_latex_smoke(simple_network):
     latex = simple_network.to_latex()
     assert "A_to_B" in latex
     assert "mathrm" in latex["A_to_B"]
+
+
+def test_compile_stage_helpers():
+    """The compile_network stage helpers behave as a pipeline: parameter index
+    is network-level-then-reaction-local in order, and _unresolved_params flags
+    only names resolving to neither scope."""
+    from aquakin.core.network import _build_param_index, _unresolved_params
+    from aquakin.core.parser import parse_rate_expression
+
+    # ASM1 has both network-level (Y_H, ...) and reaction-local params.
+    net = aquakin.load_network("asm1")
+    # Network-level params come before reaction-local (which are dotted).
+    bare = [p for p in net.parameters if "." not in p]
+    dotted = [p for p in net.parameters if "." in p]
+    if bare and dotted:
+        assert net.parameters.index(bare[-1]) < net.parameters.index(dotted[0])
+
+    pidx = {"k": 0, "r1.kf": 1}
+    ast = parse_rate_expression("k * kf / nope")
+    # 'k' resolves network-level; 'r1.kf' resolves reaction-local; 'nope' doesn't.
+    # (order is unspecified -- param_names() is a set -- so compare as sets.)
+    assert set(_unresolved_params(ast, "r1", pidx)) == {"nope"}
+    assert set(_unresolved_params(ast, "r2", pidx)) == {"kf", "nope"}  # r2.kf absent
