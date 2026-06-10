@@ -217,3 +217,34 @@ def test_shared_asm1_constants_are_single_source(asm1):
     # Metrics reuses the same TSS set / factor object.
     assert metrics._TSS_SPECIES is ASM1_TSS_SPECIES
     assert metrics._TSS_FACTOR == ASM1_TSS_FACTOR
+
+
+def test_controlled_split_helper():
+    """Shared overflow/underflow split helper used by both clarifiers."""
+    from aquakin.plant._flow_split import (
+        split_controlled_flows,
+        validate_controlled_split,
+    )
+
+    # Exactly one of overflow/underflow must be set.
+    with pytest.raises(ValueError, match="exactly one"):
+        validate_controlled_split("X", None, None)
+    with pytest.raises(ValueError, match="exactly one"):
+        validate_controlled_split("X", 1.0, 2.0)
+    with pytest.raises(ValueError, match="non-negative"):
+        validate_controlled_split("X", None, -1.0)
+    validate_controlled_split("X", None, 5.0)  # ok
+
+    Q_in = jnp.asarray(100.0)
+    # Fixed underflow -> overflow is the remainder.
+    o, u = split_controlled_flows(None, 30.0, Q_in, clamp=True)
+    assert float(o) == pytest.approx(70.0) and float(u) == pytest.approx(30.0)
+    # Fixed overflow -> underflow is the remainder.
+    o, u = split_controlled_flows(40.0, None, Q_in, clamp=True)
+    assert float(o) == pytest.approx(40.0) and float(u) == pytest.approx(60.0)
+    # clamp keeps both in [0, Q_in] when the feed dips below the setpoint.
+    o, u = split_controlled_flows(None, 30.0, jnp.asarray(20.0), clamp=True)
+    assert 0.0 <= float(o) <= 20.0 and 0.0 <= float(u) <= 20.0
+    # clamp=False leaves the split affine (overflow may exceed Q_in).
+    o, u = split_controlled_flows(None, 30.0, jnp.asarray(20.0), clamp=False)
+    assert float(o) == pytest.approx(-10.0)  # 20 - 30, affine
