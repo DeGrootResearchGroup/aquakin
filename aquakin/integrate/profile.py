@@ -311,6 +311,14 @@ def profile_likelihood(
                 break
 
     loss = np.array([f.loss if f is not None else np.nan for f in fits])
+    if not np.any(np.isfinite(loss)):
+        # Every inner fit failed: there is no profile minimum to anchor on, so
+        # report a clean 'unidentified' result rather than letting nanmin /
+        # nanargmin raise on the all-NaN array.
+        return ProfileResult(
+            profiled=profiled, grid=grid, loss=loss, delta_loss=loss.copy(),
+            mle=float("nan"), ci=(None, None), fits=fits, delta=delta,
+        )
     delta_loss = loss - np.nanmin(loss)
     mle = float(grid[int(np.nanargmin(loss))])
     ci = _interp_ci(grid, delta_loss, delta)
