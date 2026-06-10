@@ -12,7 +12,6 @@ influent files shipped under ``aquakin/plant/bsm/data/``.
 
 from __future__ import annotations
 
-import csv
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -116,14 +115,31 @@ def read_influent_csv(
     -------
     InfluentSeries
     """
-    if column_order is None:
-        column_order = _BSM1_COLUMN_ORDER
-
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"Influent file not found: {p}")
+    return _influent_from_text(
+        p.read_text(encoding="utf-8"), network,
+        column_order=column_order, delimiter=delimiter, source=str(p),
+    )
 
-    text = p.read_text(encoding="utf-8")
+
+def _influent_from_text(
+    text: str,
+    network: "CompiledNetwork",
+    *,
+    column_order: list[str] | None = None,
+    delimiter: str | None = None,
+    source: str = "<text>",
+) -> InfluentSeries:
+    """Parse influent CSV / whitespace text into an :class:`InfluentSeries`.
+
+    Shared by :func:`read_influent_csv` (file path) and
+    :func:`load_bsm1_influent` (in-package data), so neither round-trips the
+    data through a temporary file. ``source`` only labels error messages.
+    """
+    if column_order is None:
+        column_order = _BSM1_COLUMN_ORDER
 
     # Auto-detect delimiter by trying commas first, then whitespace.
     rows = []
@@ -166,7 +182,7 @@ def read_influent_csv(
             ) from exc
 
     if not rows:
-        raise ValueError(f"Influent file {p} contained no data rows.")
+        raise ValueError(f"Influent source {source} contained no data rows.")
 
     data = jnp.asarray(rows)  # shape (n_t, n_cols)
 
@@ -224,15 +240,8 @@ def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
         raise FileNotFoundError(
             f"BSM1 influent file 'BSM1_{profile}.csv' not found in package data."
         )
-    with resource.open() as f:
-        text = f.read()
-    # Write to a temp path? No — use the CSV reader on the raw text via a
-    # tempfile is overkill. Re-implement the simple inline parsing here.
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tf:
-        tf.write(text)
-        tmp_path = tf.name
-    try:
-        return read_influent_csv(tmp_path, network)
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+    # Parse the package data directly from text -- no temporary-file round-trip.
+    return _influent_from_text(
+        resource.read_text(encoding="utf-8"), network,
+        source=f"BSM1_{profile}.csv",
+    )

@@ -168,10 +168,8 @@ def effluent_quality_index(
         + _EQI_WEIGHTS["TKN"] * TKN_t
         + _EQI_WEIGHTS["NO"] * SNO_t
     )
-    dt = jnp.diff(t)
-    mid = 0.5 * (integrand[:-1] + integrand[1:])
     T_total = float(t[-1] - t[0])
-    return float(jnp.sum(mid * dt) * 1e-3 / (T_total + 1e-12))
+    return float(jnp.trapezoid(integrand, t) * 1e-3 / (T_total + 1e-12))
 
 
 def aeration_energy(
@@ -195,11 +193,9 @@ def aeration_energy(
     kla_history = jnp.asarray(kla_history)
     volumes = jnp.asarray(volumes)
     integrand = jnp.sum(kla_history * volumes[None, :], axis=1)
-    dt = jnp.diff(t)
-    mid = 0.5 * (integrand[:-1] + integrand[1:])
     T_total = float(t[-1] - t[0])
     return float(
-        saturation / (T_total * 1.8 * 1000.0) * jnp.sum(mid * dt)
+        saturation / (T_total * 1.8 * 1000.0) * jnp.trapezoid(integrand, t)
     )
 
 
@@ -214,10 +210,8 @@ def pumping_energy(
     PE = (1 / T) × ∫ (0.004 × Q_internal + 0.008 × Q_ras + 0.05 × Q_was) dt
     """
     integrand = 0.004 * Q_internal + 0.008 * Q_ras + 0.05 * Q_was
-    dt = jnp.diff(t)
-    mid = 0.5 * (integrand[:-1] + integrand[1:])
     T_total = float(t[-1] - t[0])
-    return float(jnp.sum(mid * dt) / (T_total + 1e-12))
+    return float(jnp.trapezoid(integrand, t) / (T_total + 1e-12))
 
 
 def operational_cost_index(
