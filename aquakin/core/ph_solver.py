@@ -22,6 +22,27 @@ through automatically and the solver composes inside a Diffrax RHS.
 All inputs and outputs are plain JAX scalars (or broadcastable arrays); there
 is no Pydantic or dataclass dependency, keeping this usable from the core
 runtime hot path.
+
+Equilibrium-constant provenance
+-------------------------------
+The base (25 degC) dissociation constants and van't Hoff reaction enthalpies in
+``_PK_BASE`` are the standard aquatic acid/base set:
+
+- Water, carbonate (Ka1/Ka2), ammonium, and phosphate (Ka1-Ka3) pK and
+  reaction-enthalpy values follow the standard aquatic-chemistry tabulations
+  (Stumm & Morgan, *Aquatic Chemistry*, 3rd ed., 1996).
+- The four monoprotic volatile-fatty-acid systems (acetate, propionate,
+  butyrate, valerate) and the temperature-correction form
+  ``K(T) = K_base * exp(dH/R * (1/T_base - 1/T))`` follow the ADM1 anaerobic
+  digestion model and its BSM2 implementation, which use this same constant set
+  (Batstone et al., *Anaerobic Digestion Model No. 1 (ADM1)*, IWA STR No. 13,
+  2002; Rosen & Jeppsson, *Aspects on ADM1 Implementation within the BSM2
+  Framework*, Lund University, 2006). The VFA acids are treated as
+  temperature-independent (dH = 0).
+- The second sulfide dissociation constant (``s_2``, pKa2 = 13.9) is **contested
+  in the literature** (reported values span roughly 12-19); 13.9 is the
+  commonly tabulated mid-range value adopted here. Treat sulfide speciation
+  above pH ~12 as correspondingly uncertain.
 """
 
 from __future__ import annotations
