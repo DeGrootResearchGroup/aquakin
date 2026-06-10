@@ -67,6 +67,47 @@ def test_bsm1_builds_and_solves(asm1, constant_influent):
     assert jnp.all(jnp.isfinite(sol.state))
 
 
+@pytest.mark.parametrize("use_takacs", [False, True])
+def test_recycle_concentration_sweep_converges_by_two_passes(
+    asm1, constant_influent, use_takacs
+):
+    """The per-RHS Gauss-Seidel concentration sweep reaches a fixed point in 2
+    passes for the BSM1 topology, so the default recycle_passes=3 is a safe
+    margin (the recycle concentrations are mostly CSTR states, read directly).
+    This pins the convergence claim that was previously only asserted."""
+    import numpy as np
+
+    plant = build_bsm1(network=asm1, use_takacs=use_takacs)
+    plant.add_influent("feed", constant_influent)
+    plant.connect(None, "feed", "inlet_mix", "fresh")
+    # Set up the layouts the RHS needs (solve() would do this).
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    y0 = plant.initial_state()
+    params = plant.default_parameters()
+    t = jnp.asarray(0.0)
+
+    def dstate(n):
+        plant.recycle_passes = n
+        return np.asarray(plant._rhs(t, y0, params))
+
+    d2, d10 = dstate(2), dstate(10)
+    # 2 passes is already converged to ~machine precision vs many passes.
+    assert np.allclose(d2, d10, rtol=1e-8, atol=1e-6 * (np.linalg.norm(d10) + 1.0))
+    # 1 pass is genuinely unconverged (so the sweep is doing real work).
+    d1 = dstate(1)
+    assert not np.allclose(d1, d10, rtol=1e-6)
+
+
+def test_recycle_passes_validated_and_configurable(asm1):
+    from aquakin.plant import Plant
+
+    with pytest.raises(ValueError):
+        Plant("p", recycle_passes=0)
+    assert Plant("p", recycle_passes=5).recycle_passes == 5
+    assert Plant("p").recycle_passes == 3  # default
+
+
 def test_bsm1_nitrification_active(asm1, constant_influent):
     """Under aerobic conditions in tank 5, NH4 should be largely oxidised."""
     plant = build_bsm1(network=asm1)
