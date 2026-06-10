@@ -268,3 +268,27 @@ def test_children_covers_every_node_type():
             if hasattr(getattr(node, f.name), "compile")  # is an ASTNode
         )
         assert node.children() == expected
+
+
+def test_accessors_union_over_children():
+    """species()/param_names()/condition_names() are driven by children(), so a
+    compound expression collects every leaf's contribution without per-node
+    accessor boilerplate. T comes from arrhenius, pH from pH_switch."""
+    from aquakin.core.parser import parse_rate_expression
+
+    ast = parse_rate_expression(
+        "-arrhenius(k1, Ea) * monod_ratio([XS], [XB_H], K_X) "
+        "* pH_switch(pKa) + monod([SO], KO)"
+    )
+    assert ast.species() == {"XS", "XB_H", "SO"}
+    assert ast.param_names() == {"k1", "Ea", "K_X", "pKa", "KO"}
+    assert ast.condition_names() == {"T", "pH"}
+
+
+def test_leaf_accessors():
+    assert SpeciesNode("XS").species() == {"XS"}
+    assert SpeciesNode("XS").param_names() == set()
+    assert ParamNode("k").param_names() == {"k"}
+    assert ParamNode("k").species() == set()
+    assert ConditionNode("pH").condition_names() == {"pH"}
+    assert ConstantNode(3.0).species() == set()
