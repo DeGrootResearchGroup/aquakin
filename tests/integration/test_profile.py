@@ -176,6 +176,32 @@ def test_profile_unknown_target_rejected(simple_network):
                                    observed_species=["B"])
 
 
+def test_profile_all_failed_returns_unidentified(simple_network, monkeypatch):
+    """If every inner fit fails, the profile is all-NaN: return a clean
+    'unidentified' result (mle=nan, open CI) rather than raising on nanmin/
+    nanargmin of an all-NaN array."""
+    from aquakin.integrate import profile as profile_mod
+
+    def _always_fail(*args, **kwargs):
+        raise RuntimeError("inner fit blew up")
+
+    monkeypatch.setattr(profile_mod, "calibrate", _always_fail)
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+    )
+    grid = np.linspace(0.1, 0.4, 5)
+    pr = aquakin.profile_likelihood(
+        reactor, jnp.asarray([1.0, 0.0]), jnp.asarray([0.0, 0.5]),
+        jnp.asarray([0.0, 1.0]), ["A_to_B.k"], grid=grid,
+        profile_ic="A", observed_species=["B"], n_starts=2,
+    )
+    assert np.isnan(pr.mle)
+    assert pr.ci == (None, None)
+    assert np.all(np.isnan(pr.loss))
+    assert np.all(np.isnan(pr.delta_loss))
+    assert all(f is None for f in pr.fits)
+
+
 def test_profile_multibatch_rejected(simple_network):
     reactor = aquakin.BatchReactor(
         simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
