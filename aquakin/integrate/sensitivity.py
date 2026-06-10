@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -180,6 +181,14 @@ def fit(
     Returns
     -------
     FitResult
+
+    Notes
+    -----
+    Box bounds are applied per parameter from each parameter's declared
+    ``bounds``. A free parameter without declared bounds is left unbounded
+    (``(-inf, +inf)``) while the others keep their boxes; a warning is emitted
+    in that mixed case. If no free parameter has bounds, the solve is fully
+    unconstrained.
     """
     if method != "adjoint":
         raise ValueError(f"Unknown fit method {method!r}; only 'adjoint' is supported.")
@@ -247,15 +256,27 @@ def fit(
         val, grad = loss_value_and_grad(x)
         return float(val), np.asarray(grad)
 
-    # Bounds (if all free params have bounds set; otherwise unbounded).
+    # Per-parameter bounds: each free parameter keeps its declared box bounds;
+    # a parameter without declared bounds is left unbounded as (-inf, +inf)
+    # rather than dropping every other parameter's bounds.
     bounds_list = []
-    use_bounds = True
+    unbounded = []
     for name in free_params:
-        if name not in network.parameter_bounds:
-            use_bounds = False
-            break
-        b = network.parameter_bounds[name]
-        bounds_list.append((float(b[0]), float(b[1])))
+        b = network.parameter_bounds.get(name)
+        if b is None:
+            bounds_list.append((-np.inf, np.inf))
+            unbounded.append(name)
+        else:
+            bounds_list.append((float(b[0]), float(b[1])))
+    if unbounded and len(unbounded) < len(free_params):
+        warnings.warn(
+            "fit(): some free parameters have no declared bounds and are left "
+            f"unbounded while the others stay bounded: {unbounded}. Declare "
+            "bounds on these parameters to constrain them.",
+            stacklevel=2,
+        )
+    # All free parameters unbounded => no box constraints at all.
+    use_bounds = len(unbounded) < len(free_params)
 
     x0_np = np.asarray(p0_full[free_indices_arr])
     result = minimize(

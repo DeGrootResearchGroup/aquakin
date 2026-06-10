@@ -181,6 +181,107 @@ def test_fit_recovers_known_rate(simple_network):
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
 
 
+_PARTIAL_BOUNDS_YAML = """
+network:
+  name: chain_decay
+  version: "1.0"
+  description: "A -> B -> C; k1 bounded, k2 unbounded."
+species:
+  - {name: A, default_concentration: 1.0}
+  - {name: B, default_concentration: 0.0}
+  - {name: C, default_concentration: 0.0}
+conditions:
+  - {name: T, default: 293.15}
+reactions:
+  - name: r1
+    rate: "k1 * [A]"
+    parameters:
+      k1: {value: 0.3, bounds: [1.0e-3, 10.0]}
+    stoichiometry: {A: -1, B: +1}
+  - name: r2
+    rate: "k2 * [B]"
+    parameters:
+      k2: {value: 0.2}            # no bounds declared
+    stoichiometry: {B: -1, C: +1}
+"""
+
+
+def _chain_fit_setup(tmp_path):
+    p = tmp_path / "chain.yaml"
+    p.write_text(_PARTIAL_BOUNDS_YAML)
+    net = aquakin.load_network_from_file(str(p))
+    reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(1, T=293.15))
+    C0 = jnp.asarray([1.0, 0.0, 0.0])
+    t_obs = jnp.linspace(0.5, 10.0, 12)
+    obs = reactor.solve(C0, net.default_parameters(), t_span=(0.0, 10.0), t_eval=t_obs).C_named("C")
+    return reactor, C0, obs, t_obs
+
+
+def _capture_bounds(monkeypatch):
+    """Patch the scipy minimize used by fit() to record the bounds passed."""
+    import importlib
+
+    # The package exposes a `sensitivity` function that shadows the submodule
+    # attribute, so resolve the module object explicitly.
+    S = importlib.import_module("aquakin.integrate.sensitivity")
+    captured = {}
+    real = S.minimize
+
+    def fake(*args, **kwargs):
+        captured["bounds"] = kwargs.get("bounds")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(S, "minimize", fake)
+    return captured
+
+
+def test_fit_keeps_partial_bounds(tmp_path, monkeypatch):
+    """A free param without declared bounds must NOT drop the other's bounds:
+    it is left unbounded (+/-inf) while the bounded one keeps its box, and a
+    warning is emitted."""
+    reactor, C0, obs, t_obs = _chain_fit_setup(tmp_path)
+    captured = _capture_bounds(monkeypatch)
+    with pytest.warns(UserWarning, match="no declared bounds"):
+        aquakin.fit(
+            reactor, C0, observations=obs, t_obs=t_obs,
+            free_params=["r1.k1", "r2.k2"], observed_species=["C"],
+        )
+    bounds = captured["bounds"]
+    assert bounds is not None
+    assert bounds[0] == (1.0e-3, 10.0)             # k1 keeps its declared box
+    assert bounds[1] == (-np.inf, np.inf)          # k2 left unbounded
+
+
+def test_fit_all_bounded_no_warning(tmp_path, monkeypatch):
+    """All free params bounded -> per-param bounds, no warning."""
+    reactor, C0, obs, t_obs = _chain_fit_setup(tmp_path)
+    captured = _capture_bounds(monkeypatch)
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("error")                    # any warning fails the test
+        aquakin.fit(
+            reactor, C0, observations=obs, t_obs=t_obs,
+            free_params=["r1.k1"], observed_species=["C"],
+        )
+    assert captured["bounds"] == [(1.0e-3, 10.0)]
+
+
+def test_fit_all_unbounded_passes_none(tmp_path, monkeypatch):
+    """No free param has bounds -> bounds=None (fully unbounded), no warning."""
+    reactor, C0, obs, t_obs = _chain_fit_setup(tmp_path)
+    captured = _capture_bounds(monkeypatch)
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("error")
+        aquakin.fit(
+            reactor, C0, observations=obs, t_obs=t_obs,
+            free_params=["r2.k2"], observed_species=["C"],
+        )
+    assert captured["bounds"] is None
+
+
 # --- DGSM (derivative-based global sensitivity) ------------------------
 
 
