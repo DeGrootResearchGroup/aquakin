@@ -131,6 +131,24 @@ def test_default_fixed_mask_warns_on_reactive_particulate(net, cond):
                  fixed_mask=jnp.array([False, False]))  # explicit -> no warning
 
 
+def test_solve_validates_c0_and_params_shape(net, cond):
+    # The shared _coerce_y0 / _check_params helpers must reject a wrong-shaped
+    # C0 or params uniformly across the solve paths.
+    r = _reactor(net, cond)
+    p = net.default_parameters()
+    bad_C0 = jnp.zeros(net.n_species + 1)
+    with pytest.raises(ValueError, match="C0 has shape"):
+        r.solve(bad_C0, p, t_span=(0.0, 1.0))
+    with pytest.raises(ValueError, match="params has shape"):
+        r.solve(jnp.zeros(net.n_species), jnp.zeros(net.n_params + 1), t_span=(0.0, 1.0))
+    # Both the (n,) and (n_layers+1, n) C0 shapes are accepted.
+    n_comp = r.n_layers + 1
+    sol_flat = r.solve(jnp.zeros(net.n_species), p, t_span=(0.0, 0.5))
+    sol_prof = r.solve(jnp.zeros((n_comp, net.n_species)), p, t_span=(0.0, 0.5))
+    assert sol_flat.profile.shape[1:] == (n_comp, net.n_species)
+    assert sol_prof.profile.shape[1:] == (n_comp, net.n_species)
+
+
 def test_solve_validates_t_eval(net, cond):
     # Diffrax silently returns NaN for save times outside the span; the solve
     # must reject them up front (same guarantee as BatchReactor) rather than

@@ -443,6 +443,33 @@ class BiofilmReactor:
         self._jit_cache: dict = {}
         self._sens_jit_cache: dict = {}
 
+    def _check_params(self, params: jnp.ndarray) -> jnp.ndarray:
+        """Coerce and shape-check the parameter vector."""
+        params = jnp.asarray(params)
+        if params.shape != (self.network.n_params,):
+            raise ValueError(
+                f"params has shape {params.shape}, expected ({self.network.n_params},)"
+            )
+        return params
+
+    def _coerce_y0(self, C0: jnp.ndarray) -> jnp.ndarray:
+        """Validate and broadcast the initial state to ``(n_layers+1, n_species)``.
+
+        Accepts ``(n_species,)`` --- the same composition in the bulk and every
+        layer --- or the full ``(n_layers+1, n_species)`` bulk-plus-per-layer
+        profile.
+        """
+        n = self.network.n_species
+        n_comp = self.n_layers + 1
+        C0 = jnp.asarray(C0)
+        if C0.shape == (n,):
+            return jnp.broadcast_to(C0, (n_comp, n))
+        if C0.shape == (n_comp, n):
+            return C0
+        raise ValueError(
+            f"C0 has shape {C0.shape}, expected ({n},) or ({n_comp}, {n})."
+        )
+
     def solve(
         self,
         C0: jnp.ndarray,
@@ -474,22 +501,8 @@ class BiofilmReactor:
         -------
         BiofilmSolution
         """
-        params = jnp.asarray(params)
-        n = self.network.n_species
-        if params.shape != (self.network.n_params,):
-            raise ValueError(
-                f"params has shape {params.shape}, expected ({self.network.n_params},)"
-            )
-        C0 = jnp.asarray(C0)
-        n_comp = self.n_layers + 1
-        if C0.shape == (n,):
-            y0 = jnp.broadcast_to(C0, (n_comp, n))
-        elif C0.shape == (n_comp, n):
-            y0 = C0
-        else:
-            raise ValueError(
-                f"C0 has shape {C0.shape}, expected ({n},) or ({n_comp}, {n})."
-            )
+        params = self._check_params(params)
+        y0 = self._coerce_y0(C0)
 
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
@@ -573,22 +586,10 @@ class BiofilmReactor:
             resolve_sens_indices,
         )
 
-        params = jnp.asarray(params)
+        params = self._check_params(params)
+        y0 = self._coerce_y0(C0)
         n = self.network.n_species
-        if params.shape != (self.network.n_params,):
-            raise ValueError(
-                f"params has shape {params.shape}, expected ({self.network.n_params},)"
-            )
-        C0 = jnp.asarray(C0)
         n_comp = self.n_layers + 1
-        if C0.shape == (n,):
-            y0 = jnp.broadcast_to(C0, (n_comp, n))
-        elif C0.shape == (n_comp, n):
-            y0 = C0
-        else:
-            raise ValueError(
-                f"C0 has shape {C0.shape}, expected ({n},) or ({n_comp}, {n})."
-            )
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
@@ -820,18 +821,10 @@ class BiofilmReactor:
         import lineax as lx
         import optimistix as optx
 
-        params = jnp.asarray(params)
+        params = self._check_params(params)
+        y0 = self._coerce_y0(C0)
         n = self.network.n_species
         n_comp = self.n_layers + 1
-        C0 = jnp.asarray(C0)
-        if C0.shape == (n,):
-            y0 = jnp.broadcast_to(C0, (n_comp, n))
-        elif C0.shape == (n_comp, n):
-            y0 = C0
-        else:
-            raise ValueError(
-                f"C0 has shape {C0.shape}, expected ({n},) or ({n_comp}, {n})."
-            )
         active = conditions if conditions is not None else self.conditions
         condition_arrays = active.fields
 
