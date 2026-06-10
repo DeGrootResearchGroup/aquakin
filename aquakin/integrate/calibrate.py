@@ -329,9 +329,13 @@ class CalibrationResult:
             for n, t in zip(names, self.transforms)
         ])
 
-        # Identifiable-subspace draws: eigen-decompose H, keep high-curvature
-        # directions, sample with std = 1/sqrt(eigenvalue) along each.
-        H = np.asarray(self.hessian_unconstrained)
+        # Identifiable-subspace draws: eigen-decompose the Hessian, keep
+        # high-curvature directions, sample with std = 1/sqrt(eigenvalue) along
+        # each. Use the *ridged* Hessian (recovered as inv(posterior_cov)) that
+        # ``posterior_cov`` and ``params_named_std`` are built from, so the band
+        # is drawn from exactly the reported posterior rather than the un-ridged
+        # raw Hessian (which differs along near-null directions).
+        H = np.linalg.inv(np.asarray(self.posterior_cov))
         w, V = np.linalg.eigh(0.5 * (H + H.T))
         keep = w > eig_keep * max(w.max(), 1.0)
         if not np.any(keep):

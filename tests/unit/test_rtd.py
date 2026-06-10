@@ -83,6 +83,20 @@ def test_percentile_time_truncated_tail_warns():
         rtd.morrill_index(t, C)
 
 
+def test_morrill_index_warns_only_once():
+    """morrill_index calls percentile_time twice (t90, t10); a truncated
+    response must warn exactly once, not once per inner call."""
+    t = jnp.linspace(0.0, 120.0, 2000)
+    C = jnp.exp(-t / 100.0)  # not washed out at 1.2 tau
+    import warnings as _w
+
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        rtd.morrill_index(t, C)
+    truncation = [w for w in caught if "truncated" in str(w.message)]
+    assert len(truncation) == 1
+
+
 def test_percentile_time_full_washout_no_warning():
     """A fully washed-out response (tail at baseline) resolves percentiles with
     no truncation warning."""

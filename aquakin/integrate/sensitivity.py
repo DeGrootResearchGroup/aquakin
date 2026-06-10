@@ -512,7 +512,21 @@ def dgsm(
         # fv: (n,) output values; g2: (n, d) squared partials.
         nu = np.mean(g2, axis=0)
         var_f = float(np.var(fv))
-        scale = (hi - lo) ** 2 / (math.pi ** 2 * var_f) if var_f > 0 else np.zeros(d)
+        if var_f > 0:
+            scale = (hi - lo) ** 2 / (math.pi ** 2 * var_f)
+        else:
+            # Every sample produced an identical output (e.g. a saturated or
+            # clipped response): the Sobol total-index bound is undefined
+            # (0/0). Return an all-zero bound but warn, so an empty ranking is
+            # not silently read as "no input matters".
+            scale = np.zeros(d)
+            warnings.warn(
+                f"DGSM output{f' {name!r}' if name else ''} has zero variance "
+                f"over the sampled ranges; the Sobol total-index bound is "
+                f"undefined and reported as 0. The output may be saturated, "
+                f"clipped, or insensitive to every input over these ranges.",
+                stacklevel=2,
+            )
         bound = nu * scale
         bound_se = (np.std(g2, axis=0) / math.sqrt(n)) * scale
         return DGSMResult(
