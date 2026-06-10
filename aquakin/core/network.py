@@ -10,25 +10,13 @@ import numpy as np
 
 from aquakin.core.context import CompileContext
 from aquakin.core.nodes import (
-    AddNode,
-    ArrheniusNode,
     ASTNode,
     ConditionNode,
     ConstantNode,
-    DivideNode,
-    MonodInhibitionNode,
-    MonodInhibitionRatioNode,
-    MonodNode,
-    MonodRatioNode,
-    MultiplyNode,
     NegateNode,
     ParamNode,
-    PowerNode,
     RateCallable,
     SpeciesNode,
-    SubtractNode,
-    pHInhibitNode,
-    pHSwitchNode,
     _BinaryNode,
 )
 from aquakin.core.parser import parse_rate_expression
@@ -46,99 +34,50 @@ _ALLOWED_STOICH_NODES = (ConstantNode, ParamNode, NegateNode, _BinaryNode)
 
 
 def _validate_stoich_ast(ast: ASTNode, rxn_name: str, species: str) -> None:
-    """Reject stoich ASTs that reference state, conditions, or functions."""
-    if isinstance(ast, _ALLOWED_STOICH_NODES):
-        if isinstance(ast, NegateNode):
-            _validate_stoich_ast(ast.operand, rxn_name, species)
-        elif isinstance(ast, _BinaryNode):
-            _validate_stoich_ast(ast.left, rxn_name, species)
-            _validate_stoich_ast(ast.right, rxn_name, species)
-        return
-    kind = type(ast).__name__
-    raise ValueError(
-        f"Stoichiometric coefficient for '{rxn_name}' / '{species}' uses an "
-        f"unsupported expression element ({kind}). Stoich expressions may only "
-        f"reference parameters, numeric constants, and arithmetic / negation; "
-        f"species, conditions, named expressions, and domain functions "
-        f"(arrhenius, pH_switch, monod, ...) are not allowed."
-    )
+    """Reject stoich ASTs that reference state, conditions, or functions.
+
+    Generic over the AST via ``children()``: an allowed node's children are
+    validated recursively, so a new node type cannot slip through unchecked.
+    """
+    if not isinstance(ast, _ALLOWED_STOICH_NODES):
+        kind = type(ast).__name__
+        raise ValueError(
+            f"Stoichiometric coefficient for '{rxn_name}' / '{species}' uses an "
+            f"unsupported expression element ({kind}). Stoich expressions may only "
+            f"reference parameters, numeric constants, and arithmetic / negation; "
+            f"species, conditions, named expressions, and domain functions "
+            f"(arrhenius, pH_switch, monod, ...) are not allowed."
+        )
+    for child in ast.children():
+        _validate_stoich_ast(child, rxn_name, species)
 
 
 def _collect_param_refs(node: ASTNode) -> set[str]:
-    """Walk an AST and return every ParamNode name encountered."""
+    """Walk an AST and return every ParamNode name encountered.
+
+    Driven by ``ASTNode.children()`` so it descends into *every* node type,
+    including ones added later -- a hand-enumerated walk would silently treat an
+    unrecognised node as a leaf and miss its parameter references.
+    """
     if isinstance(node, ParamNode):
         return {node.name}
-    if isinstance(node, _BinaryNode):
-        return _collect_param_refs(node.left) | _collect_param_refs(node.right)
-    if isinstance(node, NegateNode):
-        return _collect_param_refs(node.operand)
-    if isinstance(node, ArrheniusNode):
-        return _collect_param_refs(node.A) | _collect_param_refs(node.Ea)
-    if isinstance(node, pHSwitchNode):
-        return _collect_param_refs(node.pKa)
-    if isinstance(node, pHInhibitNode):
-        return _collect_param_refs(node.pH_LL) | _collect_param_refs(node.pH_UL)
-    if isinstance(node, (MonodNode, MonodInhibitionNode)):
-        return _collect_param_refs(node.X) | _collect_param_refs(node.K)
-    if isinstance(node, (MonodRatioNode, MonodInhibitionRatioNode)):
-        return (
-            _collect_param_refs(node.A)
-            | _collect_param_refs(node.B)
-            | _collect_param_refs(node.K)
-        )
-    return set()  # ConstantNode, SpeciesNode, ConditionNode
+    refs: set[str] = set()
+    for child in node.children():
+        refs |= _collect_param_refs(child)
+    return refs
 
 
 def _substitute(node: ASTNode, expr_asts: dict[str, ASTNode]) -> ASTNode:
-    """Return a new AST with ParamNode references to named expressions
-    replaced by the corresponding (already-resolved) expression AST.
+    """Return a new AST with ParamNode references to named expressions replaced
+    by the corresponding (already-resolved) expression AST.
+
+    Driven by ``ASTNode.map_children()``: every node type's children are
+    rewritten generically (and identity is preserved where nothing changed), so
+    a new node type cannot silently skip inlining.
     """
-    if isinstance(node, ParamNode):
-        if node.name in expr_asts:
-            return expr_asts[node.name]
-        return node
-    if isinstance(node, _BinaryNode):
-        new_left = _substitute(node.left, expr_asts)
-        new_right = _substitute(node.right, expr_asts)
-        if new_left is node.left and new_right is node.right:
-            return node
-        return type(node)(new_left, new_right)
-    if isinstance(node, NegateNode):
-        new_op = _substitute(node.operand, expr_asts)
-        if new_op is node.operand:
-            return node
-        return NegateNode(new_op)
-    if isinstance(node, ArrheniusNode):
-        new_A = _substitute(node.A, expr_asts)
-        new_Ea = _substitute(node.Ea, expr_asts)
-        if new_A is node.A and new_Ea is node.Ea:
-            return node
-        return ArrheniusNode(new_A, new_Ea)
-    if isinstance(node, pHSwitchNode):
-        new_pKa = _substitute(node.pKa, expr_asts)
-        if new_pKa is node.pKa:
-            return node
-        return pHSwitchNode(new_pKa)
-    if isinstance(node, pHInhibitNode):
-        new_ll = _substitute(node.pH_LL, expr_asts)
-        new_ul = _substitute(node.pH_UL, expr_asts)
-        if new_ll is node.pH_LL and new_ul is node.pH_UL:
-            return node
-        return pHInhibitNode(new_ll, new_ul)
-    if isinstance(node, (MonodNode, MonodInhibitionNode)):
-        new_X = _substitute(node.X, expr_asts)
-        new_K = _substitute(node.K, expr_asts)
-        if new_X is node.X and new_K is node.K:
-            return node
-        return type(node)(new_X, new_K)
-    if isinstance(node, (MonodRatioNode, MonodInhibitionRatioNode)):
-        new_A = _substitute(node.A, expr_asts)
-        new_B = _substitute(node.B, expr_asts)
-        new_K = _substitute(node.K, expr_asts)
-        if new_A is node.A and new_B is node.B and new_K is node.K:
-            return node
-        return type(node)(new_A, new_B, new_K)
-    return node  # leaves we don't rewrite
+    if isinstance(node, ParamNode) and node.name in expr_asts:
+        return expr_asts[node.name]
+    return node.map_children(lambda child: _substitute(child, expr_asts))
 
 
 def _topo_sort_expressions(
@@ -569,6 +508,10 @@ def compile_network(spec: "Any") -> CompiledNetwork:
             raise ValueError(
                 f"Failed to parse named expression '{name}': {exc}"
             ) from exc
+
+    # (An expression name colliding with a parameter name is already rejected by
+    # the schema validator in schema/network_spec.py, so a collision never
+    # reaches the silent ``_substitute`` shadowing path.)
 
     # Dependency graph: expression -> set of other expressions it references.
     expr_names = list(expression_asts_raw.keys())

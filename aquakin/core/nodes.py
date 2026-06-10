@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from typing import Any, Callable, ClassVar
 
 import jax
@@ -28,6 +28,40 @@ class ASTNode(ABC):
     @abstractmethod
     def compile(self, ctx: CompileContext) -> RateCallable:
         """Return a JAX-compatible callable for this node."""
+
+    def children(self) -> tuple["ASTNode", ...]:
+        """Direct child AST nodes, in field order.
+
+        Generic over every concrete node (all are frozen dataclasses): returns
+        each dataclass-field value that is itself an :class:`ASTNode`. Leaf
+        nodes (no AST-valued fields) return ``()``. Generic AST traversals
+        drive off this, so a new node type's children can never be silently
+        skipped by a hand-enumerated walk.
+        """
+        return tuple(
+            v for f in fields(self)
+            if isinstance(v := getattr(self, f.name), ASTNode)
+        )
+
+    def map_children(self, fn: "Callable[[ASTNode], ASTNode]") -> "ASTNode":
+        """Return a copy with each direct child replaced by ``fn(child)``.
+
+        Leaf nodes (no AST children) return ``self``. Reconstructs the
+        frozen-dataclass node via :func:`dataclasses.replace`, and returns
+        ``self`` unchanged when no child actually changed (so unaffected
+        subtrees keep their identity).
+        """
+        replacements: dict[str, "ASTNode"] = {}
+        changed = False
+        for f in fields(self):
+            v = getattr(self, f.name)
+            if isinstance(v, ASTNode):
+                nv = fn(v)
+                replacements[f.name] = nv
+                changed = changed or nv is not v
+        if not changed:
+            return self
+        return replace(self, **replacements)
 
     def species(self) -> set[str]:
         """Names of species referenced anywhere in this subtree."""
