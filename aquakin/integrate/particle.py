@@ -22,7 +22,7 @@ from aquakin.integrate._common import (
     _HasNamedSpecies,
     _coerce_atol,
     _interp_fields_to_scalar,
-    _run_diffeqsolve,
+    solve_chemistry,
 )
 
 
@@ -185,25 +185,12 @@ class ParticleTrackReactor:
 
         @jax.jit
         def _solve(C0, params):
-            stoich = network.compute_stoich(params)
-
-            def rhs(t, C, args):
-                params_ = args
-                cond = _interp_fields_to_scalar(t, t_grid, fields)
-                return network.dCdt(C, params_, cond, 0, stoich=stoich)
-
-            sol = _run_diffeqsolve(
-                rhs,
-                t0=t0,
-                t1=t1,
-                y0=C0,
-                args=params,
+            sol = solve_chemistry(
+                network, C0, params,
+                cond_fn=lambda t: _interp_fields_to_scalar(t, t_grid, fields),
                 saveat=diffrax.SaveAt(ts=t_save),
-                rtol=rtol,
-                atol=atol,
-                adjoint=adjoint,
-                dtmax=dtmax,
-                max_steps=max_steps,
+                t0=t0, t1=t1, rtol=rtol, atol=atol,
+                adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
             )
             return sol.ts, sol.ys
 

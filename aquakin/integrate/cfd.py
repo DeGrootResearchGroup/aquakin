@@ -35,7 +35,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.network import CompiledNetwork
-from aquakin.integrate._common import _coerce_atol, _run_diffeqsolve
+from aquakin.integrate._common import _coerce_atol, solve_chemistry
 
 
 class CFDReactor:
@@ -244,26 +244,12 @@ class CFDReactor:
             # wrap each in a length-1 array so ConditionNode can index with
             # loc_idx=0.
             cond_arrays = {name: v[None] for name, v in cond_cell.items()}
-            # Stoichiometry depends only on params; precompute once per
-            # vmapped cell (params is broadcast, so this is hoisted out of
-            # the per-cell vmap by the jit compiler anyway).
-            stoich = network.compute_stoich(params)
-
-            def rhs(t, C, args):
-                return network.dCdt(C, args, cond_arrays, 0, stoich=stoich)
-
-            sol = _run_diffeqsolve(
-                rhs,
-                t0=0.0,
-                t1=dt,
-                y0=C_cell,
-                args=params,
+            sol = solve_chemistry(
+                network, C_cell, params,
+                cond_fn=lambda t: cond_arrays,
                 saveat=diffrax.SaveAt(t1=True),
-                rtol=rtol,
-                atol=atol,
-                adjoint=adjoint,
-                dtmax=dtmax,
-                max_steps=max_steps,
+                t0=0.0, t1=dt, rtol=rtol, atol=atol,
+                adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
             )
             return sol.ys[-1]
 

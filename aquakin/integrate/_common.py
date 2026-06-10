@@ -160,6 +160,65 @@ def _run_diffeqsolve(
     )
 
 
+def solve_chemistry(
+    network: CompiledNetwork,
+    C0: jnp.ndarray,
+    params: jnp.ndarray,
+    *,
+    cond_fn: Callable[[jnp.ndarray], Mapping[str, jnp.ndarray]],
+    saveat: diffrax.SaveAt,
+    t0,
+    t1,
+    rtol: float,
+    atol,
+    adjoint: diffrax.AbstractAdjoint | None = None,
+    dtmax: float | None = None,
+    max_steps: int = 100_000,
+    rate_scale=None,
+):
+    """The canonical chemistry sub-solve shared by every reactor.
+
+    Hoists the (parameter-dependent) stoichiometry out of the per-step RHS ---
+    so dynamic coefficients are evaluated once per solve, not per step --- builds
+    the right-hand side ``dC/dt = rate_scale * dCdt(C, params, cond_fn(t))`` and
+    runs the Kvaerno5 + ``PIDController`` solve via :func:`_run_diffeqsolve`.
+
+    The reactors differ only in three traced-time choices, passed in here:
+
+    - ``cond_fn(t)`` returns the condition arrays at independent-variable value
+      ``t``. A batch / CFD cell passes a constant dict; a PFR or particle track
+      passes an interpolation of its spatially / temporally varying fields.
+    - ``rate_scale`` (``None`` = identity) multiplies the rate, e.g. ``1/velocity``
+      for the steady-state PFR whose independent variable is axial position.
+    - ``saveat`` / ``t0`` / ``t1`` select the output points and the span.
+
+    Returns the diffrax ``Solution``; callers read ``sol.ts`` / ``sol.ys`` (or
+    ``sol.ys[-1]`` for a single-endpoint step).
+    """
+    stoich = network.compute_stoich(params)
+
+    if rate_scale is None:
+        def rhs(t, C, args):
+            return network.dCdt(C, args, cond_fn(t), 0, stoich=stoich)
+    else:
+        def rhs(t, C, args):
+            return network.dCdt(C, args, cond_fn(t), 0, stoich=stoich) * rate_scale
+
+    return _run_diffeqsolve(
+        rhs,
+        t0=t0,
+        t1=t1,
+        y0=C0,
+        args=params,
+        saveat=saveat,
+        rtol=rtol,
+        atol=atol,
+        adjoint=adjoint,
+        dtmax=dtmax,
+        max_steps=max_steps,
+    )
+
+
 def _interp_fields_to_scalar(
     t: jnp.ndarray,
     t_grid: jnp.ndarray,

@@ -14,7 +14,7 @@ from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
     _coerce_atol,
-    _run_diffeqsolve,
+    solve_chemistry,
     validate_t_eval,
 )
 
@@ -313,35 +313,18 @@ class BatchReactor:
     def _build_jitted_solve(self, t0: float, t1: float, has_t_eval: bool):
         """Build a jit-compiled inner solver for a specific call signature."""
         network = self.network
-        rtol = self.rtol
-        atol = self.atol
-        adjoint = self.adjoint
-        dtmax = self.dtmax
-        max_steps = self.max_steps
+        kw = dict(
+            t0=t0, t1=t1, rtol=self.rtol, atol=self.atol,
+            adjoint=self.adjoint, dtmax=self.dtmax, max_steps=self.max_steps,
+        )
 
         if has_t_eval:
             @jax.jit
             def _solve(C0, params, condition_arrays, t_eval):
-                # Hoist stoichiometry out of the per-step RHS so dynamic
-                # (parameter-dependent) coefficients are evaluated once,
-                # not on every ODE step.
-                stoich = network.compute_stoich(params)
-
-                def rhs(t, C, args):
-                    return network.dCdt(C, args, condition_arrays, 0, stoich=stoich)
-
-                sol = _run_diffeqsolve(
-                    rhs,
-                    t0=t0,
-                    t1=t1,
-                    y0=C0,
-                    args=params,
-                    saveat=diffrax.SaveAt(ts=t_eval),
-                    rtol=rtol,
-                    atol=atol,
-                    adjoint=adjoint,
-                    dtmax=dtmax,
-                    max_steps=max_steps,
+                sol = solve_chemistry(
+                    network, C0, params,
+                    cond_fn=lambda t: condition_arrays,
+                    saveat=diffrax.SaveAt(ts=t_eval), **kw,
                 )
                 return sol.ts, sol.ys
 
@@ -349,23 +332,10 @@ class BatchReactor:
 
         @jax.jit
         def _solve(C0, params, condition_arrays):
-            stoich = network.compute_stoich(params)
-
-            def rhs(t, C, args):
-                return network.dCdt(C, args, condition_arrays, 0, stoich=stoich)
-
-            sol = _run_diffeqsolve(
-                rhs,
-                t0=t0,
-                t1=t1,
-                y0=C0,
-                args=params,
-                saveat=diffrax.SaveAt(t1=True),
-                rtol=rtol,
-                atol=atol,
-                adjoint=adjoint,
-                dtmax=dtmax,
-                max_steps=max_steps,
+            sol = solve_chemistry(
+                network, C0, params,
+                cond_fn=lambda t: condition_arrays,
+                saveat=diffrax.SaveAt(t1=True), **kw,
             )
             return sol.ts, sol.ys
 

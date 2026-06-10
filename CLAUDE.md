@@ -970,7 +970,11 @@ aquakin/
 │   │   └── loader.py                # YAML -> Pydantic -> CompiledNetwork
 │   │
 │   ├── integrate/
-│   │   ├── _common.py               # shared helpers (atol coercion, jit'd solve, Reactor Protocol)
+│   │   ├── _common.py               # shared helpers: atol coercion, _run_diffeqsolve,
+│   │   │                            #   solve_chemistry (the one stoich-hoist + RHS + solve
+│   │   │                            #   factory the Batch/PFR/Particle/CFD reactors all call,
+│   │   │                            #   parameterised by cond_fn / rate_scale / saveat),
+│   │   │                            #   validate_t_eval, Reactor Protocol
 │   │   ├── batch.py                 # BatchReactor, BatchSolution
 │   │   ├── biofilm.py               # BiofilmReactor (layered 1-D diffusion-reaction)
 │   │   ├── pfr.py                   # PlugFlowReactor, PFRSolution

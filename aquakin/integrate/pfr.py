@@ -15,7 +15,7 @@ from aquakin.integrate._common import (
     _HasNamedSpecies,
     _coerce_atol,
     _interp_fields_to_scalar,
-    _run_diffeqsolve,
+    solve_chemistry,
 )
 
 
@@ -302,29 +302,20 @@ class PlugFlowReactor:
 
         @jax.jit
         def _solve(C0, params, fields):
-            # Hoist parameter-dependent stoichiometry out of the per-step RHS.
-            stoich = network.compute_stoich(params)
+            # Conditions at axial position x: a fixed dict for a single-location
+            # reactor, else interpolated over the axial condition grid.
+            def cond_fn(x):
+                return fields if single_loc else _interp_fields_to_scalar(x, x_grid, fields)
 
-            def rhs(x, C, args):
-                params_ = args
-                if single_loc:
-                    cond = fields
-                else:
-                    cond = _interp_fields_to_scalar(x, x_grid, fields)
-                return network.dCdt(C, params_, cond, 0, stoich=stoich) / velocity
-
-            sol = _run_diffeqsolve(
-                rhs,
-                t0=0.0,
-                t1=length,
-                y0=C0,
-                args=params,
+            sol = solve_chemistry(
+                network, C0, params,
+                cond_fn=cond_fn,
+                # Steady-state PFR: integrate over axial position, dC/dx =
+                # (1/velocity) * dCdt.
+                rate_scale=1.0 / velocity,
                 saveat=diffrax.SaveAt(ts=x_eval),
-                rtol=rtol,
-                atol=atol,
-                adjoint=adjoint,
-                dtmax=dtmax,
-                max_steps=max_steps,
+                t0=0.0, t1=length, rtol=rtol, atol=atol,
+                adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
             )
             return sol.ts, sol.ys
 
