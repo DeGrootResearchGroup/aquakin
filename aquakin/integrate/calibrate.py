@@ -216,7 +216,11 @@ class CalibrationResult:
     params_named : dict[str, float]
         Free parameters by namespaced name, in physical space.
     loss : float
-        Final loss (in physical-parameter space at the MAP).
+        The full scalar objective at the MAP: the summed data loss plus any
+        prior penalty. It is the same value regardless of ``optimizer`` --- for
+        ``loss="nll"`` it is the complete Gaussian negative log-likelihood
+        (including the ``sum(log(sigma))`` normaliser), not the Gauss-Newton
+        ``0.5*||residual||^2`` (which drops that constant).
     converged : bool
         Whether SciPy declared convergence.
     message : str
@@ -1083,10 +1087,18 @@ def calibrate(
             name: float(std_physical[i]) for i, name in enumerate(free_params)
         }
 
+    # Report the loss as the full scalar objective at the optimum, identical
+    # across optimizers. The Gauss-Newton path's ``r.cost`` is 0.5*||residual||^2,
+    # which for ``loss="nll"`` omits the sum(log(sigma)) normaliser that the
+    # L-BFGS-B scalar objective includes; evaluating ``objective`` directly puts
+    # both on the same scale (and is a no-op for the L-BFGS-B path, whose
+    # ``r.fun`` already is this objective).
+    reported_loss = float(obj_value_and_grad(theta_opt)[0])
+
     return CalibrationResult(
         params=full_params,
         params_named={name: float(physical_opt[i]) for i, name in enumerate(free_params)},
-        loss=float(result.fun),
+        loss=reported_loss,
         converged=bool(result.success),
         message=str(result.message),
         n_iter=int(result.nit),
