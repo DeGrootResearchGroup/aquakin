@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Union
 
 import yaml
+from pydantic import ValidationError
 
 from aquakin.core.network import CompiledNetwork, compile_network
 from aquakin.schema.network_spec import NetworkSpec
@@ -21,7 +22,10 @@ def _yaml_to_spec(text: str, source: str) -> NetworkSpec:
         raise ValueError(f"Top-level YAML in {source} must be a mapping, got {type(data).__name__}")
     try:
         return NetworkSpec.model_validate(data)
-    except Exception as exc:
+    except ValidationError as exc:
+        # Only schema-validation failures mean "bad network spec". Other
+        # exceptions (e.g. RecursionError) are genuine bugs and must propagate
+        # rather than be relabelled as invalid user input.
         raise ValueError(f"Invalid network specification in {source}: {exc}") from exc
 
 

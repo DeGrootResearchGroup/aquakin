@@ -137,3 +137,31 @@ def test_duplicate_species_rejected(tmp_path):
 def test_missing_file():
     with pytest.raises(FileNotFoundError):
         aquakin.load_network_from_file("/no/such/file.yaml")
+
+
+def test_non_validation_error_propagates(tmp_path, monkeypatch):
+    """A genuine bug during validation must propagate, not be relabelled as an
+    invalid network specification."""
+    from aquakin.schema import loader
+
+    def _boom(_data):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(loader.NetworkSpec, "model_validate", staticmethod(_boom))
+    p = _write(
+        tmp_path,
+        """
+        network: {name: ok, version: "1.0"}
+        species:
+          - {name: A, default_concentration: 1.0}
+        reactions:
+          - name: r1
+            rate: "k * [A]"
+            parameters:
+              k: {value: 1.0}
+            stoichiometry:
+              A: -1
+        """,
+    )
+    with pytest.raises(RecursionError):
+        aquakin.load_network_from_file(p)
