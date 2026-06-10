@@ -11,6 +11,7 @@ target — see :mod:`aquakin.plant.bsm.bsm1`.
 """
 
 from aquakin.plant.cstr import CSTRUnit
+from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
@@ -27,6 +28,7 @@ from aquakin.plant.translators import IdentityTranslator, StateTranslator
 from aquakin.plant.units import Unit
 
 __all__ = [
+    "ADM1DigesterUnit",
     "ADM1toASM1",
     "ASM1toADM1",
     "CSTRUnit",
