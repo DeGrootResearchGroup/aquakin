@@ -56,8 +56,13 @@ class CFDReactor:
         Absolute tolerance. Scalar or shape ``(n_species,)``. See
         :class:`BatchReactor` for the per-species rationale.
     adjoint : diffrax.AbstractAdjoint, optional
-        Adjoint strategy. Defaults to
-        :class:`diffrax.RecursiveCheckpointAdjoint`.
+        Adjoint strategy for the per-cell solve. Defaults to
+        :class:`diffrax.RecursiveCheckpointAdjoint`. Note that the only public
+        method, :meth:`step`, returns NumPy (it converts at the pybind11
+        boundary and runs a host-side finiteness check), so gradients do not
+        flow through ``step`` and this argument is inert for that path. It is
+        retained for advanced use of the internal jitted per-cell step in a
+        differentiable context, and for symmetry with the other reactors.
     on_nan : {"raise", "ignore"}, optional
         Policy when any cell produces a non-finite concentration (NaN or
         Inf) after the chemistry step.

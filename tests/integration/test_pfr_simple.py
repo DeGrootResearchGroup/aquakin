@@ -86,3 +86,23 @@ def test_pfr_conditions_override_shape_mismatch_rejected(simple_network):
             simple_network.default_parameters(),
             conditions=overlay,
         )
+
+
+def test_pfr_direct_adjoint_enables_forward_mode(simple_network):
+    """With adjoint=DirectAdjoint the PFR solve is forward-mode differentiable
+    (jacfwd), which the default RecursiveCheckpointAdjoint (a reverse-only
+    custom_vjp) rejects. Closes the adjoint-asymmetry gap with BatchReactor."""
+    import diffrax
+
+    conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
+    reactor = aquakin.PlugFlowReactor(
+        simple_network, conditions, n_points=5, length=10.0, velocity=1.0,
+        adjoint=diffrax.DirectAdjoint(),
+    )
+    C0 = jnp.asarray([1.0, 0.0])
+
+    def out(p):
+        return jnp.sum(reactor.solve(C0, p).C)
+
+    J = jax.jacfwd(out)(simple_network.default_parameters())
+    assert jnp.all(jnp.isfinite(J))

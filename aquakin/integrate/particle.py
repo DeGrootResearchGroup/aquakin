@@ -94,6 +94,16 @@ class ParticleTrackReactor:
         Relative tolerance for the ODE solver.
     atol : float or jnp.ndarray, optional
         Absolute tolerance, scalar or shape ``(n_species,)``.
+    adjoint : diffrax.AbstractAdjoint, optional
+        Adjoint strategy. Defaults to
+        :class:`diffrax.RecursiveCheckpointAdjoint` (reverse-mode); pass
+        ``diffrax.DirectAdjoint()`` for forward-mode AD through the track solve.
+        See :class:`~aquakin.BatchReactor` for the rationale.
+    dtmax : float, optional
+        Maximum integrator step; set it for reverse-mode differentiation of a
+        stiff network.
+    max_steps : int, optional
+        Maximum number of internal solver steps (default 100000).
     """
 
     def __init__(
@@ -104,6 +114,7 @@ class ParticleTrackReactor:
         n_save: int | None = None,
         rtol: float = 1e-6,
         atol=1e-9,
+        adjoint: "diffrax.AbstractAdjoint | None" = None,
         dtmax: float | None = None,
         max_steps: int = 100_000,
     ) -> None:
@@ -120,6 +131,7 @@ class ParticleTrackReactor:
             raise ValueError(f"n_save must be >= 2, got {self.n_save}")
         self.rtol = rtol
         self.atol = _coerce_atol(atol, network.n_species)
+        self.adjoint = adjoint
         self.dtmax = dtmax
         self.max_steps = int(max_steps)
         # Single jitted variant: the track structure is fixed for the
@@ -167,6 +179,7 @@ class ParticleTrackReactor:
         t_save = jnp.linspace(t0, t1, self.n_save)
         rtol = self.rtol
         atol = self.atol
+        adjoint = self.adjoint
         dtmax = self.dtmax
         max_steps = self.max_steps
 
@@ -188,6 +201,7 @@ class ParticleTrackReactor:
                 saveat=diffrax.SaveAt(ts=t_save),
                 rtol=rtol,
                 atol=atol,
+                adjoint=adjoint,
                 dtmax=dtmax,
                 max_steps=max_steps,
             )
@@ -205,6 +219,8 @@ def integrate_ensemble(
     rtol: float = 1e-6,
     atol=1e-9,
     n_save: int | None = None,
+    adjoint: "diffrax.AbstractAdjoint | None" = None,
+    dtmax: float | None = None,
     max_steps: int = 100_000,
 ) -> dict[int, TrackSolution]:
     """
@@ -220,8 +236,9 @@ def integrate_ensemble(
         ``lambda pid: network.default_concentrations()``.
     params : jnp.ndarray
         Flat parameter vector shared across all particles.
-    rtol, atol, n_save, max_steps : passed through to each
-        :class:`ParticleTrackReactor`.
+    rtol, atol, n_save, adjoint, dtmax, max_steps : passed through to each
+        :class:`ParticleTrackReactor`. ``adjoint`` / ``dtmax`` let an ensemble
+        of stiff tracks be differentiated the same way a single track can.
 
     Returns
     -------
@@ -232,7 +249,7 @@ def integrate_ensemble(
     for pid, track in tracks.items():
         reactor = ParticleTrackReactor(
             network, track, n_save=n_save, rtol=rtol, atol=atol,
-            max_steps=max_steps,
+            adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
         )
         results[pid] = reactor.solve(C0_fn(pid), params)
     return results

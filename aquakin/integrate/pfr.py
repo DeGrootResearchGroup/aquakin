@@ -68,6 +68,16 @@ class PlugFlowReactor:
     atol : float or jnp.ndarray, optional
         Absolute tolerance, scalar or shape ``(n_species,)``. See
         :class:`BatchReactor` for the per-species rationale.
+    adjoint : diffrax.AbstractAdjoint, optional
+        Adjoint strategy for the axial solve. Defaults to
+        :class:`diffrax.RecursiveCheckpointAdjoint` (reverse-mode). Pass
+        ``diffrax.DirectAdjoint()`` for forward-mode AD through the solve. See
+        :class:`BatchReactor` for the full rationale.
+    dtmax : float, optional
+        Maximum integrator step. Set it for reverse-mode differentiation of a
+        stiff network (see :class:`BatchReactor`).
+    max_steps : int, optional
+        Maximum number of internal solver steps (default 100000).
     """
 
     def __init__(
@@ -80,6 +90,7 @@ class PlugFlowReactor:
         *,
         rtol: float = 1e-6,
         atol=1e-9,
+        adjoint: Optional[diffrax.AbstractAdjoint] = None,
         dtmax: Optional[float] = None,
         max_steps: int = 100_000,
     ) -> None:
@@ -97,6 +108,7 @@ class PlugFlowReactor:
         self.velocity = float(velocity)
         self.rtol = rtol
         self.atol = _coerce_atol(atol, network.n_species)
+        self.adjoint = adjoint
         self.dtmax = dtmax
         self.max_steps = int(max_steps)
 
@@ -283,6 +295,7 @@ class PlugFlowReactor:
         length = self.length
         rtol = self.rtol
         atol = self.atol
+        adjoint = self.adjoint
         dtmax = self.dtmax
         max_steps = self.max_steps
         x_eval = jnp.linspace(0.0, length, self.n_points)
@@ -309,6 +322,7 @@ class PlugFlowReactor:
                 saveat=diffrax.SaveAt(ts=x_eval),
                 rtol=rtol,
                 atol=atol,
+                adjoint=adjoint,
                 dtmax=dtmax,
                 max_steps=max_steps,
             )
