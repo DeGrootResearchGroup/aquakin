@@ -64,16 +64,25 @@ class ASTNode(ABC):
         return replace(self, **replacements)
 
     def species(self) -> set[str]:
-        """Names of species referenced anywhere in this subtree."""
-        return set()
+        """Names of species referenced anywhere in this subtree.
+
+        Generic: the union over :meth:`children`. Leaf nodes (no children) get
+        the empty set; ``SpeciesNode`` overrides this to add its own name.
+        Driving the three accessors off ``children()`` means a new node type is
+        traversed automatically -- it cannot silently under-report.
+        """
+        return set().union(*(c.species() for c in self.children()))
 
     def param_names(self) -> set[str]:
-        """Local (un-namespaced) rate-constant names referenced in this subtree."""
-        return set()
+        """Local (un-namespaced) rate-constant names in this subtree (union over
+        :meth:`children`; ``ParamNode`` adds its own name)."""
+        return set().union(*(c.param_names() for c in self.children()))
 
     def condition_names(self) -> set[str]:
-        """Condition field names referenced in this subtree."""
-        return set()
+        """Condition field names in this subtree (union over :meth:`children`;
+        ``ConditionNode`` adds its own, and the temperature/pH nodes add the
+        field they require)."""
+        return set().union(*(c.condition_names() for c in self.children()))
 
 
 # --- Leaf nodes ---------------------------------------------------------
@@ -205,15 +214,6 @@ class _BinaryNode(ASTNode):
 
         return _eval
 
-    def species(self) -> set[str]:
-        return self.left.species() | self.right.species()
-
-    def param_names(self) -> set[str]:
-        return self.left.param_names() | self.right.param_names()
-
-    def condition_names(self) -> set[str]:
-        return self.left.condition_names() | self.right.condition_names()
-
 
 class AddNode(_BinaryNode):
     _op = staticmethod(lambda l, r: l + r)
@@ -249,15 +249,6 @@ class NegateNode(ASTNode):
 
         return _eval
 
-    def species(self) -> set[str]:
-        return self.operand.species()
-
-    def param_names(self) -> set[str]:
-        return self.operand.param_names()
-
-    def condition_names(self) -> set[str]:
-        return self.operand.condition_names()
-
 
 # --- Domain-specific function nodes ------------------------------------
 
@@ -289,14 +280,8 @@ class ArrheniusNode(ASTNode):
 
         return _eval
 
-    def species(self) -> set[str]:
-        return self.A.species() | self.Ea.species()
-
-    def param_names(self) -> set[str]:
-        return self.A.param_names() | self.Ea.param_names()
-
     def condition_names(self) -> set[str]:
-        return {"T"} | self.A.condition_names() | self.Ea.condition_names()
+        return {"T"} | super().condition_names()
 
 
 @dataclass(frozen=True)
@@ -321,15 +306,6 @@ class MonodNode(ASTNode):
 
         return _eval
 
-    def species(self) -> set[str]:
-        return self.X.species() | self.K.species()
-
-    def param_names(self) -> set[str]:
-        return self.X.param_names() | self.K.param_names()
-
-    def condition_names(self) -> set[str]:
-        return self.X.condition_names() | self.K.condition_names()
-
 
 @dataclass(frozen=True)
 class MonodInhibitionNode(ASTNode):
@@ -352,15 +328,6 @@ class MonodInhibitionNode(ASTNode):
             return k / (k + x)
 
         return _eval
-
-    def species(self) -> set[str]:
-        return self.X.species() | self.K.species()
-
-    def param_names(self) -> set[str]:
-        return self.X.param_names() | self.K.param_names()
-
-    def condition_names(self) -> set[str]:
-        return self.X.condition_names() | self.K.condition_names()
 
 
 @dataclass(frozen=True)
@@ -390,15 +357,6 @@ class MonodRatioNode(ASTNode):
 
         return _eval
 
-    def species(self) -> set[str]:
-        return self.A.species() | self.B.species() | self.K.species()
-
-    def param_names(self) -> set[str]:
-        return self.A.param_names() | self.B.param_names() | self.K.param_names()
-
-    def condition_names(self) -> set[str]:
-        return self.A.condition_names() | self.B.condition_names() | self.K.condition_names()
-
 
 @dataclass(frozen=True)
 class MonodInhibitionRatioNode(ASTNode):
@@ -426,15 +384,6 @@ class MonodInhibitionRatioNode(ASTNode):
             return kb / (kb + a)
 
         return _eval
-
-    def species(self) -> set[str]:
-        return self.A.species() | self.B.species() | self.K.species()
-
-    def param_names(self) -> set[str]:
-        return self.A.param_names() | self.B.param_names() | self.K.param_names()
-
-    def condition_names(self) -> set[str]:
-        return self.A.condition_names() | self.B.condition_names() | self.K.condition_names()
 
 
 @dataclass(frozen=True)
@@ -466,14 +415,8 @@ class pHSwitchNode(ASTNode):
 
         return _eval
 
-    def species(self) -> set[str]:
-        return self.pKa.species()
-
-    def param_names(self) -> set[str]:
-        return self.pKa.param_names()
-
     def condition_names(self) -> set[str]:
-        return {"pH"} | self.pKa.condition_names()
+        return {"pH"} | super().condition_names()
 
 
 @dataclass(frozen=True)
@@ -510,11 +453,5 @@ class pHInhibitNode(ASTNode):
 
         return _eval
 
-    def species(self) -> set[str]:
-        return self.pH_LL.species() | self.pH_UL.species()
-
-    def param_names(self) -> set[str]:
-        return self.pH_LL.param_names() | self.pH_UL.param_names()
-
     def condition_names(self) -> set[str]:
-        return {"pH"} | self.pH_LL.condition_names() | self.pH_UL.condition_names()
+        return {"pH"} | super().condition_names()
