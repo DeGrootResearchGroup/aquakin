@@ -104,7 +104,9 @@ def test_bsm2_flow_balance(asm1, constant_influent):
     assert float(fl[("primary", "underflow")]) == pytest.approx(0.007 * primary_feed, rel=1e-6)
     # Net plant volume balance: the only liquid streams permanently leaving are
     # the settler effluent and the dewatered-sludge disposal (everything else
-    # recycles), so influent == effluent + disposal.
+    # recycles), so influent + external carbon == effluent + disposal.
+    from aquakin.plant.bsm.bsm2 import BSM2_CARBON_FLOW
     effluent = float(fl[("settler", "overflow")])
     dewater_disposal = float(fl[("dewatering", "underflow")])
-    assert BSM2_Q_REF == pytest.approx(effluent + dewater_disposal, rel=1e-3)
+    assert (BSM2_Q_REF + BSM2_CARBON_FLOW) == pytest.approx(
+        effluent + dewater_disposal, rel=1e-3)

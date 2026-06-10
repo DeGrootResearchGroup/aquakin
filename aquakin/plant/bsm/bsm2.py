@@ -45,6 +45,7 @@ import jax.numpy as jnp
 
 from aquakin.plant.cstr import CSTRUnit
 from aquakin.plant.digester import ADM1DigesterUnit
+from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import Plant
@@ -70,6 +71,58 @@ BSM2_DIGESTER_T = 308.15       # K (35 °C)
 BSM2_THICKENER_TSS_PERCENT = 7.0
 BSM2_DEWATERING_TSS_PERCENT = 28.0
 BSM2_SEPARATOR_REMOVAL = 98.0
+BSM2_CARBON_FLOW = 2.0          # m³/d external carbon dosed to reactor 1
+BSM2_CARBON_CONC = 400000.0     # gCOD/m³ readily-biodegradable (SS) carbon source
+
+# Published BSM2 constant-influent composition (the open-loop operating point;
+# gCOD/m³ or gN/m³, SALK in mol/m³). Q is BSM2_Q_REF.
+BSM2_CONSTANT_INFLUENT = {
+    "SI": 27.2262, "SS": 58.1762, "XI": 92.499, "XS": 363.9435, "XB_H": 50.6833,
+    "XB_A": 0.0, "XP": 0.0, "SO": 0.0, "SNO": 0.0, "SNH": 23.8595, "SND": 5.6516,
+    "XND": 16.1298, "SALK": 7.0,
+}
+
+# BSM2 ASM1 kinetic/stoichiometric parameters (asm1init_bsm2, calibrated at
+# 15 °C). ``KNH_H`` is set ~0 because the BSM/IWA ASM1 has no heterotroph
+# ammonia-limitation term (aquakin's ASM1 adds one; disabling it recovers the
+# benchmark behaviour). Names are aquakin's ASM1 parameter names.
+BSM2_ASM1_PARAMETERS = {
+    "muH": 4.0, "KS": 10.0, "KOH": 0.2, "KNO": 0.5, "KNH_H": 1e-6, "etag": 0.8,
+    "muA": 0.5, "KNH_A": 1.0, "KOA": 0.4, "bH": 0.3, "bA": 0.05, "ka": 0.05,
+    "kh": 3.0, "KX": 0.1, "etah": 0.8, "Y_H": 0.67, "Y_A": 0.24, "i_XB": 0.08,
+    "i_XP": 0.06, "f_P": 0.08,
+}
+
+
+def bsm2_asm1_parameter_vector(asm1_network):
+    """ASM1 parameter vector with the BSM2 (15 °C) overrides applied."""
+    p = asm1_network.default_parameters()
+    for name, val in BSM2_ASM1_PARAMETERS.items():
+        if name in asm1_network.parameters:
+            p = p.at[asm1_network.parameters.index(name)].set(val)
+    return p
+
+
+def bsm2_parameters(asm1_network, adm1_network):
+    """Full BSM2 plant parameter vector: BSM2 ASM1 block + default ADM1 block.
+
+    Pass to ``plant.solve(params=...)``. The water-line block carries the BSM2
+    ASM1 values (the network defaults are the BSM1/20 °C set); the digester block
+    uses the ADM1 defaults, which are already the BSM2 values.
+    """
+    return jnp.concatenate([
+        bsm2_asm1_parameter_vector(asm1_network),
+        adm1_network.default_parameters(),
+    ])
+
+
+def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF) -> InfluentSeries:
+    """The published BSM2 constant influent as an :class:`InfluentSeries`."""
+    C = asm1_network.default_concentrations() * 0.0
+    for sp, v in BSM2_CONSTANT_INFLUENT.items():
+        C = C.at[asm1_network.species_index[sp]].set(float(v))
+    return InfluentSeries(t=jnp.asarray([0.0, 1.0e4]), Q=jnp.full((2,), float(Q)),
+                          C=jnp.tile(C, (2, 1)), network=asm1_network)
 
 
 def build_bsm2(
@@ -78,6 +131,8 @@ def build_bsm2(
     *,
     Q_ref: float = BSM2_Q_REF,
     conditions: Optional[dict] = None,
+    carbon_flow: float = BSM2_CARBON_FLOW,
+    carbon_conc: float = BSM2_CARBON_CONC,
 ) -> Plant:
     """Assemble the open-loop BSM2 plant.
 
@@ -122,9 +177,10 @@ def build_bsm2(
                                     volume=BSM2_PRIMARY_VOLUME, f_PS=BSM2_PRIMARY_FPS))
 
     # ----- Activated sludge: mixer + 5 CSTRs + internal recycle. -----
-    plant.add_unit(MixerUnit(
-        name="as_mix",
-        input_port_names=["primary_eff", "internal_recycle", "ras"], network=asm1))
+    as_ports = ["primary_eff", "internal_recycle", "ras"]
+    if carbon_flow > 0:
+        as_ports.append("carbon")   # external carbon dosed to reactor 1
+    plant.add_unit(MixerUnit(name="as_mix", input_port_names=as_ports, network=asm1))
     for i in range(5):
         kla = {"SO": BSM2_KLA[i]} if BSM2_KLA[i] > 0 else {}
         sat = {"SO": BSM2_DO_SATURATION} if BSM2_KLA[i] > 0 else {}
@@ -196,5 +252,17 @@ def build_bsm2(
     plant.connect("dewatering", "overflow", "reject_mix", "dewatering_reject")
     plant.connect("reject_mix", "out", "front_mix", "reject", initial_value=seed)
     # dewatering:underflow -> sludge disposal (leaves the plant; not routed).
+
+    # External carbon dosing to reactor 1 (a constant readily-biodegradable SS
+    # source) -- supports denitrification in the anoxic tanks and is part of the
+    # BSM2 plant design, so the builder adds it directly.
+    if carbon_flow > 0:
+        carbon_C = asm1.default_concentrations()
+        carbon_C = (carbon_C * 0.0).at[asm1.species_index["SS"]].set(float(carbon_conc))
+        carbon = InfluentSeries(
+            t=jnp.asarray([0.0, 1.0e9]), Q=jnp.full((2,), float(carbon_flow)),
+            C=jnp.tile(carbon_C, (2, 1)), network=asm1)
+        plant.add_influent("external_carbon", carbon)
+        plant.connect(None, "external_carbon", "as_mix", "carbon")
 
     return plant

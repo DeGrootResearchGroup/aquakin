@@ -1591,16 +1591,34 @@ flows (internal recycle `Qintr=3·Q_ref`, RAS `Qr=Q_ref`, wastage `Qw=300`,
 primary sludge `f_PS·Q`) are fixed-flow pumps (the BSM1 flow-control fix carries
 over); the thickener/dewatering underflows are concentration-dependent but sit
 on the low-gain reject loop, which the concentration sweep resolves (their
-`flow_outputs` seed the linear pre-solve with a nominal fraction). **It reaches
-a healthy open-loop steady state in ~20 s** — nitrifying AS (tank-5 SNH ≈ 0,
-SNO produced, biomass sustained) and a methanogenic digester whose headspace
-methane matches the published BSM2 value to <1% — with all three recycle loops
-(AS internal, RAS, reject) and the flow balance closing
-(`tests/integration/test_bsm2.py`). The **storage tank, hydraulic delay,
-influent bypass, sensors and controllers are omitted** (open-loop steady state
-is the implemented scope); a canonical BSM2 influent file is not shipped, so the
-plant-level test asserts *qualitative* behaviour (the digester is *quantitatively*
-validated at the unit level in `tests/validation/test_bsm2_digester_unit.py`).
+`flow_outputs` seed the linear pre-solve with a nominal fraction). A constant
+**external carbon dose** (2 m³/d of readily-biodegradable COD to reactor 1,
+`carbon_flow`/`carbon_conc`, BSM2 default on) feeds denitrification in the
+anoxic tanks. **It reaches a healthy open-loop steady state in ~20 s** —
+nitrifying AS, biomass sustained, and a methanogenic digester.
+
+**Quantitatively validated** against the published BSM2 open-loop steady state
+(`tests/validation/test_bsm2_steadystate.py`): run with the published constant
+influent (`bsm2_constant_influent`) and the BSM2 (15 °C) ASM1 parameter set
+(`bsm2_parameters`), the whole multi-network plant — the 5 AS reactors, the
+secondary settler, the primary clarifier, both ASM1↔ADM1 interfaces, the
+digester, and all recycle loops including the reject water — reproduces the
+reference reactor states (`asm1init_bsm2` `XINIT`: XB_H ≈ 2245, XB_A ≈ 167,
+XP ≈ 967, XI ≈ 1532, the SNH/SNO/SO profiles) and the digester (`DIGESTERINIT`:
+headspace methane to ~0.2%) **to within ~3% on every key state**. Two parameter
+reconciliations were needed: the BSM2 ASM1 values are the 15 °C set
+(`muH=4, KS=10, muA=0.5, bH=0.3, KX=0.1, etah=0.8`), and aquakin's ASM1 adds a
+heterotroph ammonia-limitation term (`KNH_H`) that the BSM/IWA ASM1 lacks, so
+`bsm2_parameters` disables it (`KNH_H → 0`); without it tank-5 growth is
+suppressed ~24% and XB_H comes out ~half. ASM1 has no Arrhenius T-dependence
+(the `T` condition is declared but unused), so only the parameter *values*
+matter, not the 15 °C operating temperature.
+
+The **storage tank, hydraulic delay, influent bypass, sensors and controllers
+are omitted** (open-loop steady state is the implemented scope). A canonical
+BSM2 *dynamic* influent file is not shipped; the dynamic run is a future phase.
+The digester is additionally validated at the unit level in
+`tests/validation/test_bsm2_digester_unit.py`.
 
 The **ASM1↔ADM1 interfaces** (`aquakin/plant/interfaces.py`, `ASM1toADM1` /
 `ADM1toASM1`) are the continuity-based BSM2 interfaces (Nopens et al. 2009 /
