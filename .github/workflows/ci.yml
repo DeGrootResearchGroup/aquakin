@@ -28,7 +28,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # Python 3.10 is install-compatible (requires-python >= 3.10, diffrax
+        # 0.7.0 supports it) but excluded from CI: its heavier jaxlib 0.6.2
+        # build runs close to the hosted runner's resource/time limits and the
+        # job was intermittently killed (hung or cancelled mid-run) while
+        # 3.11/3.12 stayed green and the suite passed locally on 3.10.
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
