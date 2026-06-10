@@ -65,3 +65,35 @@ def test_mismatched_lengths_rejected():
     C = jnp.ones(10)
     with pytest.raises(ValueError):
         rtd.E_curve(t, C)
+
+
+def test_percentile_time_truncated_tail_warns():
+    """A tracer impulse cut off before it washes out must warn: E_curve
+    normalises the partial area to 1 and biases the percentile times (and
+    Morrill) low, so the truncation is flagged rather than passing silently."""
+    tau = 100.0
+    # Window ends at t=120 (~1.2 tau): C[-1] = exp(-1.2) ~= 0.30 of the peak,
+    # i.e. clearly not washed out.
+    t = jnp.linspace(0.0, 120.0, 2000)
+    C = jnp.exp(-t / tau)
+    with pytest.warns(UserWarning, match="truncated"):
+        rtd.percentile_time(t, C, q=0.9)
+    # The Morrill index (which uses t90) therefore also warns.
+    with pytest.warns(UserWarning, match="truncated"):
+        rtd.morrill_index(t, C)
+
+
+def test_percentile_time_full_washout_no_warning():
+    """A fully washed-out response (tail at baseline) resolves percentiles with
+    no truncation warning."""
+    tau = 50.0
+    t = jnp.linspace(0.0, 1000.0, 5000)   # ~20 tau: C[-1] ~= exp(-20) ~ 0
+    C = jnp.exp(-t / tau)
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("error")          # any warning fails the test
+        assert float(rtd.percentile_time(t, C, q=0.9)) > 0.0
+        assert float(rtd.percentile_time(t, C, q=1.0)) == pytest.approx(
+            float(t[-1]), rel=1e-6
+        )
