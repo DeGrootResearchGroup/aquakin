@@ -258,25 +258,43 @@ class Plant:
         self._state_layout = layout
         self._total_state_size = cursor
 
+    def _ordered_networks(self) -> list[CompiledNetwork]:
+        """The distinct kinetic networks, in first-appearance order.
+
+        Deduplicated by object **identity** (two units sharing the same
+        compiled network see one block). Parameter blocks are keyed by
+        ``network.name``, so two *distinct* networks sharing a name would
+        collide; reject that here rather than silently mis-slice the
+        parameter vector. This is the single source of truth for both
+        :meth:`_build_parameter_layout` and :meth:`default_parameters`, so the
+        layout and the default vector can never disagree.
+        """
+        seen: list[CompiledNetwork] = []
+        for name in self._unit_order:
+            net = getattr(self.units[name], "network", None)
+            if net is None:
+                continue
+            if any(s is net for s in seen):
+                continue
+            if any(s.name == net.name for s in seen):
+                raise ValueError(
+                    f"Two distinct networks share the name '{net.name}'. "
+                    f"Parameter blocks are keyed by network name, so names "
+                    f"must be unique across the plant's networks."
+                )
+            seen.append(net)
+        return seen
+
     def _build_parameter_layout(self) -> ParameterLayout:
         """Concatenate kinetic-parameter vectors for every distinct network.
 
         Each network contributes one block, in the order networks first
         appear via the unit-list iteration.
         """
-        seen: list[CompiledNetwork] = []
-        for name in self._unit_order:
-            unit = self.units[name]
-            net = getattr(unit, "network", None)
-            if net is None:
-                continue
-            if not any(s is net for s in seen):
-                seen.append(net)
-
         blocks: dict[str, tuple[int, int]] = {}
         cursor = 0
         net_index: dict[str, int] = {}
-        for i, net in enumerate(seen):
+        for i, net in enumerate(self._ordered_networks()):
             blocks[net.name] = (cursor, net.n_params)
             net_index[net.name] = i
             cursor += net.n_params
@@ -291,19 +309,10 @@ class Plant:
 
     def default_parameters(self) -> jnp.ndarray:
         """Concatenated default parameters across all kinetic networks."""
-        layout = self._build_parameter_layout()
-        if layout.total_size == 0:
+        nets = self._ordered_networks()
+        if not nets:
             return jnp.zeros((0,))
-        pieces: list[jnp.ndarray] = []
-        seen_names: set[str] = set()
-        for name in self._unit_order:
-            unit = self.units[name]
-            net = getattr(unit, "network", None)
-            if net is None or net.name in seen_names:
-                continue
-            seen_names.add(net.name)
-            pieces.append(net.default_parameters())
-        return jnp.concatenate(pieces)
+        return jnp.concatenate([net.default_parameters() for net in nets])
 
     def _params_for_unit(
         self, unit_name: str, params_full: jnp.ndarray

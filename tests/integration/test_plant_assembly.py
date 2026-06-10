@@ -269,3 +269,37 @@ def test_influent_interpolation(simple_net):
     # The trajectory should not be constant — there's a real time response.
     A_traj = sol.C_named("tank", "A")
     assert float(jnp.max(A_traj) - jnp.min(A_traj)) > 0.05
+
+
+def test_param_layout_and_defaults_agree_for_shared_network(simple_net):
+    """The parameter layout and the default-parameter vector must stay in sync.
+
+    Both derive from the same identity-deduped network list, so a plant whose
+    units share one compiled network gets exactly one parameter block and a
+    default vector of matching length.
+    """
+    plant = Plant("two_tanks")
+    for nm in ("t1", "t2"):
+        plant.add_unit(
+            CSTRUnit(name=nm, network=simple_net, volume=100.0,
+                     input_port_names=["inlet"], conditions={"T": 293.15})
+        )
+    layout = plant._build_parameter_layout()
+    assert layout.total_size == simple_net.n_params  # one shared block
+    assert plant.default_parameters().shape == (layout.total_size,)
+
+
+def test_distinct_networks_sharing_a_name_rejected():
+    """Two *distinct* networks with the same name would collide in the
+    name-keyed parameter blocks; the plant must reject that rather than
+    silently mis-slice the parameter vector."""
+    net_a = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    net_b = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    assert net_a is not net_b and net_a.name == net_b.name
+    plant = Plant("collision")
+    plant.add_unit(CSTRUnit(name="a", network=net_a, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_unit(CSTRUnit(name="b", network=net_b, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    with pytest.raises(ValueError, match="share the name"):
+        plant.default_parameters()
