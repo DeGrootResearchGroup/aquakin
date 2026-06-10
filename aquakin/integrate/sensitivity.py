@@ -152,6 +152,21 @@ def fit(
     """
     Least-squares fit of selected parameters to time-series observations.
 
+    This is the lightweight fitter: box-constrained sum-of-squares least squares
+    on a single batch, with no parameter transforms, priors, Laplace posterior,
+    free initial conditions, or multi-batch support. For anything beyond a quick
+    point estimate, prefer :func:`aquakin.calibrate` (use
+    ``calibrate(..., laplace=False)`` for a bare point fit) --- it is a strict
+    superset of this function.
+
+    .. note::
+       The reported losses are **not comparable** between the two. ``fit``
+       reports :attr:`FitResult.loss` as the **sum** of squared residuals
+       (SciPy ``least_squares`` cost), whereas ``calibrate`` with ``loss="mse"``
+       reports the **mean** squared error. The optima coincide (a positive
+       constant factor does not move the minimiser); only the absolute loss
+       value differs in scale.
+
     Parameters
     ----------
     reactor : BatchReactor
