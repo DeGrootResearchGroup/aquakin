@@ -22,10 +22,20 @@ can serve a family of related networks.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Optional
+
 import numpy as np
 
+if TYPE_CHECKING:  # pragma: no cover
+    from aquakin.core.network import CompiledNetwork
 
-def _composition_matrix(network, composition):
+# species name -> {quantity name -> content per unit of the species' measure}
+Composition = dict[str, dict[str, float]]
+
+
+def _composition_matrix(
+    network: "CompiledNetwork", composition: Composition
+) -> tuple[list[str], np.ndarray]:
     """(n_quantities, n_species) content matrix and the quantity-name list."""
     quantities = sorted({q for c in composition.values() for q in c})
     sidx = network.species_index
@@ -37,7 +47,11 @@ def _composition_matrix(network, composition):
     return quantities, mat
 
 
-def conservation_residuals(network, composition, params=None):
+def conservation_residuals(
+    network: "CompiledNetwork",
+    composition: Composition,
+    params: Optional[Any] = None,
+) -> tuple[list[str], list[str], np.ndarray]:
     """Per-reaction conservation residual for every quantity in ``composition``.
 
     Parameters
@@ -65,8 +79,14 @@ def conservation_residuals(network, composition, params=None):
     return list(network.reaction_names), quantities, residuals
 
 
-def nitrogen_residuals(network, composition, *, params=None,
-                       nitrate="S_NO", n_key="N"):
+def nitrogen_residuals(
+    network: "CompiledNetwork",
+    composition: Composition,
+    *,
+    params: Optional[Any] = None,
+    nitrate: str = "S_NO",
+    n_key: str = "N",
+) -> tuple[list[str], np.ndarray]:
     """Per-reaction nitrogen residual, accounting for denitrification N2 gas.
 
     Nitrogen oxidation/reduction is outside the COD continuity, so it needs its
@@ -96,15 +116,27 @@ def nitrogen_residuals(network, composition, *, params=None,
     return list(network.reaction_names), residual
 
 
-def check_nitrogen(network, composition, *, tol=1e-2, **kwargs):
+def check_nitrogen(
+    network: "CompiledNetwork",
+    composition: Composition,
+    *,
+    tol: float = 1e-2,
+    **kwargs: Any,
+) -> list[tuple[str, float]]:
     """Return nitrogen-balance violations ``(reaction, residual)`` above ``tol``."""
     names, residual = nitrogen_residuals(network, composition, **kwargs)
     return [(names[i], float(residual[i]))
             for i in range(len(names)) if abs(residual[i]) > tol]
 
 
-def check_conservation(network, composition, *, tol=1e-2, params=None,
-                       quantities=None):
+def check_conservation(
+    network: "CompiledNetwork",
+    composition: Composition,
+    *,
+    tol: float = 1e-2,
+    params: Optional[Any] = None,
+    quantities: Optional[list[str]] = None,
+) -> list[tuple[str, str, float]]:
     """Return the list of conservation violations ``(reaction, quantity, residual)``.
 
     A reaction/quantity pair is reported when ``abs(residual) > tol``. The

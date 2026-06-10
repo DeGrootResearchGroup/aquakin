@@ -39,11 +39,16 @@ class MixerUnit:
     input_port_names: list[str]
     network: "CompiledNetwork"
     state_size: int = 0
-    output_ports: tuple[str, ...] = ("out",)
 
     @property
     def input_ports(self) -> list[str]:
         return list(self.input_port_names)
+
+    @property
+    def output_ports(self) -> list[str]:
+        # List-returning property to match the Unit Protocol (list[str]) and the
+        # CSTR / clarifier units; the single output port is always "out".
+        return ["out"]
 
     def initial_state(self) -> jnp.ndarray:
         return jnp.zeros((0,))
@@ -107,7 +112,6 @@ class SplitterUnit:
     output_port_ratios: dict[str, float]
     network: "CompiledNetwork"
     state_size: int = 0
-    input_ports: tuple[str, ...] = ("in",)
 
     def __post_init__(self) -> None:
         total = sum(self.output_port_ratios.values())
@@ -115,6 +119,12 @@ class SplitterUnit:
             raise ValueError(
                 f"SplitterUnit '{self.name}' ratios must sum to 1.0; got {total}"
             )
+
+    @property
+    def input_ports(self) -> list[str]:
+        # List-returning property to match the Unit Protocol (list[str]); the
+        # single input port is always "in".
+        return ["in"]
 
     @property
     def output_ports(self) -> list[str]:

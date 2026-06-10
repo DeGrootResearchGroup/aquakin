@@ -86,7 +86,7 @@ class IdealClarifier:
         mask = jnp.zeros((self.network.n_species,))
         for i in self._part_indices:
             mask = mask.at[i].set(1.0)
-        object.__setattr__(self, "_particulate_mask", mask)
+        self._particulate_mask = mask
 
     @property
     def input_ports(self) -> list[str]:

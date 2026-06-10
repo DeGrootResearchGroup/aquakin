@@ -89,17 +89,16 @@ class CSTRUnit:
             kla_vec = kla_vec.at[self.network.species_index[sp]].set(float(val))
         for sp, val in self.C_sat.items():
             sat_vec = sat_vec.at[self.network.species_index[sp]].set(float(val))
-        object.__setattr__(self, "_kla_vec", kla_vec)
-        object.__setattr__(self, "_sat_vec", sat_vec)
+        self._kla_vec = kla_vec
+        self._sat_vec = sat_vec
 
         # Condition arrays for the kinetics call: each declared condition
         # broadcast to a length-1 array so the rate functions index with
         # loc_idx=0 — same convention as BatchReactor.
-        cond_arrays = {
+        self._condition_arrays = {
             name: jnp.asarray([float(self.conditions[name])])
             for name in self.network.conditions_required
         }
-        object.__setattr__(self, "_condition_arrays", cond_arrays)
 
     @property
     def state_size(self) -> int:
