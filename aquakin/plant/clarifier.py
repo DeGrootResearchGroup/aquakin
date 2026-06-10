@@ -22,6 +22,10 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant._constants import ASM1_SETTLING_SPECIES
+from aquakin.plant._flow_split import (
+    split_controlled_flows,
+    validate_controlled_split,
+)
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -87,11 +91,9 @@ class IdealClarifier:
             raise ValueError(
                 f"capture_efficiency must be in [0, 1]; got {self.capture_efficiency}"
             )
-        if (self.overflow_Q is None) == (self.underflow_Q is None):
-            raise ValueError(
-                f"IdealClarifier '{self.name}': supply exactly one of "
-                f"overflow_Q or underflow_Q."
-            )
+        validate_controlled_split(
+            f"IdealClarifier '{self.name}'", self.overflow_Q, self.underflow_Q
+        )
         self._part_indices = [
             self.network.species_index[s] for s in self.particulate_species
             if s in self.network.species_index
@@ -114,23 +116,9 @@ class IdealClarifier:
         return jnp.zeros((0,))
 
     def _split_flows(self, Q_in: jnp.ndarray, clamp: bool):
-        """Return ``(Q_over, Q_under)`` from the inlet flow.
-
-        The *controlled* flow is fixed (``underflow_Q`` for a flow-controlled
-        underflow pump, else ``overflow_Q``); the other is the remainder, so the
-        free flow tracks the feed -- the BSM convention ``Q_e = Q_f - Q_u``.
-        ``clamp=True`` (concentration stage) keeps both flows in ``[0, Q_in]`` so
-        a transient feed below the setpoint never makes a negative-flow stream;
-        ``clamp=False`` (the linear flow rule) leaves the split affine so
-        ``Plant._resolve_flows`` is exact.
-        """
-        if self.underflow_Q is not None:
-            Q_over = Q_in - jnp.asarray(float(self.underflow_Q))
-        else:
-            Q_over = jnp.asarray(float(self.overflow_Q))
-        if clamp:
-            Q_over = jnp.clip(Q_over, 0.0, Q_in)
-        return Q_over, Q_in - Q_over
+        return split_controlled_flows(
+            self.overflow_Q, self.underflow_Q, Q_in, clamp
+        )
 
     def compute_outputs(
         self,

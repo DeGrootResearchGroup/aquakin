@@ -39,6 +39,10 @@ from aquakin.plant._constants import (
     ASM1_TSS_FACTOR,
     ASM1_TSS_SPECIES,
 )
+from aquakin.plant._flow_split import (
+    split_controlled_flows,
+    validate_controlled_split,
+)
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -155,15 +159,9 @@ class TakacsClarifier:
             raise ValueError(
                 f"feed_layer must be in [0, {self.n_layers}); got {self.feed_layer}"
             )
-        if (self.overflow_Q is None) == (self.underflow_Q is None):
-            raise ValueError(
-                f"TakacsClarifier '{self.name}': supply exactly one of "
-                f"overflow_Q or underflow_Q."
-            )
-        if self.overflow_Q is not None and self.overflow_Q < 0:
-            raise ValueError(f"overflow_Q must be non-negative; got {self.overflow_Q}")
-        if self.underflow_Q is not None and self.underflow_Q < 0:
-            raise ValueError(f"underflow_Q must be non-negative; got {self.underflow_Q}")
+        validate_controlled_split(
+            f"TakacsClarifier '{self.name}'", self.overflow_Q, self.underflow_Q
+        )
         # Soluble = everything not in particulate.
         self._soluble_indices = [
             i for i in range(self.network.n_species) if i not in self._part_indices
@@ -263,21 +261,9 @@ class TakacsClarifier:
         return jnp.clip(v_takacs, 0.0, self._vmax)
 
     def _split_flows(self, Q_in: jnp.ndarray, clamp: bool):
-        """Return ``(Q_over, Q_under)`` from the inlet flow.
-
-        The *controlled* flow is fixed (``underflow_Q`` for a flow-controlled
-        RAS+wastage pump, else ``overflow_Q``) and the other is the remainder, so
-        the free flow tracks the feed (``Q_e = Q_f - Q_u``, the BSM convention).
-        ``clamp=True`` keeps both flows in ``[0, Q_in]`` (concentration/settling
-        stage); ``clamp=False`` leaves the split affine for ``_resolve_flows``.
-        """
-        if self.underflow_Q is not None:
-            Q_over = Q_in - jnp.asarray(float(self.underflow_Q))
-        else:
-            Q_over = jnp.asarray(float(self.overflow_Q))
-        if clamp:
-            Q_over = jnp.clip(Q_over, 0.0, Q_in)
-        return Q_over, Q_in - Q_over
+        return split_controlled_flows(
+            self.overflow_Q, self.underflow_Q, Q_in, clamp
+        )
 
     def compute_outputs(
         self,
