@@ -47,9 +47,16 @@ class IdealClarifier:
     ----------
     name : str
     network : CompiledNetwork
-    overflow_Q : float
-        Overflow (effluent) volumetric flow rate. Underflow takes the
-        remainder of the inlet.
+    overflow_Q : float, optional
+        Fixed overflow (effluent) flow rate; underflow takes the remainder.
+        Supply exactly one of ``overflow_Q`` or ``underflow_Q``.
+    underflow_Q : float, optional
+        Fixed underflow flow rate (the controlled RAS+wastage pump flow,
+        ``Q_r + Q_w``); the overflow (effluent) is then the remainder and
+        tracks the feed (``Q_e = Q_f - Q_u``, the BSM convention). Preferred
+        for plants with dynamic influent -- a fixed overflow forces a
+        near-singular recycle-flow gain. Supply exactly one of ``overflow_Q``
+        or ``underflow_Q``.
     capture_efficiency : float
         Fraction of inflowing particulate mass directed to the underflow.
         Default 0.998 (typical BSM1 clarifier; corresponds to ~99.8% of
@@ -63,7 +70,8 @@ class IdealClarifier:
 
     name: str
     network: "CompiledNetwork"
-    overflow_Q: float
+    overflow_Q: "float | None" = None
+    underflow_Q: "float | None" = None
     capture_efficiency: float = 0.998
     particulate_species: list[str] = field(
         default_factory=lambda: list(ASM1_SETTLING_SPECIES)
@@ -78,6 +86,11 @@ class IdealClarifier:
         if not (0.0 <= self.capture_efficiency <= 1.0):
             raise ValueError(
                 f"capture_efficiency must be in [0, 1]; got {self.capture_efficiency}"
+            )
+        if (self.overflow_Q is None) == (self.underflow_Q is None):
+            raise ValueError(
+                f"IdealClarifier '{self.name}': supply exactly one of "
+                f"overflow_Q or underflow_Q."
             )
         self._part_indices = [
             self.network.species_index[s] for s in self.particulate_species
@@ -100,6 +113,25 @@ class IdealClarifier:
     def initial_state(self) -> jnp.ndarray:
         return jnp.zeros((0,))
 
+    def _split_flows(self, Q_in: jnp.ndarray, clamp: bool):
+        """Return ``(Q_over, Q_under)`` from the inlet flow.
+
+        The *controlled* flow is fixed (``underflow_Q`` for a flow-controlled
+        underflow pump, else ``overflow_Q``); the other is the remainder, so the
+        free flow tracks the feed -- the BSM convention ``Q_e = Q_f - Q_u``.
+        ``clamp=True`` (concentration stage) keeps both flows in ``[0, Q_in]`` so
+        a transient feed below the setpoint never makes a negative-flow stream;
+        ``clamp=False`` (the linear flow rule) leaves the split affine so
+        ``Plant._resolve_flows`` is exact.
+        """
+        if self.underflow_Q is not None:
+            Q_over = Q_in - jnp.asarray(float(self.underflow_Q))
+        else:
+            Q_over = jnp.asarray(float(self.overflow_Q))
+        if clamp:
+            Q_over = jnp.clip(Q_over, 0.0, Q_in)
+        return Q_over, Q_in - Q_over
+
     def compute_outputs(
         self,
         t: jnp.ndarray,
@@ -109,13 +141,12 @@ class IdealClarifier:
     ) -> dict[str, Stream]:
         s_in = inputs[self.input_port]
         Q_in = s_in.Q
-        # Guard: overflow can never exceed the inflow, else underflow goes
-        # negative and the mass/Q_under concentrations blow up. This is a real
-        # hazard during the recycle-flow startup transient (closes issue #17);
-        # mass-conserving (the two outflows sum to Q_in) and inactive at steady
-        # state (feed > overflow).
-        Q_over = jnp.minimum(jnp.asarray(self.overflow_Q), Q_in)
-        Q_under = Q_in - Q_over
+        # The non-controlled outflow is the remainder, clamped into [0, Q_in]:
+        # neither overflow nor underflow can go negative (the mass/Q blow-up
+        # hazard during the recycle-flow startup transient; closes issue #17).
+        # Mass-conserving (the two outflows sum to Q_in) and inactive at steady
+        # state.
+        Q_over, Q_under = self._split_flows(Q_in, clamp=True)
         cap = jnp.asarray(self.capture_efficiency)
 
         # Per-species partitioning. Solubles split with flow ratio.
@@ -146,14 +177,14 @@ class IdealClarifier:
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
-        """Linear flow rule for the recycle-flow solve: overflow is the design
-        constant, underflow is the remainder. The ``min`` guard in
-        ``compute_outputs`` is a concentration-stage safeguard; the flow network
-        is solved with the constant overflow so it stays linear (the steady-state
-        feed exceeds the overflow, where the guard is inactive)."""
+        """Linear flow rule for the recycle-flow solve: the controlled flow
+        (``underflow_Q`` or ``overflow_Q``) is constant and the other outflow is
+        the remainder, so the map stays affine and ``Plant._resolve_flows`` is
+        exact. The clamp in ``compute_outputs`` is the concentration-stage
+        safeguard, inactive at steady state."""
         Q_in = input_flows[self.input_port]
-        Q_over = jnp.asarray(self.overflow_Q)
-        return {self.overflow_port: Q_over, self.underflow_port: Q_in - Q_over}
+        Q_over, Q_under = self._split_flows(Q_in, clamp=False)
+        return {self.overflow_port: Q_over, self.underflow_port: Q_under}
 
     def rhs(
         self,

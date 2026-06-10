@@ -144,20 +144,28 @@ def build_bsm1(
             )
         )
 
+    # Controlled recycle-pump flows (BSM convention: constant volumetric
+    # setpoints, not fractions of throughput). ``Qa`` internal recycle, ``Qr``
+    # RAS, ``Qw`` wastage -- all fixed regardless of influent, defined off the
+    # design flow ``Q_avg``. The clarifier underflow is ``Qr + Qw`` and the
+    # effluent is the free remainder (``Q_e = Q_f - Q_u``). Modelling these as
+    # fixed *fractions* instead makes the recycle-flow loop gain near-singular
+    # off the design influent, so the plant blows up under dynamic flow (see
+    # the SplitterUnit flow-mode docstring).
+    Qa = BSM1_INTERNAL_RECYCLE_RATIO * Q_avg
+    Qr = BSM1_EXTERNAL_RECYCLE_RATIO * Q_avg
+    Qw = BSM1_WASTAGE_FLOW
+    Q_underflow = Qr + Qw
+
     # ----- Internal recycle splitter (tank 5 outlet) -----
-    # Tank 5 outlet goes to internal recycle + clarifier_feed.
-    # At Q_in_avg=18446 and Qa_ratio=3, internal recycle = 55338 m³/d;
-    # the remainder (Q_in + Q_r = 18446 + 18446 = 36892) goes to the
-    # clarifier. Total tank-5 outlet = Q_in + Q_a + Q_r = 5×Q_in = 92230.
-    # Fractions: internal_recycle = 3/5, clarifier_feed = 2/5.
+    # Tank 5 outlet splits into the fixed internal-recycle pump flow Qa and the
+    # remainder (the clarifier feed, Q_in + Qr).
     plant.add_unit(
         SplitterUnit(
             name="tank5_split",
-            output_port_ratios={
-                "internal_recycle": 3.0 / 5.0,
-                "to_clarifier": 2.0 / 5.0,
-            },
             network=network,
+            output_port_flows={"internal_recycle": Qa},
+            remainder_port="to_clarifier",
         )
     )
 
@@ -173,11 +181,13 @@ def build_bsm1(
                 network=network,
                 area=BSM1_CLARIFIER_AREA,
                 height=BSM1_CLARIFIER_HEIGHT,
-                overflow_Q=Q_avg - BSM1_WASTAGE_FLOW,
+                # Fixed underflow pump flow (Qr + Qw); the effluent overflow is
+                # the remainder and tracks the feed.
+                underflow_Q=Q_underflow,
                 # Settled-blanket initialization: the design underflow flow sets
                 # the thickening ratio so the clarifier starts settled rather
                 # than uniform, avoiding the violent startup transient.
-                init_underflow_Q=BSM1_EXTERNAL_RECYCLE_RATIO * Q_avg + BSM1_WASTAGE_FLOW,
+                init_underflow_Q=Q_underflow,
             )
         )
     else:
@@ -185,21 +195,20 @@ def build_bsm1(
             IdealClarifier(
                 name="clarifier",
                 network=network,
-                overflow_Q=Q_avg - BSM1_WASTAGE_FLOW,
+                underflow_Q=Q_underflow,
                 capture_efficiency=0.998,
             )
         )
 
     # ----- Underflow splitter (RAS + wastage) -----
-    # Underflow = Q_r + Q_w. RAS goes back to tank 1; wastage leaves.
-    Q_underflow = BSM1_EXTERNAL_RECYCLE_RATIO * Q_avg + BSM1_WASTAGE_FLOW
-    ras_ratio = (BSM1_EXTERNAL_RECYCLE_RATIO * Q_avg) / Q_underflow
-    waste_ratio = BSM1_WASTAGE_FLOW / Q_underflow
+    # The clarifier underflow (Qr + Qw) splits into the fixed RAS pump flow Qr
+    # back to tank 1 and the remainder (wastage Qw), which leaves the plant.
     plant.add_unit(
         SplitterUnit(
             name="underflow_split",
-            output_port_ratios={"ras": ras_ratio, "waste": waste_ratio},
             network=network,
+            output_port_flows={"ras": Qr},
+            remainder_port="waste",
         )
     )
 

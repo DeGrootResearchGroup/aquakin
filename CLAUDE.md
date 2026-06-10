@@ -1521,17 +1521,37 @@ three fixes, all diagnosed against the official BSM1 reference code:
   `flow_outputs` rule; `Plant` solves the small flow fixed point **exactly**
   (probe the affine map, one `lineax`/`jnp.linalg.solve`), then runs the
   concentration sweep on the fixed flows. This was the keystone.
-- **Non-negative flow split** (`overflow_Q = min(overflow_Q, Q_in)` in both
-  clarifiers): guards against a negative underflow when the feed dips below the
-  design overflow — closes issue #17; inactive at steady state.
+- **Non-negative flow split** (the remainder outflow clamped into `[0, Q_in]` in
+  both clarifiers): guards against a negative underflow when the feed dips below
+  the design split — closes issue #17; inactive at steady state.
 - **`clip_negative_states`** on ASM1 (the reference `xtemp = max(x,0)` clamp).
 
 `Plant.solve` takes an optional `y0=` for warm-starting (e.g. a dynamic run
-from a precomputed steady state). **Remaining limitation (issue #30):** the
-*dynamic* (time-varying-influent) transient is still stiff — the rapid diurnal
-forcing through the now-full-strength recycle drives tiny steps — so a long
-dry/rain/storm run does not yet integrate efficiently (the dynamic smoke test
-is skipped pending that hardening). The steady-state path is solid.
+from a precomputed steady state).
+
+**Dynamic influent now works too — flow-controlled recycle pumps (issue #30).**
+The dynamic (time-varying-influent) run *used* to hit the step ceiling, which
+was attributed to diurnal-forcing stiffness. The real cause was a **flow-model
+bug**: the recycle streams (internal recycle `Qa`, RAS `Qr`, wastage `Qw`) were
+modelled as fixed-*fraction* `SplitterUnit`s and the clarifier effluent as a
+fixed flow — constants calibrated only at the design influent `Q_avg`. The
+recycle-flow algebra then has a near-singular gain
+(`tank5_throughput = (Q_fresh − 17693)/0.00816`), so a ±10% influent swing whips
+the throughput from 5× to ~23× `Q_in`; that violently amplified, fast-varying
+flow field is what made the monolithic solve crawl. `_resolve_flows` was exact —
+it was faithfully resolving the *wrong* flow model — which is why it stayed
+hidden at steady state (sitting exactly at `Q_avg`, where the fractions are
+correct). The BSM1/BSM2 reference (`asm1init_bsm2.m`) settles it: `Qa = 3·Qin0`,
+`Qr = Qin0`, `Qw = 300` are **constant pumped flows** off a fixed reference flow,
+and the settler computes the effluent as the *free remainder*
+(`Q_e = Q_f − (Q_r + Q_w)`). The fix mirrors this: `SplitterUnit` gains a
+fixed-setpoint *flow mode* (`output_port_flows` + `remainder_port`); the
+clarifiers gain a fixed `underflow_Q` (= `Qr + Qw`) with the overflow as the
+remainder; `build_bsm1` wires the recycles as constant pumps. Throughput now
+holds ~5× `Q_in` under any influent, and the 14-day dry run integrates in ~5k
+steps (Ideal, ~10 s) / ~18k steps (Takács, ~30 s) to a healthy state —
+**~1000× fewer steps**, steady state unchanged. Regression-guarded by
+`test_bsm1_dry_weather_runs` and `test_bsm1_takacs_dry_weather_runs`.
 
 The first plant-wide demonstration target is **BSM1** (Copp 2002 / Alex
 2008) — built by `aquakin.plant.bsm.build_bsm1()`. Three synthesised

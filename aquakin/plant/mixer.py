@@ -92,33 +92,68 @@ class MixerUnit:
 
 @dataclass
 class SplitterUnit:
-    """Splits one input stream into N output streams by fixed flow ratios.
+    """Splits one input stream into N output streams.
 
     Concentration is preserved across all outputs (passive splitter); only
-    the flow rate is partitioned.
+    the flow rate is partitioned. Two partition modes, exactly one of which
+    must be supplied:
+
+    - **ratio mode** (``output_port_ratios``): each output gets a fixed
+      *fraction* of the inlet flow. Fractions must sum to 1.
+    - **flow mode** (``output_port_flows`` + ``remainder_port``): the named
+      outputs are *flow-controlled pumps* delivering fixed absolute setpoint
+      flows; ``remainder_port`` takes whatever is left
+      (``Q_in - sum(setpoints)``). This is the correct model for the BSM
+      recycle pumps (internal recycle, RAS, wastage), whose volumetric flows
+      are held constant regardless of influent — see :func:`build_bsm1`. A
+      fixed *fraction* of throughput, by contrast, makes the recycle-flow
+      loop gain near-singular off the design influent and the plant blows up
+      under dynamic flow.
 
     Parameters
     ----------
     name : str
         Unit identifier.
-    output_port_ratios : dict[str, float]
-        Output port name -> fraction of inlet flow. Fractions must sum to 1
-        (validated at construction; calibration of split ratios uses
-        ``params`` instead — see :attr:`output_ports_dynamic`).
     network : CompiledNetwork
+    output_port_ratios : dict[str, float], optional
+        Ratio mode: output port name -> fraction of inlet flow (sum to 1).
+    output_port_flows : dict[str, float], optional
+        Flow mode: output port name -> fixed setpoint flow (m³/d). Requires
+        ``remainder_port``.
+    remainder_port : str, optional
+        Flow mode only: the output port carrying the remaining flow.
     """
 
     name: str
-    output_port_ratios: dict[str, float]
     network: "CompiledNetwork"
+    output_port_ratios: "dict[str, float] | None" = None
+    output_port_flows: "dict[str, float] | None" = None
+    remainder_port: "str | None" = None
     state_size: int = 0
 
     def __post_init__(self) -> None:
-        total = sum(self.output_port_ratios.values())
-        if not (abs(total - 1.0) < 1e-9):
+        if (self.output_port_ratios is None) == (self.output_port_flows is None):
             raise ValueError(
-                f"SplitterUnit '{self.name}' ratios must sum to 1.0; got {total}"
+                f"SplitterUnit '{self.name}': supply exactly one of "
+                f"output_port_ratios or output_port_flows."
             )
+        if self.output_port_ratios is not None:
+            total = sum(self.output_port_ratios.values())
+            if not (abs(total - 1.0) < 1e-9):
+                raise ValueError(
+                    f"SplitterUnit '{self.name}' ratios must sum to 1.0; got {total}"
+                )
+        else:
+            if self.remainder_port is None:
+                raise ValueError(
+                    f"SplitterUnit '{self.name}': output_port_flows requires "
+                    f"remainder_port."
+                )
+            if self.remainder_port in self.output_port_flows:
+                raise ValueError(
+                    f"SplitterUnit '{self.name}': remainder_port "
+                    f"'{self.remainder_port}' must not also be a setpoint port."
+                )
 
     @property
     def input_ports(self) -> list[str]:
@@ -128,7 +163,9 @@ class SplitterUnit:
 
     @property
     def output_ports(self) -> list[str]:
-        return list(self.output_port_ratios.keys())
+        if self.output_port_ratios is not None:
+            return list(self.output_port_ratios.keys())
+        return list(self.output_port_flows.keys()) + [self.remainder_port]
 
     def initial_state(self) -> jnp.ndarray:
         return jnp.zeros((0,))
@@ -142,19 +179,37 @@ class SplitterUnit:
     ) -> dict[str, Stream]:
         s_in = inputs["in"]
         outputs: dict[str, Stream] = {}
-        for port, ratio in self.output_port_ratios.items():
-            outputs[port] = Stream(
-                Q=s_in.Q * jnp.asarray(ratio),
-                C=s_in.C,
-                network=self.network,
-            )
+        if self.output_port_ratios is not None:
+            for port, ratio in self.output_port_ratios.items():
+                outputs[port] = Stream(
+                    Q=s_in.Q * jnp.asarray(ratio), C=s_in.C, network=self.network
+                )
+            return outputs
+        # Flow mode: fixed setpoints, remainder takes what is left. Clamp the
+        # remainder at zero so a feed transiently below the total setpoint does
+        # not produce a negative-flow stream (the concentration-stage safeguard;
+        # the linear flow_outputs below stays unclamped so _resolve_flows is
+        # exact).
+        total_set = jnp.zeros(())
+        for port, q in self.output_port_flows.items():
+            q = jnp.asarray(float(q))
+            total_set = total_set + q
+            outputs[port] = Stream(Q=q, C=s_in.C, network=self.network)
+        outputs[self.remainder_port] = Stream(
+            Q=jnp.maximum(s_in.Q - total_set, 0.0), C=s_in.C, network=self.network
+        )
         return outputs
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
-        """Output port flows = inlet flow times each split ratio."""
+        """Output port flows from the inlet flow (the linear flow rule)."""
         Q_in = input_flows["in"]
-        return {port: Q_in * jnp.asarray(ratio)
-                for port, ratio in self.output_port_ratios.items()}
+        if self.output_port_ratios is not None:
+            return {port: Q_in * jnp.asarray(ratio)
+                    for port, ratio in self.output_port_ratios.items()}
+        out = {port: jnp.asarray(float(q))
+               for port, q in self.output_port_flows.items()}
+        out[self.remainder_port] = Q_in - sum(out.values())
+        return out
 
     def rhs(
         self,
