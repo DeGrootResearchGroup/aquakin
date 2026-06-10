@@ -14,6 +14,11 @@ jobs:
   test:
     name: tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    # Hard ceiling so a hung run fails fast. The full not-validation suite takes
+    # ~15-20 min; a stuck pytest-xdist worker (e.g. an OOM-killed worker the
+    # controller then blocks on) once ran a job for 1h20m before the runner
+    # killed it. 35 min leaves ample headroom for a healthy run.
+    timeout-minutes: 35
     # Pin XLA/BLAS to a single thread per process so pytest-xdist workers do not
     # oversubscribe the CI runner's CPUs (each JAX process otherwise grabs every
     # core, and N workers x M cores thrashes). With this, -n auto scales cleanly.
@@ -40,11 +45,20 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run unit and integration tests
-        run: pytest -m "not validation" -q -n auto --durations=15
+        # --timeout fires inside a worker if a single test deadlocks (the slowest
+        # legitimate test is ~220 s, so 600 s is safe), naming the offending test
+        # instead of letting the run hang silently. --max-worker-restart=0 makes a
+        # crashed worker fail the run immediately rather than leaving the
+        # controller blocked. Together with the job timeout-minutes above, a hang
+        # now surfaces a clear, fast failure.
+        run: >-
+          pytest -m "not validation" -q -n auto --durations=15
+          --timeout=600 --timeout-method=thread --max-worker-restart=0
 
   validation:
     name: validation suite
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       OMP_NUM_THREADS: "1"
       XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false"
@@ -64,4 +78,6 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run validation suite (against published data)
-        run: pytest -m validation -q -n auto --durations=15
+        run: >-
+          pytest -m validation -q -n auto --durations=15
+          --timeout=900 --timeout-method=thread --max-worker-restart=0
