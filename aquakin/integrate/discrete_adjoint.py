@@ -55,9 +55,25 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 import diffrax
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optimistix
+
+
+def _implicit_tols(rtol: float, atol: float):
+    """Explicit root-finder tolerances for an implicit diffrax solver.
+
+    The forward solve here pairs an implicit solver with a step-clipping
+    controller. Older diffrax (e.g. 0.7.0, the newest that still supports
+    Python 3.10) does not treat ``ClipStepSizeController`` as adaptive, so it
+    refuses an implicit solver whose root-finder tolerances are unspecified
+    (they default to a "use the stepsize tolerance" sentinel it cannot resolve
+    for a non-adaptive controller). Setting them explicitly makes the solve
+    valid on every diffrax version.
+    """
+    return diffrax.VeryChord(rtol=rtol, atol=atol, norm=optimistix.max_norm)
 
 
 def implicit_euler_adjoint_solve(
@@ -126,7 +142,8 @@ def implicit_euler_adjoint_solve(
 
     def _forward(y0_, params_):
         return diffrax.diffeqsolve(
-            term, diffrax.ImplicitEuler(), t0, t1, dt0, y0_, args=params_,
+            term, diffrax.ImplicitEuler(root_finder=_implicit_tols(rtol, atol)),
+            t0, t1, dt0, y0_, args=params_,
             stepsize_controller=controller,
             saveat=diffrax.SaveAt(steps=True), max_steps=max_steps,
         )
@@ -282,6 +299,12 @@ def esdirk_adjoint_solve(
     """
     if solver is None:
         solver = diffrax.Kvaerno5()
+    # Set explicit root-finder tolerances (see _implicit_tols) so the implicit
+    # solve is valid on diffrax versions that don't treat ClipStepSizeController
+    # as adaptive (older diffrax on Python 3.10).
+    solver = eqx.tree_at(
+        lambda s: s.root_finder, solver, _implicit_tols(rtol, atol)
+    )
     A, b, diag_np, s = _esdirk_tableau(solver)
     diag = jnp.asarray(diag_np)
 
