@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import pytest
 
 import diffrax
+import optimistix
 
 import aquakin
 from aquakin.integrate.discrete_adjoint import (
@@ -110,7 +111,13 @@ def test_equals_autodiff_through_same_solve(simple_network):
             diffrax.PIDController(rtol=rtol, atol=atol), step_ts=t_obs
         )
         sol = diffrax.diffeqsolve(
-            diffrax.ODETerm(lambda t, y, a: rhs(t, y, a)), diffrax.ImplicitEuler(),
+            diffrax.ODETerm(lambda t, y, a: rhs(t, y, a)),
+            # Explicit root-finder tolerances: older diffrax (py3.10) does not
+            # treat ClipStepSizeController (no dtmax) as adaptive and otherwise
+            # rejects the implicit solver's unspecified tolerances.
+            diffrax.ImplicitEuler(
+                root_finder=diffrax.VeryChord(rtol=rtol, atol=atol,
+                                              norm=optimistix.max_norm)),
             0.0, 8.0, 1e-6, C0, args=pp, stepsize_controller=ctrl,
             adjoint=diffrax.RecursiveCheckpointAdjoint(),
             saveat=diffrax.SaveAt(ts=t_obs), max_steps=100_000,
@@ -219,7 +226,11 @@ def test_esdirk_equals_autodiff_through_same_solve(simple_network):
             diffrax.PIDController(rtol=rtol, atol=atol), step_ts=t_obs
         )
         sol = diffrax.diffeqsolve(
-            diffrax.ODETerm(lambda t, y, a: rhs(t, y, a)), diffrax.Kvaerno5(),
+            diffrax.ODETerm(lambda t, y, a: rhs(t, y, a)),
+            # Explicit root-finder tolerances (see note above) for diffrax 0.7.0.
+            diffrax.Kvaerno5(
+                root_finder=diffrax.VeryChord(rtol=rtol, atol=atol,
+                                              norm=optimistix.max_norm)),
             0.0, 8.0, 1e-6, C0, args=pp, stepsize_controller=ctrl,
             adjoint=diffrax.RecursiveCheckpointAdjoint(),
             saveat=diffrax.SaveAt(ts=t_obs), max_steps=100_000,
