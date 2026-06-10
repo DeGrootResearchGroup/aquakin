@@ -17,14 +17,15 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import ASM1_TSS_FACTOR, ASM1_TSS_SPECIES
+
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
 
 
-# ASM1 → TSS conversion (Copp 2002 eq. for TSS).
-# TSS = 0.75 * (X_S + X_I + X_BH + X_BA + X_P).
-_TSS_FACTOR = 0.75
-_TSS_SPECIES = ("XS", "XI", "XB_H", "XB_A", "XP")
+# ASM1 → TSS conversion (Copp 2002): TSS = 0.75 * (X_S + X_I + X_BH + X_BA + X_P).
+_TSS_FACTOR = ASM1_TSS_FACTOR
+_TSS_SPECIES = ASM1_TSS_SPECIES
 
 # EQI weighting factors (g pollutant / m³)⁻¹ from Copp 2002.
 _EQI_WEIGHTS = {

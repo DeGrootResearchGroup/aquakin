@@ -192,3 +192,28 @@ def test_no_inflow_no_dynamics(asm1):
     )
     # All particulate state must remain finite.
     assert jnp.all(jnp.isfinite(sol.state))
+
+
+def test_shared_asm1_constants_are_single_source(asm1):
+    """Clarifier/Takács settling sets and the metrics TSS set come from the one
+    shared constants module, so they cannot drift apart."""
+    from aquakin.plant._constants import (
+        ASM1_SETTLING_SPECIES,
+        ASM1_TSS_FACTOR,
+        ASM1_TSS_SPECIES,
+    )
+    from aquakin.plant import metrics
+    from aquakin.plant import takacs as takacs_mod
+    from aquakin.plant.clarifier import IdealClarifier
+
+    ideal = IdealClarifier(name="c", network=asm1, overflow_Q=1.0)
+    tak = TakacsClarifier(name="t", network=asm1, area=1.0, height=4.0,
+                          overflow_Q=1.0)
+    assert tuple(ideal.particulate_species) == ASM1_SETTLING_SPECIES
+    assert tuple(tak.particulate_species) == ASM1_SETTLING_SPECIES
+    # Takács TSS factors: the TSS species at the shared factor, XND at zero.
+    assert takacs_mod._DEFAULT_TSS_FACTORS == {
+        **{s: ASM1_TSS_FACTOR for s in ASM1_TSS_SPECIES}, "XND": 0.0}
+    # Metrics reuses the same TSS set / factor object.
+    assert metrics._TSS_SPECIES is ASM1_TSS_SPECIES
+    assert metrics._TSS_FACTOR == ASM1_TSS_FACTOR

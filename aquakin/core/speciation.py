@@ -26,7 +26,10 @@ import jax.numpy as jnp
 from aquakin.core.ph_solver import solve_ph
 
 # Total acid/base systems understood by the pH solver, in solver-argument terms.
-_TOTAL_KEYS = (
+# Single source of truth: the Pydantic schema (schema/network_spec.py) imports
+# this so the load-time validator and the runtime builder agree on the valid
+# total keys.
+VALID_TOTAL_KEYS = (
     "carbonate",
     "acetate",
     "propionate",
@@ -36,6 +39,7 @@ _TOTAL_KEYS = (
     "phosphate",
     "sulfide",
 )
+_TOTAL_KEYS = VALID_TOTAL_KEYS  # internal alias (kept for the existing references)
 
 
 def build_ph_derived_fn(
