@@ -14,6 +14,7 @@ from aquakin.core.nodes import (
     PowerNode,
     SpeciesNode,
     SubtractNode,
+    pHInhibitNode,
     pHSwitchNode,
 )
 from aquakin.utils.latex import to_latex
@@ -124,6 +125,18 @@ def test_power_parenthesises_divide_base():
     base = DivideNode(ParamNode("a"), ParamNode("b"))
     out = to_latex(PowerNode(base, ConstantNode(2)))
     assert out.startswith(r"\left(\frac") and out.endswith(r"\right)^{2}")
+
+
+def test_ph_inhibit_renders():
+    """pH_inhibit must render (it is inlined into ADM1 reaction ASTs); a missing
+    branch previously raised TypeError from network.to_latex()."""
+    node = pHInhibitNode(ConstantNode(4.0), ConstantNode(5.5))
+    out = to_latex(node)
+    # Stable sigmoid closed form: 1 / (1 + 10^{n(m - pH)}).
+    assert out == (
+        r"\frac{1}{1 + 10^{\frac{3}{5.5 - 4}"
+        r"\left(\frac{5.5 + 4}{2} - \mathrm{pH}\right)}}"
+    )
 
 
 def test_unknown_node_raises():

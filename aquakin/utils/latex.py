@@ -19,6 +19,7 @@ from aquakin.core.nodes import (
     PowerNode,
     SpeciesNode,
     SubtractNode,
+    pHInhibitNode,
     pHSwitchNode,
 )
 
@@ -85,6 +86,16 @@ def to_latex(node: ASTNode) -> str:
     if isinstance(node, pHSwitchNode):
         pKa = to_latex(node.pKa)
         return rf"\frac{{1}}{{1 + 10^{{\mathrm{{pH}} - {pKa}}}}}"
+    if isinstance(node, pHInhibitNode):
+        # Hill lower-pH inhibition in its stable sigmoid closed form:
+        #   I = 1 / (1 + 10^{n (m - pH)}),  n = 3/(ul - ll),  m = (ul + ll)/2
+        # -- 1 at high pH, 0 at low pH. Matches the implemented sigmoid exactly.
+        ll = to_latex(node.pH_LL)
+        ul = to_latex(node.pH_UL)
+        n = rf"\frac{{3}}{{{ul} - {ll}}}"
+        m = rf"\frac{{{ul} + {ll}}}{{2}}"
+        exponent = rf"{n}\left({m} - \mathrm{{pH}}\right)"
+        return rf"\frac{{1}}{{1 + 10^{{{exponent}}}}}"
     if isinstance(node, MonodNode):
         return rf"\frac{{{to_latex(node.X)}}}{{{to_latex(node.K)} + {to_latex(node.X)}}}"
     if isinstance(node, MonodInhibitionNode):
