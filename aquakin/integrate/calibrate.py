@@ -31,6 +31,7 @@ available two ways (``laplace_method``):
 
 from __future__ import annotations
 
+import warnings
 from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -171,6 +172,61 @@ def _build_residual(
     )
 
 
+# --- Laplace covariance -----------------------------------------------
+
+
+def _laplace_covariance(H, ridge: float, eig_keep: float):
+    """Eigen-truncated Laplace covariance from an unconstrained-space Hessian.
+
+    Symmetrise ``H``, add the ``ridge`` regulariser, eigen-decompose, and
+    **drop** the near-null directions (eigenvalue at or below
+    ``eig_keep * max(largest_eigenvalue, 1)``) -- the non-identifiable
+    parameter combinations the data do not constrain. The covariance is built
+    from the surviving directions only, so it describes the identifiable
+    subspace.
+
+    This is the single regulariser shared by ``calibrate``'s
+    ``posterior_cov`` / ``params_named_std`` and
+    :meth:`CalibrationResult.predictive_band`, so the reported marginal std
+    devs and the predictive draws can never disagree about which directions
+    are identified (the inconsistency the two used to have).
+
+    Parameters
+    ----------
+    H : array-like, shape (d, d)
+        The (Gauss-Newton or finite-difference) Hessian of the loss.
+    ridge : float
+        Tikhonov regulariser added to the diagonal before inversion.
+    eig_keep : float
+        Relative eigenvalue floor for the identifiable subspace.
+
+    Returns
+    -------
+    cov : np.ndarray, shape (d, d)
+        The eigen-truncated covariance ``sum_k (1/w_k) v_k v_k^T`` over the
+        kept directions (rank = number of kept directions).
+    kept_eigvals : np.ndarray, shape (m,)
+        The kept (ridged) eigenvalues ``w_k``.
+    kept_eigvecs : np.ndarray, shape (d, m)
+        The corresponding eigenvectors (columns).
+    """
+    H = np.asarray(H, dtype=float)
+    H = 0.5 * (H + H.T)
+    w, V = np.linalg.eigh(H + ridge * np.eye(H.shape[0]))
+    thr = eig_keep * max(float(w.max()), 1.0)
+    keep = w > thr
+    if not np.any(keep):
+        raise ValueError(
+            "Laplace Hessian has no identifiable directions above eig_keep: "
+            "the posterior is degenerate (more informative data or a smaller "
+            "eig_keep / ridge is needed)."
+        )
+    wk = w[keep]
+    Vk = V[:, keep]
+    cov = (Vk / wk) @ Vk.T
+    return cov, wk, Vk
+
+
 # --- Result dataclasses ------------------------------------------------
 
 
@@ -278,19 +334,21 @@ class CalibrationResult:
         n_draw: int = 200,
         percentiles: tuple[float, float] = (2.5, 97.5),
         seed: int = 0,
-        eig_keep: float = 1e-2,
+        eig_keep: Optional[float] = None,
         observed_species: Optional[list[str]] = None,
     ) -> PredictiveBand:
         """Posterior-predictive band by propagating Laplace draws through a solve.
 
         Samples the calibrated parameters from the Laplace posterior
-        ``N(MAP, H^{-1})`` (``H`` the Hessian stored on this result), inverse-
-        transforms each draw to physical space, sets it into the fitted parameter
-        vector, integrates ``reactor`` from ``C0`` over ``t_eval``, and returns
-        the pointwise percentile envelope across draws. Near-null Hessian
-        directions (non-identifiable parameter combinations) are dropped so the
-        draws stay finite: only eigenvectors with eigenvalue above
-        ``eig_keep * max_eigenvalue`` are sampled.
+        ``N(MAP, posterior_cov)``, inverse-transforms each draw to physical
+        space, sets it into the fitted parameter vector, integrates ``reactor``
+        from ``C0`` over ``t_eval``, and returns the pointwise percentile
+        envelope across draws. The draws are taken from ``self.posterior_cov``
+        --- the same eigen-truncated covariance behind ``params_named_std`` ---
+        so the band and the reported marginal std devs regularise identically.
+        The non-identifiable directions were already dropped (at calibrate time,
+        via ``laplace_eig_keep``), so they carry zero variance and the draws
+        stay finite.
 
         Requires that the calibration was run with ``laplace=True`` (so a Hessian
         is available). The supplied ``C0`` may differ from the calibration
@@ -311,8 +369,11 @@ class CalibrationResult:
             Lower / upper band percentiles (default the central 95%).
         seed : int
             Seed for the draws (reproducible).
-        eig_keep : float
-            Relative eigenvalue threshold for the identifiable subspace.
+        eig_keep : float, optional
+            Deprecated and ignored. The identifiable-subspace truncation is now
+            applied once, at calibrate time, via ``calibrate(laplace_eig_keep=
+            ...)``, so the band and ``params_named_std`` share one regulariser.
+            Passing a value here emits a ``DeprecationWarning``.
         observed_species : list[str], optional
             Restrict the returned band to these species. ``None`` returns all.
 
@@ -320,10 +381,18 @@ class CalibrationResult:
         -------
         PredictiveBand
         """
-        if self.hessian_unconstrained is None:
+        if self.posterior_cov is None:
             raise ValueError(
                 "predictive_band requires a Laplace posterior; call "
                 "calibrate(..., laplace=True)."
+            )
+        if eig_keep is not None:
+            warnings.warn(
+                "predictive_band(eig_keep=...) is deprecated and ignored; the "
+                "identifiable-subspace truncation is set once at calibrate time "
+                "via calibrate(laplace_eig_keep=...).",
+                DeprecationWarning,
+                stacklevel=2,
             )
         network = reactor.network
         names = self.parameter_names
@@ -333,25 +402,26 @@ class CalibrationResult:
             for n, t in zip(names, self.transforms)
         ])
 
-        # Identifiable-subspace draws: eigen-decompose the Hessian, keep
-        # high-curvature directions, sample with std = 1/sqrt(eigenvalue) along
-        # each. Use the *ridged* Hessian (recovered as inv(posterior_cov)) that
-        # ``posterior_cov`` and ``params_named_std`` are built from, so the band
-        # is drawn from exactly the reported posterior rather than the un-ridged
-        # raw Hessian (which differs along near-null directions).
-        H = np.linalg.inv(np.asarray(self.posterior_cov))
-        w, V = np.linalg.eigh(0.5 * (H + H.T))
-        keep = w > eig_keep * max(w.max(), 1.0)
-        if not np.any(keep):
+        # Draw from N(theta_map, posterior_cov). posterior_cov is the
+        # eigen-truncated covariance that also backs params_named_std, so the
+        # band and the marginal std devs regularise identically. Eigen-decompose
+        # to sample; the truncated (non-identifiable) directions carry zero
+        # variance and so add no spread (a tiny relative floor drops them and any
+        # round-off negatives).
+        cov = np.asarray(self.posterior_cov, dtype=float)
+        cov = 0.5 * (cov + cov.T)
+        s, Q = np.linalg.eigh(cov)
+        pos = s > 1e-12 * max(float(s.max()), 0.0)
+        if not np.any(pos):
             raise ValueError(
-                "No identifiable directions above eig_keep; posterior is "
-                "degenerate (try a smaller eig_keep or more informative data)."
+                "Posterior covariance has no positive-variance directions; the "
+                "Laplace posterior is degenerate."
             )
-        std_k = 1.0 / np.sqrt(w[keep])
+        std_k = np.sqrt(s[pos])
         rng = np.random.RandomState(seed)
         draws = theta_map[None, :] + (
-            rng.standard_normal((n_draw, int(keep.sum()))) * std_k[None, :]
-        ) @ V[:, keep].T
+            rng.standard_normal((n_draw, int(pos.sum()))) * std_k[None, :]
+        ) @ Q[:, pos].T
 
         base = self.params
         C0_j = jnp.asarray(C0)
@@ -409,6 +479,7 @@ def calibrate(
     laplace: bool = True,
     laplace_method: str = "fd",
     laplace_ridge: float = 1e-6,
+    laplace_eig_keep: float = 1e-2,
     laplace_fd_step: float = 1e-3,
     laplace_dtmax: Optional[float] = None,
     free_ic: Optional[list[str]] = None,
@@ -497,6 +568,15 @@ def calibrate(
         not (see module docstring).
     laplace_ridge : float
         Diagonal ridge added to the Hessian for positive-definiteness.
+    laplace_eig_keep : float
+        Relative eigenvalue floor for the identifiable subspace of the Laplace
+        posterior. Directions whose (ridged) Hessian eigenvalue is at or below
+        ``laplace_eig_keep * largest`` are dropped from ``posterior_cov`` --- and
+        therefore from both ``params_named_std`` and the draws in
+        :meth:`CalibrationResult.predictive_band`, so the two regularise
+        identically. A well-identified fit keeps every direction (the covariance
+        then equals ``inv(H + ridge)``); the truncation only matters when the
+        Hessian is near-degenerate.
     laplace_fd_step : float
         Relative finite-difference step for the Hessian rows (``"fd"`` only).
     laplace_dtmax : float, optional
@@ -855,6 +935,27 @@ def calibrate(
             )
         return data_term
 
+    def _residual_parts(rate_thetas, ic_thetas, rctr=None, *, include_ic_prior):
+        """The stacked residual vector whose 0.5*||.||^2 is the objective's
+        theta-dependent part. Shared by the Gauss-Newton fit (full theta,
+        ``include_ic_prior=True``) and the Gauss-Newton Laplace Hessian (rate
+        thetas only, pools fixed at the MAP, ``include_ic_prior=False`` -- the
+        ic-prior block has zero Jacobian w.r.t. the rates, so it is omitted from
+        the rate-only Fisher matrix). One source of truth keeps the two in sync.
+        """
+        physical = physical_from_theta(rate_thetas)
+        p = p0_full.at[free_indices].set(physical)
+        parts = []
+        for (_C0, _t, _ts, _loss_i, resid_fn_i), pred in zip(
+            datasets, _predict(p, ic_thetas, rctr)
+        ):
+            parts.append(resid_fn_i(pred))
+        if has_priors:
+            parts.append(prior_mask * (physical - prior_mean) / prior_std)
+        if include_ic_prior and m_ic and ic_prior_log_std:
+            parts.append((ic_thetas - ic_center_full) / ic_prior_log_std)
+        return jnp.concatenate(parts)
+
     obj_value_and_grad = jax.jit(jax.value_and_grad(objective))
 
     # --- Run SciPy L-BFGS-B in unconstrained space ---------------------
@@ -903,20 +1004,9 @@ def calibrate(
         # trust-region least-squares. The residual Jacobian is by forward-mode AD
         # if the reactor is forward-capable (DirectAdjoint), else reverse-mode.
         def _full_residual(theta):
-            rate_thetas = theta[:n_rate]
-            ic_thetas = theta[n_rate:]
-            physical = physical_from_theta(rate_thetas)
-            p = p0_full.at[free_indices].set(physical)
-            parts = []
-            for (_C0, _t, _ts, _loss_i, resid_fn_i), pred in zip(
-                datasets, _predict(p, ic_thetas)
-            ):
-                parts.append(resid_fn_i(pred))
-            if has_priors:
-                parts.append(prior_mask * (physical - prior_mean) / prior_std)
-            if m_ic and ic_prior_log_std:
-                parts.append((ic_thetas - ic_center_full) / ic_prior_log_std)
-            return jnp.concatenate(parts)
+            return _residual_parts(
+                theta[:n_rate], theta[n_rate:], include_ic_prior=True
+            )
 
         # The stable adjoint is a reverse-only custom_vjp, so its residual
         # Jacobian must be reverse-mode regardless of the reactor's adjoint.
@@ -1022,17 +1112,13 @@ def calibrate(
             # forward-over-reverse pass hits the adjoint's custom_vjp, and the
             # second-order solve is unreliable). For loss='nll' this is the
             # exact Fisher information; it is PSD by construction.
+            # Rate-only residual (pools fixed at the MAP, on the Laplace
+            # reactor); the same builder as the fit, with the ic-prior block
+            # omitted (it does not depend on the rates).
             def _residual_vec(rate_thetas):
-                physical = physical_from_theta(rate_thetas)
-                p = p0_full.at[free_indices].set(physical)
-                parts = []
-                for (_C0, _t, _ts, _loss_i, resid_fn_i), pred in zip(
-                    datasets, _predict(p, ic_opt, lap_reactor)
-                ):
-                    parts.append(resid_fn_i(pred))
-                if has_priors:
-                    parts.append(prior_mask * (physical - prior_mean) / prior_std)
-                return jnp.concatenate(parts)
+                return _residual_parts(
+                    rate_thetas, ic_opt, lap_reactor, include_ic_prior=False
+                )
 
             _use_fwd_lap = gradient != "stable_adjoint" and isinstance(
                 getattr(lap_reactor, "adjoint", None), diffrax.DirectAdjoint)
@@ -1070,8 +1156,12 @@ def calibrate(
             )
         H = 0.5 * (H + H.T)  # symmetrise away asymmetry / FD noise
 
-        H_ridge = H + laplace_ridge * jnp.eye(d)
-        posterior_cov = jnp.linalg.inv(H_ridge)
+        # Eigen-truncated covariance: the SAME regulariser
+        # ``predictive_band`` samples from, so the marginal std devs and the
+        # predictive draws regularise identically (well-identified Hessians keep
+        # every direction, so this equals inv(H + ridge)).
+        cov_np, _, _ = _laplace_covariance(np.asarray(H), laplace_ridge, laplace_eig_keep)
+        posterior_cov = jnp.asarray(cov_np)
         posterior_std_unconstrained = jnp.sqrt(jnp.diag(posterior_cov))
         hessian_unconstrained = H
 

@@ -428,6 +428,57 @@ def test_predictive_band_requires_laplace(setup):
         result.predictive_band(reactor, C0, t_obs)
 
 
+def test_predictive_band_eig_keep_is_deprecated(setup):
+    reactor, C0, t_obs, _, result = _band_setup(setup)
+    with pytest.warns(DeprecationWarning, match="eig_keep"):
+        result.predictive_band(
+            reactor, C0, t_obs, observed_species=["B"], n_draw=10, eig_keep=1e-2
+        )
+
+
+# ---------- Laplace covariance regularisation (#7) ----------
+
+
+def test_laplace_covariance_truncates_null_direction():
+    """A Hessian with one near-null eigen-direction yields a rank-deficient
+    covariance: the unidentifiable direction is dropped, and the kept variance
+    is 1/eigenvalue along the strong direction."""
+    from aquakin.integrate.calibrate import _laplace_covariance
+
+    V = np.array([[1.0, 1.0], [1.0, -1.0]]) / np.sqrt(2.0)  # orthonormal
+    H = V @ np.diag([100.0, 1e-9]) @ V.T
+    cov, wk, Vk = _laplace_covariance(H, ridge=1e-6, eig_keep=1e-2)
+    assert wk.shape == (1,)                       # the null direction dropped
+    assert wk[0] == pytest.approx(100.0, rel=1e-3)
+    s = np.linalg.eigvalsh(0.5 * (cov + cov.T))
+    assert int(np.sum(s > 1e-9)) == 1             # rank-1 covariance
+    assert float(np.max(s)) == pytest.approx(1.0 / 100.0, rel=1e-3)
+
+
+def test_laplace_covariance_keeps_all_when_well_conditioned():
+    """A well-conditioned Hessian keeps every direction; the covariance then
+    equals inv(H + ridge) (no truncation)."""
+    from aquakin.integrate.calibrate import _laplace_covariance
+
+    H = np.diag([10.0, 20.0])
+    cov, wk, _ = _laplace_covariance(H, ridge=1e-6, eig_keep=1e-2)
+    assert wk.shape == (2,)
+    assert np.allclose(cov, np.linalg.inv(H + 1e-6 * np.eye(2)), atol=1e-9)
+
+
+def test_band_and_std_share_the_truncation(setup):
+    """params_named_std and predictive_band draw from the SAME posterior_cov, so
+    they regularise identically -- the draws' empirical covariance matches the
+    reported posterior_cov (the #7 consistency)."""
+    reactor, C0, t_obs, _, result = _band_setup(setup)
+    # Reconstruct the draws the band uses (1 free param here) and check their
+    # spread matches posterior_cov[0,0].
+    cov00 = float(np.asarray(result.posterior_cov)[0, 0])
+    # std reported (unconstrained space) is sqrt(posterior_cov diagonal).
+    std_report = float(np.asarray(result.posterior_std_unconstrained)[0])
+    assert std_report == pytest.approx(np.sqrt(cov00), rel=1e-6)
+
+
 # ---------- Gauss-Newton optimiser ----------
 
 

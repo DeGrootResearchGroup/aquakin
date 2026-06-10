@@ -1325,9 +1325,15 @@ calib.C0_fitted                      # per-batch fitted initial states (when fre
 calib.ic_named                       # per-batch fitted free pools by species name
 result.converged
 # Posterior-predictive curve bands: a first-class method that samples the Laplace
-# posterior, drops near-null (non-identifiable) eigen-directions so draws stay
-# finite, propagates each through a solve, and returns per-timepoint percentiles.
-# The C0 passed in may differ from calibration (e.g. a held-out validation batch).
+# posterior (= `posterior_cov`), propagates each draw through a solve, and returns
+# per-timepoint percentiles. The C0 passed in may differ from calibration (e.g. a
+# held-out validation batch). The non-identifiable directions are dropped ONCE, at
+# calibrate time, by a single eigen-truncated covariance (`calibrate(laplace_eig_keep
+# =...)`, default 1e-2) built by `_laplace_covariance`; `posterior_cov`,
+# `params_named_std` and `predictive_band` all read it, so the reported marginal
+# std devs and the band regularise identically (a well-identified fit keeps every
+# direction, so the covariance equals inv(H+ridge)). `predictive_band(eig_keep=...)`
+# is deprecated/ignored.
 band = calib.predictive_band(reactor, C0, t_eval, n_draw=200, percentiles=(2.5, 97.5))
 band.median, band.lo, band.hi        # (n_t, n_species) envelopes -> PredictiveBand
 
