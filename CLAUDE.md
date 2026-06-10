@@ -656,6 +656,69 @@ optimisation. `calibrate` does not yet expose a
 `jacobian="forward_sensitivity"` hook, so the `dtmax` cap is still required for
 the reverse-mode `calibrate` gradient until that lands.
 
+**Cap-free *reverse* mode — hand-written discrete adjoint.** The forward
+sensitivity above scales with the parameter count, so for a scalar-loss gradient
+of many parameters (the calibration case) reverse mode is still wanted — and
+that is the mode the `dtmax` cap exists for. `aquakin.implicit_euler_adjoint_solve`
+([`integrate/discrete_adjoint.py`](aquakin/integrate/discrete_adjoint.py))
+removes the cap there too, by **not differentiating through the solve at all**:
+the forward pass is an ordinary robust adaptive diffrax `ImplicitEuler` solve,
+and the reverse pass is the **discrete adjoint written out by hand** as a
+per-step backward scan over the saved trajectory — each step a single
+*transposed* solve through the same well-conditioned `I − dt·J` (a contraction,
+so the cotangent stays bounded and nothing overflows). This is the classical
+implicit-RK discrete adjoint (Sandu 2006; FATODE, Zhang & Sandu 2014); it is the
+*exact* gradient of the discrete solve and is **verified two ways**: against the
+closed-form gradient of first-order decay, and against the (correct but capped)
+`RecursiveCheckpointAdjoint` gradient of the same implicit-Euler solve
+(`rel ≈ 5e-8`, uncapped — see `tests/integration/test_discrete_adjoint.py`).
+**Why earlier attempts failed and this works:** the overflow is in reverse-mode
+AD forming cotangents of the large stored stage vector-field values `f_i ∼ ‖J‖·y`
+(confirmed by reading the diffrax/optimistix source — the per-step Newton solve
+is *already* IFT-differentiated by optimistix; the overflow is in the explicit
+stage-combination arithmetic on the tape). Writing the per-step adjoint as the
+analytic transposed solve never forms those large cotangents. Empirically
+checked dead-ends, for the record: a stiffness-aware `dt·‖J‖` step controller
+(finite but no faster than the cap), and k-space stage storage (shifts the
+threshold out but does not remove the overflow). **Trajectory loss** is
+supported: passing `t_eval` returns the states at those times and the backward
+scan injects each observation's cotangent at its step; to keep that exact
+without differentiating through dense interpolation, the forward is forced to
+land steps exactly on `t_eval` (`diffrax.ClipStepSizeController(step_ts=t_eval)`),
+so every observation is a step boundary (verified vs a closed-form
+multi-observation gradient and vs the capped reference using the same
+forced-step forward, `rel ≈ 6e-8`). **Wired into `calibrate`** via `calibrate(..., gradient="stable_adjoint")`. Both
+gradient backends compute a discrete adjoint and both use JAX autodiff for the
+**model** derivatives (`∂f/∂y` via `jacfwd`, `∂f/∂θ` via `vjp`); they differ only
+in how the *integrator's* adjoint is formed — `gradient="jax_adjoint"` (default)
+lets JAX/diffrax differentiate the whole solve (`RecursiveCheckpointAdjoint`,
+needs the cap for stiff), while `gradient="stable_adjoint"` replaces only the
+integrator's adjoint with the explicit per-step transposed solve (cap-free). The
+stable backend forces a reverse-mode residual Jacobian under
+`optimizer="gauss_newton"` (it is a reverse-only `custom_vjp`), and
+`stable_adjoint_max_steps` bounds the saved-trajectory buffer the backward scan
+walks (set it to a tight upper bound on the step count). Verified end-to-end: a
+synthetic Khalil calibration reaches the **same optimum** as the capped-Kvaerno5
+`gradient="jax_adjoint"` path — see `test_calibrate_stable_adjoint_matches_jax_adjoint`.
+
+**Two solvers, low- and high-order.** `implicit_euler_adjoint_solve` (first
+order) is the simple, robust baseline. `esdirk_adjoint_solve` is the high-order
+version: a general s-stage ESDIRK forward (default **`Kvaerno5`, the same method
+the reactors use**) whose discrete adjoint recomputes the stage values in the
+backward pass (diffrax saves only step states) and applies the transposed-stage
+recurrence `(I − dt·γ·Jᵢᵀ)⁻¹` per stage — the FATODE/Sandu construction (verified
+to reduce to the implicit-Euler case for s=1). **`calibrate(gradient=
+"stable_adjoint")` now uses the Kvaerno5 ESDIRK adjoint**, so its forward matches
+the reactor exactly and its gradients agree with the capped `jax_adjoint` path to
+the optimiser tolerance (analytic decay `rel ≈ 1e-6`; stiff network
+finite-uncapped, matching capped Kvaerno5 to `rel ≈ 2.5e-5`, the residual being
+the capped-vs-uncapped *forward* difference, FD-confirmed). **Cost note:** the
+backward scan's cost scales with `stable_adjoint_max_steps` (the padded
+trajectory length), and the ESDIRK backward recomputes the 7 stages per step
+(Newton + transposed solves), so keep `max_steps` tight; Kvaerno5's high order
+keeps the step count low. The autonomous reaction RHS is assumed (the ESDIRK
+stage times `c` do not enter).
+
 ### Operator Splitting
 
 Transport and reaction are decoupled at all scales:
@@ -874,6 +937,10 @@ aquakin/
 │   │   ├── _simultaneous_corrector.py # CVODES simultaneous-corrector lineax
 │   │   │                            #   solver (shared_factor=True, Option A):
 │   │   │                            #   factorise the shared diagonal block once
+│   │   ├── discrete_adjoint.py      # implicit_euler_adjoint_solve /
+│   │   │                            #   esdirk_adjoint_solve (Kvaerno5): cap-free
+│   │   │                            #   REVERSE-mode gradient via a hand-written
+│   │   │                            #   discrete adjoint (no autodiff through the solve)
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands
@@ -1004,7 +1071,9 @@ aquakin/
 ├── examples/
 │   ├── batch_bromate.py
 │   ├── lagrangian_demo.py
-│   └── sensitivity_demo.py
+│   ├── sensitivity_demo.py
+│   ├── bsm1_dry_weather.py
+│   └── adjoint_speed_benchmark.py  # stable_adjoint vs capped jax_adjoint timing
 │   # NOTE: the wats_sewer_extended batch-fitting / calibration / sensitivity scripts and
 │   # their measurement data live in the separate paper-reproduction repository,
 │   # not here (this repo ships only the reusable library + networks).

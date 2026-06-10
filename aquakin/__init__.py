@@ -18,6 +18,10 @@ from aquakin.integrate.particle import (
     TrackSolution,
     integrate_ensemble,
 )
+from aquakin.integrate.discrete_adjoint import (
+    esdirk_adjoint_solve,
+    implicit_euler_adjoint_solve,
+)
 from aquakin.integrate.forward_sensitivity import (
     ForwardSensitivityResult,
     forward_sensitivity,
@@ -79,8 +83,10 @@ __all__ = [
     "profile_likelihood",
     "compile_network",
     "dgsm",
+    "esdirk_adjoint_solve",
     "fit",
     "forward_sensitivity",
+    "implicit_euler_adjoint_solve",
     "integrate_ensemble",
     "load_network",
     "load_network_from_file",
