@@ -81,6 +81,7 @@ class PlugFlowReactor:
         rtol: float = 1e-6,
         atol=1e-9,
         dtmax: Optional[float] = None,
+        max_steps: int = 100_000,
     ) -> None:
         conditions.validate_required(network.conditions_required)
         if n_points < 2:
@@ -97,6 +98,7 @@ class PlugFlowReactor:
         self.rtol = rtol
         self.atol = _coerce_atol(atol, network.n_species)
         self.dtmax = dtmax
+        self.max_steps = int(max_steps)
 
         n_loc = max(conditions.n_locations, 1)
         if n_loc == 1:
@@ -262,7 +264,10 @@ class PlugFlowReactor:
             jitted = build_jitted_sensitivity_solve(
                 make_f_flat, free_idx, t0=0.0, t1=self.length, has_t_eval=True,
                 rtol=self.rtol, atol_y=atol_y, sens_rtol=sens_rtol,
-                dtmax=self.dtmax, max_steps=100_000, shared_factor=shared_factor,
+                # The augmented [y; S] solve resolves the sensitivity transient
+                # and is step-hungrier than the primal; use the same 1e6 budget
+                # as BatchReactor (was 1e5, an inconsistency).
+                dtmax=self.dtmax, max_steps=1_000_000, shared_factor=shared_factor,
             )
             self._sens_jit_cache[cache_key] = jitted
 
@@ -279,6 +284,7 @@ class PlugFlowReactor:
         rtol = self.rtol
         atol = self.atol
         dtmax = self.dtmax
+        max_steps = self.max_steps
         x_eval = jnp.linspace(0.0, length, self.n_points)
 
         @jax.jit
@@ -304,6 +310,7 @@ class PlugFlowReactor:
                 rtol=rtol,
                 atol=atol,
                 dtmax=dtmax,
+                max_steps=max_steps,
             )
             return sol.ts, sol.ys
 
