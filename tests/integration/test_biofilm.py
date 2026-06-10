@@ -131,6 +131,25 @@ def test_default_fixed_mask_warns_on_reactive_particulate(net, cond):
                  fixed_mask=jnp.array([False, False]))  # explicit -> no warning
 
 
+def test_solve_validates_t_eval(net, cond):
+    # Diffrax silently returns NaN for save times outside the span; the solve
+    # must reject them up front (same guarantee as BatchReactor) rather than
+    # produce a silently-corrupt BiofilmSolution.
+    r = _reactor(net, cond)
+    C0 = jnp.array([1.0, 0.0])
+    p = net.default_parameters()
+    with pytest.raises(ValueError, match="within t_span"):
+        r.solve(C0, p, t_span=(0.0, 1.0), t_eval=jnp.array([0.0, 2.0]))
+    with pytest.raises(ValueError, match="ascending"):
+        r.solve(C0, p, t_span=(0.0, 1.0), t_eval=jnp.array([0.5, 0.2]))
+    # solve_sensitivity guards too.
+    with pytest.raises(ValueError, match="within t_span"):
+        r.solve_sensitivity(
+            C0, p, t_span=(0.0, 1.0), t_eval=jnp.array([0.0, 5.0]),
+            sens_params=[0],
+        )
+
+
 def test_max_steps_is_enforced(net, cond):
     # ``max_steps`` is a construction-time attribute threaded into BOTH solve
     # paths (with and without t_eval). A budget far too small for the adaptive
