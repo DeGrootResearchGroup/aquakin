@@ -108,7 +108,12 @@ class IdealClarifier:
     ) -> dict[str, Stream]:
         s_in = inputs[self.input_port]
         Q_in = s_in.Q
-        Q_over = jnp.asarray(self.overflow_Q)
+        # Guard: overflow can never exceed the inflow, else underflow goes
+        # negative and the mass/Q_under concentrations blow up. This is a real
+        # hazard during the recycle-flow startup transient (closes issue #17);
+        # mass-conserving (the two outflows sum to Q_in) and inactive at steady
+        # state (feed > overflow).
+        Q_over = jnp.minimum(jnp.asarray(self.overflow_Q), Q_in)
         Q_under = Q_in - Q_over
         cap = jnp.asarray(self.capture_efficiency)
 
@@ -138,6 +143,16 @@ class IdealClarifier:
             self.overflow_port: Stream(Q=Q_over, C=C_over, network=self.network),
             self.underflow_port: Stream(Q=Q_under, C=C_under, network=self.network),
         }
+
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+        """Linear flow rule for the recycle-flow solve: overflow is the design
+        constant, underflow is the remainder. The ``min`` guard in
+        ``compute_outputs`` is a concentration-stage safeguard; the flow network
+        is solved with the constant overflow so it stays linear (the steady-state
+        feed exceeds the overflow, where the guard is inactive)."""
+        Q_in = input_flows[self.input_port]
+        Q_over = jnp.asarray(self.overflow_Q)
+        return {self.overflow_port: Q_over, self.underflow_port: Q_in - Q_over}
 
     def rhs(
         self,

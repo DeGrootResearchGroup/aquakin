@@ -174,6 +174,10 @@ def build_bsm1(
                 area=BSM1_CLARIFIER_AREA,
                 height=BSM1_CLARIFIER_HEIGHT,
                 overflow_Q=Q_avg - BSM1_WASTAGE_FLOW,
+                # Settled-blanket initialization: the design underflow flow sets
+                # the thickening ratio so the clarifier starts settled rather
+                # than uniform, avoiding the violent startup transient.
+                init_underflow_Q=BSM1_EXTERNAL_RECYCLE_RATIO * Q_avg + BSM1_WASTAGE_FLOW,
             )
         )
     else:

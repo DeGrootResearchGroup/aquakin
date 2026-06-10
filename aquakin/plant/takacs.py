@@ -103,6 +103,15 @@ class TakacsClarifier:
     overflow_Q: float
     n_layers: int = 10
     feed_layer: int = 5
+    # Initial-condition operating point for a settled-blanket start (state-point
+    # analysis). When ``init_underflow_Q`` is given, ``initial_state`` seeds a
+    # settled profile -- clarification layers near the non-settleable floor, a
+    # thickened bottom blanket -- instead of a uniform fill, which avoids the
+    # violent startup transient (the blanket forming from scratch through the
+    # flux kinks). ``init_feed_tss`` is the expected feed TSS (MLSS); if None it
+    # is taken from the network's default particulate concentrations.
+    init_underflow_Q: "float | None" = None
+    init_feed_tss: "float | None" = None
     particulate_species: list[str] = field(default_factory=lambda: [
         "XS", "XI", "XB_H", "XB_A", "XP", "XND"
     ])
@@ -163,12 +172,46 @@ class TakacsClarifier:
         return [self.overflow_port, self.underflow_port]
 
     def initial_state(self) -> jnp.ndarray:
-        # Seed every layer at the inlet's default particulate concentration
-        # (so the integrator starts in a sensible regime).
         defaults = self.network.default_concentrations()
         part_defaults = jnp.asarray([float(defaults[i]) for i in self._part_indices])
-        # Tile to (n_layers, n_part) then flatten.
-        return jnp.tile(part_defaults, self.n_layers)
+
+        if self.init_underflow_Q is None:
+            # Backward-compatible uniform seed: every layer at the inlet's
+            # default particulate concentration.
+            return jnp.tile(part_defaults, self.n_layers)
+
+        # --- State-point-analysis settled blanket ----------------------
+        # Feed TSS (MLSS) the blanket is built for. The clarifier feed at
+        # startup is the reactors' initial mixed-liquor, so default to the TSS
+        # implied by the network's particulate defaults.
+        factors = jnp.asarray(self._part_tss_factors)
+        X_f = (
+            float(self.init_feed_tss)
+            if self.init_feed_tss is not None
+            else float(jnp.sum(part_defaults * factors))
+        )
+        # Thickening ratio Q_feed / Q_underflow. For a well-functioning
+        # clarifier (clean effluent) a solids balance puts the underflow at
+        # X_u = X_f * Q_feed / Q_underflow; here Q_feed = Q_overflow + Q_under.
+        Q_u = float(self.init_underflow_Q)
+        ratio = (self.overflow_Q + Q_u) / Q_u
+        X_u = X_f * ratio
+        # Clarification (above-feed) layers sit at the non-settleable floor.
+        X_clar = max(self._fns * X_f, 1.0)
+
+        # Per-layer TSS, layer 0 = bottom (underflow) ... n-1 = top (effluent).
+        # Below feed and the feed layer carry the mixed-liquor TSS; the very
+        # bottom layer carries the thickened blanket; clarification layers are
+        # clear. (Matches the reference settled profile's flat-then-spike shape.)
+        layer_idx = jnp.arange(self.n_layers)
+        tss = jnp.where(layer_idx > self.feed_layer, X_clar, X_f)
+        tss = tss.at[0].set(X_u)
+
+        # Apportion each layer's TSS across particulate species by the feed
+        # composition: C_k = d_k * (TSS_layer / X_f), so sum_k C_k * f_k = TSS.
+        scale = tss / X_f                                   # (n_layers,)
+        state = scale[:, None] * part_defaults[None, :]     # (n_layers, n_part)
+        return state.reshape(-1)
 
     def _layered(self, state: jnp.ndarray) -> jnp.ndarray:
         """Reshape the flat state into ``(n_layers, n_part)``."""
@@ -202,7 +245,11 @@ class TakacsClarifier:
         layered = self._layered(state)  # (n_layers, n_part)
         # Overflow = top layer (index n_layers - 1). Underflow = bottom (0).
         # Soluble species pass through (same concentration in both outlets).
-        overflow_Q = jnp.asarray(self.overflow_Q)
+        # Overflow cannot exceed the feed (during the recycle-flow startup the
+        # feed is transiently below the design overflow); clamping keeps the
+        # underflow non-negative, so the RAS never carries a negative flow that
+        # would make the downstream mixer produce negative concentrations.
+        overflow_Q = jnp.minimum(self.overflow_Q, s_in.Q)
         underflow_Q = s_in.Q - overflow_Q
 
         # Build the per-species C vectors for the two outputs.
@@ -223,6 +270,14 @@ class TakacsClarifier:
             self.underflow_port: Stream(Q=underflow_Q, C=C_underflow, network=self.network),
         }
 
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+        """Linear flow rule for the recycle-flow solve (constant overflow, the
+        remainder to underflow); the ``min`` guard in compute_outputs is the
+        concentration-stage safeguard, inactive at the steady-state feed."""
+        Q_in = input_flows[self.input_port]
+        Q_over = jnp.asarray(self.overflow_Q)
+        return {self.overflow_port: Q_over, self.underflow_port: Q_in - Q_over}
+
     def rhs(
         self,
         t: jnp.ndarray,
@@ -232,7 +287,11 @@ class TakacsClarifier:
     ) -> jnp.ndarray:
         s_in = inputs[self.input_port]
         Q_in = s_in.Q
-        overflow_Q = jnp.asarray(self.overflow_Q)
+        # Clamp overflow to the feed so underflow stays non-negative (see
+        # compute_outputs): the recycle-flow startup transiently drives the feed
+        # below the design overflow, and a negative underflow flow would make the
+        # RAS recycle a negative-flow stream and destabilise the solve.
+        overflow_Q = jnp.minimum(self.overflow_Q, Q_in)
         underflow_Q = Q_in - overflow_Q
 
         layered = self._layered(state)  # (n_layers, n_part)

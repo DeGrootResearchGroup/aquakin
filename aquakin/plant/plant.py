@@ -345,14 +345,28 @@ class Plant:
         streams: dict[tuple[Optional[str], str], Stream] = {}
         for port_name, series in self.influents.items():
             streams[(None, port_name)] = series.at(t)
+        # Resolve the recycle FLOW network first (exact, decoupled from
+        # concentration). The flows are linear and concentration-independent,
+        # but the loop gain is high (BSM1's 3x internal + 1x RAS recycle), so a
+        # few Gauss-Seidel passes do not converge it -- under-resolved flows give
+        # a negative/under-sized underflow and the plant washes out. Seeding the
+        # recycle edges with the exactly-resolved flows makes the concentration
+        # sweep below correct from its first pass.
+        resolved_flows = self._resolve_flows(t, params_full)
         # Pre-seed recycle edges so the downstream unit can read them on
-        # the first iteration before the source unit has been visited.
+        # the first iteration before the source unit has been visited; carry the
+        # resolved flow (concentration is corrected within a few passes, as the
+        # recycle concentrations are read directly from the source unit states).
         seeded: dict[tuple[str, str], Stream] = {}
         for conn in self.connections:
             if conn.from_unit is None:
                 continue
             if conn.initial_value is not None:
-                seeded[(conn.from_unit, conn.from_port)] = conn.initial_value
+                iv = conn.initial_value
+                q = resolved_flows[(conn.from_unit, conn.from_port)]
+                seeded[(conn.from_unit, conn.from_port)] = Stream(
+                    Q=q, C=iv.C, network=iv.network
+                )
 
         # Step 3: traverse units in evaluation order, computing outputs.
         # Recycle edges (downstream → upstream) create cyclic data
@@ -385,6 +399,62 @@ class Plant:
             dstate = unit.rhs(t, states[name], inputs, params_unit)
             dstates.append(dstate)
         return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
+
+    def _resolve_flows(
+        self, t: jnp.ndarray, params_full: jnp.ndarray
+    ) -> dict[tuple[Optional[str], str], jnp.ndarray]:
+        """Solve the recycle FLOW network exactly (decoupled from concentration).
+
+        Every unit exposes a linear ``flow_outputs`` rule (output port flows from
+        input port flows). One topological pass over those rules, with the
+        recycle back-edges held at trial values, is an affine map
+        ``x -> A x + b`` on the back-edge flows. We recover ``A`` and ``b`` by
+        probing (one pass at zero, one per back-edge) and solve
+        ``(I - A) x = b`` for the consistent recycle flows -- exact and
+        gain-independent, in ``n_recycle + 1`` cheap scalar passes. Returns the
+        resolved flow for every stream key.
+        """
+        base: dict[tuple[Optional[str], str], jnp.ndarray] = {}
+        for port_name, series in self.influents.items():
+            base[(None, port_name)] = series.at(t).Q
+        recycle_keys = [
+            (c.from_unit, c.from_port)
+            for c in self.connections
+            if c.from_unit is not None and c.initial_value is not None
+        ]
+        n = len(recycle_keys)
+
+        def one_pass(recycle_Qs):
+            flows = dict(base)
+            for k, q in zip(recycle_keys, recycle_Qs):
+                flows[k] = q
+            for name in self._unit_order:
+                in_flows: dict[str, jnp.ndarray] = {}
+                for conn in self.connections:
+                    if conn.to_unit != name:
+                        continue
+                    src = (None, conn.from_port) if conn.from_unit is None \
+                        else (conn.from_unit, conn.from_port)
+                    in_flows[conn.to_port] = flows[src]
+                out = self.units[name].flow_outputs(
+                    in_flows, self._params_for_unit(name, params_full)
+                )
+                for port, q in out.items():
+                    flows[(name, port)] = q
+            recycled = (
+                jnp.stack([flows[k] for k in recycle_keys])
+                if n else jnp.zeros((0,))
+            )
+            return recycled, flows
+
+        if n == 0:
+            return one_pass(jnp.zeros((0,)))[1]
+        b, _ = one_pass(jnp.zeros((n,)))
+        eye = jnp.eye(n)
+        cols = [one_pass(eye[i])[0] - b for i in range(n)]
+        A = jnp.stack(cols, axis=1)
+        x = jnp.linalg.solve(eye - A, b)
+        return one_pass(x)[1]
 
     def _collect_inputs(
         self,
@@ -427,6 +497,7 @@ class Plant:
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
         dtmax: Optional[float] = None,
         max_steps: int = 100_000,
+        y0: Optional[jnp.ndarray] = None,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
 
@@ -471,7 +542,17 @@ class Plant:
                 )
         atol_eff = _coerce_atol(atol, self._total_state_size)
 
-        y0 = self.initial_state()
+        # Initial state: the per-unit defaults, or a caller-supplied warm start
+        # (e.g. a previously-computed steady state -- the standard way to start a
+        # dynamic-influent run, avoiding the stiff clean-start transient).
+        if y0 is None:
+            y0 = self.initial_state()
+        else:
+            y0 = jnp.asarray(y0)
+            if y0.shape != (self._total_state_size,):
+                raise ValueError(
+                    f"y0 has shape {y0.shape}, expected ({self._total_state_size},)"
+                )
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")

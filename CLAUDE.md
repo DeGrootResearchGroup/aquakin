@@ -1504,16 +1504,34 @@ limited by the layer below only when that layer exceeds `X_threshold`) and
 the per-species flux apportioning (each species settles at the bulk
 velocity, `flux_tss · X_k/TSS`, conserving total settleable solids) produce
 a monotone sludge blanket, a strongly clarified effluent, a thickened
-underflow, and tight solids mass balance. `build_bsm1(use_takacs=True)`
-selects it in the full plant (both clarifiers expose the same ports), and
-`Plant.solve` takes `max_steps`. **Known limitation:** the *coupled* BSM1
-plant transient is severely stiff — the non-smooth Takács flux (the `min` /
-`where` / `clip` kinks) plus the strong recycle feedback drive the adaptive
-stepper into tiny steps, so the full plant does not yet integrate
-efficiently to steady state (the default uses `IdealClarifier`). Making the
-full plant tractable needs further numerical hardening (smoothing the flux
-kinks and/or warm-starting from a steady-state initialization), tracked
-separately.
+underflow, and tight solids mass balance (verified to machine precision
+against an independent port of the reference BSM1 settler derivative in
+`tests/validation/test_takacs_vs_bsm1_reference.py`). `build_bsm1(use_takacs=
+True)` selects it in the full plant (both clarifiers expose the same ports),
+and `Plant.solve` takes `max_steps`.
+
+**Coupled BSM1 — steady state now works.** The *coupled* BSM1 plant reaches the
+correct steady state for **both** clarifiers (Takács and Ideal agree: tank-5
+XB_H ≈ 1.7e3, SNH ≈ 0.5, healthy nitrification) in ~10 s. Getting there took
+three fixes, all diagnosed against the official BSM1 reference code:
+- **Decoupled recycle-flow resolution** (`Plant._resolve_flows`): the recycle
+  *flow* network is linear and concentration-independent, but BSM1's loop gain
+  is ≈0.99 (3× internal + 1× RAS), so the old 3-pass Gauss–Seidel left the
+  flows at ~40% of steady → starved underflow → washout. Each unit now exposes a
+  `flow_outputs` rule; `Plant` solves the small flow fixed point **exactly**
+  (probe the affine map, one `lineax`/`jnp.linalg.solve`), then runs the
+  concentration sweep on the fixed flows. This was the keystone.
+- **Non-negative flow split** (`overflow_Q = min(overflow_Q, Q_in)` in both
+  clarifiers): guards against a negative underflow when the feed dips below the
+  design overflow — closes issue #17; inactive at steady state.
+- **`clip_negative_states`** on ASM1 (the reference `xtemp = max(x,0)` clamp).
+
+`Plant.solve` takes an optional `y0=` for warm-starting (e.g. a dynamic run
+from a precomputed steady state). **Remaining limitation (issue #30):** the
+*dynamic* (time-varying-influent) transient is still stiff — the rapid diurnal
+forcing through the now-full-strength recycle drives tiny steps — so a long
+dry/rain/storm run does not yet integrate efficiently (the dynamic smoke test
+is skipped pending that hardening). The steady-state path is solid.
 
 The first plant-wide demonstration target is **BSM1** (Copp 2002 / Alex
 2008) — built by `aquakin.plant.bsm.build_bsm1()`. Three synthesised

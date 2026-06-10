@@ -132,6 +132,13 @@ class CSTRUnit:
             self.output_port: Stream(Q=Q_total, C=state, network=self.network)
         }
 
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+        """Outflow equals total inflow (constant-volume reactor)."""
+        Q_total = jnp.zeros(())
+        for name in self.input_port_names:
+            Q_total = Q_total + input_flows[name]
+        return {self.output_port: Q_total}
+
     def rhs(
         self,
         t: jnp.ndarray,
