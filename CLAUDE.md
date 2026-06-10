@@ -861,6 +861,21 @@ reactions:
   `CompiledNetwork.dCdt` to the reaction term only (reactors add transport
   afterwards), so every reactor benefits. Opt-in; off when the block is
   absent. Stored as `CompiledNetwork.positivity_threshold`.
+- Optional `clip_negative_states: true` (default `false`) clamps the
+  concentration vector to `>= 0` *when evaluating the reaction rates* (and any
+  state-derived condition such as pH), leaving the raw state for the reactor's
+  transport term and the unit outputs. This protects nonlinear kinetics (Monod /
+  ratio terms) from a transiently-negative state — where they produce
+  large/garbage rates and a stiff blow-up — and is exactly the reference
+  IWA/BSM S-function convention (`xtemp = max(x, 0)` before the process rates).
+  It is **distinct** from `positivity_limiter`: the limiter throttles the *net
+  reaction* near zero (output side), while this clamps the rate *inputs* — so it
+  prevents the Monod-at-negative-`C` blow-up that the limiter does not. Identity
+  at feasible states (does not change the physical solution); leaving transport
+  on the raw state keeps the linear washout self-correcting and the inter-unit
+  mass balance exact. Enabled on `asm1` (needed once the BSM1 settler recycles
+  concentrated solids into a small reactor). Stored as
+  `CompiledNetwork.clip_negative_states`.
 - YAML is loaded with `yaml.safe_load()` throughout. Species names that
   could be misread as non-string types (e.g. `NO`) must be quoted in YAML.
 
@@ -1099,7 +1114,8 @@ aquakin/
 │   │   └── test_pfr_simple.py
 │   ├── validation/
 │   │   ├── test_bromate_vongunten.py# validates against published data
-│   │   └── test_adm1_bsm2_steadystate.py # ADM1 vs published BSM2 AD steady state
+│   │   ├── test_adm1_bsm2_steadystate.py # ADM1 vs published BSM2 AD steady state
+│   │   └── test_takacs_vs_bsm1_reference.py # Takács settler vs published BSM1 settler derivative
 │   └── fixtures/
 │       └── simple_network.yaml      # minimal 2-species toy network for unit tests
 │

@@ -46,6 +46,16 @@ conditions:
     description: "Temperature (K). Provided for completeness; default ASM1 rate constants are at 20 deg C."
     default: 293.15
 
+# Clamp concentrations to >= 0 when evaluating the Monod / hydrolysis-ratio
+# rate terms, matching the reference IWA/BSM ASM1 S-function (xtemp = max(x, 0)
+# before the process rates). A coupled plant (e.g. BSM1 with the settler
+# recycling concentrated solids into a small reactor) can transiently overshoot
+# a particulate state below zero; without this clamp the nonlinear rates blow up
+# there and the stiff solver stalls. The raw state still drives the linear
+# transport/washout and the unit outputs, so this is identity at feasible states
+# and preserves the inter-unit mass balance.
+clip_negative_states: true
+
 # Network-level parameters. Kinetic rate constants AND stoichiometric
 # coefficients (yields, N-content, decay fraction) are declared here as a
 # single slot each. Calibrating Y_H or i_XB therefore propagates through
