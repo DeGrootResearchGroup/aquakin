@@ -172,6 +172,18 @@ class TakacsClarifier:
         # The state vector is (n_layers, n_part) flattened into 1-D.
         # Initial state: all zero (clean reactor at start).
         self._n_part = n_part
+
+        # Precompute the constant index/factor arrays and per-layer geometric
+        # masks ONCE, so the per-RHS-call hot path does not rebuild them with
+        # ``jnp.asarray`` of a Python list / ``astype`` every step.
+        self._part_idx_arr = jnp.asarray(self._part_indices)
+        self._sol_idx_arr = jnp.asarray(self._soluble_indices)
+        self._factors_arr = jnp.asarray(self._part_tss_factors)
+        layer_idx = jnp.arange(self.n_layers)
+        self._is_below_feed = (layer_idx < self.feed_layer).astype(jnp.float64)
+        self._is_above_feed = (layer_idx > self.feed_layer).astype(jnp.float64)
+        self._is_feed = (layer_idx == self.feed_layer).astype(jnp.float64)
+
         # Stash settling params as a closure to use in rhs without Python
         # branching per call.
         self._v0 = float(self.settling_params["v0"])
@@ -206,7 +218,7 @@ class TakacsClarifier:
         # Feed TSS (MLSS) the blanket is built for. The clarifier feed at
         # startup is the reactors' initial mixed-liquor, so default to the TSS
         # implied by the network's particulate defaults.
-        factors = jnp.asarray(self._part_tss_factors)
+        factors = self._factors_arr
         X_f = (
             float(self.init_feed_tss)
             if self.init_feed_tss is not None
@@ -248,8 +260,7 @@ class TakacsClarifier:
     def _tss(self, layer_C: jnp.ndarray) -> jnp.ndarray:
         """Total settleable solids (g/m³) in a layer from per-species
         particulate concentrations."""
-        factors = jnp.asarray(self._part_tss_factors)
-        return jnp.sum(layer_C * factors)
+        return jnp.sum(layer_C * self._factors_arr)
 
     def _settling_velocity(self, X: jnp.ndarray, X_min: jnp.ndarray) -> jnp.ndarray:
         """Takács double-exponential settling velocity.
@@ -295,18 +306,22 @@ class TakacsClarifier:
         # make the downstream mixer produce negative concentrations).
         overflow_Q, underflow_Q = self._split_flows(s_in.Q, clamp=True)
 
-        # Build the per-species C vectors for the two outputs.
+        # Build the per-species C vectors with two scatters each (not a Python
+        # loop of scalar scatters): solubles pass through; particulates take the
+        # top layer for overflow and the bottom layer for underflow.
         n_species = self.network.n_species
-        C_overflow = jnp.zeros((n_species,))
-        C_underflow = jnp.zeros((n_species,))
-        # Solubles: pass through.
-        for i in self._soluble_indices:
-            C_overflow = C_overflow.at[i].set(s_in.C[i])
-            C_underflow = C_underflow.at[i].set(s_in.C[i])
-        # Particulates: top layer for overflow, bottom layer for underflow.
-        for k, i in enumerate(self._part_indices):
-            C_overflow = C_overflow.at[i].set(layered[self.n_layers - 1, k])
-            C_underflow = C_underflow.at[i].set(layered[0, k])
+        sol_idx, part_idx = self._sol_idx_arr, self._part_idx_arr
+        sol_C = s_in.C[sol_idx]
+        C_overflow = (
+            jnp.zeros((n_species,))
+            .at[sol_idx].set(sol_C)
+            .at[part_idx].set(layered[self.n_layers - 1])
+        )
+        C_underflow = (
+            jnp.zeros((n_species,))
+            .at[sol_idx].set(sol_C)
+            .at[part_idx].set(layered[0])
+        )
 
         return {
             self.overflow_port: Stream(Q=overflow_Q, C=C_overflow, network=self.network),
@@ -339,10 +354,9 @@ class TakacsClarifier:
         overflow_Q, underflow_Q = self._split_flows(Q_in, clamp=True)
 
         layered = self._layered(state)  # (n_layers, n_part)
-        # Particulate inlet concentrations — gather via index array (vectorised).
-        part_idx = jnp.asarray(self._part_indices)
-        C_in_part = s_in.C[part_idx]  # (n_part,)
-        factors = jnp.asarray(self._part_tss_factors)
+        # Particulate inlet concentrations — gather via the precomputed index array.
+        C_in_part = s_in.C[self._part_idx_arr]  # (n_part,)
+        factors = self._factors_arr
 
         # Inlet TSS for the non-settleable threshold.
         tss_in = jnp.sum(C_in_part * factors)
@@ -398,11 +412,11 @@ class TakacsClarifier:
         below = jnp.concatenate([layered[1:, :], zero_row], axis=0)  # padded "layer above" each i
         above = jnp.concatenate([zero_row, layered[:-1, :]], axis=0)  # padded "layer below" each i
 
-        # Build per-layer (n_layers, n_part) convection terms.
-        layer_idx = jnp.arange(self.n_layers)
-        is_below_feed = (layer_idx < self.feed_layer).astype(jnp.float64)
-        is_above_feed = (layer_idx > self.feed_layer).astype(jnp.float64)
-        is_feed = (layer_idx == self.feed_layer).astype(jnp.float64)
+        # Per-layer convection terms; the zone masks are pure geometry,
+        # precomputed in __post_init__.
+        is_below_feed = self._is_below_feed
+        is_above_feed = self._is_above_feed
+        is_feed = self._is_feed
 
         # Downflow convection contributes only in/at the underflow zone.
         conv_in_down = (v_down / h_layer) * below * is_below_feed[:, None]
