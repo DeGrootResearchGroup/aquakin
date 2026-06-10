@@ -1586,9 +1586,13 @@ Don't try to `git push` from inside the sandbox; it fails with
 
 GitHub Actions runs the test suite on every push to `main` and every
 pull request (`.github/workflows/ci.yml`). The `test` job runs
-`pytest -m "not validation"` across Python 3.10/3.11/3.12; a separate
+`pytest -m "not validation"` across Python 3.11/3.12; a separate
 `validation` job runs `pytest -m validation` (the slower published-data
-checks) on 3.12. A green CI is the merge gate. When adding a runtime
+checks) on 3.12. A green CI is the merge gate. Python 3.10 stays
+install-compatible (`requires-python >= 3.10`) but is **not** CI-tested:
+its heavier jaxlib 0.6.2 build ran close to the hosted runner's
+resource/time limits and the job was intermittently killed mid-run, while
+3.11/3.12 stayed green and the suite passed locally on 3.10. When adding a runtime
 dependency, add it to `pyproject.toml` `dependencies` so the CI install
 (`pip install -e ".[test]"`) picks it up — the `_make_*` network
 generators' `ruamel` need is intentionally *not* a runtime dep (they are
