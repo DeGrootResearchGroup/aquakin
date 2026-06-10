@@ -29,12 +29,17 @@ network:
 
     STATUS -- complete ADM1 in the BSM2 form: liquid phase + gas headspace +
     state-derived pH with explicit strong-ion (S_cat / S_an) states. Parameter
-    values and initial concentrations are the BSM2 digester defaults (35 C). The
-    gas outflow uses the smooth overpressure form
-    ``k_P*(P_gas - P_atm)`` without the lower ``max(0, .)`` clip, so a
-    (transient) sub-atmospheric headspace draws gas back in rather than holding
-    the valve shut; at the digester operating point P_gas > P_atm throughout, so
-    biogas only ever leaves.
+    values and initial concentrations are the BSM2 digester defaults (35 C).
+    VALIDATED against the published BSM2 open-loop steady-state digester
+    composition: run as the benchmark CSTR (3400 m3 liquid, 300 m3 headspace,
+    fed at ~178 m3/d, HRT ~19 d) the network reproduces the reference steady
+    state to ~1-3% on the substrates, biomass and biogas, and its
+    charge-balance pH (~7.27) matches the reference electroneutrality relation
+    (see tests/validation/test_adm1_bsm2_steadystate.py). The gas outflow uses
+    the smooth overpressure form ``k_P*(P_gas - P_atm)`` without the lower
+    ``max(0, .)`` clip, so a (transient) sub-atmospheric headspace draws gas
+    back in rather than holding the valve shut; at the digester operating point
+    P_gas > P_atm throughout, so biogas only ever leaves.
   references:
     - "Batstone, D.J. et al. (2002). Anaerobic Digestion Model No. 1 (ADM1). IWA Sci. Tech. Rep. No. 13."
     - "Rosen, C. & Jeppsson, U. (2006). Aspects on ADM1 Implementation within the BSM2 Framework. Tech. Report, Lund University."
@@ -57,11 +62,12 @@ species:
   # S_cat and S_an are the lumped strong cations / anions (Na+, K+, Cl-, ...)
   # that set the strong-ion difference in the charge balance. They carry no
   # reaction stoichiometry, so they are conservative in a batch and only change
-  # by transport (dilution / advection) in a CSTR/PFR. S_an is set so the
-  # default strong-ion difference S_cat - S_an reproduces the BSM2 reference
-  # operating pH 7.47 with the default carbonate/ammonia/VFA totals.
-  - {name: S_cat, description: "Strong cations",             units: "kmol/m3",  default_concentration: 0.040}
-  - {name: S_an,  description: "Strong anions",              units: "kmol/m3",  default_concentration: 0.0409330944}
+  # by transport (dilution / advection) in a CSTR/PFR. The BSM2 digester feed
+  # carries no strong cations and a small chloride anion (0.0052 kmol/m3); the
+  # near-neutral pH (7.27) comes from the ammonium/bicarbonate buffer generated
+  # by protein degradation, not from a strong-ion excess.
+  - {name: S_cat, description: "Strong cations",             units: "kmol/m3",  default_concentration: 0.0}
+  - {name: S_an,  description: "Strong anions",              units: "kmol/m3",  default_concentration: 0.0052}
   # --- particulate ---
   - {name: X_c,   description: "Composite particulates",     units: "kgCOD/m3", default_concentration: 0.1079}
   - {name: X_ch,  description: "Carbohydrates",              units: "kgCOD/m3", default_concentration: 0.0205}
@@ -117,9 +123,15 @@ speciation:
 parameters:
   # --- hydrolysis / disintegration (1/d) ---
   k_dis:     {value: 0.5,  units: "1/d",  bounds: [0.1, 2.0],   transform: positive_log}
-  k_hyd_ch:  {value: 10.0, units: "1/d",  bounds: [1.0, 30.0],  transform: positive_log}
-  k_hyd_pr:  {value: 10.0, units: "1/d",  bounds: [1.0, 30.0],  transform: positive_log}
-  k_hyd_li:  {value: 10.0, units: "1/d",  bounds: [1.0, 30.0],  transform: positive_log}
+  # Hydrolysis at the standard 10 1/d. The reference BSM2 init parameter block
+  # lists 0.3, but that is inconsistent with the reference's OWN steady state:
+  # the digester reduces an influent of ~16 gCOD/L protein to ~0.08 gCOD/L
+  # (99.5% conversion) at HRT ~19 d, which first-order hydrolysis reaches only
+  # at k_hyd ~ 10. At 0.3 the model does not reproduce the published steady
+  # state; at 10 it matches it to ~1-3% (see the BSM2 steady-state validation).
+  k_hyd_ch:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log}
+  k_hyd_pr:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log}
+  k_hyd_li:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log}
   # --- uptake max rates (1/d) and half-saturations (kgCOD/m3) ---
   k_m_su:    {value: 30.0, units: "1/d",  bounds: [5.0, 70.0],  transform: positive_log}
   K_S_su:    {value: 0.5,  units: "kgCOD/m3", bounds: [0.05, 5.0], transform: positive_log}
@@ -198,16 +210,19 @@ parameters:
   C_xc:  {value: 0.02786}
   # --- nitrogen content (kmolN/kgCOD) ---
   N_aa:  {value: 0.007}
-  N_bac: {value: 0.005714}   # 0.08/14
-  N_I:   {value: 0.004286}   # 0.06/14
-  N_xc:  {value: 0.002686}   # 0.0376/14
-  # --- gas-liquid transfer / headspace (values T-corrected to 35 C) ---
+  N_bac: {value: 0.00571429}   # 0.08/14
+  N_I:   {value: 0.00428571}   # 0.06/14
+  N_xc:  {value: 0.00268571}   # 0.0376/14
+  # --- gas-liquid transfer / headspace ---
+  # Henry constants T-corrected to 35 C by van't Hoff: K_H = K_H_base *
+  # exp(-dH * (1/T_base - 1/T_op) / R), with R = 8.3145 J/mol/K (= 100*0.083145)
+  # and T_base = 298.15, T_op = 308.15 K.
   kLa:      {value: 200.0, units: "1/d",   bounds: [50.0, 400.0], transform: positive_log}
-  K_H_h2:   {value: 4.95e-4, units: "kmol/m3/bar"}   # 7.8e-4 * exp(-4180*(1/298.15-1/308.15))
-  K_H_ch4:  {value: 2.97e-4, units: "kmol/m3/bar"}   # 1.4e-3 * exp(-14240*...)
-  K_H_co2:  {value: 4.23e-3, units: "kmol/m3/bar"}   # 3.5e-2 * exp(-19410*...)
-  R_T:      {value: 25.6209, units: "bar*m3/kmol"}   # R * T_op = 0.083145 * 308.15
-  p_h2o:    {value: 0.0557, units: "bar"}            # water vapour pressure at 35 C
+  K_H_h2:   {value: 7.384654e-4, units: "kmol/m3/bar"}   # 7.8e-4 * exp(-4180 *(1/Tb-1/To)/R)
+  K_H_ch4:  {value: 1.161903e-3, units: "kmol/m3/bar"}   # 1.4e-3 * exp(-14240*(1/Tb-1/To)/R)
+  K_H_co2:  {value: 2.714669e-2, units: "kmol/m3/bar"}   # 3.5e-2 * exp(-19410*(1/Tb-1/To)/R)
+  R_T:      {value: 25.621132, units: "bar*m3/kmol"}     # R * T_op = 0.083145 * 308.15
+  p_h2o:    {value: 0.0556677, units: "bar"}             # 0.0313 * exp(5290*(1/Tb-1/To)), 35 C
   P_atm:    {value: 1.013, units: "bar"}
   k_P:      {value: 5.0e4, units: "m3/d/bar"}        # gas outflow resistance
   V_gas:    {value: 300.0, units: "m3"}

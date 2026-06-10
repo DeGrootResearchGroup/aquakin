@@ -40,7 +40,15 @@ The shipped networks currently are:
   explicit conservative `S_cat`/`S_an` ion states (via the solver's
   `strong_cations`/`strong_anions` terms); the free-ammonia and dissolved-CO₂
   pH-switch fractions therefore track the instantaneous state. This is the
-  complete ADM1 in BSM2 form.
+  complete ADM1 in BSM2 form, **validated** against the published BSM2
+  open-loop steady-state digester: run as the benchmark CSTR (3400 m³ liquid /
+  300 m³ headspace, fed at ~178 m³/d, HRT ~19 d) it reproduces the reference
+  steady state to ~1–3% on substrates/biomass/biogas, with a charge-balance pH
+  (~7.27) matching the reference electroneutrality relation
+  (`tests/validation/test_adm1_bsm2_steadystate.py`). Note: the BSM2 init file
+  lists hydrolysis `k_hyd = 0.3` d⁻¹, but that is inconsistent with its own
+  steady state (which needs ~10, the canonical value, for the observed ~99.5%
+  particulate conversion at HRT 19 d); the network ships `k_hyd = 10`.
 - `wats_sewer` — the **original reference-book WATS model** (Hvitved-Jacobsen,
   Vollertsen & Nielsen 2013, process matrices Tables 9.1–9.4): aerobic/anoxic/
   anaerobic heterotrophic carbon turnover (growth bulk+biofilm, endogenous
@@ -1090,7 +1098,8 @@ aquakin/
 │   │   ├── test_batch_simple.py     # validates against analytical solution
 │   │   └── test_pfr_simple.py
 │   ├── validation/
-│   │   └── test_bromate_vongunten.py# validates against published data
+│   │   ├── test_bromate_vongunten.py# validates against published data
+│   │   └── test_adm1_bsm2_steadystate.py # ADM1 vs published BSM2 AD steady state
 │   └── fixtures/
 │       └── simple_network.yaml      # minimal 2-species toy network for unit tests
 │
