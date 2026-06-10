@@ -47,6 +47,22 @@ from aquakin.core.nodes import (
 )
 
 
+# Built-in domain functions: name -> (node class, argument names). The arity is
+# ``len(arg_names)``. This single registry drives both ``_make_function_call``
+# and the "unknown function" error message, so neither can go stale when a node
+# type is added (every node constructor takes its arguments positionally, in
+# argument order).
+_FUNCTIONS = {
+    "arrhenius": (ArrheniusNode, ("A", "Ea")),
+    "pH_switch": (pHSwitchNode, ("pKa",)),
+    "pH_inhibit": (pHInhibitNode, ("pH_LL", "pH_UL")),
+    "monod": (MonodNode, ("X", "K")),
+    "monod_inh": (MonodInhibitionNode, ("X", "K")),
+    "monod_ratio": (MonodRatioNode, ("A", "B", "K")),
+    "monod_inh_ratio": (MonodInhibitionRatioNode, ("A", "B", "K")),
+}
+
+
 class ParseError(ValueError):
     """Raised when a rate expression cannot be parsed."""
 
@@ -291,52 +307,19 @@ class _Parser:
         return args
 
     def _make_function_call(self, name: str, args: list[ASTNode]) -> ASTNode:
-        if name == "arrhenius":
-            if len(args) != 2:
-                raise ParseError(
-                    f"arrhenius() takes 2 arguments (A, Ea), got {len(args)}"
-                )
-            return ArrheniusNode(args[0], args[1])
-        if name == "pH_switch":
-            if len(args) != 1:
-                raise ParseError(
-                    f"pH_switch() takes 1 argument (pKa), got {len(args)}"
-                )
-            return pHSwitchNode(args[0])
-        if name == "pH_inhibit":
-            if len(args) != 2:
-                raise ParseError(
-                    f"pH_inhibit() takes 2 arguments (pH_LL, pH_UL), got {len(args)}"
-                )
-            return pHInhibitNode(args[0], args[1])
-        if name == "monod":
-            if len(args) != 2:
-                raise ParseError(
-                    f"monod() takes 2 arguments (X, K), got {len(args)}"
-                )
-            return MonodNode(args[0], args[1])
-        if name == "monod_inh":
-            if len(args) != 2:
-                raise ParseError(
-                    f"monod_inh() takes 2 arguments (X, K), got {len(args)}"
-                )
-            return MonodInhibitionNode(args[0], args[1])
-        if name == "monod_ratio":
-            if len(args) != 3:
-                raise ParseError(
-                    f"monod_ratio() takes 3 arguments (A, B, K), got {len(args)}"
-                )
-            return MonodRatioNode(args[0], args[1], args[2])
-        if name == "monod_inh_ratio":
-            if len(args) != 3:
-                raise ParseError(
-                    f"monod_inh_ratio() takes 3 arguments (A, B, K), got {len(args)}"
-                )
-            return MonodInhibitionRatioNode(args[0], args[1], args[2])
-        raise ParseError(
-            f"Unknown function '{name}'. Built-ins are: arrhenius, pH_switch, "
-            f"monod, monod_inh, monod_ratio, monod_inh_ratio."
-        )
+        spec = _FUNCTIONS.get(name)
+        if spec is None:
+            raise ParseError(
+                f"Unknown function '{name}'. Built-ins are: "
+                f"{', '.join(_FUNCTIONS)}."
+            )
+        node_cls, arg_names = spec
+        if len(args) != len(arg_names):
+            raise ParseError(
+                f"{name}() takes {len(arg_names)} argument(s) "
+                f"({', '.join(arg_names)}), got {len(args)}"
+            )
+        return node_cls(*args)
 
 
 def parse_rate_expression(text: str) -> ASTNode:
