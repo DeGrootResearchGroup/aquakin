@@ -135,3 +135,30 @@ def test_ozone_bromate_runs():
     # Bromate should be non-negative.
     bro3 = sol.C_named("BrO3-")
     assert jnp.all(bro3 >= -1e-15)
+
+
+def test_solve_chemistry_helper_matches_analytical_and_scales(simple_network):
+    """The shared _common.solve_chemistry factory (used by every reactor) must
+    reproduce first-order decay, and rate_scale must linearly scale the rate
+    (the PFR's 1/velocity device): a span of 2*T at scale 0.5 equals a span of
+    T at scale 1."""
+    import diffrax
+    from aquakin.integrate._common import solve_chemistry
+
+    net = simple_network
+    cond = aquakin.SpatialConditions.uniform(1, T=293.15).fields
+    C0 = jnp.asarray([1.0, 0.0])
+    p = net.default_parameters()
+    k = float(p[0])
+    T = 8.0
+    kw = dict(cond_fn=lambda t: cond, rtol=1e-8, atol=1e-10)
+
+    sol = solve_chemistry(net, C0, p, saveat=diffrax.SaveAt(ts=jnp.asarray([T])),
+                          t0=0.0, t1=T, **kw)
+    assert float(sol.ys[-1, 0]) == pytest.approx(jnp.exp(-k * T), rel=1e-5)
+
+    # rate_scale=0.5 over 2T reaches the same state as scale=1 over T.
+    sol_scaled = solve_chemistry(net, C0, p, rate_scale=0.5,
+                                 saveat=diffrax.SaveAt(ts=jnp.asarray([2 * T])),
+                                 t0=0.0, t1=2 * T, **kw)
+    assert float(sol_scaled.ys[-1, 0]) == pytest.approx(float(sol.ys[-1, 0]), rel=1e-5)
