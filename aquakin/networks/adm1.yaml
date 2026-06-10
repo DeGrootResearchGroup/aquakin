@@ -4,26 +4,32 @@ network:
   description: >
     Anaerobic Digestion Model No. 1 (ADM1), the IWA reference model for
     anaerobic digestion (Batstone et al. 2002), in the BSM2 implementation
-    form (Rosen & Jeppsson 2006). 24 liquid-phase state variables and 19
-    biochemical processes: disintegration of composite particulates, hydrolysis
-    of carbohydrates / proteins / lipids, uptake of sugars / amino acids / LCFA
-    / valerate / butyrate / propionate / acetate / hydrogen (with pH, hydrogen,
-    free-ammonia and inorganic-nitrogen inhibition), and first-order decay of
-    the seven biomass groups.
+    form (Rosen & Jeppsson 2006). 27 state variables (24 liquid-phase + 3 gas
+    headspace) and 25 processes. Biochemistry (19 processes): disintegration of
+    composite particulates, hydrolysis of carbohydrates / proteins / lipids,
+    uptake of sugars / amino acids / LCFA / valerate / butyrate / propionate /
+    acetate / hydrogen (with pH, hydrogen, free-ammonia and inorganic-nitrogen
+    inhibition), and first-order decay of the seven biomass groups. Gas
+    headspace (6 processes): kLa gas-liquid transfer of H2 / CH4 / CO2 into the
+    headspace pools (S_gas_h2 / S_gas_ch4 / S_gas_co2) and the overpressure-
+    driven gas outflow that produces biogas -- so dissolved H2/CH4/CO2 are
+    stripped and the biogas composition is an output.
 
     Stoichiometric coefficients on inorganic carbon (S_IC) and nitrogen (S_IN)
     are written as SYMBOLIC EXPRESSIONS in the carbon/nitrogen content and
     yield/fraction parameters (the ADM1 elemental balances), so calibrating a
     yield or composition propagates through the balances automatically.
 
-    STATUS -- first cut (liquid phase, fixed operating pH). Not yet included
-    (the documented extensions): (1) the gas headspace (S_gas_h2 / S_gas_ch4 /
-    S_gas_co2, kLa transfer, gas flow) -- so dissolved H2/CH4/CO2 are not yet
-    stripped; (2) the state-derived charge-balance pH (the ``speciation:`` block)
-    and free-ammonia from it -- pH is currently a fixed operating condition and
-    free ammonia is computed from S_IN via a single pK_a; (3) ion / cation /
-    anion states. Parameter values and initial concentrations are the BSM2
-    digester defaults (35 C).
+    STATUS -- liquid phase + gas headspace, fixed operating pH. Not yet
+    included (the documented extensions): (1) the state-derived charge-balance
+    pH (the ``speciation:`` block) and free-ammonia from it -- pH is currently a
+    fixed operating condition and free ammonia is computed from S_IN via a
+    single pK_a; (2) ion / cation / anion states. Parameter values and initial
+    concentrations are the BSM2 digester defaults (35 C). The gas outflow uses
+    the smooth overpressure form ``k_P*(P_gas - P_atm)`` without the lower
+    ``max(0, .)`` clip, so a (transient) sub-atmospheric headspace draws gas
+    back in rather than holding the valve shut; at the digester operating point
+    P_gas > P_atm throughout, so biogas only ever leaves.
   references:
     - "Batstone, D.J. et al. (2002). Anaerobic Digestion Model No. 1 (ADM1). IWA Sci. Tech. Rep. No. 13."
     - "Rosen, C. & Jeppsson, U. (2006). Aspects on ADM1 Implementation within the BSM2 Framework. Tech. Report, Lund University."
@@ -55,6 +61,10 @@ species:
   - {name: X_ac,  description: "Acetate degraders",          units: "kgCOD/m3", default_concentration: 0.6772}
   - {name: X_h2,  description: "Hydrogen degraders",         units: "kgCOD/m3", default_concentration: 0.2848}
   - {name: X_I,   description: "Particulate inerts",         units: "kgCOD/m3", default_concentration: 17.2162}
+  # --- gas headspace ---
+  - {name: S_gas_h2,  description: "Hydrogen in headspace",  units: "kgCOD/m3", default_concentration: 1.1e-5}
+  - {name: S_gas_ch4, description: "Methane in headspace",   units: "kgCOD/m3", default_concentration: 1.6535}
+  - {name: S_gas_co2, description: "Carbon dioxide in headspace", units: "kmolC/m3", default_concentration: 0.0135}
 
 conditions:
   - name: pH
@@ -151,6 +161,17 @@ parameters:
   N_bac: {value: 0.005714}   # 0.08/14
   N_I:   {value: 0.004286}   # 0.06/14
   N_xc:  {value: 0.002686}   # 0.0376/14
+  # --- gas-liquid transfer / headspace (values T-corrected to 35 C) ---
+  kLa:      {value: 200.0, units: "1/d",   bounds: [50.0, 400.0], transform: positive_log}
+  K_H_h2:   {value: 4.95e-4, units: "kmol/m3/bar"}   # 7.8e-4 * exp(-4180*(1/298.15-1/308.15))
+  K_H_ch4:  {value: 2.97e-4, units: "kmol/m3/bar"}   # 1.4e-3 * exp(-14240*...)
+  K_H_co2:  {value: 4.23e-3, units: "kmol/m3/bar"}   # 3.5e-2 * exp(-19410*...)
+  R_T:      {value: 25.6209, units: "bar*m3/kmol"}   # R * T_op = 0.083145 * 308.15
+  p_h2o:    {value: 0.0557, units: "bar"}            # water vapour pressure at 35 C
+  P_atm:    {value: 1.013, units: "bar"}
+  k_P:      {value: 5.0e4, units: "m3/d/bar"}        # gas outflow resistance
+  V_gas:    {value: 300.0, units: "m3"}
+  pKa_co2:  {value: 6.35, units: "-"}
 
 expressions:
   # --- inhibition factors ---
@@ -184,6 +205,16 @@ expressions:
   rho_pro: "k_m_pro * [S_pro] / (K_S_pro + [S_pro]) * [X_pro] * inhib_pro"
   rho_ac:  "k_m_ac * [S_ac] / (K_S_ac + [S_ac]) * [X_ac] * inhib_ac"
   rho_h2:  "k_m_h2 * [S_h2] / (K_S_h2 + [S_h2]) * [X_h2] * inhib_h2"
+  # --- gas headspace: partial pressures, total pressure, normalised outflow ---
+  p_gas_h2:  "R_T / 16 * [S_gas_h2]"
+  p_gas_ch4: "R_T / 64 * [S_gas_ch4]"
+  p_gas_co2: "R_T * [S_gas_co2]"
+  P_gas:     "R_T / 16 * [S_gas_h2] + R_T / 64 * [S_gas_ch4] + R_T * [S_gas_co2] + p_h2o"
+  # gas outflow per gas-volume (q_gas / V_gas); k_P*(P_gas - P_atm) is the BSM2
+  # gas-flow law (kept un-clipped here: a steady digester runs above P_atm).
+  q_gas_norm: "k_P * (R_T / 16 * [S_gas_h2] + R_T / 64 * [S_gas_ch4] + R_T * [S_gas_co2] + p_h2o - P_atm) / V_gas"
+  # dissolved CO2 (un-ionised acid fraction of inorganic carbon) at the local pH
+  S_co2_diss: "[S_IC] * pH_switch(pKa_co2)"
 
 reactions:
   - name: disintegration
@@ -344,3 +375,31 @@ reactions:
     description: "First-order decay of hydrogen degraders -> composite."
     rate: "k_dec_h2 * [X_h2]"
     stoichiometry: {X_h2: -1.0, X_c: 1.0}
+
+  # --- gas-liquid transfer (kLa) -> liquid loses, headspace gains V_liq/V_gas ---
+  - name: transfer_h2
+    description: "H2 gas-liquid transfer to the headspace."
+    rate: "kLa * ([S_h2] - 16 * K_H_h2 * p_gas_h2)"
+    stoichiometry: {S_h2: -1.0, S_gas_h2: 11.3333}
+  - name: transfer_ch4
+    description: "CH4 gas-liquid transfer to the headspace."
+    rate: "kLa * ([S_ch4] - 64 * K_H_ch4 * p_gas_ch4)"
+    stoichiometry: {S_ch4: -1.0, S_gas_ch4: 11.3333}
+  - name: transfer_co2
+    description: "CO2 gas-liquid transfer (dissolved CO2 fraction of S_IC) to the headspace."
+    rate: "kLa * (S_co2_diss - K_H_co2 * p_gas_co2)"
+    stoichiometry: {S_IC: -1.0, S_gas_co2: 11.3333}
+
+  # --- headspace outflow (advection of biogas out of the digester) ---
+  - name: gas_outflow_h2
+    description: "H2 leaves the headspace with the biogas stream."
+    rate: "q_gas_norm * [S_gas_h2]"
+    stoichiometry: {S_gas_h2: -1.0}
+  - name: gas_outflow_ch4
+    description: "CH4 leaves the headspace with the biogas stream."
+    rate: "q_gas_norm * [S_gas_ch4]"
+    stoichiometry: {S_gas_ch4: -1.0}
+  - name: gas_outflow_co2
+    description: "CO2 leaves the headspace with the biogas stream."
+    rate: "q_gas_norm * [S_gas_co2]"
+    stoichiometry: {S_gas_co2: -1.0}

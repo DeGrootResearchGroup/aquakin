@@ -26,6 +26,18 @@ The shipped networks currently are:
 - `asm2d_tud` — Delft TUD variant of ASM2D with revised bio-P stoichiometry.
 - `asm3` — ASM3, ASM1 with internal storage products replacing hydrolysis.
 - `asm3_biop` — ASM3 + bio-P extension.
+- `adm1` — Anaerobic Digestion Model No. 1 (Batstone et al. 2002), BSM2
+  implementation form (Rosen & Jeppsson 2006). 27 states (24 liquid + 3 gas
+  headspace), 25 processes: disintegration, the three hydrolyses, seven
+  substrate-uptake reactions (with pH / hydrogen / free-ammonia /
+  inorganic-N inhibition, the lower-pH inhibition via the new `pHInhibitNode`),
+  seven biomass decays, and the gas headspace (kLa transfer of H₂/CH₄/CO₂ plus
+  overpressure-driven biogas outflow). Inorganic-carbon and -nitrogen
+  stoichiometry are symbolic parameter-expressions (the ADM1 elemental
+  balances), so a calibrated yield/composition flows through them. Operating pH
+  is currently a fixed condition; the state-derived charge-balance pH (extending
+  the `speciation:` solver to the va/bu/pro acids) and the ion/cation/anion
+  states are the documented next extensions.
 - `wats_sewer` — the **original reference-book WATS model** (Hvitved-Jacobsen,
   Vollertsen & Nielsen 2013, process matrices Tables 9.1–9.4): aerobic/anoxic/
   anaerobic heterotrophic carbon turnover (growth bulk+biofilm, endogenous
@@ -324,8 +336,7 @@ produced by WastewaterAD's `wastewaterad.tools.sumo_import`. Stoichiometric
 coefficients that depend on yield / N-content / fraction parameters are
 precomputed at literature defaults; kinetic parameters remain free.
 
-Future networks include UV/TiO₂, chlorine decay, and ADM1 (anaerobic
-digestion).
+Future networks include UV/TiO₂ and chlorine decay.
 
 **The library is a standalone scientific contribution.** It is not tied to any
 specific application project.
@@ -962,8 +973,8 @@ aquakin/
 │   │   ├── asm3.yaml                # ASM3 (storage products replace hydrolysis)
 │   │   ├── asm3_biop.yaml           # ASM3 + bio-P extension
 │   │   ├── adm1.yaml                # ADM1 anaerobic digestion (BSM2 form, Rosen-Jeppsson
-│   │   │                            #   2006); FIRST CUT: liquid phase + fixed pH. TODO
-│   │   │                            #   extensions: gas headspace, state-derived pH, ions
+│   │   │                            #   2006); liquid phase + gas headspace, fixed pH. TODO
+│   │   │                            #   extensions: state-derived pH, ion/cation/anion states
 │   │   ├── wats_sewer.yaml          # original reference-book WATS (Tables 9.1-9.4)
 │   │   ├── wats_sewer_extended.yaml  # extended WATS (+ nitrate/methane/elemental-S, state-derived pH)
 │   │   ├── wats_sewer_extended_*.yaml # extended-model structural variants + v0
