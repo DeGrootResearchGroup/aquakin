@@ -20,16 +20,22 @@ network:
     yield/fraction parameters (the ADM1 elemental balances), so calibrating a
     yield or composition propagates through the balances automatically.
 
-    STATUS -- liquid phase + gas headspace, fixed operating pH. Not yet
-    included (the documented extensions): (1) the state-derived charge-balance
-    pH (the ``speciation:`` block) and free-ammonia from it -- pH is currently a
-    fixed operating condition and free ammonia is computed from S_IN via a
-    single pK_a; (2) ion / cation / anion states. Parameter values and initial
-    concentrations are the BSM2 digester defaults (35 C). The gas outflow uses
-    the smooth overpressure form ``k_P*(P_gas - P_atm)`` without the lower
-    ``max(0, .)`` clip, so a (transient) sub-atmospheric headspace draws gas
-    back in rather than holding the valve shut; at the digester operating point
-    P_gas > P_atm throughout, so biogas only ever leaves.
+    pH is STATE-DERIVED through the differentiable charge-balance solver (the
+    ``speciation:`` block): it is solved from the instantaneous acid/base
+    speciation each RHS call over the four VFAs, inorganic carbon and nitrogen,
+    with the strong-ion difference supplied by the S_cat_net condition. The
+    free-ammonia and dissolved-CO2 fractions therefore track the state
+    automatically.
+
+    STATUS -- liquid phase + gas headspace, state-derived pH. Not yet included
+    (the documented extension): explicit ion / cation / anion dynamic states
+    (S_cat and S_an are currently lumped into the constant S_cat_net strong-ion
+    difference). Parameter values and initial concentrations are the BSM2
+    digester defaults (35 C). The gas outflow uses the smooth overpressure form
+    ``k_P*(P_gas - P_atm)`` without the lower ``max(0, .)`` clip, so a
+    (transient) sub-atmospheric headspace draws gas back in rather than holding
+    the valve shut; at the digester operating point P_gas > P_atm throughout, so
+    biogas only ever leaves.
   references:
     - "Batstone, D.J. et al. (2002). Anaerobic Digestion Model No. 1 (ADM1). IWA Sci. Tech. Rep. No. 13."
     - "Rosen, C. & Jeppsson, U. (2006). Aspects on ADM1 Implementation within the BSM2 Framework. Tech. Report, Lund University."
@@ -67,12 +73,43 @@ species:
   - {name: S_gas_co2, description: "Carbon dioxide in headspace", units: "kmolC/m3", default_concentration: 0.0135}
 
 conditions:
-  - name: pH
-    description: "Operating pH (fixed for now; a state-derived charge-balance pH is the documented extension)."
-    default: 7.0
   - name: T
     description: "Operating temperature (K). Default ADM1 parameters are at 35 C."
     default: 308.15
+  - name: S_cat_net
+    description: >
+      Net strong-ion charge (S_cat - S_an), eq/L. The strong-ion difference
+      that closes the charge balance; lumps the fully-dissociated cations/anions
+      (Na+, K+, Cl-, ...) not modelled explicitly. Conservative in a closed
+      batch. The default value places the default digester state at pH 7.47
+      (the BSM2 reference operating point). Promoting S_cat / S_an to dynamic
+      states is the documented next extension.
+    default: -9.330944e-4
+
+# --- State-derived pH via the differentiable charge-balance solver.
+#     pH is fixed by the instantaneous acid/base speciation through
+#     electroneutrality, so it is solved from the state each RHS call and
+#     exposed as the {pH} condition. The four ADM1 volatile fatty acids
+#     (acetate/propionate/butyrate/valerate) are monoprotic weak acids; the
+#     inorganic carbon and nitrogen totals are already molar (kmol/m3 = mol/L),
+#     so their molar_mass is 1. The VFAs are stored as COD, converted to molar
+#     by their COD equivalents (64/112/160/208 gCOD/mol). The net strong-ion
+#     charge is supplied by the S_cat_net condition. With pH state-derived, the
+#     free-ammonia and dissolved-CO2 fractions (pH_switch terms in the rate
+#     expressions) now track the instantaneous state automatically.
+speciation:
+  field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  z_cation_eq: {condition: S_cat_net}
+  n_iter: 40
+  totals:
+    carbonate:  {species: S_IC,  molar_mass: 1.0}     # kmolC/m3 -> mol/L (already molar)
+    ammonia:    {species: S_IN,  molar_mass: 1.0}     # kmolN/m3 -> mol/L (already molar)
+    acetate:    {species: S_ac,  molar_mass: 64.0}    # gCOD/L -> mol/L (acetate, 64 gCOD/mol)
+    propionate: {species: S_pro, molar_mass: 112.0}   # propionate, 112 gCOD/mol
+    butyrate:   {species: S_bu,  molar_mass: 160.0}   # butyrate, 160 gCOD/mol
+    valerate:   {species: S_va,  molar_mass: 208.0}   # valerate, 208 gCOD/mol
 
 parameters:
   # --- hydrolysis / disintegration (1/d) ---
@@ -115,7 +152,7 @@ parameters:
   pH_LL_ac:  {value: 6.0}
   pH_UL_h2:  {value: 6.0}
   pH_LL_h2:  {value: 5.0}
-  pKa_IN:    {value: 9.25, units: "-"}
+  pKa_IN:    {value: 8.955, units: "-"}   # NH4+/NH3 pKa at 35 C (9.25 at 25 C, van't Hoff dH=51965 J/mol); matches the charge-balance solver's effective ammonia pKa
   # --- yields (kgCOD biomass / kgCOD substrate) ---
   Y_su:  {value: 0.10, bounds: [0.02, 0.2], transform: positive_log}
   Y_aa:  {value: 0.08, bounds: [0.02, 0.2], transform: positive_log}
@@ -171,7 +208,7 @@ parameters:
   P_atm:    {value: 1.013, units: "bar"}
   k_P:      {value: 5.0e4, units: "m3/d/bar"}        # gas outflow resistance
   V_gas:    {value: 300.0, units: "m3"}
-  pKa_co2:  {value: 6.35, units: "-"}
+  pKa_co2:  {value: 6.32, units: "-"}    # H2CO3*/HCO3- pKa1 at 35 C (6.35 at 25 C, van't Hoff dH=5200 J/mol); matches the charge-balance solver's effective carbonate pKa1
 
 expressions:
   # --- inhibition factors ---

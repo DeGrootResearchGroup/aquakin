@@ -34,10 +34,12 @@ The shipped networks currently are:
   seven biomass decays, and the gas headspace (kLa transfer of H₂/CH₄/CO₂ plus
   overpressure-driven biogas outflow). Inorganic-carbon and -nitrogen
   stoichiometry are symbolic parameter-expressions (the ADM1 elemental
-  balances), so a calibrated yield/composition flows through them. Operating pH
-  is currently a fixed condition; the state-derived charge-balance pH (extending
-  the `speciation:` solver to the va/bu/pro acids) and the ion/cation/anion
-  states are the documented next extensions.
+  balances), so a calibrated yield/composition flows through them. pH is
+  **state-derived** through the charge-balance `speciation:` solver (extended to
+  the four ADM1 volatile fatty acids), with the strong-ion difference supplied
+  by the `S_cat_net` condition; the free-ammonia and dissolved-CO₂ pH-switch
+  fractions therefore track the instantaneous state. Promoting `S_cat`/`S_an` to
+  explicit dynamic ion states is the documented next extension.
 - `wats_sewer` — the **original reference-book WATS model** (Hvitved-Jacobsen,
   Vollertsen & Nielsen 2013, process matrices Tables 9.1–9.4): aerobic/anoxic/
   anaerobic heterotrophic carbon turnover (growth bulk+biofilm, endogenous
@@ -910,7 +912,9 @@ speciation:
 validated declaration plus `species_index` into the derived-condition
 callable. Negative concentrations are clamped to zero before conversion
 (mirrors the reference). Valid `totals` keys: `carbonate`, `acetate`,
-`ammonia`, `phosphate`, `sulfide`.
+`propionate`, `butyrate`, `valerate`, `ammonia`, `phosphate`, `sulfide`
+(`propionate`/`butyrate`/`valerate` are the additional monoprotic ADM1
+volatile fatty acids, treated exactly like `acetate`).
 
 ---
 
@@ -973,8 +977,8 @@ aquakin/
 │   │   ├── asm3.yaml                # ASM3 (storage products replace hydrolysis)
 │   │   ├── asm3_biop.yaml           # ASM3 + bio-P extension
 │   │   ├── adm1.yaml                # ADM1 anaerobic digestion (BSM2 form, Rosen-Jeppsson
-│   │   │                            #   2006); liquid phase + gas headspace, fixed pH. TODO
-│   │   │                            #   extensions: state-derived pH, ion/cation/anion states
+│   │   │                            #   2006); liquid + gas headspace, state-derived pH. TODO
+│   │   │                            #   extension: explicit ion/cation/anion dynamic states
 │   │   ├── wats_sewer.yaml          # original reference-book WATS (Tables 9.1-9.4)
 │   │   ├── wats_sewer_extended.yaml  # extended WATS (+ nitrate/methane/elemental-S, state-derived pH)
 │   │   ├── wats_sewer_extended_*.yaml # extended-model structural variants + v0

@@ -190,7 +190,16 @@ class StrongAnionSpec(BaseModel):
     charge: float = Field(gt=0.0)
 
 
-_VALID_TOTAL_KEYS = ("carbonate", "acetate", "ammonia", "phosphate", "sulfide")
+_VALID_TOTAL_KEYS = (
+    "carbonate",
+    "acetate",
+    "propionate",
+    "butyrate",
+    "valerate",
+    "ammonia",
+    "phosphate",
+    "sulfide",
+)
 
 
 class SpeciationSpec(BaseModel):

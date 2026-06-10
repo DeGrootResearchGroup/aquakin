@@ -96,6 +96,50 @@ def test_summary_smoke(name, _a, _b, _c):
     assert f"Species ({net.n_species})" in s
 
 
+def test_adm1_ph_is_state_derived():
+    """ADM1 pH is produced by the charge-balance speciation solver, not an
+    external condition: it is a derived field, sits at the BSM2 operating
+    point for the default state, and responds to the acid/base state."""
+    net = aquakin.load_network("adm1")
+    # pH is produced, not required as an input.
+    assert "pH" in net.derived_fields
+    assert "pH" not in net.conditions_required
+    assert "S_cat_net" in net.conditions_required
+
+    cond = net.default_conditions()
+    C0 = net.default_concentrations()
+    p = net.default_parameters()
+
+    pH0 = float(net.derived_condition_fn(C0, p, cond.fields, 0)["pH"])
+    # BSM2 reference digester operating point.
+    assert pH0 == pytest.approx(7.47, abs=0.05)
+
+    # Adding volatile fatty acid must lower the pH (more acid).
+    si = net.species_index
+    C_acid = C0.at[si["S_ac"]].add(5.0)
+    pH_acid = float(net.derived_condition_fn(C_acid, p, cond.fields, 0)["pH"])
+    assert pH_acid < pH0
+
+
+def test_adm1_ph_operating_point_is_differentiable():
+    """The strong-ion difference S_cat_net sets the pH operating point and
+    must flow differentiably through a solve into a downstream output."""
+    net = aquakin.load_network("adm1")
+    si = net.species_index
+    C0 = net.default_concentrations().at[si["S_ac"]].set(2.0).at[si["X_ac"]].set(0.76)
+    p = net.default_parameters()
+    t_eval = jnp.linspace(0.0, 2.0, 5)
+
+    def loss(z):
+        fields = {"T": jnp.array([308.15]), "S_cat_net": z.reshape(1)}
+        reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions(fields=fields))
+        sol = reactor.solve(C0, p, (0.0, 2.0), t_eval)
+        return jnp.sum(sol.C_named("S_ch4"))
+
+    g = jax.grad(loss)(jnp.array(-9.330944e-4))
+    assert jnp.isfinite(g)
+
+
 def test_asm3_uses_monod_helpers():
     """ASM3's auxiliaries should be rendered using the monod helpers."""
     yaml_text = (

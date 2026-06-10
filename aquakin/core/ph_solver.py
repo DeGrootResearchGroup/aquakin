@@ -7,8 +7,9 @@ solves that algebraic constraint for ``[H+]`` (and hence pH) given the total
 molar concentrations of the relevant acid/base systems plus the strong-ion
 charge balance.
 
-The solver performs a proton (charge) balance over the carbonate, acetate,
-ammonia, phosphate and sulfide acid/base systems together with water
+The solver performs a proton (charge) balance over the carbonate, ammonia,
+phosphate and sulfide acid/base systems and the monoprotic volatile fatty acids
+(acetate, propionate, butyrate, valerate — the ADM1 set) together with water
 self-ionisation, strong anions (e.g. sulfate, nitrate) and a net fixed cation
 charge.
 
@@ -38,7 +39,10 @@ _LN10 = jnp.log(10.0)
 # Acetate is treated as temperature-independent (dH = 0).
 _PK_BASE = {
     "w": (14.0, 55900.0),        # water self-ionisation
-    "ac": (4.76, 0.0),           # CH3COOH  <-> H+ + CH3COO-
+    "ac": (4.76, 0.0),           # CH3COOH    <-> H+ + CH3COO-
+    "pro": (4.88, 0.0),          # propionate <-> H+ + propionate-
+    "bu": (4.82, 0.0),           # butyrate   <-> H+ + butyrate-
+    "va": (4.86, 0.0),           # valerate   <-> H+ + valerate-
     "nh": (9.25, 51965.0),       # NH4+     <-> H+ + NH3
     "co3_1": (6.35, 5200.0),     # H2CO3*   <-> H+ + HCO3-   (Ka1)
     "co3_2": (10.33, 14900.0),   # HCO3-    <-> H+ + CO3 2-  (Ka2)
@@ -76,6 +80,9 @@ def charge_balance_residual(
     *,
     tot_carbonate=0.0,
     tot_acetate=0.0,
+    tot_propionate=0.0,
+    tot_butyrate=0.0,
+    tot_valerate=0.0,
     tot_ammonia=0.0,
     tot_phosphate=0.0,
     tot_sulfide=0.0,
@@ -94,8 +101,10 @@ def charge_balance_residual(
     ----------
     h : scalar
         Trial hydrogen-ion concentration ``[H+]`` (mol/L).
-    tot_carbonate, tot_acetate, tot_ammonia, tot_phosphate, tot_sulfide : scalar
-        Total molar concentrations (mol/L) of each acid/base system.
+    tot_carbonate, tot_acetate, tot_propionate, tot_butyrate, tot_valerate, tot_ammonia, tot_phosphate, tot_sulfide : scalar
+        Total molar concentrations (mol/L) of each acid/base system. Propionate,
+        butyrate and valerate are monoprotic weak acids treated exactly like
+        acetate (the ADM1 volatile-fatty-acid set).
     strong_anion_eq : scalar
         Charge equivalents per litre from fully dissociated strong anions
         (e.g. ``2*[SO4] + [NO3]``), positive.
@@ -118,9 +127,15 @@ def charge_balance_residual(
     # Strong ions and fixed charge.
     f = f + strong_anion_eq - z_cation_eq
 
-    # Acetate: anionic fraction CH3COO- = Ka / (h + Ka).
+    # Monoprotic volatile fatty acids: anionic fraction A- = Ka / (h + Ka).
     Ka_ac = K["ac"]
     f = f + tot_acetate * Ka_ac / (h + Ka_ac)
+    Ka_pro = K["pro"]
+    f = f + tot_propionate * Ka_pro / (h + Ka_pro)
+    Ka_bu = K["bu"]
+    f = f + tot_butyrate * Ka_bu / (h + Ka_bu)
+    Ka_va = K["va"]
+    f = f + tot_valerate * Ka_va / (h + Ka_va)
 
     # Ammonia: cationic fraction NH4+ = h / (h + Ka).
     Ka_nh = K["nh"]
@@ -151,6 +166,9 @@ def charge_balance_residual_deriv(
     *,
     tot_carbonate=0.0,
     tot_acetate=0.0,
+    tot_propionate=0.0,
+    tot_butyrate=0.0,
+    tot_valerate=0.0,
     tot_ammonia=0.0,
     tot_phosphate=0.0,
     tot_sulfide=0.0,
@@ -169,6 +187,12 @@ def charge_balance_residual_deriv(
 
     Ka_ac = K["ac"]
     df = df - tot_acetate * Ka_ac / (h + Ka_ac) ** 2
+    Ka_pro = K["pro"]
+    df = df - tot_propionate * Ka_pro / (h + Ka_pro) ** 2
+    Ka_bu = K["bu"]
+    df = df - tot_butyrate * Ka_bu / (h + Ka_bu) ** 2
+    Ka_va = K["va"]
+    df = df - tot_valerate * Ka_va / (h + Ka_va) ** 2
 
     Ka_nh = K["nh"]
     df = df - tot_ammonia * Ka_nh / (h + Ka_nh) ** 2
@@ -197,6 +221,9 @@ def solve_ph(
     *,
     tot_carbonate=0.0,
     tot_acetate=0.0,
+    tot_propionate=0.0,
+    tot_butyrate=0.0,
+    tot_valerate=0.0,
     tot_ammonia=0.0,
     tot_phosphate=0.0,
     tot_sulfide=0.0,
@@ -216,7 +243,7 @@ def solve_ph(
 
     Parameters
     ----------
-    tot_carbonate, tot_acetate, tot_ammonia, tot_phosphate, tot_sulfide : scalar, optional
+    tot_carbonate, tot_acetate, tot_propionate, tot_butyrate, tot_valerate, tot_ammonia, tot_phosphate, tot_sulfide : scalar, optional
         Total molar concentrations of each acid/base system.
     strong_anion_eq : scalar, optional
         Strong-anion charge equivalents (e.g. ``2*[SO4]+[NO3]``).
@@ -248,6 +275,9 @@ def solve_ph(
     totals = dict(
         tot_carbonate=tot_carbonate,
         tot_acetate=tot_acetate,
+        tot_propionate=tot_propionate,
+        tot_butyrate=tot_butyrate,
+        tot_valerate=tot_valerate,
         tot_ammonia=tot_ammonia,
         tot_phosphate=tot_phosphate,
         tot_sulfide=tot_sulfide,

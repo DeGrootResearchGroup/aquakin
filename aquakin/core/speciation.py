@@ -26,7 +26,16 @@ import jax.numpy as jnp
 from aquakin.core.ph_solver import solve_ph
 
 # Total acid/base systems understood by the pH solver, in solver-argument terms.
-_TOTAL_KEYS = ("carbonate", "acetate", "ammonia", "phosphate", "sulfide")
+_TOTAL_KEYS = (
+    "carbonate",
+    "acetate",
+    "propionate",
+    "butyrate",
+    "valerate",
+    "ammonia",
+    "phosphate",
+    "sulfide",
+)
 
 
 def build_ph_derived_fn(

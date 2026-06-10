@@ -54,6 +54,17 @@ CASES = [
     ),
     # Acidic case: strong-anion excess.
     dict(tot_carbonate=1.0e-3, strong_anion_eq=2.0e-3, z_cation_eq=5.0e-4),
+    # ADM1 digester: carbonate + ammonia buffer with the full VFA set,
+    # representative of an anaerobic digester at the BSM2 operating point.
+    dict(
+        tot_carbonate=0.0951,
+        tot_acetate=0.0893 / 64.0,
+        tot_propionate=0.0176 / 112.0,
+        tot_butyrate=0.0140 / 160.0,
+        tot_valerate=0.0123 / 208.0,
+        tot_ammonia=0.0945,
+        z_cation_eq=-9.330944e-4,
+    ),
 ]
 
 
