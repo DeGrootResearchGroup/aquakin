@@ -134,6 +134,56 @@ def test_invalid_on_nan_rejected(simple_network):
         aquakin.CFDReactor(simple_network, on_nan="explode")
 
 
+def _inject_nonfinite_inner(reactor, n_cells, bad_row):
+    """Pre-populate the jit cache with a stub that returns a non-finite cell,
+    isolating step()'s post-solve finiteness/mask handling from the solver."""
+
+    def fake(C, cond, dt, params):
+        return C.at[bad_row, 0].set(jnp.nan)
+
+    reactor._jit_cache[n_cells] = fake
+
+
+def test_step_ignore_returns_nonfinite_without_raising(simple_network, simple_state):
+    """on_nan='ignore' passes non-finite cells through with no signal."""
+    C, conds = simple_state
+    reactor = aquakin.CFDReactor(simple_network, on_nan="ignore")
+    _inject_nonfinite_inner(reactor, C.shape[0], bad_row=1)
+    out = reactor.step(C, conds, dt=1.0)
+    assert isinstance(out, np.ndarray)
+    assert not np.all(np.isfinite(out[1]))                    # the corrupted cell
+    assert np.all(np.isfinite(np.delete(out, 1, axis=0)))     # the rest is finite
+
+
+def test_step_return_mask_flags_nonfinite_under_ignore(simple_network, simple_state):
+    """return_mask lets the caller detect dropped cells even under 'ignore'."""
+    C, conds = simple_state
+    reactor = aquakin.CFDReactor(simple_network, on_nan="ignore")
+    _inject_nonfinite_inner(reactor, C.shape[0], bad_row=2)
+    out, mask = reactor.step(C, conds, dt=1.0, return_mask=True)
+    assert mask.shape == (C.shape[0],)
+    assert not mask[2]
+    assert mask.sum() == C.shape[0] - 1
+
+
+def test_step_return_mask_all_true_on_clean(reactor, simple_state):
+    """A clean step with return_mask=True returns an all-True mask."""
+    C, conds = simple_state
+    out, mask = reactor.step(C, conds, dt=1.0, return_mask=True)
+    assert out.shape == C.shape
+    assert mask.shape == (C.shape[0],)
+    assert mask.all()
+
+
+def test_step_raise_detects_injected_nonfinite(simple_network, simple_state):
+    """on_nan='raise' (default) surfaces a non-finite result as RuntimeError."""
+    C, conds = simple_state
+    reactor = aquakin.CFDReactor(simple_network)   # on_nan='raise'
+    _inject_nonfinite_inner(reactor, C.shape[0], bad_row=0)
+    with pytest.raises(RuntimeError, match="non-finite"):
+        reactor.step(C, conds, dt=1.0)
+
+
 def test_species_field_order_matches_network(reactor):
     assert reactor.species_field_order == reactor.network.species
 
