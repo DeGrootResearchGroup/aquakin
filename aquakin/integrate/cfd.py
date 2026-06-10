@@ -59,10 +59,19 @@ class CFDReactor:
         Adjoint strategy. Defaults to
         :class:`diffrax.RecursiveCheckpointAdjoint`.
     on_nan : {"raise", "ignore"}, optional
-        Policy when any cell produces a NaN concentration after the
-        chemistry step. ``"raise"`` (default) raises ``RuntimeError`` with
-        the offending cell indices; the C++ caller is then expected to
-        retry with a smaller transport timestep or otherwise recover.
+        Policy when any cell produces a non-finite concentration (NaN or
+        Inf) after the chemistry step.
+
+        - ``"raise"`` (default) raises ``RuntimeError`` with the offending
+          cell indices; the C++ caller is then expected to retry with a
+          smaller transport timestep or otherwise recover.
+        - ``"ignore"`` returns the array as-is, non-finite cells included,
+          with **no signal** to the caller. This is the fast path (no
+          per-step finiteness scan), but a non-finite cell crossing the
+          pybind11 boundary is then undetectable unless the caller checks.
+          When using ``"ignore"`` you should pass ``return_mask=True`` to
+          :meth:`step` (or check finiteness yourself) so corrupted cells
+          can be detected and recovered.
 
     Attributes
     ----------
@@ -111,6 +120,8 @@ class CFDReactor:
         conditions: Mapping[str, np.ndarray],
         dt: float,
         params: Optional[np.ndarray] = None,
+        *,
+        return_mask: bool = False,
     ) -> np.ndarray:
         """
         Advance chemistry by ``dt`` for every cell.
@@ -129,11 +140,19 @@ class CFDReactor:
         params : np.ndarray, optional
             Flat parameter vector, shape ``(n_params,)``. Defaults to
             ``network.default_parameters()``.
+        return_mask : bool, optional
+            If ``True``, also return a per-cell boolean mask of finite
+            results, so the caller can detect non-finite cells even under
+            ``on_nan="ignore"`` (where ``step`` otherwise gives no signal).
+            Default ``False`` keeps the plain-array return.
 
         Returns
         -------
-        np.ndarray
-            Post-reaction concentrations, same shape as input ``C``.
+        np.ndarray or tuple[np.ndarray, np.ndarray]
+            Post-reaction concentrations, same shape as input ``C``. If
+            ``return_mask=True``, a ``(C_new, finite_mask)`` tuple where
+            ``finite_mask`` has shape ``(n_cells,)`` and is ``True`` for
+            cells whose every species value is finite.
         """
         C_np = np.ascontiguousarray(np.asarray(C, dtype=np.float64))
         if C_np.ndim != 2:
@@ -188,14 +207,20 @@ class CFDReactor:
         C_new = inner(jnp.asarray(C_np), cond_jax, jnp.asarray(dt_f), params_jax)
         C_new_np = np.asarray(C_new)
 
-        if self.on_nan == "raise":
-            bad_rows = np.where(np.any(~np.isfinite(C_new_np), axis=1))[0]
-            if bad_rows.size:
-                raise RuntimeError(
-                    f"CFDReactor.step produced non-finite concentrations in "
-                    f"{bad_rows.size} cell(s); offending indices (first 10): "
-                    f"{bad_rows[:10].tolist()}. Consider reducing dt."
-                )
+        # The finiteness scan is only needed to raise or to build the mask;
+        # under on_nan="ignore" without return_mask we skip it (fast path).
+        if self.on_nan == "raise" or return_mask:
+            finite_mask = np.all(np.isfinite(C_new_np), axis=1)
+            if self.on_nan == "raise":
+                bad_rows = np.where(~finite_mask)[0]
+                if bad_rows.size:
+                    raise RuntimeError(
+                        f"CFDReactor.step produced non-finite concentrations in "
+                        f"{bad_rows.size} cell(s); offending indices (first 10): "
+                        f"{bad_rows[:10].tolist()}. Consider reducing dt."
+                    )
+            if return_mask:
+                return C_new_np, finite_mask
         return C_new_np
 
     def _build_step(self):
