@@ -457,6 +457,28 @@ def test_gauss_newton_matches_lbfgsb_on_easy_fit(setup):
     )
 
 
+def test_nll_loss_is_comparable_across_optimizers(setup):
+    """CalibrationResult.loss must be the same scalar objective regardless of
+    optimizer. The Gauss-Newton path minimises 0.5*||residual||^2, which for
+    loss='nll' drops the sum(log(sigma)) normaliser the L-BFGS-B objective
+    includes; the reported loss must add it back so both agree."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    sigma = jnp.asarray(0.02)
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="nll", sigma=sigma, laplace=False,
+    )
+    lb = aquakin.calibrate(reactor, C0, optimizer="lbfgsb", **common)
+    gn = aquakin.calibrate(reactor, C0, optimizer="gauss_newton", **common)
+    # Same optimum -> same reported objective (the full NLL, not 0.5||r||^2).
+    assert gn.loss == pytest.approx(lb.loss, rel=1e-4)
+    # And it is the full NLL: well above the GN 0.5||r||^2, which here is ~0
+    # (clean data) while sum(log(sigma)) = n_obs * log(0.02) < 0.
+    expected_const = float(t_obs.shape[0] * jnp.log(sigma))
+    assert gn.loss == pytest.approx(expected_const, abs=1e-3)
+
+
 def test_gauss_newton_forward_mode_with_direct_adjoint(simple_network):
     """With a DirectAdjoint reactor the GN Jacobian is formed in forward mode
     (jacfwd); it must still recover the parameter."""
