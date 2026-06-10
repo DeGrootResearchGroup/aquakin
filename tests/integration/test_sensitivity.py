@@ -305,6 +305,17 @@ def test_dgsm_matches_analytic_nu():
     assert float(res.dgsm[0]) == pytest.approx(c ** 2, rel=1e-6)
 
 
+def test_dgsm_zero_variance_output_warns():
+    """A constant output (zero variance) makes the Sobol total-index bound
+    undefined (0/0). dgsm must warn and report a zero bound rather than
+    silently returning an all-zero ranking that reads as 'nothing matters'."""
+    with pytest.warns(UserWarning, match="zero variance"):
+        res = aquakin.dgsm(lambda z: jnp.asarray(3.0), [(0.0, 1.0), (0.0, 1.0)],
+                           n_samples=16)
+    assert float(res.output_variance) == 0.0
+    assert np.all(np.asarray(res.sobol_total_bound) == 0.0)
+
+
 def test_dgsm_reproducible_with_seed():
     fn = lambda z: jnp.sin(z[0]) * z[1] ** 2
     rng = [(0.0, 2.0), (0.0, 2.0)]

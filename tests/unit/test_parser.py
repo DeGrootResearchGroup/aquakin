@@ -112,6 +112,19 @@ def test_empty_condition_brace():
         parse_rate_expression("{}")
 
 
+@pytest.mark.parametrize("expr", ["1e", "1e+", "2.5e", "3E-"])
+def test_malformed_exponent_is_parse_error(expr):
+    """A number with an exponent marker but no exponent digits must fail as a
+    positioned ParseError, not a bare float() ValueError from the primary."""
+    with pytest.raises(ParseError):
+        parse_rate_expression(expr)
+
+
+@pytest.mark.parametrize("expr", ["1e3", "1.6e2", "1.5e-2", "2E+3"])
+def test_valid_exponent_still_parses(expr):
+    assert parse_rate_expression(expr) is not None
+
+
 def test_arrhenius_function():
     tree = parse_rate_expression("arrhenius(A, Ea)")
     assert isinstance(tree, ArrheniusNode)

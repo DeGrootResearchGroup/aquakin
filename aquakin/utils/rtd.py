@@ -91,7 +91,27 @@ def variance(t, C) -> jnp.ndarray:
     return jnp.trapezoid((t - mean) ** 2 * E, t)
 
 
-def percentile_time(t, C, q: float) -> jnp.ndarray:
+def _warn_if_truncated(C, stacklevel: int = 2) -> None:
+    """Warn if the tracer response was cut short before washing out.
+
+    A fully-resolved impulse returns to baseline, so the final ordinate is a
+    small fraction of the peak. If it is not, the window was cut short and the
+    normalised ``F`` (hence every percentile time and the Morrill index) is
+    biased low. Threshold = 5% of the peak magnitude.
+    """
+    peak = jnp.max(jnp.abs(C))
+    tail = jnp.abs(C[-1])
+    if float(peak) > 0.0 and float(tail) > 0.05 * float(peak):
+        warnings.warn(
+            f"Tracer response appears truncated: the final-sample concentration "
+            f"is {float(tail) / float(peak):.0%} of the peak, so it has not washed "
+            f"out and the RTD is not fully resolved. Percentile times and the "
+            f"Morrill index are biased low; extend the sampling window.",
+            stacklevel=stacklevel,
+        )
+
+
+def percentile_time(t, C, q: float, *, _warn_truncated: bool = True) -> jnp.ndarray:
     """
     Time at which the cumulative RTD reaches ``q``.
 
@@ -129,20 +149,8 @@ def percentile_time(t, C, q: float) -> jnp.ndarray:
     if not (0.0 <= q <= 1.0):
         raise ValueError(f"q must be in [0, 1], got {q}")
     t, C = _ensure_1d(t, C)
-    # Detect a truncated tracer response: a fully-resolved impulse returns to
-    # baseline, so the final ordinate is a small fraction of the peak. If it is
-    # not, the window was cut short and the normalised F (hence this percentile)
-    # is biased low. Threshold = 5% of the peak magnitude.
-    peak = jnp.max(jnp.abs(C))
-    tail = jnp.abs(C[-1])
-    if float(peak) > 0.0 and float(tail) > 0.05 * float(peak):
-        warnings.warn(
-            f"Tracer response appears truncated: the final-sample concentration "
-            f"is {float(tail) / float(peak):.0%} of the peak, so it has not washed "
-            f"out and the RTD is not fully resolved. Percentile times and the "
-            f"Morrill index are biased low; extend the sampling window.",
-            stacklevel=2,
-        )
+    if _warn_truncated:
+        _warn_if_truncated(C, stacklevel=3)
     F = F_curve(t, C)
     # Drop runs where F is flat (E=0): keep the first occurrence of each
     # plateau so interp sees a strictly-increasing-by-points domain.
@@ -158,4 +166,11 @@ def morrill_index(t, C) -> jnp.ndarray:
     (CSTR) has Morrill = ln(0.1) / ln(0.9) ~= 21.85. Drinking-water
     disinfection guidelines often target Morrill <= 2 for "near plug flow".
     """
-    return percentile_time(t, C, 0.9) / percentile_time(t, C, 0.1)
+    # Check truncation once here, then suppress it in the two inner calls so a
+    # single Morrill evaluation does not emit the same warning twice.
+    t1, C1 = _ensure_1d(t, C)
+    _warn_if_truncated(C1, stacklevel=2)
+    return (
+        percentile_time(t, C, 0.9, _warn_truncated=False)
+        / percentile_time(t, C, 0.1, _warn_truncated=False)
+    )

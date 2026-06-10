@@ -13,9 +13,11 @@ Grammar (lowest to highest precedence)::
                | '(' expr ')'
     arglist   := expr (',' expr)*
 
-Identifiers without parentheses are rate-constant references (``ParamNode``).
-The built-in function names ``arrhenius`` and ``pH_switch`` emit their
-respective domain nodes. Any other identifier with parentheses is rejected.
+An identifier without parentheses is a rate-constant reference (``ParamNode``);
+``[name]`` is a species and ``{name}`` a condition field. The built-in function
+names ``arrhenius``, ``pH_switch``, ``pH_inhibit``, ``monod``, ``monod_inh``,
+``monod_ratio`` and ``monod_inh_ratio`` emit their respective domain nodes.
+Any other identifier with parentheses is rejected.
 """
 
 from __future__ import annotations
@@ -103,10 +105,18 @@ def _tokenize(text: str) -> list[Token]:
                     saw_dot = True
                     j += 1
                 elif cj in ("e", "E") and not saw_exp:
-                    saw_exp = True
-                    j += 1
-                    if j < n and text[j] in "+-":
-                        j += 1
+                    # Only an exponent if a digit follows (optionally after a
+                    # sign). Otherwise leave the 'e' for the identifier scanner
+                    # so a malformed number like "1e" or "1e+" surfaces as a
+                    # clean ParseError rather than a bare float() ValueError.
+                    k = j + 1
+                    if k < n and text[k] in "+-":
+                        k += 1
+                    if k < n and text[k].isdigit():
+                        saw_exp = True
+                        j = k
+                    else:
+                        break
                 else:
                     break
             tokens.append(Token("NUMBER", text[i:j], i))
