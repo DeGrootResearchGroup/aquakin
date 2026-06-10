@@ -23,6 +23,21 @@ def network():
     return aquakin.load_network_from_file(FIXTURE)
 
 
+def test_summary_includes_symbolic_coefficient(network):
+    """summary() must render parameter-dependent coefficients (evaluated at the
+    defaults), not silently drop them by reading the all-zeros static base.
+
+    The fixture's substrate S has the symbolic coefficient ``-1/Y`` (Y=0.5 by
+    default, so -2); X is the numeric +1.0. The static base matrix holds 0 for
+    S, so a summary reading it would omit S entirely.
+    """
+    out = network.summary()
+    growth_line = next(ln for ln in out.splitlines() if "growth:" in ln)
+    assert "S" in growth_line  # would be missing if read from the static base
+    assert "2 S" in growth_line  # -1/Y at Y=0.5
+    assert "X" in growth_line
+
+
 def test_dynamic_entries_recorded(network):
     """Compile registers the symbolic stoich entry."""
     assert len(network.stoich_dynamic) == 1
