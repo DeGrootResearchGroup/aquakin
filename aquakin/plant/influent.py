@@ -12,6 +12,7 @@ influent files shipped under ``aquakin/plant/bsm/data/``.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -33,6 +34,10 @@ _BSM1_COLUMN_ORDER = [
     "t", "SI", "SS", "XI", "XS", "XB_H", "XB_A", "XP",
     "SO", "SNO", "SNH", "SND", "XND", "SALK", "Q",
 ]
+
+# BSM2 files add a time-varying influent temperature ``T`` (degC) as the last
+# column; load_bsm2_influent converts it to Kelvin.
+_BSM2_COLUMN_ORDER = _BSM1_COLUMN_ORDER + ["T"]
 
 
 @dataclass
@@ -217,8 +222,11 @@ def _influent_from_text(
     t = data[:, t_idx]
     Q = data[:, Q_idx]
     C = data[:, species_idx_arr]
+    # An optional 'T' column carries the influent temperature, in the file's own
+    # units (the caller converts if needed -- e.g. load_bsm2_influent's degC).
+    T = data[:, column_order.index("T")] if "T" in column_order else None
 
-    return InfluentSeries(t=t, Q=Q, C=C, network=network)
+    return InfluentSeries(t=t, Q=Q, C=C, network=network, T=T)
 
 
 def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeries:
@@ -276,9 +284,11 @@ def load_bsm2_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
     These files are **synthesised** (``scripts/generate_bsm2_influent.py``): they
     follow the BSM2 constant-influent composition (Gernaey et al. 2014) plus a
     diurnal flow / load pattern, but are not the canonical 609-day IWA series.
-    They share the BSM1 column layout (TSS and the time-varying influent
-    temperature are omitted -- aquakin's ASM1 is temperature-independent and the
-    digester runs at a fixed 35 °C).
+    The layout is the BSM1 columns plus a time-varying influent temperature
+    ``T`` (stored in degC; returned as ``InfluentSeries.T`` in Kelvin), which
+    drives the ASM1 temperature corrections seasonally -- pair the network with
+    :func:`aquakin.plant.bsm.bsm2_asm1_network` so the kinetics reference the
+    BSM2 15 degC base. TSS is omitted (it is derived, not a state).
     """
     if profile not in ("dry", "rain", "storm"):
         raise ValueError(
@@ -289,7 +299,9 @@ def load_bsm2_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
         raise FileNotFoundError(
             f"BSM2 influent file 'BSM2_{profile}.csv' not found in package data."
         )
-    return _influent_from_text(
+    series = _influent_from_text(
         resource.read_text(encoding="utf-8"), network,
-        source=f"BSM2_{profile}.csv",
+        column_order=_BSM2_COLUMN_ORDER, source=f"BSM2_{profile}.csv",
     )
+    # The file stores temperature in degC; reactors expect Kelvin.
+    return dataclasses.replace(series, T=series.T + 273.15)

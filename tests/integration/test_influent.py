@@ -7,6 +7,7 @@ import aquakin
 from aquakin.plant.influent import (
     _influent_from_text,
     load_bsm1_influent,
+    load_bsm2_influent,
     read_influent_csv,
 )
 
@@ -50,6 +51,46 @@ def test_read_influent_csv_matches_text(asm1, tmp_path):
 def test_read_influent_csv_missing_file(asm1, tmp_path):
     with pytest.raises(FileNotFoundError):
         read_influent_csv(tmp_path / "nope.csv", asm1)
+
+
+def test_influent_from_text_captures_T_column(asm1):
+    """A 'T' column is captured into InfluentSeries.T (in the file's units);
+    its absence leaves T = None."""
+    from aquakin.plant.influent import _BSM1_COLUMN_ORDER
+
+    order = _BSM1_COLUMN_ORDER + ["T"]
+    header = ",".join(order)
+    zeros = {name: 0.0 for name in order}
+    rows = []
+    for tval, temp in ((0.0, 12.0), (0.25, 16.0)):
+        vals = dict(zeros, t=tval, Q=18000.0, T=temp)
+        rows.append(",".join(f"{vals[c]:g}" for c in order))
+    text = header + "\n" + "\n".join(rows) + "\n"
+    series = _influent_from_text(text, asm1, column_order=order)
+    assert series.T is not None
+    assert float(series.T[0]) == pytest.approx(12.0)
+    assert float(series.T[1]) == pytest.approx(16.0)
+    # No T column -> T is None (default, back-compatible).
+    assert _influent_from_text(_csv_text(asm1), asm1).T is None
+
+
+def test_load_bsm2_influent_carries_temperature_kelvin(asm1):
+    """The BSM2 influent files carry a temperature column; load_bsm2_influent
+    returns it in Kelvin (the degC file values + 273.15), seasonally varying."""
+    for profile in ("dry", "rain", "storm"):
+        inf = load_bsm2_influent(profile, asm1)
+        assert inf.T is not None
+        assert inf.T.shape == inf.t.shape
+        # 11.5-18.5 degC window -> ~284.6-291.7 K.
+        assert 283.0 < float(inf.T.min()) < float(inf.T.max()) < 293.0
+        # at(t) interpolates the temperature onto the returned stream.
+        s = inf.at(jnp.asarray(7.0))
+        assert s.T is not None and 285.0 < float(s.T) < 291.0
+
+
+def test_load_bsm1_influent_has_no_temperature(asm1):
+    """BSM1 files have no temperature column, so T stays None (back-compatible)."""
+    assert load_bsm1_influent("dry", asm1).T is None
 
 
 @pytest.mark.parametrize("profile", ["dry", "rain", "storm"])

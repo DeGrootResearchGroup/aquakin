@@ -18,6 +18,7 @@ import pytest
 import aquakin
 from aquakin.plant.bsm.bsm2 import (
     build_bsm2,
+    bsm2_asm1_network,
     bsm2_constant_influent,
     bsm2_parameters,
 )
@@ -32,7 +33,9 @@ _SS_CACHE = {}
 
 
 def _networks():
-    return aquakin.load_network("asm1"), aquakin.load_network("adm1")
+    # The BSM2-configured ASM1 (temperature corrections referenced to 15 °C) so
+    # the seasonal influent temperature drives the kinetics from the right base.
+    return bsm2_asm1_network(), aquakin.load_network("adm1")
 
 
 def _build(asm1, adm1, influent):
