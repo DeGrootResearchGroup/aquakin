@@ -61,8 +61,7 @@ def _run(plant, t_end=30.0, n_save=4, **kwargs):
 
 def test_bsm1_builds_and_solves(asm1, constant_influent):
     plant = build_bsm1(network=asm1)
-    plant.add_influent("feed", constant_influent)
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=10.0)
     assert jnp.all(jnp.isfinite(sol.state))
 
@@ -78,8 +77,7 @@ def test_recycle_concentration_sweep_converges_by_two_passes(
     import numpy as np
 
     plant = build_bsm1(network=asm1, use_takacs=use_takacs)
-    plant.add_influent("feed", constant_influent)
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     # Set up the layouts the RHS needs (solve() would do this).
     plant._build_state_layout()
     plant._build_parameter_layout()
@@ -111,8 +109,7 @@ def test_recycle_passes_validated_and_configurable(asm1):
 def test_bsm1_nitrification_active(asm1, constant_influent):
     """Under aerobic conditions in tank 5, NH4 should be largely oxidised."""
     plant = build_bsm1(network=asm1)
-    plant.add_influent("feed", constant_influent)
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=15.0)
     tank5_SNH = float(sol.C_named("tank5", "SNH")[-1])
     tank5_SNO = float(sol.C_named("tank5", "SNO")[-1])
@@ -124,8 +121,7 @@ def test_bsm1_nitrification_active(asm1, constant_influent):
 def test_bsm1_biomass_sustained(asm1, constant_influent):
     """RAS recycle should keep biomass concentrations elevated."""
     plant = build_bsm1(network=asm1)
-    plant.add_influent("feed", constant_influent)
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=15.0)
     # Heterotrophic biomass should grow well above the influent value
     # (which is 28.17) via the recycled mass.
@@ -139,8 +135,7 @@ def test_bsm1_biomass_sustained(asm1, constant_influent):
 def test_bsm1_aerobic_anoxic_separation(asm1, constant_influent):
     """Aerobic tanks should have positive SO; anoxic tanks ~zero."""
     plant = build_bsm1(network=asm1)
-    plant.add_influent("feed", constant_influent)
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=10.0)
     so1 = float(sol.C_named("tank1", "SO")[-1])
     so3 = float(sol.C_named("tank3", "SO")[-1])
@@ -159,8 +154,7 @@ def test_bsm1_aerobic_anoxic_separation(asm1, constant_influent):
 def test_bsm1_grad_through_plant(asm1, constant_influent):
     """jax.grad through plant.solve must produce finite gradients."""
     plant = build_bsm1(network=asm1)
-    plant.add_influent("feed", constant_influent)
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
 
     def loss(params):
         # Cap the integrator step. The reverse-mode adjoint of this stiff plant
@@ -191,8 +185,7 @@ def test_bsm1_takacs_reaches_steady_state(asm1, constant_influent):
     out. The Takács result should match the IdealClarifier's healthy steady
     state."""
     plant = build_bsm1(network=asm1, use_takacs=True)
-    plant.add_influent("feed", constant_influent)
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = plant.solve(
         t_span=(0.0, 150.0), t_eval=jnp.asarray([0.0, 150.0]),
         rtol=1e-4, atol=1e-3, max_steps=300_000,
@@ -213,8 +206,7 @@ def test_bsm1_dry_weather_runs(asm1):
     fixed-fraction gain that blew the throughput up to ~20x Qin and made the
     monolithic solve hit the step ceiling under diurnal forcing (issue #30)."""
     plant = build_bsm1(network=asm1)
-    plant.add_influent("feed", load_bsm1_influent("dry", asm1))
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", load_bsm1_influent("dry", asm1), to="inlet_mix.fresh")
     sol = _run(plant, t_end=14.0, n_save=8)
     assert jnp.all(jnp.isfinite(sol.state))
     # Healthy plant under the diurnal load: biomass sustained, nitrified.
@@ -228,8 +220,7 @@ def test_bsm1_takacs_dry_weather_runs(asm1):
     influent to a healthy state (issue #30): the fixed-setpoint recycle pumps
     keep the layered settler's flows bounded under diurnal forcing."""
     plant = build_bsm1(network=asm1, use_takacs=True)
-    plant.add_influent("feed", load_bsm1_influent("dry", asm1))
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", load_bsm1_influent("dry", asm1), to="inlet_mix.fresh")
     sol = plant.solve(
         t_span=(0.0, 14.0), t_eval=jnp.linspace(0.0, 14.0, 8),
         rtol=1e-4, atol=1e-3, max_steps=200_000,
@@ -242,8 +233,7 @@ def test_bsm1_takacs_dry_weather_runs(asm1):
 def test_metrics_compute_finite(asm1, constant_influent):
     """The metrics module produces finite values on a BSM1 trajectory."""
     plant = build_bsm1(network=asm1)
-    plant.add_influent("feed", constant_influent)
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=10.0, n_save=11)
 
     # Reconstruct effluent stream at every save time. Effluent = clarifier
