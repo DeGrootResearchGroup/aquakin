@@ -836,6 +836,28 @@ reactions:
   literature values; for a proper Bayesian MAP/posterior pair them with
   `loss="nll"` and a measurement `sigma` so the data term is a true negative
   log-likelihood and the prior curvature enters the Laplace covariance.
+- `temperature` on parameters is optional — an Arrhenius-style temperature
+  correction `temperature: {theta: t, ref_T: T0, condition: "T"}`. When present,
+  the rate constant is multiplied by `theta**(T - ref_T)` during rate
+  evaluation, where `T` is read from the named condition field (default `"T"`).
+  The parameter `value` is the value **at** `ref_T`, so the correction is unity
+  there — a network whose conditions sit at the reference temperature behaves
+  exactly as if uncorrected (backward-compatible). `ref_T` is in the condition's
+  units (Kelvin for the ASM/ADM networks); a difference is used, so Kelvin and
+  Celsius give the same `theta`. `theta` is the per-degree factor; from a
+  parameter measured `p_hi` at `T_hi` and `p_lo` at `T_lo` it is
+  `(p_hi/p_lo)**(1/(T_hi - T_lo))`. The correction is applied to **rate
+  constants only** — it is confined to `CompiledNetwork.rates` (which multiplies
+  the corrected param indices by their factor before evaluating the rate
+  callables); `compute_stoich` always uses the raw parameters, so stoichiometric
+  (yield / composition) coefficients are never temperature-scaled. Stored as
+  `CompiledNetwork.temperature_corrections` (a list of
+  `(param_idx, ln_theta, ref_T, condition_field)`); AD-clean. `asm1` ships with
+  the six BSM temperature-dependent rate constants corrected (`muH`, `muA`,
+  `bH`, `bA`, `ka`, `kh`, `ref_T = 293.15 K`, slopes from the standard BSM
+  15 °C/10 °C pairs in `asm1_bsm2.c`), so it slows correctly in the cold
+  (nitrification — the most temperature-sensitive — drops to ~36% at 10 °C) while
+  staying identical to the old behaviour at the default 20 °C.
 - Parameters can live at the network level (a single shared slot used by
   any reaction that references them by bare name) or inside a reaction's
   `parameters:` block (namespaced as `<reaction>.<name>`). Network-level

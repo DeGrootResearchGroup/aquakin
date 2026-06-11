@@ -63,19 +63,26 @@ clip_negative_states: true
 # below.
 parameters:
   # --- Kinetic constants ---
-  muH:    {value: 6.0,   units: "1/d",          bounds: [1.0, 12.0],   transform: positive_log}
+  # The six rate constants (muH, muA, bH, bA, ka, kh) carry an Arrhenius-style
+  # temperature correction ``theta^(T - ref_T)``: the value is at ref_T = 293.15 K
+  # (20 degC), and the correction is unity there, so a network run at the default
+  # 20 degC behaves exactly as before. The theta slopes are the standard BSM
+  # values (asm1_bsm2.c), derived from the documented 15 degC / 10 degC pairs,
+  # e.g. muH theta = (4.0/3.0)**(1/5). Half-saturation / switching constants are
+  # treated as temperature-independent (BSM convention).
+  muH:    {value: 6.0,   units: "1/d",          bounds: [1.0, 12.0],   transform: positive_log, temperature: {theta: 1.059224, ref_T: 293.15}}
   KS:     {value: 20.0,  units: "g_COD/m3",     bounds: [1.0, 200.0],  transform: positive_log}
   KOH:    {value: 0.2,   units: "g_O2/m3",      bounds: [0.01, 2.0],   transform: positive_log}
   KNO:    {value: 0.5,   units: "g_N/m3",       bounds: [0.05, 5.0],   transform: positive_log}
   KNH_H:  {value: 0.05,  units: "g_N/m3",       bounds: [0.001, 1.0],  transform: positive_log}
   etag:   {value: 0.8,   units: "-",            bounds: [0.05, 0.95],  transform: logit}
-  muA:    {value: 0.8,   units: "1/d",          bounds: [0.1, 2.0],    transform: positive_log}
+  muA:    {value: 0.8,   units: "1/d",          bounds: [0.1, 2.0],    transform: positive_log, temperature: {theta: 1.107568, ref_T: 293.15}}
   KNH_A:  {value: 1.0,   units: "g_N/m3",       bounds: [0.1, 10.0],   transform: positive_log}
   KOA:    {value: 0.4,   units: "g_O2/m3",      bounds: [0.05, 4.0],   transform: positive_log}
-  bH:     {value: 0.62,  units: "1/d",          bounds: [0.05, 2.0],   transform: positive_log}
-  bA:     {value: 0.05,  units: "1/d",          bounds: [0.005, 0.5],  transform: positive_log}
-  ka:     {value: 0.08,  units: "m3/(g_COD*d)", bounds: [0.005, 1.0],  transform: positive_log}
-  kh:     {value: 3.0,   units: "1/d",          bounds: [0.1, 10.0],   transform: positive_log}
+  bH:     {value: 0.62,  units: "1/d",          bounds: [0.05, 2.0],   transform: positive_log, temperature: {theta: 1.084473, ref_T: 293.15}}
+  bA:     {value: 0.05,  units: "1/d",          bounds: [0.005, 0.5],  transform: positive_log, temperature: {theta: 1.107568, ref_T: 293.15}}
+  ka:     {value: 0.08,  units: "m3/(g_COD*d)", bounds: [0.005, 1.0],  transform: positive_log, temperature: {theta: 1.045640, ref_T: 293.15}}
+  kh:     {value: 3.0,   units: "1/d",          bounds: [0.1, 10.0],   transform: positive_log, temperature: {theta: 1.037137, ref_T: 293.15}}
   KX:     {value: 0.03,  units: "-",            bounds: [0.001, 1.0],  transform: positive_log}
   etah:   {value: 0.4,   units: "-",            bounds: [0.05, 0.95],  transform: logit}
   # --- Stoichiometric constants (now calibratable) ---

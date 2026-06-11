@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import math
+
 import jax.numpy as jnp
 import numpy as np
 
@@ -210,6 +212,17 @@ class CompiledNetwork:
     # (non-negative) states, so it does not change the physical solution.
     clip_negative_states: bool = False
 
+    # Optional per-parameter temperature corrections. Each entry is
+    # ``(param_idx, ln_theta, ref_T, condition_field)``: when evaluating the
+    # rates, the parameter at ``param_idx`` is multiplied by
+    # ``exp(ln_theta * (T - ref_T))`` (a ``theta^(T - ref_T)`` Arrhenius-style
+    # factor), where ``T`` is read from ``condition_arrays[condition_field]``.
+    # The correction is applied to the rate constants only (it is confined to
+    # :meth:`rates`); ``compute_stoich`` always uses the raw parameters. Unity
+    # at ``T == ref_T``, so a network whose conditions sit at the reference
+    # temperature behaves exactly as if uncorrected.
+    temperature_corrections: list = field(default_factory=list)
+
     @property
     def n_species(self) -> int:
         return len(self.species)
@@ -274,9 +287,25 @@ class CompiledNetwork:
             condition_arrays = self._augment_conditions(
                 C, params, condition_arrays, loc_idx
             )
+        if self.temperature_corrections:
+            params = self._apply_temperature(params, condition_arrays, loc_idx)
         return jnp.stack(
             [f(C, params, condition_arrays, loc_idx) for f in self.rate_callables]
         )
+
+    def _apply_temperature(
+        self, params: jnp.ndarray, condition_arrays: dict, loc_idx
+    ) -> jnp.ndarray:
+        """Multiply temperature-corrected rate constants by ``theta^(T-ref_T)``.
+
+        Returns a new parameter vector with each corrected entry scaled by its
+        Arrhenius-style factor. Confined to rate evaluation, so the
+        stoichiometry parameters are untouched.
+        """
+        for idx, ln_theta, ref_T, cond in self.temperature_corrections:
+            T = condition_arrays[cond][loc_idx]
+            params = params.at[idx].multiply(jnp.exp(ln_theta * (T - ref_T)))
+        return params
 
     def _augment_conditions(
         self,
@@ -467,7 +496,8 @@ def _build_param_index(spec):
     reaction-local parameters in declaration order (so ordering is
     deterministic).
 
-    Returns ``(parameters, param_index, defaults, bounds, transforms, priors)``.
+    Returns ``(parameters, param_index, defaults, bounds, transforms, priors,
+    temperature_corrections)``.
     """
     parameters: list[str] = []
     param_index: dict[str, int] = {}
@@ -475,9 +505,11 @@ def _build_param_index(spec):
     bounds: dict[str, tuple[float, float]] = {}
     transforms: dict[str, str] = {}
     priors: dict[str, tuple[float, float]] = {}
+    temperature: list = []
 
     def record(key: str, pspec) -> None:
-        param_index[key] = len(parameters)
+        idx = len(parameters)
+        param_index[key] = idx
         parameters.append(key)
         defaults.append(float(pspec.value))
         if pspec.bounds is not None:
@@ -486,13 +518,19 @@ def _build_param_index(spec):
         prior = getattr(pspec, "prior", None)
         if prior is not None:
             priors[key] = prior.resolved()
+        tc = getattr(pspec, "temperature", None)
+        if tc is not None:
+            temperature.append(
+                (idx, math.log(float(tc.theta)), float(tc.ref_T), tc.condition)
+            )
 
     for local_name, pspec in getattr(spec, "parameters", {}).items():
         record(local_name, pspec)
     for rxn in spec.reactions:
         for local_name, pspec in rxn.parameters.items():
             record(f"{rxn.name}.{local_name}", pspec)
-    return parameters, param_index, defaults, bounds, transforms, priors
+    return (parameters, param_index, defaults, bounds, transforms, priors,
+            temperature)
 
 
 def _resolve_expressions(spec) -> dict[str, ASTNode]:
@@ -647,7 +685,8 @@ def compile_network(spec: "Any") -> CompiledNetwork:
 
     # Stage 2: the flat parameter index (network-level then reaction-local).
     (parameters, param_index, parameter_defaults, parameter_bounds,
-     parameter_transforms, parameter_priors) = _build_param_index(spec)
+     parameter_transforms, parameter_priors,
+     temperature_corrections) = _build_param_index(spec)
 
     # Stage 3: parse + topo-sort + inline the named expressions.
     expression_asts = _resolve_expressions(spec)
@@ -726,4 +765,5 @@ def compile_network(spec: "Any") -> CompiledNetwork:
         derived_fields=derived_fields,
         positivity_threshold=positivity_threshold,
         clip_negative_states=bool(getattr(spec, "clip_negative_states", False)),
+        temperature_corrections=temperature_corrections,
     )
