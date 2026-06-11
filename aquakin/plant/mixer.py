@@ -71,7 +71,18 @@ class MixerUnit:
             Q_total = Q_total + s.Q
             mass_total = mass_total + s.Q * s.C
         C_out = mass_total / (Q_total + _EPS_Q)
-        return {"out": Stream(Q=Q_total, C=C_out, network=self.network)}
+        # Heat balance: the outlet temperature is the flow-weighted inlet
+        # temperature. Only computed when every inlet carries a temperature
+        # (a static, topology-determined property); otherwise the mixer stays
+        # temperature-agnostic.
+        T_out = None
+        if all(inputs[name].T is not None for name in self.input_port_names):
+            heat = jnp.zeros(())
+            for name in self.input_port_names:
+                s = inputs[name]
+                heat = heat + s.Q * s.T
+            T_out = heat / (Q_total + _EPS_Q)
+        return {"out": Stream(Q=Q_total, C=C_out, network=self.network, T=T_out)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
         """Output port flows from input port flows (the linear flow rule).
@@ -187,10 +198,12 @@ class SplitterUnit:
     ) -> dict[str, Stream]:
         s_in = inputs["in"]
         outputs: dict[str, Stream] = {}
+        # A passive splitter preserves the inlet temperature on every outlet.
         if self.output_port_ratios is not None:
             for port, ratio in self.output_port_ratios.items():
                 outputs[port] = Stream(
-                    Q=s_in.Q * jnp.asarray(ratio), C=s_in.C, network=self.network
+                    Q=s_in.Q * jnp.asarray(ratio), C=s_in.C, network=self.network,
+                    T=s_in.T,
                 )
             return outputs
         # Flow mode: fixed setpoints, remainder takes what is left. Clamp the
@@ -202,9 +215,10 @@ class SplitterUnit:
         for port, q in self.output_port_flows.items():
             q = jnp.asarray(float(q))
             total_set = total_set + q
-            outputs[port] = Stream(Q=q, C=s_in.C, network=self.network)
+            outputs[port] = Stream(Q=q, C=s_in.C, network=self.network, T=s_in.T)
         outputs[self.remainder_port] = Stream(
-            Q=jnp.maximum(s_in.Q - total_set, 0.0), C=s_in.C, network=self.network
+            Q=jnp.maximum(s_in.Q - total_set, 0.0), C=s_in.C, network=self.network,
+            T=s_in.T,
         )
         return outputs
 

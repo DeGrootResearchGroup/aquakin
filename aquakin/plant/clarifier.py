@@ -164,8 +164,8 @@ class IdealClarifier:
         C_under = sol_C_under + part_C_under
 
         return {
-            self.overflow_port: Stream(Q=Q_over, C=C_over, network=self.network),
-            self.underflow_port: Stream(Q=Q_under, C=C_under, network=self.network),
+            self.overflow_port: Stream(Q=Q_over, C=C_over, network=self.network, T=s_in.T),
+            self.underflow_port: Stream(Q=Q_under, C=C_under, network=self.network, T=s_in.T),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:

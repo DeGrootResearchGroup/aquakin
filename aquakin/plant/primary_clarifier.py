@@ -115,6 +115,13 @@ class PrimaryClarifier:
         Q_in = jnp.zeros(())
         for name in self.input_port_names:
             Q_in = Q_in + inputs[name].Q
+        # Flow-weighted inlet temperature, passed through to both outlets.
+        T_out = None
+        if all(inputs[n].T is not None for n in self.input_port_names):
+            heat = jnp.zeros(())
+            for name in self.input_port_names:
+                heat = heat + inputs[name].Q * inputs[name].T
+            T_out = heat / (Q_in + 1e-12)
 
         Qu = self.f_PS * Q_in
         E = 1.0 / self.f_PS                       # thickening factor Q_in/Q_u
@@ -128,9 +135,9 @@ class PrimaryClarifier:
 
         return {
             self.effluent_port: Stream(
-                Q=Q_in - Qu, C=C_eff, network=self.network
+                Q=Q_in - Qu, C=C_eff, network=self.network, T=T_out
             ),
-            self.sludge_port: Stream(Q=Qu, C=C_sludge, network=self.network),
+            self.sludge_port: Stream(Q=Qu, C=C_sludge, network=self.network, T=T_out),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:

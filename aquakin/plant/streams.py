@@ -31,20 +31,34 @@ class Stream:
         is ``network.species``.
     network : CompiledNetwork
         The kinetic network whose species ordering applies to ``C``.
+    T : jnp.ndarray, optional
+        Stream temperature (scalar, Kelvin). Carried algebraically through the
+        flowsheet: mixers flow-weight it (a heat balance) and pass-through units
+        propagate it unchanged, so a reactor can read its inlet temperature and
+        feed it to temperature-dependent kinetics. ``None`` (the default) means
+        the stream is temperature-agnostic; reactors then fall back to their
+        static condition, so existing plants are unaffected. ``None``-ness is a
+        static structural property (consistent across RHS calls), so it is
+        jit-safe.
     """
 
     Q: jnp.ndarray
     C: jnp.ndarray
     network: "CompiledNetwork"
+    T: "jnp.ndarray | None" = None
 
     def mass_flow(self) -> jnp.ndarray:
         """Per-species mass flow rate ``Q * C``, shape ``(n_species,)``."""
         return self.Q * self.C
 
     def with_C(self, C: jnp.ndarray) -> "Stream":
-        """Return a new stream with the same Q/network but a new C vector."""
-        return Stream(Q=self.Q, C=C, network=self.network)
+        """Return a new stream with the same Q/T/network but a new C vector."""
+        return Stream(Q=self.Q, C=C, network=self.network, T=self.T)
 
     def with_Q(self, Q: jnp.ndarray) -> "Stream":
-        """Return a new stream with the same C/network but a new flow rate."""
-        return Stream(Q=Q, C=self.C, network=self.network)
+        """Return a new stream with the same C/T/network but a new flow rate."""
+        return Stream(Q=Q, C=self.C, network=self.network, T=self.T)
+
+    def with_T(self, T: "jnp.ndarray | None") -> "Stream":
+        """Return a new stream with the same Q/C/network but a new temperature."""
+        return Stream(Q=self.Q, C=self.C, network=self.network, T=T)

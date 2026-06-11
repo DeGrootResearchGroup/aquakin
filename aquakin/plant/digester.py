@@ -108,11 +108,16 @@ class ADM1DigesterUnit:
         inputs: dict[str, Stream],
         params: jnp.ndarray,
     ) -> dict[str, Stream]:
-        # Constant liquid volume: effluent flow equals the total inflow.
+        # Constant liquid volume: effluent flow equals the total inflow. The
+        # effluent temperature is carried through from the feed (the small reject
+        # stream returns at roughly the water-line temperature).
         Q_total = jnp.zeros(())
+        T_in = None
         for name in self.input_port_names:
             Q_total = Q_total + inputs[name].Q
-        return {self.output_port: Stream(Q=Q_total, C=state, network=self.network)}
+            T_in = inputs[name].T if T_in is None else T_in
+        return {self.output_port: Stream(Q=Q_total, C=state, network=self.network,
+                                         T=T_in)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
         Q_total = jnp.zeros(())

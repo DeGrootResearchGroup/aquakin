@@ -39,6 +39,7 @@ are omitted (open-loop steady state).
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Optional
 
 import jax.numpy as jnp
@@ -72,6 +73,7 @@ BSM2_DEWATERING_TSS_PERCENT = 28.0
 BSM2_SEPARATOR_REMOVAL = 98.0
 BSM2_CARBON_FLOW = 2.0          # m³/d external carbon dosed to reactor 1
 BSM2_CARBON_CONC = 400000.0     # gCOD/m³ readily-biodegradable (SS) carbon source
+BSM2_AS_TEMPERATURE_K = 288.15  # K (15 °C) -- the BSM2 ASM1 reference temperature
 
 # Published BSM2 constant-influent composition (the open-loop operating point;
 # gCOD/m³ or gN/m³, SALK in mol/m³). Q is BSM2_Q_REF.
@@ -91,6 +93,26 @@ BSM2_ASM1_PARAMETERS = {
     "kh": 3.0, "KX": 0.1, "etah": 0.8, "Y_H": 0.67, "Y_A": 0.24, "i_XB": 0.08,
     "i_XP": 0.06, "f_P": 0.08,
 }
+
+
+def bsm2_asm1_network(asm1_network=None):
+    """ASM1 network configured for BSM2: temperature corrections re-referenced
+    to 15 °C (the BSM2 ASM1 reference temperature, matching ``bsm2_parameters``).
+
+    The shipped ``asm1`` corrections are referenced to 20 °C; this moves ``ref_T``
+    to 288.15 K while keeping the (BSM2) slopes. Use the returned network for
+    **both** ``build_bsm2`` and the influent (e.g. ``bsm2_constant_influent``)
+    so their network identities match and a temperature-carrying influent drives
+    the AS kinetics from the correct 15 °C base.
+    """
+    import aquakin
+    asm1 = asm1_network if asm1_network is not None else aquakin.load_network("asm1")
+    if not getattr(asm1, "temperature_corrections", None):
+        return asm1
+    return dataclasses.replace(asm1, temperature_corrections=[
+        (idx, ln_theta, BSM2_AS_TEMPERATURE_K, cond)
+        for (idx, ln_theta, _ref, cond) in asm1.temperature_corrections
+    ])
 
 
 def bsm2_asm1_parameter_vector(asm1_network):
@@ -157,9 +179,19 @@ def build_bsm2(
 
     asm1 = asm1_network if asm1_network is not None else aquakin.load_network("asm1")
     adm1 = adm1_network if adm1_network is not None else aquakin.load_network("adm1")
+
+    # The AS reactors operate at the temperature where their parameters are
+    # defined -- the reference temperature of the ASM1 temperature corrections
+    # (288.15 K for the BSM2-configured network from bsm2_asm1_network, 293.15 K
+    # for the plain shipped asm1). Setting the static condition there makes the
+    # correction unity at steady state, so a constant-temperature run reproduces
+    # the (uncorrected) reference exactly; a temperature-carrying influent then
+    # drives the correction away from it (seasonal kinetics).
     if conditions is None:
         conditions = {name: asm1._condition_defaults[name]
                       for name in asm1.conditions_required}
+        if "T" in conditions and getattr(asm1, "temperature_corrections", None):
+            conditions["T"] = float(asm1.temperature_corrections[0][2])
 
     Qintr = 3.0 * Q_ref
     Qr = 1.0 * Q_ref
@@ -167,6 +199,13 @@ def build_bsm2(
     Q_settler_underflow = Qr + Qw
 
     plant = Plant("BSM2")
+    # Recycle seeds carry a nominal temperature so a temperature-aware influent
+    # ignites T propagation around the reject loop from the first pass (the value
+    # is overwritten within a couple of passes by the real recycle temperature).
+    # For a temperature-agnostic influent the front mixer sees the (None) fresh
+    # feed and the seed temperature is simply never used.
+    seed = Stream(Q=jnp.asarray(0.0), C=asm1.default_concentrations(),
+                  network=asm1, T=jnp.asarray(BSM2_AS_TEMPERATURE_K))
 
     # ----- Front: combine raw influent with the recycled reject water. -----
     plant.add_unit(MixerUnit(name="front_mix",
@@ -258,6 +297,10 @@ def build_bsm2(
         carbon_C = (carbon_C * 0.0).at[asm1.species_index["SS"]].set(float(carbon_conc))
         carbon = InfluentSeries(
             t=jnp.asarray([0.0, 1.0e9]), Q=jnp.full((2,), float(carbon_flow)),
+            C=jnp.tile(carbon_C, (2, 1)), network=asm1,
+            T=jnp.full((2,), float(conditions.get("T", BSM2_AS_TEMPERATURE_K))))
+        plant.add_influent("external_carbon", carbon)
+        plant.connect(None, "external_carbon", "as_mix", "carbon")
             C=jnp.tile(carbon_C, (2, 1)), network=asm1)
         plant.add_influent("external_carbon", carbon, to="as_mix.carbon")
 

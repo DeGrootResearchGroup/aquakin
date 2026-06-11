@@ -49,12 +49,18 @@ class InfluentSeries:
         Concentration at each sample, shape ``(n_t, n_species)`` where
         columns follow ``network.species`` ordering.
     network : CompiledNetwork
+    T : jnp.ndarray, optional
+        Influent temperature at each sample (Kelvin), shape ``(n_t,)``. When
+        given, ``at(t)`` returns a stream carrying the interpolated temperature,
+        which the plant propagates to temperature-dependent kinetics. ``None``
+        (default) leaves the influent temperature-agnostic.
     """
 
     t: jnp.ndarray
     Q: jnp.ndarray
     C: jnp.ndarray
     network: "CompiledNetwork"
+    T: "jnp.ndarray | None" = None
 
     def __post_init__(self) -> None:
         if self.t.ndim != 1:
@@ -72,6 +78,10 @@ class InfluentSeries:
                 f"C has {self.C.shape[1]} species columns but network has "
                 f"{self.network.n_species}"
             )
+        if self.T is not None and self.T.shape != self.t.shape:
+            raise ValueError(
+                f"T shape {self.T.shape} does not match t shape {self.t.shape}"
+            )
 
     def at(self, t: jnp.ndarray) -> Stream:
         """Return the influent :class:`Stream` at time ``t``.
@@ -83,7 +93,8 @@ class InfluentSeries:
         # Interpolate every species column in one vmapped op (over the species
         # axis) rather than a Python loop of n_species separate interp calls.
         C_t = jax.vmap(lambda col: jnp.interp(t, self.t, col), in_axes=1)(self.C)
-        return Stream(Q=Q_t, C=C_t, network=self.network)
+        T_t = None if self.T is None else jnp.interp(t, self.t, self.T)
+        return Stream(Q=Q_t, C=C_t, network=self.network, T=T_t)
 
 
 def read_influent_csv(
