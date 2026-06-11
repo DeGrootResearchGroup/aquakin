@@ -50,9 +50,11 @@ class SensitivityResult:
 def sensitivity(
     reactor: Reactor,
     C0: jnp.ndarray,
-    params: jnp.ndarray,
-    output_fn: Callable[[Any], jnp.ndarray],
+    params: Optional[jnp.ndarray] = None,
+    output_fn: Optional[Callable[[Any], jnp.ndarray]] = None,
     *,
+    t_span: Optional[tuple[float, float]] = None,
+    t_eval: Optional[jnp.ndarray] = None,
     solve_kwargs: Optional[dict] = None,
 ) -> SensitivityResult:
     """
@@ -66,19 +68,32 @@ def sensitivity(
         attribute.
     C0 : jnp.ndarray
         Initial concentration vector.
-    params : jnp.ndarray
-        Parameter vector at which to evaluate sensitivity.
+    params : jnp.ndarray, optional
+        Parameter vector at which to evaluate sensitivity. Defaults to
+        ``reactor.network.default_parameters()``.
     output_fn : callable
-        Maps a solution object to a scalar JAX value.
+        Maps a solution object to a scalar JAX value, e.g.
+        ``lambda sol: sol.C_named("BrO3-")[-1]``.
+    t_span, t_eval : optional
+        Integration window / save times, passed straight to ``reactor.solve``
+        (the common batch case). Equivalent to putting them in ``solve_kwargs``;
+        provide whichever reads better.
     solve_kwargs : dict, optional
-        Extra keyword arguments passed through to ``reactor.solve`` (e.g.
-        ``t_span``, ``t_eval`` for a batch reactor).
+        Any further keyword arguments forwarded to ``reactor.solve``.
 
     Returns
     -------
     SensitivityResult
     """
+    if output_fn is None:
+        raise ValueError("output_fn is required (a solution -> scalar callable).")
+    if params is None:
+        params = reactor.network.default_parameters()
     solve_kwargs = dict(solve_kwargs or {})
+    if t_span is not None:
+        solve_kwargs.setdefault("t_span", t_span)
+    if t_eval is not None:
+        solve_kwargs.setdefault("t_eval", t_eval)
     base_fields = dict(reactor.conditions.fields)
 
     def _output_from_params(p):

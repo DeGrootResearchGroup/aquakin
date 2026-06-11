@@ -243,6 +243,101 @@ class CompiledNetwork:
         """Return a copy of the default parameter vector."""
         return jnp.asarray(self._default_parameters)
 
+    def _override_vector(self, base, index_map, overrides, kwargs, kind):
+        """Return ``base`` with named entries replaced via ``index_map``.
+
+        ``overrides`` is a dict (the robust form -- many species/parameter names
+        are not valid Python identifiers, e.g. ``"Br-"`` or the namespaced
+        ``"O3_Br_direct.k1"``); ``kwargs`` adds identifier-safe convenience
+        overrides. Unknown names raise a ``KeyError`` with a close-match hint.
+        """
+        import difflib
+
+        merged: dict[str, float] = {}
+        if overrides is not None:
+            if not isinstance(overrides, dict):
+                raise TypeError(
+                    f"overrides must be a dict of {kind} name -> value; got "
+                    f"{type(overrides).__name__}."
+                )
+            merged.update(overrides)
+        merged.update(kwargs)
+        if not merged:
+            return base
+        idxs, vals = [], []
+        for name, value in merged.items():
+            if name not in index_map:
+                hint = difflib.get_close_matches(name, index_map, n=3)
+                suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+                raise KeyError(
+                    f"Unknown {kind} '{name}' for network '{self.name}'.{suffix}"
+                )
+            idxs.append(index_map[name])
+            vals.append(float(value))
+        return base.at[jnp.asarray(idxs)].set(jnp.asarray(vals, dtype=base.dtype))
+
+    def concentrations(self, overrides=None, /, **kwargs) -> jnp.ndarray:
+        """Initial-concentration vector: YAML defaults with named species set.
+
+        A by-name builder that avoids manual
+        ``default_concentrations().at[species_index[name]].set(value)`` chains.
+
+        Parameters
+        ----------
+        overrides : dict[str, float], optional
+            Species name -> concentration; unlisted species keep their YAML
+            default. Positional-only. Use the dict for names that are not valid
+            Python identifiers (``"Br-"``, ``"BrO3-"``).
+        **kwargs : float
+            Convenience overrides for identifier-safe species names (``O3=1e-4``).
+
+        Returns
+        -------
+        jnp.ndarray
+            Concentration vector of shape ``(n_species,)``.
+
+        Examples
+        --------
+        >>> network.concentrations({"O3": 1e-4, "Br-": 1e-5})
+        >>> network.concentrations(SS=50.0)
+        """
+        return self._override_vector(
+            self.default_concentrations(), self.species_index, overrides, kwargs,
+            "species",
+        )
+
+    def parameter_values(self, overrides=None, /, **kwargs) -> jnp.ndarray:
+        """Parameter vector: defaults with named (namespaced) parameters set.
+
+        The parameter analogue of :meth:`concentrations`. Names are the
+        namespaced keys (``"O3_Br_direct.k1"``), so the dict form is the usual
+        one; ``kwargs`` works for the rare bare network-level parameter.
+
+        Examples
+        --------
+        >>> network.parameter_values({"O3_Br_direct.k1": 175.0})
+        """
+        return self._override_vector(
+            self.default_parameters(), self.param_index, overrides, kwargs,
+            "parameter",
+        )
+
+    def atol(self, overrides=None, /, default: float = 1e-9, **kwargs) -> jnp.ndarray:
+        """Per-species absolute-tolerance vector for a reactor's ``atol=``.
+
+        ``default`` everywhere, with named species overridden -- the by-name
+        replacement for ``jnp.full((n_species,), d).at[species_index[s]].set(v)``
+        when a trace species needs a tighter tolerance.
+
+        Examples
+        --------
+        >>> reactor = BatchReactor(net, conds, atol=net.atol({"OH": 1e-20}, default=1e-12))
+        """
+        base = jnp.full((self.n_species,), float(default))
+        return self._override_vector(
+            base, self.species_index, overrides, kwargs, "species"
+        )
+
     def default_conditions(self, n_locations: int = 1):
         """Build a :class:`SpatialConditions` from the network's declared defaults.
 

@@ -47,6 +47,50 @@ def test_max_steps_is_exposed_and_enforced(simple_network):
     assert jnp.all(jnp.isfinite(sol.C))
 
 
+def test_conditions_uniform_defaults_to_one_location():
+    """SpatialConditions.uniform defaults n_locations=1 for the batch case."""
+    c = aquakin.SpatialConditions.uniform(T=293.15, pH=7.5)
+    assert c.n_locations == 1
+    assert float(c.fields["T"][0]) == 293.15
+    # Explicit n_locations still works.
+    assert aquakin.SpatialConditions.uniform(3, T=293.15).n_locations == 3
+
+
+def test_solve_defaults_params_to_network_defaults(simple_network):
+    """reactor.solve(C0, t_span=...) uses network.default_parameters() when
+    params is omitted, matching an explicit pass."""
+    conditions = aquakin.SpatialConditions.uniform(T=293.15)
+    reactor = aquakin.BatchReactor(simple_network, conditions)
+    C0 = jnp.asarray([1.0, 0.0])
+    t_eval = jnp.linspace(0.0, 20.0, 21)
+
+    auto = reactor.solve(C0, t_span=(0.0, 20.0), t_eval=t_eval)
+    explicit = reactor.solve(
+        C0, simple_network.default_parameters(), t_span=(0.0, 20.0), t_eval=t_eval
+    )
+    assert jnp.allclose(auto.C, explicit.C)
+
+
+def test_solve_requires_t_span(simple_network):
+    """Omitting t_span (now that params is optional) is a clear error, not a
+    silent misbinding."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(T=293.15)
+    )
+    with pytest.raises(ValueError, match="t_span"):
+        reactor.solve(jnp.asarray([1.0, 0.0]))
+
+
+def test_solve_tuple_as_params_is_caught(simple_network):
+    """The footgun reactor.solve(C0, (0, 20)) -- a t_span tuple landing in the
+    params slot -- is caught by the params shape check, not run silently."""
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(T=293.15)
+    )
+    with pytest.raises(ValueError, match="params has shape"):
+        reactor.solve(jnp.asarray([1.0, 0.0]), (0.0, 20.0))
+
+
 def test_grad_through_solve_finite(simple_network):
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.BatchReactor(simple_network, conditions)

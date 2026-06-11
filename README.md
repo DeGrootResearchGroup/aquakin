@@ -45,14 +45,17 @@ import jax.numpy as jnp
 import aquakin
 
 network = aquakin.load_network("ozone_bromate")
-conditions = aquakin.SpatialConditions.uniform(n_locations=1, pH=7.5, T=293.15)
+conditions = aquakin.SpatialConditions.uniform(pH=7.5, T=293.15)   # n_locations=1 default
 
 reactor = aquakin.BatchReactor(network, conditions)
+
+# Build the initial state by name -- no .at[species_index[...]].set() chains.
+# Use a dict (species names like "Br-" aren't valid kwargs); rest = YAML defaults.
+C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
+
+# params is optional and defaults to network.default_parameters().
 solution = reactor.solve(
-    network.default_concentrations(),
-    network.default_parameters(),
-    t_span=(0.0, 600.0),
-    t_eval=jnp.linspace(0.0, 600.0, 121),
+    C0, t_span=(0.0, 600.0), t_eval=jnp.linspace(0.0, 600.0, 121),
 )
 
 print("[BrO3-] at t=600s:", float(solution.C_named("BrO3-")[-1]))

@@ -123,8 +123,8 @@ class BatchReactor:
     def solve(
         self,
         C0: jnp.ndarray,
-        params: jnp.ndarray,
-        t_span: tuple[float, float],
+        params: Optional[jnp.ndarray] = None,
+        t_span: tuple[float, float] = None,
         t_eval: Optional[jnp.ndarray] = None,
         *,
         conditions: Optional[SpatialConditions] = None,
@@ -136,8 +136,10 @@ class BatchReactor:
         ----------
         C0 : jnp.ndarray
             Initial concentration vector, shape ``(n_species,)``.
-        params : jnp.ndarray
-            Rate constant vector, shape ``(n_params,)``.
+        params : jnp.ndarray, optional
+            Rate constant vector, shape ``(n_params,)``. Defaults to
+            ``network.default_parameters()`` -- pass it only to override rate
+            constants (e.g. for a what-if run; see ``network.parameter_values``).
         t_span : tuple of float
             ``(t_start, t_end)`` integration interval.
         t_eval : jnp.ndarray, optional
@@ -153,7 +155,9 @@ class BatchReactor:
         BatchSolution
         """
         C0 = jnp.asarray(C0)
-        params = jnp.asarray(params)
+        params = (
+            self.network.default_parameters() if params is None else jnp.asarray(params)
+        )
         if C0.shape != (self.network.n_species,):
             raise ValueError(
                 f"C0 has shape {C0.shape}, expected ({self.network.n_species},)"
@@ -162,6 +166,8 @@ class BatchReactor:
             raise ValueError(
                 f"params has shape {params.shape}, expected ({self.network.n_params},)"
             )
+        if t_span is None:
+            raise ValueError("t_span=(t_start, t_end) is required.")
 
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):

@@ -59,6 +59,52 @@ def test_to_latex_smoke(simple_network):
     assert "mathrm" in latex["A_to_B"]
 
 
+def test_concentrations_by_name(simple_network):
+    """concentrations() starts from the YAML defaults and overrides named
+    species, via a dict and/or kwargs, with no .at[].set() needed."""
+    base = simple_network.default_concentrations()
+    a = simple_network.species_index["A"]
+    b = simple_network.species_index["B"]
+
+    # No overrides -> the defaults unchanged.
+    assert jnp.array_equal(simple_network.concentrations(), base)
+
+    # Dict override.
+    c = simple_network.concentrations({"A": 5.0})
+    assert float(c[a]) == 5.0 and float(c[b]) == float(base[b])
+
+    # kwargs override (identifier-safe name) and dict+kwargs together.
+    c2 = simple_network.concentrations({"A": 5.0}, B=2.0)
+    assert float(c2[a]) == 5.0 and float(c2[b]) == 2.0
+
+
+def test_parameter_values_by_name(simple_network):
+    p = simple_network.parameter_values({"A_to_B.k": 0.7})
+    assert float(p[simple_network.param_index["A_to_B.k"]]) == 0.7
+    # default (no overrides) equals default_parameters
+    assert jnp.array_equal(simple_network.parameter_values(),
+                           simple_network.default_parameters())
+
+
+def test_atol_by_name(simple_network):
+    atol = simple_network.atol({"B": 1e-15}, default=1e-9)
+    assert float(atol[simple_network.species_index["B"]]) == 1e-15
+    assert float(atol[simple_network.species_index["A"]]) == 1e-9
+    assert atol.shape == (simple_network.n_species,)
+
+
+def test_override_unknown_name_raises_with_hint(simple_network):
+    with pytest.raises(KeyError, match="Unknown species 'AA'"):
+        simple_network.concentrations({"AA": 1.0})
+    with pytest.raises(KeyError, match="Unknown parameter"):
+        simple_network.parameter_values({"A_to_B.kk": 1.0})
+
+
+def test_override_rejects_non_dict_positional(simple_network):
+    with pytest.raises(TypeError, match="must be a dict"):
+        simple_network.concentrations(["A", 1.0])
+
+
 def test_compile_stage_helpers():
     """The compile_network stage helpers behave as a pipeline: parameter index
     is network-level-then-reaction-local in order, and _unresolved_params flags

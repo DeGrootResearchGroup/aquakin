@@ -473,8 +473,8 @@ class BiofilmReactor:
     def solve(
         self,
         C0: jnp.ndarray,
-        params: jnp.ndarray,
-        t_span: tuple[float, float],
+        params: Optional[jnp.ndarray] = None,
+        t_span: tuple[float, float] = None,
         t_eval: Optional[jnp.ndarray] = None,
         *,
         conditions: Optional[SpatialConditions] = None,
@@ -488,8 +488,9 @@ class BiofilmReactor:
             the bulk and every layer --- or ``(n_layers + 1, n_species)`` to set
             the bulk and each layer explicitly (row 0 bulk, rows 1.. surface to
             wall). The latter sets the stratified particulate (biomass) profile.
-        params : jnp.ndarray
-            Rate constant vector, shape ``(n_params,)``.
+        params : jnp.ndarray, optional
+            Rate constant vector, shape ``(n_params,)``. Defaults to
+            ``network.default_parameters()``.
         t_span : tuple of float
             ``(t_start, t_end)`` integration interval.
         t_eval : jnp.ndarray, optional
@@ -501,9 +502,13 @@ class BiofilmReactor:
         -------
         BiofilmSolution
         """
+        if params is None:
+            params = self.network.default_parameters()
         params = self._check_params(params)
         y0 = self._coerce_y0(C0)
 
+        if t_span is None:
+            raise ValueError("t_span=(t_start, t_end) is required.")
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")

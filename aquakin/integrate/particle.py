@@ -11,7 +11,7 @@ term.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Mapping, Optional
 
 import diffrax
 import jax
@@ -138,7 +138,7 @@ class ParticleTrackReactor:
         # reactor's lifetime, so one cache slot is enough.
         self._jitted_solve = None
 
-    def solve(self, C0: jnp.ndarray, params: jnp.ndarray) -> TrackSolution:
+    def solve(self, C0: jnp.ndarray, params: Optional[jnp.ndarray] = None) -> TrackSolution:
         """
         Integrate the network along the track.
 
@@ -146,15 +146,17 @@ class ParticleTrackReactor:
         ----------
         C0 : jnp.ndarray
             Inlet concentration vector, shape ``(n_species,)``.
-        params : jnp.ndarray
-            Flat parameter vector.
+        params : jnp.ndarray, optional
+            Flat parameter vector. Defaults to ``network.default_parameters()``.
 
         Returns
         -------
         TrackSolution
         """
         C0 = jnp.asarray(C0)
-        params = jnp.asarray(params)
+        params = (
+            self.network.default_parameters() if params is None else jnp.asarray(params)
+        )
         if C0.shape != (self.network.n_species,):
             raise ValueError(
                 f"C0 has shape {C0.shape}, expected ({self.network.n_species},)"
