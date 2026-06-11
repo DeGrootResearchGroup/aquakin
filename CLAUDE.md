@@ -1763,10 +1763,38 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
 Covered by `tests/integration/test_bsm2_control.py` (controller-unit behaviour:
 signal sign, saturation, integral direction, anti-windup; closed-loop setpoint
 tracking; closed-vs-open contrast; `jax.grad` through the closed loop). The
-**storage tank, hydraulic delay, influent bypass, and the wastage (`Qw`) timer
-are still omitted** (the remaining BSM2 closed-loop elements). The digester is
+**hydraulic delay, influent bypass, and the wastage (`Qw`) timer
+are still omitted** (the remaining BSM2 elements). The digester is
 additionally validated at the unit level in
 `tests/validation/test_bsm2_digester_unit.py`.
+
+**Reject storage tank (`build_bsm2(reject_storage=True)`).** A variable-volume
+equalisation tank on the reject-recycle line: a completely-mixed CSTR with **no
+reactions** (`StorageTank`, [`plant/storage.py`](aquakin/plant/storage.py))
+whose liquid volume `V` is a state (`dV/dt = Q_in_stored − Q_out`,
+`dC_i/dt = Q_in_stored/V·(C_in,i − C_i)`). It releases at a controlled rate
+`storage_output_flow` (default 0) with a **level-gated automatic bypass**: full
+and filling → divert the whole inflow (don't overfill); full and draining →
+release normally; empty → stop releasing and just fill. The two outlets
+(`out`, the released stream at tank concentration; `bypass`, the diverted inflow
+at inlet concentration) recombine at the front mixer. With the default zero
+release the open-loop tank fills to its upper limit (`0.9·Vmax`) and bypasses
+**all** reject, so it is a faithful pass-through and the steady state is
+unchanged from the no-storage plant (verified: tank5 XB_H identical).
+*Architecture note:* the bypass split is gated by the tank's own volume state,
+so `StorageTank` sets `flow_needs_state = True` and `Plant._resolve_flows`
+passes its state into `flow_outputs`. The exact affine flow solve stays valid
+because the tank's *inlet* comes from the fixed-pump sludge line (the wastage
+`Qw` is a constant pump), so at fixed volume its outputs are constant in the
+recycle flows — the state-dependence does not couple to the recycle variables.
+(In this benchmark the reject flow is therefore nearly constant, so a *fixed*
+release just fills or drains the tank; genuine equalisation needs a level-based
+release controller — the deferred closed-loop reject-control piece.) Wired into
+`build_bsm2` behind `reject_storage`; demonstrated in
+`examples/bsm2_reject_storage.py` (level-gated behaviour by release rate) and
+tested in `tests/integration/test_bsm2_storage.py` (the four regimes + flow/
+volume conservation, no-solve; wired plant fills-and-bypasses, steady state
+healthy). The **hydraulic delay and the wastage (`Qw`) timer** remain.
 
 **BSM2 performance evaluation — EQI / OCI (`evaluate_bsm2`).** The generic metric
 kernels (`aquakin/plant/metrics.py`: `effluent_quality_index`, `aeration_energy`,
