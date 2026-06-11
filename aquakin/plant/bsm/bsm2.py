@@ -52,7 +52,6 @@ from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import Plant
 from aquakin.plant.primary_clarifier import PrimaryClarifier
 from aquakin.plant.separators import IdealThickener
-from aquakin.plant.streams import Stream
 from aquakin.plant.takacs import TakacsClarifier
 
 # Reference BSM2 design values (Gernaey et al. 2014; asm1init/adm1init).
@@ -264,31 +263,30 @@ def build_bsm2(
     adm2asm = ADM1toASM1(source_network=adm1, target_network=asm1)
 
     # ----- Wiring -----
-    # Front line.
-    plant.connect("front_mix", "out", "primary", "inlet")
-    plant.connect("primary", "effluent", "as_mix", "primary_eff")
-    plant.connect("as_mix", "out", "tank1", "inlet")
-    plant.connect("tank1", "out", "tank2", "inlet")
-    plant.connect("tank2", "out", "tank3", "inlet")
-    plant.connect("tank3", "out", "tank4", "inlet")
-    plant.connect("tank4", "out", "tank5", "inlet")
-    plant.connect("tank5", "out", "tank5_split", "in")
-    plant.connect("tank5_split", "to_settler", "settler", "inlet")
-    plant.connect("settler", "underflow", "underflow_split", "in")
-    # AS recycles (back-edges; seeded).
-    plant.connect("tank5_split", "internal_recycle", "as_mix", "internal_recycle",
-                  initial_value=seed)
-    plant.connect("underflow_split", "ras", "as_mix", "ras", initial_value=seed)
-    # Sludge train.
-    plant.connect("primary", "underflow", "sludge_mix", "primary_sludge")
-    plant.connect("underflow_split", "waste", "thickener", "inlet")
-    plant.connect("thickener", "underflow", "sludge_mix", "thickener_under")
-    plant.connect("sludge_mix", "out", "digester", "inlet", translator=asm2adm)
-    plant.connect("digester", "effluent", "dewatering", "inlet", translator=adm2asm)
-    # Reject-water recycle to the front (back-edge; seeded).
-    plant.connect("thickener", "overflow", "reject_mix", "thickener_reject")
-    plant.connect("dewatering", "overflow", "reject_mix", "dewatering_reject")
-    plant.connect("reject_mix", "out", "front_mix", "reject", initial_value=seed)
+    # Front line (bare endpoints use each unit's sole in/out port).
+    plant.connect("front_mix", "primary")
+    plant.connect("primary.effluent", "as_mix.primary_eff")
+    plant.connect("as_mix", "tank1")
+    plant.connect("tank1", "tank2")
+    plant.connect("tank2", "tank3")
+    plant.connect("tank3", "tank4")
+    plant.connect("tank4", "tank5")
+    plant.connect("tank5", "tank5_split")
+    plant.connect("tank5_split.to_settler", "settler")
+    plant.connect("settler.underflow", "underflow_split")
+    # AS recycles (back-edges; auto-seeded with a zero-flow stream).
+    plant.connect("tank5_split.internal_recycle", "as_mix.internal_recycle")
+    plant.connect("underflow_split.ras", "as_mix.ras")
+    # Sludge train (the digester crosses ASM1 <-> ADM1 via the interfaces).
+    plant.connect("primary.underflow", "sludge_mix.primary_sludge")
+    plant.connect("underflow_split.waste", "thickener")
+    plant.connect("thickener.underflow", "sludge_mix.thickener_under")
+    plant.connect("sludge_mix", "digester", translator=asm2adm)
+    plant.connect("digester", "dewatering", translator=adm2asm)
+    # Reject-water recycle to the front (back-edge; auto-seeded).
+    plant.connect("thickener.overflow", "reject_mix.thickener_reject")
+    plant.connect("dewatering.overflow", "reject_mix.dewatering_reject")
+    plant.connect("reject_mix", "front_mix.reject")
     # dewatering:underflow -> sludge disposal (leaves the plant; not routed).
 
     # External carbon dosing to reactor 1 (a constant readily-biodegradable SS
@@ -303,5 +301,7 @@ def build_bsm2(
             T=jnp.full((2,), float(conditions.get("T", BSM2_AS_TEMPERATURE_K))))
         plant.add_influent("external_carbon", carbon)
         plant.connect(None, "external_carbon", "as_mix", "carbon")
+            C=jnp.tile(carbon_C, (2, 1)), network=asm1)
+        plant.add_influent("external_carbon", carbon, to="as_mix.carbon")
 
     return plant

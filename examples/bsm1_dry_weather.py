@@ -24,8 +24,7 @@ def main() -> None:
 
     plant = build_bsm1(network=network)
     inf = load_bsm1_influent("dry", network)
-    plant.add_influent("feed", inf)
-    plant.connect(None, "feed", "inlet_mix", "fresh")
+    plant.add_influent("feed", inf, to="inlet_mix.fresh")
 
     print("BSM1 plant:")
     print(f"  units: {list(plant.units.keys())}")
