@@ -23,6 +23,10 @@ from aquakin.plant.metrics import (
     pumping_energy,
 )
 
+# Slow module: full BSM1 plant solves (5 reactors + clarifier + recycles).
+# Excluded from the fast PR gate; runs in the merge-to-main suite.
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture
 def asm1():

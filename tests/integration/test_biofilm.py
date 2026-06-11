@@ -15,6 +15,10 @@ import pytest
 
 import aquakin
 
+# Slow module: stiff biofilm diffusion-reaction solves. Excluded from the fast
+# PR gate; runs in the merge-to-main suite (see the ``slow`` marker).
+pytestmark = pytest.mark.slow
+
 FIXTURE = os.path.join(
     os.path.dirname(__file__), "..", "fixtures", "simple_network.yaml"
 )

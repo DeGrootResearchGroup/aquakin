@@ -76,6 +76,19 @@ BSM2_CARBON_FLOW = 2.0          # m³/d external carbon dosed to reactor 1
 BSM2_CARBON_CONC = 400000.0     # gCOD/m³ readily-biodegradable (SS) carbon source
 BSM2_AS_TEMPERATURE_K = 288.15  # K (15 °C) -- the BSM2 ASM1 reference temperature
 
+# Closed-loop dissolved-oxygen / kLa control (reginit_bsm2). A PI controller
+# senses SO in reactor 4 and manipulates its aeration kLa; reactors 3 and 5
+# scale off the same signal. The constants are the reference DO loop tuning
+# (Kp=KSO4, Ti=TiSO4, Tt=TtSO4 in days; the kLa offset and DO setpoint).
+BSM2_DO_SETPOINT = 2.0          # gO2/m³ (SO4ref)
+BSM2_DO_KP = 25.0               # PI proportional gain (KSO4)
+BSM2_DO_TI = 0.002              # PI integral time, d (TiSO4)
+BSM2_DO_TT = 0.001              # anti-windup tracking time, d (TtSO4)
+BSM2_DO_KLA_OFFSET = 120.0      # kLa bias, d⁻¹ (KLa4offset)
+BSM2_DO_KLA_MAX = 360.0         # kLa saturation upper bound, d⁻¹
+# Per-tank kLa gains relative to the reactor-4 control signal (KLa{3,4,5}gain).
+BSM2_DO_KLA_GAINS = {"tank3": 1.0, "tank4": 1.0, "tank5": 0.5}
+
 # Published BSM2 constant-influent composition (the open-loop operating point;
 # gCOD/m³ or gN/m³, SALK in mol/m³). Q is BSM2_Q_REF.
 BSM2_CONSTANT_INFLUENT = {
@@ -155,8 +168,9 @@ def build_bsm2(
     conditions: Optional[dict] = None,
     carbon_flow: float = BSM2_CARBON_FLOW,
     carbon_conc: float = BSM2_CARBON_CONC,
+    do_control: bool = False,
 ) -> Plant:
-    """Assemble the open-loop BSM2 plant.
+    """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
     Parameters
     ----------
@@ -169,6 +183,11 @@ def build_bsm2(
     conditions : dict, optional
         Per-tank ASM1 condition values (e.g. ``{"T": ...}``). Defaults to the
         ASM1 network's declared defaults.
+    do_control : bool, optional
+        If True, close the dissolved-oxygen loop: a :class:`PIController` senses
+        ``SO`` in reactor 4 and manipulates its aeration ``kLa`` (with reactors 3
+        and 5 scaled off the same signal), instead of the fixed open-loop ``kLa``
+        of reactors 3-5. Default False (open-loop fixed aeration).
 
     Returns
     -------
@@ -176,6 +195,7 @@ def build_bsm2(
         The wired BSM2 plant. The caller adds the influent and connects it to
         ``front_mix:fresh`` (mirroring :func:`build_bsm1`).
     """
+    from aquakin.plant.control import PIController
     import aquakin
 
     asm1 = asm1_network if asm1_network is not None else aquakin.load_network("asm1")
@@ -220,11 +240,30 @@ def build_bsm2(
         as_ports.append("carbon")   # external carbon dosed to reactor 1
     plant.add_unit(MixerUnit(name="as_mix", input_port_names=as_ports, network=asm1))
     for i in range(5):
-        kla = {"SO": BSM2_KLA[i]} if BSM2_KLA[i] > 0 else {}
-        sat = {"SO": BSM2_DO_SATURATION} if BSM2_KLA[i] > 0 else {}
+        tank = f"tank{i + 1}"
+        aerated = BSM2_KLA[i] > 0
+        kla = {"SO": BSM2_KLA[i]} if aerated else {}
+        sat = {"SO": BSM2_DO_SATURATION} if aerated else {}
+        controlled = {}
+        if do_control and tank in BSM2_DO_KLA_GAINS:
+            # The DO controller drives this tank's oxygen kLa; drop the fixed
+            # kLa (the signal replaces it) but keep the DO saturation for the
+            # aeration term.
+            kla = {}
+            controlled = {"SO": ("do_kla", BSM2_DO_KLA_GAINS[tank])}
         plant.add_unit(CSTRUnit(
-            name=f"tank{i + 1}", network=asm1, volume=BSM2_TANK_VOLUMES[i],
-            input_port_names=["inlet"], conditions=conditions, kla=kla, C_sat=sat))
+            name=tank, network=asm1, volume=BSM2_TANK_VOLUMES[i],
+            input_port_names=["inlet"], conditions=conditions, kla=kla, C_sat=sat,
+            controlled_kla=controlled))
+
+    # Closed DO loop: a PI controller sensing reactor 4's oxygen, publishing the
+    # 'do_kla' signal the aerobic reactors consume.
+    if do_control:
+        plant.add_unit(PIController(
+            name="do_control", network=asm1, measured_species="SO",
+            setpoint=BSM2_DO_SETPOINT, Kp=BSM2_DO_KP, Ti=BSM2_DO_TI, Tt=BSM2_DO_TT,
+            offset=BSM2_DO_KLA_OFFSET, out_min=0.0, out_max=BSM2_DO_KLA_MAX,
+            signal_name="do_kla"))
 
     plant.add_unit(SplitterUnit(
         name="tank5_split", network=asm1,
@@ -273,6 +312,10 @@ def build_bsm2(
     plant.connect("tank3", "tank4")
     plant.connect("tank4", "tank5")
     plant.connect("tank5", "tank5_split")
+    if do_control:
+        # Sense reactor-4 oxygen for the DO controller (a measurement tap; the
+        # controller produces no material stream).
+        plant.connect("tank4", "do_control.measured")
     plant.connect("tank5_split.to_settler", "settler")
     plant.connect("settler.underflow", "underflow_split")
     # AS recycles (back-edges). Seeded with a temperature-carrying zero-flow

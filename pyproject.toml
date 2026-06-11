@@ -42,5 +42,6 @@ include = ["aquakin*"]
 [tool.pytest.ini_options]
 markers = [
     "validation: scientific validation tests against published data (slow)",
+    "slow: multi-minute stiff/plant integration tests; excluded from the fast PR gate, run in full on merge to main",
 ]
 testpaths = ["tests"]
