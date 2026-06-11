@@ -32,6 +32,7 @@ import jax.numpy as jnp
 
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import _coerce_atol, _run_diffeqsolve
+from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.streams import Stream, StreamSeries
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
@@ -955,6 +956,7 @@ class Plant:
         dtmax: Optional[float] = None,
         max_steps: int = 100_000,
         y0: Optional[jnp.ndarray] = None,
+        gradient: str = "jax_adjoint",
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
 
@@ -980,12 +982,33 @@ class Plant:
             Maximum number of internal solver steps (default 100000). Increase
             it for stiff, long-horizon plants -- notably BSM1 with the Takács
             clarifier, whose 10-layer settling dynamics need a larger budget than
-            the stateless ``IdealClarifier``.
+            the stateless ``IdealClarifier``. Under ``gradient="stable_adjoint"``
+            it also bounds the saved-trajectory buffer the backward scan walks, so
+            it must exceed the forward step count.
+        gradient : {"jax_adjoint", "stable_adjoint"}, optional
+            How a reverse-mode gradient through the solve is formed.
+            ``"jax_adjoint"`` (default) lets JAX/Diffrax differentiate the whole
+            solve via the ``adjoint`` strategy; for a stiff plant this needs the
+            ``dtmax`` cap to stay finite. ``"stable_adjoint"`` instead forms the
+            gradient with a hand-written discrete adjoint
+            (:func:`~aquakin.esdirk_adjoint_solve`): the forward is a robust
+            adaptive ESDIRK solve and the reverse is a per-step transposed solve
+            over the saved trajectory, finite at any step size with no ``dtmax``
+            cap. It is reverse-mode only and assumes a time-invariant right-hand
+            side, so it is exact for a constant influent (where the plant RHS does
+            not depend explicitly on time) and approximate otherwise. It manages
+            its own adjoint and step control, so passing ``adjoint`` or ``dtmax``
+            alongside it is an error.
 
         Returns
         -------
         PlantSolution
         """
+        if gradient not in ("jax_adjoint", "stable_adjoint"):
+            raise ValueError(
+                "gradient must be 'jax_adjoint' or 'stable_adjoint'; "
+                f"got {gradient!r}."
+            )
         self._build_state_layout()
         layout = self._build_parameter_layout()
         if params is None:
@@ -1024,6 +1047,31 @@ class Plant:
         # works.
         def rhs(t, y, args):
             return self._rhs(t, y, args)
+
+        if gradient == "stable_adjoint":
+            if adjoint is not None or dtmax is not None:
+                raise ValueError(
+                    "gradient='stable_adjoint' forms its own discrete adjoint and "
+                    "controls its own steps; do not also pass adjoint= or dtmax=."
+                )
+            # Cap-free reverse-mode gradient through the stiff plant solve: the
+            # forward is a robust adaptive ESDIRK solve and the reverse is the
+            # per-step transposed-solve discrete adjoint over the saved
+            # trajectory, which stays finite at any step size. The backward pass
+            # assumes a time-invariant RHS (it evaluates the Jacobian with the
+            # influent held fixed), so the gradient is exact for a constant
+            # influent and approximate under a time-varying one. ``max_steps``
+            # bounds the saved-trajectory buffer the backward scan walks.
+            ys = esdirk_adjoint_solve(
+                rhs, y0, params, (t0, t1), t_eval,
+                rtol=rtol, atol=atol_eff, max_steps=max_steps,
+            )
+            if t_eval is None:
+                ts = jnp.asarray([t1])
+                ys = ys[None, :]
+            else:
+                ts = jnp.asarray(t_eval)
+            return PlantSolution(t=ts, state=ys, plant=self)
 
         sol = _run_diffeqsolve(
             rhs,

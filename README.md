@@ -105,6 +105,30 @@ factorising the full augmented system. This is several times faster than the
 dense augmented solve on large stiff systems (e.g. the layered biofilm) and
 gives bit-identical results.
 
+## Cap-free reverse-mode gradients (stable adjoint)
+
+`solve_sensitivity` scales with the parameter count, so for a scalar-loss
+gradient over many parameters — the calibration case — reverse mode is wanted,
+and that is the mode the `dtmax` cap exists for. The cap-free alternative there is
+a hand-written discrete adjoint: the forward is an ordinary robust adaptive ESDIRK
+(Kvaerno5) solve and the reverse is a per-step transposed solve over the saved
+trajectory, finite at any step size with no cap. It is exposed as
+`gradient="stable_adjoint"` on `aquakin.calibrate(...)` and, for whole plants, on
+`Plant.solve(...)`:
+
+```python
+sol = plant.solve(
+    t_span=(0.0, T), t_eval=t_eval, params=params, y0=y0,
+    gradient="stable_adjoint",
+)
+g = jax.grad(loss)(params)   # finite through the stiff, coupled BSM2 plant
+```
+
+This is what lets a reverse-mode gradient flow through the whole monolithic BSM2
+solve — across the ASM↔ADM interface and the recycle loops — where differentiating
+*through* the stiff solve is non-finite. It assumes a time-invariant right-hand
+side, so the gradient is exact for a constant influent.
+
 ## Testing
 
 ```bash
