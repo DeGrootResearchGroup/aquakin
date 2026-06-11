@@ -728,18 +728,28 @@ which routes the assembled flat plant RHS through `esdirk_adjoint_solve` so a
 reverse-mode gradient flows through the whole monolithic plant solve — across the
 ASM↔ADM interface and the recycle loops — with no `dtmax` cap, in the regime where
 differentiating *through* the stiff plant solve (the default `jax_adjoint` /
-`RecursiveCheckpointAdjoint`) is non-finite. It assumes a time-invariant RHS, so
-the gradient is **exact for a constant influent** (the steady-state /
-cross-interface case) and approximate under a time-varying one; it rejects
+`RecursiveCheckpointAdjoint`) is non-finite. It is **exact through a transient
+solve**: `plant.solve` passes `time_dependent=True`, so the explicit time
+dependence of a time-varying influent is carried in the state
+(`esdirk_adjoint_solve(time_dependent=True)`, the classical autonomization that
+appends `dτ/dt=1` and reads the time from the state) and the discrete adjoint
+captures `∂f/∂t` exactly with no change to the per-step recurrence. Without it the
+default autonomous backward evaluates the field at a fixed time and the gradient
+of any time-coupled parameter is wrong (zeroed in the worst case). It rejects
 `adjoint=`/`dtmax=` (it manages its own integrator and adjoint), and `max_steps`
 bounds the saved-trajectory buffer the backward scan walks (the warm-started BSM2
-plant takes ~205 forward steps, so a small cap keeps the reverse pass cheap).
+plant takes ~205 forward steps under a constant influent, so a small cap keeps the
+reverse pass cheap).
 **Validated**: a *water-line* gradient — tank-1 nitrate with respect to the ADM1
 acetate-uptake rate `k_m_ac`, flowing back through the digester, the interface and
 the reject recycle — is finite and matches central finite differences to
-`rel ≈ 4e-5` (the direct digester-biogas gradient to `rel ≈ 4e-6`), where the
-default reverse adjoint of the stiff plant fails outright
-(`tests/integration/test_plant_stable_adjoint.py`).
+`rel ≈ 4e-5` under a constant influent (the direct digester-biogas gradient to
+`rel ≈ 4e-6`), and to `rel ≈ 2e-3` under a *diurnal time-varying* influent (the
+`time_dependent` path), where the default reverse adjoint of the stiff plant fails
+outright (`tests/integration/test_plant_stable_adjoint.py`). The autonomization is
+verified exact against finite differences on a forced ODE, and the autonomous
+default is shown to give the wrong gradient for a time-coupled parameter, in
+`tests/integration/test_discrete_adjoint.py`.
 
 **Two solvers, low- and high-order.** `implicit_euler_adjoint_solve` (first
 order) is the simple, robust baseline. `esdirk_adjoint_solve` is the high-order

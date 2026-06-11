@@ -126,8 +126,9 @@ g = jax.grad(loss)(params)   # finite through the stiff, coupled BSM2 plant
 
 This is what lets a reverse-mode gradient flow through the whole monolithic BSM2
 solve — across the ASM↔ADM interface and the recycle loops — where differentiating
-*through* the stiff solve is non-finite. It assumes a time-invariant right-hand
-side, so the gradient is exact for a constant influent.
+*through* the stiff solve is non-finite. It is exact through a transient solve:
+`plant.solve` carries the integration time in the state, so the explicit time
+dependence of a time-varying influent is captured exactly in the gradient.
 
 ## Testing
 

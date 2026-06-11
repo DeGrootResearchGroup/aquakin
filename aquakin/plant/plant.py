@@ -994,11 +994,11 @@ class Plant:
             (:func:`~aquakin.esdirk_adjoint_solve`): the forward is a robust
             adaptive ESDIRK solve and the reverse is a per-step transposed solve
             over the saved trajectory, finite at any step size with no ``dtmax``
-            cap. It is reverse-mode only and assumes a time-invariant right-hand
-            side, so it is exact for a constant influent (where the plant RHS does
-            not depend explicitly on time) and approximate otherwise. It manages
-            its own adjoint and step control, so passing ``adjoint`` or ``dtmax``
-            alongside it is an error.
+            cap. It is reverse-mode only and is exact through a transient solve:
+            the explicit time dependence of the plant RHS (a time-varying
+            influent) is carried in the state so the discrete adjoint captures it
+            exactly. It manages its own adjoint and step control, so passing
+            ``adjoint`` or ``dtmax`` alongside it is an error.
 
         Returns
         -------
@@ -1057,14 +1057,16 @@ class Plant:
             # Cap-free reverse-mode gradient through the stiff plant solve: the
             # forward is a robust adaptive ESDIRK solve and the reverse is the
             # per-step transposed-solve discrete adjoint over the saved
-            # trajectory, which stays finite at any step size. The backward pass
-            # assumes a time-invariant RHS (it evaluates the Jacobian with the
-            # influent held fixed), so the gradient is exact for a constant
-            # influent and approximate under a time-varying one. ``max_steps``
-            # bounds the saved-trajectory buffer the backward scan walks.
+            # trajectory, which stays finite at any step size. ``time_dependent``
+            # carries integration time in the state so the explicit time
+            # dependence of the plant RHS (a time-varying influent) is captured
+            # exactly, making the gradient exact through a transient solve.
+            # ``max_steps`` bounds the saved-trajectory buffer the backward scan
+            # walks.
             ys = esdirk_adjoint_solve(
                 rhs, y0, params, (t0, t1), t_eval,
                 rtol=rtol, atol=atol_eff, max_steps=max_steps,
+                time_dependent=True,
             )
             if t_eval is None:
                 ts = jnp.asarray([t1])

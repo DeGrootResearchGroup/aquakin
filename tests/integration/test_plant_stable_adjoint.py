@@ -120,6 +120,49 @@ def test_stable_adjoint_cross_interface_gradient_matches_fd():
 
 
 @pytest.mark.validation
+def test_stable_adjoint_transient_influent_gradient_matches_fd():
+    """Under a time-varying (diurnal-flow) influent the cross-interface gradient
+    is still finite and matches central finite differences. The discrete adjoint
+    carries the integration time in the state, so it is exact for the
+    non-autonomous plant right-hand side, not only for a constant influent."""
+    from aquakin.plant.bsm.bsm2 import BSM2_Q_REF
+    from aquakin.plant.influent import InfluentSeries
+
+    asm1 = aquakin.load_network("asm1")
+    adm1 = aquakin.load_network("adm1")
+    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    # A diurnal flow modulation makes the plant RHS explicitly time-dependent.
+    c_const = bsm2_constant_influent(asm1).C[0]
+    n = 120
+    t_inf = jnp.linspace(0.0, 4.0, n)
+    q_inf = BSM2_Q_REF * (1.0 + 0.3 * jnp.sin(2.0 * jnp.pi * t_inf))
+    plant.add_influent(
+        "feed",
+        InfluentSeries(t=t_inf, Q=q_inf, C=jnp.tile(c_const, (n, 1)), network=asm1),
+        to="front_mix.fresh",
+    )
+    warm = asm1.concentrations(_WARM)
+    y0 = plant.initial_state(overrides={tk: warm for tk in _TANKS})
+    base = bsm2_parameters(asm1, adm1)
+    gidx = asm1.n_params + adm1.param_index["k_m_ac"]
+    theta0 = float(base[gidx])
+    T = 3.0
+
+    def g(theta):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
+                          gradient="stable_adjoint", **_solve_kwargs())
+        return sol.C_named("tank1", "SNO")[-1]
+
+    grad = float(jax.grad(g)(theta0))
+    assert np.isfinite(grad)
+    assert grad != 0.0
+    h = theta0 * 1e-3
+    fd = (float(g(theta0 + h)) - float(g(theta0 - h))) / (2.0 * h)
+    assert grad == pytest.approx(fd, rel=5e-3)
+
+
+@pytest.mark.validation
 def test_stable_adjoint_gradient_finite_through_full_param_vector():
     """A full-parameter reverse gradient (the calibration case) is finite, where
     the default through-the-solve adjoint is not without a step cap."""
