@@ -25,7 +25,7 @@ import aquakin
 def test_analytic_decay_sensitivity_exact(simple_network):
     # First-order decay A -> B: A(t) = A0 e^{-kt}, so dA/dk = -t A0 e^{-kt} and
     # dB/dk = +t A0 e^{-kt} in closed form.
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
+    cond = aquakin.SpatialConditions.uniform(T=293.15)
     reactor = aquakin.BatchReactor(simple_network, cond, rtol=1e-11, atol=1e-13)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_network.default_parameters()
@@ -71,7 +71,7 @@ def test_sensitivity_array_is_finite_and_composes(simple_network):
     # AD-correctness analogue: the returned S is a real, finite JAX array that
     # composes in further computation (the project requires every solve path to
     # produce finite derivatives).
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
+    cond = aquakin.SpatialConditions.uniform(T=293.15)
     reactor = aquakin.BatchReactor(simple_network, cond)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_network.default_parameters()
@@ -87,7 +87,7 @@ def test_sensitivity_array_is_finite_and_composes(simple_network):
 
 
 def test_int_indices_equivalent_to_names(simple_network):
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
+    cond = aquakin.SpatialConditions.uniform(T=293.15)
     reactor = aquakin.BatchReactor(simple_network, cond)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_network.default_parameters()
@@ -102,7 +102,7 @@ def test_int_indices_equivalent_to_names(simple_network):
 
 
 def test_biofilm_sensitivity_matches_jacfwd(simple_network):
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
+    cond = aquakin.SpatialConditions.uniform(T=293.15)
     kw = dict(
         n_layers=4, thickness=8e-4, area_per_volume=50.0,
         diffusivity=1e-4, boundary_layer=1e-4, rtol=1e-9, atol=1e-11,
@@ -131,7 +131,7 @@ def test_biofilm_sensitivity_matches_jacfwd(simple_network):
 
 
 def test_pfr_sensitivity_matches_jacfwd(simple_network):
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
+    cond = aquakin.SpatialConditions.uniform(T=293.15)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_network.default_parameters()
 
@@ -175,7 +175,7 @@ def test_free_function_and_accessors():
 def test_shared_factor_matches_dense_single_param(simple_network):
     # The simultaneous corrector solves the same Newton system as the dense
     # path, so shared_factor=True must reproduce shared_factor=False exactly.
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
+    cond = aquakin.SpatialConditions.uniform(T=293.15)
     reactor = aquakin.BatchReactor(simple_network, cond, rtol=1e-11, atol=1e-13)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_network.default_parameters()
@@ -251,7 +251,7 @@ def test_simultaneous_corrector_solver_matches_dense_lu():
 
 
 def test_bad_sens_params_raise(simple_network):
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
+    cond = aquakin.SpatialConditions.uniform(T=293.15)
     reactor = aquakin.BatchReactor(simple_network, cond)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_network.default_parameters()

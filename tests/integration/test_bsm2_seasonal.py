@@ -11,7 +11,6 @@ temperature-sensitive process, slows), warmer leaves less.
 """
 
 import jax.numpy as jnp
-import numpy as np
 import pytest
 
 import aquakin
@@ -38,17 +37,11 @@ def _tank5_snh_at(asm1, adm1, params, T_kelvin):
                           T=jnp.full((2,), float(T_kelvin)))
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
     plant.add_influent("feed", infl, to="front_mix.fresh")
-    plant._build_state_layout()
-    plant._build_parameter_layout()
-    warm = asm1.default_concentrations()
-    for sp, v in _WARM.items():
-        warm = warm.at[asm1.species_index[sp]].set(v)
-    y0 = np.array(plant.initial_state())
-    for tk in ("tank1", "tank2", "tank3", "tank4", "tank5"):
-        s, sz = plant._state_layout[tk]
-        y0[s:s + sz] = np.array(warm)
+    warm = asm1.concentrations(_WARM)
+    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
+    y0 = plant.initial_state(overrides={tk: warm for tk in tanks})
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
-                      params=params, y0=jnp.asarray(y0),
+                      params=params, y0=y0,
                       rtol=1e-5, atol=1e-3, max_steps=500_000)
     assert jnp.all(jnp.isfinite(sol.state))
     return float(sol.C_named("tank5", "SNH")[-1])
@@ -85,16 +78,12 @@ def test_temperature_influent_rhs_finite_and_active():
                               T=jnp.full((2,), float(T_kelvin)))
         plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
         plant.add_influent("feed", infl, to="front_mix.fresh")
-        plant._build_state_layout()
+        warm = asm1.concentrations(_WARM)
+        tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
+        y0 = plant.initial_state(overrides={tk: warm for tk in tanks})
+        # Calling the RHS directly (not via solve()) needs the parameter layout.
         plant._build_parameter_layout()
-        warm = asm1.default_concentrations()
-        for sp, v in _WARM.items():
-            warm = warm.at[asm1.species_index[sp]].set(v)
-        y0 = np.array(plant.initial_state())
-        for tk in ("tank1", "tank2", "tank3", "tank4", "tank5"):
-            s, sz = plant._state_layout[tk]
-            y0[s:s + sz] = np.array(warm)
-        d = plant._rhs(jnp.asarray(0.0), jnp.asarray(y0), params)
+        d = plant._rhs(jnp.asarray(0.0), y0, params)
         assert jnp.all(jnp.isfinite(d))
         s5 = plant._state_layout["tank5"][0]
         return float(d[s5 + asm1.species_index["SNH"]])

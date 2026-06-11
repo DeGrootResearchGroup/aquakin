@@ -41,7 +41,7 @@ def test_solubles_pass_through(asm1):
     """Soluble species (SS, SNH, ...) must appear at the same concentration
     in both overflow and underflow because they don't settle."""
     # Make soluble SS distinctive in the inlet.
-    C_inlet = asm1.default_concentrations().at[asm1.species_index["SS"]].set(50.0)
+    C_inlet = asm1.concentrations(SS=50.0)
     plant = _clarifier_plant(asm1, C_inlet=C_inlet)
     sol = plant.solve(
         t_span=(0.0, 2.0), t_eval=jnp.asarray([0.0, 2.0]),
@@ -122,11 +122,8 @@ def test_takacs_blanket_profile_and_clarification(asm1):
     from aquakin.plant.metrics import derived_TSS
     from aquakin.plant.streams import Stream
 
-    C = asm1.default_concentrations()
-    feed = {"XB_H": 2200.0, "XB_A": 120.0, "XS": 80.0, "XI": 1100.0,
-            "XP": 600.0, "XND": 5.0}
-    for s, v in feed.items():
-        C = C.at[asm1.species_index[s]].set(v)
+    C = asm1.concentrations({"XB_H": 2200.0, "XB_A": 120.0, "XS": 80.0,
+                             "XI": 1100.0, "XP": 600.0, "XND": 5.0})
     Q_in, overflow = 36892.0, 18061.0   # ~BSM1 clarifier loading
 
     plant = Plant("clar_load")

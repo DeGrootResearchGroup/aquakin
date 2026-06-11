@@ -15,9 +15,7 @@ def network():
 def _build(network, *, t_end=1.0, **C0_overrides):
     conditions = network.default_conditions()
     reactor = aquakin.BatchReactor(network, conditions, rtol=1e-6, atol=1e-9)
-    C0 = network.default_concentrations()
-    for name, val in C0_overrides.items():
-        C0 = C0.at[network.species_index[name]].set(val)
+    C0 = network.concentrations(C0_overrides)
     sol = reactor.solve(
         C0,
         network.default_parameters(),

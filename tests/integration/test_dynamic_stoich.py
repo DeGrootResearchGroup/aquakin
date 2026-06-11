@@ -55,7 +55,7 @@ def test_compute_stoich_at_defaults(network):
 
 def test_compute_stoich_responds_to_params(network):
     """Changing Y changes the substrate coefficient."""
-    p = network.default_parameters().at[network.param_index["Y"]].set(0.25)
+    p = network.parameter_values({"Y": 0.25})
     stoich = network.compute_stoich(p)
     # -1/0.25 = -4
     assert float(stoich[0, network.species_index["S"]]) == pytest.approx(-4.0)
@@ -72,7 +72,7 @@ def test_dCdt_uses_dynamic_stoich(network):
     assert float(dC[network.species_index["X"]]) == pytest.approx(5000.0)
 
     # Halving Y to 0.25 should double the substrate-side magnitude.
-    p = network.default_parameters().at[network.param_index["Y"]].set(0.25)
+    p = network.parameter_values({"Y": 0.25})
     dC2 = network.dCdt(C, p, conditions.fields, 0)
     assert float(dC2[network.species_index["S"]]) == pytest.approx(-20000.0)
     assert float(dC2[network.species_index["X"]]) == pytest.approx(5000.0)
@@ -115,7 +115,7 @@ def test_calibration_recovers_yield(network):
     C0 = jnp.asarray([100.0, 50.0])
 
     # Truth: Y = 0.3, mu = 1.0 (default).
-    true_params = network.default_parameters().at[network.param_index["Y"]].set(0.3)
+    true_params = network.parameter_values({"Y": 0.3})
     t_obs = jnp.linspace(0.005, 0.05, 10)
     sol = reactor.solve(C0, true_params, t_span=(0.0, 0.05), t_eval=t_obs)
     clean = np.asarray(sol.C_named("X"))

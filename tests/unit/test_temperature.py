@@ -99,10 +99,7 @@ def test_asm1_unchanged_at_reference():
     uncorrected values (the correction is unity)."""
     net = aquakin.load_network("asm1")
     assert len(net.temperature_corrections) == 6
-    C = net.default_concentrations()
-    C = C.at[net.species_index["SS"]].set(10.0)
-    C = C.at[net.species_index["SO"]].set(2.0)
-    C = C.at[net.species_index["XB_H"]].set(2000.0)
+    C = net.concentrations(SS=10.0, SO=2.0, XB_H=2000.0)
     p = net.default_parameters()
     r = net.rates(C, p, {"T": jnp.array([293.15])}, 0)
     # Recompute the heterotroph aerobic growth by hand at 20 °C (theta^0 = 1).
@@ -120,10 +117,7 @@ def test_asm1_nitrification_slows_in_the_cold():
     """Autotroph growth (nitrification) is the most temperature-sensitive: at
     10 °C it drops to ~36% of the 20 °C rate (theta_muA^-10)."""
     net = aquakin.load_network("asm1")
-    C = net.default_concentrations()
-    C = C.at[net.species_index["SO"]].set(2.0)
-    C = C.at[net.species_index["SNH"]].set(5.0)
-    C = C.at[net.species_index["XB_A"]].set(150.0)
+    C = net.concentrations(SO=2.0, SNH=5.0, XB_A=150.0)
     p = net.default_parameters()
     i = net.reaction_names.index("aerobic_growth_autotrophs")
     r20 = float(net.rates(C, p, {"T": jnp.array([293.15])}, 0)[i])

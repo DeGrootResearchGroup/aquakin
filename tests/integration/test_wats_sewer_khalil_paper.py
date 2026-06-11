@@ -37,7 +37,7 @@ def net():
 
 @pytest.fixture
 def cond():
-    return aquakin.SpatialConditions.uniform(1, A_V=56.7, X_BF=10.0, pH=7.5)
+    return aquakin.SpatialConditions.uniform(A_V=56.7, X_BF=10.0, pH=7.5)
 
 
 def test_compiles_with_expected_shape(net):
@@ -57,7 +57,7 @@ def test_structural_variants_compile(variant):
     assert v.name == variant
     assert v.n_species == 18
     assert v.n_reactions == 27
-    cond = aquakin.SpatialConditions.uniform(1, A_V=56.7, X_BF=10.0, pH=7.5)
+    cond = aquakin.SpatialConditions.uniform(A_V=56.7, X_BF=10.0, pH=7.5)
     r = v.rates(v.default_concentrations(), v.default_parameters(), cond.fields, 0)
     assert bool(jnp.all(jnp.isfinite(r)))
 
@@ -162,7 +162,7 @@ def test_nitrate_dosing_lowers_sulfide(net, cond):
     reactor = aquakin.BatchReactor(net, cond, rtol=1e-6, atol=1e-9, dtmax=5.0e-4)
     p = net.default_parameters()
     C_dosed = net.default_concentrations()  # default has nitrate dosed (S_NO=30)
-    C_no = C_dosed.at[net.species_index["S_NO"]].set(0.0)
+    C_no = net.concentrations({"S_NO": 0.0})
     sumS_dosed = float(reactor.solve(C_dosed, p, t_span=(0.0, 5.0 / 24.0)).C_named("sumS")[-1])
     sumS_no = float(reactor.solve(C_no, p, t_span=(0.0, 5.0 / 24.0)).C_named("sumS")[-1])
     assert sumS_dosed < sumS_no
@@ -191,7 +191,7 @@ def test_halforder_variant_is_ad_differentiable_with_tighter_cap():
     integrator-step cap for the reverse-mode adjoint to stay finite."""
     v = aquakin.load_network_from_file(
         os.path.join(_NDIR, "wats_sewer_khalil_paper_halforder.yaml"))
-    cond = aquakin.SpatialConditions.uniform(1, A_V=56.7, X_BF=10.0, pH=7.5)
+    cond = aquakin.SpatialConditions.uniform(A_V=56.7, X_BF=10.0, pH=7.5)
     C0 = v.default_concentrations()
     p = v.default_parameters()
     reactor = aquakin.BatchReactor(v, cond, rtol=1e-6, atol=1e-9, dtmax=1.0e-4)

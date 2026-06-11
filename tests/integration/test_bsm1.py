@@ -36,16 +36,13 @@ def constant_influent(asm1):
     n_t = 2
     t = jnp.asarray([0.0, 100.0])
     Q = jnp.full((n_t,), BSM1_Q_AVG)
-    C0 = asm1.default_concentrations()
-    # Override with the documented Table 5.1 inlet composition.
-    inlet_overrides = {
+    # The documented Table 5.1 inlet composition (rest = network defaults).
+    C0 = asm1.concentrations({
         "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32,
         "XB_H": 28.17, "XB_A": 0.0, "XP": 0.0,
         "SO": 0.0, "SNO": 0.0, "SNH": 31.56,
         "SND": 6.95, "XND": 10.59, "SALK": 7.0,
-    }
-    for sp, val in inlet_overrides.items():
-        C0 = C0.at[asm1.species_index[sp]].set(val)
+    })
     C = jnp.tile(C0, (n_t, 1))
     return InfluentSeries(t=t, Q=Q, C=C, network=asm1)
 
@@ -236,29 +233,9 @@ def test_metrics_compute_finite(asm1, constant_influent):
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=10.0, n_save=11)
 
-    # Reconstruct effluent stream at every save time. Effluent = clarifier
-    # overflow. The IdealClarifier is stateless so we recompute it.
-    clar = plant.units["clarifier"]
-    n_t = sol.state.shape[0]
-    C_eff = jnp.zeros((n_t, asm1.n_species))
-    Q_eff = jnp.zeros((n_t,))
-    for i in range(n_t):
-        # Tank 5 outlet → tank5_split:to_clarifier → clarifier:inlet.
-        tank5_start, tank5_size = plant._state_layout["tank5"]
-        tank5_C = sol.state[i, tank5_start:tank5_start + tank5_size]
-        # Q_clar = 2/5 * Q_tank5_outlet. Tank 5 sees Q = 5 * Q_in.
-        Q_in_t = float(plant.influents["feed"].at(jnp.asarray(sol.t[i])).Q)
-        Q_clar = 2.0 / 5.0 * 5.0 * Q_in_t  # = 2 * Q_in
-        from aquakin.plant.streams import Stream
-        inlet_stream = Stream(Q=jnp.asarray(Q_clar), C=tank5_C, network=asm1)
-        out = clar.compute_outputs(
-            jnp.asarray(sol.t[i]), jnp.zeros((0,)),
-            {"inlet": inlet_stream}, plant.default_parameters(),
-        )
-        C_eff = C_eff.at[i].set(out["overflow"].C)
-        Q_eff = Q_eff.at[i].set(out["overflow"].Q)
-
-    averages = effluent_averages(sol.t, C_eff, Q_eff, asm1)
+    # Effluent = the clarifier overflow, reconstructed from the saved states.
+    eff = plant.stream(sol, "clarifier.overflow")
+    averages = effluent_averages(eff.t, eff.C, eff.Q, asm1)
     for key, val in averages.items():
         assert val >= 0.0, f"{key} is negative: {val}"
         assert val < 1e4, f"{key} unreasonably large: {val}"

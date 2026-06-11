@@ -12,8 +12,7 @@ def network():
 
 
 def _atol_for(network):
-    a = jnp.full((network.n_species,), 1e-12)
-    return a.at[network.species_index["OH"]].set(1e-20)
+    return network.atol({"OH": 1e-20}, default=1e-12)
 
 
 def _solve(network, *, fluence_rate, t_end=600.0, n=61):

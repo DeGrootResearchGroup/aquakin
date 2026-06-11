@@ -30,9 +30,7 @@ def constant_influent(asm1):
     over = {"SI": 27.0, "SS": 58.0, "XI": 92.0, "XS": 364.0, "XB_H": 51.0,
             "XB_A": 0.0, "XP": 0.0, "SO": 0.0, "SNO": 0.0, "SNH": 24.0,
             "SND": 4.0, "XND": 15.0, "SALK": 7.0}
-    C0 = asm1.default_concentrations()
-    for sp, v in over.items():
-        C0 = C0.at[asm1.species_index[sp]].set(v)
+    C0 = asm1.concentrations(over)
     return InfluentSeries(t=jnp.array([0.0, 1e4]), Q=jnp.full((2,), BSM2_Q_REF),
                           C=jnp.tile(C0, (2, 1)), network=asm1)
 

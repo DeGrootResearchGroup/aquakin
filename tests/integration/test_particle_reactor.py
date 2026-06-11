@@ -20,7 +20,7 @@ def test_constant_track_matches_batch(simple_network):
     sol_track = reactor.solve(C0, params)
 
     batch = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_network, aquakin.SpatialConditions.uniform(T=293.15)
     )
     sol_batch = batch.solve(
         C0, params, t_span=(0.0, t_end), t_eval=jnp.linspace(0.0, t_end, 11)
@@ -71,8 +71,7 @@ def test_missing_condition_rejected(simple_network):
 def test_scavenging_step_affects_OH_path():
     """Step-up in OH_scavenging should suppress bromate yield on the back half."""
     network = aquakin.load_network("ozone_bromate")
-    atol = jnp.full((network.n_species,), 1e-12)
-    atol = atol.at[network.species_index["OH"]].set(1e-20)
+    atol = network.atol({"OH": 1e-20}, default=1e-12)
 
     t = jnp.linspace(0.0, 600.0, 13)
     low = jnp.full_like(t, 1.0e3)
@@ -96,9 +95,7 @@ def test_scavenging_step_affects_OH_path():
         },
     )
 
-    C0 = network.default_concentrations()
-    C0 = C0.at[network.species_index["O3"]].set(1e-4)
-    C0 = C0.at[network.species_index["Br-"]].set(1e-5)
+    C0 = network.concentrations({"O3": 1e-4, "Br-": 1e-5})
 
     sol_step = aquakin.ParticleTrackReactor(network, track_step, atol=atol).solve(
         C0, network.default_parameters()

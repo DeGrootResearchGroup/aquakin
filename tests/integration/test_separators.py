@@ -15,9 +15,7 @@ def asm1():
 
 
 def _inlet(asm1, Q, overrides):
-    C = asm1.default_concentrations()
-    for sp, v in overrides.items():
-        C = C.at[asm1.species_index[sp]].set(v)
+    C = asm1.concentrations(overrides)
     return Stream(Q=jnp.asarray(float(Q)), C=C, network=asm1)
 
 
@@ -95,7 +93,7 @@ def test_grad_through_separator(asm1):
     """compute_outputs is differentiable w.r.t. the inlet concentration."""
     import jax
     unit = IdealThickener(name="thk", network=asm1, target_tss_percent=7.0)
-    C0 = asm1.default_concentrations().at[asm1.species_index["XB_H"]].set(2500.0)
+    C0 = asm1.concentrations(XB_H=2500.0)
 
     def loss(C):
         s_in = Stream(Q=jnp.asarray(300.0), C=C, network=asm1)
