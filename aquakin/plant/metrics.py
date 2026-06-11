@@ -37,45 +37,42 @@ _EQI_WEIGHTS = {
 }
 
 
+def _species_idx(network: "CompiledNetwork", names) -> jnp.ndarray:
+    """Index array for the named species that exist in the network."""
+    return jnp.asarray(
+        [network.species_index[s] for s in names if s in network.species_index]
+    )
+
+
+# Every derived quantity below indexes ``C`` with ``C[..., i]`` (a scalar
+# column) and, where it sums, sums over ``axis=-1``. That works for both a 1-D
+# state vector ``(n_species,)`` -> scalar and a 2-D trajectory
+# ``(n_t, n_species)`` -> vector, so no rank branch is needed.
+
+
 def derived_TSS(C: jnp.ndarray, network: "CompiledNetwork") -> jnp.ndarray:
     """Total suspended solids from ASM1 particulate species.
 
-    ``TSS = 0.75 × (XS + XI + XB_H + XB_A + XP)``.
-
-    Returns a scalar (if ``C`` is 1-D) or a vector along the leading
-    axis (if 2-D).
+    ``TSS = 0.75 × (XS + XI + XB_H + XB_A + XP)``. Scalar for 1-D ``C``, a
+    leading-axis vector for 2-D ``C``.
     """
-    indices = [network.species_index[s] for s in _TSS_SPECIES if s in network.species_index]
-    idx = jnp.asarray(indices)
-    if C.ndim == 1:
-        return _TSS_FACTOR * jnp.sum(C[idx])
-    return _TSS_FACTOR * jnp.sum(C[..., idx], axis=-1)
+    return _TSS_FACTOR * jnp.sum(C[..., _species_idx(network, _TSS_SPECIES)], axis=-1)
 
 
 def derived_COD(C: jnp.ndarray, network: "CompiledNetwork") -> jnp.ndarray:
     """Total COD = SI + SS + XI + XS + XB_H + XB_A + XP."""
     species = ("SI", "SS", "XI", "XS", "XB_H", "XB_A", "XP")
-    idx = jnp.asarray(
-        [network.species_index[s] for s in species if s in network.species_index]
-    )
-    if C.ndim == 1:
-        return jnp.sum(C[idx])
-    return jnp.sum(C[..., idx], axis=-1)
+    return jnp.sum(C[..., _species_idx(network, species)], axis=-1)
 
 
 def derived_BOD(C: jnp.ndarray, network: "CompiledNetwork") -> jnp.ndarray:
     """BOD₅ proxy = 0.25 × (SS + XS + (1 - f_P) × (XB_H + XB_A))
     using Copp 2002 BOD relation with f_P ≈ 0.08."""
     f_P = 0.08
-    idx = lambda s: network.species_index[s]
-    if C.ndim == 1:
-        return 0.25 * (
-            C[idx("SS")] + C[idx("XS")]
-            + (1.0 - f_P) * (C[idx("XB_H")] + C[idx("XB_A")])
-        )
+    i = network.species_index
     return 0.25 * (
-        C[..., idx("SS")] + C[..., idx("XS")]
-        + (1.0 - f_P) * (C[..., idx("XB_H")] + C[..., idx("XB_A")])
+        C[..., i["SS"]] + C[..., i["XS"]]
+        + (1.0 - f_P) * (C[..., i["XB_H"]] + C[..., i["XB_A"]])
     )
 
 
@@ -85,17 +82,11 @@ def derived_TKN(C: jnp.ndarray, network: "CompiledNetwork") -> jnp.ndarray:
     """
     i_XB = 0.086
     i_XP = 0.06
-    idx = lambda s: network.species_index[s]
-    if C.ndim == 1:
-        return (
-            C[idx("SNH")] + C[idx("SND")] + C[idx("XND")]
-            + i_XB * (C[idx("XB_H")] + C[idx("XB_A")])
-            + i_XP * (C[idx("XP")] + C[idx("XI")])
-        )
+    i = network.species_index
     return (
-        C[..., idx("SNH")] + C[..., idx("SND")] + C[..., idx("XND")]
-        + i_XB * (C[..., idx("XB_H")] + C[..., idx("XB_A")])
-        + i_XP * (C[..., idx("XP")] + C[..., idx("XI")])
+        C[..., i["SNH"]] + C[..., i["SND"]] + C[..., i["XND"]]
+        + i_XB * (C[..., i["XB_H"]] + C[..., i["XB_A"]])
+        + i_XP * (C[..., i["XP"]] + C[..., i["XI"]])
     )
 
 
