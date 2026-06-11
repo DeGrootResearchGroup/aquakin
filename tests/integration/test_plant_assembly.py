@@ -468,3 +468,72 @@ def test_add_influent_to_creates_connection(simple_net):
     assert len(inf_conn) == 1
     c = inf_conn[0]
     assert (c.from_port, c.to_unit, c.to_port) == ("feed", "mix", "fresh")
+
+
+def _two_tank_plant(simple_net):
+    """Two CSTRs in series (a -> b), each carrying the 2-species network."""
+    plant = Plant("two_tank")
+    plant.add_unit(CSTRUnit(name="a", network=simple_net, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_unit(CSTRUnit(name="b", network=simple_net, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.connect("a", "b")
+    return plant
+
+
+def test_initial_state_overrides_named_unit(simple_net):
+    """initial_state(overrides=...) replaces only the named unit's state and
+    leaves the others at their own initial_state()."""
+    plant = _two_tank_plant(simple_net)
+    base = plant.initial_state()
+    warm = simple_net.concentrations(A=0.7, B=0.3)
+    y0 = plant.initial_state(overrides={"b": warm})
+
+    a0, a_sz = plant._state_layout["a"]
+    b0, b_sz = plant._state_layout["b"]
+    assert jnp.allclose(y0[a0:a0 + a_sz], base[a0:a0 + a_sz])  # 'a' untouched
+    assert jnp.allclose(y0[b0:b0 + b_sz], warm)                # 'b' replaced
+
+
+def test_initial_state_override_unknown_unit_errors(simple_net):
+    plant = _two_tank_plant(simple_net)
+    with pytest.raises(KeyError, match="unknown units"):
+        plant.initial_state(overrides={"nope": jnp.zeros(simple_net.n_species)})
+
+
+def test_initial_state_override_wrong_length_errors(simple_net):
+    plant = _two_tank_plant(simple_net)
+    with pytest.raises(ValueError, match="expected"):
+        plant.initial_state(overrides={"a": jnp.zeros(simple_net.n_species + 1)})
+
+
+def _fed_cstr_plant(simple_net, *, Q=10.0, C=(1.0, 0.0)):
+    """A single CSTR fed by a constant influent."""
+    plant = Plant("one")
+    plant.add_unit(CSTRUnit(name="tank", network=simple_net, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_influent("feed", _constant_influent(simple_net, Q=Q, C=C),
+                       to="tank.inlet")
+    return plant
+
+
+def test_stream_reconstructs_unit_output(simple_net):
+    """plant.stream(sol, endpoint) rebuilds a unit's output trajectory from the
+    saved states. A CSTR's output concentration equals its state and its flow
+    equals the (constant) inflow."""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    sol = plant.solve(t_span=(0.0, 50.0), t_eval=jnp.linspace(0.0, 50.0, 6))
+
+    eff = plant.stream(sol, "tank")            # CSTR's sole output port inferred
+    assert eff.t.shape == sol.t.shape
+    assert eff.C.shape == (sol.t.shape[0], simple_net.n_species)
+    assert jnp.allclose(eff.Q, 10.0)                          # output flow = inflow
+    assert jnp.allclose(eff.C_named("A"), sol.C_named("tank", "A"))  # output C = state
+    assert jnp.allclose(eff.C_named("B"), sol.C_named("tank", "B"))
+
+
+def test_stream_unknown_endpoint_errors(simple_net):
+    plant = _fed_cstr_plant(simple_net)
+    sol = plant.solve(t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 2))
+    with pytest.raises(KeyError, match="Unknown unit"):
+        plant.stream(sol, "nope")

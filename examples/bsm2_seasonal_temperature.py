@@ -14,7 +14,6 @@ it away from there.
 """
 
 import jax.numpy as jnp
-import numpy as np
 
 import aquakin
 from aquakin.plant.bsm.bsm2 import (
@@ -40,13 +39,9 @@ def _steady_snh(asm1, adm1, params, T_kelvin):
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
     plant.add_influent("feed", influent, to="front_mix.fresh")
 
-    plant._build_state_layout()
-    plant._build_parameter_layout()
-    warm = np.array(asm1.concentrations(WARM_AS))
-    y0 = np.array(plant.initial_state())
-    for tank in ("tank1", "tank2", "tank3", "tank4", "tank5"):
-        start, size = plant._state_layout[tank]
-        y0[start:start + size] = warm
+    warm = asm1.concentrations(WARM_AS)
+    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
+    y0 = plant.initial_state(overrides={t: warm for t in tanks})
 
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
                       params=params, y0=jnp.asarray(y0),

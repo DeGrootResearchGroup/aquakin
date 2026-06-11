@@ -62,3 +62,35 @@ class Stream:
     def with_T(self, T: "jnp.ndarray | None") -> "Stream":
         """Return a new stream with the same Q/C/network but a new temperature."""
         return Stream(Q=self.Q, C=self.C, network=self.network, T=T)
+
+
+@dataclass(frozen=True)
+class StreamSeries:
+    """A stream's flow and concentration trajectory over time.
+
+    Returned by :meth:`Plant.stream`, which reconstructs a named output stream
+    (e.g. the clarifier effluent) from a solution's saved states -- the plant
+    integrates unit *states*, not the inter-unit streams, so the effluent is
+    recomputed after the fact.
+
+    Attributes
+    ----------
+    t : jnp.ndarray
+        Save times, shape ``(n_t,)``.
+    Q : jnp.ndarray
+        Volumetric flow rate at each time, shape ``(n_t,)``.
+    C : jnp.ndarray
+        Concentration over time, shape ``(n_t, n_species)`` in the network's
+        species ordering.
+    network : CompiledNetwork
+        The kinetic network whose species ordering applies to ``C``.
+    """
+
+    t: jnp.ndarray
+    Q: jnp.ndarray
+    C: jnp.ndarray
+    network: "CompiledNetwork"
+
+    def C_named(self, species: str) -> jnp.ndarray:
+        """Concentration trajectory of one species, shape ``(n_t,)``."""
+        return self.C[:, self.network.species_index[species]]

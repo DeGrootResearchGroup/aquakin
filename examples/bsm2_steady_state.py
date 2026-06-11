@@ -12,12 +12,11 @@ which match the published BSM2 reference steady state to within a few percent
 (see ``tests/validation/test_bsm2_steadystate.py``).
 
 The plant is warm-started from a healthy activated-sludge biomass so the slow
-digester (HRT ~19 d) settles quickly. Seeding per-unit state still goes through
-the plant's internal state layout -- a rough edge in the current API.
+digester (HRT ~19 d) settles quickly, using ``plant.initial_state(overrides=...)``
+to seed the reactor units by name.
 """
 
 import jax.numpy as jnp
-import numpy as np
 
 import aquakin
 from aquakin.plant.bsm.bsm2 import (
@@ -42,15 +41,11 @@ def main() -> None:
     plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
     params = bsm2_parameters(asm1, adm1)
 
-    # Seed the AS reactors with a healthy biomass (warm start). Building the
-    # initial state vector reaches into the plant's internal per-unit layout.
-    plant._build_state_layout()
-    plant._build_parameter_layout()
-    warm = np.array(asm1.concentrations(WARM_AS))
-    y0 = np.array(plant.initial_state())
-    for tank in ("tank1", "tank2", "tank3", "tank4", "tank5"):
-        start, size = plant._state_layout[tank]
-        y0[start:start + size] = warm
+    # Seed the AS reactors with a healthy biomass (warm start) so the slow
+    # digester settles quickly. The rest of the plant starts from its defaults.
+    warm = asm1.concentrations(WARM_AS)
+    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
+    y0 = plant.initial_state(overrides={t: warm for t in tanks})
 
     print("Settling BSM2 to open-loop steady state (constant influent) ...")
     sol = plant.solve(
