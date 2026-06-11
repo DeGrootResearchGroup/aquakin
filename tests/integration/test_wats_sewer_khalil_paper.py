@@ -21,6 +21,10 @@ import pytest
 
 import aquakin
 
+# Slow module: stiff WATS/Khalil sewer-network solves. Excluded from the fast
+# PR gate; runs in the merge-to-main suite (see the ``slow`` marker).
+pytestmark = pytest.mark.slow
+
 _NDIR = os.path.join(os.path.dirname(aquakin.__file__), "networks")
 _VARIANTS = [
     "wats_sewer_khalil_paper_halforder",

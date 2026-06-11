@@ -15,6 +15,10 @@ import pytest
 
 import aquakin
 
+# Slow module: stiff WATS sewer-network solves and AD gradients. Excluded from
+# the fast PR gate; runs in the merge-to-main suite (see the ``slow`` marker).
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture(scope="module")
 def net():

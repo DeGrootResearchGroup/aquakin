@@ -18,6 +18,10 @@ import diffrax
 
 import aquakin
 
+# Slow module: forward-sensitivity solves through stiff networks. Excluded from
+# the fast PR gate; runs in the merge-to-main suite (see the ``slow`` marker).
+pytestmark = pytest.mark.slow
+
 
 # --- Fast exactness / API tests -----------------------------------------
 

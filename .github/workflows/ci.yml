@@ -10,29 +10,30 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Pin XLA/BLAS to a single thread per process so pytest-xdist workers do not
+# oversubscribe the runner's CPUs (each JAX process otherwise grabs every core,
+# and N workers x M cores thrashes). With this, -n auto scales cleanly.
+env:
+  OMP_NUM_THREADS: "1"
+  XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false"
+
 jobs:
+  # ---- Fast merge gate: unit + fast integration -------------------------------
+  # Runs on every pull request AND every push to main. Excludes the multi-minute
+  # stiff/plant solves (marked `slow`) and the published-data `validation` suite,
+  # which run in full on merge to main (see the `slow` and `validation` jobs).
+  # This is the required status check that gates merging.
   test:
-    name: tests (py${{ matrix.python-version }})
+    name: fast tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    # Hard ceiling so a hung run fails fast. The full not-validation suite takes
-    # ~15-20 min; a stuck pytest-xdist worker (e.g. an OOM-killed worker the
-    # controller then blocks on) once ran a job for 1h20m before the runner
-    # killed it. 35 min leaves ample headroom for a healthy run.
-    timeout-minutes: 35
-    # Pin XLA/BLAS to a single thread per process so pytest-xdist workers do not
-    # oversubscribe the CI runner's CPUs (each JAX process otherwise grabs every
-    # core, and N workers x M cores thrashes). With this, -n auto scales cleanly.
-    env:
-      OMP_NUM_THREADS: "1"
-      XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false"
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        # Python 3.10 is install-compatible (requires-python >= 3.10, diffrax
-        # 0.7.0 supports it) but excluded from CI: its heavier jaxlib 0.6.2
-        # build runs close to the hosted runner's resource/time limits and the
-        # job was intermittently killed (hung or cancelled mid-run) while
-        # 3.11/3.12 stayed green and the suite passed locally on 3.10.
+        # Python 3.10 is install-compatible (requires-python >= 3.10) but excluded
+        # from CI: its heavier jaxlib build ran close to the hosted runner's
+        # resource/time limits and was intermittently killed, while 3.11/3.12
+        # stayed green and the suite passed locally on 3.10.
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
@@ -49,24 +50,54 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
 
-      - name: Run unit and integration tests
-        # --timeout fires inside a worker if a single test deadlocks (the slowest
-        # legitimate test is ~220 s, so 600 s is safe), naming the offending test
-        # instead of letting the run hang silently. --max-worker-restart=0 makes a
-        # crashed worker fail the run immediately rather than leaving the
-        # controller blocked. Together with the job timeout-minutes above, a hang
-        # now surfaces a clear, fast failure.
+      - name: Run fast tests (unit + fast integration)
+        # --timeout fires inside a worker if a single test deadlocks, naming the
+        # offending test instead of hanging silently. --max-worker-restart=0 makes
+        # a crashed worker fail the run immediately. Together with timeout-minutes
+        # above, a hang surfaces a clear, fast failure.
         run: >-
-          pytest -m "not validation" -q -n auto --durations=15
+          pytest -m "not validation and not slow" -q -n auto --durations=15
           --timeout=600 --timeout-method=thread --max-worker-restart=0
 
+  # ---- Full slow integration suite: merge-to-main only ------------------------
+  # The multi-minute stiff/plant solves. Skipped on pull requests (the fast gate
+  # carries those); runs on every push to main so a regression the PR's fast gate
+  # could not catch surfaces within minutes of landing -- revert from there.
+  slow:
+    name: slow suite (py${{ matrix.python-version }})
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Run slow suite
+        run: >-
+          pytest -m "slow" -q -n auto --durations=15
+          --timeout=900 --timeout-method=thread --max-worker-restart=0
+
+  # ---- Validation suite (against published data): merge-to-main only ----------
   validation:
     name: validation suite
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      OMP_NUM_THREADS: "1"
-      XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false"
     steps:
       - uses: actions/checkout@v4
 
