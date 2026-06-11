@@ -1149,11 +1149,18 @@ aquakin/
 │   ├── batch_bromate.py
 │   ├── lagrangian_demo.py
 │   ├── sensitivity_demo.py
-│   ├── bsm1_dry_weather.py
+│   ├── bsm1_dry_weather.py            # BSM1 open-loop steady state
+│   ├── bsm1_dynamic_influent.py       # BSM1 dry-vs-rain dynamic influent (warm-started)
+│   ├── bsm2_steady_state.py           # BSM2 two-network open-loop steady state
+│   ├── bsm2_seasonal_temperature.py   # BSM2 cold->warm nitrification effect
+│   ├── dgsm_sensitivity_screen.py     # DGSM global sensitivity, forward==reverse
+│   ├── wats_nitrate_dosing_calibration.py  # synthetic sewer rate recovery (calibrate + Laplace)
 │   └── adjoint_speed_benchmark.py  # stable_adjoint vs capped jax_adjoint timing
 │   # NOTE: the wats_sewer_extended batch-fitting / calibration / sensitivity scripts and
 │   # their measurement data live in the separate paper-reproduction repository,
 │   # not here (this repo ships only the reusable library + networks).
+│   # wats_nitrate_dosing_calibration.py is a self-contained *synthetic* demo of
+│   # the calibration API, not the paper reproduction.
 │
 ├── docs/
 │   ├── index.md
