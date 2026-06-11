@@ -216,6 +216,54 @@ def test_recycle_with_initial_value(simple_net):
     assert 0.0 < float(A_traj[-1]) < 1.0
 
 
+def test_connection_index_groups_inputs_and_recycle_keys(simple_net):
+    """_build_state_layout precomputes the per-unit incoming-edge map and the
+    recycle source keys that the RHS hot paths read instead of re-scanning all
+    connections each step."""
+    plant = Plant("idx_test")
+    plant.add_unit(
+        MixerUnit(name="mix", input_port_names=["fresh", "recycle"], network=simple_net)
+    )
+    plant.add_unit(
+        CSTRUnit(
+            name="tank", network=simple_net, volume=100.0,
+            input_port_names=["inlet"], conditions={"T": 293.15},
+        )
+    )
+    plant.add_unit(
+        SplitterUnit(
+            name="split",
+            output_port_ratios={"out_product": 0.5, "out_recycle": 0.5},
+            network=simple_net,
+        )
+    )
+    plant.add_influent("feed", _constant_influent(simple_net, Q=10.0))
+    plant.connect(None, "feed", "mix", "fresh")
+    plant.connect("mix", "out", "tank", "inlet")
+    plant.connect("tank", "out", "split", "in")
+    plant.connect(
+        "split", "out_recycle", "mix", "recycle",
+        initial_value=Stream(Q=jnp.asarray(5.0), C=jnp.asarray([0.0, 0.0]), network=simple_net),
+    )
+
+    plant._build_state_layout()  # builds the connection index too
+
+    # Every connection is grouped under its destination unit, partitioning the
+    # full connection list with no loss.
+    idx = plant._inputs_by_unit
+    assert {c.to_port for c in idx["mix"]} == {"fresh", "recycle"}
+    assert [c.to_port for c in idx["tank"]] == ["inlet"]
+    assert [c.to_port for c in idx["split"]] == ["in"]
+    assert sum(len(v) for v in idx.values()) == len(plant.connections)
+
+    # Only the seeded back-edge is a recycle key.
+    assert plant._recycle_keys == [("split", "out_recycle")]
+
+    # Re-running the build is idempotent (no duplicated edges).
+    plant._build_state_layout()
+    assert sum(len(v) for v in plant._inputs_by_unit.values()) == len(plant.connections)
+
+
 def test_ad_grad_through_plant(simple_net):
     """jax.grad through Plant.solve w.r.t. params returns a finite gradient."""
     plant = Plant("grad_test")

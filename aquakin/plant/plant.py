@@ -155,6 +155,9 @@ class Plant:
         self._total_state_size: int = 0
         self._parameter_layout: ParameterLayout = ParameterLayout()
         self._network_param_index: dict[str, int] = {}
+        # Static connection adjacency, rebuilt by _build_state_layout():
+        self._inputs_by_unit: dict[str, list[Connection]] = {}
+        self._recycle_keys: list[tuple[Optional[str], str]] = []
 
     # ----- assembly --------------------------------------------------------
 
@@ -257,7 +260,14 @@ class Plant:
     # ----- layout ----------------------------------------------------------
 
     def _build_state_layout(self) -> None:
-        """Assign each unit a contiguous slice of the flat state vector."""
+        """Assign each unit a contiguous slice of the flat state vector.
+
+        Also (re)builds the static connection-adjacency caches the RHS hot
+        paths rely on (:meth:`_build_connection_index`). Both depend only on
+        the wiring, which is fixed by the time the plant is solved, so they are
+        computed together here -- the single topology-setup entry point that
+        :meth:`solve` and every direct-RHS caller invoke first.
+        """
         layout: dict[str, tuple[int, int]] = {}
         cursor = 0
         for name in self._unit_order:
@@ -266,6 +276,33 @@ class Plant:
             cursor += size
         self._state_layout = layout
         self._total_state_size = cursor
+        self._build_connection_index()
+
+    def _build_connection_index(self) -> None:
+        """Precompute the static connection adjacency for the RHS hot paths.
+
+        Two derived structures, both functions of the wiring only:
+
+        - ``_inputs_by_unit`` groups connections by destination unit, so
+          :meth:`_collect_inputs` and :meth:`_resolve_flows` look up a unit's
+          incoming edges in O(in-degree) instead of re-scanning all
+          connections (the scan ran ``recycle_passes x n_units`` times per
+          stream sweep plus once per unit in the derivative pass).
+        - ``_recycle_keys`` lists the recycle source ports (back-edges seeded
+          with an ``initial_value``), so :meth:`_resolve_flows` does not
+          re-derive them on every step.
+        """
+        inputs_by_unit: dict[str, list[Connection]] = {
+            name: [] for name in self._unit_order
+        }
+        for conn in self.connections:
+            inputs_by_unit.setdefault(conn.to_unit, []).append(conn)
+        self._inputs_by_unit = inputs_by_unit
+        self._recycle_keys = [
+            (c.from_unit, c.from_port)
+            for c in self.connections
+            if c.from_unit is not None and c.initial_value is not None
+        ]
 
     def _ordered_networks(self) -> list[CompiledNetwork]:
         """The distinct kinetic networks, in first-appearance order.
@@ -358,46 +395,77 @@ class Plant:
             states[name] = jax.lax.dynamic_slice(state_full, (start,), (size,))
 
         # Step 2: build the stream registry, starting with influents and
-        # initial-value seeds for recycle edges.
+        # initial-value seeds for recycle edges. The recycle FLOW network is
+        # resolved first (exact, decoupled from concentration) so the seeds
+        # carry the correct flow.
         streams: dict[tuple[Optional[str], str], Stream] = {}
         for port_name, series in self.influents.items():
             streams[(None, port_name)] = series.at(t)
-        # Resolve the recycle FLOW network first (exact, decoupled from
-        # concentration). The flows are linear and concentration-independent,
-        # but the loop gain is high (BSM1's 3x internal + 1x RAS recycle), so a
-        # few Gauss-Seidel passes do not converge it -- under-resolved flows give
-        # a negative/under-sized underflow and the plant washes out. Seeding the
-        # recycle edges with the exactly-resolved flows makes the concentration
-        # sweep below correct from its first pass.
         resolved_flows = self._resolve_flows(t, params_full)
-        # Pre-seed recycle edges so the downstream unit can read them on
-        # the first iteration before the source unit has been visited; carry the
-        # resolved flow (concentration is corrected within a few passes, as the
-        # recycle concentrations are read directly from the source unit states).
+        seeded = self._seed_recycle_streams(resolved_flows)
+
+        # Step 3: traverse units in evaluation order, resolving recycle edges
+        # with the fixed-pass Gauss-Seidel sweep.
+        all_outputs = self._sweep_outputs(t, states, streams, seeded, params_full)
+
+        # Step 4: compute dstates from final input streams.
+        dstates: list[jnp.ndarray] = []
+        for name in self._unit_order:
+            unit = self.units[name]
+            inputs = self._collect_inputs(name, all_outputs, streams)
+            params_unit = self._params_for_unit(name, params_full)
+            dstate = unit.rhs(t, states[name], inputs, params_unit)
+            dstates.append(dstate)
+        return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
+
+    def _seed_recycle_streams(
+        self,
+        resolved_flows: dict[tuple[Optional[str], str], jnp.ndarray],
+    ) -> dict[tuple[str, str], Stream]:
+        """Pre-seed recycle back-edges with their resolved flow + initial conc.
+
+        A recycle edge (downstream -> upstream) must be readable before its
+        source unit has been visited in the sweep. We seed it with the
+        exactly-resolved flow (from :meth:`_resolve_flows`) and the edge's
+        declared ``initial_value`` concentration; the concentration is then
+        corrected within a few sweep passes, as recycle concentrations are read
+        directly from the source unit's state.
+        """
         seeded: dict[tuple[str, str], Stream] = {}
         for conn in self.connections:
-            if conn.from_unit is None:
+            if conn.from_unit is None or conn.initial_value is None:
                 continue
-            if conn.initial_value is not None:
-                iv = conn.initial_value
-                q = resolved_flows[(conn.from_unit, conn.from_port)]
-                seeded[(conn.from_unit, conn.from_port)] = Stream(
-                    Q=q, C=iv.C, network=iv.network
-                )
+            iv = conn.initial_value
+            q = resolved_flows[(conn.from_unit, conn.from_port)]
+            seeded[(conn.from_unit, conn.from_port)] = Stream(
+                Q=q, C=iv.C, network=iv.network
+            )
+        return seeded
 
-        # Step 3: traverse units in evaluation order, computing outputs.
-        # Recycle edges (downstream → upstream) create cyclic data
-        # dependencies. We resolve them with a fixed number of Gauss-Seidel
-        # passes (``recycle_passes``, default 3) over the unit-output
-        # computations: each pass refines the stream estimates on recycle edges.
-        # The count is fixed, not iterate-to-tolerance, because this RHS is
-        # jitted and differentiated -- a data-dependent loop is not allowed.
-        # Convergence is fast because most recycle-stream concentrations are a
-        # source unit's *state* (read directly, e.g. a CSTR's output is its own
-        # tank concentration), so the only iterated chain is the short
-        # mixer/splitter/clarifier path. For BSM-family topologies the streams
-        # reach a fixed point in 2 passes (verified to machine precision in
-        # tests/integration/test_bsm1.py), so the default 3 is a safe margin.
+    def _sweep_outputs(
+        self,
+        t: jnp.ndarray,
+        states: dict[str, jnp.ndarray],
+        streams: dict[tuple[Optional[str], str], Stream],
+        seeded: dict[tuple[str, str], Stream],
+        params_full: jnp.ndarray,
+    ) -> dict[tuple[str, str], Stream]:
+        """Resolve unit outputs with the fixed-pass Gauss-Seidel recycle sweep.
+
+        Recycle edges (downstream -> upstream) create cyclic data dependencies.
+        We resolve them with a fixed number of passes (``recycle_passes``,
+        default 3) over the unit-output computations: each pass refines the
+        stream estimates on recycle edges. The count is fixed, not
+        iterate-to-tolerance, because this RHS is jitted and differentiated --
+        a data-dependent loop is not allowed. Convergence is fast because most
+        recycle-stream concentrations are a source unit's *state* (read
+        directly, e.g. a CSTR's output is its own tank concentration), so the
+        only iterated chain is the short mixer/splitter/clarifier path. For
+        BSM-family topologies the streams reach a fixed point in 2 passes
+        (verified to machine precision in tests/integration/test_bsm1.py), so
+        the default 3 is a safe margin. ``streams`` is updated in place; the
+        returned ``all_outputs`` includes the recycle seeds.
+        """
         all_outputs: dict[tuple[str, str], Stream] = {}
         all_outputs.update(seeded)
         for _pass in range(self.recycle_passes):
@@ -409,16 +477,7 @@ class Plant:
                 for port, stream in outputs.items():
                     all_outputs[(name, port)] = stream
                     streams[(name, port)] = stream
-
-        # Step 4: compute dstates from final input streams.
-        dstates: list[jnp.ndarray] = []
-        for name in self._unit_order:
-            unit = self.units[name]
-            inputs = self._collect_inputs(name, all_outputs, streams)
-            params_unit = self._params_for_unit(name, params_full)
-            dstate = unit.rhs(t, states[name], inputs, params_unit)
-            dstates.append(dstate)
-        return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
+        return all_outputs
 
     def _resolve_flows(
         self, t: jnp.ndarray, params_full: jnp.ndarray
@@ -437,11 +496,7 @@ class Plant:
         base: dict[tuple[Optional[str], str], jnp.ndarray] = {}
         for port_name, series in self.influents.items():
             base[(None, port_name)] = series.at(t).Q
-        recycle_keys = [
-            (c.from_unit, c.from_port)
-            for c in self.connections
-            if c.from_unit is not None and c.initial_value is not None
-        ]
+        recycle_keys = self._recycle_keys
         n = len(recycle_keys)
 
         def one_pass(recycle_Qs):
@@ -450,9 +505,7 @@ class Plant:
                 flows[k] = q
             for name in self._unit_order:
                 in_flows: dict[str, jnp.ndarray] = {}
-                for conn in self.connections:
-                    if conn.to_unit != name:
-                        continue
+                for conn in self._inputs_by_unit.get(name, ()):
                     src = (None, conn.from_port) if conn.from_unit is None \
                         else (conn.from_unit, conn.from_port)
                     in_flows[conn.to_port] = flows[src]
@@ -484,9 +537,7 @@ class Plant:
     ) -> dict[str, Stream]:
         """Find the input stream for each port of ``unit_name``."""
         inputs: dict[str, Stream] = {}
-        for conn in self.connections:
-            if conn.to_unit != unit_name:
-                continue
+        for conn in self._inputs_by_unit.get(unit_name, ()):
             if conn.from_unit is None:
                 src = streams[(None, conn.from_port)]
             else:
