@@ -44,8 +44,7 @@ def _synthetic_tracer(t_end: float, n_samples: int) -> tuple[jnp.ndarray, jnp.nd
 
 def main() -> None:
     network = aquakin.load_network("ozone_bromate")
-    atol = jnp.full((network.n_species,), 1e-12)
-    atol = atol.at[network.species_index["OH"]].set(1e-20)
+    atol = network.atol({"OH": 1e-20}, default=1e-12)
 
     t_end = 600.0
     n_samples = 61
@@ -60,10 +59,7 @@ def main() -> None:
     print(f"Loaded {len(loaded)} particles back from CSV.")
 
     def C0_fn(_pid: int) -> jnp.ndarray:
-        C0 = network.default_concentrations()
-        C0 = C0.at[network.species_index["O3"]].set(1.0e-4)
-        C0 = C0.at[network.species_index["Br-"]].set(1.0e-5)
-        return C0
+        return network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
 
     solutions = aquakin.integrate_ensemble(
         network,

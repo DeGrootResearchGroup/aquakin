@@ -125,7 +125,7 @@ class PlugFlowReactor:
     def solve(
         self,
         C0: jnp.ndarray,
-        params: jnp.ndarray,
+        params: Optional[jnp.ndarray] = None,
         *,
         conditions: Optional[SpatialConditions] = None,
     ) -> PFRSolution:
@@ -136,8 +136,9 @@ class PlugFlowReactor:
         ----------
         C0 : jnp.ndarray
             Inlet concentration vector, shape ``(n_species,)``.
-        params : jnp.ndarray
-            Rate constant vector, shape ``(n_params,)``.
+        params : jnp.ndarray, optional
+            Rate constant vector, shape ``(n_params,)``. Defaults to
+            ``network.default_parameters()``.
         conditions : SpatialConditions, optional
             Override the conditions stored on the reactor for this call. Must
             match the constructor-time ``n_locations`` so the precomputed
@@ -148,7 +149,9 @@ class PlugFlowReactor:
         PFRSolution
         """
         C0 = jnp.asarray(C0)
-        params = jnp.asarray(params)
+        params = (
+            self.network.default_parameters() if params is None else jnp.asarray(params)
+        )
         if C0.shape != (self.network.n_species,):
             raise ValueError(
                 f"C0 has shape {C0.shape}, expected ({self.network.n_species},)"

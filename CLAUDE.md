@@ -1188,18 +1188,28 @@ network.name
 network.species
 network.parameters
 network.conditions_required
-network.default_concentrations()     # jnp.array
+network.default_concentrations()     # jnp.array (all YAML defaults)
 network.default_parameters()         # jnp.array
 network.summary()                    # prints human-readable table
 network.to_latex()                   # LaTeX rate expressions
 
-# Conditions
-conditions = aquakin.SpatialConditions.uniform(n_locations=1, pH=7.5, T=293.15)
+# By-name vector builders (avoid .at[species_index[...]].set() chains). The
+# dict form is primary -- many species/param names are not valid Python
+# identifiers ("Br-", the namespaced "O3_Br_direct.k1"); kwargs are a
+# convenience for identifier-safe names. Unknown names raise with a
+# difflib "did you mean?" hint.
+network.concentrations({"O3": 1e-4, "Br-": 1e-5})   # defaults + overrides
+network.parameter_values({"O3_Br_direct.k1": 175.0})
+network.atol({"OH": 1e-20}, default=1e-12)          # per-species tolerance vector
+
+# Conditions  (n_locations defaults to 1, for the 0-D batch case)
+conditions = aquakin.SpatialConditions.uniform(pH=7.5, T=293.15)
 conditions = aquakin.SpatialConditions(fields={"pH": jnp.array([...]), ...})
 
-# Batch reactor
+# Batch reactor  (params defaults to network.default_parameters())
 reactor = aquakin.BatchReactor(network, conditions)
-solution = reactor.solve(C0, params, t_span, t_eval)
+solution = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_eval)
+solution = reactor.solve(C0, params, t_span, t_eval)   # explicit params still fine
 solution.t                           # (n_t,)
 solution.C                           # (n_t, n_species)
 solution.C_named("BrO3-")           # convenience accessor
@@ -1278,8 +1288,9 @@ solution.profile                     # (n_t, n_layers+1, n_species) -- depth-res
 solution.depth                       # (n_layers,) layer mid-depths from the surface
 solution.profile_named("S_NO")       # (n_t, n_layers+1) depth profile over time
 
-# Sensitivity and fitting
-sens = aquakin.sensitivity(reactor, C0, params, output_fn)
+# Sensitivity and fitting  (params defaults to network defaults; t_span/t_eval
+# can be passed directly instead of via solve_kwargs)
+sens = aquakin.sensitivity(reactor, C0, output_fn=out, t_span=(0.0, 600.0), t_eval=t_obs)
 sens.doutput_dparams                 # (n_params,)
 sens.doutput_dconditions["pH"]       # (n_locations,) — dict access
 sens.ranked_params()

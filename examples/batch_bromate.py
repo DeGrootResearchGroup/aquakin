@@ -9,21 +9,16 @@ def main() -> None:
     network = aquakin.load_network("ozone_bromate")
     print(network.summary())
 
-    conditions = aquakin.SpatialConditions.uniform(
-        n_locations=1, pH=7.5, T=293.15, OH_scavenging=5.0e4
-    )
+    conditions = aquakin.SpatialConditions.uniform(pH=7.5, T=293.15, OH_scavenging=5.0e4)
 
     # Per-species absolute tolerance: OH lives at ~1e-12 M, others at ~1e-4 M.
-    atol = jnp.full((network.n_species,), 1e-12)
-    atol = atol.at[network.species_index["OH"]].set(1e-20)
+    atol = network.atol({"OH": 1e-20}, default=1e-12)
     reactor = aquakin.BatchReactor(network, conditions, atol=atol)
 
-    C0 = network.default_concentrations()
-    C0 = C0.at[network.species_index["O3"]].set(1.0e-4)
-    C0 = C0.at[network.species_index["Br-"]].set(1.0e-5)
+    C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
 
     t_eval = jnp.linspace(0.0, 600.0, 121)
-    sol = reactor.solve(C0, network.default_parameters(), t_span=(0.0, 600.0), t_eval=t_eval)
+    sol = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_eval)
 
     print()
     print(

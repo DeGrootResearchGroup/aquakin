@@ -34,6 +34,32 @@ def test_autodiff_matches_finite_difference(simple_network):
     assert ad == pytest.approx(fd, rel=1e-3, abs=1e-6)
 
 
+def test_sensitivity_direct_t_span_matches_solve_kwargs(simple_network):
+    """Passing t_span/t_eval directly to sensitivity equals putting them in
+    solve_kwargs, and params defaults to the network defaults."""
+    conditions = aquakin.SpatialConditions.uniform(T=293.15)
+    reactor = aquakin.BatchReactor(simple_network, conditions)
+    C0 = jnp.asarray([1.0, 0.0])
+    t_eval = jnp.linspace(0.0, 10.0, 11)
+    out = lambda sol: sol.C_named("B")[-1]
+
+    direct = aquakin.sensitivity(reactor, C0, output_fn=out,
+                                 t_span=(0.0, 10.0), t_eval=t_eval)
+    via_kwargs = aquakin.sensitivity(
+        reactor, C0, simple_network.default_parameters(), output_fn=out,
+        solve_kwargs={"t_span": (0.0, 10.0), "t_eval": t_eval},
+    )
+    assert jnp.allclose(direct.doutput_dparams, via_kwargs.doutput_dparams)
+
+
+def test_sensitivity_requires_output_fn(simple_network):
+    reactor = aquakin.BatchReactor(
+        simple_network, aquakin.SpatialConditions.uniform(T=293.15)
+    )
+    with pytest.raises(ValueError, match="output_fn"):
+        aquakin.sensitivity(reactor, jnp.asarray([1.0, 0.0]), t_span=(0.0, 10.0))
+
+
 def test_ranked_params(simple_network):
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.BatchReactor(simple_network, conditions)

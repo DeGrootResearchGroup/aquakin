@@ -54,14 +54,16 @@ class SpatialConditions:
         return int(next(iter(self.fields.values())).shape[0])
 
     @classmethod
-    def uniform(cls, n_locations: int, **kwargs: float) -> "SpatialConditions":
+    def uniform(cls, n_locations: int = 1, **kwargs: float) -> "SpatialConditions":
         """
         Build a spatially homogeneous ``SpatialConditions`` object.
 
         Parameters
         ----------
-        n_locations : int
-            Number of spatial locations. Must be at least 1.
+        n_locations : int, optional
+            Number of spatial locations (default 1). Must be at least 1; the
+            default suits a 0-D batch reactor, so a batch user writes
+            ``SpatialConditions.uniform(pH=7.5, T=293.15)``.
         **kwargs : float
             Field name -> scalar value. The scalar is broadcast to
             ``(n_locations,)``.
