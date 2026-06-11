@@ -723,6 +723,33 @@ stable backend forces a reverse-mode residual Jacobian under
 walks (set it to a tight upper bound on the step count). Verified end-to-end: a
 synthetic Khalil calibration reaches the **same optimum** as the capped-Kvaerno5
 `gradient="jax_adjoint"` path — see `test_calibrate_stable_adjoint_matches_jax_adjoint`.
+**Also wired into `plant.solve`** via `plant.solve(..., gradient="stable_adjoint")`,
+which routes the assembled flat plant RHS through `esdirk_adjoint_solve` so a
+reverse-mode gradient flows through the whole monolithic plant solve — across the
+ASM↔ADM interface and the recycle loops — with no `dtmax` cap, in the regime where
+differentiating *through* the stiff plant solve (the default `jax_adjoint` /
+`RecursiveCheckpointAdjoint`) is non-finite. It is **exact through a transient
+solve**: `plant.solve` passes `time_dependent=True`, so the explicit time
+dependence of a time-varying influent is carried in the state
+(`esdirk_adjoint_solve(time_dependent=True)`, the classical autonomization that
+appends `dτ/dt=1` and reads the time from the state) and the discrete adjoint
+captures `∂f/∂t` exactly with no change to the per-step recurrence. Without it the
+default autonomous backward evaluates the field at a fixed time and the gradient
+of any time-coupled parameter is wrong (zeroed in the worst case). It rejects
+`adjoint=`/`dtmax=` (it manages its own integrator and adjoint), and `max_steps`
+bounds the saved-trajectory buffer the backward scan walks (the warm-started BSM2
+plant takes ~205 forward steps under a constant influent, so a small cap keeps the
+reverse pass cheap).
+**Validated**: a *water-line* gradient — tank-1 nitrate with respect to the ADM1
+acetate-uptake rate `k_m_ac`, flowing back through the digester, the interface and
+the reject recycle — is finite and matches central finite differences to
+`rel ≈ 4e-5` under a constant influent (the direct digester-biogas gradient to
+`rel ≈ 4e-6`), and to `rel ≈ 2e-3` under a *diurnal time-varying* influent (the
+`time_dependent` path), where the default reverse adjoint of the stiff plant fails
+outright (`tests/integration/test_plant_stable_adjoint.py`). The autonomization is
+verified exact against finite differences on a forced ODE, and the autonomous
+default is shown to give the wrong gradient for a time-coupled parameter, in
+`tests/integration/test_discrete_adjoint.py`.
 
 **Two solvers, low- and high-order.** `implicit_euler_adjoint_solve` (first
 order) is the simple, robust baseline. `esdirk_adjoint_solve` is the high-order
@@ -1763,7 +1790,7 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
 Covered by `tests/integration/test_bsm2_control.py` (controller-unit behaviour:
 signal sign, saturation, integral direction, anti-windup; closed-loop setpoint
 tracking; closed-vs-open contrast; `jax.grad` through the closed loop). The
-**hydraulic delay, influent bypass, and the wastage (`Qw`) timer
+**hydraulic delay and the wastage (`Qw`) timer
 are still omitted** (the remaining BSM2 elements). The digester is
 additionally validated at the unit level in
 `tests/validation/test_bsm2_digester_unit.py`.
@@ -1795,6 +1822,29 @@ release controller — the deferred closed-loop reject-control piece.) Wired int
 tested in `tests/integration/test_bsm2_storage.py` (the four regimes + flow/
 volume conservation, no-solve; wired plant fills-and-bypasses, steady state
 healthy). The **hydraulic delay and the wastage (`Qw`) timer** remain.
+
+**Hydraulic influent bypass (`build_bsm2(influent_bypass=True)`).** The BSM2
+wet-weather bypass: raw influent flow above `bypass_threshold` (default 60000
+m³/d) is diverted around the whole treatment train (primary, AS, secondary
+clarifier) and rejoined with the clarified effluent — protecting the plant
+hydraulics at the cost of releasing untreated wastewater. Built on a new
+`SplitterUnit` **threshold mode** (`threshold` + `threshold_port` +
+`remainder_port`): `above = max(Q_in − threshold, 0)` to the threshold port,
+`min(Q_in, threshold)` to the remainder. The split is on the **raw influent**
+flow (an external input), so it stays a constant within the exact recycle-flow
+solve (`_resolve_flows`) and doesn't break its affine assumption — important
+because the split is piecewise-linear (a kink at the threshold) and would
+otherwise be non-affine in the recycle flows. The diverted flow skips the
+clarifier too (matching the reference `Qbypassplant=1`: it bypasses the *plant*,
+not just the AS) and joins the final effluent through a new `effluent_mix`
+combiner, so the final effluent is `effluent_mix.out` (treated + bypassed) —
+`evaluate_bsm2` auto-detects it. **This changes the influent entry point**: with
+the bypass, wire the influent to `bypass_split.in` instead of `front_mix.fresh`.
+Default `influent_bypass=False` leaves the plant and its entry point unchanged.
+Demonstrated in `examples/bsm2_influent_bypass.py` (storm flow degrades the
+effluent) and tested in `tests/integration/test_bsm2_bypass.py` (threshold-mode
+flow split + validation; wired-plant flow balance, effluent = treated + bypass,
+bypass degrades effluent, evaluation auto-detects the combined effluent).
 
 **BSM2 performance evaluation — EQI / OCI (`evaluate_bsm2`).** The generic metric
 kernels (`aquakin/plant/metrics.py`: `effluent_quality_index`, `aeration_energy`,

@@ -361,3 +361,68 @@ def test_stiff_trajectory_loss_matches_capped():
     g_ref = jax.jit(jax.grad(loss_ref))(p)
     rel = float(jnp.linalg.norm(g - g_ref) / (jnp.linalg.norm(g_ref) + 1e-30))
     assert rel < 1e-5
+
+
+# --- time-dependent (non-autonomous) right-hand side ------------------------
+
+def _forced_rhs(t, y, p):
+    """A non-autonomous, time-forced scalar ODE: dy/dt = -p0 y + p1 sin(2 t).
+    The p1 sensitivity is carried entirely by the explicit time dependence."""
+    return jnp.array([-p[0] * y[0] + p[1] * jnp.sin(2.0 * t)])
+
+
+def test_time_dependent_esdirk_gradient_matches_fd():
+    """With ``time_dependent=True`` the discrete adjoint is exact for a
+    non-autonomous RHS (time carried in the state); it matches central FD."""
+    p0 = jnp.array([1.0, 0.5])
+    y0 = jnp.array([1.0])
+    teval = jnp.linspace(0.5, 4.0, 8)
+
+    def loss(p):
+        ys = esdirk_adjoint_solve(_forced_rhs, y0, p, (0.0, 4.0), teval,
+                                  max_steps=20_000, time_dependent=True)
+        return jnp.sum(ys[:, 0] ** 2)
+
+    g = jax.grad(loss)(p0)
+    assert jnp.all(jnp.isfinite(g))
+    h = 1e-5
+    fd = jnp.array([(loss(p0.at[i].add(h)) - loss(p0.at[i].add(-h))) / (2 * h)
+                    for i in range(2)])
+    assert g == pytest.approx(fd, rel=1e-3)
+
+
+def test_time_dependent_implicit_euler_gradient_matches_fd():
+    """Same exactness for the first-order implicit-Euler discrete adjoint."""
+    p0 = jnp.array([1.0, 0.5])
+    y0 = jnp.array([1.0])
+    teval = jnp.linspace(0.5, 4.0, 8)
+
+    def loss(p):
+        ys = implicit_euler_adjoint_solve(_forced_rhs, y0, p, (0.0, 4.0), teval,
+                                          max_steps=20_000, time_dependent=True)
+        return jnp.sum(ys[:, 0] ** 2)
+
+    g = jax.grad(loss)(p0)
+    assert jnp.all(jnp.isfinite(g))
+    h = 1e-5
+    fd = jnp.array([(loss(p0.at[i].add(h)) - loss(p0.at[i].add(-h))) / (2 * h)
+                    for i in range(2)])
+    assert g == pytest.approx(fd, rel=5e-3)
+
+
+def test_autonomous_default_is_wrong_for_time_forced_parameter():
+    """The default autonomous assumption evaluates the field at a fixed time, so
+    the gradient of a purely time-coupled parameter is wrong -- it is zeroed here
+    because the forcing sin(2 t) is evaluated at t=0. This is the failure that
+    ``time_dependent=True`` fixes (compare the test above)."""
+    p0 = jnp.array([1.0, 0.5])
+    y0 = jnp.array([1.0])
+    teval = jnp.linspace(0.5, 4.0, 8)
+
+    def loss(p):
+        ys = esdirk_adjoint_solve(_forced_rhs, y0, p, (0.0, 4.0), teval,
+                                  max_steps=20_000)   # autonomous (default)
+        return jnp.sum(ys[:, 0] ** 2)
+
+    g_auto = jax.grad(loss)(p0)
+    assert float(g_auto[1]) == pytest.approx(0.0, abs=1e-9)
