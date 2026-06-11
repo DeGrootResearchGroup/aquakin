@@ -50,6 +50,12 @@ class CSTRUnit:
     C_sat : dict[str, float], optional
         Per-species saturation concentrations used in the aeration term.
         Defaults to 0 for any species without an entry.
+    controlled_kla : dict[str, tuple[str, float]], optional
+        Maps a species to ``(signal_name, gain)``: under closed-loop control its
+        ``kLa`` is taken from the control signal ``signal_name`` (times ``gain``)
+        each RHS call instead of the fixed ``kla`` entry. Setting this makes the
+        unit ``consumes_signals`` -- the plant then threads the signal bus into
+        ``rhs``. Used for DO/kLa control of the aerobic ASM tanks.
     output_port : str
         Name of the single output port.
     """
@@ -61,6 +67,7 @@ class CSTRUnit:
     conditions: dict[str, float] = field(default_factory=dict)
     kla: dict[str, float] = field(default_factory=dict)
     C_sat: dict[str, float] = field(default_factory=dict)
+    controlled_kla: dict[str, tuple[str, float]] = field(default_factory=dict)
     output_port: str = "out"
 
     def __post_init__(self) -> None:
@@ -79,6 +86,12 @@ class CSTRUnit:
             if sp not in self.network.species_index:
                 raise ValueError(
                     f"CSTRUnit '{self.name}' C_sat refers to unknown species '{sp}'"
+                )
+        for sp in self.controlled_kla:
+            if sp not in self.network.species_index:
+                raise ValueError(
+                    f"CSTRUnit '{self.name}' controlled_kla refers to unknown "
+                    f"species '{sp}'"
                 )
 
         # Precompute (n_species,) aeration arrays once. These vectors are
@@ -111,6 +124,11 @@ class CSTRUnit:
     @property
     def output_ports(self) -> list[str]:
         return [self.output_port]
+
+    @property
+    def consumes_signals(self) -> bool:
+        """True when any kLa is driven by a control signal (see ``rhs``)."""
+        return bool(self.controlled_kla)
 
     def initial_state(self) -> jnp.ndarray:
         return self.network.default_concentrations()
@@ -162,6 +180,7 @@ class CSTRUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         # Mix inflows (Q-weighted).
         Q_total = jnp.zeros(())
@@ -187,7 +206,14 @@ class CSTRUnit:
         rates = self.network.rates(state, params, conditions, 0)
         chemistry = stoich.T @ rates
 
-        # Aeration (mass transfer). Zero on species without a kLa entry.
-        aeration = self._kla_vec * (self._sat_vec - state)
+        # Aeration (mass transfer). Zero on species without a kLa entry. Under
+        # closed-loop control the kLa of a controlled species is overridden by
+        # its control signal (times the per-tank gain).
+        kla_vec = self._kla_vec
+        if self.controlled_kla and signals is not None:
+            for sp, (signal_name, gain) in self.controlled_kla.items():
+                idx = self.network.species_index[sp]
+                kla_vec = kla_vec.at[idx].set(signals[signal_name] * gain)
+        aeration = kla_vec * (self._sat_vec - state)
 
         return convection + chemistry + aeration

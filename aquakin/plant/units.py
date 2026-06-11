@@ -35,6 +35,18 @@ class Unit(Protocol):
 
     Both ``compute_outputs`` and ``rhs`` must be AD-clean (no Python
     branching on traced values, no concretisation of ``t`` / ``state``).
+
+    Optional control hooks (duck-typed, not part of the required surface):
+
+    - ``signal_outputs(t, state, inputs, params) -> dict[str, jnp.ndarray]``:
+      a unit that *produces* control signals (e.g. a PI controller) returns a
+      mapping of signal name to scalar. The plant evaluates these each RHS call
+      and gathers them into a shared signal bus.
+    - ``consumes_signals: bool``: a unit that *reads* control signals sets this
+      truthy; the plant then calls its ``rhs`` with an extra ``signals`` dict
+      argument (``rhs(t, state, inputs, params, signals)``).
+
+    See :mod:`aquakin.plant.control` and ``Plant._rhs``.
     """
 
     name: str
