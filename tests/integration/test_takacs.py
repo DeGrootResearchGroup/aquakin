@@ -33,8 +33,7 @@ def _clarifier_plant(asm1, *, Q_inlet=56000.0, overflow_Q=18446.0, C_inlet=None)
         C=jnp.stack([C_inlet, C_inlet]),
         network=asm1,
     )
-    plant.add_influent("feed", inf)
-    plant.connect(None, "feed", "clar", "inlet")
+    plant.add_influent("feed", inf, to="clar.inlet")
     return plant
 
 
@@ -136,8 +135,7 @@ def test_takacs_blanket_profile_and_clarification(asm1):
     plant.add_unit(clar)
     plant.add_influent("feed", InfluentSeries(
         t=jnp.asarray([0.0, 50.0]), Q=jnp.full((2,), Q_in),
-        C=jnp.stack([C, C]), network=asm1))
-    plant.connect(None, "feed", "clar", "inlet")
+        C=jnp.stack([C, C]), network=asm1), to="clar.inlet")
     sol = plant.solve(t_span=(0.0, 5.0), t_eval=jnp.asarray([0.0, 5.0]),
                       rtol=1e-5, atol=1e-3, max_steps=200_000)
     assert jnp.all(jnp.isfinite(sol.state))
@@ -184,8 +182,7 @@ def test_no_inflow_no_dynamics(asm1):
         ]),
         network=asm1,
     )
-    plant.add_influent("feed", inf)
-    plant.connect(None, "feed", "clar", "inlet")
+    plant.add_influent("feed", inf, to="clar.inlet")
     sol = plant.solve(
         t_span=(0.0, 0.5), t_eval=jnp.asarray([0.0, 0.5]),
         rtol=1e-4, atol=1e-3,

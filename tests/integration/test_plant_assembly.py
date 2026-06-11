@@ -56,8 +56,7 @@ def test_single_cstr_steady_state(simple_net):
             conditions={"T": 293.15},
         )
     )
-    plant.add_influent("feed", _constant_influent(simple_net))
-    plant.connect(None, "feed", "tank", "inlet")
+    plant.add_influent("feed", _constant_influent(simple_net), to="tank.inlet")
     sol = plant.solve(
         t_span=(0.0, 200.0), t_eval=jnp.linspace(0.0, 200.0, 5)
     )
@@ -78,9 +77,8 @@ def test_two_cstrs_in_series(simple_net):
                 input_port_names=["inlet"], conditions={"T": 293.15},
             )
         )
-    plant.add_influent("feed", _constant_influent(simple_net))
-    plant.connect(None, "feed", "t1", "inlet")
-    plant.connect("t1", "out", "t2", "inlet")
+    plant.add_influent("feed", _constant_influent(simple_net), to="t1.inlet")
+    plant.connect("t1", "t2")
     sol = plant.solve(
         t_span=(0.0, 400.0), t_eval=jnp.linspace(0.0, 400.0, 5)
     )
@@ -108,12 +106,10 @@ def test_mixer_mass_balance(simple_net):
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
-    plant.add_influent("feed_main", _constant_influent(simple_net, Q=10.0))
-    plant.add_influent("feed_side", _constant_influent(simple_net, Q=5.0, C=(2.0, 0.0)))
-    plant.connect(None, "feed_main", "t1", "inlet")
-    plant.connect("t1", "out", "mix", "a")
-    plant.connect(None, "feed_side", "mix", "b")
-    plant.connect("mix", "out", "t2", "inlet")
+    plant.add_influent("feed_main", _constant_influent(simple_net, Q=10.0), to="t1.inlet")
+    plant.add_influent("feed_side", _constant_influent(simple_net, Q=5.0, C=(2.0, 0.0)), to="mix.b")
+    plant.connect("t1", "mix.a")
+    plant.connect("mix", "t2")
     sol = plant.solve(t_span=(0.0, 500.0), t_eval=jnp.linspace(0.0, 500.0, 5))
     assert jnp.all(jnp.isfinite(sol.state))
 
@@ -148,11 +144,10 @@ def test_splitter_flow_ratios(simple_net):
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
-    plant.add_influent("feed", _constant_influent(simple_net))
-    plant.connect(None, "feed", "src", "inlet")
-    plant.connect("src", "out", "split", "in")
-    plant.connect("split", "a", "sink_a", "inlet")
-    plant.connect("split", "b", "sink_b", "inlet")
+    plant.add_influent("feed", _constant_influent(simple_net), to="src.inlet")
+    plant.connect("src", "split")
+    plant.connect("split.a", "sink_a")
+    plant.connect("split.b", "sink_b")
     sol = plant.solve(t_span=(0.0, 300.0), t_eval=jnp.linspace(0.0, 300.0, 5))
     # At steady state both sinks see the same inlet concentration (the
     # splitter is passive on C), so their final A should match.
@@ -194,12 +189,13 @@ def test_recycle_with_initial_value(simple_net):
             network=simple_net,
         )
     )
-    plant.add_influent("feed", _constant_influent(simple_net, Q=10.0))
-    plant.connect(None, "feed", "mix", "fresh")
-    plant.connect("mix", "out", "tank", "inlet")
-    plant.connect("tank", "out", "split", "in")
+    plant.add_influent("feed", _constant_influent(simple_net, Q=10.0), to="mix.fresh")
+    plant.connect("mix", "tank")
+    plant.connect("tank", "split")
+    # Explicit initial_value override (a non-zero warm seed); the recycle would
+    # otherwise be auto-seeded with a zero-flow stream.
     plant.connect(
-        "split", "out_recycle", "mix", "recycle",
+        "split.out_recycle", "mix.recycle",
         initial_value=Stream(
             Q=jnp.asarray(5.0),
             C=jnp.asarray([0.0, 0.0]),
@@ -237,14 +233,11 @@ def test_connection_index_groups_inputs_and_recycle_keys(simple_net):
             network=simple_net,
         )
     )
-    plant.add_influent("feed", _constant_influent(simple_net, Q=10.0))
-    plant.connect(None, "feed", "mix", "fresh")
-    plant.connect("mix", "out", "tank", "inlet")
-    plant.connect("tank", "out", "split", "in")
-    plant.connect(
-        "split", "out_recycle", "mix", "recycle",
-        initial_value=Stream(Q=jnp.asarray(5.0), C=jnp.asarray([0.0, 0.0]), network=simple_net),
-    )
+    plant.add_influent("feed", _constant_influent(simple_net, Q=10.0), to="mix.fresh")
+    plant.connect("mix", "tank")
+    plant.connect("tank", "split")
+    # Recycle edge with no initial_value -> auto-seeded.
+    plant.connect("split.out_recycle", "mix.recycle")
 
     plant._build_state_layout()  # builds the connection index too
 
@@ -256,7 +249,7 @@ def test_connection_index_groups_inputs_and_recycle_keys(simple_net):
     assert [c.to_port for c in idx["split"]] == ["in"]
     assert sum(len(v) for v in idx.values()) == len(plant.connections)
 
-    # Only the seeded back-edge is a recycle key.
+    # The auto-seeded back-edge is the sole recycle key.
     assert plant._recycle_keys == [("split", "out_recycle")]
 
     # Re-running the build is idempotent (no duplicated edges).
@@ -273,8 +266,7 @@ def test_ad_grad_through_plant(simple_net):
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
-    plant.add_influent("feed", _constant_influent(simple_net))
-    plant.connect(None, "feed", "t1", "inlet")
+    plant.add_influent("feed", _constant_influent(simple_net), to="t1.inlet")
 
     def loss(params):
         sol = plant.solve(
@@ -311,8 +303,7 @@ def test_influent_interpolation(simple_net):
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
-    plant.add_influent("feed", inf)
-    plant.connect(None, "feed", "tank", "inlet")
+    plant.add_influent("feed", inf, to="tank.inlet")
     sol = plant.solve(t_span=(0.0, 50.0), t_eval=jnp.linspace(0.0, 50.0, 51))
     # The trajectory should not be constant — there's a real time response.
     A_traj = sol.C_named("tank", "A")
@@ -392,3 +383,88 @@ def test_stateless_units_expose_state_size_as_property(simple_net):
         assert isinstance(type(u).state_size, property)
         field_names = {f.name for f in dataclasses.fields(u)}
         assert "state_size" not in field_names
+
+
+def _recycle_plant(simple_net):
+    """A mixer -> tank -> splitter loop, the splitter recycling to the mixer."""
+    plant = Plant("rc")
+    plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "recycle"],
+                             network=simple_net))
+    plant.add_unit(CSTRUnit(name="tank", network=simple_net, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_unit(SplitterUnit(name="split", network=simple_net,
+                                output_port_ratios={"out": 0.5, "rec": 0.5}))
+    return plant
+
+
+def test_connect_infers_sole_ports(simple_net):
+    """Bare-unit endpoints resolve to the unit's only in/out port; the stored
+    Connection carries the resolved port names."""
+    plant = _recycle_plant(simple_net)
+    plant.connect("mix", "tank")           # mix.out -> tank.inlet
+    plant.connect("tank", "split")         # tank.out -> split.in
+    c0, c1 = plant.connections
+    assert (c0.from_unit, c0.from_port, c0.to_unit, c0.to_port) == ("mix", "out", "tank", "inlet")
+    assert (c1.from_unit, c1.from_port, c1.to_unit, c1.to_port) == ("tank", "out", "split", "in")
+
+
+def test_connect_auto_seeds_recycle_edge(simple_net):
+    """A recycle edge (source ordered after destination) given no initial_value
+    is auto-seeded with a zero-flow stream of the source network."""
+    plant = _recycle_plant(simple_net)
+    plant.connect("mix", "tank")
+    plant.connect("tank", "split")
+    plant.connect("split.rec", "mix.recycle")     # recycle, no initial_value
+    forward, recycle = plant.connections[1], plant.connections[2]
+    # The forward edge is not seeded; the recycle edge is.
+    assert forward.initial_value is None
+    seed = recycle.initial_value
+    assert seed is not None
+    assert float(seed.Q) == 0.0
+    assert seed.network is simple_net
+
+
+def test_connect_explicit_initial_value_overrides_autoseed(simple_net):
+    """An explicit initial_value is kept verbatim (no auto-seed override)."""
+    plant = _recycle_plant(simple_net)
+    plant.connect("mix", "tank")
+    plant.connect("tank", "split")
+    warm = Stream(Q=jnp.asarray(7.0), C=simple_net.default_concentrations(),
+                  network=simple_net)
+    plant.connect("split.rec", "mix.recycle", initial_value=warm)
+    assert plant.connections[2].initial_value is warm
+
+
+def test_connect_ambiguous_bare_port_errors(simple_net):
+    """A bare unit endpoint with more than one port for the role is rejected
+    with a message naming the available ports."""
+    plant = _recycle_plant(simple_net)
+    with pytest.raises(ValueError, match="omits the port"):
+        plant.connect("split", "mix.recycle")     # split has 2 output ports
+
+
+def test_connect_unknown_port_errors(simple_net):
+    plant = _recycle_plant(simple_net)
+    with pytest.raises(KeyError, match="no destination port"):
+        plant.connect("mix", "tank.nope")
+
+
+def test_connect_influent_as_source_errors(simple_net):
+    """Using an influent name as a connect source points the user to
+    add_influent(to=...)."""
+    plant = _recycle_plant(simple_net)
+    plant.add_influent("feed", _constant_influent(simple_net), to="mix.fresh")
+    with pytest.raises(ValueError, match="is an influent"):
+        plant.connect("feed", "tank")
+
+
+def test_add_influent_to_creates_connection(simple_net):
+    """add_influent(to=...) registers the influent AND wires it, with no
+    separate connect call."""
+    plant = _recycle_plant(simple_net)
+    plant.add_influent("feed", _constant_influent(simple_net), to="mix.fresh")
+    assert "feed" in plant.influents
+    inf_conn = [c for c in plant.connections if c.from_unit is None]
+    assert len(inf_conn) == 1
+    c = inf_conn[0]
+    assert (c.from_port, c.to_unit, c.to_port) == ("feed", "mix", "fresh")

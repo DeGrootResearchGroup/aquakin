@@ -48,8 +48,7 @@ def _solve():
     asm1 = aquakin.load_network("asm1")
     adm1 = aquakin.load_network("adm1")
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
-    plant.add_influent("feed", bsm2_constant_influent(asm1))
-    plant.connect(None, "feed", "front_mix", "fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
     plant._build_state_layout()
     plant._build_parameter_layout()
 

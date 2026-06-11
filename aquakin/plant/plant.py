@@ -168,85 +168,171 @@ class Plant:
         self.units[unit.name] = unit
         self._unit_order.append(unit.name)
 
-    def add_influent(self, port_name: str, series: InfluentSeries) -> None:
-        """Register an external time-varying influent stream.
-
-        ``port_name`` is the symbolic name used as ``from_port`` in a
-        connection (with ``from_unit=None``).
-        """
-        if port_name in self.influents:
-            raise ValueError(f"Influent '{port_name}' already added")
-        self.influents[port_name] = series
-
-    def connect(
+    def add_influent(
         self,
-        from_unit: Optional[str],
-        from_port: str,
-        to_unit: str,
-        to_port: str,
+        name: str,
+        series: InfluentSeries,
+        to: Optional[str] = None,
+        *,
         translator: Optional[StateTranslator] = None,
-        initial_value: Optional[Stream] = None,
     ) -> None:
-        """Wire one stream from a source to a destination.
+        """Register an external time-varying influent stream, optionally wiring it.
 
         Parameters
         ----------
-        from_unit : str or None
-            Source unit name, or ``None`` for an external influent.
-        from_port : str
-            Source port name. For an influent, this is the influent's
-            registered name.
-        to_unit : str
-            Destination unit name.
-        to_port : str
-            Destination input port name on the destination unit.
+        name : str
+            Identifier for this influent (used in stream keys and error
+            messages).
+        series : InfluentSeries
+            The time-varying influent data.
+        to : str, optional
+            Destination endpoint to feed this influent into, as ``"unit.port"``
+            (or bare ``"unit"`` to use the unit's sole input port). When given,
+            the connection is made here, so no separate :meth:`connect` call is
+            needed. The destination unit must already be added. When omitted the
+            influent is registered but inert -- influents are not valid
+            :meth:`connect` sources, so wiring happens here.
         translator : StateTranslator, optional
-            State translator to apply on the stream as it crosses the
-            connection. Defaults to :class:`IdentityTranslator` when
-            source and destination share a network. Required when they
-            differ.
-        initial_value : Stream, optional
-            Seed value for the stream on the first RHS pass. Required for
-            *recycle* edges (where the source unit is evaluated after the
-            destination unit in :attr:`_unit_order`). Ignored for
-            feed-forward edges.
+            Translator for the influent -> unit connection. Defaults to identity
+            when the influent and destination share a network.
         """
-        if to_unit not in self.units:
-            raise KeyError(f"Unknown destination unit '{to_unit}'")
-        if from_unit is not None and from_unit not in self.units:
-            raise KeyError(f"Unknown source unit '{from_unit}'")
-        if from_unit is None and from_port not in self.influents:
-            raise KeyError(f"Unknown influent '{from_port}'")
-        if to_port not in self.units[to_unit].input_ports:
-            raise KeyError(
-                f"Unit '{to_unit}' has no input port '{to_port}'; available: "
-                f"{self.units[to_unit].input_ports}"
+        if name in self.influents:
+            raise ValueError(f"Influent '{name}' already added")
+        self.influents[name] = series
+        if to is not None:
+            to_unit, to_port = self._parse_endpoint(to, role="destination")
+            translator = self._default_translator(
+                series.network, to_unit, translator,
+                f"influent '{name}'", f"{to_unit}.{to_port}",
             )
-        # Resolve a default translator if both ends share a network.
-        if translator is None:
-            target_network = self._unit_network(to_unit)
-            source_network = (
-                self._unit_network(from_unit)
-                if from_unit is not None
-                else self.influents[from_port].network
-            )
-            if source_network is target_network:
-                translator = IdentityTranslator(target_network)
-            else:
-                raise ValueError(
-                    f"Connection {from_unit}.{from_port} -> {to_unit}.{to_port} "
-                    f"crosses networks; supply an explicit translator."
+            self.connections.append(
+                Connection(
+                    from_unit=None, from_port=name,
+                    to_unit=to_unit, to_port=to_port,
+                    translator=translator, initial_value=None,
                 )
+            )
+
+    def connect(
+        self,
+        source: str,
+        dest: str,
+        *,
+        translator: Optional[StateTranslator] = None,
+        initial_value: Optional[Stream] = None,
+    ) -> None:
+        """Wire a stream from one unit's output to another unit's input.
+
+        Both endpoints are ``"unit.port"`` strings, read as ``source -> dest``.
+        The port may be omitted (bare ``"unit"``) when the unit has exactly one
+        port for that role -- a single output (source) or single input (dest) --
+        so only multi-port units like mixers and splitters need an explicit
+        port. To feed an external influent, use
+        :meth:`add_influent` with ``to=...`` rather than :meth:`connect`.
+
+        Parameters
+        ----------
+        source : str
+            Source endpoint, ``"unit.port"`` or bare ``"unit"`` for the unit's
+            sole output port.
+        dest : str
+            Destination endpoint, ``"unit.port"`` or bare ``"unit"`` for the
+            unit's sole input port.
+        translator : StateTranslator, optional
+            State translator to apply as the stream crosses the connection.
+            Defaults to :class:`IdentityTranslator` when source and destination
+            share a network; required when they differ.
+        initial_value : Stream, optional
+            Seed for the stream's first RHS pass on a *recycle* edge (where the
+            source unit is evaluated after the destination in
+            :attr:`_unit_order`). Omit it and any recycle edge is auto-seeded
+            with a zero-flow stream of the source network; pass it only to
+            override that with a non-zero warm start. Ignored for feed-forward
+            edges.
+
+        Examples
+        --------
+        >>> plant.connect("tank1", "tank2")                 # sole ports inferred
+        >>> plant.connect("tank5_split.to_clarifier", "clarifier")
+        >>> plant.connect("split.recycle", "mix.recycle")   # recycle: auto-seeded
+        """
+        src_unit, src_port = self._parse_endpoint(source, role="source")
+        dst_unit, dst_port = self._parse_endpoint(dest, role="destination")
+        translator = self._default_translator(
+            self._unit_network(src_unit), dst_unit, translator,
+            f"{src_unit}.{src_port}", f"{dst_unit}.{dst_port}",
+        )
+        if initial_value is None and self._is_recycle(src_unit, dst_unit):
+            net = self._unit_network(src_unit)
+            initial_value = Stream(
+                Q=jnp.asarray(0.0), C=net.default_concentrations(), network=net
+            )
         self.connections.append(
             Connection(
-                from_unit=from_unit,
-                from_port=from_port,
-                to_unit=to_unit,
-                to_port=to_port,
-                translator=translator,
-                initial_value=initial_value,
+                from_unit=src_unit, from_port=src_port,
+                to_unit=dst_unit, to_port=dst_port,
+                translator=translator, initial_value=initial_value,
             )
         )
+
+    def _parse_endpoint(self, spec: str, *, role: str) -> tuple[str, str]:
+        """Resolve a ``"unit.port"`` / ``"unit"`` endpoint string to ``(unit, port)``.
+
+        ``role`` is ``"source"`` (resolves against the unit's output ports) or
+        ``"destination"`` (input ports). A bare unit infers its sole port for
+        that role; an unknown unit, an unknown port, or an ambiguous bare unit
+        (more than one port for the role) raises a clear error.
+        """
+        unit_name, _, port = spec.partition(".")
+        if unit_name not in self.units:
+            if unit_name in self.influents:
+                raise ValueError(
+                    f"'{unit_name}' is an influent, not a unit; wire it with "
+                    f"add_influent('{unit_name}', series, to=...), not connect()."
+                )
+            raise KeyError(f"Unknown unit '{unit_name}' in endpoint '{spec}'.")
+        ports = (
+            self.units[unit_name].output_ports if role == "source"
+            else self.units[unit_name].input_ports
+        )
+        if port:
+            if port not in ports:
+                raise KeyError(
+                    f"Unit '{unit_name}' has no {role} port '{port}'; "
+                    f"available: {list(ports)}."
+                )
+            return unit_name, port
+        if len(ports) != 1:
+            raise ValueError(
+                f"Endpoint '{spec}' omits the port, but unit '{unit_name}' has "
+                f"{len(ports)} {role} ports {list(ports)}; name one explicitly "
+                f"as '{unit_name}.<port>'."
+            )
+        return unit_name, ports[0]
+
+    def _default_translator(
+        self, source_network, dest_unit, translator, src_label, dst_label
+    ) -> StateTranslator:
+        """Return ``translator`` if given, else the default for the endpoints.
+
+        The default is :class:`IdentityTranslator` when the source and
+        destination share a network; a cross-network connection with no
+        explicit translator is an error.
+        """
+        if translator is not None:
+            return translator
+        target_network = self._unit_network(dest_unit)
+        if source_network is target_network:
+            return IdentityTranslator(target_network)
+        raise ValueError(
+            f"Connection {src_label} -> {dst_label} crosses networks; "
+            f"supply an explicit translator."
+        )
+
+    def _is_recycle(self, source_unit: str, dest_unit: str) -> bool:
+        """True if ``source_unit`` is evaluated after ``dest_unit`` (a recycle)."""
+        order = self._unit_order
+        return order.index(source_unit) > order.index(dest_unit)
 
     def _unit_network(self, unit_name: str) -> CompiledNetwork:
         unit = self.units[unit_name]

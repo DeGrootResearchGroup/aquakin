@@ -1504,6 +1504,21 @@ Key types:
 - `Plant` — assembles units and connections, drives the monolithic
   integration. Recycles are resolved by iterating the per-RHS stream
   computation 3 times (sufficient for typical BSM topologies).
+  - **Wiring API.** `plant.connect(source, dest)` takes two `"unit.port"`
+    endpoint strings, read as `source -> dest`. The port may be omitted
+    (bare `"unit"`) when the unit has exactly one port for that role — a
+    single output (source) or single input (dest) — so only multi-port
+    units (mixers/splitters/clarifiers) name a port. A **recycle** edge
+    (source unit ordered after the destination) with no `initial_value` is
+    **auto-seeded** with a zero-flow stream of the source network; pass
+    `initial_value=` only to override with a non-zero warm start.
+    External influents are wired through
+    `plant.add_influent(name, series, to="unit.port")` — they are *not*
+    valid `connect` sources (a clear error redirects you). `connect`
+    resolves the default `IdentityTranslator` when the two ends share a
+    network and requires an explicit `translator=` across networks (e.g.
+    the BSM2 ASM1↔ADM1 digester edges). The endpoint parsing lives in
+    `Plant._parse_endpoint`; recycle detection in `Plant._is_recycle`.
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `MixerUnit`,
 `SplitterUnit`, `IdealClarifier` (fast, stateless separator),

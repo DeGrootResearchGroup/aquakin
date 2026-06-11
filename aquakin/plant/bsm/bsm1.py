@@ -21,13 +21,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-import jax.numpy as jnp
-
 from aquakin.plant.clarifier import IdealClarifier
 from aquakin.plant.cstr import CSTRUnit
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import Plant
-from aquakin.plant.streams import Stream
 from aquakin.plant.takacs import TakacsClarifier
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -109,13 +106,6 @@ def build_bsm1(
                       for name in network.conditions_required}
 
     plant = Plant("BSM1")
-
-    # Two seed streams (zero flow, default C). Used for recycle initialisation.
-    seed_zero = Stream(
-        Q=jnp.asarray(0.0),
-        C=network.default_concentrations(),
-        network=network,
-    )
 
     # ----- Influent mixer -----
     # Mixes the external influent + internal recycle + RAS into tank 1's inlet.
@@ -227,17 +217,18 @@ def build_bsm1(
     #   inlet_mix:ras              <- underflow_split:ras
     # Note: clarifier.overflow is the effluent (not routed onward).
 
-    plant.connect("inlet_mix", "out", "tank1", "inlet")
-    plant.connect("tank1", "out", "tank2", "inlet")
-    plant.connect("tank2", "out", "tank3", "inlet")
-    plant.connect("tank3", "out", "tank4", "inlet")
-    plant.connect("tank4", "out", "tank5", "inlet")
-    plant.connect("tank5", "out", "tank5_split", "in")
-    plant.connect("tank5_split", "to_clarifier", "clarifier", "inlet")
-    plant.connect("clarifier", "underflow", "underflow_split", "in")
-    plant.connect("tank5_split", "internal_recycle", "inlet_mix", "internal_recycle",
-                  initial_value=seed_zero)
-    plant.connect("underflow_split", "ras", "inlet_mix", "ras",
-                  initial_value=seed_zero)
+    # Reactor cascade: bare endpoints use each unit's sole in/out port.
+    plant.connect("inlet_mix", "tank1")
+    plant.connect("tank1", "tank2")
+    plant.connect("tank2", "tank3")
+    plant.connect("tank3", "tank4")
+    plant.connect("tank4", "tank5")
+    plant.connect("tank5", "tank5_split")
+    plant.connect("tank5_split.to_clarifier", "clarifier")
+    plant.connect("clarifier.underflow", "underflow_split")
+    # Recycles (source evaluated after destination): auto-seeded with a
+    # zero-flow stream, so no initial_value is needed.
+    plant.connect("tank5_split.internal_recycle", "inlet_mix.internal_recycle")
+    plant.connect("underflow_split.ras", "inlet_mix.ras")
 
     return plant
