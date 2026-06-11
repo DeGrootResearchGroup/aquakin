@@ -37,8 +37,7 @@ def _tank5_snh_at(asm1, adm1, params, T_kelvin):
                           C=jnp.tile(C, (2, 1)), network=asm1,
                           T=jnp.full((2,), float(T_kelvin)))
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
-    plant.add_influent("feed", infl)
-    plant.connect(None, "feed", "front_mix", "fresh")
+    plant.add_influent("feed", infl, to="front_mix.fresh")
     plant._build_state_layout()
     plant._build_parameter_layout()
     warm = asm1.default_concentrations()
@@ -85,8 +84,7 @@ def test_temperature_influent_rhs_finite_and_active():
                               C=jnp.tile(C, (2, 1)), network=asm1,
                               T=jnp.full((2,), float(T_kelvin)))
         plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
-        plant.add_influent("feed", infl)
-        plant.connect(None, "feed", "front_mix", "fresh")
+        plant.add_influent("feed", infl, to="front_mix.fresh")
         plant._build_state_layout()
         plant._build_parameter_layout()
         warm = asm1.default_concentrations()
