@@ -108,53 +108,62 @@ def _closed_loop_plant(asm1, adm1):
     return plant
 
 
-def test_closed_loop_builds_and_is_finite(asm1, adm1):
-    plant = _closed_loop_plant(asm1, adm1)
+# The DO loop is fast (Ti=0.002 d), so reactor-4 oxygen reaches the setpoint
+# within a fraction of a day regardless of the slower biology -- a short horizon
+# suffices and keeps the (stiff full-plant) solves cheap for CI. The closed- and
+# open-loop solutions are each computed once at module scope and shared across
+# the assertions below.
+_T_END = 10.0
+_T_EVAL = jnp.array([0.0, _T_END])
+
+
+@pytest.fixture(scope="module")
+def closed_plant(asm1, adm1):
+    return _closed_loop_plant(asm1, adm1)
+
+
+@pytest.fixture(scope="module")
+def closed_sol(closed_plant, asm1, adm1):
     params = bsm2_parameters(asm1, adm1)
-    sol = plant.solve((0.0, 50.0), t_eval=jnp.array([0.0, 50.0]),
-                      params=params, rtol=1e-4, atol=1e-3, max_steps=400_000)
-    assert jnp.all(jnp.isfinite(sol.state))
+    return closed_plant.solve((0.0, _T_END), t_eval=_T_EVAL, params=params,
+                              rtol=1e-4, atol=1e-3, max_steps=200_000)
+
+
+@pytest.fixture(scope="module")
+def open_sol(asm1, adm1):
+    plant = build_bsm2(asm1, adm1, do_control=False)
+    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    params = bsm2_parameters(asm1, adm1)
+    return plant.solve((0.0, _T_END), t_eval=_T_EVAL, params=params,
+                       rtol=1e-4, atol=1e-3, max_steps=200_000)
+
+
+def test_closed_loop_builds_and_is_finite(closed_plant, closed_sol):
+    assert jnp.all(jnp.isfinite(closed_sol.state))
     # The controller carries one integral state.
-    assert plant.units["do_control"].state_size == 1
+    assert closed_plant.units["do_control"].state_size == 1
 
 
-def test_do_setpoint_tracking(asm1, adm1):
+def test_do_setpoint_tracking(closed_sol):
     """The PI loop holds reactor-4 oxygen at the DO setpoint."""
-    plant = _closed_loop_plant(asm1, adm1)
-    params = bsm2_parameters(asm1, adm1)
-    sol = plant.solve((0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
-                      params=params, rtol=1e-4, atol=1e-3, max_steps=600_000)
-    so4 = float(sol.C_named("tank4", "SO")[-1])
+    so4 = float(closed_sol.C_named("tank4", "SO")[-1])
     assert so4 == pytest.approx(BSM2_DO_SETPOINT, abs=0.1)
     # Aerated reactors hold oxygen; the anoxic reactors do not.
-    assert float(sol.C_named("tank1", "SO")[-1]) < 0.5
-    assert float(sol.C_named("tank3", "SO")[-1]) > 0.0
-    # The effective kLa from the control signal stays within actuator limits:
-    # the resulting oxygen never exceeds the saturation it is driven toward.
+    assert float(closed_sol.C_named("tank1", "SO")[-1]) < 0.5
+    assert float(closed_sol.C_named("tank3", "SO")[-1]) > 0.0
+    # The control signal stays within the actuator's oxygen bounds.
     assert 0.0 <= so4 <= BSM2_DO_KLA_MAX
 
 
-def test_closed_loop_differs_from_open_loop(asm1, adm1):
+def test_closed_loop_differs_from_open_loop(closed_sol, open_sol):
     """Closing the DO loop pins reactor-4 oxygen at the setpoint, unlike the
     fixed-kLa open-loop plant at the same operating point."""
-    params = bsm2_parameters(asm1, adm1)
-    t_eval = jnp.array([0.0, 100.0])
-
-    closed = _closed_loop_plant(asm1, adm1)
-    sol_c = closed.solve((0.0, 100.0), t_eval=t_eval, params=params,
-                         rtol=1e-4, atol=1e-3, max_steps=500_000)
-
-    openp = build_bsm2(asm1, adm1, do_control=False)
-    openp.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
-    sol_o = openp.solve((0.0, 100.0), t_eval=t_eval, params=params,
-                        rtol=1e-4, atol=1e-3, max_steps=500_000)
-
-    so4_closed = float(sol_c.C_named("tank4", "SO")[-1])
-    so4_open = float(sol_o.C_named("tank4", "SO")[-1])
+    so4_closed = float(closed_sol.C_named("tank4", "SO")[-1])
+    so4_open = float(open_sol.C_named("tank4", "SO")[-1])
     assert abs(so4_closed - BSM2_DO_SETPOINT) < abs(so4_open - BSM2_DO_SETPOINT)
 
 
-def test_ad_flows_through_control_bus(asm1, adm1):
+def test_ad_flows_through_control_bus(closed_plant, asm1, adm1):
     """jax.grad flows through the control-signal bus without NaNs.
 
     Differentiated at the RHS level (one ``Plant._rhs`` evaluation) and with
@@ -165,7 +174,7 @@ def test_ad_flows_through_control_bus(asm1, adm1):
     problem (the closed loop's fast controller poles need the documented ``dtmax``
     cap / stable adjoint for a full reverse-mode solve -- see CLAUDE.md).
     """
-    plant = _closed_loop_plant(asm1, adm1)
+    plant = closed_plant
     plant._build_state_layout()
     plant._build_parameter_layout()
     params = bsm2_parameters(asm1, adm1)
