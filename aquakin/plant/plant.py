@@ -723,19 +723,9 @@ class Plant:
         # Steps 2-3: resolve influent + recycle streams and run the output sweep.
         all_outputs, streams = self._resolve_streams(t, states, params_full)
 
-        # Step 3b: control signals. Units exposing ``signal_outputs`` (e.g. PI
-        # controllers) read their sensed input streams and own state and write
-        # named scalar signals into a shared bus; units with ``consumes_signals``
-        # (e.g. an aerated CSTR under DO control) read those signals in ``rhs``.
-        # These hooks are class-level, so the branch is static (jit-safe).
-        signals: dict = {}
-        for name in self._unit_order:
-            unit = self.units[name]
-            if hasattr(unit, "signal_outputs"):
-                inputs = self._collect_inputs(name, all_outputs, streams)
-                signals.update(unit.signal_outputs(
-                    t, states[name], inputs,
-                    self._params_for_unit(name, params_full)))
+        # Step 3b: control signals (see :meth:`_compute_signals`).
+        signals = self._compute_signals(t, states, all_outputs, streams,
+                                        params_full)
 
         # Step 4: compute dstates from final input streams (and control signals).
         dstates: list[jnp.ndarray] = []
@@ -749,6 +739,70 @@ class Plant:
                 dstate = unit.rhs(t, states[name], inputs, params_unit)
             dstates.append(dstate)
         return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
+
+    def _compute_signals(
+        self,
+        t: jnp.ndarray,
+        states: dict[str, jnp.ndarray],
+        all_outputs: dict[tuple[str, str], Stream],
+        streams: dict[tuple[Optional[str], str], Stream],
+        params_full: jnp.ndarray,
+    ) -> dict:
+        """Gather the control-signal bus from every controller unit.
+
+        Units exposing ``signal_outputs`` (e.g. PI controllers) read their
+        sensed input streams and own state and write named scalar signals into a
+        shared dict; units with ``consumes_signals`` (e.g. an aerated CSTR under
+        DO control) read those signals in ``rhs``. The hooks are class-level, so
+        the branch is static (jit-safe).
+        """
+        signals: dict = {}
+        for name in self._unit_order:
+            unit = self.units[name]
+            if hasattr(unit, "signal_outputs"):
+                inputs = self._collect_inputs(name, all_outputs, streams)
+                signals.update(unit.signal_outputs(
+                    t, states[name], inputs,
+                    self._params_for_unit(name, params_full)))
+        return signals
+
+    def signals_at(
+        self,
+        t: jnp.ndarray,
+        state_full: jnp.ndarray,
+        params: Optional[jnp.ndarray] = None,
+    ) -> dict:
+        """Reconstruct the control-signal bus at one ``(t, state)``.
+
+        The plant integrates unit states, not the control signals, so a signal
+        such as a DO controller's manipulated ``kLa`` is recomputed from the
+        state on demand -- the signal analogue of :meth:`outputs_at`. Returns
+        ``{}`` for an open-loop plant (no controllers).
+
+        Parameters
+        ----------
+        t : float
+            Time (plant units), used to interpolate the influents.
+        state_full : jnp.ndarray
+            Flat plant state at ``t`` (e.g. one row of ``PlantSolution.state``).
+        params : jnp.ndarray, optional
+            Plant parameters (defaults to :meth:`default_parameters`).
+
+        Returns
+        -------
+        dict
+            ``{signal_name: scalar}`` for every published control signal.
+        """
+        self._build_state_layout()
+        self._build_parameter_layout()
+        params_full = (
+            self.default_parameters() if params is None else jnp.asarray(params)
+        )
+        states = self._split_state(jnp.asarray(state_full))
+        all_outputs, streams = self._resolve_streams(
+            jnp.asarray(t), states, params_full)
+        return self._compute_signals(
+            jnp.asarray(t), states, all_outputs, streams, params_full)
 
     def _seed_recycle_streams(
         self,
