@@ -104,7 +104,12 @@ jobs:
     name: validation suite
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Merge-to-main only (not on the PR critical path), so a generous ceiling is
+    # fine. The validation set has grown (now ~24 tests: published-data checks
+    # plus the AD-correctness suites -- discrete/stable/forward adjoints), and at
+    # ~24 min of full plant + stiff solves on the 4-vCPU runner it overran the
+    # old 25-min limit. 45 min leaves headroom as the suite keeps growing.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
