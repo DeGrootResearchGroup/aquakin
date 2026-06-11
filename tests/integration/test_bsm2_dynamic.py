@@ -23,6 +23,10 @@ from aquakin.plant.bsm.bsm2 import (
 )
 from aquakin.plant.influent import load_bsm2_influent
 
+# Slow module: full two-network BSM2 plant solves (steady-state warmup + dynamic
+# runs). Excluded from the fast PR gate; runs in the merge-to-main suite.
+pytestmark = pytest.mark.slow
+
 
 _WARM = {"SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
          "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,

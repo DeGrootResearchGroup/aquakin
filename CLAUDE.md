@@ -1435,14 +1435,16 @@ marked `@pytest.mark.validation`, run separately.
 [tool.pytest.ini_options]
 markers = [
     "validation: scientific validation tests against published data (slow)",
+    "slow: multi-minute stiff/plant integration tests; excluded from the fast PR gate, run in full on merge to main",
 ]
 testpaths = ["tests"]
 ```
 
 ```bash
-pytest -m "not validation"   # development
-pytest -m validation          # validation suite
-pytest                        # everything
+pytest -m "not validation and not slow"   # fast gate (the PR merge gate)
+pytest -m slow                             # the multi-minute stiff/plant solves
+pytest -m validation                       # validation suite (published data)
+pytest                                     # everything
 ```
 
 ### Canonical Integration Test
@@ -1815,11 +1817,28 @@ Don't try to `git push` from inside the sandbox; it fails with
 
 ### Continuous integration
 
-GitHub Actions runs the test suite on every push to `main` and every
-pull request (`.github/workflows/ci.yml`). The `test` job runs
-`pytest -m "not validation"` across Python 3.11/3.12; a separate
-`validation` job runs `pytest -m validation` (the slower published-data
-checks) on 3.12. A green CI is the merge gate. Python 3.10 stays
+GitHub Actions (`.github/workflows/ci.yml`) splits the suite into a **fast PR
+gate** and a **full merge-to-main suite**, because the integration tests are
+real stiff-ODE solves with AD (~irreducible seconds each) and the cost is spread
+across hundreds of tests — neither a JAX compile-cache (verified: cold ≈ warm)
+nor concentrating it in a few files makes the whole suite fast.
+
+- The **`test`** job (`pytest -m "not validation and not slow"`, Python
+  3.11/3.12) runs on **every PR and every push** — unit + fast integration. This
+  is the merge gate.
+- The **`slow`** job (`pytest -m slow`, 3.11/3.12) and **`validation`** job
+  (`pytest -m validation`, 3.12) run **only on push to `main`** (`if:
+  github.event_name == 'push'`). They carry the multi-minute stiff/plant solves
+  (the `slow` marker on `test_bsm2_dynamic`, `test_bsm1`, `test_biofilm`,
+  `test_forward_sensitivity`, the two `test_wats_sewer_*` files) and the
+  published-data checks. A regression a PR's fast gate cannot catch therefore
+  surfaces within minutes of merging — revert from there.
+
+**Branch protection:** the required status checks must be the fast-gate jobs
+(`fast tests (py3.11)` / `(py3.12)`) — **not** `slow`/`validation`, which do not
+run on PRs and would otherwise block every PR forever.
+
+A green fast gate is the merge gate. Python 3.10 stays
 install-compatible (`requires-python >= 3.10`) but is **not** CI-tested:
 its heavier jaxlib 0.6.2 build ran close to the hosted runner's
 resource/time limits and the job was intermittently killed mid-run, while
