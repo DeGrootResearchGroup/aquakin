@@ -1722,9 +1722,37 @@ run on `load_bsm2_influent(...)` is seasonally temperature-driven out of the box
 (The generic `read_influent_csv` / `_influent_from_text` capture a `T` column
 when present, in the file's own units; only the BSM2 loader converts °C→K.)
 
-The **storage tank, hydraulic delay, influent bypass, sensors and controllers
-are still omitted** (the closed-loop additions are the remaining BSM2 phase).
-The digester is additionally validated at the unit level in
+**Closed-loop DO/kLa control (`build_bsm2(do_control=True)`).** The first
+closed-loop element is the BSM2 dissolved-oxygen controller: a PI loop senses
+`SO` in reactor 4 and manipulates its aeration `kLa` (reactors 3 and 5 scale off
+the same signal at gains 1.0/0.5), driving the oxygen to the `SO=2` gO₂/m³
+setpoint instead of the fixed open-loop `kLa`. Tuning is the reference DO loop
+(`Kp=25`, integral time `Ti=0.002` d, anti-windup tracking `Tt=0.001` d, `kLa`
+offset 120 d⁻¹, bounded `[0, 360]`). It is built on a small, general
+**control-signal bus** layered on the material flowsheet (so the loop closes
+inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
+- `PIController` ([`plant/control.py`](aquakin/plant/control.py)) is a Unit with
+  one integral state. It reads its measured variable from a *sensed input
+  stream* (wired like any other connection, `tank4 → do_control.measured`, but it
+  produces no material output), and publishes a named scalar **signal**
+  `u_sat = clip(offset + Kp·e + x_i, out_min, out_max)` via `signal_outputs(...)`;
+  its `rhs` integrates `dx_i/dt = (Kp/Ti)·e + (1/Tt)·(u_sat − u)` (back-calculation
+  anti-windup). `x_i` is the integral *contribution to the output* (already
+  scaled), so the tracking term has consistent units.
+- `Plant._rhs` evaluates `signal_outputs` on every controller each RHS call,
+  gathers the results into a `signals` dict, and threads it into the `rhs` of any
+  unit declaring `consumes_signals` (an extra trailing arg) — leaving every other
+  unit's 4-arg `rhs` untouched. Both hooks are class-level/duck-typed, so the
+  branch is static and jit/AD-safe.
+- `CSTRUnit` gains `controlled_kla: {species: (signal_name, gain)}`: when set the
+  species' `kLa` is taken from `signals[name]·gain` each step (overriding the
+  fixed `kla`), and the unit reports `consumes_signals=True`.
+Covered by `tests/integration/test_bsm2_control.py` (controller-unit behaviour:
+signal sign, saturation, integral direction, anti-windup; closed-loop setpoint
+tracking; closed-vs-open contrast; `jax.grad` through the closed loop). The
+**storage tank, hydraulic delay, influent bypass, and the wastage (`Qw`) timer
+are still omitted** (the remaining BSM2 closed-loop elements). The digester is
+additionally validated at the unit level in
 `tests/validation/test_bsm2_digester_unit.py`.
 
 The **ASM1↔ADM1 interfaces** (`aquakin/plant/interfaces.py`, `ASM1toADM1` /

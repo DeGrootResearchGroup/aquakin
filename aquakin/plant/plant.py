@@ -645,13 +645,30 @@ class Plant:
         # Steps 2-3: resolve influent + recycle streams and run the output sweep.
         all_outputs, streams = self._resolve_streams(t, states, params_full)
 
-        # Step 4: compute dstates from final input streams.
+        # Step 3b: control signals. Units exposing ``signal_outputs`` (e.g. PI
+        # controllers) read their sensed input streams and own state and write
+        # named scalar signals into a shared bus; units with ``consumes_signals``
+        # (e.g. an aerated CSTR under DO control) read those signals in ``rhs``.
+        # These hooks are class-level, so the branch is static (jit-safe).
+        signals: dict = {}
+        for name in self._unit_order:
+            unit = self.units[name]
+            if hasattr(unit, "signal_outputs"):
+                inputs = self._collect_inputs(name, all_outputs, streams)
+                signals.update(unit.signal_outputs(
+                    t, states[name], inputs,
+                    self._params_for_unit(name, params_full)))
+
+        # Step 4: compute dstates from final input streams (and control signals).
         dstates: list[jnp.ndarray] = []
         for name in self._unit_order:
             unit = self.units[name]
             inputs = self._collect_inputs(name, all_outputs, streams)
             params_unit = self._params_for_unit(name, params_full)
-            dstate = unit.rhs(t, states[name], inputs, params_unit)
+            if getattr(unit, "consumes_signals", False):
+                dstate = unit.rhs(t, states[name], inputs, params_unit, signals)
+            else:
+                dstate = unit.rhs(t, states[name], inputs, params_unit)
             dstates.append(dstate)
         return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
 

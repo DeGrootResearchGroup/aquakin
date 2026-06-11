@@ -10,6 +10,7 @@ BSM1 (Copp 2002 / Alex et al. 2008) is the first plant-wide validation
 target — see :mod:`aquakin.plant.bsm.bsm1`.
 """
 
+from aquakin.plant.control import PIController
 from aquakin.plant.cstr import CSTRUnit
 from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.influent import InfluentSeries
@@ -37,6 +38,7 @@ __all__ = [
     "IdealThickener",
     "InfluentSeries",
     "MixerUnit",
+    "PIController",
     "ParameterLayout",
     "Plant",
     "PlantSolution",
