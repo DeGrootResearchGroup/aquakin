@@ -15,7 +15,6 @@ import jax.numpy as jnp
 
 import aquakin
 from aquakin.plant.bsm import build_bsm1, load_bsm1_influent
-from aquakin.plant.streams import Stream
 from aquakin.plant.metrics import effluent_averages
 
 
@@ -54,27 +53,10 @@ def main() -> None:
     for name in ("tank1", "tank2", "tank3", "tank4", "tank5"):
         print(f"  {name}: {float(sol.C_named(name, 'XB_H')[-1]):7.1f}  g_COD/m³")
 
-    # Effluent metrics: reconstruct overflow stream at every save time.
-    clar = plant.units["clarifier"]
-    n_t = sol.state.shape[0]
-    C_eff = []
-    Q_eff = []
-    for i in range(n_t):
-        tank5_start, tank5_size = plant._state_layout["tank5"]
-        tank5_C = sol.state[i, tank5_start:tank5_start + tank5_size]
-        Q_in_t = float(inf.at(jnp.asarray(sol.t[i])).Q)
-        Q_clar = 2.0 * Q_in_t  # = 2/5 * 5*Q_in
-        out = clar.compute_outputs(
-            jnp.asarray(sol.t[i]), jnp.zeros((0,)),
-            {"inlet": Stream(Q=jnp.asarray(Q_clar), C=tank5_C, network=network)},
-            plant.default_parameters(),
-        )
-        C_eff.append(out["overflow"].C)
-        Q_eff.append(out["overflow"].Q)
-    C_eff = jnp.stack(C_eff)
-    Q_eff = jnp.stack(Q_eff)
-
-    avgs = effluent_averages(sol.t, C_eff, Q_eff, network)
+    # Effluent metrics: reconstruct the clarifier overflow stream over the saved
+    # states (the plant integrates unit states, not the inter-unit streams).
+    eff = plant.stream(sol, "clarifier.overflow")
+    avgs = effluent_averages(eff.t, eff.C, eff.Q, network)
     print()
     print("Time-averaged effluent quality:")
     for key, val in avgs.items():

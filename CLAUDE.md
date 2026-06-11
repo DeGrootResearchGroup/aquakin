@@ -1559,6 +1559,22 @@ Key types:
     network and requires an explicit `translator=` across networks (e.g.
     the BSM2 ASM1↔ADM1 digester edges). The endpoint parsing lives in
     `Plant._parse_endpoint`; recycle detection in `Plant._is_recycle`.
+  - **Warm-starting.** `plant.initial_state(overrides={"tank1": vec, ...})`
+    builds the flat initial-state vector with selected units' states replaced
+    by name (each vector must match the unit's `state_size`) — the supported
+    way to seed a plant (e.g. a healthy activated-sludge biomass before a slow
+    digester settle) instead of reaching into the private `_state_layout`. Pass
+    the result as `solve(y0=...)`.
+  - **Effluent reconstruction.** The plant integrates unit *states*, not the
+    inter-unit streams, so a stream such as the secondary-clarifier effluent is
+    recomputed on demand. `plant.stream(solution, "clarifier.overflow")` walks
+    the solution's saved states, re-runs the output sweep at each, and returns a
+    `StreamSeries` (`t`, `Q`, `C` shape `(n_t, n_species)`, `network`, with a
+    `C_named(species)` accessor) — feed it straight to `effluent_averages`.
+    `plant.outputs_at(t, state, params=None)` is the single-instant primitive
+    (returns `{(unit, port): Stream}`); both reuse the same `_resolve_streams`
+    helper the RHS uses, so the reconstruction matches the integrated wiring
+    exactly (including resolved recycle flows).
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `MixerUnit`,
 `SplitterUnit`, `IdealClarifier` (fast, stateless separator),

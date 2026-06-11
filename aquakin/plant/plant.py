@@ -33,7 +33,7 @@ import jax.numpy as jnp
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import _coerce_atol, _run_diffeqsolve
 from aquakin.plant.influent import InfluentSeries
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, StreamSeries
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
 from aquakin.plant.units import Unit
 
@@ -456,17 +456,182 @@ class Plant:
         start, size = self._parameter_layout.network_param_blocks[net.name]
         return jax.lax.dynamic_slice(params_full, (start,), (size,))
 
-    def initial_state(self) -> jnp.ndarray:
-        """Concatenated initial state from each unit's ``initial_state()``."""
+    def initial_state(
+        self, overrides: Optional[dict[str, jnp.ndarray]] = None
+    ) -> jnp.ndarray:
+        """Concatenated initial state from each unit's ``initial_state()``.
+
+        Parameters
+        ----------
+        overrides : dict[str, array-like], optional
+            Map of unit name to an initial-state vector that replaces that
+            unit's own ``initial_state()``. Each vector must have length equal
+            to the unit's ``state_size``. Use this to warm-start a plant --
+            e.g. seed the activated-sludge reactors with a healthy biomass
+            before settling a slow digester -- without reaching into the
+            internal state layout::
+
+                warm = asm1.concentrations(XB_H=2244.0, ...)   # (n_species,)
+                y0 = plant.initial_state(overrides={t: warm for t in tanks})
+
+        Returns
+        -------
+        jnp.ndarray
+            The flat initial-state vector, shape ``(total_state_size,)``.
+
+        Raises
+        ------
+        KeyError
+            If an override names a unit not in the plant.
+        ValueError
+            If an override vector length does not match the unit's state size.
+        """
         self._build_state_layout()
         if self._total_state_size == 0:
             return jnp.zeros((0,))
+        overrides = overrides or {}
+        unknown = set(overrides) - set(self.units)
+        if unknown:
+            raise KeyError(
+                f"initial_state overrides name unknown units {sorted(unknown)}; "
+                f"valid units are {sorted(self.units)}."
+            )
         pieces: list[jnp.ndarray] = []
         for name in self._unit_order:
-            pieces.append(self.units[name].initial_state())
+            if name in overrides:
+                vec = jnp.asarray(overrides[name])
+                expected = self.units[name].state_size
+                if vec.shape != (expected,):
+                    raise ValueError(
+                        f"initial_state override for unit '{name}' has shape "
+                        f"{vec.shape}, expected ({expected},)."
+                    )
+                pieces.append(vec)
+            else:
+                pieces.append(self.units[name].initial_state())
         return jnp.concatenate(pieces)
 
     # ----- RHS -------------------------------------------------------------
+
+    def _split_state(
+        self, state_full: jnp.ndarray
+    ) -> dict[str, jnp.ndarray]:
+        """Split the flat state vector into a per-unit ``{name: state}`` map."""
+        states: dict[str, jnp.ndarray] = {}
+        for name in self._unit_order:
+            start, size = self._state_layout[name]
+            states[name] = jax.lax.dynamic_slice(state_full, (start,), (size,))
+        return states
+
+    def _resolve_streams(
+        self,
+        t: jnp.ndarray,
+        states: dict[str, jnp.ndarray],
+        params_full: jnp.ndarray,
+    ) -> tuple[
+        dict[tuple[Optional[str], str], Stream],
+        dict[tuple[str, str], Stream],
+    ]:
+        """Resolve every unit's output streams at one instant.
+
+        Builds the influent + recycle-seed registry, resolves the (exact,
+        concentration-decoupled) recycle flow network, and runs the fixed-pass
+        Gauss-Seidel output sweep. Returns ``(all_outputs, influent_streams)``;
+        the second is needed by :meth:`_collect_inputs`.
+        """
+        streams: dict[tuple[Optional[str], str], Stream] = {}
+        for port_name, series in self.influents.items():
+            streams[(None, port_name)] = series.at(t)
+        resolved_flows = self._resolve_flows(t, params_full)
+        seeded = self._seed_recycle_streams(resolved_flows)
+        all_outputs = self._sweep_outputs(t, states, streams, seeded, params_full)
+        return all_outputs, streams
+
+    def outputs_at(
+        self,
+        t: jnp.ndarray,
+        state_full: jnp.ndarray,
+        params: Optional[jnp.ndarray] = None,
+    ) -> dict[tuple[str, str], Stream]:
+        """Reconstruct every unit's output streams at one ``(t, state)``.
+
+        The plant integrates unit *states*, not the inter-unit streams, so a
+        stream such as the clarifier effluent is recomputed from the state on
+        demand. This resolves the full output sweep (including recycle edges)
+        and returns the ``{(unit, port): Stream}`` map. See :meth:`stream` for
+        a named-stream trajectory over a whole solution.
+
+        Parameters
+        ----------
+        t : float
+            Time (plant units), used to interpolate the influents.
+        state_full : jnp.ndarray
+            Flat plant state at ``t`` (e.g. one row of ``PlantSolution.state``).
+        params : jnp.ndarray, optional
+            Plant parameters (defaults to :meth:`default_parameters`).
+
+        Returns
+        -------
+        dict
+            ``{(unit_name, port_name): Stream}`` for every unit output.
+        """
+        self._build_state_layout()
+        self._build_parameter_layout()
+        params_full = (
+            self.default_parameters() if params is None else jnp.asarray(params)
+        )
+        states = self._split_state(jnp.asarray(state_full))
+        all_outputs, _ = self._resolve_streams(jnp.asarray(t), states, params_full)
+        return all_outputs
+
+    def stream(
+        self,
+        solution: "PlantSolution",
+        endpoint: str,
+        params: Optional[jnp.ndarray] = None,
+    ) -> StreamSeries:
+        """Reconstruct a named output stream's trajectory from a solution.
+
+        Walks the solution's saved states and rebuilds one unit-output stream
+        (flow + concentration over time) -- e.g. the secondary-clarifier
+        effluent, which the plant does not store directly because it integrates
+        unit states only.
+
+        Parameters
+        ----------
+        solution : PlantSolution
+            A solution returned by :meth:`solve` (carries ``t`` and ``state``).
+        endpoint : str
+            ``"unit.port"`` naming the output stream, e.g.
+            ``"clarifier.overflow"``. The port may be omitted (bare ``"unit"``)
+            for a single-output unit.
+        params : jnp.ndarray, optional
+            The plant parameters used for the run (defaults to
+            :meth:`default_parameters`). Output reconstruction is
+            parameter-independent for the shipped units, so the default is
+            usually fine.
+
+        Returns
+        -------
+        StreamSeries
+            ``t``, ``Q``, ``C`` (shape ``(n_t, n_species)``) and ``network``,
+            with a ``C_named(species)`` accessor.
+        """
+        unit, port = self._parse_endpoint(endpoint, role="source")
+        params_full = (
+            self.default_parameters() if params is None else jnp.asarray(params)
+        )
+        ts = solution.t
+        Q_list, C_list = [], []
+        for i in range(ts.shape[0]):
+            outs = self.outputs_at(ts[i], solution.state[i], params_full)
+            s = outs[(unit, port)]
+            Q_list.append(s.Q)
+            C_list.append(s.C)
+        return StreamSeries(
+            t=ts, Q=jnp.stack(Q_list), C=jnp.stack(C_list),
+            network=self.units[unit].network,
+        )
 
     def _rhs(
         self,
@@ -475,24 +640,10 @@ class Plant:
         params_full: jnp.ndarray,
     ) -> jnp.ndarray:
         # Step 1: split state by unit.
-        states: dict[str, jnp.ndarray] = {}
-        for name in self._unit_order:
-            start, size = self._state_layout[name]
-            states[name] = jax.lax.dynamic_slice(state_full, (start,), (size,))
+        states = self._split_state(state_full)
 
-        # Step 2: build the stream registry, starting with influents and
-        # initial-value seeds for recycle edges. The recycle FLOW network is
-        # resolved first (exact, decoupled from concentration) so the seeds
-        # carry the correct flow.
-        streams: dict[tuple[Optional[str], str], Stream] = {}
-        for port_name, series in self.influents.items():
-            streams[(None, port_name)] = series.at(t)
-        resolved_flows = self._resolve_flows(t, params_full)
-        seeded = self._seed_recycle_streams(resolved_flows)
-
-        # Step 3: traverse units in evaluation order, resolving recycle edges
-        # with the fixed-pass Gauss-Seidel sweep.
-        all_outputs = self._sweep_outputs(t, states, streams, seeded, params_full)
+        # Steps 2-3: resolve influent + recycle streams and run the output sweep.
+        all_outputs, streams = self._resolve_streams(t, states, params_full)
 
         # Step 4: compute dstates from final input streams.
         dstates: list[jnp.ndarray] = []

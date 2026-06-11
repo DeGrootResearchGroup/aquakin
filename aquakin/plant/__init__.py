@@ -23,7 +23,7 @@ from aquakin.plant.plant import (
 )
 from aquakin.plant.primary_clarifier import PrimaryClarifier
 from aquakin.plant.separators import IdealThickener
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, StreamSeries
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
 from aquakin.plant.units import Unit
 
@@ -44,5 +44,6 @@ __all__ = [
     "SplitterUnit",
     "StateTranslator",
     "Stream",
+    "StreamSeries",
     "Unit",
 ]

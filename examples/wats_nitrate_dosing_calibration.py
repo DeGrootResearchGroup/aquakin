@@ -65,10 +65,10 @@ def main() -> None:
     print("Recovering nitrate-driven sulfur-oxidation rates from a noisy batch ...")
     calib = aquakin.calibrate(
         reactor, C0,
-        observations=jnp.asarray(noisy), t_obs=t_obs,
+        observations=noisy, t_obs=t_obs,      # calibrate coerces NumPy inputs
         free_params=FREE, observed_species=OBSERVED,
         transforms={name: "positive_log" for name in FREE},
-        loss="nll", sigma=jnp.asarray(sigma),
+        loss="nll", sigma=sigma,
         optimizer="gauss_newton",
         laplace=True, laplace_method="gauss_newton",
     )
