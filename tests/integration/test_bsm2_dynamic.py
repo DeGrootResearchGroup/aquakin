@@ -84,8 +84,7 @@ def test_bsm2_dry_weather_runs_dynamic():
     assert float(sol.C_named("tank5", "SNO")[-1]) > 3.0
     # Digester keeps producing methane.
     adm1 = plant.units["digester"].network
-    start, size = plant._state_layout["digester"]
-    dstate = sol.state[-1, start:start + size]
+    dstate = plant.states_by_unit(sol.final_state)["digester"]
     assert float(dstate[adm1.species_index["S_gas_ch4"]]) > 1.0
 
 

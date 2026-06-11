@@ -77,8 +77,7 @@ def test_bsm2_activated_sludge_matches_reference():
 def test_bsm2_digester_matches_reference():
     plant, sol = _solve()
     adm1 = plant.units["digester"].network
-    start, size = plant._state_layout["digester"]
-    d = sol.state[-1, start:start + size]
+    d = plant.states_by_unit(sol.final_state)["digester"]
     for sp, rv in REF_DIG.items():
         mv = float(d[adm1.species_index[sp]])
         assert mv == pytest.approx(rv, rel=0.06), f"digester {sp}: {mv} vs {rv}"

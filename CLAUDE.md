@@ -1565,6 +1565,17 @@ Key types:
     way to seed a plant (e.g. a healthy activated-sludge biomass before a slow
     digester settle) instead of reaching into the private `_state_layout`. Pass
     the result as `solve(y0=...)`.
+  - **Reading state back by unit.** `plant.states_by_unit(vec)` splits any flat
+    plant vector into a `{unit_name: sub-vector}` map — the exact inverse of
+    `initial_state(overrides=...)`. It works on a `y0`, a `PlantSolution.final_state`
+    (the last save row, shape `(total_state_size,)`, so no opaque `[-1]` on the
+    2-D `state` trajectory), or a `derivative` result. For a *trajectory* of one
+    unit, `PlantSolution.unit_state(name)` returns `(n_t, unit.state_size)`.
+  - **Evaluating the RHS once.** `plant.derivative(state, params=None, *, t=0.0)`
+    is the public single evaluation of the assembled flowsheet RHS (`dstate/dt`,
+    recycles resolved) — for inspecting the dynamics without a full solve. Same
+    layout as `state`; split it with `states_by_unit`. (Wraps the private `_rhs`,
+    building the layouts internally.)
   - **Effluent reconstruction.** The plant integrates unit *states*, not the
     inter-unit streams, so a stream such as the secondary-clarifier effluent is
     recomputed on demand. `plant.stream(solution, "clarifier.overflow")` walks
