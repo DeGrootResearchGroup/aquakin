@@ -50,6 +50,7 @@ from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import Plant
+from aquakin.plant.streams import Stream
 from aquakin.plant.primary_clarifier import PrimaryClarifier
 from aquakin.plant.separators import IdealThickener
 from aquakin.plant.takacs import TakacsClarifier
@@ -274,19 +275,22 @@ def build_bsm2(
     plant.connect("tank5", "tank5_split")
     plant.connect("tank5_split.to_settler", "settler")
     plant.connect("settler.underflow", "underflow_split")
-    # AS recycles (back-edges; auto-seeded with a zero-flow stream).
-    plant.connect("tank5_split.internal_recycle", "as_mix.internal_recycle")
-    plant.connect("underflow_split.ras", "as_mix.ras")
+    # AS recycles (back-edges). Seeded with a temperature-carrying zero-flow
+    # stream (not the default auto-seed, which is temperature-agnostic) so a
+    # temperature-aware influent ignites T propagation around the loop.
+    plant.connect("tank5_split.internal_recycle", "as_mix.internal_recycle",
+                  initial_value=seed)
+    plant.connect("underflow_split.ras", "as_mix.ras", initial_value=seed)
     # Sludge train (the digester crosses ASM1 <-> ADM1 via the interfaces).
     plant.connect("primary.underflow", "sludge_mix.primary_sludge")
     plant.connect("underflow_split.waste", "thickener")
     plant.connect("thickener.underflow", "sludge_mix.thickener_under")
     plant.connect("sludge_mix", "digester", translator=asm2adm)
     plant.connect("digester", "dewatering", translator=adm2asm)
-    # Reject-water recycle to the front (back-edge; auto-seeded).
+    # Reject-water recycle to the front (back-edge; temperature-carrying seed).
     plant.connect("thickener.overflow", "reject_mix.thickener_reject")
     plant.connect("dewatering.overflow", "reject_mix.dewatering_reject")
-    plant.connect("reject_mix", "front_mix.reject")
+    plant.connect("reject_mix", "front_mix.reject", initial_value=seed)
     # dewatering:underflow -> sludge disposal (leaves the plant; not routed).
 
     # External carbon dosing to reactor 1 (a constant readily-biodegradable SS
@@ -299,9 +303,6 @@ def build_bsm2(
             t=jnp.asarray([0.0, 1.0e9]), Q=jnp.full((2,), float(carbon_flow)),
             C=jnp.tile(carbon_C, (2, 1)), network=asm1,
             T=jnp.full((2,), float(conditions.get("T", BSM2_AS_TEMPERATURE_K))))
-        plant.add_influent("external_carbon", carbon)
-        plant.connect(None, "external_carbon", "as_mix", "carbon")
-            C=jnp.tile(carbon_C, (2, 1)), network=asm1)
         plant.add_influent("external_carbon", carbon, to="as_mix.carbon")
 
     return plant
