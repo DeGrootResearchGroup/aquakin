@@ -1644,11 +1644,30 @@ from steady state, the 167-state two-network plant integrates a 14-day dynamic
 run **efficiently** (~140 steps/day, not a step-ceiling blow-up) to a finite,
 healthy trajectory, and a rain event doubling the influent stays bounded because
 the recycle pumps hold throughput at `Q_in + Qintr + Qr`
-(`tests/integration/test_bsm2_dynamic.py`). The influent files share the BSM1
-column layout (TSS and the time-varying influent temperature are omitted —
-aquakin's ASM1 is temperature-independent and the digester is fixed-T) and are
+(`tests/integration/test_bsm2_dynamic.py`). The shipped influent CSVs are
 **synthesised**, not the canonical 609-day IWA series, so the dynamic tests
 assert qualitative stability, not published dynamic metrics.
+
+**Seasonal temperature.** Temperature is carried *algebraically* through the
+flowsheet: `Stream` and `InfluentSeries` have an optional `T` (Kelvin); mixers
+flow-weight it (a heat balance) and every other unit passes it through, so a
+reactor reads its (flow-weighted) inlet temperature and feeds it to the ASM1
+temperature corrections. `T=None` is the default and a static structural
+property — a temperature-agnostic influent leaves every stream `T=None` and the
+reactors fall back to their static condition, so existing plants are unchanged.
+(One subtlety the BSM2 reject loop forced out: `Plant._rhs` must seed the
+recycle back-edges with the seed stream's `T`, and `build_bsm2` seeds them with
+a nominal temperature, or the `all(inlet.T is not None)` mixer gate never
+ignites T around the loop.) For BSM2 the AS reactors run at 15 °C:
+`bsm2_asm1_network()` re-references the ASM1 temperature corrections from 20 °C
+to 15 °C (keeping the BSM2 slopes), so with `bsm2_parameters` (the 15 °C values)
+the correction is unity at 15 °C — a constant-15 °C run reproduces the validated
+steady state exactly — and a temperature-carrying influent drives it away:
+colder water nitrifies more slowly (higher residual ammonia), warmer faster
+(`tests/integration/test_bsm2_seasonal.py`). Use `bsm2_asm1_network()` for
+**both** `build_bsm2` and the influent so their network identities match.
+(`load_bsm2_influent` does not yet emit a `T` column; a seasonal dynamic run
+builds the influent with `InfluentSeries(..., T=...)`.)
 
 The **storage tank, hydraulic delay, influent bypass, sensors and controllers
 are still omitted** (the closed-loop additions are the remaining BSM2 phase).

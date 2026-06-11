@@ -310,8 +310,8 @@ class TakacsClarifier:
         )
 
         return {
-            self.overflow_port: Stream(Q=overflow_Q, C=C_overflow, network=self.network),
-            self.underflow_port: Stream(Q=underflow_Q, C=C_underflow, network=self.network),
+            self.overflow_port: Stream(Q=overflow_Q, C=C_overflow, network=self.network, T=s_in.T),
+            self.underflow_port: Stream(Q=underflow_Q, C=C_underflow, network=self.network, T=s_in.T),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:

@@ -115,6 +115,21 @@ class CSTRUnit:
     def initial_state(self) -> jnp.ndarray:
         return self.network.default_concentrations()
 
+    def _mixed_inlet_T(self, inputs: dict[str, Stream]):
+        """Flow-weighted inlet temperature, or ``None`` if any inlet is
+        temperature-agnostic. The well-mixed reactor is taken to be at this
+        temperature (no thermal lag — the hydraulic retention is hours, far
+        shorter than the seasonal temperature variation)."""
+        if not all(inputs[n].T is not None for n in self.input_port_names):
+            return None
+        Q_total = jnp.zeros(())
+        heat = jnp.zeros(())
+        for name in self.input_port_names:
+            s = inputs[name]
+            Q_total = Q_total + s.Q
+            heat = heat + s.Q * s.T
+        return heat / (Q_total + 1e-12)
+
     def compute_outputs(
         self,
         t: jnp.ndarray,
@@ -128,7 +143,10 @@ class CSTRUnit:
         for name in self.input_port_names:
             Q_total = Q_total + inputs[name].Q
         return {
-            self.output_port: Stream(Q=Q_total, C=state, network=self.network)
+            self.output_port: Stream(
+                Q=Q_total, C=state, network=self.network,
+                T=self._mixed_inlet_T(inputs),
+            )
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
@@ -157,10 +175,16 @@ class CSTRUnit:
         # Convection.
         convection = (Q_total / self.volume) * (C_in - state)
 
-        # Chemistry. Hoist the stoich matrix (cheap closure; matches the
-        # pattern used in the existing reactors).
+        # Chemistry. If the inflow carries a temperature and the network uses a
+        # 'T' condition, the reactor runs at that (flow-weighted) temperature --
+        # so temperature-dependent kinetics track the influent through the
+        # season; otherwise the static condition value is used.
+        conditions = self._condition_arrays
+        T_in = self._mixed_inlet_T(inputs)
+        if T_in is not None and "T" in self._condition_arrays:
+            conditions = {**self._condition_arrays, "T": jnp.reshape(T_in, (1,))}
         stoich = self.network.compute_stoich(params)
-        rates = self.network.rates(state, params, self._condition_arrays, 0)
+        rates = self.network.rates(state, params, conditions, 0)
         chemistry = stoich.T @ rates
 
         # Aeration (mass transfer). Zero on species without a kLa entry.

@@ -438,7 +438,7 @@ class Plant:
             iv = conn.initial_value
             q = resolved_flows[(conn.from_unit, conn.from_port)]
             seeded[(conn.from_unit, conn.from_port)] = Stream(
-                Q=q, C=iv.C, network=iv.network
+                Q=q, C=iv.C, network=iv.network, T=iv.T
             )
         return seeded
 
