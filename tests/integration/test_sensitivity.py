@@ -439,3 +439,78 @@ def test_dgsm_forward_through_default_adjoint_errors():
 
     with pytest.raises(RuntimeError, match="DirectAdjoint"):
         aquakin.dgsm(fn, [(0.1, 0.5)], n_samples=8, mode="forward")
+
+
+def test_dgsm_batched_matches_unbatched():
+    """The vmapped (batched=True) and per-sample (batched=False) paths give
+    bit-identical results -- batched is purely a dispatch/memory choice."""
+    fn = lambda z: jnp.sin(z[0]) * z[1] ** 2 + 0.3 * z[0] * z[1]
+    rng = [(0.2, 1.5), (0.2, 1.5)]
+    a = aquakin.dgsm(fn, rng, n_samples=32, seed=5, batched=True)
+    b = aquakin.dgsm(fn, rng, n_samples=32, seed=5, batched=False)
+    np.testing.assert_array_equal(
+        np.asarray(a.sobol_total_bound), np.asarray(b.sobol_total_bound)
+    )
+    assert a.n_valid == b.n_valid
+
+
+def test_dgsm_batched_matches_unbatched_vector():
+    """Batched/unbatched equivalence holds for vector-valued fn too."""
+    fn = lambda z: jnp.array([2.0 * z[0] + z[1], 5.0 * z[1] ** 2])
+    rng = [(0.0, 1.0), (0.0, 1.0)]
+    kw = dict(n_samples=16, seed=2, output_names=["o0", "o1"])
+    a = aquakin.dgsm(fn, rng, batched=True, **kw)
+    b = aquakin.dgsm(fn, rng, batched=False, **kw)
+    for ra, rb in zip(a, b):
+        np.testing.assert_array_equal(
+            np.asarray(ra.sobol_total_bound), np.asarray(rb.sobol_total_bound)
+        )
+
+
+def test_dgsm_unbatched_forward_default_adjoint_errors():
+    """The per-sample fallback also raises the DirectAdjoint guidance when a
+    forward-mode screen hits the default reactor adjoint."""
+    net = aquakin.load_network_from_file(
+        str(__import__("pathlib").Path(__file__).parents[1] / "fixtures" / "simple_network.yaml")
+    )
+    conds = aquakin.SpatialConditions.uniform(1, T=293.15)
+    reactor = aquakin.BatchReactor(net, conds)  # default reverse-only adjoint
+    C0 = jnp.asarray([1.0, 0.0])
+    p_def = net.default_parameters()
+
+    def fn(z):
+        p = p_def.at[0].set(z[0])
+        return reactor.solve(C0, p, t_span=(0.0, 10.0)).C[-1, 1]
+
+    with pytest.raises(RuntimeError, match="DirectAdjoint"):
+        aquakin.dgsm(fn, [(0.1, 0.5)], n_samples=8, mode="forward", batched=False)
+
+
+def test_dgsm_helpers_validate_and_sample():
+    """The decomposed helpers behave independently of the dgsm entry point."""
+    from aquakin.integrate.sensitivity import (
+        _finite_rows,
+        _sobol_sample,
+        _validate_dgsm_ranges,
+    )
+
+    ranges_np, lo, hi, d, names = _validate_dgsm_ranges(
+        [(0.0, 2.0), (-1.0, 1.0)], None
+    )
+    assert d == 2 and names == ["z0", "z1"]
+    np.testing.assert_array_equal(lo, [0.0, -1.0])
+    np.testing.assert_array_equal(hi, [2.0, 1.0])
+
+    with pytest.raises(ValueError, match="upper > lower"):
+        _validate_dgsm_ranges([(1.0, 0.0)], None)
+    with pytest.raises(ValueError, match="input_names has"):
+        _validate_dgsm_ranges([(0.0, 1.0)], ["a", "b"])
+
+    Z, n_drawn = _sobol_sample(lo, hi, d, n_samples=30, seed=0)
+    assert n_drawn == 32 and Z.shape == (32, 2)
+    assert np.all(Z[:, 0] >= 0.0) and np.all(Z[:, 0] <= 2.0)
+
+    # _finite_rows masks any row with a non-finite value OR Jacobian entry.
+    vals = np.array([1.0, np.nan, 3.0])
+    jacs = np.array([[1.0, 2.0], [3.0, 4.0], [np.inf, 5.0]])
+    np.testing.assert_array_equal(_finite_rows(vals, jacs), [True, False, False])
