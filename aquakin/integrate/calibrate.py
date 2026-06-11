@@ -179,11 +179,17 @@ def _laplace_covariance(H, ridge: float, eig_keep: float):
     """Eigen-truncated Laplace covariance from an unconstrained-space Hessian.
 
     Symmetrise ``H``, add the ``ridge`` regulariser, eigen-decompose, and
-    **drop** the near-null directions (eigenvalue at or below
-    ``eig_keep * max(largest_eigenvalue, 1)``) -- the non-identifiable
-    parameter combinations the data do not constrain. The covariance is built
-    from the surviving directions only, so it describes the identifiable
-    subspace.
+    **drop** the near-null directions (ridged eigenvalue at or below
+    ``eig_keep * largest_eigenvalue``) -- the non-identifiable parameter
+    combinations the data do not constrain. The covariance is built from the
+    surviving directions only, so it describes the identifiable subspace.
+
+    The threshold is **purely relative** to the largest eigenvalue, so the
+    best-identified direction is always kept regardless of the Hessian's
+    absolute scale. (An earlier absolute floor wrongly discarded every
+    direction of a uniformly small-scale but well-structured Hessian -- e.g.
+    a trace-species observable in molar units, where ``JᵀJ`` is ~1e-2 yet
+    spans several orders of magnitude.)
 
     This is the single regulariser shared by ``calibrate``'s
     ``posterior_cov`` / ``params_named_std`` and
@@ -213,14 +219,18 @@ def _laplace_covariance(H, ridge: float, eig_keep: float):
     H = np.asarray(H, dtype=float)
     H = 0.5 * (H + H.T)
     w, V = np.linalg.eigh(H + ridge * np.eye(H.shape[0]))
-    thr = eig_keep * max(float(w.max()), 1.0)
-    keep = w > thr
-    if not np.any(keep):
+    w_max = float(w.max())
+    if not np.isfinite(w_max) or w_max <= 0.0:
         raise ValueError(
-            "Laplace Hessian has no identifiable directions above eig_keep: "
-            "the posterior is degenerate (more informative data or a smaller "
-            "eig_keep / ridge is needed)."
+            "Laplace Hessian is not finite / positive-definite after ridging; "
+            "cannot form a posterior covariance (check the fit converged and "
+            "the model output is finite)."
         )
+    # Relative eigen-truncation: keep directions whose ridged eigenvalue exceeds
+    # eig_keep * the largest. ridge > 0 makes w_max > 0, so the best-identified
+    # direction is always kept and `keep` is never empty.
+    thr = eig_keep * w_max
+    keep = w > thr
     wk = w[keep]
     Vk = V[:, keep]
     cov = (Vk / wk) @ Vk.T
