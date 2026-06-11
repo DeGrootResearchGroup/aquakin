@@ -1763,10 +1763,36 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
 Covered by `tests/integration/test_bsm2_control.py` (controller-unit behaviour:
 signal sign, saturation, integral direction, anti-windup; closed-loop setpoint
 tracking; closed-vs-open contrast; `jax.grad` through the closed loop). The
-**storage tank, hydraulic delay, influent bypass, and the wastage (`Qw`) timer
-are still omitted** (the remaining BSM2 closed-loop elements). The digester is
+**storage tank (reject buffering), hydraulic delay, and the wastage (`Qw`) timer
+are still omitted** (the remaining BSM2 elements). The digester is
 additionally validated at the unit level in
 `tests/validation/test_bsm2_digester_unit.py`.
+
+**Hydraulic influent bypass (`build_bsm2(influent_bypass=True)`).** The BSM2
+wet-weather bypass: raw influent flow above `bypass_threshold` (default 60000
+m³/d) is diverted around the whole treatment train (primary, AS, secondary
+clarifier) and rejoined with the clarified effluent — protecting the plant
+hydraulics at the cost of releasing untreated wastewater. Built on a new
+`SplitterUnit` **threshold mode** (`threshold` + `threshold_port` +
+`remainder_port`): `above = max(Q_in − threshold, 0)` to the threshold port,
+`min(Q_in, threshold)` to the remainder. The split is on the **raw influent**
+flow (an external input), so it stays a constant within the exact recycle-flow
+solve (`_resolve_flows`) and doesn't break its affine assumption — important
+because the split is piecewise-linear (a kink at the threshold) and would
+otherwise be non-affine in the recycle flows. The diverted flow skips the
+clarifier too (matching the reference `Qbypassplant=1`: it bypasses the *plant*,
+not just the AS) and joins the final effluent through a new `effluent_mix`
+combiner, so the final effluent is `effluent_mix.out` (treated + bypassed) —
+`evaluate_bsm2` auto-detects it. **This changes the influent entry point**: with
+the bypass, wire the influent to `bypass_split.in` instead of `front_mix.fresh`.
+Default `influent_bypass=False` leaves the plant and its entry point unchanged.
+Demonstrated in `examples/bsm2_influent_bypass.py` (storm flow degrades the
+effluent) and tested in `tests/integration/test_bsm2_bypass.py` (threshold-mode
+flow split + validation; wired-plant flow balance, effluent = treated + bypass,
+bypass degrades effluent, evaluation auto-detects the combined effluent). The
+companion **reject storage tank** — a variable-volume CSTR whose bypass-when-full
+logic is non-affine in the recycle flows (it compares `Qin > Qout`) — needs a
+flow-resolver extension and is the deferred next step.
 
 **BSM2 performance evaluation — EQI / OCI (`evaluate_bsm2`).** The generic metric
 kernels (`aquakin/plant/metrics.py`: `effluent_quality_index`, `aeration_energy`,

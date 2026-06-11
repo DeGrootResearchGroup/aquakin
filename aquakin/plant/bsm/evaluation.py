@@ -126,7 +126,7 @@ def evaluate_bsm2(
     solution,
     params: Optional[jnp.ndarray] = None,
     *,
-    effluent_port: str = _EFFLUENT_PORT,
+    effluent_port: Optional[str] = None,
     disposal_port: str = _DISPOSAL_PORT,
     internal_recycle_port: str = _INTERNAL_RECYCLE_PORT,
     ras_port: str = _RAS_PORT,
@@ -145,8 +145,11 @@ def evaluate_bsm2(
         trapezoidal time-integrals over the saved points.
     params : jnp.ndarray, optional
         The plant parameters used for the run (defaults to the plant defaults).
-    effluent_port, disposal_port, internal_recycle_port, ras_port, waste_port :
-        str, optional
+    effluent_port : str, optional
+        Final-effluent stream to score. Defaults to ``"effluent_mix.out"`` when
+        the plant has an influent bypass (the combined treated + bypassed flow),
+        else ``"settler.overflow"``.
+    disposal_port, internal_recycle_port, ras_port, waste_port : str, optional
         Stream endpoints to reconstruct; the defaults match ``build_bsm2``.
     do_saturation : float, optional
         DO saturation used in the aeration-energy formula (gO2/m^3).
@@ -158,7 +161,11 @@ def evaluate_bsm2(
     """
     network = plant.units["tank1"].network
 
-    # ----- Effluent quality (secondary clarifier overflow). -----
+    # ----- Effluent quality. The final effluent is the bypass combiner's outlet
+    # when an influent bypass is present, otherwise the clarifier overflow. -----
+    if effluent_port is None:
+        effluent_port = ("effluent_mix.out" if "effluent_mix" in plant.units
+                         else _EFFLUENT_PORT)
     eff = plant.stream(solution, effluent_port, params=params)
     eqi = effluent_quality_index(eff.t, eff.C, eff.Q, network)
     averages = effluent_averages(eff.t, eff.C, eff.Q, network)
