@@ -92,6 +92,35 @@ class PriorSpec(BaseModel):
         return (float(self.mean), float(self.std))
 
 
+class TemperatureCorrectionSpec(BaseModel):
+    """Optional Arrhenius-style temperature correction on a rate constant.
+
+    When present, the parameter is multiplied by ``theta**(T - ref_T)`` during
+    rate evaluation, where ``T`` is read from the ``condition`` field. The
+    parameter ``value`` is therefore the value *at* ``ref_T`` (the correction is
+    unity there). ``ref_T`` is in the same units as the temperature condition
+    (Kelvin for the ASM/ADM networks), and a difference is used, so Kelvin and
+    Celsius give the same ``theta``.
+
+    ``theta`` is the per-degree factor; for a parameter measured as ``p_hi`` at
+    ``T_hi`` and ``p_lo`` at ``T_lo`` it is ``(p_hi / p_lo) ** (1 / (T_hi -
+    T_lo))``. The correction is confined to the rate constants — it never
+    touches stoichiometric (yield / composition) parameters.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    theta: float
+    ref_T: float
+    condition: str = "T"
+
+    @model_validator(mode="after")
+    def _theta_positive(self) -> "TemperatureCorrectionSpec":
+        if self.theta <= 0.0:
+            raise ValueError(f"temperature.theta must be > 0; got {self.theta}")
+        return self
+
+
 class ParameterSpec(BaseModel):
     """One entry of a reaction's ``parameters:`` block."""
 
@@ -102,6 +131,7 @@ class ParameterSpec(BaseModel):
     bounds: Optional[tuple[float, float]] = None
     transform: str = "none"
     prior: Optional[PriorSpec] = None
+    temperature: Optional[TemperatureCorrectionSpec] = None
 
     @model_validator(mode="after")
     def _bounds_bracket_value(self) -> "ParameterSpec":
