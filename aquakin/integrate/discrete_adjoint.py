@@ -83,6 +83,112 @@ def _implicit_tols(rtol: float, atol: float):
     return diffrax.VeryChord(rtol=rtol, atol=atol, norm=optimistix.max_norm)
 
 
+def _discrete_adjoint_solve(
+    rhs,
+    y0,
+    params,
+    t_span,
+    t_eval,
+    *,
+    solver,
+    step_adjoint,
+    rtol,
+    atol,
+    dt0,
+    max_steps,
+):
+    """Shared forward + discrete-adjoint backward harness for both solvers.
+
+    The forward pass is a robust adaptive diffrax solve with ``solver``, forced
+    to land steps exactly on the observation times (so each is a step boundary
+    and the adjoint needs no interpolation). The custom VJP is the exact
+    discrete adjoint, evaluated by a backward scan of bounded transposed solves
+    -- finite for stiff networks at any step size, with no ``dtmax`` cap.
+
+    Everything here is method-independent; the only per-method piece is
+    ``step_adjoint(y_prev_k, y_k, params_, dt, lam_k) -> (lam_n, dpar)``, the
+    single-step transposed-solve body (implicit Euler inlines one solve on the
+    post-step state ``y_k``; ESDIRK recomputes its stages from the pre-step
+    state ``y_prev_k``). It is invoked under :func:`jax.lax.cond` so padded /
+    invalid trajectory slots are skipped and the backward cost tracks the real
+    step count, not the allocated ``max_steps`` buffer.
+    """
+    t0, t1 = float(t_span[0]), float(t_span[1])
+    n = y0.shape[0]
+    final_only = t_eval is None
+    teval = jnp.asarray([t1] if final_only else t_eval, dtype=jnp.result_type(float))
+
+    term = diffrax.ODETerm(lambda t, y, a: rhs(t, y, a))
+    controller = diffrax.ClipStepSizeController(
+        diffrax.PIDController(rtol=rtol, atol=atol), step_ts=teval
+    )
+
+    def _forward(y0_, params_):
+        return diffrax.diffeqsolve(
+            term, solver, t0, t1, dt0, y0_, args=params_,
+            stepsize_controller=controller,
+            saveat=diffrax.SaveAt(steps=True), max_steps=max_steps,
+        )
+
+    def _extract(sol, y0_):
+        # Combined trajectory [y0, step states] at times [t0, step times]; each
+        # t_eval lands exactly on a boundary, so searchsorted gives the index.
+        t_all = jnp.concatenate([jnp.array([t0], dtype=sol.ts.dtype), sol.ts])
+        y_all = jnp.concatenate([y0_[None, :], sol.ys], axis=0)
+        idx = jnp.searchsorted(t_all, teval, side="left")
+        return y_all[idx], idx
+
+    @jax.custom_vjp
+    def solve(y0_, params_):
+        return _extract(_forward(y0_, params_), y0_)[0]
+
+    def solve_fwd(y0_, params_):
+        sol = _forward(y0_, params_)
+        ys_eval, idx = _extract(sol, y0_)
+        return ys_eval, (sol.ts, sol.ys, y0_, params_, idx)
+
+    def solve_bwd(res, ybar):
+        ts, ys, y0_, params_, idx = res          # ybar: (n_obs, n)
+        K = ts.shape[0]
+        valid = jnp.isfinite(ts)
+        t_prev = jnp.concatenate([jnp.array([t0], dtype=ts.dtype), ts[:-1]])
+        dts = ts - t_prev
+        y_prev = jnp.concatenate([y0_[None, :], ys[:-1]], axis=0)
+
+        # Distribute observation cotangents: idx==0 -> y0 directly; idx==m>=1 ->
+        # the state produced by step m-1.
+        injected = jnp.zeros((K, n), dtype=ys.dtype)
+        ybar0_obs = jnp.zeros((n,), dtype=ys.dtype)
+        for i in range(teval.shape[0]):
+            step_idx = jnp.maximum(idx[i] - 1, 0)
+            injected = injected.at[step_idx].add(
+                jnp.where(idx[i] >= 1, ybar[i], 0.0)
+            )
+            ybar0_obs = ybar0_obs + jnp.where(idx[i] == 0, ybar[i], 0.0)
+
+        def body(lam_pbar, k):
+            lam, pbar = lam_pbar
+            ok = valid[k] & (dts[k] > 0)
+            lam_k = lam + injected[k]            # add this step's observation cotangent
+
+            def do(_):
+                lam_n, dpar = step_adjoint(y_prev[k], ys[k], params_, dts[k], lam_k)
+                return lam_n, pbar + dpar
+
+            lam_new, pbar_new = jax.lax.cond(ok, do, lambda _: (lam_k, pbar), None)
+            return (lam_new, pbar_new), None
+
+        (lam0, pbar), _ = jax.lax.scan(
+            body, (jnp.zeros((n,), dtype=ys.dtype), jnp.zeros_like(params_)),
+            jnp.arange(K - 1, -1, -1),
+        )
+        return lam0 + ybar0_obs, pbar
+
+    solve.defvjp(solve_fwd, solve_bwd)
+    out = solve(y0, params)
+    return out[0] if final_only else out
+
+
 def implicit_euler_adjoint_solve(
     rhs: Callable,
     y0: jnp.ndarray,
@@ -100,7 +206,9 @@ def implicit_euler_adjoint_solve(
     The forward pass is a robust adaptive implicit-Euler diffrax solve. The
     custom VJP is the exact discrete adjoint of that solve, evaluated by a
     backward scan of bounded transposed linear solves -- finite for stiff
-    networks at any step size, with no ``dtmax`` cap.
+    networks at any step size, with no ``dtmax`` cap. The first-order ``s=1``
+    special case of :func:`esdirk_adjoint_solve`; both share the
+    :func:`_discrete_adjoint_solve` harness.
 
     Parameters
     ----------
@@ -135,86 +243,25 @@ def implicit_euler_adjoint_solve(
         way the result carries the discrete-adjoint VJP w.r.t. ``y0`` and
         ``params``.
     """
-    t0, t1 = float(t_span[0]), float(t_span[1])
     n = y0.shape[0]
-    final_only = t_eval is None
-    teval = jnp.asarray([t1] if final_only else t_eval, dtype=jnp.result_type(float))
+    solver = diffrax.ImplicitEuler(root_finder=_implicit_tols(rtol, atol))
 
-    term = diffrax.ODETerm(lambda t, y, a: rhs(t, y, a))
-    # Force the adaptive controller to land steps exactly on the observation
-    # times, so each is a step boundary and the adjoint needs no interpolation.
-    controller = diffrax.ClipStepSizeController(
-        diffrax.PIDController(rtol=rtol, atol=atol), step_ts=teval
+    def step_adjoint(y_prev_k, y_k, params_, dt, lam_k):
+        # Implicit Euler step y_{n+1} = y_n + dt f(y_{n+1}); its adjoint uses the
+        # post-step state y_k. mu = (I - dt J^T)^{-1} lam_k, then the parameter
+        # cotangent is dt (df/dtheta)^T mu.
+        Jf = jax.jacfwd(lambda y: rhs(0.0, y, params_))(y_k)
+        M = jnp.eye(n, dtype=y_k.dtype) - dt * Jf
+        mu = jnp.linalg.solve(M.T, lam_k)
+        _, vjp = jax.vjp(lambda q: rhs(0.0, y_k, q), params_)
+        dpar = dt * vjp(mu)[0]
+        return mu, dpar
+
+    return _discrete_adjoint_solve(
+        rhs, y0, params, t_span, t_eval,
+        solver=solver, step_adjoint=step_adjoint,
+        rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
     )
-
-    def _forward(y0_, params_):
-        return diffrax.diffeqsolve(
-            term, diffrax.ImplicitEuler(root_finder=_implicit_tols(rtol, atol)),
-            t0, t1, dt0, y0_, args=params_,
-            stepsize_controller=controller,
-            saveat=diffrax.SaveAt(steps=True), max_steps=max_steps,
-        )
-
-    def _extract(sol, y0_):
-        # Combined trajectory [y0, step states] at times [t0, step times]; each
-        # t_eval lands exactly on a boundary, so searchsorted gives the index.
-        t_all = jnp.concatenate([jnp.array([t0], dtype=sol.ts.dtype), sol.ts])
-        y_all = jnp.concatenate([y0_[None, :], sol.ys], axis=0)
-        idx = jnp.searchsorted(t_all, teval, side="left")
-        return y_all[idx], idx
-
-    @jax.custom_vjp
-    def solve(y0_, params_):
-        return _extract(_forward(y0_, params_), y0_)[0]
-
-    def solve_fwd(y0_, params_):
-        sol = _forward(y0_, params_)
-        ys_eval, idx = _extract(sol, y0_)
-        return ys_eval, (sol.ts, sol.ys, y0_, params_, idx)
-
-    def solve_bwd(res, ybar):
-        ts, ys, y0_, params_, idx = res          # ybar: (n_obs, n)
-        K = ts.shape[0]
-        valid = jnp.isfinite(ts)
-        t_prev = jnp.concatenate([jnp.array([t0], dtype=ts.dtype), ts[:-1]])
-        dts = ts - t_prev
-
-        # Distribute observation cotangents: idx==0 -> y0 directly; idx==m>=1 ->
-        # the state produced by step m-1.
-        injected = jnp.zeros((K, n), dtype=ys.dtype)
-        ybar0_obs = jnp.zeros((n,), dtype=ys.dtype)
-        n_obs = teval.shape[0]
-        for i in range(n_obs):
-            step_idx = jnp.maximum(idx[i] - 1, 0)
-            injected = injected.at[step_idx].add(
-                jnp.where(idx[i] >= 1, ybar[i], 0.0)
-            )
-            ybar0_obs = ybar0_obs + jnp.where(idx[i] == 0, ybar[i], 0.0)
-
-        def body(lam_pbar, k):
-            lam, pbar = lam_pbar
-            y_new = ys[k]
-            dt = dts[k]
-            ok = valid[k] & (dt > 0)
-            lam_k = lam + injected[k]            # add this step's observation cotangent
-            Jf = jax.jacfwd(lambda y: rhs(0.0, y, params_))(y_new)
-            M = jnp.eye(n, dtype=y_new.dtype) - dt * Jf
-            mu = jnp.linalg.solve(M.T, lam_k)    # (I - dt*J^T)^{-1} lam_k
-            _, vjp = jax.vjp(lambda q: rhs(0.0, y_new, q), params_)
-            dpar = dt * vjp(mu)[0]
-            lam_new = jnp.where(ok, mu, lam_k)
-            pbar_new = jnp.where(ok, pbar + dpar, pbar)
-            return (lam_new, pbar_new), None
-
-        (lam0, pbar), _ = jax.lax.scan(
-            body, (jnp.zeros((n,), dtype=ys.dtype), jnp.zeros_like(params_)),
-            jnp.arange(K - 1, -1, -1),
-        )
-        return lam0 + ybar0_obs, pbar
-
-    solve.defvjp(solve_fwd, solve_bwd)
-    out = solve(y0, params)
-    return out[0] if final_only else out
 
 
 # --- High-order ESDIRK discrete adjoint --------------------------------------
@@ -314,29 +361,7 @@ def esdirk_adjoint_solve(
     )
     A, b, diag_np, s = _esdirk_tableau(solver)
     diag = jnp.asarray(diag_np)
-
-    t0, t1 = float(t_span[0]), float(t_span[1])
     n = y0.shape[0]
-    final_only = t_eval is None
-    teval = jnp.asarray([t1] if final_only else t_eval, dtype=jnp.result_type(float))
-
-    term = diffrax.ODETerm(lambda t, y, a: rhs(t, y, a))
-    controller = diffrax.ClipStepSizeController(
-        diffrax.PIDController(rtol=rtol, atol=atol), step_ts=teval
-    )
-
-    def _forward(y0_, params_):
-        return diffrax.diffeqsolve(
-            term, solver, t0, t1, dt0, y0_, args=params_,
-            stepsize_controller=controller,
-            saveat=diffrax.SaveAt(steps=True), max_steps=max_steps,
-        )
-
-    def _extract(sol, y0_):
-        t_all = jnp.concatenate([jnp.array([t0], dtype=sol.ts.dtype), sol.ts])
-        y_all = jnp.concatenate([y0_[None, :], sol.ys], axis=0)
-        idx = jnp.searchsorted(t_all, teval, side="left")
-        return y_all[idx], idx
 
     def _stages(y_n, params_, dt):
         # Recompute the ESDIRK stage values Y_i by solving each stage equation
@@ -359,8 +384,11 @@ def esdirk_adjoint_solve(
             ks.append(f(Yi))
         return jnp.stack(Ys)                      # (s, n)
 
-    def _step_adjoint(y_n, params_, dt, lam):
-        Ys = _stages(y_n, params_, dt)
+    def step_adjoint(y_prev_k, y_k, params_, dt, lam):
+        # ESDIRK adjoint: recompute the stages from the PRE-step state, then
+        # sweep them in reverse applying the per-stage transposed solves. The
+        # post-step state y_k is unused (the stages carry the dependence).
+        Ys = _stages(y_prev_k, params_, dt)
         Js = jax.vmap(lambda Y: jax.jacfwd(lambda y: rhs(0.0, y, params_))(Y))(Ys)
         Ybar = [None] * s
         pbar = jnp.zeros_like(params_)
@@ -378,50 +406,8 @@ def esdirk_adjoint_solve(
         lam_n = lam + sum(Ybar)
         return lam_n, pbar
 
-    @jax.custom_vjp
-    def solve(y0_, params_):
-        return _extract(_forward(y0_, params_), y0_)[0]
-
-    def solve_fwd(y0_, params_):
-        sol = _forward(y0_, params_)
-        ys_eval, idx = _extract(sol, y0_)
-        return ys_eval, (sol.ts, sol.ys, y0_, params_, idx)
-
-    def solve_bwd(res, ybar):
-        ts, ys, y0_, params_, idx = res
-        K = ts.shape[0]
-        valid = jnp.isfinite(ts)
-        t_prev = jnp.concatenate([jnp.array([t0], dtype=ts.dtype), ts[:-1]])
-        dts = ts - t_prev
-        y_prev = jnp.concatenate([y0_[None, :], ys[:-1]], axis=0)
-
-        injected = jnp.zeros((K, n), dtype=ys.dtype)
-        ybar0_obs = jnp.zeros((n,), dtype=ys.dtype)
-        for i in range(teval.shape[0]):
-            step_idx = jnp.maximum(idx[i] - 1, 0)
-            injected = injected.at[step_idx].add(jnp.where(idx[i] >= 1, ybar[i], 0.0))
-            ybar0_obs = ybar0_obs + jnp.where(idx[i] == 0, ybar[i], 0.0)
-
-        def body(lam_pbar, k):
-            lam, pbar = lam_pbar
-            ok = valid[k] & (dts[k] > 0)
-            lam_k = lam + injected[k]
-            # Skip the (expensive 7-stage) per-step adjoint on padded/invalid
-            # slots via cond, so the backward cost scales with the actual step
-            # count rather than the allocated buffer -- ``max_steps`` can then be
-            # set generously for forward robustness without slowing the backward.
-            def do(_):
-                lam_n, dpar = _step_adjoint(y_prev[k], params_, dts[k], lam_k)
-                return lam_n, pbar + dpar
-            lam_new, pbar_new = jax.lax.cond(ok, do, lambda _: (lam_k, pbar), None)
-            return (lam_new, pbar_new), None
-
-        (lam0, pbar), _ = jax.lax.scan(
-            body, (jnp.zeros((n,), dtype=ys.dtype), jnp.zeros_like(params_)),
-            jnp.arange(K - 1, -1, -1),
-        )
-        return lam0 + ybar0_obs, pbar
-
-    solve.defvjp(solve_fwd, solve_bwd)
-    out = solve(y0, params)
-    return out[0] if final_only else out
+    return _discrete_adjoint_solve(
+        rhs, y0, params, t_span, t_eval,
+        solver=solver, step_adjoint=step_adjoint,
+        rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
+    )
