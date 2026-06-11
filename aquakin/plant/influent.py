@@ -245,3 +245,41 @@ def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
         resource.read_text(encoding="utf-8"), network,
         source=f"BSM1_{profile}.csv",
     )
+
+
+def load_bsm2_influent(profile: str, network: "CompiledNetwork") -> InfluentSeries:
+    """Load one of the BSM2 influent files.
+
+    Parameters
+    ----------
+    profile : {"dry", "rain", "storm"}
+        Which BSM2 influent to load.
+    network : CompiledNetwork
+        ASM1 network (the water-line influent species map to ASM1 ordering).
+
+    Returns
+    -------
+    InfluentSeries
+
+    Notes
+    -----
+    These files are **synthesised** (``scripts/generate_bsm2_influent.py``): they
+    follow the BSM2 constant-influent composition (Gernaey et al. 2014) plus a
+    diurnal flow / load pattern, but are not the canonical 609-day IWA series.
+    They share the BSM1 column layout (TSS and the time-varying influent
+    temperature are omitted -- aquakin's ASM1 is temperature-independent and the
+    digester runs at a fixed 35 °C).
+    """
+    if profile not in ("dry", "rain", "storm"):
+        raise ValueError(
+            f"profile must be 'dry', 'rain', or 'storm'; got {profile!r}"
+        )
+    resource = files("aquakin.plant.bsm.data") / f"BSM2_{profile}.csv"
+    if not resource.is_file():
+        raise FileNotFoundError(
+            f"BSM2 influent file 'BSM2_{profile}.csv' not found in package data."
+        )
+    return _influent_from_text(
+        resource.read_text(encoding="utf-8"), network,
+        source=f"BSM2_{profile}.csv",
+    )

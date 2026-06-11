@@ -1614,9 +1614,22 @@ suppressed ~24% and XB_H comes out ~half. ASM1 has no Arrhenius T-dependence
 (the `T` condition is declared but unused), so only the parameter *values*
 matter, not the 15 °C operating temperature.
 
+**Dynamic influent runs too.** Synthesised BSM2 dry / rain / storm influent
+files (`scripts/generate_bsm2_influent.py` → `aquakin/plant/bsm/data/BSM2_*.csv`,
+loaded by `load_bsm2_influent()`) drive the plant under diurnal + wet-weather
+forcing. The fixed-flow-pump fix carries straight over to BSM2 scale: warm-started
+from steady state, the 167-state two-network plant integrates a 14-day dynamic
+run **efficiently** (~140 steps/day, not a step-ceiling blow-up) to a finite,
+healthy trajectory, and a rain event doubling the influent stays bounded because
+the recycle pumps hold throughput at `Q_in + Qintr + Qr`
+(`tests/integration/test_bsm2_dynamic.py`). The influent files share the BSM1
+column layout (TSS and the time-varying influent temperature are omitted —
+aquakin's ASM1 is temperature-independent and the digester is fixed-T) and are
+**synthesised**, not the canonical 609-day IWA series, so the dynamic tests
+assert qualitative stability, not published dynamic metrics.
+
 The **storage tank, hydraulic delay, influent bypass, sensors and controllers
-are omitted** (open-loop steady state is the implemented scope). A canonical
-BSM2 *dynamic* influent file is not shipped; the dynamic run is a future phase.
+are still omitted** (the closed-loop additions are the remaining BSM2 phase).
 The digester is additionally validated at the unit level in
 `tests/validation/test_bsm2_digester_unit.py`.
 
