@@ -417,6 +417,211 @@ class CompiledNetwork:
         }
 
 
+# --- compile_network stages --------------------------------------------
+
+
+def _compile_speciation(spec, species_index, declared_conditions):
+    """Wire an optional ``speciation:`` block (state-derived pH).
+
+    Returns ``(derived_condition_fn, derived_fields, condition_fields)`` where
+    ``condition_fields`` is ``declared_conditions`` plus the produced field (so
+    rate-expression validation sees it).
+    """
+    derived_condition_fn = None
+    derived_fields: list[str] = []
+    condition_fields = declared_conditions
+    speciation_cfg = getattr(spec, "speciation", None)
+    if speciation_cfg is None:
+        return derived_condition_fn, derived_fields, condition_fields
+
+    from aquakin.core.speciation import build_ph_derived_fn
+
+    # Accept either a plain dict or a Pydantic model (duck-typed).
+    cfg = (
+        speciation_cfg
+        if isinstance(speciation_cfg, dict)
+        else speciation_cfg.model_dump()
+    )
+    derived_condition_fn, produced_field, required_fields = build_ph_derived_fn(
+        cfg, species_index
+    )
+    missing = sorted(required_fields - declared_conditions)
+    if missing:
+        raise ValueError(
+            f"speciation block reads condition field(s) {missing} that are "
+            f"not declared in the network's 'conditions:' block."
+        )
+    if produced_field in declared_conditions:
+        raise ValueError(
+            f"speciation produces condition field '{produced_field}', which "
+            f"must not also be declared in 'conditions:' (it is computed, "
+            f"not supplied)."
+        )
+    derived_fields = [produced_field]
+    condition_fields = declared_conditions | {produced_field}
+    return derived_condition_fn, derived_fields, condition_fields
+
+
+def _build_param_index(spec):
+    """Build the flat parameter index by walking network-level then
+    reaction-local parameters in declaration order (so ordering is
+    deterministic).
+
+    Returns ``(parameters, param_index, defaults, bounds, transforms, priors)``.
+    """
+    parameters: list[str] = []
+    param_index: dict[str, int] = {}
+    defaults: list[float] = []
+    bounds: dict[str, tuple[float, float]] = {}
+    transforms: dict[str, str] = {}
+    priors: dict[str, tuple[float, float]] = {}
+
+    def record(key: str, pspec) -> None:
+        param_index[key] = len(parameters)
+        parameters.append(key)
+        defaults.append(float(pspec.value))
+        if pspec.bounds is not None:
+            bounds[key] = (float(pspec.bounds[0]), float(pspec.bounds[1]))
+        transforms[key] = pspec.transform
+        prior = getattr(pspec, "prior", None)
+        if prior is not None:
+            priors[key] = prior.resolved()
+
+    for local_name, pspec in getattr(spec, "parameters", {}).items():
+        record(local_name, pspec)
+    for rxn in spec.reactions:
+        for local_name, pspec in rxn.parameters.items():
+            record(f"{rxn.name}.{local_name}", pspec)
+    return parameters, param_index, defaults, bounds, transforms, priors
+
+
+def _resolve_expressions(spec) -> dict[str, ASTNode]:
+    """Parse the network's named expressions, topologically sort them by
+    inter-expression references, and inline them so each resolved AST contains
+    only leaf / parameter / species / condition references.
+    """
+    raw_expressions = getattr(spec, "expressions", {})
+    expression_asts_raw: dict[str, ASTNode] = {}
+    for name, formula in raw_expressions.items():
+        try:
+            expression_asts_raw[name] = parse_rate_expression(formula)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to parse named expression '{name}': {exc}"
+            ) from exc
+
+    # (An expression name colliding with a parameter name is already rejected by
+    # the schema validator in schema/network_spec.py, so a collision never
+    # reaches the silent ``_substitute`` shadowing path.)
+    expr_names = list(expression_asts_raw.keys())
+    expr_name_set = set(expr_names)
+    expr_deps: dict[str, set[str]] = {}
+    for name, ast in expression_asts_raw.items():
+        refs = _collect_param_refs(ast) & expr_name_set
+        refs.discard(name)  # self-loops caught below
+        expr_deps[name] = refs
+
+    expression_asts: dict[str, ASTNode] = {}
+    for name in _topo_sort_expressions(expr_names, expr_deps):
+        raw = expression_asts_raw[name]
+        if name in _collect_param_refs(raw):
+            raise ValueError(f"Named expression '{name}' references itself.")
+        expression_asts[name] = _substitute(raw, expression_asts)
+    return expression_asts
+
+
+def _unresolved_params(ast: ASTNode, rxn_name: str, param_index: dict) -> list[str]:
+    """ParamNode names in ``ast`` resolving to neither a reaction-local
+    (``<rxn>.<name>``) nor a network-level parameter."""
+    return [
+        p for p in ast.param_names()
+        if f"{rxn_name}.{p}" not in param_index and p not in param_index
+    ]
+
+
+def _compile_reaction(rxn, species_index, param_index, condition_fields,
+                      expression_asts):
+    """Compile one reaction.
+
+    Returns ``(static_coeffs, dynamic_entries, rate_callable, rate_ast)`` where
+    ``static_coeffs`` is ``[(species_col, coef)]`` and ``dynamic_entries`` is
+    ``[(species_col, params_callable)]`` for parameter-expression coefficients.
+    """
+    static_coeffs: list[tuple[int, float]] = []
+    dynamic_entries: list[tuple[int, Any]] = []
+
+    for sp_name, coef in rxn.stoichiometry.items():
+        if sp_name not in species_index:
+            raise KeyError(
+                f"Reaction '{rxn.name}' references undeclared species "
+                f"'{sp_name}' in stoichiometry."
+            )
+        j = species_index[sp_name]
+        if isinstance(coef, (int, float)):
+            static_coeffs.append((j, float(coef)))
+            continue
+        # Coefficient is a parameter expression: parse, validate, resolve, compile.
+        try:
+            raw_stoich_ast = parse_rate_expression(coef)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to parse stoichiometric coefficient "
+                f"'{rxn.name}'/{sp_name!r}: {exc}"
+            ) from exc
+        _validate_stoich_ast(raw_stoich_ast, rxn.name, sp_name)
+        bad = _unresolved_params(raw_stoich_ast, rxn.name, param_index)
+        if bad:
+            raise KeyError(
+                f"Stoichiometric coefficient '{rxn.name}'/{sp_name!r} "
+                f"references identifier '{bad[0]}' which is not a "
+                f"reaction-local nor network-level parameter."
+            )
+        stoich_ctx = CompileContext(
+            species_index={},  # species not allowed
+            param_index=param_index,
+            condition_fields=frozenset(),  # conditions not allowed
+            reaction_name=rxn.name,
+        )
+        inner = raw_stoich_ast.compile(stoich_ctx)
+        # Wrap to a (params,)-only callable; pass dummy C/cond/loc.
+        _empty_C = jnp.zeros(0)
+        _empty_cond: dict[str, jnp.ndarray] = {}
+
+        def _params_only(p, _f=inner):
+            return _f(_empty_C, p, _empty_cond, 0)
+
+        dynamic_entries.append((j, _params_only))
+
+    # Rate expression: inline named-expression references, then validate refs.
+    ast = _substitute(parse_rate_expression(rxn.rate), expression_asts)
+    for sp in ast.species():
+        if sp not in species_index:
+            raise KeyError(
+                f"Reaction '{rxn.name}' rate expression references undeclared "
+                f"species '{sp}'."
+            )
+    for cf in ast.condition_names():
+        if cf not in condition_fields:
+            raise KeyError(
+                f"Reaction '{rxn.name}' rate expression references undeclared "
+                f"condition '{cf}'."
+            )
+    bad = _unresolved_params(ast, rxn.name, param_index)
+    if bad:
+        raise KeyError(
+            f"Reaction '{rxn.name}' rate expression references identifier "
+            f"'{bad[0]}' which is not a reaction-local parameter, a network-level "
+            f"parameter, or a named expression."
+        )
+    ctx = CompileContext(
+        species_index=species_index,
+        param_index=param_index,
+        condition_fields=condition_fields,
+        reaction_name=rxn.name,
+    )
+    return static_coeffs, dynamic_entries, ast.compile(ctx), ast
+
+
 def compile_network(spec: "Any") -> CompiledNetwork:
     """
     Build a :class:`CompiledNetwork` from a validated :class:`NetworkSpec`.
@@ -432,207 +637,39 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     """
     species_names = [s.name for s in spec.species]
     species_index = {name: i for i, name in enumerate(species_names)}
-
     declared_conditions = frozenset(c.name for c in spec.conditions)
-    condition_fields = declared_conditions
 
-    # --- Optional speciation / state-derived pH ---------------------
-    derived_condition_fn = None
-    derived_fields: list[str] = []
-    speciation_cfg = getattr(spec, "speciation", None)
-    if speciation_cfg is not None:
-        from aquakin.core.speciation import build_ph_derived_fn
+    # Stage 1: optional state-derived-pH speciation (extends the valid
+    # condition-field set with any produced field).
+    derived_condition_fn, derived_fields, condition_fields = _compile_speciation(
+        spec, species_index, declared_conditions
+    )
 
-        # Accept either a plain dict or a Pydantic model (duck-typed).
-        cfg = (
-            speciation_cfg
-            if isinstance(speciation_cfg, dict)
-            else speciation_cfg.model_dump()
-        )
-        derived_condition_fn, produced_field, required_fields = build_ph_derived_fn(
-            cfg, species_index
-        )
-        missing = sorted(required_fields - declared_conditions)
-        if missing:
-            raise ValueError(
-                f"speciation block reads condition field(s) {missing} that are "
-                f"not declared in the network's 'conditions:' block."
-            )
-        if produced_field in declared_conditions:
-            raise ValueError(
-                f"speciation produces condition field '{produced_field}', which "
-                f"must not also be declared in 'conditions:' (it is computed, "
-                f"not supplied)."
-            )
-        derived_fields = [produced_field]
-        # Make the derived field visible to rate-expression validation.
-        condition_fields = declared_conditions | {produced_field}
+    # Stage 2: the flat parameter index (network-level then reaction-local).
+    (parameters, param_index, parameter_defaults, parameter_bounds,
+     parameter_transforms, parameter_priors) = _build_param_index(spec)
 
-    # Build parameter index by walking reactions in declaration order so that
-    # parameter ordering is deterministic.
-    parameters: list[str] = []
-    param_index: dict[str, int] = {}
-    parameter_defaults: list[float] = []
-    parameter_bounds: dict[str, tuple[float, float]] = {}
-    parameter_transforms: dict[str, str] = {}
-    parameter_priors: dict[str, tuple[float, float]] = {}
+    # Stage 3: parse + topo-sort + inline the named expressions.
+    expression_asts = _resolve_expressions(spec)
 
-    def _record_param(key: str, pspec) -> None:
-        param_index[key] = len(parameters)
-        parameters.append(key)
-        parameter_defaults.append(float(pspec.value))
-        if pspec.bounds is not None:
-            parameter_bounds[key] = (
-                float(pspec.bounds[0]),
-                float(pspec.bounds[1]),
-            )
-        parameter_transforms[key] = pspec.transform
-        prior = getattr(pspec, "prior", None)
-        if prior is not None:
-            parameter_priors[key] = prior.resolved()
-
-    # Network-level shared parameters first; reaction-local parameters next.
-    for local_name, pspec in getattr(spec, "parameters", {}).items():
-        _record_param(local_name, pspec)
-    for rxn in spec.reactions:
-        for local_name, pspec in rxn.parameters.items():
-            _record_param(f"{rxn.name}.{local_name}", pspec)
-
-    # --- Named expressions ------------------------------------------
-    raw_expressions = getattr(spec, "expressions", {})
-    expression_asts_raw: dict[str, ASTNode] = {}
-    for name, formula in raw_expressions.items():
-        try:
-            expression_asts_raw[name] = parse_rate_expression(formula)
-        except Exception as exc:
-            raise ValueError(
-                f"Failed to parse named expression '{name}': {exc}"
-            ) from exc
-
-    # (An expression name colliding with a parameter name is already rejected by
-    # the schema validator in schema/network_spec.py, so a collision never
-    # reaches the silent ``_substitute`` shadowing path.)
-
-    # Dependency graph: expression -> set of other expressions it references.
-    expr_names = list(expression_asts_raw.keys())
-    expr_name_set = set(expr_names)
-    expr_deps: dict[str, set[str]] = {}
-    for name, ast in expression_asts_raw.items():
-        refs = _collect_param_refs(ast) & expr_name_set
-        refs.discard(name)  # don't count self-loops; they'll be caught below
-        expr_deps[name] = refs
-
-    order = _topo_sort_expressions(expr_names, expr_deps)
-
-    # Resolve expressions in dependency order: substitute references to
-    # already-resolved expressions inline. The resulting AST contains only
-    # leaves and parameter / species / condition references.
-    expression_asts: dict[str, ASTNode] = {}
-    for name in order:
-        raw = expression_asts_raw[name]
-        # Self-reference (e.g. `rho = rho + 1`) would loop forever; the
-        # topological sort treats it as a cycle on itself.
-        if name in _collect_param_refs(raw):
-            raise ValueError(
-                f"Named expression '{name}' references itself."
-            )
-        expression_asts[name] = _substitute(raw, expression_asts)
-
+    # Stage 4: compile each reaction's stoichiometry + rate.
     n_species = len(species_names)
     n_reactions = len(spec.reactions)
-
     stoich_np = np.zeros((n_reactions, n_species), dtype=np.float64)
     stoich_dynamic: list[tuple[int, int, Any]] = []
     reaction_names: list[str] = []
     rate_callables: list[RateCallable] = []
     rate_asts: list[ASTNode] = []
-
     for i, rxn in enumerate(spec.reactions):
         reaction_names.append(rxn.name)
-        for sp_name, coef in rxn.stoichiometry.items():
-            if sp_name not in species_index:
-                raise KeyError(
-                    f"Reaction '{rxn.name}' references undeclared species "
-                    f"'{sp_name}' in stoichiometry."
-                )
-            j = species_index[sp_name]
-            if isinstance(coef, (int, float)):
-                # Static coefficient — fill into the base matrix directly.
-                stoich_np[i, j] = float(coef)
-                continue
-            # Coefficient is an expression in parameters. Parse, validate,
-            # resolve, and compile into a (params,) -> scalar callable.
-            try:
-                raw_stoich_ast = parse_rate_expression(coef)
-            except Exception as exc:
-                raise ValueError(
-                    f"Failed to parse stoichiometric coefficient "
-                    f"'{rxn.name}'/{sp_name!r}: {exc}"
-                ) from exc
-            _validate_stoich_ast(raw_stoich_ast, rxn.name, sp_name)
-            # Resolve param references the same way rate expressions do
-            # (reaction-local first, then network-level).
-            for pname in raw_stoich_ast.param_names():
-                if f"{rxn.name}.{pname}" in param_index:
-                    continue
-                if pname in param_index:
-                    continue
-                raise KeyError(
-                    f"Stoichiometric coefficient '{rxn.name}'/{sp_name!r} "
-                    f"references identifier '{pname}' which is not a "
-                    f"reaction-local nor network-level parameter."
-                )
-            stoich_ctx = CompileContext(
-                species_index={},  # species not allowed
-                param_index=param_index,
-                condition_fields=frozenset(),  # conditions not allowed
-                reaction_name=rxn.name,
-            )
-            inner = raw_stoich_ast.compile(stoich_ctx)
-            # Wrap to a (params,)-only callable; pass dummy C/cond/loc.
-            _empty_C = jnp.zeros(0)
-            _empty_cond: dict[str, jnp.ndarray] = {}
-
-            def _params_only(p, _f=inner):
-                return _f(_empty_C, p, _empty_cond, 0)
-
-            stoich_dynamic.append((i, j, _params_only))
-
-        raw_ast = parse_rate_expression(rxn.rate)
-        # Inline named-expression references first (substitute returns a new
-        # AST containing only species/param/condition leaves).
-        ast = _substitute(raw_ast, expression_asts)
-        ctx = CompileContext(
-            species_index=species_index,
-            param_index=param_index,
-            condition_fields=condition_fields,
-            reaction_name=rxn.name,
+        static_coeffs, dynamic_entries, rate_callable, ast = _compile_reaction(
+            rxn, species_index, param_index, condition_fields, expression_asts
         )
-        # Validate species/conditions referenced in the resolved AST are declared.
-        for sp in ast.species():
-            if sp not in species_index:
-                raise KeyError(
-                    f"Reaction '{rxn.name}' rate expression references undeclared "
-                    f"species '{sp}'."
-                )
-        for cf in ast.condition_names():
-            if cf not in condition_fields:
-                raise KeyError(
-                    f"Reaction '{rxn.name}' rate expression references undeclared "
-                    f"condition '{cf}'."
-                )
-        for pname in ast.param_names():
-            # Resolution order: reaction-local first, then network-level.
-            if f"{rxn.name}.{pname}" in param_index:
-                continue
-            if pname in param_index:
-                continue
-            raise KeyError(
-                f"Reaction '{rxn.name}' rate expression references identifier "
-                f"'{pname}' which is not a reaction-local parameter, a network-level "
-                f"parameter, or a named expression."
-            )
-        rate_callables.append(ast.compile(ctx))
+        for j, coef in static_coeffs:
+            stoich_np[i, j] = coef
+        for j, fn in dynamic_entries:
+            stoich_dynamic.append((i, j, fn))
+        rate_callables.append(rate_callable)
         rate_asts.append(ast)
 
     default_concentrations = jnp.asarray(
