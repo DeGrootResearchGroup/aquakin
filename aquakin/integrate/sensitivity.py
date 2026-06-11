@@ -371,6 +371,122 @@ class DGSMResult:
         return sorted(pairs, key=lambda kv: kv[1], reverse=True)
 
 
+# Guidance raised when a forward-mode screen hits the default reactor adjoint's
+# custom_vjp (which rejects jvp). Shared by the batched and per-sample paths.
+_DGSM_FORWARD_HINT = (
+    "mode='forward' requires forward-mode autodiff through the solve. Build the "
+    "reactor inside fn with adjoint=diffrax.DirectAdjoint(); the default "
+    "RecursiveCheckpointAdjoint registers a custom_vjp that rejects forward mode."
+)
+
+
+def _validate_dgsm_ranges(ranges, input_names):
+    """Coerce/validate ``ranges`` and ``input_names``.
+
+    Returns ``(ranges_np, lo, hi, d, input_names)`` with ``input_names`` filled
+    in (``z0, z1, ...``) when not supplied.
+    """
+    ranges_np = np.asarray(ranges, dtype=float)
+    if ranges_np.ndim != 2 or ranges_np.shape[1] != 2:
+        raise ValueError(f"ranges must have shape (d, 2); got {ranges_np.shape}.")
+    d = ranges_np.shape[0]
+    lo, hi = ranges_np[:, 0], ranges_np[:, 1]
+    if not np.all(hi > lo):
+        raise ValueError("each range must satisfy upper > lower.")
+    if input_names is None:
+        input_names = [f"z{j}" for j in range(d)]
+    elif len(input_names) != d:
+        raise ValueError(
+            f"input_names has {len(input_names)} entries but ranges has d={d}."
+        )
+    return ranges_np, lo, hi, d, list(input_names)
+
+
+def _sobol_sample(lo, hi, d, n_samples, seed):
+    """Draw scrambled-Sobol points in the input box.
+
+    ``n_samples`` is rounded to the nearest power of two (Sobol sequences are
+    balanced there). Returns ``(Z, n_drawn)`` with ``Z`` of shape
+    ``(n_drawn, d)``.
+    """
+    from scipy.stats import qmc
+
+    n_pow = max(1, round(math.log2(max(n_samples, 2))))
+    U = qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(n_pow)
+    Z = lo[None, :] + (hi - lo)[None, :] * U
+    return Z, int(Z.shape[0])
+
+
+def _make_dgsm_value_and_jac(fn, z0, mode):
+    """Build the jitted ``(value, Jacobian)`` callable for the requested mode.
+
+    Probes the output rank once (via :func:`jax.eval_shape`, no solve) to choose
+    between scalar (``value_and_grad`` / ``jacfwd``) and vector
+    (``jacrev`` / ``jacfwd``) Jacobians. Returns
+    ``(value_and_jac, vector, m_out)``; the Jacobian is shape ``(d,)`` for a
+    scalar output and ``(m, d)`` for a vector output.
+    """
+    f_arr = lambda z: jnp.asarray(fn(z))
+    out_shape = jax.eval_shape(f_arr, jnp.asarray(z0)).shape
+    vector = len(out_shape) == 1
+    m_out = int(out_shape[0]) if vector else 1
+    if mode == "reverse":
+        if vector:
+            value_and_jac = jax.jit(lambda z: (f_arr(z), jax.jacrev(f_arr)(z)))
+        else:
+            value_and_jac = jax.jit(jax.value_and_grad(f_arr))
+    else:  # forward
+        value_and_jac = jax.jit(lambda z: (f_arr(z), jax.jacfwd(f_arr)(z)))
+    return value_and_jac, vector, m_out
+
+
+def _finite_rows(vals: np.ndarray, jacs: np.ndarray) -> np.ndarray:
+    """Boolean mask of sample rows whose value AND Jacobian are all finite."""
+    n = vals.shape[0]
+    v_ok = np.isfinite(vals).reshape(n, -1).all(axis=1)
+    J_ok = np.isfinite(jacs).reshape(n, -1).all(axis=1)
+    return v_ok & J_ok
+
+
+def _evaluate_dgsm_samples(value_and_jac, Z, mode, batched):
+    """Evaluate the value/Jacobian over every sample, keeping only finite rows.
+
+    ``batched=True`` dispatches the whole sample through one :func:`jax.vmap`
+    (a single device->host transfer) and filters finiteness once on the stacked
+    result. ``batched=False`` is the per-sample fallback: one call per point,
+    one host transfer each, lower peak memory. Both apply identical
+    skip-on-non-finite semantics, so they return the same ``(f_vals, jacs)``
+    lists of NumPy arrays.
+    """
+    if batched:
+        try:
+            vals, jacs = jax.vmap(value_and_jac)(jnp.asarray(Z))
+        except Exception as exc:  # pragma: no cover - guidance path
+            if mode == "forward":
+                raise RuntimeError(_DGSM_FORWARD_HINT) from exc
+            raise
+        vals = np.asarray(vals)
+        jacs = np.asarray(jacs)
+        keep = _finite_rows(vals, jacs)
+        return list(vals[keep]), list(jacs[keep])
+
+    f_vals: list[np.ndarray] = []
+    jac_list: list[np.ndarray] = []
+    for k, z in enumerate(Z):
+        try:
+            v, J = value_and_jac(jnp.asarray(z))
+        except Exception as exc:  # pragma: no cover - guidance path
+            if mode == "forward" and k == 0:
+                raise RuntimeError(_DGSM_FORWARD_HINT) from exc
+            raise
+        vf = np.asarray(v)
+        Jf = np.asarray(J)
+        if np.all(np.isfinite(vf)) and np.all(np.isfinite(Jf)):
+            f_vals.append(vf)
+            jac_list.append(Jf)
+    return f_vals, jac_list
+
+
 def dgsm(
     fn: Callable[[jnp.ndarray], jnp.ndarray],
     ranges: Any,
@@ -380,6 +496,7 @@ def dgsm(
     n_samples: int = 64,
     seed: int = 0,
     mode: str = "reverse",
+    batched: bool = True,
 ) -> Any:
     """Derivative-based global sensitivity measure via autodiff + Sobol QMC.
 
@@ -442,6 +559,12 @@ def dgsm(
         makes the analysis exactly reproducible.
     mode : {"reverse", "forward"}, optional
         Autodiff mode used to form the per-sample sensitivities (see above).
+    batched : bool, optional
+        When ``True`` (default) the whole sample is pushed through one
+        ``jax.vmap`` dispatch and finiteness is filtered once on the stacked
+        result -- one device->host transfer instead of one per point. Set
+        ``False`` to evaluate point-by-point (lower peak memory for a large
+        screen). Both give identical results.
 
     Returns
     -------
@@ -458,66 +581,14 @@ def dgsm(
     >>> res.ranked()[0][0]
     'a'
     """
-    from scipy.stats import qmc
-
     if mode not in ("reverse", "forward"):
         raise ValueError(f"mode must be 'reverse' or 'forward'; got {mode!r}.")
 
-    ranges_np = np.asarray(ranges, dtype=float)
-    if ranges_np.ndim != 2 or ranges_np.shape[1] != 2:
-        raise ValueError(f"ranges must have shape (d, 2); got {ranges_np.shape}.")
-    d = ranges_np.shape[0]
-    lo, hi = ranges_np[:, 0], ranges_np[:, 1]
-    if not np.all(hi > lo):
-        raise ValueError("each range must satisfy upper > lower.")
-    if input_names is None:
-        input_names = [f"z{j}" for j in range(d)]
-    elif len(input_names) != d:
-        raise ValueError(
-            f"input_names has {len(input_names)} entries but ranges has d={d}."
-        )
+    ranges_np, lo, hi, d, input_names = _validate_dgsm_ranges(ranges, input_names)
+    Z, n_drawn = _sobol_sample(lo, hi, d, n_samples, seed)
+    value_and_jac, vector, m_out = _make_dgsm_value_and_jac(fn, Z[0], mode)
+    f_vals, jacs = _evaluate_dgsm_samples(value_and_jac, Z, mode, batched)
 
-    n_pow = max(1, round(math.log2(max(n_samples, 2))))
-    U = qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(n_pow)
-    Z = lo[None, :] + (hi - lo)[None, :] * U
-    n_drawn = int(Z.shape[0])
-
-    # Detect scalar vs vector output cheaply (no solve), then build the
-    # value-and-Jacobian callable for the requested mode. The Jacobian is shape
-    # (d,) for a scalar output and (m, d) for a vector output.
-    f_arr = lambda z: jnp.asarray(fn(z))
-    out_shape = jax.eval_shape(f_arr, jnp.asarray(Z[0])).shape
-    vector = len(out_shape) == 1
-    m_out = int(out_shape[0]) if vector else 1
-
-    if mode == "reverse":
-        if vector:
-            value_and_jac = jax.jit(lambda z: (f_arr(z), jax.jacrev(f_arr)(z)))
-        else:
-            value_and_jac = jax.jit(jax.value_and_grad(f_arr))
-    else:  # forward
-        value_and_jac = jax.jit(lambda z: (f_arr(z), jax.jacfwd(f_arr)(z)))
-
-    f_vals: list[np.ndarray] = []
-    jacs: list[np.ndarray] = []
-    for k, z in enumerate(Z):
-        try:
-            v, J = value_and_jac(jnp.asarray(z))
-        except Exception as exc:  # pragma: no cover - guidance path
-            if mode == "forward" and k == 0:
-                raise RuntimeError(
-                    "mode='forward' requires forward-mode autodiff through the "
-                    "solve. Build the reactor inside fn with "
-                    "adjoint=diffrax.DirectAdjoint(); the default "
-                    "RecursiveCheckpointAdjoint registers a custom_vjp that "
-                    "rejects forward mode."
-                ) from exc
-            raise
-        vf = np.asarray(v)
-        Jf = np.asarray(J)
-        if np.all(np.isfinite(vf)) and np.all(np.isfinite(Jf)):
-            f_vals.append(vf)
-            jacs.append(Jf)
     if len(f_vals) < 2:
         raise RuntimeError(
             f"DGSM needs >= 2 finite samples; got {len(f_vals)}/{n_drawn}. The "
