@@ -1787,14 +1787,40 @@ passes its state into `flow_outputs`. The exact affine flow solve stays valid
 because the tank's *inlet* comes from the fixed-pump sludge line (the wastage
 `Qw` is a constant pump), so at fixed volume its outputs are constant in the
 recycle flows — the state-dependence does not couple to the recycle variables.
-(In this benchmark the reject flow is therefore nearly constant, so a *fixed*
-release just fills or drains the tank; genuine equalisation needs a level-based
-release controller — the deferred closed-loop reject-control piece.) Wired into
-`build_bsm2` behind `reject_storage`; demonstrated in
-`examples/bsm2_reject_storage.py` (level-gated behaviour by release rate) and
+(In this benchmark the reject flow is nearly constant, so a *fixed* release just
+fills or drains the tank; genuine equalisation needs the level-based release
+controller below.) Wired into `build_bsm2` behind `reject_storage`; demonstrated
+in `examples/bsm2_reject_storage.py` (level-gated behaviour by release rate) and
 tested in `tests/integration/test_bsm2_storage.py` (the four regimes + flow/
 volume conservation, no-solve; wired plant fills-and-bypasses, steady state
-healthy). The **hydraulic delay and the wastage (`Qw`) timer** remain.
+healthy).
+
+**Closed-loop reject control (`build_bsm2(reject_control=True)`).** The storage
+tank's release runs a **proportional level controller** instead of a fixed
+`Q_out`: `Q_out = clip(bias + gain·(V − V_set), 0, Q_max)` (BSM2: setpoint
+`0.5·Vmax`, gain 30 m³/d per m³, pump cap `Q_max = 1500` m³/d = the reference
+`Qstorage_max`). The release rises with the level, so the tank self-regulates to
+a steady mid-level and releases the reject *smoothly through the controlled pump
+with no overflow bypass* — a functioning equalisation tank, versus the open-loop
+fill-and-bypass. The net reject returned is the same, so the activated-sludge
+steady state is unchanged (XB_H ≈ 2224); only the path differs (controlled
+release vs bypass spill), and under a varying reject load the controlled tank
+buffers (a level step up → smoothly higher release, no bypass, no chatter — the
+proportional law is continuous, so unlike a fixed release > inflow it does *not*
+chatter at the empty limit). **Architecture:** the controller lives *inside*
+`StorageTank` (`level_setpoint`/`level_gain`/`output_flow_bias`/`output_flow_max`),
+not on the signal bus, because the release feeds back into the flow network and
+must be resolved *during* the flow solve — but the signal bus is computed
+*after* it (`Plant._compute_signals` follows the stream sweep). Since the
+release is a pure function of the volume *state*, the in-tank law resolves
+exactly via the existing `flow_needs_state` path. (The signal bus remains the
+right home for a non-flow actuator like the DO `kLa`, which senses a
+concentration the sweep must produce first.) Demonstrated in
+`examples/bsm2_reject_control.py` (open-loop bypass vs closed-loop control) and
+tested in `tests/integration/test_bsm2_reject_control.py` (the release law +
+flow/volume conservation, no-solve; wired plant holds a mid-level and releases
+the reject with zero bypass). The **hydraulic delay and the wastage (`Qw`)
+timer** remain.
 
 **BSM2 performance evaluation — EQI / OCI (`evaluate_bsm2`).** The generic metric
 kernels (`aquakin/plant/metrics.py`: `effluent_quality_index`, `aeration_energy`,
