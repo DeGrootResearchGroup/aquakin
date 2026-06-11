@@ -10,8 +10,9 @@ This is appropriate for BSM1-style demos where the focus is the upstream
 biology and the clarifier serves mainly to recycle biomass via the RAS.
 It produces deterministic, stable behaviour without the per-layer
 mass-balance dynamics. For literature-comparable BSM1 effluent metrics,
-swap in :class:`aquakin.plant.takacs.TakacsClarifier` once its numerical
-behaviour is hardened.
+use the layered :class:`aquakin.plant.takacs.TakacsClarifier` instead
+(``build_bsm1(use_takacs=True)``); both expose the same ports, so they are
+drop-in interchangeable in a flowsheet.
 """
 
 from __future__ import annotations
@@ -84,7 +85,10 @@ class IdealClarifier:
     overflow_port: str = "overflow"
     underflow_port: str = "underflow"
 
-    state_size: int = 0
+    @property
+    def state_size(self) -> int:
+        # Stateless separator: instantaneous, no ODE state of its own.
+        return 0
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.capture_efficiency <= 1.0):

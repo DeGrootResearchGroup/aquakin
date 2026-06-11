@@ -15,6 +15,11 @@ RateCallable = Callable[[jnp.ndarray, jnp.ndarray, dict, jnp.ndarray], jnp.ndarr
 
 GAS_CONSTANT = 8.314462618  # J / (mol K)
 
+# ADM1 lower-pH Hill inhibition: the Hill exponent is n = _PH_INHIBIT_HILL_SLOPE
+# / (pH_UL - pH_LL), so the inhibition spans ~the [pH_LL, pH_UL] window
+# (Batstone et al. 2002; Rosen & Jeppsson 2006).
+_PH_INHIBIT_HILL_SLOPE = 3.0
+
 
 class ASTNode(ABC):
     """
@@ -448,7 +453,7 @@ class pHInhibitNode(ASTNode):
             pH = condition_arrays["pH"][loc_idx]
             ll = ll_f(C, params, condition_arrays, loc_idx)
             ul = ul_f(C, params, condition_arrays, loc_idx)
-            n = 3.0 / (ul - ll)
+            n = _PH_INHIBIT_HILL_SLOPE / (ul - ll)
             return jax.nn.sigmoid(ln10 * n * (pH - 0.5 * (ul + ll)))
 
         return _eval

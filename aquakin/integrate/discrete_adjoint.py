@@ -61,6 +61,13 @@ import jax.numpy as jnp
 import numpy as np
 import optimistix
 
+# Shared forward-solve defaults for both discrete-adjoint solvers.
+_DEFAULT_RTOL = 1e-6              # PID controller relative tolerance
+_DEFAULT_ATOL = 1e-9             # PID controller absolute tolerance
+_DEFAULT_DT0 = 1e-6             # initial step (the adaptive controller grows it)
+_DEFAULT_MAX_STEPS = 200_000   # saved-trajectory buffer the backward scan walks
+_DEFAULT_NEWTON_ITERS = 12     # per-stage Newton iterations in the ESDIRK backward pass
+
 
 def _implicit_tols(rtol: float, atol: float):
     """Explicit root-finder tolerances for an implicit diffrax solver.
@@ -83,10 +90,10 @@ def implicit_euler_adjoint_solve(
     t_span: tuple[float, float],
     t_eval: Optional[jnp.ndarray] = None,
     *,
-    rtol: float = 1e-6,
-    atol: float = 1e-9,
-    dt0: float = 1e-6,
-    max_steps: int = 200_000,
+    rtol: float = _DEFAULT_RTOL,
+    atol: float = _DEFAULT_ATOL,
+    dt0: float = _DEFAULT_DT0,
+    max_steps: int = _DEFAULT_MAX_STEPS,
 ) -> jnp.ndarray:
     """Integrate over ``t_span`` with a cap-free discrete-adjoint reverse-mode rule.
 
@@ -262,11 +269,11 @@ def esdirk_adjoint_solve(
     t_eval: Optional[jnp.ndarray] = None,
     *,
     solver: Optional[diffrax.AbstractSolver] = None,
-    rtol: float = 1e-6,
-    atol: float = 1e-9,
-    dt0: float = 1e-6,
-    max_steps: int = 200_000,
-    newton_iters: int = 12,
+    rtol: float = _DEFAULT_RTOL,
+    atol: float = _DEFAULT_ATOL,
+    dt0: float = _DEFAULT_DT0,
+    max_steps: int = _DEFAULT_MAX_STEPS,
+    newton_iters: int = _DEFAULT_NEWTON_ITERS,
 ) -> jnp.ndarray:
     """Cap-free reverse-mode gradient through a high-order ESDIRK solve.
 

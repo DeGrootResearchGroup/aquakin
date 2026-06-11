@@ -368,3 +368,27 @@ def test_unit_ports_are_lists(simple_net):
         assert isinstance(u, Unit)
         assert isinstance(u.input_ports, list)
         assert isinstance(u.output_ports, list)
+
+
+def test_stateless_units_expose_state_size_as_property(simple_net):
+    """Stateless units (mixer/splitter/clarifier/thickener) expose state_size
+    as a read-only @property returning 0 -- standardised with the stateful
+    units' property, and no longer a dataclass constructor field."""
+    import dataclasses
+
+    from aquakin.plant.clarifier import IdealClarifier
+    from aquakin.plant.separators import IdealThickener
+
+    mixer = MixerUnit(name="m", input_port_names=["a", "b"], network=simple_net)
+    splitter = SplitterUnit(
+        name="s", output_port_ratios={"x": 0.5, "y": 0.5}, network=simple_net)
+    clar = IdealClarifier(name="c", network=simple_net, underflow_Q=10.0)
+    thick = IdealThickener(name="th", network=simple_net, target_tss_percent=7.0)
+
+    for u in (mixer, splitter, clar, thick):
+        assert u.state_size == 0
+        # state_size is a property on the type, not a dataclass field, so it
+        # is not a constructor argument.
+        assert isinstance(type(u).state_size, property)
+        field_names = {f.name for f in dataclasses.fields(u)}
+        assert "state_size" not in field_names

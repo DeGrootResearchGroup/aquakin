@@ -342,97 +342,110 @@ class TakacsClarifier:
         layered = self._layered(state)  # (n_layers, n_part)
         # Particulate inlet concentrations — gather via the precomputed index array.
         C_in_part = s_in.C[self._part_idx_arr]  # (n_part,)
-        factors = self._factors_arr
 
-        # Inlet TSS for the non-settleable threshold.
-        tss_in = jnp.sum(C_in_part * factors)
+        # Inlet TSS sets the non-settleable floor X_min.
+        tss_in = jnp.sum(C_in_part * self._factors_arr)
         X_min = self._fns * tss_in
 
         h_layer = self.height / self.n_layers
         v_up = overflow_Q / self.area
         v_down = underflow_Q / self.area
 
-        # Per-layer TSS and settling velocities.
-        tss_per_layer = jnp.sum(layered * factors[None, :], axis=1)  # (n_layers,)
+        # The per-layer derivative is convection (bulk up/down transport plus
+        # the feed inflow) plus the Takács settling divergence.
+        settling = self._settling_divergence(layered, X_min, h_layer)
+        convection = self._convection(
+            layered, C_in_part, Q_in, v_up, v_down, h_layer
+        )
+        dstate = convection + settling
+        return dstate.reshape((-1,))
 
-        # Interface settling-flux density at boundary i (between layer i below
-        # and layer i+1 above). Downward positive. ``f_above``/``f_below`` are
-        # the two layers' potential settling fluxes v_s(X)*X.
+    def _settling_divergence(
+        self, layered: jnp.ndarray, X_min: jnp.ndarray, h_layer: float
+    ) -> jnp.ndarray:
+        """Net Takács (1991) settling flux per layer, shape ``(n_layers, n_part)``.
+
+        Solids settle down the column at the bulk velocity ``v_s(TSS)``. At
+        each interface the downward flux is the *limiting* (minimum) of the two
+        adjacent layers' potential fluxes ``v_s(X)*X`` -- EXCEPT in the
+        clarification zone (interfaces above the feed) while the receiving
+        layer is dilute (``<= X_threshold``), where the upper layer settles
+        freely instead of being held up by the min-flux rule (this is what
+        keeps the effluent clean). Below the feed the min-flux rule applies
+        everywhere, so a dense sludge blanket self-limits its own loading.
+
+        The interface TSS flux is apportioned to species by the upper (source)
+        layer's composition: all particulates in a layer settle at the same
+        bulk velocity, so species ``k``'s flux is ``flux_tss * X_k / TSS`` of
+        that layer (no extra TSS factor -- that would mis-scale to the species'
+        TSS flux). Summing ``flux_per_species * factor`` over species recovers
+        ``flux_tss`` exactly, conserving total settleable solids.
+        """
+        tss_per_layer = jnp.sum(layered * self._factors_arr[None, :], axis=1)
+        # Interface i lies between layer i (below, receiving) and i+1 (above).
         tss_above = tss_per_layer[1:]   # upper layer at each interface (n-1,)
         tss_below = tss_per_layer[:-1]  # lower (receiving) layer at each interface
         f_above = self._settling_velocity(tss_above, X_min) * tss_above
         f_below = self._settling_velocity(tss_below, X_min) * tss_below
 
-        # Takács flux limiting (1991). The boundary flux is the limiting
-        # (minimum) of the two layers' fluxes -- EXCEPT in the clarification
-        # zone (interfaces above the feed), where the downward flux out of the
-        # upper layer is NOT limited by the layer below while that layer is
-        # dilute (<= X_threshold). Solids then settle freely out of the clear
-        # zone instead of being held up by the min-flux rule, which is what
-        # keeps the effluent clean; below the feed the min-flux rule applies
-        # everywhere so a dense sludge blanket self-limits its own loading.
         min_flux = jnp.minimum(f_above, f_below)
         interface_idx = jnp.arange(self.n_layers - 1)
         is_clarification = interface_idx >= self.feed_layer        # static bool
         below_threshold = tss_below <= self._X_threshold
         flux_tss = jnp.where(is_clarification & below_threshold, f_above, min_flux)
 
-        # Per-species settling flux (in each species' own units). All
-        # particulates in a layer settle at the same bulk velocity, so species
-        # k's flux is the interface TSS flux apportioned by the upper (source)
-        # layer's composition: flux_tss * X_k(upper) / TSS(upper). No extra TSS
-        # factor -- multiplying by the factor would give the species' TSS flux,
-        # not its native flux, and mis-scale settling. Summing
-        # flux_per_species * factor over species recovers flux_tss exactly, so
-        # total settleable solids are conserved.
         species_frac_above = layered[1:, :] / (tss_above[:, None] + 1e-12)
         flux_per_species = flux_tss[:, None] * species_frac_above
-        # (n_layers - 1, n_part) — downward positive, at interface i between layers i and i+1.
+        # (n_layers - 1, n_part) — downward positive, at interface i.
 
-        # Convection. Use jnp.zeros((n_layers, n_part)) for "no flux at top/bottom".
-        # Upward convection above feed layer; downward below; mixed at feed.
-        zero_row = jnp.zeros((1, self._n_part))
-
-        # conv_in_down[i] = inflow from layer i+1 to layer i (downflow zone)
-        # conv_in_up[i]   = inflow from layer i-1 to layer i (upflow zone)
-        below = jnp.concatenate([layered[1:, :], zero_row], axis=0)  # padded "layer above" each i
-        above = jnp.concatenate([zero_row, layered[:-1, :]], axis=0)  # padded "layer below" each i
-
-        # Per-layer convection terms; the zone masks are pure geometry,
-        # precomputed in __post_init__.
-        is_below_feed = self._is_below_feed
-        is_above_feed = self._is_above_feed
-        is_feed = self._is_feed
-
-        # Downflow convection contributes only in/at the underflow zone.
-        conv_in_down = (v_down / h_layer) * below * is_below_feed[:, None]
-        # Upflow convection in/at the clarification zone.
-        conv_in_up = (v_up / h_layer) * above * is_above_feed[:, None]
-        # Feed-layer inflow (per-species inlet concentration).
-        feed_inflow = (Q_in / (self.area * h_layer)) * C_in_part[None, :] * is_feed[:, None]
-
-        conv_in = conv_in_down + conv_in_up + feed_inflow
-
-        # Outflow from each layer.
-        # Below feed (downflow zone): v_down * X / h
-        # Above feed: v_up * X / h
-        # Feed layer: (v_up + v_down) * X / h
-        conv_out = (
-            (v_down / h_layer) * layered * is_below_feed[:, None]
-            + (v_up / h_layer) * layered * is_above_feed[:, None]
-            + ((v_up + v_down) / h_layer) * layered * is_feed[:, None]
-        )
-
-        # Settling fluxes — mass flows down the column. flux_per_species[i]
-        # is the flux from layer i+1 down to layer i.
-        # For layer i (not top): flux into layer i from above = flux_per_species[i] / h
-        # For layer i (not bottom): flux out of layer i to below = flux_per_species[i-1] / h
+        # flux_per_species[i] is the flux from layer i+1 down to layer i: it
+        # enters layer i from above and leaves layer i+1 below. Pad with a zero
+        # row for the no-flux top/bottom boundaries.
         flux_in_from_above = jnp.concatenate(
             [flux_per_species, jnp.zeros((1, self._n_part))], axis=0
         ) / h_layer   # (n_layers, n_part); top layer has 0
         flux_out_to_below = jnp.concatenate(
             [jnp.zeros((1, self._n_part)), flux_per_species], axis=0
         ) / h_layer   # (n_layers, n_part); bottom layer has 0
+        return flux_in_from_above - flux_out_to_below
 
-        dstate = conv_in - conv_out + flux_in_from_above - flux_out_to_below
-        return dstate.reshape((-1,))
+    def _convection(
+        self,
+        layered: jnp.ndarray,
+        C_in_part: jnp.ndarray,
+        Q_in: jnp.ndarray,
+        v_up: jnp.ndarray,
+        v_down: jnp.ndarray,
+        h_layer: float,
+    ) -> jnp.ndarray:
+        """Net convective transport per layer (inflow minus outflow), shape
+        ``(n_layers, n_part)``.
+
+        Below the feed the bulk moves down at ``v_down``, above it up at
+        ``v_up``; the feed layer takes the inlet and sheds both ways. The zone
+        masks are pure geometry, precomputed in ``__post_init__``.
+        """
+        # Padded "layer above"/"layer below" each i; the zero rows give
+        # no convective flux across the top/bottom boundaries.
+        zero_row = jnp.zeros((1, self._n_part))
+        below = jnp.concatenate([layered[1:, :], zero_row], axis=0)
+        above = jnp.concatenate([zero_row, layered[:-1, :]], axis=0)
+
+        is_below_feed = self._is_below_feed
+        is_above_feed = self._is_above_feed
+        is_feed = self._is_feed
+
+        # Inflow: downflow from above in the underflow zone, upflow from below
+        # in the clarification zone, and the inlet at the feed layer.
+        conv_in_down = (v_down / h_layer) * below * is_below_feed[:, None]
+        conv_in_up = (v_up / h_layer) * above * is_above_feed[:, None]
+        feed_inflow = (Q_in / (self.area * h_layer)) * C_in_part[None, :] * is_feed[:, None]
+        conv_in = conv_in_down + conv_in_up + feed_inflow
+
+        # Outflow: v_down below feed, v_up above, (v_up + v_down) at the feed.
+        conv_out = (
+            (v_down / h_layer) * layered * is_below_feed[:, None]
+            + (v_up / h_layer) * layered * is_above_feed[:, None]
+            + ((v_up + v_down) / h_layer) * layered * is_feed[:, None]
+        )
+        return conv_in - conv_out

@@ -38,7 +38,11 @@ class MixerUnit:
     name: str
     input_port_names: list[str]
     network: "CompiledNetwork"
-    state_size: int = 0
+
+    @property
+    def state_size(self) -> int:
+        # Stateless: a mixer's output is an algebraic function of its inputs.
+        return 0
 
     @property
     def input_ports(self) -> list[str]:
@@ -129,7 +133,11 @@ class SplitterUnit:
     output_port_ratios: "dict[str, float] | None" = None
     output_port_flows: "dict[str, float] | None" = None
     remainder_port: "str | None" = None
-    state_size: int = 0
+
+    @property
+    def state_size(self) -> int:
+        # Stateless: a splitter routes its inlet flow by fixed ratios/flows.
+        return 0
 
     def __post_init__(self) -> None:
         if (self.output_port_ratios is None) == (self.output_port_flows is None):

@@ -79,7 +79,10 @@ class IdealThickener:
     overflow_port: str = "overflow"
     underflow_port: str = "underflow"
 
-    state_size: int = 0
+    @property
+    def state_size(self) -> int:
+        # Stateless separator: instantaneous, no ODE state of its own.
+        return 0
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.tss_removal_percent <= 100.0):
