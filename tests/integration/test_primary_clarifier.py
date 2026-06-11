@@ -15,10 +15,7 @@ def asm1():
 
 
 def _state(asm1, overrides):
-    C = asm1.default_concentrations()
-    for sp, v in overrides.items():
-        C = C.at[asm1.species_index[sp]].set(v)
-    return C
+    return asm1.concentrations(overrides)
 
 
 def _outputs(unit, asm1, Q_in, state):

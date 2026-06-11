@@ -12,7 +12,6 @@ not published BSM2 dynamic metrics.
 """
 
 import jax.numpy as jnp
-import numpy as np
 import pytest
 
 import aquakin
@@ -47,17 +46,11 @@ def _steady_state(asm1, adm1):
     if "y" in _SS_CACHE:
         return _SS_CACHE["y"]
     plant = _build(asm1, adm1, bsm2_constant_influent(asm1))
-    plant._build_state_layout()
-    plant._build_parameter_layout()
-    warm = asm1.default_concentrations()
-    for sp, v in _WARM.items():
-        warm = warm.at[asm1.species_index[sp]].set(v)
-    y0 = np.array(plant.initial_state())
-    for tk in ("tank1", "tank2", "tank3", "tank4", "tank5"):
-        s, sz = plant._state_layout[tk]
-        y0[s:s + sz] = np.array(warm)
+    warm = asm1.concentrations(_WARM)
+    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
+    y0 = plant.initial_state(overrides={tk: warm for tk in tanks})
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
-                      params=bsm2_parameters(asm1, adm1), y0=jnp.asarray(y0),
+                      params=bsm2_parameters(asm1, adm1), y0=y0,
                       rtol=1e-5, atol=1e-3, max_steps=500_000)
     _SS_CACHE["y"] = sol.state[-1]
     return _SS_CACHE["y"]

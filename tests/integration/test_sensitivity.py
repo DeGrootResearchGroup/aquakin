@@ -80,15 +80,12 @@ def test_sensitivity_doutput_dconditions_matches_finite_diff(simple_network):
     # The shipped simple_network's rate is k*[A] only — independent of T —
     # so we exercise the override path with the ozone_bromate network instead.
     network = aquakin.load_network("ozone_bromate")
-    atol = jnp.full((network.n_species,), 1e-12)
-    atol = atol.at[network.species_index["OH"]].set(1e-20)
+    atol = network.atol({"OH": 1e-20}, default=1e-12)
     conditions = aquakin.SpatialConditions.uniform(
-        1, pH=7.5, T=293.15, OH_scavenging=5.0e4
+        pH=7.5, T=293.15, OH_scavenging=5.0e4
     )
     reactor = aquakin.BatchReactor(network, conditions, atol=atol)
-    C0 = network.default_concentrations()
-    C0 = C0.at[network.species_index["O3"]].set(1.0e-4)
-    C0 = C0.at[network.species_index["Br-"]].set(1.0e-5)
+    C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
     params = network.default_parameters()
     t_eval = jnp.linspace(0.0, 300.0, 31)
 

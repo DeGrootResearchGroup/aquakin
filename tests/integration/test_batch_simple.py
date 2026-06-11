@@ -161,12 +161,9 @@ def test_ozone_bromate_runs():
     conditions = aquakin.SpatialConditions.uniform(
         1, pH=7.5, T=293.15, OH_scavenging=5.0e4
     )
-    atol = jnp.full((network.n_species,), 1e-12)
-    atol = atol.at[network.species_index["OH"]].set(1e-20)
+    atol = network.atol({"OH": 1e-20}, default=1e-12)
     reactor = aquakin.BatchReactor(network, conditions, atol=atol)
-    C0 = network.default_concentrations()
-    C0 = C0.at[network.species_index["Br-"]].set(1e-5)
-    C0 = C0.at[network.species_index["O3"]].set(1e-4)
+    C0 = network.concentrations({"Br-": 1e-5, "O3": 1e-4})
     sol = reactor.solve(
         C0,
         network.default_parameters(),

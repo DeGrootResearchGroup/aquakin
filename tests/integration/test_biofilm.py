@@ -27,7 +27,7 @@ def net():
 
 @pytest.fixture
 def cond():
-    return aquakin.SpatialConditions.uniform(1, T=293.15)
+    return aquakin.SpatialConditions.uniform(T=293.15)
 
 
 def _reactor(net, cond, **kw):
@@ -43,7 +43,7 @@ def test_pure_diffusion_conserves_and_equilibrates(net, cond):
     # With the reaction switched off (k=0), diffusion alone must conserve the
     # volume-weighted total and relax every compartment to a common value.
     r = _reactor(net, cond, diffusivity=1e-3)
-    p = net.default_parameters().at[net.param_index["A_to_B.k"]].set(0.0)
+    p = net.parameter_values({"A_to_B.k": 0.0})
     n_comp = r.n_layers + 1
     # bulk full of A, biofilm empty.
     y0 = jnp.zeros((n_comp, net.n_species))
@@ -78,7 +78,7 @@ def test_boundary_diffusivity_sets_transfer_and_defaults(net, cond):
 
     # A faster boundary layer equilibrates the bulk with the film sooner. Bulk
     # full, film empty, reaction off: the bulk drains faster with the larger k_L.
-    p = net.default_parameters().at[net.param_index["A_to_B.k"]].set(0.0)
+    p = net.parameter_values({"A_to_B.k": 0.0})
     n_comp = r_default.n_layers + 1
     y0 = jnp.zeros((n_comp, net.n_species)).at[0, sidx].set(1.0)
     bulk_default = float(r_default.solve(y0, p, t_span=(0.0, 0.5)).C_named("A")[-1])
@@ -197,7 +197,7 @@ def test_attachment_detachment_conserve_particulate(net, cond):
     ib = net.species_index["B"]
     soluble = jnp.array([True, False])      # A diffuses, B is particulate
     pmask = jnp.array([False, True])        # move/transport B
-    p = net.default_parameters().at[net.param_index["A_to_B.k"]].set(0.0)
+    p = net.parameter_values({"A_to_B.k": 0.0})
     n_comp = 1 + 5
 
     def total_B(sol):

@@ -12,8 +12,7 @@ def network():
 
 
 def _atol_for(network):
-    a = jnp.full((network.n_species,), 1e-12)
-    return a.at[network.species_index["OH"]].set(1e-20)
+    return network.atol({"OH": 1e-20}, default=1e-12)
 
 
 def _run(network, *, OH_scavenging, t_end=600.0, n=61):
@@ -21,9 +20,7 @@ def _run(network, *, OH_scavenging, t_end=600.0, n=61):
         1, pH=7.5, T=293.15, OH_scavenging=OH_scavenging
     )
     reactor = aquakin.BatchReactor(network, conditions, atol=_atol_for(network))
-    C0 = network.default_concentrations()
-    C0 = C0.at[network.species_index["O3"]].set(1.0e-4)
-    C0 = C0.at[network.species_index["Br-"]].set(1.0e-5)
+    C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
     return reactor.solve(
         C0,
         network.default_parameters(),

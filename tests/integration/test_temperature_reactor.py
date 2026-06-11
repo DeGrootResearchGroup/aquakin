@@ -14,12 +14,8 @@ def asm1():
 def _batch_final(asm1, T_kelvin):
     """Run a short ASM1 batch (substrate + biomass, aerobic) at temperature T,
     holding DO via a large initial SO, and return the final state."""
-    C0 = asm1.default_concentrations()
-    C0 = C0.at[asm1.species_index["SS"]].set(50.0)
-    C0 = C0.at[asm1.species_index["SO"]].set(8.0)
-    C0 = C0.at[asm1.species_index["SNH"]].set(20.0)
-    C0 = C0.at[asm1.species_index["XB_H"]].set(800.0)
-    cond = aquakin.SpatialConditions.uniform(1, T=T_kelvin)
+    C0 = asm1.concentrations(SS=50.0, SO=8.0, SNH=20.0, XB_H=800.0)
+    cond = aquakin.SpatialConditions.uniform(T=T_kelvin)
     reactor = aquakin.BatchReactor(asm1, cond)
     sol = reactor.solve(C0, asm1.default_parameters(), t_span=(0.0, 0.5))
     return sol.C[-1]
@@ -41,10 +37,8 @@ def test_batch_matches_uncorrected_at_reference(asm1):
     # Build an ASM1 with the corrections stripped, compare final states at 20 °C.
     import dataclasses
     bare = dataclasses.replace(asm1, temperature_corrections=[])
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
-    C0 = asm1.default_concentrations().at[asm1.species_index["SS"]].set(50.0)
-    C0 = C0.at[asm1.species_index["SO"]].set(8.0)
-    C0 = C0.at[asm1.species_index["XB_H"]].set(800.0)
+    cond = aquakin.SpatialConditions.uniform(T=293.15)
+    C0 = asm1.concentrations(SS=50.0, SO=8.0, XB_H=800.0)
     a = aquakin.BatchReactor(asm1, cond).solve(C0, asm1.default_parameters(), (0.0, 0.5))
     b = aquakin.BatchReactor(bare, cond).solve(C0, bare.default_parameters(), (0.0, 0.5))
     assert jnp.allclose(a.C[-1], b.C[-1], rtol=1e-8, atol=1e-8)

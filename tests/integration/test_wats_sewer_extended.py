@@ -23,7 +23,7 @@ def net():
 
 @pytest.fixture
 def cond():
-    return aquakin.SpatialConditions.uniform(1, T=20.0, A_V=56.7, X_BF=10.0)
+    return aquakin.SpatialConditions.uniform(T=20.0, A_V=56.7, X_BF=10.0)
 
 
 def test_compiles_with_expected_shape(net):
@@ -55,7 +55,7 @@ def test_structural_variants_compile(variant):
     assert v.name == variant
     assert v.n_species == 18
     assert v.n_reactions == 46
-    cond = aquakin.SpatialConditions.uniform(1, T=20.0, A_V=56.7, X_BF=10.0)
+    cond = aquakin.SpatialConditions.uniform(T=20.0, A_V=56.7, X_BF=10.0)
     r = v.rates(v.default_concentrations(), v.default_parameters(), cond.fields, 0)
     assert bool(jnp.all(jnp.isfinite(r)))
 
@@ -116,7 +116,7 @@ def test_nitrate_dosing_lowers_sulfide(net, cond):
     reactor = aquakin.BatchReactor(net, cond, rtol=1e-6, atol=1e-9)
     p = net.default_parameters()
     C_no = net.default_concentrations()
-    C_dosed = C_no.at[net.species_index["S_NO"]].set(20.0)
+    C_dosed = net.concentrations({"S_NO": 20.0})
     sumS_no = float(reactor.solve(C_no, p, t_span=(0.0, 1.0)).C_named("sumS")[-1])
     sumS_dosed = float(reactor.solve(C_dosed, p, t_span=(0.0, 1.0)).C_named("sumS")[-1])
     assert sumS_dosed < sumS_no
@@ -125,7 +125,7 @@ def test_nitrate_dosing_lowers_sulfide(net, cond):
 def test_nitrate_enables_sulfide_oxidation_sensitivity(net, cond):
     # With nitrate present, final-step sulfide RHS must respond to the
     # nitrate-driven oxidation rate constant (the paper's key control lever).
-    C0 = net.default_concentrations().at[net.species_index["S_NO"]].set(10.0)
+    C0 = net.concentrations({"S_NO": 10.0})
 
     def sumS_rhs(p):
         return net.dCdt(C0, p, cond.fields, 0, stoich=net.compute_stoich(p))[
@@ -144,7 +144,7 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
     # finite and matches a finite-difference of the same (capped) solve.
     import diffrax
 
-    C0 = net.default_concentrations().at[net.species_index["S_NO"]].set(20.0)
+    C0 = net.concentrations({"S_NO": 20.0})
     p = net.default_parameters()
     ia = net.param_index["k_sII_anox_f"]
     reactor = aquakin.BatchReactor(net, cond, rtol=1e-6, atol=1e-9, dtmax=5.0e-4)
