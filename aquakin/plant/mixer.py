@@ -125,6 +125,16 @@ class SplitterUnit:
       loop gain near-singular off the design influent and the plant blows up
       under dynamic flow.
 
+    - **threshold mode** (``threshold`` + ``threshold_port`` +
+      ``remainder_port``): inlet flow *above* ``threshold`` goes to
+      ``threshold_port`` (``max(Q_in - threshold, 0)``) and the rest
+      (``min(Q_in, threshold)``) to ``remainder_port``. This is the BSM2
+      hydraulic influent bypass (flow above a limit diverted around the
+      treatment). The split is piecewise-linear (a kink at ``threshold``), so
+      the exact recycle-flow solve (:meth:`Plant._resolve_flows`) is only exact
+      when the inlet flow is *independent of the recycle flows* -- e.g. fed
+      directly by an external influent, as in :func:`build_bsm2`.
+
     Parameters
     ----------
     name : str
@@ -135,14 +145,21 @@ class SplitterUnit:
     output_port_flows : dict[str, float], optional
         Flow mode: output port name -> fixed setpoint flow (m³/d). Requires
         ``remainder_port``.
+    threshold : float, optional
+        Threshold mode: inlet-flow limit (m³/d). Requires ``threshold_port``
+        and ``remainder_port``.
+    threshold_port : str, optional
+        Threshold mode: the output port carrying the above-threshold flow.
     remainder_port : str, optional
-        Flow mode only: the output port carrying the remaining flow.
+        Flow / threshold mode: the output port carrying the remaining flow.
     """
 
     name: str
     network: "CompiledNetwork"
     output_port_ratios: "dict[str, float] | None" = None
     output_port_flows: "dict[str, float] | None" = None
+    threshold: "float | None" = None
+    threshold_port: "str | None" = None
     remainder_port: "str | None" = None
 
     @property
@@ -150,19 +167,29 @@ class SplitterUnit:
         # Stateless: a splitter routes its inlet flow by fixed ratios/flows.
         return 0
 
+    @property
+    def _mode(self) -> str:
+        if self.output_port_ratios is not None:
+            return "ratio"
+        if self.output_port_flows is not None:
+            return "flow"
+        return "threshold"
+
     def __post_init__(self) -> None:
-        if (self.output_port_ratios is None) == (self.output_port_flows is None):
+        n_modes = sum(m is not None for m in (
+            self.output_port_ratios, self.output_port_flows, self.threshold))
+        if n_modes != 1:
             raise ValueError(
                 f"SplitterUnit '{self.name}': supply exactly one of "
-                f"output_port_ratios or output_port_flows."
+                f"output_port_ratios, output_port_flows, or threshold."
             )
-        if self.output_port_ratios is not None:
+        if self._mode == "ratio":
             total = sum(self.output_port_ratios.values())
             if not (abs(total - 1.0) < 1e-9):
                 raise ValueError(
                     f"SplitterUnit '{self.name}' ratios must sum to 1.0; got {total}"
                 )
-        else:
+        elif self._mode == "flow":
             if self.remainder_port is None:
                 raise ValueError(
                     f"SplitterUnit '{self.name}': output_port_flows requires "
@@ -173,6 +200,17 @@ class SplitterUnit:
                     f"SplitterUnit '{self.name}': remainder_port "
                     f"'{self.remainder_port}' must not also be a setpoint port."
                 )
+        else:  # threshold
+            if self.threshold_port is None or self.remainder_port is None:
+                raise ValueError(
+                    f"SplitterUnit '{self.name}': threshold requires both "
+                    f"threshold_port and remainder_port."
+                )
+            if self.threshold_port == self.remainder_port:
+                raise ValueError(
+                    f"SplitterUnit '{self.name}': threshold_port and "
+                    f"remainder_port must differ."
+                )
 
     @property
     def input_ports(self) -> list[str]:
@@ -182,9 +220,11 @@ class SplitterUnit:
 
     @property
     def output_ports(self) -> list[str]:
-        if self.output_port_ratios is not None:
+        if self._mode == "ratio":
             return list(self.output_port_ratios.keys())
-        return list(self.output_port_flows.keys()) + [self.remainder_port]
+        if self._mode == "flow":
+            return list(self.output_port_flows.keys()) + [self.remainder_port]
+        return [self.threshold_port, self.remainder_port]
 
     def initial_state(self) -> jnp.ndarray:
         return jnp.zeros((0,))
@@ -199,12 +239,22 @@ class SplitterUnit:
         s_in = inputs["in"]
         outputs: dict[str, Stream] = {}
         # A passive splitter preserves the inlet temperature on every outlet.
-        if self.output_port_ratios is not None:
+        if self._mode == "ratio":
             for port, ratio in self.output_port_ratios.items():
                 outputs[port] = Stream(
                     Q=s_in.Q * jnp.asarray(ratio), C=s_in.C, network=self.network,
                     T=s_in.T,
                 )
+            return outputs
+        if self._mode == "threshold":
+            # Inlet flow above the limit is diverted; the rest passes through.
+            limit = jnp.asarray(float(self.threshold))
+            above = jnp.maximum(s_in.Q - limit, 0.0)
+            outputs[self.threshold_port] = Stream(
+                Q=above, C=s_in.C, network=self.network, T=s_in.T)
+            outputs[self.remainder_port] = Stream(
+                Q=jnp.minimum(s_in.Q, limit), C=s_in.C, network=self.network,
+                T=s_in.T)
             return outputs
         # Flow mode: fixed setpoints, remainder takes what is left. Clamp the
         # remainder at zero so a feed transiently below the total setpoint does
@@ -225,9 +275,13 @@ class SplitterUnit:
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
         """Output port flows from the inlet flow (the linear flow rule)."""
         Q_in = input_flows["in"]
-        if self.output_port_ratios is not None:
+        if self._mode == "ratio":
             return {port: Q_in * jnp.asarray(ratio)
                     for port, ratio in self.output_port_ratios.items()}
+        if self._mode == "threshold":
+            limit = jnp.asarray(float(self.threshold))
+            return {self.threshold_port: jnp.maximum(Q_in - limit, 0.0),
+                    self.remainder_port: jnp.minimum(Q_in, limit)}
         out = {port: jnp.asarray(float(q))
                for port, q in self.output_port_flows.items()}
         out[self.remainder_port] = Q_in - sum(out.values())
