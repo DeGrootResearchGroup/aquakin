@@ -1755,6 +1755,36 @@ are still omitted** (the remaining BSM2 closed-loop elements). The digester is
 additionally validated at the unit level in
 `tests/validation/test_bsm2_digester_unit.py`.
 
+**BSM2 performance evaluation — EQI / OCI (`evaluate_bsm2`).** The generic metric
+kernels (`aquakin/plant/metrics.py`: `effluent_quality_index`, `aeration_energy`,
+`pumping_energy`, `operational_cost_index`, `effluent_averages`) are wired to a
+concrete BSM2 flowsheet by `aquakin.plant.bsm.evaluate_bsm2(plant, solution,
+params)`, returning a `BSM2Evaluation` (EQI, OCI, the AE/PE/sludge component
+terms, and the average effluent). It reconstructs what the indices need from a
+solved `PlantSolution`: the secondary-effluent stream (`settler.overflow`), the
+pumped recycle flows (`tank5_split.internal_recycle`, `underflow_split.ras/waste`),
+and the wasted-sludge mass flow to disposal (`dewatering.underflow`) — all via
+`plant.stream(...)`. The aerated reactors are auto-detected (any CSTR with a
+fixed `kla` or a `controlled_kla` on `SO`), and the **aeration term reads the
+actual kLa over the run**: a fixed `kla` open-loop, or — under closed-loop DO
+control — the controller's manipulated signal recovered per saved state by the
+new **`Plant.signals_at(t, state, params)`** (the signal-bus analogue of
+`outputs_at`; `_rhs`'s signal step was factored into a shared
+`Plant._compute_signals`). So evaluating an open- and a closed-loop run side by
+side quantifies the control's effect: e.g. warm-started at high biomass the fixed
+design kLa under-aerates (reactor-4 SO ≈ 1.45), and the controller spends more
+aeration to pin SO at the 2.0 setpoint and nitrify further — whether DO control
+*saves* aeration depends on whether the fixed kLa was over- or under-aerating at
+the operating point. The OCI here is the **BSM1-form** index (aeration + pumping
++ 5·sludge); BSM2's full OCI additionally credits methane production and charges
+mixing / sludge-heating energy (not yet included — see `BSM2Evaluation.oci_note`).
+Demonstrated in `examples/bsm2_evaluation.py` (open- vs closed-loop table) and
+tested in `tests/integration/test_bsm2_evaluation.py` (terms finite/positive,
+aerated-tank detection, AE matches the closed-form fixed-kLa value, OCI is the
+sum of its terms, open-loop `signals_at` is empty). Note the shipped influent is
+synthesised, so these are method-validated numbers, not the published EQI/OCI over
+the canonical days-245–609 window (that needs the official IWA influent file).
+
 The **ASM1↔ADM1 interfaces** (`aquakin/plant/interfaces.py`, `ASM1toADM1` /
 `ADM1toASM1`) are the continuity-based BSM2 interfaces (Nopens et al. 2009 /
 Rosen & Jeppsson 2006). `asm2adm` removes the COD demand of O₂/NO₃, then
