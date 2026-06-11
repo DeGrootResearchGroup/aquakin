@@ -466,6 +466,50 @@ def test_laplace_covariance_keeps_all_when_well_conditioned():
     assert np.allclose(cov, np.linalg.inv(H + 1e-6 * np.eye(2)), atol=1e-9)
 
 
+def test_laplace_covariance_relative_to_largest_for_small_scale_hessian():
+    """A uniformly small-scale Hessian (largest eigenvalue << 1) but with clear
+    structure must keep its identifiable direction(s). The truncation is RELATIVE
+    to the largest eigenvalue, not an absolute floor.
+
+    Regression for the bug where an observable on a tiny scale (e.g. a trace
+    species in molar units, JᵀJ ~1e-2 with eigenvalues spanning orders of
+    magnitude) was reported fully degenerate because the threshold was floored at
+    an absolute ``eig_keep * 1`` -- discarding every direction.
+    """
+    from aquakin.integrate.calibrate import _laplace_covariance
+
+    V = np.array([[1.0, 1.0], [1.0, -1.0]]) / np.sqrt(2.0)  # orthonormal
+    # Largest eigenvalue 9.1e-3 (< 1); a near-null direction at the ridge level.
+    H = V @ np.diag([9.1e-3, 1e-9]) @ V.T
+    cov, wk, Vk = _laplace_covariance(H, ridge=1e-6, eig_keep=1e-2)
+    assert wk.shape == (1,)                        # strong direction kept...
+    assert wk[0] == pytest.approx(9.1e-3, rel=1e-3)  # ...at its true eigenvalue
+    s = np.linalg.eigvalsh(0.5 * (cov + cov.T))
+    assert int(np.sum(s > 1e-12)) == 1             # rank-1 covariance
+    assert float(np.max(s)) == pytest.approx(1.0 / 9.1e-3, rel=1e-3)
+
+
+def test_calibrate_nll_small_scale_observable_gives_finite_posterior(setup):
+    """End-to-end: a NLL+Laplace fit of a tiny-magnitude observable yields a
+    finite, positive-variance posterior rather than a false 'degenerate' error
+    (the bug reproduced through the full calibrate path)."""
+    reactor, C0, t_obs, _obs_clean, true_k = setup
+    true_params = reactor.network.default_parameters().at[0].set(true_k)
+    # Scale the observable down to ~1e-6 so the Hessian is uniformly small.
+    scale = 1e-6
+    C0s = C0 * scale
+    obs = reactor.solve(
+        C0s, true_params, t_span=(0.0, float(t_obs[-1])), t_eval=t_obs
+    ).C_named("B")
+    res = aquakin.calibrate(
+        reactor, C0s, observations=obs, t_obs=t_obs, free_params=["A_to_B.k"],
+        observed_species=["B"], loss="nll", sigma=jnp.asarray(0.05 * scale),
+        laplace=True,
+    )
+    assert np.all(np.isfinite(np.asarray(res.posterior_cov)))
+    assert res.params_named_std["A_to_B.k"] > 0.0
+
+
 def test_band_and_std_share_the_truncation(setup):
     """params_named_std and predictive_band draw from the SAME posterior_cov, so
     they regularise identically -- the draws' empirical covariance matches the
