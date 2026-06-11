@@ -165,6 +165,23 @@ def test_unknown_function_rejected():
         parse_rate_expression("foo(1, 2)")
 
 
+def test_unknown_function_message_lists_all_builtins():
+    """The 'unknown function' message is derived from the registry, so it lists
+    every built-in -- including pH_inhibit, which the old hand-written message
+    omitted."""
+    with pytest.raises(ParseError) as exc:
+        parse_rate_expression("phinhibit(a)")
+    msg = str(exc.value)
+    for fn in ("arrhenius", "pH_switch", "pH_inhibit", "monod",
+               "monod_inh", "monod_ratio", "monod_inh_ratio"):
+        assert fn in msg
+
+
+def test_pH_inhibit_wrong_arity():
+    with pytest.raises(ParseError, match="pH_inhibit.. takes 2"):
+        parse_rate_expression("pH_inhibit(a)")
+
+
 def test_unexpected_character():
     with pytest.raises(ParseError):
         parse_rate_expression("k * @")
