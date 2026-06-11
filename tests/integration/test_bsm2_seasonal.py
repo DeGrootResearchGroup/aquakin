@@ -81,12 +81,10 @@ def test_temperature_influent_rhs_finite_and_active():
         warm = asm1.concentrations(_WARM)
         tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
         y0 = plant.initial_state(overrides={tk: warm for tk in tanks})
-        # Calling the RHS directly (not via solve()) needs the parameter layout.
-        plant._build_parameter_layout()
-        d = plant._rhs(jnp.asarray(0.0), y0, params)
+        d = plant.derivative(y0, params)          # dstate/dt, no full solve
         assert jnp.all(jnp.isfinite(d))
-        s5 = plant._state_layout["tank5"][0]
-        return float(d[s5 + asm1.species_index["SNH"]])
+        tank5_rate = plant.states_by_unit(d)["tank5"]
+        return float(tank5_rate[asm1.species_index["SNH"]])
 
     # Faster nitrification when warm -> more negative SNH derivative.
     assert rhs_dsnh(293.15) < rhs_dsnh(283.15) - 1.0

@@ -91,6 +91,16 @@ class PlantSolution:
     state: jnp.ndarray
     plant: "Plant"
 
+    @property
+    def final_state(self) -> jnp.ndarray:
+        """The full plant state at the last save time, shape ``(total_state_size,)``.
+
+        The last row of :attr:`state`. Pass it to :meth:`Plant.states_by_unit`
+        to read per-unit pieces without a trailing ``[-1]`` index on a 2-D
+        trajectory.
+        """
+        return self.state[-1]
+
     def unit_state(self, unit_name: str) -> jnp.ndarray:
         """Return the trajectory of one unit's state, shape
         ``(n_t, unit.state_size)``."""
@@ -511,6 +521,34 @@ class Plant:
                 pieces.append(self.units[name].initial_state())
         return jnp.concatenate(pieces)
 
+    def states_by_unit(
+        self, state_full: jnp.ndarray
+    ) -> dict[str, jnp.ndarray]:
+        """Split a flat plant vector into a ``{unit_name: sub-vector}`` map.
+
+        The inverse of :meth:`initial_state` with ``overrides``: that assembles
+        a flat vector from per-unit pieces, this splits one back apart. Works on
+        any flat plant vector in the plant's state layout -- an initial state, a
+        solution snapshot (:attr:`PlantSolution.final_state`), or a derivative
+        from :meth:`derivative`::
+
+            dig = plant.states_by_unit(sol.final_state)["digester"]
+            rate = plant.states_by_unit(plant.derivative(y0))["tank5"]
+
+        Parameters
+        ----------
+        state_full : jnp.ndarray
+            A flat plant vector, shape ``(total_state_size,)``.
+
+        Returns
+        -------
+        dict
+            ``{unit_name: sub-vector}``, each of shape ``(unit.state_size,)`` in
+            the unit-addition order.
+        """
+        self._build_state_layout()
+        return self._split_state(jnp.asarray(state_full))
+
     # ----- RHS -------------------------------------------------------------
 
     def _split_state(
@@ -632,6 +670,46 @@ class Plant:
             t=ts, Q=jnp.stack(Q_list), C=jnp.stack(C_list),
             network=self.units[unit].network,
         )
+
+    def derivative(
+        self,
+        state: jnp.ndarray,
+        params: Optional[jnp.ndarray] = None,
+        *,
+        t: float = 0.0,
+    ) -> jnp.ndarray:
+        """Evaluate the assembled flowsheet RHS once: ``dstate/dt`` at ``state``.
+
+        A public single evaluation of the same right-hand side :meth:`solve`
+        integrates (recycles resolved by the fixed-pass sweep). Useful for
+        inspecting the dynamics -- sign, magnitude, finiteness -- at a state
+        without running a full solve. Split the result with
+        :meth:`states_by_unit`::
+
+            d = plant.derivative(y0, params)
+            snh_rate = plant.states_by_unit(d)["tank5"][net.species_index["SNH"]]
+
+        Parameters
+        ----------
+        state : jnp.ndarray
+            Flat plant state, shape ``(total_state_size,)``.
+        params : jnp.ndarray, optional
+            Plant parameters (defaults to :meth:`default_parameters`).
+        t : float, optional
+            Time at which to evaluate, for time-varying influents (default 0).
+
+        Returns
+        -------
+        jnp.ndarray
+            ``dstate/dt``, shape ``(total_state_size,)`` -- the same layout as
+            ``state``.
+        """
+        self._build_state_layout()
+        self._build_parameter_layout()
+        params_full = (
+            self.default_parameters() if params is None else jnp.asarray(params)
+        )
+        return self._rhs(jnp.asarray(float(t)), jnp.asarray(state), params_full)
 
     def _rhs(
         self,

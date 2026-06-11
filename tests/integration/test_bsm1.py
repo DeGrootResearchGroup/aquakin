@@ -79,16 +79,11 @@ def test_recycle_concentration_sweep_converges_by_two_passes(
 
     plant = build_bsm1(network=asm1, use_takacs=use_takacs)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
-    # Set up the layouts the RHS needs (solve() would do this).
-    plant._build_state_layout()
-    plant._build_parameter_layout()
     y0 = plant.initial_state()
-    params = plant.default_parameters()
-    t = jnp.asarray(0.0)
 
     def dstate(n):
         plant.recycle_passes = n
-        return np.asarray(plant._rhs(t, y0, params))
+        return np.asarray(plant.derivative(y0))
 
     d2, d10 = dstate(2), dstate(10)
     # 2 passes is already converged to ~machine precision vs many passes.

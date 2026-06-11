@@ -71,8 +71,7 @@ def test_bsm2_digester_produces_methane(asm1, constant_influent):
     plant = _build(asm1, constant_influent)
     sol = _solve(plant)
     adm1 = plant.units["digester"].network
-    start, size = plant._state_layout["digester"]
-    dstate = sol.state[-1, start:start + size]
+    dstate = plant.states_by_unit(sol.final_state)["digester"]
     g = lambda n: float(dstate[adm1.species_index[n]])
     assert jnp.all(jnp.isfinite(dstate))
     assert g("S_gas_ch4") > 1.0        # headspace methane (BSM2 ref ~1.65)

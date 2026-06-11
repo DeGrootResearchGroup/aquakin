@@ -537,3 +537,48 @@ def test_stream_unknown_endpoint_errors(simple_net):
     sol = plant.solve(t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 2))
     with pytest.raises(KeyError, match="Unknown unit"):
         plant.stream(sol, "nope")
+
+
+def test_states_by_unit_inverts_initial_state(simple_net):
+    """states_by_unit splits a flat vector back into the per-unit pieces that
+    initial_state(overrides=...) assembled -- the two are inverses."""
+    plant = _two_tank_plant(simple_net)
+    warm_a = simple_net.concentrations(A=0.7, B=0.3)
+    warm_b = simple_net.concentrations(A=0.1, B=0.9)
+    y0 = plant.initial_state(overrides={"a": warm_a, "b": warm_b})
+
+    parts = plant.states_by_unit(y0)
+    assert set(parts) == {"a", "b"}
+    assert jnp.allclose(parts["a"], warm_a)
+    assert jnp.allclose(parts["b"], warm_b)
+
+
+def test_final_state_and_states_by_unit_snapshot(simple_net):
+    """sol.final_state is the last state row (1-D), and states_by_unit reads a
+    unit's snapshot from it -- matching sol.unit_state(name)[-1] without the
+    opaque index on a 2-D trajectory."""
+    plant = _fed_cstr_plant(simple_net)
+    sol = plant.solve(t_span=(0.0, 5.0), t_eval=jnp.linspace(0.0, 5.0, 4))
+
+    assert sol.final_state.shape == (sol.state.shape[1],)
+    assert jnp.array_equal(sol.final_state, sol.state[-1])
+    snap = plant.states_by_unit(sol.final_state)["tank"]
+    assert jnp.allclose(snap, sol.unit_state("tank")[-1])
+
+
+def test_derivative_evaluates_rhs(simple_net):
+    """plant.derivative(state) is the public dstate/dt: same layout as the state,
+    finite, and equal to the assembled RHS."""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    y0 = plant.initial_state()
+
+    d = plant.derivative(y0)
+    assert d.shape == y0.shape
+    assert jnp.all(jnp.isfinite(d))
+    # Defaults to default_parameters(); matches a direct RHS evaluation.
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    expected = plant._rhs(jnp.asarray(0.0), y0, plant.default_parameters())
+    assert jnp.allclose(d, expected)
+    # Splittable by unit like any flat plant vector.
+    assert plant.states_by_unit(d)["tank"].shape == (simple_net.n_species,)
