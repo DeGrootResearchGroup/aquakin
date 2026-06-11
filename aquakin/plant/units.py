@@ -18,7 +18,9 @@ class Unit(Protocol):
 
     - ``name``: a string identifier used for connections.
     - ``state_size``: the number of ODE state variables this unit owns
-      (zero for stateless units like mixers / splitters).
+      (zero for stateless units like mixers / splitters). Exposed as a
+      read-only ``@property`` on every shipped unit -- a constant ``0`` on
+      stateless ones, derived from the unit's config on stateful ones.
     - ``input_ports`` / ``output_ports``: named stream ports.
 
     And implement:
