@@ -31,7 +31,7 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.network import CompiledNetwork
-from aquakin.integrate._common import _coerce_atol, _run_diffeqsolve
+from aquakin.integrate._common import _coerce_atol, _run_diffeqsolve, default_atol
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.streams import Stream, StreamSeries
@@ -998,7 +998,7 @@ class Plant:
         params: Optional[jnp.ndarray] = None,
         *,
         rtol: float = 1e-6,
-        atol: Union[float, jnp.ndarray] = 1e-9,
+        atol: Union[float, jnp.ndarray, None] = None,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
         dtmax: Optional[float] = None,
         max_steps: int = 100_000,
@@ -1068,8 +1068,6 @@ class Plant:
                     f"params has shape {params.shape}, expected "
                     f"({layout.total_size},)"
                 )
-        atol_eff = _coerce_atol(atol, self._total_state_size)
-
         # Initial state: the per-unit defaults, or a caller-supplied warm start
         # (e.g. a previously-computed steady state -- the standard way to start a
         # dynamic-influent run, avoiding the stiff clean-start transient).
@@ -1081,6 +1079,13 @@ class Plant:
                 raise ValueError(
                     f"y0 has shape {y0.shape}, expected ({self._total_state_size},)"
                 )
+        # Default atol is a per-component noise floor scaled off the operating
+        # magnitudes (the warm start y0 and the per-unit defaults), so a g/m³
+        # plant solves without the old fixed 1e-9 forcing the step ceiling.
+        if atol is None:
+            atol_eff = default_atol(y0, self.initial_state())
+        else:
+            atol_eff = _coerce_atol(atol, self._total_state_size)
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
@@ -1128,20 +1133,35 @@ class Plant:
                 ts = jnp.asarray(t_eval)
             return PlantSolution(t=ts, state=ys, plant=self)
 
-        sol = _run_diffeqsolve(
-            rhs,
-            t0=t0,
-            t1=t1,
-            y0=y0,
-            args=params,
-            saveat=saveat,
-            rtol=rtol,
-            atol=atol_eff,
-            adjoint=adjoint,
-            dtmax=dtmax,
-            max_steps=max_steps,
-            event=event,
-        )
+        try:
+            sol = _run_diffeqsolve(
+                rhs,
+                t0=t0,
+                t1=t1,
+                y0=y0,
+                args=params,
+                saveat=saveat,
+                rtol=rtol,
+                atol=atol_eff,
+                adjoint=adjoint,
+                dtmax=dtmax,
+                max_steps=max_steps,
+                event=event,
+            )
+        except Exception as exc:  # noqa: BLE001 -- re-interpret one specific failure
+            if "maximum number of solver steps" in str(exc).lower():
+                raise RuntimeError(
+                    f"The plant solve hit its step budget (max_steps={max_steps}) "
+                    "before reaching the end of t_span. This is almost always a "
+                    "stiff transient, not a bug. Try, in order: (1) warm-start "
+                    "from a steady state -- pass y0 from plant.run_to_steady_state "
+                    "(or a previous run) instead of a cold start; (2) shorten the "
+                    "transient by loosening rtol (the default atol already "
+                    "auto-scales to the state magnitudes); or (3) raise max_steps. "
+                    "If none help, the model may be genuinely unstable at these "
+                    "parameters/inputs."
+                ) from None  # suppress the noisy Diffrax/Equinox traceback chain
+            raise
         return PlantSolution(t=sol.ts, state=sol.ys, plant=self)
 
     def run_to_steady_state(
@@ -1213,12 +1233,7 @@ class Plant:
         self._build_state_layout()
         y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
         if atol is None:
-            # Per-component noise floor from the operating magnitudes (SUNDIALS
-            # vector atol / Hairer "atol proportional to typical value").
-            ref = jnp.maximum(jnp.abs(y0), jnp.abs(self.initial_state()))
-            char = jnp.max(ref)
-            ref = jnp.maximum(ref, 1e-6 * char)
-            atol = atol_factor * ref
+            atol = default_atol(y0, self.initial_state(), atol_factor=atol_factor)
         event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
         sol = self.solve(
             t_span=(0.0, float(max_time)), params=params, y0=y0,

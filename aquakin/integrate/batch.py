@@ -14,6 +14,7 @@ from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
     _coerce_atol,
+    default_atol,
     solve_chemistry,
     validate_t_eval,
 )
@@ -100,7 +101,7 @@ class BatchReactor:
         conditions: SpatialConditions,
         *,
         rtol: float = 1e-6,
-        atol=1e-9,
+        atol=None,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
         dtmax: Optional[float] = None,
         max_steps: int = 100_000,
@@ -109,7 +110,14 @@ class BatchReactor:
         self.network = network
         self.conditions = conditions
         self.rtol = rtol
-        self.atol = _coerce_atol(atol, network.n_species)
+        # Default atol is a per-component noise floor scaled off the network's
+        # reference concentrations (see default_atol) -- so a g/m³ ASM plant and a
+        # mol/L ozone network each get sensible tolerances without hand-tuning,
+        # instead of a fixed 1e-9 that is ~9 orders too tight for g/m³ states.
+        self.atol = (
+            default_atol(network.default_concentrations())
+            if atol is None else _coerce_atol(atol, network.n_species)
+        )
         self.adjoint = adjoint
         self.dtmax = dtmax
         self.max_steps = int(max_steps)

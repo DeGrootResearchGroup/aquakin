@@ -605,3 +605,21 @@ def test_run_to_steady_state_reports_non_convergence(simple_net):
     ss = plant.run_to_steady_state(max_time=0.1)   # tau=10, nowhere near steady
     assert not ss.converged
     assert ss.time == pytest.approx(0.1)
+
+
+def test_solve_step_ceiling_gives_friendly_error(simple_net):
+    """Hitting the integrator step budget re-raises with a domain-level remedy
+    (warm-start / tolerances / max_steps), not a raw Diffrax/Equinox traceback."""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    with pytest.raises(RuntimeError, match="step budget"):
+        plant.solve(t_span=(0.0, 1000.0), max_steps=1)
+
+
+def test_default_atol_solves_without_tuning(simple_net):
+    """With atol=None (the default), the solve uses a per-component noise floor
+    scaled off the state magnitudes and stays accurate -- no hand-set atol. The
+    fed CSTR A->B reaches the analytic A=B=0.5."""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    sol = plant.solve(t_span=(0.0, 200.0), t_eval=jnp.asarray([200.0]))  # atol default
+    tank = plant.states_by_unit(sol.final_state)["tank"]
+    assert float(tank[simple_net.species_index["A"]]) == pytest.approx(0.5, abs=1e-3)
