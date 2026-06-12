@@ -91,6 +91,7 @@ def test_decay_only_no_substrate(network):
     assert float(sol.C_named("XS")[-1]) > float(sol.C_named("XS")[0])
 
 
+@pytest.mark.slow  # heavy: jax.grad through stiff ASM1 solve
 def test_AD_grad_through_solve(network):
     """jax.grad through BatchReactor.solve must produce finite gradients."""
     reactor = aquakin.BatchReactor(network, network.default_conditions())
@@ -114,6 +115,7 @@ def test_transforms_default_to_positive_log(network):
     assert transforms["etah"] == "logit"
 
 
+@pytest.mark.slow  # heavy: jax.grad to fit a yield
 def test_yield_is_calibratable(network):
     """v3 schema: Y_H now appears in the stoichiometry expressions, so
     gradients of any species trajectory w.r.t. Y_H must be non-zero.

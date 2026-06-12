@@ -71,6 +71,7 @@ def test_split_reactions_sum_to_lumped(lumped, variant):
         assert split == pytest.approx(orig, rel=1e-6)
 
 
+@pytest.mark.slow  # heavy: stiff biofilm solve
 def test_variant_solves_and_stratifies(variant, biofilm_rxns):
     # Depth-resolved solve at realistic biofilm diffusivity: nitrate is consumed
     # before it penetrates, so methanogenesis runs deep -- methane accumulates
@@ -98,6 +99,7 @@ def test_variant_solves_and_stratifies(variant, biofilm_rxns):
     assert vfa[-1] < vfa[0] - 1.0      # less acetate at the wall (diffusion-limited)
 
 
+@pytest.mark.slow  # heavy: stiff multispecies biofilm solve
 def test_multispecies_groups_grow_and_stratify():
     # The full multispecies model carries X_SRB / X_MA / X_SOB as per-layer
     # growing/decaying states. Seed each in the biofilm layers and confirm a

@@ -67,6 +67,7 @@ def test_different_settings_do_not_collide():
     assert np.all(np.isfinite(np.asarray(s_tight.C)))
 
 
+@pytest.mark.slow  # heavy: jax.grad through ASM1 solve
 def test_solver_cache_bypassed_under_tracing():
     """solve() under jax.grad (atol is materialised for the key, which is
     impossible while tracing) must bypass the cache, not crash."""
@@ -118,6 +119,7 @@ def test_plant_different_signature_compiles_separately():
     assert len(plant._jit_cache) == 2
 
 
+@pytest.mark.slow  # heavy: jax.grad through plant solve
 def test_plant_solve_grad_bypasses_cache():
     """A traced plant solve (jax.grad) bypasses the cache without crashing."""
     net = aquakin.load_network("asm1")

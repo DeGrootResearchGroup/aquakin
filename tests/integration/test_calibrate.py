@@ -138,6 +138,7 @@ def test_laplace_returns_positive_definite_cov(setup):
     assert np.all(eigvals > 0)
 
 
+@pytest.mark.slow  # heavy: calibrate + FD Laplace
 def test_gauss_newton_laplace_matches_fd(setup):
     """The Gauss-Newton Laplace Hessian (AD ``J^T J``, first-order reverse-mode)
     must agree with the finite-difference Hessian and be positive-definite. With
@@ -166,6 +167,7 @@ def test_gauss_newton_laplace_matches_fd(setup):
     )
 
 
+@pytest.mark.slow  # heavy: calibrate through stiff solve
 def test_laplace_dtmax_reconstructs_tighter_reactor(simple_network):
     """laplace_dtmax computes the Laplace Hessian with a separately (tighter)
     capped reactor; it reconstructs the reactor and gives a finite posterior. On

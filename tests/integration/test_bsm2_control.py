@@ -163,6 +163,7 @@ def test_closed_loop_differs_from_open_loop(closed_sol, open_sol):
     assert abs(so4_closed - BSM2_DO_SETPOINT) < abs(so4_open - BSM2_DO_SETPOINT)
 
 
+@pytest.mark.slow  # heavy: jax.grad through the plant RHS
 def test_ad_flows_through_control_bus(closed_plant, asm1, adm1):
     """jax.grad flows through the control-signal bus without NaNs.
 

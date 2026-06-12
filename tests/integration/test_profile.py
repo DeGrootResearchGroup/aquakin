@@ -92,6 +92,7 @@ def test_profile_warmstart_matches_independent(growth_setup):
 # ---------- initial-condition profile ----------
 
 
+@pytest.mark.slow  # heavy: profile_likelihood (many calibrate fits)
 def test_profile_ic_recovers_initial_condition(simple_network):
     """Profiling an unmeasured initial A0 (re-optimising the rate at each value)
     locates it at the true value."""
@@ -113,6 +114,7 @@ def test_profile_ic_recovers_initial_condition(simple_network):
     assert pr.mle == pytest.approx(true_A0, abs=0.06)
 
 
+@pytest.mark.slow  # heavy: profile_likelihood
 def test_profile_open_interval_when_unidentifiable(simple_network):
     """Observing only B over an early window, A0 and k are degenerate (only A0*k
     is constrained). Profiling A0 (re-optimising k) leaves the objective flat, so
@@ -218,6 +220,7 @@ def test_interp_ci_genuinely_open_does_not_warn():
     assert lo is None and hi is None
 
 
+@pytest.mark.slow  # heavy: profile_likelihood
 def test_profile_all_failed_returns_unidentified(simple_network, monkeypatch):
     """If every inner fit fails, the profile is all-NaN: return a clean
     'unidentified' result (mle=nan, open CI) rather than raising on nanmin/
