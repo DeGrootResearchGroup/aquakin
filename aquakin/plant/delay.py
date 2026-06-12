@@ -15,9 +15,9 @@ through); a flow or load pulse emerges delayed and rounded with time constant
 ``tau``.
 
 The state is ``[load_0..load_{n-1}, Q]`` (the per-species loads plus the flow).
-Because the *outlet flow* is the held-flow state, the unit declares
-``flow_needs_state`` and the plant passes its state into :meth:`flow_outputs`
-when resolving the flow network.
+Because the *outlet flow* is the held-flow state, :meth:`flow_outputs` reads it
+from the :class:`~aquakin.plant.units.FlowContext` the plant passes when
+resolving the flow network.
 
 The BSM2 reference uses ``tau`` ~ 1e-4 d -- a near-instantaneous lag whose role
 is to break algebraic loops in a sequential-modular solver. ``aquakin`` resolves
@@ -70,10 +70,6 @@ class HydraulicDelayUnit:
     input_port: str = "in"
     output_port: str = "out"
 
-    # The outlet flow is the held-flow state, so the plant must hand this unit
-    # its state when resolving the flow network.
-    flow_needs_state = True
-
     def __post_init__(self) -> None:
         if self.tau <= 0:
             raise ValueError(
@@ -118,9 +114,10 @@ class HydraulicDelayUnit:
         return {self.output_port: Stream(Q=Q, C=C, network=self.network,
                                          T=inputs[self.input_port].T)}
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, state) -> dict:
-        """The outlet flow is the held-flow state (the delayed flow)."""
-        return {self.output_port: jnp.asarray(state)[-1]}
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
+        """The outlet flow is the held-flow state (the delayed flow), read from
+        the unit's own state in ``ctx``."""
+        return {self.output_port: jnp.asarray(ctx.state)[-1]}
 
     def rhs(
         self,
@@ -128,6 +125,7 @@ class HydraulicDelayUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> jnp.ndarray:
         s_in = inputs[self.input_port]
         loads = state[: self.network.n_species]

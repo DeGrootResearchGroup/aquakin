@@ -168,7 +168,7 @@ class IdealClarifier:
             self.underflow_port: Stream(Q=Q_under, C=C_under, network=self.network, T=s_in.T),
         }
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Linear flow rule for the recycle-flow solve: the controlled flow
         (``underflow_Q`` or ``overflow_Q``) is constant and the other outflow is
         the remainder, so the map stays affine and ``Plant._resolve_flows`` is
@@ -184,5 +184,6 @@ class IdealClarifier:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> jnp.ndarray:
         return jnp.zeros((0,))

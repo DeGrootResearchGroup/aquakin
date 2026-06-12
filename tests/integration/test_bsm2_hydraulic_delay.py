@@ -16,6 +16,7 @@ from aquakin.plant.bsm import (
 )
 from aquakin.plant.delay import HydraulicDelayUnit
 from aquakin.plant.streams import Stream
+from aquakin.plant.units import FlowContext
 
 
 @pytest.fixture(scope="module")
@@ -61,7 +62,7 @@ def test_outputs_are_load_over_flow(asm1):
 def test_flow_outputs_use_held_flow(asm1):
     d = _delay(asm1, Q0=137.0)
     state = d.initial_state()
-    flows = d.flow_outputs({"in": jnp.asarray(200.0)}, None, state)
+    flows = d.flow_outputs({"in": jnp.asarray(200.0)}, None, FlowContext(state=state))
     assert float(flows["out"]) == pytest.approx(137.0)
 
 

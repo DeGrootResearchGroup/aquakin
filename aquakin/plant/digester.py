@@ -119,7 +119,7 @@ class ADM1DigesterUnit:
         return {self.output_port: Stream(Q=Q_total, C=state, network=self.network,
                                          T=T_in)}
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         Q_total = jnp.zeros(())
         for name in self.input_port_names:
             Q_total = Q_total + input_flows[name]
@@ -131,6 +131,7 @@ class ADM1DigesterUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> jnp.ndarray:
         # Mix inflows (Q-weighted) into one feed composition.
         Q_total = jnp.zeros(())

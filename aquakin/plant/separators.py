@@ -165,7 +165,7 @@ class IdealThickener:
             self.overflow_port: Stream(Q=Q_over, C=C_over, network=self.network, T=s_in.T),
         }
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Nominal linear flow rule for the recycle-flow pre-solve.
 
         The true underflow flow is concentration-dependent (see the class
@@ -187,5 +187,6 @@ class IdealThickener:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> jnp.ndarray:
         return jnp.zeros((0,))
