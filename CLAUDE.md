@@ -1198,6 +1198,7 @@ aquakin/
 │   ├── lagrangian_demo.py
 │   ├── sensitivity_demo.py
 │   ├── bsm1_dry_weather.py            # BSM1 open-loop steady state
+│   ├── bsm1_target_srt.py             # hit a target sludge age (SRT) by solving for Qw
 │   ├── bsm1_dynamic_influent.py       # BSM1 dry-vs-rain dynamic influent (warm-started)
 │   ├── bsm2_steady_state.py           # BSM2 two-network open-loop steady state
 │   ├── bsm2_seasonal_temperature.py   # BSM2 cold->warm nitrification effect
@@ -2149,6 +2150,44 @@ aerated-tank detection, AE/ME/carbon match their closed forms, OCI equals the
 full-formula sum; plus fast no-solve kernel tests). Note the shipped influent is
 synthesised, so these are method-validated numbers, not the published EQI/OCI over
 the canonical days-245–609 window (that needs the official IWA influent file).
+
+**Activated-sludge design layer — SRT / HRT / F:M (`aquakin/plant/design.py`).**
+Plants are specified in the quantities the solver integrates (tank `volume`,
+fixed pump flows, per-species `kLa`), but engineers design in the quantities
+those derive *from*: the solids retention time (SRT / sludge age), the hydraulic
+retention time (HRT) and the food-to-microorganism ratio (F:M). The design layer
+bridges both directions, exported at top level (`aquakin.size_activated_sludge`,
+`aquakin.sludge_metrics`, `ActivatedSludgeSizing`, `SludgeMetrics`):
+- **Forward sizing** — `size_activated_sludge(SRT=…, HRT_h=…, Q=…, …)` →
+  `ActivatedSludgeSizing`. `V = Q·HRT`; the wastage `Qw` from the SRT under a
+  stated wasting model: `wastage_from="mixed_liquor"` (hydraulic/Garrett control,
+  `Qw = V/SRT`, concentration-independent) or `"underflow"`
+  (`Qw = V/(SRT·thickening_ratio)`). Optional `n_tanks`/`volume_fractions` split
+  the basin into a CSTR cascade; `internal_recycle_ratio`/`ras_ratio` report the
+  pump flows.
+- **Achieved metrics (closing the loop)** — `sludge_metrics(plant, solution, …)`,
+  also reachable as **`plant.sludge_age(solution)`** (a thin `Plant` method with a
+  lazy import to avoid the plant↔design circular). SRT is an *emergent* property of
+  `Qw`, so rather than guessing it this reports what the solved model achieved,
+  time-averaged over the window: **SRT** = system solids inventory / (wastage +
+  effluent solids loss); **HRT** = total reactor volume / influent flow; **F:M** =
+  influent BOD load / reactor TSS mass. Reactors are auto-detected (the
+  `controlled_kla`+`volume` CSTRs, so the ADM1 digester is excluded); the
+  effluent/wastage ports auto-detect for BSM1/BSM2; the secondary-clarifier sludge
+  blanket is included via a new **`TakacsClarifier.solids_mass(state)`** accessor
+  (the stateless `IdealClarifier` holds ~0), so the Takács plant correctly reports
+  a larger system SRT than the ideal clarifier at the same `Qw`.
+- `build_bsm1` gains a `wastage_flow=` argument so `Qw` can be varied without
+  reaching into the wiring. Worked end-to-end in
+  `examples/bsm1_target_srt.py` — a secant iteration on `achieved_SRT(Qw) − target`
+  lands the wastage flow that hits a target sludge age (the by-hand iteration the
+  layer replaces; it converges to `Qw ≈ 269` m³/d for a 10-day SRT and shows the
+  mixed-liquor forward guess `Qw ≈ 599` differs because BSM1 wastes from the
+  thickened underflow). Tested in `tests/integration/test_design.py` (fast
+  sizing-relation + validation + `solids_mass` tests in the PR gate; slow
+  plant-solve tests for the achieved metrics: SRT/HRT/F:M sensible, HRT = V/Q,
+  `plant.sludge_age` delegation, SRT monotone-decreasing in `Qw`, Takács inventory
+  raising SRT).
 
 The **ASM1↔ADM1 interfaces** (`aquakin/plant/interfaces.py`, `ASM1toADM1` /
 `ADM1toASM1`) are the continuity-based BSM2 interfaces (Nopens et al. 2009 /

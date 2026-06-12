@@ -899,6 +899,37 @@ class Plant:
             network=self.units[unit].network,
         )
 
+    def sludge_age(self, solution: "PlantSolution",
+                   params: Optional[jnp.ndarray] = None, **kwargs):
+        """Achieved SRT / HRT / F:M of this activated-sludge plant.
+
+        Convenience wrapper for :func:`aquakin.plant.design.sludge_metrics` --
+        the design loop's closing half: the solids retention time (sludge age)
+        is an emergent property of the wastage flow, so this reports what the
+        solved model actually achieved instead of requiring it be guessed.
+
+        Parameters
+        ----------
+        solution : PlantSolution
+            A solution from :meth:`solve` (ideally near steady state).
+        params : jnp.ndarray, optional
+            Plant parameters used for the run.
+        **kwargs
+            Forwarded to :func:`~aquakin.plant.design.sludge_metrics`
+            (``reactor_units``, ``influent_name``, ``effluent_port``,
+            ``waste_port``, ``substrate``).
+
+        Returns
+        -------
+        SludgeMetrics
+            SRT, HRT, F:M and the intermediate inventories / loads.
+        """
+        # Lazy import: the design layer depends on plant types, so importing it
+        # at module load would be circular.
+        from aquakin.plant.design import sludge_metrics
+
+        return sludge_metrics(self, solution, params, **kwargs)
+
     def derivative(
         self,
         state: jnp.ndarray,

@@ -255,6 +255,29 @@ class TakacsClarifier:
         """Reshape the flat state into ``(n_layers, n_part)``."""
         return state.reshape((self.n_layers, self._n_part))
 
+    def solids_mass(self, state: jnp.ndarray) -> jnp.ndarray:
+        """Total settleable-solids mass held in the clarifier (g).
+
+        Sums each layer's TSS over the equal layer volumes
+        (``area × height / n_layers``). Used by the activated-sludge design
+        layer to include the secondary-clarifier sludge inventory in the
+        system solids-retention-time calculation.
+
+        Parameters
+        ----------
+        state : jnp.ndarray
+            The clarifier's flat state vector, shape ``(n_layers × n_part,)``.
+
+        Returns
+        -------
+        jnp.ndarray
+            Scalar total settleable-solids mass (g).
+        """
+        layered = self._layered(state)  # (n_layers, n_part)
+        tss_per_layer = jnp.sum(layered * self._factors_arr[None, :], axis=1)
+        layer_volume = self.area * self.height / self.n_layers
+        return jnp.sum(tss_per_layer) * layer_volume
+
     def _tss(self, layer_C: jnp.ndarray) -> jnp.ndarray:
         """Total settleable solids (g/m³) in a layer from per-species
         particulate concentrations."""

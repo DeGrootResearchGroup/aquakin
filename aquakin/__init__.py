@@ -37,6 +37,7 @@ from aquakin.integrate.sensitivity import (
     sensitivity,
 )
 from aquakin.plant import (
+    ActivatedSludgeSizing,
     BSM1Evaluation,
     BSM2Evaluation,
     CSTRUnit,
@@ -45,6 +46,7 @@ from aquakin.plant import (
     MixerUnit,
     Plant,
     PlantSolution,
+    SludgeMetrics,
     SplitterUnit,
     StateTranslator,
     Stream,
@@ -65,11 +67,14 @@ from aquakin.plant import (
     operational_cost_index_bsm2,
     pumping_energy,
     pumping_energy_bsm2,
+    size_activated_sludge,
+    sludge_metrics,
 )
 from aquakin.schema.loader import load_network, load_network_from_file
 from aquakin.utils.balance import check_conservation
 
 __all__ = [
+    "ActivatedSludgeSizing",
     "BSM1Evaluation",
     "BSM2Evaluation",
     "BatchReactor",
@@ -91,6 +96,8 @@ __all__ = [
     "Plant",
     "PlantSolution",
     "PlugFlowReactor",
+    "ActivatedSludgeSizing",
+    "SludgeMetrics",
     "SplitterUnit",
     "StateTranslator",
     "Stream",
@@ -132,6 +139,8 @@ __all__ = [
     "pumping_energy",
     "pumping_energy_bsm2",
     "sensitivity",
+    "size_activated_sludge",
+    "sludge_metrics",
 ]
 
 __version__ = "0.1.0"
