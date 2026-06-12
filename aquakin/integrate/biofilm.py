@@ -58,6 +58,7 @@ from aquakin.integrate._common import (
     _HasNamedSpecies,
     _run_diffeqsolve,
     friendly_step_ceiling,
+    init_solver_settings,
     validate_t_eval,
 )
 
@@ -329,17 +330,17 @@ class BiofilmReactor:
             raise ValueError(
                 "thickness, boundary_layer and area_per_volume must be positive."
             )
-        self.network = network
+        init_solver_settings(self, network, rtol=rtol, adjoint=adjoint,
+                             dtmax=dtmax, max_steps=max_steps)
         self.conditions = conditions
         self.n_layers = int(n_layers)
         self.thickness = float(thickness)
         self.area_per_volume = float(area_per_volume)
         self.boundary_layer = float(boundary_layer)
-        self.rtol = rtol
+        # Scalar atol over the multi-compartment (n_layers+1, n_species) state --
+        # the per-species default_atol of the single-vector reactors does not
+        # apply to this state shape, so the biofilm keeps an explicit scalar.
         self.atol = float(atol)
-        self.adjoint = adjoint
-        self.dtmax = dtmax
-        self.max_steps = int(max_steps)
 
         n = network.n_species
         if soluble_mask is None:

@@ -13,12 +13,13 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
-    _coerce_atol,
     cached_jitted_solver,
     concrete_settings_key,
-    default_atol,
     friendly_step_ceiling,
+    init_solver_settings,
+    resolve_state_atol,
     solve_chemistry,
+    validate_C0_params,
     validate_t_eval,
 )
 
@@ -110,20 +111,10 @@ class BatchReactor:
         max_steps: int = 100_000,
     ) -> None:
         conditions.validate_required(network.conditions_required)
-        self.network = network
+        init_solver_settings(self, network, rtol=rtol, adjoint=adjoint,
+                             dtmax=dtmax, max_steps=max_steps)
         self.conditions = conditions
-        self.rtol = rtol
-        # Default atol is a per-component noise floor scaled off the network's
-        # reference concentrations (see default_atol) -- so a g/m³ ASM plant and a
-        # mol/L ozone network each get sensible tolerances without hand-tuning,
-        # instead of a fixed 1e-9 that is ~9 orders too tight for g/m³ states.
-        self.atol = (
-            default_atol(network.default_concentrations())
-            if atol is None else _coerce_atol(atol, network.n_species)
-        )
-        self.adjoint = adjoint
-        self.dtmax = dtmax
-        self.max_steps = int(max_steps)
+        self.atol = resolve_state_atol(network, atol)
         # Cache jit-compiled inner solve keyed on (t0, t1, t_eval_shape).
         # First call with a new signature pays the trace cost; subsequent
         # calls reuse the compiled graph.
@@ -169,14 +160,7 @@ class BatchReactor:
         params = (
             self.network.default_parameters() if params is None else jnp.asarray(params)
         )
-        if C0.shape != (self.network.n_species,):
-            raise ValueError(
-                f"C0 has shape {C0.shape}, expected ({self.network.n_species},)"
-            )
-        if params.shape != (self.network.n_params,):
-            raise ValueError(
-                f"params has shape {params.shape}, expected ({self.network.n_params},)"
-            )
+        validate_C0_params(self.network, C0, params)
         if t_span is None:
             raise ValueError("t_span=(t_start, t_end) is required.")
 
@@ -272,14 +256,7 @@ class BatchReactor:
 
         C0 = jnp.asarray(C0)
         params = jnp.asarray(params)
-        if C0.shape != (self.network.n_species,):
-            raise ValueError(
-                f"C0 has shape {C0.shape}, expected ({self.network.n_species},)"
-            )
-        if params.shape != (self.network.n_params,):
-            raise ValueError(
-                f"params has shape {params.shape}, expected ({self.network.n_params},)"
-            )
+        validate_C0_params(self.network, C0, params)
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")

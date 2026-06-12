@@ -13,10 +13,12 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
-    _coerce_atol,
     _interp_fields_to_scalar,
     friendly_step_ceiling,
+    init_solver_settings,
+    resolve_state_atol,
     solve_chemistry,
+    validate_C0_params,
 )
 
 
@@ -71,8 +73,9 @@ class PlugFlowReactor:
     rtol : float, optional
         Relative tolerance for the ODE solver.
     atol : float or jnp.ndarray, optional
-        Absolute tolerance, scalar or shape ``(n_species,)``. See
-        :class:`BatchReactor` for the per-species rationale.
+        Absolute tolerance, scalar or shape ``(n_species,)``. Defaults to
+        ``None`` -> a per-component noise floor scaled off the network reference
+        concentrations (see :class:`BatchReactor` for the per-species rationale).
     adjoint : diffrax.AbstractAdjoint, optional
         Adjoint strategy for the axial solve. Defaults to
         :class:`diffrax.RecursiveCheckpointAdjoint` (reverse-mode). Pass
@@ -94,7 +97,7 @@ class PlugFlowReactor:
         velocity: float,
         *,
         rtol: float = 1e-6,
-        atol=1e-9,
+        atol=None,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
         dtmax: Optional[float] = None,
         max_steps: int = 100_000,
@@ -106,16 +109,13 @@ class PlugFlowReactor:
             raise ValueError(f"length must be positive, got {length}")
         if velocity <= 0:
             raise ValueError(f"velocity must be positive, got {velocity}")
-        self.network = network
+        init_solver_settings(self, network, rtol=rtol, adjoint=adjoint,
+                             dtmax=dtmax, max_steps=max_steps)
         self.conditions = conditions
         self.n_points = int(n_points)
         self.length = float(length)
         self.velocity = float(velocity)
-        self.rtol = rtol
-        self.atol = _coerce_atol(atol, network.n_species)
-        self.adjoint = adjoint
-        self.dtmax = dtmax
-        self.max_steps = int(max_steps)
+        self.atol = resolve_state_atol(network, atol)
 
         n_loc = max(conditions.n_locations, 1)
         if n_loc == 1:
@@ -157,14 +157,7 @@ class PlugFlowReactor:
         params = (
             self.network.default_parameters() if params is None else jnp.asarray(params)
         )
-        if C0.shape != (self.network.n_species,):
-            raise ValueError(
-                f"C0 has shape {C0.shape}, expected ({self.network.n_species},)"
-            )
-        if params.shape != (self.network.n_params,):
-            raise ValueError(
-                f"params has shape {params.shape}, expected ({self.network.n_params},)"
-            )
+        validate_C0_params(self.network, C0, params)
 
         active_conditions = conditions if conditions is not None else self.conditions
         if active_conditions.n_locations != self.conditions.n_locations:
@@ -230,14 +223,7 @@ class PlugFlowReactor:
 
         C0 = jnp.asarray(C0)
         params = jnp.asarray(params)
-        if C0.shape != (self.network.n_species,):
-            raise ValueError(
-                f"C0 has shape {C0.shape}, expected ({self.network.n_species},)"
-            )
-        if params.shape != (self.network.n_params,):
-            raise ValueError(
-                f"params has shape {params.shape}, expected ({self.network.n_params},)"
-            )
+        validate_C0_params(self.network, C0, params)
         active = conditions if conditions is not None else self.conditions
         if active.n_locations != self.conditions.n_locations:
             raise ValueError(
