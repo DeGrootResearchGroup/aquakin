@@ -210,7 +210,7 @@ def operational_cost_index(
     pumping: float,
     sludge_production: float,
 ) -> float:
-    """OCI per Copp 2002 eq:
+    """OCI per Copp 2002 eq (BSM1 form):
 
     OCI = aeration + pumping + 5 × sludge_production
 
@@ -218,3 +218,148 @@ def operational_cost_index(
     wastage + the change in plant TSS inventory.
     """
     return float(aeration + pumping + 5.0 * sludge_production)
+
+
+# ---- BSM2 OCI component kernels (Gernaey et al. 2014) -----------------------
+
+# Default BSM2 pumping-energy factors (kWh/m³), one per pumped stream.
+_BSM2_PUMP_FACTORS = {
+    "internal": 0.004, "ras": 0.008, "wastage": 0.05,
+    "primary_underflow": 0.075, "thickener_underflow": 0.060,
+    "dewatering_underflow": 0.004,
+}
+
+
+def pumping_energy_bsm2(
+    t: jnp.ndarray,
+    flows: "dict[str, jnp.ndarray]",
+    factors: "dict[str, float]" = None,
+) -> float:
+    """Pumping energy (kWh/d) for the full BSM2 pump set.
+
+    ``PE = (1/T) × ∫ Σ_k PF_k × Q_k dt`` over the pumped streams: the AS internal
+    recirculation, sludge recycle and wastage, plus the primary / thickener /
+    dewatering underflows. ``flows`` maps a stream key to its ``(n_t,)`` flow
+    trajectory; ``factors`` maps the same keys to per-m³ energy factors (default
+    :data:`_BSM2_PUMP_FACTORS`). Keys present in ``flows`` but not ``factors``
+    (or vice versa) are ignored.
+    """
+    factors = _BSM2_PUMP_FACTORS if factors is None else factors
+    integrand = jnp.zeros_like(jnp.asarray(t))
+    for key, Q in flows.items():
+        if key in factors:
+            integrand = integrand + float(factors[key]) * jnp.asarray(Q)
+    T_total = float(t[-1] - t[0])
+    return float(jnp.trapezoid(integrand, t) / (T_total + 1e-12))
+
+
+def mixing_energy(
+    t: jnp.ndarray,
+    kla_history: jnp.ndarray,
+    volumes: jnp.ndarray,
+    digester_volume: float,
+    kla_threshold: float = 20.0,
+    reactor_unit: float = 0.005,
+    digester_unit: float = 0.005,
+) -> float:
+    """Mixing energy (kWh/d) per Gernaey et al. 2014.
+
+    A reactor needs mechanical mixing only while it is *not* aerated
+    (``kLa < kla_threshold``); an aerated tank is mixed by the aeration. The
+    anaerobic digester is always mechanically mixed. With unit mixing powers in
+    kW/m³ (default 0.005 for both)::
+
+        ME = 24 × [ Σ_i reactor_unit × V_i × frac_unaerated_i
+                    + digester_unit × V_digester ]
+
+    where ``frac_unaerated_i`` is the time fraction reactor ``i`` has
+    ``kLa < kla_threshold``.
+
+    Parameters
+    ----------
+    t : (n_t,) save times in days.
+    kla_history : (n_t, n_reactors) kLa per reactor at each save time.
+    volumes : (n_reactors,) reactor liquid volumes.
+    digester_volume : float
+        Anaerobic-digester liquid volume.
+    """
+    kla_history = jnp.asarray(kla_history)
+    volumes = jnp.asarray(volumes)
+    T_total = float(t[-1] - t[0])
+    # Time fraction each reactor is below the aeration threshold.
+    unaerated = (kla_history < kla_threshold).astype(jnp.float64)  # (n_t, n_reac)
+    frac = jnp.trapezoid(unaerated, t, axis=0) / (T_total + 1e-12)  # (n_reac,)
+    reactor_mix = reactor_unit * jnp.sum(volumes * frac)
+    digester_mix = digester_unit * float(digester_volume)
+    return float(24.0 * (reactor_mix + digester_mix))
+
+
+def carbon_mass(
+    t: jnp.ndarray,
+    Q_carbon: jnp.ndarray,
+    carbon_conc: float,
+) -> float:
+    """External-carbon mass dose (kg COD/d), time-averaged.
+
+    ``= (1/T) × ∫ Q_carbon(t) × carbon_conc dt × 1e-3`` (the dose flow times the
+    source COD concentration, g→kg).
+    """
+    integrand = jnp.asarray(Q_carbon) * float(carbon_conc) * 1e-3
+    T_total = float(t[-1] - t[0])
+    return float(jnp.trapezoid(integrand, t) / (T_total + 1e-12))
+
+
+def heating_energy(
+    t: jnp.ndarray,
+    Q_feed: jnp.ndarray,
+    T_feed_C: jnp.ndarray,
+    T_target_C: float = 35.0,
+    rho: float = 1000.0,
+    cp: float = 4.186,
+) -> float:
+    """Digester sludge-heating energy (kWh/d) per Gernaey et al. 2014.
+
+    Energy to raise the digester feed from ``T_feed_C`` to ``T_target_C``::
+
+        Heatpower [kW] = (T_target − T_feed) × Q_feed × rho × cp / 86400
+        HE [kWh/d]     = 24 × time-average(Heatpower)
+
+    with water density ``rho`` (kg/m³) and specific heat ``cp`` (kJ/kg·°C).
+    Temperatures are in **Celsius**. A feed already above the target contributes
+    negative heating (no cooling credit is taken here; the OCI applies the
+    methane offset separately).
+
+    Parameters
+    ----------
+    Q_feed : (n_t,) digester feed flow (m³/d).
+    T_feed_C : (n_t,) or scalar feed temperature (°C).
+    """
+    heatpower = ((float(T_target_C) - jnp.asarray(T_feed_C))
+                 * jnp.asarray(Q_feed) * rho * cp / 86400.0)  # kW
+    T_total = float(t[-1] - t[0])
+    return float(24.0 * jnp.trapezoid(heatpower, t) / (T_total + 1e-12))
+
+
+def operational_cost_index_bsm2(
+    aeration: float,
+    pumping: float,
+    mixing: float,
+    sludge_production: float,
+    carbon: float,
+    methane: float,
+    heating: float,
+) -> float:
+    """Full BSM2 OCI (Gernaey et al. 2014):
+
+    ``OCI = AE + PE + ME + 3·sludge + 3·carbon − 6·methane
+            + max(0, heating − 7·methane)``
+
+    Energies in kWh/d; sludge and carbon in kg/d; methane in kg CH₄/d. The
+    methane credit and the methane-offset heating term reward biogas recovery.
+    """
+    return float(
+        aeration + pumping + mixing
+        + 3.0 * sludge_production + 3.0 * carbon
+        - 6.0 * methane
+        + max(0.0, heating - 7.0 * methane)
+    )
