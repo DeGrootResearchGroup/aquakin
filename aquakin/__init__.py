@@ -22,6 +22,7 @@ from aquakin.integrate.discrete_adjoint import (
     esdirk_adjoint_solve,
     implicit_euler_adjoint_solve,
 )
+from aquakin.integrate._common import forward_adjoint
 from aquakin.integrate.forward_sensitivity import (
     ForwardSensitivityResult,
     forward_sensitivity,
@@ -85,6 +86,7 @@ __all__ = [
     "dgsm",
     "esdirk_adjoint_solve",
     "fit",
+    "forward_adjoint",
     "forward_sensitivity",
     "implicit_euler_adjoint_solve",
     "integrate_ensemble",

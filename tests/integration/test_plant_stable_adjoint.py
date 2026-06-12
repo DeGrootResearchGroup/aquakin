@@ -120,6 +120,35 @@ def test_stable_adjoint_cross_interface_gradient_matches_fd():
 
 
 @pytest.mark.validation
+def test_auto_gradient_defaults_to_stable_adjoint():
+    """With the default ``gradient="auto"`` (nothing passed), a stiff plant
+    gradient is finite and matches the explicit stable-adjoint gradient -- the
+    auto router sends the differentiated solve down the cap-free path, while a
+    plain forward solve still uses the fast jax_adjoint path."""
+    asm1, adm1, plant, y0 = _bsm2_plant()
+    base = bsm2_parameters(asm1, adm1)
+    gidx = asm1.n_params + adm1.param_index["k_m_ac"]
+    theta0 = float(base[gidx])
+    T = 3.0
+
+    def g(theta, gradient):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
+                          gradient=gradient, **_solve_kwargs())
+        return sol.C_named("tank1", "SNO")[-1]
+
+    auto = float(jax.grad(lambda th: g(th, "auto"))(theta0))
+    explicit = float(jax.grad(lambda th: g(th, "stable_adjoint"))(theta0))
+    assert np.isfinite(auto)
+    assert auto == pytest.approx(explicit, rel=1e-6)
+
+    # A concrete forward solve under the same default is unchanged (fast path).
+    fwd_auto = float(g(theta0, "auto"))
+    fwd_jax = float(g(theta0, "jax_adjoint"))
+    assert fwd_auto == pytest.approx(fwd_jax, rel=1e-6)
+
+
+@pytest.mark.validation
 def test_stable_adjoint_transient_influent_gradient_matches_fd():
     """Under a time-varying (diurnal-flow) influent the cross-interface gradient
     is still finite and matches central finite differences. The discrete adjoint

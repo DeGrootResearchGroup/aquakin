@@ -7,6 +7,7 @@ on JAX and Diffrax.
 from __future__ import annotations
 
 import contextlib
+import copy
 from typing import Callable, Mapping, Protocol, runtime_checkable
 
 import diffrax
@@ -15,6 +16,60 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.network import CompiledNetwork
+
+
+# --- AD-mode helpers (hide the diffrax adjoint plumbing) ---------------------
+
+
+def forward_adjoint() -> "diffrax.AbstractAdjoint":
+    """Return the diffrax adjoint that supports forward-mode autodiff.
+
+    A thin, dependency-free alias for ``diffrax.DirectAdjoint()`` so a user
+    script that needs forward-mode AD through a reactor solve (e.g. the reactor
+    inside a ``dgsm(ad_mode="forward")`` ``fn``) can write
+    ``adjoint=aquakin.forward_adjoint()`` without importing ``diffrax`` or
+    knowing that the default ``RecursiveCheckpointAdjoint`` registers a
+    ``custom_vjp`` that rejects forward mode.
+    """
+    return diffrax.DirectAdjoint()
+
+
+def with_adjoint(reactor, adjoint):
+    """Return a shallow copy of ``reactor`` with its adjoint strategy replaced.
+
+    Reactors are stateless after construction and read ``self.adjoint`` at solve
+    time, so a shallow copy with a swapped ``adjoint`` is a valid forward-/
+    reverse-capable variant of the same reactor. Used by ``calibrate`` /
+    ``sensitivity`` to build the right adjoint internally from an ``ad_mode``
+    string, so ``diffrax`` never appears in user code.
+    """
+    clone = copy.copy(reactor)
+    clone.adjoint = adjoint
+    return clone
+
+
+def check_finite_gradient(value, *, what: str, remedy: str) -> None:
+    """Raise a friendly ``RuntimeError`` if ``value`` is non-finite.
+
+    The silent-NaN footgun of differentiating a stiff solve: the gradient comes
+    back ``NaN``/``Inf`` and nothing says why. Call this on a freshly computed
+    gradient/Jacobian to convert that into an actionable error.
+
+    Parameters
+    ----------
+    value : array-like
+        The gradient or Jacobian to check.
+    what : str
+        Short noun for the message (e.g. ``"calibration gradient"``).
+    remedy : str
+        The concrete fix to suggest.
+    """
+    if not bool(np.isfinite(np.asarray(value)).all()):
+        raise RuntimeError(
+            f"The {what} is non-finite (NaN/Inf). This is almost always the "
+            f"reverse-mode adjoint of a stiff solve overflowing, not a bug in "
+            f"your model. {remedy}"
+        )
 
 
 # --- Tabular export helpers (optional pandas) --------------------------------

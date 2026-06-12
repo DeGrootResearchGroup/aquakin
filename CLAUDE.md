@@ -549,11 +549,22 @@ registers a `custom_vjp`, so `jax.grad`/`jacrev` work but `jax.jvp`/`jacfwd`
 (forward mode) are rejected with *"can't apply forward-mode autodiff (jvp) to a
 custom_vjp function"*. When you need forward-mode AD through the solve — e.g. a
 forward-mode sensitivity Jacobian or a Gauss–Newton/Fisher matrix — construct the
-reactor with `adjoint=diffrax.DirectAdjoint()`, which is plainly differentiable
+reactor with `adjoint=diffrax.DirectAdjoint()` (or the dependency-free alias
+`aquakin.forward_adjoint()`), which is plainly differentiable
 in both modes. Its drawback is *usually* memory (it stores/unrolls the whole
 solve, cost growing with step count), so keep `RecursiveCheckpointAdjoint` as the
 default and switch to `DirectAdjoint` only when forward-mode is actually required.
-`dgsm(..., mode="forward")` is the first-class consumer of this (see the DGSM API
+**The plumbing is now hidden for the common consumers:** `calibrate` and
+`sensitivity` take `ad_mode="forward"|"reverse"` and build the right reactor
+adjoint internally (no `diffrax` / `adjoint=` in user code); `calibrate` also has
+`check_finite=True` to turn a non-finite stiff gradient into a friendly error with
+the remedy. `dgsm` takes `ad_mode=` too but cannot set the adjoint for you (your
+`fn` constructs the reactor), so its `fn` still needs
+`adjoint=aquakin.forward_adjoint()`. And `Plant.solve(gradient="auto")` (the
+default) auto-routes a differentiated stiff plant to the cap-free `stable_adjoint`
+while keeping a plain forward solve on the fast cached path — so a plant gradient
+is finite by default with no `dtmax` to tune.
+`dgsm(..., ad_mode="forward")` is the first-class consumer of this (see the DGSM API
 below): for a **multi-output sensitivity screen of a stiff network** forward mode
 can be *faster and lighter* than reverse — the reverse adjoint is paid once per
 output and is inflated by the `dtmax` step cap, whereas forward pushes all `d`
@@ -608,7 +619,7 @@ Khalil Monod biofilm, ~10× tighter (~5e-4 d) for the half-order variants whose
 the stiffer balanced base) — inside both. Because calibration needs the reverse
 adjoint (one pass for the whole parameter gradient), the cap matters there; a
 forward-mode sensitivity screen is unaffected, and is also faster (see
-`dgsm(mode="forward")`). A future alternative is a quasi-steady-state (QSS)
+`dgsm(ad_mode="forward")`). A future alternative is a quasi-steady-state (QSS)
 reduction of the near-instantaneous fast reactions, which would remove the
 stiff modes entirely and avoid needing the cap.
 
@@ -727,8 +738,15 @@ synthetic Khalil calibration reaches the **same optimum** as the capped-Kvaerno5
 which routes the assembled flat plant RHS through `esdirk_adjoint_solve` so a
 reverse-mode gradient flows through the whole monolithic plant solve — across the
 ASM↔ADM interface and the recycle loops — with no `dtmax` cap, in the regime where
-differentiating *through* the stiff plant solve (the default `jax_adjoint` /
-`RecursiveCheckpointAdjoint`) is non-finite. It is **exact through a transient
+differentiating *through* the stiff plant solve (`jax_adjoint` /
+`RecursiveCheckpointAdjoint`) is non-finite. **`gradient` defaults to `"auto"`**:
+a plain forward solve (concrete `params`/`y0`) takes the fast cached `jax_adjoint`
+path and a solve under reverse-mode differentiation (the args are JAX tracers)
+takes `stable_adjoint`, so a stiff plant gradient is finite by default with no
+knob to set; `event=`/`adjoint=`/`dtmax=` pin `jax_adjoint` (so `run_to_steady_state`
+is unaffected), and a `jax.jit`-wrapped forward solve looks traced and so routes
+to `stable_adjoint` (correct but uncached — pass `gradient="jax_adjoint"` to force
+the cached path). It is **exact through a transient
 solve**: `plant.solve` passes `time_dependent=True`, so the explicit time
 dependence of a time-varying influent is carried in the state
 (`esdirk_adjoint_solve(time_dependent=True)`, the classical autonomization that
@@ -1377,17 +1395,20 @@ res.sobol_total_bound                # (d,) upper bound on Sobol S_j^tot
 res.std_error                        # (d,) MC standard error (convergence)
 res.ranked()                         # [(name, bound), ...] sorted
 
-# mode= selects the AD direction used to form the per-sample sensitivities
+# ad_mode= selects the AD direction used to form the per-sample sensitivities
 # (identical results to machine precision — purely a performance choice):
 #   "reverse" (default) — m reverse passes (one per output), each d-independent.
 #                         Best for few outputs and a cheap adjoint.
 #   "forward"           — d forward-mode tangents through one solve, m-independent.
 #                         Best for many outputs, or when the reverse adjoint is
 #                         stiff-inflated (dtmax-capped). REQUIRES the reactor in
-#                         fn to use adjoint=diffrax.DirectAdjoint().
+#                         fn to use adjoint=aquakin.forward_adjoint() (== diffrax
+#                         DirectAdjoint, no diffrax import) — dgsm cannot set the
+#                         adjoint for you because fn constructs the reactor.
+# (mode= is a deprecated alias for ad_mode=, kept with a DeprecationWarning.)
 # If fn returns a vector of m outputs, dgsm returns a list[DGSMResult], one per
 # output (each carrying .output_name) — screen all outputs in a single call.
-outs = aquakin.dgsm(fn_vec, ranges, output_names=[...], mode="forward")
+outs = aquakin.dgsm(fn_vec, ranges, output_names=[...], ad_mode="forward")
 # Benchmark (tests/ + the JRN-055 reproduction): for a 4-output, 17-input stiff
 # batch screen, forward mode is ~2x faster (and lighter on memory) than reverse,
 # because reverse pays the stiff adjoint once per output while forward pushes all
@@ -1406,6 +1427,14 @@ calib = aquakin.calibrate(
     laplace=True,
     laplace_method="gauss_newton",   # AD Fisher H=JᵀJ (exact, PSD); or "fd" (default)
     optimizer="gauss_newton",        # robust trust-region least-squares; or "lbfgsb" (default)
+    ad_mode="forward",               # AD direction for the Jacobian: "forward" builds a
+                                     #   forward-capable adjoint INTERNALLY (no diffrax in
+                                     #   user code), finite through a stiff solve — pair with
+                                     #   optimizer="gauss_newton"; "reverse"/"auto" (default,
+                                     #   legacy: forward iff reactor already DirectAdjoint).
+                                     #   forward is mutually exclusive with gradient="stable_adjoint".
+    check_finite=True,               # default: raise a friendly error (with the remedy) if the
+                                     #   start-point gradient is non-finite, vs silent NaNs
     n_starts=24, jitter=0.5, seed=0, # deterministic multistart (escapes local minima); default n_starts=1
     free_ic=["X_S2"],                # fit unmeasured initial pools (per batch) alongside rates
     ic_bounds=(1e-3, 1e4), ic_prior_log_std=0.7,   # bounds + optional weak log-prior for free ICs
