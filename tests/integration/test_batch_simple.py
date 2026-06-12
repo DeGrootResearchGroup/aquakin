@@ -203,3 +203,15 @@ def test_solve_chemistry_helper_matches_analytical_and_scales(simple_network):
                                  saveat=diffrax.SaveAt(ts=jnp.asarray([2 * T])),
                                  t0=0.0, t1=2 * T, **kw)
     assert float(sol_scaled.ys[-1, 0]) == pytest.approx(float(sol.ys[-1, 0]), rel=1e-5)
+
+
+def test_batch_step_ceiling_gives_friendly_error():
+    """A BatchReactor that hits the integrator step budget re-raises with a
+    domain-level remedy (loosen rtol / raise max_steps), not a raw Equinox
+    runtime traceback -- the catch works through the reactor's jitted solve."""
+    net = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    cond = aquakin.SpatialConditions.uniform(T=293.15)
+    reactor = aquakin.BatchReactor(net, cond, max_steps=1)
+    with pytest.raises(RuntimeError, match="step budget"):
+        reactor.solve(net.concentrations(A=1.0), t_span=(0.0, 1000.0),
+                      t_eval=jnp.linspace(0.0, 1000.0, 50))

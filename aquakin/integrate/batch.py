@@ -15,6 +15,7 @@ from aquakin.integrate._common import (
     _HasNamedSpecies,
     _coerce_atol,
     default_atol,
+    friendly_step_ceiling,
     solve_chemistry,
     validate_t_eval,
 )
@@ -198,10 +199,11 @@ class BatchReactor:
             jitted = self._build_jitted_solve(t0, t1, t_eval_arr is not None)
             self._jit_cache[cache_key] = jitted
 
-        if t_eval_arr is None:
-            ts, ys = jitted(C0, params, condition_arrays)
-        else:
-            ts, ys = jitted(C0, params, condition_arrays, t_eval_arr)
+        with friendly_step_ceiling(self.max_steps, what="batch reactor solve"):
+            if t_eval_arr is None:
+                ts, ys = jitted(C0, params, condition_arrays)
+            else:
+                ts, ys = jitted(C0, params, condition_arrays, t_eval_arr)
         return BatchSolution(t=ts, C=ys, network=self.network)
 
     def solve_sensitivity(

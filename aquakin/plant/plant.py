@@ -31,7 +31,12 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.network import CompiledNetwork
-from aquakin.integrate._common import _coerce_atol, _run_diffeqsolve, default_atol
+from aquakin.integrate._common import (
+    _coerce_atol,
+    _run_diffeqsolve,
+    default_atol,
+    friendly_step_ceiling,
+)
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.streams import Stream, StreamSeries
@@ -1133,7 +1138,7 @@ class Plant:
                 ts = jnp.asarray(t_eval)
             return PlantSolution(t=ts, state=ys, plant=self)
 
-        try:
+        with friendly_step_ceiling(max_steps, what="plant solve"):
             sol = _run_diffeqsolve(
                 rhs,
                 t0=t0,
@@ -1148,20 +1153,6 @@ class Plant:
                 max_steps=max_steps,
                 event=event,
             )
-        except Exception as exc:  # noqa: BLE001 -- re-interpret one specific failure
-            if "maximum number of solver steps" in str(exc).lower():
-                raise RuntimeError(
-                    f"The plant solve hit its step budget (max_steps={max_steps}) "
-                    "before reaching the end of t_span. This is almost always a "
-                    "stiff transient, not a bug. Try, in order: (1) warm-start "
-                    "from a steady state -- pass y0 from plant.run_to_steady_state "
-                    "(or a previous run) instead of a cold start; (2) shorten the "
-                    "transient by loosening rtol (the default atol already "
-                    "auto-scales to the state magnitudes); or (3) raise max_steps. "
-                    "If none help, the model may be genuinely unstable at these "
-                    "parameters/inputs."
-                ) from None  # suppress the noisy Diffrax/Equinox traceback chain
-            raise
         return PlantSolution(t=sol.ts, state=sol.ys, plant=self)
 
     def run_to_steady_state(

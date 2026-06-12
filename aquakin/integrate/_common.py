@@ -6,6 +6,7 @@ on JAX and Diffrax.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Callable, Mapping, Protocol, runtime_checkable
 
 import diffrax
@@ -105,6 +106,43 @@ def _coerce_atol(atol, n_species: int):
             f"atol array must have shape ({n_species},), got {arr.shape}"
         )
     return arr
+
+
+@contextlib.contextmanager
+def friendly_step_ceiling(max_steps, *, what: str = "solve"):
+    """Re-raise the integrator step-budget failure as a domain-level error.
+
+    An adaptive solve that exhausts ``max_steps`` raises a verbose
+    ``EquinoxRuntimeError`` ("The maximum number of solver steps was reached")
+    wrapped in JAX/Equinox debugging chatter (``EQX_ON_ERROR``, ``kidger.site``,
+    ...), meaningless to a process engineer. Wrap the *execution* of a solve in
+    this context manager -- the call to the jitted solve / ``diffeqsolve``, where
+    the runtime error actually surfaces -- to re-raise it as a plain
+    ``RuntimeError`` naming the domain-level remedies, with the noisy traceback
+    suppressed (``from None``). Any other exception propagates unchanged.
+
+    Parameters
+    ----------
+    max_steps : int
+        The step budget that was hit (quoted back in the message).
+    what : str
+        A short label for the failing solve (e.g. ``"plant solve"``), used in
+        the message.
+    """
+    try:
+        yield
+    except Exception as exc:  # noqa: BLE001 -- re-interpret one specific failure
+        if "maximum number of solver steps" in str(exc).lower():
+            raise RuntimeError(
+                f"The {what} hit its integrator step budget (max_steps={max_steps}) "
+                "before completing. This is almost always a stiff transient, not a "
+                "bug. Try, in order: (1) warm-start from a settled state -- for a "
+                "plant, pass y0 from plant.run_to_steady_state (or a previous run); "
+                "(2) loosen rtol (the default atol already auto-scales to the state "
+                "magnitudes); or (3) raise max_steps. If none help, the model may be "
+                "genuinely unstable at these parameters/inputs."
+            ) from None
+        raise
 
 
 def default_atol(scale_like, reference=None, *, atol_factor: float = 1e-6,

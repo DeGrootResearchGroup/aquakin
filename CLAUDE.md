@@ -1678,10 +1678,18 @@ ceiling — so a warm-started BSM2 now solves with **nothing passed** (no
 `atol=1e-3, max_steps=500_000` magic). An explicit scalar or `(n_species,)`
 array still overrides it verbatim (e.g. the ozone `OH→1e-20` per-species atol),
 so existing calls are unchanged. Verified to reproduce every validated steady
-state (691 non-validation + 23 validation tests). A `Plant.solve` that hits the
-integrator step budget now re-raises the Diffrax/Equinox failure as a domain
-`RuntimeError` naming the remedies (warm-start via `run_to_steady_state`, loosen
-`rtol`, raise `max_steps`), with the noisy equinox traceback suppressed.
+state (691 non-validation + 23 validation tests). Any solve that hits the
+integrator step budget -- `Plant.solve` **and every reactor**
+(`BatchReactor`/`PlugFlowReactor`/`BiofilmReactor`/`ParticleTrackReactor`) --
+re-raises the Diffrax/Equinox failure as a domain `RuntimeError` naming the
+remedies (warm-start via `run_to_steady_state`, loosen `rtol`, raise
+`max_steps`), with the noisy equinox exception chain suppressed (`from None`).
+This is the shared `integrate/_common.friendly_step_ceiling(max_steps, what=...)`
+context manager wrapped around each solve's *execution* (the call to the jitted
+solve / `diffeqsolve`, where the runtime error surfaces -- not the traced
+`_run_diffeqsolve`). The jitted reactors emit one extra equinox *stderr* line
+about `filter_jit` that the exception machinery cannot suppress; the raised
+exception itself is clean.
 
 **Dynamic influent now works too — flow-controlled recycle pumps (issue #30).**
 The dynamic (time-varying-influent) run *used* to hit the step ceiling, which

@@ -22,6 +22,7 @@ from aquakin.integrate._common import (
     _HasNamedSpecies,
     _coerce_atol,
     _interp_fields_to_scalar,
+    friendly_step_ceiling,
     solve_chemistry,
 )
 
@@ -168,7 +169,8 @@ class ParticleTrackReactor:
 
         if self._jitted_solve is None:
             self._jitted_solve = self._build_jitted_solve()
-        ts, ys = self._jitted_solve(C0, params)
+        with friendly_step_ceiling(self.max_steps, what="particle-track solve"):
+            ts, ys = self._jitted_solve(C0, params)
         return TrackSolution(t=ts, C=ys, network=self.network)
 
     def _build_jitted_solve(self):
