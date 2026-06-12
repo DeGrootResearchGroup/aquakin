@@ -1445,6 +1445,59 @@ Reactors are **stateless after construction** — `solve()` takes all variable
 inputs as arguments. This enables `jax.vmap` over initial conditions or
 parameter ensembles.
 
+### Compiled-solve caching
+
+Compiling a stiff solve (JAX trace + lower + XLA) dominates its cost — the run
+itself is comparatively free (measured ~1.6 s compile vs ~0.02 s run for an
+ASM1 batch solve; ~34 s vs ~4 s for the full BSM2 plant). So the cost of code
+that solves repeatedly is *recompilation*, and the integrators cache the
+compiled solve to avoid it:
+
+- **Networks** (`load_network`) are cached by name, so repeated
+  `load_network("asm1")` returns the **same** object (and skips re-parsing the
+  YAML). A `CompiledNetwork` is immutable in use; `clear_network_cache()` resets
+  the cache. The stable identity is what lets the solver caches key on the
+  network across calls.
+- **Reactor solves** are cached **across instances** in a module-level cache
+  (`integrate/_common.py`) keyed by `(network identity, solver settings, call
+  signature)`. Two *fresh* reactors for the same network + settings + signature
+  reuse one compiled solve — so building many short-lived reactors (ensembles,
+  library code that constructs reactors internally) no longer recompiles each
+  time. (The `_build_jitted_solve` closure captures only the network and the
+  scalar settings, so the key is complete; argument shapes/dtypes are handled by
+  JAX's own per-function cache.)
+- **Plant solves** are cached **per instance** (`Plant._jit_cache`), keyed by
+  signature + settings. The plant RHS closes over the (static) unit graph, so
+  the first solve compiles and every later solve of that plant reuses it —
+  e.g. a parameter sweep / Monte Carlo that builds the plant once and solves
+  many times, or a warm-started steady-state-then-dynamic run. (Cross-*instance*
+  plant caching is deliberately **not** done: a fresh plant's compiled RHS
+  depends on the entire unit-config + connection graph, and a structural key
+  complete enough to never false-hit would be fragile — a miss there would
+  silently return a solve compiled for a *different* plant. Per-instance keying
+  cannot false-hit.) The event path (`run_to_steady_state`) and the
+  `gradient="stable_adjoint"` path are not cached (run-once / build their own
+  closure).
+
+**Correctness guarantees.** A cache key never omits anything that changes the
+compiled result, so a hit always returns a solver compiled for the exact same
+computation. The key materialises `atol` values, which is impossible **under
+tracing** (a calibration loss differentiating through `solve`); in that case the
+key is `None` and the cache is bypassed (the solve is traced into the outer
+computation, which JAX compiles as a whole, so caching gives nothing there
+anyway). Both caches assume the network / plant is not structurally mutated
+after the first solve — the same assumption reactors already make about their
+fixed network and conditions.
+
+**What this is and isn't.** It removes *duplicate* compiles; it does not remove
+the first compile of each distinct `(network/plant, settings, signature)`, and
+the JAX **persistent** (cross-process / cross-run) compilation cache does *not*
+help these Diffrax solves (verified: no reuse across processes for either an
+ASM1 reactor or the BSM2 plant — it caches only the XLA step, not tracing, and
+Diffrax programs miss it across processes). So this speeds repeated solving
+within a process; it does not by itself shrink a cold test suite where each test
+compiles a distinct configuration once.
+
 ---
 
 ## Testing Architecture

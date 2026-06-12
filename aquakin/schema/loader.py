@@ -29,9 +29,29 @@ def _yaml_to_spec(text: str, source: str) -> NetworkSpec:
         raise ValueError(f"Invalid network specification in {source}: {exc}") from exc
 
 
+# Built-in networks are deterministic for a given name and are treated as
+# immutable (nothing mutates a CompiledNetwork in place; temperature
+# re-referencing etc. go through ``dataclasses.replace``, which copies). Caching
+# the compiled object by name therefore (a) skips re-parsing + re-compiling the
+# YAML on every call, and (b) -- the bigger win -- returns the *same* object each
+# time, so a stable ``id(network)`` lets the cross-instance compiled-solver cache
+# (see ``integrate/_common.py``) share compiled solves across every reactor and
+# test that loads the same network. Call ``clear_network_cache()`` to reset.
+_NETWORK_CACHE: dict[str, CompiledNetwork] = {}
+
+
+def clear_network_cache() -> None:
+    """Clear the built-in-network cache (see :func:`load_network`)."""
+    _NETWORK_CACHE.clear()
+
+
 def load_network(name: str) -> CompiledNetwork:
     """
     Load a built-in network shipped with ``aquakin``.
+
+    The compiled network is cached by name and reused on subsequent calls (a
+    ``CompiledNetwork`` is immutable in use). Use
+    :func:`clear_network_cache` to reset the cache.
 
     Parameters
     ----------
@@ -42,6 +62,9 @@ def load_network(name: str) -> CompiledNetwork:
     -------
     CompiledNetwork
     """
+    cached = _NETWORK_CACHE.get(name)
+    if cached is not None:
+        return cached
     resource = files("aquakin.networks") / f"{name}.yaml"
     if not resource.is_file():
         available = sorted(
@@ -54,7 +77,9 @@ def load_network(name: str) -> CompiledNetwork:
         )
     text = resource.read_text(encoding="utf-8")
     spec = _yaml_to_spec(text, f"built-in network '{name}'")
-    return compile_network(spec)
+    net = compile_network(spec)
+    _NETWORK_CACHE[name] = net
+    return net
 
 
 def load_network_from_file(path: Union[str, Path]) -> CompiledNetwork:
