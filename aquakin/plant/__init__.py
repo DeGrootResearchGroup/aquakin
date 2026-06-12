@@ -21,6 +21,7 @@ from aquakin.plant.plant import (
     ParameterLayout,
     Plant,
     PlantSolution,
+    SteadyStateResult,
 )
 from aquakin.plant.primary_clarifier import PrimaryClarifier
 from aquakin.plant.schedule import PiecewiseConstantSchedule
@@ -46,6 +47,7 @@ __all__ = [
     "Plant",
     "PlantSolution",
     "PrimaryClarifier",
+    "SteadyStateResult",
     "SplitterUnit",
     "StateTranslator",
     "StorageTank",

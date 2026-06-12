@@ -120,6 +120,7 @@ def _run_diffeqsolve(
     adjoint: diffrax.AbstractAdjoint | None = None,
     max_steps: int = 100_000,
     dtmax: float | None = None,
+    event: "diffrax.Event | None" = None,
 ):
     """Wrapper around the canonical Kvaerno5 + PIDController + adjoint setup.
 
@@ -157,6 +158,7 @@ def _run_diffeqsolve(
         stepsize_controller=controller,
         adjoint=adjoint if adjoint is not None else diffrax.RecursiveCheckpointAdjoint(),
         max_steps=max_steps,
+        event=event,
     )
 
 
