@@ -385,6 +385,12 @@ def _coerce_atol(atol, n_species: int):
     """
     arr = jnp.asarray(atol)
     if arr.ndim == 0:
+        # A concrete scalar (the reactor-construction path) is returned as a
+        # Python float, but a traced value is returned as the 0-d array: calling
+        # ``float()`` on a tracer raises a concretization error, which would
+        # otherwise prevent jitting a solve whose ``atol`` flows in under tracing.
+        if isinstance(arr, jax.core.Tracer):
+            return arr
         return float(arr)
     if arr.shape != (n_species,):
         raise ValueError(

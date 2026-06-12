@@ -1525,9 +1525,22 @@ compiled solve to avoid it:
   depends on the entire unit-config + connection graph, and a structural key
   complete enough to never false-hit would be fragile — a miss there would
   silently return a solve compiled for a *different* plant. Per-instance keying
-  cannot false-hit.) The event path (`run_to_steady_state`) and the
-  `gradient="stable_adjoint"` path are not cached (run-once / build their own
-  closure).
+  cannot false-hit.) The event path (`run_to_steady_state`) is not cached
+  (run-once). The `gradient="stable_adjoint"` path **is** cached for repeat
+  *forward* solves (a parameter sweep), keyed the same way but tagged
+  `"stable_adjoint"` so it never collides with the forward path, with `t_eval`
+  baked into the closure (the discrete adjoint marks it non-differentiable, so it
+  cannot be a traced runtime argument) and its values folded into the key. The
+  cache is used **only when the inputs are concrete**: under a trace — a gradient
+  through the solve, or an enclosing `jax.jit` — the adjoint's `custom_vjp` is
+  traced directly into the outer computation rather than routed through an inner
+  `jax.jit`, which does not compose with an outer reverse-mode pass. That direct
+  path is the one a `gradient="stable_adjoint"` calibration gradient takes, so a
+  jitted calibration loss amortizes the (large) plant compile across optimizer
+  iterations through the *outer* jit. Jitting that loss is possible because
+  `_coerce_atol` returns the 0-d `atol` array unchanged under tracing instead of
+  forcing it to a Python `float` (a `float()` on a tracer raises a
+  concretization error).
 
 **Correctness guarantees.** A cache key never omits anything that changes the
 compiled result, so a hit always returns a solver compiled for the exact same
