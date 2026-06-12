@@ -218,6 +218,21 @@ class SteadyStateResult:
     solution: "PlantSolution"
 
 
+def _concrete_teval_key(t_eval):
+    """Hashable cache key for a concrete ``t_eval`` (or ``None``).
+
+    Returns ``(key, is_concrete)``. A traced ``t_eval`` (the solve running under
+    an outer trace) cannot be materialised into a key, so ``is_concrete`` is
+    ``False`` and the caller bypasses the compiled-solve cache.
+    """
+    if t_eval is None:
+        return None, True
+    try:
+        return tuple(float(x) for x in jnp.asarray(t_eval)), True
+    except (jax.errors.ConcretizationTypeError, TypeError):
+        return None, False
+
+
 class Plant:
     """A plant flowsheet of :class:`Unit` components.
 
@@ -1170,10 +1185,6 @@ class Plant:
             t_eval = jnp.asarray(t_eval)
 
         if gradient == "stable_adjoint":
-            # The stable-adjoint path builds its own (rhs) closure below; the
-            # forward jax_adjoint path uses the cached compiled solve further on.
-            def rhs(t, y, args):
-                return self._rhs(t, y, args)
             if adjoint is not None or dtmax is not None:
                 raise ValueError(
                     "gradient='stable_adjoint' forms its own discrete adjoint and "
@@ -1187,17 +1198,42 @@ class Plant:
             # Cap-free reverse-mode gradient through the stiff plant solve: the
             # forward is a robust adaptive ESDIRK solve and the reverse is the
             # per-step transposed-solve discrete adjoint over the saved
-            # trajectory, which stays finite at any step size. ``time_dependent``
-            # carries integration time in the state so the explicit time
-            # dependence of the plant RHS (a time-varying influent) is captured
-            # exactly, making the gradient exact through a transient solve.
-            # ``max_steps`` bounds the saved-trajectory buffer the backward scan
-            # walks.
-            ys = esdirk_adjoint_solve(
-                rhs, y0, params, (t0, t1), t_eval,
-                rtol=rtol, atol=atol_eff, max_steps=max_steps,
-                time_dependent=True,
-            )
+            # trajectory, which stays finite at any step size. The compiled solve
+            # is cached per instance and reused across repeat *forward* solves
+            # (the parameter-sweep case), keyed like the forward path but tagged
+            # so it never collides with it. ``t_eval`` is baked into the compiled
+            # closure (the adjoint marks it non-differentiable, so it cannot be a
+            # traced runtime argument), so the key carries its values. The cache
+            # is used only when the inputs are concrete: under a trace (a gradient
+            # through the solve, or an enclosing jit) the adjoint's ``custom_vjp``
+            # is traced directly into the outer computation -- routing it through
+            # an inner ``jax.jit`` does not compose with an outer reverse-mode
+            # pass -- which is the path the calibration gradient takes anyway.
+            settings = concrete_settings_key(rtol, atol_eff, None, None, max_steps)
+            teval_key, teval_concrete = _concrete_teval_key(t_eval)
+            under_trace = (isinstance(params, jax.core.Tracer)
+                           or isinstance(y0, jax.core.Tracer))
+            cache_key = (None if (settings is None or not teval_concrete
+                                  or under_trace)
+                         else ("stable_adjoint", t0, t1, teval_key, settings))
+            with friendly_step_ceiling(max_steps, what="plant solve"):
+                if cache_key is not None:
+                    jitted = self._jit_cache.get(cache_key)
+                    if jitted is None:
+                        jitted = self._build_jitted_stable_adjoint_solve(
+                            t0, t1, t_eval,
+                            rtol=rtol, atol=atol_eff, max_steps=max_steps,
+                        )
+                        self._jit_cache[cache_key] = jitted
+                    ys = jitted(y0, params)
+                else:
+                    def rhs(t, y, args):
+                        return self._rhs(t, y, args)
+                    ys = esdirk_adjoint_solve(
+                        rhs, y0, params, (t0, t1), t_eval,
+                        rtol=rtol, atol=atol_eff, max_steps=max_steps,
+                        time_dependent=True,
+                    )
             if t_eval is None:
                 ts = jnp.asarray([t1])
                 ys = ys[None, :]
@@ -1267,6 +1303,33 @@ class Plant:
                 saveat=diffrax.SaveAt(t1=True), **kw,
             )
             return sol.ts, sol.ys
+        return _solve
+
+    def _build_jitted_stable_adjoint_solve(
+        self, t0, t1, t_eval, *, rtol, atol, max_steps,
+    ):
+        """Build the jit-compiled cap-free stable-adjoint solve for one signature.
+
+        Mirrors :meth:`_build_jitted_solve` but wraps
+        :func:`~aquakin.esdirk_adjoint_solve` (the hand-written discrete adjoint),
+        returning the saved states. ``time_dependent`` carries integration time in
+        the state so the explicit time dependence of the plant RHS (a time-varying
+        influent) is captured exactly; ``max_steps`` bounds the saved-trajectory
+        buffer the backward scan walks. ``y0``/``params`` are runtime arguments,
+        so one compile serves any parameter or initial-state vector of the cached
+        shapes; ``t_eval`` is closed over because the discrete adjoint marks it
+        non-differentiable (a traced ``t_eval`` cannot enter that slot).
+        """
+        def rhs(t, y, args):
+            return self._rhs(t, y, args)
+
+        @jax.jit
+        def _solve(y0, params):
+            return esdirk_adjoint_solve(
+                rhs, y0, params, (t0, t1), t_eval,
+                rtol=rtol, atol=atol, max_steps=max_steps,
+                time_dependent=True,
+            )
         return _solve
 
     def run_to_steady_state(

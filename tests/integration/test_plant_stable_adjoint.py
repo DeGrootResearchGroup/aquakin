@@ -199,3 +199,67 @@ def test_stable_adjoint_gradient_finite_through_full_param_vector():
     assert g.shape == base.shape
     assert jnp.all(jnp.isfinite(g))
     assert jnp.any(g != 0.0)
+
+
+@pytest.mark.validation
+def test_stable_adjoint_solve_is_jittable():
+    """The stable-adjoint plant solve can be wrapped in ``jax.jit``: its ``atol``
+    no longer forces concretization. The jitted value and gradient match the
+    eager ones. Jitting the calibration loss is what amortizes the (large) solve
+    compile across optimizer iterations."""
+    asm1, adm1, plant, y0 = _bsm2_plant()
+    base = bsm2_parameters(asm1, adm1)
+    gidx = asm1.n_params + adm1.param_index["k_m_ac"]
+    T = 3.0
+    teval = jnp.array([T])
+
+    def g(theta):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(t_span=(0.0, T), t_eval=teval, params=p, y0=y0,
+                          gradient="stable_adjoint", **_solve_kwargs())
+        return sol.C_named("tank1", "SNO")[-1]
+
+    theta0 = float(base[gidx])
+    eager = float(g(theta0))
+    jitted = float(jax.jit(g)(theta0))
+    assert np.isfinite(jitted)
+    assert jitted == pytest.approx(eager, rel=1e-6)
+
+    ge = float(jax.grad(g)(theta0))
+    gj = float(jax.jit(jax.grad(g))(theta0))
+    assert np.isfinite(gj)
+    assert gj == pytest.approx(ge, rel=1e-6)
+
+
+@pytest.mark.validation
+def test_stable_adjoint_forward_solve_is_cached():
+    """A repeat *forward* stable-adjoint solve reuses the compiled closure (the
+    parameter-sweep case), while a traced call (a gradient through the solve)
+    bypasses the cache: the discrete adjoint's ``custom_vjp`` must be traced
+    directly into the outer computation, not routed through an inner ``jax.jit``
+    under an outer reverse-mode pass."""
+    asm1, adm1, plant, y0 = _bsm2_plant()
+    base = bsm2_parameters(asm1, adm1)
+    T = 3.0
+    kw = dict(t_span=(0.0, T), t_eval=jnp.array([T]), y0=y0,
+              gradient="stable_adjoint", **_solve_kwargs())
+
+    def _sa_keys():
+        return [k for k in plant._jit_cache if k[0] == "stable_adjoint"]
+
+    a = plant.solve(params=base, **kw)
+    assert len(_sa_keys()) == 1                       # one compiled stable solve
+    cached = plant._jit_cache[_sa_keys()[0]]
+
+    plant.solve(params=base * 1.01, **kw)             # different params, same sig
+    assert plant._jit_cache[_sa_keys()[0]] is cached  # reused, not rebuilt
+    c = plant.solve(params=base, **kw)                # same params -> same result
+    assert float(c.C_named("tank1", "SNO")[-1]) == pytest.approx(
+        float(a.C_named("tank1", "SNO")[-1]), rel=1e-10)
+
+    # A traced (gradient) call adds no stable-adjoint cache entry.
+    n_before = len(_sa_keys())
+    jax.grad(lambda th: plant.solve(
+        params=base.at[0].set(th), **kw).C_named("tank1", "SNO")[-1]
+    )(float(base[0]))
+    assert len(_sa_keys()) == n_before
