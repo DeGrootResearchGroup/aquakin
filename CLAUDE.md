@@ -2009,33 +2009,43 @@ effluent) and tested in `tests/integration/test_bsm2_bypass.py` (threshold-mode
 flow split + validation; wired-plant flow balance, effluent = treated + bypass,
 bypass degrades effluent, evaluation auto-detects the combined effluent).
 
-**BSM2 performance evaluation — EQI / OCI (`evaluate_bsm2`).** The generic metric
-kernels (`aquakin/plant/metrics.py`: `effluent_quality_index`, `aeration_energy`,
-`pumping_energy`, `operational_cost_index`, `effluent_averages`) are wired to a
-concrete BSM2 flowsheet by `aquakin.plant.bsm.evaluate_bsm2(plant, solution,
-params)`, returning a `BSM2Evaluation` (EQI, OCI, the AE/PE/sludge component
-terms, and the average effluent). It reconstructs what the indices need from a
-solved `PlantSolution`: the secondary-effluent stream (`settler.overflow`), the
-pumped recycle flows (`tank5_split.internal_recycle`, `underflow_split.ras/waste`),
-and the wasted-sludge mass flow to disposal (`dewatering.underflow`) — all via
-`plant.stream(...)`. The aerated reactors are auto-detected (any CSTR with a
-fixed `kla` or a `controlled_kla` on `SO`), and the **aeration term reads the
-actual kLa over the run**: a fixed `kla` open-loop, or — under closed-loop DO
-control — the controller's manipulated signal recovered per saved state by the
-new **`Plant.signals_at(t, state, params)`** (the signal-bus analogue of
-`outputs_at`; `_rhs`'s signal step was factored into a shared
-`Plant._compute_signals`). So evaluating an open- and a closed-loop run side by
-side quantifies the control's effect: e.g. warm-started at high biomass the fixed
-design kLa under-aerates (reactor-4 SO ≈ 1.45), and the controller spends more
-aeration to pin SO at the 2.0 setpoint and nitrify further — whether DO control
-*saves* aeration depends on whether the fixed kLa was over- or under-aerating at
-the operating point. The OCI here is the **BSM1-form** index (aeration + pumping
-+ 5·sludge); BSM2's full OCI additionally credits methane production and charges
-mixing / sludge-heating energy (not yet included — see `BSM2Evaluation.oci_note`).
-Demonstrated in `examples/bsm2_evaluation.py` (open- vs closed-loop table) and
-tested in `tests/integration/test_bsm2_evaluation.py` (terms finite/positive,
-aerated-tank detection, AE matches the closed-form fixed-kLa value, OCI is the
-sum of its terms, open-loop `signals_at` is empty). Note the shipped influent is
+**BSM2 performance evaluation — EQI / full OCI (`evaluate_bsm2`).** The generic
+metric kernels (`aquakin/plant/metrics.py`) are wired to a concrete BSM2
+flowsheet by `aquakin.plant.bsm.evaluate_bsm2(plant, solution, params)`,
+returning a `BSM2Evaluation` with the EQI, the **full BSM2 OCI** and every
+component term. The OCI is the Gernaey et al. 2014 index:
+`AE + PE + ME + 3·sludge + 3·carbon − 6·methane + max(0, HE − 7·methane)`:
+- **AE** aeration + **ME** mixing energy from the actual kLa over the run
+  (`aeration_energy`, `mixing_energy`). Mixing counts the *unaerated* reactors
+  (anoxic tanks need mechanical mixing; an aerated tank is mixed by its aeration)
+  plus the always-mixed digester, so it spans **all** AS reactors, not just the
+  aerated subset.
+- **PE** pumping over the full BSM2 pump set (`pumping_energy_bsm2`): AS internal
+  recycle / RAS / wastage + the primary / thickener / dewatering underflows, each
+  with its own per-m³ factor.
+- **sludge** disposal TSS mass flow (factor 3, not the BSM1 5); **carbon** the
+  external dose `Q·conc` (`carbon_mass`, kg COD/d).
+- **methane** the digester biogas credit — reconstructed from the ADM1 headspace
+  gas state and parameters (`_methane_production`: `Q_gas = k_P·(P_gas−P_atm)`,
+  `CH4 = (p_ch4/P_gas)·P_atm·16/R_T · Q_gas`); ~1010 kg CH₄/d at the BSM2 steady
+  state (reference ≈ 1065).
+- **HE** sludge-heating energy (`heating_energy`): raise the digester feed from
+  its temperature (the carried stream T, else a 15 °C default) to 35 °C. At the
+  BSM2 operating point methane more than covers it, so `max(0, HE − 7·methane)`
+  contributes **0** — the biogas self-sufficiency the index rewards.
+
+The aeration kLa **reads the actual value over the run** — a fixed `kla`
+open-loop, or under closed-loop DO control the controller's manipulated signal
+recovered per saved state by **`Plant.signals_at(t, state, params)`** (the
+signal-bus analogue of `outputs_at`; `_rhs`'s signal step is the shared
+`Plant._compute_signals`). All output streams are reconstructed in **one
+`outputs_at` pass per saved time** (`_reconstruct`), since the indices need ~8
+streams. The BSM1-form kernels (`operational_cost_index`, `pumping_energy`) are
+kept for BSM1. Demonstrated in `examples/bsm2_evaluation.py` (open- vs
+closed-loop table with the full term breakdown) and tested in
+`tests/integration/test_bsm2_evaluation.py` (plant terms finite/positive,
+aerated-tank detection, AE/ME/carbon match their closed forms, OCI equals the
+full-formula sum; plus fast no-solve kernel tests). Note the shipped influent is
 synthesised, so these are method-validated numbers, not the published EQI/OCI over
 the canonical days-245–609 window (that needs the official IWA influent file).
 
