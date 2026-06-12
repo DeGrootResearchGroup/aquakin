@@ -1790,7 +1790,6 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
 Covered by `tests/integration/test_bsm2_control.py` (controller-unit behaviour:
 signal sign, saturation, integral direction, anti-windup; closed-loop setpoint
 tracking; closed-vs-open contrast; `jax.grad` through the closed loop). The
-**wastage (`Qw`) timer is still omitted** (the remaining BSM2 element). The
 digester is additionally validated at the unit level in
 `tests/validation/test_bsm2_digester_unit.py`.
 
@@ -1821,6 +1820,32 @@ tested in `tests/integration/test_bsm2_storage.py` (the four regimes + flow/
 volume conservation, no-solve; wired plant fills-and-bypasses, steady state
 healthy).
 
+**Scheduled (timed) wastage (`build_bsm2(wastage_schedule=...)`).** The
+waste-sludge pump can follow a time schedule instead of the constant `Qw=300`:
+the BSM2 strategy steps the wastage between a low (300) and a high (450) rate at
+~182-day half-year blocks over the 609-day evaluation, managing the sludge
+inventory (wasting more sludge shortens the solids retention time and draws the
+reactor biomass down — verified: tank5 XB_H falls after the step). Built on a
+reusable **`PiecewiseConstantSchedule`**
+([`plant/schedule.py`](aquakin/plant/schedule.py)): `values[i]` holds on
+`[t_breaks[i-1], t_breaks[i])`, evaluated by a `jit`/AD-safe `searchsorted`
+gather. `bsm2_wastage_schedule()` returns the BSM2 `Qw(t)`; `build_bsm2` makes
+the secondary-clarifier underflow the schedule `Qr + Qw(t)` (via
+`schedule.shifted(Qr)`), so the `underflow_split` sends `Qr` to RAS and the
+scheduled remainder to wastage. **Time-threaded flow solve:** the settler's
+underflow is now time-dependent, so `TakacsClarifier` exposes
+`flow_needs_time = True` (a property, true only when a setpoint is a schedule)
+and `Plant._resolve_flows` passes `t` into its `flow_outputs` — the time analogue
+of the `flow_needs_state` hook (#121). The schedule value is a constant at a
+given `t`, so the affine recycle-flow probe stays exact; constant-setpoint
+clarifiers are unaffected (the flag is false, the 2-arg `flow_outputs` path runs).
+`split_controlled_flows` drops its `float()` cast so a traced (scheduled)
+setpoint flows through. Demonstrated in `examples/bsm2_wastage_schedule.py` and
+tested in `tests/integration/test_bsm2_wastage.py` (the schedule's step/validation/
+shift/jit behaviour, no-solve; wired plant steps the waste flow on schedule with
+RAS held fixed, and higher wastage lowers the biomass). The **hydraulic delay**
+is the last remaining BSM2 element.
+
 **Closed-loop reject control (`build_bsm2(reject_control=True)`).** The storage
 tank's release runs a **proportional level controller** instead of a fixed
 `Q_out`: `Q_out = clip(bias + gain·(V − V_set), 0, Q_max)` (BSM2: setpoint
@@ -1845,7 +1870,7 @@ concentration the sweep must produce first.) Demonstrated in
 `examples/bsm2_reject_control.py` (open-loop bypass vs closed-loop control) and
 tested in `tests/integration/test_bsm2_reject_control.py` (the release law +
 flow/volume conservation, no-solve; wired plant holds a mid-level and releases
-the reject with zero bypass). The **wastage (`Qw`) timer** remains.
+the reject with zero bypass).
 
 **Influent hydraulic delay (`build_bsm2(hydraulic_delay=True)`).** A first-order
 lag on the raw influent's flow and load, modelling the transport delay of the
@@ -1871,8 +1896,7 @@ the BSM2 element set. Demonstrated in `examples/bsm2_hydraulic_delay.py` (a flow
 pulse emerges lagged) and tested in
 `tests/integration/test_bsm2_hydraulic_delay.py` (the lag's fixed-point /
 load-over-flow / first-order-response behaviour, no-solve; wired plant builds
-front-most, steady state unchanged). With this, the **wastage timer** is the
-last remaining BSM2 element.
+front-most, steady state unchanged).
 
 **Hydraulic influent bypass (`build_bsm2(influent_bypass=True)`).** The BSM2
 wet-weather bypass: raw influent flow above `bypass_threshold` (default 60000

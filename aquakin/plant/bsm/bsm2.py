@@ -63,6 +63,13 @@ BSM2_DO_SATURATION = 8.0  # gO2/m³
 BSM2_INTERNAL_RECYCLE = 3.0 * BSM2_Q_REF   # Qintr
 BSM2_RAS = 1.0 * BSM2_Q_REF                # Qr
 BSM2_WASTAGE = 300.0                       # Qw
+# Scheduled (timed) wastage: the waste pump alternates between a low and a high
+# rate over the 609-day evaluation to manage the sludge inventory (reginit
+# Qw_low / Qw_high; step times from the reference wastage reference vector --
+# ~182-day half-year blocks: low, high, low, high).
+BSM2_WASTAGE_LOW = 300.0                    # Qw_low
+BSM2_WASTAGE_HIGH = 450.0                   # Qw_high
+BSM2_WASTAGE_STEPS = (182.0, 364.0, 546.0)  # d, schedule step times
 BSM2_STORAGE_VOLUME = 160.0                # m³, reject equalisation tank (VOL_S)
 BSM2_STORAGE_OUTFLOW = 0.0                 # m³/d, controlled release (Qstorage)
 BSM2_STORAGE_OUTFLOW_MAX = 1500.0          # m³/d, release pump capacity (Qstorage_max)
@@ -170,6 +177,23 @@ def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF) -> InfluentSerie
                           C=jnp.tile(C, (2, 1)), network=asm1_network)
 
 
+def bsm2_wastage_schedule(low: float = BSM2_WASTAGE_LOW,
+                          high: float = BSM2_WASTAGE_HIGH,
+                          steps=BSM2_WASTAGE_STEPS):
+    """The BSM2 scheduled wastage flow ``Qw(t)`` as a
+    :class:`~aquakin.plant.schedule.PiecewiseConstantSchedule`.
+
+    The waste pump steps low → high → low → high at the ``steps`` times (the
+    reference's ~182-day half-year blocks over the 609-day evaluation), managing
+    the sludge inventory seasonally. Pass to ``build_bsm2(wastage_schedule=...)``.
+    """
+    from aquakin.plant.schedule import PiecewiseConstantSchedule
+    values = [low, high, low, high]
+    if len(values) != len(steps) + 1:
+        raise ValueError("wastage schedule needs len(steps)+1 values")
+    return PiecewiseConstantSchedule(list(steps), values)
+
+
 def build_bsm2(
     asm1_network: Optional["object"] = None,
     adm1_network: Optional["object"] = None,
@@ -187,6 +211,7 @@ def build_bsm2(
     bypass_threshold: float = BSM2_BYPASS_Q,
     hydraulic_delay: bool = False,
     hydraulic_delay_tau: float = BSM2_HYDRAULIC_DELAY_TAU,
+    wastage_schedule: Optional["object"] = None,
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
@@ -248,6 +273,12 @@ def build_bsm2(
     hydraulic_delay_tau : float, optional
         Lag time constant (days) for the influent hydraulic delay. Default ~0.02
         (≈30 min). Only used when ``hydraulic_delay=True``.
+    wastage_schedule : PiecewiseConstantSchedule, optional
+        A time schedule for the wastage flow ``Qw(t)`` (see
+        :func:`bsm2_wastage_schedule`). When given, the secondary-clarifier
+        underflow follows ``Qr + Qw(t)`` so the waste pump steps on the schedule
+        (the BSM2 timed-wastage strategy) rather than the constant ``Qw=300``.
+        Default None (constant wastage).
 
     Returns
     -------
@@ -281,7 +312,16 @@ def build_bsm2(
     Qintr = 3.0 * Q_ref
     Qr = 1.0 * Q_ref
     Qw = BSM2_WASTAGE
-    Q_settler_underflow = Qr + Qw
+    # The secondary-clarifier underflow is RAS + wastage. With a wastage schedule
+    # it becomes a time schedule Qr + Qw(t); the underflow_split then sends Qr to
+    # RAS and the remainder (the scheduled Qw) to wastage. The IC operating point
+    # uses the schedule's first value so the settled-blanket start is consistent.
+    if wastage_schedule is not None:
+        Q_settler_underflow = wastage_schedule.shifted(Qr)
+        Q_settler_underflow_init = Qr + float(wastage_schedule.at(0.0))
+    else:
+        Q_settler_underflow = Qr + Qw
+        Q_settler_underflow_init = Q_settler_underflow
 
     plant = Plant("BSM2")
     # Recycle seeds carry a nominal temperature so a temperature-aware influent
@@ -364,7 +404,7 @@ def build_bsm2(
     plant.add_unit(TakacsClarifier(
         name="settler", network=asm1, area=BSM2_CLARIFIER_AREA,
         height=BSM2_CLARIFIER_HEIGHT, underflow_Q=Q_settler_underflow,
-        init_underflow_Q=Q_settler_underflow))
+        init_underflow_Q=Q_settler_underflow_init))
     plant.add_unit(SplitterUnit(
         name="underflow_split", network=asm1,
         output_port_flows={"ras": Qr}, remainder_port="waste"))
