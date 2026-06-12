@@ -59,7 +59,27 @@ class StorageTank:
     output_flow : float, optional
         Requested release flow ``Q_out`` (m³/d), the controlled pump-out rate.
         Default 0 -- with no release the tank fills and bypasses (the BSM2
-        open-loop default).
+        open-loop default). Ignored when ``level_setpoint`` is set.
+    level_setpoint : float, optional
+        If given, run a **proportional level controller**: the release request
+        becomes ``clip(output_flow_bias + level_gain*(V - level_setpoint), 0,
+        output_flow_max)`` instead of the fixed ``output_flow``. The release
+        rises with the liquid level, so the tank self-regulates to a steady
+        level and releases the inflow smoothly (closed-loop reject control)
+        rather than filling and bypassing. The level law is a function of the
+        volume state, so it resolves exactly in the flow network (the storage
+        release feeds back into the plant, and a signal-bus controller's output
+        is only available *after* the flow solve -- so the controller lives in
+        the tank).
+    level_gain : float, optional
+        Proportional gain of the level controller (m³/d per m³). Only used when
+        ``level_setpoint`` is set.
+    output_flow_bias : float, optional
+        Feed-forward release at the setpoint level (m³/d). Only used with
+        ``level_setpoint``.
+    output_flow_max : float, optional
+        Release pump capacity (m³/d); caps the controlled release. Default
+        unbounded.
     initial_fraction : float, optional
         Initial liquid volume as a fraction of ``volume`` (default 0.5).
     full_fraction, empty_fraction : float, optional
@@ -76,14 +96,19 @@ class StorageTank:
     network: "CompiledNetwork"
     volume: float
     output_flow: float = 0.0
+    level_setpoint: Optional[float] = None
+    level_gain: float = 0.0
+    output_flow_bias: float = 0.0
+    output_flow_max: float = float("inf")
     initial_fraction: float = 0.5
     full_fraction: float = 0.9
     empty_fraction: float = 0.1
     initial_concentrations: Optional[jnp.ndarray] = None
     input_port: str = "in"
 
-    # The overflow bypass is gated by the liquid level (a state), so the plant
-    # must hand this unit its state when resolving the flow network.
+    # The overflow bypass (and, under level control, the release) is gated by
+    # the liquid level (a state), so the plant must hand this unit its state
+    # when resolving the flow network.
     flow_needs_state = True
 
     @property
@@ -105,10 +130,18 @@ class StorageTank:
         V0 = jnp.asarray([self.initial_fraction * float(self.volume)])
         return jnp.concatenate([C0, V0])
 
+    def _release_request(self, V: jnp.ndarray) -> jnp.ndarray:
+        """The requested release flow: fixed, or the level-control law."""
+        if self.level_setpoint is None:
+            return jnp.asarray(float(self.output_flow))
+        Q = (self.output_flow_bias
+             + self.level_gain * (V - float(self.level_setpoint)))
+        return jnp.clip(Q, 0.0, self.output_flow_max)
+
     def _flow_split(self, V: jnp.ndarray, Q_in: jnp.ndarray):
         """Return ``(Q_out, Q_bypass, Q_in_stored)`` from the level and inflow."""
         Vmax = float(self.volume)
-        Q_req = jnp.asarray(float(self.output_flow))
+        Q_req = self._release_request(V)
         full = V >= self.full_fraction * Vmax
         empty = V <= self.empty_fraction * Vmax
         filling_full = full & (Q_in > Q_req)

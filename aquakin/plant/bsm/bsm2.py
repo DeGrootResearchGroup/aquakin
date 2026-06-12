@@ -72,6 +72,12 @@ BSM2_WASTAGE_HIGH = 450.0                   # Qw_high
 BSM2_WASTAGE_STEPS = (182.0, 364.0, 546.0)  # d, schedule step times
 BSM2_STORAGE_VOLUME = 160.0                # m³, reject equalisation tank (VOL_S)
 BSM2_STORAGE_OUTFLOW = 0.0                 # m³/d, controlled release (Qstorage)
+BSM2_STORAGE_OUTFLOW_MAX = 1500.0          # m³/d, release pump capacity (Qstorage_max)
+# Closed-loop reject control: a proportional level controller on the storage
+# release, holding the tank near a mid setpoint and releasing the reject
+# smoothly (instead of fill-and-bypass).
+BSM2_STORAGE_LEVEL_SETPOINT_FRAC = 0.5     # target level as a fraction of Vmax
+BSM2_STORAGE_LEVEL_GAIN = 30.0             # m³/d release per m³ above setpoint
 BSM2_BYPASS_Q = 60000.0                    # influent flow above this bypasses treatment
 BSM2_PRIMARY_VOLUME = 900.0  # m³
 BSM2_PRIMARY_FPS = 0.007
@@ -197,6 +203,7 @@ def build_bsm2(
     carbon_conc: float = BSM2_CARBON_CONC,
     do_control: bool = False,
     reject_storage: bool = False,
+    reject_control: bool = False,
     storage_volume: float = BSM2_STORAGE_VOLUME,
     storage_output_flow: float = BSM2_STORAGE_OUTFLOW,
     influent_bypass: bool = False,
@@ -229,11 +236,18 @@ def build_bsm2(
         ``storage_output_flow``; with the default 0 release it fills and bypasses,
         so the open-loop steady state is unchanged (all reject still reaches the
         front). Default False.
+    reject_control : bool, optional
+        If True, close the reject loop: the storage tank runs a proportional
+        **level controller** on its release (holding a mid-level setpoint and
+        releasing the reject smoothly, capped at the pump capacity) instead of a
+        fixed ``storage_output_flow``. Implies a storage tank (so it does not
+        fill and bypass). Default False.
     storage_volume : float, optional
-        Maximum reject-storage-tank volume (m³). Only used with
-        ``reject_storage=True``.
+        Maximum reject-storage-tank volume (m³). Used with ``reject_storage`` or
+        ``reject_control``.
     storage_output_flow : float, optional
-        Controlled release flow from the storage tank (m³/d). Default 0.
+        Fixed release flow from the storage tank (m³/d), used when
+        ``reject_storage=True`` and ``reject_control=False``. Default 0.
     influent_bypass : bool, optional
         If True, add the BSM2 hydraulic influent bypass: raw influent flow above
         ``bypass_threshold`` is diverted around the whole treatment train
@@ -302,6 +316,10 @@ def build_bsm2(
     seed = Stream(Q=jnp.asarray(0.0), C=asm1.default_concentrations(),
                   network=asm1, T=jnp.asarray(BSM2_AS_TEMPERATURE_K))
 
+    # A storage tank is built when either the fixed-release storage or the
+    # closed-loop reject controller is requested.
+    use_storage = reject_storage or reject_control
+
     # ----- Influent bypass (optional): divert wet-weather peak flow around the
     # whole treatment train. The split is on the *raw influent* flow (an external
     # input, so the exact recycle-flow solve stays valid); the diverted raw flow
@@ -314,7 +332,7 @@ def build_bsm2(
     # ----- Front: combine raw influent with the recycled reject water. With a
     # reject storage tank the reject returns on two ports (the released stream
     # and the level-gated overflow bypass); otherwise on one combined port.
-    front_reject_ports = (["storage_out", "storage_bypass"] if reject_storage
+    front_reject_ports = (["storage_out", "storage_bypass"] if use_storage
                           else ["reject"])
     plant.add_unit(MixerUnit(name="front_mix",
                              input_port_names=["fresh"] + front_reject_ports,
@@ -393,11 +411,22 @@ def build_bsm2(
         input_port_names=["thickener_reject", "dewatering_reject"], network=asm1))
 
     # Optional reject equalisation tank: buffer the combined reject and release
-    # it at a controlled rate, with a level-gated overflow bypass.
-    if reject_storage:
-        plant.add_unit(StorageTank(
-            name="reject_storage", network=asm1, volume=storage_volume,
-            output_flow=storage_output_flow))
+    # it at a controlled rate, with a level-gated overflow bypass. Under
+    # reject_control the release follows a proportional level controller (the
+    # tank holds a mid setpoint and releases the reject smoothly); otherwise it
+    # is the fixed storage_output_flow.
+    if use_storage:
+        if reject_control:
+            storage = StorageTank(
+                name="reject_storage", network=asm1, volume=storage_volume,
+                level_setpoint=BSM2_STORAGE_LEVEL_SETPOINT_FRAC * storage_volume,
+                level_gain=BSM2_STORAGE_LEVEL_GAIN,
+                output_flow_max=BSM2_STORAGE_OUTFLOW_MAX)
+        else:
+            storage = StorageTank(
+                name="reject_storage", network=asm1, volume=storage_volume,
+                output_flow=storage_output_flow)
+        plant.add_unit(storage)
 
     # Cross-network interfaces (ASM1 <-> ADM1).
     asm2adm = ASM1toADM1(source_network=asm1, target_network=adm1)
@@ -440,7 +469,7 @@ def build_bsm2(
     # Reject-water recycle to the front (back-edge; temperature-carrying seed).
     plant.connect("thickener.overflow", "reject_mix.thickener_reject")
     plant.connect("dewatering.overflow", "reject_mix.dewatering_reject")
-    if reject_storage:
+    if use_storage:
         # reject_mix -> storage tank; the released stream and the overflow
         # bypass both return to the front (both back-edges, seeded).
         plant.connect("reject_mix", "reject_storage.in", initial_value=seed)

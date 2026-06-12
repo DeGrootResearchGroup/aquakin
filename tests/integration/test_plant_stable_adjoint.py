@@ -148,10 +148,17 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     theta0 = float(base[gidx])
     T = 3.0
 
+    # The diurnal forcing makes the adaptive solve take ~2000 steps -- right at
+    # the constant-influent shared cap. The exact count drifts a few percent
+    # across CPU architectures, so a 2000 cap that passes on one platform trips
+    # "maximum solver steps reached" on another. Give the transient solve headroom
+    # (max_steps also sizes the stable-adjoint backward-scan buffer).
+    kw = {**_solve_kwargs(), "max_steps": 5_000}
+
     def g(theta):
         p = base.at[gidx].set(theta)
         sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
-                          gradient="stable_adjoint", **_solve_kwargs())
+                          gradient="stable_adjoint", **kw)
         return sol.C_named("tank1", "SNO")[-1]
 
     grad = float(jax.grad(g)(theta0))
