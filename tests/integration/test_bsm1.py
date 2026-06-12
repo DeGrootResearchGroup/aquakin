@@ -13,15 +13,15 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
-from aquakin.plant.bsm import build_bsm1, load_bsm1_influent
-from aquakin.plant.influent import InfluentSeries
-from aquakin.plant.metrics import (
+from aquakin import (
+    BSM1Evaluation,
     derived_TSS,
     effluent_averages,
-    operational_cost_index,
-    aeration_energy,
-    pumping_energy,
+    effluent_quality_index,
+    evaluate_bsm1,
 )
+from aquakin.plant.bsm import build_bsm1, load_bsm1_influent
+from aquakin.plant.influent import InfluentSeries
 
 # Slow module: full BSM1 plant solves (5 reactors + clarifier + recycles).
 # Excluded from the fast PR gate; runs in the merge-to-main suite.
@@ -242,3 +242,48 @@ def test_metrics_compute_finite(asm1, constant_influent):
     # TSS conversion.
     tss = derived_TSS(sol.state[-1, :asm1.n_species], asm1)
     assert float(tss) > 0.0
+
+
+def test_metrics_accept_stream_series(asm1, constant_influent):
+    """The metric kernels take a StreamSeries directly (network from the stream),
+    giving the same result as the unpacked-array call."""
+    plant = build_bsm1(network=asm1)
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
+    sol = _run(plant, t_end=10.0, n_save=11)
+    eff = plant.stream(sol, "clarifier.overflow")
+
+    # StreamSeries form == explicit-array form.
+    eqi_stream = effluent_quality_index(eff)
+    eqi_arrays = effluent_quality_index(eff.t, eff.C, eff.Q, asm1)
+    assert eqi_stream == pytest.approx(eqi_arrays)
+
+    avg_stream = effluent_averages(eff)
+    avg_arrays = effluent_averages(eff.t, eff.C, eff.Q, asm1)
+    assert avg_stream == pytest.approx(avg_arrays)
+
+    # derived_* take a StreamSeries (network from it) and match the array form.
+    tss_stream = derived_TSS(eff)
+    tss_arrays = derived_TSS(eff.C, asm1)
+    assert jnp.allclose(tss_stream, tss_arrays)
+
+
+def test_evaluate_bsm1_indices(asm1, constant_influent):
+    """evaluate_bsm1 returns finite, positive EQI / OCI and component terms."""
+    plant = build_bsm1(network=asm1)
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
+    # Settle toward steady state so the indices are representative.
+    sol = plant.solve(
+        t_span=(0.0, 60.0), t_eval=jnp.linspace(50.0, 60.0, 6),
+        rtol=1e-4, atol=1e-3, max_steps=200_000,
+    )
+    ev = evaluate_bsm1(plant, sol)
+    assert isinstance(ev, BSM1Evaluation)
+    assert ev.eqi > 0.0 and jnp.isfinite(ev.eqi)
+    assert ev.aeration_energy > 0.0
+    assert ev.pumping_energy > 0.0
+    assert ev.sludge_production > 0.0
+    # OCI is the BSM1 form AE + PE + 5*sludge.
+    assert ev.oci == pytest.approx(
+        ev.aeration_energy + ev.pumping_energy + 5.0 * ev.sludge_production)
+    # The three aerated tanks (tanks 3-5) are counted.
+    assert ev.aerated_tanks == ["tank3", "tank4", "tank5"]

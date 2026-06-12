@@ -11,10 +11,16 @@ from aquakin.plant.bsm.bsm2 import (
     bsm2_parameters,
     bsm2_wastage_schedule,
 )
-from aquakin.plant.bsm.evaluation import BSM2Evaluation, evaluate_bsm2
+from aquakin.plant.bsm.evaluation import (
+    BSM1Evaluation,
+    BSM2Evaluation,
+    evaluate_bsm1,
+    evaluate_bsm2,
+)
 from aquakin.plant.influent import load_bsm1_influent, load_bsm2_influent
 
 __all__ = [
+    "BSM1Evaluation",
     "BSM2Evaluation",
     "build_bsm1",
     "build_bsm2",
@@ -22,6 +28,7 @@ __all__ = [
     "bsm2_constant_influent",
     "bsm2_parameters",
     "bsm2_wastage_schedule",
+    "evaluate_bsm1",
     "evaluate_bsm2",
     "load_bsm1_influent",
     "load_bsm2_influent",

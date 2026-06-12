@@ -14,8 +14,8 @@ EQI / OCI comparisons, replace ``BSM1_dry.csv`` under
 import jax.numpy as jnp
 
 import aquakin
+from aquakin import effluent_averages, evaluate_bsm1
 from aquakin.plant.bsm import build_bsm1, load_bsm1_influent
-from aquakin.plant.metrics import effluent_averages
 
 
 def main() -> None:
@@ -55,8 +55,9 @@ def main() -> None:
 
     # Effluent metrics: reconstruct the clarifier overflow stream over the saved
     # states (the plant integrates unit states, not the inter-unit streams).
+    # The metric kernels take the reconstructed stream directly.
     eff = plant.stream(sol, "clarifier.overflow")
-    avgs = effluent_averages(eff.t, eff.C, eff.Q, network)
+    avgs = effluent_averages(eff)
     print()
     print("Time-averaged effluent quality:")
     # Real species (SNH, SNO) get their units from the network; the lumped
@@ -68,6 +69,16 @@ def main() -> None:
         unit = (network.units_of(key) if key in network.species_index
                 else aggregate_units[key])
         print(f"  {key:5s} = {val:7.2f}  {unit}")
+
+    # Headline BSM1 performance indices (EQI / OCI and component terms).
+    ev = evaluate_bsm1(plant, sol)
+    print()
+    print("BSM1 performance indices:")
+    print(f"  EQI = {ev.eqi:8.1f}  kg pollutant/d")
+    print(f"  OCI = {ev.oci:8.1f}  (AE + PE + 5*sludge)")
+    print(f"    aeration energy   = {ev.aeration_energy:8.1f}  kWh/d")
+    print(f"    pumping energy    = {ev.pumping_energy:8.1f}  kWh/d")
+    print(f"    sludge production = {ev.sludge_production:8.1f}  kg TSS/d")
 
 
 if __name__ == "__main__":

@@ -36,9 +36,17 @@ from aquakin.plant.metrics import (
     effluent_quality_index,
     heating_energy,
     mixing_energy,
+    operational_cost_index,
     operational_cost_index_bsm2,
+    pumping_energy,
     pumping_energy_bsm2,
 )
+
+# Default BSM1 port names (as wired by build_bsm1).
+_BSM1_EFFLUENT_PORT = "clarifier.overflow"
+_BSM1_INTERNAL_RECYCLE_PORT = "tank5_split.internal_recycle"
+_BSM1_RAS_PORT = "underflow_split.ras"
+_BSM1_WASTE_PORT = "underflow_split.waste"
 
 # Default BSM2 port names (as wired by build_bsm2).
 _EFFLUENT_PORT = "settler.overflow"
@@ -319,4 +327,122 @@ def evaluate_bsm2(
         eqi=eqi, oci=oci, aeration_energy=AE, pumping_energy=PE, mixing_energy=ME,
         sludge_production=sludge, carbon_mass=carbon, methane_production=methane,
         heating_energy=HE, effluent=averages, aerated_tanks=aerated,
+    )
+
+
+@dataclass
+class BSM1Evaluation:
+    """Headline BSM1 performance indices from a solved plant.
+
+    Attributes
+    ----------
+    eqi : float
+        Effluent Quality Index (kg pollutant / day), lower is better.
+    oci : float
+        BSM1 Operational Cost Index (Copp 2002): ``AE + PE + 5·sludge``.
+    aeration_energy : float
+        Aeration energy AE (kWh/d).
+    pumping_energy : float
+        Pumping energy PE (kWh/d): the internal recycle, RAS and wastage pumps.
+    sludge_production : float
+        Wasted-sludge TSS mass flow (kg TSS/d), time-averaged.
+    effluent : dict
+        Time/flow-weighted average effluent concentrations (COD, BOD, TSS, TKN,
+        SNH, SNO; g/m^3) from :func:`effluent_averages`.
+    aerated_tanks : list[str]
+        The reactors whose aeration was counted.
+    oci_note : str
+        Notes on the OCI computation.
+    """
+
+    eqi: float
+    oci: float
+    aeration_energy: float
+    pumping_energy: float
+    sludge_production: float
+    effluent: dict = field(default_factory=dict)
+    aerated_tanks: list = field(default_factory=list)
+    oci_note: str = (
+        "BSM1 OCI (Copp 2002): AE + PE + 5*sludge. Sludge production is the "
+        "wastage TSS mass flow (plant TSS-inventory change neglected -- ~0 at "
+        "steady state)."
+    )
+
+
+def evaluate_bsm1(
+    plant,
+    solution,
+    params: Optional[jnp.ndarray] = None,
+    *,
+    effluent_port: str = _BSM1_EFFLUENT_PORT,
+    internal_recycle_port: str = _BSM1_INTERNAL_RECYCLE_PORT,
+    ras_port: str = _BSM1_RAS_PORT,
+    waste_port: str = _BSM1_WASTE_PORT,
+    do_saturation: float = _DO_SATURATION,
+) -> BSM1Evaluation:
+    """Compute the BSM1 performance indices from a solved plant.
+
+    Parameters
+    ----------
+    plant : Plant
+        A BSM1 plant from :func:`build_bsm1` (open- or closed-loop).
+    solution : PlantSolution
+        A solution from ``plant.solve`` over the evaluation window. Use a fine
+        enough ``t_eval`` to resolve the influent dynamics; the indices are
+        trapezoidal time-integrals over the saved points.
+    params : jnp.ndarray, optional
+        The plant parameters used for the run (defaults to the plant defaults).
+    effluent_port : str, optional
+        Final-effluent stream to score. Defaults to ``"clarifier.overflow"``.
+    internal_recycle_port, ras_port, waste_port : str, optional
+        Pumped-stream endpoints; the defaults match ``build_bsm1``.
+    do_saturation : float, optional
+        DO saturation used in the aeration-energy formula (gO2/m^3).
+
+    Returns
+    -------
+    BSM1Evaluation
+        EQI, OCI and all component terms.
+    """
+    network = plant.units["tank1"].network
+    params_full = (plant.default_parameters() if params is None
+                   else jnp.asarray(params))
+    t = solution.t
+
+    # Reconstruct every needed output stream in a single pass over the states.
+    streams = _reconstruct(plant, solution, params_full, [
+        effluent_port, internal_recycle_port, ras_port, waste_port,
+    ])
+
+    # ----- Effluent quality. -----
+    eff_Q, eff_C = streams[effluent_port]
+    eqi = effluent_quality_index(t, eff_C, eff_Q, network)
+    averages = effluent_averages(t, eff_C, eff_Q, network)
+
+    # ----- Aeration energy (actual kLa over the run). -----
+    reactors = _as_reactors(plant)
+    kla_hist = _kla_history(plant, solution, params, reactors)
+    volumes = jnp.asarray([float(plant.units[n].volume) for n in reactors])
+    AE = aeration_energy(t, kla_hist, volumes, saturation=do_saturation)
+    aerated = [reactors[i] for i in range(len(reactors))
+               if float(jnp.max(kla_hist[:, i])) > 0.0]
+
+    # ----- Pumping energy (internal recycle + RAS + wastage). -----
+    PE = pumping_energy(
+        t,
+        streams[internal_recycle_port][0],
+        streams[ras_port][0],
+        streams[waste_port][0],
+    )
+
+    # ----- Sludge production (TSS mass flow leaving via wastage, kg/d). -----
+    waste_Q, waste_C = streams[waste_port]
+    tss_mass_flow = derived_TSS(waste_C, network) * waste_Q * 1e-3
+    sludge = _time_average(t, tss_mass_flow)
+
+    oci = operational_cost_index(AE, PE, sludge)
+
+    return BSM1Evaluation(
+        eqi=eqi, oci=oci, aeration_energy=AE, pumping_energy=PE,
+        sludge_production=sludge, effluent=averages, aerated_tanks=aerated,
     )
