@@ -12,6 +12,7 @@ target — see :mod:`aquakin.plant.bsm.bsm1`.
 
 from aquakin.plant.control import PIController
 from aquakin.plant.cstr import CSTRUnit
+from aquakin.plant.delay import HydraulicDelayUnit
 from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
@@ -36,6 +37,7 @@ __all__ = [
     "ASM1toADM1",
     "CSTRUnit",
     "Connection",
+    "HydraulicDelayUnit",
     "IdentityTranslator",
     "IdealThickener",
     "InfluentSeries",

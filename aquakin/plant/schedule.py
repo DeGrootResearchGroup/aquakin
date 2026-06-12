@@ -11,6 +11,7 @@ solve.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 import jax.numpy as jnp
 
@@ -38,8 +39,8 @@ class PiecewiseConstantSchedule:
     (300.0, 450.0, 300.0)
     """
 
-    t_breaks: "object"
-    values: "object"
+    t_breaks: Sequence[float]
+    values: Sequence[float]
 
     def __post_init__(self) -> None:
         self._t_breaks = jnp.asarray(self.t_breaks, dtype=float)
