@@ -20,6 +20,7 @@ from aquakin.plant.bsm import (
 from aquakin.plant.bsm.bsm2 import BSM2_STORAGE_VOLUME
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.streams import Stream
+from aquakin.plant.units import FlowContext
 
 
 @pytest.fixture(scope="module")
@@ -83,7 +84,7 @@ def test_controlled_flow_volume_conservation(asm1):
 def test_flow_outputs_match_compute_outputs(asm1):
     tank = _controlled_tank(asm1, setpoint=80.0, gain=30.0)
     state = _state(asm1, V=100.0)
-    flows = tank.flow_outputs({"in": jnp.asarray(438.0)}, None, state)
+    flows = tank.flow_outputs({"in": jnp.asarray(438.0)}, None, FlowContext(state=state))
     outs = tank.compute_outputs(0.0, state, _stream(asm1, 438.0), None)
     assert float(flows["out"]) == pytest.approx(float(outs["out"].Q))
     assert float(flows["bypass"]) == pytest.approx(float(outs["bypass"].Q))

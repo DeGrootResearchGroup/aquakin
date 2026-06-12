@@ -2,12 +2,38 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
 
 import jax.numpy as jnp
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.streams import Stream
+
+
+@dataclass(frozen=True)
+class FlowContext:
+    """Side information passed to :meth:`Unit.flow_outputs`.
+
+    The recycle-flow solve evaluates each unit's linear flow rule with the
+    unit's own internal ``state`` and the current time ``t`` held fixed (only
+    the recycle back-edge flows vary), so the map stays affine. A unit whose
+    flow split depends on its state (a variable-volume storage tank) or on the
+    time (a scheduled pump) reads it from here; units whose split depends on
+    neither simply ignore the context. Carrying both in one object keeps
+    :meth:`Unit.flow_outputs` a single fixed signature for every unit.
+
+    Attributes
+    ----------
+    state : jnp.ndarray, optional
+        The unit's own internal state vector, or ``None`` when the flow solve
+        is run without states.
+    t : jnp.ndarray, optional
+        The current time.
+    """
+
+    state: Optional[jnp.ndarray] = None
+    t: Optional[jnp.ndarray] = None
 
 
 @runtime_checkable
@@ -29,22 +55,31 @@ class Unit(Protocol):
     - :meth:`compute_outputs` — given the current ``t``, internal ``state``,
       and input streams, return the output streams. Called by the plant in
       topological order on every RHS evaluation.
-    - :meth:`rhs` — given the current ``t``, internal ``state``, and input
-      streams, return ``dstate/dt`` of shape ``(state_size,)``. Called by
-      the plant on every RHS evaluation after all output streams are known.
+    - :meth:`rhs` — given the current ``t``, internal ``state``, input streams,
+      and the control-signal bus, return ``dstate/dt`` of shape
+      ``(state_size,)``. Called by the plant on every RHS evaluation after all
+      output streams are known.
+    - :meth:`flow_outputs` — the unit's *linear* flow rule (output-port flows
+      as a function of input-port flows), used by the plant's exact recycle-flow
+      solve. Receives a :class:`FlowContext` so a state- or time-dependent
+      split has one fixed signature.
 
-    Both ``compute_outputs`` and ``rhs`` must be AD-clean (no Python
-    branching on traced values, no concretisation of ``t`` / ``state``).
+    Every method receives the same fixed arguments for every unit -- the plant
+    never branches its call on a per-unit capability flag. A unit ignores the
+    arguments it does not use (``signals`` for an uncontrolled unit, the
+    :class:`FlowContext` for a fixed-split unit).
 
-    Optional control hooks (duck-typed, not part of the required surface):
+    ``compute_outputs``, ``rhs`` and ``flow_outputs`` must be AD-clean (no
+    Python branching on traced values, no concretisation of ``t`` / ``state``).
+
+    Optional producer hook (duck-typed; only some units implement it):
 
     - ``signal_outputs(t, state, inputs, params) -> dict[str, jnp.ndarray]``:
       a unit that *produces* control signals (e.g. a PI controller) returns a
-      mapping of signal name to scalar. The plant evaluates these each RHS call
-      and gathers them into a shared signal bus.
-    - ``consumes_signals: bool``: a unit that *reads* control signals sets this
-      truthy; the plant then calls its ``rhs`` with an extra ``signals`` dict
-      argument (``rhs(t, state, inputs, params, signals)``).
+      mapping of signal name to scalar. The plant evaluates these each RHS call,
+      gathers them into a shared signal bus, and threads that bus into every
+      unit's :meth:`rhs` as ``signals``. A unit that produces no signals simply
+      does not define this method.
 
     See :mod:`aquakin.plant.control` and ``Plant._rhs``.
     """
@@ -70,4 +105,12 @@ class Unit(Protocol):
         state: jnp.ndarray,
         inputs: dict[str, "Stream"],
         params: jnp.ndarray,
+        signals: Optional[dict] = None,
     ) -> jnp.ndarray: ...
+
+    def flow_outputs(
+        self,
+        input_flows: dict[str, jnp.ndarray],
+        params: jnp.ndarray,
+        ctx: FlowContext,
+    ) -> dict[str, jnp.ndarray]: ...

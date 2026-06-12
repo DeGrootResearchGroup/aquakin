@@ -19,6 +19,7 @@ from aquakin.plant.bsm import (
 )
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.streams import Stream
+from aquakin.plant.units import FlowContext
 
 
 @pytest.fixture(scope="module")
@@ -112,7 +113,7 @@ def test_flow_outputs_match_compute_outputs(asm1):
     """The flow-network rule agrees with the concentration-stage flows."""
     tank = _tank(asm1, output_flow=200.0)
     state = _state(tank, asm1, V=80.0)
-    flows = tank.flow_outputs({"in": jnp.asarray(500.0)}, None, state)
+    flows = tank.flow_outputs({"in": jnp.asarray(500.0)}, None, FlowContext(state=state))
     outs = tank.compute_outputs(0.0, state, _stream(asm1, 500.0), None)
     assert float(flows["out"]) == pytest.approx(float(outs["out"].Q))
     assert float(flows["bypass"]) == pytest.approx(float(outs["bypass"].Q))

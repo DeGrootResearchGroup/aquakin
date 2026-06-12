@@ -53,9 +53,9 @@ class CSTRUnit:
     controlled_kla : dict[str, tuple[str, float]], optional
         Maps a species to ``(signal_name, gain)``: under closed-loop control its
         ``kLa`` is taken from the control signal ``signal_name`` (times ``gain``)
-        each RHS call instead of the fixed ``kla`` entry. Setting this makes the
-        unit ``consumes_signals`` -- the plant then threads the signal bus into
-        ``rhs``. Used for DO/kLa control of the aerobic ASM tanks.
+        each RHS call instead of the fixed ``kla`` entry, read from the
+        ``signals`` bus the plant threads into every unit's ``rhs``. Used for
+        DO/kLa control of the aerobic ASM tanks.
     output_port : str
         Name of the single output port.
     """
@@ -125,11 +125,6 @@ class CSTRUnit:
     def output_ports(self) -> list[str]:
         return [self.output_port]
 
-    @property
-    def consumes_signals(self) -> bool:
-        """True when any kLa is driven by a control signal (see ``rhs``)."""
-        return bool(self.controlled_kla)
-
     def initial_state(self) -> jnp.ndarray:
         return self.network.default_concentrations()
 
@@ -167,7 +162,7 @@ class CSTRUnit:
             )
         }
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Outflow equals total inflow (constant-volume reactor)."""
         Q_total = jnp.zeros(())
         for name in self.input_port_names:

@@ -1697,7 +1697,14 @@ Key types:
   between units.
 - `Unit` Protocol — every unit declares `state_size`, `input_ports`,
   `output_ports`, and implements `initial_state()`, `compute_outputs()`,
-  and `rhs()`.
+  `rhs(t, state, inputs, params, signals)`, and `flow_outputs(input_flows,
+  params, ctx)`. **Every unit has the *same fixed signature* for each method**
+  — the plant never branches its call on a per-unit capability flag. The
+  control-signal bus is threaded into every `rhs` as `signals` (an uncontrolled
+  unit ignores it), and `flow_outputs` always receives a `FlowContext` carrying
+  the unit's own state and the time (a fixed-split unit ignores it). The one
+  optional, duck-typed hook is `signal_outputs(...)`, implemented only by units
+  that *produce* control signals (e.g. `PIController`).
 - `StateTranslator` Protocol — converts streams between networks.
   `IdentityTranslator` covers single-network plants (BSM1).
 - `Plant` — assembles units and connections, drives the monolithic
@@ -1946,13 +1953,13 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
   anti-windup). `x_i` is the integral *contribution to the output* (already
   scaled), so the tracking term has consistent units.
 - `Plant._rhs` evaluates `signal_outputs` on every controller each RHS call,
-  gathers the results into a `signals` dict, and threads it into the `rhs` of any
-  unit declaring `consumes_signals` (an extra trailing arg) — leaving every other
-  unit's 4-arg `rhs` untouched. Both hooks are class-level/duck-typed, so the
-  branch is static and jit/AD-safe.
+  gathers the results into a `signals` dict, and threads it into **every** unit's
+  `rhs` as the trailing `signals` argument (a unit that reads no signals simply
+  ignores it). Producing signals is the one optional, class-level/duck-typed hook
+  (`hasattr(unit, "signal_outputs")`), so the branch is static and jit/AD-safe.
 - `CSTRUnit` gains `controlled_kla: {species: (signal_name, gain)}`: when set the
   species' `kLa` is taken from `signals[name]·gain` each step (overriding the
-  fixed `kla`), and the unit reports `consumes_signals=True`.
+  fixed `kla`); the uniform `rhs` signature means no per-unit flag is needed.
 Covered by `tests/integration/test_bsm2_control.py` (controller-unit behaviour:
 signal sign, saturation, integral direction, anti-windup; closed-loop setpoint
 tracking; closed-vs-open contrast; `jax.grad` through the closed loop). The
@@ -1973,8 +1980,8 @@ release the open-loop tank fills to its upper limit (`0.9·Vmax`) and bypasses
 **all** reject, so it is a faithful pass-through and the steady state is
 unchanged from the no-storage plant (verified: tank5 XB_H identical).
 *Architecture note:* the bypass split is gated by the tank's own volume state,
-so `StorageTank` sets `flow_needs_state = True` and `Plant._resolve_flows`
-passes its state into `flow_outputs`. The exact affine flow solve stays valid
+which `StorageTank.flow_outputs` reads from the `FlowContext` `Plant._resolve_flows`
+passes into every unit's `flow_outputs`. The exact affine flow solve stays valid
 because the tank's *inlet* comes from the fixed-pump sludge line (the wastage
 `Qw` is a constant pump), so at fixed volume its outputs are constant in the
 recycle flows — the state-dependence does not couple to the recycle variables.
@@ -1999,12 +2006,11 @@ gather. `bsm2_wastage_schedule()` returns the BSM2 `Qw(t)`; `build_bsm2` makes
 the secondary-clarifier underflow the schedule `Qr + Qw(t)` (via
 `schedule.shifted(Qr)`), so the `underflow_split` sends `Qr` to RAS and the
 scheduled remainder to wastage. **Time-threaded flow solve:** the settler's
-underflow is now time-dependent, so `TakacsClarifier` exposes
-`flow_needs_time = True` (a property, true only when a setpoint is a schedule)
-and `Plant._resolve_flows` passes `t` into its `flow_outputs` — the time analogue
-of the `flow_needs_state` hook (#121). The schedule value is a constant at a
-given `t`, so the affine recycle-flow probe stays exact; constant-setpoint
-clarifiers are unaffected (the flag is false, the 2-arg `flow_outputs` path runs).
+underflow is now time-dependent, so `TakacsClarifier.flow_outputs` reads the time
+from the `FlowContext` `Plant._resolve_flows` passes into every unit's
+`flow_outputs` (a scheduled setpoint uses `ctx.t`; a constant setpoint ignores
+it). The schedule value is a constant at a given `t`, so the affine recycle-flow
+probe stays exact; constant-setpoint clarifiers are unaffected.
 `split_controlled_flows` drops its `float()` cast so a traced (scheduled)
 setpoint flows through. Demonstrated in `examples/bsm2_wastage_schedule.py` and
 tested in `tests/integration/test_bsm2_wastage.py` (the schedule's step/validation/
@@ -2029,7 +2035,8 @@ not on the signal bus, because the release feeds back into the flow network and
 must be resolved *during* the flow solve — but the signal bus is computed
 *after* it (`Plant._compute_signals` follows the stream sweep). Since the
 release is a pure function of the volume *state*, the in-tank law resolves
-exactly via the existing `flow_needs_state` path. (The signal bus remains the
+exactly via the state the `flow_outputs` `FlowContext` carries. (The signal bus
+remains the
 right home for a non-flow actuator like the DO `kLa`, which senses a
 concentration the sweep must produce first.) Demonstrated in
 `examples/bsm2_reject_control.py` (open-loop bypass vs closed-loop control) and
@@ -2048,8 +2055,8 @@ concentration is the lagged load over the lagged flow. This is the BSM2
 residence time varies with flow). A flow/load pulse emerges delayed and rounded
 (first-order, ~63% of a step after one `tau`); at steady state `Q→Q_in`,
 `C→C_in` (a pass-through, so the operating point is unchanged). The **outlet
-flow is the held-flow state**, so the unit sets `flow_needs_state = True` and the
-plant passes its state into `flow_outputs` (the same hook the storage tank uses).
+flow is the held-flow state**, which `flow_outputs` reads from the `FlowContext`
+the plant passes into every unit (the same mechanism the storage tank uses).
 Wired front-most: `build_bsm2(hydraulic_delay=True)` puts it on the influent
 (entry point becomes `"influent_delay.in"`), composing with the bypass
 (influent → delay → bypass_split → front). **Faithfulness note:** the BSM2

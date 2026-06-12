@@ -140,7 +140,7 @@ class PrimaryClarifier:
             self.sludge_port: Stream(Q=Qu, C=C_sludge, network=self.network, T=T_out),
         }
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Exact linear flow rule: underflow = f_PS·Q_in, effluent the rest."""
         Q_in = jnp.zeros(())
         for name in self.input_port_names:
@@ -154,6 +154,7 @@ class PrimaryClarifier:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> jnp.ndarray:
         # Well-mixed holding tank: convection only (no reaction).
         Q_total = jnp.zeros(())

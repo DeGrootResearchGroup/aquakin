@@ -25,8 +25,8 @@ with a level-gated automatic bypass that protects the tank's volume limits:
 The two outlets (``out`` -- the released stream at tank concentration, and
 ``bypass`` -- the diverted inflow at inlet concentration) are recombined
 downstream. The flow split depends on the tank's own liquid volume (a state),
-so the unit declares ``flow_needs_state`` and the plant passes its state into
-:meth:`flow_outputs` when resolving the flow network.
+which the unit reads from the :class:`~aquakin.plant.units.FlowContext` the
+plant passes into :meth:`flow_outputs` when resolving the flow network.
 """
 
 from __future__ import annotations
@@ -106,11 +106,6 @@ class StorageTank:
     initial_concentrations: Optional[jnp.ndarray] = None
     input_port: str = "in"
 
-    # The overflow bypass (and, under level control, the release) is gated by
-    # the liquid level (a state), so the plant must hand this unit its state
-    # when resolving the flow network.
-    flow_needs_state = True
-
     @property
     def state_size(self) -> int:
         return self.network.n_species + 1  # concentrations + liquid volume
@@ -168,9 +163,13 @@ class StorageTank:
             "bypass": Stream(Q=Q_bypass, C=s_in.C, network=self.network, T=s_in.T),
         }
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, state) -> dict:
-        """Flow split from the inlet flow and the current liquid level."""
-        V = jnp.asarray(state)[-1]
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
+        """Flow split from the inlet flow and the current liquid level.
+
+        The overflow bypass (and, under level control, the release) is gated by
+        the liquid level, so this reads the unit's own state from ``ctx``.
+        """
+        V = jnp.asarray(ctx.state)[-1]
         Q_out, Q_bypass, _ = self._flow_split(V, input_flows[self.input_port])
         return {"out": Q_out, "bypass": Q_bypass}
 
@@ -180,6 +179,7 @@ class StorageTank:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> jnp.ndarray:
         s_in = inputs[self.input_port]
         C_tank = state[: self.network.n_species]

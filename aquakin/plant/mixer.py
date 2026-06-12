@@ -84,7 +84,7 @@ class MixerUnit:
             T_out = heat / (Q_total + _EPS_Q)
         return {"out": Stream(Q=Q_total, C=C_out, network=self.network, T=T_out)}
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output port flows from input port flows (the linear flow rule).
 
         Used by ``Plant`` to resolve the recycle-flow network cheaply and
@@ -101,6 +101,7 @@ class MixerUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> jnp.ndarray:
         return jnp.zeros((0,))
 
@@ -272,7 +273,7 @@ class SplitterUnit:
         )
         return outputs
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output port flows from the inlet flow (the linear flow rule)."""
         Q_in = input_flows["in"]
         if self._mode == "ratio":
@@ -293,5 +294,6 @@ class SplitterUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> jnp.ndarray:
         return jnp.zeros((0,))

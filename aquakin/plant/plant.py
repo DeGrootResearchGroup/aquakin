@@ -42,7 +42,7 @@ from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.streams import Stream, StreamSeries
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
-from aquakin.plant.units import Unit
+from aquakin.plant.units import FlowContext, Unit
 
 
 @dataclass(frozen=True)
@@ -955,16 +955,15 @@ class Plant:
         signals = self._compute_signals(t, states, all_outputs, streams,
                                         params_full)
 
-        # Step 4: compute dstates from final input streams (and control signals).
+        # Step 4: compute dstates from final input streams and the (always
+        # passed) control-signal bus. Every unit's rhs has the same signature;
+        # an uncontrolled unit ignores ``signals``.
         dstates: list[jnp.ndarray] = []
         for name in self._unit_order:
             unit = self.units[name]
             inputs = self._collect_inputs(name, all_outputs, streams)
             params_unit = self._params_for_unit(name, params_full)
-            if getattr(unit, "consumes_signals", False):
-                dstate = unit.rhs(t, states[name], inputs, params_unit, signals)
-            else:
-                dstate = unit.rhs(t, states[name], inputs, params_unit)
+            dstate = unit.rhs(t, states[name], inputs, params_unit, signals)
             dstates.append(dstate)
         return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
 
@@ -980,9 +979,10 @@ class Plant:
 
         Units exposing ``signal_outputs`` (e.g. PI controllers) read their
         sensed input streams and own state and write named scalar signals into a
-        shared dict; units with ``consumes_signals`` (e.g. an aerated CSTR under
-        DO control) read those signals in ``rhs``. The hooks are class-level, so
-        the branch is static (jit-safe).
+        shared dict; that dict is threaded into every unit's ``rhs`` as
+        ``signals``, where an aerated CSTR under DO control reads it. Whether a
+        unit produces signals is a class-level property, so the branch is static
+        (jit-safe).
         """
         signals: dict = {}
         for name in self._unit_order:
@@ -1110,13 +1110,15 @@ class Plant:
         gain-independent, in ``n_recycle + 1`` cheap scalar passes. Returns the
         resolved flow for every stream key.
 
-        A unit whose flow split depends on its *own internal state* (a variable-
-        volume storage tank, whose overflow bypass is gated by the liquid level)
-        declares ``flow_needs_state = True`` and is passed its current state. The
-        affine probe stays exact as long as that state-dependence does not couple
-        to the recycle-flow variables -- true here because such a unit's *inlet*
-        flow comes from the fixed-pump sludge line (constant during the probe),
-        so at fixed state its outputs are constant in the recycle flows.
+        Every unit's ``flow_outputs`` receives the same :class:`FlowContext`
+        (its own current state and the time), so a unit whose split depends on
+        its *own internal state* (a variable-volume storage tank, whose overflow
+        bypass is gated by the liquid level) or on time (a scheduled pump) reads
+        it from there; the rest ignore it. The affine probe stays exact as long
+        as that dependence does not couple to the recycle-flow variables -- true
+        here because such a unit's *inlet* flow comes from the fixed-pump sludge
+        line (constant during the probe), so at fixed state/time its outputs are
+        constant in the recycle flows.
         """
         base: dict[tuple[Optional[str], str], jnp.ndarray] = {}
         for port_name, series in self.influents.items():
@@ -1136,16 +1138,15 @@ class Plant:
                     in_flows[conn.to_port] = flows[src]
                 unit = self.units[name]
                 params_unit = self._params_for_unit(name, params_full)
-                if getattr(unit, "flow_needs_state", False) and states is not None:
-                    out = unit.flow_outputs(in_flows, params_unit, states[name])
-                elif getattr(unit, "flow_needs_time", False):
-                    # A unit whose controlled flow follows a time schedule (e.g.
-                    # a scheduled wastage pump) reads ``t`` here. The schedule
-                    # value is a constant at a given ``t``, so the affine probe
-                    # over the recycle flows stays exact.
-                    out = unit.flow_outputs(in_flows, params_unit, t)
-                else:
-                    out = unit.flow_outputs(in_flows, params_unit)
+                # Every unit gets the same flow_outputs signature; the context
+                # carries the unit's own state and the current time, both held
+                # fixed across the affine recycle-flow probe (a state- or
+                # time-dependent split is constant in the recycle flows, so the
+                # probe stays exact). A fixed-split unit ignores the context.
+                ctx = FlowContext(
+                    state=None if states is None else states[name], t=t,
+                )
+                out = unit.flow_outputs(in_flows, params_unit, ctx)
                 for port, q in out.items():
                     flows[(name, port)] = q
             recycled = (

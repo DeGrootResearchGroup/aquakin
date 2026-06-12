@@ -6,7 +6,7 @@ carries any controller state (the PI integral) as part of the plant state, and
 writes a named scalar **signal**; an actuated unit (e.g. an aerated CSTR under
 dissolved-oxygen control) reads that signal in its ``rhs``. The plant evaluates
 ``signal_outputs`` on every controller each RHS call and threads the resulting
-signals to units that declare ``consumes_signals`` -- see ``Plant._rhs``.
+signal bus into every unit's ``rhs`` as ``signals`` -- see ``Plant._rhs``.
 
 The shipped controller is :class:`PIController`, a PI loop with back-calculation
 anti-windup (the BSM1/BSM2 dissolved-oxygen / kLa controller form).
@@ -135,7 +135,7 @@ class PIController:
     ) -> dict:
         return {}  # no material outputs
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         return {}
 
     def rhs(
@@ -144,6 +144,7 @@ class PIController:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> jnp.ndarray:
         u, u_sat, e = self._output(state, inputs)
         dxi = (self.Kp / self.Ti) * e

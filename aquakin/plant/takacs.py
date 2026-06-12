@@ -271,12 +271,6 @@ class TakacsClarifier:
         # Clamp to [0, vmax].
         return jnp.clip(v_takacs, 0.0, self._vmax)
 
-    @property
-    def flow_needs_time(self) -> bool:
-        """True when a controlled flow follows a time schedule, so the plant
-        passes ``t`` into :meth:`flow_outputs` during the flow solve."""
-        return hasattr(self.overflow_Q, "at") or hasattr(self.underflow_Q, "at")
-
     @staticmethod
     def _resolve_setpoint(q, t):
         """Evaluate a setpoint that may be a constant or a time schedule."""
@@ -328,15 +322,15 @@ class TakacsClarifier:
             self.underflow_port: Stream(Q=underflow_Q, C=C_underflow, network=self.network, T=s_in.T),
         }
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, t=None) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Linear flow rule for the recycle-flow solve: the controlled flow
         (``underflow_Q`` or ``overflow_Q``) is the setpoint at the current time
         and the other outflow is the remainder, so the map stays affine and
-        ``_resolve_flows`` is exact. ``t`` is supplied when a controlled flow
-        follows a schedule (``flow_needs_time``); a constant setpoint ignores it.
-        The clamp in compute_outputs/rhs is the concentration-stage safeguard,
-        inactive at the steady-state feed."""
+        ``_resolve_flows`` is exact. A scheduled setpoint reads the time from
+        ``ctx``; a constant setpoint ignores it. The clamp in compute_outputs/rhs
+        is the concentration-stage safeguard, inactive at the steady-state feed."""
         Q_in = input_flows[self.input_port]
+        t = None if ctx is None else ctx.t
         Q_over, Q_under = self._split_flows(Q_in, clamp=False, t=t)
         return {self.overflow_port: Q_over, self.underflow_port: Q_under}
 
@@ -346,6 +340,7 @@ class TakacsClarifier:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> jnp.ndarray:
         s_in = inputs[self.input_port]
         Q_in = s_in.Q
