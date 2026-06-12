@@ -94,3 +94,45 @@ class StreamSeries:
     def C_named(self, species: str) -> jnp.ndarray:
         """Concentration trajectory of one species, shape ``(n_t,)``."""
         return self.C[:, self.network.species_index[species]]
+
+    def to_dataframe(self, *, units_in_columns: bool = False):
+        """Return the stream trajectory as a pandas ``DataFrame``.
+
+        One row per save time, indexed by time ``t``, with a flow column ``Q``
+        followed by one column per species (in network ordering).
+
+        Parameters
+        ----------
+        units_in_columns : bool, optional
+            If ``True``, append ``" [unit]"`` to each species column label;
+            otherwise columns are bare species names and per-species units are
+            stored in ``df.attrs["units"]``.
+
+        Returns
+        -------
+        pandas.DataFrame
+
+        Raises
+        ------
+        ImportError
+            If pandas (an optional dependency) is not installed.
+        """
+        from aquakin.integrate._common import build_dataframe
+
+        columns = [(sp, self.C[:, j]) for j, sp in enumerate(self.network.species)]
+        units = {sp: self.network.units_of(sp) for sp in self.network.species}
+        return build_dataframe(
+            self.t, columns, index_name="t", units=units,
+            units_in_columns=units_in_columns, extra=[("Q", self.Q)],
+        )
+
+    def to_csv(self, path_or_buf=None, *, units_in_columns: bool = True, **kwargs):
+        """Write the stream trajectory to CSV (delegates to :meth:`to_dataframe`).
+
+        ``units_in_columns`` defaults to ``True`` so the written file is
+        self-describing (a CSV cannot carry ``df.attrs``). Extra keyword
+        arguments are forwarded to ``pandas.DataFrame.to_csv``.
+        """
+        return self.to_dataframe(units_in_columns=units_in_columns).to_csv(
+            path_or_buf, **kwargs
+        )

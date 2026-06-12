@@ -129,6 +129,67 @@ class PlantSolution:
         idx = unit.network.species_index[species]
         return self.unit_state(unit_name)[:, idx]
 
+    def to_dataframe(self, unit: str, *, units_in_columns: bool = False):
+        """Return one unit's state trajectory as a pandas ``DataFrame``.
+
+        The plant integrates a heterogeneous flat state across many units, so a
+        single whole-plant table is not meaningful; pick one unit. For a
+        kinetic unit (one with a ``network``) the columns are species names; for
+        any other unit they are generic ``state_0..state_{n-1}`` columns.
+
+        Parameters
+        ----------
+        unit : str
+            Name of the unit whose trajectory to tabulate.
+        units_in_columns : bool, optional
+            If ``True``, append ``" [unit]"`` to each species column label
+            (kinetic units only); otherwise units are stored in
+            ``df.attrs["units"]``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Time-indexed (``t``), one row per save time.
+
+        Raises
+        ------
+        KeyError
+            If ``unit`` is not a unit of this plant.
+        ImportError
+            If pandas (an optional dependency) is not installed.
+        """
+        from aquakin.integrate._common import build_dataframe
+
+        if unit not in self.plant.units:
+            raise KeyError(
+                f"Unknown unit '{unit}'. Available: {list(self.plant.units)}"
+            )
+        sub = self.unit_state(unit)                 # (n_t, unit.state_size)
+        unit_obj = self.plant.units[unit]
+        if hasattr(unit_obj, "network"):
+            net = unit_obj.network
+            columns = [(sp, sub[:, j]) for j, sp in enumerate(net.species)]
+            units = {sp: net.units_of(sp) for sp in net.species}
+        else:
+            columns = [(f"state_{j}", sub[:, j]) for j in range(sub.shape[1])]
+            units = {}
+        return build_dataframe(
+            self.t, columns, index_name="t", units=units,
+            units_in_columns=units_in_columns,
+        )
+
+    def to_csv(self, path_or_buf=None, *, unit: str, units_in_columns: bool = True,
+               **kwargs):
+        """Write one unit's trajectory to CSV (delegates to :meth:`to_dataframe`).
+
+        ``unit`` is required (the plant state is per-unit). ``units_in_columns``
+        defaults to ``True`` so the file is self-describing. Extra keyword
+        arguments are forwarded to ``pandas.DataFrame.to_csv``.
+        """
+        return self.to_dataframe(unit, units_in_columns=units_in_columns).to_csv(
+            path_or_buf, **kwargs
+        )
+
 
 @dataclass
 class SteadyStateResult:

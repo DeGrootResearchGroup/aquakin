@@ -20,20 +20,31 @@ def main() -> None:
     t_eval = jnp.linspace(0.0, 600.0, 121)
     sol = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_eval)
 
+    species = ["O3", "Br-", "HOBr", "OH", "BrO3-"]
+    sample_rows = [0, 10, 30, 60, 120]
     print()
-    print(
-        f"{'t [s]':>8}  {'O3 [M]':>12}  {'Br- [M]':>12}  "
-        f"{'HOBr [M]':>12}  {'OH [M]':>12}  {'BrO3- [M]':>12}"
-    )
-    for i in [0, 10, 30, 60, 120]:
-        print(
-            f"{float(sol.t[i]):8.1f}  "
-            f"{float(sol.C_named('O3')[i]):12.4e}  "
-            f"{float(sol.C_named('Br-')[i]):12.4e}  "
-            f"{float(sol.C_named('HOBr')[i]):12.4e}  "
-            f"{float(sol.C_named('OH')[i]):12.4e}  "
-            f"{float(sol.C_named('BrO3-')[i]):12.4e}"
-        )
+
+    try:
+        # Preferred path: hand the whole trajectory to a DataFrame, then select
+        # the species and sample times of interest -- no per-cell float() casts.
+        df = sol.to_dataframe()
+    except ImportError:
+        # pandas is the optional `dataframe` extra; fall back to a manual table.
+        print("(install aquakin[dataframe] for tabular export; manual table:)")
+        header = "  ".join([f"{'t [s]':>8}"] + [f"{s + ' [M]':>12}" for s in species])
+        print(header)
+        for i in sample_rows:
+            cells = [f"{float(sol.t[i]):8.1f}"] + [
+                f"{float(sol.C_named(s)[i]):12.4e}" for s in species
+            ]
+            print("  ".join(cells))
+    else:
+        units = df.attrs["units"]["O3"]   # all bromate species share mol/L
+        print(f"Concentrations [{units}] at selected times (via to_dataframe):")
+        table = df[species].iloc[sample_rows]
+        print(table.to_string(float_format=lambda v: f"{v:.4e}"))
+        # to_csv embeds the units in the header so the file is self-describing.
+        print("\nto_csv() header:  " + sol.to_csv().splitlines()[0])
 
 
 if __name__ == "__main__":

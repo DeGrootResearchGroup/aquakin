@@ -17,6 +17,80 @@ import numpy as np
 from aquakin.core.network import CompiledNetwork
 
 
+# --- Tabular export helpers (optional pandas) --------------------------------
+
+
+def require_pandas():
+    """Import and return pandas, with a helpful message if it is missing.
+
+    pandas is an optional dependency, used only by the ``to_dataframe()`` /
+    ``to_csv()`` result exporters.
+    """
+    try:
+        import pandas as pd
+    except ImportError as e:  # pragma: no cover - exercised only without pandas
+        raise ImportError(
+            "to_dataframe() / to_csv() require pandas, an optional dependency. "
+            "Install it with `pip install pandas` or `pip install "
+            "aquakin[dataframe]`."
+        ) from e
+    return pd
+
+
+def build_dataframe(
+    index,
+    columns,
+    *,
+    index_name=None,
+    units=None,
+    units_in_columns=False,
+    extra=None,
+):
+    """Assemble a pandas ``DataFrame`` from an index and named value columns.
+
+    Shared by every result exporter so the column/units conventions stay
+    consistent.
+
+    Parameters
+    ----------
+    index : array-like or pandas.Index
+        The row index. A plain array is wrapped in a ``pd.Index`` named
+        ``index_name``; a pre-built ``Index``/``MultiIndex`` is used as-is.
+    columns : list of (str, array)
+        ``(species_name, 1-D values)`` pairs, in display order.
+    index_name : str, optional
+        Name for the index when ``index`` is a plain array.
+    units : dict, optional
+        ``{species_name: unit_string}``; stored in ``df.attrs["units"]`` and,
+        when ``units_in_columns`` is set, appended to the column labels.
+    units_in_columns : bool, optional
+        Append ``" [unit]"`` to each column label.
+    extra : list of (str, array), optional
+        Additional non-species columns to place before the value columns (e.g.
+        a flow ``Q`` or a ``depth`` column). Never relabelled with units.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
+    pd = require_pandas()
+    units = units or {}
+    if isinstance(index, (pd.Index, pd.MultiIndex)):
+        idx = index
+    else:
+        idx = pd.Index(np.asarray(index), name=index_name)
+    data = {}
+    for name, arr in extra or []:
+        data[name] = np.asarray(arr)
+    for name, arr in columns:
+        unit = units.get(name, "")
+        label = f"{name} [{unit}]" if (units_in_columns and unit) else name
+        data[label] = np.asarray(arr)
+    df = pd.DataFrame(data, index=idx)
+    df.attrs["units"] = dict(units)
+    return df
+
+
 # --- Cross-instance compiled-solver cache ------------------------------------
 #
 # Each ``reactor.solve(...)`` jit-compiles an inner ``_solve`` closure that
@@ -171,6 +245,65 @@ class _HasNamedSpecies:
         ``self.network.units_of(species)``.
         """
         return self.network.units_of(species)
+
+    def _table_index(self) -> "tuple[str, jnp.ndarray]":
+        """Return ``(name, array)`` for the dataframe index. Time by default;
+        space-indexed solutions (PFR) override this."""
+        return "t", self.t
+
+    def to_dataframe(self, *, units_in_columns: bool = False):
+        """Return the solution as a pandas ``DataFrame``.
+
+        One row per recorded point, one column per species (in network
+        ordering), indexed by the independent axis (time ``t`` for batch /
+        track / biofilm solutions, axial position ``x`` for a PFR).
+
+        Parameters
+        ----------
+        units_in_columns : bool, optional
+            If ``True``, append ``" [unit]"`` to each species column label
+            (e.g. ``"SNH [g_N/m³]"``). If ``False`` (default), columns are bare
+            species names and the per-species units are stored in
+            ``df.attrs["units"]`` instead, which keeps columns selectable by
+            species name.
+
+        Returns
+        -------
+        pandas.DataFrame
+
+        Raises
+        ------
+        ImportError
+            If pandas is not installed (it is an optional dependency; install
+            with ``pip install aquakin[dataframe]``).
+        """
+        network = self.network
+        columns = [(sp, self.C[:, j]) for j, sp in enumerate(network.species)]
+        units = {sp: network.units_of(sp) for sp in network.species}
+        name, index = self._table_index()
+        return build_dataframe(
+            index, columns, index_name=name, units=units,
+            units_in_columns=units_in_columns,
+        )
+
+    def to_csv(self, path_or_buf=None, *, units_in_columns: bool = True, **kwargs):
+        """Write the solution to CSV (delegates to :meth:`to_dataframe`).
+
+        Parameters
+        ----------
+        path_or_buf : str or path or file-like, optional
+            Destination passed to ``DataFrame.to_csv``. If ``None``, the CSV is
+            returned as a string.
+        units_in_columns : bool, optional
+            Defaults to ``True`` here (unlike :meth:`to_dataframe`): a CSV
+            cannot carry ``df.attrs``, so the units are embedded in the column
+            headers by default so the written file is self-describing.
+        **kwargs
+            Forwarded to ``pandas.DataFrame.to_csv``.
+        """
+        return self.to_dataframe(units_in_columns=units_in_columns).to_csv(
+            path_or_buf, **kwargs
+        )
 
 
 @runtime_checkable

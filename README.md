@@ -66,6 +66,12 @@ network.units_of("BrO3-")            # e.g. "mol/L"
 network.description_of("BrO3-")
 solution.units_named("BrO3-")        # same, for axis/column labels
 network.summary()                    # tabulates every species with its units
+
+# Export results to a table instead of float()-casting one species at a time.
+# Requires the optional `pandas` extra: pip install aquakin[dataframe]
+df = solution.to_dataframe()         # time-indexed, one column per species
+df.attrs["units"]                    # {species: unit} (units kept off the labels)
+solution.to_csv("run.csv")           # units embedded in the CSV header
 ```
 
 ## Forward sensitivity (cap-free stiff gradients)

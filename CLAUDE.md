@@ -1024,7 +1024,9 @@ aquakin/
 │   │   │                            #   solve_chemistry (the one stoich-hoist + RHS + solve
 │   │   │                            #   factory the Batch/PFR/Particle/CFD reactors all call,
 │   │   │                            #   parameterised by cond_fn / rate_scale / saveat),
-│   │   │                            #   validate_t_eval, Reactor Protocol
+│   │   │                            #   validate_t_eval, Reactor Protocol;
+│   │   │                            #   _HasNamedSpecies mixin (C_named/units_named/
+│   │   │                            #   to_dataframe/to_csv) + build_dataframe/require_pandas
 │   │   ├── batch.py                 # BatchReactor, BatchSolution
 │   │   ├── biofilm.py               # BiofilmReactor (layered 1-D diffusion-reaction)
 │   │   ├── pfr.py                   # PlugFlowReactor, PFRSolution
@@ -1253,6 +1255,14 @@ solution = reactor.solve(C0, params, t_span, t_eval)   # explicit params still f
 solution.t                           # (n_t,)
 solution.C                           # (n_t, n_species)
 solution.C_named("BrO3-")           # convenience accessor
+solution.to_dataframe()              # time-indexed pandas DataFrame, species columns
+solution.to_csv("run.csv")           # delegates to to_dataframe().to_csv(...)
+# to_dataframe(units_in_columns=False): bare species columns + df.attrs["units"];
+#   True -> "SNH [g_N/m³]" labels. to_csv defaults units_in_columns=True (a CSV
+#   can't carry attrs). pandas is the optional `dataframe` extra. Every solution
+#   has it (Batch/PFR(x-indexed)/Track/Biofilm); BiofilmSolution.to_dataframe(
+#   profile=True) gives the depth-resolved (t, compartment) MultiIndex + depth
+#   column; StreamSeries adds a Q column; PlantSolution.to_dataframe(unit="tank5").
 
 # Plug flow reactor
 reactor = aquakin.PlugFlowReactor(network, conditions, n_points, length, velocity)
@@ -2144,7 +2154,11 @@ resource/time limits and the job was intermittently killed mid-run, while
 dependency, add it to `pyproject.toml` `dependencies` so the CI install
 (`pip install -e ".[test]"`) picks it up — the `_make_*` network
 generators' `ruamel` need is intentionally *not* a runtime dep (they are
-run manually, never imported by the package or tests).
+run manually, never imported by the package or tests). `pandas` is an
+**optional** dependency (the `dataframe` extra, for the `to_dataframe()` /
+`to_csv()` result exporters), but it is also in the `test` extra so the fast
+gate exercises those exporters; the library imports it lazily inside the
+exporters (`require_pandas`), so solving never needs it.
 
 ---
 
