@@ -14,6 +14,8 @@ from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
     _coerce_atol,
+    cached_jitted_solver,
+    concrete_settings_key,
     default_atol,
     friendly_step_ceiling,
     solve_chemistry,
@@ -188,16 +190,25 @@ class BatchReactor:
 
         if t_eval is None:
             t_eval_arr = None
-            cache_key = (t0, t1, None)
+            sig = (t0, t1, None)
         else:
             t_eval_arr = jnp.asarray(t_eval)
             self._validate_t_eval(t_eval_arr, t0, t1)
-            cache_key = (t0, t1, tuple(t_eval_arr.shape))
+            sig = (t0, t1, tuple(t_eval_arr.shape))
 
-        jitted = self._jit_cache.get(cache_key)
-        if jitted is None:
-            jitted = self._build_jitted_solve(t0, t1, t_eval_arr is not None)
-            self._jit_cache[cache_key] = jitted
+        # Shared across reactor instances: the same network + settings + call
+        # signature reuses one compiled solver (see cached_jitted_solver). A
+        # traced call (solve inside an outer jit/grad) yields a None settings key
+        # and bypasses the cache -- it cannot benefit from it anyway.
+        settings = concrete_settings_key(self.rtol, self.atol, self.adjoint,
+                                         self.dtmax, self.max_steps)
+        cache_key = (None if settings is None
+                     else ("batch", id(self.network), sig, settings))
+        jitted = cached_jitted_solver(
+            cache_key,
+            lambda: self._build_jitted_solve(t0, t1, t_eval_arr is not None),
+            self.network, self.adjoint,
+        )
 
         with friendly_step_ceiling(self.max_steps, what="batch reactor solve"):
             if t_eval_arr is None:

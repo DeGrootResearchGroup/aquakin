@@ -34,6 +34,7 @@ from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _coerce_atol,
     _run_diffeqsolve,
+    concrete_settings_key,
     default_atol,
     friendly_step_ceiling,
 )
@@ -201,6 +202,16 @@ class Plant:
         # Static connection adjacency, rebuilt by _build_state_layout():
         self._inputs_by_unit: dict[str, list[Connection]] = {}
         self._recycle_keys: list[tuple[Optional[str], str]] = []
+        # Per-instance cache of the jit-compiled forward solve, keyed by call
+        # signature + solver settings. The plant RHS closes over the (static)
+        # unit graph, so once compiled the same solve is reused across repeated
+        # solves of this plant -- e.g. a parameter sweep / Monte Carlo that
+        # builds the plant once and solves it many times, or a warm-started
+        # steady-state-then-dynamic run. Without it every solve rebuilds the RHS
+        # closure and Diffrax recompiles the whole stiff plant (~tens of seconds)
+        # each call. Assumes the plant is not structurally mutated after the
+        # first solve (units/connections fixed), as the reactors assume too.
+        self._jit_cache: dict = {}
 
     # ----- assembly --------------------------------------------------------
 
@@ -1094,19 +1105,14 @@ class Plant:
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
-        if t_eval is None:
-            saveat = diffrax.SaveAt(t1=True)
-        else:
+        if t_eval is not None:
             t_eval = jnp.asarray(t_eval)
-            saveat = diffrax.SaveAt(ts=t_eval)
-
-        # Closure-capture self and params; Diffrax sees a clean (t, y, args)
-        # signature. We pass params via args so jax.grad through params
-        # works.
-        def rhs(t, y, args):
-            return self._rhs(t, y, args)
 
         if gradient == "stable_adjoint":
+            # The stable-adjoint path builds its own (rhs) closure below; the
+            # forward jax_adjoint path uses the cached compiled solve further on.
+            def rhs(t, y, args):
+                return self._rhs(t, y, args)
             if adjoint is not None or dtmax is not None:
                 raise ValueError(
                     "gradient='stable_adjoint' forms its own discrete adjoint and "
@@ -1138,22 +1144,69 @@ class Plant:
                 ts = jnp.asarray(t_eval)
             return PlantSolution(t=ts, state=ys, plant=self)
 
-        with friendly_step_ceiling(max_steps, what="plant solve"):
-            sol = _run_diffeqsolve(
-                rhs,
-                t0=t0,
-                t1=t1,
-                y0=y0,
-                args=params,
-                saveat=saveat,
-                rtol=rtol,
-                atol=atol_eff,
-                adjoint=adjoint,
-                dtmax=dtmax,
+        # Forward (jax_adjoint) path. The compiled solve is cached per instance
+        # and reused across repeat solves of this plant (see ``_jit_cache``). An
+        # event-terminated solve (e.g. run_to_steady_state) is not cached -- the
+        # event closure varies and that path is run once -- and a traced call
+        # (settings key None) bypasses the cache. Caching does not change the
+        # first solve; it only avoids recompiling on subsequent ones.
+        settings = concrete_settings_key(rtol, atol_eff, adjoint, dtmax, max_steps)
+        sig = (t0, t1, None if t_eval is None else tuple(t_eval.shape))
+        cache_key = (None if (settings is None or event is not None)
+                     else (sig, settings))
+        jitted = self._jit_cache.get(cache_key) if cache_key is not None else None
+        if jitted is None:
+            jitted = self._build_jitted_solve(
+                t0, t1, t_eval is not None, event=event,
+                rtol=rtol, atol=atol_eff, adjoint=adjoint, dtmax=dtmax,
                 max_steps=max_steps,
-                event=event,
             )
-        return PlantSolution(t=sol.ts, state=sol.ys, plant=self)
+            if cache_key is not None:
+                self._jit_cache[cache_key] = jitted
+
+        with friendly_step_ceiling(max_steps, what="plant solve"):
+            if t_eval is None:
+                ts, ys = jitted(y0, params)
+            else:
+                ts, ys = jitted(y0, params, t_eval)
+        return PlantSolution(t=ts, state=ys, plant=self)
+
+    def _build_jitted_solve(
+        self, t0, t1, has_t_eval, *, event, rtol, atol, adjoint, dtmax, max_steps,
+    ):
+        """Build the jit-compiled forward solve for one call signature.
+
+        The returned ``_solve`` closes over the (static) plant RHS and the solver
+        settings; ``y0``/``params``/``t_eval`` are its runtime arguments, so the
+        same compiled solve serves any parameter or initial-state vector of the
+        cached shapes (the parameter-sweep case). ``t_eval`` is a runtime
+        argument (not baked in) so different save times of the same shape reuse
+        one compile.
+        """
+        def rhs(t, y, args):
+            return self._rhs(t, y, args)
+
+        kw = dict(t0=t0, t1=t1, rtol=rtol, atol=atol, adjoint=adjoint,
+                  dtmax=dtmax, max_steps=max_steps, event=event)
+
+        if has_t_eval:
+            @jax.jit
+            def _solve(y0, params, t_eval):
+                sol = _run_diffeqsolve(
+                    rhs, y0=y0, args=params,
+                    saveat=diffrax.SaveAt(ts=t_eval), **kw,
+                )
+                return sol.ts, sol.ys
+            return _solve
+
+        @jax.jit
+        def _solve(y0, params):
+            sol = _run_diffeqsolve(
+                rhs, y0=y0, args=params,
+                saveat=diffrax.SaveAt(t1=True), **kw,
+            )
+            return sol.ts, sol.ys
+        return _solve
 
     def run_to_steady_state(
         self,
