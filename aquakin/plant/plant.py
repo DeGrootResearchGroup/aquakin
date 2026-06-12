@@ -581,7 +581,7 @@ class Plant:
         streams: dict[tuple[Optional[str], str], Stream] = {}
         for port_name, series in self.influents.items():
             streams[(None, port_name)] = series.at(t)
-        resolved_flows = self._resolve_flows(t, params_full)
+        resolved_flows = self._resolve_flows(t, params_full, states)
         seeded = self._seed_recycle_streams(resolved_flows)
         all_outputs = self._sweep_outputs(t, states, streams, seeded, params_full)
         return all_outputs, streams
@@ -867,7 +867,10 @@ class Plant:
         return all_outputs
 
     def _resolve_flows(
-        self, t: jnp.ndarray, params_full: jnp.ndarray
+        self,
+        t: jnp.ndarray,
+        params_full: jnp.ndarray,
+        states: Optional[dict[str, jnp.ndarray]] = None,
     ) -> dict[tuple[Optional[str], str], jnp.ndarray]:
         """Solve the recycle FLOW network exactly (decoupled from concentration).
 
@@ -879,6 +882,14 @@ class Plant:
         ``(I - A) x = b`` for the consistent recycle flows -- exact and
         gain-independent, in ``n_recycle + 1`` cheap scalar passes. Returns the
         resolved flow for every stream key.
+
+        A unit whose flow split depends on its *own internal state* (a variable-
+        volume storage tank, whose overflow bypass is gated by the liquid level)
+        declares ``flow_needs_state = True`` and is passed its current state. The
+        affine probe stays exact as long as that state-dependence does not couple
+        to the recycle-flow variables -- true here because such a unit's *inlet*
+        flow comes from the fixed-pump sludge line (constant during the probe),
+        so at fixed state its outputs are constant in the recycle flows.
         """
         base: dict[tuple[Optional[str], str], jnp.ndarray] = {}
         for port_name, series in self.influents.items():
@@ -896,9 +907,12 @@ class Plant:
                     src = (None, conn.from_port) if conn.from_unit is None \
                         else (conn.from_unit, conn.from_port)
                     in_flows[conn.to_port] = flows[src]
-                out = self.units[name].flow_outputs(
-                    in_flows, self._params_for_unit(name, params_full)
-                )
+                unit = self.units[name]
+                params_unit = self._params_for_unit(name, params_full)
+                if getattr(unit, "flow_needs_state", False) and states is not None:
+                    out = unit.flow_outputs(in_flows, params_unit, states[name])
+                else:
+                    out = unit.flow_outputs(in_flows, params_unit)
                 for port, q in out.items():
                     flows[(name, port)] = q
             recycled = (

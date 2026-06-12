@@ -63,6 +63,8 @@ BSM2_DO_SATURATION = 8.0  # gO2/m³
 BSM2_INTERNAL_RECYCLE = 3.0 * BSM2_Q_REF   # Qintr
 BSM2_RAS = 1.0 * BSM2_Q_REF                # Qr
 BSM2_WASTAGE = 300.0                       # Qw
+BSM2_STORAGE_VOLUME = 160.0                # m³, reject equalisation tank (VOL_S)
+BSM2_STORAGE_OUTFLOW = 0.0                 # m³/d, controlled release (Qstorage)
 BSM2_BYPASS_Q = 60000.0                    # influent flow above this bypasses treatment
 BSM2_PRIMARY_VOLUME = 900.0  # m³
 BSM2_PRIMARY_FPS = 0.007
@@ -170,6 +172,9 @@ def build_bsm2(
     carbon_flow: float = BSM2_CARBON_FLOW,
     carbon_conc: float = BSM2_CARBON_CONC,
     do_control: bool = False,
+    reject_storage: bool = False,
+    storage_volume: float = BSM2_STORAGE_VOLUME,
+    storage_output_flow: float = BSM2_STORAGE_OUTFLOW,
     influent_bypass: bool = False,
     bypass_threshold: float = BSM2_BYPASS_Q,
 ) -> Plant:
@@ -191,6 +196,19 @@ def build_bsm2(
         ``SO`` in reactor 4 and manipulates its aeration ``kLa`` (with reactors 3
         and 5 scaled off the same signal), instead of the fixed open-loop ``kLa``
         of reactors 3-5. Default False (open-loop fixed aeration).
+    reject_storage : bool, optional
+        If True, route the recycled reject water through a :class:`StorageTank`
+        (a variable-volume equalisation tank with a level-gated overflow bypass)
+        before returning it to the plant front, instead of recycling it directly.
+        The tank buffers the reject load and releases it at
+        ``storage_output_flow``; with the default 0 release it fills and bypasses,
+        so the open-loop steady state is unchanged (all reject still reaches the
+        front). Default False.
+    storage_volume : float, optional
+        Maximum reject-storage-tank volume (m³). Only used with
+        ``reject_storage=True``.
+    storage_output_flow : float, optional
+        Controlled release flow from the storage tank (m³/d). Default 0.
     influent_bypass : bool, optional
         If True, add the BSM2 hydraulic influent bypass: raw influent flow above
         ``bypass_threshold`` is diverted around the whole treatment train
@@ -211,6 +229,7 @@ def build_bsm2(
         ``influent_bypass=True`` (mirroring :func:`build_bsm1`).
     """
     from aquakin.plant.control import PIController
+    from aquakin.plant.storage import StorageTank
     import aquakin
 
     asm1 = asm1_network if asm1_network is not None else aquakin.load_network("asm1")
@@ -252,9 +271,14 @@ def build_bsm2(
             name="bypass_split", network=asm1, threshold=float(bypass_threshold),
             threshold_port="bypass", remainder_port="to_plant"))
 
-    # ----- Front: combine raw influent with the recycled reject water. -----
+    # ----- Front: combine raw influent with the recycled reject water. With a
+    # reject storage tank the reject returns on two ports (the released stream
+    # and the level-gated overflow bypass); otherwise on one combined port.
+    front_reject_ports = (["storage_out", "storage_bypass"] if reject_storage
+                          else ["reject"])
     plant.add_unit(MixerUnit(name="front_mix",
-                             input_port_names=["fresh", "reject"], network=asm1))
+                             input_port_names=["fresh"] + front_reject_ports,
+                             network=asm1))
     plant.add_unit(PrimaryClarifier(name="primary", network=asm1,
                                     volume=BSM2_PRIMARY_VOLUME, f_PS=BSM2_PRIMARY_FPS))
 
@@ -328,6 +352,13 @@ def build_bsm2(
         name="reject_mix",
         input_port_names=["thickener_reject", "dewatering_reject"], network=asm1))
 
+    # Optional reject equalisation tank: buffer the combined reject and release
+    # it at a controlled rate, with a level-gated overflow bypass.
+    if reject_storage:
+        plant.add_unit(StorageTank(
+            name="reject_storage", network=asm1, volume=storage_volume,
+            output_flow=storage_output_flow))
+
     # Cross-network interfaces (ASM1 <-> ADM1).
     asm2adm = ASM1toADM1(source_network=asm1, target_network=adm1)
     adm2asm = ADM1toASM1(source_network=adm1, target_network=asm1)
@@ -369,7 +400,16 @@ def build_bsm2(
     # Reject-water recycle to the front (back-edge; temperature-carrying seed).
     plant.connect("thickener.overflow", "reject_mix.thickener_reject")
     plant.connect("dewatering.overflow", "reject_mix.dewatering_reject")
-    plant.connect("reject_mix", "front_mix.reject", initial_value=seed)
+    if reject_storage:
+        # reject_mix -> storage tank; the released stream and the overflow
+        # bypass both return to the front (both back-edges, seeded).
+        plant.connect("reject_mix", "reject_storage.in", initial_value=seed)
+        plant.connect("reject_storage.out", "front_mix.storage_out",
+                      initial_value=seed)
+        plant.connect("reject_storage.bypass", "front_mix.storage_bypass",
+                      initial_value=seed)
+    else:
+        plant.connect("reject_mix", "front_mix.reject", initial_value=seed)
     # dewatering:underflow -> sludge disposal (leaves the plant; not routed).
 
     # External carbon dosing to reactor 1 (a constant readily-biodegradable SS
