@@ -48,6 +48,7 @@ def build_bsm1(
     network: Optional["CompiledNetwork"] = None,
     *,
     Q_avg: float = BSM1_Q_AVG,
+    wastage_flow: float = BSM1_WASTAGE_FLOW,
     closed_loop_do: bool = False,
     do_setpoint_tank5: float = 2.0,
     conditions: Optional[dict[str, float]] = None,
@@ -62,6 +63,11 @@ def build_bsm1(
     Q_avg : float
         Average dry-weather inlet flow. Used to size the recycle streams
         (internal recycle and RAS). Default 18446 m³/d per Copp 2002.
+    wastage_flow : float
+        Sludge-wastage pump flow ``Qw`` (m³/d). The clarifier underflow is
+        ``Qr + Qw`` and the wastage is the free remainder after the RAS split.
+        Default 385 per Copp 2002; vary it to hit a target solids retention time
+        (see ``examples/bsm1_target_srt.py``).
     closed_loop_do : bool
         If True, attach a PI controller on tank 5 DO that adjusts kLa₅
         to maintain ``do_setpoint_tank5``. Open-loop default uses the
@@ -144,7 +150,7 @@ def build_bsm1(
     # the SplitterUnit flow-mode docstring).
     Qa = BSM1_INTERNAL_RECYCLE_RATIO * Q_avg
     Qr = BSM1_EXTERNAL_RECYCLE_RATIO * Q_avg
-    Qw = BSM1_WASTAGE_FLOW
+    Qw = wastage_flow
     Q_underflow = Qr + Qw
 
     # ----- Internal recycle splitter (tank 5 outlet) -----

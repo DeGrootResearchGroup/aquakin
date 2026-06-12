@@ -13,6 +13,12 @@ target — see :mod:`aquakin.plant.bsm.bsm1`.
 from aquakin.plant.control import PIController
 from aquakin.plant.cstr import CSTRUnit
 from aquakin.plant.delay import HydraulicDelayUnit
+from aquakin.plant.design import (
+    ActivatedSludgeSizing,
+    SludgeMetrics,
+    size_activated_sludge,
+    sludge_metrics,
+)
 from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
@@ -60,6 +66,7 @@ __all__ = [
     "ADM1DigesterUnit",
     "ADM1toASM1",
     "ASM1toADM1",
+    "ActivatedSludgeSizing",
     "BSM1Evaluation",
     "BSM2Evaluation",
     "CSTRUnit",
@@ -75,6 +82,7 @@ __all__ = [
     "Plant",
     "PlantSolution",
     "PrimaryClarifier",
+    "SludgeMetrics",
     "SteadyStateResult",
     "SplitterUnit",
     "StateTranslator",
@@ -98,4 +106,6 @@ __all__ = [
     "operational_cost_index_bsm2",
     "pumping_energy",
     "pumping_energy_bsm2",
+    "size_activated_sludge",
+    "sludge_metrics",
 ]
