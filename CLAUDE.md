@@ -1843,8 +1843,7 @@ clarifiers are unaffected (the flag is false, the 2-arg `flow_outputs` path runs
 setpoint flows through. Demonstrated in `examples/bsm2_wastage_schedule.py` and
 tested in `tests/integration/test_bsm2_wastage.py` (the schedule's step/validation/
 shift/jit behaviour, no-solve; wired plant steps the waste flow on schedule with
-RAS held fixed, and higher wastage lowers the biomass). The **hydraulic delay**
-is the last remaining BSM2 element.
+RAS held fixed, and higher wastage lowers the biomass).
 
 **Closed-loop reject control (`build_bsm2(reject_control=True)`).** The storage
 tank's release runs a **proportional level controller** instead of a fixed
