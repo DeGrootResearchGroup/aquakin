@@ -1240,7 +1240,12 @@ network.to_latex()                   # LaTeX rate expressions
 # identifiers ("Br-", the namespaced "O3_Br_direct.k1"); kwargs are a
 # convenience for identifier-safe names. Unknown names raise with a
 # difflib "did you mean?" hint.
-network.concentrations({"O3": 1e-4, "Br-": 1e-5})   # defaults + overrides
+network.concentrations({"O3": 1e-4, "Br-": 1e-5})   # YAML defaults + overrides
+network.concentrations({"SS": 60.0}, base="zero")   # FEED: unlisted species = 0,
+                                                    #   not at their reference value
+network.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0, T=288.15)  # zero-based,
+                                                    #   constant-in-time InfluentSeries
+                                                    #   (== InfluentSeries.constant(net, ...))
 network.parameter_values({"O3_Br_direct.k1": 175.0})
 network.atol({"OH": 1e-20}, default=1e-12)          # per-species tolerance vector
 

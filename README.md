@@ -53,6 +53,11 @@ reactor = aquakin.BatchReactor(network, conditions)
 # Use a dict (species names like "Br-" aren't valid kwargs); rest = YAML defaults.
 C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
 
+# For a FEED composition use base="zero" (or network.influent): unlisted species
+# are absent, not silently left at their YAML reference value.
+feed = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5}, base="zero")
+influent = network.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)   # InfluentSeries
+
 # params is optional and defaults to network.default_parameters().
 solution = reactor.solve(
     C0, t_span=(0.0, 600.0), t_eval=jnp.linspace(0.0, 600.0, 121),

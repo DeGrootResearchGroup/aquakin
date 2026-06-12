@@ -108,6 +108,34 @@ def test_concentrations_by_name(simple_network):
     assert float(c2[a]) == 5.0 and float(c2[b]) == 2.0
 
 
+def test_concentrations_zero_base(simple_network):
+    """base='zero' starts every species at 0, so only the named ones are set --
+    the correct base for a feed composition."""
+    a = simple_network.species_index["A"]
+    b = simple_network.species_index["B"]
+
+    z = simple_network.concentrations({"A": 5.0}, base="zero")
+    assert float(z[a]) == 5.0
+    assert float(z[b]) == 0.0          # not the YAML default
+
+    # No overrides + zero base -> all zeros.
+    assert jnp.array_equal(
+        simple_network.concentrations(base="zero"),
+        jnp.zeros_like(simple_network.default_concentrations()),
+    )
+
+    # base='defaults' is the (default) old behaviour.
+    assert jnp.array_equal(
+        simple_network.concentrations({"A": 5.0}, base="defaults"),
+        simple_network.concentrations({"A": 5.0}),
+    )
+
+
+def test_concentrations_invalid_base(simple_network):
+    with pytest.raises(ValueError, match="base must be"):
+        simple_network.concentrations({"A": 5.0}, base="nope")
+
+
 def test_parameter_values_by_name(simple_network):
     p = simple_network.parameter_values({"A_to_B.k": 0.7})
     assert float(p[simple_network.param_index["A_to_B.k"]]) == 0.7
