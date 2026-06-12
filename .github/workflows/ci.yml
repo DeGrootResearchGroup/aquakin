@@ -62,9 +62,15 @@ jobs:
         # offending test instead of hanging silently. --max-worker-restart=0 makes
         # a crashed worker fail the run immediately. Together with timeout-minutes
         # above, a hang surfaces a clear, fast failure.
+        # --dist loadscope keeps a module's tests on one worker, so a module-
+        # scoped fixture (e.g. a built+solved BSM2 plant) compiles ONCE per module
+        # instead of once per worker that draws one of its tests -- compiling a
+        # stiff solve dominates the cost. (Trade-off: coarser load balancing, a
+        # heavy module can't be split across workers.)
         run: >-
-          pytest -m "not validation and not slow" -q -n auto --durations=15
-          --timeout=600 --timeout-method=thread --max-worker-restart=0
+          pytest -m "not validation and not slow" -q -n auto --dist loadscope
+          --durations=15 --timeout=600 --timeout-method=thread
+          --max-worker-restart=0
 
   # ---- Full slow integration suite: merge-to-main only ------------------------
   # The multi-minute stiff/plant solves. Skipped on pull requests (the fast gate
@@ -95,8 +101,10 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run slow suite
+        # --dist loadscope: module-scoped fixtures compile once per module (see
+        # the fast-tests step).
         run: >-
-          pytest -m "slow" -q -n auto --durations=15
+          pytest -m "slow" -q -n auto --dist loadscope --durations=15
           --timeout=900 --timeout-method=thread --max-worker-restart=0
 
   # ---- Validation suite (against published data): merge-to-main only ----------

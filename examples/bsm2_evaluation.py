@@ -76,10 +76,14 @@ def main() -> None:
     rows = [
         (f"reactor-4 SO ({asm1.units_of('SO')})", open_so4, closed_so4),
         ("EQI (kg/d)", open_ev.eqi, closed_ev.eqi),
-        ("OCI", open_ev.oci, closed_ev.oci),
+        ("OCI (full BSM2)", open_ev.oci, closed_ev.oci),
         ("  aeration (kWh/d)", open_ev.aeration_energy, closed_ev.aeration_energy),
         ("  pumping (kWh/d)", open_ev.pumping_energy, closed_ev.pumping_energy),
+        ("  mixing (kWh/d)", open_ev.mixing_energy, closed_ev.mixing_energy),
         ("  sludge (kg TSS/d)", open_ev.sludge_production, closed_ev.sludge_production),
+        ("  carbon (kg COD/d)", open_ev.carbon_mass, closed_ev.carbon_mass),
+        ("  methane (kg CH₄/d)", open_ev.methane_production, closed_ev.methane_production),
+        ("  heating (kWh/d)", open_ev.heating_energy, closed_ev.heating_energy),
         (f"effluent SNH ({asm1.units_of('SNH')})", open_ev.effluent["SNH"], closed_ev.effluent["SNH"]),
         (f"effluent SNO ({asm1.units_of('SNO')})", open_ev.effluent["SNO"], closed_ev.effluent["SNO"]),
     ]

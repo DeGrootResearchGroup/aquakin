@@ -19,12 +19,17 @@ from aquakin.plant.bsm.bsm2 import build_bsm2, BSM2_Q_REF
 from aquakin.plant.influent import InfluentSeries
 
 
-@pytest.fixture
+# Module-scoped so the (expensive) build + steady-state solve happens ONCE for
+# the whole file; the tests below each inspect a different facet of that single
+# solution rather than re-solving. (Run the suite under ``pytest --dist
+# loadscope`` so this module's tests stay on one xdist worker and the fixture is
+# not recomputed per worker.)
+@pytest.fixture(scope="module")
 def asm1():
     return aquakin.load_network("asm1")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def constant_influent(asm1):
     """Constant raw influent at a representative BSM2 average composition."""
     over = {"SI": 27.0, "SS": 58.0, "XI": 92.0, "XS": 364.0, "XB_H": 51.0,
@@ -35,27 +40,24 @@ def constant_influent(asm1):
                           C=jnp.tile(C0, (2, 1)), network=asm1)
 
 
-def _build(asm1, influent):
+@pytest.fixture(scope="module")
+def steady(asm1, constant_influent):
+    """The open-loop BSM2 plant and its steady-state solve (computed once)."""
     plant = build_bsm2(asm1_network=asm1)
-    plant.add_influent("feed", influent, to="front_mix.fresh")
-    return plant
+    plant.add_influent("feed", constant_influent, to="front_mix.fresh")
+    sol = plant.solve(t_span=(0.0, 200.0), t_eval=jnp.array([0.0, 200.0]),
+                      rtol=1e-4, atol=1e-3, max_steps=400_000)
+    return plant, sol
 
 
-def _solve(plant, t_end=200.0):
-    return plant.solve(t_span=(0.0, t_end), t_eval=jnp.array([0.0, t_end]),
-                       rtol=1e-4, atol=1e-3, max_steps=400_000)
-
-
-def test_bsm2_builds_and_reaches_steady_state(asm1, constant_influent):
-    plant = _build(asm1, constant_influent)
-    sol = _solve(plant)
+def test_bsm2_builds_and_reaches_steady_state(steady):
+    _plant, sol = steady
     assert jnp.all(jnp.isfinite(sol.state))
 
 
-def test_bsm2_activated_sludge_healthy(asm1, constant_influent):
+def test_bsm2_activated_sludge_healthy(steady):
     """Nitrification active and biomass sustained in the AS reactors."""
-    plant = _build(asm1, constant_influent)
-    sol = _solve(plant)
+    _plant, sol = steady
     assert float(sol.C_named("tank5", "XB_H")[-1]) > 800.0     # heterotrophs alive
     assert float(sol.C_named("tank5", "XB_A")[-1]) > 50.0      # autotrophs alive
     assert float(sol.C_named("tank5", "SNH")[-1]) < 2.0        # nitrified
@@ -65,11 +67,10 @@ def test_bsm2_activated_sludge_healthy(asm1, constant_influent):
     assert float(sol.C_named("tank5", "SO")[-1]) > 0.3
 
 
-def test_bsm2_digester_produces_methane(asm1, constant_influent):
+def test_bsm2_digester_produces_methane(steady):
     """The ADM1 digester reaches a methanogenic steady state (headspace CH4
     near the BSM2 reference) inside the coupled plant."""
-    plant = _build(asm1, constant_influent)
-    sol = _solve(plant)
+    plant, sol = steady
     adm1 = plant.units["digester"].network
     dstate = plant.states_by_unit(sol.final_state)["digester"]
     g = lambda n: float(dstate[adm1.species_index[n]])
@@ -82,10 +83,12 @@ def test_bsm2_digester_produces_methane(asm1, constant_influent):
     assert g("S_ac") > 0.0
 
 
-def test_bsm2_flow_balance(asm1, constant_influent):
+def test_bsm2_flow_balance(steady):
     """The resolved flow network is consistent: fixed pumps at setpoint, the
-    plant-wide volume balance closes (influent + reject = effluent + sludge)."""
-    plant = _build(asm1, constant_influent)
+    plant-wide volume balance closes (influent + reject = effluent + sludge).
+
+    Uses only the (cheap) flow resolution, not the integration."""
+    plant, _sol = steady
     plant._build_state_layout()
     plant._build_parameter_layout()
     params = plant.default_parameters()
