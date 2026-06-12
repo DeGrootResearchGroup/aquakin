@@ -1790,9 +1790,8 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
 Covered by `tests/integration/test_bsm2_control.py` (controller-unit behaviour:
 signal sign, saturation, integral direction, anti-windup; closed-loop setpoint
 tracking; closed-vs-open contrast; `jax.grad` through the closed loop). The
-**hydraulic delay and the wastage (`Qw`) timer
-are still omitted** (the remaining BSM2 elements). The digester is
-additionally validated at the unit level in
+**wastage (`Qw`) timer is still omitted** (the remaining BSM2 element). The
+digester is additionally validated at the unit level in
 `tests/validation/test_bsm2_digester_unit.py`.
 
 **Reject storage tank (`build_bsm2(reject_storage=True)`).** A variable-volume
@@ -1846,8 +1845,34 @@ concentration the sweep must produce first.) Demonstrated in
 `examples/bsm2_reject_control.py` (open-loop bypass vs closed-loop control) and
 tested in `tests/integration/test_bsm2_reject_control.py` (the release law +
 flow/volume conservation, no-solve; wired plant holds a mid-level and releases
-the reject with zero bypass). The **hydraulic delay and the wastage (`Qw`)
-timer** remain.
+the reject with zero bypass). The **wastage (`Qw`) timer** remains.
+
+**Influent hydraulic delay (`build_bsm2(hydraulic_delay=True)`).** A first-order
+lag on the raw influent's flow and load, modelling the transport delay of the
+sewer/channel ahead of the works. `HydraulicDelayUnit`
+([`plant/delay.py`](aquakin/plant/delay.py)) carries the **load** (`Q·C`) and
+the **flow** `Q` as state, each relaxing to the inlet with time constant `tau`
+(`d(Q·Cᵢ)/dt = (Q_in·C_in,i − Q·Cᵢ)/tau`, `dQ/dt = (Q_in − Q)/tau`); the outlet
+concentration is the lagged load over the lagged flow. This is the BSM2
+`hyddelay` structure (a fixed-`tau` lag on load, *not* a fixed-volume tank whose
+residence time varies with flow). A flow/load pulse emerges delayed and rounded
+(first-order, ~63% of a step after one `tau`); at steady state `Q→Q_in`,
+`C→C_in` (a pass-through, so the operating point is unchanged). The **outlet
+flow is the held-flow state**, so the unit sets `flow_needs_state = True` and the
+plant passes its state into `flow_outputs` (the same hook the storage tank uses).
+Wired front-most: `build_bsm2(hydraulic_delay=True)` puts it on the influent
+(entry point becomes `"influent_delay.in"`), composing with the bypass
+(influent → delay → bypass_split → front). **Faithfulness note:** the BSM2
+reference `tau≈1e-4` d is a near-instantaneous lag whose role is to break
+algebraic loops in a sequential-modular solver — aquakin resolves recycles
+directly in one monolithic solve and does not need it, so the unit is here to
+model a *physical* delay (`hydraulic_delay_tau`, default ~0.02 d) and to complete
+the BSM2 element set. Demonstrated in `examples/bsm2_hydraulic_delay.py` (a flow
+pulse emerges lagged) and tested in
+`tests/integration/test_bsm2_hydraulic_delay.py` (the lag's fixed-point /
+load-over-flow / first-order-response behaviour, no-solve; wired plant builds
+front-most, steady state unchanged). With this, the **wastage timer** is the
+last remaining BSM2 element.
 
 **Hydraulic influent bypass (`build_bsm2(influent_bypass=True)`).** The BSM2
 wet-weather bypass: raw influent flow above `bypass_threshold` (default 60000

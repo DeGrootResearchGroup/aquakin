@@ -72,6 +72,7 @@ BSM2_STORAGE_OUTFLOW_MAX = 1500.0          # m³/d, release pump capacity (Qstor
 BSM2_STORAGE_LEVEL_SETPOINT_FRAC = 0.5     # target level as a fraction of Vmax
 BSM2_STORAGE_LEVEL_GAIN = 30.0             # m³/d release per m³ above setpoint
 BSM2_BYPASS_Q = 60000.0                    # influent flow above this bypasses treatment
+BSM2_HYDRAULIC_DELAY_TAU = 0.02            # d, influent hydraulic-lag time constant (~30 min)
 BSM2_PRIMARY_VOLUME = 900.0  # m³
 BSM2_PRIMARY_FPS = 0.007
 BSM2_CLARIFIER_AREA = 1500.0  # m²
@@ -184,6 +185,8 @@ def build_bsm2(
     storage_output_flow: float = BSM2_STORAGE_OUTFLOW,
     influent_bypass: bool = False,
     bypass_threshold: float = BSM2_BYPASS_Q,
+    hydraulic_delay: bool = False,
+    hydraulic_delay_tau: float = BSM2_HYDRAULIC_DELAY_TAU,
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
@@ -234,15 +237,28 @@ def build_bsm2(
     bypass_threshold : float, optional
         Influent flow limit (m³/d) above which the excess bypasses; the BSM2
         default is 60000. Only used when ``influent_bypass=True``.
+    hydraulic_delay : bool, optional
+        If True, insert a :class:`HydraulicDelayUnit` (a first-order lag on flow
+        and load) on the raw influent before the plant, modelling the transport
+        delay of the sewer/channel ahead of the works. This **moves the influent
+        entry point** to ``"influent_delay.in"``. Default False. (The BSM2
+        reference uses a negligibly small lag to break solver algebraic loops,
+        which aquakin's monolithic solve does not need; this is for a *physical*
+        delay -- set ``hydraulic_delay_tau`` to the real residence time.)
+    hydraulic_delay_tau : float, optional
+        Lag time constant (days) for the influent hydraulic delay. Default ~0.02
+        (≈30 min). Only used when ``hydraulic_delay=True``.
 
     Returns
     -------
     Plant
         The wired BSM2 plant. The caller adds the influent and connects it to
-        ``front_mix.fresh`` -- or to ``bypass_split.in`` when
-        ``influent_bypass=True`` (mirroring :func:`build_bsm1`).
+        ``front_mix.fresh`` -- or to ``bypass_split.in`` (``influent_bypass``) or
+        ``influent_delay.in`` (``hydraulic_delay``, which takes precedence as the
+        new front-most unit). Mirrors :func:`build_bsm1`.
     """
     from aquakin.plant.control import PIController
+    from aquakin.plant.delay import HydraulicDelayUnit
     from aquakin.plant.storage import StorageTank
     import aquakin
 
@@ -279,6 +295,15 @@ def build_bsm2(
     # A storage tank is built when either the fixed-release storage or the
     # closed-loop reject controller is requested.
     use_storage = reject_storage or reject_control
+
+    # ----- Influent hydraulic delay (optional): a first-order lag on the raw
+    # influent flow and load, modelling the sewer/channel transport delay. Added
+    # front-most; its outlet feeds whatever the influent would otherwise enter.
+    if hydraulic_delay:
+        delay_C = asm1.concentrations(BSM2_CONSTANT_INFLUENT)
+        plant.add_unit(HydraulicDelayUnit(
+            name="influent_delay", network=asm1, tau=float(hydraulic_delay_tau),
+            initial_flow=Q_ref, initial_concentrations=delay_C))
 
     # ----- Influent bypass (optional): divert wet-weather peak flow around the
     # whole treatment train. The split is on the *raw influent* flow (an external
@@ -393,6 +418,11 @@ def build_bsm2(
     adm2asm = ADM1toASM1(source_network=adm1, target_network=asm1)
 
     # ----- Wiring -----
+    # The raw influent enters at the bypass splitter if present, else the front
+    # mixer; a hydraulic delay (if present) sits ahead of that and feeds it.
+    fresh_entry = "bypass_split.in" if influent_bypass else "front_mix.fresh"
+    if hydraulic_delay:
+        plant.connect("influent_delay.out", fresh_entry)
     # Influent bypass: the raw influent enters the splitter; the within-capacity
     # flow goes to the plant, the excess skips the train and rejoins the effluent.
     if influent_bypass:
