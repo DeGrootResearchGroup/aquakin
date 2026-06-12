@@ -20,10 +20,12 @@ import jax.numpy as jnp
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
-    _coerce_atol,
     _interp_fields_to_scalar,
     friendly_step_ceiling,
+    init_solver_settings,
+    resolve_state_atol,
     solve_chemistry,
+    validate_C0_params,
 )
 
 
@@ -94,7 +96,9 @@ class ParticleTrackReactor:
     rtol : float, optional
         Relative tolerance for the ODE solver.
     atol : float or jnp.ndarray, optional
-        Absolute tolerance, scalar or shape ``(n_species,)``.
+        Absolute tolerance, scalar or shape ``(n_species,)``. Defaults to
+        ``None`` -> a per-component noise floor scaled off the network reference
+        concentrations (see :class:`~aquakin.BatchReactor`).
     adjoint : diffrax.AbstractAdjoint, optional
         Adjoint strategy. Defaults to
         :class:`diffrax.RecursiveCheckpointAdjoint` (reverse-mode); pass
@@ -114,7 +118,7 @@ class ParticleTrackReactor:
         *,
         n_save: int | None = None,
         rtol: float = 1e-6,
-        atol=1e-9,
+        atol=None,
         adjoint: "diffrax.AbstractAdjoint | None" = None,
         dtmax: float | None = None,
         max_steps: int = 100_000,
@@ -125,16 +129,13 @@ class ParticleTrackReactor:
                 f"Track is missing required condition fields: {missing}. "
                 f"Provided: {sorted(track.fields)}"
             )
-        self.network = network
+        init_solver_settings(self, network, rtol=rtol, adjoint=adjoint,
+                             dtmax=dtmax, max_steps=max_steps)
         self.track = track
         self.n_save = int(n_save) if n_save is not None else track.n_points
         if self.n_save < 2:
             raise ValueError(f"n_save must be >= 2, got {self.n_save}")
-        self.rtol = rtol
-        self.atol = _coerce_atol(atol, network.n_species)
-        self.adjoint = adjoint
-        self.dtmax = dtmax
-        self.max_steps = int(max_steps)
+        self.atol = resolve_state_atol(network, atol)
         # Single jitted variant: the track structure is fixed for the
         # reactor's lifetime, so one cache slot is enough.
         self._jitted_solve = None
@@ -158,14 +159,7 @@ class ParticleTrackReactor:
         params = (
             self.network.default_parameters() if params is None else jnp.asarray(params)
         )
-        if C0.shape != (self.network.n_species,):
-            raise ValueError(
-                f"C0 has shape {C0.shape}, expected ({self.network.n_species},)"
-            )
-        if params.shape != (self.network.n_params,):
-            raise ValueError(
-                f"params has shape {params.shape}, expected ({self.network.n_params},)"
-            )
+        validate_C0_params(self.network, C0, params)
 
         if self._jitted_solve is None:
             self._jitted_solve = self._build_jitted_solve()
@@ -208,7 +202,7 @@ def integrate_ensemble(
     params: jnp.ndarray,
     *,
     rtol: float = 1e-6,
-    atol=1e-9,
+    atol=None,
     n_save: int | None = None,
     adjoint: "diffrax.AbstractAdjoint | None" = None,
     dtmax: float | None = None,

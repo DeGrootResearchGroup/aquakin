@@ -483,6 +483,57 @@ def default_atol(scale_like, reference=None, *, atol_factor: float = 1e-6,
     return atol_factor * typ
 
 
+def resolve_state_atol(network, atol):
+    """Resolve the ``atol`` for a reactor whose state is one ``(n_species,)``
+    concentration vector.
+
+    ``atol=None`` -> the per-component :func:`default_atol` noise floor scaled off
+    the network's reference concentrations (so a g/m³ ASM network and a mol/L
+    ozone network each get sensible tolerances without hand-tuning, instead of a
+    fixed scalar that is ~9 orders too tight for g/m³ states). An explicit scalar
+    or ``(n_species,)`` array is validated and returned verbatim. Shared by every
+    reactor with a single-concentration-vector state (Batch / PFR / Particle /
+    CFD); the layered :class:`~aquakin.BiofilmReactor`, whose state spans several
+    compartments, sets its own scalar ``atol`` instead.
+    """
+    return (
+        default_atol(network.default_concentrations())
+        if atol is None else _coerce_atol(atol, network.n_species)
+    )
+
+
+def init_solver_settings(reactor, network, *, rtol, adjoint, dtmax, max_steps):
+    """Store the solver settings every reactor shares, on ``reactor``.
+
+    Sets ``network``, ``rtol``, ``adjoint``, ``dtmax`` and ``max_steps`` -- the
+    five settings common to every reactor constructor. ``atol`` is **not** set
+    here because its resolution depends on the reactor's state shape (see
+    :func:`resolve_state_atol` for the single-vector case); the caller sets
+    ``reactor.atol`` itself.
+    """
+    reactor.network = network
+    reactor.rtol = float(rtol)
+    reactor.adjoint = adjoint
+    reactor.dtmax = dtmax
+    reactor.max_steps = int(max_steps)
+
+
+def validate_C0_params(network, C0, params):
+    """Raise ``ValueError`` if ``C0`` / ``params`` do not match the network.
+
+    The shared shape check every single-vector-state reactor runs at the top of
+    ``solve`` (``C0`` is ``(n_species,)``, ``params`` is ``(n_params,)``).
+    """
+    if C0.shape != (network.n_species,):
+        raise ValueError(
+            f"C0 has shape {C0.shape}, expected ({network.n_species},)"
+        )
+    if params.shape != (network.n_params,):
+        raise ValueError(
+            f"params has shape {params.shape}, expected ({network.n_params},)"
+        )
+
+
 def _run_diffeqsolve(
     rhs: Callable,
     *,

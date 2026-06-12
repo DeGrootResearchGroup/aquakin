@@ -35,7 +35,11 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.network import CompiledNetwork
-from aquakin.integrate._common import _coerce_atol, solve_chemistry
+from aquakin.integrate._common import (
+    init_solver_settings,
+    resolve_state_atol,
+    solve_chemistry,
+)
 
 
 class CFDReactor:
@@ -53,8 +57,9 @@ class CFDReactor:
     rtol : float, optional
         Relative tolerance for the per-cell ODE solver.
     atol : float or jnp.ndarray, optional
-        Absolute tolerance. Scalar or shape ``(n_species,)``. See
-        :class:`BatchReactor` for the per-species rationale.
+        Absolute tolerance. Scalar or shape ``(n_species,)``. Defaults to
+        ``None`` -> a per-component noise floor scaled off the network reference
+        concentrations (see :class:`BatchReactor` for the per-species rationale).
     adjoint : diffrax.AbstractAdjoint, optional
         Adjoint strategy for the per-cell solve. Defaults to
         :class:`diffrax.RecursiveCheckpointAdjoint`. Note that the only public
@@ -91,7 +96,7 @@ class CFDReactor:
         network: CompiledNetwork,
         *,
         rtol: float = 1e-6,
-        atol=1e-9,
+        atol=None,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
         on_nan: str = "raise",
         dtmax: Optional[float] = None,
@@ -101,13 +106,10 @@ class CFDReactor:
             raise ValueError(
                 f"on_nan must be 'raise' or 'ignore', got {on_nan!r}"
             )
-        self.network = network
-        self.rtol = rtol
-        self.atol = _coerce_atol(atol, network.n_species)
-        self.adjoint = adjoint
+        init_solver_settings(self, network, rtol=rtol, adjoint=adjoint,
+                             dtmax=dtmax, max_steps=max_steps)
+        self.atol = resolve_state_atol(network, atol)
         self.on_nan = on_nan
-        self.dtmax = dtmax
-        self.max_steps = int(max_steps)
         # Cache jit-compiled vmapped step keyed on n_cells.
         self._jit_cache: dict[int, callable] = {}
 
