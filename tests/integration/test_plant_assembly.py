@@ -623,3 +623,60 @@ def test_default_atol_solves_without_tuning(simple_net):
     sol = plant.solve(t_span=(0.0, 200.0), t_eval=jnp.asarray([200.0]))  # atol default
     tank = plant.states_by_unit(sol.final_state)["tank"]
     assert float(tank[simple_net.species_index["A"]]) == pytest.approx(0.5, abs=1e-3)
+
+
+# ----- By-name plant parameter overrides (#134) ----------------------------
+
+def _bsm2_no_solve():
+    """The two-network BSM2 plant (ASM1 + ADM1), assembled but not solved --
+    cheap, for the by-name parameter API."""
+    from aquakin.plant.bsm import build_bsm2, bsm2_asm1_network
+
+    asm1 = bsm2_asm1_network()
+    adm1 = aquakin.load_network("adm1")
+    return build_bsm2(asm1, adm1), asm1, adm1
+
+
+def test_plant_parameter_names_are_network_prefixed():
+    plant, asm1, adm1 = _bsm2_no_solve()
+    names = plant.parameter_names()
+    assert len(names) == asm1.n_params + adm1.n_params
+    assert "asm1.muH" in names           # ASM1 water line
+    assert "adm1.k_m_ac" in names        # ADM1 digester
+    # No bare names; every key carries its network prefix.
+    assert all("." in n and n.split(".")[0] in ("asm1", "adm1") for n in names)
+
+
+def test_plant_parameter_index_matches_block_offset():
+    """The friendly index equals the hand-computed block offset it replaces."""
+    plant, asm1, adm1 = _bsm2_no_solve()
+    # ASM1 is the first block (offset 0); ADM1 follows it.
+    assert plant.parameter_index("asm1.muH") == asm1.param_index["muH"]
+    assert (plant.parameter_index("adm1.k_m_ac")
+            == asm1.n_params + adm1.param_index["k_m_ac"])
+
+
+def test_plant_parameter_values_sets_only_named_entries():
+    plant, _asm1, _adm1 = _bsm2_no_solve()
+    base = plant.default_parameters()
+    i_mu = plant.parameter_index("asm1.muH")
+    i_km = plant.parameter_index("adm1.k_m_ac")
+    v = plant.parameter_values({"asm1.muH": 6.0, "adm1.k_m_ac": 9.0})
+    assert float(v[i_mu]) == 6.0
+    assert float(v[i_km]) == 9.0
+    # Every other entry is unchanged.
+    changed = set(int(i) for i in jnp.where(v != base)[0])
+    assert changed <= {i_mu, i_km}
+    # None / empty returns the defaults unchanged.
+    assert bool(jnp.array_equal(plant.parameter_values(), base))
+    assert bool(jnp.array_equal(plant.parameter_values({}), base))
+
+
+def test_plant_parameter_values_unknown_name_raises_with_hint():
+    plant, _asm1, _adm1 = _bsm2_no_solve()
+    with pytest.raises(KeyError, match="Did you mean: asm1.muH"):
+        plant.parameter_values({"asm1.muh": 6.0})   # wrong case
+    with pytest.raises(KeyError, match="Unknown plant parameter"):
+        plant.parameter_index("adm1.nope")
+    with pytest.raises(TypeError):
+        plant.parameter_values([("asm1.muH", 6.0)])  # not a dict

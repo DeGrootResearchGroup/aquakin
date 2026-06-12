@@ -575,6 +575,114 @@ class Plant:
             return jnp.zeros((0,))
         return jnp.concatenate([net.default_parameters() for net in nets])
 
+    def _plant_param_index(self) -> dict[str, int]:
+        """Map ``"<network>.<param>"`` -> index in the flat plant parameter vector.
+
+        Built from the per-network parameter blocks (:attr:`network_param_blocks`)
+        and each network's own ``param_index``. The key prefixes a network's
+        namespaced parameter name with the network name, so the same flat vector
+        the integrator uses gets a friendly by-name address.
+        """
+        self._build_parameter_layout()
+        blocks = self._parameter_layout.network_param_blocks
+        index: dict[str, int] = {}
+        for net in self._ordered_networks():
+            start, _ = blocks[net.name]
+            for pname, local in net.param_index.items():
+                index[f"{net.name}.{pname}"] = start + local
+        return index
+
+    def parameter_names(self) -> list[str]:
+        """The plant's calibratable parameter names, ``"<network>.<param>"``.
+
+        Each kinetic network contributes its (namespaced) parameter names
+        prefixed by the network name -- e.g. ``"asm1.muH"`` or
+        ``"adm1.k_hyd_ch"`` -- which are the keys accepted by
+        :meth:`parameter_values` / :meth:`parameter_index`.
+        """
+        return list(self._plant_param_index())
+
+    def parameter_index(self, name: str) -> int:
+        """Flat index of ``name`` (``"<network>.<param>"``) in the parameter vector.
+
+        The companion to :meth:`parameter_values` for code that needs the
+        *position* rather than a new vector -- e.g. ``jax.grad`` with respect to
+        one parameter, which can't go through :meth:`parameter_values` (that
+        materialises concrete values) -- without hand-computing the network
+        block offset. Raises ``KeyError`` with a close-match hint for an unknown
+        name.
+
+        Examples
+        --------
+        >>> gidx = plant.parameter_index("adm1.k_m_ac")
+        >>> grad = jax.grad(lambda th: f(params.at[gidx].set(th)))(theta0)
+        """
+        index = self._plant_param_index()
+        if name not in index:
+            import difflib
+            hint = difflib.get_close_matches(name, list(index), n=3)
+            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            raise KeyError(
+                f"Unknown plant parameter '{name}'. Keys are "
+                f"'<network>.<param>' (see plant.parameter_names()).{suffix}"
+            )
+        return index[name]
+
+    def parameter_values(self, overrides: Optional[dict] = None, /) -> jnp.ndarray:
+        """Plant parameter vector: the defaults with named entries overridden.
+
+        The plant analogue of ``CompiledNetwork.parameter_values``. Keys are
+        ``"<network>.<param>"`` -- the network name plus the network's own
+        (namespaced) parameter name -- so you can bump one rate in a
+        multi-network plant (e.g. BSM2's ASM1 water line + ADM1 digester)
+        without hunting the block offset and index by hand.
+
+        Parameters
+        ----------
+        overrides : dict[str, float], optional
+            Map of ``"<network>.<param>"`` to a new value. Unknown names raise a
+            ``KeyError`` with a close-match hint. ``None`` returns the defaults.
+
+        Returns
+        -------
+        jnp.ndarray
+            The flat parameter vector to pass to :meth:`solve`.
+
+        Examples
+        --------
+        >>> params = plant.parameter_values({"asm1.muH": 4.0, "adm1.k_hyd": 10.0})
+        >>> plant.solve(t_span=(0.0, 200.0), params=params)
+
+        See Also
+        --------
+        parameter_names : the valid keys.
+        """
+        base = self.default_parameters()
+        if overrides is None:
+            return base
+        if not isinstance(overrides, dict):
+            raise TypeError(
+                "overrides must be a dict of '<network>.<param>' -> value; got "
+                f"{type(overrides).__name__}."
+            )
+        if not overrides:
+            return base
+        import difflib
+
+        index = self._plant_param_index()
+        idxs, vals = [], []
+        for name, value in overrides.items():
+            if name not in index:
+                hint = difflib.get_close_matches(name, list(index), n=3)
+                suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+                raise KeyError(
+                    f"Unknown plant parameter '{name}'. Keys are "
+                    f"'<network>.<param>' (see plant.parameter_names()).{suffix}"
+                )
+            idxs.append(index[name])
+            vals.append(float(value))
+        return base.at[jnp.asarray(idxs)].set(jnp.asarray(vals, dtype=base.dtype))
+
     def _params_for_unit(
         self, unit_name: str, params_full: jnp.ndarray
     ) -> jnp.ndarray:
