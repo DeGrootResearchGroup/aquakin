@@ -286,8 +286,9 @@ class CompiledNetwork:
             vals.append(float(value))
         return base.at[jnp.asarray(idxs)].set(jnp.asarray(vals, dtype=base.dtype))
 
-    def concentrations(self, overrides=None, /, **kwargs) -> jnp.ndarray:
-        """Initial-concentration vector: YAML defaults with named species set.
+    def concentrations(self, overrides=None, /, *, base: str = "defaults",
+                       **kwargs) -> jnp.ndarray:
+        """Initial-concentration vector with named species set.
 
         A by-name builder that avoids manual
         ``default_concentrations().at[species_index[name]].set(value)`` chains.
@@ -295,9 +296,16 @@ class CompiledNetwork:
         Parameters
         ----------
         overrides : dict[str, float], optional
-            Species name -> concentration; unlisted species keep their YAML
-            default. Positional-only. Use the dict for names that are not valid
-            Python identifiers (``"Br-"``, ``"BrO3-"``).
+            Species name -> concentration. Positional-only. Use the dict for
+            names that are not valid Python identifiers (``"Br-"``, ``"BrO3-"``).
+        base : {"defaults", "zero"}, optional
+            Starting point for unlisted species. ``"defaults"`` (the default)
+            keeps each unspecified species at its YAML reference value;
+            ``"zero"`` starts every species at 0, so the result contains *only*
+            what was passed -- the correct base for building a feed composition
+            (where an unspecified species means "absent", not "at its reference
+            value"). A species literally named ``base`` must be passed via the
+            ``overrides`` dict.
         **kwargs : float
             Convenience overrides for identifier-safe species names (``O3=1e-4``).
 
@@ -310,10 +318,58 @@ class CompiledNetwork:
         --------
         >>> network.concentrations({"O3": 1e-4, "Br-": 1e-5})
         >>> network.concentrations(SS=50.0)
+        >>> network.concentrations({"SS": 50.0, "SNH": 25.0}, base="zero")
         """
+        if base == "defaults":
+            vec = self.default_concentrations()
+        elif base == "zero":
+            vec = jnp.zeros_like(self._default_concentrations)
+        else:
+            raise ValueError(
+                f"base must be 'defaults' or 'zero', got {base!r}."
+            )
         return self._override_vector(
-            self.default_concentrations(), self.species_index, overrides, kwargs,
-            "species",
+            vec, self.species_index, overrides, kwargs, "species",
+        )
+
+    def influent(self, overrides=None, /, *, Q: float, base: str = "zero",
+                 T=None, **kwargs):
+        """Build a constant-in-time influent stream from a feed composition.
+
+        Convenience for the common "constant feed of known composition" case:
+        a one-call, **zero-based** :class:`~aquakin.plant.influent.InfluentSeries`
+        so an unspecified species is absent from the feed rather than sitting at
+        its YAML reference value. The returned series is constant in time, so it
+        can be passed straight to ``plant.add_influent(...)``.
+
+        Parameters
+        ----------
+        overrides : dict[str, float], optional
+            Species name -> feed concentration. Positional-only.
+        Q : float
+            Volumetric flow rate of the feed (constant), required.
+        base : {"zero", "defaults"}, optional
+            Composition base, defaulting to ``"zero"`` (see :meth:`concentrations`).
+        T : float, optional
+            Constant feed temperature (Kelvin). ``None`` (default) leaves the
+            influent temperature-agnostic.
+        **kwargs : float
+            Convenience overrides for identifier-safe species names.
+
+        Returns
+        -------
+        InfluentSeries
+            A constant-in-time influent.
+
+        Examples
+        --------
+        >>> net.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)
+        >>> net.influent(SS=400.0, Q=2.0)            # carbon dose
+        """
+        from aquakin.plant.influent import InfluentSeries
+
+        return InfluentSeries.constant(
+            self, overrides, Q=Q, base=base, T=T, **kwargs
         )
 
     def parameter_values(self, overrides=None, /, **kwargs) -> jnp.ndarray:

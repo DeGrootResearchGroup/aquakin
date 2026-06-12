@@ -30,6 +30,54 @@ def _csv_text(network):
     return header + "\n" + "\n".join(rows) + "\n"
 
 
+def test_influent_constant_is_zero_based(asm1):
+    """``network.influent`` builds a zero-based constant feed: only the named
+    species are present, everything else is absent (not at its YAML default)."""
+    from aquakin.plant.influent import InfluentSeries
+
+    inf = asm1.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)
+    assert isinstance(inf, InfluentSeries)
+    # Constant over time: same stream at any t.
+    s0 = inf.at(0.0)
+    s5 = inf.at(5.0e3)
+    assert float(s0.Q) == pytest.approx(18446.0)
+    assert float(s5.Q) == pytest.approx(18446.0)
+    assert float(s0.C[asm1.species_index["SS"]]) == pytest.approx(60.0)
+    assert float(s0.C[asm1.species_index["SNH"]]) == pytest.approx(25.0)
+    # Unlisted species are zero (would be nonzero if defaults leaked in).
+    assert float(s0.C[asm1.species_index["XI"]]) == 0.0
+    assert float(s0.C[asm1.species_index["SALK"]]) == 0.0
+
+
+def test_influent_carries_temperature(asm1):
+    inf = asm1.influent({"SS": 400.0}, Q=2.0, T=288.15)
+    s = inf.at(1.0)
+    assert s.T is not None
+    assert float(s.T) == pytest.approx(288.15)
+    # No T given -> temperature-agnostic.
+    assert asm1.influent(SS=400.0, Q=2.0).at(1.0).T is None
+
+
+def test_influent_series_constant_classmethod(asm1):
+    """``InfluentSeries.constant`` is the same builder as ``network.influent``."""
+    from aquakin.plant.influent import InfluentSeries
+
+    a = asm1.influent({"SS": 60.0}, Q=100.0)
+    b = InfluentSeries.constant(asm1, {"SS": 60.0}, Q=100.0)
+    assert jnp.allclose(a.C, b.C)
+    assert jnp.allclose(a.Q, b.Q)
+
+
+def test_influent_base_defaults_keeps_reference_values(asm1):
+    """base='defaults' starts from the YAML reference composition."""
+    inf = asm1.influent({"SS": 60.0}, Q=100.0, base="defaults")
+    s = inf.at(0.0)
+    # XI keeps its (nonzero) YAML default under base='defaults'.
+    assert float(s.C[asm1.species_index["XI"]]) == pytest.approx(
+        float(asm1.default_concentrations()[asm1.species_index["XI"]])
+    )
+
+
 def test_influent_from_text_parses_without_a_file(asm1):
     series = _influent_from_text(_csv_text(asm1), asm1)
     assert series.t.shape == (2,)

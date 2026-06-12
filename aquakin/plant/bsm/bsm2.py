@@ -170,11 +170,7 @@ def bsm2_parameters(asm1_network, adm1_network):
 
 def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF) -> InfluentSeries:
     """The published BSM2 constant influent as an :class:`InfluentSeries`."""
-    C = asm1_network.default_concentrations() * 0.0
-    for sp, v in BSM2_CONSTANT_INFLUENT.items():
-        C = C.at[asm1_network.species_index[sp]].set(float(v))
-    return InfluentSeries(t=jnp.asarray([0.0, 1.0e4]), Q=jnp.full((2,), float(Q)),
-                          C=jnp.tile(C, (2, 1)), network=asm1_network)
+    return asm1_network.influent(BSM2_CONSTANT_INFLUENT, Q=Q)
 
 
 def bsm2_wastage_schedule(low: float = BSM2_WASTAGE_LOW,
@@ -515,12 +511,9 @@ def build_bsm2(
     # source) -- supports denitrification in the anoxic tanks and is part of the
     # BSM2 plant design, so the builder adds it directly.
     if carbon_flow > 0:
-        carbon_C = asm1.default_concentrations()
-        carbon_C = (carbon_C * 0.0).at[asm1.species_index["SS"]].set(float(carbon_conc))
-        carbon = InfluentSeries(
-            t=jnp.asarray([0.0, 1.0e9]), Q=jnp.full((2,), float(carbon_flow)),
-            C=jnp.tile(carbon_C, (2, 1)), network=asm1,
-            T=jnp.full((2,), float(conditions.get("T", BSM2_AS_TEMPERATURE_K))))
+        carbon = asm1.influent(
+            {"SS": carbon_conc}, Q=carbon_flow,
+            T=conditions.get("T", BSM2_AS_TEMPERATURE_K))
         plant.add_influent("external_carbon", carbon, to="as_mix.carbon")
 
     return plant

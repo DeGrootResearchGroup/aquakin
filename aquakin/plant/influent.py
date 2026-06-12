@@ -88,6 +88,51 @@ class InfluentSeries:
                 f"T shape {self.T.shape} does not match t shape {self.t.shape}"
             )
 
+    @classmethod
+    def constant(cls, network, overrides=None, /, *, Q, base: str = "zero",
+                 T=None, **species) -> "InfluentSeries":
+        """Build a constant-in-time influent from a feed composition.
+
+        The composition is built with ``network.concentrations(overrides,
+        base=base, **species)`` -- ``base="zero"`` by default, so an unspecified
+        species is absent from the feed rather than at its YAML reference value.
+        The series carries two identical samples, so ``at(t)`` returns the same
+        constant stream at every time.
+
+        Parameters
+        ----------
+        network : CompiledNetwork
+            Kinetic network whose species ordering ``C`` follows.
+        overrides : dict[str, float], optional
+            Species name -> feed concentration. Positional-only.
+        Q : float
+            Constant volumetric flow rate.
+        base : {"zero", "defaults"}, optional
+            Composition base; defaults to ``"zero"``.
+        T : float, optional
+            Constant feed temperature (Kelvin); ``None`` leaves it agnostic.
+        **species : float
+            Convenience overrides for identifier-safe species names.
+
+        Returns
+        -------
+        InfluentSeries
+
+        Examples
+        --------
+        >>> InfluentSeries.constant(net, {"SS": 60.0, "SNH": 25.0}, Q=18446.0)
+        >>> InfluentSeries.constant(net, SS=400.0, Q=2.0)
+        """
+        C = network.concentrations(overrides, base=base, **species)
+        # Two identical samples -> a genuine constant: jnp.interp clamps outside
+        # the range and interpolates a flat line within it, so any solve horizon
+        # sees the same value.
+        t = jnp.asarray([0.0, 1.0e9])
+        Q_arr = jnp.full((2,), float(Q))
+        C_arr = jnp.tile(C, (2, 1))
+        T_arr = None if T is None else jnp.full((2,), float(T))
+        return cls(t=t, Q=Q_arr, C=C_arr, network=network, T=T_arr)
+
     def at(self, t: jnp.ndarray) -> Stream:
         """Return the influent :class:`Stream` at time ``t``.
 
