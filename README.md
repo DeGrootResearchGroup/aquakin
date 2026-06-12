@@ -130,16 +130,15 @@ gradient over many parameters — the calibration case — reverse mode is wante
 and that is the mode the `dtmax` cap exists for. The cap-free alternative there is
 a hand-written discrete adjoint: the forward is an ordinary robust adaptive ESDIRK
 (Kvaerno5) solve and the reverse is a per-step transposed solve over the saved
-trajectory, finite at any step size with no cap. It is exposed as
-`gradient="stable_adjoint"` on `aquakin.calibrate(...)` and, for whole plants, on
-`Plant.solve(...)`:
+trajectory, finite at any step size with no cap. **`Plant.solve` uses it
+automatically:** `gradient` defaults to `"auto"`, which keeps a plain forward solve
+on the fast cached path but routes a solve under `jax.grad` to the cap-free
+stable adjoint — so a stiff plant gradient is finite by default with nothing to
+tune:
 
 ```python
-sol = plant.solve(
-    t_span=(0.0, T), t_eval=t_eval, params=params, y0=y0,
-    gradient="stable_adjoint",
-)
-g = jax.grad(loss)(params)   # finite through the stiff, coupled BSM2 plant
+sol = plant.solve(t_span=(0.0, T), t_eval=t_eval, params=params, y0=y0)
+g = jax.grad(loss)(params)   # finite through the stiff, coupled BSM2 plant — no dtmax
 ```
 
 This is what lets a reverse-mode gradient flow through the whole monolithic BSM2
@@ -147,6 +146,12 @@ solve — across the ASM↔ADM interface and the recycle loops — where differe
 *through* the stiff solve is non-finite. It is exact through a transient solve:
 `plant.solve` carries the integration time in the state, so the explicit time
 dependence of a time-varying influent is captured exactly in the gradient.
+
+For reactor-level fits, the adjoint plumbing is hidden too: `aquakin.calibrate`
+and `aquakin.sensitivity` take `ad_mode="forward"|"reverse"` and build the right
+adjoint internally (no `diffrax` import), and `calibrate(check_finite=True)` (the
+default) raises a friendly error with the remedy instead of returning silent
+`NaN` gradients on a stiff network.
 
 ## Testing
 

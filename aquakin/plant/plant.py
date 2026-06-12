@@ -1080,7 +1080,7 @@ class Plant:
         dtmax: Optional[float] = None,
         max_steps: int = 100_000,
         y0: Optional[jnp.ndarray] = None,
-        gradient: str = "jax_adjoint",
+        gradient: str = "auto",
         event: Optional[diffrax.Event] = None,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
@@ -1110,9 +1110,19 @@ class Plant:
             the stateless ``IdealClarifier``. Under ``gradient="stable_adjoint"``
             it also bounds the saved-trajectory buffer the backward scan walks, so
             it must exceed the forward step count.
-        gradient : {"jax_adjoint", "stable_adjoint"}, optional
+        gradient : {"auto", "jax_adjoint", "stable_adjoint"}, optional
             How a reverse-mode gradient through the solve is formed.
-            ``"jax_adjoint"`` (default) lets JAX/Diffrax differentiate the whole
+            ``"auto"`` (default) routes a plain forward solve to the fast,
+            cached ``jax_adjoint`` path and a solve that is being reverse-mode
+            differentiated (``params``/``y0`` are JAX tracers, e.g. under
+            ``jax.grad``) to the cap-free ``stable_adjoint``, so a stiff plant
+            gradient is finite by default with no ``dtmax`` to tune. Passing
+            ``event=``, ``adjoint=``, or ``dtmax=`` (all ``jax_adjoint``-only
+            knobs) pins ``jax_adjoint``. A ``jax.jit``-wrapped *forward* solve
+            also looks traced, so ``"auto"`` routes it to ``stable_adjoint``
+            (correct, but uncached) -- pass ``gradient="jax_adjoint"`` to force
+            the cached path there.
+            ``"jax_adjoint"`` lets JAX/Diffrax differentiate the whole
             solve via the ``adjoint`` strategy; for a stiff plant this needs the
             ``dtmax`` cap to stay finite. ``"stable_adjoint"`` instead forms the
             gradient with a hand-written discrete adjoint
@@ -1129,9 +1139,9 @@ class Plant:
         -------
         PlantSolution
         """
-        if gradient not in ("jax_adjoint", "stable_adjoint"):
+        if gradient not in ("auto", "jax_adjoint", "stable_adjoint"):
             raise ValueError(
-                "gradient must be 'jax_adjoint' or 'stable_adjoint'; "
+                "gradient must be 'auto', 'jax_adjoint' or 'stable_adjoint'; "
                 f"got {gradient!r}."
             )
         self._build_state_layout()
@@ -1168,6 +1178,20 @@ class Plant:
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
         if t_eval is not None:
             t_eval = jnp.asarray(t_eval)
+
+        if gradient == "auto":
+            # A concrete forward solve takes the fast cached jax_adjoint path; a
+            # solve under reverse-mode differentiation (params/y0 are tracers)
+            # takes the cap-free stable_adjoint, so a stiff plant gradient is
+            # finite by default. event=/adjoint=/dtmax= are jax_adjoint-only, so
+            # their presence pins jax_adjoint.
+            differentiating = any(
+                isinstance(v, jax.core.Tracer)
+                for v in (params, y0) if v is not None
+            )
+            pin_jax = event is not None or adjoint is not None or dtmax is not None
+            gradient = "jax_adjoint" if (pin_jax or not differentiating) \
+                else "stable_adjoint"
 
         if gradient == "stable_adjoint":
             # The stable-adjoint path builds its own (rhs) closure below; the

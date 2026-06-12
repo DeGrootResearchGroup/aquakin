@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from aquakin.core.conditions import SpatialConditions
-from aquakin.integrate._common import Reactor
+from aquakin.integrate._common import (
+    Reactor,
+    check_finite_gradient,
+    forward_adjoint,
+    with_adjoint,
+)
 
 import jax
 import jax.numpy as jnp
@@ -56,6 +61,8 @@ def sensitivity(
     t_span: Optional[tuple[float, float]] = None,
     t_eval: Optional[jnp.ndarray] = None,
     solve_kwargs: Optional[dict] = None,
+    ad_mode: str = "reverse",
+    check_finite: bool = True,
 ) -> SensitivityResult:
     """
     Compute gradients of a scalar output with respect to parameters and
@@ -80,6 +87,16 @@ def sensitivity(
         provide whichever reads better.
     solve_kwargs : dict, optional
         Any further keyword arguments forwarded to ``reactor.solve``.
+    ad_mode : {"reverse", "forward"}, optional
+        Autodiff direction through the solve. ``"reverse"`` (default) uses
+        ``jax.grad``. ``"forward"`` uses ``jax.jacfwd`` and rebuilds the reactor
+        internally with a forward-capable adjoint, so a *stiff* reactor whose
+        reverse adjoint is non-finite can be differentiated without a ``dtmax``
+        cap and without the caller touching ``diffrax``.
+    check_finite : bool, optional
+        When ``True`` (default), raise a friendly ``RuntimeError`` if the
+        computed sensitivities are non-finite (with the remedy), instead of
+        returning silent ``NaN``s.
 
     Returns
     -------
@@ -87,6 +104,13 @@ def sensitivity(
     """
     if output_fn is None:
         raise ValueError("output_fn is required (a solution -> scalar callable).")
+    if ad_mode not in ("reverse", "forward"):
+        raise ValueError(f"ad_mode must be 'reverse' or 'forward'; got {ad_mode!r}.")
+    if ad_mode == "forward":
+        # Differentiate forward through the solve; needs a forward-capable
+        # adjoint. Build it internally so diffrax never appears in user code.
+        reactor = with_adjoint(reactor, forward_adjoint())
+    _diff = jax.jacfwd if ad_mode == "forward" else jax.grad
     if params is None:
         params = reactor.network.default_parameters()
     solve_kwargs = dict(solve_kwargs or {})
@@ -111,13 +135,24 @@ def sensitivity(
         return jnp.asarray(output_fn(sol))
 
     output_value = float(_output_from_params(params))
-    dout_dparams = jax.grad(_output_from_params)(params)
+    dout_dparams = _diff(_output_from_params)(params)
 
     dout_dconditions: dict[str, jnp.ndarray] = {}
     for fname, arr in base_fields.items():
-        dout_dconditions[fname] = jax.grad(
+        dout_dconditions[fname] = _diff(
             lambda a, fn=fname: _output_from_field(fn, a)
         )(arr)
+
+    if check_finite:
+        remedy = (
+            "Pass ad_mode='forward' (forward-mode AD is finite through a stiff "
+            "solve), or build the reactor with a dtmax cap."
+            if ad_mode == "reverse" else
+            "Check the model and ranges; even forward-mode AD returned non-finite."
+        )
+        check_finite_gradient(dout_dparams, what="sensitivity", remedy=remedy)
+        for arr in dout_dconditions.values():
+            check_finite_gradient(arr, what="condition sensitivity", remedy=remedy)
 
     return SensitivityResult(
         output=output_value,
@@ -389,8 +424,9 @@ class DGSMResult:
 # Guidance raised when a forward-mode screen hits the default reactor adjoint's
 # custom_vjp (which rejects jvp). Shared by the batched and per-sample paths.
 _DGSM_FORWARD_HINT = (
-    "mode='forward' requires forward-mode autodiff through the solve. Build the "
-    "reactor inside fn with adjoint=diffrax.DirectAdjoint(); the default "
+    "ad_mode='forward' requires forward-mode autodiff through the solve. Build "
+    "the reactor inside fn with adjoint=aquakin.forward_adjoint() (dgsm cannot "
+    "set the adjoint for you -- your fn constructs the reactor); the default "
     "RecursiveCheckpointAdjoint registers a custom_vjp that rejects forward mode."
 )
 
@@ -510,7 +546,8 @@ def dgsm(
     output_names: Optional[list[str]] = None,
     n_samples: int = 64,
     seed: int = 0,
-    mode: str = "reverse",
+    ad_mode: str = "reverse",
+    mode: Optional[str] = None,
     batched: bool = True,
 ) -> Any:
     """Derivative-based global sensitivity measure via autodiff + Sobol QMC.
@@ -527,24 +564,26 @@ def dgsm(
 
     The derivatives are exact (no finite-difference truncation) and reuse the
     differentiable model, so the same machinery serves the calibration and
-    identifiability analyses. The cost depends on ``mode`` and on the number of
-    outputs ``m`` and inputs ``d``:
+    identifiability analyses. The cost depends on ``ad_mode`` and on the number
+    of outputs ``m`` and inputs ``d``:
 
-    - ``mode="reverse"`` (default) forms the per-sample sensitivities with
+    - ``ad_mode="reverse"`` (default) forms the per-sample sensitivities with
       ``m`` reverse-mode passes (one per output), each independent of ``d``.
       Best when there are few outputs relative to inputs **and** the adjoint is
       cheap. Works with any reactor adjoint.
-    - ``mode="forward"`` forms them with ``d`` forward-mode tangents pushed
+    - ``ad_mode="forward"`` forms them with ``d`` forward-mode tangents pushed
       through a single solve, independent of ``m``. Best when there are many
       outputs, or when the reverse adjoint is expensive -- e.g. a stiff solve
       whose differentiated step must be capped (``dtmax``), which inflates the
       reverse pass. **The reactor inside ``fn`` must then be built with**
-      ``adjoint=diffrax.DirectAdjoint()``: the default
+      ``adjoint=aquakin.forward_adjoint()`` (``dgsm`` cannot set the adjoint
+      for you, because ``fn`` constructs the reactor): the default
       ``RecursiveCheckpointAdjoint`` registers a ``custom_vjp`` that rejects
       forward-mode autodiff.
 
-    Both modes return identical sensitivities (to machine precision); ``mode``
-    is purely a performance choice. For a single scalar output ``reverse`` is
+    Both modes return identical sensitivities (to machine precision);
+    ``ad_mode`` is purely a performance choice. For a single scalar output
+    ``reverse`` is
     almost always cheaper; the ``forward`` advantage appears for multi-output
     screening of a stiff model.
 
@@ -572,8 +611,10 @@ def dgsm(
     seed : int, optional
         Seed for the scrambled-Sobol sampler. Fixing it (the default ``0``)
         makes the analysis exactly reproducible.
-    mode : {"reverse", "forward"}, optional
-        Autodiff mode used to form the per-sample sensitivities (see above).
+    ad_mode : {"reverse", "forward"}, optional
+        Autodiff direction used to form the per-sample sensitivities (see above).
+    mode : str, optional
+        Deprecated alias for ``ad_mode``; emits a ``DeprecationWarning``.
     batched : bool, optional
         When ``True`` (default) the whole sample is pushed through one
         ``jax.vmap`` dispatch and finiteness is filtered once on the stacked
@@ -596,8 +637,15 @@ def dgsm(
     >>> res.ranked()[0][0]
     'a'
     """
-    if mode not in ("reverse", "forward"):
-        raise ValueError(f"mode must be 'reverse' or 'forward'; got {mode!r}.")
+    if mode is not None:
+        warnings.warn(
+            "dgsm(mode=...) is deprecated; use ad_mode=... instead.",
+            DeprecationWarning, stacklevel=2,
+        )
+        ad_mode = mode
+    if ad_mode not in ("reverse", "forward"):
+        raise ValueError(f"ad_mode must be 'reverse' or 'forward'; got {ad_mode!r}.")
+    mode = ad_mode
 
     ranges_np, lo, hi, d, input_names = _validate_dgsm_ranges(ranges, input_names)
     Z, n_drawn = _sobol_sample(lo, hi, d, n_samples, seed)

@@ -42,7 +42,12 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import least_squares, minimize
 
-from aquakin.integrate._common import Reactor
+from aquakin.integrate._common import (
+    Reactor,
+    check_finite_gradient,
+    forward_adjoint,
+    with_adjoint,
+)
 
 # --- Parameter transforms ----------------------------------------------
 
@@ -59,6 +64,12 @@ _VALID_OPTIMIZERS = ("lbfgsb", "gauss_newton")
 #                       (aquakin.implicit_euler_adjoint_solve). Cap-free and
 #                       numerically stable for stiff networks.
 _VALID_GRADIENTS = ("jax_adjoint", "stable_adjoint")
+# Autodiff direction for the residual Jacobian / objective gradient. "auto"
+# preserves the legacy behaviour (forward iff the reactor was built with a
+# DirectAdjoint, else reverse); "forward"/"reverse" force the direction and
+# build the right reactor adjoint internally, so the caller never touches
+# diffrax. "forward" is the finite-through-a-stiff-solve direction.
+_VALID_AD_MODES = ("auto", "reverse", "forward")
 
 # Uniform optimiser output so the multistart loop and downstream code are
 # agnostic to which backend (L-BFGS-B or Gauss-Newton least-squares) ran.
@@ -498,6 +509,8 @@ def calibrate(
     param_halfwidth: Optional[float] = None,
     optimizer: str = "lbfgsb",
     gradient: str = "jax_adjoint",
+    ad_mode: str = "auto",
+    check_finite: bool = True,
     stable_adjoint_max_steps: int = 100_000,
     n_starts: int = 1,
     jitter: float = 0.5,
@@ -651,12 +664,27 @@ def calibrate(
         the residual *vector* with SciPy ``least_squares`` (trust-region
         reflective) -- a Gauss-Newton method that exploits the least-squares
         structure and is markedly more robust on the multimodal landscapes of
-        stiff reaction-network fits. The residual Jacobian is formed by AD:
-        forward mode (``jacfwd``) when ``reactor`` was built with
-        ``adjoint=diffrax.DirectAdjoint()``, otherwise reverse mode (``jacrev``).
-        Forward mode stays finite at any integrator step, so for very stiff
-        networks whose reverse-mode adjoint is non-finite, pass a
-        ``DirectAdjoint`` reactor and use ``"gauss_newton"``.
+        stiff reaction-network fits. The residual Jacobian is formed by AD;
+        the direction is chosen by ``ad_mode``.
+    ad_mode : {"auto", "reverse", "forward"}, optional
+        Autodiff direction for the residual Jacobian / objective gradient, and
+        the way to get a finite gradient for a *stiff* network without touching
+        ``diffrax`` or a ``dtmax`` cap. ``"forward"`` uses ``jacfwd`` and builds
+        a forward-capable reactor adjoint internally (forward-mode AD stays
+        finite at any integrator step -- the fix for a stiff network whose
+        reverse adjoint overflows); it takes effect through the Gauss-Newton
+        Jacobian, so pair it with ``optimizer="gauss_newton"``. ``"reverse"``
+        forces reverse mode (and ``gradient`` then chooses the cap-free
+        ``stable_adjoint`` vs ``jax_adjoint`` reverse backend). ``"auto"`` (the
+        default) preserves the legacy behaviour: forward iff the supplied
+        reactor was already built with a forward-capable adjoint, else reverse.
+        ``ad_mode="forward"`` and ``gradient="stable_adjoint"`` are mutually
+        exclusive (forward vs reverse-only discrete adjoint).
+    check_finite : bool, optional
+        When ``True`` (default), evaluate the gradient/Jacobian once at the
+        start point and raise a friendly ``RuntimeError`` naming the remedy if
+        it is non-finite, instead of letting the optimiser wander on silent
+        ``NaN``s (the classic stiff-reverse-adjoint footgun).
     n_starts : int, optional
         Number of optimiser starts (default ``1``). With ``n_starts > 1`` the
         calibration is run from several starting points and the lowest-loss
@@ -702,6 +730,34 @@ def calibrate(
         raise ValueError(
             f"gradient must be one of {_VALID_GRADIENTS}; got {gradient!r}."
         )
+    if ad_mode not in _VALID_AD_MODES:
+        raise ValueError(
+            f"ad_mode must be one of {_VALID_AD_MODES}; got {ad_mode!r}."
+        )
+    if ad_mode == "forward" and gradient == "stable_adjoint":
+        raise ValueError(
+            "ad_mode='forward' and gradient='stable_adjoint' are incompatible: "
+            "the stable adjoint is a reverse-only discrete adjoint. Use "
+            "ad_mode='forward' (forward-mode through the diffrax solve) OR "
+            "gradient='stable_adjoint' (cap-free reverse), not both."
+        )
+    # ad_mode='forward' needs a forward-capable adjoint; build it internally so
+    # diffrax never appears in user code. The clone is the fit reactor below.
+    if ad_mode == "forward":
+        reactor = with_adjoint(reactor, forward_adjoint())
+
+    def _resolve_forward_jac(rctr) -> bool:
+        """Whether to form the residual Jacobian by forward-mode AD (jacfwd)."""
+        if ad_mode == "forward":
+            return True
+        if ad_mode == "reverse":
+            return False
+        # auto: forward iff the reactor is forward-capable and we are not on the
+        # reverse-only stable-adjoint backend (the legacy inference).
+        return gradient != "stable_adjoint" and isinstance(
+            getattr(rctr, "adjoint", None), diffrax.DirectAdjoint
+        )
+
     if gradient == "stable_adjoint" and not hasattr(reactor, "conditions"):
         raise ValueError(
             "gradient='stable_adjoint' is implemented for batch reactors "
@@ -1020,9 +1076,7 @@ def calibrate(
 
         # The stable adjoint is a reverse-only custom_vjp, so its residual
         # Jacobian must be reverse-mode regardless of the reactor's adjoint.
-        _use_forward = gradient != "stable_adjoint" and isinstance(
-            getattr(reactor, "adjoint", None), diffrax.DirectAdjoint
-        )
+        _use_forward = _resolve_forward_jac(reactor)
         _jac = jax.jacfwd(_full_residual) if _use_forward else jax.jacrev(_full_residual)
         _res_j = jax.jit(_full_residual)
         _jac_j = jax.jit(_jac)
@@ -1050,6 +1104,43 @@ def calibrate(
         )
         return _OptOut(np.asarray(r.x), float(r.cost), bool(r.success),
                        str(r.message), int(r.nfev))
+
+    # Guard against the silent-NaN footgun: evaluate the gradient/Jacobian once
+    # at the start point and fail loudly with the remedy if it is non-finite
+    # (a stiff reverse-mode adjoint overflowing), rather than letting the
+    # optimizer wander on NaNs.
+    if check_finite:
+        if optimizer == "gauss_newton":
+            probe = _jac_j(jnp.asarray(theta0))
+        else:
+            _v0, probe = obj_value_and_grad(jnp.asarray(theta0))
+        # Forward-mode only enters through the Gauss-Newton Jacobian; L-BFGS-B
+        # always uses a reverse scalar gradient, so the cap-free fix there is
+        # gradient='stable_adjoint'.
+        on_finite_path = gradient == "stable_adjoint" or (
+            ad_mode == "forward" and optimizer == "gauss_newton"
+        )
+        if on_finite_path:
+            remedy = (
+                "It was already on a finite-by-construction path "
+                f"(ad_mode={ad_mode!r}, gradient={gradient!r}, "
+                f"optimizer={optimizer!r}); check the model, data, and "
+                "parameter ranges."
+            )
+        elif optimizer == "gauss_newton":
+            remedy = (
+                "Pass ad_mode='forward' (forward-mode, finite through a stiff "
+                "solve) or gradient='stable_adjoint' (cap-free reverse-mode); "
+                "either is handled internally with no diffrax or dtmax in your "
+                "code."
+            )
+        else:
+            remedy = (
+                "Pass gradient='stable_adjoint' (cap-free reverse-mode, handled "
+                "internally), or switch to optimizer='gauss_newton' with "
+                "ad_mode='forward'."
+            )
+        check_finite_gradient(probe, what="calibration gradient", remedy=remedy)
 
     # Start 0 is the supplied/default initial point; the rest are deterministic
     # jittered restarts. Keep the lowest finite loss (multimodal landscapes).
@@ -1130,8 +1221,7 @@ def calibrate(
                     rate_thetas, ic_opt, lap_reactor, include_ic_prior=False
                 )
 
-            _use_fwd_lap = gradient != "stable_adjoint" and isinstance(
-                getattr(lap_reactor, "adjoint", None), diffrax.DirectAdjoint)
+            _use_fwd_lap = _resolve_forward_jac(lap_reactor)
             J = (jax.jacfwd if _use_fwd_lap else jax.jacrev)(_residual_vec)(rate_theta_opt)
             H = J.T @ J
         elif laplace_method == "fd":

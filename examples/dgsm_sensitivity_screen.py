@@ -8,11 +8,12 @@ gradient at each, and reports an upper bound on the Sobol total index per input.
 
 The same screen is run in both AD modes -- reverse (one adjoint pass per output)
 and forward (one tangent per input through a single solve) -- to show they agree
-to machine precision; the choice is purely performance. Forward mode needs the
-reactor built with ``diffrax.DirectAdjoint()``.
+to machine precision; the choice is purely performance. ``dgsm`` builds the
+reactor inside ``fn``, so it cannot set the adjoint for you: forward mode needs
+the reactor built with ``aquakin.forward_adjoint()`` (the forward-capable
+adjoint, no ``diffrax`` import).
 """
 
-import diffrax
 import jax.numpy as jnp
 
 import aquakin
@@ -25,9 +26,9 @@ def main() -> None:
 
     # Per-species atol: OH lives in the 1e-12 M band.
     atol = network.atol({"OH": 1e-20}, default=1e-12)
-    # DirectAdjoint so the *forward*-mode screen works (finite at any step).
+    # forward_adjoint() so the *forward*-mode screen works (finite at any step).
     reactor = aquakin.BatchReactor(network, conditions, atol=atol,
-                                   adjoint=diffrax.DirectAdjoint())
+                                   adjoint=aquakin.forward_adjoint())
 
     C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
     base = network.default_parameters()
@@ -50,10 +51,10 @@ def main() -> None:
     print("DGSM screen of final bromate yield vs four rate constants")
     print(f"(scrambled-Sobol QMC, ranges = default x[1/3, 3])\n")
 
-    for mode in ("reverse", "forward"):
+    for ad_mode in ("reverse", "forward"):
         res = aquakin.dgsm(bromate_yield, ranges, input_names=screened,
-                           n_samples=64, seed=0, mode=mode)
-        print(f"  mode = {mode}:")
+                           n_samples=64, seed=0, ad_mode=ad_mode)
+        print(f"  ad_mode = {ad_mode}:")
         for name, bound in res.ranked():
             print(f"    {name:<24s}  Sobol-total bound = {bound:.3e}")
         print()

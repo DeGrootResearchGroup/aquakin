@@ -91,6 +91,39 @@ def test_recovers_known_parameter_mse(setup):
     assert result.posterior_cov is None
 
 
+def test_ad_mode_forward_matches_reverse(setup):
+    """ad_mode='forward' builds the forward-capable adjoint internally (no
+    diffrax in user code) and reaches the same optimum as reverse mode."""
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    common = dict(
+        observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        optimizer="gauss_newton", laplace=False,
+    )
+    fwd = aquakin.calibrate(reactor, C0, ad_mode="forward", **common)
+    rev = aquakin.calibrate(reactor, C0, ad_mode="reverse", **common)
+    assert fwd.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+    assert fwd.params_named["A_to_B.k"] == pytest.approx(
+        rev.params_named["A_to_B.k"], rel=1e-4)
+
+
+def test_ad_mode_rejects_bad_value(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(ValueError, match="ad_mode"):
+        aquakin.calibrate(reactor, C0, observations=obs_clean, t_obs=t_obs,
+                          free_params=["A_to_B.k"], observed_species=["B"],
+                          laplace=False, ad_mode="sideways")
+
+
+def test_ad_mode_forward_incompatible_with_stable_adjoint(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with pytest.raises(ValueError, match="incompatible"):
+        aquakin.calibrate(reactor, C0, observations=obs_clean, t_obs=t_obs,
+                          free_params=["A_to_B.k"], observed_species=["B"],
+                          laplace=False, ad_mode="forward",
+                          gradient="stable_adjoint")
+
+
 def test_recovers_known_parameter_nll_with_noise(setup):
     reactor, C0, t_obs, obs_clean, true_k = setup
     rng = np.random.default_rng(0)
