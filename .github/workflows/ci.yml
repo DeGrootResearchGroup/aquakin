@@ -62,13 +62,14 @@ jobs:
         # offending test instead of hanging silently. --max-worker-restart=0 makes
         # a crashed worker fail the run immediately. Together with timeout-minutes
         # above, a hang surfaces a clear, fast failure.
-        # --dist loadscope keeps a module's tests on one worker, so a module-
-        # scoped fixture (e.g. a built+solved BSM2 plant) compiles ONCE per module
-        # instead of once per worker that draws one of its tests -- compiling a
-        # stiff solve dominates the cost. (Trade-off: coarser load balancing, a
-        # heavy module can't be split across workers.)
+        # Default `-n auto` (load) distribution spreads tests across workers for
+        # the best balance. (`--dist loadscope` was tried to let module-scoped
+        # plant fixtures compile once per module, but once the heavy shared-fixture
+        # tests moved to the merge-only `slow` job it only serialized the
+        # remaining independent parametrized heavy tests onto single workers --
+        # measured ~1.4x slower here, ~4x slower on the slow suite.)
         run: >-
-          pytest -m "not validation and not slow" -q -n auto --dist loadscope
+          pytest -m "not validation and not slow" -q -n auto
           --durations=15 --timeout=600 --timeout-method=thread
           --max-worker-restart=0
 
@@ -106,10 +107,13 @@ jobs:
         # here keeps the three CI groups mutually exclusive -- no test runs in two
         # jobs. (fast = "not validation and not slow"; slow = "slow and not
         # validation"; validation = "validation".)
-        # --dist loadscope: module-scoped fixtures compile once per module (see
-        # the fast-tests step).
+        # Default `-n auto` (load), NOT loadscope: the slow suite is full of
+        # independent parametrized heavy tests (jax.grad/integration over every
+        # ASM/ADM network, calibration grids), which loadscope pins to a single
+        # worker -- measured ~4x slower (e.g. test_asm_family 268s -> 63s under
+        # load), which overran the 35-min ceiling. Spreading them balances well.
         run: >-
-          pytest -m "slow and not validation" -q -n auto --dist loadscope
+          pytest -m "slow and not validation" -q -n auto
           --durations=15 --timeout=900 --timeout-method=thread
           --max-worker-restart=0
 

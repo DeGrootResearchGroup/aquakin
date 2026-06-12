@@ -20,10 +20,11 @@ from aquakin.plant.influent import InfluentSeries
 
 
 # Module-scoped so the (expensive) build + steady-state solve happens ONCE for
-# the whole file; the tests below each inspect a different facet of that single
-# solution rather than re-solving. (Run the suite under ``pytest --dist
-# loadscope`` so this module's tests stay on one xdist worker and the fixture is
-# not recomputed per worker.)
+# the whole file when these tests land on the same worker; each test below
+# inspects a different facet of that single solution rather than re-solving. The
+# solving tests run in the merge-only `slow` job (they request the `steady`
+# fixture -- see tests/conftest.py); only the cheap assembly check stays on the
+# fast PR gate.
 @pytest.fixture(scope="module")
 def asm1():
     return aquakin.load_network("asm1")
