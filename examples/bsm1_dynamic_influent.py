@@ -58,7 +58,7 @@ def main() -> None:
     print()
     print("Tank-5 effluent response (SNH = ammonia, SNO = nitrate):")
     print(f"  {'profile':<8} {'SNH peak':>10} {'SNH mean':>10} "
-          f"{'SNO peak':>10}  [g_N/m³]")
+          f"{'SNO peak':>10}  [{network.units_of('SNH')}]")
     for profile, sol in sols.items():
         snh = sol.C_named("tank5", "SNH")
         sno = sol.C_named("tank5", "SNO")
@@ -70,8 +70,10 @@ def main() -> None:
     sol = sols["dry"]
     for i in range(0, sol.t.shape[0], 14):
         print(f"  t = {float(sol.t[i]):5.2f} d   "
-              f"SNH = {float(sol.C_named('tank5', 'SNH')[i]):6.3f}   "
-              f"SO = {float(sol.C_named('tank5', 'SO')[i]):6.3f}  g/m³")
+              f"SNH = {float(sol.C_named('tank5', 'SNH')[i]):6.3f} "
+              f"{network.units_of('SNH')}   "
+              f"SO = {float(sol.C_named('tank5', 'SO')[i]):6.3f} "
+              f"{network.units_of('SO')}")
 
 
 if __name__ == "__main__":

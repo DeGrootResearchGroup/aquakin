@@ -1012,7 +1012,8 @@ aquakin/
 │   │   ├── conditions.py            # SpatialConditions dataclass
 │   │   ├── context.py               # CompileContext dataclass
 │   │   ├── ph_solver.py             # differentiable charge-balance pH solver
-│   │   └── speciation.py            # speciation block -> derived pH condition fn
+│   │   ├── speciation.py            # speciation block -> derived pH condition fn
+│   │   └── units.py                 # prettify_units: plain-ASCII unit exponents -> Unicode superscripts
 │   │
 │   ├── schema/
 │   │   ├── network_spec.py          # Pydantic models
@@ -1222,10 +1223,15 @@ network.name
 network.species
 network.parameters
 network.conditions_required
+network.species_units                # {species: units} carried from the YAML
+network.species_descriptions         # {species: description}
+network.units_of("SNH")              # "g_N/m³" (YAML "g_N/m3" prettified; raises KeyError on unknown)
+network.description_of("SNH")        # "Ammonia + ammonium nitrogen"
 network.default_concentrations()     # jnp.array (all YAML defaults)
 network.default_parameters()         # jnp.array
-network.summary()                    # prints human-readable table
+network.summary()                    # human-readable table (species listed with units)
 network.to_latex()                   # LaTeX rate expressions
+# Solutions carry the labels too: solution.units_named("SNH") for axis/columns.
 
 # By-name vector builders (avoid .at[species_index[...]].set() chains). The
 # dict form is primary -- many species/param names are not valid Python

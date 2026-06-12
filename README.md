@@ -59,6 +59,13 @@ solution = reactor.solve(
 )
 
 print("[BrO3-] at t=600s:", float(solution.C_named("BrO3-")[-1]))
+
+# Species units and descriptions are carried from the YAML to results, so you
+# never have to re-derive units by string-matching names.
+network.units_of("BrO3-")            # e.g. "mol/L"
+network.description_of("BrO3-")
+solution.units_named("BrO3-")        # same, for axis/column labels
+network.summary()                    # tabulates every species with its units
 ```
 
 ## Forward sensitivity (cap-free stiff gradients)

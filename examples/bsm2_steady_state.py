@@ -56,11 +56,11 @@ def main() -> None:
 
     print()
     print("Activated-sludge reactor 5 (effluent) at steady state:")
-    for sp, unit_label in (("SNH", "g_N/m³"), ("SNO", "g_N/m³"),
-                           ("SO", "g_O2/m³"), ("XB_H", "g_COD/m³"),
-                           ("XB_A", "g_COD/m³"), ("XI", "g_COD/m³")):
+    # Units come from the ASM1 network (carried through compile), not a
+    # hand-kept name->unit table.
+    for sp in ("SNH", "SNO", "SO", "XB_H", "XB_A", "XI"):
         val = float(sol.C_named("tank5", sp)[-1])
-        print(f"  {sp:5s} = {val:8.2f}  {unit_label}")
+        print(f"  {sp:5s} = {val:8.2f}  {asm1.units_of(sp)}")
 
     print()
     print("Anaerobic digester headspace (biogas) at steady state:")

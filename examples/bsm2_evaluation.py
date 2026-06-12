@@ -71,15 +71,17 @@ def main() -> None:
     header = f"{'index':<22}{'open-loop':>14}{'closed-loop':>14}{'change':>12}"
     print(header)
     print("-" * len(header))
+    # Species units come from the network; the plant-level metric units
+    # (EQI/OCI/energy/sludge) are not species, so they keep explicit labels.
     rows = [
-        ("reactor-4 SO (g/m³)", open_so4, closed_so4),
+        (f"reactor-4 SO ({asm1.units_of('SO')})", open_so4, closed_so4),
         ("EQI (kg/d)", open_ev.eqi, closed_ev.eqi),
         ("OCI", open_ev.oci, closed_ev.oci),
         ("  aeration (kWh/d)", open_ev.aeration_energy, closed_ev.aeration_energy),
         ("  pumping (kWh/d)", open_ev.pumping_energy, closed_ev.pumping_energy),
         ("  sludge (kg TSS/d)", open_ev.sludge_production, closed_ev.sludge_production),
-        ("effluent SNH (g N/m³)", open_ev.effluent["SNH"], closed_ev.effluent["SNH"]),
-        ("effluent SNO (g N/m³)", open_ev.effluent["SNO"], closed_ev.effluent["SNO"]),
+        (f"effluent SNH ({asm1.units_of('SNH')})", open_ev.effluent["SNH"], closed_ev.effluent["SNH"]),
+        (f"effluent SNO ({asm1.units_of('SNO')})", open_ev.effluent["SNO"], closed_ev.effluent["SNO"]),
     ]
     for label, o, c in rows:
         pct = 100.0 * (c - o) / (abs(o) + 1e-12)

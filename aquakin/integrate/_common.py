@@ -163,6 +163,15 @@ class _HasNamedSpecies:
             )
         return self.C[:, self.network.species_index[species]]
 
+    def units_named(self, species: str) -> str:
+        """Return the declared units of a species (for axis/column labels).
+
+        Convenience for plotting and tabulating results without re-deriving
+        units by string-matching species names. Equivalent to
+        ``self.network.units_of(species)``.
+        """
+        return self.network.units_of(species)
+
 
 @runtime_checkable
 class Reactor(Protocol):
