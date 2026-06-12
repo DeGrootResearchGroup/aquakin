@@ -106,10 +106,15 @@ jobs:
     runs-on: ubuntu-latest
     # Merge-to-main only (not on the PR critical path), so a generous ceiling is
     # fine. The validation set has grown (now ~24 tests: published-data checks
-    # plus the AD-correctness suites -- discrete/stable/forward adjoints), and at
-    # ~24 min of full plant + stiff solves on the 4-vCPU runner it overran the
-    # old 25-min limit. 45 min leaves headroom as the suite keeps growing.
-    timeout-minutes: 45
+    # plus the AD-correctness suites -- discrete/stable/forward adjoints). These
+    # are the heaviest tests in the repo (full 167-state two-network BSM2 plant
+    # steady states + ADM1 + AD through stiff solves), so unlike the `slow` suite
+    # they OOM the 16 GB hosted runner under `-n auto` (4 workers): four heavy
+    # solves' peak memory coincides and the runner is killed mid-run. Capping at
+    # `-n 2` halves the concurrent heavy solves (so ~half the peak memory) at the
+    # cost of wall time -- acceptable here, since validation is off the PR
+    # critical path. 60 min absorbs the slower run with headroom.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -126,6 +131,9 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run validation suite (against published data)
+        # `-n 2` (not `-n auto`): the validation tests are the most memory-heavy
+        # in the repo, and four concurrent on the 16 GB runner OOM-kill it. Two
+        # at a time keeps peak memory in budget.
         run: >-
-          pytest -m validation -q -n auto --durations=15
+          pytest -m validation -q -n 2 --durations=15
           --timeout=900 --timeout-method=thread --max-worker-restart=0
