@@ -101,11 +101,17 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run slow suite
+        # `slow and not validation`: a few tests carry BOTH markers (a module-
+        # level `slow` plus a per-test `validation`), so excluding validation
+        # here keeps the three CI groups mutually exclusive -- no test runs in two
+        # jobs. (fast = "not validation and not slow"; slow = "slow and not
+        # validation"; validation = "validation".)
         # --dist loadscope: module-scoped fixtures compile once per module (see
         # the fast-tests step).
         run: >-
-          pytest -m "slow" -q -n auto --dist loadscope --durations=15
-          --timeout=900 --timeout-method=thread --max-worker-restart=0
+          pytest -m "slow and not validation" -q -n auto --dist loadscope
+          --durations=15 --timeout=900 --timeout-method=thread
+          --max-worker-restart=0
 
   # ---- Validation suite (against published data): merge-to-main only ----------
   validation:

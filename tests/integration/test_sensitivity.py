@@ -74,6 +74,7 @@ def test_ranked_params(simple_network):
     assert ranked[0][0] == "A_to_B.k"
 
 
+@pytest.mark.slow  # heavy: sensitivity vs FD
 def test_sensitivity_doutput_dconditions_matches_finite_diff(simple_network):
     """Verify the conditions-override grad path is non-zero where expected."""
     # Build a tiny network rate that depends on T via Arrhenius so dF/dT != 0.

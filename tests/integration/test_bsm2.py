@@ -41,10 +41,20 @@ def constant_influent(asm1):
 
 
 @pytest.fixture(scope="module")
-def steady(asm1, constant_influent):
-    """The open-loop BSM2 plant and its steady-state solve (computed once)."""
-    plant = build_bsm2(asm1_network=asm1)
-    plant.add_influent("feed", constant_influent, to="front_mix.fresh")
+def plant(asm1, constant_influent):
+    """The assembled open-loop BSM2 plant (no solve) -- a cheap fixture for the
+    assembly / flow-resolution check that stays on the fast PR gate."""
+    p = build_bsm2(asm1_network=asm1)
+    p.add_influent("feed", constant_influent, to="front_mix.fresh")
+    return p
+
+
+@pytest.fixture(scope="module")
+def steady(plant):
+    """The open-loop BSM2 plant and its steady-state solve (computed once).
+
+    Requesting this fixture marks a test ``slow`` (it builds + integrates the
+    full plant -- ~30 s to compile); see ``tests/conftest.py``."""
     sol = plant.solve(t_span=(0.0, 200.0), t_eval=jnp.array([0.0, 200.0]),
                       rtol=1e-4, atol=1e-3, max_steps=400_000)
     return plant, sol
@@ -83,12 +93,12 @@ def test_bsm2_digester_produces_methane(steady):
     assert g("S_ac") > 0.0
 
 
-def test_bsm2_flow_balance(steady):
+def test_bsm2_flow_balance(plant):
     """The resolved flow network is consistent: fixed pumps at setpoint, the
     plant-wide volume balance closes (influent + reject = effluent + sludge).
 
-    Uses only the (cheap) flow resolution, not the integration."""
-    plant, _sol = steady
+    Uses only the (cheap) flow resolution, not the integration -- so it stays on
+    the fast gate (the cheap ``plant`` fixture, not the solving ``steady``)."""
     plant._build_state_layout()
     plant._build_parameter_layout()
     params = plant.default_parameters()

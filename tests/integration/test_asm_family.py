@@ -49,6 +49,7 @@ def test_dCdt_finite_at_default_state(name, _a, _b, _c):
 
 
 @pytest.mark.parametrize("name,_a,_b,_c", _ASM_NETWORKS)
+@pytest.mark.slow  # heavy: stiff solve x every ASM/ADM network
 def test_short_integration_finite(name, _a, _b, _c):
     """Each model integrates 0.05 d without producing non-finite values."""
     net = aquakin.load_network(name)
@@ -62,6 +63,7 @@ def test_short_integration_finite(name, _a, _b, _c):
     assert jnp.all(jnp.isfinite(sol.C))
 
 
+@pytest.mark.slow  # jax.grad through a stiff solve x every ASM/ADM network
 @pytest.mark.parametrize("name,_a,_b,_c", _ASM_NETWORKS)
 def test_ad_grad_through_solve(name, _a, _b, _c):
     """jax.grad through solve must produce finite gradients."""
@@ -139,6 +141,7 @@ def test_adm1_strong_ions_are_conservative():
     assert float(dC[si["S_an"]]) == 0.0
 
 
+@pytest.mark.slow  # jax.grad through the stiff ADM1 state-derived-pH solve
 def test_adm1_ph_operating_point_is_differentiable():
     """The explicit S_cat ion state sets the pH operating point and must flow
     differentiably through a solve into a downstream output. A short solve with
@@ -177,6 +180,7 @@ def test_asm3_biop_uses_monod_inh_ratio():
     assert "monod_inh_ratio(" in yaml_text
 
 
+@pytest.mark.slow  # jax.grad through a stiff solve to fit a yield, per network
 @pytest.mark.parametrize("name,yield_param", [
     ("asm2d", "YH"),
     ("asm3", "YH_O2"),

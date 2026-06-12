@@ -101,6 +101,7 @@ def test_solve_runs_and_removes_X():
     assert 0.0 < X_final < 100.0  # some removal, but not unphysical
 
 
+@pytest.mark.slow  # heavy: jax.grad through state-derived pH solve
 def test_grad_flows_through_pH():
     net = _build()
     reactor = BatchReactor(net, SpatialConditions.uniform(1, T=20.0))
