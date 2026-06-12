@@ -98,6 +98,49 @@ class BiofilmSolution(_HasNamedSpecies):
             )
         return self.profile[:, :, self.network.species_index[species]]
 
+    def to_dataframe(self, *, profile: bool = False, units_in_columns: bool = False):
+        """Return the solution as a pandas ``DataFrame``.
+
+        By default this is the **bulk** (measurable) trajectory: one row per
+        time, one column per species, indexed by time -- identical to the other
+        solutions.
+
+        Parameters
+        ----------
+        profile : bool, optional
+            If ``True``, return the full depth-resolved trajectory instead: a
+            ``MultiIndex`` of ``(t, compartment)`` rows (compartment 0 is the
+            bulk, 1..``n_layers`` run surface->wall), a ``depth`` column (NaN
+            for the bulk row), and one column per species.
+        units_in_columns : bool, optional
+            Append ``" [unit]"`` to each species column label.
+        """
+        if not profile:
+            return super().to_dataframe(units_in_columns=units_in_columns)
+
+        import numpy as np
+
+        from aquakin.integrate._common import build_dataframe, require_pandas
+
+        pd = require_pandas()
+        prof = np.asarray(self.profile)            # (n_t, n_comp, n_species)
+        n_t, n_comp, _ = prof.shape
+        t = np.asarray(self.t)
+        index = pd.MultiIndex.from_arrays(
+            [np.repeat(t, n_comp), np.tile(np.arange(n_comp), n_t)],
+            names=["t", "compartment"],
+        )
+        flat = prof.reshape(n_t * n_comp, prof.shape[2])
+        # depth aligned to compartments: NaN for the bulk (compartment 0).
+        depth_per_comp = np.concatenate([[np.nan], np.asarray(self.depth)])
+        depth_col = np.tile(depth_per_comp, n_t)
+        columns = [(sp, flat[:, j]) for j, sp in enumerate(self.network.species)]
+        units = {sp: self.network.units_of(sp) for sp in self.network.species}
+        return build_dataframe(
+            index, columns, units=units, units_in_columns=units_in_columns,
+            extra=[("depth", depth_col)],
+        )
+
 
 def _diffusion_transport(C, D, kL, dz, area_per_volume, n_species):
     """Diffusive transport for the whole state, shape ``(n_comp, n_species)``.

@@ -30,7 +30,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7", "pytest-xdist>=3", "pytest-timeout>=2"]
+# pandas powers the optional ``to_dataframe()`` / ``to_csv()`` result exporters;
+# it is not needed for solving, only for tabular postprocessing.
+dataframe = ["pandas>=2.0"]
+test = ["pytest>=7", "pytest-xdist>=3", "pytest-timeout>=2", "pandas>=2.0"]
 
 [tool.setuptools.packages.find]
 include = ["aquakin*"]

@@ -39,6 +39,10 @@ class PFRSolution(_HasNamedSpecies):
     C: jnp.ndarray
     network: CompiledNetwork
 
+    def _table_index(self):
+        # A PFR profile is indexed by axial position, not time.
+        return "x", self.x
+
 
 class PlugFlowReactor:
     """
