@@ -31,11 +31,37 @@ from aquakin.plant.storage import StorageTank
 from aquakin.plant.streams import Stream, StreamSeries
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
 from aquakin.plant.units import Unit
+from aquakin.plant.metrics import (
+    aeration_energy,
+    carbon_mass,
+    derived_BOD,
+    derived_COD,
+    derived_TKN,
+    derived_TSS,
+    effluent_averages,
+    effluent_quality_index,
+    heating_energy,
+    mixing_energy,
+    operational_cost_index,
+    operational_cost_index_bsm2,
+    pumping_energy,
+    pumping_energy_bsm2,
+)
+# Imported last: the BSM evaluators pull in the bsm subpackage (build_bsm1 etc.),
+# which imports the plant submodules above -- so the base units must load first.
+from aquakin.plant.bsm.evaluation import (
+    BSM1Evaluation,
+    BSM2Evaluation,
+    evaluate_bsm1,
+    evaluate_bsm2,
+)
 
 __all__ = [
     "ADM1DigesterUnit",
     "ADM1toASM1",
     "ASM1toADM1",
+    "BSM1Evaluation",
+    "BSM2Evaluation",
     "CSTRUnit",
     "Connection",
     "HydraulicDelayUnit",
@@ -56,4 +82,20 @@ __all__ = [
     "Stream",
     "StreamSeries",
     "Unit",
+    "aeration_energy",
+    "carbon_mass",
+    "derived_BOD",
+    "derived_COD",
+    "derived_TKN",
+    "derived_TSS",
+    "effluent_averages",
+    "effluent_quality_index",
+    "evaluate_bsm1",
+    "evaluate_bsm2",
+    "heating_energy",
+    "mixing_energy",
+    "operational_cost_index",
+    "operational_cost_index_bsm2",
+    "pumping_energy",
+    "pumping_energy_bsm2",
 ]

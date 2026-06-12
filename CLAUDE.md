@@ -2125,7 +2125,24 @@ signal-bus analogue of `outputs_at`; `_rhs`'s signal step is the shared
 `Plant._compute_signals`). All output streams are reconstructed in **one
 `outputs_at` pass per saved time** (`_reconstruct`), since the indices need ~8
 streams. The BSM1-form kernels (`operational_cost_index`, `pumping_energy`) are
-kept for BSM1. Demonstrated in `examples/bsm2_evaluation.py` (open- vs
+kept for BSM1, wrapped by **`evaluate_bsm1(plant, solution, params)`** →
+`BSM1Evaluation` (the BSM1 analogue of `evaluate_bsm2`): EQI + the BSM1 OCI
+`AE + PE + 5·sludge`, with sludge the wastage TSS mass flow and PE over the
+internal-recycle / RAS / wastage pumps. Demonstrated in
+`examples/bsm1_dry_weather.py`.
+
+**Top-level exports + `StreamSeries`-friendly kernels.** The metric kernels
+(`effluent_quality_index`, `effluent_averages`, `derived_TSS`/`COD`/`BOD`/`TKN`,
+`aeration_energy`, `pumping_energy`, `mixing_energy`, `carbon_mass`,
+`heating_energy`, `operational_cost_index`, `operational_cost_index_bsm2`,
+`pumping_energy_bsm2`), both evaluators (`evaluate_bsm1`/`evaluate_bsm2`) and
+`check_conservation` are exported at the top level (`aquakin.…`), not only via the
+deep `aquakin.plant.metrics` path. The effluent kernels and the `derived_*`
+functions accept a **`StreamSeries` directly** — `effluent_quality_index(eff)` /
+`derived_TSS(eff)` (network taken from the stream) — as well as the original
+explicit `(t, C, Q, network)` / `(C, network)` forms; a `StreamSeries` is
+duck-typed (`.t`/`.C`/`.network`), so a plain concentration array is unaffected.
+Demonstrated in `examples/bsm2_evaluation.py` (open- vs
 closed-loop table with the full term breakdown) and tested in
 `tests/integration/test_bsm2_evaluation.py` (plant terms finite/positive,
 aerated-tank detection, AE/ME/carbon match their closed forms, OCI equals the
