@@ -1042,8 +1042,12 @@ aquakin/
 │   │   │                            #   solve_chemistry (the one stoich-hoist + RHS + solve
 │   │   │                            #   factory the Batch/PFR/Particle/CFD reactors all call,
 │   │   │                            #   parameterised by cond_fn / rate_scale / saveat),
-│   │   │                            #   validate_t_eval, Reactor Protocol;
-│   │   │                            #   _HasNamedSpecies mixin (C_named/units_named/
+│   │   │                            #   validate_t_eval; init_solver_settings /
+│   │   │                            #   resolve_state_atol / validate_C0_params (shared reactor
+│   │   │                            #   construction + validation); Reactor & ConditionedReactor
+│   │   │                            #   Protocols (the latter adds `conditions`; sensitivity
+│   │   │                            #   requires it. CFDReactor has step() not solve() -> not a
+│   │   │                            #   Reactor); _HasNamedSpecies mixin (C_named/units_named/
 │   │   │                            #   to_dataframe/to_csv) + build_dataframe/require_pandas
 │   │   ├── batch.py                 # BatchReactor, BatchSolution
 │   │   ├── biofilm.py               # BiofilmReactor (layered 1-D diffusion-reaction)

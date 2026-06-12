@@ -9,6 +9,7 @@ from typing import Any, Callable, Optional
 
 from aquakin.core.conditions import SpatialConditions
 from aquakin.integrate._common import (
+    ConditionedReactor,
     Reactor,
     check_finite_gradient,
     forward_adjoint,
@@ -53,7 +54,7 @@ class SensitivityResult:
 
 
 def sensitivity(
-    reactor: Reactor,
+    reactor: ConditionedReactor,
     C0: jnp.ndarray,
     params: Optional[jnp.ndarray] = None,
     output_fn: Optional[Callable[[Any], jnp.ndarray]] = None,
@@ -192,7 +193,7 @@ class FitResult:
 
 
 def fit(
-    reactor: Any,
+    reactor: Reactor,
     C0: jnp.ndarray,
     observations: jnp.ndarray,
     t_obs: jnp.ndarray,
