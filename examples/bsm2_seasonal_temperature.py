@@ -55,7 +55,8 @@ def main() -> None:
     params = bsm2_parameters(asm1, adm1)
 
     print("BSM2 effluent ammonia vs influent temperature:")
-    print(f"  {'season':<10} {'T [°C]':>7} {'SNH [g_N/m³]':>14}")
+    snh_units = asm1.units_of("SNH")     # units from the network, not hardcoded
+    print(f"  {'season':<10} {'T [°C]':>7} {f'SNH [{snh_units}]':>14}")
     for season, T_c in (("winter", 10.0), ("spring", 15.0), ("summer", 20.0)):
         snh = _steady_snh(asm1, adm1, params, 273.15 + T_c)
         print(f"  {season:<10} {T_c:>7.1f} {snh:>14.3f}")

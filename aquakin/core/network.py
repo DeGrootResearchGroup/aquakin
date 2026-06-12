@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.context import CompileContext
+from aquakin.core.units import prettify_units
 from aquakin.core.nodes import (
     ASTNode,
     ConditionNode,
@@ -173,6 +174,15 @@ class CompiledNetwork:
     _default_concentrations: jnp.ndarray
     _default_parameters: jnp.ndarray
     _condition_defaults: dict[str, float] = field(default_factory=dict)
+    # Per-species metadata carried verbatim from the YAML ``species:`` block,
+    # keyed by species name. ``species_units`` gives the concentration units
+    # (e.g. ``"g_COD/m3"``, ``"g_N/m3"``, ``"mol/L"``) and
+    # ``species_descriptions`` the human-readable label. Surfaced in
+    # :meth:`summary`, :meth:`units_of` / :meth:`description_of`, and on the
+    # solution objects (``units_named``), so results no longer have to
+    # re-derive units by string-matching species names.
+    species_units: dict[str, str] = field(default_factory=dict)
+    species_descriptions: dict[str, str] = field(default_factory=dict)
     parameter_bounds: dict[str, tuple[float, float]] = field(default_factory=dict)
     parameter_transforms: dict[str, str] = field(default_factory=dict)
     # Gaussian priors per namespaced parameter name, as ``(mean, std)`` in
@@ -494,12 +504,74 @@ class CompiledNetwork:
         scale = C / jnp.maximum(C, thr)
         return pos + neg * scale
 
+    def units_of(self, species: str) -> str:
+        """Return the declared concentration units of a species.
+
+        Parameters
+        ----------
+        species : str
+            Species name.
+
+        Returns
+        -------
+        str
+            The units string from the YAML ``species:`` block (e.g.
+            ``"g_COD/m3"``, ``"g_N/m3"``, ``"mol/L"``).
+
+        Raises
+        ------
+        KeyError
+            If ``species`` is not a declared species.
+        """
+        if species not in self.species_index:
+            raise KeyError(
+                f"Unknown species '{species}'. Available: {self.species}"
+            )
+        return self.species_units.get(species, "")
+
+    def description_of(self, species: str) -> str:
+        """Return the human-readable description of a species.
+
+        Parameters
+        ----------
+        species : str
+            Species name.
+
+        Returns
+        -------
+        str
+            The description string from the YAML ``species:`` block (``""`` if
+            none was declared).
+
+        Raises
+        ------
+        KeyError
+            If ``species`` is not a declared species.
+        """
+        if species not in self.species_index:
+            raise KeyError(
+                f"Unknown species '{species}'. Available: {self.species}"
+            )
+        return self.species_descriptions.get(species, "")
+
     def summary(self) -> str:
         """Return a human-readable table summarising the network."""
         lines = [
             f"Network: {self.name}",
             f"  Description: {self.description}",
-            f"  Species ({self.n_species}): {', '.join(self.species)}",
+            f"  Species ({self.n_species}):",
+        ]
+        name_w = max((len(s) for s in self.species), default=0)
+        unit_w = max((len(self.species_units.get(s, "")) for s in self.species),
+                     default=0)
+        for s in self.species:
+            units = self.species_units.get(s, "")
+            desc = self.species_descriptions.get(s, "")
+            line = f"    {s:<{name_w}}  [{units:<{unit_w}}]"
+            if desc:
+                line += f"  {desc}"
+            lines.append(line)
+        lines += [
             f"  Conditions required: {', '.join(self.conditions_required) or '(none)'}",
             f"  Reactions ({self.n_reactions}):",
         ]
@@ -811,6 +883,12 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     )
     default_parameters = jnp.asarray(parameter_defaults)
 
+    # Per-species metadata carried through to the runtime network and results.
+    # Units are prettified for display (plain-ASCII ``m3`` -> ``m³``); the YAML
+    # keeps the easy-to-type ASCII form.
+    species_units = {s.name: prettify_units(s.units) for s in spec.species}
+    species_descriptions = {s.name: s.description for s in spec.species}
+
     # conditions_required = declared conditions; reactors validate runtime
     # SpatialConditions against this list.
     conditions_required = [c.name for c in spec.conditions]
@@ -850,6 +928,8 @@ def compile_network(spec: "Any") -> CompiledNetwork:
         _default_concentrations=default_concentrations,
         _default_parameters=default_parameters,
         _condition_defaults=condition_defaults,
+        species_units=species_units,
+        species_descriptions=species_descriptions,
         parameter_bounds=parameter_bounds,
         parameter_transforms=parameter_transforms,
         parameter_priors=parameter_priors,

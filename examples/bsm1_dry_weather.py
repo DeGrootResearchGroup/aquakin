@@ -41,17 +41,17 @@ def main() -> None:
 
     print()
     print("Tank-5 effluent state at simulation end:")
-    print(f"  SS    = {float(sol.C_named('tank5', 'SS')[-1]):7.2f}  g_COD/m³")
-    print(f"  SNH   = {float(sol.C_named('tank5', 'SNH')[-1]):7.2f}  g_N/m³")
-    print(f"  SNO   = {float(sol.C_named('tank5', 'SNO')[-1]):7.2f}  g_N/m³")
-    print(f"  SO    = {float(sol.C_named('tank5', 'SO')[-1]):7.3f}  g_O2/m³")
-    print(f"  XB_H  = {float(sol.C_named('tank5', 'XB_H')[-1]):7.1f}  g_COD/m³")
-    print(f"  XB_A  = {float(sol.C_named('tank5', 'XB_A')[-1]):7.2f}  g_COD/m³")
+    # Units come from the network (carried through compile), not a hand-kept
+    # name->unit table -- no risk of mislabelling N as COD.
+    for sp in ("SS", "SNH", "SNO", "SO", "XB_H", "XB_A"):
+        val = float(sol.C_named("tank5", sp)[-1])
+        print(f"  {sp:5s} = {val:7.2f}  {network.units_of(sp)}")
 
     print()
     print("Per-tank XB_H (heterotrophic biomass) at simulation end:")
     for name in ("tank1", "tank2", "tank3", "tank4", "tank5"):
-        print(f"  {name}: {float(sol.C_named(name, 'XB_H')[-1]):7.1f}  g_COD/m³")
+        val = float(sol.C_named(name, "XB_H")[-1])
+        print(f"  {name}: {val:7.1f}  {network.units_of('XB_H')}")
 
     # Effluent metrics: reconstruct the clarifier overflow stream over the saved
     # states (the plant integrates unit states, not the inter-unit streams).
@@ -59,8 +59,14 @@ def main() -> None:
     avgs = effluent_averages(eff.t, eff.C, eff.Q, network)
     print()
     print("Time-averaged effluent quality:")
+    # Real species (SNH, SNO) get their units from the network; the lumped
+    # aggregate metrics (COD/BOD/TSS/TKN) are not species, so they carry an
+    # explicit label.
+    aggregate_units = {"COD": "g_COD/m3", "BOD": "g_COD/m3",
+                       "TSS": "g_SS/m3", "TKN": "g_N/m3"}
     for key, val in avgs.items():
-        unit = "g_N/m³" if key in ("SNH", "SNO", "TKN") else "g/m³"
+        unit = (network.units_of(key) if key in network.species_index
+                else aggregate_units[key])
         print(f"  {key:5s} = {val:7.2f}  {unit}")
 
 

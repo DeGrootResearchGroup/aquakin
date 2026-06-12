@@ -53,6 +53,36 @@ def test_summary_smoke(simple_network):
     assert "A_to_B" in out
 
 
+def test_species_units_and_descriptions(simple_network):
+    """Species units/descriptions are carried from the YAML through compile."""
+    assert simple_network.species_units == {"A": "mol/L", "B": "mol/L"}
+    assert simple_network.species_descriptions == {"A": "Reactant", "B": "Product"}
+
+    assert simple_network.units_of("A") == "mol/L"
+    assert simple_network.description_of("B") == "Product"
+
+    with pytest.raises(KeyError):
+        simple_network.units_of("nope")
+    with pytest.raises(KeyError):
+        simple_network.description_of("nope")
+
+
+def test_summary_includes_units(simple_network):
+    out = simple_network.summary()
+    # Each species line carries its units in brackets and its description.
+    assert "[mol/L]" in out
+    assert "Reactant" in out
+
+
+def test_units_named_on_solution(simple_network):
+    """A solution can label its species without re-deriving units."""
+    conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
+    reactor = aquakin.BatchReactor(simple_network, conditions)
+    sol = reactor.solve(simple_network.default_concentrations(),
+                        t_span=(0.0, 1.0))
+    assert sol.units_named("A") == "mol/L"
+
+
 def test_to_latex_smoke(simple_network):
     latex = simple_network.to_latex()
     assert "A_to_B" in latex
