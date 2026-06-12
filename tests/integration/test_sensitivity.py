@@ -486,7 +486,7 @@ def test_dgsm_forward_through_reactor_matches_reverse(simple_network):
 
 def test_dgsm_forward_through_default_adjoint_errors():
     """Forward mode through the default RecursiveCheckpointAdjoint raises a
-    helpful error pointing to DirectAdjoint."""
+    helpful error pointing to aquakin.forward_adjoint()."""
     net = aquakin.load_network_from_file(
         str(__import__("pathlib").Path(__file__).parents[1] / "fixtures" / "simple_network.yaml")
     )
