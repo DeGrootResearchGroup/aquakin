@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
-from typing import Callable, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol, runtime_checkable
 
 import diffrax
 import jax
@@ -16,6 +16,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.network import CompiledNetwork
+
+if TYPE_CHECKING:  # pragma: no cover
+    from aquakin.core.conditions import SpatialConditions
 
 
 # --- AD-mode helpers (hide the diffrax adjoint plumbing) ---------------------
@@ -363,18 +366,45 @@ class _HasNamedSpecies:
 
 @runtime_checkable
 class Reactor(Protocol):
-    """Structural type for reactors usable by ``sensitivity`` / ``fit``.
+    """Structural type for the solve-based reactors that ``sensitivity`` /
+    ``fit`` / ``calibrate`` / ``profile_likelihood`` consume.
 
-    All concrete reactors expose ``network`` and ``solve``. Batch/PFR also
-    expose ``conditions``; particle reactors expose ``track`` instead.
-    Callers that need condition gradients should narrow to a reactor with a
-    ``conditions`` attribute.
+    Declares the contract those consumers actually rely on: the compiled
+    ``network``, the five solver settings every reactor exposes (set uniformly
+    by :func:`init_solver_settings` + :func:`resolve_state_atol`), and a
+    ``solve(C0, params=None, ...)`` whose extra arguments are reactor-specific
+    (a batch/biofilm reactor takes ``t_span`` / ``t_eval``; a PFR fixes its grid
+    at construction; a particle reactor takes neither). ``CFDReactor`` is
+    deliberately **not** a ``Reactor`` -- it exposes ``step()``, not ``solve()``.
+
+    A reactor that also carries spatially-varying ``conditions`` (batch / PFR /
+    biofilm) satisfies the narrower :class:`ConditionedReactor`; a particle
+    reactor carries a ``track`` instead and does not.
     """
 
     network: CompiledNetwork
+    rtol: float
+    atol: "float | jnp.ndarray"
+    adjoint: "diffrax.AbstractAdjoint | None"
+    dtmax: "float | None"
+    max_steps: int
 
-    def solve(self, *args, **kwargs):  # pragma: no cover - protocol stub
+    def solve(self, C0, params=None, *args, **kwargs):  # pragma: no cover
         ...
+
+
+@runtime_checkable
+class ConditionedReactor(Reactor, Protocol):
+    """A :class:`Reactor` that exposes spatially-varying ``conditions``.
+
+    The batch / PFR / biofilm reactors carry a :class:`SpatialConditions`, so a
+    consumer that differentiates through condition fields (e.g.
+    :func:`aquakin.sensitivity`) requires this narrower type; a particle reactor,
+    which carries a ``track`` instead, is a :class:`Reactor` but not a
+    ``ConditionedReactor``.
+    """
+
+    conditions: "SpatialConditions"
 
 
 def _coerce_atol(atol, n_species: int):
