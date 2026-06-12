@@ -81,7 +81,10 @@ jobs:
     name: slow suite (py${{ matrix.python-version }})
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # `-n 2` (memory cap, see the run step) roughly doubles wall time versus the
+    # old 4-worker `-n auto`, so the ceiling is raised from 35 to 75 min with
+    # headroom. Merge-only, so off the PR critical path.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -107,13 +110,17 @@ jobs:
         # here keeps the three CI groups mutually exclusive -- no test runs in two
         # jobs. (fast = "not validation and not slow"; slow = "slow and not
         # validation"; validation = "validation".)
-        # Default `-n auto` (load), NOT loadscope: the slow suite is full of
-        # independent parametrized heavy tests (jax.grad/integration over every
-        # ASM/ADM network, calibration grids), which loadscope pins to a single
-        # worker -- measured ~4x slower (e.g. test_asm_family 268s -> 63s under
-        # load), which overran the 35-min ceiling. Spreading them balances well.
+        # `-n 2`, NOT `-n auto`: the slow suite has grown enough heavy whole-plant
+        # solves (the BSM2 family, the profile-likelihood and calibration grids)
+        # that four concurrent ones (`-n auto` = 4 workers) exhaust the 16 GB
+        # hosted runner and a worker is OOM-killed mid-test (an xdist worker crash,
+        # not a timeout). `-n 2` halves the concurrent heavy solves, so roughly
+        # half the peak memory, at the cost of wall time -- the same cap the
+        # validation suite already uses for the same reason. Loadscope is still
+        # avoided (it pins parametrized families to one worker; measured ~4x
+        # slower), so plain load distribution over the two workers.
         run: >-
-          pytest -m "slow and not validation" -q -n auto
+          pytest -m "slow and not validation" -q -n 2
           --durations=15 --timeout=900 --timeout-method=thread
           --max-worker-restart=0
 
@@ -126,12 +133,13 @@ jobs:
     # fine. The validation set has grown (now ~24 tests: published-data checks
     # plus the AD-correctness suites -- discrete/stable/forward adjoints). These
     # are the heaviest tests in the repo (full 167-state two-network BSM2 plant
-    # steady states + ADM1 + AD through stiff solves), so unlike the `slow` suite
-    # they OOM the 16 GB hosted runner under `-n auto` (4 workers): four heavy
-    # solves' peak memory coincides and the runner is killed mid-run. Capping at
-    # `-n 2` halves the concurrent heavy solves (so ~half the peak memory) at the
-    # cost of wall time -- acceptable here, since validation is off the PR
-    # critical path. 60 min absorbs the slower run with headroom.
+    # steady states + ADM1 + AD through stiff solves), which OOM the 16 GB hosted
+    # runner under `-n auto` (4 workers): four heavy solves' peak memory coincides
+    # and the runner is killed mid-run. Capping at `-n 2` halves the concurrent
+    # heavy solves (so ~half the peak memory) at the cost of wall time --
+    # acceptable here, since validation is off the PR critical path. The slow
+    # suite carries the same `-n 2` cap for the same reason. 60 min absorbs the
+    # slower run with headroom.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4

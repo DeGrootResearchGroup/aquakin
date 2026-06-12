@@ -241,23 +241,26 @@ def test_stable_adjoint_solve_is_jittable():
     gidx = plant.parameter_index("adm1.k_m_ac")
     T = 3.0
     teval = jnp.array([T])
+    # A tight max_steps keeps the discrete-adjoint trajectory buffer -- and so the
+    # peak memory of this jit-plus-gradient test -- small; the warm-started 3-day
+    # solve takes far fewer than 600 steps.
+    kw = dict(rtol=1e-5, atol=1e-3, max_steps=600)
 
     def g(theta):
         p = base.at[gidx].set(theta)
         sol = plant.solve(t_span=(0.0, T), t_eval=teval, params=p, y0=y0,
-                          gradient="stable_adjoint", **_solve_kwargs())
+                          gradient="stable_adjoint", **kw)
         return sol.C_named("tank1", "SNO")[-1]
 
     theta0 = float(base[gidx])
-    eager = float(g(theta0))
-    jitted = float(jax.jit(g)(theta0))
-    assert np.isfinite(jitted)
-    assert jitted == pytest.approx(eager, rel=1e-6)
-
-    ge = float(jax.grad(g)(theta0))
-    gj = float(jax.jit(jax.grad(g))(theta0))
-    assert np.isfinite(gj)
-    assert gj == pytest.approx(ge, rel=1e-6)
+    # value-and-gradient in one pass, eager and jitted, so the test compiles two
+    # programs rather than four. The jitted pass compiling at all exercises the
+    # atol concretization fix; its value and gradient must match the eager pass.
+    f_e, g_e = jax.value_and_grad(g)(theta0)
+    f_j, g_j = jax.jit(jax.value_and_grad(g))(theta0)
+    assert np.isfinite(float(f_j)) and np.isfinite(float(g_j))
+    assert float(f_j) == pytest.approx(float(f_e), rel=1e-6)
+    assert float(g_j) == pytest.approx(float(g_e), rel=1e-6)
 
 
 @pytest.mark.validation
@@ -270,8 +273,10 @@ def test_stable_adjoint_forward_solve_is_cached():
     asm1, adm1, plant, y0 = _bsm2_plant()
     base = bsm2_parameters(asm1, adm1)
     T = 3.0
+    # Tight max_steps (3-day solve uses far fewer) to keep the adjoint buffer
+    # and so this test's peak memory small.
     kw = dict(t_span=(0.0, T), t_eval=jnp.array([T]), y0=y0,
-              gradient="stable_adjoint", **_solve_kwargs())
+              gradient="stable_adjoint", rtol=1e-5, atol=1e-3, max_steps=600)
 
     def _sa_keys():
         return [k for k in plant._jit_cache if k[0] == "stable_adjoint"]
