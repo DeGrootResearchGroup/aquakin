@@ -71,6 +71,7 @@ BSM2_STORAGE_OUTFLOW_MAX = 1500.0          # m³/d, release pump capacity (Qstor
 # smoothly (instead of fill-and-bypass).
 BSM2_STORAGE_LEVEL_SETPOINT_FRAC = 0.5     # target level as a fraction of Vmax
 BSM2_STORAGE_LEVEL_GAIN = 30.0             # m³/d release per m³ above setpoint
+BSM2_BYPASS_Q = 60000.0                    # influent flow above this bypasses treatment
 BSM2_PRIMARY_VOLUME = 900.0  # m³
 BSM2_PRIMARY_FPS = 0.007
 BSM2_CLARIFIER_AREA = 1500.0  # m²
@@ -181,6 +182,8 @@ def build_bsm2(
     reject_control: bool = False,
     storage_volume: float = BSM2_STORAGE_VOLUME,
     storage_output_flow: float = BSM2_STORAGE_OUTFLOW,
+    influent_bypass: bool = False,
+    bypass_threshold: float = BSM2_BYPASS_Q,
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
@@ -220,12 +223,24 @@ def build_bsm2(
     storage_output_flow : float, optional
         Fixed release flow from the storage tank (m³/d), used when
         ``reject_storage=True`` and ``reject_control=False``. Default 0.
+    influent_bypass : bool, optional
+        If True, add the BSM2 hydraulic influent bypass: raw influent flow above
+        ``bypass_threshold`` is diverted around the whole treatment train
+        (primary, AS, secondary clarifier) and rejoined with the clarified
+        effluent, modelling wet-weather hydraulic overload. This **changes the
+        influent entry point**: wire the influent to ``"bypass_split.in"``
+        (not ``"front_mix.fresh"``), and the final plant effluent becomes
+        ``"effluent_mix.out"`` (``evaluate_bsm2`` auto-detects it). Default False.
+    bypass_threshold : float, optional
+        Influent flow limit (m³/d) above which the excess bypasses; the BSM2
+        default is 60000. Only used when ``influent_bypass=True``.
 
     Returns
     -------
     Plant
         The wired BSM2 plant. The caller adds the influent and connects it to
-        ``front_mix.fresh`` (mirroring :func:`build_bsm1`).
+        ``front_mix.fresh`` -- or to ``bypass_split.in`` when
+        ``influent_bypass=True`` (mirroring :func:`build_bsm1`).
     """
     from aquakin.plant.control import PIController
     from aquakin.plant.storage import StorageTank
@@ -264,6 +279,15 @@ def build_bsm2(
     # A storage tank is built when either the fixed-release storage or the
     # closed-loop reject controller is requested.
     use_storage = reject_storage or reject_control
+
+    # ----- Influent bypass (optional): divert wet-weather peak flow around the
+    # whole treatment train. The split is on the *raw influent* flow (an external
+    # input, so the exact recycle-flow solve stays valid); the diverted raw flow
+    # rejoins the clarified effluent downstream of the secondary clarifier.
+    if influent_bypass:
+        plant.add_unit(SplitterUnit(
+            name="bypass_split", network=asm1, threshold=float(bypass_threshold),
+            threshold_port="bypass", remainder_port="to_plant"))
 
     # ----- Front: combine raw influent with the recycled reject water. With a
     # reject storage tank the reject returns on two ports (the released stream
@@ -320,6 +344,12 @@ def build_bsm2(
         name="underflow_split", network=asm1,
         output_port_flows={"ras": Qr}, remainder_port="waste"))
 
+    # Final-effluent combiner: clarified effluent + the bypassed raw influent.
+    if influent_bypass:
+        plant.add_unit(MixerUnit(
+            name="effluent_mix",
+            input_port_names=["treated", "bypass"], network=asm1))
+
     # ----- Sludge train: thickener -> digester -> dewatering. -----
     plant.add_unit(IdealThickener(
         name="thickener", network=asm1, target_tss_percent=BSM2_THICKENER_TSS_PERCENT,
@@ -363,6 +393,12 @@ def build_bsm2(
     adm2asm = ADM1toASM1(source_network=adm1, target_network=asm1)
 
     # ----- Wiring -----
+    # Influent bypass: the raw influent enters the splitter; the within-capacity
+    # flow goes to the plant, the excess skips the train and rejoins the effluent.
+    if influent_bypass:
+        plant.connect("bypass_split.to_plant", "front_mix.fresh")
+        plant.connect("bypass_split.bypass", "effluent_mix.bypass")
+        plant.connect("settler.overflow", "effluent_mix.treated")
     # Front line (bare endpoints use each unit's sole in/out port).
     plant.connect("front_mix", "primary")
     plant.connect("primary.effluent", "as_mix.primary_eff")

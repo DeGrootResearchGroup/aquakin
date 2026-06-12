@@ -189,6 +189,39 @@ def _discrete_adjoint_solve(
     return out[0] if final_only else out
 
 
+def _autonomize(rhs: Callable, y0: jnp.ndarray, t0: float):
+    """Carry time in the state so a non-autonomous ``rhs(t, y, p)`` becomes an
+    autonomous field on the augmented state ``[y; tau]`` with ``dtau/dt = 1``.
+
+    The wrapped field reads the integration time from ``tau`` (the last state
+    component) and ignores the solver's ``t`` argument, so the discrete adjoint --
+    which evaluates the field with a fixed time argument -- still captures the
+    exact ``df/dt`` dependence through ``tau``. This is the classical
+    autonomization that makes the discrete-adjoint construction exact for a
+    time-dependent right-hand side, with no change to the per-step recurrence.
+    Returns ``(rhs_aug, y0_aug)``.
+    """
+    n = y0.shape[0]
+    y0_aug = jnp.concatenate([y0, jnp.asarray([t0], dtype=y0.dtype)])
+
+    def rhs_aug(t, y_aug, p):
+        dy = rhs(y_aug[n], y_aug[:n], p)
+        return jnp.concatenate([dy, jnp.ones((1,), dtype=y_aug.dtype)])
+
+    return rhs_aug, y0_aug
+
+
+def _augment_atol(atol):
+    """Extend an absolute tolerance to the time-augmented state. A scalar tol
+    broadcasts unchanged; an array tol gains one entry for the time component
+    (reusing the last, since the linear ``tau`` is integrated exactly so its
+    tolerance does not constrain the step)."""
+    a = jnp.asarray(atol)
+    if a.ndim == 0:
+        return atol
+    return jnp.concatenate([a, a[-1:]])
+
+
 def implicit_euler_adjoint_solve(
     rhs: Callable,
     y0: jnp.ndarray,
@@ -200,6 +233,7 @@ def implicit_euler_adjoint_solve(
     atol: float = _DEFAULT_ATOL,
     dt0: float = _DEFAULT_DT0,
     max_steps: int = _DEFAULT_MAX_STEPS,
+    time_dependent: bool = False,
 ) -> jnp.ndarray:
     """Integrate over ``t_span`` with a cap-free discrete-adjoint reverse-mode rule.
 
@@ -234,6 +268,12 @@ def implicit_euler_adjoint_solve(
     max_steps : int
         Maximum number of accepted steps (also the size of the saved trajectory
         the backward scan walks).
+    time_dependent : bool, optional
+        If ``False`` (default) the right-hand side is assumed autonomous, as the
+        reaction RHS is for fixed conditions. If ``True`` the field's explicit
+        time dependence (e.g. a time-varying influent) is handled exactly by
+        carrying time in the state, so the gradient is exact through a transient
+        solve. See :func:`_autonomize`.
 
     Returns
     -------
@@ -243,6 +283,10 @@ def implicit_euler_adjoint_solve(
         way the result carries the discrete-adjoint VJP w.r.t. ``y0`` and
         ``params``.
     """
+    n0 = y0.shape[0]
+    if time_dependent:
+        rhs, y0 = _autonomize(rhs, y0, float(t_span[0]))
+        atol = _augment_atol(atol)
     n = y0.shape[0]
     solver = diffrax.ImplicitEuler(root_finder=_implicit_tols(rtol, atol))
 
@@ -257,11 +301,12 @@ def implicit_euler_adjoint_solve(
         dpar = dt * vjp(mu)[0]
         return mu, dpar
 
-    return _discrete_adjoint_solve(
+    out = _discrete_adjoint_solve(
         rhs, y0, params, t_span, t_eval,
         solver=solver, step_adjoint=step_adjoint,
         rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
     )
+    return out[..., :n0] if time_dependent else out
 
 
 # --- High-order ESDIRK discrete adjoint --------------------------------------
@@ -321,6 +366,7 @@ def esdirk_adjoint_solve(
     dt0: float = _DEFAULT_DT0,
     max_steps: int = _DEFAULT_MAX_STEPS,
     newton_iters: int = _DEFAULT_NEWTON_ITERS,
+    time_dependent: bool = False,
 ) -> jnp.ndarray:
     """Cap-free reverse-mode gradient through a high-order ESDIRK solve.
 
@@ -329,8 +375,7 @@ def esdirk_adjoint_solve(
     the backward is the transposed-stage discrete adjoint of that method. The
     stage values are recomputed in the backward pass (diffrax saves only the
     step states), then the per-stage transposed solves accumulate the gradient.
-    Finite for stiff networks with no ``dtmax`` cap; the autonomous reaction RHS
-    is assumed (the stage times ``c`` do not enter).
+    Finite for stiff networks with no ``dtmax`` cap.
 
     Parameters
     ----------
@@ -343,6 +388,13 @@ def esdirk_adjoint_solve(
         Newton iterations used to recompute each implicit stage in the backward
         pass. The default converges the well-conditioned stage equation to
         machine precision for the step sizes the adaptive forward selects.
+    time_dependent : bool, optional
+        If ``False`` (default) the right-hand side is taken to be autonomous (the
+        reaction RHS is, for fixed conditions), so the backward pass evaluates it
+        with a fixed time argument and the stage times do not enter. If ``True``
+        the field's explicit time dependence (e.g. a time-varying influent) is
+        handled exactly by carrying time in the state (:func:`_autonomize`), so
+        the gradient is exact through a transient solve.
 
     Returns
     -------
@@ -351,6 +403,10 @@ def esdirk_adjoint_solve(
         ``(len(t_eval), n)``; carries the discrete-adjoint VJP w.r.t. ``y0`` and
         ``params``.
     """
+    n0 = y0.shape[0]
+    if time_dependent:
+        rhs, y0 = _autonomize(rhs, y0, float(t_span[0]))
+        atol = _augment_atol(atol)
     if solver is None:
         solver = diffrax.Kvaerno5()
     # Set explicit root-finder tolerances (see _implicit_tols) so the implicit
@@ -406,8 +462,9 @@ def esdirk_adjoint_solve(
         lam_n = lam + sum(Ybar)
         return lam_n, pbar
 
-    return _discrete_adjoint_solve(
+    out = _discrete_adjoint_solve(
         rhs, y0, params, t_span, t_eval,
         solver=solver, step_adjoint=step_adjoint,
         rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
     )
+    return out[..., :n0] if time_dependent else out
