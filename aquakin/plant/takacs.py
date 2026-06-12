@@ -271,9 +271,23 @@ class TakacsClarifier:
         # Clamp to [0, vmax].
         return jnp.clip(v_takacs, 0.0, self._vmax)
 
-    def _split_flows(self, Q_in: jnp.ndarray, clamp: bool):
+    @property
+    def flow_needs_time(self) -> bool:
+        """True when a controlled flow follows a time schedule, so the plant
+        passes ``t`` into :meth:`flow_outputs` during the flow solve."""
+        return hasattr(self.overflow_Q, "at") or hasattr(self.underflow_Q, "at")
+
+    @staticmethod
+    def _resolve_setpoint(q, t):
+        """Evaluate a setpoint that may be a constant or a time schedule."""
+        if q is None:
+            return None
+        return q.at(t) if hasattr(q, "at") else q
+
+    def _split_flows(self, Q_in: jnp.ndarray, clamp: bool, t=None):
         return split_controlled_flows(
-            self.overflow_Q, self.underflow_Q, Q_in, clamp
+            self._resolve_setpoint(self.overflow_Q, t),
+            self._resolve_setpoint(self.underflow_Q, t), Q_in, clamp
         )
 
     def compute_outputs(
@@ -290,7 +304,7 @@ class TakacsClarifier:
         # The controlled flow is fixed and the other is the remainder, clamped
         # into [0, Q_in] so neither outflow goes negative (a negative RAS would
         # make the downstream mixer produce negative concentrations).
-        overflow_Q, underflow_Q = self._split_flows(s_in.Q, clamp=True)
+        overflow_Q, underflow_Q = self._split_flows(s_in.Q, clamp=True, t=t)
 
         # Build the per-species C vectors with two scatters each (not a Python
         # loop of scalar scatters): solubles pass through; particulates take the
@@ -314,14 +328,16 @@ class TakacsClarifier:
             self.underflow_port: Stream(Q=underflow_Q, C=C_underflow, network=self.network, T=s_in.T),
         }
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, t=None) -> dict:
         """Linear flow rule for the recycle-flow solve: the controlled flow
-        (``underflow_Q`` or ``overflow_Q``) is constant and the other outflow is
-        the remainder, so the map stays affine and ``_resolve_flows`` is exact.
+        (``underflow_Q`` or ``overflow_Q``) is the setpoint at the current time
+        and the other outflow is the remainder, so the map stays affine and
+        ``_resolve_flows`` is exact. ``t`` is supplied when a controlled flow
+        follows a schedule (``flow_needs_time``); a constant setpoint ignores it.
         The clamp in compute_outputs/rhs is the concentration-stage safeguard,
         inactive at the steady-state feed."""
         Q_in = input_flows[self.input_port]
-        Q_over, Q_under = self._split_flows(Q_in, clamp=False)
+        Q_over, Q_under = self._split_flows(Q_in, clamp=False, t=t)
         return {self.overflow_port: Q_over, self.underflow_port: Q_under}
 
     def rhs(
@@ -337,7 +353,7 @@ class TakacsClarifier:
         # so the up/down convective velocities stay non-negative (see
         # compute_outputs): a negative underflow would make the RAS recycle a
         # negative-flow stream and destabilise the solve.
-        overflow_Q, underflow_Q = self._split_flows(Q_in, clamp=True)
+        overflow_Q, underflow_Q = self._split_flows(Q_in, clamp=True, t=t)
 
         layered = self._layered(state)  # (n_layers, n_part)
         # Particulate inlet concentrations — gather via the precomputed index array.

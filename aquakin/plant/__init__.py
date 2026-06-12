@@ -23,6 +23,7 @@ from aquakin.plant.plant import (
     PlantSolution,
 )
 from aquakin.plant.primary_clarifier import PrimaryClarifier
+from aquakin.plant.schedule import PiecewiseConstantSchedule
 from aquakin.plant.separators import IdealThickener
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.streams import Stream, StreamSeries
@@ -41,6 +42,7 @@ __all__ = [
     "MixerUnit",
     "PIController",
     "ParameterLayout",
+    "PiecewiseConstantSchedule",
     "Plant",
     "PlantSolution",
     "PrimaryClarifier",

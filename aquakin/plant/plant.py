@@ -911,6 +911,12 @@ class Plant:
                 params_unit = self._params_for_unit(name, params_full)
                 if getattr(unit, "flow_needs_state", False) and states is not None:
                     out = unit.flow_outputs(in_flows, params_unit, states[name])
+                elif getattr(unit, "flow_needs_time", False):
+                    # A unit whose controlled flow follows a time schedule (e.g.
+                    # a scheduled wastage pump) reads ``t`` here. The schedule
+                    # value is a constant at a given ``t``, so the affine probe
+                    # over the recycle flows stays exact.
+                    out = unit.flow_outputs(in_flows, params_unit, t)
                 else:
                     out = unit.flow_outputs(in_flows, params_unit)
                 for port, q in out.items():
