@@ -97,7 +97,7 @@ def test_stable_adjoint_cross_interface_gradient_matches_fd():
     through the interface and the recycle, is finite and matches central FD."""
     asm1, adm1, plant, y0 = _bsm2_plant()
     base = bsm2_parameters(asm1, adm1)
-    gidx = asm1.n_params + adm1.param_index["k_m_ac"]   # acetate-uptake max rate
+    gidx = plant.parameter_index("adm1.k_m_ac")   # acetate-uptake max rate
     theta0 = float(base[gidx])
     T = 3.0
 
@@ -127,7 +127,7 @@ def test_auto_gradient_defaults_to_stable_adjoint():
     plain forward solve still uses the fast jax_adjoint path."""
     asm1, adm1, plant, y0 = _bsm2_plant()
     base = bsm2_parameters(asm1, adm1)
-    gidx = asm1.n_params + adm1.param_index["k_m_ac"]
+    gidx = plant.parameter_index("adm1.k_m_ac")
     theta0 = float(base[gidx])
     T = 3.0
 
@@ -173,7 +173,7 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     warm = asm1.concentrations(_WARM)
     y0 = plant.initial_state(overrides={tk: warm for tk in _TANKS})
     base = bsm2_parameters(asm1, adm1)
-    gidx = asm1.n_params + adm1.param_index["k_m_ac"]
+    gidx = plant.parameter_index("adm1.k_m_ac")
     theta0 = float(base[gidx])
     T = 3.0
 
@@ -238,7 +238,7 @@ def test_stable_adjoint_solve_is_jittable():
     compile across optimizer iterations."""
     asm1, adm1, plant, y0 = _bsm2_plant()
     base = bsm2_parameters(asm1, adm1)
-    gidx = asm1.n_params + adm1.param_index["k_m_ac"]
+    gidx = plant.parameter_index("adm1.k_m_ac")
     T = 3.0
     teval = jnp.array([T])
 

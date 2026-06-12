@@ -1677,6 +1677,20 @@ into one flat vector and integrates the whole thing under a monolithic
 Diffrax solve — so `jax.grad` flows end-to-end across the plant, and
 `aquakin.calibrate()` works on plant-level parameter vectors.
 
+**By-name plant parameters.** A `Plant` concatenates its networks' parameter
+vectors into one flat `default_parameters()`. `Plant.parameter_values(overrides)`
+gives that flat vector the same friendly by-name API as
+`CompiledNetwork.parameter_values`, keyed by `"<network>.<param>"` (the network
+name plus the network's own namespaced parameter name) — e.g.
+`plant.parameter_values({"asm1.muH": 4.0, "adm1.k_hyd_ch": 10.0})` to bump one
+rate in a multi-network plant (BSM2's ASM1 water line + ADM1 digester) without
+hand-computing the block offset. `parameter_names()` lists the valid keys;
+`parameter_index(name)` returns the flat index (the companion for `jax.grad`
+w.r.t. one parameter, which can't go through `parameter_values` — that
+materialises concrete values). All three reuse the existing
+`network_param_blocks` layout. Unknown names raise a `KeyError` with a
+close-match hint.
+
 Key types:
 
 - `Stream(Q, C, network)` — the bulk-flow + concentration record passed
