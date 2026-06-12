@@ -15,6 +15,7 @@ from aquakin.integrate._common import (
     _HasNamedSpecies,
     _coerce_atol,
     _interp_fields_to_scalar,
+    friendly_step_ceiling,
     solve_chemistry,
 )
 
@@ -172,7 +173,8 @@ class PlugFlowReactor:
 
         if self._jitted_solve is None:
             self._jitted_solve = self._build_jitted_solve()
-        ts, ys = self._jitted_solve(C0, params, fields)
+        with friendly_step_ceiling(self.max_steps, what="plug-flow reactor solve"):
+            ts, ys = self._jitted_solve(C0, params, fields)
         return PFRSolution(x=ts, C=ys, network=self.network)
 
     def solve_sensitivity(

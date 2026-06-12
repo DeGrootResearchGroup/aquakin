@@ -1655,6 +1655,42 @@ three fixes, all diagnosed against the official BSM1 reference code:
 `Plant.solve` takes an optional `y0=` for warm-starting (e.g. a dynamic run
 from a precomputed steady state).
 
+**Reaching steady state — `plant.run_to_steady_state(...)`.** A single continuous
+adaptive solve that **self-terminates** at steady state via diffrax's
+`steady_state_event` (halts when `||dstate/dt|| <= ss_atol + ss_rtol*||state||`,
+the standard march-to-steady-state criterion) — no fixed horizon to guess and no
+chunked re-integration; `max_time` is only a safety cap (reached ⇒
+`converged=False`). Returns a `SteadyStateResult(state, converged, time,
+solution)`. Implemented by threading an `event=` argument through
+`Plant.solve` → `_run_diffeqsolve` → `diffeqsolve` (forward `jax_adjoint` path
+only; rejected under `stable_adjoint`). Warm-started BSM2 settles in ~51 d /
+~25 s reproducing the validated steady state.
+
+**Default `atol` is now per-component, scaled to the state magnitudes.** When
+`atol` is omitted, `BatchReactor` and `Plant.solve` build a per-species noise
+floor `atol_i = atol_factor·max(|operating_i|, |reference_i|, floor_frac·char)`
+(`atol_factor=floor_frac=1e-6`) via `integrate/_common.default_atol` — the
+SUNDIALS "vector atol" / Hairer "atol ∝ typical value" rule. The reactor scales
+off the network's `default_concentrations` (at construction); the plant scales
+off `y0` (at solve time). This replaces the old fixed `atol=1e-9`, which was
+~9 orders too tight for g/m³ ASM/ADM states and forced the integrator step
+ceiling — so a warm-started BSM2 now solves with **nothing passed** (no
+`atol=1e-3, max_steps=500_000` magic). An explicit scalar or `(n_species,)`
+array still overrides it verbatim (e.g. the ozone `OH→1e-20` per-species atol),
+so existing calls are unchanged. Verified to reproduce every validated steady
+state (691 non-validation + 23 validation tests). Any solve that hits the
+integrator step budget -- `Plant.solve` **and every reactor**
+(`BatchReactor`/`PlugFlowReactor`/`BiofilmReactor`/`ParticleTrackReactor`) --
+re-raises the Diffrax/Equinox failure as a domain `RuntimeError` naming the
+remedies (warm-start via `run_to_steady_state`, loosen `rtol`, raise
+`max_steps`), with the noisy equinox exception chain suppressed (`from None`).
+This is the shared `integrate/_common.friendly_step_ceiling(max_steps, what=...)`
+context manager wrapped around each solve's *execution* (the call to the jitted
+solve / `diffeqsolve`, where the runtime error surfaces -- not the traced
+`_run_diffeqsolve`). The jitted reactors emit one extra equinox *stderr* line
+about `filter_jit` that the exception machinery cannot suppress; the raised
+exception itself is clean.
+
 **Dynamic influent now works too — flow-controlled recycle pumps (issue #30).**
 The dynamic (time-varying-influent) run *used* to hit the step ceiling, which
 was attributed to diurnal-forcing stiffness. The real cause was a **flow-model

@@ -31,7 +31,12 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.network import CompiledNetwork
-from aquakin.integrate._common import _coerce_atol, _run_diffeqsolve
+from aquakin.integrate._common import (
+    _coerce_atol,
+    _run_diffeqsolve,
+    default_atol,
+    friendly_step_ceiling,
+)
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.streams import Stream, StreamSeries
@@ -122,6 +127,33 @@ class PlantSolution:
             )
         idx = unit.network.species_index[species]
         return self.unit_state(unit_name)[:, idx]
+
+
+@dataclass
+class SteadyStateResult:
+    """Result of :meth:`Plant.run_to_steady_state`.
+
+    Attributes
+    ----------
+    state : jnp.ndarray
+        The steady-state (operating-point) state vector, shape
+        ``(total_state_size,)``. Pass it to :meth:`Plant.states_by_unit` to read
+        per-unit values, or as ``solve(y0=...)`` to start a dynamic run.
+    converged : bool
+        ``True`` if the steady-state event fired (the plant settled) before the
+        ``max_time`` safety cap; ``False`` if the cap was hit first (not yet
+        steady -- raise ``max_time``).
+    time : float
+        The time (plant units) at which steady state was reached, or ``max_time``
+        if it did not converge.
+    solution : PlantSolution
+        The underlying solve (terminating at ``time``).
+    """
+
+    state: jnp.ndarray
+    converged: bool
+    time: float
+    solution: "PlantSolution"
 
 
 class Plant:
@@ -971,12 +1003,13 @@ class Plant:
         params: Optional[jnp.ndarray] = None,
         *,
         rtol: float = 1e-6,
-        atol: Union[float, jnp.ndarray] = 1e-9,
+        atol: Union[float, jnp.ndarray, None] = None,
         adjoint: Optional[diffrax.AbstractAdjoint] = None,
         dtmax: Optional[float] = None,
         max_steps: int = 100_000,
         y0: Optional[jnp.ndarray] = None,
         gradient: str = "jax_adjoint",
+        event: Optional[diffrax.Event] = None,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
 
@@ -1040,8 +1073,6 @@ class Plant:
                     f"params has shape {params.shape}, expected "
                     f"({layout.total_size},)"
                 )
-        atol_eff = _coerce_atol(atol, self._total_state_size)
-
         # Initial state: the per-unit defaults, or a caller-supplied warm start
         # (e.g. a previously-computed steady state -- the standard way to start a
         # dynamic-influent run, avoiding the stiff clean-start transient).
@@ -1053,6 +1084,13 @@ class Plant:
                 raise ValueError(
                     f"y0 has shape {y0.shape}, expected ({self._total_state_size},)"
                 )
+        # Default atol is a per-component noise floor scaled off the operating
+        # magnitudes (the warm start y0 and the per-unit defaults), so a g/m³
+        # plant solves without the old fixed 1e-9 forcing the step ceiling.
+        if atol is None:
+            atol_eff = default_atol(y0, self.initial_state())
+        else:
+            atol_eff = _coerce_atol(atol, self._total_state_size)
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
@@ -1073,6 +1111,11 @@ class Plant:
                 raise ValueError(
                     "gradient='stable_adjoint' forms its own discrete adjoint and "
                     "controls its own steps; do not also pass adjoint= or dtmax=."
+                )
+            if event is not None:
+                raise ValueError(
+                    "event= (e.g. a steady-state terminating event) is only "
+                    "supported on the forward gradient='jax_adjoint' path."
                 )
             # Cap-free reverse-mode gradient through the stiff plant solve: the
             # forward is a robust adaptive ESDIRK solve and the reverse is the
@@ -1095,17 +1138,100 @@ class Plant:
                 ts = jnp.asarray(t_eval)
             return PlantSolution(t=ts, state=ys, plant=self)
 
-        sol = _run_diffeqsolve(
-            rhs,
-            t0=t0,
-            t1=t1,
-            y0=y0,
-            args=params,
-            saveat=saveat,
-            rtol=rtol,
-            atol=atol_eff,
-            adjoint=adjoint,
-            dtmax=dtmax,
-            max_steps=max_steps,
-        )
+        with friendly_step_ceiling(max_steps, what="plant solve"):
+            sol = _run_diffeqsolve(
+                rhs,
+                t0=t0,
+                t1=t1,
+                y0=y0,
+                args=params,
+                saveat=saveat,
+                rtol=rtol,
+                atol=atol_eff,
+                adjoint=adjoint,
+                dtmax=dtmax,
+                max_steps=max_steps,
+                event=event,
+            )
         return PlantSolution(t=sol.ts, state=sol.ys, plant=self)
+
+    def run_to_steady_state(
+        self,
+        params: Optional[jnp.ndarray] = None,
+        y0: Optional[jnp.ndarray] = None,
+        *,
+        max_time: float = 1000.0,
+        ss_rtol: float = 1e-3,
+        ss_atol: float = 1e-3,
+        rtol: float = 1e-6,
+        atol: Union[float, jnp.ndarray, None] = None,
+        atol_factor: float = 1e-6,
+        max_steps: int = 500_000,
+    ) -> "SteadyStateResult":
+        """Integrate forward until the plant settles to steady state.
+
+        A single continuous adaptive solve that **terminates itself** the instant
+        the dynamics die out -- diffrax's steady-state event halts when the
+        vector field is approximately zero (``||dstate/dt|| <= ss_atol +
+        ss_rtol*||state||``), the standard "march in time until the residual
+        dies" criterion. There is no fixed horizon to guess and no chunked
+        re-integration: ``max_time`` is only a safety cap, reached only if the
+        plant has *not* settled (then ``converged`` is ``False``).
+
+        The absolute tolerance for the underlying solve defaults to a
+        per-component noise floor scaled off the operating magnitudes
+        (``atol_i = atol_factor * max(|y0_i|, |default_i|)``, with a small global
+        floor) -- the SUNDIALS/Hairer "vector atol" recommendation for states
+        spanning many orders of magnitude -- so the engineer does not hand-tune
+        tolerances for a g/m³ plant.
+
+        Parameters
+        ----------
+        params : jnp.ndarray, optional
+            Plant parameters (defaults to :meth:`default_parameters`).
+        y0 : jnp.ndarray, optional
+            Initial state / warm start (defaults to :meth:`initial_state`). A
+            healthy warm start reaches steady state far faster than a cold start.
+        max_time : float
+            Safety cap on integration time (plant units, typically days).
+        ss_rtol, ss_atol : float
+            Steady-state event tolerances on ``||dstate/dt||`` (the convergence
+            criterion). ``ss_rtol=1e-3`` ~ "no state changes faster than ~0.1%
+            per unit time".
+        rtol : float
+            Relative tolerance of the underlying integrator.
+        atol : float or jnp.ndarray, optional
+            Absolute tolerance of the integrator. ``None`` (default) auto-scales
+            per component (see above); pass a value to override.
+        atol_factor : float
+            Scale factor for the auto per-component ``atol``.
+        max_steps : int
+            Maximum integrator steps.
+
+        Returns
+        -------
+        SteadyStateResult
+            ``state`` (the operating point), ``converged``, ``time``, and the
+            underlying ``solution``.
+
+        Examples
+        --------
+        >>> ss = plant.run_to_steady_state(params, y0=warm)
+        >>> ss.converged
+        True
+        >>> snh = plant.states_by_unit(ss.state)["tank5"][asm1.species_index["SNH"]]
+        """
+        self._build_state_layout()
+        y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
+        if atol is None:
+            atol = default_atol(y0, self.initial_state(), atol_factor=atol_factor)
+        event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
+        sol = self.solve(
+            t_span=(0.0, float(max_time)), params=params, y0=y0,
+            rtol=rtol, atol=atol, max_steps=max_steps, event=event,
+        )
+        t_final = float(sol.t[-1])
+        converged = bool(t_final < float(max_time))
+        return SteadyStateResult(
+            state=sol.state[-1], converged=converged, time=t_final, solution=sol,
+        )
