@@ -2039,6 +2039,23 @@ Key types:
     (returns `{(unit, port): Stream}`); both reuse the same `_resolve_streams`
     helper the RHS uses, so the reconstruction matches the integrated wiring
     exactly (including resolved recycle flows).
+  - **Semantic stream shortcuts.** `plant.stream(sol, …)` also accepts an
+    engineering **name** instead of a `"unit.port"` — the builders register a
+    `named_streams` map (`plant.register_stream(name, endpoint)`,
+    `plant.list_streams()`) so `plant.stream(sol, "effluent")` reads the right
+    port without the user knowing it is `"tank5_split.internal_recycle"`. BSM1
+    registers `effluent`/`ras`/`wastage`/`internal_recycle`; BSM2 adds
+    `primary_effluent`/`primary_sludge`/`thickener_overflow`/`reject`/
+    `dewatering_reject`/`disposal_sludge`, with `effluent` tracking the
+    option-dependent `effluent_endpoint`. A misspelled name gives a hinted error
+    listing `list_streams()`. `plant.effluent_stream(sol)` is the first-class
+    shortcut for the most-read one (reads `effluent_endpoint`). The digester
+    **biogas** is a *derived* output (computed from the ADM1 headspace state, not
+    a material port), so it has its own accessor: `plant.digester_gas(sol)` →
+    `DigesterGas` (`t`, `Q` m³/d, `p_ch4`/`p_co2`/`p_h2` bar, `ch4` kg/d, and
+    `.methane_production()` time-averaged kg CH₄/d), reusing the OCI biogas
+    formula (`evaluate_bsm2`'s `_methane_production` now delegates to it). Raises
+    if the plant has no ADM1 digester.
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `MixerUnit`,
 `SplitterUnit`, `IdealClarifier` (fast, stateless separator),

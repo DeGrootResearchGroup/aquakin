@@ -368,6 +368,13 @@ class Plant:
         # whose builder did not set them.
         self.influent_endpoint: Optional[str] = None
         self.effluent_endpoint: Optional[str] = None
+        # Semantic stream shortcuts: engineering names (``"effluent"``, ``"ras"``,
+        # ``"internal_recycle"``, ``"primary_sludge"``, ``"reject"`` ...) -> the
+        # internal ``"unit.port"`` they resolve to, registered by the builder
+        # (see :meth:`register_stream`). ``plant.stream(sol, "effluent")`` then
+        # reads the right port without the user knowing it is
+        # ``"tank5_split.internal_recycle"``; :meth:`list_streams` lists them.
+        self.named_streams: dict[str, str] = {}
         # Filled in at solve() time:
         self._state_layout: dict[str, tuple[int, int]] = {}
         self._total_state_size: int = 0
@@ -1364,9 +1371,12 @@ class Plant:
         solution : PlantSolution
             A solution returned by :meth:`solve` (carries ``t`` and ``state``).
         endpoint : str
-            ``"unit.port"`` naming the output stream, e.g.
-            ``"clarifier.overflow"``. The port may be omitted (bare ``"unit"``)
-            for a single-output unit.
+            A registered **semantic name** (``"effluent"``, ``"ras"``,
+            ``"internal_recycle"``, ``"primary_sludge"``, ``"reject"`` ... -- see
+            :meth:`list_streams`) **or** a literal ``"unit.port"`` (e.g.
+            ``"clarifier.overflow"``; the port may be omitted for a single-output
+            unit). The semantic name is resolved to its port first, so an engineer
+            asks for ``"effluent"`` without knowing the internal port.
         params : jnp.ndarray, optional
             The plant parameters used for the run (defaults to
             :meth:`default_parameters`). Output reconstruction is
@@ -1379,6 +1389,22 @@ class Plant:
             ``t``, ``Q``, ``C`` (shape ``(n_t, n_species)``) and ``network``,
             with a ``C_named(species)`` accessor.
         """
+        resolved = self.named_streams.get(endpoint)
+        if (resolved is None and "." not in endpoint
+                and endpoint not in self.units):
+            # Looks like a semantic name (no port, not a unit) but isn't
+            # registered -> hint at the available ones rather than the bare
+            # "Unknown unit" that _parse_endpoint would give.
+            import difflib
+            hint = difflib.get_close_matches(
+                endpoint, list(self.named_streams), n=3)
+            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            raise KeyError(
+                f"Unknown stream '{endpoint}'. Semantic names "
+                f"(plant.list_streams()): {sorted(self.named_streams)}; or pass "
+                f"a 'unit.port' (plant.list_ports()).{suffix}"
+            )
+        endpoint = resolved if resolved is not None else endpoint
         unit, port = self._parse_endpoint(endpoint, role="source")
         params_full = (
             self.default_parameters() if params is None else jnp.asarray(params)
@@ -1394,6 +1420,57 @@ class Plant:
             t=ts, Q=jnp.stack(Q_list), C=jnp.stack(C_list),
             network=self.units[unit].network,
         )
+
+    def register_stream(self, name: str, endpoint: str) -> "Plant":
+        """Register a **semantic name** for an output ``"unit.port"`` endpoint.
+
+        After this, ``plant.stream(sol, name)`` reads that port -- so an engineer
+        asks for ``"effluent"`` / ``"ras"`` / ``"digester_gas"`` instead of the
+        internal port. Builders (``build_bsm1`` / ``build_bsm2``) register the
+        plant's named streams; call this to add your own. Returns ``self`` for
+        chaining.
+        """
+        self.named_streams[name] = endpoint
+        return self
+
+    def list_streams(self) -> dict[str, str]:
+        """The registered semantic stream names ``{name: "unit.port"}``.
+
+        The engineering shortcuts :meth:`stream` accepts (``"effluent"``,
+        ``"ras"``, ...) and the internal port each resolves to -- the discoverable
+        companion to :meth:`list_ports`, so you never read the builder source to
+        find a port string. Empty on a plant whose builder registered none.
+        """
+        return dict(self.named_streams)
+
+    def effluent_stream(self, solution: "PlantSolution",
+                        params: Optional[jnp.ndarray] = None) -> StreamSeries:
+        """The plant's final effluent stream (a shortcut for the most-read one).
+
+        Reads the builder-recorded :attr:`effluent_endpoint` -- the right port
+        even when an option moved it (a BSM2 influent bypass relocates the
+        effluent to ``effluent_mix.out``). Equivalent to
+        ``plant.stream(sol, plant.effluent_endpoint)``.
+        """
+        if self.effluent_endpoint is None:
+            raise ValueError(
+                "This plant has no recorded effluent_endpoint (its builder did "
+                "not set one); pass an explicit endpoint to plant.stream(sol, ...)."
+            )
+        return self.stream(solution, self.effluent_endpoint, params)
+
+    def digester_gas(self, solution: "PlantSolution",
+                     params: Optional[jnp.ndarray] = None):
+        """The anaerobic digester's biogas trajectory.
+
+        A :class:`~aquakin.plant.bsm.evaluation.DigesterGas` with the biogas flow
+        ``Q`` (m³/d), the CH₄/CO₂/H₂ partial pressures and the CH₄ mass flow
+        ``ch4`` (kg/d), plus ``.methane_production()`` (time-averaged kg CH₄/d).
+        Unlike :meth:`stream`, the biogas is *derived* from the ADM1 headspace
+        state (not a material port). Raises if the plant has no ADM1 digester.
+        """
+        from aquakin.plant.bsm.evaluation import digester_gas
+        return digester_gas(self, solution, params)
 
     def sludge_age(self, solution: "PlantSolution",
                    params: Optional[jnp.ndarray] = None, **kwargs):

@@ -18,6 +18,8 @@ from aquakin.plant.bsm.bsm2 import (
 from aquakin.plant.bsm.evaluation import (
     BSM1Evaluation,
     BSM2Evaluation,
+    DigesterGas,
+    digester_gas,
     evaluate_bsm1,
     evaluate_bsm2,
 )
@@ -34,6 +36,7 @@ __all__ = [
     "BSM1_WARM_REACTOR_COMPOSITION",
     "BSM2Evaluation",
     "BSM2_WARM_REACTOR_COMPOSITION",
+    "DigesterGas",
     "ExternalCarbon",
     "HydraulicDelay",
     "InfluentBypass",
@@ -46,6 +49,7 @@ __all__ = [
     "bsm2_parameters",
     "bsm2_warm_start",
     "bsm2_wastage_schedule",
+    "digester_gas",
     "evaluate_bsm1",
     "evaluate_bsm2",
     "load_bsm1_influent",

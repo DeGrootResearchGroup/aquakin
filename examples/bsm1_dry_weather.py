@@ -53,10 +53,11 @@ def main() -> None:
         val = float(sol.C_named(name, "XB_H")[-1])
         print(f"  {name}: {val:7.1f}  {network.units_of('XB_H')}")
 
-    # Effluent metrics: reconstruct the clarifier overflow stream over the saved
-    # states (the plant integrates unit states, not the inter-unit streams).
-    # The metric kernels take the reconstructed stream directly.
-    eff = plant.stream(sol, "clarifier.overflow")
+    # Effluent metrics: reconstruct the effluent stream over the saved states
+    # (the plant integrates unit states, not the inter-unit streams). The
+    # semantic shortcut reads the right port (see plant.list_streams()); the
+    # metric kernels take the reconstructed stream directly.
+    eff = plant.effluent_stream(sol)             # == plant.stream(sol, "effluent")
     avgs = effluent_averages(eff)
     print()
     print("Time-averaged effluent quality:")
