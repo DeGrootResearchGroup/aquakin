@@ -23,6 +23,7 @@ cycles by ordering downstream units before upstream consumers — see
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional, Union
 
@@ -287,6 +288,9 @@ class Plant:
         # Static connection adjacency, rebuilt by _build_state_layout():
         self._inputs_by_unit: dict[str, list[Connection]] = {}
         self._recycle_keys: list[tuple[Optional[str], str]] = []
+        # One-time guard for the concrete recycle-flow affinity check (a
+        # warning, run once per plant on the first non-traced solve).
+        self._flow_affinity_checked: bool = False
         # Per-instance cache of the jit-compiled forward solve, keyed by call
         # signature + solver settings. The plant RHS closes over the (static)
         # unit graph, so once compiled the same solve is reused across repeated
@@ -1258,6 +1262,8 @@ class Plant:
         t: jnp.ndarray,
         params_full: jnp.ndarray,
         states: Optional[dict[str, jnp.ndarray]] = None,
+        *,
+        check_affine: bool = False,
     ) -> dict[tuple[Optional[str], str], jnp.ndarray]:
         """Solve the recycle FLOW network exactly (decoupled from concentration).
 
@@ -1322,7 +1328,39 @@ class Plant:
         cols = [one_pass(eye[i])[0] - b for i in range(n)]
         A = jnp.stack(cols, axis=1)
         x = jnp.linalg.solve(eye - A, b)
-        return one_pass(x)[1]
+        recycled_at_x, flows = one_pass(x)
+        if check_affine:
+            # ``x`` solves the *linearised* (probed) system; re-evaluating the
+            # forward pass at ``x`` reproduces it iff the flow rules are truly
+            # affine in the recycle flows. A mismatch means a piecewise-linear
+            # rule (a threshold split / storage bypass with a recycle-dependent
+            # inlet crossing its kink) was linearised across the kink -- the
+            # resolved flows are then inaccurate. Concrete-only (see solve()).
+            self._warn_if_flow_nonaffine(recycled_at_x, x)
+        return flows
+
+    def _warn_if_flow_nonaffine(self, recycled, x) -> None:
+        """Warn if the recycle-flow solve is inconsistent (non-affine flow rule).
+
+        ``recycled`` is the forward pass re-evaluated at the solved recycle flows
+        ``x``; for an affine flow network they are equal. A meaningful residual
+        means the affine ``(I - A) x = b`` solve does not actually solve the flow
+        network -- see :meth:`_resolve_flows`.
+        """
+        resid = float(jnp.max(jnp.abs(jnp.asarray(recycled) - jnp.asarray(x))))
+        scale = float(jnp.max(jnp.abs(jnp.asarray(x)))) + 1.0
+        if resid > 1e-6 * scale:
+            warnings.warn(
+                f"Recycle-flow solve is inconsistent (residual {resid:.3g} on "
+                f"flows of order {scale:.3g}): a unit's flow rule is non-affine "
+                f"in the recycle flows -- typically a threshold-mode SplitterUnit "
+                f"or a StorageTank bypass whose inlet varies with a recycle flow "
+                f"and crosses its kink. Plant._resolve_flows assumes affine flow "
+                f"rules, so the resolved recycle flows (and the steady state they "
+                f"drive) may be inaccurate. Feed such a unit from a recycle-"
+                f"independent source (e.g. an external influent).",
+                stacklevel=2,
+            )
 
     def _collect_inputs(
         self,
@@ -1462,6 +1500,19 @@ class Plant:
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
         if t_eval is not None:
             t_eval = jnp.asarray(t_eval)
+
+        # One-time, concrete check that the recycle-flow solve is self-consistent
+        # (every flow rule affine in the recycle flows). Skipped under tracing
+        # (params/y0 are JAX tracers -- can't compare/warn) and guarded to run
+        # once per plant. It only warns, never blocks the solve.
+        if not self._flow_affinity_checked and not any(
+            isinstance(v, jax.core.Tracer) for v in (params, y0)
+        ):
+            self._flow_affinity_checked = True
+            self._resolve_flows(
+                jnp.asarray(t0), params, states=self._split_state(y0),
+                check_affine=True,
+            )
 
         if gradient == "auto":
             # A concrete forward solve takes the fast cached jax_adjoint path; a
