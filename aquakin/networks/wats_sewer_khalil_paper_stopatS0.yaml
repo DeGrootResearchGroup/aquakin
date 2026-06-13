@@ -98,6 +98,7 @@ conditions:
 - name: pH
   description: Fixed operating pH (no charge-balance solver; used by the pH-dependent bulk sulfide-oxidation
     rates).
+  units: '-'
   default: 7.5
 positivity_limiter:
   threshold: 0.001

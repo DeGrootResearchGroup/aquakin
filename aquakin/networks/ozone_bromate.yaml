@@ -45,9 +45,11 @@ species:
 conditions:
   - name: pH
     description: "Solution pH (-log10[H+])"
+    units: "-"
     default: 7.5
   - name: T
     description: "Temperature (K)"
+    units: "K"
     default: 293.15
   - name: OH_scavenging
     description: >

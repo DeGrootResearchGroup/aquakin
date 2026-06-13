@@ -1278,10 +1278,20 @@ network.to_latex()                   # LaTeX rate expressions
 network.check_units()                # -> list[UnitWarning] (reaction, location, detail)
 network.check_units(check_root=False)  # local rules only (skip currency/vol/time root)
 aquakin.parse_units("g_COD/m3")      # -> Dimension (or None if unknown); aquakin.UnitWarning
-# All shipped ASM/ADM/ozone/WATS networks are unit-clean (0 warnings); the check
-# is regression-guarded in tests/unit/test_units_check.py. A bare numeric guard
-# added to a concentration (the ADM1 `[S_va] + [S_bu] + 1e-6` regulariser) is a
-# ConstantNode and is treated as dimension-neutral, so it is NOT flagged.
+# The shipped ASM1/2d/3, ozone, UV and WATS networks are unit-clean (0
+# warnings); ADM1 is clean on its dissolved/biological reactions but the check
+# DOES flag the three gas_outflow reactions -- the BSM2 gas headspace carries
+# H2/CH4 in COD (kgCOD/m3) and CO2 in carbon (kmolC/m3) and the /16, /64 molar
+# masses are bare numbers, so the partial-pressure sum mixes currencies. This is
+# a documented inherent characteristic of the BSM2 gas phase, not a model error
+# (homogenising it would need molar-mass parameters, which would change ADM1's
+# parameter vector). Pressure (`bar`) and temperature (`K`) are recognised unit
+# tokens so the gas units parse, but they are outside the canonical
+# currency/volume/time root form. A bare numeric guard added to a concentration
+# (the ADM1 `[S_va] + [S_bu] + 1e-6` regulariser) is a ConstantNode and is
+# treated as dimension-neutral, so it is NOT flagged. Conditions carry advisory
+# units too (`pH: "-"`, `T: "K"`). All regression-guarded in
+# tests/unit/test_units_check.py.
 
 # By-name vector builders (avoid .at[species_index[...]].set() chains). The
 # dict form is primary -- many species/param names are not valid Python

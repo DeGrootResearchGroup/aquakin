@@ -124,8 +124,8 @@ DIMENSIONLESS = Dimension()
 # = m^3, ``s-1`` = s^-1, or a caret exponent ``^0.5``). Longest first so the
 # scan prefers ``mol`` over ``m`` and ``min`` over ``m``. ``M`` is molarity and
 # is normalised to ``mol/L`` after parsing.
-_UNIT_SYMBOLS = ["kmol", "mol", "min", "kg", "Pa", "g", "m", "L", "d", "s",
-                 "h", "M"]
+_UNIT_SYMBOLS = ["kmol", "mol", "min", "kg", "bar", "Pa", "g", "m", "L", "d",
+                 "s", "h", "M", "K"]
 # Chemical "currency" tokens. ``O2`` carries the meaning of oxygen-as-O2; these
 # are the distinct base dimensions the check exists to keep apart. Longest first
 # (``COD`` before ``C``).

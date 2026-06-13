@@ -102,6 +102,7 @@ conditions:
 - {name: X_BF, description: "Biofilm heterotrophic biomass (gCOD/m2)", default: 10.0}
 - name: pH
   description: Fixed operating pH (no charge-balance solver; used by the pH-dependent bulk sulfide-oxidation rates).
+  units: '-'
   default: 7.5
 positivity_limiter:
   threshold: 1.0e-3

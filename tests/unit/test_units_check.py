@@ -57,6 +57,8 @@ def test_dimension_hashable_and_str():
     ("-", {}),
     ("m³", {"m": 3}),                                    # display superscripts
     ("M⁻¹ s⁻¹", {"mol": -1, "L": 1, "s": -1}),
+    ("bar*m3/kmol", {"bar": 1, "m": 3, "kmol": -1}),     # ADM1 gas-law constant
+    ("kmol/m3/bar", {"kmol": 1, "m": -3, "bar": -1}),    # Henry constant
 ])
 def test_parse_known_dialects(text, expected):
     dim = parse_units(text)
@@ -166,12 +168,23 @@ def test_units_metadata_carried_through():
 
 
 @pytest.mark.parametrize("name", [
-    "asm1", "asm2d", "asm3", "ozone_bromate", "uv_h2o2", "adm1", "wats_sewer",
+    "asm1", "asm2d", "asm3", "ozone_bromate", "uv_h2o2", "wats_sewer",
 ])
 def test_shipped_networks_are_unit_clean(name):
     # the correctly-annotated shipped networks raise no warning (the check is
     # advisory, so this is the no-false-positive guard, not a proof of math)
     assert aquakin.load_network(name).check_units() == []
+
+
+def test_adm1_warnings_confined_to_gas_headspace():
+    # ADM1's dissolved/biological reactions are clean; the only warnings are on
+    # the gas-headspace pressure sum, which mixes COD-carried H2/CH4 with
+    # carbon-carried CO2 (a documented BSM2 gas-phase unit characteristic, not a
+    # model error). Guards that the check does not leak into the biology.
+    ws = aquakin.load_network("adm1").check_units()
+    gas = {"gas_outflow_h2", "gas_outflow_ch4", "gas_outflow_co2"}
+    assert ws, "expected the gas-headspace finding to be surfaced"
+    assert {w.reaction for w in ws} <= gas
 
 
 def _broken_yaml(rate):

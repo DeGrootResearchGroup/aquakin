@@ -89,6 +89,7 @@ species:
 conditions:
   - name: T
     description: "Operating temperature (K). Default ADM1 parameters are at 35 C."
+    units: "K"
     default: 308.15
 
 # --- State-derived pH via the differentiable charge-balance solver.
@@ -261,6 +262,13 @@ expressions:
   rho_ac:  "k_m_ac * [S_ac] / (K_S_ac + [S_ac]) * [X_ac] * inhib_ac"
   rho_h2:  "k_m_h2 * [S_h2] / (K_S_h2 + [S_h2]) * [X_h2] * inhib_h2"
   # --- gas headspace: partial pressures, total pressure, normalised outflow ---
+  # NOTE (dimensional check): the headspace H2/CH4 are carried in COD (kgCOD/m3)
+  # and CO2 in carbon (kmolC/m3), and the /16 and /64 are implicit COD->mole
+  # molar masses written as bare numbers, so the partial-pressure sum P_gas mixes
+  # currencies and `network.check_units()` flags the three gas_outflow reactions
+  # (advisory). This is an inherent unit characteristic of the BSM2 ADM1 gas
+  # phase, not a model error; making it dimensionally homogeneous would require
+  # molar-mass parameters (which would change the parameter vector).
   p_gas_h2:  "R_T / 16 * [S_gas_h2]"
   p_gas_ch4: "R_T / 64 * [S_gas_ch4]"
   p_gas_co2: "R_T * [S_gas_co2]"
