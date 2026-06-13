@@ -245,6 +245,7 @@ class SpeciationSpec(BaseModel):
     temperature_units: str = "celsius"
     z_cation_eq: Union[float, dict[str, str]] = 0.0
     n_iter: int = Field(default=40, ge=1)
+    activity_model: str = "none"
     totals: dict[str, TotalSpec] = Field(default_factory=dict)
     strong_anions: list[StrongIonSpec] = Field(default_factory=list)
     strong_cations: list[StrongIonSpec] = Field(default_factory=list)
@@ -255,6 +256,12 @@ class SpeciationSpec(BaseModel):
             raise ValueError(
                 f"temperature_units must be 'celsius' or 'kelvin', "
                 f"got {self.temperature_units!r}"
+            )
+        from aquakin.core.ph_solver import _ACTIVITY_MODELS
+        if self.activity_model not in _ACTIVITY_MODELS:
+            raise ValueError(
+                f"speciation.activity_model must be one of {_ACTIVITY_MODELS}; "
+                f"got {self.activity_model!r}"
             )
         unknown = set(self.totals) - set(_VALID_TOTAL_KEYS)
         if unknown:

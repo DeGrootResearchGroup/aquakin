@@ -114,6 +114,122 @@ def equilibrium_constants(T_kelvin):
     return out
 
 
+_ACTIVITY_MODELS = ("none", "davies", "debye_huckel")
+
+
+def water_dielectric(T_kelvin):
+    """Static relative permittivity of liquid water (Malmberg & Maryott 1956).
+
+    ``eps_r(t) = 87.74 - 0.4008 t + 9.398e-4 t^2 - 1.410e-6 t^3`` with ``t`` in
+    degrees Celsius; ~78.4 at 25 degC. Used only by :func:`debye_huckel_A`.
+    """
+    t = jnp.asarray(T_kelvin, dtype=float) - 273.15
+    return 87.74 - 0.4008 * t + 9.398e-4 * t * t - 1.410e-6 * t * t * t
+
+
+def debye_huckel_A(T_kelvin):
+    """Debye-Hückel ``A`` parameter (base-10, mol^-1/2 L^1/2) vs temperature.
+
+    ``A = 1.8246e6 / (eps_r * T)^1.5`` from the water dielectric constant
+    (:func:`water_dielectric`); ~0.509 at 25 degC, rising slowly with
+    temperature. This is the slope factor in the Davies / extended Debye-Hückel
+    activity-coefficient expressions.
+    """
+    T = jnp.asarray(T_kelvin, dtype=float)
+    eps = water_dielectric(T)
+    return 1.8246e6 / jnp.power(eps * T, 1.5)
+
+
+def _log10_gamma(z2, sqrt_I, I, A, model: str):
+    """``log10`` of the activity coefficient of an ion of charge-squared ``z2``.
+
+    ``model`` is a *static* string (branched at trace time):
+
+    - ``"davies"``: ``log10 g = -A z^2 (sqrt(I)/(1+sqrt(I)) - 0.3 I)`` -- valid to
+      ``I ~ 0.5 M``, the form SUMO/BioWin use.
+    - ``"debye_huckel"``: the extended Debye-Hückel / Güntelberg form
+      ``log10 g = -A z^2 sqrt(I)/(1+sqrt(I))`` (no ``0.3 I`` term) -- valid to
+      ``I ~ 0.1 M``.
+    """
+    base = sqrt_I / (1.0 + sqrt_I)
+    if model == "davies":
+        base = base - 0.3 * I
+    return -A * z2 * base
+
+
+def _conditional_constants(K, I, A, model: str):
+    """Activity-corrected (conditional, concentration-basis) dissociation constants.
+
+    Replaces each thermodynamic ``K`` with ``Kc = K * g_acid / (g_H * g_base)``
+    so the fraction expressions -- which are written in *concentrations* -- obey
+    the activity-based equilibrium at ionic strength ``I``. With neutral acids
+    ``g=1`` this reduces to dividing each proton release ``z_acid -> z_base+H+`` by
+    the appropriate ``g`` product. Charge-symmetric ``NH4+ -> NH3 + H+`` is
+    unchanged (the ``g`` of the +1 ammonium and the +1 proton cancel).
+    """
+    sqrt_I = jnp.sqrt(jnp.maximum(I, 0.0))
+    g1 = jnp.power(10.0, _log10_gamma(1.0, sqrt_I, I, A, model))   # |z| = 1
+    g2 = jnp.power(10.0, _log10_gamma(4.0, sqrt_I, I, A, model))   # |z| = 2
+    g3 = jnp.power(10.0, _log10_gamma(9.0, sqrt_I, I, A, model))   # |z| = 3
+    g1_sq = g1 * g1
+    Kc = dict(K)
+    # Single proton release between a neutral/-1 acid and a -1/-2 base, plus
+    # water self-ionisation: divide by g1^2.
+    for key in ("w", "ac", "pro", "bu", "va", "co3_1", "s_1", "po4_1"):
+        Kc[key] = K[key] / g1_sq
+    # -1 -> -2 and -2 -> -3 second/third releases: g1*g2 / g1 = g2, etc.
+    Kc["co3_2"] = K["co3_2"] / g2
+    Kc["s_2"] = K["s_2"] / g2
+    Kc["po4_2"] = K["po4_2"] / g2
+    Kc["po4_3"] = K["po4_3"] * g2 / (g1 * g3)
+    # nh ( +1 -> 0 + H+ ) is activity-symmetric: Kc == K.
+    return Kc, g1
+
+
+def _ionic_strength_total(h, K, I_strong, *, totals):
+    """Ionic strength ``I = 1/2 sum c_i z_i^2`` at trial ``[H+] = h``.
+
+    Sums the (concentration-basis, so ``K`` must be the *conditional* constants)
+    weak-acid ion concentrations -- the same speciation fractions the charge
+    residual uses, re-weighted by ``z^2`` -- plus ``H+`` and ``OH-``, on top of
+    the pH-independent strong-ion contribution ``I_strong`` (passed in because the
+    speciation layer holds each strong ion's charge).
+    """
+    Kw = K["w"]
+    Iw = 0.5 * (h + Kw / h)                       # H+, OH- (z = 1)
+
+    for key, tot in (
+        ("ac", totals["tot_acetate"]),
+        ("pro", totals["tot_propionate"]),
+        ("bu", totals["tot_butyrate"]),
+        ("va", totals["tot_valerate"]),
+    ):
+        Ka = K[key]
+        Iw = Iw + 0.5 * tot * Ka / (h + Ka)       # A- (z = 1)
+
+    Ka_nh = K["nh"]
+    Iw = Iw + 0.5 * totals["tot_ammonia"] * h / (h + Ka_nh)   # NH4+ (z = 1)
+
+    k1, k2 = K["co3_1"], K["co3_2"]
+    Dc = h * h + k1 * h + k1 * k2
+    tc = totals["tot_carbonate"]
+    Iw = Iw + 0.5 * tc * (k1 * h + 4.0 * k1 * k2) / Dc        # HCO3- z1, CO3-- z2
+
+    s1, s2 = K["s_1"], K["s_2"]
+    Ds = h * h + s1 * h + s1 * s2
+    ts = totals["tot_sulfide"]
+    Iw = Iw + 0.5 * ts * (s1 * h + 4.0 * s1 * s2) / Ds        # HS- z1, S-- z2
+
+    p1, p2, p3 = K["po4_1"], K["po4_2"], K["po4_3"]
+    Dp = h ** 3 + p1 * h * h + p1 * p2 * h + p1 * p2 * p3
+    tp = totals["tot_phosphate"]
+    Iw = Iw + 0.5 * tp * (
+        p1 * h * h + 4.0 * p1 * p2 * h + 9.0 * p1 * p2 * p3
+    ) / Dp                                                    # z1, z2, z3
+
+    return I_strong + Iw
+
+
 def charge_balance_residual(
     h,
     *,
@@ -271,6 +387,8 @@ def solve_ph(
     T_kelvin=293.15,
     n_iter: int = 40,
     h_init: float = 1e-7,
+    activity_model: str = "none",
+    ionic_strength_strong=0.0,
 ):
     """Solve the charge balance for pH.
 
@@ -304,10 +422,28 @@ def solve_ph(
         bracketed iteration the result no longer depends on a good initial
         guess, but a guess near the operating pH saves a few bisection steps.
 
+    activity_model : str, optional
+        Ionic-strength activity-coefficient model (a *static* choice, branched at
+        trace time): ``"none"`` (default) uses molar concentrations directly (all
+        activity coefficients = 1, the ADM1/BSM2 convention -- bit-identical to the
+        historic behaviour); ``"davies"`` and ``"debye_huckel"`` apply the Davies
+        or extended Debye-Hückel correction. With a non-``none`` model the
+        equilibrium constants become *conditional* (concentration-basis) constants
+        at the self-consistent ionic strength, and the returned pH is the
+        **measurable** ``-log10(a_H) = -log10(g_H [H+])`` (it reduces to
+        ``-log10([H+])`` when all ``g = 1``).
+    ionic_strength_strong : scalar, optional
+        The pH-independent strong-ion contribution to ionic strength,
+        ``1/2 sum c_i z_i^2`` over the strong anions/cations (and the lumped fixed
+        cation charge, taken monovalent). Supplied by the caller because only it
+        knows each strong ion's charge. Used only when ``activity_model`` is not
+        ``"none"``.
+
     Returns
     -------
     jnp.ndarray
-        Solution pH = ``-log10([H+])``.
+        Solution pH -- ``-log10([H+])`` for ``activity_model="none"``, else the
+        activity-based ``-log10(a_H)``.
 
     Examples
     --------
@@ -317,6 +453,11 @@ def solve_ph(
     >>> float(solve_ph(tot_carbonate=1e-3, z_cation_eq=1e-3))  # doctest: +SKIP
     8.3
     """
+    if activity_model not in _ACTIVITY_MODELS:
+        raise ValueError(
+            f"activity_model must be one of {_ACTIVITY_MODELS}; got "
+            f"{activity_model!r}"
+        )
     K = equilibrium_constants(jnp.asarray(T_kelvin, dtype=float))
 
     totals = dict(
@@ -368,33 +509,76 @@ def solve_ph(
         _U_LO, _U_HI,
     )
 
-    def body(carry, _):
-        u_lo, u_hi, u = carry
-        h = jnp.exp(u)
-        f = residual(h)
-        # df/du = f'(h) * h (analytic derivative, no nested AD). f'(h) <= -1 (the
-        # water term) and h > 0, so dfdu < 0 always -- the Newton step never
-        # divides by zero.
-        dfdu = dresidual_dh(h) * h
+    def rtsafe_update(u_lo, u_hi, u, f, dfdu):
+        """One safeguarded Newton-bisection step (Newton, bisection fallback).
+
+        ``dfdu`` need only have the right sign and order of magnitude -- the
+        bracketing guarantees convergence regardless, and near the root the
+        Newton step is tiny and stays in-bracket (so the iteration is pure Newton
+        there and AD yields the exact implicit-function-theorem pH sensitivity).
+        """
         # Tighten the bracket using the sign of f at u. f is decreasing, so f > 0
         # means the root lies at a larger u; the endpoints keep f(u_lo) >= 0 >=
         # f(u_hi) and the bracket only shrinks.
         pos = f > 0.0
         u_lo = jnp.where(pos, u, u_lo)
         u_hi = jnp.where(pos, u_hi, u)
-        # Newton candidate; fall back to bisection if it leaves the bracket
-        # (which is exactly what overflowed the old scheme). The acceptance test
-        # is the non-strict rtsafe product test: ``u_newton`` is inside
-        # ``[u_lo, u_hi]`` iff the two offsets have opposite signs. Non-strict
-        # (``<= 0``) is essential -- at convergence the bracket collapses an
-        # endpoint onto ``u`` and the Newton step lands *on* that boundary; a
-        # strict test would reject it and bisect away, un-converging the root.
+        # Newton candidate; fall back to bisection if it leaves the bracket. The
+        # acceptance test is the non-strict rtsafe product test (``<= 0`` is
+        # essential -- at convergence the bracket collapses an endpoint onto ``u``
+        # and the Newton step lands *on* it; a strict test would bisect it away).
         u_newton = u - f / dfdu
         u_bisect = 0.5 * (u_lo + u_hi)
         in_bracket = (u_newton - u_lo) * (u_newton - u_hi) <= 0.0
         u_next = jnp.where(in_bracket, u_newton, u_bisect)
-        return (u_lo, u_hi, u_next), None
+        return u_lo, u_hi, u_next
 
-    (_, _, u), _ = jax.lax.scan(body, (u_lo, u_hi, u), None, length=n_iter)
+    if activity_model == "none":
+        # Ideal (g = 1): the historic path, bit-for-bit. No ionic strength.
+        def body(carry, _):
+            u_lo, u_hi, u = carry
+            h = jnp.exp(u)
+            f = residual(h)
+            # df/du = f'(h) * h (analytic, no nested AD); f'(h) <= -1, h > 0, so
+            # dfdu < 0 always -- the Newton step never divides by zero.
+            dfdu = dresidual_dh(h) * h
+            u_lo, u_hi, u_next = rtsafe_update(u_lo, u_hi, u, f, dfdu)
+            return (u_lo, u_hi, u_next), None
+
+        (_, _, u), _ = jax.lax.scan(body, (u_lo, u_hi, u), None, length=n_iter)
+        h = jnp.exp(u)
+        return -jnp.log(h) / _LN10
+
+    # Activity-corrected path. The conditional constants depend on the ionic
+    # strength, which depends on the speciation, which depends on [H+] -- a
+    # coupled fixed point. We resolve it *inside* the same bracketed scan by
+    # carrying the ionic strength ``I``: each step forms the conditional constants
+    # at the carried ``I``, takes one safeguarded step on the resulting residual,
+    # and recomputes ``I`` from the new speciation. ``I`` and ``[H+]`` converge
+    # together, so at the root ``I`` is self-consistent with the speciation.
+    A = debye_huckel_A(jnp.asarray(T_kelvin, dtype=float))
+    I_strong = jnp.broadcast_to(
+        jnp.asarray(ionic_strength_strong, dtype=float), out_shape)
+    I0 = jnp.maximum(I_strong, 0.0)
+
+    def act_body(carry, _):
+        u_lo, u_hi, u, I = carry
+        h = jnp.exp(u)
+        Kc, _g1 = _conditional_constants(K, I, A, activity_model)
+        f = charge_balance_residual(
+            h, strong_anion_eq=strong_anion_eq, z_cation_eq=z_cation_eq,
+            K=Kc, **totals)
+        # Newton derivative holding Kc fixed (the d Kc / dh coupling is a small
+        # perturbation; bracketing covers it). f'(h) <= -1 still, so dfdu < 0.
+        dfdu = charge_balance_residual_deriv(h, K=Kc, **totals) * h
+        u_lo, u_hi, u_next = rtsafe_update(u_lo, u_hi, u, f, dfdu)
+        I_next = _ionic_strength_total(
+            jnp.exp(u_next), Kc, I_strong, totals=totals)
+        return (u_lo, u_hi, u_next, I_next), None
+
+    (_, _, u, I), _ = jax.lax.scan(
+        act_body, (u_lo, u_hi, u, I0), None, length=n_iter)
     h = jnp.exp(u)
-    return -jnp.log(h) / _LN10
+    # Report the measurable pH = -log10(a_H) = -log10(g_H [H+]).
+    _, g1 = _conditional_constants(K, I, A, activity_model)
+    return -jnp.log(g1 * h) / _LN10
