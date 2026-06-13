@@ -339,16 +339,16 @@ def _pick_endpoint(plant, explicit, candidates, role):
 
 
 def _reactor_units(plant, explicit):
-    """Auto-detect the activated-sludge reactor CSTRs (volume + controllable
-    aeration), or validate an explicit list. The digester and other volumed
-    units lack ``controlled_kla`` and are excluded."""
+    """Auto-detect the activated-sludge reactor CSTRs (volume + aeration), or
+    validate an explicit list. The digester and other volumed units have no
+    ``aeration`` field and are excluded."""
     if explicit is not None:
         for name in explicit:
             if name not in plant.units:
                 raise ValueError(f"Unknown reactor unit {name!r}.")
         return list(explicit)
     reactors = [name for name in plant._unit_order
-                if hasattr(plant.units[name], "controlled_kla")
+                if hasattr(plant.units[name], "aeration")
                 and hasattr(plant.units[name], "volume")]
     if not reactors:
         raise ValueError(

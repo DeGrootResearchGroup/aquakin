@@ -842,8 +842,8 @@ class Plant:
         """Cross-check the control-signal bus: every signal a unit *consumes*
         must be *published* by some unit in the plant.
 
-        A unit under closed-loop control (a ``CSTRUnit`` with ``controlled_kla``)
-        reads ``signals[name]`` in its ``rhs``; if no controller publishes
+        A unit under closed-loop control (a ``CSTRUnit`` whose ``aeration`` has a
+        DO setpoint) reads ``signals[name]`` in its ``rhs``; if no controller publishes
         ``name`` -- a forgotten or mistyped wiring -- that read is a bare
         ``KeyError`` from deep inside the first jitted solve. This runs at
         topology setup (before the RHS is traced) and raises a clear error
