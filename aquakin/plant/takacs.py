@@ -289,9 +289,14 @@ class TakacsClarifier:
         ``X`` is total solids (g/m³) in a layer; ``X_min`` is the
         non-settleable threshold based on the inflow.
         """
-        excess = jnp.maximum(X - X_min, 0.0)
+        # The reference Takács expression clamps only the *output* velocity, not
+        # the exponent argument: below the non-settleable floor (X < X_min) the
+        # double exponential is already <= 0 (since rp > rh), so the outer
+        # clip(., 0, .) yields v = 0 -- the same result without an inner
+        # max(X-X_min, 0). The arguments stay O(1) (rh, rp ~ 1e-3; |X-X_min| is
+        # bounded by X_min ~ f_ns*feed_tss), so no exp overflow.
+        excess = X - X_min
         v_takacs = self._v0 * (jnp.exp(-self._rh * excess) - jnp.exp(-self._rp * excess))
-        # Clamp to [0, vmax].
         return jnp.clip(v_takacs, 0.0, self._vmax)
 
     @staticmethod

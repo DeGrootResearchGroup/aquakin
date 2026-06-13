@@ -24,7 +24,7 @@ _ASM_NETWORKS = [
     ("asm3_biop", 17, 23, 65),
     # ADM1 (anaerobic digestion): liquid + gas headspace, state-derived pH,
     # explicit strong-ion (S_cat / S_an) states.
-    ("adm1", 29, 25, 88),
+    ("adm1", 29, 25, 89),
 ]
 
 

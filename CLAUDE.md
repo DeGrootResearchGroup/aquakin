@@ -32,7 +32,12 @@ The shipped networks currently are:
   substrate-uptake reactions (with pH / hydrogen / free-ammonia /
   inorganic-N inhibition, the lower-pH inhibition via the new `pHInhibitNode`),
   seven biomass decays, and the gas headspace (kLa transfer of H₂/CH₄/CO₂ plus
-  overpressure-driven biogas outflow). Inorganic-carbon and -nitrogen
+  overpressure-driven biogas outflow). The gas-transfer headspace-gain factor is
+  the symbolic `V_liq / V_gas` (the liquid lost to transfer raises the headspace
+  concentration by that ratio), not a baked-in constant; `ADM1DigesterUnit`
+  slaves the `V_liq` parameter to its own liquid volume, so the gas transfer is
+  correct for any digester size (the network default is the BSM2 3400/300 = 11⅓).
+  Inorganic-carbon and -nitrogen
   stoichiometry are symbolic parameter-expressions (the ADM1 elemental
   balances), so a calibrated yield/composition flows through them. pH is
   **state-derived** through the charge-balance `speciation:` solver (extended to
@@ -488,6 +493,11 @@ tree itself is not walked repeatedly.
   — so the rate takes its physical limit 0 there without padding the denominator
   with a dimensionless epsilon. Used by ADM1's valerate/butyrate C4 competition
   (`safe_div([S_va], [S_va] + [S_bu])`), replacing the old `+ 1.0e-6` guard.
+- `MaxNode(a, b)` — the `max(a, b)` function: elementwise maximum, AD-safe
+  (`jnp.maximum`, active-branch subgradient at the kink). For a one-sided clip,
+  e.g. ADM1's biogas outflow `k_P * max(0, P_gas - P_atm)` so an
+  overpressure-driven flux only stops (never reverses) when the driving
+  difference goes negative.
 
 The four Monod nodes and `SafeDivideNode` all evaluate their `num/denom` through
 `_safe_ratio` (`core/nodes.py`), a **double-where** guard returning 0 (with a

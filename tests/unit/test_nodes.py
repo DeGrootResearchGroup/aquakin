@@ -373,3 +373,35 @@ def test_leaf_accessors():
     assert ParamNode("k").species() == set()
     assert ConditionNode("pH").condition_names() == {"pH"}
     assert ConstantNode(3.0).species() == set()
+
+
+def test_max_node_evaluates_and_clips():
+    """max(a, b) elementwise; max(0, x) one-sided clip (the overpressure use)."""
+    from aquakin.core.parser import parse_rate_expression
+
+    m = parse_rate_expression("max([A], [B])")
+    assert _eval(m, C=(1.0, 2.0)) == 2.0
+    assert _eval(m, C=(5.0, 2.0)) == 5.0
+
+    clip = parse_rate_expression("max(0, [A] - 3.0)")
+    assert _eval(clip, C=(1.0, 0.0)) == 0.0       # max(0, -2) -> 0
+    assert _eval(clip, C=(5.0, 0.0)) == 2.0       # max(0,  2) -> 2
+
+
+def test_max_node_gradient_is_subgradient():
+    """jax.grad flows through max (the active-branch subgradient)."""
+    from aquakin.core.parser import parse_rate_expression
+    clip = parse_rate_expression("max(0, [A] - 3.0)")
+    fn = clip.compile(_ctx())
+
+    def g(a):
+        return fn(jnp.array([a, 0.0]), jnp.zeros(4),
+                  {"pH": jnp.asarray([7.0]), "T": jnp.asarray([293.0])}, 0)
+    assert float(jax.grad(g)(5.0)) == 1.0   # above the kink -> d/da (a-3) = 1
+    assert float(jax.grad(g)(1.0)) == 0.0   # below the kink -> clipped, grad 0
+
+
+def test_max_node_latex():
+    from aquakin.core.parser import parse_rate_expression
+    from aquakin.utils.latex import to_latex
+    assert "max" in to_latex(parse_rate_expression("max(0, [A])"))

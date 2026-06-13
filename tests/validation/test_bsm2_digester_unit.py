@@ -87,3 +87,49 @@ def test_digester_effluent_flow_equals_feed():
     out = unit.compute_outputs(jnp.asarray(0.0), net.default_concentrations(),
                                {"inlet": s_in}, net.default_parameters())
     assert float(out["effluent"].Q) == pytest.approx(Q_FEED, rel=1e-9)
+
+
+def test_gas_transfer_scales_with_digester_volume():
+    """The gas-transfer headspace gain uses V_liq/V_gas, with V_liq slaved to the
+    unit's liquid volume -- so a digester of a different size transfers
+    proportionally (the old code hard-coded the BSM2 3400/300 ratio). With the
+    headspace empty (no back-pressure, no outflow), dS_gas/dt is pure transfer-in
+    and scales linearly with the liquid volume."""
+    adm1 = aquakin.load_network("adm1")
+    # A liquid state above the Henry equilibrium so transfer is into the
+    # headspace; gas states zeroed so p_gas = 0 (no back-pressure / outflow).
+    C = adm1.default_concentrations()
+    for sp in ("S_gas_h2", "S_gas_ch4", "S_gas_co2"):
+        C = C.at[adm1.species_index[sp]].set(0.0)
+    C = C.at[adm1.species_index["S_ch4"]].set(0.06)
+    inp = {"inlet": Stream(Q=jnp.asarray(0.0), C=C, network=adm1)}  # no dilution
+    gi = adm1.species_index["S_gas_ch4"]
+
+    def gas_rate(volume):
+        d = ADM1DigesterUnit(name="d", network=adm1, volume=volume,
+                             conditions={"T": 308.15})
+        return float(d.rhs(0.0, C, inp, adm1.default_parameters())[gi])
+
+    r_full, r_half = gas_rate(3400.0), gas_rate(1700.0)
+    assert r_full > 0.0
+    assert r_full == pytest.approx(2.0 * r_half, rel=1e-6)  # 3400/1700
+
+
+def test_biogas_outflow_clipped_when_subatmospheric():
+    """The overpressure outflow k_P*max(0, P_gas - P_atm) holds the valve shut
+    (no gas drawn back) if the headspace is transiently below atmospheric, while
+    being identical to the un-clipped form at the operating point (P_gas > P_atm)."""
+    adm1 = aquakin.load_network("adm1")
+    p = adm1.default_parameters()
+    conds = {f: jnp.asarray([v]) for f, v in adm1._condition_defaults.items()}
+    ri = adm1.reaction_names.index("gas_outflow_ch4")
+
+    def outflow(C):
+        return float(adm1.rates(C, p, conds, 0)[ri])
+
+    C = adm1.default_concentrations()
+    assert outflow(C) > 0.0                       # operating point: P_gas > P_atm
+    # Empty headspace -> P_gas = p_h2o << P_atm -> clipped to zero (no backflow).
+    for sp in ("S_gas_h2", "S_gas_ch4", "S_gas_co2"):
+        C = C.at[adm1.species_index[sp]].set(0.0)
+    assert outflow(C) == 0.0

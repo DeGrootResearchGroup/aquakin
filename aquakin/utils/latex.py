@@ -9,6 +9,7 @@ from aquakin.core.nodes import (
     ConstantNode,
     ConditionNode,
     DivideNode,
+    MaxNode,
     MonodInhibitionNode,
     MonodInhibitionRatioNode,
     MonodNode,
@@ -80,6 +81,8 @@ def to_latex(node: ASTNode) -> str:
         return rf"\frac{{{to_latex(node.left)}}}{{{to_latex(node.right)}}}"
     if isinstance(node, SafeDivideNode):
         return rf"\frac{{{to_latex(node.num)}}}{{{to_latex(node.denom)}}}"
+    if isinstance(node, MaxNode):
+        return rf"\max\!\left({to_latex(node.a)}, {to_latex(node.b)}\right)"
     if isinstance(node, PowerNode):
         return f"{_paren_pow_base(node.left)}^{{{to_latex(node.right)}}}"
     if isinstance(node, ArrheniusNode):
