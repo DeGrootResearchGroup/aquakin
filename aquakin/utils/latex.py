@@ -17,6 +17,7 @@ from aquakin.core.nodes import (
     NegateNode,
     ParamNode,
     PowerNode,
+    SafeDivideNode,
     SpeciesNode,
     SubtractNode,
     pHInhibitNode,
@@ -77,6 +78,8 @@ def to_latex(node: ASTNode) -> str:
         return rf"{_maybe_paren_addsub(node.left)} \cdot {_maybe_paren_addsub(node.right)}"
     if isinstance(node, DivideNode):
         return rf"\frac{{{to_latex(node.left)}}}{{{to_latex(node.right)}}}"
+    if isinstance(node, SafeDivideNode):
+        return rf"\frac{{{to_latex(node.num)}}}{{{to_latex(node.denom)}}}"
     if isinstance(node, PowerNode):
         return f"{_paren_pow_base(node.left)}^{{{to_latex(node.right)}}}"
     if isinstance(node, ArrheniusNode):

@@ -44,6 +44,7 @@ from aquakin.core.nodes import (
     NegateNode,
     ParamNode,
     PowerNode,
+    SafeDivideNode,
     pHInhibitNode,
     pHSwitchNode,
     SpeciesNode,
@@ -126,10 +127,11 @@ DIMENSIONLESS = Dimension()
 # is normalised to ``mol/L`` after parsing.
 _UNIT_SYMBOLS = ["kmol", "mol", "min", "kg", "bar", "Pa", "g", "m", "L", "d",
                  "s", "h", "M", "K"]
-# Chemical "currency" tokens. ``O2`` carries the meaning of oxygen-as-O2; these
-# are the distinct base dimensions the check exists to keep apart. Longest first
-# (``COD`` before ``C``).
-_CURRENCY_TOKENS = ["COD", "O2", "N", "P", "S", "C"]
+# Chemical "currency" tokens. ``O2`` carries the meaning of oxygen-as-O2;
+# ``TSS`` is suspended-solids mass (a distinct currency in the ASM2d/ASM3
+# models). These are the distinct base dimensions the check exists to keep
+# apart. Longest first (``COD`` before ``C``, ``TSS`` before ``S``).
+_CURRENCY_TOKENS = ["COD", "TSS", "O2", "N", "P", "S", "C"]
 
 _SUPERSCRIPT_TO_ASCII = str.maketrans(
     {"⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5", "⁶": "6",
@@ -431,6 +433,12 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Optional[Dimension]:
     if isinstance(node, DivideNode):
         lo = _infer(node.left, ctx)
         ro = _infer(node.right, ctx)
+        return None if lo is None or ro is None else lo / ro
+    if isinstance(node, SafeDivideNode):
+        # safe_div(num, denom) is num/denom dimensionally (the zero-guard only
+        # affects the value at denom == 0, not the units).
+        lo = _infer(node.num, ctx)
+        ro = _infer(node.denom, ctx)
         return None if lo is None or ro is None else lo / ro
     if isinstance(node, PowerNode):
         base = _infer(node.left, ctx)

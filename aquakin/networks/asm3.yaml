@@ -7,63 +7,63 @@ network:
     - ""
 
 species:
-  - {name: SO2, default_concentration: 1.0, units: "g O2.m-3", description: "Dissolved oxygen (O2)"}
-  - {name: SS, default_concentration: 1.0, units: "g COD.m-3", description: "Soluble biodegradable organics"}
-  - {name: SNH4, default_concentration: 1.0, units: "g N.m-3", description: "Ammonia (NH4+ + NH3)"}
-  - {name: SNOX, default_concentration: 1.0, units: "g N.m-3", description: "Nitrate and nitrite (NO3 + NO2)"}
-  - {name: SN2, default_concentration: 1.0, units: "g N.m-3", description: "Dissolved nitrogen (N2)"}
-  - {name: SALK, default_concentration: 1.0, units: "kmol HCO3-.m-3", description: "Alkalinity (HCO3-)"}
-  - {name: SI, default_concentration: 1.0, units: "g COD.m-3", description: "Soluble undegradable organics"}
-  - {name: XI, default_concentration: 1.0, units: "g COD.m-3", description: "Particulate unbiodegradable organics"}
-  - {name: XS, default_concentration: 1.0, units: "g COD.m-3", description: "Particulate biodegradable organics"}
-  - {name: XH, default_concentration: 1.0, units: "g COD.m-3", description: "Ordinary heterotrophic organisms (OHO)"}
-  - {name: XSTO, default_concentration: 1.0, units: "g COD.m-3", description: "Storage compound in OHOs"}
-  - {name: XA, default_concentration: 1.0, units: "g COD.m-3", description: "Autotrophic nitrifying organisms (NH4+ to NO3-)"}
-  - {name: XSS, default_concentration: 1.0, units: "g TSS.m-3", description: "Total suspended solids (TSS)"}
+  - {name: SO2, default_concentration: 1.0, units: "g_O2/m3", description: "Dissolved oxygen (O2)"}
+  - {name: SS, default_concentration: 1.0, units: "g_COD/m3", description: "Soluble biodegradable organics"}
+  - {name: SNH4, default_concentration: 1.0, units: "g_N/m3", description: "Ammonia (NH4+ + NH3)"}
+  - {name: SNOX, default_concentration: 1.0, units: "g_N/m3", description: "Nitrate and nitrite (NO3 + NO2)"}
+  - {name: SN2, default_concentration: 1.0, units: "g_N/m3", description: "Dissolved nitrogen (N2)"}
+  - {name: SALK, default_concentration: 1.0, units: "kmol/m3", description: "Alkalinity (HCO3-)"}
+  - {name: SI, default_concentration: 1.0, units: "g_COD/m3", description: "Soluble undegradable organics"}
+  - {name: XI, default_concentration: 1.0, units: "g_COD/m3", description: "Particulate unbiodegradable organics"}
+  - {name: XS, default_concentration: 1.0, units: "g_COD/m3", description: "Particulate biodegradable organics"}
+  - {name: XH, default_concentration: 1.0, units: "g_COD/m3", description: "Ordinary heterotrophic organisms (OHO)"}
+  - {name: XSTO, default_concentration: 1.0, units: "g_COD/m3", description: "Storage compound in OHOs"}
+  - {name: XA, default_concentration: 1.0, units: "g_COD/m3", description: "Autotrophic nitrifying organisms (NH4+ to NO3-)"}
+  - {name: XSS, default_concentration: 1.0, units: "g_TSS/m3", description: "Total suspended solids (TSS)"}
 
 conditions:
   - {name: T, default: 293.15, description: "Temperature (K)."}
 
 parameters:
-  KALK: {value: 0.0001, transform: positive_log, bounds: [1e-06, 0.01], units: "0"}
-  KA_O2: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "0"}
-  KNH4: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "0"}
-  KNOX: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "0"}
-  KO2: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
-  KS: {value: 2.0, transform: positive_log, bounds: [0.02, 200.0], units: "0"}
-  KSTO: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "0"}
-  KX: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "0"}
-  YA: {value: 0.24, transform: positive_log, bounds: [0.0024, 24.0], units: "SmallNumber"}
-  YH_NOX: {value: 0.54, transform: positive_log, bounds: [0.0054, 54.0], units: "SmallNumber"}
-  YH_O2: {value: 0.63, transform: positive_log, bounds: [0.0063, 63.0], units: "SmallNumber"}
-  YSTO_NOX: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "SmallNumber"}
-  YSTO_O2: {value: 0.85, transform: positive_log, bounds: [0.0085, 85.0], units: "SmallNumber"}
-  bA_NOX: {value: 0.05, transform: positive_log, bounds: [0.0005, 5.0], units: "0"}
-  bA_O2: {value: 0.15, transform: positive_log, bounds: [0.0015, 15.0], units: "0"}
-  bH_NOX: {value: 0.1, transform: positive_log, bounds: [0.001, 10.0], units: "0"}
-  bH_O2: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
-  bSTO_NOX: {value: 0.1, transform: positive_log, bounds: [0.001, 10.0], units: "0"}
-  bSTO_O2: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
-  etaNOX: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "0"}
-  fSI: {value: 0.0, transform: none, bounds: [0.0, 1e-09], units: "0"}
-  fXI: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "0"}
-  iCOD_NO3: {value: -4.571428571428571, transform: none, bounds: [-9.142857142857142, 1e-09], units: "-BigNumber"}
-  iCharge_SNHx: {value: 7.14285714285714e-05, transform: positive_log, bounds: [7.142857142857139e-07, 0.007142857142857139], units: "-BigNumber"}
-  iCharge_SNOx: {value: -7.14285714285714e-05, transform: none, bounds: [-0.0001428571428571428, 1e-09], units: "-BigNumber"}
-  iNO3_N2: {value: 2.857142857142857, transform: positive_log, bounds: [0.02857142857142857, 285.7142857142857], units: "SmallNumber"}
-  iN_BM: {value: 0.07, transform: positive_log, bounds: [0.0007000000000000001, 7.000000000000001], units: "0"}
-  iN_SI: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "0"}
-  iN_SS: {value: 0.03, transform: positive_log, bounds: [0.0003, 3.0], units: "0"}
-  iN_XI: {value: 0.02, transform: positive_log, bounds: [0.0002, 2.0], units: "0"}
-  iN_XS: {value: 0.04, transform: positive_log, bounds: [0.0004, 4.0], units: "0"}
-  iSS_BM: {value: 0.9, transform: positive_log, bounds: [0.009000000000000001, 90.0], units: "0"}
-  iSS_STO: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "0"}
-  iSS_XI: {value: 0.75, transform: positive_log, bounds: [0.0075, 75.0], units: "0"}
-  iSS_XS: {value: 0.75, transform: positive_log, bounds: [0.0075, 75.0], units: "0"}
-  kH: {value: 3.0, transform: positive_log, bounds: [0.03, 300.0], units: "0"}
-  muA: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "0"}
-  muH: {value: 2.0, transform: positive_log, bounds: [0.02, 200.0], units: "0"}
-  qSTO: {value: 5.0, transform: positive_log, bounds: [0.05, 500.0], units: "0"}
+  KALK: {value: 0.0001, transform: positive_log, bounds: [1e-06, 0.01], units: "kmol/m3"}
+  KA_O2: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "g_O2/m3"}
+  KNH4: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "g_N/m3"}
+  KNOX: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "g_N/m3"}
+  KO2: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_O2/m3"}
+  KS: {value: 2.0, transform: positive_log, bounds: [0.02, 200.0], units: "g_COD/m3"}
+  KSTO: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "-"}
+  KX: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "-"}
+  YA: {value: 0.24, transform: positive_log, bounds: [0.0024, 24.0], units: "g_COD/g_N"}
+  YH_NOX: {value: 0.54, transform: positive_log, bounds: [0.0054, 54.0], units: "g_COD/g_COD"}
+  YH_O2: {value: 0.63, transform: positive_log, bounds: [0.0063, 63.0], units: "g_COD/g_COD"}
+  YSTO_NOX: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "g_COD/g_COD"}
+  YSTO_O2: {value: 0.85, transform: positive_log, bounds: [0.0085, 85.0], units: "g_COD/g_COD"}
+  bA_NOX: {value: 0.05, transform: positive_log, bounds: [0.0005, 5.0], units: "1/d"}
+  bA_O2: {value: 0.15, transform: positive_log, bounds: [0.0015, 15.0], units: "1/d"}
+  bH_NOX: {value: 0.1, transform: positive_log, bounds: [0.001, 10.0], units: "1/d"}
+  bH_O2: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "1/d"}
+  bSTO_NOX: {value: 0.1, transform: positive_log, bounds: [0.001, 10.0], units: "1/d"}
+  bSTO_O2: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "1/d"}
+  etaNOX: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "-"}
+  fSI: {value: 0.0, transform: none, bounds: [0.0, 1e-09], units: "-"}
+  fXI: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "-"}
+  iCOD_NO3: {value: -4.571428571428571, transform: none, bounds: [-9.142857142857142, 1e-09], units: "g_COD/g_N"}
+  iCharge_SNHx: {value: 7.14285714285714e-05, transform: positive_log, bounds: [7.142857142857139e-07, 0.007142857142857139], units: "mol/g_N"}
+  iCharge_SNOx: {value: -7.14285714285714e-05, transform: none, bounds: [-0.0001428571428571428, 1e-09], units: "mol/g_N"}
+  iNO3_N2: {value: 2.857142857142857, transform: positive_log, bounds: [0.02857142857142857, 285.7142857142857], units: "-"}
+  iN_BM: {value: 0.07, transform: positive_log, bounds: [0.0007000000000000001, 7.000000000000001], units: "g_N/g_COD"}
+  iN_SI: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "g_N/g_COD"}
+  iN_SS: {value: 0.03, transform: positive_log, bounds: [0.0003, 3.0], units: "g_N/g_COD"}
+  iN_XI: {value: 0.02, transform: positive_log, bounds: [0.0002, 2.0], units: "g_N/g_COD"}
+  iN_XS: {value: 0.04, transform: positive_log, bounds: [0.0004, 4.0], units: "g_N/g_COD"}
+  iSS_BM: {value: 0.9, transform: positive_log, bounds: [0.009000000000000001, 90.0], units: "g_TSS/g_COD"}
+  iSS_STO: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "g_TSS/g_COD"}
+  iSS_XI: {value: 0.75, transform: positive_log, bounds: [0.0075, 75.0], units: "g_TSS/g_COD"}
+  iSS_XS: {value: 0.75, transform: positive_log, bounds: [0.0075, 75.0], units: "g_TSS/g_COD"}
+  kH: {value: 3.0, transform: positive_log, bounds: [0.03, 300.0], units: "1/d"}
+  muA: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "1/d"}
+  muH: {value: 2.0, transform: positive_log, bounds: [0.02, 200.0], units: "1/d"}
+  qSTO: {value: 5.0, transform: positive_log, bounds: [0.05, 500.0], units: "1/d"}
 
 expressions:
   Monod_XS_over_XH: "monod_ratio([XS], [XH], KX)"

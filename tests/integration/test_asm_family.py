@@ -180,6 +180,26 @@ def test_asm3_biop_uses_monod_inh_ratio():
     assert "monod_inh_ratio(" in yaml_text
 
 
+def test_adm1_c4_competition_uses_safe_div():
+    """The valerate/butyrate C4 competition split is written with safe_div, not
+    a dimensionless epsilon in the denominator, and the rates stay finite at the
+    S_va = S_bu = 0 depletion point the epsilon used to guard."""
+    import pathlib
+
+    text = pathlib.Path("aquakin/networks/adm1.yaml").read_text()
+    assert "safe_div([S_va], [S_va] + [S_bu])" in text
+    assert "safe_div([S_bu], [S_va] + [S_bu])" in text
+    # the old bare-epsilon guard is gone from the competition denominators
+    assert "[S_bu] + 1.0e-6" not in text
+
+    net = aquakin.load_network("adm1")
+    iva, ibu = net.species_index["S_va"], net.species_index["S_bu"]
+    C0 = net.default_concentrations().at[iva].set(0.0).at[ibu].set(0.0)
+    dC = net.dCdt(C0, net.default_parameters(),
+                  net.default_conditions().fields, 0)
+    assert jnp.all(jnp.isfinite(dC))
+
+
 @pytest.mark.slow  # jax.grad through a stiff solve to fit a yield, per network
 @pytest.mark.parametrize("name,yield_param", [
     ("asm2d", "YH"),

@@ -162,6 +162,12 @@ heterotrophic growth in one step.
   - `monod_inh_ratio(A, B, K)` — `K / (K + A/B)`. The inhibition counterpart
     of `monod_ratio`. Appears in bio-P models as a gate on the
     storage-to-biomass ratio.
+  - `safe_div(num, denom)` — `num / denom`, but returns `0` (with a finite
+    gradient) where `denom == 0` instead of `inf`/`NaN`. Use it for a ratio
+    whose denominator can legitimately reach exactly zero — e.g. a
+    substrate-competition fraction `safe_div([A], [A] + [B])` where both
+    substrates can deplete to 0 — so the rate takes its physical limit `0`
+    there, without padding the denominator with a small dimensionless constant.
 
 Examples mixing all three reference forms:
 

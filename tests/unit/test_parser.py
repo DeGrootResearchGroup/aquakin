@@ -153,11 +153,21 @@ def test_monod_ratio_function():
     assert isinstance(tree, MonodRatioNode)
 
 
+def test_safe_div_function():
+    from aquakin.core.nodes import SafeDivideNode, SpeciesNode
+
+    tree = parse_rate_expression("safe_div([S_va], [S_va] + [S_bu])")
+    assert isinstance(tree, SafeDivideNode)
+    assert isinstance(tree.num, SpeciesNode) and tree.num.name == "S_va"
+
+
 def test_monod_wrong_arity():
     with pytest.raises(ParseError):
         parse_rate_expression("monod([SS])")
     with pytest.raises(ParseError):
         parse_rate_expression("monod_ratio([A], [B])")
+    with pytest.raises(ParseError):
+        parse_rate_expression("safe_div([A])")
 
 
 def test_unknown_function_rejected():
