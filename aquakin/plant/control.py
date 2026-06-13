@@ -98,6 +98,13 @@ class PIController:
         return 1  # the integral state x_i
 
     @property
+    def signal_names(self) -> tuple[str, ...]:
+        """Control-signal names this unit publishes to the bus (see
+        :meth:`signal_outputs`). Lets the plant validate that consuming units'
+        signal references resolve."""
+        return (self.signal_name,)
+
+    @property
     def input_ports(self) -> list[str]:
         return [self.input_port]
 

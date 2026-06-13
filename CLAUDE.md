@@ -2060,6 +2060,15 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
 - `CSTRUnit` gains `controlled_kla: {species: (signal_name, gain)}`: when set the
   species' `kLa` is taken from `signals[name]·gain` each step (overriding the
   fixed `kla`); the uniform `rhs` signature means no per-unit flag is needed.
+- **Assembly-time signal validation.** A unit declares the bus names it reads via
+  `required_signals` (`CSTRUnit` derives it from `controlled_kla`) and the names
+  it publishes via `signal_names` (`PIController` -> its `signal_name`).
+  `Plant._validate_control_signals` (run from `_build_state_layout`, before the
+  RHS is traced) checks every consumed name is published, so a forgotten/mistyped
+  controller signal raises a clear `ValueError` naming the unit and the available
+  signals -- not a bare `KeyError` from deep in the first jitted solve. It is
+  conservative: if any producer (a unit exposing `signal_outputs`) does not
+  declare `signal_names`, the published set is unknown and validation is skipped.
 Covered by `tests/integration/test_bsm2_control.py` (controller-unit behaviour:
 signal sign, saturation, integral direction, anti-windup; closed-loop setpoint
 tracking; closed-vs-open contrast; `jax.grad` through the closed loop). The
