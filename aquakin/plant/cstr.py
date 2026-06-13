@@ -25,6 +25,38 @@ if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
 
 
+def oxygen_saturation(T_K):
+    """Clean-water dissolved-oxygen saturation (mg/L) at 1 atm, zero salinity.
+
+    The Benson--Krause / APHA Standard Methods correlation: ``ln(C_s)`` as a
+    quartic in ``1/T`` with ``T`` in Kelvin. Gives ~9.09 mg/L at 20 degC and
+    ~7.56 at 30 degC -- the ~15-20% swing across the activated-sludge operating
+    band. Used only as a **ratio** ``C_s(T)/C_s(T_ref)`` to temperature-correct a
+    user-supplied saturation, so the absolute calibration (salinity, pressure)
+    cancels; those enter separately as the ``beta`` / ``pressure_factor``
+    multipliers on :class:`Aeration`. Pure ``jnp`` so it is jit/AD-clean.
+
+    Parameters
+    ----------
+    T_K : float or jnp.ndarray
+        Temperature in Kelvin.
+
+    Returns
+    -------
+    jnp.ndarray
+        Saturation dissolved-oxygen concentration in mg/L (== g/m3).
+    """
+    T = jnp.asarray(T_K, dtype=float)
+    ln_cs = (
+        -139.34411
+        + 1.575701e5 / T
+        - 6.642308e7 / T**2
+        + 1.243800e10 / T**3
+        - 8.621949e11 / T**4
+    )
+    return jnp.exp(ln_cs)
+
+
 @dataclass(frozen=True)
 class Aeration:
     """Aeration / dissolved-oxygen spec for a :class:`CSTRUnit`.
@@ -75,6 +107,40 @@ class Aeration:
     Kp, Ti, Tt, kla_offset, kla_min, kla_max : float
         Closed-loop PI tuning and output bounds. Defaults are the BSM2 DO loop:
         Kp=25, Ti=0.002 d, Tt=0.001 d, offset 120, bounds [0, 360] d^-1.
+
+    Oxygen-transfer corrections (all **off / identity by default**, so a default
+    ``Aeration`` is bit-faithful to the IWA benchmark constant-saturation,
+    constant-kLa definition):
+
+    temperature_correction : bool
+        When ``True``, temperature-correct the oxygen driving force using the
+        tank's operating temperature (the flow-weighted inlet ``T`` the kinetics
+        already use, falling back to the static ``T`` condition). The saturation
+        is scaled by the clean-water ratio ``C_s(T)/C_s(ref_T)``
+        (:func:`oxygen_saturation`) and -- for an open-loop fixed ``kla`` -- the
+        transfer coefficient by ``kla_theta**(T - ref_T)``. ``False`` (default)
+        leaves both constant. Removes the internal inconsistency whereby a warm
+        run already speeds the (Arrhenius) biology while the oxygen saturation
+        stays pinned. A closed-loop controlled ``kla`` is **not** theta-scaled
+        (the controller already manipulates it to hold the setpoint), but its
+        driving-force saturation still gets the ``C_s(T)`` correction.
+    ref_T : float
+        Reference temperature (Kelvin) at which ``do_sat`` and ``kla`` are
+        specified, so the correction is unity there. Default 293.15 (20 degC).
+    alpha : float
+        Process kLa-transfer factor (alpha_F): a constant multiplier on ``kla``
+        (clean-water -> process water; typically 0.4-0.7 in activated sludge).
+        Default 1.0. Applied to the open-loop ``kla`` only.
+    beta : float
+        Salinity saturation factor: a constant multiplier on ``do_sat``
+        (typically 0.95-0.99). Default 1.0.
+    pressure_factor : float
+        Elevation / barometric saturation factor: a constant multiplier on
+        ``do_sat`` (``< 1`` at altitude). Default 1.0.
+    kla_theta : float
+        Arrhenius base for the open-loop ``kla(T) = kla*kla_theta**(T-ref_T)``
+        correction (only used when ``temperature_correction`` is on). Default
+        1.024, the standard value.
     """
 
     kla: float | None = None
@@ -90,6 +156,12 @@ class Aeration:
     kla_offset: float = 120.0
     kla_min: float = 0.0
     kla_max: float = 360.0
+    temperature_correction: bool = False
+    ref_T: float = 293.15
+    alpha: float = 1.0
+    beta: float = 1.0
+    pressure_factor: float = 1.0
+    kla_theta: float = 1.024
 
     def __post_init__(self) -> None:
         n_modes = (self.kla is not None) + (self.do_setpoint is not None)
@@ -100,6 +172,15 @@ class Aeration:
             )
         if self.kla is not None and self.kla < 0.0:
             raise ValueError(f"Aeration kla must be >= 0, got {self.kla}.")
+        for name in ("alpha", "beta", "pressure_factor"):
+            if getattr(self, name) < 0.0:
+                raise ValueError(
+                    f"Aeration {name} must be >= 0, got {getattr(self, name)}."
+                )
+        if self.kla_theta <= 0.0:
+            raise ValueError(
+                f"Aeration kla_theta must be > 0, got {self.kla_theta}."
+            )
 
     @property
     def is_closed_loop(self) -> bool:
@@ -171,6 +252,13 @@ class CSTRUnit:
         controlled: dict[str, tuple[str, float]] = {}
         kla_vec = jnp.zeros((self.network.n_species,))
         sat_vec = jnp.zeros((self.network.n_species,))
+        # Aeration-correction config, used by ``rhs`` for the temperature-dependent
+        # part. Defaults are off / identity, so a tank with no Aeration (or a
+        # default Aeration) is unchanged.
+        self._aer_idx = -1
+        self._temp_correct = False
+        self._aer_ref_T = 293.15
+        self._kla_theta = 1.024
         if aer is not None:
             if aer.species not in self.network.species_index:
                 raise ValueError(
@@ -178,11 +266,21 @@ class CSTRUnit:
                     f"is not in the network."
                 )
             idx = self.network.species_index[aer.species]
-            sat_vec = sat_vec.at[idx].set(float(aer.do_sat))
+            # Constant (temperature-independent) corrections fold straight into
+            # the precomputed vectors: beta (salinity) and pressure_factor
+            # (elevation) on the saturation; alpha (transfer fouling) on the
+            # open-loop kLa. All default to 1.0 -> vectors unchanged.
+            sat_vec = sat_vec.at[idx].set(
+                float(aer.do_sat) * float(aer.beta) * float(aer.pressure_factor)
+            )
             if aer.is_closed_loop:
                 controlled[aer.species] = (aer.signal_name(self.name), aer.gain)
             else:
-                kla_vec = kla_vec.at[idx].set(float(aer.kla))
+                kla_vec = kla_vec.at[idx].set(float(aer.kla) * float(aer.alpha))
+            self._aer_idx = idx
+            self._temp_correct = bool(aer.temperature_correction)
+            self._aer_ref_T = float(aer.ref_T)
+            self._kla_theta = float(aer.kla_theta)
         self._controlled_kla = controlled
         self._kla_vec = kla_vec
         self._sat_vec = sat_vec
@@ -308,14 +406,32 @@ class CSTRUnit:
         rates = self.network.rates(state, params, conditions, 0)
         chemistry = stoich.T @ rates
 
-        # Aeration (mass transfer). Zero on species without a kLa entry. Under
-        # closed-loop control the kLa of a controlled species is overridden by
-        # its control signal (times the per-tank gain).
+        # Aeration (mass transfer). Zero on species without a kLa entry.
         kla_vec = self._kla_vec
+        sat_vec = self._sat_vec
+        # Temperature-correct the oxygen driving force at the tank's operating
+        # temperature (the same inlet T the kinetics use, else the static T
+        # condition). Saturation scales by the clean-water ratio C_s(T)/C_s(ref);
+        # the open-loop fixed kLa scales by theta**(T-ref). Applied BEFORE the
+        # closed-loop override so a controlled kLa is not theta-scaled (the
+        # controller already manipulates it), while its driving force still gets
+        # the saturation correction.
+        if self._temp_correct:
+            T_eff = T_in
+            if T_eff is None and "T" in self.conditions:
+                T_eff = self.conditions["T"]
+            if T_eff is not None:
+                sat_ratio = (
+                    oxygen_saturation(T_eff) / oxygen_saturation(self._aer_ref_T)
+                )
+                sat_vec = sat_vec * sat_ratio
+                kla_vec = kla_vec * self._kla_theta ** (T_eff - self._aer_ref_T)
+        # Under closed-loop control the kLa of a controlled species is overridden
+        # by its control signal (times the per-tank gain).
         if self._controlled_kla and signals is not None:
             for sp, (signal_name, gain) in self._controlled_kla.items():
                 idx = self.network.species_index[sp]
                 kla_vec = kla_vec.at[idx].set(signals[signal_name] * gain)
-        aeration = kla_vec * (self._sat_vec - state)
+        aeration = kla_vec * (sat_vec - state)
 
         return convection + chemistry + aeration

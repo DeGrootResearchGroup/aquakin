@@ -6,13 +6,16 @@ a dissolved-oxygen setpoint (closed loop), the latter auto-wiring a PI controlle
 on the plant. Covers the spec validation, the open-loop translation, and the
 closed-loop auto-wiring (per-tank and shared-controller).
 """
+import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
 from aquakin.plant import Aeration
-from aquakin.plant.cstr import CSTRUnit
+from aquakin.plant.cstr import CSTRUnit, oxygen_saturation
 from aquakin.plant.plant import Plant
+from aquakin.plant.streams import Stream
 
 
 @pytest.fixture(scope="module")
@@ -119,3 +122,153 @@ def test_sensor_must_exist(asm1):
                Aeration(do_setpoint=2.0, controller="do", sensor="ghost")))
     with pytest.raises(ValueError, match="senses unit 'ghost'"):
         p._build_state_layout()
+
+
+# --- oxygen-transfer corrections (issue #206) -------------------------------
+
+def _aeration_term(asm1, aeration, T_in, signals=None):
+    """The aeration contribution to the SO rhs, isolated by subtracting an
+    otherwise-identical un-aerated tank at the same inlet temperature (so the
+    convection + temperature-dependent chemistry terms cancel exactly)."""
+    so = asm1.species_index["SO"]
+    C = asm1.default_concentrations()
+    s = Stream(Q=jnp.asarray(100.0), C=C, network=asm1, T=jnp.asarray(float(T_in)))
+    p = asm1.default_parameters()
+    aer_tank = _tank(asm1, "t", aeration)
+    bare = _tank(asm1, "t0", None)
+    r_aer = aer_tank.rhs(jnp.asarray(0.0), C, {"in": s}, p, signals)
+    r_bare = bare.rhs(jnp.asarray(0.0), C, {"in": s}, p)
+    return float(r_aer[so] - r_bare[so]), float(C[so])
+
+
+def test_oxygen_saturation_benson_krause():
+    """The Benson--Krause correlation reproduces the standard saturation curve:
+    ~9.09 mg/L at 20 degC, ~7.56 at 30 degC -- a ~17% swing."""
+    assert float(oxygen_saturation(293.15)) == pytest.approx(9.09, abs=0.02)
+    assert float(oxygen_saturation(303.15)) == pytest.approx(7.56, abs=0.02)
+    # Monotonically decreasing with temperature.
+    assert float(oxygen_saturation(283.15)) > float(oxygen_saturation(303.15))
+
+
+def test_default_aeration_is_bit_faithful(asm1):
+    """All corrections off by default: the saturation/kLa vectors are the raw
+    constants and the rhs ignores the inlet temperature (the IWA benchmark)."""
+    tank = _tank(asm1, "t", Aeration(kla=240.0, do_sat=8.0))
+    so = asm1.species_index["SO"]
+    assert float(tank._sat_vec[so]) == 8.0 and float(tank._kla_vec[so]) == 240.0
+    # Aeration term is the same whether the inlet is warm or at the reference.
+    warm, _ = _aeration_term(asm1, Aeration(kla=240.0), 303.15)
+    ref, _ = _aeration_term(asm1, Aeration(kla=240.0), 293.15)
+    assert warm == pytest.approx(ref)
+
+
+def test_constant_factors_fold_into_vectors(asm1):
+    """alpha scales the open-loop kLa; beta and pressure_factor scale the
+    saturation -- all temperature-independent, folded at construction."""
+    tank = _tank(asm1, "t", Aeration(kla=240.0, do_sat=8.0,
+                                     alpha=0.6, beta=0.95, pressure_factor=0.9))
+    so = asm1.species_index["SO"]
+    assert float(tank._kla_vec[so]) == pytest.approx(240.0 * 0.6)
+    assert float(tank._sat_vec[so]) == pytest.approx(8.0 * 0.95 * 0.9)
+
+
+def test_temperature_correction_identity_at_ref_T(asm1):
+    """With temperature_correction on, the reference temperature is the unity
+    point -- it reproduces the uncorrected aeration exactly."""
+    on = Aeration(kla=240.0, temperature_correction=True, ref_T=293.15)
+    off = Aeration(kla=240.0)
+    a_on, _ = _aeration_term(asm1, on, 293.15)
+    a_off, _ = _aeration_term(asm1, off, 293.15)
+    assert a_on == pytest.approx(a_off)
+
+
+def test_temperature_correction_warm_lowers_saturation_raises_kla(asm1):
+    """At 30 degC the saturation falls by C_s(T)/C_s(ref) and the open-loop kLa
+    rises by theta**(T-ref) -- both applied to the aeration term."""
+    on = Aeration(kla=240.0, do_sat=8.0, temperature_correction=True,
+                  ref_T=293.15, kla_theta=1.024)
+    term, so_val = _aeration_term(asm1, on, 303.15)
+    ratio = float(oxygen_saturation(303.15) / oxygen_saturation(293.15))
+    kla_eff = 240.0 * 1.024 ** (303.15 - 293.15)
+    expected = kla_eff * (8.0 * ratio - so_val)
+    assert term == pytest.approx(expected, rel=1e-6)
+
+
+def test_temperature_correction_falls_back_to_static_T(asm1):
+    """When the inlet carries no temperature, the correction uses the tank's
+    static T condition (the same source the kinetics fall back to)."""
+    so = asm1.species_index["SO"]
+    C = asm1.default_concentrations()
+    s = Stream(Q=jnp.asarray(100.0), C=C, network=asm1, T=None)  # no inlet T
+    p = asm1.default_parameters()
+    tank = CSTRUnit(name="t", network=asm1, volume=1000.0, input_port_names=["in"],
+                    conditions={"T": 303.15},
+                    aeration=Aeration(kla=240.0, do_sat=8.0,
+                                      temperature_correction=True, ref_T=293.15))
+    bare = CSTRUnit(name="t0", network=asm1, volume=1000.0, input_port_names=["in"],
+                    conditions={"T": 303.15}, aeration=None)
+    term = float(tank.rhs(jnp.asarray(0.0), C, {"in": s}, p)[so]
+                 - bare.rhs(jnp.asarray(0.0), C, {"in": s}, p)[so])
+    ratio = float(oxygen_saturation(303.15) / oxygen_saturation(293.15))
+    kla_eff = 240.0 * 1.024 ** (303.15 - 293.15)
+    assert term == pytest.approx(kla_eff * (8.0 * ratio - float(C[so])), rel=1e-6)
+
+
+def test_closed_loop_kla_not_theta_scaled_but_saturation_is(asm1):
+    """A controlled kLa comes from the control signal and is NOT theta-scaled
+    (the controller already manipulates it), but its driving-force saturation
+    still gets the C_s(T) correction."""
+    aer = Aeration(do_setpoint=2.0, temperature_correction=True, ref_T=293.15)
+    signals = {"_aer_t_kla": 100.0}
+    term, so_val = _aeration_term(asm1, aer, 303.15, signals=signals)
+    ratio = float(oxygen_saturation(303.15) / oxygen_saturation(293.15))
+    # kLa is the raw signal (gain 1.0), NOT 100*theta**10.
+    expected = 100.0 * (8.0 * ratio - so_val)
+    assert term == pytest.approx(expected, rel=1e-6)
+
+
+def test_correction_factor_validation():
+    with pytest.raises(ValueError, match="alpha must be"):
+        Aeration(kla=120.0, alpha=-0.1)
+    with pytest.raises(ValueError, match="beta must be"):
+        Aeration(kla=120.0, beta=-1.0)
+    with pytest.raises(ValueError, match="pressure_factor must be"):
+        Aeration(kla=120.0, pressure_factor=-0.5)
+    with pytest.raises(ValueError, match="kla_theta must be"):
+        Aeration(kla=120.0, kla_theta=0.0)
+
+
+def test_build_bsm2_do_temperature_correction_flag():
+    """build_bsm2 keeps the IWA-faithful constant aeration by default, and the
+    opt-in flag enables the temperature correction on the aerated tanks with the
+    reactors' static T as the unity reference."""
+    from aquakin.plant.bsm.bsm2 import build_bsm2
+
+    base = build_bsm2()
+    t3 = base.units["tank3"]
+    assert t3._temp_correct is False
+    assert float(t3._sat_vec[t3.network.species_index["SO"]]) == 8.0
+
+    corr = build_bsm2(do_temperature_correction=True)
+    t3c = corr.units["tank3"]
+    assert t3c._temp_correct is True
+    assert t3c._aer_ref_T == float(corr.units["tank3"].conditions["T"])
+    # An unaerated (anoxic) tank is untouched -- no aeration to correct.
+    assert corr.units["tank1"].aeration is None
+
+
+def test_temperature_corrected_aeration_is_ad_clean(asm1):
+    """jax.grad flows through the corrected aeration term w.r.t. the inlet
+    temperature without error or NaN (it stays in the monolithic plant solve)."""
+    so = asm1.species_index["SO"]
+    C = asm1.default_concentrations()
+    p = asm1.default_parameters()
+    tank = _tank(asm1, "t", Aeration(kla=240.0, do_sat=8.0,
+                                     temperature_correction=True))
+
+    def so_rhs(T):
+        s = Stream(Q=jnp.asarray(100.0), C=C, network=asm1, T=T)
+        return tank.rhs(jnp.asarray(0.0), C, {"in": s}, p)[so]
+
+    g = jax.grad(so_rhs)(jnp.asarray(300.0))
+    assert np.isfinite(float(g))

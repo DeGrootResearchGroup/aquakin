@@ -2303,6 +2303,27 @@ run on `load_bsm2_influent(...)` is seasonally temperature-driven out of the box
 (The generic `read_influent_csv` / `_influent_from_text` capture a `T` column
 when present, in the file's own units; only the BSM2 loader converts °C→K.)
 
+**Temperature-dependent oxygen transfer (issue #206).** By default the aeration
+term is `kLa·(C_sat − C)` with `C_sat` a fixed constant (8.0 gO₂/m³) and `kLa`
+constant — the literal IWA benchmark definition. That left a seasonal-run
+inconsistency: a warm influent already speeds the (Arrhenius) biology while the
+oxygen driving force stayed pinned. `Aeration` now carries **opt-in** transfer
+corrections, all identity by default so the benchmark stays bit-faithful:
+`temperature_correction=True` scales the saturation by the clean-water ratio
+`C_s(T)/C_s(ref_T)` (the Benson–Krause `aquakin.plant.oxygen_saturation`,
+~9.09 mg/L at 20 °C → ~7.56 at 30 °C) and the **open-loop** `kLa` by
+`kla_theta**(T−ref_T)` (default θ=1.024), using the same flow-weighted inlet `T`
+the kinetics use (falling back to the static `T` condition); a closed-loop
+controlled `kLa` is **not** θ-scaled (the controller already manipulates it) but
+its driving-force saturation still gets the `C_s(T)` correction. Constant factors
+`alpha` (kLa transfer fouling), `beta` (salinity) and `pressure_factor`
+(elevation) fold into the precomputed vectors at construction (defaults 1.0). All
+AD-clean (the correction is a smooth function of `T` inside the monolithic plant
+solve). `build_bsm2(do_temperature_correction=True)` turns it on plant-wide with
+`ref_T` = the reactors' static temperature (so it is unity at the benchmark
+operating point and only a temperature-carrying influent drives it); default off
+reproduces the validated steady state exactly.
+
 **Influent characterization + CSV `column_map` (issue #136).** Real influent is
 measured as aggregates (total COD, TKN, ammonia, alkalinity, optionally
 filtered/flocculated COD, VFA), not as the 13 ASM1 states. `aquakin/plant/characterize.py`
