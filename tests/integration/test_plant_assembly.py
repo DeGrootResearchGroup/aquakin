@@ -408,18 +408,21 @@ def test_connect_infers_sole_ports(simple_net):
     assert (c1.from_unit, c1.from_port, c1.to_unit, c1.to_port) == ("tank", "out", "split", "in")
 
 
-def test_connect_auto_seeds_recycle_edge(simple_net):
-    """A recycle edge (source ordered after destination) given no initial_value
-    is auto-seeded with a zero-flow stream of the source network."""
+def test_recycle_edge_auto_detected_and_seeded(simple_net):
+    """A recycle (graph back-edge) given no initial_value is detected by the
+    topological sort and auto-seeded with a zero-flow stream of the source
+    network. (connect() no longer seeds at wire time -- recycles are found from
+    the graph at finalize, regardless of add order.)"""
     plant = _recycle_plant(simple_net)
     plant.connect("mix", "tank")
     plant.connect("tank", "split")
     plant.connect("split.rec", "mix.recycle")     # recycle, no initial_value
-    forward, recycle = plant.connections[1], plant.connections[2]
-    # The forward edge is not seeded; the recycle edge is.
-    assert forward.initial_value is None
-    seed = recycle.initial_value
-    assert seed is not None
+    # connect() leaves the connection unseeded.
+    assert all(c.initial_value is None for c in plant.connections)
+    plant._finalize_topology()
+    # The back-edge is detected and zero-flow seeded.
+    assert ("split", "rec") in plant._recycle_keys
+    seed = plant._recycle_seeds[("split", "rec")]
     assert float(seed.Q) == 0.0
     assert seed.network is simple_net
 

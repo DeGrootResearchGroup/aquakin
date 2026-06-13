@@ -1795,17 +1795,41 @@ Key types:
     endpoint strings, read as `source -> dest`. The port may be omitted
     (bare `"unit"`) when the unit has exactly one port for that role — a
     single output (source) or single input (dest) — so only multi-port
-    units (mixers/splitters/clarifiers) name a port. A **recycle** edge
-    (source unit ordered after the destination) with no `initial_value` is
-    **auto-seeded** with a zero-flow stream of the source network; pass
-    `initial_value=` only to override with a non-zero warm start.
+    units (mixers/splitters/clarifiers) name a port.
     External influents are wired through
     `plant.add_influent(name, series, to="unit.port")` — they are *not*
     valid `connect` sources (a clear error redirects you). `connect`
     resolves the default `IdentityTranslator` when the two ends share a
     network and requires an explicit `translator=` across networks (e.g.
     the BSM2 ASM1↔ADM1 digester edges). The endpoint parsing lives in
-    `Plant._parse_endpoint`; recycle detection in `Plant._is_recycle`.
+    `Plant._parse_endpoint`.
+  - **Arbitrary add order; topological sort.** Units may be `add_unit`-ed in
+    **any order**: `Plant._finalize_topology` (run from `_build_state_layout`,
+    so at every solve) topologically sorts the feed-forward connection graph
+    into the RHS evaluation order `_unit_order`, and the **recycles are the graph
+    back-edges, detected automatically** — you no longer add the downstream unit
+    before its upstream consumer or mark recycles by ordering. The sort is Kahn's
+    algorithm with an insertion-order tie-break (deterministic, so the
+    state/parameter layouts are stable): a connection carrying an explicit
+    `initial_value` is a declared recycle and cut first (its seed rides the cut
+    edge); any remaining cycle is broken by cutting the earliest-added remaining
+    unit's still-active incoming edges, which become auto-detected recycles
+    (zero-flow seeded via `_recycle_seeds`). For a plant already added in a valid
+    order it **reproduces that order and recycle set exactly** (BSM1/BSM2
+    unchanged); any valid feedback-arc cut gives the same converged solve, so the
+    result is add-order-independent. `add_unit` records the raw add order in
+    `_insertion_order` (the parameter-block order and the tie-break read it);
+    `_unit_order` is the computed eval order. Recycles are then resolved by
+    iterating the per-RHS stream computation 3 times (sufficient for typical BSM
+    topologies). `initial_value=` on `connect` overrides a recycle's zero-flow
+    seed with a non-zero warm start (e.g. the BSM2 temperature-carrying seed).
+  - **Pre-solve wiring check.** `plant.check()` → `PlantCheck` reports **unfed
+    input ports** (`.unfed_ports`, an error — the RHS sweep has no source for
+    them) and **unconsumed outputs** (`.dangling_outputs`, info — a terminal
+    stream like the final effluent / wasted sludge / disposal cake / biogas
+    legitimately leaves the plant), plus the detected `.recycles`; `.ok` is true
+    when nothing is unfed and `.summary()` prints it. `check(raise_on_error=True)`
+    raises on an unfed port. Exported as `aquakin.PlantCheck`.
   - **Operating temperature.** `plant.set_temperature(celsius)` sets the static
     `T` condition of every temperature-bearing reactor in one call (°C → K),
     leaving a heated fixed-`T` unit like the digester untouched; clears the

@@ -80,6 +80,46 @@ class ParameterLayout:
 
 
 @dataclass
+class PlantCheck:
+    """Result of :meth:`Plant.check` -- a pre-solve wiring report.
+
+    Attributes
+    ----------
+    unfed_ports : list[str]
+        ``"unit.port"`` input ports with no stream wired into them. These are
+        **errors**: the RHS sweep has no source for them, so the solve fails.
+    dangling_outputs : list[str]
+        ``"unit.port"`` output ports consumed by no connection. Usually benign
+        -- a terminal stream that leaves the plant (final effluent, wasted
+        sludge, disposal cake, biogas) -- so they are reported for information,
+        not flagged as errors.
+    recycles : list[str]
+        ``"unit.port"`` recycle (back-edge) source ports the topological sort
+        detected, for visibility into how the graph was cut.
+    """
+
+    unfed_ports: list = field(default_factory=list)
+    dangling_outputs: list = field(default_factory=list)
+    recycles: list = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        """True when no input port is unfed (a dangling output is not an error)."""
+        return not self.unfed_ports
+
+    def summary(self) -> str:
+        """A short human-readable report."""
+        lines = [f"Plant check: {'OK' if self.ok else 'PROBLEMS'}"]
+        if self.unfed_ports:
+            lines.append(f"  unfed input ports (errors): {self.unfed_ports}")
+        if self.dangling_outputs:
+            lines.append(f"  unconsumed outputs (info): {self.dangling_outputs}")
+        if self.recycles:
+            lines.append(f"  recycle edges: {self.recycles}")
+        return "\n".join(lines)
+
+
+@dataclass
 class PlantSolution:
     """Result of :meth:`Plant.solve`.
 
@@ -267,6 +307,11 @@ class Plant:
             raise ValueError(f"recycle_passes must be >= 1; got {recycle_passes}")
         self.recycle_passes = int(recycle_passes)
         self.units: dict[str, Unit] = {}
+        # Units in the order they were added (the user's order; arbitrary).
+        self._insertion_order: list[str] = []
+        # The RHS *evaluation* order: a topological sort of the feed-forward
+        # connection graph, computed by _finalize_topology() (recycles are the
+        # graph back-edges, detected automatically, not by add order).
         self._unit_order: list[str] = []
         self.connections: list[Connection] = []
         self.influents: dict[str, InfluentSeries] = {}
@@ -287,6 +332,11 @@ class Plant:
         # Static connection adjacency, rebuilt by _build_state_layout():
         self._inputs_by_unit: dict[str, list[Connection]] = {}
         self._recycle_keys: list[tuple[Optional[str], str]] = []
+        # The recycle (back-edge) connections and, for any auto-detected one with
+        # no explicit ``initial_value``, a zero-flow seed stream. Set by
+        # _finalize_topology().
+        self._recycle_conns: list[Connection] = []
+        self._recycle_seeds: dict[tuple[str, str], Stream] = {}
         # Per-instance cache of the jit-compiled forward solve, keyed by call
         # signature + solver settings. The plant RHS closes over the (static)
         # unit graph, so once compiled the same solve is reused across repeated
@@ -301,10 +351,22 @@ class Plant:
     # ----- assembly --------------------------------------------------------
 
     def add_unit(self, unit: Unit) -> None:
-        """Register a unit. Order of addition is the evaluation order."""
+        """Register a unit.
+
+        Units may be added in any order: the plant computes the RHS evaluation
+        order itself by topologically sorting the connection graph at solve time
+        (recycles are the graph back-edges, detected automatically -- you do not
+        have to add a downstream unit before its upstream consumer). The add
+        order is used only as a deterministic tie-break for the sort and to order
+        the per-network parameter blocks.
+        """
         if unit.name in self.units:
             raise ValueError(f"Unit '{unit.name}' already added")
         self.units[unit.name] = unit
+        self._insertion_order.append(unit.name)
+        # Seed the evaluation order with the insertion order so it is non-empty
+        # before the first solve (helpers that just enumerate units read it);
+        # _finalize_topology() reorders it into a valid topological order.
         self._unit_order.append(unit.name)
 
     def add_influent(
@@ -444,18 +506,20 @@ class Plant:
             Defaults to :class:`IdentityTranslator` when source and destination
             share a network; required when they differ.
         initial_value : Stream, optional
-            Seed for the stream's first RHS pass on a *recycle* edge (where the
-            source unit is evaluated after the destination in
-            :attr:`_unit_order`). Omit it and any recycle edge is auto-seeded
-            with a zero-flow stream of the source network; pass it only to
-            override that with a non-zero warm start. Ignored for feed-forward
-            edges.
+            Seed for the stream's first RHS pass on a *recycle* edge. Recycles
+            are detected automatically as the back-edges of the connection graph
+            (you do not mark them, and the units may be added in any order); a
+            recycle with no ``initial_value`` is auto-seeded with a zero-flow
+            stream of the source network. Pass it only to override that with a
+            non-zero warm start (e.g. a temperature-carrying seed to ignite
+            temperature propagation around the loop on the first pass). Ignored
+            for feed-forward edges. Both endpoints must already be added.
 
         Examples
         --------
         >>> plant.connect("tank1", "tank2")                 # sole ports inferred
         >>> plant.connect("tank5_split.to_clarifier", "clarifier")
-        >>> plant.connect("split.recycle", "mix.recycle")   # recycle: auto-seeded
+        >>> plant.connect("split.recycle", "mix.recycle")   # recycle: auto-detected
         """
         src_unit, src_port = self._parse_endpoint(source, role="source")
         dst_unit, dst_port = self._parse_endpoint(dest, role="destination")
@@ -463,11 +527,6 @@ class Plant:
             self._unit_network(src_unit), dst_unit, translator,
             f"{src_unit}.{src_port}", f"{dst_unit}.{dst_port}",
         )
-        if initial_value is None and self._is_recycle(src_unit, dst_unit):
-            net = self._unit_network(src_unit)
-            initial_value = Stream(
-                Q=jnp.asarray(0.0), C=net.default_concentrations(), network=net
-            )
         self.connections.append(
             Connection(
                 from_unit=src_unit, from_port=src_port,
@@ -475,6 +534,51 @@ class Plant:
                 translator=translator, initial_value=initial_value,
             )
         )
+
+    def check(self, *, raise_on_error: bool = False) -> PlantCheck:
+        """Validate the wiring before solving: find unfed ports / dangling outputs.
+
+        Every unit input port must be fed by exactly one stream (an influent or
+        another unit's output); an **unfed** input port has no source, so the RHS
+        sweep cannot resolve it and the solve fails. Output ports consumed by no
+        connection are reported too, but as information -- a terminal stream that
+        leaves the plant (final effluent, wasted sludge, disposal cake, biogas)
+        is legitimately unconsumed.
+
+        Parameters
+        ----------
+        raise_on_error : bool, optional
+            If True, raise ``ValueError`` when any input port is unfed (the
+            actionable error) instead of only reporting it. Default False.
+
+        Returns
+        -------
+        PlantCheck
+            ``unfed_ports`` (errors), ``dangling_outputs`` (info), ``recycles``
+            (the detected back-edges), with ``.ok`` and ``.summary()``.
+        """
+        self._finalize_topology()
+        fed = {(c.to_unit, c.to_port) for c in self.connections}
+        consumed = {(c.from_unit, c.from_port)
+                    for c in self.connections if c.from_unit is not None}
+        unfed, dangling = [], []
+        for name in self._insertion_order:
+            unit = self.units[name]
+            for port in unit.input_ports:
+                if (name, port) not in fed:
+                    unfed.append(f"{name}.{port}")
+            for port in unit.output_ports:
+                if (name, port) not in consumed:
+                    dangling.append(f"{name}.{port}")
+        result = PlantCheck(
+            unfed_ports=unfed, dangling_outputs=dangling,
+            recycles=[f"{u}.{p}" for (u, p) in self._recycle_keys])
+        if raise_on_error and not result.ok:
+            raise ValueError(
+                f"Plant '{self.name}' has unfed input ports (no stream wired "
+                f"in): {unfed}. Wire them with connect()/add_influent() before "
+                f"solving.")
+        return result
 
     def _parse_endpoint(self, spec: str, *, role: str) -> tuple[str, str]:
         """Resolve a ``"unit.port"`` / ``"unit"`` endpoint string to ``(unit, port)``.
@@ -550,10 +654,66 @@ class Plant:
             f"translator."
         )
 
-    def _is_recycle(self, source_unit: str, dest_unit: str) -> bool:
-        """True if ``source_unit`` is evaluated after ``dest_unit`` (a recycle)."""
-        order = self._unit_order
-        return order.index(source_unit) > order.index(dest_unit)
+    def _finalize_topology(self) -> None:
+        """Compute the RHS evaluation order and the recycle (back-edge) set.
+
+        Topologically sorts the feed-forward connection graph so units can be
+        added in any order. A connection carrying an explicit ``initial_value``
+        is treated as a declared recycle and cut first (so its seed sits on the
+        cut edge); any cycle remaining in the rest is broken deterministically --
+        Kahn's algorithm with an insertion-order tie-break, and when it stalls
+        the earliest-added remaining unit has its still-active incoming edges cut
+        (those become auto-detected recycles, zero-flow seeded). Sets
+        :attr:`_unit_order`, :attr:`_recycle_keys`, :attr:`_recycle_conns` and the
+        zero-flow :attr:`_recycle_seeds`. Deterministic, so the state/parameter
+        layouts are stable, and for a plant whose units were already added in a
+        valid evaluation order it reproduces that order and recycle set exactly.
+        """
+        units = self._insertion_order
+        pos = {u: i for i, u in enumerate(units)}
+        unit_conns = [c for c in self.connections if c.from_unit is not None]
+        forced_ids = {id(c) for c in unit_conns if c.initial_value is not None}
+
+        incoming = {u: [] for u in units}
+        succ = {u: [] for u in units}
+        for c in unit_conns:
+            if id(c) not in forced_ids:
+                incoming[c.to_unit].append(c)
+                succ[c.from_unit].append(c)
+        indeg = {u: len(incoming[u]) for u in units}
+
+        remaining = set(units)
+        cut_ids: set[int] = set()
+        order: list[str] = []
+        while remaining:
+            ready = sorted((u for u in remaining if indeg[u] == 0), key=pos.get)
+            if not ready:
+                # Cycle: break it at the earliest-added remaining unit by cutting
+                # its still-active incoming edges (sources not yet emitted).
+                node = min(remaining, key=pos.get)
+                for c in incoming[node]:
+                    if c.from_unit in remaining and id(c) not in cut_ids:
+                        cut_ids.add(id(c))
+                        indeg[node] -= 1
+                ready = [node]
+            node = ready[0]
+            order.append(node)
+            remaining.discard(node)
+            for c in succ[node]:
+                if id(c) not in cut_ids and c.to_unit in remaining:
+                    indeg[c.to_unit] -= 1
+
+        self._unit_order = order
+        forced = [c for c in unit_conns if id(c) in forced_ids]
+        auto_cut = [c for c in unit_conns if id(c) in cut_ids]
+        self._recycle_conns = forced + auto_cut
+        self._recycle_keys = [(c.from_unit, c.from_port)
+                              for c in self._recycle_conns]
+        self._recycle_seeds = {}
+        for c in auto_cut:
+            net = self.units[c.from_unit].network
+            self._recycle_seeds[(c.from_unit, c.from_port)] = Stream(
+                Q=jnp.asarray(0.0), C=net.default_concentrations(), network=net)
 
     def _unit_network(self, unit_name: str) -> CompiledNetwork:
         unit = self.units[unit_name]
@@ -569,12 +729,14 @@ class Plant:
     def _build_state_layout(self) -> None:
         """Assign each unit a contiguous slice of the flat state vector.
 
-        Also (re)builds the static connection-adjacency caches the RHS hot
-        paths rely on (:meth:`_build_connection_index`). Both depend only on
-        the wiring, which is fixed by the time the plant is solved, so they are
-        computed together here -- the single topology-setup entry point that
-        :meth:`solve` and every direct-RHS caller invoke first.
+        First topologically sorts the units (:meth:`_finalize_topology`, which
+        also derives the recycle set), then assigns the state slices in that
+        evaluation order and (re)builds the input-adjacency cache. All depend
+        only on the wiring, fixed by the time the plant is solved -- the single
+        topology-setup entry point that :meth:`solve` and every direct-RHS caller
+        invoke first.
         """
+        self._finalize_topology()
         layout: dict[str, tuple[int, int]] = {}
         cursor = 0
         for name in self._unit_order:
@@ -624,18 +786,13 @@ class Plant:
                     )
 
     def _build_connection_index(self) -> None:
-        """Precompute the static connection adjacency for the RHS hot paths.
+        """Group connections by destination unit for the RHS hot paths.
 
-        Two derived structures, both functions of the wiring only:
-
-        - ``_inputs_by_unit`` groups connections by destination unit, so
-          :meth:`_collect_inputs` and :meth:`_resolve_flows` look up a unit's
-          incoming edges in O(in-degree) instead of re-scanning all
-          connections (the scan ran ``recycle_passes x n_units`` times per
-          stream sweep plus once per unit in the derivative pass).
-        - ``_recycle_keys`` lists the recycle source ports (back-edges seeded
-          with an ``initial_value``), so :meth:`_resolve_flows` does not
-          re-derive them on every step.
+        ``_inputs_by_unit`` lets :meth:`_collect_inputs` and :meth:`_resolve_flows`
+        look up a unit's incoming edges in O(in-degree) instead of re-scanning all
+        connections (the scan ran ``recycle_passes x n_units`` times per stream
+        sweep plus once per unit in the derivative pass). The recycle set is
+        computed separately by :meth:`_finalize_topology`.
         """
         inputs_by_unit: dict[str, list[Connection]] = {
             name: [] for name in self._unit_order
@@ -643,11 +800,6 @@ class Plant:
         for conn in self.connections:
             inputs_by_unit.setdefault(conn.to_unit, []).append(conn)
         self._inputs_by_unit = inputs_by_unit
-        self._recycle_keys = [
-            (c.from_unit, c.from_port)
-            for c in self.connections
-            if c.from_unit is not None and c.initial_value is not None
-        ]
 
     def _ordered_networks(self) -> list[CompiledNetwork]:
         """The distinct kinetic networks, in first-appearance order.
@@ -661,7 +813,7 @@ class Plant:
         layout and the default vector can never disagree.
         """
         seen: list[CompiledNetwork] = []
-        for name in self._unit_order:
+        for name in self._insertion_order:
             net = getattr(self.units[name], "network", None)
             if net is None:
                 continue
@@ -1200,20 +1352,19 @@ class Plant:
 
         A recycle edge (downstream -> upstream) must be readable before its
         source unit has been visited in the sweep. We seed it with the
-        exactly-resolved flow (from :meth:`_resolve_flows`) and the edge's
-        declared ``initial_value`` concentration; the concentration is then
-        corrected within a few sweep passes, as recycle concentrations are read
-        directly from the source unit's state.
+        exactly-resolved flow (from :meth:`_resolve_flows`) and a seed
+        concentration -- the edge's explicit ``initial_value`` when given, else
+        the zero-flow auto-seed from :meth:`_finalize_topology`; the
+        concentration is then corrected within a few sweep passes, as recycle
+        concentrations are read directly from the source unit's state.
         """
         seeded: dict[tuple[str, str], Stream] = {}
-        for conn in self.connections:
-            if conn.from_unit is None or conn.initial_value is None:
-                continue
-            iv = conn.initial_value
-            q = resolved_flows[(conn.from_unit, conn.from_port)]
-            seeded[(conn.from_unit, conn.from_port)] = Stream(
-                Q=q, C=iv.C, network=iv.network, T=iv.T
-            )
+        for conn in self._recycle_conns:
+            key = (conn.from_unit, conn.from_port)
+            iv = conn.initial_value if conn.initial_value is not None \
+                else self._recycle_seeds[key]
+            q = resolved_flows[key]
+            seeded[key] = Stream(Q=q, C=iv.C, network=iv.network, T=iv.T)
         return seeded
 
     def _sweep_outputs(
