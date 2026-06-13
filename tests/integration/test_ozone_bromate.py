@@ -23,7 +23,7 @@ def _run(network, *, OH_scavenging, t_end=600.0, n=61):
     C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
     return reactor.solve(
         C0,
-        network.default_parameters(),
+        params=network.default_parameters(),
         t_span=(0.0, t_end),
         t_eval=jnp.linspace(0.0, t_end, n),
     )

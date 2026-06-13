@@ -519,10 +519,10 @@ class BiofilmReactor:
     def solve(
         self,
         C0: jnp.ndarray,
-        params: Optional[jnp.ndarray] = None,
         t_span: tuple[float, float] = None,
         t_eval: Optional[jnp.ndarray] = None,
         *,
+        params: Optional[jnp.ndarray] = None,
         conditions: Optional[SpatialConditions] = None,
         time_unit: Optional[str] = None,
     ) -> BiofilmSolution:
@@ -535,14 +535,15 @@ class BiofilmReactor:
             the bulk and every layer --- or ``(n_layers + 1, n_species)`` to set
             the bulk and each layer explicitly (row 0 bulk, rows 1.. surface to
             wall). The latter sets the stratified particulate (biomass) profile.
-        params : jnp.ndarray, optional
-            Rate constant vector, shape ``(n_params,)``. Defaults to
-            ``network.default_parameters()``.
         t_span : tuple of float
             ``(t_start, t_end)`` integration interval, in the network's time unit
-            unless ``time_unit`` is given.
+            unless ``time_unit`` is given. The required second positional argument.
         t_eval : jnp.ndarray, optional
             Times at which to record the solution. If ``None`` only the endpoint.
+        params : jnp.ndarray, optional, keyword-only
+            Rate constant vector, shape ``(n_params,)``. Defaults to
+            ``network.default_parameters()``. Keyword-only so a positional
+            ``t_span`` can never land in it.
         conditions : SpatialConditions, optional
             Override the reactor conditions for this call.
         time_unit : str, optional
@@ -895,7 +896,7 @@ class BiofilmReactor:
 
         if warmup and warmup > 0.0:
             seed = self.solve(
-                y0, params, t_span=(0.0, float(warmup)), conditions=active
+                y0, params=params, t_span=(0.0, float(warmup)), conditions=active
             ).profile[-1]
         else:
             seed = y0

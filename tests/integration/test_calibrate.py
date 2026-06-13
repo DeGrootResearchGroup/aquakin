@@ -68,7 +68,7 @@ def setup(simple_network):
     true_k = 0.25
     true_params = simple_network.default_parameters().at[0].set(true_k)
     t_obs = jnp.linspace(0.5, 10.0, 20)
-    sol = reactor.solve(C0, true_params, t_span=(0.0, 10.0), t_eval=t_obs)
+    sol = reactor.solve(C0, params=true_params, t_span=(0.0, 10.0), t_eval=t_obs)
     obs_clean = sol.C_named("B")
     return reactor, C0, t_obs, obs_clean, true_k
 
@@ -210,7 +210,7 @@ def test_laplace_dtmax_reconstructs_tighter_reactor(simple_network):
     C0 = jnp.asarray([1.0, 0.0])
     tp = simple_network.default_parameters().at[0].set(0.25)
     t = jnp.linspace(0.5, 10.0, 20)
-    obs = reactor.solve(C0, tp, t_span=(0.0, 10.0), t_eval=t).C_named("B")
+    obs = reactor.solve(C0, params=tp, t_span=(0.0, 10.0), t_eval=t).C_named("B")
     common = dict(
         observations=obs, t_obs=t, free_params=["A_to_B.k"],
         transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
@@ -534,7 +534,7 @@ def test_calibrate_nll_small_scale_observable_gives_finite_posterior(setup):
     scale = 1e-6
     C0s = C0 * scale
     obs = reactor.solve(
-        C0s, true_params, t_span=(0.0, float(t_obs[-1])), t_eval=t_obs
+        C0s, params=true_params, t_span=(0.0, float(t_obs[-1])), t_eval=t_obs
     ).C_named("B")
     res = aquakin.calibrate(
         reactor, C0s, observations=obs, t_obs=t_obs, free_params=["A_to_B.k"],
@@ -620,7 +620,7 @@ def test_gauss_newton_forward_mode_with_direct_adjoint(simple_network):
     true_k = 0.25
     true_params = simple_network.default_parameters().at[0].set(true_k)
     t_obs = jnp.linspace(0.5, 10.0, 20)
-    obs = reactor.solve(C0, true_params, t_span=(0.0, 10.0), t_eval=t_obs).C_named("B")
+    obs = reactor.solve(C0, params=true_params, t_span=(0.0, 10.0), t_eval=t_obs).C_named("B")
     result = aquakin.calibrate(
         reactor, C0, observations=obs, t_obs=t_obs,
         free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
@@ -638,7 +638,7 @@ def test_gauss_newton_with_free_ic_and_multistart(simple_network):
     true_k, true_A0 = 0.25, 1.6
     true_params = simple_network.default_parameters().at[0].set(true_k)
     t_obs = jnp.linspace(0.5, 12.0, 25)
-    sol = reactor.solve(jnp.asarray([true_A0, 0.0]), true_params, t_span=(0.0, 12.0), t_eval=t_obs)
+    sol = reactor.solve(jnp.asarray([true_A0, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t_obs)
     obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
     result = aquakin.calibrate(
         reactor, jnp.asarray([1.0, 0.0]), observations=obs, t_obs=t_obs,
@@ -673,7 +673,7 @@ def test_free_ic_recovers_initial_condition(simple_network):
     true_params = simple_network.default_parameters().at[0].set(true_k)
     C0_true = jnp.asarray([true_A0, 0.0])
     t_obs = jnp.linspace(0.5, 12.0, 25)
-    sol = reactor.solve(C0_true, true_params, t_span=(0.0, 12.0), t_eval=t_obs)
+    sol = reactor.solve(C0_true, params=true_params, t_span=(0.0, 12.0), t_eval=t_obs)
     obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
 
     # Start from the wrong A0 (1.0); free it.
@@ -700,8 +700,8 @@ def test_free_ic_per_dataset_in_multibatch(simple_network):
     A0a, A0b = 1.2, 2.4
     ta = jnp.linspace(0.5, 10.0, 20)
     tb = jnp.linspace(0.5, 10.0, 20)
-    sola = reactor.solve(jnp.asarray([A0a, 0.0]), true_params, t_span=(0.0, 10.0), t_eval=ta)
-    solb = reactor.solve(jnp.asarray([A0b, 0.0]), true_params, t_span=(0.0, 10.0), t_eval=tb)
+    sola = reactor.solve(jnp.asarray([A0a, 0.0]), params=true_params, t_span=(0.0, 10.0), t_eval=ta)
+    solb = reactor.solve(jnp.asarray([A0b, 0.0]), params=true_params, t_span=(0.0, 10.0), t_eval=tb)
     obsa = jnp.stack([sola.C_named("A"), sola.C_named("B")], axis=1)
     obsb = jnp.stack([solb.C_named("A"), solb.C_named("B")], axis=1)
     start = jnp.asarray([1.0, 0.0])
@@ -724,7 +724,7 @@ def test_free_ic_laplace_is_over_rates_only(simple_network):
     )
     true_params = simple_network.default_parameters().at[0].set(0.25)
     t_obs = jnp.linspace(0.5, 12.0, 25)
-    sol = reactor.solve(jnp.asarray([1.5, 0.0]), true_params, t_span=(0.0, 12.0), t_eval=t_obs)
+    sol = reactor.solve(jnp.asarray([1.5, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t_obs)
     obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
     result = aquakin.calibrate(
         reactor, jnp.asarray([1.0, 0.0]), observations=obs, t_obs=t_obs,
@@ -770,8 +770,8 @@ def test_joint_multibatch_recovers_known_parameter(simple_network):
     C0b = jnp.asarray([2.0, 0.0])
     ta = jnp.linspace(0.5, 8.0, 12)
     tb = jnp.linspace(0.3, 10.0, 15)
-    obsa = reactor.solve(C0a, true_params, t_span=(0.0, 8.0), t_eval=ta).C_named("B")
-    obsb = reactor.solve(C0b, true_params, t_span=(0.0, 10.0), t_eval=tb).C_named("B")
+    obsa = reactor.solve(C0a, params=true_params, t_span=(0.0, 8.0), t_eval=ta).C_named("B")
+    obsb = reactor.solve(C0b, params=true_params, t_span=(0.0, 10.0), t_eval=tb).C_named("B")
     result = aquakin.calibrate(
         reactor,
         [C0a, C0b],

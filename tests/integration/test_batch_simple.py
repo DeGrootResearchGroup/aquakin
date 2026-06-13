@@ -19,7 +19,7 @@ def test_first_order_decay_matches_analytical(simple_network):
     k = float(params[0])
     t_eval = jnp.linspace(0.0, 20.0, 21)
 
-    sol = reactor.solve(C0, params, t_span=(0.0, 20.0), t_eval=t_eval)
+    sol = reactor.solve(C0, params=params, t_span=(0.0, 20.0), t_eval=t_eval)
 
     analytical_A = jnp.exp(-k * t_eval)
     analytical_B = 1.0 - analytical_A
@@ -40,10 +40,10 @@ def test_max_steps_is_exposed_and_enforced(simple_network):
     r_tight = aquakin.BatchReactor(simple_network, conditions, max_steps=2)
     assert r_tight.max_steps == 2
     with pytest.raises(Exception):
-        r_tight.solve(C0, params, t_span=(0.0, 20.0), t_eval=t_eval)
+        r_tight.solve(C0, params=params, t_span=(0.0, 20.0), t_eval=t_eval)
 
     r_ok = aquakin.BatchReactor(simple_network, conditions, max_steps=100_000)
-    sol = r_ok.solve(C0, params, t_span=(0.0, 20.0), t_eval=t_eval)
+    sol = r_ok.solve(C0, params=params, t_span=(0.0, 20.0), t_eval=t_eval)
     assert jnp.all(jnp.isfinite(sol.C))
 
 
@@ -66,7 +66,7 @@ def test_solve_defaults_params_to_network_defaults(simple_network):
 
     auto = reactor.solve(C0, t_span=(0.0, 20.0), t_eval=t_eval)
     explicit = reactor.solve(
-        C0, simple_network.default_parameters(), t_span=(0.0, 20.0), t_eval=t_eval
+        C0, params=simple_network.default_parameters(), t_span=(0.0, 20.0), t_eval=t_eval
     )
     assert jnp.allclose(auto.C, explicit.C)
 
@@ -81,14 +81,26 @@ def test_solve_requires_t_span(simple_network):
         reactor.solve(jnp.asarray([1.0, 0.0]))
 
 
-def test_solve_tuple_as_params_is_caught(simple_network):
-    """The footgun reactor.solve(C0, (0, 20)) -- a t_span tuple landing in the
-    params slot -- is caught by the params shape check, not run silently."""
+def test_solve_positional_tuple_is_t_span_not_params(simple_network):
+    """The former footgun: ``solve(C0, (0, 20))`` now binds the tuple to t_span
+    (its 2nd positional argument), so the common call just works. params is
+    keyword-only, so a t_span tuple can no longer land in it."""
     reactor = aquakin.BatchReactor(
         simple_network, aquakin.SpatialConditions.uniform(T=293.15)
     )
-    with pytest.raises(ValueError, match="params has shape"):
-        reactor.solve(jnp.asarray([1.0, 0.0]), (0.0, 20.0))
+    # The positional tuple is t_span -> the solve runs (no shape error).
+    sol = reactor.solve(jnp.asarray([1.0, 0.0]), (0.0, 20.0))
+    assert float(sol.t[-1]) == 20.0
+    # t_eval is the 3rd positional; params is keyword-only, so it lives past it.
+    sol = reactor.solve(jnp.asarray([1.0, 0.0]), (0.0, 20.0),
+                        jnp.linspace(0.0, 20.0, 5))
+    assert sol.t.shape == (5,)
+    # A 4th positional argument (where params used to sit) is now a TypeError --
+    # params can only arrive by keyword, so it can never swallow a t_span tuple.
+    with pytest.raises(TypeError):
+        reactor.solve(jnp.asarray([1.0, 0.0]), (0.0, 20.0),
+                      jnp.linspace(0.0, 20.0, 5),
+                      simple_network.default_parameters())
 
 
 def test_grad_through_solve_finite(simple_network):
@@ -97,7 +109,7 @@ def test_grad_through_solve_finite(simple_network):
     C0 = jnp.asarray([1.0, 0.0])
 
     def loss(params):
-        sol = reactor.solve(C0, params, t_span=(0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 11))
+        sol = reactor.solve(C0, params=params, t_span=(0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 11))
         return jnp.sum(sol.C_named("B") ** 2)
 
     g = jax.grad(loss)(simple_network.default_parameters())
@@ -109,39 +121,39 @@ def test_grad_through_solve_finite(simple_network):
 def test_C0_shape_validated(simple_network):
     reactor = aquakin.BatchReactor(simple_network, aquakin.SpatialConditions.uniform(1, T=293.15))
     with pytest.raises(ValueError):
-        reactor.solve(jnp.asarray([1.0]), simple_network.default_parameters(), (0.0, 1.0))
+        reactor.solve(jnp.asarray([1.0]), (0.0, 1.0))
 
 
 def test_t_span_must_be_ascending(simple_network):
     reactor = aquakin.BatchReactor(simple_network, aquakin.SpatialConditions.uniform(1, T=293.15))
     with pytest.raises(ValueError):
-        reactor.solve(jnp.asarray([1.0, 0.0]), simple_network.default_parameters(), (1.0, 1.0))
+        reactor.solve(jnp.asarray([1.0, 0.0]), (1.0, 1.0))
     with pytest.raises(ValueError):
-        reactor.solve(jnp.asarray([1.0, 0.0]), simple_network.default_parameters(), (2.0, 1.0))
+        reactor.solve(jnp.asarray([1.0, 0.0]), (2.0, 1.0))
 
 
 def test_t_eval_out_of_span_rejected(simple_network):
     reactor = aquakin.BatchReactor(simple_network, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0, p = jnp.asarray([1.0, 0.0]), simple_network.default_parameters()
     with pytest.raises(ValueError):   # below t0
-        reactor.solve(C0, p, (0.0, 10.0), t_eval=jnp.asarray([-1.0, 5.0]))
+        reactor.solve(C0, (0.0, 10.0), params=p, t_eval=jnp.asarray([-1.0, 5.0]))
     with pytest.raises(ValueError):   # above t1
-        reactor.solve(C0, p, (0.0, 10.0), t_eval=jnp.asarray([5.0, 11.0]))
+        reactor.solve(C0, (0.0, 10.0), params=p, t_eval=jnp.asarray([5.0, 11.0]))
 
 
 def test_t_eval_must_be_ascending(simple_network):
     reactor = aquakin.BatchReactor(simple_network, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0, p = jnp.asarray([1.0, 0.0]), simple_network.default_parameters()
     with pytest.raises(ValueError):   # not ascending
-        reactor.solve(C0, p, (0.0, 10.0), t_eval=jnp.asarray([5.0, 2.0, 8.0]))
+        reactor.solve(C0, (0.0, 10.0), params=p, t_eval=jnp.asarray([5.0, 2.0, 8.0]))
     with pytest.raises(ValueError):   # repeated (not strictly ascending)
-        reactor.solve(C0, p, (0.0, 10.0), t_eval=jnp.asarray([2.0, 2.0]))
+        reactor.solve(C0, (0.0, 10.0), params=p, t_eval=jnp.asarray([2.0, 2.0]))
 
 
 def test_t_eval_valid_accepted(simple_network):
     reactor = aquakin.BatchReactor(simple_network, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0, p = jnp.asarray([1.0, 0.0]), simple_network.default_parameters()
-    sol = reactor.solve(C0, p, (0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 6))
+    sol = reactor.solve(C0, (0.0, 10.0), params=p, t_eval=jnp.linspace(0.0, 10.0, 6))
     assert jnp.all(jnp.isfinite(sol.C))
 
 
@@ -166,9 +178,9 @@ def test_ozone_bromate_runs():
     C0 = network.concentrations({"Br-": 1e-5, "O3": 1e-4})
     sol = reactor.solve(
         C0,
-        network.default_parameters(),
         t_span=(0.0, 600.0),
         t_eval=jnp.linspace(0.0, 600.0, 11),
+        params=network.default_parameters(),
     )
     # Ozone should decrease monotonically.
     o3 = sol.C_named("O3")

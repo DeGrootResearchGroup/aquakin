@@ -23,7 +23,7 @@ def test_pfr_first_order_decay(simple_network):
     params = simple_network.default_parameters()
     k = float(params[0])
 
-    sol = reactor.solve(C0, params)
+    sol = reactor.solve(C0, params=params)
 
     tau = sol.x / velocity
     analytical_A = jnp.exp(-k * tau)
@@ -40,7 +40,7 @@ def test_pfr_inlet_matches_C0(simple_network):
         velocity=1.0,
     )
     C0 = jnp.asarray([0.75, 0.25])
-    sol = reactor.solve(C0, simple_network.default_parameters())
+    sol = reactor.solve(C0, params=simple_network.default_parameters())
     assert float(sol.C[0, 0]) == 0.75
     assert float(sol.C[0, 1]) == 0.25
 
@@ -54,7 +54,7 @@ def test_pfr_grad_through_solve_finite(simple_network):
     C0 = jnp.asarray([1.0, 0.0])
 
     def loss(params):
-        sol = reactor.solve(C0, params)
+        sol = reactor.solve(C0, params=params)
         return jnp.sum(sol.C_named("B") ** 2)
 
     g = jax.grad(loss)(simple_network.default_parameters())
@@ -83,7 +83,7 @@ def test_pfr_conditions_override_shape_mismatch_rejected(simple_network):
     with pytest.raises(ValueError):
         reactor.solve(
             jnp.asarray([1.0, 0.0]),
-            simple_network.default_parameters(),
+            params=simple_network.default_parameters(),
             conditions=overlay,
         )
 
@@ -102,7 +102,7 @@ def test_pfr_direct_adjoint_enables_forward_mode(simple_network):
     C0 = jnp.asarray([1.0, 0.0])
 
     def out(p):
-        return jnp.sum(reactor.solve(C0, p).C)
+        return jnp.sum(reactor.solve(C0, params=p).C)
 
     J = jax.jacfwd(out)(simple_network.default_parameters())
     assert jnp.all(jnp.isfinite(J))

@@ -18,8 +18,8 @@ def _build(network, *, t_end=1.0, **C0_overrides):
     C0 = network.concentrations(C0_overrides)
     sol = reactor.solve(
         C0,
-        network.default_parameters(),
         t_span=(0.0, t_end),
+        params=network.default_parameters(),
         t_eval=jnp.linspace(0.0, t_end, 51),
     )
     return sol
@@ -99,7 +99,7 @@ def test_AD_grad_through_solve(network):
 
     def loss(params):
         sol = reactor.solve(
-            C0, params, t_span=(0.0, 0.2), t_eval=jnp.linspace(0.0, 0.2, 11)
+            C0, params=params, t_span=(0.0, 0.2), t_eval=jnp.linspace(0.0, 0.2, 11)
         )
         return jnp.sum(sol.C_named("SNH"))
 
@@ -129,7 +129,7 @@ def test_yield_is_calibratable(network):
 
     def loss(params):
         sol = reactor.solve(
-            C0, params, t_span=(0.0, 0.01), t_eval=jnp.linspace(0.0, 0.01, 6)
+            C0, params=params, t_span=(0.0, 0.01), t_eval=jnp.linspace(0.0, 0.01, 6)
         )
         return jnp.sum(sol.C_named("SS"))
 

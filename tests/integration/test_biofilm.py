@@ -52,7 +52,7 @@ def test_pure_diffusion_conserves_and_equilibrates(net, cond):
     # bulk full of A, biofilm empty.
     y0 = jnp.zeros((n_comp, net.n_species))
     y0 = y0.at[0, net.species_index["A"]].set(1.0)
-    sol = r.solve(y0, p, t_span=(0.0, 2.0))
+    sol = r.solve(y0, params=p, t_span=(0.0, 2.0))
     final = np.asarray(sol.profile[-1])  # (n_comp, n_species)
     a = final[:, net.species_index["A"]]
     # all compartments equal at steady state
@@ -85,8 +85,8 @@ def test_boundary_diffusivity_sets_transfer_and_defaults(net, cond):
     p = net.parameter_values({"A_to_B.k": 0.0})
     n_comp = r_default.n_layers + 1
     y0 = jnp.zeros((n_comp, net.n_species)).at[0, sidx].set(1.0)
-    bulk_default = float(r_default.solve(y0, p, t_span=(0.0, 0.5)).C_named("A")[-1])
-    bulk_fast = float(r_fast.solve(y0, p, t_span=(0.0, 0.5)).C_named("A")[-1])
+    bulk_default = float(r_default.solve(y0, params=p, t_span=(0.0, 0.5)).C_named("A")[-1])
+    bulk_fast = float(r_fast.solve(y0, params=p, t_span=(0.0, 0.5)).C_named("A")[-1])
     assert bulk_fast < bulk_default
 
 
@@ -106,8 +106,8 @@ def test_reactive_particulate_evolves_and_conserves(net, cond):
                         soluble_mask=soluble, fixed_mask=jnp.array([False, False]))
     frozen = _reactor(net, cond, n_layers=n_comp - 1,
                       soluble_mask=soluble, fixed_mask=jnp.array([False, True]))
-    sr = reactive.solve(y0, p, t_span=(0.0, 1.0))
-    sf = frozen.solve(y0, p, t_span=(0.0, 1.0))
+    sr = reactive.solve(y0, params=p, t_span=(0.0, 1.0))
+    sf = frozen.solve(y0, params=p, t_span=(0.0, 1.0))
     # Reactive B grows from zero; frozen B stays put.
     assert float(sr.profile[-1, 0, ib]) > 0.05
     assert float(sf.profile[-1, 0, ib]) == pytest.approx(0.0, abs=1e-12)
@@ -142,13 +142,13 @@ def test_solve_validates_c0_and_params_shape(net, cond):
     p = net.default_parameters()
     bad_C0 = jnp.zeros(net.n_species + 1)
     with pytest.raises(ValueError, match="C0 has shape"):
-        r.solve(bad_C0, p, t_span=(0.0, 1.0))
+        r.solve(bad_C0, params=p, t_span=(0.0, 1.0))
     with pytest.raises(ValueError, match="params has shape"):
-        r.solve(jnp.zeros(net.n_species), jnp.zeros(net.n_params + 1), t_span=(0.0, 1.0))
+        r.solve(jnp.zeros(net.n_species), params=jnp.zeros(net.n_params + 1), t_span=(0.0, 1.0))
     # Both the (n,) and (n_layers+1, n) C0 shapes are accepted.
     n_comp = r.n_layers + 1
-    sol_flat = r.solve(jnp.zeros(net.n_species), p, t_span=(0.0, 0.5))
-    sol_prof = r.solve(jnp.zeros((n_comp, net.n_species)), p, t_span=(0.0, 0.5))
+    sol_flat = r.solve(jnp.zeros(net.n_species), params=p, t_span=(0.0, 0.5))
+    sol_prof = r.solve(jnp.zeros((n_comp, net.n_species)), params=p, t_span=(0.0, 0.5))
     assert sol_flat.profile.shape[1:] == (n_comp, net.n_species)
     assert sol_prof.profile.shape[1:] == (n_comp, net.n_species)
 
@@ -161,13 +161,13 @@ def test_solve_validates_t_eval(net, cond):
     C0 = jnp.array([1.0, 0.0])
     p = net.default_parameters()
     with pytest.raises(ValueError, match="within t_span"):
-        r.solve(C0, p, t_span=(0.0, 1.0), t_eval=jnp.array([0.0, 2.0]))
+        r.solve(C0, params=p, t_span=(0.0, 1.0), t_eval=jnp.array([0.0, 2.0]))
     with pytest.raises(ValueError, match="ascending"):
-        r.solve(C0, p, t_span=(0.0, 1.0), t_eval=jnp.array([0.5, 0.2]))
+        r.solve(C0, params=p, t_span=(0.0, 1.0), t_eval=jnp.array([0.5, 0.2]))
     # solve_sensitivity guards too.
     with pytest.raises(ValueError, match="within t_span"):
         r.solve_sensitivity(
-            C0, p, t_span=(0.0, 1.0), t_eval=jnp.array([0.0, 5.0]),
+            C0, params=p, t_span=(0.0, 1.0), t_eval=jnp.array([0.0, 5.0]),
             sens_params=[0],
         )
 
@@ -184,13 +184,13 @@ def test_max_steps_is_enforced(net, cond):
     r_tight = _reactor(net, cond, max_steps=4)
     capped = False
     try:
-        sol = r_tight.solve(C0, p, t_span=(0.0, 5.0))     # no t_eval path
+        sol = r_tight.solve(C0, params=p, t_span=(0.0, 5.0))     # no t_eval path
         capped = not np.all(np.isfinite(np.asarray(sol.C)))
     except Exception:
         capped = True
     assert capped
 
-    sol = _reactor(net, cond, max_steps=100_000).solve(C0, p, t_span=(0.0, 5.0))
+    sol = _reactor(net, cond, max_steps=100_000).solve(C0, params=p, t_span=(0.0, 5.0))
     assert np.all(np.isfinite(np.asarray(sol.C)))
 
 
@@ -219,7 +219,7 @@ def test_attachment_detachment_conserve_particulate(net, cond):
             y0 = y0.at[0, ib].set(1.0)
         else:
             y0 = y0.at[1:, ib].set(1.0)
-        sol = r.solve(y0, p, t_span=(0.0, 0.5))
+        sol = r.solve(y0, params=p, t_span=(0.0, 0.5))
         tot0 = (1.0 / r.area_per_volume) * 1.0 if "k_att" in kw else \
             (r.thickness / r.n_layers) * r.n_layers * 1.0
         assert total_B(sol) == pytest.approx(tot0, rel=1e-5)
@@ -242,7 +242,7 @@ def test_density_cap_throttles_growth(net, cond):
     maxd = jnp.array([jnp.inf, rho])        # cap B only
     r = _reactor(net, cond, n_layers=3, max_density=maxd, packing_fraction=1.0)
     C0 = jnp.array([1.0, 0.0])              # all A; A->B
-    sol = r.solve(C0, net.default_parameters(), t_span=(0.0, 50.0))
+    sol = r.solve(C0, params=net.default_parameters(), t_span=(0.0, 50.0))
     b_final = np.asarray(sol.profile[-1, :, ib])
     assert np.all(b_final <= rho + 1e-6)    # never exceeds the cap
     assert np.max(b_final) > 0.5 * rho      # but does fill toward it
@@ -256,8 +256,8 @@ def test_well_mixed_limit_matches_batch(net, cond):
     C0 = jnp.array([1.0, 0.0])  # A, B
     p = net.default_parameters()
     t_eval = jnp.linspace(0.0, 5.0, 11)
-    bio = r.solve(C0, p, t_span=(0.0, 5.0), t_eval=t_eval)  # uniform IC broadcast
-    bat = batch.solve(C0, p, t_span=(0.0, 5.0), t_eval=t_eval)
+    bio = r.solve(C0, params=p, t_span=(0.0, 5.0), t_eval=t_eval)  # uniform IC broadcast
+    bat = batch.solve(C0, params=p, t_span=(0.0, 5.0), t_eval=t_eval)
     assert np.allclose(np.asarray(bio.C_named("A")), np.asarray(bat.C_named("A")),
                        rtol=1e-5, atol=1e-7)
 
@@ -274,8 +274,8 @@ def test_diffusion_limitation_starves_deep_layers(net, cond):
     slow = _reactor(net, cond, diffusivity=1e-6)
     # Short time: fast diffusion (timescale L^2/D ~ 6e-4 d) fills the deepest
     # layer; slow diffusion (timescale ~0.6 d) has barely penetrated.
-    deep_fast = float(fast.solve(y0, p, t_span=(0.0, 0.1)).profile_named("A")[-1, -1])
-    deep_slow = float(slow.solve(y0, p, t_span=(0.0, 0.1)).profile_named("A")[-1, -1])
+    deep_fast = float(fast.solve(y0, params=p, t_span=(0.0, 0.1)).profile_named("A")[-1, -1])
+    deep_slow = float(slow.solve(y0, params=p, t_span=(0.0, 0.1)).profile_named("A")[-1, -1])
     assert deep_fast > deep_slow + 0.3
 
 
@@ -288,8 +288,8 @@ def test_phase_mask_confines_reaction_to_biofilm(net, cond):
     C0 = jnp.array([1.0, 0.0])  # uniform A everywhere
     everywhere = _reactor(net, cond)                       # runs in every compartment
     film_only = _reactor(net, cond, biofilm_reactions=["A_to_B"])
-    se = everywhere.solve(C0, p, t_span=(0.0, 2.0))
-    sf = film_only.solve(C0, p, t_span=(0.0, 2.0))
+    se = everywhere.solve(C0, params=p, t_span=(0.0, 2.0))
+    sf = film_only.solve(C0, params=p, t_span=(0.0, 2.0))
     assert float(sf.C_named("A")[-1]) > float(se.C_named("A")[-1]) + 1e-2
     assert float(sf.C_named("B")[-1]) < float(se.C_named("B")[-1])
 
@@ -303,7 +303,7 @@ def test_solution_shapes_and_named_accessors(net, cond):
     r = _reactor(net, cond)
     p = net.default_parameters()
     t_eval = jnp.linspace(0.0, 1.0, 5)
-    sol = r.solve(jnp.array([1.0, 0.0]), p, t_span=(0.0, 1.0), t_eval=t_eval)
+    sol = r.solve(jnp.array([1.0, 0.0]), params=p, t_span=(0.0, 1.0), t_eval=t_eval)
     assert sol.C.shape == (5, net.n_species)               # bulk trajectory
     assert sol.profile.shape == (5, r.n_layers + 1, net.n_species)
     assert sol.depth.shape == (r.n_layers,)
@@ -321,7 +321,7 @@ def test_grad_flows_through_layered_solve(net, cond):
 
     def final_bulk_A(k):
         p = net.default_parameters().at[ki].set(k)
-        return r.solve(y0, p, t_span=(0.0, 1.0)).C_named("A")[-1]
+        return r.solve(y0, params=p, t_span=(0.0, 1.0)).C_named("A")[-1]
 
     g = jax.grad(final_bulk_A)(0.1)
     assert np.isfinite(float(g))

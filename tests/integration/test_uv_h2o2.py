@@ -22,7 +22,7 @@ def _solve(network, *, fluence_rate, t_end=600.0, n=61):
     reactor = aquakin.BatchReactor(network, conditions, atol=_atol_for(network))
     return reactor.solve(
         network.default_concentrations(),
-        network.default_parameters(),
+        params=network.default_parameters(),
         t_span=(0.0, t_end),
         t_eval=jnp.linspace(0.0, t_end, n),
     )

@@ -17,13 +17,13 @@ def test_constant_track_matches_batch(simple_network):
     reactor = aquakin.ParticleTrackReactor(simple_network, track, n_save=11)
     C0 = jnp.asarray([1.0, 0.0])
     params = simple_network.default_parameters()
-    sol_track = reactor.solve(C0, params)
+    sol_track = reactor.solve(C0, params=params)
 
     batch = aquakin.BatchReactor(
         simple_network, aquakin.SpatialConditions.uniform(T=293.15)
     )
     sol_batch = batch.solve(
-        C0, params, t_span=(0.0, t_end), t_eval=jnp.linspace(0.0, t_end, 11)
+        C0, params=params, t_span=(0.0, t_end), t_eval=jnp.linspace(0.0, t_end, 11)
     )
 
     assert jnp.allclose(sol_track.C, sol_batch.C, atol=1e-7, rtol=1e-5)
@@ -38,7 +38,7 @@ def test_grad_through_particle_solve(simple_network):
     C0 = jnp.asarray([1.0, 0.0])
 
     def loss(params):
-        sol = reactor.solve(C0, params)
+        sol = reactor.solve(C0, params=params)
         return jnp.sum(sol.C_named("B") ** 2)
 
     g = jax.grad(loss)(simple_network.default_parameters())
@@ -98,10 +98,10 @@ def test_scavenging_step_affects_OH_path():
     C0 = network.concentrations({"O3": 1e-4, "Br-": 1e-5})
 
     sol_step = aquakin.ParticleTrackReactor(network, track_step, atol=atol).solve(
-        C0, network.default_parameters()
+        C0, params=network.default_parameters()
     )
     sol_high = aquakin.ParticleTrackReactor(network, track_high, atol=atol).solve(
-        C0, network.default_parameters()
+        C0, params=network.default_parameters()
     )
 
     bro3_step = float(sol_step.C_named("BrO3-")[-1])
@@ -149,7 +149,7 @@ def test_particle_direct_adjoint_enables_forward_mode(simple_network):
     C0 = jnp.asarray([1.0, 0.0])
 
     def out(p):
-        return jnp.sum(reactor.solve(C0, p).C)
+        return jnp.sum(reactor.solve(C0, params=p).C)
 
     J = jax.jacfwd(out)(simple_network.default_parameters())
     assert jnp.all(jnp.isfinite(J))

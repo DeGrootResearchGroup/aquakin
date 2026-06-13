@@ -107,7 +107,7 @@ def test_batch_integrates_and_stays_nonnegative(net, cond):
     # finite and non-negative, and reduce sulfate into sulfide.
     reactor = aquakin.BatchReactor(net, cond, rtol=1e-6, atol=1e-9)
     C0 = net.default_concentrations()
-    sol = reactor.solve(C0, net.default_parameters(), t_span=(0.0, 2.0))
+    sol = reactor.solve(C0, params=net.default_parameters(), t_span=(0.0, 2.0))
     assert bool(jnp.all(jnp.isfinite(sol.C)))
     assert float(jnp.min(sol.C)) >= -1e-6
     # sulfate reduced, sulfide produced
@@ -121,8 +121,8 @@ def test_nitrate_dosing_lowers_sulfide(net, cond):
     p = net.default_parameters()
     C_no = net.default_concentrations()
     C_dosed = net.concentrations({"S_NO": 20.0})
-    sumS_no = float(reactor.solve(C_no, p, t_span=(0.0, 1.0)).C_named("sumS")[-1])
-    sumS_dosed = float(reactor.solve(C_dosed, p, t_span=(0.0, 1.0)).C_named("sumS")[-1])
+    sumS_no = float(reactor.solve(C_no, params=p, t_span=(0.0, 1.0)).C_named("sumS")[-1])
+    sumS_dosed = float(reactor.solve(C_dosed, params=p, t_span=(0.0, 1.0)).C_named("sumS")[-1])
     assert sumS_dosed < sumS_no
 
 
@@ -154,7 +154,7 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
     reactor = aquakin.BatchReactor(net, cond, rtol=1e-6, atol=1e-9, dtmax=5.0e-4)
 
     def final_sumS(pp):
-        return reactor.solve(C0, pp, t_span=(0.0, 0.1)).C_named("sumS")[-1]
+        return reactor.solve(C0, params=pp, t_span=(0.0, 0.1)).C_named("sumS")[-1]
 
     g = jax.grad(final_sumS)(p)
     assert np.all(np.isfinite(np.asarray(g)))
@@ -174,7 +174,7 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
     )
     tangent = jnp.zeros_like(p).at[ia].set(1.0)
     _, jvp = jax.jvp(
-        lambda pp: fwd_reactor.solve(C0, pp, t_span=(0.0, 0.1)).C_named("sumS")[-1],
+        lambda pp: fwd_reactor.solve(C0, params=pp, t_span=(0.0, 0.1)).C_named("sumS")[-1],
         (p,),
         (tangent,),
     )

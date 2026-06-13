@@ -45,7 +45,7 @@ def main() -> None:
     def bromate_yield(z):
         """Final bromate, given the screened rate constants z (the rest fixed)."""
         params = base.at[idx].set(z)
-        sol = reactor.solve(C0, params, t_span=(0.0, 600.0), t_eval=t_eval)
+        sol = reactor.solve(C0, params=params, t_span=(0.0, 600.0), t_eval=t_eval)
         return sol.C_named("BrO3-")[-1]
 
     print("DGSM screen of final bromate yield vs four rate constants")

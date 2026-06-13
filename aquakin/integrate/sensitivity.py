@@ -72,7 +72,7 @@ def sensitivity(
     Parameters
     ----------
     reactor : BatchReactor or PlugFlowReactor
-        Any reactor exposing ``.solve(C0, params, ...)`` and a ``.conditions``
+        Any reactor exposing ``.solve(C0, t_span, ..., params=...)`` and a ``.conditions``
         attribute.
     C0 : jnp.ndarray
         Initial concentration vector.
@@ -122,7 +122,7 @@ def sensitivity(
     base_fields = dict(reactor.conditions.fields)
 
     def _output_from_params(p):
-        sol = reactor.solve(C0, p, **solve_kwargs)
+        sol = reactor.solve(C0, params=p, **solve_kwargs)
         return jnp.asarray(output_fn(sol))
 
     def _output_from_field(field_name: str, field_array: jnp.ndarray):
@@ -132,7 +132,7 @@ def sensitivity(
         overlay = SpatialConditions(
             fields={**base_fields, field_name: field_array}
         )
-        sol = reactor.solve(C0, params, conditions=overlay, **solve_kwargs)
+        sol = reactor.solve(C0, params=params, conditions=overlay, **solve_kwargs)
         return jnp.asarray(output_fn(sol))
 
     output_value = float(_output_from_params(params))
@@ -314,7 +314,7 @@ def fit(
 
     def loss_from_free(free_values):
         p = p0_full.at[free_indices_arr].set(free_values)
-        sol = reactor.solve(C0, p, t_span=t_span, t_eval=t_obs)
+        sol = reactor.solve(C0, params=p, t_span=t_span, t_eval=t_obs)
         pred = sol.C[:, obs_species_indices]
         return jnp.sum((pred - observations) ** 2)
 

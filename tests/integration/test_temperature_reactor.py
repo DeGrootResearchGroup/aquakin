@@ -17,7 +17,7 @@ def _batch_final(asm1, T_kelvin):
     C0 = asm1.concentrations(SS=50.0, SO=8.0, SNH=20.0, XB_H=800.0)
     cond = aquakin.SpatialConditions.uniform(T=T_kelvin)
     reactor = aquakin.BatchReactor(asm1, cond)
-    sol = reactor.solve(C0, asm1.default_parameters(), t_span=(0.0, 0.5))
+    sol = reactor.solve(C0, params=asm1.default_parameters(), t_span=(0.0, 0.5))
     return sol.C[-1]
 
 
@@ -39,6 +39,6 @@ def test_batch_matches_uncorrected_at_reference(asm1):
     bare = dataclasses.replace(asm1, temperature_corrections=[])
     cond = aquakin.SpatialConditions.uniform(T=293.15)
     C0 = asm1.concentrations(SS=50.0, SO=8.0, XB_H=800.0)
-    a = aquakin.BatchReactor(asm1, cond).solve(C0, asm1.default_parameters(), (0.0, 0.5))
-    b = aquakin.BatchReactor(bare, cond).solve(C0, bare.default_parameters(), (0.0, 0.5))
+    a = aquakin.BatchReactor(asm1, cond).solve(C0, (0.0, 0.5), params=asm1.default_parameters())
+    b = aquakin.BatchReactor(bare, cond).solve(C0, (0.0, 0.5), params=bare.default_parameters())
     assert jnp.allclose(a.C[-1], b.C[-1], rtol=1e-8, atol=1e-8)

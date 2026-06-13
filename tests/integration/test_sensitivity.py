@@ -25,7 +25,7 @@ def test_autodiff_matches_finite_difference(simple_network):
 
     def _eval_k(k_val):
         p = params.at[0].set(k_val)
-        sol = reactor.solve(C0, p, t_span=(0.0, 10.0), t_eval=t_eval)
+        sol = reactor.solve(C0, params=p, t_span=(0.0, 10.0), t_eval=t_eval)
         return float(sol.C_named("B")[-1])
 
     h = 1e-4
@@ -215,7 +215,7 @@ def test_fit_recovers_known_rate(simple_network):
     true_k = 0.25
     true_params = simple_network.default_parameters().at[0].set(true_k)
     t_obs = jnp.linspace(0.5, 10.0, 20)
-    sol = reactor.solve(C0, true_params, t_span=(0.0, 10.0), t_eval=t_obs)
+    sol = reactor.solve(C0, params=true_params, t_span=(0.0, 10.0), t_eval=t_obs)
     obs = sol.C_named("B")
 
     # Start from a wrong initial guess (the network default, k = 0.1).
@@ -264,7 +264,7 @@ def _chain_fit_setup(tmp_path):
     reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = jnp.asarray([1.0, 0.0, 0.0])
     t_obs = jnp.linspace(0.5, 10.0, 12)
-    obs = reactor.solve(C0, net.default_parameters(), t_span=(0.0, 10.0), t_eval=t_obs).C_named("C")
+    obs = reactor.solve(C0, params=net.default_parameters(), t_span=(0.0, 10.0), t_eval=t_obs).C_named("C")
     return reactor, C0, obs, t_obs
 
 
@@ -398,7 +398,7 @@ def test_dgsm_through_reactor(simple_network):
 
     def fn(z):
         p = p_def.at[0].set(z[0])
-        sol = reactor.solve(C0, p, t_span=(0.0, 10.0), t_eval=t_eval)
+        sol = reactor.solve(C0, params=p, t_span=(0.0, 10.0), t_eval=t_eval)
         return sol.C_named("B")[-1]
 
     res = aquakin.dgsm(fn, [(0.1, 0.5)], input_names=["A_to_B.k"], n_samples=8)
@@ -466,7 +466,7 @@ def test_dgsm_forward_through_reactor_matches_reverse(simple_network):
     def make_fn(reactor):
         def fn(z):
             p = p_def.at[0].set(z[0])
-            sol = reactor.solve(C0, p, t_span=(0.0, 10.0), t_eval=t_eval)
+            sol = reactor.solve(C0, params=p, t_span=(0.0, 10.0), t_eval=t_eval)
             return sol.C_named("B")[-1]
         return fn
 
@@ -497,7 +497,7 @@ def test_dgsm_forward_through_default_adjoint_errors():
 
     def fn(z):
         p = p_def.at[0].set(z[0])
-        sol = reactor.solve(C0, p, t_span=(0.0, 10.0))
+        sol = reactor.solve(C0, params=p, t_span=(0.0, 10.0))
         return sol.C[-1, 1]
 
     with pytest.raises(RuntimeError, match="forward_adjoint"):
@@ -543,7 +543,7 @@ def test_dgsm_unbatched_forward_default_adjoint_errors():
 
     def fn(z):
         p = p_def.at[0].set(z[0])
-        return reactor.solve(C0, p, t_span=(0.0, 10.0)).C[-1, 1]
+        return reactor.solve(C0, params=p, t_span=(0.0, 10.0)).C[-1, 1]
 
     with pytest.raises(RuntimeError, match="forward_adjoint"):
         aquakin.dgsm(fn, [(0.1, 0.5)], n_samples=8, ad_mode="forward", batched=False)

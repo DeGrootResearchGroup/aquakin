@@ -21,7 +21,7 @@ def growth_setup():
     C0 = net.default_concentrations()
     true = net.default_parameters()
     t = jnp.linspace(0.02, 2.0, 40)
-    sol = reactor.solve(C0, true, t_span=(0.0, 2.0), t_eval=t)
+    sol = reactor.solve(C0, params=true, t_span=(0.0, 2.0), t_eval=t)
     rng = np.random.default_rng(1)
     sig = 0.3
     obs = jnp.stack(
@@ -102,7 +102,7 @@ def test_profile_ic_recovers_initial_condition(simple_network):
     true_k, true_A0 = 0.25, 1.7
     true_params = simple_network.default_parameters().at[0].set(true_k)
     t = jnp.linspace(0.5, 12.0, 25)
-    sol = reactor.solve(jnp.asarray([true_A0, 0.0]), true_params, t_span=(0.0, 12.0), t_eval=t)
+    sol = reactor.solve(jnp.asarray([true_A0, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t)
     obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
     grid = np.linspace(1.3, 2.1, 17)
     pr = aquakin.profile_likelihood(
@@ -124,7 +124,7 @@ def test_profile_open_interval_when_unidentifiable(simple_network):
     )
     true_params = simple_network.default_parameters().at[0].set(0.25)
     t = jnp.linspace(0.1, 0.6, 8)   # early: B ~ A0*k*t, only the product is seen
-    obs = reactor.solve(jnp.asarray([1.5, 0.0]), true_params, t_span=(0.0, 0.6), t_eval=t).C_named("B")
+    obs = reactor.solve(jnp.asarray([1.5, 0.0]), params=true_params, t_span=(0.0, 0.6), t_eval=t).C_named("B")
     grid = np.linspace(1.0, 2.2, 13)
     pr = aquakin.profile_likelihood(
         reactor, jnp.asarray([1.5, 0.0]), obs, t, ["A_to_B.k"], grid=grid,

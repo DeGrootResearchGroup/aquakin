@@ -299,7 +299,7 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint():
     idx = [net.param_index[n] for n in free]
     p_true = p_def.at[jnp.array(idx)].multiply(jnp.array([1.4, 0.6]))
     gen = aquakin.BatchReactor(net, cond, rtol=1e-9, atol=1e-11)
-    obs = gen.solve(C0, p_true, t_span=span, t_eval=t_obs).C[
+    obs = gen.solve(C0, params=p_true, t_span=span, t_eval=t_obs).C[
         :, [net.species_index[s] for s in obs_species]
     ]
 

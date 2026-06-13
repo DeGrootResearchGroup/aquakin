@@ -458,7 +458,7 @@ class CalibrationResult:
             p = base.at[free_idx].set(physical)
             try:
                 cc = np.asarray(
-                    reactor.solve(C0_j, p, t_span=(0.0, t_end), t_eval=t_eval_j).C
+                    reactor.solve(C0_j, params=p, t_span=(0.0, t_end), t_eval=t_eval_j).C
                 )
             except Exception:
                 continue
@@ -978,7 +978,7 @@ def calibrate(
                 )
                 preds.append(ys[:, obs_species_indices])
             else:
-                sol = rctr.solve(C0_k, p, t_span=tspan_i, t_eval=tobs_i)
+                sol = rctr.solve(C0_k, params=p, t_span=tspan_i, t_eval=tobs_i)
                 preds.append(sol.C[:, obs_species_indices])
         return preds
 

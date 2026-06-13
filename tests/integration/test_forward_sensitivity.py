@@ -61,7 +61,7 @@ def test_matches_jacfwd_multi_param():
     ref = aquakin.BatchReactor(net, cond, adjoint=diffrax.DirectAdjoint())
 
     def Cfn(pp):
-        return ref.solve(C0, pp, (0.0, 5.0), t_eval).C
+        return ref.solve(C0, (0.0, 5.0), t_eval, params=pp).C
 
     J = jax.jacfwd(Cfn)(p)  # (n_t, n_species, n_params)
 
@@ -121,7 +121,7 @@ def test_biofilm_sensitivity_matches_jacfwd(simple_network):
     )
 
     def bulkC(pp):
-        return ref.solve(C0, pp, (0.0, 5.0), t_eval).C  # bulk trajectory
+        return ref.solve(C0, (0.0, 5.0), t_eval, params=pp).C  # bulk trajectory
 
     J = jax.jacfwd(bulkC)(p)[:, :, 0]
 
@@ -146,7 +146,7 @@ def test_pfr_sensitivity_matches_jacfwd(simple_network):
     # The PFR uses the default (reverse-mode) adjoint, so the reference Jacobian
     # is taken with jacrev; the augmented forward solve must reproduce it.
     def Cfn(pp):
-        return ref.solve(C0, pp).C
+        return ref.solve(C0, params=pp).C
 
     J = jax.jacrev(Cfn)(p)[:, :, 0]
     _, S = ref.solve_sensitivity(C0, p, sens_params=["A_to_B.k"])
@@ -291,7 +291,7 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
     )
 
     def Cfn_uncapped(pp):
-        return uncapped.solve(C0, pp, (0.0, 0.1), t_eval).C
+        return uncapped.solve(C0, (0.0, 0.1), t_eval, params=pp).C
 
     uncapped_bad = False
     try:
@@ -307,7 +307,7 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
     )
 
     def Cfn_capped(pp):
-        return capped.solve(C0, pp, (0.0, 0.1), t_eval).C
+        return capped.solve(C0, (0.0, 0.1), t_eval, params=pp).C
 
     J_cap = jax.jacfwd(Cfn_capped)(p)[:, :, idx]
     assert bool(jnp.all(jnp.isfinite(J_cap)))
@@ -369,7 +369,7 @@ def test_state_derived_ph_jvp_flows_and_matches():
     )
 
     def Cfn(pp):
-        return capped.solve(C0, pp, (0.0, 0.1), t_eval).C
+        return capped.solve(C0, (0.0, 0.1), t_eval, params=pp).C
 
     J = jax.jacfwd(Cfn)(p)[:, :, idx]
     r = aquakin.BatchReactor(net, cond)
