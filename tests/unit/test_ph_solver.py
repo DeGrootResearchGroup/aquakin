@@ -191,3 +191,86 @@ def test_gradient_correct_in_weak_buffer_regime():
     eps = 1e-8
     fd = (float(f(s0 + eps)) - float(f(s0 - eps))) / (2 * eps)
     assert g == pytest.approx(fd, rel=1e-5)
+
+
+# ----- Ionic-strength activity corrections (issue #205) --------------------
+
+from aquakin.core.ph_solver import debye_huckel_A  # noqa: E402
+
+
+def test_activity_none_is_bit_identical_to_default():
+    """activity_model='none' must reproduce the historic concentration-based
+    solver exactly -- this is what keeps every validated BSM2/WATS result
+    recoverable bit-for-bit."""
+    kw = dict(tot_carbonate=3e-3, tot_ammonia=4e-3, tot_phosphate=1e-3,
+              strong_anion_eq=2e-3, z_cation_eq=5e-3, T_kelvin=308.15)
+    assert float(solve_ph(**kw)) == float(solve_ph(**kw, activity_model="none"))
+
+
+def test_debye_huckel_A_value():
+    assert float(debye_huckel_A(298.15)) == pytest.approx(0.51, abs=0.01)
+    # Rises slowly with temperature.
+    assert float(debye_huckel_A(308.15)) > float(debye_huckel_A(298.15))
+
+
+@pytest.mark.parametrize("model", ["davies", "debye_huckel"])
+@pytest.mark.parametrize("I", [0.01, 0.1, 0.25])
+def test_pure_water_in_inert_salt_stays_neutral(model, I):
+    """An inert (neutral) salt cannot change the pH of pure water: the
+    *measurable* activity pH stays at the neutral value at any ionic strength.
+    This is the decisive check on the activity-pH formulation -log10(g_H [H+])."""
+    T = 298.15
+    neutral = float(solve_ph(T_kelvin=T))                      # no salt
+    salted = float(solve_ph(T_kelvin=T, activity_model=model,
+                            ionic_strength_strong=I))
+    assert salted == pytest.approx(neutral, abs=1e-4)
+
+
+@pytest.mark.parametrize("model", ["davies", "debye_huckel"])
+def test_activity_lowers_carbonate_buffer_ph(model):
+    """Raising ionic strength increases dissociation (conditional pKa drop), so a
+    carbonate buffer's pH falls -- by a sensible ~0.1-0.3 units at I~0.1."""
+    buf = dict(tot_carbonate=5e-3, z_cation_eq=5e-3, T_kelvin=308.15)
+    p0 = float(solve_ph(**buf))
+    pI = float(solve_ph(**buf, activity_model=model, ionic_strength_strong=0.1))
+    assert -0.4 < pI - p0 < -0.05
+
+
+@pytest.mark.parametrize("model", ["davies", "debye_huckel"])
+def test_activity_reduces_to_none_at_low_strength(model):
+    """As the total ion content -> 0 the activity coefficients -> 1, so the
+    activity path collapses onto the ideal one. (At finite ionic strength even
+    the buffer's own dissolved ions contribute, so the two coincide only in the
+    dilute limit.)"""
+    kw = dict(tot_carbonate=1e-6, z_cation_eq=1e-6, T_kelvin=298.15)
+    assert float(solve_ph(**kw, activity_model=model,
+                          ionic_strength_strong=0.0)) == pytest.approx(
+        float(solve_ph(**kw)), abs=2e-3)
+
+
+def test_activity_solve_is_converged():
+    """The coupled ionic-strength / [H+] fixed point is converged at n_iter=40
+    (more iterations do not move it)."""
+    kw = dict(tot_carbonate=5e-3, tot_ammonia=3e-3, z_cation_eq=5e-3,
+              T_kelvin=308.15, activity_model="davies",
+              ionic_strength_strong=0.1)
+    assert float(solve_ph(**kw, n_iter=40)) == pytest.approx(
+        float(solve_ph(**kw, n_iter=80)), abs=1e-8)
+
+
+def test_activity_gradient_matches_fd():
+    """AD through the activity-coupled solve is finite and matches central FD."""
+    def f(z):
+        return solve_ph(tot_carbonate=5e-3, z_cation_eq=z, T_kelvin=308.15,
+                        activity_model="davies", ionic_strength_strong=0.1)
+    z0 = 5e-3
+    g = float(jax.grad(f)(z0))
+    assert np.isfinite(g)
+    eps = 1e-7
+    fd = (float(f(z0 + eps)) - float(f(z0 - eps))) / (2 * eps)
+    assert g == pytest.approx(fd, rel=1e-4)
+
+
+def test_invalid_activity_model_raises():
+    with pytest.raises(ValueError, match="activity_model"):
+        solve_ph(tot_carbonate=1e-3, activity_model="bogus")

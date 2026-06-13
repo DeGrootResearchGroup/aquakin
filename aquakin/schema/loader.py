@@ -29,6 +29,29 @@ def _yaml_to_spec(text: str, source: str) -> NetworkSpec:
         raise ValueError(f"Invalid network specification in {source}: {exc}") from exc
 
 
+def _apply_activity_override(spec: NetworkSpec, activity_model: str) -> NetworkSpec:
+    """Override the speciation ``activity_model`` on a loaded spec.
+
+    Lets a caller enable an ionic-strength activity correction on a shipped
+    network whose YAML ships ``activity_model: none`` (e.g. ``adm1``), without
+    editing the YAML. Raises if the network has no ``speciation:`` block (there
+    is no pH solver to correct) or the value is invalid.
+    """
+    from aquakin.core.ph_solver import _ACTIVITY_MODELS
+
+    if activity_model not in _ACTIVITY_MODELS:
+        raise ValueError(
+            f"activity_model must be one of {_ACTIVITY_MODELS}; got "
+            f"{activity_model!r}")
+    if spec.speciation is None:
+        raise ValueError(
+            "activity_model override requires the network to declare a "
+            "speciation: block (a state-derived pH); this network has none.")
+    spec.speciation = spec.speciation.model_copy(
+        update={"activity_model": activity_model})
+    return spec
+
+
 # Built-in networks are deterministic for a given name and are treated as
 # immutable (nothing mutates a CompiledNetwork in place; temperature
 # re-referencing etc. go through ``dataclasses.replace``, which copies). Caching
@@ -45,7 +68,7 @@ def clear_network_cache() -> None:
     _NETWORK_CACHE.clear()
 
 
-def load_network(name: str) -> CompiledNetwork:
+def load_network(name: str, *, activity_model: Union[str, None] = None) -> CompiledNetwork:
     """
     Load a built-in network shipped with ``aquakin``.
 
@@ -57,14 +80,23 @@ def load_network(name: str) -> CompiledNetwork:
     ----------
     name : str
         Network name (e.g. ``"ozone_bromate"``).
+    activity_model : str, optional
+        Override the speciation ``activity_model`` (ionic-strength activity
+        correction in the pH solver) -- e.g. ``"davies"`` to run ``adm1`` with
+        activity coefficients instead of the shipped ``"none"`` (which uses molar
+        concentrations directly, the ADM1/BSM2 convention). Requires the network
+        to declare a ``speciation:`` block. When given, the cache is bypassed (so
+        the default and the overridden network coexist); ``None`` (default)
+        returns the cached default unchanged.
 
     Returns
     -------
     CompiledNetwork
     """
-    cached = _NETWORK_CACHE.get(name)
-    if cached is not None:
-        return cached
+    if activity_model is None:
+        cached = _NETWORK_CACHE.get(name)
+        if cached is not None:
+            return cached
     resource = files("aquakin.networks") / f"{name}.yaml"
     if not resource.is_file():
         available = sorted(
@@ -77,12 +109,17 @@ def load_network(name: str) -> CompiledNetwork:
         )
     text = resource.read_text(encoding="utf-8")
     spec = _yaml_to_spec(text, f"built-in network '{name}'")
+    if activity_model is not None:
+        spec = _apply_activity_override(spec, activity_model)
+        return compile_network(spec)
     net = compile_network(spec)
     _NETWORK_CACHE[name] = net
     return net
 
 
-def load_network_from_file(path: Union[str, Path]) -> CompiledNetwork:
+def load_network_from_file(
+    path: Union[str, Path], *, activity_model: Union[str, None] = None
+) -> CompiledNetwork:
     """
     Load a network from a YAML file on disk.
 
@@ -90,6 +127,8 @@ def load_network_from_file(path: Union[str, Path]) -> CompiledNetwork:
     ----------
     path : str or Path
         Path to a YAML network file.
+    activity_model : str, optional
+        Override the speciation ``activity_model`` (see :func:`load_network`).
 
     Returns
     -------
@@ -100,4 +139,6 @@ def load_network_from_file(path: Union[str, Path]) -> CompiledNetwork:
         raise FileNotFoundError(f"Network file not found: {p}")
     text = p.read_text(encoding="utf-8")
     spec = _yaml_to_spec(text, str(p))
+    if activity_model is not None:
+        spec = _apply_activity_override(spec, activity_model)
     return compile_network(spec)

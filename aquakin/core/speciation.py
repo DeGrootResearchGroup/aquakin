@@ -90,6 +90,7 @@ def build_ph_derived_fn(
     temp_field = config["temperature_field"]
     temp_units = config.get("temperature_units", "celsius")
     n_iter = int(config.get("n_iter", 40))
+    activity_model = config.get("activity_model", "none")
 
     if temp_units not in ("celsius", "kelvin"):
         raise ValueError(
@@ -176,12 +177,27 @@ def build_ph_derived_fn(
         for idx, mm, charge in cation_terms:
             z_cation_eq = z_cation_eq + charge * jnp.maximum(C[idx], 0.0) / mm
 
+        extra = {}
+        if activity_model != "none":
+            # The pH-independent strong-ion ionic strength 1/2 sum c*z^2. Only the
+            # speciation layer knows each strong ion's charge (the solver receives
+            # them lumped into the charge sums), so it is computed here. The fixed
+            # cation-charge offset is taken monovalent (z=1).
+            I_strong = 0.5 * jnp.abs(z_cation_eq)
+            for idx, mm, charge in strong_terms:
+                I_strong = I_strong + 0.5 * charge * charge * jnp.maximum(C[idx], 0.0) / mm
+            for idx, mm, charge in cation_terms:
+                I_strong = I_strong + 0.5 * charge * charge * jnp.maximum(C[idx], 0.0) / mm
+            extra = dict(activity_model=activity_model,
+                         ionic_strength_strong=I_strong)
+
         pH = solve_ph(
             strong_anion_eq=strong_anion_eq,
             z_cation_eq=z_cation_eq,
             T_kelvin=T_kelvin,
             n_iter=n_iter,
             **kwargs,
+            **extra,
         )
         return {field: pH}
 

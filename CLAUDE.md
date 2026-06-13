@@ -1033,6 +1033,33 @@ pH solver. Validated against an independent bisection root finder, and the
 weak-buffer / extreme-charge regime that broke the old bare-Newton scheme is
 regression-tested, in `tests/unit/test_ph_solver.py`.
 
+**Ionic-strength activity corrections (`activity_model`).** By default the solver
+uses molar **concentrations** directly with thermodynamic equilibrium constants
+(all activity coefficients γ = 1) — the published ADM1/BSM2 convention, and the
+behaviour every validated BSM2/WATS result is pinned to. Commercial simulators
+(SUMO, BioWin, GPS-X) instead apply an ionic-strength activity correction, which
+at digester/sewer ionic strengths (I ≈ 0.05–0.2 M) shifts pH by ~0.1–0.3 units.
+`solve_ph(..., activity_model=...)` adds this as an **opt-in** static option:
+`"none"` (default, the γ = 1 path — a trace-time Python branch, so it is
+**bit-identical** to the historic solver), `"davies"` (the Davies equation, valid
+to I ≈ 0.5 M), or `"debye_huckel"` (extended Debye–Hückel / Güntelberg, to
+I ≈ 0.1 M). With a non-`none` model the dissociation constants become *conditional*
+(concentration-basis) constants `Kc = K·γ_acid/(γ_H·γ_base)` at the
+**self-consistent** ionic strength — the coupled `I`↔`[H+]` fixed point is solved
+*inside* the same bracketed scan by carrying `I` (it converges together with
+`[H+]`), and the returned pH is the **measurable** `−log10(a_H) = −log10(γ_H·[H+])`
+(which reduces to `−log10[H+]` at γ = 1). The Debye–Hückel `A(T)` comes from the
+water dielectric (`debye_huckel_A`). NH₄⁺/NH₃ is charge-symmetric so its Ka is
+unchanged; the strong-ion contribution to `I` (`½Σc z²`) is supplied by the
+speciation layer, which holds each strong ion's charge. The whole path stays
+`jit`/`vmap`/`grad`-clean (the IFT pH sensitivity flows through it). Decisive
+correctness check: pure water in an inert salt stays at the neutral pH for any
+`I` (`tests/unit/test_ph_solver.py`). Exposed two ways: the `speciation:` block's
+`activity_model:` field (per-network YAML), and a load-time override
+`load_network("adm1", activity_model="davies")` (and `load_network_from_file(...,
+activity_model=...)`) to run a *shipped* network with activities without editing
+its YAML.
+
 ### Derived conditions (the wiring)
 
 `CompiledNetwork` carries an optional `derived_condition_fn(C, params,
@@ -1054,6 +1081,7 @@ speciation:
   temperature_units: celsius # or "kelvin"
   z_cation_eq: 3.28e-3      # net fixed cation-charge OFFSET (eq/L); literal or {condition: name}
   n_iter: 40
+  activity_model: none      # ionic-strength correction: none (default) | davies | debye_huckel
   totals:                   # species -> acid/base total (molar_mass converts mg/L -> mol/L)
     carbonate: {species: S_CO2, molar_mass: 12000}
     acetate:   {species: S_VFA, molar_mass: 64000}

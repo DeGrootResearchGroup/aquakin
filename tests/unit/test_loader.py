@@ -165,3 +165,62 @@ def test_non_validation_error_propagates(tmp_path, monkeypatch):
     )
     with pytest.raises(RecursionError):
         aquakin.load_network_from_file(p)
+
+
+# ----- speciation activity_model override (issue #205) ---------------------
+
+def test_load_network_activity_override_shifts_ph_and_keeps_default():
+    """load_network(..., activity_model=) overrides the speciation activity
+    model on a shipped network; the cached default is untouched."""
+    import jax.numpy as jnp
+    from aquakin import load_network
+
+    base = load_network("adm1")                      # cached default (none)
+    dav = load_network("adm1", activity_model="davies")
+    assert dav is not base
+    assert load_network("adm1") is base              # default still cached/unchanged
+
+    C = base.default_concentrations()
+    conds = {f: jnp.asarray([v]) for f, v in base._condition_defaults.items()}
+
+    def ph(net):
+        return float(net.derived_condition_fn(
+            C, net.default_parameters(), conds, 0)["pH"])
+
+    ph_base, ph_dav = ph(base), ph(dav)
+    assert ph_base == pytest.approx(7.27, abs=0.05)  # validated BSM2 digester pH
+    assert abs(ph_dav - ph_base) > 0.02              # activity-shifted
+
+
+def test_activity_override_requires_speciation_block():
+    from aquakin import load_network
+    with pytest.raises(ValueError, match="speciation"):
+        load_network("asm1", activity_model="davies")   # no pH solver
+
+
+def test_activity_override_validates_model_name():
+    from aquakin import load_network
+    with pytest.raises(ValueError, match="activity_model"):
+        load_network("adm1", activity_model="bogus")
+
+
+def test_speciation_activity_model_validated_in_yaml(tmp_path):
+    """A bad activity_model in a speciation: block is rejected at load."""
+    body = """
+    network:
+      name: t
+      version: "1"
+    species:
+      - {name: S_IC, units: mol/L, default_concentration: 1.0e-3}
+    conditions:
+      - {name: T, default: 25.0}
+    speciation:
+      temperature_field: T
+      activity_model: bogus
+      totals:
+        carbonate: {species: S_IC, molar_mass: 1.0}
+    reactions:
+      - {name: r, rate: "0.0 * [S_IC]", stoichiometry: {S_IC: -1}}
+    """
+    with pytest.raises(ValueError, match="activity_model"):
+        aquakin.load_network_from_file(_write(tmp_path, body))
