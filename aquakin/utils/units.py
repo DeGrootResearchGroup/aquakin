@@ -31,6 +31,7 @@ from typing import NamedTuple, Optional
 
 from aquakin.core.nodes import (
     AddNode,
+    MaxNode,
     ArrheniusNode,
     ASTNode,
     ConditionNode,
@@ -425,6 +426,20 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Optional[Dimension]:
                      f"{lo} vs {ro}")
         # Result carries either side's dimension (they should agree); prefer a
         # known one so the rest of the expression can still be checked.
+        return lo if lo is not None else ro
+    if isinstance(node, MaxNode):
+        # max(a, b) is dimensionally like add/subtract: the operands must share a
+        # unit and the result carries it. A bare literal (the ``0`` in a
+        # ``max(0, .)`` clip) adopts the sibling's dimension silently.
+        lo = _infer(node.a, ctx)
+        ro = _infer(node.b, ctx)
+        if isinstance(node.a, ConstantNode):
+            return ro
+        if isinstance(node.b, ConstantNode):
+            return lo
+        if lo is not None and ro is not None and lo != ro:
+            ctx.warn("'max' operands",
+                     f"max() operands differ in units: {lo} vs {ro}")
         return lo if lo is not None else ro
     if isinstance(node, MultiplyNode):
         lo = _infer(node.left, ctx)

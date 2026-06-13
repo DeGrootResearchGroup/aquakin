@@ -444,6 +444,32 @@ class SafeDivideNode(ASTNode):
 
 
 @dataclass(frozen=True)
+class MaxNode(ASTNode):
+    """Elementwise maximum ``max(a, b)`` -- the ``max(a, b)`` rate function.
+
+    Used to one-sidedly clip a quantity, e.g. ``max(0, P_gas - P_atm)`` so an
+    overpressure-driven flux only ever leaves (never reverses) when the driving
+    difference goes negative. AD-safe (``jnp.maximum`` carries the subgradient at
+    the kink); identity away from it.
+    """
+
+    a: ASTNode
+    b: ASTNode
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        af = self.a.compile(ctx)
+        bf = self.b.compile(ctx)
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            return jnp.maximum(
+                af(C, params, condition_arrays, loc_idx),
+                bf(C, params, condition_arrays, loc_idx),
+            )
+
+        return _eval
+
+
+@dataclass(frozen=True)
 class pHSwitchNode(ASTNode):
     """
     Acid/base speciation fraction: ``1 / (1 + 10^(pH - pKa))``.

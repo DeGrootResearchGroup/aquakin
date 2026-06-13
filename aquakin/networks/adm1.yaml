@@ -36,10 +36,10 @@ network:
     state to ~1-3% on the substrates, biomass and biogas, and its
     charge-balance pH (~7.27) matches the reference electroneutrality relation
     (see tests/validation/test_adm1_bsm2_steadystate.py). The gas outflow uses
-    the smooth overpressure form ``k_P*(P_gas - P_atm)`` without the lower
-    ``max(0, .)`` clip, so a (transient) sub-atmospheric headspace draws gas
-    back in rather than holding the valve shut; at the digester operating point
-    P_gas > P_atm throughout, so biogas only ever leaves.
+    the overpressure form ``k_P*max(0, P_gas - P_atm)`` -- the lower ``max(0, .)``
+    clip holds the valve shut rather than drawing gas back in if the headspace
+    ever goes (transiently) sub-atmospheric. At the digester operating point
+    P_gas > P_atm throughout, so the clip is inactive and biogas only leaves.
   references:
     - "Batstone, D.J. et al. (2002). Anaerobic Digestion Model No. 1 (ADM1). IWA Sci. Tech. Rep. No. 13."
     - "Rosen, C. & Jeppsson, U. (2006). Aspects on ADM1 Implementation within the BSM2 Framework. Tech. Report, Lund University."
@@ -283,8 +283,11 @@ expressions:
   p_gas_co2: "R_T * [S_gas_co2]"
   P_gas:     "R_T / 16 * [S_gas_h2] + R_T / 64 * [S_gas_ch4] + R_T * [S_gas_co2] + p_h2o"
   # gas outflow per gas-volume (q_gas / V_gas); k_P*(P_gas - P_atm) is the BSM2
-  # gas-flow law (kept un-clipped here: a steady digester runs above P_atm).
-  q_gas_norm: "k_P * (R_T / 16 * [S_gas_h2] + R_T / 64 * [S_gas_ch4] + R_T * [S_gas_co2] + p_h2o - P_atm) / V_gas"
+  # gas-flow law, clipped by max(0, .) so a (transient) sub-atmospheric headspace
+  # only stops venting rather than drawing gas back in (it runs above P_atm at
+  # steady state, so the clip is inactive there and the validated state is
+  # unchanged).
+  q_gas_norm: "k_P * max(0, P_gas - P_atm) / V_gas"
   # dissolved CO2 (un-ionised acid fraction of inorganic carbon) at the local pH
   S_co2_diss: "[S_IC] * pH_switch(pKa_co2)"
 

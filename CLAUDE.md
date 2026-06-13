@@ -493,6 +493,11 @@ tree itself is not walked repeatedly.
   — so the rate takes its physical limit 0 there without padding the denominator
   with a dimensionless epsilon. Used by ADM1's valerate/butyrate C4 competition
   (`safe_div([S_va], [S_va] + [S_bu])`), replacing the old `+ 1.0e-6` guard.
+- `MaxNode(a, b)` — the `max(a, b)` function: elementwise maximum, AD-safe
+  (`jnp.maximum`, active-branch subgradient at the kink). For a one-sided clip,
+  e.g. ADM1's biogas outflow `k_P * max(0, P_gas - P_atm)` so an
+  overpressure-driven flux only stops (never reverses) when the driving
+  difference goes negative.
 
 The four Monod nodes and `SafeDivideNode` all evaluate their `num/denom` through
 `_safe_ratio` (`core/nodes.py`), a **double-where** guard returning 0 (with a

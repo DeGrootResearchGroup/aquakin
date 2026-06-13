@@ -16,8 +16,8 @@ Grammar (lowest to highest precedence)::
 An identifier without parentheses is a rate-constant reference (``ParamNode``);
 ``[name]`` is a species and ``{name}`` a condition field. The built-in function
 names ``arrhenius``, ``pH_switch``, ``pH_inhibit``, ``monod``, ``monod_inh``,
-``monod_ratio``, ``monod_inh_ratio`` and ``safe_div`` emit their respective
-domain nodes. Any other identifier with parentheses is rejected.
+``monod_ratio``, ``monod_inh_ratio``, ``safe_div`` and ``max`` emit their
+respective domain nodes. Any other identifier with parentheses is rejected.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from aquakin.core.nodes import (
     ConstantNode,
     DivideNode,
     MonodInhibitionNode,
+    MaxNode,
     MonodInhibitionRatioNode,
     MonodNode,
     MonodRatioNode,
@@ -62,6 +63,7 @@ _FUNCTIONS = {
     "monod_ratio": (MonodRatioNode, ("A", "B", "K")),
     "monod_inh_ratio": (MonodInhibitionRatioNode, ("A", "B", "K")),
     "safe_div": (SafeDivideNode, ("num", "denom")),
+    "max": (MaxNode, ("a", "b")),
 }
 
 
