@@ -27,6 +27,7 @@ from aquakin.plant.plant import (
     Connection,
     ParameterLayout,
     Plant,
+    PlantCheck,
     PlantSolution,
     SteadyStateResult,
 )
@@ -80,6 +81,7 @@ __all__ = [
     "ParameterLayout",
     "PiecewiseConstantSchedule",
     "Plant",
+    "PlantCheck",
     "PlantSolution",
     "PrimaryClarifier",
     "FlowContext",
