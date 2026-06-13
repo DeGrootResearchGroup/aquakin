@@ -305,6 +305,7 @@ def build_bsm2(
     bypass: Optional["InfluentBypass"] = None,
     hydraulic_delay: Optional["HydraulicDelay"] = None,
     wastage_schedule: Optional["object"] = None,
+    do_temperature_correction: bool = False,
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
@@ -355,6 +356,16 @@ def build_bsm2(
         underflow follows ``Qr + Qw(t)`` so the waste pump steps on the schedule
         (the BSM2 timed-wastage strategy) rather than the constant ``Qw=300``.
         Default None (constant wastage).
+    do_temperature_correction : bool, optional
+        If True, temperature-correct the aeration oxygen transfer at the AS
+        operating temperature (see :class:`~aquakin.plant.cstr.Aeration`): the
+        saturation scales by ``C_s(T)/C_s(ref_T)`` and the open-loop ``kLa`` by
+        ``1.024**(T-ref_T)``, with ``ref_T`` the reactors' static temperature so
+        the correction is unity at the benchmark operating point. Default False,
+        which keeps the IWA-faithful constant ``C_sat=8`` / constant ``kLa``.
+        Turn it on for a seasonal (temperature-carrying-influent) run, where the
+        constant saturation otherwise under-models oxygen transfer while the
+        kinetics already track temperature.
 
     Returns
     -------
@@ -459,6 +470,14 @@ def build_bsm2(
     if carbon_flow > 0:
         as_ports.append("carbon")   # external carbon dosed to reactor 1
     plant.add_unit(MixerUnit(name="as_mix", input_port_names=as_ports, network=asm1))
+    # Aeration temperature-correction kwargs, shared by both construction
+    # branches. The reference temperature is the reactors' static T, so the
+    # correction is unity at the benchmark operating point and only a
+    # temperature-carrying influent drives it. Empty (no correction) by default.
+    do_corr = (
+        {"temperature_correction": True, "ref_T": float(conditions["T"])}
+        if do_temperature_correction and "T" in conditions else {}
+    )
     for i in range(5):
         tank = f"tank{i + 1}"
         if do_control and tank in BSM2_DO_KLA_GAINS:
@@ -470,9 +489,10 @@ def build_bsm2(
                 controller="do_control", sensor="tank4",
                 gain=BSM2_DO_KLA_GAINS[tank], Kp=BSM2_DO_KP, Ti=BSM2_DO_TI,
                 Tt=BSM2_DO_TT, kla_offset=BSM2_DO_KLA_OFFSET, kla_min=0.0,
-                kla_max=BSM2_DO_KLA_MAX)
+                kla_max=BSM2_DO_KLA_MAX, **do_corr)
         elif BSM2_KLA[i] > 0:
-            aeration = Aeration(kla=BSM2_KLA[i], do_sat=BSM2_DO_SATURATION)
+            aeration = Aeration(kla=BSM2_KLA[i], do_sat=BSM2_DO_SATURATION,
+                                **do_corr)
         else:
             aeration = None
         plant.add_unit(CSTRUnit(
