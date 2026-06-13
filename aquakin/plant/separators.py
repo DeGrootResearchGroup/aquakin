@@ -33,13 +33,14 @@ from aquakin.plant._constants import (
     ASM1_TSS_SPECIES,
 )
 from aquakin.plant.streams import Stream
+from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
 
 
 @dataclass
-class IdealThickener:
+class IdealThickener(StatelessUnit):
     """Stateless ideal %TSS separator (BSM2 thickener / dewatering).
 
     Parameters
@@ -79,10 +80,7 @@ class IdealThickener:
     overflow_port: str = "overflow"
     underflow_port: str = "underflow"
 
-    @property
-    def state_size(self) -> int:
-        # Stateless separator: instantaneous, no ODE state of its own.
-        return 0
+    # state_size / initial_state / rhs come from StatelessUnit.
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.tss_removal_percent <= 100.0):
@@ -120,9 +118,6 @@ class IdealThickener:
     @property
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
-
-    def initial_state(self) -> jnp.ndarray:
-        return jnp.zeros((0,))
 
     def compute_outputs(
         self,
@@ -180,13 +175,3 @@ class IdealThickener:
             self.underflow_port: Q_in * frac,
             self.overflow_port: Q_in * (1.0 - frac),
         }
-
-    def rhs(
-        self,
-        t: jnp.ndarray,
-        state: jnp.ndarray,
-        inputs: dict[str, Stream],
-        params: jnp.ndarray,
-        signals: "dict | None" = None,
-    ) -> jnp.ndarray:
-        return jnp.zeros((0,))

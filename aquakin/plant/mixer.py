@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant.streams import Stream
+from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
@@ -17,7 +18,7 @@ _EPS_Q = 1e-12  # guard against 0/0 when all inflows are zero
 
 
 @dataclass
-class MixerUnit:
+class MixerUnit(StatelessUnit):
     """Combines two or more input streams into a single output stream by
     mass balance: ``Q_out = sum(Q_in_i)``, ``C_out = sum(Q_in_i * C_in_i) / Q_out``.
 
@@ -39,10 +40,7 @@ class MixerUnit:
     input_port_names: list[str]
     network: "CompiledNetwork"
 
-    @property
-    def state_size(self) -> int:
-        # Stateless: a mixer's output is an algebraic function of its inputs.
-        return 0
+    # state_size / initial_state / rhs come from StatelessUnit.
 
     @property
     def input_ports(self) -> list[str]:
@@ -53,9 +51,6 @@ class MixerUnit:
         # List-returning property to match the Unit Protocol (list[str]) and the
         # CSTR / clarifier units; the single output port is always "out".
         return ["out"]
-
-    def initial_state(self) -> jnp.ndarray:
-        return jnp.zeros((0,))
 
     def compute_outputs(
         self,
@@ -95,19 +90,9 @@ class MixerUnit:
             Q_total = Q_total + input_flows[name]
         return {"out": Q_total}
 
-    def rhs(
-        self,
-        t: jnp.ndarray,
-        state: jnp.ndarray,
-        inputs: dict[str, Stream],
-        params: jnp.ndarray,
-        signals: "dict | None" = None,
-    ) -> jnp.ndarray:
-        return jnp.zeros((0,))
-
 
 @dataclass
-class SplitterUnit:
+class SplitterUnit(StatelessUnit):
     """Splits one input stream into N output streams.
 
     Concentration is preserved across all outputs (passive splitter); only
@@ -163,10 +148,7 @@ class SplitterUnit:
     threshold_port: "str | None" = None
     remainder_port: "str | None" = None
 
-    @property
-    def state_size(self) -> int:
-        # Stateless: a splitter routes its inlet flow by fixed ratios/flows.
-        return 0
+    # state_size / initial_state / rhs come from StatelessUnit.
 
     @property
     def _mode(self) -> str:
@@ -227,9 +209,6 @@ class SplitterUnit:
             return list(self.output_port_flows.keys()) + [self.remainder_port]
         return [self.threshold_port, self.remainder_port]
 
-    def initial_state(self) -> jnp.ndarray:
-        return jnp.zeros((0,))
-
     def compute_outputs(
         self,
         t: jnp.ndarray,
@@ -287,13 +266,3 @@ class SplitterUnit:
                for port, q in self.output_port_flows.items()}
         out[self.remainder_port] = Q_in - sum(out.values())
         return out
-
-    def rhs(
-        self,
-        t: jnp.ndarray,
-        state: jnp.ndarray,
-        inputs: dict[str, Stream],
-        params: jnp.ndarray,
-        signals: "dict | None" = None,
-    ) -> jnp.ndarray:
-        return jnp.zeros((0,))

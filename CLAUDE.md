@@ -1709,7 +1709,12 @@ Key types:
   unit ignores it), and `flow_outputs` always receives a `FlowContext` carrying
   the unit's own state and the time (a fixed-split unit ignores it). The one
   optional, duck-typed hook is `signal_outputs(...)`, implemented only by units
-  that *produce* control signals (e.g. `PIController`).
+  that *produce* control signals (e.g. `PIController`). A **stateless** unit
+  (`state_size == 0`: mixers, splitters, ideal separators) inherits the
+  `StatelessUnit` mixin (`plant/units.py`), which supplies the three trivial
+  state members (`state_size → 0`, empty `initial_state`, no-op `rhs`), so it
+  only writes `compute_outputs` / `flow_outputs`. It is a plain mixin, not part
+  of the Protocol, so it composes with the `@dataclass` units.
 - `StateTranslator` Protocol — converts streams between networks.
   `IdentityTranslator` covers single-network plants (BSM1).
 - `Plant` — assembles units and connections, drives the monolithic

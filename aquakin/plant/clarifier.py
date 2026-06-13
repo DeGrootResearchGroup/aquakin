@@ -28,13 +28,14 @@ from aquakin.plant._flow_split import (
     validate_controlled_split,
 )
 from aquakin.plant.streams import Stream
+from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
 
 
 @dataclass
-class IdealClarifier:
+class IdealClarifier(StatelessUnit):
     """Stateless ideal solid/liquid separator.
 
     Soluble species pass through to both outflow streams at the inlet
@@ -85,10 +86,7 @@ class IdealClarifier:
     overflow_port: str = "overflow"
     underflow_port: str = "underflow"
 
-    @property
-    def state_size(self) -> int:
-        # Stateless separator: instantaneous, no ODE state of its own.
-        return 0
+    # state_size / initial_state / rhs come from StatelessUnit.
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.capture_efficiency <= 1.0):
@@ -115,9 +113,6 @@ class IdealClarifier:
     @property
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
-
-    def initial_state(self) -> jnp.ndarray:
-        return jnp.zeros((0,))
 
     def _split_flows(self, Q_in: jnp.ndarray, clamp: bool):
         return split_controlled_flows(
@@ -177,13 +172,3 @@ class IdealClarifier:
         Q_in = input_flows[self.input_port]
         Q_over, Q_under = self._split_flows(Q_in, clamp=False)
         return {self.overflow_port: Q_over, self.underflow_port: Q_under}
-
-    def rhs(
-        self,
-        t: jnp.ndarray,
-        state: jnp.ndarray,
-        inputs: dict[str, Stream],
-        params: jnp.ndarray,
-        signals: "dict | None" = None,
-    ) -> jnp.ndarray:
-        return jnp.zeros((0,))
