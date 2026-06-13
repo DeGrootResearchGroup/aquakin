@@ -1,9 +1,9 @@
 """BSM2 closed-loop reject control (storage-tank level controller).
 
 The reject-water storage tank holds the recycled reject and returns it to the
-plant front. Run **open-loop** (``reject_storage=True``, zero release) it simply
+plant front. Run **open-loop** (``reject=RejectStorage()``, zero release) it simply
 fills to its limit and bypasses the whole reject stream -- the tank does no
-buffering. Run **closed-loop** (``reject_control=True``) a proportional level
+buffering. Run **closed-loop** (``reject=RejectStorage(control=True)``) a proportional level
 controller manipulates the release: the tank settles at a mid-level and releases
 the reject smoothly through the controlled pump, with no overflow bypass. It is
 then a functioning equalisation tank -- the reject returns as a controlled,
@@ -21,6 +21,7 @@ import aquakin
 from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
     build_bsm2,
+    RejectStorage,
     bsm2_asm1_network,
     bsm2_constant_influent,
     bsm2_parameters,
@@ -30,7 +31,7 @@ from aquakin.plant.bsm.bsm2 import BSM2_STORAGE_VOLUME
 
 def _run(asm1, adm1, params, **kw):
     plant = build_bsm2(asm1, adm1, **kw)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
     sol = plant.solve(t_span=(0.0, 80.0), t_eval=jnp.array([0.0, 80.0]),
                       params=params, y0=jnp.asarray(y0),
@@ -49,8 +50,8 @@ def main() -> None:
               f"{'bypassed':>11}{'tank5 XB_H':>12}")
     print(header)
     print("-" * len(header))
-    for label, kw in (("open-loop (release=0)", dict(reject_storage=True)),
-                      ("closed-loop control", dict(reject_control=True))):
+    for label, kw in (("open-loop (release=0)", dict(reject=RejectStorage())),
+                      ("closed-loop control", dict(reject=RejectStorage(control=True)))):
         plant, sol = _run(asm1, adm1, params, **kw)
         V = float(sol.unit_state("reject_storage")[-1, -1])
         out = float(plant.stream(sol, "reject_storage.out", params).Q[-1])

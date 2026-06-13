@@ -1,7 +1,7 @@
 """BSM2 influent hydraulic-delay tests.
 
 Covers the :class:`HydraulicDelayUnit` first-order flow/load lag (fast, no plant
-solve) and the wired ``build_bsm2(hydraulic_delay=True)`` plant.
+solve) and the wired ``build_bsm2(hydraulic_delay=HydraulicDelay())`` plant.
 """
 
 import jax.numpy as jnp
@@ -11,6 +11,7 @@ import aquakin
 from aquakin.plant.bsm import (
     bsm2_warm_start,
     build_bsm2,
+    HydraulicDelay,
     bsm2_asm1_network,
     bsm2_constant_influent,
     bsm2_parameters,
@@ -103,8 +104,8 @@ def adm1():
 
 @pytest.fixture(scope="module")
 def delay_run(asm1, adm1):
-    plant = build_bsm2(asm1, adm1, hydraulic_delay=True)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="influent_delay.in")
+    plant = build_bsm2(asm1, adm1, hydraulic_delay=HydraulicDelay())
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
     y0 = bsm2_warm_start(plant)
     sol = plant.solve((0.0, 80.0), t_eval=jnp.array([0.0, 80.0]),

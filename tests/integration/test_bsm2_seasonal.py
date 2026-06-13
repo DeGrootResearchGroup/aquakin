@@ -33,7 +33,7 @@ def _tank5_snh_at(asm1, adm1, params, T_kelvin):
                           C=jnp.tile(C, (2, 1)), network=asm1,
                           T=jnp.full((2,), float(T_kelvin)))
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
-    plant.add_influent("feed", infl, to="front_mix.fresh")
+    plant.add_influent("feed", infl)
     y0 = bsm2_warm_start(plant)
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
                       params=params, y0=y0,
@@ -72,7 +72,7 @@ def test_temperature_influent_rhs_finite_and_active():
                               C=jnp.tile(C, (2, 1)), network=asm1,
                               T=jnp.full((2,), float(T_kelvin)))
         plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
-        plant.add_influent("feed", infl, to="front_mix.fresh")
+        plant.add_influent("feed", infl)
         y0 = bsm2_warm_start(plant)
         d = plant.derivative(y0, params)          # dstate/dt, no full solve
         assert jnp.all(jnp.isfinite(d))

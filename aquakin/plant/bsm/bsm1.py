@@ -237,4 +237,10 @@ def build_bsm1(
     plant.connect("tank5_split.internal_recycle", "inlet_mix.internal_recycle")
     plant.connect("underflow_split.ras", "inlet_mix.ras")
 
+    # Canonical entry / exit endpoints, so callers wire the influent with
+    # ``plant.add_influent("feed", series)`` and read the effluent off
+    # ``plant.effluent_endpoint`` instead of hard-coding a port.
+    plant.influent_endpoint = "inlet_mix.fresh"
+    plant.effluent_endpoint = "clarifier.overflow"
+
     return plant

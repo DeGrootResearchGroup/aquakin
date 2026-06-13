@@ -5,6 +5,10 @@ BSM1 is implemented in :mod:`bsm1`; the open-loop BSM2 plant in :mod:`bsm2`.
 
 from aquakin.plant.bsm.bsm1 import build_bsm1
 from aquakin.plant.bsm.bsm2 import (
+    ExternalCarbon,
+    HydraulicDelay,
+    InfluentBypass,
+    RejectStorage,
     build_bsm2,
     bsm2_asm1_network,
     bsm2_constant_influent,
@@ -30,6 +34,10 @@ __all__ = [
     "BSM1_WARM_REACTOR_COMPOSITION",
     "BSM2Evaluation",
     "BSM2_WARM_REACTOR_COMPOSITION",
+    "ExternalCarbon",
+    "HydraulicDelay",
+    "InfluentBypass",
+    "RejectStorage",
     "build_bsm1",
     "build_bsm2",
     "bsm1_warm_start",

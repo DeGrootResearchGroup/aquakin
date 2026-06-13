@@ -46,7 +46,7 @@ def plant(asm1, constant_influent):
     """The assembled open-loop BSM2 plant (no solve) -- a cheap fixture for the
     assembly / flow-resolution check that stays on the fast PR gate."""
     p = build_bsm2(asm1_network=asm1)
-    p.add_influent("feed", constant_influent, to="front_mix.fresh")
+    p.add_influent("feed", constant_influent)
     return p
 
 

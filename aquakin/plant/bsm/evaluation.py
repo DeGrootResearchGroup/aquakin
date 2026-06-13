@@ -262,11 +262,15 @@ def evaluate_bsm2(
                    else jnp.asarray(params))
     t = solution.t
 
-    # The final effluent is the bypass combiner's outlet when an influent bypass
-    # is present, otherwise the clarifier overflow.
+    # The final effluent is whatever the builder recorded on the plant (the
+    # bypass combiner's outlet when an influent bypass is present, otherwise the
+    # secondary overflow); fall back to detection for a plant with no recorded
+    # endpoint.
     if effluent_port is None:
-        effluent_port = ("effluent_mix.out" if "effluent_mix" in plant.units
-                         else _EFFLUENT_PORT)
+        effluent_port = (
+            getattr(plant, "effluent_endpoint", None)
+            or ("effluent_mix.out" if "effluent_mix" in plant.units
+                else _EFFLUENT_PORT))
     # Reconstruct every needed output stream in a single pass over the states.
     streams = _reconstruct(plant, solution, params_full, [
         effluent_port, disposal_port, internal_recycle_port, ras_port,

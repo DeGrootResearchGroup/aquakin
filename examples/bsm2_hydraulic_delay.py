@@ -1,7 +1,7 @@
 """BSM2 influent hydraulic delay.
 
 A length of sewer or channel ahead of the works delays and smooths the influent
-flow and load. ``build_bsm2(hydraulic_delay=True)`` puts a
+flow and load. ``build_bsm2(hydraulic_delay=HydraulicDelay())`` puts a
 :class:`HydraulicDelayUnit` -- a first-order lag on flow and load with time
 constant ``tau`` -- on the raw influent, so a flow pulse reaches the plant
 delayed and rounded.
@@ -18,6 +18,7 @@ import aquakin
 from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
     build_bsm2,
+    HydraulicDelay,
     bsm2_asm1_network,
     bsm2_constant_influent,
     bsm2_parameters,
@@ -40,8 +41,8 @@ def main() -> None:
     params = bsm2_parameters(asm1, adm1)
 
     # A long-ish lag so the delay is visible against the 0.1-day pulse.
-    plant = build_bsm2(asm1, adm1, hydraulic_delay=True, hydraulic_delay_tau=0.05)
-    plant.add_influent("feed", _pulse_influent(asm1), to="influent_delay.in")
+    plant = build_bsm2(asm1, adm1, hydraulic_delay=HydraulicDelay(tau=0.05))
+    plant.add_influent("feed", _pulse_influent(asm1))
 
     y0 = bsm2_warm_start(plant)
 

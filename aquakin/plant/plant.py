@@ -270,6 +270,15 @@ class Plant:
         self._unit_order: list[str] = []
         self.connections: list[Connection] = []
         self.influents: dict[str, InfluentSeries] = {}
+        # Canonical entry / exit endpoints, set by the plant builders so callers
+        # never hard-code a "unit.port". A builder whose front/effluent ports move
+        # with its options (e.g. a BSM2 influent bypass relocating the entry to
+        # ``bypass_split.in`` and the effluent to ``effluent_mix.out``) records the
+        # right ones here, so ``plant.add_influent(series)`` and the metric
+        # evaluators read them instead of a guessable literal. ``None`` on a plant
+        # whose builder did not set them.
+        self.influent_endpoint: Optional[str] = None
+        self.effluent_endpoint: Optional[str] = None
         # Filled in at solve() time:
         self._state_layout: dict[str, tuple[int, int]] = {}
         self._total_state_size: int = 0
@@ -319,8 +328,11 @@ class Plant:
             Destination endpoint to feed this influent into, as ``"unit.port"``
             (or bare ``"unit"`` to use the unit's sole input port). When given,
             the connection is made here, so no separate :meth:`connect` call is
-            needed. The destination unit must already be added. When omitted the
-            influent is registered but inert -- influents are not valid
+            needed. The destination unit must already be added. When omitted it
+            defaults to the plant's :attr:`influent_endpoint` (set by the
+            builders, so ``plant.add_influent("feed", series)`` wires to the
+            canonical front without hard-coding a port); if that is also unset
+            the influent is registered but inert -- influents are not valid
             :meth:`connect` sources, so wiring happens here.
         translator : StateTranslator, optional
             Translator for the influent -> unit connection. Defaults to identity
@@ -329,6 +341,8 @@ class Plant:
         if name in self.influents:
             raise ValueError(f"Influent '{name}' already added")
         self.influents[name] = series
+        if to is None:
+            to = self.influent_endpoint
         if to is not None:
             to_unit, to_port = self._parse_endpoint(to, role="destination")
             translator = self._default_translator(
