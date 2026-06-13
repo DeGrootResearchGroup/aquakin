@@ -1327,9 +1327,12 @@ network.time_unit                    # "d" | "s" | "h" | "min" | None — integr
                                      #   units (the inverse-time token they share).
                                      #   t_span / t_eval are in THIS unit; it differs
                                      #   by network (ozone/UV "s", ASM/ADM/WATS "d"),
-                                     #   so there is no global time unit. None when it
-                                     #   can't be inferred (e.g. the SUMO-derived
-                                     #   asm2d/asm3 carry no usable unit metadata).
+                                     #   so there is no global time unit. None only
+                                     #   when it can't be inferred — a network that
+                                     #   declares no rate-constant time unit, or whose
+                                     #   rate constants disagree on one. (All shipped
+                                     #   networks, including the SUMO-derived ASM ones,
+                                     #   resolve to "d"/"s" — see _fix_sumo_units.py.)
 network.default_concentrations()     # jnp.array (all YAML defaults)
 network.default_parameters()         # jnp.array
 network.summary()                    # human-readable table (species listed with units)
