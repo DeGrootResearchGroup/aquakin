@@ -2212,6 +2212,31 @@ run on `load_bsm2_influent(...)` is seasonally temperature-driven out of the box
 (The generic `read_influent_csv` / `_influent_from_text` capture a `T` column
 when present, in the file's own units; only the BSM2 loader converts °C→K.)
 
+**Influent characterization + CSV `column_map` (issue #136).** Real influent is
+measured as aggregates (total COD, TKN, ammonia, alkalinity, optionally
+filtered/flocculated COD, VFA), not as the 13 ASM1 states. `aquakin/plant/characterize.py`
+maps them: `fractionate(total_cod=, tkn=, ...) -> {ASM1 state: value}` follows the
+**SUMO Sumo1 raw-influent fractionation reduced to ASM1** — COD split by
+filtration (soluble/colloidal/particulate) then biodegradability, reduced to ASM1
+by lumping colloidal-biodegradable into `XS` and colloidal/soluble-inert into
+`XI`/`SI` (`SI=SU, SS=SB, XI=CU+XU, XS=CB+XB, XB_H=XOHO, XP=XE, XB_A=0`); N gives
+`SNH` (ammonia or `f_snh·TKN`), `SND` (soluble-biodeg N), `XND` (TKN-balance
+remainder using ASM1's `i_XB`/`i_XP`); alkalinity mg CaCO₃/L → `SALK` mol/m³ via
+`/50`. A measured `filtered_cod`/`flocculated_filtered_cod`/`soluble_inert_cod`
+drives its split; absent, the SUMO default fraction (`InfluentFractions`, the
+Sumo1 tool's municipal values) is used. The reduction **conserves total COD**
+(`Σ COD states = total_cod`) and closes the ASM1 TKN balance. `fractionate` is
+plain arithmetic, so it runs element-wise on scalars **or arrays** — the per-row
+path. `characterize_influent(network, flow=, total_cod=, ...)` wraps it into a
+constant `InfluentSeries`. `read_influent_csv(..., column_map={role: header})`
+loads an **arbitrary-header** CSV (a lab/SCADA export — no renaming): roles are
+`t`/`Q`/`T`, any ASM species (mapped directly), and the aggregate names; mapped
+aggregates are fractionated **per row** (a directly-mapped species overrides its
+fractionated value; unmapped species default to zero). Validated against the
+spreadsheet's worked example (`tests/integration/test_characterize.py`). Exported
+as `aquakin.characterize_influent` / `fractionate` / `InfluentFractions` /
+`read_influent_csv`.
+
 **`Plant.set_temperature(celsius)` — one knob for the operating temperature.**
 Setting a plant's temperature used to mean writing the static `T` condition of
 every reactor by hand (in Kelvin, at the correction `ref_T`). `set_temperature`
