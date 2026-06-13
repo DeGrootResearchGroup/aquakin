@@ -55,12 +55,14 @@ def main() -> None:
         print(f"  {sp:5s} = {val:8.2f}  {asm1.units_of(sp)}")
 
     print()
-    print("Anaerobic digester headspace (biogas) at steady state:")
-    for sp, label in (("S_gas_ch4", "methane"), ("S_gas_co2", "CO₂"),
-                      ("S_gas_h2", "hydrogen")):
-        if sp in adm1.species_index:
-            val = float(sol.C_named("digester", sp)[-1])
-            print(f"  {label:8s} ({sp}) = {val:10.4g}")
+    print("Anaerobic digester biogas at steady state:")
+    # The biogas is a *derived* output (computed from the ADM1 headspace state,
+    # not a material port); plant.digester_gas reconstructs flow + composition.
+    gas = plant.digester_gas(sol)
+    print(f"  total flow  Q_gas = {float(gas.Q[-1]):10.4g} m³/d")
+    print(f"  methane           = {gas.methane_production():10.4g} kg CH₄/d")
+    print(f"  partial p (bar): CH₄ {float(gas.p_ch4[-1]):.3f}  "
+          f"CO₂ {float(gas.p_co2[-1]):.3f}  H₂ {float(gas.p_h2[-1]):.2e}")
 
 
 if __name__ == "__main__":

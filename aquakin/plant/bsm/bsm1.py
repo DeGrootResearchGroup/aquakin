@@ -242,4 +242,12 @@ def build_bsm1(
     plant.influent_endpoint = "inlet_mix.fresh"
     plant.effluent_endpoint = "clarifier.overflow"
 
+    # Semantic stream shortcuts (plant.stream(sol, "effluent"), plant.list_streams())
+    # so the engineer reads "effluent" / "ras" / "wastage" / "internal_recycle"
+    # rather than the internal "unit.port".
+    plant.register_stream("effluent", "clarifier.overflow")
+    plant.register_stream("internal_recycle", "tank5_split.internal_recycle")
+    plant.register_stream("ras", "underflow_split.ras")
+    plant.register_stream("wastage", "underflow_split.waste")
+
     return plant

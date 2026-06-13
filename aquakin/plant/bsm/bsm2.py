@@ -612,4 +612,19 @@ def build_bsm2(
     plant.effluent_endpoint = (
         "effluent_mix.out" if influent_bypass else "settler.overflow")
 
+    # Semantic stream shortcuts (plant.stream(sol, "effluent"), plant.list_streams())
+    # so the engineer reads "effluent" / "ras" / "reject" / "primary_sludge" /
+    # "digester_gas" (the last via plant.digester_gas) rather than the internal
+    # "unit.port". "effluent" tracks the (option-dependent) effluent_endpoint.
+    plant.register_stream("effluent", plant.effluent_endpoint)
+    plant.register_stream("internal_recycle", "tank5_split.internal_recycle")
+    plant.register_stream("ras", "underflow_split.ras")
+    plant.register_stream("wastage", "underflow_split.waste")
+    plant.register_stream("primary_effluent", "primary.effluent")
+    plant.register_stream("primary_sludge", "primary.underflow")
+    plant.register_stream("thickener_overflow", "thickener.overflow")
+    plant.register_stream("reject", "reject_mix.out")
+    plant.register_stream("dewatering_reject", "dewatering.overflow")
+    plant.register_stream("disposal_sludge", "dewatering.underflow")
+
     return plant

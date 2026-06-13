@@ -181,28 +181,85 @@ def _reconstruct(plant, solution, params_full, endpoints):
     return {ep: (jnp.stack(Qs[ep]), jnp.stack(Cs[ep])) for ep in endpoints}
 
 
-def _methane_production(plant, solution, params_full) -> float:
-    """Digester methane production (kg CH4/d), time-averaged.
+@dataclass
+class DigesterGas:
+    """The anaerobic digester's biogas trajectory (the semantic ``digester_gas``
+    stream -- a *derived* output computed from the ADM1 headspace state, not a
+    material port).
+
+    Attributes
+    ----------
+    t : jnp.ndarray
+        Save times, shape ``(n_t,)``.
+    Q : jnp.ndarray
+        Total biogas flow ``Q_gas`` (m³/d), shape ``(n_t,)``.
+    p_ch4, p_co2, p_h2 : jnp.ndarray
+        CH₄ / CO₂ / H₂ partial pressures (bar), shape ``(n_t,)``.
+    ch4 : jnp.ndarray
+        CH₄ mass flow (kg CH₄/d), shape ``(n_t,)`` -- the OCI biogas credit.
+    """
+
+    t: jnp.ndarray
+    Q: jnp.ndarray
+    p_ch4: jnp.ndarray
+    p_co2: jnp.ndarray
+    p_h2: jnp.ndarray
+    ch4: jnp.ndarray
+
+    def methane_production(self) -> float:
+        """Time-averaged CH₄ production (kg CH₄/d) over the solution window."""
+        return _time_average(self.t, self.ch4)
+
+
+def _digester_unit_name(plant) -> str:
+    """The name of the ADM1 anaerobic digester (the unit carrying the headspace
+    gas states), or a clear error if the plant has none."""
+    for name in plant.list_units():
+        net = getattr(plant.units[name], "network", None)
+        if net is not None and "S_gas_ch4" in net.species_index:
+            return name
+    raise ValueError(
+        "This plant has no anaerobic digester (no unit with an ADM1 gas "
+        "headspace), so it has no biogas. digester_gas() needs a build_bsm2 "
+        "plant with an ADM1DigesterUnit."
+    )
+
+
+def digester_gas(plant, solution, params=None) -> DigesterGas:
+    """The digester biogas trajectory (flow, partial pressures, CH₄ mass flow).
 
     From the ADM1 headspace state and gas parameters: the partial pressures give
-    the biogas flow ``Q_gas = k_P·(P_gas − P_atm)`` and the CH4 fraction, so
+    the biogas flow ``Q_gas = k_P·(P_gas − P_atm)`` and the CH₄ fraction, so
     ``CH4 = (p_ch4/P_gas)·P_atm·16/R_T · Q_gas`` (the BSM2 evaluation formula).
+    Reached as ``plant.digester_gas(solution)``.
     """
-    adm1 = plant.units["digester"].network
-    p = plant._params_for_unit("digester", params_full)
+    name = _digester_unit_name(plant)
+    adm1 = plant.units[name].network
+    params_full = (plant.default_parameters() if params is None
+                   else jnp.asarray(params))
+    plant._build_parameter_layout()
+    p = plant._params_for_unit(name, params_full)
 
-    def pv(name):
-        return float(p[adm1.parameters.index(name)])
+    def pv(pname):
+        return float(p[adm1.parameters.index(pname)])
 
     R_T, P_atm, k_P, p_h2o = pv("R_T"), pv("P_atm"), pv("k_P"), pv("p_h2o")
-    s_h2 = solution.C_named("digester", "S_gas_h2")
-    s_ch4 = solution.C_named("digester", "S_gas_ch4")
-    s_co2 = solution.C_named("digester", "S_gas_co2")
+    s_h2 = solution.C_named(name, "S_gas_h2")
+    s_ch4 = solution.C_named(name, "S_gas_ch4")
+    s_co2 = solution.C_named(name, "S_gas_co2")
+    p_h2 = R_T / 16.0 * s_h2
     p_ch4 = R_T / 64.0 * s_ch4
-    P_gas = R_T / 16.0 * s_h2 + R_T / 64.0 * s_ch4 + R_T * s_co2 + p_h2o
+    p_co2 = R_T * s_co2
+    P_gas = p_h2 + p_ch4 + p_co2 + p_h2o
     Q_gas = k_P * (P_gas - P_atm)                       # m3/d
     ch4_density = (p_ch4 / P_gas) * P_atm * 16.0 / R_T  # kg CH4/m3
-    return _time_average(solution.t, ch4_density * Q_gas)
+    return DigesterGas(t=solution.t, Q=Q_gas, p_ch4=p_ch4, p_co2=p_co2,
+                       p_h2=p_h2, ch4=ch4_density * Q_gas)
+
+
+def _methane_production(plant, solution, params_full) -> float:
+    """Digester methane production (kg CH4/d), time-averaged (the OCI credit)."""
+    return digester_gas(plant, solution, params_full).methane_production()
 
 
 def _feed_temperature_C(plant, solution, params_full, default_C):

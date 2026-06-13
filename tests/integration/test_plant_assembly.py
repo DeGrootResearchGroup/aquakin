@@ -564,7 +564,7 @@ def test_stream_reconstructs_unit_output(simple_net):
 def test_stream_unknown_endpoint_errors(simple_net):
     plant = _fed_cstr_plant(simple_net)
     sol = plant.solve(t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 2))
-    with pytest.raises(KeyError, match="Unknown unit"):
+    with pytest.raises(KeyError, match="Unknown stream"):
         plant.stream(sol, "nope")
 
 
@@ -874,3 +874,79 @@ def test_solution_C_named_errors_and_available_streams():
         sol.C_named("settler", "XB_H")
     with pytest.raises(KeyError, match="Unknown unit"):
         sol.unit_state("tankX")
+
+
+# --- semantic stream shortcuts: plant.stream(sol, "effluent") etc. (#148) -----
+
+def test_named_stream_resolution_and_effluent(simple_net):
+    # register a semantic name -> "unit.port"; stream(sol, name) reads that port,
+    # and effluent_stream() reads the recorded effluent_endpoint.
+    plant = _single_cstr_plant(simple_net)
+    plant.register_stream("product", "tank.out")
+    plant.effluent_endpoint = "tank.out"
+    assert plant.list_streams() == {"product": "tank.out"}
+
+    sol = plant.solve(t_span=(0.0, 50.0), t_eval=jnp.linspace(0.0, 50.0, 4))
+    by_name = plant.stream(sol, "product")
+    by_port = plant.stream(sol, "tank.out")
+    by_method = plant.effluent_stream(sol)
+    assert jnp.allclose(by_name.C, by_port.C)
+    assert jnp.allclose(by_method.C, by_name.C)
+    # a literal "unit.port" still works unchanged (semantic resolution is opt-in)
+    assert jnp.allclose(plant.stream(sol, "tank.out").Q, by_name.Q)
+
+
+def test_effluent_stream_requires_endpoint(simple_net):
+    plant = _single_cstr_plant(simple_net)            # no effluent_endpoint set
+    sol = plant.solve(t_span=(0.0, 10.0), t_eval=jnp.asarray([0.0, 10.0]))
+    with pytest.raises(ValueError, match="no recorded effluent_endpoint"):
+        plant.effluent_stream(sol)
+
+
+def test_bsm_named_streams_registered():
+    from aquakin.plant.bsm import build_bsm1, build_bsm2
+
+    s1 = build_bsm1().list_streams()
+    assert s1["effluent"] == "clarifier.overflow"
+    assert s1["ras"] == "underflow_split.ras"
+    assert s1["internal_recycle"] == "tank5_split.internal_recycle"
+
+    s2 = build_bsm2().list_streams()
+    assert s2["effluent"] == "settler.overflow"
+    assert s2["reject"] == "reject_mix.out"
+    assert s2["primary_sludge"] == "primary.underflow"
+    assert s2["disposal_sludge"] == "dewatering.underflow"
+
+
+def test_stream_unknown_semantic_name_hints():
+    from aquakin.plant.bsm import build_bsm2
+
+    plant = build_bsm2()
+    # The name is resolved before the solution is touched, so None is fine here.
+    with pytest.raises(KeyError, match="Did you mean: effluent"):
+        plant.stream(None, "effluant")           # close to "effluent"
+    with pytest.raises(KeyError, match="Semantic names"):
+        plant.stream(None, "nonsense")
+
+
+def test_digester_gas_and_no_digester_error(simple_net):
+    from aquakin.plant.bsm import build_bsm2, bsm2_warm_start, DigesterGas
+    from aquakin.plant.plant import PlantSolution
+
+    plant = build_bsm2()
+    plant._build_state_layout()
+    y0 = bsm2_warm_start(plant)
+    sol = PlantSolution(t=jnp.asarray([0.0, 1.0]),
+                        state=jnp.stack([y0, y0]), plant=plant)
+    gas = plant.digester_gas(sol)
+    assert isinstance(gas, DigesterGas)
+    assert float(gas.Q[0]) > 0.0 and float(gas.ch4[0]) > 0.0
+    assert gas.methane_production() == pytest.approx(float(gas.ch4[0]), rel=1e-6)
+    # the published BSM2 digester makes ~1000 kg CH4/d at the warm state
+    assert 800.0 < gas.methane_production() < 1200.0
+
+    # a plant with no ADM1 digester -> clear error
+    cstr = _single_cstr_plant(simple_net)
+    cstr_sol = cstr.solve(t_span=(0.0, 1.0), t_eval=jnp.asarray([0.0, 1.0]))
+    with pytest.raises(ValueError, match="no anaerobic digester"):
+        cstr.digester_gas(cstr_sol)
