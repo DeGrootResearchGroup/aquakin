@@ -20,11 +20,21 @@ from typing import TYPE_CHECKING, Union
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
+
+
+# Roles a ``column_map`` may target besides ``"t"`` / ``"Q"`` / ``"T"`` and
+# direct ASM-species names: aggregate lab/SCADA measurements, fractionated into
+# ASM1 states per row (see aquakin.plant.characterize.fractionate).
+_AGGREGATE_ROLES = (
+    "total_cod", "tkn", "ammonia", "nox", "alkalinity", "filtered_cod",
+    "flocculated_filtered_cod", "vfa", "soluble_inert_cod",
+)
 
 
 # BSM1 influent CSVs use this exact column order. ``t`` is days since
@@ -152,6 +162,8 @@ def read_influent_csv(
     network: "CompiledNetwork",
     *,
     column_order: list[str] | None = None,
+    column_map: dict | None = None,
+    fractions=None,
     delimiter: str | None = None,
 ) -> InfluentSeries:
     """Read a CSV influent file.
@@ -163,13 +175,27 @@ def read_influent_csv(
     network : CompiledNetwork
         Kinetic network whose species ordering ``C`` is built against.
     column_order : list[str], optional
-        Column order in the file. The first column is treated as time
-        ``t`` and the column named ``"Q"`` provides the flow rate; every
-        other name must be a species declared by the network. Defaults to
-        the standard BSM1 ordering.
+        Positional column layout, used when ``column_map`` is not given. The
+        first column is time ``t``, the column named ``"Q"`` is the flow, and
+        every other name must be a species the network declares. Defaults to the
+        standard BSM1 ordering.
+    column_map : dict, optional
+        Map of role -> CSV header name, for an arbitrary-header file (a lab /
+        SCADA export) -- no renaming the file. Roles are ``"t"``, ``"Q"``,
+        optional ``"T"``, any ASM species name (mapped directly), and the
+        aggregate measurements ``total_cod`` / ``tkn`` / ``ammonia`` / ``nox`` /
+        ``alkalinity`` / ``filtered_cod`` / ``flocculated_filtered_cod`` /
+        ``vfa`` / ``soluble_inert_cod``. When aggregates are mapped, each row is
+        fractionated into ASM1 states (see
+        :func:`aquakin.plant.characterize.fractionate`); a directly-mapped
+        species overrides its fractionated value, and any species neither mapped
+        nor produced is zero. Requires a header row in the file.
+    fractions : InfluentFractions, optional
+        Fractionation parameters for the aggregate columns (defaults to the SUMO
+        Sumo1 raw-influent values).
     delimiter : str, optional
-        Field delimiter. Defaults to auto-sniffing (whitespace and comma
-        both work).
+        Field delimiter. Defaults to auto-sniffing (whitespace and comma both
+        work).
 
     Returns
     -------
@@ -180,7 +206,8 @@ def read_influent_csv(
         raise FileNotFoundError(f"Influent file not found: {p}")
     return _influent_from_text(
         p.read_text(encoding="utf-8"), network,
-        column_order=column_order, delimiter=delimiter, source=str(p),
+        column_order=column_order, column_map=column_map, fractions=fractions,
+        delimiter=delimiter, source=str(p),
     )
 
 
@@ -189,6 +216,8 @@ def _influent_from_text(
     network: "CompiledNetwork",
     *,
     column_order: list[str] | None = None,
+    column_map: dict | None = None,
+    fractions=None,
     delimiter: str | None = None,
     source: str = "<text>",
 ) -> InfluentSeries:
@@ -198,6 +227,9 @@ def _influent_from_text(
     :func:`load_bsm1_influent` (in-package data), so neither round-trips the
     data through a temporary file. ``source`` only labels error messages.
     """
+    if column_map is not None:
+        return _influent_from_column_map(
+            text, network, column_map, fractions, delimiter, source)
     if column_order is None:
         column_order = _BSM1_COLUMN_ORDER
 
@@ -272,6 +304,93 @@ def _influent_from_text(
     T = data[:, column_order.index("T")] if "T" in column_order else None
 
     return InfluentSeries(t=t, Q=Q, C=C, network=network, T=T)
+
+
+def _split_row(line: str, delimiter: str | None) -> list[str]:
+    """Split one line into trimmed tokens (comma if present, else whitespace)."""
+    if delimiter is not None:
+        return [tok.strip() for tok in line.split(delimiter) if tok.strip() != ""]
+    if "," in line:
+        return [tok.strip() for tok in line.split(",") if tok.strip() != ""]
+    return line.split()
+
+
+def _parse_named_table(text: str, delimiter: str | None):
+    """Parse a headered table: the first non-comment line is the column-name
+    header, the rest are numeric rows. Returns ``(header, data (n_t, n_cols))``."""
+    header = None
+    rows = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        toks = _split_row(line, delimiter)
+        if header is None:
+            header = toks
+            continue
+        try:
+            rows.append([float(tok) for tok in toks])
+        except ValueError as exc:
+            raise ValueError(f"Influent row '{raw}' has a non-numeric field: {exc}") from exc
+    if header is None or not rows:
+        raise ValueError("column_map requires a header row and at least one data row.")
+    return header, np.asarray(rows)
+
+
+def _influent_from_column_map(
+    text: str, network, column_map: dict, fractions, delimiter, source: str,
+) -> InfluentSeries:
+    """Build an :class:`InfluentSeries` from an arbitrary-header CSV via a
+    role -> header ``column_map``, fractionating any mapped aggregate columns
+    into ASM1 states per row. See :func:`read_influent_csv`."""
+    from aquakin.plant.characterize import fractionate
+
+    header, data = _parse_named_table(text, delimiter)
+    pos = {name: i for i, name in enumerate(header)}
+
+    def col(role: str):
+        name = column_map[role]
+        if name not in pos:
+            raise ValueError(
+                f"column_map role '{role}' -> column '{name}' is not in the "
+                f"file header {header} (source {source})."
+            )
+        return data[:, pos[name]]
+
+    for required in ("t", "Q"):
+        if required not in column_map:
+            raise ValueError(f"column_map must map the '{required}' role.")
+    t = col("t")
+    Q = col("Q")
+    T = col("T") if "T" in column_map else None
+
+    # Aggregate measurement columns -> per-row fractionation into ASM1 states.
+    aggregates = {r: col(r) for r in _AGGREGATE_ROLES if r in column_map}
+    produced: dict = {}
+    if aggregates:
+        for need in ("total_cod", "tkn"):
+            if need not in aggregates:
+                raise ValueError(
+                    f"column_map maps aggregate measurements but not '{need}', "
+                    f"which the influent fractionation requires."
+                )
+        kw = dict(aggregates)
+        if fractions is not None:
+            kw["fractions"] = fractions
+        produced = fractionate(**kw)
+
+    n_t = data.shape[0]
+    C = np.zeros((n_t, network.n_species))
+    for sp in network.species:
+        if sp in column_map:                      # a directly-mapped species
+            C[:, network.species_index[sp]] = col(sp)
+        elif sp in produced:                      # a fractionated state
+            C[:, network.species_index[sp]] = np.asarray(produced[sp])
+        # otherwise left at zero (zero-based influent)
+
+    return InfluentSeries(
+        t=jnp.asarray(t), Q=jnp.asarray(Q), C=jnp.asarray(C), network=network,
+        T=None if T is None else jnp.asarray(T))
 
 
 def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeries:

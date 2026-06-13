@@ -65,6 +65,16 @@ C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
 feed = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5}, base="zero")
 influent = network.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)   # InfluentSeries
 
+# Or characterize an influent from lab measurements (total COD, TKN, ammonia,
+# alkalinity, ...): the SUMO-style fractionation splits them into the ASM1 states.
+asm1 = aquakin.load_network("asm1")
+influent = aquakin.characterize_influent(asm1, flow=24000.0, total_cod=420.0,
+                                         tkn=34.4, ammonia=24.0, alkalinity=330.0)
+# A lab/SCADA CSV with arbitrary headers maps + fractionates per row, no renaming:
+#   aquakin.read_influent_csv("plant_log.csv", asm1,
+#       column_map={"t": "day", "Q": "flow_m3d", "total_cod": "COD",
+#                   "tkn": "TKN", "ammonia": "NH4-N", "alkalinity": "Alk"})
+
 # There is NO global time unit: t_span / t_eval are in whatever unit the
 # network's rate constants use, and it differs by network -- ozone/UV are in
 # SECONDS (M-1 s-1), the biological models (ASM/ADM/WATS) in DAYS (1/d). Check

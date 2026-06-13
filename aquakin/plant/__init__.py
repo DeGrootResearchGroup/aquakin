@@ -20,7 +20,12 @@ from aquakin.plant.design import (
     sludge_metrics,
 )
 from aquakin.plant.digester import ADM1DigesterUnit
-from aquakin.plant.influent import InfluentSeries
+from aquakin.plant.characterize import (
+    InfluentFractions,
+    characterize_influent,
+    fractionate,
+)
+from aquakin.plant.influent import InfluentSeries, read_influent_csv
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import (
@@ -75,7 +80,11 @@ __all__ = [
     "HydraulicDelayUnit",
     "IdentityTranslator",
     "IdealThickener",
+    "InfluentFractions",
     "InfluentSeries",
+    "characterize_influent",
+    "fractionate",
+    "read_influent_csv",
     "MixerUnit",
     "PIController",
     "ParameterLayout",
