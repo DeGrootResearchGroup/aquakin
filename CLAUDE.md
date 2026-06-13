@@ -2001,6 +2001,23 @@ Key types:
     reference reactor state; the BSM1 one is ~aquakin's BSM1 steady state. Both
     are *seeds* — the solve relaxes them — so the values affect settling speed,
     not the steady state.)
+  - **Introspection — discover names instead of reading the builder source.**
+    `plant.list_units()` lists the unit names (in add order); `plant.list_ports()`
+    lists every `"unit.port"` **output** endpoint — the exact strings
+    `plant.stream(sol, …)` accepts (pass `unit=` to scope, `role="input"` for the
+    `connect`-destination endpoints); `plant.list_species(unit)` lists a
+    concentration-vector unit's species (the valid `C_named` / `to_dataframe`
+    columns). All three work **before** solving (plant structure) and raise a
+    `KeyError` with a `difflib` "did you mean?" hint for an unknown name.
+    `list_species` / `C_named` are restricted to units whose *state is a
+    concentration vector* (`state_size == network.n_species`: the CSTRs, the
+    primary clarifier holding tank, the digester) via `Plant._is_concentration_unit`
+    — a stateless mixer/splitter/ideal-clarifier or the **layered Takács settler**
+    (which carries a network but a non-species state) is rejected with a clear
+    "read it as a stream with `plant.stream(...)`" message rather than an
+    `IndexError`. `PlantSolution.available_streams()` is a convenience alias for
+    `plant.list_ports()`, and `solution.C_named(unit, species)` now gives the same
+    hinted errors (unknown unit, unknown species, non-concentration unit).
   - **Reading state back by unit.** `plant.states_by_unit(vec)` splits any flat
     plant vector into a `{unit_name: sub-vector}` map — the exact inverse of
     `initial_state(overrides=...)`. It works on a `y0`, a `PlantSolution.final_state`
