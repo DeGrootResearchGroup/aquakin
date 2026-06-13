@@ -367,6 +367,26 @@ ASM2d-TUD biomass-normalised PP-storage rates (`qPP·XPAO²/XPP·…`), whose ro
 irreducibly cross-currency (`COD²/P`) — a documented property of that model's
 rate form, surfaced (not fixed) by the root check.
 
+**COD/N/P continuity (Gujer-matrix conservation) on the ASM family** is checked
+by `tests/integration/test_asm_continuity.py` (issue #210): for each of asm1,
+asm2d, asm2d_tud, asm3, asm3_biop, every reaction conserves COD, N and (where
+modelled) P against a per-species composition vector, evaluated through the live
+`compute_stoich` (so the symbolic coefficients are exercised, and a yield
+calibration is shown to keep COD closed). Nitrate carries the NH4-referenced COD
+`iCOD_NO3 = -4.571` g COD/g N; the N2-tracking models give `SN2` the COD
+`iCOD_NO3 + iNO3_N2` so denitrification closes, while ASM1 (no N2 state) excludes
+its single denitrification reaction from the COD check and the N balance credits
+the gas via `check_nitrogen`. **This test caught a real coefficient error:** the
+asm2d / asm2d_tud heterotroph anoxic-growth nitrate/N2 coefficient was
+`(1-YH)/iNO3_N2*YH` — which evaluates as `(1-YH)·YH/iNO3_N2` — instead of the
+published `(1-YH)/(iNO3_N2·YH)` (Henze et al. 2000, STR No. 9: `(1-YH)/(2.86·YH)`),
+breaking COD continuity by ~0.37/unit-rate. Root cause: the generator's `emit`
+did not parenthesise the right operand of a left-associative `/` or `-` at equal
+precedence, so a denominator product `a/(b·c)` was mis-emitted as `a/b·c`. Fixed
+in `scripts/sumo_to_aquakin.py` (guarded by `tests/unit/test_sumo_generator.py`)
+and corrected in the two YAMLs. The legitimate `(-1/YH)·iN_SF`-style coefficients
+are genuine `(a/b)·c` and are unchanged.
+
 Future networks include UV/TiO₂ and chlorine decay.
 
 **The library is a standalone scientific contribution.** It is not tied to any

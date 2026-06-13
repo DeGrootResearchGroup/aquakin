@@ -330,7 +330,17 @@ def emit(
     op = ast["op"]
     sym = _OP_SYM[op]
     prec = _PREC[op]
-    parts = [emit(a, state_names, expr_names, prec) for a in ast["args"]]
+    args = ast["args"]
+    # Subtraction and division are left-associative and non-commutative, so a
+    # right operand at *equal* precedence must be parenthesised: ``a / (b * c)``
+    # is NOT ``a / b * c`` (which evaluates as ``a * c / b``), and ``a - (b - c)``
+    # is NOT ``a - b - c``. The first operand keeps this op's precedence; the
+    # rest are emitted as if under a tighter parent so an equal-precedence
+    # subexpression gets its parentheses. Addition / multiplication are
+    # associative, so all operands keep ``prec``.
+    right_prec = prec + 1 if op in ("sub", "div") else prec
+    parts = [emit(args[0], state_names, expr_names, prec)]
+    parts += [emit(a, state_names, expr_names, right_prec) for a in args[1:]]
     result = f" {sym} ".join(parts)
     if prec < parent_prec:
         return f"({result})"
