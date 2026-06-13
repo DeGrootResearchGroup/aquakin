@@ -532,6 +532,22 @@ operation automatically.
 `SpatialConditions.uniform(n_locations, **kwargs)` is a convenience constructor
 for spatially homogeneous conditions.
 
+**`OperatingConditions` — the 0-D alias.** A single stirred tank has no spatial
+location, so the spatial array model reads as over-machinery for the most basic
+setup. `OperatingConditions(pH=7.5, T=293.15)` (exported as
+`aquakin.OperatingConditions`) is a `SpatialConditions` subclass specialised to
+one location, built directly from scalar field values — it **is** a
+`SpatialConditions`, so it works unchanged in every reactor; use the base
+`SpatialConditions` for a spatially varying PFR/CFD case. The 0-D examples and
+the README quickstart lead with it.
+
+**`conditions.with_(**overrides)` — edit from defaults.** Returns a copy with the
+named fields overridden (or added), scalars broadcast to the object's location
+count, the rest carried over, the original untouched. The recommended
+edit-from-defaults pattern is `network.default_conditions().with_(T=283.15)`
+(start from the YAML-declared defaults, change only what differs). It always
+returns the base `SpatialConditions` type.
+
 ---
 
 ## ODE Integration Strategy
@@ -1273,8 +1289,10 @@ network.parameter_values({"O3_Br_direct.k1": 175.0})
 network.atol({"OH": 1e-20}, default=1e-12)          # per-species tolerance vector
 
 # Conditions  (n_locations defaults to 1, for the 0-D batch case)
+conditions = aquakin.OperatingConditions(pH=7.5, T=293.15)   # 0-D alias (1 location)
+conditions = network.default_conditions().with_(T=283.15)    # edit from YAML defaults
 conditions = aquakin.SpatialConditions.uniform(pH=7.5, T=293.15)
-conditions = aquakin.SpatialConditions(fields={"pH": jnp.array([...]), ...})
+conditions = aquakin.SpatialConditions(fields={"pH": jnp.array([...]), ...})  # PFR/CFD
 
 # Batch reactor  (params defaults to network.default_parameters())
 reactor = aquakin.BatchReactor(network, conditions)

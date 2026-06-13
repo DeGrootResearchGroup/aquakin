@@ -4,7 +4,7 @@ import jax
 
 jax.config.update("jax_enable_x64", True)
 
-from aquakin.core.conditions import SpatialConditions
+from aquakin.core.conditions import OperatingConditions, SpatialConditions
 from aquakin.core.network import CompiledNetwork, compile_network
 from aquakin.core.parser import parse_rate_expression
 from aquakin.integrate.batch import BatchReactor, BatchSolution
@@ -105,6 +105,7 @@ __all__ = [
     "DGSMResult",
     "ForwardSensitivityResult",
     "SensitivityResult",
+    "OperatingConditions",
     "SpatialConditions",
     "Track",
     "TrackSolution",

@@ -9,7 +9,7 @@ def main() -> None:
     network = aquakin.load_network("ozone_bromate")
     print(network.summary())
 
-    conditions = aquakin.SpatialConditions.uniform(pH=7.5, T=293.15, OH_scavenging=5.0e4)
+    conditions = aquakin.OperatingConditions(pH=7.5, T=293.15, OH_scavenging=5.0e4)
 
     # Per-species absolute tolerance: OH lives at ~1e-12 M, others at ~1e-4 M.
     atol = network.atol({"OH": 1e-20}, default=1e-12)

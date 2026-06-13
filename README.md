@@ -49,7 +49,10 @@ import jax.numpy as jnp
 import aquakin
 
 network = aquakin.load_network("ozone_bromate")
-conditions = aquakin.SpatialConditions.uniform(pH=7.5, T=293.15)   # n_locations=1 default
+conditions = aquakin.OperatingConditions(pH=7.5, T=293.15)   # 0-D: a single stirred tank
+# Or start from the YAML defaults and change only what differs:
+#   conditions = network.default_conditions().with_(T=283.15)
+# (Use SpatialConditions for a spatially varying PFR/CFD case.)
 
 reactor = aquakin.BatchReactor(network, conditions)
 

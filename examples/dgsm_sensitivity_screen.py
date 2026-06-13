@@ -21,8 +21,8 @@ import aquakin
 
 def main() -> None:
     network = aquakin.load_network("ozone_bromate")
-    conditions = aquakin.SpatialConditions.uniform(pH=7.5, T=293.15,
-                                                   OH_scavenging=5.0e4)
+    conditions = aquakin.OperatingConditions(pH=7.5, T=293.15,
+                                             OH_scavenging=5.0e4)
 
     # Per-species atol: OH lives in the 1e-12 M band.
     atol = network.atol({"OH": 1e-20}, default=1e-12)
