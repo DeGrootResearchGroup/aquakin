@@ -125,18 +125,28 @@ jobs:
           --max-worker-restart=0
 
   # ---- Validation suite (against published data): merge-to-main only ----------
+  # Sharded across parallel runners. The validation tests are the heaviest in the
+  # repo (full 167-state two-network BSM2 plant steady states + ADM1 + AD through
+  # stiff solves), each ~4-5.5 GB resident. They cannot run concurrently within a
+  # job (`-n 2` OOM-kills the 16 GB runner), so each shard runs serially (`-n 1`),
+  # but a single process accumulating ~14 of them -- XLA compilation cache plus
+  # live JAX buffers -- still exhausted memory and the runner was reclaimed
+  # mid-suite (~62 min in, before the timeout). Splitting the set across N fresh
+  # processes (pytest-split, balanced by `.test_durations`) keeps each process's
+  # accumulated footprint to ~1/N and cuts wall time by running the shards in
+  # parallel. Every test runs in exactly one shard (a complete, disjoint
+  # partition), so coverage is unchanged.
   validation:
-    name: validation suite
+    name: validation suite (shard ${{ matrix.group }}/4)
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    # Merge-to-main only (not on the PR critical path), so a generous ceiling is
-    # fine. The validation tests are the heaviest in the repo (full 167-state
-    # two-network BSM2 plant steady states + ADM1 + AD through stiff solves), each
-    # ~4-5.5 GB resident. Two concurrent (`-n 2`) still OOM-killed the 16 GB
-    # runner as the set grew, so it runs serially (`-n 1`, see the run step). The
-    # slow suite carries the same `-n 1` cap for the same reason. 90 min absorbs
-    # the serial run with headroom.
-    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4]
+    # Each shard is ~1/4 of the serial run (~15-25 min); 45 min is a safety
+    # ceiling with headroom.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -152,10 +162,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
 
-      - name: Run validation suite (against published data)
-        # `-n 1` (serial): the validation tests are the most memory-heavy in the
-        # repo (~4-5.5 GB each); even two concurrent (`-n 2`) OOM-kill the 16 GB
-        # runner as the set grew. Serial keeps peak at ~one test, in budget.
+      - name: Run validation suite shard
+        # `-n 1` (serial within the shard): the validation tests are the most
+        # memory-heavy in the repo (~4-5.5 GB each); even two concurrent OOM-kill
+        # the runner. pytest-split partitions the marked set across the 4 shards
+        # by recorded duration (`.test_durations`), so this shard runs only its
+        # slice in a fresh process -- bounding the accumulated memory.
         run: >-
-          pytest -m validation -q -n 1 --durations=15
-          --timeout=900 --timeout-method=thread --max-worker-restart=0
+          pytest -m validation -q -n 1
+          --splits 4 --group ${{ matrix.group }}
+          --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0
