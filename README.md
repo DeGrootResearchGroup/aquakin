@@ -25,9 +25,13 @@ Future networks include UV/TiO₂ and chlorine decay.
 - Reactors for batch (0D), plug flow (1D), Lagrangian particle tracks, and a
   layered biofilm (`BiofilmReactor`: 1-D diffusion-reaction over biofilm depth,
   for penetration-controlled processes).
-- Forward (variational) sensitivity solve (`solve_sensitivity` /
-  `forward_sensitivity`): integrate `dC/dθ` alongside the state, giving exact
-  parameter sensitivities of stiff networks with no integrator-step cap.
+- Plant-wide flowsheets (`aquakin.plant`): the IWA benchmark plants BSM1 and
+  BSM2 — reactors, clarifiers, mixers/splitters and an ADM1 digester integrated
+  under one monolithic solve, with run-to-steady-state, dynamic influents, and
+  EQI/OCI performance metrics.
+- Full automatic differentiation everywhere, including cap-free forward
+  sensitivity and reverse-mode gradients through stiff plant solves (see
+  [Advanced: differentiation & sensitivity](#advanced-differentiation--sensitivity)).
 
 ## Installation
 
@@ -79,7 +83,60 @@ df.attrs["units"]                    # {species: unit} (units kept off the label
 solution.to_csv("run.csv")           # units embedded in the CSV header
 ```
 
-## Forward sensitivity (cap-free stiff gradients)
+## Plant-wide simulation
+
+Beyond a single reactor, `aquakin.plant` assembles full treatment-plant
+flowsheets. The IWA benchmark plants ship ready to build: load BSM1, drive it to
+steady state, and read the effluent — no autodiff or solver tuning required.
+
+```python
+import jax.numpy as jnp
+import aquakin
+from aquakin.plant.bsm import build_bsm1, load_bsm1_influent, evaluate_bsm1
+
+network = aquakin.load_network("asm1")
+plant = build_bsm1(network)            # 5 reactors + secondary clarifier + recycles
+
+# A constant average-load influent. add_influent wires it to the plant's
+# canonical front -- no "unit.port" string to hard-code.
+plant.add_influent("feed", network.influent(
+    {"SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
+     "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0}, Q=18446.0))
+
+# Integrate until the plant settles (a self-terminating steady-state event --
+# no horizon to guess). Sensible solver defaults; nothing to tune.
+ss = plant.run_to_steady_state()
+print("converged:", ss.converged, "after", round(ss.time), "days")
+
+# Reconstruct the clarified effluent and read its quality.
+eff = plant.stream(ss.solution, plant.effluent_endpoint)
+print("effluent SNH:", round(float(eff.C_named("SNH")[-1]), 2), "g N / m³")   # ~0.5
+```
+
+For a dynamic run, drive a fresh plant with a diurnal dry-weather influent,
+warm-started from the steady state, and score the headline performance indices:
+
+```python
+dyn = build_bsm1(network)
+dyn.add_influent("feed", load_bsm1_influent("dry", network))   # a 14-day diurnal load
+sol = dyn.solve(t_span=(0.0, 14.0), t_eval=jnp.linspace(0.0, 14.0, 15), y0=ss.state)
+
+ev = evaluate_bsm1(dyn, sol)           # Effluent Quality / Operational Cost indices
+print(f"EQI = {ev.eqi:.0f} kg/d   OCI = {ev.oci:.0f}")
+```
+
+`build_bsm2(...)` assembles the full BSM2 sludge train (primary clarifier,
+thickener, ADM1 digester with the ASM1↔ADM1 interfaces, dewatering, reject
+recycle) the same way; see `examples/` and `CLAUDE.md` for the BSM2 steady state,
+dynamic/seasonal runs, DO control, and the SRT/HRT/F:M design helpers.
+
+## Advanced: differentiation & sensitivity
+
+Every solve — reactor or whole plant — is differentiable. The machinery below is
+for parameter estimation and sensitivity analysis; a plain forward simulation
+(above) never needs it.
+
+### Forward sensitivity (cap-free stiff gradients)
 
 Differentiating *through* a stiff reaction-network solve with ordinary AD goes
 non-finite above an integrator-step threshold, and the usual workaround — a
@@ -123,7 +180,7 @@ factorising the full augmented system. This is several times faster than the
 dense augmented solve on large stiff systems (e.g. the layered biofilm) and
 gives bit-identical results.
 
-## Cap-free reverse-mode gradients (stable adjoint)
+### Cap-free reverse-mode gradients (stable adjoint)
 
 `solve_sensitivity` scales with the parameter count, so for a scalar-loss
 gradient over many parameters — the calibration case — reverse mode is wanted,
