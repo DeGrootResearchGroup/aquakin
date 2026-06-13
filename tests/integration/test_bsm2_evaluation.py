@@ -36,7 +36,7 @@ def adm1():
 def evaluated(asm1, adm1):
     """Build an open-loop BSM2 plant, solve briefly, and evaluate it once."""
     plant = build_bsm2(asm1, adm1, do_control=False)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
     sol = plant.solve((0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 11),
                       params=params, rtol=1e-4, atol=1e-3, max_steps=300_000)

@@ -1,7 +1,7 @@
 """BSM2 hydraulic influent bypass under wet-weather flow.
 
 Builds the BSM2 plant with the influent bypass enabled
-(``build_bsm2(influent_bypass=True)``) and drives it with a storm flow well
+(``build_bsm2(bypass=InfluentBypass())``) and drives it with a storm flow well
 above the bypass threshold. Raw influent flow above the threshold is diverted
 around the whole treatment train and rejoined with the clarified effluent, so
 the plant's hydraulics are protected at the cost of releasing untreated
@@ -18,6 +18,7 @@ import aquakin
 from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
     build_bsm2,
+    InfluentBypass,
     bsm2_asm1_network,
     bsm2_constant_influent,
     bsm2_parameters,
@@ -39,8 +40,8 @@ def main() -> None:
     influent = InfluentSeries(t=jnp.array([0.0, 1e4]), Q=jnp.full((2,), Q_storm),
                               C=jnp.tile(C, (2, 1)), network=asm1)
 
-    plant = build_bsm2(asm1, adm1, influent_bypass=True)
-    plant.add_influent("feed", influent, to="bypass_split.in")
+    plant = build_bsm2(asm1, adm1, bypass=InfluentBypass())
+    plant.add_influent("feed", influent)
 
     y0 = bsm2_warm_start(plant)
 
@@ -53,7 +54,7 @@ def main() -> None:
     bp = plant.stream(sol, "bypass_split.bypass", params)
     pl = plant.stream(sol, "bypass_split.to_plant", params)
     treated = plant.stream(sol, "settler.overflow", params)
-    eff = plant.stream(sol, "effluent_mix.out", params)
+    eff = plant.stream(sol, plant.effluent_endpoint, params)
 
     print()
     print(f"Flow split (m³/d): bypassed = {float(bp.Q[-1]):8.0f}   "

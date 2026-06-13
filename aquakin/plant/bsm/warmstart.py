@@ -103,7 +103,7 @@ def bsm2_warm_start(
     Examples
     --------
     >>> plant = build_bsm2(asm1, adm1)                       # doctest: +SKIP
-    >>> plant.add_influent("feed", influent, to="front_mix.fresh")  # doctest: +SKIP
+    >>> plant.add_influent("feed", influent)                # doctest: +SKIP
     >>> y0 = bsm2_warm_start(plant)                          # doctest: +SKIP
     >>> sol = plant.solve(t_span=(0.0, 200.0), params=params, y0=y0)  # doctest: +SKIP
     """

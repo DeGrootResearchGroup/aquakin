@@ -3,7 +3,7 @@
 The reject storage tank can run a proportional level controller on its release:
 it holds a mid-level setpoint and releases the reject smoothly, instead of
 filling to its limit and bypassing. Two layers: the level-control release law
-(fast, no plant solve) and the wired ``build_bsm2(reject_control=True)`` plant
+(fast, no plant solve) and the wired ``build_bsm2(reject=RejectStorage(control=True))`` plant
 (one module-scoped solve).
 """
 
@@ -14,6 +14,7 @@ import aquakin
 from aquakin.plant.bsm import (
     bsm2_warm_start,
     build_bsm2,
+    RejectStorage,
     bsm2_asm1_network,
     bsm2_constant_influent,
     bsm2_parameters,
@@ -101,8 +102,8 @@ def adm1():
 
 @pytest.fixture(scope="module")
 def control_run(asm1, adm1):
-    plant = build_bsm2(asm1, adm1, reject_control=True)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant = build_bsm2(asm1, adm1, reject=RejectStorage(control=True))
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
     y0 = bsm2_warm_start(plant)
     sol = plant.solve((0.0, 80.0), t_eval=jnp.array([0.0, 80.0]),

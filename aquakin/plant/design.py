@@ -456,8 +456,9 @@ def sludge_metrics(
     reactor_solids_mean = _time_average(t, reactor_solids)  # g
 
     # ----- Solids leaving via wastage + effluent (g/d). -----
-    eff_port = _pick_endpoint(plant, effluent_port, _EFFLUENT_CANDIDATES,
-                              "effluent")
+    eff_port = _pick_endpoint(
+        plant, effluent_port or getattr(plant, "effluent_endpoint", None),
+        _EFFLUENT_CANDIDATES, "effluent")
     w_port = _pick_endpoint(plant, waste_port, _WASTE_CANDIDATES, "wastage")
     eff = plant.stream(solution, eff_port, params_full)
     waste = plant.stream(solution, w_port, params_full)

@@ -40,7 +40,7 @@ def _networks():
 
 def _build(asm1, adm1, influent):
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
-    plant.add_influent("feed", influent, to="front_mix.fresh")
+    plant.add_influent("feed", influent)
     return plant
 
 

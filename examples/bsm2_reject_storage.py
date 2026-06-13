@@ -1,7 +1,7 @@
 """BSM2 reject equalisation (storage) tank.
 
 The reject-water recycle (thickener overflow + dewatering reject) is a
-high-ammonia load returned to the plant front. ``build_bsm2(reject_storage=True)``
+high-ammonia load returned to the plant front. ``build_bsm2(reject=RejectStorage())``
 routes it through a variable-volume :class:`StorageTank` -- a completely-mixed
 CSTR with no reactions whose liquid volume is a state -- that holds the reject
 and releases it at a controlled rate ``storage_output_flow``, with a level-gated
@@ -28,6 +28,7 @@ import aquakin
 from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
     build_bsm2,
+    RejectStorage,
     bsm2_asm1_network,
     bsm2_constant_influent,
     bsm2_parameters,
@@ -49,12 +50,12 @@ def main() -> None:
 
     # No-storage reference: the reject recycles directly to the front.
     base = build_bsm2(asm1, adm1)
-    base.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    base.add_influent("feed", bsm2_constant_influent(asm1))
     sol_base = _steady(base, asm1, params)
 
     # Storage tank on the reject line (default zero release).
-    plant = build_bsm2(asm1, adm1, reject_storage=True)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant = build_bsm2(asm1, adm1, reject=RejectStorage())
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     sol = _steady(plant, asm1, params)
 
     level = float(sol.unit_state("reject_storage")[-1, -1])

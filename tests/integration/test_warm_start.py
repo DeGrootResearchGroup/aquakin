@@ -42,7 +42,7 @@ def test_bsm2_warm_start_matches_manual_seed():
     asm1 = bsm2_asm1_network()
     adm1 = aquakin.load_network("adm1")
     plant = build_bsm2(asm1, adm1)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
 
     y0 = bsm2_warm_start(plant)
     warm = asm1.concentrations(BSM2_WARM_REACTOR_COMPOSITION)
@@ -56,7 +56,7 @@ def test_bsm2_warm_start_only_seeds_reactors():
     asm1 = bsm2_asm1_network()
     adm1 = aquakin.load_network("adm1")
     plant = build_bsm2(asm1, adm1)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
 
     cold = plant.initial_state()
     warm_y0 = bsm2_warm_start(plant)

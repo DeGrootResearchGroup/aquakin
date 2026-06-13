@@ -82,7 +82,7 @@ def adm1():
 def wastage_run(asm1, adm1):
     """Integrate across the first schedule step (day 182), sampling either side."""
     plant = build_bsm2(asm1, adm1, wastage_schedule=bsm2_wastage_schedule())
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
     y0 = bsm2_warm_start(plant)
     sol = plant.solve((0.0, 250.0), t_eval=jnp.array([0.0, 150.0, 250.0]),
@@ -117,7 +117,7 @@ def test_higher_wastage_lowers_biomass(wastage_run):
     adm1 = aquakin.load_network("adm1")
     # Constant-Qw reference over the same window and warm start.
     ref = build_bsm2(asm1, adm1)
-    ref.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    ref.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(ref)
     sol_ref = ref.solve((0.0, 250.0), t_eval=jnp.array([0.0, 250.0]),
                         params=params, y0=jnp.asarray(y0),

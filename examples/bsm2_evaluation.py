@@ -36,7 +36,7 @@ from aquakin.plant.bsm import (
 
 def _run_and_evaluate(do_control, asm1, adm1, params):
     plant = build_bsm2(asm1, adm1, do_control=do_control)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     # Each plant builds its own warm start: the closed-loop plant carries one
     # extra state (the controller integral, seeded at its default 0).
     y0 = bsm2_warm_start(plant)

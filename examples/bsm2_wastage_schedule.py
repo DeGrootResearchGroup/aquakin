@@ -31,7 +31,7 @@ def main() -> None:
 
     schedule = bsm2_wastage_schedule()
     plant = build_bsm2(asm1, adm1, wastage_schedule=schedule)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
 
     y0 = bsm2_warm_start(plant)
 

@@ -1906,6 +1906,26 @@ on the low-gain reject loop, which the concentration sweep resolves (their
 anoxic tanks. **It reaches a healthy open-loop steady state in ~20 s** —
 nitrifying AS, biomass sustained, and a methanogenic digester.
 
+**Optional features are configured with option objects, and the entry/exit
+endpoints are exposed (so callers never hard-code a port).** The optional BSM2
+features used to be a dozen cross-coupled boolean/float flags; they are now small
+**frozen option objects** (`aquakin.plant.bsm`), one per feature, passed to
+`build_bsm2` — present ⇒ enabled, `None` ⇒ off: `ExternalCarbon(flow, conc)`
+(`carbon=`, default-on; `carbon=None` disables), `RejectStorage(volume,
+output_flow, control)` (`reject=`, with `control=True` for the closed-loop level
+controller), `InfluentBypass(threshold)` (`bypass=`), `HydraulicDelay(tau)`
+(`hydraulic_delay=`). `do_control: bool` and `wastage_schedule` stay as they were
+(a lone toggle / an already-an-object schedule). Some features move the front
+ports (the bypass relocates the entry to `bypass_split.in` and the effluent to
+`effluent_mix.out`; the hydraulic delay relocates the entry to
+`influent_delay.in`) — so `build_bsm2`/`build_bsm1` record the canonical ports on
+the generic **`Plant.influent_endpoint`** / **`Plant.effluent_endpoint`**
+attributes. `plant.add_influent("feed", series)` defaults its `to=` to
+`plant.influent_endpoint`, and `evaluate_bsm2` / `sludge_metrics` default their
+effluent port to `plant.effluent_endpoint`, so feature flags can no longer
+silently mis-wire the influent or score the wrong effluent. (The endpoints are
+plain optional attributes on every `Plant`, `None` unless a builder sets them.)
+
 **Quantitatively validated** against the published BSM2 open-loop steady state
 (`tests/validation/test_bsm2_steadystate.py`): run with the published constant
 influent (`bsm2_constant_influent`) and the BSM2 (15 °C) ASM1 parameter set
@@ -1991,7 +2011,7 @@ tracking; closed-vs-open contrast; `jax.grad` through the closed loop). The
 digester is additionally validated at the unit level in
 `tests/validation/test_bsm2_digester_unit.py`.
 
-**Reject storage tank (`build_bsm2(reject_storage=True)`).** A variable-volume
+**Reject storage tank (`build_bsm2(reject=RejectStorage())`).** A variable-volume
 equalisation tank on the reject-recycle line: a completely-mixed CSTR with **no
 reactions** (`StorageTank`, [`plant/storage.py`](aquakin/plant/storage.py))
 whose liquid volume `V` is a state (`dV/dt = Q_in_stored − Q_out`,
@@ -2042,7 +2062,7 @@ tested in `tests/integration/test_bsm2_wastage.py` (the schedule's step/validati
 shift/jit behaviour, no-solve; wired plant steps the waste flow on schedule with
 RAS held fixed, and higher wastage lowers the biomass).
 
-**Closed-loop reject control (`build_bsm2(reject_control=True)`).** The storage
+**Closed-loop reject control (`build_bsm2(reject=RejectStorage(control=True))`).** The storage
 tank's release runs a **proportional level controller** instead of a fixed
 `Q_out`: `Q_out = clip(bias + gain·(V − V_set), 0, Q_max)` (BSM2: setpoint
 `0.5·Vmax`, gain 30 m³/d per m³, pump cap `Q_max = 1500` m³/d = the reference
@@ -2069,7 +2089,7 @@ tested in `tests/integration/test_bsm2_reject_control.py` (the release law +
 flow/volume conservation, no-solve; wired plant holds a mid-level and releases
 the reject with zero bypass).
 
-**Influent hydraulic delay (`build_bsm2(hydraulic_delay=True)`).** A first-order
+**Influent hydraulic delay (`build_bsm2(hydraulic_delay=HydraulicDelay())`).** A first-order
 lag on the raw influent's flow and load, modelling the transport delay of the
 sewer/channel ahead of the works. `HydraulicDelayUnit`
 ([`plant/delay.py`](aquakin/plant/delay.py)) carries the **load** (`Q·C`) and
@@ -2082,8 +2102,9 @@ residence time varies with flow). A flow/load pulse emerges delayed and rounded
 `C→C_in` (a pass-through, so the operating point is unchanged). The **outlet
 flow is the held-flow state**, which `flow_outputs` reads from the `FlowContext`
 the plant passes into every unit (the same mechanism the storage tank uses).
-Wired front-most: `build_bsm2(hydraulic_delay=True)` puts it on the influent
-(entry point becomes `"influent_delay.in"`), composing with the bypass
+Wired front-most: `build_bsm2(hydraulic_delay=HydraulicDelay())` puts it on the
+influent (entry point becomes `"influent_delay.in"`, read off
+`plant.influent_endpoint`), composing with the bypass
 (influent → delay → bypass_split → front). **Faithfulness note:** the BSM2
 reference `tau≈1e-4` d is a near-instantaneous lag whose role is to break
 algebraic loops in a sequential-modular solver — aquakin resolves recycles
@@ -2095,7 +2116,7 @@ pulse emerges lagged) and tested in
 load-over-flow / first-order-response behaviour, no-solve; wired plant builds
 front-most, steady state unchanged).
 
-**Hydraulic influent bypass (`build_bsm2(influent_bypass=True)`).** The BSM2
+**Hydraulic influent bypass (`build_bsm2(bypass=InfluentBypass())`).** The BSM2
 wet-weather bypass: raw influent flow above `bypass_threshold` (default 60000
 m³/d) is diverted around the whole treatment train (primary, AS, secondary
 clarifier) and rejoined with the clarified effluent — protecting the plant
@@ -2111,7 +2132,9 @@ clarifier too (matching the reference `Qbypassplant=1`: it bypasses the *plant*,
 not just the AS) and joins the final effluent through a new `effluent_mix`
 combiner, so the final effluent is `effluent_mix.out` (treated + bypassed) —
 `evaluate_bsm2` auto-detects it. **This changes the influent entry point**: with
-the bypass, wire the influent to `bypass_split.in` instead of `front_mix.fresh`.
+the bypass, the influent entry moves to `bypass_split.in` and the effluent to
+`effluent_mix.out` -- both reported on `plant.influent_endpoint` /
+`plant.effluent_endpoint`, so example/user code reads those instead of a literal.
 Default `influent_bypass=False` leaves the plant and its entry point unchanged.
 Demonstrated in `examples/bsm2_influent_bypass.py` (storm flow degrades the
 effluent) and tested in `tests/integration/test_bsm2_bypass.py` (threshold-mode

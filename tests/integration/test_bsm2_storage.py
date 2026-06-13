@@ -1,7 +1,7 @@
 """BSM2 reject storage-tank tests.
 
 Two layers: the :class:`StorageTank` level-gated bypass logic (fast, no plant
-solve) and the wired ``build_bsm2(reject_storage=True)`` plant (one
+solve) and the wired ``build_bsm2(reject=RejectStorage())`` plant (one
 module-scoped solve, since the suite runs near the CI runner's limit). The key
 faithfulness property: with the default zero release the open-loop tank fills to
 its upper limit and bypasses all reject, so the steady state is unchanged.
@@ -14,6 +14,7 @@ import aquakin
 from aquakin.plant.bsm import (
     bsm2_warm_start,
     build_bsm2,
+    RejectStorage,
     bsm2_asm1_network,
     bsm2_constant_influent,
     bsm2_parameters,
@@ -130,8 +131,8 @@ def adm1():
 
 @pytest.fixture(scope="module")
 def storage_run(asm1, adm1):
-    plant = build_bsm2(asm1, adm1, reject_storage=True)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant = build_bsm2(asm1, adm1, reject=RejectStorage())
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
     y0 = bsm2_warm_start(plant)
     sol = plant.solve((0.0, 80.0), t_eval=jnp.array([0.0, 80.0]),

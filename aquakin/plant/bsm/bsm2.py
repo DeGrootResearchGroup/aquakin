@@ -173,6 +173,109 @@ def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF) -> InfluentSerie
     return asm1_network.influent(BSM2_CONSTANT_INFLUENT, Q=Q)
 
 
+# ---------------------------------------------------------------------------
+# Optional-feature option objects
+# ---------------------------------------------------------------------------
+# Each groups the coupled parameters of one optional BSM2 feature into a single
+# object, so build_bsm2 takes a handful of feature objects instead of a dozen
+# cross-coupled boolean/float flags. Passing the object (with its defaults)
+# enables the feature; leaving the argument ``None`` leaves it off. Frozen so an
+# instance is a safe shared default.
+
+@dataclasses.dataclass(frozen=True)
+class ExternalCarbon:
+    """External-carbon dosing to reactor 1 (BSM2 default-on).
+
+    A constant readily-biodegradable (``SS``) carbon source fed to the first
+    anoxic reactor to support denitrification. ``build_bsm2(carbon=None)``
+    disables it.
+
+    Parameters
+    ----------
+    flow : float
+        Dose flow (m³/d). Default 2.
+    conc : float
+        Source ``SS`` concentration (gCOD/m³). Default 4e5.
+    """
+
+    flow: float = BSM2_CARBON_FLOW
+    conc: float = BSM2_CARBON_CONC
+
+
+@dataclasses.dataclass(frozen=True)
+class RejectStorage:
+    """Reject-water equalisation tank on the recycle line.
+
+    Routes the recycled reject water through a variable-volume
+    :class:`~aquakin.plant.storage.StorageTank` with a level-gated overflow
+    bypass before returning it to the front. With the default fixed release
+    (``output_flow``) and ``control=False`` the tank fills and bypasses, so the
+    open-loop steady state is unchanged; ``control=True`` runs a proportional
+    **level controller** on the release instead (holding a mid-level setpoint and
+    releasing the reject smoothly, capped at the pump capacity).
+
+    Parameters
+    ----------
+    volume : float
+        Maximum tank volume (m³). Default 160.
+    output_flow : float
+        Fixed release flow (m³/d) when ``control=False``. Default 0
+        (fill-and-bypass).
+    control : bool
+        Close the reject loop with a proportional level controller instead of a
+        fixed release. Default False.
+    """
+
+    volume: float = BSM2_STORAGE_VOLUME
+    output_flow: float = BSM2_STORAGE_OUTFLOW
+    control: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class InfluentBypass:
+    """Wet-weather hydraulic influent bypass.
+
+    Raw influent flow above ``threshold`` is diverted around the whole treatment
+    train (primary, AS, secondary clarifier) and rejoined with the clarified
+    effluent. Enabling it moves the influent entry to ``bypass_split.in`` and the
+    final effluent to ``effluent_mix.out`` -- but callers read
+    :attr:`~aquakin.plant.plant.Plant.influent_endpoint` /
+    :attr:`~aquakin.plant.plant.Plant.effluent_endpoint` rather than these
+    literals, so the move is transparent.
+
+    Parameters
+    ----------
+    threshold : float
+        Influent flow limit (m³/d) above which the excess bypasses. Default
+        60000.
+    """
+
+    threshold: float = BSM2_BYPASS_Q
+
+
+@dataclasses.dataclass(frozen=True)
+class HydraulicDelay:
+    """First-order hydraulic lag on the raw influent.
+
+    Inserts a :class:`~aquakin.plant.delay.HydraulicDelayUnit` (a first-order lag
+    on flow and load) front-most, modelling the sewer/channel transport delay
+    ahead of the works. Enabling it moves the influent entry to
+    ``influent_delay.in`` (read it from
+    :attr:`~aquakin.plant.plant.Plant.influent_endpoint`).
+
+    Parameters
+    ----------
+    tau : float
+        Lag time constant (days). Default ~0.02 (≈30 min).
+    """
+
+    tau: float = BSM2_HYDRAULIC_DELAY_TAU
+
+
+# The BSM2 default carbon dose (a frozen instance -> safe as a default arg).
+_DEFAULT_CARBON = ExternalCarbon()
+
+
 def bsm2_wastage_schedule(low: float = BSM2_WASTAGE_LOW,
                           high: float = BSM2_WASTAGE_HIGH,
                           steps=BSM2_WASTAGE_STEPS):
@@ -196,20 +299,22 @@ def build_bsm2(
     *,
     Q_ref: float = BSM2_Q_REF,
     conditions: Optional[dict] = None,
-    carbon_flow: float = BSM2_CARBON_FLOW,
-    carbon_conc: float = BSM2_CARBON_CONC,
+    carbon: Optional["ExternalCarbon"] = _DEFAULT_CARBON,
     do_control: bool = False,
-    reject_storage: bool = False,
-    reject_control: bool = False,
-    storage_volume: float = BSM2_STORAGE_VOLUME,
-    storage_output_flow: float = BSM2_STORAGE_OUTFLOW,
-    influent_bypass: bool = False,
-    bypass_threshold: float = BSM2_BYPASS_Q,
-    hydraulic_delay: bool = False,
-    hydraulic_delay_tau: float = BSM2_HYDRAULIC_DELAY_TAU,
+    reject: Optional["RejectStorage"] = None,
+    bypass: Optional["InfluentBypass"] = None,
+    hydraulic_delay: Optional["HydraulicDelay"] = None,
     wastage_schedule: Optional["object"] = None,
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
+
+    The optional features are configured with small **option objects** -- pass
+    the object to enable the feature, leave the argument ``None`` to leave it off
+    -- so the builder takes a handful of feature objects instead of a dozen
+    cross-coupled flags. The influent / effluent entry points move with some
+    features, but the caller reads them from :attr:`Plant.influent_endpoint` /
+    :attr:`Plant.effluent_endpoint` (set here) rather than hard-coding a port, so
+    a feature can never silently mis-wire the influent.
 
     Parameters
     ----------
@@ -222,53 +327,28 @@ def build_bsm2(
     conditions : dict, optional
         Per-tank ASM1 condition values (e.g. ``{"T": ...}``). Defaults to the
         ASM1 network's declared defaults.
+    carbon : ExternalCarbon or None, optional
+        External-carbon dosing to reactor 1 (default :class:`ExternalCarbon`,
+        the BSM2 dose). Pass ``None`` to disable dosing.
     do_control : bool, optional
         If True, close the dissolved-oxygen loop: a :class:`PIController` senses
         ``SO`` in reactor 4 and manipulates its aeration ``kLa`` (with reactors 3
         and 5 scaled off the same signal), instead of the fixed open-loop ``kLa``
         of reactors 3-5. Default False (open-loop fixed aeration).
-    reject_storage : bool, optional
-        If True, route the recycled reject water through a :class:`StorageTank`
-        (a variable-volume equalisation tank with a level-gated overflow bypass)
-        before returning it to the plant front, instead of recycling it directly.
-        The tank buffers the reject load and releases it at
-        ``storage_output_flow``; with the default 0 release it fills and bypasses,
-        so the open-loop steady state is unchanged (all reject still reaches the
-        front). Default False.
-    reject_control : bool, optional
-        If True, close the reject loop: the storage tank runs a proportional
-        **level controller** on its release (holding a mid-level setpoint and
-        releasing the reject smoothly, capped at the pump capacity) instead of a
-        fixed ``storage_output_flow``. Implies a storage tank (so it does not
-        fill and bypass). Default False.
-    storage_volume : float, optional
-        Maximum reject-storage-tank volume (m³). Used with ``reject_storage`` or
-        ``reject_control``.
-    storage_output_flow : float, optional
-        Fixed release flow from the storage tank (m³/d), used when
-        ``reject_storage=True`` and ``reject_control=False``. Default 0.
-    influent_bypass : bool, optional
-        If True, add the BSM2 hydraulic influent bypass: raw influent flow above
-        ``bypass_threshold`` is diverted around the whole treatment train
-        (primary, AS, secondary clarifier) and rejoined with the clarified
-        effluent, modelling wet-weather hydraulic overload. This **changes the
-        influent entry point**: wire the influent to ``"bypass_split.in"``
-        (not ``"front_mix.fresh"``), and the final plant effluent becomes
-        ``"effluent_mix.out"`` (``evaluate_bsm2`` auto-detects it). Default False.
-    bypass_threshold : float, optional
-        Influent flow limit (m³/d) above which the excess bypasses; the BSM2
-        default is 60000. Only used when ``influent_bypass=True``.
-    hydraulic_delay : bool, optional
-        If True, insert a :class:`HydraulicDelayUnit` (a first-order lag on flow
-        and load) on the raw influent before the plant, modelling the transport
-        delay of the sewer/channel ahead of the works. This **moves the influent
-        entry point** to ``"influent_delay.in"``. Default False. (The BSM2
-        reference uses a negligibly small lag to break solver algebraic loops,
-        which aquakin's monolithic solve does not need; this is for a *physical*
-        delay -- set ``hydraulic_delay_tau`` to the real residence time.)
-    hydraulic_delay_tau : float, optional
-        Lag time constant (days) for the influent hydraulic delay. Default ~0.02
-        (≈30 min). Only used when ``hydraulic_delay=True``.
+    reject : RejectStorage or None, optional
+        Route the recycled reject water through an equalisation
+        :class:`StorageTank` (see :class:`RejectStorage` for the fixed-release vs
+        level-controlled options). Default ``None`` (reject recycled directly).
+    bypass : InfluentBypass or None, optional
+        Add the wet-weather hydraulic influent bypass (see :class:`InfluentBypass`).
+        Moves the influent entry to ``bypass_split.in`` and the effluent to
+        ``effluent_mix.out`` -- both reported on the plant's endpoint attributes.
+        Default ``None``.
+    hydraulic_delay : HydraulicDelay or None, optional
+        Insert a first-order hydraulic lag on the raw influent (see
+        :class:`HydraulicDelay`). Moves the influent entry to
+        ``influent_delay.in`` (reported on :attr:`Plant.influent_endpoint`).
+        Default ``None``.
     wastage_schedule : PiecewiseConstantSchedule, optional
         A time schedule for the wastage flow ``Qw(t)`` (see
         :func:`bsm2_wastage_schedule`). When given, the secondary-clarifier
@@ -279,15 +359,29 @@ def build_bsm2(
     Returns
     -------
     Plant
-        The wired BSM2 plant. The caller adds the influent and connects it to
-        ``front_mix.fresh`` -- or to ``bypass_split.in`` (``influent_bypass``) or
-        ``influent_delay.in`` (``hydraulic_delay``, which takes precedence as the
-        new front-most unit). Mirrors :func:`build_bsm1`.
+        The wired BSM2 plant, with :attr:`Plant.influent_endpoint` /
+        :attr:`Plant.effluent_endpoint` set. The caller adds the influent with
+        ``plant.add_influent("feed", series)`` (which wires to the recorded
+        front) or ``to=plant.influent_endpoint``. Mirrors :func:`build_bsm1`.
     """
     from aquakin.plant.control import PIController
     from aquakin.plant.delay import HydraulicDelayUnit
     from aquakin.plant.storage import StorageTank
     import aquakin
+
+    # ----- Translate the feature option objects into the internal flags/values
+    # the wiring below uses. A ``None`` argument means the feature is off.
+    reject_storage = reject is not None
+    reject_control = reject is not None and reject.control
+    storage_volume = reject.volume if reject is not None else BSM2_STORAGE_VOLUME
+    storage_output_flow = (reject.output_flow if reject is not None
+                           else BSM2_STORAGE_OUTFLOW)
+    influent_bypass = bypass is not None
+    bypass_threshold = bypass.threshold if bypass is not None else BSM2_BYPASS_Q
+    use_delay = hydraulic_delay is not None
+    delay_tau = hydraulic_delay.tau if hydraulic_delay is not None else BSM2_HYDRAULIC_DELAY_TAU
+    carbon_flow = carbon.flow if carbon is not None else 0.0
+    carbon_conc = carbon.conc if carbon is not None else BSM2_CARBON_CONC
 
     asm1 = asm1_network if asm1_network is not None else aquakin.load_network("asm1")
     adm1 = adm1_network if adm1_network is not None else aquakin.load_network("adm1")
@@ -335,10 +429,10 @@ def build_bsm2(
     # ----- Influent hydraulic delay (optional): a first-order lag on the raw
     # influent flow and load, modelling the sewer/channel transport delay. Added
     # front-most; its outlet feeds whatever the influent would otherwise enter.
-    if hydraulic_delay:
+    if use_delay:
         delay_C = asm1.concentrations(BSM2_CONSTANT_INFLUENT)
         plant.add_unit(HydraulicDelayUnit(
-            name="influent_delay", network=asm1, tau=float(hydraulic_delay_tau),
+            name="influent_delay", network=asm1, tau=float(delay_tau),
             initial_flow=Q_ref, initial_concentrations=delay_C))
 
     # ----- Influent bypass (optional): divert wet-weather peak flow around the
@@ -457,7 +551,7 @@ def build_bsm2(
     # The raw influent enters at the bypass splitter if present, else the front
     # mixer; a hydraulic delay (if present) sits ahead of that and feeds it.
     fresh_entry = "bypass_split.in" if influent_bypass else "front_mix.fresh"
-    if hydraulic_delay:
+    if use_delay:
         plant.connect("influent_delay.out", fresh_entry)
     # Influent bypass: the raw influent enters the splitter; the within-capacity
     # flow goes to the plant, the excess skips the train and rejoins the effluent.
@@ -511,9 +605,20 @@ def build_bsm2(
     # source) -- supports denitrification in the anoxic tanks and is part of the
     # BSM2 plant design, so the builder adds it directly.
     if carbon_flow > 0:
-        carbon = asm1.influent(
+        carbon_influent = asm1.influent(
             {"SS": carbon_conc}, Q=carbon_flow,
             T=conditions.get("T", BSM2_AS_TEMPERATURE_K))
-        plant.add_influent("external_carbon", carbon, to="as_mix.carbon")
+        plant.add_influent("external_carbon", carbon_influent, to="as_mix.carbon")
+
+    # Record the canonical entry / exit endpoints so callers never hard-code a
+    # port: the influent enters the hydraulic delay (front-most) if present, else
+    # the bypass splitter if present, else the front mixer; the final effluent is
+    # the bypass combiner's outlet when bypassing, else the secondary overflow.
+    plant.influent_endpoint = (
+        "influent_delay.in" if use_delay
+        else "bypass_split.in" if influent_bypass
+        else "front_mix.fresh")
+    plant.effluent_endpoint = (
+        "effluent_mix.out" if influent_bypass else "settler.overflow")
 
     return plant

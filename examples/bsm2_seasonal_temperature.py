@@ -34,7 +34,7 @@ def _steady_snh(asm1, adm1, params, T_kelvin):
                               T=jnp.full_like(base.Q, float(T_kelvin)))
 
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
-    plant.add_influent("feed", influent, to="front_mix.fresh")
+    plant.add_influent("feed", influent)
 
     y0 = bsm2_warm_start(plant)
 

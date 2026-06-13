@@ -34,7 +34,7 @@ def _bsm2_plant():
     asm1 = aquakin.load_network("asm1")
     adm1 = aquakin.load_network("adm1")
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
     return asm1, adm1, plant, y0
 
@@ -160,7 +160,6 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     plant.add_influent(
         "feed",
         InfluentSeries(t=t_inf, Q=q_inf, C=jnp.tile(c_const, (n, 1)), network=asm1),
-        to="front_mix.fresh",
     )
     y0 = bsm2_warm_start(plant)
     base = bsm2_parameters(asm1, adm1)

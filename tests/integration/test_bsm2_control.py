@@ -104,7 +104,7 @@ def adm1():
 
 def _closed_loop_plant(asm1, adm1):
     plant = build_bsm2(asm1, adm1, do_control=True)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     return plant
 
 
@@ -132,7 +132,7 @@ def closed_sol(closed_plant, asm1, adm1):
 @pytest.fixture(scope="module")
 def open_sol(asm1, adm1):
     plant = build_bsm2(asm1, adm1, do_control=False)
-    plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
     return plant.solve((0.0, _T_END), t_eval=_T_EVAL, params=params,
                        rtol=1e-4, atol=1e-3, max_steps=200_000)
