@@ -41,6 +41,7 @@ class ConditionSpec(BaseModel):
 
     name: str
     description: str = ""
+    units: str = ""
     default: float = 0.0
 
 

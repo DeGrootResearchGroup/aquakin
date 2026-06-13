@@ -879,7 +879,13 @@ reactions:
   experimental initial condition. Users override it at runtime.
 - `conditions` block declares all fields the network requires. The loader
   validates that any `SpatialConditions` object passed at runtime provides
-  all declared fields.
+  all declared fields. Each condition may carry an optional `units:` string
+  (default `""`), advisory metadata used only by `check_units` (e.g. `pH: "-"`).
+- `units` on species (default `"mol/L"`), parameters (default `""`), and
+  conditions (default `""`) are advisory unit strings. Species/parameter units
+  feed result labelling and the opt-in `check_units` dimensional check; they are
+  not otherwise used at runtime. `check_units` treats a blank/unparseable unit
+  as unknown (skipped).
 - `reference` on reactions is optional but strongly encouraged — it makes
   the YAML file a self-documenting scientific artifact.
 - `bounds` on parameters are optional, used by `fit()` as box constraints.
@@ -1208,6 +1214,9 @@ aquakin/
 │   └── utils/
 │       ├── latex.py                 # AST -> LaTeX rate expressions
 │       ├── balance.py               # mass / electron (COD) conservation checks
+│       ├── units.py                 # currency-aware dimensional check of rate
+│       │                            #   expressions (network.check_units); distinct
+│       │                            #   from core/units.py, which only formats units
 │       └── rtd.py                   # RTD analysis (E-curve, Morrill index)
 │
 ├── tests/
@@ -1286,6 +1295,37 @@ network.default_parameters()         # jnp.array
 network.summary()                    # human-readable table (species listed with units)
 network.to_latex()                   # LaTeX rate expressions
 # Solutions carry the labels too: solution.units_named("SNH") for axis/columns.
+
+# Dimensional ('unit') consistency check of the rate expressions (issue #161).
+# Currency-AWARE: units are a free abelian group over currency tokens
+# {g, mol, m, L, d, s, COD, N, O2, P, S, C, ...} where COD/N/O2 are DISTINCT base
+# dimensions, so g_COD/m3 vs g_N/m3 are different (a plain SI check waves them
+# through). Walks each rate AST: +/- operands must match, monod/monod_ratio
+# saturation args must share a currency (-> dimensionless), and the root must
+# resolve to currency/volume/time (e.g. g_COD/m3/d, mol/L/s). Catches a dropped
+# concentration factor, a wrong rate-constant exponent, a Monod mixing
+# currencies. ADVISORY + opt-in: never run at load, never raises; a blank or
+# unparseable unit is treated as unknown and skipped (no false alarm), so an
+# empty result means "no inconsistency among the declared, parseable units", not
+# a proof. Stoichiometry (deliberately cross-currency yields) is OUT of scope --
+# that is conservation, via check_conservation / utils/balance.py.
+network.check_units()                # -> list[UnitWarning] (reaction, location, detail)
+network.check_units(check_root=False)  # local rules only (skip currency/vol/time root)
+aquakin.parse_units("g_COD/m3")      # -> Dimension (or None if unknown); aquakin.UnitWarning
+# The shipped ASM1/2d/3, ozone, UV and WATS networks are unit-clean (0
+# warnings); ADM1 is clean on its dissolved/biological reactions but the check
+# DOES flag the three gas_outflow reactions -- the BSM2 gas headspace carries
+# H2/CH4 in COD (kgCOD/m3) and CO2 in carbon (kmolC/m3) and the /16, /64 molar
+# masses are bare numbers, so the partial-pressure sum mixes currencies. This is
+# a documented inherent characteristic of the BSM2 gas phase, not a model error
+# (homogenising it would need molar-mass parameters, which would change ADM1's
+# parameter vector). Pressure (`bar`) and temperature (`K`) are recognised unit
+# tokens so the gas units parse, but they are outside the canonical
+# currency/volume/time root form. A bare numeric guard added to a concentration
+# (the ADM1 `[S_va] + [S_bu] + 1e-6` regulariser) is a ConstantNode and is
+# treated as dimension-neutral, so it is NOT flagged. Conditions carry advisory
+# units too (`pH: "-"`, `T: "K"`). All regression-guarded in
+# tests/unit/test_units_check.py.
 
 # By-name vector builders (avoid .at[species_index[...]].set() chains). The
 # dict form is primary -- many species/param names are not valid Python

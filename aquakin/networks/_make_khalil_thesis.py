@@ -94,6 +94,7 @@ def main():
             "name": "pH",
             "description": "Fixed operating pH of the batch (thesis uses a "
                            "fixed pH rather than a charge-balance solver).",
+            "units": "-",
             "default": PH_FIXED,
         })
 

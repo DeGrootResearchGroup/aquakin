@@ -118,6 +118,7 @@ def main():
     ph = {"name": "pH",
           "description": "Fixed operating pH (no charge-balance solver; used by "
                          "the pH-dependent bulk sulfide-oxidation rates).",
+          "units": "-",
           "default": PH_FIXED}
     core["conditions"].append(ph)
 
