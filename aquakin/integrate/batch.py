@@ -15,7 +15,7 @@ from aquakin.integrate._common import (
     _HasNamedSpecies,
     cached_jitted_solver,
     concrete_settings_key,
-    friendly_step_ceiling,
+    friendly_solve_errors,
     init_solver_settings,
     resolve_state_atol,
     solve_chemistry,
@@ -215,7 +215,7 @@ class BatchReactor:
             self.network, self.adjoint,
         )
 
-        with friendly_step_ceiling(self.max_steps, what="batch reactor solve"):
+        with friendly_solve_errors(self.max_steps, what="batch reactor solve"):
             if t_eval_arr is None:
                 ts, ys = jitted(C0, params, condition_arrays)
             else:
