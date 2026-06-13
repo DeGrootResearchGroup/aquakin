@@ -509,6 +509,12 @@ def default_atol(scale_like, reference=None, *, atol_factor: float = 1e-6,
     if reference is not None:
         typ = jnp.maximum(typ, jnp.abs(jnp.asarray(reference, dtype=float)))
     char = jnp.max(typ)
+    # When every magnitude is zero there is no scale to floor against, so the
+    # near-zero floor floor_frac*char would itself be 0 -- returning atol_i = 0,
+    # which the solver literature warns against (the invariant this floor exists
+    # to uphold). Fall back to unit scale in that case. Identity for any input
+    # with a nonzero magnitude (the common path), since char > 0 there.
+    char = jnp.where(char > 0.0, char, 1.0)
     typ = jnp.maximum(typ, floor_frac * char)
     return atol_factor * typ
 

@@ -21,6 +21,26 @@ GAS_CONSTANT = 8.314462618  # J / (mol K)
 _PH_INHIBIT_HILL_SLOPE = 3.0
 
 
+def _safe_ratio(num, denom):
+    """``num / denom`` that returns 0 (not NaN) where ``denom == 0``, with a
+    finite gradient there.
+
+    The Monod saturation / inhibition terms are all ``num / denom`` with a
+    denominator that is zero only when the limiting quantity is fully depleted
+    (``K + X`` with ``K = X = 0``, a saturation constant calibrated to its zero
+    bound beside a depleted species). The physically safe limit is 0 (no
+    substrate -> no rate). A bare ``num / denom`` is ``0/0 = NaN`` there, and the
+    naive ``where(denom != 0, num/denom, 0)`` still back-propagates a NaN through
+    the unused branch -- so the *denominator* is guarded too (the double-where):
+    the live branch never divides by zero and the masked branch uses a finite
+    stand-in, so both the value and its gradient stay clean. Identity for any
+    nonzero denominator (the only change is exactly at the singularity).
+    """
+    nonzero = denom != 0.0
+    safe = jnp.where(nonzero, denom, 1.0)
+    return jnp.where(nonzero, num / safe, 0.0)
+
+
 class ASTNode(ABC):
     """
     Base class for rate-expression AST nodes.
@@ -307,7 +327,7 @@ class MonodNode(ASTNode):
         def _eval(C, params, condition_arrays, loc_idx):
             x = xf(C, params, condition_arrays, loc_idx)
             k = kf(C, params, condition_arrays, loc_idx)
-            return x / (k + x)
+            return _safe_ratio(x, k + x)
 
         return _eval
 
@@ -330,7 +350,7 @@ class MonodInhibitionNode(ASTNode):
         def _eval(C, params, condition_arrays, loc_idx):
             x = xf(C, params, condition_arrays, loc_idx)
             k = kf(C, params, condition_arrays, loc_idx)
-            return k / (k + x)
+            return _safe_ratio(k, k + x)
 
         return _eval
 
@@ -342,7 +362,9 @@ class MonodRatioNode(ASTNode):
     The kinetic form used in ASM1/2/3 hydrolysis where the rate-limiting
     quantity is the substrate-to-biomass ratio (``XS/XH``) rather than
     bulk substrate concentration. Written mathematically equivalently as
-    ``A / (K*B + A)`` to avoid the ``B=0`` singularity at startup.
+    ``A / (K*B + A)`` to avoid the ``B=0`` singularity at startup; the
+    remaining ``A = B = 0`` point (full depletion) evaluates to 0 via
+    :func:`_safe_ratio` rather than ``NaN``.
     """
 
     A: ASTNode
@@ -358,7 +380,7 @@ class MonodRatioNode(ASTNode):
             a = af(C, params, condition_arrays, loc_idx)
             b = bf(C, params, condition_arrays, loc_idx)
             k = kf(C, params, condition_arrays, loc_idx)
-            return a / (k * b + a)
+            return _safe_ratio(a, k * b + a)
 
         return _eval
 
@@ -386,7 +408,7 @@ class MonodInhibitionRatioNode(ASTNode):
             b = bf(C, params, condition_arrays, loc_idx)
             k = kf(C, params, condition_arrays, loc_idx)
             kb = k * b
-            return kb / (kb + a)
+            return _safe_ratio(kb, kb + a)
 
         return _eval
 
