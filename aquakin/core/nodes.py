@@ -414,6 +414,36 @@ class MonodInhibitionRatioNode(ASTNode):
 
 
 @dataclass(frozen=True)
+class SafeDivideNode(ASTNode):
+    """Division ``num / denom`` that returns 0 where ``denom == 0``.
+
+    The ``safe_div(num, denom)`` rate function. Use it for a ratio whose
+    denominator can legitimately reach exactly zero -- e.g. a substrate-
+    competition fraction ``[A] / ([A] + [B])`` where both substrates can deplete
+    to 0 -- so the rate takes its physical limit (0, with a finite gradient) at
+    that point instead of ``inf`` / ``NaN``, without padding the denominator with
+    a dimensionless epsilon. Built on the same double-where guard
+    (:func:`_safe_ratio`) as the Monod nodes; identity for any nonzero
+    denominator.
+    """
+
+    num: ASTNode
+    denom: ASTNode
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        nf = self.num.compile(ctx)
+        df = self.denom.compile(ctx)
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            return _safe_ratio(
+                nf(C, params, condition_arrays, loc_idx),
+                df(C, params, condition_arrays, loc_idx),
+            )
+
+        return _eval
+
+
+@dataclass(frozen=True)
 class pHSwitchNode(ASTNode):
     """
     Acid/base speciation fraction: ``1 / (1 + 10^(pH - pKa))``.

@@ -466,12 +466,20 @@ tree itself is not walked repeatedly.
 - `MonodInhibitionNode(X, K)` — inhibition Monod: `K / (K + X)`
 - `MonodRatioNode(A, B, K)` — ratio-saturation Monod: `(A/B) / (K + A/B)`
 - `MonodInhibitionRatioNode(A, B, K)` — ratio-inhibition Monod: `K / (K + A/B)`
+- `SafeDivideNode(num, denom)` — the `safe_div(num, denom)` function: division
+  that returns 0 (with a finite gradient) where `denom == 0`, instead of
+  `inf`/`NaN`. For a ratio whose denominator can legitimately reach exactly zero
+  — a substrate-competition fraction `[A] / ([A] + [B])` where both deplete to 0
+  — so the rate takes its physical limit 0 there without padding the denominator
+  with a dimensionless epsilon. Used by ADM1's valerate/butyrate C4 competition
+  (`safe_div([S_va], [S_va] + [S_bu])`), replacing the old `+ 1.0e-6` guard.
 
-All four Monod nodes evaluate their `num/denom` through `_safe_ratio`
-(`core/nodes.py`), a **double-where** guard returning 0 (with a finite
-gradient) where the denominator is exactly zero — the full-depletion point
-where the limiting quantity *and* its saturation constant are both 0 (`K = X =
-0`). The physical limit is 0 (no substrate → no rate); a bare `num/denom` is
+The four Monod nodes and `SafeDivideNode` all evaluate their `num/denom` through
+`_safe_ratio` (`core/nodes.py`), a **double-where** guard returning 0 (with a
+finite gradient) where the denominator is exactly zero — for the Monod nodes the
+full-depletion point where the limiting quantity *and* its saturation constant
+are both 0 (`K = X = 0`); for `safe_div` wherever the author's denominator hits
+0. The physical limit is 0 (no substrate → no rate); a bare `num/denom` is
 `0/0 = NaN` there and the naive single `where` still back-propagates a NaN
 through the masked branch, so the denominator is guarded too. Identity for any
 nonzero denominator — the only change is exactly at the singularity.
@@ -1330,10 +1338,11 @@ aquakin.parse_units("g_COD/m3")      # -> Dimension (or None if unknown); aquaki
 # (homogenising it would need molar-mass parameters, which would change ADM1's
 # parameter vector). Pressure (`bar`) and temperature (`K`) are recognised unit
 # tokens so the gas units parse, but they are outside the canonical
-# currency/volume/time root form. A bare numeric guard added to a concentration
-# (the ADM1 `[S_va] + [S_bu] + 1e-6` regulariser) is a ConstantNode and is
-# treated as dimension-neutral, so it is NOT flagged. Conditions carry advisory
-# units too (`pH: "-"`, `T: "K"`). All regression-guarded in
+# currency/volume/time root form. (A bare dimensionless constant added to a
+# concentration would be a ConstantNode and treated as dimension-neutral, so NOT
+# flagged; ADM1 no longer relies on such a guard -- its valerate/butyrate
+# competition uses `safe_div` instead of a `+ 1.0e-6` denominator.) Conditions
+# carry advisory units too (`pH: "-"`, `T: "K"`). All regression-guarded in
 # tests/unit/test_units_check.py.
 
 # By-name vector builders (avoid .at[species_index[...]].set() chains). The

@@ -44,6 +44,7 @@ from aquakin.core.nodes import (
     NegateNode,
     ParamNode,
     PowerNode,
+    SafeDivideNode,
     pHInhibitNode,
     pHSwitchNode,
     SpeciesNode,
@@ -431,6 +432,12 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Optional[Dimension]:
     if isinstance(node, DivideNode):
         lo = _infer(node.left, ctx)
         ro = _infer(node.right, ctx)
+        return None if lo is None or ro is None else lo / ro
+    if isinstance(node, SafeDivideNode):
+        # safe_div(num, denom) is num/denom dimensionally (the zero-guard only
+        # affects the value at denom == 0, not the units).
+        lo = _infer(node.num, ctx)
+        ro = _infer(node.denom, ctx)
         return None if lo is None or ro is None else lo / ro
     if isinstance(node, PowerNode):
         base = _infer(node.left, ctx)

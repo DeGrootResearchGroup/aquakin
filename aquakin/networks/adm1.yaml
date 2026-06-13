@@ -256,8 +256,11 @@ expressions:
   rho_su:  "k_m_su * [S_su] / (K_S_su + [S_su]) * [X_su] * inhib_aa"
   rho_aa:  "k_m_aa * [S_aa] / (K_S_aa + [S_aa]) * [X_aa] * inhib_aa"
   rho_fa:  "k_m_fa * [S_fa] / (K_S_fa + [S_fa]) * [X_fa] * inhib_fa"
-  rho_va:  "k_m_c4 * [S_va] / (K_S_c4 + [S_va]) * [X_c4] * [S_va] / ([S_va] + [S_bu] + 1.0e-6) * inhib_c4"
-  rho_bu:  "k_m_c4 * [S_bu] / (K_S_c4 + [S_bu]) * [X_c4] * [S_bu] / ([S_va] + [S_bu] + 1.0e-6) * inhib_c4"
+  # The S_va/(S_va+S_bu) factors split the shared C4 uptake between valerate and
+  # butyrate by relative abundance; safe_div handles the S_va = S_bu = 0
+  # depletion point (-> 0) without a dimensionless epsilon in the denominator.
+  rho_va:  "k_m_c4 * [S_va] / (K_S_c4 + [S_va]) * [X_c4] * safe_div([S_va], [S_va] + [S_bu]) * inhib_c4"
+  rho_bu:  "k_m_c4 * [S_bu] / (K_S_c4 + [S_bu]) * [X_c4] * safe_div([S_bu], [S_va] + [S_bu]) * inhib_c4"
   rho_pro: "k_m_pro * [S_pro] / (K_S_pro + [S_pro]) * [X_pro] * inhib_pro"
   rho_ac:  "k_m_ac * [S_ac] / (K_S_ac + [S_ac]) * [X_ac] * inhib_ac"
   rho_h2:  "k_m_h2 * [S_h2] / (K_S_h2 + [S_h2]) * [X_h2] * inhib_h2"

@@ -219,6 +219,35 @@ def test_monod_nodes_unchanged_for_nonzero_denominator():
     ) == pytest.approx(0.5)
 
 
+def test_safe_divide_evaluates_and_is_safe_at_zero():
+    """safe_div(num, denom) is plain division away from denom=0, and the
+    physical limit 0 (not inf/NaN) at denom=0 -- the competition-fraction guard
+    that replaces a dimensionless epsilon in the denominator."""
+    from aquakin.core.nodes import AddNode, SafeDivideNode
+
+    # C = (A, B) = (1.0, 2.0): A/(A+B) = 1/3.
+    node = SafeDivideNode(SpeciesNode("A"), AddNode(SpeciesNode("A"), SpeciesNode("B")))
+    assert _eval(node) == pytest.approx(1.0 / 3.0)
+    # denom = 0 -> 0 (both A and B depleted).
+    zero = ConstantNode(0.0)
+    assert _eval(SafeDivideNode(zero, zero)) == pytest.approx(0.0)
+
+
+def test_safe_divide_gradient_finite_at_zero():
+    from aquakin.core.nodes import AddNode, SafeDivideNode
+
+    node = SafeDivideNode(SpeciesNode("A"), AddNode(SpeciesNode("A"), SpeciesNode("B")))
+    fn = node.compile(_ctx())
+
+    def f(C):
+        return fn(C, jnp.asarray([0.5, 1.0, 5000.0, 8.8]),
+                  {"pH": jnp.asarray([7.5]), "T": jnp.asarray([293.15])}, 0)
+
+    val, g = jax.value_and_grad(f)(jnp.asarray([0.0, 0.0]))
+    assert float(val) == pytest.approx(0.0)
+    assert jnp.all(jnp.isfinite(g))
+
+
 def test_grad_through_params():
     # d/d(k) of k * [A] = [A]
     node = MultiplyNode(ParamNode("k"), SpeciesNode("A"))
@@ -312,6 +341,7 @@ def test_children_covers_every_node_type():
         _nodes.MonodInhibitionNode(leaf, leaf),
         _nodes.MonodRatioNode(leaf, leaf, leaf),
         _nodes.MonodInhibitionRatioNode(leaf, leaf, leaf),
+        _nodes.SafeDivideNode(leaf, leaf),
     ]
     for node in samples:
         expected = tuple(
