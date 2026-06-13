@@ -63,7 +63,8 @@ class SpatialConditions:
         n_locations : int, optional
             Number of spatial locations (default 1). Must be at least 1; the
             default suits a 0-D batch reactor, so a batch user writes
-            ``SpatialConditions.uniform(pH=7.5, T=293.15)``.
+            ``SpatialConditions.uniform(pH=7.5, T=293.15)``. For the 0-D case the
+            :class:`OperatingConditions` alias reads more naturally still.
         **kwargs : float
             Field name -> scalar value. The scalar is broadcast to
             ``(n_locations,)``.
@@ -76,6 +77,38 @@ class SpatialConditions:
             raise ValueError(f"n_locations must be >= 1, got {n_locations}")
         fields = {name: jnp.full((n_locations,), float(value)) for name, value in kwargs.items()}
         return cls(fields=fields)
+
+    def with_(self, **kwargs: float) -> "SpatialConditions":
+        """Return a copy with some fields overridden (or added).
+
+        The common edit-from-defaults pattern: start from
+        ``network.default_conditions()`` and change only what differs, e.g.::
+
+            conditions = network.default_conditions().with_(T=283.15)   # cold
+
+        Scalar overrides are broadcast to this object's location count (so the
+        result keeps the same ``n_locations``); a length-``n_locations`` array
+        override is used as-is. Fields not named are carried over unchanged. The
+        original is not modified.
+
+        Parameters
+        ----------
+        **kwargs : float or array-like
+            Field name -> new value (scalar, broadcast to ``n_locations``, or a
+            length-``n_locations`` array).
+
+        Returns
+        -------
+        SpatialConditions
+            A new ``SpatialConditions`` (always the base type, so it stays valid
+            for every reactor) with the merged fields.
+        """
+        n = self.n_locations or 1
+        merged = dict(self.fields)
+        for name, value in kwargs.items():
+            arr = jnp.asarray(value)
+            merged[name] = jnp.full((n,), float(value)) if arr.ndim == 0 else arr
+        return SpatialConditions(fields=merged)
 
     def validate_required(self, required: Iterable[str]) -> None:
         """
@@ -92,3 +125,32 @@ class SpatialConditions:
                 f"SpatialConditions is missing required fields: {missing}. "
                 f"Provided: {sorted(self.fields.keys())}"
             )
+
+
+class OperatingConditions(SpatialConditions):
+    """Operating conditions for the 0-D (single stirred tank) case.
+
+    A single stirred tank has no spatial extent, so the spatially-varying
+    :class:`SpatialConditions` (with its ``n_locations`` array model) reads as
+    over-machinery for the most basic setup. ``OperatingConditions`` is the same
+    object specialised to one location, constructed directly from scalar field
+    values::
+
+        conditions = aquakin.OperatingConditions(pH=7.5, T=293.15)
+
+    It **is** a :class:`SpatialConditions` (one location), so it works unchanged
+    in every reactor; for a spatially varying PFR/CFD case use
+    :class:`SpatialConditions` (or :meth:`SpatialConditions.uniform`) directly.
+    To start from a network's declared defaults instead, use
+    ``network.default_conditions()`` and :meth:`SpatialConditions.with_` to edit.
+
+    Parameters
+    ----------
+    **kwargs : float
+        Condition field name (e.g. ``pH``, ``T``) -> scalar value.
+    """
+
+    def __init__(self, **kwargs: float) -> None:
+        super().__init__(
+            fields={name: jnp.asarray(float(value))
+                    for name, value in kwargs.items()})

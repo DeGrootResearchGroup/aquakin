@@ -16,7 +16,7 @@ import jax.numpy as jnp
 import aquakin
 
 network = aquakin.load_network("ozone_bromate")
-conditions = aquakin.SpatialConditions.uniform(n_locations=1, pH=7.5, T=293.15)
+conditions = aquakin.OperatingConditions(pH=7.5, T=293.15)   # 0-D batch case
 reactor = aquakin.BatchReactor(network, conditions)
 sol = reactor.solve(
     network.default_concentrations(),
