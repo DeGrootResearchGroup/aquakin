@@ -117,6 +117,21 @@ class CSTRUnit:
     def state_size(self) -> int:
         return self.network.n_species
 
+    def set_temperature(self, temperature_K: float) -> None:
+        """Set this reactor's static operating temperature (Kelvin).
+
+        Updates the ``T`` condition (and its precomputed rate-evaluation array)
+        in place, so a re-solve runs the kinetics -- including any Arrhenius
+        ``temperature_corrections`` -- at the new temperature. A no-op for a
+        network that declares no ``T`` condition. The plant clears its compiled-
+        solve cache after calling this; on a bare unit, rebuild any cached solve.
+        """
+        if "T" not in self.network.conditions_required:
+            return
+        self.conditions = {**self.conditions, "T": float(temperature_K)}
+        self._condition_arrays = {
+            **self._condition_arrays, "T": jnp.asarray([float(temperature_K)])}
+
     @property
     def input_ports(self) -> list[str]:
         return list(self.input_port_names)

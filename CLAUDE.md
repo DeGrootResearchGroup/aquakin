@@ -1753,6 +1753,11 @@ Key types:
     network and requires an explicit `translator=` across networks (e.g.
     the BSM2 ASM1↔ADM1 digester edges). The endpoint parsing lives in
     `Plant._parse_endpoint`; recycle detection in `Plant._is_recycle`.
+  - **Operating temperature.** `plant.set_temperature(celsius)` sets the static
+    `T` condition of every temperature-bearing reactor in one call (°C → K),
+    leaving a heated fixed-`T` unit like the digester untouched; clears the
+    compiled-solve cache and returns `self`. See the seasonal-temperature notes
+    below.
   - **Warm-starting.** `plant.initial_state(overrides={"tank1": vec, ...})`
     builds the flat initial-state vector with selected units' states replaced
     by name (each vector must match the unit's `state_size`) — the supported
@@ -2002,6 +2007,33 @@ synthesised BSM2 influent CSVs carry a time-varying temperature column (`T`, in
 run on `load_bsm2_influent(...)` is seasonally temperature-driven out of the box.
 (The generic `read_influent_csv` / `_influent_from_text` capture a `T` column
 when present, in the file's own units; only the BSM2 loader converts °C→K.)
+
+**`Plant.set_temperature(celsius)` — one knob for the operating temperature.**
+Setting a plant's temperature used to mean writing the static `T` condition of
+every reactor by hand (in Kelvin, at the correction `ref_T`). `set_temperature`
+takes **°C**, converts to Kelvin, and writes the static `T` of every
+temperature-bearing reactor — so a re-solve runs the Arrhenius
+`temperature_corrections` at that temperature (`build_bsm2(...)` then
+`plant.set_temperature(15)` is the BSM2 15 °C operating point; `set_temperature(10)`
+drives nitrification down — verified in
+`tests/integration/test_plant_temperature.py`). It targets the activated-sludge
+reactors (`CSTRUnit`s exposing `set_temperature` with a `T` condition) and
+**leaves the heated anaerobic digester untouched** (a fixed-`T` ADM1 unit without
+the method); pass `units=[...]` to target a specific set. It clears the plant's
+compiled-solve cache (`_jit_cache`) so the next solve recompiles at the new
+temperature, and returns `self` for chaining after `build_*`. The per-unit
+mechanic is `CSTRUnit.set_temperature(temperature_K)` (updates `conditions["T"]`
+and its precomputed condition array).
+
+**Clear error on an influent/plant network-instance mismatch.** The seasonal
+footgun was using *different instances* of the same ASM1 model for the plant and
+the influent (e.g. calling `bsm2_asm1_network()` twice): their temperature
+corrections / parameters then silently disagree. `Plant._default_translator` now
+distinguishes this from a genuine cross-network edge — when the two networks have
+the same `name` and `species` but are different objects, the error says to *build
+the network once and pass that same object to both* (rather than the old, here
+misleading, "supply an explicit translator"); a truly different model still gets
+the translator message.
 
 **Closed-loop DO/kLa control (`build_bsm2(do_control=True)`).** The first
 closed-loop element is the BSM2 dissolved-oxygen controller: a PI loop senses

@@ -24,7 +24,7 @@ cycles by ordering downstream units before upstream consumers — see
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Union
+from typing import Callable, Iterable, Optional, Union
 
 import diffrax
 import jax
@@ -357,6 +357,63 @@ class Plant:
                 )
             )
 
+    def set_temperature(
+        self, celsius: float, *, units: Optional[Iterable[str]] = None
+    ) -> "Plant":
+        """Set the operating temperature of the reactors, in **degrees Celsius**.
+
+        One knob for "run the plant at this temperature": converts to Kelvin and
+        writes the static ``T`` condition of every temperature-bearing reactor,
+        so a re-solve runs the kinetics -- including the Arrhenius
+        ``temperature_corrections`` -- at that temperature. (For a network whose
+        corrections are referenced to this temperature, the correction is unity
+        and the run reproduces the calibrated operating point; a colder/warmer
+        setting drives the kinetics away from it.)
+
+        By default it targets the activated-sludge reactors (the units exposing
+        :meth:`CSTRUnit.set_temperature` with a ``T`` condition) and **leaves a
+        fixed-temperature unit like the heated anaerobic digester untouched** --
+        the digester is a separate ADM1 unit without that method. Pass ``units``
+        to target a specific set by name.
+
+        Parameters
+        ----------
+        celsius : float
+            Operating temperature in °C (converted to Kelvin internally; the
+            ASM/ADM condition fields are Kelvin).
+        units : iterable of str, optional
+            Unit names to set. Defaults to every reactor that supports it.
+
+        Returns
+        -------
+        Plant
+            ``self`` (so calls can be chained after ``build_*``).
+
+        Raises
+        ------
+        ValueError
+            If a name in ``units`` is unknown or does not support a temperature.
+        """
+        kelvin = float(celsius) + 273.15
+        if units is None:
+            targets = [n for n, u in self.units.items()
+                       if hasattr(u, "set_temperature")
+                       and "T" in getattr(u.network, "conditions_required", ())]
+        else:
+            targets = list(units)
+            for name in targets:
+                if name not in self.units:
+                    raise ValueError(f"Unknown unit '{name}'.")
+                if not hasattr(self.units[name], "set_temperature"):
+                    raise ValueError(
+                        f"Unit '{name}' does not support set_temperature.")
+        for name in targets:
+            self.units[name].set_temperature(kelvin)
+        # The compiled solve bakes in the (now-changed) condition values, so it
+        # must be recompiled on the next solve.
+        self._jit_cache.clear()
+        return self
+
     def connect(
         self,
         source: str,
@@ -468,9 +525,29 @@ class Plant:
         target_network = self._unit_network(dest_unit)
         if source_network is target_network:
             return IdentityTranslator(target_network)
+        # Two *different* network objects. Distinguish the common mistake -- two
+        # separate instances of the same model (e.g. calling bsm2_asm1_network()
+        # twice, so the plant and the influent carry different temperature
+        # corrections / parameters) -- from a genuine cross-network connection.
+        same_model = (
+            getattr(source_network, "name", object()) == getattr(target_network, "name", None)
+            and getattr(source_network, "species", object()) == getattr(target_network, "species", None)
+        )
+        if same_model:
+            raise ValueError(
+                f"Connection {src_label} -> {dst_label}: the two endpoints use "
+                f"different *instances* of the same network "
+                f"('{getattr(source_network, 'name', '?')}'). Build the network "
+                f"once and pass that same object to both the plant and the "
+                f"influent, so their parameters and temperature corrections "
+                f"match -- two instances are silently inconsistent. (If they are "
+                f"genuinely different models, pass an explicit translator=.)"
+            )
         raise ValueError(
-            f"Connection {src_label} -> {dst_label} crosses networks; "
-            f"supply an explicit translator."
+            f"Connection {src_label} -> {dst_label} crosses networks "
+            f"('{getattr(source_network, 'name', '?')}' -> "
+            f"'{getattr(target_network, 'name', '?')}'); supply an explicit "
+            f"translator."
         )
 
     def _is_recycle(self, source_unit: str, dest_unit: str) -> bool:
