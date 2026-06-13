@@ -20,6 +20,7 @@ import jax.numpy as jnp
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
+    GradientCheckMixin,
     _interp_fields_to_scalar,
     friendly_step_ceiling,
     init_solver_settings,
@@ -80,7 +81,7 @@ class TrackSolution(_HasNamedSpecies):
     network: CompiledNetwork
 
 
-class ParticleTrackReactor:
+class ParticleTrackReactor(GradientCheckMixin):
     """
     Integrate chemistry along a single particle track.
 

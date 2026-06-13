@@ -13,6 +13,7 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
+    GradientCheckMixin,
     _interp_fields_to_scalar,
     friendly_step_ceiling,
     init_solver_settings,
@@ -46,7 +47,7 @@ class PFRSolution(_HasNamedSpecies):
         return "x", self.x
 
 
-class PlugFlowReactor:
+class PlugFlowReactor(GradientCheckMixin):
     """
     Steady-state plug-flow reactor.
 

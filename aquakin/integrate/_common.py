@@ -75,6 +75,67 @@ def check_finite_gradient(value, *, what: str, remedy: str) -> None:
         )
 
 
+class GradientCheckMixin:
+    """Give every reactor a finiteness check for a hand-rolled reverse gradient.
+
+    A reverse-mode gradient (``jax.grad``/``jax.jacrev``) taken *directly*
+    through a stiff network's :meth:`solve` -- a user's own loss + optimizer,
+    outside :func:`aquakin.calibrate` / :func:`aquakin.sensitivity`, which guard
+    this internally -- can return silent ``NaN``/``Inf`` when the integrator step
+    is uncapped (the backward accumulation overflows; see the ``dtmax`` note on
+    the reactor). Nothing raises, so the garbage gradient flows into the
+    optimizer and the run "works" but never converges.
+
+    This mixin adds :meth:`check_gradient_finite`, a one-call guard the DIY user
+    wraps their gradient in. The remedy it suggests is tailored to whether the
+    reactor already caps ``dtmax``.
+    """
+
+    def check_gradient_finite(self, grad_value, *, what: str = "gradient"):
+        """Raise a friendly error if a reverse-mode gradient is non-finite.
+
+        Wrap a freshly computed ``jax.grad`` result through this reactor's
+        ``solve`` to turn a silent non-finite gradient into an actionable error::
+
+            g = reactor.check_gradient_finite(jax.grad(loss)(params))
+
+        Parameters
+        ----------
+        grad_value : array-like
+            The gradient/Jacobian to check (returned unchanged when finite, so
+            the call composes inline).
+        what : str, optional
+            Short noun for the message (default ``"gradient"``).
+
+        Returns
+        -------
+        The ``grad_value`` argument, unchanged.
+
+        Raises
+        ------
+        RuntimeError
+            If ``grad_value`` contains any non-finite entry.
+        """
+        if getattr(self, "dtmax", None) is None:
+            remedy = (
+                "A reverse-mode gradient through a stiff solve overflows in the "
+                "backward pass when the integrator step is uncapped. Build the "
+                "reactor with a dtmax cap (a small multiple of the fastest "
+                "reaction timescale), or differentiate in forward mode "
+                "(jax.jacfwd with adjoint=aquakin.forward_adjoint()). "
+                "aquakin.calibrate (gradient='stable_adjoint', cap-free) and "
+                "aquakin.sensitivity handle this for you."
+            )
+        else:
+            remedy = (
+                f"The reactor already caps dtmax={self.dtmax}; if the gradient is "
+                "still non-finite, tighten dtmax further, or check the model, "
+                "data and parameter ranges."
+            )
+        check_finite_gradient(grad_value, what=what, remedy=remedy)
+        return grad_value
+
+
 # --- Tabular export helpers (optional pandas) --------------------------------
 
 
