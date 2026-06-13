@@ -1299,11 +1299,20 @@ network.species_units                # {species: units} carried from the YAML
 network.species_descriptions         # {species: description}
 network.units_of("SNH")              # "g_N/m³" (YAML "g_N/m3" prettified; raises KeyError on unknown)
 network.description_of("SNH")        # "Ammonia + ammonium nitrogen"
+network.time_unit                    # "d" | "s" | "h" | "min" | None — integration
+                                     #   time unit, inferred from the rate-constant
+                                     #   units (the inverse-time token they share).
+                                     #   t_span / t_eval are in THIS unit; it differs
+                                     #   by network (ozone/UV "s", ASM/ADM/WATS "d"),
+                                     #   so there is no global time unit. None when it
+                                     #   can't be inferred (e.g. the SUMO-derived
+                                     #   asm2d/asm3 carry no usable unit metadata).
 network.default_concentrations()     # jnp.array (all YAML defaults)
 network.default_parameters()         # jnp.array
 network.summary()                    # human-readable table (species listed with units)
 network.to_latex()                   # LaTeX rate expressions
-# Solutions carry the labels too: solution.units_named("SNH") for axis/columns.
+# Solutions carry the labels too: solution.units_named("SNH") for axis/columns,
+#   and solution.time_unit for the time axis (delegates to network.time_unit).
 
 # Dimensional ('unit') consistency check of the rate expressions (issue #161).
 # Currency-AWARE: units are a free abelian group over currency tokens
@@ -1313,7 +1322,13 @@ network.to_latex()                   # LaTeX rate expressions
 # saturation args must share a currency (-> dimensionless), and the root must
 # resolve to currency/volume/time (e.g. g_COD/m3/d, mol/L/s). Catches a dropped
 # concentration factor, a wrong rate-constant exponent, a Monod mixing
-# currencies. ADVISORY + opt-in: never run at load, never raises; a blank or
+# currencies. It also runs ONE cross-reaction rule: every rate constant drives
+# dC/dt against the same integration time, so all rates must share one
+# inverse-time unit -- a network mixing 1/d and 1/s rates is malformed (its RHS
+# sums terms on inconsistent time bases) yet each rate passes the per-rate root
+# check on its own, so the disagreement is flagged once at network scope
+# (reaction "(network)", location "time unit"). The shipped networks all share
+# one time unit, so this never fires on them. ADVISORY + opt-in: never run at load, never raises; a blank or
 # unparseable unit is treated as unknown and skipped (no false alarm), so an
 # empty result means "no inconsistency among the declared, parseable units", not
 # a proof. Stoichiometry (deliberately cross-currency yields) is OUT of scope --
@@ -1360,6 +1375,14 @@ conditions = aquakin.SpatialConditions(fields={"pH": jnp.array([...]), ...})  # 
 reactor = aquakin.BatchReactor(network, conditions)
 solution = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_eval)
 solution = reactor.solve(C0, params, t_span, t_eval)   # explicit params still fine
+# t_span / t_eval are in the network's native time unit (network.time_unit); pass
+# time_unit= to work in another unit. The input times are converted into the
+# native unit for the solve (rate constants unchanged) and solution.t is reported
+# back in the requested unit (solution.time_unit is set to it). Raises if the
+# network's own time unit is undeclared (network.time_unit is None). Wired on
+# BatchReactor / BiofilmReactor / Plant.solve (PFR is space-indexed -> N/A; the
+# AD/fitting paths -- solve_sensitivity / calibrate / sensitivity -- stay native).
+solution = reactor.solve(C0, t_span=(0.0, 24.0), t_eval=t_eval, time_unit="h")
 solution.t                           # (n_t,)
 solution.C                           # (n_t, n_species)
 solution.C_named("BrO3-")           # convenience accessor

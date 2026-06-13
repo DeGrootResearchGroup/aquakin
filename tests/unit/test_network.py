@@ -74,6 +74,126 @@ def test_summary_includes_units(simple_network):
     assert "Reactant" in out
 
 
+def test_time_unit_seconds(simple_network):
+    """The fixture's rate constant is ``s-1``, so the network is in seconds."""
+    assert simple_network.time_unit == "s"
+
+
+def test_summary_includes_time_unit(simple_network):
+    out = simple_network.summary()
+    assert "Time unit: s" in out
+    assert "seconds" in out
+
+
+_DAYS_YAML = """
+network:
+  name: days_net
+  description: "Rate constant in 1/d."
+species:
+  - {name: A, units: g/m3, default_concentration: 1.0}
+  - {name: B, units: g/m3, default_concentration: 0.0}
+conditions:
+  - {name: T, default: 293.15}
+reactions:
+  - name: A_to_B
+    rate: "k * [A]"
+    parameters:
+      k: {value: 0.1, units: "1/d"}
+    stoichiometry: {A: -1, B: +1}
+"""
+
+# A second-order rate (time at -1) plus a half-saturation constant with no time:
+# the inverse-time token is unambiguous (``d``).
+_DAYS_SECOND_ORDER_YAML = """
+network:
+  name: days_net2
+  description: "Second-order rate plus a non-time parameter."
+species:
+  - {name: A, units: g/m3, default_concentration: 1.0}
+  - {name: B, units: g/m3, default_concentration: 0.0}
+conditions:
+  - {name: T, default: 293.15}
+reactions:
+  - name: A_to_B
+    rate: "k * [A] * monod([A], Khalf)"
+    parameters:
+      k: {value: 0.1, units: "m3/(g*d)"}
+      Khalf: {value: 1.0, units: "g/m3"}
+    stoichiometry: {A: -1, B: +1}
+"""
+
+# Mixed inverse-time tokens (one rate in 1/d, one in 1/s) -> ambiguous.
+_AMBIGUOUS_YAML = """
+network:
+  name: mixed_net
+  description: "Rate constants disagree on the time unit."
+species:
+  - {name: A, units: g/m3, default_concentration: 1.0}
+  - {name: B, units: g/m3, default_concentration: 0.0}
+conditions:
+  - {name: T, default: 293.15}
+reactions:
+  - name: A_to_B
+    rate: "k1 * [A]"
+    parameters:
+      k1: {value: 0.1, units: "1/d"}
+    stoichiometry: {A: -1, B: +1}
+  - name: B_to_A
+    rate: "k2 * [B]"
+    parameters:
+      k2: {value: 0.1, units: "1/s"}
+    stoichiometry: {B: -1, A: +1}
+"""
+
+# No declared time units at all -> cannot infer.
+_NO_UNITS_YAML = """
+network:
+  name: bare_net
+  description: "No parameter units declared."
+species:
+  - {name: A, units: g/m3, default_concentration: 1.0}
+  - {name: B, units: g/m3, default_concentration: 0.0}
+conditions:
+  - {name: T, default: 293.15}
+reactions:
+  - name: A_to_B
+    rate: "k * [A]"
+    parameters:
+      k: {value: 0.1}
+    stoichiometry: {A: -1, B: +1}
+"""
+
+
+def _net_from_yaml(text, tmp_path):
+    path = tmp_path / "net.yaml"
+    path.write_text(text)
+    return aquakin.load_network_from_file(path)
+
+
+def test_time_unit_days(tmp_path):
+    assert _net_from_yaml(_DAYS_YAML, tmp_path).time_unit == "d"
+
+
+def test_time_unit_days_from_second_order_rate(tmp_path):
+    """A non-time parameter (half-saturation constant) does not confuse it; the
+    one inverse-time token from the second-order rate constant is used."""
+    assert _net_from_yaml(_DAYS_SECOND_ORDER_YAML, tmp_path).time_unit == "d"
+
+
+def test_time_unit_ambiguous_returns_none(tmp_path):
+    """Rate constants that disagree on the time unit give ``None``, not a guess."""
+    assert _net_from_yaml(_AMBIGUOUS_YAML, tmp_path).time_unit is None
+
+
+def test_time_unit_none_when_undeclared(tmp_path):
+    assert _net_from_yaml(_NO_UNITS_YAML, tmp_path).time_unit is None
+
+
+def test_summary_time_unit_unknown(tmp_path):
+    out = _net_from_yaml(_NO_UNITS_YAML, tmp_path).summary()
+    assert "could not infer" in out
+
+
 def test_units_named_on_solution(simple_network):
     """A solution can label its species without re-deriving units."""
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
@@ -81,6 +201,47 @@ def test_units_named_on_solution(simple_network):
     sol = reactor.solve(simple_network.default_concentrations(),
                         t_span=(0.0, 1.0))
     assert sol.units_named("A") == "mol/L"
+    # The solution surfaces the time unit too, for unambiguous axis labels.
+    assert sol.time_unit == "s"
+
+
+def test_solve_time_unit_conversion_is_equivalent(tmp_path):
+    """Solving a days network with t in hours gives the same physics, with the
+    result times reported back in hours."""
+    net = _net_from_yaml(_DAYS_YAML, tmp_path)        # native unit: days
+    reactor = aquakin.BatchReactor(net, net.default_conditions())
+    C0 = net.default_concentrations()
+
+    sol_d = reactor.solve(C0, t_span=(0.0, 2.0), t_eval=jnp.linspace(0.0, 2.0, 5))
+    sol_h = reactor.solve(C0, t_span=(0.0, 48.0), t_eval=jnp.linspace(0.0, 48.0, 5),
+                          time_unit="h")             # 48 h == 2 d
+
+    assert sol_d.time_unit == "d"
+    assert sol_h.time_unit == "h"
+    # Output times come back in the requested unit (the t_eval the caller passed).
+    assert jnp.allclose(sol_h.t, jnp.linspace(0.0, 48.0, 5))
+    # Same physical times -> identical trajectory.
+    assert jnp.allclose(sol_d.C, sol_h.C, rtol=1e-6, atol=1e-8)
+    # Passing the native unit explicitly is a no-op.
+    sol_d2 = reactor.solve(C0, t_span=(0.0, 2.0), t_eval=jnp.linspace(0.0, 2.0, 5),
+                           time_unit="d")
+    assert jnp.allclose(sol_d.t, sol_d2.t)
+
+
+def test_solve_time_unit_unknown_raises(simple_network):
+    reactor = aquakin.BatchReactor(simple_network, simple_network.default_conditions())
+    with pytest.raises(ValueError, match="Unknown time_unit"):
+        reactor.solve(simple_network.default_concentrations(),
+                      t_span=(0.0, 1.0), time_unit="fortnight")
+
+
+def test_solve_time_unit_undeclared_network_raises(tmp_path):
+    """If the network's own time unit can't be inferred, conversion can't be
+    applied -- raise rather than silently assume."""
+    net = _net_from_yaml(_NO_UNITS_YAML, tmp_path)    # time_unit is None
+    reactor = aquakin.BatchReactor(net, net.default_conditions())
+    with pytest.raises(ValueError, match="could not be inferred"):
+        reactor.solve(net.default_concentrations(), t_span=(0.0, 1.0), time_unit="h")
 
 
 def test_to_latex_smoke(simple_network):

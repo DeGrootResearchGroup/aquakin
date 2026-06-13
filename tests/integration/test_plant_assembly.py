@@ -64,6 +64,32 @@ def test_single_cstr_steady_state(simple_net):
     assert float(sol.C_named("tank", "B")[-1]) == pytest.approx(0.5, abs=1e-4)
 
 
+def _single_cstr_plant(net):
+    plant = Plant("single_cstr")
+    plant.add_unit(CSTRUnit(
+        name="tank", network=net, volume=100.0,
+        input_port_names=["inlet"], conditions={"T": 293.15},
+    ))
+    plant.add_influent("feed", _constant_influent(net), to="tank.inlet")
+    return plant
+
+
+def test_plant_time_unit_and_conversion(simple_net):
+    """Plant.time_unit reflects its network's unit (the fixture is in seconds),
+    and solve(time_unit=...) converts in and out equivalently."""
+    plant = _single_cstr_plant(simple_net)
+    assert plant.time_unit == "s"
+
+    sol_s = plant.solve(t_span=(0.0, 120.0), t_eval=jnp.linspace(0.0, 120.0, 5))
+    sol_min = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.linspace(0.0, 2.0, 5),
+                          time_unit="min")           # 2 min == 120 s
+    assert sol_s.time_unit == "s"
+    assert sol_min.time_unit == "min"
+    assert jnp.allclose(sol_min.t, jnp.linspace(0.0, 2.0, 5))
+    # Same physical times -> same state trajectory.
+    assert jnp.allclose(sol_s.state, sol_min.state, rtol=1e-6, atol=1e-8)
+
+
 def test_two_cstrs_in_series(simple_net):
     """Tank-in-series mass balance: with the same volume per tank and
     first-order decay, A drops by factor 1/(1+k*tau) per tank at steady

@@ -65,6 +65,18 @@ C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
 feed = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5}, base="zero")
 influent = network.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)   # InfluentSeries
 
+# There is NO global time unit: t_span / t_eval are in whatever unit the
+# network's rate constants use, and it differs by network -- ozone/UV are in
+# SECONDS (M-1 s-1), the biological models (ASM/ADM/WATS) in DAYS (1/d). Check
+# it before choosing a span:
+network.time_unit                    # "s" for ozone_bromate, "d" for asm1, ...
+
+# ...or pass time_unit= to work in a unit of your choice: the input times are
+# converted to the network's native unit for the solve and solution.t comes back
+# in the unit you asked for (solution.time_unit reports it). Works the same on
+# BatchReactor / BiofilmReactor / Plant.solve. e.g. an ASM run in hours:
+#   sol = reactor.solve(C0, t_span=(0.0, 48.0), t_eval=..., time_unit="h")
+
 # params is optional and defaults to network.default_parameters().
 solution = reactor.solve(
     C0, t_span=(0.0, 600.0), t_eval=jnp.linspace(0.0, 600.0, 121),

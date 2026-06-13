@@ -19,6 +19,7 @@ from aquakin.integrate._common import (
     init_solver_settings,
     resolve_state_atol,
     solve_chemistry,
+    to_native_time,
     validate_C0_params,
     validate_t_eval,
 )
@@ -130,6 +131,7 @@ class BatchReactor:
         t_eval: Optional[jnp.ndarray] = None,
         *,
         conditions: Optional[SpatialConditions] = None,
+        time_unit: Optional[str] = None,
     ) -> BatchSolution:
         """
         Integrate the reaction network over a time span.
@@ -143,7 +145,8 @@ class BatchReactor:
             ``network.default_parameters()`` -- pass it only to override rate
             constants (e.g. for a what-if run; see ``network.parameter_values``).
         t_span : tuple of float
-            ``(t_start, t_end)`` integration interval.
+            ``(t_start, t_end)`` integration interval, in the network's time unit
+            unless ``time_unit`` is given.
         t_eval : jnp.ndarray, optional
             Time points at which to record solution. If ``None`` the solver
             returns endpoints only.
@@ -151,6 +154,18 @@ class BatchReactor:
             Override the conditions stored on the reactor for this call. Used
             by :func:`aquakin.sensitivity` to differentiate through condition
             fields without mutating the reactor.
+        time_unit : str, optional
+            The time unit ``t_span`` / ``t_eval`` are expressed in (``"s"``,
+            ``"min"``, ``"h"``, ``"d"``). aquakin has no global time unit -- the
+            native unit is set by the network's rate constants
+            (``network.time_unit``: seconds for ozone/UV, days for ASM/ADM/WATS).
+            Pass ``time_unit`` to work in a different unit: the input times are
+            converted into the native unit for the solve (rate constants
+            unchanged) and the returned ``solution.t`` is reported back in
+            ``time_unit`` (with ``solution.time_unit`` set to it). Default
+            ``None`` uses the network's native unit. Raises if the network's own
+            time unit is undeclared (``network.time_unit is None``), since there
+            is then no native unit to convert to.
 
         Returns
         -------
@@ -163,6 +178,9 @@ class BatchReactor:
         validate_C0_params(self.network, C0, params)
         if t_span is None:
             raise ValueError("t_span=(t_start, t_end) is required.")
+
+        t_span, t_eval, _time_factor = to_native_time(
+            self.network.time_unit, time_unit, t_span, t_eval)
 
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
@@ -199,7 +217,12 @@ class BatchReactor:
                 ts, ys = jitted(C0, params, condition_arrays)
             else:
                 ts, ys = jitted(C0, params, condition_arrays, t_eval_arr)
-        return BatchSolution(t=ts, C=ys, network=self.network)
+        if _time_factor != 1.0:
+            ts = ts / _time_factor          # native -> requested unit
+        sol = BatchSolution(t=ts, C=ys, network=self.network)
+        if time_unit is not None:
+            sol._requested_time_unit = time_unit
+        return sol
 
     def solve_sensitivity(
         self,

@@ -38,6 +38,7 @@ from aquakin.integrate._common import (
     concrete_settings_key,
     default_atol,
     friendly_step_ceiling,
+    to_native_time,
 )
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.plant.influent import InfluentSeries
@@ -138,6 +139,16 @@ class PlantSolution:
     t: jnp.ndarray
     state: jnp.ndarray
     plant: "Plant"
+
+    @property
+    def time_unit(self) -> Optional[str]:
+        """The time unit of :attr:`t` (``"s"``, ``"d"``, ... or ``None``).
+
+        The plant's native unit (:attr:`Plant.time_unit`), or the ``time_unit=``
+        passed to :meth:`Plant.solve` when the times were reported in that unit.
+        """
+        override = getattr(self, "_requested_time_unit", None)
+        return override if override is not None else self.plant.time_unit
 
     @property
     def final_state(self) -> jnp.ndarray:
@@ -831,6 +842,23 @@ class Plant:
                 )
             seen.append(net)
         return seen
+
+    @property
+    def time_unit(self) -> Optional[str]:
+        """The plant's native integration time unit, or ``None``.
+
+        ``t_span`` / ``t_eval`` passed to :meth:`solve` are in this unit (unless
+        a ``time_unit=`` override is given). It is the unit shared by every
+        kinetic network's rate constants (:attr:`CompiledNetwork.time_unit`) --
+        ``"d"`` for the BSM-family plants (ASM1 + ADM1 are both in days).
+        Returns ``None`` if the plant has no kinetic network, or its networks
+        disagree on (or do not declare) a time unit -- in which case a
+        ``time_unit=`` conversion in :meth:`solve` cannot be applied.
+        """
+        units = {net.time_unit for net in self._ordered_networks()}
+        if len(units) == 1:
+            return next(iter(units))
+        return None
 
     def _build_parameter_layout(self) -> ParameterLayout:
         """Concatenate kinetic-parameter vectors for every distinct network.
@@ -1555,13 +1583,15 @@ class Plant:
         y0: Optional[jnp.ndarray] = None,
         gradient: str = "auto",
         event: Optional[diffrax.Event] = None,
+        time_unit: Optional[str] = None,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
 
         Parameters
         ----------
         t_span : (float, float)
-            ``(t_start, t_end)`` in plant time units (typically days for BSM-family).
+            ``(t_start, t_end)`` in the plant's time unit (``plant.time_unit``,
+            typically days for BSM-family) unless ``time_unit`` is given.
         t_eval : jnp.ndarray, optional
             Save times. If ``None`` only the endpoint is saved.
         params : jnp.ndarray, optional
@@ -1607,6 +1637,14 @@ class Plant:
             influent) is carried in the state so the discrete adjoint captures it
             exactly. It manages its own adjoint and step control, so passing
             ``adjoint`` or ``dtmax`` alongside it is an error.
+        time_unit : str, optional
+            The time unit ``t_span`` / ``t_eval`` are in (``"s"``/``"min"``/
+            ``"h"``/``"d"``). Default ``None`` uses the plant's native time unit
+            (``plant.time_unit`` -- the unit shared by its networks' rate
+            constants). When given, the input times are converted to the native
+            unit for the solve and ``solution.t`` is reported back in
+            ``time_unit``. Raises if the plant's networks disagree on (or do not
+            declare) a time unit (``plant.time_unit is None``).
 
         Returns
         -------
@@ -1646,6 +1684,10 @@ class Plant:
             atol_eff = default_atol(y0, self.initial_state())
         else:
             atol_eff = _coerce_atol(atol, self._total_state_size)
+        # Convert t_span / t_eval from a caller-supplied time_unit into the
+        # plant's native (rate-constant) unit; _time_factor scales back on output.
+        t_span, t_eval, _time_factor = to_native_time(
+            self.time_unit, time_unit, t_span, t_eval)
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
@@ -1734,7 +1776,12 @@ class Plant:
                 ys = ys[None, :]
             else:
                 ts = jnp.asarray(t_eval)
-            return PlantSolution(t=ts, state=ys, plant=self)
+            if _time_factor != 1.0:
+                ts = ts / _time_factor      # native -> requested unit
+            sol = PlantSolution(t=ts, state=ys, plant=self)
+            if time_unit is not None:
+                sol._requested_time_unit = time_unit
+            return sol
 
         # Forward (jax_adjoint) path. The compiled solve is cached per instance
         # and reused across repeat solves of this plant (see ``_jit_cache``). An
@@ -1761,7 +1808,12 @@ class Plant:
                 ts, ys = jitted(y0, params)
             else:
                 ts, ys = jitted(y0, params, t_eval)
-        return PlantSolution(t=ts, state=ys, plant=self)
+        if _time_factor != 1.0:
+            ts = ts / _time_factor          # native -> requested unit
+        sol = PlantSolution(t=ts, state=ys, plant=self)
+        if time_unit is not None:
+            sol._requested_time_unit = time_unit
+        return sol
 
     def _build_jitted_solve(
         self, t0, t1, has_t_eval, *, event, rtol, atol, adjoint, dtmax, max_steps,

@@ -565,9 +565,32 @@ def check_network_units(network, *, check_root: bool = True) -> list:
     condition_dim = {name: parse_units(u)
                      for name, u in network.condition_units.items()}
     warnings: list = []
+    inv_time: dict = {}
     for name, ast in zip(network.reaction_names, network.rate_asts):
         warnings.extend(check_rate_units(
             ast, name, species_dim, param_dim, condition_dim,
             check_root=check_root,
         ))
+        # Record each rate's inverse-time token for the cross-reaction check
+        # below (reuse the same root inference; cheap and advisory).
+        root = _infer(ast, _Ctx(name, species_dim, param_dim, condition_dim, []))
+        if root is not None:
+            inv = [k for k, v in root.as_dict().items()
+                   if k in _TIME_TOKENS and v < 0]
+            if len(inv) == 1:
+                inv_time[name] = inv[0]
+
+    # Cross-reaction time-unit consistency. Every rate constant drives dC/dt
+    # against the *same* integration time, so all rates must share one
+    # inverse-time unit. A network mixing, say, 1/d and 1/s rates is malformed --
+    # its RHS sums terms on inconsistent time bases -- yet each such rate passes
+    # the per-rate root check on its own. Flag the disagreement once, at network
+    # scope, so an author sees it. (Runs whenever the roots are determinable,
+    # independent of ``check_root``.)
+    distinct = set(inv_time.values())
+    if len(distinct) > 1:
+        detail = ("rate constants disagree on the time unit, so the RHS is not "
+                  "dimensionally consistent: "
+                  + ", ".join(f"{r} -> 1/{u}" for r, u in sorted(inv_time.items())))
+        warnings.append(UnitWarning("(network)", "time unit", detail))
     return warnings
