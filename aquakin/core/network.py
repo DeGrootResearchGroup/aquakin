@@ -253,7 +253,17 @@ class CompiledNetwork:
         return len(self.parameters)
 
     def default_concentrations(self) -> jnp.ndarray:
-        """Return a copy of the default initial-concentration vector."""
+        """Return a copy of the default initial-concentration vector.
+
+        This is the network's **reference state** -- every species at its YAML
+        ``default_concentration`` -- *not* a blank slate. For most networks that
+        means many species are nonzero (e.g. a full biomass inventory). It is a
+        sensible starting initial condition, but it is the **wrong base for a
+        feed composition**: an influent species you do not list should be
+        *absent*, not sitting at its reference value. Build feeds with
+        :meth:`influent` or ``concentrations(..., base="zero")`` instead -- see
+        :meth:`concentrations` for the trap in full.
+        """
         return jnp.asarray(self._default_concentrations)
 
     def default_parameters(self) -> jnp.ndarray:
@@ -299,6 +309,18 @@ class CompiledNetwork:
 
         A by-name builder that avoids manual
         ``default_concentrations().at[species_index[name]].set(value)`` chains.
+
+        .. warning::
+           **Building a feed? Use** :meth:`influent` **or** ``base="zero"``.
+           With the default ``base="defaults"`` every species you do *not* list
+           keeps its YAML reference value, so ``concentrations({"SS": 100.0})``
+           silently carries a full biomass/inert inventory (``XB_H``, ``XS``,
+           ``XI``, ...) into the result. That is correct for an **initial
+           condition** (the reactor starts from the reference state with a few
+           species adjusted) but wrong for an **influent** (an unlisted species
+           should be absent). For a feed, pass ``base="zero"`` so the vector
+           contains *only* what you list, or use :meth:`influent`, which
+           defaults to the zero base.
 
         Parameters
         ----------
