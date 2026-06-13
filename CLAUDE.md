@@ -32,7 +32,12 @@ The shipped networks currently are:
   substrate-uptake reactions (with pH / hydrogen / free-ammonia /
   inorganic-N inhibition, the lower-pH inhibition via the new `pHInhibitNode`),
   seven biomass decays, and the gas headspace (kLa transfer of H₂/CH₄/CO₂ plus
-  overpressure-driven biogas outflow). Inorganic-carbon and -nitrogen
+  overpressure-driven biogas outflow). The gas-transfer headspace-gain factor is
+  the symbolic `V_liq / V_gas` (the liquid lost to transfer raises the headspace
+  concentration by that ratio), not a baked-in constant; `ADM1DigesterUnit`
+  slaves the `V_liq` parameter to its own liquid volume, so the gas transfer is
+  correct for any digester size (the network default is the BSM2 3400/300 = 11⅓).
+  Inorganic-carbon and -nitrogen
   stoichiometry are symbolic parameter-expressions (the ADM1 elemental
   balances), so a calibrated yield/composition flows through them. pH is
   **state-derived** through the charge-balance `speciation:` solver (extended to

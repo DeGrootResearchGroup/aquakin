@@ -85,6 +85,13 @@ class ADM1DigesterUnit:
             if sp in self.network.species_index:
                 mask = mask.at[self.network.species_index[sp]].set(0.0)
         self._liquid_mask = mask
+        # The gas-transfer stoichiometry scales the headspace gain by the liquid
+        # volume V_liq (a unit of liquid lost to transfer raises the headspace
+        # concentration by V_liq/V_gas). The network ships V_liq at the BSM2
+        # default; slave it to this unit's actual liquid volume so the gas
+        # transfer is correct for any digester size. None if the network has no
+        # V_liq parameter (then the network's own default ratio is used).
+        self._v_liq_idx = self.network.param_index.get("V_liq")
 
     @property
     def state_size(self) -> int:
@@ -142,6 +149,11 @@ class ADM1DigesterUnit:
             mass_total = mass_total + s.Q * s.C
         C_in = mass_total / (Q_total + 1e-12)
 
+        # Slave the network's V_liq parameter to this unit's liquid volume so the
+        # gas-transfer headspace-gain ratio V_liq/V_gas matches the actual
+        # geometry (the network default is BSM2's 3400 m³).
+        if self._v_liq_idx is not None:
+            params = params.at[self._v_liq_idx].set(float(self.volume))
         reaction = self.network.dCdt(state, params, self._condition_arrays, 0)
         dilution = (Q_total / self.volume) * (C_in - state) * self._liquid_mask
         return reaction + dilution

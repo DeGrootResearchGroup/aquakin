@@ -226,7 +226,13 @@ parameters:
   p_h2o:    {value: 0.0556677, units: "bar"}             # 0.0313 * exp(5290*(1/Tb-1/To)), 35 C
   P_atm:    {value: 1.013, units: "bar"}
   k_P:      {value: 5.0e4, units: "m3/d/bar"}        # gas outflow resistance
-  V_gas:    {value: 300.0, units: "m3"}
+  V_gas:    {value: 300.0, units: "m3"}              # headspace gas volume
+  # Liquid (digester) volume. Only the gas-transfer stoichiometry uses it, via
+  # the V_liq/V_gas headspace-gain ratio (a unit of liquid lost to transfer
+  # raises the headspace concentration by V_liq/V_gas). The default is the BSM2
+  # geometry; ADM1DigesterUnit overrides it with the unit's actual liquid volume,
+  # so the gas transfer is correct for any digester size, not just 3400 m3.
+  V_liq:    {value: 3400.0, units: "m3"}
   pKa_co2:  {value: 6.32, units: "-"}    # H2CO3*/HCO3- pKa1 at 35 C (6.35 at 25 C, van't Hoff dH=5200 J/mol); matches the charge-balance solver's effective carbonate pKa1
 
 expressions:
@@ -446,15 +452,15 @@ reactions:
   - name: transfer_h2
     description: "H2 gas-liquid transfer to the headspace."
     rate: "kLa * ([S_h2] - 16 * K_H_h2 * p_gas_h2)"
-    stoichiometry: {S_h2: -1.0, S_gas_h2: 11.3333}
+    stoichiometry: {S_h2: -1.0, S_gas_h2: "V_liq / V_gas"}
   - name: transfer_ch4
     description: "CH4 gas-liquid transfer to the headspace."
     rate: "kLa * ([S_ch4] - 64 * K_H_ch4 * p_gas_ch4)"
-    stoichiometry: {S_ch4: -1.0, S_gas_ch4: 11.3333}
+    stoichiometry: {S_ch4: -1.0, S_gas_ch4: "V_liq / V_gas"}
   - name: transfer_co2
     description: "CO2 gas-liquid transfer (dissolved CO2 fraction of S_IC) to the headspace."
     rate: "kLa * (S_co2_diss - K_H_co2 * p_gas_co2)"
-    stoichiometry: {S_IC: -1.0, S_gas_co2: 11.3333}
+    stoichiometry: {S_IC: -1.0, S_gas_co2: "V_liq / V_gas"}
 
   # --- headspace outflow (advection of biogas out of the digester) ---
   - name: gas_outflow_h2
