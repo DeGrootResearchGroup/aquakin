@@ -56,6 +56,7 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
+    GradientCheckMixin,
     _run_diffeqsolve,
     friendly_solve_errors,
     init_solver_settings,
@@ -212,7 +213,7 @@ def _default_soluble_mask(network: CompiledNetwork) -> jnp.ndarray:
     )
 
 
-class BiofilmReactor:
+class BiofilmReactor(GradientCheckMixin):
     """Stateless 1-D layered biofilm reactor (diffusion--reaction over depth).
 
     Parameters

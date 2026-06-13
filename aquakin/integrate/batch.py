@@ -13,6 +13,7 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
+    GradientCheckMixin,
     cached_jitted_solver,
     concrete_settings_key,
     friendly_solve_errors,
@@ -46,7 +47,7 @@ class BatchSolution(_HasNamedSpecies):
     network: CompiledNetwork
 
 
-class BatchReactor:
+class BatchReactor(GradientCheckMixin):
     """
     Stateless 0-D (batch) reactor.
 
@@ -98,6 +99,27 @@ class BatchReactor:
     max_steps : int, optional
         Maximum number of internal solver steps (default 100000). Raise it for
         long or very stiff forward solves that exhaust the default budget.
+
+    Notes
+    -----
+    **Differentiating a stiff solve.** A reverse-mode gradient (``jax.grad`` /
+    ``jax.jacrev``) taken directly through ``solve`` on a stiff network
+    (ASM / ADM / WATS) returns **silent** ``NaN`` / ``Inf`` when ``dtmax`` is
+    uncapped -- the backward accumulation overflows (see ``dtmax`` above). No
+    exception is raised, so the non-finite gradient flows into an optimizer as
+    garbage and the fit never converges with no indication why. :func:`aquakin.calibrate`
+    and :func:`aquakin.sensitivity` guard this (``check_finite=True``), but a
+    hand-rolled loss + optimizer through ``solve`` is exposed. The remedies, in
+    order of convenience:
+
+    - build the reactor with a ``dtmax`` cap (the simplest fix);
+    - differentiate in **forward mode** (``jax.jacfwd`` with
+      ``adjoint=aquakin.forward_adjoint()``), finite at any step;
+    - use :func:`aquakin.calibrate` (``gradient="stable_adjoint"``, cap-free) or
+      :func:`aquakin.sensitivity`, which handle it internally;
+    - guard your own gradient with :meth:`check_gradient_finite`
+      (``g = reactor.check_gradient_finite(jax.grad(loss)(params))``), which
+      raises an actionable error instead of returning silent ``NaN``.
     """
 
     def __init__(

@@ -22,7 +22,7 @@ from aquakin.integrate.discrete_adjoint import (
     esdirk_adjoint_solve,
     implicit_euler_adjoint_solve,
 )
-from aquakin.integrate._common import forward_adjoint
+from aquakin.integrate._common import check_finite_gradient, forward_adjoint
 from aquakin.integrate.forward_sensitivity import (
     ForwardSensitivityResult,
     forward_sensitivity,
@@ -142,6 +142,7 @@ __all__ = [
     "dgsm",
     "effluent_averages",
     "effluent_quality_index",
+    "check_finite_gradient",
     "esdirk_adjoint_solve",
     "evaluate_bsm1",
     "evaluate_bsm2",

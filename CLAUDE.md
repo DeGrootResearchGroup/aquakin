@@ -636,7 +636,16 @@ default and switch to `DirectAdjoint` only when forward-mode is actually require
 `sensitivity` take `ad_mode="forward"|"reverse"` and build the right reactor
 adjoint internally (no `diffrax` / `adjoint=` in user code); `calibrate` also has
 `check_finite=True` to turn a non-finite stiff gradient into a friendly error with
-the remedy. `dgsm` takes `ad_mode=` too but cannot set the adjoint for you (your
+the remedy. **For a user who rolls their own loss + optimizer through
+`reactor.solve` (outside `calibrate`/`sensitivity`),** the same silent-non-finite
+reverse-gradient footgun is exposed and nothing raises. Every reactor therefore
+carries `check_gradient_finite(grad_value, what=...)` (the `GradientCheckMixin` in
+`integrate/_common.py`): wrap a freshly computed `jax.grad` in it
+(`g = reactor.check_gradient_finite(jax.grad(loss)(p))`) to convert a silent
+`NaN`/`Inf` into an actionable error whose remedy is tailored to whether the
+reactor already caps `dtmax`. The underlying free checker `check_finite_gradient`
+is exported at the package level too (`aquakin.check_finite_gradient`) for guarding
+a gradient computed without a reactor handle. `dgsm` takes `ad_mode=` too but cannot set the adjoint for you (your
 `fn` constructs the reactor), so its `fn` still needs
 `adjoint=aquakin.forward_adjoint()`. And `Plant.solve(gradient="auto")` (the
 default) auto-routes a differentiated stiff plant to the cap-free `stable_adjoint`

@@ -174,6 +174,17 @@ Every solve — reactor or whole plant — is differentiable. The machinery belo
 for parameter estimation and sensitivity analysis; a plain forward simulation
 (above) never needs it.
 
+> **Heads-up — silent non-finite reverse gradients.** A reverse-mode gradient
+> (`jax.grad` / `jax.jacrev`) taken *directly* through a stiff network's `solve`
+> (ASM / ADM / WATS) returns silent `NaN`/`Inf` when the reactor's `dtmax` is
+> uncapped — no exception, so the garbage gradient flows into your optimizer and
+> the fit never converges. `aquakin.calibrate` and `aquakin.sensitivity` guard
+> this for you; if you roll your own loss + optimizer, either cap `dtmax`, use
+> forward mode (`jax.jacfwd` with `adjoint=aquakin.forward_adjoint()`), or wrap
+> your gradient in `reactor.check_gradient_finite(jax.grad(loss)(p))`
+> (equivalently the free `aquakin.check_finite_gradient`) to get an actionable
+> error instead of silent `NaN`.
+
 ### Forward sensitivity (cap-free stiff gradients)
 
 Differentiating *through* a stiff reaction-network solve with ordinary AD goes
