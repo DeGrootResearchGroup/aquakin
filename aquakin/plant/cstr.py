@@ -117,6 +117,13 @@ class CSTRUnit:
     def state_size(self) -> int:
         return self.network.n_species
 
+    @property
+    def required_signals(self) -> tuple[str, ...]:
+        """Control-signal names this unit reads from the bus in ``rhs`` (the
+        ``signal_name`` of each ``controlled_kla`` entry). The plant validates
+        these are published before solving."""
+        return tuple(signal_name for signal_name, _gain in self.controlled_kla.values())
+
     def set_temperature(self, temperature_K: float) -> None:
         """Set this reactor's static operating temperature (Kelvin).
 

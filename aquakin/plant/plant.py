@@ -584,6 +584,44 @@ class Plant:
         self._state_layout = layout
         self._total_state_size = cursor
         self._build_connection_index()
+        self._validate_control_signals()
+
+    def _validate_control_signals(self) -> None:
+        """Cross-check the control-signal bus: every signal a unit *consumes*
+        must be *published* by some unit in the plant.
+
+        A unit under closed-loop control (a ``CSTRUnit`` with ``controlled_kla``)
+        reads ``signals[name]`` in its ``rhs``; if no controller publishes
+        ``name`` -- a forgotten or mistyped wiring -- that read is a bare
+        ``KeyError`` from deep inside the first jitted solve. This runs at
+        topology setup (before the RHS is traced) and raises a clear error
+        naming the unit, the missing signal, and the available signals instead.
+
+        Conservative by design: a unit that publishes signals declares their
+        names via ``signal_names``; if any signal *producer* (one exposing
+        ``signal_outputs``) does not declare ``signal_names``, the published set
+        is unknown, so validation is skipped rather than risk rejecting a valid
+        plant.
+        """
+        unknown_publisher = any(
+            hasattr(u, "signal_outputs") and not hasattr(u, "signal_names")
+            for u in self.units.values()
+        )
+        if unknown_publisher:
+            return
+        published: set[str] = set()
+        for unit in self.units.values():
+            published.update(getattr(unit, "signal_names", ()) or ())
+        for name, unit in self.units.items():
+            for sig in getattr(unit, "required_signals", ()) or ():
+                if sig not in published:
+                    raise ValueError(
+                        f"Unit '{name}' consumes control signal '{sig}', which "
+                        f"no unit in this plant publishes. Published signals: "
+                        f"{sorted(published) or '(none)'}. Add a controller "
+                        f"(e.g. a PIController) that publishes '{sig}', or fix "
+                        f"the signal name."
+                    )
 
     def _build_connection_index(self) -> None:
         """Precompute the static connection adjacency for the RHS hot paths.
