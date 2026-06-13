@@ -81,10 +81,10 @@ jobs:
     name: slow suite (py${{ matrix.python-version }})
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    # `-n 2` (memory cap, see the run step) roughly doubles wall time versus the
-    # old 4-worker `-n auto`, so the ceiling is raised from 35 to 75 min with
-    # headroom. Merge-only, so off the PR critical path.
-    timeout-minutes: 75
+    # `-n 1` (serial, see the run step) roughly doubles wall time versus `-n 2`,
+    # so the ceiling is raised to 100 min with headroom for further growth.
+    # Merge-only, so off the PR critical path.
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:
@@ -110,17 +110,17 @@ jobs:
         # here keeps the three CI groups mutually exclusive -- no test runs in two
         # jobs. (fast = "not validation and not slow"; slow = "slow and not
         # validation"; validation = "validation".)
-        # `-n 2`, NOT `-n auto`: the slow suite has grown enough heavy whole-plant
-        # solves (the BSM2 family, the profile-likelihood and calibration grids)
-        # that four concurrent ones (`-n auto` = 4 workers) exhaust the 16 GB
-        # hosted runner and a worker is OOM-killed mid-test (an xdist worker crash,
-        # not a timeout). `-n 2` halves the concurrent heavy solves, so roughly
-        # half the peak memory, at the cost of wall time -- the same cap the
-        # validation suite already uses for the same reason. Loadscope is still
-        # avoided (it pins parametrized families to one worker; measured ~4x
-        # slower), so plain load distribution over the two workers.
+        # `-n 1` (serial), NOT `-n auto`/`-n 2`: a single heavy whole-plant test
+        # (the BSM2 family, the profile-likelihood and calibration grids) peaks at
+        # ~4-5.5 GB resident, and the heaviest do several solves and spike higher.
+        # On the 16 GB hosted runner two concurrent ones (`-n 2`) reach 10-16 GB
+        # and the runner is OOM-killed or thrashes to the timeout when two heavy
+        # tests coincide (observed intermittently: one Python version passes while
+        # the other OOMs). Running serially caps peak at ~one test (~7-9 GB with
+        # the interpreter), comfortably in budget, at the cost of wall time --
+        # acceptable since this is merge-only, off the PR critical path.
         run: >-
-          pytest -m "slow and not validation" -q -n 2
+          pytest -m "slow and not validation" -q -n 1
           --durations=15 --timeout=900 --timeout-method=thread
           --max-worker-restart=0
 
@@ -130,17 +130,13 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # Merge-to-main only (not on the PR critical path), so a generous ceiling is
-    # fine. The validation set has grown (now ~24 tests: published-data checks
-    # plus the AD-correctness suites -- discrete/stable/forward adjoints). These
-    # are the heaviest tests in the repo (full 167-state two-network BSM2 plant
-    # steady states + ADM1 + AD through stiff solves), which OOM the 16 GB hosted
-    # runner under `-n auto` (4 workers): four heavy solves' peak memory coincides
-    # and the runner is killed mid-run. Capping at `-n 2` halves the concurrent
-    # heavy solves (so ~half the peak memory) at the cost of wall time --
-    # acceptable here, since validation is off the PR critical path. The slow
-    # suite carries the same `-n 2` cap for the same reason. 60 min absorbs the
-    # slower run with headroom.
-    timeout-minutes: 60
+    # fine. The validation tests are the heaviest in the repo (full 167-state
+    # two-network BSM2 plant steady states + ADM1 + AD through stiff solves), each
+    # ~4-5.5 GB resident. Two concurrent (`-n 2`) still OOM-killed the 16 GB
+    # runner as the set grew, so it runs serially (`-n 1`, see the run step). The
+    # slow suite carries the same `-n 1` cap for the same reason. 90 min absorbs
+    # the serial run with headroom.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -157,9 +153,9 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run validation suite (against published data)
-        # `-n 2` (not `-n auto`): the validation tests are the most memory-heavy
-        # in the repo, and four concurrent on the 16 GB runner OOM-kill it. Two
-        # at a time keeps peak memory in budget.
+        # `-n 1` (serial): the validation tests are the most memory-heavy in the
+        # repo (~4-5.5 GB each); even two concurrent (`-n 2`) OOM-kill the 16 GB
+        # runner as the set grew. Serial keeps peak at ~one test, in budget.
         run: >-
-          pytest -m validation -q -n 2 --durations=15
+          pytest -m validation -q -n 1 --durations=15
           --timeout=900 --timeout-method=thread --max-worker-restart=0
