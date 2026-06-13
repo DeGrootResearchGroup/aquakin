@@ -1908,7 +1908,17 @@ three fixes, all diagnosed against the official BSM1 reference code:
   flows at ~40% of steady → starved underflow → washout. Each unit now exposes a
   `flow_outputs` rule; `Plant` solves the small flow fixed point **exactly**
   (probe the affine map, one `lineax`/`jnp.linalg.solve`), then runs the
-  concentration sweep on the fixed flows. This was the keystone.
+  concentration sweep on the fixed flows. This was the keystone. **Affinity is
+  checked:** the probe is exact only if every `flow_outputs` is affine in the
+  recycle flows, which a threshold-mode `SplitterUnit` / `StorageTank` bypass is
+  *not* (piecewise-linear, a kink). On the first non-traced `solve` the plant
+  re-evaluates the forward pass at the solved recycle flows and `warnings.warn`s
+  if it does not reproduce them (`Plant._warn_if_flow_nonaffine`) — the residual
+  is exactly the affine-violation indicator, so it fires only when a
+  recycle-dependent inlet actually crosses a kink (no false positives: the shipped
+  BSM2 bypass/storage plants, whose such units are fed by the influent / a fixed
+  pump, never warn). It is a warning, not an error: a kink the flow never crosses
+  in operation is still correct.
 - **Non-negative flow split** (the remainder outflow clamped into `[0, Q_in]` in
   both clarifiers): guards against a negative underflow when the feed dips below
   the design split — closes issue #17; inactive at steady state.
