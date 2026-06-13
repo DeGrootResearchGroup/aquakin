@@ -127,10 +127,11 @@ DIMENSIONLESS = Dimension()
 # is normalised to ``mol/L`` after parsing.
 _UNIT_SYMBOLS = ["kmol", "mol", "min", "kg", "bar", "Pa", "g", "m", "L", "d",
                  "s", "h", "M", "K"]
-# Chemical "currency" tokens. ``O2`` carries the meaning of oxygen-as-O2; these
-# are the distinct base dimensions the check exists to keep apart. Longest first
-# (``COD`` before ``C``).
-_CURRENCY_TOKENS = ["COD", "O2", "N", "P", "S", "C"]
+# Chemical "currency" tokens. ``O2`` carries the meaning of oxygen-as-O2;
+# ``TSS`` is suspended-solids mass (a distinct currency in the ASM2d/ASM3
+# models). These are the distinct base dimensions the check exists to keep
+# apart. Longest first (``COD`` before ``C``, ``TSS`` before ``S``).
+_CURRENCY_TOKENS = ["COD", "TSS", "O2", "N", "P", "S", "C"]
 
 _SUPERSCRIPT_TO_ASCII = str.maketrans(
     {"⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5", "⁶": "6",

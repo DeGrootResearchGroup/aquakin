@@ -11,9 +11,18 @@ network YAML using:
 - precomputed numeric ``stoichiometry:`` coefficients (yield, N-content,
   charge factors evaluated at their literature defaults)
 
+The SUMO export's ``units`` field carries internal sentinels (``"0"`` /
+``"SmallNumber"`` / ``"-BigNumber"``) for parameters and a dotted dialect
+(``g COD.m-3``) for species, neither of which aquakin can parse. Real units are
+stamped afterwards by the post-processor
+[`aquakin/networks/_fix_sumo_units.py`](../aquakin/networks/_fix_sumo_units.py)
+(run it after regenerating), which assigns each unit from the network's own
+structure -- so ``network.time_unit`` resolves and ``check_units`` works.
+
 Usage::
 
     python scripts/sumo_to_aquakin.py /tmp/sumo_json/asm3.json aquakin/networks/asm3.yaml [network_name]
+    (cd aquakin/networks && python _fix_sumo_units.py)   # stamp real units
 """
 
 from __future__ import annotations

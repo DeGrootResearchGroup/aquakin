@@ -168,12 +168,42 @@ def test_units_metadata_carried_through():
 
 
 @pytest.mark.parametrize("name", [
-    "asm1", "asm2d", "asm3", "ozone_bromate", "uv_h2o2", "wats_sewer",
+    "asm1", "asm2d", "asm3", "asm3_biop", "ozone_bromate", "uv_h2o2",
+    "wats_sewer",
 ])
 def test_shipped_networks_are_unit_clean(name):
     # the correctly-annotated shipped networks raise no warning (the check is
-    # advisory, so this is the no-false-positive guard, not a proof of math)
+    # advisory, so this is the no-false-positive guard, not a proof of math).
+    # The SUMO-derived asm2d/asm3/asm3_biop carry real units (issue #199), so
+    # they are now actually checked, not skipped, and come out clean.
     assert aquakin.load_network(name).check_units() == []
+
+
+def test_sumo_networks_have_real_units():
+    # The four SUMO-derived ASM networks shipped with placeholder parameter units
+    # ("0"/"SmallNumber"/"-BigNumber") and an unparseable species-unit dialect.
+    # _fix_sumo_units.py stamps real units, so their rate constants now declare a
+    # time unit (the inverse-time token parses) and the species units parse.
+    from aquakin.utils.units import parse_units
+    for name in ("asm2d", "asm2d_tud", "asm3", "asm3_biop"):
+        net = aquakin.load_network(name)
+        assert "0" not in net.parameter_units.values()
+        # at least one rate constant declares 1/d
+        assert any(parse_units(u) == parse_units("1/d")
+                   for u in net.parameter_units.values())
+        # every species unit parses (no leftover dotted dialect)
+        assert all(parse_units(net.units_of(s)) is not None for s in net.species)
+
+
+def test_asm2d_tud_warnings_confined_to_pp_storage():
+    # ASM2d-TUD is unit-clean except its two biomass-normalised PP-storage rates
+    # (qPP * XPAO**2 / XPP * ...), whose root is irreducibly cross-currency
+    # (COD^2/P) -- a property of that model's rate form, which the root check
+    # correctly surfaces. Guards that nothing else regresses.
+    ws = aquakin.load_network("asm2d_tud").check_units()
+    storage = {"Anoxic_storage_of_XPP", "Aerobic_storage_of_XPP"}
+    assert ws, "expected the PP-storage root finding to be surfaced"
+    assert {w.reaction for w in ws} <= storage
 
 
 def test_adm1_warnings_confined_to_gas_headspace():
