@@ -167,12 +167,18 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     theta0 = float(base[gidx])
     T = 3.0
 
-    # The diurnal forcing makes the adaptive solve take ~2000 steps -- right at
-    # the constant-influent shared cap. The exact count drifts a few percent
-    # across CPU architectures, so a 2000 cap that passes on one platform trips
-    # "maximum solver steps reached" on another. Give the transient solve headroom
-    # (max_steps also sizes the stable-adjoint backward-scan buffer).
-    kw = {**_solve_kwargs(), "max_steps": 5_000}
+    # Tighter solver than the shared default, for an *accurate* finite-difference
+    # reference. The stable-adjoint gradient is the exact gradient of the discrete
+    # solve and is platform-stable; FD is the noisy side. Each g(theta+-h) re-runs
+    # an adaptive solve whose step grid shifts discretely with theta, and at the
+    # default atol=1e-3 that grid noise puts a ~theta-independent absolute error on
+    # the central difference (it landed up to ~8% off across CPU/XLA builds).
+    # Dropping to rtol=1e-7 / atol=1e-5 resolves the grid, so FD converges to the
+    # gradient to ~0.1% (verified: FD -> grad to 0.00% as h shrinks). rel=2e-2 then
+    # covers the residual platform spread with wide margin while still catching a
+    # genuinely wrong gradient (sign, magnitude). max_steps also sizes the
+    # stable-adjoint backward-scan buffer, so give the tighter solve headroom.
+    kw = {**_solve_kwargs(), "rtol": 1e-7, "atol": 1e-5, "max_steps": 12_000}
 
     def g(theta):
         p = base.at[gidx].set(theta)
@@ -183,19 +189,6 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     grad = float(jax.grad(g)(theta0))
     assert np.isfinite(grad)
     assert grad != 0.0
-    # The stable-adjoint gradient is the *exact* gradient of the discrete solve
-    # and is platform-stable (it agrees across machines to ~5 significant
-    # figures). The finite-difference reference is the noisy side: each g(theta+-h)
-    # re-runs an adaptive stiff solve whose step sequence shifts discretely with
-    # theta (and across CPU/XLA builds), so the central difference carries a
-    # roughly theta-independent absolute noise, i.e. a relative error ~ noise/(2h*grad).
-    # The earlier h = theta*1e-3 made that signal ~2e-4 -- near the atol=1e-3 floor --
-    # so FD landed within 0.2% locally but ~8% off on the CI runner. A 10x larger
-    # step lifts the signal an order of magnitude above the noise (FD error scales
-    # as 1/h here, the sensitivity being near-linear); rel=2e-2 then covers the
-    # residual platform spread while still catching a genuinely wrong gradient
-    # (sign, magnitude). dtmax cannot pin the grid: gradient="stable_adjoint"
-    # controls its own steps and rejects it.
     h = theta0 * 1e-2
     fd = (float(g(theta0 + h)) - float(g(theta0 - h))) / (2.0 * h)
     assert grad == pytest.approx(fd, rel=2e-2)

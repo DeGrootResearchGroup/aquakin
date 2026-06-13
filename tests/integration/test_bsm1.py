@@ -68,13 +68,14 @@ def test_bsm1_builds_and_solves(asm1, constant_influent):
 
 
 @pytest.mark.parametrize("use_takacs", [False, True])
-def test_recycle_concentration_sweep_converges_by_two_passes(
+def test_recycle_presolve_makes_mopup_passes_irrelevant(
     asm1, constant_influent, use_takacs
 ):
-    """The per-RHS Gauss-Seidel concentration sweep reaches a fixed point in 2
-    passes for the BSM1 topology, so the default recycle_passes=3 is a safe
-    margin (the recycle concentrations are mostly CSTR states, read directly).
-    This pins the convergence claim that was previously only asserted."""
+    """The recycle back-edges are seeded with their *exact* affine fixed point
+    (``_resolve_recycle_concentrations``) before the Gauss-Seidel mop-up, so the
+    BSM1 RHS is identical at 1, 2 and 10 mop-up passes -- the seed is already the
+    answer, and the pass count does no work. (Before the pre-solve this needed 2
+    passes; now it is exact at any count, gain-independent.)"""
     import numpy as np
 
     plant = build_bsm1(network=asm1, use_takacs=use_takacs)
@@ -85,12 +86,10 @@ def test_recycle_concentration_sweep_converges_by_two_passes(
         plant.recycle_passes = n
         return np.asarray(plant.derivative(y0))
 
-    d2, d10 = dstate(2), dstate(10)
-    # 2 passes is already converged to ~machine precision vs many passes.
-    assert np.allclose(d2, d10, rtol=1e-8, atol=1e-6 * (np.linalg.norm(d10) + 1.0))
-    # 1 pass is genuinely unconverged (so the sweep is doing real work).
-    d1 = dstate(1)
-    assert not np.allclose(d1, d10, rtol=1e-6)
+    d1, d2, d10 = dstate(1), dstate(2), dstate(10)
+    tol = 1e-6 * (np.linalg.norm(d10) + 1.0)
+    assert np.allclose(d1, d10, rtol=1e-8, atol=tol)
+    assert np.allclose(d2, d10, rtol=1e-8, atol=tol)
 
 
 def test_recycle_passes_validated_and_configurable(asm1):

@@ -301,20 +301,20 @@ class Plant:
     ----------
     name : str
     recycle_passes : int, optional
-        Number of Gauss-Seidel passes used per RHS evaluation to propagate
-        concentrations around recycle loops (default 3). The recycle *flows*
-        are resolved exactly (:meth:`_resolve_flows`); this only bounds the
-        concentration sweep. It is a *fixed* count (not iterate-to-tolerance)
-        because the RHS is jitted and differentiated, so a data-dependent loop
-        is not permitted. For BSM-family topologies the streams reach a fixed
-        point in 2 passes (verified to machine precision), so the default of 3
-        is a safe margin; raise it only for unusual topologies with a long
-        chain of concentration-transforming units (mixers/splitters/clarifiers)
-        inside a recycle loop. The first non-traced :meth:`solve` runs a one-time
-        convergence diagnostic and warns if the sweep has *not* converged at
-        ``recycle_passes`` (so an under-resolved topology is flagged rather than
-        silently returning a wrong steady state); raise ``recycle_passes`` until
-        the warning clears.
+        Number of Gauss-Seidel *mop-up* passes per RHS evaluation (default 3).
+        Both the recycle flows AND concentrations are first resolved **exactly**
+        and gain-independently -- flows by :meth:`_resolve_flows`, concentrations
+        by :meth:`_resolve_recycle_concentrations` (an affine probe + linear
+        solve) -- so for any linear topology (every shipped plant) the recycle
+        back-edges are seeded at their exact fixed point and these passes do no
+        work. They only refine the residual of a genuinely *non-affine* in-cycle
+        unit (an ASM↔ADM translator inside a pure-stateless loop, which the
+        shipped units cannot form), so the default 3 is ample and rarely matters.
+        It is a *fixed* count (not iterate-to-tolerance) because the RHS is jitted
+        and differentiated. The first non-traced :meth:`solve` runs a one-time
+        convergence diagnostic on the mop-up residual and warns only if even the
+        exact pre-solve plus these passes has not converged (a non-affine loop);
+        raise ``recycle_passes`` until it clears.
     """
 
     def __init__(self, name: str, *, recycle_passes: int = 3) -> None:
@@ -1128,7 +1128,13 @@ class Plant:
         for port_name, series in self.influents.items():
             streams[(None, port_name)] = series.at(t)
         resolved_flows = self._resolve_flows(t, params_full, states)
-        seeded = self._seed_recycle_streams(resolved_flows)
+        # Seed the recycle back-edges with their exact (affine) fixed point, so
+        # the Gauss-Seidel mop-up starts at the answer for any linear topology
+        # (gain-independent); it then only refines a genuinely non-affine
+        # in-cycle unit, if any. Falls back to the zero auto-seed when there are
+        # no recycle edges.
+        seeded = self._resolve_recycle_concentrations(t, states, params_full,
+                                                      resolved_flows)
         all_outputs = self._sweep_outputs(t, states, streams, seeded, params_full)
         return all_outputs, streams
 
@@ -1405,6 +1411,124 @@ class Plant:
             seeded[key] = Stream(Q=q, C=iv.C, network=iv.network, T=iv.T)
         return seeded
 
+    def _resolve_recycle_concentrations(
+        self,
+        t: jnp.ndarray,
+        states: dict[str, jnp.ndarray],
+        params_full: jnp.ndarray,
+        resolved_flows: dict[tuple[Optional[str], str], jnp.ndarray],
+    ) -> dict[tuple[str, str], Stream]:
+        """Pre-solve the recycle back-edge concentrations exactly, as a seed.
+
+        One forward output sweep, with the recycle back-edge concentrations held
+        at trial values, is an **affine** map ``c -> M·c + d`` on those
+        concentrations (mixers / splitters / clarifiers are linear in
+        concentration at the already-resolved flows; stateful units output their
+        state, a constant). So instead of iterating it (gain-limited), we recover
+        ``M`` and ``d`` by probing -- one pass at ``c = 0`` (``d``), one pass per
+        recycle edge set to a unit concentration (the columns of ``M``) -- and
+        solve ``(I − M) c = d`` directly. This is exact and **gain-independent**,
+        the same closed-form trick :meth:`_resolve_flows` uses for the flows.
+
+        The map is **species-decoupled** (a mixer/splitter/clarifier maps each
+        species independently; the only species-coupling unit, an ASM↔ADM
+        translator, is fed by a digester *state* and so never enters the cyclic
+        map), so one probe per edge yields its whole column across all species,
+        and the solve is ``n_species`` independent ``n_edge × n_edge`` systems --
+        ``n_recycle_edges + 1`` cheap forward passes total, like the flow probe.
+        Edges of different networks do not couple (the translator that would
+        couple them is broken by the digester state), so the solve is grouped by
+        network. Temperature, when carried, is one more decoupled scalar channel.
+
+        Returned as the recycle seed for :meth:`_sweep_outputs`. For the linear
+        case (every shipped topology) it **is** the exact fixed point, so the
+        subsequent mop-up passes leave it unchanged; the iterative sweep then only
+        has to refine the residual of a genuinely *non*-affine in-cycle unit (a
+        translator inside a pure-stateless loop -- not constructible from the
+        shipped units), with :meth:`_check_recycle_convergence` as the backstop.
+        """
+        keys = self._recycle_keys
+        if not keys:
+            return {}
+        seed_net: dict = {}
+        for conn in self._recycle_conns:
+            key = (conn.from_unit, conn.from_port)
+            iv = conn.initial_value if conn.initial_value is not None \
+                else self._recycle_seeds[key]
+            seed_net[key] = iv.network
+        nsp = {k: seed_net[k].n_species for k in keys}
+        # Temperature propagates only when an influent carries it (the mixer
+        # T-gate needs every inlet to have T); otherwise the whole plant is
+        # T=None regardless of the nominal recycle-seed T. So resolve a T channel
+        # only in that case -- a number around the loop ignites the gate.
+        carries_T = any(getattr(s, "T", None) is not None
+                        for s in self.influents.values())
+        t_seed = jnp.zeros(()) if carries_T else None
+
+        def forward(c_by_key, T_by_key):
+            influent = {(None, pn): s.at(t) for pn, s in self.influents.items()}
+            seeded = {k: Stream(Q=resolved_flows[k], C=c_by_key[k],
+                                network=seed_net[k], T=T_by_key[k]) for k in keys}
+            out = self._sweep_outputs(t, states, influent, seeded, params_full,
+                                      passes=1)
+            return ({k: out[k].C for k in keys},
+                    {k: out[k].T for k in keys})
+
+        zeroC = {k: jnp.zeros((nsp[k],)) for k in keys}
+        zeroT = {k: t_seed for k in keys}
+        dC, dT = forward(zeroC, zeroT)                       # constant part
+        resolve_T = carries_T and all(dT[k] is not None for k in keys)
+
+        # Probe each edge with a unit concentration (+ unit T) -> its column.
+        colC: dict = {}
+        colT: dict = {}
+        for ki in keys:
+            cC = dict(zeroC)
+            cT = dict(zeroT)
+            cC[ki] = jnp.ones((nsp[ki],))
+            if resolve_T:
+                cT[ki] = jnp.ones(())
+            fC, fT = forward(cC, cT)
+            colC[ki] = {kj: fC[kj] - dC[kj] for kj in keys}
+            colT[ki] = {kj: (fT[kj] - dT[kj]) if resolve_T else None
+                        for kj in keys}
+
+        # Group by network (different species vectors / no cross-network coupling)
+        # and solve (I - M) c = d per species, plus a scalar T channel if carried.
+        groups: dict = {}
+        for k in keys:
+            groups.setdefault(id(seed_net[k]), []).append(k)
+
+        solved_C: dict = {}
+        solved_T: dict = {}
+        for gkeys in groups.values():
+            m = len(gkeys)
+            eye = jnp.eye(m)
+            # M[s, j, i] = response of edge j (species s) to a unit at edge i.
+            M = jnp.stack([
+                jnp.stack([colC[gkeys[i]][gkeys[j]] for i in range(m)], axis=1)
+                for j in range(m)
+            ], axis=1)                                        # (nsp, m_j, m_i)
+            d = jnp.stack([dC[gkeys[j]] for j in range(m)], axis=1)   # (nsp, m_j)
+            cs = jnp.linalg.solve(eye[None] - M, d[..., None])[..., 0]  # (nsp, m_j)
+            for j, kj in enumerate(gkeys):
+                solved_C[kj] = cs[:, j]
+            if resolve_T:
+                MT = jnp.stack([
+                    jnp.stack([colT[gkeys[i]][gkeys[j]] for i in range(m)])
+                    for j in range(m)
+                ])                                            # (m_j, m_i)
+                dT_g = jnp.stack([dT[gkeys[j]] for j in range(m)])
+                cT_g = jnp.linalg.solve(eye - MT, dT_g)
+                for j, kj in enumerate(gkeys):
+                    solved_T[kj] = cT_g[j]
+            else:
+                for kj in gkeys:
+                    solved_T[kj] = None
+
+        return {k: Stream(Q=resolved_flows[k], C=solved_C[k],
+                          network=seed_net[k], T=solved_T[k]) for k in keys}
+
     def _sweep_outputs(
         self,
         t: jnp.ndarray,
@@ -1479,7 +1603,12 @@ class Plant:
             for port_name, series in self.influents.items():
                 streams[(None, port_name)] = series.at(t)
             resolved_flows = self._resolve_flows(t, params_full, states)
-            seeded = self._seed_recycle_streams(resolved_flows)
+            # Seed from the exact affine pre-solve, exactly as _resolve_streams
+            # does -- so the check measures the *residual the mop-up still has to
+            # remove* (the non-affine-in-cycle part), not the gain-limited
+            # convergence of the bare zero-seed the pre-solve replaced.
+            seeded = self._resolve_recycle_concentrations(
+                t, states, params_full, resolved_flows)
             return self._sweep_outputs(t, states, streams, seeded, params_full,
                                        passes=passes)
 
