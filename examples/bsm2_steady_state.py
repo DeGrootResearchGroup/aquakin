@@ -48,10 +48,11 @@ def main() -> None:
 
     print()
     print("Activated-sludge reactor 5 (effluent) at steady state:")
-    # Units come from the ASM1 network (carried through compile), not a
-    # hand-kept name->unit table.
-    for sp in ("SNH", "SNO", "SO", "XB_H", "XB_A", "XI"):
-        val = float(sol.C_named("tank5", sp)[-1])
+    # final_named reads the steady-state (last-point) values for several species
+    # in one call. Units come from the ASM1 network (carried through compile),
+    # not a hand-kept name->unit table.
+    finals = sol.final_named("tank5", ("SNH", "SNO", "SO", "XB_H", "XB_A", "XI"))
+    for sp, val in finals.items():
         print(f"  {sp:5s} = {val:8.2f}  {asm1.units_of(sp)}")
 
     print()

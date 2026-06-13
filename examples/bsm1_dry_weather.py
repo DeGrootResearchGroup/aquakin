@@ -41,10 +41,11 @@ def main() -> None:
 
     print()
     print("Tank-5 effluent state at simulation end:")
-    # Units come from the network (carried through compile), not a hand-kept
-    # name->unit table -- no risk of mislabelling N as COD.
-    for sp in ("SS", "SNH", "SNO", "SO", "XB_H", "XB_A"):
-        val = float(sol.C_named("tank5", sp)[-1])
+    # final_named reads the last-point values for several species in one call
+    # (no per-species [-1] slice). Units come from the network (carried through
+    # compile), not a hand-kept name->unit table -- no risk of mislabelling N as COD.
+    finals = sol.final_named("tank5", ("SS", "SNH", "SNO", "SO", "XB_H", "XB_A"))
+    for sp, val in finals.items():
         print(f"  {sp:5s} = {val:7.2f}  {network.units_of(sp)}")
 
     print()

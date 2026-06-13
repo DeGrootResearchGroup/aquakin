@@ -94,6 +94,11 @@ solution = reactor.solve(
 
 print("[BrO3-] at t=600s:", float(solution.C_named("BrO3-")[-1]))
 
+# Reporting last-point values without the per-species [-1] slice:
+solution.final_named(["O3", "BrO3-"])   # {name: float} at the final time (None = all)
+solution.final                          # == final_named(): every species' last value
+solution.C_named_many(["O3", "BrO3-"])  # several full trajectories -> {name: array}
+
 # Species units and descriptions are carried from the YAML to results, so you
 # never have to re-derive units by string-matching names.
 network.units_of("BrO3-")            # e.g. "mol/L"
