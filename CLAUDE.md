@@ -467,6 +467,15 @@ tree itself is not walked repeatedly.
 - `MonodRatioNode(A, B, K)` — ratio-saturation Monod: `(A/B) / (K + A/B)`
 - `MonodInhibitionRatioNode(A, B, K)` — ratio-inhibition Monod: `K / (K + A/B)`
 
+All four Monod nodes evaluate their `num/denom` through `_safe_ratio`
+(`core/nodes.py`), a **double-where** guard returning 0 (with a finite
+gradient) where the denominator is exactly zero — the full-depletion point
+where the limiting quantity *and* its saturation constant are both 0 (`K = X =
+0`). The physical limit is 0 (no substrate → no rate); a bare `num/denom` is
+`0/0 = NaN` there and the naive single `where` still back-propagates a NaN
+through the masked branch, so the denominator is guarded too. Identity for any
+nonzero denominator — the only change is exactly at the singularity.
+
 New domain-specific node types are added here as needed. Each node implements:
 
 ```python
@@ -1913,7 +1922,11 @@ per-species noise floor
 (`atol_factor=floor_frac=1e-6`) via `integrate/_common.default_atol` — the
 SUNDIALS "vector atol" / Hairer "atol ∝ typical value" rule. The reactors scale
 off the network's `default_concentrations` (at construction); the plant scales
-off `y0` (at solve time). `BiofilmReactor` is the exception — its multi-
+off `y0` (at solve time). When **every** magnitude is zero (an all-zero
+`scale_like` with no reference) the relative floor `floor_frac·char` would
+itself be 0, so `char` falls back to unit scale — keeping every `atol_i`
+strictly positive rather than 0 (the very invariant this floor upholds). This
+fallback is identity for any input with a nonzero magnitude (the common path). `BiofilmReactor` is the exception — its multi-
 compartment `(n_layers+1, n_species)` state does not match the per-species
 vector, so it keeps an explicit scalar `atol` (default `1e-9`). This replaces
 the old fixed `atol=1e-9`, which was ~9 orders too tight for g/m³ ASM/ADM states

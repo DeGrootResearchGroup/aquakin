@@ -159,13 +159,64 @@ def test_monod_ratio_evaluates_correctly():
 
 
 def test_monod_ratio_handles_zero_denominator():
-    """A=0, B=0 -> 0/0 mathematically. Our form A/(K*B+A) returns 0/0 = NaN
-    only when both are exactly zero; in practice solvers don't visit that
-    point. Test the well-defined case A=0, B>0 -> 0."""
+    """A=0, B>0 -> 0 (the well-defined depleted-substrate limit)."""
     from aquakin.core.nodes import MonodRatioNode
 
     node = MonodRatioNode(ConstantNode(0.0), ConstantNode(1.0), ConstantNode(0.5))
     assert _eval(node) == pytest.approx(0.0)
+
+
+def test_monod_nodes_safe_at_full_depletion():
+    """A saturation/inhibition denominator is zero only when the limiting
+    quantity *and* its saturation constant are both zero (a species depleted
+    to 0 beside a K calibrated to its zero bound). The physical limit is 0 (no
+    substrate -> no rate); the term must return 0, not NaN."""
+    from aquakin.core.nodes import (
+        MonodInhibitionNode,
+        MonodInhibitionRatioNode,
+        MonodNode,
+        MonodRatioNode,
+    )
+
+    zero = ConstantNode(0.0)
+    # Monod x/(K+x) and MonodRatio a/(K*b+a) -> 0 at X=K=0 / A=K=0.
+    assert _eval(MonodNode(zero, zero)) == pytest.approx(0.0)
+    assert _eval(MonodRatioNode(zero, zero, zero)) == pytest.approx(0.0)
+    # Inhibition K/(K+x) and K/(K+a/b) -> 0 at K=0 (full, un-relievable
+    # inhibition) rather than 0/0 = NaN.
+    assert _eval(MonodInhibitionNode(zero, zero)) == pytest.approx(0.0)
+    assert _eval(MonodInhibitionRatioNode(zero, zero, zero)) == pytest.approx(0.0)
+
+
+def test_monod_gradient_finite_at_full_depletion():
+    """The double-where guard keeps the *gradient* finite at the 0/0 point too
+    (a naive ``where(denom!=0, num/denom, 0)`` still back-propagates NaN)."""
+    from aquakin.core.nodes import MonodNode
+
+    # MonodNode([A], k) with the species A and rate constant k both driven to 0.
+    node = MonodNode(SpeciesNode("A"), ParamNode("k"))
+    fn = node.compile(_ctx())
+
+    def f(a, k):
+        C = jnp.asarray([a, 2.0])
+        params = jnp.asarray([k, 1.0, 5000.0, 8.8])
+        return fn(C, params, {"pH": jnp.asarray([7.5]), "T": jnp.asarray([293.15])}, 0)
+
+    val, (ga, gk) = jax.value_and_grad(f, argnums=(0, 1))(0.0, 0.0)
+    assert float(val) == pytest.approx(0.0)
+    assert jnp.isfinite(ga) and jnp.isfinite(gk)
+
+
+def test_monod_nodes_unchanged_for_nonzero_denominator():
+    """The guard is identity away from the singularity -- ordinary Monod values
+    are untouched."""
+    from aquakin.core.nodes import MonodInhibitionNode, MonodNode
+
+    # A=1, K=1 -> 0.5 either way (regression: guard must not perturb the value).
+    assert _eval(MonodNode(SpeciesNode("A"), ConstantNode(1.0))) == pytest.approx(0.5)
+    assert _eval(
+        MonodInhibitionNode(SpeciesNode("A"), ConstantNode(1.0))
+    ) == pytest.approx(0.5)
 
 
 def test_grad_through_params():
