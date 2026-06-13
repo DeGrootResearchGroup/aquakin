@@ -194,10 +194,10 @@ reactions:
     stoichiometry:
       SF: "(-1) / YH"
       SNH: "iN_SF / YH - iN_BM"
-      SNO: "(-1) * (1 - YH) / iNO3_N2 * YH"
-      SN2: "(1 - YH) / iNO3_N2 * YH"
+      SNO: "(-1) * (1 - YH) / iNO3_N2 / YH"
+      SN2: "(1 - YH) / iNO3_N2 / YH"
       SPO: "iP_SF / YH - iP_BM"
-      SHCO: "(iN_SF / YH - iN_BM) * iCharge_SNHx + (iP_SF / YH - iP_BM) * iCharge_SPO4 + (-1) * (1 - YH) / iNO3_N2 * YH * iCharge_SNOx"
+      SHCO: "(iN_SF / YH - iN_BM) * iCharge_SNHx + (iP_SF / YH - iP_BM) * iCharge_SPO4 + (-1) * (1 - YH) / iNO3_N2 / YH * iCharge_SNOx"
       XH: 1.0
       XTSS: "iTSS_BM"
 
@@ -207,10 +207,10 @@ reactions:
     stoichiometry:
       SA: "(-1) / YH"
       SNH: "(-1) * iN_BM"
-      SNO: "(-1) * (1 - YH) / iNO3_N2 * YH"
-      SN2: "(1 - YH) / iNO3_N2 * YH"
+      SNO: "(-1) * (1 - YH) / iNO3_N2 / YH"
+      SN2: "(1 - YH) / iNO3_N2 / YH"
       SPO: "(-1) * iP_BM"
-      SHCO: "(-1) * iN_BM * iCharge_SNHx + (-1) * iP_BM * iCharge_SPO4 + (-1) * (1 - YH) / iNO3_N2 * YH * iCharge_SNOx + (-1) / YH * iCharge_SVFA"
+      SHCO: "(-1) * iN_BM * iCharge_SNHx + (-1) * iP_BM * iCharge_SPO4 + (-1) * (1 - YH) / iNO3_N2 / YH * iCharge_SNOx + (-1) / YH * iCharge_SVFA"
       XH: 1.0
       XTSS: "iTSS_BM"
 
