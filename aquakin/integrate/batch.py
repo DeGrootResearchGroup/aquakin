@@ -126,10 +126,10 @@ class BatchReactor:
     def solve(
         self,
         C0: jnp.ndarray,
-        params: Optional[jnp.ndarray] = None,
         t_span: tuple[float, float] = None,
         t_eval: Optional[jnp.ndarray] = None,
         *,
+        params: Optional[jnp.ndarray] = None,
         conditions: Optional[SpatialConditions] = None,
         time_unit: Optional[str] = None,
     ) -> BatchSolution:
@@ -140,16 +140,19 @@ class BatchReactor:
         ----------
         C0 : jnp.ndarray
             Initial concentration vector, shape ``(n_species,)``.
-        params : jnp.ndarray, optional
-            Rate constant vector, shape ``(n_params,)``. Defaults to
-            ``network.default_parameters()`` -- pass it only to override rate
-            constants (e.g. for a what-if run; see ``network.parameter_values``).
         t_span : tuple of float
             ``(t_start, t_end)`` integration interval, in the network's time unit
-            unless ``time_unit`` is given.
+            unless ``time_unit`` is given. The required second positional argument
+            (``solve(C0, (0.0, 600.0))``).
         t_eval : jnp.ndarray, optional
             Time points at which to record solution. If ``None`` the solver
             returns endpoints only.
+        params : jnp.ndarray, optional, keyword-only
+            Rate constant vector, shape ``(n_params,)``. Defaults to
+            ``network.default_parameters()`` -- pass it (as a keyword) only to
+            override rate constants (e.g. a what-if run; see
+            ``network.parameter_values``). Keyword-only so a positional ``t_span``
+            tuple can never land in it.
         conditions : SpatialConditions, optional
             Override the conditions stored on the reactor for this call. Used
             by :func:`aquakin.sensitivity` to differentiate through condition

@@ -96,7 +96,7 @@ def test_solve_runs_and_removes_X():
     net = _build()
     reactor = BatchReactor(net, SpatialConditions.uniform(1, T=20.0))
     C0 = net.default_concentrations()
-    sol = reactor.solve(C0, net.default_parameters(), t_span=(0.0, 5.0))
+    sol = reactor.solve(C0, params=net.default_parameters(), t_span=(0.0, 5.0))
     X_final = float(sol.C_named("X")[-1])
     assert 0.0 < X_final < 100.0  # some removal, but not unphysical
 
@@ -109,7 +109,7 @@ def test_grad_flows_through_pH():
     params = net.default_parameters()
 
     def final_X(C0):
-        sol = reactor.solve(C0, params, t_span=(0.0, 5.0))
+        sol = reactor.solve(C0, params=params, t_span=(0.0, 5.0))
         return sol.C_named("X")[-1]
 
     # Sensitivity of final X to the initial carbonate (which moves pH and thus

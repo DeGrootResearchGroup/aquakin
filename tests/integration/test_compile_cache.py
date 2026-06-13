@@ -49,9 +49,9 @@ def test_fresh_reactors_share_one_compiled_solver():
     C0, p = net.default_concentrations(), net.default_parameters()
     t_eval = jnp.array([1.0])
 
-    s1 = _batch(net).solve(C0, p, (0.0, 1.0), t_eval)
+    s1 = _batch(net).solve(C0, (0.0, 1.0), t_eval, params=p)
     n_after_first = len(_common._SOLVER_CACHE)
-    s2 = _batch(net).solve(C0, p, (0.0, 1.0), t_eval)  # fresh reactor, same key
+    s2 = _batch(net).solve(C0, (0.0, 1.0), t_eval, params=p)  # fresh reactor, same key
     assert len(_common._SOLVER_CACHE) == n_after_first  # reused, no new compile
     assert np.allclose(np.asarray(s1.C), np.asarray(s2.C))
 
@@ -61,8 +61,8 @@ def test_different_settings_do_not_collide():
     net = aquakin.load_network("asm1")
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0, p = net.default_concentrations(), net.default_parameters()
-    s_loose = aquakin.BatchReactor(net, cond, rtol=1e-4).solve(C0, p, (0.0, 1.0))
-    s_tight = aquakin.BatchReactor(net, cond, rtol=1e-9).solve(C0, p, (0.0, 1.0))
+    s_loose = aquakin.BatchReactor(net, cond, rtol=1e-4).solve(C0, (0.0, 1.0), params=p)
+    s_tight = aquakin.BatchReactor(net, cond, rtol=1e-9).solve(C0, (0.0, 1.0), params=p)
     assert np.all(np.isfinite(np.asarray(s_loose.C)))
     assert np.all(np.isfinite(np.asarray(s_tight.C)))
 
@@ -77,7 +77,7 @@ def test_solver_cache_bypassed_under_tracing():
     C0, p = net.default_concentrations(), net.default_parameters()
 
     def loss(params):
-        return r.solve(C0, params, (0.0, 1.0), jnp.array([1.0])).C.sum()
+        return r.solve(C0, (0.0, 1.0), jnp.array([1.0]), params=params).C.sum()
 
     g = jax.grad(loss)(p)
     assert jnp.all(jnp.isfinite(g))

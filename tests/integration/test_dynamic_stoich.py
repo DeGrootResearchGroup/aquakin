@@ -88,7 +88,7 @@ def test_ad_grad_through_stoich_only_param(network):
     C0 = jnp.asarray([100.0, 50.0])
 
     def loss(params):
-        sol = reactor.solve(C0, params, t_span=(0.0, 0.01), t_eval=jnp.asarray([0.0, 0.01]))
+        sol = reactor.solve(C0, params=params, t_span=(0.0, 0.01), t_eval=jnp.asarray([0.0, 0.01]))
         return jnp.sum(sol.C_named("S"))  # final substrate
 
     g = jax.grad(loss)(network.default_parameters())
@@ -117,7 +117,7 @@ def test_calibration_recovers_yield(network):
     # Truth: Y = 0.3, mu = 1.0 (default).
     true_params = network.parameter_values({"Y": 0.3})
     t_obs = jnp.linspace(0.005, 0.05, 10)
-    sol = reactor.solve(C0, true_params, t_span=(0.0, 0.05), t_eval=t_obs)
+    sol = reactor.solve(C0, params=true_params, t_span=(0.0, 0.05), t_eval=t_obs)
     clean = np.asarray(sol.C_named("X"))
     rng = np.random.default_rng(0)
     sigma = 0.5

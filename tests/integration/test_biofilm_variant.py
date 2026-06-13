@@ -89,7 +89,7 @@ def test_variant_solves_and_stratifies(variant, biofilm_rxns):
         diffusivity=1e-4, boundary_layer=1e-4, biofilm_reactions=biofilm_rxns,
         fixed_mask=fixed, dtmax=3e-5,
     )
-    sol = bio.solve(C0, variant.default_parameters(), t_span=(0.0, 5.0 / 24.0))
+    sol = bio.solve(C0, params=variant.default_parameters(), t_span=(0.0, 5.0 / 24.0))
     assert bool(jnp.all(jnp.isfinite(sol.profile)))
     prof = np.asarray(sol.profile[-1])                      # (n_comp, n_species)
     layers = slice(1, None)                                 # biofilm, surface->wall
@@ -123,8 +123,8 @@ def test_multispecies_groups_grow_and_stratify():
         n_layers=n_layers, thickness=2e-3, area_per_volume=A_V_LUMPED,
         diffusivity=1e-4, boundary_layer=1e-4, fixed_mask=fixed, dtmax=3e-5,
     )
-    sol = bio.solve(jnp.asarray(y0), net.default_parameters(),
-                    t_span=(0.0, 5.0 / 24.0))
+    sol = bio.solve(jnp.asarray(y0), t_span=(0.0, 5.0 / 24.0),
+                    params=net.default_parameters())
     assert bool(jnp.all(jnp.isfinite(sol.profile)))
     prof = np.asarray(sol.profile[-1])                       # (n_comp, n_species)
     # every functional group is denser in the biofilm than the (dilute) bulk

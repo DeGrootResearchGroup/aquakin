@@ -130,8 +130,8 @@ class PlugFlowReactor:
     def solve(
         self,
         C0: jnp.ndarray,
-        params: Optional[jnp.ndarray] = None,
         *,
+        params: Optional[jnp.ndarray] = None,
         conditions: Optional[SpatialConditions] = None,
     ) -> PFRSolution:
         """

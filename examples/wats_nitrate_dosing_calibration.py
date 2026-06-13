@@ -57,7 +57,7 @@ def main() -> None:
 
     # 1-2. Truth simulation + noisy observations.
     true_params = network.parameter_values(TRUE)  # defaults with the two rates set
-    clean = reactor.solve(C0, true_params, t_span=(0.0, T_END), t_eval=t_obs)
+    clean = reactor.solve(C0, params=true_params, t_span=(0.0, T_END), t_eval=t_obs)
     obs_idx = [network.species_index[s] for s in OBSERVED]
     clean_obs = np.asarray(clean.C[:, obs_idx])
     sigma = 0.05 * np.maximum(clean_obs.max(axis=0), 1.0)   # 5% per-series noise

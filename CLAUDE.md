@@ -1459,7 +1459,9 @@ conditions = aquakin.SpatialConditions(fields={"pH": jnp.array([...]), ...})  # 
 # Batch reactor  (params defaults to network.default_parameters())
 reactor = aquakin.BatchReactor(network, conditions)
 solution = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_eval)
-solution = reactor.solve(C0, params, t_span, t_eval)   # explicit params still fine
+solution = reactor.solve(C0, t_span, t_eval, params=params)   # t_span is the 2nd
+#   positional arg; params is KEYWORD-ONLY, so a positional t_span tuple can never
+#   land in it -- reactor.solve(C0, (0.0, 600.0)) just works (no shape-error footgun).
 # t_span / t_eval are in the network's native time unit (network.time_unit); pass
 # time_unit= to work in another unit. The input times are converted into the
 # native unit for the solve (rate constants unchanged) and solution.t is reported
@@ -1482,7 +1484,7 @@ solution.to_csv("run.csv")           # delegates to to_dataframe().to_csv(...)
 
 # Plug flow reactor
 reactor = aquakin.PlugFlowReactor(network, conditions, n_points, length, velocity)
-solution = reactor.solve(C0, params)
+solution = reactor.solve(C0, params=params)            # params keyword-only
 solution.x                           # (n_points,)
 solution.C                           # (n_points, n_species)
 
@@ -1548,7 +1550,7 @@ reactor = aquakin.BiofilmReactor(
     network, conditions, n_layers=6, thickness=8e-4, area_per_volume=50.0,
     diffusivity=1e-4, boundary_layer=1e-4,
     biofilm_reactions=[...])             # names of the {A_V} reactions (run in layers only)
-solution = reactor.solve(C0, params, t_span, t_eval)  # C0 (n_species,) or (n_layers+1, n_species)
+solution = reactor.solve(C0, t_span, t_eval, params=params)  # C0 (n_species,) or (n_layers+1, n_species); params keyword-only
 solution.C                           # (n_t, n_species) -- BULK (measurable) trajectory
 solution.profile                     # (n_t, n_layers+1, n_species) -- depth-resolved (0=bulk)
 solution.depth                       # (n_layers,) layer mid-depths from the surface

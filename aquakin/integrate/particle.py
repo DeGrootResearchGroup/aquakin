@@ -140,7 +140,7 @@ class ParticleTrackReactor:
         # reactor's lifetime, so one cache slot is enough.
         self._jitted_solve = None
 
-    def solve(self, C0: jnp.ndarray, params: Optional[jnp.ndarray] = None) -> TrackSolution:
+    def solve(self, C0: jnp.ndarray, *, params: Optional[jnp.ndarray] = None) -> TrackSolution:
         """
         Integrate the network along the track.
 
@@ -236,5 +236,5 @@ def integrate_ensemble(
             network, track, n_save=n_save, rtol=rtol, atol=atol,
             adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
         )
-        results[pid] = reactor.solve(C0_fn(pid), params)
+        results[pid] = reactor.solve(C0_fn(pid), params=params)
     return results

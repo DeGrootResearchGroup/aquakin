@@ -76,7 +76,7 @@ def test_ad_grad_through_solve(name, _a, _b, _c):
 
     def loss(params):
         sol = reactor.solve(
-            C0, params, t_span=(0.0, 0.05), t_eval=jnp.linspace(0.0, 0.05, 6)
+            C0, params=params, t_span=(0.0, 0.05), t_eval=jnp.linspace(0.0, 0.05, 6)
         )
         return jnp.sum(sol.C_named(target))
 
@@ -222,7 +222,7 @@ def test_yield_is_calibratable_in_sumo_models(name, yield_param):
 
     def loss(params):
         sol = reactor.solve(
-            C0, params, t_span=(0.0, 0.02), t_eval=jnp.linspace(0.0, 0.02, 6)
+            C0, params=params, t_span=(0.0, 0.02), t_eval=jnp.linspace(0.0, 0.02, 6)
         )
         # Sum every species to make sure the gradient picks up any dynamics
         # touched by the yield.

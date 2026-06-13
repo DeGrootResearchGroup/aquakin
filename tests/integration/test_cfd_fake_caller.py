@@ -152,8 +152,8 @@ def test_matches_per_cell_BatchReactor(cfd_setup):
         br = aquakin.BatchReactor(network, sc, atol=jnp.asarray(atol))
         sol = br.solve(
             jnp.asarray(C0[i]),
-            network.default_parameters(),
             t_span=(0.0, dt),
+            params=network.default_parameters(),
         )
         out_batch[i] = np.asarray(sol.C[-1])
 

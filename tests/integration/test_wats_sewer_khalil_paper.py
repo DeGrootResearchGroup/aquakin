@@ -75,8 +75,9 @@ def test_aerobic_backbone_dormant_in_anaerobic_batch(net, cond):
     r = net.rates(net.default_concentrations(), net.default_parameters(), cond.fields, 0)
     assert float(jnp.max(jnp.abs(r[-4:]))) == pytest.approx(0.0, abs=1e-30)
     reactor = aquakin.BatchReactor(net, cond, dtmax=5.0e-4)
-    sol = reactor.solve(net.default_concentrations(), net.default_parameters(),
-                        t_span=(0.0, 0.2), t_eval=jnp.linspace(0.0, 0.2, 5))
+    sol = reactor.solve(net.default_concentrations(),
+                        t_span=(0.0, 0.2), t_eval=jnp.linspace(0.0, 0.2, 5),
+                        params=net.default_parameters())
     assert float(jnp.max(jnp.abs(sol.C_named("S_O")))) == pytest.approx(0.0, abs=1e-12)
     assert bool(jnp.all(jnp.isfinite(sol.C)))
 
@@ -156,7 +157,7 @@ def test_rhs_jacobian_wrt_params_is_finite(net, cond):
 def test_batch_integrates_and_stays_nonnegative(net, cond):
     reactor = aquakin.BatchReactor(net, cond, rtol=1e-6, atol=1e-9, dtmax=5.0e-4)
     C0 = net.default_concentrations()
-    sol = reactor.solve(C0, net.default_parameters(), t_span=(0.0, 5.0 / 24.0))
+    sol = reactor.solve(C0, params=net.default_parameters(), t_span=(0.0, 5.0 / 24.0))
     assert bool(jnp.all(jnp.isfinite(sol.C)))
     assert float(jnp.min(sol.C)) >= -1e-6
 
@@ -167,8 +168,8 @@ def test_nitrate_dosing_lowers_sulfide(net, cond):
     p = net.default_parameters()
     C_dosed = net.default_concentrations()  # default has nitrate dosed (S_NO=30)
     C_no = net.concentrations({"S_NO": 0.0})
-    sumS_dosed = float(reactor.solve(C_dosed, p, t_span=(0.0, 5.0 / 24.0)).C_named("sumS")[-1])
-    sumS_no = float(reactor.solve(C_no, p, t_span=(0.0, 5.0 / 24.0)).C_named("sumS")[-1])
+    sumS_dosed = float(reactor.solve(C_dosed, params=p, t_span=(0.0, 5.0 / 24.0)).C_named("sumS")[-1])
+    sumS_no = float(reactor.solve(C_no, params=p, t_span=(0.0, 5.0 / 24.0)).C_named("sumS")[-1])
     assert sumS_dosed < sumS_no
 
 
@@ -181,7 +182,7 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
     reactor = aquakin.BatchReactor(net, cond, rtol=1e-6, atol=1e-9, dtmax=5.0e-4)
 
     def final_sumS(pp):
-        return reactor.solve(C0, pp, t_span=(0.0, 0.1)).C_named("sumS")[-1]
+        return reactor.solve(C0, params=pp, t_span=(0.0, 0.1)).C_named("sumS")[-1]
 
     g = jax.grad(final_sumS)(p)
     assert np.all(np.isfinite(np.asarray(g)))
@@ -201,7 +202,7 @@ def test_halforder_variant_is_ad_differentiable_with_tighter_cap():
     reactor = aquakin.BatchReactor(v, cond, rtol=1e-6, atol=1e-9, dtmax=1.0e-4)
 
     def final_so4(pp):
-        return reactor.solve(C0, pp, t_span=(0.0, 0.1)).C_named("S_SO4")[-1]
+        return reactor.solve(C0, params=pp, t_span=(0.0, 0.1)).C_named("S_SO4")[-1]
 
     g = jax.grad(final_so4)(p)
     assert np.all(np.isfinite(np.asarray(g)))
