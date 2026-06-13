@@ -18,6 +18,7 @@ overflow vs controlled release.
 import jax.numpy as jnp
 
 import aquakin
+from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
     build_bsm2,
     bsm2_asm1_network,
@@ -26,17 +27,11 @@ from aquakin.plant.bsm import (
 )
 from aquakin.plant.bsm.bsm2 import BSM2_STORAGE_VOLUME
 
-WARM_AS = {"SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
-           "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,
-           "SND": 0.7, "XND": 3.0, "SALK": 5.0}
-
 
 def _run(asm1, adm1, params, **kw):
     plant = build_bsm2(asm1, adm1, **kw)
     plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
-    warm = asm1.concentrations(WARM_AS)
-    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
-    y0 = plant.initial_state(overrides={t: warm for t in tanks})
+    y0 = bsm2_warm_start(plant)
     sol = plant.solve(t_span=(0.0, 80.0), t_eval=jnp.array([0.0, 80.0]),
                       params=params, y0=jnp.asarray(y0),
                       rtol=1e-5, atol=1e-3, max_steps=600_000)

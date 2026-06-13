@@ -15,6 +15,7 @@ point unchanged.
 import jax.numpy as jnp
 
 import aquakin
+from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
     build_bsm2,
     bsm2_asm1_network,
@@ -23,10 +24,6 @@ from aquakin.plant.bsm import (
 )
 from aquakin.plant.bsm.bsm2 import BSM2_Q_REF
 from aquakin.plant.influent import InfluentSeries
-
-WARM_AS = {"SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
-           "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,
-           "SND": 0.7, "XND": 3.0, "SALK": 5.0}
 
 
 def _pulse_influent(asm1):
@@ -46,9 +43,7 @@ def main() -> None:
     plant = build_bsm2(asm1, adm1, hydraulic_delay=True, hydraulic_delay_tau=0.05)
     plant.add_influent("feed", _pulse_influent(asm1), to="influent_delay.in")
 
-    warm = asm1.concentrations(WARM_AS)
-    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
-    y0 = plant.initial_state(overrides={t: warm for t in tanks})
+    y0 = bsm2_warm_start(plant)
 
     t_eval = jnp.linspace(0.4, 1.0, 13)
     print("Driving BSM2 with a 2x influent flow pulse (days 0.5-0.6), "

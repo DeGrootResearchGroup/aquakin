@@ -19,6 +19,7 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
+from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     build_bsm2,
     bsm2_constant_influent,
@@ -36,12 +37,6 @@ REF = {
 # Published digester steady state (adm1init_bsm2 DIGESTERINIT).
 REF_DIG = {"S_gas_ch4": 1.6535, "S_ac": 0.0893, "X_ac": 0.677, "S_IN": 0.0945}
 
-# Near-uniform AS biomass/inert warm start (the slow inerts are ~uniform across
-# reactors at the published steady state; the fast variables relax within hours).
-_WARM = {"SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
-         "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,
-         "SND": 0.7, "XND": 3.0, "SALK": 5.0}
-
 
 def _solve():
     asm1 = aquakin.load_network("asm1")
@@ -49,9 +44,7 @@ def _solve():
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
 
-    warm = asm1.concentrations(_WARM)
-    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
-    y0 = plant.initial_state(overrides={tk: warm for tk in tanks})
+    y0 = bsm2_warm_start(plant)
 
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
                       params=bsm2_parameters(asm1, adm1), y0=y0,

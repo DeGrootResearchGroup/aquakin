@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
+from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     build_bsm2,
     bsm2_asm1_network,
@@ -27,10 +28,6 @@ from aquakin.plant.influent import load_bsm2_influent
 # runs). Excluded from the fast PR gate; runs in the merge-to-main suite.
 pytestmark = pytest.mark.slow
 
-
-_WARM = {"SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
-         "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,
-         "SND": 0.7, "XND": 3.0, "SALK": 5.0}
 
 _SS_CACHE = {}
 
@@ -53,9 +50,7 @@ def _steady_state(asm1, adm1):
     if "y" in _SS_CACHE:
         return _SS_CACHE["y"]
     plant = _build(asm1, adm1, bsm2_constant_influent(asm1))
-    warm = asm1.concentrations(_WARM)
-    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
-    y0 = plant.initial_state(overrides={tk: warm for tk in tanks})
+    y0 = bsm2_warm_start(plant)
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
                       params=bsm2_parameters(asm1, adm1), y0=y0,
                       rtol=1e-5, atol=1e-3, max_steps=500_000)
