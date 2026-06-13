@@ -1849,7 +1849,20 @@ Key types:
   `IdentityTranslator` covers single-network plants (BSM1).
 - `Plant` — assembles units and connections, drives the monolithic
   integration. Recycles are resolved by iterating the per-RHS stream
-  computation 3 times (sufficient for typical BSM topologies).
+  computation `recycle_passes` times (default 3, sufficient for typical BSM
+  topologies). The flows are solved exactly; the concentration sweep is the
+  fixed-pass part. The first non-traced `solve` runs a **one-time convergence
+  diagnostic** (`_check_recycle_convergence`, mirroring the flow-affinity check):
+  it re-sweeps to `recycle_passes + 4` and `warnings.warn`s (naming the
+  worst-converging stream) if any output concentration still moves beyond a
+  stream-scaled `atol + rtol·|C|` tolerance, so an under-resolved recycle-heavy
+  topology is flagged rather than silently returning a wrong steady state — raise
+  `recycle_passes` until it clears. It is diagnostic-only (never blocks), skipped
+  under tracing, and skipped for a plant with no recycle edges. (Convergence is
+  fast in practice because a CSTR's output is its own *state*, read directly; the
+  sweep is slow only when concentration circulates through *stateless*
+  concentration-transforming units — e.g. a clarifier inside a high-gain loop
+  with no tank to break the cycle.)
   - **Wiring API.** `plant.connect(source, dest)` takes two `"unit.port"`
     endpoint strings, read as `source -> dest`. The port may be omitted
     (bare `"unit"`) when the unit has exactly one port for that role — a

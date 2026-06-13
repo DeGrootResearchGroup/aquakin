@@ -310,7 +310,11 @@ class Plant:
         point in 2 passes (verified to machine precision), so the default of 3
         is a safe margin; raise it only for unusual topologies with a long
         chain of concentration-transforming units (mixers/splitters/clarifiers)
-        inside a recycle loop.
+        inside a recycle loop. The first non-traced :meth:`solve` runs a one-time
+        convergence diagnostic and warns if the sweep has *not* converged at
+        ``recycle_passes`` (so an under-resolved topology is flagged rather than
+        silently returning a wrong steady state); raise ``recycle_passes`` until
+        the warning clears.
     """
 
     def __init__(self, name: str, *, recycle_passes: int = 3) -> None:
@@ -349,9 +353,11 @@ class Plant:
         # _finalize_topology().
         self._recycle_conns: list[Connection] = []
         self._recycle_seeds: dict[tuple[str, str], Stream] = {}
-        # One-time guard for the concrete recycle-flow affinity check (a
-        # warning, run once per plant on the first non-traced solve).
+        # One-time guards for the concrete recycle diagnostics (warnings, run
+        # once per plant on the first non-traced solve): the flow-affinity check
+        # and the concentration-sweep convergence check.
         self._flow_affinity_checked: bool = False
+        self._recycle_convergence_checked: bool = False
         # Per-instance cache of the jit-compiled forward solve, keyed by call
         # signature + solver settings. The plant RHS closes over the (static)
         # unit graph, so once compiled the same solve is reused across repeated
@@ -1406,6 +1412,7 @@ class Plant:
         streams: dict[tuple[Optional[str], str], Stream],
         seeded: dict[tuple[str, str], Stream],
         params_full: jnp.ndarray,
+        passes: Optional[int] = None,
     ) -> dict[tuple[str, str], Stream]:
         """Resolve unit outputs with the fixed-pass Gauss-Seidel recycle sweep.
 
@@ -1422,10 +1429,15 @@ class Plant:
         (verified to machine precision in tests/integration/test_bsm1.py), so
         the default 3 is a safe margin. ``streams`` is updated in place; the
         returned ``all_outputs`` includes the recycle seeds.
+
+        ``passes`` overrides ``self.recycle_passes`` for this call -- used by the
+        one-time convergence diagnostic (:meth:`_check_recycle_convergence`),
+        which sweeps to a deeper count to see whether the default has converged.
         """
+        n_passes = self.recycle_passes if passes is None else passes
         all_outputs: dict[tuple[str, str], Stream] = {}
         all_outputs.update(seeded)
-        for _pass in range(self.recycle_passes):
+        for _pass in range(n_passes):
             for name in self._unit_order:
                 unit = self.units[name]
                 inputs = self._collect_inputs(name, all_outputs, streams)
@@ -1435,6 +1447,72 @@ class Plant:
                     all_outputs[(name, port)] = stream
                     streams[(name, port)] = stream
         return all_outputs
+
+    def _check_recycle_convergence(
+        self,
+        t: jnp.ndarray,
+        states: dict[str, jnp.ndarray],
+        params_full: jnp.ndarray,
+        *,
+        extra_passes: int = 4,
+        rtol: float = 1e-3,
+        atol: float = 1e-6,
+    ) -> None:
+        """Warn if the fixed-pass recycle concentration sweep has not converged.
+
+        The recycle *flows* are solved exactly, but the inter-unit
+        *concentrations* are a fixed ``recycle_passes`` Gauss-Seidel sweep (see
+        :meth:`_sweep_outputs`) -- enough for the BSM topologies, but an atypical
+        recycle-heavy topology could need more, in which case the steady state is
+        silently wrong. This re-runs the sweep to ``recycle_passes + extra_passes``
+        and warns if any output-stream concentration still moves by more than the
+        ``atol + rtol*|C|`` tolerance, naming the worst-converging stream. It is a
+        diagnostic only -- it never blocks the solve, and runs once per plant on
+        concrete inputs (skipped under tracing). A plant with no recycle edges has
+        nothing to converge and is skipped.
+        """
+        if not self._recycle_conns:
+            return
+
+        def sweep(passes):
+            streams: dict[tuple[Optional[str], str], Stream] = {}
+            for port_name, series in self.influents.items():
+                streams[(None, port_name)] = series.at(t)
+            resolved_flows = self._resolve_flows(t, params_full, states)
+            seeded = self._seed_recycle_streams(resolved_flows)
+            return self._sweep_outputs(t, states, streams, seeded, params_full,
+                                       passes=passes)
+
+        base = sweep(self.recycle_passes)
+        deep = sweep(self.recycle_passes + extra_passes)
+        worst, worst_key = 0.0, None
+        for key, sb in base.items():
+            sd = deep.get(key)
+            if sd is None:
+                continue
+            cb, cd = jnp.asarray(sb.C), jnp.asarray(sd.C)
+            if cb.size == 0:
+                continue
+            # Scale the residual by the *stream's* characteristic magnitude (its
+            # largest concentration), not per-species: a trace species at ~0 with
+            # a negligible absolute change must not dominate the relative metric.
+            scale = float(jnp.max(jnp.abs(cb)))
+            resid = float(jnp.max(jnp.abs(cd - cb)))
+            rel = resid / (atol + rtol * scale)
+            if rel > worst:
+                worst, worst_key = rel, key
+        if worst > 1.0 and worst_key is not None:
+            unit, port = worst_key
+            deeper = self.recycle_passes + extra_passes
+            warnings.warn(
+                f"Plant recycle concentration sweep may not have converged at "
+                f"recycle_passes={self.recycle_passes}: stream '{unit}.{port}' "
+                f"still changes by ~{worst:.0f}x the rtol={rtol}/atol={atol} "
+                f"tolerance after {deeper} passes. On a recycle-heavy topology "
+                f"the steady state may be wrong; raise recycle_passes (e.g. "
+                f"Plant(..., recycle_passes={deeper})) until this warning clears.",
+                stacklevel=3,
+            )
 
     def _resolve_flows(
         self,
@@ -1698,14 +1776,19 @@ class Plant:
         # (every flow rule affine in the recycle flows). Skipped under tracing
         # (params/y0 are JAX tracers -- can't compare/warn) and guarded to run
         # once per plant. It only warns, never blocks the solve.
-        if not self._flow_affinity_checked and not any(
-            isinstance(v, jax.core.Tracer) for v in (params, y0)
-        ):
-            self._flow_affinity_checked = True
-            self._resolve_flows(
-                jnp.asarray(t0), params, states=self._split_state(y0),
-                check_affine=True,
-            )
+        if not any(isinstance(v, jax.core.Tracer) for v in (params, y0)):
+            if not self._flow_affinity_checked:
+                self._flow_affinity_checked = True
+                self._resolve_flows(
+                    jnp.asarray(t0), params, states=self._split_state(y0),
+                    check_affine=True,
+                )
+            # Companion diagnostic: does the fixed-pass recycle concentration
+            # sweep converge at recycle_passes? (warns once, never blocks.)
+            if not self._recycle_convergence_checked:
+                self._recycle_convergence_checked = True
+                self._check_recycle_convergence(
+                    jnp.asarray(t0), self._split_state(y0), params)
 
         if gradient == "auto":
             # A concrete forward solve takes the fast cached jax_adjoint path; a

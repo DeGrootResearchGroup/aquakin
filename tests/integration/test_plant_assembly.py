@@ -709,3 +709,87 @@ def test_plant_parameter_values_unknown_name_raises_with_hint():
         plant.parameter_index("adm1.nope")
     with pytest.raises(TypeError):
         plant.parameter_values([("asm1.muH", 6.0)])  # not a dict
+
+
+# --- recycle concentration-sweep convergence diagnostic (#197) ---------------
+
+def _clarifier_recycle_loop(recycle_passes, *, capture):
+    """A stateless high-recycle loop: fresh -> mix -> clarifier ->
+    {overflow -> tank, underflow -> recycle to mix}. With no state-holding unit
+    *inside* the loop, the particulate concentration genuinely circulates
+    through the clarifier each pass, so the Gauss-Seidel sweep needs many passes
+    when the loop gain (= capture_efficiency) is high. A low ``capture`` makes a
+    fast loop; a high one a slow loop -- the knob for testing the diagnostic."""
+    from aquakin.plant.clarifier import IdealClarifier
+
+    net = aquakin.load_network("asm1")
+    infl = net.influent({"SS": 60.0, "XS": 200.0, "XB_H": 50.0, "XI": 25.0,
+                         "SNH": 25.0}, Q=1.0)
+    plant = Plant("clar_loop", recycle_passes=recycle_passes)
+    plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "ras"],
+                             network=net))
+    plant.add_unit(IdealClarifier(name="clar", network=net, underflow_Q=2.0,
+                                  capture_efficiency=capture))
+    plant.add_unit(CSTRUnit(name="tank", network=net, volume=50.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_influent("fresh", infl, to="mix.fresh")
+    plant.connect("mix", "clar.inlet")
+    plant.connect("clar.overflow", "tank")
+    plant.connect("clar.underflow", "mix.ras")
+    return plant
+
+
+def _recycle_warnings(plant):
+    import warnings as _w
+    with _w.catch_warnings(record=True) as w:
+        _w.simplefilter("always")
+        plant.solve(t_span=(0.0, 0.05), t_eval=jnp.asarray([0.0, 0.05]),
+                    rtol=1e-4, atol=1e-3, max_steps=20000)
+    return [str(x.message) for x in w
+            if "recycle concentration" in str(x.message)]
+
+
+def test_recycle_convergence_warns_when_underresolved():
+    # A high-gain stateless recycle loop (capture 0.6) does NOT converge in the
+    # default few passes; the one-time diagnostic warns and names the stream.
+    plant = _clarifier_recycle_loop(recycle_passes=3, capture=0.6)
+    msgs = _recycle_warnings(plant)
+    assert len(msgs) == 1
+    assert "recycle_passes=3" in msgs[0]
+    assert "clar." in msgs[0]
+
+
+def test_recycle_convergence_silent_when_converged():
+    # Same loop with enough passes converges -> no warning. (Guards against a
+    # false positive that would fire on every recycle plant.)
+    plant = _clarifier_recycle_loop(recycle_passes=40, capture=0.6)
+    assert _recycle_warnings(plant) == []
+
+
+def test_recycle_convergence_skipped_without_recycle(simple_net):
+    # A plant with no recycle edges has nothing to converge -> no warning.
+    plant = Plant("no_recycle")
+    plant.add_unit(CSTRUnit(name="tank", network=simple_net, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_influent("feed", _constant_influent(simple_net), to="tank.inlet")
+    assert _recycle_warnings(plant) == []
+
+
+def test_recycle_convergence_check_skipped_under_tracing():
+    # The diagnostic compares concrete values, so it is skipped under tracing
+    # (a gradient through solve): jax.grad still works and emits no warning.
+    plant = _clarifier_recycle_loop(recycle_passes=3, capture=0.6)
+    y0 = plant.initial_state()
+
+    def loss(p):
+        sol = plant.solve(t_span=(0.0, 0.02), t_eval=jnp.asarray([0.0, 0.02]),
+                          params=p, y0=y0, rtol=1e-4, atol=1e-3,
+                          max_steps=20000, gradient="stable_adjoint")
+        return jnp.sum(sol.final_state)
+
+    import warnings as _w
+    with _w.catch_warnings(record=True) as w:
+        _w.simplefilter("always")
+        g = jax.grad(loss)(plant.default_parameters())
+    assert jnp.all(jnp.isfinite(g))
+    assert [x for x in w if "recycle concentration" in str(x.message)] == []
