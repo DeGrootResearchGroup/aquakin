@@ -59,6 +59,7 @@ from aquakin.integrate._common import (
     _run_diffeqsolve,
     friendly_step_ceiling,
     init_solver_settings,
+    to_native_time,
     validate_t_eval,
 )
 
@@ -523,6 +524,7 @@ class BiofilmReactor:
         t_eval: Optional[jnp.ndarray] = None,
         *,
         conditions: Optional[SpatialConditions] = None,
+        time_unit: Optional[str] = None,
     ) -> BiofilmSolution:
         """Integrate the layered biofilm over a time span.
 
@@ -537,11 +539,16 @@ class BiofilmReactor:
             Rate constant vector, shape ``(n_params,)``. Defaults to
             ``network.default_parameters()``.
         t_span : tuple of float
-            ``(t_start, t_end)`` integration interval.
+            ``(t_start, t_end)`` integration interval, in the network's time unit
+            unless ``time_unit`` is given.
         t_eval : jnp.ndarray, optional
             Times at which to record the solution. If ``None`` only the endpoint.
         conditions : SpatialConditions, optional
             Override the reactor conditions for this call.
+        time_unit : str, optional
+            The time unit ``t_span`` / ``t_eval`` are in (``"s"``/``"min"``/
+            ``"h"``/``"d"``); see :meth:`BatchReactor.solve`. Default ``None``
+            uses the network's native unit.
 
         Returns
         -------
@@ -554,6 +561,8 @@ class BiofilmReactor:
 
         if t_span is None:
             raise ValueError("t_span=(t_start, t_end) is required.")
+        t_span, t_eval, _time_factor = to_native_time(
+            self.network.time_unit, time_unit, t_span, t_eval)
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
@@ -578,9 +587,14 @@ class BiofilmReactor:
             else:
                 ts, ys = jitted(y0, params, condition_arrays, t_eval_arr)
         # ys: (n_t, n_comp, n_species). Bulk is compartment 0.
-        return BiofilmSolution(
+        if _time_factor != 1.0:
+            ts = ts / _time_factor          # native -> requested unit
+        sol = BiofilmSolution(
             t=ts, C=ys[:, 0, :], profile=ys, depth=self._depth, network=self.network
         )
+        if time_unit is not None:
+            sol._requested_time_unit = time_unit
+        return sol
 
     def solve_sensitivity(
         self,

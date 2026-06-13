@@ -228,3 +228,46 @@ def test_broken_network_cross_currency_sum(tmp_path):
     p.write_text(_broken_yaml("k * ([A] + [B])"))
     net = aquakin.load_network_from_file(str(p))
     assert any("operands" in w.location for w in net.check_units())
+
+
+_MIXED_TIME_YAML = """
+network:
+  name: mixed_time
+  description: "Two rate constants in different time units."
+species:
+  - {name: A, units: g_COD/m3, default_concentration: 1.0}
+  - {name: B, units: g_COD/m3, default_concentration: 0.0}
+conditions: []
+reactions:
+  - name: R1
+    rate: "k1 * [A]"
+    parameters: {k1: {value: 0.1, units: "1/d"}}
+    stoichiometry: {A: -1, B: +1}
+  - name: R2
+    rate: "k2 * [B]"
+    parameters: {k2: {value: 0.1, units: "1/s"}}
+    stoichiometry: {B: -1, A: +1}
+"""
+
+
+def test_mixed_time_units_flagged(tmp_path):
+    """Rate constants in different time units make the RHS dimensionally
+    inconsistent (terms summed on different time bases); each rate passes its own
+    root check, so the disagreement is flagged once at network scope."""
+    p = tmp_path / "mixed_time.yaml"
+    p.write_text(_MIXED_TIME_YAML)
+    net = aquakin.load_network_from_file(str(p))
+    ws = net.check_units()
+    network_ws = [w for w in ws if w.reaction == "(network)"
+                  and w.location == "time unit"]
+    assert len(network_ws) == 1
+    assert "1/d" in network_ws[0].detail and "1/s" in network_ws[0].detail
+
+
+def test_consistent_time_units_not_flagged(tmp_path):
+    """A network whose rate constants share one time unit gets no network-scope
+    time-unit warning (the shipped networks are already covered above)."""
+    p = tmp_path / "ok_time.yaml"
+    p.write_text(_MIXED_TIME_YAML.replace('units: "1/s"', 'units: "1/d"'))
+    net = aquakin.load_network_from_file(str(p))
+    assert not [w for w in net.check_units() if w.location == "time unit"]

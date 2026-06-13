@@ -304,6 +304,17 @@ class _HasNamedSpecies:
         """
         return self.network.units_of(species)
 
+    @property
+    def time_unit(self) -> "str | None":
+        """The time unit of ``self.t`` (``"s"``, ``"d"``, ... or ``None``).
+
+        Defaults to the network's native unit (:attr:`CompiledNetwork.time_unit`),
+        surfaced here so a plot or table can label the time axis unambiguously.
+        When the solve was called with an explicit ``time_unit=`` the result times
+        are reported in *that* unit, and this returns it."""
+        override = getattr(self, "_requested_time_unit", None)
+        return override if override is not None else self.network.time_unit
+
     def _table_index(self) -> "tuple[str, jnp.ndarray]":
         """Return ``(name, array)`` for the dataframe index. Time by default;
         space-indexed solutions (PFR) override this."""
@@ -517,6 +528,74 @@ def default_atol(scale_like, reference=None, *, atol_factor: float = 1e-6,
     char = jnp.where(char > 0.0, char, 1.0)
     typ = jnp.maximum(typ, floor_frac * char)
     return atol_factor * typ
+
+
+# Seconds per time unit, for converting a user-supplied ``time_unit`` to a
+# network's native (rate-constant) time unit. The keys match
+# ``CompiledNetwork.time_unit`` / ``utils.units._TIME_TOKENS``.
+_TIME_UNIT_SECONDS = {"s": 1.0, "min": 60.0, "h": 3600.0, "d": 86400.0}
+
+
+def native_time_factor(network_time_unit, requested_unit) -> float:
+    """Factor ``f`` such that ``t_native = f * t_requested``.
+
+    Converts a time expressed in ``requested_unit`` into the network's native
+    (rate-constant) time unit, so a caller can pass ``t_span`` / ``t_eval`` in a
+    convenient unit (e.g. hours) and have the solve run with the network's
+    unchanged rate constants. Returns ``1.0`` when ``requested_unit is None``
+    (no conversion -- the default, native-unit path).
+
+    Parameters
+    ----------
+    network_time_unit : str or None
+        The network's native time unit (``CompiledNetwork.time_unit``).
+    requested_unit : str or None
+        The unit the caller's times are in. ``None`` means "native".
+
+    Raises
+    ------
+    ValueError
+        If ``requested_unit`` is unknown, or it is given but the network's own
+        time unit could not be inferred (``None``) and so there is no native
+        unit to convert to.
+    """
+    if requested_unit is None:
+        return 1.0
+    if requested_unit not in _TIME_UNIT_SECONDS:
+        raise ValueError(
+            f"Unknown time_unit {requested_unit!r}; expected one of "
+            f"{sorted(_TIME_UNIT_SECONDS)}."
+        )
+    if network_time_unit is None:
+        raise ValueError(
+            f"Cannot convert times to time_unit={requested_unit!r}: this "
+            "network's own time unit could not be inferred from its "
+            "rate-constant units (network.time_unit is None), so there is no "
+            "native unit to convert to. Pass t_span / t_eval already in the "
+            "network's rate-constant time unit and omit time_unit."
+        )
+    # network_time_unit comes from CompiledNetwork.time_unit, which only ever
+    # returns a known token, so it is guaranteed to be in the table.
+    return _TIME_UNIT_SECONDS[requested_unit] / _TIME_UNIT_SECONDS[network_time_unit]
+
+
+def to_native_time(network_time_unit, requested_unit, t_span, t_eval):
+    """Scale ``(t_span, t_eval)`` from ``requested_unit`` into native time.
+
+    Returns ``(t_span_native, t_eval_native, factor)`` where ``factor`` is the
+    :func:`native_time_factor` (``t_native = factor * t_requested``); divide a
+    native-unit result time by it to report back in ``requested_unit``. A
+    ``factor`` of ``1.0`` (the ``requested_unit is None`` default, or a unit
+    equal to the native one) leaves the inputs untouched.
+    """
+    factor = native_time_factor(network_time_unit, requested_unit)
+    if factor == 1.0:
+        return t_span, t_eval, factor
+    if t_span is not None:
+        t_span = (t_span[0] * factor, t_span[1] * factor)
+    if t_eval is not None:
+        t_eval = jnp.asarray(t_eval) * factor
+    return t_span, t_eval, factor
 
 
 def resolve_state_atol(network, atol):

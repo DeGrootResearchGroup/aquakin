@@ -617,11 +617,58 @@ class CompiledNetwork:
             )
         return self.species_descriptions.get(species, "")
 
+    @property
+    def time_unit(self) -> str | None:
+        """Integration time unit, inferred from the rate-constant units.
+
+        aquakin has **no global time unit**: ``t_span`` and ``t_eval`` are
+        interpreted in whatever time unit the network's rate constants are
+        written in, and that differs by network. The chemistry networks (ozone,
+        UV/H₂O₂) use **seconds** (rate constants in ``M-1 s-1``); the biological
+        networks (ASM1/2d/3, ADM1, WATS) use **days** (``1/d``). So
+        ``reactor.solve(C0, t_span=(0, 600))`` integrates 600 *seconds* for
+        ``ozone_bromate`` but 600 *days* for ``asm1`` — same code, no warning.
+
+        This property recovers that unit by parsing the declared parameter
+        ``units:`` strings and reading the inverse-time token the rate constants
+        share (the ``s`` in ``M-1 s-1``, the ``d`` in ``1/d``), so a caller can
+        check it before choosing a ``t_span``.
+
+        Returns
+        -------
+        str or None
+            The shared inverse-time token (``"s"``, ``"d"``, ``"h"`` or
+            ``"min"``), or ``None`` when it cannot be determined unambiguously —
+            no parameter declares a time unit, or different rate constants
+            disagree.
+        """
+        from aquakin.utils.units import parse_units, _TIME_TOKENS
+
+        found = set()
+        for unit in self.parameter_units.values():
+            dim = parse_units(unit)
+            if dim is None:
+                continue
+            found |= {tok for tok, exp in dim.tokens if tok in _TIME_TOKENS and exp < 0}
+        if len(found) == 1:
+            return next(iter(found))
+        return None
+
     def summary(self) -> str:
         """Return a human-readable table summarising the network."""
+        _time_names = {"s": "seconds", "d": "days", "h": "hours", "min": "minutes"}
+        tu = self.time_unit
+        if tu is not None:
+            time_line = (
+                f"  Time unit: {tu} "
+                f"(t_span / t_eval are in {_time_names.get(tu, tu)})"
+            )
+        else:
+            time_line = "  Time unit: (could not infer from rate-constant units)"
         lines = [
             f"Network: {self.name}",
             f"  Description: {self.description}",
+            time_line,
             f"  Species ({self.n_species}):",
         ]
         name_w = max((len(s) for s in self.species), default=0)
