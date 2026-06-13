@@ -290,10 +290,44 @@ class _HasNamedSpecies:
     def C_named(self, species: str) -> jnp.ndarray:
         """Return the trajectory of a single species by name."""
         if species not in self.network.species_index:
+            import difflib
+            hint = difflib.get_close_matches(species, self.network.species, n=3)
+            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
             raise KeyError(
-                f"Unknown species '{species}'. Available: {self.network.species}"
+                f"Unknown species '{species}'. Available: "
+                f"{self.network.species}.{suffix}"
             )
         return self.C[:, self.network.species_index[species]]
+
+    def C_named_many(self, species) -> "dict[str, jnp.ndarray]":
+        """Trajectories of several species by name, as ``{name: array}``.
+
+        The multi-species companion to :meth:`C_named` -- read a handful of
+        species in one call (``sol.C_named_many(["SNH", "SNO", "SO"])``) instead
+        of a separate slice each. Each value has the same shape ``C_named``
+        returns. An unknown name raises the same hinted ``KeyError``.
+        """
+        return {sp: self.C_named(sp) for sp in species}
+
+    def final_named(self, species=None) -> "dict[str, float]":
+        """Values at the **last** recorded point, as ``{name: float}``.
+
+        The reporting shortcut for a steady-state / end-of-run value: instead of
+        ``float(sol.C_named("SNH")[-1])`` per species, ``sol.final_named(["SNH",
+        "SNO"])`` returns them in one dict. With ``species=None`` (default) every
+        network species is returned. Values are plain Python floats (this is a
+        post-processing read on an already-solved solution -- use
+        ``C_named(sp)[-1]`` if you need a differentiable last value).
+        """
+        names = list(self.network.species) if species is None else list(species)
+        return {sp: float(self.C_named(sp)[-1]) for sp in names}
+
+    @property
+    def final(self) -> "dict[str, float]":
+        """Every species' value at the last recorded point (``{name: float}``).
+
+        The no-argument attribute form of :meth:`final_named` -- ``sol.final``."""
+        return self.final_named()
 
     def units_named(self, species: str) -> str:
         """Return the declared units of a species (for axis/column labels).

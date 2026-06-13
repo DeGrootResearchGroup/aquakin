@@ -205,6 +205,33 @@ def test_units_named_on_solution(simple_network):
     assert sol.time_unit == "s"
 
 
+def test_final_named_and_C_named_many_on_solution(simple_network):
+    """final_named / .final report last-point values by name; C_named_many reads
+    several trajectories at once -- consistent with C_named."""
+    conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
+    reactor = aquakin.BatchReactor(simple_network, conditions)
+    sol = reactor.solve(simple_network.default_concentrations(),
+                        t_span=(0.0, 5.0), t_eval=jnp.linspace(0.0, 5.0, 4))
+
+    # final_named subset: float values equal the last C_named point.
+    fn = sol.final_named(["A"])
+    assert isinstance(fn["A"], float)
+    assert fn["A"] == float(sol.C_named("A")[-1])
+
+    # .final and final_named() cover every species.
+    assert set(sol.final) == set(simple_network.species)
+    assert sol.final == sol.final_named()
+
+    # C_named_many returns one trajectory per requested name.
+    many = sol.C_named_many(["A", "B"])
+    assert set(many) == {"A", "B"}
+    assert jnp.array_equal(many["A"], sol.C_named("A"))
+
+    # Unknown name raises a hinted KeyError (shared with C_named).
+    with pytest.raises(KeyError, match="Did you mean"):
+        sol.final_named(["AA"])
+
+
 def test_solve_time_unit_conversion_is_equivalent(tmp_path):
     """Solving a days network with t in hours gives the same physics, with the
     result times reported back in hours."""

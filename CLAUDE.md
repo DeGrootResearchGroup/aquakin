@@ -1472,7 +1472,17 @@ solution = reactor.solve(C0, t_span, t_eval, params=params)   # t_span is the 2n
 solution = reactor.solve(C0, t_span=(0.0, 24.0), t_eval=t_eval, time_unit="h")
 solution.t                           # (n_t,)
 solution.C                           # (n_t, n_species)
-solution.C_named("BrO3-")           # convenience accessor
+solution.C_named("BrO3-")           # one species' trajectory (hinted KeyError on a typo)
+solution.C_named_many(["O3", "BrO3-"])  # several at once -> {name: trajectory}
+solution.final_named(["O3", "BrO3-"])   # last-point values -> {name: float} (reporting;
+                                    #   None = every species). Use C_named(sp)[-1] for a
+                                    #   *differentiable* last value -- final_named returns floats.
+solution.final                       # == final_named(): every species' last-point value
+# These four come from the shared _HasNamedSpecies mixin, so every single-vector
+# solution has them (Batch/PFR(x-indexed: "final" = outlet)/Track/Biofilm) AND the
+# reconstructed StreamSeries. PlantSolution mirrors them per unit:
+#   plantsol.C_named_many("tank5", ["SNH","SNO"]) / plantsol.final_named("tank5"[, [...]])
+#   (and plantsol.final_state for the whole flat vector -> states_by_unit).
 solution.to_dataframe()              # time-indexed pandas DataFrame, species columns
 solution.to_csv("run.csv")           # delegates to to_dataframe().to_csv(...)
 # to_dataframe(units_in_columns=False): bare species columns + df.attrs["units"];

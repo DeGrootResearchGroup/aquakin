@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.integrate._common import _HasNamedSpecies
+
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
 
@@ -65,7 +67,7 @@ class Stream:
 
 
 @dataclass(frozen=True)
-class StreamSeries:
+class StreamSeries(_HasNamedSpecies):
     """A stream's flow and concentration trajectory over time.
 
     Returned by :meth:`Plant.stream`, which reconstructs a named output stream
@@ -91,9 +93,8 @@ class StreamSeries:
     C: jnp.ndarray
     network: "CompiledNetwork"
 
-    def C_named(self, species: str) -> jnp.ndarray:
-        """Concentration trajectory of one species, shape ``(n_t,)``."""
-        return self.C[:, self.network.species_index[species]]
+    # C_named / C_named_many / final_named / .final come from _HasNamedSpecies
+    # (shared with the reactor solutions), keyed off .C and .network.
 
     def to_dataframe(self, *, units_in_columns: bool = False):
         """Return the stream trajectory as a pandas ``DataFrame``.

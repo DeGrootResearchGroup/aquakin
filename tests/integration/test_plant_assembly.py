@@ -876,6 +876,34 @@ def test_solution_C_named_errors_and_available_streams():
         sol.unit_state("tankX")
 
 
+def test_plant_final_named_and_C_named_many():
+    """final_named / C_named_many on a PlantSolution mirror C_named(unit, sp):
+    last-point floats by name, several trajectories at once, same hinted errors."""
+    from aquakin.plant.plant import PlantSolution
+    from aquakin.plant.bsm import bsm2_warm_start
+
+    plant, _asm1, _adm1 = _bsm2_no_solve()
+    plant._build_state_layout()
+    y0 = bsm2_warm_start(plant)
+    sol = PlantSolution(t=jnp.asarray([0.0]), state=y0[None, :], plant=plant)
+
+    # subset: floats equal to the last C_named point
+    fn = sol.final_named("tank5", ["SNH", "XB_H"])
+    assert isinstance(fn["XB_H"], float)
+    assert fn["SNH"] == float(sol.C_named("tank5", "SNH")[-1])
+    # species=None covers the unit's whole network
+    assert set(sol.final_named("tank5")) == set(plant.list_species("tank5"))
+    # C_named_many returns one trajectory per name
+    many = sol.C_named_many("tank5", ["SNH", "SNO"])
+    assert set(many) == {"SNH", "SNO"}
+    assert jnp.array_equal(many["SNH"], sol.C_named("tank5", "SNH"))
+    # shared errors: unknown species, and a non-concentration unit (species=None)
+    with pytest.raises(KeyError, match="Did you mean: SNH"):
+        sol.final_named("tank5", ["SNHH"])
+    with pytest.raises(KeyError, match="not a concentration vector"):
+        sol.final_named("settler")
+
+
 # --- semantic stream shortcuts: plant.stream(sol, "effluent") etc. (#148) -----
 
 def test_named_stream_resolution_and_effluent(simple_net):
@@ -950,3 +978,21 @@ def test_digester_gas_and_no_digester_error(simple_net):
     cstr_sol = cstr.solve(t_span=(0.0, 1.0), t_eval=jnp.asarray([0.0, 1.0]))
     with pytest.raises(ValueError, match="no anaerobic digester"):
         cstr.digester_gas(cstr_sol)
+
+
+def test_stream_series_named_accessors(simple_net):
+    """StreamSeries shares the _HasNamedSpecies accessors: C_named (hinted),
+    C_named_many, final_named and .final."""
+    from aquakin.plant.streams import StreamSeries
+
+    n = simple_net.n_species
+    t = jnp.asarray([0.0, 1.0, 2.0])
+    C = jnp.stack([jnp.full((n,), 0.1 * (i + 1)) for i in range(3)])
+    eff = StreamSeries(t=t, Q=jnp.full((3,), 5.0), C=C, network=simple_net)
+
+    sp0 = simple_net.species[0]
+    assert jnp.array_equal(eff.C_named_many([sp0])[sp0], eff.C_named(sp0))
+    assert eff.final_named([sp0])[sp0] == float(eff.C_named(sp0)[-1])
+    assert set(eff.final) == set(simple_net.species)
+    with pytest.raises(KeyError, match="Available"):
+        eff.C_named("definitely_not_a_species")

@@ -209,6 +209,31 @@ class PlantSolution:
         idx = unit.network.species_index[species]
         return self.unit_state(unit_name)[:, idx]
 
+    def C_named_many(self, unit_name: str, species) -> "dict[str, jnp.ndarray]":
+        """Trajectories of several species in one unit, as ``{name: array}``.
+
+        The multi-species companion to :meth:`C_named` -- read a handful of a
+        unit's species in one call (``sol.C_named_many("tank5", ["SNH", "SNO"])``)
+        instead of a slice each. An unknown unit/species raises the same hinted
+        ``KeyError`` :meth:`C_named` gives.
+        """
+        return {sp: self.C_named(unit_name, sp) for sp in species}
+
+    def final_named(self, unit_name: str, species=None) -> "dict[str, float]":
+        """Values at the **last** save time for one unit, as ``{name: float}``.
+
+        The reporting shortcut for a steady-state value: instead of
+        ``float(sol.C_named("tank5", "SNH")[-1])`` per species,
+        ``sol.final_named("tank5", ["SNH", "SNO"])`` returns them in one dict.
+        With ``species=None`` (default) every species of the unit's network is
+        returned (see :meth:`Plant.list_species`). Values are plain Python floats
+        (a post-processing read on an already-solved solution -- use
+        ``C_named(unit, sp)[-1]`` if you need a differentiable last value).
+        """
+        names = (self.plant.list_species(unit_name) if species is None
+                 else list(species))
+        return {sp: float(self.C_named(unit_name, sp)[-1]) for sp in names}
+
     def to_dataframe(self, unit: str, *, units_in_columns: bool = False):
         """Return one unit's state trajectory as a pandas ``DataFrame``.
 
