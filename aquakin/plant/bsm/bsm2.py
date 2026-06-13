@@ -44,7 +44,7 @@ from typing import Optional
 
 import jax.numpy as jnp
 
-from aquakin.plant.cstr import CSTRUnit
+from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
@@ -364,7 +364,6 @@ def build_bsm2(
         ``plant.add_influent("feed", series)`` (which wires to the recorded
         front) or ``to=plant.influent_endpoint``. Mirrors :func:`build_bsm1`.
     """
-    from aquakin.plant.control import PIController
     from aquakin.plant.delay import HydraulicDelayUnit
     from aquakin.plant.storage import StorageTank
     import aquakin
@@ -462,29 +461,23 @@ def build_bsm2(
     plant.add_unit(MixerUnit(name="as_mix", input_port_names=as_ports, network=asm1))
     for i in range(5):
         tank = f"tank{i + 1}"
-        aerated = BSM2_KLA[i] > 0
-        kla = {"SO": BSM2_KLA[i]} if aerated else {}
-        sat = {"SO": BSM2_DO_SATURATION} if aerated else {}
-        controlled = {}
         if do_control and tank in BSM2_DO_KLA_GAINS:
-            # The DO controller drives this tank's oxygen kLa; drop the fixed
-            # kLa (the signal replaces it) but keep the DO saturation for the
-            # aeration term.
-            kla = {}
-            controlled = {"SO": ("do_kla", BSM2_DO_KLA_GAINS[tank])}
+            # Closed DO loop: one PI controller (named 'do_control') sensing
+            # reactor 4's oxygen drives the aerobic reactors' kLa, at per-tank
+            # gains. The plant auto-wires the shared controller from these specs.
+            aeration = Aeration(
+                do_setpoint=BSM2_DO_SETPOINT, do_sat=BSM2_DO_SATURATION,
+                controller="do_control", sensor="tank4",
+                gain=BSM2_DO_KLA_GAINS[tank], Kp=BSM2_DO_KP, Ti=BSM2_DO_TI,
+                Tt=BSM2_DO_TT, kla_offset=BSM2_DO_KLA_OFFSET, kla_min=0.0,
+                kla_max=BSM2_DO_KLA_MAX)
+        elif BSM2_KLA[i] > 0:
+            aeration = Aeration(kla=BSM2_KLA[i], do_sat=BSM2_DO_SATURATION)
+        else:
+            aeration = None
         plant.add_unit(CSTRUnit(
             name=tank, network=asm1, volume=BSM2_TANK_VOLUMES[i],
-            input_port_names=["inlet"], conditions=conditions, kla=kla, C_sat=sat,
-            controlled_kla=controlled))
-
-    # Closed DO loop: a PI controller sensing reactor 4's oxygen, publishing the
-    # 'do_kla' signal the aerobic reactors consume.
-    if do_control:
-        plant.add_unit(PIController(
-            name="do_control", network=asm1, measured_species="SO",
-            setpoint=BSM2_DO_SETPOINT, Kp=BSM2_DO_KP, Ti=BSM2_DO_TI, Tt=BSM2_DO_TT,
-            offset=BSM2_DO_KLA_OFFSET, out_min=0.0, out_max=BSM2_DO_KLA_MAX,
-            signal_name="do_kla"))
+            input_port_names=["inlet"], conditions=conditions, aeration=aeration))
 
     plant.add_unit(SplitterUnit(
         name="tank5_split", network=asm1,
@@ -568,10 +561,8 @@ def build_bsm2(
     plant.connect("tank3", "tank4")
     plant.connect("tank4", "tank5")
     plant.connect("tank5", "tank5_split")
-    if do_control:
-        # Sense reactor-4 oxygen for the DO controller (a measurement tap; the
-        # controller produces no material stream).
-        plant.connect("tank4", "do_control.measured")
+    # The DO controller and its reactor-4 measurement tap are auto-wired from the
+    # reactors' closed-loop Aeration specs (Plant._materialize_aeration).
     plant.connect("tank5_split.to_settler", "settler")
     plant.connect("settler.underflow", "underflow_split")
     # AS recycles (back-edges). Seeded with a temperature-carrying zero-flow

@@ -11,7 +11,7 @@ target — see :mod:`aquakin.plant.bsm.bsm1`.
 """
 
 from aquakin.plant.control import PIController
-from aquakin.plant.cstr import CSTRUnit
+from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.delay import HydraulicDelayUnit
 from aquakin.plant.design import (
     ActivatedSludgeSizing,
@@ -75,6 +75,7 @@ __all__ = [
     "ActivatedSludgeSizing",
     "BSM1Evaluation",
     "BSM2Evaluation",
+    "Aeration",
     "CSTRUnit",
     "Connection",
     "HydraulicDelayUnit",

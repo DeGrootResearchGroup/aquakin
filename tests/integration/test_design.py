@@ -101,6 +101,29 @@ def test_takacs_solids_mass():
     assert mass > 0.0
 
 
+def test_reactor_autodetection_finds_as_reactors_not_digester():
+    """The AS-reactor auto-detection (used by sludge_metrics / plant.sludge_age
+    and by the warm-start) must find the activated-sludge CSTRs and exclude the
+    digester. This is a no-solve guard for the detection logic, which otherwise
+    is only exercised by the slow plant-solve tests -- so a change to how a CSTR
+    advertises its aeration (the field the detection keys on) would slip the fast
+    gate. Both call sites share the discriminator and must agree."""
+    from aquakin.plant.bsm import build_bsm2
+    from aquakin.plant.bsm.warmstart import _as_reactor_names
+    from aquakin.plant.design import _reactor_units
+
+    bsm1 = build_bsm1()
+    expected = ["tank1", "tank2", "tank3", "tank4", "tank5"]
+    assert _reactor_units(bsm1, None) == expected
+    assert _as_reactor_names(bsm1) == expected
+
+    bsm2 = build_bsm2()
+    # Same five AS reactors; the ADM1 digester (volumed but not a CSTR) is out.
+    assert _reactor_units(bsm2, None) == expected
+    assert _as_reactor_names(bsm2) == expected
+    assert "digester" not in _reactor_units(bsm2, None)
+
+
 # ----- Achieved metrics from a solved plant (slow: BSM1 plant solves) -----
 
 def _influent(network):
