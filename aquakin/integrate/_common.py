@@ -441,30 +441,41 @@ def _coerce_atol(atol, n_species: int):
 
 
 @contextlib.contextmanager
-def friendly_step_ceiling(max_steps, *, what: str = "solve"):
-    """Re-raise the integrator step-budget failure as a domain-level error.
+def friendly_solve_errors(max_steps, *, what: str = "solve"):
+    """Re-raise two opaque solve-time failures as domain-level errors.
 
-    An adaptive solve that exhausts ``max_steps`` raises a verbose
-    ``EquinoxRuntimeError`` ("The maximum number of solver steps was reached")
-    wrapped in JAX/Equinox debugging chatter (``EQX_ON_ERROR``, ``kidger.site``,
-    ...), meaningless to a process engineer. Wrap the *execution* of a solve in
+    Both failures surface from JAX/Diffrax/Equinox internals with messages a
+    process engineer cannot map to a fix. Wrap the *execution* of a solve in
     this context manager -- the call to the jitted solve / ``diffeqsolve``, where
-    the runtime error actually surfaces -- to re-raise it as a plain
-    ``RuntimeError`` naming the domain-level remedies, with the noisy traceback
-    suppressed (``from None``). Any other exception propagates unchanged.
+    each failure actually surfaces -- to re-raise it as a plain ``RuntimeError``
+    naming the remedy, with the noisy traceback suppressed (``from None``). Any
+    other exception propagates unchanged.
+
+    1. **Step-budget exhaustion.** An adaptive solve that exhausts ``max_steps``
+       raises a verbose ``EquinoxRuntimeError`` ("The maximum number of solver
+       steps was reached") wrapped in JAX/Equinox debugging chatter
+       (``EQX_ON_ERROR``, ``kidger.site``, ...). Re-raised naming the
+       warm-start / loosen-rtol / raise-max_steps remedies.
+    2. **Forward-mode AD through the reverse-only adjoint.** The default
+       ``RecursiveCheckpointAdjoint`` registers a ``custom_vjp``, so a
+       ``jax.jacfwd`` / ``jax.jvp`` through the solve fails with JAX's
+       "can't apply forward-mode autodiff (jvp) to a custom_vjp function" --
+       which never mentions the cure. Re-raised naming
+       ``aquakin.forward_adjoint()``.
 
     Parameters
     ----------
     max_steps : int
-        The step budget that was hit (quoted back in the message).
+        The step budget that was hit (quoted back in the step-budget message).
     what : str
         A short label for the failing solve (e.g. ``"plant solve"``), used in
         the message.
     """
     try:
         yield
-    except Exception as exc:  # noqa: BLE001 -- re-interpret one specific failure
-        if "maximum number of solver steps" in str(exc).lower():
+    except Exception as exc:  # noqa: BLE001 -- re-interpret two specific failures
+        msg = str(exc).lower()
+        if "maximum number of solver steps" in msg:
             raise RuntimeError(
                 f"The {what} hit its integrator step budget (max_steps={max_steps}) "
                 "before completing. This is almost always a stiff transient, not a "
@@ -473,6 +484,16 @@ def friendly_step_ceiling(max_steps, *, what: str = "solve"):
                 "(2) loosen rtol (the default atol already auto-scales to the state "
                 "magnitudes); or (3) raise max_steps. If none help, the model may be "
                 "genuinely unstable at these parameters/inputs."
+            ) from None
+        if "forward-mode autodiff" in msg and "custom_vjp" in msg:
+            raise RuntimeError(
+                f"Forward-mode autodiff (jax.jacfwd / jax.jvp) cannot flow through "
+                f"the {what}: the default adjoint (RecursiveCheckpointAdjoint) is "
+                "reverse-mode only -- it registers a custom_vjp that rejects forward "
+                "mode. Build the reactor with adjoint=aquakin.forward_adjoint() to "
+                "use a forward-mode-capable solve, or take a reverse-mode gradient "
+                "(jax.grad / jax.jacrev) instead. (aquakin.sensitivity and "
+                "aquakin.dgsm accept ad_mode='forward' and set this adjoint for you.)"
             ) from None
         raise
 

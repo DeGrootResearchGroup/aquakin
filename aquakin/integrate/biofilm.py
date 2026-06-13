@@ -57,7 +57,7 @@ from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
     _run_diffeqsolve,
-    friendly_step_ceiling,
+    friendly_solve_errors,
     init_solver_settings,
     to_native_time,
     validate_t_eval,
@@ -582,7 +582,7 @@ class BiofilmReactor:
             jitted = self._build_jitted_solve(t0, t1, t_eval_arr is not None)
             self._jit_cache[cache_key] = jitted
 
-        with friendly_step_ceiling(self.max_steps, what="biofilm reactor solve"):
+        with friendly_solve_errors(self.max_steps, what="biofilm reactor solve"):
             if t_eval_arr is None:
                 ts, ys = jitted(y0, params, condition_arrays)
             else:

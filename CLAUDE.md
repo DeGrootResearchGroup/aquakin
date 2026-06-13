@@ -2127,12 +2127,18 @@ integrator step budget -- `Plant.solve` **and every reactor**
 re-raises the Diffrax/Equinox failure as a domain `RuntimeError` naming the
 remedies (warm-start via `run_to_steady_state`, loosen `rtol`, raise
 `max_steps`), with the noisy equinox exception chain suppressed (`from None`).
-This is the shared `integrate/_common.friendly_step_ceiling(max_steps, what=...)`
+This is the shared `integrate/_common.friendly_solve_errors(max_steps, what=...)`
 context manager wrapped around each solve's *execution* (the call to the jitted
 solve / `diffeqsolve`, where the runtime error surfaces -- not the traced
 `_run_diffeqsolve`). The jitted reactors emit one extra equinox *stderr* line
 about `filter_jit` that the exception machinery cannot suppress; the raised
-exception itself is clean.
+exception itself is clean. The **same** context manager also catches the other
+opaque solve-time failure — a `jax.jacfwd`/`jax.jvp` (forward-mode AD) through
+the default reverse-only adjoint, which JAX rejects with "can't apply
+forward-mode autodiff (jvp) to a custom_vjp function". That is re-raised as a
+`RuntimeError` naming the cure, `aquakin.forward_adjoint()` (build the reactor
+with that adjoint, or take a reverse-mode gradient). `sensitivity`/`dgsm` with
+`ad_mode="forward"` set the forward-capable adjoint for you and so never hit it.
 
 **Dynamic influent now works too — flow-controlled recycle pumps (issue #30).**
 The dynamic (time-varying-influent) run *used* to hit the step ceiling, which

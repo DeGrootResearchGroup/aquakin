@@ -227,3 +227,49 @@ def test_batch_step_ceiling_gives_friendly_error():
     with pytest.raises(RuntimeError, match="step budget"):
         reactor.solve(net.concentrations(A=1.0), t_span=(0.0, 1000.0),
                       t_eval=jnp.linspace(0.0, 1000.0, 50))
+
+
+def test_forward_mode_through_default_adjoint_gives_friendly_error(simple_network):
+    """A direct jax.jacfwd / jax.jvp through a default reactor re-raises with a
+    domain-level remedy naming aquakin.forward_adjoint(), not JAX's raw
+    "custom_vjp function" message -- the default RecursiveCheckpointAdjoint is
+    reverse-only, and the cure is otherwise undiscoverable from the error."""
+    conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
+    reactor = aquakin.BatchReactor(simple_network, conditions)  # default adjoint
+    C0 = jnp.asarray([1.0, 0.0])
+    p = simple_network.default_parameters()
+
+    def out(z):
+        return reactor.solve(C0, params=p.at[0].set(z[0]), t_span=(0.0, 10.0)).C[-1, 1]
+
+    with pytest.raises(RuntimeError, match="forward_adjoint"):
+        jax.jacfwd(out)(jnp.asarray([0.3]))
+    # The raw JAX message must not leak through.
+    try:
+        jax.jacfwd(out)(jnp.asarray([0.3]))
+    except RuntimeError as exc:
+        assert "custom_vjp function." not in str(exc)
+
+
+def test_forward_adjoint_enables_forward_mode_through_batch(simple_network):
+    """Building the reactor with aquakin.forward_adjoint() makes the same
+    forward-mode solve differentiable (the cure the friendly error points to),
+    while reverse mode through the default adjoint is unaffected."""
+    conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
+    C0 = jnp.asarray([1.0, 0.0])
+    p = simple_network.default_parameters()
+
+    fwd = aquakin.BatchReactor(simple_network, conditions,
+                               adjoint=aquakin.forward_adjoint())
+
+    def out(z):
+        return fwd.solve(C0, params=p.at[0].set(z[0]), t_span=(0.0, 10.0)).C[-1, 1]
+
+    J = jax.jacfwd(out)(jnp.asarray([0.3]))
+    assert jnp.all(jnp.isfinite(J))
+
+    # Reverse mode through a fresh default reactor still works.
+    rev = aquakin.BatchReactor(simple_network, conditions)
+    g = jax.grad(lambda z: rev.solve(
+        C0, params=p.at[0].set(z[0]), t_span=(0.0, 10.0)).C[-1, 1])(jnp.asarray([0.3]))
+    assert jnp.all(jnp.isfinite(g))

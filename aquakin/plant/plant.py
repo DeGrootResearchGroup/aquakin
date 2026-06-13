@@ -37,7 +37,7 @@ from aquakin.integrate._common import (
     _run_diffeqsolve,
     concrete_settings_key,
     default_atol,
-    friendly_step_ceiling,
+    friendly_solve_errors,
     to_native_time,
 )
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
@@ -2136,7 +2136,7 @@ class Plant:
             cache_key = (None if (settings is None or not teval_concrete
                                   or under_trace)
                          else ("stable_adjoint", t0, t1, teval_key, settings))
-            with friendly_step_ceiling(max_steps, what="plant solve"):
+            with friendly_solve_errors(max_steps, what="plant solve"):
                 if cache_key is not None:
                     jitted = self._jit_cache.get(cache_key)
                     if jitted is None:
@@ -2186,7 +2186,7 @@ class Plant:
             if cache_key is not None:
                 self._jit_cache[cache_key] = jitted
 
-        with friendly_step_ceiling(max_steps, what="plant solve"):
+        with friendly_solve_errors(max_steps, what="plant solve"):
             if t_eval is None:
                 ts, ys = jitted(y0, params)
             else:
