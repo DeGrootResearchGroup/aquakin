@@ -162,21 +162,49 @@ class PlantSolution:
 
     def unit_state(self, unit_name: str) -> jnp.ndarray:
         """Return the trajectory of one unit's state, shape
-        ``(n_t, unit.state_size)``."""
-        start, size = self.plant._state_layout[unit_name]
+        ``(n_t, unit.state_size)``. See ``plant.list_units()`` for the names."""
+        layout = self.plant._state_layout
+        if unit_name not in layout:
+            import difflib
+            hint = difflib.get_close_matches(unit_name, list(layout), n=3)
+            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            raise KeyError(
+                f"Unknown unit '{unit_name}'. Units (see plant.list_units()): "
+                f"{list(layout)}.{suffix}"
+            )
+        start, size = layout[unit_name]
         return self.state[:, start : start + size]
+
+    def available_streams(self) -> list[str]:
+        """The ``"unit.port"`` output endpoints :meth:`Plant.stream` accepts
+        (a convenience alias for ``plant.list_ports()``)."""
+        return self.plant.list_ports()
 
     def C_named(self, unit_name: str, species: str) -> jnp.ndarray:
         """Return a single species' trajectory in a single unit.
 
-        Only valid for units whose state is a concentration vector in
-        the unit's network (CSTRs and other kinetic units).
+        Only valid for units whose state is a concentration vector in the unit's
+        network (CSTRs and other kinetic units). See ``plant.list_units()`` /
+        ``plant.list_species(unit)`` for the valid names.
         """
-        unit = self.plant.units[unit_name]
-        if not hasattr(unit, "network"):
+        unit = self.plant._unit_or_raise(unit_name)
+        if not self.plant._is_concentration_unit(unit):
+            indexable = [n for n in self.plant.list_units()
+                         if self.plant._is_concentration_unit(self.plant.units[n])]
             raise KeyError(
-                f"Unit '{unit_name}' has no 'network' attribute; cannot "
-                f"index by species name."
+                f"Unit '{unit_name}' state is not a concentration vector, so it "
+                f"cannot be indexed by species (read it as a stream with "
+                f"plant.stream(sol, '{unit_name}.<port>') instead). "
+                f"Concentration units: {indexable}."
+            )
+        if species not in unit.network.species_index:
+            import difflib
+            hint = difflib.get_close_matches(species, unit.network.species, n=3)
+            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            raise KeyError(
+                f"Unknown species '{species}' in unit '{unit_name}'. Species "
+                f"(see plant.list_species('{unit_name}')): "
+                f"{list(unit.network.species)}.{suffix}"
             )
         idx = unit.network.species_index[species]
         return self.unit_state(unit_name)[:, idx]
@@ -1070,6 +1098,80 @@ class Plant:
             idxs.append(index[name])
             vals.append(float(value))
         return base.at[jnp.asarray(idxs)].set(jnp.asarray(vals, dtype=base.dtype))
+
+    # ----- introspection: discover unit / port / species names ---------------
+
+    def _unit_or_raise(self, name: str) -> "Unit":
+        """Return ``self.units[name]`` or a ``KeyError`` with a close-match hint."""
+        if name not in self.units:
+            import difflib
+            hint = difflib.get_close_matches(name, list(self.units), n=3)
+            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            raise KeyError(
+                f"Unknown unit '{name}'. Units (see plant.list_units()): "
+                f"{self.list_units()}.{suffix}"
+            )
+        return self.units[name]
+
+    def list_units(self) -> list[str]:
+        """The plant's unit names, in the order added.
+
+        Each name keys :attr:`units`, is the ``unit`` part of the ``"unit.port"``
+        endpoints :meth:`stream` / :meth:`connect` accept, and is a key of
+        :meth:`states_by_unit` / :meth:`PlantSolution.unit_state`. See
+        :meth:`list_ports` for the ports and :meth:`list_species` for a kinetic
+        unit's species. Available before solving (it is plant structure).
+        """
+        return list(self._insertion_order)
+
+    def list_ports(self, unit: Optional[str] = None, *,
+                   role: str = "output") -> list[str]:
+        """The ``"unit.port"`` endpoint strings, for discovering stream args.
+
+        ``role="output"`` (default) returns every unit-*output* endpoint -- the
+        strings :meth:`stream` reconstructs and :meth:`connect` reads from as a
+        source. ``role="input"`` returns the input endpoints (:meth:`connect`
+        destinations). Pass ``unit`` to restrict to one unit. No reading the
+        builder source to find a port string.
+        """
+        if role not in ("output", "input"):
+            raise ValueError(f"role must be 'output' or 'input'; got {role!r}.")
+        names = [unit] if unit is not None else list(self._insertion_order)
+        out: list[str] = []
+        for name in names:
+            u = self._unit_or_raise(name)
+            ports = u.output_ports if role == "output" else u.input_ports
+            out.extend(f"{name}.{p}" for p in ports)
+        return out
+
+    @staticmethod
+    def _is_concentration_unit(unit) -> bool:
+        """Whether a unit's state *is* its network's concentration vector (so it
+        can be indexed by species: a CSTR or the digester, not a stateless
+        mixer/splitter/ideal-clarifier nor the layered Takacs settler)."""
+        return (hasattr(unit, "network")
+                and getattr(unit, "state_size", 0) == unit.network.n_species)
+
+    def list_species(self, unit: str) -> list[str]:
+        """The species names of a concentration-vector unit's network.
+
+        These are the valid names for :meth:`PlantSolution.C_named` and
+        :meth:`PlantSolution.to_dataframe` on that unit. Raises ``KeyError`` for
+        an unknown unit (with a hint), or for a unit whose state is not a
+        concentration vector (a mixer/splitter/clarifier) -- use
+        :meth:`stream` to read those as flow streams instead.
+        """
+        u = self._unit_or_raise(unit)
+        if not self._is_concentration_unit(u):
+            indexable = [n for n in self._insertion_order
+                         if self._is_concentration_unit(self.units[n])]
+            raise KeyError(
+                f"Unit '{unit}' state is not a concentration vector, so it has "
+                f"no per-species columns (read it as a stream with "
+                f"plant.stream(sol, ...) instead). Concentration units: "
+                f"{indexable}."
+            )
+        return list(u.network.species)
 
     def _params_for_unit(
         self, unit_name: str, params_full: jnp.ndarray

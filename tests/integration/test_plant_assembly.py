@@ -810,3 +810,67 @@ def test_recycle_presolve_differentiable():
         g = jax.grad(loss)(plant.default_parameters())
     assert jnp.all(jnp.isfinite(g))
     assert [x for x in w if "recycle concentration" in str(x.message)] == []
+
+
+# --- plant introspection: discoverable unit / port / species names (#147) -----
+
+def test_list_units_ports_species():
+    plant, asm1, adm1 = _bsm2_no_solve()
+    units = plant.list_units()
+    assert units[:3] == ["front_mix", "primary", "as_mix"]
+    assert "digester" in units and "settler" in units
+    # output endpoints are "unit.port" strings (what stream() accepts)
+    ports = plant.list_ports()
+    assert "settler.overflow" in ports and "settler.underflow" in ports
+    assert "tank5.out" in ports
+    assert all("." in p for p in ports)
+    assert plant.list_ports("settler") == ["settler.overflow", "settler.underflow"]
+    assert plant.list_ports("tank1", role="input") == ["tank1.inlet"]
+    # species of the concentration-vector units
+    assert plant.list_species("tank5") == list(asm1.species)
+    assert plant.list_species("digester") == list(adm1.species)
+
+
+def test_list_species_rejects_non_concentration_units():
+    # stateless mixers/splitters and the layered Takacs settler carry a network
+    # but their state is not a concentration vector -> clear error, not a wrong
+    # or empty result.
+    plant, _asm1, _adm1 = _bsm2_no_solve()
+    for unit in ("front_mix", "settler", "thickener"):
+        with pytest.raises(KeyError, match="not a concentration vector"):
+            plant.list_species(unit)
+
+
+def test_introspection_unknown_name_hints():
+    plant, _asm1, _adm1 = _bsm2_no_solve()
+    with pytest.raises(KeyError, match="Did you mean: tank5"):
+        plant.list_species("tank6")           # close to tank5/tank4/...
+    with pytest.raises(KeyError, match="Unknown unit"):
+        plant.list_ports("nope")
+    with pytest.raises(ValueError, match="role must be"):
+        plant.list_ports(role="sideways")
+
+
+def test_solution_C_named_errors_and_available_streams():
+    from aquakin.plant.plant import PlantSolution
+    from aquakin.plant.bsm import bsm2_warm_start
+
+    plant, _asm1, _adm1 = _bsm2_no_solve()
+    plant._build_state_layout()
+    y0 = bsm2_warm_start(plant)
+    sol = PlantSolution(t=jnp.asarray([0.0]), state=y0[None, :], plant=plant)
+
+    # available_streams mirrors plant.list_ports()
+    assert sol.available_streams() == plant.list_ports()
+    # a good lookup works
+    assert float(sol.C_named("tank5", "SNH")[0]) > 0.0
+    # unknown species -> hint; unknown unit -> hint; non-concentration unit ->
+    # a clear "read it as a stream" message.
+    with pytest.raises(KeyError, match="Did you mean: SNH"):
+        sol.C_named("tank5", "SNHH")
+    with pytest.raises(KeyError, match="Unknown unit"):
+        sol.C_named("tankX", "SNH")
+    with pytest.raises(KeyError, match="not a concentration vector"):
+        sol.C_named("settler", "XB_H")
+    with pytest.raises(KeyError, match="Unknown unit"):
+        sol.unit_state("tankX")
