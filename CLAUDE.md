@@ -960,12 +960,24 @@ ordinary condition field.
 `solve_ph(...)` returns pH given the total molar concentrations of the
 carbonate, acetate, ammonia, phosphate and sulfide systems, plus strong-anion
 charge equivalents, a net fixed cation charge, and temperature. It runs a
-**fixed number of Newton iterations** on the electroneutrality residual in
-`u = ln[H+]` space (`jax.lax.scan`, no data-dependent control flow), so it is
-`jit` / `vmap` / `grad` friendly and composes inside a Diffrax RHS.
-Equilibrium constants are temperature-corrected via van't Hoff. The chemistry
-mirrors the WATS reference pH solver. Validated against an independent
-bisection root finder in `tests/unit/test_ph_solver.py`.
+**fixed number of safeguarded Newton-bisection iterations** on the
+electroneutrality residual in `u = ln[H+]` space (`jax.lax.scan`, no
+data-dependent control flow), so it is `jit` / `vmap` / `grad` friendly and
+composes inside a Diffrax RHS. The residual is strictly monotone with a unique,
+trivially bracketable root, so each step takes a Newton step but falls back to
+bisection (via the non-strict rtsafe product test) whenever Newton would leave
+the bracket — making the iteration **globally convergent in a fixed step count**.
+This matters: a bare Newton step from the fixed pH-7 start **overshoots to
+`exp(u) = inf` (NaN), or silently to an absurd pH that saturates the `pH_switch`
+rate terms**, when the strong-ion charge exceeds the buffering (e.g. a weakly
+buffered transient, or a calibration that pushes the `S_cat`/`S_an` states) —
+the bracketed scheme stays finite and correct there, while still converging
+quadratically (pure Newton) near the root, so AD through it is the exact
+implicit-function-theorem pH sensitivity. Equilibrium constants are
+temperature-corrected via van't Hoff. The chemistry mirrors the WATS reference
+pH solver. Validated against an independent bisection root finder, and the
+weak-buffer / extreme-charge regime that broke the old bare-Newton scheme is
+regression-tested, in `tests/unit/test_ph_solver.py`.
 
 ### Derived conditions (the wiring)
 
@@ -1030,6 +1042,7 @@ aquakin/
 │   │   ├── conditions.py            # SpatialConditions dataclass
 │   │   ├── context.py               # CompileContext dataclass
 │   │   ├── ph_solver.py             # differentiable charge-balance pH solver
+│   │   │                            #   (safeguarded Newton-bisection: globally convergent, no NaN)
 │   │   ├── speciation.py            # speciation block -> derived pH condition fn
 │   │   └── units.py                 # prettify_units: plain-ASCII unit exponents -> Unicode superscripts
 │   │

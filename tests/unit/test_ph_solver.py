@@ -135,3 +135,59 @@ def test_vmap_over_states():
     pH = jax.vmap(lambda c, z: solve_ph(tot_carbonate=c, z_cation_eq=z))(carb, zcat)
     assert pH.shape == (3,)
     assert jnp.all(jnp.isfinite(pH))
+
+
+# --- Global convergence: the charge balance far outside the buffered regime ---
+# A bare Newton step overshoots to exp(u)=inf (NaN) -- or silently to an absurd
+# pH that saturates the rate terms -- when the strong-ion charge exceeds the
+# buffering. The safeguarded Newton-bisection brackets the (monotone) root and
+# stays finite and correct. These cases all returned NaN / nonsense before.
+
+# (description, kwargs, expected pH from an independent NumPy reference)
+_WEAK_BUFFER_CASES = [
+    ("strong acid, no buffer", dict(strong_anion_eq=1.0e-2), 2.0),
+    ("strong acid + trace carbonate", dict(tot_carbonate=1e-3, strong_anion_eq=2e-2), 1.699),
+    ("strong base, weak buffer", dict(tot_carbonate=1e-3, z_cation_eq=5e-2), 12.848),
+    ("large acid excess", dict(tot_carbonate=1e-2, strong_anion_eq=0.3), 0.523),
+]
+
+
+@pytest.mark.parametrize("desc, totals, pH_expected", _WEAK_BUFFER_CASES)
+def test_weak_buffer_regime_converges_finite(desc, totals, pH_expected):
+    K = equilibrium_constants(jnp.asarray(293.15))
+    pH = float(solve_ph(**totals))
+    assert np.isfinite(pH), f"{desc}: pH is non-finite"
+    assert pH == pytest.approx(pH_expected, abs=1e-2), desc
+    # The root is actually solved, not just bounded.
+    h = 10.0 ** (-pH)
+    res = float(charge_balance_residual(jnp.asarray(h), K=K, **totals))
+    assert abs(res) < 1e-10, f"{desc}: residual {res} not ~0"
+
+
+def test_no_nan_over_extreme_inputs():
+    """Sweep wide strong-ion imbalances against weak buffers; the solver must
+    stay finite everywhere (it returned NaN here before the safeguard)."""
+    rng = np.random.default_rng(0)
+    for _ in range(400):
+        pH = float(solve_ph(
+            tot_carbonate=10.0 ** rng.uniform(-6, 0),
+            tot_ammonia=10.0 ** rng.uniform(-6, 0),
+            tot_sulfide=10.0 ** rng.uniform(-6, -1),
+            strong_anion_eq=rng.uniform(-1.0, 1.0),
+            z_cation_eq=rng.uniform(-1.0, 1.0),
+        ))
+        assert np.isfinite(pH)
+
+
+def test_gradient_correct_in_weak_buffer_regime():
+    """AD through the safeguarded iteration is the exact implicit-function-theorem
+    sensitivity even where a bare Newton step would diverge."""
+    def f(san):
+        return solve_ph(tot_carbonate=1e-3, strong_anion_eq=san)
+
+    s0 = 2e-2
+    g = float(jax.grad(f)(s0))
+    assert np.isfinite(g)
+    eps = 1e-8
+    fd = (float(f(s0 + eps)) - float(f(s0 - eps))) / (2 * eps)
+    assert g == pytest.approx(fd, rel=1e-5)
