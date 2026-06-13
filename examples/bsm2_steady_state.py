@@ -19,18 +19,12 @@ to seed the reactor units by name.
 import jax.numpy as jnp
 
 import aquakin
+from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     build_bsm2,
     bsm2_constant_influent,
     bsm2_parameters,
 )
-
-# A healthy activated-sludge biomass to seed the five AS reactors (g/m³),
-# roughly the reference BSM2 reactor composition. The digester and the rest of
-# the plant start from network defaults and settle in.
-WARM_AS = {"SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
-           "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,
-           "SND": 0.7, "XND": 3.0, "SALK": 5.0}
 
 
 def main() -> None:
@@ -43,9 +37,7 @@ def main() -> None:
 
     # Seed the AS reactors with a healthy biomass (warm start) so the slow
     # digester settles quickly. The rest of the plant starts from its defaults.
-    warm = asm1.concentrations(WARM_AS)
-    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
-    y0 = plant.initial_state(overrides={t: warm for t in tanks})
+    y0 = bsm2_warm_start(plant)
 
     print("Settling BSM2 to open-loop steady state (constant influent) ...")
     sol = plant.solve(

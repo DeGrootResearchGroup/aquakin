@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
+from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     BSM2_CONSTANT_INFLUENT,
     BSM2_Q_REF,
@@ -22,10 +23,6 @@ from aquakin.plant.bsm.bsm2 import (
     bsm2_parameters,
 )
 from aquakin.plant.influent import InfluentSeries
-
-_WARM = {"SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
-         "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,
-         "SND": 0.7, "XND": 3.0, "SALK": 5.0}
 
 
 def _tank5_snh_at(asm1, adm1, params, T_kelvin):
@@ -37,9 +34,7 @@ def _tank5_snh_at(asm1, adm1, params, T_kelvin):
                           T=jnp.full((2,), float(T_kelvin)))
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
     plant.add_influent("feed", infl, to="front_mix.fresh")
-    warm = asm1.concentrations(_WARM)
-    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
-    y0 = plant.initial_state(overrides={tk: warm for tk in tanks})
+    y0 = bsm2_warm_start(plant)
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
                       params=params, y0=y0,
                       rtol=1e-5, atol=1e-3, max_steps=500_000)
@@ -78,9 +73,7 @@ def test_temperature_influent_rhs_finite_and_active():
                               T=jnp.full((2,), float(T_kelvin)))
         plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
         plant.add_influent("feed", infl, to="front_mix.fresh")
-        warm = asm1.concentrations(_WARM)
-        tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
-        y0 = plant.initial_state(overrides={tk: warm for tk in tanks})
+        y0 = bsm2_warm_start(plant)
         d = plant.derivative(y0, params)          # dstate/dt, no full solve
         assert jnp.all(jnp.isfinite(d))
         tank5_rate = plant.states_by_unit(d)["tank5"]

@@ -1731,7 +1731,22 @@ Key types:
     by name (each vector must match the unit's `state_size`) — the supported
     way to seed a plant (e.g. a healthy activated-sludge biomass before a slow
     digester settle) instead of reaching into the private `_state_layout`. Pass
-    the result as `solve(y0=...)`.
+    the result as `solve(y0=...)`. For the BSM plants the reference seed is
+    shipped — **`bsm2_warm_start(plant)`** / **`bsm1_warm_start(plant)`**
+    (`aquakin.plant.bsm`) return a ready flat `y0` with the five AS reactors
+    seeded from the reference reactor composition (the dict constants
+    `BSM2_WARM_REACTOR_COMPOSITION` / `BSM1_WARM_REACTOR_COMPOSITION`) and every
+    other unit at its default. **BSM2 should always be warm-started**: the
+    digester's ~19-day retention makes a cold start slow and stiff (the
+    near-empty AS basin filling against the recycle loops can crawl or hit the
+    step ceiling), and the warm seed removes that transient so only the digester
+    has to settle. The reactor set and water-line network are auto-detected from
+    the plant, so a single `bsm2_warm_start(plant)` replaces the
+    seed-composition dict + tank list + `initial_state(overrides=…)` boilerplate
+    the BSM2 scripts used to copy-paste. (The BSM2 composition is the validated
+    reference reactor state; the BSM1 one is ~aquakin's BSM1 steady state. Both
+    are *seeds* — the solve relaxes them — so the values affect settling speed,
+    not the steady state.)
   - **Reading state back by unit.** `plant.states_by_unit(vec)` splits any flat
     plant vector into a `{unit_name: sub-vector}` map — the exact inverse of
     `initial_state(overrides=...)`. It works on a `y0`, a `PlantSolution.final_state`

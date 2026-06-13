@@ -22,19 +22,12 @@ import numpy as np
 import pytest
 
 import aquakin
+from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     build_bsm2,
     bsm2_constant_influent,
     bsm2_parameters,
 )
-
-# Near-uniform activated-sludge warm start (the slow inerts are ~uniform across
-# reactors at the published steady state; the fast variables relax within hours),
-# so a short solve starts near steady state instead of from a stiff clean start.
-_WARM = {"SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
-         "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,
-         "SND": 0.7, "XND": 3.0, "SALK": 5.0}
-_TANKS = ("tank1", "tank2", "tank3", "tank4", "tank5")
 
 
 def _bsm2_plant():
@@ -42,8 +35,7 @@ def _bsm2_plant():
     adm1 = aquakin.load_network("adm1")
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
-    warm = asm1.concentrations(_WARM)
-    y0 = plant.initial_state(overrides={tk: warm for tk in _TANKS})
+    y0 = bsm2_warm_start(plant)
     return asm1, adm1, plant, y0
 
 
@@ -170,8 +162,7 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
         InfluentSeries(t=t_inf, Q=q_inf, C=jnp.tile(c_const, (n, 1)), network=asm1),
         to="front_mix.fresh",
     )
-    warm = asm1.concentrations(_WARM)
-    y0 = plant.initial_state(overrides={tk: warm for tk in _TANKS})
+    y0 = bsm2_warm_start(plant)
     base = bsm2_parameters(asm1, adm1)
     gidx = plant.parameter_index("adm1.k_m_ac")
     theta0 = float(base[gidx])

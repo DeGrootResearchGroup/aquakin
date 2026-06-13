@@ -14,6 +14,7 @@ heterotroph biomass on either side, showing the inventory response.
 import jax.numpy as jnp
 
 import aquakin
+from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
     build_bsm2,
     bsm2_asm1_network,
@@ -21,10 +22,6 @@ from aquakin.plant.bsm import (
     bsm2_parameters,
     bsm2_wastage_schedule,
 )
-
-WARM_AS = {"SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
-           "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,
-           "SND": 0.7, "XND": 3.0, "SALK": 5.0}
 
 
 def main() -> None:
@@ -36,9 +33,7 @@ def main() -> None:
     plant = build_bsm2(asm1, adm1, wastage_schedule=schedule)
     plant.add_influent("feed", bsm2_constant_influent(asm1), to="front_mix.fresh")
 
-    warm = asm1.concentrations(WARM_AS)
-    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
-    y0 = plant.initial_state(overrides={t: warm for t in tanks})
+    y0 = bsm2_warm_start(plant)
 
     t_eval = jnp.array([0.0, 90.0, 180.0, 220.0, 300.0])
     print("Driving BSM2 with the scheduled wastage (step up at day 182) ...")

@@ -15,6 +15,7 @@ bypass adds.
 import jax.numpy as jnp
 
 import aquakin
+from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
     build_bsm2,
     bsm2_asm1_network,
@@ -25,11 +26,6 @@ from aquakin.plant.bsm import (
 from aquakin.plant.bsm.bsm2 import BSM2_BYPASS_Q
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.metrics import derived_COD, derived_TSS
-
-# A healthy activated-sludge biomass to seed the five AS reactors (g/m³).
-WARM_AS = {"SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
-           "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,
-           "SND": 0.7, "XND": 3.0, "SALK": 5.0}
 
 
 def main() -> None:
@@ -46,9 +42,7 @@ def main() -> None:
     plant = build_bsm2(asm1, adm1, influent_bypass=True)
     plant.add_influent("feed", influent, to="bypass_split.in")
 
-    warm = asm1.concentrations(WARM_AS)
-    tanks = ("tank1", "tank2", "tank3", "tank4", "tank5")
-    y0 = plant.initial_state(overrides={t: warm for t in tanks})
+    y0 = bsm2_warm_start(plant)
 
     print(f"Driving BSM2 (influent bypass on) at a storm flow "
           f"{Q_storm:.0f} m³/d (threshold {BSM2_BYPASS_Q:.0f}) ...")
