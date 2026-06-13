@@ -183,6 +183,13 @@ class CompiledNetwork:
     # re-derive units by string-matching species names.
     species_units: dict[str, str] = field(default_factory=dict)
     species_descriptions: dict[str, str] = field(default_factory=dict)
+    # Declared units for the rate-constant parameters (keyed by namespaced name,
+    # e.g. ``"O3_Br_direct.k1"``) and the condition fields (keyed by field name).
+    # Advisory metadata carried verbatim from the YAML; consumed only by the
+    # opt-in :meth:`check_units` dimensional-consistency check. A blank ``units:``
+    # is kept as ``""`` and treated as "unknown" (skipped) by the check.
+    parameter_units: dict[str, str] = field(default_factory=dict)
+    condition_units: dict[str, str] = field(default_factory=dict)
     parameter_bounds: dict[str, tuple[float, float]] = field(default_factory=dict)
     parameter_transforms: dict[str, str] = field(default_factory=dict)
     # Gaussian priors per namespaced parameter name, as ``(mean, std)`` in
@@ -668,6 +675,45 @@ class CompiledNetwork:
             for name, ast in zip(self.reaction_names, self.rate_asts, strict=True)
         }
 
+    def check_units(self, *, check_root: bool = True) -> list:
+        """Check the rate expressions for dimensional ("unit") consistency.
+
+        A currency-aware dimensional analysis of every ``rate:`` expression: it
+        catches a dropped concentration factor, a wrong rate-constant exponent,
+        or a Monod term that compares two different "currencies"
+        (``g_COD/m3`` vs ``g_N/m3``), which a plain SI dimension check waves
+        through because both are mass/volume. Units are taken from the species,
+        parameter, and condition ``units:`` declarations.
+
+        The check is **advisory**: a blank or unparseable unit is treated as
+        unknown and skipped, so an empty result is "no inconsistency among the
+        declared, parseable units", not a proof of correctness. Stoichiometry
+        (a conservation question) is out of scope -- use
+        :func:`aquakin.check_conservation` for that.
+
+        Parameters
+        ----------
+        check_root : bool, default True
+            Also assert each rate resolves to ``currency / volume / time`` (e.g.
+            ``g_COD/m3/d`` or ``mol/L/s``). Set ``False`` to run only the local
+            operand- and Monod-consistency rules.
+
+        Returns
+        -------
+        list of aquakin.utils.units.UnitWarning
+            One entry per finding, as ``(reaction, location, detail)`` named
+            tuples (empty when nothing is flagged).
+
+        Examples
+        --------
+        >>> net = aquakin.load_network("asm1")
+        >>> for w in net.check_units():
+        ...     print(w)
+        """
+        from aquakin.utils.units import check_network_units
+
+        return check_network_units(self, check_root=check_root)
+
 
 # --- compile_network stages --------------------------------------------
 
@@ -720,7 +766,7 @@ def _build_param_index(spec):
     deterministic).
 
     Returns ``(parameters, param_index, defaults, bounds, transforms, priors,
-    temperature_corrections)``.
+    units, temperature_corrections)``.
     """
     parameters: list[str] = []
     param_index: dict[str, int] = {}
@@ -728,6 +774,7 @@ def _build_param_index(spec):
     bounds: dict[str, tuple[float, float]] = {}
     transforms: dict[str, str] = {}
     priors: dict[str, tuple[float, float]] = {}
+    units: dict[str, str] = {}
     temperature: list = []
 
     def record(key: str, pspec) -> None:
@@ -738,6 +785,7 @@ def _build_param_index(spec):
         if pspec.bounds is not None:
             bounds[key] = (float(pspec.bounds[0]), float(pspec.bounds[1]))
         transforms[key] = pspec.transform
+        units[key] = getattr(pspec, "units", "") or ""
         prior = getattr(pspec, "prior", None)
         if prior is not None:
             priors[key] = prior.resolved()
@@ -753,7 +801,7 @@ def _build_param_index(spec):
         for local_name, pspec in rxn.parameters.items():
             record(f"{rxn.name}.{local_name}", pspec)
     return (parameters, param_index, defaults, bounds, transforms, priors,
-            temperature)
+            units, temperature)
 
 
 def _resolve_expressions(spec) -> dict[str, ASTNode]:
@@ -908,7 +956,7 @@ def compile_network(spec: "Any") -> CompiledNetwork:
 
     # Stage 2: the flat parameter index (network-level then reaction-local).
     (parameters, param_index, parameter_defaults, parameter_bounds,
-     parameter_transforms, parameter_priors,
+     parameter_transforms, parameter_priors, parameter_units,
      temperature_corrections) = _build_param_index(spec)
 
     # Stage 3: parse + topo-sort + inline the named expressions.
@@ -949,6 +997,8 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     # SpatialConditions against this list.
     conditions_required = [c.name for c in spec.conditions]
     condition_defaults = {c.name: float(c.default) for c in spec.conditions}
+    # Advisory units per condition field (blank when undeclared), for check_units.
+    condition_units = {c.name: getattr(c, "units", "") or "" for c in spec.conditions}
 
     # --- Optional positivity limiter --------------------------------
     positivity_threshold = None
@@ -986,6 +1036,8 @@ def compile_network(spec: "Any") -> CompiledNetwork:
         _condition_defaults=condition_defaults,
         species_units=species_units,
         species_descriptions=species_descriptions,
+        parameter_units=parameter_units,
+        condition_units=condition_units,
         parameter_bounds=parameter_bounds,
         parameter_transforms=parameter_transforms,
         parameter_priors=parameter_priors,

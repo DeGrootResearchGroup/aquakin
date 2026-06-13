@@ -68,6 +68,11 @@ from aquakin.plant import (
 )
 from aquakin.schema.loader import load_network, load_network_from_file
 from aquakin.utils.balance import check_conservation
+from aquakin.utils.units import (
+    UnitWarning,
+    check_network_units,
+    parse_units,
+)
 
 __all__ = [
     "BSM1Evaluation",
@@ -105,6 +110,9 @@ __all__ = [
     "calibrate",
     "carbon_mass",
     "check_conservation",
+    "check_network_units",
+    "parse_units",
+    "UnitWarning",
     "profile_likelihood",
     "compile_network",
     "derived_BOD",

@@ -72,6 +72,14 @@ network.description_of("BrO3-")
 solution.units_named("BrO3-")        # same, for axis/column labels
 network.summary()                    # tabulates every species with its units
 
+# Dimensional ("unit") consistency check of the rate expressions. Currency-aware:
+# g_COD/m3 and g_N/m3 are different dimensions, so it catches a dropped
+# concentration factor, a wrong rate-constant exponent, or a Monod term mixing
+# two currencies -- bugs a plain SI dimension check misses. Opt-in and advisory
+# (never raises; unknown/unparseable units are skipped).
+for w in network.check_units():      # -> list of (reaction, location, detail)
+    print(w)
+
 # Export results to a table instead of float()-casting one species at a time.
 # Requires the optional `pandas` extra: pip install aquakin[dataframe]
 df = solution.to_dataframe()         # time-indexed, one column per species
