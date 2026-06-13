@@ -358,6 +358,9 @@ class Plant:
         # and the concentration-sweep convergence check.
         self._flow_affinity_checked: bool = False
         self._recycle_convergence_checked: bool = False
+        # One-time guard for materialising the DO controllers a CSTRUnit's
+        # closed-loop Aeration spec requires (see _materialize_aeration).
+        self._aeration_materialized: bool = False
         # Per-instance cache of the jit-compiled forward solve, keyed by call
         # signature + solver settings. The plant RHS closes over the (static)
         # unit graph, so once compiled the same solve is reused across repeated
@@ -747,6 +750,71 @@ class Plant:
 
     # ----- layout ----------------------------------------------------------
 
+    def _materialize_aeration(self) -> None:
+        """Auto-wire a PI controller for every closed-loop ``Aeration`` spec.
+
+        A ``CSTRUnit`` whose ``aeration`` carries a ``do_setpoint`` reads a kLa
+        control signal in its ``rhs`` but does not itself supply the controller.
+        This creates the missing controllers from the units' specs: tanks are
+        grouped by their aeration ``controller`` id (the shared-controller case)
+        or, when none is given, each gets its own (per-tank control). For each
+        group one :class:`~aquakin.plant.control.PIController` is added -- sensing
+        the group's ``sensor`` unit, publishing the signal the tanks consume --
+        and the sensor is connected to it. Runs once (idempotent) at topology
+        setup, before the state layout is assigned, so the controllers get state
+        slices and the signal-bus validation sees them.
+
+        Tanks sharing a controller must agree on its setpoint, sensor and tuning;
+        only the per-tank ``gain`` may differ.
+        """
+        if self._aeration_materialized:
+            return
+        self._aeration_materialized = True
+
+        from aquakin.plant.control import PIController
+        from aquakin.plant.cstr import _aeration_signal_name
+
+        groups: dict[str, list[tuple[str, "Unit", object]]] = {}
+        for name in list(self._insertion_order):
+            aer = getattr(self.units[name], "aeration", None)
+            if aer is None or not aer.is_closed_loop:
+                continue
+            groups.setdefault(aer.controller_id(name), []).append(
+                (name, self.units[name], aer)
+            )
+
+        for cid, members in groups.items():
+            first_name, first_unit, a0 = members[0]
+            key = (a0.do_setpoint, a0.sensor, a0.species, a0.Kp, a0.Ti, a0.Tt,
+                   a0.kla_offset, a0.kla_min, a0.kla_max)
+            for nm, _u, a in members[1:]:
+                if (a.do_setpoint, a.sensor, a.species, a.Kp, a.Ti, a.Tt,
+                        a.kla_offset, a.kla_min, a.kla_max) != key:
+                    raise ValueError(
+                        f"CSTRUnits sharing aeration controller '{cid}' "
+                        f"('{first_name}', '{nm}') must agree on its setpoint, "
+                        f"sensor, species and PI tuning; only gain may differ."
+                    )
+            sensor = a0.sensor if a0.sensor is not None else first_name
+            if sensor not in self.units:
+                raise ValueError(
+                    f"Aeration controller '{cid}' senses unit '{sensor}', which "
+                    f"is not in the plant."
+                )
+            # The controller unit takes the shared id as its name (so it is
+            # referenceable); a per-tank controller gets a derived name that
+            # cannot collide with the tank it controls.
+            ctrl_name = a0.controller if a0.controller is not None \
+                else f"{first_name}_aeration"
+            self.add_unit(PIController(
+                name=ctrl_name, network=first_unit.network,
+                measured_species=a0.species, setpoint=a0.do_setpoint,
+                Kp=a0.Kp, Ti=a0.Ti, Tt=a0.Tt, offset=a0.kla_offset,
+                out_min=a0.kla_min, out_max=a0.kla_max,
+                signal_name=_aeration_signal_name(cid),
+            ))
+            self.connect(sensor, f"{ctrl_name}.measured")
+
     def _build_state_layout(self) -> None:
         """Assign each unit a contiguous slice of the flat state vector.
 
@@ -757,6 +825,7 @@ class Plant:
         topology-setup entry point that :meth:`solve` and every direct-RHS caller
         invoke first.
         """
+        self._materialize_aeration()
         self._finalize_topology()
         layout: dict[str, tuple[int, int]] = {}
         cursor = 0

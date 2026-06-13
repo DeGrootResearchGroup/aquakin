@@ -122,12 +122,12 @@ class BSM2Evaluation:
 def _as_reactors(plant) -> list:
     """The activated-sludge reactor CSTRs (anoxic and aerated), in plant order.
 
-    Identified by the CSTR-only ``controlled_kla`` attribute (the digester and
-    other units lack it). All of them are mechanically mixed when unaerated, so
-    the mixing-energy term needs the full set, not just the aerated tanks.
+    Identified by the CSTR-only ``aeration`` attribute (the digester and other
+    units lack it). All of them are mechanically mixed when unaerated, so the
+    mixing-energy term needs the full set, not just the aerated tanks.
     """
     return [name for name in plant._unit_order
-            if hasattr(plant.units[name], "controlled_kla")]
+            if hasattr(plant.units[name], "aeration")]
 
 
 def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
@@ -135,9 +135,9 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
 
     An anoxic tank has ``kLa = 0``; an aerated tank under DO control reads its
     kLa from the control signal (via :meth:`Plant.signals_at`), otherwise its
-    fixed ``kla``.
+    fixed ``kLa``.
     """
-    need_signals = any(plant.units[n].controlled_kla for n in tanks)
+    need_signals = any(plant.units[n]._controlled_kla for n in tanks)
     rows = []
     for i in range(solution.t.shape[0]):
         sig = (plant.signals_at(solution.t[i], solution.state[i], params)
@@ -145,11 +145,12 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
         row = []
         for n in tanks:
             unit = plant.units[n]
-            if unit.controlled_kla and "SO" in unit.controlled_kla:
-                signal_name, gain = unit.controlled_kla["SO"]
+            controlled = unit._controlled_kla.get("SO")
+            if controlled is not None:
+                signal_name, gain = controlled
                 row.append(float(sig[signal_name]) * gain)
             else:
-                row.append(float(unit.kla.get("SO", 0.0)))
+                row.append(float(unit._kla_vec[unit.network.species_index["SO"]]))
         rows.append(row)
     return jnp.asarray(rows)
 

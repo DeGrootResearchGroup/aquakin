@@ -25,6 +25,102 @@ if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
 
 
+@dataclass(frozen=True)
+class Aeration:
+    """Aeration / dissolved-oxygen spec for a :class:`CSTRUnit`.
+
+    The quantity a designer actually thinks in, instead of a raw mass-transfer
+    coefficient on a state variable. Choose exactly one mode.
+
+    **Open loop** -- a fixed mass-transfer coefficient (the saturation defaults
+    sensibly, so the common case is one number)::
+
+        Aeration(kla=120)                 # do_sat defaults to 8.0 gO2/m3
+        Aeration(kla=120, do_sat=9.0)
+
+    **Closed loop** -- a dissolved-oxygen setpoint. The plant auto-wires a PI
+    controller that manipulates this tank's kLa to hold the setpoint::
+
+        Aeration(do_setpoint=2.0)         # this tank holds DO = 2.0 on its own
+
+    Several tanks share one controller by giving the same ``controller`` id -- the
+    BSM2 design, one sensor driving several reactors at per-tank gains::
+
+        Aeration(do_setpoint=2.0, controller="do", sensor="tank4", gain=1.0)
+        Aeration(do_setpoint=2.0, controller="do", sensor="tank4", gain=0.5)
+
+    Parameters
+    ----------
+    kla : float, optional
+        Open-loop mass-transfer coefficient (1/time). Mutually exclusive with
+        ``do_setpoint``.
+    do_setpoint : float, optional
+        Closed-loop dissolved-oxygen target (same units as ``species``).
+    do_sat : float
+        Saturation concentration in the aeration term ``kLa*(do_sat - C)``.
+        Default 8.0 (gO2/m3, the usual ASM oxygen saturation).
+    species : str
+        The aerated species (default ``"SO"``).
+    controller : str, optional
+        Closed-loop only. Shared-controller id: tanks giving the same id share one
+        PI controller (and the controller unit takes this name). ``None`` (the
+        default) gives this tank its own dedicated controller.
+    sensor : str, optional
+        Closed-loop only. Name of the unit whose oxygen the controller measures.
+        Defaults to the controlled tank itself (per-tank control).
+    gain : float
+        Closed-loop only. This tank's share of the controller's kLa output
+        (default 1.0), so one shared controller can drive tanks at different
+        rates.
+    Kp, Ti, Tt, kla_offset, kla_min, kla_max : float
+        Closed-loop PI tuning and output bounds. Defaults are the BSM2 DO loop:
+        Kp=25, Ti=0.002 d, Tt=0.001 d, offset 120, bounds [0, 360] d^-1.
+    """
+
+    kla: float | None = None
+    do_setpoint: float | None = None
+    do_sat: float = 8.0
+    species: str = "SO"
+    controller: str | None = None
+    sensor: str | None = None
+    gain: float = 1.0
+    Kp: float = 25.0
+    Ti: float = 0.002
+    Tt: float = 0.001
+    kla_offset: float = 120.0
+    kla_min: float = 0.0
+    kla_max: float = 360.0
+
+    def __post_init__(self) -> None:
+        n_modes = (self.kla is not None) + (self.do_setpoint is not None)
+        if n_modes != 1:
+            raise ValueError(
+                "Aeration requires exactly one of kla= (open loop) or "
+                "do_setpoint= (closed loop)."
+            )
+        if self.kla is not None and self.kla < 0.0:
+            raise ValueError(f"Aeration kla must be >= 0, got {self.kla}.")
+
+    @property
+    def is_closed_loop(self) -> bool:
+        return self.do_setpoint is not None
+
+    def controller_id(self, unit_name: str) -> str:
+        """The id that groups tanks onto one controller: the shared ``controller``
+        if given, else the tank's own name (a dedicated per-tank controller)."""
+        return self.controller if self.controller is not None else unit_name
+
+    def signal_name(self, unit_name: str) -> str:
+        """The control-signal name the controlled tank reads and its controller
+        publishes. Derived from the controller id so a shared controller's tanks
+        all resolve to the same signal."""
+        return _aeration_signal_name(self.controller_id(unit_name))
+
+
+def _aeration_signal_name(controller_id: str) -> str:
+    return f"_aer_{controller_id}_kla"
+
+
 @dataclass
 class CSTRUnit:
     """A single continuous-flow stirred tank with kinetics + aeration.
@@ -43,19 +139,12 @@ class CSTRUnit:
     conditions : dict[str, float]
         Spatially-uniform condition values (e.g. ``{"T": 293.15}``). One
         value per condition declared by the network.
-    kla : dict[str, float], optional
-        Per-species ``kLa`` mass-transfer coefficients ``(1/time)``.
-        Defaults to no aeration on any species. Typically only ``"SO"``
-        is set for ASM1 / ASM2D / ASM3.
-    C_sat : dict[str, float], optional
-        Per-species saturation concentrations used in the aeration term.
-        Defaults to 0 for any species without an entry.
-    controlled_kla : dict[str, tuple[str, float]], optional
-        Maps a species to ``(signal_name, gain)``: under closed-loop control its
-        ``kLa`` is taken from the control signal ``signal_name`` (times ``gain``)
-        each RHS call instead of the fixed ``kla`` entry, read from the
-        ``signals`` bus the plant threads into every unit's ``rhs``. Used for
-        DO/kLa control of the aerobic ASM tanks.
+    aeration : Aeration, optional
+        How the tank is aerated. ``None`` (default) is an anoxic/anaerobic tank
+        (no aeration). ``Aeration(kla=120)`` is open-loop aeration at a fixed
+        mass-transfer coefficient; ``Aeration(do_setpoint=2.0)`` is closed-loop
+        dissolved-oxygen control, for which the plant auto-wires a PI controller
+        on this tank's kLa (see :class:`Aeration`).
     output_port : str
         Name of the single output port.
     """
@@ -65,9 +154,7 @@ class CSTRUnit:
     volume: float
     input_port_names: list[str]
     conditions: dict[str, float] = field(default_factory=dict)
-    kla: dict[str, float] = field(default_factory=dict)
-    C_sat: dict[str, float] = field(default_factory=dict)
-    controlled_kla: dict[str, tuple[str, float]] = field(default_factory=dict)
+    aeration: "Aeration | None" = None
     output_port: str = "out"
 
     def __post_init__(self) -> None:
@@ -77,31 +164,26 @@ class CSTRUnit:
                 f"CSTRUnit '{self.name}' is missing required condition values "
                 f"for: {sorted(missing)}. Provided: {sorted(self.conditions)}"
             )
-        for sp in self.kla:
-            if sp not in self.network.species_index:
-                raise ValueError(
-                    f"CSTRUnit '{self.name}' kla refers to unknown species '{sp}'"
-                )
-        for sp in self.C_sat:
-            if sp not in self.network.species_index:
-                raise ValueError(
-                    f"CSTRUnit '{self.name}' C_sat refers to unknown species '{sp}'"
-                )
-        for sp in self.controlled_kla:
-            if sp not in self.network.species_index:
-                raise ValueError(
-                    f"CSTRUnit '{self.name}' controlled_kla refers to unknown "
-                    f"species '{sp}'"
-                )
-
-        # Precompute (n_species,) aeration arrays once. These vectors are
-        # used inside rhs() and don't change per integration step.
+        # Translate the Aeration spec into the per-species vectors the RHS uses:
+        # a fixed-kLa vector, a saturation vector, and -- for closed-loop control
+        # -- a map species -> (signal_name, gain) read off the signal bus.
+        aer = self.aeration
+        controlled: dict[str, tuple[str, float]] = {}
         kla_vec = jnp.zeros((self.network.n_species,))
         sat_vec = jnp.zeros((self.network.n_species,))
-        for sp, val in self.kla.items():
-            kla_vec = kla_vec.at[self.network.species_index[sp]].set(float(val))
-        for sp, val in self.C_sat.items():
-            sat_vec = sat_vec.at[self.network.species_index[sp]].set(float(val))
+        if aer is not None:
+            if aer.species not in self.network.species_index:
+                raise ValueError(
+                    f"CSTRUnit '{self.name}' aeration species '{aer.species}' "
+                    f"is not in the network."
+                )
+            idx = self.network.species_index[aer.species]
+            sat_vec = sat_vec.at[idx].set(float(aer.do_sat))
+            if aer.is_closed_loop:
+                controlled[aer.species] = (aer.signal_name(self.name), aer.gain)
+            else:
+                kla_vec = kla_vec.at[idx].set(float(aer.kla))
+        self._controlled_kla = controlled
         self._kla_vec = kla_vec
         self._sat_vec = sat_vec
 
@@ -120,9 +202,12 @@ class CSTRUnit:
     @property
     def required_signals(self) -> tuple[str, ...]:
         """Control-signal names this unit reads from the bus in ``rhs`` (the
-        ``signal_name`` of each ``controlled_kla`` entry). The plant validates
-        these are published before solving."""
-        return tuple(signal_name for signal_name, _gain in self.controlled_kla.values())
+        closed-loop aeration signal, if any). The plant validates these are
+        published -- by the controller it auto-wires from the ``Aeration`` spec --
+        before solving."""
+        return tuple(
+            signal_name for signal_name, _gain in self._controlled_kla.values()
+        )
 
     def set_temperature(self, temperature_K: float) -> None:
         """Set this reactor's static operating temperature (Kelvin).
@@ -227,8 +312,8 @@ class CSTRUnit:
         # closed-loop control the kLa of a controlled species is overridden by
         # its control signal (times the per-tank gain).
         kla_vec = self._kla_vec
-        if self.controlled_kla and signals is not None:
-            for sp, (signal_name, gain) in self.controlled_kla.items():
+        if self._controlled_kla and signals is not None:
+            for sp, (signal_name, gain) in self._controlled_kla.items():
                 idx = self.network.species_index[sp]
                 kla_vec = kla_vec.at[idx].set(signals[signal_name] * gain)
         aeration = kla_vec * (self._sat_vec - state)

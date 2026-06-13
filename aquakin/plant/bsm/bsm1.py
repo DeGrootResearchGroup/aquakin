@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 from aquakin.plant.clarifier import IdealClarifier
-from aquakin.plant.cstr import CSTRUnit
+from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import Plant
 from aquakin.plant.takacs import TakacsClarifier
@@ -125,8 +125,8 @@ def build_bsm1(
 
     # ----- 5 CSTR tanks -----
     for i in range(5):
-        tank_kla = {"SO": BSM1_KLA[i]} if BSM1_KLA[i] > 0 else {}
-        tank_sat = {"SO": BSM1_DO_SATURATION} if BSM1_KLA[i] > 0 else {}
+        aeration = (Aeration(kla=BSM1_KLA[i], do_sat=BSM1_DO_SATURATION)
+                    if BSM1_KLA[i] > 0 else None)
         upstream = "inlet_mix" if i == 0 else f"tank{i}"
         plant.add_unit(
             CSTRUnit(
@@ -135,8 +135,7 @@ def build_bsm1(
                 volume=BSM1_TANK_VOLUMES[i],
                 input_port_names=["inlet"],
                 conditions=conditions,
-                kla=tank_kla,
-                C_sat=tank_sat,
+                aeration=aeration,
             )
         )
 

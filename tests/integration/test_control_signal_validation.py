@@ -1,16 +1,22 @@
-"""Assembly-time validation of the control-signal bus.
+"""Assembly-time wiring of the control-signal bus.
 
-A unit under closed-loop control reads ``signals[name]`` in its ``rhs``. If no
-controller publishes ``name`` (a forgotten or mistyped wiring) that read is a
-bare ``KeyError`` from deep inside the first jitted solve. The plant cross-checks
-consumed-vs-published signal names at topology setup and raises a clear error
-instead -- this pins that behaviour.
+A unit under closed-loop control reads ``signals[name]`` in its ``rhs``. Two
+things keep that safe at assembly time:
+
+- A ``CSTRUnit`` with a closed-loop :class:`~aquakin.plant.Aeration` spec has its
+  controller **auto-wired** by the plant (``_materialize_aeration``), so the
+  signal it consumes is always published -- there is no forgotten-controller
+  footgun for the common case.
+- The generic cross-check still runs for any other consumer: a unit that
+  declares ``required_signals`` no producer publishes fails at topology setup
+  with a clear error, not a deep ``KeyError`` from the first jitted solve.
 """
 
 import jax.numpy as jnp
 import pytest
 
 import aquakin
+from aquakin.plant import Aeration
 from aquakin.plant.control import PIController
 from aquakin.plant.cstr import CSTRUnit
 from aquakin.plant.plant import Plant
@@ -21,13 +27,6 @@ def asm1():
     return aquakin.load_network("asm1")
 
 
-def _controlled_tank(asm1, signal_name):
-    return CSTRUnit(name="tank", network=asm1, volume=1000.0,
-                    input_port_names=["in"], conditions={"T": 293.15},
-                    kla={"SO": 240.0},
-                    controlled_kla={"SO": (signal_name, 1.0)})
-
-
 def _do_controller(asm1, signal_name):
     return PIController(
         name="do_ctrl", network=asm1, measured_species="SO", setpoint=2.0,
@@ -35,30 +34,66 @@ def _do_controller(asm1, signal_name):
         signal_name=signal_name)
 
 
-def test_required_and_published_signal_names():
+class _SignalConsumer:
+    """A minimal mock unit that consumes a control signal but is not a CSTRUnit,
+    so the plant does not auto-wire a controller for it -- used to exercise the
+    generic consumed-vs-published validation."""
+
+    def __init__(self, signal_name):
+        self.name = "consumer"
+        self._signal = signal_name
+
+    state_size = 0
+    input_ports: list = []
+    output_ports: list = []
+
+    @property
+    def required_signals(self):
+        return (self._signal,)
+
+    def initial_state(self):
+        return jnp.zeros((0,))
+
+    def compute_outputs(self, t, state, inputs, params):
+        return {}
+
+    def flow_outputs(self, input_flows, params, ctx=None):
+        return {}
+
+    def rhs(self, t, state, inputs, params, signals=None):
+        return jnp.zeros((0,))
+
+
+def test_required_and_published_signal_names(asm1):
     """The declarative hooks the validation reads."""
-    asm1 = aquakin.load_network("asm1")
-    assert _controlled_tank(asm1, "do_signal").required_signals == ("do_signal",)
+    tank = CSTRUnit(name="tank", network=asm1, volume=1000.0,
+                    input_port_names=["in"], conditions={"T": 293.15},
+                    aeration=Aeration(do_setpoint=2.0, controller="do"))
+    assert tank.required_signals == ("_aer_do_kla",)
     assert _do_controller(asm1, "do_signal").signal_names == ("do_signal",)
-    # An uncontrolled tank requires nothing.
+    # An uncontrolled (open-loop or anoxic) tank requires nothing.
     plain = CSTRUnit(name="t", network=asm1, volume=1.0, input_port_names=["in"],
-                     conditions={"T": 293.15})
+                     conditions={"T": 293.15}, aeration=Aeration(kla=240.0))
     assert plain.required_signals == ()
 
 
-def test_matched_signal_passes(asm1):
-    """A controlled tank with a controller publishing its signal validates."""
-    p = Plant(name="ok")
-    p.add_unit(_controlled_tank(asm1, "do_signal"))
-    p.add_unit(_do_controller(asm1, "do_signal"))
-    p._build_state_layout()        # runs _validate_control_signals; must not raise
+def test_closed_loop_aeration_auto_wires_controller(asm1):
+    """A closed-loop-aeration tank gets its controller (and sensor tap) created
+    by the plant, so the bus validates and the controller is referenceable."""
+    p = Plant(name="auto")
+    p.add_unit(CSTRUnit(name="tank", network=asm1, volume=1000.0,
+                        input_port_names=["in"], conditions={"T": 293.15},
+                        aeration=Aeration(do_setpoint=2.0, controller="do")))
+    p._build_state_layout()                # auto-wires + validates; must not raise
+    assert "do" in p.units                 # controller named after the shared id
+    assert p.units["do"].signal_names == ("_aer_do_kla",)
 
 
 def test_missing_publisher_raises_clearly(asm1):
-    """A controlled tank whose signal nobody publishes fails at setup, naming the
-    unit, the missing signal, and the (empty) published set -- not a deep KeyError."""
+    """A (non-CSTR) consumer whose signal nobody publishes fails at setup, naming
+    the unit and the missing signal -- not a deep KeyError."""
     p = Plant(name="bad")
-    p.add_unit(_controlled_tank(asm1, "do_signal"))
+    p.add_unit(_SignalConsumer("do_signal"))
     with pytest.raises(ValueError, match="consumes control signal 'do_signal'"):
         p._build_state_layout()
 
@@ -66,8 +101,8 @@ def test_missing_publisher_raises_clearly(asm1):
 def test_typo_in_signal_name_raises(asm1):
     """A mismatch between the consumed and published name is caught."""
     p = Plant(name="typo")
-    p.add_unit(_controlled_tank(asm1, "do_signl"))      # typo
-    p.add_unit(_do_controller(asm1, "do_signal"))       # publishes the correct name
+    p.add_unit(_SignalConsumer("do_signl"))            # typo
+    p.add_unit(_do_controller(asm1, "do_signal"))      # publishes the correct name
     with pytest.raises(ValueError, match="do_signl"):
         p._build_state_layout()
 
@@ -76,7 +111,6 @@ def test_unknown_publisher_skips_validation(asm1):
     """If a signal *producer* doesn't declare signal_names, the published set is
     unknown, so validation is skipped rather than risk rejecting a valid plant."""
     class CustomController:
-        # A producer with signal_outputs but no signal_names declaration.
         name = "custom"
         state_size = 0
         input_ports: list = []
@@ -95,6 +129,6 @@ def test_unknown_publisher_skips_validation(asm1):
             return {"do_signal": jnp.asarray(1.0)}
 
     p = Plant(name="custom")
-    p.add_unit(_controlled_tank(asm1, "do_signal"))
+    p.add_unit(_SignalConsumer("do_signal"))
     p.add_unit(CustomController())
     p._build_state_layout()        # must not raise (publisher set is unknown)

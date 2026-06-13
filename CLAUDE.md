@@ -2233,12 +2233,34 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
   `rhs` as the trailing `signals` argument (a unit that reads no signals simply
   ignores it). Producing signals is the one optional, class-level/duck-typed hook
   (`hasattr(unit, "signal_outputs")`), so the branch is static and jit/AD-safe.
-- `CSTRUnit` gains `controlled_kla: {species: (signal_name, gain)}`: when set the
-  species' `kLa` is taken from `signals[name]·gain` each step (overriding the
-  fixed `kla`); the uniform `rhs` signature means no per-unit flag is needed.
+- **`Aeration` on `CSTRUnit` (issue #137).** A tank's aeration is set with one
+  `aeration=Aeration(...)` object, not raw per-species `kla`/`C_sat`/`controlled_kla`
+  dicts (those fields are gone — pre-release, single interface). `Aeration` has two
+  modes: open loop `Aeration(kla=120, do_sat=8)` (a fixed mass-transfer
+  coefficient; `do_sat` defaults to 8.0), and closed loop `Aeration(do_setpoint=2.0)`
+  (a DO target). `CSTRUnit.__post_init__` translates the spec into the internal
+  `_kla_vec`/`_sat_vec`/`_controlled_kla` the `rhs` uses, so the aeration term
+  `kLa·(do_sat - C)` is unchanged. For closed loop the species' `kLa` is taken from
+  `signals[name]·gain` each step (overriding the fixed `kLa`); the signal name is
+  derived deterministically from the controller id.
+- **Auto-wired DO controllers (`Plant._materialize_aeration`).** A closed-loop
+  `Aeration` consumes a kLa signal but does not itself add the controller. The
+  plant materialises it: at topology setup (once, before the state layout) it
+  groups the closed-loop tanks by their aeration `controller` id — the shared-
+  controller case (BSM2: one sensor on `tank4`, per-tank `gain`s) — or, when no id
+  is given, gives each tank its own controller (per-tank DO control, `sensor`
+  defaults to the tank). One `PIController` per group is added (named after the
+  shared id, or `<tank>_aeration`), sensing the group's `sensor`, with the
+  setpoint/PI tuning/bounds from the `Aeration` (defaults are the BSM2 DO loop).
+  Tanks sharing a controller must agree on its setpoint/sensor/tuning; only `gain`
+  differs. `build_bsm2(do_control=True)` now expresses the loop purely as
+  `Aeration(do_setpoint=2.0, controller="do_control", sensor="tank4", gain=...)`
+  on the reactors — the controller and its sensor tap are auto-wired (the manual
+  `PIController` + `connect` are gone). `build_bsm1`/`build_bsm2` open-loop tanks
+  use `Aeration(kla=..., do_sat=8)`.
 - **Assembly-time signal validation.** A unit declares the bus names it reads via
-  `required_signals` (`CSTRUnit` derives it from `controlled_kla`) and the names
-  it publishes via `signal_names` (`PIController` -> its `signal_name`).
+  `required_signals` (`CSTRUnit` derives it from its closed-loop aeration) and the
+  names it publishes via `signal_names` (`PIController` -> its `signal_name`).
   `Plant._validate_control_signals` (run from `_build_state_layout`, before the
   RHS is traced) checks every consumed name is published, so a forgotten/mistyped
   controller signal raises a clear `ValueError` naming the unit and the available
@@ -2459,7 +2481,7 @@ bridges both directions, exported at top level (`aquakin.size_activated_sludge`,
   time-averaged over the window: **SRT** = system solids inventory / (wastage +
   effluent solids loss); **HRT** = total reactor volume / influent flow; **F:M** =
   influent BOD load / reactor TSS mass. Reactors are auto-detected (the
-  `controlled_kla`+`volume` CSTRs, so the ADM1 digester is excluded); the
+  `aeration`-carrying `CSTRUnit`s, so the ADM1 digester is excluded); the
   effluent/wastage ports auto-detect for BSM1/BSM2; the secondary-clarifier sludge
   blanket is included via a new **`TakacsClarifier.solids_mass(state)`** accessor
   (the stateless `IdealClarifier` holds ~0), so the Takács plant correctly reports

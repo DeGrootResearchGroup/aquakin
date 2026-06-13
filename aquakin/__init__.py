@@ -38,6 +38,7 @@ from aquakin.integrate.sensitivity import (
 )
 from aquakin.plant import (
     ActivatedSludgeSizing,
+    Aeration,
     BSM1Evaluation,
     BSM2Evaluation,
     CSTRUnit,
@@ -88,6 +89,7 @@ __all__ = [
     "BiofilmReactor",
     "BiofilmSolution",
     "CFDReactor",
+    "Aeration",
     "CSTRUnit",
     "CalibrationResult",
     "PredictiveBand",
