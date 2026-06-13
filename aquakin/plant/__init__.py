@@ -36,7 +36,7 @@ from aquakin.plant.separators import IdealThickener
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.streams import Stream, StreamSeries
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
-from aquakin.plant.units import Unit
+from aquakin.plant.units import FlowContext, StatelessUnit, Unit
 from aquakin.plant.metrics import (
     aeration_energy,
     carbon_mass,
@@ -82,9 +82,11 @@ __all__ = [
     "Plant",
     "PlantSolution",
     "PrimaryClarifier",
+    "FlowContext",
     "SludgeMetrics",
     "SteadyStateResult",
     "SplitterUnit",
+    "StatelessUnit",
     "StateTranslator",
     "StorageTank",
     "Stream",

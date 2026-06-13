@@ -114,3 +114,38 @@ class Unit(Protocol):
         params: jnp.ndarray,
         ctx: FlowContext,
     ) -> dict[str, jnp.ndarray]: ...
+
+
+class StatelessUnit:
+    """Mixin for units that own no ODE state (``state_size == 0``).
+
+    A stateless unit transforms streams instantaneously -- a mixer, a splitter,
+    an ideal separator -- so its only real work is :meth:`compute_outputs` and
+    :meth:`flow_outputs`. This mixin supplies the three otherwise-identical state
+    members (a zero state size, an empty initial state, and a no-op ``rhs``), so
+    such a unit only writes the parts that actually differ and "stateless" is a
+    named concept rather than three look-alike method bodies.
+
+    It is a plain mixin, not part of the :class:`Unit` Protocol, so it composes
+    with the ``@dataclass`` units: inherit it and the dataclass fields and the
+    domain methods stay on the subclass. A unit author writing a new stateless
+    unit inherits it the same way.
+    """
+
+    @property
+    def state_size(self) -> int:
+        return 0
+
+    def initial_state(self) -> jnp.ndarray:
+        return jnp.zeros((0,))
+
+    def rhs(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, "Stream"],
+        params: jnp.ndarray,
+        signals: Optional[dict] = None,
+    ) -> jnp.ndarray:
+        # No state -> no derivative.
+        return jnp.zeros((0,))
