@@ -709,3 +709,104 @@ def test_plant_parameter_values_unknown_name_raises_with_hint():
         plant.parameter_index("adm1.nope")
     with pytest.raises(TypeError):
         plant.parameter_values([("asm1.muH", 6.0)])  # not a dict
+
+
+# --- exact affine recycle-concentration pre-solve (#197) ---------------------
+
+def _clarifier_recycle_loop(recycle_passes, *, capture):
+    """A *stateless* high-recycle loop: fresh -> mix -> clarifier ->
+    {overflow -> tank, underflow -> recycle to mix}. With no state-holding unit
+    *inside* the loop, the particulate concentration genuinely circulates
+    through the clarifier, so the bare Gauss-Seidel sweep converges at a rate set
+    by the loop gain (= capture_efficiency) -- arbitrarily slow as capture -> 1.
+    This is the worst case for the recycle solve; the affine pre-solve nails it
+    exactly in one linear solve, gain-independent."""
+    from aquakin.plant.clarifier import IdealClarifier
+
+    net = aquakin.load_network("asm1")
+    infl = net.influent({"SS": 60.0, "XS": 200.0, "XB_H": 50.0, "XI": 25.0,
+                         "SNH": 25.0}, Q=1.0)
+    plant = Plant("clar_loop", recycle_passes=recycle_passes)
+    plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "ras"],
+                             network=net))
+    plant.add_unit(IdealClarifier(name="clar", network=net, underflow_Q=2.0,
+                                  capture_efficiency=capture))
+    plant.add_unit(CSTRUnit(name="tank", network=net, volume=50.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_influent("fresh", infl, to="mix.fresh")
+    plant.connect("mix", "clar.inlet")
+    plant.connect("clar.overflow", "tank")
+    plant.connect("clar.underflow", "mix.ras")
+    return plant
+
+
+def _recycle_warnings(plant):
+    import warnings as _w
+    with _w.catch_warnings(record=True) as w:
+        _w.simplefilter("always")
+        plant.solve(t_span=(0.0, 0.05), t_eval=jnp.asarray([0.0, 0.05]),
+                    rtol=1e-4, atol=1e-3, max_steps=20000)
+    return [str(x.message) for x in w
+            if "recycle concentration" in str(x.message)]
+
+
+@pytest.mark.parametrize("capture", [0.6, 0.998])
+def test_recycle_presolve_is_exact_and_gain_independent(capture):
+    # The affine pre-solve seeds the recycle back-edge with its exact fixed point
+    # in one linear solve, so even an extreme-gain stateless loop is resolved at
+    # the default few mop-up passes -> no convergence warning (which the bare
+    # gain-limited sweep would have raised). Also check the seed equals the
+    # many-pass Gauss-Seidel answer to machine precision.
+    import numpy as np
+
+    plant = _clarifier_recycle_loop(recycle_passes=3, capture=capture)
+    assert _recycle_warnings(plant) == []
+
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    y0 = plant.initial_state()
+    states = plant._split_state(y0)
+    params = plant.default_parameters()
+    t = jnp.asarray(0.0)
+    flows = plant._resolve_flows(t, params, states)
+    presolved = plant._resolve_recycle_concentrations(t, states, params, flows)
+    key = list(plant._recycle_keys)[0]
+    # Exactness as a fixed point: one forward pass from the pre-solved seed
+    # reproduces the recycle concentration (gain-independent -- a deep
+    # Gauss-Seidel reference would itself be unconverged at capture=0.998).
+    influent = {(None, pn): s.at(t) for pn, s in plant.influents.items()}
+    one = plant._sweep_outputs(t, states, influent, dict(presolved), params,
+                               passes=1)
+    assert np.allclose(np.asarray(one[key].C), np.asarray(presolved[key].C),
+                       rtol=1e-8, atol=1e-8)
+    assert np.all(np.isfinite(np.asarray(presolved[key].C)))
+
+
+def test_recycle_presolve_skipped_without_recycle(simple_net):
+    # A plant with no recycle edges has nothing to pre-solve -> no warning.
+    plant = Plant("no_recycle")
+    plant.add_unit(CSTRUnit(name="tank", network=simple_net, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_influent("feed", _constant_influent(simple_net), to="tank.inlet")
+    assert _recycle_warnings(plant) == []
+
+
+def test_recycle_presolve_differentiable():
+    # The affine pre-solve (probe + jnp.linalg.solve) runs inside the jitted,
+    # differentiated RHS: a gradient through solve stays finite (and the concrete
+    # convergence check is skipped under tracing, so no warning).
+    plant = _clarifier_recycle_loop(recycle_passes=3, capture=0.6)
+    y0 = plant.initial_state()
+
+    def loss(p):
+        sol = plant.solve(t_span=(0.0, 0.02), t_eval=jnp.asarray([0.0, 0.02]),
+                          params=p, y0=y0, rtol=1e-4, atol=1e-3,
+                          max_steps=20000, gradient="stable_adjoint")
+        return jnp.sum(sol.final_state)
+
+    import warnings as _w
+    with _w.catch_warnings(record=True) as w:
+        _w.simplefilter("always")
+        g = jax.grad(loss)(plant.default_parameters())
+    assert jnp.all(jnp.isfinite(g))
+    assert [x for x in w if "recycle concentration" in str(x.message)] == []

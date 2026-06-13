@@ -1848,8 +1848,34 @@ Key types:
 - `StateTranslator` Protocol — converts streams between networks.
   `IdentityTranslator` covers single-network plants (BSM1).
 - `Plant` — assembles units and connections, drives the monolithic
-  integration. Recycles are resolved by iterating the per-RHS stream
-  computation 3 times (sufficient for typical BSM topologies).
+  integration. Recycles are resolved **exactly and gain-independently** per RHS,
+  in two decoupled steps that both use the same affine-probe + linear-solve trick
+  (no iterate-to-tolerance — the RHS is jitted/differentiated):
+  - **Flows** — `_resolve_flows` probes the (affine) recycle-flow map and solves
+    `(I − A)x = b` for the back-edge flows.
+  - **Concentrations** — `_resolve_recycle_concentrations` does the same for the
+    recycle-edge *concentrations*. One forward output sweep at fixed flows is an
+    affine map `c → M·c + d` (mixers/splitters/clarifiers are linear in
+    concentration; stateful units output their state, a constant), so it probes
+    `M`/`d` (one pass at `c=0`, one per recycle edge set to a unit concentration)
+    and solves `(I − M)c = d`. The map is **species-decoupled** (the only
+    species-coupling unit, an ASM↔ADM translator, is fed by a digester *state* so
+    never enters the cyclic map), so one probe per edge yields its whole column
+    across all species — `n_recycle_edges + 1` cheap passes, like the flow probe.
+    Edges of **different networks** don't couple (the translator that would couple
+    them is broken by the digester state), so the solve is grouped by network;
+    **temperature**, when an influent carries it, is one more decoupled scalar
+    channel. Exact and gain-independent: a recycle loop whose bare Gauss-Seidel
+    would need thousands of passes (a clarifier in a high-capture stateless loop)
+    is solved in one linear solve. Validated as a fixed point on BSM1, the
+    multi-network BSM2, and a temperature-carrying loop (residual ~1e-12).
+  The exact concentration solve **seeds** the `recycle_passes` Gauss-Seidel
+  mop-up (default 3), which therefore does no work for any linear topology (every
+  shipped plant) and only refines a genuinely *non-affine* in-cycle unit (a
+  translator inside a pure-stateless loop — not constructible from the shipped
+  units). A one-time `_check_recycle_convergence` diagnostic (concrete-only,
+  skipped under tracing, skipped without recycle edges) warns if even that has
+  not converged — the backstop for the non-affine case.
   - **Wiring API.** `plant.connect(source, dest)` takes two `"unit.port"`
     endpoint strings, read as `source -> dest`. The port may be omitted
     (bare `"unit"`) when the unit has exactly one port for that role — a
