@@ -8,8 +8,11 @@ network YAML using:
 - named ``expressions:`` for SUMO auxiliaries that reference state variables
 - ``monod`` / ``monod_inh`` / ``monod_ratio`` helpers when the auxiliary
   matches the standard Monod patterns
-- precomputed numeric ``stoichiometry:`` coefficients (yield, N-content,
-  charge factors evaluated at their literature defaults)
+- live **symbolic** ``stoichiometry:`` coefficients: any cell that depends on a
+  parameter (yield, N-content, charge factor) is emitted as a string expression
+  re-evaluated from the current parameter vector every ``solve()``, so
+  calibrating those parameters propagates to every dependent coefficient. Only
+  cells with no parameter leaf are constant-folded to a numeric literal.
 
 The SUMO export's ``units`` field carries internal sentinels (``"0"`` /
 ``"SmallNumber"`` / ``"-BigNumber"``) for parameters and a dotted dialect
