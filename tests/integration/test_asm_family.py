@@ -56,7 +56,7 @@ def test_short_integration_finite(name, _a, _b, _c):
     reactor = aquakin.BatchReactor(net, net.default_conditions())
     sol = reactor.solve(
         net.default_concentrations(),
-        net.default_parameters(),
+        params=net.default_parameters(),
         t_span=(0.0, 0.05),
         t_eval=jnp.linspace(0.0, 0.05, 6),
     )
@@ -155,7 +155,7 @@ def test_adm1_ph_operating_point_is_differentiable():
     t_eval = jnp.linspace(0.0, 0.5, 4)
 
     def loss(scat0):
-        sol = reactor.solve(C0.at[si["S_cat"]].set(scat0), p, (0.0, 0.5), t_eval)
+        sol = reactor.solve(C0.at[si["S_cat"]].set(scat0), (0.0, 0.5), t_eval, params=p)
         return jnp.sum(sol.C_named("S_ch4"))
 
     g = jax.grad(loss)(5.0e-3)
