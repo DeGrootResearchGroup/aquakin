@@ -109,7 +109,13 @@ class SplitterUnit(StatelessUnit):
       are held constant regardless of influent — see :func:`build_bsm1`. A
       fixed *fraction* of throughput, by contrast, makes the recycle-flow
       loop gain near-singular off the design influent and the plant blows up
-      under dynamic flow.
+      under dynamic flow. If the feed transiently drops *below* the total
+      setpoint the **material** streams (``compute_outputs``) share the available
+      flow proportionally (``q·min(1, Q_in/Σsetpoints)``) with a zero remainder,
+      so the unit never carries more than it receives. The recycle-flow rule
+      (``flow_outputs``) stays the exact *affine* ``Q_in − Σsetpoints`` remainder
+      (which the linear recycle solve requires); the two coincide whenever
+      ``Q_in ≥ Σsetpoints``, true at any steady state.
 
     - **threshold mode** (``threshold`` + ``threshold_port`` +
       ``remainder_port``): inlet flow *above* ``threshold`` goes to
@@ -236,16 +242,23 @@ class SplitterUnit(StatelessUnit):
                 Q=jnp.minimum(s_in.Q, limit), C=s_in.C, network=self.network,
                 T=s_in.T)
             return outputs
-        # Flow mode: fixed setpoints, remainder takes what is left. Clamp the
-        # remainder at zero so a feed transiently below the total setpoint does
-        # not produce a negative-flow stream (the concentration-stage safeguard;
-        # the linear flow_outputs below stays unclamped so _resolve_flows is
-        # exact).
+        # Flow mode: fixed setpoints, remainder takes what is left. When the feed
+        # is below the total setpoint the setpoint ports share the available flow
+        # proportionally (a flow-limited pump set), so the MATERIAL streams never
+        # carry more than the unit receives -- it conserves mass -- and the
+        # remainder is then zero. Identity when Q_in >= total setpoint (scale ==
+        # 1), so steady-state behaviour is unchanged; the scale-down only bites in
+        # a transient starve. (flow_outputs below stays the exact AFFINE rule the
+        # recycle-flow solve requires -- it must, or the (I-A)x=b probe breaks --
+        # and the two agree wherever the unit is not starved, i.e. at any steady
+        # state.)
         total_set = jnp.zeros(())
+        for q in self.output_port_flows.values():
+            total_set = total_set + jnp.asarray(float(q))
+        scale = jnp.minimum(1.0, s_in.Q / jnp.maximum(total_set, 1e-12))
         for port, q in self.output_port_flows.items():
-            q = jnp.asarray(float(q))
-            total_set = total_set + q
-            outputs[port] = Stream(Q=q, C=s_in.C, network=self.network, T=s_in.T)
+            outputs[port] = Stream(Q=jnp.asarray(float(q)) * scale, C=s_in.C,
+                                   network=self.network, T=s_in.T)
         outputs[self.remainder_port] = Stream(
             Q=jnp.maximum(s_in.Q - total_set, 0.0), C=s_in.C, network=self.network,
             T=s_in.T,
@@ -253,7 +266,12 @@ class SplitterUnit(StatelessUnit):
         return outputs
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
-        """Output port flows from the inlet flow (the linear flow rule)."""
+        """Output port flows from the inlet flow (the AFFINE flow rule the
+        recycle-flow solve requires). The flow-mode remainder is the exact
+        ``Q_in - sum(setpoints)`` and stays affine in ``Q_in`` (it may go negative
+        in a transient starve, which is harmless for the linear flow solve); the
+        conserving scale-down lives in :meth:`compute_outputs` (the material
+        sweep), and the two agree wherever the unit is not starved."""
         Q_in = input_flows["in"]
         if self._mode == "ratio":
             return {port: Q_in * jnp.asarray(ratio)

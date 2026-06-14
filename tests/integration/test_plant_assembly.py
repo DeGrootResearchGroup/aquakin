@@ -140,6 +140,46 @@ def test_mixer_mass_balance(simple_net):
     assert jnp.all(jnp.isfinite(sol.state))
 
 
+def test_splitter_flow_mode_conserves_under_low_feed(simple_net):
+    """A flow-mode splitter's MATERIAL streams (compute_outputs) never carry more
+    flow than the unit receives. Above the total setpoint the setpoints are
+    honored verbatim with the remainder taking the rest; below it the setpoints
+    share the available flow proportionally with a zero remainder -- so the
+    material sweep conserves flow in every regime (previously it over-delivered,
+    creating flow). flow_outputs stays the exact AFFINE rule the recycle solve
+    needs (an unclamped remainder), and the two agree wherever the unit is not
+    starved."""
+    sp = SplitterUnit(name="s", network=simple_net,
+                      output_port_flows={"a": 100.0, "b": 100.0}, remainder_port="r")
+    C = simple_net.default_concentrations()
+    p = simple_net.default_parameters()
+
+    def material(Q_in):
+        ins = {"in": Stream(Q=jnp.asarray(float(Q_in)), C=C, network=simple_net)}
+        out = sp.compute_outputs(jnp.asarray(0.0), None, ins, p)
+        return {k: float(v.Q) for k, v in out.items()}
+
+    def flow(Q_in):
+        return {k: float(v) for k, v in
+                sp.flow_outputs({"in": jnp.asarray(float(Q_in))}, p).items()}
+
+    # Above the setpoint (300 >= 200): full setpoints + remainder; material and
+    # flow rules agree.
+    assert material(300.0) == {"a": 100.0, "b": 100.0, "r": 100.0}
+    assert flow(300.0) == material(300.0)
+    # Below the setpoint (150 < 200): material shares proportionally with a zero
+    # remainder (no flow created)...
+    co = material(150.0)
+    assert co["a"] == pytest.approx(75.0) and co["b"] == pytest.approx(75.0)
+    assert co["r"] == pytest.approx(0.0)
+    # ...while flow_outputs stays affine (exact, may be negative -- harmless for
+    # the linear recycle solve, which is what kept it from breaking _resolve_flows).
+    assert flow(150.0)["r"] == pytest.approx(-50.0)
+    # The material sweep conserves flow in every regime.
+    for Q_in in (50.0, 150.0, 200.0, 300.0):
+        assert sum(material(Q_in).values()) == pytest.approx(Q_in)
+
+
 def test_splitter_flow_ratios(simple_net):
     """Splitter routes 60/40 of its inflow to two sinks (which are CSTRs)."""
     plant = Plant("split_test")
