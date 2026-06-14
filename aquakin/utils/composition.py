@@ -166,6 +166,7 @@ def _adm1_composition(net: "CompiledNetwork", params=None) -> Composition:
 
 _BUILDERS = {
     "asm1": _asm_composition,
+    "asm1_ammonia_limitation": _asm_composition,
     "asm2d": _asm_composition,
     "asm2d_tud": _asm_composition,
     "asm3": _asm_composition,
@@ -195,8 +196,8 @@ def composition_table(network: "CompiledNetwork", *,
     Parameters
     ----------
     network : CompiledNetwork
-        A shipped ASM-family network (``asm1`` / ``asm2d`` / ``asm2d_tud`` /
-        ``asm3`` / ``asm3_biop``) or ``adm1``.
+        A shipped ASM-family network (``asm1`` / ``asm1_ammonia_limitation`` /
+        ``asm2d`` / ``asm2d_tud`` / ``asm3`` / ``asm3_biop``) or ``adm1``.
     electron_acceptor_cod : bool, optional
         ASM family only. If ``True`` (default) nitrate / N₂ carry their
         NH₄-referenced electron-equivalent COD -- the convention under which the

@@ -106,10 +106,8 @@ def test_asm1_unchanged_at_reference():
     muH = float(p[net.parameters.index("muH")])
     KS = float(p[net.parameters.index("KS")])
     KOH = float(p[net.parameters.index("KOH")])
-    KNH_H = float(p[net.parameters.index("KNH_H")])
-    expect = (muH * 10.0 / (KS + 10.0) * 2.0 / (KOH + 2.0)
-              * float(C[net.species_index["SNH"]])
-              / (KNH_H + float(C[net.species_index["SNH"]])) * 2000.0)
+    # Textbook ASM1 heterotroph growth: no ammonia (N-source) availability switch.
+    expect = (muH * 10.0 / (KS + 10.0) * 2.0 / (KOH + 2.0) * 2000.0)
     assert float(r[0]) == pytest.approx(expect, rel=1e-9)
 
 
