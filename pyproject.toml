@@ -31,9 +31,11 @@ dependencies = [
 
 [project.optional-dependencies]
 # pandas powers the optional ``to_dataframe()`` / ``to_csv()`` result exporters;
-# it is not needed for solving, only for tabular postprocessing.
+# matplotlib the optional ``sol.plot(...)`` helper. Neither is needed for
+# solving, only for postprocessing.
 dataframe = ["pandas>=2.0"]
-test = ["pytest>=7", "pytest-xdist>=3", "pytest-timeout>=2", "pytest-split>=0.8", "pandas>=2.0"]
+plot = ["matplotlib>=3.5"]
+test = ["pytest>=7", "pytest-xdist>=3", "pytest-timeout>=2", "pytest-split>=0.8", "pandas>=2.0", "matplotlib>=3.5"]
 
 [tool.setuptools.packages.find]
 include = ["aquakin*"]

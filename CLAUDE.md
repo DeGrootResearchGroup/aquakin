@@ -1519,6 +1519,16 @@ solution.to_csv("run.csv")           # delegates to to_dataframe().to_csv(...)
 #   has it (Batch/PFR(x-indexed)/Track/Biofilm); BiofilmSolution.to_dataframe(
 #   profile=True) gives the depth-resolved (t, compartment) MultiIndex + depth
 #   column; StreamSeries adds a Q column; PlantSolution.to_dataframe(unit="tank5").
+solution.plot("SNH")                 # matplotlib Axes: one species over the
+solution.plot(["SNH", "SNO"], ax=ax) #   independent axis, no boilerplate
+# plot(species=None|str|iterable, ax=None, **plot_kwargs) -> matplotlib.axes.Axes.
+#   The x-axis is labelled with the network's time unit (PFR: "axial position
+#   [m]"); a single species labels the y-axis with its units, several get a
+#   legend; None plots every species. matplotlib is the optional `plot` extra
+#   (also in the `test` extra). Same mixin as to_dataframe, so every single-vector
+#   solution has it (Batch/PFR/Track/Biofilm) AND StreamSeries; PlantSolution is
+#   per unit -- PlantSolution.plot(unit, species=None, ax=None). Unknown species /
+#   non-concentration unit raise the same hinted errors as C_named.
 
 # Plug flow reactor
 reactor = aquakin.PlugFlowReactor(network, conditions, n_points, length, velocity)

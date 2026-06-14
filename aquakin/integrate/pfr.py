@@ -46,6 +46,9 @@ class PFRSolution(_HasNamedSpecies):
         # A PFR profile is indexed by axial position, not time.
         return "x", self.x
 
+    def _independent_axis_label(self) -> str:
+        return "axial position [m]"
+
 
 class PlugFlowReactor(GradientCheckMixin):
     """
