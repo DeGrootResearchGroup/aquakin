@@ -55,6 +55,25 @@ The shipped networks currently are:
   machine precision (`tests/integration/test_asm_continuity.py`), and the
   two-step nitrification/denitrification signatures are checked in
   `tests/integration/test_asm3_2step.py`.
+- `asm3_2step_n2o` — `asm3_2step` extended with the **two-pathway AOB nitrous-
+  oxide (N₂O) model** of Pocquet et al. (2016). An **`extends: asm3_2step`
+  inheritance file** (this layer *is* a clean delta, unlike the base two-step
+  refactor): it `remove:`s the lumped AOB nitritation and replaces it with the
+  AOB electron-transport chain through explicit intermediates — NH₄ → `SNH2OH`
+  (hydroxylamine, AMO) → `SNO` (nitric oxide, HAO) → `SNO2` — plus dissolved
+  `SN2O`. N₂O is produced by two competing pathways: **NN** (Nor reduces NO to
+  N₂O coupled to NH₂OH oxidation) and **ND** (free nitrous acid `[SNO2]·pH_switch(pKa)`
+  reduced to N₂O, with the source study's Haldane DO term — production rises as
+  DO falls to a maximum, then falls toward zero DO). Adds a **fixed operating-pH
+  condition** (for the free-nitrous-acid fraction; the source study held pH
+  constant). 18 compounds, 23 processes. The N-oxide intermediates carry their
+  NH₄-referenced electron COD (NH₂OH 16/14, NO 40/14, N₂O 32/14 gO₂/gN), so COD,
+  N and charge close to machine precision (continuity suite); NO/N₂O are kept as
+  dissolved states (gas stripping is a reactor concern, not modelled). Reproduces
+  Pocquet's headline trends — N₂O rises with nitrite and peaks at intermediate DO
+  (`tests/integration/test_asm3_2step_n2o.py`). NOTE: `SNO` is **nitric oxide**
+  here, which collides with the ASM1 family's `SNO` (= nitrate); the composition
+  table disambiguates by the presence of `SNO3`.
 - `asm3_biop` — ASM3 + bio-P extension.
 - `adm1` — Anaerobic Digestion Model No. 1 (Batstone et al. 2002), BSM2
   implementation form (Rosen & Jeppsson 2006). 29 states (26 liquid + 3 gas
@@ -1295,6 +1314,7 @@ aquakin/
 │   │   ├── asm2d_tud.yaml           # Delft TUD variant of ASM2D       [units: _fix_sumo_units.py]
 │   │   ├── asm3.yaml                # ASM3 (storage products replace hydrolysis)  [units: _fix_sumo_units.py]
 │   │   ├── asm3_2step.yaml          # ASM3 + two-step nitrification/denitrification (explicit NO2; Kaelin 2009)
+│   │   ├── asm3_2step_n2o.yaml      # asm3_2step + two-pathway AOB N2O (NH2OH/NO/N2O; Pocquet 2016); extends: asm3_2step
 │   │   ├── asm3_biop.yaml           # ASM3 + bio-P extension           [units: _fix_sumo_units.py]
 │   │   ├── adm1.yaml                # ADM1 anaerobic digestion (BSM2 form, Rosen-Jeppsson
 │   │   │                            #   2006); complete: liquid + gas headspace, state-derived
