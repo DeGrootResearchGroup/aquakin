@@ -22,12 +22,14 @@ import numpy as np
 import pytest
 
 import aquakin
+from aquakin.plant import CSTRUnit, Plant
 from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     build_bsm2,
     bsm2_constant_influent,
     bsm2_parameters,
 )
+from aquakin.plant.influent import InfluentSeries
 
 
 def _bsm2_plant():
@@ -56,6 +58,63 @@ def test_stable_adjoint_rejects_adjoint_and_dtmax():
     with pytest.raises(ValueError, match="do not also pass"):
         plant.solve(t_span=(0.0, 1.0), y0=y0, gradient="stable_adjoint",
                     adjoint=diffrax.DirectAdjoint())
+
+
+# --- fast small-network correctness (a single-CSTR plant) ------------------
+
+def _single_cstr_plant(net):
+    """A one-unit plant: a CSTR on the toy decay network fed a constant flow.
+
+    Small and non-stiff, so the stable-adjoint gradient through the *plant*
+    solve can be checked against the standard ``jax_adjoint`` gradient and a
+    finite difference in the fast gate -- the BSM2 versions of this check are
+    validation-marked because the whole plant is expensive to integrate.
+    """
+    plant = Plant("single_cstr")
+    plant.add_unit(CSTRUnit(
+        name="tank", network=net, volume=100.0,
+        input_port_names=["inlet"], conditions={"T": 293.15},
+    ))
+    influent = InfluentSeries(
+        t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
+        C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), network=net,
+    )
+    plant.add_influent("feed", influent, to="tank.inlet")
+    return plant
+
+
+def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd():
+    """On a small single-CSTR plant the cap-free stable-adjoint gradient equals
+    the standard through-the-solve (jax_adjoint) gradient and a central FD."""
+    net = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    plant = _single_cstr_plant(net)
+    base = net.default_parameters()
+    gidx = plant.parameter_index("simple_decay.A_to_B.k")
+    theta0 = float(base[gidx])
+    T = 40.0
+    teval = jnp.array([T])
+
+    def g(theta, gradient):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(t_span=(0.0, T), t_eval=teval, params=p,
+                          gradient=gradient)
+        return sol.C_named("tank", "B")[-1]   # product at the outlet
+
+    # Forward primal agrees regardless of the gradient backend (the two paths
+    # take slightly different adaptive step grids, so this is to solver tol).
+    assert float(g(theta0, "stable_adjoint")) == pytest.approx(
+        float(g(theta0, "jax_adjoint")), rel=1e-6)
+
+    g_stable = float(jax.grad(lambda th: g(th, "stable_adjoint"))(theta0))
+    g_jax = float(jax.grad(lambda th: g(th, "jax_adjoint"))(theta0))
+    assert np.isfinite(g_stable)
+    assert g_stable != 0.0
+    assert g_stable == pytest.approx(g_jax, rel=1e-4)
+
+    h = theta0 * 1e-3
+    fd = (float(g(theta0 + h, "stable_adjoint"))
+          - float(g(theta0 - h, "stable_adjoint"))) / (2.0 * h)
+    assert g_stable == pytest.approx(fd, rel=1e-3)
 
 
 # --- the cross-interface gradient (slow: integrates the whole plant) -------

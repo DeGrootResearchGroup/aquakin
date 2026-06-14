@@ -18,9 +18,18 @@ import diffrax
 
 import aquakin
 
-# Slow module: forward-sensitivity solves through stiff networks. Excluded from
-# the fast PR gate; runs in the merge-to-main suite (see the ``slow`` marker).
-pytestmark = pytest.mark.slow
+# This module mixes three tiers (see the per-test markers):
+#   * fast gate     -- cheap correctness/equivalence checks on the toy decay
+#                      and small UV/H2O2 networks (analytic-decay exactness,
+#                      the simultaneous-corrector vs dense-augmented Option-A/B
+#                      equivalence, finiteness/composition, accessors, errors);
+#   * ``slow``      -- the jacfwd-reference comparisons, which compile a second
+#                      reactor plus a reference Jacobian per test (~2-3 s each);
+#   * ``validation``-- the headline stiff-network claims (finite where uncapped
+#                      AD is non-finite; the JVP flowing through a state-derived
+#                      pH solver), tens of seconds each.
+# So a PR that breaks forward-sensitivity correctness fails in the fast gate,
+# not only at merge.
 
 
 # --- Fast exactness / API tests -----------------------------------------
@@ -48,6 +57,7 @@ def test_analytic_decay_sensitivity_exact(simple_network):
     assert float(jnp.max(jnp.abs(sol.C_named("A") - jnp.exp(-k * t_eval)))) < 1e-6
 
 
+@pytest.mark.slow
 def test_matches_jacfwd_multi_param():
     # On a small non-stiff network the augmented solve must reproduce jax.jacfwd
     # for several parameters at once.
@@ -105,6 +115,7 @@ def test_int_indices_equivalent_to_names(simple_network):
     assert jnp.allclose(S_name, S_idx)
 
 
+@pytest.mark.slow
 def test_biofilm_sensitivity_matches_jacfwd(simple_network):
     cond = aquakin.SpatialConditions.uniform(T=293.15)
     kw = dict(
@@ -134,6 +145,7 @@ def test_biofilm_sensitivity_matches_jacfwd(simple_network):
     assert float(jnp.max(jnp.abs(S[:, :, 0] - J))) < 1e-6
 
 
+@pytest.mark.slow
 def test_pfr_sensitivity_matches_jacfwd(simple_network):
     cond = aquakin.SpatialConditions.uniform(T=293.15)
     C0 = jnp.asarray([1.0, 0.0])

@@ -92,6 +92,34 @@ def test_ad_grad_through_solve(name):
     assert jnp.all(jnp.isfinite(g))
 
 
+def test_asm3_short_integration_and_ad_grad_finite():
+    """Fast-gate representative of the two ``slow`` ASM-family checks above
+    (``test_short_integration_finite`` / ``test_ad_grad_through_solve``): asm3
+    is the smallest shipped ASM/ADM network, so a single short stiff solve and a
+    ``jax.grad`` through it run cheaply. This keeps a core differentiability path
+    -- integrate a stiff biological network and back-propagate -- in the PR gate,
+    so a change that breaks it fails fast rather than only in the merge suite.
+    """
+    net = aquakin.load_network("asm3")
+    reactor = aquakin.BatchReactor(net, net.default_conditions())
+    C0 = net.default_concentrations()
+    t_eval = jnp.linspace(0.0, 0.05, 6)
+
+    def loss(params):
+        sol = reactor.solve(C0, params=params, t_span=(0.0, 0.05), t_eval=t_eval)
+        return jnp.sum(sol.C_named(net.species[0]))
+
+    # Forward primal is finite ...
+    p = net.default_parameters()
+    sol = reactor.solve(C0, params=p, t_span=(0.0, 0.05), t_eval=t_eval)
+    assert jnp.all(jnp.isfinite(sol.C))
+    # ... and so is the reverse-mode gradient through the stiff solve.
+    g = jax.grad(loss)(p)
+    assert g.shape == p.shape
+    assert jnp.all(jnp.isfinite(g))
+    assert jnp.any(g != 0.0)
+
+
 @pytest.mark.parametrize("name", _ASM_NETWORKS)
 def test_no_duplicate_parameter_names(name):
     """The shared-params schema means no namespaced duplicates."""
