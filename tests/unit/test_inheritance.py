@@ -1,0 +1,194 @@
+"""Declarative YAML model inheritance: network.extends + add/modify/remove (#246)."""
+
+import jax.numpy as jnp
+import pytest
+
+import aquakin
+from aquakin.schema.inheritance import apply_remove, merge_spec, pop_inheritance_keys
+
+
+def _write(tmp_path, name, text):
+    p = tmp_path / name
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def _derived(tmp_path, body):
+    return _write(tmp_path, "derived.yaml", body)
+
+
+# --- end-to-end: a derived network extending the shipped asm1 ----------------
+
+def test_extends_inherits_the_whole_base(tmp_path):
+    """A derived network that only renames inherits every species, reaction and
+    parameter of its base."""
+    net = aquakin.load_network_from_file(_derived(tmp_path, """
+network:
+  name: asm1_renamed
+  extends: asm1
+"""))
+    base = aquakin.load_network("asm1")
+    assert net.name == "asm1_renamed"
+    assert net.species == base.species
+    assert net.reaction_names == base.reaction_names
+    assert net.parameters == base.parameters
+    assert jnp.allclose(net.default_parameters(), base.default_parameters())
+
+
+def test_extends_adds_parameter_and_overrides_expression(tmp_path):
+    """The motivating case (#208/#246): add a parameter and override the two
+    heterotroph rate expressions; everything else inherited."""
+    net = aquakin.load_network_from_file(_derived(tmp_path, """
+network:
+  name: asm1_nutrient
+  extends: asm1
+parameters:
+  KNH_H: {value: 0.05, units: "g_N/m3", bounds: [0.001, 1.0]}
+expressions:
+  rho_hetero_aerobic: "muH * [SS] / (KS + [SS]) * [SO] / (KOH + [SO]) * [SNH] / (KNH_H + [SNH]) * [XB_H]"
+"""))
+    base = aquakin.load_network("asm1")
+    assert "KNH_H" in net.param_index and "KNH_H" not in base.param_index
+    assert net.species == base.species               # rest inherited
+    assert net.reaction_names == base.reaction_names
+    # The shipped asm1_ammonia_limitation is exactly this pattern.
+    amm = aquakin.load_network("asm1_ammonia_limitation")
+    assert "KNH_H" in amm.param_index
+
+
+def test_extends_reaction_field_merge_keeps_base_stoichiometry(tmp_path):
+    """Overriding a reaction by name merges fields: change the rate, keep the
+    inherited stoichiometry."""
+    net = aquakin.load_network_from_file(_derived(tmp_path, """
+network:
+  name: asm1_rate_tweak
+  extends: asm1
+parameters:
+  scale: {value: 2.0}
+reactions:
+  - name: aerobic_growth_heterotrophs
+    rate: "scale * rho_hetero_aerobic"
+"""))
+    base = aquakin.load_network("asm1")
+    i = net.reaction_names.index("aerobic_growth_heterotrophs")
+    p = net.default_parameters()
+    # Same stoichiometry as the base (inherited), only the rate scaled.
+    assert jnp.allclose(net.compute_stoich(p)[i],
+                        base.compute_stoich(base.default_parameters())[i])
+
+
+def test_extends_add_new_reaction(tmp_path):
+    net = aquakin.load_network_from_file(_derived(tmp_path, """
+network:
+  name: asm1_extra
+  extends: asm1
+parameters:
+  k_extra: {value: 0.1}
+reactions:
+  - name: extra_decay
+    rate: "k_extra * [XP]"
+    stoichiometry: {XP: -1, XI: 1}
+"""))
+    assert "extra_decay" in net.reaction_names
+    assert len(net.reaction_names) == len(aquakin.load_network("asm1").reaction_names) + 1
+
+
+def test_remove_reaction_and_parameter(tmp_path):
+    net = aquakin.load_network_from_file(_derived(tmp_path, """
+network:
+  name: asm1_no_ammonification
+  extends: asm1
+remove:
+  reactions: [ammonification]
+"""))
+    assert "ammonification" not in net.reaction_names
+    assert "ammonification" in aquakin.load_network("asm1").reaction_names
+
+
+# --- error handling ----------------------------------------------------------
+
+def test_unknown_base_errors(tmp_path):
+    with pytest.raises(FileNotFoundError, match="base network 'no_such_model' not found"):
+        aquakin.load_network_from_file(_derived(tmp_path, """
+network: {name: x, extends: no_such_model}
+"""))
+
+
+def test_cyclic_extends_errors(tmp_path):
+    _write(tmp_path, "a.yaml", "network: {name: a, extends: ./b.yaml}\n"
+           "species: [{name: A, default_concentration: 1.0}]\n"
+           "reactions: [{name: r, rate: '1.0', stoichiometry: {A: -1}}]\n")
+    _write(tmp_path, "b.yaml", "network: {name: b, extends: ./a.yaml}\n")
+    with pytest.raises(ValueError, match="cyclic 'extends' chain"):
+        aquakin.load_network_from_file(tmp_path / "a.yaml")
+
+
+def test_remove_without_extends_errors(tmp_path):
+    with pytest.raises(ValueError, match="'remove:' has no effect without 'extends:'"):
+        aquakin.load_network_from_file(_derived(tmp_path, """
+network: {name: x}
+species: [{name: A, default_concentration: 1.0}]
+reactions: [{name: r, rate: "1.0", stoichiometry: {A: -1}}]
+remove: {reactions: [r]}
+"""))
+
+
+def test_extends_declared_twice_errors(tmp_path):
+    with pytest.raises(ValueError, match="declare 'extends' once"):
+        aquakin.load_network_from_file(_derived(tmp_path, """
+extends: asm1
+network: {name: x, extends: asm1}
+"""))
+
+
+def test_remove_nonexistent_reaction_errors(tmp_path):
+    with pytest.raises(ValueError, match="remove.reactions names .* not in the base"):
+        aquakin.load_network_from_file(_derived(tmp_path, """
+network: {name: x, extends: asm1}
+remove: {reactions: [nope]}
+"""))
+
+
+def test_relative_path_extends(tmp_path):
+    """``extends`` resolves a relative path against the extending file's dir."""
+    _write(tmp_path, "base.yaml", """
+network: {name: tiny}
+species:
+  - {name: A, default_concentration: 1.0}
+  - {name: B, default_concentration: 0.0}
+parameters: {k: {value: 0.5}}
+reactions: [{name: decay, rate: "k * [A]", stoichiometry: {A: -1, B: 1}}]
+""")
+    net = aquakin.load_network_from_file(_derived(tmp_path, """
+network: {name: tiny_fast, extends: ./base.yaml}
+parameters: {k: {value: 2.0}}
+"""))
+    assert net.name == "tiny_fast"
+    assert float(net.default_parameters()[net.param_index["k"]]) == 2.0   # overridden
+
+
+# --- unit: the pure merge helpers --------------------------------------------
+
+def test_merge_spec_named_list_field_merge():
+    base = {"reactions": [{"name": "r1", "rate": "a", "stoichiometry": {"A": -1}},
+                          {"name": "r2", "rate": "b"}]}
+    derived = {"reactions": [{"name": "r1", "rate": "c"},          # override field
+                             {"name": "r3", "rate": "d"}]}          # append
+    out = merge_spec(base, derived, source="<t>")
+    r = {e["name"]: e for e in out["reactions"]}
+    assert r["r1"] == {"name": "r1", "rate": "c", "stoichiometry": {"A": -1}}  # rate overridden, stoich kept
+    assert r["r2"]["rate"] == "b"                                   # untouched
+    assert r["r3"]["rate"] == "d"                                   # appended
+    assert [e["name"] for e in out["reactions"]] == ["r1", "r2", "r3"]
+
+
+def test_pop_inheritance_keys_reads_network_extends():
+    data = {"network": {"name": "x", "extends": "asm1"}, "remove": {"reactions": ["r"]}}
+    extends, remove = pop_inheritance_keys(data, "<t>")
+    assert extends == "asm1" and remove == {"reactions": ["r"]}
+    assert "extends" not in data["network"] and "remove" not in data
+
+
+def test_apply_remove_unknown_block_errors():
+    with pytest.raises(ValueError, match="unknown block"):
+        apply_remove({"reactions": []}, {"widgets": ["x"]}, "<t>")
