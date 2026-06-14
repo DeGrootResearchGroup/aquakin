@@ -61,6 +61,8 @@ import jax.numpy as jnp
 import numpy as np
 import optimistix
 
+from aquakin.integrate._common import validate_t_eval
+
 # Shared forward-solve defaults for both discrete-adjoint solvers.
 _DEFAULT_RTOL = 1e-6              # PID controller relative tolerance
 _DEFAULT_ATOL = 1e-9             # PID controller absolute tolerance
@@ -116,6 +118,11 @@ def _discrete_adjoint_solve(
     t0, t1 = float(t_span[0]), float(t_span[1])
     n = y0.shape[0]
     final_only = t_eval is None
+    if not final_only:
+        # Out-of-span / non-ascending save times otherwise silently return inf /
+        # wrong values (the backward scan injects cotangents only at landed
+        # steps), poisoning any downstream loss. Validate as the reactors do.
+        validate_t_eval(jnp.asarray(t_eval), t0, t1)
     teval = jnp.asarray([t1] if final_only else t_eval, dtype=jnp.result_type(float))
 
     term = diffrax.ODETerm(lambda t, y, a: rhs(t, y, a))
