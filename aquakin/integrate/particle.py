@@ -74,7 +74,14 @@ class Track:
 
 @dataclass
 class TrackSolution(_HasNamedSpecies):
-    """Solution returned by :meth:`ParticleTrackReactor.solve`."""
+    """Solution returned by :meth:`ParticleTrackReactor.solve`.
+
+    ``C`` (shape ``(n_t, n_species)``) is the raw integrated state. If the
+    network sets ``clip_negative_states``, entries may be **small transient
+    negatives** -- the ``max(C, 0)`` clamp is applied only when evaluating the
+    reaction rates, not to the saved state. A normal numerical transient, not an
+    error; clip with ``jnp.maximum(sol.C, 0.0)`` for display if needed.
+    """
 
     t: jnp.ndarray
     C: jnp.ndarray
