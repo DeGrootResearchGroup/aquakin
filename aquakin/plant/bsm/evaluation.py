@@ -247,23 +247,17 @@ def _time_average(t: jnp.ndarray, values: jnp.ndarray) -> float:
 
 
 def _reconstruct(plant, solution, params_full, endpoints):
-    """Reconstruct several output streams in one pass over the saved states.
+    """Reconstruct several output streams from the saved states.
 
     ``endpoints`` is a list of ``"unit.port"`` strings. Returns
-    ``{endpoint: (Q (n_t,), C (n_t, n_species))}``. One :meth:`Plant.outputs_at`
-    per saved time (resolving the whole flow + stream sweep once) instead of one
-    full pass per stream -- the indices need ~8 streams, so this is ~8x cheaper.
+    ``{endpoint: (Q (n_t,), C (n_t, n_species))}``. The whole output sweep is
+    reconstructed once (resolving the flow + stream sweep per saved time) and
+    cached on the solution by :meth:`Plant._cached_streams`, so the metric
+    indices' ~8 streams and any later ``plant.stream`` call share one pass.
     """
-    keys = {ep: tuple(plant._parse_endpoint(ep, role="source")) for ep in endpoints}
-    Qs = {ep: [] for ep in endpoints}
-    Cs = {ep: [] for ep in endpoints}
-    for i in range(solution.t.shape[0]):
-        outs = plant.outputs_at(solution.t[i], solution.state[i], params_full)
-        for ep, key in keys.items():
-            s = outs[key]
-            Qs[ep].append(s.Q)
-            Cs[ep].append(s.C)
-    return {ep: (jnp.stack(Qs[ep]), jnp.stack(Cs[ep])) for ep in endpoints}
+    allstreams = plant._cached_streams(solution, params_full)
+    return {ep: allstreams[plant._parse_endpoint(ep, role="source")]
+            for ep in endpoints}
 
 
 @dataclass
