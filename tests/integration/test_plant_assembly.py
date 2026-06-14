@@ -140,6 +140,40 @@ def test_mixer_mass_balance(simple_net):
     assert jnp.all(jnp.isfinite(sol.state))
 
 
+def test_splitter_flow_mode_conserves_under_low_feed(simple_net):
+    """A flow-mode splitter never emits more than it receives. Above the total
+    setpoint the setpoints are honored verbatim with the remainder taking the
+    rest (affine, unchanged); below it the setpoints share the available flow
+    proportionally with a zero remainder -- so it conserves flow in every regime
+    (previously it over-delivered, creating flow). compute_outputs and
+    flow_outputs agree."""
+    sp = SplitterUnit(name="s", network=simple_net,
+                      output_port_flows={"a": 100.0, "b": 100.0}, remainder_port="r")
+    C = simple_net.default_concentrations()
+    p = simple_net.default_parameters()
+
+    def flows(Q_in):
+        ins = {"in": Stream(Q=jnp.asarray(float(Q_in)), C=C, network=simple_net)}
+        out = sp.compute_outputs(jnp.asarray(0.0), None, ins, p)
+        fo = sp.flow_outputs({"in": jnp.asarray(float(Q_in))}, p)
+        co = {k: float(v.Q) for k, v in out.items()}
+        return co, {k: float(v) for k, v in fo.items()}
+
+    # Above the setpoint (300 >= 200): full setpoints + remainder, conserving.
+    co, fo = flows(300.0)
+    assert (co["a"], co["b"], co["r"]) == (100.0, 100.0, 100.0)
+    assert co == fo
+    # Below the setpoint (150 < 200): proportional share, zero remainder.
+    co, fo = flows(150.0)
+    assert co["a"] == pytest.approx(75.0) and co["b"] == pytest.approx(75.0)
+    assert co["r"] == pytest.approx(0.0)
+    assert co == pytest.approx(fo)
+    # In every case the outflow equals the inflow (no flow created).
+    for Q_in in (50.0, 150.0, 200.0, 300.0):
+        co, _ = flows(Q_in)
+        assert sum(co.values()) == pytest.approx(Q_in)
+
+
 def test_splitter_flow_ratios(simple_net):
     """Splitter routes 60/40 of its inflow to two sinks (which are CSTRs)."""
     plant = Plant("split_test")

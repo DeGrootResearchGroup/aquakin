@@ -109,7 +109,11 @@ class SplitterUnit(StatelessUnit):
       are held constant regardless of influent — see :func:`build_bsm1`. A
       fixed *fraction* of throughput, by contrast, makes the recycle-flow
       loop gain near-singular off the design influent and the plant blows up
-      under dynamic flow.
+      under dynamic flow. If the feed transiently drops *below* the total
+      setpoint the setpoint ports share the available flow proportionally
+      (``q·min(1, Q_in/Σsetpoints)``) and the remainder is zero, so the unit
+      always conserves flow; this is identity (and exactly affine) whenever
+      ``Q_in ≥ Σsetpoints``, true at any steady state.
 
     - **threshold mode** (``threshold`` + ``threshold_port`` +
       ``remainder_port``): inlet flow *above* ``threshold`` goes to
@@ -236,24 +240,39 @@ class SplitterUnit(StatelessUnit):
                 Q=jnp.minimum(s_in.Q, limit), C=s_in.C, network=self.network,
                 T=s_in.T)
             return outputs
-        # Flow mode: fixed setpoints, remainder takes what is left. Clamp the
-        # remainder at zero so a feed transiently below the total setpoint does
-        # not produce a negative-flow stream (the concentration-stage safeguard;
-        # the linear flow_outputs below stays unclamped so _resolve_flows is
-        # exact).
-        total_set = jnp.zeros(())
-        for port, q in self.output_port_flows.items():
-            q = jnp.asarray(float(q))
-            total_set = total_set + q
-            outputs[port] = Stream(Q=q, C=s_in.C, network=self.network, T=s_in.T)
-        outputs[self.remainder_port] = Stream(
-            Q=jnp.maximum(s_in.Q - total_set, 0.0), C=s_in.C, network=self.network,
-            T=s_in.T,
-        )
+        # Flow mode: fixed setpoints, remainder takes what is left. When the feed
+        # is below the total setpoint the setpoint ports share the available flow
+        # proportionally (a flow-limited pump set), so the unit never emits more
+        # than it receives -- it conserves mass -- and the remainder is then zero.
+        # Identity when Q_in >= total setpoint (scale == 1), so steady-state
+        # behaviour is unchanged; the scale-down only bites in a transient
+        # starve. flow_outputs uses the same rule, so the resolved flow network
+        # and the concentration sweep agree.
+        outputs.update(self._flow_split(s_in.Q, lambda q: Stream(
+            Q=q, C=s_in.C, network=self.network, T=s_in.T)))
         return outputs
 
+    def _flow_split(self, Q_in, make):
+        """Flow-mode port flows from the inlet flow, proportionally limited.
+
+        ``make(q)`` wraps a port flow ``q`` into the value the caller wants (a
+        ``Stream`` for :meth:`compute_outputs`, the bare flow for
+        :meth:`flow_outputs`), so both share one conserving rule.
+        """
+        total_set = jnp.zeros(())
+        for q in self.output_port_flows.values():
+            total_set = total_set + jnp.asarray(float(q))
+        scale = jnp.minimum(1.0, Q_in / jnp.maximum(total_set, 1e-12))
+        out = {port: make(jnp.asarray(float(q)) * scale)
+               for port, q in self.output_port_flows.items()}
+        out[self.remainder_port] = make(jnp.maximum(Q_in - total_set, 0.0))
+        return out
+
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
-        """Output port flows from the inlet flow (the linear flow rule)."""
+        """Output port flows from the inlet flow (the flow rule used by the
+        recycle-flow solve). Affine in ``Q_in`` while the unit is not starved
+        (``Q_in >= total setpoint``); proportionally scaled below that (matching
+        :meth:`compute_outputs`)."""
         Q_in = input_flows["in"]
         if self._mode == "ratio":
             return {port: Q_in * jnp.asarray(ratio)
@@ -262,7 +281,4 @@ class SplitterUnit(StatelessUnit):
             limit = jnp.asarray(float(self.threshold))
             return {self.threshold_port: jnp.maximum(Q_in - limit, 0.0),
                     self.remainder_port: jnp.minimum(Q_in, limit)}
-        out = {port: jnp.asarray(float(q))
-               for port, q in self.output_port_flows.items()}
-        out[self.remainder_port] = Q_in - sum(out.values())
-        return out
+        return self._flow_split(Q_in, lambda q: q)
