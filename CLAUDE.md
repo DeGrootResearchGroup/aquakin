@@ -58,13 +58,17 @@ The shipped networks currently are:
   pH-switch fractions therefore track the instantaneous state. This is the
   complete ADM1 in BSM2 form, **validated** against the published BSM2
   open-loop steady-state digester: run as the benchmark CSTR (3400 m³ liquid /
-  300 m³ headspace, fed at ~178 m³/d, HRT ~19 d) it reproduces the reference
-  steady state to within ~6% on **every** state (the few-percent residual is the
-  difference between the charge-balance pH solver and the reference DAE, which
-  the slow, inhibition-sensitive acetate / C4 methanogens amplify). Methane (the
-  defining output) matches to <1%; the charge-balance pH (~7.27) matches the
-  reference electroneutrality relation
-  (`tests/validation/test_adm1_bsm2_steadystate.py`).
+  300 m³ headspace, fed at ~178 m³/d, HRT ~19 d) **with the exact published feed
+  and reference** (the "ADM1 influent (post ASM2ADM interface)" and "ADM1
+  effluent" tables of the official `Results/BSM2_steady_state.pdf`) it reproduces
+  the reference steady state to within **~1.5% on every state** (the ~1% residual
+  is the difference between the charge-balance pH solver and the reference DAE).
+  Methane (the defining output) matches to <1%; the charge-balance pH (~7.26)
+  matches the reference electroneutrality relation
+  (`tests/validation/test_adm1_bsm2_steadystate.py`). *(The earlier standalone
+  test used a slightly mis-transcribed feed — `S_aa`/`X_pr` ~6%/2% high — which
+  alone accounted for a ~5% steady-state offset; the model itself matches a
+  faithful port of `adm1_ODE_bsm2.c` to <1%.)*
   Note: the BSM2 init file
   lists hydrolysis `k_hyd = 0.3` d⁻¹, but that is inconsistent with its own
   steady state (which needs ~10, the canonical value, for the observed ~99.5%
