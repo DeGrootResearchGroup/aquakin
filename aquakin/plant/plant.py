@@ -2101,6 +2101,15 @@ class Plant:
         here because such a unit's *inlet* flow comes from the fixed-pump sludge
         line (constant during the probe), so at fixed state/time its outputs are
         constant in the recycle flows.
+
+        The self-consistency of this assumption is checked once, at ``(t0, y0)``,
+        by ``check_affine`` (a warning, never a block). That t0 check does NOT
+        catch a unit with a *piecewise-linear* flow rule (a threshold-mode
+        ``SplitterUnit`` bypass, a level-gated ``StorageTank`` bypass) that is on
+        one side of its kink at ``t0`` but crosses it later in a dynamic run: the
+        probe then linearises across the kink at that time silently. The resolved
+        flows are exact only while every unit stays in the affine regime it
+        occupied at ``t0`` (issue #255).
         """
         base: dict[tuple[Optional[str], str], jnp.ndarray] = {}
         for port_name, series in self.influents.items():
@@ -2335,6 +2344,15 @@ class Plant:
         # (every flow rule affine in the recycle flows). Skipped under tracing
         # (params/y0 are JAX tracers -- can't compare/warn) and guarded to run
         # once per plant. It only warns, never blocks the solve.
+        #
+        # LIMITATION: this probes affinity only at (t0, y0). A unit with a
+        # piecewise-linear flow rule -- a threshold-mode SplitterUnit (influent
+        # bypass) or a StorageTank level-gated bypass -- that is on one side of
+        # its kink at t0 but crosses it *later* in a dynamic run is NOT caught:
+        # _resolve_flows then linearises across the kink at that time with no
+        # warning. The resolved flows stay exact only while every unit remains in
+        # the affine regime it occupied at t0. (Re-probing at sampled times would
+        # close this; deferred as a known limitation -- see issue #255.)
         if not any(isinstance(v, jax.core.Tracer) for v in (params, y0)):
             if not self._flow_affinity_checked:
                 self._flow_affinity_checked = True
