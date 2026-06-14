@@ -240,6 +240,58 @@ class PlantSolution:
                  else list(species))
         return {sp: float(self.C_named(unit_name, sp)[-1]) for sp in names}
 
+    def plot(self, unit_name: str, species=None, *, ax=None, **kwargs):
+        """Plot one unit's species trajectories over time.
+
+        The plant analogue of ``BatchSolution.plot``: a thin matplotlib wrapper
+        so ``sol.plot("tank5", "SNH")`` needs no manual ``C_named`` / unit /
+        axis-label boilerplate. The x-axis is labelled with the plant's time
+        unit; a single-species plot labels the y-axis with that species' units.
+
+        Parameters
+        ----------
+        unit_name : str
+            A concentration-vector unit (see :meth:`Plant.list_species`).
+        species : str or iterable of str, optional
+            Species to plot; a single name, an iterable (legended), or ``None``
+            for every species of the unit's network.
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on; a new one is created if omitted.
+        **kwargs
+            Forwarded to ``ax.plot``.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+
+        Raises
+        ------
+        ImportError
+            If matplotlib is not installed (``pip install aquakin[plot]``).
+        KeyError
+            For an unknown unit / species, or a non-concentration unit (hinted).
+        """
+        import numpy as np
+
+        from aquakin.integrate._common import require_matplotlib
+        plt = require_matplotlib()
+        names = (self.plant.list_species(unit_name) if species is None
+                 else [species] if isinstance(species, str) else list(species))
+        if ax is None:
+            _, ax = plt.subplots()
+        t = np.asarray(self.t)
+        net = self.plant.units[unit_name].network
+        for sp in names:
+            ax.plot(t, np.asarray(self.C_named(unit_name, sp)), label=sp, **kwargs)
+        unit = self.time_unit
+        ax.set_xlabel(f"time [{unit}]" if unit else "time")
+        if len(names) == 1:
+            ax.set_ylabel(f"{names[0]} [{net.units_of(names[0])}]")
+        else:
+            ax.set_ylabel(f"{unit_name} concentration")
+            ax.legend()
+        return ax
+
     def to_dataframe(self, unit: str, *, units_in_columns: bool = False):
         """Return one unit's state trajectory as a pandas ``DataFrame``.
 

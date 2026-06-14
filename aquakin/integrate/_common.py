@@ -156,6 +156,22 @@ def require_pandas():
     return pd
 
 
+def require_matplotlib():
+    """Import and return ``matplotlib.pyplot``, with a helpful message if missing.
+
+    matplotlib is an optional dependency, used only by the ``plot()`` result
+    helpers.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as e:  # pragma: no cover - exercised only without mpl
+        raise ImportError(
+            "plot() requires matplotlib, an optional dependency. Install it with "
+            "`pip install matplotlib` or `pip install aquakin[plot]`."
+        ) from e
+    return plt
+
+
 def build_dataframe(
     index,
     columns,
@@ -414,6 +430,62 @@ class _HasNamedSpecies:
         """Return ``(name, array)`` for the dataframe index. Time by default;
         space-indexed solutions (PFR) override this."""
         return "t", self.t
+
+    def _independent_axis_label(self) -> str:
+        """Label for the plot's independent axis. Time (with the network's
+        time unit) by default; a space-indexed PFR overrides this."""
+        unit = self.time_unit
+        return f"time [{unit}]" if unit else "time"
+
+    def plot(self, species=None, *, ax=None, **kwargs):
+        """Plot one or more species against the independent axis (time, or axial
+        position for a PFR).
+
+        A thin wrapper over matplotlib so "plot SNH over time" needs no manual
+        ``C_named`` / unit / axis-label boilerplate. The x-axis is labelled with
+        the network's time unit (or position for a PFR), and a single-species
+        plot labels the y-axis with that species' units.
+
+        Parameters
+        ----------
+        species : str or iterable of str, optional
+            Species to plot. A single name plots one line; an iterable plots
+            several with a legend; ``None`` (default) plots every species.
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on. If ``None``, a new figure/axes is created.
+        **kwargs
+            Forwarded to ``ax.plot`` (e.g. ``lw``, ``ls``, ``color``).
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+            The axes drawn on (for further customisation / saving).
+
+        Raises
+        ------
+        ImportError
+            If matplotlib is not installed (optional dependency; install with
+            ``pip install aquakin[plot]``).
+        KeyError
+            If a species name is unknown (with a "did you mean?" hint).
+        """
+        plt = require_matplotlib()
+        names = ([species] if isinstance(species, str)
+                 else list(self.network.species) if species is None
+                 else list(species))
+        if ax is None:
+            _, ax = plt.subplots()
+        _, x = self._table_index()
+        x = np.asarray(x)
+        for sp in names:
+            ax.plot(x, np.asarray(self.C_named(sp)), label=sp, **kwargs)
+        ax.set_xlabel(self._independent_axis_label())
+        if len(names) == 1:
+            ax.set_ylabel(f"{names[0]} [{self.units_named(names[0])}]")
+        else:
+            ax.set_ylabel("concentration")
+            ax.legend()
+        return ax
 
     def to_dataframe(self, *, units_in_columns: bool = False):
         """Return the solution as a pandas ``DataFrame``.

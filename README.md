@@ -125,6 +125,12 @@ for w in network.check_units():      # -> list of (reaction, location, detail)
 df = solution.to_dataframe()         # time-indexed, one column per species
 df.attrs["units"]                    # {species: unit} (units kept off the labels)
 solution.to_csv("run.csv")           # units embedded in the CSV header
+
+# Plot a species (or several) without matplotlib boilerplate -- the x-axis is
+# labelled with the network's time unit, the y-axis with the species' units.
+# Returns a matplotlib Axes. Requires the optional `plot` extra: aquakin[plot]
+ax = solution.plot("BrO3-")          # one line; y-axis "BrO3- [mol/L]"
+solution.plot(["O3", "BrO3-"])       # several, legended; pass ax= to overlay
 ```
 
 ## Plant-wide simulation
