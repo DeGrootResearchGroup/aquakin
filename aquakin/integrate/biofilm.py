@@ -75,7 +75,13 @@ class BiofilmSolution(_HasNamedSpecies):
         Times at which the solution was recorded, shape ``(n_t,)``.
     C : jnp.ndarray
         **Bulk** concentration trajectory, shape ``(n_t, n_species)``. This is
-        the measurable (well-mixed liquid) signal; :meth:`C_named` reads it.
+        the measurable (well-mixed liquid) signal; :meth:`C_named` reads it. It
+        is the raw integrated state (likewise ``profile``): if the network sets
+        ``clip_negative_states``, entries may be **small transient negatives**,
+        because the ``max(C, 0)`` clamp is applied only when evaluating the
+        reaction rates, not to the saved state. These are a normal numerical
+        transient, not an error; clip with ``jnp.maximum(sol.C, 0.0)`` for
+        display if needed.
     profile : jnp.ndarray
         Full depth-resolved trajectory, shape ``(n_t, n_compartments,
         n_species)``, where compartment 0 is the bulk and 1..``n_layers`` run

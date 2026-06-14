@@ -130,7 +130,13 @@ class PlantSolution:
     t : jnp.ndarray
         Save times, shape ``(n_t,)``.
     state : jnp.ndarray
-        Full plant state, shape ``(n_t, total_state_size)``.
+        Full plant state, shape ``(n_t, total_state_size)``. This is the raw
+        integrated state. Where a unit's network sets ``clip_negative_states``
+        (on by default for ASM1, so the activated-sludge reactors in BSM1/BSM2),
+        entries may be **small transient negatives** -- the ``max(x, 0)`` clamp
+        is applied only when evaluating that unit's reaction rates, not to the
+        saved state. A normal numerical transient, not a solver/model error;
+        clip with ``jnp.maximum(state, 0.0)`` for display if needed.
     plant : Plant
         The plant that produced this solution; retained for accessor
         methods.

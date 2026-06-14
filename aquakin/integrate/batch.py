@@ -36,7 +36,15 @@ class BatchSolution(_HasNamedSpecies):
     t : jnp.ndarray
         Times at which the solution was recorded, shape ``(n_t,)``.
     C : jnp.ndarray
-        Concentration trajectory, shape ``(n_t, n_species)``.
+        Concentration trajectory, shape ``(n_t, n_species)``. This is the raw
+        integrated state. If the network sets ``clip_negative_states`` (on by
+        default for ASM1), individual entries may be **small transient
+        negatives**: the ``max(C, 0)`` clamp is applied only when evaluating the
+        reaction rates (and state-derived conditions such as pH), not to the
+        saved state, so the rates were computed on the clamped values while the
+        trajectory keeps the raw ones. These negatives are a normal numerical
+        transient of a stiff solve, not a solver or model error; clip them
+        yourself (``jnp.maximum(sol.C, 0.0)``) for display if needed.
     network : CompiledNetwork
         The network that produced this solution. Retained so that the
         inherited :meth:`C_named` can look up species by name.

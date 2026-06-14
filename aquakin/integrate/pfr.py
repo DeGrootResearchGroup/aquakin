@@ -33,7 +33,13 @@ class PFRSolution(_HasNamedSpecies):
     x : jnp.ndarray
         Axial positions at which the solution was recorded, shape ``(n_points,)``.
     C : jnp.ndarray
-        Concentration profile, shape ``(n_points, n_species)``.
+        Concentration profile, shape ``(n_points, n_species)``. This is the raw
+        integrated state. If the network sets ``clip_negative_states``, individual
+        entries may be **small transient negatives**: the ``max(C, 0)`` clamp is
+        applied only when evaluating the reaction rates (and state-derived
+        conditions), not to the saved state. These are a normal numerical
+        transient, not an error; clip with ``jnp.maximum(sol.C, 0.0)`` for display
+        if needed.
     network : CompiledNetwork
         Network used to produce this solution.
     """

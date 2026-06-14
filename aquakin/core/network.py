@@ -227,6 +227,11 @@ class CompiledNetwork:
     # stays exact. This mirrors the reference IWA/BSM S-function convention
     # (``xtemp = max(x, 0)`` before the process rates). Identity at feasible
     # (non-negative) states, so it does not change the physical solution.
+    # Consequence for users: because the clamp is not applied to the saved state,
+    # a returned trajectory (``solution.C`` / a plant ``state``) may contain small
+    # transient negatives -- a normal numerical artefact of the stiff solve, not a
+    # solver/model error (the rates were computed on the clamped values). The
+    # Solution docstrings flag this; clip for display with ``jnp.maximum(C, 0)``.
     clip_negative_states: bool = False
 
     # Optional per-parameter temperature corrections. Each entry is
