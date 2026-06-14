@@ -435,6 +435,41 @@ def test_dgsm_forward_matches_reverse():
     )
 
 
+def test_dgsm_forward_matches_reverse_through_reactor(simple_network):
+    """forward and reverse DGSM agree when ``fn`` integrates a reactor solve --
+    the real use case the forward path exists for. The forward screen drives
+    ``reactor.solve`` through ``aquakin.forward_adjoint()`` (DirectAdjoint, which
+    permits forward-mode AD), the reverse screen through the default adjoint, and
+    the two Sobol-total bounds are identical (ad_mode is only a performance
+    choice)."""
+    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
+    C0 = jnp.asarray([1.0, 0.0])
+    p_def = simple_network.default_parameters()
+    t_eval = jnp.linspace(0.0, 10.0, 11)
+    rng = [(0.1, 0.5)]
+
+    def make_fn(adjoint):
+        reactor = aquakin.BatchReactor(simple_network, cond, adjoint=adjoint)
+
+        def fn(z):
+            p = p_def.at[0].set(z[0])
+            sol = reactor.solve(C0, params=p, t_span=(0.0, 10.0), t_eval=t_eval)
+            return sol.C_named("B")[-1]
+
+        return fn
+
+    # default adjoint (reverse-capable); the dependency-free forward adjoint.
+    rev = aquakin.dgsm(make_fn(None), rng, input_names=["A_to_B.k"],
+                       n_samples=8, seed=1, ad_mode="reverse")
+    fwd = aquakin.dgsm(make_fn(aquakin.forward_adjoint()), rng,
+                       input_names=["A_to_B.k"], n_samples=8, seed=1,
+                       ad_mode="forward")
+    np.testing.assert_allclose(
+        np.asarray(fwd.sobol_total_bound),
+        np.asarray(rev.sobol_total_bound), rtol=1e-6,
+    )
+
+
 def test_dgsm_vector_output_returns_per_output_results():
     """A vector-valued fn returns one result per output, each with its name and
     the right input ranking."""

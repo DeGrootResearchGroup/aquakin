@@ -335,6 +335,60 @@ def test_grad_flows_through_layered_solve(net, cond):
     assert float(g) < 0.0
 
 
+# --- steady_state() root-find ------------------------------------------------
+
+def _fed_reactor(net, cond, **kw):
+    """A biofilm with a continuous bulk feed of A, so the bulk has a unique
+    feed-driven steady state (steady_state needs the feed to drive the bulk --
+    it does not work with clamp_bulk or held-fixed species)."""
+    feed = jnp.zeros(net.n_species).at[net.species_index["A"]].set(1.0)
+    return _reactor(net, cond, n_layers=4, feed=feed, dilution_rate=2.0, **kw)
+
+
+def test_steady_state_converges_to_a_fixed_point(net, cond):
+    """steady_state finds y* with RHS(y*) = 0: a short forward solve started from
+    the returned profile does not move it. The bulk sits at its feed-driven
+    value, and the gradient flows through the implicit-function-theorem adjoint."""
+    r = _fed_reactor(net, cond)
+    p = net.default_parameters()
+    n_comp = r.n_layers + 1
+    C0 = jnp.full((n_comp, net.n_species), 0.5)
+
+    ss = r.steady_state(C0, p, warmup=5.0)
+    prof = ss.profile[-1]
+    # A fixed point of the dynamics: advancing it barely changes it.
+    advanced = r.solve(prof, params=p, t_span=(0.0, 0.5)).profile[-1]
+    assert float(jnp.max(jnp.abs(advanced - prof))) < 1e-8
+    # The bulk equilibrates near the feed (dilution >> the slow decay loss).
+    assert 0.9 < float(prof[0, net.species_index["A"]]) < 1.0
+
+    # Differentiable w.r.t. a rate constant via optimistix ImplicitAdjoint.
+    def loss(k):
+        pk = p.at[net.param_index["A_to_B.k"]].set(k)
+        return jnp.sum(r.steady_state(C0, pk, warmup=5.0).profile[-1])
+
+    g = jax.grad(loss)(float(p[net.param_index["A_to_B.k"]]))
+    assert np.isfinite(float(g))
+
+
+def test_steady_state_can_stall_silently(net, cond):
+    """The documented failure mode: the root-find uses throw=False, so when it is
+    not given enough iterations (or a good seed) it returns a NON-steady profile
+    without raising. Here a 1-step solve from a far seed does not reach the fixed
+    point, and the returned profile is demonstrably not steady -- advancing it
+    moves it substantially. Callers must therefore verify convergence (or, for a
+    genuinely slow/stiff maturation, integrate forward instead)."""
+    r = _fed_reactor(net, cond)
+    p = net.default_parameters()
+    n_comp = r.n_layers + 1
+    far_seed = jnp.full((n_comp, net.n_species), 0.01)   # far from the fed state
+
+    stalled = r.steady_state(far_seed, p, warmup=0.0, newton_steps=1).profile[-1]
+    advanced = r.solve(stalled, params=p, t_span=(0.0, 0.5)).profile[-1]
+    # NOT a fixed point: the under-iterated result still evolves a lot.
+    assert float(jnp.max(jnp.abs(advanced - stalled))) > 0.1
+
+
 def test_64bit_precision_enabled():
     import jax
     assert jax.config.x64_enabled
