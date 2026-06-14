@@ -426,3 +426,22 @@ def test_autonomous_default_is_wrong_for_time_forced_parameter():
 
     g_auto = jax.grad(loss)(p0)
     assert float(g_auto[1]) == pytest.approx(0.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("solve", [esdirk_adjoint_solve, implicit_euler_adjoint_solve])
+def test_adjoint_solvers_validate_t_eval(solve):
+    """Out-of-span or non-ascending save times must raise, not silently return
+    inf / wrong values (the backward scan injects cotangents only at landed
+    steps). Matches the reactor `solve` contract."""
+    def rhs(t, y, p):
+        return -p[0] * y
+
+    y0 = jnp.array([1.0])
+    p = jnp.array([1.0])
+    with pytest.raises(ValueError, match="within t_span"):
+        solve(rhs, y0, p, (0.0, 1.0), t_eval=jnp.array([0.5, 2.0]))
+    with pytest.raises(ValueError, match="ascending"):
+        solve(rhs, y0, p, (0.0, 1.0), t_eval=jnp.array([0.8, 0.3]))
+    # A valid t_eval is unaffected (finite states at the requested times).
+    ys = solve(rhs, y0, p, (0.0, 1.0), t_eval=jnp.array([0.5, 1.0]))
+    assert jnp.all(jnp.isfinite(ys)) and ys.shape == (2, 1)
