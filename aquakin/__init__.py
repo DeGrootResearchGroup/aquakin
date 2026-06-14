@@ -42,11 +42,14 @@ from aquakin.plant import (
     BSM1Evaluation,
     BSM2Evaluation,
     CSTRUnit,
+    ComponentBalance,
     IdentityTranslator,
     InfluentFractions,
     InfluentSeries,
+    MassBalance,
     characterize_influent,
     fractionate,
+    mass_balance,
     read_influent_csv,
     MixerUnit,
     Plant,
@@ -78,6 +81,10 @@ from aquakin.plant import (
 )
 from aquakin.schema.loader import load_network, load_network_from_file
 from aquakin.utils.balance import check_conservation
+from aquakin.utils.composition import (
+    canonical_content,
+    composition_table,
+)
 from aquakin.utils.units import (
     UnitWarning,
     check_network_units,
@@ -129,7 +136,9 @@ __all__ = [
     "aeration_energy",
     "calibrate",
     "carbon_mass",
+    "canonical_content",
     "check_conservation",
+    "composition_table",
     "check_network_units",
     "parse_units",
     "UnitWarning",
@@ -154,6 +163,9 @@ __all__ = [
     "integrate_ensemble",
     "load_network",
     "load_network_from_file",
+    "ComponentBalance",
+    "MassBalance",
+    "mass_balance",
     "mixing_energy",
     "operational_cost_index",
     "operational_cost_index_bsm2",

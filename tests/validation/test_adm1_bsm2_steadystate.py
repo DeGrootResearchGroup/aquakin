@@ -104,8 +104,16 @@ def _digester_cstr_solution():
 
 @pytest.mark.validation
 def test_adm1_reproduces_bsm2_digester_steady_state():
-    """The CSTR settles onto the published BSM2 steady state (core states
-    within ~6%; methane output much tighter)."""
+    """The CSTR settles onto the published BSM2 steady state (every state within
+    ~6%; methane output much tighter).
+
+    The biochemical stoichiometry is verified identical to the official BSM2
+    ``adm1_ODE_bsm2.c`` (every reaction's coefficients, including the inorganic
+    C/N balances, match to machine precision), and the kinetic / equilibrium
+    constants match ``adm1init_bsm2.m`` (including the carbonate Ka1 van't Hoff
+    enthalpy). The residual few-percent spread is the difference between this
+    network's charge-balance pH solver and the reference DAE, which the slow,
+    inhibition-sensitive acetate/C4 methanogens amplify."""
     net, C = _digester_cstr_solution()
     si = net.species_index
 
