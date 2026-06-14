@@ -39,8 +39,14 @@ Future networks include UV/TiO₂ and chlorine decay.
 pip install -e ".[test]"
 ```
 
-`aquakin` enables JAX 64-bit mode automatically at import — stiff ODE
-integration requires it.
+> **⚠️ `import aquakin` enables JAX 64-bit (x64) mode process-wide.** The stiff
+> implicit ODE solves need double precision, so at import aquakin runs
+> `jax.config.update("jax_enable_x64", True)` — which is **global JAX state**.
+> Any other JAX code in the same process will use float64 afterward (more memory,
+> different numerics). This is required, not optional. If you are co-running JAX
+> code that needs float32, run aquakin in a separate process. aquakin emits a
+> one-time warning if it overrides an explicit float32 preference (JAX already
+> imported, or `JAX_ENABLE_X64` set off), so the side effect is never silent.
 
 ## Quickstart
 

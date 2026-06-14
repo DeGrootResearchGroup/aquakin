@@ -1,8 +1,37 @@
 """aquakin: reactive scalar transport kinetics for aqueous environmental systems."""
 
+import os as _os
+import sys as _sys
+import warnings as _warnings
+
+# aquakin enables JAX 64-bit (x64) mode at import: the stiff implicit ODE solves
+# need double precision (repeatedly forming small net differences in a stiff
+# Newton step loses the accurate digits at float32). This mutates GLOBAL,
+# process-wide JAX state -- any other JAX code in the same process will use
+# float64 afterward. The behaviour is deliberate and documented, but to keep it
+# from being a *silent* surprise we warn when we are overriding what looks like
+# an explicit float32 preference: JAX was already imported (so other code may be
+# relying on the default float32), or JAX_ENABLE_X64 is set to a false value.
+_jax_already_imported = "jax" in _sys.modules
+
 import jax
 
-jax.config.update("jax_enable_x64", True)
+if not jax.config.jax_enable_x64:
+    _env_x64 = _os.environ.get("JAX_ENABLE_X64", "").strip().lower()
+    _overrides_explicit_choice = (
+        _jax_already_imported or _env_x64 in ("0", "false", "off", "no")
+    )
+    if _overrides_explicit_choice:
+        _warnings.warn(
+            "aquakin is enabling JAX 64-bit (x64) mode, which it requires for "
+            "stiff ODE integration. This is GLOBAL, process-wide JAX state: "
+            "other JAX code in this process will now use float64. It overrides "
+            "an apparent float32 preference (JAX was already imported, or "
+            "JAX_ENABLE_X64 is set off). Enable x64 yourself before importing "
+            "aquakin, or run aquakin in a separate process, to silence this.",
+            stacklevel=2,
+        )
+    jax.config.update("jax_enable_x64", True)
 
 from aquakin.core.conditions import OperatingConditions, SpatialConditions
 from aquakin.core.network import CompiledNetwork, compile_network
