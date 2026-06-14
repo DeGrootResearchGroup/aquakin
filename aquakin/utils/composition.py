@@ -49,7 +49,7 @@ def _p(net: "CompiledNetwork", name: str, default: float = 0.0,
 
 
 # --- per-family species roles (names differ across ASM1/2d/3) ----------------
-_BIOMASS = {"XB_H", "XB_A", "XH", "XPAO", "XAUT", "XA", "XAOB", "XNOB"}
+_BIOMASS = {"XB_H", "XB_A", "XH", "XPAO", "XAUT", "XA", "XAOB", "XNOB", "XAMX"}
 _STORAGE = {"SA", "XPHA", "XSTO", "XGLY"}          # COD = 1, no N / P
 _NPOOL = {"SNH", "SNH4", "SND", "XND"}             # N = 1
 _PPOOL = {"SPO4", "SPO", "XPP"}                    # P = 1
@@ -183,6 +183,7 @@ _BUILDERS = {
     "asm1_ammonia_limitation": _asm_composition,
     "asm3_2step": _asm_composition,
     "asm3_2step_n2o": _asm_composition,
+    "asm3_2step_anammox": _asm_composition,
     "asm2d": _asm_composition,
     "asm2d_tud": _asm_composition,
     "asm3": _asm_composition,

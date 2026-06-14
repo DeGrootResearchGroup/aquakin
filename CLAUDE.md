@@ -74,6 +74,27 @@ The shipped networks currently are:
   (`tests/integration/test_asm3_2step_n2o.py`). NOTE: `SNO` is **nitric oxide**
   here, which collides with the ASM1 family's `SNO` (= nitrate); the composition
   table disambiguates by the presence of `SNO3`.
+- `asm3_2step_anammox` — `asm3_2step` extended with **anammox** (anaerobic
+  ammonium-oxidising) bacteria, after Strous et al. (1998, 1999). An additive
+  **`extends: asm3_2step`** file (a new biomass `XAMX` + its 3 processes; the
+  inheritance sweet spot): anammox oxidises ammonium with nitrite as the electron
+  acceptor straight to N₂ (no organic carbon), oxidising a little extra nitrite to
+  nitrate to fix CO₂ for growth — the canonical Strous stoichiometry **NH₄ : NO₂ :
+  NO₃ ≈ 1 : 1.32 : 0.26** (1.02 N₂ per NH₄). The stoichiometry is written
+  symbolically in the yield `Y_AMX` and the nitrate-production ratio `f_NO3_AMX`,
+  **derived to conserve COD/N/charge exactly while reproducing the Strous ratios**
+  (verified to machine precision; the matrix is COD-exact, unlike the raw
+  measured coefficients which carry a ~1% imbalance). Anammox is very slow
+  (μ ≈ 0.08 d⁻¹), high-affinity (`K_NH4`/`K_NO2` ≈ 0.05–0.07 gN/m³), reversibly
+  **O₂-inhibited** (a `monod_inh` O₂ term), with the source 70 kJ/mol activation
+  energy (θ ≈ 1.10). 16 compounds, 22 processes. With AOB + NOB + anammox all
+  present the network supports **partial-nitritation/anammox (PN/A)
+  deammonification** (autotrophic N removal — the sidestream process); the
+  anammox half is validated as anaerobic deammonification (NH₄ + NO₂ → N₂,
+  `tests/integration/test_asm3_2step_anammox.py`, `examples/anammox_deammonification.py`).
+  A continuous low-DO PN/A flowsheet (sustained partial nitritation + anammox at
+  steady state) is the natural follow-up — it needs a continuously-aerated
+  reactor, which a `BatchReactor` cannot maintain.
 - `asm3_biop` — ASM3 + bio-P extension.
 - `adm1` — Anaerobic Digestion Model No. 1 (Batstone et al. 2002), BSM2
   implementation form (Rosen & Jeppsson 2006). 29 states (26 liquid + 3 gas
@@ -1315,6 +1336,7 @@ aquakin/
 │   │   ├── asm3.yaml                # ASM3 (storage products replace hydrolysis)  [units: _fix_sumo_units.py]
 │   │   ├── asm3_2step.yaml          # ASM3 + two-step nitrification/denitrification (explicit NO2; Kaelin 2009)
 │   │   ├── asm3_2step_n2o.yaml      # asm3_2step + two-pathway AOB N2O (NH2OH/NO/N2O; Pocquet 2016); extends: asm3_2step
+│   │   ├── asm3_2step_anammox.yaml  # asm3_2step + anammox (NH4+NO2->N2; Strous 1998/1999); extends: asm3_2step
 │   │   ├── asm3_biop.yaml           # ASM3 + bio-P extension           [units: _fix_sumo_units.py]
 │   │   ├── adm1.yaml                # ADM1 anaerobic digestion (BSM2 form, Rosen-Jeppsson
 │   │   │                            #   2006); complete: liquid + gas headspace, state-derived
