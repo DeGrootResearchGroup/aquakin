@@ -125,6 +125,12 @@ class PlantCheck:
 class PlantSolution:
     """Result of :meth:`Plant.solve`.
 
+    Holds the integrated unit **states** (:attr:`state`), not the inter-unit
+    streams: the plant integrates states only, so an effluent / recycle stream is
+    *reconstructed on demand* from the saved states via :meth:`stream` (the whole
+    sweep is reconstructed once and cached on the solution). Per-unit
+    concentrations are read directly with :meth:`C_named` / :meth:`unit_state`.
+
     Attributes
     ----------
     t : jnp.ndarray
@@ -185,6 +191,19 @@ class PlantSolution:
         """The ``"unit.port"`` output endpoints :meth:`Plant.stream` accepts
         (a convenience alias for ``plant.list_ports()``)."""
         return self.plant.list_ports()
+
+    def stream(self, endpoint: str, params: Optional[jnp.ndarray] = None):
+        """Reconstruct one output stream's trajectory -- ``sol.stream("effluent")``.
+
+        A convenience for ``plant.stream(sol, endpoint, params)`` (the plant is
+        carried on the solution). **Inter-unit streams are not stored** -- the
+        plant integrates unit states, so the effluent/recycle streams are
+        recomputed from the saved states; the whole sweep is reconstructed once
+        and cached on this solution, so repeated calls for different ports are
+        cheap. ``endpoint`` is a semantic name (``"effluent"``, ``"ras"``, ...) or
+        a ``"unit.port"`` (see :meth:`available_streams` / ``plant.list_streams``).
+        """
+        return self.plant.stream(self, endpoint, params)
 
     def C_named(self, unit_name: str, species: str) -> jnp.ndarray:
         """Return a single species' trajectory in a single unit.
@@ -1384,6 +1403,40 @@ class Plant:
         all_outputs, _ = self._resolve_streams(jnp.asarray(t), states, params_full)
         return all_outputs
 
+    def _cached_streams(self, solution: "PlantSolution", params_full):
+        """Reconstruct **every** unit-output stream over a whole solution, once.
+
+        The plant integrates unit *states*, not the inter-unit streams, so each
+        stream is recomputed from the saved states. This does that for all
+        ``(unit, port)`` outputs in a single pass over the saved times, and
+        **caches** the result on the solution keyed by the parameter vector --
+        so a sequence of ``plant.stream(sol, ...)`` calls (effluent, RAS,
+        wastage, ...) costs one reconstruction, not one per stream.
+
+        Returns ``{(unit, port): (Q (n_t,), C (n_t, n_species))}``. Under tracing
+        (a differentiated/jitted solve) the parameter vector cannot be
+        materialised into a cache key, so the pass runs uncached.
+        """
+        key, concrete = _concrete_teval_key(params_full)
+        cache = solution.__dict__.setdefault("_stream_cache", {})
+        if concrete and key in cache:
+            return cache[key]
+        self._build_state_layout()
+        self._build_parameter_layout()
+        ts = jnp.asarray(solution.t)
+        acc: dict = {}                       # (unit, port) -> ([Q...], [C...])
+        for i in range(ts.shape[0]):
+            states = self._split_state(jnp.asarray(solution.state[i]))
+            outs, _ = self._resolve_streams(ts[i], states, params_full)
+            for endpoint_key, s in outs.items():
+                qc = acc.setdefault(endpoint_key, ([], []))
+                qc[0].append(s.Q)
+                qc[1].append(s.C)
+        result = {k: (jnp.stack(q), jnp.stack(c)) for k, (q, c) in acc.items()}
+        if concrete:
+            cache[key] = result
+        return result
+
     def stream(
         self,
         solution: "PlantSolution",
@@ -1392,10 +1445,12 @@ class Plant:
     ) -> StreamSeries:
         """Reconstruct a named output stream's trajectory from a solution.
 
-        Walks the solution's saved states and rebuilds one unit-output stream
-        (flow + concentration over time) -- e.g. the secondary-clarifier
-        effluent, which the plant does not store directly because it integrates
-        unit states only.
+        **The plant integrates unit states, not the inter-unit streams**, so a
+        stream such as the secondary-clarifier effluent is *not stored* -- it is
+        recomputed (flow + concentration over time) from the saved states on
+        demand. The whole output sweep is reconstructed once and **cached on the
+        solution** (see :meth:`_cached_streams`), so a sequence of ``stream``
+        calls for different ports reuses one reconstruction.
 
         Parameters
         ----------
@@ -1440,17 +1495,9 @@ class Plant:
         params_full = (
             self.default_parameters() if params is None else jnp.asarray(params)
         )
-        ts = solution.t
-        Q_list, C_list = [], []
-        for i in range(ts.shape[0]):
-            outs = self.outputs_at(ts[i], solution.state[i], params_full)
-            s = outs[(unit, port)]
-            Q_list.append(s.Q)
-            C_list.append(s.C)
-        return StreamSeries(
-            t=ts, Q=jnp.stack(Q_list), C=jnp.stack(C_list),
-            network=self.units[unit].network,
-        )
+        Q, C = self._cached_streams(solution, params_full)[(unit, port)]
+        return StreamSeries(t=solution.t, Q=Q, C=C,
+                            network=self.units[unit].network)
 
     def register_stream(self, name: str, endpoint: str) -> "Plant":
         """Register a **semantic name** for an output ``"unit.port"`` endpoint.

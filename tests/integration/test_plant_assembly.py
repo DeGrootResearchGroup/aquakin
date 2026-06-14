@@ -568,6 +568,53 @@ def test_stream_unknown_endpoint_errors(simple_net):
         plant.stream(sol, "nope")
 
 
+def test_stream_reconstruction_is_cached_on_the_solution(simple_net):
+    """The whole output sweep is reconstructed once and cached on the solution,
+    so a second stream call (any port) reuses it -- and the result matches the
+    per-timestep outputs_at reconstruction exactly."""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    sol = plant.solve(t_span=(0.0, 50.0), t_eval=jnp.linspace(0.0, 50.0, 6))
+
+    assert "_stream_cache" not in sol.__dict__          # nothing cached yet
+    eff = plant.stream(sol, "tank")
+    cache = sol.__dict__["_stream_cache"]
+    assert len(cache) == 1                              # one params key
+    cached_map = next(iter(cache.values()))
+    assert ("tank", "out") in cached_map                # all ports reconstructed
+
+    # A second call (same params) does not rebuild -- still one key.
+    plant.stream(sol, "tank")
+    assert len(sol.__dict__["_stream_cache"]) == 1
+
+    # Correctness: the cached stream equals the manual outputs_at trajectory.
+    Q = jnp.stack([plant.outputs_at(sol.t[i], sol.state[i])[("tank", "out")].Q
+                   for i in range(sol.t.shape[0])])
+    C = jnp.stack([plant.outputs_at(sol.t[i], sol.state[i])[("tank", "out")].C
+                   for i in range(sol.t.shape[0])])
+    assert jnp.allclose(eff.Q, Q) and jnp.allclose(eff.C, C)
+
+
+def test_solution_stream_convenience_delegates(simple_net):
+    """sol.stream(endpoint) is plant.stream(sol, endpoint) with the plant carried
+    on the solution, sharing the same cache."""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    sol = plant.solve(t_span=(0.0, 20.0), t_eval=jnp.linspace(0.0, 20.0, 4))
+    a = sol.stream("tank")
+    b = plant.stream(sol, "tank")
+    assert jnp.allclose(a.C, b.C) and jnp.allclose(a.Q, b.Q)
+
+
+def test_stream_cache_keys_on_parameters(simple_net):
+    """Different parameter vectors get separate cache entries (the cache never
+    serves a stream reconstructed for other parameters)."""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    sol = plant.solve(t_span=(0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 3))
+    p = plant.default_parameters()
+    plant.stream(sol, "tank", params=p)
+    plant.stream(sol, "tank", params=p.at[0].set(p[0] * 1.5))
+    assert len(sol.__dict__["_stream_cache"]) == 2
+
+
 def test_states_by_unit_inverts_initial_state(simple_net):
     """states_by_unit splits a flat vector back into the per-unit pieces that
     initial_state(overrides=...) assembled -- the two are inverses."""

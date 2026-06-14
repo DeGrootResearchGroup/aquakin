@@ -2066,16 +2066,23 @@ Key types:
     recycles resolved) — for inspecting the dynamics without a full solve. Same
     layout as `state`; split it with `states_by_unit`. (Wraps the private `_rhs`,
     building the layouts internally.)
-  - **Effluent reconstruction.** The plant integrates unit *states*, not the
-    inter-unit streams, so a stream such as the secondary-clarifier effluent is
-    recomputed on demand. `plant.stream(solution, "clarifier.overflow")` walks
-    the solution's saved states, re-runs the output sweep at each, and returns a
-    `StreamSeries` (`t`, `Q`, `C` shape `(n_t, n_species)`, `network`, with a
-    `C_named(species)` accessor) — feed it straight to `effluent_averages`.
-    `plant.outputs_at(t, state, params=None)` is the single-instant primitive
-    (returns `{(unit, port): Stream}`); both reuse the same `_resolve_streams`
-    helper the RHS uses, so the reconstruction matches the integrated wiring
-    exactly (including resolved recycle flows).
+  - **Effluent reconstruction (streams are recomputed, not stored).** The plant
+    integrates unit *states*, not the inter-unit streams, so a stream such as the
+    secondary-clarifier effluent is **recomputed on demand** from the saved
+    states — it is *not* in the solution. `plant.stream(solution,
+    "clarifier.overflow")` (or the convenience `solution.stream("effluent")`,
+    plant carried on the solution) returns a `StreamSeries` (`t`, `Q`, `C` shape
+    `(n_t, n_species)`, `network`, with a `C_named(species)` accessor) — feed it
+    straight to `effluent_averages`. **The whole output sweep (every `(unit,
+    port)`) is reconstructed in one pass and cached on the solution**
+    (`Plant._cached_streams`, keyed by the parameter vector via
+    `_concrete_teval_key`; skipped under tracing), so a sequence of `stream`
+    calls for different ports — or `evaluate_bsm*` reading ~8 streams — costs one
+    reconstruction, not one per stream. `plant.outputs_at(t, state, params=None)`
+    is the single-instant primitive (returns `{(unit, port): Stream}`,
+    uncached); both reuse the same `_resolve_streams` helper the RHS uses, so the
+    reconstruction matches the integrated wiring exactly (including resolved
+    recycle flows).
   - **Semantic stream shortcuts.** `plant.stream(sol, …)` also accepts an
     engineering **name** instead of a `"unit.port"` — the builders register a
     `named_streams` map (`plant.register_stream(name, endpoint)`,
