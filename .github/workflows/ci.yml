@@ -181,3 +181,52 @@ jobs:
           pytest -m validation -q -n 1
           --splits 4 --group ${{ matrix.group }}
           --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0
+
+  # ---- Pre-merge smoke slice: a rotating shard of the slow suite, on PRs -------
+  # The `slow`/`validation` suites run only on push-to-main, so a regression that
+  # lives solely in them is invisible on the PR and surfaces only after merge (the
+  # class behind the recent test_asm_family signature break and the slow-suite
+  # OOM). The fast gate's signature-contract test catches the *signature* sub-case
+  # cheaply; this job adds breadth -- it EXECUTES a bounded ~1/18 slice of the
+  # slow set on every PR, so shared-fixture breaks, whole-plant call-site
+  # regressions, and memory creep get an early warning before merge. It is
+  # deliberately probabilistic: a single PR runs only ~8 of the ~141 slow tests,
+  # but the shard ROTATES by run number, so consecutive runs cover the whole set,
+  # and a fixture break (which hits most slow tests) is caught by any shard
+  # immediately. Scope is `slow and not validation`: those tests have no recorded
+  # durations, so pytest-split partitions them EVENLY by count (no empty shard,
+  # unlike a duration-skewed slow+validation split), and it excludes the heaviest
+  # ~4-min published-data validation tests, keeping the slice time predictable.
+  # A bare `--collect-only` would NOT catch the kind of runtime call-site break
+  # this targets, so the slice must execute. Off the fast-gate critical path
+  # (runs in parallel); 20 min is a safety ceiling, not the target.
+  smoke:
+    name: pre-merge smoke (rotating slow shard)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Run a rotating slow-suite shard
+        # Pick the shard from the run number so consecutive runs rotate through
+        # all 18 groups (GitHub expression syntax has no modulo, so compute it in
+        # the shell). 1-indexed for pytest-split (--group is 1..N).
+        run: |
+          group=$(( ${{ github.run_number }} % 18 + 1 ))
+          echo "Pre-merge smoke: slow shard ${group}/18 (rotates by run number)"
+          pytest -m "slow and not validation" -q -n 1 \
+            --splits 18 --group "${group}" \
+            --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0

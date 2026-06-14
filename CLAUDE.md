@@ -2805,6 +2805,19 @@ nor concentrating it in a few files makes the whole suite fast.
   balances by `.test_durations` where recorded — currently the validation set —
   else evenly by count, which is what bounds the *memory*; duration-balancing
   only evens the wall time.)
+- The **`smoke`** job (`pytest -m "slow and not validation" --splits 18 --group
+  <rotating>`, 3.12) runs on **every PR** as an early-warning slice of the
+  merge-only `slow` set: it *executes* a bounded ~1/18 shard (~8 tests) so
+  shared-fixture breaks, whole-plant call-site regressions and memory creep show
+  up before merge, not after. It is deliberately probabilistic — a single PR
+  runs only ~8 of the ~141 slow tests — but the shard **rotates by run number**,
+  so consecutive runs cover the whole set, and a fixture break (which hits most
+  slow tests) is caught by any shard. Scope is `slow and not validation`: with no
+  recorded durations those tests split evenly by count (no empty shard, unlike a
+  duration-skewed slow+validation split) and the heaviest ~4-min published-data
+  tests are excluded, keeping the slice time predictable. It complements the
+  fast-gate signature-contract test (`tests/unit/test_api_signatures.py`), which
+  catches the *signature* sub-case deterministically; the smoke adds breadth.
 
 **Branch protection:** the required status checks must be the fast-gate jobs
 (`fast tests (py3.11)` / `(py3.12)`) — **not** `slow`/`validation`, which do not
