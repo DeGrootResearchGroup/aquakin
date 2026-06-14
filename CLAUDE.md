@@ -2649,6 +2649,17 @@ kept for BSM1, wrapped by **`evaluate_bsm1(plant, solution, params)`** →
 internal-recycle / RAS / wastage pumps. Demonstrated in
 `examples/bsm1_dry_weather.py`.
 
+**Labeled report (`str(eval)` / `eval.report()`).** Both `BSM1Evaluation` and
+`BSM2Evaluation` render a units-annotated breakdown when printed: the EQI
+(`kg poll.-units/d`) and OCI, then each OCI term with its physical value, units
+(`kWh/d`, `kg TSS/d`, `kg COD/d`, `kg CH4/d`) and **signed OCI contribution**
+(so the methane credit shows as `−6·CH4` and the BSM2 heating enters via
+`max(0, HE − 7·methane)`), the effluent averages with currency-specific units,
+the aerated reactors counted, and the `oci_note` caveat (always shown, wrapped).
+The raw float fields stay available for programmatic use; `str` delegates to
+`report()`. So the headline indices are not bare floats to misread against
+published Alex 2008 / Gernaey 2014 values (issue #153).
+
 **Top-level exports + `StreamSeries`-friendly kernels.** The metric kernels
 (`effluent_quality_index`, `effluent_averages`, `derived_TSS`/`COD`/`BOD`/`TKN`,
 `aeration_energy`, `pumping_energy`, `mixing_energy`, `carbon_mass`,

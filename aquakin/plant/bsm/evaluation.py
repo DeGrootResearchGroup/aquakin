@@ -23,6 +23,7 @@ state and feed flow (see ``_methane_production`` / ``heating_energy``).
 
 from __future__ import annotations
 
+import textwrap
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -61,10 +62,55 @@ _DIGESTER_FEED_PORT = "sludge_mix.out"
 _DIGESTER_TARGET_T_C = 35.0     # digester operating temperature (BSM2)
 _DIGESTER_FEED_T_C = 15.0       # default feed temperature when streams carry no T
 
+# Units for the keys returned by effluent_averages (g/m³, currency-specific).
+_EFFLUENT_UNITS = {
+    "COD": "g COD/m³", "BOD": "g BOD/m³", "TSS": "g SS/m³",
+    "TKN": "g N/m³", "SNH": "g N/m³", "SNO": "g N/m³",
+}
+
+
+def _render_eval_report(title, eqi, oci, oci_formula, terms, effluent,
+                        aerated_tanks, note):
+    """Render a labeled, units-annotated EQI / OCI report.
+
+    ``terms`` is a list of ``(label, value, unit, contribution)`` rows, where
+    ``contribution`` is the term's signed addition to the OCI (``None`` for a row
+    that enters the index non-linearly, whose contribution column is left blank).
+    """
+    width = max((len(lbl) for lbl, *_ in terms), default=0)
+    lines = [
+        title, "=" * len(title),
+        f"  EQI  Effluent Quality Index = {eqi:14.1f}  kg poll.-units/d "
+        f" (lower is better)",
+        f"  OCI  Operational Cost Index = {oci:14.1f}  (weighted cost units)",
+        "",
+        f"  OCI = {oci_formula}",
+        f"  {'term':<{width}}  {'value':>12}  {'unit':<9}  {'OCI +=':>12}",
+    ]
+    for lbl, val, unit, contrib in terms:
+        c = "" if contrib is None else f"{contrib:12.1f}"
+        lines.append(f"  {lbl:<{width}}  {val:12.1f}  {unit:<9}  {c:>12}")
+    if effluent:
+        lines += ["", "  Effluent quality (time/flow-weighted averages):"]
+        for key, val in effluent.items():
+            lines.append(f"    {key:<4} {val:9.2f}  {_EFFLUENT_UNITS.get(key, 'g/m³')}")
+    if aerated_tanks:
+        lines.append(f"  Aerated reactors counted: {', '.join(aerated_tanks)}")
+    if note:
+        lines.append("")
+        lines += textwrap.wrap(note, width=76, initial_indent="  Note: ",
+                               subsequent_indent="        ")
+    return "\n".join(lines)
+
 
 @dataclass
 class BSM2Evaluation:
     """Headline BSM2 performance indices from a solved plant.
+
+    ``str(eval)`` / :meth:`report` give a labeled, units-annotated breakdown of
+    the EQI, the OCI and every component term (with its OCI contribution) plus
+    the ``oci_note`` caveat; the raw fields below stay available for programmatic
+    use.
 
     Attributes
     ----------
@@ -117,6 +163,39 @@ class BSM2Evaluation:
         "steady state); the heating feed temperature defaults to 15 C unless "
         "supplied."
     )
+
+    def report(self) -> str:
+        """A labeled, units-annotated EQI / OCI breakdown (also ``str(eval)``).
+
+        Shows each OCI term with its physical value, units, and signed
+        contribution to the index, the effluent averages, and the ``oci_note``
+        caveat -- so the headline numbers are not bare floats to misread against
+        published values.
+        """
+        heat = max(0.0, self.heating_energy - 7.0 * self.methane_production)
+        terms = [
+            ("Aeration energy  AE", self.aeration_energy, "kWh/d",
+             self.aeration_energy),
+            ("Pumping energy   PE", self.pumping_energy, "kWh/d",
+             self.pumping_energy),
+            ("Mixing energy    ME", self.mixing_energy, "kWh/d",
+             self.mixing_energy),
+            ("Sludge prod.  (x3)", self.sludge_production, "kg TSS/d",
+             3.0 * self.sludge_production),
+            ("Ext. carbon   (x3)", self.carbon_mass, "kg COD/d",
+             3.0 * self.carbon_mass),
+            ("Methane      (x-6)", self.methane_production, "kg CH4/d",
+             -6.0 * self.methane_production),
+            ("Heating energy HE", self.heating_energy, "kWh/d", None),
+            ("  net heating (>=0)", heat, "kWh/d", heat),
+        ]
+        return _render_eval_report(
+            "BSM2 performance indices", self.eqi, self.oci,
+            "AE + PE + ME + 3*sludge + 3*carbon - 6*methane + max(0, HE - 7*methane)",
+            terms, self.effluent, self.aerated_tanks, self.oci_note)
+
+    def __str__(self) -> str:
+        return self.report()
 
 
 def _as_reactors(plant) -> list:
@@ -402,6 +481,10 @@ def evaluate_bsm2(
 class BSM1Evaluation:
     """Headline BSM1 performance indices from a solved plant.
 
+    ``str(eval)`` / :meth:`report` give a labeled, units-annotated breakdown of
+    the EQI, the OCI and every component term plus the ``oci_note`` caveat; the
+    raw fields below stay available for programmatic use.
+
     Attributes
     ----------
     eqi : float
@@ -435,6 +518,27 @@ class BSM1Evaluation:
         "wastage TSS mass flow (plant TSS-inventory change neglected -- ~0 at "
         "steady state)."
     )
+
+    def report(self) -> str:
+        """A labeled, units-annotated EQI / OCI breakdown (also ``str(eval)``).
+
+        Shows each OCI term with its value, units and signed contribution to the
+        index, the effluent averages, and the ``oci_note`` caveat."""
+        terms = [
+            ("Aeration energy  AE", self.aeration_energy, "kWh/d",
+             self.aeration_energy),
+            ("Pumping energy   PE", self.pumping_energy, "kWh/d",
+             self.pumping_energy),
+            ("Sludge prod.  (x5)", self.sludge_production, "kg TSS/d",
+             5.0 * self.sludge_production),
+        ]
+        return _render_eval_report(
+            "BSM1 performance indices", self.eqi, self.oci,
+            "AE + PE + 5*sludge", terms, self.effluent, self.aerated_tanks,
+            self.oci_note)
+
+    def __str__(self) -> str:
+        return self.report()
 
 
 def evaluate_bsm1(

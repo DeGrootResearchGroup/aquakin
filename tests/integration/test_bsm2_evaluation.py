@@ -237,3 +237,45 @@ def test_effluent_averages_single_point(asm1):
     assert avg["SNH"] == pytest.approx(2.0, rel=1e-9)
     assert avg["SNO"] == pytest.approx(8.0, rel=1e-9)
     assert all(jnp.isfinite(v) for v in avg.values())
+
+
+# --- labeled EQI/OCI report (#153) -- fast, no solve --------------------------
+
+_EFF = {"COD": 48.2, "BOD": 2.7, "TSS": 12.5, "TKN": 4.6, "SNH": 1.2, "SNO": 8.9}
+
+
+def test_bsm2_report_is_labeled_with_units_and_breakdown():
+    from aquakin.plant.bsm import BSM2Evaluation
+    ev = BSM2Evaluation(
+        eqi=6123.4, oci=0.0, aeration_energy=3784.2, pumping_energy=1689.0,
+        mixing_energy=768.0, sludge_production=2280.5, carbon_mass=800.0,
+        methane_production=1010.3, heating_energy=4200.0, effluent=_EFF,
+        aerated_tanks=["tank3", "tank4", "tank5"])
+    r = ev.report()
+    assert str(ev) == r                                    # __str__ delegates
+    # headline labels + units
+    for token in ("BSM2 performance indices", "EQI", "OCI", "kg poll.-units/d",
+                  "kWh/d", "kg TSS/d", "kg COD/d", "kg CH4/d", "g COD/m³"):
+        assert token in r, token
+    # the OCI formula and the caveat (oci_note) are always shown
+    assert "AE + PE + ME + 3*sludge" in r
+    assert "Note:" in r and "Gernaey" in r
+    # the methane term shows its negative (credit) contribution
+    assert f"{-6.0 * 1010.3:12.1f}".strip() in r
+    # every aerated reactor is named
+    assert "tank3, tank4, tank5" in r
+
+
+def test_bsm1_report_is_labeled_and_str_delegates():
+    from aquakin.plant.bsm import BSM1Evaluation
+    ev = BSM1Evaluation(
+        eqi=6443.2, oci=3341.4 + 388.2 + 5.0 * 2082.3, aeration_energy=3341.4,
+        pumping_energy=388.2, sludge_production=2082.3, effluent=_EFF,
+        aerated_tanks=["tank3", "tank4", "tank5"])
+    r = str(ev)
+    assert "BSM1 performance indices" in r
+    assert "AE + PE + 5*sludge" in r and "Copp 2002" in r
+    assert "kWh/d" in r and "kg TSS/d" in r and "kg poll.-units/d" in r
+    # the OCI equals the sum of the displayed contributions
+    assert ev.oci == pytest.approx(
+        ev.aeration_energy + ev.pumping_energy + 5.0 * ev.sludge_production)
