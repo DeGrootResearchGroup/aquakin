@@ -92,9 +92,18 @@ The shipped networks currently are:
   deammonification** (autotrophic N removal — the sidestream process); the
   anammox half is validated as anaerobic deammonification (NH₄ + NO₂ → N₂,
   `tests/integration/test_asm3_2step_anammox.py`, `examples/anammox_deammonification.py`).
-  A continuous low-DO PN/A flowsheet (sustained partial nitritation + anammox at
-  steady state) is the natural follow-up — it needs a continuously-aerated
-  reactor, which a `BatchReactor` cannot maintain.
+  The full single-stage **PN/A sidestream flowsheet** is a continuously-fed
+  low-DO `CSTRUnit` (`examples/pna_sidestream.py`, regression-tested in
+  `tests/integration/test_pna_sidestream.py`): a high-ammonium reject stream with
+  no organic carbon reaches an autotrophic-N-removal steady state (~86% TIN
+  removal) where anammox is retained, **NOB are out-competed for nitrite and wash
+  out**, and the effluent nitrate is the anammox autotrophic byproduct (~26% of N
+  removed) rather than NOB activity. Three couplings control it: a long HRT
+  (~30 d) retains the slow anammox (in a plain CSTR SRT = HRT); a low kLa holds
+  DO ~0.05 gO₂/m³ (anammox is strongly O₂-inhibited — `K_O2_AMX_inh` is small, so
+  the viable DO window is narrow); and a limited feed alkalinity caps nitritation
+  at ~half the ammonium, supplying anammox its ~1:1.3 NH₄:NO₂ feed. (A
+  `BatchReactor` cannot sustain low DO, so PN/A needs the continuous reactor.)
 - `asm3_biop` — ASM3 + bio-P extension.
 - `adm1` — Anaerobic Digestion Model No. 1 (Batstone et al. 2002), BSM2
   implementation form (Rosen & Jeppsson 2006). 29 states (26 liquid + 3 gas
