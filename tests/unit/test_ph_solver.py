@@ -274,3 +274,35 @@ def test_activity_gradient_matches_fd():
 def test_invalid_activity_model_raises():
     with pytest.raises(ValueError, match="activity_model"):
         solve_ph(tot_carbonate=1e-3, activity_model="bogus")
+
+
+def test_activity_ionic_strength_does_not_double_count_strong_cations():
+    """Regression: the speciation-layer ionic strength must count each explicit
+    strong cation once. A monovalent strong-cation *state* and the equivalent
+    fixed-charge *offset* describe identical chemistry, so under activity
+    correction they must give the same pH. (Previously the I_strong seed used the
+    post-fold net cation charge, which already contained the explicit cations, so
+    an explicit ``strong_cations`` state was counted twice and shifted the pH.)"""
+    from aquakin.core.speciation import build_ph_derived_fn
+
+    species_index = {"S_cat": 0, "S_CO2": 1}
+    base = dict(field="pH", temperature_field="T", temperature_units="kelvin",
+                activity_model="davies", n_iter=60,
+                totals={"carbonate": {"species": "S_CO2", "molar_mass": 12000}})
+    c = 5.0e-3                # eq/L of monovalent cation charge (buffer scale)
+    co2 = 5.0e-3 * 12000      # gC/m3 so tot_carbonate == 5e-3 mol/L
+
+    # (A) the cation as an explicit strong_cations state (molar_mass 1 -> eq == C)
+    fn_state, _, _ = build_ph_derived_fn(
+        {**base, "z_cation_eq": 0.0,
+         "strong_cations": [{"species": "S_cat", "molar_mass": 1.0, "charge": 1}]},
+        species_index)
+    # (B) the same cation charge as the fixed monovalent offset, no strong state
+    fn_offset, _, _ = build_ph_derived_fn(
+        {**base, "z_cation_eq": c, "strong_cations": []}, species_index)
+
+    cond = {"T": jnp.array([308.15])}
+    pH_state = float(fn_state(jnp.array([c, co2]), None, cond, 0)["pH"])
+    pH_offset = float(fn_offset(jnp.array([0.0, co2]), None, cond, 0)["pH"])
+    assert np.isfinite(pH_state)
+    assert pH_state == pytest.approx(pH_offset, abs=1e-9)

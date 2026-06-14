@@ -171,9 +171,10 @@ def build_ph_derived_fn(
             strong_anion_eq = strong_anion_eq + charge * jnp.maximum(C[idx], 0.0) / mm
 
         if z_condition is not None:
-            z_cation_eq = condition_arrays[z_condition][loc_idx]
+            z_offset = condition_arrays[z_condition][loc_idx]
         else:
-            z_cation_eq = jnp.asarray(z_literal)
+            z_offset = jnp.asarray(z_literal)
+        z_cation_eq = z_offset
         for idx, mm, charge in cation_terms:
             z_cation_eq = z_cation_eq + charge * jnp.maximum(C[idx], 0.0) / mm
 
@@ -181,9 +182,12 @@ def build_ph_derived_fn(
         if activity_model != "none":
             # The pH-independent strong-ion ionic strength 1/2 sum c*z^2. Only the
             # speciation layer knows each strong ion's charge (the solver receives
-            # them lumped into the charge sums), so it is computed here. The fixed
-            # cation-charge offset is taken monovalent (z=1).
-            I_strong = 0.5 * jnp.abs(z_cation_eq)
+            # them lumped into the charge sums), so it is computed here. Seed from
+            # the fixed cation-charge OFFSET (taken monovalent, z=1) -- NOT the
+            # post-fold ``z_cation_eq``, which already contains the explicit strong
+            # cations: using it here would count each strong cation twice (once
+            # mis-weighted in the lump, once in its own z^2 term below).
+            I_strong = 0.5 * jnp.abs(z_offset)
             for idx, mm, charge in strong_terms:
                 I_strong = I_strong + 0.5 * charge * charge * jnp.maximum(C[idx], 0.0) / mm
             for idx, mm, charge in cation_terms:
