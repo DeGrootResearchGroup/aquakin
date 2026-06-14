@@ -39,7 +39,18 @@ The shipped networks currently are:
   correct for any digester size (the network default is the BSM2 3400/300 = 11⅓).
   Inorganic-carbon and -nitrogen
   stoichiometry are symbolic parameter-expressions (the ADM1 elemental
-  balances), so a calibrated yield/composition flows through them. pH is
+  balances), so a calibrated yield/composition flows through them. The full
+  biochemical stoichiometry (all 19 reactions, every coefficient including the
+  inorganic C/N balances) is **verified identical to the official BSM2
+  `adm1_ODE_bsm2.c`** and the kinetic / equilibrium constants to
+  `adm1init_bsm2.m`. *(Fixed: the disintegration and biomass-decay
+  inorganic-nitrogen coefficients had dropped their protein term `f_pr_xc·N_aa`
+  and their `N_bac − N_xc` release respectively — a transcription error in the
+  original YAML, surfaced by the results-level mass balance below and corrected
+  against the official `reac11`; the digester now conserves nitrogen exactly.
+  Also corrected the carbonate Ka1 van't Hoff enthalpy in the shared pH solver,
+  5200 → 7646 J/mol, to the BSM2 / literature value — its absence had biased the
+  inhibition-sensitive acetate methanogens.)* pH is
   **state-derived** through the charge-balance `speciation:` solver (extended to
   the four ADM1 volatile fatty acids), with the strong-ion difference carried by
   explicit conservative `S_cat`/`S_an` ion states (via the solver's
@@ -47,10 +58,18 @@ The shipped networks currently are:
   pH-switch fractions therefore track the instantaneous state. This is the
   complete ADM1 in BSM2 form, **validated** against the published BSM2
   open-loop steady-state digester: run as the benchmark CSTR (3400 m³ liquid /
-  300 m³ headspace, fed at ~178 m³/d, HRT ~19 d) it reproduces the reference
-  steady state to ~1–3% on substrates/biomass/biogas, with a charge-balance pH
-  (~7.27) matching the reference electroneutrality relation
-  (`tests/validation/test_adm1_bsm2_steadystate.py`). Note: the BSM2 init file
+  300 m³ headspace, fed at ~178 m³/d, HRT ~19 d) **with the exact published feed
+  and reference** (the "ADM1 influent (post ASM2ADM interface)" and "ADM1
+  effluent" tables of the official `Results/BSM2_steady_state.pdf`) it reproduces
+  the reference steady state to within **~1.5% on every state** (the ~1% residual
+  is the difference between the charge-balance pH solver and the reference DAE).
+  Methane (the defining output) matches to <1%; the charge-balance pH (~7.26)
+  matches the reference electroneutrality relation
+  (`tests/validation/test_adm1_bsm2_steadystate.py`). *(The earlier standalone
+  test used a slightly mis-transcribed feed — `S_aa`/`X_pr` ~6%/2% high — which
+  alone accounted for a ~5% steady-state offset; the model itself matches a
+  faithful port of `adm1_ODE_bsm2.c` to <1%.)*
+  Note: the BSM2 init file
   lists hydrolysis `k_hyd = 0.3` d⁻¹, but that is inconsistent with its own
   steady state (which needs ~10, the canonical value, for the observed ~99.5%
   particulate conversion at HRT 19 d); the network ships `k_hyd = 10`.
@@ -2075,6 +2094,30 @@ Key types:
     `.methane_production()` time-averaged kg CH₄/d), reusing the OCI biogas
     formula (`evaluate_bsm2`'s `_methane_production` now delegates to it). Raises
     if the plant has no ADM1 digester.
+  - **Results-level mass-balance closure — `plant.mass_balance(sol, …)` (#150).**
+    The first thing an engineer does with a result: *does what went in equal what
+    came out + what left as gas + what accumulated?* Returns a `MassBalance`
+    (`aquakin.plant.balance`, exported as `aquakin.MassBalance` /
+    `aquakin.ComponentBalance` / `aquakin.mass_balance`) with, per component (COD
+    / N / P), the **inflow** (influents), **outflow** (terminal/dangling material
+    streams — effluent, wasted sludge, disposal cake), **gas** (O₂ transferred in
+    by aeration, the digester biogas, denitrification N₂ — computed from the
+    aeration term and a reaction-production integral over the reactive units, with
+    the digester deliberately excluded from the N gas term since it has no N gas
+    phase) and **accumulation** (ΔInventory across every unit — reactor / clarifier
+    / digester liquid+headspace at `V_liq`/`V_gas` / storage / Takács blanket).
+    `imbalance = in − out − gas − accumulation` is the closure; `mb["N"]`,
+    `mb.closed(rtol)`, `mb.summary()`, `mb[q].relative_imbalance`. Everything is on
+    one canonical g basis (g COD / g N / g P), so the ASM water line (g/m³) and the
+    ADM digester (kg/m³, kmol/m³) sum via `aquakin.composition_table` /
+    `aquakin.canonical_content` (the shipped per-species COD/N/P content tables;
+    `composition_table(net, electron_acceptor_cod=False)` = lab COD, the default
+    `True` = the electron-equivalent convention `check_conservation` wants;
+    `params=` reads a calibrated/BSM-specific composition such as `i_XB`). Closes
+    BSM1 to ~1e-7 and BSM2 (two networks, biogas, recycles) to COD ~0.08% / N
+    ~0.03% at steady state; the gas integrals are exact at steady state and
+    otherwise accurate to the `t_eval` sampling. **This is the tool that found the
+    ADM1 nitrogen transcription error** (see the `adm1` network note).
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `MixerUnit`,
 `SplitterUnit`, `IdealClarifier` (fast, stateless separator),

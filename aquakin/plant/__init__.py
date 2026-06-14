@@ -10,6 +10,7 @@ BSM1 (Copp 2002 / Alex et al. 2008) is the first plant-wide validation
 target — see :mod:`aquakin.plant.bsm.bsm1`.
 """
 
+from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
 from aquakin.plant.control import PIController
 from aquakin.plant.cstr import Aeration, CSTRUnit, oxygen_saturation
 from aquakin.plant.delay import HydraulicDelayUnit
@@ -77,6 +78,9 @@ __all__ = [
     "BSM2Evaluation",
     "Aeration",
     "CSTRUnit",
+    "ComponentBalance",
+    "MassBalance",
+    "mass_balance",
     "Connection",
     "oxygen_saturation",
     "HydraulicDelayUnit",

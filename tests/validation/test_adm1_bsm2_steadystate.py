@@ -10,13 +10,21 @@ This test runs the shipped ``adm1`` network as that CSTR -- the reaction RHS
 plus a dilution term ``(Q/V_liq)*(C_in - C)`` on the liquid states -- integrates
 to steady state, and checks it reproduces the published composition. It also
 checks the state-derived charge-balance pH against the reference electroneutrality
-relation. All reference numbers below are the published BSM2 constant-influent
-benchmark values (digester feed, reactor geometry and open-loop steady state).
+relation.
+
+The feed (``INFLUENT``) and the steady state (``REFERENCE_SS``) are the exact
+published BSM2 figures: the "ADM1 influent (post ASM2ADM interface)" and "ADM1
+effluent (prior ADM2ASM interface)" tables of the BSM2 open-loop steady-state
+report (``Results/BSM2_steady_state.pdf`` in the official BSM2 distribution).
+The feed is what the full plant delivers to the digester at steady state, so the
+standalone CSTR run is the same boundary-value problem the benchmark solves.
 
 References
 ----------
 Rosen, C. & Jeppsson, U. (2006). Aspects on ADM1 Implementation within the BSM2
 Framework. Dept. IEA, Lund University.
+Gernaey, K.V. et al. (2014). Benchmarking of Control Strategies for Wastewater
+Treatment Plants. IWA Scientific and Technical Report No. 23.
 Batstone, D.J. et al. (2002). Anaerobic Digestion Model No. 1 (ADM1). IWA STR 13.
 """
 
@@ -35,34 +43,33 @@ Q_FEED = 178.4674  # m3/d -- benchmark digester feed flow
 V_LIQ = 3400.0     # m3
 T_OP = 308.15      # K (35 degC)
 
-# Constant influent (digester feed), kgCOD/m3 except S_IC (kmolC/m3), S_IN
-# (kmolN/m3) and S_an (kmol/m3). Only these components are non-zero in the
-# BSM2 constant-influent file; the feed is dominated by particulate
-# carbohydrate / protein / lipid and inert solids.
+# Digester feed = the published "ADM1 influent (post ASM2ADM interface)" at the
+# BSM2 steady state (Results/BSM2_steady_state.pdf). kgCOD/m3 except S_IC
+# (kmolC/m3), S_IN (kmolN/m3) and S_an (kmol/m3). The feed is dominated by
+# particulate protein / lipid / carbohydrate and inert solids.
 INFLUENT = {
-    "S_aa": 0.0468,
-    "S_IC": 0.00791,
-    "S_IN": 0.00197,
-    "S_I": 0.0281,
-    "X_ch": 3.7244,
-    "X_pr": 16.2784,
-    "X_li": 8.0068,
-    "X_I": 17.0172,
-    "S_an": 0.0052,   # chloride; the only strong ion fed
+    "S_aa": 0.04388,
+    "S_IC": 0.0079326,
+    "S_IN": 0.0019721,
+    "S_I": 0.028067,
+    "X_ch": 3.7236,
+    "X_pr": 15.9235,
+    "X_li": 8.047,
+    "X_I": 17.0106,
+    "S_an": 0.0052101,   # chloride; the only strong ion fed
 }
 
-# Published open-loop steady-state digester composition (DIGESTERINIT).
+# Published open-loop steady-state digester composition: the "ADM1 effluent
+# (prior ADM2ASM interface)" table of Results/BSM2_steady_state.pdf.
 REFERENCE_SS = {
-    "S_su": 0.0124, "S_aa": 0.0055, "S_fa": 0.1074, "S_va": 0.0123,
-    "S_bu": 0.0140, "S_pro": 0.0176, "S_ac": 0.0893, "S_h2": 2.5055e-7,
-    "S_ch4": 0.0555, "S_IC": 0.0951, "S_IN": 0.0945, "S_I": 0.1309,
-    "X_ch": 0.0205, "X_pr": 0.0842, "X_li": 0.0436, "X_su": 0.3122,
-    "X_aa": 0.9317, "X_fa": 0.3384, "X_c4": 0.3258, "X_pro": 0.1011,
-    "X_ac": 0.6772, "X_h2": 0.2848, "X_I": 17.2162,
-    "S_gas_h2": 1.1032e-5, "S_gas_ch4": 1.6535, "S_gas_co2": 0.0135,
-    # X_c (composite) -- the published snapshot zeros it, but biomass decay
-    # genuinely feeds a small composite pool; excluded from the comparison.
-    "S_cat": 0.0, "S_an": 0.0052,
+    "S_su": 0.012394, "S_aa": 0.0055432, "S_fa": 0.10741, "S_va": 0.012333,
+    "S_bu": 0.014003, "S_pro": 0.017584, "S_ac": 0.089315, "S_h2": 2.5055e-7,
+    "S_ch4": 0.05549, "S_IC": 0.095149, "S_IN": 0.094468, "S_I": 0.13087,
+    "X_c": 0.10792, "X_ch": 0.020517, "X_pr": 0.08422, "X_li": 0.043629,
+    "X_su": 0.31222, "X_aa": 0.93167, "X_fa": 0.33839, "X_c4": 0.33577,
+    "X_pro": 0.10112, "X_ac": 0.67724, "X_h2": 0.28484, "X_I": 17.2162,
+    "S_gas_h2": 1.1032e-5, "S_gas_ch4": 1.6535, "S_gas_co2": 0.01354,
+    "S_cat": 0.0, "S_an": 0.0052101,
 }
 
 _GAS = ("S_gas_h2", "S_gas_ch4", "S_gas_co2")
@@ -104,12 +111,19 @@ def _digester_cstr_solution():
 
 @pytest.mark.validation
 def test_adm1_reproduces_bsm2_digester_steady_state():
-    """The CSTR settles onto the published BSM2 steady state (core states
-    within ~6%; methane output much tighter)."""
+    """The CSTR settles onto the published BSM2 steady state to within ~1.5% on
+    every state (methane much tighter).
+
+    The biochemical stoichiometry is verified identical to the official BSM2
+    ``adm1_ODE_bsm2.c`` (every reaction's coefficients, including the inorganic
+    C/N balances, match to machine precision), and the kinetic / equilibrium
+    constants match ``adm1init_bsm2.m`` (including the carbonate Ka1 van't Hoff
+    enthalpy). With the exact published feed, the residual ~1% is the difference
+    between this network's charge-balance pH solver and the reference DAE."""
     net, C = _digester_cstr_solution()
     si = net.species_index
 
-    # Every reported state (excluding the zeroed composite X_c) within 6%.
+    # Every reported state within 2%.
     worst, worst_name = 0.0, ""
     for name, ref in REFERENCE_SS.items():
         if ref < 1e-4:        # skip ~zero pools (S_h2, S_cat) -- absolute scale
@@ -117,7 +131,7 @@ def test_adm1_reproduces_bsm2_digester_steady_state():
         rel = abs(float(C[si[name]]) - ref) / ref
         if rel > worst:
             worst, worst_name = rel, name
-    assert worst < 0.06, f"{worst_name} off by {worst:.1%} from BSM2 steady state"
+    assert worst < 0.02, f"{worst_name} off by {worst:.1%} from BSM2 steady state"
 
     # Methane (the defining digester output): dissolved + headspace within 1.5%.
     assert float(C[si["S_ch4"]]) == pytest.approx(REFERENCE_SS["S_ch4"], rel=0.015)
