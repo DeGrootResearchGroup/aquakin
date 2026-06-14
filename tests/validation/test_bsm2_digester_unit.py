@@ -73,6 +73,11 @@ def test_digester_unit_reproduces_bsm2_steady_state():
         rel = abs(float(C[si[name]]) - ref) / ref
         if rel > worst:
             worst, worst_name = rel, name
+    # Every state within ~6%; the biochemical stoichiometry is verified identical
+    # to the official BSM2 adm1_ODE_bsm2.c and the kinetic/equilibrium constants
+    # to adm1init_bsm2.m. The residual few-percent spread is the charge-balance
+    # vs reference-DAE pH difference, amplified by the inhibition-sensitive
+    # acetate/C4 methanogens. Methane is tight.
     assert worst < 0.06, f"{worst_name} off by {worst:.1%}"
     # Methane output (defining digester quantity).
     assert float(C[si["S_gas_ch4"]]) == pytest.approx(REFERENCE_SS["S_gas_ch4"], rel=0.015)

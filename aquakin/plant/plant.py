@@ -1497,6 +1497,58 @@ class Plant:
         from aquakin.plant.bsm.evaluation import digester_gas
         return digester_gas(self, solution, params)
 
+    def mass_balance(self, solution: "PlantSolution", *,
+                     components=("COD", "N", "P"),
+                     influent_ports: Optional[list] = None,
+                     effluent_ports: Optional[list] = None,
+                     params: Optional[jnp.ndarray] = None):
+        """Results-level mass-balance closure of this plant over a solved window.
+
+        Accounts, per component (COD / N / P), the component that flowed **in**
+        (influents), **out** (terminal material streams), left as **gas** (O₂
+        transferred by aeration, digester biogas COD, denitrification N₂ + its
+        oxidised COD) and **accumulated** (inventory change across every unit) --
+        and reports the closure ``imbalance = in − out − gas − accumulation``,
+        which is ~0 for a trustworthy result. The gas terms are computed
+        independently of the in/out/accumulation bookkeeping (from the aeration
+        term, the digester headspace and an activated-sludge reaction integral),
+        so the imbalance is a genuine check rather than a definition.
+
+        Everything is reported on one canonical gram basis (g COD / g N / g P),
+        so inventories and fluxes sum across networks of different units (the ASM
+        water line in g/m³, the ADM digester in kg/m³ and kmol/m³) via the
+        shipped :func:`aquakin.composition_table`.
+
+        Parameters
+        ----------
+        solution : PlantSolution
+            A solved trajectory (the closure is over ``solution.t[0]..t[-1]``).
+            The gas integrals are exact at steady state and otherwise accurate to
+            the ``t_eval`` sampling.
+        components : tuple of str, optional
+            Which components to balance (default ``("COD", "N", "P")``); a network
+            that does not carry one contributes nothing to it.
+        influent_ports, effluent_ports : list of str, optional
+            Override the boundary streams. By default the influents are every
+            registered influent and the effluents are the plant's terminal
+            (dangling) output ports (final effluent, wasted sludge, disposal
+            cake) -- the biogas is handled as a gas term, not a material port.
+        params : jnp.ndarray, optional
+            Plant parameters used for the run (defaults to
+            :meth:`default_parameters`).
+
+        Returns
+        -------
+        MassBalance
+            Per-component :class:`~aquakin.plant.balance.ComponentBalance`
+            (index by name, e.g. ``mb["N"]``), with ``.closed(rtol)`` and
+            ``.summary()``.
+        """
+        from aquakin.plant.balance import mass_balance
+        return mass_balance(
+            self, solution, components=components, influent_ports=influent_ports,
+            effluent_ports=effluent_ports, params=params)
+
     def sludge_age(self, solution: "PlantSolution",
                    params: Optional[jnp.ndarray] = None, **kwargs):
         """Achieved SRT / HRT / F:M of this activated-sludge plant.
