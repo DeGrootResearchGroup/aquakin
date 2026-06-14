@@ -104,6 +104,26 @@ The shipped networks currently are:
   the viable DO window is narrow); and a limited feed alkalinity caps nitritation
   at ~half the ammonium, supplying anammox its ~1:1.3 NH₄:NO₂ feed. (A
   `BatchReactor` cannot sustain low DO, so PN/A needs the continuous reactor.)
+- `asm3_2step_comammox` — `asm3_2step` extended with a **complete-ammonia-oxidising
+  (comammox) organism** `XCMX`, parameterised from Kits et al. (2017) for
+  *Nitrospira inopinata*. An additive **`extends: asm3_2step`** file. Comammox is
+  a single organism doing **complete nitrification** (NH₄ → NO₃, the original
+  one-step ASM3 autotroph stoichiometry) rather than the AOB/NOB division of
+  labour; its defining trait is an **oligotrophic lifestyle** — a very high
+  ammonia affinity (`K_NH4` ≈ 0.012 gN/m³, ~10× the AOB value) with a low maximum
+  rate. The competition this creates is the point: comammox **out-competes the
+  AOB at low ammonium** (its affinity dominates) while the canonical AOB win at
+  high ammonium (their higher max rate dominates) — the documented niche
+  differentiation, reproduced in `tests/integration/test_asm3_2step_comammox.py`
+  (comammox/AOB per-biomass rate ratio 2.3 at NH₄ = 0.02, < 1 above ~0.1 gN/m³).
+  The complete-nitrification O₂ demand is the inherited `iO2_AOB + iO2_NOB`
+  (nitritation + nitratation), so COD/N/charge close to machine precision.
+  16 compounds, 22 processes. **Caveat:** there is no settled canonical
+  activated-sludge comammox Gujer matrix in the literature — this network is a
+  defensible *synthesis* (single-organism complete nitrification + Kits 2017
+  kinetics), not a faithful reproduction of one published matrix; nitrite leakage
+  (comammox's poor nitrite affinity) is omitted (modelled as complete
+  nitrification), a possible two-internal-step refinement.
 - `asm3_biop` — ASM3 + bio-P extension.
 - `adm1` — Anaerobic Digestion Model No. 1 (Batstone et al. 2002), BSM2
   implementation form (Rosen & Jeppsson 2006). 29 states (26 liquid + 3 gas
@@ -1346,6 +1366,7 @@ aquakin/
 │   │   ├── asm3_2step.yaml          # ASM3 + two-step nitrification/denitrification (explicit NO2; Kaelin 2009)
 │   │   ├── asm3_2step_n2o.yaml      # asm3_2step + two-pathway AOB N2O (NH2OH/NO/N2O; Pocquet 2016); extends: asm3_2step
 │   │   ├── asm3_2step_anammox.yaml  # asm3_2step + anammox (NH4+NO2->N2; Strous 1998/1999); extends: asm3_2step
+│   │   ├── asm3_2step_comammox.yaml # asm3_2step + comammox complete nitrifier (Kits 2017); extends: asm3_2step
 │   │   ├── asm3_biop.yaml           # ASM3 + bio-P extension           [units: _fix_sumo_units.py]
 │   │   ├── adm1.yaml                # ADM1 anaerobic digestion (BSM2 form, Rosen-Jeppsson
 │   │   │                            #   2006); complete: liquid + gas headspace, state-derived
