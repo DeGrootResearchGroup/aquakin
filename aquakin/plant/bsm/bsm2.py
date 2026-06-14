@@ -115,11 +115,11 @@ BSM2_CONSTANT_INFLUENT = {
 }
 
 # BSM2 ASM1 kinetic/stoichiometric parameters (asm1init_bsm2, calibrated at
-# 15 °C). ``KNH_H`` is set ~0 because the BSM/IWA ASM1 has no heterotroph
-# ammonia-limitation term (aquakin's ASM1 adds one; disabling it recovers the
-# benchmark behaviour). Names are aquakin's ASM1 parameter names.
+# 15 °C). The shipped ``asm1`` is the textbook Gujer matrix with no heterotroph
+# ammonia-limitation term, so no neutralising override is needed here. Names are
+# aquakin's ASM1 parameter names.
 BSM2_ASM1_PARAMETERS = {
-    "muH": 4.0, "KS": 10.0, "KOH": 0.2, "KNO": 0.5, "KNH_H": 1e-6, "etag": 0.8,
+    "muH": 4.0, "KS": 10.0, "KOH": 0.2, "KNO": 0.5, "etag": 0.8,
     "muA": 0.5, "KNH_A": 1.0, "KOA": 0.4, "bH": 0.3, "bA": 0.05, "ka": 0.05,
     "kh": 3.0, "KX": 0.1, "etah": 0.8, "Y_H": 0.67, "Y_A": 0.24, "i_XB": 0.08,
     "i_XP": 0.06, "f_P": 0.08,

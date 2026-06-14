@@ -20,7 +20,17 @@ The shipped networks currently are:
   radical chemistry (after Acero & von Gunten 2001; Pinkernell & von Gunten 2001).
 - `uv_h2o2` — UV/H₂O₂ advanced oxidation of a generic target micropollutant.
 - `asm1` — Activated Sludge Model No. 1, the IAWQ reference biological
-  wastewater treatment model (Henze et al. 1987).
+  wastewater treatment model (Henze et al. 1987). The shipped network is the
+  textbook / BSM-faithful Gujer matrix — heterotroph growth has **no** ammonia
+  (nitrogen-source) availability switch — so `load_network("asm1")` reproduces
+  canonical ASM1/BSM results out of the box.
+- `asm1_ammonia_limitation` — ASM1 plus a BioWin/SUMO-style nutrient-availability
+  switch: both heterotroph growth rates carry an extra `[SNH] / (KNH_H + [SNH])`
+  factor (default `KNH_H = 0.05 g_N/m³`) that shuts growth down when ammonia is
+  exhausted. A recognized vendor extension, **not** in the reference Gujer matrix;
+  inert in N-rich influent (so it matches `asm1` there) and only bites where
+  ammonia is driven low. Identical to `asm1` apart from that factor and the
+  `KNH_H` parameter.
 - `asm2d` — ASM2D, ASM1 extended with biological phosphorus removal
   and denitrifying polyphosphate-accumulating organisms.
 - `asm2d_tud` — Delft TUD variant of ASM2D with revised bio-P stoichiometry.
@@ -2322,10 +2332,11 @@ reference reactor states (`asm1init_bsm2` `XINIT`: XB_H ≈ 2245, XB_A ≈ 167,
 XP ≈ 967, XI ≈ 1532, the SNH/SNO/SO profiles) and the digester (`DIGESTERINIT`:
 headspace methane to ~0.2%) **to within ~3% on every key state**. Two parameter
 reconciliations were needed: the BSM2 ASM1 values are the 15 °C set
-(`muH=4, KS=10, muA=0.5, bH=0.3, KX=0.1, etah=0.8`), and aquakin's ASM1 adds a
-heterotroph ammonia-limitation term (`KNH_H`) that the BSM/IWA ASM1 lacks, so
-`bsm2_parameters` disables it (`KNH_H → 0`); without it tank-5 growth is
-suppressed ~24% and XB_H comes out ~half. ASM1 has no Arrhenius T-dependence
+(`muH=4, KS=10, muA=0.5, bH=0.3, KX=0.1, etah=0.8`). (The shipped `asm1` is the
+textbook Gujer matrix with no heterotroph ammonia-limitation term, so — unlike
+earlier versions — no neutralising override is needed; for the BioWin/SUMO
+nutrient switch use the `asm1_ammonia_limitation` network, where that term
+suppresses tank-5 growth ~24% and roughly halves XB_H.) ASM1 has no Arrhenius T-dependence
 (the `T` condition is declared but unused), so only the parameter *values*
 matter, not the 15 °C operating temperature.
 

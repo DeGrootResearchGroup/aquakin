@@ -1,27 +1,30 @@
 network:
-  name: asm1
-  version: "3.0"
+  name: asm1_ammonia_limitation
+  version: "1.0"
   description: >
-    Activated Sludge Model No. 1 (ASM1), the IAWQ-sponsored reference model
-    for biological wastewater treatment. 13 state variables, 8 processes
-    covering heterotrophic and autotrophic growth (aerobic + anoxic), decay,
-    hydrolysis, and ammonification. This is the textbook / BSM-faithful Gujer
-    matrix: heterotroph growth has NO ammonia (nitrogen-source) availability
-    switch. For the BioWin/SUMO-style nutrient-limitation extension (an extra
-    ``[SNH] / (KNH_H + [SNH])`` factor on heterotroph growth), load the
-    ``asm1_ammonia_limitation`` network instead.
+    Activated Sludge Model No. 1 (ASM1) extended with a heterotroph ammonia
+    (nitrogen-source) availability switch — the vendor-style nutrient-limitation
+    term used by BioWin and SUMO, but NOT part of the reference Gujer matrix.
+
+    This is the shipped ``asm1`` network with one addition: both heterotrophic
+    growth rates carry an extra Monod factor ``[SNH] / (KNH_H + [SNH])``, so
+    heterotroph growth shuts down when ammonia (the nitrogen source for cell
+    synthesis) is exhausted. It prevents unphysical biomass growth in a
+    nitrogen-depleted regime. With the default half-saturation ``KNH_H = 0.05
+    g_N/m3`` the factor is ~1 in nitrogen-rich domestic influent (so this model
+    matches ``asm1`` there) and only bites where ammonia is driven low.
+
+    Use the plain ``asm1`` network for textbook / BSM-faithful results; use this
+    variant when you want the BioWin/SUMO nutrient-availability behaviour. Apart
+    from the two extra rate factors (and the ``KNH_H`` parameter) the model is
+    identical to ``asm1`` — same species, stoichiometry, and every other rate.
 
     Stoichiometric coefficients are written as SYMBOLIC EXPRESSIONS in the
     yield / composition / fraction parameters (Y_H, Y_A, i_XB, i_XP, f_P).
-    Those parameters now sit alongside the kinetic constants at the network
-    level and can be calibrated as a single slot apiece — e.g. fitting Y_H
-    automatically adjusts every stoichiometric coefficient that depends on
-    it, across both aerobic and anoxic heterotrophic growth.
-
-    Kinetic parameters are declared once at the network level (so they
-    share a single slot across all reactions that use them) and named
-    process rates are factored out under ``expressions:`` for readability
-    and reuse.
+    Those parameters sit alongside the kinetic constants at the network level
+    and can be calibrated as a single slot apiece — e.g. fitting Y_H
+    automatically adjusts every stoichiometric coefficient that depends on it,
+    across both aerobic and anoxic heterotrophic growth.
 
     Standard caveat: the hydrolysis rate denominator ``KX * [XB_H] + [XS]``
     is zero only when both XB_H and XS are zero. Seed simulations with
@@ -29,6 +32,7 @@ network:
   references:
     - "Henze, M., Grady, C.P.L., Gujer, W., Marais, G.v.R. & Matsuo, T. (1987). Activated Sludge Model No. 1. IAWPRC Sci. Tech. Rep. No. 1."
     - "Henze, M. et al. (2000). Activated Sludge Models ASM1, ASM2, ASM2d and ASM3. IWA Sci. Tech. Rep. No. 9."
+    - "Nutrient (N/P) availability switch on heterotrophic growth as implemented in the BioWin and SUMO process simulators (vendor extension to ASM1)."
 
 species:
   - {name: SI,    description: "Soluble inert organic matter",                 units: "g_COD/m3", default_concentration: 30.0}
@@ -78,6 +82,10 @@ parameters:
   KS:     {value: 20.0,  units: "g_COD/m3",     bounds: [1.0, 200.0],  transform: positive_log}
   KOH:    {value: 0.2,   units: "g_O2/m3",      bounds: [0.01, 2.0],   transform: positive_log}
   KNO:    {value: 0.5,   units: "g_N/m3",       bounds: [0.05, 5.0],   transform: positive_log}
+  # Heterotroph ammonia (N-source) availability half-saturation. This term is the
+  # only difference from the reference ``asm1`` network — see the two heterotroph
+  # growth expressions below.
+  KNH_H:  {value: 0.05,  units: "g_N/m3",       bounds: [0.001, 1.0],  transform: positive_log}
   etag:   {value: 0.8,   units: "-",            bounds: [0.05, 0.95],  transform: logit}
   muA:    {value: 0.8,   units: "1/d",          bounds: [0.1, 2.0],    transform: positive_log, temperature: {theta: 1.107568, ref_T: 293.15}}
   KNH_A:  {value: 1.0,   units: "g_N/m3",       bounds: [0.1, 10.0],   transform: positive_log}
@@ -97,9 +105,12 @@ parameters:
 
 # Named process rates. Each is a closed-form expression in the species and
 # network-level parameters above. Reactions reference these by name.
+#
+# The two heterotroph growth rates carry the extra ``[SNH] / (KNH_H + [SNH])``
+# ammonia-availability factor that distinguishes this network from ``asm1``.
 expressions:
-  rho_hetero_aerobic:  "muH * [SS] / (KS + [SS]) * [SO] / (KOH + [SO]) * [XB_H]"
-  rho_hetero_anoxic:   "muH * [SS] / (KS + [SS]) * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]) * etag * [XB_H]"
+  rho_hetero_aerobic:  "muH * [SS] / (KS + [SS]) * [SO] / (KOH + [SO]) * [SNH] / (KNH_H + [SNH]) * [XB_H]"
+  rho_hetero_anoxic:   "muH * [SS] / (KS + [SS]) * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]) * [SNH] / (KNH_H + [SNH]) * etag * [XB_H]"
   rho_auto_aerobic:    "muA * [SNH] / (KNH_A + [SNH]) * [SO] / (KOA + [SO]) * [XB_A]"
   rho_hetero_decay:    "bH * [XB_H]"
   rho_auto_decay:      "bA * [XB_A]"

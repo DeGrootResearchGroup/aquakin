@@ -140,9 +140,12 @@ def test_yield_is_calibratable(network):
 
 
 def test_kinetic_params_are_shared_not_duplicated(network):
-    """v3 schema: 15 kinetic constants + 5 stoichiometric (Y_H, Y_A,
-    i_XB, i_XP, f_P) = 20 total, each appearing exactly once."""
-    assert network.n_params == 20
+    """v3 schema: 14 kinetic constants + 5 stoichiometric (Y_H, Y_A,
+    i_XB, i_XP, f_P) = 19 total, each appearing exactly once. (The textbook
+    ASM1 has no heterotroph ammonia-limitation KNH_H; that lives in the
+    ``asm1_ammonia_limitation`` variant.)"""
+    assert network.n_params == 19
+    assert "KNH_H" not in network.parameters
     # No reaction-namespaced parameter slots — every entry is a bare name.
     assert not any("." in p for p in network.parameters)
     # Stoichiometric parameters live alongside kinetic ones.
