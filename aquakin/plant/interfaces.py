@@ -16,9 +16,15 @@ the continuity-based interfaces of Nopens et al. (2009) / Rosen & Jeppsson
 - :class:`ADM1toASM1` (``adm2asm``) — digester effluent returned to the water
   line.
 
-Both conserve total COD and nitrogen by construction (the COD removed by the
-``asm2adm`` electron-acceptor demand is the only sink). They are pure,
-AD-clean functions of the concentration vector — the nested ``if/else`` N
+Both conserve total nitrogen, and conserve total COD whenever the ``asm2adm``
+electron-acceptor (O₂ + NO₃) demand does not exceed the degradable COD it draws
+from (SS + XS + XB_H + XB_A) — always true for a real, near-anoxic digester feed
+(the only intended use), where SO ≈ SNO ≈ 0 and the demand is ≈ 0. In the
+pathological case of a demand larger than the degradable COD (e.g. recycled
+nitrate far exceeding the substrate), the leftover demand is dropped rather than
+carried as a negative pool, so COD is then over-conserved; this mirrors the
+reference BSM2 implementation and never arises for an anoxic feed. They are
+pure, AD-clean functions of the concentration vector — the nested ``if/else`` N
 cascades of the reference C are written here as branch-free greedy draws
 (``jnp.minimum``), which are mathematically identical to the unrolled
 conditionals.
