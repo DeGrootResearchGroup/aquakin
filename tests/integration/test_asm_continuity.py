@@ -32,14 +32,16 @@ from aquakin.utils.composition import composition_table
 # asm1_ammonia_limitation differs from asm1 only in a rate factor; its
 # stoichiometry (which the continuity checks read) is identical, so it must
 # conserve COD/N exactly as asm1 does.
-_MODELS = ["asm1", "asm1_ammonia_limitation", "asm2d", "asm2d_tud", "asm3", "asm3_biop"]
+_MODELS = ["asm1", "asm1_ammonia_limitation", "asm3_2step", "asm2d", "asm2d_tud",
+           "asm3", "asm3_biop"]
 _TOL = 1.0e-2
 
-_NITRATE = {"asm1": "SNO", "asm1_ammonia_limitation": "SNO", "asm2d": "SNO3",
-            "asm2d_tud": "SNO", "asm3": "SNOX", "asm3_biop": "SNO"}
+_NITRATE = {"asm1": "SNO", "asm1_ammonia_limitation": "SNO", "asm3_2step": "SNO3",
+            "asm2d": "SNO3", "asm2d_tud": "SNO", "asm3": "SNOX", "asm3_biop": "SNO"}
 # Models that carry dissolved N2 as a state (so N2 is in the COD/N balance, not
-# lost as gas). The ASM1 networks are the exception.
-_TRACKS_N2 = {"asm2d", "asm2d_tud", "asm3", "asm3_biop"}
+# lost as gas). The ASM1 networks are the exception. asm3_2step carries SN2 and
+# its two-step denitrification (NO3->NO2->N2) conserves COD/N exactly.
+_TRACKS_N2 = {"asm3_2step", "asm2d", "asm2d_tud", "asm3", "asm3_biop"}
 # Reactions excluded from the COD check: ASM1 denitrification, whose electrons
 # leave with the untracked N2 gas (the N balance covers its nitrogen).
 _COD_EXCLUDED = {"asm1": {"anoxic_growth_heterotrophs"},
