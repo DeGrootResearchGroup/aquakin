@@ -65,6 +65,12 @@ from aquakin.integrate.sensitivity import (
     fit,
     sensitivity,
 )
+from aquakin.integrate.experiments import (
+    MonteCarloResult,
+    ScenarioComparison,
+    compare_scenarios,
+    monte_carlo,
+)
 from aquakin.plant import (
     ActivatedSludgeSizing,
     Aeration,
@@ -178,6 +184,10 @@ __all__ = [
     "derived_TKN",
     "derived_TSS",
     "dgsm",
+    "monte_carlo",
+    "compare_scenarios",
+    "MonteCarloResult",
+    "ScenarioComparison",
     "effluent_averages",
     "effluent_quality_index",
     "check_finite_gradient",
