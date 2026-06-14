@@ -97,6 +97,27 @@ def test_digester_effluent_flow_equals_feed():
     assert float(out["effluent"].Q) == pytest.approx(Q_FEED, rel=1e-9)
 
 
+def test_digester_effluent_temperature_is_flow_weighted():
+    """The effluent temperature is the flow-weighted inlet temperature (a heat
+    balance, like every other multi-inlet unit) -- not the first inlet's T, which
+    would ignore a second feed at a different temperature."""
+    net = aquakin.load_network("adm1")
+    C = net.default_concentrations()
+    unit = ADM1DigesterUnit(name="d", network=net, volume=V_LIQ,
+                            input_port_names=["feed", "reject"])
+    inputs = {
+        "feed":   Stream(Q=jnp.asarray(100.0), C=C, network=net, T=jnp.asarray(308.15)),
+        "reject": Stream(Q=jnp.asarray(50.0),  C=C, network=net, T=jnp.asarray(290.15)),
+    }
+    out = unit.compute_outputs(jnp.asarray(0.0), C, inputs, net.default_parameters())
+    expected = (100.0 * 308.15 + 50.0 * 290.15) / 150.0
+    assert float(out["effluent"].T) == pytest.approx(expected, rel=1e-9)
+    # A temperature-agnostic inlet makes the effluent temperature-agnostic.
+    inputs["reject"] = Stream(Q=jnp.asarray(50.0), C=C, network=net, T=None)
+    out_none = unit.compute_outputs(jnp.asarray(0.0), C, inputs, net.default_parameters())
+    assert out_none["effluent"].T is None
+
+
 def test_gas_transfer_scales_with_digester_volume():
     """The gas-transfer headspace gain uses V_liq/V_gas, with V_liq slaved to the
     unit's liquid volume -- so a digester of a different size transfers

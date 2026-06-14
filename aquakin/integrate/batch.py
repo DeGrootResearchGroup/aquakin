@@ -103,7 +103,11 @@ class BatchReactor(GradientCheckMixin):
         (a backward-accumulation overflow set by the per-step stiffness).
         Capping ``dtmax`` to a small multiple of the fastest reaction
         timescale restores a finite reverse gradient that matches forward mode
-        and finite differences.
+        and finite differences. ``dtmax`` is always in the network's **native**
+        time unit (the unit of its rate constants -- seconds for ozone/UV, days
+        for ASM/ADM/WATS), independent of any ``time_unit=`` passed to
+        :meth:`solve`; a value chosen in the solve's ``time_unit`` would be off
+        by the unit ratio.
     max_steps : int, optional
         Maximum number of internal solver steps (default 100000). Raise it for
         long or very stiff forward solves that exhaust the default budget.

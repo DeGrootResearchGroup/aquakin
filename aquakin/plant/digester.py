@@ -116,13 +116,20 @@ class ADM1DigesterUnit:
         params: jnp.ndarray,
     ) -> dict[str, Stream]:
         # Constant liquid volume: effluent flow equals the total inflow. The
-        # effluent temperature is carried through from the feed (the small reject
-        # stream returns at roughly the water-line temperature).
+        # effluent temperature is the flow-weighted inlet temperature (a heat
+        # balance, matching every other multi-inlet unit), or None if any inlet
+        # is temperature-agnostic -- not the first inlet's T, which would ignore
+        # a second feed at a different temperature.
         Q_total = jnp.zeros(())
-        T_in = None
         for name in self.input_port_names:
             Q_total = Q_total + inputs[name].Q
-            T_in = inputs[name].T if T_in is None else T_in
+        if all(inputs[name].T is not None for name in self.input_port_names):
+            heat = jnp.zeros(())
+            for name in self.input_port_names:
+                heat = heat + inputs[name].Q * inputs[name].T
+            T_in = heat / (Q_total + 1e-12)
+        else:
+            T_in = None
         return {self.output_port: Stream(Q=Q_total, C=state, network=self.network,
                                          T=T_in)}
 

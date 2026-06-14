@@ -1202,7 +1202,8 @@ def calibrate(
         if laplace_dtmax is not None and laplace_dtmax != getattr(reactor, "dtmax", None):
             lap_reactor = type(reactor)(
                 reactor.network, reactor.conditions, rtol=reactor.rtol,
-                atol=reactor.atol, adjoint=reactor.adjoint, dtmax=laplace_dtmax)
+                atol=reactor.atol, adjoint=reactor.adjoint, dtmax=laplace_dtmax,
+                max_steps=reactor.max_steps)
         else:
             lap_reactor = reactor
         if laplace_method == "gauss_newton":
