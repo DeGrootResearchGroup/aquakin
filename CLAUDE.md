@@ -2744,13 +2744,24 @@ nor concentrating it in a few files makes the whole suite fast.
 - The **`test`** job (`pytest -m "not validation and not slow"`, Python
   3.11/3.12) runs on **every PR and every push** — unit + fast integration. This
   is the merge gate.
-- The **`slow`** job (`pytest -m slow`, 3.11/3.12) and **`validation`** job
-  (`pytest -m validation`, 3.12) run **only on push to `main`** (`if:
-  github.event_name == 'push'`). They carry the multi-minute stiff/plant solves
-  (the `slow` marker on `test_bsm2_dynamic`, `test_bsm1`, `test_biofilm`,
-  `test_forward_sensitivity`, the two `test_wats_sewer_*` files) and the
-  published-data checks. A regression a PR's fast gate cannot catch therefore
-  surfaces within minutes of merging — revert from there.
+- The **`slow`** job (`pytest -m "slow and not validation"`, 3.11/3.12) and
+  **`validation`** job (`pytest -m validation`, 3.12) run **only on push to
+  `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
+  stiff/plant solves (the `slow` marker on `test_bsm2_dynamic`, `test_bsm1`,
+  `test_biofilm`, `test_forward_sensitivity`, the two `test_wats_sewer_*` files)
+  and the published-data checks. A regression a PR's fast gate cannot catch
+  therefore surfaces within minutes of merging — revert from there. **Both are
+  `pytest-split`-sharded** (`--splits N --group i`, `-n 1` within each shard):
+  even serially, a single long-lived process accumulating the whole set's XLA
+  compilation cache + live JAX buffers exhausts the 16 GB hosted runner and is
+  OOM-reclaimed mid-suite (~62 min in, SIGTERM / exit 143, before the timeout) —
+  first the validation set, then the slow set once enough whole-plant tests
+  landed. Sharding across N fresh processes bounds each process's footprint to
+  ~1/N (slow: 6 shards × 2 Python versions; validation: 4 shards, 3.12). The
+  partition is complete and disjoint, so coverage is unchanged. (pytest-split
+  balances by `.test_durations` where recorded — currently the validation set —
+  else evenly by count, which is what bounds the *memory*; duration-balancing
+  only evens the wall time.)
 
 **Branch protection:** the required status checks must be the fast-gate jobs
 (`fast tests (py3.11)` / `(py3.12)`) — **not** `slow`/`validation`, which do not
