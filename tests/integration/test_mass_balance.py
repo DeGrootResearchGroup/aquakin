@@ -82,6 +82,10 @@ _MODELS = [
     "wats_sewer_khalil_paper_balanced_directsulfate",
     "wats_sewer_khalil_paper_balanced_combined",
     "wats_sewer_khalil_paper_balanced_stopatS0",
+    # Areal {A_V} biofilm split of the balanced base (bulk/biofilm phase split,
+    # spatially uniform biofilm activity). Same stoichiometry as the lumped
+    # balanced base, so it conserves COD/S/Fe identically.
+    "wats_sewer_khalil_paper_balanced_biofilm",
     # Per-layer-biomass biofilm variant: biofilm processes driven by local
     # volumetric [X_BH] instead of the areal {A_V} lump. Same stoichiometry as
     # the balanced base, so it conserves COD/S/Fe identically.
@@ -91,6 +95,51 @@ _MODELS = [
     # COD/S/N-conserving stoichiometry.
     "wats_sewer_khalil_paper_balanced_biofilm_multispecies",
 ]
+
+# Shipped wats_sewer*.yaml networks deliberately NOT under the conservation
+# checks, each with the reason. The completeness guard below asserts that every
+# shipped WATS network is either in _MODELS (checked) or listed here, so a new
+# variant from the _make_* generators cannot be added without a conservation
+# decision. The extended-model structural variants carry COD imbalances in the
+# sulfur-oxidation / elemental-S reactions (the same class the Khalil-family
+# generator later fixed but which was never back-ported to these earlier extended
+# variants); the conserving `wats_sewer_extended` base itself IS checked.
+_BALANCE_EXEMPT = {
+    "wats_sewer_extended_v0":
+        "early extended-model prototype; superseded, not conservation-vetted",
+    "wats_sewer_extended_combined":
+        "extended-base structural variant with un-back-ported sulfur-stoich "
+        "COD imbalances",
+    "wats_sewer_extended_directsulfate":
+        "extended-base structural variant with un-back-ported sulfur-stoich "
+        "COD imbalances",
+    "wats_sewer_extended_halforder":
+        "extended-base structural variant with un-back-ported sulfur-stoich "
+        "COD imbalances",
+    "wats_sewer_extended_srbsubstrate":
+        "extended-base structural variant with un-back-ported sulfur-stoich "
+        "COD imbalances",
+}
+
+
+def test_every_wats_network_is_checked_or_exempt():
+    """Completeness guard: every shipped ``wats_sewer*.yaml`` is either under the
+    conservation checks (``_MODELS``) or explicitly exempt (``_BALANCE_EXEMPT``)
+    with a reason. Catches the failure mode where a new variant added to the
+    ``_make_*`` generators is silently left unchecked -- the hand-maintained list
+    can otherwise drift out of sync with the directory."""
+    import glob
+    on_disk = {os.path.basename(p)[:-len(".yaml")]
+               for p in glob.glob(os.path.join(_NDIR, "wats_sewer*.yaml"))}
+    accounted = set(_MODELS) | set(_BALANCE_EXEMPT)
+    unaccounted = on_disk - accounted
+    assert not unaccounted, (
+        "shipped WATS networks neither checked nor exempt (add to _MODELS if they "
+        f"conserve, else to _BALANCE_EXEMPT with a reason): {sorted(unaccounted)}"
+    )
+    # And no stale entries pointing at deleted networks.
+    stale = accounted - on_disk
+    assert not stale, f"_MODELS/_BALANCE_EXEMPT reference missing networks: {sorted(stale)}"
 
 # Nitrification / autotroph decay oxidise nitrogen (NH3 -> NO3), which is not
 # part of the carbon/sulfur COD continuity (its electron transfer is carried by

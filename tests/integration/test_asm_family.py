@@ -13,22 +13,30 @@ import pytest
 import aquakin
 
 
-# (network name, expected n_species, expected n_reactions, expected n_params)
-# Param counts include both kinetic AND stoichiometric constants (yields,
-# N/P content, fractions) — all calibratable under the symbolic-stoich
-# schema.
-_ASM_NETWORKS = [
-    ("asm2d", 19, 21, 63),
-    ("asm2d_tud", 18, 22, 73),
-    ("asm3", 13, 12, 39),
-    ("asm3_biop", 17, 23, 65),
-    # ADM1 (anaerobic digestion): liquid + gas headspace, state-derived pH,
-    # explicit strong-ion (S_cat / S_an) states.
-    ("adm1", 29, 25, 89),
-]
+# The SUMO-ported ASM/ADM networks under test. Names only -- the shape contract
+# (species/reaction/parameter counts) lives in _EXPECTED_SHAPES below and is
+# asserted by a single dedicated test, so a benign network edit (e.g. adding a
+# calibratable yield) touches one place, not this shared parametrize list that
+# six tests depend on.
+_ASM_NETWORKS = ["asm2d", "asm2d_tud", "asm3", "asm3_biop", "adm1"]
+
+# Expected (n_species, n_reactions, n_params) per network -- a deliberate
+# regression contract (it catches an accidental shape change). Param counts
+# include both kinetic AND stoichiometric constants (yields, N/P content,
+# fractions), all calibratable under the symbolic-stoich schema. ADM1 carries
+# the gas headspace, state-derived pH, and explicit strong-ion (S_cat/S_an)
+# states. Update a tuple here when a network's shape changes on purpose.
+_EXPECTED_SHAPES = {
+    "asm2d": (19, 21, 63),
+    "asm2d_tud": (18, 22, 73),
+    "asm3": (13, 12, 39),
+    "asm3_biop": (17, 23, 65),
+    "adm1": (29, 25, 89),
+}
 
 
-@pytest.mark.parametrize("name,n_sp,n_rx,n_p", _ASM_NETWORKS)
+@pytest.mark.parametrize("name,n_sp,n_rx,n_p",
+                         [(n, *s) for n, s in _EXPECTED_SHAPES.items()])
 def test_loads_with_expected_shape(name, n_sp, n_rx, n_p):
     net = aquakin.load_network(name)
     assert net.n_species == n_sp
@@ -36,8 +44,8 @@ def test_loads_with_expected_shape(name, n_sp, n_rx, n_p):
     assert net.n_params == n_p
 
 
-@pytest.mark.parametrize("name,_a,_b,_c", _ASM_NETWORKS)
-def test_dCdt_finite_at_default_state(name, _a, _b, _c):
+@pytest.mark.parametrize("name", _ASM_NETWORKS)
+def test_dCdt_finite_at_default_state(name):
     net = aquakin.load_network(name)
     dC = net.dCdt(
         net.default_concentrations(),
@@ -48,9 +56,9 @@ def test_dCdt_finite_at_default_state(name, _a, _b, _c):
     assert jnp.all(jnp.isfinite(dC))
 
 
-@pytest.mark.parametrize("name,_a,_b,_c", _ASM_NETWORKS)
+@pytest.mark.parametrize("name", _ASM_NETWORKS)
 @pytest.mark.slow  # heavy: stiff solve x every ASM/ADM network
-def test_short_integration_finite(name, _a, _b, _c):
+def test_short_integration_finite(name):
     """Each model integrates 0.05 d without producing non-finite values."""
     net = aquakin.load_network(name)
     reactor = aquakin.BatchReactor(net, net.default_conditions())
@@ -64,8 +72,8 @@ def test_short_integration_finite(name, _a, _b, _c):
 
 
 @pytest.mark.slow  # jax.grad through a stiff solve x every ASM/ADM network
-@pytest.mark.parametrize("name,_a,_b,_c", _ASM_NETWORKS)
-def test_ad_grad_through_solve(name, _a, _b, _c):
+@pytest.mark.parametrize("name", _ASM_NETWORKS)
+def test_ad_grad_through_solve(name):
     """jax.grad through solve must produce finite gradients."""
     net = aquakin.load_network(name)
     reactor = aquakin.BatchReactor(net, net.default_conditions())
@@ -84,15 +92,15 @@ def test_ad_grad_through_solve(name, _a, _b, _c):
     assert jnp.all(jnp.isfinite(g))
 
 
-@pytest.mark.parametrize("name,_a,_b,_c", _ASM_NETWORKS)
-def test_no_duplicate_parameter_names(name, _a, _b, _c):
+@pytest.mark.parametrize("name", _ASM_NETWORKS)
+def test_no_duplicate_parameter_names(name):
     """The shared-params schema means no namespaced duplicates."""
     net = aquakin.load_network(name)
     assert len(net.parameters) == len(set(net.parameters))
 
 
-@pytest.mark.parametrize("name,_a,_b,_c", _ASM_NETWORKS)
-def test_summary_smoke(name, _a, _b, _c):
+@pytest.mark.parametrize("name", _ASM_NETWORKS)
+def test_summary_smoke(name):
     net = aquakin.load_network(name)
     s = net.summary()
     assert name in s
