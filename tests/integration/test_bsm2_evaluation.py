@@ -172,3 +172,68 @@ def test_oci_bsm2_methane_offsets_heating():
         aeration=10, pumping=5, mixing=3, sludge_production=2,
         carbon=1, methane=50, heating=100)
     assert oci == pytest.approx(10 + 5 + 3 + 3 * 2 + 3 * 1 - 6 * 50 + 0.0, rel=1e-9)
+
+
+# ----- single-point (steady-state) degeneracy (issue #180) -----------------
+# run_to_steady_state returns a one-point solution; every time-averaged kernel
+# must then return the INSTANTANEOUS value (the average of a constant), not crash
+# (ZeroDivisionError, the bug) nor a spurious zero.
+
+def test_aeration_energy_single_point_is_instantaneous():
+    from aquakin.plant.metrics import aeration_energy
+    t1 = jnp.array([5.0])                     # one saved time
+    kla = jnp.array([[240.0, 84.0]])          # (1, 2)
+    volumes = jnp.array([1333.0, 1333.0])
+    ae = aeration_energy(t1, kla, volumes, saturation=8.0)
+    expected = 8.0 / 1800.0 * (240.0 * 1333.0 + 84.0 * 1333.0)
+    assert ae == pytest.approx(expected, rel=1e-9)
+    # ... and equals the multi-point limit of a constant trajectory.
+    t2 = jnp.array([5.0, 6.0])
+    ae2 = aeration_energy(t2, jnp.tile(kla, (2, 1)), volumes, saturation=8.0)
+    assert ae == pytest.approx(ae2, rel=1e-9)
+
+
+def test_time_averaged_kernels_single_point_dont_crash():
+    from aquakin.plant.metrics import (
+        carbon_mass, heating_energy, mixing_energy, pumping_energy,
+        pumping_energy_bsm2,
+    )
+    t1 = jnp.array([3.0])
+    assert pumping_energy(t1, jnp.array([100.0]), jnp.array([50.0]),
+                          jnp.array([10.0])) == pytest.approx(
+        0.004 * 100 + 0.008 * 50 + 0.05 * 10, rel=1e-9)
+    assert pumping_energy_bsm2(t1, {"internal": jnp.array([100.0])}) == \
+        pytest.approx(0.004 * 100, rel=1e-9)
+    assert carbon_mass(t1, jnp.array([2.0]), carbon_conc=400000.0) == \
+        pytest.approx(2.0 * 400000.0 / 1000.0, rel=1e-9)   # 800 kg COD/d
+    he = heating_energy(t1, jnp.array([100.0]), T_feed_C=15.0, T_target_C=35.0)
+    assert he == pytest.approx(24.0 * 20.0 * 100.0 * 1000.0 * 4.186 / 86400.0,
+                               rel=1e-9)
+    # One reactor unaerated, one aerated, at a single instant.
+    me = mixing_energy(t1, jnp.array([[0.0, 100.0]]), jnp.array([1500.0, 3000.0]),
+                       digester_volume=3400.0)
+    assert me == pytest.approx(24.0 * 0.005 * (1500.0 + 3400.0), rel=1e-9)
+
+
+def test_eqi_single_point_is_instantaneous(asm1):
+    from aquakin.plant.metrics import effluent_quality_index
+    C0 = asm1.concentrations({"XS": 10.0, "SS": 5.0, "SNO": 8.0, "SNH": 2.0})
+    C = C0[None, :]                            # (1, n_species)
+    t1 = jnp.array([4.0])
+    Q = jnp.array([18000.0])
+    eqi1 = effluent_quality_index(t1, C, Q, asm1)
+    # Equals the constant-trajectory two-point average.
+    eqi2 = effluent_quality_index(jnp.array([4.0, 5.0]),
+                                  jnp.tile(C, (2, 1)), jnp.tile(Q, 2), asm1)
+    assert jnp.isfinite(eqi1) and eqi1 > 0.0
+    assert eqi1 == pytest.approx(eqi2, rel=1e-9)
+
+
+def test_effluent_averages_single_point(asm1):
+    from aquakin.plant.metrics import effluent_averages
+    C0 = asm1.concentrations({"XS": 10.0, "SS": 5.0, "SNO": 8.0, "SNH": 2.0})
+    avg = effluent_averages(jnp.array([4.0]), C0[None, :],
+                            jnp.array([18000.0]), asm1)
+    assert avg["SNH"] == pytest.approx(2.0, rel=1e-9)
+    assert avg["SNO"] == pytest.approx(8.0, rel=1e-9)
+    assert all(jnp.isfinite(v) for v in avg.values())

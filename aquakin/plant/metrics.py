@@ -71,6 +71,35 @@ def _effluent_args(stream_or_t, C, Q, network):
     return stream_or_t, C, Q, network
 
 
+def _time_average(integrand, t, axis: int = 0):
+    """Trapezoidal time-average of ``integrand`` over the window ``[t0, t1]``.
+
+    The shared kernel behind every time-averaged index. For a **single saved
+    point** -- exactly what :meth:`Plant.run_to_steady_state` returns (the
+    terminal state only) -- the window has zero width, but the time-average of a
+    constant *is* that constant, so the single sample is returned directly. This
+    yields the meaningful **instantaneous (steady-state) value** for a one-point
+    solution instead of dividing by a zero window (which previously raised
+    ``ZeroDivisionError`` in ``aeration_energy``, or gave a spurious zero in the
+    guarded kernels). The metric kernels here are called eagerly on concrete
+    arrays after a solve, so the ``t.shape[0]`` branch is a static check.
+
+    Parameters
+    ----------
+    integrand : array
+        Values at the save times, with the time axis at ``axis``.
+    t : array
+        Save times, shape ``(n_t,)``.
+    axis : int
+        The time axis of ``integrand`` (default 0).
+    """
+    t = jnp.asarray(t)
+    integrand = jnp.asarray(integrand)
+    if t.shape[0] <= 1:
+        return jnp.take(integrand, 0, axis=axis)
+    return jnp.trapezoid(integrand, t, axis=axis) / (t[-1] - t[0])
+
+
 # Every derived quantity below indexes ``C`` with ``C[..., i]`` (a scalar
 # column) and, where it sums, sums over ``axis=-1``. That works for both a 1-D
 # state vector ``(n_species,)`` -> scalar and a 2-D trajectory
@@ -160,6 +189,8 @@ def effluent_averages(
         Time-averaged COD, BOD, TSS, TKN, SNH, SNO (g/m³).
     """
     t, C_traj, Q_traj, network = _effluent_args(stream_or_t, C_traj, Q_traj, network)
+    t = jnp.asarray(t)
+    single_point = t.shape[0] <= 1
     # Use trapezoidal integration over time.
     dt = jnp.diff(t)
     # Flow-weight via Q.
@@ -167,6 +198,10 @@ def effluent_averages(
     total_w = jnp.sum(weight)
 
     def time_avg(values: jnp.ndarray) -> float:
+        # A single saved point (a steady-state solution) has a zero-width window;
+        # the flow-weighted average of a constant is that sample.
+        if single_point:
+            return float(values[0])
         v_mid = 0.5 * (values[:-1] + values[1:])
         return float(jnp.sum(v_mid * weight) / (total_w + 1e-12))
 
@@ -209,8 +244,7 @@ def effluent_quality_index(
         + _EQI_WEIGHTS["TKN"] * TKN_t
         + _EQI_WEIGHTS["NO"] * SNO_t
     )
-    T_total = float(t[-1] - t[0])
-    return float(jnp.trapezoid(integrand, t) * 1e-3 / (T_total + 1e-12))
+    return float(_time_average(integrand, t) * 1e-3)
 
 
 def aeration_energy(
@@ -234,10 +268,7 @@ def aeration_energy(
     kla_history = jnp.asarray(kla_history)
     volumes = jnp.asarray(volumes)
     integrand = jnp.sum(kla_history * volumes[None, :], axis=1)
-    T_total = float(t[-1] - t[0])
-    return float(
-        saturation / (T_total * 1.8 * 1000.0) * jnp.trapezoid(integrand, t)
-    )
+    return float(saturation / (1.8 * 1000.0) * _time_average(integrand, t))
 
 
 def pumping_energy(
@@ -251,8 +282,7 @@ def pumping_energy(
     PE = (1 / T) × ∫ (0.004 × Q_internal + 0.008 × Q_ras + 0.05 × Q_was) dt
     """
     integrand = 0.004 * Q_internal + 0.008 * Q_ras + 0.05 * Q_was
-    T_total = float(t[-1] - t[0])
-    return float(jnp.trapezoid(integrand, t) / (T_total + 1e-12))
+    return float(_time_average(integrand, t))
 
 
 def operational_cost_index(
@@ -299,8 +329,7 @@ def pumping_energy_bsm2(
     for key, Q in flows.items():
         if key in factors:
             integrand = integrand + float(factors[key]) * jnp.asarray(Q)
-    T_total = float(t[-1] - t[0])
-    return float(jnp.trapezoid(integrand, t) / (T_total + 1e-12))
+    return float(_time_average(integrand, t))
 
 
 def mixing_energy(
@@ -335,10 +364,9 @@ def mixing_energy(
     """
     kla_history = jnp.asarray(kla_history)
     volumes = jnp.asarray(volumes)
-    T_total = float(t[-1] - t[0])
     # Time fraction each reactor is below the aeration threshold.
     unaerated = (kla_history < kla_threshold).astype(jnp.float64)  # (n_t, n_reac)
-    frac = jnp.trapezoid(unaerated, t, axis=0) / (T_total + 1e-12)  # (n_reac,)
+    frac = _time_average(unaerated, t, axis=0)                     # (n_reac,)
     reactor_mix = reactor_unit * jnp.sum(volumes * frac)
     digester_mix = digester_unit * float(digester_volume)
     return float(24.0 * (reactor_mix + digester_mix))
@@ -355,8 +383,7 @@ def carbon_mass(
     source COD concentration, g→kg).
     """
     integrand = jnp.asarray(Q_carbon) * float(carbon_conc) * 1e-3
-    T_total = float(t[-1] - t[0])
-    return float(jnp.trapezoid(integrand, t) / (T_total + 1e-12))
+    return float(_time_average(integrand, t))
 
 
 def heating_energy(
@@ -386,8 +413,7 @@ def heating_energy(
     """
     heatpower = ((float(T_target_C) - jnp.asarray(T_feed_C))
                  * jnp.asarray(Q_feed) * rho * cp / 86400.0)  # kW
-    T_total = float(t[-1] - t[0])
-    return float(24.0 * jnp.trapezoid(heatpower, t) / (T_total + 1e-12))
+    return float(24.0 * _time_average(heatpower, t))
 
 
 def operational_cost_index_bsm2(

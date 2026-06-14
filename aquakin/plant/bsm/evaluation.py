@@ -156,9 +156,15 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
 
 
 def _time_average(t: jnp.ndarray, values: jnp.ndarray) -> float:
-    """Trapezoidal time-average of ``values(t)`` over ``[t0, t1]``."""
-    T = float(t[-1] - t[0])
-    return float(jnp.trapezoid(values, t) / (T + 1e-12))
+    """Trapezoidal time-average of ``values(t)`` over ``[t0, t1]``.
+
+    A single saved point (a steady-state solution) has a zero-width window; the
+    average of a constant is that sample, so it is returned directly -- giving the
+    instantaneous steady-state value rather than dividing by a zero window."""
+    t = jnp.asarray(t)
+    if t.shape[0] <= 1:
+        return float(jnp.asarray(values)[0])
+    return float(jnp.trapezoid(values, t) / (t[-1] - t[0]))
 
 
 def _reconstruct(plant, solution, params_full, endpoints):

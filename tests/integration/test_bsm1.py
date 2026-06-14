@@ -286,3 +286,21 @@ def test_evaluate_bsm1_indices(asm1, constant_influent):
         ev.aeration_energy + ev.pumping_energy + 5.0 * ev.sludge_production)
     # The three aerated tanks (tanks 3-5) are counted.
     assert ev.aerated_tanks == ["tank3", "tank4", "tank5"]
+
+
+def test_evaluate_bsm1_on_single_point_steady_state(asm1, constant_influent):
+    """The natural 'run to steady state, then evaluate' flow used to crash with
+    ZeroDivisionError, because run_to_steady_state returns a one-point solution
+    and aeration_energy divided by a zero window. It now returns finite, positive
+    indices -- the instantaneous steady-state values (issue #180)."""
+    plant = build_bsm1(network=asm1)
+    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
+    ss = plant.run_to_steady_state()
+    assert ss.solution.t.shape[0] == 1            # the degenerate single point
+    ev = evaluate_bsm1(plant, ss.solution)         # no ZeroDivisionError
+    for name in ("eqi", "oci", "aeration_energy", "pumping_energy",
+                 "sludge_production"):
+        v = getattr(ev, name)
+        assert jnp.isfinite(v) and v > 0.0, name
+    assert ev.oci == pytest.approx(
+        ev.aeration_energy + ev.pumping_energy + 5.0 * ev.sludge_production)

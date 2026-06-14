@@ -2625,6 +2625,18 @@ full-formula sum; plus fast no-solve kernel tests). Note the shipped influent is
 synthesised, so these are method-validated numbers, not the published EQI/OCI over
 the canonical days-245–609 window (that needs the official IWA influent file).
 
+**Single-point (steady-state) evaluation.** Every time-averaged kernel runs
+through one `metrics._time_average(integrand, t)` (and the evaluator's own
+`_time_average`): over a multi-point window it is the trapezoidal mean, but for a
+**single saved point** — exactly what `plant.run_to_steady_state()` returns (the
+terminal state only) — the average of a constant is that sample, so it returns
+the **instantaneous steady-state value** instead of dividing by a zero-width
+window. So the natural "run to steady state, then `evaluate_bsm1(plant,
+ss.solution)`" flow returns finite, meaningful indices rather than raising
+`ZeroDivisionError` (the old `aeration_energy` divided by the bare window) or a
+spurious zero (the other kernels' `+1e-12` guard). Multi-point results are
+unchanged.
+
 **Activated-sludge design layer — SRT / HRT / F:M (`aquakin/plant/design.py`).**
 Plants are specified in the quantities the solver integrates (tank `volume`,
 fixed pump flows, per-species `kLa`), but engineers design in the quantities
