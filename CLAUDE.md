@@ -1044,6 +1044,30 @@ reactions:
   to an intermediate rate expression and reference it from a reaction's
   `rate:` or from another expression. References are inlined into the
   consuming AST at compile time. Cycles among expressions are rejected.
+- Optional **`network.extends:`** declares a base network to **inherit** instead
+  of copying — a variant that differs by one parameter and a rate is a few lines,
+  and a fix to the base reaches every variant. The base is a shipped network
+  *name* (or a path relative to the extending file if it contains `/` or ends
+  `.yaml`); the derived mapping is **merged onto the (recursively resolved) base
+  before Pydantic validation** (so the merged whole is schema-checked).
+  ([`schema/inheritance.py`](aquakin/schema/inheritance.py), wired in
+  [`schema/loader.py`](aquakin/schema/loader.py).) Merge semantics: the named-list
+  blocks (`species`/`conditions`/`reactions`) match by `name` and **field-merge**
+  a derived entry onto the base (override just a reaction's `rate`, keep its
+  `stoichiometry`; a new name is appended); every other block (`parameters`,
+  `expressions`, `speciation`, ...) deep-merges (nested maps key-wise, scalars/
+  lists replace). A `remove:` block (`{reactions: [...], parameters: [...],
+  species/conditions/expressions: [...]}`) then drops entries; removing a
+  not-present name, a cyclic `extends`, an unknown base, or declaring `extends`
+  in both `network:` and top-level all error clearly. New parameters append after
+  the base's, so the flat parameter *vector order* differs from a hand-written
+  full copy (the name→value mapping and the compiled stoichiometry/rates are
+  identical). A YAML with no `extends` is byte-for-byte unaffected. Shipped users:
+  `asm1_ammonia_limitation` (= `asm1` + the `KNH_H` nutrient switch, ~30 lines vs
+  a 200-line copy) and the Khalil `*_halforder` sewer variants (the generator
+  [`networks/_make_khalil_variants.py`](aquakin/networks/_make_khalil_variants.py)
+  emits the pure-override `halforder` variant as a thin `extends` file; the
+  variants whose stoichiometry is *computed from the base* stay full copies).
 - Optional `speciation:` block declares a **state-derived pH** (see below).
 - Optional `positivity_limiter:` block (`threshold`, default `1e-3`) throttles
   each species' *net reaction* term as its concentration approaches zero,
@@ -1201,7 +1225,8 @@ aquakin/
 │   │
 │   ├── schema/
 │   │   ├── network_spec.py          # Pydantic models
-│   │   └── loader.py                # YAML -> Pydantic -> CompiledNetwork
+│   │   ├── inheritance.py           # network.extends: merge a base + add/modify/remove
+│   │   └── loader.py                # YAML -> (resolve extends) -> Pydantic -> CompiledNetwork
 │   │
 │   ├── integrate/
 │   │   ├── _common.py               # shared helpers: atol coercion, _run_diffeqsolve,

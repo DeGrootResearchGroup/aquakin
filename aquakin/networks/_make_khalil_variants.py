@@ -35,6 +35,15 @@ HALFORDER_EXPR = {
     "ho_XS0_half":  "[X_S0] * ([X_S0] + 1.0e-2) ** (0.0 - 0.5)",
     "ho_SNO_half":  "[S_NO] * ([S_NO] + 1.0e-2) ** (0.0 - 0.5)",
 }
+# Reaction-rate overrides for the half-order variant (name -> rate). Shared by
+# apply_halforder (used inside 'combined') and the thin ``extends`` YAML emitted
+# for the standalone halforder variant.
+HALFORDER_RATES = {
+    "sulfide_oxidation_anoxic_biofilm":
+        "k_sII_anox_f * ho_sumS_half * ho_SNO_half * {A_V}",
+    "elemental_S_oxidation_anoxic_biofilm":
+        "k_s0_anox_f * ho_XS0_half * ho_SNO_half * {A_V}",
+}
 
 
 def rxn(net, name):
@@ -46,10 +55,8 @@ def rxn(net, name):
 
 def apply_halforder(net):
     net["expressions"].update(HALFORDER_EXPR)
-    rxn(net, "sulfide_oxidation_anoxic_biofilm")["rate"] = \
-        "k_sII_anox_f * ho_sumS_half * ho_SNO_half * {A_V}"
-    rxn(net, "elemental_S_oxidation_anoxic_biofilm")["rate"] = \
-        "k_s0_anox_f * ho_XS0_half * ho_SNO_half * {A_V}"
+    for name, rate in HALFORDER_RATES.items():
+        rxn(net, name)["rate"] = rate
 
 
 def apply_directsulfate(net):
@@ -126,11 +133,43 @@ STANDALONE = {
 }
 
 
+# Variants expressible as a pure expression / rate override are emitted as a
+# thin ``extends`` YAML (a few lines that inherit the base) instead of a full
+# copy. Only ``halforder`` qualifies; the others change stoichiometry with
+# coefficients computed from the base, so they stay full copies that the base's
+# own numbers flow into. (``combined`` still applies the override in full.)
+def _halforder_extends_doc(base_name):
+    return {
+        "network": {
+            "name": f"{base_name}_halforder",
+            "extends": base_name,
+            "description": (
+                f"Structural variant of {base_name}. {VARIANT_DESC['halforder']} "
+                f"All other reactions, parameters, species and conditions are "
+                f"inherited from the base via 'extends'."),
+        },
+        "expressions": dict(HALFORDER_EXPR),
+        "reactions": [{"name": name, "rate": rate}
+                      for name, rate in HALFORDER_RATES.items()],
+    }
+
+
 def build(base_name, variant_keys, standalone_keys=()):
     base = yaml.safe_load(open(os.path.join(HERE, base_name + ".yaml")))
     # single-change variants, a combined variant applying all of them, and any
     # standalone variants (emitted on their own, not folded into 'combined')
     for key in list(variant_keys) + ["combined"] + list(standalone_keys):
+        out = os.path.join(HERE, f"{base_name}_{key}.yaml")
+        header = (f"# Auto-generated from {base_name}.yaml by "
+                  "_make_khalil_variants.py -- do not edit by hand.\n")
+        if key == "halforder":
+            doc = _halforder_extends_doc(base_name)
+            with open(out, "w") as f:
+                f.write(header)
+                yaml.safe_dump(doc, f, sort_keys=False,
+                               default_flow_style=False, width=100)
+            print(f"wrote {os.path.basename(out)}  (extends {base_name})")
+            continue
         net = copy.deepcopy(base)
         net["network"]["name"] = f"{base_name}_{key}"
         net["network"]["description"] = (
@@ -141,10 +180,8 @@ def build(base_name, variant_keys, standalone_keys=()):
                else [VARIANT_FNS[key]])
         for fn in fns:
             fn(net)
-        out = os.path.join(HERE, f"{base_name}_{key}.yaml")
         with open(out, "w") as f:
-            f.write(f"# Auto-generated from {base_name}.yaml by "
-                    "_make_khalil_variants.py -- do not edit by hand.\n")
+            f.write(header)
             yaml.safe_dump(net, f, sort_keys=False, default_flow_style=False, width=100)
         print(f"wrote {os.path.basename(out)}  ({len(net['reactions'])} reactions)")
 
