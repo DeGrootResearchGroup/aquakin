@@ -35,6 +35,26 @@ The shipped networks currently are:
   and denitrifying polyphosphate-accumulating organisms.
 - `asm2d_tud` — Delft TUD variant of ASM2D with revised bio-P stoichiometry.
 - `asm3` — ASM3, ASM1 with internal storage products replacing hydrolysis.
+- `asm3_2step` — ASM3 extended for **two-step nitrification and two-step
+  denitrification** (Kaelin et al. 2009), carrying nitrite (NO2) as an explicit
+  intermediate. The lumped `SNOX` splits into `SNO3` + `SNO2` and the single
+  autotroph `XA` into ammonia-oxidising `XAOB` (NH4→NO2, nitritation) and
+  nitrite-oxidising `XNOB` (NO2→NO3, nitratation); ASM3's 8 processes become 19
+  (autotroph processes doubled; every heterotroph anoxic process split into a
+  NO3→NO2 and a NO2→N2 step). The two denitrification steps share the
+  electron budget of full denitrification (NO3→NO2 is the 2-electron
+  `iCOD_NO3NO2 = 8/7` gCOD/gN step, NO2→N2 the 3-electron `iCOD_NO2N2 = 12/7`,
+  summing to the 5-electron `iNO3_N2 = 40/14`; nitritation/nitratation O2 demands
+  `48/14` + `16/14` sum to the full `64/14`). Resolves nitrite peaks, the
+  nitrite-shunt (NOB out → N stalls at nitrite), and is the substrate for the
+  N2O extension (#269 PR2). Default parameters are the Kaelin (2009) 20 °C set
+  with the Table-5 temperature dependencies; **standalone YAML** (not an
+  `extends: asm3` inheritance file) because the two state-variable splits rewrite
+  most of the process matrix — the full Petersen matrix stays visible in one
+  place for the COD/N/charge continuity auditing. COD, N and charge close to
+  machine precision (`tests/integration/test_asm_continuity.py`), and the
+  two-step nitrification/denitrification signatures are checked in
+  `tests/integration/test_asm3_2step.py`.
 - `asm3_biop` — ASM3 + bio-P extension.
 - `adm1` — Anaerobic Digestion Model No. 1 (Batstone et al. 2002), BSM2
   implementation form (Rosen & Jeppsson 2006). 29 states (26 liquid + 3 gas
@@ -1274,6 +1294,7 @@ aquakin/
 │   │   ├── asm2d.yaml               # ASM2D (bio-P + denitrification)  [units: _fix_sumo_units.py]
 │   │   ├── asm2d_tud.yaml           # Delft TUD variant of ASM2D       [units: _fix_sumo_units.py]
 │   │   ├── asm3.yaml                # ASM3 (storage products replace hydrolysis)  [units: _fix_sumo_units.py]
+│   │   ├── asm3_2step.yaml          # ASM3 + two-step nitrification/denitrification (explicit NO2; Kaelin 2009)
 │   │   ├── asm3_biop.yaml           # ASM3 + bio-P extension           [units: _fix_sumo_units.py]
 │   │   ├── adm1.yaml                # ADM1 anaerobic digestion (BSM2 form, Rosen-Jeppsson
 │   │   │                            #   2006); complete: liquid + gas headspace, state-derived

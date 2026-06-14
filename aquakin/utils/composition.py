@@ -49,7 +49,7 @@ def _p(net: "CompiledNetwork", name: str, default: float = 0.0,
 
 
 # --- per-family species roles (names differ across ASM1/2d/3) ----------------
-_BIOMASS = {"XB_H", "XB_A", "XH", "XPAO", "XAUT", "XA"}
+_BIOMASS = {"XB_H", "XB_A", "XH", "XPAO", "XAUT", "XA", "XAOB", "XNOB"}
 _STORAGE = {"SA", "XPHA", "XSTO", "XGLY"}          # COD = 1, no N / P
 _NPOOL = {"SNH", "SNH4", "SND", "XND"}             # N = 1
 _PPOOL = {"SPO4", "SPO", "XPP"}                    # P = 1
@@ -112,6 +112,11 @@ def _asm_composition(net: "CompiledNetwork",
             c = {"COD": -1.0}
         elif sp in _NITRATE:
             c = {"COD": icod_no3, "N": 1.0}
+        elif sp == "SNO2":
+            # Nitrite: the 6-electron NH4-referenced electron COD, vs nitrate's
+            # 8-electron value (the NO3->NO2 step is the 2-electron difference).
+            no2_cod = (icod_no3 + P("iCOD_NO3NO2")) if electron_acceptor_cod else 0.0
+            c = {"COD": no2_cod, "N": 1.0}
         elif sp == "SN2":
             c = {"COD": n2_cod, "N": 1.0}
         elif sp in _NPOOL:
@@ -167,6 +172,7 @@ def _adm1_composition(net: "CompiledNetwork", params=None) -> Composition:
 _BUILDERS = {
     "asm1": _asm_composition,
     "asm1_ammonia_limitation": _asm_composition,
+    "asm3_2step": _asm_composition,
     "asm2d": _asm_composition,
     "asm2d_tud": _asm_composition,
     "asm3": _asm_composition,
