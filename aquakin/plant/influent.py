@@ -6,8 +6,9 @@ and exposes an AD-clean piecewise-linear interpolant ``.at(t)`` that
 the plant's RHS calls to get the inlet stream at the current integration
 time.
 
-:func:`load_bsm1_influent` reads the canonical BSM1 dry / rain / storm
-influent files shipped under ``aquakin/plant/bsm/data/``.
+:func:`load_bsm1_influent` reads the **synthesised** BSM1 dry / rain / storm
+influent files shipped under ``aquakin/plant/bsm/data/`` (they match the BSM1
+statistical profile but are not the canonical IWA series).
 """
 
 from __future__ import annotations
@@ -394,12 +395,12 @@ def _influent_from_column_map(
 
 
 def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeries:
-    """Load one of the canonical BSM1 influent files.
+    """Load one of the synthesised BSM1 influent files.
 
     Parameters
     ----------
     profile : {"dry", "rain", "storm"}
-        Which BSM1 reference influent to load.
+        Which BSM1 influent to load.
     network : CompiledNetwork
         ASM1 network (the influent species map to ASM1 state ordering).
 
@@ -409,8 +410,13 @@ def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
 
     Notes
     -----
-    These files follow the BSM1 specification (Copp 2002; Alex et al.
-    2008). Times are in days, flow in m³/d, concentrations in g_COD/m³
+    These files are **synthesised** (``scripts/generate_bsm1_influent.py``):
+    they match the BSM1 statistical dry / rain / storm profile (Copp 2002;
+    Alex et al. 2008) but are **not** the canonical IWA series, so headline
+    EQI / OCI numbers from them are not reproducible against groups using the
+    official files -- replace ``BSM1_<profile>.csv`` under
+    ``aquakin/plant/bsm/data/`` with the official file for published
+    comparisons. Times are in days, flow in m³/d, concentrations in g_COD/m³
     or g_N/m³ following ASM1 conventions.
     """
     if profile not in ("dry", "rain", "storm"):
