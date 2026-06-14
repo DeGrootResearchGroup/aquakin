@@ -72,15 +72,13 @@ def main() -> None:
                 else aggregate_units[key])
         print(f"  {key:5s} = {val:7.2f}  {unit}")
 
-    # Headline BSM1 performance indices (EQI / OCI and component terms).
+    # Headline BSM1 performance indices (EQI / OCI). The evaluation prints a
+    # labeled, units-annotated breakdown -- each OCI term with its value, units
+    # and signed contribution to the index, plus the OCI-definition caveat -- so
+    # the headline numbers aren't bare floats to misread against published values.
     ev = evaluate_bsm1(plant, sol)
     print()
-    print("BSM1 performance indices:")
-    print(f"  EQI = {ev.eqi:8.1f}  kg pollutant/d")
-    print(f"  OCI = {ev.oci:8.1f}  (AE + PE + 5*sludge)")
-    print(f"    aeration energy   = {ev.aeration_energy:8.1f}  kWh/d")
-    print(f"    pumping energy    = {ev.pumping_energy:8.1f}  kWh/d")
-    print(f"    sludge production = {ev.sludge_production:8.1f}  kg TSS/d")
+    print(ev.report())          # == print(ev); fields (ev.eqi, ev.oci, ...) too
 
 
 if __name__ == "__main__":
