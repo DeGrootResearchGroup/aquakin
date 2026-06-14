@@ -9,7 +9,8 @@ integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
 
 Shipped networks span chemistry (ozonation/bromate after Acero & von Gunten,
 2001; UV/H₂O₂) and biology (the ASM activated-sludge family, including a
-two-step nitrification/denitrification variant with explicit nitrite; ADM1 anaerobic
+two-step nitrification/denitrification variant with explicit nitrite and a
+two-pathway AOB nitrous-oxide (N₂O) model; ADM1 anaerobic
 digestion in its BSM2 form, with gas headspace; the WATS sewer-process models
 `wats_sewer_extended` and the paper-faithful `wats_sewer_khalil_paper`, the
 latter with structural variants for model-structure studies). The network

@@ -110,13 +110,22 @@ def _asm_composition(net: "CompiledNetwork",
             c = {"COD": 1.0}
         elif sp in _OXYGEN:
             c = {"COD": -1.0}
-        elif sp in _NITRATE:
+        elif sp in _NITRATE and not (sp == "SNO" and "SNO3" in net.species):
+            # ``SNO`` means nitrate in the ASM1 family but NITRIC OXIDE in a
+            # two-step network (which names nitrate ``SNO3``); defer the latter
+            # to the dedicated nitric-oxide case below.
             c = {"COD": icod_no3, "N": 1.0}
         elif sp == "SNO2":
             # Nitrite: the 6-electron NH4-referenced electron COD, vs nitrate's
             # 8-electron value (the NO3->NO2 step is the 2-electron difference).
             no2_cod = (icod_no3 + P("iCOD_NO3NO2")) if electron_acceptor_cod else 0.0
             c = {"COD": no2_cod, "N": 1.0}
+        elif sp == "SNH2OH":          # hydroxylamine: 2 e- above NH4 (icod_no3 is 8)
+            c = {"COD": icod_no3 * 0.25, "N": 1.0}
+        elif sp == "SNO":             # nitric oxide: 5 e- above NH4
+            c = {"COD": icod_no3 * 0.625, "N": 1.0}
+        elif sp == "SN2O":            # nitrous oxide: 4 e- above NH4 (per N)
+            c = {"COD": icod_no3 * 0.5, "N": 1.0}
         elif sp == "SN2":
             c = {"COD": n2_cod, "N": 1.0}
         elif sp in _NPOOL:
@@ -173,6 +182,7 @@ _BUILDERS = {
     "asm1": _asm_composition,
     "asm1_ammonia_limitation": _asm_composition,
     "asm3_2step": _asm_composition,
+    "asm3_2step_n2o": _asm_composition,
     "asm2d": _asm_composition,
     "asm2d_tud": _asm_composition,
     "asm3": _asm_composition,
