@@ -909,15 +909,14 @@ integration over one transport timestep at a fixed spatial location.
 ### JAX x64 Mode
 
 Stiff ODE integration requires 64-bit floats. `aquakin` enables x64 mode
-automatically at import time:
-
-```python
-# aquakin/__init__.py
-import jax
-jax.config.update("jax_enable_x64", True)
-```
-
-This is documented in the README. Do not remove this.
+automatically at import time. This is **global, process-wide** JAX state, so it
+is a documented side effect of `import aquakin` (README install section). To keep
+it from being *silent*, `aquakin/__init__.py` warns (once) when it overrides what
+looks like an explicit float32 preference — JAX already imported when aquakin is
+imported, or `JAX_ENABLE_X64` set to a false value — but stays silent on a plain
+fresh import (the common case). It always enables x64 regardless; the warning is
+only a signal. See `tests/unit/test_x64_import.py` (subprocess-per-scenario, since
+the effect is process-global). Do not remove the x64 enablement.
 
 ---
 
