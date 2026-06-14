@@ -217,6 +217,22 @@ def test_adm1_warnings_confined_to_gas_headspace():
     assert {w.reaction for w in ws} <= gas
 
 
+def test_check_network_units_free_function_matches_method():
+    # The exported free function aquakin.check_network_units(net) is the
+    # implementation the CompiledNetwork.check_units() method delegates to, so
+    # the two must return the same findings -- including under check_root=False.
+    net = aquakin.load_network("adm1")          # has nonzero (gas-headspace) findings
+    via_fn = aquakin.check_network_units(net)
+    via_method = net.check_units()
+    assert via_fn == via_method
+    assert via_fn, "adm1 should surface the gas-headspace findings"
+    # the check_root toggle threads through identically
+    assert (aquakin.check_network_units(net, check_root=False)
+            == net.check_units(check_root=False))
+    # a clean network gives an empty list through the free function too
+    assert aquakin.check_network_units(aquakin.load_network("asm1")) == []
+
+
 def _broken_yaml(rate):
     return f"""
 network:
