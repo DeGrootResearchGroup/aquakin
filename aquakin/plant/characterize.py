@@ -1,7 +1,7 @@
 """Influent characterization: lab / SCADA measurements -> ASM1 state vector.
 
 A municipal influent is measured as aggregates -- total COD, TKN, ammonia,
-alkalinity, and (if available) filtered / flocculated COD, VFA -- not as the 13
+alkalinity, and (if available) filtered / flocculated COD -- not as the 13
 ASM1 state variables an `InfluentSeries` needs. :func:`characterize_influent`
 and the lower-level :func:`fractionate` split those aggregates into ASM1 states,
 following the SUMO Sumo1 raw-influent fractionation reduced to ASM1.
@@ -24,7 +24,7 @@ Reduced to ASM1 (colloidal behaves as slowly-hydrolysed particulate):
     XP   = XE                 # endogenous products
     XB_A = 0                  # autotrophs ~ 0 in raw influent
 
-A measured ``filtered_cod`` / ``flocculated_filtered_cod`` / ``vfa`` /
+A measured ``filtered_cod`` / ``flocculated_filtered_cod`` /
 ``soluble_inert_cod`` drives the corresponding split; absent, the SUMO default
 fraction is used. Nitrogen: ``SNH`` from ammonia (or ``f_snh*TKN``); ``SND`` from
 the soluble-biodegradable N content; ``XND`` as the TKN-balance remainder using
@@ -38,6 +38,7 @@ aggregate-measurement CSV (a COD / TKN time series) to ASM1 states on load.
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -109,7 +110,6 @@ def fractionate(
     alkalinity=None,
     filtered_cod=None,
     flocculated_filtered_cod=None,
-    vfa=None,
     soluble_inert_cod=None,
     fractions: InfluentFractions = InfluentFractions(),
 ) -> dict:
@@ -128,13 +128,32 @@ def fractionate(
     ammonia, nox, alkalinity : float or array, optional
         Ammonia (g N/m3; else ``f_snh*tkn``), nitrate+nitrite (g N/m3; default 0
         -> ``SNO``), and alkalinity (mg CaCO3/L -> ``SALK``; else a default).
-    filtered_cod, flocculated_filtered_cod, vfa, soluble_inert_cod : float or array, optional
+    filtered_cod, flocculated_filtered_cod, soluble_inert_cod : float or array, optional
         Measured COD sub-fractions (g COD/m3). When given they drive the split;
         when absent the corresponding default fraction is used.
     fractions : InfluentFractions
         The fraction parameters (SUMO Sumo1 defaults).
+
+    Raises
+    ------
+    ValueError
+        If ``ammonia`` exceeds ``tkn`` (TKN includes ammonia).
+
+    Warns
+    -----
+    UserWarning
+        If the COD fractionation does not close -- a COD fraction clamped
+        negative (unusual ``filtered_cod`` / ``flocculated_filtered_cod``), so
+        the ASM1 COD states sum to more than ``total_cod``.
     """
     f = fractions
+
+    # TKN includes ammonia, so ammonia > TKN is an inconsistent measurement that
+    # would force the organic-N pools negative; reject it rather than clamp.
+    if ammonia is not None and np.any(np.asarray(ammonia) > np.asarray(tkn)):
+        raise ValueError(
+            "ammonia exceeds tkn (TKN includes ammonia); check the measurements."
+        )
 
     sccod = filtered_cod if filtered_cod is not None else f.f_sccod * total_cod
     scod = (flocculated_filtered_cod if flocculated_filtered_cod is not None
@@ -158,6 +177,19 @@ def fractionate(
     XS = np.maximum(cb + xb, 0.0)
     XB_H = np.maximum(oho, 0.0)
     XP = np.maximum(xe, 0.0)
+
+    # The six COD states partition total_cod exactly (sum == total_cod) when no
+    # fraction is negative. A negative fraction clamped to 0 (unusual filtered /
+    # flocculated splits) ADDS COD, so the partition no longer closes -- warn
+    # rather than silently return a non-conserving influent.
+    cod_sum = SI + SS + XI + XS + XB_H + XP
+    if np.any(np.asarray(cod_sum) > np.asarray(total_cod) * (1.0 + 1e-6) + 1e-9):
+        warnings.warn(
+            "Influent COD fractionation does not close: a COD fraction clamped "
+            "negative (check filtered_cod / flocculated_filtered_cod), so the "
+            "ASM1 COD states sum to more than total_cod.",
+            stacklevel=2,
+        )
 
     SNH = ammonia if ammonia is not None else f.f_snh * tkn
     SNO = nox
@@ -197,7 +229,6 @@ def characterize_influent(
     alkalinity=None,
     filtered_cod=None,
     flocculated_filtered_cod=None,
-    vfa=None,
     soluble_inert_cod=None,
     fractions: InfluentFractions = InfluentFractions(),
     T=None,
@@ -215,7 +246,7 @@ def characterize_influent(
     flow : float
         Volumetric flow (m3/d).
     total_cod, tkn, ammonia, nox, alkalinity, filtered_cod,
-    flocculated_filtered_cod, vfa, soluble_inert_cod, fractions :
+    flocculated_filtered_cod, soluble_inert_cod, fractions :
         Passed to :func:`fractionate`.
     T : float, optional
         Influent temperature (Kelvin), carried onto the series.
@@ -234,7 +265,7 @@ def characterize_influent(
     states = fractionate(
         total_cod=total_cod, tkn=tkn, ammonia=ammonia, nox=nox,
         alkalinity=alkalinity, filtered_cod=filtered_cod,
-        flocculated_filtered_cod=flocculated_filtered_cod, vfa=vfa,
+        flocculated_filtered_cod=flocculated_filtered_cod,
         soluble_inert_cod=soluble_inert_cod, fractions=fractions,
     )
     return network.influent({k: float(v) for k, v in states.items()},

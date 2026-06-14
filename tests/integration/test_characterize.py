@@ -78,10 +78,40 @@ def test_fractionate_is_vectorised_per_row():
 
 
 def test_fractionate_clamps_negative_states():
-    # a tiny COD with a large biomass fraction must not go negative
-    s = fractionate(total_cod=50.0, tkn=5.0,
-                    fractions=InfluentFractions(f_xu=0.5, f_oho=0.5))
+    # a tiny COD with a large biomass fraction must not go negative (it warns
+    # that COD no longer closes because a fraction clamped to 0)
+    with pytest.warns(UserWarning, match="does not close"):
+        s = fractionate(total_cod=50.0, tkn=5.0,
+                        fractions=InfluentFractions(f_xu=0.5, f_oho=0.5))
     assert all(np.all(np.asarray(v) >= 0.0) for v in s.values())
+
+
+def test_fractionate_cod_closes_by_default():
+    # the six COD states partition total_cod exactly when nothing clamps, and a
+    # normal characterization emits no closure warning.
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any UserWarning would fail the test
+        s = fractionate(total_cod=420.0, tkn=34.4, ammonia=24.0)
+    cod = sum(float(s[k]) for k in ("SI", "SS", "XI", "XS", "XB_H", "XP"))
+    assert cod == pytest.approx(420.0, rel=1e-9)
+
+
+def test_fractionate_warns_when_cod_does_not_close():
+    # an odd filtered/flocculated split drives a fraction negative -> the clamp
+    # adds COD, so the states no longer sum to total_cod.
+    with pytest.warns(UserWarning, match="does not close"):
+        s = fractionate(total_cod=200.0, filtered_cod=198.0,
+                        flocculated_filtered_cod=190.0, tkn=34.0, ammonia=24.0)
+    cod = sum(float(s[k]) for k in ("SI", "SS", "XI", "XS", "XB_H", "XP"))
+    assert cod > 200.0 + 1e-6   # over-allocated by the clamp
+
+
+def test_fractionate_rejects_ammonia_above_tkn():
+    # TKN includes ammonia, so ammonia > tkn is inconsistent and must raise.
+    with pytest.raises(ValueError, match="ammonia exceeds tkn"):
+        fractionate(total_cod=420.0, tkn=10.0, ammonia=30.0)
+    fractionate(total_cod=420.0, tkn=34.0, ammonia=24.0)   # ammonia <= tkn is fine
 
 
 # --- characterize_influent --------------------------------------------------

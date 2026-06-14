@@ -2425,7 +2425,7 @@ reproduces the validated steady state exactly.
 
 **Influent characterization + CSV `column_map` (issue #136).** Real influent is
 measured as aggregates (total COD, TKN, ammonia, alkalinity, optionally
-filtered/flocculated COD, VFA), not as the 13 ASM1 states. `aquakin/plant/characterize.py`
+filtered/flocculated COD), not as the 13 ASM1 states. `aquakin/plant/characterize.py`
 maps them: `fractionate(total_cod=, tkn=, ...) -> {ASM1 state: value}` follows the
 **SUMO Sumo1 raw-influent fractionation reduced to ASM1** — COD split by
 filtration (soluble/colloidal/particulate) then biodegradability, reduced to ASM1

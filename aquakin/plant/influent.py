@@ -34,7 +34,7 @@ if TYPE_CHECKING:  # pragma: no cover
 # ASM1 states per row (see aquakin.plant.characterize.fractionate).
 _AGGREGATE_ROLES = (
     "total_cod", "tkn", "ammonia", "nox", "alkalinity", "filtered_cod",
-    "flocculated_filtered_cod", "vfa", "soluble_inert_cod",
+    "flocculated_filtered_cod", "soluble_inert_cod",
 )
 
 
@@ -186,7 +186,7 @@ def read_influent_csv(
         optional ``"T"``, any ASM species name (mapped directly), and the
         aggregate measurements ``total_cod`` / ``tkn`` / ``ammonia`` / ``nox`` /
         ``alkalinity`` / ``filtered_cod`` / ``flocculated_filtered_cod`` /
-        ``vfa`` / ``soluble_inert_cod``. When aggregates are mapped, each row is
+        ``soluble_inert_cod``. When aggregates are mapped, each row is
         fractionated into ASM1 states (see
         :func:`aquakin.plant.characterize.fractionate`); a directly-mapped
         species overrides its fractionated value, and any species neither mapped
