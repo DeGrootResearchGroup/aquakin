@@ -77,18 +77,28 @@ jobs:
   # The multi-minute stiff/plant solves. Skipped on pull requests (the fast gate
   # carries those); runs on every push to main so a regression the PR's fast gate
   # could not catch surfaces within minutes of landing -- revert from there.
+  # Sharded across parallel runners, like the validation suite below and for the
+  # same reason: even at `-n 1` (serial within a shard), a SINGLE long-lived
+  # process accumulating the whole slow set -- XLA compilation cache plus live
+  # JAX buffers across ~140 stiff solves -- grows without bound and the 16 GB
+  # hosted runner is OOM-reclaimed mid-suite (~62 min in, SIGTERM / exit 143,
+  # before the timeout; no test actually fails). The slow set crossed that
+  # threshold as more whole-plant tests landed. Splitting it across N fresh
+  # processes (pytest-split) keeps each process's accumulated footprint to ~1/N
+  # and cuts wall time by running the shards in parallel. Every test runs in
+  # exactly one shard (a complete, disjoint partition), so coverage is unchanged.
   slow:
-    name: slow suite (py${{ matrix.python-version }})
+    name: slow suite (py${{ matrix.python-version }} shard ${{ matrix.group }}/6)
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    # `-n 1` (serial, see the run step) roughly doubles wall time versus `-n 2`,
-    # so the ceiling is raised to 100 min with headroom for further growth.
-    # Merge-only, so off the PR critical path.
-    timeout-minutes: 100
+    # Each shard is ~1/6 of the serial run; 45 min is a safety ceiling with
+    # headroom. Merge-only, so off the PR critical path.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+        group: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
 
@@ -104,23 +114,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
 
-      - name: Run slow suite
+      - name: Run slow suite shard
         # `slow and not validation`: a few tests carry BOTH markers (a module-
         # level `slow` plus a per-test `validation`), so excluding validation
         # here keeps the three CI groups mutually exclusive -- no test runs in two
         # jobs. (fast = "not validation and not slow"; slow = "slow and not
         # validation"; validation = "validation".)
-        # `-n 1` (serial), NOT `-n auto`/`-n 2`: a single heavy whole-plant test
-        # (the BSM2 family, the profile-likelihood and calibration grids) peaks at
-        # ~4-5.5 GB resident, and the heaviest do several solves and spike higher.
-        # On the 16 GB hosted runner two concurrent ones (`-n 2`) reach 10-16 GB
-        # and the runner is OOM-killed or thrashes to the timeout when two heavy
-        # tests coincide (observed intermittently: one Python version passes while
-        # the other OOMs). Running serially caps peak at ~one test (~7-9 GB with
-        # the interpreter), comfortably in budget, at the cost of wall time --
-        # acceptable since this is merge-only, off the PR critical path.
+        # `-n 1` (serial within the shard), NOT `-n auto`/`-n 2`: a single heavy
+        # whole-plant test (the BSM2 family, the profile-likelihood and
+        # calibration grids) peaks at ~4-5.5 GB resident, so two concurrent ones
+        # OOM-kill the runner. pytest-split partitions the marked set across the 6
+        # shards (by recorded duration where available in `.test_durations`, else
+        # evenly by count), so this shard runs only its ~1/6 slice in a fresh
+        # process -- bounding the accumulated memory.
         run: >-
           pytest -m "slow and not validation" -q -n 1
+          --splits 6 --group ${{ matrix.group }}
           --durations=15 --timeout=900 --timeout-method=thread
           --max-worker-restart=0
 
