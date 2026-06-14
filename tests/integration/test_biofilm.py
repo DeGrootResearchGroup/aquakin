@@ -125,6 +125,12 @@ def test_default_fixed_mask_warns_on_reactive_particulate(net, cond):
     # The DEFAULT fixed_mask freezes every particulate, which would silently turn
     # the reactive B into a non-depleting sink -> the reactor must warn. An
     # explicit fixed_mask is a deliberate choice and must NOT warn.
+    #
+    # B is ONLY produced (A -> B, B never consumed) -- the same stoichiometric
+    # shape as a precipitation sink like X_FeS. The detector must use "any nonzero
+    # stoichiometry", NOT "appears with both signs": a both-signs test would miss
+    # B (and FeS) and fail to warn about the exact mass-balance break this guards.
+    # This test therefore locks the any-nonzero choice in.
     soluble = jnp.array([True, False])  # A diffuses, B is particulate
     with pytest.warns(UserWarning, match="reactive particulate"):
         _reactor(net, cond, soluble_mask=soluble)  # fixed_mask defaulted

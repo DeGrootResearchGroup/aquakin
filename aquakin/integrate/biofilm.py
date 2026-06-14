@@ -300,6 +300,29 @@ class BiofilmReactor(GradientCheckMixin):
     no-flux boundary. Species in ``fixed_mask`` have their net rate zeroed
     everywhere (held fixed); all others evolve. Diffusion is governed separately
     by ``soluble_mask``.
+
+    Examples
+    --------
+    Sulfur biofilm networks carry *reactive* non-diffusing particulates ---
+    elemental sulfur ``X_S0`` and precipitated ``X_FeS`` --- whose inventory
+    genuinely drains and fills. The default ``fixed_mask`` would freeze them and
+    silently break mass balance (the reactor warns when it would). Build a mask
+    that holds **only the inert solids** fixed and lets every reactive pool
+    evolve:
+
+    >>> net = aquakin.load_network("wats_sewer_khalil_paper_balanced_biofilm_multispecies")
+    >>> inert = {"X_I"}   # the only genuinely inert, non-depleting solid
+    >>> fixed_mask = jnp.array([s in inert for s in net.species])
+    >>> reactor = aquakin.BiofilmReactor(
+    ...     net, conditions, n_layers=6, thickness=8e-4, area_per_volume=50.0,
+    ...     diffusivity=1e-4, boundary_layer=1e-4, fixed_mask=fixed_mask)
+
+    Everything not named in ``inert`` --- the heterotrophs and functional-group
+    biomass, the stored-substrate reservoirs ``X_S1``/``X_S2``, and the reactive
+    sulfur pools ``X_S0``/``X_FeS`` --- then evolves and conserves mass. (The
+    areal ``*_biofilm`` variant, by contrast, deliberately freezes its biomass as
+    a sustained "mature biofilm" reservoir, so its mask holds the biomass fixed
+    too; the rule is always "freeze only what is genuinely non-depleting".)
     """
 
     def __init__(
@@ -377,6 +400,14 @@ class BiofilmReactor(GradientCheckMixin):
         # source). Only warn for the default; an explicit fixed_mask is a
         # deliberate choice (a particulate may be frozen on purpose as a sustained
         # "mature biofilm" source).
+        #
+        # "Reactive" is ANY nonzero stoichiometry, not "appears with both signs".
+        # A precipitation sink like X_FeS is only ever PRODUCED (consumed > 0
+        # never), so a both-signs test would miss it -- yet freezing it is exactly
+        # the mass-balance break this guards against. Any-nonzero catches it; the
+        # cost is also flagging inert solids (X_I) and stored reservoirs, but under
+        # the default mask freezing those is wrong too, so the broad warning is the
+        # right "pass an explicit mask here" signal.
         if fixed_defaulted:
             stoich = network.compute_stoich(network.default_parameters())
             reactive = jnp.any(stoich != 0.0, axis=0)            # (n_species,)
@@ -388,9 +419,11 @@ class BiofilmReactor(GradientCheckMixin):
                     "BiofilmReactor is holding reactive particulate(s) "
                     f"{offenders} fixed by the default fixed_mask: their reactions "
                     "are zeroed everywhere, so they act as non-depleting "
-                    "source/sinks and can break mass balance. Pass an explicit "
-                    "fixed_mask that leaves reactive particulates free (only inert "
-                    "biomass/solids held fixed).",
+                    "source/sinks and can break mass balance (e.g. a frozen "
+                    "elemental-sulfur or FeS pool). Pass an explicit fixed_mask "
+                    "holding only the genuinely inert solids fixed (e.g. "
+                    "jnp.array([s in {'X_I'} for s in network.species])) and "
+                    "letting every reactive particulate evolve.",
                     stacklevel=2,
                 )
 
