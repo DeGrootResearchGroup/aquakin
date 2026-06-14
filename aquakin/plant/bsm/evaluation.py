@@ -383,7 +383,12 @@ def evaluate_bsm2(
     disposal_port, internal_recycle_port, ras_port, waste_port : str, optional
         Stream endpoints to reconstruct; the defaults match ``build_bsm2``.
     do_saturation : float, optional
-        DO saturation used in the aeration-energy formula (gO2/m^3).
+        DO saturation used in the aeration-energy formula (gO2/m^3). This is the
+        nominal saturation by BSM2 convention; it is **not** temperature-adjusted
+        even when the plant runs with ``do_temperature_correction`` (where the
+        reactor's actual driving-force saturation is scaled by ``C_s(T)/C_s(ref)``).
+        So the reported AE reflects the BSM2 definition, not the temperature-
+        corrected oxygen transfer.
     digester_feed_T_C : float, optional
         Digester-feed temperature (°C) for the heating term, used only when the
         plant's streams carry no temperature (the default constant-influent BSM2
@@ -563,7 +568,12 @@ def evaluate_bsm1(
     internal_recycle_port, ras_port, waste_port : str, optional
         Pumped-stream endpoints; the defaults match ``build_bsm1``.
     do_saturation : float, optional
-        DO saturation used in the aeration-energy formula (gO2/m^3).
+        DO saturation used in the aeration-energy formula (gO2/m^3). This is the
+        nominal saturation by BSM2 convention; it is **not** temperature-adjusted
+        even when the plant runs with ``do_temperature_correction`` (where the
+        reactor's actual driving-force saturation is scaled by ``C_s(T)/C_s(ref)``).
+        So the reported AE reflects the BSM2 definition, not the temperature-
+        corrected oxygen transfer.
 
     Returns
     -------

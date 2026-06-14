@@ -136,6 +136,31 @@ def test_wrong_root_currency_power_flagged():
     assert any(w.location == "rate root" for w in ws)
 
 
+def test_max_shared_units_passes():
+    # max of two COD concentrations is a COD concentration; * k[1/d] -> valid rate
+    assert _check("k * max([X], [Z])") == []
+
+
+def test_max_literal_operand_adopts_sibling():
+    # the bare 0 in a ``max(0, .)`` clip adopts the sibling's dimension silently
+    assert _check("k * max(0, [X])") == []
+
+
+def test_max_currency_mismatch_flagged():
+    # max() operands in different currencies (COD vs N) -> dimensional warning
+    ws = _check("k * max([X], [Y])", check_root=False)
+    assert any("max" in w.location for w in ws)
+    assert "COD" in str(ws) and "N" in str(ws)
+
+
+def test_safe_div_divides_units():
+    # safe_div([X],[Z]) (COD/COD) is dimensionless; * k * [X] -> valid rate
+    assert _check("k * safe_div([X], [Z]) * [X]") == []
+    # without the [X] factor it is only 1/d -> flagged at the root
+    ws = _check("k * safe_div([X], [Z])")
+    assert any(w.location == "rate root" for w in ws)
+
+
 def test_regularizer_constant_not_flagged():
     # a bare numeric guard added to a concentration is intentional, not a bug
     assert _check("k * [X] / ([X] + [Z] + 1.0e-6)", check_root=False) == []
