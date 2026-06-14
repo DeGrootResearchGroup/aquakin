@@ -19,19 +19,23 @@ from aquakin.plant.streams import Stream
 Q_FEED = 178.4674
 V_LIQ = 3400.0
 
+# Exact published BSM2 digester feed + steady state (the "ADM1 influent (post
+# ASM2ADM interface)" and "ADM1 effluent" tables of Results/BSM2_steady_state.pdf
+# in the official BSM2 distribution).
 INFLUENT = {
-    "S_aa": 0.0468, "S_IC": 0.00791, "S_IN": 0.00197, "S_I": 0.0281,
-    "X_ch": 3.7244, "X_pr": 16.2784, "X_li": 8.0068, "X_I": 17.0172,
-    "S_an": 0.0052,
+    "S_aa": 0.04388, "S_IC": 0.0079326, "S_IN": 0.0019721, "S_I": 0.028067,
+    "X_ch": 3.7236, "X_pr": 15.9235, "X_li": 8.047, "X_I": 17.0106,
+    "S_an": 0.0052101,
 }
 
 REFERENCE_SS = {
-    "S_su": 0.0124, "S_aa": 0.0055, "S_fa": 0.1074, "S_va": 0.0123,
-    "S_bu": 0.0140, "S_pro": 0.0176, "S_ac": 0.0893, "S_ch4": 0.0555,
-    "S_IC": 0.0951, "S_IN": 0.0945, "S_I": 0.1309, "X_ch": 0.0205,
-    "X_pr": 0.0842, "X_li": 0.0436, "X_su": 0.3122, "X_aa": 0.9317,
-    "X_fa": 0.3384, "X_c4": 0.3258, "X_pro": 0.1011, "X_ac": 0.6772,
-    "X_h2": 0.2848, "X_I": 17.2162, "S_gas_ch4": 1.6535, "S_gas_co2": 0.0135,
+    "S_su": 0.012394, "S_aa": 0.0055432, "S_fa": 0.10741, "S_va": 0.012333,
+    "S_bu": 0.014003, "S_pro": 0.017584, "S_ac": 0.089315, "S_ch4": 0.05549,
+    "S_IC": 0.095149, "S_IN": 0.094468, "S_I": 0.13087, "X_c": 0.10792,
+    "X_ch": 0.020517, "X_pr": 0.08422, "X_li": 0.043629, "X_su": 0.31222,
+    "X_aa": 0.93167, "X_fa": 0.33839, "X_c4": 0.33577, "X_pro": 0.10112,
+    "X_ac": 0.67724, "X_h2": 0.28484, "X_I": 17.2162, "S_gas_ch4": 1.6535,
+    "S_gas_co2": 0.01354,
 }
 
 
@@ -73,12 +77,11 @@ def test_digester_unit_reproduces_bsm2_steady_state():
         rel = abs(float(C[si[name]]) - ref) / ref
         if rel > worst:
             worst, worst_name = rel, name
-    # Every state within ~6%; the biochemical stoichiometry is verified identical
-    # to the official BSM2 adm1_ODE_bsm2.c and the kinetic/equilibrium constants
-    # to adm1init_bsm2.m. The residual few-percent spread is the charge-balance
-    # vs reference-DAE pH difference, amplified by the inhibition-sensitive
-    # acetate/C4 methanogens. Methane is tight.
-    assert worst < 0.06, f"{worst_name} off by {worst:.1%}"
+    # Every state within ~2% of the published BSM2 digester steady state. The
+    # stoichiometry is verified identical to the official adm1_ODE_bsm2.c and the
+    # constants to adm1init_bsm2.m; the residual ~1% is the charge-balance vs
+    # reference-DAE pH difference. Methane is tight.
+    assert worst < 0.02, f"{worst_name} off by {worst:.1%}"
     # Methane output (defining digester quantity).
     assert float(C[si["S_gas_ch4"]]) == pytest.approx(REFERENCE_SS["S_gas_ch4"], rel=0.015)
 
