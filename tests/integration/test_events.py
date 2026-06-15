@@ -160,6 +160,44 @@ def test_batch_reactor_plain_solve_unaffected(reactor, decay):
     assert float(sol.C[-1, 0]) == pytest.approx(np.exp(-0.1), abs=1e-4)
 
 
+def test_event_path_matches_plain_solve_identity_reset(reactor, decay):
+    """A no-op (identity) reset must reproduce the plain solve point-for-point.
+
+    The drift guard: the event path builds its RHS via the shared
+    ``make_chemistry_rhs`` factory and integrates via the shared
+    ``_run_diffeqsolve`` kernel -- the same two pieces the plain solve uses. An
+    identity reset at an interior time forces the multi-segment + dense-save
+    machinery yet must leave the trajectory unchanged, so any divergence in the
+    RHS or solver setup between ``solve()`` and ``solve_with_events`` shows up
+    here as a numeric mismatch. The tolerance is loose (~1e-4) because splitting
+    the span at the event times legitimately changes where the adaptive
+    controller places its steps (each segment restarts it), perturbing the
+    interpolation/accumulation error at the solver's own rtol -- a real RHS or
+    kernel divergence would be orders larger. The companion never-firing
+    single-segment test pins the kernel tightly.
+    """
+    teval = jnp.linspace(0.0, 2.0, 9)
+    plain = reactor.solve(_A0(decay), (0.0, 2.0), teval)
+    ev = Event(at_times=[0.7, 1.4], apply=lambda t, y, a: y, name="noop")
+    evented = reactor.solve(_A0(decay), (0.0, 2.0), teval, events=[ev])
+    np.testing.assert_allclose(np.asarray(evented.C), np.asarray(plain.C),
+                               rtol=1e-4, atol=1e-7)
+
+
+def test_event_path_matches_plain_solve_never_firing_state_event(reactor, decay):
+    """A state event that never crosses (so a single segment runs under a
+    terminating diffrax.Event) must also match the plain solve -- pinning the
+    ``has_root`` branch of the driver to the plain kernel."""
+    teval = jnp.linspace(0.0, 2.0, 9)
+    plain = reactor.solve(_A0(decay), (0.0, 2.0), teval)
+    # A decays from 1 toward 0; this threshold at -1 is never reached.
+    ev = Event(cond_fn=lambda t, y, a: y[0] + 1.0, direction=-1, name="never")
+    evented = reactor.solve(_A0(decay), (0.0, 2.0), teval, events=[ev])
+    assert evented.events_log == []
+    np.testing.assert_allclose(np.asarray(evented.C), np.asarray(plain.C),
+                               rtol=1e-6, atol=1e-9)
+
+
 def test_batch_reactor_grad_through_event(reactor, decay):
     teval = jnp.array([2.0])
 

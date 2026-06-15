@@ -18,6 +18,7 @@ from aquakin.integrate._common import (
     concrete_settings_key,
     friendly_solve_errors,
     init_solver_settings,
+    make_chemistry_rhs,
     resolve_state_atol,
     solve_chemistry,
     to_native_time,
@@ -287,17 +288,17 @@ class BatchReactor(GradientCheckMixin):
                            events, time_factor):
         """Run the event-driven segmented solve (the ``events=`` path).
 
-        Builds the same constant-condition RHS the plain batch solve uses and
-        hands it to :func:`solve_with_events`, which locates the events and
-        applies their resets between segments. Not routed through the jit cache:
-        the driver is an eager Python loop over segments (a state event's count
-        is data-dependent), and time-only events still differentiate because each
+        Builds the same constant-condition RHS the plain batch solve uses --
+        through the shared :func:`make_chemistry_rhs` factory, so the event path
+        and ``solve_chemistry`` cannot drift -- and hands it to
+        :func:`solve_with_events`, which locates the events and applies their
+        resets between segments. Not routed through the jit cache: the driver is
+        an eager Python loop over segments (a state event's count is
+        data-dependent), and time-only events still differentiate because each
         segment is a plain differentiable sub-solve.
         """
-        stoich = self.network.compute_stoich(params)
-
-        def rhs(t, C, args):
-            return self.network.dCdt(C, args, condition_arrays, 0, stoich=stoich)
+        rhs = make_chemistry_rhs(
+            self.network, params, cond_fn=lambda t: condition_arrays)
 
         t_eval_arr = None if t_eval is None else jnp.asarray(t_eval)
         if t_eval_arr is not None:

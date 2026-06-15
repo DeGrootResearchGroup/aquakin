@@ -1056,6 +1056,15 @@ instead of smoothing it or grid-snapping with `searchsorted`. Exposed as an
 `events=` argument on `BatchReactor.solve` and `Plant.solve`; both build their
 RHS and hand it to the shared driver, which returns the trajectory on the
 requested `t_eval` grid plus a `solution.events_log` of `(time, name)` firings.
+**No drift from the plain solve:** the event path reuses the *same* two pieces
+the plain solve uses — the reaction RHS comes from the shared
+`make_chemistry_rhs` factory (batch) or `self._rhs` (plant), and each segment is
+integrated by the canonical `_run_diffeqsolve` (Kvaerno5 + `PIDController` +
+adjoint), so the per-step integration and the RHS cannot diverge between
+`solve()` and `solve_with_events`. A parity test pins this: an identity reset (or
+a never-firing state event) reproduces the plain `solve()` trajectory, so any
+future change to the RHS/kernel that reaches only one path fails the test
+(`tests/integration/test_events.py`).
 
 An `Event` carries exactly one trigger — `at_times=[...]` (a **time event**) or
 `cond_fn(t, y, args)` (a **state event**, located by an optimistix root find on

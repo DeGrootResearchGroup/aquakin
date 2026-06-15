@@ -38,6 +38,8 @@ import jax.numpy as jnp
 import numpy as np
 import optimistix as optx
 
+from aquakin.integrate._common import _run_diffeqsolve
+
 
 @dataclass
 class Event:
@@ -121,17 +123,19 @@ class EventedResult:
 
 
 def _make_segment_solver(rhs, *, rtol, atol, max_steps, dtmax, adjoint):
-    """Build a one-segment ``diffeqsolve`` matching the reactor/plant settings."""
-    term = diffrax.ODETerm(rhs)
-    solver = diffrax.Kvaerno5()
-    controller = diffrax.PIDController(rtol=rtol, atol=atol, dtmax=dtmax)
-    adj = adjoint if adjoint is not None else diffrax.RecursiveCheckpointAdjoint()
+    """Build a one-segment solver for the event driver.
 
+    Delegates to the canonical :func:`_run_diffeqsolve` -- the **same**
+    Kvaerno5 + ``PIDController`` + adjoint setup the plain reactor/plant solves
+    use -- adding only the per-segment ``saveat`` and terminating ``event``. So
+    the event path's per-step integration is the plain path's, and the solver
+    defaults cannot drift between them.
+    """
     def solve_segment(y0, t0, t1, args, saveat, event):
-        return diffrax.diffeqsolve(
-            term, solver, t0=t0, t1=t1, dt0=None, y0=y0, args=args,
-            saveat=saveat, stepsize_controller=controller, adjoint=adj,
-            max_steps=max_steps, event=event,
+        return _run_diffeqsolve(
+            rhs, t0=t0, t1=t1, y0=y0, args=args, saveat=saveat,
+            rtol=rtol, atol=atol, adjoint=adjoint, max_steps=max_steps,
+            dtmax=dtmax, event=event,
         )
 
     return solve_segment
