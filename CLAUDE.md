@@ -2678,6 +2678,21 @@ is what production simulators use to snap to steady state on any topology.
   `custom_vjp` that solves the transposed steady Jacobian `Jᵀw = ḡ` and returns
   `−(∂F/∂params)ᵀw`), so `jax.grad` of a loss on the steady state flows to the
   plant parameters. Verified against finite differences (rel. err ~1e-6).
+- **Design variables** (`steady_state(..., design=...)`): because the IFT
+  differentiates w.r.t. *whatever pytree the residual consumes*, the steady state
+  is differentiable w.r.t. design variables, not only kinetic parameters, by
+  folding them into `θ = (params, design)`. **Influent load** is wired:
+  `design={"influent": {port: {"Q": ..., "C": ..., "T": ...}}}` (plain arrays —
+  a `Stream` can't be a θ leaf, it carries the non-JAX `network`) overrides the
+  recorded influent at `influent_time` inside `_resolve_streams`/`_resolve_flows`,
+  so `jax.grad` of a steady-state output w.r.t. the influent composition/flow
+  works (BSM1 `d(effluent NH)/d(influent NH)` matches FD). **Recycle/wastage flow
+  setpoints (the SRT knob) are NOT yet design variables** — the setpoint is
+  consumed in two decoupled paths (`_resolve_flows` *and* each unit's
+  `compute_outputs`, which recompute the split) and is `float()`-concretized in
+  `SplitterUnit`/the clarifiers, so making it differentiable needs a
+  flows-as-parameters refactor (route the setpoint through `params_unit`, which
+  both paths already receive) — a tracked follow-up.
 - Returns the same `SteadyStateResult` (now `method="ptc"`, with `iterations`
   and the scaled `residual`; `time`/`solution` are `None`). Eager calls get
   concrete diagnostics and, if PTC fails to converge within `max_iter`, an

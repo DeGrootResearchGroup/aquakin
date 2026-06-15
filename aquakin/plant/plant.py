@@ -1408,6 +1408,7 @@ class Plant:
         t: jnp.ndarray,
         states: dict[str, jnp.ndarray],
         params_full: jnp.ndarray,
+        design: Optional[dict] = None,
     ) -> tuple[
         dict[tuple[Optional[str], str], Stream],
         dict[tuple[str, str], Stream],
@@ -1418,11 +1419,26 @@ class Plant:
         concentration-decoupled) recycle flow network, and runs the fixed-pass
         Gauss-Seidel output sweep. Returns ``(all_outputs, influent_streams)``;
         the second is needed by :meth:`_collect_inputs`.
+
+        ``design["influent"]`` (optional) maps an influent port name to a
+        ``{"Q": ..., "C": ..., "T": ...}`` dict of differentiable arrays, used
+        instead of the recorded :class:`InfluentSeries` at ``t`` (``T`` optional)
+        -- the hook that makes a steady-state / sweep differentiable w.r.t. the
+        influent load. (Plain arrays, not a :class:`Stream`, because the Stream
+        carries a non-JAX ``network`` field and so cannot be a differentiated
+        leaf; the network is supplied here from the recorded influent.)
         """
+        influent_override = (design or {}).get("influent", {})
         streams: dict[tuple[Optional[str], str], Stream] = {}
         for port_name, series in self.influents.items():
-            streams[(None, port_name)] = series.at(t)
-        resolved_flows = self._resolve_flows(t, params_full, states)
+            if port_name in influent_override:
+                ov = influent_override[port_name]
+                streams[(None, port_name)] = Stream(
+                    Q=ov["Q"], C=ov["C"], network=series.network,
+                    T=ov.get("T"))
+            else:
+                streams[(None, port_name)] = series.at(t)
+        resolved_flows = self._resolve_flows(t, params_full, states, design=design)
         # Seed the recycle back-edges with their exact (affine) fixed point, so
         # the Gauss-Seidel mop-up starts at the answer for any linear topology
         # (gain-independent); it then only refines a genuinely non-affine
@@ -1745,12 +1761,17 @@ class Plant:
         t: jnp.ndarray,
         state_full: jnp.ndarray,
         params_full: jnp.ndarray,
+        design: Optional[dict] = None,
     ) -> jnp.ndarray:
         # Step 1: split state by unit.
         states = self._split_state(state_full)
 
         # Steps 2-3: resolve influent + recycle streams and run the output sweep.
-        all_outputs, streams = self._resolve_streams(t, states, params_full)
+        # ``design`` (optional) carries differentiable design-variable overrides
+        # -- currently the influent streams -- threaded into the stream resolution
+        # so a steady-state / sweep can take gradients w.r.t. them.
+        all_outputs, streams = self._resolve_streams(
+            t, states, params_full, design=design)
 
         # Step 3b: control signals (see :meth:`_compute_signals`).
         signals = self._compute_signals(t, states, all_outputs, streams,
@@ -2094,6 +2115,7 @@ class Plant:
         params_full: jnp.ndarray,
         states: Optional[dict[str, jnp.ndarray]] = None,
         *,
+        design: Optional[dict] = None,
         check_affine: bool = False,
     ) -> dict[tuple[Optional[str], str], jnp.ndarray]:
         """Solve the recycle FLOW network exactly (decoupled from concentration).
@@ -2126,9 +2148,12 @@ class Plant:
         flows are exact only while every unit stays in the affine regime it
         occupied at ``t0`` (issue #255).
         """
+        influent_override = (design or {}).get("influent", {})
         base: dict[tuple[Optional[str], str], jnp.ndarray] = {}
         for port_name, series in self.influents.items():
-            base[(None, port_name)] = series.at(t).Q
+            base[(None, port_name)] = (
+                influent_override[port_name]["Q"] if port_name in influent_override
+                else series.at(t).Q)
         recycle_keys = self._recycle_keys
         n = len(recycle_keys)
 
@@ -2649,6 +2674,7 @@ class Plant:
         tol: float = 1e-6,
         scale_floor: float = 1.0,
         nonneg: bool = True,
+        design: Optional[dict] = None,
         fallback: bool = True,
         fallback_kwargs: Optional[dict] = None,
     ) -> "SteadyStateResult":
@@ -2698,6 +2724,19 @@ class Plant:
         nonneg : bool
             Clamp the state to ``>= 0`` each step (concentrations are
             non-negative).
+        design : dict, optional
+            Differentiable design-variable overrides folded into the quantity the
+            implicit-function-theorem gradient is taken w.r.t., so a design sweep
+            can ``jax.grad`` / ``jacobian`` the steady state through them.
+            Currently supports the **influent load**:
+            ``design={"influent": {port: {"Q": ..., "C": ..., "T": ...}}}`` (plain
+            arrays; ``T`` optional), which replaces the recorded influent at
+            ``influent_time``. Example -- sensitivity of effluent ammonia to the
+            influent ammonia load::
+
+                jax.grad(lambda c: plant.steady_state(
+                    p, y0, design={"influent": {"feed": {"Q": Q, "C": c}}}
+                ).state[eff_idx])(C_influent)
         fallback : bool
             If PTC does not converge within ``max_iter`` (eager use only), fall
             back to :meth:`run_to_steady_state` and return that result (with
@@ -2727,11 +2766,23 @@ class Plant:
         y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
         t = jnp.asarray(float(influent_time))
 
-        def rhs(y, p):
-            return self._rhs(t, y, p)
+        # When design variables are supplied, the differentiated quantity is the
+        # pytree ``theta = (params, design)`` -- the implicit-function-theorem
+        # gradient then flows to BOTH the kinetic parameters and the design
+        # overrides (e.g. the influent load). Without design, theta is just the
+        # parameter vector (unchanged path).
+        if design is None:
+            def rhs(y, theta):
+                return self._rhs(t, y, theta)
+            theta = params
+        else:
+            def rhs(y, theta):
+                p, d = theta
+                return self._rhs(t, y, p, design=d)
+            theta = (params, design)
 
         res = solve_steady_state(
-            rhs, params, y0, dt0=dt0, dt_max=dt_max, growth_cap=growth_cap,
+            rhs, theta, y0, dt0=dt0, dt_max=dt_max, growth_cap=growth_cap,
             max_iter=max_iter, tol=tol, scale_floor=scale_floor, nonneg=nonneg,
         )
 

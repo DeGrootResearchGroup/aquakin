@@ -125,6 +125,33 @@ def test_bsm1_steady_state_differentiable():
 
 
 @pytest.mark.slow
+def test_bsm1_steady_state_differentiable_wrt_influent_load():
+    # A design sweep: the steady state is differentiable w.r.t. the influent load
+    # (passed via design={"influent": ...}), not just the kinetic parameters.
+    # Check d(effluent ammonia)/d(influent ammonia) against a finite difference.
+    plant, asm1, y0 = _bsm1()
+    from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
+    start, _ = plant._state_layout["tank5"]
+    eff = start + asm1.species_index["SNH"]
+    j = asm1.species_index["SNH"]
+    C_in = asm1.concentrations({
+        "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
+        "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0})
+
+    def eff_snh(influent_snh):
+        C = C_in.at[j].set(influent_snh)
+        design = {"influent": {"feed": {"Q": jnp.asarray(BSM1_Q_AVG), "C": C}}}
+        return plant.steady_state(y0=y0, design=design, tol=1e-9).state[eff]
+
+    x0 = float(C_in[j])
+    g = jax.grad(eff_snh)(x0)
+    assert np.isfinite(float(g)) and float(g) > 0.0   # more load -> more residual
+    h = 1e-2 * x0
+    fd = (float(eff_snh(x0 + h)) - float(eff_snh(x0 - h))) / (2 * h)
+    assert abs(float(g) - fd) <= 1e-2 * abs(fd) + 1e-5
+
+
+@pytest.mark.slow
 def test_bsm1_steady_state_falls_back_to_forward():
     # If PTC is starved of iterations it falls back to the forward solve.
     plant, _asm1, y0 = _bsm1()
