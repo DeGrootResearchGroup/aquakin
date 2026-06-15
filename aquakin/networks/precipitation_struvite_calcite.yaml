@@ -9,8 +9,10 @@ network:
     pKsp and the supersaturation order; the engine computes the saturation index
     SI_<name> and the supersaturation rate factor R_<name> = sign(sigma)*|sigma|^n
     from the free-ion activities at the (here fixed) operating pH, and exposes
-    them as condition fields. A precipitation reaction reads {R_<name>} and
-    precipitates the mineral (or dissolves it when undersaturated, sign(sigma)<0).
+    them as condition fields. Declaring the precipitate species (solid) and the
+    crystallisation rate_constant auto-derives the precipitation reaction (the
+    engine consumes each ion at its formula count and produces the solid),
+    precipitating the mineral (or dissolving it when undersaturated, sign<0).
 
     Concentrations are in mol/m3 (= mmol/L) so the precipitation stoichiometry is
     exact (one mole of mineral consumes one mole of each constituent ion); the
@@ -51,6 +53,13 @@ precipitation:
     - name: struvite
       pKsp: 13.26                     # MgNH4PO4 (Ohlinger et al. 1998)
       order: 3
+      # The precipitation reaction is auto-derived from this mineral: declaring
+      # the precipitate species (solid) and the crystallisation rate constant is
+      # enough -- the engine consumes each ion's species at -count and produces
+      # the solid at +1 (Mg2+ + NH4+ + PO4^3- -> MgNH4PO4). Source rate values
+      # ~0.4-12 1/h; here in 1/d, fast enough to saturate within the demo span.
+      solid: X_struvite
+      rate_constant: {value: 100.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
       ions:
         - {species: S_Mg,  molar_mass: 1000, count: 1, charge: 2}                       # Mg2+ (free)
         - {species: S_NH,  molar_mass: 1000, count: 1, charge: 1, fraction: ammonia}    # NH4+ fraction at pH
@@ -58,30 +67,8 @@ precipitation:
     - name: calcite
       pKsp: 8.48                      # CaCO3 (Plummer & Busenberg 1982)
       order: 2
+      solid: X_calcite                # Ca2+ + CO3^2- -> CaCO3 (auto-derived reaction)
+      rate_constant: {value: 10.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
       ions:
         - {species: S_Ca, molar_mass: 1000, count: 1, charge: 2}                        # Ca2+ (free)
         - {species: S_IC, molar_mass: 1000, count: 1, charge: 2, fraction: carbonate}   # CO3^2- fraction at pH
-
-parameters:
-  # Crystallisation rate coefficients (1/d). Source values ~0.4-12 1/h; here in
-  # 1/d, fast enough to reach the saturation equilibrium within the demo span.
-  k_struvite: {value: 100.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
-  k_calcite:  {value: 10.0,  units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
-
-reactions:
-  - name: struvite_precipitation
-    description: "Mg2+ + NH4+ + PO4^3- -> MgNH4PO4 (precipitation; dissolution when undersaturated)."
-    rate: "k_struvite * [X_struvite] * {R_struvite}"
-    stoichiometry:
-      S_Mg: -1.0
-      S_NH: -1.0
-      S_PO4: -1.0
-      X_struvite: 1.0
-
-  - name: calcite_precipitation
-    description: "Ca2+ + CO3^2- -> CaCO3 (precipitation; dissolution when undersaturated)."
-    rate: "k_calcite * [X_calcite] * {R_calcite}"
-    stoichiometry:
-      S_Ca: -1.0
-      S_IC: -1.0
-      X_calcite: 1.0

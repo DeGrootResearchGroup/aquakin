@@ -246,6 +246,9 @@ class SpeciationSpec(BaseModel):
     z_cation_eq: Union[float, dict[str, str]] = 0.0
     n_iter: int = Field(default=40, ge=1)
     activity_model: str = "none"
+    # If set, also produce the self-consistent solution ionic strength under this
+    # field name, so a precipitation block can share it (see PrecipitationSpec).
+    ionic_strength_field: Optional[str] = None
     totals: dict[str, TotalSpec] = Field(default_factory=dict)
     strong_anions: list[StrongIonSpec] = Field(default_factory=list)
     strong_cations: list[StrongIonSpec] = Field(default_factory=list)
@@ -320,16 +323,40 @@ class MineralIonSpec(BaseModel):
 
 class MineralSpec(BaseModel):
     """One mineral in a ``precipitation.minerals`` list. Precipitates / dissolves
-    at ``k_cryst * X_cryst * sign(sigma) * |sigma|^order`` driven by the
-    supersaturation ``sigma`` of the ion-activity product against ``10^-pKsp``."""
+    at ``rate_constant * [solid] * sign(sigma) * |sigma|^order`` driven by the
+    supersaturation ``sigma`` of the ion-activity product against ``Ksp``.
+
+    ``pKsp`` is at the reference temperature; ``dH_sp`` is the enthalpy of
+    dissolution (J/mol) that van't Hoff-corrects ``Ksp`` with temperature (0, the
+    default, leaves ``Ksp`` temperature-independent).
+
+    Declaring ``solid`` (the precipitate species) and ``rate_constant`` makes the
+    precipitation **reaction auto-derived** from the mineral: the engine consumes
+    each constituent ion's ``species`` at ``-count`` and produces ``solid`` at
+    ``+1``, with rate ``rate_constant * [solid] * {R_<name>}``. This removes the
+    duplication of writing the stoichiometry a second time in ``reactions:`` (and
+    the risk of it drifting from the ion counts). ``solid`` and ``rate_constant``
+    are set together or not at all; omitting both means the reaction is written by
+    hand instead (referencing ``{R_<name>}``)."""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str
     pKsp: float
     order: float = Field(default=1.0, gt=0.0)
-    dH_sp: float = 0.0          # reserved for a future van't Hoff Ksp correction
+    dH_sp: float = 0.0          # enthalpy of dissolution (J/mol); van't Hoff Ksp(T)
     ions: list[MineralIonSpec] = Field(min_length=1)
+    solid: Optional[str] = None             # precipitate species (-> auto-derived reaction)
+    rate_constant: Optional[ParameterSpec] = None   # crystallisation rate coefficient
+
+    @model_validator(mode="after")
+    def _solid_and_rate_constant_together(self) -> "MineralSpec":
+        if (self.solid is None) != (self.rate_constant is None):
+            raise ValueError(
+                f"mineral '{self.name}': 'solid' and 'rate_constant' must be set "
+                f"together (they auto-derive the precipitation reaction), or both "
+                f"omitted (the reaction is written by hand).")
+        return self
 
 
 class PrecipitationSpec(BaseModel):
@@ -348,6 +375,11 @@ class PrecipitationSpec(BaseModel):
     temperature_units: str = "celsius"
     activity_model: str = "none"
     ionic_strength_offset: float = Field(default=0.0, ge=0.0)
+    # If set, read the ionic strength for the activity coefficients from this
+    # condition field (e.g. a speciation block's ``ionic_strength_field``)
+    # instead of ``ionic_strength_offset`` + the mineral ions -- so the pH and
+    # the saturation indices use the same ionic strength.
+    ionic_strength_field: Optional[str] = None
     minerals: list[MineralSpec] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -377,6 +409,45 @@ class PrecipitationSpec(BaseModel):
         return self
 
 
+def _synthesize_precipitation_reactions(
+    precipitation: "PrecipitationSpec", species_set: set
+) -> list[ReactionSpec]:
+    """Build the precipitation reactions implied by the mineral definitions.
+
+    For each mineral declaring a ``solid`` + ``rate_constant`` (see
+    :class:`MineralSpec`), emit a reaction ``<name>_precipitation`` whose rate is
+    ``k * [solid] * {R_<name>}`` and whose stoichiometry consumes each ion's
+    ``species`` at ``-count`` and produces ``solid`` at ``+1``. Ions with no
+    ``species`` (the ``proton`` / ``hydroxide`` specials) carry no mass term.
+    Minerals without a ``solid`` are skipped (their reaction is hand-written).
+    """
+    out: list[ReactionSpec] = []
+    for m in precipitation.minerals:
+        if m.solid is None:
+            continue
+        if m.solid not in species_set:
+            raise ValueError(
+                f"mineral '{m.name}' solid '{m.solid}' is not a declared species.")
+        stoich: dict[str, float] = {}
+        for ion in m.ions:
+            if ion.species is None:
+                continue
+            if ion.species not in species_set:
+                raise ValueError(
+                    f"mineral '{m.name}' ion species '{ion.species}' is not "
+                    f"declared.")
+            stoich[ion.species] = stoich.get(ion.species, 0.0) - float(ion.count)
+        stoich[m.solid] = stoich.get(m.solid, 0.0) + 1.0
+        out.append(ReactionSpec(
+            name=f"{m.name}_precipitation",
+            description=f"Auto-derived SI-driven precipitation / dissolution of {m.name}.",
+            rate=f"k * [{m.solid}] * {{R_{m.name}}}",
+            parameters={"k": m.rate_constant},
+            stoichiometry=stoich,
+        ))
+    return out
+
+
 class NetworkSpec(BaseModel):
     """Top-level YAML network file schema."""
 
@@ -396,13 +467,28 @@ class NetworkSpec(BaseModel):
     # outputs, so it is identity at feasible states. Mirrors the reference
     # IWA/BSM S-function ``xtemp = max(x, 0)`` convention.
     clip_negative_states: bool = False
-    reactions: list[ReactionSpec] = Field(min_length=1)
+    # May be empty when every process is an auto-derived precipitation reaction
+    # (a mineral with a ``solid`` + ``rate_constant``); _check_consistency
+    # synthesizes those and then requires the final list to be non-empty.
+    reactions: list[ReactionSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_consistency(self) -> "NetworkSpec":
         species_names = [s.name for s in self.species]
         if len(set(species_names)) != len(species_names):
             raise ValueError(f"Duplicate species names: {species_names}")
+
+        # Auto-derive precipitation reactions from any mineral declaring a
+        # ``solid`` + ``rate_constant``, then validate them alongside the
+        # hand-written reactions below (species references, name collisions).
+        if self.precipitation is not None:
+            self.reactions = self.reactions + _synthesize_precipitation_reactions(
+                self.precipitation, set(species_names))
+        if not self.reactions:
+            raise ValueError(
+                "network has no reactions: declare a 'reactions:' list, or a "
+                "'precipitation:' block whose minerals carry 'solid' + "
+                "'rate_constant' (which auto-derive the reactions).")
         condition_names = [c.name for c in self.conditions]
         if len(set(condition_names)) != len(condition_names):
             raise ValueError(f"Duplicate condition names: {condition_names}")

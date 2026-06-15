@@ -77,20 +77,29 @@ def build_ph_derived_fn(
             ``charge * max(C, 0) / molar_mass`` eq/L of cationic charge (summed
             into the net cation charge). Lets a state species drive pH, e.g.
             ADM1's ``S_cat`` / ``S_an`` dynamic ion states.
+        ``ionic_strength_field`` : str, optional
+            If set, also produce the self-consistent solution ionic strength
+            under this field name (default None -- only ``field`` is produced).
     species_index : dict[str, int]
         Map from species name to index in ``C``.
 
     Returns
     -------
-    (callable, produced_field, required_condition_fields)
-        The derived-condition function, the name of the field it produces, and
-        the set of condition fields it reads (so the network can require them).
+    (callable, produced_fields, required_condition_fields)
+        The derived-condition function, the list of field names it produces
+        (``[field]``, plus the ionic-strength field when
+        ``ionic_strength_field`` is set), and the set of condition fields it
+        reads (so the network can require them).
     """
     field = config.get("field", "pH")
     temp_field = config["temperature_field"]
     temp_units = config.get("temperature_units", "celsius")
     n_iter = int(config.get("n_iter", 40))
     activity_model = config.get("activity_model", "none")
+    # Optionally also expose the self-consistent solution ionic strength as a
+    # produced condition field, so a downstream activity calculation (mineral
+    # precipitation) can share the exact ionic strength the pH was solved at.
+    ic_field = config.get("ionic_strength_field")
 
     if temp_units not in ("celsius", "kelvin"):
         raise ValueError(
@@ -195,14 +204,19 @@ def build_ph_derived_fn(
             extra = dict(activity_model=activity_model,
                          ionic_strength_strong=I_strong)
 
-        pH = solve_ph(
+        result = solve_ph(
             strong_anion_eq=strong_anion_eq,
             z_cation_eq=z_cation_eq,
             T_kelvin=T_kelvin,
             n_iter=n_iter,
+            return_ionic_strength=ic_field is not None,
             **kwargs,
             **extra,
         )
-        return {field: pH}
+        if ic_field is not None:
+            pH, I = result
+            return {field: pH, ic_field: I}
+        return {field: result}
 
-    return derived, field, required_fields
+    produced_fields = [field] if ic_field is None else [field, ic_field]
+    return derived, produced_fields, required_fields

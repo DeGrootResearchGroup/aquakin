@@ -389,6 +389,7 @@ def solve_ph(
     h_init: float = 1e-7,
     activity_model: str = "none",
     ionic_strength_strong=0.0,
+    return_ionic_strength: bool = False,
 ):
     """Solve the charge balance for pH.
 
@@ -439,11 +440,20 @@ def solve_ph(
         knows each strong ion's charge. Used only when ``activity_model`` is not
         ``"none"``.
 
+    return_ionic_strength : bool, optional
+        If True, return ``(pH, I)`` where ``I`` is the self-consistent solution
+        ionic strength at the converged speciation (strong ions + weak-acid
+        speciation + water). For ``activity_model="none"`` no ``I`` is computed,
+        so the supplied ``ionic_strength_strong`` is returned instead. Lets a
+        downstream activity calculation (e.g. mineral precipitation) share the
+        exact ionic strength the pH was solved at.
+
     Returns
     -------
-    jnp.ndarray
+    jnp.ndarray or tuple of jnp.ndarray
         Solution pH -- ``-log10([H+])`` for ``activity_model="none"``, else the
-        activity-based ``-log10(a_H)``.
+        activity-based ``-log10(a_H)``. If ``return_ionic_strength`` is True,
+        instead ``(pH, ionic_strength)``.
 
     Examples
     --------
@@ -547,7 +557,14 @@ def solve_ph(
 
         (_, _, u), _ = jax.lax.scan(body, (u_lo, u_hi, u), None, length=n_iter)
         h = jnp.exp(u)
-        return -jnp.log(h) / _LN10
+        pH = -jnp.log(h) / _LN10
+        if return_ionic_strength:
+            # No activity model -> no self-consistent solution ionic strength is
+            # computed; report the strong-ion contribution the caller supplied
+            # (the best available; 0 by default).
+            return pH, jnp.broadcast_to(
+                jnp.asarray(ionic_strength_strong, dtype=float), out_shape)
+        return pH
 
     # Activity-corrected path. The conditional constants depend on the ionic
     # strength, which depends on the speciation, which depends on [H+] -- a
@@ -581,4 +598,9 @@ def solve_ph(
     h = jnp.exp(u)
     # Report the measurable pH = -log10(a_H) = -log10(g_H [H+]).
     _, g1 = _conditional_constants(K, I, A, activity_model)
-    return -jnp.log(g1 * h) / _LN10
+    pH = -jnp.log(g1 * h) / _LN10
+    if return_ionic_strength:
+        # The self-consistent solution ionic strength at the converged speciation
+        # (strong ions + weak-acid speciation + water).
+        return pH, I
+    return pH

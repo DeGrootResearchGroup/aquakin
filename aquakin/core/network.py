@@ -814,7 +814,7 @@ def _compile_speciation(spec, species_index, declared_conditions):
         if isinstance(speciation_cfg, dict)
         else speciation_cfg.model_dump()
     )
-    derived_condition_fn, produced_field, required_fields = build_ph_derived_fn(
+    derived_condition_fn, produced_fields, required_fields = build_ph_derived_fn(
         cfg, species_index
     )
     missing = sorted(required_fields - declared_conditions)
@@ -823,14 +823,14 @@ def _compile_speciation(spec, species_index, declared_conditions):
             f"speciation block reads condition field(s) {missing} that are "
             f"not declared in the network's 'conditions:' block."
         )
-    if produced_field in declared_conditions:
+    clash = sorted(set(produced_fields) & declared_conditions)
+    if clash:
         raise ValueError(
-            f"speciation produces condition field '{produced_field}', which "
-            f"must not also be declared in 'conditions:' (it is computed, "
-            f"not supplied)."
+            f"speciation produces condition field(s) {clash}, which must not "
+            f"also be declared in 'conditions:' (they are computed, not supplied)."
         )
-    derived_fields = [produced_field]
-    condition_fields = declared_conditions | {produced_field}
+    derived_fields = list(produced_fields)
+    condition_fields = declared_conditions | set(produced_fields)
     return derived_condition_fn, derived_fields, condition_fields
 
 
