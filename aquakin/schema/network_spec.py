@@ -292,6 +292,7 @@ class PositivityLimiterSpec(BaseModel):
 # Single source of truth lives in core/precipitation.py (the runtime consumer).
 from aquakin.core.precipitation import (
     VALID_PRECIP_FRACTIONS as _VALID_PRECIP_FRACTIONS,
+    _PH_SPECIALS as _PRECIP_PH_SPECIALS,
 )
 
 
@@ -303,8 +304,9 @@ class MineralIonSpec(BaseModel):
     coefficient). ``fraction`` selects how the free activity is obtained: an
     acid/base system (``carbonate``/``phosphate``/``ammonia``/``sulfide``) takes
     the species total times its de/protonated fraction at pH; ``proton`` is H+
-    (activity = 10^-pH, no ``species``); omitting it makes the ion a fully-free
-    cation (the species total taken as the free ion).
+    (activity = 10^-pH) and ``hydroxide`` is OH- (activity = Kw/[H+]), neither
+    taking a ``species``; omitting it makes the ion a fully-free cation (the
+    species total taken as the free ion).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -368,10 +370,10 @@ class PrecipitationSpec(BaseModel):
                     raise ValueError(
                         f"mineral '{m.name}' ion fraction {ion.fraction!r} is "
                         f"invalid; valid: {_VALID_PRECIP_FRACTIONS} (or omit).")
-                if ion.fraction != "proton" and ion.species is None:
+                if ion.fraction not in _PRECIP_PH_SPECIALS and ion.species is None:
                     raise ValueError(
                         f"mineral '{m.name}' ion needs a 'species' unless its "
-                        f"fraction is 'proton'.")
+                        f"fraction is one of {_PRECIP_PH_SPECIALS}.")
         return self
 
 

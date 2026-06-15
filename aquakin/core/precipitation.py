@@ -58,12 +58,18 @@ _FRACTIONS = {
     / (h * h + K["s_1"] * h + K["s_1"] * K["s_2"]),
 }
 
+# Specials computed from pH / water alone (no species total): "proton" is the
+# H+ activity (10^-pH) and "hydroxide" the OH- activity (Kw / [H+]). Used by
+# minerals that incorporate a proton (DCPD, OCP) or a hydroxyl (the metal
+# hydroxides Fe(OH)3 / Al(OH)3, hydroxylapatite).
+_PH_SPECIALS = ("proton", "hydroxide")
+
 # An ion's ``fraction`` selects how its free activity is obtained: an acid/base
-# system key (the species total times its de/protonated fraction at pH), the
-# special "proton" (H+, activity = 10^-pH), or omitted -- a fully-free cation
+# system key (the species total times its de/protonated fraction at pH), a
+# pH/water special ("proton" or "hydroxide"), or omitted -- a fully-free cation
 # (the species total taken as the free ion). Single source of truth shared with
 # the Pydantic schema.
-VALID_PRECIP_FRACTIONS = tuple(_FRACTIONS) + ("proton",)
+VALID_PRECIP_FRACTIONS = tuple(_FRACTIONS) + _PH_SPECIALS
 
 
 def build_precipitation_derived_fn(
@@ -81,7 +87,8 @@ def build_precipitation_derived_fn(
         a list of ``minerals``, each ``{name, pKsp, order, dH_sp, ions: [...]}``
         with ions ``{species, molar_mass, count, charge, fraction?}``
         (``fraction`` is one of ``carbonate``/``phosphate``/``ammonia``/``sulfide``
-        for an acid-base ion, ``proton`` for H+, or omitted for a free cation).
+        for an acid-base ion, ``proton`` for H+, ``hydroxide`` for OH-, or omitted
+        for a free cation).
     species_index : dict[str, int]
         Map from species name to its index in the state vector.
 
@@ -114,11 +121,11 @@ def build_precipitation_derived_fn(
                     f"mineral {name!r} ion has unknown fraction {frac!r}; valid: "
                     f"{VALID_PRECIP_FRACTIONS} (or omit for a free cation).")
             sp = ion.get("species")
-            if frac != "proton":
+            if frac not in _PH_SPECIALS:
                 if sp is None:
                     raise ValueError(
                         f"mineral {name!r} ion needs a 'species' (only the "
-                        f"'proton' fraction may omit it).")
+                        f"{_PH_SPECIALS} fractions may omit it).")
                 if sp not in species_index:
                     raise KeyError(
                         f"mineral {name!r} references undeclared species {sp!r}; "
@@ -166,6 +173,8 @@ def build_precipitation_derived_fn(
             for idx, mm, count, z2, frac in ions:
                 if frac == "proton":               # H+ activity is h directly
                     a = h
+                elif frac == "hydroxide":          # OH- activity = Kw / [H+]
+                    a = K["w"] / h
                 else:
                     tot = jnp.maximum(C[idx], 0.0) / mm
                     a = gamma(z2) * tot * (_FRACTIONS[frac](h, K) if frac in _FRACTIONS else 1.0)
