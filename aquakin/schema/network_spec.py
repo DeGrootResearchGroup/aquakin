@@ -289,6 +289,92 @@ class PositivityLimiterSpec(BaseModel):
     threshold: float = Field(default=1.0e-3, gt=0.0)
 
 
+# Single source of truth lives in core/precipitation.py (the runtime consumer).
+from aquakin.core.precipitation import (
+    VALID_PRECIP_FRACTIONS as _VALID_PRECIP_FRACTIONS,
+)
+
+
+class MineralIonSpec(BaseModel):
+    """One constituent ion of a mineral in ``precipitation.minerals[].ions``.
+
+    ``count`` is the ion's stoichiometric number in the mineral formula (e.g. 3
+    for Ca in Ca3(PO4)2); ``charge`` its charge magnitude (for the activity
+    coefficient). ``fraction`` selects how the free activity is obtained: an
+    acid/base system (``carbonate``/``phosphate``/``ammonia``/``sulfide``) takes
+    the species total times its de/protonated fraction at pH; ``proton`` is H+
+    (activity = 10^-pH, no ``species``); omitting it makes the ion a fully-free
+    cation (the species total taken as the free ion).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    species: Optional[str] = None
+    molar_mass: float = Field(default=1.0, gt=0.0)
+    count: int = Field(gt=0)
+    charge: float = Field(ge=0.0)
+    fraction: Optional[str] = None
+
+
+class MineralSpec(BaseModel):
+    """One mineral in a ``precipitation.minerals`` list. Precipitates / dissolves
+    at ``k_cryst * X_cryst * sign(sigma) * |sigma|^order`` driven by the
+    supersaturation ``sigma`` of the ion-activity product against ``10^-pKsp``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    pKsp: float
+    order: float = Field(default=1.0, gt=0.0)
+    dH_sp: float = 0.0          # reserved for a future van't Hoff Ksp correction
+    ions: list[MineralIonSpec] = Field(min_length=1)
+
+
+class PrecipitationSpec(BaseModel):
+    """Optional ``precipitation:`` block declaring SI-driven mineral precipitation.
+
+    Exposes, per mineral, a saturation index ``SI_<name>`` and a supersaturation
+    rate factor ``R_<name>`` as condition fields, computed from the state and the
+    system pH (a condition -- e.g. produced by a ``speciation:`` block) on every
+    RHS evaluation. A precipitation reaction reads ``{R_<name>}`` in its rate.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pH_field: str = "pH"
+    temperature_field: str = "T"
+    temperature_units: str = "celsius"
+    activity_model: str = "none"
+    ionic_strength_offset: float = Field(default=0.0, ge=0.0)
+    minerals: list[MineralSpec] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "PrecipitationSpec":
+        if self.temperature_units not in ("celsius", "kelvin"):
+            raise ValueError(
+                f"temperature_units must be 'celsius' or 'kelvin', "
+                f"got {self.temperature_units!r}")
+        from aquakin.core.ph_solver import _ACTIVITY_MODELS
+        if self.activity_model not in _ACTIVITY_MODELS:
+            raise ValueError(
+                f"precipitation.activity_model must be one of {_ACTIVITY_MODELS}; "
+                f"got {self.activity_model!r}")
+        names = [m.name for m in self.minerals]
+        if len(set(names)) != len(names):
+            raise ValueError(f"duplicate mineral names: {names}")
+        for m in self.minerals:
+            for ion in m.ions:
+                if ion.fraction is not None and ion.fraction not in _VALID_PRECIP_FRACTIONS:
+                    raise ValueError(
+                        f"mineral '{m.name}' ion fraction {ion.fraction!r} is "
+                        f"invalid; valid: {_VALID_PRECIP_FRACTIONS} (or omit).")
+                if ion.fraction != "proton" and ion.species is None:
+                    raise ValueError(
+                        f"mineral '{m.name}' ion needs a 'species' unless its "
+                        f"fraction is 'proton'.")
+        return self
+
+
 class NetworkSpec(BaseModel):
     """Top-level YAML network file schema."""
 
@@ -300,6 +386,7 @@ class NetworkSpec(BaseModel):
     parameters: dict[str, ParameterSpec] = Field(default_factory=dict)
     expressions: dict[str, str] = Field(default_factory=dict)
     speciation: Optional[SpeciationSpec] = None
+    precipitation: Optional[PrecipitationSpec] = None
     positivity_limiter: Optional[PositivityLimiterSpec] = None
     # Clamp concentrations to >= 0 when evaluating reaction rates (and any
     # state-derived condition). Protects the nonlinear kinetics from a
