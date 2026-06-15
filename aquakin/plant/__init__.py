@@ -14,6 +14,7 @@ from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
 from aquakin.plant.control import PIController
 from aquakin.plant.cstr import Aeration, CSTRUnit, oxygen_saturation
 from aquakin.plant.delay import HydraulicDelayUnit
+from aquakin.plant.ifas import IFASUnit, MBBRUnit
 from aquakin.plant.design import (
     ActivatedSludgeSizing,
     SludgeMetrics,
@@ -89,6 +90,8 @@ __all__ = [
     "BSM2Evaluation",
     "Aeration",
     "CSTRUnit",
+    "IFASUnit",
+    "MBBRUnit",
     "ComponentBalance",
     "MassBalance",
     "mass_balance",

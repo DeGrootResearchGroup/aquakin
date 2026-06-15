@@ -322,22 +322,31 @@ class MineralIonSpec(BaseModel):
 
 
 class MineralSpec(BaseModel):
-    """One mineral in a ``precipitation.minerals`` list. Precipitates / dissolves
-    at ``rate_constant * [solid] * sign(sigma) * |sigma|^order`` driven by the
-    supersaturation ``sigma`` of the ion-activity product against ``Ksp``.
+    """One mineral in a ``precipitation.minerals`` list.
 
-    ``pKsp`` is at the reference temperature; ``dH_sp`` is the enthalpy of
-    dissolution (J/mol) that van't Hoff-corrects ``Ksp`` with temperature (0, the
-    default, leaves ``Ksp`` temperature-independent).
+    With the default ``mode: kinetic`` the mineral precipitates / dissolves at
+    ``rate_constant * [solid] * sign(sigma) * |sigma|^order`` driven by the
+    supersaturation ``sigma`` of the ion-activity product against ``Ksp``,
+    exposing the rate factor ``R_<name>``. ``supersaturation_form: bounded``
+    swaps the power law for the bounded driver ``tanh(SI/(2 nu) ln10)`` (a ``~k``
+    rate Jacobian, for a differentiable dynamic solve of an ultra-insoluble
+    mineral). ``pKsp`` is at the reference temperature; ``dH_sp`` is the enthalpy
+    of dissolution (J/mol) that van't Hoff-corrects ``Ksp`` with temperature (0,
+    the default, leaves ``Ksp`` temperature-independent).
 
     Declaring ``solid`` (the precipitate species) and ``rate_constant`` makes the
-    precipitation **reaction auto-derived** from the mineral: the engine consumes
-    each constituent ion's ``species`` at ``-count`` and produces ``solid`` at
-    ``+1``, with rate ``rate_constant * [solid] * {R_<name>}``. This removes the
-    duplication of writing the stoichiometry a second time in ``reactions:`` (and
-    the risk of it drifting from the ion counts). ``solid`` and ``rate_constant``
-    are set together or not at all; omitting both means the reaction is written by
-    hand instead (referencing ``{R_<name>}``)."""
+    kinetic precipitation **reaction auto-derived**: the engine consumes each
+    constituent ion's ``species`` at ``-count`` and produces ``solid`` at ``+1``,
+    with rate ``rate_constant * [solid] * {R_<name>}`` (so the stoichiometry is not
+    written a second time). ``solid`` and ``rate_constant`` are set together or
+    both omitted (the reaction is then hand-written, referencing ``{R_<name>}``).
+
+    With ``mode: equilibrium`` the mineral is solved to its algebraic saturation
+    equilibrium (``IAP = Ksp`` with complementarity, coupled across all
+    equilibrium minerals); the engine exposes the equilibrium phase amount
+    ``Xeq_<name>`` (in the solid's units) and the reaction is the hand-written
+    relaxation toward it. ``solid`` is required (the phase reported), ``order`` /
+    ``supersaturation_form`` are unused, and there is no ``rate_constant``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -345,13 +354,34 @@ class MineralSpec(BaseModel):
     pKsp: float
     order: float = Field(default=1.0, gt=0.0)
     dH_sp: float = 0.0          # enthalpy of dissolution (J/mol); van't Hoff Ksp(T)
+    mode: str = "kinetic"       # "kinetic" (default) or "equilibrium"
+    supersaturation_form: str = "power"     # kinetic mode: "power" or "bounded"
     ions: list[MineralIonSpec] = Field(min_length=1)
-    solid: Optional[str] = None             # precipitate species (-> auto-derived reaction)
+    solid: Optional[str] = None             # precipitate species
     rate_constant: Optional[ParameterSpec] = None   # crystallisation rate coefficient
 
     @model_validator(mode="after")
-    def _solid_and_rate_constant_together(self) -> "MineralSpec":
-        if (self.solid is None) != (self.rate_constant is None):
+    def _validate_mode(self) -> "MineralSpec":
+        if self.mode not in ("kinetic", "equilibrium"):
+            raise ValueError(
+                f"mineral '{self.name}' mode must be 'kinetic' or 'equilibrium'; "
+                f"got {self.mode!r}.")
+        if self.supersaturation_form not in ("power", "bounded"):
+            raise ValueError(
+                f"mineral '{self.name}' supersaturation_form must be 'power' or "
+                f"'bounded'; got {self.supersaturation_form!r}.")
+        if self.mode == "equilibrium":
+            if self.solid is None:
+                raise ValueError(
+                    f"equilibrium-mode mineral '{self.name}' needs a 'solid:' "
+                    f"species (the phase its equilibrium amount Xeq_{self.name} is "
+                    f"reported for).")
+            if self.rate_constant is not None:
+                raise ValueError(
+                    f"equilibrium-mode mineral '{self.name}' takes no "
+                    f"'rate_constant' (its reaction is the relaxation toward "
+                    f"Xeq_{self.name}, written by hand).")
+        elif (self.solid is None) != (self.rate_constant is None):
             raise ValueError(
                 f"mineral '{self.name}': 'solid' and 'rate_constant' must be set "
                 f"together (they auto-derive the precipitation reaction), or both "
@@ -396,6 +426,8 @@ class PrecipitationSpec(BaseModel):
         names = [m.name for m in self.minerals]
         if len(set(names)) != len(names):
             raise ValueError(f"duplicate mineral names: {names}")
+        # The per-mineral mode / supersaturation_form / solid validation lives in
+        # MineralSpec._validate_mode; here we only check the ion declarations.
         for m in self.minerals:
             for ion in m.ions:
                 if ion.fraction is not None and ion.fraction not in _VALID_PRECIP_FRACTIONS:
@@ -419,11 +451,13 @@ def _synthesize_precipitation_reactions(
     ``k * [solid] * {R_<name>}`` and whose stoichiometry consumes each ion's
     ``species`` at ``-count`` and produces ``solid`` at ``+1``. Ions with no
     ``species`` (the ``proton`` / ``hydroxide`` specials) carry no mass term.
-    Minerals without a ``solid`` are skipped (their reaction is hand-written).
+    Minerals without a ``solid`` are skipped (their reaction is hand-written), as
+    are ``mode: equilibrium`` minerals (whose ``solid`` is for the equilibrium
+    engine and whose reaction is the hand-written relaxation toward ``Xeq_<name>``).
     """
     out: list[ReactionSpec] = []
     for m in precipitation.minerals:
-        if m.solid is None:
+        if m.solid is None or m.mode == "equilibrium":
             continue
         if m.solid not in species_set:
             raise ValueError(

@@ -246,13 +246,13 @@ def test_build_bsm2_do_temperature_correction_flag():
 
     base = build_bsm2()
     t3 = base.units["tank3"]
-    assert t3._temp_correct is False
+    assert t3._av.temp_correct is False
     assert float(t3._sat_vec[t3.network.species_index["SO"]]) == 8.0
 
     corr = build_bsm2(do_temperature_correction=True)
     t3c = corr.units["tank3"]
-    assert t3c._temp_correct is True
-    assert t3c._aer_ref_T == float(corr.units["tank3"].conditions["T"])
+    assert t3c._av.temp_correct is True
+    assert t3c._av.ref_T == float(corr.units["tank3"].conditions["T"])
     # An unaerated (anoxic) tank is untouched -- no aeration to correct.
     assert corr.units["tank1"].aeration is None
 

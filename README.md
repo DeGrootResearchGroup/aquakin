@@ -18,7 +18,11 @@ latter with structural variants for model-structure studies) as well as
 chemistry coupled to acid-base speciation (a charge-balance state-derived pH,
 and SI-driven mineral precipitation/dissolution — struvite + calcite, and
 iron/aluminium chemical-phosphorus removal — after Kazadi Mbamba et al. 2015 and
-Flores-Alsina et al. 2016). The network
+Flores-Alsina et al. 2016. A very insoluble mineral's stiff kinetics defeat every
+sensitivity method, so two opt-in differentiable variants are provided: an
+**algebraic equilibrium** mode that solves `IAP = Ksp` directly
+(`network.precipitation_equilibrium(...)`) and a **bounded-driver** kinetic form
+for differentiable dynamics). The network
 YAML files live under `aquakin/networks/`; see `CLAUDE.md` for the full list.
 Future networks include UV/TiO₂ and chlorine decay.
 
@@ -38,7 +42,9 @@ Future networks include UV/TiO₂ and chlorine decay.
   algebraic steady-state solver (`plant.steady_state`, pseudo-transient
   continuation — ~10× faster than integrating to settle), dynamic influents,
   EQI/OCI performance metrics, and GHG (N₂O / CO₂e) + monetised-cost reporting
-  with standardized scenario-comparison KPI tables.
+  with standardized scenario-comparison KPI tables. Includes an `IFASUnit` / 
+  `MBBRUnit` (a CSTR bulk coupled to a depth-resolved attached biofilm) for 
+  modelling MBBR/IFAS intensification retrofits.
 - Full automatic differentiation everywhere, including cap-free forward
   sensitivity and reverse-mode gradients through stiff plant solves (see
   [Advanced: differentiation & sensitivity](#advanced-differentiation--sensitivity)).

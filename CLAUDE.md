@@ -318,10 +318,26 @@ The shipped networks currently are:
   FePO₄ / AlPO₄ while competing to form the hydroxides Fe(OH)₃ / Al(OH)₃ (the
   `hydroxide` ion fraction, OH⁻ = Kw/[H⁺]). The hydroxide buffers the free metal,
   giving a pH-dependent floor on the achievable phosphate (removal worsens at
-  higher pH). A **forward-simulation** demonstration: ferric/aluminium phosphates
-  are so insoluble (`SI ~ 14`) that the dose transient, while finite to solve, is
-  not differentiable by any sensitivity method — see *Mineral precipitation /
-  state-derived saturation* below.
+  higher pH). With the **default power-law** kinetics this is a
+  **forward-simulation** demonstration: ferric/aluminium phosphates are so
+  insoluble (`SI ~ 14`) that the dose transient, while finite to solve, is not
+  differentiable by any sensitivity method (the `~1e13` rate Jacobian). Two opt-in
+  variants restore differentiability (issue #295) — see *Mineral precipitation /
+  state-derived saturation* below:
+- `precipitation_metal_phosphate_equilibrium` — the same chemistry with every
+  mineral `mode: equilibrium`: the precipitation **equilibrium** is solved
+  *algebraically* (`IAP = Ksp` with complementarity, mass-balanced across the
+  shared metal) and exposed via `network.precipitation_equilibrium(...)`, the
+  differentiable equilibrium-projected state. The principled
+  "solve-don't-integrate" reduction (what geochemistry codes do) — exact, fast,
+  and `jax.grad`-clean, so `calibrate` / `sensitivity` flow through the
+  equilibrium outcome. The equilibrium reproduces the kinetic `t→∞` limit (ferric
+  ripens from FePO₄ to the more stable Fe(OH)₃).
+- `precipitation_metal_phosphate_bounded` — the same chemistry with every mineral
+  `supersaturation_form: bounded`: the kinetic driver is the bounded
+  `R = tanh(SI/(2ν)·ln10)` instead of the power law, so the rate Jacobian is `~k`
+  (non-stiff) and a **dynamic** reactor/plant solve is differentiable, relaxing to
+  the same equilibrium. The reaction expressions are unchanged (`k·X·{R}`).
 
 ### Khalil model-improvement sequence (JRN-055 reproduction log)
 
@@ -1455,11 +1471,79 @@ sensitivity method survives the initial transient** (reverse adjoint, even with 
 `dtmax` cap; and the cap-free `forward_sensitivity`/`DirectAdjoint` — all return
 non-finite). This is the extreme end of the documented stiff-AD spectrum and is
 intrinsic to the chemistry (lowering `order` 2→1 cuts the Jacobian ~7 decades and
-still fails). So **this network is a forward-simulation demonstration**;
-`precipitation_struvite_calcite` (modest `SI ~ 1–3`) remains the differentiable /
-calibratable precipitation example. The `hydroxide` *engine* path is itself
-AD-clean at moderate supersaturation (verified on a mild `M(OH)₂` toy in the
-test suite — `jax.grad` through the solve is finite).
+still fails). So with the **default power-law** kinetics this network is a
+forward-simulation demonstration; `precipitation_struvite_calcite` (modest
+`SI ~ 1–3`) remains the differentiable / calibratable power-law example. The
+`hydroxide` *engine* path is itself AD-clean at moderate supersaturation
+(verified on a mild `M(OH)₂` toy in the test suite — `jax.grad` through the solve
+is finite).
+
+### Differentiable ultra-insoluble precipitation — algebraic equilibrium + bounded driver (#295)
+
+The `~1e13` power-law Jacobian is **not** the documented `dtmax`/`stable_adjoint`
+overflow (where the per-step operator `I − γ·dt·J` stays well-conditioned): here
+that operator is genuinely **near-singular** (cond `~1e13` even at tiny `dt`), so
+*every* sensitivity path fails — including the hand-written discrete adjoint
+(`stable_adjoint`), which NaNs on the multi-mineral network. The lesson (verified
+numerically): you must **reduce the primal stiffness**, not swap the adjoint; the
+true sensitivity is tame (finite differences on the finite forward solve give an
+`O(0.01)` gradient), so the pathology is purely the through-the-transient AD.
+Grounded in what geochemistry codes do, two opt-in fixes restore
+differentiability while the default power law is **unchanged**:
+
+**(A) Algebraic equilibrium — `mode: equilibrium`**
+([`core/precipitation_equilibrium.py`](aquakin/core/precipitation_equilibrium.py)).
+Solve the precipitation *equilibrium* algebraically instead of integrating the
+stiff kinetics — the geochemistry-standard equilibrium-phase problem: find the
+phase amounts and dissolved ions that satisfy mass balance **and** the mineral
+complementarity (every precipitated mineral on its solubility `IAP = Ksp`, every
+absent one undersaturated, coupled across the shared ions). It is the MINEQL /
+PHREEQC structure — unknowns are log-free-ion + phase amounts, the complementarity
+written with a smoothed Fischer–Burmeister function — solved by a **fixed-iteration
+safeguarded Newton scan** (the `solve_ph` pattern): ε-continuation on the
+complementarity smoothing, residual-adaptive Levenberg–Marquardt damping, and a
+bounded log-free-ion step make it globally convergent even when a component is
+driven to near-complete consumption (free ion `~1e-18` mol/L). The converged
+solution is **differentiated via the implicit function theorem** (the forward
+scan runs under `stop_gradient`; one Newton step on the converged residual
+attaches the exact `−(∂G/∂w)⁻¹∂G/∂θ` sensitivity in a single linear solve — *not*
+a backprop through the iterations, which is huge and unnecessary), and the
+algebraic Jacobian it inverts is well-conditioned, so the `1e13` stiffness is
+gone. A mineral declares `mode: equilibrium` + a `solid:` species; the engine
+exposes `Xeq_<name>` (the equilibrium phase amount) and
+**`CompiledNetwork.precipitation_equilibrium(C, conditions)`** returns the
+equilibrium-projected state (each equilibrium solid set to `Xeq`, dissolved ions
+rebalanced — mass-conserving). Verified on the metal-phosphate: equilibrium P
+removal reproduces the kinetic `t→∞` limit, mass closes exactly, the pH trend is
+right, and `jax.grad` (w.r.t. dose, pH) is finite. **This is "solve, don't
+integrate":** it covers the equilibrium-outcome sensitivity / calibration use
+(#295's impact list) but is not an in-ODE reaction (embedding the per-RHS Newton
+solve inside the time integration is impractically slow — a documented future
+optimization needing solver warm-starting). The solver van't Hoff-corrects each
+`Ksp` with temperature (the per-mineral `dH_sp`, same form / reference temperature
+as the kinetic engine), so the equilibrium tracks `T` consistently with the
+kinetic path. Kinetic minerals in the same block are untouched
+(`build_precipitation_derived_fn` skips `mode: equilibrium` minerals; the
+equilibrium engine handles them and composes after the speciation pH like the
+kinetic one).
+
+**(B) Bounded-driver kinetics — `supersaturation_form: bounded`**
+([`core/precipitation.py`](aquakin/core/precipitation.py)). For a differentiable
+*dynamic* solve, replace the power-law factor `sign(σ)·|σ|^order` with the
+thermodynamically-grounded **bounded driver** `R = tanh(SI/(2ν)·ln10) =
+(Ω^{1/ν}−1)/(Ω^{1/ν}+1)` (bounded in `(−1, 1)`, `0` at `SI = 0`, `±1` far from
+saturation). The rate Jacobian is then `~k` (non-stiff), so a reverse gradient
+through the *time integration* of the ultra-insoluble network is finite, and the
+steady state (`R = 0` ⇔ `SI = 0`) is the same equilibrium the projection gives —
+verified to agree. The driver is a per-mineral `supersaturation_form: bounded`
+flag (default `power`); the reaction expression `k·X·{R}` is unchanged, so it is a
+drop-in. The trade-off is a slower precipitation *rate* far from saturation (the
+*endpoint* is unchanged); raise `k` to reach equilibrium faster.
+[`precipitation_metal_phosphate_equilibrium.yaml`](aquakin/networks/precipitation_metal_phosphate_equilibrium.yaml)
+(A) and
+[`precipitation_metal_phosphate_bounded.yaml`](aquakin/networks/precipitation_metal_phosphate_bounded.yaml)
+(B) are the worked examples; `tests/integration/test_precipitation_equilibrium.py`
+covers both plus the solver complementarity and the schema validation.
 
 ---
 
@@ -1481,7 +1565,11 @@ aquakin/
 │   │   │                            #   (safeguarded Newton-bisection: globally convergent, no NaN)
 │   │   ├── speciation.py            # speciation block -> derived pH condition fn
 │   │   ├── precipitation.py         # precipitation block -> derived SI_/R_ condition fn
-│   │   │                            #   (Kazadi Mbamba 2015; reuses ph_solver constants/activities)
+│   │   │                            #   (Kazadi Mbamba 2015; kinetic power-law OR bounded driver;
+│   │   │                            #   reuses ph_solver constants/activities)
+│   │   ├── precipitation_equilibrium.py # mode: equilibrium -> algebraic equilibrium solve
+│   │   │                            #   (MINEQL/PHREEQC: log-free-ion + phase amounts, smoothed-FB
+│   │   │                            #   complementarity; IFT-differentiable; -> Xeq_/projection)
 │   │   └── units.py                 # prettify_units: plain-ASCII unit exponents -> Unicode superscripts
 │   │
 │   ├── schema/
@@ -1557,7 +1645,9 @@ aquakin/
 │   │   ├── wats_sewer_khalil_paper_balanced_biofilm_biomass.yaml  # per-layer-biomass biofilm (heterotroph)
 │   │   ├── wats_sewer_khalil_paper_balanced_biofilm_multispecies.yaml  # + X_SRB/X_MA/X_SOB groups
 │   │   ├── precipitation_struvite_calcite.yaml  # mineral precipitation (Kazadi Mbamba 2015): struvite + calcite
-│   │   └── precipitation_metal_phosphate.yaml   # iron/Al chemical-P removal (FePO4/AlPO4 + Fe(OH)3/Al(OH)3 hydroxide fraction)
+│   │   ├── precipitation_metal_phosphate.yaml   # iron/Al chemical-P removal (FePO4/AlPO4 + Fe(OH)3/Al(OH)3 hydroxide fraction); kinetic power-law (AD-limited)
+│   │   ├── precipitation_metal_phosphate_equilibrium.yaml  # mode: equilibrium (algebraic projection, differentiable)
+│   │   └── precipitation_metal_phosphate_bounded.yaml      # supersaturation_form: bounded (differentiable dynamics)
 │   │
 │   │   # wats_sewer_khalil_paper (paper) is the paper-active core augmented with the
 │   │   #   dormant full-WATS aerobic pieces by networks/_make_khalil_paper.py;
@@ -1734,6 +1824,12 @@ network.default_concentrations()     # jnp.array (all YAML defaults)
 network.default_parameters()         # jnp.array
 network.summary()                    # human-readable table (species listed with units)
 network.to_latex()                   # LaTeX rate expressions
+# Project a composition onto its mineral precipitation EQUILIBRIUM (only for a
+#   precipitation network with `mode: equilibrium` minerals): solve IAP=Ksp with
+#   complementarity, mass-balanced, and return the equilibrium-projected state.
+#   Differentiable via the implicit function theorem -- the non-stiff alternative
+#   to integrating an ultra-insoluble mineral's ~1e13 kinetics (issue #295).
+network.precipitation_equilibrium(C, conditions)   # -> equilibrium state (n_species,)
 # Solutions carry the labels too: solution.units_named("SNH") for axis/columns,
 #   and solution.time_unit for the time axis (delegates to network.time_unit).
 
@@ -2495,7 +2591,9 @@ Key types:
     otherwise accurate to the `t_eval` sampling. **This is the tool that found the
     ADM1 nitrogen transcription error** (see the `adm1` network note).
 
-Shipped units: `CSTRUnit` (kinetics + aeration), `MixerUnit`,
+Shipped units: `CSTRUnit` (kinetics + aeration), `IFASUnit` / `MBBRUnit`
+(an IFAS/MBBR tank: a CSTR bulk coupled to a depth-resolved attached biofilm —
+see below), `MixerUnit`,
 `SplitterUnit`, `IdealClarifier` (fast, stateless separator),
 `PrimaryClarifier` (BSM2 Otterpohl–Freund: a well-mixed holding tank split by
 an HRT-dependent particulate-removal efficiency, fixed underflow `f_PS·Q`),
@@ -2514,6 +2612,39 @@ against an independent port of the reference BSM1 settler derivative in
 `tests/validation/test_takacs_vs_bsm1_reference.py`). `build_bsm1(use_takacs=
 True)` selects it in the full plant (both clarifiers expose the same ports),
 and `Plant.solve` takes `max_steps`.
+
+**IFAS / MBBR unit ([`plant/ifas.py`](aquakin/plant/ifas.py)).** `IFASUnit`
+(alias `MBBRUnit`) places carrier-media biofilm in the flowsheet by **wiring the
+existing depth-resolved `BiofilmReactor`** (1-D diffusion–reaction over biofilm
+depth) into a plant unit, alongside the suspended (CSTR) fraction — the
+intensification retrofit the BSM palette lacked. Its state is the bulk
+concentration **plus** the biofilm layer profile (`(n_layers+1)·n_species`); its
+`rhs` is `BiofilmReactor._make_rhs` (finite-volume bulk↔surface↔…↔wall soluble
+diffusion + per-compartment reaction) with the **plant's bulk convection +
+aeration added on the bulk row**, replacing the biofilm reactor's own
+stand-alone CSTR feed (built with `feed=None`). Carrier geometry is the
+designer's `specific_surface_area` (media SSA, m²/m³) × `fill_fraction` →
+`area_per_volume`; oxygen enters the **bulk** and reaches the biofilm only by
+diffusion (so deep layers can be O₂-limited — the reason for depth resolution).
+The effluent is the well-mixed bulk; the biofilm stays on the carrier. Aeration
+reuses the **same `Aeration` spec as `CSTRUnit`** (open- or closed-loop; the
+plant's generic `_materialize_aeration` auto-wires a DO controller from the
+spec), via aeration helpers (`build_aeration_vectors` / `aeration_transfer`)
+factored out of `CSTRUnit` and shared by both (CSTR behaviour is bit-unchanged).
+The biofilm is a **mature, fixed attached-biomass** model: the layers' biomass +
+inert structure is held as a sustained reservoir while the substrate pools and
+solubles react and diffuse and the suspended bulk fraction evolves fully. The
+default freeze mask is **stoichiometry-derived** (`_default_biofilm_fixed_mask`):
+freeze every particulate **except** a hydrolysis substrate (one consumed while a
+soluble is produced, `XS→SS`) — freezing such a pool would make it a
+non-depleting soluble source (the biofilm footgun), whereas biomass/inerts are
+the intended structure. For ASM1 that freezes `XI`/`XB_H`/`XB_A`/`XP` and leaves
+`XS`/`XND` dynamic. **Validated:** at equal volume + aeration an IFAS tank
+removes more soluble COD (effluent SS 1.8 vs 2.7) and nitrifies markedly more
+(SNH 0.4 vs 2.6) than a plain CSTR, converges to steady state, and `jax.grad`
+flows end-to-end through the biofilm core (`tests/integration/test_ifas.py`). A
+fully dynamic biofilm (growth with attachment/detachment/a density cap) is the
+underlying `BiofilmReactor`'s domain and a follow-up for the unit.
 
 **Coupled BSM1 — steady state now works.** The *coupled* BSM1 plant reaches the
 correct steady state for **both** clarifiers (Takács and Ideal agree: tank-5
@@ -2583,6 +2714,21 @@ is what production simulators use to snap to steady state on any topology.
   `custom_vjp` that solves the transposed steady Jacobian `Jᵀw = ḡ` and returns
   `−(∂F/∂params)ᵀw`), so `jax.grad` of a loss on the steady state flows to the
   plant parameters. Verified against finite differences (rel. err ~1e-6).
+- **Design variables** (`steady_state(..., design=...)`): because the IFT
+  differentiates w.r.t. *whatever pytree the residual consumes*, the steady state
+  is differentiable w.r.t. design variables, not only kinetic parameters, by
+  folding them into `θ = (params, design)`. **Influent load** is wired:
+  `design={"influent": {port: {"Q": ..., "C": ..., "T": ...}}}` (plain arrays —
+  a `Stream` can't be a θ leaf, it carries the non-JAX `network`) overrides the
+  recorded influent at `influent_time` inside `_resolve_streams`/`_resolve_flows`,
+  so `jax.grad` of a steady-state output w.r.t. the influent composition/flow
+  works (BSM1 `d(effluent NH)/d(influent NH)` matches FD). **Recycle/wastage flow
+  setpoints (the SRT knob) are NOT yet design variables** — the setpoint is
+  consumed in two decoupled paths (`_resolve_flows` *and* each unit's
+  `compute_outputs`, which recompute the split) and is `float()`-concretized in
+  `SplitterUnit`/the clarifiers, so making it differentiable needs a
+  flows-as-parameters refactor (route the setpoint through `params_unit`, which
+  both paths already receive) — a tracked follow-up.
 - Returns the same `SteadyStateResult` (now `method="ptc"`, with `iterations`
   and the scaled `residual`; `time`/`solution` are `None`). Eager calls get
   concrete diagnostics and, if PTC fails to converge within `max_iter`, an
