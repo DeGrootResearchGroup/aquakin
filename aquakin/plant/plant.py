@@ -25,13 +25,14 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional, Union
+from typing import Callable, Iterable, Optional, Sequence, Union
 
 import diffrax
 import jax
 import jax.numpy as jnp
 
 from aquakin.core.network import CompiledNetwork
+from aquakin.integrate.events import Event, solve_with_events
 from aquakin.integrate._common import (
     _coerce_atol,
     _run_diffeqsolve,
@@ -146,11 +147,15 @@ class PlantSolution:
     plant : Plant
         The plant that produced this solution; retained for accessor
         methods.
+    events_log : list of (float, str), optional
+        When the solve used ``events=``, the fired events in order as
+        ``(time, name)``. ``None`` for a plain solve.
     """
 
     t: jnp.ndarray
     state: jnp.ndarray
     plant: "Plant"
+    events_log: Optional[list] = None
 
     @property
     def time_unit(self) -> Optional[str]:
@@ -2269,6 +2274,7 @@ class Plant:
         y0: Optional[jnp.ndarray] = None,
         gradient: str = "auto",
         event: Optional[diffrax.Event] = None,
+        events: Optional[Sequence["Event"]] = None,
         time_unit: Optional[str] = None,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
@@ -2323,6 +2329,18 @@ class Plant:
             influent) is carried in the state so the discrete adjoint captures it
             exactly. It manages its own adjoint and step control, so passing
             ``adjoint`` or ``dtmax`` alongside it is an error.
+        events : sequence of Event, optional
+            Located plant-wide discontinuities (on/off pumps, SBR phase switches,
+            dosing on/off, tank-level limits). Each :class:`~aquakin.Event` fires
+            at a known time (``at_times=``) or when the flat plant state crosses a
+            ``cond_fn`` zero, and may reset the state (``apply=``) or terminate
+            the solve. The monolithic solve is split into segments at the firings
+            and ``solution.events_log`` records them. Time-only events keep
+            ``jax.grad`` finite (the segment boundaries are static); a state event
+            makes the run a forward simulation. Distinct from the low-level
+            ``event=`` (a single diffrax terminating event used internally for
+            steady-state detection): pass ``events=`` for the user-facing API.
+            Mutually exclusive with ``event=`` and ``gradient="stable_adjoint"``.
         time_unit : str, optional
             The time unit ``t_span`` / ``t_eval`` are in (``"s"``/``"min"``/
             ``"h"``/``"d"``). Default ``None`` uses the plant's native time unit
@@ -2379,6 +2397,23 @@ class Plant:
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
         if t_eval is not None:
             t_eval = jnp.asarray(t_eval)
+
+        if events is not None:
+            if event is not None:
+                raise ValueError(
+                    "pass either events= (the user-facing located-event API) or "
+                    "the low-level event= (a single diffrax terminating event), "
+                    "not both.")
+            if gradient == "stable_adjoint":
+                raise ValueError(
+                    "events= runs a segmented solve and is not supported on the "
+                    "gradient='stable_adjoint' path; use the default 'auto'/"
+                    "'jax_adjoint' (time-only events keep jax.grad finite).")
+            return self._solve_with_events(
+                t0, t1, t_eval, params, y0, events,
+                rtol=rtol, atol=atol_eff, dtmax=dtmax, adjoint=adjoint,
+                max_steps=max_steps, time_factor=_time_factor,
+                time_unit=time_unit)
 
         # One-time, concrete check that the recycle-flow solve is self-consistent
         # (every flow rule affine in the recycle flows). Skipped under tracing
@@ -2511,6 +2546,34 @@ class Plant:
         if _time_factor != 1.0:
             ts = ts / _time_factor          # native -> requested unit
         sol = PlantSolution(t=ts, state=ys, plant=self)
+        if time_unit is not None:
+            sol._requested_time_unit = time_unit
+        return sol
+
+    def _solve_with_events(self, t0, t1, t_eval, params, y0, events, *,
+                           rtol, atol, dtmax, adjoint, max_steps, time_factor,
+                           time_unit):
+        """Run the monolithic plant solve with located events (the ``events=``
+        path).
+
+        Hands the assembled plant RHS to :func:`solve_with_events`, which splits
+        the solve at the event times and applies their resets to the flat plant
+        state between segments. Not routed through the per-instance jit cache: the
+        driver is an eager segment loop (a state event's firing count is
+        data-dependent), while time-only events still differentiate because each
+        segment is a plain differentiable plant sub-solve.
+        """
+        def rhs(t, y, args):
+            return self._rhs(t, y, args)
+
+        with friendly_solve_errors(max_steps, what="plant solve"):
+            res = solve_with_events(
+                rhs, y0, params, t0=t0, t1=t1, t_eval=t_eval, events=events,
+                rtol=rtol, atol=atol, dtmax=dtmax, adjoint=adjoint,
+                max_steps=max_steps,
+            )
+        ts = res.ts / time_factor if time_factor != 1.0 else res.ts
+        sol = PlantSolution(t=ts, state=res.ys, plant=self, events_log=res.log)
         if time_unit is not None:
             sol._requested_time_unit = time_unit
         return sol

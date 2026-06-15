@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 import diffrax
 import jax
@@ -24,6 +24,7 @@ from aquakin.integrate._common import (
     validate_C0_params,
     validate_t_eval,
 )
+from aquakin.integrate.events import Event, solve_with_events
 
 
 @dataclass
@@ -48,11 +49,16 @@ class BatchSolution(_HasNamedSpecies):
     network : CompiledNetwork
         The network that produced this solution. Retained so that the
         inherited :meth:`C_named` can look up species by name.
+    events_log : list of (float, str), optional
+        When the solve used ``events=``, the fired events in order as
+        ``(time, name)`` -- the audit trail of switch times. ``None`` for a plain
+        solve.
     """
 
     t: jnp.ndarray
     C: jnp.ndarray
     network: CompiledNetwork
+    events_log: Optional[list] = None
 
 
 class BatchReactor(GradientCheckMixin):
@@ -166,6 +172,7 @@ class BatchReactor(GradientCheckMixin):
         params: Optional[jnp.ndarray] = None,
         conditions: Optional[SpatialConditions] = None,
         time_unit: Optional[str] = None,
+        events: Optional[Sequence[Event]] = None,
     ) -> BatchSolution:
         """
         Integrate the reaction network over a time span.
@@ -203,6 +210,16 @@ class BatchReactor(GradientCheckMixin):
             ``None`` uses the network's native unit. Raises if the network's own
             time unit is undeclared (``network.time_unit is None``), since there
             is then no native unit to convert to.
+        events : sequence of Event, optional
+            Located discontinuities (on/off switches, SBR phases, level limits)
+            applied during the solve. Each :class:`~aquakin.Event` fires at a
+            known time (``at_times=``) or when a state ``cond_fn`` crosses zero,
+            and may reset the state (``apply=``) or terminate the solve
+            (``terminal=``). The solve is split into segments at the firings; the
+            returned ``solution.events_log`` records them. Time-only events keep
+            ``jax.grad`` finite (static segment boundaries); a state event makes
+            the solve a forward simulation (the firing count is data-dependent).
+            See :func:`aquakin.solve_with_events`.
 
         Returns
         -------
@@ -226,6 +243,11 @@ class BatchReactor(GradientCheckMixin):
             )
         active_conditions = conditions if conditions is not None else self.conditions
         condition_arrays = active_conditions.fields
+
+        if events is not None:
+            return self._solve_with_events(
+                C0, params, condition_arrays, t0, t1, t_eval, events,
+                _time_factor)
 
         if t_eval is None:
             t_eval_arr = None
@@ -260,6 +282,35 @@ class BatchReactor(GradientCheckMixin):
         if time_unit is not None:
             sol._requested_time_unit = time_unit
         return sol
+
+    def _solve_with_events(self, C0, params, condition_arrays, t0, t1, t_eval,
+                           events, time_factor):
+        """Run the event-driven segmented solve (the ``events=`` path).
+
+        Builds the same constant-condition RHS the plain batch solve uses and
+        hands it to :func:`solve_with_events`, which locates the events and
+        applies their resets between segments. Not routed through the jit cache:
+        the driver is an eager Python loop over segments (a state event's count
+        is data-dependent), and time-only events still differentiate because each
+        segment is a plain differentiable sub-solve.
+        """
+        stoich = self.network.compute_stoich(params)
+
+        def rhs(t, C, args):
+            return self.network.dCdt(C, args, condition_arrays, 0, stoich=stoich)
+
+        t_eval_arr = None if t_eval is None else jnp.asarray(t_eval)
+        if t_eval_arr is not None:
+            self._validate_t_eval(t_eval_arr, t0, t1)
+        with friendly_solve_errors(self.max_steps, what="batch reactor solve"):
+            res = solve_with_events(
+                rhs, C0, params, t0=t0, t1=t1, t_eval=t_eval_arr, events=events,
+                rtol=self.rtol, atol=self.atol, dtmax=self.dtmax,
+                adjoint=self.adjoint, max_steps=self.max_steps,
+            )
+        ts = res.ts / time_factor if time_factor != 1.0 else res.ts
+        return BatchSolution(t=ts, C=res.ys, network=self.network,
+                             events_log=res.log)
 
     def solve_sensitivity(
         self,

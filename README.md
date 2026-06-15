@@ -45,6 +45,10 @@ Future networks include UV/TiO₂ and chlorine decay.
   with standardized scenario-comparison KPI tables. Includes an `IFASUnit` / 
   `MBBRUnit` (a CSTR bulk coupled to a depth-resolved attached biofilm) for 
   modelling MBBR/IFAS intensification retrofits.
+- Located events / discontinuities (`Event` + `solve(events=...)`): time events
+  and state root-crossings with exact state resets / mode switches (on/off pumps,
+  SBR phases, dosing on/off, level limits) — time-scheduled events keep
+  `jax.grad` finite.
 - Full automatic differentiation everywhere, including cap-free forward
   sensitivity and reverse-mode gradients through stiff plant solves (see
   [Advanced: differentiation & sensitivity](#advanced-differentiation--sensitivity)).
@@ -147,6 +151,23 @@ solution.to_csv("run.csv")           # units embedded in the CSV header
 # Returns a matplotlib Axes. Requires the optional `plot` extra: aquakin[plot]
 ax = solution.plot("BrO3-")          # one line; y-axis "BrO3- [mol/L]"
 solution.plot(["O3", "BrO3-"])       # several, legended; pass ax= to overlay
+```
+
+Discontinuous operations -- on/off pumps, SBR phases, dosing, level limits --
+are handled with **located events** (`solve(events=...)`, on reactors and the
+plant). A time event fires at a known time (AD-safe), a state event when a
+`cond_fn` crosses zero; each can reset the state or terminate the solve:
+
+```python
+i_o3 = network.species_index["O3"]
+events = [
+    aquakin.Event(at_times=[200.0, 400.0],                  # scheduled re-dose
+                  apply=lambda t, C, p: C.at[i_o3].add(5e-5)),
+    aquakin.Event(cond_fn=lambda t, C, p: C[i_o3] - 1e-6,   # stop when O3 depletes
+                  direction=-1, terminal=True, name="O3 spent"),
+]
+sol = reactor.solve(C0, (0.0, 600.0), t_eval, events=events)
+sol.events_log                       # [(time, name), ...] -- the switch audit trail
 ```
 
 ## Plant-wide simulation

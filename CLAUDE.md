@@ -1046,6 +1046,49 @@ Transport and reaction are decoupled at all scales:
 The ODE integrator only ever sees the reaction sub-problem — a pure chemistry
 integration over one transport timestep at a fixed spatial location.
 
+### Located events / discontinuities ([`integrate/events.py`](aquakin/integrate/events.py))
+
+A plain solve is continuous; on/off pumps, SBR fill/react/settle/decant phase
+switches, relay/saturating control, dosing on/off and tank-level limits are
+**discontinuous**. `aquakin.Event` + `solve_with_events` locate the switch
+exactly and apply a **state reset / mode switch** there, then continue —
+instead of smoothing it or grid-snapping with `searchsorted`. Exposed as an
+`events=` argument on `BatchReactor.solve` and `Plant.solve`; both build their
+RHS and hand it to the shared driver, which returns the trajectory on the
+requested `t_eval` grid plus a `solution.events_log` of `(time, name)` firings.
+
+An `Event` carries exactly one trigger — `at_times=[...]` (a **time event**) or
+`cond_fn(t, y, args)` (a **state event**, located by an optimistix root find on
+the zero crossing, filtered by `direction` ±1) — plus an optional
+`apply(t, y, args) -> y` reset and a `terminal` flag. The driver splits the
+solve into segments at the firings; the boundary convention is that a `t_eval`
+point coinciding with a firing reports its **pre-reset** value (it belongs to
+the segment ending at the event), so the reset defines the next segment's
+initial condition.
+
+Two paths, one driver (`_drive`), chosen by whether any state event is present:
+- **Time events only** — the segment boundaries are static Python constants and
+  no branch depends on traced state, so the whole solve is a fixed sequence of
+  differentiable diffrax sub-solves: **`jax.grad` flows through it** (the SBR /
+  scheduled-dosing / AD-safe case). It still needs the `dtmax` cap for a stiff
+  reverse-mode gradient, exactly like the plain solve.
+- **Any state event** — the firing time/count is discovered at runtime (located
+  via a terminating `diffrax.Event` whose `event_mask` says which fired), so the
+  loop is an **eager forward simulation**, not differentiable through the switch
+  (use a smoothed `cond_fn` where a gradient through the threshold is needed). A
+  `max_segments` guard raises a clear error if a reset fails to clear the
+  threshold and the event re-fires without advancing.
+
+This is distinct from the low-level `Plant.solve(event=<diffrax.Event>)` used
+internally by `run_to_steady_state` (a single terminating event); the
+user-facing API is `events=[Event(...)]`. `events=` is rejected with
+`gradient="stable_adjoint"` (it runs its own segmented solve). It is the
+prerequisite for the SBR unit (#273) and relay/on-off control studies.
+Demonstrated in `examples/event_handling.py` (scheduled ozone re-dosing + a
+bromate-limit terminal cut-off); tested in `tests/integration/test_events.py`
+(reset/terminal/direction/multi-event, AD through a time event, the runaway
+guard, and BSM1 plant resets).
+
 ### JAX x64 Mode
 
 Stiff ODE integration requires 64-bit floats. `aquakin` enables x64 mode
@@ -1613,6 +1656,9 @@ aquakin/
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands
+│   │   ├── events.py                # Event + solve_with_events: located events
+│   │   │                            #   (time / state root-crossing) + AD-safe state
+│   │   │                            #   resets / mode switches, via a segmented solve
 │   │   └── profile.py               # profile_likelihood(): parameter / initial-condition
 │   │                                #   profile-likelihood identifiability analysis
 │   │
@@ -1765,6 +1811,7 @@ aquakin/
 │   ├── dgsm_sensitivity_screen.py     # DGSM global sensitivity, forward==reverse
 │   ├── wats_nitrate_dosing_calibration.py  # synthetic sewer rate recovery (calibrate + Laplace)
 │   ├── bsm2_ghg_cost_report.py     # GHG (N2O/CO2e) + cost reporting + scenario KPI table
+│   ├── event_handling.py           # located events: scheduled re-dosing + terminal cut-off
 │   └── adjoint_speed_benchmark.py  # stable_adjoint vs capped jax_adjoint timing
 │   # NOTE: the wats_sewer_extended batch-fitting / calibration / sensitivity scripts and
 │   # their measurement data live in the separate paper-reproduction repository,
