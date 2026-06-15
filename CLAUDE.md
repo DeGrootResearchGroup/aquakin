@@ -1898,12 +1898,14 @@ solution.C                           # (n_points, n_species)
 #   - feed (influent vector) + dilution_rate (Q/V, 1/d): a CSTR feed on the bulk
 #     (d_bulk += dilution*(feed-bulk)); the steady bulk is the predicted effluent.
 #   - clamp_bulk: hold the bulk as a fixed reservoir (Dirichlet) instead.
-#   - steady_state(C0, params, warmup=...): Newton/Levenberg-Marquardt root-find
-#     on RHS=0 with implicit-diff for AD (optimistix). Works for well-conditioned
-#     steady states; for a VERY stiff/slow biofilm (the multispecies maturation,
-#     whose asymptotic fixed point is hundreds of days out) it stalls -- there,
-#     integrate forward to the physical maturation time (~90 d for the Khalil rig)
-#     and use that profile as the IC instead.
+#   - steady_state(C0, params, warmup=...): pseudo-transient continuation (PTC)
+#     root-find on RHS=0 (aquakin.plant.steady.solve_steady_state), with
+#     implicit-function-theorem AD. PTC's per-state pseudo-time damping is robust
+#     where the old Newton/Levenberg-Marquardt root-find stalled; for a VERY
+#     stiff/slow biofilm whose asymptotic fixed point is hundreds of days out
+#     (the multispecies maturation), raise newton_steps or integrate forward to
+#     the physical maturation time (~90 d for the Khalil rig) and use that profile
+#     as the IC instead.
 reactor = aquakin.BiofilmReactor(
     network, conditions, n_layers=6, thickness=8e-4, area_per_volume=50.0,
     diffusivity=1e-4, boundary_layer=1e-4,
@@ -2551,6 +2553,42 @@ solution)`. Implemented by threading an `event=` argument through
 `Plant.solve` → `_run_diffeqsolve` → `diffeqsolve` (forward `jax_adjoint` path
 only; rejected under `stable_adjoint`). Warm-started BSM2 settles in ~51 d /
 ~25 s reproducing the validated steady state.
+
+**Algebraic steady state — `plant.steady_state(...)` (pseudo-transient continuation).**
+A fast, robust, *differentiable* alternative to the forward solve: it finds the
+root of the plant RHS `F(y)=dy/dt=0` directly by **pseudo-transient continuation
+(PTC)** rather than integrating until the dynamics die out. The core lives in
+[`plant/steady.py`](aquakin/plant/steady.py) (`solve_steady_state` / `ptc_forward`)
+and is reusable on any `rhs(y, params)` — `BiofilmReactor.steady_state` is also
+routed through it (replacing the Levenberg–Marquardt root-find that stalled). PTC takes damped-Newton steps
+`(V/δ − J)·Δy = F(y)` with the exact AD Jacobian `J = ∂F/∂y` (forward-mode) and a
+**per-state** pseudo-time `V/δ`, `V = diag(max(|y|, floor))`: at small `δ` the
+step is a stable backward-Euler move along the physical transient (globally
+convergent, like time-stepping — the regime where a plain Newton root-find
+stalls), and as the Switched-Evolution-Relaxation ramp `δ ← δ·min(cap,
+‖F_old‖/‖F_new‖)` grows `δ` the term vanishes and it becomes Newton (quadratic
+terminal convergence). The per-state `V` is essential — plant states span orders
+of magnitude (DO ~2, heterotrophs ~2000, gas ~1e-3) and a scalar `I/δ` thrashes.
+This is the standard method for "forward integration converges but Newton stalls"
+stiff systems (Kelley–Keyes 1998; the flowsheet form is Pattison–Baldea 2014) and
+is what production simulators use to snap to steady state on any topology.
+- **Validated:** BSM1 (75 iters) and BSM2 (the 167-state plant with the long-SRT
+  digester — the stiff case a plain root-find stalls on; 85 iters) both reach the
+  forward-integration steady state to within ~1–3% on every key state, **~10×
+  faster** than `run_to_steady_state`, to a tighter residual.
+- **Differentiable** for design sweeps: the returned `state` carries the
+  **implicit-function-theorem** parameter gradient (the iteration — a
+  `while_loop` — is gradient-blocked; the gradient is re-attached by a
+  `custom_vjp` that solves the transposed steady Jacobian `Jᵀw = ḡ` and returns
+  `−(∂F/∂params)ᵀw`), so `jax.grad` of a loss on the steady state flows to the
+  plant parameters. Verified against finite differences (rel. err ~1e-6).
+- Returns the same `SteadyStateResult` (now `method="ptc"`, with `iterations`
+  and the scaled `residual`; `time`/`solution` are `None`). Eager calls get
+  concrete diagnostics and, if PTC fails to converge within `max_iter`, an
+  automatic **fallback** to `run_to_steady_state` (`method="ptc->forward"`);
+  under a `jit`/`grad` trace the diagnostics are traced values and the fallback
+  is skipped (only the differentiable `state` is used there). Constant influent
+  is assumed (the residual samples the influent at `influent_time`, default 0).
 
 **Default `atol` is now per-component, scaled to the state magnitudes.** When
 `atol` is omitted, **every single-concentration-vector reactor**

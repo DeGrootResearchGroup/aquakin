@@ -883,15 +883,19 @@ class BiofilmReactor(GradientCheckMixin):
         warmup: float = 20.0,
         rtol: float = 1e-6,
         atol: float = 1e-8,
-        newton_steps: int = 50,
+        newton_steps: int = 200,
     ) -> BiofilmSolution:
-        """Solve for the steady-state profile via a Newton root-find on ``RHS=0``.
+        """Solve for the steady-state profile by pseudo-transient continuation.
 
         Instead of integrating to steady state (slow for a maturing biofilm), this
-        finds ``y*`` such that ``f(y*, params) = 0`` directly. A short forward
-        integration to ``warmup`` seeds the Newton iteration (the seed is detached
-        from the gradient). The result is differentiable w.r.t. ``params`` via the
-        implicit function theorem (optimistix ``ImplicitAdjoint``), so it composes
+        finds ``y*`` such that ``f(y*, params) = 0`` directly, by pseudo-transient
+        continuation (PTC) -- damped-Newton steps that ramp from a stable
+        time-stepping move to a full Newton step as the residual falls, robust on
+        the stiff/slow biofilm where a plain Newton / Levenberg--Marquardt
+        root-find stalls (see :func:`aquakin.plant.steady.solve_steady_state`). A
+        short forward integration to ``warmup`` seeds the iteration (the seed is
+        detached from the gradient). The result is differentiable w.r.t. ``params``
+        via the implicit function theorem, so it composes
         with :func:`~aquakin.calibrate` -- the intended use is the continuous-feed
         maturation (``feed=...``, ``dilution_rate>0``) whose steady bulk is the
         predicted effluent and whose biofilm profile is a downstream batch IC.
@@ -906,12 +910,16 @@ class BiofilmReactor(GradientCheckMixin):
         conditions : SpatialConditions, optional
             Override the reactor conditions for this call.
         warmup : float
-            Forward-integration time used to seed Newton. ``0`` uses ``C0``
-            directly.
-        rtol, atol : float
-            Newton convergence tolerances.
+            Forward-integration time used to seed the iteration. ``0`` uses
+            ``C0`` directly.
+        rtol : float
+            Convergence tolerance on the scaled steady-state residual
+            ``max_i |f_i| / max(|y_i|, 1)``.
+        atol : float
+            Retained for backward compatibility; unused (PTC converges on the
+            relative residual ``rtol``).
         newton_steps : int
-            Maximum Newton iterations.
+            Maximum PTC iterations.
 
         Returns
         -------
@@ -924,8 +932,7 @@ class BiofilmReactor(GradientCheckMixin):
         are identically zero, making the residual Jacobian singular). Use the
         continuous feed to drive the bulk instead.
         """
-        import lineax as lx
-        import optimistix as optx
+        from aquakin.plant.steady import solve_steady_state
 
         params = self._check_params(params)
         y0 = self._coerce_y0(C0)
@@ -940,37 +947,28 @@ class BiofilmReactor(GradientCheckMixin):
             ).profile[-1]
         else:
             seed = y0
-        seed = jax.lax.stop_gradient(seed)        # Newton seed: no path gradient
+        seed = jax.lax.stop_gradient(seed)        # root-find seed: no path gradient
 
-        # Scale the residual to a relative rate (RHS / |concentration|) so the
-        # least-squares objective weighs every species comparably. Biomass
-        # production terms are O(1e3) while soluble terms are O(1); unscaled, the
-        # solver only ever sees the biomass modes and stalls. ``scale_floor``
-        # bounds the denominator for near-zero species.
-        scale_floor = 1.0
-
-        def residual(y_flat, p):
+        # Solve RHS=0 on the flattened ``(n_comp, n)`` profile by pseudo-transient
+        # continuation. PTC damps each step by a per-state pseudo-time that ramps
+        # from a stable time-stepping move (far from the root) to a full Newton
+        # step (near it), so it is robust to the difficulties of the stiff/slow
+        # biofilm steady state that defeat a plain Newton or Levenberg--Marquardt
+        # root-find: a generically singular reaction Jacobian (dormant species
+        # under an anaerobic feed, or a density-capped layer, give zero rows) and
+        # Newton overshoot into non-physical states. The per-state scaling weighs
+        # the O(1e3) biomass and O(1) soluble modes comparably. The result is
+        # differentiable w.r.t. ``params`` through the implicit function theorem
+        # (see :func:`aquakin.plant.steady.solve_steady_state`).
+        def rhs_flat(y_flat, p):
             rhs = self._make_rhs(condition_arrays, p)
-            y = y_flat.reshape(n_comp, n)
-            r = rhs(0.0, y, p)
-            return (r / jnp.maximum(jnp.abs(y), scale_floor)).reshape(-1)
+            return rhs(0.0, y_flat.reshape(n_comp, n), p).reshape(-1)
 
-        # Solve RHS=0 as a least-squares problem with Levenberg--Marquardt. LM's
-        # trust-region damping is robust to the two difficulties of the biofilm
-        # steady state that defeat a plain Newton step: (i) a generically singular
-        # Jacobian (dormant species S_O/S_NO under an anaerobic feed, or a fully
-        # density-capped layer give zero rows), and (ii) unbounded Newton steps
-        # that overshoot into non-physical states where the rates are non-finite.
-        # The minimum of ||RHS||^2 is the steady state. A pseudoinverse linear
-        # solver handles the rank deficiency in the implicit-diff adjoint.
-        lin = lx.AutoLinearSolver(well_posed=False)
-        solver = optx.LevenbergMarquardt(rtol=rtol, atol=atol)
-        sol = optx.least_squares(
-            residual, solver, seed.reshape(-1), args=params,
-            max_steps=newton_steps, throw=False,
-            adjoint=optx.ImplicitAdjoint(linear_solver=lin),
+        sol = solve_steady_state(
+            rhs_flat, params, seed.reshape(-1),
+            tol=rtol, max_iter=newton_steps, scale_floor=1.0, nonneg=True,
         )
-        y_star = sol.value.reshape(n_comp, n)
+        y_star = sol.state.reshape(n_comp, n)
         return BiofilmSolution(
             t=jnp.asarray([jnp.inf]),
             C=y_star[0][None, :],

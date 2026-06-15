@@ -40,6 +40,7 @@ from aquakin.plant.plant import (
 from aquakin.plant.primary_clarifier import PrimaryClarifier
 from aquakin.plant.schedule import PiecewiseConstantSchedule
 from aquakin.plant.separators import IdealThickener
+from aquakin.plant.steady import PTCResult, ptc_forward, solve_steady_state
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.streams import Stream, StreamSeries
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
@@ -99,9 +100,12 @@ __all__ = [
     "PlantCheck",
     "PlantSolution",
     "PrimaryClarifier",
+    "PTCResult",
     "FlowContext",
     "SludgeMetrics",
     "SteadyStateResult",
+    "ptc_forward",
+    "solve_steady_state",
     "SplitterUnit",
     "StatelessUnit",
     "StateTranslator",

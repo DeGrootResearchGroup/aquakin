@@ -375,29 +375,44 @@ class PlantSolution:
 
 @dataclass
 class SteadyStateResult:
-    """Result of :meth:`Plant.run_to_steady_state`.
+    """Result of :meth:`Plant.run_to_steady_state` or :meth:`Plant.steady_state`.
 
     Attributes
     ----------
     state : jnp.ndarray
         The steady-state (operating-point) state vector, shape
         ``(total_state_size,)``. Pass it to :meth:`Plant.states_by_unit` to read
-        per-unit values, or as ``solve(y0=...)`` to start a dynamic run.
+        per-unit values, or as ``solve(y0=...)`` to start a dynamic run. From
+        :meth:`steady_state` it carries the implicit-function-theorem parameter
+        gradient (``jax.grad`` of a loss on it flows to the plant parameters).
     converged : bool
-        ``True`` if the steady-state event fired (the plant settled) before the
-        ``max_time`` safety cap; ``False`` if the cap was hit first (not yet
-        steady -- raise ``max_time``).
-    time : float
-        The time (plant units) at which steady state was reached, or ``max_time``
-        if it did not converge.
-    solution : PlantSolution
-        The underlying solve (terminating at ``time``).
+        ``True`` if steady state was reached -- the dynamics died out before the
+        ``max_time`` cap (forward) or the residual fell below ``tol`` within
+        ``max_iter`` (algebraic PTC).
+    time : float or None
+        The time (plant units) at which a *forward* solve settled, or
+        ``max_time`` if it did not; ``None`` for the algebraic solve.
+    solution : PlantSolution or None
+        The underlying forward solve (terminating at ``time``); ``None`` for the
+        algebraic solve.
+    method : str
+        How the steady state was found: ``"forward"`` (integrate-to-steady),
+        ``"ptc"`` (pseudo-transient continuation), or ``"ptc->forward"`` (PTC did
+        not converge and the forward fallback was used).
+    iterations : int or None
+        PTC iteration count (``None`` for the forward method).
+    residual : float or None
+        The final scaled steady-state residual ``max_i |dy_i/dt| /
+        max(|y_i|, scale_floor)`` for the algebraic solve (``None`` for forward).
     """
 
     state: jnp.ndarray
     converged: bool
-    time: float
-    solution: "PlantSolution"
+    time: Optional[float] = None
+    solution: Optional["PlantSolution"] = None
+    method: str = "forward"
+    iterations: Optional[int] = None
+    residual: Optional[float] = None
 
 
 def _concrete_teval_key(t_eval):
@@ -2618,4 +2633,130 @@ class Plant:
         converged = bool(t_final < float(max_time))
         return SteadyStateResult(
             state=sol.state[-1], converged=converged, time=t_final, solution=sol,
+            method="forward",
+        )
+
+    def steady_state(
+        self,
+        params: Optional[jnp.ndarray] = None,
+        y0: Optional[jnp.ndarray] = None,
+        *,
+        influent_time: float = 0.0,
+        dt0: float = 1e-2,
+        dt_max: float = 1e10,
+        growth_cap: float = 10.0,
+        max_iter: int = 400,
+        tol: float = 1e-6,
+        scale_floor: float = 1.0,
+        nonneg: bool = True,
+        fallback: bool = True,
+        fallback_kwargs: Optional[dict] = None,
+    ) -> "SteadyStateResult":
+        """Solve the plant steady state algebraically by pseudo-transient continuation.
+
+        Finds the root of the plant right-hand side ``F(y) = dy/dt = 0`` directly,
+        rather than integrating forward until the dynamics die out
+        (:meth:`run_to_steady_state`). Pseudo-transient continuation takes
+        damped-Newton steps ``(V/dt - J) dy = F`` with the exact AD Jacobian
+        ``J`` and a per-state pseudo-time ``V/dt`` that ramps from a stable
+        time-stepping move (far from the root) to a full Newton step (near it),
+        so it is robust on stiff plants (long-SRT digesters) where a plain
+        Newton root-find stalls. Typically reaches steady state ~10x faster than
+        the forward solve and to a tighter residual; see
+        :mod:`aquakin.plant.steady`.
+
+        **Differentiable.** The returned ``state`` carries the
+        implicit-function-theorem gradient with respect to ``params`` (the
+        iteration itself is gradient-blocked), so ``jax.grad`` of a loss on the
+        steady state flows to the plant parameters -- the intended path for
+        design sweeps. The diagnostic fields (``converged``, ``iterations``,
+        ``residual``) and the forward fallback are only available in eager use;
+        under an outer ``jit``/``grad`` trace they are traced values and the
+        fallback is skipped.
+
+        Parameters
+        ----------
+        params : jnp.ndarray, optional
+            Plant parameters (defaults to :meth:`default_parameters`).
+        y0 : jnp.ndarray, optional
+            Warm start (defaults to :meth:`initial_state`). A healthy warm start
+            (e.g. ``bsm2_warm_start``) converges in fewer iterations.
+        influent_time : float
+            Time at which to read the (constant) influent for the steady
+            residual. The steady state is only well defined for a constant load;
+            for a time-varying influent this samples it at ``influent_time``.
+        dt0, dt_max, growth_cap : float
+            Pseudo-transient controls: initial / maximum pseudo-timestep and the
+            per-step SER growth cap (see :func:`aquakin.plant.steady.ptc_forward`).
+        max_iter : int
+            PTC iteration cap.
+        tol : float
+            Convergence tolerance on the scaled residual.
+        scale_floor : float
+            Floor on ``|y|`` in the per-state scaling (so near-zero states do not
+            distort the pseudo-time or the residual).
+        nonneg : bool
+            Clamp the state to ``>= 0`` each step (concentrations are
+            non-negative).
+        fallback : bool
+            If PTC does not converge within ``max_iter`` (eager use only), fall
+            back to :meth:`run_to_steady_state` and return that result (with
+            ``method="ptc->forward"``).
+        fallback_kwargs : dict, optional
+            Extra keyword arguments for the forward fallback.
+
+        Returns
+        -------
+        SteadyStateResult
+            ``state`` (the operating point, IFT-differentiable), ``converged``,
+            ``method="ptc"``, ``iterations`` and ``residual``.
+
+        Examples
+        --------
+        >>> ss = plant.steady_state(params, y0=warm)
+        >>> ss.converged, ss.iterations
+        (True, 75)
+        >>> g = jax.grad(lambda p: plant.steady_state(p, y0=warm).state[idx])(params)
+        """
+        from aquakin.plant.steady import solve_steady_state
+
+        self._build_state_layout()
+        self._build_parameter_layout()
+        if params is None:
+            params = self.default_parameters()
+        y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
+        t = jnp.asarray(float(influent_time))
+
+        def rhs(y, p):
+            return self._rhs(t, y, p)
+
+        res = solve_steady_state(
+            rhs, params, y0, dt0=dt0, dt_max=dt_max, growth_cap=growth_cap,
+            max_iter=max_iter, tol=tol, scale_floor=scale_floor, nonneg=nonneg,
+        )
+
+        # Eager use gets concrete diagnostics and the forward fallback; under an
+        # outer trace ``bool(...)`` raises, so we keep the traced values and skip
+        # the (un-jittable) fallback branch.
+        try:
+            converged = bool(res.converged)
+            iterations = int(res.iterations)
+            residual = float(res.residual)
+        except jax.errors.ConcretizationTypeError:
+            # Under an outer jit/grad trace the diagnostics are traced values;
+            # return them as-is and skip the (un-jittable) fallback branch.
+            return SteadyStateResult(
+                state=res.state, converged=res.converged, method="ptc",
+                iterations=res.iterations, residual=res.residual,
+            )
+
+        if fallback and not converged:
+            fb = self.run_to_steady_state(
+                params, y0=y0, **(fallback_kwargs or {}))
+            fb.method = "ptc->forward"
+            return fb
+
+        return SteadyStateResult(
+            state=res.state, converged=converged, method="ptc",
+            iterations=iterations, residual=residual,
         )

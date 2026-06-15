@@ -354,7 +354,7 @@ def test_steady_state_converges_to_a_fixed_point(net, cond):
     n_comp = r.n_layers + 1
     C0 = jnp.full((n_comp, net.n_species), 0.5)
 
-    ss = r.steady_state(C0, p, warmup=5.0)
+    ss = r.steady_state(C0, p, warmup=5.0, rtol=1e-9)
     prof = ss.profile[-1]
     # A fixed point of the dynamics: advancing it barely changes it.
     advanced = r.solve(prof, params=p, t_span=(0.0, 0.5)).profile[-1]
@@ -362,7 +362,8 @@ def test_steady_state_converges_to_a_fixed_point(net, cond):
     # The bulk equilibrates near the feed (dilution >> the slow decay loss).
     assert 0.9 < float(prof[0, net.species_index["A"]]) < 1.0
 
-    # Differentiable w.r.t. a rate constant via optimistix ImplicitAdjoint.
+    # Differentiable w.r.t. a rate constant via the implicit-function-theorem
+    # adjoint of the pseudo-transient steady state.
     def loss(k):
         pk = p.at[net.param_index["A_to_B.k"]].set(k)
         return jnp.sum(r.steady_state(C0, pk, warmup=5.0).profile[-1])
@@ -372,12 +373,13 @@ def test_steady_state_converges_to_a_fixed_point(net, cond):
 
 
 def test_steady_state_can_stall_silently(net, cond):
-    """The documented failure mode: the root-find uses throw=False, so when it is
-    not given enough iterations (or a good seed) it returns a NON-steady profile
-    without raising. Here a 1-step solve from a far seed does not reach the fixed
-    point, and the returned profile is demonstrably not steady -- advancing it
-    moves it substantially. Callers must therefore verify convergence (or, for a
-    genuinely slow/stiff maturation, integrate forward instead)."""
+    """The documented failure mode: the solver returns a profile without raising,
+    so when it is not given enough iterations (or a good seed) the result is a
+    NON-steady profile. Here a 1-iteration solve from a far seed does not reach
+    the fixed point, and the returned profile is demonstrably not steady --
+    advancing it moves it substantially. Callers must therefore verify
+    convergence (or, for a genuinely slow/stiff maturation, integrate forward
+    instead)."""
     r = _fed_reactor(net, cond)
     p = net.default_parameters()
     n_comp = r.n_layers + 1
