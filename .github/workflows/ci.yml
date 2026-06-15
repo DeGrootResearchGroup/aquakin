@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly (Mon 07:23 UTC): refresh `.test_durations` so the slow/validation
+    # pytest-split shards stay duration-balanced as tests are added. Only the
+    # refresh-durations / commit-durations jobs run on this event; everything
+    # else is gated off it.
+    - cron: "23 7 * * 1"
+  # Manual trigger for the same refresh (e.g. to populate the slow-test durations
+  # immediately instead of waiting for the weekly cron).
+  workflow_dispatch:
 
 # Cancel superseded runs on the same PR, but NEVER cancel a push-to-main run.
 # Keying push events on the immutable commit SHA gives every merge its own
@@ -29,6 +38,9 @@ jobs:
   # This is the required status check that gates merging.
   test:
     name: fast tests (py${{ matrix.python-version }})
+    # Push + PR only; the `schedule` cron and manual `workflow_dispatch` run just
+    # the refresh jobs.
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     # The fast gate is ~8 min on a 5-core dev machine but ~15-25 min on the
     # 4-vCPU hosted runner (the integration tests are real stiff-ODE solves whose
@@ -240,3 +252,118 @@ jobs:
           pytest -m "slow and not validation" -q -n 1 \
             --splits 18 --group "${group}" \
             --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0
+
+  # ---- Weekly refresh of .test_durations (schedule only) ----------------------
+  # The slow (6) and validation (4) jobs pytest-split-shard by `.test_durations`;
+  # as tests are added the file drifts (a test with no recorded duration gets the
+  # fallback average), so the shards lose their duration balance. This weekly job
+  # re-records every slow/validation test's duration and commits the result back.
+  #
+  # It runs `slow or validation` ACROSS SHARDS with `--store-durations` (each
+  # shard records its own slice -- recording the whole set in one process would
+  # OOM the runner, the same reason the suites are sharded in the first place),
+  # uploads the per-shard files, and the commit job merges them into a complete
+  # `.test_durations`. A complete, disjoint partition, so every test is recorded
+  # exactly once and stale entries (tests no longer slow/validation) are pruned.
+  refresh-durations:
+    name: refresh test-durations (shard ${{ matrix.group }}/8)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Generous ceiling: the refresh split is balanced by the (drifted) current
+    # durations, so a shard can be heavier than the steady-state shards.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Record this shard's durations
+        run: >-
+          pytest -m "slow or validation" -q -n 1
+          --splits 8 --group ${{ matrix.group }}
+          --store-durations --durations-path durations-${{ matrix.group }}.json
+          --timeout=900 --timeout-method=thread --max-worker-restart=0
+
+      - name: Upload shard durations
+        uses: actions/upload-artifact@v4
+        with:
+          name: durations-${{ matrix.group }}
+          path: durations-${{ matrix.group }}.json
+          if-no-files-found: error
+
+  commit-durations:
+    name: open .test_durations refresh PR
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: refresh-durations          # only proceed on a COMPLETE set (all shards ok)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write                 # push the refresh branch
+      pull-requests: write            # open the PR
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all shard durations
+        uses: actions/download-artifact@v4
+        with:
+          pattern: durations-*
+          path: _durations
+          merge-multiple: true
+
+      - name: Merge into .test_durations
+        run: |
+          python - <<'PY'
+          import glob, json
+          combined = {}
+          for f in sorted(glob.glob("_durations/durations-*.json")):
+              combined.update(json.load(open(f)))
+          if not combined:
+              raise SystemExit("no shard durations found -- aborting")
+          # Match the existing format exactly (sorted keys, indent=4, no trailing
+          # newline) so an unchanged set is a no-op diff.
+          with open(".test_durations", "w") as fh:
+              json.dump(dict(sorted(combined.items())), fh, indent=4)
+          print(f"merged {len(combined)} test durations")
+          PY
+
+      - name: Open / update the refresh PR if changed
+        # `main` is branch-protected, so this does NOT push to it directly: it
+        # force-updates a single rolling `ci/refresh-test-durations` branch and
+        # opens (or reuses) one PR you merge. The change is metadata-only. Note:
+        # GitHub does not run workflows on a PR authored by the default
+        # GITHUB_TOKEN, so this PR has no CI checks -- merge it with your admin
+        # bypass (it touches only .test_durations).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- .test_durations; then
+            echo "No change to .test_durations -- nothing to do."
+            exit 0
+          fi
+          branch="ci/refresh-test-durations"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add .test_durations
+          git commit -m "ci: refresh .test_durations"
+          git push -f origin "$branch"
+          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')" ]; then
+            gh pr create --base main --head "$branch" \
+              --title "ci: refresh .test_durations" \
+              --body "Automated weekly refresh of the pytest-split durations that balance the slow/validation shards. **Metadata-only** (only \`.test_durations\` changes), so it is safe to merge. Opened by the scheduled \`refresh-durations\` job; CI does not run on bot-authored PRs, so merge with your admin override."
+          else
+            echo "Refresh PR already open; updated its branch."
+          fi
