@@ -30,6 +30,7 @@ from typing import Optional
 import jax.numpy as jnp
 
 from aquakin.plant.metrics import (
+    _time_average as _metrics_time_average,
     aeration_energy,
     carbon_mass,
     derived_TSS,
@@ -235,15 +236,12 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
 
 
 def _time_average(t: jnp.ndarray, values: jnp.ndarray) -> float:
-    """Trapezoidal time-average of ``values(t)`` over ``[t0, t1]``.
-
-    A single saved point (a steady-state solution) has a zero-width window; the
-    average of a constant is that sample, so it is returned directly -- giving the
-    instantaneous steady-state value rather than dividing by a zero window."""
-    t = jnp.asarray(t)
-    if t.shape[0] <= 1:
-        return float(jnp.asarray(values)[0])
-    return float(jnp.trapezoid(values, t) / (t[-1] - t[0]))
+    """Trapezoidal time-average of ``values(t)`` over ``[t0, t1]`` (single source
+    of truth: the shared :func:`aquakin.plant.metrics._time_average` kernel,
+    which also returns the single sample for a one-point steady-state window).
+    Wrapped here only to keep the local ``(t, values)`` argument order and the
+    ``float`` return."""
+    return float(_metrics_time_average(values, t))
 
 
 def _reconstruct(plant, solution, params_full, endpoints):
@@ -342,13 +340,27 @@ def _methane_production(plant, solution, params_full) -> float:
 
 
 def _feed_temperature_C(plant, solution, params_full, default_C):
-    """Flow-weighted digester-feed temperature (°C) at the final state, falling
-    back to ``default_C`` when the streams carry no temperature."""
-    outs = plant.outputs_at(solution.t[-1], solution.state[-1], params_full)
-    feed = outs.get(("sludge_mix", "out"))
+    """Digester-feed temperature (°C), per saved time, so ``heating_energy``
+    time-averages it consistently with the feed flow (rather than using only the
+    final instant). Falls back to ``default_C`` when the streams carry no
+    temperature.
+
+    Temperature presence is structural -- a temperature-agnostic influent leaves
+    every stream ``T = None``, a temperature-carrying one leaves every stream with
+    a ``T`` -- so a ``None`` at the final state means ``None`` throughout: the
+    common (default BSM2) case returns the scalar default after one reconstruction
+    and only a genuinely temperature-carrying run pays the per-step sweep."""
+    final = plant.outputs_at(solution.t[-1], solution.state[-1], params_full)
+    feed = final.get(("sludge_mix", "out"))
     if feed is None or feed.T is None:
         return float(default_C)
-    return float(feed.T) - 273.15  # Stream T is Kelvin
+    temps = []
+    for i in range(solution.t.shape[0]):
+        f = plant.outputs_at(solution.t[i], solution.state[i],
+                             params_full).get(("sludge_mix", "out"))
+        temps.append(float(f.T) - 273.15 if (f is not None and f.T is not None)
+                     else float(default_C))  # Stream T is Kelvin
+    return jnp.asarray(temps)
 
 
 def evaluate_bsm2(
