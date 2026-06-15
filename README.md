@@ -36,8 +36,9 @@ Future networks include UV/TiO₂ and chlorine decay.
   BSM2 — reactors, clarifiers, mixers/splitters and an ADM1 digester integrated
   under one monolithic solve, with run-to-steady-state, a fast differentiable
   algebraic steady-state solver (`plant.steady_state`, pseudo-transient
-  continuation — ~10× faster than integrating to settle), dynamic influents, and
-  EQI/OCI performance metrics.
+  continuation — ~10× faster than integrating to settle), dynamic influents,
+  EQI/OCI performance metrics, and GHG (N₂O / CO₂e) + monetised-cost reporting
+  with standardized scenario-comparison KPI tables.
 - Full automatic differentiation everywhere, including cap-free forward
   sensitivity and reverse-mode gradients through stiff plant solves (see
   [Advanced: differentiation & sensitivity](#advanced-differentiation--sensitivity)).
@@ -194,6 +195,41 @@ print(f"EQI = {ev.eqi:.0f} kg/d   OCI = {ev.oci:.0f}")
 thickener, ADM1 digester with the ASM1↔ADM1 interfaces, dewatering, reject
 recycle) the same way; see `examples/` and `CLAUDE.md` for the BSM2 steady state,
 dynamic/seasonal runs, DO control, and the SRT/HRT/F:M design helpers.
+
+### GHG, cost and scenario reporting
+
+On top of the EQI / OCI evaluation, `aquakin` reports a **carbon footprint**
+(CO₂e/d) and a monetised **operating cost** (currency/d), and tabulates
+scenarios side by side:
+
+```python
+ev  = evaluate_bsm2(plant, sol, params)          # EQI / OCI + physical flows
+n2o = aquakin.direct_n2o_emission(plant, sol)    # stripped N₂O (0 unless the AS
+                                                 # network resolves an SN2O state)
+
+fp = aquakin.carbon_footprint(                   # kg CO₂e/d, with breakdown
+    ev.total_energy(), grid_factor=0.4, n2o_emission=n2o,
+    methane_production=ev.methane_production, ch4_fugitive_fraction=0.015)
+
+oc = aquakin.operating_cost(                     # currency/d OPEX (+ optional CAPEX)
+    energy_kwh_per_d=ev.total_energy(), carbon_kg_cod_per_d=ev.carbon_mass,
+    sludge_kg_tss_per_d=ev.sludge_production,
+    methane_kg_per_d=ev.methane_production,
+    factors=aquakin.CostFactors(energy_price=0.12), co2e_per_d=fp.total_co2e)
+
+print(fp)            # labeled CO₂e breakdown
+print(oc)            # labeled cost breakdown
+print(aquakin.kpi_comparison({"baseline": ev, "low-DO": ev_b}).table())
+```
+
+`carbon_footprint` weights direct N₂O (GWP ~273), grid-energy CO₂e and fugitive
+biogas methane (GWP ~27), crediting recovered biogas energy; `operating_cost`
+prices energy / carbon / sludge / biogas (and an optional CAPEX + carbon charge);
+`kpi_comparison` puts any report objects (`BSM2Evaluation`, `CarbonFootprint`,
+`OperatingCost`) into one standardized KPI table. The scenario-orchestration
+primitives `monte_carlo`, `compare_scenarios` and `optimize_design` propagate
+input uncertainty and size designs to a permit at minimum cost. See
+`examples/bsm2_ghg_cost_report.py`.
 
 ## Advanced: differentiation & sensitivity
 

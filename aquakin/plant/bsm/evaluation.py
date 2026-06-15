@@ -165,6 +165,23 @@ class BSM2Evaluation:
         "supplied."
     )
 
+    def total_energy(self) -> float:
+        """Total electricity draw (kWh/d) = aeration + pumping + mixing -- the
+        energy basis for the GHG and cost layers."""
+        return self.aeration_energy + self.pumping_energy + self.mixing_energy
+
+    def kpis(self) -> dict:
+        """Headline performance KPIs for a scenario comparison table."""
+        return {
+            "EQI (kg/d)": self.eqi,
+            "OCI": self.oci,
+            "Energy (kWh/d)": self.total_energy(),
+            "Sludge (kgTSS/d)": self.sludge_production,
+            "Methane (kgCH4/d)": self.methane_production,
+            "SNH (gN/m3)": self.effluent.get("SNH", float("nan")),
+            "SNO (gN/m3)": self.effluent.get("SNO", float("nan")),
+        }
+
     def report(self) -> str:
         """A labeled, units-annotated EQI / OCI breakdown (also ``str(eval)``).
 
@@ -530,6 +547,22 @@ class BSM1Evaluation:
         "steady state)."
     )
 
+    def total_energy(self) -> float:
+        """Total electricity draw (kWh/d) = aeration + pumping -- the energy
+        basis for the GHG and cost layers (BSM1 has no mixing/digester term)."""
+        return self.aeration_energy + self.pumping_energy
+
+    def kpis(self) -> dict:
+        """Headline performance KPIs for a scenario comparison table."""
+        return {
+            "EQI (kg/d)": self.eqi,
+            "OCI": self.oci,
+            "Energy (kWh/d)": self.total_energy(),
+            "Sludge (kgTSS/d)": self.sludge_production,
+            "SNH (gN/m3)": self.effluent.get("SNH", float("nan")),
+            "SNO (gN/m3)": self.effluent.get("SNO", float("nan")),
+        }
+
     def report(self) -> str:
         """A labeled, units-annotated EQI / OCI breakdown (also ``str(eval)``).
 
@@ -634,3 +667,69 @@ def evaluate_bsm1(
         eqi=eqi, oci=oci, aeration_energy=AE, pumping_energy=PE,
         sludge_production=sludge, effluent=averages, aerated_tanks=aerated,
     )
+
+
+# ---- GHG / carbon-footprint coupling ---------------------------------------
+
+# The dissolved N₂O state name in the N₂O kinetic networks (Pocquet 2016 form).
+_N2O_SPECIES = "SN2O"
+
+
+def direct_n2o_emission(
+    plant,
+    solution,
+    params: Optional[jnp.ndarray] = None,
+    *,
+    n2o_species: str = _N2O_SPECIES,
+    kla_ratio: float = 1.0,
+) -> float:
+    """Direct N₂O stripped from the activated-sludge reactors (kg N₂O-N/d).
+
+    The activated-sludge network must track a dissolved nitrous-oxide state
+    (``n2o_species``, default ``"SN2O"`` -- present in the N₂O kinetic networks,
+    e.g. ``asm3_2step_n2o``). N₂O is stripped at the aeration mass-transfer rate,
+    so only the aerated reactors emit; this reconstructs each reactor's oxygen
+    ``kLa`` (the same control-aware reconstruction ``evaluate_bsm2`` uses) and its
+    dissolved N₂O trajectory, and time-averages the stripping flux
+    (:func:`aquakin.plant.ghg.stripped_n2o`).
+
+    If the network has no ``n2o_species`` state (the standard ASM1 BSM2 plant,
+    which does not resolve N₂O), the direct N₂O emission is **0** -- the model has
+    no nitrous oxide to strip. Use an N₂O-capable activated-sludge network to get
+    a non-zero direct footprint.
+
+    Parameters
+    ----------
+    plant : Plant
+        A plant whose activated-sludge reactors carry ``n2o_species``.
+    solution : PlantSolution
+        A solved trajectory over the evaluation window.
+    params : jnp.ndarray, optional
+        Plant parameters used for the run (defaults to the plant defaults).
+    n2o_species : str
+        Dissolved N₂O-N state name (default ``"SN2O"``).
+    kla_ratio : float
+        N₂O-to-O₂ mass-transfer-coefficient ratio (default 1.0).
+
+    Returns
+    -------
+    float
+        Time-averaged stripped N₂O-N mass flow (kg N/d).
+    """
+    from aquakin.plant.ghg import stripped_n2o
+
+    params_full = (plant.default_parameters() if params is None
+                   else jnp.asarray(params))
+    reactors = _as_reactors(plant)
+    # Reactors whose network resolves the dissolved N₂O state.
+    n2o_reactors = [n for n in reactors
+                    if n2o_species in plant.units[n].network.species_index]
+    if not n2o_reactors:
+        return 0.0
+
+    t = solution.t
+    kla_hist = _kla_history(plant, solution, params, n2o_reactors)
+    volumes = jnp.asarray([float(plant.units[n].volume) for n in n2o_reactors])
+    s_n2o = jnp.stack(
+        [solution.C_named(n, n2o_species) for n in n2o_reactors], axis=1)
+    return stripped_n2o(t, kla_hist, s_n2o, volumes, kla_ratio=kla_ratio)

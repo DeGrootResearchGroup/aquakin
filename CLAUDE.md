@@ -1674,6 +1674,7 @@ aquakin/
 │   ├── bsm2_seasonal_temperature.py   # BSM2 cold->warm nitrification effect
 │   ├── dgsm_sensitivity_screen.py     # DGSM global sensitivity, forward==reverse
 │   ├── wats_nitrate_dosing_calibration.py  # synthetic sewer rate recovery (calibrate + Laplace)
+│   ├── bsm2_ghg_cost_report.py     # GHG (N2O/CO2e) + cost reporting + scenario KPI table
 │   └── adjoint_speed_benchmark.py  # stable_adjoint vs capped jax_adjoint timing
 │   # NOTE: the wats_sewer_extended batch-fitting / calibration / sensitivity scripts and
 │   # their measurement data live in the separate paper-reproduction repository,
@@ -3102,6 +3103,43 @@ ss.solution)`" flow returns finite, meaningful indices rather than raising
 `ZeroDivisionError` (the old `aeration_energy` divided by the bare window) or a
 spurious zero (the other kernels' `+1e-12` guard). Multi-point results are
 unchanged.
+
+**GHG / cost reporting + standardized scenario KPI tables.** On top of the
+EQI/OCI evaluation, two presentation layers turn the physical flows a
+`BSM2Evaluation`/`BSM1Evaluation` already carries into the carbon-footprint and
+cost-OPEX deliverables, plus a standardized side-by-side KPI table:
+- **Carbon footprint** ([`aquakin/plant/ghg.py`](aquakin/plant/ghg.py)):
+  generic CO₂e kernels (`co2e_from_energy`, `n2o_n_to_co2e` — N₂O-N → N₂O via
+  44/28 then ×GWP, `methane_to_co2e`) plus `stripped_n2o` (the aeration-rate
+  stripping `Σ kLa_N2O·(S_N2O−S*)·V`, so only aerated tanks emit), assembled by
+  `carbon_footprint(energy_kwh, *, grid_factor, n2o_emission, methane_production,
+  ch4_fugitive_fraction, biogas_recovered_kwh, ...)` into a `CarbonFootprint`
+  (direct N₂O + grid-energy CO₂e + fugitive CH₄ − biogas-energy credit). IPCC
+  AR6 100-yr GWP defaults (N₂O 273, biogenic CH₄ 27) and a representative grid
+  factor, all overridable. The plant-coupled `direct_n2o_emission(plant, solution,
+  params)` (in [`bsm/evaluation.py`](aquakin/plant/bsm/evaluation.py)) reconstructs
+  the stripped N₂O from a solved plant (reusing the control-aware `_kla_history`
+  and reading the dissolved `SN2O` per reactor); it returns **0** when the AS
+  network has no `SN2O` state (the standard ASM1 BSM2 plant — only an N₂O-capable
+  network such as `asm3_2step_n2o` gives a non-zero direct term).
+- **Operating cost** ([`aquakin/plant/cost.py`](aquakin/plant/cost.py)):
+  `operating_cost(*, energy_kwh_per_d, carbon_kg_cod_per_d, sludge_kg_tss_per_d,
+  methane_kg_per_d, factors, co2e_per_d)` prices energy / external carbon /
+  sludge disposal / biogas credit (`CostFactors`, currency/d) with an optional
+  annualised CAPEX and a CO₂e carbon charge → `OperatingCost` (per-day +
+  annual).
+- **Standardized KPI comparison** (`kpi_comparison` in
+  [`integrate/experiments.py`](aquakin/integrate/experiments.py)): tabulates
+  heterogeneous report objects (`BSM2Evaluation`, `CarbonFootprint`,
+  `OperatingCost` — anything exposing `.kpis()`, or a plain dict) side by side
+  into a `KPIComparison` (union of KPI columns, `.best(kpi, minimize=)`). The
+  report-object companion to `compare_scenarios` (which runs a model and
+  tabulates a fixed output vector). The four evaluation/report dataclasses each
+  expose `.kpis()`, and the evaluators a `total_energy()` (AE+PE[+ME]) — the
+  energy basis for the GHG/cost layers.
+  Demonstrated in `examples/bsm2_ghg_cost_report.py`; kernels + KPI logic tested
+  fast in `tests/unit/test_ghg_cost.py`, the plant-coupled path on the shared
+  BSM2 solve in `tests/integration/test_bsm2_evaluation.py`.
 
 **Activated-sludge design layer — SRT / HRT / F:M (`aquakin/plant/design.py`).**
 Plants are specified in the quantities the solver integrates (tank `volume`,

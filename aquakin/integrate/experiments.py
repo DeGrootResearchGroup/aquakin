@@ -390,6 +390,109 @@ def compare_scenarios(
     )
 
 
+# --- Standardized KPI comparison ---------------------------------------------
+
+@dataclass
+class KPIComparison:
+    """A side-by-side KPI table over several named results.
+
+    The standardized-report companion to :func:`compare_scenarios`: where that
+    runs a model and tabulates a fixed output *vector*, this assembles a table
+    from heterogeneous **report objects** (a :class:`BSM2Evaluation`, a
+    :class:`CarbonFootprint`, an :class:`OperatingCost`, or any object exposing a
+    ``kpis()`` mapping -- or a plain ``{name: value}`` dict) already computed per
+    scenario. The KPI columns are the union of every report's keys, in
+    first-seen order; a KPI a given report does not provide is left blank.
+
+    Attributes
+    ----------
+    names : list[str]
+        The result names (table rows).
+    kpi_names : list[str]
+        The KPI labels (table columns), union over all results.
+    values : dict
+        ``name -> {kpi: value}`` for every result.
+    """
+
+    names: list[str]
+    kpi_names: list[str]
+    values: dict
+
+    def column(self, kpi: str) -> dict:
+        """The ``{name: value}`` map for one KPI across results."""
+        if kpi not in self.kpi_names:
+            raise KeyError(f"unknown KPI '{kpi}'; have {self.kpi_names}.")
+        return {n: self.values[n].get(kpi, float("nan")) for n in self.names}
+
+    def best(self, kpi: str, *, minimize: bool = True) -> str:
+        """The result name with the lowest (or highest) value of ``kpi``."""
+        col = self.column(kpi)
+        finite = {n: v for n, v in col.items() if v == v}  # drop NaNs
+        if not finite:
+            raise ValueError(f"KPI '{kpi}' has no finite value across results.")
+        return (min if minimize else max)(finite, key=finite.get)
+
+    def table(self) -> str:
+        """A human-readable KPI table, one column per result."""
+        rows = [["KPI", *self.names]]
+        for kpi in self.kpi_names:
+            row = [kpi]
+            for n in self.names:
+                v = self.values[n].get(kpi)
+                row.append("" if v is None else f"{v:.4g}")
+            rows.append(row)
+        w = [max(len(r[c]) for r in rows) for c in range(len(rows[0]))]
+        return "\n".join("  ".join(r[c].ljust(w[c]) for c in range(len(r)))
+                         for r in rows)
+
+    def __str__(self) -> str:
+        return self.table()
+
+
+def _kpis_of(report) -> dict:
+    """Extract a ``{kpi: value}`` mapping from a report object or plain dict."""
+    if isinstance(report, dict):
+        return dict(report)
+    kpis = getattr(report, "kpis", None)
+    if callable(kpis):
+        return dict(kpis())
+    raise TypeError(
+        f"a KPI report must be a dict or expose a kpis() method; got "
+        f"{type(report).__name__}.")
+
+
+def kpi_comparison(reports: dict) -> KPIComparison:
+    """Tabulate KPIs from several named report objects side by side.
+
+    Parameters
+    ----------
+    reports : dict
+        ``name -> report``, where each report is a result object exposing a
+        ``kpis()`` method (:class:`BSM2Evaluation`, :class:`CarbonFootprint`,
+        :class:`OperatingCost`, ...) or a plain ``{kpi: value}`` mapping. The KPI
+        columns are the union of every report's keys, in first-seen order.
+
+    Returns
+    -------
+    KPIComparison
+
+    Examples
+    --------
+    >>> kpi_comparison({
+    ...     "baseline": evaluation_a,
+    ...     "low-DO":   evaluation_b,
+    ... }).table()  # doctest: +SKIP
+    """
+    names = list(reports.keys())
+    per_name = {n: _kpis_of(reports[n]) for n in names}
+    kpi_names: list = []
+    for n in names:
+        for k in per_name[n]:
+            if k not in kpi_names:
+                kpi_names.append(k)
+    return KPIComparison(names=names, kpi_names=kpi_names, values=per_name)
+
+
 # --- Constrained design optimization -----------------------------------------
 
 @dataclass

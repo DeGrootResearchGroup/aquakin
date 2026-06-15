@@ -123,6 +123,56 @@ def test_signals_at_open_loop_is_empty(evaluated):
     assert plant.signals_at(sol.t[0], sol.state[0], params) == {}
 
 
+# ----- GHG / cost reporting on the same solve -----------------------------
+
+def test_direct_n2o_zero_without_n2o_state(evaluated):
+    """The ASM1 BSM2 plant does not resolve N2O, so the direct N2O emission is
+    exactly 0 (there is no nitrous oxide in the model to strip)."""
+    from aquakin.plant.bsm import direct_n2o_emission
+    plant, sol, params, _ = evaluated
+    assert direct_n2o_emission(plant, sol, params) == 0.0
+
+
+def test_carbon_footprint_from_evaluation(evaluated):
+    """The carbon footprint builds off the evaluation's energy and methane: the
+    energy term equals AE+PE+ME * grid factor; the biogas credit subtracts."""
+    _, _, _, ev = evaluated
+    fp = aquakin.carbon_footprint(
+        ev.total_energy(), grid_factor=0.4,
+        n2o_emission=0.0, methane_production=ev.methane_production,
+        ch4_fugitive_fraction=0.01,
+    )
+    assert fp.energy_co2e == pytest.approx(0.4 * ev.total_energy())
+    assert fp.ch4_fugitive == pytest.approx(0.01 * ev.methane_production)
+    assert jnp.isfinite(fp.total_co2e)
+
+
+def test_operating_cost_from_evaluation(evaluated):
+    """The OPEX builds off the evaluation's physical flows; with positive prices
+    and a digester the biogas credit is non-zero."""
+    _, _, _, ev = evaluated
+    oc = aquakin.operating_cost(
+        energy_kwh_per_d=ev.total_energy(),
+        carbon_kg_cod_per_d=ev.carbon_mass,
+        sludge_kg_tss_per_d=ev.sludge_production,
+        methane_kg_per_d=ev.methane_production,
+        factors=aquakin.CostFactors(),
+    )
+    assert oc.biogas_credit > 0.0
+    assert jnp.isfinite(oc.total_per_day)
+
+
+def test_evaluation_kpis_and_comparison(evaluated):
+    """A BSM2Evaluation exposes kpis(); kpi_comparison tabulates two side by
+    side with the union of columns."""
+    _, _, _, ev = evaluated
+    assert "EQI (kg/d)" in ev.kpis()
+    assert ev.kpis()["Energy (kWh/d)"] == pytest.approx(ev.total_energy())
+    kc = aquakin.kpi_comparison({"baseline": ev, "same": ev})
+    assert kc.names == ["baseline", "same"]
+    assert kc.best("EQI (kg/d)") in ("baseline", "same")
+
+
 # ----- OCI-component metric kernels (no plant solve) ----------------------
 
 def test_mixing_energy_kernel():

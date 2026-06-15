@@ -20,6 +20,7 @@ from aquakin.plant.bsm.evaluation import (
     BSM2Evaluation,
     DigesterGas,
     digester_gas,
+    direct_n2o_emission,
     evaluate_bsm1,
     evaluate_bsm2,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "bsm2_warm_start",
     "bsm2_wastage_schedule",
     "digester_gas",
+    "direct_n2o_emission",
     "evaluate_bsm1",
     "evaluate_bsm2",
     "load_bsm1_influent",
