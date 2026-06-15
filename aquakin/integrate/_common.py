@@ -892,6 +892,45 @@ def _run_diffeqsolve(
     )
 
 
+def make_chemistry_rhs(
+    network: CompiledNetwork,
+    params: jnp.ndarray,
+    *,
+    cond_fn: Callable[[jnp.ndarray], Mapping[str, jnp.ndarray]],
+    rate_scale=None,
+) -> Callable:
+    """Build the canonical reaction right-hand side ``rhs(t, C, args)``.
+
+    Hoists the (parameter-dependent) stoichiometry once, then returns
+    ``dC/dt = rate_scale * dCdt(C, params, cond_fn(t))``. This is the **single
+    source** for the reaction RHS: both the plain solve (:func:`solve_chemistry`)
+    and the event-driven segmented solve build their RHS through here, so the two
+    paths cannot drift (a change to how the RHS is assembled reaches both). The
+    threaded ``args`` carries the live ``params`` for the rate constants while the
+    stoichiometry is the hoisted constant.
+
+    Parameters
+    ----------
+    network : CompiledNetwork
+    params : jnp.ndarray
+        Parameter vector; the stoichiometry is hoisted from it once.
+    cond_fn : callable
+        ``cond_fn(t)`` returning the condition arrays at independent value ``t``
+        (a constant dict for batch/CFD; an interpolation for PFR/particle).
+    rate_scale : optional
+        ``None`` (identity) or a scalar multiplying the rate (e.g. ``1/velocity``
+        for the steady-state PFR).
+    """
+    stoich = network.compute_stoich(params)
+    if rate_scale is None:
+        def rhs(t, C, args):
+            return network.dCdt(C, args, cond_fn(t), 0, stoich=stoich)
+    else:
+        def rhs(t, C, args):
+            return network.dCdt(C, args, cond_fn(t), 0, stoich=stoich) * rate_scale
+    return rhs
+
+
 def solve_chemistry(
     network: CompiledNetwork,
     C0: jnp.ndarray,
@@ -927,14 +966,8 @@ def solve_chemistry(
     Returns the diffrax ``Solution``; callers read ``sol.ts`` / ``sol.ys`` (or
     ``sol.ys[-1]`` for a single-endpoint step).
     """
-    stoich = network.compute_stoich(params)
-
-    if rate_scale is None:
-        def rhs(t, C, args):
-            return network.dCdt(C, args, cond_fn(t), 0, stoich=stoich)
-    else:
-        def rhs(t, C, args):
-            return network.dCdt(C, args, cond_fn(t), 0, stoich=stoich) * rate_scale
+    rhs = make_chemistry_rhs(network, params, cond_fn=cond_fn,
+                             rate_scale=rate_scale)
 
     return _run_diffeqsolve(
         rhs,

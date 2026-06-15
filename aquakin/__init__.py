@@ -65,6 +65,7 @@ from aquakin.integrate.sensitivity import (
     fit,
     sensitivity,
 )
+from aquakin.integrate.events import Event, EventedResult, solve_with_events
 from aquakin.integrate.experiments import (
     Constraint,
     KPIComparison,
@@ -199,6 +200,9 @@ __all__ = [
     "derived_TKN",
     "derived_TSS",
     "dgsm",
+    "Event",
+    "EventedResult",
+    "solve_with_events",
     "monte_carlo",
     "compare_scenarios",
     "kpi_comparison",
