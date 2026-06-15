@@ -834,6 +834,61 @@ def _compile_speciation(spec, species_index, declared_conditions):
     return derived_condition_fn, derived_fields, condition_fields
 
 
+def _compose_derived(first, second):
+    """Compose two derived-condition functions: run ``first``, inject its outputs
+    into the condition arrays, then run ``second`` on the augmented conditions;
+    return both outputs merged. This lets the precipitation saturation-index
+    computation read the pH that the speciation block produced in the same RHS
+    call (they share one ``derived_condition_fn`` slot)."""
+    def composed(C, params, conditions, loc_idx):
+        out1 = first(C, params, conditions, loc_idx)
+        shape = jnp.shape(next(iter(conditions.values()))) if conditions else (1,)
+        merged = dict(conditions)
+        for k, v in out1.items():
+            merged[k] = jnp.broadcast_to(jnp.asarray(v), shape)
+        out2 = second(C, params, merged, loc_idx)
+        return {**out1, **out2}
+    return composed
+
+
+def _compile_precipitation(spec, species_index, condition_fields, derived_fields,
+                           speciation_fn):
+    """Wire an optional ``precipitation:`` block (SI-driven mineral precipitation).
+
+    Composes after the speciation pH: the precipitation derived-fn needs the
+    system pH, which may be a declared condition OR produced by ``speciation:``.
+    Returns ``(derived_condition_fn, derived_fields, condition_fields)`` with the
+    valid condition set extended by each mineral's ``SI_<name>`` / ``R_<name>``.
+    """
+    precip_cfg = getattr(spec, "precipitation", None)
+    if precip_cfg is None:
+        return speciation_fn, derived_fields, condition_fields
+
+    from aquakin.core.precipitation import build_precipitation_derived_fn
+
+    cfg = precip_cfg if isinstance(precip_cfg, dict) else precip_cfg.model_dump()
+    precip_fn, produced, required = build_precipitation_derived_fn(cfg, species_index)
+
+    missing = sorted(required - condition_fields)
+    if missing:
+        raise ValueError(
+            f"precipitation block reads condition field(s) {missing} that are "
+            f"neither declared in 'conditions:' nor produced by 'speciation:'."
+        )
+    clash = sorted(set(produced) & condition_fields)
+    if clash:
+        raise ValueError(
+            f"precipitation produces field(s) {clash} that collide with declared "
+            f"conditions or speciation-derived fields."
+        )
+
+    combined = precip_fn if speciation_fn is None else _compose_derived(
+        speciation_fn, precip_fn
+    )
+    return (combined, list(derived_fields) + produced,
+            condition_fields | set(produced))
+
+
 def _build_param_index(spec):
     """Build the flat parameter index by walking network-level then
     reaction-local parameters in declaration order (so ordering is
@@ -1026,6 +1081,11 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     # condition-field set with any produced field).
     derived_condition_fn, derived_fields, condition_fields = _compile_speciation(
         spec, species_index, declared_conditions
+    )
+    # Stage 1b: optional mineral precipitation, composed after the speciation pH
+    # (it adds each mineral's SI_<name> / R_<name> to the valid condition set).
+    derived_condition_fn, derived_fields, condition_fields = _compile_precipitation(
+        spec, species_index, condition_fields, derived_fields, derived_condition_fn
     )
 
     # Stage 2: the flat parameter index (network-level then reaction-local).

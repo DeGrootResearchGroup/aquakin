@@ -301,6 +301,18 @@ The shipped networks currently are:
   omits it), and the parameter values — i.e. the paper model is essentially the
   thesis model with the `_halforder`→Monod structural choice and paper Table-3
   parameters.
+- `precipitation_struvite_calcite` — mineral **precipitation/dissolution** from
+  an anaerobic-digester supernatant: struvite (MgNH₄PO₄) and calcite (CaCO₃),
+  the worked example of the `precipitation:` block (generalised precipitation
+  framework, Kazadi Mbamba et al. 2015). Each mineral declares its constituent
+  ions, pKsp and supersaturation order; the engine computes the saturation index
+  `SI_<name>` and the SI-driven rate factor `R_<name> = sign(σ)·|σ|^n` from the
+  free-ion activities at the operating pH, and a precipitation reaction reads
+  `{R_<name>}` to consume the ions / form the solid (or dissolve it when
+  undersaturated). State is in mol/m³ so the stoichiometry is exact; pH is a
+  fixed condition here, but a `speciation:` block can instead supply a
+  charge-balance pH the precipitation reads (the two derived functions compose).
+  See *Mineral precipitation / state-derived saturation* below.
 
 ### Khalil model-improvement sequence (JRN-055 reproduction log)
 
@@ -1293,6 +1305,97 @@ way `strong_anions` already does for anions.
 
 ---
 
+## Mineral precipitation / state-derived saturation
+
+`aquakin` can model **kinetic mineral precipitation and dissolution** —
+struvite, calcite, the calcium phosphates — driven by the aqueous
+supersaturation. Like pH, the saturation state is not an independent state: it
+is computed from the instantaneous composition and exposed to rate expressions
+as ordinary condition fields. The framework is the generalised
+precipitation approach of Kazadi Mbamba et al. (2015).
+
+### The rate law (`core/precipitation.py`)
+
+Each mineral precipitates (or dissolves) at
+
+```
+R = k_cryst · X_cryst · sign(σ) · |σ|^n
+```
+
+driven by the relative supersaturation `σ = (IAP/Ksp)^(1/ν) − 1`
+(`SI = log10(IAP/Ksp)` is the saturation index), where
+`IAP = Π aᵢ^countᵢ` is the ion-activity product over the mineral's
+constituent ions, `Ksp` its solubility product, `ν = Σ countᵢ` the number of
+ions, and `aᵢ` the free-ion **activities** at the system pH. A small non-zero
+`X_cryst` seed lets precipitation self-nucleate; `sign(σ)` makes the same law
+describe dissolution when the phase is undersaturated (`σ < 0`).
+
+The aqueous chemistry — the temperature-corrected dissociation constants, the
+free-ion fractions of the carbonate/phosphate/ammonia/sulfide acid-base
+systems, and the Davies / Debye-Hückel activity coefficients — is **shared with
+the charge-balance pH solver** (`core/ph_solver.py`): the module reuses
+`equilibrium_constants`, `_log10_gamma`, `debye_huckel_A`. Free Ca/Mg are taken
+as the full declared total (ion-pairing not yet subtracted — a documented
+simplification of the source aqueous model). AD-clean (no data-dependent control
+flow), so it composes inside a Diffrax RHS and `jax.grad` flows through it.
+
+### `precipitation:` block (`core/precipitation.py`, schema in `schema/network_spec.py`)
+
+```yaml
+precipitation:
+  pH_field: pH               # condition giving pH (a fixed condition, or produced by speciation:)
+  temperature_field: T
+  temperature_units: kelvin  # or "celsius"
+  activity_model: davies     # "none" | "davies" | "debye_huckel"
+  ionic_strength_offset: 0.1 # background electrolyte (mol/L)
+  minerals:
+    - name: struvite
+      pKsp: 13.26            # MgNH4PO4
+      order: 3               # supersaturation exponent n
+      ions:                  # molar_mass converts the state's units -> mol/L (Ksp basis)
+        - {species: S_Mg,  molar_mass: 1000, count: 1, charge: 2}                       # free cation
+        - {species: S_NH,  molar_mass: 1000, count: 1, charge: 1, fraction: ammonia}    # NH4+ fraction at pH
+        - {species: S_PO4, molar_mass: 1000, count: 1, charge: 3, fraction: phosphate}  # PO4^3- fraction at pH
+    - name: calcite
+      pKsp: 8.48
+      order: 2
+      ions:
+        - {species: S_Ca, molar_mass: 1000, count: 1, charge: 2}
+        - {species: S_IC, molar_mass: 1000, count: 1, charge: 2, fraction: carbonate}
+```
+
+`build_precipitation_derived_fn` (in `core/precipitation.py`, no Pydantic) turns
+the validated declaration plus `species_index` into a derived-condition callable
+that produces `SI_<name>` and `R_<name>` per mineral; a precipitation reaction
+reads `{R_<name>}` in its rate and consumes the constituent ions / produces the
+solid through ordinary stoichiometry. An ion's `fraction` selects how its free
+activity is obtained: an acid/base system key — `carbonate`, `phosphate`,
+`ammonia`, `sulfide` (the species total times its de/protonated fraction at pH)
+— the special `proton` (H⁺, activity `10^-pH`, `species` omitted), or omitted
+for a fully-free cation (the species total taken as the free ion).
+`VALID_PRECIP_FRACTIONS` in `core/precipitation.py` is the single source of
+truth, imported by the Pydantic schema so an unknown `fraction` (or an
+undeclared `species`) is a load-time error.
+
+**Composition with speciation.** `precipitation:` is wired in a `_compile_precipitation`
+stage in `core/network.py` *after* `_compile_speciation`, so when both blocks
+are present the precipitation reads the **charge-balance pH** the speciation
+block produces (the two derived functions compose via `_compose_derived`:
+speciation runs, its pH is broadcast into the conditions, then precipitation
+runs and both results merge). The shipped
+[`precipitation_struvite_calcite.yaml`](aquakin/networks/precipitation_struvite_calcite.yaml)
+is the worked example (digester supernatant, struvite + calcite, fixed
+operating pH); the test suite also exercises the speciation→precipitation
+composition.
+
+**Units.** The worked network uses **mol/m³ (= mmol/L)** for the ions and
+solids so the precipitation stoichiometry is exact (one mole of mineral consumes
+one mole of each constituent ion), with the per-ion `molar_mass: 1000`
+converting mol/m³ → the mol/L the IAP/Ksp use. `clip_negative_states: true`
+protects the supersaturation term from a transiently-negative ion state.
+
+---
+
 ## Package Structure
 
 ```
@@ -1310,6 +1413,8 @@ aquakin/
 │   │   ├── ph_solver.py             # differentiable charge-balance pH solver
 │   │   │                            #   (safeguarded Newton-bisection: globally convergent, no NaN)
 │   │   ├── speciation.py            # speciation block -> derived pH condition fn
+│   │   ├── precipitation.py         # precipitation block -> derived SI_/R_ condition fn
+│   │   │                            #   (Kazadi Mbamba 2015; reuses ph_solver constants/activities)
 │   │   └── units.py                 # prettify_units: plain-ASCII unit exponents -> Unicode superscripts
 │   │
 │   ├── schema/
@@ -1383,7 +1488,8 @@ aquakin/
 │   │   ├── wats_sewer_khalil_thesis.yaml # thesis-faithful Khalil model
 │   │   ├── wats_sewer_khalil_paper_balanced_biofilm.yaml  # layered-biofilm variant ({A_V} areal)
 │   │   ├── wats_sewer_khalil_paper_balanced_biofilm_biomass.yaml  # per-layer-biomass biofilm (heterotroph)
-│   │   └── wats_sewer_khalil_paper_balanced_biofilm_multispecies.yaml  # + X_SRB/X_MA/X_SOB groups
+│   │   ├── wats_sewer_khalil_paper_balanced_biofilm_multispecies.yaml  # + X_SRB/X_MA/X_SOB groups
+│   │   └── precipitation_struvite_calcite.yaml  # mineral precipitation (Kazadi Mbamba 2015): struvite + calcite
 │   │
 │   │   # wats_sewer_khalil_paper (paper) is the paper-active core augmented with the
 │   │   #   dormant full-WATS aerobic pieces by networks/_make_khalil_paper.py;

@@ -14,7 +14,10 @@ two-pathway AOB nitrous-oxide (N₂O) model, an anammox / deammonification
 variant, and a comammox complete-nitrifier variant; ADM1 anaerobic
 digestion in its BSM2 form, with gas headspace; the WATS sewer-process models
 `wats_sewer_extended` and the paper-faithful `wats_sewer_khalil_paper`, the
-latter with structural variants for model-structure studies). The network
+latter with structural variants for model-structure studies) as well as
+chemistry coupled to acid-base speciation (a charge-balance state-derived pH,
+and SI-driven mineral precipitation/dissolution — struvite + calcite — after
+Kazadi Mbamba et al. 2015). The network
 YAML files live under `aquakin/networks/`; see `CLAUDE.md` for the full list.
 Future networks include UV/TiO₂ and chlorine decay.
 
