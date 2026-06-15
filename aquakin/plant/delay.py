@@ -54,7 +54,12 @@ class HydraulicDelayUnit:
     tau : float
         Lag time constant (days). Smaller is faster (less delay).
     initial_flow : float, optional
-        Initial held flow ``Q`` (m³/d) seeding the state. Default 0.
+        Initial held flow ``Q`` (m³/d) seeding the state. Default 0. **Set this
+        to the expected influent flow** for a steady start: the outlet flow IS
+        the held-flow state, so a default of 0 makes the unit emit no flow until
+        ~``tau`` has elapsed -- a non-physical no-flow transient that starves the
+        whole downstream plant on a cold start. ``build_bsm2(hydraulic_delay=...)``
+        seeds it with the reference flow for exactly this reason.
     initial_concentrations : jnp.ndarray, optional
         Initial held concentrations, shape ``(n_species,)``. Defaults to the
         network's default concentrations.

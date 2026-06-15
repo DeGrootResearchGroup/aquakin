@@ -134,6 +134,54 @@ def test_duplicate_species_rejected(tmp_path):
         aquakin.load_network_from_file(p)
 
 
+def test_unreferenced_expression_bad_species_rejected(tmp_path):
+    """A named expression that NO reaction consumes is still validated -- a typo'd
+    species reference in it must be rejected, not loaded silently (it used to be
+    checked only when a reaction inlined the expression)."""
+    p = _write(
+        tmp_path,
+        """
+        network: {name: bad, version: "1.0"}
+        species:
+          - {name: A, default_concentration: 1.0}
+        expressions:
+          unused: "[X]"
+        reactions:
+          - name: r1
+            rate: "k * [A]"
+            parameters:
+              k: {value: 1.0}
+            stoichiometry:
+              A: -1
+        """,
+    )
+    with pytest.raises(KeyError, match="undeclared species"):
+        aquakin.load_network_from_file(p)
+
+
+def test_unreferenced_expression_valid_refs_loads(tmp_path):
+    """An unused expression with valid species/condition references loads fine."""
+    p = _write(
+        tmp_path,
+        """
+        network: {name: ok, version: "1.0"}
+        species:
+          - {name: A, default_concentration: 1.0}
+        expressions:
+          unused: "[A] + 1"
+        reactions:
+          - name: r1
+            rate: "k * [A]"
+            parameters:
+              k: {value: 1.0}
+            stoichiometry:
+              A: -1
+        """,
+    )
+    net = aquakin.load_network_from_file(p)
+    assert net.species == ["A"]
+
+
 def test_missing_file():
     with pytest.raises(FileNotFoundError):
         aquakin.load_network_from_file("/no/such/file.yaml")

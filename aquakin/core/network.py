@@ -968,6 +968,45 @@ def _resolve_expressions(spec) -> dict[str, ASTNode]:
     return expression_asts
 
 
+def _collect_species_refs(node: ASTNode) -> set[str]:
+    """Every ``SpeciesNode`` name in ``ast``, via ``children()`` (so a new node
+    type cannot hide a species reference)."""
+    if isinstance(node, SpeciesNode):
+        return {node.name}
+    refs: set[str] = set()
+    for child in node.children():
+        refs |= _collect_species_refs(child)
+    return refs
+
+
+def _validate_expression_refs(expression_asts, species_index, condition_fields):
+    """Validate every named expression's species / condition references.
+
+    A reaction's rate is validated against the species / condition / parameter
+    indices when it is compiled, which also catches bad references inside the
+    expressions it inlines -- but an expression that **no reaction consumes** is
+    never compiled, so a typo in it would otherwise load silently. Check the
+    species and condition references of *every* expression here.
+
+    Parameter references are deliberately not checked: an expression's bare
+    parameter resolves against the *consuming* reaction's namespace (reaction-
+    local, then network-level), so it has no well-defined meaning standalone.
+    """
+    for name, ast in expression_asts.items():
+        for sp in sorted(_collect_species_refs(ast)):
+            if sp not in species_index:
+                raise KeyError(
+                    f"Named expression '{name}' references undeclared species "
+                    f"'{sp}'."
+                )
+        for cond in sorted(ast.condition_names()):
+            if cond not in condition_fields:
+                raise ValueError(
+                    f"Named expression '{name}' references unknown condition "
+                    f"field '{cond}'."
+                )
+
+
 def _unresolved_params(ast: ASTNode, rxn_name: str, param_index: dict) -> list[str]:
     """ParamNode names in ``ast`` resolving to neither a reaction-local
     (``<rxn>.<name>``) nor a network-level parameter."""
@@ -1093,8 +1132,10 @@ def compile_network(spec: "Any") -> CompiledNetwork:
      parameter_transforms, parameter_priors, parameter_units,
      temperature_corrections) = _build_param_index(spec)
 
-    # Stage 3: parse + topo-sort + inline the named expressions.
+    # Stage 3: parse + topo-sort + inline the named expressions, and validate the
+    # species/condition references of every one (even those no reaction consumes).
     expression_asts = _resolve_expressions(spec)
+    _validate_expression_refs(expression_asts, species_index, condition_fields)
 
     # Stage 4: compile each reaction's stoichiometry + rate.
     n_species = len(species_names)
