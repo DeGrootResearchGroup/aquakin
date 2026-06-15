@@ -27,13 +27,13 @@ if TYPE_CHECKING:  # pragma: no cover
 _TSS_FACTOR = ASM1_TSS_FACTOR
 _TSS_SPECIES = ASM1_TSS_SPECIES
 
-# EQI weighting factors (g pollutant / m³)⁻¹ from Copp 2002.
+# EQI weighting factors (g pollutant / m³)⁻¹ from Copp 2002 / Alex 2008.
 _EQI_WEIGHTS = {
     "TSS":  2.0,
     "COD":  1.0,
     "BOD":  2.0,
-    "TKN": 20.0,  # total Kjeldahl nitrogen
-    "NO":  20.0,  # nitrate-nitrogen
+    "TKN": 30.0,  # total Kjeldahl nitrogen
+    "NO":  10.0,  # nitrate-nitrogen
 }
 
 

@@ -329,3 +329,28 @@ def test_bsm1_report_is_labeled_and_str_delegates():
     # the OCI equals the sum of the displayed contributions
     assert ev.oci == pytest.approx(
         ev.aeration_energy + ev.pumping_energy + 5.0 * ev.sludge_production)
+
+
+def test_eqi_weights_are_copp_alex_standard(asm1):
+    """EQI uses the Copp 2002 / Alex 2008 weights (TSS 2, COD 1, BOD 2,
+    TKN 30, NO 10). Guards against a regression in the nitrogen weighting,
+    which otherwise leaves the effluent concentrations correct while the
+    aggregate index is wrong."""
+    from aquakin.plant.metrics import (
+        effluent_quality_index, derived_TSS, derived_COD, derived_BOD,
+        derived_TKN)
+    C = asm1.concentrations({"SI": 28.0, "SS": 5.0, "XI": 10.0, "XS": 8.0,
+                             "XB_H": 12.0, "SNH": 2.0, "SNO": 7.0, "SND": 1.0,
+                             "XND": 1.5})
+    Ctraj = jnp.stack([C, C])
+    t = jnp.array([0.0, 1.0])
+    Q = jnp.array([1.0e4, 1.0e4])
+    tss = float(derived_TSS(Ctraj, asm1)[0])
+    cod = float(derived_COD(Ctraj, asm1)[0])
+    bod = float(derived_BOD(Ctraj, asm1)[0])
+    tkn = float(derived_TKN(Ctraj, asm1)[0])
+    sno = float(C[asm1.species_index["SNO"]])
+    expected = 1.0e4 * (2.0 * tss + 1.0 * cod + 2.0 * bod
+                        + 30.0 * tkn + 10.0 * sno) / 1000.0
+    got = effluent_quality_index(t, Ctraj, Q, asm1)
+    assert got == pytest.approx(expected, rel=1e-9)
