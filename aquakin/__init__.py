@@ -66,10 +66,13 @@ from aquakin.integrate.sensitivity import (
     sensitivity,
 )
 from aquakin.integrate.experiments import (
+    Constraint,
     MonteCarloResult,
+    OptimizeResult,
     ScenarioComparison,
     compare_scenarios,
     monte_carlo,
+    optimize_design,
 )
 from aquakin.plant import (
     ActivatedSludgeSizing,
@@ -186,8 +189,11 @@ __all__ = [
     "dgsm",
     "monte_carlo",
     "compare_scenarios",
+    "optimize_design",
     "MonteCarloResult",
     "ScenarioComparison",
+    "OptimizeResult",
+    "Constraint",
     "effluent_averages",
     "effluent_quality_index",
     "check_finite_gradient",

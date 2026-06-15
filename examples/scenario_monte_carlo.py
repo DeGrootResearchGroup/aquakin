@@ -57,4 +57,25 @@ lo, med, hi = mc.percentiles((2.5, 50.0, 97.5))
 print(f"\n95% effluent-ammonia interval: "
       f"{lo[mc.output_names.index('eff_NH4')]:.2f} - "
       f"{hi[mc.output_names.index('eff_NH4')]:.2f} g N/m3 "
-      f"(median {med[mc.output_names.index('eff_NH4')]:.2f})")
+      f"(median {med[mc.output_names.index('eff_NH4')]:.2f})\n")
+
+
+# --- Design optimization: size to a permit at minimum rate -------------------
+# Find the smallest AOB growth rate (a stand-in for the aeration/cost that drives
+# nitrification) that still meets an effluent-ammonia permit -- the AD gradient
+# of the (stiff) solve drives the constrained optimizer.
+def eff_nh4(x):
+    p = net.default_parameters().at[i_mu].set(x[0])
+    sol = reactor.solve(C0, params=p, t_span=(0.0, 1.0),
+                        t_eval=jnp.linspace(0.0, 1.0, 6))
+    return sol.C_named("SNH4")[-1]
+
+
+opt = aquakin.optimize_design(
+    objective=lambda x: x[0],                       # minimise muAOB (the "cost")
+    bounds=[(0.5, 2.0)], input_names=["muAOB"],
+    constraints=[aquakin.Constraint(fn=eff_nh4, upper=6.0, name="eff_NH4")],
+    x0=[1.5],
+)
+print(opt.report())
+print("  (the permit binds: the optimal muAOB is the smallest that meets it)")

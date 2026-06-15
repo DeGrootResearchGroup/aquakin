@@ -154,3 +154,80 @@ def test_monte_carlo_through_a_reactor_solve():
     assert np.all(np.isfinite(mc.outputs))
     # Faster AOB -> lower effluent ammonia, so the output spans a real range.
     assert mc.std()[0] > 0.0
+
+
+# --- optimize_design ---------------------------------------------------------
+
+def test_optimize_design_analytical_with_constraint():
+    # min x0^2 + x1^2 s.t. x0 + x1 >= 1  ->  (0.5, 0.5), objective 0.5.
+    res = aquakin.optimize_design(
+        lambda x: x[0] ** 2 + x[1] ** 2,
+        bounds=[(0.0, 2.0), (0.0, 2.0)], input_names=["x0", "x1"],
+        constraints=[aquakin.Constraint(fn=lambda x: x[0] + x[1], lower=1.0,
+                                        name="sum")])
+    assert res.success and res.feasible
+    assert np.allclose(res.x, [0.5, 0.5], atol=1e-3)
+    assert res.objective == pytest.approx(0.5, abs=1e-3)
+    assert res.x_named["x0"] == pytest.approx(0.5, abs=1e-3)
+    assert res.constraint_values["sum"] == pytest.approx(1.0, abs=1e-3)
+
+
+def test_optimize_design_maximize():
+    # max x0 s.t. x0 <= 3 (upper constraint) -> x0 = 3.
+    res = aquakin.optimize_design(
+        lambda x: x[0], bounds=[(0.0, 10.0)], maximize=True,
+        constraints=[aquakin.Constraint(fn=lambda x: x[0], upper=3.0)])
+    assert res.feasible
+    assert res.x[0] == pytest.approx(3.0, abs=1e-3)
+    assert res.objective == pytest.approx(3.0, abs=1e-3)
+
+
+def test_optimize_design_box_bounds_active():
+    # Unconstrained min of (x - 5)^2 with the box capping x at 2 -> x = 2.
+    res = aquakin.optimize_design(lambda x: (x[0] - 5.0) ** 2, bounds=[(0.0, 2.0)])
+    assert res.x[0] == pytest.approx(2.0, abs=1e-3)
+
+
+def test_optimize_design_reports_infeasible():
+    # No x in [0, 1] satisfies x >= 5; the optimizer must report infeasible.
+    res = aquakin.optimize_design(
+        lambda x: x[0], bounds=[(0.0, 1.0)],
+        constraints=[aquakin.Constraint(fn=lambda x: x[0], lower=5.0)])
+    assert not res.feasible
+
+
+def test_optimize_design_multistart_runs():
+    res = aquakin.optimize_design(
+        lambda x: (x[0] - 1.0) ** 2 + (x[1] + 1.0) ** 2,
+        bounds=[(-3.0, 3.0), (-3.0, 3.0)], n_starts=4, seed=0)
+    assert res.n_starts == 4
+    assert np.allclose(res.x, [1.0, -1.0], atol=1e-2)
+
+
+def test_constraint_needs_a_bound():
+    with pytest.raises(ValueError, match="needs an 'upper'"):
+        aquakin.Constraint(fn=lambda x: x[0])
+
+
+def test_optimize_design_through_a_reactor_solve():
+    # Size the AOB growth rate to a (feasible) effluent-ammonia permit at minimum
+    # rate: minimise muAOB s.t. effluent NH4 <= 6.5 gN/m3. The constraint is
+    # active at the optimum (the smallest muAOB that still meets the permit).
+    net = aquakin.load_network("asm3_2step")
+    r = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(T=293.15))
+    C0 = net.concentrations({"SO2": 300.0, "SNH4": 30.0, "XAOB": 80.0,
+                             "XNOB": 80.0, "SALK": 0.05})
+    i_mu = net.param_index["muAOB"]
+
+    def eff_nh4(x):
+        p = net.default_parameters().at[i_mu].set(x[0])
+        return r.solve(C0, params=p, t_span=(0.0, 1.0),
+                       t_eval=jnp.linspace(0.0, 1.0, 6)).C_named("SNH4")[-1]
+
+    res = aquakin.optimize_design(
+        objective=lambda x: x[0], bounds=[(0.5, 2.0)], input_names=["muAOB"],
+        constraints=[aquakin.Constraint(fn=eff_nh4, upper=6.5, name="eff_NH4")],
+        x0=[1.5])
+    assert res.feasible
+    assert res.constraint_values["eff_NH4"] <= 6.5 + 1e-3   # permit met
+    assert 0.5 <= res.x[0] <= 2.0

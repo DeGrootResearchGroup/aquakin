@@ -1335,9 +1335,11 @@ aquakin/
 │   │   ├── particle.py              # Track, ParticleTrackReactor, integrate_ensemble
 │   │   ├── cfd.py                   # CFDReactor (Option C runtime coupling)
 │   │   ├── sensitivity.py           # sensitivity(), fit(), dgsm()
-│   │   ├── experiments.py           # compare_scenarios(), monte_carlo(): scenario
-│   │   │                            #   comparison + Monte-Carlo uncertainty on the
-│   │   │                            #   fn(x)->output contract (reuses dgsm's Sobol QMC)
+│   │   ├── experiments.py           # compare_scenarios(), monte_carlo(),
+│   │   │                            #   optimize_design(): scenario comparison +
+│   │   │                            #   Monte-Carlo uncertainty + constrained design
+│   │   │                            #   optimization on the fn(x)->output contract
+│   │   │                            #   (reuses dgsm's Sobol QMC; AD-gradient NLP)
 │   │   ├── forward_sensitivity.py   # solve_sensitivity / forward_sensitivity:
 │   │   │                            #   augmented [y; S] variational solve giving
 │   │   │                            #   cap-free exact stiff sensitivities
@@ -1820,8 +1822,22 @@ mc = aquakin.monte_carlo(fn,
 mc.percentiles((2.5, 50, 97.5))      # (3, m) per-output percentiles
 mc.mean(); mc.std(); mc.summary()    # (m,), (m,), human-readable table
 mc.output_named("NH4")               # (n_valid,) ensemble of one output
-# The constrained design-optimizer (size-to-permit at min OCI) is the planned
-# third piece of this experiment layer (a follow-up).
+#
+# optimize_design -- minimise (or maximise) an objective over BOUNDED design
+# variables subject to inequality constraints, using AD gradients (a constrained
+# NLP via SciPy SLSQP/trust-constr). The canonical use is "size a design to a
+# permit at minimum cost": objective is a cost/energy metric, each Constraint is
+# an effluent ceiling. objective/constraint fns share the fn(x)->scalar contract
+# and must be JAX-differentiable (gradients taken by autodiff). n_starts does
+# quasi-random (Sobol) multistart and returns the best feasible optimum.
+opt = aquakin.optimize_design(
+        objective=lambda x: x[0],                    # e.g. minimise OCI
+        bounds=[(0.5, 2.0)], input_names=["muAOB"],
+        constraints=[aquakin.Constraint(fn=eff_nh4, upper=6.5, name="eff_NH4")],
+        x0=[1.5], n_starts=1)
+opt.x; opt.x_named; opt.objective    # optimal design + objective value
+opt.constraint_values; opt.feasible  # {name: fn(x)} at the optimum; permit met?
+opt.report()                         # human-readable summary (str)
 
 # Point-estimate fit (SciPy box-constrained least squares)
 result = aquakin.fit(reactor, C0, observations, t_obs, free_params, method="adjoint")
