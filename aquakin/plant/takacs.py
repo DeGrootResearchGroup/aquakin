@@ -43,6 +43,7 @@ from aquakin.plant._flow_split import (
     split_controlled_flows,
     validate_controlled_split,
 )
+from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -74,7 +75,7 @@ _BSM1_TAKACS_DEFAULTS = dict(
 
 
 @dataclass
-class TakacsClarifier:
+class TakacsClarifier(FlowParameterized):
     """A 10-layer 1-D secondary clarifier.
 
     Parameters
@@ -162,6 +163,14 @@ class TakacsClarifier:
         validate_controlled_split(
             f"TakacsClarifier '{self.name}'", self.overflow_Q, self.underflow_Q
         )
+        # The controlled outflow is a differentiable flow setpoint -- but only
+        # when it is a constant; a *scheduled* setpoint (a PiecewiseConstant with
+        # ``.at(t)``) is left as the schedule (not a single parameter).
+        self._setpoints = {}
+        ctrl_name = "underflow_Q" if self.underflow_Q is not None else "overflow_Q"
+        ctrl_val = getattr(self, ctrl_name)
+        if ctrl_val is not None and not hasattr(ctrl_val, "at"):
+            self._setpoints[ctrl_name] = FlowSetpoint(float(ctrl_val), 0)
         # Soluble = everything not in particulate.
         self._soluble_indices = [
             i for i in range(self.network.n_species) if i not in self._part_indices
@@ -299,17 +308,27 @@ class TakacsClarifier:
         v_takacs = self._v0 * (jnp.exp(-self._rh * excess) - jnp.exp(-self._rp * excess))
         return jnp.clip(v_takacs, 0.0, self._vmax)
 
-    @staticmethod
-    def _resolve_setpoint(q, t):
-        """Evaluate a setpoint that may be a constant or a time schedule."""
+    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+        return self._setpoints
+
+    def _resolve_setpoint(self, q, t, params, name):
+        """Evaluate a setpoint: a time schedule, a differentiable parameter, or a
+        constant. A scheduled setpoint (``.at(t)``) takes precedence; otherwise a
+        constant controlled flow is read through its :class:`FlowSetpoint` (so it
+        is differentiable), falling back to the raw value."""
         if q is None:
             return None
-        return q.at(t) if hasattr(q, "at") else q
+        if hasattr(q, "at"):
+            return q.at(t)
+        if name in self._setpoints:
+            return self._setpoints[name].resolve(self._flow_params(params))
+        return q
 
-    def _split_flows(self, Q_in: jnp.ndarray, clamp: bool, t=None):
+    def _split_flows(self, Q_in: jnp.ndarray, clamp: bool, t, params):
         return split_controlled_flows(
-            self._resolve_setpoint(self.overflow_Q, t),
-            self._resolve_setpoint(self.underflow_Q, t), Q_in, clamp
+            self._resolve_setpoint(self.overflow_Q, t, params, "overflow_Q"),
+            self._resolve_setpoint(self.underflow_Q, t, params, "underflow_Q"),
+            Q_in, clamp
         )
 
     def compute_outputs(
@@ -326,7 +345,7 @@ class TakacsClarifier:
         # The controlled flow is fixed and the other is the remainder, clamped
         # into [0, Q_in] so neither outflow goes negative (a negative RAS would
         # make the downstream mixer produce negative concentrations).
-        overflow_Q, underflow_Q = self._split_flows(s_in.Q, clamp=True, t=t)
+        overflow_Q, underflow_Q = self._split_flows(s_in.Q, clamp=True, t=t, params=params)
 
         # Build the per-species C vectors with two scatters each (not a Python
         # loop of scalar scatters): solubles pass through; particulates take the
@@ -359,7 +378,7 @@ class TakacsClarifier:
         is the concentration-stage safeguard, inactive at the steady-state feed."""
         Q_in = input_flows[self.input_port]
         t = None if ctx is None else ctx.t
-        Q_over, Q_under = self._split_flows(Q_in, clamp=False, t=t)
+        Q_over, Q_under = self._split_flows(Q_in, clamp=False, t=t, params=params)
         return {self.overflow_port: Q_over, self.underflow_port: Q_under}
 
     def rhs(
@@ -376,7 +395,7 @@ class TakacsClarifier:
         # so the up/down convective velocities stay non-negative (see
         # compute_outputs): a negative underflow would make the RAS recycle a
         # negative-flow stream and destabilise the solve.
-        overflow_Q, underflow_Q = self._split_flows(Q_in, clamp=True, t=t)
+        overflow_Q, underflow_Q = self._split_flows(Q_in, clamp=True, t=t, params=params)
 
         layered = self._layered(state)  # (n_layers, n_part)
         # Particulate inlet concentrations — gather via the precomputed index array.

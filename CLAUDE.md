@@ -2722,13 +2722,30 @@ is what production simulators use to snap to steady state on any topology.
   a `Stream` can't be a θ leaf, it carries the non-JAX `network`) overrides the
   recorded influent at `influent_time` inside `_resolve_streams`/`_resolve_flows`,
   so `jax.grad` of a steady-state output w.r.t. the influent composition/flow
-  works (BSM1 `d(effluent NH)/d(influent NH)` matches FD). **Recycle/wastage flow
-  setpoints (the SRT knob) are NOT yet design variables** — the setpoint is
-  consumed in two decoupled paths (`_resolve_flows` *and* each unit's
-  `compute_outputs`, which recompute the split) and is `float()`-concretized in
-  `SplitterUnit`/the clarifiers, so making it differentiable needs a
-  flows-as-parameters refactor (route the setpoint through `params_unit`, which
-  both paths already receive) — a tracked follow-up.
+  works (BSM1 `d(effluent NH)/d(influent NH)` matches FD).
+- **Flow setpoints as first-class parameters (the SRT / recycle knobs).** A flow
+  setpoint — a recycle / wastage pump flow, a clarifier underflow, the primary
+  sludge fraction — is consumed in **two** code paths (`_resolve_flows` →
+  `flow_outputs` and `_sweep_outputs` → `compute_outputs`, which recompute the
+  split). [`plant/flow_setpoint.py`](aquakin/plant/flow_setpoint.py)'s
+  `FlowSetpoint` is the single source of truth: both paths call
+  `resolve(flow_params)` on the same object, so they cannot desync, and the value
+  is read from the unit's slice of the **parameter vector** (which both
+  `flow_outputs` and `compute_outputs` already receive as `params_unit`) — making
+  it differentiable everywhere (steady-state IFT *and* dynamic solves) with no
+  Protocol change. `_build_parameter_layout` **appends** a per-unit flow-setpoint
+  block after the kinetic network blocks (so kinetic indices are unchanged); the
+  setpoints are addressed by name `"<unit>.<setpoint>"` (e.g.
+  `"underflow_split.ras"`, `"clarifier.underflow_Q"`, `"primary.f_PS"`). The
+  `FlowParameterized` mixin (on `SplitterUnit`, `IdealClarifier`,
+  `TakacsClarifier`, `PrimaryClarifier`) provides the resolution; a unit used
+  standalone (no plant) resolves the default, so it is unchanged. **Backward
+  compatible:** a kinetic-only parameter vector (the pre-flow convention, e.g.
+  `bsm2_parameters`) is padded with the default flow setpoints by
+  `Plant._coerce_params`. Validated: BSM1 `d(effluent NH)/d(RAS flow)` matches FD
+  (and is negative — more recycle retains biomass, lowering effluent ammonia).
+  *Not* a flow setpoint: the thickener/dewatering underflow is
+  concentration-derived (`%TSS` target), so `IdealThickener` is left as-is.
 - Returns the same `SteadyStateResult` (now `method="ptc"`, with `iterations`
   and the scaled `residual`; `time`/`solution` are `None`). Eager calls get
   concrete diagnostics and, if PTC fails to converge within `max_iter`, an

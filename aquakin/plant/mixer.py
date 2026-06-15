@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream
 from aquakin.plant.units import StatelessUnit
 
@@ -92,7 +93,7 @@ class MixerUnit(StatelessUnit):
 
 
 @dataclass
-class SplitterUnit(StatelessUnit):
+class SplitterUnit(StatelessUnit, FlowParameterized):
     """Splits one input stream into N output streams.
 
     Concentration is preserved across all outputs (passive splitter); only
@@ -200,6 +201,20 @@ class SplitterUnit(StatelessUnit):
                     f"SplitterUnit '{self.name}': threshold_port and "
                     f"remainder_port must differ."
                 )
+        # Wrap the absolute flow setpoints (flow / threshold mode) as
+        # FlowSetpoints so the recycle-flow rule and the material split read one
+        # shared, differentiable value. Ratio mode has no absolute flow setpoint.
+        if self._mode == "flow":
+            self._setpoints = {
+                port: FlowSetpoint(float(q), i)
+                for i, (port, q) in enumerate(self.output_port_flows.items())}
+        elif self._mode == "threshold":
+            self._setpoints = {"threshold": FlowSetpoint(float(self.threshold), 0)}
+        else:
+            self._setpoints = {}
+
+    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+        return self._setpoints
 
     @property
     def input_ports(self) -> list[str]:
@@ -234,7 +249,7 @@ class SplitterUnit(StatelessUnit):
             return outputs
         if self._mode == "threshold":
             # Inlet flow above the limit is diverted; the rest passes through.
-            limit = jnp.asarray(float(self.threshold))
+            limit = self._setpoints["threshold"].resolve(self._flow_params(params))
             above = jnp.maximum(s_in.Q - limit, 0.0)
             outputs[self.threshold_port] = Stream(
                 Q=above, C=s_in.C, network=self.network, T=s_in.T)
@@ -252,12 +267,14 @@ class SplitterUnit(StatelessUnit):
         # recycle-flow solve requires -- it must, or the (I-A)x=b probe breaks --
         # and the two agree wherever the unit is not starved, i.e. at any steady
         # state.)
+        fp = self._flow_params(params)
+        setpts = {port: sp.resolve(fp) for port, sp in self._setpoints.items()}
         total_set = jnp.zeros(())
-        for q in self.output_port_flows.values():
-            total_set = total_set + jnp.asarray(float(q))
+        for q in setpts.values():
+            total_set = total_set + q
         scale = jnp.minimum(1.0, s_in.Q / jnp.maximum(total_set, 1e-12))
-        for port, q in self.output_port_flows.items():
-            outputs[port] = Stream(Q=jnp.asarray(float(q)) * scale, C=s_in.C,
+        for port, q in setpts.items():
+            outputs[port] = Stream(Q=q * scale, C=s_in.C,
                                    network=self.network, T=s_in.T)
         outputs[self.remainder_port] = Stream(
             Q=jnp.maximum(s_in.Q - total_set, 0.0), C=s_in.C, network=self.network,
@@ -277,10 +294,10 @@ class SplitterUnit(StatelessUnit):
             return {port: Q_in * jnp.asarray(ratio)
                     for port, ratio in self.output_port_ratios.items()}
         if self._mode == "threshold":
-            limit = jnp.asarray(float(self.threshold))
+            limit = self._setpoints["threshold"].resolve(self._flow_params(params))
             return {self.threshold_port: jnp.maximum(Q_in - limit, 0.0),
                     self.remainder_port: jnp.minimum(Q_in, limit)}
-        out = {port: jnp.asarray(float(q))
-               for port, q in self.output_port_flows.items()}
+        fp = self._flow_params(params)
+        out = {port: sp.resolve(fp) for port, sp in self._setpoints.items()}
         out[self.remainder_port] = Q_in - sum(out.values())
         return out

@@ -27,6 +27,7 @@ from aquakin.plant._flow_split import (
     split_controlled_flows,
     validate_controlled_split,
 )
+from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream
 from aquakin.plant.units import StatelessUnit
 
@@ -35,7 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 @dataclass
-class IdealClarifier(StatelessUnit):
+class IdealClarifier(StatelessUnit, FlowParameterized):
     """Stateless ideal solid/liquid separator.
 
     Soluble species pass through to both outflow streams at the inlet
@@ -96,6 +97,15 @@ class IdealClarifier(StatelessUnit):
         validate_controlled_split(
             f"IdealClarifier '{self.name}'", self.overflow_Q, self.underflow_Q
         )
+        # The controlled outflow (underflow or overflow) is a differentiable
+        # flow setpoint; the other outflow is the remainder. Both the flow rule
+        # and the material split read it through one FlowSetpoint.
+        if self.underflow_Q is not None:
+            self._ctrl = "underflow"
+            self._setpoints = {"underflow_Q": FlowSetpoint(float(self.underflow_Q), 0)}
+        else:
+            self._ctrl = "overflow"
+            self._setpoints = {"overflow_Q": FlowSetpoint(float(self.overflow_Q), 0)}
         self._part_indices = [
             self.network.species_index[s] for s in self.particulate_species
             if s in self.network.species_index
@@ -114,10 +124,14 @@ class IdealClarifier(StatelessUnit):
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
 
-    def _split_flows(self, Q_in: jnp.ndarray, clamp: bool):
-        return split_controlled_flows(
-            self.overflow_Q, self.underflow_Q, Q_in, clamp
-        )
+    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+        return self._setpoints
+
+    def _split_flows(self, Q_in: jnp.ndarray, params: jnp.ndarray, clamp: bool):
+        val = self._setpoints[f"{self._ctrl}_Q"].resolve(self._flow_params(params))
+        if self._ctrl == "underflow":
+            return split_controlled_flows(None, val, Q_in, clamp)
+        return split_controlled_flows(val, None, Q_in, clamp)
 
     def compute_outputs(
         self,
@@ -133,7 +147,7 @@ class IdealClarifier(StatelessUnit):
         # hazard during the recycle-flow startup transient; closes issue #17).
         # Mass-conserving (the two outflows sum to Q_in) and inactive at steady
         # state.
-        Q_over, Q_under = self._split_flows(Q_in, clamp=True)
+        Q_over, Q_under = self._split_flows(Q_in, params, clamp=True)
         cap = jnp.asarray(self.capture_efficiency)
 
         # Per-species partitioning. Solubles split with flow ratio.
@@ -170,5 +184,5 @@ class IdealClarifier(StatelessUnit):
         exact. The clamp in ``compute_outputs`` is the concentration-stage
         safeguard, inactive at steady state."""
         Q_in = input_flows[self.input_port]
-        Q_over, Q_under = self._split_flows(Q_in, clamp=False)
+        Q_over, Q_under = self._split_flows(Q_in, params, clamp=False)
         return {self.overflow_port: Q_over, self.underflow_port: Q_under}
