@@ -1356,11 +1356,14 @@ precipitation:
   temperature_field: T
   temperature_units: kelvin  # or "celsius"
   activity_model: davies     # "none" | "davies" | "debye_huckel"
-  ionic_strength_offset: 0.1 # background electrolyte (mol/L)
+  ionic_strength_offset: 0.1 # background electrolyte (mol/L); OR ionic_strength_field: I_aq (see below)
   minerals:
     - name: struvite
-      pKsp: 13.26            # MgNH4PO4
+      pKsp: 13.26            # at the reference temperature (25 C)
       order: 3               # supersaturation exponent n
+      dH_sp: 0.0             # enthalpy of dissolution (J/mol); van't Hoff Ksp(T), 0 = T-independent
+      solid: X_struvite      # precipitate species -> the reaction is AUTO-DERIVED
+      rate_constant: {value: 100.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
       ions:                  # molar_mass converts the state's units -> mol/L (Ksp basis)
         - {species: S_Mg,  molar_mass: 1000, count: 1, charge: 2}                       # free cation
         - {species: S_NH,  molar_mass: 1000, count: 1, charge: 1, fraction: ammonia}    # NH4+ fraction at pH
@@ -1368,6 +1371,8 @@ precipitation:
     - name: calcite
       pKsp: 8.48
       order: 2
+      solid: X_calcite
+      rate_constant: {value: 10.0, units: "1/d"}
       ions:
         - {species: S_Ca, molar_mass: 1000, count: 1, charge: 2}
         - {species: S_IC, molar_mass: 1000, count: 1, charge: 2, fraction: carbonate}
@@ -1375,9 +1380,36 @@ precipitation:
 
 `build_precipitation_derived_fn` (in `core/precipitation.py`, no Pydantic) turns
 the validated declaration plus `species_index` into a derived-condition callable
-that produces `SI_<name>` and `R_<name>` per mineral; a precipitation reaction
-reads `{R_<name>}` in its rate and consumes the constituent ions / produces the
-solid through ordinary stoichiometry. An ion's `fraction` selects how its free
+that produces `SI_<name>` and `R_<name>` per mineral.
+
+**Auto-derived reactions.** A mineral declaring `solid` (the precipitate
+species) + `rate_constant` **auto-derives its precipitation reaction**: the
+schema's `_synthesize_precipitation_reactions` emits `<name>_precipitation` with
+rate `k * [solid] * {R_<name>}` and stoichiometry that consumes each ion's
+`species` at `-count` and produces `solid` at `+1` (species-less `proton`/
+`hydroxide` ions carry no mass term). This removes the old duplication of
+re-writing the stoichiometry in a separate `reactions:` block (and the risk of it
+drifting from the ion counts — vivianite Fe₃(PO₄)₂ correctly gets `-3`/`-2`). The
+rate constant is namespaced `<name>_precipitation.k`. A network whose only
+processes are precipitation may omit `reactions:` entirely; omitting `solid`/
+`rate_constant` falls back to a hand-written reaction referencing `{R_<name>}`.
+
+**Ksp(T).** `pKsp` is the value at the reference temperature (25 °C); `dH_sp`
+(enthalpy of dissolution, J/mol) van't Hoff-corrects it,
+`Ksp(T) = Ksp(Tref)·exp(dH_sp/R·(1/Tref − 1/T))` — the same form and reference as
+the dissociation constants. `dH_sp = 0` (default) leaves Ksp temperature-
+independent (backward compatible).
+
+**Shared ionic strength.** When precipitation composes with a `speciation:`
+block, set `ionic_strength_field: I_aq` on **both** blocks: `solve_ph` optionally
+returns the self-consistent solution ionic strength (strong ions + weak-acid
+speciation + water), speciation exposes it as the `I_aq` condition field, and
+precipitation reads it for its Davies/Debye-Hückel coefficients — so the pH and
+the saturation indices use the **same** ionic strength. Without it, precipitation
+falls back to `ionic_strength_offset` + its own mineral ions (which misses the
+bulk electrolyte), the right choice for a standalone fixed-pH network.
+
+An ion's `fraction` selects how its free
 activity is obtained: an acid/base system key — `carbonate`, `phosphate`,
 `ammonia`, `sulfide` (the species total times its de/protonated fraction at pH)
 — a pH/water special (`proton`, H⁺ activity `10^-pH`; or `hydroxide`, OH⁻

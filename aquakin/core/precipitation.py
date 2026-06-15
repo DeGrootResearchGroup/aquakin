@@ -30,7 +30,10 @@ through ordinary stoichiometry.
 NOTE: free Ca/Mg are taken as the full declared total (ion-pairing with
 carbonate/phosphate is not yet subtracted -- a documented simplification of the
 source aqueous model); the ionic strength for the activity coefficients is the
-declared ``ionic_strength_offset`` plus the mineral ions' contribution.
+declared ``ionic_strength_offset`` plus the mineral ions' contribution, unless an
+``ionic_strength_field`` is given (then it is read from that condition -- e.g.
+the ionic strength a ``speciation:`` block solved the pH at, so the pH and the
+saturation indices share one ionic strength).
 """
 from __future__ import annotations
 
@@ -39,6 +42,8 @@ from typing import Callable
 import jax.numpy as jnp
 
 from aquakin.core.ph_solver import (
+    _R_SI,
+    _T_BASE,
     _log10_gamma,
     debye_huckel_A,
     equilibrium_constants,
@@ -85,6 +90,9 @@ def build_precipitation_derived_fn(
         the network schema): ``pH_field``, ``temperature_field``,
         ``temperature_units``, ``activity_model``, ``ionic_strength_offset`` and
         a list of ``minerals``, each ``{name, pKsp, order, dH_sp, ions: [...]}``
+        (``pKsp`` at the reference temperature; ``dH_sp`` the enthalpy of
+        dissolution in J/mol, van't Hoff-correcting ``Ksp`` with temperature --
+        0, the default, leaves ``Ksp`` temperature-independent)
         with ions ``{species, molar_mass, count, charge, fraction?}``
         (``fraction`` is one of ``carbonate``/``phosphate``/``ammonia``/``sulfide``
         for an acid-base ion, ``proton`` for H+, ``hydroxide`` for OH-, or omitted
@@ -104,13 +112,20 @@ def build_precipitation_derived_fn(
     temp_units = config.get("temperature_units", "celsius")
     model = config.get("activity_model", "none")
     I_offset = float(config.get("ionic_strength_offset", 0.0))
+    # If set, read the ionic strength from this condition field (e.g. the one a
+    # speciation block produces) instead of building it from ionic_strength_offset
+    # + the mineral ions -- so the activity coefficients here match the ionic
+    # strength the pH was solved at. The mineral ions are NOT added on top, since
+    # a shared field already reflects the full solution composition.
+    ic_field = config.get("ionic_strength_field")
 
     # Pre-resolve each mineral to plain numbers / indices (no per-call lookups).
     minerals = []
     produced: list[str] = []
     for m in config["minerals"]:
         name = m["name"]
-        Ksp = 10.0 ** (-float(m["pKsp"]))
+        Ksp_ref = 10.0 ** (-float(m["pKsp"]))   # at the reference temperature _T_BASE
+        dH_sp = float(m.get("dH_sp", 0.0))       # enthalpy of dissolution (J/mol), van't Hoff
         order = float(m["order"])
         nu = sum(int(ion["count"]) for ion in m["ions"])
         ions = []
@@ -138,7 +153,7 @@ def build_precipitation_derived_fn(
                 float(ion["charge"]) ** 2,   # z^2 for the activity coefficient
                 frac,
             ))
-        minerals.append((name, Ksp, order, nu, ions))
+        minerals.append((name, Ksp_ref, dH_sp, order, nu, ions))
         produced += [f"SI_{name}", f"R_{name}"]
 
     def derived(C, params, condition_arrays, loc_idx) -> dict:
@@ -152,14 +167,19 @@ def build_precipitation_derived_fn(
         use_activity = model != "none"
         if use_activity:
             A = debye_huckel_A(T_kelvin)
-            I = I_offset
-            for _, Ksp, order, nu, ions in minerals:
-                for idx, mm, count, z2, frac in ions:
-                    if idx < 0:
-                        continue
-                    tot = jnp.maximum(C[idx], 0.0) / mm
-                    free = tot * (_FRACTIONS[frac](h, K) if frac in _FRACTIONS else 1.0)
-                    I = I + 0.5 * z2 * free
+            if ic_field is not None:
+                # Share the ionic strength the pH solver converged at.
+                I = condition_arrays[ic_field][loc_idx]
+            else:
+                # Self-contained: background electrolyte + the mineral ions.
+                I = I_offset
+                for _, _Ksp_ref, _dH, _order, _nu, ions in minerals:
+                    for idx, mm, count, z2, frac in ions:
+                        if idx < 0:
+                            continue
+                        tot = jnp.maximum(C[idx], 0.0) / mm
+                        free = tot * (_FRACTIONS[frac](h, K) if frac in _FRACTIONS else 1.0)
+                        I = I + 0.5 * z2 * free
             sqrt_I = jnp.sqrt(jnp.maximum(I, 0.0))
 
         def gamma(z2):
@@ -167,8 +187,14 @@ def build_precipitation_derived_fn(
                 return 1.0
             return jnp.power(10.0, _log10_gamma(z2, sqrt_I, I, A, model))
 
+        # van't Hoff temperature correction of each Ksp (unity when dH_sp = 0):
+        # Ksp(T) = Ksp(T_ref) * exp(dH_sp/R * (1/T_ref - 1/T)). Same form and
+        # reference temperature as the dissociation constants above.
+        vant_hoff = (1.0 / _T_BASE - 1.0 / T_kelvin) / _R_SI
+
         out = {}
-        for name, Ksp, order, nu, ions in minerals:
+        for name, Ksp_ref, dH_sp, order, nu, ions in minerals:
+            Ksp = Ksp_ref * jnp.exp(dH_sp * vant_hoff)
             log_iap = 0.0
             for idx, mm, count, z2, frac in ions:
                 if frac == "proton":               # H+ activity is h directly
@@ -189,4 +215,6 @@ def build_precipitation_derived_fn(
         return out
 
     required = {pH_field, temp_field}
+    if ic_field is not None and model != "none":
+        required.add(ic_field)
     return derived, produced, required

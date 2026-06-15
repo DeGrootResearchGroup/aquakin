@@ -100,7 +100,7 @@ def test_grad_through_solve_is_finite(net):
 
     g = jax.grad(loss)(net.default_parameters())
     assert jnp.all(jnp.isfinite(g))
-    assert float(g[net.param_index["k_struvite"]]) != 0.0
+    assert float(g[net.param_index["struvite_precipitation.k"]]) != 0.0
 
 
 # --- speciation -> precipitation composition ---------------------------------
@@ -130,15 +130,11 @@ precipitation:
     - name: calcite
       pKsp: 8.48
       order: 2
+      solid: X_calcite              # auto-derived reaction (composed with speciation pH)
+      rate_constant: {value: 10.0, units: "1/d"}
       ions:
         - {species: S_Ca, molar_mass: 1000, count: 1, charge: 2}
         - {species: S_IC, molar_mass: 1000, count: 1, charge: 2, fraction: carbonate}
-parameters:
-  k_calcite: {value: 10.0, units: "1/d"}
-reactions:
-  - name: calcite_precip
-    rate: "k_calcite * [X_calcite] * {R_calcite}"
-    stoichiometry: {S_Ca: -1.0, S_IC: -1.0, X_calcite: 1.0}
 """)
 
 
@@ -380,3 +376,205 @@ def test_schema_hydroxide_ion_may_omit_species():
             {count: 2, charge: 1, fraction: hydroxide}]}
     """)
     _load_bad(block)   # loads without error
+
+
+# --- auto-derived precipitation reactions + Ksp(T) ---------------------------
+# A mineral declaring a `solid` + `rate_constant` auto-derives its precipitation
+# reaction (stoichiometry from the ion counts), so the reaction is not written a
+# second time in `reactions:`. The shipped networks above all use this form;
+# these tests pin the derivation itself.
+
+def test_autoderived_reaction_names_and_params():
+    # The shipped struvite/calcite network declares no `reactions:` -- both come
+    # from the minerals. The synthesized reaction is `<name>_precipitation` with
+    # a namespaced rate constant `<name>_precipitation.k`.
+    net = aquakin.load_network("precipitation_struvite_calcite")
+    assert net.n_reactions == 2
+    assert "struvite_precipitation.k" in net.param_index
+    assert "calcite_precipitation.k" in net.param_index
+
+
+def _load_yaml(text):
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        f.write(textwrap.dedent(text))
+        path = f.name
+    try:
+        return aquakin.load_network_from_file(path)
+    finally:
+        os.unlink(path)
+
+
+def test_autoderived_stoichiometry_follows_ion_counts():
+    # Vivianite Fe3(PO4)2: counts 3 and 2 must appear in the derived stoichiometry
+    # as -3 / -2, and the solid as +1 -- the duplication-free path the manual
+    # form was prone to getting wrong.
+    net = _load_yaml("""
+    network: {name: vivianite, version: "1.0", description: "x"}
+    species:
+      - {name: S_Fe2, default_concentration: 6.0, units: "mol/m3"}
+      - {name: S_PO4, default_concentration: 4.0, units: "mol/m3"}
+      - {name: X_viv, default_concentration: 1.0e-3, units: "mol/m3"}
+    conditions: [{name: T, default: 298.15}, {name: pH, default: 7.5}]
+    clip_negative_states: true
+    precipitation:
+      pH_field: pH
+      temperature_field: T
+      temperature_units: kelvin
+      minerals:
+        - name: vivianite
+          pKsp: 36.0
+          order: 2
+          solid: X_viv
+          rate_constant: {value: 50.0, units: "1/d"}
+          ions:
+            - {species: S_Fe2, molar_mass: 1000, count: 3, charge: 2}
+            - {species: S_PO4, molar_mass: 1000, count: 2, charge: 3, fraction: phosphate}
+    """)
+    i = net.species_index
+    rxn = net.stoich_matrix[0]          # the single auto-derived reaction
+    assert float(rxn[i["S_Fe2"]]) == -3.0
+    assert float(rxn[i["S_PO4"]]) == -2.0
+    assert float(rxn[i["X_viv"]]) == 1.0
+    # And it conserves Fe and P (aqueous + solid) when run.
+    r = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(T=298.15, pH=7.5))
+    sol = r.solve(net.default_concentrations(), params=net.default_parameters(),
+                  t_span=(0.0, 2.0), t_eval=jnp.linspace(0.0, 2.0, 5))
+    s = lambda n: np.asarray(sol.C_named(n))
+    fe = s("S_Fe2") + 3.0 * s("X_viv")
+    p = s("S_PO4") + 2.0 * s("X_viv")
+    assert np.allclose(fe, fe[0], rtol=1e-5) and np.allclose(p, p[0], rtol=1e-5)
+
+
+def test_schema_solid_requires_rate_constant():
+    with pytest.raises(Exception, match="rate_constant"):
+        _load_bad(textwrap.dedent("""
+        precipitation:
+          minerals:
+            - {name: m, pKsp: 8.0, order: 1, solid: X_m, ions: [
+                {species: S_Ca, molar_mass: 1000, count: 1, charge: 2}]}
+        """))
+
+
+def test_schema_autoderived_solid_must_be_declared():
+    with pytest.raises(Exception, match="X_ghost|declared"):
+        _load_bad(textwrap.dedent("""
+        precipitation:
+          minerals:
+            - {name: m, pKsp: 8.0, order: 1, solid: X_ghost,
+               rate_constant: {value: 1.0}, ions: [
+                {species: S_Ca, molar_mass: 1000, count: 1, charge: 2}]}
+        """))
+
+
+def test_ksp_temperature_correction():
+    # dH_sp van't Hoff-corrects Ksp: a positive enthalpy of dissolution makes the
+    # mineral MORE soluble as temperature rises, lowering its saturation index.
+    net = _load_yaml("""
+    network: {name: ksp_t, version: "1.0", description: "x"}
+    species:
+      - {name: S_M, default_concentration: 1.0, units: "mol/m3"}
+      - {name: S_X, default_concentration: 1.0, units: "mol/m3"}
+      - {name: X_MX, default_concentration: 1.0e-3, units: "mol/m3"}
+    conditions: [{name: T, default: 298.15}, {name: pH, default: 7.0}]
+    precipitation:
+      pH_field: pH
+      temperature_field: T
+      temperature_units: kelvin
+      minerals:
+        - name: MX
+          pKsp: 6.0
+          order: 1
+          dH_sp: 25000.0          # endothermic dissolution -> more soluble when warm
+          solid: X_MX
+          rate_constant: {value: 1.0}
+          ions:
+            - {species: S_M, molar_mass: 1000, count: 1, charge: 1}
+            - {species: S_X, molar_mass: 1000, count: 1, charge: 1}
+    """)
+    p = net.default_parameters()
+    C0 = net.default_concentrations()
+    def SI(T):
+        d = net.derived_condition_fn(C0, p, {"T": jnp.array([T]), "pH": jnp.array([7.0])}, 0)
+        return float(d["SI_MX"])
+    assert SI(283.15) > SI(298.15) > SI(313.15)      # cooler -> less soluble -> higher SI
+
+
+def test_ksp_temperature_correction_off_by_default():
+    # With dH_sp = 0 (default) Ksp is temperature-independent: SI moves with T only
+    # through the dissociation-constant van't Hoff, identical to before this change.
+    net = aquakin.load_network("precipitation_struvite_calcite")
+    p = net.default_parameters()
+    C0 = net.default_concentrations()
+    d = net.derived_condition_fn(C0, p, {"T": jnp.array([308.15]),
+                                         "pH": jnp.array([7.8])}, 0)
+    assert abs(float(d["SI_struvite"]) - 1.0455) < 1e-3
+
+
+# --- shared ionic strength (speciation pH <-> precipitation activities) ------
+# A speciation block can export the self-consistent solution ionic strength as a
+# condition field; precipitation reads it so the Davies/DH activity coefficients
+# in the pH and in the saturation index use the SAME ionic strength (instead of
+# precipitation seeing only its own mineral ions, missing the bulk electrolyte).
+
+_SHARED_I_YAML = """
+network: {name: shared_I, version: "1.0", description: "x"}
+species:
+  - {name: S_Ca,  default_concentration: 3.0,  units: "mol/m3"}
+  - {name: S_IC,  default_concentration: 50.0, units: "mol/m3"}
+  - {name: S_cat, default_concentration: 80.0, units: "mol/m3"}
+  - {name: X_calcite, default_concentration: 1.0e-3, units: "mol/m3"}
+conditions: [{name: T, default: 298.15}]
+speciation:
+  field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  activity_model: davies
+  ionic_strength_field: I_aq
+  totals: {carbonate: {species: S_IC, molar_mass: 1000}}
+  strong_cations: [{species: S_cat, molar_mass: 1000, charge: 1}]
+precipitation:
+  pH_field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  activity_model: davies
+  ionic_strength_field: I_aq
+  minerals:
+    - name: calcite
+      pKsp: 8.48
+      order: 2
+      solid: X_calcite
+      rate_constant: {value: 10.0}
+      ions:
+        - {species: S_Ca, molar_mass: 1000, count: 1, charge: 2}
+        - {species: S_IC, molar_mass: 1000, count: 1, charge: 2, fraction: carbonate}
+"""
+
+
+def test_speciation_exports_shared_ionic_strength():
+    net = _load_yaml(_SHARED_I_YAML)
+    # Speciation produces both pH and the ionic strength; precipitation produces
+    # the saturation index reading that ionic strength.
+    assert set(net.derived_fields) == {"pH", "I_aq", "SI_calcite", "R_calcite"}
+    d = net.derived_condition_fn(net.default_concentrations(),
+                                 net.default_parameters(),
+                                 {"T": jnp.array([298.15])}, 0)
+    # The shared ionic strength is dominated by the 80 mM strong cation -- a
+    # mineral-ion-only estimate (the old precipitation default) would be ~1000x
+    # smaller and miss the bulk electrolyte entirely.
+    assert float(d["I_aq"]) > 0.05
+    assert np.isfinite(float(d["SI_calcite"]))
+
+
+def test_shared_ionic_strength_solves_and_differentiates():
+    net = _load_yaml(_SHARED_I_YAML)
+    r = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(T=298.15))
+    C0 = net.default_concentrations()
+    sol = r.solve(C0, params=net.default_parameters(),
+                  t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 5))
+    assert float(sol.C_named("X_calcite")[-1]) > 1.0
+    assert np.all(np.isfinite(sol.C))
+    g = jax.grad(lambda p: jnp.sum(
+        r.solve(C0, params=p, t_span=(0.0, 1.0),
+                t_eval=jnp.linspace(0.0, 1.0, 5)).C_named("X_calcite")))(
+        net.default_parameters())
+    assert jnp.all(jnp.isfinite(g))
