@@ -120,13 +120,18 @@ def build_precipitation_derived_fn(
     ic_field = config.get("ionic_strength_field")
 
     # Pre-resolve each mineral to plain numbers / indices (no per-call lookups).
+    # Equilibrium-mode minerals are handled by the algebraic equilibrium engine
+    # (core/precipitation_equilibrium.py), not the kinetic SI/R factor here.
     minerals = []
     produced: list[str] = []
     for m in config["minerals"]:
+        if m.get("mode") == "equilibrium":
+            continue
         name = m["name"]
         Ksp_ref = 10.0 ** (-float(m["pKsp"]))   # at the reference temperature _T_BASE
         dH_sp = float(m.get("dH_sp", 0.0))       # enthalpy of dissolution (J/mol), van't Hoff
         order = float(m["order"])
+        form = m.get("supersaturation_form", "power")
         nu = sum(int(ion["count"]) for ion in m["ions"])
         ions = []
         for ion in m["ions"]:
@@ -153,7 +158,7 @@ def build_precipitation_derived_fn(
                 float(ion["charge"]) ** 2,   # z^2 for the activity coefficient
                 frac,
             ))
-        minerals.append((name, Ksp_ref, dH_sp, order, nu, ions))
+        minerals.append((name, Ksp_ref, dH_sp, order, nu, ions, form))
         produced += [f"SI_{name}", f"R_{name}"]
 
     def derived(C, params, condition_arrays, loc_idx) -> dict:
@@ -173,7 +178,7 @@ def build_precipitation_derived_fn(
             else:
                 # Self-contained: background electrolyte + the mineral ions.
                 I = I_offset
-                for _, _Ksp_ref, _dH, _order, _nu, ions in minerals:
+                for _, _Ksp_ref, _dH, _order, _nu, ions, _form in minerals:
                     for idx, mm, count, z2, frac in ions:
                         if idx < 0:
                             continue
@@ -193,7 +198,7 @@ def build_precipitation_derived_fn(
         vant_hoff = (1.0 / _T_BASE - 1.0 / T_kelvin) / _R_SI
 
         out = {}
-        for name, Ksp_ref, dH_sp, order, nu, ions in minerals:
+        for name, Ksp_ref, dH_sp, order, nu, ions, form in minerals:
             Ksp = Ksp_ref * jnp.exp(dH_sp * vant_hoff)
             log_iap = 0.0
             for idx, mm, count, z2, frac in ions:
@@ -207,9 +212,16 @@ def build_precipitation_derived_fn(
                 # guard the log against a depleted ion (a -> 0)
                 log_iap = log_iap + count * jnp.log(jnp.maximum(a, 1e-300))
             si = (log_iap - jnp.log(Ksp)) / jnp.log(10.0)         # log10(IAP/Ksp)
-            ratio = jnp.power(10.0, si)
-            sigma = jnp.power(ratio, 1.0 / nu) - 1.0
-            r_factor = jnp.sign(sigma) * jnp.power(jnp.abs(sigma), order)
+            if form == "bounded":
+                # Thermodynamic driver bounded in (-1, 1): tanh(SI/(2 nu) ln10) =
+                # (Omega^(1/nu) - 1)/(Omega^(1/nu) + 1). R -> +-1 far from
+                # saturation (so the rate Jacobian stays ~k, differentiable) and
+                # is 0 at SI = 0 (the same equilibrium as the power law).
+                r_factor = jnp.tanh(si * jnp.log(10.0) / (2.0 * nu))
+            else:
+                ratio = jnp.power(10.0, si)
+                sigma = jnp.power(ratio, 1.0 / nu) - 1.0
+                r_factor = jnp.sign(sigma) * jnp.power(jnp.abs(sigma), order)
             out[f"SI_{name}"] = si
             out[f"R_{name}"] = r_factor
         return out

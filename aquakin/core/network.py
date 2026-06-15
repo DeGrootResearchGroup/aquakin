@@ -212,6 +212,12 @@ class CompiledNetwork:
     # see the derived value. ``derived_fields`` lists the names it produces.
     derived_condition_fn: "Callable | None" = None
     derived_fields: list[str] = field(default_factory=list)
+    # Optional projection onto the precipitation equilibrium, present when a
+    # ``precipitation:`` block declares any ``mode: equilibrium`` minerals.
+    # ``precipitation_equilibrium_fn(C, condition_arrays, loc_idx) -> C_eq``
+    # snaps a composition onto the algebraic mineral equilibrium (see
+    # :meth:`CompiledNetwork.precipitation_equilibrium`).
+    precipitation_equilibrium_fn: "Callable | None" = None
     # Optional positivity limiter on the net reaction term. When set, each
     # species' net reaction rate is throttled as its concentration approaches
     # zero, so consumption cannot drive a state negative. Applied to the
@@ -447,6 +453,60 @@ class CompiledNetwork:
         from aquakin.core.conditions import SpatialConditions
 
         return SpatialConditions.uniform(n_locations, **self._condition_defaults)
+
+    def precipitation_equilibrium(
+        self,
+        C: "jnp.ndarray | None" = None,
+        conditions=None,
+        *,
+        loc_idx: int = 0,
+    ) -> jnp.ndarray:
+        """Project a composition onto its mineral precipitation equilibrium.
+
+        For a ``precipitation:`` network with ``mode: equilibrium`` minerals,
+        solve the coupled algebraic equilibrium -- every precipitated mineral on
+        its solubility (``IAP = Ksp``), every absent mineral undersaturated, mass
+        balanced across the shared ions -- and return the equilibrium-projected
+        state: each equilibrium solid set to its equilibrium amount and the
+        dissolved ions rebalanced. This is the differentiable, non-stiff
+        alternative to integrating an ultra-insoluble mineral's kinetics (whose
+        ``~1e13`` rate Jacobian defeats every sensitivity method): the solve is
+        well conditioned and ``jax.grad`` flows through it via the
+        implicit-function-theorem sensitivity, so it composes with
+        :func:`~aquakin.sensitivity` / :func:`~aquakin.calibrate` w.r.t. the dose
+        (the composition) and the operating conditions (pH, T).
+
+        Parameters
+        ----------
+        C : jnp.ndarray, optional
+            Composition to project, shape ``(n_species,)``. Defaults to the
+            network's ``default_concentrations()``.
+        conditions : SpatialConditions, optional
+            Conditions supplying pH / T. Defaults to ``default_conditions()``.
+        loc_idx : int, optional
+            Spatial location index into ``conditions`` (default 0).
+
+        Returns
+        -------
+        jnp.ndarray
+            The equilibrium-projected composition, shape ``(n_species,)``. Read a
+            residual dissolved ion or a solid amount with
+            :meth:`species_index`-based indexing or a ``BatchSolution``-style
+            accessor.
+
+        Raises
+        ------
+        ValueError
+            If the network declares no ``mode: equilibrium`` minerals.
+        """
+        if self.precipitation_equilibrium_fn is None:
+            raise ValueError(
+                "precipitation_equilibrium() requires a precipitation: block with "
+                "at least one 'mode: equilibrium' mineral; this network has none.")
+        C = self.default_concentrations() if C is None else jnp.asarray(C)
+        if conditions is None:
+            conditions = self.default_conditions()
+        return self.precipitation_equilibrium_fn(C, conditions.fields, loc_idx)
 
     def rates(
         self,
@@ -862,31 +922,51 @@ def _compile_precipitation(spec, species_index, condition_fields, derived_fields
     """
     precip_cfg = getattr(spec, "precipitation", None)
     if precip_cfg is None:
-        return speciation_fn, derived_fields, condition_fields
+        return speciation_fn, derived_fields, condition_fields, None
 
     from aquakin.core.precipitation import build_precipitation_derived_fn
+    from aquakin.core.precipitation_equilibrium import (
+        build_precipitation_equilibrium_derived_fn,
+    )
 
     cfg = precip_cfg if isinstance(precip_cfg, dict) else precip_cfg.model_dump()
-    precip_fn, produced, required = build_precipitation_derived_fn(cfg, species_index)
 
-    missing = sorted(required - condition_fields)
-    if missing:
-        raise ValueError(
-            f"precipitation block reads condition field(s) {missing} that are "
-            f"neither declared in 'conditions:' nor produced by 'speciation:'."
-        )
-    clash = sorted(set(produced) & condition_fields)
-    if clash:
-        raise ValueError(
-            f"precipitation produces field(s) {clash} that collide with declared "
-            f"conditions or speciation-derived fields."
-        )
+    fn = speciation_fn
+    new_fields = list(derived_fields)
+    cond = condition_fields
+    equilibrium_project = None
 
-    combined = precip_fn if speciation_fn is None else _compose_derived(
-        speciation_fn, precip_fn
-    )
-    return (combined, list(derived_fields) + produced,
-            condition_fields | set(produced))
+    def _add(stage_fn, produced, required, what):
+        nonlocal fn, new_fields, cond
+        missing = sorted(required - cond)
+        if missing:
+            raise ValueError(
+                f"precipitation ({what}) reads condition field(s) {missing} that "
+                f"are neither declared in 'conditions:' nor produced by "
+                f"'speciation:'.")
+        clash = sorted(set(produced) & cond)
+        if clash:
+            raise ValueError(
+                f"precipitation ({what}) produces field(s) {clash} that collide "
+                f"with declared conditions or other derived fields.")
+        fn = stage_fn if fn is None else _compose_derived(fn, stage_fn)
+        new_fields = new_fields + list(produced)
+        cond = cond | set(produced)
+
+    # Kinetic minerals -> SI_/R_ (skips equilibrium-mode minerals).
+    kin_fn, kin_produced, kin_required = build_precipitation_derived_fn(
+        cfg, species_index)
+    if kin_produced:
+        _add(kin_fn, kin_produced, kin_required, "kinetic")
+
+    # Equilibrium-mode minerals -> Xeq_ (the algebraic equilibrium amount), plus
+    # a projection fn that snaps a composition onto the precipitation equilibrium.
+    eq = build_precipitation_equilibrium_derived_fn(cfg, species_index)
+    if eq is not None:
+        eq_fn, eq_produced, eq_required, equilibrium_project = eq
+        _add(eq_fn, eq_produced, eq_required, "equilibrium")
+
+    return fn, new_fields, cond, equilibrium_project
 
 
 def _build_param_index(spec):
@@ -1123,7 +1203,8 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     )
     # Stage 1b: optional mineral precipitation, composed after the speciation pH
     # (it adds each mineral's SI_<name> / R_<name> to the valid condition set).
-    derived_condition_fn, derived_fields, condition_fields = _compile_precipitation(
+    (derived_condition_fn, derived_fields, condition_fields,
+     precipitation_equilibrium_fn) = _compile_precipitation(
         spec, species_index, condition_fields, derived_fields, derived_condition_fn
     )
 
@@ -1221,6 +1302,7 @@ def compile_network(spec: "Any") -> CompiledNetwork:
         _stoich_dynamic_cols=dyn_cols,
         derived_condition_fn=derived_condition_fn,
         derived_fields=derived_fields,
+        precipitation_equilibrium_fn=precipitation_equilibrium_fn,
         positivity_threshold=positivity_threshold,
         clip_negative_states=bool(getattr(spec, "clip_negative_states", False)),
         temperature_corrections=temperature_corrections,
