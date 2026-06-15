@@ -34,7 +34,9 @@ Future networks include UV/TiO₂ and chlorine decay.
   for penetration-controlled processes).
 - Plant-wide flowsheets (`aquakin.plant`): the IWA benchmark plants BSM1 and
   BSM2 — reactors, clarifiers, mixers/splitters and an ADM1 digester integrated
-  under one monolithic solve, with run-to-steady-state, dynamic influents, and
+  under one monolithic solve, with run-to-steady-state, a fast differentiable
+  algebraic steady-state solver (`plant.steady_state`, pseudo-transient
+  continuation — ~10× faster than integrating to settle), dynamic influents, and
   EQI/OCI performance metrics.
 - Full automatic differentiation everywhere, including cap-free forward
   sensitivity and reverse-mode gradients through stiff plant solves (see
@@ -164,6 +166,12 @@ plant.add_influent("feed", network.influent(
 # no horizon to guess). Sensible solver defaults; nothing to tune.
 ss = plant.run_to_steady_state()
 print("converged:", ss.converged, "after", round(ss.time), "days")
+
+# ...or snap straight to steady state algebraically (pseudo-transient
+# continuation: ~10x faster, robust on stiff topologies, and differentiable --
+# jax.grad of a loss on ss.state flows to the plant parameters for design sweeps).
+ss = plant.steady_state()
+print("converged:", ss.converged, "in", int(ss.iterations), "iterations")
 
 # Reconstruct the clarified effluent and read its quality.
 eff = plant.stream(ss.solution, plant.effluent_endpoint)
