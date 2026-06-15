@@ -1898,12 +1898,14 @@ solution.C                           # (n_points, n_species)
 #   - feed (influent vector) + dilution_rate (Q/V, 1/d): a CSTR feed on the bulk
 #     (d_bulk += dilution*(feed-bulk)); the steady bulk is the predicted effluent.
 #   - clamp_bulk: hold the bulk as a fixed reservoir (Dirichlet) instead.
-#   - steady_state(C0, params, warmup=...): Newton/Levenberg-Marquardt root-find
-#     on RHS=0 with implicit-diff for AD (optimistix). Works for well-conditioned
-#     steady states; for a VERY stiff/slow biofilm (the multispecies maturation,
-#     whose asymptotic fixed point is hundreds of days out) it stalls -- there,
-#     integrate forward to the physical maturation time (~90 d for the Khalil rig)
-#     and use that profile as the IC instead.
+#   - steady_state(C0, params, warmup=...): pseudo-transient continuation (PTC)
+#     root-find on RHS=0 (aquakin.plant.steady.solve_steady_state), with
+#     implicit-function-theorem AD. PTC's per-state pseudo-time damping is robust
+#     where the old Newton/Levenberg-Marquardt root-find stalled; for a VERY
+#     stiff/slow biofilm whose asymptotic fixed point is hundreds of days out
+#     (the multispecies maturation), raise newton_steps or integrate forward to
+#     the physical maturation time (~90 d for the Khalil rig) and use that profile
+#     as the IC instead.
 reactor = aquakin.BiofilmReactor(
     network, conditions, n_layers=6, thickness=8e-4, area_per_volume=50.0,
     diffusivity=1e-4, boundary_layer=1e-4,
@@ -2557,7 +2559,8 @@ A fast, robust, *differentiable* alternative to the forward solve: it finds the
 root of the plant RHS `F(y)=dy/dt=0` directly by **pseudo-transient continuation
 (PTC)** rather than integrating until the dynamics die out. The core lives in
 [`plant/steady.py`](aquakin/plant/steady.py) (`solve_steady_state` / `ptc_forward`)
-and is reusable on any `rhs(y, params)`. PTC takes damped-Newton steps
+and is reusable on any `rhs(y, params)` — `BiofilmReactor.steady_state` is also
+routed through it (replacing the Levenberg–Marquardt root-find that stalled). PTC takes damped-Newton steps
 `(V/δ − J)·Δy = F(y)` with the exact AD Jacobian `J = ∂F/∂y` (forward-mode) and a
 **per-state** pseudo-time `V/δ`, `V = diag(max(|y|, floor))`: at small `δ` the
 step is a stable backward-Euler move along the physical transient (globally
