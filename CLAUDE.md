@@ -2494,7 +2494,9 @@ Key types:
     otherwise accurate to the `t_eval` sampling. **This is the tool that found the
     ADM1 nitrogen transcription error** (see the `adm1` network note).
 
-Shipped units: `CSTRUnit` (kinetics + aeration), `MixerUnit`,
+Shipped units: `CSTRUnit` (kinetics + aeration), `IFASUnit` / `MBBRUnit`
+(an IFAS/MBBR tank: a CSTR bulk coupled to a depth-resolved attached biofilm —
+see below), `MixerUnit`,
 `SplitterUnit`, `IdealClarifier` (fast, stateless separator),
 `PrimaryClarifier` (BSM2 Otterpohl–Freund: a well-mixed holding tank split by
 an HRT-dependent particulate-removal efficiency, fixed underflow `f_PS·Q`),
@@ -2513,6 +2515,39 @@ against an independent port of the reference BSM1 settler derivative in
 `tests/validation/test_takacs_vs_bsm1_reference.py`). `build_bsm1(use_takacs=
 True)` selects it in the full plant (both clarifiers expose the same ports),
 and `Plant.solve` takes `max_steps`.
+
+**IFAS / MBBR unit ([`plant/ifas.py`](aquakin/plant/ifas.py)).** `IFASUnit`
+(alias `MBBRUnit`) places carrier-media biofilm in the flowsheet by **wiring the
+existing depth-resolved `BiofilmReactor`** (1-D diffusion–reaction over biofilm
+depth) into a plant unit, alongside the suspended (CSTR) fraction — the
+intensification retrofit the BSM palette lacked. Its state is the bulk
+concentration **plus** the biofilm layer profile (`(n_layers+1)·n_species`); its
+`rhs` is `BiofilmReactor._make_rhs` (finite-volume bulk↔surface↔…↔wall soluble
+diffusion + per-compartment reaction) with the **plant's bulk convection +
+aeration added on the bulk row**, replacing the biofilm reactor's own
+stand-alone CSTR feed (built with `feed=None`). Carrier geometry is the
+designer's `specific_surface_area` (media SSA, m²/m³) × `fill_fraction` →
+`area_per_volume`; oxygen enters the **bulk** and reaches the biofilm only by
+diffusion (so deep layers can be O₂-limited — the reason for depth resolution).
+The effluent is the well-mixed bulk; the biofilm stays on the carrier. Aeration
+reuses the **same `Aeration` spec as `CSTRUnit`** (open- or closed-loop; the
+plant's generic `_materialize_aeration` auto-wires a DO controller from the
+spec), via aeration helpers (`build_aeration_vectors` / `aeration_transfer`)
+factored out of `CSTRUnit` and shared by both (CSTR behaviour is bit-unchanged).
+The biofilm is a **mature, fixed attached-biomass** model: the layers' biomass +
+inert structure is held as a sustained reservoir while the substrate pools and
+solubles react and diffuse and the suspended bulk fraction evolves fully. The
+default freeze mask is **stoichiometry-derived** (`_default_biofilm_fixed_mask`):
+freeze every particulate **except** a hydrolysis substrate (one consumed while a
+soluble is produced, `XS→SS`) — freezing such a pool would make it a
+non-depleting soluble source (the biofilm footgun), whereas biomass/inerts are
+the intended structure. For ASM1 that freezes `XI`/`XB_H`/`XB_A`/`XP` and leaves
+`XS`/`XND` dynamic. **Validated:** at equal volume + aeration an IFAS tank
+removes more soluble COD (effluent SS 1.8 vs 2.7) and nitrifies markedly more
+(SNH 0.4 vs 2.6) than a plain CSTR, converges to steady state, and `jax.grad`
+flows end-to-end through the biofilm core (`tests/integration/test_ifas.py`). A
+fully dynamic biofilm (growth with attachment/detachment/a density cap) is the
+underlying `BiofilmReactor`'s domain and a follow-up for the unit.
 
 **Coupled BSM1 — steady state now works.** The *coupled* BSM1 plant reaches the
 correct steady state for **both** clarifiers (Takács and Ideal agree: tank-5
