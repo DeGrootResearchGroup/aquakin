@@ -1519,10 +1519,13 @@ right, and `jax.grad` (w.r.t. dose, pH) is finite. **This is "solve, don't
 integrate":** it covers the equilibrium-outcome sensitivity / calibration use
 (#295's impact list) but is not an in-ODE reaction (embedding the per-RHS Newton
 solve inside the time integration is impractically slow — a documented future
-optimization needing solver warm-starting). Kinetic minerals in the same block
-are untouched (`build_precipitation_derived_fn` skips `mode: equilibrium`
-minerals; the equilibrium engine handles them and composes after the speciation
-pH like the kinetic one).
+optimization needing solver warm-starting). The solver van't Hoff-corrects each
+`Ksp` with temperature (the per-mineral `dH_sp`, same form / reference temperature
+as the kinetic engine), so the equilibrium tracks `T` consistently with the
+kinetic path. Kinetic minerals in the same block are untouched
+(`build_precipitation_derived_fn` skips `mode: equilibrium` minerals; the
+equilibrium engine handles them and composes after the speciation pH like the
+kinetic one).
 
 **(B) Bounded-driver kinetics — `supersaturation_form: bounded`**
 ([`core/precipitation.py`](aquakin/core/precipitation.py)). For a differentiable

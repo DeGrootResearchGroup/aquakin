@@ -158,6 +158,66 @@ def test_equilibrium_solver_satisfies_complementarity():
     assert "Xeq_FePO4" in derived
 
 
+# --- van't Hoff Ksp(T) in the equilibrium solver ----------------------------
+
+def _moderate_equilibrium_yaml(dH_sp):
+    # A moderately-soluble 1:1 mineral (two free ions, no pH fraction, no activity
+    # correction) so the only temperature dependence is the van't Hoff Ksp(T):
+    # at equilibrium [M][A]/1e6 = Ksp(T), and with M=A by symmetry the residual
+    # ion scales as sqrt(Ksp(T)).
+    return f"""
+network: {{name: vh, version: "1.0", description: x}}
+species:
+  - {{name: S_M, default_concentration: 1.0, units: "mol/m3"}}
+  - {{name: S_A, default_concentration: 1.0, units: "mol/m3"}}
+  - {{name: X_MA, default_concentration: 1.0e-4, units: "mol/m3"}}
+conditions:
+  - {{name: T, default: 293.15}}
+  - {{name: pH, default: 7.0}}
+clip_negative_states: true
+precipitation:
+  pH_field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  activity_model: none
+  minerals:
+    - name: MA
+      pKsp: 8.0
+      dH_sp: {dH_sp}
+      mode: equilibrium
+      solid: X_MA
+      ions:
+        - {{species: S_M, molar_mass: 1000, count: 1, charge: 2}}
+        - {{species: S_A, molar_mass: 1000, count: 1, charge: 1}}
+reactions:
+  - {{name: r, rate: "{{Xeq_MA}}", stoichiometry: {{S_M: -1, S_A: -1, X_MA: 1}}}}
+"""
+
+
+def test_vant_hoff_shifts_equilibrium_with_temperature(tmp_path):
+    import math
+    from aquakin.core.ph_solver import _R_SI
+
+    def residual_M(dH, T):
+        f = tmp_path / f"vh_{dH}.yaml"
+        f.write_text(_moderate_equilibrium_yaml(dH), encoding="utf-8")
+        net = aquakin.load_network_from_file(f)
+        cond = SpatialConditions(fields={"pH": jnp.array([7.0]), "T": jnp.array([T])})
+        return float(net.precipitation_equilibrium(conditions=cond)[net.species_index["S_M"]])
+
+    T_lo, T_hi = 283.15, 303.15
+    # dH = 0: Ksp is temperature-independent, so the residual is unchanged.
+    assert residual_M(0.0, T_lo) == pytest.approx(residual_M(0.0, T_hi), rel=1e-4)
+
+    # dH > 0: the residual ion tracks sqrt(Ksp(T)); the ratio across two
+    # temperatures equals the analytic van't Hoff factor exp(0.5*dH*Δ(1/T)/R).
+    dH = 40000.0
+    lo, hi = residual_M(dH, T_lo), residual_M(dH, T_hi)
+    expected_ratio = math.exp(0.5 * dH * (1.0 / T_lo - 1.0 / T_hi) / _R_SI)
+    assert lo != pytest.approx(hi, rel=1e-3)         # genuinely temperature-shifted
+    assert (hi / lo) == pytest.approx(expected_ratio, rel=2e-3)
+
+
 # --- schema validation ------------------------------------------------------
 
 def test_equilibrium_mode_requires_solid(tmp_path):

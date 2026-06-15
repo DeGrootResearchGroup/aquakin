@@ -51,6 +51,8 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.ph_solver import (
+    _R_SI,
+    _T_BASE,
     _log10_gamma,
     debye_huckel_A,
     equilibrium_constants,
@@ -73,9 +75,11 @@ _MAX_DLOG = 2.0        # max change in log10(free ion) per iteration
 def _build_equilibrium_system(minerals_cfg, species_index):
     """Resolve the equilibrium-mode minerals to plain numbers / indices.
 
-    Returns ``(produced, solid_idx, Cmat, ion_states, ion_mm, ion_frac, mineral_ions,
-    log_ksp)`` describing the conserved-ion mass-balance system and the per-mineral
-    ion-activity products. ``None`` when there are no equilibrium-mode minerals.
+    Returns ``(produced, solid_idx, Cmat, ion_states, ion_mm, ion_states_list,
+    mineral_ions, log_ksp_ref, dH_sp)`` describing the conserved-ion mass-balance
+    system and the per-mineral ion-activity products (``log_ksp_ref`` the reference
+    ``ln Ksp``, ``dH_sp`` its enthalpy of dissolution for the van't Hoff
+    correction). ``None`` when there are no equilibrium-mode minerals.
     """
     eq_minerals = [m for m in minerals_cfg if m.get("mode") == "equilibrium"]
     if not eq_minerals:
@@ -103,7 +107,8 @@ def _build_equilibrium_system(minerals_cfg, species_index):
     N = len(ion_states)
     Cmat = [[0.0] * N for _ in range(M)]        # conserved-ion count per mineral
     solid_idx: list[int] = []
-    log_ksp: list[float] = []
+    log_ksp_ref: list[float] = []                # ln(Ksp) at the reference T
+    dH_sp: list[float] = []                      # enthalpy of dissolution (J/mol)
     mineral_ions: list[list[tuple]] = []         # (kind, count, z2, frac, mm, ion_pos)
     produced: list[str] = []
     for mi, m in enumerate(eq_minerals):
@@ -116,7 +121,8 @@ def _build_equilibrium_system(minerals_cfg, species_index):
                 f"mineral {m['name']!r} solid {m['solid']!r} is not a declared "
                 f"species; declared: {sorted(species_index)}")
         solid_idx.append(species_index[m["solid"]])
-        log_ksp.append(-float(m["pKsp"]) * float(_LN10))
+        log_ksp_ref.append(-float(m["pKsp"]) * float(_LN10))
+        dH_sp.append(float(m.get("dH_sp", 0.0)))
         ions = []
         for ion in m["ions"]:
             frac = ion.get("fraction")
@@ -135,19 +141,22 @@ def _build_equilibrium_system(minerals_cfg, species_index):
 
     return (produced, jnp.asarray(solid_idx), jnp.asarray(Cmat),
             jnp.asarray(ion_states), jnp.asarray(ion_mm), ion_states,
-            mineral_ions, jnp.asarray(log_ksp))
+            mineral_ions, jnp.asarray(log_ksp_ref), jnp.asarray(dH_sp))
 
 
-def _make_si_fn(mineral_ions, log_ksp, ion_mm, model):
-    """Build ``SI(u, h, K, gamma) -> (M,)`` for the equilibrium minerals.
+def _make_si_fn(mineral_ions, log_ksp_ref, dH_sp, ion_mm, model):
+    """Build ``SI(u, h, K, gamma, vant_hoff) -> (M,)`` for the equilibrium minerals.
 
     ``u`` is ``log10`` of each conserved ion's *total dissolved* concentration in
     the state's own units; the per-ion ``molar_mass`` converts to the mol/L the
-    ``Ksp`` / activities use. Returns each mineral's ``log10(IAP/Ksp)``.
+    ``Ksp`` / activities use. ``Ksp`` is van't Hoff-corrected with temperature,
+    ``ln(Ksp(T)) = ln(Ksp_ref) + dH_sp * vant_hoff`` (``vant_hoff = (1/T_ref -
+    1/T)/R``), the same form and reference temperature as the kinetic engine.
+    Returns each mineral's ``log10(IAP/Ksp)``.
     """
-    def si(u, h, K, gamma):
+    def si(u, h, K, gamma, vant_hoff):
         out = []
-        for ions, lk in zip(mineral_ions, log_ksp):
+        for ions, lk_ref, dH in zip(mineral_ions, log_ksp_ref, dH_sp):
             log_iap = 0.0
             for kind, count, z2, frac, mm, pos in ions:
                 if kind == "proton":
@@ -159,7 +168,7 @@ def _make_si_fn(mineral_ions, log_ksp, ion_mm, model):
                     fr = _FRACTIONS[frac](h, K) if kind in _FRACTIONS else 1.0
                     a = gamma(z2) * tot * fr
                 log_iap = log_iap + count * jnp.log(jnp.maximum(a, 1e-300))
-            out.append((log_iap - lk) / _LN10)
+            out.append((log_iap - (lk_ref + dH * vant_hoff)) / _LN10)
         return jnp.stack(out)
     return si
 
@@ -178,7 +187,8 @@ def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model,
     T_kelvin : scalar
         Absolute temperature (K).
     si_fn : callable
-        ``(u, h, K, gamma) -> (M,)`` saturation indices (see :func:`_make_si_fn`).
+        ``(u, h, K, gamma, vant_hoff) -> (M,)`` saturation indices (see
+        :func:`_make_si_fn`).
     Cmat : jnp.ndarray, shape (M, N)
         Conserved-ion count of each mineral.
     model : str
@@ -195,6 +205,8 @@ def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model,
     """
     M, N = Cmat.shape
     K = equilibrium_constants(T_kelvin)
+    # van't Hoff factor for the Ksp(T) correction inside si_fn (unity at T_ref).
+    vant_hoff = (1.0 / _T_BASE - 1.0 / T_kelvin) / _R_SI
     use_activity = model != "none"
     if use_activity:
         A = debye_huckel_A(T_kelvin)
@@ -211,7 +223,7 @@ def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model,
         u = w[:N]
         X = w[N:]
         mass = jnp.power(10.0, u) + X @ Cmat - totals          # (N,) feasibility
-        si = si_fn(u, h, K, gamma)                             # (M,)
+        si = si_fn(u, h, K, gamma, vant_hoff)                  # (M,)
         # Smoothed Fischer-Burmeister: phi(X, -SI) = 0  <=>  X>=0, SI<=0, X*SI=0.
         fb = X + (-si) - jnp.sqrt(X * X + si * si + eps * eps)
         return jnp.concatenate([mass, fb])
@@ -280,14 +292,14 @@ def build_precipitation_equilibrium_derived_fn(
     if built is None:
         return None
     (produced, solid_idx, Cmat, ion_states_arr, ion_mm, ion_states,
-     mineral_ions, log_ksp) = built
+     mineral_ions, log_ksp_ref, dH_sp) = built
 
     pH_field = config.get("pH_field", "pH")
     temp_field = config.get("temperature_field", "T")
     temp_units = config.get("temperature_units", "celsius")
     model = config.get("activity_model", "none")
     I_offset = float(config.get("ionic_strength_offset", 0.0))
-    si_fn = _make_si_fn(mineral_ions, log_ksp, ion_mm, model)
+    si_fn = _make_si_fn(mineral_ions, log_ksp_ref, dH_sp, ion_mm, model)
 
     def _solve(C, condition_arrays, loc_idx):
         """Shared core: total inventory -> equilibrium phase amounts ``Xeq`` (M,)
