@@ -339,7 +339,7 @@ jobs:
     needs: refresh-durations          # only proceed on a COMPLETE set (all shards ok)
     runs-on: ubuntu-latest
     permissions:
-      contents: write                 # push the refresh branch
+      contents: write                 # write .test_durations via the Contents API
       pull-requests: write            # open the PR
     steps:
       - uses: actions/checkout@v4
@@ -368,30 +368,63 @@ jobs:
           PY
 
       - name: Open / update the refresh PR if changed
-        # `main` is branch-protected, so this does NOT push to it directly: it
-        # force-updates a single rolling `ci/refresh-test-durations` branch and
-        # opens (or reuses) one PR you merge. The change is metadata-only. Note:
-        # GitHub does not run workflows on a PR authored by the default
-        # GITHUB_TOKEN, so this PR has no CI checks -- merge it with your admin
-        # bypass (it touches only .test_durations).
+        # `main` is branch-protected, so this does NOT push to it: it puts the
+        # change on a single rolling `ci/refresh-test-durations` branch and opens
+        # one PR you merge. Two GITHUB_TOKEN limitations shape HOW:
+        #   1. The token may not push a *branch* whose tree carries the repo's
+        #      workflow files (a new branch "introduces" .github/workflows/* and
+        #      the token lacks the un-grantable `workflows` permission). So the
+        #      commit is made through the GitHub Contents API, which writes ONLY
+        #      .test_durations and never pushes workflow content -- no PAT needed.
+        #   2. Opening a PR from the token needs the repo setting "Allow GitHub
+        #      Actions to create and approve pull requests" (Settings -> Actions
+        #      -> General). If it is off, `gh pr create` fails -- so that failure
+        #      is non-fatal: the branch is still updated and you open the PR once
+        #      by hand (or enable the setting and it auto-opens thereafter).
+        # CI does not run on a bot-authored PR, so merge it with your admin bypass
+        # (it touches only .test_durations).
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           if git diff --quiet -- .test_durations; then
             echo "No change to .test_durations -- nothing to do."
             exit 0
           fi
+          repo="$GITHUB_REPOSITORY"
           branch="ci/refresh-test-durations"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$branch"
-          git add .test_durations
-          git commit -m "ci: refresh .test_durations"
-          git push -f origin "$branch"
-          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')" ]; then
-            gh pr create --base main --head "$branch" \
-              --title "ci: refresh .test_durations" \
-              --body "Automated weekly refresh of the pytest-split durations that balance the slow/validation shards. **Metadata-only** (only \`.test_durations\` changes), so it is safe to merge. Opened by the scheduled \`refresh-durations\` job; CI does not run on bot-authored PRs, so merge with your admin override."
+          base_sha="$(git rev-parse HEAD)"   # the checked-out main commit
+
+          # Point the rolling branch at the current main (create, or reset if it
+          # already exists) so the PR diff is exactly this run's durations change.
+          if gh api "repos/$repo/git/refs/heads/$branch" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$repo/git/refs/heads/$branch" \
+              -f sha="$base_sha" -F force=true >/dev/null
           else
-            echo "Refresh PR already open; updated its branch."
+            gh api -X POST "repos/$repo/git/refs" \
+              -f ref="refs/heads/$branch" -f sha="$base_sha" >/dev/null
+          fi
+
+          # Commit ONLY .test_durations onto the branch via the Contents API.
+          file_sha="$(gh api "repos/$repo/contents/.test_durations?ref=$branch" --jq .sha)"
+          gh api -X PUT "repos/$repo/contents/.test_durations" \
+            -f message="ci: refresh .test_durations" \
+            -f content="$(base64 -w0 .test_durations)" \
+            -f branch="$branch" \
+            -f sha="$file_sha" >/dev/null
+          echo "Updated $branch with the refreshed durations."
+
+          # Open the PR if one isn't already open. Non-fatal if the repo setting
+          # blocks Actions from creating PRs (see note above).
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')" ]; then
+            echo "Refresh PR already open; its branch was updated in place."
+          elif gh pr create --base main --head "$branch" \
+              --title "ci: refresh .test_durations" \
+              --body "Automated refresh of the pytest-split durations that balance the slow/validation shards. **Metadata-only** (only \`.test_durations\` changes), so it is safe to merge. Opened by the \`refresh-durations\` job via the GitHub API; CI does not run on bot-authored PRs, so merge with your admin override."; then
+            echo "Opened the refresh PR."
+          else
+            echo "::warning::Branch '$branch' was updated but the PR could not be "\
+              "opened automatically. Enable 'Allow GitHub Actions to create and "\
+              "approve pull requests' (Settings -> Actions -> General), or open a "\
+              "PR from '$branch' by hand once -- later runs reuse it."
           fi
