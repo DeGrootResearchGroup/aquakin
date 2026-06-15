@@ -41,7 +41,9 @@ Future networks include UV/TiO₂ and chlorine decay.
   under one monolithic solve, with run-to-steady-state, a fast differentiable
   algebraic steady-state solver (`plant.steady_state`, pseudo-transient
   continuation — ~10× faster than integrating to settle), dynamic influents, and
-  EQI/OCI performance metrics.
+  EQI/OCI performance metrics. Includes an `IFASUnit` / `MBBRUnit` (a CSTR bulk
+  coupled to a depth-resolved attached biofilm) for modelling MBBR/IFAS
+  intensification retrofits.
 - Full automatic differentiation everywhere, including cap-free forward
   sensitivity and reverse-mode gradients through stiff plant solves (see
   [Advanced: differentiation & sensitivity](#advanced-differentiation--sensitivity)).
