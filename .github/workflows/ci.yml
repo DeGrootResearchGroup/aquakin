@@ -224,10 +224,64 @@ jobs:
         # memory-heavy in the repo (~4-5.5 GB each); even two concurrent OOM-kill
         # the runner. pytest-split partitions the marked set across the 4 shards
         # by recorded duration (`.test_durations`), so this shard runs only its
-        # slice in a fresh process -- bounding the accumulated memory.
+        # slice in a fresh process -- bounding the accumulated memory. The
+        # `heavy` validation tests (the whole-plant stable-adjoint gradients, the
+        # single heaviest in the repo) are EXCLUDED here and run in their own
+        # `heavy-validation` job: with `-n 1` a shard accumulates XLA cache across
+        # its tests, and one heavy test landing in a shared shard tipped it past
+        # the 16 GB runner -- so they are split out where they accumulate only
+        # against each other.
         run: >-
-          pytest -m validation -q -n 1
+          pytest -m "validation and not heavy" -q -n 1
           --splits 4 --group ${{ matrix.group }}
+          --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0
+
+  # ---- Heavy validation: the whole-plant stable-adjoint gradient tests ---------
+  # These are the single most memory-heavy tests in the repo (each builds the full
+  # two-network BSM2 plant and runs a reverse-mode discrete-adjoint gradient,
+  # peaking ~4-5.5 GB). Run serially (`-n 1`) and split into their own shards so
+  # each fresh process accumulates only a couple of them -- when one of these
+  # shared a regular `validation` shard, its peak plus the shard's accumulated XLA
+  # cache OOM-killed the 16 GB runner (a crashed `gw0` worker). Same gate, Python,
+  # and install as the `validation` job; the two together are a complete, disjoint
+  # partition of the validation set (`not heavy` + `heavy`), so coverage is
+  # unchanged.
+  heavy-validation:
+    name: heavy validation (shard ${{ matrix.group }}/3)
+    if: >-
+      github.event_name == 'push'
+      || (github.event_name == 'pull_request'
+          && contains(github.event.pull_request.labels.*.name, 'full-ci'))
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Run heavy validation shard
+        # `-n 1`, split across 3 fresh processes balanced by `.test_durations`, so
+        # each process runs at most ~3 of these ~5 GB tests -- well under the 16 GB
+        # runner once they no longer pile onto a shared validation shard. (3, not
+        # 4, splits: with only a handful of heavy tests a 4th shard collects none
+        # and pytest exits 5 / fails the job.)
+        run: >-
+          pytest -m "validation and heavy" -q -n 1
+          --splits 3 --group ${{ matrix.group }}
           --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0
 
   # ---- Pre-merge smoke slice: a rotating shard of the slow suite, on PRs -------

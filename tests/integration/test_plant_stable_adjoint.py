@@ -128,6 +128,7 @@ def _solve_kwargs():
 
 
 @pytest.mark.validation
+@pytest.mark.heavy
 def test_stable_adjoint_forward_matches_jax_adjoint():
     """The stable-adjoint forward primal equals the standard (jax_adjoint) solve;
     both integrate the same RHS with Kvaerno5, so they agree closely."""
@@ -143,6 +144,7 @@ def test_stable_adjoint_forward_matches_jax_adjoint():
 
 
 @pytest.mark.validation
+@pytest.mark.heavy
 def test_stable_adjoint_cross_interface_gradient_matches_fd():
     """Gradient of a water-line output with respect to an ADM1 (digester) rate,
     through the interface and the recycle, is finite and matches central FD."""
@@ -171,6 +173,7 @@ def test_stable_adjoint_cross_interface_gradient_matches_fd():
 
 
 @pytest.mark.validation
+@pytest.mark.heavy
 def test_auto_gradient_defaults_to_stable_adjoint():
     """With the default ``gradient="auto"`` (nothing passed), a stiff plant
     gradient is finite and matches the explicit stable-adjoint gradient -- the
@@ -200,6 +203,7 @@ def test_auto_gradient_defaults_to_stable_adjoint():
 
 
 @pytest.mark.validation
+@pytest.mark.heavy
 def test_stable_adjoint_transient_influent_gradient_matches_fd():
     """Under a time-varying (diurnal-flow) influent the cross-interface gradient
     is still finite and matches central finite differences. The discrete adjoint
@@ -254,6 +258,7 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
 
 
 @pytest.mark.validation
+@pytest.mark.heavy
 def test_stable_adjoint_gradient_finite_through_full_param_vector():
     """A full-parameter reverse gradient (the calibration case) is finite, where
     the default through-the-solve adjoint is not without a step cap."""
@@ -273,6 +278,7 @@ def test_stable_adjoint_gradient_finite_through_full_param_vector():
 
 
 @pytest.mark.validation
+@pytest.mark.heavy
 def test_stable_adjoint_solve_is_jittable():
     """The stable-adjoint plant solve can be wrapped in ``jax.jit``: its ``atol``
     no longer forces concretization. The jitted value and gradient match the
@@ -306,6 +312,7 @@ def test_stable_adjoint_solve_is_jittable():
 
 
 @pytest.mark.validation
+@pytest.mark.heavy
 def test_stable_adjoint_forward_solve_is_cached():
     """A repeat *forward* stable-adjoint solve reuses the compiled closure (the
     parameter-sweep case), while a traced call (a gradient through the solve)

@@ -48,5 +48,6 @@ include = ["aquakin*"]
 markers = [
     "validation: scientific validation tests against published data (slow)",
     "slow: multi-minute stiff/plant integration tests; excluded from the fast PR gate, run in full on merge to main",
+    "heavy: peak-memory-heavy validation tests (whole-plant stable-adjoint gradients, ~4-5.5 GB each); isolated into their own CI job so their accumulated XLA cache does not OOM a shared validation shard",
 ]
 testpaths = ["tests"]
