@@ -277,9 +277,21 @@ jobs:
         run: |
           group=$(( ${{ github.run_number }} % 18 + 1 ))
           echo "Pre-merge smoke: slow shard ${group}/18 (rotates by run number)"
+          set +e
           pytest -m "slow and not validation" -q -n 1 \
             --splits 18 --group "${group}" \
             --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0
+          ec=$?
+          # Exit code 5 = pytest collected no tests. The duration-based-chunks
+          # split front-loads the groups, so a trailing group (e.g. 18/18) can be
+          # empty; the rotating sampler then lands on it. That is benign for a
+          # smoke check -- consecutive runs rotate to non-empty groups -- so treat
+          # "no tests collected" as a pass. Any real test failure still fails.
+          if [ "$ec" -eq 5 ]; then
+            echo "Empty rotating shard (no tests in group ${group}); treating as pass."
+            exit 0
+          fi
+          exit $ec
 
   # ---- Weekly refresh of .test_durations (schedule only) ----------------------
   # The slow (6) and validation (4) jobs pytest-split-shard by `.test_durations`;
