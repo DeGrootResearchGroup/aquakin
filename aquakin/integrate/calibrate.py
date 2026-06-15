@@ -216,6 +216,17 @@ def _laplace_covariance(H, ridge: float, eig_keep: float):
     kept_eigvecs : np.ndarray, shape (d, m)
         The corresponding eigenvectors (columns).
     """
+    # The threshold is a *fraction* of the largest eigenvalue, so it only keeps
+    # the best-identified direction when eig_keep < 1 (then w_max > thr). At
+    # eig_keep >= 1 every direction would be dropped, leaving an all-zero
+    # covariance -- reject it with a clear message rather than returning that
+    # silently.
+    if not (0.0 <= eig_keep < 1.0):
+        raise ValueError(
+            f"eig_keep must be in [0, 1) (it is the relative eigenvalue floor, "
+            f"a fraction of the largest eigenvalue); got {eig_keep}. A value "
+            f">= 1 would drop every direction and give a degenerate covariance."
+        )
     H = np.asarray(H, dtype=float)
     H = 0.5 * (H + H.T)
     w, V = np.linalg.eigh(H + ridge * np.eye(H.shape[0]))
@@ -227,8 +238,8 @@ def _laplace_covariance(H, ridge: float, eig_keep: float):
             "the model output is finite)."
         )
     # Relative eigen-truncation: keep directions whose ridged eigenvalue exceeds
-    # eig_keep * the largest. ridge > 0 makes w_max > 0, so the best-identified
-    # direction is always kept and `keep` is never empty.
+    # eig_keep * the largest. With eig_keep < 1 (enforced above) and w_max > 0,
+    # the best-identified direction is always kept and `keep` is never empty.
     thr = eig_keep * w_max
     keep = w > thr
     wk = w[keep]
@@ -586,7 +597,8 @@ def calibrate(
         :meth:`CalibrationResult.predictive_band`, so the two regularise
         identically. A well-identified fit keeps every direction (the covariance
         then equals ``inv(H + ridge)``); the truncation only matters when the
-        Hessian is near-degenerate.
+        Hessian is near-degenerate. Must be in ``[0, 1)`` (it is a fraction of
+        the largest eigenvalue); a value ``>= 1`` would drop every direction.
     laplace_fd_step : float
         Relative finite-difference step for the Hessian rows (``"fd"`` only).
     laplace_dtmax : float, optional

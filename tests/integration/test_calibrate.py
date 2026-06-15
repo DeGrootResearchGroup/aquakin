@@ -489,6 +489,18 @@ def test_laplace_covariance_relative_to_largest_for_small_scale_hessian():
     assert float(np.max(s)) == pytest.approx(1.0 / 9.1e-3, rel=1e-3)
 
 
+@pytest.mark.parametrize("eig_keep", [1.0, 1.5, -0.1])
+def test_laplace_covariance_rejects_out_of_range_eig_keep(eig_keep):
+    """eig_keep is a fraction of the largest eigenvalue, so it must be in [0, 1).
+    A value >= 1 would drop every direction and (silently) return an all-zero
+    covariance -- it must raise a clear error instead."""
+    from aquakin.integrate.calibrate import _laplace_covariance
+
+    H = np.diag([10.0, 20.0])
+    with pytest.raises(ValueError, match=r"eig_keep must be in \[0, 1\)"):
+        _laplace_covariance(H, ridge=1e-6, eig_keep=eig_keep)
+
+
 def test_calibrate_nll_small_scale_observable_gives_finite_posterior(setup):
     """End-to-end: a NLL+Laplace fit of a tiny-magnitude observable yields a
     finite, positive-variance posterior rather than a false 'degenerate' error
