@@ -313,6 +313,15 @@ The shipped networks currently are:
   fixed condition here, but a `speciation:` block can instead supply a
   charge-balance pH the precipitation reads (the two derived functions compose).
   See *Mineral precipitation / state-derived saturation* below.
+- `precipitation_metal_phosphate` — **chemical phosphorus removal** by ferric /
+  aluminium dosing: the metals precipitate orthophosphate as the very insoluble
+  FePO₄ / AlPO₄ while competing to form the hydroxides Fe(OH)₃ / Al(OH)₃ (the
+  `hydroxide` ion fraction, OH⁻ = Kw/[H⁺]). The hydroxide buffers the free metal,
+  giving a pH-dependent floor on the achievable phosphate (removal worsens at
+  higher pH). A **forward-simulation** demonstration: ferric/aluminium phosphates
+  are so insoluble (`SI ~ 14`) that the dose transient, while finite to solve, is
+  not differentiable by any sensitivity method — see *Mineral precipitation /
+  state-derived saturation* below.
 
 ### Khalil model-improvement sequence (JRN-055 reproduction log)
 
@@ -1371,11 +1380,14 @@ reads `{R_<name>}` in its rate and consumes the constituent ions / produces the
 solid through ordinary stoichiometry. An ion's `fraction` selects how its free
 activity is obtained: an acid/base system key — `carbonate`, `phosphate`,
 `ammonia`, `sulfide` (the species total times its de/protonated fraction at pH)
-— the special `proton` (H⁺, activity `10^-pH`, `species` omitted), or omitted
-for a fully-free cation (the species total taken as the free ion).
-`VALID_PRECIP_FRACTIONS` in `core/precipitation.py` is the single source of
-truth, imported by the Pydantic schema so an unknown `fraction` (or an
-undeclared `species`) is a load-time error.
+— a pH/water special (`proton`, H⁺ activity `10^-pH`; or `hydroxide`, OH⁻
+activity `Kw/[H+]`, both with `species` omitted), or omitted for a fully-free
+cation (the species total taken as the free ion). The `hydroxide` fraction is
+what lets metal hydroxides (Fe(OH)₃, Al(OH)₃) and hydroxide-bearing minerals
+(hydroxylapatite) be declared. `VALID_PRECIP_FRACTIONS` in
+`core/precipitation.py` is the single source of truth (with `_PH_SPECIALS` the
+`species`-optional subset), imported by the Pydantic schema so an unknown
+`fraction` (or an undeclared `species`) is a load-time error.
 
 **Composition with speciation.** `precipitation:` is wired in a `_compile_precipitation`
 stage in `core/network.py` *after* `_compile_speciation`, so when both blocks
@@ -1393,6 +1405,29 @@ solids so the precipitation stoichiometry is exact (one mole of mineral consumes
 one mole of each constituent ion), with the per-ion `molar_mass: 1000`
 converting mol/m³ → the mol/L the IAP/Ksp use. `clip_negative_states: true`
 protects the supersaturation term from a transiently-negative ion state.
+
+**Chemical-P removal network + AD limitation at extreme supersaturation.**
+[`precipitation_metal_phosphate.yaml`](aquakin/networks/precipitation_metal_phosphate.yaml)
+is the second worked network: ferric / aluminium dosing precipitates
+orthophosphate as the very insoluble phosphates FePO₄ / AlPO₄ (after the
+plant-wide P/S/Fe extension of Flores-Alsina et al. 2016), while the same dosed
+metal competes to form the hydroxides Fe(OH)₃ / Al(OH)₃ (the `hydroxide`
+fraction). The metal hydroxide buffers the free metal, so it sets a
+**pH-dependent floor** on the achievable phosphate — chemical-P removal worsens
+at higher pH (more OH⁻) and needs a metal dose in excess of stoichiometric. Its
+forward behaviour is exact (P removal, the pH trend, machine-precision Fe/Al/P
+conservation), but the metal phosphates are so insoluble that a far-from-
+equilibrium dose sits at `SI ~ 14`, where the SI-driven rate Jacobian is `~1e13`:
+the L-stable `Kvaerno5` damps this so the **forward solve is fine**, but **no
+sensitivity method survives the initial transient** (reverse adjoint, even with a
+`dtmax` cap; and the cap-free `forward_sensitivity`/`DirectAdjoint` — all return
+non-finite). This is the extreme end of the documented stiff-AD spectrum and is
+intrinsic to the chemistry (lowering `order` 2→1 cuts the Jacobian ~7 decades and
+still fails). So **this network is a forward-simulation demonstration**;
+`precipitation_struvite_calcite` (modest `SI ~ 1–3`) remains the differentiable /
+calibratable precipitation example. The `hydroxide` *engine* path is itself
+AD-clean at moderate supersaturation (verified on a mild `M(OH)₂` toy in the
+test suite — `jax.grad` through the solve is finite).
 
 ---
 
@@ -1489,7 +1524,8 @@ aquakin/
 │   │   ├── wats_sewer_khalil_paper_balanced_biofilm.yaml  # layered-biofilm variant ({A_V} areal)
 │   │   ├── wats_sewer_khalil_paper_balanced_biofilm_biomass.yaml  # per-layer-biomass biofilm (heterotroph)
 │   │   ├── wats_sewer_khalil_paper_balanced_biofilm_multispecies.yaml  # + X_SRB/X_MA/X_SOB groups
-│   │   └── precipitation_struvite_calcite.yaml  # mineral precipitation (Kazadi Mbamba 2015): struvite + calcite
+│   │   ├── precipitation_struvite_calcite.yaml  # mineral precipitation (Kazadi Mbamba 2015): struvite + calcite
+│   │   └── precipitation_metal_phosphate.yaml   # iron/Al chemical-P removal (FePO4/AlPO4 + Fe(OH)3/Al(OH)3 hydroxide fraction)
 │   │
 │   │   # wats_sewer_khalil_paper (paper) is the paper-active core augmented with the
 │   │   #   dormant full-WATS aerobic pieces by networks/_make_khalil_paper.py;

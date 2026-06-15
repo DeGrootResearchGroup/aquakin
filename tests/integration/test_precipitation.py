@@ -212,3 +212,171 @@ def test_schema_rejects_undeclared_species():
     """)
     with pytest.raises(Exception, match="ghost|undeclared"):
         _load_bad(block)
+
+
+# --- metal-phosphate chemical-P removal + the hydroxide ion fraction ----------
+# The shipped precipitation_metal_phosphate network: ferric / aluminium dosing
+# precipitates orthophosphate as FePO4 / AlPO4, while the same metal competes to
+# form the hydroxides Fe(OH)3 / Al(OH)3 (the new "hydroxide" ion fraction, OH-
+# activity = Kw/[H+]). Ferric (Fe3+) is the dosed metal by default.
+#
+# NOTE on AD: ferric/aluminium phosphates are so insoluble that a far-from-
+# equilibrium dose sits at SI ~ 14, where the SI-driven rate Jacobian is ~1e13.
+# The L-stable solver damps this so the forward solve is exact, but no current
+# sensitivity method (reverse adjoint, forward sensitivity) survives the initial
+# transient -- this network is a *forward-simulation* demonstration. The
+# hydroxide ion fraction itself is AD-clean at moderate supersaturation, which
+# the toy below verifies (this is what the new engine code path needs to prove).
+
+@pytest.fixture
+def metal():
+    return aquakin.load_network("precipitation_metal_phosphate")
+
+
+def _solve_metal(metal, t_end=3.0, n=7, T=293.15, pH=7.0, **C0):
+    cond = aquakin.SpatialConditions.uniform(T=T, pH=pH)
+    r = aquakin.BatchReactor(metal, cond)
+    C = metal.concentrations(C0) if C0 else metal.default_concentrations()
+    return r.solve(C, params=metal.default_parameters(),
+                   t_span=(0.0, t_end), t_eval=jnp.linspace(0.0, t_end, n))
+
+
+def test_metal_phosphate_structure(metal):
+    assert metal.n_species == 7 and metal.n_reactions == 4
+    assert set(metal.derived_fields) == {
+        "SI_FePO4", "R_FePO4", "SI_AlPO4", "R_AlPO4",
+        "SI_FeOH3", "R_FeOH3", "SI_AlOH3", "R_AlOH3"}
+    # Aluminium is off by default; ferric is the dosed metal.
+    assert float(metal.concentrations({})[metal.species_index["S_Al"]]) == 0.0
+
+
+def test_ferric_removes_phosphate_with_hydroxide_competition(metal):
+    # The default ferric dose removes phosphate as FePO4, with the excess iron
+    # going to Fe(OH)3; iron and phosphorus are conserved exactly.
+    sol = _solve_metal(metal, pH=7.0)
+    s = lambda n: np.asarray(sol.C_named(n))
+    assert s("S_PO4")[-1] < s("S_PO4")[0]          # phosphate removed
+    assert s("X_FePO4")[-1] > 0.1                  # iron phosphate is a real sink
+    assert s("X_FeOH3")[-1] > 0.1                  # excess ferric -> hydroxide
+    fe = s("S_Fe3") + s("X_FePO4") + s("X_FeOH3")
+    p = s("S_PO4") + s("X_FePO4") + s("X_AlPO4")
+    assert np.allclose(fe, fe[0], rtol=1e-5), "Fe not conserved"
+    assert np.allclose(p, p[0], rtol=1e-5), "P not conserved"
+
+
+def test_chemical_p_removal_worsens_at_higher_pH(metal):
+    # The metal hydroxide buffers the free metal, setting a pH-dependent floor on
+    # the achievable phosphate: more OH- at higher pH -> less P removal.
+    res = [float(_solve_metal(metal, pH=pH).C_named("S_PO4")[-1])
+           for pH in (6.5, 7.0, 7.5)]
+    assert res[0] < res[1] < res[2], f"residual P should rise with pH: {res}"
+
+
+def test_aluminium_dosing_removes_phosphate(metal):
+    # Dose aluminium instead of iron: AlPO4 forms and aluminium / phosphorus are
+    # conserved (exercises the AlPO4 / Al(OH)3 minerals).
+    sol = _solve_metal(metal, pH=6.5, S_Fe3=0.0, S_Al=2.0, S_PO4=2.0)
+    s = lambda n: np.asarray(sol.C_named(n))
+    assert s("S_PO4")[-1] < 0.5 * s("S_PO4")[0]    # phosphate removed
+    assert s("X_AlPO4")[-1] > 0.1
+    al = s("S_Al") + s("X_AlPO4") + s("X_AlOH3")
+    assert np.allclose(al, al[0], rtol=1e-5), "Al not conserved"
+
+
+def test_metal_phosphate_forward_solve_is_finite(metal):
+    # The far-from-equilibrium dose is extremely stiff (SI ~ 14); the L-stable
+    # solver still integrates it to a finite trajectory.
+    sol = _solve_metal(metal, pH=7.0)
+    assert np.all(np.isfinite(sol.C))
+
+
+# The hydroxide ion fraction at moderate supersaturation: a metal hydroxide
+# M(OH)2 that precipitates as pH rises, with a finite gradient through solve.
+_HYDROXIDE_TOY_YAML = textwrap.dedent("""
+network: {name: hydroxide_toy, version: "1.0", description: "x"}
+species:
+  - {name: S_M,    default_concentration: 1.0,  units: "mol/m3"}
+  - {name: X_MOH2, default_concentration: 0.02, units: "mol/m3"}
+conditions:
+  - {name: T,  default: 298.15}
+  - {name: pH, default: 9.0}
+clip_negative_states: true
+precipitation:
+  pH_field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  minerals:
+    - {name: MOH2, pKsp: 15.0, order: 1, ions: [
+        {species: S_M, molar_mass: 1000, count: 1, charge: 2},
+        {count: 2, charge: 1, fraction: hydroxide}]}
+parameters: {k_MOH2: {value: 5.0}}
+reactions:
+  - {name: MOH2_p, rate: "k_MOH2 * [X_MOH2] * {R_MOH2}",
+     stoichiometry: {S_M: -1.0, X_MOH2: 1.0}}
+""")
+
+
+def _load_toy():
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        f.write(_HYDROXIDE_TOY_YAML)
+        path = f.name
+    try:
+        return aquakin.load_network_from_file(path)
+    finally:
+        os.unlink(path)
+
+
+def test_hydroxide_fraction_omits_species_and_precipitates():
+    # The OH- ion declares no 'species' (its activity is Kw/[H+]); the mineral
+    # precipitates and metal is conserved exactly.
+    net = _load_toy()
+    assert "SI_MOH2" in net.derived_fields
+    r = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(T=298.15, pH=9.0))
+    C0 = net.default_concentrations()
+    sol = r.solve(C0, params=net.default_parameters(),
+                  t_span=(0.0, 3.0), t_eval=jnp.linspace(0.0, 3.0, 5))
+    s = lambda n: np.asarray(sol.C_named(n))
+    assert s("S_M")[-1] < 0.1 * s("S_M")[0]        # metal precipitated out
+    tot = s("S_M") + s("X_MOH2")
+    assert np.allclose(tot, tot[0], rtol=1e-5)
+
+
+def test_hydroxide_precipitation_increases_with_pH():
+    # OH- activity = Kw/[H+], so a higher pH raises the hydroxide saturation
+    # index and removes more metal.
+    net = _load_toy()
+    C0 = net.default_concentrations()
+    def residual(pH):
+        r = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(T=298.15, pH=pH))
+        return float(r.solve(C0, params=net.default_parameters(),
+                             t_span=(0.0, 3.0), t_eval=jnp.linspace(0.0, 3.0, 3)
+                             ).C_named("S_M")[-1])
+    assert residual(8.0) > residual(9.0) > residual(10.0)
+
+
+def test_hydroxide_fraction_grad_is_finite():
+    # The new ion fraction is AD-clean: jax.grad flows through the solve.
+    net = _load_toy()
+    r = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(T=298.15, pH=9.0))
+    C0 = net.default_concentrations()
+
+    def loss(p):
+        sol = r.solve(C0, params=p, t_span=(0.0, 3.0),
+                      t_eval=jnp.linspace(0.0, 3.0, 5))
+        return jnp.sum(sol.C_named("X_MOH2"))
+
+    g = jax.grad(loss)(net.default_parameters())
+    assert jnp.all(jnp.isfinite(g))
+    assert float(g[net.param_index["k_MOH2"]]) != 0.0
+
+
+def test_schema_hydroxide_ion_may_omit_species():
+    # The 'hydroxide' fraction (like 'proton') needs no 'species'.
+    block = textwrap.dedent("""
+    precipitation:
+      minerals:
+        - {name: m, pKsp: 8.0, order: 1, ions: [
+            {species: S_Ca, molar_mass: 1000, count: 1, charge: 2},
+            {count: 2, charge: 1, fraction: hydroxide}]}
+    """)
+    _load_bad(block)   # loads without error
