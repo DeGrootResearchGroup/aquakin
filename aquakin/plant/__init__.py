@@ -13,6 +13,7 @@ target — see :mod:`aquakin.plant.bsm.bsm1`.
 from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
 from aquakin.plant.control import PIController
 from aquakin.plant.cstr import Aeration, CSTRUnit, oxygen_saturation
+from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.delay import HydraulicDelayUnit
 from aquakin.plant.ifas import IFASUnit, MBBRUnit
 from aquakin.plant.design import (
@@ -92,6 +93,8 @@ __all__ = [
     "CSTRUnit",
     "IFASUnit",
     "MBBRUnit",
+    "FlowParameterized",
+    "FlowSetpoint",
     "ComponentBalance",
     "MassBalance",
     "mass_balance",

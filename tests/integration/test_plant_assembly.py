@@ -756,11 +756,18 @@ def _bsm2_no_solve():
 def test_plant_parameter_names_are_network_prefixed():
     plant, asm1, adm1 = _bsm2_no_solve()
     names = plant.parameter_names()
-    assert len(names) == asm1.n_params + adm1.n_params
-    assert "asm1.muH" in names           # ASM1 water line
-    assert "adm1.k_m_ac" in names        # ADM1 digester
-    # No bare names; every key carries its network prefix.
-    assert all("." in n and n.split(".")[0] in ("asm1", "adm1") for n in names)
+    # The kinetic parameters: one block per network, network-prefixed.
+    kinetic = [n for n in names if n.split(".")[0] in ("asm1", "adm1")]
+    assert len(kinetic) == asm1.n_params + adm1.n_params
+    assert "asm1.muH" in names            # ASM1 water line
+    assert "adm1.k_m_ac" in names         # ADM1 digester
+    # No bare names; every key carries a prefix (network for kinetic params,
+    # unit for the appended flow setpoints).
+    assert all("." in n for n in names)
+    # Flow setpoints are addressed "<unit>.<setpoint>" -- the differentiable
+    # design-variable knobs (recycle / wastage pumps, clarifier underflow).
+    flow = [n for n in names if n.split(".")[0] not in ("asm1", "adm1")]
+    assert flow and all(n.split(".")[0] in plant.units for n in flow)
 
 
 def test_plant_parameter_index_matches_block_offset():

@@ -152,6 +152,30 @@ def test_bsm1_steady_state_differentiable_wrt_influent_load():
 
 
 @pytest.mark.slow
+def test_bsm1_steady_state_differentiable_wrt_recycle_flow():
+    # The SRT / recycle design knob: the steady state is differentiable w.r.t. a
+    # flow setpoint (the RAS pump flow), now a first-class plant parameter
+    # addressed "<unit>.<setpoint>". Check d(effluent ammonia)/d(RAS flow) vs FD.
+    plant, asm1, y0 = _bsm1()
+    p = plant.default_parameters()
+    ras = plant.parameter_index("underflow_split.ras")
+    assert "clarifier.underflow_Q" in plant.parameter_names()   # clarifier knob too
+    start, _ = plant._state_layout["tank5"]
+    eff = start + asm1.species_index["SNH"]
+
+    def eff_snh(params):
+        return plant.steady_state(params, y0=y0, tol=1e-9).state[eff]
+
+    g = jax.grad(eff_snh)(p)
+    assert bool(jnp.all(jnp.isfinite(g)))
+    h = 1e-3 * float(p[ras])
+    fd = (float(eff_snh(p.at[ras].add(h))) - float(eff_snh(p.at[ras].add(-h)))) / (2 * h)
+    assert abs(float(g[ras]) - fd) <= 1e-2 * abs(fd) + 1e-6
+    # more RAS recycle retains more biomass -> lower effluent ammonia
+    assert float(g[ras]) < 0.0
+
+
+@pytest.mark.slow
 def test_bsm1_steady_state_falls_back_to_forward():
     # If PTC is starved of iterations it falls back to the forward solve.
     plant, _asm1, y0 = _bsm1()

@@ -78,6 +78,10 @@ class ParameterLayout:
     network_param_blocks: dict[str, tuple[int, int]] = field(default_factory=dict)
     # (start_index, length) per kinetic network, keyed by network.name.
     # All units sharing a network see the same block.
+    # (start_index, length) per unit that carries differentiable flow setpoints
+    # (RAS / recycle / wastage pumps, clarifier underflow, ...), keyed by unit
+    # name. Appended after the kinetic blocks, so kinetic indices are unchanged.
+    unit_flow_blocks: dict[str, tuple[int, int]] = field(default_factory=dict)
     total_size: int = 0
 
 
@@ -1101,19 +1105,73 @@ class Plant:
             net_index[net.name] = i
             cursor += net.n_params
 
+        # Flow-setpoint blocks: one per unit carrying differentiable flow
+        # setpoints, appended after the kinetic blocks (so kinetic indices are
+        # unchanged). Each unit's setpoint defaults seed these slots; the unit
+        # reads the live values from the tail of its ``params_unit`` slice.
+        flow_blocks: dict[str, tuple[int, int]] = {}
+        for name in self._unit_order:
+            defaults = self._unit_flow_defaults(self.units[name])
+            if defaults:
+                flow_blocks[name] = (cursor, len(defaults))
+                cursor += len(defaults)
+
         self._network_param_index = net_index
         self._parameter_layout = ParameterLayout(
             network_param_blocks=blocks,
+            unit_flow_blocks=flow_blocks,
             total_size=cursor,
         )
         return self._parameter_layout
 
+    @staticmethod
+    def _unit_flow_defaults(unit) -> list[float]:
+        """A flow-bearing unit's ordered setpoint defaults (``[]`` otherwise)."""
+        fn = getattr(unit, "flow_param_defaults", None)
+        return list(fn()) if fn is not None else []
+
+    def _kinetic_param_size(self) -> int:
+        """Total length of the kinetic (network) parameter blocks."""
+        layout = self._parameter_layout
+        return sum(size for _, size in layout.network_param_blocks.values())
+
+    def _coerce_params(self, params: jnp.ndarray) -> jnp.ndarray:
+        """Accept a full parameter vector, or a kinetic-only one (padded).
+
+        The full vector is ``[kinetic networks | flow setpoints]``. A vector of
+        only the kinetic length -- e.g. one built by concatenating the network
+        defaults, the convention before flow setpoints became parameters -- is
+        padded with the default flow setpoints, so existing parameter vectors
+        keep working unchanged.
+        """
+        self._build_parameter_layout()
+        params = jnp.asarray(params)
+        total = self._parameter_layout.total_size
+        kinetic = self._kinetic_param_size()
+        if params.shape == (total,):
+            return params
+        if params.shape == (kinetic,) and total > kinetic:
+            flow_defaults = self.default_parameters()[kinetic:]
+            return jnp.concatenate([params, flow_defaults])
+        raise ValueError(
+            f"params has shape {params.shape}, expected ({total},) "
+            f"(or the kinetic-only ({kinetic},), padded with flow setpoints)."
+        )
+
     def default_parameters(self) -> jnp.ndarray:
-        """Concatenated default parameters across all kinetic networks."""
+        """Concatenated default parameters: kinetic networks then flow setpoints."""
         nets = self._ordered_networks()
-        if not nets:
-            return jnp.zeros((0,))
-        return jnp.concatenate([net.default_parameters() for net in nets])
+        kinetic = (
+            jnp.concatenate([net.default_parameters() for net in nets])
+            if nets else jnp.zeros((0,))
+        )
+        flow_defaults: list[float] = []
+        for name in self._unit_order:
+            flow_defaults.extend(self._unit_flow_defaults(self.units[name]))
+        if flow_defaults:
+            return jnp.concatenate(
+                [kinetic, jnp.asarray(flow_defaults, dtype=float)])
+        return kinetic
 
     def _plant_param_index(self) -> dict[str, int]:
         """Map ``"<network>.<param>"`` -> index in the flat plant parameter vector.
@@ -1130,6 +1188,12 @@ class Plant:
             start, _ = blocks[net.name]
             for pname, local in net.param_index.items():
                 index[f"{net.name}.{pname}"] = start + local
+        # Flow setpoints are addressed ``"<unit>.<setpoint>"`` (e.g.
+        # ``"underflow_split.ras"``), the differentiable design-variable knobs.
+        for name, (fstart, _) in self._parameter_layout.unit_flow_blocks.items():
+            local_names = self.units[name].flow_param_local_names()
+            for j, local_name in enumerate(local_names):
+                index[f"{name}.{local_name}"] = fstart + j
         return index
 
     def parameter_names(self) -> list[str]:
@@ -1300,13 +1364,31 @@ class Plant:
     def _params_for_unit(
         self, unit_name: str, params_full: jnp.ndarray
     ) -> jnp.ndarray:
-        """Slice out the kinetic parameters for one unit's network."""
+        """Slice out one unit's parameters: its kinetic network block, then (for
+        a flow-bearing unit) its appended flow-setpoint block."""
         unit = self.units[unit_name]
         net = getattr(unit, "network", None)
         if net is None:
-            return jnp.zeros((0,))
-        start, size = self._parameter_layout.network_param_blocks[net.name]
-        return jax.lax.dynamic_slice(params_full, (start,), (size,))
+            kinetic = jnp.zeros((0,))
+        else:
+            start, size = self._parameter_layout.network_param_blocks[net.name]
+            kinetic = jax.lax.dynamic_slice(params_full, (start,), (size,))
+        flow_block = self._parameter_layout.unit_flow_blocks.get(unit_name)
+        if flow_block is None:
+            return kinetic
+        fstart, fsize = flow_block
+        # Read the unit's flow setpoints from its block -- unless the parameter
+        # vector is the kinetic-only length (the pre-flow convention, or a
+        # results-level reconstruction passing the same vector the run used): then
+        # fall back to the unit's default setpoints (``dynamic_slice`` would
+        # otherwise silently clamp and read garbage). ``shape`` is static, so this
+        # branch is resolved at trace time.
+        if params_full.shape[0] >= fstart + fsize:
+            flow = jax.lax.dynamic_slice(params_full, (fstart,), (fsize,))
+        else:
+            flow = jnp.asarray(self._unit_flow_defaults(self.units[unit_name]),
+                               dtype=params_full.dtype)
+        return jnp.concatenate([kinetic, flow])
 
     def initial_state(
         self, overrides: Optional[dict[str, jnp.ndarray]] = None
@@ -1480,7 +1562,7 @@ class Plant:
         self._build_state_layout()
         self._build_parameter_layout()
         params_full = (
-            self.default_parameters() if params is None else jnp.asarray(params)
+            self.default_parameters() if params is None else self._coerce_params(params)
         )
         states = self._split_state(jnp.asarray(state_full))
         all_outputs, _ = self._resolve_streams(jnp.asarray(t), states, params_full)
@@ -1576,7 +1658,7 @@ class Plant:
         endpoint = resolved if resolved is not None else endpoint
         unit, port = self._parse_endpoint(endpoint, role="source")
         params_full = (
-            self.default_parameters() if params is None else jnp.asarray(params)
+            self.default_parameters() if params is None else self._coerce_params(params)
         )
         Q, C = self._cached_streams(solution, params_full)[(unit, port)]
         return StreamSeries(t=solution.t, Q=Q, C=C,
@@ -1752,7 +1834,7 @@ class Plant:
         self._build_state_layout()
         self._build_parameter_layout()
         params_full = (
-            self.default_parameters() if params is None else jnp.asarray(params)
+            self.default_parameters() if params is None else self._coerce_params(params)
         )
         return self._rhs(jnp.asarray(float(t)), jnp.asarray(state), params_full)
 
@@ -1846,7 +1928,7 @@ class Plant:
         self._build_state_layout()
         self._build_parameter_layout()
         params_full = (
-            self.default_parameters() if params is None else jnp.asarray(params)
+            self.default_parameters() if params is None else self._coerce_params(params)
         )
         states = self._split_state(jnp.asarray(state_full))
         all_outputs, streams = self._resolve_streams(
@@ -2346,12 +2428,7 @@ class Plant:
         if params is None:
             params = self.default_parameters()
         else:
-            params = jnp.asarray(params)
-            if params.shape != (layout.total_size,):
-                raise ValueError(
-                    f"params has shape {params.shape}, expected "
-                    f"({layout.total_size},)"
-                )
+            params = self._coerce_params(params)
         # Initial state: the per-unit defaults, or a caller-supplied warm start
         # (e.g. a previously-computed steady state -- the standard way to start a
         # dynamic-influent run, avoiding the stiff clean-start transient).
@@ -2761,8 +2838,8 @@ class Plant:
 
         self._build_state_layout()
         self._build_parameter_layout()
-        if params is None:
-            params = self.default_parameters()
+        params = (self.default_parameters() if params is None
+                  else self._coerce_params(params))
         y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
         t = jnp.asarray(float(influent_time))
 

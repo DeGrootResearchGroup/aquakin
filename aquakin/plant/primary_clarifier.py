@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant._constants import ASM1_SETTLING_SPECIES
+from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -34,7 +35,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 @dataclass
-class PrimaryClarifier:
+class PrimaryClarifier(FlowParameterized):
     """Otterpohl–Freund dynamic primary clarifier.
 
     Parameters
@@ -79,6 +80,12 @@ class PrimaryClarifier:
             if sp in self.network.species_index:
                 mask = mask.at[self.network.species_index[sp]].set(1.0)
         self._settle_mask = mask
+        # Primary-sludge fraction as a differentiable setpoint, read by both the
+        # flow rule and the material split.
+        self._setpoints = {"f_PS": FlowSetpoint(float(self.f_PS), 0)}
+
+    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+        return self._setpoints
 
     @property
     def state_size(self) -> int:
@@ -123,8 +130,9 @@ class PrimaryClarifier:
                 heat = heat + inputs[name].Q * inputs[name].T
             T_out = heat / (Q_in + 1e-12)
 
-        Qu = self.f_PS * Q_in
-        E = 1.0 / self.f_PS                       # thickening factor Q_in/Q_u
+        f_PS = self._setpoints["f_PS"].resolve(self._flow_params(params))
+        Qu = f_PS * Q_in
+        E = 1.0 / f_PS                            # thickening factor Q_in/Q_u
         n_x = self._removal_fraction(Q_in)
 
         # ff_i = fraction of species i that stays in the effluent. Solubles
@@ -145,7 +153,8 @@ class PrimaryClarifier:
         Q_in = jnp.zeros(())
         for name in self.input_port_names:
             Q_in = Q_in + input_flows[name]
-        Qu = self.f_PS * Q_in
+        f_PS = self._setpoints["f_PS"].resolve(self._flow_params(params))
+        Qu = f_PS * Q_in
         return {self.effluent_port: Q_in - Qu, self.sludge_port: Qu}
 
     def rhs(
