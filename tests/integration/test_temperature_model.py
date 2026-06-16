@@ -13,8 +13,10 @@ be the instantaneous flow-weighted inlet temperature. These tests pin:
   heat-balance fixed point (so it reproduces the algebraic steady temperature);
 - ``jax.grad`` flows through the temperature state.
 
-All checks use single RHS evaluations (``plant.derivative``) -- no stiff solve --
-so they run in the fast gate.
+Most checks use single RHS evaluations (``plant.derivative``) -- no stiff solve --
+so they run in the fast gate; one ``slow`` test runs an end-to-end integration to
+confirm the heat-balance *solve* (the grown state vector + the appended-block atol)
+converges to the same steady state as the algebraic-temperature plant.
 """
 
 import dataclasses
@@ -126,6 +128,38 @@ def test_constant_influent_temperature_is_the_fixed_point():
     d = plant.derivative(y0, params=bsm2_parameters(asm1, adm1))
     dT = d[ts:ts + tn]
     assert jnp.max(jnp.abs(dT)) < 1e-6      # influent T is the fixed point
+
+
+# ----- end-to-end solve (the backward-compat guarantee) --------------------
+
+@pytest.mark.slow
+def test_heatbalance_solve_reaches_algebraic_steady_state():
+    """An end-to-end stiff solve with the heat-balance temperature STATE converges
+    to the same steady state as the algebraic-temperature plant: the tank
+    temperature relaxes (from its 15 C seed) to the constant 10 C influent, and the
+    reactor concentrations then match the algebraic plant. This exercises the grown
+    state vector and the appended-block atol through a real integration, which the
+    single-RHS fixed-point checks cannot."""
+    asm1 = bsm2_asm1_network()
+    V, Q, T_in = 1500.0, 1000.0, 283.15           # 10 C influent, seed condition 15 C
+    span, t_eval = (0.0, 60.0), jnp.array([60.0])
+    alg, _ = _one_cstr_plant(asm1, volume=V, model=aquakin.AlgebraicTemperature(),
+                             T_in_K=T_in, Q=Q)
+    hb, _ = _one_cstr_plant(asm1, volume=V, model=aquakin.HeatBalanceTemperature(),
+                            T_in_K=T_in, Q=Q)
+    sol_alg = alg.solve(t_span=span, t_eval=t_eval)
+    sol_hb = hb.solve(t_span=span, t_eval=t_eval)
+    # the heat-balance temperature state relaxed to the influent temperature
+    ts, _ = hb._temperature_block
+    assert float(sol_hb.state[-1, ts]) == pytest.approx(T_in, abs=1e-3)
+    # and the reactor concentrations match the algebraic plant (same steady
+    # chemistry once T has settled -> no regression from the grown state vector)
+    n = asm1.n_species
+    s_alg = alg._state_layout["tank"][0]
+    s_hb = hb._state_layout["tank"][0]
+    C_alg = jnp.asarray(sol_alg.state[-1, s_alg:s_alg + n])
+    C_hb = jnp.asarray(sol_hb.state[-1, s_hb:s_hb + n])
+    assert jnp.allclose(C_alg, C_hb, rtol=1e-3, atol=1e-3)
 
 
 # ----- AD ------------------------------------------------------------------

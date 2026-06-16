@@ -164,6 +164,20 @@ def test_shared_dosing_controller_disagreement_raises(asm1):
         p._build_state_layout()
 
 
+def test_feedback_dose_sensor_must_be_a_reactor(asm1):
+    """A feedback sensor that is not a concentration-state reactor (here a
+    stateless mixer) is rejected at setup with a clear error, rather than failing
+    opaquely deep in the first solve (#353)."""
+    from aquakin.plant import MixerUnit
+    p = Plant("bad_sensor")
+    r = Reagent.from_species(asm1, SS=4e5)
+    p.add_unit(DosingUnit("carbon", r, setpoint=1.0, measured_species="SNO",
+                          sensor="mix", flow_max=10.0))
+    p.add_unit(MixerUnit("mix", ["a"], asm1))            # stateless: no concentration state
+    with pytest.raises(ValueError, match="not a concentration vector"):
+        p._build_state_layout()
+
+
 def test_controlled_dose_without_bus_raises(asm1):
     """A feedback dose's compute_outputs called without the signal bus raises,
     rather than silently dosing nothing (the plant always supplies the bus)."""

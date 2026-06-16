@@ -100,7 +100,7 @@ BSM2_AS_TEMPERATURE_K = 288.15  # K (15 °C) -- the BSM2 ASM1 reference temperat
 # corrections apply a small slowdown -- omitting it runs the line ~0.14 °C warm
 # and over-predicts nitrification by ~1.4 %, the difference between the bare
 # 15 °C rates and the benchmark steady state.
-BSM2_CONSTANT_INFLUENT_T = 288.00808  # K (14.85808 °C), constinfluent column T
+BSM2_CONSTANT_INFLUENT_T = 288.00808  # K (14.85808 °C): the benchmark steady-state influent temperature
 
 # Closed-loop dissolved-oxygen / kLa control (reginit_bsm2). A PI controller
 # senses SO in reactor 4 and manipulates its aeration kLa; reactors 3 and 5
