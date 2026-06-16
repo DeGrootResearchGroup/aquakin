@@ -28,7 +28,7 @@ import jax.numpy as jnp
 
 from aquakin.plant._constants import ASM1_SETTLING_SPECIES
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, mixed_temperature
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
@@ -123,12 +123,7 @@ class PrimaryClarifier(FlowParameterized):
         for name in self.input_port_names:
             Q_in = Q_in + inputs[name].Q
         # Flow-weighted inlet temperature, passed through to both outlets.
-        T_out = None
-        if all(inputs[n].T is not None for n in self.input_port_names):
-            heat = jnp.zeros(())
-            for name in self.input_port_names:
-                heat = heat + inputs[name].Q * inputs[name].T
-            T_out = heat / (Q_in + 1e-12)
+        T_out = mixed_temperature(inputs, self.input_port_names)
 
         f_PS = self._setpoints["f_PS"].resolve(self._flow_params(params))
         Qu = f_PS * Q_in

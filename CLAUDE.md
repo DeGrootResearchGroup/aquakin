@@ -2960,10 +2960,20 @@ reactor reads its (flow-weighted) inlet temperature and feeds it to the ASM1
 temperature corrections. `T=None` is the default and a static structural
 property — a temperature-agnostic influent leaves every stream `T=None` and the
 reactors fall back to their static condition, so existing plants are unchanged.
-(One subtlety the BSM2 reject loop forced out: `Plant._rhs` must seed the
-recycle back-edges with the seed stream's `T`, and `build_bsm2` seeds them with
-a nominal temperature, or the `all(inlet.T is not None)` mixer gate never
-ignites T around the loop.) For BSM2 the AS reactors run at 15 °C:
+The single heat-balance rule every multi-inlet unit (mixer, CSTR, clarifier,
+digester) uses is `streams.mixed_temperature(inputs, names)`: it flow-weights
+only the inlets that carry a temperature and *ignores* a `T=None` inlet rather
+than letting one collapse the whole mix to `None`. This is what lets a
+temperature-carrying influent propagate around a recycle loop whose back-edge is
+auto-seeded with a zero-flow, temperature-agnostic stream (the seed contributes
+nothing and is ignored); earlier the `all(inlet.T is not None)` gate meant one
+agnostic seed disabled temperature around the loop, so `build_bsm2` had to
+hand-seed its recycles with a nominal `T` (now redundant — kept only as an
+explicit warm start). The helper is also zero-flow-safe: if every
+temperature-carrying inlet is momentarily at zero flow it returns their mean
+rather than dividing by the flow epsilon (which would drive the result toward
+0 K and feed a garbage value into the Arrhenius correction). For BSM2 the AS
+reactors run at 15 °C:
 `bsm2_asm1_network()` re-references the ASM1 temperature corrections from 20 °C
 to 15 °C (keeping the BSM2 slopes), so with `bsm2_parameters` (the 15 °C values)
 the correction is unity at 15 °C — a constant-15 °C run reproduces the validated

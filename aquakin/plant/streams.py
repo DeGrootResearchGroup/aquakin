@@ -66,6 +66,56 @@ class Stream:
         return Stream(Q=self.Q, C=self.C, network=self.network, T=T)
 
 
+_EPS_Q = 1e-12  # guard the flow-weighted division when total inflow is ~zero
+
+
+def mixed_temperature(inputs: "dict[str, Stream]", names) -> "jnp.ndarray | None":
+    """Flow-weighted outlet temperature for a unit's inlet streams (a heat balance).
+
+    The single shared rule every multi-inlet unit (mixer, CSTR, clarifier,
+    digester) uses to combine inlet temperatures, so the convention cannot drift
+    between them.
+
+    Only the inlets that actually carry a temperature (``Stream.T is not None``)
+    are combined; an inlet with ``T is None`` -- a temperature-agnostic feed, or a
+    zero-flow recycle seed -- is **ignored**, not allowed to poison the result.
+    (A single ``None`` inlet used to force the whole mix to ``None``; for a recycle
+    loop seeded with a temperature-agnostic zero-flow stream that disabled
+    temperature propagation around the entire loop.) Returns ``None`` only when
+    *no* inlet carries a temperature, i.e. a fully temperature-agnostic mix.
+
+    Zero-flow-safe: the weighting divides by the carriers' total flow, but if that
+    is ~zero (every temperature-carrying inlet momentarily at zero flow) it falls
+    back to their plain mean instead of dividing by ~0, which would otherwise
+    collapse the temperature toward 0 K and feed a garbage value to any Arrhenius
+    correction downstream.
+
+    Parameters
+    ----------
+    inputs : dict[str, Stream]
+        The unit's inlet streams keyed by input-port name.
+    names : iterable of str
+        The input-port names to combine (the unit's ``input_port_names``).
+
+    Returns
+    -------
+    jnp.ndarray or None
+        The flow-weighted temperature (scalar), or ``None`` if no inlet carries
+        one. ``None``-ness is a static structural property (it depends only on
+        which inlets carry a temperature), so callers stay jit-safe.
+    """
+    carriers = [inputs[n] for n in names if inputs[n].T is not None]
+    if not carriers:
+        return None
+    Q_total = jnp.zeros(())
+    heat = jnp.zeros(())
+    for s in carriers:
+        Q_total = Q_total + s.Q
+        heat = heat + s.Q * s.T
+    mean_T = sum(s.T for s in carriers) / len(carriers)
+    return jnp.where(Q_total > _EPS_Q, heat / (Q_total + _EPS_Q), mean_T)
+
+
 @dataclass(frozen=True)
 class StreamSeries(_HasNamedSpecies):
     """A stream's flow and concentration trajectory over time.
