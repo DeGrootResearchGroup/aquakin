@@ -3553,6 +3553,20 @@ nor concentrating it in a few files makes the whole suite fast.
   tests are excluded, keeping the slice time predictable. It complements the
   fast-gate signature-contract test (`tests/unit/test_api_signatures.py`), which
   catches the *signature* sub-case deterministically; the smoke adds breadth.
+- **The `full-ci` label** runs the full merge suite (the `slow` **and**
+  `validation` jobs) on a PR *before* merge — the opt-in, pay-when-it-matters
+  pre-merge check. Apply it to a PR (the workflow listens for the `labeled`
+  event, so no fresh push is needed) for a **large or high-risk change** —
+  anything touching the plant assembly, a network's stoichiometry, the
+  integrators/adjoints, or the metric/mass-balance kernels — where the
+  fast-gate-plus-rotating-smoke coverage is not enough and you want the slow
+  whole-plant solves and published-data validation to run before it lands.
+  Without the label those jobs run only **after** merge to `main` (the
+  default), so a regression they catch surfaces post-merge and is reverted from
+  there; the label moves that signal earlier at the cost of the runtime. The
+  bare `labeled` event deliberately does **not** re-run the fast gate / smoke
+  (they already ran on the latest commit) and does not cancel an in-progress
+  run, so labelling never disturbs the required checks.
 
 **Branch protection:** the required status checks must be the fast-gate jobs
 (`fast tests (py3.11)` / `(py3.12)`) — **not** `slow`/`validation`, which do not
