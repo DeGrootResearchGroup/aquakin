@@ -2507,6 +2507,19 @@ class Plant:
         if t_eval is not None:
             t_eval = jnp.asarray(t_eval)
 
+        # Auto-collect located phase-transition events that units declare (an
+        # SBRUnit's cycle boundaries), merged with any user-supplied events, so
+        # the integrator lands exactly on every phase switch without the caller
+        # hand-listing them. cycle_events takes the native-time span.
+        unit_events: list[Event] = []
+        for unit in self.units.values():
+            collect = getattr(unit, "cycle_events", None)
+            if collect is not None:
+                unit_events.extend(collect(t0, t1))
+        if unit_events:
+            events = (list(events) + unit_events) if events is not None \
+                else unit_events
+
         if events is not None:
             if event is not None:
                 raise ValueError(
