@@ -2979,8 +2979,12 @@ to 15 °C (keeping the BSM2 slopes), so with `bsm2_parameters` (the 15 °C value
 the correction is unity at 15 °C — a constant-15 °C run reproduces the validated
 steady state exactly — and a temperature-carrying influent drives it away:
 colder water nitrifies more slowly (higher residual ammonia), warmer faster
-(`tests/integration/test_bsm2_seasonal.py`). Use `bsm2_asm1_network()` for
-**both** `build_bsm2` and the influent so their network identities match. The
+(`tests/integration/test_bsm2_seasonal.py`). `build_bsm2()` now **defaults** its
+ASM1 network to `bsm2_asm1_network()` (the 15 °C reference), so the out-of-the-box
+plant is the BSM2 calibration; pass the plain `load_network("asm1")` explicitly to
+get the 20 °C reference. When you build the influent yourself, reuse the **same
+network instance** for both `build_bsm2` and the influent so their identities match
+(a clear error fires otherwise). The
 synthesised BSM2 influent CSVs carry a time-varying temperature column (`T`, in
 °C; a shoulder-season ~12→18 °C ramp + diurnal ripple), which
 `load_bsm2_influent` returns as `InfluentSeries.T` in **Kelvin** — so a dynamic

@@ -52,6 +52,24 @@ def test_set_temperature_leaves_heated_digester_untouched():
     assert plant.units["digester"].conditions["T"] == dig_T  # unchanged (heated)
 
 
+def test_build_bsm2_defaults_to_15C_bsm2_network():
+    """build_bsm2() with no asm1_network defaults to the BSM2-configured (15 degC)
+    network, so a temperature-carrying influent is referenced to 15 degC -- not
+    the plain 20 degC asm1, which would apply a spurious slowdown on top of the
+    already-15 degC bsm2_parameters values. Passing the plain network still gives
+    the 20 degC reference."""
+    from aquakin.plant.bsm.bsm2 import BSM2_AS_TEMPERATURE_K
+
+    default = build_bsm2()
+    tank = default.units["tank1"]
+    assert tank.conditions["T"] == pytest.approx(BSM2_AS_TEMPERATURE_K)   # 288.15
+    ref_Ts = [ref for (_i, _ln, ref, _c) in tank.network.temperature_corrections]
+    assert ref_Ts and all(r == pytest.approx(BSM2_AS_TEMPERATURE_K) for r in ref_Ts)
+
+    plain = build_bsm2(asm1_network=aquakin.load_network("asm1"))
+    assert plain.units["tank1"].conditions["T"] == pytest.approx(293.15)  # 20 degC
+
+
 def test_set_temperature_explicit_units(asm1):
     plant = build_bsm1(asm1)
     plant.set_temperature(14.0, units=["tank1", "tank2"])
