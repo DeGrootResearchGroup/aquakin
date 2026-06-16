@@ -224,9 +224,16 @@ jobs:
         # memory-heavy in the repo (~4-5.5 GB each); even two concurrent OOM-kill
         # the runner. pytest-split partitions the marked set across the 4 shards
         # by recorded duration (`.test_durations`), so this shard runs only its
-        # slice in a fresh process -- bounding the accumulated memory.
+        # slice in a fresh process -- bounding the accumulated memory. The
+        # `heavy` validation tests (the whole-plant stable-adjoint gradients) are
+        # EXCLUDED from CI entirely -- a single one of them peaks near the 16 GB
+        # runner and even two in one process OOM it, with no free-runner config
+        # that fits; they are run locally via `pytest -m "validation and heavy"`.
+        # The stable-adjoint gradient path is still smoke-tested in the fast gate
+        # by the small single-CSTR `test_stable_adjoint_plant_gradient_matches_
+        # jax_adjoint_and_fd`.
         run: >-
-          pytest -m validation -q -n 1
+          pytest -m "validation and not heavy" -q -n 1
           --splits 4 --group ${{ matrix.group }}
           --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0
 
@@ -332,8 +339,11 @@ jobs:
           pip install -e ".[test]"
 
       - name: Record this shard's durations
+        # Exclude `heavy`: those whole-plant stable-adjoint tests do not run in
+        # CI (they OOM the 16 GB runner), so they need no recorded durations, and
+        # timing them here would OOM this job too.
         run: >-
-          pytest -m "slow or validation" -q -n 1
+          pytest -m "(slow or validation) and not heavy" -q -n 1
           --splits 8 --group ${{ matrix.group }}
           --store-durations --durations-path durations-${{ matrix.group }}.json
           --timeout=900 --timeout-method=thread --max-worker-restart=0
