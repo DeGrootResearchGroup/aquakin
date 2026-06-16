@@ -852,11 +852,18 @@ def _run_diffeqsolve(
     dtmax: float | None = None,
     event: "diffrax.Event | None" = None,
     progress_meter: "diffrax.AbstractProgressMeter | None" = None,
+    solver: "diffrax.AbstractSolver | None" = None,
 ):
     """Wrapper around the canonical Kvaerno5 + PIDController + adjoint setup.
 
     All reactors call this with their own ``rhs``. Adjusting the default
     solver, controller, or adjoint here changes behaviour for every reactor.
+
+    ``solver`` overrides the default ``Kvaerno5`` integrator with any diffrax
+    solver (``None`` keeps ``Kvaerno5``). A lower-order ESDIRK such as
+    ``Kvaerno3`` does less implicit linear algebra per step (fewer stages), which
+    can be faster on a large stiff system whose per-step cost is dominated by the
+    Jacobian factorisation, at the cost of taking more (cheaper) steps.
 
     ``dtmax`` caps the integrator step size. It is ``None`` (uncapped) by
     default, which is fastest for plain forward solves. For *reverse-mode*
@@ -875,7 +882,7 @@ def _run_diffeqsolve(
     the "Differentiating stiff networks" discussion in CLAUDE.md.
     """
     term = diffrax.ODETerm(rhs)
-    solver = diffrax.Kvaerno5()
+    solver = solver if solver is not None else diffrax.Kvaerno5()
     controller = diffrax.PIDController(rtol=rtol, atol=atol, dtmax=dtmax)
     return diffrax.diffeqsolve(
         term,

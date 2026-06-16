@@ -352,6 +352,25 @@ solve — across the ASM↔ADM interface and the recycle loops — where differe
 `plant.solve` carries the integration time in the state, so the explicit time
 dependence of a time-varying influent is captured exactly in the gradient.
 
+### Choosing the integrator (`solver=`)
+
+The forward solve defaults to `Kvaerno5` (a 7-stage L-stable ESDIRK). For a long
+stiff run — the multi-hundred-day dynamic BSM2 simulation — the per-step cost is
+dominated by the implicit Jacobian factorisation of the whole plant state, so a
+lower-order, fewer-stage ESDIRK can be faster. Pass any diffrax solver to
+override it:
+
+```python
+import diffrax
+sol = plant.solve(t_span=(0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
+                  solver=diffrax.Kvaerno3())   # ~13% faster on dynamic BSM2
+```
+
+`Kvaerno3` (4 stages) takes somewhat more, but cheaper, steps and matches
+`Kvaerno5` to ~5e-5 on the final state. `solver=` applies to the forward solve
+(it is rejected alongside `gradient="stable_adjoint"` or `events=`, which manage
+their own integrator).
+
 For reactor-level fits, the adjoint plumbing is hidden too: `aquakin.calibrate`
 and `aquakin.sensitivity` take `ad_mode="forward"|"reverse"` and build the right
 adjoint internally (no `diffrax` import), and `calibrate(check_finite=True)` (the

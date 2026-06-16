@@ -2676,6 +2676,26 @@ against an independent port of the reference BSM1 settler derivative in
 True)` selects it in the full plant (both clarifiers expose the same ports),
 and `Plant.solve` takes `max_steps`.
 
+**`Plant.solve(solver=...)` — override the integrator.** The forward solve
+defaults to `Kvaerno5` (the 7-stage L-stable ESDIRK every reactor uses); passing
+a diffrax solver instance overrides it (`None` keeps `Kvaerno5`). The motivating
+case is the long dynamic BSM2 run: profiling shows it is **stiffness-bound** —
+~750–1000 accepted steps/day, step count nearly invariant to `rtol` — with the
+per-step cost dominated by the implicit Jacobian factorisation of the 167-state
+system across the solver's stages. A lower-order ESDIRK (`diffrax.Kvaerno3`, 4
+stages) does less linear algebra per step and, despite taking ~10% more steps,
+runs **~13% faster** at preserved accuracy (final-state agreement ~5e-5 vs
+`Kvaerno5`). It is threaded through `_build_jitted_solve` → `_run_diffeqsolve`
+and keyed into the per-instance compiled-solve cache **by solver class** (a fresh
+stock instance shares the entry; a different class keys separately; a
+custom-*configured* instance of an otherwise-default class would share the
+default's entry — documented on the argument). It applies to the forward
+`jax_adjoint` path only: passing it with `gradient="stable_adjoint"` (its own
+ESDIRK discrete-adjoint integrator) or `events=` (the segmented solve) raises.
+(`solver=` is a forward-path knob, so like `dtmax=` it does not change the
+`gradient="auto"` routing.) Covered by
+`tests/integration/test_plant_solver_option.py`.
+
 **IFAS / MBBR unit ([`plant/ifas.py`](aquakin/plant/ifas.py)).** `IFASUnit`
 (alias `MBBRUnit`) places carrier-media biofilm in the flowsheet by **wiring the
 existing depth-resolved `BiofilmReactor`** (1-D diffusion–reaction over biofilm
