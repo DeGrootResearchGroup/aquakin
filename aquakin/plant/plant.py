@@ -1056,8 +1056,8 @@ class Plant:
         self._validate_control_signals()
 
     def _validate_control_signals(self) -> None:
-        """Cross-check the control-signal bus: every signal a unit *consumes*
-        must be *published* by some unit in the plant.
+        """Cross-check the control-signal bus: every published signal name is
+        unique, and every signal a unit *consumes* is *published* by some unit.
 
         A unit under closed-loop control (a ``CSTRUnit`` whose ``aeration`` has a
         DO setpoint) reads ``signals[name]`` in its ``rhs``; if no controller publishes
@@ -1065,6 +1065,13 @@ class Plant:
         ``KeyError`` from deep inside the first jitted solve. This runs at
         topology setup (before the RHS is traced) and raises a clear error
         naming the unit, the missing signal, and the available signals instead.
+
+        Two controllers publishing the *same* signal name are also rejected here:
+        the bus is gathered with ``dict.update`` (see :meth:`_compute_signals`),
+        so a duplicate would silently overwrite -- whichever unit runs later wins
+        and the other's output is discarded while its integral state keeps
+        winding. That is caught up front as a clear error rather than a silent
+        wrong closed loop.
 
         Conservative by design: a unit that publishes signals declares their
         names via ``signal_names``; if any signal *producer* (one exposing
@@ -1079,8 +1086,19 @@ class Plant:
         if unknown_publisher:
             return
         published: set[str] = set()
-        for unit in self.units.values():
-            published.update(getattr(unit, "signal_names", ()) or ())
+        publisher_of: dict[str, str] = {}
+        for name, unit in self.units.items():
+            for sig in getattr(unit, "signal_names", ()) or ():
+                if sig in publisher_of:
+                    raise ValueError(
+                        f"Control signal '{sig}' is published by both "
+                        f"'{publisher_of[sig]}' and '{name}'. Signal names must be "
+                        f"unique -- the bus gathers them by name, so a duplicate "
+                        f"would silently overwrite. Give the controllers distinct "
+                        f"signal names."
+                    )
+                publisher_of[sig] = name
+                published.add(sig)
         for name, unit in self.units.items():
             for sig in getattr(unit, "required_signals", ()) or ():
                 if sig not in published:
@@ -1932,15 +1950,25 @@ class Plant:
         all_outputs, streams = self._resolve_streams(
             t, states, params_full, signals=signals, design=design)
 
+        # Collect each unit's converged input streams ONCE for the dstate pass.
+        # The streams are fixed after the sweep, so re-collecting per unit would
+        # repeat the translator calls and Stream allocations on every RHS step --
+        # and on the differentiated tape. Same values, so the result is
+        # unchanged. (The signal bus is computed up front from the states, above,
+        # so it does not reuse this map.)
+        inputs_by_unit = {
+            name: self._collect_inputs(name, all_outputs, streams)
+            for name in self._unit_order
+        }
+
         # Step 4: compute dstates from final input streams and the (always
         # passed) control-signal bus. Every unit's rhs has the same signature;
         # an uncontrolled unit ignores ``signals``.
         dstates: list[jnp.ndarray] = []
         for name in self._unit_order:
             unit = self.units[name]
-            inputs = self._collect_inputs(name, all_outputs, streams)
-            params_unit = self._params_for_unit(name, params_full)
-            dstate = unit.rhs(t, states[name], inputs, params_unit, signals)
+            dstate = unit.rhs(t, states[name], inputs_by_unit[name],
+                              self._params_for_unit(name, params_full), signals)
             dstates.append(dstate)
         return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
 

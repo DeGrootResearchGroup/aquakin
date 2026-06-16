@@ -321,7 +321,10 @@ def build_bsm2(
     Parameters
     ----------
     asm1_network : CompiledNetwork, optional
-        ASM1 network for the water line. Defaults to ``load_network("asm1")``.
+        ASM1 network for the water line. Defaults to :func:`bsm2_asm1_network`
+        (the BSM2-configured network with temperature corrections referenced to
+        15 degC, matching ``bsm2_parameters`` and the BSM2 influent). Pass the
+        plain ``load_network("asm1")`` to use the 20 degC reference instead.
     adm1_network : CompiledNetwork, optional
         ADM1 network for the digester. Defaults to ``load_network("adm1")``.
     Q_ref : float
@@ -394,16 +397,24 @@ def build_bsm2(
     carbon_flow = carbon.flow if carbon is not None else 0.0
     carbon_conc = carbon.conc if carbon is not None else BSM2_CARBON_CONC
 
-    asm1 = asm1_network if asm1_network is not None else aquakin.load_network("asm1")
+    # Default to the BSM2-configured ASM1 network (temperature corrections
+    # referenced to 15 degC, matching bsm2_parameters and the BSM2 influent), not
+    # the plain 20 degC shipped asm1. With the plain network a temperature-carrying
+    # influent would apply a spurious Arrhenius slowdown relative to the already
+    # 15 degC parameter values; the BSM2 network makes 15 degC the unity point so
+    # seasonal kinetics are referenced correctly. A constant-temperature run is
+    # unaffected (the correction is unity at the static T either way). Pass an
+    # explicit asm1_network to override (e.g. the plain 20 degC asm1).
+    asm1 = asm1_network if asm1_network is not None else bsm2_asm1_network()
     adm1 = adm1_network if adm1_network is not None else aquakin.load_network("adm1")
 
     # The AS reactors operate at the temperature where their parameters are
     # defined -- the reference temperature of the ASM1 temperature corrections
-    # (288.15 K for the BSM2-configured network from bsm2_asm1_network, 293.15 K
-    # for the plain shipped asm1). Setting the static condition there makes the
-    # correction unity at steady state, so a constant-temperature run reproduces
-    # the (uncorrected) reference exactly; a temperature-carrying influent then
-    # drives the correction away from it (seasonal kinetics).
+    # (288.15 K for the default BSM2-configured network, 293.15 K for the plain
+    # shipped asm1 if passed explicitly). Setting the static condition there makes
+    # the correction unity at steady state, so a constant-temperature run
+    # reproduces the (uncorrected) reference exactly; a temperature-carrying
+    # influent then drives the correction away from it (seasonal kinetics).
     if conditions is None:
         conditions = {name: asm1._condition_defaults[name]
                       for name in asm1.conditions_required}
