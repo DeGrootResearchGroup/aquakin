@@ -352,24 +352,33 @@ solve — across the ASM↔ADM interface and the recycle loops — where differe
 `plant.solve` carries the integration time in the state, so the explicit time
 dependence of a time-varying influent is captured exactly in the gradient.
 
-### Choosing the integrator (`solver=`)
+### Choosing the integrator (`solver=`, `factormax=`)
 
-The forward solve defaults to `Kvaerno5` (a 7-stage L-stable ESDIRK). For a long
-stiff run — the multi-hundred-day dynamic BSM2 simulation — the per-step cost is
-dominated by the implicit Jacobian factorisation of the whole plant state, so a
-lower-order, fewer-stage ESDIRK can be faster. Pass any diffrax solver to
-override it:
+A long dynamic plant run — the multi-hundred-day dynamic BSM2 simulation — is
+**stiffness-bound**: the step count barely depends on the tolerance, and the
+per-step cost is dominated by the implicit Jacobian factorisation of the whole
+167-state plant. The forward solve defaults to `Kvaerno5` (a 7-stage L-stable
+ESDIRK) **with a decoupled root finder** — the per-stage Newton tolerance is
+loosened 10× from the step tolerance, so each step ends in fewer iterations and
+is ~15–20% cheaper at preserved accuracy (the step controller still enforces the
+solution accuracy). That speedup is automatic; nothing to pass.
+
+Two knobs go further on the long stiff run:
 
 ```python
 import diffrax
 sol = plant.solve(t_span=(0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
-                  solver=diffrax.Kvaerno3())   # ~13% faster on dynamic BSM2
+                  solver=diffrax.Kvaerno3(),   # 4 stages, less linear algebra/step
+                  factormax=3.0)               # cap step growth (damps reject churn)
 ```
 
-`Kvaerno3` (4 stages) takes somewhat more, but cheaper, steps and matches
-`Kvaerno5` to ~5e-5 on the final state. `solver=` applies to the forward solve
-(it is rejected alongside `gradient="stable_adjoint"` or `events=`, which manage
-their own integrator).
+`Kvaerno3` takes somewhat more, but cheaper, steps; with `factormax` the two
+stack to **~40% faster** than the old default, matching `Kvaerno5` to ~6e-5 on
+the final state. Passing a `solver` opts out of the default Newton decoupling
+(the solver's own root finder is used) — to keep it with a different order, pass
+it explicitly: `diffrax.Kvaerno3(root_finder=diffrax.VeryChord(rtol=10*rtol,
+atol=10*atol))`. Both knobs apply to the forward solve only (rejected alongside
+`gradient="stable_adjoint"` or `events=`, which manage their own integrator).
 
 For reactor-level fits, the adjoint plumbing is hidden too: `aquakin.calibrate`
 and `aquakin.sensitivity` take `ad_mode="forward"|"reverse"` and build the right

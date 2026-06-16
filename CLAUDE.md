@@ -2676,25 +2676,77 @@ against an independent port of the reference BSM1 settler derivative in
 True)` selects it in the full plant (both clarifiers expose the same ports),
 and `Plant.solve` takes `max_steps`.
 
-**`Plant.solve(solver=...)` — override the integrator.** The forward solve
-defaults to `Kvaerno5` (the 7-stage L-stable ESDIRK every reactor uses); passing
-a diffrax solver instance overrides it (`None` keeps `Kvaerno5`). The motivating
-case is the long dynamic BSM2 run: profiling shows it is **stiffness-bound** —
-~750–1000 accepted steps/day, step count nearly invariant to `rtol` — with the
-per-step cost dominated by the implicit Jacobian factorisation of the 167-state
-system across the solver's stages. A lower-order ESDIRK (`diffrax.Kvaerno3`, 4
-stages) does less linear algebra per step and, despite taking ~10% more steps,
-runs **~13% faster** at preserved accuracy (final-state agreement ~5e-5 vs
-`Kvaerno5`). It is threaded through `_build_jitted_solve` → `_run_diffeqsolve`
-and keyed into the per-instance compiled-solve cache **by solver class** (a fresh
-stock instance shares the entry; a different class keys separately; a
-custom-*configured* instance of an otherwise-default class would share the
-default's entry — documented on the argument). It applies to the forward
-`jax_adjoint` path only: passing it with `gradient="stable_adjoint"` (its own
-ESDIRK discrete-adjoint integrator) or `events=` (the segmented solve) raises.
-(`solver=` is a forward-path knob, so like `dtmax=` it does not change the
-`gradient="auto"` routing.) Covered by
+### Dynamic-solve performance — the stiffness-bound regime and its levers
+
+Profiling the long dynamic BSM2 run (the JRN-056 609-day simulation) established
+that it is **stiffness-bound, not wasted-work-bound** — a finding worth not
+re-discovering. The signature: ~750–1000 accepted steps/day, **step count nearly
+invariant to `rtol`** (1e-4 vs 1e-3 → <2%), **~50% step rejection** with the
+default solver, and per-step cost dominated by the **implicit Jacobian
+factorisation of the 167-state plant** across the solver's stages (the raw RHS is
+~4% of per-step cost). It extrapolates to ~38 min run-only for 609 days.
+
+**Levers that do NOT help (measured — do not re-try):** `jump_ts` at the 15-min
+influent kinks (the kinks aren't the bottleneck; a state-triggered clamp kink is
+— see below); looser `rtol` (step count is tolerance-independent); PI-controller
+tuning (`pcoeff`/`icoeff`) and `factormax` *alone* (they cut the rejection *rate*
+but trade rejections for accepted steps → wall flat — reducing the rejection rate
+is **not** itself the win); `recycle_passes` 3→1 (changes the answer ~2% via the
+concentration-dependent reject loop — unsafe). The wall-time wins come from
+**cheaper steps**, **fewer stages**, and **less stiffness**, not from chasing the
+rejection rate.
+
+**Verified speedups (20-day proxy, final-state agreement ≤ 6e-5 vs the old
+default):** decoupled Newton tolerance **~18%**; `Kvaerno3` **~16%**; the two plus
+`factormax=3` together **~42%**. These are exposed as two `Plant.solve` knobs and
+one new default:
+
+- **Default decoupled root finder (no opt-in).** `_run_diffeqsolve` now builds
+  the default `Kvaerno5` with `root_finder=VeryChord(rtol=10·rtol, atol=10·atol)`
+  — the per-stage **Newton** tolerance loosened 10× from the step tolerance.
+  diffrax's stock Kvaerno root finder *copies* the controller tolerances, driving
+  each stage solve to the full step accuracy (more Newton iterations than the
+  embedded error estimate needs); the step controller still enforces the solution
+  accuracy through `rtol`/`atol`, so this only ends each stage solve sooner —
+  ~15–20% faster everywhere at preserved accuracy. Applies to **every** reactor
+  and the forward `jax_adjoint` plant path (the shared `_run_diffeqsolve`); a
+  user-supplied `solver=` is honoured verbatim (opts out of the loosening). The
+  10× scale is off the *actual* `rtol`/`atol`, so it is correct for any network
+  scale (mol/L ozone as well as g/m³ ASM/ADM); validated steady states are
+  unchanged within their tolerances.
+- **`Plant.solve(solver=...)`** overrides the integrator (`None` keeps the
+  decoupled `Kvaerno5`). `diffrax.Kvaerno3` (4 stages vs 7) does less linear
+  algebra per step. To keep the Newton decoupling with a custom order, pass it on
+  the solver: `Kvaerno3(root_finder=VeryChord(rtol=10*rtol, atol=10*atol))`.
+- **`Plant.solve(factormax=...)`** caps the `PIDController` per-step growth factor
+  (diffrax default 10). On `Kvaerno3` the levers **stack** (unlike on `Kvaerno5`,
+  where `factormax` cancels the Newton saving): `solver=Kvaerno3(...)` +
+  `factormax=3` is the **~42%** config.
+
+Both are threaded `Plant.solve` → `_build_jitted_solve` → `_run_diffeqsolve` and
+keyed into the per-instance compiled-solve cache (`solver` **by class** — a fresh
+stock instance shares the entry, a different class keys separately, a
+custom-*configured* instance of an otherwise-default class shares the default's
+entry; `factormax` by value). Both are **forward `jax_adjoint`-only**: passing
+either with `gradient="stable_adjoint"` (its own ESDIRK discrete-adjoint
+integrator) or `events=` (the segmented solve) raises. Like `dtmax=`, they do not
+change the `gradient="auto"` routing. Covered by
 `tests/integration/test_plant_solver_option.py`.
+
+**The biggest lever is still on the table — `S_h2` quasi-steady-state (issue
+#361, deferred).** Every production WWTP simulator (BSM2 reference, GPS-X, WEST)
+removes the ADM1 stiffness at the *source* by collapsing the two fastest states —
+pH **and dissolved hydrogen `S_h2`** — to algebraic equilibrium, then runs a
+non-stiff solver: Table 4.5 of the BSM book (Rosen et al. 2006) reports ~18–28×
+from pH+`S_h2`, and **pH alone buys nothing**. We already solve pH via the
+charge-balance speciation solver, but `S_h2` is still a differential ADM1 state
+with a sub-second time constant — *the* stiff offender. Making it algebraic (QSS)
+is the documented universal fix and the planned next structural step. (A related
+finding: the `clip_negative_states` `max(x,0)` is a *state-triggered moving
+derivative kink* near depleted species — DO in anoxic zones, depleted substrates
+— which embedded error estimators reject at, and which cannot be declared as a
+breakpoint; this is why `jump_ts` did nothing. Smooth Monod switching guards
+`[S]/(K+[S])` are the IWA-native fix. See issue #361.)
 
 **IFAS / MBBR unit ([`plant/ifas.py`](aquakin/plant/ifas.py)).** `IFASUnit`
 (alias `MBBRUnit`) places carrier-media biofilm in the flowsheet by **wiring the

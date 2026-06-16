@@ -66,7 +66,7 @@ def test_solver_override_keys_cache_by_class(asm1):
 def test_solver_override_rejected_on_stable_adjoint(asm1):
     plant = _mini_plant(asm1)
     y0 = plant.initial_state()
-    with pytest.raises(ValueError, match="solver= is only supported"):
+    with pytest.raises(ValueError, match="only supported on the forward"):
         plant.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]), y0=y0,
                     gradient="stable_adjoint", solver=diffrax.Kvaerno3())
 
@@ -75,9 +75,44 @@ def test_solver_override_rejected_with_events(asm1):
     plant = _mini_plant(asm1)
     y0 = plant.initial_state()
     ev = aquakin.Event(at_times=[0.5])
-    with pytest.raises(ValueError, match="solver= is not supported with events="):
+    with pytest.raises(ValueError, match="not supported with events="):
         plant.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]), y0=y0,
                     events=[ev], solver=diffrax.Kvaerno3())
+
+
+def test_factormax_runs_and_matches_default(asm1):
+    plant = _mini_plant(asm1)
+    y0 = plant.initial_state()
+    t_eval = jnp.linspace(0.0, 2.0, 9)
+    base = plant.solve(t_span=(0.0, 2.0), t_eval=t_eval, y0=y0)
+    capped = plant.solve(t_span=(0.0, 2.0), t_eval=t_eval, y0=y0, factormax=3.0)
+    assert np.all(np.isfinite(np.asarray(capped.state)))
+    rel = np.max(np.abs(np.asarray(capped.state[-1]) - np.asarray(base.state[-1]))
+                 / (np.abs(np.asarray(base.state[-1])) + 1e-9))
+    assert rel < 1e-3
+
+
+def test_factormax_keys_cache(asm1):
+    plant = _mini_plant(asm1)
+    y0 = plant.initial_state()
+    t_eval = jnp.linspace(0.0, 1.0, 5)
+    plant._jit_cache.clear()
+    plant.solve(t_span=(0.0, 1.0), t_eval=t_eval, y0=y0)                  # default
+    n = len(plant._jit_cache)
+    plant.solve(t_span=(0.0, 1.0), t_eval=t_eval, y0=y0, factormax=3.0)   # distinct
+    assert len(plant._jit_cache) == n + 1
+
+
+def test_factormax_rejected_off_forward_path(asm1):
+    plant = _mini_plant(asm1)
+    y0 = plant.initial_state()
+    with pytest.raises(ValueError, match="factormax"):
+        plant.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]), y0=y0,
+                    gradient="stable_adjoint", factormax=3.0)
+    ev = aquakin.Event(at_times=[0.5])
+    with pytest.raises(ValueError, match="factormax"):
+        plant.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]), y0=y0,
+                    events=[ev], factormax=3.0)
 
 
 def test_solver_override_grad_flows(asm1):
