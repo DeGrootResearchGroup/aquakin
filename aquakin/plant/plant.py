@@ -433,6 +433,19 @@ class SteadyStateResult:
     residual: Optional[float] = None
 
 
+def _senses_concentration(unit) -> bool:
+    """Whether a control loop can read a measured species from ``unit``'s state.
+
+    The signal bus reconstructs the sensed value as ``state[sensor][meas_idx]``,
+    so the sensor's state must carry the species concentrations as its leading
+    entries -- true for a reactor (CSTR, MBR, SBR, digester, storage), false for a
+    stateless mixer/splitter/ideal-clarifier. A unit whose state has the
+    concentration vector as a prefix (``state_size >= n_species``) qualifies.
+    """
+    net = getattr(unit, "network", None)
+    return net is not None and getattr(unit, "state_size", 0) >= net.n_species
+
+
 def _concrete_teval_key(t_eval):
     """Hashable cache key for a concrete ``t_eval`` (or ``None``).
 
@@ -998,6 +1011,14 @@ class Plant:
                     f"Aeration controller '{cid}' senses unit '{sensor}', which "
                     f"is not in the plant."
                 )
+            if not _senses_concentration(self.units[sensor]):
+                raise ValueError(
+                    f"Aeration controller '{cid}' senses unit '{sensor}', whose "
+                    f"state is not a concentration vector. A DO sensor must read a "
+                    f"reactor that carries the species concentrations in its state "
+                    f"(e.g. a CSTRUnit), not a mixer/splitter/clarifier. Set "
+                    f"sensor= to such a reactor."
+                )
             # The controller unit takes the shared id as its name (so it is
             # referenceable); a per-tank controller gets a derived name that
             # cannot collide with the tank it controls.
@@ -1062,6 +1083,14 @@ class Plant:
                 raise ValueError(
                     f"Dosing controller '{cid}' senses unit '{d0.sensor}', which "
                     f"is not in the plant."
+                )
+            if not _senses_concentration(self.units[d0.sensor]):
+                raise ValueError(
+                    f"Dosing controller '{cid}' senses unit '{d0.sensor}', whose "
+                    f"state is not a concentration vector. A feedback dose must "
+                    f"measure a reactor that carries the species concentrations in "
+                    f"its state (e.g. a CSTRUnit), not a mixer/splitter/clarifier. "
+                    f"Set sensor= to such a reactor."
                 )
             self.add_unit(PIController(
                 name=cid, network=self.units[d0.sensor].network,

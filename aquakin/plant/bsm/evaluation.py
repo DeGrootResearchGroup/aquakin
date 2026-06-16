@@ -31,6 +31,7 @@ import jax.numpy as jnp
 
 from aquakin.plant.metrics import (
     _composition,
+    _EQI_WEIGHTS,
     _time_average as _metrics_time_average,
     aeration_energy,
     carbon_mass,
@@ -433,6 +434,11 @@ def evaluate_bsm2(
     network = plant.units["tank1"].network
     params_full = (plant.default_parameters() if params is None
                    else jnp.asarray(params))
+    # Composition (i_XB / i_XP / f_P) is read with the ASM1 network's *local*
+    # param_index, so it must be sliced from the ASM1 block of the concatenated
+    # plant vector -- not indexed into the full vector (which is correct only while
+    # ASM1 sits at block offset 0).
+    params_asm = plant._params_for_unit("tank1", params_full)
     t = solution.t
 
     # The final effluent is whatever the builder recorded on the plant (the
@@ -453,11 +459,12 @@ def evaluate_bsm2(
 
     # ----- Effluent quality. -----
     eff_Q, eff_C = streams[effluent_port]
-    eqi = effluent_quality_index(t, eff_C, eff_Q, network, params=params_full)
-    averages = effluent_averages(t, eff_C, eff_Q, network, params=params_full)
+    eqi = effluent_quality_index(t, eff_C, eff_Q, network, params=params_asm)
+    averages = effluent_averages(t, eff_C, eff_Q, network, params=params_asm)
 
-    # BSM2 weights the BOD of *bypassed* (untreated) flow at 0.65 rather than the
-    # 0.25 applied to treated effluent (perf_plant_bsm2). When an influent bypass
+    # BSM2 weights the BOD of *bypassed* (untreated) flow at the raw-sewage 0.65
+    # BOD5/BODu coefficient rather than the 0.25 applied to treated effluent. When
+    # an influent bypass
     # is present the scored effluent is the treated + bypassed mix, so the flat
     # 0.25-coefficient BOD that effluent_averages returns understates it. Redo the
     # BOD average as the load-weighted split over the two component streams; this
@@ -469,13 +476,20 @@ def evaluate_bsm2(
                             [_EFFLUENT_PORT, "bypass_split.bypass"])
         Qt, Ct = comp[_EFFLUENT_PORT]
         Qb, Cb = comp["bypass_split.bypass"]
-        _, _, f_P = _composition(network, params_full)
+        _, _, f_P = _composition(network, params_asm)
         base_t = derived_BOD(Ct, network, f_P=f_P) / 0.25   # SS+XS+(1-fP)(XBH+XBA)
         base_b = derived_BOD(Cb, network, f_P=f_P) / 0.25
         bod_load = (_time_average(t, 0.25 * base_t * Qt)
                     + _time_average(t, 0.65 * base_b * Qb))
         total_flow = _time_average(t, Qt + Qb)
         averages = {**averages, "BOD": float(bod_load / total_flow)}
+        # The flat-weight EQI scored the bypass BOD at the treated 0.25 coefficient
+        # as well (it ran on the combined effluent); add the extra (0.65 − 0.25)
+        # weight on the bypass BOD load so the scored EQI carries the benchmark
+        # bypass coefficient too. derived_BOD is linear, so the combined-effluent
+        # BOD load already equals 0.25·(base_t·Qt + base_b·Qb).
+        eqi = eqi + float(_EQI_WEIGHTS["BOD"] * (0.65 - 0.25)
+                          * _time_average(t, base_b * Qb) * 1e-3)
 
     # ----- Aeration + mixing energy (actual kLa over the run). Both span all AS
     # reactors: anoxic tanks add no aeration (kLa=0) but do need mixing. -----
@@ -664,6 +678,9 @@ def evaluate_bsm1(
     network = plant.units["tank1"].network
     params_full = (plant.default_parameters() if params is None
                    else jnp.asarray(params))
+    # Composition is read with the ASM1 network's local param_index, so slice the
+    # ASM1 block from the concatenated plant vector (see evaluate_bsm2).
+    params_asm = plant._params_for_unit("tank1", params_full)
     t = solution.t
 
     # Reconstruct every needed output stream in a single pass over the states.
@@ -673,8 +690,8 @@ def evaluate_bsm1(
 
     # ----- Effluent quality. -----
     eff_Q, eff_C = streams[effluent_port]
-    eqi = effluent_quality_index(t, eff_C, eff_Q, network, params=params_full)
-    averages = effluent_averages(t, eff_C, eff_Q, network, params=params_full)
+    eqi = effluent_quality_index(t, eff_C, eff_Q, network, params=params_asm)
+    averages = effluent_averages(t, eff_C, eff_Q, network, params=params_asm)
 
     # ----- Aeration energy (actual kLa over the run). -----
     reactors = _as_reactors(plant)

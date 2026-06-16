@@ -3420,11 +3420,13 @@ clarifier too (matching the reference `Qbypassplant=1`: it bypasses the *plant*,
 not just the AS) and joins the final effluent through a new `effluent_mix`
 combiner, so the final effluent is `effluent_mix.out` (treated + bypassed) —
 `evaluate_bsm2` auto-detects it. When a bypass is present `evaluate_bsm2` also
-applies the BSM2 **split BOD weighting** — the benchmark's `0.65` coefficient on
-the *bypassed* (untreated) BOD vs `0.25` on the treated effluent
-(`perf_plant_bsm2`) — as a load-weighted average over the two source streams
-(`settler.overflow` + `bypass_split.bypass`); the no-bypass path keeps the flat
-`0.25` and is untouched. **This changes the influent entry point**: with
+applies the BSM2 **split BOD weighting** — the benchmark's `0.65` raw-sewage
+BOD₅/BODu coefficient on the *bypassed* (untreated) BOD vs `0.25` on the treated
+effluent — both to the reported BOD *average* (a load-weighted average over the two
+source streams `settler.overflow` + `bypass_split.bypass`) **and to the scored
+`effluent_quality_index`** (the flat-weight EQI runs on the combined effluent, so
+the extra `0.65 − 0.25` weight on the bypass BOD load is added back); the no-bypass
+path keeps the flat `0.25` and is untouched. **This changes the influent entry point**: with
 the bypass, the influent entry moves to `bypass_split.in` and the effluent to
 `effluent_mix.out` -- both reported on `plant.influent_endpoint` /
 `plant.effluent_endpoint`, so example/user code reads those instead of a literal.
