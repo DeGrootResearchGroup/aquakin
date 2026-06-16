@@ -481,11 +481,24 @@ def evaluate_bsm2(
     sludge = _time_average(t, tss_mass_flow)
 
     # ----- External-carbon dose (kg COD/d). -----
-    carbon_influent = plant.influents.get("external_carbon")
-    if carbon_influent is not None:
+    # The external carbon is dosed by the `external_carbon` DosingUnit: the dose
+    # flow times the reagent's readily-biodegradable (SS) concentration.
+    carbon_unit = plant.units.get("external_carbon")
+    if carbon_unit is not None and hasattr(carbon_unit, "reagent"):
         ss_idx = network.species_index["SS"]
-        Q_carbon = jnp.stack([carbon_influent.at(ti).Q for ti in t])
-        conc = float(carbon_influent.at(t[0]).C[ss_idx])
+        conc = float(carbon_unit.reagent.composition[ss_idx])
+        if carbon_unit.flow is not None:
+            # Fixed dose: constant flow over the window.
+            Q_carbon = jnp.full_like(jnp.asarray(t, dtype=float),
+                                     float(carbon_unit.flow))
+        else:
+            # Feedback dose: the manipulated dose flow is the controller signal
+            # (gain-scaled), reconstructed per saved state from the control bus.
+            sig = carbon_unit.required_signals[0]
+            Q_carbon = jnp.stack([
+                plant.signals_at(ti, solution.state[i], params_full)[sig]
+                * carbon_unit.gain
+                for i, ti in enumerate(t)])
         carbon = carbon_mass(t, Q_carbon, conc)
     else:
         carbon = 0.0
