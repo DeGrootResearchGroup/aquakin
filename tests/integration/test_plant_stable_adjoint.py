@@ -228,7 +228,11 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     base = bsm2_parameters(asm1, adm1)
     gidx = plant.parameter_index("adm1.k_m_ac")
     theta0 = float(base[gidx])
-    T = 3.0
+    # Two diurnal cycles is enough to make the RHS explicitly time-dependent and
+    # exercise the non-autonomous adjoint; a longer horizon only multiplies the
+    # (rtol=1e-7) step count -- and so the CI runtime and the backward-scan buffer
+    # -- without testing anything new.
+    T = 2.0
 
     # Tighter solver than the shared default, for an *accurate* finite-difference
     # reference. The stable-adjoint gradient is the exact gradient of the discrete
@@ -241,7 +245,7 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     # covers the residual platform spread with wide margin while still catching a
     # genuinely wrong gradient (sign, magnitude). max_steps also sizes the
     # stable-adjoint backward-scan buffer, so give the tighter solve headroom.
-    kw = {**_solve_kwargs(), "rtol": 1e-7, "atol": 1e-5, "max_steps": 12_000}
+    kw = {**_solve_kwargs(), "rtol": 1e-7, "atol": 1e-5, "max_steps": 8_000}
 
     def g(theta):
         p = base.at[gidx].set(theta)
