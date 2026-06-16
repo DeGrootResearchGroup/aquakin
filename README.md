@@ -223,6 +223,15 @@ thickener, ADM1 digester with the ASM1↔ADM1 interfaces, dewatering, reject
 recycle) the same way; see `examples/` and `CLAUDE.md` for the BSM2 steady state,
 dynamic/seasonal runs, DO control, and the SRT/HRT/F:M design helpers.
 
+Reactor temperature is a selectable `TemperatureModel`: the default
+`AlgebraicTemperature` takes each reactor's temperature to be its instantaneous
+flow-weighted inlet temperature, while `HeatBalanceTemperature` gives every
+finite-volume unit a dynamic temperature *state* governed by the first-order heat
+balance `V dT/dt = Q_in (T_in − T)` (the heated digester stays fixed), so the
+reactor temperature lags and damps the influent. Select it with
+`plant.set_temperature_model(aquakin.HeatBalanceTemperature())` or
+`build_bsm2(temperature_model=aquakin.HeatBalanceTemperature())`.
+
 ### GHG, cost and scenario reporting
 
 On top of the EQI / OCI evaluation, `aquakin` reports a **carbon footprint**

@@ -44,8 +44,17 @@ from aquakin.integrate._common import (
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.streams import Stream, StreamSeries
+from aquakin.plant.temperature import (
+    OPERATING_T_SIGNAL as _OPERATING_T_SIGNAL,
+)
+from aquakin.plant.temperature import AlgebraicTemperature, TemperatureModel
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
 from aquakin.plant.units import FlowContext, Unit
+
+# Reserved key under which :meth:`Plant._split_state` exposes the appended
+# temperature-state block in the per-unit state map (not a real unit, so it is
+# never iterated as one -- ``_unit_order`` does not contain it).
+_TEMPERATURE_KEY = "__temperature__"
 
 
 @dataclass(frozen=True)
@@ -501,9 +510,20 @@ class Plant:
         # reads the right port without the user knowing it is
         # ``"tank5_split.internal_recycle"``; :meth:`list_streams` lists them.
         self.named_streams: dict[str, str] = {}
+        # How reactor temperature is handled (see aquakin.plant.temperature). The
+        # default carries no state and reproduces the historic instantaneous
+        # flow-weighted behaviour exactly; a HeatBalanceTemperature gives each
+        # finite-volume unit a dynamic temperature state. Swappable on the built
+        # plant (clears the compiled-solve cache).
+        self.temperature_model: TemperatureModel = AlgebraicTemperature()
         # Filled in at solve() time:
         self._state_layout: dict[str, tuple[int, int]] = {}
         self._total_state_size: int = 0
+        # Appended temperature-state block: the tracked unit names (in state
+        # order) and the (start, size) slice of the flat state vector. Empty for
+        # the default AlgebraicTemperature.
+        self._temperature_units: list[str] = []
+        self._temperature_block: tuple[int, int] = (0, 0)
         self._parameter_layout: ParameterLayout = ParameterLayout()
         self._network_param_index: dict[str, int] = {}
         # Static connection adjacency, rebuilt by _build_state_layout():
@@ -658,6 +678,22 @@ class Plant:
             self.units[name].set_temperature(kelvin)
         # The compiled solve bakes in the (now-changed) condition values, so it
         # must be recompiled on the next solve.
+        self._jit_cache.clear()
+        return self
+
+    def set_temperature_model(self, model: TemperatureModel) -> "Plant":
+        """Select how reactor temperature is handled (see :mod:`aquakin.plant.temperature`).
+
+        Pass :class:`~aquakin.plant.temperature.HeatBalanceTemperature` to give
+        each finite-volume liquid unit a dynamic temperature state (a first-order
+        heat balance), or the default
+        :class:`~aquakin.plant.temperature.AlgebraicTemperature` for the
+        instantaneous flow-weighted behaviour. Changes the flat state-vector
+        length (an appended temperature block), so it clears the compiled-solve
+        cache; rebuild ``y0`` (e.g. via ``bsm2_warm_start``) after calling it.
+        Returns ``self`` for chaining.
+        """
+        self.temperature_model = model
         self._jit_cache.clear()
         return self
 
@@ -1051,6 +1087,13 @@ class Plant:
             layout[name] = (cursor, size)
             cursor += size
         self._state_layout = layout
+        # Append the temperature-state block at the tail (the FlowSetpoint
+        # parameter-block pattern, but for state): every per-unit slice above
+        # keeps its index, so warm-starts and states_by_unit are unaffected.
+        self._temperature_units = self.temperature_model.tracked_units(self)
+        temp_size = self.temperature_model.state_size(self)
+        self._temperature_block = (cursor, temp_size)
+        cursor += temp_size
         self._total_state_size = cursor
         self._build_connection_index()
         self._validate_control_signals()
@@ -1522,6 +1565,8 @@ class Plant:
                 pieces.append(vec)
             else:
                 pieces.append(self.units[name].initial_state())
+        if self._temperature_block[1]:
+            pieces.append(self.temperature_model.initial_state(self))
         return jnp.concatenate(pieces)
 
     def states_by_unit(
@@ -1557,12 +1602,41 @@ class Plant:
     def _split_state(
         self, state_full: jnp.ndarray
     ) -> dict[str, jnp.ndarray]:
-        """Split the flat state vector into a per-unit ``{name: state}`` map."""
+        """Split the flat state vector into a per-unit ``{name: state}`` map.
+
+        The appended temperature-state block (if any) is exposed under the
+        reserved :data:`_TEMPERATURE_KEY`, not a real unit name -- ``_unit_order``
+        does not contain it, so it is never iterated as a unit.
+        """
         states: dict[str, jnp.ndarray] = {}
         for name in self._unit_order:
             start, size = self._state_layout[name]
             states[name] = jax.lax.dynamic_slice(state_full, (start,), (size,))
+        tstart, tsize = self._temperature_block
+        if tsize:
+            states[_TEMPERATURE_KEY] = jax.lax.dynamic_slice(
+                state_full, (tstart,), (tsize,))
         return states
+
+    def _temperatures_by_unit(self, states: dict[str, jnp.ndarray]) -> dict:
+        """Map each tracked unit to its current temperature state value.
+
+        Empty for the default :class:`AlgebraicTemperature` (no tracked units)
+        and when the influent carries no temperature (the channel is inactive,
+        so overriding an outlet to a number would be inconsistent with the
+        all-``None`` temperature field). When non-empty, it drives both the
+        outlet-temperature override in :meth:`_sweep_outputs` and the operating
+        temperature a reactor reads in its ``rhs``.
+        """
+        temp_state = states.get(_TEMPERATURE_KEY)
+        if temp_state is None or not self._temperature_units:
+            return {}
+        carries_T = any(getattr(s, "T", None) is not None
+                        for s in self.influents.values())
+        if not carries_T:
+            return {}
+        return {name: temp_state[i]
+                for i, name in enumerate(self._temperature_units)}
 
     def _resolve_streams(
         self,
@@ -1963,14 +2037,51 @@ class Plant:
 
         # Step 4: compute dstates from final input streams and the (always
         # passed) control-signal bus. Every unit's rhs has the same signature;
-        # an uncontrolled unit ignores ``signals``.
+        # an uncontrolled unit ignores ``signals``. Under a heat-balance
+        # temperature model, a reactor's operating temperature (its lagged tank
+        # state) is threaded in through a reserved signal key, and the flow-
+        # weighted inlet (Q, T) of each tracked unit is captured for the
+        # temperature-state derivative.
+        temp_by_unit = self._temperatures_by_unit(states)
+        inlet_by_unit: dict = {}
         dstates: list[jnp.ndarray] = []
         for name in self._unit_order:
             unit = self.units[name]
-            dstate = unit.rhs(t, states[name], inputs_by_unit[name],
-                              self._params_for_unit(name, params_full), signals)
+            inputs = inputs_by_unit[name]
+            params_unit = self._params_for_unit(name, params_full)
+            unit_signals = signals
+            if temp_by_unit:
+                unit_signals = {**signals,
+                                _OPERATING_T_SIGNAL: temp_by_unit.get(name)}
+                if name in temp_by_unit:
+                    inlet_by_unit[name] = self._inlet_flow_temperature(inputs)
+            dstate = unit.rhs(t, states[name], inputs, params_unit, unit_signals)
             dstates.append(dstate)
+        if self._temperature_block[1]:
+            dstates.append(self.temperature_model.state_rhs(
+                self, states[_TEMPERATURE_KEY], inlet_by_unit))
         return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
+
+    @staticmethod
+    def _inlet_flow_temperature(inputs: dict[str, Stream]):
+        """Total inlet flow and flow-weighted inlet temperature of a unit.
+
+        Returns ``(Q_in, T_in)``; ``T_in`` is ``None`` if any inlet is
+        temperature-agnostic (the same gate the unit mixers use). The heat
+        balance ``V dT/dt = Q_in (T_in - T)`` reads both.
+        """
+        Q_total = jnp.zeros(())
+        heat = jnp.zeros(())
+        have_T = True
+        for s in inputs.values():
+            Q_total = Q_total + s.Q
+            if getattr(s, "T", None) is None:
+                have_T = False
+            else:
+                heat = heat + s.Q * s.T
+        if not have_T:
+            return (Q_total, None)
+        return (Q_total, heat / (Q_total + 1e-12))
 
     def _compute_signals(
         self,
@@ -2225,6 +2336,13 @@ class Plant:
         which sweeps to a deeper count to see whether the default has converged.
         """
         n_passes = self.recycle_passes if passes is None else passes
+        # Under a HeatBalanceTemperature, a tracked unit's outlet leaves at its
+        # *tank* temperature (a state, constant w.r.t. its inlets this RHS), not
+        # the flow-weighted inlet T the unit self-computes. Override it here so the
+        # lagged temperature propagates downstream and (since this method also runs
+        # the affine recycle-temperature probe) through that exact solve. Empty for
+        # the algebraic default -> a pure no-op.
+        temp_by_unit = self._temperatures_by_unit(states)
         all_outputs: dict[tuple[str, str], Stream] = {}
         all_outputs.update(seeded)
         for _pass in range(n_passes):
@@ -2234,7 +2352,10 @@ class Plant:
                 params_unit = self._params_for_unit(name, params_full)
                 outputs = unit.compute_outputs(t, states[name], inputs,
                                                params_unit, signals)
+                override_T = temp_by_unit.get(name)
                 for port, stream in outputs.items():
+                    if override_T is not None:
+                        stream = stream.with_T(override_T)
                     all_outputs[(name, port)] = stream
                     streams[(name, port)] = stream
         return all_outputs
