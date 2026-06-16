@@ -123,8 +123,12 @@ def closed_plant(asm1, adm1):
 
 
 @pytest.fixture(scope="module")
-def closed_sol(closed_plant, asm1, adm1):
-    params = bsm2_parameters(asm1, adm1)
+def params(asm1, adm1):
+    return bsm2_parameters(asm1, adm1)
+
+
+@pytest.fixture(scope="module")
+def closed_sol(closed_plant, params):
     return closed_plant.solve((0.0, _T_END), t_eval=_T_EVAL, params=params,
                               rtol=1e-4, atol=1e-3, max_steps=200_000)
 
@@ -144,15 +148,20 @@ def test_closed_loop_builds_and_is_finite(closed_plant, closed_sol):
     assert closed_plant.units["do_control"].state_size == 1
 
 
-def test_do_setpoint_tracking(closed_sol):
+def test_do_setpoint_tracking(closed_plant, closed_sol, params):
     """The PI loop holds reactor-4 oxygen at the DO setpoint."""
     so4 = float(closed_sol.C_named("tank4", "SO")[-1])
     assert so4 == pytest.approx(BSM2_DO_SETPOINT, abs=0.1)
     # Aerated reactors hold oxygen; the anoxic reactors do not.
     assert float(closed_sol.C_named("tank1", "SO")[-1]) < 0.5
     assert float(closed_sol.C_named("tank3", "SO")[-1]) > 0.0
-    # The control signal stays within the actuator's oxygen bounds.
-    assert 0.0 <= so4 <= BSM2_DO_KLA_MAX
+    # The manipulated kLa signal stays within the actuator's saturation bounds.
+    # (Read the published control signal itself -- not the controlled oxygen --
+    # so a controller that violated its kLa clip would actually fail here.)
+    signals = closed_plant.signals_at(_T_END, closed_sol.final_state, params)
+    assert signals, "closed-loop plant should publish a DO kLa control signal"
+    for name, value in signals.items():
+        assert 0.0 <= float(value) <= BSM2_DO_KLA_MAX, name
 
 
 def test_closed_loop_differs_from_open_loop(closed_sol, open_sol):
