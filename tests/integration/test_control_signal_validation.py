@@ -107,6 +107,20 @@ def test_typo_in_signal_name_raises(asm1):
         p._build_state_layout()
 
 
+def test_duplicate_published_signal_name_raises(asm1):
+    """Two controllers publishing the SAME signal name are rejected at setup: the
+    bus is gathered by name (dict.update), so a duplicate would silently overwrite
+    -- one controller's output discarded while its integral keeps winding."""
+    p = Plant(name="dup")
+    p.add_unit(_do_controller(asm1, "do_kla"))         # name 'do_ctrl'
+    p.add_unit(PIController(
+        name="do_ctrl2", network=asm1, measured_species="SO", setpoint=2.0,
+        Kp=25.0, Ti=0.002, Tt=0.001, offset=120.0, out_min=0.0, out_max=360.0,
+        signal_name="do_kla"))                         # same signal name, other unit
+    with pytest.raises(ValueError, match="published by both"):
+        p._build_state_layout()
+
+
 def test_unknown_publisher_skips_validation(asm1):
     """If a signal *producer* doesn't declare signal_names, the published set is
     unknown, so validation is skipped rather than risk rejecting a valid plant."""
