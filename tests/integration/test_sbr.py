@@ -98,7 +98,16 @@ def test_cycle_events_at_phase_boundaries(asm1):
 
 
 # --- the cycle: volume + clarification --------------------------------------
+#
+# These run real event-driven plant solves. Like the other whole-plant solves
+# (test_bsm1/test_bsm2_dynamic/test_biofilm) they are marked ``slow`` so they run
+# on the merge-only, pytest-split-sharded job that bounds per-process memory; on
+# the unsharded ``-n auto`` fast gate their accumulated XLA compilation cache +
+# live JAX buffers push the hosted runner into an OOM reclaim. The cheap
+# construction / unit-level tests above and below stay on the fast gate.
 
+
+@pytest.mark.slow
 def test_volume_cycles_fill_and_decant(asm1):
     sbr = _sbr(asm1)
     p = _plant(asm1, sbr)
@@ -109,6 +118,7 @@ def test_volume_cycles_fill_and_decant(asm1):
     assert V.min() == pytest.approx(500.0, abs=5.0)    # decants back to the heel
 
 
+@pytest.mark.slow
 def test_event_aligned_save_grid_is_finite(asm1):
     """A save grid that lands exactly on phase-boundary event times must stay
     finite -- the segment-endpoint emission, not a dense edge-evaluation."""
@@ -119,6 +129,7 @@ def test_event_aligned_save_grid_is_finite(asm1):
     assert sol.events_log and len(sol.events_log) >= 8   # phase switches logged
 
 
+@pytest.mark.slow
 def test_decant_is_clarified(asm1):
     """During decant the effluent particulates are far below the bulk (settled);
     solubles pass through unchanged (they do not settle)."""
@@ -135,6 +146,7 @@ def test_decant_is_clarified(asm1):
     assert float(eff.C[i, ss]) == pytest.approx(float(sol.state[i, ss]), rel=1e-3)
 
 
+@pytest.mark.slow
 def test_layered_settling_solves_finite(asm1):
     sbr = _sbr(asm1, settling=LayeredSettling(n_layers=4, v_settle=400.0, area=200.0))
     assert sbr.state_size == asm1.n_species + 1 + 4
@@ -148,6 +160,7 @@ def test_layered_settling_solves_finite(asm1):
     assert float(eff.C[i, xbh]) < float(sol.state[i, xbh])          # clarified
 
 
+@pytest.mark.slow
 def test_grad_through_a_cycle(asm1):
     sbr = _sbr(asm1)
     p = _plant(asm1, sbr)
