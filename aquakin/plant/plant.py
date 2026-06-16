@@ -2595,6 +2595,7 @@ class Plant:
         event: Optional[diffrax.Event] = None,
         events: Optional[Sequence["Event"]] = None,
         time_unit: Optional[str] = None,
+        progress_meter: Optional["diffrax.AbstractProgressMeter"] = None,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
 
@@ -2840,14 +2841,17 @@ class Plant:
         # first solve; it only avoids recompiling on subsequent ones.
         settings = concrete_settings_key(rtol, atol_eff, adjoint, dtmax, max_steps)
         sig = (t0, t1, None if t_eval is None else tuple(t_eval.shape))
-        cache_key = (None if (settings is None or event is not None)
+        # A progress meter is a one-off diagnostic (and carries host state), so it
+        # bypasses the compiled-solve cache rather than being keyed into it.
+        cache_key = (None if (settings is None or event is not None
+                              or progress_meter is not None)
                      else (sig, settings))
         jitted = self._jit_cache.get(cache_key) if cache_key is not None else None
         if jitted is None:
             jitted = self._build_jitted_solve(
                 t0, t1, t_eval is not None, event=event,
                 rtol=rtol, atol=atol_eff, adjoint=adjoint, dtmax=dtmax,
-                max_steps=max_steps,
+                max_steps=max_steps, progress_meter=progress_meter,
             )
             if cache_key is not None:
                 self._jit_cache[cache_key] = jitted
@@ -2894,6 +2898,7 @@ class Plant:
 
     def _build_jitted_solve(
         self, t0, t1, has_t_eval, *, event, rtol, atol, adjoint, dtmax, max_steps,
+        progress_meter=None,
     ):
         """Build the jit-compiled forward solve for one call signature.
 
@@ -2908,7 +2913,8 @@ class Plant:
             return self._rhs(t, y, args)
 
         kw = dict(t0=t0, t1=t1, rtol=rtol, atol=atol, adjoint=adjoint,
-                  dtmax=dtmax, max_steps=max_steps, event=event)
+                  dtmax=dtmax, max_steps=max_steps, event=event,
+                  progress_meter=progress_meter)
 
         if has_t_eval:
             @jax.jit

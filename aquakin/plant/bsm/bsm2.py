@@ -94,6 +94,14 @@ BSM2_CARBON_FLOW = 2.0          # m³/d external carbon dosed to reactor 1
 BSM2_CARBON_CONC = 400000.0     # gCOD/m³ readily-biodegradable (SS) carbon source
 BSM2_AS_TEMPERATURE_K = 288.15  # K (15 °C) -- the BSM2 ASM1 reference temperature
 
+# The published BSM2 constant influent carries its own temperature, 14.858 °C
+# (the annual mean of the dynamic influent), NOT the 15 °C ASM1 reference. The
+# AS reactors operate at this inlet temperature, so the (15 °C-referenced) rate
+# corrections apply a small slowdown -- omitting it runs the line ~0.14 °C warm
+# and over-predicts nitrification by ~1.4 %, the difference between the bare
+# 15 °C rates and the benchmark steady state.
+BSM2_CONSTANT_INFLUENT_T = 288.00808  # K (14.85808 °C), constinfluent column T
+
 # Closed-loop dissolved-oxygen / kLa control (reginit_bsm2). A PI controller
 # senses SO in reactor 4 and manipulates its aeration kLa; reactors 3 and 5
 # scale off the same signal. The constants are the reference DO loop tuning
@@ -169,9 +177,22 @@ def bsm2_parameters(asm1_network, adm1_network):
     ])
 
 
-def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF) -> InfluentSeries:
-    """The published BSM2 constant influent as an :class:`InfluentSeries`."""
-    return asm1_network.influent(BSM2_CONSTANT_INFLUENT, Q=Q)
+def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF,
+                           T: float = None) -> InfluentSeries:
+    """The published BSM2 constant influent as an :class:`InfluentSeries`.
+
+    ``T`` defaults to ``None`` (temperature-agnostic): the reactors then fall back
+    to their static ``T`` condition. For a benchmark-faithful run pass
+    ``T=BSM2_CONSTANT_INFLUENT_T`` (14.858 °C) **together with the 15 °C-referenced
+    network** :func:`bsm2_asm1_network`, so the AS line operates at the BSM2
+    steady-state temperature and the rate corrections are referenced correctly --
+    this reproduces the benchmark reactor states to round-off. Omitting ``T`` runs
+    the line at the 15 °C reference, which over-predicts nitrification by ~1.4 %.
+    Do **not** pass ``T`` with the plain 20 °C ``load_network("asm1")``: a
+    14.858 °C inlet on a 20 °C-referenced network applies a large spurious
+    slowdown.
+    """
+    return asm1_network.influent(BSM2_CONSTANT_INFLUENT, Q=Q, T=T)
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +329,7 @@ def build_bsm2(
     wastage_schedule: Optional["object"] = None,
     do_temperature_correction: bool = False,
     temperature_model: Optional["object"] = None,
+    settler_composition_mode: str = "per_species",
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
@@ -494,7 +516,8 @@ def build_bsm2(
     # correction is unity at the benchmark operating point and only a
     # temperature-carrying influent drives it. Empty (no correction) by default.
     do_corr = (
-        {"temperature_correction": True, "ref_T": float(conditions["T"])}
+        {"temperature_correction": True, "ref_T": float(conditions["T"]),
+         "saturation_model": "bsm2"}
         if do_temperature_correction and "T" in conditions else {}
     )
     for i in range(5):
@@ -526,7 +549,8 @@ def build_bsm2(
     plant.add_unit(TakacsClarifier(
         name="settler", network=asm1, area=BSM2_CLARIFIER_AREA,
         height=BSM2_CLARIFIER_HEIGHT, underflow_Q=Q_settler_underflow,
-        init_underflow_Q=Q_settler_underflow_init))
+        init_underflow_Q=Q_settler_underflow_init,
+        composition_mode=settler_composition_mode))
     plant.add_unit(SplitterUnit(
         name="underflow_split", network=asm1,
         output_port_flows={"ras": Qr}, remainder_port="waste"))
