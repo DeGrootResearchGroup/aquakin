@@ -46,6 +46,7 @@ from aquakin.plant.metrics import (
     pumping_energy,
     pumping_energy_bsm2,
 )
+from aquakin.plant.aeration_system import blower_airflow_total, blower_energy
 
 # Default BSM1 port names (as wired by build_bsm1).
 _BSM1_EFFLUENT_PORT = "clarifier.overflow"
@@ -145,6 +146,9 @@ class BSM2Evaluation:
         SNH, SNO; g/m^3) from :func:`effluent_averages`.
     aerated_tanks : list[str]
         The reactors whose aeration was counted.
+    air_flow : float or None
+        Total blower air flow (m³/d, time-averaged) when an ``aeration_system``
+        diffuser/blower design was supplied; ``None`` for the correlation default.
     oci_note : str
         Notes on the OCI computation.
     """
@@ -160,6 +164,7 @@ class BSM2Evaluation:
     heating_energy: float
     effluent: dict = field(default_factory=dict)
     aerated_tanks: list = field(default_factory=list)
+    air_flow: float | None = None
     oci_note: str = (
         "Full BSM2 OCI (Gernaey et al. 2014): AE + PE + ME + 3*sludge + "
         "3*carbon - 6*methane + max(0, HE - 7*methane). Sludge production is the "
@@ -194,9 +199,13 @@ class BSM2Evaluation:
         published values.
         """
         heat = max(0.0, self.heating_energy - 7.0 * self.methane_production)
+        ae_label = ("Aeration energy  AE (blower)" if self.air_flow is not None
+                    else "Aeration energy  AE")
         terms = [
-            ("Aeration energy  AE", self.aeration_energy, "kWh/d",
-             self.aeration_energy),
+            (ae_label, self.aeration_energy, "kWh/d", self.aeration_energy),]
+        if self.air_flow is not None:
+            terms.append(("  air flow", self.air_flow, "m3/d", None))
+        terms += [
             ("Pumping energy   PE", self.pumping_energy, "kWh/d",
              self.pumping_energy),
             ("Mixing energy    ME", self.mixing_energy, "kWh/d",
@@ -395,6 +404,7 @@ def evaluate_bsm2(
     waste_port: str = _WASTE_PORT,
     do_saturation: float = _DO_SATURATION,
     digester_feed_T_C: float = _DIGESTER_FEED_T_C,
+    aeration_system=None,
 ) -> BSM2Evaluation:
     """Compute the BSM2 performance indices from a solved plant.
 
@@ -496,7 +506,15 @@ def evaluate_bsm2(
     reactors = _as_reactors(plant)
     kla_hist = _kla_history(plant, solution, params, reactors)
     volumes = jnp.asarray([float(plant.units[n].volume) for n in reactors])
-    AE = aeration_energy(t, kla_hist, volumes, saturation=do_saturation)
+    # When a diffuser/blower design is given, AE is the mechanistic blower energy
+    # (SOTE / depth / blower curve) and the total air flow is reported; otherwise
+    # the Copp-2002 aeration-energy correlation (the validated benchmark default).
+    if aeration_system is not None:
+        AE = blower_energy(t, kla_hist, volumes, aeration_system)
+        air_flow = blower_airflow_total(t, kla_hist, volumes, aeration_system)
+    else:
+        AE = aeration_energy(t, kla_hist, volumes, saturation=do_saturation)
+        air_flow = None
     V_digester = float(plant.units["digester"].volume)
     ME = mixing_energy(t, kla_hist, volumes, V_digester)
     aerated = [reactors[i] for i in range(len(reactors))
@@ -552,6 +570,7 @@ def evaluate_bsm2(
         eqi=eqi, oci=oci, aeration_energy=AE, pumping_energy=PE, mixing_energy=ME,
         sludge_production=sludge, carbon_mass=carbon, methane_production=methane,
         heating_energy=HE, effluent=averages, aerated_tanks=aerated,
+        air_flow=air_flow,
     )
 
 
@@ -580,6 +599,9 @@ class BSM1Evaluation:
         SNH, SNO; g/m^3) from :func:`effluent_averages`.
     aerated_tanks : list[str]
         The reactors whose aeration was counted.
+    air_flow : float or None
+        Total blower air flow (m³/d, time-averaged) when an ``aeration_system``
+        diffuser/blower design was supplied; ``None`` for the correlation default.
     oci_note : str
         Notes on the OCI computation.
     """
@@ -591,6 +613,7 @@ class BSM1Evaluation:
     sludge_production: float
     effluent: dict = field(default_factory=dict)
     aerated_tanks: list = field(default_factory=list)
+    air_flow: float | None = None
     oci_note: str = (
         "BSM1 OCI (Copp 2002): AE + PE + 5*sludge. Sludge production is the "
         "wastage TSS mass flow (plant TSS-inventory change neglected -- ~0 at "
@@ -618,9 +641,12 @@ class BSM1Evaluation:
 
         Shows each OCI term with its value, units and signed contribution to the
         index, the effluent averages, and the ``oci_note`` caveat."""
-        terms = [
-            ("Aeration energy  AE", self.aeration_energy, "kWh/d",
-             self.aeration_energy),
+        ae_label = ("Aeration energy  AE (blower)" if self.air_flow is not None
+                    else "Aeration energy  AE")
+        terms = [(ae_label, self.aeration_energy, "kWh/d", self.aeration_energy)]
+        if self.air_flow is not None:
+            terms.append(("  air flow", self.air_flow, "m3/d", None))
+        terms += [
             ("Pumping energy   PE", self.pumping_energy, "kWh/d",
              self.pumping_energy),
             ("Sludge prod.  (x5)", self.sludge_production, "kg TSS/d",
@@ -645,6 +671,7 @@ def evaluate_bsm1(
     ras_port: str = _BSM1_RAS_PORT,
     waste_port: str = _BSM1_WASTE_PORT,
     do_saturation: float = _DO_SATURATION,
+    aeration_system=None,
 ) -> BSM1Evaluation:
     """Compute the BSM1 performance indices from a solved plant.
 
@@ -697,7 +724,14 @@ def evaluate_bsm1(
     reactors = _as_reactors(plant)
     kla_hist = _kla_history(plant, solution, params, reactors)
     volumes = jnp.asarray([float(plant.units[n].volume) for n in reactors])
-    AE = aeration_energy(t, kla_hist, volumes, saturation=do_saturation)
+    # Mechanistic blower energy when a diffuser/blower design is given, else the
+    # Copp-2002 correlation (see evaluate_bsm2).
+    if aeration_system is not None:
+        AE = blower_energy(t, kla_hist, volumes, aeration_system)
+        air_flow = blower_airflow_total(t, kla_hist, volumes, aeration_system)
+    else:
+        AE = aeration_energy(t, kla_hist, volumes, saturation=do_saturation)
+        air_flow = None
     aerated = [reactors[i] for i in range(len(reactors))
                if float(jnp.max(kla_hist[:, i])) > 0.0]
 
@@ -719,6 +753,7 @@ def evaluate_bsm1(
     return BSM1Evaluation(
         eqi=eqi, oci=oci, aeration_energy=AE, pumping_energy=PE,
         sludge_production=sludge, effluent=averages, aerated_tanks=aerated,
+        air_flow=air_flow,
     )
 
 
