@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, mixed_temperature
 from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -68,16 +68,9 @@ class MixerUnit(StatelessUnit):
             mass_total = mass_total + s.Q * s.C
         C_out = mass_total / (Q_total + _EPS_Q)
         # Heat balance: the outlet temperature is the flow-weighted inlet
-        # temperature. Only computed when every inlet carries a temperature
-        # (a static, topology-determined property); otherwise the mixer stays
-        # temperature-agnostic.
-        T_out = None
-        if all(inputs[name].T is not None for name in self.input_port_names):
-            heat = jnp.zeros(())
-            for name in self.input_port_names:
-                s = inputs[name]
-                heat = heat + s.Q * s.T
-            T_out = heat / (Q_total + _EPS_Q)
+        # temperature (over the inlets that carry one; a temperature-agnostic or
+        # zero-flow-seed inlet is ignored rather than poisoning the mix).
+        T_out = mixed_temperature(inputs, self.input_port_names)
         return {"out": Stream(Q=Q_total, C=C_out, network=self.network, T=T_out)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:

@@ -112,9 +112,18 @@ def test_digester_effluent_temperature_is_flow_weighted():
     out = unit.compute_outputs(jnp.asarray(0.0), C, inputs, net.default_parameters())
     expected = (100.0 * 308.15 + 50.0 * 290.15) / 150.0
     assert float(out["effluent"].T) == pytest.approx(expected, rel=1e-9)
-    # A temperature-agnostic inlet makes the effluent temperature-agnostic.
+    # A temperature-agnostic inlet is IGNORED, not allowed to force the whole mix
+    # agnostic: the effluent carries the temperature-bearing feed's T. (This is
+    # what lets temperature propagate around a loop seeded with an agnostic
+    # zero-flow recycle stream -- see streams.mixed_temperature.)
     inputs["reject"] = Stream(Q=jnp.asarray(50.0), C=C, network=net, T=None)
-    out_none = unit.compute_outputs(jnp.asarray(0.0), C, inputs, net.default_parameters())
+    out_partial = unit.compute_outputs(jnp.asarray(0.0), C, inputs,
+                                       net.default_parameters())
+    assert float(out_partial["effluent"].T) == pytest.approx(308.15, rel=1e-9)
+    # Only when NO inlet carries a temperature is the effluent agnostic.
+    inputs["feed"] = Stream(Q=jnp.asarray(100.0), C=C, network=net, T=None)
+    out_none = unit.compute_outputs(jnp.asarray(0.0), C, inputs,
+                                    net.default_parameters())
     assert out_none["effluent"].T is None
 
 

@@ -10,7 +10,10 @@ from aquakin.plant.bsm import (
     bsm2_asm1_network,
     bsm2_constant_influent,
 )
+from aquakin.plant.cstr import CSTRUnit
 from aquakin.plant.influent import InfluentSeries
+from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.plant import Plant
 
 
 @pytest.fixture(scope="module")
@@ -92,6 +95,61 @@ def test_matched_network_instance_wires_fine(asm1):
     plant = build_bsm1(asm1)
     plant.add_influent("feed", asm1.influent({"SS": 60.0}, Q=18446.0))  # same object
     assert any(c.from_port == "feed" for c in plant.connections)
+
+
+# ----- temperature propagates around an AUTO-SEEDED recycle loop ----------
+
+def test_temperature_propagates_around_auto_seeded_recycle(asm1):
+    """A recycle edge wired with no explicit ``initial_value`` is auto-seeded
+    with a zero-flow, temperature-agnostic stream. That seed must not disable
+    temperature propagation around the loop: the mixer ignores the zero-flow
+    agnostic inlet, so a temperature-carrying influent still reaches the reactor.
+
+    Regression -- the seed's ``T=None`` used to poison the front mixer's heat
+    balance (all-inlets-must-carry-T), and because the loop feeds back, the
+    ``None`` perpetuated and temperature never propagated (build_bsm2 only
+    avoided it by hand-seeding its recycles with a nominal temperature)."""
+    plant = Plant("recycle-T")
+    plant.add_unit(MixerUnit("mix", ["fresh", "rec"], asm1))
+    plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
+                            conditions={"T": 293.15}))
+    plant.add_unit(SplitterUnit("split", asm1,
+                                output_port_ratios={"out": 0.7, "rec": 0.3}))
+    plant.add_influent("feed", InfluentSeries.constant(asm1, SS=60.0, Q=1000.0,
+                                                       T=291.0), to="mix.fresh")
+    plant.connect("mix", "tank")
+    plant.connect("tank", "split")
+    plant.connect("split.rec", "mix.rec")          # back-edge: auto-seeded
+    # `out` is a free effluent (no sink needed for stream reconstruction).
+
+    y0 = plant.initial_state()
+    outs = plant.outputs_at(jnp.asarray(0.0), y0)
+    # The mixer's outlet, the reactor's outlet, and the recycled split all carry
+    # the influent temperature -- not None, and not collapsed.
+    assert outs[("mix", "out")].T is not None
+    assert float(outs[("mix", "out")].T) == pytest.approx(291.0, abs=1e-6)
+    assert float(outs[("tank", "out")].T) == pytest.approx(291.0, abs=1e-6)
+    assert float(outs[("split", "rec")].T) == pytest.approx(291.0, abs=1e-6)
+
+
+def test_agnostic_influent_keeps_plant_temperature_agnostic(asm1):
+    """The mirror case: with a temperature-agnostic influent the auto-seeded
+    recycle loop stays agnostic (no temperature is fabricated)."""
+    plant = Plant("recycle-noT")
+    plant.add_unit(MixerUnit("mix", ["fresh", "rec"], asm1))
+    plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
+                            conditions={"T": 293.15}))
+    plant.add_unit(SplitterUnit("split", asm1,
+                                output_port_ratios={"out": 0.7, "rec": 0.3}))
+    plant.add_influent("feed", InfluentSeries.constant(asm1, SS=60.0, Q=1000.0),
+                       to="mix.fresh")            # T=None
+    plant.connect("mix", "tank")
+    plant.connect("tank", "split")
+    plant.connect("split.rec", "mix.rec")
+
+    outs = plant.outputs_at(jnp.asarray(0.0), plant.initial_state())
+    assert outs[("mix", "out")].T is None
+    assert outs[("tank", "out")].T is None
 
 
 # ----- functional: temperature drives nitrification (slow) ----------------

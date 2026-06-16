@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, mixed_temperature
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
@@ -392,19 +392,11 @@ class CSTRUnit:
         return self.network.default_concentrations()
 
     def _mixed_inlet_T(self, inputs: dict[str, Stream]):
-        """Flow-weighted inlet temperature, or ``None`` if any inlet is
-        temperature-agnostic. The well-mixed reactor is taken to be at this
-        temperature (no thermal lag — the hydraulic retention is hours, far
-        shorter than the seasonal temperature variation)."""
-        if not all(inputs[n].T is not None for n in self.input_port_names):
-            return None
-        Q_total = jnp.zeros(())
-        heat = jnp.zeros(())
-        for name in self.input_port_names:
-            s = inputs[name]
-            Q_total = Q_total + s.Q
-            heat = heat + s.Q * s.T
-        return heat / (Q_total + 1e-12)
+        """Flow-weighted inlet temperature, or ``None`` if no inlet carries one.
+        The well-mixed reactor is taken to be at this temperature (no thermal lag
+        — the hydraulic retention is hours, far shorter than the seasonal
+        temperature variation)."""
+        return mixed_temperature(inputs, self.input_port_names)
 
     def compute_outputs(
         self,
