@@ -46,6 +46,11 @@ from aquakin.plant.separators import IdealThickener
 from aquakin.plant.steady import PTCResult, ptc_forward, solve_steady_state
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.streams import Stream, StreamSeries
+from aquakin.plant.temperature import (
+    AlgebraicTemperature,
+    HeatBalanceTemperature,
+    TemperatureModel,
+)
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
 from aquakin.plant.units import FlowContext, StatelessUnit, Unit
 from aquakin.plant.metrics import (
@@ -131,6 +136,9 @@ __all__ = [
     "StorageTank",
     "Stream",
     "StreamSeries",
+    "TemperatureModel",
+    "AlgebraicTemperature",
+    "HeatBalanceTemperature",
     "Unit",
     "CarbonFootprint",
     "CostFactors",

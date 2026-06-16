@@ -2956,7 +2956,46 @@ the recycle pumps hold throughput at `Q_in + Qintr + Qr`
 **synthesised**, not the canonical 609-day IWA series, so the dynamic tests
 assert qualitative stability, not published dynamic metrics.
 
-**Seasonal temperature.** Temperature is carried *algebraically* through the
+**Temperature handling is a selectable `TemperatureModel`
+([`plant/temperature.py`](aquakin/plant/temperature.py)).** Two strategies, set on
+the plant (`plant.set_temperature_model(...)`, or `build_bsm2(temperature_model=
+...)`); exported at the top level (`aquakin.TemperatureModel` /
+`AlgebraicTemperature` / `HeatBalanceTemperature`):
+- **`AlgebraicTemperature`** (default) — temperature is *instantaneous*: each unit
+  flow-weights its inlet `T` (a heat balance) and passes it through, so a reactor
+  runs its kinetics at its flow-weighted inlet temperature, with **no thermal
+  storage**. Carries **zero** extra state and is a pure no-op (every existing
+  plant and validated steady state is byte-for-byte unchanged). This is the
+  historic behaviour, described in the rest of this section.
+- **`HeatBalanceTemperature`** — every finite-volume liquid unit (one exposing a
+  positive `volume`) that is not temperature-fixed carries its temperature as a
+  **dynamic state** with the completely-mixed first-order balance
+  `V dT/dt = Q_in (T_in − T)`; the heated digester sets `temperature_fixed = True`
+  and stays pinned (the BSM2-protocol treatment, Jeppsson et al. 2007). The
+  reactor then runs at this **lagged tank temperature**, so it damps/lags the
+  influent (important because recycles trap heat — the effective AS time constant
+  `V_total/Q_fresh` is hours, comparable to diurnal forcing — which the algebraic
+  model cannot represent). For BSM2 it tracks the 5 reactors + primary clarifier +
+  settler (the `TakacsClarifier` exposes a `volume = area·height` for this). The
+  temperature states are appended as one block at the **tail** of the flat plant
+  state vector (the `FlowSetpoint` tail-append pattern, but for state), so every
+  per-unit state slice keeps its index (warm-starts / `states_by_unit` unaffected);
+  `Plant._split_state` exposes the block under a reserved key, `_sweep_outputs`
+  overrides each tracked unit's outlet `T` with its state (so the lag propagates
+  through the exact recycle-temperature solve), and the reactor reads its operating
+  temperature from a reserved control-signal key (`OPERATING_T_SIGNAL`), falling
+  back to the flow-weighted inlet T when absent. At a constant influent temperature
+  the heat-balance fixed point IS the influent temperature, so it reproduces the
+  algebraic steady state. Tested in
+  `tests/integration/test_temperature_model.py` (tracked set, the first-order
+  balance + `V/Q` time constant, the constant-influent fixed point, AD through the
+  state). *(Motivation: investigating the ~16% effluent-S_NH gap in the dynamic
+  BSM2 vs the ring-test consensus — the algebraic and heat-balance reactor
+  temperatures are equal to ≤0.1 °C across the AS line because the lag averages
+  out over a seasonal window, so this is for transient-temperature fidelity, not a
+  fix for that gap.)*
+
+The default-model behaviour: temperature is carried *algebraically* through the
 flowsheet: `Stream` and `InfluentSeries` have an optional `T` (Kelvin); mixers
 flow-weight it (a heat balance) and every other unit passes it through, so a
 reactor reads its (flow-weighted) inlet temperature and feeds it to the ASM1

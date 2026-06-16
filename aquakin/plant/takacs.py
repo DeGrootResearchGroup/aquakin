@@ -205,6 +205,16 @@ class TakacsClarifier(FlowParameterized):
         return self.n_layers * self._n_part
 
     @property
+    def volume(self) -> float:
+        """Total liquid volume (m³) = settling area × depth.
+
+        Exposed so a :class:`~aquakin.plant.temperature.HeatBalanceTemperature`
+        model gives the settler a (well-mixed) bulk temperature state; it does
+        not enter the settling physics, which are layered.
+        """
+        return float(self.area) * float(self.height)
+
+    @property
     def input_ports(self) -> list[str]:
         return [self.input_port]
 

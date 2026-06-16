@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant.streams import Stream, mixed_temperature
+from aquakin.plant.temperature import OPERATING_T_SIGNAL
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
@@ -454,12 +455,19 @@ class CSTRUnit:
         # Convection.
         convection = (Q_total / self.volume) * (C_in - state)
 
-        # Chemistry. If the inflow carries a temperature and the network uses a
-        # 'T' condition, the reactor runs at that (flow-weighted) temperature --
-        # so temperature-dependent kinetics track the influent through the
-        # season; otherwise the static condition value is used.
+        # Chemistry. The reactor's operating temperature is, in order: the
+        # plant-supplied operating temperature (the lagged tank state under a
+        # heat-balance temperature model, threaded in via the control-signal bus);
+        # else the flow-weighted inlet temperature (the instantaneous/algebraic
+        # default); else the static condition value. When set and the network uses
+        # a 'T' condition, temperature-dependent kinetics run at it -- so they
+        # track the season.
         conditions = self._condition_arrays
-        T_in = self._mixed_inlet_T(inputs)
+        T_in = None
+        if signals is not None:
+            T_in = signals.get(OPERATING_T_SIGNAL)
+        if T_in is None:
+            T_in = self._mixed_inlet_T(inputs)
         if T_in is not None and "T" in self._condition_arrays:
             conditions = {**self._condition_arrays, "T": jnp.reshape(T_in, (1,))}
         stoich = self.network.compute_stoich(params)

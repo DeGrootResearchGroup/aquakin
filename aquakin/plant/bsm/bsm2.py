@@ -307,6 +307,7 @@ def build_bsm2(
     hydraulic_delay: Optional["HydraulicDelay"] = None,
     wastage_schedule: Optional["object"] = None,
     do_temperature_correction: bool = False,
+    temperature_model: Optional["object"] = None,
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
@@ -660,5 +661,12 @@ def build_bsm2(
     plant.register_stream("reject", "reject_mix.out")
     plant.register_stream("dewatering_reject", "dewatering.overflow")
     plant.register_stream("disposal_sludge", "dewatering.underflow")
+
+    # Optional dynamic-temperature (heat-balance) model. Default (None) leaves the
+    # plant's algebraic instantaneous temperature, so the validated steady state
+    # is unchanged; pass HeatBalanceTemperature() to give each finite-volume unit
+    # a temperature state (the digester stays fixed at 35 degC).
+    if temperature_model is not None:
+        plant.set_temperature_model(temperature_model)
 
     return plant
