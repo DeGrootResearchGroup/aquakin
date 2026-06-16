@@ -155,6 +155,44 @@ def test_do_control_auto_wires_a_controller(asm1):
     assert np.all(np.isfinite(np.asarray(sol.state)))
 
 
+# --- seasonal temperature ---------------------------------------------------
+
+def test_inlet_temperature_propagates_and_drives_kinetics(asm1):
+    """The MBR carries the flow-weighted inlet temperature onto its outlet streams
+    and feeds it to the (Arrhenius) kinetics, like a CSTR -- not the static
+    condition. A warmer feed nitrifies faster, so the ammonia derivative differs."""
+    mbr = _mbr(asm1)
+    C = asm1.concentrations({"XB_H": 2000.0, "XB_A": 120.0, "SNH": 30.0, "SO": 2.0})
+    state = jnp.concatenate([C, jnp.zeros((1,))])
+    p = asm1.default_parameters()
+    cold = Stream(Q=jnp.asarray(1000.0), C=asm1.default_concentrations(),
+                  network=asm1, T=283.15)
+    warm = Stream(Q=jnp.asarray(1000.0), C=asm1.default_concentrations(),
+                  network=asm1, T=303.15)
+    outs = mbr.compute_outputs(jnp.asarray(0.0), state, {"feed": cold}, p)
+    assert float(outs["permeate"].T) == pytest.approx(283.15)   # carried downstream
+    assert float(outs["waste"].T) == pytest.approx(283.15)
+    snh = asm1.species_index["SNH"]
+    dC_cold = mbr.rhs(jnp.asarray(0.0), state, {"feed": cold}, p)
+    dC_warm = mbr.rhs(jnp.asarray(0.0), state, {"feed": warm}, p)
+    assert float(dC_cold[snh]) != float(dC_warm[snh])           # T drives kinetics
+
+
+# --- mass balance -----------------------------------------------------------
+
+def test_mass_balance_closes(asm1):
+    """Regression for #348: a plant containing an MBR must close its mass balance.
+    The inventory reads the fixed reactor volume (not the fouling resistance), and
+    the aeration-O2 / reaction-gas term treats the MBR as a reactive aerated unit."""
+    mbr = _mbr(asm1)
+    p = _plant(asm1, mbr)
+    sol = p.solve(t_span=(0.0, 60.0), t_eval=jnp.linspace(40.0, 60.0, 21))  # near steady
+    mb = p.mass_balance(sol)
+    for q in ("COD", "N"):
+        infl = mb[q].inflow
+        assert abs(mb[q].imbalance) < 0.02 * abs(infl)          # closes to a few %
+
+
 # --- AD ---------------------------------------------------------------------
 
 def test_grad_through_mbr(asm1):

@@ -135,10 +135,12 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
     Handles every shipped unit type: a concentration-vector unit (CSTR /
     primary clarifier / digester) holds ``volume × Σ C·content``; the digester
     weights its three gas-headspace states by the headspace volume ``V_gas``; a
-    storage tank carries its liquid volume as the last state entry; a sequencing
-    batch reactor carries ``[C..., V, <settling state>]`` (volume at ``n_species``,
-    the trailing settling state massless); the layered Takács settler sums its
-    particulate blanket over the layers; stateless units hold nothing.
+    sequencing batch reactor carries ``[C..., V, <settling state>]`` (volume at
+    ``n_species``, the trailing settling state massless); a membrane bioreactor
+    carries ``[C..., R_f]`` at its fixed ``volume`` (the trailing fouling
+    resistance is massless); a storage tank carries its liquid volume as the last
+    state entry; the layered Takács settler sums its particulate blanket over the
+    layers; stateless units hold nothing.
     """
     unit = plant.units[unit_name]
     net = getattr(unit, "network", None)
@@ -164,6 +166,15 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
     if hasattr(unit, "settling") and hasattr(unit, "full_volume"):
         C = sv[:net.n_species]
         V = float(sv[net.n_species])
+        return {comp: V * float(np.dot(C, vec)) for comp, vec in content.items()}
+
+    # Membrane bioreactor: state is [C..., R_f]; the volume is the fixed
+    # ``unit.volume`` and the trailing fouling resistance is dimensionless and
+    # carries no mass (so it must NOT be read as the volume by the storage-tank
+    # branch below, which the n_species+1 size would otherwise match).
+    if hasattr(unit, "membrane_area") and getattr(unit, "volume", None) is not None:
+        V = float(unit.volume)
+        C = sv[:net.n_species]
         return {comp: V * float(np.dot(C, vec)) for comp, vec in content.items()}
 
     # Storage tank: [C..., V]; the liquid volume is the trailing state entry.
@@ -423,7 +434,11 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_network, comp
         for name in reactive:
             unit = plant.units[name]
             start, size = layout[name]
-            C = state_i[start:start + size]
+            # Use the species part only: a unit may carry trailing non-species
+            # state (an MBR's fouling resistance), which the per-species reaction
+            # and aeration terms must not see.
+            n_sp = unit.network.n_species
+            C = state_i[start:start + n_sp]
             react = _reaction_term(plant, name, C, params)
             for q in gas_comps[name]:
                 R[q] += float(jnp.dot(react, content[name][q]))
