@@ -151,6 +151,7 @@ class StorageTank:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         s_in = inputs[self.input_port]
         C_tank = state[: self.network.n_species]

@@ -337,6 +337,7 @@ class TakacsClarifier(FlowParameterized):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         s_in = inputs[self.input_port]
         layered = self._layered(state)  # (n_layers, n_part)

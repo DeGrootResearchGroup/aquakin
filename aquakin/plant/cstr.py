@@ -413,6 +413,7 @@ class CSTRUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         # Total inflow Q. The outflow equals the total inflow (constant
         # volume assumption; no accumulation of water).

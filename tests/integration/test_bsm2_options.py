@@ -96,10 +96,16 @@ def test_hydraulic_delay_object_tau(nets):
 
 def test_carbon_default_on_and_disablable(nets):
     asm1, adm1 = nets
-    assert "external_carbon" in build_bsm2(asm1, adm1).influents
-    assert "external_carbon" not in build_bsm2(asm1, adm1, carbon=None).influents
+    # External carbon is now a DosingUnit on the as_mix -> tank1 line (default on).
+    from aquakin.plant.dosing import DosingUnit
+    default = build_bsm2(asm1, adm1)
+    assert "external_carbon" in default.units
+    assert isinstance(default.units["external_carbon"], DosingUnit)
+    assert "external_carbon" not in build_bsm2(asm1, adm1, carbon=None).units
     plant = build_bsm2(asm1, adm1, carbon=ExternalCarbon(flow=3.0, conc=5e5))
-    assert "external_carbon" in plant.influents
+    dose = plant.units["external_carbon"]
+    assert dose.flow == 3.0
+    assert float(dose.reagent.composition[asm1.species_index["SS"]]) == 5e5
 
 
 def test_option_objects_are_frozen():
