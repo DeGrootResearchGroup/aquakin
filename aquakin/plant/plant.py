@@ -1010,7 +1010,12 @@ class Plant:
                 out_min=a0.kla_min, out_max=a0.kla_max,
                 signal_name=_aeration_signal_name(cid),
             ))
-            self.connect(sensor, f"{ctrl_name}.measured")
+            # Tap the sensor's first output port explicitly: the controller reads
+            # the sensed value from the sensor's state (a reactor concentration),
+            # so any output port carries it, but a bare endpoint is ambiguous for a
+            # multi-output sensor (e.g. an MBR's permeate/waste).
+            sensor_port = self.units[sensor].output_ports[0]
+            self.connect(f"{sensor}.{sensor_port}", f"{ctrl_name}.measured")
 
     def _materialize_dosing(self) -> None:
         """Auto-wire a PI controller for every feedback :class:`DosingUnit`.
