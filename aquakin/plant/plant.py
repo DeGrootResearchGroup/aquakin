@@ -1878,9 +1878,19 @@ class Plant:
         all_outputs, streams = self._resolve_streams(
             t, states, params_full, design=design)
 
+        # Collect each unit's converged input streams ONCE per step, then reuse
+        # them for both the control-signal bus and the dstate pass. The streams
+        # are fixed after the sweep, so re-collecting per consumer (the signal
+        # gather did its own collection, the dstate loop another) repeated the
+        # translator calls and Stream allocations on every RHS step -- and on the
+        # differentiated tape. Same values, so the result is unchanged.
+        inputs_by_unit = {
+            name: self._collect_inputs(name, all_outputs, streams)
+            for name in self._unit_order
+        }
+
         # Step 3b: control signals (see :meth:`_compute_signals`).
-        signals = self._compute_signals(t, states, all_outputs, streams,
-                                        params_full)
+        signals = self._compute_signals(t, states, inputs_by_unit, params_full)
 
         # Step 4: compute dstates from final input streams and the (always
         # passed) control-signal bus. Every unit's rhs has the same signature;
@@ -1888,9 +1898,8 @@ class Plant:
         dstates: list[jnp.ndarray] = []
         for name in self._unit_order:
             unit = self.units[name]
-            inputs = self._collect_inputs(name, all_outputs, streams)
-            params_unit = self._params_for_unit(name, params_full)
-            dstate = unit.rhs(t, states[name], inputs, params_unit, signals)
+            dstate = unit.rhs(t, states[name], inputs_by_unit[name],
+                              self._params_for_unit(name, params_full), signals)
             dstates.append(dstate)
         return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
 
@@ -1898,8 +1907,7 @@ class Plant:
         self,
         t: jnp.ndarray,
         states: dict[str, jnp.ndarray],
-        all_outputs: dict[tuple[str, str], Stream],
-        streams: dict[tuple[Optional[str], str], Stream],
+        inputs_by_unit: dict[str, dict[str, Stream]],
         params_full: jnp.ndarray,
     ) -> dict:
         """Gather the control-signal bus from every controller unit.
@@ -1909,15 +1917,16 @@ class Plant:
         shared dict; that dict is threaded into every unit's ``rhs`` as
         ``signals``, where an aerated CSTR under DO control reads it. Whether a
         unit produces signals is a class-level property, so the branch is static
-        (jit-safe).
+        (jit-safe). ``inputs_by_unit`` is the already-collected per-unit input
+        map (collected once per step by the caller), so the controllers' sensed
+        streams are not re-collected here.
         """
         signals: dict = {}
         for name in self._unit_order:
             unit = self.units[name]
             if hasattr(unit, "signal_outputs"):
-                inputs = self._collect_inputs(name, all_outputs, streams)
                 signals.update(unit.signal_outputs(
-                    t, states[name], inputs,
+                    t, states[name], inputs_by_unit[name],
                     self._params_for_unit(name, params_full)))
         return signals
 
@@ -1956,8 +1965,13 @@ class Plant:
         states = self._split_state(jnp.asarray(state_full))
         all_outputs, streams = self._resolve_streams(
             jnp.asarray(t), states, params_full)
+        inputs_by_unit = {
+            name: self._collect_inputs(name, all_outputs, streams)
+            for name in self._unit_order
+            if hasattr(self.units[name], "signal_outputs")
+        }
         return self._compute_signals(
-            jnp.asarray(t), states, all_outputs, streams, params_full)
+            jnp.asarray(t), states, inputs_by_unit, params_full)
 
     def _seed_recycle_streams(
         self,
