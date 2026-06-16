@@ -2733,20 +2733,30 @@ integrator) or `events=` (the segmented solve) raises. Like `dtmax=`, they do no
 change the `gradient="auto"` routing. Covered by
 `tests/integration/test_plant_solver_option.py`.
 
-**The biggest lever is still on the table — `S_h2` quasi-steady-state (issue
-#361, deferred).** Every production WWTP simulator (BSM2 reference, GPS-X, WEST)
-removes the ADM1 stiffness at the *source* by collapsing the two fastest states —
-pH **and dissolved hydrogen `S_h2`** — to algebraic equilibrium, then runs a
-non-stiff solver: Table 4.5 of the BSM book (Rosen et al. 2006) reports ~18–28×
-from pH+`S_h2`, and **pH alone buys nothing**. We already solve pH via the
-charge-balance speciation solver, but `S_h2` is still a differential ADM1 state
-with a sub-second time constant — *the* stiff offender. Making it algebraic (QSS)
-is the documented universal fix and the planned next structural step. (A related
-finding: the `clip_negative_states` `max(x,0)` is a *state-triggered moving
-derivative kink* near depleted species — DO in anoxic zones, depleted substrates
-— which embedded error estimators reject at, and which cannot be declared as a
-breakpoint; this is why `jump_ts` did nothing. Smooth Monod switching guards
-`[S]/(K+[S])` are the IWA-native fix. See issue #361.)
+**`S_h2` quasi-steady-state — TESTED AND REJECTED for our solver (issue #361).**
+Every production WWTP simulator (BSM2 reference, GPS-X, WEST) makes the two
+fastest ADM1 states — pH **and dissolved hydrogen `S_h2`** — algebraic, reporting
+~18–28× (Rosen et al. 2006, Table 4.5). **But that win is an *explicit*-solver
+(ODE45) benefit and does NOT transfer to our L-stable implicit `Kvaerno5`.** A
+proof-of-concept confirmed it: the QSS equation is sound (monotone residual,
+unique root, algebraic `S_h2` = 2.508e-7 vs the reference 2.506e-7, slow states
+reproduced to 1e-10), but freezing `S_h2` at its exact QSS value via a smooth
+Newton solver left the digester step count **unchanged** (801 vs 812 steps; 384
+vs 389 rejections). The reason is fundamental: an L-stable implicit method
+*already* performs the QSS implicitly — it damps the `S_h2` fast mode (eigenvalue
+~1.4e6 d⁻¹) to its quasi-steady value at any step size, so removing it by hand is
+redundant. (pH is different: it is not a fast *mode* but a state-derived
+algebraic condition, which is why we solve it directly.) **Do not build the
+`S_h2` DAE machinery** — it is multi-day, fragile, and zero-benefit here.
+
+**The remaining lever for the ~50% rejection is the `clip_negative_states`
+`max(x,0)` kink (issue #361).** It is a *state-triggered moving derivative kink*
+near depleted species (DO in anoxic zones, depleted substrates) that embedded
+error estimators reject at, and that cannot be declared as a `jump_ts` breakpoint
+(why `jump_ts` did nothing). Unlike `S_h2` QSS this is **solver-agnostic** (it
+hurts implicit methods too). The IWA-native fix is smooth Monod switching guards
+`[S]/(K+[S])` (small K) or a smooth clamp `½(x+√(x²+ε²))` — the next thing to
+test. See issue #361.
 
 **IFAS / MBBR unit ([`plant/ifas.py`](aquakin/plant/ifas.py)).** `IFASUnit`
 (alias `MBBRUnit`) places carrier-media biofilm in the flowsheet by **wiring the
