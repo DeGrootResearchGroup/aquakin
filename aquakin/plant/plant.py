@@ -976,6 +976,61 @@ class Plant:
             ))
             self.connect(sensor, f"{ctrl_name}.measured")
 
+    def _materialize_dosing(self) -> None:
+        """Auto-wire a PI controller for every feedback :class:`DosingUnit`.
+
+        A ``DosingUnit`` with a ``setpoint`` reads a dose-flow control signal in
+        its ``compute_outputs`` but does not itself supply the controller. This
+        creates the missing controllers from the units' specs -- the dosing
+        analogue of :meth:`_materialize_aeration` -- grouping units by their
+        ``controller`` id (shared controller) or giving each its own. For each
+        group one :class:`~aquakin.plant.control.PIController` is added, sensing
+        the group's ``sensor`` reactor and publishing the dose-flow signal the
+        units consume, and the sensor is connected to it. Idempotent; runs at
+        topology setup before the state layout is assigned.
+
+        Units sharing a controller must agree on its setpoint, sensor, measured
+        species and PI tuning; only the per-unit ``gain`` may differ.
+        """
+        if getattr(self, "_dosing_materialized", False):
+            return
+        self._dosing_materialized = True
+
+        from aquakin.plant.control import PIController
+        from aquakin.plant.dosing import DosingUnit, dose_signal_name
+
+        groups: dict[str, list[tuple[str, "DosingUnit"]]] = {}
+        for name in list(self._insertion_order):
+            unit = self.units[name]
+            if isinstance(unit, DosingUnit) and unit.is_closed_loop:
+                groups.setdefault(unit.controller_id(), []).append((name, unit))
+
+        for cid, members in groups.items():
+            first_name, d0 = members[0]
+            key = (d0.setpoint, d0.sensor, d0.measured_species,
+                   d0.Kp, d0.Ti, d0.Tt, d0.flow_offset, d0.flow_min, d0.flow_max)
+            for nm, d in members[1:]:
+                if (d.setpoint, d.sensor, d.measured_species, d.Kp, d.Ti, d.Tt,
+                        d.flow_offset, d.flow_min, d.flow_max) != key:
+                    raise ValueError(
+                        f"DosingUnits sharing controller '{cid}' ('{first_name}', "
+                        f"'{nm}') must agree on setpoint, sensor, measured species "
+                        f"and PI tuning; only gain may differ."
+                    )
+            if d0.sensor not in self.units:
+                raise ValueError(
+                    f"Dosing controller '{cid}' senses unit '{d0.sensor}', which "
+                    f"is not in the plant."
+                )
+            self.add_unit(PIController(
+                name=cid, network=self.units[d0.sensor].network,
+                measured_species=d0.measured_species, setpoint=d0.setpoint,
+                Kp=d0.Kp, Ti=d0.Ti, Tt=d0.Tt, offset=d0.flow_offset,
+                out_min=d0.flow_min, out_max=d0.flow_max,
+                signal_name=dose_signal_name(cid),
+            ))
+            self.connect(d0.sensor, f"{cid}.measured")
+
     def _build_state_layout(self) -> None:
         """Assign each unit a contiguous slice of the flat state vector.
 
@@ -987,6 +1042,7 @@ class Plant:
         invoke first.
         """
         self._materialize_aeration()
+        self._materialize_dosing()
         self._finalize_topology()
         layout: dict[str, tuple[int, int]] = {}
         cursor = 0
@@ -1495,6 +1551,7 @@ class Plant:
         t: jnp.ndarray,
         states: dict[str, jnp.ndarray],
         params_full: jnp.ndarray,
+        signals: Optional[dict] = None,
         design: Optional[dict] = None,
     ) -> tuple[
         dict[tuple[Optional[str], str], Stream],
@@ -1515,6 +1572,14 @@ class Plant:
         carries a non-JAX ``network`` field and so cannot be a differentiated
         leaf; the network is supplied here from the recorded influent.)
         """
+        # The control-signal bus is computed from the states up front (controllers
+        # sense reactor states), so it is available to every unit's
+        # compute_outputs during the sweep -- a feedback-dosing unit reads its
+        # dose flow there. Callers other than _rhs (outputs_at, the steady-state
+        # solve) leave it None and it is computed here; _rhs passes the bus it
+        # also reuses for the dstate pass.
+        if signals is None:
+            signals = self._compute_signals(t, states, params_full)
         influent_override = (design or {}).get("influent", {})
         streams: dict[tuple[Optional[str], str], Stream] = {}
         for port_name, series in self.influents.items():
@@ -1532,8 +1597,9 @@ class Plant:
         # in-cycle unit, if any. Falls back to the zero auto-seed when there are
         # no recycle edges.
         seeded = self._resolve_recycle_concentrations(t, states, params_full,
-                                                      resolved_flows)
-        all_outputs = self._sweep_outputs(t, states, streams, seeded, params_full)
+                                                      resolved_flows, signals)
+        all_outputs = self._sweep_outputs(t, states, streams, seeded, params_full,
+                                          signals=signals)
         return all_outputs, streams
 
     def outputs_at(
@@ -1853,16 +1919,18 @@ class Plant:
         # Step 1: split state by unit.
         states = self._split_state(state_full)
 
-        # Steps 2-3: resolve influent + recycle streams and run the output sweep.
-        # ``design`` (optional) carries differentiable design-variable overrides
-        # -- currently the influent streams -- threaded into the stream resolution
-        # so a steady-state / sweep can take gradients w.r.t. them.
-        all_outputs, streams = self._resolve_streams(
-            t, states, params_full, design=design)
+        # Step 2: control signals, computed from the reactor states BEFORE the
+        # sweep (see :meth:`_compute_signals`) so a feedback-dosing unit can read
+        # its dose-flow signal while its output stream is being computed.
+        signals = self._compute_signals(t, states, params_full)
 
-        # Step 3b: control signals (see :meth:`_compute_signals`).
-        signals = self._compute_signals(t, states, all_outputs, streams,
-                                        params_full)
+        # Step 3: resolve influent + recycle streams and run the output sweep,
+        # threading the signal bus into every unit's ``compute_outputs`` (a
+        # dosing unit reads its dose flow there). ``design`` (optional) carries
+        # differentiable design-variable overrides -- currently the influent
+        # streams -- so a steady-state / sweep can take gradients w.r.t. them.
+        all_outputs, streams = self._resolve_streams(
+            t, states, params_full, signals=signals, design=design)
 
         # Step 4: compute dstates from final input streams and the (always
         # passed) control-signal bus. Every unit's rhs has the same signature;
@@ -1880,27 +1948,43 @@ class Plant:
         self,
         t: jnp.ndarray,
         states: dict[str, jnp.ndarray],
-        all_outputs: dict[tuple[str, str], Stream],
-        streams: dict[tuple[Optional[str], str], Stream],
         params_full: jnp.ndarray,
     ) -> dict:
-        """Gather the control-signal bus from every controller unit.
+        """Gather the control-signal bus from every controller unit -- BEFORE the
+        stream sweep.
 
-        Units exposing ``signal_outputs`` (e.g. PI controllers) read their
-        sensed input streams and own state and write named scalar signals into a
-        shared dict; that dict is threaded into every unit's ``rhs`` as
-        ``signals``, where an aerated CSTR under DO control reads it. Whether a
-        unit produces signals is a class-level property, so the branch is static
-        (jit-safe).
+        Units exposing ``signal_outputs`` (e.g. PI controllers) read a sensed
+        reactor variable and their own state and write named scalar signals into
+        a shared dict; that dict is threaded into every unit's ``compute_outputs``
+        and ``rhs`` as ``signals``. A controller senses a reactor's
+        concentration, which IS that unit's state, so the sensed value is taken
+        directly from ``states`` and the bus is computed *before* the sweep. That
+        ordering is what lets a feedback-dosing unit read its dose-flow signal in
+        ``compute_outputs`` -- a dose changes the output stream, computed in the
+        sweep, so the signal must already exist. Each controller's sensed
+        ``inputs`` stream is reconstructed from the sensor unit's state
+        (``C = state``); the sensor must therefore be a reactor whose output
+        concentration is its state (a :class:`CSTRUnit`). Whether a unit produces
+        signals is a class-level property, so the branch is static (jit-safe).
         """
         signals: dict = {}
         for name in self._unit_order:
             unit = self.units[name]
-            if hasattr(unit, "signal_outputs"):
-                inputs = self._collect_inputs(name, all_outputs, streams)
-                signals.update(unit.signal_outputs(
-                    t, states[name], inputs,
-                    self._params_for_unit(name, params_full)))
+            if not hasattr(unit, "signal_outputs"):
+                continue
+            # Reconstruct each sensed source's stream from its state (a reactor's
+            # output concentration is its state), so no swept stream is needed.
+            sensed_outputs: dict[tuple[str, str], Stream] = {}
+            for conn in self._inputs_by_unit.get(name, ()):
+                if conn.from_unit is None:
+                    continue
+                sensed_outputs[(conn.from_unit, conn.from_port)] = Stream(
+                    Q=jnp.zeros(()), C=states[conn.from_unit],
+                    network=self.units[conn.from_unit].network)
+            inputs = self._collect_inputs(name, sensed_outputs, {})
+            signals.update(unit.signal_outputs(
+                t, states[name], inputs,
+                self._params_for_unit(name, params_full)))
         return signals
 
     def signals_at(
@@ -1936,10 +2020,9 @@ class Plant:
             self.default_parameters() if params is None else self._coerce_params(params)
         )
         states = self._split_state(jnp.asarray(state_full))
-        all_outputs, streams = self._resolve_streams(
-            jnp.asarray(t), states, params_full)
-        return self._compute_signals(
-            jnp.asarray(t), states, all_outputs, streams, params_full)
+        # The bus is computed from the reactor states alone (controllers sense
+        # states), so no stream sweep is needed to reconstruct it.
+        return self._compute_signals(jnp.asarray(t), states, params_full)
 
     def _seed_recycle_streams(
         self,
@@ -1970,6 +2053,7 @@ class Plant:
         states: dict[str, jnp.ndarray],
         params_full: jnp.ndarray,
         resolved_flows: dict[tuple[Optional[str], str], jnp.ndarray],
+        signals: Optional[dict] = None,
     ) -> dict[tuple[str, str], Stream]:
         """Pre-solve the recycle back-edge concentrations exactly, as a seed.
 
@@ -2023,7 +2107,7 @@ class Plant:
             seeded = {k: Stream(Q=resolved_flows[k], C=c_by_key[k],
                                 network=seed_net[k], T=T_by_key[k]) for k in keys}
             out = self._sweep_outputs(t, states, influent, seeded, params_full,
-                                      passes=1)
+                                      passes=1, signals=signals)
             return ({k: out[k].C for k in keys},
                     {k: out[k].T for k in keys})
 
@@ -2090,6 +2174,7 @@ class Plant:
         seeded: dict[tuple[str, str], Stream],
         params_full: jnp.ndarray,
         passes: Optional[int] = None,
+        signals: Optional[dict] = None,
     ) -> dict[tuple[str, str], Stream]:
         """Resolve unit outputs with the fixed-pass Gauss-Seidel recycle sweep.
 
@@ -2119,7 +2204,8 @@ class Plant:
                 unit = self.units[name]
                 inputs = self._collect_inputs(name, all_outputs, streams)
                 params_unit = self._params_for_unit(name, params_full)
-                outputs = unit.compute_outputs(t, states[name], inputs, params_unit)
+                outputs = unit.compute_outputs(t, states[name], inputs,
+                                               params_unit, signals)
                 for port, stream in outputs.items():
                     all_outputs[(name, port)] = stream
                     streams[(name, port)] = stream
@@ -2151,6 +2237,8 @@ class Plant:
         if not self._recycle_conns:
             return
 
+        signals = self._compute_signals(t, states, params_full)
+
         def sweep(passes):
             streams: dict[tuple[Optional[str], str], Stream] = {}
             for port_name, series in self.influents.items():
@@ -2161,9 +2249,9 @@ class Plant:
             # remove* (the non-affine-in-cycle part), not the gain-limited
             # convergence of the bare zero-seed the pre-solve replaced.
             seeded = self._resolve_recycle_concentrations(
-                t, states, params_full, resolved_flows)
+                t, states, params_full, resolved_flows, signals)
             return self._sweep_outputs(t, states, streams, seeded, params_full,
-                                       passes=passes)
+                                       passes=passes, signals=signals)
 
         base = sweep(self.recycle_passes)
         deep = sweep(self.recycle_passes + extra_passes)

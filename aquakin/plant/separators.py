@@ -125,6 +125,7 @@ class IdealThickener(StatelessUnit):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         s_in = inputs[self.input_port]
         Q_in = s_in.Q

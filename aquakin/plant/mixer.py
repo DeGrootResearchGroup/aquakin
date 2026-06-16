@@ -59,6 +59,7 @@ class MixerUnit(StatelessUnit):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         Q_total = jnp.zeros(())
         mass_total = jnp.zeros((self.network.n_species,))
@@ -229,6 +230,7 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         s_in = inputs["in"]
         outputs: dict[str, Stream] = {}

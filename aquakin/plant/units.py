@@ -53,8 +53,11 @@ class Unit(Protocol):
 
     - :meth:`initial_state` — the ``(state_size,)`` initial state vector.
     - :meth:`compute_outputs` — given the current ``t``, internal ``state``,
-      and input streams, return the output streams. Called by the plant in
-      topological order on every RHS evaluation.
+      input streams, and the control-signal bus, return the output streams.
+      Called by the plant in topological order on every RHS evaluation. It
+      receives the same ``signals`` bus threaded into :meth:`rhs`, so a unit
+      whose *output* stream depends on a control signal (e.g. a feedback-dosing
+      unit) can read it; an uncontrolled unit ignores it.
     - :meth:`rhs` — given the current ``t``, internal ``state``, input streams,
       and the control-signal bus, return ``dstate/dt`` of shape
       ``(state_size,)``. Called by the plant on every RHS evaluation after all
@@ -97,6 +100,7 @@ class Unit(Protocol):
         state: jnp.ndarray,
         inputs: dict[str, "Stream"],
         params: jnp.ndarray,
+        signals: Optional[dict] = None,
     ) -> dict[str, "Stream"]: ...
 
     def rhs(

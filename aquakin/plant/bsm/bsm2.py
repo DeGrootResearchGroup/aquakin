@@ -45,6 +45,7 @@ from typing import Optional
 import jax.numpy as jnp
 
 from aquakin.plant.cstr import Aeration, CSTRUnit
+from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
@@ -467,9 +468,15 @@ def build_bsm2(
 
     # ----- Activated sludge: mixer + 5 CSTRs + internal recycle. -----
     as_ports = ["primary_eff", "internal_recycle", "ras"]
-    if carbon_flow > 0:
-        as_ports.append("carbon")   # external carbon dosed to reactor 1
     plant.add_unit(MixerUnit(name="as_mix", input_port_names=as_ports, network=asm1))
+    if carbon_flow > 0:
+        # External carbon (a readily-biodegradable SS source) dosed into reactor 1
+        # to support denitrification -- a fixed-flow DosingUnit on the
+        # as_mix -> tank1 line, generalising the former hard-coded carbon influent.
+        plant.add_unit(DosingUnit(
+            name="external_carbon", flow=carbon_flow,
+            reagent=Reagent.from_species(asm1, SS=carbon_conc,
+                                         label="external carbon")))
     # Aeration temperature-correction kwargs, shared by both construction
     # branches. The reference temperature is the reactors' static T, so the
     # correction is unity at the benchmark operating point and only a
@@ -575,7 +582,11 @@ def build_bsm2(
     # Front line (bare endpoints use each unit's sole in/out port).
     plant.connect("front_mix", "primary")
     plant.connect("primary.effluent", "as_mix.primary_eff")
-    plant.connect("as_mix", "tank1")
+    if carbon_flow > 0:
+        plant.connect("as_mix", "external_carbon.in")
+        plant.connect("external_carbon.out", "tank1")
+    else:
+        plant.connect("as_mix", "tank1")
     plant.connect("tank1", "tank2")
     plant.connect("tank2", "tank3")
     plant.connect("tank3", "tank4")
@@ -611,15 +622,7 @@ def build_bsm2(
     else:
         plant.connect("reject_mix", "front_mix.reject", initial_value=seed)
     # dewatering:underflow -> sludge disposal (leaves the plant; not routed).
-
-    # External carbon dosing to reactor 1 (a constant readily-biodegradable SS
-    # source) -- supports denitrification in the anoxic tanks and is part of the
-    # BSM2 plant design, so the builder adds it directly.
-    if carbon_flow > 0:
-        carbon_influent = asm1.influent(
-            {"SS": carbon_conc}, Q=carbon_flow,
-            T=conditions.get("T", BSM2_AS_TEMPERATURE_K))
-        plant.add_influent("external_carbon", carbon_influent, to="as_mix.carbon")
+    # (External carbon is dosed by the `external_carbon` DosingUnit wired above.)
 
     # Record the canonical entry / exit endpoints so callers never hard-code a
     # port: the influent enters the hydraulic delay (front-most) if present, else
