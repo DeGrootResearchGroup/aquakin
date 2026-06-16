@@ -27,6 +27,7 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import Optional
 
+import jax
 import jax.numpy as jnp
 
 from aquakin.plant.metrics import (
@@ -246,22 +247,33 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
     kLa from the control signal (via :meth:`Plant.signals_at`), otherwise its
     fixed ``kLa``.
     """
+    n_t = solution.t.shape[0]
     need_signals = any(plant.units[n]._controlled_kla for n in tanks)
-    rows = []
-    for i in range(solution.t.shape[0]):
-        sig = (plant.signals_at(solution.t[i], solution.state[i], params)
-               if need_signals else {})
-        row = []
+    if not need_signals:
+        # Every tank's kLa is fixed: one constant row, tiled over time.
+        row = jnp.asarray([
+            float(plant.units[n]._kla_vec[plant.units[n].network.species_index["SO"]])
+            for n in tanks])
+        return jnp.broadcast_to(row, (n_t, len(tanks)))
+
+    # Closed-loop DO control: the manipulated kLa comes from the control signal,
+    # reconstructed per saved state. vmap it over all times in one sweep instead
+    # of a per-step Python call to signals_at.
+    def _row(t_i, state_row):
+        sig = plant.signals_at(t_i, state_row, params)
+        vals = []
         for n in tanks:
             unit = plant.units[n]
             controlled = unit._controlled_kla.get("SO")
             if controlled is not None:
                 signal_name, gain = controlled
-                row.append(float(sig[signal_name]) * gain)
+                vals.append(sig[signal_name] * gain)
             else:
-                row.append(float(unit._kla_vec[unit.network.species_index["SO"]]))
-        rows.append(row)
-    return jnp.asarray(rows)
+                vals.append(jnp.asarray(
+                    float(unit._kla_vec[unit.network.species_index["SO"]])))
+        return jnp.stack(vals)
+
+    return jax.vmap(_row)(jnp.asarray(solution.t), jnp.asarray(solution.state))
 
 
 def _time_average(t: jnp.ndarray, values: jnp.ndarray) -> float:
@@ -383,13 +395,17 @@ def _feed_temperature_C(plant, solution, params_full, default_C):
     feed = final.get(("sludge_mix", "out"))
     if feed is None or feed.T is None:
         return float(default_C)
-    temps = []
-    for i in range(solution.t.shape[0]):
-        f = plant.outputs_at(solution.t[i], solution.state[i],
-                             params_full).get(("sludge_mix", "out"))
-        temps.append(float(f.T) - 273.15 if (f is not None and f.T is not None)
-                     else float(default_C))  # Stream T is Kelvin
-    return jnp.asarray(temps)
+    # T is structurally present (a temperature-carrying influent leaves every
+    # stream with a T), so vmap the digester-feed temperature over all saved
+    # times in one vectorised sweep rather than a per-step Python loop.
+    ts = jnp.asarray(solution.t)
+
+    def _feed_T(t_i, state_row):
+        states = plant._split_state(state_row)
+        outs, _ = plant._resolve_streams(t_i, states, params_full)
+        return outs[("sludge_mix", "out")].T
+
+    return jax.vmap(_feed_T)(ts, jnp.asarray(solution.state)) - 273.15  # K -> C
 
 
 def evaluate_bsm2(
