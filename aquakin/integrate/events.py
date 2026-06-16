@@ -286,9 +286,14 @@ def _drive(solve_segment, y0, args, t0, t1, t_eval_np, events,
             t_end = seg_t1
         y_end = sol.ys[-1]
 
-        # Emit t_eval points in (seg_t0, t_end] (pre-reset), via dense output.
+        # Emit t_eval points in (seg_t0, t_end] (pre-reset). A point coinciding
+        # with the segment end uses the exact endpoint state ``y_end`` rather than
+        # the dense interpolant: evaluating diffrax dense output exactly at the
+        # right boundary t1 is an edge case that can return NaN, and the endpoint
+        # is the value we want anyway (the documented pre-reset boundary value).
         while idx < n_eval and t_eval_np[idx] <= t_end + tol:
-            out_y.append(sol.evaluate(float(t_eval_np[idx])))
+            te = float(t_eval_np[idx])
+            out_y.append(y_end if te >= t_end - tol else sol.evaluate(te))
             idx += 1
 
         # Determine which events fire at the segment end and apply their resets.

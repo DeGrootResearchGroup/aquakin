@@ -2660,8 +2660,10 @@ separator, concentration-dependent underflow flow), `ADM1DigesterUnit`
 (continuously-fed ADM1 CSTR with gas headspace, dilution masked to the liquid
 states), `DosingUnit` (chemical dosing: injects a `Reagent` — a fixed
 composition, e.g. metal salt / acid-base / external carbon — into a stream at a
-fixed or feedback-controlled flow; see *Chemical dosing* below), and
-`TakacsClarifier` (10-layer 1-D Takács 1991 model). Its settling physics
+fixed or feedback-controlled flow; see *Chemical dosing* below), `SBRUnit`
+(sequencing batch reactor: one tank cycling fill/react/settle/decant/idle with
+variable volume and a pluggable settling model — see *Sequencing batch reactor*
+below), and `TakacsClarifier` (10-layer 1-D Takács 1991 model). Its settling physics
 are correct and verified in isolation at BSM1 solids loading: the
 clarification-zone flux limiting (above the feed, the downward flux is
 limited by the layer below only when that layer exceeds `X_threshold`) and
@@ -3234,6 +3236,39 @@ dose only adds the reagent's *mass*; the **reactive** response — an acid/base'
 pH shift, metal-phosphate precipitation, the added COD's oxygen demand — is the
 downstream reactor's chemistry (the precipitation/pH engine, issue #271), not
 this unit's job. Covered by `tests/integration/test_dosing.py`.
+
+**Sequencing batch reactor (`SBRUnit`, issue #273).** A single tank that treats
+in batches, cycling through timed phases (fill → react → settle → decant → idle)
+defined by a list of `SBRPhase(name, duration, feed=, decant=, kla=, settle=)`.
+Variable-volume state `[C, V]` (volume rises at `feed_flow` during fill, falls at
+`decant_flow` during decant; the `StorageTank` `dV/dt = Q_in − Q_out` pattern) plus
+the internal state of a pluggable `SettlingModel`. The biology reacts every phase;
+aeration is the per-phase `kla` on the oxygen species; the settle phase clarifies
+the supernatant the decant draws as the treated effluent. **Phase transitions are
+located events:** `SBRUnit.cycle_events(t0, t1)` returns the phase-boundary times
+as a time `Event`, and `Plant.solve` **auto-collects** every unit's `cycle_events`
+(merged with any user `events=`) so the integrator lands exactly on each switch —
+the flow/aeration discontinuities are resolved at the boundary, not stepped across,
+while within a phase the ODE is smooth and differentiable (`jax.grad` flows through
+a cycle). Feed is drawn at the unit's own `feed_flow` (a fill pump) taking the
+connected stream's composition; a standalone SBR plant is just the `SBRUnit` + an
+influent on `sbr.feed`. **Modular settling** ([`plant/settling.py`](aquakin/plant/settling.py)):
+a `SettlingModel` strategy reports, each step, how its internal clarity state
+evolves and a per-species multiplier the decant draw is scaled by (1 for solubles,
+< 1 for settled particulates); mass is conserved by the SBR (a clarified decant
+concentrates the retained solids). Two ship: `InterfaceSettling` (one state — a
+clarified fraction growing at a settling velocity while the tank settles, relaxing
+to mixed otherwise) and `LayeredSettling` (a Takács-style vertical profile of the
+particulate distribution; the decant draws the top layer). New models slot in by
+implementing `SettlingModel`. (Settling is well-mixed for the biology — the bulk
+`C` is the average; the model affects only the decant clarity.) Note: sludge
+wasting is not yet a phase, so over many cycles solids concentrate (a clarified
+decant retains them); add a waste draw for a closed long-run solids balance. The
+located-event machinery also gained a fix here: a `t_eval` point landing exactly on
+an event boundary now emits the segment-endpoint state rather than a dense-output
+edge evaluation, which could return NaN for a stiff segment
+([`integrate/events.py`](aquakin/integrate/events.py)). Covered by
+`tests/integration/test_sbr.py`.
 
 **Membrane bioreactor (`MBRUnit`, issue #274).** A high-MLSS aerated reactor
 ([`plant/mbr.py`](aquakin/plant/mbr.py)) whose membrane retains the solids,
