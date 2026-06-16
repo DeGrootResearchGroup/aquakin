@@ -57,8 +57,15 @@ class SBRPhase:
         Oxygen mass-transfer coefficient applied during this phase (aerobic
         react). 0 (default) = no aeration (anoxic / settle / fill).
     settle : bool
-        Let the contents settle this phase (the settling model's clarity grows);
-        otherwise the tank is taken as well mixed.
+        Let the contents settle this phase (the settling model's clarity grows).
+    mixed : bool, optional
+        Whether the tank is actively mixed this phase (re-suspending settled
+        solids, so the settling model's clarity relaxes back toward fully mixed).
+        Default ``None`` derives it as ``feed or kla > 0`` -- a fed or aerated
+        phase is mixed; a quiescent decant/idle phase is not, so its clarity is
+        held rather than washed out. A settle phase is never mixed (settling takes
+        precedence). Set explicitly to mark an unaerated-but-mechanically-mixed
+        phase (e.g. an anoxic mixed react).
     """
 
     name: str
@@ -67,6 +74,7 @@ class SBRPhase:
     decant: bool = False
     kla: float = 0.0
     settle: bool = False
+    mixed: Optional[bool] = None
 
 
 @dataclass
@@ -161,6 +169,17 @@ class SBRUnit:
         self._kla = jnp.asarray([float(p.kla) for p in self.phases])
         self._settle = jnp.asarray([1.0 if p.settle else 0.0 for p in self.phases])
 
+        # Mixing flag: a settle phase is never mixed; otherwise use the explicit
+        # `mixed` if given, else derive it as fed-or-aerated. Quiescent decant/idle
+        # phases are thus not mixed, so the settling model holds clarity there.
+        def _is_mixed(p: SBRPhase) -> bool:
+            if p.settle:
+                return False
+            if p.mixed is not None:
+                return bool(p.mixed)
+            return bool(p.feed or p.kla > 0.0)
+        self._mixed = jnp.asarray([1.0 if _is_mixed(p) else 0.0 for p in self.phases])
+
         # Oxygen-transfer mask (a single aerated species).
         n = self.network.n_species
         if self.oxygen_species in self.network.species_index:
@@ -243,6 +262,7 @@ class SBRUnit:
         q_out = self._decant[idx] * self.decant_flow
         kla = self._kla[idx]
         settle_on = self._settle[idx]
+        mix_on = self._mixed[idx]
 
         V_safe = jnp.maximum(V, _EPS_V)
         C_in = inputs[self.input_port].C
@@ -262,7 +282,7 @@ class SBRUnit:
 
         dC = convection + chemistry + aeration
         dV = jnp.reshape(q_in - q_out, (1,))
-        d_extra = self.settling.extra_rhs(C, V, extra, settle_on)
+        d_extra = self.settling.extra_rhs(C, V, extra, settle_on, mix_on)
         return jnp.concatenate([dC, dV, d_extra])
 
     # ----- located phase-transition events -------------------------------

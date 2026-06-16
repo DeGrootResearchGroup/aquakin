@@ -135,9 +135,10 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
     Handles every shipped unit type: a concentration-vector unit (CSTR /
     primary clarifier / digester) holds ``volume × Σ C·content``; the digester
     weights its three gas-headspace states by the headspace volume ``V_gas``; a
-    storage tank carries its liquid volume as the last state entry; the layered
-    Takács settler sums its particulate blanket over the layers; stateless units
-    hold nothing.
+    storage tank carries its liquid volume as the last state entry; a sequencing
+    batch reactor carries ``[C..., V, <settling state>]`` (volume at ``n_species``,
+    the trailing settling state massless); the layered Takács settler sums its
+    particulate blanket over the layers; stateless units hold nothing.
     """
     unit = plant.units[unit_name]
     net = getattr(unit, "network", None)
@@ -157,6 +158,14 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
         return out
 
     sv = np.asarray(state_vec)
+    # Sequencing batch reactor: state is [C..., V, <settling state>]. The liquid
+    # volume is at index n_species; the trailing settling state is dimensionless
+    # (clarity / layer ratios) and carries no mass.
+    if hasattr(unit, "settling") and hasattr(unit, "full_volume"):
+        C = sv[:net.n_species]
+        V = float(sv[net.n_species])
+        return {comp: V * float(np.dot(C, vec)) for comp, vec in content.items()}
+
     # Storage tank: [C..., V]; the liquid volume is the trailing state entry.
     if hasattr(unit, "level_setpoint") or (
             getattr(unit, "volume", None) is not None and sv.size == net.n_species + 1):
