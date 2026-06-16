@@ -3085,6 +3085,39 @@ benchmark van't Hoff `oxygen_saturation_bsm2`, normalised to 8.0 mg/L at 15 °C)
 the two differ by ~0.5 % in shape. `build_bsm2(do_temperature_correction=True)`
 uses `"bsm2"` so the seasonal oxygen driving force matches the benchmark exactly.
 
+**Diffuser / blower aeration-design physics (issue #279,
+[`plant/aeration_system.py`](aquakin/plant/aeration_system.py)).** The kinetic
+model aerates through a per-species `kLa`, and the Copp-2002 OCI scores aeration
+*energy* with the fixed correlation `AE ∝ Σ V_i·kLa_i`. `AerationSystem` is the
+blower/diffuser physics behind that `kLa` — how much **air** must be blown and the
+**power** to compress it — kept **standalone** (it does **not** change the `kLa`
+interface). From the `kLa` a solve produced it computes the standard oxygen
+transfer rate `SOTR = kLa·C_s,std·V` (the clean-water transfer the airflow must
+deliver — a given `kLa` needs a given airflow, independent of the operating DO
+deficit), the **air flow** `Q_air = SOTR/(SOTE·o2_per_air)` from the diffuser's
+standard transfer efficiency `SOTE` (rising with submergence, default `6 %/m`,
+reduced by a fouling factor `F`), the blower **discharge pressure**
+`p_atm + ρ_w·g·depth + headloss`, and the blower **power** by adiabatic
+compression `P = (Q·p1/η)·(γ/(γ−1))·[(p2/p1)^((γ−1)/γ) − 1]`. Because the power is
+linear in airflow and airflow is linear in `kLa`, `blower_energy(t, kla_history,
+volumes, system)` has the same form as the Copp kernel but with a mechanistic
+coefficient (SOTE/depth/blower curve) in place of the fixed one, and stays
+`jit`/`grad`-clean (the differentiable primitives are `required_airflow` /
+`blower_power_kw`; the float-returning `blower_energy` is the reporting kernel, the
+drop-in for `aeration_energy`). The α/β/temperature *field* corrections stay on
+`Aeration` (they shape the `kLa` and driving force in the solve); `AerationSystem`
+adds the diffuser-fouling `F` and the blower curve. **Wired into the evaluators:**
+`evaluate_bsm1(..., aeration_system=AerationSystem(...))` and `evaluate_bsm2(...,
+aeration_system=...)` **replace** the correlation AE with the mechanistic blower
+energy (flowing into the OCI and, via `total_energy()`, the GHG/cost report) and
+expose `air_flow` (m³/d) on the evaluation; `aeration_system=None` (default) keeps
+the validated Copp AE, so the benchmark numbers are unchanged. `design_summary(kla,
+volume, system)` is the standalone sizing entry point → an `AerationDesignPoint`
+(SOTE / SOTR / airflow / discharge pressure / power) with a labeled `report()`.
+Covered by `tests/integration/test_aeration_system.py` (physics vs closed form,
+SOTE/depth/fouling, validation, AD) and the evaluator wiring in
+`tests/integration/test_bsm2_evaluation.py`.
+
 **Influent characterization + CSV `column_map` (issue #136).** Real influent is
 measured as aggregates (total COD, TKN, ammonia, alkalinity, optionally
 filtered/flocculated COD), not as the 13 ASM1 states. `aquakin/plant/characterize.py`

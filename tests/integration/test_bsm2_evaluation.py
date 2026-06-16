@@ -67,6 +67,26 @@ def test_aerated_tanks_detected(evaluated):
     assert ev.aerated_tanks == ["tank3", "tank4", "tank5"]
 
 
+def test_aeration_system_replaces_AE_with_blower_energy(evaluated):
+    """With a diffuser/blower design, evaluate_bsm2 reports the mechanistic blower
+    energy as AE and the total air flow, and the OCI uses it -- while the default
+    (correlation) path is unchanged (#279)."""
+    from aquakin import AerationSystem
+    plant, sol, params, ev_default = evaluated
+    syst = AerationSystem(depth=5.0, sote=0.20)
+    ev = evaluate_bsm2(plant, sol, params, aeration_system=syst)
+    # air flow reported, AE is the (different) blower model, both finite/positive
+    assert ev.air_flow is not None and ev.air_flow > 0.0
+    assert jnp.isfinite(ev.aeration_energy) and ev.aeration_energy > 0.0
+    assert ev.aeration_energy != pytest.approx(ev_default.aeration_energy)
+    # OCI swapped only the AE term: OCI - AE matches the default
+    assert (ev.oci - ev.aeration_energy) == pytest.approx(
+        ev_default.oci - ev_default.aeration_energy, rel=1e-6)
+    assert "blower" in ev.report()
+    # default path untouched
+    assert ev_default.air_flow is None
+
+
 def test_aeration_energy_matches_fixed_kla(evaluated, asm1, adm1):
     """For the open-loop plant kLa is fixed, so the aeration energy equals the
     closed-form ``S_sat / (1.8e3) * Σ_i V_i kLa_i`` independent of the horizon."""

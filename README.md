@@ -232,6 +232,21 @@ reactor temperature lags and damps the influent. Select it with
 `plant.set_temperature_model(aquakin.HeatBalanceTemperature())` or
 `build_bsm2(temperature_model=aquakin.HeatBalanceTemperature())`.
 
+Aeration energy can be scored from **blower/diffuser physics** instead of the
+Copp-2002 correlation. An `AerationSystem` (diffuser submergence, SOTE, fouling,
+blower efficiency) turns the `kLa` a solve produced into the required air flow
+(via the standard oxygen transfer rate `kLa·C_s·V` and the diffuser SOTE) and the
+adiabatic blower power against the submergence head — keeping the `kLa` kinetic
+interface unchanged. Pass it to size a tank
+(`aquakin.design_summary(kla, volume, system)`) or to the evaluators, where it
+replaces the aeration-energy term and reports the air flow:
+
+```python
+syst = aquakin.AerationSystem(depth=5.0, sote=0.20)      # 5 m diffusers, 20 % SOTE
+ev   = evaluate_bsm2(plant, sol, params, aeration_system=syst)
+print(ev.aeration_energy, "kWh/d   air:", ev.air_flow, "m3/d")   # mechanistic AE
+```
+
 ### GHG, cost and scenario reporting
 
 On top of the EQI / OCI evaluation, `aquakin` reports a **carbon footprint**
