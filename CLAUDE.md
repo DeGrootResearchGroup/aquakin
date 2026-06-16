@@ -2933,8 +2933,29 @@ influent (`bsm2_constant_influent`) and the BSM2 (15 °C) ASM1 parameter set
 secondary settler, the primary clarifier, both ASM1↔ADM1 interfaces, the
 digester, and all recycle loops including the reject water — reproduces the
 reference reactor states (`asm1init_bsm2` `XINIT`: XB_H ≈ 2245, XB_A ≈ 167,
-XP ≈ 967, XI ≈ 1532, the SNH/SNO/SO profiles) and the digester (`DIGESTERINIT`:
-headspace methane to ~0.2%) **to within ~3% on every key state**. Two parameter
+XP ≈ 967, XI ≈ 1532, the SNH/SNO/SO profiles) **to round-off (≤0.06% on every AS
+state — the level at which the reference ring-test simulators agree with one
+another)** and the digester (`DIGESTERINIT`: headspace methane to ~0.2%) **to
+within ~1.3% (worst: headspace CO₂, the charge-balance-pH vs algebraic-pH
+difference in the gas phase)**. **Reaching the round-off AS match needs the
+benchmark operating temperature, not just the 15 °C parameters.** The ASM1 rates
+are defined at 15 °C and Arrhenius-corrected to each reactor's (flow-weighted)
+*inlet* temperature; the BSM2 constant influent enters at **14.858 °C**
+(`BSM2_CONSTANT_INFLUENT_T`, the `constinfluent` T column = the annual mean), so
+the AS line operates 0.14 °C below the reference and every rate is slowed ~1.4%.
+Omitting this (running the line at the bare 15 °C reference) over-predicts
+nitrification by ~1.4% — the entire otherwise-residual deviation (SNH/SNO drift
+~1–1.5%). `bsm2_constant_influent` therefore takes a `T=` argument: pass
+`T=BSM2_CONSTANT_INFLUENT_T` **together with `bsm2_asm1_network()`** (the 15 °C-
+referenced corrections) for the faithful match. The default `T=None` keeps the
+historic temperature-agnostic behaviour (reactors fall back to their static 15 °C
+condition); do **not** pass `T` with the plain 20 °C `load_network("asm1")` — a
+14.858 °C inlet on a 20 °C-referenced network applies a large spurious slowdown
+(~40% on nitrification). aquakin carries the reactor temperature *algebraically*
+(the flow-weighted inlet each RHS, resolved with the recycle solve), not as a
+BSM2-style heat-balance state `dT/dt=(Q/V)(T_in−T)`; the two agree at steady
+state (both give T=T_in) and differ only by the (sub-hour) thermal lag in
+transient. Two parameter
 reconciliations were needed: the BSM2 ASM1 values are the 15 °C set
 (`muH=4, KS=10, muA=0.5, bH=0.3, KX=0.1, etah=0.8`). (The shipped `asm1` is the
 textbook Gujer matrix with no heterotroph ammonia-limitation term, so — unlike
@@ -3053,7 +3074,12 @@ AD-clean (the correction is a smooth function of `T` inside the monolithic plant
 solve). `build_bsm2(do_temperature_correction=True)` turns it on plant-wide with
 `ref_T` = the reactors' static temperature (so it is unity at the benchmark
 operating point and only a temperature-carrying influent drives it); default off
-reproduces the validated steady state exactly.
+reproduces the validated steady state exactly. The saturation curve used for the
+`C_s(T)/C_s(ref_T)` ratio is selectable via `Aeration(saturation_model=...)`:
+`"benson_krause"` (default, the APHA `oxygen_saturation`) or `"bsm2"` (the IWA
+benchmark van't Hoff `oxygen_saturation_bsm2`, normalised to 8.0 mg/L at 15 °C);
+the two differ by ~0.5 % in shape. `build_bsm2(do_temperature_correction=True)`
+uses `"bsm2"` so the seasonal oxygen driving force matches the benchmark exactly.
 
 **Influent characterization + CSV `column_map` (issue #136).** Real influent is
 measured as aggregates (total COD, TKN, ammonia, alkalinity, optionally
@@ -3327,7 +3353,12 @@ otherwise be non-affine in the recycle flows. The diverted flow skips the
 clarifier too (matching the reference `Qbypassplant=1`: it bypasses the *plant*,
 not just the AS) and joins the final effluent through a new `effluent_mix`
 combiner, so the final effluent is `effluent_mix.out` (treated + bypassed) —
-`evaluate_bsm2` auto-detects it. **This changes the influent entry point**: with
+`evaluate_bsm2` auto-detects it. When a bypass is present `evaluate_bsm2` also
+applies the BSM2 **split BOD weighting** — the benchmark's `0.65` coefficient on
+the *bypassed* (untreated) BOD vs `0.25` on the treated effluent
+(`perf_plant_bsm2`) — as a load-weighted average over the two source streams
+(`settler.overflow` + `bypass_split.bypass`); the no-bypass path keeps the flat
+`0.25` and is untouched. **This changes the influent entry point**: with
 the bypass, the influent entry moves to `bypass_split.in` and the effluent to
 `effluent_mix.out` -- both reported on `plant.influent_endpoint` /
 `plant.effluent_endpoint`, so example/user code reads those instead of a literal.

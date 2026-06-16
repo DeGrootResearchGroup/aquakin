@@ -58,6 +58,43 @@ def oxygen_saturation(T_K):
     return jnp.exp(ln_cs)
 
 
+def oxygen_saturation_bsm2(T_K):
+    """Dissolved-oxygen saturation (mg/L) by the IWA benchmark (BSM1/BSM2) van't
+    Hoff correlation, normalised to 8.0 mg/L at 15 degC.
+
+    This is the exact saturation the activated-sludge benchmark uses to
+    temperature-correct the oxygen driving force, ``SO_sat(T) = 0.9997743214 *
+    8/10.5 * 56.12 * 6791.5 * exp(-66.7354 + 87.4755/theta + 24.4526*ln(theta))``
+    with ``theta = T_K/100``. It gives 8.0 at 15 degC, ~9.0 at 9.5 degC and ~7.2
+    at 20.5 degC. Use it (rather than :func:`oxygen_saturation`, the Benson--Krause
+    correlation, whose temperature *shape* differs by ~0.5 %) when matching the
+    benchmark exactly. Pure ``jnp`` so it is jit/AD-clean.
+
+    Parameters
+    ----------
+    T_K : float or jnp.ndarray
+        Temperature in Kelvin.
+
+    Returns
+    -------
+    jnp.ndarray
+        Saturation dissolved-oxygen concentration in mg/L (== g/m3).
+    """
+    theta = jnp.asarray(T_K, dtype=float) / 100.0
+    return 0.9997743214 * 8.0 / 10.5 * (
+        56.12 * 6791.5
+        * jnp.exp(-66.7354 + 87.4755 / theta + 24.4526 * jnp.log(theta))
+    )
+
+
+# Saturation-model registry: name -> C_s(T) callable used for the temperature
+# correction ratio C_s(T)/C_s(ref_T).
+_SATURATION_MODELS = {
+    "benson_krause": oxygen_saturation,
+    "bsm2": oxygen_saturation_bsm2,
+}
+
+
 @dataclass(frozen=True)
 class Aeration:
     """Aeration / dissolved-oxygen spec for a :class:`CSTRUnit`.
@@ -142,6 +179,13 @@ class Aeration:
         Arrhenius base for the open-loop ``kla(T) = kla*kla_theta**(T-ref_T)``
         correction (only used when ``temperature_correction`` is on). Default
         1.024, the standard value.
+    saturation_model : str
+        Which clean-water saturation correlation supplies the temperature-
+        correction ratio ``C_s(T)/C_s(ref_T)``: ``"benson_krause"`` (default, the
+        APHA correlation) or ``"bsm2"`` (the IWA benchmark van't Hoff formula,
+        :func:`oxygen_saturation_bsm2`). Use ``"bsm2"`` to match the benchmark's
+        oxygen driving force exactly; the two differ by ~0.5 % in shape. Only used
+        when ``temperature_correction`` is on.
     """
 
     kla: float | None = None
@@ -163,6 +207,7 @@ class Aeration:
     beta: float = 1.0
     pressure_factor: float = 1.0
     kla_theta: float = 1.024
+    saturation_model: str = "benson_krause"
 
     def __post_init__(self) -> None:
         n_modes = (self.kla is not None) + (self.do_setpoint is not None)
@@ -170,6 +215,11 @@ class Aeration:
             raise ValueError(
                 "Aeration requires exactly one of kla= (open loop) or "
                 "do_setpoint= (closed loop)."
+            )
+        if self.saturation_model not in _SATURATION_MODELS:
+            raise ValueError(
+                f"Unknown saturation_model '{self.saturation_model}'; choose "
+                f"from {sorted(_SATURATION_MODELS)}."
             )
         if self.kla is not None and self.kla < 0.0:
             raise ValueError(f"Aeration kla must be >= 0, got {self.kla}.")
@@ -221,6 +271,7 @@ class AerationVectors:
     ref_T: float
     kla_theta: float
     temp_correct: bool
+    saturation_model: str = "benson_krause"
 
 
 def build_aeration_vectors(aeration, network, unit_name: str) -> AerationVectors:
@@ -236,6 +287,7 @@ def build_aeration_vectors(aeration, network, unit_name: str) -> AerationVectors
     kla_vec = jnp.zeros((network.n_species,))
     sat_vec = jnp.zeros((network.n_species,))
     ref_T, kla_theta, temp_correct = 293.15, 1.024, False
+    saturation_model = "benson_krause"
     if aeration is not None:
         if aeration.species not in network.species_index:
             raise ValueError(
@@ -255,8 +307,9 @@ def build_aeration_vectors(aeration, network, unit_name: str) -> AerationVectors
         ref_T = float(aeration.ref_T)
         kla_theta = float(aeration.kla_theta)
         temp_correct = bool(aeration.temperature_correction)
+        saturation_model = aeration.saturation_model
     return AerationVectors(kla_vec, sat_vec, controlled, ref_T, kla_theta,
-                           temp_correct)
+                           temp_correct, saturation_model)
 
 
 def aeration_transfer(av: AerationVectors, C, T_eff, signals, network):
@@ -271,7 +324,8 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, network):
     """
     kla_vec, sat_vec = av.kla_vec, av.sat_vec
     if av.temp_correct and T_eff is not None:
-        sat_ratio = oxygen_saturation(T_eff) / oxygen_saturation(av.ref_T)
+        c_s = _SATURATION_MODELS[av.saturation_model]
+        sat_ratio = c_s(T_eff) / c_s(av.ref_T)
         sat_vec = sat_vec * sat_ratio
         kla_vec = kla_vec * av.kla_theta ** (T_eff - av.ref_T)
     if av.controlled:

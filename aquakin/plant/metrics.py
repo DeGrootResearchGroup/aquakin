@@ -57,6 +57,25 @@ def _conc_network(C, network):
     return C, network
 
 
+def _composition(network, params=None):
+    """``(i_XB, i_XP, f_P)`` for the derived TKN and BOD quantities.
+
+    Read from ``params`` when given (the composition the simulation actually
+    used, so a calibrated or benchmark-specific value such as the BSM2
+    ``i_XB = 0.08`` is honoured), else from the network's declared defaults, else
+    the standard ASM1 values. This keeps the post-processed nitrogen and BOD
+    consistent with the model the states came from instead of a fixed constant.
+    """
+    def g(name, fallback):
+        idx = getattr(network, "param_index", {}).get(name) if network else None
+        if idx is None:
+            return fallback
+        if params is not None:
+            return float(params[idx])
+        return float(network.default_parameters()[idx])
+    return g("i_XB", 0.086), g("i_XP", 0.06), g("f_P", 0.08)
+
+
 def _effluent_args(stream_or_t, C, Q, network):
     """Normalise the effluent-metric arguments.
 
@@ -127,14 +146,17 @@ def derived_COD(C, network: "CompiledNetwork" = None) -> jnp.ndarray:
     return jnp.sum(C[..., _species_idx(network, species)], axis=-1)
 
 
-def derived_BOD(C, network: "CompiledNetwork" = None) -> jnp.ndarray:
-    """BOD₅ proxy = 0.25 × (SS + XS + (1 - f_P) × (XB_H + XB_A))
-    using Copp 2002 BOD relation with f_P ≈ 0.08.
+def derived_BOD(C, network: "CompiledNetwork" = None, *,
+                f_P: float = None) -> jnp.ndarray:
+    """BOD₅ proxy = 0.25 × (SS + XS + (1 - f_P) × (XB_H + XB_A)), Copp 2002.
 
-    ``C`` may be a concentration array (with ``network``) or a ``StreamSeries``.
+    ``f_P`` defaults to the network's declared inert-fraction (the standard ASM1
+    0.08 when undeclared). ``C`` may be a concentration array (with ``network``)
+    or a ``StreamSeries``.
     """
     C, network = _conc_network(C, network)
-    f_P = 0.08
+    if f_P is None:
+        _, _, f_P = _composition(network)
     i = network.species_index
     return 0.25 * (
         C[..., i["SS"]] + C[..., i["XS"]]
@@ -142,15 +164,21 @@ def derived_BOD(C, network: "CompiledNetwork" = None) -> jnp.ndarray:
     )
 
 
-def derived_TKN(C, network: "CompiledNetwork" = None) -> jnp.ndarray:
+def derived_TKN(C, network: "CompiledNetwork" = None, *,
+                i_XB: float = None, i_XP: float = None) -> jnp.ndarray:
     """Total Kjeldahl Nitrogen = S_NH + S_ND + X_ND + i_XB × (XB_H + XB_A)
-    + i_XP × (XP + XI). Uses standard ASM1 N-fractions i_XB=0.086, i_XP=0.06.
+    + i_XP × (XP + XI).
 
-    ``C`` may be a concentration array (with ``network``) or a ``StreamSeries``.
+    ``i_XB`` / ``i_XP`` default to the network's declared N-fractions (the
+    standard ASM1 0.086 / 0.06 when undeclared); the BSM2 parameter set uses
+    ``i_XB = 0.08``. ``C`` may be a concentration array (with ``network``) or a
+    ``StreamSeries``.
     """
     C, network = _conc_network(C, network)
-    i_XB = 0.086
-    i_XP = 0.06
+    if i_XB is None or i_XP is None:
+        d_XB, d_XP, _ = _composition(network)
+        i_XB = d_XB if i_XB is None else i_XB
+        i_XP = d_XP if i_XP is None else i_XP
     i = network.species_index
     return (
         C[..., i["SNH"]] + C[..., i["SND"]] + C[..., i["XND"]]
@@ -164,6 +192,8 @@ def effluent_averages(
     C_traj=None,
     Q_traj=None,
     network: "CompiledNetwork" = None,
+    *,
+    params=None,
 ) -> dict[str, float]:
     """Time-flow-weighted average effluent concentrations.
 
@@ -189,6 +219,7 @@ def effluent_averages(
         Time-averaged COD, BOD, TSS, TKN, SNH, SNO (g/m³).
     """
     t, C_traj, Q_traj, network = _effluent_args(stream_or_t, C_traj, Q_traj, network)
+    i_XB, i_XP, f_P = _composition(network, params)
     t = jnp.asarray(t)
     single_point = t.shape[0] <= 1
     # Use trapezoidal integration over time.
@@ -208,8 +239,8 @@ def effluent_averages(
     return {
         "TSS": time_avg(derived_TSS(C_traj, network)),
         "COD": time_avg(derived_COD(C_traj, network)),
-        "BOD": time_avg(derived_BOD(C_traj, network)),
-        "TKN": time_avg(derived_TKN(C_traj, network)),
+        "BOD": time_avg(derived_BOD(C_traj, network, f_P=f_P)),
+        "TKN": time_avg(derived_TKN(C_traj, network, i_XB=i_XB, i_XP=i_XP)),
         "SNH": time_avg(C_traj[:, network.species_index["SNH"]]),
         "SNO": time_avg(C_traj[:, network.species_index["SNO"]]),
     }
@@ -220,6 +251,8 @@ def effluent_quality_index(
     C_traj=None,
     Q_traj=None,
     network: "CompiledNetwork" = None,
+    *,
+    params=None,
 ) -> float:
     """EQI per Copp 2002 / Alex 2008.
 
@@ -231,10 +264,11 @@ def effluent_quality_index(
     -- or the explicit ``(t, C_traj, Q_traj, network)`` form.
     """
     t, C_traj, Q_traj, network = _effluent_args(stream_or_t, C_traj, Q_traj, network)
+    i_XB, i_XP, f_P = _composition(network, params)
     TSS_t = derived_TSS(C_traj, network)
     COD_t = derived_COD(C_traj, network)
-    BOD_t = derived_BOD(C_traj, network)
-    TKN_t = derived_TKN(C_traj, network)
+    BOD_t = derived_BOD(C_traj, network, f_P=f_P)
+    TKN_t = derived_TKN(C_traj, network, i_XB=i_XB, i_XP=i_XP)
     SNO_t = C_traj[:, network.species_index["SNO"]]
 
     integrand = Q_traj * (

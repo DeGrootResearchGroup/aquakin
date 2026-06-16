@@ -213,6 +213,189 @@ def test_shared_asm1_constants_are_single_source(asm1):
     assert metrics._TSS_FACTOR == ASM1_TSS_FACTOR
 
 
+def test_composition_mode_validation(asm1):
+    """An unrecognised composition_mode is rejected at construction."""
+    with pytest.raises(ValueError, match="composition_mode"):
+        TakacsClarifier(name="c", network=asm1, area=1.0, height=4.0,
+                        overflow_Q=1.0, composition_mode="bogus")
+
+
+def test_lumped_tss_state_size_and_initial_state(asm1):
+    """lumped_tss carries one TSS value per layer; the uniform seed is the
+    default composition summed to TSS, identical in every layer."""
+    lm = TakacsClarifier(name="lm", network=asm1, area=1500.0, height=4.0,
+                         overflow_Q=18446.0, composition_mode="lumped_tss")
+    assert lm.state_size == lm.n_layers
+    init = lm.initial_state()
+    assert init.shape == (lm.n_layers,)
+    part_def = jnp.asarray([float(asm1.default_concentrations()[i])
+                            for i in lm._part_indices])
+    expected = float(jnp.sum(part_def * jnp.asarray(lm._part_tss_factors)))
+    assert bool(jnp.allclose(init, expected))
+
+
+def test_lumped_tss_blanket_seed_matches_per_species(asm1):
+    """With init_underflow_Q the settled-blanket TSS profile is shared: the
+    lumped seed equals the per-species seed summed to TSS layer by layer."""
+    kw = dict(network=asm1, area=1500.0, height=4.0, underflow_Q=18446.0,
+              init_underflow_Q=18446.0)
+    ps = TakacsClarifier(name="ps", composition_mode="per_species", **kw)
+    lm = TakacsClarifier(name="lm", composition_mode="lumped_tss", **kw)
+    ps_tss = jnp.sum(
+        ps.initial_state().reshape((ps.n_layers, ps._n_part))
+        * jnp.asarray(ps._part_tss_factors)[None, :], axis=1)
+    assert bool(jnp.allclose(lm.initial_state(), ps_tss))
+
+
+def test_lumped_tss_rhs_matches_per_species_aggregated(asm1):
+    """The lumped per-layer dTSS/dt equals the per-species dTSS/dt aggregated
+    over species for the SAME total-TSS profile and inlet -- both apply the
+    identical Takács flux/convection math to the total solids."""
+    from aquakin.plant.streams import Stream
+
+    C = asm1.concentrations({"XB_H": 2200.0, "XB_A": 120.0, "XS": 80.0,
+                             "XI": 1100.0, "XP": 600.0, "XND": 5.0})
+    Q_in, overflow = 36892.0, 18061.0
+    kw = dict(network=asm1, area=1500.0, height=4.0, overflow_Q=overflow)
+    ps = TakacsClarifier(name="ps", composition_mode="per_species", **kw)
+    lm = TakacsClarifier(name="lm", composition_mode="lumped_tss", **kw)
+
+    part_def = jnp.asarray([float(C[i]) for i in ps._part_indices])
+    feed_tss = float(jnp.sum(part_def * jnp.asarray(ps._part_tss_factors)))
+    # A non-uniform settled profile (dense bottom, clear top), bottom -> top.
+    scales = jnp.asarray([3.0, 1.5, 1.2, 1.0, 1.0, 1.0, 0.4, 0.2, 0.05, 0.02])
+    ps_state = (scales[:, None] * part_def[None, :]).reshape(-1)
+    lm_state = scales * feed_tss
+
+    params = asm1.default_parameters()
+    inlet = Stream(Q=jnp.asarray(Q_in), C=C, network=asm1)
+    d_lm = lm.rhs(jnp.asarray(0.0), lm_state, {"inlet": inlet}, params)
+    d_ps = ps.rhs(jnp.asarray(0.0), ps_state, {"inlet": inlet}, params)
+    d_ps_tss = jnp.sum(
+        d_ps.reshape((ps.n_layers, ps._n_part))
+        * jnp.asarray(ps._part_tss_factors)[None, :], axis=1)
+    assert d_lm.shape == (lm.n_layers,)
+    assert bool(jnp.all(jnp.isfinite(d_lm)))
+    # Equal up to the per-species apportioning's 1e-12 denominator guard,
+    # relative to the (large) flux magnitude.
+    assert bool(jnp.allclose(d_lm, d_ps_tss, rtol=1e-9, atol=1e-6))
+
+
+def test_lumped_tss_outputs_clarify_thicken_passthrough(asm1):
+    """lumped_tss compute_outputs: particulates scale by the boundary-layer /
+    feed TSS ratio (clarified overflow, thickened underflow), solubles pass
+    through, and a zero feed is guarded."""
+    from aquakin.plant.metrics import derived_TSS
+    from aquakin.plant.streams import Stream
+
+    lm = TakacsClarifier(name="lm", network=asm1, area=1500.0, height=4.0,
+                         overflow_Q=18061.0, composition_mode="lumped_tss")
+    C = asm1.concentrations({"XB_H": 2200.0, "XB_A": 120.0, "XS": 80.0,
+                             "XI": 1100.0, "XP": 600.0, "XND": 5.0,
+                             "SS": 42.0, "SNH": 17.0})
+    feed_tss = float(derived_TSS(C, asm1))
+    # Bottom (index 0) thickened, top (index n-1) clarified.
+    lm_state = jnp.asarray([3.0, 1.5, 1.2, 1.0, 1.0, 1.0, 0.4, 0.2, 0.05, 0.02]) * feed_tss
+
+    params = asm1.default_parameters()
+    out = lm.compute_outputs(
+        jnp.asarray(0.0), lm_state,
+        {"inlet": Stream(Q=jnp.asarray(36892.0), C=C, network=asm1)}, params)
+    eff_tss = float(derived_TSS(out["overflow"].C, asm1))
+    und_tss = float(derived_TSS(out["underflow"].C, asm1))
+    assert eff_tss < feed_tss          # clarified
+    assert und_tss > feed_tss          # thickened
+    # Particulate scaling is the boundary-layer / feed TSS ratio.
+    assert eff_tss == pytest.approx(0.02 * feed_tss, rel=1e-6)
+    assert und_tss == pytest.approx(3.0 * feed_tss, rel=1e-6)
+    # Solubles pass through unchanged in both outlets.
+    for sp, val in (("SS", 42.0), ("SNH", 17.0)):
+        i = asm1.species_index[sp]
+        assert float(out["overflow"].C[i]) == pytest.approx(val, rel=1e-9)
+        assert float(out["underflow"].C[i]) == pytest.approx(val, rel=1e-9)
+
+    # Zero-feed guard: no NaN/Inf, particulates fall back to feed passthrough.
+    out0 = lm.compute_outputs(
+        jnp.asarray(0.0), lm_state,
+        {"inlet": Stream(Q=jnp.asarray(0.0), C=jnp.zeros((asm1.n_species,)),
+                         network=asm1)}, params)
+    assert bool(jnp.all(jnp.isfinite(out0["overflow"].C)))
+    assert bool(jnp.all(jnp.isfinite(out0["underflow"].C)))
+
+
+def test_lumped_tss_solids_mass(asm1):
+    """In lumped mode solids_mass sums the per-layer TSS over the layer volumes,
+    matching the per-species mass for the same total-TSS profile."""
+    kw = dict(network=asm1, area=1500.0, height=4.0, overflow_Q=18061.0)
+    ps = TakacsClarifier(name="ps", composition_mode="per_species", **kw)
+    lm = TakacsClarifier(name="lm", composition_mode="lumped_tss", **kw)
+    part_def = jnp.asarray([float(asm1.default_concentrations()[i])
+                            for i in ps._part_indices])
+    feed_tss = float(jnp.sum(part_def * jnp.asarray(ps._part_tss_factors)))
+    scales = jnp.asarray([3.0, 1.5, 1.2, 1.0, 1.0, 1.0, 0.4, 0.2, 0.05, 0.02])
+    lm_state = scales * feed_tss
+    ps_state = (scales[:, None] * part_def[None, :]).reshape(-1)
+    layer_volume = lm.area * lm.height / lm.n_layers
+    assert float(lm.solids_mass(lm_state)) == pytest.approx(
+        float(jnp.sum(lm_state)) * layer_volume, rel=1e-12)
+    assert float(lm.solids_mass(lm_state)) == pytest.approx(
+        float(ps.solids_mass(ps_state)), rel=1e-9)
+
+
+def test_lumped_tss_grad_through_rhs(asm1):
+    """jax.grad flows through the lumped-mode rhs without NaNs (AD-clean)."""
+    import jax
+    from aquakin.plant.streams import Stream
+
+    lm = TakacsClarifier(name="lm", network=asm1, area=1500.0, height=4.0,
+                         overflow_Q=18061.0, composition_mode="lumped_tss")
+    C = asm1.concentrations({"XB_H": 2200.0, "XI": 1100.0})
+    inlet = Stream(Q=jnp.asarray(36892.0), C=C, network=asm1)
+    state = lm.initial_state()
+
+    def loss(p):
+        d = lm.rhs(jnp.asarray(0.0), state, {"inlet": inlet}, p)
+        return jnp.sum(d ** 2)
+
+    g = jax.grad(loss)(asm1.default_parameters())
+    assert bool(jnp.all(jnp.isfinite(g)))
+
+
+def test_lumped_tss_plant_solve(asm1):
+    """A lumped_tss clarifier integrates in a plant to a finite, clarifying
+    steady-ish state (clarified effluent, thickened underflow)."""
+    from aquakin.plant.metrics import derived_TSS
+    from aquakin.plant.streams import Stream
+
+    C = asm1.concentrations({"XB_H": 2200.0, "XB_A": 120.0, "XS": 80.0,
+                             "XI": 1100.0, "XP": 600.0, "XND": 5.0})
+    Q_in, overflow = 36892.0, 18061.0
+    plant = Plant("clar_lumped")
+    clar = TakacsClarifier(name="clar", network=asm1, area=1500.0, height=4.0,
+                           overflow_Q=overflow, composition_mode="lumped_tss")
+    plant.add_unit(clar)
+    plant.add_influent("feed", InfluentSeries(
+        t=jnp.asarray([0.0, 50.0]), Q=jnp.full((2,), Q_in),
+        C=jnp.stack([C, C]), network=asm1), to="clar.inlet")
+    sol = plant.solve(t_span=(0.0, 5.0), t_eval=jnp.asarray([0.0, 5.0]),
+                      rtol=1e-5, atol=1e-3, max_steps=200_000)
+    assert jnp.all(jnp.isfinite(sol.state))
+
+    st0, sz = plant._state_layout["clar"]
+    assert sz == clar.n_layers
+    tss = sol.state[-1, st0:st0 + sz]                 # bottom -> top
+    assert float(tss[0]) > 10.0 * float(tss[-1])      # dense bottom, clear top
+    assert bool(jnp.all(jnp.diff(tss) <= 1e-6))       # monotone non-increasing up
+
+    out = clar.compute_outputs(
+        jnp.asarray(5.0), tss,
+        {"inlet": Stream(Q=jnp.asarray(Q_in), C=C, network=asm1)},
+        plant.default_parameters())
+    feed_tss = float(derived_TSS(C, asm1))
+    assert float(derived_TSS(out["overflow"].C, asm1)) < 0.05 * feed_tss
+    assert float(derived_TSS(out["underflow"].C, asm1)) > 1.5 * feed_tss
+
+
 def test_controlled_split_helper():
     """Shared overflow/underflow split helper used by both clarifiers."""
     from aquakin.plant._flow_split import (
