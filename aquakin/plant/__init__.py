@@ -31,6 +31,7 @@ from aquakin.plant.characterize import (
 )
 from aquakin.plant.influent import InfluentSeries, read_influent_csv
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
+from aquakin.plant.mbr import MBRUnit
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import (
     Connection,
@@ -111,6 +112,7 @@ __all__ = [
     "characterize_influent",
     "fractionate",
     "read_influent_csv",
+    "MBRUnit",
     "MixerUnit",
     "PIController",
     "ParameterLayout",

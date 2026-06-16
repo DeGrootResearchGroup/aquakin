@@ -2649,7 +2649,9 @@ Key types:
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `IFASUnit` / `MBBRUnit`
 (an IFAS/MBBR tank: a CSTR bulk coupled to a depth-resolved attached biofilm —
-see below), `MixerUnit`,
+see below), `MBRUnit` (membrane bioreactor: a high-MLSS aerated reactor whose
+membrane retains the solids into a near-solids-free permeate, with fouling/TMP —
+see *Membrane bioreactor* below), `MixerUnit`,
 `SplitterUnit`, `IdealClarifier` (fast, stateless separator),
 `PrimaryClarifier` (BSM2 Otterpohl–Freund: a well-mixed holding tank split by
 an HRT-dependent particulate-removal efficiency, fixed underflow `f_PS·Q`),
@@ -3167,6 +3169,35 @@ dose only adds the reagent's *mass*; the **reactive** response — an acid/base'
 pH shift, metal-phosphate precipitation, the added COD's oxygen demand — is the
 downstream reactor's chemistry (the precipitation/pH engine, issue #271), not
 this unit's job. Covered by `tests/integration/test_dosing.py`.
+
+**Membrane bioreactor (`MBRUnit`, issue #274).** A high-MLSS aerated reactor
+([`plant/mbr.py`](aquakin/plant/mbr.py)) whose membrane retains the solids,
+replacing the secondary clarifier. Fixed-volume reactor state `[C, R_f]` (the bulk
+concentrations + a membrane-fouling resistance), reusing the CSTR kinetics and the
+`Aeration` machinery — so it takes an open-loop `kla` or a `do_setpoint` the plant
+**auto-wires** a DO controller for, exactly like a CSTR. Two outlets: `permeate`
+(the filtrate — solubles pass, particulates carried at `(1 − rejection)`, so the
+effluent is near solids-free) and `waste` (mixed liquor at the full reactor MLSS,
+drawn at the `waste_flow` setpoint). The volume is held constant
+(`Q_permeate = Q_in − Q_waste`), and because solids leave **only** via the waste
+draw the MLSS concentrates: at a 1-day HRT the biomass is retained where a
+clarifier-less CSTR would wash out, and the **SRT = V / Q_waste decouples from the
+HRT** (the defining MBR behaviour). A simple membrane-fouling state grows with the
+permeate flux and relaxes (`dR_f/dt = fouling_rate·J − fouling_relax·R_f`,
+`J = Q_permeate / membrane_area`), reaching a quasi-steady fouled state;
+`MBRUnit.tmp(R_f, Q_permeate)` reports the trans-membrane pressure
+`tmp_viscosity·J·(R_m + R_f)`. The permeate particulate split uses a per-species
+mask built from `particulate_species` (solubles pass unhindered). Scour-air energy
+couples to the aeration/blower accounting (the membrane needs continuous coarse-
+bubble aeration); for now the biological aeration is the modelled term. The
+`_materialize_aeration` sensor tap now names the sensor's first output port
+explicitly (a bare endpoint is ambiguous for a multi-output unit like the MBR);
+the controller reads the sensed value from the sensor's *state*, so any output
+port carries it (unchanged for single-output CSTRs). Modelling choices for the
+MVP — fixed volume with the permeate following the feed (vs a flux-controlled
+variable-volume membrane) and reversible-fouling TMP (vs explicit backwash/cleaning
+events) — are the natural simple forms; both are extension points. Covered by
+`tests/integration/test_mbr.py`.
 
 **Reject storage tank (`build_bsm2(reject=RejectStorage())`).** A variable-volume
 equalisation tank on the reject-recycle line: a completely-mixed CSTR with **no
