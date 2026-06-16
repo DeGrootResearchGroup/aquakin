@@ -273,7 +273,16 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, network):
         sat_ratio = oxygen_saturation(T_eff) / oxygen_saturation(av.ref_T)
         sat_vec = sat_vec * sat_ratio
         kla_vec = kla_vec * av.kla_theta ** (T_eff - av.ref_T)
-    if av.controlled and signals is not None:
+    if av.controlled:
+        if signals is None:
+            raise ValueError(
+                "Closed-loop aeration needs the control-signal bus, but rhs() "
+                "was called without one (signals=None). A controlled reactor must "
+                "be solved inside its plant, which supplies the signals "
+                f"{sorted(sig for sig, _gain in av.controlled.values())}; there is "
+                "no open-loop kLa to fall back on, so running it this way would "
+                "silently leave it unaerated."
+            )
         for sp, (signal_name, gain) in av.controlled.items():
             idx = network.species_index[sp]
             kla_vec = kla_vec.at[idx].set(signals[signal_name] * gain)

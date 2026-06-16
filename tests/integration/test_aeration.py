@@ -89,6 +89,23 @@ def test_materialisation_is_idempotent(asm1):
     assert n_ctrl == 1                                # not added twice
 
 
+def test_controlled_rhs_without_signal_bus_raises(asm1):
+    """A closed-loop reactor's rhs called without the control-signal bus raises a
+    clear error rather than silently running unaerated. The plant always supplies
+    the bus, so a ``None`` here is misuse -- and a controlled tank has no open-loop
+    kLa to fall back on, so a silent fallback would quietly leave it anoxic."""
+    p = Plant(name="noBus")
+    p.add_unit(_tank(asm1, "reactor", Aeration(do_setpoint=2.0)))
+    p._build_state_layout()                # materialises the controlled aeration
+    tank = p.units["reactor"]
+    assert tank.required_signals           # sanity: it really is controlled
+    C0 = asm1.default_concentrations()
+    inp = {"in": Stream(Q=jnp.asarray(1000.0), C=C0, network=asm1)}
+    with pytest.raises(ValueError, match="control-signal bus"):
+        # signals defaults to None -- the misuse this guards against.
+        tank.rhs(jnp.asarray(0.0), C0, inp, asm1.default_parameters())
+
+
 # --- closed loop: shared controller -----------------------------------------
 
 def test_shared_controller_drives_several_tanks(asm1):
