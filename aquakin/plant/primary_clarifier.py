@@ -118,6 +118,7 @@ class PrimaryClarifier(FlowParameterized):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         Q_in = jnp.zeros(())
         for name in self.input_port_names:

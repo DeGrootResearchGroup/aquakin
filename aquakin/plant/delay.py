@@ -113,6 +113,7 @@ class HydraulicDelayUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         Q, C = self._flow_and_conc(state)
         # Temperature passes straight through (the reference treats T(out)=T(in)).

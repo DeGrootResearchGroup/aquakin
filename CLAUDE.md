@@ -2656,9 +2656,12 @@ an HRT-dependent particulate-removal efficiency, fixed underflow `f_PS·Q`),
 `IdealThickener` (BSM2 thickener / dewatering — a stateless ideal `%TSS`
 separator, concentration-dependent underflow flow), `ADM1DigesterUnit`
 (continuously-fed ADM1 CSTR with gas headspace, dilution masked to the liquid
-states), `SBRUnit` (sequencing batch reactor: one tank cycling fill/react/settle/
-decant/idle with variable volume and a pluggable settling model — see *Sequencing
-batch reactor* below), and `TakacsClarifier` (10-layer 1-D Takács 1991 model). Its settling physics
+states), `DosingUnit` (chemical dosing: injects a `Reagent` — a fixed
+composition, e.g. metal salt / acid-base / external carbon — into a stream at a
+fixed or feedback-controlled flow; see *Chemical dosing* below), `SBRUnit`
+(sequencing batch reactor: one tank cycling fill/react/settle/decant/idle with
+variable volume and a pluggable settling model — see *Sequencing batch reactor*
+below), and `TakacsClarifier` (10-layer 1-D Takács 1991 model). Its settling physics
 are correct and verified in isolation at BSM1 solids loading: the
 clarification-zone flux limiting (above the feed, the downward flux is
 limited by the layer below only when that layer exceeds `X_threshold`) and
@@ -3086,9 +3089,20 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
   scaled), so the tracking term has consistent units.
 - `Plant._rhs` evaluates `signal_outputs` on every controller each RHS call,
   gathers the results into a `signals` dict, and threads it into **every** unit's
-  `rhs` as the trailing `signals` argument (a unit that reads no signals simply
-  ignores it). Producing signals is the one optional, class-level/duck-typed hook
-  (`hasattr(unit, "signal_outputs")`), so the branch is static and jit/AD-safe.
+  `compute_outputs` *and* `rhs` as the trailing `signals` argument (a unit that
+  reads no signals simply ignores it). Producing signals is the one optional,
+  class-level/duck-typed hook (`hasattr(unit, "signal_outputs")`), so the branch
+  is static and jit/AD-safe. **The bus is computed from the reactor states
+  *before* the stream sweep** (`_compute_signals`): a controller senses a
+  reactor's concentration, which *is* that unit's state, so the sensed value is
+  read directly from `states` (the controller's sensed `inputs` stream is
+  reconstructed as `C = states[sensor]`, so the sensor must be a reactor whose
+  output concentration is its state, i.e. a `CSTRUnit`). Computing signals first
+  is what lets a unit whose *output stream* depends on a signal — a
+  feedback-`DosingUnit` — read it in `compute_outputs` (the sweep), which runs
+  before any post-sweep quantity. For a DO controller sensing a CSTR the value is
+  identical to the old post-sweep read (state == output `C`), so aeration is
+  unchanged.
 - **`Aeration` on `CSTRUnit` (issue #137).** A tank's aeration is set with one
   `aeration=Aeration(...)` object, not raw per-species `kla`/`C_sat`/`controlled_kla`
   dicts (those fields are gone — pre-release, single interface). `Aeration` has two
@@ -3128,6 +3142,33 @@ signal sign, saturation, integral direction, anti-windup; closed-loop setpoint
 tracking; closed-vs-open contrast; `jax.grad` through the closed loop). The
 digester is additionally validated at the unit level in
 `tests/validation/test_bsm2_digester_unit.py`.
+
+**Chemical dosing (`DosingUnit` / `Reagent`, issue #278).** A general inline
+dosing unit (`aquakin/plant/dosing.py`): `in` stream → `out` = inlet + reagent
+dose, flow-mixing the compositions. A `Reagent` is a value object — a fixed
+composition vector built by name (`Reagent.from_species(asm1, SS=4e5,
+label="methanol")`, base zero, so the neat reagent contains only what you name) —
+covering metal salts, acid/base, and external carbon. The dose flow is either
+**fixed** (`DosingUnit(name, reagent, flow=2.0)`) or **feedback-controlled**
+(`DosingUnit(name, reagent, setpoint=1.0, measured_species="SNO", sensor="anoxic",
+flow_max=...)`): a feedback dose declares a sensed reactor + species + setpoint,
+and the plant auto-wires a `PIController` (`Plant._materialize_dosing`, the dosing
+analogue of `_materialize_aeration`, reusing the same controller) that
+manipulates the dose flow to hold the setpoint, publishing a `_dose_<id>_flow`
+signal the unit consumes. The unit is **stateless** — a fixed dose needs no
+state, a feedback dose's PI integral lives in the controller — and reads its
+dose-flow signal in `compute_outputs` (the dose changes the *output stream*),
+which is why the signal bus is computed before the sweep (above); `flow_outputs`
+seeds the recycle-flow solve with the nominal `flow_offset` for a feedback dose
+(the exact, concentration-dependent flow is applied in `compute_outputs`, the
+same convention the separators' concentration-dependent flows use). `build_bsm2`
+now expresses its external-carbon feed as a fixed `DosingUnit` on the
+`as_mix → tank1` line (the former hard-coded carbon influent is gone); the
+validated steady state is unchanged (same carbon mass, same tank-1 inlet). The
+dose only adds the reagent's *mass*; the **reactive** response — an acid/base's
+pH shift, metal-phosphate precipitation, the added COD's oxygen demand — is the
+downstream reactor's chemistry (the precipitation/pH engine, issue #271), not
+this unit's job. Covered by `tests/integration/test_dosing.py`.
 
 **Sequencing batch reactor (`SBRUnit`, issue #273).** A single tank that treats
 in batches, cycling through timed phases (fill → react → settle → decant → idle)

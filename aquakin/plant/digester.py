@@ -114,6 +114,7 @@ class ADM1DigesterUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         # Constant liquid volume: effluent flow equals the total inflow. The
         # effluent temperature is the flow-weighted inlet temperature (a heat

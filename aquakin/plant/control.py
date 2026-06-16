@@ -139,6 +139,7 @@ class PIController:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: "dict | None" = None,
     ) -> dict:
         return {}  # no material outputs
 
