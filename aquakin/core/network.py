@@ -311,8 +311,13 @@ class CompiledNetwork:
                     f"Unknown {kind} '{name}' for network '{self.name}'.{suffix}"
                 )
             idxs.append(index_map[name])
-            vals.append(float(value))
-        return base.at[jnp.asarray(idxs)].set(jnp.asarray(vals, dtype=base.dtype))
+            vals.append(jnp.asarray(value))
+        # Assemble with jnp.stack rather than float()-coercing each value, so a
+        # traced/JAX override (building C0 / params inside jax.grad / vmap to
+        # differentiate w.r.t. an initial concentration or rate constant) flows
+        # through unconcretised -- the convenience builder stays AD-clean.
+        stacked = jnp.stack(vals).astype(base.dtype)
+        return base.at[jnp.asarray(idxs)].set(stacked)
 
     def concentrations(self, overrides=None, /, *, base: str = "defaults",
                        **kwargs) -> jnp.ndarray:
