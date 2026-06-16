@@ -131,19 +131,28 @@ def test_event_aligned_save_grid_is_finite(asm1):
 
 @pytest.mark.slow
 def test_decant_is_clarified(asm1):
-    """During decant the effluent particulates are far below the bulk (settled);
-    solubles pass through unchanged (they do not settle)."""
+    """*Every* decant draw -- not just the phase boundary -- is clarified: the
+    particulates stay far below the bulk throughout the decant, and solubles pass
+    through unchanged. Sampling the whole decant span (not one grid-lucky point)
+    is what pins that clarity is held across the draw, rather than washed out by
+    re-mixing once the quiescent decant begins."""
     sbr = _sbr(asm1)
     p = _plant(asm1, sbr)
-    sol = p.solve(t_span=(0.0, 1.3), t_eval=jnp.linspace(0.0, 1.3, 131))
+    # A fine grid with several interior samples inside each decant phase
+    # ([0.5, 0.6) and [1.15, 1.25)), none relying on a phase boundary.
+    sol = p.solve(t_span=(0.0, 1.3), t_eval=jnp.linspace(0.0, 1.3, 261))
     eff = p.stream(sol, "sbr.effluent")
     q = np.asarray(eff.Q)
     decant = np.where(q > 1e-6)[0]
-    assert decant.size > 0
-    i = int(decant[decant.size // 2])
+    assert decant.size >= 6                                          # multiple draws
     xbh, ss = asm1.species_index["XB_H"], asm1.species_index["SS"]
-    assert float(eff.C[i, xbh]) < 0.1 * float(sol.state[i, xbh])    # clarified
-    assert float(eff.C[i, ss]) == pytest.approx(float(sol.state[i, ss]), rel=1e-3)
+    for i in decant:
+        i = int(i)
+        # particulates clarified at every decant instant (held across the draw)
+        assert float(eff.C[i, xbh]) < 0.1 * float(sol.state[i, xbh])
+        # solubles unchanged (they do not settle)
+        assert float(eff.C[i, ss]) == pytest.approx(
+            float(sol.state[i, ss]), rel=1e-3)
 
 
 @pytest.mark.slow
@@ -158,6 +167,33 @@ def test_layered_settling_solves_finite(asm1):
     i = int(np.where(q > 1e-6)[0][0])
     xbh = asm1.species_index["XB_H"]
     assert float(eff.C[i, xbh]) < float(sol.state[i, xbh])          # clarified
+
+
+def test_mass_balance_reads_sbr_inventory(asm1):
+    """Regression for #348: mass_balance must read the SBR's [C, V, settling]
+    inventory (volume at index n_species, settling state massless) rather than
+    dropping the unit or misreading a state entry as the volume."""
+    from aquakin import canonical_content
+    from aquakin.plant.balance import _unit_inventory
+    sbr = _sbr(asm1)
+    p = _plant(asm1, sbr)
+    p._build_state_layout()
+    p._build_parameter_layout()
+    params = p.default_parameters()
+    n = asm1.n_species
+    C = asm1.default_concentrations()
+    state = jnp.concatenate([C, jnp.array([700.0]), jnp.array([0.9])])  # V=700, clarity 0.9
+    content = {q: canonical_content(asm1, q, electron_acceptor_cod=False, params=params)
+               for q in ("COD", "N", "P")}
+    inv = _unit_inventory(p, "sbr", state, {asm1.name: content}, params)
+    for q in ("COD", "N", "P"):
+        expected = 700.0 * float(np.dot(np.asarray(C), np.asarray(content[q])))
+        assert inv[q] == pytest.approx(expected, rel=1e-9)
+    assert inv["COD"] > 0.0                                   # unit is not dropped
+    # the dimensionless settling state carries no mass
+    inv2 = _unit_inventory(p, "sbr", state.at[n + 1].set(0.1),
+                           {asm1.name: content}, params)
+    assert inv2["COD"] == pytest.approx(inv["COD"], rel=1e-12)
 
 
 @pytest.mark.slow
@@ -190,15 +226,21 @@ def test_interface_settling_clarifies_particulates_only(asm1):
     assert float(mult0[asm1.species_index["XB_H"]]) == pytest.approx(1.0)
 
 
-def test_interface_settling_grows_while_settling(asm1):
+def test_interface_settling_grows_settles_mixes_and_holds(asm1):
     m = InterfaceSettling(v_settle=400.0, area=200.0)
     m.bind(asm1, _PARTS)
     C = asm1.default_concentrations()
-    # settling active -> clarity rises; not settling -> relaxes toward 0
-    dc_on = m.extra_rhs(C, jnp.asarray(1000.0), jnp.asarray([0.0]), jnp.asarray(1.0))
-    dc_off = m.extra_rhs(C, jnp.asarray(1000.0), jnp.asarray([0.5]), jnp.asarray(0.0))
-    assert float(dc_on[0]) > 0.0
-    assert float(dc_off[0]) < 0.0
+    V = jnp.asarray(1000.0)
+    settling, mixing, quiescent = jnp.asarray(1.0), jnp.asarray(1.0), jnp.asarray(0.0)
+    # settling active (not mixed) -> clarity rises
+    dc_settle = m.extra_rhs(C, V, jnp.asarray([0.0]), settling, quiescent)
+    # actively mixed (not settling) -> clarity relaxes toward 0
+    dc_mix = m.extra_rhs(C, V, jnp.asarray([0.5]), quiescent, mixing)
+    # quiescent (neither: decant/idle) -> clarity held, so the decant stays clear
+    dc_hold = m.extra_rhs(C, V, jnp.asarray([0.5]), quiescent, quiescent)
+    assert float(dc_settle[0]) > 0.0
+    assert float(dc_mix[0]) < 0.0
+    assert float(dc_hold[0]) == pytest.approx(0.0)
 
 
 def test_layered_settling_average_ratio_conserved(asm1):
@@ -207,6 +249,12 @@ def test_layered_settling_average_ratio_conserved(asm1):
     m = LayeredSettling(n_layers=5, v_settle=400.0, area=200.0)
     m.bind(asm1, _PARTS)
     C = asm1.default_concentrations()
-    dr = m.extra_rhs(C, jnp.asarray(1000.0), jnp.ones((5,)), jnp.asarray(1.0))
+    dr = m.extra_rhs(C, jnp.asarray(1000.0), jnp.ones((5,)),
+                     jnp.asarray(1.0), jnp.asarray(0.0))   # settling, not mixed
     assert float(jnp.sum(dr)) == pytest.approx(0.0, abs=1e-9)   # mean ratio held
     assert float(dr[0]) < 0.0 and float(dr[-1]) > 0.0           # top down, bottom up
+    # a quiescent (decant) call holds the profile -- no redistribution, no remix
+    dr_hold = m.extra_rhs(C, jnp.asarray(1000.0),
+                          jnp.asarray([0.2, 0.6, 1.0, 1.4, 1.8]),
+                          jnp.asarray(0.0), jnp.asarray(0.0))
+    assert float(jnp.max(jnp.abs(dr_hold))) == pytest.approx(0.0)

@@ -3239,12 +3239,12 @@ this unit's job. Covered by `tests/integration/test_dosing.py`.
 
 **Sequencing batch reactor (`SBRUnit`, issue #273).** A single tank that treats
 in batches, cycling through timed phases (fill → react → settle → decant → idle)
-defined by a list of `SBRPhase(name, duration, feed=, decant=, kla=, settle=)`.
-Variable-volume state `[C, V]` (volume rises at `feed_flow` during fill, falls at
-`decant_flow` during decant; the `StorageTank` `dV/dt = Q_in − Q_out` pattern) plus
-the internal state of a pluggable `SettlingModel`. The biology reacts every phase;
-aeration is the per-phase `kla` on the oxygen species; the settle phase clarifies
-the supernatant the decant draws as the treated effluent. **Phase transitions are
+defined by a list of `SBRPhase(name, duration, feed=, decant=, kla=, settle=,
+mixed=)`. Variable-volume state `[C, V]` (volume rises at `feed_flow` during fill,
+falls at `decant_flow` during decant; the `StorageTank` `dV/dt = Q_in − Q_out`
+pattern) plus the internal state of a pluggable `SettlingModel`. The biology reacts
+every phase; aeration is the per-phase `kla` on the oxygen species; the settle phase
+clarifies the supernatant the decant draws as the treated effluent. **Phase transitions are
 located events:** `SBRUnit.cycle_events(t0, t1)` returns the phase-boundary times
 as a time `Event`, and `Plant.solve` **auto-collects** every unit's `cycle_events`
 (merged with any user `events=`) so the integrator lands exactly on each switch —
@@ -3257,13 +3257,23 @@ a `SettlingModel` strategy reports, each step, how its internal clarity state
 evolves and a per-species multiplier the decant draw is scaled by (1 for solubles,
 < 1 for settled particulates); mass is conserved by the SBR (a clarified decant
 concentrates the retained solids). Two ship: `InterfaceSettling` (one state — a
-clarified fraction growing at a settling velocity while the tank settles, relaxing
-to mixed otherwise) and `LayeredSettling` (a Takács-style vertical profile of the
-particulate distribution; the decant draws the top layer). New models slot in by
-implementing `SettlingModel`. (Settling is well-mixed for the biology — the bulk
-`C` is the average; the model affects only the decant clarity.) Note: sludge
-wasting is not yet a phase, so over many cycles solids concentrate (a clarified
-decant retains them); add a waste draw for a closed long-run solids balance. The
+clarified fraction growing at a settling velocity while the tank settles) and
+`LayeredSettling` (a Takács-style vertical profile of the particulate distribution;
+the decant draws the top layer). New models slot in by implementing `SettlingModel`.
+**Clarity is driven by three regimes**, so the decant actually draws a clarified
+effluent: the model's clarity *grows* while settling, *relaxes* back to mixed only
+while the tank is **actively mixed** (fed or aerated), and is **held** during a
+quiescent phase (decant/idle) — relaxing whenever `settle=False` would otherwise
+wash the clarity out during the decant draw itself. A phase's mixing is derived as
+`feed or kla>0` unless `SBRPhase(..., mixed=)` is set explicitly (e.g. an unaerated
+but mechanically mixed anoxic react). (Settling is well-mixed for the biology — the
+bulk `C` is the average; the model affects only the decant clarity.) `plant.mass_balance`
+reads the SBR's `[C, V, settling]` inventory (volume at index `n_species`, the
+settling state massless); the reaction/aeration *gas* term does not yet cover the
+SBR's variable volume and per-phase aeration, so end-to-end closure of an aerated
+SBR plant is a follow-up. Note: sludge wasting is not yet a phase, so over many
+cycles solids concentrate (a clarified decant retains them); add a waste draw for a
+closed long-run solids balance. The
 located-event machinery also gained a fix here: a `t_eval` point landing exactly on
 an event boundary now emits the segment-endpoint state rather than a dense-output
 edge evaluation, which could return NaN for a stiff segment

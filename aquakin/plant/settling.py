@@ -72,10 +72,21 @@ class SettlingModel(ABC):
 
     @abstractmethod
     def extra_rhs(self, C: jnp.ndarray, V: jnp.ndarray, extra: jnp.ndarray,
-                  settling_active: jnp.ndarray) -> jnp.ndarray:
+                  settling_active: jnp.ndarray,
+                  mixing_active: jnp.ndarray) -> jnp.ndarray:
         """``d(extra)/dt`` of the settling state.
 
-        ``settling_active`` is a 0/1 scalar (1 during the settle phase). A
+        Three regimes are driven by two 0/1 scalars:
+
+        * ``settling_active == 1`` (the settle phase) -- clarity grows.
+        * ``mixing_active == 1`` (the tank is actively mixed: fed or aerated) --
+          clarity relaxes back toward fully mixed.
+        * both 0 (a quiescent phase: decant or idle) -- the clarity is *held*,
+          so the supernatant the decant draws stays as clear as the settle left
+          it. Re-mixing on ``settling_active == 0`` alone would wash the clarity
+          out during the decant draw itself.
+
+        The two flags are mutually exclusive (a settle phase is never mixed). A
         stateless model returns ``zeros((0,))``.
         """
 
@@ -106,9 +117,9 @@ class InterfaceSettling(SettlingModel):
     area : float
         Tank cross-sectional area, length^2, converting volume to depth.
     remix_rate : float
-        First-order rate (1/time) at which clarity decays back to 0 when not
-        settling. Large enough that the tank is well mixed within a fill/react
-        phase; default 1e3 (effectively instant on a daily cycle).
+        First-order rate (1/time) at which clarity decays back to 0 while the
+        tank is actively mixed. Large enough that the tank is well mixed within a
+        fill/react phase; default 1e3 (effectively instant on a daily cycle).
     """
 
     v_settle: float
@@ -122,13 +133,15 @@ class InterfaceSettling(SettlingModel):
     def initial_extra_state(self) -> jnp.ndarray:
         return jnp.zeros((1,))  # start fully mixed
 
-    def extra_rhs(self, C, V, extra, settling_active) -> jnp.ndarray:
+    def extra_rhs(self, C, V, extra, settling_active, mixing_active) -> jnp.ndarray:
         c = extra[0]
         depth = jnp.maximum(V / self.area, 1e-9)
         grow = self.v_settle / depth                  # interface descent -> clarity
-        # Settling grows c toward 1; otherwise it relaxes to 0 (re-mixing).
+        # Settling grows c toward 1; active mixing relaxes it to 0; a quiescent
+        # phase (decant/idle: neither flag set) holds c so the decant draw stays
+        # clarified.
         dc = settling_active * grow * (1.0 - c) \
-            - (1.0 - settling_active) * self.remix_rate * c
+            - mixing_active * self.remix_rate * c
         return jnp.reshape(dc, (1,))
 
     def decant_multiplier(self, C, V, extra) -> jnp.ndarray:
@@ -162,7 +175,8 @@ class LayeredSettling(SettlingModel):
     area : float
         Tank cross-sectional area, length^2.
     remix_rate : float
-        Re-mixing relaxation rate (1/time) when not settling. Default 1e3.
+        Re-mixing relaxation rate (1/time) while the tank is actively mixed.
+        Default 1e3.
     """
 
     n_layers: int = 4
@@ -181,7 +195,7 @@ class LayeredSettling(SettlingModel):
     def initial_extra_state(self) -> jnp.ndarray:
         return jnp.ones((self.n_layers,))  # uniform profile (ratio 1 everywhere)
 
-    def extra_rhs(self, C, V, extra, settling_active) -> jnp.ndarray:
+    def extra_rhs(self, C, V, extra, settling_active, mixing_active) -> jnp.ndarray:
         # Per-layer particulate ratio r (mean 1). Settling moves mass from layer
         # k to k+1 at a velocity-set rate; the downward flux out of the bottom is
         # reflected (no mass leaves the profile -- the average ratio is conserved).
@@ -198,7 +212,9 @@ class LayeredSettling(SettlingModel):
         # Re-mixing relaxes the profile to uniform (mean of r).
         mean_r = jnp.mean(r)
         d_mix = self.remix_rate * (mean_r - r)
-        dr = settling_active * d_settle + (1.0 - settling_active) * d_mix
+        # Settle -> redistribute; actively mixed -> relax to uniform; a quiescent
+        # phase (decant/idle) holds the profile so the decant draw stays clarified.
+        dr = settling_active * d_settle + mixing_active * d_mix
         return dr
 
     def decant_multiplier(self, C, V, extra) -> jnp.ndarray:
