@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 import jax.numpy as jnp
 
 from aquakin.plant.cstr import Aeration, aeration_transfer, build_aeration_vectors
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, mixed_temperature
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
@@ -163,6 +163,21 @@ class MBRUnit:
         n = self.network.n_species
         return state[:n], state[n]
 
+    # Back-compat accessors onto the canonical ``self._av`` store, so the aeration
+    # O2 / reaction-gas readers (plant.balance, plant.bsm.evaluation) treat the MBR
+    # as a first-class reactive aerated unit, exactly like a CSTR.
+    @property
+    def _kla_vec(self) -> jnp.ndarray:
+        return self._av.kla_vec
+
+    @property
+    def _sat_vec(self) -> jnp.ndarray:
+        return self._av.sat_vec
+
+    @property
+    def _controlled_kla(self) -> dict:
+        return self._av.controlled
+
     # ----- membrane diagnostics ------------------------------------------
     def tmp(self, fouling_resistance: jnp.ndarray,
             permeate_flow: jnp.ndarray) -> jnp.ndarray:
@@ -189,10 +204,11 @@ class MBRUnit:
         C, _R_f = self._split(state)
         q_in = inputs[self.input_port].Q
         q_perm, q_waste = self._flows(q_in)
+        T_out = mixed_temperature(inputs, [self.input_port])   # carry inlet T on
         return {
             self.permeate_port: Stream(Q=q_perm, C=self._perm_mult * C,
-                                       network=self.network),
-            self.waste_port: Stream(Q=q_waste, C=C, network=self.network),
+                                       network=self.network, T=T_out),
+            self.waste_port: Stream(Q=q_waste, C=C, network=self.network, T=T_out),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray,
@@ -220,11 +236,20 @@ class MBRUnit:
         convection = (q_in * s_in.C - q_perm * (self._perm_mult * C)
                       - q_waste * C) / self.volume
 
+        # Use the flow-weighted inlet temperature (seasonal influent) for both the
+        # kinetics and the aeration, exactly as the CSTR does; fall back to the
+        # static condition when no inlet carries a temperature.
+        T_in = mixed_temperature(inputs, [self.input_port])
+        if T_in is not None and "T" in self._condition_arrays:
+            conditions = {**self._condition_arrays, "T": jnp.reshape(T_in, (1,))}
+        else:
+            conditions = self._condition_arrays
+
         stoich = self.network.compute_stoich(params)
-        rates = self.network.rates(C, params, self._condition_arrays, 0)
+        rates = self.network.rates(C, params, conditions, 0)
         chemistry = stoich.T @ rates
 
-        T_eff = self.conditions.get("T")
+        T_eff = T_in if T_in is not None else self.conditions.get("T")
         aeration = aeration_transfer(self._av, C, T_eff, signals, self.network)
 
         dC = convection + chemistry + aeration

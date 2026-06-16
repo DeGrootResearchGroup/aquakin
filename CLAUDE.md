@@ -3306,7 +3306,14 @@ the controller reads the sensed value from the sensor's *state*, so any output
 port carries it (unchanged for single-output CSTRs). Modelling choices for the
 MVP — fixed volume with the permeate following the feed (vs a flux-controlled
 variable-volume membrane) and reversible-fouling TMP (vs explicit backwash/cleaning
-events) — are the natural simple forms; both are extension points. Covered by
+events) — are the natural simple forms; both are extension points. Like the CSTR,
+the MBR carries the **flow-weighted inlet temperature** onto its outlet streams and
+into the Arrhenius kinetics/aeration (via `streams.mixed_temperature`), so a
+seasonal influent drives it; and `plant.mass_balance` treats it as a first-class
+reactive aerated unit — its `[C, R_f]` inventory reads the fixed reactor volume (the
+fouling resistance `R_f` is massless), and it exposes the CSTR `_kla_vec`/`_sat_vec`/
+`_controlled_kla` accessors so its aeration-O2 and reaction-gas terms are counted (a
+single-MBR plant closes COD/N to a few %). Covered by
 `tests/integration/test_mbr.py`.
 
 **Reject storage tank (`build_bsm2(reject=RejectStorage())`).** A variable-volume
