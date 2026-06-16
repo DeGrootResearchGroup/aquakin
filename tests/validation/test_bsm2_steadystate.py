@@ -6,7 +6,9 @@ the digester against the reference open-loop steady state (``asm1init_bsm2.m``
 ``XINIT`` and ``adm1init_bsm2.m`` ``DIGESTERINIT``). The whole multi-network
 plant -- primary clarifier, 5 AS reactors, Takács secondary clarifier, thickener,
 ADM1 digester with the ASM1<->ADM1 interfaces, dewatering, and the reject-water
-recycle -- matches to within ~3% on every key state.
+recycle -- matches every key activated-sludge state to round-off (<1%) when run
+at the benchmark influent temperature (14.858 °C) with the 15 °C-referenced ASM1
+network, the same agreement the reference ring-test simulators reach.
 
 References
 ----------
@@ -21,7 +23,9 @@ import pytest
 import aquakin
 from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
+    BSM2_CONSTANT_INFLUENT_T,
     build_bsm2,
+    bsm2_asm1_network,
     bsm2_constant_influent,
     bsm2_parameters,
 )
@@ -29,20 +33,26 @@ from aquakin.plant.bsm.bsm2 import (
 
 # Published BSM2 open-loop reactor steady states (asm1init_bsm2 XINIT1 / XINIT5).
 REF = {
-    "tank1": {"XB_H": 2245.1, "XB_A": 166.7, "XP": 964.9, "XI": 1532.3,
-              "SNH": 6.892, "SNO": 3.935, "SS": 3.050},
-    "tank5": {"XB_H": 2242.1, "XB_A": 167.8, "XP": 970.4, "XI": 1532.3,
-              "SNH": 0.159, "SNO": 9.195, "SS": 0.673},
+    "tank1": {"XB_H": 2245.1, "XB_A": 166.6699, "XP": 964.8992, "XI": 1532.3,
+              "SNH": 6.8924, "SNO": 3.9350, "SS": 3.0503},
+    "tank5": {"XB_H": 2242.1, "XB_A": 167.8482, "XP": 970.3678, "XI": 1532.3,
+              "SNH": 0.1585, "SNO": 9.1948, "SS": 0.6734},
 }
 # Published digester steady state (adm1init_bsm2 DIGESTERINIT).
 REF_DIG = {"S_gas_ch4": 1.6535, "S_ac": 0.0893, "X_ac": 0.677, "S_IN": 0.0945}
 
 
 def _solve():
-    asm1 = aquakin.load_network("asm1")
+    # Benchmark-faithful configuration: the 15 °C-referenced ASM1 network with the
+    # constant influent carrying the BSM2 temperature (14.858 °C), so the AS line
+    # operates at the reference steady-state temperature and the rate corrections
+    # are referenced correctly. (Running at the bare 15 °C reference instead
+    # over-predicts nitrification by ~1.4 %.)
+    asm1 = bsm2_asm1_network()
     adm1 = aquakin.load_network("adm1")
     plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
-    plant.add_influent("feed", bsm2_constant_influent(asm1))
+    plant.add_influent("feed",
+                       bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
 
     y0 = bsm2_warm_start(plant)
 
@@ -63,7 +73,7 @@ def test_bsm2_activated_sludge_matches_reference():
             rel = abs(mv - rv) / abs(rv)
             if rel > worst:
                 worst, worst_name = rel, f"{tk}.{sp}"
-    assert worst < 0.06, f"{worst_name} off by {worst:.1%} from BSM2 reference"
+    assert worst < 0.01, f"{worst_name} off by {worst:.1%} from BSM2 reference"
 
 
 @pytest.mark.validation

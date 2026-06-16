@@ -167,6 +167,37 @@ def test_oxygen_saturation_benson_krause():
     assert float(oxygen_saturation(283.15)) > float(oxygen_saturation(303.15))
 
 
+def test_oxygen_saturation_bsm2_normalised_to_eight_at_15C():
+    """The IWA benchmark saturation is normalised to 8.0 mg/L at 15 degC and
+    decreases with temperature (~9.0 at 9.5 degC, ~7.2 at 20.5 degC)."""
+    from aquakin.plant.cstr import oxygen_saturation_bsm2
+    assert float(oxygen_saturation_bsm2(288.15)) == pytest.approx(8.0, abs=1e-4)
+    assert float(oxygen_saturation_bsm2(282.65)) == pytest.approx(9.0, abs=0.05)
+    assert float(oxygen_saturation_bsm2(293.65)) == pytest.approx(7.19, abs=0.05)
+    assert (float(oxygen_saturation_bsm2(282.65))
+            > float(oxygen_saturation_bsm2(293.65)))
+
+
+def test_saturation_model_selects_correction_curve(asm1):
+    """``saturation_model='bsm2'`` uses the benchmark curve for the correction
+    ratio; an unknown model is rejected at construction."""
+    from aquakin.plant.cstr import (
+        aeration_transfer, build_aeration_vectors, oxygen_saturation_bsm2)
+    with pytest.raises(ValueError):
+        Aeration(kla=120.0, saturation_model="nope")
+    aer = Aeration(kla=120.0, do_sat=8.0, temperature_correction=True,
+                   ref_T=288.15, kla_theta=1.024, saturation_model="bsm2")
+    av = build_aeration_vectors(aer, asm1, "t")
+    so = asm1.species_index["SO"]
+    C = jnp.zeros(asm1.n_species)
+    # At 10 degC the saturation is scaled by the BSM2 ratio C_s(283.15)/C_s(288.15)
+    # and the open-loop kLa by theta**(T-ref); both apply to the aeration term.
+    term = aeration_transfer(av, C, 283.15, None, asm1)
+    ratio = float(oxygen_saturation_bsm2(283.15) / oxygen_saturation_bsm2(288.15))
+    kla_eff = 120.0 * 1.024 ** (283.15 - 288.15)
+    assert float(term[so]) == pytest.approx(kla_eff * 8.0 * ratio, rel=1e-6)
+
+
 def test_default_aeration_is_bit_faithful(asm1):
     """All corrections off by default: the saturation/kLa vectors are the raw
     constants and the rhs ignores the inlet temperature (the IWA benchmark)."""

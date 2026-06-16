@@ -30,9 +30,11 @@ from typing import Optional
 import jax.numpy as jnp
 
 from aquakin.plant.metrics import (
+    _composition,
     _time_average as _metrics_time_average,
     aeration_energy,
     carbon_mass,
+    derived_BOD,
     derived_TSS,
     effluent_averages,
     effluent_quality_index,
@@ -451,8 +453,29 @@ def evaluate_bsm2(
 
     # ----- Effluent quality. -----
     eff_Q, eff_C = streams[effluent_port]
-    eqi = effluent_quality_index(t, eff_C, eff_Q, network)
-    averages = effluent_averages(t, eff_C, eff_Q, network)
+    eqi = effluent_quality_index(t, eff_C, eff_Q, network, params=params_full)
+    averages = effluent_averages(t, eff_C, eff_Q, network, params=params_full)
+
+    # BSM2 weights the BOD of *bypassed* (untreated) flow at 0.65 rather than the
+    # 0.25 applied to treated effluent (perf_plant_bsm2). When an influent bypass
+    # is present the scored effluent is the treated + bypassed mix, so the flat
+    # 0.25-coefficient BOD that effluent_averages returns understates it. Redo the
+    # BOD average as the load-weighted split over the two component streams; this
+    # branch is inert without a bypass (the validated no-bypass path is untouched).
+    if "effluent_mix" in plant.units:
+        # The two source streams feeding the bypass combiner: the treated
+        # secondary-clarifier overflow and the diverted raw influent.
+        comp = _reconstruct(plant, solution, params_full,
+                            [_EFFLUENT_PORT, "bypass_split.bypass"])
+        Qt, Ct = comp[_EFFLUENT_PORT]
+        Qb, Cb = comp["bypass_split.bypass"]
+        _, _, f_P = _composition(network, params_full)
+        base_t = derived_BOD(Ct, network, f_P=f_P) / 0.25   # SS+XS+(1-fP)(XBH+XBA)
+        base_b = derived_BOD(Cb, network, f_P=f_P) / 0.25
+        bod_load = (_time_average(t, 0.25 * base_t * Qt)
+                    + _time_average(t, 0.65 * base_b * Qb))
+        total_flow = _time_average(t, Qt + Qb)
+        averages = {**averages, "BOD": float(bod_load / total_flow)}
 
     # ----- Aeration + mixing energy (actual kLa over the run). Both span all AS
     # reactors: anoxic tanks add no aeration (kLa=0) but do need mixing. -----
@@ -481,11 +504,24 @@ def evaluate_bsm2(
     sludge = _time_average(t, tss_mass_flow)
 
     # ----- External-carbon dose (kg COD/d). -----
-    carbon_influent = plant.influents.get("external_carbon")
-    if carbon_influent is not None:
+    # The external carbon is dosed by the `external_carbon` DosingUnit: the dose
+    # flow times the reagent's readily-biodegradable (SS) concentration.
+    carbon_unit = plant.units.get("external_carbon")
+    if carbon_unit is not None and hasattr(carbon_unit, "reagent"):
         ss_idx = network.species_index["SS"]
-        Q_carbon = jnp.stack([carbon_influent.at(ti).Q for ti in t])
-        conc = float(carbon_influent.at(t[0]).C[ss_idx])
+        conc = float(carbon_unit.reagent.composition[ss_idx])
+        if carbon_unit.flow is not None:
+            # Fixed dose: constant flow over the window.
+            Q_carbon = jnp.full_like(jnp.asarray(t, dtype=float),
+                                     float(carbon_unit.flow))
+        else:
+            # Feedback dose: the manipulated dose flow is the controller signal
+            # (gain-scaled), reconstructed per saved state from the control bus.
+            sig = carbon_unit.required_signals[0]
+            Q_carbon = jnp.stack([
+                plant.signals_at(ti, solution.state[i], params_full)[sig]
+                * carbon_unit.gain
+                for i, ti in enumerate(t)])
         carbon = carbon_mass(t, Q_carbon, conc)
     else:
         carbon = 0.0
@@ -637,8 +673,8 @@ def evaluate_bsm1(
 
     # ----- Effluent quality. -----
     eff_Q, eff_C = streams[effluent_port]
-    eqi = effluent_quality_index(t, eff_C, eff_Q, network)
-    averages = effluent_averages(t, eff_C, eff_Q, network)
+    eqi = effluent_quality_index(t, eff_C, eff_Q, network, params=params_full)
+    averages = effluent_averages(t, eff_C, eff_Q, network, params=params_full)
 
     # ----- Aeration energy (actual kLa over the run). -----
     reactors = _as_reactors(plant)

@@ -2649,7 +2649,9 @@ Key types:
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `IFASUnit` / `MBBRUnit`
 (an IFAS/MBBR tank: a CSTR bulk coupled to a depth-resolved attached biofilm —
-see below), `MixerUnit`,
+see below), `MBRUnit` (membrane bioreactor: a high-MLSS aerated reactor whose
+membrane retains the solids into a near-solids-free permeate, with fouling/TMP —
+see *Membrane bioreactor* below), `MixerUnit`,
 `SplitterUnit`, `IdealClarifier` (fast, stateless separator),
 `PrimaryClarifier` (BSM2 Otterpohl–Freund: a well-mixed holding tank split by
 an HRT-dependent particulate-removal efficiency, fixed underflow `f_PS·Q`),
@@ -2935,8 +2937,29 @@ influent (`bsm2_constant_influent`) and the BSM2 (15 °C) ASM1 parameter set
 secondary settler, the primary clarifier, both ASM1↔ADM1 interfaces, the
 digester, and all recycle loops including the reject water — reproduces the
 reference reactor states (`asm1init_bsm2` `XINIT`: XB_H ≈ 2245, XB_A ≈ 167,
-XP ≈ 967, XI ≈ 1532, the SNH/SNO/SO profiles) and the digester (`DIGESTERINIT`:
-headspace methane to ~0.2%) **to within ~3% on every key state**. Two parameter
+XP ≈ 967, XI ≈ 1532, the SNH/SNO/SO profiles) **to round-off (≤0.06% on every AS
+state — the level at which the reference ring-test simulators agree with one
+another)** and the digester (`DIGESTERINIT`: headspace methane to ~0.2%) **to
+within ~1.3% (worst: headspace CO₂, the charge-balance-pH vs algebraic-pH
+difference in the gas phase)**. **Reaching the round-off AS match needs the
+benchmark operating temperature, not just the 15 °C parameters.** The ASM1 rates
+are defined at 15 °C and Arrhenius-corrected to each reactor's (flow-weighted)
+*inlet* temperature; the BSM2 constant influent enters at **14.858 °C**
+(`BSM2_CONSTANT_INFLUENT_T`, the `constinfluent` T column = the annual mean), so
+the AS line operates 0.14 °C below the reference and every rate is slowed ~1.4%.
+Omitting this (running the line at the bare 15 °C reference) over-predicts
+nitrification by ~1.4% — the entire otherwise-residual deviation (SNH/SNO drift
+~1–1.5%). `bsm2_constant_influent` therefore takes a `T=` argument: pass
+`T=BSM2_CONSTANT_INFLUENT_T` **together with `bsm2_asm1_network()`** (the 15 °C-
+referenced corrections) for the faithful match. The default `T=None` keeps the
+historic temperature-agnostic behaviour (reactors fall back to their static 15 °C
+condition); do **not** pass `T` with the plain 20 °C `load_network("asm1")` — a
+14.858 °C inlet on a 20 °C-referenced network applies a large spurious slowdown
+(~40% on nitrification). aquakin carries the reactor temperature *algebraically*
+(the flow-weighted inlet each RHS, resolved with the recycle solve), not as a
+BSM2-style heat-balance state `dT/dt=(Q/V)(T_in−T)`; the two agree at steady
+state (both give T=T_in) and differ only by the (sub-hour) thermal lag in
+transient. Two parameter
 reconciliations were needed: the BSM2 ASM1 values are the 15 °C set
 (`muH=4, KS=10, muA=0.5, bH=0.3, KX=0.1, etah=0.8`). (The shipped `asm1` is the
 textbook Gujer matrix with no heterotroph ammonia-limitation term, so — unlike
@@ -2958,7 +2981,46 @@ the recycle pumps hold throughput at `Q_in + Qintr + Qr`
 **synthesised**, not the canonical 609-day IWA series, so the dynamic tests
 assert qualitative stability, not published dynamic metrics.
 
-**Seasonal temperature.** Temperature is carried *algebraically* through the
+**Temperature handling is a selectable `TemperatureModel`
+([`plant/temperature.py`](aquakin/plant/temperature.py)).** Two strategies, set on
+the plant (`plant.set_temperature_model(...)`, or `build_bsm2(temperature_model=
+...)`); exported at the top level (`aquakin.TemperatureModel` /
+`AlgebraicTemperature` / `HeatBalanceTemperature`):
+- **`AlgebraicTemperature`** (default) — temperature is *instantaneous*: each unit
+  flow-weights its inlet `T` (a heat balance) and passes it through, so a reactor
+  runs its kinetics at its flow-weighted inlet temperature, with **no thermal
+  storage**. Carries **zero** extra state and is a pure no-op (every existing
+  plant and validated steady state is byte-for-byte unchanged). This is the
+  historic behaviour, described in the rest of this section.
+- **`HeatBalanceTemperature`** — every finite-volume liquid unit (one exposing a
+  positive `volume`) that is not temperature-fixed carries its temperature as a
+  **dynamic state** with the completely-mixed first-order balance
+  `V dT/dt = Q_in (T_in − T)`; the heated digester sets `temperature_fixed = True`
+  and stays pinned (the BSM2-protocol treatment, Jeppsson et al. 2007). The
+  reactor then runs at this **lagged tank temperature**, so it damps/lags the
+  influent (important because recycles trap heat — the effective AS time constant
+  `V_total/Q_fresh` is hours, comparable to diurnal forcing — which the algebraic
+  model cannot represent). For BSM2 it tracks the 5 reactors + primary clarifier +
+  settler (the `TakacsClarifier` exposes a `volume = area·height` for this). The
+  temperature states are appended as one block at the **tail** of the flat plant
+  state vector (the `FlowSetpoint` tail-append pattern, but for state), so every
+  per-unit state slice keeps its index (warm-starts / `states_by_unit` unaffected);
+  `Plant._split_state` exposes the block under a reserved key, `_sweep_outputs`
+  overrides each tracked unit's outlet `T` with its state (so the lag propagates
+  through the exact recycle-temperature solve), and the reactor reads its operating
+  temperature from a reserved control-signal key (`OPERATING_T_SIGNAL`), falling
+  back to the flow-weighted inlet T when absent. At a constant influent temperature
+  the heat-balance fixed point IS the influent temperature, so it reproduces the
+  algebraic steady state. Tested in
+  `tests/integration/test_temperature_model.py` (tracked set, the first-order
+  balance + `V/Q` time constant, the constant-influent fixed point, AD through the
+  state). *(Motivation: investigating the ~16% effluent-S_NH gap in the dynamic
+  BSM2 vs the ring-test consensus — the algebraic and heat-balance reactor
+  temperatures are equal to ≤0.1 °C across the AS line because the lag averages
+  out over a seasonal window, so this is for transient-temperature fidelity, not a
+  fix for that gap.)*
+
+The default-model behaviour: temperature is carried *algebraically* through the
 flowsheet: `Stream` and `InfluentSeries` have an optional `T` (Kelvin); mixers
 flow-weight it (a heat balance) and every other unit passes it through, so a
 reactor reads its (flow-weighted) inlet temperature and feeds it to the ASM1
@@ -3016,7 +3078,12 @@ AD-clean (the correction is a smooth function of `T` inside the monolithic plant
 solve). `build_bsm2(do_temperature_correction=True)` turns it on plant-wide with
 `ref_T` = the reactors' static temperature (so it is unity at the benchmark
 operating point and only a temperature-carrying influent drives it); default off
-reproduces the validated steady state exactly.
+reproduces the validated steady state exactly. The saturation curve used for the
+`C_s(T)/C_s(ref_T)` ratio is selectable via `Aeration(saturation_model=...)`:
+`"benson_krause"` (default, the APHA `oxygen_saturation`) or `"bsm2"` (the IWA
+benchmark van't Hoff `oxygen_saturation_bsm2`, normalised to 8.0 mg/L at 15 °C);
+the two differ by ~0.5 % in shape. `build_bsm2(do_temperature_correction=True)`
+uses `"bsm2"` so the seasonal oxygen driving force matches the benchmark exactly.
 
 **Influent characterization + CSV `column_map` (issue #136).** Real influent is
 measured as aggregates (total COD, TKN, ammonia, alkalinity, optionally
@@ -3203,6 +3270,35 @@ edge evaluation, which could return NaN for a stiff segment
 ([`integrate/events.py`](aquakin/integrate/events.py)). Covered by
 `tests/integration/test_sbr.py`.
 
+**Membrane bioreactor (`MBRUnit`, issue #274).** A high-MLSS aerated reactor
+([`plant/mbr.py`](aquakin/plant/mbr.py)) whose membrane retains the solids,
+replacing the secondary clarifier. Fixed-volume reactor state `[C, R_f]` (the bulk
+concentrations + a membrane-fouling resistance), reusing the CSTR kinetics and the
+`Aeration` machinery — so it takes an open-loop `kla` or a `do_setpoint` the plant
+**auto-wires** a DO controller for, exactly like a CSTR. Two outlets: `permeate`
+(the filtrate — solubles pass, particulates carried at `(1 − rejection)`, so the
+effluent is near solids-free) and `waste` (mixed liquor at the full reactor MLSS,
+drawn at the `waste_flow` setpoint). The volume is held constant
+(`Q_permeate = Q_in − Q_waste`), and because solids leave **only** via the waste
+draw the MLSS concentrates: at a 1-day HRT the biomass is retained where a
+clarifier-less CSTR would wash out, and the **SRT = V / Q_waste decouples from the
+HRT** (the defining MBR behaviour). A simple membrane-fouling state grows with the
+permeate flux and relaxes (`dR_f/dt = fouling_rate·J − fouling_relax·R_f`,
+`J = Q_permeate / membrane_area`), reaching a quasi-steady fouled state;
+`MBRUnit.tmp(R_f, Q_permeate)` reports the trans-membrane pressure
+`tmp_viscosity·J·(R_m + R_f)`. The permeate particulate split uses a per-species
+mask built from `particulate_species` (solubles pass unhindered). Scour-air energy
+couples to the aeration/blower accounting (the membrane needs continuous coarse-
+bubble aeration); for now the biological aeration is the modelled term. The
+`_materialize_aeration` sensor tap now names the sensor's first output port
+explicitly (a bare endpoint is ambiguous for a multi-output unit like the MBR);
+the controller reads the sensed value from the sensor's *state*, so any output
+port carries it (unchanged for single-output CSTRs). Modelling choices for the
+MVP — fixed volume with the permeate following the feed (vs a flux-controlled
+variable-volume membrane) and reversible-fouling TMP (vs explicit backwash/cleaning
+events) — are the natural simple forms; both are extension points. Covered by
+`tests/integration/test_mbr.py`.
+
 **Reject storage tank (`build_bsm2(reject=RejectStorage())`).** A variable-volume
 equalisation tank on the reject-recycle line: a completely-mixed CSTR with **no
 reactions** (`StorageTank`, [`plant/storage.py`](aquakin/plant/storage.py))
@@ -3323,7 +3419,12 @@ otherwise be non-affine in the recycle flows. The diverted flow skips the
 clarifier too (matching the reference `Qbypassplant=1`: it bypasses the *plant*,
 not just the AS) and joins the final effluent through a new `effluent_mix`
 combiner, so the final effluent is `effluent_mix.out` (treated + bypassed) —
-`evaluate_bsm2` auto-detects it. **This changes the influent entry point**: with
+`evaluate_bsm2` auto-detects it. When a bypass is present `evaluate_bsm2` also
+applies the BSM2 **split BOD weighting** — the benchmark's `0.65` coefficient on
+the *bypassed* (untreated) BOD vs `0.25` on the treated effluent
+(`perf_plant_bsm2`) — as a load-weighted average over the two source streams
+(`settler.overflow` + `bypass_split.bypass`); the no-bypass path keeps the flat
+`0.25` and is untouched. **This changes the influent entry point**: with
 the bypass, the influent entry moves to `bypass_split.in` and the effluent to
 `effluent_mix.out` -- both reported on `plant.influent_endpoint` /
 `plant.effluent_endpoint`, so example/user code reads those instead of a literal.
@@ -3588,6 +3689,20 @@ nor concentrating it in a few files makes the whole suite fast.
   tests are excluded, keeping the slice time predictable. It complements the
   fast-gate signature-contract test (`tests/unit/test_api_signatures.py`), which
   catches the *signature* sub-case deterministically; the smoke adds breadth.
+- **The `full-ci` label** runs the full merge suite (the `slow` **and**
+  `validation` jobs) on a PR *before* merge — the opt-in, pay-when-it-matters
+  pre-merge check. Apply it to a PR (the workflow listens for the `labeled`
+  event, so no fresh push is needed) for a **large or high-risk change** —
+  anything touching the plant assembly, a network's stoichiometry, the
+  integrators/adjoints, or the metric/mass-balance kernels — where the
+  fast-gate-plus-rotating-smoke coverage is not enough and you want the slow
+  whole-plant solves and published-data validation to run before it lands.
+  Without the label those jobs run only **after** merge to `main` (the
+  default), so a regression they catch surfaces post-merge and is reverted from
+  there; the label moves that signal earlier at the cost of the runtime. The
+  bare `labeled` event deliberately does **not** re-run the fast gate / smoke
+  (they already ran on the latest commit) and does not cancel an in-progress
+  run, so labelling never disturbs the required checks.
 
 **Branch protection:** the required status checks must be the fast-gate jobs
 (`fast tests (py3.11)` / `(py3.12)`) — **not** `slow`/`validation`, which do not

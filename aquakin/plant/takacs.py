@@ -110,6 +110,21 @@ class TakacsClarifier(FlowParameterized):
     settling_params : dict[str, float]
         Takács settling parameters (v0, vmax, rh, rp, fns, X_threshold).
         Defaults to the standard BSM1 values.
+    composition_mode : str
+        How the particulate composition of the outlet streams is determined.
+
+        - ``"per_species"`` (default): the state carries every particulate
+          species per layer, shape ``(n_layers, n_part)``. Each layer keeps its
+          own evolving composition, and the outlet particulates are read straight
+          from the relevant boundary layer. This carries per-layer composition
+          memory.
+        - ``"lumped_tss"``: the state carries a single total-suspended-solids
+          value per layer, shape ``(n_layers,)``. The settling/convection
+          dynamics act on that one TSS variable, and each outlet stream's
+          particulate composition is the *instantaneous feed* composition scaled
+          by the boundary-layer-to-feed TSS ratio. The two modes agree at steady
+          state but diverge under dynamic flow, because the lumped form has no
+          per-layer composition memory.
     input_port : str
     overflow_port : str
     underflow_port : str
@@ -137,11 +152,17 @@ class TakacsClarifier(FlowParameterized):
     )
     settling_params: dict[str, float] = field(default_factory=lambda: dict(_BSM1_TAKACS_DEFAULTS))
     tss_factors: dict[str, float] = field(default_factory=lambda: dict(_DEFAULT_TSS_FACTORS))
+    composition_mode: str = "per_species"
     input_port: str = "inlet"
     overflow_port: str = "overflow"
     underflow_port: str = "underflow"
 
     def __post_init__(self) -> None:
+        if self.composition_mode not in ("per_species", "lumped_tss"):
+            raise ValueError(
+                f"TakacsClarifier '{self.name}': composition_mode must be "
+                f"'per_species' or 'lumped_tss'; got {self.composition_mode!r}."
+            )
         # Validate species and resolve indices.
         self._part_indices: list[int] = []
         self._part_tss_factors: list[float] = []
@@ -202,7 +223,19 @@ class TakacsClarifier(FlowParameterized):
 
     @property
     def state_size(self) -> int:
+        if self.composition_mode == "lumped_tss":
+            return self.n_layers
         return self.n_layers * self._n_part
+
+    @property
+    def volume(self) -> float:
+        """Total liquid volume (m³) = settling area × depth.
+
+        Exposed so a :class:`~aquakin.plant.temperature.HeatBalanceTemperature`
+        model gives the settler a (well-mixed) bulk temperature state; it does
+        not enter the settling physics, which are layered.
+        """
+        return float(self.area) * float(self.height)
 
     @property
     def input_ports(self) -> list[str]:
@@ -219,8 +252,43 @@ class TakacsClarifier(FlowParameterized):
         if self.init_underflow_Q is None:
             # Backward-compatible uniform seed: every layer at the inlet's
             # default particulate concentration.
+            if self.composition_mode == "lumped_tss":
+                # The single per-layer TSS is the default composition summed to
+                # total solids, identical in every layer.
+                tss = float(jnp.sum(part_defaults * self._factors_arr))
+                return jnp.full((self.n_layers,), tss)
             return jnp.tile(part_defaults, self.n_layers)
 
+        tss = self._initial_blanket_tss(part_defaults)
+        if self.composition_mode == "lumped_tss":
+            return tss
+
+        # Apportion each layer's TSS across particulate species by the feed
+        # composition: C_k = d_k * (TSS_layer / X_f), so sum_k C_k * f_k = TSS.
+        X_f = float(jnp.sum(part_defaults * self._factors_arr))
+        scale = tss / X_f                                   # (n_layers,)
+        state = scale[:, None] * part_defaults[None, :]     # (n_layers, n_part)
+        return state.reshape(-1)
+
+    def _initial_blanket_tss(self, part_defaults: jnp.ndarray) -> jnp.ndarray:
+        """Per-layer TSS (g/m³) for a settled-blanket start, shape ``(n_layers,)``.
+
+        Builds a state-point-analysis profile -- clarification (above-feed)
+        layers near the non-settleable floor, a thickened bottom blanket -- from
+        the network's default particulate concentrations and the blanket
+        operating point. Layer 0 is the bottom (underflow); ``n_layers - 1`` is
+        the top (effluent). Shared by both composition modes.
+
+        Parameters
+        ----------
+        part_defaults : jnp.ndarray
+            Per-species default particulate concentrations, shape ``(n_part,)``.
+
+        Returns
+        -------
+        jnp.ndarray
+            Per-layer total-suspended-solids profile, shape ``(n_layers,)``.
+        """
         # --- State-point-analysis settled blanket ----------------------
         # Feed TSS (MLSS) the blanket is built for. The clarifier feed at
         # startup is the reactors' initial mixed-liquor, so default to the TSS
@@ -253,12 +321,7 @@ class TakacsClarifier(FlowParameterized):
         layer_idx = jnp.arange(self.n_layers)
         tss = jnp.where(layer_idx > self.feed_layer, X_clar, X_f)
         tss = tss.at[0].set(X_u)
-
-        # Apportion each layer's TSS across particulate species by the feed
-        # composition: C_k = d_k * (TSS_layer / X_f), so sum_k C_k * f_k = TSS.
-        scale = tss / X_f                                   # (n_layers,)
-        state = scale[:, None] * part_defaults[None, :]     # (n_layers, n_part)
-        return state.reshape(-1)
+        return tss
 
     def _layered(self, state: jnp.ndarray) -> jnp.ndarray:
         """Reshape the flat state into ``(n_layers, n_part)``."""
@@ -275,15 +338,19 @@ class TakacsClarifier(FlowParameterized):
         Parameters
         ----------
         state : jnp.ndarray
-            The clarifier's flat state vector, shape ``(n_layers × n_part,)``.
+            The clarifier's flat state vector: shape ``(n_layers × n_part,)`` in
+            ``"per_species"`` mode, ``(n_layers,)`` in ``"lumped_tss"`` mode.
 
         Returns
         -------
         jnp.ndarray
             Scalar total settleable-solids mass (g).
         """
-        layered = self._layered(state)  # (n_layers, n_part)
-        tss_per_layer = jnp.sum(layered * self._factors_arr[None, :], axis=1)
+        if self.composition_mode == "lumped_tss":
+            tss_per_layer = state  # the state IS the per-layer TSS
+        else:
+            layered = self._layered(state)  # (n_layers, n_part)
+            tss_per_layer = jnp.sum(layered * self._factors_arr[None, :], axis=1)
         layer_volume = self.area * self.height / self.n_layers
         return jnp.sum(tss_per_layer) * layer_volume
 
@@ -340,7 +407,6 @@ class TakacsClarifier(FlowParameterized):
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         s_in = inputs[self.input_port]
-        layered = self._layered(state)  # (n_layers, n_part)
         # Overflow = top layer (index n_layers - 1). Underflow = bottom (0).
         # Soluble species pass through (same concentration in both outlets).
         # The controlled flow is fixed and the other is the remainder, clamped
@@ -348,21 +414,44 @@ class TakacsClarifier(FlowParameterized):
         # make the downstream mixer produce negative concentrations).
         overflow_Q, underflow_Q = self._split_flows(s_in.Q, clamp=True, t=t, params=params)
 
-        # Build the per-species C vectors with two scatters each (not a Python
-        # loop of scalar scatters): solubles pass through; particulates take the
-        # top layer for overflow and the bottom layer for underflow.
         n_species = self.network.n_species
         sol_idx, part_idx = self._sol_idx_arr, self._part_idx_arr
         sol_C = s_in.C[sol_idx]
+
+        if self.composition_mode == "lumped_tss":
+            # Particulates carry no per-layer composition memory: each outlet
+            # takes the *instantaneous feed* particulate composition scaled by
+            # the boundary-layer-to-feed TSS ratio, so a layer thicker than the
+            # feed concentrates every particulate by the same factor and a clear
+            # layer dilutes them. (At steady state this matches the per-species
+            # reading; under dynamic flow it has no composition lag.)
+            C_in_part = s_in.C[part_idx]                          # (n_part,)
+            tss_feed = jnp.sum(C_in_part * self._factors_arr)
+            # Guard the zero-feed division: with no feed solids the scaling is
+            # undefined, so the outlets just carry the feed particulates through.
+            safe_tss = jnp.where(tss_feed > 0.0, tss_feed, 1.0)
+            scale_over = jnp.where(tss_feed > 0.0, state[self.n_layers - 1] / safe_tss, 1.0)
+            scale_under = jnp.where(tss_feed > 0.0, state[0] / safe_tss, 1.0)
+            part_overflow = C_in_part * scale_over
+            part_underflow = C_in_part * scale_under
+        else:
+            # Particulates take the top layer for overflow and the bottom layer
+            # for underflow, straight from the per-layer composition state.
+            layered = self._layered(state)  # (n_layers, n_part)
+            part_overflow = layered[self.n_layers - 1]
+            part_underflow = layered[0]
+
+        # Build the per-species C vectors with two scatters each (not a Python
+        # loop of scalar scatters): solubles pass through; particulates as above.
         C_overflow = (
             jnp.zeros((n_species,))
             .at[sol_idx].set(sol_C)
-            .at[part_idx].set(layered[self.n_layers - 1])
+            .at[part_idx].set(part_overflow)
         )
         C_underflow = (
             jnp.zeros((n_species,))
             .at[sol_idx].set(sol_C)
-            .at[part_idx].set(layered[0])
+            .at[part_idx].set(part_underflow)
         )
 
         return {
@@ -398,7 +487,6 @@ class TakacsClarifier(FlowParameterized):
         # negative-flow stream and destabilise the solve.
         overflow_Q, underflow_Q = self._split_flows(Q_in, clamp=True, t=t, params=params)
 
-        layered = self._layered(state)  # (n_layers, n_part)
         # Particulate inlet concentrations — gather via the precomputed index array.
         C_in_part = s_in.C[self._part_idx_arr]  # (n_part,)
 
@@ -410,6 +498,22 @@ class TakacsClarifier(FlowParameterized):
         v_up = overflow_Q / self.area
         v_down = underflow_Q / self.area
 
+        if self.composition_mode == "lumped_tss":
+            # A single total-solids variable per layer. The settling velocity is
+            # already TSS-based, so the lumped dynamics are the identical Takács
+            # flux/convection math applied to the one TSS variable -- treat the
+            # state as an (n_layers, 1) array with unit TSS factor, run the same
+            # helpers, and flatten back. The result equals the per-species
+            # dTSS/dt aggregated over species for the same TSS profile.
+            tss = state[:, None]                                  # (n_layers, 1)
+            settling = self._settling_divergence_tss(tss, X_min, h_layer)
+            convection = self._convection_tss(
+                tss, tss_in, Q_in, v_up, v_down, h_layer
+            )
+            return (convection + settling).reshape((-1,))
+
+        layered = self._layered(state)  # (n_layers, n_part)
+
         # The per-layer derivative is convection (bulk up/down transport plus
         # the feed inflow) plus the Takács settling divergence.
         settling = self._settling_divergence(layered, X_min, h_layer)
@@ -418,6 +522,88 @@ class TakacsClarifier(FlowParameterized):
         )
         dstate = convection + settling
         return dstate.reshape((-1,))
+
+    def _settling_divergence_tss(
+        self, tss: jnp.ndarray, X_min: jnp.ndarray, h_layer: float
+    ) -> jnp.ndarray:
+        """Net Takács settling flux per layer on the lumped TSS state.
+
+        Identical interface flux-limiting to :meth:`_settling_divergence` but on
+        the single total-solids variable: the interface flux ``v_s(X)·X`` is the
+        limiting (minimum) of the two adjacent layers' potential fluxes, except
+        in the clarification zone while the receiving layer is dilute, where the
+        upper layer settles freely. ``tss`` is shape ``(n_layers, 1)``.
+
+        Parameters
+        ----------
+        tss : jnp.ndarray
+            Per-layer total solids as an ``(n_layers, 1)`` column.
+        X_min : jnp.ndarray
+            Non-settleable floor (``f_ns × feed TSS``).
+        h_layer : float
+            Layer height (m).
+
+        Returns
+        -------
+        jnp.ndarray
+            Per-layer settling divergence, shape ``(n_layers, 1)``.
+        """
+        tss_per_layer = tss[:, 0]                  # (n_layers,)
+        tss_above = tss_per_layer[1:]              # upper layer at each interface
+        tss_below = tss_per_layer[:-1]             # lower (receiving) layer
+        f_above = self._settling_velocity(tss_above, X_min) * tss_above
+        f_below = self._settling_velocity(tss_below, X_min) * tss_below
+
+        min_flux = jnp.minimum(f_above, f_below)
+        interface_idx = jnp.arange(self.n_layers - 1)
+        is_clarification = interface_idx >= self.feed_layer        # static bool
+        below_threshold = tss_below <= self._X_threshold
+        flux_tss = jnp.where(is_clarification & below_threshold, f_above, min_flux)
+
+        # flux_tss[i] flows from layer i+1 down to layer i. Zero-pad for the
+        # no-flux top/bottom boundaries.
+        flux_in_from_above = jnp.concatenate(
+            [flux_tss, jnp.zeros((1,))], axis=0
+        ) / h_layer
+        flux_out_to_below = jnp.concatenate(
+            [jnp.zeros((1,)), flux_tss], axis=0
+        ) / h_layer
+        return (flux_in_from_above - flux_out_to_below)[:, None]
+
+    def _convection_tss(
+        self,
+        tss: jnp.ndarray,
+        tss_in: jnp.ndarray,
+        Q_in: jnp.ndarray,
+        v_up: jnp.ndarray,
+        v_down: jnp.ndarray,
+        h_layer: float,
+    ) -> jnp.ndarray:
+        """Net convective transport per layer on the lumped TSS state.
+
+        Identical to :meth:`_convection` but on the single total-solids
+        variable, with the feed inflow carrying the feed TSS. ``tss`` is shape
+        ``(n_layers, 1)``; the return matches.
+        """
+        zero_row = jnp.zeros((1, 1))
+        below = jnp.concatenate([tss[1:, :], zero_row], axis=0)
+        above = jnp.concatenate([zero_row, tss[:-1, :]], axis=0)
+
+        is_below_feed = self._is_below_feed[:, None]
+        is_above_feed = self._is_above_feed[:, None]
+        is_feed = self._is_feed[:, None]
+
+        conv_in_down = (v_down / h_layer) * below * is_below_feed
+        conv_in_up = (v_up / h_layer) * above * is_above_feed
+        feed_inflow = (Q_in / (self.area * h_layer)) * tss_in * is_feed
+        conv_in = conv_in_down + conv_in_up + feed_inflow
+
+        conv_out = (
+            (v_down / h_layer) * tss * is_below_feed
+            + (v_up / h_layer) * tss * is_above_feed
+            + ((v_up + v_down) / h_layer) * tss * is_feed
+        )
+        return conv_in - conv_out
 
     def _settling_divergence(
         self, layered: jnp.ndarray, X_min: jnp.ndarray, h_layer: float

@@ -62,6 +62,12 @@ class ADM1DigesterUnit:
     gas_species: tuple[str, ...] = ADM1_GAS_SPECIES
     output_port: str = "effluent"
 
+    # The digester is heated and held at a fixed operating temperature, so a
+    # HeatBalanceTemperature model does NOT give it a dynamic temperature state
+    # (matching the BSM2 protocol: "except the digester, fixed at 35 degC"). A
+    # plain class attribute, not a dataclass field, so it never enters the state.
+    temperature_fixed = True
+
     def __post_init__(self) -> None:
         # Fill in any unspecified required conditions from the network defaults.
         defaults = {

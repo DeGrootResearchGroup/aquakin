@@ -252,6 +252,28 @@ def mass_balance(
         for q in comps:
             inflow[q] += float(np.trapezoid(_flux(Q, C, cvec[q]), t))
 
+    # --- inflow (reagent mass injected by dosing units) ---------------------
+    # A DosingUnit adds its reagent's mass to the through-stream from outside the
+    # plant boundary, so it is a component source -- counted as inflow (the
+    # through-stream's own mass already enters via its upstream influent).
+    for uname, u in plant.units.items():
+        comp_vec = getattr(getattr(u, "reagent", None), "composition", None)
+        if comp_vec is None:
+            continue
+        cvec = content_by_network[u.network.name]
+        comp_vec = np.asarray(comp_vec)
+        if u.flow is not None:
+            Q_dose = np.full(len(t), float(u.flow))
+        else:
+            sig = u.required_signals[0]
+            Q_dose = np.asarray([
+                float(plant.signals_at(tt, solution.state[i], params)[sig]
+                      * u.gain)
+                for i, tt in enumerate(t)])
+        C_dose = np.broadcast_to(comp_vec, (len(t), comp_vec.shape[0]))
+        for q in comps:
+            inflow[q] += float(np.trapezoid(_flux(Q_dose, C_dose, cvec[q]), t))
+
     # --- outflow (terminal material streams) --------------------------------
     outflow = {q: 0.0 for q in comps}
     if effluent_ports:

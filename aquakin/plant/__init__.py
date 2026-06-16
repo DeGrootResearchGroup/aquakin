@@ -31,6 +31,7 @@ from aquakin.plant.characterize import (
 )
 from aquakin.plant.influent import InfluentSeries, read_influent_csv
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
+from aquakin.plant.mbr import MBRUnit
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import (
     Connection,
@@ -52,6 +53,11 @@ from aquakin.plant.settling import (
 from aquakin.plant.steady import PTCResult, ptc_forward, solve_steady_state
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.streams import Stream, StreamSeries
+from aquakin.plant.temperature import (
+    AlgebraicTemperature,
+    HeatBalanceTemperature,
+    TemperatureModel,
+)
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
 from aquakin.plant.units import FlowContext, StatelessUnit, Unit
 from aquakin.plant.metrics import (
@@ -117,6 +123,7 @@ __all__ = [
     "characterize_influent",
     "fractionate",
     "read_influent_csv",
+    "MBRUnit",
     "MixerUnit",
     "PIController",
     "ParameterLayout",
@@ -142,6 +149,9 @@ __all__ = [
     "StorageTank",
     "Stream",
     "StreamSeries",
+    "TemperatureModel",
+    "AlgebraicTemperature",
+    "HeatBalanceTemperature",
     "Unit",
     "CarbonFootprint",
     "CostFactors",
