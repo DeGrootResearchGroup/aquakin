@@ -339,6 +339,36 @@ def test_atol_by_name(simple_network):
     assert atol.shape == (simple_network.n_species,)
 
 
+def test_override_vector_is_ad_clean(simple_network):
+    """The by-name builders must accept traced/JAX overrides without float()
+    coercion, so C0 / params can be built inside jax.grad / vmap to
+    differentiate w.r.t. an initial concentration or rate constant (#317)."""
+    import jax
+
+    a = simple_network.species_index["A"]
+
+    # A traced override flows through concentrations() unconcretised.
+    def c_of_x(x):
+        return simple_network.concentrations({"A": x})[a]
+
+    assert float(jax.grad(c_of_x)(5.0)) == 1.0
+
+    # vmap over an override builds a batch of vectors.
+    batched = jax.vmap(lambda x: simple_network.concentrations({"A": x}))(
+        jnp.array([1.0, 2.0, 3.0])
+    )
+    assert batched.shape == (3, simple_network.n_species)
+    assert jnp.allclose(batched[:, a], jnp.array([1.0, 2.0, 3.0]))
+
+    # parameter_values() and atol() share the same path, so they are AD-clean too.
+    k_idx = simple_network.param_index["A_to_B.k"]
+    g = jax.grad(lambda x: simple_network.parameter_values({"A_to_B.k": x})[k_idx])
+    assert float(g(0.7)) == 1.0
+    b = simple_network.species_index["B"]
+    ga = jax.grad(lambda x: simple_network.atol({"B": x})[b])
+    assert float(ga(1e-12)) == 1.0
+
+
 def test_override_unknown_name_raises_with_hint(simple_network):
     with pytest.raises(KeyError, match="Unknown species 'AA'"):
         simple_network.concentrations({"AA": 1.0})
