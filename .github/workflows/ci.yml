@@ -225,83 +225,17 @@ jobs:
         # the runner. pytest-split partitions the marked set across the 4 shards
         # by recorded duration (`.test_durations`), so this shard runs only its
         # slice in a fresh process -- bounding the accumulated memory. The
-        # `heavy` validation tests (the whole-plant stable-adjoint gradients, the
-        # single heaviest in the repo) are EXCLUDED here and run in their own
-        # `heavy-validation` job: with `-n 1` a shard accumulates XLA cache across
-        # its tests, and one heavy test landing in a shared shard tipped it past
-        # the 16 GB runner -- so they are split out where they accumulate only
-        # against each other.
+        # `heavy` validation tests (the whole-plant stable-adjoint gradients) are
+        # EXCLUDED from CI entirely -- a single one of them peaks near the 16 GB
+        # runner and even two in one process OOM it, with no free-runner config
+        # that fits; they are run locally via `pytest -m "validation and heavy"`.
+        # The stable-adjoint gradient path is still smoke-tested in the fast gate
+        # by the small single-CSTR `test_stable_adjoint_plant_gradient_matches_
+        # jax_adjoint_and_fd`.
         run: >-
           pytest -m "validation and not heavy" -q -n 1
           --splits 4 --group ${{ matrix.group }}
           --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0
-
-  # ---- Heavy validation: the whole-plant stable-adjoint gradient tests ---------
-  # These are the single most memory-heavy tests in the repo (each builds the full
-  # two-network BSM2 plant and runs a reverse-mode discrete-adjoint gradient,
-  # peaking ~4-5.5 GB). Run serially (`-n 1`) and split into their own shards so
-  # each fresh process accumulates only a couple of them -- when one of these
-  # shared a regular `validation` shard, its peak plus the shard's accumulated XLA
-  # cache OOM-killed the 16 GB runner (a crashed `gw0` worker). Same gate, Python,
-  # and install as the `validation` job; the two together are a complete, disjoint
-  # partition of the validation set (`not heavy` + `heavy`), so coverage is
-  # unchanged.
-  heavy-validation:
-    name: heavy validation (shard ${{ matrix.group }}/4)
-    if: >-
-      github.event_name == 'push'
-      || (github.event_name == 'pull_request'
-          && contains(github.event.pull_request.labels.*.name, 'full-ci'))
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        group: [1, 2, 3, 4]
-    # A shard runs at most 2 heavy tests serially in one process (~15 min each);
-    # 60 min covers that with headroom.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-
-      - name: Install package and test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[test]"
-
-      - name: Run heavy validation shard
-        # These whole-plant stable-adjoint tests are ~5 GB EACH (a large BSM2
-        # adjoint program whose XLA compilation cache persists across tests in a
-        # process). The budget is therefore set by how many share a process, NOT
-        # their duration -- so partition by COUNT (2 per shard), which
-        # pytest-split's duration balancing cannot do (it once put 3 short ones
-        # together -> OOM, or left a shard empty). Run the shard's 2 tests in ONE
-        # pytest process: the expensive plant compile is amortized across them
-        # (running each in its own process instead recompiles every time -> 12-25
-        # min each, overran), while only 2 caches accumulate (fits 16 GB; 3 did
-        # not). --timeout 1800 s: the slowest runs ~15 min single-threaded, where
-        # 900 s tripped a thread-timeout the XLA call could not be interrupted
-        # out of (a "crashed worker").
-        shell: bash
-        run: |
-          pytest -m "validation and heavy" --collect-only -q | grep '::' \
-            | sort > all_heavy.txt
-          g=${{ matrix.group }}
-          sel=$(sed -n "$(((g - 1) * 2 + 1)),$((g * 2))p" all_heavy.txt)
-          if [ -z "$sel" ]; then
-            echo "Shard $g/4: no heavy tests in this count slice; nothing to run."
-            exit 0
-          fi
-          echo "Shard $g/4 runs these heavy test(s) in one shared process:"
-          echo "$sel" | sed 's/^/  /'
-          pytest $sel -q -n 1 --durations=15 \
-            --timeout=1800 --timeout-method=thread --max-worker-restart=0
 
   # ---- Pre-merge smoke slice: a rotating shard of the slow suite, on PRs -------
   # The `slow`/`validation` suites run only on push-to-main, so a regression that
@@ -405,8 +339,11 @@ jobs:
           pip install -e ".[test]"
 
       - name: Record this shard's durations
+        # Exclude `heavy`: those whole-plant stable-adjoint tests do not run in
+        # CI (they OOM the 16 GB runner), so they need no recorded durations, and
+        # timing them here would OOM this job too.
         run: >-
-          pytest -m "slow or validation" -q -n 1
+          pytest -m "(slow or validation) and not heavy" -q -n 1
           --splits 8 --group ${{ matrix.group }}
           --store-durations --durations-path durations-${{ matrix.group }}.json
           --timeout=900 --timeout-method=thread --max-worker-restart=0
