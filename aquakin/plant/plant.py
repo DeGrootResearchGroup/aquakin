@@ -1000,8 +1000,8 @@ class Plant:
         self._validate_control_signals()
 
     def _validate_control_signals(self) -> None:
-        """Cross-check the control-signal bus: every signal a unit *consumes*
-        must be *published* by some unit in the plant.
+        """Cross-check the control-signal bus: every published signal name is
+        unique, and every signal a unit *consumes* is *published* by some unit.
 
         A unit under closed-loop control (a ``CSTRUnit`` whose ``aeration`` has a
         DO setpoint) reads ``signals[name]`` in its ``rhs``; if no controller publishes
@@ -1009,6 +1009,13 @@ class Plant:
         ``KeyError`` from deep inside the first jitted solve. This runs at
         topology setup (before the RHS is traced) and raises a clear error
         naming the unit, the missing signal, and the available signals instead.
+
+        Two controllers publishing the *same* signal name are also rejected here:
+        the bus is gathered with ``dict.update`` (see :meth:`_compute_signals`),
+        so a duplicate would silently overwrite -- whichever unit runs later wins
+        and the other's output is discarded while its integral state keeps
+        winding. That is caught up front as a clear error rather than a silent
+        wrong closed loop.
 
         Conservative by design: a unit that publishes signals declares their
         names via ``signal_names``; if any signal *producer* (one exposing
@@ -1023,8 +1030,19 @@ class Plant:
         if unknown_publisher:
             return
         published: set[str] = set()
-        for unit in self.units.values():
-            published.update(getattr(unit, "signal_names", ()) or ())
+        publisher_of: dict[str, str] = {}
+        for name, unit in self.units.items():
+            for sig in getattr(unit, "signal_names", ()) or ():
+                if sig in publisher_of:
+                    raise ValueError(
+                        f"Control signal '{sig}' is published by both "
+                        f"'{publisher_of[sig]}' and '{name}'. Signal names must be "
+                        f"unique -- the bus gathers them by name, so a duplicate "
+                        f"would silently overwrite. Give the controllers distinct "
+                        f"signal names."
+                    )
+                publisher_of[sig] = name
+                published.add(sig)
         for name, unit in self.units.items():
             for sig in getattr(unit, "required_signals", ()) or ():
                 if sig not in published:
