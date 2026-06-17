@@ -330,6 +330,7 @@ def build_bsm2(
     do_temperature_correction: bool = False,
     temperature_model: Optional["object"] = None,
     settler_composition_mode: str = "per_species",
+    settler_soluble_holdup: bool = False,
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
@@ -393,6 +394,18 @@ def build_bsm2(
         Turn it on for a seasonal (temperature-carrying-influent) run, where the
         constant saturation otherwise under-models oxygen transfer while the
         kinetics already track temperature.
+    settler_composition_mode : str, optional
+        Particulate state form of the secondary clarifier
+        (:class:`~aquakin.plant.takacs.TakacsClarifier`); ``"per_species"``
+        (default) or ``"lumped_tss"``.
+    settler_soluble_holdup : bool, optional
+        If True, the secondary clarifier carries the soluble species in its
+        layers (advected by the bulk flow, no settling), so its liquid volume
+        damps the soluble effluent signal -- the BSM2 ``settler1dv5`` behaviour.
+        Default False (solubles pass straight through, no holdup). Leaves every
+        steady state unchanged (a non-reacting soluble relaxes to the feed
+        concentration), so it only matters under a dynamic influent, where it
+        smooths the effluent ammonia peaks/troughs toward the reference.
 
     Returns
     -------
@@ -550,7 +563,8 @@ def build_bsm2(
         name="settler", network=asm1, area=BSM2_CLARIFIER_AREA,
         height=BSM2_CLARIFIER_HEIGHT, underflow_Q=Q_settler_underflow,
         init_underflow_Q=Q_settler_underflow_init,
-        composition_mode=settler_composition_mode))
+        composition_mode=settler_composition_mode,
+        soluble_holdup=settler_soluble_holdup))
     plant.add_unit(SplitterUnit(
         name="underflow_split", network=asm1,
         output_port_flows={"ras": Qr}, remainder_port="waste"))
