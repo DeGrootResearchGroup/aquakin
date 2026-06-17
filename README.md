@@ -247,6 +247,22 @@ ev   = evaluate_bsm2(plant, sol, params, aeration_system=syst)
 print(ev.aeration_energy, "kWh/d   air:", ev.air_flow, "m3/d")   # mechanistic AE
 ```
 
+**Disinfection** unit ops reduce a pathogen indicator at the end of the train:
+a `UVUnit` (dose = intensity × exposure × UVT-factor → log-linear inactivation)
+and a `ChlorineContactUnit` (a chlorine residual that decays first-order; the CT
+credit `residual × T10` → log-removal, with `T10` from a baffling factor or a
+residence-time distribution). Both pass the process stream through and reduce the
+indicator-organism density carried on the stream (`Stream.org`, the disinfection
+analogue of the temperature scalar), so the reconstructed effluent reports it:
+
+```python
+p.add_unit(aquakin.ChlorineContactUnit("cl", net, volume=500.0, dose=5.0,
+                                       ct_per_log=8.0, decay_rate=2.0,
+                                       inlet_density=1e6))   # CFU/100 mL in
+sol = p.solve(t_span=(0.0, 2.0), t_eval=t)
+print(p.stream(sol, "cl.out").org[-1])                      # effluent indicator
+```
+
 ### GHG, cost and scenario reporting
 
 On top of the EQI / OCI evaluation, `aquakin` reports a **carbon footprint**

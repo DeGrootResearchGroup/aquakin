@@ -2666,7 +2666,9 @@ separator, concentration-dependent underflow flow), `ADM1DigesterUnit`
 (continuously-fed ADM1 CSTR with gas headspace, dilution masked to the liquid
 states), `DosingUnit` (chemical dosing: injects a `Reagent` — a fixed
 composition, e.g. metal salt / acid-base / external carbon — into a stream at a
-fixed or feedback-controlled flow; see *Chemical dosing* below), `SBRUnit`
+fixed or feedback-controlled flow; see *Chemical dosing* below), `UVUnit` /
+`ChlorineContactUnit` (disinfection: UV dose-response and chlorine CT /
+log-removal — see *Disinfection* below), `SBRUnit`
 (sequencing batch reactor: one tank cycling fill/react/settle/decant/idle with
 variable volume and a pluggable settling model — see *Sequencing batch reactor*
 below), and `TakacsClarifier` (10-layer 1-D Takács 1991 model). Its settling physics
@@ -3377,6 +3379,44 @@ dose only adds the reagent's *mass*; the **reactive** response — an acid/base'
 pH shift, metal-phosphate precipitation, the added COD's oxygen demand — is the
 downstream reactor's chemistry (the precipitation/pH engine, issue #271), not
 this unit's job. Covered by `tests/integration/test_dosing.py`.
+
+**Disinfection unit ops (`UVUnit` / `ChlorineContactUnit`, issue #280,
+[`plant/disinfection.py`](aquakin/plant/disinfection.py)).** The `uv_h2o2` /
+`ozone_bromate` *networks* model the oxidation chemistry, but neither is a
+disinfection *unit op* that reduces a pathogen indicator in the flowsheet. These
+two add that, matching the commercial simulators (GPS-X / SUMO track an indicator
+organism + the disinfectant residual and apply a dose/CT log-removal). Both
+**pass the process (ASM) stream through unchanged** (disinfection does not
+materially change COD/N/P at this fidelity) and reduce an **indicator-organism
+density carried on the stream** — a new optional `Stream.org` scalar, the
+disinfection analogue of the temperature `T` scalar: mixers flow-weight it (the
+shared `streams._flow_weighted_scalar` behind both `mixed_temperature` and the
+new `mixed_organism`) and pass-through units propagate it, and a disinfection unit
+applies `N = N0·10^(−log)`. When the inlet carries no indicator (`org is None`)
+the unit falls back to its design `inlet_density`, so a terminal disinfection
+train works without wiring an indicator influent. The reconstructed effluent
+surfaces it: `Plant.stream(...)` returns a `StreamSeries` with an `org` trajectory
+(reconstructed on demand via `Plant._reconstruct_stream_org`; `None` for an
+indicator-agnostic stream, so every BSM stream is unaffected and does no extra
+work). `UVUnit` is **stateless**: the dose is `intensity · exposure · UVT-factor`
+with the exposure the baffling-scaled residence `V/Q` converted to seconds
+(fluence rate mW/cm², dose mJ/cm²), and a log-linear dose-response
+`log = dose/d10` (optional `max_log` tailing). `ChlorineContactUnit` carries a
+**one-state chlorine residual** (a completely-mixed tank with first-order decay,
+`dCl/dt = (Q/V)(dose − Cl) − k_decay·Cl`); the CT credit `residual · T10` drives
+`log = CT/ct_per_log`, with `T10 = baffling·V/Q` (or `t10_from_rtd`, the
+non-ideal-contactor 10th-percentile of a residence-time distribution, reusing
+`utils/rtd.percentile_time`); `dechlorinate=True` reports the discharged residual
+as zero. The credit physics is exposed as pure, AD-clean functions (`uv_dose`,
+`uv_log_inactivation`, `ct_value`, `ct_log_removal`, `t10_from_baffling`,
+`t10_from_rtd`) for standalone sizing/credit, and `jax.grad` flows through both the
+credit and a plant solve (design optimisation). Covered by
+`tests/integration/test_disinfection.py`. **Scope/fidelity notes:** the UVT
+correction is a first-order linear `uvt/uvt_ref` (a full UVDGM dose-distribution is
+future work); chlorine is modelled as a residual-decay + CT credit (no breakpoint
+/ chloramine speciation); the indicator transports through mixers + the
+disinfection units (the biological train does not yet copy `org`, which is right
+for a terminal disinfection step).
 
 **Sequencing batch reactor (`SBRUnit`, issue #273).** A single tank that treats
 in batches, cycling through timed phases (fill → react → settle → decant → idle)

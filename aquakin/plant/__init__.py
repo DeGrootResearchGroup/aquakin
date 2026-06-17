@@ -22,6 +22,16 @@ from aquakin.plant.aeration_system import (
 from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
 from aquakin.plant.control import PIController
 from aquakin.plant.cstr import Aeration, CSTRUnit, oxygen_saturation
+from aquakin.plant.disinfection import (
+    ChlorineContactUnit,
+    UVUnit,
+    ct_log_removal,
+    ct_value,
+    t10_from_baffling,
+    t10_from_rtd,
+    uv_dose,
+    uv_log_inactivation,
+)
 from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.delay import HydraulicDelayUnit
@@ -122,6 +132,14 @@ __all__ = [
     "CSTRUnit",
     "DosingUnit",
     "Reagent",
+    "UVUnit",
+    "ChlorineContactUnit",
+    "uv_dose",
+    "uv_log_inactivation",
+    "ct_value",
+    "ct_log_removal",
+    "t10_from_baffling",
+    "t10_from_rtd",
     "IFASUnit",
     "MBBRUnit",
     "FlowParameterized",

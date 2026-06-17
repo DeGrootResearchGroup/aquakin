@@ -42,28 +42,42 @@ class Stream:
         static condition, so existing plants are unaffected. ``None``-ness is a
         static structural property (consistent across RHS calls), so it is
         jit-safe.
+    org : jnp.ndarray, optional
+        Indicator-organism density (scalar, e.g. CFU/100 mL) for disinfection.
+        Carried algebraically through the flowsheet exactly like ``T``: mixers
+        flow-weight it and pass-through units propagate it unchanged, and a
+        disinfection unit reduces it by the computed log-inactivation. ``None``
+        (the default) means the stream tracks no indicator; a disinfection unit
+        then falls back to its design ``inlet_density``. ``None``-ness is a static
+        structural property, so it is jit-safe.
     """
 
     Q: jnp.ndarray
     C: jnp.ndarray
     network: "CompiledNetwork"
     T: "jnp.ndarray | None" = None
+    org: "jnp.ndarray | None" = None
 
     def mass_flow(self) -> jnp.ndarray:
         """Per-species mass flow rate ``Q * C``, shape ``(n_species,)``."""
         return self.Q * self.C
 
     def with_C(self, C: jnp.ndarray) -> "Stream":
-        """Return a new stream with the same Q/T/network but a new C vector."""
-        return Stream(Q=self.Q, C=C, network=self.network, T=self.T)
+        """Return a new stream with the same Q/T/org/network but a new C vector."""
+        return Stream(Q=self.Q, C=C, network=self.network, T=self.T, org=self.org)
 
     def with_Q(self, Q: jnp.ndarray) -> "Stream":
-        """Return a new stream with the same C/T/network but a new flow rate."""
-        return Stream(Q=Q, C=self.C, network=self.network, T=self.T)
+        """Return a new stream with the same C/T/org/network but a new flow rate."""
+        return Stream(Q=Q, C=self.C, network=self.network, T=self.T, org=self.org)
 
     def with_T(self, T: "jnp.ndarray | None") -> "Stream":
-        """Return a new stream with the same Q/C/network but a new temperature."""
-        return Stream(Q=self.Q, C=self.C, network=self.network, T=T)
+        """Return a new stream with the same Q/C/org/network but a new temperature."""
+        return Stream(Q=self.Q, C=self.C, network=self.network, T=T, org=self.org)
+
+    def with_org(self, org: "jnp.ndarray | None") -> "Stream":
+        """Return a new stream with the same Q/C/T/network but a new indicator
+        density."""
+        return Stream(Q=self.Q, C=self.C, network=self.network, T=self.T, org=org)
 
 
 _EPS_Q = 1e-12  # guard the flow-weighted division when total inflow is ~zero
@@ -104,16 +118,41 @@ def mixed_temperature(inputs: "dict[str, Stream]", names) -> "jnp.ndarray | None
         one. ``None``-ness is a static structural property (it depends only on
         which inlets carry a temperature), so callers stay jit-safe.
     """
-    carriers = [inputs[n] for n in names if inputs[n].T is not None]
+    carriers = [(inputs[n].Q, inputs[n].T) for n in names if inputs[n].T is not None]
     if not carriers:
         return None
+    return _flow_weighted_scalar(carriers)
+
+
+def _flow_weighted_scalar(carriers) -> "jnp.ndarray":
+    """Flow-weighted mean of a per-stream scalar over the streams that carry it.
+
+    ``carriers`` is a list of ``(Q, value)``. Divides the flow-weighted sum by the
+    carriers' total flow, falling back to the plain mean when that total is ~zero
+    (every carrier momentarily at zero flow) rather than dividing by ~0. The shared
+    kernel behind :func:`mixed_temperature` (a heat balance) and
+    :func:`mixed_organism` (an indicator mass balance)."""
     Q_total = jnp.zeros(())
-    heat = jnp.zeros(())
-    for s in carriers:
-        Q_total = Q_total + s.Q
-        heat = heat + s.Q * s.T
-    mean_T = sum(s.T for s in carriers) / len(carriers)
-    return jnp.where(Q_total > _EPS_Q, heat / (Q_total + _EPS_Q), mean_T)
+    weighted = jnp.zeros(())
+    for q, v in carriers:
+        Q_total = Q_total + q
+        weighted = weighted + q * v
+    mean = sum(v for _, v in carriers) / len(carriers)
+    return jnp.where(Q_total > _EPS_Q, weighted / (Q_total + _EPS_Q), mean)
+
+
+def mixed_organism(inputs: "dict[str, Stream]", names) -> "jnp.ndarray | None":
+    """Flow-weighted outlet indicator-organism density for a unit's inlet streams.
+
+    The indicator analogue of :func:`mixed_temperature`: a flow-weighted mass
+    balance over the inlets that carry an indicator density (``Stream.org is not
+    None``); an inlet with ``org is None`` is ignored, not allowed to poison the
+    mix. Returns ``None`` only when no inlet carries one (a fully indicator-agnostic
+    mix), which is a static structural property, so callers stay jit-safe."""
+    carriers = [(inputs[n].Q, inputs[n].org) for n in names if inputs[n].org is not None]
+    if not carriers:
+        return None
+    return _flow_weighted_scalar(carriers)
 
 
 @dataclass(frozen=True)
@@ -136,12 +175,16 @@ class StreamSeries(_HasNamedSpecies):
         species ordering.
     network : CompiledNetwork
         The kinetic network whose species ordering applies to ``C``.
+    org : jnp.ndarray, optional
+        Indicator-organism density trajectory, shape ``(n_t,)``, when the stream
+        carries one (e.g. downstream of a disinfection unit); ``None`` otherwise.
     """
 
     t: jnp.ndarray
     Q: jnp.ndarray
     C: jnp.ndarray
     network: "CompiledNetwork"
+    org: "jnp.ndarray | None" = None
 
     # C_named / C_named_many / final_named / .final come from _HasNamedSpecies
     # (shared with the reactor solutions), keyed off .C and .network.
