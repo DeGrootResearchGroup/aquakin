@@ -24,6 +24,12 @@ from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import Plant
 
+# Every test here builds a plant and compiles at least one solve (`_prime`); run
+# in the merge-only slow tier (like the other plant-solve files), so they do not
+# pile compile-cache + live JAX buffers onto the single fast-gate process, which
+# otherwise exhausts the 16 GB hosted runner and is OOM-reclaimed mid-suite.
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture(scope="module")
 def asm1():
