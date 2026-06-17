@@ -2495,6 +2495,39 @@ Key types:
   units). A one-time `_check_recycle_convergence` diagnostic (concrete-only,
   skipped under tracing, skipped without recycle edges) warns if even that has
   not converged — the backstop for the non-affine case.
+  - **Cached recycle map (per-RHS speedup).** The concentration map `M` is fixed
+    by the recycle flows + topology, so for a **fixed-pump** plant (every BSM
+    plant — the recycle pumps are constant) it is **invariant to the state and
+    time**; only `d = forward(0)` varies. The `n_recycle_edges` per-species
+    `M`-probe sweeps are therefore recomputing a constant on every one of the
+    ~17 RHS calls per implicit step. `_compute_recycle_map` precomputes `M`
+    **once per solve** (from the runtime `params`, so the gradient still flows
+    and a parameter sweep stays correct) and `_build_jitted_solve` threads it into
+    every RHS as `recycle_map=`; the per-RHS recycle resolution then computes only
+    `d` (one sweep) + the cached `(I−M)` solve. Profiling located the per-RHS cost
+    as ~88% the recycle resolution and the per-step cost as ~RHS-evaluation-bound,
+    so this is a real dynamic-solve win. The **temperature** map `MT` is cached
+    too **when it is state-invariant**, which depends on the temperature model:
+    in **heat-balance** mode the reactor temperature is a *state* (it breaks the
+    loop coupling at reactors, exactly as concentration does) so `MT` is constant
+    and cached → full win; in **algebraic** mode temperature *passes through*
+    reactors (no thermal mass) so `MT` rides on the concentration-dependent
+    recycle flows and is **not** constant → it is re-probed every RHS (a cheap
+    scalar T-only sweep, its per-species part CSE-shared with `d`), while `M`
+    stays cached. Net measured speedup on the dynamic BSM2 (algebraic):
+    ~recycle-resolution 2.4× → ~1.18× wall; larger (full ~5.6× recycle) for
+    heat-balance / no-temperature plants. **Exactness:** the cached and probed
+    paths produce a **bit-identical RHS** (the cached `M` *is* the probed `M`);
+    the dynamic trajectory shows only ~1e-3 floating-point operation-order drift
+    over multi-day runs (the cached `M` is formed once outside the integration
+    loop vs per-call inside), within the solver tolerance, and the validated
+    steady states are preserved. A one-time concrete guard
+    (`_check_recycle_map_constant`, set per instance) compares each map at two
+    states and **falls back to per-RHS probing** for any topology whose `M` is
+    genuinely state-coupled — so the optimization is safe for arbitrary plants.
+    Applies to the forward `jax_adjoint` path (the `stable_adjoint` / events /
+    `outputs_at` paths probe per-call, correct but unoptimized). Covered by
+    `tests/integration/test_recycle_cached_map.py`.
   - **Wiring API.** `plant.connect(source, dest)` takes two `"unit.port"`
     endpoint strings, read as `source -> dest`. The port may be omitted
     (bare `"unit"`) when the unit has exactly one port for that role — a

@@ -552,6 +552,17 @@ class Plant:
         # and the concentration-sweep convergence check.
         self._flow_affinity_checked: bool = False
         self._recycle_convergence_checked: bool = False
+        # Tri-state: None until checked, then True/False -- whether the recycle
+        # *concentration* map M is state-independent (so it can be precomputed
+        # once per solve and reused, skipping the per-RHS per-species probes).
+        # Determined by :meth:`_check_recycle_map_constant`.
+        self._recycle_map_constant: Optional[bool] = None
+        # Same, for the *temperature* map MT. Constant in heat-balance mode (the
+        # reactor T-state breaks the loop coupling) and trivially when no T is
+        # carried; NOT constant in algebraic mode (T passes through reactors, so
+        # MT rides on the concentration-dependent recycle flows) -- then MT is
+        # re-probed every RHS (cheap scalar) while M stays cached.
+        self._recycle_T_map_constant: Optional[bool] = None
         # One-time guard for materialising the DO controllers a CSTRUnit's
         # closed-loop Aeration spec requires (see _materialize_aeration).
         self._aeration_materialized: bool = False
@@ -1679,6 +1690,7 @@ class Plant:
         params_full: jnp.ndarray,
         signals: Optional[dict] = None,
         design: Optional[dict] = None,
+        recycle_map: Optional[list] = None,
     ) -> tuple[
         dict[tuple[Optional[str], str], Stream],
         dict[tuple[str, str], Stream],
@@ -1722,8 +1734,9 @@ class Plant:
         # (gain-independent); it then only refines a genuinely non-affine
         # in-cycle unit, if any. Falls back to the zero auto-seed when there are
         # no recycle edges.
-        seeded = self._resolve_recycle_concentrations(t, states, params_full,
-                                                      resolved_flows, signals)
+        seeded = self._resolve_recycle_concentrations(
+            t, states, params_full, resolved_flows, signals,
+            recycle_map=recycle_map)
         all_outputs = self._sweep_outputs(t, states, streams, seeded, params_full,
                                           signals=signals)
         return all_outputs, streams
@@ -2071,6 +2084,7 @@ class Plant:
         state_full: jnp.ndarray,
         params_full: jnp.ndarray,
         design: Optional[dict] = None,
+        recycle_map: Optional[list] = None,
     ) -> jnp.ndarray:
         # Step 1: split state by unit.
         states = self._split_state(state_full)
@@ -2086,7 +2100,8 @@ class Plant:
         # differentiable design-variable overrides -- currently the influent
         # streams -- so a steady-state / sweep can take gradients w.r.t. them.
         all_outputs, streams = self._resolve_streams(
-            t, states, params_full, signals=signals, design=design)
+            t, states, params_full, signals=signals, design=design,
+            recycle_map=recycle_map)
 
         # Collect each unit's converged input streams ONCE for the dstate pass.
         # The streams are fixed after the sweep, so re-collecting per unit would
@@ -2257,6 +2272,7 @@ class Plant:
         params_full: jnp.ndarray,
         resolved_flows: dict[tuple[Optional[str], str], jnp.ndarray],
         signals: Optional[dict] = None,
+        recycle_map: Optional[list] = None,
     ) -> dict[tuple[str, str], Stream]:
         """Pre-solve the recycle back-edge concentrations exactly, as a seed.
 
@@ -2286,10 +2302,82 @@ class Plant:
         has to refine the residual of a genuinely *non*-affine in-cycle unit (a
         translator inside a pure-stateless loop -- not constructible from the
         shipped units), with :meth:`_check_recycle_convergence` as the backstop.
+
+        The *concentration* map ``M`` is determined purely by the resolved recycle
+        flows and the topology (the mixer/splitter/clarifier ratios) and -- for the
+        BSM plants, whose recycle flows are fixed pumps -- it is invariant to the
+        state and time; only ``d = forward(0)`` varies. So when a precomputed
+        ``recycle_map`` (the per-group concentration ``M``) is supplied, this skips
+        the ``n_recycle_edges`` per-species concentration probes and computes only
+        ``d`` (one sweep), collapsing the dominant per-RHS cost. The concentration
+        result is bit-identical to probing. The *temperature* channel is the
+        exception: its mixing weights ride on the concentration-dependent reject
+        flows, so ``MT`` is **not** state-invariant; it is always re-probed here
+        (a cheap scalar T-only sweep -- the per-species part is CSE-shared with
+        ``d``), keeping the temperature exact.
         """
         keys = self._recycle_keys
         if not keys:
             return {}
+        ctx = self._recycle_context(t, states, params_full, resolved_flows,
+                                    signals)
+        seed_net, group_lists, forward, zeroC, zeroT = ctx
+
+        dC, dT = forward(zeroC, zeroT)                       # constant part d
+        resolve_T = all(dT[k] is not None for k in keys)
+
+        # Concentration map M: cached (state-invariant) or probed. The cached
+        # ``recycle_map`` also carries MT when it is state-invariant (heat-balance
+        # / no-T modes); ``MT_cached is None`` signals per-RHS re-probing (the
+        # algebraic mode, where MT rides on the concentration-dependent flows).
+        if recycle_map is None:
+            colC = self._probe_recycle_C(forward, keys, zeroC, zeroT, dC)
+            M_groups = self._assemble_recycle_M(group_lists, colC)
+            MT_cached = None
+        else:
+            M_groups, MT_cached = recycle_map
+        # Temperature map MT: cached when state-invariant, else re-probed (cheap
+        # scalar -- the per-species part, at c=0, is CSE-shared with ``d``).
+        if not resolve_T:
+            MT_groups = [None] * len(group_lists)
+        elif MT_cached is not None:
+            MT_groups = MT_cached
+        else:
+            colT = self._probe_recycle_T(forward, keys, zeroC, zeroT, dT)
+            MT_groups = self._assemble_recycle_MT(group_lists, colT)
+
+        # Solve (I - M) c = d per group, with d fresh and M fresh-or-cached.
+        solved_C: dict = {}
+        solved_T: dict = {}
+        for gkeys, M, MT in zip(group_lists, M_groups, MT_groups):
+            m = len(gkeys)
+            eye = jnp.eye(m)
+            d = jnp.stack([dC[gkeys[j]] for j in range(m)], axis=1)   # (nsp, m_j)
+            cs = jnp.linalg.solve(eye[None] - M, d[..., None])[..., 0]  # (nsp, m_j)
+            for j, kj in enumerate(gkeys):
+                solved_C[kj] = cs[:, j]
+            if MT is not None:
+                dT_g = jnp.stack([dT[gkeys[j]] for j in range(m)])
+                cT_g = jnp.linalg.solve(eye - MT, dT_g)
+                for j, kj in enumerate(gkeys):
+                    solved_T[kj] = cT_g[j]
+            else:
+                for kj in gkeys:
+                    solved_T[kj] = None
+
+        return {k: Stream(Q=resolved_flows[k], C=solved_C[k],
+                          network=seed_net[k], T=solved_T[k]) for k in keys}
+
+    def _recycle_context(self, t, states, params_full, resolved_flows, signals):
+        """Shared setup for the recycle affine solve.
+
+        Returns ``(seed_net, group_lists, forward, zeroC, zeroT)``: the per-edge
+        seed networks, the recycle edges grouped by network (no cross-network
+        coupling), the one-pass ``forward(c, T) -> (C_out, T_out)`` sweep closure,
+        and the zero seeds. Used by both the live solve and
+        :meth:`_compute_recycle_map`.
+        """
+        keys = self._recycle_keys
         seed_net: dict = {}
         for conn in self._recycle_conns:
             key = (conn.from_unit, conn.from_port)
@@ -2314,60 +2402,99 @@ class Plant:
             return ({k: out[k].C for k in keys},
                     {k: out[k].T for k in keys})
 
-        zeroC = {k: jnp.zeros((nsp[k],)) for k in keys}
-        zeroT = {k: t_seed for k in keys}
-        dC, dT = forward(zeroC, zeroT)                       # constant part
-        resolve_T = carries_T and all(dT[k] is not None for k in keys)
-
-        # Probe each edge with a unit concentration (+ unit T) -> its column.
-        colC: dict = {}
-        colT: dict = {}
-        for ki in keys:
-            cC = dict(zeroC)
-            cT = dict(zeroT)
-            cC[ki] = jnp.ones((nsp[ki],))
-            if resolve_T:
-                cT[ki] = jnp.ones(())
-            fC, fT = forward(cC, cT)
-            colC[ki] = {kj: fC[kj] - dC[kj] for kj in keys}
-            colT[ki] = {kj: (fT[kj] - dT[kj]) if resolve_T else None
-                        for kj in keys}
-
-        # Group by network (different species vectors / no cross-network coupling)
-        # and solve (I - M) c = d per species, plus a scalar T channel if carried.
         groups: dict = {}
         for k in keys:
             groups.setdefault(id(seed_net[k]), []).append(k)
+        group_lists = list(groups.values())
+        zeroC = {k: jnp.zeros((nsp[k],)) for k in keys}
+        zeroT = {k: t_seed for k in keys}
+        return seed_net, group_lists, forward, zeroC, zeroT
 
-        solved_C: dict = {}
-        solved_T: dict = {}
-        for gkeys in groups.values():
+    @staticmethod
+    def _probe_recycle_C(forward, keys, zeroC, zeroT, dC):
+        """Probe each edge with a unit *concentration* -> the concentration
+        columns ``colC[i][j] = M[:, j, i]`` (response of edge j to a unit at i).
+        These per-species probes are the dominant cost; the affine map they form
+        is state-invariant, so they can be precomputed once (:meth:`_compute_recycle_map`)."""
+        nsp = {k: zeroC[k].shape[0] for k in keys}
+        colC: dict = {}
+        for ki in keys:
+            cC = dict(zeroC)
+            cC[ki] = jnp.ones((nsp[ki],))
+            fC, _ = forward(cC, zeroT)
+            colC[ki] = {kj: fC[kj] - dC[kj] for kj in keys}
+        return colC
+
+    @staticmethod
+    def _probe_recycle_T(forward, keys, zeroC, zeroT, dT):
+        """Probe each edge with a unit *temperature* -> the scalar temperature
+        columns. Cheap (the per-species concentration part, at ``c = 0``, is
+        CSE-shared with the ``d`` sweep). Re-run every RHS: ``MT`` is *not*
+        state-invariant (its mixing weights ride on the concentration-dependent
+        reject flows)."""
+        colT: dict = {}
+        for ki in keys:
+            cT = dict(zeroT)
+            cT[ki] = jnp.ones(())
+            _, fT = forward(zeroC, cT)
+            colT[ki] = {kj: fT[kj] - dT[kj] for kj in keys}
+        return colT
+
+    @staticmethod
+    def _assemble_recycle_M(group_lists, colC):
+        """Stack the concentration columns into per-group ``M`` (``(nsp, m, m)``)."""
+        M_groups = []
+        for gkeys in group_lists:
             m = len(gkeys)
-            eye = jnp.eye(m)
-            # M[s, j, i] = response of edge j (species s) to a unit at edge i.
             M = jnp.stack([
                 jnp.stack([colC[gkeys[i]][gkeys[j]] for i in range(m)], axis=1)
                 for j in range(m)
             ], axis=1)                                        # (nsp, m_j, m_i)
-            d = jnp.stack([dC[gkeys[j]] for j in range(m)], axis=1)   # (nsp, m_j)
-            cs = jnp.linalg.solve(eye[None] - M, d[..., None])[..., 0]  # (nsp, m_j)
-            for j, kj in enumerate(gkeys):
-                solved_C[kj] = cs[:, j]
-            if resolve_T:
-                MT = jnp.stack([
-                    jnp.stack([colT[gkeys[i]][gkeys[j]] for i in range(m)])
-                    for j in range(m)
-                ])                                            # (m_j, m_i)
-                dT_g = jnp.stack([dT[gkeys[j]] for j in range(m)])
-                cT_g = jnp.linalg.solve(eye - MT, dT_g)
-                for j, kj in enumerate(gkeys):
-                    solved_T[kj] = cT_g[j]
-            else:
-                for kj in gkeys:
-                    solved_T[kj] = None
+            M_groups.append(M)
+        return M_groups
 
-        return {k: Stream(Q=resolved_flows[k], C=solved_C[k],
-                          network=seed_net[k], T=solved_T[k]) for k in keys}
+    @staticmethod
+    def _assemble_recycle_MT(group_lists, colT):
+        """Stack the temperature columns into per-group ``MT`` (``(m, m)``)."""
+        MT_groups = []
+        for gkeys in group_lists:
+            m = len(gkeys)
+            MT = jnp.stack([
+                jnp.stack([colT[gkeys[i]][gkeys[j]] for i in range(m)])
+                for j in range(m)
+            ])                                                # (m_j, m_i)
+            MT_groups.append(MT)
+        return MT_groups
+
+    def _compute_recycle_map(self, t, states, params_full, resolved_flows,
+                             signals=None):
+        """Probe and assemble the state-invariant recycle map(s) once, for reuse.
+
+        Returns ``(M_groups, MT_groups)``: the per-group concentration map ``M``
+        (always cached -- it is fixed by the recycle flows + topology, so for a
+        fixed-pump plant it is invariant to the state and time) and the per-group
+        temperature map ``MT`` *only when it too is state-invariant*
+        (``_recycle_T_map_constant`` -- heat-balance / no-T modes), else ``None``
+        to signal per-RHS re-probing (algebraic mode). Run once per solve and
+        passed back as ``recycle_map=``, this skips the ``n_recycle_edges``
+        per-species concentration probes -- the dominant per-RHS cost -- on every
+        call. ``None`` if there are no recycle edges. Guarded by
+        :meth:`_check_recycle_map_constant`.
+        """
+        keys = self._recycle_keys
+        if not keys:
+            return None
+        ctx = self._recycle_context(t, states, params_full, resolved_flows,
+                                    signals)
+        _, group_lists, forward, zeroC, zeroT = ctx
+        dC, dT = forward(zeroC, zeroT)
+        colC = self._probe_recycle_C(forward, keys, zeroC, zeroT, dC)
+        M_groups = self._assemble_recycle_M(group_lists, colC)
+        MT_groups = None
+        if self._recycle_T_map_constant and all(dT[k] is not None for k in keys):
+            colT = self._probe_recycle_T(forward, keys, zeroC, zeroT, dT)
+            MT_groups = self._assemble_recycle_MT(group_lists, colT)
+        return (M_groups, MT_groups)
 
     def _sweep_outputs(
         self,
@@ -2496,6 +2623,63 @@ class Plant:
                 f"Plant(..., recycle_passes={deeper})) until this warning clears.",
                 stacklevel=3,
             )
+
+    def _check_recycle_map_constant(
+        self,
+        t: jnp.ndarray,
+        y0: jnp.ndarray,
+        params_full: jnp.ndarray,
+        *,
+        rtol: float = 1e-9,
+    ) -> None:
+        """Set ``_recycle_map_constant`` / ``_recycle_T_map_constant`` -- are the
+        recycle concentration map ``M`` and temperature map ``MT`` state-fixed?
+
+        Both maps are fixed by the recycle flows + topology (mixer/splitter/
+        clarifier ratios). For a fixed-pump plant ``M`` is invariant to the state
+        and time, so it can be precomputed once per solve and reused -- skipping
+        the per-RHS per-species probes. ``MT`` is invariant too in heat-balance
+        mode (the reactor T-state breaks the loop coupling) and when no T is
+        carried, but NOT in algebraic mode (T passes through reactors, so ``MT``
+        rides on the concentration-dependent recycle flows). This guard detects
+        each by comparing the map at ``y0`` and a perturbed state, enabling reuse
+        of whichever is constant; a varying map is re-probed every RHS. Concrete-
+        only (the comparison is data-dependent); runs once per plant. No recycle
+        edges -> trivially constant.
+        """
+        if not self._recycle_conns:
+            self._recycle_map_constant = True
+            self._recycle_T_map_constant = True
+            return
+
+        keys = self._recycle_keys
+
+        def probe(y):
+            states = self._split_state(y)
+            sig = self._compute_signals(t, states, params_full)
+            flows = self._resolve_flows(t, params_full, states)
+            ctx = self._recycle_context(t, states, params_full, flows, sig)
+            _, group_lists, forward, zeroC, zeroT = ctx
+            dC, dT = forward(zeroC, zeroT)
+            colC = self._probe_recycle_C(forward, keys, zeroC, zeroT, dC)
+            M = self._assemble_recycle_M(group_lists, colC)
+            MT = None
+            if all(dT[k] is not None for k in keys):
+                colT = self._probe_recycle_T(forward, keys, zeroC, zeroT, dT)
+                MT = self._assemble_recycle_MT(group_lists, colT)
+            return M, MT
+
+        Ma, MTa = probe(y0)
+        Mb, MTb = probe(y0 * 1.3 + 1.0)   # a materially different state
+        wM = max((float(jnp.max(jnp.abs(a - b)))
+                  for a, b in zip(Ma, Mb)), default=0.0)
+        self._recycle_map_constant = bool(wM <= rtol)
+        if MTa is None:
+            self._recycle_T_map_constant = True       # no T carried
+        else:
+            wMT = max((float(jnp.max(jnp.abs(a - b)))
+                       for a, b in zip(MTa, MTb)), default=0.0)
+            self._recycle_T_map_constant = bool(wMT <= rtol)
 
     def _resolve_flows(
         self,
@@ -2866,6 +3050,10 @@ class Plant:
                 self._recycle_convergence_checked = True
                 self._check_recycle_convergence(
                     jnp.asarray(t0), self._split_state(y0), params)
+            # Is the recycle affine map M state-independent? If so, it can be
+            # precomputed once per solve and reused -- a large per-RHS saving.
+            if self._recycle_map_constant is None:
+                self._check_recycle_map_constant(jnp.asarray(t0), y0, params)
 
         if gradient == "auto":
             # A concrete forward solve takes the fast cached jax_adjoint path; a
@@ -2964,11 +3152,17 @@ class Plant:
         # custom-*configured* instance of an otherwise-default class would share
         # the default's entry -- documented on the ``solver=`` argument.
         solver_key = None if solver is None else type(solver).__name__
+        # The recycle-map reuse flags are part of the compiled solve (they select
+        # the cached-M / cached-MT code path). They are set once per instance
+        # before the first build, so they are constant for a given plant -- keying
+        # on them only guards the rare case where the very first solve was traced
+        # (flags still None) and a later concrete solve sets them.
+        recycle_key = (self._recycle_map_constant, self._recycle_T_map_constant)
         # A progress meter is a one-off diagnostic (and carries host state), so it
         # bypasses the compiled-solve cache rather than being keyed into it.
         cache_key = (None if (settings is None or event is not None
                               or progress_meter is not None)
-                     else (sig, settings, solver_key, factormax))
+                     else (sig, settings, solver_key, factormax, recycle_key))
         jitted = self._jit_cache.get(cache_key) if cache_key is not None else None
         if jitted is None:
             jitted = self._build_jitted_solve(
@@ -3032,9 +3226,29 @@ class Plant:
         cached shapes (the parameter-sweep case). ``t_eval`` is a runtime
         argument (not baked in) so different save times of the same shape reuse
         one compile.
+
+        When the recycle affine map ``M`` is state-independent
+        (:meth:`_check_recycle_map_constant`), it is computed **once** per solve
+        from the runtime ``params`` (so the gradient still flows and a parameter
+        sweep stays correct) and passed into every RHS call as ``recycle_map=``,
+        collapsing the per-RHS recycle resolution from ``n_recycle_edges + 1``
+        sweeps to one. Bit-identical to probing it every call.
         """
-        def rhs(t, y, args):
-            return self._rhs(t, y, args)
+        use_cached_M = self._recycle_map_constant is True
+        t0_arr = jnp.asarray(float(t0))
+
+        def make_rhs(y0, params):
+            recycle_map = None
+            if use_cached_M:
+                states0 = self._split_state(y0)
+                sig0 = self._compute_signals(t0_arr, states0, params)
+                flows0 = self._resolve_flows(t0_arr, params, states0)
+                recycle_map = self._compute_recycle_map(
+                    t0_arr, states0, params, flows0, sig0)
+
+            def rhs(t, y, args):
+                return self._rhs(t, y, args, recycle_map=recycle_map)
+            return rhs
 
         kw = dict(t0=t0, t1=t1, rtol=rtol, atol=atol, adjoint=adjoint,
                   dtmax=dtmax, max_steps=max_steps, event=event,
@@ -3045,7 +3259,7 @@ class Plant:
             @jax.jit
             def _solve(y0, params, t_eval):
                 sol = _run_diffeqsolve(
-                    rhs, y0=y0, args=params,
+                    make_rhs(y0, params), y0=y0, args=params,
                     saveat=diffrax.SaveAt(ts=t_eval), **kw,
                 )
                 return sol.ts, sol.ys
@@ -3054,7 +3268,7 @@ class Plant:
         @jax.jit
         def _solve(y0, params):
             sol = _run_diffeqsolve(
-                rhs, y0=y0, args=params,
+                make_rhs(y0, params), y0=y0, args=params,
                 saveat=diffrax.SaveAt(t1=True), **kw,
             )
             return sol.ts, sol.ys
