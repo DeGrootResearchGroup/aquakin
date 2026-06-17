@@ -1863,8 +1863,33 @@ class Plant:
             self.default_parameters() if params is None else self._coerce_params(params)
         )
         Q, C = self._cached_streams(solution, params_full)[(unit, port)]
+        org = self._reconstruct_stream_org(solution, (unit, port), params_full)
         return StreamSeries(t=solution.t, Q=Q, C=C,
-                            network=self.units[unit].network)
+                            network=self.units[unit].network, org=org)
+
+    def _reconstruct_stream_org(self, solution, key, params_full):
+        """Reconstruct an output stream's indicator-organism trajectory, or
+        ``None`` if the stream carries no indicator.
+
+        The reconstruction cache keeps only ``(Q, C)``; the indicator density
+        (carried like the temperature scalar) is surfaced here on demand for a
+        disinfection effluent. Whether the stream carries an indicator is a static
+        structural property, so it is decided once at the first saved state; an
+        indicator-agnostic stream (every BSM stream with no disinfection unit)
+        returns ``None`` and does no extra work."""
+        states0 = self._split_state(jnp.asarray(solution.state)[0])
+        probe, _ = self._resolve_streams(jnp.asarray(solution.t)[0], states0,
+                                         params_full)
+        if probe[key].org is None:
+            return None
+
+        def _org_one(t_i, state_row):
+            outs, _ = self._resolve_streams(t_i, self._split_state(state_row),
+                                            params_full)
+            return outs[key].org
+
+        return jax.vmap(_org_one)(jnp.asarray(solution.t),
+                                  jnp.asarray(solution.state))
 
     def register_stream(self, name: str, endpoint: str) -> "Plant":
         """Register a **semantic name** for an output ``"unit.port"`` endpoint.

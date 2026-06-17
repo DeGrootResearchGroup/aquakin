@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
-from aquakin.plant.streams import Stream, mixed_temperature
+from aquakin.plant.streams import Stream, mixed_organism, mixed_temperature
 from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -72,7 +72,10 @@ class MixerUnit(StatelessUnit):
         # temperature (over the inlets that carry one; a temperature-agnostic or
         # zero-flow-seed inlet is ignored rather than poisoning the mix).
         T_out = mixed_temperature(inputs, self.input_port_names)
-        return {"out": Stream(Q=Q_total, C=C_out, network=self.network, T=T_out)}
+        # Indicator organism (disinfection): the same flow-weighted balance.
+        org_out = mixed_organism(inputs, self.input_port_names)
+        return {"out": Stream(Q=Q_total, C=C_out, network=self.network,
+                              T=T_out, org=org_out)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output port flows from input port flows (the linear flow rule).
