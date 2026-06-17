@@ -2596,11 +2596,17 @@ Key types:
     plant carried on the solution) returns a `StreamSeries` (`t`, `Q`, `C` shape
     `(n_t, n_species)`, `network`, with a `C_named(species)` accessor) — feed it
     straight to `effluent_averages`. **The whole output sweep (every `(unit,
-    port)`) is reconstructed in one pass and cached on the solution**
-    (`Plant._cached_streams`, keyed by the parameter vector via
-    `_concrete_teval_key`; skipped under tracing), so a sequence of `stream`
-    calls for different ports — or `evaluate_bsm*` reading ~8 streams — costs one
-    reconstruction, not one per stream. `plant.outputs_at(t, state, params=None)`
+    port)`) is reconstructed in one `jax.vmap` pass over the saved times and
+    cached on the solution** (`Plant._cached_streams`, keyed by the parameter
+    vector via `_concrete_teval_key`; skipped under tracing), so a sequence of
+    `stream` calls for different ports — or `evaluate_bsm*` reading ~8 streams —
+    costs one reconstruction, not one per stream. The reconstruction is
+    **vectorised**: each saved time's `_resolve_streams` sweep (a recycle-flow +
+    concentration solve) is batched by `vmap` into a single XLA program rather
+    than a Python loop of per-step sweeps — turning a long dynamic run's
+    evaluation from minutes into seconds (a 609-day hourly evaluation drops from
+    ~20 min to a few seconds). `evaluate_bsm2`'s digester-feed-temperature and
+    closed-loop kLa histories are vmapped the same way. `plant.outputs_at(t, state, params=None)`
     is the single-instant primitive (returns `{(unit, port): Stream}`,
     uncached); both reuse the same `_resolve_streams` helper the RHS uses, so the
     reconstruction matches the integrated wiring exactly (including resolved

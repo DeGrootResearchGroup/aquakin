@@ -1786,15 +1786,20 @@ class Plant:
         self._build_state_layout()
         self._build_parameter_layout()
         ts = jnp.asarray(solution.t)
-        acc: dict = {}                       # (unit, port) -> ([Q...], [C...])
-        for i in range(ts.shape[0]):
-            states = self._split_state(jnp.asarray(solution.state[i]))
-            outs, _ = self._resolve_streams(ts[i], states, params_full)
-            for endpoint_key, s in outs.items():
-                qc = acc.setdefault(endpoint_key, ([], []))
-                qc[0].append(s.Q)
-                qc[1].append(s.C)
-        result = {k: (jnp.stack(q), jnp.stack(c)) for k, (q, c) in acc.items()}
+        states_flat = jnp.asarray(solution.state)
+
+        # Reconstruct every (unit, port) output stream at one saved time, keeping
+        # only the (Q, C) arrays (the Stream's `network` is a static, non-JAX
+        # field). vmap then batches this over all saved times in a single XLA
+        # program -- one vectorised sweep instead of a Python loop of per-step
+        # sweeps (each a recycle-flow + concentration solve), which dominated
+        # the cost of evaluating a long dynamic run.
+        def _one(t_i, state_row):
+            states = self._split_state(state_row)
+            outs, _ = self._resolve_streams(t_i, states, params_full)
+            return {k: (s.Q, s.C) for k, s in outs.items()}
+
+        result = jax.vmap(_one)(ts, states_flat)
         if concrete:
             cache[key] = result
         return result
