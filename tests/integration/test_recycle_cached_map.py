@@ -140,3 +140,58 @@ def test_grad_flows_through_cached_path(asm1):
 
     g = jax.grad(loss)(1.0)
     assert jnp.isfinite(g)
+
+
+def test_outputs_at_cached_matches_probe(asm1):
+    """Single-instant stream reconstruction: the cached-map and probed sweeps
+    return bit-identical streams (the cached M IS the probed M)."""
+    plant = _recycle_plant(asm1, carry_T=False)
+    y0 = _prime(plant)
+    pf = plant.default_parameters()
+    assert plant._recycle_map_constant is True
+    cached = plant.outputs_at(2.0, y0, pf)
+    plant._recycle_map_constant = False              # force probing
+    probe = plant.outputs_at(2.0, y0, pf)
+    plant._recycle_map_constant = True
+    assert set(cached) == set(probe)
+    for k in cached:
+        assert np.array_equal(np.asarray(cached[k].C), np.asarray(probe[k].C))
+        assert np.array_equal(np.asarray(cached[k].Q), np.asarray(probe[k].Q))
+
+
+def test_stream_reconstruction_cached_matches_probe(asm1):
+    """Whole-trajectory stream reconstruction (_cached_streams) over a solved
+    run is bit-identical with the cached map vs per-time probing."""
+    plant = _recycle_plant(asm1, carry_T=False)
+    y0 = _prime(plant)
+    t_eval = jnp.linspace(0.0, 4.0, 9)
+    sol = plant.solve(t_span=(0.0, 4.0), t_eval=t_eval, y0=y0,
+                      rtol=1e-5, atol=1e-3, max_steps=1_000_000)
+    eff_cached = plant.stream(sol, "split.out")
+    # force probing: clear the per-solution stream cache + flip the flag
+    sol.__dict__.pop("_stream_cache", None)
+    plant._recycle_map_constant = False
+    eff_probe = plant.stream(sol, "split.out")
+    plant._recycle_map_constant = True
+    assert np.array_equal(np.asarray(eff_cached.C), np.asarray(eff_probe.C))
+    assert np.array_equal(np.asarray(eff_cached.Q), np.asarray(eff_probe.Q))
+
+
+def test_events_cached_matches_probe(asm1):
+    """The located-event segmented solve reuses the cached map across segments;
+    a never-resetting time event reproduces the probe-path trajectory."""
+    plant = _recycle_plant(asm1, carry_T=False)
+    y0 = _prime(plant)
+    assert plant._recycle_map_constant is True
+    ev = [aquakin.Event(at_times=[1.5, 3.0])]    # land steps, no reset
+    t_eval = jnp.linspace(0.0, 4.0, 9)
+    cached = plant.solve(t_span=(0.0, 4.0), t_eval=t_eval, y0=y0, events=ev,
+                         rtol=1e-6, atol=1e-8, max_steps=1_000_000)
+    plant._recycle_map_constant = False              # force probing
+    probe = plant.solve(t_span=(0.0, 4.0), t_eval=t_eval, y0=y0, events=ev,
+                        rtol=1e-6, atol=1e-8, max_steps=1_000_000)
+    plant._recycle_map_constant = True
+    rel = np.max(np.abs(np.asarray(cached.state) - np.asarray(probe.state))
+                 / (np.abs(np.asarray(probe.state)) + 1e-6))
+    assert rel < 1e-9
+    assert np.all(np.isfinite(np.asarray(cached.state)))

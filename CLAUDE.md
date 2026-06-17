@@ -2525,8 +2525,25 @@ Key types:
     (`_check_recycle_map_constant`, set per instance) compares each map at two
     states and **falls back to per-RHS probing** for any topology whose `M` is
     genuinely state-coupled — so the optimization is safe for arbitrary plants.
-    Applies to the forward `jax_adjoint` path (the `stable_adjoint` / events /
-    `outputs_at` paths probe per-call, correct but unoptimized). Covered by
+    The cached map is built once from `params` by `_maybe_recycle_map` (the
+    shared helper) and reused by **four** paths: the forward `jax_adjoint` solve,
+    the located-event segmented solve (`events=`, reused across every segment),
+    the single-instant `outputs_at`, and the whole-trajectory stream
+    reconstruction (`_cached_streams` / `plant.stream`, the `evaluate_bsm*`
+    evaluation path — measured ~1.16×, bit-identical). The events path needed the
+    one-time constancy check hoisted *above* the events branch in `solve` so an
+    events-only plant (SBR / control study) still gets the cached map (and the
+    affinity/convergence diagnostics). The reconstruction win confirms its
+    per-time cost was also recycle-resolution-dominated. **`gradient=
+    "stable_adjoint"` deliberately does NOT cache**: `esdirk_adjoint_solve` is a
+    `custom_vjp` that forms `∂f/∂θ` by differentiating the *per-call*
+    `rhs(t, y, params)`, so a precomputed `M` closed over as a constant is
+    invisible to that vjp — the calibration gradient w.r.t. a **flow-setpoint
+    param** (RAS/`Qw`/`f_PS`, the only params `M` depends on) would silently drop
+    its `∂M/∂θ` term. Kinetic-param gradients would be unaffected, but the path is
+    left correct-but-unoptimized rather than assume the user never frees a flow
+    setpoint; a fast cached-primal + param-recomputing-`∂f/∂θ` split of the
+    discrete-adjoint kernel is the future option there. Covered by
     `tests/integration/test_recycle_cached_map.py`.
   - **Wiring API.** `plant.connect(source, dest)` takes two `"unit.port"`
     endpoint strings, read as `source -> dest`. The port may be omitted

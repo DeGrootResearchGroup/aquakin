@@ -1775,7 +1775,9 @@ class Plant:
             self.default_parameters() if params is None else self._coerce_params(params)
         )
         states = self._split_state(jnp.asarray(state_full))
-        all_outputs, _ = self._resolve_streams(jnp.asarray(t), states, params_full)
+        recycle_map = self._maybe_recycle_map(jnp.asarray(t), states, params_full)
+        all_outputs, _ = self._resolve_streams(
+            jnp.asarray(t), states, params_full, recycle_map=recycle_map)
         return all_outputs
 
     def _cached_streams(self, solution: "PlantSolution", params_full):
@@ -1801,6 +1803,16 @@ class Plant:
         ts = jnp.asarray(solution.t)
         states_flat = jnp.asarray(solution.state)
 
+        # The recycle concentration map M is state-invariant for a fixed-pump
+        # plant, so precompute it once (from the first saved state) and reuse it
+        # across every reconstructed time -- skipping the per-time per-edge probe
+        # sweeps, exactly as the forward RHS does. None when the map is
+        # state-coupled (the resolver then probes per call). Built from
+        # params_full so a differentiated reconstruction still flows the gradient
+        # through M (the vmap below is traced when params_full is a tracer).
+        recycle_map = self._maybe_recycle_map(
+            ts[0], self._split_state(states_flat[0]), params_full)
+
         # Reconstruct every (unit, port) output stream at one saved time, keeping
         # only the (Q, C) arrays (the Stream's `network` is a static, non-JAX
         # field). vmap then batches this over all saved times in a single XLA
@@ -1809,7 +1821,8 @@ class Plant:
         # the cost of evaluating a long dynamic run.
         def _one(t_i, state_row):
             states = self._split_state(state_row)
-            outs, _ = self._resolve_streams(t_i, states, params_full)
+            outs, _ = self._resolve_streams(t_i, states, params_full,
+                                            recycle_map=recycle_map)
             return {k: (s.Q, s.C) for k, s in outs.items()}
 
         result = jax.vmap(_one)(ts, states_flat)
@@ -2496,6 +2509,26 @@ class Plant:
             MT_groups = self._assemble_recycle_MT(group_lists, colT)
         return (M_groups, MT_groups)
 
+    def _maybe_recycle_map(self, t, states, params_full):
+        """Precompute the cached recycle affine map, or ``None`` to probe per-call.
+
+        Returns the :meth:`_compute_recycle_map` result when the map is known to
+        be state-invariant (``_recycle_map_constant`` is ``True``, set by
+        :meth:`_check_recycle_map_constant` on the first concrete solve), else
+        ``None`` -- the signal for the resolver to probe ``M`` every call. The map
+        is built from ``params_full`` (so a downstream gradient still flows through
+        it and a parameter sweep stays correct) at the supplied ``(t, states)``,
+        which the caller uses as the once-per-solve reference point. Shared by the
+        forward RHS, the located-event segments and the stream reconstruction so
+        all three reuse one definition.
+        """
+        if self._recycle_map_constant is not True:
+            return None
+        t = jnp.asarray(t)
+        signals = self._compute_signals(t, states, params_full)
+        flows = self._resolve_flows(t, params_full, states)
+        return self._compute_recycle_map(t, states, params_full, flows, signals)
+
     def _sweep_outputs(
         self,
         t: jnp.ndarray,
@@ -3003,31 +3036,12 @@ class Plant:
             events = (list(events) + unit_events) if events is not None \
                 else unit_events
 
-        if events is not None:
-            if event is not None:
-                raise ValueError(
-                    "pass either events= (the user-facing located-event API) or "
-                    "the low-level event= (a single diffrax terminating event), "
-                    "not both.")
-            if gradient == "stable_adjoint":
-                raise ValueError(
-                    "events= runs a segmented solve and is not supported on the "
-                    "gradient='stable_adjoint' path; use the default 'auto'/"
-                    "'jax_adjoint' (time-only events keep jax.grad finite).")
-            if solver is not None or factormax is not None:
-                raise ValueError(
-                    "solver=/factormax= are not supported with events=; the "
-                    "located-event solve manages its own integrator. Drop them.")
-            return self._solve_with_events(
-                t0, t1, t_eval, params, y0, events,
-                rtol=rtol, atol=atol_eff, dtmax=dtmax, adjoint=adjoint,
-                max_steps=max_steps, time_factor=_time_factor,
-                time_unit=time_unit)
-
         # One-time, concrete check that the recycle-flow solve is self-consistent
         # (every flow rule affine in the recycle flows). Skipped under tracing
         # (params/y0 are JAX tracers -- can't compare/warn) and guarded to run
-        # once per plant. It only warns, never blocks the solve.
+        # once per plant. It only warns, never blocks the solve. Run before the
+        # events branch too, so an events-only plant (an SBR/control study) still
+        # gets these diagnostics and the cached recycle map.
         #
         # LIMITATION: this probes affinity only at (t0, y0). A unit with a
         # piecewise-linear flow rule -- a threshold-mode SplitterUnit (influent
@@ -3054,6 +3068,27 @@ class Plant:
             # precomputed once per solve and reused -- a large per-RHS saving.
             if self._recycle_map_constant is None:
                 self._check_recycle_map_constant(jnp.asarray(t0), y0, params)
+
+        if events is not None:
+            if event is not None:
+                raise ValueError(
+                    "pass either events= (the user-facing located-event API) or "
+                    "the low-level event= (a single diffrax terminating event), "
+                    "not both.")
+            if gradient == "stable_adjoint":
+                raise ValueError(
+                    "events= runs a segmented solve and is not supported on the "
+                    "gradient='stable_adjoint' path; use the default 'auto'/"
+                    "'jax_adjoint' (time-only events keep jax.grad finite).")
+            if solver is not None or factormax is not None:
+                raise ValueError(
+                    "solver=/factormax= are not supported with events=; the "
+                    "located-event solve manages its own integrator. Drop them.")
+            return self._solve_with_events(
+                t0, t1, t_eval, params, y0, events,
+                rtol=rtol, atol=atol_eff, dtmax=dtmax, adjoint=adjoint,
+                max_steps=max_steps, time_factor=_time_factor,
+                time_unit=time_unit)
 
         if gradient == "auto":
             # A concrete forward solve takes the fast cached jax_adjoint path; a
@@ -3198,9 +3233,18 @@ class Plant:
         driver is an eager segment loop (a state event's firing count is
         data-dependent), while time-only events still differentiate because each
         segment is a plain differentiable plant sub-solve.
+
+        The state-invariant recycle map is precomputed once (from ``params``, so a
+        time-event gradient still flows through it) and reused across every
+        segment's RHS calls -- the same per-RHS saving the forward solve gets;
+        ``None`` (the probe path) when the map is state-coupled or the constancy
+        check has not run.
         """
+        recycle_map = self._maybe_recycle_map(
+            jnp.asarray(t0), self._split_state(y0), params)
+
         def rhs(t, y, args):
-            return self._rhs(t, y, args)
+            return self._rhs(t, y, args, recycle_map=recycle_map)
 
         with friendly_solve_errors(max_steps, what="plant solve"):
             res = solve_with_events(
@@ -3234,17 +3278,11 @@ class Plant:
         collapsing the per-RHS recycle resolution from ``n_recycle_edges + 1``
         sweeps to one. Bit-identical to probing it every call.
         """
-        use_cached_M = self._recycle_map_constant is True
         t0_arr = jnp.asarray(float(t0))
 
         def make_rhs(y0, params):
-            recycle_map = None
-            if use_cached_M:
-                states0 = self._split_state(y0)
-                sig0 = self._compute_signals(t0_arr, states0, params)
-                flows0 = self._resolve_flows(t0_arr, params, states0)
-                recycle_map = self._compute_recycle_map(
-                    t0_arr, states0, params, flows0, sig0)
+            recycle_map = self._maybe_recycle_map(
+                t0_arr, self._split_state(y0), params)
 
             def rhs(t, y, args):
                 return self._rhs(t, y, args, recycle_map=recycle_map)
