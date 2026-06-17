@@ -1662,6 +1662,9 @@ aquakin/
 │   │   │                            #   esdirk_adjoint_solve (Kvaerno5): cap-free
 │   │   │                            #   REVERSE-mode gradient via a hand-written
 │   │   │                            #   discrete adjoint (no autodiff through the solve)
+│   │   ├── colored_jacobian.py      # ColoredVeryChord: sparse (column-compressed
+│   │   │                            #   colored-AD) per-step Jacobian for the implicit
+│   │   │                            #   stage solve; Plant.solve(colored_jacobian=True)
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands
@@ -2790,6 +2793,58 @@ either with `gradient="stable_adjoint"` (its own ESDIRK discrete-adjoint
 integrator) or `events=` (the segmented solve) raises. Like `dtmax=`, they do not
 change the `gradient="auto"` routing. Covered by
 `tests/integration/test_plant_solver_option.py`.
+
+**`Plant.solve(colored_jacobian=True)` — sparse (colored-AD) Jacobian
+materialisation ([`integrate/colored_jacobian.py`](aquakin/integrate/colored_jacobian.py)).**
+Profiling the per-step *linear algebra* (after the decoupled-Newton + cached-map
+wins) found the dominant cost is **forming the implicit Jacobian, not factorising
+it**: diffrax's `VeryChord` materialises + factorises `I − γ·dt·J` **once per
+step** (reused across stages/iterations), and for the 167-state plant the dense
+materialisation (`jacfwd`, ~33% of a step-attempt) dwarfs the LU factor (~4%,
+`cond ~10³` — well-conditioned, fast). But the plant Jacobian is **5–15%
+nonzero** — dense per-unit kinetic blocks (the network stoichiometry × rate
+dependencies) plus sparse inter-unit flow coupling — so it can be formed by
+**column compression** (Curtis–Powell–Reid 1974): group structurally-orthogonal
+columns (sharing no nonzero row) into *colors*, push one seed per color through a
+single forward linearisation (`jax.linearize` once + `vmap` the tangent — **not**
+`jax.jvp` per color, which redoes the expensive nonlinear primal — the recycle +
+pH solves — every color), and scatter each color's JVP back to its columns via
+the pattern. For BSM2 that is **~45 colors vs 167 columns**, set by the widest
+dense block (the digester). The reconstructed matrix **equals the dense Jacobian**
+when the pattern is a superset of the real nonzeros, so the chord iteration — the
+step sequence, the trajectory, the gradient — is numerically unchanged; only the
+formation cost drops. **Measured ~1.43× on the 14-day BSM2 solve** (trajectory
+within integration tolerance, ~5e-3, the within-tolerance `LU`-vs-`AutoLinearSolver`
+step-path drift; gradient finite and matching the dense path to ~1e-8). It
+**stacks** with `Kvaerno3`/`factormax` (it helps any ESDIRK) and the cached map.
+- `ColoredVeryChord(VeryChord)` overrides only `init` (materialise via colored
+  forward AD into an `lx.MatrixLinearOperator` with an explicit `lx.LU()`,
+  avoiding the `AutoLinearSolver(well_posed=None)` least-squares fallback a bare
+  matrix would trigger); `step`/`terminate` are inherited, so the chord is
+  identical.
+- **Sparsity pattern** (`jacobian_sparsity_pattern`): the union of `|J|>tol` over
+  ~24 **strictly-positive** probe states (every component floored above zero, then
+  log-normally jittered) + the full diagonal. Probing at positive states is
+  essential — a *depleted* (near-zero) component zeroes the entries that couple
+  through it, so a probe there misses structurally-present nonzeros (the failure
+  mode that made an early prototype 6× *slower* via an 8× step explosion). A
+  positive-state probe reveals the structural superset without solving first.
+- **Correctness model:** a pattern *miss* does **not** corrupt the result — the
+  chord still converges to the stage residual's root — it only degrades
+  convergence (costs steps, not accuracy). The pattern is therefore conservative,
+  and **guarded once per plant** (`colored_jacobian_max_error`): the colored and
+  dense Jacobians are compared at the start state and the solve **falls back to
+  the dense solver with a warning** on any mismatch. Built concretely once and
+  reused; a first solve under reverse-mode tracing also falls back (the probe
+  needs concrete arrays — run one concrete solve to build it, then differentiate).
+- Wired like `solver=`/`factormax=` (forward `jax_adjoint` only; rejected with
+  `events=`/`stable_adjoint`), keyed into the compiled-solve cache by a
+  `colored_active` flag so it never collides with a plain solve. **Most
+  worthwhile for a large stiff plant (BSM2); on small BSM1 the materialisation is
+  not the bottleneck (≈1×, but still numerically matches to ~3e-13).** Covered by
+  `tests/integration/test_colored_jacobian.py` (coloring/reconstruction math,
+  positive-probe superset over the trajectory, colored==dense J, full-solve
+  trajectory + gradient match, the guard/fallback on a truncated pattern, BSM2).
 
 **`S_h2` quasi-steady-state — TESTED AND REJECTED for our solver (issue #361).**
 Every production WWTP simulator (BSM2 reference, GPS-X, WEST) makes the two
