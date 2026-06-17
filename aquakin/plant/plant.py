@@ -3036,6 +3036,27 @@ class Plant:
             events = (list(events) + unit_events) if events is not None \
                 else unit_events
 
+        # Validate incompatible argument combinations BEFORE any concrete solve
+        # work (the affinity/recycle-map probes below call _resolve_flows, which
+        # would raise an obscure error on an intentionally-minimal plant). The
+        # events dispatch itself stays after the concrete checks so a valid events
+        # solve still gets the cached recycle map.
+        if events is not None:
+            if event is not None:
+                raise ValueError(
+                    "pass either events= (the user-facing located-event API) or "
+                    "the low-level event= (a single diffrax terminating event), "
+                    "not both.")
+            if gradient == "stable_adjoint":
+                raise ValueError(
+                    "events= runs a segmented solve and is not supported on the "
+                    "gradient='stable_adjoint' path; use the default 'auto'/"
+                    "'jax_adjoint' (time-only events keep jax.grad finite).")
+            if solver is not None or factormax is not None:
+                raise ValueError(
+                    "solver=/factormax= are not supported with events=; the "
+                    "located-event solve manages its own integrator. Drop them.")
+
         # One-time, concrete check that the recycle-flow solve is self-consistent
         # (every flow rule affine in the recycle flows). Skipped under tracing
         # (params/y0 are JAX tracers -- can't compare/warn) and guarded to run
@@ -3070,20 +3091,7 @@ class Plant:
                 self._check_recycle_map_constant(jnp.asarray(t0), y0, params)
 
         if events is not None:
-            if event is not None:
-                raise ValueError(
-                    "pass either events= (the user-facing located-event API) or "
-                    "the low-level event= (a single diffrax terminating event), "
-                    "not both.")
-            if gradient == "stable_adjoint":
-                raise ValueError(
-                    "events= runs a segmented solve and is not supported on the "
-                    "gradient='stable_adjoint' path; use the default 'auto'/"
-                    "'jax_adjoint' (time-only events keep jax.grad finite).")
-            if solver is not None or factormax is not None:
-                raise ValueError(
-                    "solver=/factormax= are not supported with events=; the "
-                    "located-event solve manages its own integrator. Drop them.")
+            # (argument combinations validated above, before the concrete checks)
             return self._solve_with_events(
                 t0, t1, t_eval, params, y0, events,
                 rtol=rtol, atol=atol_eff, dtmax=dtmax, adjoint=adjoint,
