@@ -2755,14 +2755,34 @@ redundant. (pH is different: it is not a fast *mode* but a state-derived
 algebraic condition, which is why we solve it directly.) **Do not build the
 `S_h2` DAE machinery** — it is multi-day, fragile, and zero-benefit here.
 
-**The remaining lever for the ~50% rejection is the `clip_negative_states`
-`max(x,0)` kink (issue #361).** It is a *state-triggered moving derivative kink*
-near depleted species (DO in anoxic zones, depleted substrates) that embedded
-error estimators reject at, and that cannot be declared as a `jump_ts` breakpoint
-(why `jump_ts` did nothing). Unlike `S_h2` QSS this is **solver-agnostic** (it
-hurts implicit methods too). The IWA-native fix is smooth Monod switching guards
-`[S]/(K+[S])` (small K) or a smooth clamp `½(x+√(x²+ε²))` — the next thing to
-test. See issue #361.
+**The `clip_negative_states` `max(x,0)` kink — ALSO tested and rejected (issue
+#361).** The hypothesis was that the hard clamp is a *state-triggered moving
+derivative kink* near depleted species (DO in anoxic zones, depleted substrates)
+that the embedded error estimator rejects at (and that, being state-triggered,
+can't be a `jump_ts` breakpoint — why `jump_ts` did nothing). A direct test
+replaced it with a smooth clamp `½(x+√(x²+ε²))` and swept `ε` over three orders
+of magnitude on the BSM2 dynamic solve: the rejection rate stayed **pinned at
+~50.7%** at every `ε` (even `ε=0.5`, which rewrites the entire sub-0.5 region of
+the RHS), while the smooth clamp *biased* depleted species toward `ε/2`. So the
+clip kink is **not** the rejection source either, and the smooth clamp is a net
+negative (no speedup, worse accuracy).
+
+**Diagnosis of the ~50% rejection — a controller property, and why it is not
+worth chasing.** Across all experiments the rejection rate moved *only* for
+*step-size-controller* changes — `factormax=3` (→39%) and PI coefficients (→31%)
+— and never for RHS changes (tolerance, `jump_ts`, `S_h2` QSS, the clip kink).
+It is the classic deadbeat-I-controller overshoot→reject→shrink oscillation on a
+stiff forced system: diffrax's `PIDController` is a pure Söderlind error filter
+with **no Gustafsson iteration-count-aware predictive control** (the standard
+cure in RADAU/SDIRK codes, which diffrax lacks). Crucially, **lowering the
+rejection rate this way does not lower wall time** — it trades rejected steps for
+accepted ones. The wall-time wins are therefore *cheaper steps* (the decoupled
+Newton default) and *fewer stages* (`Kvaerno3`), banked in the dynamic-solve
+knobs above; the residual rejection rate is left as-is. A genuinely different
+integrator (a Gustafsson-predictive controller, or an exponential/QSS-reduced
+non-stiff formulation) is the only thing that would cut it further, and is a
+large effort not currently justified by the already-shipped ~42%. See issue #361
+for the full experiment log.
 
 **IFAS / MBBR unit ([`plant/ifas.py`](aquakin/plant/ifas.py)).** `IFASUnit`
 (alias `MBBRUnit`) places carrier-media biofilm in the flowsheet by **wiring the
