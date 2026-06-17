@@ -411,6 +411,25 @@ it explicitly: `diffrax.Kvaerno3(root_finder=diffrax.VeryChord(rtol=10*rtol,
 atol=10*atol))`. Both knobs apply to the forward solve only (rejected alongside
 `gradient="stable_adjoint"` or `events=`, which manage their own integrator).
 
+A third knob, `colored_jacobian=True`, forms the per-step implicit Jacobian by
+**sparse column compression** instead of densely:
+
+```python
+sol = plant.solve(t_span=(0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
+                  colored_jacobian=True)   # ~1.4x on dynamic BSM2, numerically identical
+```
+
+The plant Jacobian is sparse (dense per-unit kinetic blocks + sparse inter-unit
+coupling), so it is built in a handful of colored Jacobian-vector products (~45
+for BSM2) rather than one per state (167) — the dominant per-step linear-algebra
+cost. The reconstructed matrix equals the dense Jacobian, so the trajectory and
+gradient are unchanged to integration tolerance; only the cost of forming it
+drops (**~1.4× on dynamic BSM2**, and it stacks with `Kvaerno3`/`factormax`). It
+is built and guarded against the dense Jacobian once per plant, falling back to
+the dense solver if the guard fails. Most worthwhile on a large stiff plant
+(BSM2); on the small BSM1 the materialisation is not the bottleneck. Forward
+solve only, like the knobs above.
+
 For reactor-level fits, the adjoint plumbing is hidden too: `aquakin.calibrate`
 and `aquakin.sensitivity` take `ad_mode="forward"|"reverse"` and build the right
 adjoint internally (no `diffrax` import), and `calibrate(check_finite=True)` (the

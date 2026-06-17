@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional, Sequence, Union
 
 import diffrax
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 
@@ -563,6 +564,11 @@ class Plant:
         # MT rides on the concentration-dependent recycle flows) -- then MT is
         # re-probed every RHS (cheap scalar) while M stays cached.
         self._recycle_T_map_constant: Optional[bool] = None
+        # Colored-Jacobian root finder (built once, concretely, on the first
+        # colored_jacobian=True solve): (root_finder, n_colors, ok). ``ok`` False
+        # means the setup guard found the colored Jacobian disagreed with the
+        # dense one at the start state, so the solve falls back to the dense path.
+        self._colored_root_finder: Optional[tuple] = None
         # One-time guard for materialising the DO controllers a CSTRUnit's
         # closed-loop Aeration spec requires (see _materialize_aeration).
         self._aeration_materialized: bool = False
@@ -2529,6 +2535,57 @@ class Plant:
         flows = self._resolve_flows(t, params_full, states)
         return self._compute_recycle_map(t, states, params_full, flows, signals)
 
+    def _colored_jacobian_solver(self, solver, t0, y0, params, rtol, atol):
+        """Return ``solver`` reconfigured to use a colored-AD Jacobian root
+        finder, or ``solver`` unchanged when the colored path is unavailable.
+
+        Built **once per plant** (concretely): derive the plant Jacobian sparsity
+        pattern, color it, pack a :class:`ColoredVeryChord`, and **guard** it by
+        comparing the colored and dense Jacobians at the start state -- falling
+        back to the dense path (returning ``solver`` unchanged, with a warning) if
+        they disagree. Reused on later solves. Skipped under tracing if not yet
+        built (the probe/guard need concrete arrays), so a first traced solve
+        falls back to dense. The colored matrix equals the dense one when the
+        pattern is a superset, so the step sequence is unchanged; a pattern miss
+        only costs solver steps, never accuracy.
+        """
+        from aquakin.integrate.colored_jacobian import (
+            build_colored_root_finder, colored_jacobian_max_error)
+
+        if self._colored_root_finder is None:
+            if (isinstance(params, jax.core.Tracer)
+                    or isinstance(y0, jax.core.Tracer)):
+                return solver           # can't build under trace; fall back
+            t0a = jnp.asarray(float(t0))
+            states0 = self._split_state(y0)
+            rmap = self._maybe_recycle_map(t0a, states0, params)
+
+            def rhs_y(y):
+                return self._rhs(t0a, y, params, recycle_map=rmap)
+
+            atol_arr = jnp.asarray(atol)
+            rf, n_colors = build_colored_root_finder(
+                rhs_y, y0, rtol=10.0 * rtol, atol=10.0 * atol_arr)
+            err = colored_jacobian_max_error(rhs_y, y0, rf)
+            jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs_y)(y0)))) + 1e-300
+            ok = err <= 1e-8 * jscale
+            if not ok:
+                warnings.warn(
+                    "colored_jacobian=True: the derived Jacobian sparsity pattern "
+                    f"disagrees with the dense Jacobian at the start state (max "
+                    f"abs error {err:.2e}, scale {jscale:.2e}); falling back to "
+                    "the dense solver. This indicates the structural pattern "
+                    "missed a nonzero -- please report it.",
+                    RuntimeWarning, stacklevel=2)
+            self._colored_root_finder = (rf, n_colors, ok)
+
+        rf, n_colors, ok = self._colored_root_finder
+        if not ok:
+            return solver
+        base = solver if solver is not None else diffrax.Kvaerno5()
+        # Swap the base solver's chord root finder for the colored one.
+        return eqx.tree_at(lambda s: s.root_finder, base, rf)
+
     def _sweep_outputs(
         self,
         t: jnp.ndarray,
@@ -2879,6 +2936,7 @@ class Plant:
         progress_meter: Optional["diffrax.AbstractProgressMeter"] = None,
         solver: Optional["diffrax.AbstractSolver"] = None,
         factormax: Optional[float] = None,
+        colored_jacobian: bool = False,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
 
@@ -2935,6 +2993,24 @@ class Plant:
             Combined with ``solver=diffrax.Kvaerno3(...)`` and the decoupled root
             finder it gives the largest measured speedup (~40% on dynamic BSM2).
             Forward ``jax_adjoint`` path only. ``None`` keeps the diffrax default.
+        colored_jacobian : bool, optional
+            Materialise the per-step implicit Jacobian by sparse column
+            compression (colored forward AD) instead of densely. The flowsheet
+            Jacobian is sparse (dense per-unit kinetic blocks + sparse inter-unit
+            coupling), so it forms in ``C`` Jacobian-vector products (the color
+            count, set by the widest dense block -- ~45 for BSM2) instead of
+            ``n`` -- the dominant per-step linear-algebra cost. The reconstructed
+            matrix equals the dense Jacobian, so the step sequence, trajectory and
+            gradient are numerically unchanged (to integration tolerance); only
+            the cost of forming ``J`` drops (~1.4x on dynamic BSM2). Built and
+            **guarded against the dense Jacobian once per plant** at the start
+            state, falling back to the dense solver (with a warning) on any
+            mismatch; a first solve under reverse-mode tracing also falls back
+            (the pattern needs concrete arrays -- run one concrete solve first to
+            build it, then differentiate). Composes with ``solver=``/``factormax=``
+            and the cached recycle map. Forward ``jax_adjoint`` path only; default
+            ``False``. ``True`` is most worthwhile for a large stiff plant (BSM2);
+            on a small plant (BSM1) the materialisation is not the bottleneck.
         gradient : {"auto", "jax_adjoint", "stable_adjoint"}, optional
             How a reverse-mode gradient through the solve is formed.
             ``"auto"`` (default) routes a plain forward solve to the fast,
@@ -3036,6 +3112,28 @@ class Plant:
             events = (list(events) + unit_events) if events is not None \
                 else unit_events
 
+        # Validate incompatible argument combinations BEFORE any concrete solve
+        # work (the affinity/recycle-map probes below call _resolve_flows, which
+        # would raise an obscure error on an intentionally-minimal plant). The
+        # events dispatch itself stays after the concrete checks so a valid events
+        # solve still gets the cached recycle map.
+        if events is not None:
+            if event is not None:
+                raise ValueError(
+                    "pass either events= (the user-facing located-event API) or "
+                    "the low-level event= (a single diffrax terminating event), "
+                    "not both.")
+            if gradient == "stable_adjoint":
+                raise ValueError(
+                    "events= runs a segmented solve and is not supported on the "
+                    "gradient='stable_adjoint' path; use the default 'auto'/"
+                    "'jax_adjoint' (time-only events keep jax.grad finite).")
+            if solver is not None or factormax is not None or colored_jacobian:
+                raise ValueError(
+                    "solver=/factormax=/colored_jacobian= are not supported with "
+                    "events=; the located-event solve manages its own integrator. "
+                    "Drop them.")
+
         # One-time, concrete check that the recycle-flow solve is self-consistent
         # (every flow rule affine in the recycle flows). Skipped under tracing
         # (params/y0 are JAX tracers -- can't compare/warn) and guarded to run
@@ -3070,20 +3168,7 @@ class Plant:
                 self._check_recycle_map_constant(jnp.asarray(t0), y0, params)
 
         if events is not None:
-            if event is not None:
-                raise ValueError(
-                    "pass either events= (the user-facing located-event API) or "
-                    "the low-level event= (a single diffrax terminating event), "
-                    "not both.")
-            if gradient == "stable_adjoint":
-                raise ValueError(
-                    "events= runs a segmented solve and is not supported on the "
-                    "gradient='stable_adjoint' path; use the default 'auto'/"
-                    "'jax_adjoint' (time-only events keep jax.grad finite).")
-            if solver is not None or factormax is not None:
-                raise ValueError(
-                    "solver=/factormax= are not supported with events=; the "
-                    "located-event solve manages its own integrator. Drop them.")
+            # (argument combinations validated above, before the concrete checks)
             return self._solve_with_events(
                 t0, t1, t_eval, params, y0, events,
                 rtol=rtol, atol=atol_eff, dtmax=dtmax, adjoint=adjoint,
@@ -3115,12 +3200,12 @@ class Plant:
                     "event= (e.g. a steady-state terminating event) is only "
                     "supported on the forward gradient='jax_adjoint' path."
                 )
-            if solver is not None or factormax is not None:
+            if solver is not None or factormax is not None or colored_jacobian:
                 raise ValueError(
-                    "solver=/factormax= are only supported on the forward "
-                    "gradient='jax_adjoint' path; gradient='stable_adjoint' uses "
-                    "its own ESDIRK discrete-adjoint integrator and step control. "
-                    "Drop them or use gradient='jax_adjoint'."
+                    "solver=/factormax=/colored_jacobian= are only supported on the "
+                    "forward gradient='jax_adjoint' path; gradient='stable_adjoint' "
+                    "uses its own ESDIRK discrete-adjoint integrator and step "
+                    "control. Drop them or use gradient='jax_adjoint'."
                 )
             # Cap-free reverse-mode gradient through the stiff plant solve: the
             # forward is a robust adaptive ESDIRK solve and the reverse is the
@@ -3179,6 +3264,19 @@ class Plant:
         # event closure varies and that path is run once -- and a traced call
         # (settings key None) bypasses the cache. Caching does not change the
         # first solve; it only avoids recompiling on subsequent ones.
+        # Colored-AD Jacobian: reconfigure the solver to materialise the per-step
+        # implicit Jacobian by sparse column compression (a large saving on the
+        # dense flowsheet Jacobian). Built+guarded once per plant; falls back to
+        # the dense solver if the start-state guard fails or it can't be built
+        # (a first traced solve). Numerically identical when the pattern is a
+        # superset, so it composes with solver=/factormax= and the cached map.
+        if colored_jacobian:
+            solver = self._colored_jacobian_solver(
+                solver, t0, y0, params, rtol, atol_eff)
+        colored_active = colored_jacobian and (
+            self._colored_root_finder is not None
+            and self._colored_root_finder[2])
+
         settings = concrete_settings_key(rtol, atol_eff, adjoint, dtmax, max_steps)
         sig = (t0, t1, None if t_eval is None else tuple(t_eval.shape))
         # The solver is keyed by class name: a fresh stock solver instance (the
@@ -3197,7 +3295,8 @@ class Plant:
         # bypasses the compiled-solve cache rather than being keyed into it.
         cache_key = (None if (settings is None or event is not None
                               or progress_meter is not None)
-                     else (sig, settings, solver_key, factormax, recycle_key))
+                     else (sig, settings, solver_key, factormax, recycle_key,
+                           colored_active))
         jitted = self._jit_cache.get(cache_key) if cache_key is not None else None
         if jitted is None:
             jitted = self._build_jitted_solve(
