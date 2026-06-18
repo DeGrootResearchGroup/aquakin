@@ -62,6 +62,32 @@ def test_pattern_is_superset_of_truth():
     assert np.all(P[truth])                       # superset: covers every true nonzero
 
 
+def test_pattern_captures_small_natural_scale_column():
+    """A component at a tiny natural scale with a steep near-zero Jacobian column
+    (an inhibition knee, like the ADM1 dissolved hydrogen) must be captured even
+    when a large-scale block sets the Jacobian magnitude. The historical
+    ``|y0|+1`` floor lifts such a component into its saturated, flat regime, where
+    its column slope collapses below the relative threshold set by the large
+    block and is missed; the own-scale / y0 probes keep it in its physical
+    regime. Regression for the colored-Jacobian fall-back on the soluble-holdup
+    BSM2 plant, whose settled hydrogen column was being dropped."""
+    K = 1.0e-8
+    BIG = 1.0e6   # a stiff large-scale block, as biomass/settling are in the plant
+    def rhs(y):
+        a, b, u, v = y
+        inh = 1.0 / (1.0 + u / K)              # steep at u~K, flat (slope->0) at u>>K
+        return jnp.array([inh * a,             # column (a <- u): steep only near u~K
+                          -2.0 * b,
+                          -1.0 * u + 1.0,
+                          -BIG * v + BIG * b])  # large block -> big max|J| at probes
+    y0 = jnp.array([1.0, 1.0, K, 1.0])         # u sits at its inhibition knee
+    P = jacobian_sparsity_pattern(rhs, y0, n_probe=8, seed=0)
+    assert P[0, 2], "steep small-natural-scale column missed under a large Jacobian scale"
+    rf, _ = build_colored_root_finder(rhs, y0, rtol=1e-3, atol=1e-3, n_probe=8)
+    jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs)(y0)))) + 1e-300
+    assert colored_jacobian_max_error(rhs, y0, rf) < 1e-8 * jscale
+
+
 def test_colored_reconstruction_is_exact_synthetic():
     rhs, _ = _synthetic_rhs(n=12)
     rf, n_colors = build_colored_root_finder(
@@ -253,3 +279,35 @@ def test_colored_bsm2_matches_default():
     assert np.all(np.isfinite(b))
     rel = np.max(np.abs(a - b) / (np.abs(a) + 1e-3))
     assert rel < 2e-2            # within-tolerance drift over the dynamic run
+
+
+@pytest.mark.slow
+def test_colored_bsm2_soluble_holdup_no_fallback():
+    """The settler soluble-holdup states put the digester at its settled
+    operating point, where the dissolved-hydrogen Jacobian column is steep at a
+    tiny natural scale. The two-scale probe must capture it so the colored path
+    is used rather than falling back to dense. Regression for the reported
+    soluble-holdup colored-Jacobian fall-back."""
+    from aquakin import HeatBalanceTemperature
+    from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.bsm.bsm2 import (
+        build_bsm2, bsm2_asm1_network, bsm2_constant_influent, bsm2_parameters,
+        BSM2_CONSTANT_INFLUENT_T)
+
+    asm1 = bsm2_asm1_network(); adm1 = aquakin.load_network("adm1")
+    params = bsm2_parameters(asm1, adm1)
+    p = build_bsm2(asm1_network=asm1, adm1_network=adm1,
+                   do_temperature_correction=True,
+                   temperature_model=HeatBalanceTemperature(),
+                   settler_soluble_holdup=True)
+    p.add_influent("feed", bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
+    y0 = p.steady_state(params, y0=bsm2_warm_start(p)).state
+    te = jnp.linspace(0.0, 6.0, 13)
+    kw = dict(t_span=(0.0, 6.0), t_eval=te, params=params, y0=y0,
+              rtol=1e-4, atol=1e-3, max_steps=8_000_000)
+    s_def = p.solve(**kw)
+    s_col = p.solve(**kw, colored_jacobian=True)
+    assert p._colored_root_finder[2] is True       # guard passed: colored, not dense
+    a, b = np.asarray(s_def.state), np.asarray(s_col.state)
+    assert np.all(np.isfinite(b))
+    assert np.max(np.abs(a - b) / (np.abs(a) + 1e-3)) < 2e-2

@@ -2840,12 +2840,23 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   matrix would trigger); `step`/`terminate` are inherited, so the chord is
   identical.
 - **Sparsity pattern** (`jacobian_sparsity_pattern`): the union of `|J|>tol` over
-  ~24 **strictly-positive** probe states (every component floored above zero, then
-  log-normally jittered) + the full diagonal. Probing at positive states is
-  essential — a *depleted* (near-zero) component zeroes the entries that couple
-  through it, so a probe there misses structurally-present nonzeros (the failure
-  mode that made an early prototype 6× *slower* via an 8× step explosion). A
-  positive-state probe reveals the structural superset without solving first.
+  **strictly-positive** probe states drawn at **two scales**, plus `y0` itself and
+  the full diagonal. Two failure modes must both be covered and a single scale
+  covers only one: (1) a *depleted* (zero-at-`y0`) component zeroes the entries
+  that couple through it, so the probe lifts every component to `|y0|+1` and
+  jitters to reveal those couplings (the *lifted* scale; missing it made an early
+  prototype 6× *slower* via an 8× step explosion); (2) a *small-natural-scale*
+  component — the ADM1 dissolved hydrogen `S_h2` sits at ~`1e-7` at its inhibition
+  knee, where its Jacobian column is enormous — is pushed by that same `|y0|+1`
+  lift into a **saturated**, flat regime where the steep column collapses below
+  the relative threshold (set by the large biomass/settling entries) and is
+  dropped, so the probe also jitters each component around its **own** magnitude
+  (the *own* scale) to keep it in its physical regime. Including the Jacobian at
+  `y0` makes the start-state guard pass by construction. *(This two-scale probe
+  fixed a real fall-back: the BSM2 settler `soluble_holdup` states settle the
+  digester to its operating point, surfacing the steep `S_h2` column that the
+  lifted-only probe dropped — the colored path then fell back to dense; it now
+  stays colored, ~2.6× over dense, matching to round-off.)*
 - **Correctness model:** a pattern *miss* does **not** corrupt the result — the
   chord still converges to the stage residual's root — it only degrades
   convergence (costs steps, not accuracy). The pattern is therefore conservative,
