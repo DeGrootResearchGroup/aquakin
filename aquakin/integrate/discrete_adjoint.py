@@ -241,6 +241,7 @@ def implicit_euler_adjoint_solve(
     dt0: float = _DEFAULT_DT0,
     max_steps: int = _DEFAULT_MAX_STEPS,
     time_dependent: bool = False,
+    primal_rhs: Optional[Callable] = None,
 ) -> jnp.ndarray:
     """Integrate over ``t_span`` with a cap-free discrete-adjoint reverse-mode rule.
 
@@ -281,6 +282,12 @@ def implicit_euler_adjoint_solve(
         time dependence (e.g. a time-varying influent) is handled exactly by
         carrying time in the state, so the gradient is exact through a transient
         solve. See :func:`_autonomize`.
+    primal_rhs : callable, optional
+        Fast alternate RHS for the forward solve and the ``df/dy`` Jacobian, while
+        ``rhs`` supplies the ``df/dtheta`` vjp. See :func:`esdirk_adjoint_solve`
+        for the full contract (it must match ``rhs`` in value and ``df/dy``; only
+        the parameter derivative is taken from ``rhs``; ``stop_gradient`` any
+        ``params``-derived value closed over). ``None`` uses ``rhs`` throughout.
 
     Returns
     -------
@@ -292,16 +299,21 @@ def implicit_euler_adjoint_solve(
     """
     n0 = y0.shape[0]
     if time_dependent:
-        rhs, y0 = _autonomize(rhs, y0, float(t_span[0]))
+        t0f = float(t_span[0])
+        if primal_rhs is not None:
+            primal_rhs = _autonomize(primal_rhs, y0, t0f)[0]
+        rhs, y0 = _autonomize(rhs, y0, t0f)
         atol = _augment_atol(atol)
+    primal = primal_rhs if primal_rhs is not None else rhs
     n = y0.shape[0]
     solver = diffrax.ImplicitEuler(root_finder=_implicit_tols(rtol, atol))
 
     def step_adjoint(y_prev_k, y_k, params_, dt, lam_k):
         # Implicit Euler step y_{n+1} = y_n + dt f(y_{n+1}); its adjoint uses the
         # post-step state y_k. mu = (I - dt J^T)^{-1} lam_k, then the parameter
-        # cotangent is dt (df/dtheta)^T mu.
-        Jf = jax.jacfwd(lambda y: rhs(0.0, y, params_))(y_k)
+        # cotangent is dt (df/dtheta)^T mu. df/dy from ``primal`` (cached); the
+        # df/dtheta vjp from ``rhs`` (recomputes any params-derived sub-term).
+        Jf = jax.jacfwd(lambda y: primal(0.0, y, params_))(y_k)
         M = jnp.eye(n, dtype=y_k.dtype) - dt * Jf
         mu = jnp.linalg.solve(M.T, lam_k)
         _, vjp = jax.vjp(lambda q: rhs(0.0, y_k, q), params_)
@@ -309,7 +321,7 @@ def implicit_euler_adjoint_solve(
         return mu, dpar
 
     out = _discrete_adjoint_solve(
-        rhs, y0, params, t_span, t_eval,
+        primal, y0, params, t_span, t_eval,
         solver=solver, step_adjoint=step_adjoint,
         rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
     )
@@ -374,6 +386,7 @@ def esdirk_adjoint_solve(
     max_steps: int = _DEFAULT_MAX_STEPS,
     newton_iters: int = _DEFAULT_NEWTON_ITERS,
     time_dependent: bool = False,
+    primal_rhs: Optional[Callable] = None,
 ) -> jnp.ndarray:
     """Cap-free reverse-mode gradient through a high-order ESDIRK solve.
 
@@ -402,6 +415,25 @@ def esdirk_adjoint_solve(
         the field's explicit time dependence (e.g. a time-varying influent) is
         handled exactly by carrying time in the state (:func:`_autonomize`), so
         the gradient is exact through a transient solve.
+    primal_rhs : callable, optional
+        An alternate right-hand side used for the **forward solve, the stage
+        recomputation, and the ``df/dy`` stage Jacobians** -- everything except
+        the ``df/dtheta`` parameter vjp, which always uses ``rhs``. It must
+        produce the *same values and the same ``df/dy``* as ``rhs`` (so the
+        trajectory and the state-cotangent recurrence are unchanged); only the
+        *parameter* derivative is taken from ``rhs``. The use case is a RHS with a
+        state-invariant but parameter-dependent sub-computation that is expensive
+        to repeat -- e.g. a plant's recycle map ``M(params)`` -- which can be
+        evaluated **once** and reused for every Jacobian/stage call here, while
+        ``rhs`` (which recomputes it) still supplies the exact ``dM/dtheta`` in the
+        one place it is needed (the parameter vjp). Because the discrete adjoint
+        takes its *entire* parameter gradient from that vjp and uses the stages /
+        Jacobians only to propagate the *state* cotangent, the result is the exact
+        gradient -- bit-identical to using ``rhs`` everywhere when the cached
+        sub-computation equals the recomputed one. The caller MUST
+        :func:`jax.lax.stop_gradient` any ``params``-derived value it closes over
+        in ``primal_rhs`` (otherwise the closed-over tracer escapes the custom
+        VJP). ``None`` (default) uses ``rhs`` for everything (the historic path).
 
     Returns
     -------
@@ -412,8 +444,14 @@ def esdirk_adjoint_solve(
     """
     n0 = y0.shape[0]
     if time_dependent:
-        rhs, y0 = _autonomize(rhs, y0, float(t_span[0]))
+        t0f = float(t_span[0])
+        if primal_rhs is not None:
+            primal_rhs = _autonomize(primal_rhs, y0, t0f)[0]
+        rhs, y0 = _autonomize(rhs, y0, t0f)
         atol = _augment_atol(atol)
+    # ``primal`` drives the forward solve + the df/dy stage work (it may cache a
+    # state-invariant sub-computation); ``rhs`` always supplies the df/dtheta vjp.
+    primal = primal_rhs if primal_rhs is not None else rhs
     if solver is None:
         solver = diffrax.Kvaerno5()
     # Set explicit root-finder tolerances (see _implicit_tols) so the implicit
@@ -429,7 +467,8 @@ def esdirk_adjoint_solve(
     def _stages(y_n, params_, dt):
         # Recompute the ESDIRK stage values Y_i by solving each stage equation
         # Y_i = pred_i + dt*gamma_i f(Y_i) (explicit first stage solves trivially).
-        f = lambda y: rhs(0.0, y, params_)
+        # Uses ``primal`` (the stage VALUES need only correct f / df-dy).
+        f = lambda y: primal(0.0, y, params_)
         ks, Ys = [], []
         for i in range(s):
             pred = y_n
@@ -452,7 +491,9 @@ def esdirk_adjoint_solve(
         # sweep them in reverse applying the per-stage transposed solves. The
         # post-step state y_k is unused (the stages carry the dependence).
         Ys = _stages(y_prev_k, params_, dt)
-        Js = jax.vmap(lambda Y: jax.jacfwd(lambda y: rhs(0.0, y, params_))(Y))(Ys)
+        # df/dy stage Jacobians from ``primal`` (cached sub-computation); the
+        # df/dtheta vjp below from ``rhs`` (recomputes it -> exact dM/dtheta).
+        Js = jax.vmap(lambda Y: jax.jacfwd(lambda y: primal(0.0, y, params_))(Y))(Ys)
         Ybar = [None] * s
         pbar = jnp.zeros_like(params_)
         for i in range(s - 1, -1, -1):
@@ -470,7 +511,7 @@ def esdirk_adjoint_solve(
         return lam_n, pbar
 
     out = _discrete_adjoint_solve(
-        rhs, y0, params, t_span, t_eval,
+        primal, y0, params, t_span, t_eval,
         solver=solver, step_adjoint=step_adjoint,
         rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
     )

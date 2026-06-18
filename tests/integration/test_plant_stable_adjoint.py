@@ -23,7 +23,12 @@ import pytest
 
 import aquakin
 from aquakin.plant import CSTRUnit, Plant
-from aquakin.plant.bsm import bsm2_warm_start
+from aquakin.plant.bsm import (
+    bsm1_warm_start,
+    bsm2_warm_start,
+    build_bsm1,
+    load_bsm1_influent,
+)
 from aquakin.plant.bsm.bsm2 import (
     build_bsm2,
     bsm2_constant_influent,
@@ -170,6 +175,58 @@ def test_stable_adjoint_cross_interface_gradient_matches_fd():
     # The discrete adjoint is the exact gradient of the forward solve; it agrees
     # with the central difference to the finite-difference truncation/solver floor.
     assert grad == pytest.approx(fd, rel=2e-3)
+
+
+@pytest.mark.validation
+@pytest.mark.heavy
+def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
+    """The gradient w.r.t. a FLOW-SETPOINT parameter (the RAS recycle flow) is
+    unchanged by the cached-recycle-map optimisation -- the ``dM/dtheta`` guard
+    for the carve-out in issue #366.
+
+    The recycle concentration map ``M`` depends on the parameters only through
+    the flow setpoints. The cap-free path caches ``M`` once and reuses it on the
+    *primal* RHS (the forward solve + every backward ``df/dy`` Jacobian, skipping
+    the per-call probe), while the ``df/dtheta`` vjp uses the map-recomputing
+    ``rhs`` -- so ``dM/dtheta`` is captured exactly. Disabling the cache (the
+    ``_recycle_map_constant = False`` path probes ``M`` on every call -- the
+    pre-#366 behaviour, the textbook discrete adjoint with no carve-out) must give
+    the **bit-identical** gradient. A wrong split would drop the ``dM/dtheta``
+    term, so the cached gradient would differ. The kinetic-param gradient (above)
+    cannot catch this (``dM/dtheta = 0`` there); this is a deterministic check
+    (no finite-difference tolerance)."""
+    asm1 = aquakin.load_network("asm1")
+    plant = build_bsm1(asm1)
+    plant.add_influent("influent", load_bsm1_influent("dry", asm1))
+    y0 = bsm1_warm_start(plant)
+    base = plant.default_parameters()
+    gidx = plant.parameter_index("underflow_split.ras")   # RAS recycle flow
+    theta0 = float(base[gidx])
+    T = 0.3
+    kw = dict(rtol=1e-6, atol=1e-3, max_steps=20_000)
+
+    def g(theta):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([0.15, T]), params=p,
+                          y0=y0, gradient="stable_adjoint", **kw)
+        return jnp.sum(sol.state ** 2)
+
+    # A concrete solve sets the state-invariant-map flag (BSM1's recycle map is
+    # constant), so the cached-map primal is exercised.
+    _ = g(theta0)
+    assert plant._recycle_map_constant is True
+
+    plant._jit_cache.clear()
+    grad_cached = float(jax.grad(g)(theta0))            # cached-map primal (#366)
+    assert np.isfinite(grad_cached)
+    # RAS genuinely moves the plant through the recycle (so dM/dtheta != 0): if it
+    # were 0 the guard would be vacuous.
+    assert grad_cached != 0.0
+
+    plant._recycle_map_constant = False                 # probe M every call
+    plant._jit_cache.clear()
+    grad_probed = float(jax.grad(g)(theta0))            # pre-#366 path
+    assert grad_cached == grad_probed                   # bit-identical
 
 
 @pytest.mark.validation
