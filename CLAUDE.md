@@ -2538,16 +2538,38 @@ Key types:
     events-only plant (SBR / control study) still gets the cached map (and the
     affinity/convergence diagnostics). The reconstruction win confirms its
     per-time cost was also recycle-resolution-dominated. **`gradient=
-    "stable_adjoint"` deliberately does NOT cache**: `esdirk_adjoint_solve` is a
-    `custom_vjp` that forms `∂f/∂θ` by differentiating the *per-call*
-    `rhs(t, y, params)`, so a precomputed `M` closed over as a constant is
-    invisible to that vjp — the calibration gradient w.r.t. a **flow-setpoint
-    param** (RAS/`Qw`/`f_PS`, the only params `M` depends on) would silently drop
-    its `∂M/∂θ` term. Kinetic-param gradients would be unaffected, but the path is
-    left correct-but-unoptimized rather than assume the user never frees a flow
-    setpoint; a fast cached-primal + param-recomputing-`∂f/∂θ` split of the
-    discrete-adjoint kernel is the future option there. Covered by
-    `tests/integration/test_recycle_cached_map.py`.
+    "stable_adjoint"` also uses the cached map (#366)**, via a *primal/param RHS
+    split* of the discrete-adjoint kernel. `esdirk_adjoint_solve` forms `∂f/∂θ` by
+    differentiating the per-call `rhs(t, y, params)`, so a precomputed `M` closed
+    over as a constant would be invisible to that vjp and a gradient w.r.t. a
+    **flow-setpoint param** (RAS/`Qw`/`f_PS`, the only params `M` depends on) would
+    silently drop its `∂M/∂θ` term. The kernel therefore takes an optional
+    `primal_rhs=`: the forward solve and the backward **`∂f/∂y`** stage Jacobians
+    use the cached-`M` `primal_rhs` (the recycle probe hoisted out of the hot
+    loop), while the **`∂f/∂θ`** vjp keeps the map-recomputing `rhs` — so `∂M/∂θ`
+    is captured exactly. Because the discrete adjoint draws its *entire* parameter
+    gradient from that vjp and uses the stages/Jacobians only to propagate the
+    *state* cotangent, and the cached `M` *is* the probed `M`, the result is
+    **bit-identical** to probing every call, just faster (the gradient w.r.t. a
+    kinetic *and* a flow-setpoint param both match the per-call-probe gradient
+    bit-for-bit). The cached map must be `stop_gradient`'d before being closed over
+    (it is a params-derived value inside the `custom_vjp`; its parameter dependence
+    is the vjp's job). Both the cached jitted forward and the under-trace
+    calibration-gradient path go through the shared `Plant._esdirk_stable_adjoint`.
+    Falls back to per-call probing when `M` is not state-invariant
+    (`_recycle_map_constant` not True). **Measured (clean serial min-of-8 timing):
+    a modest reverse-gradient win where the recycle probe is non-trivial — BSM2
+    `value+grad` ~1.15× (14.7→12.8 s, the ASM↔ADM-interface probe hoisted out of
+    the backward) — and neutral on BSM1** (whose probe is cheap, so its gradient is
+    unchanged). The one-time map build makes the *forward* marginally slower (BSM2
+    ~0.95→1.09 s), but `stable_adjoint` exists for gradients, where the net is
+    positive. The win is modest because the backward's dominant cost is the
+    per-step `n≈167` **dense stage Jacobian builds and solves**, which the cached
+    map does not touch — that (e.g. a sparsity-colored backward Jacobian) is the
+    remaining lever, tracked separately. Covered by
+    `tests/integration/test_recycle_cached_map.py` and the bit-identical
+    flow-setpoint `∂M/∂θ` guard
+    `test_plant_stable_adjoint.py::test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta`.
   - **Wiring API.** `plant.connect(source, dest)` takes two `"unit.port"`
     endpoint strings, read as `source -> dest`. The port may be omitted
     (bare `"unit"`) when the unit has exactly one port for that role — a

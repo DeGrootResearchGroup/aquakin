@@ -3239,13 +3239,12 @@ class Plant:
                         self._jit_cache[cache_key] = jitted
                     ys = jitted(y0, params)
                 else:
-                    def rhs(t, y, args):
-                        return self._rhs(t, y, args)
-                    ys = esdirk_adjoint_solve(
-                        rhs, y0, params, (t0, t1), t_eval,
-                        rtol=rtol, atol=atol_eff, max_steps=max_steps,
-                        time_dependent=True,
-                    )
+                    # Under-trace (the calibration-gradient path): not cached, but
+                    # still hoists the recycle probe via the cached-map primal RHS
+                    # (the same exact split as the jitted closure).
+                    ys = self._esdirk_stable_adjoint(
+                        y0, params, t0, t1, t_eval,
+                        rtol=rtol, atol=atol_eff, max_steps=max_steps)
             if t_eval is None:
                 ts = jnp.asarray([t1])
                 ys = ys[None, :]
@@ -3426,17 +3425,52 @@ class Plant:
         shapes; ``t_eval`` is closed over because the discrete adjoint marks it
         non-differentiable (a traced ``t_eval`` cannot enter that slot).
         """
+        @jax.jit
+        def _solve(y0, params):
+            return self._esdirk_stable_adjoint(
+                y0, params, t0, t1, t_eval,
+                rtol=rtol, atol=atol, max_steps=max_steps)
+        return _solve
+
+    def _esdirk_stable_adjoint(self, y0, params, t0, t1, t_eval, *,
+                               rtol, atol, max_steps):
+        """Cap-free reverse-mode plant solve with the cached recycle map hoisted
+        out of the backward pass.
+
+        Caches the state-invariant recycle map once per solve and reuses it on the
+        *primal* RHS (the forward solve + every backward stage / df/dy Jacobian),
+        so the expensive per-call recycle probe is lifted out of the hot
+        reverse-adjoint loop. The plain ``rhs`` -- which recomputes the map from
+        ``params`` -- still drives the df/dtheta vjp, so the dM/dtheta term
+        (nonzero only for flow-setpoint params) is exact; the gradient is
+        bit-identical to probing on every call, just faster.
+
+        The cached map must be ``stop_gradient``'d: it is a params-derived value
+        closed over inside the discrete-adjoint custom VJP, and its parameter
+        dependence is accounted for by the vjp's ``rhs``, not by this closure.
+        When the map is not state-invariant (``_recycle_map_constant`` not True,
+        e.g. a scheduled pump) the cache is ``None`` and the primal falls back to
+        ``rhs`` (probe per call -- correct, just unoptimised). Shared by the
+        cached jit closure and the under-trace gradient path so both optimise.
+        """
         def rhs(t, y, args):
             return self._rhs(t, y, args)
 
-        @jax.jit
-        def _solve(y0, params):
-            return esdirk_adjoint_solve(
-                rhs, y0, params, (t0, t1), t_eval,
-                rtol=rtol, atol=atol, max_steps=max_steps,
-                time_dependent=True,
-            )
-        return _solve
+        rmap = self._maybe_recycle_map(
+            jnp.asarray(t0), self._split_state(y0), params)
+        if rmap is None:
+            primal_rhs = None
+        else:
+            rmap = jax.lax.stop_gradient(rmap)
+
+            def primal_rhs(t, y, args):
+                return self._rhs(t, y, args, recycle_map=rmap)
+
+        return esdirk_adjoint_solve(
+            rhs, y0, params, (t0, t1), t_eval,
+            rtol=rtol, atol=atol, max_steps=max_steps,
+            time_dependent=True, primal_rhs=primal_rhs,
+        )
 
     def run_to_steady_state(
         self,
