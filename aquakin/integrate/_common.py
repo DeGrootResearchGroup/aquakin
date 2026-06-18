@@ -295,6 +295,42 @@ def concrete_settings_key(rtol, atol, adjoint, dtmax, max_steps):
         return None
 
 
+def reactor_settings_key(reactor):
+    """Return the reactor's concrete solver-settings cache key.
+
+    Equivalent to ``concrete_settings_key(reactor.rtol, reactor.atol, ...)`` but
+    memoises the expensive part. The ``atol`` value-based key materialises the
+    per-component tolerance array to Python floats -- a device->host sync that
+    otherwise runs *before* the cache lookup on every solve, including hits, on
+    exactly the many-short-solve loop the cache exists for. ``atol`` is fixed at
+    construction, so its key is computed once and stored on the reactor.
+
+    The cheap parts (``rtol`` / ``adjoint`` id / ``dtmax`` / ``max_steps``) are
+    re-read every call rather than cached: :func:`with_adjoint` produces a
+    *shallow copy* with a swapped ``adjoint`` (the forward-/reverse-mode variant
+    ``calibrate`` / ``sensitivity`` build), and that copy inherits the cached
+    ``_atol_key`` (correctly -- same ``atol`` array) while its adjoint differs,
+    so the adjoint must not be baked into the cached portion.
+
+    Returns ``None`` under tracing (``atol`` is a tracer); not cached in that
+    case, so a later concrete solve still computes and stores a real key.
+    """
+    atol_key = reactor.__dict__.get("_atol_key")
+    if atol_key is None:
+        try:
+            atol_key = atol_cache_key(reactor.atol)
+        except jax.errors.TracerArrayConversionError:
+            return None
+        reactor._atol_key = atol_key
+    return (
+        float(reactor.rtol),
+        atol_key,
+        None if reactor.adjoint is None else id(reactor.adjoint),
+        None if reactor.dtmax is None else float(reactor.dtmax),
+        int(reactor.max_steps),
+    )
+
+
 def cached_jitted_solver(key, build, *keep_alive):
     """Return the cached compiled solver for ``key``, building it once.
 

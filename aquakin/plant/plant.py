@@ -1538,14 +1538,42 @@ class Plant:
         self, unit_name: str, params_full: jnp.ndarray
     ) -> jnp.ndarray:
         """Slice out one unit's parameters: its kinetic network block, then (for
-        a flow-bearing unit) its appended flow-setpoint block."""
+        a flow-bearing unit) its appended flow-setpoint block.
+
+        One RHS step calls this hundreds of times (the flow probe, the
+        concentration probe, the output sweep, the signal bus and the dstate
+        loop each re-request every unit's slice), always with the *same*
+        ``params_full`` object and producing the *same* slice. So the per-unit
+        slices are built once per distinct ``params_full`` and memoised: within
+        a single (traced) RHS evaluation ``params_full`` is one object, so the
+        map is built once and every later request is a dict lookup. Keyed by
+        object identity (``is``), with a strong reference held, so an identity
+        can never be reused for a different array while the map is live.
+        """
+        cache = self.__dict__.get("_params_unit_cache")
+        if cache is None or cache[0] is not params_full:
+            built = {
+                name: self._slice_unit_params(name, params_full)
+                for name in self._unit_order
+            }
+            cache = (params_full, built)
+            self._params_unit_cache = cache
+        return cache[1][unit_name]
+
+    def _slice_unit_params(
+        self, unit_name: str, params_full: jnp.ndarray
+    ) -> jnp.ndarray:
+        """Compute one unit's parameter slice (uncached; see
+        :meth:`_params_for_unit`)."""
         unit = self.units[unit_name]
         net = getattr(unit, "network", None)
         if net is None:
             kinetic = jnp.zeros((0,))
         else:
             start, size = self._parameter_layout.network_param_blocks[net.name]
-            kinetic = jax.lax.dynamic_slice(params_full, (start,), (size,))
+            # ``start``/``size`` are static Python ints, so a static slice lets
+            # XLA constant-fold the index instead of emitting a dynamic_slice op.
+            kinetic = params_full[start:start + size]
         flow_block = self._parameter_layout.unit_flow_blocks.get(unit_name)
         if flow_block is None:
             return kinetic
@@ -1553,11 +1581,11 @@ class Plant:
         # Read the unit's flow setpoints from its block -- unless the parameter
         # vector is the kinetic-only length (the pre-flow convention, or a
         # results-level reconstruction passing the same vector the run used): then
-        # fall back to the unit's default setpoints (``dynamic_slice`` would
-        # otherwise silently clamp and read garbage). ``shape`` is static, so this
-        # branch is resolved at trace time.
+        # fall back to the unit's default setpoints (a slice would otherwise
+        # silently clamp and read garbage). ``shape`` is static, so this branch
+        # is resolved at trace time.
         if params_full.shape[0] >= fstart + fsize:
-            flow = jax.lax.dynamic_slice(params_full, (fstart,), (fsize,))
+            flow = params_full[fstart:fstart + fsize]
         else:
             flow = jnp.asarray(self._unit_flow_defaults(self.units[unit_name]),
                                dtype=params_full.dtype)
@@ -1662,11 +1690,12 @@ class Plant:
         states: dict[str, jnp.ndarray] = {}
         for name in self._unit_order:
             start, size = self._state_layout[name]
-            states[name] = jax.lax.dynamic_slice(state_full, (start,), (size,))
+            # ``start``/``size`` are static Python ints; a static slice lets XLA
+            # constant-fold the index rather than emit a dynamic_slice op.
+            states[name] = state_full[start:start + size]
         tstart, tsize = self._temperature_block
         if tsize:
-            states[_TEMPERATURE_KEY] = jax.lax.dynamic_slice(
-                state_full, (tstart,), (tsize,))
+            states[_TEMPERATURE_KEY] = state_full[tstart:tstart + tsize]
         return states
 
     def _temperatures_by_unit(self, states: dict[str, jnp.ndarray]) -> dict:
@@ -2412,8 +2441,12 @@ class Plant:
                         for s in self.influents.values())
         t_seed = jnp.zeros(()) if carries_T else None
 
+        # The influent streams are independent of the probe trial values, so
+        # interpolate them once rather than on every one of the ``n_edges + 1``
+        # forward probe passes.
+        influent = {(None, pn): s.at(t) for pn, s in self.influents.items()}
+
         def forward(c_by_key, T_by_key):
-            influent = {(None, pn): s.at(t) for pn, s in self.influents.items()}
             seeded = {k: Stream(Q=resolved_flows[k], C=c_by_key[k],
                                 network=seed_net[k], T=T_by_key[k]) for k in keys}
             out = self._sweep_outputs(t, states, influent, seeded, params_full,

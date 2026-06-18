@@ -251,6 +251,24 @@ class CompiledNetwork:
     # temperature behaves exactly as if uncorrected.
     temperature_corrections: list = field(default_factory=list)
 
+    # Precomputed, vectorised form of ``temperature_corrections``, grouped by
+    # condition field: a list of ``(condition_field, idx_array, ln_theta_array,
+    # ref_T_array)``. Built once in :meth:`__post_init__` so :meth:`_apply_temperature`
+    # applies one scatter-multiply per condition field, not one per correction.
+    _temp_groups: list = field(default_factory=list, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        grouped: dict[str, tuple[list, list, list]] = {}
+        for idx, ln_theta, ref_T, cond in self.temperature_corrections:
+            idxs, ln_thetas, ref_Ts = grouped.setdefault(cond, ([], [], []))
+            idxs.append(idx)
+            ln_thetas.append(ln_theta)
+            ref_Ts.append(ref_T)
+        self._temp_groups = [
+            (cond, jnp.asarray(idxs), jnp.asarray(ln_thetas), jnp.asarray(ref_Ts))
+            for cond, (idxs, ln_thetas, ref_Ts) in grouped.items()
+        ]
+
     @property
     def n_species(self) -> int:
         return len(self.species)
@@ -560,11 +578,17 @@ class CompiledNetwork:
 
         Returns a new parameter vector with each corrected entry scaled by its
         Arrhenius-style factor. Confined to rate evaluation, so the
-        stoichiometry parameters are untouched.
+        stoichiometry parameters are untouched. Corrections are grouped by
+        condition field (see ``_temp_groups``) and applied as one vectorised
+        scatter-multiply per field rather than one scatter per correction.
         """
-        for idx, ln_theta, ref_T, cond in self.temperature_corrections:
+        for cond, idxs, ln_thetas, ref_Ts in self._temp_groups:
             T = condition_arrays[cond][loc_idx]
-            params = params.at[idx].multiply(jnp.exp(ln_theta * (T - ref_T)))
+            factors = jnp.exp(ln_thetas * (T - ref_Ts))
+            # ``idxs`` are distinct (a parameter carries at most one temperature
+            # correction), so the scatter-multiply has unique indices -- required
+            # for its reverse-mode gradient (scatter_mul VJP needs it).
+            params = params.at[idxs].multiply(factors, unique_indices=True)
         return params
 
     def _augment_conditions(
