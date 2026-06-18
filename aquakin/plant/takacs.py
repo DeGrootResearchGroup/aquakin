@@ -3,9 +3,16 @@
 The clarifier is modelled as a stack of well-mixed layers with vertical
 flux exchange:
 
-- **Soluble species** (e.g. SS, SNH, SNO) don't settle. They are computed
-  by mass balance on the inlet flow split between overflow and underflow:
-  Q_overflow + Q_underflow = Q_in, and C_soluble is identical in both.
+- **Soluble species** (e.g. SS, SNH, SNO) don't settle. By default they are
+  computed by mass balance on the inlet flow split between overflow and
+  underflow: Q_overflow + Q_underflow = Q_in, and C_soluble is identical in
+  both (pass-through, no holdup). With the opt-in ``soluble_holdup=True`` they
+  instead occupy the layers as well-mixed states advected by the bulk flow
+  (convection only, no settling), so the clarifier's liquid volume damps the
+  soluble signal -- the overflow soluble is the top layer, the underflow the
+  bottom. A non-reacting soluble reaches a uniform = feed concentration at
+  steady state (overflow = underflow = feed), so the holdup changes only the
+  dynamic response, not the steady state.
 - **Particulate species** (e.g. XS, XB_H, XB_A) settle at a velocity
   given by the Takács double-exponential function::
 
@@ -125,6 +132,18 @@ class TakacsClarifier(FlowParameterized):
           by the boundary-layer-to-feed TSS ratio. The two modes agree at steady
           state but diverge under dynamic flow, because the lumped form has no
           per-layer composition memory.
+    soluble_holdup : bool
+        If ``True`` (default ``False``), the soluble species also occupy the
+        layers as well-mixed states advected by the bulk flow (no settling), so
+        the clarifier's liquid volume (~``area × height``) damps the soluble
+        effluent signal. The overflow soluble is the top layer, the underflow
+        the bottom; a soluble holdup block of shape ``(n_layers, n_soluble)`` is
+        appended to the tail of the state vector (so the particulate state
+        layout and ``state_size`` are unchanged when this is off). Orthogonal to
+        ``composition_mode``. A non-reacting soluble reaches a uniform = feed
+        concentration at steady state, so this leaves every steady state
+        unchanged and only adds the dynamic hydraulic smoothing (the BSM2
+        ``settler1dv5`` behaviour, where each soluble is carried per layer).
     input_port : str
     overflow_port : str
     underflow_port : str
@@ -153,6 +172,7 @@ class TakacsClarifier(FlowParameterized):
     settling_params: dict[str, float] = field(default_factory=lambda: dict(_BSM1_TAKACS_DEFAULTS))
     tss_factors: dict[str, float] = field(default_factory=lambda: dict(_DEFAULT_TSS_FACTORS))
     composition_mode: str = "per_species"
+    soluble_holdup: bool = False
     input_port: str = "inlet"
     overflow_port: str = "overflow"
     underflow_port: str = "underflow"
@@ -196,6 +216,7 @@ class TakacsClarifier(FlowParameterized):
         self._soluble_indices = [
             i for i in range(self.network.n_species) if i not in self._part_indices
         ]
+        self._n_sol = len(self._soluble_indices)
 
         # The state vector is (n_layers, n_part) flattened into 1-D.
         # Initial state: all zero (clean reactor at start).
@@ -222,10 +243,33 @@ class TakacsClarifier(FlowParameterized):
         self._X_threshold = float(self.settling_params["X_threshold"])
 
     @property
-    def state_size(self) -> int:
+    def _part_block_size(self) -> int:
+        """Size of the particulate portion of the state (the head block)."""
         if self.composition_mode == "lumped_tss":
             return self.n_layers
         return self.n_layers * self._n_part
+
+    @property
+    def state_size(self) -> int:
+        size = self._part_block_size
+        if self.soluble_holdup:
+            size += self.n_layers * self._n_sol
+        return size
+
+    def _unpack(self, state: jnp.ndarray):
+        """Split the flat state into ``(particulate_state, soluble_layered)``.
+
+        The particulate head block keeps its existing layout (per the
+        ``composition_mode``); the soluble holdup, when enabled, is a tail block
+        reshaped to ``(n_layers, n_soluble)``. Returns ``soluble_layered = None``
+        when ``soluble_holdup`` is off.
+        """
+        if not self.soluble_holdup:
+            return state, None
+        pb = self._part_block_size
+        part = state[:pb]
+        sol = state[pb:].reshape((self.n_layers, self._n_sol))
+        return part, sol
 
     @property
     def volume(self) -> float:
@@ -246,6 +290,20 @@ class TakacsClarifier(FlowParameterized):
         return [self.overflow_port, self.underflow_port]
 
     def initial_state(self) -> jnp.ndarray:
+        part_state = self._particulate_initial_state()
+        if not self.soluble_holdup:
+            return part_state
+        # Seed every layer at the network's default soluble concentrations; a
+        # non-reacting soluble relaxes to the feed concentration anyway, so the
+        # seed only affects the initial transient.
+        defaults = self.network.default_concentrations()
+        sol_defaults = jnp.asarray([float(defaults[i]) for i in self._soluble_indices])
+        sol_block = jnp.tile(sol_defaults, self.n_layers)   # (n_layers * n_sol,)
+        return jnp.concatenate([part_state, sol_block])
+
+    def _particulate_initial_state(self) -> jnp.ndarray:
+        """The particulate head block of the initial state (layout per
+        ``composition_mode``); unchanged by ``soluble_holdup``."""
         defaults = self.network.default_concentrations()
         part_defaults = jnp.asarray([float(defaults[i]) for i in self._part_indices])
 
@@ -346,10 +404,11 @@ class TakacsClarifier(FlowParameterized):
         jnp.ndarray
             Scalar total settleable-solids mass (g).
         """
+        part_state, _ = self._unpack(state)
         if self.composition_mode == "lumped_tss":
-            tss_per_layer = state  # the state IS the per-layer TSS
+            tss_per_layer = part_state  # the particulate block IS the per-layer TSS
         else:
-            layered = self._layered(state)  # (n_layers, n_part)
+            layered = self._layered(part_state)  # (n_layers, n_part)
             tss_per_layer = jnp.sum(layered * self._factors_arr[None, :], axis=1)
         layer_volume = self.area * self.height / self.n_layers
         return jnp.sum(tss_per_layer) * layer_volume
@@ -416,8 +475,17 @@ class TakacsClarifier(FlowParameterized):
 
         n_species = self.network.n_species
         sol_idx, part_idx = self._sol_idx_arr, self._part_idx_arr
-        sol_C = s_in.C[sol_idx]
+        part_state, sol_layered = self._unpack(state)
 
+        # Soluble outlets: feed pass-through by default; the held top/bottom
+        # layers when soluble_holdup is on (so the liquid volume has damped them).
+        if self.soluble_holdup:
+            sol_overflow = sol_layered[self.n_layers - 1]
+            sol_underflow = sol_layered[0]
+        else:
+            sol_overflow = sol_underflow = s_in.C[sol_idx]
+
+        state = part_state  # the particulate logic below reads the head block
         if self.composition_mode == "lumped_tss":
             # Particulates carry no per-layer composition memory: each outlet
             # takes the *instantaneous feed* particulate composition scaled by
@@ -445,12 +513,12 @@ class TakacsClarifier(FlowParameterized):
         # loop of scalar scatters): solubles pass through; particulates as above.
         C_overflow = (
             jnp.zeros((n_species,))
-            .at[sol_idx].set(sol_C)
+            .at[sol_idx].set(sol_overflow)
             .at[part_idx].set(part_overflow)
         )
         C_underflow = (
             jnp.zeros((n_species,))
-            .at[sol_idx].set(sol_C)
+            .at[sol_idx].set(sol_underflow)
             .at[part_idx].set(part_underflow)
         )
 
@@ -498,6 +566,8 @@ class TakacsClarifier(FlowParameterized):
         v_up = overflow_Q / self.area
         v_down = underflow_Q / self.area
 
+        part_state, sol_layered = self._unpack(state)
+
         if self.composition_mode == "lumped_tss":
             # A single total-solids variable per layer. The settling velocity is
             # already TSS-based, so the lumped dynamics are the identical Takács
@@ -505,23 +575,33 @@ class TakacsClarifier(FlowParameterized):
             # state as an (n_layers, 1) array with unit TSS factor, run the same
             # helpers, and flatten back. The result equals the per-species
             # dTSS/dt aggregated over species for the same TSS profile.
-            tss = state[:, None]                                  # (n_layers, 1)
+            tss = part_state[:, None]                             # (n_layers, 1)
             settling = self._settling_divergence_tss(tss, X_min, h_layer)
             convection = self._convection_tss(
                 tss, tss_in, Q_in, v_up, v_down, h_layer
             )
-            return (convection + settling).reshape((-1,))
+            part_dstate = (convection + settling).reshape((-1,))
+        else:
+            layered = self._layered(part_state)  # (n_layers, n_part)
+            # The per-layer derivative is convection (bulk up/down transport plus
+            # the feed inflow) plus the Takács settling divergence.
+            settling = self._settling_divergence(layered, X_min, h_layer)
+            convection = self._convection(
+                layered, C_in_part, Q_in, v_up, v_down, h_layer
+            )
+            part_dstate = (convection + settling).reshape((-1,))
 
-        layered = self._layered(state)  # (n_layers, n_part)
+        if not self.soluble_holdup:
+            return part_dstate
 
-        # The per-layer derivative is convection (bulk up/down transport plus
-        # the feed inflow) plus the Takács settling divergence.
-        settling = self._settling_divergence(layered, X_min, h_layer)
-        convection = self._convection(
-            layered, C_in_part, Q_in, v_up, v_down, h_layer
-        )
-        dstate = convection + settling
-        return dstate.reshape((-1,))
+        # Soluble holdup: bulk convection through the layers, no settling (the
+        # feed soluble enters at the feed layer and is carried up/down by the
+        # same v_up/v_down field). The shared _convection serves both blocks.
+        C_in_sol = s_in.C[self._sol_idx_arr]                      # (n_sol,)
+        sol_dstate = self._convection(
+            sol_layered, C_in_sol, Q_in, v_up, v_down, h_layer
+        ).reshape((-1,))
+        return jnp.concatenate([part_dstate, sol_dstate])
 
     def _settling_divergence_tss(
         self, tss: jnp.ndarray, X_min: jnp.ndarray, h_layer: float
@@ -664,15 +744,17 @@ class TakacsClarifier(FlowParameterized):
         h_layer: float,
     ) -> jnp.ndarray:
         """Net convective transport per layer (inflow minus outflow), shape
-        ``(n_layers, n_part)``.
+        ``(n_layers, n_comp)``.
 
         Below the feed the bulk moves down at ``v_down``, above it up at
         ``v_up``; the feed layer takes the inlet and sheds both ways. The zone
-        masks are pure geometry, precomputed in ``__post_init__``.
+        masks are pure geometry, precomputed in ``__post_init__``. Component-count
+        agnostic (inferred from ``layered.shape[1]``) so it serves both the
+        particulate transport and the optional soluble-holdup transport.
         """
         # Padded "layer above"/"layer below" each i; the zero rows give
         # no convective flux across the top/bottom boundaries.
-        zero_row = jnp.zeros((1, self._n_part))
+        zero_row = jnp.zeros((1, layered.shape[1]))
         below = jnp.concatenate([layered[1:, :], zero_row], axis=0)
         above = jnp.concatenate([zero_row, layered[:-1, :]], axis=0)
 

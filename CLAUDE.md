@@ -2735,7 +2735,24 @@ underflow, and tight solids mass balance (verified to machine precision
 against an independent port of the reference BSM1 settler derivative in
 `tests/validation/test_takacs_vs_bsm1_reference.py`). `build_bsm1(use_takacs=
 True)` selects it in the full plant (both clarifiers expose the same ports),
-and `Plant.solve` takes `max_steps`.
+and `Plant.solve` takes `max_steps`. By default the **soluble** species are not
+held in the settler — they pass straight through (overflow = underflow = feed,
+no holdup), the common simplification. The opt-in **`soluble_holdup=True`** makes
+each soluble a per-layer well-mixed state advected by the bulk flow (convection
+only, no settling), so the clarifier's liquid volume (~`area·height`) damps the
+soluble effluent signal — the BSM2 `settler1dv5` behaviour, which carries
+`SNH_1..SNH_10` etc. per layer. The soluble holdup is a tail block of shape
+`(n_layers, n_soluble)` appended to the state (so the particulate layout /
+`state_size` are unchanged when off), orthogonal to `composition_mode`. **It
+leaves every steady state unchanged** — a non-reacting soluble's only transport
+is convection, whose fixed point is the uniform feed concentration (overflow =
+underflow = feed), verified in `tests/integration/test_takacs.py` — so it only
+matters under a dynamic influent, where it smooths the effluent ammonia
+peaks/troughs. This is the structural cause of aquakin's wider dynamic-BSM2
+effluent-NH4 distribution vs the reference: the reactors agree to corr 0.99 but
+the pass-through settler does not damp the soluble signal the way BSM2's
+soluble-carrying settler does (the JRN-056 dynamic validation). `build_bsm2(
+settler_soluble_holdup=True)` enables it plant-wide.
 
 ### Dynamic-solve performance — the stiffness-bound regime and its levers
 

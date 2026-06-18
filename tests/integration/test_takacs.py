@@ -396,6 +396,109 @@ def test_lumped_tss_plant_solve(asm1):
     assert float(derived_TSS(out["underflow"].C, asm1)) > 1.5 * feed_tss
 
 
+def test_soluble_holdup_state_size_and_initial_state(asm1):
+    """Opt-in soluble holdup appends an (n_layers, n_soluble) tail block, leaving
+    the particulate head block (and the no-holdup state_size) unchanged."""
+    kw = dict(network=asm1, area=1500.0, height=4.0, underflow_Q=18446.0)
+    base = TakacsClarifier(name="b", **kw)
+    held = TakacsClarifier(name="h", soluble_holdup=True, **kw)
+    assert held.state_size == base.state_size + held.n_layers * held._n_sol
+    y0 = held.initial_state()
+    assert y0.shape[0] == held.state_size
+    # Head block is byte-identical to the no-holdup initial state.
+    assert bool(jnp.allclose(y0[: base.state_size], base.initial_state()))
+
+
+def test_soluble_holdup_steady_state_invariance(asm1):
+    """A non-reacting soluble at the uniform = feed profile is a fixed point
+    (rhs ~ 0) and both outlets carry the feed concentration -- so soluble holdup
+    leaves every steady state unchanged."""
+    from aquakin.plant.streams import Stream
+
+    held = TakacsClarifier(name="h", network=asm1, area=1500.0, height=4.0,
+                           underflow_Q=18446.0, soluble_holdup=True)
+    C = asm1.concentrations({"SS": 50.0, "SNH": 25.0})
+    inlet = Stream(Q=jnp.asarray(20000.0), C=C, network=asm1)
+    params = asm1.default_parameters()
+    sol_idx = held._sol_idx_arr
+    # State: particulate blanket seed + every soluble layer at the feed value.
+    part0 = held._particulate_initial_state()
+    sol_feed = jnp.tile(C[sol_idx], held.n_layers)
+    y = jnp.concatenate([part0, sol_feed])
+    _, sol_d = held._unpack(held.rhs(jnp.asarray(0.0), y, {"inlet": inlet}, params))
+    assert float(jnp.max(jnp.abs(sol_d))) < 1e-9      # soluble block is at rest
+    outs = held.compute_outputs(jnp.asarray(0.0), y, {"inlet": inlet}, params)
+    assert bool(jnp.allclose(outs["overflow"].C[sol_idx], C[sol_idx]))
+    assert bool(jnp.allclose(outs["underflow"].C[sol_idx], C[sol_idx]))
+
+
+def test_soluble_holdup_damps_vs_passthrough(asm1):
+    """With holdup the overflow soluble is the (lagged) top layer, not the
+    instantaneous feed: perturbing a held layer shifts the outlet, and a plant
+    solve shows the overflow soluble lagging a step change that the no-holdup
+    clarifier passes through instantly."""
+    from aquakin.plant.streams import Stream
+
+    held = TakacsClarifier(name="h", network=asm1, area=1500.0, height=4.0,
+                           underflow_Q=18446.0, soluble_holdup=True)
+    C = asm1.concentrations({"SS": 50.0})
+    inlet = Stream(Q=jnp.asarray(20000.0), C=C, network=asm1)
+    params = asm1.default_parameters()
+    sol_idx = held._sol_idx_arr
+    part0 = held._particulate_initial_state()
+    y = jnp.concatenate([part0, jnp.tile(C[sol_idx], held.n_layers)])
+    base_over = held.compute_outputs(jnp.asarray(0.0), y, {"inlet": inlet}, params)[
+        "overflow"].C[sol_idx]
+    # Bump the first soluble in the TOP layer (overflow boundary) by +5.
+    top0 = held._part_block_size + (held.n_layers - 1) * held._n_sol
+    y_pert = y.at[top0].add(5.0)
+    pert_over = held.compute_outputs(jnp.asarray(0.0), y_pert, {"inlet": inlet}, params)[
+        "overflow"].C[sol_idx]
+    assert float(pert_over[0] - base_over[0]) == pytest.approx(5.0, rel=1e-9)
+
+    # Plant solve: step the influent SS up; the held overflow must lag the feed
+    # at a short time (whereas a no-holdup clarifier equals the feed instantly).
+    Q_in, overflow = 36892.0, 18446.0
+    C_lo = asm1.concentrations({"XB_H": 2200.0, "XI": 1100.0, "SS": 10.0})
+    C_hi = asm1.concentrations({"XB_H": 2200.0, "XI": 1100.0, "SS": 200.0})
+    plant = Plant("clar_hold")
+    clar = TakacsClarifier(name="clar", network=asm1, area=1500.0, height=4.0,
+                           underflow_Q=overflow, soluble_holdup=True)
+    plant.add_unit(clar)
+    plant.add_influent("feed", InfluentSeries(
+        t=jnp.asarray([0.0, 0.0, 50.0]), Q=jnp.full((3,), Q_in),
+        C=jnp.stack([C_lo, C_hi, C_hi]), network=asm1), to="clar.inlet")
+    sol = plant.solve(t_span=(0.0, 0.05), t_eval=jnp.asarray([0.0, 0.05]),
+                      rtol=1e-5, atol=1e-4, max_steps=200_000)
+    assert jnp.all(jnp.isfinite(sol.state))
+    SS_idx = asm1.species_index["SS"]
+    out = clar.compute_outputs(
+        jnp.asarray(0.05), sol.state[-1],
+        {"inlet": Stream(Q=jnp.asarray(Q_in), C=C_hi, network=asm1)},
+        plant.default_parameters())
+    # Overflow SS still well below the 200 feed shortly after the step: holdup.
+    assert float(out["overflow"].C[SS_idx]) < 150.0
+
+
+def test_soluble_holdup_grad_through_rhs(asm1):
+    """jax.grad flows through the soluble-holdup rhs without NaNs."""
+    import jax
+    from aquakin.plant.streams import Stream
+
+    held = TakacsClarifier(name="h", network=asm1, area=1500.0, height=4.0,
+                           overflow_Q=18061.0, soluble_holdup=True)
+    C = asm1.concentrations({"XB_H": 2200.0, "XI": 1100.0, "SS": 40.0, "SNH": 25.0})
+    inlet = Stream(Q=jnp.asarray(36892.0), C=C, network=asm1)
+    state = held.initial_state()
+
+    def loss(p):
+        d = held.rhs(jnp.asarray(0.0), state, {"inlet": inlet}, p)
+        return jnp.sum(d ** 2)
+
+    g = jax.grad(loss)(asm1.default_parameters())
+    assert bool(jnp.all(jnp.isfinite(g)))
+
+
 def test_controlled_split_helper():
     """Shared overflow/underflow split helper used by both clarifiers."""
     from aquakin.plant._flow_split import (
