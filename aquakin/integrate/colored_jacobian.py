@@ -104,14 +104,29 @@ def jacobian_sparsity_pattern(
 ) -> np.ndarray:
     """Conservative (superset) sparsity pattern of ``J = d rhs / dy`` near ``y0``.
 
-    The pattern is the union of the numerical nonzeros of ``J`` over ``n_probe``
-    **strictly-positive** probe states. Probing at positive states (every
-    component floored above zero, then log-normally jittered) is essential: at a
-    state with a *depleted* component (a species at zero), the columns/rows that
-    couple through that component vanish, so a probe there misses structurally
-    present entries. Floored-positive probes reveal every term that can be
-    nonzero. The full diagonal is always included (the implicit-stage residual
-    ``I - c.J`` has a nonzero diagonal regardless of ``J``).
+    The pattern is the union of the numerical nonzeros of ``J`` over a set of
+    **strictly-positive** probe states drawn at two scales, plus ``y0`` itself.
+    Two failure modes must both be covered, and a single probe scale covers only
+    one:
+
+    - *Depleted-at-y0 components.* A species sitting at zero zeroes the
+      columns/rows that couple through it, so a probe there misses structurally
+      present entries. Lifting every component to ``|y0| + 1`` and jittering
+      reveals those couplings (the historical scheme).
+    - *Small-natural-scale components.* A species whose physical scale is far
+      below one (the ADM1 dissolved hydrogen ``S_h2`` sits at ~``1e-7`` at its
+      inhibition knee, where its Jacobian column is enormous) is pushed by the
+      ``|y0| + 1`` lift into a *saturated* regime where its column goes flat and
+      its huge near-zero gradient vanishes. Probing each component around its
+      **own** magnitude keeps such a state in its physical regime so its column
+      is captured.
+
+    The pattern therefore unions, at ``rel_tol`` relative threshold: the
+    Jacobian at ``y0`` (the actual operating regime, which makes the start-state
+    guard pass by construction), ``n_probe`` own-scale multiplicative-jitter
+    probes, and ``n_probe`` lifted multiplicative-jitter probes. The full
+    diagonal is always included (the implicit-stage residual ``I - c.J`` has a
+    nonzero diagonal regardless of ``J``).
 
     The result is a superset of the true pattern with overwhelming reliability;
     a missed entry costs solver steps, not accuracy, and the setup-time guard
@@ -124,7 +139,8 @@ def jacobian_sparsity_pattern(
     y0 : jnp.ndarray
         Reference state, shape ``(n,)``; sets the per-component probe scale.
     n_probe : int, optional
-        Number of probe states (default 24).
+        Number of probe states *per scale* (default 24); the total is
+        ``2*n_probe + 1`` (own-scale, lifted, and ``y0``).
     seed : int, optional
         RNG seed for reproducibility (default 0).
     rel_tol : float, optional
@@ -139,13 +155,29 @@ def jacobian_sparsity_pattern(
     n = y0.shape[0]
     fj = jax.jit(jax.jacfwd(rhs))
     rng = np.random.default_rng(seed)
-    base = np.abs(np.asarray(y0)) + 1.0          # strictly-positive per-component floor
+    ay0 = np.abs(np.asarray(y0))
+    # Own-scale = each component's own magnitude; an exactly-zero component has no
+    # scale to jitter around, so it is floored to a tiny fraction of the typical
+    # nonzero magnitude (small enough to stay in the depleted regime, positive so
+    # the rate kinetics are well defined).
+    typ = float(np.median(ay0[ay0 > 0])) if np.any(ay0 > 0) else 1.0
+    own = np.where(ay0 > 0.0, ay0, typ * 1e-6)
+    lifted = ay0 + 1.0                            # lift depleted components above 1
     P = np.eye(n, dtype=bool)
-    for _ in range(n_probe):
-        ys = jnp.asarray(base * np.exp(rng.normal(0.0, 1.0, size=n)))   # always > 0
-        J = np.asarray(fj(ys))
-        scale = np.abs(J).max() + 1e-300
-        P |= np.abs(J) > rel_tol * scale
+
+    def _accumulate(ys):
+        J = np.asarray(fj(jnp.asarray(ys)))
+        nonlocal P
+        P |= np.abs(J) > rel_tol * (np.abs(J).max() + 1e-300)
+
+    # The actual operating regime at y0 (zeros lifted to the tiny own floor so
+    # the rates are evaluated at a strictly-positive state near y0). This makes
+    # the start-state guard pass and captures small-natural-scale columns.
+    _accumulate(np.where(ay0 > 0.0, ay0, own))
+    for _ in range(n_probe):                      # own-scale: physical regime
+        _accumulate(own * np.exp(rng.normal(0.0, 1.0, size=n)))
+    for _ in range(n_probe):                      # lifted: depleted-coupling regime
+        _accumulate(lifted * np.exp(rng.normal(0.0, 1.0, size=n)))
     return P
 
 
