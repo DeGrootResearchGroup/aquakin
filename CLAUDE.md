@@ -3148,6 +3148,45 @@ is what production simulators use to snap to steady state on any topology.
   under a `jit`/`grad` trace the diagnostics are traced values and the fallback
   is skipped (only the differentiable `state` is used there). Constant influent
   is assumed (the residual samples the influent at `influent_time`, default 0).
+- **`steady_state(..., colored_jacobian=True)` — sparse (colored-AD) PTC
+  Jacobian.** PTC forms the full plant `dF/dy` every Newton step (~tens of times
+  for BSM2), the *same* block-sparse object the integrator's implicit-stage
+  (`Plant.solve(colored_jacobian=True)`) and the `stable_adjoint` backward color.
+  This flag materializes it by column compression (one Jacobian-vector product
+  per color — BSM2 46 colors vs 167 states) instead of dense `jax.jacfwd`,
+  reconstructing the same matrix on the sparsity-pattern support: **bit-identical
+  to dense on a single-network plant** (BSM1, the recycle reconstruction is
+  exact) and **identical to PTC tolerance (~1e-7) on a multi-network plant**
+  (BSM2 — the colored `linearize`+vmap materialization orders the recycle
+  linear-solve arithmetic differently from dense `jacfwd`, a round-off difference
+  well inside the 1e-6 convergence tolerance; same 83 iterations). The injection
+  point is `ptc_forward`/`solve_steady_state`'s new `jac_fn=(F, y) -> dF/dy`
+  argument; `Plant.steady_state` builds the colored materializer once concretely
+  (`_colored_steady_jacobian_builder`, reusing the `colored_jacobian` module's
+  pattern/coloring) and **guards** it against the dense Jacobian at the warm
+  start, **falling back to dense** on a mismatch or under a `jit`/`grad` trace
+  (the probe needs concrete arrays). To stay leak-free it builds the pattern from
+  a **cached-recycle-map** forward rhs (the per-call recycle probing in
+  `_rhs(recycle_map=None)` leaks a traced intermediate under the pattern-probe
+  `jit` on a multi-network plant); this cached-map rhs (`primal_rhs`) is also used
+  for the **forward iteration** (identical result, faster), while the one-shot
+  implicit-function-theorem *gradient* keeps the **map-recomputing** rhs so a
+  flow-setpoint parameter retains its `d(map)/d(param)` term (the #366 split).
+  **PTC is a better fit for coloring than the dynamic solve**: it marches to a
+  single operating point in a narrow neighbourhood, so the start-state sparsity
+  pattern stays valid throughout — unlike the 609-day dynamic run's wide load
+  excursion. **Measured (BSM2, 167 states / 46 colors):** the per-iteration
+  Jacobian build is **2.4× cheaper** (0.62 → 0.26 ms) and the whole PTC solve,
+  **run-only under `jit`, is 1.87× faster** (58 → 31 ms). **But the un-jitted
+  one-shot `steady_state` call is compile/trace-bound, not Jacobian-build-bound**
+  (the `while_loop` re-traces per call), so the run-phase saving is invisible
+  there and the one-time pattern build (~49 dense probes) makes a single
+  `steady_state(colored_jacobian=True)` call *slower* (~0.8×). The win therefore
+  materializes only when the solve is run **repeatedly under `jit`** (differentiable
+  design sweeps / optimization loops, where compilation is amortized) or for a
+  much larger plant. The implicit-function-theorem *gradient* Jacobian stays
+  dense (a single evaluation). **Default off; opt in for the jitted/amortized
+  regime, not for a one-shot steady state.**
 
 **Default `atol` is now per-component, scaled to the state magnitudes.** When
 `atol` is omitted, **every single-concentration-vector reactor**

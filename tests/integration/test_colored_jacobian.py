@@ -312,3 +312,70 @@ def test_colored_bsm2_soluble_holdup_no_fallback():
     a, b = np.asarray(s_def.state), np.asarray(s_col.state)
     assert np.all(np.isfinite(b))
     assert np.max(np.abs(a - b) / (np.abs(a) + 1e-3)) < 2e-2
+
+
+# --------------------------------------------------------------------------
+# Colored Jacobian in the PTC steady-state solve (Plant.steady_state).
+# PTC forms the same plant dF/dy each Newton step; coloring it gives a
+# bit-identical operating point in C colored JVPs instead of n. PTC's narrow
+# operating-point neighbourhood makes the warm-start pattern valid throughout.
+# --------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_colored_ptc_matches_dense_bsm1(bsm1):
+    """Colored PTC reaches the same BSM1 steady state as dense PTC, the guard
+    passes (colored J == dense J at the warm start), and the IFT gradient still
+    flows. The colored matrix equals the dense one on the pattern support, so the
+    PTC steps -- iteration count, residual, state -- are identical."""
+    plant, y0 = bsm1()
+    params = plant.default_parameters()
+
+    dense = plant.steady_state(params, y0=y0)
+    colored = plant.steady_state(params, y0=y0, colored_jacobian=True)
+
+    builder, n_colors, ok = plant._colored_steady_builder
+    assert ok is True and builder is not None          # guard passed
+    assert n_colors < y0.shape[0]                       # actually compressed
+    a, b = np.asarray(dense.state), np.asarray(colored.state)
+    assert np.all(np.isfinite(b))
+    # Identical step sequence -> identical result (not just within tolerance).
+    assert int(dense.iterations) == int(colored.iterations)
+    assert np.max(np.abs(a - b) / (np.abs(a) + 1e-12)) < 1e-10
+
+    # IFT parameter gradient through the colored steady state stays finite (the
+    # gradient Jacobian is dense; under the trace the colored build is skipped).
+    g = jax.grad(lambda p: plant.steady_state(
+        p, y0=y0, colored_jacobian=True).state.sum())(params)
+    assert np.all(np.isfinite(np.asarray(g)))
+
+
+@pytest.mark.slow
+def test_colored_ptc_matches_dense_bsm2():
+    """The real ~45-color case: colored PTC reaches the published BSM2 steady
+    state identically to dense PTC, with the guard passing on the full
+    two-network plant."""
+    from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.bsm.bsm2 import (
+        BSM2_CONSTANT_INFLUENT_T, build_bsm2, bsm2_asm1_network,
+        bsm2_constant_influent, bsm2_parameters)
+
+    asm1 = bsm2_asm1_network(); adm1 = aquakin.load_network("adm1")
+    params = bsm2_parameters(asm1, adm1)
+    p = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    p.add_influent("feed", bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
+    y0 = bsm2_warm_start(p)
+
+    dense = p.steady_state(params, y0=y0)
+    colored = p.steady_state(params, y0=y0, colored_jacobian=True)
+
+    builder, n_colors, ok = p._colored_steady_builder
+    assert ok is True and builder is not None
+    assert n_colors < y0.shape[0]                       # ~46 vs 167
+    a, b = np.asarray(dense.state), np.asarray(colored.state)
+    assert np.all(np.isfinite(b))
+    assert bool(dense.converged) and bool(colored.converged)
+    # The colored linearize+vmap materialization differs from dense jacfwd only
+    # by round-off in the multi-network recycle solve, so the converged states
+    # agree to PTC tolerance (~1e-7) rather than bit-for-bit (cf. the
+    # single-network BSM1, which is exact).
+    assert np.max(np.abs(a - b) / (np.abs(a) + 1e-9)) < 1e-5
