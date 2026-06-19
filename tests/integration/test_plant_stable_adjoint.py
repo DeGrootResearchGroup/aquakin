@@ -129,7 +129,13 @@ def _solve_kwargs():
     # small max_steps suffices. Under gradient="stable_adjoint" max_steps also
     # sizes the backward scan's trajectory buffer, so keeping it tight is what
     # keeps the reverse pass cheap.
-    return dict(rtol=1e-5, atol=1e-3, max_steps=2_000)
+    #
+    # colored_jacobian=False (not the "auto" default): these heavy BSM2 tests
+    # check gradient *correctness* (vs FD / jax_adjoint), which the dense backward
+    # does; forcing dense keeps them off the (much slower to COMPILE) colored
+    # backward and skips the auto build-time measurement. Coloring itself is
+    # covered by the fast BSM1 tests (test_stable_adjoint_colored_jacobian_*).
+    return dict(rtol=1e-5, atol=1e-3, max_steps=2_000, colored_jacobian=False)
 
 
 @pytest.mark.validation
@@ -203,7 +209,7 @@ def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     gidx = plant.parameter_index("underflow_split.ras")   # RAS recycle flow
     theta0 = float(base[gidx])
     T = 0.3
-    kw = dict(rtol=1e-6, atol=1e-3, max_steps=20_000)
+    kw = dict(rtol=1e-6, atol=1e-3, max_steps=20_000, colored_jacobian=False)
 
     def g(theta):
         p = base.at[gidx].set(theta)
@@ -227,6 +233,85 @@ def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     plant._jit_cache.clear()
     grad_probed = float(jax.grad(g)(theta0))            # pre-#366 path
     assert grad_cached == grad_probed                   # bit-identical
+
+
+@pytest.mark.validation
+@pytest.mark.heavy
+def test_stable_adjoint_colored_jacobian_matches_dense():
+    """``colored_jacobian=True`` colors the per-step ``df/dy`` Jacobian build in
+    the stable_adjoint **backward** pass (its dominant cost for a large plant).
+    The colored Jacobian equals the dense one on its superset sparsity pattern,
+    so the gradient must match the dense-Jacobian gradient. Guards the colored
+    backward path: a missed pattern entry would change the gradient by O(1) in a
+    component, which this catches; the float-order difference of the exact case
+    is ~1e-15 here."""
+    asm1 = aquakin.load_network("asm1")
+    plant = build_bsm1(asm1)
+    plant.add_influent("influent", load_bsm1_influent("dry", asm1))
+    y0 = bsm1_warm_start(plant)
+    base = plant.default_parameters()
+    gidx = plant.parameter_index("asm1.muH")
+    theta0 = float(base[gidx])
+    T = 0.3
+    kw = dict(rtol=1e-6, atol=1e-3, max_steps=20_000)
+
+    def g(theta, colored):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve((0.0, T), t_eval=jnp.array([0.15, T]), params=p, y0=y0,
+                          gradient="stable_adjoint", colored_jacobian=colored, **kw)
+        return jnp.sum(sol.state ** 2)
+
+    # A concrete solve derives + guards the colored backward Jacobian builder.
+    _ = g(theta0, True)
+    builder = plant._colored_adjoint_builder
+    assert builder is not None and builder[2] is True       # guard passed (ok)
+    assert builder[1] < plant._total_state_size             # fewer colors than states
+
+    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
+    g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
+    assert np.isfinite(g_colored)
+    assert g_colored != 0.0
+    # Equal to the dense-Jacobian gradient (the colored Jacobian is exact on the
+    # superset pattern; only float summation order differs).
+    assert g_colored == pytest.approx(g_dense, rel=1e-8)
+
+
+@pytest.mark.validation
+@pytest.mark.heavy
+def test_stable_adjoint_colored_jacobian_auto_off_for_small_plant():
+    """``colored_jacobian="auto"`` (the default) measures the colored vs dense
+    build time and enables coloring only when it pays. On a small plant (BSM1) the
+    colored build is *slower* than dense, so auto picks dense -- and the gradient
+    is then the dense gradient. Guards the auto decision and the accessor."""
+    asm1 = aquakin.load_network("asm1")
+    plant = build_bsm1(asm1)
+    plant.add_influent("influent", load_bsm1_influent("dry", asm1))
+    y0 = bsm1_warm_start(plant)
+    base = plant.default_parameters()
+    gidx = plant.parameter_index("asm1.muH")
+    theta0 = float(base[gidx])
+    T = 0.3
+    kw = dict(rtol=1e-6, atol=1e-3, max_steps=20_000)
+
+    def g(theta, colored):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve((0.0, T), t_eval=jnp.array([0.15, T]), params=p, y0=y0,
+                          gradient="stable_adjoint", colored_jacobian=colored, **kw)
+        return jnp.sum(sol.state ** 2)
+
+    # A concrete solve under the default "auto" derives the coloring and measures
+    # the build speedup; on BSM1 the colored build is the slower one.
+    assert plant.colored_jacobian_decision() is None        # not decided yet
+    _ = g(theta0, "auto")
+    choice, ratio = plant.colored_jacobian_decision()
+    assert choice == "dense"
+    assert ratio < plant._COLORED_BACKWARD_MARGIN           # colored build not cheaper
+
+    # auto picked dense, so its gradient equals the explicit-dense gradient.
+    g_auto = float(jax.grad(lambda th: g(th, "auto"))(theta0))
+    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
+    assert np.isfinite(g_auto) and g_auto != 0.0
+    assert g_auto == pytest.approx(g_dense, rel=1e-10)
 
 
 @pytest.mark.validation
@@ -353,7 +438,7 @@ def test_stable_adjoint_solve_is_jittable():
     # A tight max_steps keeps the discrete-adjoint trajectory buffer -- and so the
     # peak memory of this jit-plus-gradient test -- small; the warm-started 3-day
     # solve takes far fewer than 600 steps.
-    kw = dict(rtol=1e-5, atol=1e-3, max_steps=600)
+    kw = dict(rtol=1e-5, atol=1e-3, max_steps=600, colored_jacobian=False)
 
     def g(theta):
         p = base.at[gidx].set(theta)
@@ -386,7 +471,8 @@ def test_stable_adjoint_forward_solve_is_cached():
     # Tight max_steps (3-day solve uses far fewer) to keep the adjoint buffer
     # and so this test's peak memory small.
     kw = dict(t_span=(0.0, T), t_eval=jnp.array([T]), y0=y0,
-              gradient="stable_adjoint", rtol=1e-5, atol=1e-3, max_steps=600)
+              gradient="stable_adjoint", rtol=1e-5, atol=1e-3, max_steps=600,
+              colored_jacobian=False)
 
     def _sa_keys():
         return [k for k in plant._jit_cache if k[0] == "stable_adjoint"]

@@ -387,6 +387,7 @@ def esdirk_adjoint_solve(
     newton_iters: int = _DEFAULT_NEWTON_ITERS,
     time_dependent: bool = False,
     primal_rhs: Optional[Callable] = None,
+    jacobian_builder: Optional[Callable] = None,
 ) -> jnp.ndarray:
     """Cap-free reverse-mode gradient through a high-order ESDIRK solve.
 
@@ -434,6 +435,20 @@ def esdirk_adjoint_solve(
         :func:`jax.lax.stop_gradient` any ``params``-derived value it closes over
         in ``primal_rhs`` (otherwise the closed-over tracer escapes the custom
         VJP). ``None`` (default) uses ``rhs`` for everything (the historic path).
+    jacobian_builder : callable, optional
+        Builder ``(f, y) -> J`` for the per-stage ``df/dy`` Jacobian used in the
+        backward pass (the Newton stage recompute and the transposed-stage
+        solves), where ``f`` is the (autonomized) ``primal`` right-hand side at
+        fixed parameters. ``None`` (default) builds the **dense** Jacobian with
+        ``jax.jacfwd`` (the historic path, bit-identical). A sparsity-**colored**
+        builder -- one Jacobian-vector product per color instead of one per state
+        -- cuts the dominant backward cost for a large, block-sparse plant: the
+        backward is ~80% Jacobian builds. The builder MUST return a ``J`` equal to
+        the dense Jacobian (the colored construction is exact when its sparsity
+        pattern is a superset of the true nonzeros; the caller guards this at the
+        start state and falls back to dense on a mismatch), so the discrete
+        adjoint -- and the gradient -- is unchanged. Affects only the backward
+        Jacobian build; the forward solve and the parameter vjp are untouched.
 
     Returns
     -------
@@ -464,6 +479,16 @@ def esdirk_adjoint_solve(
     diag = jnp.asarray(diag_np)
     n = y0.shape[0]
 
+    # The df/dy stage Jacobian builder: dense ``jacfwd`` by default, or the
+    # caller's sparsity-colored builder ``(f, y) -> J``. ``jacobian_builder is
+    # None`` is a trace-time Python branch, so the dense path is bit-identical to
+    # the historic code. ``J`` must equal the dense Jacobian (the colored builder
+    # carries a superset sparsity pattern, guarded by the caller).
+    def _build_jac(f, y):
+        if jacobian_builder is None:
+            return jax.jacfwd(f)(y)
+        return jacobian_builder(f, y)
+
     def _stages(y_n, params_, dt):
         # Recompute the ESDIRK stage values Y_i by solving each stage equation
         # Y_i = pred_i + dt*gamma_i f(Y_i) (explicit first stage solves trivially).
@@ -479,7 +504,7 @@ def esdirk_adjoint_solve(
                 gi = diag[i]
                 def newton(Y, _):
                     G = Y - pred - dt * gi * f(Y)
-                    J = jax.jacfwd(f)(Y)
+                    J = _build_jac(f, Y)
                     return Y - jnp.linalg.solve(jnp.eye(n) - dt * gi * J, G), None
                 Yi, _ = jax.lax.scan(newton, Yi, None, length=newton_iters)
             Ys.append(Yi)
@@ -493,7 +518,8 @@ def esdirk_adjoint_solve(
         Ys = _stages(y_prev_k, params_, dt)
         # df/dy stage Jacobians from ``primal`` (cached sub-computation); the
         # df/dtheta vjp below from ``rhs`` (recomputes it -> exact dM/dtheta).
-        Js = jax.vmap(lambda Y: jax.jacfwd(lambda y: primal(0.0, y, params_))(Y))(Ys)
+        f = lambda y: primal(0.0, y, params_)
+        Js = jax.vmap(lambda Y: _build_jac(f, Y))(Ys)
         Ybar = [None] * s
         pbar = jnp.zeros_like(params_)
         for i in range(s - 1, -1, -1):

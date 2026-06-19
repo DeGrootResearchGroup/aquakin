@@ -569,6 +569,14 @@ class Plant:
         # means the setup guard found the colored Jacobian disagreed with the
         # dense one at the start state, so the solve falls back to the dense path.
         self._colored_root_finder: Optional[tuple] = None
+        # Colored-Jacobian builder for the stable_adjoint BACKWARD pass (built
+        # once, concretely, on the first colored_jacobian=True stable_adjoint
+        # solve): (builder_or_None, n_colors, ok). Distinct from
+        # _colored_root_finder (the forward root finder, n states) -- this colors
+        # the AUGMENTED (time-carrying, n+1) primal rhs the discrete adjoint
+        # differentiates. ``ok`` False => the guard found a colored/dense mismatch
+        # at the start state, so the backward falls back to dense jacfwd.
+        self._colored_adjoint_builder: Optional[tuple] = None
         # One-time guard for materialising the DO controllers a CSTRUnit's
         # closed-loop Aeration spec requires (see _materialize_aeration).
         self._aeration_materialized: bool = False
@@ -2619,6 +2627,141 @@ class Plant:
         # Swap the base solver's chord root finder for the colored one.
         return eqx.tree_at(lambda s: s.root_finder, base, rf)
 
+    def _colored_adjoint_jacobian_builder(self, t0, y0, params, rtol, atol, *,
+                                          mode):
+        """Derive (once, concretely) the sparsity-colored ``df/dy`` Jacobian
+        builder for the stable_adjoint backward pass, plus its measured benefit.
+
+        The cap-free reverse-mode backward is dominated (~82% on BSM2) by per-step
+        dense ``df/dy`` Jacobian builds -- one Jacobian-vector product per state.
+        For a large block-sparse plant, coloring the Jacobian computes it in one
+        JVP per *color* (BSM2: ~45 vs 167), cutting that cost while staying exact
+        (the colored matrix equals the dense one when the pattern is a superset).
+        But for a *small* plant the colored build's overhead (the per-color scatter)
+        exceeds the saving and it is *slower* (BSM1: ~2x slower per build), so the
+        win is plant-dependent.
+
+        Caches ``(builder_or_None, n_colors, ok, ratio)`` on
+        ``_colored_adjoint_builder``: the augmented colored builder, the color
+        count, whether the start-state guard passed, and -- for ``mode="auto"`` --
+        the measured **jitted build-time speedup** ``ratio = t_dense / t_colored``
+        (``> 1`` means the colored build is cheaper, so coloring helps). ``ratio``
+        is ``None`` for ``mode=True`` (forced; no measurement) or a failed guard.
+
+        Built for the **augmented** (time-carrying, ``n+1``) primal right-hand side
+        the discrete adjoint actually differentiates, mirroring
+        :meth:`_colored_jacobian_solver`. Guarded against the dense Jacobian at the
+        start state; a mismatch falls back to dense (with a warning). Skipped under
+        tracing (the probe needs concrete arrays).
+        """
+        from aquakin.integrate.colored_jacobian import (
+            build_colored_root_finder, colored_jacobian_max_error)
+        from aquakin.integrate.discrete_adjoint import _autonomize
+
+        if self._colored_adjoint_builder is None:
+            if (isinstance(params, jax.core.Tracer)
+                    or isinstance(y0, jax.core.Tracer)):
+                return None             # can't build under trace; fall back
+            t0f = float(t0)
+            rmap = self._maybe_recycle_map(
+                jnp.asarray(t0f), self._split_state(y0), params)
+
+            def primal(t, y, p):
+                return self._rhs(t, y, p, recycle_map=rmap)
+
+            # The discrete adjoint integrates the autonomized [y; tau] state, so
+            # the backward Jacobians -- and hence the coloring -- are of that.
+            rhs_aug, y0_aug = _autonomize(primal, y0, t0f)
+
+            def rhs_aug_y(ya):
+                return rhs_aug(0.0, ya, params)
+
+            # rtol/atol only set the (unused) chord tolerances on the returned
+            # object; the seed matrix / coloring / pattern is all we use. A scalar
+            # atol avoids augmenting the per-component vector for the probe.
+            atol_s = float(jnp.max(jnp.asarray(atol)))
+            rf, n_colors = build_colored_root_finder(
+                rhs_aug_y, y0_aug, rtol=10.0 * rtol, atol=10.0 * atol_s)
+            err = colored_jacobian_max_error(rhs_aug_y, y0_aug, rf)
+            jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs_aug_y)(y0_aug)))) + 1e-300
+            ok = err <= 1e-8 * jscale
+            if not ok:
+                warnings.warn(
+                    "colored_jacobian (stable_adjoint): the derived backward "
+                    f"Jacobian sparsity pattern disagrees with the dense Jacobian "
+                    f"at the start state (max abs error {err:.2e}, scale "
+                    f"{jscale:.2e}); falling back to dense jacfwd. This indicates "
+                    "the structural pattern missed a nonzero -- please report it.",
+                    RuntimeWarning, stacklevel=2)
+
+            def builder(f, y):
+                # One JVP per color through the linearized f, scattered back to
+                # the (superset) pattern -- equal to jax.jacfwd(f)(y) on the
+                # pattern's support.
+                _, lin = jax.linearize(f, y)
+                JS = jax.vmap(lin, in_axes=1, out_axes=1)(rf.seed_matrix)
+                return JS[:, rf.color_of] * rf.pattern
+
+            ratio = None
+            if ok and mode == "auto":
+                ratio = self._colored_build_speedup(rhs_aug_y, y0_aug, builder)
+            self._colored_adjoint_builder = (
+                builder if ok else None, n_colors, ok, ratio)
+
+        return self._colored_adjoint_builder[0]
+
+    @staticmethod
+    def _colored_build_speedup(rhs_aug_y, y0_aug, builder):
+        """Measured jitted-build speedup ``t_dense / t_colored`` of the colored
+        ``df/dy`` build vs dense ``jacfwd``, at the start state.
+
+        This *is* the backward GO/NO-GO: the backward rebuilds ``df/dy`` ~79x per
+        step, so the sign of (dense - colored) build time is the sign of the
+        backward speedup. The decision must use **jitted** times (eager timing is
+        misleading -- XLA fuses the colored build's scatter away). Compiled once
+        here; the few-second compile is one-time and cached, negligible against a
+        calibration.
+        """
+        import time
+
+        dense = jax.jit(lambda y: jax.jacfwd(rhs_aug_y)(y))
+        colored = jax.jit(lambda y: builder(rhs_aug_y, y))
+        dense(y0_aug).block_until_ready()      # compile
+        colored(y0_aug).block_until_ready()
+
+        def _best(fn):
+            best = float("inf")
+            for _ in range(20):
+                t0 = time.perf_counter()
+                jax.block_until_ready(fn(y0_aug))
+                best = min(best, time.perf_counter() - t0)
+            return best
+
+        return _best(dense) / max(_best(colored), 1e-12)
+
+    # Backward colored Jacobian is auto-enabled when its measured build speedup
+    # clears this margin (colored build at least this much cheaper than dense).
+    _COLORED_BACKWARD_MARGIN = 1.05
+
+    def colored_jacobian_decision(self):
+        """Report the auto colored-backward-Jacobian decision (after a concrete
+        ``gradient="stable_adjoint"`` solve), or ``None`` if not yet decided.
+
+        Returns ``("colored" | "dense", detail)`` where ``detail`` is the measured
+        build speedup ``t_dense/t_colored`` (``mode="auto"``), the string
+        ``"forced"`` (``colored_jacobian=True``), or ``"guard failed"``.
+        """
+        cab = self._colored_adjoint_builder
+        if cab is None:
+            return None
+        _builder, _nc, ok, ratio = cab
+        if not ok:
+            return ("dense", "guard failed")
+        if ratio is None:
+            return ("colored", "forced")
+        choice = "colored" if ratio > self._COLORED_BACKWARD_MARGIN else "dense"
+        return (choice, ratio)
+
     def _sweep_outputs(
         self,
         t: jnp.ndarray,
@@ -2969,7 +3112,7 @@ class Plant:
         progress_meter: Optional["diffrax.AbstractProgressMeter"] = None,
         solver: Optional["diffrax.AbstractSolver"] = None,
         factormax: Optional[float] = None,
-        colored_jacobian: bool = False,
+        colored_jacobian: Union[bool, str] = "auto",
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
 
@@ -3026,24 +3169,36 @@ class Plant:
             Combined with ``solver=diffrax.Kvaerno3(...)`` and the decoupled root
             finder it gives the largest measured speedup (~40% on dynamic BSM2).
             Forward ``jax_adjoint`` path only. ``None`` keeps the diffrax default.
-        colored_jacobian : bool, optional
+        colored_jacobian : {"auto", True, False}, optional
             Materialise the per-step implicit Jacobian by sparse column
             compression (colored forward AD) instead of densely. The flowsheet
             Jacobian is sparse (dense per-unit kinetic blocks + sparse inter-unit
             coupling), so it forms in ``C`` Jacobian-vector products (the color
             count, set by the widest dense block -- ~45 for BSM2) instead of
-            ``n`` -- the dominant per-step linear-algebra cost. The reconstructed
-            matrix equals the dense Jacobian, so the step sequence, trajectory and
-            gradient are numerically unchanged (to integration tolerance); only
-            the cost of forming ``J`` drops (~1.4x on dynamic BSM2). Built and
-            **guarded against the dense Jacobian once per plant** at the start
-            state, falling back to the dense solver (with a warning) on any
-            mismatch; a first solve under reverse-mode tracing also falls back
-            (the pattern needs concrete arrays -- run one concrete solve first to
-            build it, then differentiate). Composes with ``solver=``/``factormax=``
-            and the cached recycle map. Forward ``jax_adjoint`` path only; default
-            ``False``. ``True`` is most worthwhile for a large stiff plant (BSM2);
-            on a small plant (BSM1) the materialisation is not the bottleneck.
+            ``n``. The reconstructed matrix equals the dense Jacobian, so the
+            trajectory and gradient are numerically unchanged (to integration
+            tolerance); only the cost of forming ``J`` drops. It applies to
+            **both** the forward ``jax_adjoint`` solve (where ``J`` is built once
+            per step) and the ``gradient="stable_adjoint"`` reverse adjoint (where
+            ``J`` is rebuilt ~80x per step, so it dominates -- ~1.95x on the BSM2
+            reverse gradient). Built and **guarded against the dense Jacobian once
+            per plant** at the start state, falling back to dense (with a warning)
+            on any mismatch; a first solve under reverse-mode tracing also falls
+            back (the pattern needs concrete arrays -- run one concrete solve
+            first, then differentiate). Composes with ``solver=``/``factormax=``
+            and the cached recycle map.
+
+            **Three settings:** ``"auto"`` (default) governs the
+            ``gradient="stable_adjoint"`` **backward** decision: on a concrete
+            solve it **measures** whether the colored ``df/dy`` build is actually
+            cheaper than dense (it can be slower on a small plant) and enables it
+            only when it pays -- so a large plant (BSM2) gets the ~1.95x reverse
+            speedup and a small one (BSM1) stays dense. The measured decision is
+            reported by :meth:`colored_jacobian_decision`. ``"auto"`` leaves the
+            **forward** solve dense (forward coloring swaps the implicit linear
+            solver, so enabling it everywhere needs separate validation). ``True``
+            forces coloring on **both** the forward solve and the reverse backward
+            (skipping the measurement); ``False`` disables it entirely.
         gradient : {"auto", "jax_adjoint", "stable_adjoint"}, optional
             How a reverse-mode gradient through the solve is formed.
             ``"auto"`` (default) routes a plain forward solve to the fast,
@@ -3097,6 +3252,11 @@ class Plant:
             raise ValueError(
                 "gradient must be 'auto', 'jax_adjoint' or 'stable_adjoint'; "
                 f"got {gradient!r}."
+            )
+        if colored_jacobian not in (True, False, "auto"):
+            raise ValueError(
+                "colored_jacobian must be True, False or 'auto'; got "
+                f"{colored_jacobian!r}."
             )
         self._build_state_layout()
         layout = self._build_parameter_layout()
@@ -3161,7 +3321,7 @@ class Plant:
                     "events= runs a segmented solve and is not supported on the "
                     "gradient='stable_adjoint' path; use the default 'auto'/"
                     "'jax_adjoint' (time-only events keep jax.grad finite).")
-            if solver is not None or factormax is not None or colored_jacobian:
+            if solver is not None or factormax is not None or colored_jacobian is True:
                 raise ValueError(
                     "solver=/factormax=/colored_jacobian= are not supported with "
                     "events=; the located-event solve manages its own integrator. "
@@ -3199,6 +3359,9 @@ class Plant:
             # precomputed once per solve and reused -- a large per-RHS saving.
             if self._recycle_map_constant is None:
                 self._check_recycle_map_constant(jnp.asarray(t0), y0, params)
+            # (The colored backward Jacobian builder is derived in the
+            # stable_adjoint branch below, only when that path is actually taken,
+            # so a forward jax_adjoint solve never builds it.)
 
         if events is not None:
             # (argument combinations validated above, before the concrete checks)
@@ -3233,13 +3396,35 @@ class Plant:
                     "event= (e.g. a steady-state terminating event) is only "
                     "supported on the forward gradient='jax_adjoint' path."
                 )
-            if solver is not None or factormax is not None or colored_jacobian:
+            if solver is not None or factormax is not None:
                 raise ValueError(
-                    "solver=/factormax=/colored_jacobian= are only supported on the "
-                    "forward gradient='jax_adjoint' path; gradient='stable_adjoint' "
-                    "uses its own ESDIRK discrete-adjoint integrator and step "
-                    "control. Drop them or use gradient='jax_adjoint'."
+                    "solver=/factormax= are only supported on the forward "
+                    "gradient='jax_adjoint' path; gradient='stable_adjoint' uses "
+                    "its own ESDIRK discrete-adjoint integrator and step control. "
+                    "Drop them or use gradient='jax_adjoint'."
                 )
+            # colored_jacobian colors the per-step df/dy Jacobian build in the
+            # BACKWARD pass (its dominant cost), exact (machine-precision) vs dense.
+            # On a concrete solve, derive + cache the colored builder and -- for
+            # "auto" -- measure whether it actually pays (the build is cheaper than
+            # dense); under a first traced solve (before it is built) it is None ->
+            # dense fallback. The decision: True forces it on, "auto" enables it
+            # only when the measured build speedup clears the margin (so it is on
+            # for a large block-sparse plant like BSM2 and off for a small one like
+            # BSM1, where the colored build is slower), False never colors.
+            under_trace = (isinstance(params, jax.core.Tracer)
+                           or isinstance(y0, jax.core.Tracer))
+            if (colored_jacobian is not False and not under_trace
+                    and self._colored_adjoint_builder is None):
+                self._colored_adjoint_jacobian_builder(
+                    t0, y0, params, rtol, atol_eff, mode=colored_jacobian)
+            cab = self._colored_adjoint_builder
+            use_colored = bool(
+                cab is not None and cab[2]                       # built + guard ok
+                and (colored_jacobian is True                    # forced on
+                     or (colored_jacobian == "auto" and cab[3] is not None
+                         and cab[3] > self._COLORED_BACKWARD_MARGIN)))  # auto: pays
+            jac_builder = cab[0] if use_colored else None
             # Cap-free reverse-mode gradient through the stiff plant solve: the
             # forward is a robust adaptive ESDIRK solve and the reverse is the
             # per-step transposed-solve discrete adjoint over the saved
@@ -3274,10 +3459,12 @@ class Plant:
                 else:
                     # Under-trace (the calibration-gradient path): not cached, but
                     # still hoists the recycle probe via the cached-map primal RHS
-                    # (the same exact split as the jitted closure).
+                    # (the same exact split as the jitted closure) and uses the
+                    # colored backward Jacobian builder when requested.
                     ys = self._esdirk_stable_adjoint(
                         y0, params, t0, t1, t_eval,
-                        rtol=rtol, atol=atol_eff, max_steps=max_steps)
+                        rtol=rtol, atol=atol_eff, max_steps=max_steps,
+                        jacobian_builder=jac_builder)
             if t_eval is None:
                 ts = jnp.asarray([t1])
                 ys = ys[None, :]
@@ -3302,10 +3489,16 @@ class Plant:
         # the dense solver if the start-state guard fails or it can't be built
         # (a first traced solve). Numerically identical when the pattern is a
         # superset, so it composes with solver=/factormax= and the cached map.
-        if colored_jacobian:
+        # Forward coloring is enabled by an explicit ``colored_jacobian=True``.
+        # The default ``"auto"`` governs only the (exact) stable_adjoint BACKWARD
+        # decision; it leaves the forward solve dense, because forward coloring
+        # swaps the implicit linear solver and so is not guaranteed bit-identical
+        # -- making it the all-solves default needs its own full-suite validation
+        # (a deliberate follow-up). ``True`` opts into both.
+        if colored_jacobian is True:
             solver = self._colored_jacobian_solver(
                 solver, t0, y0, params, rtol, atol_eff)
-        colored_active = colored_jacobian and (
+        colored_active = colored_jacobian is True and (
             self._colored_root_finder is not None
             and self._colored_root_finder[2])
 
@@ -3466,7 +3659,7 @@ class Plant:
         return _solve
 
     def _esdirk_stable_adjoint(self, y0, params, t0, t1, t_eval, *,
-                               rtol, atol, max_steps):
+                               rtol, atol, max_steps, jacobian_builder=None):
         """Cap-free reverse-mode plant solve with the cached recycle map hoisted
         out of the backward pass.
 
@@ -3503,6 +3696,7 @@ class Plant:
             rhs, y0, params, (t0, t1), t_eval,
             rtol=rtol, atol=atol, max_steps=max_steps,
             time_dependent=True, primal_rhs=primal_rhs,
+            jacobian_builder=jacobian_builder,
         )
 
     def run_to_steady_state(

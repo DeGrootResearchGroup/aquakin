@@ -2590,9 +2590,10 @@ Key types:
     unchanged). The one-time map build makes the *forward* marginally slower (BSM2
     ~0.95→1.09 s), but `stable_adjoint` exists for gradients, where the net is
     positive. The win is modest because the backward's dominant cost is the
-    per-step `n≈167` **dense stage Jacobian builds and solves**, which the cached
-    map does not touch — that (e.g. a sparsity-colored backward Jacobian) is the
-    remaining lever, tracked separately. Covered by
+    per-step `n≈167` **dense stage Jacobian builds** (~82% of the backward,
+    profiled) — which `colored_jacobian=True` now colors (see that bullet, ~1.95×
+    on the BSM2 reverse gradient); the cached map alone does not touch them.
+    Covered by
     `tests/integration/test_recycle_cached_map.py` and the bit-identical
     flow-setpoint `∂M/∂θ` guard
     `test_plant_stable_adjoint.py::test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta`.
@@ -2913,14 +2914,54 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   the dense solver with a warning** on any mismatch. Built concretely once and
   reused; a first solve under reverse-mode tracing also falls back (the probe
   needs concrete arrays — run one concrete solve to build it, then differentiate).
-- Wired like `solver=`/`factormax=` (forward `jax_adjoint` only; rejected with
-  `events=`/`stable_adjoint`), keyed into the compiled-solve cache by a
-  `colored_active` flag so it never collides with a plain solve. **Most
-  worthwhile for a large stiff plant (BSM2); on small BSM1 the materialisation is
-  not the bottleneck (≈1×, but still numerically matches to ~3e-13).** Covered by
+- Wired like `solver=`/`factormax=` on the forward `jax_adjoint` path (rejected
+  with `events=`), keyed into the compiled-solve cache by a `colored_active` flag
+  so it never collides with a plain solve. **Most worthwhile for a large stiff
+  plant (BSM2); on small BSM1 the materialisation is not the bottleneck (≈1×, but
+  still numerically matches to ~3e-13).** Covered by
   `tests/integration/test_colored_jacobian.py` (coloring/reconstruction math,
   positive-probe superset over the trajectory, colored==dense J, full-solve
   trajectory + gradient match, the guard/fallback on a truncated pattern, BSM2).
+- **Also colors the `gradient="stable_adjoint"` BACKWARD pass.** Profiling the
+  BSM2 reverse adjoint showed it is **~82% dense per-step `df/dy` Jacobian builds**
+  (the Newton stage recompute + the transposed-stage `Js`, one JVP per state ×
+  ~79 builds/step × ~204 steps), with the dense solves ~17% and the parameter vjp
+  ~1%. `colored_jacobian=True` now passes a colored builder into
+  `esdirk_adjoint_solve` (`jacobian_builder=`), which builds each stage Jacobian
+  in one JVP per *color* instead of per state. The coloring is derived once,
+  concretely, for the **augmented** (`n+1`, time-carrying) primal rhs the discrete
+  adjoint differentiates — `Plant._colored_adjoint_jacobian_builder`, the backward
+  analogue of `_colored_jacobian_solver`, guarded by `colored_jacobian_max_error`
+  with a dense fallback, cached in `_colored_adjoint_builder`. The dense default
+  (`jacobian_builder=None`) is a trace-time branch, so it is bit-identical to the
+  historic backward; the colored gradient equals the dense one (exact on the
+  superset pattern — only float summation order differs: ~1e-15 on BSM1, ~6e-7 on
+  BSM2 through the ADM1 pH-solver linearization, well inside the FD/`jax_adjoint`
+  match envelope). **Measured (clean serial min-of-trials): BSM2 `value+grad`
+  15.1→7.8 s (~1.95×); BSM1 is slower (3.0→3.7 s — the colored build's overhead
+  exceeds its saving at `n_colors=14` vs 65).**
+- **`colored_jacobian="auto"` is the default — it measures whether the backward
+  coloring pays and turns it on only then.** The GO/NO-GO reduces to "is the
+  colored `df/dy` build cheaper than dense?" (the backward rebuilds it ~79×/step,
+  so the *sign* of the build-time difference is the sign of the speedup). The
+  decision **must** use *jitted* build times — eager timing is misleading because
+  XLA fuses the colored build's scatter away (eager shows colored slower for both
+  plants; jitted shows BSM1 `ratio=0.51`, BSM2 `ratio=2.12`). So on the first
+  concrete `stable_adjoint` solve `_colored_build_speedup` jit-compiles the dense
+  and colored builds once (a few-seconds one-time cost, cached, amortized over a
+  calibration) and stores `ratio = t_dense/t_colored`; `"auto"` enables coloring
+  iff `ratio > _COLORED_BACKWARD_MARGIN` (1.05). Validated: BSM1 → `("dense",
+  0.52)`, BSM2 → `("colored", 2.13)`, each matching the measured outcome, with the
+  auto gradient equal to the dense gradient. `plant.colored_jacobian_decision()`
+  returns `("colored"|"dense", ratio)`. **`"auto"` governs only the
+  `stable_adjoint` backward** — it leaves the **forward** `jax_adjoint` solve dense
+  (forward coloring swaps the implicit linear solver and so is not guaranteed
+  bit-identical; making it the all-solves default is a separate, full-suite-
+  validated change). `colored_jacobian=True` forces coloring on **both** paths
+  (skipping the measurement); `False` disables it. Covered by
+  `test_plant_stable_adjoint.py` (`test_stable_adjoint_colored_jacobian_matches_dense`,
+  the forced path; `test_stable_adjoint_colored_jacobian_auto_off_for_small_plant`,
+  the auto decision).
 
 **`S_h2` quasi-steady-state — TESTED AND REJECTED for our solver (issue #361).**
 Every production WWTP simulator (BSM2 reference, GPS-X, WEST) makes the two
