@@ -1665,6 +1665,10 @@ aquakin/
 │   │   ├── colored_jacobian.py      # ColoredVeryChord: sparse (column-compressed
 │   │   │                            #   colored-AD) per-step Jacobian for the implicit
 │   │   │                            #   stage solve; Plant.solve(colored_jacobian=True)
+│   │   ├── forward_solve.py         # forward_solve: lean non-AD adaptive ESDIRK
+│   │   │                            #   (lax.while_loop, no diffrax adjoint/optimistix/
+│   │   │                            #   lineax); Plant.solve(forward_fast=True) -- ~3x
+│   │   │                            #   faster compile, ~1.3-1.9x run, forward-only
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands
@@ -2873,6 +2877,55 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   `tests/integration/test_colored_jacobian.py` (coloring/reconstruction math,
   positive-probe superset over the trajectory, colored==dense J, full-solve
   trajectory + gradient match, the guard/fallback on a truncated pattern, BSM2).
+
+**`Plant.solve(forward_fast=True)` — lean non-AD forward integrator
+([`integrate/forward_solve.py`](aquakin/integrate/forward_solve.py)).** A stiff
+diffrax solve carries machinery whose purpose is to make the *whole solve*
+differentiable — an optimistix root finder, a lineax linear-solve abstraction, and
+a checkpointing reverse-mode adjoint (`custom_vjp`). **Tracing all of that
+dominates compile time** (the implicit scaffolding traces ~10× slower than the
+bare ODE loop — an explicit-solver solve of the same plant RHS traces in ~2 s vs
+~30 s for the diffrax implicit solve; the RHS itself is ~0.2 s). A **forward-only**
+plant solve — one that never needs `jax.grad`/`calibrate`/`sensitivity` of the
+result — can skip all of it: `forward_solve` is a plain `lax.while_loop` running
+the Kvaerno3 ESDIRK stages with a simplified Newton (Hairer–Wanner contraction
+test) + a direct dense `lu_factor`/`lu_solve`, an embedded-error PI controller, and
+a **convergence-aware step-growth limiter** (the Newton contraction rate caps the
+step growth, so it rarely grows into nonlinear-divergence). Output at `t_eval` is
+*exact* — the step is clipped to land on each save time (no dense-output
+interpolation; for a dense `t_eval` this adds ~clip-per-save-interval steps, the
+one cost vs diffrax's interpolation — a future dense-output refinement).
+- **The per-step Jacobian `J = df/dy` is STILL colored forward-mode AD** (the same
+  exact matrix the differentiable path forms, so the step behaviour matches). What
+  is dropped is only the *adjoint over the whole solve*: the result is **not**
+  differentiable w.r.t. parameters / initial conditions. So `J` uses AD locally;
+  the solve is just not wrapped to be differentiable globally.
+- **Opt-in, forward-only, concrete-only.** Rejected with `events=` and
+  `gradient="stable_adjoint"`, and **requires concrete `params`/`y0`** (a `jax.grad`
+  / `jax.jit` of a `forward_fast` solve raises a clear error — the `lax.while_loop`
+  is not reverse-mode differentiable and the colored pattern needs concrete arrays
+  to build). It needs the colored-Jacobian pattern; it builds + guards it like
+  `colored_jacobian=True` and **falls back to the diffrax forward path (with a
+  warning) if the guard fails**. Composes with the cached recycle map; its compiled
+  solve is cached per instance (so a parameter sweep at fixed signature reuses it).
+- **Measured: ~3× faster compile** (the implicit-machinery tracing collapses — the
+  part that *cannot* be file-cached, since tracing is Python; standalone 14 s vs
+  42–48 s) — the robust win, and the main reason to use it for long one-off dynamic
+  runs (the 7-min full-BSM2 compile). **Run is ~1.3–1.9× faster** on the
+  validated 244-state JRN-056 dynamic BSM2 (real 609-day influent, `HeatBalance` +
+  `settler_soluble_holdup`): a 60-day window is 1.91× and the full 609-day run
+  1.26× — the run gain narrows over a long run because the `t_eval` step-clipping
+  adds a boundary per save point (8737 over days 245–609) where diffrax interpolates
+  (a future dense-output refinement would recover it). Same accuracy (a valid
+  solution to the same `rtol` — it differs from the diffrax trajectory only by the
+  step-sequence variation between two valid adaptive solves, ~2e-2 on the dynamic
+  BSM2). Covered by
+  `tests/integration/test_forward_fast.py` (analytic decay + order, exact `t_eval`,
+  BSM1/BSM2 agreement with diffrax, the guards). NOTE the lean integrator (Kvaerno3,
+  3rd order) vs the diffrax default (Kvaerno5, 5th order) — both controlled to
+  `rtol`, so equally `rtol`-accurate, K3 just takes more (cheaper) steps; a Kvaerno5
+  forward_fast is a future option if a tighter match to the validated steady states
+  is wanted.
 
 **`S_h2` quasi-steady-state — TESTED AND REJECTED for our solver (issue #361).**
 Every production WWTP simulator (BSM2 reference, GPS-X, WEST) makes the two

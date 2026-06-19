@@ -430,6 +430,30 @@ the dense solver if the guard fails. Most worthwhile on a large stiff plant
 (BSM2); on the small BSM1 the materialisation is not the bottleneck. Forward
 solve only, like the knobs above.
 
+### A non-AD fast lane (`forward_fast=True`)
+
+If a solve never needs gradients (`jax.grad` / `calibrate` / `sensitivity` of the
+result), `forward_fast=True` runs a lean integrator that skips the diffrax
+adjoint / optimistix / lineax machinery entirely — a plain `lax.while_loop`
+adaptive ESDIRK with a simplified Newton and the colored Jacobian:
+
+```python
+sol = plant.solve(t_span=(0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
+                  forward_fast=True)   # ~3x compile, ~1.3-1.9x run (dynamic BSM2)
+```
+
+That machinery exists to make the *whole solve* differentiable, and tracing it
+dominates compile time — so dropping it gives **~3× faster compile** (a big deal
+for the multi-minute full-BSM2 compile, which file-caching can't help because the
+cost is Python-level tracing) **and ~1.3–1.9× faster run** on the dynamic BSM2
+(the run gain narrows over a long run with dense `t_eval`, the compile win is the
+robust benefit), at the same accuracy. The
+per-step Jacobian is *still* colored forward-mode AD (the exact same matrix), so
+the trajectory matches a valid adaptive solution to the same `rtol`; only
+end-to-end differentiability is given up. It is opt-in and forward-only: it needs
+concrete `params`/`y0` and raises a clear error under `jax.grad`/`jax.jit` or with
+`events=`, and falls back to the diffrax path if the colored-Jacobian guard fails.
+
 For reactor-level fits, the adjoint plumbing is hidden too: `aquakin.calibrate`
 and `aquakin.sensitivity` take `ad_mode="forward"|"reverse"` and build the right
 adjoint internally (no `diffrax` import), and `calibrate(check_finite=True)` (the

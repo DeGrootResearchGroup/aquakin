@@ -2937,6 +2937,7 @@ class Plant:
         solver: Optional["diffrax.AbstractSolver"] = None,
         factormax: Optional[float] = None,
         colored_jacobian: bool = False,
+        forward_fast: bool = False,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
 
@@ -3134,6 +3135,26 @@ class Plant:
                     "events=; the located-event solve manages its own integrator. "
                     "Drop them.")
 
+        # forward_fast is the lean non-AD forward integrator: no diffrax adjoint /
+        # optimistix / lineax machinery, so the result is NOT differentiable and it
+        # needs concrete inputs to build its colored-Jacobian pattern once.
+        if forward_fast:
+            if events is not None:
+                raise ValueError(
+                    "forward_fast is not supported with events=; the located-event "
+                    "solve manages its own integrator. Drop one.")
+            if gradient == "stable_adjoint":
+                raise ValueError(
+                    "forward_fast is a non-differentiable forward path; it is "
+                    "incompatible with gradient='stable_adjoint'. For a reverse-mode "
+                    "gradient use the default solve.")
+            if any(isinstance(v, jax.core.Tracer) for v in (params, y0)):
+                raise ValueError(
+                    "forward_fast requires concrete params/y0 -- it is a non-AD "
+                    "fast path that is not differentiable and cannot be traced "
+                    "(no jax.grad / jax.jit). For gradients or jit use the default "
+                    "solve (which routes through the differentiable diffrax path).")
+
         # One-time, concrete check that the recycle-flow solve is self-consistent
         # (every flow rule affine in the recycle flows). Skipped under tracing
         # (params/y0 are JAX tracers -- can't compare/warn) and guarded to run
@@ -3264,6 +3285,37 @@ class Plant:
         # event closure varies and that path is run once -- and a traced call
         # (settings key None) bypasses the cache. Caching does not change the
         # first solve; it only avoids recompiling on subsequent ones.
+        # Forward-fast: the lean non-AD integrator (no diffrax adjoint / optimistix
+        # / lineax). It needs the colored-Jacobian pattern (for a cheap per-step
+        # Jacobian); build + guard it, and fall back to the diffrax path if the
+        # guard fails. Concrete-only (validated above). Its compiled solve is
+        # cached per instance like the diffrax path.
+        if forward_fast:
+            self._colored_jacobian_solver(None, t0, y0, params, rtol, atol_eff)
+            crf = self._colored_root_finder
+            if crf is not None and crf[2]:
+                te = t_eval if t_eval is not None else jnp.asarray([float(t1)])
+                fkey = ("forward_fast", t0, t1, tuple(te.shape),
+                        concrete_settings_key(rtol, atol_eff, None, None, max_steps),
+                        self._recycle_map_constant)
+                jitted = self._jit_cache.get(fkey)
+                if jitted is None:
+                    jitted = self._build_jitted_forward_fast(
+                        t0, t1, rtol=rtol, atol=atol_eff)
+                    self._jit_cache[fkey] = jitted
+                with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
+                    ts, ys = jitted(y0, params, te)
+                if _time_factor != 1.0:
+                    ts = ts / _time_factor
+                sol = PlantSolution(t=ts, state=ys, plant=self)
+                if time_unit is not None:
+                    sol._requested_time_unit = time_unit
+                return sol
+            warnings.warn(
+                "forward_fast: the colored-Jacobian start-state guard failed; "
+                "falling back to the diffrax forward path for this plant.",
+                RuntimeWarning, stacklevel=2)
+
         # Colored-AD Jacobian: reconfigure the solver to materialise the per-step
         # implicit Jacobian by sparse column compression (a large saving on the
         # dense flowsheet Jacobian). Built+guarded once per plant; falls back to
@@ -3409,6 +3461,41 @@ class Plant:
                 saveat=diffrax.SaveAt(t1=True), **kw,
             )
             return sol.ts, sol.ys
+        return _solve
+
+    def _build_jitted_forward_fast(self, t0, t1, *, rtol, atol):
+        """Build the lean non-AD forward solve for one signature.
+
+        Wraps :func:`~aquakin.integrate.forward_solve.forward_solve` -- a plain
+        ``lax.while_loop`` adaptive ESDIRK with simplified Newton + colored
+        Jacobian + direct ``lu_factor``/``lu_solve``, no diffrax adjoint /
+        optimistix / lineax. The per-step Jacobian is still colored forward-mode
+        AD (the same exact matrix the differentiable path uses), but the solve is
+        NOT differentiable. ``y0``/``params``/``t_eval`` are runtime arguments so
+        one compile serves a parameter sweep; the colored pattern (built+guarded
+        before this is called) is baked into the closure. The recycle map is
+        precomputed once per solve from ``params`` (the cached-M path).
+        """
+        from aquakin.integrate.forward_solve import forward_solve
+        rf = self._colored_root_finder[0]
+        S, col_of, pattern = rf.seed_matrix, rf.color_of, rf.pattern
+        t0a = jnp.asarray(float(t0))
+
+        @jax.jit
+        def _solve(y0, params, t_eval):
+            rmap = self._maybe_recycle_map(t0a, self._split_state(y0), params)
+
+            def rhs(t, y, args):
+                return self._rhs(t, y, args, recycle_map=rmap)
+
+            def jac(t, y, args):
+                _, lin = jax.linearize(lambda yy: rhs(t, yy, args), y)
+                JS = jax.vmap(lin, in_axes=1, out_axes=1)(S)
+                return JS[:, col_of] * pattern
+
+            ys = forward_solve(rhs, jac, y0, params, float(t0), float(t1),
+                               t_eval, rtol=rtol, atol=atol)
+            return t_eval, ys
         return _solve
 
     def _build_jitted_stable_adjoint_solve(
