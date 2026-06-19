@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional
 
 import jax
 import jax.numpy as jnp
@@ -91,6 +91,7 @@ def ptc_forward(
     tol: float = 1e-6,
     scale_floor: float = 1.0,
     nonneg: bool = True,
+    jac_fn: Optional[Callable] = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Run the PTC iteration to a steady state of ``rhs(y, params) = 0``.
 
@@ -128,6 +129,14 @@ def ptc_forward(
     nonneg : bool
         Clamp the state to ``>= 0`` after each step (concentrations are
         non-negative). Static.
+    jac_fn : callable, optional
+        Custom Jacobian materializer ``(F, y) -> dF/dy``, used in place of the
+        default dense ``jax.jacfwd(F)`` at each iteration. The PTC step
+        ``(V/dt - J) dy = F`` is unchanged, so the result is identical whenever
+        ``jac_fn`` returns the true Jacobian (e.g. a column-compressed colored-AD
+        materializer, which equals the dense Jacobian on its sparsity-pattern
+        support but forms it in far fewer Jacobian-vector products). ``None``
+        (default) uses dense ``jax.jacfwd``.
 
     Returns
     -------
@@ -140,7 +149,7 @@ def ptc_forward(
     def F(y):
         return rhs(y, params)
 
-    jac = jax.jacfwd(F)
+    jac = jax.jacfwd(F) if jac_fn is None else (lambda y: jac_fn(F, y))
 
     def step(carry):
         y, dt, r, k = carry
@@ -177,6 +186,9 @@ def solve_steady_state(
     rhs: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray],
     params: jnp.ndarray,
     y0: jnp.ndarray,
+    *,
+    jac_fn: Optional[Callable] = None,
+    primal_rhs: Optional[Callable] = None,
     **ptc_kwargs,
 ) -> PTCResult:
     """PTC steady-state solve with implicit-function-theorem parameter gradients.
@@ -196,6 +208,20 @@ def solve_steady_state(
         Parameter vector (the differentiable input).
     y0 : jnp.ndarray
         Warm start.
+    jac_fn : callable, optional
+        Custom Jacobian materializer ``(F, y) -> dF/dy`` for the PTC iteration
+        (e.g. a colored-AD column-compression builder); see :func:`ptc_forward`.
+        It accelerates only the iteration Jacobian; the one-shot
+        implicit-function-theorem gradient Jacobian below stays dense (a single
+        evaluation, negligible against the ~tens of iteration Jacobians).
+    primal_rhs : callable, optional
+        Alternate ``rhs(y, params)`` for the **forward iteration only** -- e.g.
+        one closing over a precomputed (cached) recycle map, which is identical to
+        the probed map but cheaper and free of the per-call probing that leaks a
+        traced intermediate under ``jit``. The **gradient** (the
+        implicit-function-theorem backward) uses the map-*recomputing* ``rhs`` so
+        a parameter the recycle map depends on (a flow setpoint) keeps its
+        ``d(map)/d(param)`` term. ``None`` (default) uses ``rhs`` for both.
     **ptc_kwargs
         Forwarded to :func:`ptc_forward` (``dt0``, ``growth_cap``, ``tol``, ...).
 
@@ -205,7 +231,8 @@ def solve_steady_state(
         ``state`` carries the IFT gradient w.r.t. ``params``.
     """
     y_star, residual, iterations, converged = ptc_forward(
-        rhs, params, y0, **ptc_kwargs
+        rhs if primal_rhs is None else primal_rhs,
+        params, y0, jac_fn=jac_fn, **ptc_kwargs
     )
     # The iteration is not reverse-differentiable (a while_loop); block any
     # attempt to differentiate through it and re-inject the exact parameter

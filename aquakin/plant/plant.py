@@ -577,6 +577,12 @@ class Plant:
         # differentiates. ``ok`` False => the guard found a colored/dense mismatch
         # at the start state, so the backward falls back to dense jacfwd.
         self._colored_adjoint_builder: Optional[tuple] = None
+        # Colored-Jacobian builder for the PTC STEADY-STATE iteration (built once,
+        # concretely, on the first colored_jacobian=True steady_state call):
+        # (builder_or_None, n_colors, ok). Colors the autonomous steady residual
+        # Jacobian dF/dy. The PTC operating-point neighbourhood is narrow, so the
+        # start-state pattern stays valid throughout (unlike a wide dynamic run).
+        self._colored_steady_builder: Optional[tuple] = None
         # One-time guard for materialising the DO controllers a CSTRUnit's
         # closed-loop Aeration spec requires (see _materialize_aeration).
         self._aeration_materialized: bool = False
@@ -2762,6 +2768,65 @@ class Plant:
         choice = "colored" if ratio > self._COLORED_BACKWARD_MARGIN else "dense"
         return (choice, ratio)
 
+    def _colored_steady_jacobian_builder(self, rhs, y0, theta, *, tol):
+        """Derive (once, concretely) a colored-AD materializer for the PTC steady
+        residual Jacobian ``dF/dy``, or ``None`` to fall back to dense ``jacfwd``.
+
+        The PTC iteration (:func:`aquakin.plant.steady.ptc_forward`) forms the
+        full plant Jacobian ``dF/dy`` -- the same block-sparse object the
+        integrator's implicit-stage and the stable_adjoint backward color -- once
+        per Newton step (~tens of times for BSM2). Coloring builds it in one
+        Jacobian-vector product per *color* (BSM2: ~45 vs 167 columns) instead of
+        ``n``, while reconstructing the identical matrix on the pattern's support.
+
+        Unlike the dynamic solve, this is well suited to coloring: PTC marches to
+        a single operating point in a narrow neighbourhood, so the sparsity
+        pattern derived at the warm start stays valid throughout (the dynamic
+        run's wide load excursion is what can expose start-state-missed
+        couplings). Built and **guarded** against the dense Jacobian at ``y0``
+        once (falling back to dense with a warning on a mismatch), then cached and
+        reused -- a parameter/design sweep keeps the same structural pattern.
+
+        Returns a builder ``(F, y) -> dF/dy``, or ``None`` (dense) when called
+        under a trace (the probe needs concrete arrays) or when the guard fails.
+        """
+        from aquakin.integrate.colored_jacobian import (
+            build_colored_root_finder, colored_jacobian_max_error)
+
+        if self._colored_steady_builder is None:
+            if any(isinstance(leaf, jax.core.Tracer)
+                   for leaf in jax.tree_util.tree_leaves((theta, y0))):
+                return None             # can't build under trace; fall back
+
+            def rhs_y(y):
+                return rhs(y, theta)
+
+            tol_s = float(jnp.max(jnp.asarray(tol)))
+            rf, n_colors = build_colored_root_finder(
+                rhs_y, y0, rtol=tol_s, atol=tol_s)
+            err = colored_jacobian_max_error(rhs_y, y0, rf)
+            jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs_y)(y0)))) + 1e-300
+            ok = err <= 1e-8 * jscale
+            if not ok:
+                warnings.warn(
+                    "colored_jacobian=True (steady_state): the derived Jacobian "
+                    f"sparsity pattern disagrees with the dense Jacobian at the "
+                    f"warm start (max abs error {err:.2e}, scale {jscale:.2e}); "
+                    "falling back to dense jacfwd. This indicates the structural "
+                    "pattern missed a nonzero -- please report it.",
+                    RuntimeWarning, stacklevel=2)
+
+            def builder(f, y):
+                # One JVP per color through the linearized f, scattered back to
+                # the (superset) pattern -- equals jax.jacfwd(f)(y) on its support.
+                _, lin = jax.linearize(f, y)
+                JS = jax.vmap(lin, in_axes=1, out_axes=1)(rf.seed_matrix)
+                return JS[:, rf.color_of] * rf.pattern
+
+            self._colored_steady_builder = (builder if ok else None, n_colors, ok)
+
+        return self._colored_steady_builder[0]
+
     def _sweep_outputs(
         self,
         t: jnp.ndarray,
@@ -3795,6 +3860,7 @@ class Plant:
         scale_floor: float = 1.0,
         nonneg: bool = True,
         design: Optional[dict] = None,
+        colored_jacobian: bool = False,
         fallback: bool = True,
         fallback_kwargs: Optional[dict] = None,
     ) -> "SteadyStateResult":
@@ -3857,6 +3923,24 @@ class Plant:
                 jax.grad(lambda c: plant.steady_state(
                     p, y0, design={"influent": {"feed": {"Q": Q, "C": c}}}
                 ).state[eff_idx])(C_influent)
+        colored_jacobian : bool
+            Materialize the PTC iteration Jacobian ``dF/dy`` by column-compressed
+            colored AD (one Jacobian-vector product per color rather than per
+            state; BSM2 46 colors vs 167) instead of dense ``jax.jacfwd``. The
+            operating point is unchanged (the colored matrix equals the dense one
+            on its sparsity-pattern support: bit-identical on a single-network
+            plant, identical to PTC tolerance on a multi-network plant where the
+            recycle solve differs by round-off); only the per-iteration Jacobian
+            cost drops. Built and guarded once concretely (falls back to dense
+            with a warning on a start-state mismatch, or under a ``jit``/``grad``
+            trace where the probe cannot run). **Benefit is regime-specific**
+            (measured BSM2): the Jacobian build is ~2.4x cheaper and the whole
+            solve ~1.9x faster *run-only under jit*, but an un-jitted one-shot
+            call is compile/trace-bound, so the one-time pattern build makes it
+            ~0.8x (slower). Worth enabling only when the steady solve is run
+            **repeatedly under jit** (differentiable design sweeps, where compile
+            amortizes) or for a much larger plant; not for a single steady state.
+            Default ``False``.
         fallback : bool
             If PTC does not converge within ``max_iter`` (eager use only), fall
             back to :meth:`run_to_steady_state` and return that result (with
@@ -3901,9 +3985,35 @@ class Plant:
                 return self._rhs(t, y, p, design=d)
             theta = (params, design)
 
+        # Colored PTC needs a leak-free, cached-recycle-map forward rhs: the
+        # per-call recycle probing in ``_rhs(recycle_map=None)`` leaks a traced
+        # intermediate under the ``jit`` used for the structural pattern probe on
+        # a multi-network plant. The cached map equals the probed map, so the
+        # operating point is unchanged; it is built only on the concrete,
+        # constant-map, design-free path (else fall back to dense). The gradient
+        # keeps the map-recomputing ``rhs`` (primal_rhs is forward-only), so a
+        # flow-setpoint parameter retains its recycle-map dependence.
+        jac_fn = None
+        primal_rhs = None
+        if colored_jacobian:
+            concrete = not any(
+                isinstance(leaf, jax.core.Tracer)
+                for leaf in jax.tree_util.tree_leaves((params, y0)))
+            if design is None and concrete:
+                self._check_recycle_map_constant(t, y0, params)
+                rmap = self._maybe_recycle_map(t, self._split_state(y0), params)
+                if rmap is not None:
+                    def primal_rhs(y, theta):
+                        return self._rhs(t, y, theta, recycle_map=rmap)
+                    jac_fn = self._colored_steady_jacobian_builder(
+                        primal_rhs, y0, theta, tol=tol)
+            if jac_fn is None:
+                primal_rhs = None       # colored unavailable -> dense forward too
+
         res = solve_steady_state(
-            rhs, theta, y0, dt0=dt0, dt_max=dt_max, growth_cap=growth_cap,
-            max_iter=max_iter, tol=tol, scale_floor=scale_floor, nonneg=nonneg,
+            rhs, theta, y0, jac_fn=jac_fn, primal_rhs=primal_rhs, dt0=dt0,
+            dt_max=dt_max, growth_cap=growth_cap, max_iter=max_iter, tol=tol,
+            scale_floor=scale_floor, nonneg=nonneg,
         )
 
         # Eager use gets concrete diagnostics and the forward fallback; under an
