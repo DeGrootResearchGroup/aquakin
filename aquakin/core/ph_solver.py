@@ -479,6 +479,65 @@ def _adaptive_newton_bisection(f, dfdh, h_init, max_iter, out_shape, *, utol=1e-
     return jnp.exp(u)
 
 
+def _adaptive_activity_solve(
+    K, A, I_strong, activity_model, totals, strong_anion_eq, z_cation_eq,
+    h_init, I_init, max_iter, out_shape, *, utol=1e-11,
+):
+    """Coupled ``(h, I)`` fixed point for the activity-corrected path, by the same
+    adaptive safeguarded scheme as :func:`_adaptive_newton_bisection`.
+
+    The conditional dissociation constants depend on the ionic strength ``I``,
+    which depends on the speciation, which depends on ``[H+]`` -- a joint fixed
+    point. Each step forms the conditional constants at the carried ``I``, takes
+    one safeguarded Newton-bisection step on the resulting charge-balance residual
+    (with ``Kc`` held fixed within the step), and recomputes ``I`` from the new
+    speciation. The :func:`jax.lax.while_loop` stops once **both** the in-bracket
+    Newton step on ``[H+]`` and the ``I`` update have settled below tolerance, and
+    is capped at ``max_iter``. Returns ``(h*, I*)``. Run inside
+    :func:`jax.lax.custom_root` under ``stop_gradient``; the joint pH/ionic-
+    strength sensitivity is supplied by the 2x2 implicit-function-theorem tangent
+    solve, so the iteration count never enters the AD graph.
+    """
+    u_lo = jnp.broadcast_to(jnp.asarray(_U_LO), out_shape).astype(float)
+    u_hi = jnp.broadcast_to(jnp.asarray(_U_HI), out_shape).astype(float)
+    u0 = jnp.clip(
+        jnp.broadcast_to(jnp.asarray(jnp.log(h_init)), out_shape).astype(float),
+        _U_LO, _U_HI,
+    )
+    I0 = jnp.broadcast_to(jnp.asarray(I_init), out_shape).astype(float)
+
+    def cond(state):
+        _, _, _, _, it, converged = state
+        return (it < max_iter) & jnp.any(~converged)
+
+    def step(state):
+        u_lo, u_hi, u, I, it, _ = state
+        h = jnp.exp(u)
+        Kc, _g1 = _conditional_constants(K, I, A, activity_model)
+        fv = charge_balance_residual(
+            h, strong_anion_eq=strong_anion_eq, z_cation_eq=z_cation_eq,
+            K=Kc, **totals)
+        dfdu = charge_balance_residual_deriv(h, K=Kc, **totals) * h
+        pos = fv > 0.0
+        u_lo = jnp.where(pos, u, u_lo)
+        u_hi = jnp.where(pos, u_hi, u)
+        u_newton = u - fv / dfdu
+        in_bracket = (u_newton - u_lo) * (u_newton - u_hi) <= 0.0
+        u_next = jnp.where(in_bracket, u_newton, 0.5 * (u_lo + u_hi))
+        I_next = _ionic_strength_total(
+            jnp.exp(u_next), Kc, I_strong, totals=totals)
+        # Converged when the in-bracket Newton step on [H+] is tiny AND the ionic
+        # strength has settled (relative, since I spans orders of magnitude).
+        h_conv = in_bracket & (jnp.abs(u_newton - u) <= utol)
+        I_conv = jnp.abs(I_next - I) <= utol * (jnp.abs(I) + 1.0)
+        return (u_lo, u_hi, u_next, I_next, it + 1, h_conv & I_conv)
+
+    init = (u_lo, u_hi, u0, I0, jnp.asarray(0),
+            jnp.zeros(out_shape, dtype=bool))
+    _, _, u, I, _, _ = jax.lax.while_loop(cond, step, init)
+    return jnp.exp(u), I
+
+
 def solve_ph(
     *,
     tot_carbonate=0.0,
@@ -652,42 +711,54 @@ def solve_ph(
 
     # Activity-corrected path (opt-in, not on the ADM1/BSM2 hot path). The
     # conditional constants depend on the ionic strength, which depends on the
-    # speciation, which depends on [H+] -- a coupled fixed point. We resolve it
-    # inside a fixed-count bracketed scan carrying the ionic strength ``I``: each
-    # step forms the conditional constants at the carried ``I``, takes one
-    # safeguarded step on the resulting residual, and recomputes ``I`` from the
-    # new speciation. ``I`` and ``[H+]`` converge together, so at the root ``I``
-    # is self-consistent with the speciation. (This path differentiates through
-    # the scan; the IFT reduction above is applied only to the ideal hot path.)
-    u_lo = jnp.broadcast_to(jnp.asarray(_U_LO), out_shape).astype(float)
-    u_hi = jnp.broadcast_to(jnp.asarray(_U_HI), out_shape).astype(float)
-    u = jnp.clip(
-        jnp.broadcast_to(jnp.asarray(jnp.log(h_init)), out_shape).astype(float),
-        _U_LO, _U_HI,
-    )
+    # speciation, which depends on [H+] -- a coupled (h, I) fixed point:
+    #   f1(h, I) = charge_balance_residual(h, Kc(I)) = 0      (electroneutrality)
+    #   f2(h, I) = ionic_strength_total(h, Kc(I)) - I = 0     (self-consistent I)
+    # It is solved by the same adaptive + IFT scheme as the ideal path, lifted to
+    # the 2-vector root: an adaptive coupled while_loop
+    # (``_adaptive_activity_solve``) wrapped in ``jax.lax.custom_root`` over the
+    # pair (h, I). The pH / ionic-strength sensitivity is the exact
+    # implicit-function-theorem tangent -- here a 2x2 linear solve of the joint
+    # Jacobian at the root -- so AD is O(1) in the iteration count in both modes,
+    # as on the ideal path.
     A = debye_huckel_A(jnp.asarray(T_kelvin, dtype=float))
     I_strong = jnp.broadcast_to(
         jnp.asarray(ionic_strength_strong, dtype=float), out_shape)
     I0 = jnp.maximum(I_strong, 0.0)
+    h0 = jnp.broadcast_to(jnp.asarray(h_init, dtype=float), out_shape)
 
-    def act_body(carry, _):
-        u_lo, u_hi, u, I = carry
-        h = jnp.exp(u)
+    def F_act(x):
+        h, I = x
         Kc, _g1 = _conditional_constants(K, I, A, activity_model)
-        f = charge_balance_residual(
+        f1 = charge_balance_residual(
             h, strong_anion_eq=strong_anion_eq, z_cation_eq=z_cation_eq,
             K=Kc, **totals)
-        # Newton derivative holding Kc fixed (the d Kc / dh coupling is a small
-        # perturbation; bracketing covers it). f'(h) <= -1 still, so dfdu < 0.
-        dfdu = charge_balance_residual_deriv(h, K=Kc, **totals) * h
-        u_lo, u_hi, u_next = _rtsafe_update(u_lo, u_hi, u, f, dfdu)
-        I_next = _ionic_strength_total(
-            jnp.exp(u_next), Kc, I_strong, totals=totals)
-        return (u_lo, u_hi, u_next, I_next), None
+        f2 = _ionic_strength_total(h, Kc, I_strong, totals=totals) - I
+        return (f1, f2)
 
-    (_, _, u, I), _ = jax.lax.scan(
-        act_body, (u_lo, u_hi, u, I0), None, length=n_iter)
-    h = jnp.exp(u)
+    def solve_act(_F, x_init):
+        h_start, I_start = x_init
+        return _adaptive_activity_solve(
+            K, A, I_strong, activity_model, totals, strong_anion_eq,
+            z_cation_eq, h_start, I_start, n_iter, out_shape)
+
+    def tangent_solve_act(g, y):
+        # g is the elementwise linear JVP of F_act at the root: (dh, dI) ->
+        # (df1, df2). Materialise the 2x2 Jacobian by probing with unit tangents
+        # and solve ``J z = y`` explicitly per element. det != 0: df1/dh <= -1
+        # and the I-fixed-point is a contraction (df2/dI ~ -1), so the Jacobian
+        # is well-conditioned.
+        zero = jnp.zeros(out_shape)
+        one = jnp.ones(out_shape)
+        a, c = g((one, zero))    # (df1/dh, df2/dh)
+        b, d = g((zero, one))    # (df1/dI, df2/dI)
+        det = a * d - b * c
+        y1, y2 = y
+        z1 = (d * y1 - b * y2) / det
+        z2 = (-c * y1 + a * y2) / det
+        return (z1, z2)
+
+    h, I = jax.lax.custom_root(F_act, (h0, I0), solve_act, tangent_solve_act)
     # Report the measurable pH = -log10(a_H) = -log10(g_H [H+]).
     _, g1 = _conditional_constants(K, I, A, activity_model)
     pH = -jnp.log(g1 * h) / _LN10

@@ -1319,9 +1319,13 @@ Step-0 profile of the BSM2 plant found the pH solve was **~35% of the Jacobian
 materialisation** purely because `n_iter` was 40 while it converges in ~6; the
 adaptive + IFT rewrite drops the pH share to **~8%** (per-tangent pH cost
 O(40)→O(1)) and the whole 20-day BSM2 transient by **~20–25%** (default solver),
-with bit-identical results. The opt-in **activity-corrected path** keeps the
-original fixed-count scan (its `[H+]`↔ionic-strength fixed point couples the two,
-so it differentiates through the scan); it is not on the hot path. Equilibrium
+with bit-identical results. The opt-in **activity-corrected path** uses the same
+adaptive + IFT scheme lifted to a **2-variable coupled root**: its conditional
+constants couple `[H+]` and the ionic strength `I`, so it solves the joint fixed
+point `(f1 = charge balance, f2 = I − I(h)) = 0` with an adaptive coupled
+`while_loop` wrapped in `custom_root` over the pair `(h, I)`, and the sensitivity
+is the exact IFT tangent via a **2×2 linear solve** of the joint Jacobian at the
+root (so it too is O(1) in the iteration count, forward and reverse). Equilibrium
 constants are temperature-corrected via van't Hoff. The chemistry mirrors the
 WATS reference pH solver. Validated against an independent bisection root finder;
 the weak-buffer / extreme-charge regime that broke the old bare-Newton scheme,
