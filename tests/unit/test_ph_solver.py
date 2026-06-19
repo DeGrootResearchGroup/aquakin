@@ -324,6 +324,34 @@ def test_activity_gradient_matches_fd():
     assert g == pytest.approx(fd, rel=1e-4)
 
 
+def test_activity_forward_and_reverse_ad_agree():
+    """The coupled (h, I) activity path is also wrapped in custom_root, so its
+    gradient is the 2x2 implicit-function-theorem tangent. Forward-mode (jvp) and
+    reverse-mode (grad) must agree -- and both match FD."""
+    def f(z):
+        return solve_ph(tot_carbonate=5e-3, z_cation_eq=z, T_kelvin=308.15,
+                        activity_model="davies", ionic_strength_strong=0.1)
+    z0 = 5e-3
+    g_rev = float(jax.grad(f)(z0))
+    _, g_fwd = jax.jvp(f, (z0,), (1.0,))
+    g_fwd = float(g_fwd)
+    eps = 1e-7
+    fd = (float(f(z0 + eps)) - float(f(z0 - eps))) / (2 * eps)
+    assert g_fwd == pytest.approx(g_rev, rel=1e-7)
+    assert g_rev == pytest.approx(fd, rel=1e-4)
+
+
+def test_activity_pH_independent_of_iteration_cap():
+    """The adaptive coupled loop stops once both [H+] and the ionic strength have
+    settled, so the activity-path pH is independent of the n_iter cap once it
+    exceeds the (small) count needed."""
+    kw = dict(tot_carbonate=5e-3, tot_ammonia=3e-3, z_cation_eq=5e-3,
+              T_kelvin=308.15, activity_model="davies", ionic_strength_strong=0.1)
+    ref = float(solve_ph(**kw, n_iter=200))
+    for cap in (15, 25, 40, 200):
+        assert float(solve_ph(**kw, n_iter=cap)) == pytest.approx(ref, abs=1e-10)
+
+
 def test_invalid_activity_model_raises():
     with pytest.raises(ValueError, match="activity_model"):
         solve_ph(tot_carbonate=1e-3, activity_model="bogus")
