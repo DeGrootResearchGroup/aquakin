@@ -1287,24 +1287,46 @@ ordinary condition field.
 `solve_ph(...)` returns pH given the total molar concentrations of the
 carbonate, acetate, ammonia, phosphate and sulfide systems, plus strong-anion
 charge equivalents, a net fixed cation charge, and temperature. It runs a
-**fixed number of safeguarded Newton-bisection iterations** on the
-electroneutrality residual in `u = ln[H+]` space (`jax.lax.scan`, no
-data-dependent control flow), so it is `jit` / `vmap` / `grad` friendly and
-composes inside a Diffrax RHS. The residual is strictly monotone with a unique,
-trivially bracketable root, so each step takes a Newton step but falls back to
-bisection (via the non-strict rtsafe product test) whenever Newton would leave
-the bracket — making the iteration **globally convergent in a fixed step count**.
-This matters: a bare Newton step from the fixed pH-7 start **overshoots to
-`exp(u) = inf` (NaN), or silently to an absurd pH that saturates the `pH_switch`
-rate terms**, when the strong-ion charge exceeds the buffering (e.g. a weakly
-buffered transient, or a calibration that pushes the `S_cat`/`S_an` states) —
-the bracketed scheme stays finite and correct there, while still converging
-quadratically (pure Newton) near the root, so AD through it is the exact
-implicit-function-theorem pH sensitivity. Equilibrium constants are
-temperature-corrected via van't Hoff. The chemistry mirrors the WATS reference
-pH solver. Validated against an independent bisection root finder, and the
-weak-buffer / extreme-charge regime that broke the old bare-Newton scheme is
-regression-tested, in `tests/unit/test_ph_solver.py`.
+**safeguarded Newton-bisection** on the electroneutrality residual in
+`u = ln[H+]` space. The residual is strictly monotone with a unique, trivially
+bracketable root, so each step takes a Newton step but falls back to bisection
+(via the non-strict rtsafe product test) whenever Newton would leave the bracket
+— making the iteration **globally convergent**. This matters: a bare Newton step
+from the fixed pH-7 start **overshoots to `exp(u) = inf` (NaN), or silently to an
+absurd pH that saturates the `pH_switch` rate terms**, when the strong-ion charge
+exceeds the buffering (e.g. a weakly buffered transient, or a calibration that
+pushes the `S_cat`/`S_an` states) — the bracketed scheme stays finite and correct
+there.
+
+**Adaptive iteration + implicit-function-theorem AD (the ideal hot path).** On
+the default `activity_model="none"` path the iteration is an **adaptive
+`jax.lax.while_loop`** that stops as soon as a Newton step near the root falls
+below tolerance (a handful of steps in the buffered regime — measured 5–6 to
+machine precision across pH 5.4–8.8) and is **capped at `n_iter`** for the
+bisection worst case, wrapped in **`jax.lax.custom_root`** so the **pH
+sensitivity is the analytic IFT tangent** (one scalar solve of `df/d[H+]` at the
+root). The iteration count therefore never enters the AD graph: `jax.jvp` /
+`jacfwd` (forward, the per-step Jacobian-materialisation path) and `jax.grad`
+(reverse, the calibration-gradient path) through `solve_ph` are **O(1) in the
+iteration count** instead of differentiating through every Newton step. The root
+is the same one the old fixed scan converged to, so **every steady state is
+unchanged** (validated: BSM2 steady state and the ADM1 digester reproduce
+bit-for-bit). The convergence criterion is `in_bracket AND |Newton step| ≤ tol`
+— a *bisection* step can be spuriously small far from the root, so the step size
+alone is not a safe criterion, but a tiny in-bracket Newton step `|f/f'|` (with
+`|f'| ≥ 1`) means a tiny residual, i.e. the root. *Why this is the lever:* a
+Step-0 profile of the BSM2 plant found the pH solve was **~35% of the Jacobian
+materialisation** purely because `n_iter` was 40 while it converges in ~6; the
+adaptive + IFT rewrite drops the pH share to **~8%** (per-tangent pH cost
+O(40)→O(1)) and the whole 20-day BSM2 transient by **~20–25%** (default solver),
+with bit-identical results. The opt-in **activity-corrected path** keeps the
+original fixed-count scan (its `[H+]`↔ionic-strength fixed point couples the two,
+so it differentiates through the scan); it is not on the hot path. Equilibrium
+constants are temperature-corrected via van't Hoff. The chemistry mirrors the
+WATS reference pH solver. Validated against an independent bisection root finder;
+the weak-buffer / extreme-charge regime that broke the old bare-Newton scheme,
+the cap-independence of the adaptive loop, and forward-vs-reverse AD agreement
+(both the IFT tangent) are regression-tested in `tests/unit/test_ph_solver.py`.
 
 **Ionic-strength activity corrections (`activity_model`).** By default the solver
 uses molar **concentrations** directly with thermodynamic equilibrium constants
