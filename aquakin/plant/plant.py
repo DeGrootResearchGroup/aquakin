@@ -2166,7 +2166,8 @@ class Plant:
         # unchanged. (The signal bus is computed up front from the states, above,
         # so it does not reuse this map.)
         inputs_by_unit = {
-            name: self._collect_inputs(name, all_outputs, streams)
+            name: self._collect_inputs(name, all_outputs, streams, states,
+                                       params_full)
             for name in self._unit_order
         }
 
@@ -2805,7 +2806,8 @@ class Plant:
         for _pass in range(n_passes):
             for name in self._unit_order:
                 unit = self.units[name]
-                inputs = self._collect_inputs(name, all_outputs, streams)
+                inputs = self._collect_inputs(name, all_outputs, streams, states,
+                                              params_full)
                 params_unit = self._params_for_unit(name, params_full)
                 outputs = unit.compute_outputs(t, states[name], inputs,
                                                params_unit, signals)
@@ -3070,8 +3072,19 @@ class Plant:
         unit_name: str,
         all_outputs: dict[tuple[str, str], Stream],
         streams: dict[tuple[Optional[str], str], Stream],
+        states: Optional[dict[str, jnp.ndarray]] = None,
+        params_full: Optional[jnp.ndarray] = None,
     ) -> dict[str, Stream]:
-        """Find the input stream for each port of ``unit_name``."""
+        """Find the input stream for each port of ``unit_name``.
+
+        A translator that declares ``needs_dest_pH`` (the ASM->ADM interface)
+        has a pH-dependent inorganic-carbon charge balance, which the benchmark
+        evaluates at the digester pH. It is fed the destination (digester) unit's
+        instantaneous, state-derived pH so the feed it produces is benchmark-
+        consistent. This needs ``states``/``params_full``; when they are absent
+        (e.g. the control-signal sweep) the translator falls back to its fixed
+        ``pH_adm``.
+        """
         inputs: dict[str, Stream] = {}
         for conn in self._inputs_by_unit.get(unit_name, ()):
             if conn.from_unit is None:
@@ -3088,8 +3101,31 @@ class Plant:
                         f"available for {conn.to_unit}.{conn.to_port}. "
                         f"Recycle edges must be seeded with initial_value."
                     )
-            inputs[conn.to_port] = src.with_C(conn.translator.translate(src.C))
+            digester_pH = None
+            if states is not None:
+                if getattr(conn.translator, "needs_dest_pH", False):
+                    # ASM->ADM: the digester is the destination.
+                    digester_pH = self._unit_operating_pH(
+                        unit_name, states, params_full)
+                elif (getattr(conn.translator, "needs_src_pH", False)
+                        and conn.from_unit is not None):
+                    # ADM->ASM: the digester is the source.
+                    digester_pH = self._unit_operating_pH(
+                        conn.from_unit, states, params_full)
+            inputs[conn.to_port] = src.with_C(
+                conn.translator.translate(src.C, digester_pH=digester_pH))
         return inputs
+
+    def _unit_operating_pH(self, unit_name, states, params_full):
+        """The state-derived pH of ``unit_name`` for a pH-coupled translator.
+
+        Returns ``None`` (interface uses its fixed fallback) if the unit exposes
+        no ``operating_pH`` -- so the feedback is opt-in per unit.
+        """
+        op = getattr(self.units[unit_name], "operating_pH", None)
+        if op is None:
+            return None
+        return op(states[unit_name], self._params_for_unit(unit_name, params_full))
 
     # ----- solve -----------------------------------------------------------
 

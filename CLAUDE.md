@@ -4025,9 +4025,24 @@ AD-clean. Both **conserve total COD** (`asm2adm` minus the electron-acceptor
 demand; `adm2asm` minus the stripped `S_h2`+`S_ch4`) **and total nitrogen** —
 verified to `rel 1e-6` in `tests/integration/test_interfaces.py`. Only the BSM2
 `fdegrade = 0` case is implemented (other values raise `NotImplementedError`).
-The digester pH used in the charge balance is a fixed parameter (default 7.0);
-the digester's own charge-balance speciation solver sets the actual pH from the
-state, so a representative fixed value is sufficient for the steady state.
+The charge balances (inorganic carbon + `S_cat`/`S_an` in `asm2adm`, alkalinity
+`SALK` in `adm2asm`) are evaluated at the **digester pH**, fed back from the
+digester's own state-derived (charge-balance speciation) pH each RHS — as in the
+benchmark, where the interface pH is the digester's. The plumbing: each interface
+declares `needs_dest_pH` (`asm2adm`, whose destination is the digester) or
+`needs_src_pH` (`adm2asm`, whose source is the digester), and
+`Plant._collect_inputs` reads that unit's `operating_pH(state, params)` and passes
+it as `translate(..., digester_pH=...)`. The `pH_adm` parameter (default 7.0) is
+only the fallback for a standalone `translate` call with no plant to supply it.
+This is the **only pH-dependent part of the maps** (the inorganic-carbon and
+alkalinity charge balances); the COD/N partition is pH-independent, so feeding the
+real digester pH (~7.27) instead of the fixed 7.0 leaves every substrate pool
+unchanged and only corrects the charge-balance pools: the post-interface digester
+**`S_IC`** matches the published BSM2 feed to **0.13%** (was 7.6% at the fixed 7.0)
+and the strong-ion `S_an` to 0.015% (was 1.17%), eliminating what had been the
+digester's largest steady-state residual. The validated BSM2 reactor steady state
+is unchanged (≤0.06%); the digester's remaining ~1.3% is the headspace CO₂
+(the charge-balance-pH vs reference-algebraic-pH difference, not the interface).
 
 ---
 

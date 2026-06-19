@@ -35,7 +35,15 @@ class StateTranslator(Protocol):
     source_network: "CompiledNetwork"
     target_network: "CompiledNetwork"
 
-    def translate(self, C_source: jnp.ndarray) -> jnp.ndarray: ...
+    def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
+        """Map ``C_source`` to the target network's species ordering.
+
+        ``digester_pH`` optionally supplies the digester's instantaneous,
+        state-derived pH for a translator whose mapping has a pH-dependent
+        (charge-balance) term; a translator without one ignores it. The plant
+        supplies it when the translator declares ``needs_dest_pH``.
+        """
+        ...
 
 
 class IdentityTranslator:
@@ -51,5 +59,5 @@ class IdentityTranslator:
         self.source_network = network
         self.target_network = network
 
-    def translate(self, C_source: jnp.ndarray) -> jnp.ndarray:
+    def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         return C_source

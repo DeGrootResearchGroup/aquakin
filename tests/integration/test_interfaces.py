@@ -167,3 +167,84 @@ def test_adm2asm_outputs_finite_and_grad(nets):
         assert float(y[asm1.species_index[sp]]) == pytest.approx(0.0, abs=1e-12)
     g = jax.grad(lambda c: jnp.sum(trans.translate(c)))(C)
     assert jnp.all(jnp.isfinite(g))
+
+
+# --- digester-pH feedback ---------------------------------------------------
+
+def test_asm2adm_uses_digester_pH(nets):
+    """asm2adm evaluates its inorganic-carbon charge balance at the supplied
+    digester pH; the fixed pH_adm is only the standalone fallback."""
+    asm1, adm1 = nets
+    trans = ASM1toADM1(source_network=asm1, target_network=adm1)  # pH_adm = 7.0
+    C = _asm_vec(asm1, SI=28.0, SS=3.0, XI=95.0, XS=360.0, XB_H=50.0, XB_A=0.1,
+                 XP=0.7, SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SO=0.0, SNO=0.0)
+    sic = adm1.species_index["S_IC"]
+    # No pH supplied == evaluating at the fixed pH_adm.
+    assert float(trans.translate(C)[sic]) == pytest.approx(
+        float(trans.translate(C, digester_pH=7.0)[sic]), rel=1e-12)
+    # A higher digester pH shifts S_IC (more bicarbonate -> lower total IC).
+    sic_70 = float(trans.translate(C, digester_pH=7.0)[sic])
+    sic_73 = float(trans.translate(C, digester_pH=7.3)[sic])
+    assert sic_73 < sic_70
+    assert abs(sic_73 - sic_70) / sic_70 > 0.02
+    # COD and N are pH-independent, so still conserved at the shifted pH.
+    y = trans.translate(C, digester_pH=7.3)
+    assert _adm_cod(adm1, y) == pytest.approx(_asm_cod(asm1, C), rel=1e-6)
+    assert _adm_n(adm1, y) == pytest.approx(_asm_n(asm1, C), rel=1e-6)
+
+
+def test_adm2asm_uses_digester_pH(nets):
+    """adm2asm evaluates its alkalinity charge balance at the supplied digester
+    pH; conservation is unaffected and the gradient stays finite."""
+    asm1, adm1 = nets
+    trans = ADM1toASM1(source_network=adm1, target_network=asm1)
+    C = adm1.default_concentrations()
+    salk = asm1.species_index["SALK"]
+    assert float(trans.translate(C)[salk]) == pytest.approx(
+        float(trans.translate(C, digester_pH=7.0)[salk]), rel=1e-12)
+    assert float(trans.translate(C, digester_pH=7.3)[salk]) != pytest.approx(
+        float(trans.translate(C, digester_pH=7.0)[salk]), rel=1e-6)
+    y = trans.translate(C, digester_pH=7.3)
+    assert _asm_n_out(asm1, y) == pytest.approx(_adm_n_full(adm1, C), rel=1e-6)
+    g = jax.grad(lambda c: jnp.sum(trans.translate(c, digester_pH=7.3)))(C)
+    assert jnp.all(jnp.isfinite(g))
+
+
+@pytest.mark.slow
+def test_plant_feeds_digester_pH_to_interface():
+    """In the assembled BSM2 plant the ASM->ADM interface is fed the digester's
+    state-derived pH, so the digester inlet the plant resolves uses that pH
+    (~7.3), not the interface's fixed pH_adm of 7.0."""
+    from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.bsm.bsm2 import (
+        BSM2_CONSTANT_INFLUENT_T, build_bsm2, bsm2_asm1_network,
+        bsm2_constant_influent, bsm2_parameters)
+
+    asm1 = bsm2_asm1_network()
+    adm1 = aquakin.load_network("adm1")
+    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    plant.add_influent("feed",
+                       bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
+    params = bsm2_parameters(asm1, adm1)
+    y0 = bsm2_warm_start(plant)
+    plant.derivative(y0, params=params)   # build the state / parameter layouts
+    states = plant.states_by_unit(y0)
+    di = adm1.species_index
+
+    dig_pH = float(plant.units["digester"].operating_pH(
+        states["digester"], plant._params_for_unit("digester", params)))
+    assert 7.0 < dig_pH < 7.6     # the digester operates near pH 7.3, not 7.0
+
+    # The digester inlet the plant actually resolves.
+    all_outputs, streams = plant._resolve_streams(0.0, states, params)
+    inlet = plant._collect_inputs("digester", all_outputs, streams, states, params)
+    inlet_C = inlet[plant.units["digester"].input_ports[0]].C
+    sludge = all_outputs[("sludge_mix", "out")]
+    iface = ASM1toADM1(source_network=asm1, target_network=adm1)
+    sic_plant = float(inlet_C[di["S_IC"]])
+    sic_fb = float(iface.translate(sludge.C, digester_pH=dig_pH)[di["S_IC"]])
+    sic_fixed = float(iface.translate(sludge.C)[di["S_IC"]])
+    # The plant feeds the digester pH (matches the fed-back translation) and so
+    # differs materially from the fixed-pH_adm result.
+    assert sic_plant == pytest.approx(sic_fb, rel=1e-9)
+    assert abs(sic_plant - sic_fixed) / sic_fixed > 0.03
