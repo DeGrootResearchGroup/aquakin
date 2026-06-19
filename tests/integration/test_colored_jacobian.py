@@ -237,16 +237,17 @@ def test_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch):
     assert rel < 1e-10
 
 
-def test_colored_rejected_with_events_and_stable_adjoint(bsm1):
+def test_colored_rejected_with_events(bsm1):
+    # colored_jacobian is rejected with events= (the segmented solve manages its
+    # own integrator). It IS supported with gradient="stable_adjoint" (it colors
+    # the discrete-adjoint backward Jacobian build) -- covered by
+    # test_plant_stable_adjoint.test_stable_adjoint_colored_jacobian_matches_dense.
     plant, y0 = bsm1()
     params = plant.default_parameters()
     ev = [aquakin.Event(at_times=[1.0])]
     with pytest.raises(ValueError, match="colored_jacobian"):
         plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]), params=params,
                     y0=y0, events=ev, colored_jacobian=True)
-    with pytest.raises(ValueError, match="colored_jacobian"):
-        plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]), params=params,
-                    y0=y0, gradient="stable_adjoint", colored_jacobian=True)
 
 
 # --------------------------------------------------------------------------
