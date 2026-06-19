@@ -137,6 +137,59 @@ def test_vmap_over_states():
     assert jnp.all(jnp.isfinite(pH))
 
 
+# --- Implicit-function-theorem (custom_root) path: the ideal solve uses an
+# adaptive while_loop wrapped in jax.lax.custom_root, so the pH sensitivity is
+# the analytic IFT tangent (one scalar solve at the root) rather than a
+# differentiate-through of the iteration. These pin that behaviour.
+
+def test_pH_independent_of_iteration_cap():
+    """The adaptive loop stops at convergence, so the result is independent of the
+    n_iter *cap* once the cap exceeds the (small) iteration count needed -- a tiny
+    cap, the default, and a huge cap all agree to machine precision."""
+    # A buffered state: Newton converges in ~6 steps, so any cap >= ~8 agrees.
+    kw = dict(tot_carbonate=2.0e-3, tot_ammonia=3.0e-3, z_cation_eq=2.0e-3)
+    ref = float(solve_ph(**kw, n_iter=200))
+    for cap in (8, 12, 40, 200):
+        assert float(solve_ph(**kw, n_iter=cap)) == pytest.approx(ref, abs=1e-12)
+    # A hard, weakly-buffered state far from the pH-7 start is bisection-dominated
+    # and genuinely needs the worst-case count, so a tiny cap (12) legitimately
+    # under-converges -- only the default cap (40, the validated production count)
+    # agrees with the fully-converged reference. This also confirms the loop does
+    # NOT falsely declare convergence on a bisection step.
+    hard = dict(tot_carbonate=1e-2, strong_anion_eq=0.3)
+    ref_h = float(solve_ph(**hard, n_iter=200))
+    assert float(solve_ph(**hard, n_iter=40)) == pytest.approx(ref_h, abs=1e-9)
+    assert float(solve_ph(**hard, n_iter=12)) != pytest.approx(ref_h, abs=1e-6)
+
+
+def test_forward_and_reverse_ad_agree_and_match_fd():
+    """The IFT path must differentiate in BOTH modes: forward-mode (jax.jvp /
+    jacfwd -- the per-step Jacobian-materialisation path) and reverse-mode
+    (jax.grad). They must agree with each other and with central finite
+    differences (the IFT tangent is exact)."""
+    def f(z):
+        return solve_ph(tot_carbonate=2.0e-3, tot_ammonia=3.0e-3, z_cation_eq=z)
+
+    z0 = 2.0e-3
+    g_rev = float(jax.grad(f)(z0))
+    _, g_fwd = jax.jvp(f, (z0,), (1.0,))      # forward-mode directional derivative
+    g_fwd = float(g_fwd)
+    eps = 1e-8
+    fd = (float(f(z0 + eps)) - float(f(z0 - eps))) / (2 * eps)
+    assert np.isfinite(g_rev) and np.isfinite(g_fwd)
+    assert g_fwd == pytest.approx(g_rev, rel=1e-9)      # both are the IFT tangent
+    assert g_rev == pytest.approx(fd, rel=1e-5, abs=1e-6)
+
+
+def test_jit_and_grad_under_jit():
+    """solve_ph (adaptive while_loop + custom_root) is jit-clean, and grad
+    composes with jit."""
+    f = lambda z: solve_ph(tot_carbonate=2.0e-3, z_cation_eq=z)
+    z0 = 2.0e-3
+    assert float(jax.jit(f)(z0)) == pytest.approx(float(f(z0)), abs=1e-12)
+    assert float(jax.jit(jax.grad(f))(z0)) == pytest.approx(float(jax.grad(f)(z0)), rel=1e-9)
+
+
 # --- Global convergence: the charge balance far outside the buffered regime ---
 # A bare Newton step overshoots to exp(u)=inf (NaN) -- or silently to an absurd
 # pH that saturates the rate terms -- when the strong-ion charge exceeds the
