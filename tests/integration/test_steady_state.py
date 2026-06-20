@@ -176,6 +176,32 @@ def test_bsm1_steady_state_differentiable_wrt_recycle_flow():
 
 
 @pytest.mark.slow
+def test_bsm1_steady_state_solve_is_cached():
+    # The eager PTC while_loop recompiles on every call; a persisted jitted solver
+    # makes a repeated concrete steady_state reuse the compile. Pin the behaviour
+    # (not the wall time): one cache entry, reused across params, bit-identical
+    # re-call, and the gradient path bypasses the cache (and stays finite).
+    plant, _asm1, y0 = _bsm1()
+    params = plant.default_parameters()
+    assert not plant._steady_jit_cache                 # empty before first solve
+    r1 = plant.steady_state(params, y0=y0)
+    assert bool(r1.converged)
+    assert len(plant._steady_jit_cache) == 1           # compiled + cached once
+    # A swept-params call reuses the SAME compiled solver (rhs reads params as an
+    # argument), so no new entry is added.
+    r2 = plant.steady_state(params.at[0].multiply(1.001), y0=y0)
+    assert bool(r2.converged) and len(plant._steady_jit_cache) == 1
+    # Same-params re-call is bit-identical (the cached compiled solve).
+    r3 = plant.steady_state(params, y0=y0)
+    assert float(jnp.max(jnp.abs(r1.state - r3.state))) == 0.0
+    # Under a gradient the call is traced, so it takes the IFT path, NOT the
+    # concrete cache -- no concrete entry is added and the gradient is finite.
+    g = jax.grad(lambda p: plant.steady_state(p, y0=y0).state.sum())(params)
+    assert bool(jnp.all(jnp.isfinite(g)))
+    assert len(plant._steady_jit_cache) == 1
+
+
+@pytest.mark.slow
 def test_bsm1_steady_state_falls_back_to_forward():
     # If PTC is starved of iterations it falls back to the forward solve.
     plant, _asm1, y0 = _bsm1()

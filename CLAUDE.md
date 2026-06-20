@@ -3262,6 +3262,30 @@ is what production simulators use to snap to steady state on any topology.
   array) is always honoured. `scale_floor` only affects the path and the
   convergence criterion, never the root. Regression: `test_steady_state.py::
   test_bsm2_steady_state_per_state_scaling_cuts_iterations`.
+- **Compiled-solve cache — the single-run-compile lever (`Plant._steady_jit_cache`).**
+  A one-shot `steady_state` is **~99% compilation** (BSM2: ~12 s compile of the
+  plant-RHS `jacfwd` inside the PTC `while_loop`, vs ~40 ms of actual solving),
+  and the eager `jax.lax.while_loop` in `ptc_forward` **re-traces and recompiles
+  on every call** — so before this, a *repeated* `steady_state` (a temperature /
+  SRT sweep, multistart, regenerating a figure) paid the full ~12–17 s each time.
+  `plant.steady_state` now **persists a jitted forward solver** keyed by the PTC
+  settings (`dt0`/`dt_max`/`growth_cap`/`max_iter`/`tol`/`nonneg`/`influent_time`)
+  and reuses it, so JAX skips the recompile: **BSM2 call 1 ≈ 15.6 s, call 2 ≈
+  0.02 s (~780×), and a swept-`params` call is also ~0.02 s** (the `rhs` reads
+  `params` as a jit *argument* and recomputes the recycle map inside, so one
+  compiled solver is correct for any params — and `y0`-derived `scale_floor` is an
+  argument too, so a varying warm start does not recompile). Cached **only on the
+  dense, design-free, concrete path**: the colored primal bakes a params-derived
+  recycle map, the `design=` path differentiates a pytree, and a traced (gradient)
+  call needs the IFT `custom_vjp` — those keep `solve_steady_state` (the gradient
+  is amortized by the caller's own `jit`). The cached path returns the converged
+  state directly (no IFT wrapper — a concrete call takes no gradient) and still
+  honours the non-convergence fallback to `run_to_steady_state`. The cache is
+  cleared by `set_temperature` / `set_temperature_model` (they change the RHS /
+  state size). **This does NOT speed up the *first* (one-shot) call — that compile
+  is irreducible here — only repeated calls.** Regression: `test_steady_state.py::
+  test_bsm1_steady_state_solve_is_cached` (one entry, reused across params,
+  bit-identical re-call, gradient path bypasses it and stays finite).
 - **`steady_state(..., colored_jacobian=True)` — sparse (colored-AD) PTC
   Jacobian.** PTC forms the full plant `dF/dy` every Newton step (~tens of times
   for BSM2), the *same* block-sparse object the integrator's implicit-stage
