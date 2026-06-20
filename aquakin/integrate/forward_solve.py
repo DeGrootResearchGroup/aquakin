@@ -17,20 +17,31 @@ is dropped is only the *adjoint over the whole solve*: the result is **not**
 differentiable w.r.t. parameters / initial conditions. So this is an opt-in fast
 lane for non-AD solves; any differentiated solve must use the ``diffrax`` path.
 
-The compile saving is real but **scale-dependent**: it is large for small/simple
-networks (where the ``diffrax`` implicit scaffolding dominates the trace), but on
-a large flowsheet the dominant compile cost is the shared colored-Jacobian +
-plant-RHS tracing, so the saving shrinks (measured only ~1.1x on the full BSM2
-plant). The run is **not** faster than the colored ``diffrax`` path on a large
-plant -- it is ~1.2x slower there, because ``diffrax``'s mature chord/PID solver
-places steps more efficiently (the per-step costs are otherwise the same: both
-build the colored Jacobian once per step, which XLA fuses into one batched JVP, so
-freezing/reusing it does not help and in fact hurts via degraded Newton
-convergence). So this is a fast lane for **small/simple** non-AD forward solves
-and compile-bound repeated solves; for a large differentiable plant the
-``colored_jacobian`` ``diffrax`` path is both faster and differentiable. Results
-match the ``diffrax`` trajectory to the same ``rtol`` (the usual step-sequence
-variation between two valid adaptive solves).
+The run is faster than the colored ``diffrax`` forward path -- measured ~0.86x
+(compile+run) and ~0.88x (run-only) on the full 609-day BSM2 dynamic solve at the
+benchmark hourly save grid -- because the lean loop strips the differentiability
+scaffolding while the **dense-output continuous extension** (see below) removes
+the only remaining per-save penalty. The per-step costs are otherwise the same as
+``diffrax`` (both build the colored Jacobian once per step, which XLA fuses into
+one batched JVP -- so freezing/reusing it does not help and in fact hurts via
+degraded Newton convergence). The compile is also faster, though the margin is
+**scale-dependent**: large for small/simple networks (where the ``diffrax``
+implicit scaffolding dominates the trace) and smaller on a big flowsheet (where
+the shared colored-Jacobian + plant-RHS tracing dominates). The trade-off versus
+``diffrax`` is the loss of differentiability, so a large *differentiable* solve
+(``calibrate`` / ``sensitivity`` / ``jax.grad``) must still use the
+``colored_jacobian`` ``diffrax`` path. Results match the ``diffrax`` trajectory to
+the same ``rtol`` (the usual step-sequence variation between two valid adaptive
+solves).
+
+Output at ``t_eval`` uses a **cubic-Hermite dense output** (the Kvaerno3
+continuous extension, :func:`_hermite`): the integrator takes its natural adaptive
+steps -- clipped only to the final time ``t1`` -- and every save point falling
+inside a step is recovered by interpolation, exactly as the ``diffrax`` path does.
+This replaces the earlier step-clipping (a forced step boundary on every save),
+whose cost grew with save density and was the dominant reason an earlier version
+ran slower than ``diffrax`` at the dense benchmark grid; with dense output the run
+time is flat in the number of save points.
 
 The method is the L-stable A-stable 3rd-order Kvaerno3 ESDIRK with its embedded
 2nd-order error estimate (Kvaerno 2004) and an adaptive step controller with two
@@ -42,9 +53,7 @@ simplified-Newton contraction rate caps the step growth, so a step is rarely gro
 into nonlinear-divergence, the chord's failure mode; diffrax's ``PIDController``
 has no such term). The default ``maxfac=2.0`` / ``pi_beta=0.08`` were tuned on the
 full 609-day BSM2 dynamic run, where they cut the step count ~20% versus the
-earlier ``maxfac=5`` pure-I controller (fewer error-test rejections). Output at
-``t_eval`` is exact: the step is clipped to land on each save time (no
-dense-output interpolation error).
+earlier ``maxfac=5`` pure-I controller (fewer error-test rejections).
 """
 
 from functools import partial
@@ -72,6 +81,22 @@ _BE = (_A41 - _A31, _A42 - _A32, _A43 - _G, _G)   # embedded-error weights
 
 _MAXNEWT = 12
 _KAPPA = 1e-2          # simplified-Newton convergence tolerance (Hairer eta test)
+
+
+def _hermite(y0_, y1_, f0_, f1_, h, theta):
+    """Cubic Hermite continuous extension on a step ``[t, t+h]`` at fraction
+    ``theta`` in ``[0, 1]``. Matches the state and its derivative at both ends
+    (3rd-order, the order of the Kvaerno3 method and the same dense output the
+    ``diffrax`` path uses). ``f0 = rhs(t, y) = k1`` and ``f1 = rhs(t+h, y1) = k4``
+    (the stiffly-accurate last stage is evaluated at the step endpoint, so its
+    derivative is the endpoint slope -- no extra RHS evaluation needed)."""
+    th2 = theta * theta
+    th3 = th2 * theta
+    h00 = 2.0 * th3 - 3.0 * th2 + 1.0
+    h10 = th3 - 2.0 * th2 + theta
+    h01 = -2.0 * th3 + 3.0 * th2
+    h11 = th3 - th2
+    return h00 * y0_ + h10 * h * f0_ + h01 * y1_ + h11 * h * f1_
 
 
 def forward_solve(
@@ -165,7 +190,9 @@ def forward_solve(
         err = h * (_BE[0] * k1 + _BE[1] * k2 + _BE[2] * k3 + _BE[3] * k4)
         rate = jnp.maximum(jnp.maximum(r2, r3), r4)
         conv = c2 & c3 & c4 & jnp.all(jnp.isfinite(y1))
-        return y1, wrms(err, y), rate, conv
+        # k1 (slope at t) and k4 (slope at t+h, the stiffly-accurate endpoint
+        # stage) feed the cubic-Hermite dense output.
+        return y1, wrms(err, y), rate, conv, k1, k4
 
     ys0 = jnp.zeros((n_save, n), dtype=y0.dtype)
 
@@ -189,13 +216,16 @@ def forward_solve(
                     dead)
 
         def do_step():
-            # clip the actual step so it never overshoots the next save time
-            # (-> recorded exactly at t_eval); the controller still proposes off
-            # the unclipped h_ctrl so clipping does not bias the step sequence.
-            h = jnp.minimum(h_ctrl, next_save - t)
+            # Take the NATURAL adaptive step, clipped only to the final time t1
+            # (not to each save). Save points that fall inside the step are
+            # recovered by the cubic-Hermite continuous extension below, so the
+            # controller keeps its natural step rhythm instead of being forced to
+            # plant an extra boundary on every t_eval point (the step-clipping
+            # cost at a dense save grid -- issue #386).
+            h = jnp.minimum(h_ctrl, t1 - t)
             J = jac(t, y, args)
             lu = jsla.lu_factor(eye - h * _G * J)
-            y1, en, rate, conv = one_step(t, y, h, lu)
+            y1, en, rate, conv, k1, k4 = one_step(t, y, h, lu)
             accept = conv & (en <= 1.0)
             # Error controller: an I-term en^(-1/3) with an optional Soderlind PI
             # memory term (en_prev/en)^pi_beta -- the proportional part that damps
@@ -214,10 +244,22 @@ def forward_solve(
             t_new = jnp.where(accept, t + h, t)
             y_new = jnp.where(accept, y1, y)
             en_prev_new = jnp.where(accept, ens, en_prev)   # update only on accept
-            landed = accept & (t_new >= next_save - _tol(next_save))
-            ys_new = jax.lax.cond(landed, lambda: ys.at[sidx].set(y_new),
-                                  lambda: ys)
-            sidx_new = sidx + jnp.where(landed, 1, 0)
+            # Dense output: on an accepted step, record EVERY save time in
+            # (t, t_new] by interpolating within the step (a step may span several
+            # saves at a sparse grid, or none at a dense one). f0=k1, f1=k4.
+            def rec_cond(rc):
+                ys_, si_ = rc
+                in_range = si_ < n_save
+                tsi = t_eval[jnp.minimum(si_, n_save - 1)]
+                return accept & in_range & (tsi <= t_new + _tol(t_new))
+
+            def rec_body(rc):
+                ys_, si_ = rc
+                theta = (t_eval[si_] - t) / h
+                ysave = _hermite(y, y_new, k1, k4, h, theta)
+                return ys_.at[si_].set(ysave), si_ + 1
+
+            ys_new, sidx_new = jax.lax.while_loop(rec_cond, rec_body, (ys, sidx))
             stuck = h_ctrl_new < 1e-13
             return (t_new, y_new, h_ctrl_new, sidx_new, ys_new, nstep + 1,
                     en_prev_new, dead | stuck)
