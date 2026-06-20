@@ -70,6 +70,20 @@ def test_ptc_reports_non_convergence():
     assert int(res.iterations) == 1
 
 
+def test_ptc_step_guard_keeps_overshoot_finite():
+    # A large initial pseudo-timestep makes the first Newton step overshoot into a
+    # region where the field is non-finite (exp blows up). The accept-always
+    # iteration would propagate the resulting NaN; the step-acceptance guard
+    # rejects the step, hard-shrinks dt, and still converges to the root y*=log(p).
+    def rhs(y, p):
+        return p - jnp.exp(y)
+    res = solve_steady_state(rhs, jnp.array([1.0]), jnp.array([-50.0]),
+                             dt0=1e4, scale_floor=1.0, nonneg=False, tol=1e-10)
+    assert bool(jnp.all(jnp.isfinite(res.state)))
+    assert bool(res.converged)
+    np.testing.assert_allclose(np.asarray(res.state), [0.0], atol=1e-6)  # log(1)=0
+
+
 # --- full plant: BSM1 / BSM2 (slow) ------------------------------------------
 
 def _bsm1():
@@ -235,6 +249,46 @@ def test_bsm2_steady_state_matches_forward():
     for sp in ["XB_H", "XB_A", "SNH", "SNO"]:
         assert abs(float(a["tank5"][i[sp]]) - float(b["tank5"][i[sp]])) <= \
             0.03 * abs(float(b["tank5"][i[sp]])) + 0.05, sp
+
+
+@pytest.mark.slow
+def test_ptc_step_guard_rescues_cold_start():
+    # From a cold start (the generic initial_state, far from the operating point)
+    # a Newton overshoot blows the residual up by orders of magnitude and the
+    # accept-always iteration runs to NaN. The step-acceptance guard rejects the
+    # blow-up steps and converges. The contrast pins that the GROWTH guard (not
+    # just non-finite rejection) is what rescues it: a nan-only guard
+    # (divergence_factor = inf) stays finite but stalls.
+    from aquakin.plant.bsm.bsm2 import (
+        BSM2_CONSTANT_INFLUENT_T, build_bsm2, bsm2_asm1_network,
+        bsm2_constant_influent, bsm2_parameters)
+    from aquakin.plant.steady import ptc_forward
+    asm1 = bsm2_asm1_network()
+    adm1 = aquakin.load_network("adm1")
+    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    plant.add_influent("feed",
+                       bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
+    params = bsm2_parameters(asm1, adm1)
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    yc = plant.initial_state()                           # cold start
+    t = jnp.asarray(0.0)
+    plant._check_recycle_map_constant(t, yc, params)
+    rmap = plant._maybe_recycle_map(t, plant._split_state(yc), params)
+    def rhs(y, th):
+        return plant._rhs(t, y, th, recycle_map=rmap)
+    sf = jnp.maximum(jnp.abs(yc), 1e-6)
+
+    # Default growth guard: converges, finite (no NaN).
+    ys, r, _k, conv = ptc_forward(rhs, params, yc, scale_floor=sf, max_iter=1000)
+    assert bool(jnp.all(jnp.isfinite(ys)))
+    assert bool(conv) and float(r) < 1e-5
+    # Non-finite-only guard (divergence_factor = inf): the nan-rejection keeps it
+    # finite, but without rejecting the finite blow-up steps it stalls.
+    ys2, _r2, _k2, conv2 = ptc_forward(
+        rhs, params, yc, scale_floor=sf, divergence_factor=jnp.inf, max_iter=1000)
+    assert bool(jnp.all(jnp.isfinite(ys2)))             # no NaN ...
+    assert not bool(conv2)                              # ... but does not converge
 
 
 @pytest.mark.slow

@@ -3241,6 +3241,27 @@ is what production simulators use to snap to steady state on any topology.
   under a `jit`/`grad` trace the diagnostics are traced values and the fallback
   is skipped (only the differentiable `state` is used there). Constant influent
   is assumed (the residual samples the influent at `influent_time`, default 0).
+- **Step-acceptance guard (the robustness lever, `divergence_factor`).** PTC is
+  legitimately **non-monotone** — a healthy step can spike the scaled residual
+  (~20–30× on the BSM plants) and recover, so the ramp must accept those. But a
+  Newton step from far off the solution (a cold start) can overshoot into a bad
+  region where the residual blows up by orders of magnitude and then goes
+  non-finite — the accept-always iteration runs to **NaN**. `ptc_forward` now
+  **rejects** a non-finite or grossly-diverging step (scaled-residual growth past
+  the generous `divergence_factor`, default `1000`): it **holds the iterate and
+  hard-shrinks `dt`** (×0.1, floored) so the retry is a stabler backward-Euler
+  step. The threshold sits in the **wide gap between benign (~30×) and
+  catastrophic (~1e5×) growth**, so a converging run **never rejects and is
+  bit-identical** to the unguarded iteration (BSM1/BSM2 warm: same 23/38
+  iterations), while a divergent one is pulled back. **Measured:** BSM2 from a
+  *cold* `initial_state` went to NaN before; it now **converges** (447 PTC
+  iterations). The growth guard is what rescues it, not merely catching NaN: a
+  non-finite-only guard (`divergence_factor=inf`) stays finite but **stalls**
+  (1000 iters, residual ~1.5e-2). The guard is in the core `ptc_forward`, so it
+  also hardens `BiofilmReactor.steady_state` and direct callers, identity on the
+  happy path. Regressions: `test_steady_state.py::test_ptc_step_guard_keeps_overshoot_finite`
+  (fast synthetic overshoot→NaN rescue) and `::test_ptc_step_guard_rescues_cold_start`
+  (BSM2 cold: growth guard converges, nan-only stalls).
 - **Per-state pseudo-time / residual scaling (the iteration-count lever).** PTC's
   step damping `V` and convergence criterion both use `max(|y|, scale_floor)`. A
   flat scalar floor (the old default `1.0`) **over-damps the small-magnitude
