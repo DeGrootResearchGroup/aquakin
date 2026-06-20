@@ -379,3 +379,56 @@ def test_colored_ptc_matches_dense_bsm2():
     # agree to PTC tolerance (~1e-7) rather than bit-for-bit (cf. the
     # single-network BSM1, which is exact).
     assert np.max(np.abs(a - b) / (np.abs(a) + 1e-9)) < 1e-5
+
+
+@pytest.mark.slow
+def test_colored_adjoint_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch):
+    """A truncated pattern must be caught by the stable_adjoint **backward**
+    builder's guard (which validates the colored vs dense Jacobian at the start
+    state), warn, and fall back to the dense backward Jacobian -- so the solve is
+    still correct (== the dense path). Truncating the probe to the diagonal gates
+    off the structural pattern's cross-unit placement, so the cross-unit and
+    time-dependence couplings are missing and the guard fires."""
+    plant, y0 = bsm1()
+    params = plant.default_parameters()
+
+    def _diag_only(rhs, y0_, **kw):
+        n = jnp.asarray(y0_).shape[0]
+        return np.eye(n, dtype=bool)
+    monkeypatch.setattr(cj, "jacobian_sparsity_pattern", _diag_only)
+
+    kw = dict(t_span=(0.0, 0.3), t_eval=jnp.array([0.15, 0.3]), params=params,
+              y0=y0, gradient="stable_adjoint", rtol=1e-6, atol=1e-3,
+              max_steps=20_000)
+    s_def = plant.solve(**kw, colored_jacobian=False)
+    with pytest.warns(RuntimeWarning, match="falling back to dense"):
+        s_col = plant.solve(**kw, colored_jacobian=True)
+    builder, _n, ok, _ratio = plant._colored_adjoint_builder
+    assert ok is False and builder is None              # guard failed -> dense
+    # The forward trajectory is unaffected by the (backward-only) Jacobian build,
+    # so the fallback solve equals the dense one.
+    rel = np.max(np.abs(np.asarray(s_def.state) - np.asarray(s_col.state))
+                 / (np.abs(np.asarray(s_def.state)) + 1e-9))
+    assert rel < 1e-10
+
+
+@pytest.mark.slow
+def test_colored_steady_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch):
+    """A truncated pattern must be caught by the PTC ``steady_state`` colored
+    builder's guard, warn, and fall back to dense ``jacfwd`` -- reaching the same
+    steady state as dense PTC."""
+    plant, y0 = bsm1()
+    params = plant.default_parameters()
+
+    def _diag_only(rhs, y0_, **kw):
+        n = jnp.asarray(y0_).shape[0]
+        return np.eye(n, dtype=bool)
+    monkeypatch.setattr(cj, "jacobian_sparsity_pattern", _diag_only)
+
+    dense = plant.steady_state(params, y0=y0)
+    with pytest.warns(RuntimeWarning, match="falling back to dense"):
+        colored = plant.steady_state(params, y0=y0, colored_jacobian=True)
+    builder, _n, ok = plant._colored_steady_builder
+    assert ok is False and builder is None
+    a, b = np.asarray(dense.state), np.asarray(colored.state)
+    assert np.max(np.abs(a - b) / (np.abs(a) + 1e-9)) < 1e-7

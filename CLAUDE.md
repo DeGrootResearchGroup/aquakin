@@ -2976,7 +2976,26 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   concretely, for the **augmented** (`n+1`, time-carrying) primal rhs the discrete
   adjoint differentiates — `Plant._colored_adjoint_jacobian_builder`, the backward
   analogue of `_colored_jacobian_solver`, guarded by `colored_jacobian_max_error`
-  with a dense fallback, cached in `_colored_adjoint_builder`. The dense default
+  with a dense fallback, cached in `_colored_adjoint_builder`. **Its sparsity
+  pattern is the per-component structural pattern (issue #381).** The backward
+  feeds `J` directly into `I − dt·γ·Jᵀ` and the transposed solve, so a missed
+  coupling does **not** cost steps (as it does for the self-correcting forward
+  chord) — it **silently corrupts the gradient**, undetected mid-transient by the
+  start-state guard, and a start-state-only or trajectory-*sampled* pattern can
+  miss a coupling that only activates at an unvisited correlated operating point.
+  So the builder unions the IC probe with **`_structural_plant_pattern`** (each
+  unit's equation-derived `coupling_pattern()` — the same complete assembly the
+  forward path uses), embedded in the augmented `[y; τ]` layout's `df/dy` block
+  (the probe supplies the always-on `τ` time-dependence column). A *complete*
+  structural superset closes the silent-corruption risk a sampled pattern only
+  reduces. The PTC steady-state builder (`_colored_steady_jacobian_builder`) uses
+  the same structural pattern (it marches in a narrow neighbourhood so the probe
+  usually suffices, but the superset is complete regardless). Validated: the
+  colored backward gradient w.r.t. a kinetic param **and** a flow-setpoint param
+  (`underflow_split.ras`, where `dM/dθ ≠ 0`) matches the dense-Jacobian gradient,
+  and the backward / PTC guards fall back to dense on a truncated pattern
+  (`tests/integration/test_plant_stable_adjoint.py`, `test_colored_jacobian.py`).
+  The dense default
   (`jacobian_builder=None`) is a trace-time branch, so it is bit-identical to the
   historic backward; the colored gradient equals the dense one (exact on the
   superset pattern — only float summation order differs: ~1e-15 on BSM1, ~6e-7 on
