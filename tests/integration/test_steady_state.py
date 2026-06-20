@@ -209,3 +209,31 @@ def test_bsm2_steady_state_matches_forward():
     for sp in ["XB_H", "XB_A", "SNH", "SNO"]:
         assert abs(float(a["tank5"][i[sp]]) - float(b["tank5"][i[sp]])) <= \
             0.03 * abs(float(b["tank5"][i[sp]])) + 0.05, sp
+
+
+@pytest.mark.slow
+def test_bsm2_steady_state_per_state_scaling_cuts_iterations():
+    # The default per-state pseudo-time / residual floor (max(|y0|, 1e-6)) gives
+    # every state a magnitude-consistent scale, so the SER ramp is no longer
+    # throttled by the over-damped small-magnitude states -- roughly halving the
+    # PTC iteration count vs the old flat scalar floor, while converging to the
+    # same root.
+    from aquakin.plant.bsm.bsm2 import (
+        build_bsm2, bsm2_constant_influent, bsm2_parameters)
+    from aquakin.plant.bsm import bsm2_warm_start
+    asm1 = aquakin.load_network("asm1")
+    adm1 = aquakin.load_network("adm1")
+    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
+    y0 = bsm2_warm_start(plant)
+    params = bsm2_parameters(asm1, adm1)
+
+    default = plant.steady_state(params, y0=y0)                # per-state floor
+    flat = plant.steady_state(params, y0=y0, scale_floor=1.0)  # old behaviour
+    assert bool(default.converged) and bool(flat.converged)
+    # Fewer iterations (the win) ...
+    assert int(default.iterations) < int(flat.iterations)
+    # ... and the same operating point (scaling changes the path, not the root).
+    rel = float(jnp.max(jnp.abs(default.state - flat.state)
+                        / (jnp.abs(flat.state) + 1e-9)))
+    assert rel < 1e-4

@@ -3241,6 +3241,27 @@ is what production simulators use to snap to steady state on any topology.
   under a `jit`/`grad` trace the diagnostics are traced values and the fallback
   is skipped (only the differentiable `state` is used there). Constant influent
   is assumed (the residual samples the influent at `influent_time`, default 0).
+- **Per-state pseudo-time / residual scaling (the iteration-count lever).** PTC's
+  step damping `V` and convergence criterion both use `max(|y|, scale_floor)`. A
+  flat scalar floor (the old default `1.0`) **over-damps the small-magnitude
+  states** (gas fractions ~1e-3, dissolved hydrogen ~1e-7): their relative rate is
+  throttled, which throttles the SER `dt`-ramp and roughly **doubles** the
+  iteration count. `plant.steady_state` now defaults `scale_floor` to a
+  **per-state** floor `max(|y0|, 1e-6)` — each state scaled by its own warm-start
+  magnitude — so every state has a magnitude-consistent pseudo-time. Measured on
+  **BSM2: 80 → 38 PTC iterations (run-only 39.4 → 18.9 ms, ~2.1×), same root
+  (rel ≤ 7e-6)**; neutral on BSM1 (24 → 23). The small `1e-6` absolute floor
+  anchors near-zero states — a *pure* `|y|` relative scale (no floor) is faster
+  still on BSM2 (~44 it) but **destabilises BSM1** (~280 it), so the `|y0|`-anchored
+  floor is the robust choice. The win is in the **run/amortized** time (a jitted
+  design sweep, calibration); the un-jitted one-shot `steady_state` wall is
+  compile-bound, so its time is roughly unchanged. The change is confined to
+  `plant.steady_state`'s default — `ptc_forward` / `solve_steady_state` keep the
+  scalar `scale_floor=1.0` default (so `BiofilmReactor.steady_state` and direct
+  callers are unchanged), and an explicit `scale_floor` (scalar or per-state
+  array) is always honoured. `scale_floor` only affects the path and the
+  convergence criterion, never the root. Regression: `test_steady_state.py::
+  test_bsm2_steady_state_per_state_scaling_cuts_iterations`.
 - **`steady_state(..., colored_jacobian=True)` — sparse (colored-AD) PTC
   Jacobian.** PTC forms the full plant `dF/dy` every Newton step (~tens of times
   for BSM2), the *same* block-sparse object the integrator's implicit-stage
