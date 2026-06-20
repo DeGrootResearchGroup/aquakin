@@ -2771,6 +2771,9 @@ class Plant:
         """
         from aquakin.integrate.colored_jacobian import (
             build_colored_root_finder, colored_jacobian_max_error)
+        import numpy as np
+
+        from aquakin.integrate.colored_jacobian import jacobian_sparsity_pattern
         from aquakin.integrate.discrete_adjoint import _autonomize
 
         if self._colored_adjoint_builder is None:
@@ -2791,12 +2794,31 @@ class Plant:
             def rhs_aug_y(ya):
                 return rhs_aug(0.0, ya, params)
 
+            # The backward feeds J directly into ``I - dt.gamma.J^T`` and the
+            # transposed solve, so a missed coupling does not cost steps (as it
+            # does for the self-correcting forward chord) -- it **silently
+            # corrupts the gradient**, undetected mid-transient by the start-state
+            # guard. So the pattern must be a *complete* structural superset, not
+            # a start-state-only or sampled one. Use the per-component structural
+            # pattern (each unit's equation-derived ``coupling_pattern()``,
+            # assembled by :meth:`_structural_plant_pattern`) for the plant
+            # ``df/dy`` block, embedded in the augmented ``[y; tau]`` layout's
+            # top-left block; the augmented probe inside ``build_colored_root_finder``
+            # supplies the (always-on, non-stale) ``tau`` time-dependence column.
+            n = y0.shape[0]
+            plain_probe = jacobian_sparsity_pattern(
+                lambda y: primal(jnp.asarray(t0f), y, params), y0) > 0
+            structural = self._structural_plant_pattern(coupling_mask=plain_probe)
+            aug_extra = np.zeros((n + 1, n + 1), dtype=bool)
+            aug_extra[:n, :n] = plain_probe | structural
+
             # rtol/atol only set the (unused) chord tolerances on the returned
             # object; the seed matrix / coloring / pattern is all we use. A scalar
             # atol avoids augmenting the per-component vector for the probe.
             atol_s = float(jnp.max(jnp.asarray(atol)))
             rf, n_colors = build_colored_root_finder(
-                rhs_aug_y, y0_aug, rtol=10.0 * rtol, atol=10.0 * atol_s)
+                rhs_aug_y, y0_aug, rtol=10.0 * rtol, atol=10.0 * atol_s,
+                extra_pattern=aug_extra)
             err = colored_jacobian_max_error(rhs_aug_y, y0_aug, rf)
             jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs_aug_y)(y0_aug)))) + 1e-300
             ok = err <= 1e-8 * jscale
@@ -2889,18 +2911,23 @@ class Plant:
         ``n``, while reconstructing the identical matrix on the pattern's support.
 
         Unlike the dynamic solve, this is well suited to coloring: PTC marches to
-        a single operating point in a narrow neighbourhood, so the sparsity
-        pattern derived at the warm start stays valid throughout (the dynamic
-        run's wide load excursion is what can expose start-state-missed
-        couplings). Built and **guarded** against the dense Jacobian at ``y0``
-        once (falling back to dense with a warning on a mismatch), then cached and
-        reused -- a parameter/design sweep keeps the same structural pattern.
+        a single operating point in a narrow neighbourhood, so the warm-start
+        probe usually suffices on its own (the dynamic run's wide load excursion
+        is what makes start-state-missed couplings a problem). The builder unions
+        it with the complete per-component structural pattern regardless, matching
+        the forward and stable_adjoint builders. Built and **guarded** against the
+        dense Jacobian at ``y0`` once (falling back to dense with a warning on a
+        mismatch), then cached and reused -- a parameter/design sweep keeps the
+        same structural pattern.
 
         Returns a builder ``(F, y) -> dF/dy``, or ``None`` (dense) when called
         under a trace (the probe needs concrete arrays) or when the guard fails.
         """
+        import numpy as np
+
         from aquakin.integrate.colored_jacobian import (
-            build_colored_root_finder, colored_jacobian_max_error)
+            build_colored_root_finder, colored_jacobian_max_error,
+            jacobian_sparsity_pattern)
 
         if self._colored_steady_builder is None:
             if any(isinstance(leaf, jax.core.Tracer)
@@ -2911,8 +2938,17 @@ class Plant:
                 return rhs(y, theta)
 
             tol_s = float(jnp.max(jnp.asarray(tol)))
+            # Use the per-component structural pattern (each unit's equation-derived
+            # coupling_pattern, assembled by _structural_plant_pattern) unioned with
+            # the warm-start probe, matching the forward and stable_adjoint builders.
+            # PTC stays in a narrow neighbourhood so the start-state probe is usually
+            # enough on its own, but the structural superset is complete regardless
+            # of how far the warm start sits from the steady state.
+            plain_probe = jacobian_sparsity_pattern(rhs_y, y0) > 0
+            structural = self._structural_plant_pattern(coupling_mask=plain_probe)
             rf, n_colors = build_colored_root_finder(
-                rhs_y, y0, rtol=tol_s, atol=tol_s)
+                rhs_y, y0, rtol=tol_s, atol=tol_s,
+                probe_pattern=plain_probe, extra_pattern=structural)
             err = colored_jacobian_max_error(rhs_y, y0, rf)
             jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs_y)(y0)))) + 1e-300
             ok = err <= 1e-8 * jscale

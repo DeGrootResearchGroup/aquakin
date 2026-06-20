@@ -493,3 +493,41 @@ def test_stable_adjoint_forward_solve_is_cached():
         params=base.at[0].set(th), **kw).C_named("tank1", "SNO")[-1]
     )(float(base[0]))
     assert len(_sa_keys()) == n_before
+
+
+@pytest.mark.validation
+@pytest.mark.heavy
+def test_stable_adjoint_colored_jacobian_flow_setpoint_matches_dense():
+    """The intersection of the two backward features: ``colored_jacobian`` AND a
+    FLOW-SETPOINT parameter (the RAS recycle flow). The primal/``rhs`` split puts
+    the cached recycle map on every ``df/dy`` Jacobian build (now colored) while
+    the ``df/dtheta`` vjp keeps the map-recomputing ``rhs`` -- so coloring the
+    backward Jacobian must NOT drop the ``dM/dtheta`` term. The colored gradient
+    w.r.t. RAS (where ``dM/dtheta != 0``) must equal the dense-Jacobian gradient.
+    The kinetic-param colored test cannot catch a dropped ``dM/dtheta`` (it is 0
+    there); this is the test that does."""
+    asm1 = aquakin.load_network("asm1")
+    plant = build_bsm1(asm1)
+    plant.add_influent("influent", load_bsm1_influent("dry", asm1))
+    y0 = bsm1_warm_start(plant)
+    base = plant.default_parameters()
+    gidx = plant.parameter_index("underflow_split.ras")     # RAS recycle flow
+    theta0 = float(base[gidx])
+    T = 0.3
+    kw = dict(rtol=1e-6, atol=1e-3, max_steps=20_000)
+
+    def g(theta, colored):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve((0.0, T), t_eval=jnp.array([0.15, T]), params=p, y0=y0,
+                          gradient="stable_adjoint", colored_jacobian=colored, **kw)
+        return jnp.sum(sol.state ** 2)
+
+    _ = g(theta0, True)                                     # build + guard colored
+    builder = plant._colored_adjoint_builder
+    assert builder is not None and builder[2] is True       # guard passed
+
+    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
+    g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
+    assert np.isfinite(g_colored)
+    assert g_colored != 0.0                                 # RAS moves M (dM/dtheta != 0)
+    assert g_colored == pytest.approx(g_dense, rel=1e-8)
