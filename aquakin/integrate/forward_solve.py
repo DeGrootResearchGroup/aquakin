@@ -17,17 +17,34 @@ is dropped is only the *adjoint over the whole solve*: the result is **not**
 differentiable w.r.t. parameters / initial conditions. So this is an opt-in fast
 lane for non-AD solves; any differentiated solve must use the ``diffrax`` path.
 
-Measured on BSM2: ~3x faster compile (the tracing collapses) and ~2-3x faster run
-than the ``diffrax`` forward solve, at the same accuracy (a valid solution to the
-same ``rtol`` -- it differs from the diffrax trajectory only by the usual
-step-sequence variation between two valid adaptive solves).
+The compile saving is real but **scale-dependent**: it is large for small/simple
+networks (where the ``diffrax`` implicit scaffolding dominates the trace), but on
+a large flowsheet the dominant compile cost is the shared colored-Jacobian +
+plant-RHS tracing, so the saving shrinks (measured only ~1.1x on the full BSM2
+plant). The run is **not** faster than the colored ``diffrax`` path on a large
+plant -- it is ~1.2x slower there, because ``diffrax``'s mature chord/PID solver
+places steps more efficiently (the per-step costs are otherwise the same: both
+build the colored Jacobian once per step, which XLA fuses into one batched JVP, so
+freezing/reusing it does not help and in fact hurts via degraded Newton
+convergence). So this is a fast lane for **small/simple** non-AD forward solves
+and compile-bound repeated solves; for a large differentiable plant the
+``colored_jacobian`` ``diffrax`` path is both faster and differentiable. Results
+match the ``diffrax`` trajectory to the same ``rtol`` (the usual step-sequence
+variation between two valid adaptive solves).
 
 The method is the L-stable A-stable 3rd-order Kvaerno3 ESDIRK with its embedded
-2nd-order error estimate (Kvaerno 2004), an adaptive PI step controller, and a
-**convergence-aware growth limiter** (the simplified-Newton contraction rate caps
-the step growth, so a step is rarely grown into nonlinear-divergence -- the
-chord's failure mode). Output at ``t_eval`` is exact: the step is clipped to land
-on each save time (no dense-output interpolation error).
+2nd-order error estimate (Kvaerno 2004) and an adaptive step controller with two
+parts: an error controller -- the I-term ``en^(-1/3)`` with a Soderlind PI memory
+term ``(en_prev/en)^pi_beta`` (the proportional part damps the overshoot-then-
+reject oscillation a bare I-controller suffers; ``pi_beta=0`` recovers the pure
+I-controller) -- and a **Gustafsson-style convergence-aware growth limiter** (the
+simplified-Newton contraction rate caps the step growth, so a step is rarely grown
+into nonlinear-divergence, the chord's failure mode; diffrax's ``PIDController``
+has no such term). The default ``maxfac=2.0`` / ``pi_beta=0.08`` were tuned on the
+full 609-day BSM2 dynamic run, where they cut the step count ~20% versus the
+earlier ``maxfac=5`` pure-I controller (fewer error-test rejections). Output at
+``t_eval`` is exact: the step is clipped to land on each save time (no
+dense-output interpolation error).
 """
 
 from functools import partial
@@ -72,7 +89,8 @@ def forward_solve(
     theta_target: float = 0.3,
     safety: float = 0.9,
     minfac: float = 0.2,
-    maxfac: float = 5.0,
+    maxfac: float = 2.0,
+    pi_beta: float = 0.08,
     max_steps: int = 100_000_000,
 ):
     """Integrate ``dy/dt = rhs(t, y, args)`` from ``t0`` to ``t1``, forward only.
@@ -154,19 +172,21 @@ def forward_solve(
     def _tol(s):
         return 1e-12 * jnp.maximum(1.0, jnp.abs(s))
 
-    # carry: t, y, h_ctrl (unclipped proposal), save_idx, ys, n_steps, dead
+    # carry: t, y, h_ctrl (unclipped proposal), save_idx, ys, n_steps,
+    #        en_prev (last accepted error, for the PI term), dead
     def cond(c):
-        t, y, h_ctrl, sidx, ys, nstep, dead = c
+        t, y, h_ctrl, sidx, ys, nstep, en_prev, dead = c
         return (sidx < n_save) & (~dead) & (nstep < max_steps)
 
     def body(c):
-        t, y, h_ctrl, sidx, ys, nstep, dead = c
+        t, y, h_ctrl, sidx, ys, nstep, en_prev, dead = c
         next_save = t_eval[sidx]
 
         def record_only():
             # already at this save time (e.g. t_eval[0] == t0): record, advance,
             # do not take a (zero-width) step.
-            return (t, y, h_ctrl, sidx + 1, ys.at[sidx].set(y), nstep, dead)
+            return (t, y, h_ctrl, sidx + 1, ys.at[sidx].set(y), nstep, en_prev,
+                    dead)
 
         def do_step():
             # clip the actual step so it never overshoots the next save time
@@ -177,25 +197,35 @@ def forward_solve(
             lu = jsla.lu_factor(eye - h * _G * J)
             y1, en, rate, conv = one_step(t, y, h, lu)
             accept = conv & (en <= 1.0)
-            f_err = safety * jnp.where(en > 0, en ** (-1.0 / 3.0), maxfac)
+            # Error controller: an I-term en^(-1/3) with an optional Soderlind PI
+            # memory term (en_prev/en)^pi_beta -- the proportional part that damps
+            # the controller's overshoot-then-reject oscillation a bare I-controller
+            # suffers (pi_beta=0 recovers the pure I-controller). Combined with the
+            # Gustafsson-style convergence-rate growth limiter f_conv below, which
+            # caps growth by the simplified-Newton contraction rate so a step is not
+            # grown into nonlinear divergence.
+            ens = jnp.maximum(en, 1e-30)
+            f_pi = (en_prev / ens) ** pi_beta
+            f_err = safety * jnp.where(en > 0, ens ** (-1.0 / 3.0) * f_pi, maxfac)
             f_conv = jnp.where(rate > 1e-3, theta_target / rate, maxfac)
             fac = jnp.clip(jnp.minimum(f_err, f_conv), minfac, maxfac)
             fac = jnp.where(conv, fac, 0.25)        # nonconvergence -> shrink hard
             h_ctrl_new = h_ctrl * fac
             t_new = jnp.where(accept, t + h, t)
             y_new = jnp.where(accept, y1, y)
+            en_prev_new = jnp.where(accept, ens, en_prev)   # update only on accept
             landed = accept & (t_new >= next_save - _tol(next_save))
             ys_new = jax.lax.cond(landed, lambda: ys.at[sidx].set(y_new),
                                   lambda: ys)
             sidx_new = sidx + jnp.where(landed, 1, 0)
             stuck = h_ctrl_new < 1e-13
             return (t_new, y_new, h_ctrl_new, sidx_new, ys_new, nstep + 1,
-                    dead | stuck)
+                    en_prev_new, dead | stuck)
 
         already = (next_save - t) <= _tol(next_save)
         return jax.lax.cond(already, record_only, do_step)
 
     init = (jnp.asarray(float(t0)), y0, jnp.asarray(float(h0)), jnp.array(0),
-            ys0, jnp.array(0), jnp.array(False))
-    t, y, h, sidx, ys, nstep, dead = jax.lax.while_loop(cond, body, init)
+            ys0, jnp.array(0), jnp.array(1.0), jnp.array(False))
+    t, y, h, sidx, ys, nstep, en_prev, dead = jax.lax.while_loop(cond, body, init)
     return ys
