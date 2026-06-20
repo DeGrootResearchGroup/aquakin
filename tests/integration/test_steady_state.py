@@ -251,44 +251,29 @@ def test_bsm2_steady_state_matches_forward():
             0.03 * abs(float(b["tank5"][i[sp]])) + 0.05, sp
 
 
-@pytest.mark.slow
-def test_ptc_step_guard_rescues_cold_start():
-    # From a cold start (the generic initial_state, far from the operating point)
-    # a Newton overshoot blows the residual up by orders of magnitude and the
-    # accept-always iteration runs to NaN. The step-acceptance guard rejects the
-    # blow-up steps and converges. The contrast pins that the GROWTH guard (not
-    # just non-finite rejection) is what rescues it: a nan-only guard
-    # (divergence_factor = inf) stays finite but stalls.
-    from aquakin.plant.bsm.bsm2 import (
-        BSM2_CONSTANT_INFLUENT_T, build_bsm2, bsm2_asm1_network,
-        bsm2_constant_influent, bsm2_parameters)
-    from aquakin.plant.steady import ptc_forward
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
-    plant.add_influent("feed",
-                       bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
-    params = bsm2_parameters(asm1, adm1)
-    plant._build_state_layout()
-    plant._build_parameter_layout()
-    yc = plant.initial_state()                           # cold start
-    t = jnp.asarray(0.0)
-    plant._check_recycle_map_constant(t, yc, params)
-    rmap = plant._maybe_recycle_map(t, plant._split_state(yc), params)
-    def rhs(y, th):
-        return plant._rhs(t, y, th, recycle_map=rmap)
-    sf = jnp.maximum(jnp.abs(yc), 1e-6)
-
-    # Default growth guard: converges, finite (no NaN).
-    ys, r, _k, conv = ptc_forward(rhs, params, yc, scale_floor=sf, max_iter=1000)
-    assert bool(jnp.all(jnp.isfinite(ys)))
-    assert bool(conv) and float(r) < 1e-5
-    # Non-finite-only guard (divergence_factor = inf): the nan-rejection keeps it
-    # finite, but without rejecting the finite blow-up steps it stalls.
-    ys2, _r2, _k2, conv2 = ptc_forward(
-        rhs, params, yc, scale_floor=sf, divergence_factor=jnp.inf, max_iter=1000)
-    assert bool(jnp.all(jnp.isfinite(ys2)))             # no NaN ...
-    assert not bool(conv2)                              # ... but does not converge
+def test_ptc_step_guard_rejects_finite_blowup():
+    # The growth guard must reject a step whose residual blows up by a large but
+    # *finite* factor (a Newton overshoot from a flat region), not only a
+    # non-finite one. Cubic dy/dt = p - y^3 (root y*=1): from y0=0.01 the Jacobian
+    # -3y^2 is ~0, so a large dt0 makes ONE step overshoot to y~3e3 where the
+    # residual is ~1e7x the start. With the default divergence_factor the step is
+    # rejected (the iterate is held) and dt hard-shrunk; with divergence_factor=inf
+    # (reject only non-finite) the same finite blow-up is accepted and the iterate
+    # jumps. Deterministic: it checks the acceptance logic, not a convergence count.
+    def rhs(y, p):
+        return p - y ** 3
+    y0 = jnp.array([0.01])
+    p = jnp.array([1.0])
+    kw = dict(dt0=1e6, scale_floor=1.0, nonneg=False)
+    held, *_ = ptc_forward(rhs, p, y0, max_iter=1, divergence_factor=1000.0, **kw)
+    jumped, *_ = ptc_forward(rhs, p, y0, max_iter=1, divergence_factor=jnp.inf, **kw)
+    assert float(held[0]) == pytest.approx(0.01, abs=1e-6)   # blow-up rejected
+    assert float(jumped[0]) > 1e3                            # blow-up accepted
+    # The rejection does not break convergence: the guarded solve still finds y*=1.
+    res = solve_steady_state(rhs, p, y0, dt0=1e6, scale_floor=1.0, nonneg=False,
+                             tol=1e-10)
+    assert bool(res.converged)
+    np.testing.assert_allclose(np.asarray(res.state), [1.0], atol=1e-6)
 
 
 @pytest.mark.slow

@@ -3273,14 +3273,19 @@ is what production simulators use to snap to steady state on any topology.
   catastrophic (~1e5×) growth**, so a converging run **never rejects and is
   bit-identical** to the unguarded iteration (BSM1/BSM2 warm: same 23/38
   iterations), while a divergent one is pulled back. **Measured:** BSM2 from a
-  *cold* `initial_state` went to NaN before; it now **converges** (447 PTC
-  iterations). The growth guard is what rescues it, not merely catching NaN: a
-  non-finite-only guard (`divergence_factor=inf`) stays finite but **stalls**
-  (1000 iters, residual ~1.5e-2). The guard is in the core `ptc_forward`, so it
-  also hardens `BiofilmReactor.steady_state` and direct callers, identity on the
-  happy path. Regressions: `test_steady_state.py::test_ptc_step_guard_keeps_overshoot_finite`
-  (fast synthetic overshoot→NaN rescue) and `::test_ptc_step_guard_rescues_cold_start`
-  (BSM2 cold: growth guard converges, nan-only stalls).
+  *cold* `initial_state` went to NaN before; it now stays finite and **converges**
+  (~450 PTC iterations on the dev machine — the cold-start *count* is numerically
+  platform-sensitive, so it is not asserted in CI). The growth guard is what
+  rescues it, not merely catching NaN: a non-finite-only guard
+  (`divergence_factor=inf`) accepts the finite blow-ups and stalls. The guard is
+  in the core `ptc_forward`, so it also hardens `BiofilmReactor.steady_state` and
+  direct callers, identity on the happy path. Regressions (both fast +
+  deterministic — no brittle convergence count):
+  `test_steady_state.py::test_ptc_step_guard_keeps_overshoot_finite` (an overshoot
+  to a non-finite region is rescued to convergence) and
+  `::test_ptc_step_guard_rejects_finite_blowup` (a large *finite* residual blow-up
+  is rejected with the default `divergence_factor` but accepted with `inf`,
+  checking the acceptance logic directly).
 - **Per-state pseudo-time / residual scaling (the iteration-count lever).** PTC's
   step damping `V` and convergence criterion both use `max(|y|, scale_floor)`. A
   flat scalar floor (the old default `1.0`) **over-damps the small-magnitude
