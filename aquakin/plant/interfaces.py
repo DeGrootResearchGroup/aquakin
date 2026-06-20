@@ -29,11 +29,15 @@ cascades of the reference C are written here as branch-free greedy draws
 (``jnp.minimum``), which are mathematically identical to the unrolled
 conditionals.
 
-The digester pH used by the charge balance is a fixed parameter
-(``pH_adm``, default 7.0). In the full benchmark it is fed back from the
-digester; for the open-loop steady state the digester's own charge-balance
-speciation solver sets the actual pH from the ``S_IC``/``S_cat``/``S_an``/VFA
-state, so a representative fixed value here is sufficient.
+The charge balances (inorganic carbon in ``asm2adm``, alkalinity in ``adm2asm``)
+are evaluated at the **digester pH**, as in the benchmark. Inside a plant the
+digester's instantaneous, state-derived pH is fed in via
+``translate(..., digester_pH=...)``: ``asm2adm`` (whose destination is the
+digester) reads it from the destination unit, ``adm2asm`` (whose source is the
+digester) from the source unit, both wired by ``Plant._collect_inputs`` through
+the ``needs_dest_pH`` / ``needs_src_pH`` flags. The ``pH_adm`` parameter (default
+7.0) is only the fallback for a standalone ``translate`` call with no plant to
+supply the pH.
 """
 
 from __future__ import annotations
@@ -75,6 +79,12 @@ class ASM1toADM1:
     target_network: "CompiledNetwork"
     pH_adm: float = 7.0
     T_op: float = 308.15
+    # The inorganic-carbon charge balance is evaluated at the digester pH. When
+    # the plant can supply the digester's instantaneous (state-derived) pH it is
+    # fed in via ``translate(..., digester_pH=...)``; ``pH_adm`` is the fallback
+    # for a standalone call. This flag tells the plant to read the pH from the
+    # destination (digester) unit's state each step.
+    needs_dest_pH: bool = True
 
     # Interface stoichiometric parameters (BSM2 defaults).
     CODequiv: float = 40.0 / 14.0
@@ -126,7 +136,7 @@ class ASM1toADM1:
         # Target indices for assembling the ADM1 output vector by name.
         self._ti = self.target_network.species_index
 
-    def translate(self, C_source: jnp.ndarray) -> jnp.ndarray:
+    def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         si = self._si
         # ASM1 inputs (gCOD/m3 or gN/m3).
         SI = C_source[si["SI"]]
@@ -221,14 +231,22 @@ class ASM1toADM1:
         X_li = (xli1 + xli2) / 1000.0
         X_I = (biomass_nobio + inertX) / 1000.0
 
-        # Charge balance for inorganic carbon (VFA outputs are zero here).
+        # Charge balance for inorganic carbon, evaluated at the digester pH. This
+        # is the ONLY pH-dependent part of the mapping; everything above is a
+        # pH-independent COD/N partition. The benchmark feeds the digester's own
+        # pH into this balance, so ``digester_pH`` (the digester's instantaneous
+        # state-derived pH, supplied by the plant) is used when available; the
+        # fixed ``pH_adm`` is the standalone fallback. (VFA outputs are zero here.)
+        pH = self.pH_adm if digester_pH is None else digester_pH
+        alfa_co2 = -1.0 / (1.0 + 10 ** (self._pK_a_co2 - pH))
+        alfa_IN = (10 ** (self._pK_a_IN - pH)) / (1.0 + 10 ** (self._pK_a_IN - pH))
         S_IC = (
             (SNO * self._alfa_NO + SNH * self._alfa_NH + SALK * self._alfa_alk)
-            - (S_IN * self._alfa_IN)
-        ) / self._alfa_co2
+            - (S_IN * alfa_IN)
+        ) / alfa_co2
         ScatminusSan = (
-            S_IN * self._alfa_IN + S_IC * self._alfa_co2
-            + 10 ** (-self._pK_w + self.pH_adm) - 10 ** (-self.pH_adm)
+            S_IN * alfa_IN + S_IC * alfa_co2
+            + 10 ** (-self._pK_w + pH) - 10 ** (-pH)
         )
         S_cat = jnp.maximum(ScatminusSan, 0.0)
         S_an = jnp.maximum(-ScatminusSan, 0.0)
@@ -275,6 +293,11 @@ class ADM1toASM1:
     target_network: "CompiledNetwork"
     pH_adm: float = 7.0
     T_op: float = 308.15
+    # The alkalinity (SALK) charge balance is evaluated at the digester pH. The
+    # source of this map IS the digester, so the plant feeds the source unit's
+    # state-derived pH via ``translate(..., digester_pH=...)``; ``pH_adm`` is the
+    # standalone fallback.
+    needs_src_pH: bool = True
 
     fnaa: float = _N_aa * 14.0
     fnxc: float = _N_xc * 14.0
@@ -316,7 +339,7 @@ class ADM1toASM1:
         self._alfa_alk = -0.001
         self._alfa_NO = -1.0 / 14000.0
 
-    def translate(self, C_source: jnp.ndarray) -> jnp.ndarray:
+    def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         si = self._si
         g = lambda name: C_source[si[name]]
         S_su, S_aa, S_fa = g("S_su"), g("S_aa"), g("S_fa")
@@ -354,9 +377,20 @@ class ADM1toASM1:
         XND = fnxc * XStemp + fnxc * 1000.0 * X_c + fnaa * 1000.0 * X_pr
         SNH = S_IN_adj * 14000.0
 
+        # Alkalinity charge balance, evaluated at the digester pH (fed back from
+        # the digester state when available, else the fixed pH_adm). These are
+        # the only pH-dependent terms; everything above is a pH-independent
+        # COD/N partition.
+        pH = self.pH_adm if digester_pH is None else digester_pH
+        alfa_va = 1.0 / 208.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_va_base - pH)))
+        alfa_bu = 1.0 / 160.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_bu_base - pH)))
+        alfa_pro = 1.0 / 112.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_pro_base - pH)))
+        alfa_ac = 1.0 / 64.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_ac_base - pH)))
+        alfa_co2 = -1.0 / (1.0 + 10 ** (self._pK_a_co2 - pH))
+        alfa_IN = (10 ** (self._pK_a_IN - pH)) / (1.0 + 10 ** (self._pK_a_IN - pH))
         SALK = (
-            S_va * self._alfa_va + S_bu * self._alfa_bu + S_pro * self._alfa_pro
-            + S_ac * self._alfa_ac + S_IC * self._alfa_co2 + S_IN * self._alfa_IN
+            S_va * alfa_va + S_bu * alfa_bu + S_pro * alfa_pro
+            + S_ac * alfa_ac + S_IC * alfa_co2 + S_IN * alfa_IN
             - SNH * self._alfa_NH
         ) / self._alfa_alk
 
