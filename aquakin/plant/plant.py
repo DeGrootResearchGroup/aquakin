@@ -2583,6 +2583,109 @@ class Plant:
         flows = self._resolve_flows(t, params_full, states)
         return self._compute_recycle_map(t, states, params_full, flows, signals)
 
+    def _structural_plant_pattern(self, coupling_mask=None) -> "np.ndarray":
+        """Assemble the plant's structural Jacobian sparsity from each unit's
+        emitted couplings, for the colored pattern (issue #388).
+
+        The numerical probe at the start state captures the plant's **linear,
+        always-on** couplings but drops every **nonlinear** coupling that is
+        saturated at the warm-start operating point and only switches on once a
+        dynamic influent drives the plant off it -- reaction kinetics (Monod / pH
+        switches), the Takacs settling velocity, and the ASM<->ADM interface
+        branches. Those are the stiff couplings, so a stale pattern wrecks the
+        chord-Newton convergence (a ~6x slowdown).
+
+        Each unit emits its own structural sparsity (:class:`CouplingAware`,
+        :meth:`coupling_pattern`): a ``self`` block (d rhs / d own state) and an
+        ``inlet`` block (d rhs / d inlet concentration). This assembler places the
+        ``self`` blocks on the diagonal and composes each ``inlet`` block with the
+        species coupling of the stream feeding it -- identity for a same-network
+        feed, the translator's emitted ``coupling_pattern()`` for an ASM<->ADM
+        feed -- to form the off-diagonal blocks, restricted to the unit pairs the
+        probe shows actually coupled (the recycle's real reach). The result is a
+        structural superset that cannot go stale for any influent. ``coupling_mask``
+        is the probe pattern (used only to restrict off-diagonal placement to real
+        couplings, keeping the coloring tight).
+        """
+        import numpy as np
+
+        from aquakin.plant.translators import translator_coupling_pattern
+
+        N = self._total_state_size
+        P = np.zeros((N, N), dtype=bool)
+
+        # Each unit emits its structural Jacobian sparsity (CouplingAware): a
+        # self block (d rhs / d own state) and an inlet block (d rhs / d inlet
+        # concentration). Reactors derive self from the rate AST (saturated Monod
+        # terms are numerically invisible to a probe), the Takacs settler by AD
+        # over diverse solids profiles, stateless units are empty.
+        cps = {}
+        for name, unit in self.units.items():
+            fn = getattr(unit, "coupling_pattern", None)
+            if fn is not None:
+                cps[name] = (unit, fn())
+
+        # Diagonal: each unit's self_pattern, placed on its own state block.
+        for name, (unit, cp) in cps.items():
+            sp = np.asarray(cp.self_pattern, dtype=bool)
+            if sp.size == 0:
+                continue
+            off, _ = self._state_layout[name]
+            k = sp.shape[0]
+            P[off:off + k, off:off + k] |= sp
+
+        # Off-diagonal: J[A][B] = inlet_pattern_A composed with the species
+        # coupling of the stream feeding A from B. For a same-network feed that
+        # coupling is the identity; for a cross-network feed (ASM<->ADM) it is the
+        # translator's emitted pattern. The source unit B's *output* is linear in
+        # its state (a reactor outputs its state; the settler reads a layer), so B
+        # ranges over the concentration units (output == state) and the only
+        # nonlinear, stale parts are A's inlet response and the translator -- both
+        # captured here. Placement is restricted to the unit pairs the probe shows
+        # actually coupled (the recycle's real reach), keeping the pattern tight.
+        tcache: dict[tuple, np.ndarray] = {}
+
+        def _translator(src_net, tgt_net):
+            key = (id(src_net), id(tgt_net))
+            if key not in tcache:
+                tcache[key] = None
+                for conn in self.connections:
+                    T = getattr(conn, "translator", None)
+                    if (T is not None and T.source_network is src_net
+                            and T.target_network is tgt_net):
+                        tcache[key] = np.asarray(
+                            translator_coupling_pattern(T), dtype=bool)
+                        break
+            return tcache[key]
+
+        conc = {nm: u for nm, u in self.units.items()
+                if self._is_concentration_unit(u)}
+        for aname, (aunit, cp) in cps.items():
+            if cp.inlet_pattern is None:
+                continue
+            ip = np.asarray(cp.inlet_pattern, dtype=bool)        # (a_rows, a_nsp)
+            a_off, _ = self._state_layout[aname]
+            a_rows = ip.shape[0]
+            a_net = getattr(aunit, "network", None)
+            for bname, bunit in conc.items():
+                if bname == aname:
+                    continue
+                b_net = bunit.network
+                b_off, _ = self._state_layout[bname]
+                b_cols = b_net.n_species
+                if coupling_mask is not None and not coupling_mask[
+                        a_off:a_off + a_rows, b_off:b_off + b_cols].any():
+                    continue                                     # not really coupled
+                if a_net is b_net:
+                    coupling = np.eye(a_net.n_species, dtype=bool)
+                else:
+                    coupling = _translator(b_net, a_net)         # (a_nsp, b_nsp)
+                    if coupling is None:
+                        continue
+                block = (ip.astype(np.int8) @ coupling.astype(np.int8)) > 0
+                P[a_off:a_off + a_rows, b_off:b_off + b_cols] |= block
+        return P
+
     def _colored_jacobian_solver(self, solver, t0, y0, params, rtol, atol):
         """Return ``solver`` reconfigured to use a colored-AD Jacobian root
         finder, or ``solver`` unchanged when the colored path is unavailable.
@@ -2612,8 +2715,13 @@ class Plant:
                 return self._rhs(t0a, y, params, recycle_map=rmap)
 
             atol_arr = jnp.asarray(atol)
+            from aquakin.integrate.colored_jacobian import (
+                jacobian_sparsity_pattern)
+            probe = jacobian_sparsity_pattern(rhs_y, y0) > 0
+            structural = self._structural_plant_pattern(coupling_mask=probe)
             rf, n_colors = build_colored_root_finder(
-                rhs_y, y0, rtol=10.0 * rtol, atol=10.0 * atol_arr)
+                rhs_y, y0, rtol=10.0 * rtol, atol=10.0 * atol_arr,
+                probe_pattern=probe, extra_pattern=structural)
             err = colored_jacobian_max_error(rhs_y, y0, rf)
             jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs_y)(y0)))) + 1e-300
             ok = err <= 1e-8 * jscale

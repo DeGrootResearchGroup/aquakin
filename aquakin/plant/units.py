@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
 
 import jax.numpy as jnp
 
+from aquakin.plant.coupling import CouplingAware
+
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.streams import Stream
 
@@ -120,7 +122,7 @@ class Unit(Protocol):
     ) -> dict[str, jnp.ndarray]: ...
 
 
-class StatelessUnit:
+class StatelessUnit(CouplingAware):
     """Mixin for units that own no ODE state (``state_size == 0``).
 
     A stateless unit transforms streams instantaneously -- a mixer, a splitter,
@@ -153,3 +155,12 @@ class StatelessUnit:
     ) -> jnp.ndarray:
         # No state -> no derivative.
         return jnp.zeros((0,))
+
+    def coupling_pattern(self):
+        """No state -> no structural Jacobian contribution (issue #388)."""
+        import numpy as np
+
+        from aquakin.plant.coupling import CouplingPattern
+
+        return CouplingPattern(self_pattern=np.zeros((0, 0), dtype=bool),
+                               inlet_pattern=None)

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.streams import Stream, mixed_temperature
 from aquakin.plant.temperature import OPERATING_T_SIGNAL
 
@@ -345,7 +346,7 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, network):
 
 
 @dataclass
-class CSTRUnit:
+class CSTRUnit(CouplingAware):
     """A single continuous-flow stirred tank with kinetics + aeration.
 
     Parameters
@@ -454,6 +455,26 @@ class CSTRUnit:
 
     def initial_state(self) -> jnp.ndarray:
         return self.network.default_concentrations()
+
+    def coupling_pattern(self):
+        """Structural Jacobian sparsity (issue #388).
+
+        ``self`` is the reaction kinetics' coupling from the rate AST (a saturated
+        Monod term is numerically invisible at any single state, so the syntactic
+        dependency is needed, not a probe). ``inlet`` is the convective dilution
+        ``(Q/V)(C_in - C)``, which couples each species' derivative to its own
+        inlet concentration only -- the identity.
+        """
+        import numpy as np
+
+        from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
+        from aquakin.plant.coupling import CouplingPattern
+
+        n = self.network.n_species
+        return CouplingPattern(
+            self_pattern=structural_sparsity_pattern(self.network),
+            inlet_pattern=np.eye(n, dtype=bool),
+        )
 
     def _mixed_inlet_T(self, inputs: dict[str, Stream]):
         """Flow-weighted inlet temperature, or ``None`` if no inlet carries one.

@@ -46,6 +46,50 @@ class StateTranslator(Protocol):
         ...
 
 
+def translator_coupling_pattern(translator, n_states: int = 96, seed: int = 0):
+    """Structural coupling of a translator: which target species each source
+    species can influence, as a boolean ``(n_target, n_source)`` matrix.
+
+    This is what lets a translator participate in the plant's colored-Jacobian
+    sparsity pattern (issue #388): a cross-network edge (ASM<->ADM) introduces
+    couplings that live in the *translator*, not in either network, and that are
+    regime-dependent (an interface's greedy nitrogen-budget allocation switches
+    branches with the influent), so a numerical probe at one operating point
+    misses the branches that activate at another.
+
+    The pattern is derived by **forward-AD of ``translate`` unioned over many
+    diverse source states** (each component scaled over a wide multiplicative
+    range), so every min/max allocation branch is exercised and the result is a
+    structural superset, not a single-state snapshot. The map is small and cheap,
+    so a far denser sample than a stiff plant solve could afford is used. A
+    translator may **override** this by defining its own ``coupling_pattern()``
+    method -- e.g. a declarative translator built from per-species expressions
+    could emit its pattern exactly from that declaration. This is the extension
+    point that lets a user add a custom cross-network translator and have it work
+    with the colored solver automatically.
+    """
+    import numpy as np
+    import jax
+    import jax.numpy as jnp
+
+    override = getattr(translator, "coupling_pattern", None)
+    if callable(override):
+        return np.asarray(override(), dtype=bool)
+
+    src = translator.source_network
+    n_src = src.n_species
+    n_tgt = translator.target_network.n_species
+    base = np.maximum(np.abs(np.asarray(src.default_concentrations())), 1e-3)
+    # fixed representative pH for the (value-independent) coupling structure
+    fj = jax.jit(lambda c: jax.jacfwd(lambda x: translator.translate(x, 7.0))(c))
+    rng = np.random.default_rng(seed)
+    P = np.zeros((n_tgt, n_src), dtype=bool)
+    for _ in range(n_states):
+        c = jnp.asarray(base * 10.0 ** rng.uniform(-2.0, 2.0, size=n_src))
+        P |= np.abs(np.asarray(fj(c))) > 0.0
+    return P
+
+
 class IdentityTranslator:
     """Pass-through translator for when source and target networks are the
     same — the only kind of translator BSM1 needs.
@@ -61,3 +105,9 @@ class IdentityTranslator:
 
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         return C_source
+
+    def coupling_pattern(self):
+        """The identity map couples each species only to itself."""
+        import numpy as np
+
+        return np.eye(self.source_network.n_species, dtype=bool)

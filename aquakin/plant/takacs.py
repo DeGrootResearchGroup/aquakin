@@ -50,6 +50,7 @@ from aquakin.plant._flow_split import (
     split_controlled_flows,
     validate_controlled_split,
 )
+from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream
 
@@ -82,7 +83,7 @@ _BSM1_TAKACS_DEFAULTS = dict(
 
 
 @dataclass
-class TakacsClarifier(FlowParameterized):
+class TakacsClarifier(FlowParameterized, CouplingAware):
     """A 10-layer 1-D secondary clarifier.
 
     Parameters
@@ -288,6 +289,47 @@ class TakacsClarifier(FlowParameterized):
     @property
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
+
+    def coupling_pattern(self):
+        """Structural Jacobian sparsity (issue #388), AD-derived.
+
+        The Takacs settling velocity ``v_s(X)`` and the feed flux-split are
+        nonlinear, so the settler's couplings switch regime with the solids load
+        and a single-operating-point probe goes stale on them. Unlike Monod
+        kinetics (whose saturated terms are numerically invisible at any state),
+        the settling law is a smooth nonlinearity whose every branch is exercised
+        by sampling diverse physical profiles -- so AD of the RHS unioned over
+        such states (:func:`aquakin.plant.coupling.ad_union`) gives a structural
+        superset. ``params=None`` resolves the default flow setpoints, so this is
+        a standalone derivation. ``self`` = d(rhs)/d(layer state); ``inlet`` =
+        d(rhs)/d(feed concentration).
+        """
+        import numpy as np
+        import jax
+        import jax.numpy as jnp
+
+        from aquakin.plant.coupling import CouplingPattern, ad_union
+        from aquakin.plant.streams import Stream
+
+        net = self.network
+        state0 = np.asarray(self.initial_state())
+        base_C = np.asarray(net.default_concentrations())
+        Q0 = jnp.asarray(2.0e4)                  # representative positive throughput
+        t0 = jnp.asarray(0.0)
+
+        def make_inputs(C):
+            return {self.input_port: Stream(Q=Q0, C=C, network=net)}
+
+        inlet0 = make_inputs(jnp.asarray(np.maximum(np.abs(base_C), 1e-3)))
+        self_jac = lambda s: jax.jacfwd(
+            lambda x: self.rhs(t0, x, inlet0, None))(s)
+        self_pat = ad_union(self_jac, state0)
+
+        state_fixed = jnp.asarray(np.maximum(np.abs(state0), 1e-3))
+        inlet_jac = lambda c: jax.jacfwd(
+            lambda C: self.rhs(t0, state_fixed, make_inputs(C), None))(c)
+        inlet_pat = ad_union(inlet_jac, base_C)
+        return CouplingPattern(self_pattern=self_pat, inlet_pattern=inlet_pat)
 
     def initial_state(self) -> jnp.ndarray:
         part_state = self._particulate_initial_state()

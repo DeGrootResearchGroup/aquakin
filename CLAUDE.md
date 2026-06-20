@@ -2926,6 +2926,46 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   `tests/integration/test_colored_jacobian.py` (coloring/reconstruction math,
   positive-probe superset over the trajectory, colored==dense J, full-solve
   trajectory + gradient match, the guard/fallback on a truncated pattern, BSM2).
+- **The IC probe goes STALE on a wide dynamic run — fixed by per-component
+  structural couplings (issue #388, [`plant/coupling.py`](aquakin/plant/coupling.py)).**
+  `jacobian_sparsity_pattern` probes `|J|` at the *start state*, so on a long
+  dynamic BSM2 run it drops every coupling that is numerically tiny at the
+  warm-start operating point but switches on once the influent drives the plant
+  off it — saturated Monod kinetics, the Takacs settling velocity, the ASM<->ADM
+  interface's nitrogen-budget branches. Those are the **stiff** couplings, so the
+  stale pattern collapses the chord-Newton convergence: colored ran **~6×
+  *slower* than no-colored** on the validated 244-state JRN-056 dynamic BSM2 (a
+  convergence-rejection explosion — 17× the step attempts, 100% Newton-failure
+  rejections). The fix is to build the pattern from the **equations, not a probe**:
+  every stateful unit emits its structural Jacobian sparsity via the
+  **`CouplingAware`** ABC's **`coupling_pattern()`** — a `self` block
+  (`d rhs / d own state`) and an `inlet` block (`d rhs / d inlet concentration`).
+  Reactors (`CSTRUnit`, `ADM1DigesterUnit`) derive `self` from the rate AST
+  (`structural_sparsity_pattern`; a saturated Monod term is numerically invisible
+  to a probe, so the *syntactic* dependency is needed) and `inlet` from the
+  dilution diagonal; the `TakacsClarifier` derives both by AD over diverse solids
+  profiles (`ad_union` — the settling law is a smooth nonlinearity whose branches
+  a sample exercises, unlike Monod saturation); cross-network translators emit
+  their own `coupling_pattern()` (`translator_coupling_pattern`, AD over the
+  interface branches); stateless units are empty (the `StatelessUnit` default).
+  `Plant._structural_plant_pattern` assembles these — `self` blocks on the
+  diagonal, each `inlet` block composed with the feeding stream's translator
+  coupling on the off-diagonal — **unioned with the IC probe**, which supplies the
+  linear, always-on couplings and the recycle's real block structure (so the
+  off-diagonal placement is restricted to genuinely-coupled unit pairs, keeping
+  the coloring tight). The result is a structural superset that **cannot go stale
+  for any influent**, with **no trajectory sampling** (only the single
+  always-available IC probe). On the JRN-056 dynamic BSM2 it turns colored from
+  ~6× slower into **1.71× faster than no-colored** (49.8 s vs 85.3 s, 37 colors —
+  tighter than even a trajectory-sampled pattern), with 0 within-unit couplings
+  missing and the residual misses all `|J| ≲ 0.3` (negligible for convergence).
+  Covered by `tests/integration/test_coupling_pattern.py` (the contract shapes,
+  ABC enforcement, the settler/`ad_union` superset, and the assembled BSM1 plant
+  pattern leaving no within-unit coupling missing along a trajectory). *(The
+  reactive units present only in non-BSM plants — `MBRUnit`/`SBRUnit`/`IFASUnit`
+  — do not yet emit `coupling_pattern()`; they fall back to the probe gracefully,
+  so colored is correct but not yet staleness-free on those flowsheets — a
+  follow-up.)*
 - **Also colors the `gradient="stable_adjoint"` BACKWARD pass.** Profiling the
   BSM2 reverse adjoint showed it is **~82% dense per-step `df/dy` Jacobian builds**
   (the Newton stage recompute + the transposed-stage `Js`, one JVP per state ×
