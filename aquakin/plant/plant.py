@@ -2888,13 +2888,20 @@ class Plant:
         Jacobian-vector product per *color* (BSM2: ~45 vs 167 columns) instead of
         ``n``, while reconstructing the identical matrix on the pattern's support.
 
-        Unlike the dynamic solve, this is well suited to coloring: PTC marches to
-        a single operating point in a narrow neighbourhood, so the sparsity
-        pattern derived at the warm start stays valid throughout (the dynamic
-        run's wide load excursion is what can expose start-state-missed
-        couplings). Built and **guarded** against the dense Jacobian at ``y0``
-        once (falling back to dense with a warning on a mismatch), then cached and
-        reused -- a parameter/design sweep keeps the same structural pattern.
+        The sparsity pattern is the **structural superset** the forward colored
+        solve uses (:meth:`_structural_plant_pattern`): the warm-start probe for
+        the linear always-on (flow/recycle) couplings, unioned with the
+        equation-derived blocks for the nonlinear couplings that are saturated at
+        the warm start (Monod / pH switches, the Takacs settling regime, the
+        ASM<->ADM interface branches). PTC marches in a narrow neighbourhood, so a
+        warm-start probe is usually enough -- but a far/cold warm start or a
+        design/parameter sweep that shifts the steady operating point can cross a
+        regime where one of those couplings switches on, which a probe-only
+        pattern would miss (degrading chord-Newton convergence). The structural
+        blocks make the pattern robust to that, at no extra build cost. Built and
+        **guarded** against the dense Jacobian at ``y0`` once (falling back to
+        dense with a warning on a mismatch), then cached and reused -- a
+        parameter/design sweep keeps the same structural pattern.
 
         Returns a builder ``(F, y) -> dF/dy``, or ``None`` (dense) when called
         under a trace (the probe needs concrete arrays) or when the guard fails.
@@ -2911,8 +2918,22 @@ class Plant:
                 return rhs(y, theta)
 
             tol_s = float(jnp.max(jnp.asarray(tol)))
+            # Same structural-superset pattern as the forward colored solve: the
+            # warm-start probe captures the linear always-on (flow/recycle)
+            # couplings, and the equation-derived structural blocks restore the
+            # nonlinear couplings saturated at the warm start (Monod / pH switches,
+            # the Takacs settling regime, the ASM<->ADM interface branches). PTC's
+            # dF/dy IS the plant Jacobian (F = dy/dt), so the same assembler
+            # applies. This makes the pattern robust to a far/cold warm start or a
+            # design/parameter sweep that shifts the steady operating point off the
+            # probe, where a probe-only pattern could go stale.
+            from aquakin.integrate.colored_jacobian import (
+                jacobian_sparsity_pattern)
+            probe = jacobian_sparsity_pattern(rhs_y, y0) > 0
+            structural = self._structural_plant_pattern(coupling_mask=probe)
             rf, n_colors = build_colored_root_finder(
-                rhs_y, y0, rtol=tol_s, atol=tol_s)
+                rhs_y, y0, rtol=tol_s, atol=tol_s,
+                probe_pattern=probe, extra_pattern=structural)
             err = colored_jacobian_max_error(rhs_y, y0, rf)
             jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs_y)(y0)))) + 1e-300
             ok = err <= 1e-8 * jscale
