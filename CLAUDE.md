@@ -3260,6 +3260,72 @@ is what production simulators use to snap to steady state on any topology.
   under a `jit`/`grad` trace the diagnostics are traced values and the fallback
   is skipped (only the differentiable `state` is used there). Constant influent
   is assumed (the residual samples the influent at `influent_time`, default 0).
+- **Step-acceptance guard (the robustness lever, `divergence_factor`).** PTC is
+  legitimately **non-monotone** — a healthy step can spike the scaled residual
+  (~20–30× on the BSM plants) and recover, so the ramp must accept those. But a
+  Newton step from far off the solution (a cold start) can overshoot into a bad
+  region where the residual blows up by orders of magnitude and then goes
+  non-finite — the accept-always iteration runs to **NaN**. `ptc_forward` now
+  **rejects** a non-finite or grossly-diverging step (scaled-residual growth past
+  the generous `divergence_factor`, default `1000`): it **holds the iterate and
+  hard-shrinks `dt`** (×0.1, floored) so the retry is a stabler backward-Euler
+  step. The threshold sits in the **wide gap between benign (~30×) and
+  catastrophic (~1e5×) growth**, so a converging run **never rejects and is
+  bit-identical** to the unguarded iteration (BSM1/BSM2 warm: same 23/38
+  iterations), while a divergent one is pulled back. **Measured:** BSM2 from a
+  *cold* `initial_state` went to NaN before; it now **converges** (447 PTC
+  iterations). The growth guard is what rescues it, not merely catching NaN: a
+  non-finite-only guard (`divergence_factor=inf`) stays finite but **stalls**
+  (1000 iters, residual ~1.5e-2). The guard is in the core `ptc_forward`, so it
+  also hardens `BiofilmReactor.steady_state` and direct callers, identity on the
+  happy path. Regressions: `test_steady_state.py::test_ptc_step_guard_keeps_overshoot_finite`
+  (fast synthetic overshoot→NaN rescue) and `::test_ptc_step_guard_rescues_cold_start`
+  (BSM2 cold: growth guard converges, nan-only stalls).
+- **Per-state pseudo-time / residual scaling (the iteration-count lever).** PTC's
+  step damping `V` and convergence criterion both use `max(|y|, scale_floor)`. A
+  flat scalar floor (the old default `1.0`) **over-damps the small-magnitude
+  states** (gas fractions ~1e-3, dissolved hydrogen ~1e-7): their relative rate is
+  throttled, which throttles the SER `dt`-ramp and roughly **doubles** the
+  iteration count. `plant.steady_state` now defaults `scale_floor` to a
+  **per-state** floor `max(|y0|, 1e-6)` — each state scaled by its own warm-start
+  magnitude — so every state has a magnitude-consistent pseudo-time. Measured on
+  **BSM2: 80 → 38 PTC iterations (run-only 39.4 → 18.9 ms, ~2.1×), same root
+  (rel ≤ 7e-6)**; neutral on BSM1 (24 → 23). The small `1e-6` absolute floor
+  anchors near-zero states — a *pure* `|y|` relative scale (no floor) is faster
+  still on BSM2 (~44 it) but **destabilises BSM1** (~280 it), so the `|y0|`-anchored
+  floor is the robust choice. The win is in the **run/amortized** time (a jitted
+  design sweep, calibration); the un-jitted one-shot `steady_state` wall is
+  compile-bound, so its time is roughly unchanged. The change is confined to
+  `plant.steady_state`'s default — `ptc_forward` / `solve_steady_state` keep the
+  scalar `scale_floor=1.0` default (so `BiofilmReactor.steady_state` and direct
+  callers are unchanged), and an explicit `scale_floor` (scalar or per-state
+  array) is always honoured. `scale_floor` only affects the path and the
+  convergence criterion, never the root. Regression: `test_steady_state.py::
+  test_bsm2_steady_state_per_state_scaling_cuts_iterations`.
+- **Compiled-solve cache — the single-run-compile lever (`Plant._steady_jit_cache`).**
+  A one-shot `steady_state` is **~99% compilation** (BSM2: ~12 s compile of the
+  plant-RHS `jacfwd` inside the PTC `while_loop`, vs ~40 ms of actual solving),
+  and the eager `jax.lax.while_loop` in `ptc_forward` **re-traces and recompiles
+  on every call** — so before this, a *repeated* `steady_state` (a temperature /
+  SRT sweep, multistart, regenerating a figure) paid the full ~12–17 s each time.
+  `plant.steady_state` now **persists a jitted forward solver** keyed by the PTC
+  settings (`dt0`/`dt_max`/`growth_cap`/`max_iter`/`tol`/`nonneg`/`influent_time`)
+  and reuses it, so JAX skips the recompile: **BSM2 call 1 ≈ 15.6 s, call 2 ≈
+  0.02 s (~780×), and a swept-`params` call is also ~0.02 s** (the `rhs` reads
+  `params` as a jit *argument* and recomputes the recycle map inside, so one
+  compiled solver is correct for any params — and `y0`-derived `scale_floor` is an
+  argument too, so a varying warm start does not recompile). Cached **only on the
+  dense, design-free, concrete path**: the colored primal bakes a params-derived
+  recycle map, the `design=` path differentiates a pytree, and a traced (gradient)
+  call needs the IFT `custom_vjp` — those keep `solve_steady_state` (the gradient
+  is amortized by the caller's own `jit`). The cached path returns the converged
+  state directly (no IFT wrapper — a concrete call takes no gradient) and still
+  honours the non-convergence fallback to `run_to_steady_state`. The cache is
+  cleared by `set_temperature` / `set_temperature_model` (they change the RHS /
+  state size). **This does NOT speed up the *first* (one-shot) call — that compile
+  is irreducible here — only repeated calls.** Regression: `test_steady_state.py::
+  test_bsm1_steady_state_solve_is_cached` (one entry, reused across params,
+  bit-identical re-call, gradient path bypasses it and stays finite).
 - **`steady_state(..., colored_jacobian=True)` — sparse (colored-AD) PTC
   Jacobian.** PTC forms the full plant `dF/dy` every Newton step (~tens of times
   for BSM2), the *same* block-sparse object the integrator's implicit-stage
@@ -3299,6 +3365,25 @@ is what production simulators use to snap to steady state on any topology.
   much larger plant. The implicit-function-theorem *gradient* Jacobian stays
   dense (a single evaluation). **Default off; opt in for the jitted/amortized
   regime, not for a one-shot steady state.**
+- **Carrying the RHS across PTC iterations — TESTED AND REJECTED (no benefit).**
+  The PTC `step` (`plant/steady.py`) evaluates the RHS twice per iteration —
+  `Fy = F(y)` at the top (for the linear solve) and `F(y_new)` for the residual —
+  and the next iteration's `F(y)` *is* the previous iteration's `F(y_new)`. The
+  obvious optimization is to carry the `F` vector in the `while_loop` carry so the
+  RHS is evaluated once per iteration (each eval includes the recycle and pH
+  solves, so on paper the saving looks real). **It does not help:** the result is
+  bit-identical but the BSM2 run-only (jitted) time is **neutral-to-slightly-worse**
+  (~43 → ~44 ms, measured min-of-8). The reason is that `jac = jax.jacfwd(F)`
+  computes `F(y)` as its forward-mode **primal** on the same `y`, so **XLA already
+  CSE-eliminates the redundant top-level `F(y)`** against the Jacobian's primal
+  pass; removing it by hand saves nothing and threading the extra `n`-vector
+  through the loop carry adds a hair of overhead. **Lesson:** redundant RHS
+  *evaluations* in the PTC loop are the compiler's job — it fuses them. Real PTC
+  speedups must cut *distinct* work the compiler cannot share across iterations:
+  the per-iteration Jacobian materialization (the `colored_jacobian` builder, or
+  freezing/reusing `J` for several steps) or the **iteration count** itself
+  (better pseudo-time / residual scaling, a line search). Do not re-attempt the
+  carry-`F` micro-optimization.
 
 **Default `atol` is now per-component, scaled to the state magnitudes.** When
 `atol` is omitted, **every single-concentration-vector reactor**

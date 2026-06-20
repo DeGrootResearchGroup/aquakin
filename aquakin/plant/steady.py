@@ -21,6 +21,15 @@ residual falls. This is the standard robust method for "forward integration
 converges but Newton stalls" systems and the basis of pseudo-transient
 flowsheet convergence (Pattison & Baldea 2014).
 
+A **step-acceptance guard** makes the ramp robust to a far-from-solution
+overshoot: a step whose scaled residual is non-finite or grows past a generous
+factor is rejected (the iterate is held and ``dt`` hard-shrunk toward the stable
+backward-Euler limit) rather than accepted. PTC is legitimately non-monotone --
+a healthy step can spike the residual and recover -- so the threshold is generous
+and a converging run never rejects (it is bit-identical to the unguarded
+iteration); only a genuine divergence (which would otherwise run to ``NaN``, e.g.
+from a cold start) is pulled back.
+
 ``V = diag(max(|y|, floor))`` (per-state pseudo-time) is essential here: plant
 states span orders of magnitude (dissolved O2 ~ 2, heterotrophs ~ 2000, gas
 fractions ~ 1e-3), and a scalar ``I/dt`` thrashes; the per-state scaling gives
@@ -91,6 +100,7 @@ def ptc_forward(
     tol: float = 1e-6,
     scale_floor: float = 1.0,
     nonneg: bool = True,
+    divergence_factor: float = 1000.0,
     jac_fn: Optional[Callable] = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Run the PTC iteration to a steady state of ``rhs(y, params) = 0``.
@@ -129,6 +139,17 @@ def ptc_forward(
     nonneg : bool
         Clamp the state to ``>= 0`` after each step (concentrations are
         non-negative). Static.
+    divergence_factor : float
+        Step-acceptance guard threshold. A step is rejected (the iterate is held
+        and ``dt`` hard-shrunk) when the scaled residual is non-finite or grows by
+        more than this factor in one step -- catching a far-from-solution Newton
+        overshoot that would otherwise run to ``NaN`` (a cold-start divergence).
+        PTC is legitimately non-monotone (a healthy step can spike the residual
+        ~30x and recover), so the default ``1000`` is deliberately generous: it
+        sits in the wide gap between benign and catastrophic growth, so a
+        converging run never rejects (it is bit-identical to no guard) while a
+        diverging one is pulled back. Set to ``inf`` to reject only non-finite
+        steps.
     jac_fn : callable, optional
         Custom Jacobian materializer ``(F, y) -> dF/dy``, used in place of the
         default dense ``jax.jacfwd(F)`` at each iteration. The PTC step
@@ -145,6 +166,8 @@ def ptc_forward(
     """
     n = y0.shape[0]
     eye = jnp.eye(n)
+    reject_shrink = 0.1     # dt multiplier on a rejected step (toward stability)
+    dt_min = 1e-12          # floor so a rejected dt cannot underflow to zero
 
     def F(y):
         return rhs(y, params)
@@ -159,15 +182,27 @@ def ptc_forward(
         # (V/dt - J) dy = F, with V = diag(s): backward-Euler pseudo-time step.
         A = eye * (s / dt)[:, None] - J
         dy = jnp.linalg.solve(A, Fy)
-        y_new = y + dy
+        y_trial = y + dy
         if nonneg:
-            y_new = jnp.maximum(y_new, 0.0)
-        r_new = _scaled_resnorm(F(y_new), y_new, scale_floor)
-        # Switched-Evolution-Relaxation: grow dt inversely to the residual,
-        # capped above (and floored below) so a residual spike pulls dt back to a
-        # stabler step rather than diverging.
-        ratio = jnp.clip(r / jnp.maximum(r_new, 1e-30), shrink_floor, growth_cap)
-        dt_new = jnp.minimum(dt_max, dt * ratio)
+            y_trial = jnp.maximum(y_trial, 0.0)
+        r_trial = _scaled_resnorm(F(y_trial), y_trial, scale_floor)
+        # Step-acceptance guard: reject a non-finite or grossly-diverging step
+        # (residual growth past the generous ``divergence_factor``) -- hold the
+        # iterate and hard-shrink dt so the retry is a stabler backward-Euler
+        # step, instead of accepting an overshoot that runs to NaN. The threshold
+        # sits in the wide gap between PTC's benign non-monotone spikes (~30x) and
+        # a true blow-up (~1e5x), so a converging run never rejects and stays
+        # bit-identical to the unguarded iteration.
+        accept = jnp.isfinite(r_trial) & (r_trial <= divergence_factor * r)
+        y_new = jnp.where(accept, y_trial, y)
+        r_new = jnp.where(accept, r_trial, r)
+        # Accept: Switched-Evolution-Relaxation grows dt inversely to the residual
+        # (capped above, floored below). Reject: hard-shrink dt toward the stable
+        # limit (floored so it cannot underflow to zero).
+        ser = jnp.clip(r / jnp.maximum(r_trial, 1e-30), shrink_floor, growth_cap)
+        dt_new = jnp.where(accept,
+                           jnp.minimum(dt_max, dt * ser),
+                           jnp.maximum(dt * reject_shrink, dt_min))
         return (y_new, dt_new, r_new, k + 1)
 
     def cond(carry):

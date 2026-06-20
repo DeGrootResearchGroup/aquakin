@@ -596,6 +596,12 @@ class Plant:
         # each call. Assumes the plant is not structurally mutated after the
         # first solve (units/connections fixed), as the reactors assume too.
         self._jit_cache: dict = {}
+        # Compiled PTC steady-state forward solves, keyed by settings. The eager
+        # ``jax.lax.while_loop`` in ``ptc_forward`` re-traces and recompiles on
+        # every call (~12-17 s for BSM2), so a persisted jitted solver lets a
+        # repeated concrete ``steady_state`` (a sweep / multistart / figure
+        # regen) pay that compile once and reuse it (~40 ms run thereafter).
+        self._steady_jit_cache: dict = {}
 
     # ----- assembly --------------------------------------------------------
 
@@ -723,6 +729,7 @@ class Plant:
         # The compiled solve bakes in the (now-changed) condition values, so it
         # must be recompiled on the next solve.
         self._jit_cache.clear()
+        self._steady_jit_cache.clear()
         return self
 
     def set_temperature_model(self, model: TemperatureModel) -> "Plant":
@@ -739,6 +746,7 @@ class Plant:
         """
         self.temperature_model = model
         self._jit_cache.clear()
+        self._steady_jit_cache.clear()
         return self
 
     def connect(
@@ -4124,7 +4132,7 @@ class Plant:
         growth_cap: float = 10.0,
         max_iter: int = 400,
         tol: float = 1e-6,
-        scale_floor: float = 1.0,
+        scale_floor: Optional[float] = None,
         nonneg: bool = True,
         design: Optional[dict] = None,
         colored_jacobian: bool = False,
@@ -4171,9 +4179,14 @@ class Plant:
             PTC iteration cap.
         tol : float
             Convergence tolerance on the scaled residual.
-        scale_floor : float
-            Floor on ``|y|`` in the per-state scaling (so near-zero states do not
-            distort the pseudo-time or the residual).
+        scale_floor : float or array, optional
+            Floor on ``|y|`` in the per-state pseudo-time / residual scaling (so
+            near-zero states do not distort the damping or the convergence
+            criterion). Default ``None`` builds a **per-state** floor
+            ``max(|y0|, 1e-6)`` -- each state scaled by its own warm-start
+            magnitude, which roughly halves the iteration count on a stiff
+            multi-network plant (the flat scalar floor over-damps small-magnitude
+            states). Pass a scalar or per-state array to override.
         nonneg : bool
             Clamp the state to ``>= 0`` each step (concentrations are
             non-negative).
@@ -4228,7 +4241,7 @@ class Plant:
         (True, 75)
         >>> g = jax.grad(lambda p: plant.steady_state(p, y0=warm).state[idx])(params)
         """
-        from aquakin.plant.steady import solve_steady_state
+        from aquakin.plant.steady import ptc_forward, solve_steady_state
 
         self._build_state_layout()
         self._build_parameter_layout()
@@ -4236,6 +4249,19 @@ class Plant:
                   else self._coerce_params(params))
         y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
         t = jnp.asarray(float(influent_time))
+
+        # Per-state pseudo-time / residual scaling. The PTC step damping V and the
+        # convergence criterion both use ``max(|y|, scale_floor)``; a flat scalar
+        # floor over-damps the small-magnitude states (gas fractions ~1e-3,
+        # dissolved hydrogen ~1e-7), throttling their residual and so the SER ramp,
+        # which roughly doubles the iteration count. Defaulting the floor to each
+        # state's own warm-start magnitude ``max(|y0|, 1e-6)`` gives every state a
+        # magnitude-consistent scale -- ~half the iterations on BSM2 (80 -> 38),
+        # neutral on BSM1, same root. The small 1e-6 absolute floor anchors
+        # near-zero states (a pure-|y| relative scale destabilises the iteration).
+        # An explicit ``scale_floor`` (scalar or per-state array) is honoured.
+        if scale_floor is None:
+            scale_floor = jnp.maximum(jnp.abs(y0), 1e-6)
 
         # When design variables are supplied, the differentiated quantity is the
         # pytree ``theta = (params, design)`` -- the implicit-function-theorem
@@ -4276,6 +4302,46 @@ class Plant:
                         primal_rhs, y0, theta, tol=tol)
             if jac_fn is None:
                 primal_rhs = None       # colored unavailable -> dense forward too
+
+        # Compiled-solve cache (the single-run compile lever). The eager
+        # ``while_loop`` in ``ptc_forward`` re-traces and recompiles on EVERY call
+        # (~12-17 s for BSM2, dominated by the plant-RHS ``jacfwd``), so a repeated
+        # concrete ``steady_state`` -- a temperature/SRT sweep, multistart, or
+        # regenerating a figure -- pays that compile each time. Persisting a jitted
+        # forward solver and reusing it lets JAX skip the recompile (~40 ms run
+        # thereafter). Cached only on the **dense, design-free, concrete** path:
+        # the ``rhs`` recomputes the recycle map from the argument ``params``, so
+        # one compiled solver is correct for any params (a sweep); the colored
+        # primal bakes a params-derived map, the ``design`` path differentiates a
+        # pytree, and a traced (gradient) call needs the IFT ``custom_vjp`` and is
+        # amortized by the caller's own ``jit`` -- those keep ``solve_steady_state``.
+        under_trace = any(
+            isinstance(leaf, jax.core.Tracer)
+            for leaf in jax.tree_util.tree_leaves((theta, y0, scale_floor)))
+        if design is None and jac_fn is None and not under_trace:
+            key = (float(dt0), float(dt_max), float(growth_cap), int(max_iter),
+                   float(tol), bool(nonneg), float(influent_time))
+            jitted = self._steady_jit_cache.get(key)
+            if jitted is None:
+                def _fwd(y0_, params_, scale_floor_):
+                    return ptc_forward(
+                        rhs, params_, y0_, dt0=dt0, dt_max=dt_max,
+                        growth_cap=growth_cap, max_iter=max_iter, tol=tol,
+                        scale_floor=scale_floor_, nonneg=nonneg)
+                jitted = jax.jit(_fwd)
+                self._steady_jit_cache[key] = jitted
+            y_star, residual_a, iters_a, conv_a = jitted(
+                y0, params, jnp.asarray(scale_floor))
+            converged = bool(conv_a)
+            if fallback and not converged:
+                fb = self.run_to_steady_state(
+                    params, y0=y0, **(fallback_kwargs or {}))
+                fb.method = "ptc->forward"
+                return fb
+            return SteadyStateResult(
+                state=y_star, converged=converged, method="ptc",
+                iterations=int(iters_a), residual=float(residual_a),
+            )
 
         res = solve_steady_state(
             rhs, theta, y0, jac_fn=jac_fn, primal_rhs=primal_rhs, dt0=dt0,
