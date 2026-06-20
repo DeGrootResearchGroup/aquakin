@@ -895,7 +895,8 @@ def test_recycle_presolve_differentiable():
     def loss(p):
         sol = plant.solve(t_span=(0.0, 0.02), t_eval=jnp.asarray([0.0, 0.02]),
                           params=p, y0=y0, rtol=1e-4, atol=1e-3,
-                          max_steps=20000, gradient="stable_adjoint")
+                          max_steps=20000, gradient="stable_adjoint",
+                          colored_jacobian=False)
         return jnp.sum(sol.final_state)
 
     import warnings as _w

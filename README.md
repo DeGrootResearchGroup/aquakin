@@ -74,30 +74,34 @@ pip install -e ".[test]"
 import jax.numpy as jnp
 import aquakin
 
-network = aquakin.load_network("ozone_bromate")
-conditions = aquakin.OperatingConditions(pH=7.5, T=293.15)   # 0-D: a single stirred tank
-# Or start from the YAML defaults and change only what differs:
-#   conditions = network.default_conditions().with_(T=283.15)
-# (Use SpatialConditions for a spatially varying PFR/CFD case.)
+network = aquakin.load_network("asm1")   # Activated Sludge Model No. 1 (IAWQ)
+
+# 0-D (a single well-mixed tank): start from the network's declared condition
+# defaults (ASM1 runs at a temperature T) and change only what differs.
+conditions = network.default_conditions()                   # YAML defaults (T = 20 C)
+# conditions = network.default_conditions().with_(T=283.15)   # ...or run it at 10 C
+# (OperatingConditions(T=293.15) is the scalar 0-D shorthand; use SpatialConditions
+#  for a spatially varying PFR/CFD case.)
 
 reactor = aquakin.BatchReactor(network, conditions)
 
 # Build the initial state by name -- no .at[species_index[...]].set() chains.
-# Use a dict (species names like "Br-" aren't valid kwargs); rest = YAML defaults.
-C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
+# A simple aerobic batch: activated-sludge biomass + substrate + ammonia.
+# (A dict, since some ASM species names aren't valid kwargs; rest = YAML defaults.)
+C0 = network.concentrations({
+    "SS": 60.0, "SNH": 25.0, "XB_H": 500.0, "XB_A": 80.0, "SO": 2.0})
 
 # For a FEED composition use base="zero" (or network.influent): unlisted species
 # are absent, not silently left at their YAML reference value.
-feed = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5}, base="zero")
+feed = network.concentrations({"SS": 60.0, "SNH": 25.0}, base="zero")
 influent = network.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)   # InfluentSeries
 
 # Or characterize an influent from lab measurements (total COD, TKN, ammonia,
 # alkalinity, ...): the SUMO-style fractionation splits them into the ASM1 states.
-asm1 = aquakin.load_network("asm1")
-influent = aquakin.characterize_influent(asm1, flow=24000.0, total_cod=420.0,
+influent = aquakin.characterize_influent(network, flow=24000.0, total_cod=420.0,
                                          tkn=34.4, ammonia=24.0, alkalinity=330.0)
 # A lab/SCADA CSV with arbitrary headers maps + fractionates per row, no renaming:
-#   aquakin.read_influent_csv("plant_log.csv", asm1,
+#   aquakin.read_influent_csv("plant_log.csv", network,
 #       column_map={"t": "day", "Q": "flow_m3d", "total_cod": "COD",
 #                   "tkn": "TKN", "ammonia": "NH4-N", "alkalinity": "Alk"})
 
@@ -105,7 +109,7 @@ influent = aquakin.characterize_influent(asm1, flow=24000.0, total_cod=420.0,
 # network's rate constants use, and it differs by network -- ozone/UV are in
 # SECONDS (M-1 s-1), the biological models (ASM/ADM/WATS) in DAYS (1/d). Check
 # it before choosing a span:
-network.time_unit                    # "s" for ozone_bromate, "d" for asm1, ...
+network.time_unit                    # "d" for asm1 (the ozone/UV networks are in "s")
 
 # ...or pass time_unit= to work in a unit of your choice: the input times are
 # converted to the network's native unit for the solve and solution.t comes back
@@ -114,22 +118,21 @@ network.time_unit                    # "s" for ozone_bromate, "d" for asm1, ...
 #   sol = reactor.solve(C0, t_span=(0.0, 48.0), t_eval=..., time_unit="h")
 
 # params is optional and defaults to network.default_parameters().
-solution = reactor.solve(
-    C0, t_span=(0.0, 600.0), t_eval=jnp.linspace(0.0, 600.0, 121),
-)
+t_eval = jnp.linspace(0.0, 1.0, 121)        # one day, in days (asm1's native unit)
+solution = reactor.solve(C0, t_span=(0.0, 1.0), t_eval=t_eval)
 
-print("[BrO3-] at t=600s:", float(solution.C_named("BrO3-")[-1]))
+print("[SNH] at t=1 d:", float(solution.C_named("SNH")[-1]))   # final effluent ammonia
 
 # Reporting last-point values without the per-species [-1] slice:
-solution.final_named(["O3", "BrO3-"])   # {name: float} at the final time (None = all)
+solution.final_named(["SS", "SNH", "SNO"])  # {name: float} at the final time (None = all)
 solution.final                          # == final_named(): every species' last value
-solution.C_named_many(["O3", "BrO3-"])  # several full trajectories -> {name: array}
+solution.C_named_many(["SNH", "SNO"])   # several full trajectories -> {name: array}
 
 # Species units and descriptions are carried from the YAML to results, so you
 # never have to re-derive units by string-matching names.
-network.units_of("BrO3-")            # e.g. "mol/L"
-network.description_of("BrO3-")
-solution.units_named("BrO3-")        # same, for axis/column labels
+network.units_of("SNH")              # e.g. "g_N/m³"
+network.description_of("SNH")
+solution.units_named("SNH")          # same, for axis/column labels
 network.summary()                    # tabulates every species with its units
 
 # Dimensional ("unit") consistency check of the rate expressions. Currency-aware:
@@ -149,8 +152,8 @@ solution.to_csv("run.csv")           # units embedded in the CSV header
 # Plot a species (or several) without matplotlib boilerplate -- the x-axis is
 # labelled with the network's time unit, the y-axis with the species' units.
 # Returns a matplotlib Axes. Requires the optional `plot` extra: aquakin[plot]
-ax = solution.plot("BrO3-")          # one line; y-axis "BrO3- [mol/L]"
-solution.plot(["O3", "BrO3-"])       # several, legended; pass ax= to overlay
+ax = solution.plot("SNH")            # one line; y-axis "SNH [g_N/m³]"
+solution.plot(["SNH", "SNO"])        # several, legended; pass ax= to overlay
 ```
 
 Discontinuous operations -- on/off pumps, SBR phases, dosing, level limits --
@@ -159,15 +162,21 @@ plant). A time event fires at a known time (AD-safe), a state event when a
 `cond_fn` crosses zero; each can reset the state or terminate the solve:
 
 ```python
-i_o3 = network.species_index["O3"]
+# An anoxic (denitrification) batch: dose external carbon partway through to
+# drive denitrification, and stop once the nitrate has been removed.
+i_ss = network.species_index["SS"]
+i_sno = network.species_index["SNO"]
+anoxic = network.concentrations(
+    {"SS": 70.0, "SNO": 12.0, "SNH": 20.0, "XB_H": 150.0, "SO": 0.0})
 events = [
-    aquakin.Event(at_times=[200.0, 400.0],                  # scheduled re-dose
-                  apply=lambda t, C, p: C.at[i_o3].add(5e-5)),
-    aquakin.Event(cond_fn=lambda t, C, p: C[i_o3] - 1e-6,   # stop when O3 depletes
-                  direction=-1, terminal=True, name="O3 spent"),
+    aquakin.Event(at_times=[0.1],                           # dose carbon at t = 0.1 d
+                  apply=lambda t, C, p: C.at[i_ss].add(60.0)),
+    aquakin.Event(cond_fn=lambda t, C, p: C[i_sno] - 0.5,   # stop when nitrate is gone
+                  direction=-1, terminal=True, name="denitrified"),
 ]
-sol = reactor.solve(C0, (0.0, 600.0), t_eval, events=events)
-sol.events_log                       # [(time, name), ...] -- the switch audit trail
+sol = reactor.solve(anoxic, t_span=(0.0, 0.5),
+                    t_eval=jnp.linspace(0.0, 0.5, 101), events=events)
+sol.events_log                       # [(0.1, 'event0'), (~0.13, 'denitrified')] -- the audit trail
 ```
 
 ## Plant-wide simulation

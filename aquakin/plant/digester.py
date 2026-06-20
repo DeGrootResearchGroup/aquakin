@@ -114,6 +114,19 @@ class ADM1DigesterUnit:
     def initial_state(self) -> jnp.ndarray:
         return self.network.default_concentrations()
 
+    def operating_pH(self, state: jnp.ndarray, params: jnp.ndarray) -> jnp.ndarray:
+        """The digester's instantaneous, state-derived pH.
+
+        Read from the charge-balance speciation the network already solves each
+        step. The ASM<->ADM interfaces use it because the benchmark evaluates
+        their inorganic-carbon charge balance at the digester pH. Falls back to
+        the static ``pH`` condition if the network declares no speciation.
+        """
+        fn = self.network.derived_condition_fn
+        if fn is None:
+            return jnp.reshape(self._condition_arrays["pH"], ())
+        return fn(state, params, self._condition_arrays, 0)["pH"]
+
     def compute_outputs(
         self,
         t: jnp.ndarray,

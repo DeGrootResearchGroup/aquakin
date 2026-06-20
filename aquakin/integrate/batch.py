@@ -15,10 +15,10 @@ from aquakin.integrate._common import (
     _HasNamedSpecies,
     GradientCheckMixin,
     cached_jitted_solver,
-    concrete_settings_key,
     friendly_solve_errors,
     init_solver_settings,
     make_chemistry_rhs,
+    reactor_settings_key,
     resolve_state_atol,
     solve_chemistry,
     to_native_time,
@@ -262,8 +262,7 @@ class BatchReactor(GradientCheckMixin):
         # signature reuses one compiled solver (see cached_jitted_solver). A
         # traced call (solve inside an outer jit/grad) yields a None settings key
         # and bypasses the cache -- it cannot benefit from it anyway.
-        settings = concrete_settings_key(self.rtol, self.atol, self.adjoint,
-                                         self.dtmax, self.max_steps)
+        settings = reactor_settings_key(self)
         cache_key = (None if settings is None
                      else ("batch", id(self.network), sig, settings))
         jitted = cached_jitted_solver(

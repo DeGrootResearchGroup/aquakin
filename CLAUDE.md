@@ -1287,24 +1287,50 @@ ordinary condition field.
 `solve_ph(...)` returns pH given the total molar concentrations of the
 carbonate, acetate, ammonia, phosphate and sulfide systems, plus strong-anion
 charge equivalents, a net fixed cation charge, and temperature. It runs a
-**fixed number of safeguarded Newton-bisection iterations** on the
-electroneutrality residual in `u = ln[H+]` space (`jax.lax.scan`, no
-data-dependent control flow), so it is `jit` / `vmap` / `grad` friendly and
-composes inside a Diffrax RHS. The residual is strictly monotone with a unique,
-trivially bracketable root, so each step takes a Newton step but falls back to
-bisection (via the non-strict rtsafe product test) whenever Newton would leave
-the bracket — making the iteration **globally convergent in a fixed step count**.
-This matters: a bare Newton step from the fixed pH-7 start **overshoots to
-`exp(u) = inf` (NaN), or silently to an absurd pH that saturates the `pH_switch`
-rate terms**, when the strong-ion charge exceeds the buffering (e.g. a weakly
-buffered transient, or a calibration that pushes the `S_cat`/`S_an` states) —
-the bracketed scheme stays finite and correct there, while still converging
-quadratically (pure Newton) near the root, so AD through it is the exact
-implicit-function-theorem pH sensitivity. Equilibrium constants are
-temperature-corrected via van't Hoff. The chemistry mirrors the WATS reference
-pH solver. Validated against an independent bisection root finder, and the
-weak-buffer / extreme-charge regime that broke the old bare-Newton scheme is
-regression-tested, in `tests/unit/test_ph_solver.py`.
+**safeguarded Newton-bisection** on the electroneutrality residual in
+`u = ln[H+]` space. The residual is strictly monotone with a unique, trivially
+bracketable root, so each step takes a Newton step but falls back to bisection
+(via the non-strict rtsafe product test) whenever Newton would leave the bracket
+— making the iteration **globally convergent**. This matters: a bare Newton step
+from the fixed pH-7 start **overshoots to `exp(u) = inf` (NaN), or silently to an
+absurd pH that saturates the `pH_switch` rate terms**, when the strong-ion charge
+exceeds the buffering (e.g. a weakly buffered transient, or a calibration that
+pushes the `S_cat`/`S_an` states) — the bracketed scheme stays finite and correct
+there.
+
+**Adaptive iteration + implicit-function-theorem AD (the ideal hot path).** On
+the default `activity_model="none"` path the iteration is an **adaptive
+`jax.lax.while_loop`** that stops as soon as a Newton step near the root falls
+below tolerance (a handful of steps in the buffered regime — measured 5–6 to
+machine precision across pH 5.4–8.8) and is **capped at `n_iter`** for the
+bisection worst case, wrapped in **`jax.lax.custom_root`** so the **pH
+sensitivity is the analytic IFT tangent** (one scalar solve of `df/d[H+]` at the
+root). The iteration count therefore never enters the AD graph: `jax.jvp` /
+`jacfwd` (forward, the per-step Jacobian-materialisation path) and `jax.grad`
+(reverse, the calibration-gradient path) through `solve_ph` are **O(1) in the
+iteration count** instead of differentiating through every Newton step. The root
+is the same one the old fixed scan converged to, so **every steady state is
+unchanged** (validated: BSM2 steady state and the ADM1 digester reproduce
+bit-for-bit). The convergence criterion is `in_bracket AND |Newton step| ≤ tol`
+— a *bisection* step can be spuriously small far from the root, so the step size
+alone is not a safe criterion, but a tiny in-bracket Newton step `|f/f'|` (with
+`|f'| ≥ 1`) means a tiny residual, i.e. the root. *Why this is the lever:* a
+Step-0 profile of the BSM2 plant found the pH solve was **~35% of the Jacobian
+materialisation** purely because `n_iter` was 40 while it converges in ~6; the
+adaptive + IFT rewrite drops the pH share to **~8%** (per-tangent pH cost
+O(40)→O(1)) and the whole 20-day BSM2 transient by **~20–25%** (default solver),
+with bit-identical results. The opt-in **activity-corrected path** uses the same
+adaptive + IFT scheme lifted to a **2-variable coupled root**: its conditional
+constants couple `[H+]` and the ionic strength `I`, so it solves the joint fixed
+point `(f1 = charge balance, f2 = I − I(h)) = 0` with an adaptive coupled
+`while_loop` wrapped in `custom_root` over the pair `(h, I)`, and the sensitivity
+is the exact IFT tangent via a **2×2 linear solve** of the joint Jacobian at the
+root (so it too is O(1) in the iteration count, forward and reverse). Equilibrium
+constants are temperature-corrected via van't Hoff. The chemistry mirrors the
+WATS reference pH solver. Validated against an independent bisection root finder;
+the weak-buffer / extreme-charge regime that broke the old bare-Newton scheme,
+the cap-independence of the adaptive loop, and forward-vs-reverse AD agreement
+(both the IFT tangent) are regression-tested in `tests/unit/test_ph_solver.py`.
 
 **Ionic-strength activity corrections (`activity_model`).** By default the solver
 uses molar **concentrations** directly with thermodynamic equilibrium constants
@@ -2542,16 +2568,39 @@ Key types:
     events-only plant (SBR / control study) still gets the cached map (and the
     affinity/convergence diagnostics). The reconstruction win confirms its
     per-time cost was also recycle-resolution-dominated. **`gradient=
-    "stable_adjoint"` deliberately does NOT cache**: `esdirk_adjoint_solve` is a
-    `custom_vjp` that forms `∂f/∂θ` by differentiating the *per-call*
-    `rhs(t, y, params)`, so a precomputed `M` closed over as a constant is
-    invisible to that vjp — the calibration gradient w.r.t. a **flow-setpoint
-    param** (RAS/`Qw`/`f_PS`, the only params `M` depends on) would silently drop
-    its `∂M/∂θ` term. Kinetic-param gradients would be unaffected, but the path is
-    left correct-but-unoptimized rather than assume the user never frees a flow
-    setpoint; a fast cached-primal + param-recomputing-`∂f/∂θ` split of the
-    discrete-adjoint kernel is the future option there. Covered by
-    `tests/integration/test_recycle_cached_map.py`.
+    "stable_adjoint"` also uses the cached map (#366)**, via a *primal/param RHS
+    split* of the discrete-adjoint kernel. `esdirk_adjoint_solve` forms `∂f/∂θ` by
+    differentiating the per-call `rhs(t, y, params)`, so a precomputed `M` closed
+    over as a constant would be invisible to that vjp and a gradient w.r.t. a
+    **flow-setpoint param** (RAS/`Qw`/`f_PS`, the only params `M` depends on) would
+    silently drop its `∂M/∂θ` term. The kernel therefore takes an optional
+    `primal_rhs=`: the forward solve and the backward **`∂f/∂y`** stage Jacobians
+    use the cached-`M` `primal_rhs` (the recycle probe hoisted out of the hot
+    loop), while the **`∂f/∂θ`** vjp keeps the map-recomputing `rhs` — so `∂M/∂θ`
+    is captured exactly. Because the discrete adjoint draws its *entire* parameter
+    gradient from that vjp and uses the stages/Jacobians only to propagate the
+    *state* cotangent, and the cached `M` *is* the probed `M`, the result is
+    **bit-identical** to probing every call, just faster (the gradient w.r.t. a
+    kinetic *and* a flow-setpoint param both match the per-call-probe gradient
+    bit-for-bit). The cached map must be `stop_gradient`'d before being closed over
+    (it is a params-derived value inside the `custom_vjp`; its parameter dependence
+    is the vjp's job). Both the cached jitted forward and the under-trace
+    calibration-gradient path go through the shared `Plant._esdirk_stable_adjoint`.
+    Falls back to per-call probing when `M` is not state-invariant
+    (`_recycle_map_constant` not True). **Measured (clean serial min-of-8 timing):
+    a modest reverse-gradient win where the recycle probe is non-trivial — BSM2
+    `value+grad` ~1.15× (14.7→12.8 s, the ASM↔ADM-interface probe hoisted out of
+    the backward) — and neutral on BSM1** (whose probe is cheap, so its gradient is
+    unchanged). The one-time map build makes the *forward* marginally slower (BSM2
+    ~0.95→1.09 s), but `stable_adjoint` exists for gradients, where the net is
+    positive. The win is modest because the backward's dominant cost is the
+    per-step `n≈167` **dense stage Jacobian builds** (~82% of the backward,
+    profiled) — which `colored_jacobian=True` now colors (see that bullet, ~1.95×
+    on the BSM2 reverse gradient); the cached map alone does not touch them.
+    Covered by
+    `tests/integration/test_recycle_cached_map.py` and the bit-identical
+    flow-setpoint `∂M/∂θ` guard
+    `test_plant_stable_adjoint.py::test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta`.
   - **Wiring API.** `plant.connect(source, dest)` takes two `"unit.port"`
     endpoint strings, read as `source -> dest`. The port may be omitted
     (bare `"unit"`) when the unit has exactly one port for that role — a
@@ -2869,14 +2918,54 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   the dense solver with a warning** on any mismatch. Built concretely once and
   reused; a first solve under reverse-mode tracing also falls back (the probe
   needs concrete arrays — run one concrete solve to build it, then differentiate).
-- Wired like `solver=`/`factormax=` (forward `jax_adjoint` only; rejected with
-  `events=`/`stable_adjoint`), keyed into the compiled-solve cache by a
-  `colored_active` flag so it never collides with a plain solve. **Most
-  worthwhile for a large stiff plant (BSM2); on small BSM1 the materialisation is
-  not the bottleneck (≈1×, but still numerically matches to ~3e-13).** Covered by
+- Wired like `solver=`/`factormax=` on the forward `jax_adjoint` path (rejected
+  with `events=`), keyed into the compiled-solve cache by a `colored_active` flag
+  so it never collides with a plain solve. **Most worthwhile for a large stiff
+  plant (BSM2); on small BSM1 the materialisation is not the bottleneck (≈1×, but
+  still numerically matches to ~3e-13).** Covered by
   `tests/integration/test_colored_jacobian.py` (coloring/reconstruction math,
   positive-probe superset over the trajectory, colored==dense J, full-solve
   trajectory + gradient match, the guard/fallback on a truncated pattern, BSM2).
+- **Also colors the `gradient="stable_adjoint"` BACKWARD pass.** Profiling the
+  BSM2 reverse adjoint showed it is **~82% dense per-step `df/dy` Jacobian builds**
+  (the Newton stage recompute + the transposed-stage `Js`, one JVP per state ×
+  ~79 builds/step × ~204 steps), with the dense solves ~17% and the parameter vjp
+  ~1%. `colored_jacobian=True` now passes a colored builder into
+  `esdirk_adjoint_solve` (`jacobian_builder=`), which builds each stage Jacobian
+  in one JVP per *color* instead of per state. The coloring is derived once,
+  concretely, for the **augmented** (`n+1`, time-carrying) primal rhs the discrete
+  adjoint differentiates — `Plant._colored_adjoint_jacobian_builder`, the backward
+  analogue of `_colored_jacobian_solver`, guarded by `colored_jacobian_max_error`
+  with a dense fallback, cached in `_colored_adjoint_builder`. The dense default
+  (`jacobian_builder=None`) is a trace-time branch, so it is bit-identical to the
+  historic backward; the colored gradient equals the dense one (exact on the
+  superset pattern — only float summation order differs: ~1e-15 on BSM1, ~6e-7 on
+  BSM2 through the ADM1 pH-solver linearization, well inside the FD/`jax_adjoint`
+  match envelope). **Measured (clean serial min-of-trials): BSM2 `value+grad`
+  15.1→7.8 s (~1.95×); BSM1 is slower (3.0→3.7 s — the colored build's overhead
+  exceeds its saving at `n_colors=14` vs 65).**
+- **`colored_jacobian="auto"` is the default — it measures whether the backward
+  coloring pays and turns it on only then.** The GO/NO-GO reduces to "is the
+  colored `df/dy` build cheaper than dense?" (the backward rebuilds it ~79×/step,
+  so the *sign* of the build-time difference is the sign of the speedup). The
+  decision **must** use *jitted* build times — eager timing is misleading because
+  XLA fuses the colored build's scatter away (eager shows colored slower for both
+  plants; jitted shows BSM1 `ratio=0.51`, BSM2 `ratio=2.12`). So on the first
+  concrete `stable_adjoint` solve `_colored_build_speedup` jit-compiles the dense
+  and colored builds once (a few-seconds one-time cost, cached, amortized over a
+  calibration) and stores `ratio = t_dense/t_colored`; `"auto"` enables coloring
+  iff `ratio > _COLORED_BACKWARD_MARGIN` (1.05). Validated: BSM1 → `("dense",
+  0.52)`, BSM2 → `("colored", 2.13)`, each matching the measured outcome, with the
+  auto gradient equal to the dense gradient. `plant.colored_jacobian_decision()`
+  returns `("colored"|"dense", ratio)`. **`"auto"` governs only the
+  `stable_adjoint` backward** — it leaves the **forward** `jax_adjoint` solve dense
+  (forward coloring swaps the implicit linear solver and so is not guaranteed
+  bit-identical; making it the all-solves default is a separate, full-suite-
+  validated change). `colored_jacobian=True` forces coloring on **both** paths
+  (skipping the measurement); `False` disables it. Covered by
+  `test_plant_stable_adjoint.py` (`test_stable_adjoint_colored_jacobian_matches_dense`,
+  the forced path; `test_stable_adjoint_colored_jacobian_auto_off_for_small_plant`,
+  the auto decision).
 
 **`Plant.solve(forward_fast=True)` — lean non-AD forward integrator
 ([`integrate/forward_solve.py`](aquakin/integrate/forward_solve.py)).** A stiff
@@ -3112,6 +3201,45 @@ is what production simulators use to snap to steady state on any topology.
   under a `jit`/`grad` trace the diagnostics are traced values and the fallback
   is skipped (only the differentiable `state` is used there). Constant influent
   is assumed (the residual samples the influent at `influent_time`, default 0).
+- **`steady_state(..., colored_jacobian=True)` — sparse (colored-AD) PTC
+  Jacobian.** PTC forms the full plant `dF/dy` every Newton step (~tens of times
+  for BSM2), the *same* block-sparse object the integrator's implicit-stage
+  (`Plant.solve(colored_jacobian=True)`) and the `stable_adjoint` backward color.
+  This flag materializes it by column compression (one Jacobian-vector product
+  per color — BSM2 46 colors vs 167 states) instead of dense `jax.jacfwd`,
+  reconstructing the same matrix on the sparsity-pattern support: **bit-identical
+  to dense on a single-network plant** (BSM1, the recycle reconstruction is
+  exact) and **identical to PTC tolerance (~1e-7) on a multi-network plant**
+  (BSM2 — the colored `linearize`+vmap materialization orders the recycle
+  linear-solve arithmetic differently from dense `jacfwd`, a round-off difference
+  well inside the 1e-6 convergence tolerance; same 83 iterations). The injection
+  point is `ptc_forward`/`solve_steady_state`'s new `jac_fn=(F, y) -> dF/dy`
+  argument; `Plant.steady_state` builds the colored materializer once concretely
+  (`_colored_steady_jacobian_builder`, reusing the `colored_jacobian` module's
+  pattern/coloring) and **guards** it against the dense Jacobian at the warm
+  start, **falling back to dense** on a mismatch or under a `jit`/`grad` trace
+  (the probe needs concrete arrays). To stay leak-free it builds the pattern from
+  a **cached-recycle-map** forward rhs (the per-call recycle probing in
+  `_rhs(recycle_map=None)` leaks a traced intermediate under the pattern-probe
+  `jit` on a multi-network plant); this cached-map rhs (`primal_rhs`) is also used
+  for the **forward iteration** (identical result, faster), while the one-shot
+  implicit-function-theorem *gradient* keeps the **map-recomputing** rhs so a
+  flow-setpoint parameter retains its `d(map)/d(param)` term (the #366 split).
+  **PTC is a better fit for coloring than the dynamic solve**: it marches to a
+  single operating point in a narrow neighbourhood, so the start-state sparsity
+  pattern stays valid throughout — unlike the 609-day dynamic run's wide load
+  excursion. **Measured (BSM2, 167 states / 46 colors):** the per-iteration
+  Jacobian build is **2.4× cheaper** (0.62 → 0.26 ms) and the whole PTC solve,
+  **run-only under `jit`, is 1.87× faster** (58 → 31 ms). **But the un-jitted
+  one-shot `steady_state` call is compile/trace-bound, not Jacobian-build-bound**
+  (the `while_loop` re-traces per call), so the run-phase saving is invisible
+  there and the one-time pattern build (~49 dense probes) makes a single
+  `steady_state(colored_jacobian=True)` call *slower* (~0.8×). The win therefore
+  materializes only when the solve is run **repeatedly under `jit`** (differentiable
+  design sweeps / optimization loops, where compilation is amortized) or for a
+  much larger plant. The implicit-function-theorem *gradient* Jacobian stays
+  dense (a single evaluation). **Default off; opt in for the jitted/amortized
+  regime, not for a one-shot steady state.**
 
 **Default `atol` is now per-component, scaled to the state magnitudes.** When
 `atol` is omitted, **every single-concentration-vector reactor**
@@ -3989,9 +4117,24 @@ AD-clean. Both **conserve total COD** (`asm2adm` minus the electron-acceptor
 demand; `adm2asm` minus the stripped `S_h2`+`S_ch4`) **and total nitrogen** —
 verified to `rel 1e-6` in `tests/integration/test_interfaces.py`. Only the BSM2
 `fdegrade = 0` case is implemented (other values raise `NotImplementedError`).
-The digester pH used in the charge balance is a fixed parameter (default 7.0);
-the digester's own charge-balance speciation solver sets the actual pH from the
-state, so a representative fixed value is sufficient for the steady state.
+The charge balances (inorganic carbon + `S_cat`/`S_an` in `asm2adm`, alkalinity
+`SALK` in `adm2asm`) are evaluated at the **digester pH**, fed back from the
+digester's own state-derived (charge-balance speciation) pH each RHS — as in the
+benchmark, where the interface pH is the digester's. The plumbing: each interface
+declares `needs_dest_pH` (`asm2adm`, whose destination is the digester) or
+`needs_src_pH` (`adm2asm`, whose source is the digester), and
+`Plant._collect_inputs` reads that unit's `operating_pH(state, params)` and passes
+it as `translate(..., digester_pH=...)`. The `pH_adm` parameter (default 7.0) is
+only the fallback for a standalone `translate` call with no plant to supply it.
+This is the **only pH-dependent part of the maps** (the inorganic-carbon and
+alkalinity charge balances); the COD/N partition is pH-independent, so feeding the
+real digester pH (~7.27) instead of the fixed 7.0 leaves every substrate pool
+unchanged and only corrects the charge-balance pools: the post-interface digester
+**`S_IC`** matches the published BSM2 feed to **0.13%** (was 7.6% at the fixed 7.0)
+and the strong-ion `S_an` to 0.015% (was 1.17%), eliminating what had been the
+digester's largest steady-state residual. The validated BSM2 reactor steady state
+is unchanged (≤0.06%); the digester's remaining ~1.3% is the headspace CO₂
+(the charge-balance-pH vs reference-algebraic-pH difference, not the interface).
 
 ---
 
