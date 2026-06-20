@@ -4368,19 +4368,29 @@ nor concentrating it in a few files makes the whole suite fast.
   fast-gate signature-contract test (`tests/unit/test_api_signatures.py`), which
   catches the *signature* sub-case deterministically; the smoke adds breadth.
 - **The `full-ci` label** runs the full merge suite (the `slow` **and**
-  `validation` jobs) on a PR *before* merge — the opt-in, pay-when-it-matters
-  pre-merge check. Apply it to a PR (the workflow listens for the `labeled`
-  event, so no fresh push is needed) for a **large or high-risk change** —
-  anything touching the plant assembly, a network's stoichiometry, the
-  integrators/adjoints, or the metric/mass-balance kernels — where the
-  fast-gate-plus-rotating-smoke coverage is not enough and you want the slow
-  whole-plant solves and published-data validation to run before it lands.
-  Without the label those jobs run only **after** merge to `main` (the
-  default), so a regression they catch surfaces post-merge and is reverted from
-  there; the label moves that signal earlier at the cost of the runtime. The
-  bare `labeled` event deliberately does **not** re-run the fast gate / smoke
-  (they already ran on the latest commit) and does not cancel an in-progress
-  run, so labelling never disturbs the required checks.
+  `validation` jobs) on a PR *before* merge. Apply it to a PR (the workflow
+  listens for the `labeled` event, so no fresh push is needed) and the slow
+  whole-plant solves and published-data validation run before it lands. Without
+  the label those jobs run only **after** merge to `main`, so a regression they
+  catch surfaces post-merge and is reverted from there; the label moves that
+  signal earlier at the cost of the runtime. The bare `labeled` event
+  deliberately does **not** re-run the fast gate / smoke (they already ran on the
+  latest commit) and does not cancel an in-progress run, so labelling never
+  disturbs the required checks.
+  - **Convention — apply `full-ci` to any PR that touches convergence-sensitive
+    code:** the integrators / adjoints, the PTC steady-state solver
+    (`plant/steady.py`), the plant assembly / recycle resolution, a network's
+    stoichiometry, the pH / precipitation solvers, or the metric / mass-balance
+    kernels. Those are exactly the changes whose regressions live in the `slow` /
+    `validation` suites, which **do not run on the PR fast gate** — so the
+    fast-gate-plus-rotating-smoke coverage can pass while a whole-plant solve or a
+    published-data check is broken. (Concretely: a brittle slow test added in
+    #394 — a BSM2 PTC cold-start convergence with a platform-sensitive iteration
+    count — passed the fast gate and broke `main` only on the post-merge slow run;
+    `full-ci` before merge would have caught it. The fix was to make the test
+    deterministic, but the label is the process guard.) Skipping the label is fine
+    only for changes that cannot reach the slow/validation paths (docs, a new
+    isolated unit, a fast-gated network add).
 
 **Branch protection:** the required status checks must be the fast-gate jobs
 (`fast tests (py3.11)` / `(py3.12)`) — **not** `slow`/`validation`, which do not
