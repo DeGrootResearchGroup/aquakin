@@ -3280,6 +3280,25 @@ is what production simulators use to snap to steady state on any topology.
   much larger plant. The implicit-function-theorem *gradient* Jacobian stays
   dense (a single evaluation). **Default off; opt in for the jitted/amortized
   regime, not for a one-shot steady state.**
+- **Carrying the RHS across PTC iterations — TESTED AND REJECTED (no benefit).**
+  The PTC `step` (`plant/steady.py`) evaluates the RHS twice per iteration —
+  `Fy = F(y)` at the top (for the linear solve) and `F(y_new)` for the residual —
+  and the next iteration's `F(y)` *is* the previous iteration's `F(y_new)`. The
+  obvious optimization is to carry the `F` vector in the `while_loop` carry so the
+  RHS is evaluated once per iteration (each eval includes the recycle and pH
+  solves, so on paper the saving looks real). **It does not help:** the result is
+  bit-identical but the BSM2 run-only (jitted) time is **neutral-to-slightly-worse**
+  (~43 → ~44 ms, measured min-of-8). The reason is that `jac = jax.jacfwd(F)`
+  computes `F(y)` as its forward-mode **primal** on the same `y`, so **XLA already
+  CSE-eliminates the redundant top-level `F(y)`** against the Jacobian's primal
+  pass; removing it by hand saves nothing and threading the extra `n`-vector
+  through the loop carry adds a hair of overhead. **Lesson:** redundant RHS
+  *evaluations* in the PTC loop are the compiler's job — it fuses them. Real PTC
+  speedups must cut *distinct* work the compiler cannot share across iterations:
+  the per-iteration Jacobian materialization (the `colored_jacobian` builder, or
+  freezing/reusing `J` for several steps) or the **iteration count** itself
+  (better pseudo-time / residual scaling, a line search). Do not re-attempt the
+  carry-`F` micro-optimization.
 
 **Default `atol` is now per-component, scaled to the state magnitudes.** When
 `atol` is omitted, **every single-concentration-vector reactor**
