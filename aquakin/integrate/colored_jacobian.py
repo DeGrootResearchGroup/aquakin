@@ -53,6 +53,7 @@ __all__ = [
     "ColoredVeryChord",
     "greedy_color",
     "jacobian_sparsity_pattern",
+    "structural_sparsity_pattern",
     "build_colored_root_finder",
     "colored_jacobian_max_error",
 ]
@@ -181,6 +182,94 @@ def jacobian_sparsity_pattern(
     return P
 
 
+def structural_sparsity_pattern(network, params=None) -> np.ndarray:
+    """Exact **structural** Jacobian sparsity pattern from a network's equations.
+
+    Unlike :func:`jacobian_sparsity_pattern`, which thresholds ``|J| > tol`` at
+    sampled states, this is **state-free**: it asks which species each rate
+    *equation references*, not which couplings are numerically active at some
+    probe point. That distinction matters because a saturated Monod term
+    ``S/(K+S)`` with ``S >> K`` has a tiny but nonzero sensitivity ``~K/S^2`` --
+    structurally present, numerically below threshold -- so a probe taken at one
+    operating regime (e.g. a warm-start steady state) **drops couplings that
+    activate in another** (a dynamic load excursion drives substrates into the
+    Monod-limiting range, inhibitors across their thresholds, pH through a
+    ``pH_switch`` pKa). The dropped couplings are the stiff/fast ones, so a stale
+    pattern wrecks the chord-Newton convergence (see the issue history). The
+    structural pattern cannot go stale: it is a superset of every coupling the
+    equations *can* express, for any influent.
+
+    Construction. For each reaction ``r`` the species it can affect are the
+    nonzeros of its stoichiometry row (static ``stoich_matrix`` **and** the
+    symbolic ``stoich_dynamic`` entries), and the species its rate can depend on
+    are the syntactic species of its rate AST (:meth:`ASTNode.species`) plus --
+    when the rate reads a derived condition such as a state-derived ``pH`` -- the
+    species feeding that derived field. The derived-field dependencies are found
+    by one forward-AD pass of the (always-on, non-saturating) charge-balance
+    ``derived_condition_fn``: ``d(pH)/d(total_i)`` is nonzero for every total the
+    charge balance carries, regardless of regime, so a single evaluation gives
+    the exact structural set. The Jacobian diagonal is always included.
+
+    Parameters
+    ----------
+    network : CompiledNetwork
+        The compiled network (its ``rate_asts``, ``stoich_matrix`` /
+        ``stoich_dynamic``, ``species_index`` and optional
+        ``derived_condition_fn`` / ``derived_fields``).
+    params : jnp.ndarray, optional
+        Parameter vector for evaluating the derived-condition AD (default
+        ``network.default_parameters()``); only its structure matters, not its
+        values.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean ``(n_species, n_species)`` structural superset (diagonal
+        included).
+    """
+    n = network.n_species
+    si = network.species_index
+    P = np.eye(n, dtype=bool)
+    if params is None:
+        params = network.default_parameters()
+
+    # affects[r] = species reaction r can change (static + symbolic stoichiometry)
+    stoich = np.asarray(network.stoich_matrix)
+    affects = [set(np.nonzero(stoich[r])[0].tolist())
+               for r in range(stoich.shape[0])]
+    for (r, j, _fn) in network.stoich_dynamic:
+        affects[r].add(int(j))
+
+    # derived condition (pH, ...) -> the species that feed it. The charge balance
+    # depends on every total it carries at any state, so one forward-AD pass of
+    # the always-on derived fn gives the exact structural dependency set.
+    derived_deps: dict[str, set[int]] = {}
+    if network.derived_condition_fn is not None and network.derived_fields:
+        conds = {k: jnp.asarray(v)
+                 for k, v in network.default_conditions().fields.items()}
+        c_generic = jnp.maximum(jnp.abs(network.default_concentrations()), 1.0)
+        fields = list(network.derived_fields)
+
+        def _derived(c):
+            out = network.derived_condition_fn(c, params, conds, 0)
+            return jnp.stack([jnp.reshape(out[f], ()) for f in fields])
+
+        jac_derived = np.asarray(jax.jacfwd(_derived)(c_generic))   # (n_fields, n)
+        for k, f in enumerate(fields):
+            derived_deps[f] = set(np.nonzero(jac_derived[k] != 0.0)[0].tolist())
+
+    for r, ast in enumerate(network.rate_asts):
+        deps = {si[s] for s in ast.species()}
+        for cond in ast.condition_names():
+            if cond in derived_deps:
+                deps |= derived_deps[cond]
+        if deps:
+            dep_idx = list(deps)
+            for i in affects[r]:
+                P[i, dep_idx] = True
+    return P
+
+
 class ColoredVeryChord(VeryChord):
     """:class:`diffrax.VeryChord` that materializes the per-step Jacobian by
     column-compressed forward AD instead of the dense ``lineax`` linearization.
@@ -260,6 +349,8 @@ def build_colored_root_finder(
     atol: float,
     n_probe: int = 24,
     seed: int = 0,
+    extra_pattern: "np.ndarray | None" = None,
+    probe_pattern: "np.ndarray | None" = None,
 ) -> tuple[ColoredVeryChord, int]:
     """Build a :class:`ColoredVeryChord` for ``rhs`` linearized near ``y0``.
 
@@ -269,9 +360,21 @@ def build_colored_root_finder(
     plant passes the decoupled, 10x-loosened step tolerances, matching the
     default solver).
 
+    ``extra_pattern`` (an ``(n, n)`` boolean array) is unioned with the probed
+    pattern before coloring. The plant passes the **structural** (equation-derived)
+    Jacobian blocks here (:func:`structural_sparsity_pattern`): the numerical
+    probe at ``y0`` captures the linear always-on couplings (flow/recycle) but
+    drops kinetic couplings that are saturated at ``y0`` and only activate off it,
+    so the structural blocks restore them and the pattern cannot go stale.
+
     Returns ``(root_finder, n_colors)``.
     """
-    P = jacobian_sparsity_pattern(rhs, y0, n_probe=n_probe, seed=seed)
+    if probe_pattern is not None:
+        P = np.asarray(probe_pattern, dtype=bool)      # caller already probed
+    else:
+        P = jacobian_sparsity_pattern(rhs, y0, n_probe=n_probe, seed=seed)
+    if extra_pattern is not None:
+        P = P | np.asarray(extra_pattern, dtype=bool)
     color = greedy_color(P)
     n_colors = int(color.max() + 1)
     n = P.shape[0]

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.streams import Stream, mixed_temperature
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -32,7 +33,7 @@ ADM1_GAS_SPECIES: tuple[str, ...] = ("S_gas_h2", "S_gas_ch4", "S_gas_co2")
 
 
 @dataclass
-class ADM1DigesterUnit:
+class ADM1DigesterUnit(CouplingAware):
     """Continuously-fed ADM1 digester (BSM2 mesophilic, 35 °C).
 
     Parameters
@@ -113,6 +114,25 @@ class ADM1DigesterUnit:
 
     def initial_state(self) -> jnp.ndarray:
         return self.network.default_concentrations()
+
+    def coupling_pattern(self):
+        """Structural Jacobian sparsity (issue #388).
+
+        ``self`` is the ADM1 kinetics + gas-transfer + state-derived-pH coupling
+        from the rate AST. ``inlet`` is the dilution, which couples each *liquid*
+        species' derivative to its own inlet concentration -- the gas-headspace
+        states are not fed (``liquid_mask`` is 0 there), so their inlet rows are
+        empty.
+        """
+        import numpy as np
+
+        from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
+        from aquakin.plant.coupling import CouplingPattern
+
+        return CouplingPattern(
+            self_pattern=structural_sparsity_pattern(self.network),
+            inlet_pattern=np.diag(np.asarray(self._liquid_mask) > 0.0),
+        )
 
     def operating_pH(self, state: jnp.ndarray, params: jnp.ndarray) -> jnp.ndarray:
         """The digester's instantaneous, state-derived pH.
