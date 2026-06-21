@@ -494,22 +494,25 @@ class Plant:
         exact pre-solve plus these passes has not converged (a non-affine loop);
         raise ``recycle_passes`` until it clears, or set ``recycle_tol``.
     recycle_tol : float, optional
-        When set (default ``None``), the recycle back-edge *streams* (flow,
-        concentration, temperature) are iterated to this relative tolerance by an
-        adaptive solve instead of the fixed ``recycle_passes`` mop-up -- correct
-        for *any* topology, not just the low-gain BSM reject loop. The fixed count
-        converges in ``log(tol)/log(rho)`` passes where ``rho`` is the nonlinear
-        flow<->concentration coupling's spectral radius (~0.0066 for BSM, so 3
-        passes is ample), but ``rho`` is topology-dependent and not bounded below
-        1: a recycle-heavy plant with a strong concentration-dependent in-loop
-        flow can leave the fixed count silently under-converged. The adaptive
-        solve (warm-started from the exact affine seed, an adaptive
-        :func:`jax.lax.while_loop` wrapped in :func:`jax.lax.custom_root`) iterates
-        until the *actual* residual clears, so it converges for any ``rho < 1``,
-        stops early on a low-gain plant, and -- via the implicit-function-theorem
-        tangent -- gives a gradient that is exact and O(1) in the pass count.
-        ``None`` keeps the fixed-pass path (bit-identical to the historic
-        behaviour). See :meth:`_adaptive_recycle_refine`.
+        Relative tolerance for the **adaptive** recycle resolution, **on by
+        default** (``1e-8``). The recycle back-edge *streams* (flow,
+        concentration, temperature) are iterated to this tolerance -- correct for
+        *any* topology, not just the low-gain BSM reject loop. The alternative
+        fixed ``recycle_passes`` mop-up converges in ``log(tol)/log(rho)`` passes
+        where ``rho`` is the nonlinear flow<->concentration coupling's spectral
+        radius (~0.0066 for BSM, so 3 passes is ample), but ``rho`` is
+        topology-dependent and not bounded below 1: a recycle-heavy plant with a
+        strong concentration-dependent in-loop flow can leave the fixed count
+        silently under-converged. The adaptive solve (warm-started from the exact
+        affine seed, an adaptive :func:`jax.lax.while_loop` wrapped in
+        :func:`jax.lax.custom_root`) iterates until the *actual* residual clears,
+        so it converges for any ``rho < 1``, stops early on a low-gain plant, and
+        -- via the implicit-function-theorem tangent -- gives a gradient that is
+        exact and O(1) in the pass count. ``1e-8`` is well below the typical solver
+        ``rtol`` and a strict improvement on the old fixed-3-pass default (~1e-6 for
+        BSM) at ~neutral cost (~3 iterations from the affine seed). Set
+        ``recycle_tol=None`` to fall back to the fixed ``recycle_passes`` path. See
+        :meth:`_adaptive_recycle_refine`.
     recycle_max_passes : int, optional
         Cap on the adaptive ``recycle_tol`` iteration (default 100), the
         worst-case guard for a near-unit-gain loop.
@@ -520,18 +523,18 @@ class Plant:
         name: str,
         *,
         recycle_passes: int = 3,
-        recycle_tol: Optional[float] = None,
+        recycle_tol: Optional[float] = 1e-8,
         recycle_max_passes: int = 100,
     ) -> None:
         self.name = name
         if recycle_passes < 1:
             raise ValueError(f"recycle_passes must be >= 1; got {recycle_passes}")
         self.recycle_passes = int(recycle_passes)
-        # Opt-in adaptive recycle-concentration resolution. When set, the
-        # recycle back-edge concentrations are iterated to this relative
-        # tolerance (an adaptive ``lax.while_loop`` warm-started from the exact
-        # affine seed, wrapped in ``jax.lax.custom_root`` for the IFT gradient),
-        # instead of the fixed ``recycle_passes`` Gauss-Seidel mop-up. The fixed
+        # Adaptive recycle-concentration resolution (on by default). The recycle
+        # back-edge concentrations are iterated to this relative tolerance (an
+        # adaptive ``lax.while_loop`` warm-started from the exact affine seed,
+        # wrapped in ``jax.lax.custom_root`` for the IFT gradient); ``None`` falls
+        # back to the fixed ``recycle_passes`` Gauss-Seidel mop-up. The fixed
         # count is calibrated to the BSM reject-loop gain (it converges in ~2-3
         # passes), but the passes-to-tolerance is ``log(tol)/log(rho)`` where
         # ``rho`` is the nonlinear flow<->concentration coupling's spectral
@@ -539,8 +542,8 @@ class Plant:
         # recycle-heavy plant, where the fixed count would silently under-
         # converge. The adaptive solve iterates until the *actual* residual
         # clears, so it is correct for any ``rho < 1`` and the gradient (via the
-        # IFT tangent) is O(1) in the pass count. ``None`` (default) keeps the
-        # fixed-pass path, which is bit-identical to the historic behaviour.
+        # IFT tangent) is O(1) in the pass count. On by default (``1e-8``); the
+        # fixed-pass path (``None``) is the bit-identical historic behaviour.
         if recycle_tol is not None and recycle_tol <= 0:
             raise ValueError(f"recycle_tol must be > 0 or None; got {recycle_tol}")
         self.recycle_tol = recycle_tol

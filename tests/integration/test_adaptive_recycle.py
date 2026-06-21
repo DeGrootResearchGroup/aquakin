@@ -112,8 +112,9 @@ def test_adaptive_ift_gradient_matches_finite_difference():
 
 def test_recycle_tol_construction_validation():
     """``recycle_tol`` / ``recycle_max_passes`` are validated at construction."""
-    assert Plant("a").recycle_tol is None            # default: fixed-pass path
+    assert Plant("a").recycle_tol == 1e-8            # adaptive on by default
     assert Plant("b", recycle_tol=1e-9).recycle_tol == 1e-9
+    assert Plant("f", recycle_tol=None).recycle_tol is None  # opt out -> fixed-pass
     with pytest.raises(ValueError):
         Plant("c", recycle_tol=0.0)
     with pytest.raises(ValueError):

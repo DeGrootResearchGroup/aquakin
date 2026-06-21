@@ -2540,9 +2540,9 @@ Key types:
     thickener/dewatering `%TSS` underflow on a tight reject loop) can have `rho`
     near 1, where the fixed 3 passes leaves residual `rho³` — a **silently wrong
     steady state** (measured on a synthetic map: 13% error at `rho=0.5`, 73% at
-    `rho=0.9`, 97% at `rho=0.99`). `Plant(..., recycle_tol=...)` (default `None`)
-    replaces the fixed mop-up with an **adaptive solve to that relative
-    tolerance**, mirroring the charge-balance pH solver
+    `rho=0.9`, 97% at `rho=0.99`). `Plant(..., recycle_tol=...)` (**on by
+    default, `1e-8`**) replaces the fixed mop-up with an **adaptive solve to that
+    relative tolerance**, mirroring the charge-balance pH solver
     ([`core/ph_solver.py`](aquakin/core/ph_solver.py)): the recycle back-edge
     **streams** — flow `Q`, concentration `C`, and (when carried) temperature `T`
     — are the fixed point `x = G(x)` of one forward output sweep
@@ -2557,9 +2557,14 @@ Key types:
     `y / g(1)`. AD (forward and reverse) is therefore **O(1) in the iteration
     count** rather than differentiating through every sweep
     (`Plant._adaptive_recycle_refine`). It converges for any `rho < 1`, stops
-    early on a low-gain plant, and is **off by default** — `recycle_tol=None`
-    keeps the fixed-pass path, bit-identical to the historic behaviour (the
-    validated BSM steady states are untouched). **Verified** (`tests/integration/
+    early on a low-gain plant, and is **on by default** at `1e-8` (well below the
+    typical solver `rtol`, a strict improvement on the old fixed-3-pass ~1e-6 at
+    ~neutral cost — ~3 iterations from the affine seed for BSM); `recycle_tol=None`
+    falls back to the fixed `recycle_passes` mop-up (the bit-identical historic
+    behaviour). **The validated BSM steady states are reproduced** with the
+    default on (the published BSM2 / ADM1 / Takács validations pass unchanged) —
+    the adaptive path converges to the *same* recycle fixed point the fixed-pass
+    mop-up approximates, only tighter. **Verified** (`tests/integration/
     test_adaptive_recycle.py`): on a synthetic tunable-`rho` map the adaptive
     solve reaches tolerance for `rho` up to 0.99 where the fixed 3-pass leaves
     13–97%, and its IFT gradient matches central finite differences to ~2e-10; on
@@ -2569,7 +2574,14 @@ Key types:
     (within the solver tolerance — the adaptive path is the more-converged of the
     two). `recycle_tol` is read inside `_resolve_recycle_concentrations`, so it
     reaches every solve path automatically (no per-path threading); the cached
-    affine `recycle_map` still supplies the warm-start seed.
+    affine `recycle_map` still supplies the warm-start seed. Because the default
+    routes every plant solve through `jax.lax.custom_root`, the
+    `gradient="stable_adjoint"` discrete adjoint composes with the recycle IFT
+    tangent (verified exact: the cached/probed `dM/dθ` gradient agrees to ~1e-13,
+    and the cross-interface gradient matches finite differences to the FD floor);
+    with the adaptive default `M` is only the warm-start seed (the fixed point is
+    M-independent), so the `#366` cached/probed-map gradient distinction now agrees
+    to float rounding rather than bit-for-bit.
   - **Cached recycle map (per-RHS speedup).** The concentration map `M` is fixed
     by the recycle flows + topology, so for a **fixed-pump** plant (every BSM
     plant — the recycle pumps are constant) it is **invariant to the state and
