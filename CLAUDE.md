@@ -3273,14 +3273,19 @@ is what production simulators use to snap to steady state on any topology.
   catastrophic (~1e5×) growth**, so a converging run **never rejects and is
   bit-identical** to the unguarded iteration (BSM1/BSM2 warm: same 23/38
   iterations), while a divergent one is pulled back. **Measured:** BSM2 from a
-  *cold* `initial_state` went to NaN before; it now **converges** (447 PTC
-  iterations). The growth guard is what rescues it, not merely catching NaN: a
-  non-finite-only guard (`divergence_factor=inf`) stays finite but **stalls**
-  (1000 iters, residual ~1.5e-2). The guard is in the core `ptc_forward`, so it
-  also hardens `BiofilmReactor.steady_state` and direct callers, identity on the
-  happy path. Regressions: `test_steady_state.py::test_ptc_step_guard_keeps_overshoot_finite`
-  (fast synthetic overshoot→NaN rescue) and `::test_ptc_step_guard_rescues_cold_start`
-  (BSM2 cold: growth guard converges, nan-only stalls).
+  *cold* `initial_state` went to NaN before; it now stays finite and **converges**
+  (~450 PTC iterations on the dev machine — the cold-start *count* is numerically
+  platform-sensitive, so it is not asserted in CI). The growth guard is what
+  rescues it, not merely catching NaN: a non-finite-only guard
+  (`divergence_factor=inf`) accepts the finite blow-ups and stalls. The guard is
+  in the core `ptc_forward`, so it also hardens `BiofilmReactor.steady_state` and
+  direct callers, identity on the happy path. Regressions (both fast +
+  deterministic — no brittle convergence count):
+  `test_steady_state.py::test_ptc_step_guard_keeps_overshoot_finite` (an overshoot
+  to a non-finite region is rescued to convergence) and
+  `::test_ptc_step_guard_rejects_finite_blowup` (a large *finite* residual blow-up
+  is rejected with the default `divergence_factor` but accepted with `inf`,
+  checking the acceptance logic directly).
 - **Per-state pseudo-time / residual scaling (the iteration-count lever).** PTC's
   step damping `V` and convergence criterion both use `max(|y|, scale_floor)`. A
   flat scalar floor (the old default `1.0`) **over-damps the small-magnitude
@@ -4363,19 +4368,29 @@ nor concentrating it in a few files makes the whole suite fast.
   fast-gate signature-contract test (`tests/unit/test_api_signatures.py`), which
   catches the *signature* sub-case deterministically; the smoke adds breadth.
 - **The `full-ci` label** runs the full merge suite (the `slow` **and**
-  `validation` jobs) on a PR *before* merge — the opt-in, pay-when-it-matters
-  pre-merge check. Apply it to a PR (the workflow listens for the `labeled`
-  event, so no fresh push is needed) for a **large or high-risk change** —
-  anything touching the plant assembly, a network's stoichiometry, the
-  integrators/adjoints, or the metric/mass-balance kernels — where the
-  fast-gate-plus-rotating-smoke coverage is not enough and you want the slow
-  whole-plant solves and published-data validation to run before it lands.
-  Without the label those jobs run only **after** merge to `main` (the
-  default), so a regression they catch surfaces post-merge and is reverted from
-  there; the label moves that signal earlier at the cost of the runtime. The
-  bare `labeled` event deliberately does **not** re-run the fast gate / smoke
-  (they already ran on the latest commit) and does not cancel an in-progress
-  run, so labelling never disturbs the required checks.
+  `validation` jobs) on a PR *before* merge. Apply it to a PR (the workflow
+  listens for the `labeled` event, so no fresh push is needed) and the slow
+  whole-plant solves and published-data validation run before it lands. Without
+  the label those jobs run only **after** merge to `main`, so a regression they
+  catch surfaces post-merge and is reverted from there; the label moves that
+  signal earlier at the cost of the runtime. The bare `labeled` event
+  deliberately does **not** re-run the fast gate / smoke (they already ran on the
+  latest commit) and does not cancel an in-progress run, so labelling never
+  disturbs the required checks.
+  - **Convention — apply `full-ci` to any PR that touches convergence-sensitive
+    code:** the integrators / adjoints, the PTC steady-state solver
+    (`plant/steady.py`), the plant assembly / recycle resolution, a network's
+    stoichiometry, the pH / precipitation solvers, or the metric / mass-balance
+    kernels. Those are exactly the changes whose regressions live in the `slow` /
+    `validation` suites, which **do not run on the PR fast gate** — so the
+    fast-gate-plus-rotating-smoke coverage can pass while a whole-plant solve or a
+    published-data check is broken. (Concretely: a brittle slow test added in
+    #394 — a BSM2 PTC cold-start convergence with a platform-sensitive iteration
+    count — passed the fast gate and broke `main` only on the post-merge slow run;
+    `full-ci` before merge would have caught it. The fix was to make the test
+    deterministic, but the label is the process guard.) Skipping the label is fine
+    only for changes that cannot reach the slow/validation paths (docs, a new
+    isolated unit, a fast-gated network add).
 
 **Branch protection:** the required status checks must be the fast-gate jobs
 (`fast tests (py3.11)` / `(py3.12)`) — **not** `slow`/`validation`, which do not
