@@ -44,6 +44,38 @@ def test_decay_matches_analytic_and_saveat():
     assert not np.any(np.all(np.asarray(ys) == 0, axis=1))     # no missed points
 
 
+def test_dense_output_save_grid_independent():
+    """Dense output (cubic-Hermite continuous extension, #386): the integrator
+    takes its natural steps (clipped only to t1, not to each save) and interpolates
+    save points within a step. So the solution at a save time does NOT depend on
+    how dense the t_eval grid is -- a sparse and a dense grid are interpolated from
+    the *same* step sequence and must agree exactly at shared times. (With the old
+    step-clipping every save forced a step boundary, so the grids gave different
+    step sequences and only agreed to integration tolerance.)"""
+    k = jnp.array([1.0, 0.3, 2.5])
+    y0 = jnp.array([1.0, 2.0, 0.5])
+
+    def rhs(t, y, args):
+        return -k * y
+
+    def jac(t, y, args):
+        return jnp.diag(-k)
+
+    dense = jnp.linspace(0.0, 4.0, 201)         # 0.02 spacing
+    sparse = jnp.linspace(0.0, 4.0, 5)          # 0,1,2,3,4 -- a subset of dense
+    yd = forward_solve(rhs, jac, y0, None, 0.0, 4.0, dense, rtol=1e-4, atol=1e-8)
+    ys = forward_solve(rhs, jac, y0, None, 0.0, 4.0, sparse, rtol=1e-4, atol=1e-8)
+    shared = np.asarray(yd)[::50]               # dense rows at t = 0,1,2,3,4
+    # Same step sequence interpolated at the same times -> bit-for-bit agreement.
+    assert np.max(np.abs(shared - np.asarray(ys))) < 1e-11
+    # And the interpolation tracks the analytic decay (most dense points fall
+    # strictly inside a step at this loose tolerance).
+    exact = np.asarray(y0)[None, :] * np.exp(-np.asarray(k)[None, :]
+                                             * np.asarray(dense)[:, None])
+    assert np.max(np.abs(np.asarray(yd) - exact)) < 1e-3
+    assert not np.any(np.all(np.asarray(yd) == 0, axis=1))     # no missed points
+
+
 def test_order_is_three():
     """Kvaerno3 is 3rd order: error should drop ~8x per halving of tolerance-
     driven step (checked via a stiff scalar with a tight vs loose tol)."""

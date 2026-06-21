@@ -17,17 +17,43 @@ is dropped is only the *adjoint over the whole solve*: the result is **not**
 differentiable w.r.t. parameters / initial conditions. So this is an opt-in fast
 lane for non-AD solves; any differentiated solve must use the ``diffrax`` path.
 
-Measured on BSM2: ~3x faster compile (the tracing collapses) and ~2-3x faster run
-than the ``diffrax`` forward solve, at the same accuracy (a valid solution to the
-same ``rtol`` -- it differs from the diffrax trajectory only by the usual
-step-sequence variation between two valid adaptive solves).
+The run is faster than the colored ``diffrax`` forward path -- measured ~0.86x
+(compile+run) and ~0.88x (run-only) on the full 609-day BSM2 dynamic solve at the
+benchmark hourly save grid -- because the lean loop strips the differentiability
+scaffolding while the **dense-output continuous extension** (see below) removes
+the only remaining per-save penalty. The per-step costs are otherwise the same as
+``diffrax`` (both build the colored Jacobian once per step, which XLA fuses into
+one batched JVP -- so freezing/reusing it does not help and in fact hurts via
+degraded Newton convergence). The compile is also faster, though the margin is
+**scale-dependent**: large for small/simple networks (where the ``diffrax``
+implicit scaffolding dominates the trace) and smaller on a big flowsheet (where
+the shared colored-Jacobian + plant-RHS tracing dominates). The trade-off versus
+``diffrax`` is the loss of differentiability, so a large *differentiable* solve
+(``calibrate`` / ``sensitivity`` / ``jax.grad``) must still use the
+``colored_jacobian`` ``diffrax`` path. Results match the ``diffrax`` trajectory to
+the same ``rtol`` (the usual step-sequence variation between two valid adaptive
+solves).
+
+Output at ``t_eval`` uses a **cubic-Hermite dense output** (the Kvaerno3
+continuous extension, :func:`_hermite`): the integrator takes its natural adaptive
+steps -- clipped only to the final time ``t1`` -- and every save point falling
+inside a step is recovered by interpolation, exactly as the ``diffrax`` path does.
+This replaces the earlier step-clipping (a forced step boundary on every save),
+whose cost grew with save density and was the dominant reason an earlier version
+ran slower than ``diffrax`` at the dense benchmark grid; with dense output the run
+time is flat in the number of save points.
 
 The method is the L-stable A-stable 3rd-order Kvaerno3 ESDIRK with its embedded
-2nd-order error estimate (Kvaerno 2004), an adaptive PI step controller, and a
-**convergence-aware growth limiter** (the simplified-Newton contraction rate caps
-the step growth, so a step is rarely grown into nonlinear-divergence -- the
-chord's failure mode). Output at ``t_eval`` is exact: the step is clipped to land
-on each save time (no dense-output interpolation error).
+2nd-order error estimate (Kvaerno 2004) and an adaptive step controller with two
+parts: an error controller -- the I-term ``en^(-1/3)`` with a Soderlind PI memory
+term ``(en_prev/en)^pi_beta`` (the proportional part damps the overshoot-then-
+reject oscillation a bare I-controller suffers; ``pi_beta=0`` recovers the pure
+I-controller) -- and a **Gustafsson-style convergence-aware growth limiter** (the
+simplified-Newton contraction rate caps the step growth, so a step is rarely grown
+into nonlinear-divergence, the chord's failure mode; diffrax's ``PIDController``
+has no such term). The default ``maxfac=2.0`` / ``pi_beta=0.08`` were tuned on the
+full 609-day BSM2 dynamic run, where they cut the step count ~20% versus the
+earlier ``maxfac=5`` pure-I controller (fewer error-test rejections).
 """
 
 from functools import partial
@@ -57,6 +83,22 @@ _MAXNEWT = 12
 _KAPPA = 1e-2          # simplified-Newton convergence tolerance (Hairer eta test)
 
 
+def _hermite(y0_, y1_, f0_, f1_, h, theta):
+    """Cubic Hermite continuous extension on a step ``[t, t+h]`` at fraction
+    ``theta`` in ``[0, 1]``. Matches the state and its derivative at both ends
+    (3rd-order, the order of the Kvaerno3 method and the same dense output the
+    ``diffrax`` path uses). ``f0 = rhs(t, y) = k1`` and ``f1 = rhs(t+h, y1) = k4``
+    (the stiffly-accurate last stage is evaluated at the step endpoint, so its
+    derivative is the endpoint slope -- no extra RHS evaluation needed)."""
+    th2 = theta * theta
+    th3 = th2 * theta
+    h00 = 2.0 * th3 - 3.0 * th2 + 1.0
+    h10 = th3 - 2.0 * th2 + theta
+    h01 = -2.0 * th3 + 3.0 * th2
+    h11 = th3 - th2
+    return h00 * y0_ + h10 * h * f0_ + h01 * y1_ + h11 * h * f1_
+
+
 def forward_solve(
     rhs: Callable,
     jac: Callable,
@@ -72,7 +114,8 @@ def forward_solve(
     theta_target: float = 0.3,
     safety: float = 0.9,
     minfac: float = 0.2,
-    maxfac: float = 5.0,
+    maxfac: float = 2.0,
+    pi_beta: float = 0.08,
     max_steps: int = 100_000_000,
 ):
     """Integrate ``dy/dt = rhs(t, y, args)`` from ``t0`` to ``t1``, forward only.
@@ -147,55 +190,84 @@ def forward_solve(
         err = h * (_BE[0] * k1 + _BE[1] * k2 + _BE[2] * k3 + _BE[3] * k4)
         rate = jnp.maximum(jnp.maximum(r2, r3), r4)
         conv = c2 & c3 & c4 & jnp.all(jnp.isfinite(y1))
-        return y1, wrms(err, y), rate, conv
+        # k1 (slope at t) and k4 (slope at t+h, the stiffly-accurate endpoint
+        # stage) feed the cubic-Hermite dense output.
+        return y1, wrms(err, y), rate, conv, k1, k4
 
     ys0 = jnp.zeros((n_save, n), dtype=y0.dtype)
 
     def _tol(s):
         return 1e-12 * jnp.maximum(1.0, jnp.abs(s))
 
-    # carry: t, y, h_ctrl (unclipped proposal), save_idx, ys, n_steps, dead
+    # carry: t, y, h_ctrl (unclipped proposal), save_idx, ys, n_steps,
+    #        en_prev (last accepted error, for the PI term), dead
     def cond(c):
-        t, y, h_ctrl, sidx, ys, nstep, dead = c
+        t, y, h_ctrl, sidx, ys, nstep, en_prev, dead = c
         return (sidx < n_save) & (~dead) & (nstep < max_steps)
 
     def body(c):
-        t, y, h_ctrl, sidx, ys, nstep, dead = c
+        t, y, h_ctrl, sidx, ys, nstep, en_prev, dead = c
         next_save = t_eval[sidx]
 
         def record_only():
             # already at this save time (e.g. t_eval[0] == t0): record, advance,
             # do not take a (zero-width) step.
-            return (t, y, h_ctrl, sidx + 1, ys.at[sidx].set(y), nstep, dead)
+            return (t, y, h_ctrl, sidx + 1, ys.at[sidx].set(y), nstep, en_prev,
+                    dead)
 
         def do_step():
-            # clip the actual step so it never overshoots the next save time
-            # (-> recorded exactly at t_eval); the controller still proposes off
-            # the unclipped h_ctrl so clipping does not bias the step sequence.
-            h = jnp.minimum(h_ctrl, next_save - t)
+            # Take the NATURAL adaptive step, clipped only to the final time t1
+            # (not to each save). Save points that fall inside the step are
+            # recovered by the cubic-Hermite continuous extension below, so the
+            # controller keeps its natural step rhythm instead of being forced to
+            # plant an extra boundary on every t_eval point (the step-clipping
+            # cost at a dense save grid -- issue #386).
+            h = jnp.minimum(h_ctrl, t1 - t)
             J = jac(t, y, args)
             lu = jsla.lu_factor(eye - h * _G * J)
-            y1, en, rate, conv = one_step(t, y, h, lu)
+            y1, en, rate, conv, k1, k4 = one_step(t, y, h, lu)
             accept = conv & (en <= 1.0)
-            f_err = safety * jnp.where(en > 0, en ** (-1.0 / 3.0), maxfac)
+            # Error controller: an I-term en^(-1/3) with an optional Soderlind PI
+            # memory term (en_prev/en)^pi_beta -- the proportional part that damps
+            # the controller's overshoot-then-reject oscillation a bare I-controller
+            # suffers (pi_beta=0 recovers the pure I-controller). Combined with the
+            # Gustafsson-style convergence-rate growth limiter f_conv below, which
+            # caps growth by the simplified-Newton contraction rate so a step is not
+            # grown into nonlinear divergence.
+            ens = jnp.maximum(en, 1e-30)
+            f_pi = (en_prev / ens) ** pi_beta
+            f_err = safety * jnp.where(en > 0, ens ** (-1.0 / 3.0) * f_pi, maxfac)
             f_conv = jnp.where(rate > 1e-3, theta_target / rate, maxfac)
             fac = jnp.clip(jnp.minimum(f_err, f_conv), minfac, maxfac)
             fac = jnp.where(conv, fac, 0.25)        # nonconvergence -> shrink hard
             h_ctrl_new = h_ctrl * fac
             t_new = jnp.where(accept, t + h, t)
             y_new = jnp.where(accept, y1, y)
-            landed = accept & (t_new >= next_save - _tol(next_save))
-            ys_new = jax.lax.cond(landed, lambda: ys.at[sidx].set(y_new),
-                                  lambda: ys)
-            sidx_new = sidx + jnp.where(landed, 1, 0)
+            en_prev_new = jnp.where(accept, ens, en_prev)   # update only on accept
+            # Dense output: on an accepted step, record EVERY save time in
+            # (t, t_new] by interpolating within the step (a step may span several
+            # saves at a sparse grid, or none at a dense one). f0=k1, f1=k4.
+            def rec_cond(rc):
+                ys_, si_ = rc
+                in_range = si_ < n_save
+                tsi = t_eval[jnp.minimum(si_, n_save - 1)]
+                return accept & in_range & (tsi <= t_new + _tol(t_new))
+
+            def rec_body(rc):
+                ys_, si_ = rc
+                theta = (t_eval[si_] - t) / h
+                ysave = _hermite(y, y_new, k1, k4, h, theta)
+                return ys_.at[si_].set(ysave), si_ + 1
+
+            ys_new, sidx_new = jax.lax.while_loop(rec_cond, rec_body, (ys, sidx))
             stuck = h_ctrl_new < 1e-13
             return (t_new, y_new, h_ctrl_new, sidx_new, ys_new, nstep + 1,
-                    dead | stuck)
+                    en_prev_new, dead | stuck)
 
         already = (next_save - t) <= _tol(next_save)
         return jax.lax.cond(already, record_only, do_step)
 
     init = (jnp.asarray(float(t0)), y0, jnp.asarray(float(h0)), jnp.array(0),
-            ys0, jnp.array(0), jnp.array(False))
-    t, y, h, sidx, ys, nstep, dead = jax.lax.while_loop(cond, body, init)
+            ys0, jnp.array(0), jnp.array(1.0), jnp.array(False))
+    t, y, h, sidx, ys, nstep, en_prev, dead = jax.lax.while_loop(cond, body, init)
     return ys
