@@ -31,6 +31,7 @@ import diffrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jax.flatten_util import ravel_pytree
 
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate.events import Event, solve_with_events
@@ -491,14 +492,65 @@ class Plant:
         and differentiated. The first non-traced :meth:`solve` runs a one-time
         convergence diagnostic on the mop-up residual and warns only if even the
         exact pre-solve plus these passes has not converged (a non-affine loop);
-        raise ``recycle_passes`` until it clears.
+        raise ``recycle_passes`` until it clears, or set ``recycle_tol``.
+    recycle_tol : float, optional
+        Relative tolerance for the **adaptive** recycle resolution, **on by
+        default** (``1e-8``). The recycle back-edge *streams* (flow,
+        concentration, temperature) are iterated to this tolerance -- correct for
+        *any* topology, not just the low-gain BSM reject loop. The alternative
+        fixed ``recycle_passes`` mop-up converges in ``log(tol)/log(rho)`` passes
+        where ``rho`` is the nonlinear flow<->concentration coupling's spectral
+        radius (~0.0066 for BSM, so 3 passes is ample), but ``rho`` is
+        topology-dependent and not bounded below 1: a recycle-heavy plant with a
+        strong concentration-dependent in-loop flow can leave the fixed count
+        silently under-converged. The adaptive solve (warm-started from the exact
+        affine seed, an adaptive :func:`jax.lax.while_loop` wrapped in
+        :func:`jax.lax.custom_root`) iterates until the *actual* residual clears,
+        so it converges for any ``rho < 1``, stops early on a low-gain plant, and
+        -- via the implicit-function-theorem tangent -- gives a gradient that is
+        exact and O(1) in the pass count. ``1e-8`` is well below the typical solver
+        ``rtol`` and a strict improvement on the old fixed-3-pass default (~1e-6 for
+        BSM) at ~neutral cost (~3 iterations from the affine seed). Set
+        ``recycle_tol=None`` to fall back to the fixed ``recycle_passes`` path. See
+        :meth:`_adaptive_recycle_refine`.
+    recycle_max_passes : int, optional
+        Cap on the adaptive ``recycle_tol`` iteration (default 100), the
+        worst-case guard for a near-unit-gain loop.
     """
 
-    def __init__(self, name: str, *, recycle_passes: int = 3) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        recycle_passes: int = 3,
+        recycle_tol: Optional[float] = 1e-8,
+        recycle_max_passes: int = 100,
+    ) -> None:
         self.name = name
         if recycle_passes < 1:
             raise ValueError(f"recycle_passes must be >= 1; got {recycle_passes}")
         self.recycle_passes = int(recycle_passes)
+        # Adaptive recycle-concentration resolution (on by default). The recycle
+        # back-edge concentrations are iterated to this relative tolerance (an
+        # adaptive ``lax.while_loop`` warm-started from the exact affine seed,
+        # wrapped in ``jax.lax.custom_root`` for the IFT gradient); ``None`` falls
+        # back to the fixed ``recycle_passes`` Gauss-Seidel mop-up. The fixed
+        # count is calibrated to the BSM reject-loop gain (it converges in ~2-3
+        # passes), but the passes-to-tolerance is ``log(tol)/log(rho)`` where
+        # ``rho`` is the nonlinear flow<->concentration coupling's spectral
+        # radius -- topology-dependent and not bounded below 1 for an arbitrary
+        # recycle-heavy plant, where the fixed count would silently under-
+        # converge. The adaptive solve iterates until the *actual* residual
+        # clears, so it is correct for any ``rho < 1`` and the gradient (via the
+        # IFT tangent) is O(1) in the pass count. On by default (``1e-8``); the
+        # fixed-pass path (``None``) is the bit-identical historic behaviour.
+        if recycle_tol is not None and recycle_tol <= 0:
+            raise ValueError(f"recycle_tol must be > 0 or None; got {recycle_tol}")
+        self.recycle_tol = recycle_tol
+        if recycle_max_passes < 1:
+            raise ValueError(
+                f"recycle_max_passes must be >= 1; got {recycle_max_passes}")
+        self.recycle_max_passes = int(recycle_max_passes)
         self.units: dict[str, Unit] = {}
         # Units in the order they were added (the user's order; arbitrary).
         self._insertion_order: list[str] = []
@@ -2401,7 +2453,7 @@ class Plant:
             return {}
         ctx = self._recycle_context(t, states, params_full, resolved_flows,
                                     signals)
-        seed_net, group_lists, forward, zeroC, zeroT = ctx
+        seed_net, group_lists, forward, zeroC, zeroT, forward_full = ctx
 
         dC, dT = forward(zeroC, zeroT)                       # constant part d
         resolve_T = all(dT[k] is not None for k in keys)
@@ -2445,16 +2497,159 @@ class Plant:
                 for kj in gkeys:
                     solved_T[kj] = None
 
+        # Opt-in adaptive refinement. The affine solve above is the exact fixed
+        # point only for a *linear* topology (mixers/splitters/clarifiers linear
+        # in concentration at the resolved flows). When a recycle-loop flow is
+        # concentration-dependent (a thickener/dewatering ``%TSS`` underflow on a
+        # reject loop), the true map ``c -> forward(c)`` is nonlinear and the
+        # affine ``c`` is off by that nonlinear residual. The fixed ``recycle_passes``
+        # mop-up removes it in ``log(tol)/log(rho)`` passes (``rho`` = the loop's
+        # spectral radius); calibrated to BSM's ~0.0066, ample at 3 passes, but
+        # topology-dependent. With ``recycle_tol`` set, iterate the nonlinear map
+        # to tolerance instead (AD-safe via :meth:`_adaptive_recycle_refine`), so
+        # convergence is guaranteed for any ``rho < 1``.
+        if self.recycle_tol is not None:
+            seed_Q = {k: resolved_flows[k] for k in keys}
+            solved_Q, solved_C, solved_T = self._adaptive_recycle_refine(
+                forward_full, keys, seed_Q, solved_C, solved_T, resolve_T)
+            return {k: Stream(Q=solved_Q[k], C=solved_C[k],
+                              network=seed_net[k], T=solved_T[k]) for k in keys}
+
         return {k: Stream(Q=resolved_flows[k], C=solved_C[k],
                           network=seed_net[k], T=solved_T[k]) for k in keys}
+
+    def _adaptive_recycle_refine(self, forward_full, keys, seed_Q, seed_C,
+                                 seed_T, resolve_T):
+        """Iterate the nonlinear recycle map to ``recycle_tol``, AD-safe.
+
+        The recycle back-edge *streams* -- flow ``Q``, concentration ``C`` and
+        (when carried) temperature ``T`` -- are the fixed point ``x = G(x)`` of
+        one forward output sweep (``forward_full``), read back on the recycle
+        edges. ``Q`` is part of the variable because a concentration-dependent
+        in-loop flow (a thickener/dewatering ``%TSS`` underflow on a reject loop)
+        is recomputed from the seeded streams each sweep, so the true fixed point
+        couples ``Q`` and ``C``; iterating ``C`` alone solves the wrong problem.
+        The affine pre-solve (:meth:`_resolve_recycle_concentrations`) plus the
+        resolved flows give the exact *linear*-topology fixed point as a warm
+        start; this closes the residual of the nonlinear flow<->concentration
+        coupling.
+
+        Mirrors the charge-balance pH solver (``core/ph_solver.py``): the forward
+        solve is an adaptive :func:`jax.lax.while_loop` that stops once the
+        relative step falls below ``recycle_tol`` (capped at ``recycle_max_passes``
+        for the worst case), wrapped in :func:`jax.lax.custom_root` so the
+        sensitivity is the exact implicit-function-theorem tangent -- AD (forward
+        and reverse) is O(1) in the iteration count rather than differentiating
+        through every sweep. The map is contractive (spectral radius ``rho < 1``),
+        so both the forward fixed-point iteration ``x <- G(x)`` and the tangent's
+        Neumann inversion converge geometrically.
+
+        Parameters
+        ----------
+        forward_full : callable
+            ``forward_full(q, c, T) -> (C_dict, T_dict, Q_dict)`` -- one sweep,
+            read back on the recycle edges (from :meth:`_recycle_context`).
+        keys : list
+            The recycle back-edge keys.
+        seed_Q, seed_C, seed_T : dict
+            The warm start: per-edge resolved flows ``Q``, affine-solve ``C``,
+            and ``T`` scalars (``seed_T`` entries are ``None`` when no temperature
+            is carried).
+        resolve_T : bool
+            Whether a temperature channel is part of the fixed point.
+
+        Returns
+        -------
+        (dict, dict, dict)
+            The refined per-edge ``Q``, ``C`` and ``T`` (``T`` passed through
+            unchanged when ``resolve_T`` is False).
+        """
+        tol = self.recycle_tol
+        max_passes = self.recycle_max_passes
+
+        # The fixed-point variable is (Q, C) per edge, plus T when carried;
+        # T=None channels are kept out of the differentiated pytree and threaded
+        # through ``forward_full`` separately.
+        none_T = {k: None for k in keys}
+
+        if resolve_T:
+            def G(x):
+                Q, C, T = x
+                Cn, Tn, Qn = forward_full(Q, C, T)
+                return (Qn, Cn, Tn)
+            x0 = (seed_Q, seed_C, seed_T)
+        else:
+            def G(x):
+                Q, C = x
+                Cn, _, Qn = forward_full(Q, C, none_T)
+                return (Qn, Cn)
+            x0 = (seed_Q, seed_C)
+
+        def F(x):
+            gx = G(x)
+            return jax.tree_util.tree_map(lambda a, b: a - b, x, gx)
+
+        def _relerr(x, xn):
+            # Per-leaf relative step (each channel -- a Q ~ 1e3, a C ~ 1e0 -- has
+            # its own scale), then the worst across leaves.
+            rel = jnp.array(0.0)
+            for a, b in zip(jax.tree_util.tree_leaves(x),
+                            jax.tree_util.tree_leaves(xn)):
+                step = jnp.max(jnp.abs(b - a))
+                scale = jnp.max(jnp.abs(a)) + 1e-9
+                rel = jnp.maximum(rel, step / scale)
+            return rel
+
+        def solve_root(f, init):
+            def body(carry):
+                x, _err, i = carry
+                # G(x) = x - f(x): one nonlinear sweep, read back recycle edges.
+                fx = f(x)
+                xn = jax.tree_util.tree_map(lambda a, b: a - b, x, fx)
+                return xn, _relerr(x, xn), i + 1
+
+            def cond(carry):
+                _x, err, i = carry
+                return (err > tol) & (i < max_passes)
+
+            xf, _, _ = jax.lax.while_loop(
+                cond, body, (init, jnp.inf, jnp.array(0)))
+            return xf
+
+        def tangent_solve(g, y):
+            # g is the linearisation z -> z - dG.z of F at the root -- a small
+            # linear operator on the recycle-edge variable (a few edges x ~tens of
+            # channels). Solve g(z) = y by materialising its dense matrix (one
+            # jacobian of the linear map, constant) and a direct dense solve: the
+            # exact implicit-function-theorem inverse, and the vector generalisation
+            # of the pH solver's scalar ``y / g(1)``. ``jnp.linalg.solve`` is
+            # cleanly transposable, so custom_root composes with the outer autodiff
+            # (reverse and forward) without differentiating any iteration.
+            y_flat, unravel = ravel_pytree(y)
+
+            def g_flat(z_flat):
+                return ravel_pytree(g(unravel(z_flat)))[0]
+
+            J = jax.jacobian(g_flat)(jnp.zeros_like(y_flat))
+            z_flat = jnp.linalg.solve(J, y_flat)
+            return unravel(z_flat)
+
+        xr = jax.lax.custom_root(F, x0, solve_root, tangent_solve)
+        if resolve_T:
+            Qr, Cr, Tr = xr
+            return Qr, Cr, Tr
+        Qr, Cr = xr
+        return Qr, Cr, seed_T
 
     def _recycle_context(self, t, states, params_full, resolved_flows, signals):
         """Shared setup for the recycle affine solve.
 
-        Returns ``(seed_net, group_lists, forward, zeroC, zeroT)``: the per-edge
-        seed networks, the recycle edges grouped by network (no cross-network
-        coupling), the one-pass ``forward(c, T) -> (C_out, T_out)`` sweep closure,
-        and the zero seeds. Used by both the live solve and
+        Returns ``(seed_net, group_lists, forward, zeroC, zeroT, forward_full)``:
+        the per-edge seed networks, the recycle edges grouped by network (no
+        cross-network coupling), the one-pass ``forward(c, T) -> (C_out, T_out)``
+        sweep closure (Q held at ``resolved_flows`` -- the affine probe), the zero
+        seeds, and ``forward_full(q, c, T) -> (C, T, Q)`` (Q varying -- the
+        adaptive solver's true fixed-point map). Used by the live solve and
         :meth:`_compute_recycle_map`.
         """
         keys = self._recycle_keys
@@ -2486,13 +2681,29 @@ class Plant:
             return ({k: out[k].C for k in keys},
                     {k: out[k].T for k in keys})
 
+        # Q-varying one-pass map for the adaptive solver: the recycle back-edge
+        # Q is itself a fixed-point variable, because a concentration-dependent
+        # in-loop flow (a thickener/dewatering ``%TSS`` underflow on a reject
+        # loop) is recomputed in ``compute_outputs`` from the seeded streams. The
+        # affine probe above holds Q fixed at ``resolved_flows`` (the linear part);
+        # this closure lets it vary so :meth:`_adaptive_recycle_refine` iterates
+        # the true (Q, C, T) fixed point. Returns (C, T, Q) read back on the edges.
+        def forward_full(q_by_key, c_by_key, T_by_key):
+            seeded = {k: Stream(Q=q_by_key[k], C=c_by_key[k],
+                                network=seed_net[k], T=T_by_key[k]) for k in keys}
+            out = self._sweep_outputs(t, states, influent, seeded, params_full,
+                                      passes=1, signals=signals)
+            return ({k: out[k].C for k in keys},
+                    {k: out[k].T for k in keys},
+                    {k: out[k].Q for k in keys})
+
         groups: dict = {}
         for k in keys:
             groups.setdefault(id(seed_net[k]), []).append(k)
         group_lists = list(groups.values())
         zeroC = {k: jnp.zeros((nsp[k],)) for k in keys}
         zeroT = {k: t_seed for k in keys}
-        return seed_net, group_lists, forward, zeroC, zeroT
+        return seed_net, group_lists, forward, zeroC, zeroT, forward_full
 
     @staticmethod
     def _probe_recycle_C(forward, keys, zeroC, zeroT, dC):
@@ -2570,7 +2781,7 @@ class Plant:
             return None
         ctx = self._recycle_context(t, states, params_full, resolved_flows,
                                     signals)
-        _, group_lists, forward, zeroC, zeroT = ctx
+        _, group_lists, forward, zeroC, zeroT, _ = ctx
         dC, dT = forward(zeroC, zeroT)
         colC = self._probe_recycle_C(forward, keys, zeroC, zeroT, dC)
         M_groups = self._assemble_recycle_M(group_lists, colC)
@@ -3157,7 +3368,7 @@ class Plant:
             sig = self._compute_signals(t, states, params_full)
             flows = self._resolve_flows(t, params_full, states)
             ctx = self._recycle_context(t, states, params_full, flows, sig)
-            _, group_lists, forward, zeroC, zeroT = ctx
+            _, group_lists, forward, zeroC, zeroT, _ = ctx
             dC, dT = forward(zeroC, zeroT)
             colC = self._probe_recycle_C(forward, keys, zeroC, zeroT, dC)
             M = self._assemble_recycle_M(group_lists, colC)
