@@ -201,3 +201,91 @@ def test_events_cached_matches_probe(asm1):
                  / (np.abs(np.asarray(probe.state)) + 1e-6))
     assert rel < 1e-9
     assert np.all(np.isfinite(np.asarray(cached.state)))
+
+
+# --- the recycle FLOW map A (the (I-A) back-edge flow response) -----------------
+# Same caching idea as M, for the flow solve: A is fixed by the recycle flows +
+# topology, so for a fixed-pump plant it is precomputed once per solve and reused,
+# skipping the per-RHS flow probe. The cached-A RHS, Jacobian and steady state are
+# bit-identical to the probe; on a sensitive time-varying run the two valid solves
+# may separate by FP because the probe recomputes A every step (a ~1e-16
+# cancellation residual that wobbles with the influent) while the cache holds A at
+# its exact constant value -- the cached path being the cleaner one.
+
+
+def test_flow_map_constant_detected(asm1):
+    plant = _recycle_plant(asm1, carry_T=False)
+    _prime(plant)
+    assert plant._flow_map_constant is True          # fixed-ratio recycle -> A const
+
+
+def test_cached_flow_rhs_bit_identical_to_probe(asm1):
+    """At a fixed state, the cached-A RHS equals the per-RHS-probed RHS to the
+    bit (the cached A IS the probed A)."""
+    plant = _recycle_plant(asm1, carry_T=False)
+    y0 = _prime(plant)
+    pf = plant.default_parameters()
+    t = jnp.asarray(2.0)
+    fmap = plant._compute_flow_map(t, pf, plant._split_state(y0))
+    cached = np.asarray(plant._rhs(t, y0, pf, flow_map=fmap))
+    probe = np.asarray(plant._rhs(t, y0, pf, flow_map=None))
+    assert np.array_equal(cached, probe)             # bit-identical
+
+
+def test_cached_flow_jacobian_bit_identical_to_probe(asm1):
+    """The implicit solver differentiates the RHS; the cached-A (constant) and
+    probe-A (recomputed) stage Jacobians must match -- A is state-invariant, so
+    dA/dy = 0 in both."""
+    plant = _recycle_plant(asm1, carry_T=False)
+    y0 = _prime(plant)
+    pf = plant.default_parameters()
+    t = jnp.asarray(2.0)
+    fmap = plant._compute_flow_map(t, pf, plant._split_state(y0))
+    Jc = jax.jacfwd(lambda y: plant._rhs(t, y, pf, flow_map=fmap))(y0)
+    Jp = jax.jacfwd(lambda y: plant._rhs(t, y, pf, flow_map=None))(y0)
+    assert np.array_equal(np.asarray(Jc), np.asarray(Jp))
+
+
+def test_cached_flow_steady_state_matches_probe(asm1):
+    """Under a constant influent the dynamics converge to a fixed point, where
+    the cached-A and probe-A solves are bit-identical (no chaotic FP
+    amplification)."""
+    plant = _recycle_plant(asm1, carry_T=False)
+    y0 = _prime(plant)
+    assert plant._flow_map_constant is True
+    t_eval = jnp.linspace(0.0, 30.0, 7)
+    cached = plant.solve(t_span=(0.0, 30.0), t_eval=t_eval, y0=y0,
+                         rtol=1e-6, atol=1e-8, max_steps=2_000_000)
+    plant._flow_map_constant = False                 # force the flow probe path
+    plant._jit_cache.clear()
+    probe = plant.solve(t_span=(0.0, 30.0), t_eval=t_eval, y0=y0,
+                        rtol=1e-6, atol=1e-8, max_steps=2_000_000)
+    plant._flow_map_constant = True
+    d = np.max(np.abs(np.asarray(cached.state[-1]) - np.asarray(probe.state[-1])))
+    assert d < 1e-9                                  # bit-identical at steady state
+    assert np.all(np.isfinite(np.asarray(cached.state)))
+
+
+def test_no_recycle_flow_trivially_constant(asm1):
+    plant = Plant("once-through")
+    plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
+                            conditions={"T": 293.15}))
+    plant.add_influent("feed", InfluentSeries.constant(asm1, SS=120.0, Q=1000.0),
+                       to="tank.inlet")
+    _prime(plant)
+    assert plant._flow_map_constant is True           # no recycle edges
+
+
+def test_grad_flows_through_cached_flow_path(asm1):
+    plant = _recycle_plant(asm1, carry_T=False)
+    y0 = _prime(plant)
+    base = plant.default_parameters()
+
+    def loss(scale):
+        sol = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]),
+                          params=base * scale, y0=y0, gradient="jax_adjoint",
+                          rtol=1e-5, atol=1e-3, max_steps=1_000_000)
+        return jnp.sum(sol.state[-1] ** 2)
+
+    g = jax.grad(loss)(1.0)
+    assert jnp.isfinite(g)

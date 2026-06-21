@@ -564,6 +564,7 @@ class Plant:
         # MT rides on the concentration-dependent recycle flows) -- then MT is
         # re-probed every RHS (cheap scalar) while M stays cached.
         self._recycle_T_map_constant: Optional[bool] = None
+        self._flow_map_constant: Optional[bool] = None
         # Colored-Jacobian root finder (built once, concretely, on the first
         # colored_jacobian=True solve): (root_finder, n_colors, ok). ``ok`` False
         # means the setup guard found the colored Jacobian disagreed with the
@@ -1748,6 +1749,7 @@ class Plant:
         signals: Optional[dict] = None,
         design: Optional[dict] = None,
         recycle_map: Optional[list] = None,
+        flow_map: Optional[jnp.ndarray] = None,
     ) -> tuple[
         dict[tuple[Optional[str], str], Stream],
         dict[tuple[str, str], Stream],
@@ -1785,7 +1787,8 @@ class Plant:
                     T=ov.get("T"))
             else:
                 streams[(None, port_name)] = series.at(t)
-        resolved_flows = self._resolve_flows(t, params_full, states, design=design)
+        resolved_flows = self._resolve_flows(t, params_full, states, design=design,
+                                             flow_map=flow_map)
         # Seed the recycle back-edges with their exact (affine) fixed point, so
         # the Gauss-Seidel mop-up starts at the answer for any linear topology
         # (gain-independent); it then only refines a genuinely non-affine
@@ -1833,8 +1836,10 @@ class Plant:
         )
         states = self._split_state(jnp.asarray(state_full))
         recycle_map = self._maybe_recycle_map(jnp.asarray(t), states, params_full)
+        flow_map = self._maybe_flow_map(jnp.asarray(t), states, params_full)
         all_outputs, _ = self._resolve_streams(
-            jnp.asarray(t), states, params_full, recycle_map=recycle_map)
+            jnp.asarray(t), states, params_full, recycle_map=recycle_map,
+            flow_map=flow_map)
         return all_outputs
 
     def _cached_streams(self, solution: "PlantSolution", params_full):
@@ -1869,6 +1874,8 @@ class Plant:
         # through M (the vmap below is traced when params_full is a tracer).
         recycle_map = self._maybe_recycle_map(
             ts[0], self._split_state(states_flat[0]), params_full)
+        flow_map = self._maybe_flow_map(
+            ts[0], self._split_state(states_flat[0]), params_full)
 
         # Reconstruct every (unit, port) output stream at one saved time, keeping
         # only the (Q, C) arrays (the Stream's `network` is a static, non-JAX
@@ -1879,7 +1886,8 @@ class Plant:
         def _one(t_i, state_row):
             states = self._split_state(state_row)
             outs, _ = self._resolve_streams(t_i, states, params_full,
-                                            recycle_map=recycle_map)
+                                            recycle_map=recycle_map,
+                                            flow_map=flow_map)
             return {k: (s.Q, s.C) for k, s in outs.items()}
 
         result = jax.vmap(_one)(ts, states_flat)
@@ -2155,6 +2163,7 @@ class Plant:
         params_full: jnp.ndarray,
         design: Optional[dict] = None,
         recycle_map: Optional[list] = None,
+        flow_map: Optional[jnp.ndarray] = None,
     ) -> jnp.ndarray:
         # Step 1: split state by unit.
         states = self._split_state(state_full)
@@ -2171,7 +2180,7 @@ class Plant:
         # streams -- so a steady-state / sweep can take gradients w.r.t. them.
         all_outputs, streams = self._resolve_streams(
             t, states, params_full, signals=signals, design=design,
-            recycle_map=recycle_map)
+            recycle_map=recycle_map, flow_map=flow_map)
 
         # Collect each unit's converged input streams ONCE for the dstate pass.
         # The streams are fixed after the sweep, so re-collecting per unit would
@@ -2718,9 +2727,11 @@ class Plant:
             t0a = jnp.asarray(float(t0))
             states0 = self._split_state(y0)
             rmap = self._maybe_recycle_map(t0a, states0, params)
+            fmap = self._maybe_flow_map(t0a, states0, params)
 
             def rhs_y(y):
-                return self._rhs(t0a, y, params, recycle_map=rmap)
+                return self._rhs(t0a, y, params, recycle_map=rmap,
+                                 flow_map=fmap)
 
             atol_arr = jnp.asarray(atol)
             from aquakin.integrate.colored_jacobian import (
@@ -2791,9 +2802,11 @@ class Plant:
             t0f = float(t0)
             rmap = self._maybe_recycle_map(
                 jnp.asarray(t0f), self._split_state(y0), params)
+            fmap = self._maybe_flow_map(
+                jnp.asarray(t0f), self._split_state(y0), params)
 
             def primal(t, y, p):
-                return self._rhs(t, y, p, recycle_map=rmap)
+                return self._rhs(t, y, p, recycle_map=rmap, flow_map=fmap)
 
             # The discrete adjoint integrates the autonomized [y; tau] state, so
             # the backward Jacobians -- and hence the coloring -- are of that.
@@ -3166,44 +3179,14 @@ class Plant:
                        for a, b in zip(MTa, MTb)), default=0.0)
             self._recycle_T_map_constant = bool(wMT <= rtol)
 
-    def _resolve_flows(
-        self,
-        t: jnp.ndarray,
-        params_full: jnp.ndarray,
-        states: Optional[dict[str, jnp.ndarray]] = None,
-        *,
-        design: Optional[dict] = None,
-        check_affine: bool = False,
-    ) -> dict[tuple[Optional[str], str], jnp.ndarray]:
-        """Solve the recycle FLOW network exactly (decoupled from concentration).
+    def _flow_one_pass(self, t, params_full, states, design):
+        """Build the affine recycle-FLOW forward pass.
 
-        Every unit exposes a linear ``flow_outputs`` rule (output port flows from
-        input port flows). One topological pass over those rules, with the
-        recycle back-edges held at trial values, is an affine map
-        ``x -> A x + b`` on the back-edge flows. We recover ``A`` and ``b`` by
-        probing (one pass at zero, one per back-edge) and solve
-        ``(I - A) x = b`` for the consistent recycle flows -- exact and
-        gain-independent, in ``n_recycle + 1`` cheap scalar passes. Returns the
-        resolved flow for every stream key.
-
-        Every unit's ``flow_outputs`` receives the same :class:`FlowContext`
-        (its own current state and the time), so a unit whose split depends on
-        its *own internal state* (a variable-volume storage tank, whose overflow
-        bypass is gated by the liquid level) or on time (a scheduled pump) reads
-        it from there; the rest ignore it. The affine probe stays exact as long
-        as that dependence does not couple to the recycle-flow variables -- true
-        here because such a unit's *inlet* flow comes from the fixed-pump sludge
-        line (constant during the probe), so at fixed state/time its outputs are
-        constant in the recycle flows.
-
-        The self-consistency of this assumption is checked once, at ``(t0, y0)``,
-        by ``check_affine`` (a warning, never a block). That t0 check does NOT
-        catch a unit with a *piecewise-linear* flow rule (a threshold-mode
-        ``SplitterUnit`` bypass, a level-gated ``StorageTank`` bypass) that is on
-        one side of its kink at ``t0`` but crosses it later in a dynamic run: the
-        probe then linearises across the kink at that time silently. The resolved
-        flows are exact only while every unit stays in the affine regime it
-        occupied at ``t0`` (issue #255).
+        Returns ``(one_pass, n)``: ``one_pass(recycle_Qs) -> (recycled_stack,
+        full_flows_dict)`` is one topological sweep of every unit's
+        ``flow_outputs`` with the ``n`` recycle back-edges held at the trial
+        flows. Shared by :meth:`_resolve_flows` and :meth:`_compute_flow_map`
+        (the cached-``A`` path) so the two cannot drift.
         """
         influent_override = (design or {}).get("influent", {})
         base: dict[tuple[Optional[str], str], jnp.ndarray] = {}
@@ -3243,12 +3226,102 @@ class Plant:
             )
             return recycled, flows
 
+        return one_pass, n
+
+    def _compute_flow_map(self, t, params_full, states, design=None):
+        """Probe the recycle-FLOW affine map ``A`` (the ``n x n`` back-edge
+        response). State/time-invariant for a fixed-pump plant, so cacheable
+        (:meth:`_maybe_flow_map`) -- the flow analogue of
+        :meth:`_compute_recycle_map`. ``params_full`` is coerced so the
+        flow-setpoint block (the RAS/wastage/primary-sludge split flows, appended
+        after the kinetic blocks) is present even from a kinetic-only vector --
+        the cached ``A`` must match the hot path, which runs on coerced params.
+        Idempotent on a full vector, so a flow-setpoint gradient still flows."""
+        params_full = self._coerce_params(params_full)
+        one_pass, n = self._flow_one_pass(t, params_full, states, design)
+        if n == 0:
+            return jnp.zeros((0, 0))
+        b, _ = one_pass(jnp.zeros((n,)))
+        eye = jnp.eye(n)
+        cols = [one_pass(eye[i])[0] - b for i in range(n)]
+        return jnp.stack(cols, axis=1)
+
+    def _maybe_flow_map(self, t, states, params_full):
+        """The flow map ``A`` when it is state-invariant (``_flow_map_constant``
+        True, set by :meth:`_check_flow_map_constant`), else ``None`` (re-probe).
+        Same params handling as :meth:`_maybe_recycle_map`."""
+        if self._flow_map_constant is not True:
+            return None
+        return self._compute_flow_map(t, params_full, states)
+
+    def _check_flow_map_constant(self, t, y0, params_full, *, rtol: float = 1e-9):
+        """Set ``_flow_map_constant`` -- is the recycle flow map ``A``
+        state-fixed? ``A`` is fixed by the recycle flows + topology; for a
+        fixed-pump plant it is invariant to the state, so it can be precomputed
+        once per solve and reused, skipping the per-RHS flow probe. A flow split
+        riding on a unit state (a level-gated storage bypass) makes it vary, then
+        it is re-probed. Compares ``A`` at ``y0`` and a perturbed state.
+        Concrete-only; runs once per plant. No recycle edges -> trivially
+        constant. (The flow analogue of :meth:`_check_recycle_map_constant`.)"""
+        if not self._recycle_conns:
+            self._flow_map_constant = True
+            return
+        Aa = self._compute_flow_map(t, params_full, self._split_state(y0))
+        Ab = self._compute_flow_map(t, params_full,
+                                    self._split_state(y0 * 1.3 + 1.0))
+        wA = float(jnp.max(jnp.abs(Aa - Ab))) if Aa.size else 0.0
+        self._flow_map_constant = bool(wA <= rtol)
+
+    def _resolve_flows(
+        self,
+        t: jnp.ndarray,
+        params_full: jnp.ndarray,
+        states: Optional[dict[str, jnp.ndarray]] = None,
+        *,
+        design: Optional[dict] = None,
+        check_affine: bool = False,
+        flow_map: Optional[jnp.ndarray] = None,
+    ) -> dict[tuple[Optional[str], str], jnp.ndarray]:
+        """Solve the recycle FLOW network exactly (decoupled from concentration).
+
+        Every unit exposes a linear ``flow_outputs`` rule (output port flows from
+        input port flows). One topological pass over those rules, with the
+        recycle back-edges held at trial values, is an affine map
+        ``x -> A x + b`` on the back-edge flows. We recover ``A`` and ``b`` by
+        probing (one pass at zero, one per back-edge) and solve
+        ``(I - A) x = b`` for the consistent recycle flows -- exact and
+        gain-independent, in ``n_recycle + 1`` cheap scalar passes. Returns the
+        resolved flow for every stream key.
+
+        Every unit's ``flow_outputs`` receives the same :class:`FlowContext`
+        (its own current state and the time), so a unit whose split depends on
+        its *own internal state* (a variable-volume storage tank, whose overflow
+        bypass is gated by the liquid level) or on time (a scheduled pump) reads
+        it from there; the rest ignore it. The affine probe stays exact as long
+        as that dependence does not couple to the recycle-flow variables -- true
+        here because such a unit's *inlet* flow comes from the fixed-pump sludge
+        line (constant during the probe), so at fixed state/time its outputs are
+        constant in the recycle flows.
+
+        The self-consistency of this assumption is checked once, at ``(t0, y0)``,
+        by ``check_affine`` (a warning, never a block). That t0 check does NOT
+        catch a unit with a *piecewise-linear* flow rule (a threshold-mode
+        ``SplitterUnit`` bypass, a level-gated ``StorageTank`` bypass) that is on
+        one side of its kink at ``t0`` but crosses it later in a dynamic run: the
+        probe then linearises across the kink at that time silently. The resolved
+        flows are exact only while every unit stays in the affine regime it
+        occupied at ``t0`` (issue #255).
+        """
+        one_pass, n = self._flow_one_pass(t, params_full, states, design)
         if n == 0:
             return one_pass(jnp.zeros((0,)))[1]
         b, _ = one_pass(jnp.zeros((n,)))
         eye = jnp.eye(n)
-        cols = [one_pass(eye[i])[0] - b for i in range(n)]
-        A = jnp.stack(cols, axis=1)
+        if flow_map is not None:
+            A = flow_map
+        else:
+            cols = [one_pass(eye[i])[0] - b for i in range(n)]
+            A = jnp.stack(cols, axis=1)
         x = jnp.linalg.solve(eye - A, b)
         recycled_at_x, flows = one_pass(x)
         if check_affine:
@@ -3633,6 +3706,10 @@ class Plant:
             # precomputed once per solve and reused -- a large per-RHS saving.
             if self._recycle_map_constant is None:
                 self._check_recycle_map_constant(jnp.asarray(t0), y0, params)
+            # Is the recycle *flow* map A state-independent? If so it is cached
+            # once per solve too, skipping the per-RHS flow probe.
+            if self._flow_map_constant is None:
+                self._check_flow_map_constant(jnp.asarray(t0), y0, params)
             # (The colored backward Jacobian builder is derived in the
             # stable_adjoint branch below, only when that path is actually taken,
             # so a forward jax_adjoint solve never builds it.)
@@ -3820,7 +3897,8 @@ class Plant:
         # before the first build, so they are constant for a given plant -- keying
         # on them only guards the rare case where the very first solve was traced
         # (flags still None) and a later concrete solve sets them.
-        recycle_key = (self._recycle_map_constant, self._recycle_T_map_constant)
+        recycle_key = (self._recycle_map_constant, self._recycle_T_map_constant,
+                       self._flow_map_constant)
         # A progress meter is a one-off diagnostic (and carries host state), so it
         # bypasses the compiled-solve cache rather than being keyed into it.
         cache_key = (None if (settings is None or event is not None
@@ -3871,9 +3949,12 @@ class Plant:
         """
         recycle_map = self._maybe_recycle_map(
             jnp.asarray(t0), self._split_state(y0), params)
+        flow_map = self._maybe_flow_map(
+            jnp.asarray(t0), self._split_state(y0), params)
 
         def rhs(t, y, args):
-            return self._rhs(t, y, args, recycle_map=recycle_map)
+            return self._rhs(t, y, args, recycle_map=recycle_map,
+                             flow_map=flow_map)
 
         with friendly_solve_errors(max_steps, what="plant solve"):
             res = solve_with_events(
@@ -3910,11 +3991,13 @@ class Plant:
         t0_arr = jnp.asarray(float(t0))
 
         def make_rhs(y0, params):
-            recycle_map = self._maybe_recycle_map(
-                t0_arr, self._split_state(y0), params)
+            states0 = self._split_state(y0)
+            recycle_map = self._maybe_recycle_map(t0_arr, states0, params)
+            flow_map = self._maybe_flow_map(t0_arr, states0, params)
 
             def rhs(t, y, args):
-                return self._rhs(t, y, args, recycle_map=recycle_map)
+                return self._rhs(t, y, args, recycle_map=recycle_map,
+                                 flow_map=flow_map)
             return rhs
 
         kw = dict(t0=t0, t1=t1, rtol=rtol, atol=atol, adjoint=adjoint,
@@ -3962,9 +4045,10 @@ class Plant:
         @jax.jit
         def _solve(y0, params, t_eval):
             rmap = self._maybe_recycle_map(t0a, self._split_state(y0), params)
+            fmap = self._maybe_flow_map(t0a, self._split_state(y0), params)
 
             def rhs(t, y, args):
-                return self._rhs(t, y, args, recycle_map=rmap)
+                return self._rhs(t, y, args, recycle_map=rmap, flow_map=fmap)
 
             def jac(t, y, args):
                 _, lin = jax.linearize(lambda yy: rhs(t, yy, args), y)
@@ -4024,13 +4108,21 @@ class Plant:
 
         rmap = self._maybe_recycle_map(
             jnp.asarray(t0), self._split_state(y0), params)
+        fmap = self._maybe_flow_map(
+            jnp.asarray(t0), self._split_state(y0), params)
         if rmap is None:
             primal_rhs = None
         else:
             rmap = jax.lax.stop_gradient(rmap)
+            # The cached flow map A is a params-derived value (it depends on the
+            # flow-setpoint block); stop_gradient it before closing over it -- its
+            # parameter dependence is the param-vjp's job, which keeps the
+            # map-recomputing `rhs` (flow_map left None) so a flow-setpoint
+            # gradient still captures dA/dtheta.
+            fmap = None if fmap is None else jax.lax.stop_gradient(fmap)
 
             def primal_rhs(t, y, args):
-                return self._rhs(t, y, args, recycle_map=rmap)
+                return self._rhs(t, y, args, recycle_map=rmap, flow_map=fmap)
 
         return esdirk_adjoint_solve(
             rhs, y0, params, (t0, t1), t_eval,
@@ -4294,10 +4386,13 @@ class Plant:
                 for leaf in jax.tree_util.tree_leaves((params, y0)))
             if design is None and concrete:
                 self._check_recycle_map_constant(t, y0, params)
+                self._check_flow_map_constant(t, y0, params)
                 rmap = self._maybe_recycle_map(t, self._split_state(y0), params)
+                fmap = self._maybe_flow_map(t, self._split_state(y0), params)
                 if rmap is not None:
                     def primal_rhs(y, theta):
-                        return self._rhs(t, y, theta, recycle_map=rmap)
+                        return self._rhs(t, y, theta, recycle_map=rmap,
+                                         flow_map=fmap)
                     jac_fn = self._colored_steady_jacobian_builder(
                         primal_rhs, y0, theta, tol=tol)
             if jac_fn is None:
