@@ -2528,6 +2528,48 @@ Key types:
   units). A one-time `_check_recycle_convergence` diagnostic (concrete-only,
   skipped under tracing, skipped without recycle edges) warns if even that has
   not converged — the backstop for the non-affine case.
+  - **Adaptive AD-safe recycle convergence (`recycle_tol`).** The fixed
+    `recycle_passes` count is a *diagnostic-backed default*, not a general
+    convergence guarantee: the mop-up converges geometrically in
+    `log(tol)/log(rho)` passes, where `rho` is the spectral radius of the
+    nonlinear flow↔concentration coupling Jacobian (the reject loop). For BSM2 the
+    only iterating stream is the front mixer (influent + reject recycle) and
+    `rho ≈ 0.0066`, so 3 passes leaves ~1e-6 residual — but `rho` is
+    topology-dependent and **not bounded below 1**: a recycle-heavy plant with a
+    strong concentration-dependent in-loop flow (e.g. a high-capture
+    thickener/dewatering `%TSS` underflow on a tight reject loop) can have `rho`
+    near 1, where the fixed 3 passes leaves residual `rho³` — a **silently wrong
+    steady state** (measured on a synthetic map: 13% error at `rho=0.5`, 73% at
+    `rho=0.9`, 97% at `rho=0.99`). `Plant(..., recycle_tol=...)` (default `None`)
+    replaces the fixed mop-up with an **adaptive solve to that relative
+    tolerance**, mirroring the charge-balance pH solver
+    ([`core/ph_solver.py`](aquakin/core/ph_solver.py)): the recycle back-edge
+    **streams** — flow `Q`, concentration `C`, and (when carried) temperature `T`
+    — are the fixed point `x = G(x)` of one forward output sweep
+    (`Plant._recycle_context`'s `forward_full`, which lets `Q` vary so the true
+    `Q↔C` reject-loop coupling is captured; iterating `C` alone solves the wrong
+    problem), warm-started from the exact affine seed and iterated by a
+    `jax.lax.while_loop` that **stops once the actual residual clears** (capped at
+    `recycle_max_passes`, default 100), wrapped in `jax.lax.custom_root` so the
+    sensitivity is the exact **implicit-function-theorem tangent** — a small dense
+    solve of the linearised recycle-edge operator (the recycle edges are few ×
+    ~tens of channels), the vector generalisation of the pH solver's scalar
+    `y / g(1)`. AD (forward and reverse) is therefore **O(1) in the iteration
+    count** rather than differentiating through every sweep
+    (`Plant._adaptive_recycle_refine`). It converges for any `rho < 1`, stops
+    early on a low-gain plant, and is **off by default** — `recycle_tol=None`
+    keeps the fixed-pass path, bit-identical to the historic behaviour (the
+    validated BSM steady states are untouched). **Verified** (`tests/integration/
+    test_adaptive_recycle.py`): on a synthetic tunable-`rho` map the adaptive
+    solve reaches tolerance for `rho` up to 0.99 where the fixed 3-pass leaves
+    13–97%, and its IFT gradient matches central finite differences to ~2e-10; on
+    the real BSM2 reject loop the adaptive forward fixed point matches a 14-pass
+    deep sweep to ~4e-15, its IFT tangent matches the deep-sweep gradient to
+    ~6e-19, and a short BSM2 solve matches the fixed-pass trajectory to ~3e-8
+    (within the solver tolerance — the adaptive path is the more-converged of the
+    two). `recycle_tol` is read inside `_resolve_recycle_concentrations`, so it
+    reaches every solve path automatically (no per-path threading); the cached
+    affine `recycle_map` still supplies the warm-start seed.
   - **Cached recycle map (per-RHS speedup).** The concentration map `M` is fixed
     by the recycle flows + topology, so for a **fixed-pump** plant (every BSM
     plant — the recycle pumps are constant) it is **invariant to the state and
