@@ -36,9 +36,11 @@ so the reverse recurrence, given the cotangent ``lam`` of ``y_{n+1}``, is
 mu``. Implicit Euler is first order (accurate but many small steps).
 
 :func:`esdirk_adjoint_solve` uses a **high-order ESDIRK** forward (default
-``Kvaerno5``, the method the reactors use), whose discrete adjoint recomputes the
-stage values in the backward pass and applies the transposed-stage recurrence
-(see that function). Either way every per-step solve is the same well-conditioned
+``Kvaerno5``, the method the reactors use). The forward saves each step's stage
+derivatives (diffrax dense output), so the discrete adjoint reconstructs the
+stage values exactly in the backward pass -- no Newton recompute -- and applies
+the transposed-stage recurrence (see that function). Either way every per-step
+solve is the same well-conditioned
 ``I - gamma*dt*J`` (a contraction), so the cotangents stay bounded with no cap.
 
 **Loss at observation times.** With ``t_eval`` the solve returns the states at
@@ -68,7 +70,6 @@ _DEFAULT_RTOL = 1e-6              # PID controller relative tolerance
 _DEFAULT_ATOL = 1e-9             # PID controller absolute tolerance
 _DEFAULT_DT0 = 1e-6             # initial step (the adaptive controller grows it)
 _DEFAULT_MAX_STEPS = 200_000   # saved-trajectory buffer the backward scan walks
-_DEFAULT_NEWTON_ITERS = 12     # per-stage Newton iterations in the ESDIRK backward pass
 
 
 def _implicit_tols(rtol: float, atol: float):
@@ -98,6 +99,7 @@ def _discrete_adjoint_solve(
     atol,
     dt0,
     max_steps,
+    save_stages=False,
 ):
     """Shared forward + discrete-adjoint backward harness for both solvers.
 
@@ -108,10 +110,13 @@ def _discrete_adjoint_solve(
     -- finite for stiff networks at any step size, with no ``dtmax`` cap.
 
     Everything here is method-independent; the only per-method piece is
-    ``step_adjoint(y_prev_k, y_k, params_, dt, lam_k) -> (lam_n, dpar)``, the
-    single-step transposed-solve body (implicit Euler inlines one solve on the
-    post-step state ``y_k``; ESDIRK recomputes its stages from the pre-step
-    state ``y_prev_k``). It is invoked under :func:`jax.lax.cond` so padded /
+    ``step_adjoint(...) -> (lam_n, dpar)``, the single-step transposed-solve body
+    (implicit Euler inlines one solve on the post-step state ``y_k``; ESDIRK
+    reconstructs its stages from the pre-step state and the saved stage
+    derivatives). With ``save_stages=True`` the forward stores each step's
+    dense-output stage derivatives ``k`` and the driver passes them as a trailing
+    argument to ``step_adjoint`` (so the ESDIRK body needs no Newton recompute).
+    It is invoked under :func:`jax.lax.cond` so padded /
     invalid trajectory slots are skipped and the backward cost tracks the real
     step count, not the allocated ``max_steps`` buffer.
     """
@@ -130,11 +135,17 @@ def _discrete_adjoint_solve(
         diffrax.PIDController(rtol=rtol, atol=atol), step_ts=teval
     )
 
+    # ``dense=save_stages`` makes diffrax also store each step's dense-output
+    # info, which for a Runge-Kutta solver carries the stage derivatives ``k`` --
+    # so an ESDIRK backward can reconstruct its stage values exactly instead of
+    # re-solving them by Newton (the dominant backward cost).
+    saveat = diffrax.SaveAt(steps=True, dense=save_stages)
+
     def _forward(y0_, params_):
         return diffrax.diffeqsolve(
             term, solver, t0, t1, dt0, y0_, args=params_,
             stepsize_controller=controller,
-            saveat=diffrax.SaveAt(steps=True), max_steps=max_steps,
+            saveat=saveat, max_steps=max_steps,
         )
 
     def _extract(sol, y0_):
@@ -152,10 +163,17 @@ def _discrete_adjoint_solve(
     def solve_fwd(y0_, params_):
         sol = _forward(y0_, params_)
         ys_eval, idx = _extract(sol, y0_)
+        if save_stages:
+            # Per-step stage derivatives k_j = f(Y_j), shape (max_steps, s, n).
+            ks = sol.interpolation.infos["k"]
+            return ys_eval, (sol.ts, sol.ys, y0_, params_, idx, ks)
         return ys_eval, (sol.ts, sol.ys, y0_, params_, idx)
 
     def solve_bwd(res, ybar):
-        ts, ys, y0_, params_, idx = res          # ybar: (n_obs, n)
+        if save_stages:
+            ts, ys, y0_, params_, idx, ks = res  # ybar: (n_obs, n)
+        else:
+            ts, ys, y0_, params_, idx = res
         K = ts.shape[0]
         valid = jnp.isfinite(ts)
         t_prev = jnp.concatenate([jnp.array([t0], dtype=ts.dtype), ts[:-1]])
@@ -179,7 +197,12 @@ def _discrete_adjoint_solve(
             lam_k = lam + injected[k]            # add this step's observation cotangent
 
             def do(_):
-                lam_n, dpar = step_adjoint(y_prev[k], ys[k], params_, dts[k], lam_k)
+                if save_stages:
+                    lam_n, dpar = step_adjoint(
+                        y_prev[k], ys[k], params_, dts[k], lam_k, ks[k])
+                else:
+                    lam_n, dpar = step_adjoint(
+                        y_prev[k], ys[k], params_, dts[k], lam_k)
                 return lam_n, pbar + dpar
 
             lam_new, pbar_new = jax.lax.cond(ok, do, lambda _: (lam_k, pbar), None)
@@ -333,8 +356,10 @@ def implicit_euler_adjoint_solve(
 # The implicit-Euler adjoint above is first order. For accuracy parity with the
 # reactors -- which integrate with the high-order ESDIRK ``Kvaerno5`` -- the same
 # idea (robust diffrax forward + hand-written discrete adjoint) extends to a
-# general s-stage ESDIRK, at the cost of recomputing the stage values in the
-# backward pass and applying the transposed-stage recurrence.
+# general s-stage ESDIRK. The forward saves each step's stage derivatives (diffrax
+# dense output), so the backward reconstructs the stage values exactly by the
+# Butcher linear combination and applies the transposed-stage recurrence -- no
+# Newton recompute.
 #
 # An ESDIRK step over ``dt`` (autonomous f; our reaction RHS ignores t) is
 #
@@ -384,7 +409,6 @@ def esdirk_adjoint_solve(
     atol: float = _DEFAULT_ATOL,
     dt0: float = _DEFAULT_DT0,
     max_steps: int = _DEFAULT_MAX_STEPS,
-    newton_iters: int = _DEFAULT_NEWTON_ITERS,
     time_dependent: bool = False,
     primal_rhs: Optional[Callable] = None,
     jacobian_builder: Optional[Callable] = None,
@@ -394,9 +418,12 @@ def esdirk_adjoint_solve(
     Like :func:`implicit_euler_adjoint_solve` but the forward uses a high-order
     ESDIRK method (default :class:`diffrax.Kvaerno5`, matching the reactors), and
     the backward is the transposed-stage discrete adjoint of that method. The
-    stage values are recomputed in the backward pass (diffrax saves only the
-    step states), then the per-stage transposed solves accumulate the gradient.
-    Finite for stiff networks with no ``dtmax`` cap.
+    forward saves each step's stage derivatives via diffrax dense output, so the
+    backward reconstructs the stage values exactly by the Butcher linear
+    combination ``Y_i = y_n + sum_j A[i,j]*k_j`` (the dense-output ``k`` is the
+    dt-scaled stage increment) -- no Newton recompute, which
+    was the dominant backward cost -- then the per-stage transposed solves
+    accumulate the gradient. Finite for stiff networks with no ``dtmax`` cap.
 
     Parameters
     ----------
@@ -405,10 +432,6 @@ def esdirk_adjoint_solve(
     solver : diffrax.AbstractSolver, optional
         The ESDIRK forward solver; must expose a Butcher ``tableau``. Defaults to
         :class:`diffrax.Kvaerno5`.
-    newton_iters : int, optional
-        Newton iterations used to recompute each implicit stage in the backward
-        pass. The default converges the well-conditioned stage equation to
-        machine precision for the step sizes the adaptive forward selects.
     time_dependent : bool, optional
         If ``False`` (default) the right-hand side is taken to be autonomous (the
         reaction RHS is, for fixed conditions), so the backward pass evaluates it
@@ -417,8 +440,8 @@ def esdirk_adjoint_solve(
         handled exactly by carrying time in the state (:func:`_autonomize`), so
         the gradient is exact through a transient solve.
     primal_rhs : callable, optional
-        An alternate right-hand side used for the **forward solve, the stage
-        recomputation, and the ``df/dy`` stage Jacobians** -- everything except
+        An alternate right-hand side used for the **forward solve and the
+        ``df/dy`` stage Jacobians** -- everything except
         the ``df/dtheta`` parameter vjp, which always uses ``rhs``. It must
         produce the *same values and the same ``df/dy``* as ``rhs`` (so the
         trajectory and the state-cotangent recurrence are unchanged); only the
@@ -437,8 +460,8 @@ def esdirk_adjoint_solve(
         VJP). ``None`` (default) uses ``rhs`` for everything (the historic path).
     jacobian_builder : callable, optional
         Builder ``(f, y) -> J`` for the per-stage ``df/dy`` Jacobian used in the
-        backward pass (the Newton stage recompute and the transposed-stage
-        solves), where ``f`` is the (autonomized) ``primal`` right-hand side at
+        backward pass (built once per reconstructed stage, for the transposed-
+        stage solves), where ``f`` is the (autonomized) ``primal`` right-hand at
         fixed parameters. ``None`` (default) builds the **dense** Jacobian with
         ``jax.jacfwd`` (the historic path, bit-identical). A sparsity-**colored**
         builder -- one Jacobian-vector product per color instead of one per state
@@ -489,33 +512,16 @@ def esdirk_adjoint_solve(
             return jax.jacfwd(f)(y)
         return jacobian_builder(f, y)
 
-    def _stages(y_n, params_, dt):
-        # Recompute the ESDIRK stage values Y_i by solving each stage equation
-        # Y_i = pred_i + dt*gamma_i f(Y_i) (explicit first stage solves trivially).
-        # Uses ``primal`` (the stage VALUES need only correct f / df-dy).
-        f = lambda y: primal(0.0, y, params_)
-        ks, Ys = [], []
-        for i in range(s):
-            pred = y_n
-            for j in range(i):
-                pred = pred + dt * A[i, j] * ks[j]
-            Yi = pred
-            if diag_np[i] != 0.0:
-                gi = diag[i]
-                def newton(Y, _):
-                    G = Y - pred - dt * gi * f(Y)
-                    J = _build_jac(f, Y)
-                    return Y - jnp.linalg.solve(jnp.eye(n) - dt * gi * J, G), None
-                Yi, _ = jax.lax.scan(newton, Yi, None, length=newton_iters)
-            Ys.append(Yi)
-            ks.append(f(Yi))
-        return jnp.stack(Ys)                      # (s, n)
-
-    def step_adjoint(y_prev_k, y_k, params_, dt, lam):
-        # ESDIRK adjoint: recompute the stages from the PRE-step state, then
-        # sweep them in reverse applying the per-stage transposed solves. The
-        # post-step state y_k is unused (the stages carry the dependence).
-        Ys = _stages(y_prev_k, params_, dt)
+    def step_adjoint(y_prev_k, y_k, params_, dt, lam, ks):
+        # ESDIRK adjoint: the stage values are RECONSTRUCTED from the saved stage
+        # increments ks[j] (diffrax dense-output ``k``, which is the dt-SCALED
+        # stage derivative dt*f(Y_j)), then the backward sweep applies the
+        # per-stage transposed solves. Each stage satisfies Y_i = y_n +
+        # sum_j A[i,j]*k_j with A the full lower-triangular Butcher matrix (the
+        # dt is already folded into k), so the reconstruction is exact -- no
+        # Newton recompute, the dominant backward cost removed. The post-step
+        # state y_k is unused (the stages carry the dependence).
+        Ys = y_prev_k[None, :] + (A @ ks)             # (s, n)
         # df/dy stage Jacobians from ``primal`` (cached sub-computation); the
         # df/dtheta vjp below from ``rhs`` (recomputes it -> exact dM/dtheta).
         f = lambda y: primal(0.0, y, params_)
@@ -540,5 +546,6 @@ def esdirk_adjoint_solve(
         primal, y0, params, t_span, t_eval,
         solver=solver, step_adjoint=step_adjoint,
         rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
+        save_stages=True,
     )
     return out[..., :n0] if time_dependent else out
