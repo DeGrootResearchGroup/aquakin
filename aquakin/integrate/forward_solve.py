@@ -54,6 +54,15 @@ into nonlinear-divergence, the chord's failure mode; diffrax's ``PIDController``
 has no such term). The default ``maxfac=2.0`` / ``pi_beta=0.08`` were tuned on the
 full 609-day BSM2 dynamic run, where they cut the step count ~20% versus the
 earlier ``maxfac=5`` pure-I controller (fewer error-test rejections).
+
+The simplified-Newton inner tolerance ``_KAPPA = 1e-1`` was likewise tuned on that
+run: loosening it from ``1e-2`` cut the Newton iterations per stage ~3.7 -> ~3.3
+(and the step count fell slightly too, so it is a pure win, not a rejection
+trade-off), ~10% faster, while the solution stays within ``rtol`` -- the
+final-state difference from the ``diffrax`` solve is ~2.5e-4, far inside the
+benchmark agreement. The RHS evaluation (recycle + kinetics), at ~12 per step, is
+the dominant cost; the per-step Jacobian factorization is only ~8% (so block /
+sparse factorization is not worth it at this scale -- it loses to XLA's dense LU).
 """
 
 from functools import partial
@@ -80,7 +89,7 @@ _B = (_A41, _A42, _A43, _G)              # solution weights (stiffly accurate)
 _BE = (_A41 - _A31, _A42 - _A32, _A43 - _G, _G)   # embedded-error weights
 
 _MAXNEWT = 12
-_KAPPA = 1e-2          # simplified-Newton convergence tolerance (Hairer eta test)
+_KAPPA = 1e-1          # simplified-Newton convergence tolerance (Hairer eta test)
 
 
 def _hermite(y0_, y1_, f0_, f1_, h, theta):
