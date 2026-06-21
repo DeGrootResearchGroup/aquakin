@@ -1018,20 +1018,36 @@ default is shown to give the wrong gradient for a time-coupled parameter, in
 **Two solvers, low- and high-order.** `implicit_euler_adjoint_solve` (first
 order) is the simple, robust baseline. `esdirk_adjoint_solve` is the high-order
 version: a general s-stage ESDIRK forward (default **`Kvaerno5`, the same method
-the reactors use**) whose discrete adjoint recomputes the stage values in the
-backward pass (diffrax saves only step states) and applies the transposed-stage
-recurrence `(I − dt·γ·Jᵢᵀ)⁻¹` per stage — the FATODE/Sandu construction (verified
-to reduce to the implicit-Euler case for s=1). **`calibrate(gradient=
-"stable_adjoint")` now uses the Kvaerno5 ESDIRK adjoint**, so its forward matches
-the reactor exactly and its gradients agree with the capped `jax_adjoint` path to
-the optimiser tolerance (analytic decay `rel ≈ 1e-6`; stiff network
-finite-uncapped, matching capped Kvaerno5 to `rel ≈ 2.5e-5`, the residual being
-the capped-vs-uncapped *forward* difference, FD-confirmed). **Cost note:** the
-backward scan's cost scales with `stable_adjoint_max_steps` (the padded
-trajectory length), and the ESDIRK backward recomputes the 7 stages per step
-(Newton + transposed solves), so keep `max_steps` tight; Kvaerno5's high order
-keeps the step count low. The autonomous reaction RHS is assumed (the ESDIRK
-stage times `c` do not enter).
+the reactors use**) whose discrete adjoint reconstructs the stage values in the
+backward pass and applies the transposed-stage recurrence `(I − dt·γ·Jᵢᵀ)⁻¹` per
+stage — the FATODE/Sandu construction (verified to reduce to the implicit-Euler
+case for s=1). **The stage values are saved by the forward, not recomputed.**
+The forward runs `SaveAt(steps=True, dense=True)`; for a Runge–Kutta solver the
+dense-output info carries the per-step stage increments `kⱼ` (the **dt-scaled**
+stage derivatives `dt·f(Yⱼ)`), so the backward reconstructs each stage exactly by
+the Butcher linear combination `Yᵢ = yₙ + Σⱼ A[i,j]·kⱼ` (`A` the full
+lower-triangular tableau, dt already folded into `k`) — **no per-step Newton
+recompute**, which was the dominant backward cost. (Earlier this re-solved every
+stage by a fixed 12-iteration Newton scan, ~72 Jacobian builds + dense solves +
+RHS evals per step; the saved-stage path removes all of it.) The saving is threaded
+through the shared `_discrete_adjoint_solve` driver as `save_stages=` (ESDIRK sets
+it; the s=1 implicit-Euler adjoint reads the post-step state directly and leaves it
+off). **Measured (BSM2 `value+grad`, dense backward, 3-day warm-started span): the
+backward dropped 10,647 → 617 ms (~17×) and the whole gradient 11,200 → 1,212 ms
+(~9×), gradient FD-/jax_adjoint-validated unchanged.** Validated: the stage
+reconstruction is exact (the discrete-adjoint suite — analytic decay, FD, trajectory
+and time-dependent gradients — and the plant BSM1/BSM2 cross-interface, colored,
+and flow-setpoint `∂M/∂θ` gradients all match FD / the capped `jax_adjoint` path).
+**`calibrate(gradient="stable_adjoint")` uses this Kvaerno5 ESDIRK adjoint**, so
+its forward matches the reactor exactly and its gradients agree with the capped
+`jax_adjoint` path to the optimiser tolerance (analytic decay `rel ≈ 1e-6`; stiff
+network finite-uncapped, matching capped Kvaerno5 to `rel ≈ 2.5e-5`, the residual
+being the capped-vs-uncapped *forward* difference, FD-confirmed). **Cost note:** the
+backward scan's cost scales with `stable_adjoint_max_steps` (the padded trajectory
+length), and with `dense=True` the saved dense-output buffer is ~`n_stages`× the
+trajectory, so keep `max_steps` tight; Kvaerno5's high order keeps the step count
+low. The autonomous reaction RHS is assumed (the ESDIRK stage times `c` do not
+enter).
 
 ### Operator Splitting
 
@@ -2997,7 +3013,15 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   — do not yet emit `coupling_pattern()`; they fall back to the probe gracefully,
   so colored is correct but not yet staleness-free on those flowsheets — a
   follow-up.)*
-- **Also colors the `gradient="stable_adjoint"` BACKWARD pass.** Profiling the
+- **Also colors the `gradient="stable_adjoint"` BACKWARD pass.** *(Profiling note:
+  the figures below — "~82% Jacobian builds", "~79 builds/step", the ~1.95× colored
+  speedup and the auto-decision ratios — were measured when the backward still
+  recomputed every stage by a 12-iteration Newton scan. The saved-stage backward
+  (above) removed that recompute, so per-step `df/dy` builds dropped from ~79 to
+  the **~7 stage `Js` only**; the colored builder now operates on that much smaller
+  base, and these specific numbers are superseded pending a re-measure. The colored
+  mechanism and the auto-decision — which time a single build, dense vs colored —
+  are unchanged.)* Profiling the
   BSM2 reverse adjoint showed it is **~82% dense per-step `df/dy` Jacobian builds**
   (the Newton stage recompute + the transposed-stage `Js`, one JVP per state ×
   ~79 builds/step × ~204 steps), with the dense solves ~17% and the parameter vjp

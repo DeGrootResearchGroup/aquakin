@@ -445,3 +445,41 @@ def test_adjoint_solvers_validate_t_eval(solve):
     # A valid t_eval is unaffected (finite states at the requested times).
     ys = solve(rhs, y0, p, (0.0, 1.0), t_eval=jnp.array([0.5, 1.0]))
     assert jnp.all(jnp.isfinite(ys)) and ys.shape == (2, 1)
+
+
+def test_esdirk_dense_stage_reconstruction_convention():
+    """Pin the diffrax dense-output convention the ESDIRK backward relies on.
+
+    ``esdirk_adjoint_solve`` reconstructs each step's stage values from the
+    saved dense-output ``k`` via ``Y_i = y_n + sum_j A[i,j]*k_j`` (``k`` is the
+    dt-SCALED stage derivative, so no explicit ``dt``). For the stiffly-accurate
+    Kvaerno5 the last stage equals the step output, so the reconstruction must
+    reproduce ``sol.ys`` exactly. If a diffrax upgrade changes the ``infos["k"]``
+    scaling or alignment this fails loudly here rather than silently corrupting
+    gradients.
+    """
+    import numpy as np
+    from aquakin.integrate.discrete_adjoint import _esdirk_tableau
+
+    solver = diffrax.Kvaerno5()
+    A, b, _diag, _s = _esdirk_tableau(solver)
+    A = np.asarray(A)
+    assert np.allclose(b, A[-1])   # stiffly accurate: Y_s == y_{n+1}
+
+    y0 = jnp.array([1.0, 2.0])
+    term = diffrax.ODETerm(lambda t, y, a: -a * y)
+    sol = diffrax.diffeqsolve(
+        term, solver, 0.0, 3.0, 0.1, y0, args=0.7,
+        stepsize_controller=diffrax.PIDController(rtol=1e-6, atol=1e-9),
+        saveat=diffrax.SaveAt(steps=True, dense=True), max_steps=64,
+    )
+    ts = np.asarray(sol.ts)
+    ys = np.asarray(sol.ys)
+    ks = np.asarray(sol.interpolation.infos["k"])     # (max_steps, s, n)
+    nstep = int(np.sum(np.isfinite(ts)))
+    y_prev = np.concatenate([np.asarray(y0)[None, :], ys[:-1]], axis=0)
+    for m in range(nstep):
+        Y_last = (y_prev[m] + (A @ ks[m]))[-1]        # reconstruct, last stage
+        assert np.allclose(Y_last, ys[m], rtol=1e-9, atol=1e-12), (
+            f"step {m}: reconstructed last stage {Y_last} != step output {ys[m]}"
+        )
