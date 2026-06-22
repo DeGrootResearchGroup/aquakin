@@ -11,6 +11,7 @@ import copy
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol, runtime_checkable
 
 import diffrax
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -872,6 +873,68 @@ def validate_C0_params(network, C0, params):
         )
 
 
+# The per-stage Newton (root-find) tolerance is decoupled from the step tolerance
+# by this factor: diffrax's stock Kvaerno root finder copies the step tolerances,
+# driving each stage solve to full-step accuracy (more Newton iterations than the
+# embedded error estimate needs). The step controller still enforces the solution
+# accuracy at (rtol, atol); loosening only the per-stage Newton ends each stage
+# solve sooner (~15-20% faster on the stiff BSM2 plant, final-state agreement
+# ~1e-6).
+NEWTON_TOL_FACTOR = 10.0
+
+
+def build_implicit_solver(rtol, atol, *, solver=None, colored_root_finder=None,
+                          force_root_finder=False):
+    """The single source of truth for the implicit ODE solver, shared by EVERY
+    aquakin solve so the forward and discrete-adjoint paths cannot silently drift.
+
+    Both :func:`_run_diffeqsolve` (the forward path) and the discrete-adjoint
+    forward pass (:func:`~aquakin.integrate.discrete_adjoint.esdirk_adjoint_solve`)
+    build their solver here, so a per-step optimization -- the decoupled Newton
+    tolerance, a colored root finder, a different ESDIRK order -- lands in one
+    place and automatically reaches both modes.
+
+    Parameters
+    ----------
+    rtol, atol : float
+        Step-size tolerances; the per-stage Newton tolerance is these loosened by
+        :data:`NEWTON_TOL_FACTOR` unless a ``colored_root_finder`` is given.
+    solver : diffrax.AbstractSolver, optional
+        The ESDIRK solver (``None`` -> the default ``Kvaerno5``). A lower-order
+        ``Kvaerno3`` does less linear algebra per step.
+    colored_root_finder : diffrax root finder, optional
+        A sparsity-colored root finder (``ColoredVeryChord``) that materializes the
+        per-step implicit Jacobian by one JVP per color instead of a dense
+        ``jacfwd``. When given it is used verbatim (its own tolerances stand).
+    force_root_finder : bool
+        When ``True`` (the discrete-adjoint forward, which pairs the solver with a
+        step-clipping controller that needs explicit root-finder tolerances), the
+        decoupled root finder is injected even into a *supplied* ``solver``. When
+        ``False`` (the forward path) a supplied ``solver`` is honoured verbatim --
+        its own root finder is left untouched -- and only the *default* solver gets
+        the decoupled root finder.
+    """
+    if colored_root_finder is not None:
+        rf = colored_root_finder
+    else:
+        rf = diffrax.VeryChord(rtol=NEWTON_TOL_FACTOR * rtol,
+                               atol=NEWTON_TOL_FACTOR * jnp.asarray(atol))
+    if solver is None:
+        return diffrax.Kvaerno5(root_finder=rf)
+    if force_root_finder or colored_root_finder is not None:
+        return eqx.tree_at(lambda s: s.root_finder, solver, rf)
+    return solver       # forward path: a user-supplied solver is honoured verbatim
+
+
+def build_step_controller(rtol, atol, *, factormax=None, dtmax=None):
+    """The single source of truth for the PID step-size controller core, shared by
+    the forward solve (which uses it directly) and the discrete adjoint (which
+    wraps it in a ``ClipStepSizeController``) -- so ``factormax`` / the tolerances
+    cannot drift between the two paths."""
+    kw = {} if factormax is None else {"factormax": factormax}
+    return diffrax.PIDController(rtol=rtol, atol=atol, dtmax=dtmax, **kw)
+
+
 def _run_diffeqsolve(
     rhs: Callable,
     *,
@@ -927,23 +990,13 @@ def _run_diffeqsolve(
     the "Differentiating stiff networks" discussion in CLAUDE.md.
     """
     term = diffrax.ODETerm(rhs)
-    if solver is None:
-        # Default: decouple the per-stage Newton (root-find) tolerance from the
-        # step-size tolerance by loosening it 10x. diffrax's default Kvaerno root
-        # finder *copies* the controller tolerances, so each stage solve is driven
-        # to the same accuracy as the whole step -- more Newton iterations than the
-        # embedded error estimate needs. The step controller still enforces the
-        # solution accuracy through rtol/atol; only the stage-solve convergence is
-        # loosened, so each step ends in fewer iterations and is cheaper (~15-20%
-        # faster on the stiff BSM2 plant) at preserved accuracy (final-state
-        # agreement ~1e-6). A user-supplied ``solver`` is honoured verbatim -- its
-        # own root finder is left untouched.
-        solver = diffrax.Kvaerno5(
-            root_finder=diffrax.VeryChord(rtol=10.0 * rtol,
-                                          atol=10.0 * jnp.asarray(atol)))
-    pid_kwargs = {} if factormax is None else {"factormax": factormax}
-    controller = diffrax.PIDController(rtol=rtol, atol=atol, dtmax=dtmax,
-                                       **pid_kwargs)
+    # Build the solver + controller from the shared single-source-of-truth helpers
+    # (the decoupled-Newton default solver and the PID controller) so this forward
+    # path and the discrete-adjoint forward pass cannot drift in their per-step
+    # configuration. A user-supplied ``solver`` is honoured verbatim here.
+    solver = build_implicit_solver(rtol, atol, solver=solver)
+    controller = build_step_controller(rtol, atol, factormax=factormax,
+                                        dtmax=dtmax)
     return diffrax.diffeqsolve(
         term,
         solver,

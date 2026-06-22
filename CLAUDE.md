@@ -3097,11 +3097,46 @@ Both are threaded `Plant.solve` → `_build_jitted_solve` → `_run_diffeqsolve`
 keyed into the per-instance compiled-solve cache (`solver` **by class** — a fresh
 stock instance shares the entry, a different class keys separately, a
 custom-*configured* instance of an otherwise-default class shares the default's
-entry; `factormax` by value). Both are **forward `jax_adjoint`-only**: passing
-either with `gradient="stable_adjoint"` (its own ESDIRK discrete-adjoint
-integrator) or `events=` (the segmented solve) raises. Like `dtmax=`, they do not
-change the `gradient="auto"` routing. Covered by
-`tests/integration/test_plant_solver_option.py`.
+entry; `factormax` by value). `events=` (the segmented solve) rejects them. They
+are **also supported on `gradient="stable_adjoint"`**: the discrete adjoint builds
+its backward from the forward solver's Butcher tableau generically, so a cheaper
+4-stage `Kvaerno3` forward (with the matching backward recurrence) and a
+`factormax` cap apply there too — the same optimized configuration the
+`forward_fast` path uses, keyed into the stable-adjoint cache by solver class +
+`factormax`. Like `dtmax=`, they do not change the `gradient="auto"` routing.
+Covered by `tests/integration/test_plant_solver_option.py` and (the stable-adjoint
+path) `tests/integration/test_plant_stable_adjoint.py`.
+
+**Single source of truth for the integrator config — no drift between modes.**
+The forward solve and the stable-adjoint *forward* pass used to construct their
+solver + step controller independently, so the forward path's accumulated per-step
+optimizations (the decoupled-Newton root finder, the colored Jacobian, the
+`Kvaerno3`/`factormax` knobs) silently failed to reach the adjoint's forward pass —
+it kept paying dense, full-Newton, 7-stage costs. Both now build from one pair of
+helpers in [`integrate/_common.py`](aquakin/integrate/_common.py):
+`build_implicit_solver(rtol, atol, solver=, colored_root_finder=, force_root_finder=)`
+(the decoupled-Newton default `Kvaerno5`, or a supplied `Kvaerno3`, with the
+colored `ColoredVeryChord` injected when given) and
+`build_step_controller(rtol, atol, factormax=, dtmax=)` (the PID core the forward
+uses directly and the adjoint wraps in a `ClipStepSizeController`). So a future
+per-step optimization lands in one place and reaches **both** modes. Specifically
+the stable-adjoint forward pass now gets the **decoupled Newton** — previously only
+the forward `jax_adjoint`/`forward_fast` paths had it. (The helpers also carry a
+`colored_root_finder` so the adjoint *forward* chord could color its per-step
+Jacobian too, and `esdirk_adjoint_solve` accepts it — but it is **not auto-enabled**:
+the colored *backward* feeds J straight into the transposed solve and is exact on a
+superset pattern, whereas the colored *forward* feeds J into an iterative chord
+whose decoupled-Newton convergence point depends on the J approximation, so a
+colored-vs-dense difference shifts the forward trajectory at the
+~Newton-tolerance level (~1e-4) — which would break the bit-identical
+`colored_jacobian=True` == dense invariant. It awaits the structural pattern being
+reconciled so the colored and dense forward chords converge identically.) The
+forward path's construction is unchanged (the helper reproduces it). A regression
+guard,
+`test_plant_stable_adjoint.py::test_forward_paths_agree_no_config_drift`, asserts
+the `jax_adjoint`, `forward_fast`, and `stable_adjoint`-forward integrators realize
+the **same primal trajectory** — so a future divergence in any one path's
+configuration fails loudly.
 
 **`Plant.solve(colored_jacobian=True)` — sparse (colored-AD) Jacobian
 materialisation ([`integrate/colored_jacobian.py`](aquakin/integrate/colored_jacobian.py)).**
