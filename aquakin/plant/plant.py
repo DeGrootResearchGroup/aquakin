@@ -2929,7 +2929,8 @@ class Plant:
         only costs solver steps, never accuracy.
         """
         from aquakin.integrate.colored_jacobian import (
-            build_colored_root_finder, colored_jacobian_max_error)
+            build_colored_root_finder, colored_jacobian_guard,
+            jacobian_sparsity_pattern)
 
         if self._colored_root_finder is None:
             if (isinstance(params, jax.core.Tracer)
@@ -2945,24 +2946,13 @@ class Plant:
                                  flow_map=fmap)
 
             atol_arr = jnp.asarray(atol)
-            from aquakin.integrate.colored_jacobian import (
-                jacobian_sparsity_pattern)
             probe = jacobian_sparsity_pattern(rhs_y, y0) > 0
             structural = self._structural_plant_pattern(coupling_mask=probe)
             rf, n_colors = build_colored_root_finder(
                 rhs_y, y0, rtol=10.0 * rtol, atol=10.0 * atol_arr,
                 probe_pattern=probe, extra_pattern=structural)
-            err = colored_jacobian_max_error(rhs_y, y0, rf)
-            jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs_y)(y0)))) + 1e-300
-            ok = err <= 1e-8 * jscale
-            if not ok:
-                warnings.warn(
-                    "colored_jacobian=True: the derived Jacobian sparsity pattern "
-                    f"disagrees with the dense Jacobian at the start state (max "
-                    f"abs error {err:.2e}, scale {jscale:.2e}); falling back to "
-                    "the dense solver. This indicates the structural pattern "
-                    "missed a nonzero -- please report it.",
-                    RuntimeWarning, stacklevel=2)
+            ok = colored_jacobian_guard(
+                rhs_y, y0, rf, context="colored_jacobian=True")
             self._colored_root_finder = (rf, n_colors, ok)
 
         rf, n_colors, ok = self._colored_root_finder
@@ -3000,10 +2990,10 @@ class Plant:
         tracing (the probe needs concrete arrays).
         """
         from aquakin.integrate.colored_jacobian import (
-            build_colored_root_finder, colored_jacobian_max_error)
+            build_colored_root_finder, colored_jacobian_guard,
+            jacobian_sparsity_pattern, materialize_colored_jacobian)
         import numpy as np
 
-        from aquakin.integrate.colored_jacobian import jacobian_sparsity_pattern
         from aquakin.integrate.discrete_adjoint import _autonomize
 
         if self._colored_adjoint_builder is None:
@@ -3051,25 +3041,12 @@ class Plant:
             rf, n_colors = build_colored_root_finder(
                 rhs_aug_y, y0_aug, rtol=10.0 * rtol, atol=10.0 * atol_s,
                 extra_pattern=aug_extra)
-            err = colored_jacobian_max_error(rhs_aug_y, y0_aug, rf)
-            jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs_aug_y)(y0_aug)))) + 1e-300
-            ok = err <= 1e-8 * jscale
-            if not ok:
-                warnings.warn(
-                    "colored_jacobian (stable_adjoint): the derived backward "
-                    f"Jacobian sparsity pattern disagrees with the dense Jacobian "
-                    f"at the start state (max abs error {err:.2e}, scale "
-                    f"{jscale:.2e}); falling back to dense jacfwd. This indicates "
-                    "the structural pattern missed a nonzero -- please report it.",
-                    RuntimeWarning, stacklevel=2)
+            ok = colored_jacobian_guard(
+                rhs_aug_y, y0_aug, rf,
+                context="colored_jacobian (stable_adjoint)")
 
             def builder(f, y):
-                # One JVP per color through the linearized f, scattered back to
-                # the (superset) pattern -- equal to jax.jacfwd(f)(y) on the
-                # pattern's support.
-                _, lin = jax.linearize(f, y)
-                JS = jax.vmap(lin, in_axes=1, out_axes=1)(rf.seed_matrix)
-                return JS[:, rf.color_of] * rf.pattern
+                return materialize_colored_jacobian(rf, f, y)
 
             ratio = None
             if ok and mode == "auto":
@@ -3158,8 +3135,8 @@ class Plant:
         import numpy as np
 
         from aquakin.integrate.colored_jacobian import (
-            build_colored_root_finder, colored_jacobian_max_error,
-            jacobian_sparsity_pattern)
+            build_colored_root_finder, colored_jacobian_guard,
+            jacobian_sparsity_pattern, materialize_colored_jacobian)
 
         if self._colored_steady_builder is None:
             if any(isinstance(leaf, jax.core.Tracer)
@@ -3181,24 +3158,11 @@ class Plant:
             rf, n_colors = build_colored_root_finder(
                 rhs_y, y0, rtol=tol_s, atol=tol_s,
                 probe_pattern=plain_probe, extra_pattern=structural)
-            err = colored_jacobian_max_error(rhs_y, y0, rf)
-            jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs_y)(y0)))) + 1e-300
-            ok = err <= 1e-8 * jscale
-            if not ok:
-                warnings.warn(
-                    "colored_jacobian=True (steady_state): the derived Jacobian "
-                    f"sparsity pattern disagrees with the dense Jacobian at the "
-                    f"warm start (max abs error {err:.2e}, scale {jscale:.2e}); "
-                    "falling back to dense jacfwd. This indicates the structural "
-                    "pattern missed a nonzero -- please report it.",
-                    RuntimeWarning, stacklevel=2)
+            ok = colored_jacobian_guard(
+                rhs_y, y0, rf, context="colored_jacobian=True (steady_state)")
 
             def builder(f, y):
-                # One JVP per color through the linearized f, scattered back to
-                # the (superset) pattern -- equals jax.jacfwd(f)(y) on its support.
-                _, lin = jax.linearize(f, y)
-                JS = jax.vmap(lin, in_axes=1, out_axes=1)(rf.seed_matrix)
-                return JS[:, rf.color_of] * rf.pattern
+                return materialize_colored_jacobian(rf, f, y)
 
             self._colored_steady_builder = (builder if ok else None, n_colors, ok)
 

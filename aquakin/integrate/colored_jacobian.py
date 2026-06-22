@@ -33,6 +33,7 @@ through ``colored_jacobian=True``; the heavy lifting (pattern, coloring,
 root-finder) is built once per plant and reused.
 """
 
+import warnings
 from typing import Callable
 
 import equinox as eqx
@@ -56,7 +57,51 @@ __all__ = [
     "structural_sparsity_pattern",
     "build_colored_root_finder",
     "colored_jacobian_max_error",
+    "materialize_colored_jacobian",
+    "colored_jacobian_guard",
+    "COLORED_JACOBIAN_GUARD_RTOL",
 ]
+
+
+# Relative tolerance for the setup-time colored-vs-dense Jacobian guard: the
+# colored matrix must match the dense one at the start state to within this
+# fraction of the dense Jacobian's largest entry, else the caller falls back to
+# the dense path. One definition shared by every guard site.
+COLORED_JACOBIAN_GUARD_RTOL = 1e-8
+
+
+def materialize_colored_jacobian(root_finder, f, y):
+    """Materialize ``df/dy`` at ``y`` by column compression.
+
+    Linearizes ``f`` once at ``y`` (a single primal pass through the full RHS),
+    pushes the color seeds through that one tangent map, and scatters each
+    color's Jacobian-vector product back to its columns on ``root_finder``'s
+    sparsity pattern. Equal to ``jax.jacfwd(f)(y)`` on the pattern's support (to
+    round-off) when the pattern is a true superset of the real nonzeros.
+
+    This is the single definition of the colored materialization shared by the
+    per-step solve (:meth:`ColoredVeryChord.init`), the setup guard
+    (:func:`colored_jacobian_max_error`), and the discrete-adjoint / steady-state
+    Jacobian builders.
+
+    Parameters
+    ----------
+    root_finder : ColoredVeryChord
+        Carries the ``seed_matrix`` ``(n, C)``, the ``color_of`` ``(n,)`` column
+        map, and the ``(n, n)`` ``pattern``.
+    f : Callable
+        ``y -> f(y)``, the function whose Jacobian is formed.
+    y : jnp.ndarray
+        Point at which to linearize.
+
+    Returns
+    -------
+    jnp.ndarray
+        The ``(n, n)`` Jacobian on the pattern's support.
+    """
+    _, lin = jax.linearize(f, y)
+    JS = jax.vmap(lin, in_axes=1, out_axes=1)(root_finder.seed_matrix)   # (n, C)
+    return JS[:, root_finder.color_of] * root_finder.pattern            # (n, n)
 
 
 def greedy_color(pattern: np.ndarray) -> np.ndarray:
@@ -310,15 +355,10 @@ class ColoredVeryChord(VeryChord):
             pass
         g = _NoAux(fn)
         # Linearize ONCE (a single primal pass through the full RHS, incl. the
-        # recycle and pH solves), then push the C color seeds through the SAME
-        # linear tangent map. Using jax.jvp per color would redo the expensive
-        # nonlinear primal C times.
-        _, lin = jax.linearize(lambda z: g(z, args), y)
-        JS = jax.vmap(lin, in_axes=1, out_axes=1)(self.seed_matrix)   # (n, C)
-        # Scatter: column j takes its color's combined JVP, masked to the rows
-        # where (i, j) is structurally present. Exact because columns sharing a
-        # color share no pattern row.
-        J = JS[:, self.color_of] * self.pattern                      # (n, n)
+        # recycle and pH solves) and push the C color seeds through that one
+        # tangent map, scattering each color's JVP back to its columns. Using
+        # jax.jvp per color would redo the expensive nonlinear primal C times.
+        J = materialize_colored_jacobian(self, lambda z: g(z, args), y)
         jac = lx.MatrixLinearOperator(J, tags=tags)
         init_later_state = self.linear_solver.init(jac, options={})
         dynamic, static = eqx.partition(init_later_state, eqx.is_array)
@@ -404,7 +444,52 @@ def colored_jacobian_max_error(
     ``I - c.J`` shares this pattern plus the always-included diagonal.)
     """
     Jd = jax.jacfwd(rhs)(y)
-    _, lin = jax.linearize(rhs, y)
-    JS = jax.vmap(lin, in_axes=1, out_axes=1)(root_finder.seed_matrix)
-    Jc = JS[:, root_finder.color_of] * root_finder.pattern
+    Jc = materialize_colored_jacobian(root_finder, rhs, y)
     return float(jnp.max(jnp.abs(Jd - Jc)))
+
+
+def colored_jacobian_guard(
+    rhs: Callable,
+    y0: jnp.ndarray,
+    root_finder: ColoredVeryChord,
+    *,
+    context: str,
+    stacklevel: int = 3,
+) -> bool:
+    """Setup-time guard: does the colored Jacobian match the dense one at ``y0``?
+
+    Compares the colored and dense ``d rhs / dy`` at ``y0``
+    (:func:`colored_jacobian_max_error`) against
+    :data:`COLORED_JACOBIAN_GUARD_RTOL` times the dense Jacobian's largest entry.
+    Returns ``True`` when they agree; on a mismatch (the sparsity pattern missed
+    a nonzero) it ``warnings.warn``s -- with ``context`` naming the caller -- and
+    returns ``False`` so the caller can fall back to the dense path. The single
+    definition of the colored-Jacobian correctness check shared by the forward
+    solver, the stable-adjoint backward and the steady-state PTC builders.
+
+    Parameters
+    ----------
+    rhs : Callable
+        ``y -> f(y)`` whose Jacobian is colored.
+    y0 : jnp.ndarray
+        Start state to validate at.
+    root_finder : ColoredVeryChord
+        The colored root finder / Jacobian materializer to validate.
+    context : str
+        Short label naming the caller for the warning (e.g.
+        ``"colored_jacobian=True"``).
+    stacklevel : int, optional
+        ``warnings.warn`` stack level (default 3, to point at the caller's
+        caller).
+    """
+    err = colored_jacobian_max_error(rhs, y0, root_finder)
+    jscale = float(jnp.max(jnp.abs(jax.jacfwd(rhs)(y0)))) + 1e-300
+    ok = err <= COLORED_JACOBIAN_GUARD_RTOL * jscale
+    if not ok:
+        warnings.warn(
+            f"{context}: the derived Jacobian sparsity pattern disagrees with "
+            f"the dense Jacobian at the start state (max abs error {err:.2e}, "
+            f"scale {jscale:.2e}); falling back to dense. This indicates the "
+            f"structural pattern missed a nonzero -- please report it.",
+            RuntimeWarning, stacklevel=stacklevel)
+    return ok

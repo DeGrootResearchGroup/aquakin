@@ -99,6 +99,44 @@ def test_colored_reconstruction_is_exact_synthetic():
         assert colored_jacobian_max_error(rhs, y, rf) < 1e-10
 
 
+def test_materialize_colored_jacobian_equals_jacfwd_on_support():
+    """The shared materializer (used by the per-step solve, the setup guard and
+    the adjoint/steady builders) reconstructs ``jax.jacfwd`` exactly on the
+    pattern's support."""
+    rhs, _ = _synthetic_rhs(n=12)
+    rf, _ = build_colored_root_finder(
+        rhs, jnp.ones(12), rtol=1e-3, atol=1e-3, n_probe=16)
+    rng = np.random.default_rng(5)
+    for _ in range(5):
+        y = jnp.asarray(rng.standard_normal(12))
+        Jc = cj.materialize_colored_jacobian(rf, rhs, y)
+        Jd = jax.jacfwd(rhs)(y)
+        # Equal where the pattern is present; the pattern is a superset of the
+        # true nonzeros, so this is the whole Jacobian here.
+        assert float(jnp.max(jnp.abs(Jc - Jd))) < 1e-10
+
+
+def test_colored_jacobian_guard_passes_and_warns():
+    """``colored_jacobian_guard`` returns True for a superset pattern and, for a
+    pattern with a nonzero removed, warns ('falling back to dense') and returns
+    False -- the single guard the three plant builders share."""
+    rhs, truth = _synthetic_rhs(n=12)
+    y0 = jnp.ones(12)
+    rf, _ = build_colored_root_finder(rhs, y0, rtol=1e-3, atol=1e-3, n_probe=16)
+    assert cj.colored_jacobian_guard(rhs, y0, rf, context="test") is True
+
+    # Drop a genuine off-diagonal coupling from the pattern -> the colored matrix
+    # no longer matches the dense one, so the guard must warn and return False.
+    import equinox as eqx
+    bad_pattern = np.array(rf.pattern)    # writable copy (jax array is read-only)
+    bad_pattern[0, 12 - 4] = 0.0          # the A[0, n-4] = 1.3 link
+    rf_bad = eqx.tree_at(lambda r: r.pattern, rf,
+                         jnp.asarray(bad_pattern, dtype=rf.pattern.dtype))
+    with pytest.warns(RuntimeWarning, match="falling back to dense"):
+        ok = cj.colored_jacobian_guard(rhs, y0, rf_bad, context="test")
+    assert ok is False
+
+
 # --------------------------------------------------------------------------
 # Plant integration (BSM1) -- correctness of the wired solve.
 # --------------------------------------------------------------------------
@@ -228,7 +266,7 @@ def test_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch):
     kw = dict(t_span=(0.0, 5.0), t_eval=te, params=params, y0=y0,
               rtol=1e-5, atol=1e-3, max_steps=2_000_000)
     s_def = plant.solve(**kw)
-    with pytest.warns(RuntimeWarning, match="falling back to the dense solver"):
+    with pytest.warns(RuntimeWarning, match="falling back to dense"):
         s_col = plant.solve(**kw, colored_jacobian=True)
     assert plant._colored_root_finder[2] is False         # guard failed
     # fallback path == dense default, so trajectories match tightly
