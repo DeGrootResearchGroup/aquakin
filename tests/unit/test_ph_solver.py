@@ -219,17 +219,28 @@ def test_weak_buffer_regime_converges_finite(desc, totals, pH_expected):
 
 def test_no_nan_over_extreme_inputs():
     """Sweep wide strong-ion imbalances against weak buffers; the solver must
-    stay finite everywhere (it returned NaN here before the safeguard)."""
+    stay finite everywhere (it returned NaN here before the safeguard).
+
+    Vectorised with ``jax.vmap`` over the whole batch -- one trace/compile of the
+    pH solver applied to all cases -- rather than a Python loop, which re-traced
+    and recompiled the solver's ``while_loop`` per case (~150 s for 400 cases vs
+    ~0.3 s vmapped). Same coverage, fast enough to stay in the fast gate."""
     rng = np.random.default_rng(0)
-    for _ in range(400):
-        pH = float(solve_ph(
-            tot_carbonate=10.0 ** rng.uniform(-6, 0),
-            tot_ammonia=10.0 ** rng.uniform(-6, 0),
-            tot_sulfide=10.0 ** rng.uniform(-6, -1),
-            strong_anion_eq=rng.uniform(-1.0, 1.0),
-            z_cation_eq=rng.uniform(-1.0, 1.0),
-        ))
-        assert np.isfinite(pH)
+    n = 400
+    cases = dict(
+        tot_carbonate=jnp.asarray(10.0 ** rng.uniform(-6, 0, n)),
+        tot_ammonia=jnp.asarray(10.0 ** rng.uniform(-6, 0, n)),
+        tot_sulfide=jnp.asarray(10.0 ** rng.uniform(-6, -1, n)),
+        strong_anion_eq=jnp.asarray(rng.uniform(-1.0, 1.0, n)),
+        z_cation_eq=jnp.asarray(rng.uniform(-1.0, 1.0, n)),
+    )
+    pH = jax.vmap(
+        lambda c, a, s, sa, zc: solve_ph(
+            tot_carbonate=c, tot_ammonia=a, tot_sulfide=s,
+            strong_anion_eq=sa, z_cation_eq=zc)
+    )(cases["tot_carbonate"], cases["tot_ammonia"], cases["tot_sulfide"],
+      cases["strong_anion_eq"], cases["z_cation_eq"])
+    assert bool(jnp.all(jnp.isfinite(pH)))
 
 
 def test_gradient_correct_in_weak_buffer_regime():
