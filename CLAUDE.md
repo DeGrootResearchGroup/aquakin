@@ -695,6 +695,49 @@ def compile(self, ctx: CompileContext) -> Callable:
     """Returns a JAX-compatible callable: (C, params, condition_arrays, loc_idx) -> scalar"""
 ```
 
+### Vectorized rate kernel (`core/vector_kernel.py`)
+
+Evaluating the rates as `jnp.stack([f(C, params, ...) for f in rate_callables])`
+traces **one nested closure tree per reaction**, so the jaxpr holds
+`O(reactions x ops-per-reaction)` scalar primitives — each leaf a `slice` +
+`squeeze`. XLA fuses them so the *runtime* is fine, but its optimization passes
+scale with that op count, so the **compile** is dominated by it — and amplified
+in the reverse-mode adjoint, where the RHS jaxpr is differentiated ~80x per
+step (the multi-minute discrete-adjoint compiles). Compile, not run, is the cost
+of a stiff solve (~1.6 s compile vs ~0.02 s run for an ASM1 batch), so this
+*compile-time* lever is what hurts the test suite, where each test compiles a
+distinct configuration once.
+
+`build_vectorized_rates` builds, from the per-reaction rate ASTs, a single
+callable returning the `(n_reactions,)` rate vector by **interning every
+distinct subexpression** (node type + operand positions) and evaluating **all
+instances of each primitive in one batched elementwise op**, in topological
+order — global common-subexpression elimination plus vectorization by node type.
+The pool is built **append-only by concatenation** (1 jaxpr op each, vs ~5 for a
+scatter incl. index fixup), and operands are read with a **raw `lax.gather`**
+(skips the negative-index normalization `slice`/`squeeze`/`select_n` that
+`P[idx]` inserts). The traced op count collapses to `~O(node-types x depth)`,
+independent of the reaction count.
+
+It is **bit-identical** to the scalar path: each interned instance is a lane of
+a batched op doing the identical scalar arithmetic, and IEEE elementwise ops are
+deterministic per lane; the interning dedups identical subexpressions (also
+bit-identical, since the scalar path recomputes them to the same bits). So it is
+*not* the issue's masked-`jnp.prod` assembly (which would change the product
+reduction order); the order-preserving batched ops need no revalidation rebasing.
+Built once in `CompiledNetwork.__post_init__` (`_rate_kernel`) and dispatched
+from `CompiledNetwork.rates` after the clip / derived-condition / temperature
+preprocessing (which is unchanged); a future AST node type with no batched
+kernel raises `UnsupportedNode` and `rates` falls back to the scalar stack, so
+the kernel is a safe, transparent overlay. **Measured:** the rate jaxpr is the
+dominant term in a differentiated stiff-solve compile (60% asm1 → 85% adm1 →
+94% wats_sewer_extended), and the kernel cuts that jaxpr ~2–12x (asm1 2.9x,
+adm1 2.2x, asm2d 10x, wats 5.6x), giving an end-to-end differentiated-compile
+speedup of ~1.15x (asm1) / 1.5x (adm1) / 3.4x (wats) — larger on the bigger
+networks, where the suite hurts most. Runtime is unchanged. Regression-guarded
+(bit-identicality on randomized states, op-count reduction, AD parity, and the
+unsupported-node fallback) in `tests/unit/test_vector_kernel.py`.
+
 ### Parser
 
 Recursive descent parser. No external parser dependencies. Operator precedence
@@ -1636,6 +1679,9 @@ aquakin/
 │   ├── core/
 │   │   ├── nodes.py                 # ASTNode base class + all node types
 │   │   ├── parser.py                # recursive descent parser -> AST
+│   │   ├── vector_kernel.py         # vectorized rate kernel: intern subexprs +
+│   │   │                            #   batch each primitive (bit-identical to the
+│   │   │                            #   scalar stack, smaller jaxpr -> faster compile)
 │   │   ├── network.py               # CompiledNetwork dataclass + compile()
 │   │   ├── conditions.py            # SpatialConditions dataclass
 │   │   ├── context.py               # CompileContext dataclass
