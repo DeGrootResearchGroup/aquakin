@@ -28,6 +28,10 @@ parameters:
   KALK: {value: 0.0001, transform: positive_log, bounds: [1e-06, 0.01], units: "kmol/m3"}
   KA_O2: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "g_O2/m3"}
   KNH4: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "g_N/m3"}
+  # Autotroph-specific ammonia / alkalinity half-saturations (the import had
+  # collapsed the nitrifier growth Monod terms onto the heterotroph values).
+  KA_NH4: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "g_N/m3"}
+  KA_ALK: {value: 0.0005, transform: positive_log, bounds: [5e-06, 0.05], units: "kmol/m3"}
   KNOX: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "g_N/m3"}
   KO2: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_O2/m3"}
   KS: {value: 2.0, transform: positive_log, bounds: [0.02, 200.0], units: "g_COD/m3"}
@@ -75,6 +79,10 @@ expressions:
   Monod_SALK: "monod([SALK], KALK)"
   Monod_XSTO_over_XH: "monod_ratio([XSTO], [XH], KSTO)"
   Monod_KA_O2: "monod_inh([SO2], KA_O2)"
+  # Autotroph-specific saturation terms (own half-saturation constants).
+  Monod_SO2_A: "monod([SO2], KA_O2)"
+  Monod_SNH4_A: "monod([SNH4], KA_NH4)"
+  Monod_SALK_A: "monod([SALK], KA_ALK)"
 
 reactions:
   - name: Hydrolysis
@@ -177,7 +185,7 @@ reactions:
 
   - name: Growth_of_autotrophic_nitrifying_organisms
     description: "Growth of autotrophic nitrifying organisms"
-    rate: "muA * Monod_SO2 * Monod_SNH4 * Monod_SALK * [XA]"
+    rate: "muA * Monod_SO2_A * Monod_SNH4_A * Monod_SALK_A * [XA]"
     stoichiometry:
       SO2: "(-1) * ((-1) * iCOD_NO3 - YA) / YA"
       SNH4: "(-1) / YA - iN_BM"
@@ -188,7 +196,7 @@ reactions:
 
   - name: Aerobic_endogenous_respiration_of_XA
     description: "Aerobic endogenous respiration of XA"
-    rate: "bA_O2 * Monod_SO2 * [XA]"
+    rate: "bA_O2 * Monod_SO2_A * [XA]"
     stoichiometry:
       SO2: "(-1) * (1 - fXI)"
       SNH4: "(-1) * fXI * iN_XI + iN_BM"

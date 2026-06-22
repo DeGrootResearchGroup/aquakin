@@ -548,6 +548,14 @@ class CSTRUnit(CouplingAware):
         stoich = self.network.compute_stoich(params)
         rates = self.network.rates(state, params, conditions, 0)
         chemistry = stoich.T @ rates
+        # Honour the network's positivity limiter (throttle the net reaction term
+        # as a species approaches zero), matching CompiledNetwork.dCdt. The plant
+        # builds its own RHS from rates() rather than calling dCdt, so without this
+        # the limiter would be silently inert inside a plant -- letting a fully
+        # consumed soluble integrate negative and recirculate. Convection/aeration
+        # are left unlimited (the reaction term is the only one the limiter guards).
+        if self.network.positivity_threshold is not None:
+            chemistry = self.network._apply_positivity_limiter(chemistry, state)
 
         # Aeration (mass transfer). The operating temperature for the optional
         # driving-force correction is the (flow-weighted) inlet T the kinetics use,

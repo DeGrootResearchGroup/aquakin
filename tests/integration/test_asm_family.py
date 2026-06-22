@@ -27,10 +27,10 @@ _ASM_NETWORKS = ["asm2d", "asm2d_tud", "asm3", "asm3_biop", "adm1"]
 # the gas headspace, state-derived pH, and explicit strong-ion (S_cat/S_an)
 # states. Update a tuple here when a network's shape changes on purpose.
 _EXPECTED_SHAPES = {
-    "asm2d": (19, 21, 63),
-    "asm2d_tud": (18, 22, 73),
-    "asm3": (13, 12, 39),
-    "asm3_biop": (17, 23, 65),
+    "asm2d": (19, 21, 69),
+    "asm2d_tud": (18, 22, 77),
+    "asm3": (13, 12, 41),
+    "asm3_biop": (17, 23, 69),
     "adm1": (29, 25, 89),
 }
 
@@ -208,12 +208,18 @@ def test_asm3_uses_monod_helpers():
     assert "monod_ratio(" in yaml_text
 
 
-def test_asm3_biop_uses_monod_inh_ratio():
-    """ASM3_BioP's storage rate has an inhibition-ratio Monod (MRinh)."""
+def test_asm3_biop_polyp_storage_uses_max_ratio_inhibition():
+    """ASM3_BioP's poly-P storage inhibition carries the maximum-ratio K_max term
+    (the SUMO/Henze ``(Kmax - XPP/XPAO)/(KiPP + Kmax - XPP/XPAO)`` form), not the
+    plain ``monod_inh_ratio`` the import had produced -- which capped stored
+    poly-P far below its physical maximum."""
     yaml_text = (
         __import__("pathlib").Path("aquakin/networks/asm3_biop.yaml").read_text()
     )
-    assert "monod_inh_ratio(" in yaml_text
+    assert "Kmax_PAO" in yaml_text
+    assert "Monod_inh_XPP_max" in yaml_text
+    # The buggy plain inhibition-ratio form is gone.
+    assert "monod_inh_ratio(" not in yaml_text
 
 
 def test_adm1_c4_competition_uses_safe_div():
@@ -268,6 +274,30 @@ def test_yield_is_calibratable_in_sumo_models(name, yield_param):
     y_idx = net.param_index[yield_param]
     assert jnp.all(jnp.isfinite(g))
     assert float(g[y_idx]) != 0.0
+
+
+# The bio-P / nitrification networks share an import that (a) collapsed the
+# autotroph half-saturation Monod terms onto the heterotroph values and (b)
+# dropped the maximum-poly-P-ratio term from the poly-P storage inhibition. These
+# pin the corrected constants per network (the SUMO ASM2D/ASM2D_TUD/ASM3_BioP and
+# Henze STR No. 9 values), so a regeneration that reintroduces the bug fails here.
+@pytest.mark.parametrize("network, nh4_aut_param, nh4_aut_value, max_ratio_param", [
+    ("asm2d", "KNH4_AUT", 1.0, "KMAX"),
+    ("asm3", "KA_NH4", 1.0, None),               # plain ASM3 nitrification (no bio-P)
+    ("asm3_biop", "KNH_A", 1.0, "Kmax_PAO"),
+    ("asm2d_tud", "KNH_A", 1.0, "fPP_max"),
+])
+def test_biop_autotroph_and_polyp_constants(network, nh4_aut_param, nh4_aut_value,
+                                            max_ratio_param):
+    net = aquakin.load_network(network)
+    pv = net.parameter_values({})
+    # Autotroph ammonia half-saturation is the nitrifier-specific value, NOT the
+    # heterotroph 0.05 / 0.01 the collapsed term had used.
+    assert nh4_aut_param in net.param_index
+    assert float(pv[net.param_index[nh4_aut_param]]) == pytest.approx(nh4_aut_value)
+    # The poly-P storage carries its maximum-ratio parameter (bio-P networks).
+    if max_ratio_param is not None:
+        assert max_ratio_param in net.param_index
 
 
 def test_default_stoich_values_match_pre_symbolic_conversion():
