@@ -98,6 +98,45 @@ def test_polyp_storage_has_kmax_term(asm2d):
     assert float(pv[names["KPS"]]) == pytest.approx(0.2)        # not 0.01
 
 
+def test_cstr_reaction_term_routes_through_dCdt(asm2d):
+    """A plant CSTR's reaction term must be the network's canonical ``dCdt`` --
+    so ``clip_negative_states`` and the positivity limiter are applied identically
+    to a standalone reactor, and cannot be silently bypassed. (The original plant
+    bug was CSTRUnit building its RHS from ``rates()`` directly, leaving the
+    limiter inert and letting a consumed soluble integrate negative.)
+
+    With no inflow ports and no aeration the CSTR RHS is purely the reaction term,
+    so it must equal ``dCdt`` exactly; and on a near-depleted species the limiter
+    must actually fire (the term differs from the un-limited ``stoich.T @ rates``).
+    """
+    from aquakin.plant.cstr import CSTRUnit
+
+    net = asm2d
+    assert net.positivity_threshold is not None  # asm2d carries the limiter
+    unit = CSTRUnit(name="t", network=net, volume=1000.0,
+                    input_port_names=[], conditions={"T": 293.15})
+    params = net.default_parameters()
+    cond = {"T": jnp.asarray([293.15])}
+
+    # A near-depleted acetate pool (below the 1e-3 limiter threshold) being
+    # consumed by heterotroph/PAO uptake -- where the limiter must throttle.
+    state = net.concentrations(
+        {"SO2": 2.0, "SF": 2.0, "SA": 5.0e-4, "SNH4": 5.0, "SNO3": 3.0,
+         "SPO4": 15.0, "SALK": 7.0, "XH": 1200.0, "XPAO": 300.0, "XPP": 80.0,
+         "XPHA": 20.0, "XAUT": 80.0}, base="zero")
+
+    rhs = unit.rhs(0.0, state, {}, params)            # no inflow, no aeration
+    expected = net.dCdt(state, params, cond, 0)
+    assert float(jnp.max(jnp.abs(rhs - expected))) == 0.0   # bit-identical
+
+    # The limiter is genuinely active: the un-limited net term over-consumes the
+    # depleted acetate, and dCdt (hence the CSTR) throttles it back.
+    sa = net.species_index["SA"]
+    unlimited = net.compute_stoich(params).T @ net.rates(state, params, cond, 0)
+    assert unlimited[sa] < 0.0                              # acetate being consumed
+    assert float(rhs[sa]) > float(unlimited[sa])            # throttled toward zero
+
+
 # --------------------------------------------------------------------------
 # Slow plant-level check: the working nutrient-removal steady state.
 # --------------------------------------------------------------------------

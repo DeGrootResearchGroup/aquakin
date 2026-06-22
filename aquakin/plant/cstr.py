@@ -545,17 +545,13 @@ class CSTRUnit(CouplingAware):
             T_in = self._mixed_inlet_T(inputs)
         if T_in is not None and "T" in self._condition_arrays:
             conditions = {**self._condition_arrays, "T": jnp.reshape(T_in, (1,))}
+        # The reaction term is the network's canonical dCdt -- it applies
+        # clip_negative_states to the rate inputs and the positivity limiter to
+        # the net term, so a fully consumed soluble cannot integrate negative and
+        # recirculate. Convection/aeration are added on top, unlimited (the
+        # reaction term is the only one the limiter guards).
         stoich = self.network.compute_stoich(params)
-        rates = self.network.rates(state, params, conditions, 0)
-        chemistry = stoich.T @ rates
-        # Honour the network's positivity limiter (throttle the net reaction term
-        # as a species approaches zero), matching CompiledNetwork.dCdt. The plant
-        # builds its own RHS from rates() rather than calling dCdt, so without this
-        # the limiter would be silently inert inside a plant -- letting a fully
-        # consumed soluble integrate negative and recirculate. Convection/aeration
-        # are left unlimited (the reaction term is the only one the limiter guards).
-        if self.network.positivity_threshold is not None:
-            chemistry = self.network._apply_positivity_limiter(chemistry, state)
+        chemistry = self.network.dCdt(state, params, conditions, 0, stoich=stoich)
 
         # Aeration (mass transfer). The operating temperature for the optional
         # driving-force correction is the (flow-weighted) inlet T the kinetics use,
