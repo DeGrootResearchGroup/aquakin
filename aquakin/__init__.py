@@ -148,7 +148,11 @@ from aquakin.plant import (
     uv_dose,
     uv_log_inactivation,
 )
-from aquakin.schema.loader import load_network, load_network_from_file
+from aquakin.schema.loader import (
+    clear_network_cache,
+    load_network,
+    load_network_from_file,
+)
 from aquakin.utils.balance import check_conservation
 from aquakin.utils.composition import (
     canonical_content,
@@ -272,6 +276,7 @@ __all__ = [
     "integrate_ensemble",
     "load_network",
     "load_network_from_file",
+    "clear_network_cache",
     "ComponentBalance",
     "MassBalance",
     "mass_balance",

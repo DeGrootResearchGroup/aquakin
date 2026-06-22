@@ -207,6 +207,35 @@ def test_esdirk_analytic_trajectory_gradient(simple_network):
 
 
 @pytest.mark.parametrize("solve", [implicit_euler_adjoint_solve, esdirk_adjoint_solve])
+def test_gradient_with_t0_in_t_eval(simple_network, solve):
+    # A t_eval that INCLUDES t0 exercises the discrete adjoint's idx==0 branch:
+    # the observation at t0 is y0 itself, so its cotangent flows straight to y0
+    # (via ybar0_obs), not through any backward step. The parameter and y0
+    # gradients must both stay finite and match the closed form.
+    rhs = _decay_rhs(simple_network)
+    C0 = jnp.array([1.0, 0.0])
+    p = simple_network.default_parameters()
+    k = float(p[0])
+    t_obs = jnp.array([0.0, 5.0, 15.0])               # t0 included
+
+    def loss(pp, c0):
+        ys = solve(rhs, c0, pp, (0.0, 15.0), t_obs, rtol=1e-9, atol=1e-11)
+        return jnp.sum(ys[:, 0] ** 2)
+
+    gp = jax.grad(loss, argnums=0)(p, C0)[0]
+    gy = jax.grad(loss, argnums=1)(p, C0)
+    # dL/dk = sum_i 2 A(t_i)(-t_i A(t_i)); the t0 term is 0 (t=0), so it matches
+    # the no-t0 sum -- but the t0 observation still drives the y0 gradient.
+    exact_k = sum(2 * math.exp(-k * ti) * (-ti * math.exp(-k * ti))
+                  for ti in [0.0, 5.0, 15.0])
+    assert jnp.isfinite(gp) and jnp.all(jnp.isfinite(gy))
+    assert abs(float(gp) - exact_k) / abs(exact_k) < 1e-4
+    # The t0 term contributes 2*A(0)=2 to dL/dA0 on its own (plus the later
+    # observations through the trajectory), so the A0 gradient is finite & nonzero.
+    assert float(gy[0]) > 0.0
+
+
+@pytest.mark.parametrize("solve", [implicit_euler_adjoint_solve, esdirk_adjoint_solve])
 def test_gradient_independent_of_max_steps(simple_network, solve):
     # The backward recurrence is bounded by the real accepted-step count, not the
     # allocated ``max_steps`` buffer: diffrax saves accepted steps contiguously

@@ -247,7 +247,13 @@ class ChlorineContactUnit:
     ct_per_log : float
         CT (residual × T10) that earns one log of inactivation, in the same units
         as ``residual × time`` (from the regulatory CT tables for the organism /
-        pH / temperature).
+        pH / temperature). **Time-unit trap:** ``T10 = baffling·V/Q`` is in the
+        plant's time unit (days for the BSM networks, whose rate constants are
+        ``1/d``), while the regulatory CT tables are in **mg·min/L**. Supply
+        ``ct_per_log`` in the *plant* time unit -- e.g. for a days-based plant
+        multiply a mg·min/L table value by ``1/1440`` (min→day) -- or both the CT
+        and the credit are off by ``1440×``. ``V``/``Q`` and ``decay_rate`` are in
+        that same plant time unit.
     decay_rate : float
         First-order chlorine-decay rate (1/time, plant time unit). Default 0.
     baffling_factor : float

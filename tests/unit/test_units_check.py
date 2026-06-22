@@ -342,3 +342,12 @@ def test_consistent_time_units_not_flagged(tmp_path):
     p.write_text(_MIXED_TIME_YAML.replace('units: "1/s"', 'units: "1/d"'))
     net = aquakin.load_network_from_file(str(p))
     assert not [w for w in net.check_units() if w.location == "time unit"]
+
+
+def test_parse_units_accepts_display_dot():
+    # The display multiplication dot (U+00B7 and U+22C5) parses as '*', so the
+    # prettified form round-trips through the parser.
+    target = parse_units("g_COD/m3/d")
+    assert target is not None
+    assert parse_units("g_COD·m⁻³·d⁻¹") == target
+    assert parse_units("g_COD⋅m-3⋅d-1") == target

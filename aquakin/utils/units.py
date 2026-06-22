@@ -230,7 +230,8 @@ def parse_units(text: str) -> Optional[Dimension]:
     text : str
         A unit string in any of the shipped dialects, e.g. ``"g_COD/m3"``,
         ``"1/d"``, ``"M-1 s-1"``, ``"m3/(g_COD*d)"``, ``"gO2^0.5/m/d"``,
-        ``"mol/L"``. Unicode superscripts (the display form ``m³``) are accepted.
+        ``"mol/L"``. The display form is accepted too: Unicode superscripts
+        (``m³``) and the multiplication dot (``g_COD·m⁻³`` == ``g_COD*m-3``).
 
     Returns
     -------
@@ -242,7 +243,10 @@ def parse_units(text: str) -> Optional[Dimension]:
     """
     if text is None:
         return None
-    s = text.translate(_SUPERSCRIPT_TO_ASCII).strip()
+    # Accept the display multiplication dot (U+00B7 '·', U+22C5 '⋅') as '*', so
+    # the prettified form round-trips through the parser.
+    s = (text.translate(_SUPERSCRIPT_TO_ASCII)
+         .replace("·", "*").replace("⋅", "*").strip())
     if s == "" :
         return None
     if s == "-":

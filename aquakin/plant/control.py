@@ -117,7 +117,24 @@ class PIController:
 
     def _output(self, state: jnp.ndarray, inputs: dict[str, Stream]):
         """Return ``(u, u_sat, e)``: raw output, saturated output, error."""
-        measured = inputs[self.input_port].C[self._meas_idx]
+        stream = inputs[self.input_port]
+        # ``_meas_idx`` was resolved against ``self.network``; it indexes the right
+        # species only if the sensed stream shares that network's species ordering.
+        # The networks are static, so this is a trace-time check (it fires on the
+        # first solve, not every step); the ``is`` short-circuit keeps the common
+        # same-instance case free, while two instances of the same model (same
+        # species order) are still accepted.
+        sensed_net = stream.network
+        if sensed_net is not self.network and (
+                getattr(sensed_net, "species", None) != self.network.species):
+            raise ValueError(
+                f"PIController '{self.name}' senses a stream in network "
+                f"'{getattr(sensed_net, 'name', '?')}', but its measured_species "
+                f"'{self.measured_species}' index was resolved in network "
+                f"'{self.network.name}' with a different species ordering -- it "
+                f"would read the wrong species. Build the controller with the "
+                f"sensed unit's network.")
+        measured = stream.C[self._meas_idx]
         e = self.setpoint - measured
         u = self.offset + self.Kp * e + state[0]
         u_sat = jnp.clip(u, self.out_min, self.out_max)

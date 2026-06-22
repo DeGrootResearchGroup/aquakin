@@ -192,3 +192,14 @@ def test_pop_inheritance_keys_reads_network_extends():
 def test_apply_remove_unknown_block_errors():
     with pytest.raises(ValueError, match="unknown block"):
         apply_remove({"reactions": []}, {"widgets": ["x"]}, "<t>")
+
+
+def test_apply_remove_tolerates_nameless_base_entry():
+    # A base named-list entry lacking a 'name' must be un-targetable by remove:
+    # rather than tripping a bare KeyError; removing a present name still works and
+    # the nameless sibling is retained.
+    data = {"reactions": [{"name": "a", "rate": "1"}, {"rate": "2"},
+                          {"name": "b", "rate": "3"}]}
+    apply_remove(data, {"reactions": ["a"]}, "t")
+    names = [e.get("name") for e in data["reactions"]]
+    assert "a" not in names and "b" in names and None in names  # nameless retained

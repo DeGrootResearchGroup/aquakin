@@ -28,7 +28,10 @@ if TYPE_CHECKING:  # pragma: no cover
 _EPS_Q = 1e-12  # guard the flow-weighted division when the through-flow is ~zero
 
 
-@dataclass(frozen=True)
+# eq=False: a Reagent holds a jnp array (unhashable by value), so use identity
+# equality/hash -- honestly hashable, unlike the field-based __hash__ a frozen
+# dataclass with eq=True would synthesize (which raises on the array at hash time).
+@dataclass(frozen=True, eq=False)
 class Reagent:
     """The neat composition of a dosing reagent: a concentration vector in the
     dosed stream's network, plus a label.

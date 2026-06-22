@@ -115,13 +115,17 @@ def apply_remove(data: dict, remove, source: str) -> dict:
         names = set(remove.get(block) or [])
         if not names:
             continue
-        present = {e["name"] for e in data.get(block, []) if isinstance(e, dict)}
+        # A base entry may legitimately lack a 'name' (malformed/partial); use
+        # .get so it is simply un-targetable by remove: rather than a bare KeyError.
+        present = {e["name"] for e in data.get(block, [])
+                   if isinstance(e, dict) and "name" in e}
         missing = names - present
         if missing:
             raise ValueError(
                 f"{source}: remove.{block} names {sorted(missing)} are not in "
                 f"the base network.")
-        data[block] = [e for e in data.get(block, []) if e["name"] not in names]
+        data[block] = [e for e in data.get(block, [])
+                       if not (isinstance(e, dict) and e.get("name") in names)]
     for block in ("parameters", "expressions"):
         block_map = data.get(block) or {}
         for name in remove.get(block) or []:

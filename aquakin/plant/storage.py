@@ -110,6 +110,16 @@ class StorageTank:
     def state_size(self) -> int:
         return self.network.n_species + 1  # concentrations + liquid volume
 
+    def liquid_volume(self, state: jnp.ndarray):
+        """The liquid volume held (the trailing state entry).
+
+        The explicit mass-balance inventory contract (see
+        :func:`aquakin.plant.balance._unit_inventory`): a unit holding a single
+        well-mixed liquid volume returns it here, so its inventory is ``V*C`` with
+        no fragile state-shape guessing.
+        """
+        return state[self.network.n_species]
+
     @property
     def input_ports(self) -> list[str]:
         return [self.input_port]

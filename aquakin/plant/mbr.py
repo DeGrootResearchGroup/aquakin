@@ -159,6 +159,15 @@ class MBRUnit(AerationUnit):
         n = self.network.n_species
         return state[:n], state[n]
 
+    def liquid_volume(self, state: jnp.ndarray):
+        """The (fixed) reactor liquid volume.
+
+        The explicit mass-balance inventory contract (see
+        :func:`aquakin.plant.balance._unit_inventory`): the trailing fouling
+        resistance ``R_f`` carries no mass, so the inventory is ``volume*C``.
+        """
+        return jnp.asarray(self.volume)
+
     # ----- membrane diagnostics ------------------------------------------
     def tmp(self, fouling_resistance: jnp.ndarray,
             permeate_flow: jnp.ndarray) -> jnp.ndarray:

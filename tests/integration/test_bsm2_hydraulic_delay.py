@@ -129,3 +129,29 @@ def test_plant_finite_and_steady_state_unchanged(delay_run):
     out = plant.stream(sol, "influent_delay.out", params)
     from aquakin.plant.bsm.bsm2 import BSM2_Q_REF
     assert float(out.Q[-1]) == pytest.approx(BSM2_Q_REF, rel=1e-4)
+
+
+def test_grad_through_delay_plant_is_finite(asm1):
+    """jax.grad flows through a HydraulicDelayUnit solve. Its outlet is the held
+    load over the held flow (a 1/Q division) and the lag divides by tau -- exactly
+    where a reverse-mode NaN could hide -- so differentiate a short solve w.r.t.
+    the initial state (load + flow) and check it stays finite."""
+    import jax
+    from aquakin.plant import Plant
+    plant = Plant("t")
+    plant.add_unit(HydraulicDelayUnit(
+        name="d", network=asm1, tau=0.02, initial_flow=100.0,
+        initial_concentrations=asm1.default_concentrations()))
+    plant.add_influent("feed", asm1.influent({"SS": 60.0}, Q=150.0), to="d.in")
+    y0 = plant.initial_state()
+
+    def loss(y0_):
+        # jax_adjoint (reverse-mode through the solve) suits a small non-stiff
+        # delay plant and exercises the load/flow (1/Q) reverse division.
+        # (stable_adjoint w.r.t. y0 currently leaks a tracer -- issue #420.)
+        sol = plant.solve((0.0, 0.2), t_eval=jnp.array([0.2]), y0=y0_,
+                          gradient="jax_adjoint")
+        return jnp.sum(sol.state)
+
+    g = jax.grad(loss)(y0)
+    assert jnp.all(jnp.isfinite(g))

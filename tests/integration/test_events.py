@@ -250,3 +250,20 @@ def test_plant_events_reject_stable_adjoint():
     ev = Event(at_times=[1.0])
     with pytest.raises(ValueError, match="stable_adjoint"):
         plant.solve((0.0, 2.0), events=[ev], gradient="stable_adjoint")
+
+
+def test_state_event_step_budget_raises_friendly(decay):
+    """A state-event (eager) solve that exhausts the integrator step budget must
+    re-raise the friendly remedy message, not the raw equinox MaxStepsReached
+    chatter -- the segmented eager solve is now wrapped like the plain solves."""
+    fields = SpatialConditions.uniform(T=293.15).fields
+    rhs = lambda t, y, p: decay.dCdt(y, p, fields, 0)
+    C0 = _A0(decay)
+    params = decay.default_parameters()
+    # Fires only when A has all but vanished, so the solver keeps stepping over a
+    # long span; a tiny max_steps exhausts the budget first.
+    ev = Event(cond_fn=lambda t, y, args: y[0] - 1e-12)
+    with pytest.raises(RuntimeError, match="integrator step budget"):
+        solve_with_events(rhs, C0, params, t0=0.0, t1=1e8,
+                          t_eval=jnp.array([1e8]), events=[ev],
+                          rtol=1e-6, atol=1e-9, max_steps=4)
