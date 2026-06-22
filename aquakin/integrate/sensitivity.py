@@ -395,7 +395,10 @@ class DGSMResult:
     n_samples : int
         Number of quasi-random points actually drawn (a power of two).
     n_valid : int
-        Number of points with a finite output and gradient (others skipped).
+        Number of points with a finite output and gradient (others skipped). For
+        a vector-valued ``fn`` this is counted **per output** -- a sample
+        non-finite in another output is not dropped from this one -- so different
+        outputs may report different ``n_valid``.
     seed : int
         Seed of the scrambled-Sobol sampler -- fixing it makes the result
         bit-for-bit reproducible.
@@ -492,23 +495,28 @@ def _make_dgsm_value_and_jac(fn, z0, mode):
     return value_and_jac, vector, m_out
 
 
-def _finite_rows(vals: np.ndarray, jacs: np.ndarray) -> np.ndarray:
-    """Boolean mask of sample rows whose value AND Jacobian are all finite."""
-    n = vals.shape[0]
-    v_ok = np.isfinite(vals).reshape(n, -1).all(axis=1)
-    J_ok = np.isfinite(jacs).reshape(n, -1).all(axis=1)
-    return v_ok & J_ok
+def _finite_mask(v_col: np.ndarray, j_col: np.ndarray) -> np.ndarray:
+    """Boolean per-sample mask: one output's value AND its Jacobian row finite.
+
+    ``v_col`` is ``(N,)`` (a single output's value over the samples) and
+    ``j_col`` is ``(N, d)`` (that output's partials). Applied **per output** so a
+    sample non-finite in one output does not drop the others.
+    """
+    n = v_col.shape[0]
+    return np.isfinite(v_col) & np.isfinite(j_col).reshape(n, -1).all(axis=1)
 
 
 def _evaluate_dgsm_samples(value_and_jac, Z, mode, batched):
-    """Evaluate the value/Jacobian over every sample, keeping only finite rows.
+    """Evaluate the value/Jacobian over every sample; return the full stacked
+    arrays (non-finite rows **included**).
 
-    ``batched=True`` dispatches the whole sample through one :func:`jax.vmap`
-    (a single device->host transfer) and filters finiteness once on the stacked
-    result. ``batched=False`` is the per-sample fallback: one call per point,
-    one host transfer each, lower peak memory. Both apply identical
-    skip-on-non-finite semantics, so they return the same ``(f_vals, jacs)``
-    lists of NumPy arrays.
+    Finiteness is filtered downstream *per output* (see :func:`_finite_mask`), so
+    this returns every drawn row -- a sample whose value/gradient is non-finite in
+    one output must still contribute to the others. ``batched=True`` dispatches
+    the whole sample through one :func:`jax.vmap` (a single device->host
+    transfer); ``batched=False`` is the per-sample fallback (one host transfer
+    each, lower peak memory). Both return identical ``(vals, jacs)`` NumPy arrays:
+    ``vals`` is ``(N,)``/``(N, m)`` and ``jacs`` is ``(N, d)``/``(N, m, d)``.
     """
     if batched:
         try:
@@ -517,13 +525,10 @@ def _evaluate_dgsm_samples(value_and_jac, Z, mode, batched):
             if mode == "forward":
                 raise RuntimeError(_DGSM_FORWARD_HINT) from exc
             raise
-        vals = np.asarray(vals)
-        jacs = np.asarray(jacs)
-        keep = _finite_rows(vals, jacs)
-        return list(vals[keep]), list(jacs[keep])
+        return np.asarray(vals), np.asarray(jacs)
 
-    f_vals: list[np.ndarray] = []
-    jac_list: list[np.ndarray] = []
+    v_list: list[np.ndarray] = []
+    j_list: list[np.ndarray] = []
     for k, z in enumerate(Z):
         try:
             v, J = value_and_jac(jnp.asarray(z))
@@ -531,12 +536,9 @@ def _evaluate_dgsm_samples(value_and_jac, Z, mode, batched):
             if mode == "forward" and k == 0:
                 raise RuntimeError(_DGSM_FORWARD_HINT) from exc
             raise
-        vf = np.asarray(v)
-        Jf = np.asarray(J)
-        if np.all(np.isfinite(vf)) and np.all(np.isfinite(Jf)):
-            f_vals.append(vf)
-            jac_list.append(Jf)
-    return f_vals, jac_list
+        v_list.append(np.asarray(v))
+        j_list.append(np.asarray(J))
+    return np.asarray(v_list), np.asarray(j_list)
 
 
 def dgsm(
@@ -651,18 +653,20 @@ def dgsm(
     ranges_np, lo, hi, d, input_names = _validate_dgsm_ranges(ranges, input_names)
     Z, n_drawn = _sobol_sample(lo, hi, d, n_samples, seed)
     value_and_jac, vector, m_out = _make_dgsm_value_and_jac(fn, Z[0], mode)
-    f_vals, jacs = _evaluate_dgsm_samples(value_and_jac, Z, mode, batched)
-
-    if len(f_vals) < 2:
-        raise RuntimeError(
-            f"DGSM needs >= 2 finite samples; got {len(f_vals)}/{n_drawn}. The "
-            "output or its gradient is non-finite over the sampled ranges -- for "
-            "a stiff network, cap the integrator step via the reactor's dtmax."
-        )
-    n = len(f_vals)
+    vals, jacs = _evaluate_dgsm_samples(value_and_jac, Z, mode, batched)
 
     def _assemble(fv: np.ndarray, g2: np.ndarray, name: Optional[str]) -> DGSMResult:
-        # fv: (n,) output values; g2: (n, d) squared partials.
+        # fv: (n,) finite output values; g2: (n, d) squared partials (already
+        # masked to this output's finite samples, so n is this output's n_valid).
+        n = fv.shape[0]
+        if n < 2:
+            raise RuntimeError(
+                f"DGSM needs >= 2 finite samples"
+                f"{f' for output {name!r}' if name else ''}; got {n}/{n_drawn}. "
+                "The output or its gradient is non-finite over the sampled ranges "
+                "-- for a stiff network, cap the integrator step via the "
+                "reactor's dtmax."
+            )
         nu = np.mean(g2, axis=0)
         var_f = float(np.var(fv))
         if var_f > 0:
@@ -696,9 +700,8 @@ def dgsm(
         )
 
     if not vector:
-        fv = np.asarray(f_vals)              # (n,)
-        g2 = np.asarray(jacs) ** 2           # (n, d)
-        return _assemble(fv, g2, None)
+        keep = _finite_mask(vals, jacs)              # vals (N,), jacs (N, d)
+        return _assemble(vals[keep], jacs[keep] ** 2, None)
 
     if output_names is None:
         output_names = [f"output{i}" for i in range(m_out)]
@@ -707,9 +710,12 @@ def dgsm(
             f"output_names has {len(output_names)} entries but fn returns "
             f"m={m_out} outputs."
         )
-    F = np.asarray(f_vals)                    # (n, m)
-    Jstack = np.asarray(jacs)                 # (n, m, d)
-    return [
-        _assemble(F[:, i], Jstack[:, i, :] ** 2, output_names[i])
-        for i in range(m_out)
-    ]
+    # Mask finiteness PER OUTPUT: a sample non-finite in one output (or its
+    # gradient) is dropped only for that output, not jointly for all of them, so
+    # each output's nu_j and n_valid are unbiased by the others' failures.
+    results = []
+    for i in range(m_out):
+        keep_i = _finite_mask(vals[:, i], jacs[:, i, :])   # (N,)
+        results.append(
+            _assemble(vals[keep_i, i], jacs[keep_i, i, :] ** 2, output_names[i]))
+    return results

@@ -582,6 +582,9 @@ def test_gauss_newton_recovers_known_parameter(setup):
         optimizer="gauss_newton",
     )
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+    # n_iter is an iteration-scale count (Jacobian evals for the GN path), not the
+    # raw function-evaluation count -- a small positive int.
+    assert isinstance(result.n_iter, int) and result.n_iter >= 1
 
 
 def test_gauss_newton_matches_lbfgsb_on_easy_fit(setup):

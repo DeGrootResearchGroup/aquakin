@@ -489,6 +489,27 @@ def test_dgsm_vector_output_returns_per_output_results():
     assert float(out[1].dgsm[1]) == pytest.approx(25.0, rel=1e-6)
 
 
+def test_dgsm_finite_mask_is_per_output():
+    """A sample non-finite in one output must not be dropped from the others.
+
+    Output 0 is NaN for the (roughly half) samples with z0 > 0.5; output 1 is
+    finite everywhere. The clean output must keep ALL drawn samples (a joint mask
+    would discard the shared rows and bias its nu / n_valid), while the dirty
+    output keeps only its finite subset."""
+    fn = lambda z: jnp.array([jnp.where(z[0] > 0.5, jnp.nan, 2.0 * z[0]),
+                              5.0 * z[1]])
+    rng = [(0.0, 1.0), (0.0, 1.0)]
+    out = aquakin.dgsm(fn, rng, input_names=["a", "b"],
+                       output_names=["dirty", "clean"], n_samples=16, ad_mode="forward")
+    n_drawn = out[0].n_samples
+    assert out[1].n_valid == n_drawn               # clean output: every sample kept
+    assert 2 <= out[0].n_valid < n_drawn           # dirty output: NaN rows dropped
+    # The clean output's sensitivity is the exact partial, computed over all 16
+    # samples -- unbiased by the other output's failures.
+    assert float(out[1].dgsm[1]) == pytest.approx(25.0, rel=1e-6)
+    assert float(out[0].dgsm[0]) == pytest.approx(4.0, rel=1e-6)
+
+
 def test_dgsm_forward_through_reactor_matches_reverse(simple_network):
     """Forward mode through a reactor solve agrees with the reverse-mode result
     to machine precision. The forward-capable adjoint is built with the
@@ -587,7 +608,7 @@ def test_dgsm_unbatched_forward_default_adjoint_errors():
 def test_dgsm_helpers_validate_and_sample():
     """The decomposed helpers behave independently of the dgsm entry point."""
     from aquakin.integrate.sensitivity import (
-        _finite_rows,
+        _finite_mask,
         _sobol_sample,
         _validate_dgsm_ranges,
     )
@@ -608,7 +629,8 @@ def test_dgsm_helpers_validate_and_sample():
     assert n_drawn == 32 and Z.shape == (32, 2)
     assert np.all(Z[:, 0] >= 0.0) and np.all(Z[:, 0] <= 2.0)
 
-    # _finite_rows masks any row with a non-finite value OR Jacobian entry.
+    # _finite_mask masks any sample with a non-finite value OR Jacobian entry,
+    # for one output column (value (N,), Jacobian (N, d)).
     vals = np.array([1.0, np.nan, 3.0])
     jacs = np.array([[1.0, 2.0], [3.0, 4.0], [np.inf, 5.0]])
-    np.testing.assert_array_equal(_finite_rows(vals, jacs), [True, False, False])
+    np.testing.assert_array_equal(_finite_mask(vals, jacs), [True, False, False])

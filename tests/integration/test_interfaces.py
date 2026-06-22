@@ -109,6 +109,45 @@ def test_grad_through_interface(nets):
     assert jnp.all(jnp.isfinite(g))
 
 
+def test_excess_acceptor_demand_over_conserves_cod_by_default(nets):
+    """When the electron-acceptor (O2+NO3) COD demand exceeds the degradable COD,
+    each cascade draw clamps at zero, so only the available COD is removed and the
+    surplus demand is silently dropped -- COD is over-conserved (the documented
+    pathological regime). The default interface does NOT raise."""
+    asm1, adm1 = nets
+    trans = ASM1toADM1(source_network=asm1, target_network=adm1)
+    # demand = CODequiv*SNO = 285.7 gCOD, far above the 35 gCOD of degradable pools.
+    C = _asm_vec(asm1, SI=28.0, XI=95.0, XP=0.7, SS=10.0, XS=20.0, XB_H=5.0,
+                 SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SNO=100.0)
+    demand = _CODEQUIV * 100.0
+    degradable = 10.0 + 20.0 + 5.0                  # SS + XS + XB_H (XB_A = 0)
+    y = trans.translate(C)
+    # Only the available COD is removed -- not the full (larger) demand...
+    assert _adm_cod(adm1, y) == pytest.approx(_asm_cod(asm1, C) - degradable, rel=1e-6)
+    # ...so COD is over-conserved by exactly the dropped surplus demand.
+    surplus = demand - degradable
+    assert surplus > 0
+    assert (_adm_cod(adm1, y) - (_asm_cod(asm1, C) - demand)
+            == pytest.approx(surplus, rel=1e-6))
+
+
+def test_strict_raises_on_excess_acceptor_demand(nets):
+    """``ASM1toADM1(strict=True)`` raises when the electron-acceptor demand is not
+    fully absorbed by the degradable COD, instead of silently over-conserving. A
+    normal anoxic feed (demand <= degradable COD) still passes."""
+    asm1, adm1 = nets
+    strict = ASM1toADM1(source_network=asm1, target_network=adm1, strict=True)
+    # In-regime anoxic feed: the demand is absorbed, so strict does not fire.
+    C_ok = _asm_vec(asm1, SI=28.0, SS=40.0, XI=95.0, XS=360.0, XB_H=200.0, XB_A=10.0,
+                    SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SO=5.0, SNO=8.0)
+    assert jnp.all(jnp.isfinite(strict.translate(C_ok)))
+    # Nitrate far exceeding the degradable COD: the surplus is dropped -> raise.
+    C_bad = _asm_vec(asm1, SI=28.0, XI=95.0, XP=0.7, SS=10.0, XS=20.0, XB_H=5.0,
+                     SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SNO=100.0)
+    with pytest.raises(Exception, match="over-conserved"):
+        strict.translate(C_bad)
+
+
 # --- ADM1 -> ASM1 (adm2asm) -------------------------------------------------
 
 def _adm_cod_full(adm1, C):

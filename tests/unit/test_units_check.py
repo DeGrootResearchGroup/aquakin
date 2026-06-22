@@ -205,10 +205,10 @@ def test_shipped_networks_are_unit_clean(name):
 
 
 def test_sumo_networks_have_real_units():
-    # The four SUMO-derived ASM networks shipped with placeholder parameter units
-    # ("0"/"SmallNumber"/"-BigNumber") and an unparseable species-unit dialect.
-    # _fix_sumo_units.py stamps real units, so their rate constants now declare a
-    # time unit (the inverse-time token parses) and the species units parse.
+    # The four SUMO-derived ASM networks were imported with placeholder parameter
+    # units ("0"/"SmallNumber"/"-BigNumber") and an unparseable species-unit
+    # dialect; the shipped YAMLs carry real units, so their rate constants declare
+    # a time unit (the inverse-time token parses) and the species units parse.
     from aquakin.utils.units import parse_units
     for name in ("asm2d", "asm2d_tud", "asm3", "asm3_biop"):
         net = aquakin.load_network(name)

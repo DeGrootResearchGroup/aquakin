@@ -23,7 +23,9 @@ from (SS + XS + XB_H + XB_A) — always true for a real, near-anoxic digester fe
 pathological case of a demand larger than the degradable COD (e.g. recycled
 nitrate far exceeding the substrate), the leftover demand is dropped rather than
 carried as a negative pool, so COD is then over-conserved; this mirrors the
-reference BSM2 implementation and never arises for an anoxic feed. They are
+reference BSM2 implementation and never arises for an anoxic feed. Construct
+``ASM1toADM1(strict=True)`` to instead raise (jit/AD-safe) when the demand is not
+fully absorbed, asserting the feed stays in the intended regime. They are
 pure, AD-clean functions of the concentration vector — the nested ``if/else`` N
 cascades of the reference C are written here as branch-free greedy draws
 (``jnp.minimum``), which are mathematically identical to the unrolled
@@ -46,6 +48,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import equinox as eqx
 import jax.numpy as jnp
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -85,6 +88,15 @@ class ASM1toADM1:
     # for a standalone call. This flag tells the plant to read the pH from the
     # destination (digester) unit's state each step.
     needs_dest_pH: bool = True
+
+    # When True, raise at runtime (via ``eqx.error_if``, so it is jit/AD-safe) if
+    # the electron-acceptor (O2 + NO3) COD demand exceeds the degradable COD it
+    # draws from -- the pathological regime where the surplus is silently dropped
+    # and COD is over-conserved (see the module docstring). Default False
+    # reproduces the reference BSM2 behaviour exactly; opt in to assert that a feed
+    # stays within the interface's intended near-anoxic regime.
+    strict: bool = False
+    strict_tol: float = 1e-6
 
     # Interface stoichiometric parameters (BSM2 defaults).
     CODequiv: float = 40.0 / 14.0
@@ -164,6 +176,17 @@ class ASM1toADM1:
         take = jnp.minimum(d, XBH); ut_XBH = XBH - take; nrel = take * fnbac; d = d - take
         take = jnp.minimum(d, XBA); ut_XBA = XBA - take; nrel = nrel + take * fnbac; d = d - take
         ut_SNH = SNH + nrel  # N released from consumed biomass
+        if self.strict:
+            # `d` > 0 here means the electron-acceptor demand outran every
+            # degradable COD pool, so the surplus is about to be dropped (COD
+            # over-conserved). Flag it; AD-/jit-safe, and ut_SNH flows to the
+            # output so the check is not eliminated.
+            ut_SNH = eqx.error_if(
+                ut_SNH, d > self.strict_tol,
+                "ASM1toADM1(strict=True): electron-acceptor (O2+NO3) COD demand "
+                "exceeds the degradable COD (SS+XS+XB_H+XB_A); the surplus is "
+                "dropped and total COD is over-conserved. This is a non-anoxic / "
+                "nitrate-heavy feed outside the interface's intended regime.")
 
         ut_SND = SND
         ut_XND = XND
