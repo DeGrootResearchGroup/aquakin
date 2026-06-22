@@ -441,7 +441,7 @@ def test_colored_adjoint_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch
     s_def = plant.solve(**kw, colored_jacobian=False)
     with pytest.warns(RuntimeWarning, match="falling back to dense"):
         s_col = plant.solve(**kw, colored_jacobian=True)
-    builder, _n, ok, _ratio = plant._colored_adjoint_builder
+    builder, _n, ok, _ratio, _rf = plant._colored_adjoint_builder
     assert ok is False and builder is None              # guard failed -> dense
     # The forward trajectory is unaffected by the (backward-only) Jacobian build,
     # so the fallback solve equals the dense one.
