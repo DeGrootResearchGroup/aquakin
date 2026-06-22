@@ -51,13 +51,12 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.ph_solver import (
-    _R_SI,
-    _T_BASE,
     _log10_gamma,
     debye_huckel_A,
     equilibrium_constants,
 )
 from aquakin.core.precipitation import _FRACTIONS
+from aquakin.core.temperature import van_t_hoff_factor
 
 _LN10 = jnp.log(10.0)
 
@@ -206,7 +205,7 @@ def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model,
     M, N = Cmat.shape
     K = equilibrium_constants(T_kelvin)
     # van't Hoff factor for the Ksp(T) correction inside si_fn (unity at T_ref).
-    vant_hoff = (1.0 / _T_BASE - 1.0 / T_kelvin) / _R_SI
+    vant_hoff = van_t_hoff_factor(T_kelvin)
     use_activity = model != "none"
     if use_activity:
         A = debye_huckel_A(T_kelvin)

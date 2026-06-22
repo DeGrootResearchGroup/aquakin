@@ -33,6 +33,7 @@ import jax
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
+from aquakin.core.hints import did_you_mean
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate.events import Event, solve_with_events
 from aquakin.integrate._common import (
@@ -197,9 +198,7 @@ class PlantSolution:
         ``(n_t, unit.state_size)``. See ``plant.list_units()`` for the names."""
         layout = self.plant._state_layout
         if unit_name not in layout:
-            import difflib
-            hint = difflib.get_close_matches(unit_name, list(layout), n=3)
-            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            suffix = did_you_mean(unit_name, list(layout))
             raise KeyError(
                 f"Unknown unit '{unit_name}'. Units (see plant.list_units()): "
                 f"{list(layout)}.{suffix}"
@@ -243,9 +242,7 @@ class PlantSolution:
                 f"Concentration units: {indexable}."
             )
         if species not in unit.network.species_index:
-            import difflib
-            hint = difflib.get_close_matches(species, unit.network.species, n=3)
-            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            suffix = did_you_mean(species, unit.network.species)
             raise KeyError(
                 f"Unknown species '{species}' in unit '{unit_name}'. Species "
                 f"(see plant.list_species('{unit_name}')): "
@@ -1471,9 +1468,7 @@ class Plant:
         """
         index = self._plant_param_index()
         if name not in index:
-            import difflib
-            hint = difflib.get_close_matches(name, list(index), n=3)
-            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            suffix = did_you_mean(name, list(index))
             raise KeyError(
                 f"Unknown plant parameter '{name}'. Keys are "
                 f"'<network>.<param>' (see plant.parameter_names()).{suffix}"
@@ -1519,14 +1514,11 @@ class Plant:
             )
         if not overrides:
             return base
-        import difflib
-
         index = self._plant_param_index()
         idxs, vals = [], []
         for name, value in overrides.items():
             if name not in index:
-                hint = difflib.get_close_matches(name, list(index), n=3)
-                suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+                suffix = did_you_mean(name, list(index))
                 raise KeyError(
                     f"Unknown plant parameter '{name}'. Keys are "
                     f"'<network>.<param>' (see plant.parameter_names()).{suffix}"
@@ -1540,9 +1532,7 @@ class Plant:
     def _unit_or_raise(self, name: str) -> "Unit":
         """Return ``self.units[name]`` or a ``KeyError`` with a close-match hint."""
         if name not in self.units:
-            import difflib
-            hint = difflib.get_close_matches(name, list(self.units), n=3)
-            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            suffix = did_you_mean(name, list(self.units))
             raise KeyError(
                 f"Unknown unit '{name}'. Units (see plant.list_units()): "
                 f"{self.list_units()}.{suffix}"
@@ -1991,10 +1981,7 @@ class Plant:
             # Looks like a semantic name (no port, not a unit) but isn't
             # registered -> hint at the available ones rather than the bare
             # "Unknown unit" that _parse_endpoint would give.
-            import difflib
-            hint = difflib.get_close_matches(
-                endpoint, list(self.named_streams), n=3)
-            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            suffix = did_you_mean(endpoint, list(self.named_streams))
             raise KeyError(
                 f"Unknown stream '{endpoint}'. Semantic names "
                 f"(plant.list_streams()): {sorted(self.named_streams)}; or pass "

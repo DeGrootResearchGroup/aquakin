@@ -15,6 +15,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from aquakin.core.hints import did_you_mean
 from aquakin.core.network import CompiledNetwork
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -403,9 +404,7 @@ class _HasNamedSpecies:
     def C_named(self, species: str) -> jnp.ndarray:
         """Return the trajectory of a single species by name."""
         if species not in self.network.species_index:
-            import difflib
-            hint = difflib.get_close_matches(species, self.network.species, n=3)
-            suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+            suffix = did_you_mean(species, self.network.species)
             raise KeyError(
                 f"Unknown species '{species}'. Available: "
                 f"{self.network.species}.{suffix}"

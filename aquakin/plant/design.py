@@ -29,7 +29,12 @@ from typing import TYPE_CHECKING, Optional
 import jax
 import jax.numpy as jnp
 
-from aquakin.plant.metrics import derived_BOD, derived_COD, derived_TSS
+from aquakin.plant.metrics import (
+    derived_BOD,
+    derived_COD,
+    derived_TSS,
+    _time_average as _metrics_time_average,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant, PlantSolution
@@ -358,11 +363,12 @@ def _reactor_units(plant, explicit):
 
 
 def _time_average(t, values):
-    """Trapezoidal time-average of ``values(t)`` over ``[t0, t1]``."""
-    T = float(t[-1] - t[0])
-    if T <= 0.0:  # single time point -> just the value
-        return float(jnp.asarray(values).reshape(-1)[-1])
-    return float(jnp.trapezoid(values, t) / T)
+    """Trapezoidal time-average of ``values(t)`` over ``[t0, t1]`` (single source
+    of truth: the shared :func:`aquakin.plant.metrics._time_average` kernel,
+    which also returns the single sample for a one-point steady-state window).
+    Wrapped here only to keep the local ``(t, values)`` argument order and the
+    ``float`` return."""
+    return float(_metrics_time_average(values, t))
 
 
 def _pick_influent(plant, influent_name):

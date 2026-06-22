@@ -32,9 +32,90 @@ The shipped networks currently are:
   ammonia is driven low. Identical to `asm1` apart from that factor and the
   `KNH_H` parameter.
 - `asm2d` — ASM2D, ASM1 extended with biological phosphorus removal
-  and denitrifying polyphosphate-accumulating organisms.
+  and denitrifying polyphosphate-accumulating organisms. *(Several SUMO-import
+  errors in the original YAML were corrected against both the SUMO `ASM2D.xlsm`
+  source and Henze et al. 2000 STR No. 9 — they survived because each conserves
+  COD/N/P, so the continuity suite passed while nitrification and bio-P were
+  broken; running the network to a viable steady state in the A²O plug below is
+  what surfaced them: (1) **heterotroph lysis** `Lysis_1` (rate `bH·[XH]`)
+  decremented `XAUT` instead of `XH`, applying the large heterotroph decay to the
+  nitrifiers and washing them out; (2) the **aerobic poly-P storage** inhibition
+  dropped the maximum-ratio term — restored to the Henze/SUMO
+  `(K_MAX − XPP/XPAO)/(K_iPP + K_MAX − XPP/XPAO)` with `K_MAX = 0.34`, so stored
+  poly-P reaches ~`K_MAX·XPAO` instead of being capped ~17× low; (3) the
+  **autotroph and PP-uptake half-saturations** had been collapsed onto the
+  heterotroph/hydrolysis values by an import that deduplicated Monod terms by
+  species — `KO2_AUT` (0.5, was 0.2), `KNH4_AUT` (1.0, was 0.05 — a 20× error that
+  let nitrifiers over-compete for ammonia and N-starve PAO growth), `KALK_AUT`
+  (0.0005), `KPS` (0.2, the PO₄-uptake constant for poly-P storage). Also added
+  the standard IWA `clip_negative_states` clamp and a `positivity_limiter` (asm2d
+  had neither); and (4) the **chemical-P precipitation** reactions had dropped
+  their metal coefficients — `Precipitation`/`Redissolution` changed `SPO4` and
+  the lumped `XTSS` but not `XMeOH`/`XMeP`, so the metal hydroxide was never
+  consumed (an inexhaustible precipitant) and metal phosphate never formed;
+  restored to the SUMO/Henze Table 3.6 `XMeOH = fMeOH_PO4_MW (−3.45)`,
+  `XMeP = fMeP_PO4_MW (+4.87)` (and the `KALK_PRE` redissolution alkalinity
+  constant). With these the network nitrifies, removes phosphorus biologically,
+  and the dosed-metal chemical-P works (the A²O plant's ferric dosing). The same
+  import errors were found and fixed in `asm2d_tud`, `asm3` and `asm3_biop` — the
+  whole bio-P/nitrification family is corrected. **The entire family is now
+  verified term-by-term, value-by-value against the SUMO source spreadsheets**
+  (every parameter value, every rate-term Monod half-saturation constant, every
+  participating-species set, and every numeric stoichiometric coefficient
+  including the charge-balance `SALK`/`SHCO` terms match SUMO — 482 coefficients,
+  0 mismatches across the four models; the corrected constants are pinned per
+  network in `tests/integration/test_asm_family.py::
+  test_biop_autotroph_and_polyp_constants`). **The root cause is UPSTREAM, not in
+  this repo's generator.** `scripts/sumo_to_aquakin.py` reads a JSON dump produced
+  by the external `wastewaterad.tools.sumo_import` tool and faithfully reproduces
+  it (it emits the auxiliaries / stoichiometry verbatim — verified by reading the
+  generator). The collapse (per-group Monod constants deduplicated by species),
+  the lost `K_max` poly-P-storage override (the SUMO `MRinh`/`MRsat` *generic*
+  function form was exported instead of the instantiated "Calculated variables"
+  form), and the dropped precipitation metal coefficients (collapsed into their
+  `XTSS` sum) all already exist in the JSON, so they originate in `sumo_import`.
+  The aquakin YAMLs are now hand-fixed; **a regeneration from a fresh
+  (unfixed-upstream) JSON would reintroduce the bugs**, so re-run
+  [`scripts/verify_sumo_asm.py`](scripts/verify_sumo_asm.py) after any
+  regeneration — it re-checks every parameter, rate-term constant, participating
+  species and numeric coefficient against the SUMO `.xlsm` and exits non-zero on
+  any discrepancy.)*
+- `asm2d_chemp` — ASM2D with **saturation-index-driven chemical-P precipitation**
+  (ferric), replacing ASM2d's simple empirical `kPRE·[SPO4]·[XMeOH]`
+  Precipitation/Redissolution with the generalised precipitation framework
+  (Kazadi Mbamba et al. 2015). An **`extends: asm2d`** file that `remove:`s the
+  simple metal model (the `XMeOH`/`XMeP` species, `kPRE`/`kRED`, the
+  `fMeOH`/`fMeP` mass factors) and adds a `precipitation:` block: dosed ferric
+  `S_Fe3` precipitates orthophosphate as strengite `FePO4` and competes to form
+  ferrihydrite `Fe(OH)3`, with the rate driven by the saturation index from the
+  free-ion activities at the operating pH (a fixed condition) — so the achievable
+  effluent phosphate has a **pH-dependent floor** (the hydroxide buffers the free
+  metal, so chemical-P worsens at higher pH; verified — the FeOH3 vs FePO4
+  saturation gap widens pH 6.5→8.0). The minerals use the **bounded** driver
+  (`R = tanh(SI/(2ν)·ln10)`), so the rate Jacobian is `~k` (non-stiff) and a
+  dynamic reactor/plant solve is differentiable — `jax.grad` of the effluent
+  phosphate w.r.t. the ferric dose flows through the time integration. The metal
+  and solids are mol/m³; ASM2d's `SPO4` stays g_P/m³, so the precipitation ions
+  carry `molar_mass: 31000` (g_P/m³→mol/L for the activity product) and the
+  reactions carry the P molar mass `P_MW` to convert between the bases — phosphorus
+  is conserved exactly (the SPO4 lowered equals 31 g/mol × the FePO4 precipitated;
+  `tests/integration/test_asm2d_chemp.py`). This is the rigorous,
+  thermodynamically-grounded counterpart of the A²O plant's native-ASM2d ferric
+  dosing (`FerricDose` on the simple kPRE model), and the worked example of the
+  precipitation engine composing with a full biological network.
 - `asm2d_tud` — Delft TUD variant of ASM2D with revised bio-P stoichiometry.
+  *(Carried the same import errors as `asm2d`, now fixed against SUMO
+  `ASM2D_TUD.xlsm` + Henze STR No. 9: the `Lysis_1` heterotroph→autotroph biomass
+  swap; the autotroph half-saturations (`KNH_A = 1.0`, `KO_A = 0.5`,
+  `KHCO_A = 0.0005`) collapsed onto the heterotroph values; and the metabolic
+  poly-P storage limiter, which used a plain ratio Monod where the model limits
+  storage to a maximum ratio `(fPP_max − XPP/XPAO)/(KfPP + fPP_max − XPP/XPAO)`,
+  `fPP_max = 0.35` — without it stored poly-P is unbounded.)*
 - `asm3` — ASM3, ASM1 with internal storage products replacing hydrolysis.
+  *(Carried the collapsed-autotroph-constant import error: nitrifier growth and
+  aerobic respiration used the heterotroph O₂/ammonia/alkalinity half-saturations
+  instead of `KA_O2 = 0.5`, `KA_NH4 = 1.0`, `KA_ALK = 0.0005` — fixed and verified
+  against SUMO `ASM3.xlsm`.)*
 - `asm3_2step` — ASM3 extended for **two-step nitrification and two-step
   denitrification** (Kaelin et al. 2009), carrying nitrite (NO2) as an explicit
   intermediate. The lumped `SNOX` splits into `SNO3` + `SNO2` and the single
@@ -124,7 +205,14 @@ The shipped networks currently are:
   kinetics), not a faithful reproduction of one published matrix; nitrite leakage
   (comammox's poor nitrite affinity) is omitted (modelled as complete
   nitrification), a possible two-internal-step refinement.
-- `asm3_biop` — ASM3 + bio-P extension.
+- `asm3_biop` — ASM3 + bio-P extension. *(Carried the same import errors as
+  `asm2d`, now fixed against SUMO `ASM3_BioP.xlsm` + Henze STR No. 9: the
+  autotroph growth/respiration used the heterotroph O₂/ammonia/alkalinity
+  half-saturations instead of the nitrifier-specific `KO_A = 0.5`,
+  `KNH_A = 1.0`, `KHCO_A = 0.0005`; the poly-P storage dropped its maximum-ratio
+  term, restored to `(Kmax_PAO − XPP/XPAO)/(KiPP_PAO + Kmax_PAO − XPP/XPAO)` with
+  `Kmax_PAO = 0.2`; and the PP-uptake PO₄ term used the nutrient `KPO4_H` rather
+  than `KPO4_PP = 0.2`. Added the standard `clip_negative_states` clamp.)*
 - `adm1` — Anaerobic Digestion Model No. 1 (Batstone et al. 2002), BSM2
   implementation form (Rosen & Jeppsson 2006). 29 states (26 liquid + 3 gas
   headspace), 25 processes: disintegration, the three hydrolyses, seven
@@ -1730,6 +1818,7 @@ aquakin/
 │   │   ├── uv_h2o2.yaml             # UV/H2O2 AOP
 │   │   ├── asm1.yaml                # Activated Sludge Model No. 1
 │   │   ├── asm2d.yaml               # ASM2D (bio-P + denitrification)  [units: _fix_sumo_units.py]
+│   │   ├── asm2d_chemp.yaml         # ASM2D + saturation-driven chemical-P (ferric); extends: asm2d
 │   │   ├── asm2d_tud.yaml           # Delft TUD variant of ASM2D       [units: _fix_sumo_units.py]
 │   │   ├── asm3.yaml                # ASM3 (storage products replace hydrolysis)  [units: _fix_sumo_units.py]
 │   │   ├── asm3_2step.yaml          # ASM3 + two-step nitrification/denitrification (explicit NO2; Kaelin 2009)
@@ -3581,6 +3670,32 @@ canonical IWA files; for quantitative comparison to Alex 2008's
 published EQI / OCI values, users should replace them with the
 official files.
 
+**A²O biological-nutrient-removal plant (`aquakin.plant.build_a2o`,
+[`plant/a2o.py`](aquakin/plant/a2o.py)).** The first phosphorus-capable
+flowsheet — the BSM plants run the P-free ASM1, so they cannot host bio-P or the
+chemical-P (metal-salt dosing) demonstration. `build_a2o` is the canonical
+**Anaerobic–Anoxic–Oxic** layout on the shipped `asm2d` network: an anaerobic
+selector (where PAOs release phosphate and store fermentation products) → anoxic
+denitrification → aerated nitrification + luxury P uptake → secondary clarifier,
+with the mixed-liquor internal recycle (aerobic→anoxic) and RAS
+(underflow→anaerobic) closing the loop, so it removes carbon, nitrogen **and**
+phosphorus in one plant. `a2o_influent(net)` is a matching constant municipal
+(VFA-bearing) influent and `a2o_warm_start(plant)` seeds the AS reactors with an
+established EBPR mixed liquor (a large PAO population + stored poly-P), so a solve
+starts from healthy bio-P sludge rather than the slow, seed-sensitive cold-start
+PAO establishment. The default config reaches a feasible steady state with
+**complete biological P removal** (effluent SPO4 ≈ 0) and ~80% N removal (full
+nitrification of the influent ammonia + denitrification), with no recirculating
+negative soluble pools (it relies on the `asm2d` `positivity_limiter`, now
+honoured inside `CSTRUnit`). It is **not** a standardised benchmark — the sizing
+is a representative municipal design, not a published reference set, so it is a
+worked nutrient-removal flowsheet, not a validation target. Building it is what
+surfaced the `asm2d` process-matrix import errors (see the `asm2d` network note);
+the A²O viability test (`tests/integration/test_a2o.py`) is the regression guard
+the COD/N/P continuity suite could not be (each broken coefficient still
+conserves mass). It is the substrate for the chemical-P (ferric/alum dosing)
+demonstration.
+
 **BSM2 — open-loop plant (Gernaey et al. 2014 / Jeppsson et al. 2007).**
 `aquakin.plant.bsm.build_bsm2()` wraps the BSM1 activated-sludge core with the
 full sludge train: a **primary clarifier** ahead of the reactors, and
@@ -4452,8 +4567,20 @@ across hundreds of tests — neither a JAX compile-cache (verified: cold ≈ war
 nor concentrating it in a few files makes the whole suite fast.
 
 - The **`test`** job (`pytest -m "not validation and not slow"`, Python
-  3.11/3.12) runs on **every PR and every push** — unit + fast integration. This
-  is the merge gate.
+  3.11/3.12) runs on **every PR and every push** — unit + fast integration. It is
+  the merge gate, and is **`pytest-split`-sharded** (`--splits 4 --group i`, `-n
+  auto` within each shard) for the *same* reason the slow/validation suites are:
+  the fast suite grew to ~1300 tests and a single long-lived run accumulated XLA
+  cache + live JAX buffers until an xdist worker was OOM-killed (a worker *crash*
+  on a random lightweight test) and/or it hit the time ceiling — intermittent red
+  on the required gate with no real regression. Four fresh shards × 2 Python
+  versions bound each shard's footprint to ~1/4 (no OOM) and run in parallel (well
+  under the ceiling). The sharded per-version jobs are **not** the required check —
+  the **`fast-gate`** aggregator (job name **`fast gate`**) is: it `needs:` the
+  shard matrix and is green iff every shard succeeded (or was skipped — a bare
+  `labeled` event skips the gate, which must not block). It is a *stable* required-
+  check name that survives shard-count changes, so **branch protection requires
+  `fast gate`**, not the per-shard `fast tests (...)` jobs.
 - The **`slow`** job (`pytest -m "slow and not validation"`, 3.11/3.12) and
   **`validation`** job (`pytest -m validation`, 3.12) run **only on push to
   `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
@@ -4510,9 +4637,15 @@ nor concentrating it in a few files makes the whole suite fast.
     only for changes that cannot reach the slow/validation paths (docs, a new
     isolated unit, a fast-gated network add).
 
-**Branch protection:** the required status checks must be the fast-gate jobs
-(`fast tests (py3.11)` / `(py3.12)`) — **not** `slow`/`validation`, which do not
-run on PRs and would otherwise block every PR forever.
+**Branch protection:** the required status check must be the **`fast gate`**
+aggregator job — **not** the per-shard `fast tests (py3.x shard i/4)` jobs (their
+names/count change when the shard count is tuned) and **not** `slow`/`validation`
+(which do not run on PRs and would otherwise block every PR forever). The
+`fast gate` job is green only when every fast shard passes, so requiring it gives
+the same gate with a stable name. (When the fast gate was sharded, the old
+required checks `fast tests (py3.11)` / `(py3.12)` ceased to exist; branch
+protection must be repointed to `fast gate` or merges block forever waiting on
+checks that never report.)
 
 A green fast gate is the merge gate. Python 3.10 stays
 install-compatible (`requires-python >= 3.10`) but is **not** CI-tested:

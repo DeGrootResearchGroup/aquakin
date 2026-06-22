@@ -41,6 +41,8 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 
+from aquakin.plant.metrics import _time_average as _metrics_time_average
+
 # Standard physical constants (SI).
 _RHO_WATER = 1000.0       # kg/m3
 _G = 9.80665              # m/s2
@@ -181,13 +183,11 @@ def blower_power_kw(airflow_m3_per_d, system: AerationSystem):
 
 
 def _time_average(values, t):
-    """Trapezoidal mean of ``values`` over ``[t0, t1]`` (a single point returns
-    itself -- the steady-state case)."""
-    t = jnp.asarray(t)
-    values = jnp.asarray(values)
-    if t.shape[0] < 2:
-        return values[0]
-    return jnp.trapezoid(values, t, axis=0) / (t[-1] - t[0])
+    """Trapezoidal mean of ``values`` over ``[t0, t1]`` (single source of truth:
+    the shared :func:`aquakin.plant.metrics._time_average` kernel, which also
+    returns the single sample for a one-point steady-state window). Wrapped here
+    only to keep the local ``(values, t)`` argument order."""
+    return _metrics_time_average(values, t)
 
 
 def blower_airflow_total(t, kla_history, volumes, system: AerationSystem) -> float:

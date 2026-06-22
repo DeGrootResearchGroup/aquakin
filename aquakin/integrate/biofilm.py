@@ -785,7 +785,6 @@ class BiofilmReactor(GradientCheckMixin):
         has_det, k_det, detach_mask = self._has_det, self._k_det, self._detach_mask
         clamp_bulk = self.clamp_bulk
         has_feed, feed, dilution = self._has_feed, self._feed, self.dilution_rate
-        thr = network.positivity_threshold
 
         stoich = network.compute_stoich(params)
         # Phase split: zeroing a reaction's stoichiometry row removes its
@@ -805,16 +804,16 @@ class BiofilmReactor(GradientCheckMixin):
             growth_rxn = jnp.any((stoich > 0) & capped[None, :], axis=1)
 
         def cell(c, st, args):
-            # chemistry in one compartment, with the optional growth throttle
-            r = network.rates(c, args, condition_arrays, 0)
+            # chemistry in one compartment via the canonical dCdt (clip inputs +
+            # positivity limiter), with the optional growth throttle as a
+            # per-reaction rate_scale so uptake and production scale together
+            rate_scale = None
             if has_cap:
                 # space availability: 1 when empty, 0 at the packing limit
                 s = jnp.clip(1.0 - (c @ inv_rho) / packing, 0.0, 1.0)
-                r = r * jnp.where(growth_rxn, s, 1.0)
-            R = st.T @ r
-            if thr is not None:
-                R = network._apply_positivity_limiter(R, c)
-            return R
+                rate_scale = jnp.where(growth_rxn, s, 1.0)
+            return network.dCdt(c, args, condition_arrays, 0,
+                                stoich=st, rate_scale=rate_scale)
 
         def rhs(t, y, args):
             bulk = cell(y[0], stoich_bulk, args)
