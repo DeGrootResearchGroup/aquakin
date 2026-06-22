@@ -190,10 +190,12 @@ def test_constant_exponent_keeps_derivative_finite():
     J = jax.jacfwd(lambda CC: net._rate_kernel(CC, p, ca2, 0))(Cc)
     assert bool(jnp.all(jnp.isfinite(J)))
 
-    # And it matches the scalar Jacobian (bit-identical, since the fix makes the
-    # pow derivative structurally identical to the scalar PowerNode).
+    # And it matches the scalar Jacobian. The *forward* rates are bit-identical,
+    # but the derivative flows through different ops (gather / concatenate vs
+    # slice / stack), so it agrees to machine precision, not bit-for-bit (whether
+    # it lands bit-exact is platform-dependent -- a tight tolerance is correct).
     Js = jax.jacfwd(lambda CC: _scalar_rates(net, CC, p, ca2, 0))(Cc)
-    assert jnp.array_equal(J, Js)
+    assert jnp.allclose(J, Js, rtol=1e-9, atol=1e-12)
 
 
 def test_unsupported_node_falls_back_to_scalar():
