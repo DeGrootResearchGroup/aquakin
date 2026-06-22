@@ -19,18 +19,31 @@ on:
   # immediately instead of waiting for the weekly cron).
   workflow_dispatch:
 
-# Cancel superseded runs on the same PR, but NEVER cancel a push-to-main run.
-# Keying push events on the immutable commit SHA gives every merge its own
-# concurrency group, so a rapid second merge cannot cancel the first merge's
-# slow/validation run and let a regression land unverified. PR events stay keyed
-# on the ref, so a new push to a PR branch still cancels its own superseded runs.
-# Exception: a `labeled` event does NOT cancel an in-progress run -- applying the
-# `full-ci` label while the fast gate is still running would otherwise cancel
-# that required check (the label run skips it), leaving it stuck. The label run
-# queues and adds the slow+validation jobs after.
+# Concurrency groups, by event:
+#  - push to main      -> keyed on the immutable commit SHA, never cancelled, so a
+#    rapid second merge cannot cancel the first merge's slow/validation run and let
+#    a regression land unverified.
+#  - PR `labeled`      -> its OWN group (`fullci-<ref>`), SEPARATE from the fast
+#    gate. Applying the `full-ci` label spins up the slow+validation run
+#    immediately and independently: being a different group it can neither cancel
+#    the fast gate (a required check) nor be queued behind / starved by it.
+#    (The previous design shared the fast gate's group with `cancel-in-progress:
+#    false`, so the label run queued behind the in-progress fast gate and any
+#    later PR event then superseded the single pending slot -- full-ci silently
+#    never ran. Issue: PR #405.)
+#  - other PR events   -> keyed on the ref, cancel-in-progress, so a new push to a
+#    PR branch cancels its own superseded fast-gate runs.
+# cancel-in-progress is true for every PR event: in the fast-gate group a new push
+# supersedes the old run; in the `fullci-<ref>` group a re-applied label supersedes
+# the prior full-ci run (a fresh run, never queued). It is false only for push.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
-  cancel-in-progress: ${{ !(github.event_name == 'pull_request' && github.event.action == 'labeled') }}
+  group: >-
+    ${{ github.workflow }}-${{
+      (github.event_name == 'pull_request' && github.event.action == 'labeled')
+      && format('fullci-{0}', github.ref)
+      || (github.event_name == 'push' && github.sha)
+      || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 # Pin XLA/BLAS to a single thread per process so pytest-xdist workers do not
 # oversubscribe the runner's CPUs (each JAX process otherwise grabs every core,
