@@ -226,9 +226,8 @@ class PlugFlowReactor(GradientCheckMixin):
         """
         from aquakin.integrate._common import _interp_fields_to_scalar
         from aquakin.integrate.forward_sensitivity import (
-            augmented_forward_sensitivity,
-            build_jitted_sensitivity_solve,
             resolve_sens_indices,
+            run_forward_sensitivity,
         )
 
         C0 = jnp.asarray(C0)
@@ -262,33 +261,19 @@ class PlugFlowReactor(GradientCheckMixin):
                 return network.dCdt(C, p, cond, 0) / velocity
             return f_flat
 
-        if sens_atol is not None or param_scale is not None:
-            xs, y_traj, S_traj = augmented_forward_sensitivity(
-                make_f_flat(fields), C0, params, free_idx,
-                t0=0.0, t1=self.length, t_eval=x_eval,
-                rtol=self.rtol, atol_y=atol_y,
-                sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
-                dtmax=self.dtmax, shared_factor=shared_factor,
-            )
-            return PFRSolution(x=xs, C=y_traj, network=network), S_traj
-
         cache_key = (
             tuple(int(i) for i in free_idx), bool(shared_factor),
             None if sens_rtol is None else float(sens_rtol),
         )
-        jitted = self._sens_jit_cache.get(cache_key)
-        if jitted is None:
-            jitted = build_jitted_sensitivity_solve(
-                make_f_flat, free_idx, t0=0.0, t1=self.length, has_t_eval=True,
-                rtol=self.rtol, atol_y=atol_y, sens_rtol=sens_rtol,
-                # The augmented [y; S] solve resolves the sensitivity transient
-                # and is step-hungrier than the primal; use the same 1e6 budget
-                # as BatchReactor (was 1e5, an inconsistency).
-                dtmax=self.dtmax, max_steps=1_000_000, shared_factor=shared_factor,
-            )
-            self._sens_jit_cache[cache_key] = jitted
-
-        xs, y_traj, S_traj = jitted(C0, params, fields, x_eval)
+        # The augmented [y; S] solve resolves the sensitivity transient and is
+        # step-hungrier than the primal, so it uses the 1e6 budget (as Batch).
+        xs, y_traj, S_traj = run_forward_sensitivity(
+            make_f_flat, C0, params, free_idx, fields,
+            t0=0.0, t1=self.length, t_eval=x_eval, rtol=self.rtol, atol_y=atol_y,
+            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
+            dtmax=self.dtmax, max_steps=1_000_000, shared_factor=shared_factor,
+            cache=self._sens_jit_cache, cache_key=cache_key,
+        )
         return PFRSolution(x=xs, C=y_traj, network=network), S_traj
 
     def _build_jitted_solve(self):

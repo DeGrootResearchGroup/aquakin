@@ -687,9 +687,8 @@ class BiofilmReactor(GradientCheckMixin):
             aligned with ``sol.C``.
         """
         from aquakin.integrate.forward_sensitivity import (
-            augmented_forward_sensitivity,
-            build_jitted_sensitivity_solve,
             resolve_sens_indices,
+            run_forward_sensitivity,
         )
 
         params = self._check_params(params)
@@ -723,46 +722,25 @@ class BiofilmReactor(GradientCheckMixin):
             )
             return sol, S_full[:, 0, :, :]
 
-        if sens_atol is not None or param_scale is not None:
+        def make_f_flat(condition_arrays):
             def f_flat(t, y_flat, p):
-                return self._make_rhs(cond, p)(
+                return self._make_rhs(condition_arrays, p)(
                     0.0, y_flat.reshape(n_comp, n), p
                 ).reshape(-1)
-
-            return _finish(*augmented_forward_sensitivity(
-                f_flat, y0_flat, params, free_idx,
-                t0=t0, t1=t1, t_eval=t_eval_arr, rtol=self.rtol, atol_y=atol_y,
-                sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
-                dtmax=self.dtmax, max_steps=self.max_steps, shared_factor=shared_factor,
-            ))
+            return f_flat
 
         cache_key = (
             t0, t1, None if t_eval_arr is None else tuple(t_eval_arr.shape),
             tuple(int(i) for i in free_idx), bool(shared_factor),
             None if sens_rtol is None else float(sens_rtol),
         )
-        jitted = self._sens_jit_cache.get(cache_key)
-        if jitted is None:
-            def make_f_flat(condition_arrays):
-                def f_flat(t, y_flat, p):
-                    return self._make_rhs(condition_arrays, p)(
-                        0.0, y_flat.reshape(n_comp, n), p
-                    ).reshape(-1)
-                return f_flat
-
-            jitted = build_jitted_sensitivity_solve(
-                make_f_flat, free_idx, t0=t0, t1=t1,
-                has_t_eval=t_eval_arr is not None, rtol=self.rtol, atol_y=atol_y,
-                sens_rtol=sens_rtol, dtmax=self.dtmax, max_steps=self.max_steps,
-                shared_factor=shared_factor,
-            )
-            self._sens_jit_cache[cache_key] = jitted
-
-        if t_eval_arr is None:
-            ts, y_traj, S_traj = jitted(y0_flat, params, cond)
-        else:
-            ts, y_traj, S_traj = jitted(y0_flat, params, cond, t_eval_arr)
-        return _finish(ts, y_traj, S_traj)
+        return _finish(*run_forward_sensitivity(
+            make_f_flat, y0_flat, params, free_idx, cond,
+            t0=t0, t1=t1, t_eval=t_eval_arr, rtol=self.rtol, atol_y=atol_y,
+            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
+            dtmax=self.dtmax, max_steps=self.max_steps, shared_factor=shared_factor,
+            cache=self._sens_jit_cache, cache_key=cache_key,
+        ))
 
     def _make_rhs(self, condition_arrays, params):
         """Build the depth-resolved diffusion--reaction RHS ``f(t, y, args)``.

@@ -360,9 +360,8 @@ class BatchReactor(GradientCheckMixin):
             ``(n_t, n_species, n_sens_params)``.
         """
         from aquakin.integrate.forward_sensitivity import (
-            augmented_forward_sensitivity,
-            build_jitted_sensitivity_solve,
             resolve_sens_indices,
+            run_forward_sensitivity,
         )
 
         C0 = jnp.asarray(C0)
@@ -384,43 +383,21 @@ class BatchReactor(GradientCheckMixin):
         if t_eval_arr is not None:
             self._validate_t_eval(t_eval_arr, t0, t1)
 
-        # Non-default sensitivity tolerances bypass the compile cache (they would
-        # bloat the key); the common default path is cached like ``solve``.
-        if sens_atol is not None or param_scale is not None:
-            def f_flat(t, y, p):
-                return network.dCdt(y, p, cond, 0)
-
-            ts, y_traj, S_traj = augmented_forward_sensitivity(
-                f_flat, C0, params, free_idx,
-                t0=t0, t1=t1, t_eval=t_eval_arr,
-                rtol=self.rtol, atol_y=atol_y,
-                sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
-                dtmax=self.dtmax, shared_factor=shared_factor,
-            )
-            return BatchSolution(t=ts, C=y_traj, network=network), S_traj
+        def make_f_flat(condition_arrays):
+            return lambda t, y, p: network.dCdt(y, p, condition_arrays, 0)
 
         cache_key = (
             t0, t1, None if t_eval_arr is None else tuple(t_eval_arr.shape),
             tuple(int(i) for i in free_idx), bool(shared_factor),
             None if sens_rtol is None else float(sens_rtol),
         )
-        jitted = self._sens_jit_cache.get(cache_key)
-        if jitted is None:
-            def make_f_flat(condition_arrays):
-                return lambda t, y, p: network.dCdt(y, p, condition_arrays, 0)
-
-            jitted = build_jitted_sensitivity_solve(
-                make_f_flat, free_idx, t0=t0, t1=t1,
-                has_t_eval=t_eval_arr is not None, rtol=self.rtol, atol_y=atol_y,
-                sens_rtol=sens_rtol, dtmax=self.dtmax, max_steps=1_000_000,
-                shared_factor=shared_factor,
-            )
-            self._sens_jit_cache[cache_key] = jitted
-
-        if t_eval_arr is None:
-            ts, y_traj, S_traj = jitted(C0, params, cond)
-        else:
-            ts, y_traj, S_traj = jitted(C0, params, cond, t_eval_arr)
+        ts, y_traj, S_traj = run_forward_sensitivity(
+            make_f_flat, C0, params, free_idx, cond,
+            t0=t0, t1=t1, t_eval=t_eval_arr, rtol=self.rtol, atol_y=atol_y,
+            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
+            dtmax=self.dtmax, max_steps=1_000_000, shared_factor=shared_factor,
+            cache=self._sens_jit_cache, cache_key=cache_key,
+        )
         return BatchSolution(t=ts, C=y_traj, network=network), S_traj
 
     _validate_t_eval = staticmethod(validate_t_eval)
