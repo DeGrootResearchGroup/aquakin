@@ -259,6 +259,14 @@ class CompiledNetwork:
     # applies one scatter-multiply per condition field, not one per correction.
     _temp_groups: list = field(default_factory=list, init=False, repr=False)
 
+    # Vectorized rate kernel: evaluates all reaction rates in batched ops with
+    # a much smaller traced jaxpr than the per-reaction scalar stack (the same
+    # values -- bit-identical -- but a faster compile, which dominates the cost
+    # of stiff solves and especially their reverse-mode adjoint). Built once in
+    # __post_init__; ``None`` falls back to the scalar path (an unsupported AST
+    # node type, or a network with no reactions).
+    _rate_kernel: "Any | None" = field(default=None, init=False, repr=False)
+
     def __post_init__(self) -> None:
         grouped: dict[str, tuple[list, list, list]] = {}
         for idx, ln_theta, ref_T, cond in self.temperature_corrections:
@@ -270,6 +278,26 @@ class CompiledNetwork:
             (cond, jnp.asarray(idxs), jnp.asarray(ln_thetas), jnp.asarray(ref_Ts))
             for cond, (idxs, ln_thetas, ref_Ts) in grouped.items()
         ]
+        self._build_rate_kernel()
+
+    def _build_rate_kernel(self) -> None:
+        """Build the vectorized rate kernel, or leave it ``None`` to fall back
+        to the scalar per-reaction path (unsupported node type / no reactions)."""
+        from aquakin.core.vector_kernel import (
+            UnsupportedNode,
+            build_vectorized_rates,
+        )
+
+        if not self.rate_asts:
+            self._rate_kernel = None
+            return
+        try:
+            self._rate_kernel = build_vectorized_rates(
+                self.rate_asts, self.reaction_names,
+                self.species_index, self.param_index,
+            )
+        except UnsupportedNode:
+            self._rate_kernel = None
 
     @property
     def n_species(self) -> int:
@@ -566,6 +594,8 @@ class CompiledNetwork:
             )
         if self.temperature_corrections:
             params = self._apply_temperature(params, condition_arrays, loc_idx)
+        if self._rate_kernel is not None:
+            return self._rate_kernel(C, params, condition_arrays, loc_idx)
         return jnp.stack(
             [f(C, params, condition_arrays, loc_idx) for f in self.rate_callables]
         )
