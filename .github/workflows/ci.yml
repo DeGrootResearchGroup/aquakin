@@ -53,30 +53,36 @@ env:
   XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false"
 
 jobs:
-  # ---- Fast merge gate: unit + fast integration -------------------------------
+  # ---- Fast merge gate: unit + fast integration (sharded) ---------------------
   # Runs on every pull request AND every push to main. Excludes the multi-minute
   # stiff/plant solves (marked `slow`) and the published-data `validation` suite,
   # which run in full on merge to main (see the `slow` and `validation` jobs).
-  # This is the required status check that gates merging.
+  #
+  # SHARDED across fresh processes (pytest-split), exactly like the slow/validation
+  # suites and for the same reason: the fast suite grew to ~1300 tests / ~15-39 min
+  # and a single long-lived run accumulated XLA-compilation cache + live JAX
+  # buffers until an xdist worker was OOM-killed by the 16 GB runner (a worker
+  # *crash* on a random lightweight test, varying per run) and/or it hit the time
+  # ceiling -- intermittent red on the required gate with no real regression.
+  # Splitting across N fresh jobs keeps each job's accumulated footprint to ~1/N
+  # (no OOM) and runs the shards in parallel (well under the ceiling). The
+  # per-shard jobs are NOT the required check -- the `fast-gate` aggregator below
+  # is (a stable name that survives shard-count changes); update branch protection
+  # to require `fast gate` instead of the old per-version `fast tests (...)` jobs.
   test:
-    name: fast tests (py${{ matrix.python-version }})
+    name: fast tests (py${{ matrix.python-version }} shard ${{ matrix.group }}/4)
     # Push + PR only; the `schedule` cron and manual `workflow_dispatch` run just
     # the refresh jobs. A bare `labeled` event (someone applied a label) does not
     # re-run the gate -- it already ran on the latest commit, and re-running would
-    # briefly un-green this required check.
+    # briefly un-green the required check.
     if: >-
       github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
       && github.event.action != 'labeled'
     runs-on: ubuntu-latest
-    # The fast gate is ~8 min on a 5-core dev machine but ~15-25 min on the
-    # 4-vCPU hosted runner (the integration tests are real stiff-ODE solves whose
-    # cost is spread across hundreds of tests and does not parallelise away on few
-    # cores) -- still well under the old full "not validation" job (~32 min on
-    # 3.12) since the `slow` files and validation are now deferred to merge. 40
-    # min is a safety ceiling with headroom above the ~15-25 min real cost: as the
-    # integration suite grows, 30 min could creep toward the ceiling and flip red
-    # without a real regression. A run approaching 40 signals a real regression.
-    timeout-minutes: 40
+    # Each shard is ~1/4 of the suite in a fresh process, so its memory stays well
+    # under the runner limit and its wall time well under this ceiling; 25 min is
+    # a safety margin over the few-minute real cost.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -85,6 +91,7 @@ jobs:
         # resource/time limits and was intermittently killed, while 3.11/3.12
         # stayed green and the suite passed locally on 3.10.
         python-version: ["3.11", "3.12"]
+        group: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
 
@@ -100,21 +107,45 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
 
-      - name: Run fast tests (unit + fast integration)
+      - name: Run fast tests shard (unit + fast integration)
         # --timeout fires inside a worker if a single test deadlocks, naming the
         # offending test instead of hanging silently. --max-worker-restart=0 makes
-        # a crashed worker fail the run immediately. Together with timeout-minutes
-        # above, a hang surfaces a clear, fast failure.
-        # Default `-n auto` (load) distribution spreads tests across workers for
-        # the best balance. (`--dist loadscope` was tried to let module-scoped
-        # plant fixtures compile once per module, but once the heavy shared-fixture
-        # tests moved to the merge-only `slow` job it only serialized the
-        # remaining independent parametrized heavy tests onto single workers --
-        # measured ~1.4x slower here, ~4x slower on the slow suite.)
+        # a crashed worker fail the run immediately. `-n auto` spreads the shard's
+        # tests across workers; with ~1/4 of the suite per shard each worker runs
+        # far fewer tests, so the accumulated XLA/JAX memory stays bounded.
+        # pytest-split partitions the marked set across the 4 shards -- by recorded
+        # duration where available in `.test_durations` (currently the slow/
+        # validation tests), else evenly by count, which is what bounds the memory.
         run: >-
           pytest -m "not validation and not slow" -q -n auto
+          --splits 4 --group ${{ matrix.group }}
           --durations=15 --timeout=600 --timeout-method=thread
           --max-worker-restart=0
+
+  # ---- Fast-gate aggregator: the single required status check ------------------
+  # Sharding renames the per-shard jobs (and their count may change), so make ONE
+  # stable job the required check. It succeeds iff every fast shard succeeded (or
+  # was skipped -- a bare `labeled` event skips the gate, which must not block).
+  # `needs.test.result` is the aggregate of the matrix: success only if all shards
+  # pass, failure/cancelled if any did. Always runs on push/PR (never schedule/
+  # dispatch) so it always reports a concrete status for branch protection.
+  fast-gate:
+    name: fast gate
+    needs: test
+    if: >-
+      always() && github.event_name != 'schedule'
+      && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all fast shards to pass
+        run: |
+          result="${{ needs.test.result }}"
+          echo "fast-test matrix result: $result"
+          if [ "$result" = "success" ] || [ "$result" = "skipped" ]; then
+            exit 0
+          fi
+          echo "::error::fast-test shards did not all pass (result: $result)"
+          exit 1
 
   # ---- Full slow integration suite: merge-to-main + opt-in on a PR ------------
   # The multi-minute stiff/plant solves. Runs on every push to main so a

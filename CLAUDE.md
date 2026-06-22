@@ -4452,8 +4452,20 @@ across hundreds of tests — neither a JAX compile-cache (verified: cold ≈ war
 nor concentrating it in a few files makes the whole suite fast.
 
 - The **`test`** job (`pytest -m "not validation and not slow"`, Python
-  3.11/3.12) runs on **every PR and every push** — unit + fast integration. This
-  is the merge gate.
+  3.11/3.12) runs on **every PR and every push** — unit + fast integration. It is
+  the merge gate, and is **`pytest-split`-sharded** (`--splits 4 --group i`, `-n
+  auto` within each shard) for the *same* reason the slow/validation suites are:
+  the fast suite grew to ~1300 tests and a single long-lived run accumulated XLA
+  cache + live JAX buffers until an xdist worker was OOM-killed (a worker *crash*
+  on a random lightweight test) and/or it hit the time ceiling — intermittent red
+  on the required gate with no real regression. Four fresh shards × 2 Python
+  versions bound each shard's footprint to ~1/4 (no OOM) and run in parallel (well
+  under the ceiling). The sharded per-version jobs are **not** the required check —
+  the **`fast-gate`** aggregator (job name **`fast gate`**) is: it `needs:` the
+  shard matrix and is green iff every shard succeeded (or was skipped — a bare
+  `labeled` event skips the gate, which must not block). It is a *stable* required-
+  check name that survives shard-count changes, so **branch protection requires
+  `fast gate`**, not the per-shard `fast tests (...)` jobs.
 - The **`slow`** job (`pytest -m "slow and not validation"`, 3.11/3.12) and
   **`validation`** job (`pytest -m validation`, 3.12) run **only on push to
   `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
@@ -4510,9 +4522,15 @@ nor concentrating it in a few files makes the whole suite fast.
     only for changes that cannot reach the slow/validation paths (docs, a new
     isolated unit, a fast-gated network add).
 
-**Branch protection:** the required status checks must be the fast-gate jobs
-(`fast tests (py3.11)` / `(py3.12)`) — **not** `slow`/`validation`, which do not
-run on PRs and would otherwise block every PR forever.
+**Branch protection:** the required status check must be the **`fast gate`**
+aggregator job — **not** the per-shard `fast tests (py3.x shard i/4)` jobs (their
+names/count change when the shard count is tuned) and **not** `slow`/`validation`
+(which do not run on PRs and would otherwise block every PR forever). The
+`fast gate` job is green only when every fast shard passes, so requiring it gives
+the same gate with a stable name. (When the fast gate was sharded, the old
+required checks `fast tests (py3.11)` / `(py3.12)` ceased to exist; branch
+protection must be repointed to `fast gate` or merges block forever waiting on
+checks that never report.)
 
 A green fast gate is the merge gate. Python 3.10 stays
 install-compatible (`requires-python >= 3.10`) but is **not** CI-tested:
