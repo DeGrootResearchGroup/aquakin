@@ -106,8 +106,8 @@ def _discrete_adjoint_solve(
     The forward pass is a robust adaptive diffrax solve with ``solver``, forced
     to land steps exactly on the observation times (so each is a step boundary
     and the adjoint needs no interpolation). The custom VJP is the exact
-    discrete adjoint, evaluated by a backward scan of bounded transposed solves
-    -- finite for stiff networks at any step size, with no ``dtmax`` cap.
+    discrete adjoint, evaluated by a backward recurrence of bounded transposed
+    solves -- finite for stiff networks at any step size, with no ``dtmax`` cap.
 
     Everything here is method-independent; the only per-method piece is
     ``step_adjoint(...) -> (lam_n, dpar)``, the single-step transposed-solve body
@@ -116,9 +116,13 @@ def _discrete_adjoint_solve(
     derivatives). With ``save_stages=True`` the forward stores each step's
     dense-output stage derivatives ``k`` and the driver passes them as a trailing
     argument to ``step_adjoint`` (so the ESDIRK body needs no Newton recompute).
-    It is invoked under :func:`jax.lax.cond` so padded /
-    invalid trajectory slots are skipped and the backward cost tracks the real
-    step count, not the allocated ``max_steps`` buffer.
+    The backward runs as a :func:`jax.lax.fori_loop` bounded by the actual
+    accepted-step count (``sum(isfinite(ts))``), not the allocated ``max_steps``
+    buffer -- diffrax saves the accepted steps contiguously from index 0, so the
+    padded tail is never traversed and the backward cost tracks the real step
+    count even when ``max_steps`` is a loose upper bound. A :func:`jax.lax.cond`
+    still gates each visited step so a zero-width step (e.g. a save time landing
+    on a boundary) skips the transposed solve while still carrying its cotangent.
     """
     t0, t1 = float(t_span[0]), float(t_span[1])
     n = y0.shape[0]
@@ -191,8 +195,8 @@ def _discrete_adjoint_solve(
             )
             ybar0_obs = ybar0_obs + jnp.where(idx[i] == 0, ybar[i], 0.0)
 
-        def body(lam_pbar, k):
-            lam, pbar = lam_pbar
+        def back_step(carry, k):
+            lam, pbar = carry
             ok = valid[k] & (dts[k] > 0)
             lam_k = lam + injected[k]            # add this step's observation cotangent
 
@@ -205,12 +209,26 @@ def _discrete_adjoint_solve(
                         y_prev[k], ys[k], params_, dts[k], lam_k)
                 return lam_n, pbar + dpar
 
-            lam_new, pbar_new = jax.lax.cond(ok, do, lambda _: (lam_k, pbar), None)
-            return (lam_new, pbar_new), None
+            return jax.lax.cond(ok, do, lambda _: (lam_k, pbar), None)
 
-        (lam0, pbar), _ = jax.lax.scan(
-            body, (jnp.zeros((n,), dtype=ys.dtype), jnp.zeros_like(params_)),
-            jnp.arange(K - 1, -1, -1),
+        # diffrax saves accepted steps contiguously from index 0 and pads the tail
+        # with inf, so the real steps are exactly indices 0..n_steps-1. The backward
+        # recurrence is serial, so a ``fori_loop`` bounded by the actual step count
+        # (a traced bound, lowered to a ``while_loop``) walks ONLY the real steps,
+        # descending k = n_steps-1..0 -- the same order, on the same steps, as a
+        # static scan over the whole buffer visited its non-padded slots. The padded
+        # slots are exact no-ops (their injected cotangent is zero and the step
+        # adjoint is gated off), so dropping them is bit-identical: it only removes
+        # the ``max_steps - n_steps`` trivial iterations, which dominate the walk
+        # when ``max_steps`` is sized as a loose upper bound on the step count. (A
+        # data-dependent loop bound is not itself reverse-differentiable, so the
+        # backward is no longer double-reverse-differentiable; second-order AD
+        # through the stiff solve is avoided elsewhere regardless.)
+        n_steps = jnp.sum(valid).astype(jnp.int32)
+        lam0, pbar = jax.lax.fori_loop(
+            0, n_steps,
+            lambda i, carry: back_step(carry, n_steps - 1 - i),
+            (jnp.zeros((n,), dtype=ys.dtype), jnp.zeros_like(params_)),
         )
         return lam0 + ybar0_obs, pbar
 

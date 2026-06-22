@@ -206,6 +206,33 @@ def test_esdirk_analytic_trajectory_gradient(simple_network):
     assert abs(float(g) - exact) / abs(exact) < 1e-5
 
 
+@pytest.mark.parametrize("solve", [implicit_euler_adjoint_solve, esdirk_adjoint_solve])
+def test_gradient_independent_of_max_steps(simple_network, solve):
+    # The backward recurrence is bounded by the real accepted-step count, not the
+    # allocated ``max_steps`` buffer: diffrax saves accepted steps contiguously
+    # from index 0 and pads the tail, and the bounded loop never visits the
+    # padding. So a generously-oversized ``max_steps`` (a loose upper bound) must
+    # give the *bit-identical* gradient of a tightly-sized one -- the only effect
+    # of the extra capacity is the never-traversed padding.
+    rhs = _decay_rhs(simple_network)
+    C0 = jnp.array([1.0, 0.0])
+    p = simple_network.default_parameters()
+    t_obs = jnp.array([2.0, 5.0, 9.0, 15.0])
+
+    def loss(pp, max_steps):
+        ys = solve(rhs, C0, pp, (0.0, 15.0), t_obs,
+                   rtol=1e-8, atol=1e-10, max_steps=max_steps)
+        return jnp.sum(ys[:, 0] ** 2)
+
+    # Both bounds exceed the real step count (implicit Euler, first order, takes
+    # the most), so both solves share the identical accepted-step trajectory and
+    # differ only in never-traversed padding (~10x more in the loose case).
+    g_tight = jax.grad(loss)(p, 20_000)[0]
+    g_loose = jax.grad(loss)(p, 200_000)[0]
+    assert jnp.isfinite(g_tight)
+    assert float(g_tight) == float(g_loose)   # bit-identical, not merely close
+
+
 def test_esdirk_equals_autodiff_through_same_solve(simple_network):
     # Same machine-precision guard as the implicit-Euler one, but for the
     # Kvaerno5 discrete adjoint: it must equal jax.grad through the identical
