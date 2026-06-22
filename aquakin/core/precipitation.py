@@ -42,12 +42,11 @@ from typing import Callable
 import jax.numpy as jnp
 
 from aquakin.core.ph_solver import (
-    _R_SI,
-    _T_BASE,
     _log10_gamma,
     debye_huckel_A,
     equilibrium_constants,
 )
+from aquakin.core.temperature import van_t_hoff_factor
 
 # Free-ion fraction of a total acid/base system as a function of h = [H+].
 # Each returns the fraction present as the fully de/protonated ion the minerals
@@ -193,9 +192,9 @@ def build_precipitation_derived_fn(
             return jnp.power(10.0, _log10_gamma(z2, sqrt_I, I, A, model))
 
         # van't Hoff temperature correction of each Ksp (unity when dH_sp = 0):
-        # Ksp(T) = Ksp(T_ref) * exp(dH_sp/R * (1/T_ref - 1/T)). Same form and
-        # reference temperature as the dissociation constants above.
-        vant_hoff = (1.0 / _T_BASE - 1.0 / T_kelvin) / _R_SI
+        # Ksp(T) = Ksp(T_ref) * exp(dH_sp * factor). Same form and reference
+        # temperature as the dissociation constants above.
+        vant_hoff = van_t_hoff_factor(T_kelvin)
 
         out = {}
         for name, Ksp_ref, dH_sp, order, nu, ions, form in minerals:

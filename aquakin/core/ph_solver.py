@@ -68,10 +68,17 @@ import math
 import jax
 import jax.numpy as jnp
 
-# Universal gas constant in J / (mol K), used in the van't Hoff correction.
-_R_SI = 8.314462618
-_T_BASE = 298.15  # reference temperature for the tabulated pK values (K)
-_LN10 = jnp.log(10.0)
+from aquakin.core.temperature import (
+    R_GAS as _R_SI,
+    T_REF_THERMO as _T_BASE,
+    LN10 as _LN10,
+    van_t_hoff_factor,
+)
+
+# ``_R_SI`` (universal gas constant, J/(mol K)), ``_T_BASE`` (reference
+# temperature for the tabulated pK values, K) and ``_LN10`` are re-exported here
+# under their historic private names; the canonical definitions live in
+# ``core/temperature.py`` and are imported by the precipitation engines too.
 
 # Convergence bracket for the charge balance, in ``u = ln[H+]``. The residual
 # ``f([H+])`` runs from ``+inf`` (as h->0) to ``-inf`` (as h->inf) -- the water
@@ -117,7 +124,7 @@ def equilibrium_constants(T_kelvin):
         Mapping from system key (see :data:`_PK_BASE`) to the dissociation
         constant at ``T_kelvin``.
     """
-    factor = (1.0 / _T_BASE - 1.0 / T_kelvin) / _R_SI
+    factor = van_t_hoff_factor(T_kelvin)
     out = {}
     for key, (pk, dH) in _PK_BASE.items():
         out[key] = jnp.power(10.0, -pk) * jnp.exp(dH * factor)
