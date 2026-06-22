@@ -314,6 +314,11 @@ class CalibrationResult:
     message : str
         Optimiser status message.
     n_iter : int
+        Optimiser iteration count: ``nit`` for the L-BFGS-B optimiser, and the
+        Jacobian-evaluation count (``njev``, ~one per trust-region iteration) for
+        the Gauss-Newton least-squares optimiser, which exposes no direct
+        iteration count. Either way it is an iteration-scale figure, not the raw
+        residual/function-evaluation count.
     parameter_names : list[str]
         Ordered free-parameter names. Matches the rows / cols of
         ``posterior_cov`` and ``hessian_unconstrained`` when present.
@@ -1114,8 +1119,14 @@ def calibrate(
             method="trf", bounds=_ls_bounds, max_nfev=max_iter,
             xtol=tol, ftol=tol,
         )
+        # ``n_iter`` reports optimiser ITERATIONS, consistent with L-BFGS-B's
+        # ``nit`` above. scipy.least_squares exposes no iteration count, so use the
+        # Jacobian-evaluation count ``njev`` (~one per trust-region iteration)
+        # rather than ``nfev`` (raw residual evaluations, which also counts
+        # rejected trial steps and so is a different, larger scale).
+        n_iter_ls = int(r.njev) if r.njev is not None else int(r.nfev)
         return _OptOut(np.asarray(r.x), float(r.cost), bool(r.success),
-                       str(r.message), int(r.nfev))
+                       str(r.message), n_iter_ls)
 
     # Guard against the silent-NaN footgun: evaluate the gradient/Jacobian once
     # at the start point and fail loudly with the remedy if it is non-finite

@@ -4572,8 +4572,16 @@ nitrogen cascades are written here **branch-free with `jnp.minimum`** (the
 unrolled conditionals are mathematically a greedy allocation), so the maps are
 AD-clean. Both **conserve total COD** (`asm2adm` minus the electron-acceptor
 demand; `adm2asm` minus the stripped `S_h2`+`S_ch4`) **and total nitrogen** —
-verified to `rel 1e-6` in `tests/integration/test_interfaces.py`. Only the BSM2
-`fdegrade = 0` case is implemented (other values raise `NotImplementedError`).
+verified to `rel 1e-6` in `tests/integration/test_interfaces.py`. The COD
+conservation holds whenever the `asm2adm` electron-acceptor (O₂+NO₃) demand does
+not exceed the degradable COD it draws from (`SS+XS+XB_H+XB_A`) — always true for
+a real near-anoxic digester feed; in the pathological case (recycled nitrate far
+exceeding the substrate) the surplus demand is dropped and COD is over-conserved,
+mirroring the reference. Construct `ASM1toADM1(strict=True)` to instead raise
+(jit/AD-safe, via `eqx.error_if`) when the demand is not fully absorbed, asserting
+the feed stays in the intended regime (default `False` is bit-faithful to the
+reference). Only the BSM2 `fdegrade = 0` case is implemented (other values raise
+`NotImplementedError`).
 The charge balances (inorganic carbon + `S_cat`/`S_an` in `asm2adm`, alkalinity
 `SALK` in `adm2asm`) are evaluated at the **digester pH**, fed back from the
 digester's own state-derived (charge-balance speciation) pH each RHS — as in the

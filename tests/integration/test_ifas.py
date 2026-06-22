@@ -136,6 +136,26 @@ def test_ifas_removes_more_than_equivalent_cstr(asm1):
     assert np.isfinite(ss_i) and ss_i >= 0.0
 
 
+def test_ifas_plant_evaluates_kla_history(asm1):
+    """The BSM evaluator must score a plant containing an IFAS tank.
+
+    ``_as_reactors`` collects the IFAS unit (it carries an ``aeration`` spec) and
+    ``_kla_history`` then reads its ``_controlled_kla`` / ``_kla_vec`` -- which the
+    shared ``AerationUnit`` mixin supplies, so the previously-missing accessors no
+    longer raise ``AttributeError`` mid-evaluation. Open-loop, so the constant-kLa
+    tiling path is exercised (and ``_controlled_kla`` is read for the controlled
+    check)."""
+    from aquakin.plant.bsm.evaluation import _as_reactors, _kla_history
+    p = _plant(_ifas(asm1, aeration=Aeration(kla=600.0)), asm1)
+    sol = p.solve(t_span=(0.0, 0.5), t_eval=jnp.array([0.25, 0.5]),
+                  y0=p.initial_state())
+    reactors = _as_reactors(p)
+    assert "r" in reactors                       # the IFAS tank is a reactor
+    kla = _kla_history(p, sol, p.default_parameters(), reactors)
+    assert kla.shape == (2, 1)
+    assert np.all(np.isfinite(np.asarray(kla))) and float(kla[0, 0]) == 600.0
+
+
 @pytest.mark.slow
 def test_grad_through_ifas_plant_is_finite(asm1):
     """jax.grad flows through a plant containing an IFAS unit (the biofilm
