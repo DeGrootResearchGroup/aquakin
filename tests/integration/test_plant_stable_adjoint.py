@@ -543,3 +543,76 @@ def test_stable_adjoint_colored_jacobian_flow_setpoint_matches_dense():
     assert np.isfinite(g_colored)
     assert g_colored != 0.0                                 # RAS moves M (dM/dtheta != 0)
     assert g_colored == pytest.approx(g_dense, rel=1e-8)
+
+
+@pytest.mark.slow
+def test_stable_adjoint_accepts_kvaerno3_and_factormax():
+    """``solver=``/``factormax=`` are supported on the ``stable_adjoint`` path.
+
+    The discrete adjoint builds its backward from the forward solver's Butcher
+    tableau generically, so a cheaper 4-stage ``Kvaerno3`` (and a ``factormax``
+    cap on the PID step growth) is a valid forward, matching the optimized
+    ``forward_fast`` configuration. The gradient stays finite and agrees with the
+    default ``Kvaerno5`` discrete adjoint to the two methods' truncation
+    difference (they differ in the realized step sequence, each exact for its
+    own)."""
+    asm1 = aquakin.load_network("asm1")
+    plant = build_bsm1(asm1)
+    plant.add_influent("influent", load_bsm1_influent("dry", asm1))
+    y0 = bsm1_warm_start(plant)
+    base = plant.default_parameters()
+    gidx = plant.parameter_index("asm1.muA")
+    theta0 = float(base[gidx])
+    T = 0.5
+    kw = dict(rtol=1e-4, atol=1e-3, max_steps=20_000)
+
+    def g(theta, **solve_kw):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve((0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
+                          gradient="stable_adjoint", **kw, **solve_kw)
+        return sol.C_named("tank5", "SNO")[-1]
+
+    g5 = float(jax.grad(lambda th: g(th))(theta0))                  # Kvaerno5
+    g3 = float(jax.grad(lambda th: g(th, solver=diffrax.Kvaerno3()))(theta0))
+    g3f = float(jax.grad(
+        lambda th: g(th, solver=diffrax.Kvaerno3(), factormax=3.0))(theta0))
+    assert np.isfinite(g3) and np.isfinite(g3f)
+    assert g3 != 0.0
+    # Same gradient to the ESDIRK order difference (both exact discrete adjoints).
+    assert g3 == pytest.approx(g5, rel=2e-3)
+    assert g3f == pytest.approx(g5, rel=2e-3)
+
+
+@pytest.mark.slow
+def test_forward_paths_agree_no_config_drift():
+    """The three forward integrators -- the ``jax_adjoint`` forward solve, the lean
+    ``forward_fast`` solve, and the ``stable_adjoint`` *forward* pass -- all build
+    their solver + step controller from the shared single-source-of-truth helpers
+    (``build_implicit_solver`` / ``build_step_controller``), so they realize the
+    same primal trajectory. If any path's per-step configuration (decoupled
+    Newton, colored Jacobian, ESDIRK order, factormax) is changed without the
+    others, the primals diverge and this fails -- the regression guard the
+    silently-drifted adjoint forward never had.
+    """
+    asm1 = aquakin.load_network("asm1")
+    plant = build_bsm1(asm1)
+    plant.add_influent("influent", load_bsm1_influent("dry", asm1))
+    y0 = bsm1_warm_start(plant)
+    base = plant.default_parameters()
+    T = 1.0
+    kw = dict(rtol=1e-5, atol=1e-3, max_steps=50_000)
+    teval = jnp.array([0.5, T])
+
+    def final(**solve_kw):
+        sol = plant.solve((0.0, T), t_eval=teval, params=base, y0=y0, **kw,
+                          **solve_kw)
+        return np.asarray(sol.state)
+
+    jax_fwd = final(gradient="jax_adjoint")
+    fast = final(forward_fast=True)
+    stable_fwd = final(gradient="stable_adjoint")
+    assert np.all(np.isfinite(jax_fwd))
+    # Same primal to the shared integrator tolerance: the adjoint bookkeeping and
+    # the lean forward_fast machinery do not change the realized trajectory.
+    assert np.allclose(jax_fwd, fast, rtol=1e-3, atol=1e-3)
+    assert np.allclose(jax_fwd, stable_fwd, rtol=1e-3, atol=1e-3)

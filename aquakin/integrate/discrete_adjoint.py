@@ -57,13 +57,15 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 import diffrax
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-import optimistix
 
-from aquakin.integrate._common import validate_t_eval
+from aquakin.integrate._common import (
+    build_implicit_solver,
+    build_step_controller,
+    validate_t_eval,
+)
 
 # Shared forward-solve defaults for both discrete-adjoint solvers.
 _DEFAULT_RTOL = 1e-6              # PID controller relative tolerance
@@ -72,18 +74,11 @@ _DEFAULT_DT0 = 1e-6             # initial step (the adaptive controller grows it
 _DEFAULT_MAX_STEPS = 200_000   # saved-trajectory buffer the backward scan walks
 
 
-def _implicit_tols(rtol: float, atol: float):
-    """Explicit root-finder tolerances for an implicit diffrax solver.
-
-    The forward solve here pairs an implicit solver with a step-clipping
-    controller. Older diffrax (e.g. 0.7.0, the newest that still supports
-    Python 3.10) does not treat ``ClipStepSizeController`` as adaptive, so it
-    refuses an implicit solver whose root-finder tolerances are unspecified
-    (they default to a "use the stepsize tolerance" sentinel it cannot resolve
-    for a non-adaptive controller). Setting them explicitly makes the solve
-    valid on every diffrax version.
-    """
-    return diffrax.VeryChord(rtol=rtol, atol=atol, norm=optimistix.max_norm)
+# The decoupled-Newton root finder, the colored-Jacobian root finder, and the PID
+# controller are all built by the SHARED helpers ``build_implicit_solver`` /
+# ``build_step_controller`` (``aquakin.integrate._common``), the single source of
+# truth this forward pass and ``_run_diffeqsolve`` both use -- so the two paths'
+# per-step configuration cannot silently drift.
 
 
 def _discrete_adjoint_solve(
@@ -100,6 +95,7 @@ def _discrete_adjoint_solve(
     dt0,
     max_steps,
     save_stages=False,
+    factormax=None,
 ):
     """Shared forward + discrete-adjoint backward harness for both solvers.
 
@@ -135,9 +131,12 @@ def _discrete_adjoint_solve(
     teval = jnp.asarray([t1] if final_only else t_eval, dtype=jnp.result_type(float))
 
     term = diffrax.ODETerm(lambda t, y, a: rhs(t, y, a))
+    # The PID controller core comes from the shared builder (so factormax / the
+    # tolerances track the forward path), wrapped in a ClipStepSizeController that
+    # forces steps to land on the observation times -- so each is a step boundary
+    # and the discrete adjoint needs no interpolation.
     controller = diffrax.ClipStepSizeController(
-        diffrax.PIDController(rtol=rtol, atol=atol), step_ts=teval
-    )
+        build_step_controller(rtol, atol, factormax=factormax), step_ts=teval)
 
     # ``dense=save_stages`` makes diffrax also store each step's dense-output
     # info, which for a Runge-Kutta solver carries the stage derivatives ``k`` --
@@ -347,7 +346,11 @@ def implicit_euler_adjoint_solve(
         atol = _augment_atol(atol)
     primal = primal_rhs if primal_rhs is not None else rhs
     n = y0.shape[0]
-    solver = diffrax.ImplicitEuler(root_finder=_implicit_tols(rtol, atol))
+    # Decoupled-Newton root finder from the shared builder (force_root_finder so
+    # the supplied ImplicitEuler gets explicit tolerances for the step-clipping
+    # controller), matching the forward path's per-stage Newton configuration.
+    solver = build_implicit_solver(
+        rtol, atol, solver=diffrax.ImplicitEuler(), force_root_finder=True)
 
     def step_adjoint(y_prev_k, y_k, params_, dt, lam_k):
         # Implicit Euler step y_{n+1} = y_n + dt f(y_{n+1}); its adjoint uses the
@@ -430,6 +433,8 @@ def esdirk_adjoint_solve(
     time_dependent: bool = False,
     primal_rhs: Optional[Callable] = None,
     jacobian_builder: Optional[Callable] = None,
+    forward_root_finder: Optional[object] = None,
+    factormax: Optional[float] = None,
 ) -> jnp.ndarray:
     """Cap-free reverse-mode gradient through a high-order ESDIRK solve.
 
@@ -508,14 +513,19 @@ def esdirk_adjoint_solve(
     # ``primal`` drives the forward solve + the df/dy stage work (it may cache a
     # state-invariant sub-computation); ``rhs`` always supplies the df/dtheta vjp.
     primal = primal_rhs if primal_rhs is not None else rhs
-    if solver is None:
-        solver = diffrax.Kvaerno5()
-    # Set explicit root-finder tolerances (see _implicit_tols) so the implicit
-    # solve is valid on diffrax versions that don't treat ClipStepSizeController
-    # as adaptive (older diffrax on Python 3.10).
-    solver = eqx.tree_at(
-        lambda s: s.root_finder, solver, _implicit_tols(rtol, atol)
-    )
+    # Build the forward solver from the SHARED single-source-of-truth helper, so
+    # it tracks the forward path's per-step configuration (decoupled Newton, a
+    # colored root finder, the ESDIRK order) and the two paths cannot drift.
+    # ``force_root_finder`` injects explicit root-finder tolerances even into a
+    # supplied solver (e.g. the cheaper Kvaerno3), which the step-clipping
+    # controller below requires. A ``forward_root_finder`` is the colored
+    # ``ColoredVeryChord`` for the *autonomized* forward RHS (the solve here
+    # integrates ``[y; tau]`` when ``time_dependent``); its superset pattern is
+    # exact and a missed coupling only costs steps (the forward chord
+    # self-corrects), so it never affects the result.
+    solver = build_implicit_solver(
+        rtol, atol, solver=solver, colored_root_finder=forward_root_finder,
+        force_root_finder=True)
     A, b, diag_np, s = _esdirk_tableau(solver)
     diag = jnp.asarray(diag_np)
     n = y0.shape[0]
@@ -564,6 +574,6 @@ def esdirk_adjoint_solve(
         primal, y0, params, t_span, t_eval,
         solver=solver, step_adjoint=step_adjoint,
         rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
-        save_stages=True,
+        save_stages=True, factormax=factormax,
     )
     return out[..., :n0] if time_dependent else out

@@ -3038,8 +3038,12 @@ class Plant:
             ratio = None
             if ok and mode == "auto":
                 ratio = self._colored_build_speedup(rhs_aug_y, y0_aug, builder)
+            # ``rf`` (the ColoredVeryChord for the autonomized forward RHS) is
+            # cached too: its seed/coloring/pattern drive the backward ``builder``,
+            # and the object itself is reused as the *forward* solve's root finder
+            # so the adjoint's forward pass colors its per-step Jacobian as well.
             self._colored_adjoint_builder = (
-                builder if ok else None, n_colors, ok, ratio)
+                builder if ok else None, n_colors, ok, ratio, rf if ok else None)
 
         return self._colored_adjoint_builder[0]
 
@@ -3087,7 +3091,7 @@ class Plant:
         cab = self._colored_adjoint_builder
         if cab is None:
             return None
-        _builder, _nc, ok, ratio = cab
+        _builder, _nc, ok, ratio, _rf = cab
         if not ok:
             return ("dense", "guard failed")
         if ratio is None:
@@ -3909,13 +3913,13 @@ class Plant:
                     "event= (e.g. a steady-state terminating event) is only "
                     "supported on the forward gradient='jax_adjoint' path."
                 )
-            if solver is not None or factormax is not None:
-                raise ValueError(
-                    "solver=/factormax= are only supported on the forward "
-                    "gradient='jax_adjoint' path; gradient='stable_adjoint' uses "
-                    "its own ESDIRK discrete-adjoint integrator and step control. "
-                    "Drop them or use gradient='jax_adjoint'."
-                )
+            # solver=/factormax= ARE supported here: the discrete adjoint builds
+            # its backward from the forward solver's Butcher tableau generically
+            # (any ESDIRK with a tableau -- e.g. the cheaper 4-stage Kvaerno3 in
+            # place of the default 7-stage Kvaerno5), and factormax caps the
+            # per-step growth of its PID controller, exactly as on the forward
+            # path. A non-ESDIRK solver raises a clear error from the tableau
+            # extraction. ``solver=None`` keeps the default Kvaerno5.
             # colored_jacobian colors the per-step df/dy Jacobian build in the
             # BACKWARD pass (its dominant cost), exact (machine-precision) vs dense.
             # On a concrete solve, derive + cache the colored builder and -- for
@@ -3938,6 +3942,19 @@ class Plant:
                      or (colored_jacobian == "auto" and cab[3] is not None
                          and cab[3] > self._COLORED_BACKWARD_MARGIN)))  # auto: pays
             jac_builder = cab[0] if use_colored else None
+            # The infrastructure to also color the *forward* solve's per-step
+            # implicit Jacobian is in place (``cab[4]`` is the ColoredVeryChord for
+            # the autonomized forward RHS, and ``esdirk_adjoint_solve`` accepts it
+            # as ``forward_root_finder``), but it is NOT auto-enabled: unlike the
+            # colored *backward* (which feeds J directly into the transposed solve,
+            # exact on a superset pattern), the colored forward feeds J into an
+            # iterative chord whose decoupled-Newton convergence point depends on
+            # the J approximation, so a colored-vs-dense difference shifts the
+            # forward trajectory at the ~Newton-tolerance level (~1e-4) -- it would
+            # break the bit-identical ``colored_jacobian=True`` == dense invariant.
+            # Enabling it as a default needs the structural pattern reconciled so
+            # the colored and dense forward chords converge identically.
+            fwd_root_finder = None
             # Cap-free reverse-mode gradient through the stiff plant solve: the
             # forward is a robust adaptive ESDIRK solve and the reverse is the
             # per-step transposed-solve discrete adjoint over the saved
@@ -3956,9 +3973,14 @@ class Plant:
             teval_key, teval_concrete = _concrete_teval_key(t_eval)
             under_trace = (isinstance(params, jax.core.Tracer)
                            or isinstance(y0, jax.core.Tracer))
+            # The forward ESDIRK solver (e.g. the cheaper Kvaerno3) and factormax
+            # change the compiled solve, so they key the cache -- the solver by
+            # class, exactly as the forward jax_adjoint path does.
+            solver_key = type(solver).__name__ if solver is not None else None
             cache_key = (None if (settings is None or not teval_concrete
                                   or under_trace)
-                         else ("stable_adjoint", t0, t1, teval_key, settings))
+                         else ("stable_adjoint", t0, t1, teval_key, settings,
+                               use_colored, solver_key, factormax))
             with friendly_solve_errors(max_steps, what="plant solve"):
                 if cache_key is not None:
                     jitted = self._jit_cache.get(cache_key)
@@ -3966,6 +3988,8 @@ class Plant:
                         jitted = self._build_jitted_stable_adjoint_solve(
                             t0, t1, t_eval,
                             rtol=rtol, atol=atol_eff, max_steps=max_steps,
+                            forward_root_finder=fwd_root_finder,
+                            solver=solver, factormax=factormax,
                         )
                         self._jit_cache[cache_key] = jitted
                     ys = jitted(y0, params)
@@ -3973,11 +3997,14 @@ class Plant:
                     # Under-trace (the calibration-gradient path): not cached, but
                     # still hoists the recycle probe via the cached-map primal RHS
                     # (the same exact split as the jitted closure) and uses the
-                    # colored backward Jacobian builder when requested.
+                    # colored backward Jacobian builder + colored forward root
+                    # finder when requested.
                     ys = self._esdirk_stable_adjoint(
                         y0, params, t0, t1, t_eval,
                         rtol=rtol, atol=atol_eff, max_steps=max_steps,
-                        jacobian_builder=jac_builder)
+                        jacobian_builder=jac_builder,
+                        forward_root_finder=fwd_root_finder,
+                        solver=solver, factormax=factormax)
             if t_eval is None:
                 ts = jnp.asarray([t1])
                 ys = ys[None, :]
@@ -4223,7 +4250,8 @@ class Plant:
         return _solve
 
     def _build_jitted_stable_adjoint_solve(
-        self, t0, t1, t_eval, *, rtol, atol, max_steps,
+        self, t0, t1, t_eval, *, rtol, atol, max_steps, forward_root_finder=None,
+        solver=None, factormax=None,
     ):
         """Build the jit-compiled cap-free stable-adjoint solve for one signature.
 
@@ -4241,11 +4269,15 @@ class Plant:
         def _solve(y0, params):
             return self._esdirk_stable_adjoint(
                 y0, params, t0, t1, t_eval,
-                rtol=rtol, atol=atol, max_steps=max_steps)
+                rtol=rtol, atol=atol, max_steps=max_steps,
+                forward_root_finder=forward_root_finder,
+                solver=solver, factormax=factormax)
         return _solve
 
     def _esdirk_stable_adjoint(self, y0, params, t0, t1, t_eval, *,
-                               rtol, atol, max_steps, jacobian_builder=None):
+                               rtol, atol, max_steps, jacobian_builder=None,
+                               forward_root_finder=None, solver=None,
+                               factormax=None):
         """Cap-free reverse-mode plant solve with the cached recycle map hoisted
         out of the backward pass.
 
@@ -4288,9 +4320,11 @@ class Plant:
 
         return esdirk_adjoint_solve(
             rhs, y0, params, (t0, t1), t_eval,
+            solver=solver, factormax=factormax,
             rtol=rtol, atol=atol, max_steps=max_steps,
             time_dependent=True, primal_rhs=primal_rhs,
             jacobian_builder=jacobian_builder,
+            forward_root_finder=forward_root_finder,
         )
 
     def run_to_steady_state(
