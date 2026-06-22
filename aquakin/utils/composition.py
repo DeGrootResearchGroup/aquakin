@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from aquakin.core.hints import did_you_mean
+
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
 
@@ -245,9 +247,7 @@ def composition_table(network: "CompiledNetwork", *,
     """
     builder = _BUILDERS.get(network.name)
     if builder is None:
-        import difflib
-        hint = difflib.get_close_matches(network.name, list(_BUILDERS), n=3)
-        suffix = f" Did you mean: {', '.join(hint)}?" if hint else ""
+        suffix = did_you_mean(network.name, list(_BUILDERS))
         raise KeyError(
             f"No shipped composition table for network '{network.name}'. "
             f"Tables: {sorted(_BUILDERS)}.{suffix}"
