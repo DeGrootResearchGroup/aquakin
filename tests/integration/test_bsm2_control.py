@@ -201,3 +201,16 @@ def test_ad_flows_through_control_bus(closed_plant, asm1, adm1):
     so4_idx = (plant._state_layout["tank4"][0]
                + asm1.species_index["SO"])
     assert float(jnp.abs(g[so4_idx])) > 0.0
+
+
+def test_controller_rejects_mismatched_sensed_network(asm1):
+    """The sensed stream must share the controller's network species ordering;
+    otherwise the resolved measured-species index would read the wrong species, so
+    the controller raises instead of silently mis-sensing."""
+    ctrl = _controller(asm1)
+    asm3 = aquakin.load_network("asm3")    # a different species ordering
+    bad = {"measured": Stream(Q=jnp.asarray(1.0),
+                              C=asm3.default_concentrations(), network=asm3)}
+    with pytest.raises(ValueError, match="wrong species"):
+        ctrl._output(ctrl.initial_state(), bad)
+    ctrl._output(ctrl.initial_state(), _so_stream(asm1, 2.0))   # matching: OK

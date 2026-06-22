@@ -370,6 +370,18 @@ class MineralSpec(BaseModel):
             raise ValueError(
                 f"mineral '{self.name}' supersaturation_form must be 'power' or "
                 f"'bounded'; got {self.supersaturation_form!r}.")
+        if (self.mode == "kinetic" and self.supersaturation_form == "power"
+                and self.order < 1.0):
+            # The power driver sign(sigma)*|sigma|^order has derivative
+            # order*|sigma|^(order-1) -> infinity as sigma -> 0 (at SI = 0, i.e.
+            # equilibrium) when order < 1, so the rate Jacobian is unbounded there
+            # and any sensitivity through the equilibrium is non-finite. order >= 1
+            # keeps it finite; the 'bounded' (tanh) form has no such restriction.
+            raise ValueError(
+                f"mineral '{self.name}' has order={self.order} < 1 with the "
+                f"'power' supersaturation form, whose rate gradient is infinite at "
+                f"saturation (SI=0); use order >= 1, or supersaturation_form: "
+                f"'bounded'.")
         if self.mode == "equilibrium":
             if self.solid is None:
                 raise ValueError(
@@ -516,8 +528,16 @@ class NetworkSpec(BaseModel):
         # ``solid`` + ``rate_constant``, then validate them alongside the
         # hand-written reactions below (species references, name collisions).
         if self.precipitation is not None:
-            self.reactions = self.reactions + _synthesize_precipitation_reactions(
-                self.precipitation, set(species_names))
+            # Idempotent: this after-validator may run again on a re-validation
+            # (e.g. model_validate(model_dump(...)), where the dump already
+            # contains the synthesized reactions). Skip any whose name is already
+            # present, so the synthesized reactions are not double-appended.
+            existing = {r.name for r in self.reactions}
+            self.reactions = self.reactions + [
+                r for r in _synthesize_precipitation_reactions(
+                    self.precipitation, set(species_names))
+                if r.name not in existing
+            ]
         if not self.reactions:
             raise ValueError(
                 "network has no reactions: declare a 'reactions:' list, or a "

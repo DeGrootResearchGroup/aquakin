@@ -169,27 +169,15 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
         return out
 
     sv = np.asarray(state_vec)
-    # Sequencing batch reactor: state is [C..., V, <settling state>]. The liquid
-    # volume is at index n_species; the trailing settling state is dimensionless
-    # (clarity / layer ratios) and carries no mass.
-    if hasattr(unit, "settling") and hasattr(unit, "full_volume"):
-        C = sv[:net.n_species]
-        V = float(sv[net.n_species])
-        return {comp: V * float(np.dot(C, vec)) for comp, vec in content.items()}
-
-    # Membrane bioreactor: state is [C..., R_f]; the volume is the fixed
-    # ``unit.volume`` and the trailing fouling resistance is dimensionless and
-    # carries no mass (so it must NOT be read as the volume by the storage-tank
-    # branch below, which the n_species+1 size would otherwise match).
-    if hasattr(unit, "membrane_area") and getattr(unit, "volume", None) is not None:
-        V = float(unit.volume)
-        C = sv[:net.n_species]
-        return {comp: V * float(np.dot(C, vec)) for comp, vec in content.items()}
-
-    # Storage tank: [C..., V]; the liquid volume is the trailing state entry.
-    if hasattr(unit, "level_setpoint") or (
-            getattr(unit, "volume", None) is not None and sv.size == net.n_species + 1):
-        V = float(sv[-1])
+    # Units with a single well-mixed liquid volume (StorageTank, MBR, SBR --
+    # whose states are all [C..., one-or-more scalars]) declare that volume
+    # explicitly via ``liquid_volume(state)``, so the inventory is ``V*C`` with the
+    # concentration head block. This replaces the previous fragile hasattr/state-
+    # size dispatch (whose MBR-before-storage ordering existed only because both
+    # are [C.., scalar]); a future such unit just implements the contract instead
+    # of risking silent misclassification.
+    if hasattr(unit, "liquid_volume"):
+        V = float(unit.liquid_volume(state_vec))
         C = sv[:net.n_species]
         return {comp: V * float(np.dot(C, vec)) for comp, vec in content.items()}
 

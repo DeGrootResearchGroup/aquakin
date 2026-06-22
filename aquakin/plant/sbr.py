@@ -200,6 +200,15 @@ class SBRUnit:
     def state_size(self) -> int:
         return self.network.n_species + 1 + self.settling.extra_state_size()
 
+    def liquid_volume(self, state: jnp.ndarray):
+        """The current liquid volume (the settling-state tail carries no mass).
+
+        The explicit mass-balance inventory contract (see
+        :func:`aquakin.plant.balance._unit_inventory`): inventory is ``V*C`` with
+        the concentration head block.
+        """
+        return self._split(state)[1]
+
     @property
     def input_ports(self) -> list[str]:
         return [self.input_port]

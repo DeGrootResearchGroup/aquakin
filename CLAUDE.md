@@ -1572,7 +1572,11 @@ driven by the relative supersaturation `σ = (IAP/Ksp)^(1/ν) − 1`
 constituent ions, `Ksp` its solubility product, `ν = Σ countᵢ` the number of
 ions, and `aᵢ` the free-ion **activities** at the system pH. A small non-zero
 `X_cryst` seed lets precipitation self-nucleate; `sign(σ)` makes the same law
-describe dissolution when the phase is undersaturated (`σ < 0`).
+describe dissolution when the phase is undersaturated (`σ < 0`). The kinetic
+`power` form requires **`order >= 1`** (validated at load): its rate gradient
+`order·|σ|^(order-1)` is infinite at `SI = 0` (saturation) for `order < 1`, so a
+sensitivity through the equilibrium would be non-finite; the `bounded` (tanh)
+form carries no such restriction.
 
 The aqueous chemistry — the temperature-corrected dissociation constants, the
 free-ion fractions of the carbonate/phosphate/ammonia/sulfide acid-base
@@ -2979,6 +2983,13 @@ Key types:
     the digester deliberately excluded from the N gas term since it has no N gas
     phase) and **accumulation** (ΔInventory across every unit — reactor / clarifier
     / digester liquid+headspace at `V_liq`/`V_gas` / storage / Takács blanket).
+    A unit holding a single well-mixed liquid volume (`StorageTank` / `MBRUnit` /
+    `SBRUnit`, whose states are `[C…, scalar(s)]`) declares that volume through an
+    explicit **`liquid_volume(state)`** contract, so its inventory is `V·C` — the
+    `_unit_inventory` dispatch reads that method instead of the former fragile
+    `hasattr`/state-size guessing (whose MBR-before-storage ordering existed only
+    because both states were `[C.., scalar]`); a future such unit just implements
+    the contract.
     `imbalance = in − out − gas − accumulation` is the closure; `mb["N"]`,
     `mb.closed(rtol)`, `mb.summary()`, `mb[q].relative_imbalance`. Everything is on
     one canonical g basis (g COD / g N / g P), so the ASM water line (g/m³) and the

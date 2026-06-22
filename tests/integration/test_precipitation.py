@@ -578,3 +578,30 @@ def test_shared_ionic_strength_solves_and_differentiates():
                 t_eval=jnp.linspace(0.0, 1.0, 5)).C_named("X_calcite")))(
         net.default_parameters())
     assert jnp.all(jnp.isfinite(g))
+
+
+def test_power_order_below_one_rejected_at_load():
+    # The power driver's gradient is infinite at SI=0 for order<1, so it is
+    # rejected at validation; the bounded form has no such restriction.
+    from aquakin.schema.network_spec import MineralSpec, MineralIonSpec
+    ion = MineralIonSpec(species="S_Ca", molar_mass=1000, count=1, charge=2)
+    kw = dict(name="x", pKsp=8.0, ions=[ion], solid="X",
+              rate_constant={"value": 1.0})
+    with pytest.raises(Exception, match="order"):
+        MineralSpec(order=0.5, **kw)                       # power form (default)
+    MineralSpec(order=0.5, supersaturation_form="bounded", **kw)  # OK
+    MineralSpec(order=1.0, **kw)                                  # OK
+
+
+def test_precipitation_reaction_synthesis_is_idempotent():
+    # Re-validating a precipitation NetworkSpec (e.g. model_dump -> model_validate)
+    # must NOT re-append the auto-synthesized precipitation reactions.
+    import importlib.resources
+    from aquakin.schema.loader import _yaml_to_spec
+    from aquakin.schema.network_spec import NetworkSpec
+    txt = (importlib.resources.files("aquakin.networks")
+           .joinpath("precipitation_struvite_calcite.yaml").read_text())
+    spec = _yaml_to_spec(txt, "test")
+    n = len(spec.reactions)
+    spec2 = NetworkSpec.model_validate(spec.model_dump())
+    assert len(spec2.reactions) == n

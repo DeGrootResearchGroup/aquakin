@@ -161,3 +161,28 @@ def test_storage_fills_and_bypasses_all_reject(storage_run):
     reject_in = plant.stream(sol, "reject_mix.out", params)
     assert float(released.Q[-1]) == pytest.approx(0.0, abs=1e-6)
     assert float(bypass.Q[-1]) == pytest.approx(float(reject_in.Q[-1]), rel=1e-6)
+
+
+def test_grad_through_storage_plant_is_finite(asm1):
+    """jax.grad flows through a StorageTank solve. The tank rhs divides by the
+    liquid volume (1/V) -- exactly the kind of reverse-mode division where a NaN
+    gradient could hide -- so differentiate a short solve w.r.t. the initial state
+    (which includes V) and check it stays finite."""
+    import jax
+    from aquakin.plant import Plant
+    plant = Plant("t")
+    plant.add_unit(StorageTank(name="store", network=asm1, volume=160.0,
+                               output_flow=50.0))
+    plant.add_influent("feed", asm1.influent({"SS": 60.0}, Q=100.0), to="store.in")
+    y0 = plant.initial_state()
+
+    def loss(y0_):
+        # jax_adjoint (reverse-mode through the solve) is the right backend for a
+        # small non-stiff storage plant and exercises the 1/V reverse division.
+        # (stable_adjoint w.r.t. y0 currently leaks a tracer -- issue #420.)
+        sol = plant.solve((0.0, 1.0), t_eval=jnp.array([1.0]), y0=y0_,
+                          gradient="jax_adjoint")
+        return jnp.sum(sol.state)
+
+    g = jax.grad(loss)(y0)
+    assert jnp.all(jnp.isfinite(g))

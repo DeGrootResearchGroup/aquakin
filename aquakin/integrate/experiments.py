@@ -687,8 +687,10 @@ def optimize_design(
                        bounds=bounds, constraints=scipy_cons, method=method,
                        tol=tol)
         feas = _feasible(res.x)
-        # Prefer a feasible point; among same feasibility, the lower objective.
-        key = (not feas, float(res.fun))
+        # Prefer a feasible point; among equally feasible, a converged optimizer
+        # result over a non-converged one (don't let a failed solve with a lower
+        # objective win); then the lower objective.
+        key = (not feas, not bool(res.success), float(res.fun))
         if best is None or key < best[0]:
             best = (key, res, feas)
 

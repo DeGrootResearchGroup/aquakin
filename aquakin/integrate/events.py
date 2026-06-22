@@ -38,7 +38,7 @@ import jax.numpy as jnp
 import numpy as np
 import optimistix as optx
 
-from aquakin.integrate._common import _run_diffeqsolve
+from aquakin.integrate._common import _run_diffeqsolve, friendly_solve_errors
 
 
 @dataclass
@@ -223,8 +223,12 @@ def solve_with_events(
         adjoint=adjoint)
 
     has_root = bool([ev for ev in events if not ev.is_time_event])
-    return _drive(solve_segment, y0, args, t0, t1, t_eval_np, events,
-                  has_root, root_rtol, root_atol, max_segments)
+    # Wrap the segmented drive so a segment exhausting the integrator step budget
+    # re-raises the friendly remedy message instead of the raw equinox
+    # MaxStepsReached chatter (the per-segment solves execute eagerly here).
+    with friendly_solve_errors(max_steps, what="event solve"):
+        return _drive(solve_segment, y0, args, t0, t1, t_eval_np, events,
+                      has_root, root_rtol, root_atol, max_segments)
 
 
 def _drive(solve_segment, y0, args, t0, t1, t_eval_np, events,

@@ -53,7 +53,7 @@ class FlowSetpoint:
         """
         if flow_params.shape[0] > self.local_pos:
             return flow_params[self.local_pos]
-        return jnp.asarray(float(self.default))
+        return jnp.asarray(self.default)
 
 
 class FlowParameterized:

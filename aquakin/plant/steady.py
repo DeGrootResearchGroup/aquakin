@@ -235,6 +235,17 @@ def solve_steady_state(
     ``-(dF/dparams)^T (dF/dy)^{-T} g`` -- one transposed Jacobian solve plus one
     vector-Jacobian product, no differentiation through the iteration.
 
+    .. note::
+       The gradient assumes a **full-rank** steady Jacobian ``dF/dy`` at the
+       root -- the case for every shipped network at its operating point, where
+       the transposed solve is exact. If the Jacobian is rank-deficient (a fully
+       dormant/depleted species gives a zero row, so the root is not locally
+       unique along that null direction), the true IFT cotangent is undefined and
+       the backward returns the least-squares min-norm cotangent instead; a
+       gradient w.r.t. a parameter that moves only a dormant species is then not
+       reliable. The forward iteration is unaffected -- its pseudo-time term
+       keeps the per-step operator non-singular regardless.
+
     Parameters
     ----------
     rhs : callable
@@ -296,9 +307,20 @@ def _ift_state_fwd(rhs, y_star, params):
 
 def _ift_state_bwd(rhs, res, g):
     y_star, params = res
-    # Transposed steady-state Jacobian solve: w = (dF/dy)^{-T} g, using a
-    # least-squares solve so a rank-deficient Jacobian (dormant species give
-    # zero rows) is handled gracefully.
+    # Transposed steady-state Jacobian solve: w = (dF/dy)^{-T} g.
+    #
+    # The IFT cotangent w = J^{-T} g is exact and unique only when the steady
+    # Jacobian J = dF/dy is FULL RANK -- true for every shipped/validated network
+    # at its operating point, where this least-squares solve equals the plain
+    # `solve` the forward PTC step uses (so the forward and backward agree). If J
+    # is rank-deficient (e.g. a fully dormant/depleted species contributes a zero
+    # row, so the root is not locally unique along that null direction), the true
+    # IFT cotangent is undefined; `lstsq` then returns the MIN-NORM least-squares
+    # cotangent -- a reasonable but arbitrary choice, NOT the exact gradient. So a
+    # gradient w.r.t. a parameter that moves only a dormant species is not
+    # reliable there. (A Tikhonov shift would merely substitute a different
+    # arbitrary regularization while risking the full-rank gradients, so it is not
+    # used; see the full-rank note in `solve_steady_state`.)
     J = jax.jacfwd(lambda y: rhs(y, params))(y_star)
     w, *_ = jnp.linalg.lstsq(J.T, g, rcond=None)
     # grad_params = -(dF/dparams)^T w

@@ -272,3 +272,16 @@ def test_speciation_activity_model_validated_in_yaml(tmp_path):
     """
     with pytest.raises(ValueError, match="activity_model"):
         aquakin.load_network_from_file(_write(tmp_path, body))
+
+
+def test_clear_network_cache_is_exported():
+    # Documented public API: must be importable from the top-level package and in
+    # __all__ (it was missing despite being referenced in the docs).
+    import aquakin
+    assert "clear_network_cache" in aquakin.__all__
+    assert callable(aquakin.clear_network_cache)
+    # Cached identity, then cleared.
+    a = aquakin.load_network("asm1")
+    assert aquakin.load_network("asm1") is a
+    aquakin.clear_network_cache()
+    assert aquakin.load_network("asm1") is not a

@@ -3333,17 +3333,31 @@ class Plant:
                 MT = self._assemble_recycle_MT(group_lists, colT)
             return M, MT
 
-        Ma, MTa = probe(y0)
-        Mb, MTb = probe(y0 * 1.3 + 1.0)   # a materially different state
-        wM = max((float(jnp.max(jnp.abs(a - b)))
-                  for a, b in zip(Ma, Mb)), default=0.0)
-        self._recycle_map_constant = bool(wM <= rtol)
+        # Probe THREE materially-different states, not two: a state-dependent map
+        # that coincidentally agrees at a single perturbed pair (e.g. a split
+        # ratio invariant under one affine shift) would be mis-cached as constant,
+        # and there is no mid-solve re-guard. Three distinct affine perturbations
+        # make that coincidence far less likely (a genuinely state-dependent map
+        # must agree under all three to slip through). Residual limitation: a map
+        # that is constant on all three probes but varies elsewhere is still
+        # mis-cached -- not observed for any shipped topology, where the only
+        # state-dependent splits (clarifier %TSS) vary under these perturbations.
+        probes = [probe(y0), probe(1.3 * y0 + 1.0), probe(0.5 * y0 + 3.0)]
+        Ma, MTa = probes[0]
+
+        def _max_dev(idx):
+            base = probes[0][idx]
+            return max(
+                (float(jnp.max(jnp.abs(a - b)))
+                 for other in probes[1:]
+                 for a, b in zip(base, other[idx])),
+                default=0.0)
+
+        self._recycle_map_constant = bool(_max_dev(0) <= rtol)
         if MTa is None:
             self._recycle_T_map_constant = True       # no T carried
         else:
-            wMT = max((float(jnp.max(jnp.abs(a - b)))
-                       for a, b in zip(MTa, MTb)), default=0.0)
-            self._recycle_T_map_constant = bool(wMT <= rtol)
+            self._recycle_T_map_constant = bool(_max_dev(1) <= rtol)
 
     def _flow_one_pass(self, t, params_full, states, design):
         """Build the affine recycle-FLOW forward pass.
@@ -3426,16 +3440,22 @@ class Plant:
         fixed-pump plant it is invariant to the state, so it can be precomputed
         once per solve and reused, skipping the per-RHS flow probe. A flow split
         riding on a unit state (a level-gated storage bypass) makes it vary, then
-        it is re-probed. Compares ``A`` at ``y0`` and a perturbed state.
-        Concrete-only; runs once per plant. No recycle edges -> trivially
-        constant. (The flow analogue of :meth:`_check_recycle_map_constant`.)"""
+        it is re-probed. Compares ``A`` over THREE materially-different states
+        (not a single pair, which a split invariant under one affine shift could
+        slip through; there is no mid-solve re-guard). Concrete-only; runs once
+        per plant. No recycle edges -> trivially constant. (The flow analogue of
+        :meth:`_check_recycle_map_constant`.)"""
         if not self._recycle_conns:
             self._flow_map_constant = True
             return
-        Aa = self._compute_flow_map(t, params_full, self._split_state(y0))
-        Ab = self._compute_flow_map(t, params_full,
-                                    self._split_state(y0 * 1.3 + 1.0))
-        wA = float(jnp.max(jnp.abs(Aa - Ab))) if Aa.size else 0.0
+        A0 = self._compute_flow_map(t, params_full, self._split_state(y0))
+        if not A0.size:
+            self._flow_map_constant = True
+            return
+        wA = max(
+            float(jnp.max(jnp.abs(
+                A0 - self._compute_flow_map(t, params_full, self._split_state(s)))))
+            for s in (1.3 * y0 + 1.0, 0.5 * y0 + 3.0))
         self._flow_map_constant = bool(wA <= rtol)
 
     def _resolve_flows(

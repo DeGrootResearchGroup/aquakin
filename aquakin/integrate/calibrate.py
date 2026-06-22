@@ -466,6 +466,7 @@ class CalibrationResult:
         t_end = float(np.asarray(t_eval)[-1])
         transforms = self.transforms
         curves = []
+        first_error = None
         for theta in draws:
             physical = jnp.stack([
                 _from_unconstrained(jnp.asarray(theta[i]), transforms[i])
@@ -476,12 +477,24 @@ class CalibrationResult:
                 cc = np.asarray(
                     reactor.solve(C0_j, params=p, t_span=(0.0, t_end), t_eval=t_eval_j).C
                 )
-            except Exception:
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc      # keep the first cause, to report if all fail
                 continue
             if np.all(np.isfinite(cc)):
                 curves.append(cc)
         if not curves:
-            raise RuntimeError("All posterior draws failed to solve.")
+            # Don't swallow the cause: surface the first solve failure (or note
+            # that every draw merely went non-finite) instead of a bare message.
+            if first_error is not None:
+                raise RuntimeError(
+                    "All posterior draws failed to solve; the first error is the "
+                    "direct cause above."
+                ) from first_error
+            raise RuntimeError(
+                "All posterior draws produced a non-finite trajectory (no "
+                "exception raised) -- the Laplace draws may leave the feasible "
+                "region; check the fit or tighten laplace_eig_keep.")
         curves = np.array(curves)
         lo = np.percentile(curves, percentiles[0], axis=0)
         hi = np.percentile(curves, percentiles[1], axis=0)
