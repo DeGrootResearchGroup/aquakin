@@ -35,8 +35,8 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.integrate.biofilm import BiofilmReactor, _default_soluble_mask
 from aquakin.plant.cstr import (
     Aeration,
+    AerationUnit,
     aeration_transfer,
-    build_aeration_vectors,
 )
 from aquakin.plant.streams import Stream
 
@@ -65,7 +65,7 @@ def _default_biofilm_fixed_mask(network, soluble_mask) -> jnp.ndarray:
 
 
 @dataclass
-class IFASUnit:
+class IFASUnit(AerationUnit):
     """An IFAS / MBBR tank: a CSTR bulk coupled to a depth-resolved biofilm.
 
     Parameters
@@ -211,8 +211,8 @@ class IFASUnit:
             )
         self._layer_fixed = layer_fixed
 
-        # Bulk aeration vectors (shared translation with CSTRUnit).
-        self._av = build_aeration_vectors(self.aeration, self.network, self.name)
+        # Bulk aeration vectors (the AerationUnit mixin, shared with CSTRUnit).
+        self._setup_aeration()
 
         self._condition_arrays = {
             cname: jnp.asarray([float(self.conditions[cname])])
@@ -234,14 +234,6 @@ class IFASUnit:
     @property
     def output_ports(self) -> list[str]:
         return [self.output_port]
-
-    @property
-    def required_signals(self) -> tuple[str, ...]:
-        """The closed-loop aeration signal this unit reads, if any (the plant
-        auto-wires a controller from the ``Aeration`` spec, as for a CSTR)."""
-        return tuple(
-            signal_name for signal_name, _gain in self._av.controlled.values()
-        )
 
     def initial_state(self) -> jnp.ndarray:
         """Flat ``(n_comp * n_species,)`` state: bulk row + the biofilm layers.
@@ -267,19 +259,6 @@ class IFASUnit:
             **self._condition_arrays, "T": jnp.asarray([float(temperature_K)])}
         self._biofilm.conditions = SpatialConditions.uniform(
             **{k: float(v) for k, v in self.conditions.items()})
-
-    def _mixed_inlet_T(self, inputs: dict[str, Stream]):
-        """Flow-weighted inlet temperature, or ``None`` if any inlet is
-        temperature-agnostic (same convention as :class:`CSTRUnit`)."""
-        if not all(inputs[n].T is not None for n in self.input_port_names):
-            return None
-        Q_total = jnp.zeros(())
-        heat = jnp.zeros(())
-        for nm in self.input_port_names:
-            s = inputs[nm]
-            Q_total = Q_total + s.Q
-            heat = heat + s.Q * s.T
-        return heat / (Q_total + 1e-12)
 
     def _bulk(self, state: jnp.ndarray) -> jnp.ndarray:
         return state.reshape(self._n_comp, self._n)[0]

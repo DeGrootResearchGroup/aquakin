@@ -345,8 +345,62 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, network):
     return kla_vec * (sat_vec - C)
 
 
+class AerationUnit:
+    """Mixin for a plant unit that aerates through an :class:`Aeration` spec.
+
+    Translates the ``Aeration`` spec into the per-species RHS vectors once and
+    exposes the readers the aeration-energy / O2-balance code and the control bus
+    use, so a CSTR, an IFAS/MBBR tank and an MBR share one definition instead of
+    each re-deriving them. A consumer sets ``self.aeration`` / ``self.network`` /
+    ``self.name`` and calls :meth:`_setup_aeration` from its ``__post_init__``;
+    the flow-weighted inlet temperature reads the unit's ``input_ports``.
+    """
+
+    def _setup_aeration(self) -> None:
+        """Build the per-species aeration vectors (fixed-kLa / saturation, the
+        closed-loop signal map, the temperature-correction config) into
+        ``self._av``. Call from ``__post_init__`` once ``aeration`` / ``network``
+        / ``name`` are set."""
+        self._av = build_aeration_vectors(self.aeration, self.network, self.name)
+
+    @property
+    def required_signals(self) -> tuple[str, ...]:
+        """Control-signal names this unit reads from the bus in ``rhs`` (the
+        closed-loop aeration signal, if any). The plant validates these are
+        published -- by the controller it auto-wires from the ``Aeration`` spec --
+        before solving."""
+        return tuple(
+            signal_name for signal_name, _gain in self._av.controlled.values()
+        )
+
+    # Readers onto the canonical ``self._av`` store, for the aeration-energy /
+    # O2-balance code (plant.bsm.evaluation, plant.balance) and tests that
+    # introspect the per-species aeration vectors.
+    @property
+    def _kla_vec(self) -> jnp.ndarray:
+        return self._av.kla_vec
+
+    @property
+    def _sat_vec(self) -> jnp.ndarray:
+        return self._av.sat_vec
+
+    @property
+    def _controlled_kla(self) -> dict:
+        return self._av.controlled
+
+    def _mixed_inlet_T(self, inputs: dict[str, Stream]):
+        """Flow-weighted inlet temperature, or ``None`` if no inlet carries one.
+
+        Uses the canonical :func:`~aquakin.plant.streams.mixed_temperature`,
+        which ignores a temperature-agnostic (``T is None``) inlet rather than
+        collapsing the whole mix to ``None``. The well-mixed reactor is taken to
+        be at this temperature (no thermal lag -- the hydraulic retention is
+        hours, far shorter than the seasonal temperature variation)."""
+        return mixed_temperature(inputs, self.input_ports)
+
+
 @dataclass
-class CSTRUnit(CouplingAware):
+class CSTRUnit(AerationUnit, CouplingAware):
     """A single continuous-flow stirred tank with kinetics + aeration.
 
     Parameters
@@ -390,8 +444,9 @@ class CSTRUnit(CouplingAware):
             )
         # Translate the Aeration spec into the per-species RHS vectors (the
         # fixed-kLa / saturation vectors, the closed-loop signal map, and the
-        # temperature-correction config). Shared with the IFAS unit's bulk.
-        self._av = build_aeration_vectors(self.aeration, self.network, self.name)
+        # temperature-correction config) -- the AerationUnit mixin, shared with
+        # the IFAS and MBR units.
+        self._setup_aeration()
 
         # Condition arrays for the kinetics call: each declared condition
         # broadcast to a length-1 array so the rate functions index with
@@ -404,31 +459,6 @@ class CSTRUnit(CouplingAware):
     @property
     def state_size(self) -> int:
         return self.network.n_species
-
-    @property
-    def required_signals(self) -> tuple[str, ...]:
-        """Control-signal names this unit reads from the bus in ``rhs`` (the
-        closed-loop aeration signal, if any). The plant validates these are
-        published -- by the controller it auto-wires from the ``Aeration`` spec --
-        before solving."""
-        return tuple(
-            signal_name for signal_name, _gain in self._av.controlled.values()
-        )
-
-    # Back-compat accessors onto the canonical ``self._av`` store, for the
-    # aeration-energy / O2-balance readers (plant.bsm.evaluation, plant.balance)
-    # and tests that introspect the per-species aeration vectors.
-    @property
-    def _kla_vec(self) -> jnp.ndarray:
-        return self._av.kla_vec
-
-    @property
-    def _sat_vec(self) -> jnp.ndarray:
-        return self._av.sat_vec
-
-    @property
-    def _controlled_kla(self) -> dict:
-        return self._av.controlled
 
     def set_temperature(self, temperature_K: float) -> None:
         """Set this reactor's static operating temperature (Kelvin).
@@ -475,13 +505,6 @@ class CSTRUnit(CouplingAware):
             self_pattern=structural_sparsity_pattern(self.network),
             inlet_pattern=np.eye(n, dtype=bool),
         )
-
-    def _mixed_inlet_T(self, inputs: dict[str, Stream]):
-        """Flow-weighted inlet temperature, or ``None`` if no inlet carries one.
-        The well-mixed reactor is taken to be at this temperature (no thermal lag
-        — the hydraulic retention is hours, far shorter than the seasonal
-        temperature variation)."""
-        return mixed_temperature(inputs, self.input_port_names)
 
     def compute_outputs(
         self,

@@ -29,15 +29,15 @@ from typing import TYPE_CHECKING, Optional, Sequence
 
 import jax.numpy as jnp
 
-from aquakin.plant.cstr import Aeration, aeration_transfer, build_aeration_vectors
-from aquakin.plant.streams import Stream, mixed_temperature
+from aquakin.plant.cstr import Aeration, AerationUnit, aeration_transfer
+from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
 
 
 @dataclass
-class MBRUnit:
+class MBRUnit(AerationUnit):
     """A membrane bioreactor: high-MLSS aerated reactor with membrane separation.
 
     Parameters
@@ -130,8 +130,9 @@ class MBRUnit:
             mask = mask.at[jnp.asarray(idx, dtype=int)].set(1.0)
         self._perm_mult = 1.0 - self.rejection * mask
 
-        # Aeration vectors (reuses the CSTR machinery, incl. auto-wired DO control).
-        self._av = build_aeration_vectors(self.aeration, self.network, self.name)
+        # Aeration vectors via the AerationUnit mixin (the same CSTR machinery,
+        # incl. auto-wired DO control).
+        self._setup_aeration()
         self._condition_arrays = {
             k: jnp.asarray([float(v)]) for k, v in self.conditions.items()}
 
@@ -148,11 +149,6 @@ class MBRUnit:
     def output_ports(self) -> list[str]:
         return [self.permeate_port, self.waste_port]
 
-    @property
-    def required_signals(self) -> tuple[str, ...]:
-        """The aeration control signal this unit reads (DO control), if any."""
-        return tuple(sig for sig, _gain in self._av.controlled.values())
-
     def initial_state(self) -> jnp.ndarray:
         C0 = (self.network.default_concentrations()
               if self.initial_concentrations is None
@@ -162,21 +158,6 @@ class MBRUnit:
     def _split(self, state):
         n = self.network.n_species
         return state[:n], state[n]
-
-    # Back-compat accessors onto the canonical ``self._av`` store, so the aeration
-    # O2 / reaction-gas readers (plant.balance, plant.bsm.evaluation) treat the MBR
-    # as a first-class reactive aerated unit, exactly like a CSTR.
-    @property
-    def _kla_vec(self) -> jnp.ndarray:
-        return self._av.kla_vec
-
-    @property
-    def _sat_vec(self) -> jnp.ndarray:
-        return self._av.sat_vec
-
-    @property
-    def _controlled_kla(self) -> dict:
-        return self._av.controlled
 
     # ----- membrane diagnostics ------------------------------------------
     def tmp(self, fouling_resistance: jnp.ndarray,
@@ -204,7 +185,7 @@ class MBRUnit:
         C, _R_f = self._split(state)
         q_in = inputs[self.input_port].Q
         q_perm, q_waste = self._flows(q_in)
-        T_out = mixed_temperature(inputs, [self.input_port])   # carry inlet T on
+        T_out = self._mixed_inlet_T(inputs)   # carry inlet T on
         return {
             self.permeate_port: Stream(Q=q_perm, C=self._perm_mult * C,
                                        network=self.network, T=T_out),
@@ -239,7 +220,7 @@ class MBRUnit:
         # Use the flow-weighted inlet temperature (seasonal influent) for both the
         # kinetics and the aeration, exactly as the CSTR does; fall back to the
         # static condition when no inlet carries a temperature.
-        T_in = mixed_temperature(inputs, [self.input_port])
+        T_in = self._mixed_inlet_T(inputs)
         if T_in is not None and "T" in self._condition_arrays:
             conditions = {**self._condition_arrays, "T": jnp.reshape(T_in, (1,))}
         else:
