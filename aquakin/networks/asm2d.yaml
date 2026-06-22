@@ -30,6 +30,24 @@ species:
 conditions:
   - {name: T, default: 293.15, description: "Temperature (K)."}
 
+# Clamp the concentration vector to >= 0 when evaluating the process rates (the
+# standard IWA/BSM `xtemp = max(x, 0)` convention). Identity at feasible states,
+# so the physical solution is unchanged; it protects the Monod / ratio kinetics
+# from a transiently-negative state when a clarifier recycles concentrated solids
+# into a small reactor (the same reason asm1 sets it -- without it the stiff
+# rates blow up to the trivial zero state).
+clip_negative_states: true
+
+# Throttle each species' net reaction term as its concentration approaches zero
+# (R_lim = max(R,0) + min(R,0)*C/max(C,threshold)). clip_negative_states guards
+# the rate *inputs*, but in a tight-recycle plant a soluble that is fully consumed
+# in one zone (VFA, nitrate) can still integrate slightly negative and recirculate
+# as a conserved negative pool; this limiter keeps the *state* non-negative. It is
+# identity at feasible states (concentrations above the threshold), so a healthy
+# steady state is unchanged.
+positivity_limiter:
+  threshold: 1.0e-3
+
 parameters:
   KALK_H: {value: 0.0001, transform: positive_log, bounds: [1e-06, 0.01], units: "kmol/m3"}
   KA_PAO: {value: 4.0, transform: positive_log, bounds: [0.04, 400.0], units: "g_COD/m3"}
@@ -40,6 +58,16 @@ parameters:
   KO2_H: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_O2/m3"}
   KO2_HYD: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_O2/m3"}
   KO2_PAO: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_O2/m3"}
+  # Autotroph- and PAO-specific half-saturations. The SUMO/Henze ASM2d gives each
+  # organism group its own constant; the import collapsed the Monod terms by
+  # species, so the nitrifier and PP-uptake terms had silently inherited the
+  # heterotroph/hydrolysis values. The values below are the Henze STR No. 9
+  # Table 4.3 / SUMO ASM2D set, restored here.
+  KO2_AUT: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "g_O2/m3"}
+  KNH4_AUT: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "g_N/m3"}
+  KALK_AUT: {value: 0.0005, transform: positive_log, bounds: [5e-06, 0.05], units: "kmol/m3"}
+  KPS: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_P/m3"}
+  KALK_PRE: {value: 0.0005, transform: positive_log, bounds: [5e-06, 0.05], units: "kmol/m3"}
   KPHA: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "-"}
   KPP: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "g_P/g_COD"}
   KP_H: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "g_P/m3"}
@@ -47,6 +75,7 @@ parameters:
   Kfe: {value: 4.0, transform: positive_log, bounds: [0.04, 400.0], units: "g_COD/m3"}
   Kh: {value: 3.0, transform: positive_log, bounds: [0.03, 300.0], units: "1/d"}
   KiPP: {value: 0.02, transform: positive_log, bounds: [0.0002, 2.0], units: "g_P/g_COD"}
+  KMAX: {value: 0.34, transform: positive_log, bounds: [0.0034, 3.4], units: "g_P/g_COD"}
   YAUT: {value: 0.24, transform: positive_log, bounds: [0.0024, 24.0], units: "g_COD/g_N"}
   YH: {value: 0.625, transform: positive_log, bounds: [0.00625, 62.5], units: "g_COD/g_COD"}
   YPAO: {value: 0.625, transform: positive_log, bounds: [0.00625, 62.5], units: "g_COD/g_COD"}
@@ -111,7 +140,19 @@ expressions:
   Monod_SA: "monod([SA], KA_PAO)"
   Monod_XPP_over_XPAO: "monod_ratio([XPP], [XPAO], KPP)"
   Monod_XPHA_over_XPAO: "monod_ratio([XPHA], [XPAO], KPHA)"
+  # Inhibition of poly-P storage as the stored fraction XPP/XPAO approaches its
+  # maximum KMAX: (KMAX - XPP/XPAO) / (KiPP + KMAX - XPP/XPAO). The storage rate
+  # falls to zero at XPP/XPAO = KMAX. safe_div takes the ratio to 0 (not NaN) when
+  # XPAO = 0; the rate carries a [XPAO] factor, so that point contributes nothing.
+  Monod_inh_XPP_max: "(KMAX - safe_div([XPP], [XPAO])) / (KiPP + KMAX - safe_div([XPP], [XPAO]))"
   Monod_KO2_PAO: "monod_inh([SO2], KO2_PAO)"
+  # Autotroph-specific saturation terms (own half-saturation constants), and the
+  # PO4-uptake term for poly-P storage (KPS, distinct from the KP nutrient term).
+  Monod_SO2_AUT: "monod([SO2], KO2_AUT)"
+  Monod_SNH4_AUT: "monod([SNH4], KNH4_AUT)"
+  Monod_SALK_AUT: "monod([SALK], KALK_AUT)"
+  Monod_SPO4_PP: "monod([SPO4], KPS)"
+  Monod_SALK_PRE: "monod([SALK], KALK_PRE)"
 
 reactions:
   - name: Aerobic_hydrolysis
@@ -211,7 +252,7 @@ reactions:
       SALK: "iCharge_SNHx * iN_SF + iCharge_SPO4 * iP_SF + iCharge_SVFA"
 
   - name: Lysis_1
-    description: "Lysis"
+    description: "Lysis of heterotrophs (XH)"
     rate: "bH * [XH]"
     stoichiometry:
       SNH4: "(-1) * (fXI * iN_XI + (1 - fXI) * iN_XS - iN_BM)"
@@ -219,7 +260,7 @@ reactions:
       SALK: "iCharge_SNHx * (-1) * (fXI * iN_XI + (1 - fXI) * iN_XS - iN_BM) + iCharge_SPO4 * (-1) * (fXI * iP_XI + (1 - fXI) * iP_XS - iP_BM)"
       XI: "fXI"
       XS: "1 - fXI"
-      XAUT: -1.0
+      XH: -1.0
       XTSS: "fXI * iTSS_XI + (1 - fXI) * iTSS_XS - iTSS_BM"
 
   - name: Storage_of_XPHA
@@ -235,7 +276,7 @@ reactions:
 
   - name: Aerobic_storage_of_XPP
     description: "Aerobic storage of XPP"
-    rate: "qPP * Monod_SO2 * Monod_SPO4 * Monod_SALK * Monod_XPHA_over_XPAO * monod_inh_ratio([XPP], [XPAO], KiPP) * [XPAO]"
+    rate: "qPP * Monod_SO2 * Monod_SPO4_PP * Monod_SALK * Monod_XPHA_over_XPAO * Monod_inh_XPP_max * [XPAO]"
     stoichiometry:
       SO2: "(-1) * YPHA"
       SPO4: -1.0
@@ -246,7 +287,7 @@ reactions:
 
   - name: Anoxic_storage_of_XPP
     description: "Anoxic storage of XPP"
-    rate: "qPP * etaNO3_PAO * Monod_SNO3 * Monod_KO2_PAO * Monod_SPO4 * Monod_SALK * Monod_XPHA_over_XPAO * monod_inh_ratio([XPP], [XPAO], KiPP) * [XPAO]"
+    rate: "qPP * etaNO3_PAO * Monod_SNO3 * Monod_KO2_PAO * Monod_SPO4_PP * Monod_SALK * Monod_XPHA_over_XPAO * Monod_inh_XPP_max * [XPAO]"
     stoichiometry:
       SNO3: "(-1) * YPHA * 1 / iNO3_N2"
       SPO4: -1.0
@@ -313,7 +354,7 @@ reactions:
 
   - name: Aerobic_growth_of_XAUT
     description: "Aerobic growth of XAUT"
-    rate: "muAUT * Monod_SO2 * Monod_SNH4 * Monod_SPO4 * Monod_SALK * [XAUT]"
+    rate: "muAUT * Monod_SO2_AUT * Monod_SNH4_AUT * Monod_SPO4 * Monod_SALK_AUT * [XAUT]"
     stoichiometry:
       SO2: "(-1) * ((-1) * iCOD_NO3 - YAUT) / YAUT"
       SNH4: "(-1) * iN_BM - 1 / YAUT"
@@ -336,21 +377,25 @@ reactions:
       XTSS: "fXI * iTSS_XI + (1 - fXI) * iTSS_XS - iTSS_BM"
 
   - name: Precipitation
-    description: "Precipitation"
+    description: "Precipitation of phosphate with metal hydroxide"
     rate: "kPRE * [SPO4] * [XMeOH]"
     stoichiometry:
       SPO4: -1.0
       SALK: "(-1) * iCharge_SPO4"
+      XMeOH: "fMeOH_PO4_MW"
+      XMeP: "fMeP_PO4_MW"
       XTSS: "fMeOH_PO4_MW + fMeP_PO4_MW"
       XMeOH: "fMeOH_PO4_MW"
       XMeP: "fMeP_PO4_MW"
 
   - name: Redissolution
-    description: "Redissolution"
-    rate: "kRED * [XMeP] * Monod_SALK"
+    description: "Redissolution of metal phosphate"
+    rate: "kRED * [XMeP] * Monod_SALK_PRE"
     stoichiometry:
       SPO4: 1.0
       SALK: "iCharge_SPO4"
+      XMeOH: "(-1) * fMeOH_PO4_MW"
+      XMeP: "(-1) * fMeP_PO4_MW"
       XTSS: "(-1) * (fMeOH_PO4_MW + fMeP_PO4_MW)"
       XMeOH: "(-1) * fMeOH_PO4_MW"
       XMeP: "(-1) * fMeP_PO4_MW"

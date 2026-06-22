@@ -648,14 +648,29 @@ class CompiledNetwork:
         loc_idx,
         *,
         stoich: "jnp.ndarray | None" = None,
+        rate_scale: "jnp.ndarray | None" = None,
     ) -> jnp.ndarray:
-        """Return ``stoich.T @ rates(...)`` — the chemistry RHS.
+        """Return the fully post-processed chemistry RHS for one location.
+
+        This is the single canonical reaction term — ``stoich.T @ rates(...)``
+        with ``clip_negative_states`` applied to the rate inputs (inside
+        :meth:`rates`) and the ``positivity_limiter`` applied to the net term.
+        Reactors that add their own transport build their RHS as
+        ``dCdt(...) + transport`` rather than re-deriving this, so the clip and
+        limiter are applied identically everywhere.
 
         ``stoich`` may be precomputed via :meth:`compute_stoich` and passed
         in to avoid re-evaluating parameter-dependent coefficients on every
         ODE step. If omitted, it is computed from ``params`` here.
+
+        ``rate_scale`` is an optional per-reaction multiplier applied to the
+        rate vector **before** ``stoich.T @ r`` — for a reaction-level throttle
+        such as the biofilm density cap, where uptake and production must scale
+        together (a post-multiply on the net term would not conserve mass).
         """
         r = self.rates(C, params, condition_arrays, loc_idx)
+        if rate_scale is not None:
+            r = r * rate_scale
         if stoich is None:
             stoich = self.compute_stoich(params)
         R = stoich.T @ r

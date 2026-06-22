@@ -28,6 +28,10 @@ species:
 conditions:
   - {name: T, default: 293.15, description: "Temperature (K)."}
 
+# Standard IWA/BSM `xtemp = max(x, 0)` clamp for the process rates; identity at
+# feasible states (see asm1/asm2d).
+clip_negative_states: true
+
 parameters:
   KHCO_H: {value: 0.0001, transform: positive_log, bounds: [1e-06, 0.01], units: "kmol/m3"}
   KNH_H: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "g_N/m3"}
@@ -42,6 +46,14 @@ parameters:
   KSTO_H: {value: 0.1, transform: positive_log, bounds: [0.001, 10.0], units: "-"}
   KX: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "-"}
   KiPP_PAO: {value: 0.05, transform: positive_log, bounds: [0.0005, 5.0], units: "g_P/g_COD"}
+  # Autotroph- and PP-uptake-specific constants + the maximum poly-P ratio. The
+  # SUMO/Henze model gives each group its own half-saturation; the import had
+  # collapsed the nitrifier and PP-uptake Monod terms onto the heterotroph values
+  # and dropped the K_max term from the poly-P storage inhibition.
+  KNH_A: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "g_N/m3"}
+  KHCO_A: {value: 0.0005, transform: positive_log, bounds: [5e-06, 0.05], units: "kmol/m3"}
+  KPO4_PP: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_P/m3"}
+  Kmax_PAO: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_P/g_COD"}
   YAUT: {value: 0.24, transform: positive_log, bounds: [0.0024, 24.0], units: "g_COD/g_N"}
   YH_NO: {value: 0.65, transform: positive_log, bounds: [0.006500000000000001, 65.0], units: "g_COD/g_COD"}
   YH_O2: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "g_COD/g_COD"}
@@ -109,6 +121,14 @@ expressions:
   Monod_XPP_over_XPAO: "monod_ratio([XPP], [XPAO], KPP_PAO)"
   Monod_XPHA_over_XPAO: "monod_ratio([XPHA], [XPAO], KPHA)"
   Monod_KO_PAO: "monod_inh([SO], KO_PAO)"
+  # Autotroph-specific saturation terms (own half-saturations), the PO4-uptake
+  # term for poly-P storage (KPO4_PP, distinct from the KPO4 nutrient term), and
+  # the maximum-ratio poly-P storage inhibition.
+  Monod_SO_A: "monod([SO], KO_A)"
+  Monod_SNH4_A: "monod([SNH4], KNH_A)"
+  Monod_SHCO_A: "monod([SHCO], KHCO_A)"
+  Monod_SPO4_PP: "monod([SPO4], KPO4_PP)"
+  Monod_inh_XPP_max: "(Kmax_PAO - safe_div([XPP], [XPAO])) / (KiPP_PAO + Kmax_PAO - safe_div([XPP], [XPAO]))"
 
 reactions:
   - name: Hydrolysis
@@ -218,7 +238,7 @@ reactions:
 
   - name: Growth_of_autotrophic_nitrifying_organisms
     description: "Growth of autotrophic nitrifying organisms"
-    rate: "muA * Monod_SO * Monod_SNH4 * Monod_SHCO * Monod_SPO4 * [XA]"
+    rate: "muA * Monod_SO_A * Monod_SNH4_A * Monod_SHCO_A * Monod_SPO4 * [XA]"
     stoichiometry:
       SO: "(-1) * ((-1) * iCOD_NO3 - YAUT) / YAUT"
       SNH4: "(-1) / YAUT - iN_BM"
@@ -230,7 +250,7 @@ reactions:
 
   - name: Aerobic_endogenous_respiration_of_XAUT
     description: "Aerobic endogenous respiration of XAUT"
-    rate: "bA * Monod_SO * [XA]"
+    rate: "bA * Monod_SO_A * [XA]"
     stoichiometry:
       SO: "(-1) * (1 - fXI)"
       SNH4: "(-1) * fXI * iN_XI + iN_BM"
@@ -267,7 +287,7 @@ reactions:
 
   - name: Aerobic_storage_of_XPP
     description: "Aerobic storage of XPP"
-    rate: "qPP * Monod_SO * Monod_SPO4 * Monod_SHCO * Monod_XPHA_over_XPAO * monod_inh_ratio([XPP], [XPAO], KiPP_PAO) * [XPAO]"
+    rate: "qPP * Monod_SO * Monod_SPO4_PP * Monod_SHCO * Monod_XPHA_over_XPAO * Monod_inh_XPP_max * [XPAO]"
     stoichiometry:
       SO: "(-1) * YPHA"
       SPO4: -1.0
@@ -278,7 +298,7 @@ reactions:
 
   - name: Anoxic_storage_of_XPP
     description: "Anoxic storage of XPP"
-    rate: "qPP * etaNO_PAO * Monod_KO_PAO * Monod_SNO * Monod_SPO4 * Monod_SHCO * Monod_XPHA_over_XPAO * monod_inh_ratio([XPP], [XPAO], KiPP_PAO) * [XPAO]"
+    rate: "qPP * etaNO_PAO * Monod_KO_PAO * Monod_SNO * Monod_SPO4_PP * Monod_SHCO * Monod_XPHA_over_XPAO * Monod_inh_XPP_max * [XPAO]"
     stoichiometry:
       SNO: "(-1) * YPHA / iNO3_N2"
       SN2: "YPHA / iNO3_N2"

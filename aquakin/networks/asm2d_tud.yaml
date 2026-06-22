@@ -48,6 +48,14 @@ parameters:
   KfGLY: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "-"}
   KfPHA: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "-"}
   KfPP: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "g_P/g_COD"}
+  # Autotroph-specific half-saturations + the maximum poly-P ratio. The import had
+  # collapsed the nitrifier Monod terms onto the heterotroph values, and used a
+  # plain ratio-saturation for poly-P storage where the model limits storage to
+  # fPP_max via (fPP_max - XPP/XPAO)/(KfPP + fPP_max - XPP/XPAO).
+  KO_A: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "g_O2/m3"}
+  KNH_A: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "g_N/m3"}
+  KHCO_A: {value: 0.0005, transform: positive_log, bounds: [5e-06, 0.05], units: "kmol/m3"}
+  fPP_max: {value: 0.35, transform: positive_log, bounds: [0.0035, 3.5], units: "g_P/g_COD"}
   Kfe: {value: 20.0, transform: positive_log, bounds: [0.2, 2000.0], units: "g_COD/m3"}
   YA: {value: 0.24, transform: positive_log, bounds: [0.0024, 24.0], units: "g_COD/g_N"}
   YGLY_NO: {value: 1.18, transform: positive_log, bounds: [0.0118, 118.0], units: "g_COD/g_COD"}
@@ -124,7 +132,14 @@ expressions:
   Monod_XPP: "monod([XPP], KPP)"
   Monod_XPHA_over_XPAO: "monod_ratio([XPHA], [XPAO], KfPHA)"
   Monod_XPHA: "monod([XPHA], KPHA)"
-  Monod_XPP_over_XPAO: "monod_ratio([XPP], [XPAO], KfPP)"
+  # Poly-P storage limiter: falls to zero as the stored ratio XPP/XPAO reaches
+  # its maximum fPP_max (a metabolic-model max-ratio saturation, not a plain
+  # ratio Monod). safe_div takes the ratio to 0 when XPAO = 0.
+  Monod_XPP_max: "(fPP_max - safe_div([XPP], [XPAO])) / (KfPP + fPP_max - safe_div([XPP], [XPAO]))"
+  # Autotroph-specific saturation terms (own half-saturations).
+  Monod_SO_A: "monod([SO], KO_A)"
+  Monod_SNH_A: "monod([SNH], KNH_A)"
+  Monod_SHCO_A: "monod([SHCO], KHCO_A)"
   Monod_XGLY_over_XPAO: "monod_ratio([XGLY], [XPAO], KfGLY)"
 
 reactions:
@@ -225,7 +240,7 @@ reactions:
       SHCO: "iN_SF * iCharge_SNHx + iP_SF * iCharge_SPO4 + iCharge_SVFA"
 
   - name: Lysis_1
-    description: "Lysis"
+    description: "Lysis of heterotrophs (XH)"
     rate: "bH * [XH]"
     stoichiometry:
       SNH: "iN_BM - iN_XI * fXI_A - iN_XS * (1 - fXI_A)"
@@ -233,7 +248,7 @@ reactions:
       SHCO: "(iN_BM - iN_XI * fXI_A - iN_XS * (1 - fXI_A)) * iCharge_SNHx + (iP_BM - iP_XI * fXI_A - iP_XS * (1 - fXI_A)) * iCharge_SPO4"
       XI: "fXI_A"
       XS: "1 - fXI_A"
-      XA: -1.0
+      XH: -1.0
       XTSS: "iTSS_XI * fXI_A + iTSS_XS * (1 - fXI_A) - iTSS_BM"
 
   - name: Anaerobic_storage_of_SA
@@ -285,7 +300,7 @@ reactions:
 
   - name: Anoxic_storage_of_XPP
     description: "Anoxic storage of XPP"
-    rate: "qPP * etaNO_PAO * [XPAO] / [XPP] * Monod_KO_PAO * Monod_SNO * Monod_SPO * Monod_XPHA * Monod_XPP_over_XPAO * [XPAO]"
+    rate: "qPP * etaNO_PAO * [XPAO] / [XPP] * Monod_KO_PAO * Monod_SNO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
     stoichiometry:
       SNH: "iN_BM / YPP_NO"
       SNO: "(-1) * 1 / YPP_NO / iNO3_N2"
@@ -335,7 +350,7 @@ reactions:
 
   - name: Aerobic_storage_of_XPP
     description: "Aerobic storage of XPP"
-    rate: "qPP * [XPAO] / [XPP] * Monod_SO * Monod_SPO * Monod_XPHA * Monod_XPP_over_XPAO * [XPAO]"
+    rate: "qPP * [XPAO] / [XPP] * Monod_SO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
     stoichiometry:
       SO: "(-1) / YPP_O"
       SNH: "iN_BM / YPP_O"
@@ -370,7 +385,7 @@ reactions:
 
   - name: Aerobic_growth_of_XA
     description: "Aerobic growth of XA"
-    rate: "muA * Monod_SO * Monod_SNH * Monod_SPO * Monod_SHCO * [XA]"
+    rate: "muA * Monod_SO_A * Monod_SNH_A * Monod_SPO * Monod_SHCO_A * [XA]"
     stoichiometry:
       SO: "(-1) * ((-1) * iCOD_NO3 - YA) / YA"
       SNH: "(-1) * iN_BM - 1 / YA"
