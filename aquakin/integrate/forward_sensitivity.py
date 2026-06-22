@@ -308,6 +308,92 @@ def build_jitted_sensitivity_solve(
     return _solve
 
 
+def run_forward_sensitivity(
+    make_f_flat,
+    y0_flat: jnp.ndarray,
+    params: jnp.ndarray,
+    free_idx: jnp.ndarray,
+    cond,
+    *,
+    t0: float,
+    t1: float,
+    t_eval,
+    rtol: float,
+    atol_y: jnp.ndarray,
+    sens_rtol,
+    sens_atol,
+    param_scale,
+    dtmax,
+    max_steps: int,
+    shared_factor: bool,
+    cache: dict,
+    cache_key,
+):
+    """Run a forward-sensitivity solve and return ``(ts, y_traj, S_traj)``.
+
+    The single dispatch shared by every reactor's ``solve_sensitivity`` (Batch /
+    PFR / Biofilm): each reactor builds its own flat RHS factory, flattened state,
+    error-control vector, time bounds, cache key and result wrapping; this routes
+    them through the two paths uniformly so the dispatch cannot drift between
+    reactors.
+
+    Two paths, matching the per-call jit caching of ``reactor.solve``:
+
+    - **Non-default sensitivity tolerances** (``sens_atol`` or ``param_scale``
+      given) bypass the compile cache -- they would bloat the key -- and call
+      :func:`augmented_forward_sensitivity` directly.
+    - **The default path** is cached: a jitted solve from
+      :func:`build_jitted_sensitivity_solve` is built once per ``cache_key`` and
+      reused, then called with the (runtime) conditions and optional ``t_eval``.
+
+    Parameters
+    ----------
+    make_f_flat : Callable
+        ``condition_arrays -> (t, y_flat, p) -> dy_flat`` flat RHS factory.
+    y0_flat : jnp.ndarray
+        Flattened initial state.
+    params : jnp.ndarray
+        Parameter vector.
+    free_idx : jnp.ndarray
+        Indices of the sensitivity parameters (from
+        :func:`resolve_sens_indices`).
+    cond : dict
+        The condition-field arrays.
+    t0, t1, t_eval
+        Integration bounds and save times (``t_eval`` ``None`` for solver-chosen).
+    rtol, atol_y, sens_rtol, sens_atol, param_scale, dtmax, max_steps, shared_factor
+        Solver / sensitivity controls, forwarded unchanged.
+    cache : dict
+        The reactor's ``_sens_jit_cache``.
+    cache_key : hashable
+        Per-call-signature key for the cached jitted solve.
+
+    Returns
+    -------
+    (ts, y_traj, S_traj)
+        Raw solver output; the caller reshapes / wraps it into its solution type.
+    """
+    if sens_atol is not None or param_scale is not None:
+        return augmented_forward_sensitivity(
+            make_f_flat(cond), y0_flat, params, free_idx,
+            t0=t0, t1=t1, t_eval=t_eval, rtol=rtol, atol_y=atol_y,
+            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
+            dtmax=dtmax, max_steps=max_steps, shared_factor=shared_factor,
+        )
+    jitted = cache.get(cache_key)
+    if jitted is None:
+        jitted = build_jitted_sensitivity_solve(
+            make_f_flat, free_idx, t0=t0, t1=t1,
+            has_t_eval=t_eval is not None, rtol=rtol, atol_y=atol_y,
+            sens_rtol=sens_rtol, dtmax=dtmax, max_steps=max_steps,
+            shared_factor=shared_factor,
+        )
+        cache[cache_key] = jitted
+    if t_eval is None:
+        return jitted(y0_flat, params, cond)
+    return jitted(y0_flat, params, cond, t_eval)
+
+
 @dataclass
 class ForwardSensitivityResult:
     """Result of :func:`forward_sensitivity`.
