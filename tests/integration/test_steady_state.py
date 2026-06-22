@@ -102,9 +102,20 @@ def _bsm1():
     return plant, asm1, bsm1_warm_start(plant)
 
 
+@pytest.fixture(scope="module")
+def bsm1():
+    """The BSM1 plant built once and shared across the steady-state tests that
+    only READ it -- ``steady_state`` / ``run_to_steady_state`` / ``jax.grad`` do
+    not mutate the plant, so its per-instance compiled-solve cache amortises the
+    PTC compile across these tests instead of rebuilding + recompiling per test.
+    (The cache-assertion test below builds its own fresh plant: it asserts an
+    empty cache.)"""
+    return _bsm1()
+
+
 @pytest.mark.slow
-def test_bsm1_steady_state_matches_forward():
-    plant, asm1, y0 = _bsm1()
+def test_bsm1_steady_state_matches_forward(bsm1):
+    plant, asm1, y0 = bsm1
     ss = plant.steady_state(y0=y0)
     assert ss.method == "ptc" and bool(ss.converged)
     assert float(ss.residual) < 1e-5
@@ -119,10 +130,10 @@ def test_bsm1_steady_state_matches_forward():
 
 
 @pytest.mark.slow
-def test_bsm1_steady_state_differentiable():
+def test_bsm1_steady_state_differentiable(bsm1):
     # The steady state carries the IFT parameter gradient; check it against a
     # central finite difference in the heterotroph max-growth rate.
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     start, _ = plant._state_layout["tank5"]
     idx = start + asm1.species_index["XB_H"]
     params = plant.default_parameters()
@@ -139,11 +150,11 @@ def test_bsm1_steady_state_differentiable():
 
 
 @pytest.mark.slow
-def test_bsm1_steady_state_differentiable_wrt_influent_load():
+def test_bsm1_steady_state_differentiable_wrt_influent_load(bsm1):
     # A design sweep: the steady state is differentiable w.r.t. the influent load
     # (passed via design={"influent": ...}), not just the kinetic parameters.
     # Check d(effluent ammonia)/d(influent ammonia) against a finite difference.
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
     start, _ = plant._state_layout["tank5"]
     eff = start + asm1.species_index["SNH"]
@@ -166,11 +177,11 @@ def test_bsm1_steady_state_differentiable_wrt_influent_load():
 
 
 @pytest.mark.slow
-def test_bsm1_steady_state_differentiable_wrt_recycle_flow():
+def test_bsm1_steady_state_differentiable_wrt_recycle_flow(bsm1):
     # The SRT / recycle design knob: the steady state is differentiable w.r.t. a
     # flow setpoint (the RAS pump flow), now a first-class plant parameter
     # addressed "<unit>.<setpoint>". Check d(effluent ammonia)/d(RAS flow) vs FD.
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     p = plant.default_parameters()
     ras = plant.parameter_index("underflow_split.ras")
     assert "clarifier.underflow_Q" in plant.parameter_names()   # clarifier knob too
@@ -216,9 +227,9 @@ def test_bsm1_steady_state_solve_is_cached():
 
 
 @pytest.mark.slow
-def test_bsm1_steady_state_falls_back_to_forward():
+def test_bsm1_steady_state_falls_back_to_forward(bsm1):
     # If PTC is starved of iterations it falls back to the forward solve.
-    plant, _asm1, y0 = _bsm1()
+    plant, _asm1, y0 = bsm1
     ss = plant.steady_state(y0=y0, max_iter=1, fallback=True,
                             fallback_kwargs={"max_time": 300.0})
     assert ss.method == "ptc->forward"
