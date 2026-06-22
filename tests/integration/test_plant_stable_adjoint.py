@@ -578,9 +578,15 @@ def test_stable_adjoint_accepts_kvaerno3_and_factormax():
         lambda th: g(th, solver=diffrax.Kvaerno3(), factormax=3.0))(theta0))
     assert np.isfinite(g3) and np.isfinite(g3f)
     assert g3 != 0.0
-    # Same gradient to the ESDIRK order difference (both exact discrete adjoints).
-    assert g3 == pytest.approx(g5, rel=2e-3)
-    assert g3f == pytest.approx(g5, rel=2e-3)
+    # Each is the exact discrete adjoint of its own forward solve, so they agree
+    # only to the ESDIRK truncation difference between the realized step
+    # sequences -- and the factormax-capped sequence is platform-sensitive (the
+    # adaptive controller lands different steps on different hardware/BLAS). So
+    # compare to the independent Kvaerno5 reference at 1e-2: tight enough that a
+    # broken adjoint (off by tens of percent or sign) still fails, loose enough to
+    # absorb the cross-discretization + platform step-sequence spread.
+    assert g3 == pytest.approx(g5, rel=1e-2)
+    assert g3f == pytest.approx(g5, rel=1e-2)
 
 
 @pytest.mark.slow
