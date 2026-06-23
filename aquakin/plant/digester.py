@@ -138,7 +138,7 @@ class ADM1DigesterUnit(CouplingAware):
         """The digester's instantaneous, state-derived pH.
 
         Read from the charge-balance speciation the network already solves each
-        step. The ASM<->ADM interfaces use it because the benchmark evaluates
+        step. The ASM<->ADM interfaces use it because BSM2 evaluates
         their inorganic-carbon charge balance at the digester pH. Falls back to
         the static ``pH`` condition if the network declares no speciation.
         """

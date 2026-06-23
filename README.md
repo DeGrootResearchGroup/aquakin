@@ -447,24 +447,37 @@ it explicitly: `diffrax.Kvaerno3(root_finder=diffrax.VeryChord(rtol=10*rtol,
 atol=10*atol))`. Both knobs apply to the forward solve only (rejected alongside
 `gradient="stable_adjoint"` or `events=`, which manage their own integrator).
 
-A third knob, `colored_jacobian=True`, forms the per-step implicit Jacobian by
-**sparse column compression** instead of densely:
+A third knob, `colored_jacobian` (default `"auto"`), forms the per-step implicit
+Jacobian by **sparse column compression** instead of densely:
 
 ```python
 sol = plant.solve(t_span=(0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
-                  colored_jacobian=True)   # ~1.4x on dynamic BSM2, numerically identical
+                  colored_jacobian=True)   # force coloring on both solve paths
 ```
 
 The plant Jacobian is sparse (dense per-unit kinetic blocks + sparse inter-unit
 coupling), so it is built in a handful of colored Jacobian-vector products (~45
-for BSM2) rather than one per state (167) — the dominant per-step linear-algebra
+for BSM2) rather than one per state (167) — a dominant per-step linear-algebra
 cost. The reconstructed matrix equals the dense Jacobian, so the trajectory and
 gradient are unchanged to integration tolerance; only the cost of forming it
-drops (**~1.4× on dynamic BSM2**, and it stacks with `Kvaerno3`/`factormax`). It
-is built and guarded against the dense Jacobian once per plant, falling back to
-the dense solver if the guard fails. Most worthwhile on a large stiff plant
-(BSM2); on the small BSM1 the materialisation is not the bottleneck. Forward
-solve only, like the knobs above.
+drops, and it stacks with `Kvaerno3`/`factormax`. It applies to **both** the
+forward `jax_adjoint` solve (where `J` is built once per step) and the
+`gradient="stable_adjoint"` reverse adjoint (where `J` is rebuilt many times per
+step, so it dominates). It is built and guarded against the dense Jacobian once
+per plant, falling back to the dense solver if the guard fails.
+
+The three settings:
+
+- **`"auto"`** (default) governs the `stable_adjoint` **backward** only: on a
+  concrete solve it *measures* whether the colored `df/dy` build is actually
+  cheaper than dense (it can be slower on a small plant) and enables it only when
+  it pays — so a large plant (BSM2) gets the reverse-gradient speedup while a
+  small one (BSM1) stays dense. The measured decision is reported by
+  `plant.colored_jacobian_decision()`. `"auto"` leaves the forward solve dense.
+- **`True`** forces coloring on both the forward solve and the reverse backward
+  (skipping the measurement). Most worthwhile on a large stiff plant (BSM2); on
+  the small BSM1 the materialisation is not the bottleneck.
+- **`False`** disables it entirely.
 
 ### A non-AD fast lane (`forward_fast=True`)
 

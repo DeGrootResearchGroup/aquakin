@@ -31,9 +31,12 @@ root. The iteration count therefore never enters the autodiff graph: ``jax.grad`
 iterations (forward and reverse), rather than differentiating through every
 Newton step, and the result is the exact implicit-function-theorem pH
 sensitivity. It composes inside a Diffrax RHS and survives a charge balance far
-outside the buffered regime without NaNs. (The opt-in activity-corrected path,
-which couples ``[H+]`` and the ionic strength, keeps the original fixed-count scan
-and differentiates through it.)
+outside the buffered regime without NaNs. The opt-in activity-corrected path uses
+the same adaptive scheme lifted to the coupled ``(h, I)`` fixed point (its
+conditional constants couple ``[H+]`` and the ionic strength): an adaptive
+``jax.lax.while_loop`` wrapped in ``jax.lax.custom_root`` over the pair, with the
+sensitivity the exact 2x2 implicit-function-theorem tangent — so it too is O(1)
+in the iteration count, forward and reverse.
 
 All inputs and outputs are plain JAX scalars (or broadcastable arrays); there
 is no Pydantic or dataclass dependency, keeping this usable from the core
@@ -491,8 +494,10 @@ def _adaptive_newton_bisection(f, dfdh, h_init, max_iter, out_shape, *, utol=1e-
         u_next = jnp.where(in_bracket, u_newton, 0.5 * (u_lo + u_hi))
         # Converged only on a small *Newton* step near the root: a bisection step
         # can be spuriously small far from the root (so the step size alone is not
-        # a safe criterion), but the residual is monotone with |f'| >= 1, so a
-        # tiny in-bracket Newton step ``|f/f'|`` means a tiny residual -> the root.
+        # a safe criterion), but the in-bracket Newton-in-u step is
+        # ``u_newton - u = -f/(f'*h)``, which vanishes only as the residual ``f``
+        # does (``f'*h`` is bounded away from 0), so a tiny in-bracket step means a
+        # tiny residual -> the root.
         converged = in_bracket & (jnp.abs(u_newton - u) <= utol)
         return (u_lo, u_hi, u_next, it + 1, converged)
 
@@ -582,13 +587,17 @@ def solve_ph(
 ):
     """Solve the charge balance for pH.
 
-    Performs ``n_iter`` safeguarded Newton-bisection steps in log space on the
-    electroneutrality residual (Newton near the root, bisection when a Newton
-    step would leave the root bracket). The fixed iteration count makes the
-    routine ``jax.jit`` / ``vmap`` / ``grad`` friendly with no data-dependent
-    control flow, and the bracketing makes it globally convergent — it cannot
-    overshoot to ``NaN`` even when the strong-ion charge far exceeds the
-    buffering.
+    Runs safeguarded Newton-bisection steps in log space on the electroneutrality
+    residual (Newton near the root, bisection when a Newton step would leave the
+    root bracket) as an **adaptive** ``jax.lax.while_loop`` that stops at
+    convergence and is capped at ``n_iter``, wrapped in ``jax.lax.custom_root`` so
+    the pH sensitivity is the analytic implicit-function-theorem tangent. The
+    iteration count therefore never enters the autodiff graph (``jax.jit`` /
+    ``vmap`` / ``grad`` cost O(1) in it), and the bracketing makes the routine
+    globally convergent — it cannot overshoot to ``NaN`` even when the strong-ion
+    charge far exceeds the buffering. The activity-corrected path
+    (``activity_model != "none"``) uses the same adaptive ``custom_root`` scheme
+    lifted to the coupled ``(h, I)`` fixed point.
 
     All concentration arguments are in mol/L; charge arguments in eq/L.
 
@@ -607,8 +616,9 @@ def solve_ph(
         adaptive loop stops at convergence (a handful of Newton steps in the
         buffered regime) and uses ``n_iter`` only as the hard cap that guarantees
         the bisection fallback pins the pH to ``bracket_width / 2**n_iter`` for any
-        charge balance (40 is the bisection worst-case bound for the bracket). On
-        the activity-corrected path it is the fixed scan length, as before.
+        charge balance (40 is the bisection worst-case bound for the bracket). The
+        activity-corrected path uses the same adaptive loop and cap, lifted to the
+        coupled ``(h, I)`` fixed point.
     h_init : float, optional
         Initial guess for ``[H+]`` (mol/L). Default 1e-7 (pH 7). With the
         bracketed iteration the result no longer depends on a good initial

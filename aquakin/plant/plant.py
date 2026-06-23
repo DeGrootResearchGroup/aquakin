@@ -3617,10 +3617,10 @@ class Plant:
         """Find the input stream for each port of ``unit_name``.
 
         A translator that declares ``needs_dest_pH`` (the ASM->ADM interface)
-        has a pH-dependent inorganic-carbon charge balance, which the benchmark
+        has a pH-dependent inorganic-carbon charge balance, which BSM2
         evaluates at the digester pH. It is fed the destination (digester) unit's
-        instantaneous, state-derived pH so the feed it produces is benchmark-
-        consistent. This needs ``states``/``params_full``; when they are absent
+        instantaneous, state-derived pH so the feed it produces is
+        BSM2-consistent. This needs ``states``/``params_full``; when they are absent
         (e.g. the control-signal sweep) the translator falls back to its fixed
         ``pH_adm``.
         """
