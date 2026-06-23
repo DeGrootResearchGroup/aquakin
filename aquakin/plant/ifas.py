@@ -33,6 +33,7 @@ import jax.numpy as jnp
 
 from aquakin.core.conditions import SpatialConditions
 from aquakin.integrate.biofilm import BiofilmReactor, _default_soluble_mask
+from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.cstr import (
     Aeration,
     AerationUnit,
@@ -65,7 +66,7 @@ def _default_biofilm_fixed_mask(network, soluble_mask) -> jnp.ndarray:
 
 
 @dataclass
-class IFASUnit(AerationUnit):
+class IFASUnit(AerationUnit, CouplingAware):
     """An IFAS / MBBR tank: a CSTR bulk coupled to a depth-resolved biofilm.
 
     Parameters
@@ -259,6 +260,58 @@ class IFASUnit(AerationUnit):
             **self._condition_arrays, "T": jnp.asarray([float(temperature_K)])}
         self._biofilm.conditions = SpatialConditions.uniform(
             **{k: float(v) for k, v in self.conditions.items()})
+
+    def coupling_pattern(self):
+        """Structural Jacobian sparsity (issue #388).
+
+        State is the flat ``(n_comp * n_species,)`` profile (bulk row + biofilm
+        layers). Two structures feed the ``self`` block: the soluble diffusion
+        between adjacent compartments and the bulk convection/aeration are *linear*
+        (their Jacobian is state-independent, so AD over diverse states captures
+        them exactly -- :func:`ad_union`), while the per-compartment reaction
+        kinetics carry saturated Monod terms that are numerically invisible to a
+        probe, so the network's syntactic AST pattern is unioned into each
+        compartment's diagonal sub-block. In the biofilm layers the fixed
+        attached-biomass species have their rate zeroed, so their rows are dropped
+        from the layer kinetics blocks. ``inlet``: the bulk dilution diagonal --
+        the inflow enters the bulk row only; the biofilm couples to it solely by
+        diffusion (captured in ``self``).
+        """
+        import numpy as np
+        import jax
+
+        from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
+        from aquakin.plant.coupling import CouplingPattern, ad_union
+
+        net = self.network
+        n, n_comp = self._n, self._n_comp
+        m = self.state_size
+        params = net.default_parameters()
+        state0 = np.asarray(self.initial_state())
+        base_C = jnp.asarray(np.maximum(np.abs(np.asarray(
+            net.default_concentrations())), 1e-3))
+        Q = jnp.asarray(self.volume)                 # representative positive inflow
+        inputs = {nm: Stream(Q=Q, C=base_C, network=net)
+                  for nm in self.input_port_names}
+
+        # AD over diverse states: the (linear) diffusion + convection + aeration
+        # couplings are captured exactly; the reaction kinetics are unioned from the
+        # AST below (saturated Monod is invisible to AD).
+        jac = lambda s: jax.jacfwd(lambda x: self.rhs(jnp.asarray(0.0), x, inputs,
+                                                      params))(s)
+        self_pat = ad_union(jac, state0)
+
+        kin = structural_sparsity_pattern(net)       # (n, n) reaction couplings
+        layer_kin = kin.copy()
+        layer_kin[np.asarray(self._layer_fixed), :] = False   # frozen layer rates
+        for c in range(n_comp):
+            block = kin if c == 0 else layer_kin     # bulk fully dynamic
+            self_pat[c * n:(c + 1) * n, c * n:(c + 1) * n] |= block
+        np.fill_diagonal(self_pat, True)
+
+        inlet_pat = np.zeros((m, n), dtype=bool)
+        inlet_pat[:n, :] = np.eye(n, dtype=bool)     # inflow dilutes the bulk row
+        return CouplingPattern(self_pattern=self_pat, inlet_pattern=inlet_pat)
 
     def _bulk(self, state: jnp.ndarray) -> jnp.ndarray:
         return state.reshape(self._n_comp, self._n)[0]

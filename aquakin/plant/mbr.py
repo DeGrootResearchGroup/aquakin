@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 
 import jax.numpy as jnp
 
+from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.cstr import Aeration, AerationUnit, aeration_transfer
 from aquakin.plant.streams import Stream
 
@@ -37,7 +38,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 @dataclass
-class MBRUnit(AerationUnit):
+class MBRUnit(AerationUnit, CouplingAware):
     """A membrane bioreactor: high-MLSS aerated reactor with membrane separation.
 
     Parameters
@@ -167,6 +168,32 @@ class MBRUnit(AerationUnit):
         resistance ``R_f`` carries no mass, so the inventory is ``volume*C``.
         """
         return jnp.asarray(self.volume)
+
+    def coupling_pattern(self):
+        """Structural Jacobian sparsity (issue #388).
+
+        State is ``[C (n_species), R_f]``. ``self``: the reaction kinetics'
+        structural pattern on the species block (a saturated Monod term is
+        numerically invisible to a probe, so the syntactic AST dependency is
+        needed), plus the fouling resistance's self-relaxation diagonal entry.
+        ``R_f`` is driven by the permeate flux (a flow setpoint, not the species),
+        so it is decoupled from the concentrations: ``dR_f/dt`` does not read
+        ``C``, and ``dC/dt`` does not read ``R_f`` (see :meth:`rhs`). ``inlet``:
+        the convective dilution diagonal on the species (the permeate/waste split
+        is a fixed-flow setpoint), with no inlet coupling into ``R_f``.
+        """
+        import numpy as np
+
+        from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
+        from aquakin.plant.coupling import CouplingPattern
+
+        n = self.network.n_species
+        self_pat = np.zeros((n + 1, n + 1), dtype=bool)
+        self_pat[:n, :n] = structural_sparsity_pattern(self.network)
+        self_pat[n, n] = True                       # dR_f/dt depends on R_f
+        inlet_pat = np.zeros((n + 1, n), dtype=bool)
+        inlet_pat[:n, :] = np.eye(n, dtype=bool)    # dilution: each C_i <- C_in,i
+        return CouplingPattern(self_pattern=self_pat, inlet_pattern=inlet_pat)
 
     # ----- membrane diagnostics ------------------------------------------
     def tmp(self, fouling_resistance: jnp.ndarray,

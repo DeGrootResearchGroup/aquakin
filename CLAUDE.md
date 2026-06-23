@@ -3354,11 +3354,17 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   missing and the residual misses all `|J| ≲ 0.3` (negligible for convergence).
   Covered by `tests/integration/test_coupling_pattern.py` (the contract shapes,
   ABC enforcement, the settler/`ad_union` superset, and the assembled BSM1 plant
-  pattern leaving no within-unit coupling missing along a trajectory). *(The
-  reactive units present only in non-BSM plants — `MBRUnit`/`SBRUnit`/`IFASUnit`
-  — do not yet emit `coupling_pattern()`; they fall back to the probe gracefully,
-  so colored is correct but not yet staleness-free on those flowsheets — a
-  follow-up.)*
+  pattern leaving no within-unit coupling missing along a trajectory). The
+  reactive units present only in non-BSM plants — `MBRUnit`, `SBRUnit` and
+  `IFASUnit`/`MBBRUnit` — **also emit `coupling_pattern()`** (issues #390–#392):
+  the MBR is the CSTR's AST kinetics block plus a decoupled fouling-resistance
+  diagonal; the SBR unions the AD-derived state couplings (the `1/V` convection
+  and the settling-clarity dynamics) over its phases with the rate AST for the
+  kinetics; the IFAS unions the (linear) soluble inter-layer diffusion +
+  bulk-convection couplings from AD with the per-compartment rate AST (frozen
+  layer-biomass rows dropped in the layers). So colored is staleness-free on
+  those flowsheets too; the single-unit assembled-pattern superset is checked per
+  unit in the same test.
 - **Also colors the `gradient="stable_adjoint"` BACKWARD pass.** Since the
   saved-stage backward (above) reconstructs the stages instead of re-solving them
   by a 12-iteration Newton scan, the per-step `df/dy` builds dropped from ~79 to

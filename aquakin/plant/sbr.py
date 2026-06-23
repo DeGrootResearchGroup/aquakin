@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 import jax.numpy as jnp
 
 from aquakin.integrate.events import Event
+from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.settling import SettlingModel
 from aquakin.plant.streams import Stream
 
@@ -78,7 +79,7 @@ class SBRPhase:
 
 
 @dataclass
-class SBRUnit:
+class SBRUnit(CouplingAware):
     """A sequencing batch reactor: variable-volume, time-phased single tank.
 
     Parameters
@@ -233,6 +234,57 @@ class SBRUnit:
     def _split(self, state: jnp.ndarray):
         n = self.network.n_species
         return state[:n], state[n], state[n + 1:]
+
+    # ----- structural coupling (issue #388) ------------------------------
+    def coupling_pattern(self):
+        """Structural Jacobian sparsity (issue #388), over phases.
+
+        State is ``[C (n_species), V, <settling-model state>]``. The within-phase
+        RHS is smooth, but the active phase is a constant per phase (it switches at
+        the located cycle events, not with the state), so the structural superset
+        is the **union over phases**. Two nonlinearities feed the ``self`` block:
+        the reaction kinetics (a saturated Monod term is numerically invisible to
+        a probe, so the network's syntactic AST pattern is unioned into the species
+        sub-block) and the settling clarity dynamics + the ``1/V`` convection
+        (smooth nonlinearities whose branches AD over diverse states exercises, as
+        for the Takacs settler -- unioned via :func:`ad_union` at each phase's
+        representative time). ``inlet``: the convective dilution diagonal on the
+        species (active during fill); the feed couples no other state.
+        """
+        import numpy as np
+        import jax
+
+        from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
+        from aquakin.plant.coupling import CouplingPattern, ad_union
+
+        net = self.network
+        n = net.n_species
+        m = self.state_size
+        params = net.default_parameters()
+        state0 = np.asarray(self.initial_state())
+        base_C = jnp.asarray(np.maximum(np.abs(np.asarray(
+            net.default_concentrations())), 1e-3))
+        inlet = {self.input_port: Stream(Q=jnp.asarray(self.feed_flow),
+                                         C=base_C, network=net)}
+
+        # AD over diverse states, unioned over a representative time in each phase
+        # (so the fill/decant/settle couplings all appear). A Monod term is invisible
+        # to this, so the rate AST is unioned in below.
+        self_pat = np.zeros((m, m), dtype=bool)
+        for p, start in enumerate(self._phase_starts):
+            t_p = jnp.asarray(self.cycle_origin + start
+                              + 0.5 * float(self.phases[p].duration))
+            jac = lambda s, _t=t_p: jax.jacfwd(
+                lambda x: self.rhs(_t, x, inlet, params))(s)
+            self_pat |= ad_union(jac, state0)
+        self_pat[:n, :n] |= structural_sparsity_pattern(net)   # saturated kinetics
+        np.fill_diagonal(self_pat, True)
+
+        # Feed enters only through ``q_in/V*(C_in - C)`` -- diagonal in species, no
+        # coupling into V or the settling state.
+        inlet_pat = np.zeros((m, n), dtype=bool)
+        inlet_pat[:n, :] = np.eye(n, dtype=bool)
+        return CouplingPattern(self_pattern=self_pat, inlet_pattern=inlet_pat)
 
     # ----- protocol: behaviour -------------------------------------------
     def compute_outputs(
