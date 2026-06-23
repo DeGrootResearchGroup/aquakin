@@ -360,6 +360,59 @@ def test_activity_forward_and_reverse_ad_agree():
     assert g_rev == pytest.approx(fd, rel=1e-4)
 
 
+@pytest.mark.parametrize("model", ["davies", "debye_huckel"])
+def test_activity_no_nan_over_extreme_inputs(model):
+    """The activity-corrected path must stay finite over wide strong-ion / weak-
+    buffer extremes, just like the ideal path (#382). Before the ionic-strength
+    clamp a far-overshoot trial [H+] in the bracketed iteration blew the water
+    self-ionisation term up to I ~ 1e20-1e25, where the activity coefficients
+    overflow to inf and the conditional constants become NaN -- which the
+    bracketing could then never recover from (most extreme cases returned NaN)."""
+    rng = np.random.default_rng(0)
+    n = 400
+    sa = rng.uniform(0.0, 0.5, n)            # strong-anion charge / ionic strength
+    cb = 10.0 ** rng.uniform(-6, -1, n)
+    pH = jax.vmap(
+        lambda c, s: solve_ph(
+            tot_carbonate=c, tot_ammonia=2e-3, strong_anion_eq=s,
+            activity_model=model, ionic_strength_strong=s)
+    )(jnp.asarray(cb), jnp.asarray(sa))
+    assert bool(jnp.all(jnp.isfinite(pH)))
+
+
+@pytest.mark.parametrize("model", ["davies", "debye_huckel"])
+def test_activity_gradient_finite_at_degenerate_point(model):
+    """The activity-path IFT tangent is a 2x2 determinant solve; at a degenerate
+    input -- all-zero totals with zero ionic strength -- the 2x2 can go near-
+    singular, so the determinant is floored to keep the gradient finite (#382).
+    Both the forward value and its gradient must stay finite there."""
+    def f(s):
+        return solve_ph(strong_anion_eq=s, activity_model=model,
+                        ionic_strength_strong=s)
+    assert np.isfinite(float(f(0.0)))
+    assert np.isfinite(float(jax.grad(f)(0.0)))
+    # And finite at the issue's extreme buffered point.
+    g = jax.grad(lambda s: solve_ph(
+        tot_carbonate=1e-3, strong_anion_eq=s, activity_model=model,
+        ionic_strength_strong=s))
+    assert np.isfinite(float(g(0.01)))
+
+
+def test_activity_clamp_inactive_at_physical_root():
+    """The ionic-strength clamp only tames the transient overshoot: the converged
+    self-consistent ionic strength at any routine root sits far below the physical
+    ceiling _I_MAX, so jnp.clip(I, 0, _I_MAX) is exactly identity there and the
+    #382 safeguard cannot perturb the converged pH. (A digester/sewer I is
+    ~0.01-0.2 M; _I_MAX is 10 M.)"""
+    from aquakin.core.ph_solver import _I_MAX
+    for I_strong in (1e-3, 0.05, 0.25):
+        pH, I = solve_ph(tot_carbonate=5e-3, tot_ammonia=3e-3, z_cation_eq=5e-3,
+                         T_kelvin=308.15, activity_model="davies",
+                         ionic_strength_strong=I_strong, return_ionic_strength=True)
+        assert np.isfinite(float(pH))
+        assert float(I) < 0.1 * _I_MAX
+
+
 def test_activity_pH_independent_of_iteration_cap():
     """The adaptive coupled loop stops once both [H+] and the ionic strength have
     settled, so the activity-path pH is independent of the n_iter cap once it

@@ -87,6 +87,19 @@ from aquakin.core.temperature import (
 _U_LO = -40.0 * math.log(10.0)   # pH 40  (basic extreme):  f(u) > 0
 _U_HI = 20.0 * math.log(10.0)    # pH -20 (acidic extreme): f(u) < 0
 
+# Physical ceiling on the ionic strength fed to the activity-coefficient models.
+# A real aqueous solution never exceeds a few mol/L (saturated brine ~6 M), and
+# the Davies / Debye-Hückel forms are only valid to ~0.5 M anyway, so 10 M is a
+# generous physical bound well above any digester/sewer value (~0.01-0.2 M). It
+# exists only to tame the transient: a far-overshoot trial ``[H+]`` in the
+# bracketed iteration makes the water self-ionisation term ``0.5*(h + Kw/h)``
+# explode the ionic strength to ~1e20-1e25, where ``g = 10^(...)`` overflows to
+# ``inf`` and the ``inf/inf`` activity-coefficient ratios become ``NaN`` -- which
+# the bracketing can then never recover from. Clamping ``I`` here keeps every
+# conditional constant finite so the bracket pulls ``[H+]`` back to the physical
+# root, where ``I`` is far below the clamp and the clamp is exactly identity.
+_I_MAX = 10.0
+
 # Base (25 degC) pK values and van't Hoff reaction enthalpies (J/mol) for the
 # temperature correction K(T) = K_base * exp(dH/R * (1/T_base - 1/T)).
 # Acetate is treated as temperature-independent (dH = 0).
@@ -181,7 +194,13 @@ def _conditional_constants(K, I, A, model: str):
     the appropriate ``g`` product. Charge-symmetric ``NH4+ -> NH3 + H+`` is
     unchanged (the ``g`` of the +1 ammonium and the +1 proton cancel).
     """
-    sqrt_I = jnp.sqrt(jnp.maximum(I, 0.0))
+    # Clamp to a physical ceiling so a transient far-overshoot ``I`` (~1e20 from
+    # the water term at an extreme trial ``[H+]``) cannot overflow ``g`` to inf and
+    # turn the conditional constants into NaN -- the bracketing then never recovers.
+    # At the physical root ``I`` is orders of magnitude below ``_I_MAX``, so this is
+    # identity there and does not change the converged result (see ``_I_MAX``).
+    I = jnp.clip(I, 0.0, _I_MAX)
+    sqrt_I = jnp.sqrt(I)
     g1 = jnp.power(10.0, _log10_gamma(1.0, sqrt_I, I, A, model))   # |z| = 1
     g2 = jnp.power(10.0, _log10_gamma(4.0, sqrt_I, I, A, model))   # |z| = 2
     g3 = jnp.power(10.0, _log10_gamma(9.0, sqrt_I, I, A, model))   # |z| = 3
@@ -754,6 +773,13 @@ def solve_ph(
         a, c = g((one, zero))    # (df1/dh, df2/dh)
         b, d = g((zero, one))    # (df1/dI, df2/dI)
         det = a * d - b * c
+        # At a physical root the 2x2 is well-conditioned (df1/dh <= -1 and the
+        # I-fixed-point is a contraction, df2/dI ~ -1), so ``det`` is O(1). But a
+        # degenerate input under outer differentiation -- all-zero totals with zero
+        # ionic strength -- can drive it near zero; floor its magnitude so the
+        # tangent stays finite there instead of dividing by ~0. Identity whenever
+        # ``|det|`` exceeds the tiny floor, i.e. at every real root.
+        det = jnp.where(jnp.abs(det) > 1e-300, det, 1e-300)
         y1, y2 = y
         z1 = (d * y1 - b * y2) / det
         z2 = (-c * y1 + a * y2) / det
