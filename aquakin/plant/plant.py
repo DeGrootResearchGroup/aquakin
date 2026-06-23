@@ -800,6 +800,14 @@ class Plant:
         self.temperature_model = model
         self._jit_cache.clear()
         self._steady_jit_cache.clear()
+        # The colored-Jacobian builders cache seed matrices / sparsity patterns
+        # sized for the concrete state. The appended temperature block changes the
+        # state length, so a previously-built builder is stale and would be
+        # dimension-mismatched on the next colored solve -- reset them too (unlike
+        # set_temperature, which leaves the state size and pattern unchanged).
+        self._colored_root_finder = None
+        self._colored_adjoint_builder = None
+        self._colored_steady_builder = None
         return self
 
     def connect(
@@ -1296,6 +1304,22 @@ class Plant:
         }
         for conn in self.connections:
             inputs_by_unit.setdefault(conn.to_unit, []).append(conn)
+            # A pH-feedback translator on the source side (needs_src_pH, e.g.
+            # ADM->ASM) reads the source unit's state-derived pH. An external
+            # influent has no source unit (from_unit is None) and no state, so the
+            # feedback would silently fall back to the fixed pH_adm. Not reachable
+            # in shipped plants (the digester is always a real source unit); warn
+            # if it is ever wired that way rather than failing silently.
+            if (conn.from_unit is None
+                    and getattr(conn.translator, "needs_src_pH", False)):
+                warnings.warn(
+                    f"Translator on the influent edge into '{conn.to_unit}."
+                    f"{conn.to_port}' declares needs_src_pH but has no source "
+                    f"unit (it is fed by an external influent), so its pH "
+                    f"feedback falls back to the fixed pH_adm. Feed it from the "
+                    f"pH-bearing unit (e.g. the digester) for state-derived pH.",
+                    stacklevel=2,
+                )
         self._inputs_by_unit = inputs_by_unit
 
     def _ordered_networks(self) -> list[CompiledNetwork]:
@@ -3977,6 +4001,14 @@ class Plant:
             # BSM1, where the colored build is slower), False never colors.
             under_trace = (isinstance(params, jax.core.Tracer)
                            or isinstance(y0, jax.core.Tracer))
+            # Derive (and, for "auto", benchmark) the colored backward builder on
+            # this concrete solve so a subsequent gradient can reuse it -- the
+            # builder is built only here (concretely), never under the gradient's
+            # own trace, which is why the auto benchmark cannot be deferred to the
+            # backward. The "auto" timing is a one-time per-plant cost in service
+            # of differentiation; a solve that is only ever run forward should use
+            # the default gradient="auto" (it routes forward-only solves to the
+            # fast jax_adjoint path and never reaches this stable_adjoint branch).
             if (colored_jacobian is not False and not under_trace
                     and self._colored_adjoint_builder is None):
                 self._colored_adjoint_jacobian_builder(

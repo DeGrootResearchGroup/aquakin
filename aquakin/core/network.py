@@ -232,8 +232,8 @@ class CompiledNetwork:
     # stiff blow-up. The clamp applies ONLY to rate evaluation: the raw state is
     # still what the reactor's (linear) transport term and the unit outputs see,
     # so the linear washout stays self-correcting and the inter-unit mass balance
-    # stays exact. This mirrors the reference IWA/BSM S-function convention
-    # (``xtemp = max(x, 0)`` before the process rates). Identity at feasible
+    # stays exact. Concretely, the rate inputs are clamped with ``max(x, 0)``
+    # before the process rates. Identity at feasible
     # (non-negative) states, so it does not change the physical solution.
     # Consequence for users: because the clamp is not applied to the saved state,
     # a returned trajectory (``solution.C`` / a plant ``state``) may contain small

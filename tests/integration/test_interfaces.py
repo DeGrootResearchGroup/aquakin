@@ -287,3 +287,27 @@ def test_plant_feeds_digester_pH_to_interface():
     # differs materially from the fixed-pH_adm result.
     assert sic_plant == pytest.approx(sic_fb, rel=1e-9)
     assert abs(sic_plant - sic_fixed) / sic_fixed > 0.03
+
+
+def test_needs_src_ph_influent_edge_warns():
+    """Defensive: a ``needs_src_pH`` translator wired to an EXTERNAL influent has
+    no source unit (so no state-derived pH), and the pH feedback would silently
+    fall back to the fixed ``pH_adm``. The connection-index build warns rather
+    than failing silently. Not reachable in shipped plants (the digester is
+    always a real source unit), so this exercises the defensive guard directly."""
+    from aquakin.plant.plant import Plant, Connection
+
+    class _SrcPHTranslator:
+        needs_src_pH = True
+
+        def translate(self, C, digester_pH=None):
+            return C
+
+    plant = Plant("defensive")
+    plant._unit_order = ["sink"]
+    plant.connections = [
+        Connection(from_unit=None, from_port="feed", to_unit="sink",
+                   to_port="in", translator=_SrcPHTranslator()),
+    ]
+    with pytest.warns(UserWarning, match="needs_src_pH"):
+        plant._build_connection_index()
