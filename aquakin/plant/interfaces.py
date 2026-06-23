@@ -32,7 +32,7 @@ cascades of the reference C are written here as branch-free greedy draws
 conditionals.
 
 The charge balances (inorganic carbon in ``asm2adm``, alkalinity in ``adm2asm``)
-are evaluated at the **digester pH**, as in the benchmark. Inside a plant the
+are evaluated at the **digester pH**, as in BSM2. Inside a plant the
 digester's instantaneous, state-derived pH is fed in via
 ``translate(..., digester_pH=...)``: ``asm2adm`` (whose destination is the
 digester) reads it from the destination unit, ``adm2asm`` (whose source is the
@@ -251,7 +251,7 @@ class ASM1toADM1:
 
         # Charge balance for inorganic carbon, evaluated at the digester pH. This
         # is the ONLY pH-dependent part of the mapping; everything above is a
-        # pH-independent COD/N partition. The benchmark feeds the digester's own
+        # pH-independent COD/N partition. BSM2 feeds the digester's own
         # pH into this balance, so ``digester_pH`` (the digester's instantaneous
         # state-derived pH, supplied by the plant) is used when available; the
         # fixed ``pH_adm`` is the standalone fallback. (VFA outputs are zero here.)
