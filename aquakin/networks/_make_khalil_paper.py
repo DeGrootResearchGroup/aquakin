@@ -114,6 +114,20 @@ def main():
     for sp in ADD_SPECIES:
         core["species"].append(by_name(parent["species"], sp))
 
+    # (1b) Sync each species' conserved-quantity `composition` from the parent
+    # (wats_sewer_extended.yaml is the single source of the WATS composition
+    # table), so the check_conservation() metadata propagates without being
+    # hand-maintained in this paper-active core.
+    for sp in core["species"]:
+        try:
+            parent_sp = by_name(parent["species"], sp["name"])
+        except KeyError:
+            continue
+        if "composition" in parent_sp:
+            sp["composition"] = parent_sp["composition"]
+        else:
+            sp.pop("composition", None)
+
     # (2) Fixed operating pH condition for the pH-dependent bulk oxidation.
     ph = {"name": "pH",
           "description": "Fixed operating pH (no charge-balance solver; used by "

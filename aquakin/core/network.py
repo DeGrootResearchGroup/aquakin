@@ -185,6 +185,12 @@ class CompiledNetwork:
     # re-derive units by string-matching species names.
     species_units: dict[str, str] = field(default_factory=dict)
     species_descriptions: dict[str, str] = field(default_factory=dict)
+    # Optional per-species content of conserved quantities (COD / N / P / S / Fe /
+    # charge / ...), in the species' own measure, declared in the YAML
+    # ``species[].composition`` block. Empty unless declared. Consumed by
+    # :meth:`composition` / :meth:`check_conservation`, so a network can carry its
+    # own conservation table instead of one hand-maintained elsewhere.
+    species_composition: dict[str, dict[str, float]] = field(default_factory=dict)
     # Declared units for the rate-constant parameters (keyed by namespaced name,
     # e.g. ``"O3_Br_direct.k1"``) and the condition fields (keyed by field name).
     # Advisory metadata carried verbatim from the YAML; consumed only by the
@@ -921,6 +927,101 @@ class CompiledNetwork:
 
         return check_network_units(self, check_root=check_root)
 
+    def composition(
+        self, *, params=None, electron_acceptor_cod: bool = True
+    ) -> dict[str, dict[str, float]]:
+        """The per-species conserved-quantity content table for this network.
+
+        Returns ``{species: {quantity: content}}`` -- the content of each
+        conserved quantity (``COD`` / ``N`` / ``P`` / ``S`` / ``Fe`` / ...) per
+        unit of the species' own measure. This is the table a conservation check
+        dots against the stoichiometry (:meth:`check_conservation`) and that a
+        results-level balance dots against concentrations.
+
+        Resolution order:
+
+        1. the network's own declared ``species[].composition`` metadata, if any;
+        2. otherwise the shipped role-based table
+           (:func:`aquakin.composition_table`) for the ASM / ADM families, which
+           reads the network's composition *parameters* (so a calibrated N / P
+           fraction flows through);
+        3. otherwise an empty table (no metadata available).
+
+        Parameters
+        ----------
+        params : array-like, optional
+            Parameter vector passed to the shipped role-based fallback so the
+            table tracks a calibrated / run composition. Ignored when the network
+            declares its own (literal) ``composition:`` metadata.
+        electron_acceptor_cod : bool, default True
+            Passed to the shipped role-based fallback (``False`` selects the
+            lab-COD convention; see :func:`aquakin.composition_table`). Ignored
+            for declared metadata.
+        """
+        if self.species_composition:
+            return {sp: dict(c) for sp, c in self.species_composition.items()}
+        from aquakin.utils.composition import composition_table
+        try:
+            return composition_table(
+                self, electron_acceptor_cod=electron_acceptor_cod, params=params)
+        except KeyError:
+            return {}
+
+    def check_conservation(
+        self, *, tol: float = 1e-2, params=None, quantities=None,
+        composition=None, electron_acceptor_cod: bool = True,
+    ) -> list:
+        """Conservation violations ``(reaction, quantity, residual)`` above ``tol``.
+
+        Dots each reaction's stoichiometry against the per-species
+        :meth:`composition` table; a quantity whose stoichiometry-weighted content
+        does not sum to zero (beyond ``tol``) is reported. Catches the
+        conservation-determined-coefficient errors that are otherwise easy to miss
+        -- a wrong electron-acceptor (O2 / NO3) demand breaks the COD balance, a
+        wrong product split breaks an elemental (S / N / P / Fe) balance.
+
+        **Advisory and opt-in**, like :meth:`check_units`: it never runs at load
+        and never raises on a violation -- it returns the list for you to inspect.
+        Restrict to specific ``quantities`` (e.g. ``["COD"]``) if desired, or pass
+        an explicit ``composition`` to override the network's table.
+
+        Raises ``ValueError`` only if no composition table is available (the
+        network declares none and there is no shipped fallback).
+        """
+        comp = (composition if composition is not None
+                else self.composition(params=params,
+                                      electron_acceptor_cod=electron_acceptor_cod))
+        if not comp:
+            raise ValueError(
+                f"network '{self.name}' has no composition metadata to check "
+                f"against: declare a `composition:` per species in the YAML, or "
+                f"pass an explicit composition=...")
+        from aquakin.utils.balance import check_conservation as _check
+        return _check(self, comp, tol=tol, params=params, quantities=quantities)
+
+    def check_nitrogen(
+        self, *, tol: float = 1e-2, params=None, composition=None,
+        nitrate: str = "S_NO", n_key: str = "N",
+    ) -> list:
+        """Nitrogen-balance violations ``(reaction, residual)`` above ``tol``.
+
+        The nitrogen analogue of :meth:`check_conservation`, accounting for the
+        nitrate reduced to (untracked) N2 gas: a reaction conserves nitrogen when
+        its tracked-species N content plus the gassed-off nitrate is zero. Exact
+        for both nitrification (no nitrate consumed) and denitrification. Uses the
+        network's :meth:`composition` table unless ``composition`` is passed.
+        """
+        comp = composition if composition is not None else self.composition(
+            params=params)
+        if not comp:
+            raise ValueError(
+                f"network '{self.name}' has no composition metadata to check "
+                f"against: declare a `composition:` per species in the YAML, or "
+                f"pass an explicit composition=...")
+        from aquakin.utils.balance import check_nitrogen as _check
+        return _check(self, comp, tol=tol, params=params, nitrate=nitrate,
+                      n_key=n_key)
+
 
 # --- compile_network stages --------------------------------------------
 
@@ -1321,6 +1422,12 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     # keeps the easy-to-type ASCII form.
     species_units = {s.name: prettify_units(s.units) for s in spec.species}
     species_descriptions = {s.name: s.description for s in spec.species}
+    # Per-species conserved-quantity content, declared in the YAML (empty unless
+    # a `composition:` block is given). Carried verbatim onto the runtime network.
+    species_composition = {
+        s.name: {q: float(v) for q, v in s.composition.items()}
+        for s in spec.species if getattr(s, "composition", None)
+    }
 
     # conditions_required = declared conditions; reactors validate runtime
     # SpatialConditions against this list.
@@ -1365,6 +1472,7 @@ def compile_network(spec: "Any") -> CompiledNetwork:
         _condition_defaults=condition_defaults,
         species_units=species_units,
         species_descriptions=species_descriptions,
+        species_composition=species_composition,
         parameter_units=parameter_units,
         condition_units=condition_units,
         parameter_bounds=parameter_bounds,

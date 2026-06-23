@@ -32,6 +32,28 @@ class SpeciesSpec(BaseModel):
     description: str = ""
     units: str = "mol/L"
     default_concentration: float = Field(default=0.0, ge=0.0)
+    # Optional per-species content of conserved quantities, in the species' own
+    # measure -- e.g. ``{COD: 1.0}`` for an organic (1 g COD per g COD),
+    # ``{COD: -1.0}`` for dissolved oxygen (an electron acceptor), ``{COD: -2.86,
+    # N: 1.0}`` for nitrate-N, ``{COD: 2.0, S: 1.0}`` for sulfide. Quantity names
+    # are free-form (``COD`` / ``N`` / ``P`` / ``S`` / ``Fe`` / ``charge`` ...);
+    # the conservation check (:meth:`CompiledNetwork.check_conservation`) dots them
+    # against the stoichiometry. Advisory metadata: declaring it lets a network
+    # carry its own conservation table instead of one hand-maintained elsewhere.
+    composition: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _composition_finite(self) -> "SpeciesSpec":
+        import math
+        for q, v in self.composition.items():
+            if not q:
+                raise ValueError(
+                    f"species '{self.name}' has an empty composition quantity name")
+            if not math.isfinite(v):
+                raise ValueError(
+                    f"species '{self.name}' composition[{q!r}] must be finite; "
+                    f"got {v}")
+        return self
 
 
 class ConditionSpec(BaseModel):
