@@ -3549,12 +3549,37 @@ is what production simulators use to snap to steady state on any topology.
   digester — the stiff case a plain root-find stalls on; 85 iters) both reach the
   forward-integration steady state to within ~1–3% on every key state, **~10×
   faster** than `run_to_steady_state`, to a tighter residual.
-- **Differentiable** for design sweeps: the returned `state` carries the
-  **implicit-function-theorem** parameter gradient (the iteration — a
-  `while_loop` — is gradient-blocked; the gradient is re-attached by a
-  `custom_vjp` that solves the transposed steady Jacobian `Jᵀw = ḡ` and returns
-  `−(∂F/∂params)ᵀw`), so `jax.grad` of a loss on the steady state flows to the
-  plant parameters. Verified against finite differences (rel. err ~1e-6).
+- **Differentiable in BOTH AD directions** for design sweeps and sensitivity: the
+  returned `state` carries the **implicit-function-theorem** parameter
+  sensitivity (the iteration — a `while_loop` — is gradient-blocked; the
+  sensitivity is re-attached by a **`custom_jvp`** that gives the forward tangent
+  `dy = −J⁻¹(∂F/∂params)·dθ`). Because that map is *linear in the tangent*, JAX
+  transposes it automatically to the reverse gradient `−(∂F/∂params)ᵀJ⁻ᵀḡ`, so the
+  one rule serves **forward** (`jax.jvp`/`jacfwd` — the many-output
+  sensitivity-screen direction) and **reverse** (`jax.grad`/`jacrev` — the
+  calibration-gradient direction) alike. (It was a reverse-only `custom_vjp`;
+  the `custom_jvp` is what unblocks forward-mode AD and `dgsm(ad_mode="forward")`
+  through `plant.steady_state`.) `J = ∂F/∂y` is full rank for the shipped networks
+  at their operating point, where the `jnp.linalg.solve` is exact; a rank-deficient
+  `J` (a fully dormant species) leaves the IFT sensitivity undefined along that
+  null direction (the old `lstsq` returned an arbitrary min-norm cotangent there
+  rather than the exact gradient, so it is not used). Verified: forward == reverse
+  to machine precision and both match finite differences (`tests/integration/test_steady_state.py`).
+- **`plant.steady_state_sensitivity(params, *, output_fn=, wrt=, mode=, elasticity=)`** —
+  the exact steady-state output sensitivity `d(output)/dθ` from the IFT, **far
+  cheaper than `jacfwd`/`jacrev` through `steady_state`** (which re-solves per
+  call): it solves the steady state once and reuses a single `∂F/∂y` factorisation
+  for every output and parameter. `output_fn` maps the flat plant state to a
+  length-`m` output vector (default: the full state, giving `dy*/dθ`). `wrt`
+  selects the parameters to differentiate (flat indices or `"<network>.<param>"`
+  names; default all) — restricting to `k` parameters makes forward mode cost `k`
+  solves rather than `n_params`. `mode` selects the AD direction — `"forward"`
+  (one solve per parameter, all outputs follow; efficient when outputs outnumber
+  parameters), `"reverse"` (one transposed solve + VJP per output, all parameters
+  follow; efficient when parameters outnumber outputs), or `"auto"` (forward iff
+  `k ≤ m`). Both give the same exact sensitivity; `elasticity=True` returns the
+  dimensionless `(dg/dθ)(θ/g)`. This is the general form of the plant-scale
+  sensitivity screen.
 - **Design variables** (`steady_state(..., design=...)`): because the IFT
   differentiates w.r.t. *whatever pytree the residual consumes*, the steady state
   is differentiable w.r.t. design variables, not only kinetic parameters, by

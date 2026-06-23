@@ -313,3 +313,85 @@ def test_bsm2_steady_state_per_state_scaling_cuts_iterations():
     rel = float(jnp.max(jnp.abs(default.state - flat.state)
                         / (jnp.abs(flat.state) + 1e-9)))
     assert rel < 1e-4
+
+
+@pytest.mark.slow
+def test_steady_state_forward_mode_ad():
+    """The steady-state IFT gradient is now a ``custom_jvp``, so the plant steady
+    state is differentiable in BOTH directions: forward-mode ``jacfwd`` flows
+    through ``plant.steady_state`` (previously rejected by the reverse-only
+    ``custom_vjp``), and it agrees with reverse-mode ``jax.grad`` and with finite
+    differences. This is the forward-mode capability the many-output sensitivity
+    screen needs."""
+    plant, asm1, y0 = _bsm1()
+    base = plant.default_parameters()
+    i = plant.parameter_index("asm1.muA")
+    si = asm1.species_index
+
+    def out(theta):
+        s = plant.steady_state(base.at[i].set(theta), y0=y0).state
+        return plant.states_by_unit(s)["tank5"][si["SNO"]]
+
+    th = float(base[i])
+    fwd = float(jax.jacfwd(out)(th))                 # forward mode (the new path)
+    rev = float(jax.grad(out)(th))                   # reverse mode (unchanged)
+    h = th * 1e-4
+    fd = (float(out(th + h)) - float(out(th - h))) / (2.0 * h)
+    assert np.isfinite(fwd) and np.isfinite(rev)
+    assert fwd == pytest.approx(rev, rel=1e-7)       # both IFT, same root
+    assert fwd == pytest.approx(fd, rel=1e-4)        # the true sensitivity (FD floor)
+
+
+@pytest.mark.slow
+def test_steady_state_sensitivity_helper():
+    """``plant.steady_state_sensitivity`` returns the exact IFT output sensitivity
+    in either AD direction from a single steady-state solve. Forward and reverse
+    give the same result; it matches a ``jax.grad`` through ``steady_state`` and
+    finite differences; the elasticity option is finite."""
+    plant, asm1, y0 = _bsm1()
+    base = plant.default_parameters()
+    si = asm1.species_index
+
+    def out_fn(y):
+        sb = plant.states_by_unit(y)
+        return jnp.array([sb["tank5"][si["SNH"]], sb["tank5"][si["SNO"]]])
+
+    Sf = np.asarray(plant.steady_state_sensitivity(
+        base, y0=y0, output_fn=out_fn, mode="forward"))
+    Sr = np.asarray(plant.steady_state_sensitivity(
+        base, y0=y0, output_fn=out_fn, mode="reverse"))
+    assert Sf.shape == (2, base.shape[0])
+    # forward and reverse are the same exact sensitivity
+    assert np.allclose(Sf, Sr, rtol=1e-7, atol=1e-12)
+
+    # matches a gradient through the solve, and finite differences
+    i = plant.parameter_index("asm1.muA")
+    th = float(base[i])
+
+    def scalar(theta):
+        s = plant.steady_state(base.at[i].set(theta), y0=y0).state
+        return plant.states_by_unit(s)["tank5"][si["SNO"]]
+
+    g = float(jax.grad(scalar)(th))
+    h = th * 1e-4
+    fd = (scalar(th + h) - scalar(th - h)) / (2.0 * h)
+    assert float(Sf[1, i]) == pytest.approx(g, rel=1e-7)
+    assert float(Sf[1, i]) == pytest.approx(float(fd), rel=1e-4)  # FD floor
+
+    # a parameter subset (wrt) equals the full computation's selected columns
+    wrt = ["asm1.muH", "asm1.muA", "asm1.etag"]
+    widx = [plant.parameter_index(w) for w in wrt]
+    Sw = np.asarray(plant.steady_state_sensitivity(
+        base, y0=y0, output_fn=out_fn, wrt=wrt, mode="forward"))
+    assert Sw.shape == (2, len(wrt))
+    assert np.allclose(Sw, Sf[:, widx], rtol=1e-7, atol=1e-12)
+
+    # state= (a pre-solved steady state) skips the internal solve, same result
+    ss = plant.steady_state(base, y0=y0).state
+    Ss = np.asarray(plant.steady_state_sensitivity(
+        base, state=ss, output_fn=out_fn, mode="forward"))
+    assert np.allclose(Ss, Sf, rtol=1e-7, atol=1e-12)
+
+    E = plant.steady_state_sensitivity(base, y0=y0, output_fn=out_fn,
+                                       elasticity=True)
+    assert bool(jnp.all(jnp.isfinite(E)))

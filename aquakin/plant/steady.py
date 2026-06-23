@@ -290,44 +290,42 @@ def solve_steady_state(
     )
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+@functools.partial(jax.custom_jvp, nondiff_argnums=(0,))
 def _ift_state(rhs, y_star, params):
-    """Identity in ``y_star``; defines the parameter gradient by the IFT.
+    """Identity in ``y_star``; defines the parameter sensitivity by the IFT.
 
-    Forward returns the converged ``y_star`` unchanged. The custom backward pass
-    ignores the (already-converged) ``y_star`` input direction and routes the
-    full state cotangent to ``params`` through the implicit function theorem.
+    Returns the converged ``y_star`` unchanged, but attaches the parameter
+    sensitivity through the implicit function theorem so the steady state is
+    differentiable with respect to ``params`` in **both** AD directions. The
+    custom JVP gives the forward-mode sensitivity ``dy = -J^{-1}(dF/dparams)``;
+    because that map is *linear in the input tangent*, JAX transposes it
+    automatically to recover the reverse-mode gradient ``-(dF/dparams)^T J^{-T}g``
+    -- so one rule serves forward (``jax.jvp`` / ``jacfwd``, the many-output
+    sensitivity-screen direction) and reverse (``jax.grad`` / ``jacrev``, the
+    calibration-gradient direction) alike. The (already-converged) ``y_star``
+    input carries no tangent: the root does not depend on the initial guess.
+
+    ``J = dF/dy`` is full rank for every shipped/validated network at its operating
+    point, where ``jnp.linalg.solve`` is exact (and equals the plain solve the
+    forward PTC step uses, so forward and reverse agree). If ``J`` were
+    rank-deficient -- a fully dormant/depleted species contributing a zero row, so
+    the root is not locally unique along that null direction -- the IFT sensitivity
+    would be undefined, and a sensitivity that moves only such a dormant species is
+    not reliable. (A min-norm ``lstsq`` would substitute a different arbitrary
+    choice there while risking the full-rank sensitivities, so it is not used.)
     """
     return y_star
 
 
-def _ift_state_fwd(rhs, y_star, params):
-    return y_star, (y_star, params)
-
-
-def _ift_state_bwd(rhs, res, g):
-    y_star, params = res
-    # Transposed steady-state Jacobian solve: w = (dF/dy)^{-T} g.
-    #
-    # The IFT cotangent w = J^{-T} g is exact and unique only when the steady
-    # Jacobian J = dF/dy is FULL RANK -- true for every shipped/validated network
-    # at its operating point, where this least-squares solve equals the plain
-    # `solve` the forward PTC step uses (so the forward and backward agree). If J
-    # is rank-deficient (e.g. a fully dormant/depleted species contributes a zero
-    # row, so the root is not locally unique along that null direction), the true
-    # IFT cotangent is undefined; `lstsq` then returns the MIN-NORM least-squares
-    # cotangent -- a reasonable but arbitrary choice, NOT the exact gradient. So a
-    # gradient w.r.t. a parameter that moves only a dormant species is not
-    # reliable there. (A Tikhonov shift would merely substitute a different
-    # arbitrary regularization while risking the full-rank gradients, so it is not
-    # used; see the full-rank note in `solve_steady_state`.)
+@_ift_state.defjvp
+def _ift_state_jvp(rhs, primals, tangents):
+    y_star, params = primals
+    _, dparams = tangents
+    # At the steady state F(y*, params) = 0, so J dy + (dF/dparams) dparams = 0
+    # (J = dF/dy), giving dy = -J^{-1} (dF/dparams . dparams). The directional
+    # parameter derivative dF/dparams . dparams is one forward JVP of the RHS; the
+    # input-guess tangent does not enter (the converged root is guess-independent).
+    _, dF = jax.jvp(lambda p: rhs(y_star, p), (params,), (dparams,))
     J = jax.jacfwd(lambda y: rhs(y, params))(y_star)
-    w, *_ = jnp.linalg.lstsq(J.T, g, rcond=None)
-    # grad_params = -(dF/dparams)^T w
-    _, vjp_params = jax.vjp(lambda p: rhs(y_star, p), params)
-    (grad_params,) = vjp_params(-w)
-    # No cotangent flows back to the y_star input (it is the fixed root).
-    return (jnp.zeros_like(y_star), grad_params)
-
-
-_ift_state.defvjp(_ift_state_fwd, _ift_state_bwd)
+    dy = -jnp.linalg.solve(J, dF)
+    return y_star, dy
