@@ -165,7 +165,10 @@ for r, q, residual in network.check_conservation(quantities=["COD"]):
 #     - name: growth
 #       conserved_for: [COD]                 # or a network-level `conserved_for:`
 #       rate: "mu * [SS] * [XBH]"
-#       stoichiometry: {SS: -2.0, XBH: 1.0, SO: auto}   # O2 demand solved from COD
+#       stoichiometry: {SS: "-1/Y_H", XBH: 1.0, SO: auto}   # O2 demand solved from COD
+# When a neighbour is a parameter expression (here -1/Y_H), the solved `auto`
+# coefficient is itself yield-dependent and stays differentiable -- calibrating
+# Y_H flows through it and the reaction conserves at *every* parameter value.
 
 # Export results to a table instead of float()-casting one species at a time.
 # Requires the optional `pandas` extra: pip install aquakin[dataframe]

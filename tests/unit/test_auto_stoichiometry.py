@@ -139,21 +139,74 @@ def test_auto_inconsistent_overdetermined_raises(tmp_path):
             """)
 
 
-def test_auto_with_parameter_expression_neighbour_raises(tmp_path):
-    # A yield-dependent neighbour makes the auto value parameter-dependent, which
-    # this phase does not handle.
-    with pytest.raises(NotImplementedError, match="parameter expression"):
+def _symbolic_growth(tmp_path):
+    # Yield-dependent O2 demand: SS coeff = -1/Y_H, SO solved from COD. The derived
+    # coefficient must conserve COD for EVERY Y_H, not just the nominal value.
+    return _load(tmp_path, """
+        network: {name: auto_paramexpr}
+        conserved_for: [COD]
+        parameters: {Y_H: {value: 0.67}}
+        species:
+          - {name: SS,  units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
+          - {name: SO,  units: gO2/m3,  default_concentration: 8.0, composition: {COD: -1.0}}
+          - {name: XBH, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
+        reactions:
+          - name: growth
+            rate: "mu * [SS] * [XBH]"
+            parameters: {mu: {value: 1.0}}
+            stoichiometry: {SS: "0.0 - 1.0 / Y_H", XBH: 1.0, SO: auto}
+        """)
+
+
+def test_auto_parameter_expression_resolves_and_conserves_for_all_yields(tmp_path):
+    import numpy as np
+    net = _symbolic_growth(tmp_path)
+    # The derived coefficient is parameter-dependent (a stoich_dynamic entry), not
+    # a baked constant.
+    assert net.stoich_dynamic, "expected a parameter-dependent (dynamic) coefficient"
+    j = net.species_index["SO"]
+    for Y in (0.4, 0.67, 0.9):
+        p = np.array(net.default_parameters())
+        p[net.param_index["Y_H"]] = Y
+        coef = float(net.compute_stoich(p)[0, j])
+        assert coef == pytest.approx((Y - 1.0) / Y, rel=1e-9)   # SO = (Y-1)/Y
+        assert net.check_conservation(tol=1e-9, params=p, quantities=["COD"]) == []
+
+
+def test_auto_parameter_expression_coefficient_is_differentiable(tmp_path):
+    """jax.grad flows through the derived (yield-dependent) coefficient: d(SO)/dY_H
+    of the resolved -1/Y_H + 1 is +1/Y_H^2."""
+    import jax
+    import jax.numpy as jnp
+    net = _symbolic_growth(tmp_path)
+    j, iY = net.species_index["SO"], net.param_index["Y_H"]
+    base = net.default_parameters()
+
+    def so_coeff(Y):
+        p = base.at[iY].set(Y)
+        return net.compute_stoich(p)[0, j]
+
+    g = jax.grad(so_coeff)(0.67)
+    assert jnp.isfinite(g)
+    assert float(g) == pytest.approx(1.0 / 0.67**2, rel=1e-6)
+
+
+def test_symbolic_auto_requires_square_system(tmp_path):
+    # Two balances (COD, N) but a single auto unknown alongside a parameter
+    # expression: the over-determined symbolic consistency would be
+    # parameter-dependent, so it is rejected at compile time.
+    with pytest.raises(ValueError, match="square system"):
         _load(tmp_path, """
-            network: {name: auto_paramexpr}
-            conserved_for: [COD]
+            network: {name: auto_symb_over}
+            conserved_for: [COD, N]
             parameters: {Y: {value: 0.5}}
             species:
-              - {name: S_S, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
-              - {name: S_O, units: gO2/m3,  default_concentration: 8.0, composition: {COD: -1.0}}
-              - {name: X,   units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
+              - {name: SS, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0, N: 0.05}}
+              - {name: SO, units: gO2/m3,  default_concentration: 8.0, composition: {COD: -1.0}}
+              - {name: X,  units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0, N: 0.10}}
             reactions:
               - name: growth
-                rate: "mu * [S_S]"
+                rate: "mu * [SS]"
                 parameters: {mu: {value: 1.0}}
-                stoichiometry: {S_S: "-1.0 / Y", X: 1.0, S_O: auto}
+                stoichiometry: {SS: "0.0 - 1.0 / Y", X: 1.0, SO: auto}
             """)

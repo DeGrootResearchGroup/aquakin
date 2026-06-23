@@ -1389,18 +1389,29 @@ reactions:
   `composition` content must sum to zero, giving one small linear system
   (`core/stoich_resolve.py`, `numpy.linalg.lstsq`) solved before the stoichiometry
   is read. Example: `stoichiometry: {SS: "-1/Y_H", X_BH: 1, SO: auto}` with
-  `conserved_for: [COD]` solves the O₂ demand from the COD balance. The resolved
-  value is baked into the static stoichiometry matrix, and the compiled network
-  conserves by construction (`check_conservation` is then a tautology on that
-  reaction — the point). Clear errors for an `auto` with no `conserved_for`, an
-  under-determined system (an auto species carrying no content in the conserved
-  quantities), or inconsistent balances. **Phase 2 of issue #291 — the numeric
-  case:** every *other* coefficient in an `auto` reaction must be a numeric literal
-  (a parameter-expression neighbour, which would make the resolved value
-  yield-dependent, raises `NotImplementedError` and is the remaining Phase 3 — feed
-  the derived coefficient to `stoich_dynamic`). `auto` requires declared
-  `composition:` (the resolver does not use the role-based fallback). Shipped
-  networks keep their published rounded literals; `auto` is opt-in.
+  `conserved_for: [COD]` solves the O₂ demand from the COD balance. The compiled
+  network then conserves by construction (`check_conservation` is a tautology on
+  that reaction — the point). Clear errors for an `auto` with no `conserved_for`,
+  an under-determined system (an auto species carrying no content in the conserved
+  quantities), or inconsistent balances. Two cases (issue #291 Phases 2–3):
+  - **numeric** — every other coefficient is a numeric literal, so the solve is
+    purely numeric (`lstsq`, tolerating an over-determined-but-consistent system)
+    and the resolved value is a constant baked into the static stoichiometry matrix.
+  - **parameter-expression (yield-dependent)** — a neighbour is a string expression
+    (e.g. `-1/Y_H`, as in the example above). Conservation is *linear* in the
+    coefficients, so each `auto` coefficient is a numeric-weighted linear
+    combination of the known coefficient expressions (`x = M⁻¹b`, `M` from the
+    composition); the resolver emits that as a *derived* expression string, which
+    the normal stoichiometry-expression machinery compiles into a
+    parameter-dependent (`stoich_dynamic`) coefficient. So calibrating a yield
+    flows through to the derived coefficient — the reaction conserves for **every**
+    parameter value, and `jax.grad` flows through it. This path needs a **square**
+    system (`#auto == #conserved_for`); an over-determined symbolic system's
+    consistency would be parameter-dependent and is rejected.
+
+  `auto` requires declared `composition:` (the resolver does not use the role-based
+  fallback). Shipped networks keep their published rounded literals; `auto` is
+  opt-in.
 - Optional `expressions:` block at the network level lets you give a name
   to an intermediate rate expression and reference it from a reaction's
   `rate:` or from another expression. References are inlined into the
@@ -1829,7 +1840,8 @@ aquakin/
 │   │   ├── network.py               # CompiledNetwork dataclass + compile()
 │   │   ├── stoich_resolve.py        # `auto`/`?` coefficient resolver: solve a
 │   │   │                            #   conservation-determined coefficient from the
-│   │   │                            #   composition table + conserved_for (numeric)
+│   │   │                            #   composition table + conserved_for (numeric, or
+│   │   │                            #   a derived param-expression for yield-dependent)
 │   │   ├── conditions.py            # SpatialConditions dataclass
 │   │   ├── context.py               # CompileContext dataclass
 │   │   ├── ph_solver.py             # differentiable charge-balance pH solver
