@@ -441,3 +441,41 @@ def test_steady_state_dgsm_matches_dgsm():
     assert se.shape == bound.shape
     j = res.input_names.index("asm1.muA")               # dominant input
     assert float(se[-1, 0, j]) < float(se[0, 0, j])     # std error shrinks with N
+
+
+def test_dgsm_cond_filter_and_with_cond_factor():
+    """The near-singular-Jacobian filter (the heavy-tail robustification) drops the
+    samples it should and re-aggregation reuses the retained per-sample data. Fast
+    and deterministic -- exercises the aggregation directly, no plant solve."""
+    from aquakin.plant.plant import (_dgsm_aggregate, _cond_mask,
+                                     SteadyStateDGSMResult)
+    rng = np.random.default_rng(0)
+    N, m, k = 200, 1, 3
+    grad = rng.normal(size=(N, m, k))
+    grad[0] = 1.0e6                       # one near-singular sample: huge sensitivity
+    grad_sq = grad ** 2
+    outputs = rng.normal(size=(N, m))
+    cond = np.full(N, 1.0e10)
+    cond[0] = 1.0e20                      # ... at a near-singular Jacobian
+    rng2 = np.ones(k)
+
+    mask = _cond_mask(cond, cond_factor=100.0)
+    assert not bool(mask[0]) and bool(mask[1:].all())
+    assert bool(_cond_mask(cond, None).all())          # None keeps everything
+
+    b_filt, *_ = _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=mask)
+    b_all, *_ = _dgsm_aggregate(grad_sq, outputs, rng2)   # includes the huge sample
+    assert np.all(b_filt < b_all)                      # the outlier inflates the mean
+
+    res = SteadyStateDGSMResult(
+        input_names=["a", "b", "c"], output_names=["o"],
+        sobol_total_bound=jnp.asarray(b_all), std_error=jnp.zeros((m, k)),
+        nu=jnp.zeros((m, k)), output_variance=jnp.zeros(m),
+        ranges=jnp.asarray(np.tile([0.0, 1.0], (k, 1))),
+        n_samples=N, seed=0, grad_sq=jnp.asarray(grad_sq),
+        outputs=jnp.asarray(outputs), n_valid=jnp.full(m, N),
+        cond=jnp.asarray(cond), cond_factor=None)
+    res2 = res.with_cond_factor(100.0)                 # re-aggregate, no re-solve
+    assert int(res2.n_valid[0]) == N - 1
+    np.testing.assert_allclose(np.asarray(res2.sobol_total_bound),
+                               np.asarray(b_filt), rtol=1e-12)
