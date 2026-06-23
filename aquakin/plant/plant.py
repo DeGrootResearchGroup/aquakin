@@ -586,6 +586,9 @@ class Plant:
         # order) and the (start, size) slice of the flat state vector. Empty for
         # the default AlgebraicTemperature.
         self._temperature_units: list[str] = []
+        # Volumes (m^3) of the tracked units, in the same order -- precomputed
+        # once so the heat-balance RHS need not re-read float(unit.volume) per call.
+        self._temperature_volumes: jnp.ndarray = jnp.zeros((0,))
         self._temperature_block: tuple[int, int] = (0, 0)
         self._parameter_layout: ParameterLayout = ParameterLayout()
         self._network_param_index: dict[str, int] = {}
@@ -1214,6 +1217,9 @@ class Plant:
         # parameter-block pattern, but for state): every per-unit slice above
         # keeps its index, so warm-starts and states_by_unit are unaffected.
         self._temperature_units = self.temperature_model.tracked_units(self)
+        self._temperature_volumes = jnp.asarray(
+            [float(self.units[n].volume) for n in self._temperature_units],
+            dtype=float)
         temp_size = self.temperature_model.state_size(self)
         self._temperature_block = (cursor, temp_size)
         cursor += temp_size
@@ -1569,6 +1575,26 @@ class Plant:
             ports = u.output_ports if role == "output" else u.input_ports
             out.extend(f"{name}.{p}" for p in ports)
         return out
+
+    def activated_sludge_reactors(self, *, require_volume: bool = True) -> list[str]:
+        """The activated-sludge reactor units (CSTR / MBR), in plant order.
+
+        Identified by the CSTR-only ``aeration`` attribute -- the digester and
+        the other volumed units lack it. ``require_volume`` (the default)
+        additionally requires a ``volume`` field: warm-starts and sizing need
+        the volume, whereas the mixing-energy term wants every mechanically
+        mixed reactor regardless. The single source of truth behind the
+        warm-start / design / evaluation reactor heuristics.
+        """
+        names = []
+        for name in self._unit_order:
+            unit = self.units[name]
+            if not hasattr(unit, "aeration"):
+                continue
+            if require_volume and not hasattr(unit, "volume"):
+                continue
+            names.append(name)
+        return names
 
     @staticmethod
     def _is_concentration_unit(unit) -> bool:

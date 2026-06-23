@@ -55,9 +55,7 @@ BSM1_WARM_REACTOR_COMPOSITION = {
 def _as_reactor_names(plant: "Plant") -> list:
     """The activated-sludge reactor CSTRs (volume + aeration), in plant order.
     The digester and other volumed units have no ``aeration`` field."""
-    reactors = [name for name in plant._unit_order
-                if hasattr(plant.units[name], "aeration")
-                and hasattr(plant.units[name], "volume")]
+    reactors = plant.activated_sludge_reactors(require_volume=True)
     if not reactors:
         raise ValueError(
             "No activated-sludge reactors found in this plant; cannot build a "

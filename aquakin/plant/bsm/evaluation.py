@@ -234,10 +234,10 @@ def _as_reactors(plant) -> list:
 
     Identified by the CSTR-only ``aeration`` attribute (the digester and other
     units lack it). All of them are mechanically mixed when unaerated, so the
-    mixing-energy term needs the full set, not just the aerated tanks.
+    mixing-energy term needs the full set, not just the aerated tanks -- hence
+    ``require_volume=False`` (an MBR-style reactor need not declare a volume).
     """
-    return [name for name in plant._unit_order
-            if hasattr(plant.units[name], "aeration")]
+    return plant.activated_sludge_reactors(require_volume=False)
 
 
 def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:

@@ -614,13 +614,16 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             # A single total-solids variable per layer. The settling velocity is
             # already TSS-based, so the lumped dynamics are the identical Takács
             # flux/convection math applied to the one TSS variable -- treat the
-            # state as an (n_layers, 1) array with unit TSS factor, run the same
-            # helpers, and flatten back. The result equals the per-species
-            # dTSS/dt aggregated over species for the same TSS profile.
+            # state as an (n_layers, 1) array and run the SAME component-agnostic
+            # helpers the per-species path uses, with a unit TSS factor and the
+            # feed TSS as the single inlet "concentration". The result equals the
+            # per-species dTSS/dt aggregated over species for the same profile.
             tss = part_state[:, None]                             # (n_layers, 1)
-            settling = self._settling_divergence_tss(tss, X_min, h_layer)
-            convection = self._convection_tss(
-                tss, tss_in, Q_in, v_up, v_down, h_layer
+            settling = self._settling_divergence(
+                tss, X_min, h_layer, factors=jnp.ones((1,))
+            )
+            convection = self._convection(
+                tss, tss_in[None], Q_in, v_up, v_down, h_layer
             )
             part_dstate = (convection + settling).reshape((-1,))
         else:
@@ -645,92 +648,11 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         ).reshape((-1,))
         return jnp.concatenate([part_dstate, sol_dstate])
 
-    def _settling_divergence_tss(
-        self, tss: jnp.ndarray, X_min: jnp.ndarray, h_layer: float
-    ) -> jnp.ndarray:
-        """Net Takács settling flux per layer on the lumped TSS state.
-
-        Identical interface flux-limiting to :meth:`_settling_divergence` but on
-        the single total-solids variable: the interface flux ``v_s(X)·X`` is the
-        limiting (minimum) of the two adjacent layers' potential fluxes, except
-        in the clarification zone while the receiving layer is dilute, where the
-        upper layer settles freely. ``tss`` is shape ``(n_layers, 1)``.
-
-        Parameters
-        ----------
-        tss : jnp.ndarray
-            Per-layer total solids as an ``(n_layers, 1)`` column.
-        X_min : jnp.ndarray
-            Non-settleable floor (``f_ns × feed TSS``).
-        h_layer : float
-            Layer height (m).
-
-        Returns
-        -------
-        jnp.ndarray
-            Per-layer settling divergence, shape ``(n_layers, 1)``.
-        """
-        tss_per_layer = tss[:, 0]                  # (n_layers,)
-        tss_above = tss_per_layer[1:]              # upper layer at each interface
-        tss_below = tss_per_layer[:-1]             # lower (receiving) layer
-        f_above = self._settling_velocity(tss_above, X_min) * tss_above
-        f_below = self._settling_velocity(tss_below, X_min) * tss_below
-
-        min_flux = jnp.minimum(f_above, f_below)
-        interface_idx = jnp.arange(self.n_layers - 1)
-        is_clarification = interface_idx >= self.feed_layer        # static bool
-        below_threshold = tss_below <= self._X_threshold
-        flux_tss = jnp.where(is_clarification & below_threshold, f_above, min_flux)
-
-        # flux_tss[i] flows from layer i+1 down to layer i. Zero-pad for the
-        # no-flux top/bottom boundaries.
-        flux_in_from_above = jnp.concatenate(
-            [flux_tss, jnp.zeros((1,))], axis=0
-        ) / h_layer
-        flux_out_to_below = jnp.concatenate(
-            [jnp.zeros((1,)), flux_tss], axis=0
-        ) / h_layer
-        return (flux_in_from_above - flux_out_to_below)[:, None]
-
-    def _convection_tss(
-        self,
-        tss: jnp.ndarray,
-        tss_in: jnp.ndarray,
-        Q_in: jnp.ndarray,
-        v_up: jnp.ndarray,
-        v_down: jnp.ndarray,
-        h_layer: float,
-    ) -> jnp.ndarray:
-        """Net convective transport per layer on the lumped TSS state.
-
-        Identical to :meth:`_convection` but on the single total-solids
-        variable, with the feed inflow carrying the feed TSS. ``tss`` is shape
-        ``(n_layers, 1)``; the return matches.
-        """
-        zero_row = jnp.zeros((1, 1))
-        below = jnp.concatenate([tss[1:, :], zero_row], axis=0)
-        above = jnp.concatenate([zero_row, tss[:-1, :]], axis=0)
-
-        is_below_feed = self._is_below_feed[:, None]
-        is_above_feed = self._is_above_feed[:, None]
-        is_feed = self._is_feed[:, None]
-
-        conv_in_down = (v_down / h_layer) * below * is_below_feed
-        conv_in_up = (v_up / h_layer) * above * is_above_feed
-        feed_inflow = (Q_in / (self.area * h_layer)) * tss_in * is_feed
-        conv_in = conv_in_down + conv_in_up + feed_inflow
-
-        conv_out = (
-            (v_down / h_layer) * tss * is_below_feed
-            + (v_up / h_layer) * tss * is_above_feed
-            + ((v_up + v_down) / h_layer) * tss * is_feed
-        )
-        return conv_in - conv_out
-
     def _settling_divergence(
-        self, layered: jnp.ndarray, X_min: jnp.ndarray, h_layer: float
+        self, layered: jnp.ndarray, X_min: jnp.ndarray, h_layer: float,
+        factors: "jnp.ndarray | None" = None,
     ) -> jnp.ndarray:
-        """Net Takács (1991) settling flux per layer, shape ``(n_layers, n_part)``.
+        """Net Takács (1991) settling flux per layer, shape ``(n_layers, n_comp)``.
 
         Solids settle down the column at the bulk velocity ``v_s(TSS)``. At
         each interface the downward flux is the *limiting* (minimum) of the two
@@ -741,14 +663,24 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         keeps the effluent clean). Below the feed the min-flux rule applies
         everywhere, so a dense sludge blanket self-limits its own loading.
 
-        The interface TSS flux is apportioned to species by the upper (source)
+        The interface TSS flux is apportioned to columns by the upper (source)
         layer's composition: all particulates in a layer settle at the same
-        bulk velocity, so species ``k``'s flux is ``flux_tss * X_k / TSS`` of
-        that layer (no extra TSS factor -- that would mis-scale to the species'
-        TSS flux). Summing ``flux_per_species * factor`` over species recovers
+        bulk velocity, so column ``k``'s flux is ``flux_tss * X_k / TSS`` of
+        that layer (no extra TSS factor -- that would mis-scale to the column's
+        TSS flux). Summing ``flux_per_col * factor`` over columns recovers
         ``flux_tss`` exactly, conserving total settleable solids.
+
+        Component-count agnostic (the column count is inferred from
+        ``layered.shape[1]``), so the per-species particulate state and the
+        single-column lumped-TSS state both route through here: the per-species
+        caller passes the species TSS ``factors``, and the lumped caller a
+        one-element ``[1.0]`` (the state already *is* the TSS, so its fraction
+        of the layer total is 1).
         """
-        tss_per_layer = jnp.sum(layered * self._factors_arr[None, :], axis=1)
+        if factors is None:
+            factors = self._factors_arr
+        n_comp = layered.shape[1]
+        tss_per_layer = jnp.sum(layered * factors[None, :], axis=1)
         # Interface i lies between layer i (below, receiving) and i+1 (above).
         tss_above = tss_per_layer[1:]   # upper layer at each interface (n-1,)
         tss_below = tss_per_layer[:-1]  # lower (receiving) layer at each interface
@@ -763,17 +695,17 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
 
         species_frac_above = layered[1:, :] / (tss_above[:, None] + 1e-12)
         flux_per_species = flux_tss[:, None] * species_frac_above
-        # (n_layers - 1, n_part) — downward positive, at interface i.
+        # (n_layers - 1, n_comp) — downward positive, at interface i.
 
         # flux_per_species[i] is the flux from layer i+1 down to layer i: it
         # enters layer i from above and leaves layer i+1 below. Pad with a zero
         # row for the no-flux top/bottom boundaries.
         flux_in_from_above = jnp.concatenate(
-            [flux_per_species, jnp.zeros((1, self._n_part))], axis=0
-        ) / h_layer   # (n_layers, n_part); top layer has 0
+            [flux_per_species, jnp.zeros((1, n_comp))], axis=0
+        ) / h_layer   # (n_layers, n_comp); top layer has 0
         flux_out_to_below = jnp.concatenate(
-            [jnp.zeros((1, self._n_part)), flux_per_species], axis=0
-        ) / h_layer   # (n_layers, n_part); bottom layer has 0
+            [jnp.zeros((1, n_comp)), flux_per_species], axis=0
+        ) / h_layer   # (n_layers, n_comp); bottom layer has 0
         return flux_in_from_above - flux_out_to_below
 
     def _convection(

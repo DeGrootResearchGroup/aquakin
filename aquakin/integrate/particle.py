@@ -22,8 +22,10 @@ from aquakin.integrate._common import (
     _HasNamedSpecies,
     GradientCheckMixin,
     _interp_fields_to_scalar,
+    cached_jitted_solver,
     friendly_solve_errors,
     init_solver_settings,
+    reactor_settings_key,
     resolve_state_atol,
     solve_chemistry,
     validate_C0_params,
@@ -144,9 +146,6 @@ class ParticleTrackReactor(GradientCheckMixin):
         if self.n_save < 2:
             raise ValueError(f"n_save must be >= 2, got {self.n_save}")
         self.atol = resolve_state_atol(network, atol)
-        # Single jitted variant: the track structure is fixed for the
-        # reactor's lifetime, so one cache slot is enough.
-        self._jitted_solve = None
 
     def solve(self, C0: jnp.ndarray, *, params: Optional[jnp.ndarray] = None) -> TrackSolution:
         """
@@ -169,20 +168,34 @@ class ParticleTrackReactor(GradientCheckMixin):
         )
         validate_C0_params(self.network, C0, params)
 
-        if self._jitted_solve is None:
-            self._jitted_solve = self._build_jitted_solve()
-        with friendly_solve_errors(self.max_steps, what="particle-track solve"):
-            ts, ys = self._jitted_solve(C0, params)
-        return TrackSolution(t=ts, C=ys, network=self.network)
-
-    def _build_jitted_solve(self):
-        """Build a jit-compiled inner solver. Track is closed-over."""
-        network = self.network
-        t_grid = self.track.t
-        fields = self.track.fields
+        t_grid = jnp.asarray(self.track.t)
         t0 = float(t_grid[0])
         t1 = float(t_grid[-1])
         t_save = jnp.linspace(t0, t1, self.n_save)
+        # Shared across reactor instances: the track-specific arrays (sample
+        # times and condition fields) are runtime arguments rather than baked
+        # into the closure, so an ensemble of same-shape tracks for one network
+        # reuses a single compiled solver (see cached_jitted_solver /
+        # integrate_ensemble). JAX's per-shape cache covers tracks that differ in
+        # length, so the key need only carry the network + settings.
+        settings = reactor_settings_key(self)
+        cache_key = (None if settings is None
+                     else ("particle", id(self.network), settings))
+        jitted = cached_jitted_solver(
+            cache_key, self._build_jitted_solve, self.network, self.adjoint)
+        with friendly_solve_errors(self.max_steps, what="particle-track solve"):
+            ts, ys = jitted(C0, params, t_grid, self.track.fields, t_save)
+        return TrackSolution(t=ts, C=ys, network=self.network)
+
+    def _build_jitted_solve(self):
+        """Build a jit-compiled inner solver that takes the track as arguments.
+
+        ``t_grid`` / ``fields`` / ``t_save`` are passed at call time (not closed
+        over), so one compiled program serves every track of a given shape -- the
+        cross-instance reuse the per-instance cache could not give. The
+        integration bounds are read from the track inside the trace.
+        """
+        network = self.network
         rtol = self.rtol
         atol = self.atol
         adjoint = self.adjoint
@@ -190,12 +203,12 @@ class ParticleTrackReactor(GradientCheckMixin):
         max_steps = self.max_steps
 
         @jax.jit
-        def _solve(C0, params):
+        def _solve(C0, params, t_grid, fields, t_save):
             sol = solve_chemistry(
                 network, C0, params,
                 cond_fn=lambda t: _interp_fields_to_scalar(t, t_grid, fields),
                 saveat=diffrax.SaveAt(ts=t_save),
-                t0=t0, t1=t1, rtol=rtol, atol=atol,
+                t0=t_grid[0], t1=t_grid[-1], rtol=rtol, atol=atol,
                 adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
             )
             return sol.ts, sol.ys

@@ -352,9 +352,7 @@ def _reactor_units(plant, explicit):
             if name not in plant.units:
                 raise ValueError(f"Unknown reactor unit {name!r}.")
         return list(explicit)
-    reactors = [name for name in plant._unit_order
-                if hasattr(plant.units[name], "aeration")
-                and hasattr(plant.units[name], "volume")]
+    reactors = plant.activated_sludge_reactors(require_volume=True)
     if not reactors:
         raise ValueError(
             "Could not auto-detect activated-sludge reactors; pass "

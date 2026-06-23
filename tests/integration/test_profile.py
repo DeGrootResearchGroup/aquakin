@@ -260,3 +260,45 @@ def test_profile_multibatch_rejected(simple_network):
             [jnp.asarray([0.0, 1.0])] * 2, ["A_to_B.k"], grid=[0.1, 0.2],
             profile_ic="A", observed_species=["B"],
         )
+
+
+def test_profile_compiled_cache_matches_uncached(growth_setup):
+    """The grid sweep shares one compiled objective across points (calibrate's
+    ``_compiled_cache``, with the pinned value / warm start threaded as runtime
+    arguments). The cached sweep must give bit-identical losses to calling
+    ``calibrate`` per point with no shared cache, and the shared cache must be
+    *reused* -- a second structurally identical fit adds no new compiled entry.
+    """
+    net, reactor, C0, t, obs, sig = growth_setup
+    grid = np.linspace(0.4, 1.6, 3)
+    common = dict(observed_species=["S", "X"], loss="mse", optimizer="gauss_newton")
+
+    pr = aquakin.profile_likelihood(
+        reactor, C0, obs, t, ["mu", "Y"], grid=grid, profile_param="Y",
+        warm_start=False, polish=False, n_starts=1, **common,
+    )
+
+    # Uncached reference: one calibrate per grid point, each compiling fresh.
+    ref = []
+    for v in grid:
+        init_p = net.default_parameters().at[net.param_index["Y"]].set(v)
+        c = aquakin.calibrate(
+            reactor, C0, obs, t, ["mu"], initial_params=init_p, n_starts=1,
+            laplace=False, **common,
+        )
+        ref.append(c.loss)
+    # Bit-identical: the cache only reuses the compiled program, not the maths.
+    assert np.array_equal(pr.loss, np.asarray(ref))
+
+    # A shared cache is reused: the second fit (different pinned value) must not
+    # grow the entry count -- it hits the compiled program the first one built.
+    shared: dict = {}
+    p0 = net.default_parameters().at[net.param_index["Y"]].set(0.5)
+    p1 = net.default_parameters().at[net.param_index["Y"]].set(1.5)
+    aquakin.calibrate(reactor, C0, obs, t, ["mu"], initial_params=p0, n_starts=1,
+                      laplace=False, _compiled_cache=shared, **common)
+    n_after_first = len(shared)
+    aquakin.calibrate(reactor, C0, obs, t, ["mu"], initial_params=p1, n_starts=1,
+                      laplace=False, _compiled_cache=shared, **common)
+    assert n_after_first > 0
+    assert len(shared) == n_after_first
