@@ -3659,6 +3659,21 @@ is what production simulators use to snap to steady state on any topology.
   `k ≤ m`). Both give the same exact sensitivity; `elasticity=True` returns the
   dimensionless `(dg/dθ)(θ/g)`. This is the general form of the plant-scale
   sensitivity screen.
+- **`plant.steady_state_dgsm(ranges, *, output_fn=, wrt=, mode=, n_samples=, seed=)`**
+  — **global** sensitivity (DGSM) of the steady state: samples the screened
+  parameters over their ranges (scrambled-Sobol QMC), solves the steady state at
+  each sample, and reads each output's sensitivity through
+  `steady_state_sensitivity` — reusing **one** `∂F/∂y` factorisation per sample, so
+  it is far cheaper than the generic `aquakin.dgsm` over `steady_state` (whose
+  `jacfwd`/`jacrev` recompute the steady-state structure per input tangent /
+  output). Aggregates to the Sobol total-index upper bound
+  `S_ij^tot ≤ ν_ij(b_j−a_j)²/(π²Var(g_i))`, `ν_ij = E[(∂g_i/∂z_j)²]`, returning a
+  `SteadyStateDGSMResult` (`sobol_total_bound`/`std_error` shape `(m, k)`,
+  `.ranked(output)`). Validated **bit-identical to `aquakin.dgsm`** (same Sobol
+  seed → same points → same formula), just computed more cheaply. It **retains the
+  per-sample data**, so `result.convergence()` returns the running bound + MC
+  standard error versus sample count — the **sample-size convergence study** with
+  no re-solving. (`tests/integration/test_steady_state.py`.)
 - **Design variables** (`steady_state(..., design=...)`): because the IFT
   differentiates w.r.t. *whatever pytree the residual consumes*, the steady state
   is differentiable w.r.t. design variables, not only kinetic parameters, by
