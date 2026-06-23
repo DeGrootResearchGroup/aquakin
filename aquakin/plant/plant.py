@@ -4756,3 +4756,130 @@ class Plant:
             state=res.state, converged=converged, method="ptc",
             iterations=iterations, residual=residual,
         )
+
+    def steady_state_sensitivity(
+        self,
+        params: Optional[jnp.ndarray] = None,
+        y0: Optional[jnp.ndarray] = None,
+        *,
+        state: Optional[jnp.ndarray] = None,
+        output_fn: Optional[Callable] = None,
+        wrt: Optional[Sequence] = None,
+        mode: str = "auto",
+        elasticity: bool = False,
+        **steady_kwargs,
+    ) -> jnp.ndarray:
+        """Exact steady-state output sensitivities via the implicit function theorem.
+
+        Solves the plant to steady state once, then returns ``d(output)/d(params)``
+        directly from the right-hand-side Jacobians -- no time integration and no
+        differentiation through the solve. A single steady-state solve and a single
+        ``dF/dy`` factorisation are reused for every output and parameter, so this
+        is far cheaper than ``jacfwd``/``jacrev`` through :meth:`steady_state`
+        (which re-solves per call).
+
+        The two AD directions are the two ways to read the same sensitivity:
+        forward mode (one solve per parameter, all outputs follow) is efficient
+        when the outputs outnumber the parameters; reverse mode (one transposed
+        solve plus a vector--Jacobian product per output, all parameters follow) is
+        efficient when the parameters outnumber the outputs.
+
+        Parameters
+        ----------
+        params : jnp.ndarray, optional
+            Plant parameters (defaults to :meth:`default_parameters`).
+        y0 : jnp.ndarray, optional
+            Warm start for the steady-state solve.
+        state : jnp.ndarray, optional
+            A pre-solved steady state to evaluate the sensitivity at, skipping the
+            internal solve. Use this when the operating point is already known (e.g.
+            a warm-start steady state) and to read the sensitivity in several ways
+            without re-solving each time. Must satisfy ``F(state, params) = 0``.
+        output_fn : callable, optional
+            Maps the flat plant state ``(total_state_size,)`` to a length-``m``
+            vector of scalar outputs. Defaults to the identity (the full state, so
+            the result is the ``(n_states, n_params)`` sensitivity ``dy*/dtheta``).
+        wrt : sequence of int or str, optional
+            The parameters to differentiate with respect to -- flat indices or
+            ``"<network>.<param>"`` names (resolved by :meth:`parameter_index`).
+            Defaults to all parameters. Restricting to a subset of ``k`` parameters
+            makes **forward** mode cost ``k`` solves (one per chosen parameter)
+            rather than ``n_params``; reverse mode returns all parameters from the
+            per-output solve regardless and simply selects this subset.
+        mode : {"auto", "forward", "reverse"}
+            AD direction. ``"auto"`` picks ``"forward"`` when the number of selected
+            parameters ``<= m`` and ``"reverse"`` otherwise. Both give the same exact
+            sensitivity.
+        elasticity : bool
+            If ``True`` return the dimensionless elasticity
+            ``(dg/dtheta)(theta/g)`` instead of the raw derivative.
+        **steady_kwargs
+            Forwarded to :meth:`steady_state` (e.g. ``max_iter``).
+
+        Returns
+        -------
+        jnp.ndarray
+            ``(m, k)`` sensitivity of the ``m`` outputs to the ``k`` selected
+            parameters (``k == n_params`` when ``wrt`` is ``None``).
+
+        Notes
+        -----
+        Exact when the steady Jacobian ``dF/dy`` is full rank (true for the shipped
+        networks at their operating point; see :func:`solve_steady_state`).
+        """
+        params = (self.default_parameters() if params is None
+                  else jnp.asarray(params))
+        if state is not None:
+            y_star = jax.lax.stop_gradient(jnp.asarray(state))
+        else:
+            y_star = jax.lax.stop_gradient(
+                self.steady_state(params, y0=y0, **steady_kwargs).state)
+
+        def F(y, p):
+            return self.derivative(y, params=p)
+
+        out_fn = output_fn if output_fn is not None else (lambda y: y)
+        g0 = jnp.atleast_1d(out_fn(y_star))
+        G = jax.jacfwd(out_fn)(y_star)                  # (m, n) or (n,)
+        if G.ndim == 1:
+            G = G[None, :]                              # scalar output -> (1, n)
+        m, n_par = G.shape[0], int(params.shape[0])
+
+        if wrt is None:
+            wrt_idx = jnp.arange(n_par)
+        else:
+            wrt_idx = jnp.asarray([
+                self.parameter_index(w) if isinstance(w, str) else int(w)
+                for w in wrt])
+        n_wrt = int(wrt_idx.shape[0])
+
+        J_y = jax.jacfwd(lambda y: F(y, params))(y_star)
+
+        chosen = ("forward" if n_wrt <= m else "reverse") if mode == "auto" else mode
+        if chosen == "forward":
+            # Differentiate only the selected parameters: k forward passes, not
+            # n_params. (k == n_params when wrt is None.)
+            def F_sub(theta_sub):
+                return F(y_star, params.at[wrt_idx].set(theta_sub))
+
+            J_theta = jax.jacfwd(F_sub)(params[wrt_idx])           # (n, n_wrt)
+            S = jnp.linalg.solve(J_y, -J_theta)                    # (n, n_wrt)
+            dgdth = G @ S                                          # (m, n_wrt)
+        elif chosen == "reverse":
+            # Each output's adjoint returns the sensitivity to every parameter;
+            # select the requested subset afterwards.
+            J_yT = J_y.T
+            _, vjp_F = jax.vjp(lambda p: F(y_star, p), params)
+
+            def _row(g_i):
+                lam = jnp.linalg.solve(J_yT, -g_i)                 # adjoint
+                return vjp_F(lam)[0][wrt_idx]                      # (n_wrt,)
+
+            dgdth = jax.vmap(_row)(G)                              # (m, n_wrt)
+        else:
+            raise ValueError(
+                f"mode must be 'auto', 'forward', or 'reverse'; got {mode!r}.")
+
+        if elasticity:
+            dgdth = dgdth * (params[wrt_idx][None, :] / g0[:, None])
+        return dgdth
