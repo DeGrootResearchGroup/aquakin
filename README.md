@@ -143,6 +143,33 @@ network.summary()                    # tabulates every species with its units
 for w in network.check_units():      # -> list of (reaction, location, detail)
     print(w)
 
+# Conservation (mass / electron balance) check. The companion to check_units:
+# each species declares its content of the conserved quantities in the YAML
+# (`composition: {COD: 1.0}` for an organic, `{COD: -1.0}` for oxygen, `{COD:
+# -2.86, N: 1.0}` for nitrate-N, ...), and check_conservation dots that table
+# against the stoichiometry -- so a wrong electron-acceptor demand breaks COD and
+# a wrong product split breaks an elemental (S/N/P/Fe) balance. Opt-in and
+# advisory (never raises). The ASM/ADM families fall back to a shipped table.
+network.composition()                # -> {species: {quantity: content}}
+for r, q, residual in network.check_conservation(quantities=["COD"]):
+    print(r, q, residual)            # reactions whose COD content does not balance
+# (For ASM1 this lists only `anoxic_growth_heterotrophs`: denitrification's
+# electrons leave as N2 gas, which ASM1 does not track -- a known, intentional
+# exception. The WATS sewer networks declare composition in their YAML and close
+# COD/S/N/Fe exactly.)
+
+# Better than checking after the fact: write a conservation-determined coefficient
+# as `auto` and let it be SOLVED from the declared balances at load -- so it can
+# never be typed wrong. With composition declared on each species:
+#   reactions:
+#     - name: growth
+#       conserved_for: [COD]                 # or a network-level `conserved_for:`
+#       rate: "mu * [SS] * [XBH]"
+#       stoichiometry: {SS: "-1/Y_H", XBH: 1.0, SO: auto}   # O2 demand solved from COD
+# When a neighbour is a parameter expression (here -1/Y_H), the solved `auto`
+# coefficient is itself yield-dependent and stays differentiable -- calibrating
+# Y_H flows through it and the reaction conserves at *every* parameter value.
+
 # Export results to a table instead of float()-casting one species at a time.
 # Requires the optional `pandas` extra: pip install aquakin[dataframe]
 df = solution.to_dataframe()         # time-indexed, one column per species

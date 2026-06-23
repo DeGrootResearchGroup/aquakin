@@ -36,11 +36,16 @@ N_PARAMS = {
 FES_PARAM = ("k_fes_p", 1.0, "m3/g/d",
              "FeS precipitation rate (iron-limited 2nd-order)")
 
+# composition: the conserved-quantity content (check_conservation table). Fe(II)
+# carries 0.143 gCOD/gFe; solid FeS its mass fractions (Fe 56/88, S 32/88) with
+# the residual COD, so the FeS-precipitation reaction closes COD / S / Fe.
 FES_SPECIES = [
     {"name": "S_Fe2", "description": "Dissolved ferrous iron Fe(II)",
-     "units": "gFe/m3", "default_concentration": 0.0},
+     "units": "gFe/m3", "default_concentration": 0.0,
+     "composition": {"COD": 0.143, "Fe": 1.0}},
     {"name": "X_FeS", "description": "Precipitated iron sulfide FeS (solid)",
-     "units": "gFeS/m3", "default_concentration": 0.0},
+     "units": "gFeS/m3", "default_concentration": 0.0,
+     "composition": {"COD": 0.818, "S": 32.0 / 88.0, "Fe": 56.0 / 88.0}},
 ]
 FES_REACTION = {
     "name": "FeS_precipitation",

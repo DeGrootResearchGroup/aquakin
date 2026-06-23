@@ -1,0 +1,110 @@
+"""First-class per-species composition metadata + the conservation-check API.
+
+A network may declare each species' content of the conserved quantities
+(``COD`` / ``N`` / ``P`` / ``S`` / ``Fe`` / ...) in a ``species[].composition``
+block. ``CompiledNetwork`` carries it as :attr:`species_composition`, exposes it
+through :meth:`composition`, and dots it against the stoichiometry in
+:meth:`check_conservation` / :meth:`check_nitrogen`. These tests pin:
+
+- the schema parses ``composition:`` and rejects a non-finite / unnamed entry;
+- the compiled network carries it and ``composition()`` returns it verbatim;
+- ``check_conservation`` flags a deliberately broken coefficient and passes a
+  balanced one, and raises a clear error when no composition is available;
+- a network that declares no composition falls back to the shipped role-based
+  table (the ASM/ADM families), so the API is uniform;
+- ``extends:`` inherits a base species' composition.
+"""
+
+import textwrap
+
+import pytest
+
+import aquakin
+
+
+def _write(tmp_path, body: str, name="net.yaml"):
+    p = tmp_path / name
+    p.write_text(textwrap.dedent(body))
+    return p
+
+
+# A minimal balanced redox toy: S_S + (1/Y) O2 -> X (the O2 demand closes the COD
+# balance exactly for the chosen yield). COD content: organic = 1, oxygen = -1.
+_TOY = """
+network: {{name: toy_balance, version: "1.0"}}
+species:
+  - {{name: S_S, units: gCOD/m3, default_concentration: 1.0, composition: {{COD: 1.0}}}}
+  - {{name: S_O, units: gO2/m3, default_concentration: 8.0, composition: {{COD: -1.0}}}}
+  - {{name: X,   units: gCOD/m3, default_concentration: 1.0, composition: {{COD: 1.0}}}}
+reactions:
+  - name: growth
+    rate: "mu * [S_S] * [X]"
+    parameters: {{mu: {{value: 1.0}}}}
+    stoichiometry: {{S_S: -2.0, S_O: {o2}, X: 1.0}}
+"""
+
+
+def test_schema_parses_and_network_carries_composition(tmp_path):
+    net = aquakin.load_network_from_file(_write(tmp_path, _TOY.format(o2=-1.0)))
+    assert net.species_composition["S_O"] == {"COD": -1.0}
+    comp = net.composition()
+    assert comp["S_S"] == {"COD": 1.0}
+    assert comp["S_O"] == {"COD": -1.0}
+    # composition() returns copies, not the internal dicts.
+    comp["S_S"]["COD"] = 999.0
+    assert net.species_composition["S_S"]["COD"] == 1.0
+
+
+def test_check_conservation_passes_balanced_flags_broken(tmp_path):
+    # S_S -2, X +1 -> 1 gCOD destroyed, so the O2 demand must be -1 to close COD.
+    ok = aquakin.load_network_from_file(_write(tmp_path, _TOY.format(o2=-1.0)))
+    assert ok.check_conservation(tol=1e-6) == []
+    # A wrong O2 coefficient breaks the COD balance and is flagged.
+    bad = aquakin.load_network_from_file(_write(tmp_path, _TOY.format(o2=-0.5),
+                                                name="bad.yaml"))
+    viol = bad.check_conservation(tol=1e-6)
+    assert [(r, q) for r, q, _ in viol] == [("growth", "COD")]
+    assert abs(viol[0][2]) == pytest.approx(0.5, abs=1e-9)
+
+
+def test_check_conservation_without_metadata_raises(tmp_path):
+    # ozone_bromate declares no composition and has no shipped role-based table.
+    net = aquakin.load_network("ozone_bromate")
+    assert net.species_composition == {}
+    assert net.composition() == {}
+    with pytest.raises(ValueError, match="no composition metadata"):
+        net.check_conservation()
+
+
+def test_composition_falls_back_to_shipped_table_for_asm():
+    """A network with no YAML composition delegates to the shipped role-based
+    table, so check_conservation works uniformly across families."""
+    asm1 = aquakin.load_network("asm1")
+    assert asm1.species_composition == {}          # none declared in YAML
+    comp = asm1.composition()
+    assert comp, "expected the shipped ASM1 role-based composition table"
+    # ASM1 conserves COD through the Gujer matrix (except the single
+    # denitrification reaction, which the electron convention handles -- here we
+    # just assert the fallback produces a usable table).
+    assert comp["SO"] == {"COD": -1.0}
+
+
+def test_composition_rejects_non_finite(tmp_path):
+    body = _TOY.format(o2=-1.0).replace("composition: {COD: -1.0}",
+                                        "composition: {COD: .inf}")
+    with pytest.raises(ValueError, match="must be finite"):
+        aquakin.load_network_from_file(_write(tmp_path, body))
+
+
+def test_extends_inherits_base_composition(tmp_path):
+    base = _write(tmp_path, _TOY.format(o2=-1.0), name="base.yaml")
+    # A derived network that overrides only the rate keeps the base composition.
+    derived = _write(tmp_path, f"""
+        network: {{name: toy_child, extends: {base}}}
+        reactions:
+          - name: growth
+            rate: "mu * [S_S]"
+        """, name="child.yaml")
+    child = aquakin.load_network_from_file(derived)
+    assert child.composition()["S_O"] == {"COD": -1.0}
+    assert child.check_conservation(tol=1e-6) == []

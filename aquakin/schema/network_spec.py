@@ -32,6 +32,28 @@ class SpeciesSpec(BaseModel):
     description: str = ""
     units: str = "mol/L"
     default_concentration: float = Field(default=0.0, ge=0.0)
+    # Optional per-species content of conserved quantities, in the species' own
+    # measure -- e.g. ``{COD: 1.0}`` for an organic (1 g COD per g COD),
+    # ``{COD: -1.0}`` for dissolved oxygen (an electron acceptor), ``{COD: -2.86,
+    # N: 1.0}`` for nitrate-N, ``{COD: 2.0, S: 1.0}`` for sulfide. Quantity names
+    # are free-form (``COD`` / ``N`` / ``P`` / ``S`` / ``Fe`` / ``charge`` ...);
+    # the conservation check (:meth:`CompiledNetwork.check_conservation`) dots them
+    # against the stoichiometry. Advisory metadata: declaring it lets a network
+    # carry its own conservation table instead of one hand-maintained elsewhere.
+    composition: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _composition_finite(self) -> "SpeciesSpec":
+        import math
+        for q, v in self.composition.items():
+            if not q:
+                raise ValueError(
+                    f"species '{self.name}' has an empty composition quantity name")
+            if not math.isfinite(v):
+                raise ValueError(
+                    f"species '{self.name}' composition[{q!r}] must be finite; "
+                    f"got {v}")
+        return self
 
 
 class ConditionSpec(BaseModel):
@@ -179,7 +201,19 @@ class ReactionSpec(BaseModel):
     # entries are evaluated at compile / solve time using the actual
     # parameter values, which means yield / N-content / fraction
     # coefficients can be calibrated alongside the kinetic constants.
+    #
+    # The sentinel string ``auto`` (or ``?``) marks a coefficient to be SOLVED
+    # from the declared conservation laws (this reaction's ``conserved_for``, or
+    # the network default) instead of written by hand -- so a
+    # conservation-determined coefficient cannot be written wrong. The other
+    # participating coefficients must be numeric literals (their balance is solved
+    # numerically at compile time), and every participating species must carry the
+    # relevant ``composition:`` content.
     stoichiometry: dict[str, Union[float, str]] = Field(default_factory=dict)
+    # Conserved quantities (e.g. ``[COD, N, P]``) used to solve any ``auto``
+    # coefficient in this reaction. ``None`` (the default) falls back to the
+    # network-level ``conserved_for``.
+    conserved_for: Optional[list[str]] = None
 
     @model_validator(mode="after")
     def _stoichiometry_non_empty(self) -> "ReactionSpec":
@@ -504,6 +538,11 @@ class NetworkSpec(BaseModel):
     conditions: list[ConditionSpec] = Field(default_factory=list)
     parameters: dict[str, ParameterSpec] = Field(default_factory=dict)
     expressions: dict[str, str] = Field(default_factory=dict)
+    # Default conserved quantities (e.g. ``[COD, N, P]``) used to solve any
+    # ``auto`` stoichiometric coefficient in a reaction that does not declare its
+    # own ``conserved_for``. Empty (the default) means a reaction using ``auto``
+    # must declare its own list.
+    conserved_for: list[str] = Field(default_factory=list)
     speciation: Optional[SpeciationSpec] = None
     precipitation: Optional[PrecipitationSpec] = None
     positivity_limiter: Optional[PositivityLimiterSpec] = None

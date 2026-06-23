@@ -57,10 +57,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = os.path.join(HERE, "wats_sewer_khalil_paper_balanced_biofilm_biomass.yaml")
 OUT = os.path.join(HERE, "wats_sewer_khalil_paper_balanced_biofilm_multispecies.yaml")
 
-# Active-biomass composition shared by every functional group (matches X_BH).
+# Active-biomass composition shared by every functional group (matches X_BH):
+# COD=1 with the biomass N / P / S micro-contents, so the conserved-quantity table
+# (check_conservation) closes the growth/decay balances for these groups too.
 _BIOMASS_SPECIES = lambda name, desc: {
     "name": name, "description": desc, "units": "gCOD/m3",
     "default_concentration": 1.0,
+    "composition": {"COD": 1.0, "N": 0.07, "P": 0.02, "S": 0.01},
 }
 
 # New network-level parameters (yields fixed from the literature; growth rates

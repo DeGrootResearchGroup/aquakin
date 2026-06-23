@@ -12,22 +12,29 @@ network:
   - "Calabro, Mannina & Viviani (2009). In-sewer processes (fermentation, anaerobic correction)."
 
 # --- State species. Inert fractions (S_I, X_I) advect but do not react.
+# composition: per-species content of the conserved quantities (COD / N / P / S),
+# in the species' own measure -- the table check_conservation() dots against the
+# stoichiometry. Organics carry COD=1; oxygen is an electron acceptor (COD=-1);
+# nitrate-N carries the electron COD -2.86 gCOD/gN reduced to N2; sulfide 2 and
+# sulfate 0 gCOD/gS. Biomass/substrate micro-contents (i_s_*, i_n_xb, i_n_bio,
+# i_p_bio) close the heterotrophic balances. S_CO2 (inorganic carbon) carries no
+# COD/N/P/S, so it has no composition entry.
 species:
-- {name: S_B, description: "Readily biodegradable substrate (non-VFA)", units: gCOD/m3, default_concentration: 40.0}
-- {name: S_VFA, description: "Volatile fatty acids (as acetate)", units: gCOD/m3, default_concentration: 40.0}
-- {name: X_BH, description: "Heterotrophic biomass", units: gCOD/m3, default_concentration: 30.0}
-- {name: X_S1, description: "Rapidly hydrolysable substrate", units: gCOD/m3, default_concentration: 160.3}
-- {name: X_S2, description: "Slowly hydrolysable substrate", units: gCOD/m3, default_concentration: 108.4}
-- {name: S_O, description: "Dissolved oxygen", units: gO2/m3, default_concentration: 0.0}
-- {name: S_NO, description: "Nitrate (as N)", units: gN/m3, default_concentration: 0.0}
-- {name: S_NH, description: "Ammonia (as N)", units: gN/m3, default_concentration: 44.0}
-- {name: sumS, description: "Total dissolved sulfide (as S)", units: gS/m3, default_concentration: 0.65}
-- {name: S_SO4, description: "Sulfate (as S)", units: gS/m3, default_concentration: 16.0}
-- {name: S_PO4, description: "Total phosphate (as P)", units: gP/m3, default_concentration: 10.0}
-- {name: S_H2, description: "Dissolved hydrogen", units: gCOD/m3, default_concentration: 0.0}
+- {name: S_B, description: "Readily biodegradable substrate (non-VFA)", units: gCOD/m3, default_concentration: 40.0, composition: {COD: 1.0, S: 0.0015}}
+- {name: S_VFA, description: "Volatile fatty acids (as acetate)", units: gCOD/m3, default_concentration: 40.0, composition: {COD: 1.0}}
+- {name: X_BH, description: "Heterotrophic biomass", units: gCOD/m3, default_concentration: 30.0, composition: {COD: 1.0, N: 0.07, P: 0.02, S: 0.01}}
+- {name: X_S1, description: "Rapidly hydrolysable substrate", units: gCOD/m3, default_concentration: 160.3, composition: {COD: 1.0, N: 0.07, S: 0.0015}}
+- {name: X_S2, description: "Slowly hydrolysable substrate", units: gCOD/m3, default_concentration: 108.4, composition: {COD: 1.0, N: 0.07, S: 0.0015}}
+- {name: S_O, description: "Dissolved oxygen", units: gO2/m3, default_concentration: 0.0, composition: {COD: -1.0}}
+- {name: S_NO, description: "Nitrate (as N)", units: gN/m3, default_concentration: 0.0, composition: {COD: -2.86, N: 1.0}}
+- {name: S_NH, description: "Ammonia (as N)", units: gN/m3, default_concentration: 44.0, composition: {N: 1.0}}
+- {name: sumS, description: "Total dissolved sulfide (as S)", units: gS/m3, default_concentration: 0.65, composition: {COD: 2.0, S: 1.0}}
+- {name: S_SO4, description: "Sulfate (as S)", units: gS/m3, default_concentration: 16.0, composition: {S: 1.0}}
+- {name: S_PO4, description: "Total phosphate (as P)", units: gP/m3, default_concentration: 10.0, composition: {P: 1.0}}
+- {name: S_H2, description: "Dissolved hydrogen", units: gCOD/m3, default_concentration: 0.0, composition: {COD: 1.0}}
 - {name: S_CO2, description: "Dissolved inorganic carbon (as C)", units: gC/m3, default_concentration: 20.0}
-- {name: S_I, description: "Inert soluble COD (non-reactive)", units: gCOD/m3, default_concentration: 20.0}
-- {name: X_I, description: "Inert particulate COD (non-reactive)", units: gCOD/m3, default_concentration: 20.0}
+- {name: S_I, description: "Inert soluble COD (non-reactive)", units: gCOD/m3, default_concentration: 20.0, composition: {COD: 1.0}}
+- {name: X_I, description: "Inert particulate COD (non-reactive)", units: gCOD/m3, default_concentration: 20.0, composition: {COD: 1.0}}
 conditions:
 - {name: T, description: "Temperature (degC)", default: 20.0}
 - {name: A_V, description: "Biofilm area-to-volume ratio (m2/m3)", default: 56.7}

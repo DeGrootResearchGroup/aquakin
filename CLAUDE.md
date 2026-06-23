@@ -1359,6 +1359,59 @@ reactions:
   once per `solve()` call so yield / N-content / fraction parameters can
   be calibrated alongside kinetic constants. See `asm1.yaml` for a worked
   example.
+- Optional per-species **`composition:`** block declares the species' content of
+  the conserved quantities in its own measure — `composition: {COD: 1.0}` for an
+  organic (1 g COD per g COD), `{COD: -1.0}` for dissolved oxygen (an electron
+  acceptor), `{COD: -2.86, N: 1.0}` for nitrate-N, `{COD: 2.0, S: 1.0}` for
+  sulfide. Quantity names are free-form (`COD` / `N` / `P` / `S` / `Fe` / `charge`
+  / …). It is **first-class conservation metadata**: a network carries its own
+  table instead of one hand-maintained in a test, read back via
+  `network.composition()` and dotted against the stoichiometry by
+  `network.check_conservation()` / `network.check_nitrogen()` (the
+  advisory/opt-in conservation analogue of `check_units`; it never runs at load
+  and never raises on a violation — it returns the list). A network that declares
+  no `composition:` falls back to the shipped role-based table
+  (`aquakin.composition_table`, the ASM/ADM families) so the check API is uniform;
+  a network with neither raises a clear error. Values are literal floats (a
+  yield-dependent *derived* coefficient stays in the stoichiometry, not here).
+  The WATS sewer family (`wats_sewer`, `wats_sewer_extended` and everything the
+  `_make_khalil_*` generators splice from them) ships `composition:` per species,
+  so the conservation suite checks each network against its own declared table
+  (`tests/integration/test_mass_balance.py`); inherited through `extends:` (a
+  derived species keeps the base's composition unless it overrides it).
+- A stoichiometric coefficient written **`auto`** (or **`?`**) is left unknown and
+  **solved from the declared conservation laws** at compile time, so a
+  conservation-determined coefficient *cannot be written wrong* — the failure mode
+  behind almost every stoichiometry bug here (a hand-typed electron-acceptor
+  demand, an elemental-S reduction donor, a product split). The quantities to
+  solve from are the reaction's **`conserved_for: [COD, N, …]`** (or a network-level
+  `conserved_for:` default); for each, the stoichiometry-weighted species
+  `composition` content must sum to zero, giving one small linear system
+  (`core/stoich_resolve.py`, `numpy.linalg.lstsq`) solved before the stoichiometry
+  is read. Example: `stoichiometry: {SS: "-1/Y_H", X_BH: 1, SO: auto}` with
+  `conserved_for: [COD]` solves the O₂ demand from the COD balance. The compiled
+  network then conserves by construction (`check_conservation` is a tautology on
+  that reaction — the point). Clear errors for an `auto` with no `conserved_for`,
+  an under-determined system (an auto species carrying no content in the conserved
+  quantities), or inconsistent balances. Two cases (issue #291 Phases 2–3):
+  - **numeric** — every other coefficient is a numeric literal, so the solve is
+    purely numeric (`lstsq`, tolerating an over-determined-but-consistent system)
+    and the resolved value is a constant baked into the static stoichiometry matrix.
+  - **parameter-expression (yield-dependent)** — a neighbour is a string expression
+    (e.g. `-1/Y_H`, as in the example above). Conservation is *linear* in the
+    coefficients, so each `auto` coefficient is a numeric-weighted linear
+    combination of the known coefficient expressions (`x = M⁻¹b`, `M` from the
+    composition); the resolver emits that as a *derived* expression string, which
+    the normal stoichiometry-expression machinery compiles into a
+    parameter-dependent (`stoich_dynamic`) coefficient. So calibrating a yield
+    flows through to the derived coefficient — the reaction conserves for **every**
+    parameter value, and `jax.grad` flows through it. This path needs a **square**
+    system (`#auto == #conserved_for`); an over-determined symbolic system's
+    consistency would be parameter-dependent and is rejected.
+
+  `auto` requires declared `composition:` (the resolver does not use the role-based
+  fallback). Shipped networks keep their published rounded literals; `auto` is
+  opt-in.
 - Optional `expressions:` block at the network level lets you give a name
   to an intermediate rate expression and reference it from a reaction's
   `rate:` or from another expression. References are inlined into the
@@ -1796,6 +1849,10 @@ aquakin/
 │   │   │                            #   batch each primitive (bit-identical to the
 │   │   │                            #   scalar stack, smaller jaxpr -> faster compile)
 │   │   ├── network.py               # CompiledNetwork dataclass + compile()
+│   │   ├── stoich_resolve.py        # `auto`/`?` coefficient resolver: solve a
+│   │   │                            #   conservation-determined coefficient from the
+│   │   │                            #   composition table + conserved_for (numeric, or
+│   │   │                            #   a derived param-expression for yield-dependent)
 │   │   ├── conditions.py            # SpatialConditions dataclass
 │   │   ├── context.py               # CompileContext dataclass
 │   │   ├── ph_solver.py             # differentiable charge-balance pH solver
@@ -2104,6 +2161,22 @@ network.precipitation_equilibrium(C, conditions)   # -> equilibrium state (n_spe
 network.check_units()                # -> list[UnitWarning] (reaction, location, detail)
 network.check_units(check_root=False)  # local rules only (skip currency/vol/time root)
 aquakin.parse_units("g_COD/m3")      # -> Dimension (or None if unknown); aquakin.UnitWarning
+
+# Conservation (mass / electron balance). The currency-aware companion to
+# check_units: dots the per-species composition table against the stoichiometry,
+# so a wrong electron-acceptor (O2/NO3) demand breaks COD and a wrong product
+# split breaks an elemental (S/N/P/Fe) balance. ADVISORY + opt-in like check_units
+# (never run at load, never raises on a violation -- it returns the list).
+network.composition()                # -> {species: {quantity: content}}; declared
+                                     #   `composition:` metadata, else the shipped
+                                     #   role-based table (composition_table) for
+                                     #   ASM/ADM, else {}.
+network.check_conservation()         # -> [(reaction, quantity, residual)] above tol
+network.check_conservation(tol=1e-2, quantities=["COD"], params=p)  # restrict / calibrated
+network.check_nitrogen()             # -> [(reaction, residual)]; credits nitrate -> N2 gas
+# Raises ValueError if no composition is available (declare a `composition:` per
+# species or pass composition=...). Quantity content lives in the network YAML
+# (the WATS family) or the shipped composition_table (ASM/ADM); both feed one API.
 # The shipped ASM1/2d/3, ozone, UV and WATS networks are unit-clean (0
 # warnings); ADM1 is clean on its dissolved/biological reactions but the check
 # DOES flag the three gas_outflow reactions -- the BSM2 gas headspace carries

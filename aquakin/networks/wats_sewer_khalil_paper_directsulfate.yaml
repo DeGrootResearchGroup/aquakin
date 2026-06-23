@@ -19,62 +19,106 @@ species:
   description: Heterotrophic biomass (bulk)
   units: gCOD/m3
   default_concentration: 11.8
+  composition:
+    COD: 1.0
+    N: 0.07
+    P: 0.02
+    S: 0.01
 - name: X_S1
   description: Rapidly hydrolyzable substrate
   units: gCOD/m3
   default_concentration: 28.32
+  composition:
+    COD: 1.0
+    N: 0.07
+    S: 0.0015
 - name: X_S2
   description: Slowly hydrolyzable substrate
   units: gCOD/m3
   default_concentration: 100.84
+  composition:
+    COD: 1.0
+    N: 0.07
+    S: 0.0015
 - name: X_S0
   description: Elemental sulfur
   units: gS/m3
   default_concentration: 15.0
+  composition:
+    COD: 1.5
+    S: 1.0
 - name: S_B
   description: Readily biodegradable substrate (non-VFA)
   units: gCOD/m3
   default_concentration: 120.0
+  composition:
+    COD: 1.0
+    S: 0.0015
 - name: S_VFA
   description: Volatile fatty acids (acetate)
   units: gCOD/m3
   default_concentration: 28.2
+  composition:
+    COD: 1.0
 - name: S_H2
   description: Dissolved hydrogen
   units: gCOD/m3
   default_concentration: 0.0
+  composition:
+    COD: 1.0
 - name: S_SO4
   description: Dissolved sulfate (as S)
   units: gS/m3
   default_concentration: 4.0
+  composition:
+    S: 1.0
 - name: sumS
   description: Dissolved sulfide (as S)
   units: gS/m3
   default_concentration: 9.0
+  composition:
+    COD: 2.0
+    S: 1.0
 - name: S_NO
   description: Dissolved nitrate (as N)
   units: gN/m3
   default_concentration: 30.0
+  composition:
+    COD: -2.86
+    N: 1.0
 - name: S_O
   description: Dissolved oxygen
   units: gO2/m3
   default_concentration: 0.0
+  composition:
+    COD: -1.0
 - name: X_BA
   description: Autotrophic (nitrifier) biomass
   units: gCOD/m3
   default_concentration: 5.0
+  composition:
+    COD: 1.0
+    N: 0.07
+    P: 0.02
+    S: 0.01
 - name: S_NH
   description: Ammonia (as N)
   units: gN/m3
   default_concentration: 44.0
+  composition:
+    N: 1.0
 - name: S_PO4
   description: Total phosphate (as P)
   units: gP/m3
   default_concentration: 10.0
+  composition:
+    P: 1.0
 - name: S_CH4
   description: Dissolved methane
   units: gCOD/m3
   default_concentration: 0.0
+  composition:
+    COD: 1.0
 - name: S_CO2
   description: Dissolved inorganic carbon (as C)
   units: gC/m3
@@ -83,10 +127,14 @@ species:
   description: Inert soluble COD (non-reactive)
   units: gCOD/m3
   default_concentration: 20.0
+  composition:
+    COD: 1.0
 - name: X_I
   description: Inert particulate COD (non-reactive)
   units: gCOD/m3
   default_concentration: 20.0
+  composition:
+    COD: 1.0
 conditions:
 - name: A_V
   description: Biofilm area-to-volume ratio (m2/m3)

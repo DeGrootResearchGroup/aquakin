@@ -13,8 +13,13 @@ Composition convention (content per unit of the species' own measure):
   - sulfide: COD = 2, elemental S: COD = 1.5, sulfate: COD = 0 (g COD per g S);
   - Fe(II): COD = 0.143 g COD per g Fe.
 Organic micro-contents of S/N/P (the i_s_*, i_n_bio, i_p_bio coefficients the
-model balances through S_SO4 / S_NH / S_PO4) are included so the heterotrophic
-balances close exactly.
+model balances through S_SO4 / S_NH / S_PO4) close the heterotrophic balances.
+
+The composition table is no longer a literal dict here: each WATS network now
+declares its own per-species ``composition:`` in the YAML, read back through
+``network.composition()`` and checked with ``network.check_conservation()`` /
+``network.check_nitrogen()`` (the conservation table is a first-class network
+property, so a value can no longer drift out of sync with the model it describes).
 """
 
 import os
@@ -22,45 +27,8 @@ import os
 import pytest
 
 import aquakin
-from aquakin.utils.balance import check_conservation, check_nitrogen
 
 _NDIR = os.path.join(os.path.dirname(aquakin.__file__), "networks")
-
-# Biomass / substrate micro-composition (literature stoichiometric coefficients).
-_I_S_SB, _I_S_BIO, _I_S_XB = 0.0015, 0.01, 0.0015
-_I_N_BIO, _I_N_XB, _I_P_BIO = 0.07, 0.07, 0.02
-
-WATS_COMPOSITION = {
-    # organic COD carriers (+ small S content of substrate / biomass). Particulate
-    # substrate also carries organic N (i_n_xb), released as ammonia on hydrolysis.
-    "S_B":   {"COD": 1.0, "S": _I_S_SB},
-    "S_VFA": {"COD": 1.0},                       # acetate carries no sulfur
-    "X_S1":  {"COD": 1.0, "S": _I_S_XB, "N": _I_N_XB},
-    "X_S2":  {"COD": 1.0, "S": _I_S_XB, "N": _I_N_XB},
-    "X_BH":  {"COD": 1.0, "N": _I_N_BIO, "P": _I_P_BIO, "S": _I_S_BIO},
-    "X_BA":  {"COD": 1.0, "N": _I_N_BIO, "P": _I_P_BIO, "S": _I_S_BIO},
-    # multispecies-biofilm functional-group biomass (same composition as biomass)
-    "X_SRB": {"COD": 1.0, "N": _I_N_BIO, "P": _I_P_BIO, "S": _I_S_BIO},
-    "X_MA":  {"COD": 1.0, "N": _I_N_BIO, "P": _I_P_BIO, "S": _I_S_BIO},
-    "X_SOB": {"COD": 1.0, "N": _I_N_BIO, "P": _I_P_BIO, "S": _I_S_BIO},
-    "S_CH4": {"COD": 1.0},
-    "S_H2":  {"COD": 1.0},
-    "S_I":   {"COD": 1.0},
-    "X_I":   {"COD": 1.0},
-    # electron acceptors
-    "S_O":   {"COD": -1.0},
-    "S_NO":  {"COD": -2.86, "N": 1.0},
-    # nutrient pools
-    "S_NH":  {"N": 1.0},
-    "S_PO4": {"P": 1.0},
-    # sulfur cycle (COD = oxygen demand of the reduced sulfur)
-    "sumS":  {"COD": 2.0, "S": 1.0},
-    "S_SO4": {"S": 1.0},
-    "X_S0":  {"COD": 1.5, "S": 1.0},
-    # iron sulfide (precipitation is not a redox step; Fe(II) = 0.143 gCOD/gFe)
-    "S_Fe2": {"COD": 0.143, "Fe": 1.0},
-    "X_FeS": {"COD": 0.818, "S": 32.0 / 88.0, "Fe": 56.0 / 88.0},
-}
 
 _MODELS = [
     "wats_sewer",
@@ -177,8 +145,8 @@ def _net(name):
 def test_cod_electron_balance(model):
     net = _net(model)
     excl = _cod_excluded(model)
-    viol = [(r, q, v) for r, q, v in check_conservation(net, WATS_COMPOSITION,
-                                                        tol=_TOL, quantities=["COD"])
+    viol = [(r, q, v) for r, q, v in net.check_conservation(tol=_TOL,
+                                                            quantities=["COD"])
             if r not in excl]
     assert not viol, f"{model} COD imbalance: " + "; ".join(
         f"{r} {v:+.3f}" for r, _, v in viol)
@@ -188,14 +156,13 @@ def test_faithful_reproduces_khalil_nonconserving_throttle():
     """The faithful model reproduces Khalil's undocumented anoxic-VFA throttle,
     which does not conserve COD; the _balanced model reverts it and conserves.
     This documents the contrast (and guards it against regression)."""
-    cod = {r: v for r, q, v in check_conservation(
-        _net("wats_sewer_khalil_paper"), WATS_COMPOSITION, tol=_TOL, quantities=["COD"])}
+    cod = {r: v for r, q, v in _net("wats_sewer_khalil_paper").check_conservation(
+        tol=_TOL, quantities=["COD"])}
     for rxn in _KHALIL_THROTTLE_RXNS:
         assert rxn in cod, f"faithful model should NOT conserve COD on {rxn!r} " \
                            "(reproduces Khalil's throttle)"
-    bal = [r for r, q, v in check_conservation(
-        _net("wats_sewer_khalil_paper_balanced"), WATS_COMPOSITION, tol=_TOL,
-        quantities=["COD"]) if r not in _COD_EXCLUDED]
+    bal = [r for r, q, v in _net("wats_sewer_khalil_paper_balanced").check_conservation(
+        tol=_TOL, quantities=["COD"]) if r not in _COD_EXCLUDED]
     assert not bal, f"balanced model COD imbalance: {bal}"
 
 
@@ -213,20 +180,20 @@ def test_yield_change_preserves_conservation():
         p = np.array(net.default_parameters())
         p[net.param_index["y_h"]] = 0.35
         excl = _cod_excluded(model)
-        cod = [(r, v) for r, q, v in check_conservation(
-            net, WATS_COMPOSITION, tol=_TOL, params=p, quantities=["COD"]) if r not in excl]
-        S = check_conservation(net, WATS_COMPOSITION, tol=_TOL, params=p, quantities=["S"])
+        cod = [(r, v) for r, q, v in net.check_conservation(
+            tol=_TOL, params=p, quantities=["COD"]) if r not in excl]
+        S = net.check_conservation(tol=_TOL, params=p, quantities=["S"])
         assert not cod, f"{model} COD imbalance at Y_H=0.35: {cod}"
         assert not S, f"{model} S imbalance at Y_H=0.35: {S}"
         if conserves_n:
-            assert not check_nitrogen(net, WATS_COMPOSITION, tol=_TOL, params=p), \
+            assert not net.check_nitrogen(tol=_TOL, params=p), \
                 f"{model} N imbalance at Y_H=0.35"
 
 
 @pytest.mark.parametrize("model", _MODELS)
 def test_sulfur_balance(model):
     net = _net(model)
-    viol = check_conservation(net, WATS_COMPOSITION, tol=_TOL, quantities=["S"])
+    viol = net.check_conservation(tol=_TOL, quantities=["S"])
     assert not viol, f"{model} sulfur imbalance: " + "; ".join(
         f"{r} {v:+.3f}" for r, _, v in viol)
 
@@ -234,7 +201,7 @@ def test_sulfur_balance(model):
 @pytest.mark.parametrize("model", _MODELS)
 def test_iron_balance(model):
     net = _net(model)
-    viol = check_conservation(net, WATS_COMPOSITION, tol=_TOL, quantities=["Fe"])
+    viol = net.check_conservation(tol=_TOL, quantities=["Fe"])
     assert not viol, f"{model} iron imbalance: " + "; ".join(
         f"{r} {v:+.3f}" for r, _, v in viol)
 
@@ -246,13 +213,13 @@ def test_balanced_model_conserves_nitrogen():
     published model), so it does NOT conserve N; that contrast is the point of
     the two-model pair."""
     balanced = _net("wats_sewer_khalil_paper_balanced")
-    viol = check_nitrogen(balanced, WATS_COMPOSITION, tol=_TOL)
+    viol = balanced.check_nitrogen(tol=_TOL)
     assert not viol, "balanced model N imbalance: " + "; ".join(
         f"{r} {v:+.3f}" for r, v in viol)
 
     # The faithful paper model does NOT track nitrogen -- assert the contrast so
     # the simplification is documented and regressions are caught.
     faithful = _net("wats_sewer_khalil_paper")
-    assert check_nitrogen(faithful, WATS_COMPOSITION, tol=_TOL), \
+    assert faithful.check_nitrogen(tol=_TOL), \
         "faithful model unexpectedly conserves N (it should reproduce the " \
         "published model's N-simplification)"
