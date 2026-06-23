@@ -2420,6 +2420,22 @@ prof.fits                            # the re-optimised CalibrationResult per gr
 # Unlike Laplace, the profile is exact for non-quadratic / non-identifiable
 # parameters: a parameter the data cannot pin gives a flat profile and an open
 # (None) interval -- a diagnosis the quadratic approximation cannot give.
+#
+# COMPILED-OBJECTIVE REUSE ACROSS GRID POINTS. Each grid point is a calibrate()
+# fit, and the points of a sweep differ ONLY in the pinned value / warm start --
+# the reactor, observations, free set, transforms and loss are identical. So
+# calibrate threads its per-call-varying data (p0_full, the per-dataset initial
+# states, the ic-prior centre) into the compiled objective + Jacobian as runtime
+# ARGUMENTS rather than baking them into the closure, and profile_likelihood
+# passes one shared compiled-objective cache (calibrate's private
+# `_compiled_cache`) across every point. The stiff objective + Jacobian then
+# compile ONCE for the whole sweep instead of per point -- ~4x faster on a
+# 9-point ASM1 sweep, growing with the grid size -- and the result is
+# bit-identical to recompiling per point (the cache reuses only the compiled
+# program). The key carries the structural shape, so a cache accidentally shared
+# across differently-shaped fits rebuilds rather than mis-hitting; a plain
+# calibrate() call (no `_compiled_cache`) is byte-for-byte unchanged. Verified in
+# tests/integration/test_profile.py::test_profile_compiled_cache_matches_uncached.
 ```
 
 Internal implementation details (`ASTNode` subclasses, `CompileContext`,
@@ -2451,7 +2467,16 @@ compiled solve to avoid it:
   library code that constructs reactors internally) no longer recompiles each
   time. (The `_build_jitted_solve` closure captures only the network and the
   scalar settings, so the key is complete; argument shapes/dtypes are handled by
-  JAX's own per-function cache.)
+  JAX's own per-function cache.) `BatchReactor`, `PlugFlowReactor` and
+  `ParticleTrackReactor` all route through this cache: the batch key carries the
+  `(t0, t1, t_eval shape)` call signature, the PFR key the fixed geometry
+  (`velocity`/`length`/`n_points`/`n_locations`), and the particle key only the
+  `(network, settings)` — the particle reactor passes the track's sample times
+  and condition fields as **runtime arguments** (not baked into the closure), so
+  an `integrate_ensemble` over same-shape tracks compiles **once** and JAX's
+  per-shape cache covers tracks of differing length. (`BiofilmReactor` keeps a
+  per-instance cache — its multi-compartment geometry makes a complete
+  cross-instance key less clear-cut.)
 - **Plant solves** are cached **per instance** (`Plant._jit_cache`), keyed by
   signature + settings. The plant RHS closes over the (static) unit graph, so
   the first solve compiles and every later solve of that plant reuses it —
@@ -2920,6 +2945,11 @@ Key types:
     `IndexError`. `PlantSolution.available_streams()` is a convenience alias for
     `plant.list_ports()`, and `solution.C_named(unit, species)` now gives the same
     hinted errors (unknown unit, unknown species, non-concentration unit).
+    `plant.activated_sludge_reactors(require_volume=True)` lists the AS reactor
+    units (the CSTR/MBR `aeration`-carrying units, digester excluded; in plant
+    order) — the single source of truth behind the warm-start / design-sizing /
+    evaluation reactor heuristics (`require_volume=False` keeps every mechanically
+    mixed reactor, e.g. for the mixing-energy term).
   - **Reading state back by unit.** `plant.states_by_unit(vec)` splits any flat
     plant vector into a `{unit_name: sub-vector}` map — the exact inverse of
     `initial_state(overrides=...)`. It works on a `y0`, a `PlantSolution.final_state`

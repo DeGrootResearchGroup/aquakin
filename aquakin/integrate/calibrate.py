@@ -547,6 +547,7 @@ def calibrate(
     seed: int = 0,
     max_iter: int = 500,
     tol: float = 1e-6,
+    _compiled_cache: Optional[dict] = None,
 ) -> CalibrationResult:
     """MAP fit with optional Laplace posterior approximation.
 
@@ -967,6 +968,19 @@ def calibrate(
         jnp.asarray(np.concatenate(ic_center_blocks)) if m_ic else jnp.zeros(0)
     )
 
+    # The per-call-varying data is threaded into the compiled objective as
+    # *arguments* (p0_full, the per-dataset initial states, the ic-prior centre),
+    # so a sequence of fits that differ only in those values -- a
+    # ``profile_likelihood`` grid sweep, where each point pins a parameter / IC --
+    # can reuse one compiled program instead of recompiling per point. The static
+    # per-dataset pieces (the observation times, span and loss/residual closures)
+    # stay baked, since they are invariant across such a sweep.
+    C0_base = tuple(C0_i for (C0_i, *_rest) in datasets)
+    dataset_static = [
+        (tobs_i, tspan_i, loss_fn_i, resid_fn_i)
+        for (_C0, tobs_i, tspan_i, loss_fn_i, resid_fn_i) in datasets
+    ]
+
     # --- The objective in unconstrained space --------------------------
 
     def physical_from_theta(rate_thetas: jnp.ndarray) -> jnp.ndarray:
@@ -987,14 +1001,18 @@ def calibrate(
         _da_fields = reactor.conditions.fields
         _da_rhs = lambda t, y, p: network.dCdt(y, p, _da_fields, 0)
 
-    def _predict(p, ic_thetas, rctr=None):
+    def _predict(p, ic_thetas, C0s, rctr=None):
         """Predicted observed-species trajectory per dataset, applying the
-        per-dataset free initial pools (if any). ``rctr`` defaults to the fit
-        reactor; the Laplace pass can supply a tighter-capped one (ignored by
-        the stable-adjoint backend, which needs no cap)."""
+        per-dataset free initial pools (if any). ``C0s`` is the per-dataset
+        initial states (a runtime argument, so a pinned-IC sweep reuses the
+        compiled program). ``rctr`` defaults to the fit reactor; the Laplace pass
+        can supply a tighter-capped one (ignored by the stable-adjoint backend,
+        which needs no cap)."""
         rctr = reactor if rctr is None else rctr
         preds = []
-        for k, (C0_i, tobs_i, tspan_i, _loss_i, _resid_i) in enumerate(datasets):
+        for k, ((tobs_i, tspan_i, _loss_i, _resid_i), C0_i) in enumerate(
+            zip(dataset_static, C0s)
+        ):
             C0_k = C0_i
             if m_ic:
                 C0_k = C0_i.at[ic_species_idx].set(
@@ -1012,14 +1030,16 @@ def calibrate(
                 preds.append(sol.C[:, obs_species_indices])
         return preds
 
-    def objective(theta: jnp.ndarray) -> jnp.ndarray:
+    def objective(theta, p0_full_arg, C0s, ic_center):
         rate_thetas = theta[:n_rate]
         ic_thetas = theta[n_rate:]
         physical = physical_from_theta(rate_thetas)
-        p = p0_full.at[free_indices].set(physical)
+        p = p0_full_arg.at[free_indices].set(physical)
         # Sum the data terms over every dataset (the batches share ``p``).
         data_term = 0.0
-        for (_C0, _t, _ts, loss_fn_i, _r), pred in zip(datasets, _predict(p, ic_thetas)):
+        for (_t, _ts, loss_fn_i, _r), pred in zip(
+            dataset_static, _predict(p, ic_thetas, C0s)
+        ):
             data_term = data_term + loss_fn_i(pred)
         if has_priors:
             data_term = data_term + 0.5 * jnp.sum(
@@ -1027,11 +1047,12 @@ def calibrate(
             )
         if m_ic and ic_prior_log_std:
             data_term = data_term + 0.5 * jnp.sum(
-                ((ic_thetas - ic_center_full) / ic_prior_log_std) ** 2
+                ((ic_thetas - ic_center) / ic_prior_log_std) ** 2
             )
         return data_term
 
-    def _residual_parts(rate_thetas, ic_thetas, rctr=None, *, include_ic_prior):
+    def _residual_parts(rate_thetas, ic_thetas, p0_full_arg, C0s, ic_center,
+                        rctr=None, *, include_ic_prior):
         """The stacked residual vector whose 0.5*||.||^2 is the objective's
         theta-dependent part. Shared by the Gauss-Newton fit (full theta,
         ``include_ic_prior=True``) and the Gauss-Newton Laplace Hessian (rate
@@ -1040,19 +1061,44 @@ def calibrate(
         the rate-only Fisher matrix). One source of truth keeps the two in sync.
         """
         physical = physical_from_theta(rate_thetas)
-        p = p0_full.at[free_indices].set(physical)
+        p = p0_full_arg.at[free_indices].set(physical)
         parts = []
-        for (_C0, _t, _ts, _loss_i, resid_fn_i), pred in zip(
-            datasets, _predict(p, ic_thetas, rctr)
+        for (_t, _ts, _loss_i, resid_fn_i), pred in zip(
+            dataset_static, _predict(p, ic_thetas, C0s, rctr)
         ):
             parts.append(resid_fn_i(pred))
         if has_priors:
             parts.append(prior_mask * (physical - prior_mean) / prior_std)
         if include_ic_prior and m_ic and ic_prior_log_std:
-            parts.append((ic_thetas - ic_center_full) / ic_prior_log_std)
+            parts.append((ic_thetas - ic_center) / ic_prior_log_std)
         return jnp.concatenate(parts)
 
-    obj_value_and_grad = jax.jit(jax.value_and_grad(objective))
+    # The per-call-varying data threaded into every compiled objective call.
+    _data = (p0_full, C0_base, ic_center_full)
+
+    # Compiled objective / Jacobian. When a caller (profile_likelihood) supplies
+    # a shared ``_compiled_cache`` for a sequence of structurally-identical fits,
+    # reuse one compiled program across them (the data flows as arguments); else
+    # build it fresh. The key carries the structural shape so a dict accidentally
+    # shared across differently-shaped fits rebuilds rather than mis-hitting.
+    def _cached_jit(key, build):
+        if _compiled_cache is None:
+            return build()
+        fn = _compiled_cache.get(key)
+        if fn is None:
+            fn = build()
+            _compiled_cache[key] = fn
+        return fn
+
+    _struct_key = (n_rate, m_ic, len(dataset_static), gradient, n_observed,
+                   tuple(int(ds[0].shape[0]) for ds in dataset_static))
+    _obj_vg_jit = _cached_jit(
+        ("obj_vg",) + _struct_key,
+        lambda: jax.jit(jax.value_and_grad(objective)),
+    )
+
+    def obj_value_and_grad(theta):
+        return _obj_vg_jit(theta, *_data)
 
     # --- Run SciPy L-BFGS-B in unconstrained space ---------------------
 
@@ -1099,17 +1145,28 @@ def calibrate(
         # Minimise the residual vector (0.5||r||^2 == the scalar objective) with
         # trust-region least-squares. The residual Jacobian is by forward-mode AD
         # if the reactor is forward-capable (DirectAdjoint), else reverse-mode.
-        def _full_residual(theta):
+        # The data (p0_full / initial states / ic centre) flows as arguments so a
+        # profile sweep reuses one compiled residual + Jacobian.
+        def _full_residual(theta, p0_full_arg, C0s, ic_center):
             return _residual_parts(
-                theta[:n_rate], theta[n_rate:], include_ic_prior=True
+                theta[:n_rate], theta[n_rate:], p0_full_arg, C0s, ic_center,
+                include_ic_prior=True,
             )
 
         # The stable adjoint is a reverse-only custom_vjp, so its residual
         # Jacobian must be reverse-mode regardless of the reactor's adjoint.
         _use_forward = _resolve_forward_jac(reactor)
-        _jac = jax.jacfwd(_full_residual) if _use_forward else jax.jacrev(_full_residual)
-        _res_j = jax.jit(_full_residual)
-        _jac_j = jax.jit(_jac)
+        _jac = (jax.jacfwd if _use_forward else jax.jacrev)(_full_residual, argnums=0)
+        _res_core = _cached_jit(("gn_res",) + _struct_key, lambda: jax.jit(_full_residual))
+        _jac_core = _cached_jit(
+            ("gn_jac", _use_forward) + _struct_key, lambda: jax.jit(_jac))
+
+        def _res_j(theta):
+            return _res_core(theta, *_data)
+
+        def _jac_j(theta):
+            return _jac_core(theta, *_data)
+
         # trust-region least-squares accepts +/-inf bounds (= unbounded dims).
         _ls_bounds = (_lb, _ub)
 
@@ -1255,7 +1312,8 @@ def calibrate(
             # omitted (it does not depend on the rates).
             def _residual_vec(rate_thetas):
                 return _residual_parts(
-                    rate_thetas, ic_opt, lap_reactor, include_ic_prior=False
+                    rate_thetas, ic_opt, p0_full, C0_base, ic_center_full,
+                    lap_reactor, include_ic_prior=False
                 )
 
             _use_fwd_lap = _resolve_forward_jac(lap_reactor)
@@ -1268,8 +1326,8 @@ def calibrate(
                 physical = physical_from_theta(rate_thetas)
                 p = p0_full.at[free_indices].set(physical)
                 total = 0.0
-                for (_C0, _t, _ts, loss_fn_i, _r), pred in zip(
-                    datasets, _predict(p, ic_opt, lap_reactor)
+                for (_t, _ts, loss_fn_i, _r), pred in zip(
+                    dataset_static, _predict(p, ic_opt, C0_base, lap_reactor)
                 ):
                     total = total + loss_fn_i(pred)
                 if has_priors:

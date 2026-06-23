@@ -395,7 +395,7 @@ class BatchReactor(GradientCheckMixin):
             make_f_flat, C0, params, free_idx, cond,
             t0=t0, t1=t1, t_eval=t_eval_arr, rtol=self.rtol, atol_y=atol_y,
             sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
-            dtmax=self.dtmax, max_steps=1_000_000, shared_factor=shared_factor,
+            dtmax=self.dtmax, max_steps=self.max_steps, shared_factor=shared_factor,
             cache=self._sens_jit_cache, cache_key=cache_key,
         )
         return BatchSolution(t=ts, C=y_traj, network=network), S_traj

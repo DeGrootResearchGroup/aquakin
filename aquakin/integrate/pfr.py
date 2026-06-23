@@ -15,8 +15,10 @@ from aquakin.integrate._common import (
     _HasNamedSpecies,
     GradientCheckMixin,
     _interp_fields_to_scalar,
+    cached_jitted_solver,
     friendly_solve_errors,
     init_solver_settings,
+    reactor_settings_key,
     resolve_state_atol,
     solve_chemistry,
     validate_C0_params,
@@ -127,14 +129,11 @@ class PlugFlowReactor(GradientCheckMixin):
         self.velocity = float(velocity)
         self.atol = resolve_state_atol(network, atol)
 
-        n_loc = max(conditions.n_locations, 1)
-        if n_loc == 1:
+        self.n_locations = max(conditions.n_locations, 1)
+        if self.n_locations == 1:
             self._x_grid = jnp.asarray([0.0])
         else:
-            self._x_grid = jnp.linspace(0.0, self.length, n_loc)
-        # PFR solve takes no varying signature args, so we only ever need one
-        # jitted variant; build it lazily on first solve.
-        self._jitted_solve = None
+            self._x_grid = jnp.linspace(0.0, self.length, self.n_locations)
         self._sens_jit_cache: dict = {}
 
     def solve(
@@ -178,10 +177,19 @@ class PlugFlowReactor(GradientCheckMixin):
 
         fields = active_conditions.fields
 
-        if self._jitted_solve is None:
-            self._jitted_solve = self._build_jitted_solve()
+        # Shared across reactor instances: a reactor with the same network,
+        # solver settings and geometry (velocity / length / grid) reuses one
+        # compiled solver (see cached_jitted_solver). The geometry is baked into
+        # the closure, so the key carries it; the condition *values* are a
+        # runtime argument. A traced call bypasses the cache (settings is None).
+        settings = reactor_settings_key(self)
+        cache_key = (None if settings is None
+                     else ("pfr", id(self.network), settings, self.velocity,
+                           self.length, self.n_points, self.n_locations))
+        jitted = cached_jitted_solver(
+            cache_key, self._build_jitted_solve, self.network, self.adjoint)
         with friendly_solve_errors(self.max_steps, what="plug-flow reactor solve"):
-            ts, ys = self._jitted_solve(C0, params, fields)
+            ts, ys = jitted(C0, params, fields)
         return PFRSolution(x=ts, C=ys, network=self.network)
 
     def solve_sensitivity(
@@ -266,12 +274,13 @@ class PlugFlowReactor(GradientCheckMixin):
             None if sens_rtol is None else float(sens_rtol),
         )
         # The augmented [y; S] solve resolves the sensitivity transient and is
-        # step-hungrier than the primal, so it uses the 1e6 budget (as Batch).
+        # step-hungrier than the primal; it honours the reactor's own max_steps
+        # (the shared convention -- raise it on the reactor if the budget is hit).
         xs, y_traj, S_traj = run_forward_sensitivity(
             make_f_flat, C0, params, free_idx, fields,
             t0=0.0, t1=self.length, t_eval=x_eval, rtol=self.rtol, atol_y=atol_y,
             sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
-            dtmax=self.dtmax, max_steps=1_000_000, shared_factor=shared_factor,
+            dtmax=self.dtmax, max_steps=self.max_steps, shared_factor=shared_factor,
             cache=self._sens_jit_cache, cache_key=cache_key,
         )
         return PFRSolution(x=xs, C=y_traj, network=network), S_traj

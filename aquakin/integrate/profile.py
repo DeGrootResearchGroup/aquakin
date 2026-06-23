@@ -265,6 +265,11 @@ def profile_likelihood(
             "profiling an initial condition)."
         )
 
+    # One compiled-objective cache shared across every grid point: the inner
+    # fits are structurally identical (same reactor, observations, free set,
+    # transforms, loss) and differ only in the pinned value / warm start, which
+    # calibrate threads as runtime arguments -- so they reuse one compiled
+    # program instead of recompiling the stiff objective + Jacobian per point.
     inner_kw = dict(
         transforms=transforms, observed_species=observed_species, loss=loss,
         sigma=sigma, priors=priors, use_priors=use_priors,
@@ -272,6 +277,7 @@ def profile_likelihood(
         ic_prior_log_std=ic_prior_log_std, param_halfwidth=param_halfwidth,
         optimizer=optimizer, jitter=jitter, jitter_schedule=jitter_schedule,
         seed=seed, max_iter=max_iter, tol=tol, laplace=False,
+        _compiled_cache={},
     )
 
     def _start_state(warm):

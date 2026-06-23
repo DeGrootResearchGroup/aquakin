@@ -146,9 +146,13 @@ class HeatBalanceTemperature(TemperatureModel):
                            dtype=float)
 
     def state_rhs(self, plant, temp_state, inlet_by_unit: dict) -> jnp.ndarray:
-        names = self.tracked_units(plant)
+        # The tracked-unit list and their volumes are fixed for the plant's
+        # lifetime, so read the values the plant precomputed at layout time
+        # rather than rebuilding tracked_units / re-reading float(volume) here.
+        names = plant._temperature_units
         if not names:
             return jnp.zeros((0,))
+        volumes = plant._temperature_volumes
         deriv = []
         for i, name in enumerate(names):
             Q_in, T_in = inlet_by_unit.get(name, (None, None))
@@ -157,6 +161,5 @@ class HeatBalanceTemperature(TemperatureModel):
                 # Temperature-agnostic inlet: hold the state fixed.
                 deriv.append(jnp.zeros(()))
                 continue
-            V = float(plant.units[name].volume)
-            deriv.append((Q_in / V) * (T_in - T))
+            deriv.append((Q_in / volumes[i]) * (T_in - T))
         return jnp.stack(deriv)
