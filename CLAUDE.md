@@ -1378,9 +1378,29 @@ reactions:
   `_make_khalil_*` generators splice from them) ships `composition:` per species,
   so the conservation suite checks each network against its own declared table
   (`tests/integration/test_mass_balance.py`); inherited through `extends:` (a
-  derived species keeps the base's composition unless it overrides it). This is
-  Phase 1 of issue #291 — `auto`/`?` conservation-DERIVED coefficients (solving an
-  unknown coefficient from the declared balances) are the follow-up phases.
+  derived species keeps the base's composition unless it overrides it).
+- A stoichiometric coefficient written **`auto`** (or **`?`**) is left unknown and
+  **solved from the declared conservation laws** at compile time, so a
+  conservation-determined coefficient *cannot be written wrong* — the failure mode
+  behind almost every stoichiometry bug here (a hand-typed electron-acceptor
+  demand, an elemental-S reduction donor, a product split). The quantities to
+  solve from are the reaction's **`conserved_for: [COD, N, …]`** (or a network-level
+  `conserved_for:` default); for each, the stoichiometry-weighted species
+  `composition` content must sum to zero, giving one small linear system
+  (`core/stoich_resolve.py`, `numpy.linalg.lstsq`) solved before the stoichiometry
+  is read. Example: `stoichiometry: {SS: "-1/Y_H", X_BH: 1, SO: auto}` with
+  `conserved_for: [COD]` solves the O₂ demand from the COD balance. The resolved
+  value is baked into the static stoichiometry matrix, and the compiled network
+  conserves by construction (`check_conservation` is then a tautology on that
+  reaction — the point). Clear errors for an `auto` with no `conserved_for`, an
+  under-determined system (an auto species carrying no content in the conserved
+  quantities), or inconsistent balances. **Phase 2 of issue #291 — the numeric
+  case:** every *other* coefficient in an `auto` reaction must be a numeric literal
+  (a parameter-expression neighbour, which would make the resolved value
+  yield-dependent, raises `NotImplementedError` and is the remaining Phase 3 — feed
+  the derived coefficient to `stoich_dynamic`). `auto` requires declared
+  `composition:` (the resolver does not use the role-based fallback). Shipped
+  networks keep their published rounded literals; `auto` is opt-in.
 - Optional `expressions:` block at the network level lets you give a name
   to an intermediate rate expression and reference it from a reaction's
   `rate:` or from another expression. References are inlined into the
@@ -1807,6 +1827,9 @@ aquakin/
 │   │   │                            #   batch each primitive (bit-identical to the
 │   │   │                            #   scalar stack, smaller jaxpr -> faster compile)
 │   │   ├── network.py               # CompiledNetwork dataclass + compile()
+│   │   ├── stoich_resolve.py        # `auto`/`?` coefficient resolver: solve a
+│   │   │                            #   conservation-determined coefficient from the
+│   │   │                            #   composition table + conserved_for (numeric)
 │   │   ├── conditions.py            # SpatialConditions dataclass
 │   │   ├── context.py               # CompileContext dataclass
 │   │   ├── ph_solver.py             # differentiable charge-balance pH solver

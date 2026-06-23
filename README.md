@@ -158,6 +158,15 @@ for r, q, residual in network.check_conservation(quantities=["COD"]):
 # exception. The WATS sewer networks declare composition in their YAML and close
 # COD/S/N/Fe exactly.)
 
+# Better than checking after the fact: write a conservation-determined coefficient
+# as `auto` and let it be SOLVED from the declared balances at load -- so it can
+# never be typed wrong. With composition declared on each species:
+#   reactions:
+#     - name: growth
+#       conserved_for: [COD]                 # or a network-level `conserved_for:`
+#       rate: "mu * [SS] * [XBH]"
+#       stoichiometry: {SS: -2.0, XBH: 1.0, SO: auto}   # O2 demand solved from COD
+
 # Export results to a table instead of float()-casting one species at a time.
 # Requires the optional `pandas` extra: pip install aquakin[dataframe]
 df = solution.to_dataframe()         # time-indexed, one column per species

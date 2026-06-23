@@ -25,6 +25,7 @@ from aquakin.core.nodes import (
     _BinaryNode,
 )
 from aquakin.core.parser import parse_rate_expression
+from aquakin.core.stoich_resolve import resolve_auto_coefficients
 
 
 # Used to detect references-to-other-expressions during AST inspection.
@@ -1392,6 +1393,17 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     expression_asts = _resolve_expressions(spec)
     _validate_expression_refs(expression_asts, species_index, condition_fields)
 
+    # Stage 3b: per-species conserved-quantity content (declared `composition:`),
+    # then resolve any `auto`/`?` stoichiometric coefficients from the declared
+    # conservation laws (issue #291), so the stoichiometry read in Stage 4 is fully
+    # numeric. Mutates spec.reactions in place; a no-op when no reaction uses `auto`.
+    species_composition = {
+        s.name: {q: float(v) for q, v in s.composition.items()}
+        for s in spec.species if getattr(s, "composition", None)
+    }
+    resolve_auto_coefficients(
+        spec.reactions, species_composition, getattr(spec, "conserved_for", None))
+
     # Stage 4: compile each reaction's stoichiometry + rate.
     n_species = len(species_names)
     n_reactions = len(spec.reactions)
@@ -1422,12 +1434,8 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     # keeps the easy-to-type ASCII form.
     species_units = {s.name: prettify_units(s.units) for s in spec.species}
     species_descriptions = {s.name: s.description for s in spec.species}
-    # Per-species conserved-quantity content, declared in the YAML (empty unless
-    # a `composition:` block is given). Carried verbatim onto the runtime network.
-    species_composition = {
-        s.name: {q: float(v) for q, v in s.composition.items()}
-        for s in spec.species if getattr(s, "composition", None)
-    }
+    # species_composition was built in Stage 3b (above) for the auto-coefficient
+    # resolver; it is carried verbatim onto the runtime network here.
 
     # conditions_required = declared conditions; reactors validate runtime
     # SpatialConditions against this list.
