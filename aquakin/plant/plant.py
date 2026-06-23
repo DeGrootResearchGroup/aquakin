@@ -642,6 +642,108 @@ class SteadyStateDGSMResult:
             n_valid=jnp.asarray(n_valid), cond_factor=cond_factor)
 
 
+def _dynamic_value_and_jacobian(f, x, mode):
+    """``(value, jacobian)`` of ``f`` at ``x`` in one primal pass.
+
+    Reverse mode forms the value and the ``(m, k)`` Jacobian from a single
+    ``jax.vjp`` (one primal solve, ``m`` transposed passes); forward mode from a
+    single ``jax.linearize`` (one primal solve, ``k`` tangent pushes). ``f`` must
+    already carry the adjoint matching ``mode`` (reverse: the cap-free stable
+    adjoint; forward: a forward-capable adjoint).
+    """
+    if mode == "reverse":
+        g, vjp_fn = jax.vjp(f, x)
+        S = jax.vmap(lambda c: vjp_fn(c)[0])(jnp.eye(int(g.shape[0])))   # (m, k)
+        return g, S
+    g, jvp_fn = jax.linearize(f, x)
+    S = jax.vmap(jvp_fn)(jnp.eye(int(x.shape[0]))).T                     # (m, k)
+    return g, S
+
+
+def _dynamic_dgsm_bounds(grad_sq, outputs, rng2):
+    """Sobol total-index bound from per-sample squared sensitivities of a transient
+    output, dropping (per output) any non-finite sample. The dynamic analogue of
+    the steady-state aggregation; there is no Jacobian-conditioning filter because
+    a transient sensitivity is differentiated through the solve, not via a
+    steady-state Jacobian.
+    """
+    import numpy as np
+    grad_sq = np.asarray(grad_sq)
+    outputs = np.asarray(outputs)
+    _, m, k = grad_sq.shape
+    valid = np.isfinite(outputs) & np.isfinite(grad_sq).all(axis=2)
+    nu = np.full((m, k), np.nan)
+    se = np.full((m, k), np.nan)
+    var = np.full(m, np.nan)
+    n_valid = valid.sum(axis=0).astype(int)
+    for i in range(m):
+        v = valid[:, i]
+        if int(v.sum()) < 2:
+            continue
+        g = grad_sq[v, i, :]
+        nu[i] = g.mean(axis=0)
+        se[i] = g.std(axis=0) / np.sqrt(int(v.sum()))
+        var[i] = outputs[v, i].var()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        scale = np.where((var > 0)[:, None],
+                         rng2[None, :] / (np.pi ** 2 * var[:, None]), np.nan)
+    return nu * scale, se * scale, nu, var, n_valid
+
+
+@dataclass
+class DynamicDGSMResult:
+    """Result of :meth:`Plant.dynamic_dgsm` -- a derivative-based global sensitivity
+    (DGSM) screen of a transient (time-window) plant output. Same Sobol
+    total-index bound as the steady-state screen, but each sample's sensitivity is
+    differentiated through the dynamic solve. Fields mirror
+    :class:`SteadyStateDGSMResult` (without the steady-state Jacobian conditioning).
+    """
+
+    input_names: list
+    output_names: list
+    sobol_total_bound: jnp.ndarray
+    std_error: jnp.ndarray
+    nu: jnp.ndarray
+    output_variance: jnp.ndarray
+    ranges: jnp.ndarray
+    n_samples: int
+    seed: int
+    grad_sq: jnp.ndarray
+    outputs: jnp.ndarray
+    n_valid: jnp.ndarray
+
+    def ranked(self, output=0):
+        """``[(input_name, bound)]`` for one output, sorted by decreasing bound."""
+        i = (self.output_names.index(output) if isinstance(output, str)
+             else int(output))
+        pairs = [(n, float(b))
+                 for n, b in zip(self.input_names, self.sobol_total_bound[i])]
+        return sorted(pairs, key=lambda t: t[1], reverse=True)
+
+    def convergence(self, counts=None):
+        """Running Sobol bound and Monte-Carlo standard error versus sample count,
+        recomputed from the retained per-sample data (no re-solving).
+        """
+        import math
+        import numpy as np
+        n = int(self.outputs.shape[0])
+        if counts is None:
+            j0 = 4
+            counts = [2 ** j for j in range(j0, max(j0, int(math.log2(n))) + 1)]
+            if not counts or counts[-1] != n:
+                counts.append(n)
+        rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)
+        gs = np.asarray(self.grad_sq)
+        ov = np.asarray(self.outputs)
+        b_list, se_list = [], []
+        for k in counts:
+            bound, se, *_ = _dynamic_dgsm_bounds(gs[:k], ov[:k], rng2)
+            b_list.append(bound)
+            se_list.append(se)
+        return (jnp.asarray(counts), jnp.asarray(np.stack(b_list)),
+                jnp.asarray(np.stack(se_list)))
+
+
 def _senses_concentration(unit) -> bool:
     """Whether a control loop can read a measured species from ``unit``'s state.
 
@@ -5232,3 +5334,191 @@ class Plant:
             grad_sq=jnp.asarray(grad_sq), outputs=jnp.asarray(outputs),
             n_valid=jnp.asarray(n_valid), cond=jnp.asarray(cond),
             cond_factor=cond_factor)
+
+    @staticmethod
+    def _dynamic_adjoint_kwargs(mode):
+        """The ``solve`` keyword that pins the adjoint matching the AD ``mode``.
+
+        Reverse mode uses the cap-free stable adjoint; forward mode a
+        forward-capable (direct) adjoint. This is the choice a user otherwise has
+        to make by hand -- the default reverse adjoint goes non-finite on a stiff
+        dynamic plant, and forward mode needs a non-``custom_vjp`` adjoint.
+        """
+        if mode == "reverse":
+            return {"gradient": "stable_adjoint"}
+        if mode == "forward":
+            return {"adjoint": diffrax.DirectAdjoint()}
+        raise ValueError(
+            f"mode must be 'reverse', 'forward', or 'auto'; got {mode!r}.")
+
+    def dynamic_sensitivity(
+        self,
+        params: Optional[jnp.ndarray] = None,
+        *,
+        output_fn: Callable,
+        t_span: tuple,
+        t_eval: Optional[jnp.ndarray] = None,
+        wrt: Optional[Sequence] = None,
+        mode: str = "reverse",
+        y0: Optional[jnp.ndarray] = None,
+        elasticity: bool = False,
+        **solve_kwargs,
+    ) -> jnp.ndarray:
+        """Sensitivity of a transient (time-window) output to the parameters.
+
+        Differentiates a dynamic :meth:`solve` over ``t_span`` through the time
+        integration -- the dynamic counterpart of :meth:`steady_state_sensitivity`,
+        for outputs that depend on the trajectory rather than the operating point
+        (an effluent time series, a window average, a peak). Unlike the steady-state
+        case there is no implicit-function-theorem shortcut, so the cost is one
+        differentiated stiff solve; this wrapper's value is that it **selects the
+        correct adjoint for the direction** (the common footgun): reverse mode uses
+        the cap-free stable adjoint of the stiff plant, forward mode a
+        forward-capable adjoint. The per-call computation is wrapped in ``jax.jit``,
+        so repeated calls at different parameters reuse the (significant) compile.
+
+        Parameters
+        ----------
+        params : jnp.ndarray, optional
+            Plant parameters (defaults to :meth:`default_parameters`).
+        output_fn : callable
+            Maps the :class:`PlantSolution` to a length-``m`` vector of scalar
+            outputs (e.g. ``lambda sol: sol.C_named("tank5", "SNO")`` for the
+            effluent-nitrate trajectory, or a window average of it).
+        t_span, t_eval :
+            Integration interval and the times at which the trajectory is saved
+            (passed straight to :meth:`solve`).
+        wrt : sequence of int or str, optional
+            Parameters to differentiate (flat indices or ``"<network>.<param>"``
+            names; default all).
+        mode : {"reverse", "forward", "auto"}
+            AD direction. ``"reverse"`` (default; ``"auto"`` resolves to it) suits
+            many parameters / few outputs and uses the stable adjoint;
+            ``"forward"`` suits few parameters / many outputs and uses a
+            forward-capable adjoint (stores the solve -- heavier on memory).
+        y0 : jnp.ndarray, optional
+            Initial plant state (e.g. a warm-start steady state).
+        elasticity : bool
+            If ``True`` return the dimensionless ``(dg/dtheta)(theta/g)``.
+        **solve_kwargs
+            Forwarded to :meth:`solve` (e.g. ``max_steps``).
+
+        Returns
+        -------
+        jnp.ndarray
+            ``(m, k)`` sensitivity of the ``m`` outputs to the ``k`` parameters.
+        """
+        params = (self.default_parameters() if params is None
+                  else jnp.asarray(params))
+        if wrt is None:
+            wrt_idx = list(range(int(params.shape[0])))
+        else:
+            wrt_idx = [self.parameter_index(w) if isinstance(w, str) else int(w)
+                       for w in wrt]
+        wrt_j = jnp.asarray(wrt_idx)
+        theta0 = params[wrt_j]
+        chosen = "reverse" if mode == "auto" else mode
+        solve_adj = self._dynamic_adjoint_kwargs(chosen)
+
+        def _f(theta):
+            p = params.at[wrt_j].set(theta)
+            sol = self.solve(t_span, t_eval=t_eval, params=p, y0=y0,
+                             **solve_adj, **solve_kwargs)
+            return jnp.atleast_1d(output_fn(sol))
+
+        # The value+Jacobian (vjp / linearize) is jitted as a unit -- not the inner
+        # solve, since vjp of an already-jitted function is unsupported -- so the
+        # stiff-adjoint compile is reused on a repeat call at the same signature.
+        g, S = jax.jit(lambda th: _dynamic_value_and_jacobian(_f, th, chosen))(theta0)
+        if elasticity:
+            S = S * (theta0[None, :] / g[:, None])
+        return S
+
+    def dynamic_dgsm(
+        self,
+        ranges,
+        *,
+        output_fn: Callable,
+        t_span: tuple,
+        t_eval: Optional[jnp.ndarray] = None,
+        wrt: Optional[Sequence] = None,
+        mode: str = "reverse",
+        y0: Optional[jnp.ndarray] = None,
+        n_samples: int = 256,
+        seed: int = 0,
+        output_names: Optional[Sequence] = None,
+        progress: Optional[int] = None,
+        **solve_kwargs,
+    ) -> "DynamicDGSMResult":
+        """Derivative-based global sensitivity (DGSM) of a transient plant output.
+
+        The dynamic counterpart of :meth:`steady_state_dgsm`: scrambled-Sobol QMC
+        over the screened parameters, each sample's sensitivity from
+        :meth:`dynamic_sensitivity` (differentiated through the dynamic solve, with
+        the adjoint selected by ``mode``), aggregated to the Sobol total-index upper
+        bound. The per-sample computation is jitted once and reused across samples,
+        so the (large) stiff-adjoint compile is paid once -- but each sample is a
+        full differentiated solve, so a dynamic screen is far heavier per sample
+        than the steady-state one; use a modest ``n_samples`` / parameter count.
+
+        Parameters mirror :meth:`steady_state_dgsm` (``ranges`` aligned with
+        ``wrt``, ``output_fn`` mapping the :class:`PlantSolution` to ``m`` outputs)
+        plus ``t_span`` / ``t_eval`` for the window. Returns a
+        :class:`DynamicDGSMResult` (``sobol_total_bound`` / ``std_error`` shape
+        ``(m, k)``, ``.ranked(output)``, ``.convergence()``).
+        """
+        import numpy as np
+        from ..integrate.sensitivity import _sobol_sample
+
+        params = self.default_parameters()
+        if wrt is None:
+            wrt_idx = list(range(int(params.shape[0])))
+        else:
+            wrt_idx = [self.parameter_index(w) if isinstance(w, str) else int(w)
+                       for w in wrt]
+        k = len(wrt_idx)
+        ranges_arr = jnp.asarray(ranges, dtype=params.dtype)
+        if ranges_arr.shape != (k, 2):
+            raise ValueError(
+                f"ranges must have shape ({k}, 2) aligned with the {k} screened "
+                f"parameters; got {tuple(ranges_arr.shape)}.")
+        lo, hi = ranges_arr[:, 0], ranges_arr[:, 1]
+        wrt_j = jnp.asarray(wrt_idx)
+        chosen = "reverse" if mode == "auto" else mode
+        solve_adj = self._dynamic_adjoint_kwargs(chosen)
+
+        @jax.jit
+        def _per_sample(z):
+            def f(theta):
+                p = params.at[wrt_j].set(theta)
+                sol = self.solve(t_span, t_eval=t_eval, params=p, y0=y0,
+                                 **solve_adj, **solve_kwargs)
+                return jnp.atleast_1d(output_fn(sol))
+            return _dynamic_value_and_jacobian(f, z, chosen)
+
+        Z, n_drawn = _sobol_sample(lo, hi, k, n_samples, seed)
+        outs, grads = [], []
+        for i in range(n_drawn):
+            g, S = _per_sample(Z[i])
+            outs.append(np.asarray(g))
+            grads.append(np.asarray(S))
+            if progress and (i + 1) % progress == 0:
+                print(f"  [dynamic_dgsm] {i + 1}/{n_drawn} samples", flush=True)
+
+        outputs = np.stack(outs)                          # (N, m)
+        grad_sq = np.stack(grads) ** 2                    # (N, m, k)
+        rng2 = np.asarray((hi - lo) ** 2)                 # (k,)
+        bound, se, nu, var, n_valid = _dynamic_dgsm_bounds(grad_sq, outputs, rng2)
+
+        names = self.parameter_names()
+        input_names = [names[i] for i in wrt_idx]
+        m = int(outputs.shape[1])
+        if output_names is None:
+            output_names = [f"output{i}" for i in range(m)]
+        return DynamicDGSMResult(
+            input_names=input_names, output_names=list(output_names),
+            sobol_total_bound=jnp.asarray(bound), std_error=jnp.asarray(se),
+            nu=jnp.asarray(nu), output_variance=jnp.asarray(var),
+            ranges=ranges_arr, n_samples=int(n_drawn), seed=int(seed),
+            grad_sq=jnp.asarray(grad_sq), outputs=jnp.asarray(outputs),
+            n_valid=jnp.asarray(n_valid))

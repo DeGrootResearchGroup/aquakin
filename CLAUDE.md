@@ -3687,6 +3687,28 @@ is what production simulators use to snap to steady state on any topology.
   study** with no re-solving — and `result.with_cond_factor(c)` re-applies a
   different threshold (re-aggregating from the retained data, no re-solve).
   (`tests/integration/test_steady_state.py`.)
+- **Dynamic (transient) sensitivity — `plant.dynamic_sensitivity(params, *, output_fn=, t_span=, t_eval=, wrt=, mode=, elasticity=)` and `plant.dynamic_dgsm(ranges, *, output_fn=, t_span=, t_eval=, wrt=, mode=, n_samples=, seed=)`.**
+  The dynamic counterparts of the steady-state pair, for an output that depends on
+  the *trajectory* (an effluent time series, a window average, a peak) rather than
+  the operating point. There is no implicit-function-theorem shortcut here — the
+  sensitivity is differentiated **through** the stiff dynamic solve — so the cost
+  is one differentiated solve per output set (sensitivity) or per sample (DGSM),
+  far heavier than the steady-state IFT. The wrapper's value is **selecting the
+  adjoint that matches the AD direction**, the easy thing to get wrong by hand:
+  `mode="reverse"` uses the cap-free `gradient="stable_adjoint"` (the default
+  reverse adjoint of a stiff plant is non-finite over a long horizon), and
+  `mode="forward"` a forward-capable `adjoint=DirectAdjoint()` (a `custom_vjp`
+  adjoint rejects forward mode). `output_fn` maps the `PlantSolution` to a
+  length-`m` output vector; the value+Jacobian come from one `jax.vjp` (reverse) or
+  `jax.linearize` (forward), jitted so a repeat call at the same signature reuses
+  the (large) stiff-adjoint compile. `dynamic_dgsm` reuses the per-sample
+  sensitivity into a Sobol total-index screen returning a `DynamicDGSMResult`
+  (mirroring `SteadyStateDGSMResult`: `.ranked()`, `.convergence()`); verified
+  forward == reverse, the reverse sensitivity matches a manual `stable_adjoint`
+  gradient to machine precision, and `dynamic_dgsm` matches `aquakin.dgsm` over the
+  same transient solve (`tests/integration/test_dynamic_sensitivity.py`). The
+  steady-state pair stays the cheap, both-directions-free path (the IFT); the
+  dynamic pair is the convenience layer over "differentiate `plant.solve`."
 - **Design variables** (`steady_state(..., design=...)`): because the IFT
   differentiates w.r.t. *whatever pytree the residual consumes*, the steady state
   is differentiable w.r.t. design variables, not only kinetic parameters, by
