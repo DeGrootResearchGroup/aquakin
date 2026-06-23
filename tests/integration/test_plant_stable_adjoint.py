@@ -205,15 +205,26 @@ def test_stable_adjoint_cross_interface_gradient_matches_fd():
     # A digester rate genuinely moves the water line through the reject recycle.
     assert grad != 0.0
 
-    h = theta0 * 1e-3
-    fd = (float(g(theta0 + h)) - float(g(theta0 - h))) / (2.0 * h)
-    # The discrete adjoint is the exact gradient of the forward solve; it agrees
-    # with the central difference to the finite-difference truncation/solver floor.
-    # The default adaptive recycle resolution (custom_root) composes with the
-    # discrete adjoint exactly (the sibling dM/dtheta test pins it to ~1e-13);
-    # the FD floor for this cross-network, recycle-coupled, stiff gradient sits
-    # around a few 1e-3, so the tolerance is the FD floor, not a gradient error.
-    assert grad == pytest.approx(fd, rel=5e-3)
+    # Validate the discrete adjoint (the EXACT gradient of the forward solve)
+    # against a central difference. The catch: the operating tolerance (atol=1e-3)
+    # makes the forward SNO noisy at the ~1e-3 level, while the FD signal h*grad is
+    # only ~2e-4 -- so a loose-tolerance central difference is dominated by solver
+    # noise and is platform-dependent (it can land far from the true value; it
+    # passes elsewhere only by luck). Evaluate the FD points at a TIGHT solver
+    # tolerance (and a larger h) so the difference is a genuine gold standard. The
+    # gradient itself is unchanged: the atol=1e-3 forward is already accurate enough
+    # that its exact discrete-adjoint gradient matches the tight-tolerance central
+    # difference to ~1e-4 (the adaptive recycle custom_root composes with the
+    # discrete adjoint exactly -- the sibling dM/dtheta test pins that to ~1e-13).
+    def g_fd(theta):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
+                          rtol=1e-8, atol=1e-6, max_steps=20_000)
+        return float(sol.C_named("tank1", "SNO")[-1])
+
+    h = theta0 * 1e-2
+    fd = (g_fd(theta0 + h) - g_fd(theta0 - h)) / (2.0 * h)
+    assert grad == pytest.approx(fd, rel=2e-3)
 
 
 @pytest.mark.validation
