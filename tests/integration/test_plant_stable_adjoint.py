@@ -122,6 +122,35 @@ def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd():
     assert g_stable == pytest.approx(fd, rel=1e-3)
 
 
+def test_stable_adjoint_initial_state_gradient_matches_jax_adjoint():
+    """The cap-free stable-adjoint gradient w.r.t. the INITIAL STATE y0 (not just
+    parameters) is finite and equals the standard jax_adjoint gradient.
+
+    Regression for issue #420: the default per-component absolute tolerance is
+    derived from y0 (``default_atol(y0, ...)``); under a gradient w.r.t. y0 that
+    traced tolerance was baked into the integrator's step controller and escaped
+    the discrete-adjoint custom-VJP forward (which re-runs diffrax.diffeqsolve) as
+    a leaked tracer. ``default_atol`` now ``stop_gradient``s the floor (it is a
+    non-differentiable solver tolerance), so the initial-condition gradient flows
+    -- the direction the standard adjoint already handled."""
+    net = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    plant = _single_cstr_plant(net)
+    params = plant.default_parameters()
+    y0 = plant.initial_state()
+    T = 40.0
+
+    def loss(y0_, gradient):
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]),
+                          params=params, y0=y0_, gradient=gradient)
+        return jnp.sum(sol.state ** 2)
+
+    g_stable = np.asarray(jax.grad(lambda y: loss(y, "stable_adjoint"))(y0))
+    g_jax = np.asarray(jax.grad(lambda y: loss(y, "jax_adjoint"))(y0))
+    assert np.all(np.isfinite(g_stable))
+    assert np.any(g_stable != 0.0)
+    assert np.allclose(g_stable, g_jax, rtol=1e-3, atol=1e-9)
+
+
 # --- the cross-interface gradient (slow: integrates the whole plant) -------
 
 def _solve_kwargs():

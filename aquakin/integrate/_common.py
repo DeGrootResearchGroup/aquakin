@@ -751,7 +751,16 @@ def default_atol(scale_like, reference=None, *, atol_factor: float = 1e-6,
     # with a nonzero magnitude (the common path), since char > 0 there.
     char = jnp.where(char > 0.0, char, 1.0)
     typ = jnp.maximum(typ, floor_frac * char)
-    return atol_factor * typ
+    # An absolute tolerance is a solver noise floor, never a differentiated
+    # quantity, so detach it from autodiff. This matters when ``scale_like`` is the
+    # initial state ``y0`` and the gradient is taken *with respect to* ``y0``: a
+    # traced atol would otherwise be baked into the integrator's step controller
+    # and -- inside the discrete-adjoint (``gradient="stable_adjoint"``) custom-VJP
+    # forward, which re-runs ``diffrax.diffeqsolve`` -- escape that inner solve as
+    # a leaked tracer (issue #420). ``stop_gradient`` collapses the ``y0``-derived
+    # tracer to its concrete primal; it is the identity for a concrete
+    # ``scale_like`` (the common path), so every existing solve is unchanged.
+    return jax.lax.stop_gradient(atol_factor * typ)
 
 
 # Seconds per time unit, for converting a user-supplied ``time_unit`` to a
