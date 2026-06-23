@@ -46,3 +46,17 @@ def test_reference_raises_the_floor():
     # char = 10; species 0 floored at 10, species 1 at floor_frac*char = 1e-5.
     assert atol[0] == pytest.approx(1e-6 * 10.0)
     assert atol[1] == pytest.approx(1e-6 * 1e-5)
+
+
+def test_atol_is_gradient_detached():
+    # atol is a solver noise floor, never a differentiated quantity. It is
+    # stop_gradient'd so a tolerance derived from a *traced* magnitude (e.g. the
+    # initial state y0, when differentiating w.r.t. y0) carries no gradient and
+    # cannot leak into the integrator's step controller (issue #420).
+    import jax
+    import numpy as np
+    g = jax.grad(lambda y: jnp.sum(default_atol(y)))(jnp.asarray([1.0, 100.0, 5.0]))
+    assert np.all(np.asarray(g) == 0.0)
+    # ... and the value is unchanged (stop_gradient is identity on the value).
+    val = default_atol(jnp.asarray([1.0, 100.0, 5.0]))
+    assert np.all(np.isfinite(np.asarray(val))) and float(val[1]) == pytest.approx(1e-4)

@@ -3692,7 +3692,18 @@ per-species noise floor
 (`atol_factor=floor_frac=1e-6`) via `integrate/_common.default_atol` — the
 SUNDIALS "vector atol" / Hairer "atol ∝ typical value" rule. The reactors scale
 off the network's `default_concentrations` (at construction); the plant scales
-off `y0` (at solve time). When **every** magnitude is zero (an all-zero
+off `y0` (at solve time). **`default_atol` `stop_gradient`s its result** — the
+tolerance is a solver noise floor, never a differentiated quantity. This matters
+because the plant scales off `y0`: under a gradient **with respect to `y0`** the
+floor would otherwise be a traced array, get baked into the integrator's step
+controller, and — inside the discrete-adjoint (`gradient="stable_adjoint"`)
+custom-VJP forward (which re-runs `diffrax.diffeqsolve`) — escape that inner solve
+as a leaked tracer (`UnexpectedTracerError`, issue #420). Detaching it is the
+identity for the value (so every steady state is unchanged) and lets the
+**initial-state gradient** flow through `stable_adjoint`, the one direction the
+standard `jax_adjoint` already handled. (The leak was specific to the
+state-derived tolerance; the param-gradient direction was always fine, since the
+tolerance does not depend on the parameters.) When **every** magnitude is zero (an all-zero
 `scale_like` with no reference) the relative floor `floor_frac·char` would
 itself be 0, so `char` falls back to unit scale — keeping every `atol_i`
 strictly positive rather than 0 (the very invariant this floor upholds). This
