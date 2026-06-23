@@ -1641,6 +1641,19 @@ class Plant:
         object identity (``is``), with a strong reference held, so an identity
         can never be reused for a different array while the map is live.
         """
+        # The memo must never be stored on the long-lived ``self`` when
+        # ``params_full`` is a JAX tracer: diffrax reuses a tracer's object
+        # identity across its ``eqx.filter_eval_shape`` sub-trace and the real
+        # trace, so a slice built in the sub-trace could be served in the outer
+        # trace (a stale tracer), and the cached ``(params_full, built)`` tuple
+        # outlives the trace -- ``jax.checking_leaks`` flags it as a leaked
+        # tracer, the canonical UnexpectedTracerError antipattern. So only a
+        # CONCRETE ``params_full`` is memoised on ``self`` (the eager forward
+        # solve, the results-level stream reconstruction); under a trace the
+        # slices are static-index slices that XLA constant-folds and CSE-dedupes
+        # anyway, so recomputing them costs nothing and nothing is cached.
+        if isinstance(params_full, jax.core.Tracer):
+            return self._slice_unit_params(unit_name, params_full)
         cache = self.__dict__.get("_params_unit_cache")
         if cache is None or cache[0] is not params_full:
             built = {

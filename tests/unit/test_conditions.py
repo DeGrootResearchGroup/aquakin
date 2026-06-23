@@ -75,3 +75,29 @@ def test_with_on_operating_conditions_returns_single_location():
     assert out.n_locations == 1
     assert float(out.fields["pH"][0]) == 8.0
     assert float(out.fields["T"][0]) == pytest.approx(293.15)
+
+
+def test_condition_builders_are_ad_safe():
+    """A *traced* condition value (a gradient w.r.t. an operating condition such
+    as pH/T) must flow through the SpatialConditions builders instead of being
+    float()-concretized -- which raised ConcretizationTypeError. Covers
+    ``uniform``, ``with_`` and ``OperatingConditions``, including under jit."""
+    import jax
+    import numpy as np
+
+    def field0(value, build):
+        return build(value).fields["pH"][0]
+
+    builders = {
+        "uniform": lambda v: SpatialConditions.uniform(2, pH=v),
+        "with_": lambda v: SpatialConditions.uniform(2, pH=7.0).with_(pH=v),
+        "operating": lambda v: OperatingConditions(pH=v, T=293.15),
+    }
+    for name, build in builders.items():
+        g = jax.grad(lambda v: field0(v, build))(jnp.asarray(7.5))
+        assert np.isfinite(float(g)) and float(g) == pytest.approx(1.0), name
+        # also composes under jit
+        assert np.isfinite(float(jax.jit(jax.grad(lambda v: field0(v, build)))(
+            jnp.asarray(7.5))))
+        # value is unchanged for a concrete input
+        assert float(build(8.0).fields["pH"][0]) == pytest.approx(8.0), name

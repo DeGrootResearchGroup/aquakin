@@ -741,6 +741,53 @@ def test_default_atol_solves_without_tuning(simple_net):
     assert float(tank[simple_net.species_index["A"]]) == pytest.approx(0.5, abs=1e-3)
 
 
+@pytest.mark.parametrize("gradient", ["jax_adjoint", "stable_adjoint"])
+@pytest.mark.parametrize("wrt", ["y0", "params"])
+def test_plant_solve_gradient_leaks_no_tracer(simple_net, gradient, wrt):
+    """``Plant.solve`` must not leak a tracer when differentiated w.r.t. either
+    the initial state ``y0`` or ``params``, under either gradient backend.
+
+    Two non-differentiable quantities are derived from these traced inputs and
+    must stay detached: the per-component ``atol`` (``default_atol(y0, ...)``,
+    a solver-config value -- stop_gradient'd in ``default_atol``) and the
+    per-unit parameter-slice memo (``_params_for_unit``, which must NOT cache a
+    tracer on the long-lived ``Plant``). Such a leak surfaces as an
+    UnexpectedTracerError *during* the grad -- diffrax reuses ``params_full``'s
+    object identity across its ``eval_shape`` sub-trace and the real trace, so a
+    cached eval_shape slice would be served in the outer trace -- so a grad that
+    completes with a finite result, plus a memo holding no tracer afterwards, is
+    the regression check.
+
+    We assert the mechanism directly rather than with ``jax.checking_leaks()``:
+    that detector inspects whole-interpreter state and false-positives -- and
+    crashes its own reporter (an ``IndexError``/``Zero`` ``TypeError``) -- on the
+    live JAX buffers and module-level solve caches left by earlier tests in a
+    shared/sharded run, so it is not safe inside the in-process suite."""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    y0 = plant.initial_state()
+    params = plant.default_parameters()
+    t_eval = jnp.asarray([0.0, 1.0])
+
+    def loss(x):
+        kw = dict(y0=y0, params=params, t_span=(0.0, 1.0), t_eval=t_eval,
+                  gradient=gradient)
+        kw[wrt] = x
+        return jnp.sum(plant.solve(**kw).state[-1])
+
+    x0 = y0 if wrt == "y0" else params
+    # Prime the concrete per-unit param memo with one ordinary solve, then
+    # differentiate. A leaked tracer would either raise UnexpectedTracerError in
+    # the grad below or overwrite the memo with a tracer that outlives the trace.
+    plant.solve(y0=y0, params=params, t_span=(0.0, 1.0), t_eval=t_eval,
+                gradient=gradient)
+    g = jax.grad(loss)(x0)
+    assert bool(jnp.all(jnp.isfinite(g)))
+    # The per-unit param memo retains no tracer from the traced grad above.
+    cache = plant.__dict__.get("_params_unit_cache")
+    if cache is not None:
+        assert not any(isinstance(v, jax.core.Tracer) for v in cache[1].values())
+
+
 # ----- By-name plant parameter overrides (#134) ----------------------------
 
 def _bsm2_no_solve():
