@@ -184,3 +184,24 @@ def test_grad_flows_through_temperature_state():
     g = jax.grad(loss)(float(y0[ts]))
     assert jnp.isfinite(g)
     assert float(g) == pytest.approx(-Q / V, rel=1e-6)   # d/dT_state of (Q/V)(T_in-T)
+
+
+def test_set_temperature_model_clears_colored_builders():
+    """Switching the temperature model changes the flat state length (the
+    heat-balance model appends a temperature block), so the colored-Jacobian
+    builders -- which cache seed matrices / patterns sized for the concrete state
+    -- must be reset alongside the compiled-solve caches, or a later colored solve
+    would hit a dimension-mismatched stale builder."""
+    plant = build_bsm2()
+    # Simulate previously-built colored builders (and a compiled solve).
+    plant._colored_root_finder = ("stale",)
+    plant._colored_adjoint_builder = ("stale",)
+    plant._colored_steady_builder = ("stale",)
+    plant._jit_cache["k"] = object()
+
+    plant.set_temperature_model(aquakin.HeatBalanceTemperature())
+
+    assert plant._colored_root_finder is None
+    assert plant._colored_adjoint_builder is None
+    assert plant._colored_steady_builder is None
+    assert plant._jit_cache == {}

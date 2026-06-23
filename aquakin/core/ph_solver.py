@@ -69,16 +69,13 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.temperature import (
-    R_GAS as _R_SI,
-    T_REF_THERMO as _T_BASE,
     LN10 as _LN10,
     van_t_hoff_factor,
 )
 
-# ``_R_SI`` (universal gas constant, J/(mol K)), ``_T_BASE`` (reference
-# temperature for the tabulated pK values, K) and ``_LN10`` are re-exported here
-# under their historic private names; the canonical definitions live in
-# ``core/temperature.py`` and are imported by the precipitation engines too.
+# ``_LN10`` is used here under its historic private name; its canonical
+# definition (with the gas constant and reference temperature) lives in
+# ``core/temperature.py``, which the precipitation engines import directly.
 
 # Convergence bracket for the charge balance, in ``u = ln[H+]``. The residual
 # ``f([H+])`` runs from ``+inf`` (as h->0) to ``-inf`` (as h->inf) -- the water
@@ -691,22 +688,19 @@ def solve_ph(
         # cost of the solve and of its derivative drops.
         h0 = jnp.broadcast_to(jnp.asarray(h_init, dtype=float), out_shape)
 
-        def f_res(h):
-            return residual(h)
-
         def solve_root(f, h_start):
             return _adaptive_newton_bisection(
                 f, dresidual_dh, h_start, n_iter, out_shape)
 
         def tangent_solve(g, y):
             # ``g`` is the elementwise linearisation ``z -> (df/d[H+]) z`` of
-            # ``f_res`` at the root; solving ``g(z) = y`` is a scalar division by
-            # ``df/d[H+]``. This is the implicit-function-theorem inverse that
-            # custom_root composes with the autodiff of ``f_res`` w.r.t. the
+            # ``residual`` at the root; solving ``g(z) = y`` is a scalar division
+            # by ``df/d[H+]``. This is the implicit-function-theorem inverse that
+            # custom_root composes with the autodiff of ``residual`` w.r.t. the
             # totals / strong ions / temperature.
             return y / g(jnp.ones_like(y))
 
-        h = jax.lax.custom_root(f_res, h0, solve_root, tangent_solve)
+        h = jax.lax.custom_root(residual, h0, solve_root, tangent_solve)
         pH = -jnp.log(h) / _LN10
         if return_ionic_strength:
             # No activity model -> no self-consistent solution ionic strength is

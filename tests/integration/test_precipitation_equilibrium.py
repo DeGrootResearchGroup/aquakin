@@ -196,7 +196,7 @@ reactions:
 
 def test_vant_hoff_shifts_equilibrium_with_temperature(tmp_path):
     import math
-    from aquakin.core.ph_solver import _R_SI
+    from aquakin.core.temperature import R_GAS as _R_SI
 
     def residual_M(dH, T):
         f = tmp_path / f"vh_{dH}.yaml"

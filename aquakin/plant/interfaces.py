@@ -134,14 +134,9 @@ class ASM1toADM1:
         self._pK_a_co2 = self.pK_a_co2_base - math.log10(math.exp(7646.0 * factor))
         self._pK_a_IN = self.pK_a_IN_base - math.log10(math.exp(51965.0 * factor))
         self._pK_w = self.pK_w_base - math.log10(math.exp(55900.0 * factor))
-        # Charge-contribution factors at the digester pH.
-        pH = self.pH_adm
-        self._alfa_va = 1.0 / 208.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_va_base - pH)))
-        self._alfa_bu = 1.0 / 160.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_bu_base - pH)))
-        self._alfa_pro = 1.0 / 112.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_pro_base - pH)))
-        self._alfa_ac = 1.0 / 64.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_ac_base - pH)))
-        self._alfa_co2 = -1.0 / (1.0 + 10 ** (self._pK_a_co2 - pH))
-        self._alfa_IN = (10 ** (self._pK_a_IN - pH)) / (1.0 + 10 ** (self._pK_a_IN - pH))
+        # pH-independent charge-contribution factors read by translate. The
+        # pH-dependent CO2 / inorganic-N / VFA factors are recomputed locally in
+        # translate at the digester's instantaneous pH, so they do not live here.
         self._alfa_NH = 1.0 / 14000.0
         self._alfa_alk = -0.001
         self._alfa_NO = -1.0 / 14000.0
@@ -351,16 +346,11 @@ class ADM1toASM1:
         factor = (1.0 / self.T_base - 1.0 / self.T_op) / (100.0 * self.R)
         self._pK_a_co2 = self.pK_a_co2_base - math.log10(math.exp(7646.0 * factor))
         self._pK_a_IN = self.pK_a_IN_base - math.log10(math.exp(51965.0 * factor))
-        pH = self.pH_adm
-        self._alfa_va = 1.0 / 208.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_va_base - pH)))
-        self._alfa_bu = 1.0 / 160.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_bu_base - pH)))
-        self._alfa_pro = 1.0 / 112.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_pro_base - pH)))
-        self._alfa_ac = 1.0 / 64.0 * (-1.0 / (1.0 + 10 ** (self.pK_a_ac_base - pH)))
-        self._alfa_co2 = -1.0 / (1.0 + 10 ** (self._pK_a_co2 - pH))
-        self._alfa_IN = (10 ** (self._pK_a_IN - pH)) / (1.0 + 10 ** (self._pK_a_IN - pH))
+        # pH-independent charge-contribution factors read by translate. The
+        # pH-dependent CO2 / inorganic-N / VFA factors are recomputed locally in
+        # translate at the digester's instantaneous pH, so they do not live here.
         self._alfa_NH = 1.0 / 14000.0
         self._alfa_alk = -0.001
-        self._alfa_NO = -1.0 / 14000.0
 
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         si = self._si

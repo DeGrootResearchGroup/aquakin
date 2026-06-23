@@ -143,7 +143,7 @@ def _build_equilibrium_system(minerals_cfg, species_index):
             mineral_ions, jnp.asarray(log_ksp_ref), jnp.asarray(dH_sp))
 
 
-def _make_si_fn(mineral_ions, log_ksp_ref, dH_sp, ion_mm, model):
+def _make_si_fn(mineral_ions, log_ksp_ref, dH_sp):
     """Build ``SI(u, h, K, gamma, vant_hoff) -> (M,)`` for the equilibrium minerals.
 
     ``u`` is ``log10`` of each conserved ion's *total dissolved* concentration in
@@ -290,7 +290,7 @@ def build_precipitation_equilibrium_derived_fn(
     built = _build_equilibrium_system(config["minerals"], species_index)
     if built is None:
         return None
-    (produced, solid_idx, Cmat, ion_states_arr, ion_mm, ion_states,
+    (produced, solid_idx, Cmat, ion_states_arr, _ion_mm, ion_states,
      mineral_ions, log_ksp_ref, dH_sp) = built
 
     pH_field = config.get("pH_field", "pH")
@@ -298,7 +298,7 @@ def build_precipitation_equilibrium_derived_fn(
     temp_units = config.get("temperature_units", "celsius")
     model = config.get("activity_model", "none")
     I_offset = float(config.get("ionic_strength_offset", 0.0))
-    si_fn = _make_si_fn(mineral_ions, log_ksp_ref, dH_sp, ion_mm, model)
+    si_fn = _make_si_fn(mineral_ions, log_ksp_ref, dH_sp)
 
     def _solve(C, condition_arrays, loc_idx):
         """Shared core: total inventory -> equilibrium phase amounts ``Xeq`` (M,)
