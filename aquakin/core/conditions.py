@@ -75,7 +75,11 @@ class SpatialConditions:
         """
         if n_locations < 1:
             raise ValueError(f"n_locations must be >= 1, got {n_locations}")
-        fields = {name: jnp.full((n_locations,), float(value)) for name, value in kwargs.items()}
+        # Broadcast (don't ``float()``-coerce) so a *traced* condition value -- a
+        # user differentiating a solve w.r.t. pH/T -- flows through instead of
+        # raising a ConcretizationTypeError. Identity for a concrete value.
+        fields = {name: jnp.broadcast_to(jnp.asarray(value), (n_locations,))
+                  for name, value in kwargs.items()}
         return cls(fields=fields)
 
     def with_(self, **kwargs: float) -> "SpatialConditions":
@@ -107,7 +111,9 @@ class SpatialConditions:
         merged = dict(self.fields)
         for name, value in kwargs.items():
             arr = jnp.asarray(value)
-            merged[name] = jnp.full((n,), float(value)) if arr.ndim == 0 else arr
+            # Broadcast a scalar rather than ``float()``-coercing it, so a traced
+            # override (a gradient w.r.t. a condition) is not concretized.
+            merged[name] = jnp.broadcast_to(arr, (n,)) if arr.ndim == 0 else arr
         return SpatialConditions(fields=merged)
 
     def validate_required(self, required: Iterable[str]) -> None:
@@ -151,6 +157,9 @@ class OperatingConditions(SpatialConditions):
     """
 
     def __init__(self, **kwargs: float) -> None:
+        # ``jnp.asarray(value)`` (not ``float(value)``) so a traced condition --
+        # a gradient w.r.t. an operating condition -- flows through rather than
+        # raising a ConcretizationTypeError. Identity for a concrete value.
         super().__init__(
-            fields={name: jnp.asarray(float(value))
+            fields={name: jnp.asarray(value)
                     for name, value in kwargs.items()})

@@ -741,6 +741,37 @@ def test_default_atol_solves_without_tuning(simple_net):
     assert float(tank[simple_net.species_index["A"]]) == pytest.approx(0.5, abs=1e-3)
 
 
+@pytest.mark.parametrize("gradient", ["jax_adjoint", "stable_adjoint"])
+@pytest.mark.parametrize("wrt", ["y0", "params"])
+def test_plant_solve_gradient_leaks_no_tracer(simple_net, gradient, wrt):
+    """``Plant.solve`` must not leak a tracer when differentiated w.r.t. either
+    the initial state ``y0`` or ``params``, under either gradient backend.
+
+    Two non-differentiable quantities are derived from these traced inputs and
+    must stay detached: the per-component ``atol`` (``default_atol(y0, ...)``,
+    a solver-config value -- stop_gradient'd in ``default_atol``) and the
+    per-unit parameter-slice memo (``_params_for_unit``, which must NOT cache a
+    tracer on the long-lived ``Plant``). ``jax.checking_leaks`` raises if either
+    escapes its trace -- the canonical UnexpectedTracerError antipattern. (The
+    cache leak is keyed by ``params_full`` object identity, which diffrax reuses
+    across its ``eval_shape`` sub-trace and the real trace.)"""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    y0 = plant.initial_state()
+    params = plant.default_parameters()
+    t_eval = jnp.asarray([0.0, 1.0])
+
+    def loss(x):
+        kw = dict(y0=y0, params=params, t_span=(0.0, 1.0), t_eval=t_eval,
+                  gradient=gradient)
+        kw[wrt] = x
+        return jnp.sum(plant.solve(**kw).state[-1])
+
+    x0 = y0 if wrt == "y0" else params
+    with jax.checking_leaks():
+        g = jax.grad(loss)(x0)
+    assert bool(jnp.all(jnp.isfinite(g)))
+
+
 # ----- By-name plant parameter overrides (#134) ----------------------------
 
 def _bsm2_no_solve():
