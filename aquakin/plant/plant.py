@@ -432,6 +432,75 @@ class SteadyStateResult:
     residual: Optional[float] = None
 
 
+def _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=None):
+    """Sobol total-index bound from per-sample squared sensitivities, robustly.
+
+    Drops, **per output**, any sample with a non-finite output or sensitivity --
+    the extreme Sobol corners where the perturbed steady state is hard to resolve,
+    exactly as :func:`~aquakin.dgsm` filters its sample -- and, when ``sample_mask``
+    is given, any sample it marks ``False`` (e.g. a near-singular-Jacobian
+    operating point). Then forms ``nu_ij = mean_s (dg_i/dz_j)^2``, ``Var(g_i)``, the
+    Sobol total-index bound ``nu_ij (b_j-a_j)^2 / (pi^2 Var(g_i))`` and its
+    Monte-Carlo standard error. An output that does not vary (zero variance) has an
+    undefined bound -- returned as ``NaN``.
+
+    Parameters
+    ----------
+    grad_sq : ndarray, shape ``(N, m, k)`` ; outputs : ndarray, shape ``(N, m)`` ;
+    rng2 : ndarray, shape ``(k,)`` -- the squared screened ranges ``(b_j-a_j)^2``.
+    sample_mask : ndarray bool, shape ``(N,)``, optional -- samples to keep.
+
+    Returns
+    -------
+    bound, std_error, nu : ndarray, shape ``(m, k)``
+    var : ndarray, shape ``(m,)`` ; n_valid : ndarray int, shape ``(m,)``
+    """
+    import numpy as np
+    grad_sq = np.asarray(grad_sq)
+    outputs = np.asarray(outputs)
+    _, m, k = grad_sq.shape
+    valid = np.isfinite(outputs) & np.isfinite(grad_sq).all(axis=2)   # (N, m)
+    if sample_mask is not None:
+        valid = valid & np.asarray(sample_mask)[:, None]
+    nu = np.full((m, k), np.nan)
+    se = np.full((m, k), np.nan)
+    var = np.full(m, np.nan)
+    n_valid = valid.sum(axis=0).astype(int)
+    for i in range(m):
+        v = valid[:, i]
+        if int(v.sum()) < 2:
+            continue
+        g = grad_sq[v, i, :]
+        nu[i] = g.mean(axis=0)
+        se[i] = g.std(axis=0) / np.sqrt(int(v.sum()))
+        var[i] = outputs[v, i].var()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        scale = np.where((var > 0)[:, None],
+                         rng2[None, :] / (np.pi ** 2 * var[:, None]), np.nan)
+    return nu * scale, se * scale, nu, var, n_valid
+
+
+def _cond_mask(cond, cond_factor):
+    """Keep-mask dropping near-singular-Jacobian samples.
+
+    A steady-state sensitivity ``-J^{-1}(...)`` is only well-defined at a
+    hyperbolic (non-marginal) operating point; near a bifurcation ``dF/dy`` becomes
+    near-singular and the sensitivity blows up (finite but huge), giving the DGSM a
+    heavy tail that the Monte-Carlo mean cannot resolve. This drops any sample whose
+    Jacobian condition number exceeds ``cond_factor`` times the **median** over the
+    sample -- i.e. that is far more ill-conditioned than the typical operating point
+    -- alongside the non-finite ones. ``cond_factor=None`` keeps every sample.
+    Returns a boolean ``(N,)`` mask.
+    """
+    import numpy as np
+    cond = np.asarray(cond)
+    finite = np.isfinite(cond)
+    if cond_factor is None:
+        return finite
+    med = np.median(cond[finite]) if finite.any() else np.inf
+    return finite & (cond <= cond_factor * med)
+
+
 @dataclass
 class SteadyStateDGSMResult:
     """Result of :meth:`Plant.steady_state_dgsm` -- a derivative-based global
@@ -457,9 +526,14 @@ class SteadyStateDGSMResult:
         ``(m, k)`` Sobol total-index upper bound per output and parameter.
     std_error : jnp.ndarray
         ``(m, k)`` Monte-Carlo standard error of the bound (shrinks like
-        ``1/sqrt(n_samples)``; the convergence indicator).
+        ``1/sqrt(n_valid)``; the convergence indicator).
     nu : jnp.ndarray
         ``(m, k)`` mean squared sensitivity ``E[(dg_i/dz_j)^2]``.
+    n_valid : jnp.ndarray
+        ``(m,)`` finite samples per output -- the extreme Sobol corners where the
+        perturbed steady state is non-finite are dropped per output (as
+        :func:`~aquakin.dgsm` does); a near-constant output (zero variance) yields
+        a ``NaN`` bound.
     output_variance : jnp.ndarray
         ``(m,)`` variance of each output over the sample.
     ranges : jnp.ndarray
@@ -473,6 +547,13 @@ class SteadyStateDGSMResult:
         :meth:`convergence` can recompute the bound from any prefix of the sample.
     outputs : jnp.ndarray
         ``(n_samples, m)`` per-sample output values (for the running variance).
+    cond : jnp.ndarray
+        ``(n_samples,)`` condition number of the steady-state Jacobian at each
+        sample (the near-singularity diagnostic the ``cond_factor`` filter uses).
+    cond_factor : float or None
+        The near-singular-Jacobian drop threshold applied (``None`` = no filter);
+        see :meth:`Plant.steady_state_dgsm`. :meth:`with_cond_factor` re-applies a
+        different value without re-solving.
     """
 
     input_names: list
@@ -486,6 +567,9 @@ class SteadyStateDGSMResult:
     seed: int
     grad_sq: jnp.ndarray
     outputs: jnp.ndarray
+    n_valid: jnp.ndarray
+    cond: jnp.ndarray
+    cond_factor: Optional[float] = None
 
     def ranked(self, output=0):
         """``[(input_name, bound)]`` for one output, sorted by decreasing bound.
@@ -517,23 +601,45 @@ class SteadyStateDGSMResult:
             ``(n_counts, m, k)`` the Monte-Carlo standard error of each.
         """
         import math
+        import numpy as np
         n = int(self.outputs.shape[0])
         if counts is None:
             j0 = 4
             counts = [2 ** j for j in range(j0, max(j0, int(math.log2(n))) + 1)]
             if not counts or counts[-1] != n:
                 counts.append(n)
-        rng2 = (self.ranges[:, 1] - self.ranges[:, 0]) ** 2          # (k,)
+        rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)   # (k,)
+        gs = np.asarray(self.grad_sq)                                     # (N, m, k)
+        ov = np.asarray(self.outputs)                                     # (N, m)
+        cond = np.asarray(self.cond)                                      # (N,)
         b_list, se_list = [], []
         for k in counts:
-            gs = self.grad_sq[:k]                                    # (k, m, p)
-            ov = self.outputs[:k]                                    # (k, m)
-            nu = gs.mean(axis=0)                                     # (m, p)
-            var = ov.var(axis=0)                                     # (m,)
-            scale = rng2[None, :] / (jnp.pi ** 2 * var[:, None])     # (m, p)
-            b_list.append(nu * scale)
-            se_list.append((gs.std(axis=0) / jnp.sqrt(k)) * scale)
-        return jnp.asarray(counts), jnp.stack(b_list), jnp.stack(se_list)
+            mask = _cond_mask(cond[:k], self.cond_factor)
+            bound, se, *_ = _dgsm_aggregate(gs[:k], ov[:k], rng2, sample_mask=mask)
+            b_list.append(bound)
+            se_list.append(se)
+        return (jnp.asarray(counts), jnp.asarray(np.stack(b_list)),
+                jnp.asarray(np.stack(se_list)))
+
+    def with_cond_factor(self, cond_factor):
+        """Re-aggregate with a different near-singular-Jacobian threshold.
+
+        Returns a new :class:`SteadyStateDGSMResult` whose bounds, standard errors
+        and ``n_valid`` are recomputed from the retained per-sample data with the
+        given ``cond_factor`` -- so the filter can be tuned (and the convergence
+        re-read) without re-solving. See :meth:`Plant.steady_state_dgsm`.
+        """
+        import numpy as np
+        from dataclasses import replace
+        rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)
+        mask = _cond_mask(np.asarray(self.cond), cond_factor)
+        bound, se, nu, var, n_valid = _dgsm_aggregate(
+            np.asarray(self.grad_sq), np.asarray(self.outputs), rng2,
+            sample_mask=mask)
+        return replace(
+            self, sobol_total_bound=jnp.asarray(bound), std_error=jnp.asarray(se),
+            nu=jnp.asarray(nu), output_variance=jnp.asarray(var),
+            n_valid=jnp.asarray(n_valid), cond_factor=cond_factor)
 
 
 def _senses_concentration(unit) -> bool:
@@ -4871,6 +4977,7 @@ class Plant:
         wrt: Optional[Sequence] = None,
         mode: str = "auto",
         elasticity: bool = False,
+        return_jacobian: bool = False,
         **steady_kwargs,
     ) -> jnp.ndarray:
         """Exact steady-state output sensitivities via the implicit function theorem.
@@ -4917,6 +5024,10 @@ class Plant:
         elasticity : bool
             If ``True`` return the dimensionless elasticity
             ``(dg/dtheta)(theta/g)`` instead of the raw derivative.
+        return_jacobian : bool
+            If ``True`` also return the steady-state Jacobian ``dF/dy`` (so a
+            caller can assess its conditioning without recomputing it, as
+            :meth:`steady_state_dgsm` does to flag near-singular operating points).
         **steady_kwargs
             Forwarded to :meth:`steady_state` (e.g. ``max_iter``).
 
@@ -4986,6 +5097,8 @@ class Plant:
 
         if elasticity:
             dgdth = dgdth * (params[wrt_idx][None, :] / g0[:, None])
+        if return_jacobian:
+            return dgdth, J_y
         return dgdth
 
     def steady_state_dgsm(
@@ -4999,6 +5112,7 @@ class Plant:
         n_samples: int = 256,
         seed: int = 0,
         mode: str = "auto",
+        cond_factor: Optional[float] = None,
         progress: Optional[int] = None,
         **steady_kwargs,
     ) -> "SteadyStateDGSMResult":
@@ -5038,6 +5152,14 @@ class Plant:
             AD direction for the per-sample sensitivity (passed to
             :meth:`steady_state_sensitivity`). ``"auto"`` is reverse for the usual
             many-parameter / few-output screen.
+        cond_factor : float, optional
+            Drop any sample whose steady-state Jacobian ``dF/dy`` is more than
+            ``cond_factor`` times as ill-conditioned as the sample median -- a
+            near-singular (near-bifurcation) operating point, where the sensitivity
+            is not well-defined and would give the DGSM a heavy tail. ``None``
+            (default) keeps every sample (then the bounds match :func:`~aquakin.dgsm`
+            exactly). A value around ``1e2`` removes the marginal-stability outliers
+            of a stiff plant; the dropped count is reported in ``n_valid``.
         progress : int, optional
             If set, print a progress line every ``progress`` samples.
         **steady_kwargs
@@ -5071,28 +5193,31 @@ class Plant:
         def _per_sample(z):
             p = base.at[wrt_j].set(z)
             ss = self.steady_state(p, y0=y0, **steady_kwargs).state
-            S = self.steady_state_sensitivity(
-                p, state=ss, output_fn=output_fn, wrt=wrt_idx, mode=mode)  # (m, k)
-            return jnp.atleast_1d(output_fn(ss)), S
+            S, J_y = self.steady_state_sensitivity(
+                p, state=ss, output_fn=output_fn, wrt=wrt_idx, mode=mode,
+                return_jacobian=True)                                # (m, k), (n, n)
+            return jnp.atleast_1d(output_fn(ss)), S, jnp.linalg.cond(J_y)
 
         Z, n_drawn = _sobol_sample(lo, hi, k, n_samples, seed)
-        outs, grads = [], []
+        outs, grads, conds = [], [], []
         for i in range(n_drawn):
-            o, S = _per_sample(Z[i])
+            o, S, c = _per_sample(Z[i])
             outs.append(np.asarray(o))
             grads.append(np.asarray(S))
+            conds.append(float(c))
             if progress and (i + 1) % progress == 0:
                 print(f"  [steady_state_dgsm] {i + 1}/{n_drawn} samples",
                       flush=True)
 
-        outputs = jnp.asarray(np.stack(outs))            # (N, m)
-        grad_sq = jnp.asarray(np.stack(grads)) ** 2      # (N, m, k)
-        rng2 = (hi - lo) ** 2                             # (k,)
-        nu = grad_sq.mean(axis=0)                         # (m, k)
-        var = outputs.var(axis=0)                         # (m,)
-        scale = rng2[None, :] / (jnp.pi ** 2 * var[:, None])
-        bound = nu * scale
-        std_error = (grad_sq.std(axis=0) / jnp.sqrt(n_drawn)) * scale
+        outputs = np.stack(outs)                          # (N, m)
+        grad_sq = np.stack(grads) ** 2                    # (N, m, k)
+        cond = np.asarray(conds)                          # (N,)
+        rng2 = np.asarray((hi - lo) ** 2)                 # (k,)
+        # Drop, per output, any non-finite sample, plus (if cond_factor is set) any
+        # near-singular-Jacobian operating point where the sensitivity blows up.
+        sample_mask = _cond_mask(cond, cond_factor)
+        bound, std_error, nu, var, n_valid = _dgsm_aggregate(
+            grad_sq, outputs, rng2, sample_mask=sample_mask)
 
         names = self.parameter_names()
         input_names = [names[i] for i in wrt_idx]
@@ -5101,6 +5226,9 @@ class Plant:
             output_names = [f"output{i}" for i in range(m)]
         return SteadyStateDGSMResult(
             input_names=input_names, output_names=list(output_names),
-            sobol_total_bound=bound, std_error=std_error, nu=nu,
-            output_variance=var, ranges=ranges_arr, n_samples=int(n_drawn),
-            seed=int(seed), grad_sq=grad_sq, outputs=outputs)
+            sobol_total_bound=jnp.asarray(bound), std_error=jnp.asarray(std_error),
+            nu=jnp.asarray(nu), output_variance=jnp.asarray(var),
+            ranges=ranges_arr, n_samples=int(n_drawn), seed=int(seed),
+            grad_sq=jnp.asarray(grad_sq), outputs=jnp.asarray(outputs),
+            n_valid=jnp.asarray(n_valid), cond=jnp.asarray(cond),
+            cond_factor=cond_factor)

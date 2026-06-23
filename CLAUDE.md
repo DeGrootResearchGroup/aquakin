@@ -3659,7 +3659,7 @@ is what production simulators use to snap to steady state on any topology.
   `k ≤ m`). Both give the same exact sensitivity; `elasticity=True` returns the
   dimensionless `(dg/dθ)(θ/g)`. This is the general form of the plant-scale
   sensitivity screen.
-- **`plant.steady_state_dgsm(ranges, *, output_fn=, wrt=, mode=, n_samples=, seed=)`**
+- **`plant.steady_state_dgsm(ranges, *, output_fn=, wrt=, mode=, n_samples=, seed=, cond_factor=)`**
   — **global** sensitivity (DGSM) of the steady state: samples the screened
   parameters over their ranges (scrambled-Sobol QMC), solves the steady state at
   each sample, and reads each output's sensitivity through
@@ -3669,11 +3669,24 @@ is what production simulators use to snap to steady state on any topology.
   output). Aggregates to the Sobol total-index upper bound
   `S_ij^tot ≤ ν_ij(b_j−a_j)²/(π²Var(g_i))`, `ν_ij = E[(∂g_i/∂z_j)²]`, returning a
   `SteadyStateDGSMResult` (`sobol_total_bound`/`std_error` shape `(m, k)`,
-  `.ranked(output)`). Validated **bit-identical to `aquakin.dgsm`** (same Sobol
-  seed → same points → same formula), just computed more cheaply. It **retains the
-  per-sample data**, so `result.convergence()` returns the running bound + MC
-  standard error versus sample count — the **sample-size convergence study** with
-  no re-solving. (`tests/integration/test_steady_state.py`.)
+  `.ranked(output)`). Non-finite samples are dropped per output exactly as
+  `aquakin.dgsm` does, so with `cond_factor=None` (default) the bounds are
+  **bit-identical to `aquakin.dgsm`** (same Sobol seed → same points → same
+  formula), just computed more cheaply. **`cond_factor`** adds the
+  heavy-tail robustification a stiff plant needs: a steady-state sensitivity
+  `−J⁻¹(…)` is only well-defined at a hyperbolic operating point, but over a wide
+  parameter screen many Sobol samples land near plant bifurcations (washout,
+  nitrification collapse) where `∂F/∂y` is near-singular and the sensitivity blows
+  up (finite but huge), giving the DGSM a heavy tail the Monte-Carlo mean cannot
+  resolve (it spikes and fails to reach `1/√N`); `cond_factor` drops any sample
+  whose Jacobian condition number exceeds `cond_factor ×` the sample median — a
+  near-singular operating point — restoring finite variance and clean `1/√N`
+  convergence (the condition number is recorded per sample in `result.cond`).
+  It **retains the per-sample data**, so `result.convergence()` returns the running
+  bound + MC standard error versus sample count — the **sample-size convergence
+  study** with no re-solving — and `result.with_cond_factor(c)` re-applies a
+  different threshold (re-aggregating from the retained data, no re-solve).
+  (`tests/integration/test_steady_state.py`.)
 - **Design variables** (`steady_state(..., design=...)`): because the IFT
   differentiates w.r.t. *whatever pytree the residual consumes*, the steady state
   is differentiable w.r.t. design variables, not only kinetic parameters, by
