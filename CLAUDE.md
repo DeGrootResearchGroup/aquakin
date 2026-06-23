@@ -1468,10 +1468,21 @@ point `(f1 = charge balance, f2 = I − I(h)) = 0` with an adaptive coupled
 is the exact IFT tangent via a **2×2 linear solve** of the joint Jacobian at the
 root (so it too is O(1) in the iteration count, forward and reverse). Equilibrium
 constants are temperature-corrected via van't Hoff. The chemistry mirrors the
-WATS reference pH solver. Validated against an independent bisection root finder;
-the weak-buffer / extreme-charge regime that broke the old bare-Newton scheme,
-the cap-independence of the adaptive loop, and forward-vs-reverse AD agreement
-(both the IFT tangent) are regression-tested in `tests/unit/test_ph_solver.py`.
+WATS reference pH solver. **The coupled path is also extreme-safe**: a transient
+far-overshoot trial `[H+]` makes the water self-ionisation term `½(h + Kw/h)`
+explode the ionic strength to ~1e20, where `g = 10^(…)` overflows to `inf` and
+the `inf/inf` activity-coefficient ratios become `NaN` — which the bracketing
+could then never recover from. The ionic strength fed to the activity models is
+clamped to a physical ceiling (`_I_MAX = 10 M`, far above any digester/sewer
+~0.01–0.2 M and the models' ~0.5 M validity), so every conditional constant stays
+finite and the bracket pulls `[H+]` back to the root, where `I ≪ _I_MAX` makes the
+clamp exactly identity (bit-identical converged pH; issue #382). The IFT 2×2
+tangent solve floors `|det|` for the same finiteness at a degenerate
+(all-zero-totals) input. Validated against an independent bisection root finder;
+the weak-buffer / extreme-charge regime that broke the old bare-Newton scheme, the
+activity path's extreme-input finiteness and degenerate-point gradient (#382), the
+cap-independence of the adaptive loop, and forward-vs-reverse AD agreement (both
+the IFT tangent) are regression-tested in `tests/unit/test_ph_solver.py`.
 
 **Ionic-strength activity corrections (`activity_model`).** By default the solver
 uses molar **concentrations** directly with thermodynamic equilibrium constants
