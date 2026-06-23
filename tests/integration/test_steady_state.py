@@ -395,3 +395,49 @@ def test_steady_state_sensitivity_helper():
     E = plant.steady_state_sensitivity(base, y0=y0, output_fn=out_fn,
                                        elasticity=True)
     assert bool(jnp.all(jnp.isfinite(E)))
+
+
+@pytest.mark.slow
+def test_steady_state_dgsm_matches_dgsm():
+    """plant.steady_state_dgsm screens the steady state globally (DGSM) by reusing
+    the IFT helper per sample. With the same Sobol seed it draws the same points
+    and applies the same Sobol total-index formula as the generic aquakin.dgsm, so
+    the bounds are identical -- just computed more cheaply (one dF/dy factorisation
+    per sample). The convergence() sample-size study runs from the retained
+    per-sample data."""
+    plant, asm1, y0 = _bsm1()
+    base = plant.default_parameters()
+    si = asm1.species_index
+    screen = ["asm1.muH", "asm1.muA", "asm1.etag", "asm1.bA"]
+    idx = [plant.parameter_index(s) for s in screen]
+    val = np.array([float(base[i]) for i in idx])
+    ranges = np.array([[v * 0.75, v * 1.25] for v in val])
+
+    def out_fn(y):
+        sb = plant.states_by_unit(y)
+        return jnp.array([sb["tank5"][si["SNH"]], sb["tank5"][si["SNO"]]])
+
+    res = plant.steady_state_dgsm(
+        ranges, output_fn=out_fn, output_names=["SNH", "SNO"],
+        wrt=screen, n_samples=32, seed=0, y0=y0)
+    assert res.sobol_total_bound.shape == (2, 4)
+    assert res.n_samples == 32
+
+    # same Sobol points + DGSM formula as aquakin.dgsm => identical bounds
+    def fn_snh(x):
+        pp = base.at[jnp.asarray(idx)].set(jnp.asarray(x))
+        s = plant.steady_state(pp, y0=y0).state
+        return plant.states_by_unit(s)["tank5"][si["SNH"]]
+
+    d = aquakin.dgsm(fn_snh, ranges, input_names=screen, n_samples=32, seed=0,
+                     ad_mode="reverse")
+    mine, theirs = dict(res.ranked("SNH")), dict(d.ranked())
+    for s in screen:
+        assert mine[s] == pytest.approx(theirs[s], rel=1e-6, abs=1e-12)
+
+    # convergence (sample-size study): running bound + MC std error vs sample count
+    counts, bound, se = res.convergence()
+    assert bound.shape == (len(counts), 2, 4)
+    assert se.shape == bound.shape
+    j = res.input_names.index("asm1.muA")               # dominant input
+    assert float(se[-1, 0, j]) < float(se[0, 0, j])     # std error shrinks with N

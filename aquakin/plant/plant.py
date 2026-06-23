@@ -432,6 +432,110 @@ class SteadyStateResult:
     residual: Optional[float] = None
 
 
+@dataclass
+class SteadyStateDGSMResult:
+    """Result of :meth:`Plant.steady_state_dgsm` -- a derivative-based global
+    sensitivity (DGSM) screen of a plant steady state.
+
+    For each screened parameter ``z_j`` (uniform on ``[a_j, b_j]``) and each output
+    ``g_i``, the **Sobol total-index upper bound**
+
+        S_ij^tot <= nu_ij (b_j - a_j)^2 / (pi^2 Var(g_i)),
+
+    with ``nu_ij = E[(dg_i/dz_j)^2]`` the mean squared steady-state sensitivity over
+    the Sobol sample (Lamboni, Sobol & Kucherenko 2013) -- the AD-accelerated
+    analogue of a variance-based Sobol total index, here read from the
+    implicit-function-theorem sensitivity (one ``dF/dy`` factorisation per sample).
+
+    Attributes
+    ----------
+    input_names : list[str]
+        The ``k`` screened parameters (columns of every array).
+    output_names : list[str]
+        The ``m`` outputs (rows of every array).
+    sobol_total_bound : jnp.ndarray
+        ``(m, k)`` Sobol total-index upper bound per output and parameter.
+    std_error : jnp.ndarray
+        ``(m, k)`` Monte-Carlo standard error of the bound (shrinks like
+        ``1/sqrt(n_samples)``; the convergence indicator).
+    nu : jnp.ndarray
+        ``(m, k)`` mean squared sensitivity ``E[(dg_i/dz_j)^2]``.
+    output_variance : jnp.ndarray
+        ``(m,)`` variance of each output over the sample.
+    ranges : jnp.ndarray
+        ``(k, 2)`` ``[a_j, b_j]`` screened ranges.
+    n_samples : int
+        Number of quasi-random points drawn (a power of two).
+    seed : int
+        Scrambled-Sobol seed (fixing it makes the result reproducible).
+    grad_sq : jnp.ndarray
+        ``(n_samples, m, k)`` per-sample squared sensitivities, retained so
+        :meth:`convergence` can recompute the bound from any prefix of the sample.
+    outputs : jnp.ndarray
+        ``(n_samples, m)`` per-sample output values (for the running variance).
+    """
+
+    input_names: list
+    output_names: list
+    sobol_total_bound: jnp.ndarray
+    std_error: jnp.ndarray
+    nu: jnp.ndarray
+    output_variance: jnp.ndarray
+    ranges: jnp.ndarray
+    n_samples: int
+    seed: int
+    grad_sq: jnp.ndarray
+    outputs: jnp.ndarray
+
+    def ranked(self, output=0):
+        """``[(input_name, bound)]`` for one output, sorted by decreasing bound.
+
+        ``output`` is an output name or row index.
+        """
+        i = (self.output_names.index(output) if isinstance(output, str)
+             else int(output))
+        pairs = [(n, float(b))
+                 for n, b in zip(self.input_names, self.sobol_total_bound[i])]
+        return sorted(pairs, key=lambda t: t[1], reverse=True)
+
+    def convergence(self, counts=None):
+        """Running Sobol bound and Monte-Carlo standard error versus sample count.
+
+        Recomputes the bound from the first ``k`` samples for each ``k`` in
+        ``counts`` (default: powers of two up to ``n_samples``), so plotting the
+        bound -- or the standard error -- against ``k`` shows the Monte-Carlo
+        convergence. This is the sample-size study, run from the retained
+        per-sample data (no re-solving).
+
+        Returns
+        -------
+        counts : jnp.ndarray
+            ``(n_counts,)`` the sample counts used.
+        bound : jnp.ndarray
+            ``(n_counts, m, k)`` the Sobol bound from each prefix.
+        std_error : jnp.ndarray
+            ``(n_counts, m, k)`` the Monte-Carlo standard error of each.
+        """
+        import math
+        n = int(self.outputs.shape[0])
+        if counts is None:
+            j0 = 4
+            counts = [2 ** j for j in range(j0, max(j0, int(math.log2(n))) + 1)]
+            if not counts or counts[-1] != n:
+                counts.append(n)
+        rng2 = (self.ranges[:, 1] - self.ranges[:, 0]) ** 2          # (k,)
+        b_list, se_list = [], []
+        for k in counts:
+            gs = self.grad_sq[:k]                                    # (k, m, p)
+            ov = self.outputs[:k]                                    # (k, m)
+            nu = gs.mean(axis=0)                                     # (m, p)
+            var = ov.var(axis=0)                                     # (m,)
+            scale = rng2[None, :] / (jnp.pi ** 2 * var[:, None])     # (m, p)
+            b_list.append(nu * scale)
+            se_list.append((gs.std(axis=0) / jnp.sqrt(k)) * scale)
+        return jnp.asarray(counts), jnp.stack(b_list), jnp.stack(se_list)
+
+
 def _senses_concentration(unit) -> bool:
     """Whether a control loop can read a measured species from ``unit``'s state.
 
@@ -4883,3 +4987,120 @@ class Plant:
         if elasticity:
             dgdth = dgdth * (params[wrt_idx][None, :] / g0[:, None])
         return dgdth
+
+    def steady_state_dgsm(
+        self,
+        ranges,
+        *,
+        output_fn: Callable,
+        output_names: Optional[Sequence] = None,
+        wrt: Optional[Sequence] = None,
+        y0: Optional[jnp.ndarray] = None,
+        n_samples: int = 256,
+        seed: int = 0,
+        mode: str = "auto",
+        progress: Optional[int] = None,
+        **steady_kwargs,
+    ) -> "SteadyStateDGSMResult":
+        """Derivative-based global sensitivity (DGSM) of the plant steady state.
+
+        Samples the screened parameters over their ranges (scrambled-Sobol QMC),
+        solves the steady state at each sample, and reads each output's sensitivity
+        to those parameters through the implicit-function-theorem helper
+        (:meth:`steady_state_sensitivity`) -- reusing **one** ``dF/dy``
+        factorisation per sample. That makes it markedly cheaper than a generic
+        :func:`~aquakin.dgsm` over ``steady_state`` (whose ``jacfwd``/``jacrev``
+        recompute the steady-state structure for every input tangent / output).
+        Aggregates to the Sobol total-index upper bound per (output, parameter); the
+        retained per-sample data lets :meth:`SteadyStateDGSMResult.convergence`
+        report the sample-size study without re-solving.
+
+        Parameters
+        ----------
+        ranges : array-like, shape ``(k, 2)``
+            ``[a_j, b_j]`` sampling range for each screened parameter, aligned with
+            ``wrt``. Inputs are sampled uniformly within.
+        output_fn : callable
+            Maps the flat plant state to a length-``m`` vector of scalar outputs.
+        output_names : sequence of str, optional
+            Names for the ``m`` outputs (default ``"output0"`` ...).
+        wrt : sequence of int or str, optional
+            The screened parameters -- flat indices or ``"<network>.<param>"``
+            names (default: all parameters; usually pass an explicit subset).
+        y0 : jnp.ndarray, optional
+            Warm start for each steady-state solve.
+        n_samples : int, optional
+            Sobol points (rounded to a power of two). Increase until
+            :meth:`SteadyStateDGSMResult.convergence` flattens.
+        seed : int, optional
+            Scrambled-Sobol seed (fixing it makes the screen reproducible).
+        mode : {"auto", "forward", "reverse"}, optional
+            AD direction for the per-sample sensitivity (passed to
+            :meth:`steady_state_sensitivity`). ``"auto"`` is reverse for the usual
+            many-parameter / few-output screen.
+        progress : int, optional
+            If set, print a progress line every ``progress`` samples.
+        **steady_kwargs
+            Forwarded to :meth:`steady_state` (e.g. ``max_iter``).
+
+        Returns
+        -------
+        SteadyStateDGSMResult
+            The ``(m, k)`` Sobol total-index bounds, standard errors, and the
+            retained per-sample data.
+        """
+        import numpy as np
+        from ..integrate.sensitivity import _sobol_sample
+
+        base = self.default_parameters()
+        if wrt is None:
+            wrt_idx = list(range(int(base.shape[0])))
+        else:
+            wrt_idx = [self.parameter_index(w) if isinstance(w, str) else int(w)
+                       for w in wrt]
+        k = len(wrt_idx)
+        ranges_arr = jnp.asarray(ranges, dtype=base.dtype)
+        if ranges_arr.shape != (k, 2):
+            raise ValueError(
+                f"ranges must have shape ({k}, 2) aligned with the {k} screened "
+                f"parameters; got {tuple(ranges_arr.shape)}.")
+        lo, hi = ranges_arr[:, 0], ranges_arr[:, 1]
+        wrt_j = jnp.asarray(wrt_idx)
+
+        @jax.jit
+        def _per_sample(z):
+            p = base.at[wrt_j].set(z)
+            ss = self.steady_state(p, y0=y0, **steady_kwargs).state
+            S = self.steady_state_sensitivity(
+                p, state=ss, output_fn=output_fn, wrt=wrt_idx, mode=mode)  # (m, k)
+            return jnp.atleast_1d(output_fn(ss)), S
+
+        Z, n_drawn = _sobol_sample(lo, hi, k, n_samples, seed)
+        outs, grads = [], []
+        for i in range(n_drawn):
+            o, S = _per_sample(Z[i])
+            outs.append(np.asarray(o))
+            grads.append(np.asarray(S))
+            if progress and (i + 1) % progress == 0:
+                print(f"  [steady_state_dgsm] {i + 1}/{n_drawn} samples",
+                      flush=True)
+
+        outputs = jnp.asarray(np.stack(outs))            # (N, m)
+        grad_sq = jnp.asarray(np.stack(grads)) ** 2      # (N, m, k)
+        rng2 = (hi - lo) ** 2                             # (k,)
+        nu = grad_sq.mean(axis=0)                         # (m, k)
+        var = outputs.var(axis=0)                         # (m,)
+        scale = rng2[None, :] / (jnp.pi ** 2 * var[:, None])
+        bound = nu * scale
+        std_error = (grad_sq.std(axis=0) / jnp.sqrt(n_drawn)) * scale
+
+        names = self.parameter_names()
+        input_names = [names[i] for i in wrt_idx]
+        m = int(outputs.shape[1])
+        if output_names is None:
+            output_names = [f"output{i}" for i in range(m)]
+        return SteadyStateDGSMResult(
+            input_names=input_names, output_names=list(output_names),
+            sobol_total_bound=bound, std_error=std_error, nu=nu,
+            output_variance=var, ranges=ranges_arr, n_samples=int(n_drawn),
+            seed=int(seed), grad_sq=grad_sq, outputs=outputs)
