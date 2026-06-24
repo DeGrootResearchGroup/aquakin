@@ -25,15 +25,19 @@ linearisation point ``(y, theta)``::
 so no explicit Jacobian is formed; the augmented RHS is ``f(y)`` plus ``p``
 JVPs of ``f`` (the JVP's primal yields ``f(y)`` for free).
 
-This module implements the *augmented-system* form (one stock
-:class:`diffrax.Kvaerno5` + :class:`diffrax.PIDController` whose error norm
-covers ``S``, no ``dtmax`` cap). The per-step implicit solve uses the dense
-augmented Jacobian; it removes the cap and is exact, and it is the right choice
-for one or a few sensitivity parameters and for scalar-loss gradients. The
-factorisation-sharing "simultaneous corrector" that additionally speeds up the
-many-parameter case (reusing one ``(I - gamma.dt.J)`` factorisation across the
-``S`` columns) is a further optimisation exposed through ``shared_factor`` and
-not yet implemented.
+This module implements the *augmented-system* form: a Kvaerno ESDIRK +
+``PIDController`` whose error norm covers ``S`` (no ``dtmax`` cap), with the
+solver and controller built through the shared
+``build_implicit_solver`` / ``build_step_controller`` helpers
+(``aquakin.integrate._common``) so this solve uses the same decoupled-Newton
+configuration as the forward and discrete-adjoint paths (``order`` selects the
+ESDIRK; ``factormax`` the step-growth cap). With ``shared_factor`` the per-step
+implicit solve uses the factorisation-sharing "simultaneous corrector": one
+``(I - gamma.dt.J)`` factorisation is reused across the ``S`` columns, the
+block-arrow :class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`
+injected as the root finder's linear solver, so the many-parameter case scales
+weakly with the parameter count. Without it the dense augmented Jacobian is used,
+which is exact and the right choice for one or a few sensitivity parameters.
 
 References
 ----------
