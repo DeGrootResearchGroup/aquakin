@@ -395,6 +395,14 @@ factorising the full augmented system. This is several times faster than the
 dense augmented solve on large stiff systems (e.g. the layered biofilm) and
 gives bit-identical results.
 
+The **plant** has it too: `Plant.solve_sensitivity(params, wrt, t_span=, t_eval=,
+y0=)` runs the same augmented `[y; S]` solve on the plant's enhanced solver
+config (Kvaerno3 + decoupled Newton + cached recycle map + the simultaneous
+corrector), so a forward-mode sensitivity of a stiff dynamic plant stays **finite
+over long horizons** where `jacfwd` through `plant.solve` goes non-finite. It is
+exact for kinetic parameters and backs the forward mode of
+`plant.dynamic_sensitivity`.
+
 ### Cap-free reverse-mode gradients (stable adjoint)
 
 `solve_sensitivity` scales with the parameter count, so for a scalar-loss

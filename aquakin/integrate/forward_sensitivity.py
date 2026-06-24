@@ -113,6 +113,8 @@ def augmented_forward_sensitivity(
     dtmax: Optional[float] = None,
     max_steps: int = 1_000_000,
     shared_factor: bool = False,
+    base_solver=None,
+    factormax: Optional[float] = None,
 ):
     """Integrate ``z = [y; S]`` with adaptive control over both blocks.
 
@@ -223,24 +225,44 @@ def augmented_forward_sensitivity(
         [jnp.full((ndof,), float(rtol)), jnp.full((ndof * k,), sens_rtol_v)]
     )
 
+    sc = None
     if shared_factor:
-        from diffrax import VeryChord, with_stepsize_controller_tols
-
         from aquakin.integrate._simultaneous_corrector import SimultaneousCorrector
 
-        root_finder = with_stepsize_controller_tols(VeryChord)(
-            linear_solver=SimultaneousCorrector(ndof=ndof, n_sens=k)
-        )
-        solver = diffrax.Kvaerno5(root_finder=root_finder)
+        sc = SimultaneousCorrector(ndof=ndof, n_sens=k)
+
+    if base_solver is None and factormax is None:
+        # Reactor default: bare Kvaerno5 with the per-stage Newton tied to the
+        # step controller's tolerances. Bit-identical to the historic
+        # forward-sensitivity solve.
+        from diffrax import VeryChord, with_stepsize_controller_tols
+
+        if shared_factor:
+            root_finder = with_stepsize_controller_tols(VeryChord)(linear_solver=sc)
+            solver = diffrax.Kvaerno5(root_finder=root_finder)
+        else:
+            solver = diffrax.Kvaerno5()
+        controller = diffrax.PIDController(rtol=rtol_aug, atol=atol_aug, dtmax=dtmax)
     else:
-        solver = diffrax.Kvaerno5()
+        # Enhanced path (the stiff plant): route the augmented [y; S] solve
+        # through the single-source-of-truth solver helpers so it inherits the
+        # decoupled Newton + factormax the plant's forward/adjoint solves use,
+        # with a supplied lower-order base solver (Kvaerno3) and the block-arrow
+        # SimultaneousCorrector for the per-stage linear algebra.
+        from aquakin.integrate._common import (build_implicit_solver,
+                                               build_step_controller)
+
+        bs = diffrax.Kvaerno5() if base_solver is None else base_solver
+        solver = build_implicit_solver(rtol, atol_aug, solver=bs,
+                                       linear_solver=sc, force_root_finder=True)
+        controller = build_step_controller(rtol_aug, atol_aug,
+                                            factormax=factormax, dtmax=dtmax)
 
     saveat = (
         diffrax.SaveAt(t1=True)
         if t_eval is None
         else diffrax.SaveAt(ts=jnp.asarray(t_eval))
     )
-    controller = diffrax.PIDController(rtol=rtol_aug, atol=atol_aug, dtmax=dtmax)
     sol = diffrax.diffeqsolve(
         diffrax.ODETerm(aug_rhs),
         solver,

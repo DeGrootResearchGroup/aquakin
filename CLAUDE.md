@@ -1013,6 +1013,43 @@ throttle, so no special-casing). Implemented in
 [`integrate/forward_sensitivity.py`](aquakin/integrate/forward_sensitivity.py)
 on `BatchReactor`, `PlugFlowReactor` and `BiofilmReactor`.
 
+**`Plant.solve_sensitivity` — the stable forward mode on the plant (the one that
+was missing).** The reactors carried the cap-free augmented `[y; S]` solve, but
+the *plant* was never wired to it, so a forward sensitivity of a stiff dynamic
+plant fell back to `jacfwd` through `plant.solve` — finite per step, but
+**non-finite over a long horizon**. That long-horizon failure is **numerical,
+not a genuine tangent divergence**: the true sensitivity stays bounded (verified
+by watching `‖S‖` *oscillate* with the diurnal load over 17 days — 45→196 — not
+grow exponentially), and the break is the reactor-era
+`augmented_forward_sensitivity` building a **stock `Kvaerno5`** that lacks the
+plant's solver robustness. It was the one implicit mode never brought into the
+`build_implicit_solver` / `build_step_controller` consolidation (the forward
+`jax_adjoint`, `forward_fast` and `stable_adjoint` paths all build from those
+helpers; the forward-*sensitivity* solve built its own). `Plant.solve_sensitivity(params, wrt, *, t_span, t_eval=, y0=, factormax=, dtmax=)`
+closes the gap: it integrates the same augmented `[y; S]` system but routes the
+solver through those shared helpers, so the `[y; S]` solve inherits the plant's
+**decoupled Newton**, **`factormax`** cap, **`Kvaerno3`** base solver and
+**cached recycle/flow maps** (its `f_flat` reuses the once-per-solve map instead
+of re-resolving the recycle each call), while keeping the block-arrow
+`SimultaneousCorrector` for the per-stage linear algebra. That config is exactly
+what the stock solver lacked: the 20-day BSM2 forward sensitivity that the stock
+augmented solve **and** `jacfwd` both blow up on is **finite** under
+`solve_sensitivity`; it matches the dense `Kvaerno5` augmented solve to 5 digits
+at 10 days, matches `jacfwd` to ~3e-7 on BSM1, and runs faster than the stock
+dense/corrector (the Kvaerno3 + decoupled Newton + cached map all pay off).
+Returns `(ts, ys, S)` with `S` the state sensitivity `dy/dθ`, shape
+`(n_t, ndof, k)`. The cached map is built from the concrete `params` and closed
+over, so the augmented linearisation drops `∂M/∂θ` — **exact for kinetic
+parameters** (`M` depends only on the flow setpoints); a flow-setpoint
+sensitivity needs the per-call map (not yet wired). The block-arrow corrector is
+**specific to the `[y; S]` arrow** (each sensitivity column couples only to `y`,
+sharing the one diagonal block `D = I − γ·dt·J`) and does **not** transfer to the
+single-state forward/adjoint solves (whose per-step lever is the colored
+Jacobian) or the steady-state IFT (which already factors `∂F/∂y` once and reuses
+it across parameters). `build_implicit_solver` gained a `linear_solver=` slot to
+inject the corrector into the decoupled root finder. Validated in
+`tests/integration/test_dynamic_sensitivity.py::test_solve_sensitivity_matches_jacfwd`.
+
 **`shared_factor` — dense (Option B) vs simultaneous corrector (Option A).**
 The per-step implicit solve has two implementations, selected by
 `solve_sensitivity(..., shared_factor=...)`:
@@ -3690,32 +3727,38 @@ is what production simulators use to snap to steady state on any topology.
 - **Dynamic (transient) sensitivity — `plant.dynamic_sensitivity(params, *, output_fn=, t_span=, t_eval=, wrt=, mode=, elasticity=)` and `plant.dynamic_dgsm(ranges, *, output_fn=, t_span=, t_eval=, wrt=, mode=, n_samples=, seed=)`.**
   The dynamic counterparts of the steady-state pair, for an output that depends on
   the *trajectory* (an effluent time series, a window average, a peak) rather than
-  the operating point. There is no implicit-function-theorem shortcut here — the
-  sensitivity is differentiated **through** the stiff dynamic solve — so the cost
-  is one differentiated solve per output set (sensitivity) or per sample (DGSM),
-  far heavier than the steady-state IFT. The wrapper's value is **selecting the
-  adjoint that matches the AD direction**, the easy thing to get wrong by hand:
-  `mode="reverse"` uses the cap-free `gradient="stable_adjoint"` (the default
-  reverse adjoint of a stiff plant is non-finite over a long horizon), and
-  `mode="forward"` a forward-capable `adjoint=DirectAdjoint()` (a `custom_vjp`
-  adjoint rejects forward mode). `output_fn` maps the `PlantSolution` to a
-  length-`m` output vector; the value+Jacobian come from one `jax.vjp` (reverse) or
-  `jax.linearize` (forward). The solve is differentiated directly (no enclosing jit
-  — the primal must run with concrete params, since some plant setup, e.g. a unit
-  `initial_state`, concretizes; an outer jit makes the BSM2 dynamic plant fail with
-  a `ConcretizationTypeError`); the solve's own compiled-solve cache still reuses
-  the integrator compile. **Forward is the memory-light direction over a long
-  horizon** — it carries the parameter tangents in lockstep with the state, so
-  memory is independent of the integration length, whereas reverse stores the whole
-  trajectory to replay it (prohibitive over a 609-day horizon). `dynamic_dgsm`
-  reuses the per-sample sensitivity into a Sobol total-index screen returning a
-  `DynamicDGSMResult`
+  the operating point. There is no implicit-function-theorem shortcut here, so the
+  cost is one stiff solve per direction (sensitivity) or per sample (DGSM), far
+  heavier than the steady-state IFT. The wrapper's value is **using the stable
+  method for each AD direction**, the easy thing to get wrong by hand — a naive
+  differentiation of `plant.solve` is non-finite on a stiff plant. `mode="reverse"`
+  differentiates the solve through the cap-free `gradient="stable_adjoint"` (one
+  `jax.vjp`). `mode="forward"` integrates the augmented `[y; S]` variational system
+  (`plant.solve_sensitivity`), whose step controller bounds `S` so it stays
+  **finite over long horizons** where forward-mode `jacfwd` through the stiff solve
+  goes non-finite (a numerical, not genuine, blow-up — the true sensitivity stays
+  bounded), then chains the full-state sensitivity through `output_fn` with one
+  `jax.linearize` of the output map over the saved trajectory (no extra solve).
+  `output_fn` maps the `PlantSolution` to a length-`m` output vector. The reverse
+  solve is differentiated directly (no enclosing jit — the primal must run with
+  concrete params, since some plant setup, e.g. a unit `initial_state`,
+  concretizes; an outer jit makes the BSM2 dynamic plant fail with a
+  `ConcretizationTypeError`); the solve's own compiled-solve cache still reuses the
+  integrator compile. **Forward is the memory-light direction over a long horizon**
+  — `solve_sensitivity` carries the parameter tangents in lockstep with the state,
+  so memory is independent of the integration length, whereas reverse stores the
+  whole trajectory to replay it (prohibitive over a 609-day horizon). Both
+  directions go through the shared `Plant._dynamic_value_jac` helper, so
+  `dynamic_dgsm`'s per-sample screen inherits the same stable forward/reverse.
+  `dynamic_dgsm` reuses the per-sample sensitivity into a Sobol total-index screen
+  returning a `DynamicDGSMResult`
   (mirroring `SteadyStateDGSMResult`: `.ranked()`, `.convergence()`); verified
   forward == reverse, the reverse sensitivity matches a manual `stable_adjoint`
-  gradient to machine precision, and `dynamic_dgsm` matches `aquakin.dgsm` over the
-  same transient solve (`tests/integration/test_dynamic_sensitivity.py`). The
-  steady-state pair stays the cheap, both-directions-free path (the IFT); the
-  dynamic pair is the convenience layer over "differentiate `plant.solve`."
+  gradient to machine precision, `dynamic_dgsm` matches `aquakin.dgsm` over the
+  same transient solve, and `solve_sensitivity` matches `jacfwd` where both are
+  finite (`tests/integration/test_dynamic_sensitivity.py`). The steady-state pair
+  stays the cheap, both-directions-free path (the IFT); the dynamic pair is the
+  convenience layer over the stable differentiation of `plant.solve`.
 - **Design variables** (`steady_state(..., design=...)`): because the IFT
   differentiates w.r.t. *whatever pytree the residual consumes*, the steady state
   is differentiable w.r.t. design variables, not only kinetic parameters, by

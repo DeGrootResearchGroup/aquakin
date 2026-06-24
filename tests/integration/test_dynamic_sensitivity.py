@@ -7,6 +7,7 @@ pick the adjoint that matches the AD direction (reverse -> the cap-free stable
 adjoint; forward -> a forward-capable adjoint), which is the easy thing to get
 wrong by hand. The solves are stiff plant integrations, so these are slow.
 """
+import diffrax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -60,6 +61,42 @@ def test_dynamic_sensitivity_modes_match_grad():
     fd = (scalar(th + h) - scalar(th - h)) / (2.0 * h)
     assert float(Sr[0, 0]) == pytest.approx(g, rel=1e-6)
     assert float(Sr[0, 0]) == pytest.approx(float(fd), rel=1e-4)
+
+
+@pytest.mark.slow
+def test_solve_sensitivity_matches_jacfwd():
+    """Plant.solve_sensitivity -- the stable forward [y; S] variational solve, on
+    the plant's enhanced solver config (Kvaerno3 + decoupled Newton + cached
+    recycle map) with the block-arrow SimultaneousCorrector -- is finite and
+    matches forward-mode jacfwd through the solve where both are finite. (The
+    augmented controller's error norm bounds S, so the same solve stays finite
+    over long horizons where jacfwd through the stiff plant goes non-finite.)"""
+    p, asm1, y0 = _bsm1()
+    base = p.default_parameters()
+    wrt = ["asm1.muA", "asm1.muH"]
+    T = 2.0
+    te = jnp.linspace(0.0, T, 5)
+    p._build_state_layout()
+    s0, _ = p._state_layout["tank5"]
+    snh = s0 + asm1.species_index["SNH"]
+
+    ts, ys, S = p.solve_sensitivity(base, wrt, t_span=(0.0, T), t_eval=te, y0=y0,
+                                    max_steps=200_000)
+    S = np.asarray(S)
+    assert np.all(np.isfinite(S))
+    assert ts.shape[0] == 5 and ys.shape == (5, y0.shape[0]) and S.shape[2] == 2
+    S_aug = S[-1, snh, :]                       # d(tank5 SNH @T)/d[muA, muH]
+
+    idx = [p.parameter_index(w) for w in wrt]
+
+    def out(theta):
+        pp = base.at[jnp.asarray(idx)].set(theta)
+        sol = p.solve((0.0, T), t_eval=te, params=pp, y0=y0,
+                      adjoint=diffrax.DirectAdjoint(), max_steps=200_000)
+        return sol.C_named("tank5", "SNH")[-1]
+
+    S_jf = np.asarray(jax.jacfwd(out)(base[jnp.asarray(idx)]))
+    assert np.allclose(S_aug, S_jf, rtol=1e-4, atol=1e-10)
 
 
 @pytest.mark.slow

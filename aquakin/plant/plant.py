@@ -5335,6 +5335,127 @@ class Plant:
             n_valid=jnp.asarray(n_valid), cond=jnp.asarray(cond),
             cond_factor=cond_factor)
 
+    def solve_sensitivity(
+        self,
+        params,
+        wrt,
+        *,
+        t_span,
+        t_eval=None,
+        y0=None,
+        rtol: float = 1e-6,
+        atol=None,
+        sens_rtol=None,
+        factormax=None,
+        dtmax=None,
+        max_steps: int = 1_000_000,
+    ):
+        """Stable forward (variational) sensitivity ``dy/dtheta`` of the plant.
+
+        Integrates the augmented system ``z = [y; S]`` (the state plus its
+        sensitivity ``S = dy/dtheta``) with the step controller's error norm
+        bounding ``S`` directly, so the sensitivity stays finite over long
+        horizons where ``jacfwd`` through the stiff plant solve goes non-finite.
+        This is the plant counterpart of the reactors' ``solve_sensitivity`` --
+        the forward-mode sensitivity tool the dynamic plant lacked.
+
+        The augmented ``[y; S]`` solve uses the SAME enhanced solver config the
+        plant's forward / discrete-adjoint solves use -- a decoupled Newton root
+        finder, the ``factormax`` step-growth cap, and the cached recycle / flow
+        maps -- with a lean ``Kvaerno3`` base solver and the block-arrow
+        :class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`
+        for the per-stage linear algebra (factor the shared diagonal block
+        ``D = I - gamma.dt.J`` once, reuse it across every sensitivity column).
+
+        Parameters
+        ----------
+        params : jnp.ndarray
+            Plant parameter vector.
+        wrt : sequence of str or int
+            The sensitivity parameters, as ``"<network>.<param>"`` names or flat
+            indices. The cached recycle map drops the ``dM/dtheta`` term, so this
+            is exact for kinetic parameters; a flow-setpoint sensitivity would
+            need the per-call map (not wired here).
+        t_span : tuple of float
+            ``(t0, t1)`` integration interval (plant time units).
+        t_eval : jnp.ndarray, optional
+            Times to record. ``None`` records the endpoint only.
+        y0 : jnp.ndarray, optional
+            Initial state (defaults to :meth:`initial_state`); warm-start a stiff
+            plant.
+        rtol, atol : float or array, optional
+            State step tolerances (``atol`` defaults to the per-component plant
+            floor).
+        sens_rtol : float, optional
+            Relative tolerance on ``S`` (defaults to ``rtol``).
+        factormax, dtmax : float, optional
+            Step-growth cap and maximum step, passed to the augmented solve.
+        max_steps : int
+            Step budget for the augmented solve.
+
+        Returns
+        -------
+        ts : jnp.ndarray
+            Save times, shape ``(n_t,)``.
+        ys : jnp.ndarray
+            State trajectory, shape ``(n_t, ndof)`` (split with
+            :meth:`states_by_unit`).
+        S : jnp.ndarray
+            Sensitivity ``dy/dtheta``, shape ``(n_t, ndof, k)`` for the ``k``
+            ``wrt`` parameters.
+
+        Notes
+        -----
+        The block-arrow ``SimultaneousCorrector`` exploits the augmented system's
+        structure (each sensitivity column couples only to ``y``); it is specific
+        to this ``[y; S]`` solve and does not apply to the single-state forward /
+        adjoint solves, whose per-step lever is the colored Jacobian.
+        """
+        import diffrax
+
+        from aquakin.integrate._common import default_atol
+        from aquakin.integrate.forward_sensitivity import (
+            augmented_forward_sensitivity,
+        )
+
+        self._build_state_layout()
+        self._build_parameter_layout()
+        params_full = self._coerce_params(jnp.asarray(params))
+        y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
+        free_idx = jnp.asarray(
+            [self.parameter_index(w) if isinstance(w, str) else int(w)
+             for w in wrt])
+        t0, t1 = float(t_span[0]), float(t_span[1])
+        t0a = jnp.asarray(t0)
+
+        # Cached recycle / flow maps (state-invariant for fixed-pump plants): run
+        # the same one-time concrete check plant.solve does, then reuse the maps
+        # per RHS so the augmented solve's f_flat does not re-resolve the recycle
+        # every call. The maps are built from the concrete ``params_full`` and
+        # closed over, so the augmented linearisation w.r.t. the wrt parameters
+        # drops ``dM/dtheta`` -- exact for kinetic parameters (M depends only on
+        # the flow setpoints).
+        if self._recycle_map_constant is None:
+            self._check_recycle_map_constant(t0a, y0, params_full)
+        if self._flow_map_constant is None:
+            self._check_flow_map_constant(t0a, y0, params_full)
+        states0 = self._split_state(y0)
+        rmap = self._maybe_recycle_map(t0a, states0, params_full)
+        fmap = self._maybe_flow_map(t0a, states0, params_full)
+
+        def f_flat(t, y, p):
+            return self._rhs(t, y, p, recycle_map=rmap, flow_map=fmap)
+
+        atol_arr = default_atol(y0) if atol is None else jnp.asarray(atol)
+        te = None if t_eval is None else jnp.asarray(t_eval)
+        return augmented_forward_sensitivity(
+            f_flat, y0, params_full, free_idx,
+            t0=t0, t1=t1, t_eval=te, rtol=rtol, atol_y=atol_arr,
+            sens_rtol=sens_rtol, dtmax=dtmax, max_steps=max_steps,
+            shared_factor=int(free_idx.shape[0]) > 1,
+            base_solver=diffrax.Kvaerno3(), factormax=factormax,
+        )
+
     @staticmethod
     def _dynamic_adjoint_kwargs(mode):
         """The ``solve`` keyword that pins the adjoint matching the AD ``mode``.
@@ -5348,6 +5469,62 @@ class Plant:
             return {"gradient": "stable_adjoint"}
         if mode == "forward":
             return {"adjoint": diffrax.DirectAdjoint()}
+        raise ValueError(
+            f"mode must be 'reverse', 'forward', or 'auto'; got {mode!r}.")
+
+    def _dynamic_value_jac(self, params, wrt_idx, theta, *, output_fn,
+                           t_span, t_eval, y0, mode, solve_kwargs):
+        """``(value, (m, k) Jacobian)`` of ``output_fn(solve(theta))`` using the
+        STABLE method for ``mode``, shared by :meth:`dynamic_sensitivity` and
+        :meth:`dynamic_dgsm`.
+
+        Reverse mode differentiates the solve through the cap-free stable discrete
+        adjoint. Forward mode integrates the augmented ``[y; S]`` variational system
+        (:meth:`solve_sensitivity`) -- finite over long horizons where forward-mode
+        ``jacfwd`` through the stiff solve goes non-finite -- and chains the
+        full-state sensitivity through ``output_fn`` with one ``jax.linearize`` of
+        the output map (no extra solve). ``theta`` is the value of the screened
+        parameters at the evaluation point (the nominal vector for a single
+        sensitivity, or a Sobol sample for the DGSM screen).
+        """
+        wrt_j = jnp.asarray(wrt_idx)
+        if mode == "forward":
+            extra = set(solve_kwargs) - {"max_steps", "dtmax", "factormax",
+                                         "rtol", "atol", "sens_rtol"}
+            if extra:
+                raise TypeError(
+                    f"forward-mode dynamic sensitivity runs the solve through "
+                    f"solve_sensitivity, which does not accept {sorted(extra)}; "
+                    f"it accepts max_steps / dtmax / factormax / rtol / atol / "
+                    f"sens_rtol.")
+            full = params.at[wrt_j].set(theta)
+            ts, ys, S_state = self.solve_sensitivity(
+                full, list(wrt_idx), t_span=t_span, t_eval=t_eval, y0=y0,
+                **solve_kwargs)
+
+            def g_of_ys(ys_traj):
+                return jnp.atleast_1d(
+                    output_fn(PlantSolution(t=ts, state=ys_traj, plant=self)))
+
+            # One linearization of the output map at the saved trajectory (no
+            # solve), pushed across the k parameter columns of dy/dtheta -> (m, k).
+            g, jvp_g = jax.linearize(g_of_ys, ys)
+            S = jax.vmap(jvp_g, in_axes=2, out_axes=1)(S_state)
+            return g, S
+        if mode == "reverse":
+            # Differentiate the solve directly through the cap-free stable adjoint,
+            # without an enclosing jit (the primal runs with concrete parameters,
+            # which some plant setup needs); the solve's compiled-solve cache reuses
+            # the integrator compile across calls.
+            solve_adj = self._dynamic_adjoint_kwargs("reverse")
+
+            def f(th):
+                p = params.at[wrt_j].set(th)
+                sol = self.solve(t_span, t_eval=t_eval, params=p, y0=y0,
+                                 **solve_adj, **solve_kwargs)
+                return jnp.atleast_1d(output_fn(sol))
+
+            return _dynamic_value_and_jacobian(f, theta, "reverse")
         raise ValueError(
             f"mode must be 'reverse', 'forward', or 'auto'; got {mode!r}.")
 
@@ -5366,21 +5543,25 @@ class Plant:
     ) -> jnp.ndarray:
         """Sensitivity of a transient (time-window) output to the parameters.
 
-        Differentiates a dynamic :meth:`solve` over ``t_span`` through the time
-        integration -- the dynamic counterpart of :meth:`steady_state_sensitivity`,
-        for outputs that depend on the trajectory rather than the operating point
-        (an effluent time series, a window average, a peak). Unlike the steady-state
-        case there is no implicit-function-theorem shortcut, so the cost is one
-        differentiated stiff solve; this wrapper's value is that it **selects the
-        correct adjoint for the direction** (the common footgun): reverse mode uses
-        the cap-free stable adjoint of the stiff plant, forward mode a
-        forward-capable adjoint. The solve is differentiated directly (no enclosing
-        jit, so the primal runs with concrete parameters, which some plant setup
-        requires); the solve's own compiled-solve cache reuses the integrator
-        compile across calls. Forward mode over a long horizon is the memory-light
-        direction: it propagates the parameter tangents in lockstep with the state,
-        so its memory is independent of the integration length, whereas reverse mode
-        stores the trajectory to replay it.
+        The sensitivity of a transient output -- the dynamic counterpart of
+        :meth:`steady_state_sensitivity`, for outputs that depend on the trajectory
+        rather than the operating point (an effluent time series, a window average,
+        a peak). Unlike the steady-state case there is no implicit-function-theorem
+        shortcut, so the cost is one stiff solve per direction; this wrapper's value
+        is that it uses the **stable method for each AD direction** (the footgun it
+        removes -- a naive differentiation of :meth:`solve` is non-finite on a stiff
+        plant). **Reverse** mode differentiates the solve through the cap-free stable
+        discrete adjoint. **Forward** mode integrates the augmented ``[y; S]``
+        variational system (:meth:`solve_sensitivity`), whose step controller bounds
+        ``S`` so it stays finite over long horizons where forward-mode ``jacfwd``
+        through the solve goes non-finite, then chains the full-state sensitivity
+        through ``output_fn``. Forward is also the **memory-light** direction over a
+        long horizon: ``solve_sensitivity`` carries the parameter tangents in
+        lockstep with the state, so its memory is independent of the integration
+        length, whereas reverse mode stores the trajectory to replay it. Neither is
+        wrapped in an enclosing jit, so the primal runs with concrete parameters
+        (which some plant setup requires); the solve's compiled-solve cache reuses
+        the integrator compile across calls.
 
         Parameters
         ----------
@@ -5398,9 +5579,12 @@ class Plant:
             names; default all).
         mode : {"reverse", "forward", "auto"}
             AD direction. ``"reverse"`` (default; ``"auto"`` resolves to it) suits
-            many parameters / few outputs and uses the stable adjoint;
-            ``"forward"`` suits few parameters / many outputs and uses a
-            forward-capable adjoint (stores the solve -- heavier on memory).
+            many parameters / few outputs and uses the stable discrete adjoint;
+            ``"forward"`` suits few parameters / many outputs and uses the augmented
+            variational solve (:meth:`solve_sensitivity`) -- finite and memory-light
+            over long horizons. In forward mode ``**solve_kwargs`` are forwarded to
+            :meth:`solve_sensitivity` (``max_steps``, ``dtmax``, ``factormax``,
+            ``rtol``, ``atol``, ``sens_rtol``), not to :meth:`solve`.
         y0 : jnp.ndarray, optional
             Initial plant state (e.g. a warm-start steady state).
         elasticity : bool
@@ -5423,19 +5607,9 @@ class Plant:
         wrt_j = jnp.asarray(wrt_idx)
         theta0 = params[wrt_j]
         chosen = "reverse" if mode == "auto" else mode
-        solve_adj = self._dynamic_adjoint_kwargs(chosen)
-
-        def _f(theta):
-            p = params.at[wrt_j].set(theta)
-            sol = self.solve(t_span, t_eval=t_eval, params=p, y0=y0,
-                             **solve_adj, **solve_kwargs)
-            return jnp.atleast_1d(output_fn(sol))
-
-        # Differentiate the solve directly, without an enclosing jit: the primal
-        # then runs with concrete parameters (some plant setup needs a concrete
-        # value there, so an outer jit fails), while the solve's own compiled-solve
-        # cache still reuses the integrator compile across calls.
-        g, S = _dynamic_value_and_jacobian(_f, theta0, chosen)
+        g, S = self._dynamic_value_jac(
+            params, wrt_idx, theta0, output_fn=output_fn, t_span=t_span,
+            t_eval=t_eval, y0=y0, mode=chosen, solve_kwargs=solve_kwargs)
         if elasticity:
             S = S * (theta0[None, :] / g[:, None])
         return S
@@ -5489,21 +5663,17 @@ class Plant:
                 f"ranges must have shape ({k}, 2) aligned with the {k} screened "
                 f"parameters; got {tuple(ranges_arr.shape)}.")
         lo, hi = ranges_arr[:, 0], ranges_arr[:, 1]
-        wrt_j = jnp.asarray(wrt_idx)
         chosen = "reverse" if mode == "auto" else mode
-        solve_adj = self._dynamic_adjoint_kwargs(chosen)
 
         def _per_sample(z):
-            # Bare (no enclosing jit): the primal solve runs with concrete
-            # parameters, so plant setup that needs a concrete value there does not
-            # see a tracer; the solve's own compiled-solve cache still amortizes the
-            # integrator compile across samples.
-            def f(theta):
-                p = params.at[wrt_j].set(theta)
-                sol = self.solve(t_span, t_eval=t_eval, params=p, y0=y0,
-                                 **solve_adj, **solve_kwargs)
-                return jnp.atleast_1d(output_fn(sol))
-            return _dynamic_value_and_jacobian(f, z, chosen)
+            # The stable value+Jacobian at the Sobol sample z (reverse: stable
+            # adjoint; forward: the augmented [y; S] variational solve). Bare (no
+            # enclosing jit): the primal runs with concrete parameters, so plant
+            # setup that needs a concrete value does not see a tracer; the solve's
+            # compiled-solve cache amortizes the integrator compile across samples.
+            return self._dynamic_value_jac(
+                params, wrt_idx, z, output_fn=output_fn, t_span=t_span,
+                t_eval=t_eval, y0=y0, mode=chosen, solve_kwargs=solve_kwargs)
 
         Z, n_drawn = _sobol_sample(lo, hi, k, n_samples, seed)
         outs, grads = [], []

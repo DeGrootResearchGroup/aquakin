@@ -893,7 +893,7 @@ NEWTON_TOL_FACTOR = 10.0
 
 
 def build_implicit_solver(rtol, atol, *, solver=None, colored_root_finder=None,
-                          force_root_finder=False):
+                          force_root_finder=False, linear_solver=None):
     """The single source of truth for the implicit ODE solver, shared by EVERY
     aquakin solve so the forward and discrete-adjoint paths cannot silently drift.
 
@@ -922,12 +922,20 @@ def build_implicit_solver(rtol, atol, *, solver=None, colored_root_finder=None,
         ``False`` (the forward path) a supplied ``solver`` is honoured verbatim --
         its own root finder is left untouched -- and only the *default* solver gets
         the decoupled root finder.
+    linear_solver : lineax.AbstractLinearSolver, optional
+        A custom linear solver for the decoupled root finder's per-stage solve.
+        The forward-sensitivity augmented ``[y; S]`` solve passes the block-arrow
+        :class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`
+        here so the decoupled Newton uses the factor-once-reuse linear algebra.
+        Ignored when ``colored_root_finder`` is given (that root finder carries
+        its own solver).
     """
     if colored_root_finder is not None:
         rf = colored_root_finder
     else:
+        rf_kw = {} if linear_solver is None else {"linear_solver": linear_solver}
         rf = diffrax.VeryChord(rtol=NEWTON_TOL_FACTOR * rtol,
-                               atol=NEWTON_TOL_FACTOR * jnp.asarray(atol))
+                               atol=NEWTON_TOL_FACTOR * jnp.asarray(atol), **rf_kw)
     if solver is None:
         return diffrax.Kvaerno5(root_finder=rf)
     if force_root_finder or colored_root_finder is not None:
