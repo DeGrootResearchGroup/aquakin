@@ -4976,9 +4976,21 @@ nor concentrating it in a few files makes the whole suite fast.
   landed. Sharding across N fresh processes bounds each process's footprint to
   ~1/N (slow: 8 shards × 2 Python versions; validation: 4 shards, 3.12). The
   partition is complete and disjoint, so coverage is unchanged. (pytest-split
-  balances by `.test_durations` where recorded — currently the validation set —
-  else evenly by count, which is what bounds the *memory*; duration-balancing
-  only evens the wall time.)
+  balances by `.test_durations` where recorded — now including the heaviest slow
+  tests — else evenly by count; duration-balancing evens the wall time.) **But
+  sharding alone is loose memory control: more shards or better balancing only
+  *relocate* an overweight shard** (a new whole-plant-AD test once walked the OOM
+  4/6 → 5/8 across re-shard / re-balance attempts), because the accumulation is
+  per-shard, not per-test. The real bound is the slow-gated autouse fixture
+  `_bound_slow_test_memory` in [`tests/conftest.py`](tests/conftest.py): it
+  `jax.clear_caches()` + `gc.collect()`s after **every** `slow` test, so a shard's
+  peak is one test's footprint (~5 GB) rather than the running sum. This is free
+  for the slow suite — plant solves are cached **per instance**
+  (`Plant._jit_cache`), so a later test compiles its own plant regardless;
+  clearing between tests frees the accumulated executables without forcing a
+  re-compile. Gated on the `slow` marker so the fast suite (where lightweight
+  tests share compiled fixtures) is untouched. Sharding still earns its keep on
+  **wall time** (parallel shards), not memory.
 - The **`smoke`** job (`pytest -m "slow and not validation" --splits 18 --group
   <rotating>`, 3.12) runs on **every PR** as an early-warning slice of the
   merge-only `slow` set: it *executes* a bounded ~1/18 shard (~8 tests) so

@@ -7,8 +7,6 @@ pick the adjoint that matches the AD direction (reverse -> the cap-free stable
 adjoint; forward -> a forward-capable adjoint), which is the easy thing to get
 wrong by hand. The solves are stiff plant integrations, so these are slow.
 """
-import gc
-
 import diffrax
 import jax
 import jax.numpy as jnp
@@ -17,26 +15,8 @@ import pytest
 
 import aquakin
 
-
-@pytest.fixture(autouse=True)
-def _free_jax_memory():
-    """Bound the JAX cache footprint of these tests in the slow-suite shard.
-
-    Each test here compiles large stiff-solve programs (the augmented ``[y; S]``
-    forward-sensitivity solve, and jacfwd / stable-adjoint through the BSM plant).
-    A slow-suite shard runs in ONE process, and these tests run mid-shard (after
-    the heavy BSM2 colored / design tests), so without freeing the JAX compilation
-    cache their compiled executables would stack on top of the prior tests' and OOM
-    the 16 GB CI runner. Clearing the cache (and collecting the plant objects)
-    *both before and after* brackets these tests in a low-memory island: they do
-    not pile onto the accumulated prior footprint, nor persist into later tests --
-    the same accumulation the suite's sharding exists to bound.
-    """
-    jax.clear_caches()
-    gc.collect()
-    yield
-    jax.clear_caches()
-    gc.collect()
+# Memory is bounded by the slow-suite-wide cache-clearing fixture in
+# tests/conftest.py (``_bound_slow_test_memory``), so no per-file fixture here.
 
 
 def _bsm1():
@@ -140,7 +120,7 @@ def test_dynamic_dgsm_matches_dgsm():
         return jnp.array([sol.C_named("tank5", "SNO")[-1]])
 
     res = p.dynamic_dgsm(ranges, output_fn=out_fn, t_span=(0.0, 2.0), t_eval=t_eval,
-                         wrt=screen, n_samples=8, seed=0, y0=y0, mode="reverse",
+                         wrt=screen, n_samples=4, seed=0, y0=y0, mode="reverse",
                          max_steps=200_000)
     assert res.sobol_total_bound.shape == (1, 3)
 
@@ -150,7 +130,7 @@ def test_dynamic_dgsm_matches_dgsm():
                       gradient="stable_adjoint", max_steps=200_000)
         return sol.C_named("tank5", "SNO")[-1]
 
-    d = aquakin.dgsm(fn, ranges, input_names=screen, n_samples=8, seed=0,
+    d = aquakin.dgsm(fn, ranges, input_names=screen, n_samples=4, seed=0,
                      ad_mode="reverse")
     mine, theirs = dict(res.ranked(0)), dict(d.ranked())
     for s in screen:

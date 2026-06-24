@@ -1,5 +1,6 @@
 """Shared pytest fixtures."""
 
+import gc
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,33 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def simple_network():
     """Load the simple A -> B test network."""
     return aquakin.load_network_from_file(FIXTURES / "simple_network.yaml")
+
+
+@pytest.fixture(autouse=True)
+def _bound_slow_test_memory(request):
+    """Clear the JAX compilation cache after each ``slow`` test to bound the
+    slow-suite shard's memory footprint.
+
+    The slow suite runs a shard's tests in ONE process, and each whole-plant test
+    compiles a large stiff-solve program (~5 GB peak) whose XLA executable and live
+    JAX buffers accumulate across the shard and OOM the 16 GB CI runner. Sharding
+    bounds this only loosely: more shards or better duration balancing just
+    *relocate* the overweight shard (the OOM walked 4/6 -> 5/8 across those
+    attempts) because the accumulation is per-shard, not per-test. Plant solves are
+    cached **per instance** (``Plant._jit_cache``), so a later test builds and
+    compiles its own plant regardless; clearing the compilation cache between
+    tests therefore frees the accumulated executables (and ``gc.collect`` frees the
+    live buffers) without forcing any re-compile. This bounds each shard's peak to
+    a single test's footprint. Gated on the ``slow`` marker so the fast suite --
+    where lightweight tests share compiled fixtures and clearing would be a net
+    cost -- is untouched.
+    """
+    yield
+    if request.node.get_closest_marker("slow") is not None:
+        import jax
+
+        jax.clear_caches()
+        gc.collect()
 
 
 # --- Tiering: defer full-plant integration tests to the merge-only `slow` job --
