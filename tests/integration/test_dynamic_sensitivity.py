@@ -7,6 +7,8 @@ pick the adjoint that matches the AD direction (reverse -> the cap-free stable
 adjoint; forward -> a forward-capable adjoint), which is the easy thing to get
 wrong by hand. The solves are stiff plant integrations, so these are slow.
 """
+import gc
+
 import diffrax
 import jax
 import jax.numpy as jnp
@@ -14,6 +16,27 @@ import numpy as np
 import pytest
 
 import aquakin
+
+
+@pytest.fixture(autouse=True)
+def _free_jax_memory():
+    """Bound the JAX cache footprint of these tests in the slow-suite shard.
+
+    Each test here compiles large stiff-solve programs (the augmented ``[y; S]``
+    forward-sensitivity solve, and jacfwd / stable-adjoint through the BSM plant).
+    A slow-suite shard runs in ONE process, and these tests run mid-shard (after
+    the heavy BSM2 colored / design tests), so without freeing the JAX compilation
+    cache their compiled executables would stack on top of the prior tests' and OOM
+    the 16 GB CI runner. Clearing the cache (and collecting the plant objects)
+    *both before and after* brackets these tests in a low-memory island: they do
+    not pile onto the accumulated prior footprint, nor persist into later tests --
+    the same accumulation the suite's sharding exists to bound.
+    """
+    jax.clear_caches()
+    gc.collect()
+    yield
+    jax.clear_caches()
+    gc.collect()
 
 
 def _bsm1():
