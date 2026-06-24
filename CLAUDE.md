@@ -5009,7 +5009,11 @@ nor concentrating it in a few files makes the whole suite fast.
   push to `main`** (`if: github.event_name == 'push'`). One shared process (the
   64 GB RAM fits the accumulated compiles), with the top-level single-thread `env:`
   overridden to use the runner's cores. See the memory discussion above for why
-  these are off the free-runner jobs.
+  these are off the free-runner jobs. **Cost opt-out:** label a PR **`skip-heavy`**
+  to skip this paid job on its merge (docs-only / low-risk changes). A small
+  `heavy-gate` job resolves the merged PR for the pushed commit and reads its
+  labels; it is **fail-safe** — a direct push (no PR) or any lookup miss leaves the
+  job *running*, so heavy is skipped only when the label is positively present.
 - The **`smoke`** job (`pytest -m "slow and not validation and not heavy" --splits
   18 --group <rotating>`, 3.12) runs on **every PR** as an early-warning slice of the
   merge-only `slow` set: it *executes* a bounded ~1/18 shard (~8 tests) so

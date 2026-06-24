@@ -244,11 +244,46 @@ jobs:
   # `runs-on: aquakin-heavy` is the NAME/label of the larger runner. Create it once
   # in Settings -> Actions -> Runners -> "New runner" -> "New GitHub-hosted runner"
   # (Ubuntu image, 16-core / 64 GB size, named `aquakin-heavy`) and grant this repo
-  # access. Until it exists this job simply stays queued; nothing depends on it, so
-  # it blocks no other job or the merge gate.
+  # access. Until it exists the `heavy` job simply stays queued; nothing depends on
+  # it, so it blocks no other job or the merge gate.
+  #
+  # COST OPT-OUT: label a PR `skip-heavy` to skip this (paid) job when it merges --
+  # for docs-only / low-risk changes that cannot affect the whole-plant adjoint. The
+  # `heavy-gate` job below resolves the merged PR for the pushed commit and reads its
+  # labels; `heavy` runs only when the gate says so. Fail-SAFE: any lookup miss, or a
+  # direct push to main (no PR), leaves `run=true`, so heavy is skipped ONLY when the
+  # `skip-heavy` label is positively present -- a risky merge can never silently skip.
+
+  # Gate that decides whether the paid `heavy` job runs (see the cost opt-out above).
+  heavy-gate:
+    name: heavy gate
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Labels of the PR(s) this pushed commit introduced (empty for a direct push).
+          labels=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+                     --jq '.[].labels[].name' 2>/dev/null || true)
+          if printf '%s\n' "$labels" | grep -qx 'skip-heavy'; then
+            echo "Merged PR is labeled 'skip-heavy' -> skipping the heavy job."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No 'skip-heavy' label -> running the heavy job."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   heavy:
     name: heavy stable-adjoint tests (larger runner)
-    if: github.event_name == 'push'
+    needs: heavy-gate
+    if: github.event_name == 'push' && needs.heavy-gate.outputs.run == 'true'
     runs-on: aquakin-heavy
     timeout-minutes: 150
     # One shared process on a 64 GB box -- no sharding, compile amortized across the
