@@ -15,16 +15,20 @@ import pytest
 
 import aquakin
 
-# Memory is bounded two ways. Across tests, the slow-suite-wide cache-clearing
-# fixture in tests/conftest.py (``_bound_slow_test_memory``) frees each test's
-# compiled programs. Within a test, the per-solve footprint is bounded by a TIGHT
-# ``max_steps``: the reverse ``stable_adjoint`` (and the ``DirectAdjoint`` jacfwd
-# reference) allocate a saved-trajectory buffer sized by ``max_steps`` times the
-# state and the dense stage count, so an over-loose cap is a large idle buffer
-# multiplied by every solve. A 2-day BSM1 solve takes a few hundred steps; the
-# cap below is well above that across the perturbed dgsm samples while keeping the
-# buffer small enough that the heaviest test (eight reverse solves) stays well
-# under the CI runner's memory.
+# These are whole-plant stable-adjoint gradient tests: each builds a BSM1 plant and
+# differentiates the stiff solve, compiling a multi-GB whole-plant program. Run
+# serially in one process, a shard's worth of such tests accumulates compiled XLA
+# programs faster than the allocator returns the freed memory to the OS, so the
+# process RSS climbs test-by-test until the runner OOM-kills the worker -- the same
+# memory wall that excludes the ``heavy`` whole-plant stable-adjoint validation
+# tests from CI. So these carry the ``heavy`` marker too and run LOCALLY
+# (``pytest -m heavy``), not on the shared CI runner. (Reducing ``max_steps`` does
+# not change this: it shrinks only the trajectory buffer, not the compiled program,
+# which is fixed by plant size.)
+#
+# ``max_steps`` is still kept tight -- a 2-day BSM1 solve takes a few hundred steps,
+# so the cap below has a wide margin across the perturbed dgsm samples while keeping
+# the per-solve saved-trajectory buffer small for fast local runs.
 _MAX_STEPS = 8_000
 
 
@@ -40,6 +44,7 @@ def _bsm1():
 
 
 @pytest.mark.slow
+@pytest.mark.heavy
 def test_dynamic_sensitivity_modes_match_grad():
     """Reverse and forward dynamic sensitivity agree, match a manual stable-adjoint
     gradient (to machine precision) and finite differences. The wrapper selects the
@@ -76,6 +81,7 @@ def test_dynamic_sensitivity_modes_match_grad():
 
 
 @pytest.mark.slow
+@pytest.mark.heavy
 def test_solve_sensitivity_matches_jacfwd():
     """Plant.solve_sensitivity -- the stable forward [y; S] variational solve, on
     the plant's enhanced solver config (Kvaerno3 + decoupled Newton + cached
@@ -112,6 +118,7 @@ def test_solve_sensitivity_matches_jacfwd():
 
 
 @pytest.mark.slow
+@pytest.mark.heavy
 def test_dynamic_dgsm_matches_dgsm():
     """plant.dynamic_dgsm screens a transient output globally by reusing
     dynamic_sensitivity per sample. With the same Sobol seed it gives the same

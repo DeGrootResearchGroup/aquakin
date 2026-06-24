@@ -212,18 +212,14 @@ jobs:
         # evenly by count), so this shard runs only its ~1/8 slice in a fresh
         # process -- bounding the accumulated memory.
         #
-        # The conftest reclaim fixture (``_bound_slow_test_memory``) calls
-        # ``malloc_trim`` between tests to return freed memory to the OS; these
-        # glibc knobs make that effective -- ``MALLOC_TRIM_THRESHOLD_=0`` returns
-        # freed memory on every ``free`` instead of hoarding it, and a small
-        # ``MALLOC_ARENA_MAX`` keeps the freed pages in few arenas so the trim
-        # reaches them. Without them the process RSS climbs test-by-test and the
-        # heaviest test OOM-kills the runner as the last test in the shard.
-        env:
-          MALLOC_TRIM_THRESHOLD_: "0"
-          MALLOC_ARENA_MAX: "2"
+        # Exclude `heavy`: the whole-plant stable-adjoint gradient tests (the
+        # dynamic_sensitivity / dynamic_dgsm tests) each compile a multi-GB plant
+        # program, and a shard's worth accumulates them faster than the allocator
+        # returns the freed memory to the OS, OOM-killing the runner -- the same
+        # wall that excludes the heavy validation tests. They run locally
+        # (`pytest -m heavy`), matching the validation suite's `not heavy`.
         run: >-
-          pytest -m "slow and not validation" -q -n 1
+          pytest -m "slow and not validation and not heavy" -q -n 1
           --splits 8 --group ${{ matrix.group }}
           --durations=15 --timeout=900 --timeout-method=thread
           --max-worker-restart=0
@@ -343,7 +339,7 @@ jobs:
           group=$(( ${{ github.run_number }} % 18 + 1 ))
           echo "Pre-merge smoke: slow shard ${group}/18 (rotates by run number)"
           set +e
-          pytest -m "slow and not validation" -q -n 1 \
+          pytest -m "slow and not validation and not heavy" -q -n 1 \
             --splits 18 --group "${group}" \
             --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0
           ec=$?

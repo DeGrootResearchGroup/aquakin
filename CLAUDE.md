@@ -4981,16 +4981,22 @@ nor concentrating it in a few files makes the whole suite fast.
   sharding alone is loose memory control: more shards or better balancing only
   *relocate* an overweight shard** (a new whole-plant-AD test once walked the OOM
   4/6 → 5/8 across re-shard / re-balance attempts), because the accumulation is
-  per-shard, not per-test. The real bound is the slow-gated autouse fixture
-  `_bound_slow_test_memory` in [`tests/conftest.py`](tests/conftest.py): it
-  `jax.clear_caches()` + `gc.collect()`s after **every** `slow` test, so a shard's
-  peak is one test's footprint (~5 GB) rather than the running sum. This is free
-  for the slow suite — plant solves are cached **per instance**
-  (`Plant._jit_cache`), so a later test compiles its own plant regardless;
-  clearing between tests frees the accumulated executables without forcing a
-  re-compile. Gated on the `slow` marker so the fast suite (where lightweight
-  tests share compiled fixtures) is untouched. Sharding still earns its keep on
-  **wall time** (parallel shards), not memory.
+  per-shard, not per-test. A per-test cache-clear fixture (`jax.clear_caches()` +
+  `gc.collect()` after every `slow` test, optionally with a `malloc_trim`
+  follow-up) was tried and **rejected** — do not re-add it: profiling showed
+  `clear_caches()` itself *spikes* RSS and only partially reclaims (the freed
+  compiled programs are not returned to the OS, so the process RSS still creeps up
+  test-by-test), and `malloc_trim` had nothing to reclaim because the programs stay
+  live until GC. The accumulation is intrinsic to the **whole-plant
+  stable-adjoint gradient tests**: each compiles a multi-GB plant program, and a
+  shard's worth piles up faster than any between-test clear can reclaim,
+  OOM-killing the runner regardless of shard count (a single such test runs fine
+  alone — the failure is cumulative). So those tests carry the **`heavy`** marker
+  and are **excluded from CI** — every slow / validation / smoke / durations job
+  runs `... and not heavy` — and run locally via `pytest -m heavy`. This is the
+  same wall, and the same exclusion, as the `heavy` whole-plant stable-adjoint
+  *validation* tests. Sharding still earns its keep on **wall time** (parallel
+  shards), not memory.
 - The **`smoke`** job (`pytest -m "slow and not validation" --splits 18 --group
   <rotating>`, 3.12) runs on **every PR** as an early-warning slice of the
   merge-only `slow` set: it *executes* a bounded ~1/18 shard (~8 tests) so
