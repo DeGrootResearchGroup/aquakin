@@ -3270,9 +3270,11 @@ optimizations (the decoupled-Newton root finder, the colored Jacobian, the
 `Kvaerno3`/`factormax` knobs) silently failed to reach the adjoint's forward pass —
 it kept paying dense, full-Newton, 7-stage costs. Both now build from one pair of
 helpers in [`integrate/_common.py`](aquakin/integrate/_common.py):
-`build_implicit_solver(rtol, atol, solver=, colored_root_finder=, force_root_finder=)`
-(the decoupled-Newton default `Kvaerno5`, or a supplied `Kvaerno3`, with the
-colored `ColoredVeryChord` injected when given) and
+`build_implicit_solver(rtol, atol, order=, solver=, colored_root_finder=, linear_solver=, force_root_finder=)`
+(the decoupled-Newton `Kvaerno` of the requested `order` — `5` default, `3` for the
+lean / forward-sensitivity paths — built from the `_CANONICAL_SOLVERS` table, with
+the colored `ColoredVeryChord` or the block-arrow `SimultaneousCorrector`
+`linear_solver` injected when given) and
 `build_step_controller(rtol, atol, factormax=, dtmax=)` (the PID core the forward
 uses directly and the adjoint wraps in a `ClipStepSizeController`). So a future
 per-step optimization lands in one place and reaches **both** modes. Specifically
@@ -3293,6 +3295,34 @@ guard,
 the `jax_adjoint`, `forward_fast`, and `stable_adjoint`-forward integrators realize
 the **same primal trajectory** — so a future divergence in any one path's
 configuration fails loudly.
+
+**Every diffrax solve funnels through these helpers, structurally enforced.** The
+forward-sensitivity reactor path and the plant's colored-solver method were the
+last two paths still constructing a `Kvaerno5` / `PIDController` *directly* (the
+former with a *tight*, controller-tied Newton — a real divergence from the
+decoupled Newton everything else used; the latter hand-injecting the colored root
+finder into a bare `Kvaerno5`). Both now build through `build_implicit_solver` /
+`build_step_controller`: the augmented `[y; S]` forward-sensitivity solve passes
+`order=` (5 reactors / 3 plant) + the `SimultaneousCorrector` `linear_solver`, and
+the colored method passes `colored_root_finder=`. So the diffrax ESDIRK object is
+constructed in exactly **one** place — the `_CANONICAL_SOLVERS` table inside
+`build_implicit_solver` — the only legitimate variation being the explicit axes the
+helper exposes (order, colored, `linear_solver`, factormax, dtmax) plus the one
+escape hatch (`Plant.solve(solver=...)`, a user object honoured verbatim). The lone
+*conceptual* exception is `forward_solve.py` (the `forward_fast` lean
+`lax.while_loop`), which builds no diffrax solver at all — its Kvaerno3 tableau is
+hand-rolled and must track diffrax's by hand. **A drift guard
+([`tests/unit/test_solver_config_single_source.py`](tests/unit/test_solver_config_single_source.py))
+AST-scans the package for any direct `Kvaerno*` / `PIDController` / `VeryChord` /
+`with_stepsize_controller_tols` *call* outside an explicit allowlist (just
+`_common.py`) and fails on a new one**, so a future solve path cannot silently
+re-introduce the drift — it must route through the helpers or add an audited
+allowlist entry (Python has no real access control, so this static AST lint is the
+enforcement, backed by the runtime trajectory-agreement guard above). The
+unification also switched the reactor forward-sensitivity from its tight Newton to
+the decoupled Newton; the reactor forward-sensitivity suite passes unchanged at its
+~1e-8 `jacfwd` tolerance, and the forward / discrete-adjoint paths are bit-identical
+(`order=5` reproduces the previous `diffrax.Kvaerno5(root_finder=rf)`).
 
 **`Plant.solve(colored_jacobian=True)` — sparse (colored-AD) Jacobian
 materialisation ([`integrate/colored_jacobian.py`](aquakin/integrate/colored_jacobian.py)).**

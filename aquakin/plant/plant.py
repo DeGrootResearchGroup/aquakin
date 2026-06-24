@@ -3320,9 +3320,12 @@ class Plant:
         rf, n_colors, ok = self._colored_root_finder
         if not ok:
             return solver
-        base = solver if solver is not None else diffrax.Kvaerno5()
-        # Swap the base solver's chord root finder for the colored one.
-        return eqx.tree_at(lambda s: s.root_finder, base, rf)
+        # Build through the single-source-of-truth helper: it injects the colored
+        # root finder into the user-supplied solver, or into the canonical Kvaerno5
+        # when none is given -- so the colored path constructs no solver of its own.
+        from aquakin.integrate._common import build_implicit_solver
+        return build_implicit_solver(rtol, atol, solver=solver,
+                                     colored_root_finder=rf)
 
     def _colored_adjoint_jacobian_builder(self, t0, y0, params, rtol, atol, *,
                                           mode):
@@ -5411,8 +5414,6 @@ class Plant:
         to this ``[y; S]`` solve and does not apply to the single-state forward /
         adjoint solves, whose per-step lever is the colored Jacobian.
         """
-        import diffrax
-
         from aquakin.integrate._common import default_atol
         from aquakin.integrate.forward_sensitivity import (
             augmented_forward_sensitivity,
@@ -5453,7 +5454,7 @@ class Plant:
             t0=t0, t1=t1, t_eval=te, rtol=rtol, atol_y=atol_arr,
             sens_rtol=sens_rtol, dtmax=dtmax, max_steps=max_steps,
             shared_factor=int(free_idx.shape[0]) > 1,
-            base_solver=diffrax.Kvaerno3(), factormax=factormax,
+            order=3, factormax=factormax,
         )
 
     @staticmethod
