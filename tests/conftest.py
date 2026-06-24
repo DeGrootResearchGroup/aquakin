@@ -16,24 +16,43 @@ def simple_network():
     return aquakin.load_network_from_file(FIXTURES / "simple_network.yaml")
 
 
+def _release_freed_heap():
+    """Return freed heap memory to the OS via ``malloc_trim``.
+
+    ``jax.clear_caches()`` + ``gc.collect()`` drop the Python references to a
+    test's compiled executables and device buffers, but on the Linux CI runner the
+    glibc allocator keeps that freed memory in its arenas rather than returning it
+    to the OS, so the process RSS does not actually fall. ``malloc_trim(0)`` returns
+    the freed arena memory to the OS, so the slow shard's process RSS resets between
+    tests instead of accumulating. No-op where ``malloc_trim`` is unavailable (e.g.
+    macOS), which is harmless -- the developer machines that lack it are not the
+    memory-constrained 16 GB runners this guards.
+    """
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _bound_slow_test_memory(request):
-    """Clear the JAX compilation cache after each ``slow`` test to bound the
-    slow-suite shard's memory footprint.
+    """Reclaim memory after each ``slow`` test to bound the shard's process RSS.
 
-    The slow suite runs a shard's tests in ONE process, and each whole-plant test
-    compiles a large stiff-solve program (~5 GB peak) whose XLA executable and live
-    JAX buffers accumulate across the shard and OOM the 16 GB CI runner. Sharding
-    bounds this only loosely: more shards or better duration balancing just
-    *relocate* the overweight shard (the OOM walked 4/6 -> 5/8 across those
-    attempts) because the accumulation is per-shard, not per-test. Plant solves are
-    cached **per instance** (``Plant._jit_cache``), so a later test builds and
-    compiles its own plant regardless; clearing the compilation cache between
-    tests therefore frees the accumulated executables (and ``gc.collect`` frees the
-    live buffers) without forcing any re-compile. This bounds each shard's peak to
-    a single test's footprint. Gated on the ``slow`` marker so the fast suite --
-    where lightweight tests share compiled fixtures and clearing would be a net
-    cost -- is untouched.
+    The slow suite runs a shard's tests serially in ONE process (``-n 1``), and
+    each whole-plant test compiles a large stiff-solve program (a multi-GB XLA
+    executable plus live JAX buffers). ``jax.clear_caches()`` + ``gc.collect()``
+    drop the Python references to the prior test's executables and buffers, and
+    ``_release_freed_heap`` then returns that freed memory to the OS -- without it
+    the glibc allocator keeps the freed pages in its arenas, so the process RSS
+    climbs test-by-test until the heaviest test's own peak tips it over the
+    runner's memory (the failure is cumulative across the shard, not per-test:
+    the heaviest test runs fine alone but OOMs as the last test in the shard).
+    Plant solves are cached **per instance** (``Plant._jit_cache``), so a later
+    test recompiles its own plant regardless -- clearing between tests forces no
+    re-compile. Gated on the ``slow`` marker so the fast suite, where lightweight
+    tests share compiled fixtures and reclaiming would be a net cost, is untouched.
     """
     yield
     if request.node.get_closest_marker("slow") is not None:
@@ -41,6 +60,7 @@ def _bound_slow_test_memory(request):
 
         jax.clear_caches()
         gc.collect()
+        _release_freed_heap()
 
 
 # --- Tiering: defer full-plant integration tests to the merge-only `slow` job --
