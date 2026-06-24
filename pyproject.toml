@@ -48,6 +48,6 @@ include = ["aquakin*"]
 markers = [
     "validation: scientific validation tests against published data (slow)",
     "slow: multi-minute stiff/plant integration tests; excluded from the fast PR gate, run in full on merge to main",
-    "heavy: peak-memory-heavy whole-plant stable-adjoint gradient tests (a ~2-5.5 GB compiled plant program each); EXCLUDED from CI -- a single one peaks near the 16 GB runner, and a shard's worth accumulates compiled programs faster than the allocator returns the freed memory to the OS, OOM-killing the runner, with no free-runner config that fits. Both the validation and the slow suites exclude them (`... and not heavy`). Run locally with `pytest -m heavy`. The stable-adjoint gradient path is still smoke-tested in the fast gate on a small single-CSTR plant.",
+    "heavy: peak-memory-heavy whole-plant stable-adjoint gradient tests (a ~2-5.5 GB compiled plant program each); kept off the free 16 GB runners -- a single one peaks near 16 GB and a shard's worth accumulates compiled programs faster than the allocator frees them, OOM-killing the runner. The slow / validation / smoke / durations jobs all exclude them (`... and not heavy`); they run on the dedicated `heavy` job (a 16-core/64 GB GitHub-hosted larger runner, push-to-main) and locally via `pytest -m heavy`. The stable-adjoint gradient path is also smoke-tested in the fast gate on a small single-CSTR plant.",
 ]
 testpaths = ["tests"]

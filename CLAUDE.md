@@ -4961,9 +4961,9 @@ nor concentrating it in a few files makes the whole suite fast.
   `labeled` event skips the gate, which must not block). It is a *stable* required-
   check name that survives shard-count changes, so **branch protection requires
   `fast gate`**, not the per-shard `fast tests (...)` jobs.
-- The **`slow`** job (`pytest -m "slow and not validation"`, 3.11/3.12) and
-  **`validation`** job (`pytest -m validation`, 3.12) run **only on push to
-  `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
+- The **`slow`** job (`pytest -m "slow and not validation and not heavy"`,
+  3.11/3.12) and **`validation`** job (`pytest -m "validation and not heavy"`,
+  3.12) run **only on push to `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
   stiff/plant solves (the `slow` marker on `test_bsm2_dynamic`, `test_bsm1`,
   `test_biofilm`, `test_forward_sensitivity`, the two `test_wats_sewer_*` files)
   and the published-data checks. A regression a PR's fast gate cannot catch
@@ -4992,13 +4992,26 @@ nor concentrating it in a few files makes the whole suite fast.
   shard's worth piles up faster than any between-test clear can reclaim,
   OOM-killing the runner regardless of shard count (a single such test runs fine
   alone — the failure is cumulative). So those tests carry the **`heavy`** marker
-  and are **excluded from CI** — every slow / validation / smoke / durations job
-  runs `... and not heavy` — and run locally via `pytest -m heavy`. This is the
-  same wall, and the same exclusion, as the `heavy` whole-plant stable-adjoint
-  *validation* tests. Sharding still earns its keep on **wall time** (parallel
+  and are kept off the free-runner jobs — every slow / validation / smoke /
+  durations job runs `... and not heavy`. They run instead on the **`heavy` job**:
+  a GitHub-hosted **larger runner** (16-core / 64 GB, Team plan; `runs-on:
+  aquakin-heavy`) whose RAM fits every heavy test in one shared process, gated to
+  **push-to-main** like slow/validation (a fork PR cannot reach a hosted runner, so
+  there is no self-hosted security concern; per-minute billing is why it stays off
+  the PR path). It runs `pytest -m heavy`, covering both the BSM2 validation-heavy
+  tests and the BSM1 slow-heavy dynamic-sensitivity tests; locally they run the
+  same way. (If the `aquakin-heavy` runner does not exist the job stays queued and
+  blocks nothing.) Sharding still earns its keep on **wall time** (parallel
   shards), not memory.
-- The **`smoke`** job (`pytest -m "slow and not validation" --splits 18 --group
-  <rotating>`, 3.12) runs on **every PR** as an early-warning slice of the
+- The **`heavy`** job (`pytest -m heavy`, 3.12) runs the whole-plant
+  stable-adjoint gradient tests that no free runner fits, on a GitHub-hosted
+  **larger runner** (`runs-on: aquakin-heavy`, 16-core/64 GB, Team plan), **only on
+  push to `main`** (`if: github.event_name == 'push'`). One shared process (the
+  64 GB RAM fits the accumulated compiles), with the top-level single-thread `env:`
+  overridden to use the runner's cores. See the memory discussion above for why
+  these are off the free-runner jobs.
+- The **`smoke`** job (`pytest -m "slow and not validation and not heavy" --splits
+  18 --group <rotating>`, 3.12) runs on **every PR** as an early-warning slice of the
   merge-only `slow` set: it *executes* a bounded ~1/18 shard (~8 tests) so
   shared-fixture breaks, whole-plant call-site regressions and memory creep show
   up before merge, not after. It is deliberately probabilistic — a single PR
