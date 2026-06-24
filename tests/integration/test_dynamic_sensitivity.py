@@ -15,8 +15,17 @@ import pytest
 
 import aquakin
 
-# Memory is bounded by the slow-suite-wide cache-clearing fixture in
-# tests/conftest.py (``_bound_slow_test_memory``), so no per-file fixture here.
+# Memory is bounded two ways. Across tests, the slow-suite-wide cache-clearing
+# fixture in tests/conftest.py (``_bound_slow_test_memory``) frees each test's
+# compiled programs. Within a test, the per-solve footprint is bounded by a TIGHT
+# ``max_steps``: the reverse ``stable_adjoint`` (and the ``DirectAdjoint`` jacfwd
+# reference) allocate a saved-trajectory buffer sized by ``max_steps`` times the
+# state and the dense stage count, so an over-loose cap is a large idle buffer
+# multiplied by every solve. A 2-day BSM1 solve takes a few hundred steps; the
+# cap below is well above that across the perturbed dgsm samples while keeping the
+# buffer small enough that the heaviest test (eight reverse solves) stays well
+# under the CI runner's memory.
+_MAX_STEPS = 8_000
 
 
 def _bsm1():
@@ -44,7 +53,7 @@ def test_dynamic_sensitivity_modes_match_grad():
                           sol.C_named("tank5", "SNH")[-1]])
 
     kw = dict(output_fn=out_fn, t_span=(0.0, 2.0), t_eval=t_eval,
-              wrt=["asm1.muA", "asm1.muH"], y0=y0, max_steps=200_000)
+              wrt=["asm1.muA", "asm1.muH"], y0=y0, max_steps=_MAX_STEPS)
     Sr = np.asarray(p.dynamic_sensitivity(base, mode="reverse", **kw))
     Sf = np.asarray(p.dynamic_sensitivity(base, mode="forward", **kw))
     assert Sr.shape == (2, 2)
@@ -56,7 +65,7 @@ def test_dynamic_sensitivity_modes_match_grad():
     def scalar(theta):
         pp = base.at[i].set(theta)
         sol = p.solve((0.0, 2.0), t_eval=t_eval, params=pp, y0=y0,
-                      gradient="stable_adjoint", max_steps=200_000)
+                      gradient="stable_adjoint", max_steps=_MAX_STEPS)
         return sol.C_named("tank5", "SNO")[-1]
 
     g = float(jax.grad(scalar)(th))
@@ -84,7 +93,7 @@ def test_solve_sensitivity_matches_jacfwd():
     snh = s0 + asm1.species_index["SNH"]
 
     ts, ys, S = p.solve_sensitivity(base, wrt, t_span=(0.0, T), t_eval=te, y0=y0,
-                                    max_steps=200_000)
+                                    max_steps=_MAX_STEPS)
     S = np.asarray(S)
     assert np.all(np.isfinite(S))
     assert ts.shape[0] == 5 and ys.shape == (5, y0.shape[0]) and S.shape[2] == 2
@@ -95,7 +104,7 @@ def test_solve_sensitivity_matches_jacfwd():
     def out(theta):
         pp = base.at[jnp.asarray(idx)].set(theta)
         sol = p.solve((0.0, T), t_eval=te, params=pp, y0=y0,
-                      adjoint=diffrax.DirectAdjoint(), max_steps=200_000)
+                      adjoint=diffrax.DirectAdjoint(), max_steps=_MAX_STEPS)
         return sol.C_named("tank5", "SNH")[-1]
 
     S_jf = np.asarray(jax.jacfwd(out)(base[jnp.asarray(idx)]))
@@ -121,13 +130,13 @@ def test_dynamic_dgsm_matches_dgsm():
 
     res = p.dynamic_dgsm(ranges, output_fn=out_fn, t_span=(0.0, 2.0), t_eval=t_eval,
                          wrt=screen, n_samples=4, seed=0, y0=y0, mode="reverse",
-                         max_steps=200_000)
+                         max_steps=_MAX_STEPS)
     assert res.sobol_total_bound.shape == (1, 3)
 
     def fn(x):
         pp = base.at[jnp.asarray(idx)].set(jnp.asarray(x))
         sol = p.solve((0.0, 2.0), t_eval=t_eval, params=pp, y0=y0,
-                      gradient="stable_adjoint", max_steps=200_000)
+                      gradient="stable_adjoint", max_steps=_MAX_STEPS)
         return sol.C_named("tank5", "SNO")[-1]
 
     d = aquakin.dgsm(fn, ranges, input_names=screen, n_samples=4, seed=0,
