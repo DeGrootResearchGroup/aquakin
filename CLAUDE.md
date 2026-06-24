@@ -4974,7 +4974,7 @@ nor concentrating it in a few files makes the whole suite fast.
   OOM-reclaimed mid-suite (~62 min in, SIGTERM / exit 143, before the timeout) —
   first the validation set, then the slow set once enough whole-plant tests
   landed. Sharding across N fresh processes bounds each process's footprint to
-  ~1/N (slow: 6 shards × 2 Python versions; validation: 4 shards, 3.12). The
+  ~1/N (slow: 8 shards × 2 Python versions; validation: 4 shards, 3.12). The
   partition is complete and disjoint, so coverage is unchanged. (pytest-split
   balances by `.test_durations` where recorded — currently the validation set —
   else evenly by count, which is what bounds the *memory*; duration-balancing

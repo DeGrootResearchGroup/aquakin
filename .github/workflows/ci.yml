@@ -166,20 +166,23 @@ jobs:
   # and cuts wall time by running the shards in parallel. Every test runs in
   # exactly one shard (a complete, disjoint partition), so coverage is unchanged.
   slow:
-    name: slow suite (py${{ matrix.python-version }} shard ${{ matrix.group }}/6)
+    name: slow suite (py${{ matrix.python-version }} shard ${{ matrix.group }}/8)
     if: >-
       github.event_name == 'push'
       || (github.event_name == 'pull_request'
           && contains(github.event.pull_request.labels.*.name, 'full-ci'))
     runs-on: ubuntu-latest
-    # Each shard is ~1/6 of the serial run; 45 min is a safety ceiling with
-    # headroom. Merge-only, so off the PR critical path.
+    # Each shard is ~1/8 of the serial run; 45 min is a safety ceiling with
+    # headroom. Merge-only, so off the PR critical path. (Raised from 6 to 8
+    # shards when the differentiable-plant sensitivity tests landed: more
+    # whole-plant solves pushed the heaviest shard's accumulated XLA cache +
+    # JAX buffers past the 16 GB runner, so a smaller 1/N slice is needed.)
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
-        group: [1, 2, 3, 4, 5, 6]
+        group: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v4
 
@@ -204,13 +207,13 @@ jobs:
         # `-n 1` (serial within the shard), NOT `-n auto`/`-n 2`: a single heavy
         # whole-plant test (the BSM2 family, the profile-likelihood and
         # calibration grids) peaks at ~4-5.5 GB resident, so two concurrent ones
-        # OOM-kill the runner. pytest-split partitions the marked set across the 6
+        # OOM-kill the runner. pytest-split partitions the marked set across the 8
         # shards (by recorded duration where available in `.test_durations`, else
-        # evenly by count), so this shard runs only its ~1/6 slice in a fresh
+        # evenly by count), so this shard runs only its ~1/8 slice in a fresh
         # process -- bounding the accumulated memory.
         run: >-
           pytest -m "slow and not validation" -q -n 1
-          --splits 6 --group ${{ matrix.group }}
+          --splits 8 --group ${{ matrix.group }}
           --durations=15 --timeout=900 --timeout-method=thread
           --max-worker-restart=0
 
