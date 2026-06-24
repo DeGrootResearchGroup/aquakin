@@ -25,15 +25,19 @@ linearisation point ``(y, theta)``::
 so no explicit Jacobian is formed; the augmented RHS is ``f(y)`` plus ``p``
 JVPs of ``f`` (the JVP's primal yields ``f(y)`` for free).
 
-This module implements the *augmented-system* form (one stock
-:class:`diffrax.Kvaerno5` + :class:`diffrax.PIDController` whose error norm
-covers ``S``, no ``dtmax`` cap). The per-step implicit solve uses the dense
-augmented Jacobian; it removes the cap and is exact, and it is the right choice
-for one or a few sensitivity parameters and for scalar-loss gradients. The
-factorisation-sharing "simultaneous corrector" that additionally speeds up the
-many-parameter case (reusing one ``(I - gamma.dt.J)`` factorisation across the
-``S`` columns) is a further optimisation exposed through ``shared_factor`` and
-not yet implemented.
+This module implements the *augmented-system* form: a Kvaerno ESDIRK +
+``PIDController`` whose error norm covers ``S`` (no ``dtmax`` cap), with the
+solver and controller built through the shared
+``build_implicit_solver`` / ``build_step_controller`` helpers
+(``aquakin.integrate._common``) so this solve uses the same decoupled-Newton
+configuration as the forward and discrete-adjoint paths (``order`` selects the
+ESDIRK; ``factormax`` the step-growth cap). With ``shared_factor`` the per-step
+implicit solve uses the factorisation-sharing "simultaneous corrector": one
+``(I - gamma.dt.J)`` factorisation is reused across the ``S`` columns, the
+block-arrow :class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`
+injected as the root finder's linear solver, so the many-parameter case scales
+weakly with the parameter count. Without it the dense augmented Jacobian is used,
+which is exact and the right choice for one or a few sensitivity parameters.
 
 References
 ----------
@@ -113,6 +117,8 @@ def augmented_forward_sensitivity(
     dtmax: Optional[float] = None,
     max_steps: int = 1_000_000,
     shared_factor: bool = False,
+    order: int = 5,
+    factormax: Optional[float] = None,
 ):
     """Integrate ``z = [y; S]`` with adaptive control over both blocks.
 
@@ -223,24 +229,29 @@ def augmented_forward_sensitivity(
         [jnp.full((ndof,), float(rtol)), jnp.full((ndof * k,), sens_rtol_v)]
     )
 
+    sc = None
     if shared_factor:
-        from diffrax import VeryChord, with_stepsize_controller_tols
-
         from aquakin.integrate._simultaneous_corrector import SimultaneousCorrector
 
-        root_finder = with_stepsize_controller_tols(VeryChord)(
-            linear_solver=SimultaneousCorrector(ndof=ndof, n_sens=k)
-        )
-        solver = diffrax.Kvaerno5(root_finder=root_finder)
-    else:
-        solver = diffrax.Kvaerno5()
+        sc = SimultaneousCorrector(ndof=ndof, n_sens=k)
+
+    # Build the augmented-system solver + controller through the single-source-of-
+    # truth helpers, so this solve shares the decoupled Newton + factormax config
+    # the forward / discrete-adjoint paths use and cannot drift from them. ``order``
+    # selects the ESDIRK (5 for the reactors, 3 for the stiff plant); the block-arrow
+    # SimultaneousCorrector is the per-stage linear solver when shared_factor.
+    from aquakin.integrate._common import (build_implicit_solver,
+                                           build_step_controller)
+
+    solver = build_implicit_solver(rtol, atol_aug, order=order, linear_solver=sc)
+    controller = build_step_controller(rtol_aug, atol_aug,
+                                        factormax=factormax, dtmax=dtmax)
 
     saveat = (
         diffrax.SaveAt(t1=True)
         if t_eval is None
         else diffrax.SaveAt(ts=jnp.asarray(t_eval))
     )
-    controller = diffrax.PIDController(rtol=rtol_aug, atol=atol_aug, dtmax=dtmax)
     sol = diffrax.diffeqsolve(
         diffrax.ODETerm(aug_rhs),
         solver,

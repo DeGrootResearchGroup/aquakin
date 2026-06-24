@@ -43,6 +43,15 @@ whose cost grew with save density and was the dominant reason an earlier version
 ran slower than ``diffrax`` at the dense benchmark grid; with dense output the run
 time is flat in the number of save points.
 
+This is the **conceptual exception** to the single-source-of-truth solver rule:
+unlike every other solve path it does not build a ``diffrax`` solver/controller
+(it is a hand-rolled ``lax.while_loop`` precisely to escape that machinery), so it
+cannot route through ``build_implicit_solver`` / ``build_step_controller``. Its
+Kvaerno3 tableau must therefore be kept consistent with diffrax's ``Kvaerno3`` by
+hand. Because it constructs no diffrax solver *object*, the single-source guard in
+``tests/unit/test_solver_config_single_source.py`` does not flag it (and it needs
+no allowlist entry there).
+
 The method is the L-stable A-stable 3rd-order Kvaerno3 ESDIRK with its embedded
 2nd-order error estimate (Kvaerno 2004) and an adaptive step controller with two
 parts: an error controller -- the I-term ``en^(-1/3)`` with a Soderlind PI memory
