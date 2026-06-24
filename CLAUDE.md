@@ -3700,9 +3700,16 @@ is what production simulators use to snap to steady state on any topology.
   `mode="forward"` a forward-capable `adjoint=DirectAdjoint()` (a `custom_vjp`
   adjoint rejects forward mode). `output_fn` maps the `PlantSolution` to a
   length-`m` output vector; the value+Jacobian come from one `jax.vjp` (reverse) or
-  `jax.linearize` (forward), jitted so a repeat call at the same signature reuses
-  the (large) stiff-adjoint compile. `dynamic_dgsm` reuses the per-sample
-  sensitivity into a Sobol total-index screen returning a `DynamicDGSMResult`
+  `jax.linearize` (forward). The solve is differentiated directly (no enclosing jit
+  — the primal must run with concrete params, since some plant setup, e.g. a unit
+  `initial_state`, concretizes; an outer jit makes the BSM2 dynamic plant fail with
+  a `ConcretizationTypeError`); the solve's own compiled-solve cache still reuses
+  the integrator compile. **Forward is the memory-light direction over a long
+  horizon** — it carries the parameter tangents in lockstep with the state, so
+  memory is independent of the integration length, whereas reverse stores the whole
+  trajectory to replay it (prohibitive over a 609-day horizon). `dynamic_dgsm`
+  reuses the per-sample sensitivity into a Sobol total-index screen returning a
+  `DynamicDGSMResult`
   (mirroring `SteadyStateDGSMResult`: `.ranked()`, `.convergence()`); verified
   forward == reverse, the reverse sensitivity matches a manual `stable_adjoint`
   gradient to machine precision, and `dynamic_dgsm` matches `aquakin.dgsm` over the

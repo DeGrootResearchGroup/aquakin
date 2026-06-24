@@ -5374,8 +5374,13 @@ class Plant:
         differentiated stiff solve; this wrapper's value is that it **selects the
         correct adjoint for the direction** (the common footgun): reverse mode uses
         the cap-free stable adjoint of the stiff plant, forward mode a
-        forward-capable adjoint. The per-call computation is wrapped in ``jax.jit``,
-        so repeated calls at different parameters reuse the (significant) compile.
+        forward-capable adjoint. The solve is differentiated directly (no enclosing
+        jit, so the primal runs with concrete parameters, which some plant setup
+        requires); the solve's own compiled-solve cache reuses the integrator
+        compile across calls. Forward mode over a long horizon is the memory-light
+        direction: it propagates the parameter tangents in lockstep with the state,
+        so its memory is independent of the integration length, whereas reverse mode
+        stores the trajectory to replay it.
 
         Parameters
         ----------
@@ -5426,10 +5431,11 @@ class Plant:
                              **solve_adj, **solve_kwargs)
             return jnp.atleast_1d(output_fn(sol))
 
-        # The value+Jacobian (vjp / linearize) is jitted as a unit -- not the inner
-        # solve, since vjp of an already-jitted function is unsupported -- so the
-        # stiff-adjoint compile is reused on a repeat call at the same signature.
-        g, S = jax.jit(lambda th: _dynamic_value_and_jacobian(_f, th, chosen))(theta0)
+        # Differentiate the solve directly, without an enclosing jit: the primal
+        # then runs with concrete parameters (some plant setup needs a concrete
+        # value there, so an outer jit fails), while the solve's own compiled-solve
+        # cache still reuses the integrator compile across calls.
+        g, S = _dynamic_value_and_jacobian(_f, theta0, chosen)
         if elasticity:
             S = S * (theta0[None, :] / g[:, None])
         return S
@@ -5456,10 +5462,10 @@ class Plant:
         over the screened parameters, each sample's sensitivity from
         :meth:`dynamic_sensitivity` (differentiated through the dynamic solve, with
         the adjoint selected by ``mode``), aggregated to the Sobol total-index upper
-        bound. The per-sample computation is jitted once and reused across samples,
-        so the (large) stiff-adjoint compile is paid once -- but each sample is a
-        full differentiated solve, so a dynamic screen is far heavier per sample
-        than the steady-state one; use a modest ``n_samples`` / parameter count.
+        bound. The solve's compiled-solve cache amortizes the integrator compile
+        across samples, but each sample is a full differentiated solve, so a dynamic
+        screen is far heavier per sample than the steady-state one; use a modest
+        ``n_samples`` / parameter count.
 
         Parameters mirror :meth:`steady_state_dgsm` (``ranges`` aligned with
         ``wrt``, ``output_fn`` mapping the :class:`PlantSolution` to ``m`` outputs)
@@ -5487,8 +5493,11 @@ class Plant:
         chosen = "reverse" if mode == "auto" else mode
         solve_adj = self._dynamic_adjoint_kwargs(chosen)
 
-        @jax.jit
         def _per_sample(z):
+            # Bare (no enclosing jit): the primal solve runs with concrete
+            # parameters, so plant setup that needs a concrete value there does not
+            # see a tracer; the solve's own compiled-solve cache still amortizes the
+            # integrator compile across samples.
             def f(theta):
                 p = params.at[wrt_j].set(theta)
                 sol = self.solve(t_span, t_eval=t_eval, params=p, y0=y0,
