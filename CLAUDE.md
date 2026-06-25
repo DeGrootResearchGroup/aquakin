@@ -3726,6 +3726,61 @@ is what production simulators use to snap to steady state on any topology.
   under a `jit`/`grad` trace the diagnostics are traced values and the fallback
   is skipped (only the differentiable `state` is used there). Constant influent
   is assumed (the residual samples the influent at `influent_time`, default 0).
+- **Layered algebraic fallback — continuation and pseudo-arclength before the
+  forward backstop (`continuation_from=`, `arclength=True`).** A direct PTC solve
+  from a fixed warm start fails for a parameter set far enough that the start is
+  out of basin, or whose operating point is near-singular (close to a
+  bifurcation). Rather than fall straight to the slow time-integration backstop,
+  `steady_state` tries two cheap *algebraic* fallbacks that deform from a **known
+  nearby solution** `continuation_from=(params_known, y_known)` (for a sweep, the
+  nominal operating point): (1) **natural-parameter continuation**
+  ([`continuation_solve`](aquakin/plant/steady.py)) — a predictor-corrector that
+  steps the parameters from the known set to the target, the IFT tangent
+  (`−J⁻¹∂F/∂θ`, free from AD) as the Euler predictor and PTC as the corrector, with
+  an adaptive step (`method="continuation"`); then, if that stalls, (2)
+  **pseudo-arclength continuation**
+  ([`arclength_continuation_solve`](aquakin/plant/steady.py)) — Keller's *scaled*
+  arclength tracking (in `z = y/scale`, so the large biomass and tiny gas states
+  contribute comparably) with a **fold-regularizing augmented corrector**
+  `A = [[∂F/∂y·diag(scale), ∂F/∂s], [tangentᵀ]]`, which is non-singular even where
+  `∂F/∂y` is singular (the fold / soft direction), so it reaches operating points
+  behind a near-singular Jacobian where PTC overshoots (`method="arclength"`). The
+  chain is **PTC → continuation → arclength → forward**: a permissive, wide-basin
+  PTC for the common case (the `divergence_factor` bound is deliberately wide
+  *because* these cheap fallbacks exist), algebraic deformation for the
+  out-of-basin / near-fold cases, and time-integration only for the irreducible
+  few. Validated on the BSM2 off-nominal Sobol screen: pseudo-arclength solves
+  near-washout operating points to machine precision (1e-10) that PTC, a
+  `dt`-capped PTC, **and** a 108-day forward solve all wall at ~5e-2.
+- **Existence classification — operating point vs "past the fold"
+  (`operating_point_exists`).** Tracking the branch by arclength does more than
+  solve: it **detects when the operating branch folds before the target** — the
+  continuation parameter `s` stops increasing and the tangent's `s`-velocity
+  *reverses sign* (a saddle-node bifurcation). There, **no operating-branch steady
+  state exists** at `params_target`: the parameters are past the survival limit
+  (e.g. digester acetoclastic-methanogen washout) and only a different branch
+  (washout) exists. That returns `method="past_fold"`, `converged=False`, and the
+  new `SteadyStateResult.operating_point_exists=False`. The test is a *true* `ts`
+  sign reversal, not merely a small `ts` — `ts` dips and **recovers** in the
+  high-sensitivity regions of a perfectly reachable (marginally-stable) branch
+  whose operating point *does* exist, so a small-`ts` heuristic would wrongly
+  exclude real operating points. The few genuinely-near-fold cases the arclength
+  cannot resolve within its step budget fall through to the forward backstop
+  (`method="ptc->forward"`, `operating_point_exists=None`) — conservatively
+  *included*, since they cannot be *confirmed* past-fold.
+- **Fold-based operating-regime exclusion in the screen
+  (`steady_state_dgsm`).** The DGSM solves each sample through the layered chain
+  and **excludes the `past_fold` samples** (no operating point) from the
+  aggregation, `convergence()`, and `with_cond_factor()`, recording the per-sample
+  `solve_method` and `operating_point_exists` on the result. This is the
+  *physical* operating-regime boundary — does a stable operating point exist? —
+  replacing the conditioning heuristic for those samples: a near-bifurcation
+  sample whose operating point genuinely exists (marginally stable, large *real*
+  sensitivity) is **kept**; only the non-existent (past-fold) ones are dropped.
+  This refines the heavy-tail diagnosis: a forward-backstop sample with a huge
+  sensitivity was either a real marginally-stable operating point (keep) or a
+  washout state past the fold (exclude), which the arclength distinguishes where
+  `cond(J)` — baseline ~1e10 from state scaling, not a fold signal — could not.
 - **Step-acceptance guard (the robustness lever, `divergence_factor`).** PTC is
   legitimately **non-monotone** — a healthy step can spike the scaled residual
   (~20–30× on the BSM plants) and recover, so the ramp must accept those. But a

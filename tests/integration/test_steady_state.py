@@ -84,6 +84,34 @@ def test_ptc_step_guard_keeps_overshoot_finite():
     np.testing.assert_allclose(np.asarray(res.state), [0.0], atol=1e-6)  # log(1)=0
 
 
+def test_arclength_solves_reachable_and_detects_past_fold():
+    # Saddle-node test: F(y, lambda) = lambda - y^2, steady state y = sqrt(lambda),
+    # with a fold at lambda = 0 (the upper branch y=+sqrt and the lower y=-sqrt
+    # meet and annihilate). Continue from the known (lambda=1, y=1).
+    from aquakin.plant.steady import arclength_continuation_solve
+
+    def rhs(y, p):
+        return jnp.array([p[0] - y[0] ** 2])
+
+    pk, yk = jnp.array([1.0]), jnp.array([1.0])
+    kw = dict(scale=jnp.array([1.0]), ptc_kwargs=dict(scale_floor=jnp.array([1.0])))
+
+    # Reachable: lambda 1 -> 4 stays on the branch; the augmented corrector tracks
+    # it to y = 2 (no fold crossed).
+    r_ok = arclength_continuation_solve(rhs, pk, yk, jnp.array([4.0]), **kw)
+    assert r_ok.status == "converged"
+    np.testing.assert_allclose(np.asarray(r_ok.state), [2.0], atol=1e-4)
+
+    # Past the fold: lambda 1 -> -1 drives the parameter through the fold at
+    # lambda=0 (arc s=0.5), where the operating branch ceases to exist; the
+    # tangent's s-velocity reverses and the solve reports it does not exist.
+    r_fold = arclength_continuation_solve(rhs, pk, yk, jnp.array([-1.0]), **kw)
+    assert r_fold.status == "past_fold"
+    assert float(r_fold.s_max) < 1.0
+    # The fold of this system is at s=0.5 (lambda crosses 0 halfway).
+    assert 0.4 < float(r_fold.s_max) < 0.65
+
+
 # --- full plant: BSM1 / BSM2 (slow) ------------------------------------------
 
 def _bsm1():
