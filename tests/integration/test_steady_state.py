@@ -262,25 +262,27 @@ def test_bsm2_steady_state_matches_forward():
             0.03 * abs(float(b["tank5"][i[sp]])) + 0.05, sp
 
 
-def test_ptc_step_guard_rejects_finite_blowup():
-    # The growth guard must reject a step whose residual blows up by a large but
-    # *finite* factor (a Newton overshoot from a flat region), not only a
-    # non-finite one. Cubic dy/dt = p - y^3 (root y*=1): from y0=0.01 the Jacobian
-    # -3y^2 is ~0, so a large dt0 makes ONE step overshoot to y~3e3 where the
-    # residual is ~1e7x the start. With the default divergence_factor the step is
-    # rejected (the iterate is held) and dt hard-shrunk; with divergence_factor=inf
-    # (reject only non-finite) the same finite blow-up is accepted and the iterate
-    # jumps. Deterministic: it checks the acceptance logic, not a convergence count.
+def test_ptc_line_search_bounds_finite_blowup():
+    # A step whose residual blows up by a large but *finite* factor (a Newton
+    # overshoot from a flat region) must be bounded, not only a non-finite one.
+    # Cubic dy/dt = p - y^3 (root y*=1): from y0=0.01 the Jacobian -3y^2 is ~0, so a
+    # large dt0 makes the full step overshoot to y~3e3 where the residual is ~1e7x
+    # the start. With the default divergence_factor the backtracking line search
+    # shrinks the step until its residual is within divergence_factor times the best
+    # residual so far, so the iterate stays bounded (here y~26); with
+    # divergence_factor=inf (no bound) the full overshoot is taken. Deterministic:
+    # it checks the step-bounding logic, not a convergence count.
     def rhs(y, p):
         return p - y ** 3
     y0 = jnp.array([0.01])
     p = jnp.array([1.0])
     kw = dict(dt0=1e6, scale_floor=1.0, nonneg=False)
-    held, *_ = ptc_forward(rhs, p, y0, max_iter=1, divergence_factor=1000.0, **kw)
+    bounded, *_ = ptc_forward(rhs, p, y0, max_iter=1, divergence_factor=1000.0, **kw)
     jumped, *_ = ptc_forward(rhs, p, y0, max_iter=1, divergence_factor=jnp.inf, **kw)
-    assert float(held[0]) == pytest.approx(0.01, abs=1e-6)   # blow-up rejected
-    assert float(jumped[0]) > 1e3                            # blow-up accepted
-    # The rejection does not break convergence: the guarded solve still finds y*=1.
+    assert jnp.isfinite(bounded[0])
+    assert abs(float(bounded[0])) < 100.0      # overshoot backtracked to within bound
+    assert float(jumped[0]) > 1e3              # full overshoot taken without the bound
+    # The bounding does not break convergence: the guarded solve still finds y*=1.
     res = solve_steady_state(rhs, p, y0, dt0=1e6, scale_floor=1.0, nonneg=False,
                              tol=1e-10)
     assert bool(res.converged)

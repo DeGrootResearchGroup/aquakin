@@ -174,44 +174,94 @@ def ptc_forward(
 
     jac = jax.jacfwd(F) if jac_fn is None else (lambda y: jac_fn(F, y))
 
+    # Globalization of the PTC step. A bare backward-Euler step at a large
+    # pseudo-time can overshoot -- through zero into the post-solve clip, or far
+    # past the trajectory -- and compound, step over step, to a non-physical value
+    # that never recovers within ``max_iter``. Two safeguards prevent this:
+    #  (1) a positivity-preserving step length (fraction-to-boundary): the step is
+    #      capped so a currently-positive state is not overshot through zero, where
+    #      the post-solve clip would otherwise distort the step the residual test
+    #      sees and seed a divergence; and
+    #  (2) a backtracking line search that shrinks the step until its residual is
+    #      within ``divergence_factor`` of the BEST residual seen so far. Gating
+    #      against the best (not the current) residual is what forbids the runaway:
+    #      a permissive bound on the *current* residual lets each accepted spike
+    #      raise the ceiling for the next, ratcheting up without limit, whereas the
+    #      best residual only decreases, so the bound only tightens -- while still
+    #      admitting PTC's benign transient spikes that a strictly monotone line
+    #      search would suppress (and which the pseudo-time ramp relies on).
+    # On a step that cannot be brought within the bound, the iterate is held and dt
+    # hard-shrunk for a stabler retry.
+    ftb_tau = 0.95          # fraction-to-boundary safety factor (item 1)
+    ls_beta = 0.5           # backtracking step factor (item 2)
+    ls_max = 20             # max backtracks (alpha shrinks to ~1e-6)
+
     def step(carry):
-        y, dt, r, k = carry
+        y, dt, r, r_best, k = carry
         Fy = F(y)
         J = jac(y)
         s = jnp.maximum(jnp.abs(y), scale_floor)
         # (V/dt - J) dy = F, with V = diag(s): backward-Euler pseudo-time step.
         A = eye * (s / dt)[:, None] - J
         dy = jnp.linalg.solve(A, Fy)
-        y_trial = y + dy
+
+        # (1) Positivity-preserving max step length: the largest alpha keeping each
+        # currently-positive state nonnegative, with a safety factor; 1 when the
+        # step does not drive any positive state down (or ``nonneg`` is off).
         if nonneg:
-            y_trial = jnp.maximum(y_trial, 0.0)
-        r_trial = _scaled_resnorm(F(y_trial), y_trial, scale_floor)
-        # Step-acceptance guard: reject a non-finite or grossly-diverging step
-        # (residual growth past the generous ``divergence_factor``) -- hold the
-        # iterate and hard-shrink dt so the retry is a stabler backward-Euler
-        # step, instead of accepting an overshoot that runs to NaN. The threshold
-        # sits in the wide gap between PTC's benign non-monotone spikes (~30x) and
-        # a true blow-up (~1e5x), so a converging run never rejects and stays
-        # bit-identical to the unguarded iteration.
-        accept = jnp.isfinite(r_trial) & (r_trial <= divergence_factor * r)
+            ratio = jnp.where((dy < 0.0) & (y > 0.0), y / -dy, jnp.inf)
+            alpha0 = jnp.minimum(1.0, ftb_tau * jnp.min(ratio))
+        else:
+            alpha0 = jnp.asarray(1.0)
+
+        def _trial(alpha):
+            yt = y + alpha * dy
+            if nonneg:
+                yt = jnp.maximum(yt, 0.0)   # clip any residual roundoff negatives
+            return yt, _scaled_resnorm(F(yt), yt, scale_floor)
+
+        # (2) Backtrack while the step overshoots beyond divergence_factor x the
+        # best residual so far (non-monotone bound). A converging step accepts
+        # ``alpha0`` with no backtrack.
+        bound = divergence_factor * r_best
+        yt0, rt0 = _trial(alpha0)
+
+        def _ls_cond(c):
+            _, _, rt, j = c
+            return (~(jnp.isfinite(rt) & (rt <= bound))) & (j < ls_max)
+
+        def _ls_body(c):
+            alpha, _, _, j = c
+            a = alpha * ls_beta
+            yt, rt = _trial(a)
+            return (a, yt, rt, j + 1)
+
+        _, y_trial, r_trial, _ = jax.lax.while_loop(
+            _ls_cond, _ls_body, (alpha0, yt0, rt0, jnp.asarray(0)))
+
+        # Accept a step within the bound; otherwise hold the iterate and hard-shrink
+        # dt for a stabler retry (the net for a direction the line search could not
+        # bring within the bound).
+        accept = jnp.isfinite(r_trial) & (r_trial <= bound)
         y_new = jnp.where(accept, y_trial, y)
         r_new = jnp.where(accept, r_trial, r)
+        r_best_new = jnp.minimum(r_best, r_new)
         # Accept: Switched-Evolution-Relaxation grows dt inversely to the residual
-        # (capped above, floored below). Reject: hard-shrink dt toward the stable
-        # limit (floored so it cannot underflow to zero).
+        # ratio (capped above, floored below). Reject: hard-shrink dt toward the
+        # stable limit (floored so it cannot underflow to zero).
         ser = jnp.clip(r / jnp.maximum(r_trial, 1e-30), shrink_floor, growth_cap)
         dt_new = jnp.where(accept,
                            jnp.minimum(dt_max, dt * ser),
                            jnp.maximum(dt * reject_shrink, dt_min))
-        return (y_new, dt_new, r_new, k + 1)
+        return (y_new, dt_new, r_new, r_best_new, k + 1)
 
     def cond(carry):
-        _, _, r, k = carry
+        _, _, r, _, k = carry
         return (r > tol) & (k < max_iter)
 
     r0 = _scaled_resnorm(F(y0), y0, scale_floor)
-    y_star, _, r_star, k_star = jax.lax.while_loop(
-        cond, step, (y0, jnp.asarray(dt0), r0, jnp.asarray(0))
+    y_star, _, r_star, _, k_star = jax.lax.while_loop(
+        cond, step, (y0, jnp.asarray(dt0), r0, r0, jnp.asarray(0))
     )
     converged = r_star <= tol
     return y_star, r_star, k_star, converged
