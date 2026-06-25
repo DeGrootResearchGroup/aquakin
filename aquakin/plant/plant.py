@@ -570,6 +570,12 @@ class SteadyStateDGSMResult:
     n_valid: jnp.ndarray
     cond: jnp.ndarray
     cond_factor: Optional[float] = None
+    # Per-sample final scaled steady-state residual ``max_i |F_i|/max(|y_i|,floor)``
+    # (shape ``(N,)``). A sample whose solve did not converge carries a large
+    # residual; it can be excluded as an invalid operating point, more directly
+    # than by a conditioning or output-magnitude test. ``None`` on results built
+    # before this was recorded.
+    residual: Optional[jnp.ndarray] = None
 
     def ranked(self, output=0):
         """``[(input_name, bound)]`` for one output, sorted by decreasing bound.
@@ -5192,19 +5198,22 @@ class Plant:
         @jax.jit
         def _per_sample(z):
             p = base.at[wrt_j].set(z)
-            ss = self.steady_state(p, y0=y0, **steady_kwargs).state
+            ssr = self.steady_state(p, y0=y0, **steady_kwargs)
+            ss = ssr.state
             S, J_y = self.steady_state_sensitivity(
                 p, state=ss, output_fn=output_fn, wrt=wrt_idx, mode=mode,
                 return_jacobian=True)                                # (m, k), (n, n)
-            return jnp.atleast_1d(output_fn(ss)), S, jnp.linalg.cond(J_y)
+            return (jnp.atleast_1d(output_fn(ss)), S, jnp.linalg.cond(J_y),
+                    ssr.residual)
 
         Z, n_drawn = _sobol_sample(lo, hi, k, n_samples, seed)
-        outs, grads, conds = [], [], []
+        outs, grads, conds, resids = [], [], [], []
         for i in range(n_drawn):
-            o, S, c = _per_sample(Z[i])
+            o, S, c, r = _per_sample(Z[i])
             outs.append(np.asarray(o))
             grads.append(np.asarray(S))
             conds.append(float(c))
+            resids.append(float(r))
             if progress and (i + 1) % progress == 0:
                 print(f"  [steady_state_dgsm] {i + 1}/{n_drawn} samples",
                       flush=True)
@@ -5212,6 +5221,7 @@ class Plant:
         outputs = np.stack(outs)                          # (N, m)
         grad_sq = np.stack(grads) ** 2                    # (N, m, k)
         cond = np.asarray(conds)                          # (N,)
+        residual = np.asarray(resids)                     # (N,) final scaled residual
         rng2 = np.asarray((hi - lo) ** 2)                 # (k,)
         # Drop, per output, any non-finite sample, plus (if cond_factor is set) any
         # near-singular-Jacobian operating point where the sensitivity blows up.
@@ -5231,4 +5241,4 @@ class Plant:
             ranges=ranges_arr, n_samples=int(n_drawn), seed=int(seed),
             grad_sq=jnp.asarray(grad_sq), outputs=jnp.asarray(outputs),
             n_valid=jnp.asarray(n_valid), cond=jnp.asarray(cond),
-            cond_factor=cond_factor)
+            cond_factor=cond_factor, residual=jnp.asarray(residual))
