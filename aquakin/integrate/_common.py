@@ -891,9 +891,18 @@ def validate_C0_params(network, C0, params):
 # ~1e-6).
 NEWTON_TOL_FACTOR = 10.0
 
+# The fixed set of ESDIRK orders any implicit solve may use, keyed by order. This
+# is the ONLY place aquakin constructs a diffrax ESDIRK solver *object*: every
+# solve path gets its solver from build_implicit_solver, which builds from this
+# table, so the solver mode cannot drift between the reactor and plant paths
+# (Kvaerno5 is the robust default; Kvaerno3 does less linear algebra per step).
+# Enforced by tests/unit/test_solver_config_single_source.py.
+_CANONICAL_SOLVERS = {3: diffrax.Kvaerno3, 5: diffrax.Kvaerno5}
 
-def build_implicit_solver(rtol, atol, *, solver=None, colored_root_finder=None,
-                          force_root_finder=False):
+
+def build_implicit_solver(rtol, atol, *, order=5, solver=None,
+                          colored_root_finder=None, force_root_finder=False,
+                          linear_solver=None):
     """The single source of truth for the implicit ODE solver, shared by EVERY
     aquakin solve so the forward and discrete-adjoint paths cannot silently drift.
 
@@ -908,9 +917,16 @@ def build_implicit_solver(rtol, atol, *, solver=None, colored_root_finder=None,
     rtol, atol : float
         Step-size tolerances; the per-stage Newton tolerance is these loosened by
         :data:`NEWTON_TOL_FACTOR` unless a ``colored_root_finder`` is given.
+    order : int
+        ESDIRK order to build when ``solver`` is ``None`` -- a key into
+        :data:`_CANONICAL_SOLVERS` (``5`` -> ``Kvaerno5``, the robust default;
+        ``3`` -> ``Kvaerno3``, less linear algebra per step). This is how an
+        internal caller selects the solver order without constructing the diffrax
+        object itself (so construction stays funneled here).
     solver : diffrax.AbstractSolver, optional
-        The ESDIRK solver (``None`` -> the default ``Kvaerno5``). A lower-order
-        ``Kvaerno3`` does less linear algebra per step.
+        A user-supplied ESDIRK solver -- the one escape hatch (e.g.
+        ``Plant.solve(solver=...)``). Overrides ``order``. ``None`` builds the
+        canonical solver of ``order``.
     colored_root_finder : diffrax root finder, optional
         A sparsity-colored root finder (``ColoredVeryChord``) that materializes the
         per-step implicit Jacobian by one JVP per color instead of a dense
@@ -922,14 +938,25 @@ def build_implicit_solver(rtol, atol, *, solver=None, colored_root_finder=None,
         ``False`` (the forward path) a supplied ``solver`` is honoured verbatim --
         its own root finder is left untouched -- and only the *default* solver gets
         the decoupled root finder.
+    linear_solver : lineax.AbstractLinearSolver, optional
+        A custom linear solver for the decoupled root finder's per-stage solve.
+        The forward-sensitivity augmented ``[y; S]`` solve passes the block-arrow
+        :class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`
+        here so the decoupled Newton uses the factor-once-reuse linear algebra.
+        Ignored when ``colored_root_finder`` is given (that root finder carries
+        its own solver).
     """
     if colored_root_finder is not None:
         rf = colored_root_finder
     else:
+        rf_kw = {} if linear_solver is None else {"linear_solver": linear_solver}
         rf = diffrax.VeryChord(rtol=NEWTON_TOL_FACTOR * rtol,
-                               atol=NEWTON_TOL_FACTOR * jnp.asarray(atol))
+                               atol=NEWTON_TOL_FACTOR * jnp.asarray(atol), **rf_kw)
     if solver is None:
-        return diffrax.Kvaerno5(root_finder=rf)
+        if order not in _CANONICAL_SOLVERS:
+            raise ValueError(
+                f"order must be one of {sorted(_CANONICAL_SOLVERS)}; got {order!r}.")
+        return _CANONICAL_SOLVERS[order](root_finder=rf)
     if force_root_finder or colored_root_finder is not None:
         return eqx.tree_at(lambda s: s.root_finder, solver, rf)
     return solver       # forward path: a user-supplied solver is honoured verbatim

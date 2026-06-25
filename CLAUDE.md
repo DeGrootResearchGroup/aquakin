@@ -1013,6 +1013,43 @@ throttle, so no special-casing). Implemented in
 [`integrate/forward_sensitivity.py`](aquakin/integrate/forward_sensitivity.py)
 on `BatchReactor`, `PlugFlowReactor` and `BiofilmReactor`.
 
+**`Plant.solve_sensitivity` — the stable forward mode on the plant (the one that
+was missing).** The reactors carried the cap-free augmented `[y; S]` solve, but
+the *plant* was never wired to it, so a forward sensitivity of a stiff dynamic
+plant fell back to `jacfwd` through `plant.solve` — finite per step, but
+**non-finite over a long horizon**. That long-horizon failure is **numerical,
+not a genuine tangent divergence**: the true sensitivity stays bounded (verified
+by watching `‖S‖` *oscillate* with the diurnal load over 17 days — 45→196 — not
+grow exponentially), and the break is the reactor-era
+`augmented_forward_sensitivity` building a **stock `Kvaerno5`** that lacks the
+plant's solver robustness. It was the one implicit mode never brought into the
+`build_implicit_solver` / `build_step_controller` consolidation (the forward
+`jax_adjoint`, `forward_fast` and `stable_adjoint` paths all build from those
+helpers; the forward-*sensitivity* solve built its own). `Plant.solve_sensitivity(params, wrt, *, t_span, t_eval=, y0=, factormax=, dtmax=)`
+closes the gap: it integrates the same augmented `[y; S]` system but routes the
+solver through those shared helpers, so the `[y; S]` solve inherits the plant's
+**decoupled Newton**, **`factormax`** cap, **`Kvaerno3`** base solver and
+**cached recycle/flow maps** (its `f_flat` reuses the once-per-solve map instead
+of re-resolving the recycle each call), while keeping the block-arrow
+`SimultaneousCorrector` for the per-stage linear algebra. That config is exactly
+what the stock solver lacked: the 20-day BSM2 forward sensitivity that the stock
+augmented solve **and** `jacfwd` both blow up on is **finite** under
+`solve_sensitivity`; it matches the dense `Kvaerno5` augmented solve to 5 digits
+at 10 days, matches `jacfwd` to ~3e-7 on BSM1, and runs faster than the stock
+dense/corrector (the Kvaerno3 + decoupled Newton + cached map all pay off).
+Returns `(ts, ys, S)` with `S` the state sensitivity `dy/dθ`, shape
+`(n_t, ndof, k)`. The cached map is built from the concrete `params` and closed
+over, so the augmented linearisation drops `∂M/∂θ` — **exact for kinetic
+parameters** (`M` depends only on the flow setpoints); a flow-setpoint
+sensitivity needs the per-call map (not yet wired). The block-arrow corrector is
+**specific to the `[y; S]` arrow** (each sensitivity column couples only to `y`,
+sharing the one diagonal block `D = I − γ·dt·J`) and does **not** transfer to the
+single-state forward/adjoint solves (whose per-step lever is the colored
+Jacobian) or the steady-state IFT (which already factors `∂F/∂y` once and reuses
+it across parameters). `build_implicit_solver` gained a `linear_solver=` slot to
+inject the corrector into the decoupled root finder. Validated in
+`tests/integration/test_dynamic_sensitivity.py::test_solve_sensitivity_matches_jacfwd`.
+
 **`shared_factor` — dense (Option B) vs simultaneous corrector (Option A).**
 The per-step implicit solve has two implementations, selected by
 `solve_sensitivity(..., shared_factor=...)`:
@@ -3233,9 +3270,11 @@ optimizations (the decoupled-Newton root finder, the colored Jacobian, the
 `Kvaerno3`/`factormax` knobs) silently failed to reach the adjoint's forward pass —
 it kept paying dense, full-Newton, 7-stage costs. Both now build from one pair of
 helpers in [`integrate/_common.py`](aquakin/integrate/_common.py):
-`build_implicit_solver(rtol, atol, solver=, colored_root_finder=, force_root_finder=)`
-(the decoupled-Newton default `Kvaerno5`, or a supplied `Kvaerno3`, with the
-colored `ColoredVeryChord` injected when given) and
+`build_implicit_solver(rtol, atol, order=, solver=, colored_root_finder=, linear_solver=, force_root_finder=)`
+(the decoupled-Newton `Kvaerno` of the requested `order` — `5` default, `3` for the
+lean / forward-sensitivity paths — built from the `_CANONICAL_SOLVERS` table, with
+the colored `ColoredVeryChord` or the block-arrow `SimultaneousCorrector`
+`linear_solver` injected when given) and
 `build_step_controller(rtol, atol, factormax=, dtmax=)` (the PID core the forward
 uses directly and the adjoint wraps in a `ClipStepSizeController`). So a future
 per-step optimization lands in one place and reaches **both** modes. Specifically
@@ -3256,6 +3295,34 @@ guard,
 the `jax_adjoint`, `forward_fast`, and `stable_adjoint`-forward integrators realize
 the **same primal trajectory** — so a future divergence in any one path's
 configuration fails loudly.
+
+**Every diffrax solve funnels through these helpers, structurally enforced.** The
+forward-sensitivity reactor path and the plant's colored-solver method were the
+last two paths still constructing a `Kvaerno5` / `PIDController` *directly* (the
+former with a *tight*, controller-tied Newton — a real divergence from the
+decoupled Newton everything else used; the latter hand-injecting the colored root
+finder into a bare `Kvaerno5`). Both now build through `build_implicit_solver` /
+`build_step_controller`: the augmented `[y; S]` forward-sensitivity solve passes
+`order=` (5 reactors / 3 plant) + the `SimultaneousCorrector` `linear_solver`, and
+the colored method passes `colored_root_finder=`. So the diffrax ESDIRK object is
+constructed in exactly **one** place — the `_CANONICAL_SOLVERS` table inside
+`build_implicit_solver` — the only legitimate variation being the explicit axes the
+helper exposes (order, colored, `linear_solver`, factormax, dtmax) plus the one
+escape hatch (`Plant.solve(solver=...)`, a user object honoured verbatim). The lone
+*conceptual* exception is `forward_solve.py` (the `forward_fast` lean
+`lax.while_loop`), which builds no diffrax solver at all — its Kvaerno3 tableau is
+hand-rolled and must track diffrax's by hand. **A drift guard
+([`tests/unit/test_solver_config_single_source.py`](tests/unit/test_solver_config_single_source.py))
+AST-scans the package for any direct `Kvaerno*` / `PIDController` / `VeryChord` /
+`with_stepsize_controller_tols` *call* outside an explicit allowlist (just
+`_common.py`) and fails on a new one**, so a future solve path cannot silently
+re-introduce the drift — it must route through the helpers or add an audited
+allowlist entry (Python has no real access control, so this static AST lint is the
+enforcement, backed by the runtime trajectory-agreement guard above). The
+unification also switched the reactor forward-sensitivity from its tight Newton to
+the decoupled Newton; the reactor forward-sensitivity suite passes unchanged at its
+~1e-8 `jacfwd` tolerance, and the forward / discrete-adjoint paths are bit-identical
+(`order=5` reproduces the previous `diffrax.Kvaerno5(root_finder=rf)`).
 
 **`Plant.solve(colored_jacobian=True)` — sparse (colored-AD) Jacobian
 materialisation ([`integrate/colored_jacobian.py`](aquakin/integrate/colored_jacobian.py)).**
@@ -3687,6 +3754,41 @@ is what production simulators use to snap to steady state on any topology.
   study** with no re-solving — and `result.with_cond_factor(c)` re-applies a
   different threshold (re-aggregating from the retained data, no re-solve).
   (`tests/integration/test_steady_state.py`.)
+- **Dynamic (transient) sensitivity — `plant.dynamic_sensitivity(params, *, output_fn=, t_span=, t_eval=, wrt=, mode=, elasticity=)` and `plant.dynamic_dgsm(ranges, *, output_fn=, t_span=, t_eval=, wrt=, mode=, n_samples=, seed=)`.**
+  The dynamic counterparts of the steady-state pair, for an output that depends on
+  the *trajectory* (an effluent time series, a window average, a peak) rather than
+  the operating point. There is no implicit-function-theorem shortcut here, so the
+  cost is one stiff solve per direction (sensitivity) or per sample (DGSM), far
+  heavier than the steady-state IFT. The wrapper's value is **using the stable
+  method for each AD direction**, the easy thing to get wrong by hand — a naive
+  differentiation of `plant.solve` is non-finite on a stiff plant. `mode="reverse"`
+  differentiates the solve through the cap-free `gradient="stable_adjoint"` (one
+  `jax.vjp`). `mode="forward"` integrates the augmented `[y; S]` variational system
+  (`plant.solve_sensitivity`), whose step controller bounds `S` so it stays
+  **finite over long horizons** where forward-mode `jacfwd` through the stiff solve
+  goes non-finite (a numerical, not genuine, blow-up — the true sensitivity stays
+  bounded), then chains the full-state sensitivity through `output_fn` with one
+  `jax.linearize` of the output map over the saved trajectory (no extra solve).
+  `output_fn` maps the `PlantSolution` to a length-`m` output vector. The reverse
+  solve is differentiated directly (no enclosing jit — the primal must run with
+  concrete params, since some plant setup, e.g. a unit `initial_state`,
+  concretizes; an outer jit makes the BSM2 dynamic plant fail with a
+  `ConcretizationTypeError`); the solve's own compiled-solve cache still reuses the
+  integrator compile. **Forward is the memory-light direction over a long horizon**
+  — `solve_sensitivity` carries the parameter tangents in lockstep with the state,
+  so memory is independent of the integration length, whereas reverse stores the
+  whole trajectory to replay it (prohibitive over a 609-day horizon). Both
+  directions go through the shared `Plant._dynamic_value_jac` helper, so
+  `dynamic_dgsm`'s per-sample screen inherits the same stable forward/reverse.
+  `dynamic_dgsm` reuses the per-sample sensitivity into a Sobol total-index screen
+  returning a `DynamicDGSMResult`
+  (mirroring `SteadyStateDGSMResult`: `.ranked()`, `.convergence()`); verified
+  forward == reverse, the reverse sensitivity matches a manual `stable_adjoint`
+  gradient to machine precision, `dynamic_dgsm` matches `aquakin.dgsm` over the
+  same transient solve, and `solve_sensitivity` matches `jacfwd` where both are
+  finite (`tests/integration/test_dynamic_sensitivity.py`). The steady-state pair
+  stays the cheap, both-directions-free path (the IFT); the dynamic pair is the
+  convenience layer over the stable differentiation of `plant.solve`.
 - **Design variables** (`steady_state(..., design=...)`): because the IFT
   differentiates w.r.t. *whatever pytree the residual consumes*, the steady state
   is differentiable w.r.t. design variables, not only kinetic parameters, by
@@ -4914,9 +5016,9 @@ nor concentrating it in a few files makes the whole suite fast.
   `labeled` event skips the gate, which must not block). It is a *stable* required-
   check name that survives shard-count changes, so **branch protection requires
   `fast gate`**, not the per-shard `fast tests (...)` jobs.
-- The **`slow`** job (`pytest -m "slow and not validation"`, 3.11/3.12) and
-  **`validation`** job (`pytest -m validation`, 3.12) run **only on push to
-  `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
+- The **`slow`** job (`pytest -m "slow and not validation and not heavy"`,
+  3.11/3.12) and **`validation`** job (`pytest -m "validation and not heavy"`,
+  3.12) run **only on push to `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
   stiff/plant solves (the `slow` marker on `test_bsm2_dynamic`, `test_bsm1`,
   `test_biofilm`, `test_forward_sensitivity`, the two `test_wats_sewer_*` files)
   and the published-data checks. A regression a PR's fast gate cannot catch
@@ -4927,13 +5029,48 @@ nor concentrating it in a few files makes the whole suite fast.
   OOM-reclaimed mid-suite (~62 min in, SIGTERM / exit 143, before the timeout) —
   first the validation set, then the slow set once enough whole-plant tests
   landed. Sharding across N fresh processes bounds each process's footprint to
-  ~1/N (slow: 6 shards × 2 Python versions; validation: 4 shards, 3.12). The
+  ~1/N (slow: 8 shards × 2 Python versions; validation: 4 shards, 3.12). The
   partition is complete and disjoint, so coverage is unchanged. (pytest-split
-  balances by `.test_durations` where recorded — currently the validation set —
-  else evenly by count, which is what bounds the *memory*; duration-balancing
-  only evens the wall time.)
-- The **`smoke`** job (`pytest -m "slow and not validation" --splits 18 --group
-  <rotating>`, 3.12) runs on **every PR** as an early-warning slice of the
+  balances by `.test_durations` where recorded — now including the heaviest slow
+  tests — else evenly by count; duration-balancing evens the wall time.) **But
+  sharding alone is loose memory control: more shards or better balancing only
+  *relocate* an overweight shard** (a new whole-plant-AD test once walked the OOM
+  4/6 → 5/8 across re-shard / re-balance attempts), because the accumulation is
+  per-shard, not per-test. A per-test cache-clear fixture (`jax.clear_caches()` +
+  `gc.collect()` after every `slow` test, optionally with a `malloc_trim`
+  follow-up) was tried and **rejected** — do not re-add it: profiling showed
+  `clear_caches()` itself *spikes* RSS and only partially reclaims (the freed
+  compiled programs are not returned to the OS, so the process RSS still creeps up
+  test-by-test), and `malloc_trim` had nothing to reclaim because the programs stay
+  live until GC. The accumulation is intrinsic to the **whole-plant
+  stable-adjoint gradient tests**: each compiles a multi-GB plant program, and a
+  shard's worth piles up faster than any between-test clear can reclaim,
+  OOM-killing the runner regardless of shard count (a single such test runs fine
+  alone — the failure is cumulative). So those tests carry the **`heavy`** marker
+  and are kept off the free-runner jobs — every slow / validation / smoke /
+  durations job runs `... and not heavy`. They run instead on the **`heavy` job**:
+  a GitHub-hosted **larger runner** (16-core / 64 GB, Team plan; `runs-on:
+  aquakin-heavy`) whose RAM fits every heavy test in one shared process, gated to
+  **push-to-main** like slow/validation (a fork PR cannot reach a hosted runner, so
+  there is no self-hosted security concern; per-minute billing is why it stays off
+  the PR path). It runs `pytest -m heavy`, covering both the BSM2 validation-heavy
+  tests and the BSM1 slow-heavy dynamic-sensitivity tests; locally they run the
+  same way. (If the `aquakin-heavy` runner does not exist the job stays queued and
+  blocks nothing.) Sharding still earns its keep on **wall time** (parallel
+  shards), not memory.
+- The **`heavy`** job (`pytest -m heavy`, 3.12) runs the whole-plant
+  stable-adjoint gradient tests that no free runner fits, on a GitHub-hosted
+  **larger runner** (`runs-on: aquakin-heavy`, 16-core/64 GB, Team plan), **only on
+  push to `main`** (`if: github.event_name == 'push'`). One shared process (the
+  64 GB RAM fits the accumulated compiles), with the top-level single-thread `env:`
+  overridden to use the runner's cores. See the memory discussion above for why
+  these are off the free-runner jobs. **Cost opt-out:** label a PR **`skip-heavy`**
+  to skip this paid job on its merge (docs-only / low-risk changes). A small
+  `heavy-gate` job resolves the merged PR for the pushed commit and reads its
+  labels; it is **fail-safe** — a direct push (no PR) or any lookup miss leaves the
+  job *running*, so heavy is skipped only when the label is positively present.
+- The **`smoke`** job (`pytest -m "slow and not validation and not heavy" --splits
+  18 --group <rotating>`, 3.12) runs on **every PR** as an early-warning slice of the
   merge-only `slow` set: it *executes* a bounded ~1/18 shard (~8 tests) so
   shared-fixture breaks, whole-plant call-site regressions and memory creep show
   up before merge, not after. It is deliberately probabilistic — a single PR
