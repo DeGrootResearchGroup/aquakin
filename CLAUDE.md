@@ -1362,6 +1362,31 @@ reactions:
   literature values; for a proper Bayesian MAP/posterior pair them with
   `loss="nll"` and a measurement `sigma` so the data term is a true negative
   log-likelihood and the prior curvature enters the Laplace covariance.
+  The shipped `asm1` and `adm1` networks **declare literature-grounded priors**
+  on every calibration parameter (the bounded, non-fraction targets), each a
+  physical-space Gaussian **centred on the parameter's nominal** with relative
+  `std` set to a literature coefficient of variation:
+  - **ASM1** — from the activated-sludge parameter database (Hauduc 2011 PhD
+    thesis, Table 3-1): the per-parameter reported `V%` (wastewater-specific by
+    construction). Most are narrow (`muH` 6%, `bH` 2%); the substrate/nitrate
+    half-saturations `KS`/`KNO` and autotroph decay `bA` the widest (50–80%).
+  - **ADM1** — **Brun et al. 2002 uncertainty classes around the BSM2 municipal-
+    sludge nominal** (kinetics / half-saturations / inhibition / decay = class 3,
+    50%; yields = class 1, 5%). It deliberately does **not** use the reported
+    ranges of the Mo et al. 2023 ADM1 review (Table 3): those aggregate across
+    digester *types* — grass silage, food/agricultural/industrial waste, dry AD —
+    so a span like `k_hyd_pr ∈ [0.0014, 10]` or `K_I_h2_c4` down to `5e-8` (grass
+    silage, Koch 2010) measures *substrate* variation, not the parameter
+    uncertainty of a mesophilic municipal-sludge digester. The within-context
+    Brun CV is the right model, and Mo's own "hydrolysis varies considerably with
+    the substrate" is the justification for it. (When a municipal-sludge-specific
+    ADM1 range source becomes available, replace the Brun CV with it.)
+
+  Priors are far tighter / more defensible than the parameters' mechanical
+  ±decade `bounds` (which stay as the hard feasibility limits), and are what a
+  global-sensitivity screen or Bayesian calibration should sample — the prior is
+  the plausible-uncertainty *belief*, the bounds are the hard *fence*.
+  `asm1_ammonia_limitation` inherits them through `extends: asm1`.
 - `temperature` on parameters is optional — an Arrhenius-style temperature
   correction `temperature: {theta: t, ref_T: T0, condition: "T"}`. When present,
   the rate constant is multiplied by `theta**(T - ref_T)` during rate

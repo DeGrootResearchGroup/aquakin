@@ -285,3 +285,42 @@ def test_clear_network_cache_is_exported():
     assert aquakin.load_network("asm1") is a
     aquakin.clear_network_cache()
     assert aquakin.load_network("asm1") is not a
+
+
+def test_asm1_adm1_ship_literature_priors():
+    # asm1 and adm1 carry literature-grounded Gaussian priors (physical-space
+    # mean/std centred on the nominal, relative std = a literature coefficient of
+    # variation). ASM1: Hauduc (2011) activated-sludge database V% (wastewater-
+    # specific). ADM1: Brun (2002) uncertainty classes around the BSM2 municipal-
+    # sludge nominal (kinetics 50%, yields 5%) -- deliberately NOT Mo (2023)'s
+    # across-substrate ranges, which measure digester-type variation (grass
+    # silage, food/agricultural/industrial waste) rather than the uncertainty of
+    # a mesophilic municipal-sludge digester.
+    asm1 = aquakin.load_network("asm1")
+    adm1 = aquakin.load_network("adm1")
+    assert len(asm1.parameter_priors) == 19
+    assert len(adm1.parameter_priors) == 38
+    # Every prior is physically valid and centred on the parameter's nominal.
+    for net in (asm1, adm1):
+        for name, (mean, std) in net.parameter_priors.items():
+            assert std > 0.0, name
+            assert mean > 0.0, name
+            nominal = float(net.default_parameters()[net.param_index[name]])
+            assert mean == pytest.approx(nominal, rel=1e-6), name
+
+    # ASM1 muH: narrow Hauduc V=6% spread.
+    mean, std = asm1.parameter_priors["muH"]
+    assert std / mean == pytest.approx(0.06, rel=1e-3)
+    # ASM1 KNO: the wide half-saturation V=80%.
+    mean, std = asm1.parameter_priors["KNO"]
+    assert std / mean == pytest.approx(0.80, rel=1e-3)
+    # ADM1 kinetics: Brun class-3 (50%) around the municipal-sludge nominal. The
+    # H2-inhibition constant is centred on its default (mean == 1e-5), NOT the
+    # cross-substrate Mo range whose linear midpoint (~5e-6) would pull it toward
+    # the grass-silage extreme of 5e-8.
+    mean, std = adm1.parameter_priors["K_I_h2_c4"]
+    assert std / mean == pytest.approx(0.5, rel=1e-3)
+    assert mean == pytest.approx(1e-5, rel=1e-3)
+    # ADM1 yields: Brun class-1 (5%).
+    mean, std = adm1.parameter_priors["Y_su"]
+    assert std / mean == pytest.approx(0.05, rel=1e-3)
