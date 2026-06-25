@@ -281,14 +281,25 @@ jobs:
           fi
 
   heavy:
-    name: heavy stable-adjoint tests (larger runner)
+    name: heavy stable-adjoint tests (larger runner, shard ${{ matrix.group }}/2)
     needs: heavy-gate
     if: github.event_name == 'push' && needs.heavy-gate.outputs.run == 'true'
     runs-on: aquakin-heavy
-    timeout-minutes: 150
-    # One shared process on a 64 GB box -- no sharding, compile amortized across the
-    # heavy tests. Override the top-level single-thread pin: with `-n 1` there is no
-    # xdist oversubscription, so let JAX / BLAS use the runner's 16 cores.
+    timeout-minutes: 90
+    # Sharded across fresh processes (pytest-split), like the slow/validation
+    # suites: the heavy tests each compile a multi-GB plant program, and a single
+    # process accumulating all ~14 of them exceeds even the 64 GB runner -- the
+    # freed XLA caches are not returned to the OS, so RSS climbs test-by-test until
+    # the interpreter aborts (the failure is cumulative; the heaviest test runs fine
+    # alone at ~2-5 GB). Two fresh shards bound each process to ~half the set, well
+    # under the runner's memory. The heavy tests are not in `.test_durations`, so
+    # pytest-split partitions them evenly by count.
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2]
+    # Override the top-level single-thread pin: with `-n 1` there is no xdist
+    # oversubscription, so let JAX / BLAS use the runner's 16 cores.
     env:
       OMP_NUM_THREADS: "16"
       XLA_FLAGS: ""
@@ -307,12 +318,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
 
-      - name: Run heavy tests
-        # All `heavy` tests in one process; the 64 GB runner fits the accumulated
-        # XLA caches that OOM a 16 GB runner. A generous per-test timeout covers the
-        # multi-GB plant-adjoint compiles.
+      - name: Run heavy tests shard
+        # This shard's ~half of the heavy set in one fresh process. A generous
+        # per-test timeout covers the multi-GB plant-adjoint compiles.
         run: >-
           pytest -m heavy -q -n 1
+          --splits 2 --group ${{ matrix.group }}
           --durations=15 --timeout=2400 --timeout-method=thread
 
   # ---- Validation suite (against published data): merge-to-main + opt-in -------
