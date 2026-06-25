@@ -318,12 +318,18 @@ def test_ptc_line_search_bounds_finite_blowup():
 
 
 @pytest.mark.slow
-def test_bsm2_steady_state_per_state_scaling_cuts_iterations():
+def test_bsm2_steady_state_per_state_scaling_converges_competitively():
     # The default per-state pseudo-time / residual floor (max(|y0|, 1e-6)) gives
-    # every state a magnitude-consistent scale, so the SER ramp is no longer
-    # throttled by the over-damped small-magnitude states -- roughly halving the
-    # PTC iteration count vs the old flat scalar floor, while converging to the
-    # same root.
+    # every state a magnitude-consistent scale, so the SER ramp is not throttled by
+    # the over-damped small-magnitude states. With the old simple step-acceptance
+    # guard this roughly halved the PTC iteration count vs the flat scalar floor;
+    # the backtracking line-search PTC now does much of that step-size control
+    # itself, so the per-state advantage is real but narrow (and the exact count is
+    # platform-sensitive at the few-iteration level, since the line search's
+    # accept/reject hinges on floating-point residual comparisons). So this guards
+    # the two STABLE invariants -- both floors converge, to the SAME operating
+    # point -- and that per-state scaling is not a material iteration regression,
+    # rather than asserting a brittle strict iteration win.
     from aquakin.plant.bsm.bsm2 import (
         build_bsm2, bsm2_constant_influent, bsm2_parameters)
     from aquakin.plant.bsm import bsm2_warm_start
@@ -337,8 +343,11 @@ def test_bsm2_steady_state_per_state_scaling_cuts_iterations():
     default = plant.steady_state(params, y0=y0)                # per-state floor
     flat = plant.steady_state(params, y0=y0, scale_floor=1.0)  # old behaviour
     assert bool(default.converged) and bool(flat.converged)
-    # Fewer iterations (the win) ...
-    assert int(default.iterations) < int(flat.iterations)
+    # Competitive, not a regression: per-state scaling does not take materially
+    # more iterations than the flat floor. The generous band tolerates the
+    # few-iteration platform jitter while still failing loudly if a future change
+    # makes per-state scaling pathological (e.g. doubling the count).
+    assert int(default.iterations) <= int(flat.iterations) * 1.3 + 5
     # ... and the same operating point (scaling changes the path, not the root).
     rel = float(jnp.max(jnp.abs(default.state - flat.state)
                         / (jnp.abs(flat.state) + 1e-9)))

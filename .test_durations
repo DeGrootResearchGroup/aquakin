@@ -176,7 +176,7 @@
     "tests/integration/test_steady_state.py::test_bsm1_steady_state_matches_forward": 33.15970119599956,
     "tests/integration/test_steady_state.py::test_bsm1_steady_state_solve_is_cached": 19.246136252999975,
     "tests/integration/test_steady_state.py::test_bsm2_steady_state_matches_forward": 142.194325769,
-    "tests/integration/test_steady_state.py::test_bsm2_steady_state_per_state_scaling_cuts_iterations": 58.08869135699996,
+    "tests/integration/test_steady_state.py::test_bsm2_steady_state_per_state_scaling_converges_competitively": 58.08869135699996,
     "tests/integration/test_temperature_model.py::test_heatbalance_solve_reaches_algebraic_steady_state": 10.364076509000029,
     "tests/integration/test_wats_sewer_extended.py::test_batch_integrates_and_stays_nonnegative": 21.683782000000008,
     "tests/integration/test_wats_sewer_extended.py::test_compiles_with_expected_shape": 0.1302122849999705,

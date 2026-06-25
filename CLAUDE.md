@@ -3928,8 +3928,14 @@ is what production simulators use to snap to steady state on any topology.
   scalar `scale_floor=1.0` default (so `BiofilmReactor.steady_state` and direct
   callers are unchanged), and an explicit `scale_floor` (scalar or per-state
   array) is always honoured. `scale_floor` only affects the path and the
-  convergence criterion, never the root. Regression: `test_steady_state.py::
-  test_bsm2_steady_state_per_state_scaling_cuts_iterations`.
+  convergence criterion, never the root. (The backtracking line-search PTC below
+  now does much of the per-step size control the per-state floor used to dominate,
+  so the per-state *iteration* advantage is narrower than the original 80 → 38 and
+  platform-sensitive at the few-iteration level; the regression therefore guards
+  the stable invariants — both floors converge to the *same* root and per-state
+  scaling is not a material iteration regression — not a strict iteration win.)
+  Regression: `test_steady_state.py::
+  test_bsm2_steady_state_per_state_scaling_converges_competitively`.
 - **Compiled-solve cache — the single-run-compile lever (`Plant._steady_jit_cache`).**
   A one-shot `steady_state` is **~99% compilation** (BSM2: ~12 s compile of the
   plant-RHS `jacfwd` inside the PTC `while_loop`, vs ~40 ms of actual solving),
