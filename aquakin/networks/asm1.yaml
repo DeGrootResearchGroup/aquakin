@@ -74,26 +74,26 @@ parameters:
   # values (asm1_bsm2.c), derived from the documented 15 degC / 10 degC pairs,
   # e.g. muH theta = (4.0/3.0)**(1/5). Half-saturation / switching constants are
   # treated as temperature-independent (BSM convention).
-  muH:    {value: 6.0,   units: "1/d",          bounds: [1.0, 12.0],   transform: positive_log, temperature: {theta: 1.059224, ref_T: 293.15}}
-  KS:     {value: 20.0,  units: "g_COD/m3",     bounds: [1.0, 200.0],  transform: positive_log}
-  KOH:    {value: 0.2,   units: "g_O2/m3",      bounds: [0.01, 2.0],   transform: positive_log}
-  KNO:    {value: 0.5,   units: "g_N/m3",       bounds: [0.05, 5.0],   transform: positive_log}
-  etag:   {value: 0.8,   units: "-",            bounds: [0.05, 0.95],  transform: logit}
-  muA:    {value: 0.8,   units: "1/d",          bounds: [0.1, 2.0],    transform: positive_log, temperature: {theta: 1.107568, ref_T: 293.15}}
-  KNH_A:  {value: 1.0,   units: "g_N/m3",       bounds: [0.1, 10.0],   transform: positive_log}
-  KOA:    {value: 0.4,   units: "g_O2/m3",      bounds: [0.05, 4.0],   transform: positive_log}
-  bH:     {value: 0.62,  units: "1/d",          bounds: [0.05, 2.0],   transform: positive_log, temperature: {theta: 1.084473, ref_T: 293.15}}
-  bA:     {value: 0.05,  units: "1/d",          bounds: [0.005, 0.5],  transform: positive_log, temperature: {theta: 1.107568, ref_T: 293.15}}
-  ka:     {value: 0.08,  units: "m3/(g_COD*d)", bounds: [0.005, 1.0],  transform: positive_log, temperature: {theta: 1.045640, ref_T: 293.15}}
-  kh:     {value: 3.0,   units: "1/d",          bounds: [0.1, 10.0],   transform: positive_log, temperature: {theta: 1.037137, ref_T: 293.15}}
-  KX:     {value: 0.03,  units: "-",            bounds: [0.001, 1.0],  transform: positive_log}
-  etah:   {value: 0.4,   units: "-",            bounds: [0.05, 0.95],  transform: logit}
+  muH:    {value: 6.0,   units: "1/d",          bounds: [1.0, 12.0],   transform: positive_log, temperature: {theta: 1.059224, ref_T: 293.15}, prior: {mean: 6, std: 0.36}}
+  KS:     {value: 20.0,  units: "g_COD/m3",     bounds: [1.0, 200.0],  transform: positive_log, prior: {mean: 20, std: 10}}
+  KOH:    {value: 0.2,   units: "g_O2/m3",      bounds: [0.01, 2.0],   transform: positive_log, prior: {mean: 0.2, std: 0.016}}
+  KNO:    {value: 0.5,   units: "g_N/m3",       bounds: [0.05, 5.0],   transform: positive_log, prior: {mean: 0.5, std: 0.4}}
+  etag:   {value: 0.8,   units: "-",            bounds: [0.05, 0.95],  transform: logit, prior: {mean: 0.8, std: 0.04}}
+  muA:    {value: 0.8,   units: "1/d",          bounds: [0.1, 2.0],    transform: positive_log, temperature: {theta: 1.107568, ref_T: 293.15}, prior: {mean: 0.8, std: 0.24}}
+  KNH_A:  {value: 1.0,   units: "g_N/m3",       bounds: [0.1, 10.0],   transform: positive_log, prior: {mean: 1, std: 0.25}}
+  KOA:    {value: 0.4,   units: "g_O2/m3",      bounds: [0.05, 4.0],   transform: positive_log, prior: {mean: 0.4, std: 0.02}}
+  bH:     {value: 0.62,  units: "1/d",          bounds: [0.05, 2.0],   transform: positive_log, temperature: {theta: 1.084473, ref_T: 293.15}, prior: {mean: 0.62, std: 0.0124}}
+  bA:     {value: 0.05,  units: "1/d",          bounds: [0.005, 0.5],  transform: positive_log, temperature: {theta: 1.107568, ref_T: 293.15}, prior: {mean: 0.05, std: 0.035}}
+  ka:     {value: 0.08,  units: "m3/(g_COD*d)", bounds: [0.005, 1.0],  transform: positive_log, temperature: {theta: 1.045640, ref_T: 293.15}, prior: {mean: 0.08, std: 0.0096}}
+  kh:     {value: 3.0,   units: "1/d",          bounds: [0.1, 10.0],   transform: positive_log, temperature: {theta: 1.037137, ref_T: 293.15}, prior: {mean: 3, std: 0.78}}
+  KX:     {value: 0.03,  units: "-",            bounds: [0.001, 1.0],  transform: positive_log, prior: {mean: 0.03, std: 0.0015}}
+  etah:   {value: 0.4,   units: "-",            bounds: [0.05, 0.95],  transform: logit, prior: {mean: 0.4, std: 0.1}}
   # --- Stoichiometric constants (now calibratable) ---
-  Y_H:    {value: 0.67,  units: "g_COD/g_COD",  bounds: [0.4, 0.85],   transform: logit}
-  Y_A:    {value: 0.24,  units: "g_COD/g_N",    bounds: [0.05, 0.5],   transform: logit}
-  i_XB:   {value: 0.086, units: "g_N/g_COD",    bounds: [0.04, 0.15],  transform: logit}
-  i_XP:   {value: 0.06,  units: "g_N/g_COD",    bounds: [0.02, 0.10],  transform: logit}
-  f_P:    {value: 0.08,  units: "-",            bounds: [0.02, 0.20],  transform: logit}
+  Y_H:    {value: 0.67,  units: "g_COD/g_COD",  bounds: [0.4, 0.85],   transform: logit, prior: {mean: 0.67, std: 0.0469}}
+  Y_A:    {value: 0.24,  units: "g_COD/g_N",    bounds: [0.05, 0.5],   transform: logit, prior: {mean: 0.24, std: 0.012}}
+  i_XB:   {value: 0.086, units: "g_N/g_COD",    bounds: [0.04, 0.15],  transform: logit, prior: {mean: 0.086, std: 0.00688}}
+  i_XP:   {value: 0.06,  units: "g_N/g_COD",    bounds: [0.02, 0.10],  transform: logit, prior: {mean: 0.06, std: 0.003}}
+  f_P:    {value: 0.08,  units: "-",            bounds: [0.02, 0.20],  transform: logit, prior: {mean: 0.08, std: 0.004}}
 
 # Named process rates. Each is a closed-form expression in the species and
 # network-level parameters above. Reactions reference these by name.

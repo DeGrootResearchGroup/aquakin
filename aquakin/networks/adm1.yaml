@@ -123,45 +123,45 @@ speciation:
 
 parameters:
   # --- hydrolysis / disintegration (1/d) ---
-  k_dis:     {value: 0.5,  units: "1/d",  bounds: [0.1, 2.0],   transform: positive_log}
+  k_dis:     {value: 0.5,  units: "1/d",  bounds: [0.1, 2.0],   transform: positive_log, prior: {mean: 0.5, std: 0.25}}
   # Hydrolysis at the standard 10 1/d. The reference BSM2 init parameter block
   # lists 0.3, but that is inconsistent with the reference's OWN steady state:
   # the digester reduces an influent of ~16 gCOD/L protein to ~0.08 gCOD/L
   # (99.5% conversion) at HRT ~19 d, which first-order hydrolysis reaches only
   # at k_hyd ~ 10. At 0.3 the model does not reproduce the published steady
   # state; at 10 it matches it to ~1-3% (see the BSM2 steady-state validation).
-  k_hyd_ch:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log}
-  k_hyd_pr:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log}
-  k_hyd_li:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log}
+  k_hyd_ch:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log, prior: {mean: 10, std: 5}}
+  k_hyd_pr:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log, prior: {mean: 10, std: 5}}
+  k_hyd_li:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log, prior: {mean: 10, std: 5}}
   # --- uptake max rates (1/d) and half-saturations (kgCOD/m3) ---
-  k_m_su:    {value: 30.0, units: "1/d",  bounds: [5.0, 70.0],  transform: positive_log}
-  K_S_su:    {value: 0.5,  units: "kgCOD/m3", bounds: [0.05, 5.0], transform: positive_log}
-  k_m_aa:    {value: 50.0, units: "1/d",  bounds: [10.0, 100.0],transform: positive_log}
-  K_S_aa:    {value: 0.3,  units: "kgCOD/m3", bounds: [0.03, 3.0], transform: positive_log}
-  k_m_fa:    {value: 6.0,  units: "1/d",  bounds: [1.0, 20.0],  transform: positive_log}
-  K_S_fa:    {value: 0.4,  units: "kgCOD/m3", bounds: [0.04, 4.0], transform: positive_log}
-  k_m_c4:    {value: 20.0, units: "1/d",  bounds: [5.0, 50.0],  transform: positive_log}
-  K_S_c4:    {value: 0.2,  units: "kgCOD/m3", bounds: [0.02, 2.0], transform: positive_log}
-  k_m_pro:   {value: 13.0, units: "1/d",  bounds: [3.0, 40.0],  transform: positive_log}
-  K_S_pro:   {value: 0.1,  units: "kgCOD/m3", bounds: [0.01, 1.0], transform: positive_log}
-  k_m_ac:    {value: 8.0,  units: "1/d",  bounds: [2.0, 25.0],  transform: positive_log}
-  K_S_ac:    {value: 0.15, units: "kgCOD/m3", bounds: [0.015, 1.5], transform: positive_log}
-  k_m_h2:    {value: 35.0, units: "1/d",  bounds: [10.0, 80.0], transform: positive_log}
-  K_S_h2:    {value: 7.0e-6, units: "kgCOD/m3", bounds: [7.0e-7, 7.0e-5], transform: positive_log}
+  k_m_su:    {value: 30.0, units: "1/d",  bounds: [5.0, 70.0],  transform: positive_log, prior: {mean: 30, std: 15}}
+  K_S_su:    {value: 0.5,  units: "kgCOD/m3", bounds: [0.05, 5.0], transform: positive_log, prior: {mean: 0.5, std: 0.25}}
+  k_m_aa:    {value: 50.0, units: "1/d",  bounds: [10.0, 100.0],transform: positive_log, prior: {mean: 50, std: 25}}
+  K_S_aa:    {value: 0.3,  units: "kgCOD/m3", bounds: [0.03, 3.0], transform: positive_log, prior: {mean: 0.3, std: 0.15}}
+  k_m_fa:    {value: 6.0,  units: "1/d",  bounds: [1.0, 20.0],  transform: positive_log, prior: {mean: 6, std: 3}}
+  K_S_fa:    {value: 0.4,  units: "kgCOD/m3", bounds: [0.04, 4.0], transform: positive_log, prior: {mean: 0.4, std: 0.2}}
+  k_m_c4:    {value: 20.0, units: "1/d",  bounds: [5.0, 50.0],  transform: positive_log, prior: {mean: 20, std: 10}}
+  K_S_c4:    {value: 0.2,  units: "kgCOD/m3", bounds: [0.02, 2.0], transform: positive_log, prior: {mean: 0.2, std: 0.1}}
+  k_m_pro:   {value: 13.0, units: "1/d",  bounds: [3.0, 40.0],  transform: positive_log, prior: {mean: 13, std: 6.5}}
+  K_S_pro:   {value: 0.1,  units: "kgCOD/m3", bounds: [0.01, 1.0], transform: positive_log, prior: {mean: 0.1, std: 0.05}}
+  k_m_ac:    {value: 8.0,  units: "1/d",  bounds: [2.0, 25.0],  transform: positive_log, prior: {mean: 8, std: 4}}
+  K_S_ac:    {value: 0.15, units: "kgCOD/m3", bounds: [0.015, 1.5], transform: positive_log, prior: {mean: 0.15, std: 0.075}}
+  k_m_h2:    {value: 35.0, units: "1/d",  bounds: [10.0, 80.0], transform: positive_log, prior: {mean: 35, std: 17.5}}
+  K_S_h2:    {value: 7.0e-6, units: "kgCOD/m3", bounds: [7.0e-7, 7.0e-5], transform: positive_log, prior: {mean: 7e-06, std: 3.5e-06}}
   # --- biomass decay (1/d) ---
-  k_dec_su:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log}
-  k_dec_aa:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log}
-  k_dec_fa:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log}
-  k_dec_c4:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log}
-  k_dec_pro: {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log}
-  k_dec_ac:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log}
-  k_dec_h2:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log}
+  k_dec_su:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_aa:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_fa:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_c4:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_pro: {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_ac:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_h2:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
   # --- inhibition ---
-  K_S_IN:    {value: 1.0e-4, units: "kmolN/m3", bounds: [1.0e-5, 1.0e-3], transform: positive_log}
-  K_I_h2_fa: {value: 5.0e-6, units: "kgCOD/m3", bounds: [5.0e-7, 5.0e-5], transform: positive_log}
-  K_I_h2_c4: {value: 1.0e-5, units: "kgCOD/m3", bounds: [1.0e-6, 1.0e-4], transform: positive_log}
-  K_I_h2_pro: {value: 3.5e-6, units: "kgCOD/m3", bounds: [3.5e-7, 3.5e-5], transform: positive_log}
-  K_I_nh3:   {value: 0.0018, units: "kmolN/m3", bounds: [1.8e-4, 1.8e-2], transform: positive_log}
+  K_S_IN:    {value: 1.0e-4, units: "kmolN/m3", bounds: [1.0e-5, 1.0e-3], transform: positive_log, prior: {mean: 0.0001, std: 5e-05}}
+  K_I_h2_fa: {value: 5.0e-6, units: "kgCOD/m3", bounds: [5.0e-7, 5.0e-5], transform: positive_log, prior: {mean: 5e-06, std: 2.5e-06}}
+  K_I_h2_c4: {value: 1.0e-5, units: "kgCOD/m3", bounds: [1.0e-6, 1.0e-4], transform: positive_log, prior: {mean: 1e-05, std: 5e-06}}
+  K_I_h2_pro: {value: 3.5e-6, units: "kgCOD/m3", bounds: [3.5e-7, 3.5e-5], transform: positive_log, prior: {mean: 3.5e-06, std: 1.75e-06}}
+  K_I_nh3:   {value: 0.0018, units: "kmolN/m3", bounds: [1.8e-4, 1.8e-2], transform: positive_log, prior: {mean: 0.0018, std: 0.0009}}
   pH_UL_aa:  {value: 5.5}
   pH_LL_aa:  {value: 4.0}
   pH_UL_ac:  {value: 7.0}
@@ -170,13 +170,13 @@ parameters:
   pH_LL_h2:  {value: 5.0}
   pKa_IN:    {value: 8.955, units: "-"}   # NH4+/NH3 pKa at 35 C (9.25 at 25 C, van't Hoff dH=51965 J/mol); matches the charge-balance solver's effective ammonia pKa
   # --- yields (kgCOD biomass / kgCOD substrate) ---
-  Y_su:  {value: 0.10, bounds: [0.02, 0.2], transform: positive_log}
-  Y_aa:  {value: 0.08, bounds: [0.02, 0.2], transform: positive_log}
-  Y_fa:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log}
-  Y_c4:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log}
-  Y_pro: {value: 0.04, bounds: [0.02, 0.2], transform: positive_log}
-  Y_ac:  {value: 0.05, bounds: [0.02, 0.2], transform: positive_log}
-  Y_h2:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log}
+  Y_su:  {value: 0.10, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.1, std: 0.005}}
+  Y_aa:  {value: 0.08, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.08, std: 0.004}}
+  Y_fa:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
+  Y_c4:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
+  Y_pro: {value: 0.04, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.04, std: 0.002}}
+  Y_ac:  {value: 0.05, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.05, std: 0.0025}}
+  Y_h2:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
   # --- fractionation ---
   f_sI_xc:  {value: 0.10}
   f_xI_xc:  {value: 0.20}
@@ -218,7 +218,7 @@ parameters:
   # Henry constants T-corrected to 35 C by van't Hoff: K_H = K_H_base *
   # exp(-dH * (1/T_base - 1/T_op) / R), with R = 8.3145 J/mol/K (= 100*0.083145)
   # and T_base = 298.15, T_op = 308.15 K.
-  kLa:      {value: 200.0, units: "1/d",   bounds: [50.0, 400.0], transform: positive_log}
+  kLa:      {value: 200.0, units: "1/d",   bounds: [50.0, 400.0], transform: positive_log, prior: {mean: 200, std: 100}}
   K_H_h2:   {value: 7.384654e-4, units: "kmol/m3/bar"}   # 7.8e-4 * exp(-4180 *(1/Tb-1/To)/R)
   K_H_ch4:  {value: 1.161903e-3, units: "kmol/m3/bar"}   # 1.4e-3 * exp(-14240*(1/Tb-1/To)/R)
   K_H_co2:  {value: 2.714669e-2, units: "kmol/m3/bar"}   # 3.5e-2 * exp(-19410*(1/Tb-1/To)/R)
