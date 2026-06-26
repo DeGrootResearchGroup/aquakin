@@ -3143,7 +3143,8 @@ Key types:
     shortcut for the most-read one (reads `effluent_endpoint`). The digester
     **biogas** is a *derived* output (computed from the ADM1 headspace state, not
     a material port), so it has its own accessor: `plant.digester_gas(sol)` →
-    `DigesterGas` (`t`, `Q` m³/d, `p_ch4`/`p_co2`/`p_h2` bar, `ch4` kg/d, and
+    `DigesterGas` (`t`, `Q` m³/d the biogas flow **normalized to atmospheric
+    pressure**, `p_ch4`/`p_co2`/`p_h2` bar, `ch4` kg/d, and
     `.methane_production()` time-averaged kg CH₄/d), reusing the OCI biogas
     formula (`evaluate_bsm2`'s `_methane_production` now delegates to it). Raises
     if the plant has no ADM1 digester.
@@ -4814,9 +4815,21 @@ component term. The OCI is the Gernaey et al. 2014 index:
 - **sludge** disposal TSS mass flow (factor 3, not the BSM1 5); **carbon** the
   external dose `Q·conc` (`carbon_mass`, kg COD/d).
 - **methane** the digester biogas credit — reconstructed from the ADM1 headspace
-  gas state and parameters (`_methane_production`: `Q_gas = k_P·(P_gas−P_atm)`,
-  `CH4 = (p_ch4/P_gas)·P_atm·16/R_T · Q_gas`); ~1010 kg CH₄/d at the BSM2 steady
-  state (reference ≈ 1065).
+  gas state and parameters (`_methane_production`: the raw overpressure outflow
+  `k_P·(P_gas−P_atm)` **renormalized to atmospheric pressure** by `·P_gas/P_atm`,
+  `Q_gas = k_P·(P_gas−P_atm)·P_gas/P_atm`, then `CH4 = (p_ch4/P_gas)·P_atm·16/R_T
+  · Q_gas`); ~1065 kg CH₄/d at the BSM2 steady state, matching the reference
+  (~1065). *(The `·P_gas/P_atm` normalization is the BSM2 ADM1 convention — the
+  gas-phase ODE uses the un-normalized `k_P·(P_gas−P_atm)`, but the **reported**
+  gas flow, and hence the methane-production / OCI credit, is recalculated to
+  atmospheric pressure. Omitting it understated the reported biogas flow, the
+  methane production, and its OCI credit by `P_gas/P_atm ≈ 1.05` — about 5% — while
+  leaving the gas-phase **concentrations** exactly matched, so the
+  concentration-level digester validation could not see it. With the
+  normalization the dynamic BSM2 methane matches the ring-test consensus to
+  ~0.2% (was ~5% low) and the OCI to ~0.7% (was ~4% high). Pinned to the published
+  steady-state biogas flow / methane in `tests/integration/test_plant_assembly.py::
+  test_digester_gas_normalized_to_published_steady_state`.)*
 - **HE** sludge-heating energy (`heating_energy`): raise the digester feed from
   its temperature (the carried stream T, else a 15 °C default) to 35 °C. At the
   BSM2 operating point methane more than covers it, so `max(0, HE − 7·methane)`

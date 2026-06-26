@@ -310,7 +310,9 @@ class DigesterGas:
     t : jnp.ndarray
         Save times, shape ``(n_t,)``.
     Q : jnp.ndarray
-        Total biogas flow ``Q_gas`` (m³/d), shape ``(n_t,)``.
+        Total biogas flow ``Q_gas`` (m³/d), shape ``(n_t,)``, normalized to
+        atmospheric pressure (the benchmark convention: the raw overpressure
+        outflow ``k_P*(P_gas - P_atm)`` times ``P_gas/P_atm``).
     p_ch4, p_co2, p_h2 : jnp.ndarray
         CH₄ / CO₂ / H₂ partial pressures (bar), shape ``(n_t,)``.
     ch4 : jnp.ndarray
@@ -369,7 +371,15 @@ def digester_gas(plant, solution, params=None) -> DigesterGas:
     p_ch4 = R_T / 64.0 * s_ch4
     p_co2 = R_T * s_co2
     P_gas = p_h2 + p_ch4 + p_co2 + p_h2o
-    Q_gas = k_P * (P_gas - P_atm)                       # m3/d
+    # Headspace overpressure drives the raw outflow k_P*(P_gas - P_atm); this is
+    # the flow the gas-phase ODE uses. The *reported* biogas flow is recalculated
+    # to atmospheric pressure by the factor P_gas/P_atm, the benchmark
+    # normalization (the BSM2 ADM1 reports q_gas*P_gas/P_atm as the gas flow, and
+    # the methane-production / OCI credit is computed from it). Omitting the
+    # normalization understates the biogas flow, and hence the methane production
+    # and its OCI credit, by P_gas/P_atm (about 5% at the benchmark operating
+    # point), while leaving the gas-phase concentrations unchanged.
+    Q_gas = k_P * (P_gas - P_atm) * P_gas / P_atm       # m3/d, normalized to P_atm
     ch4_density = (p_ch4 / P_gas) * P_atm * 16.0 / R_T  # kg CH4/m3
     return DigesterGas(t=solution.t, Q=Q_gas, p_ch4=p_ch4, p_co2=p_co2,
                        p_h2=p_h2, ch4=ch4_density * Q_gas)
