@@ -1122,6 +1122,40 @@ def test_digester_gas_and_no_digester_error(simple_net):
         cstr.digester_gas(cstr_sol)
 
 
+def test_digester_gas_normalized_to_published_steady_state():
+    """The reported biogas flow is normalized to atmospheric pressure.
+
+    At the published BSM2 open-loop steady-state digester gas composition
+    (Gernaey et al. 2014; Jeppsson et al. 2007), the reported gas flow is the raw
+    overpressure outflow ``k_P*(P_gas - P_atm)`` recalculated to atmospheric
+    pressure by ``P_gas/P_atm``: ~2708 m3/d, giving ~1065 kg CH4/d. Omitting the
+    normalization understates both by ``P_gas/P_atm`` (~5%), which the gas-phase
+    concentrations -- matched without it -- cannot reveal."""
+    from aquakin.plant.bsm import build_bsm2, bsm2_warm_start
+    from aquakin.plant.plant import PlantSolution
+
+    # Published steady-state digester gas-phase composition (kg COD/m3 for the
+    # COD gases) and the resulting reported flow and methane production.
+    REF_GAS = {"S_gas_h2": 1.1032e-5, "S_gas_ch4": 1.6535, "S_gas_co2": 0.01354}
+    REF_QGAS = 2708.34   # m3/d, normalized to atmospheric pressure
+    REF_CH4 = 1065.35    # kg CH4/d
+
+    plant = build_bsm2()
+    plant._build_state_layout()
+    y0 = bsm2_warm_start(plant)
+    dig = plant.units["digester"]
+    si = dig.network.species_index
+    dvec = plant.states_by_unit(y0)["digester"]
+    dvec = dvec.at[jnp.array([si[k] for k in REF_GAS])].set(
+        jnp.array([REF_GAS[k] for k in REF_GAS]))
+    y = plant.initial_state(overrides={"digester": dvec})
+    sol = PlantSolution(t=jnp.asarray([0.0, 1.0]),
+                        state=jnp.stack([y, y]), plant=plant)
+    gas = plant.digester_gas(sol)
+    assert float(gas.Q[0]) == pytest.approx(REF_QGAS, rel=2e-3)
+    assert gas.methane_production() == pytest.approx(REF_CH4, rel=2e-3)
+
+
 def test_stream_series_named_accessors(simple_net):
     """StreamSeries shares the _HasNamedSpecies accessors: C_named (hinted),
     C_named_many, final_named and .final."""
