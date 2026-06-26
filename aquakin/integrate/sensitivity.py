@@ -472,6 +472,31 @@ def _sobol_sample(lo, hi, d, n_samples, seed):
     return Z, int(Z.shape[0])
 
 
+def _sobol_normal_sample(mean, std, d, n_samples, seed):
+    """Draw scrambled-Sobol points from independent normals ``N(mean_j, std_j^2)``.
+
+    Maps the low-discrepancy unit points through the inverse normal CDF, so the
+    design is a quasi-Monte-Carlo sample of the Gaussian rather than of a box.
+    This is the input distribution for a DGSM screen under Gaussian (prior)
+    inputs, whose Sobol total-index bound carries the Poincare constant
+    ``std_j^2`` in place of the uniform ``(b_j-a_j)^2 / pi^2`` (Sobol & Kucherenko
+    2010, Sec. 8; Lamboni et al. 2013, Thm 3.1). ``mean``/``std`` are length-``d``
+    (in the space where the input is Gaussian -- e.g. log-parameter space for a
+    positive rate); ``n_samples`` is rounded to a power of two. Returns
+    ``(Z, n_drawn)`` with ``Z`` of shape ``(n_drawn, d)``.
+    """
+    import numpy as np
+    from scipy.stats import norm, qmc
+
+    n_pow = max(1, round(math.log2(max(n_samples, 2))))
+    U = qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(n_pow)
+    U = np.clip(U, 1e-12, 1.0 - 1e-12)        # avoid +/-inf at the 0/1 endpoints
+    mean = np.asarray(mean)
+    std = np.asarray(std)
+    Z = mean[None, :] + std[None, :] * norm.ppf(U)
+    return Z, int(Z.shape[0])
+
+
 def _make_dgsm_value_and_jac(fn, z0, mode):
     """Build the jitted ``(value, Jacobian)`` callable for the requested mode.
 
