@@ -430,6 +430,14 @@ class SteadyStateResult:
     method: str = "forward"
     iterations: Optional[int] = None
     residual: Optional[float] = None
+    # Whether an *operating-branch* steady state exists at these parameters.
+    # ``True`` for a converged solve; ``False`` when pseudo-arclength continuation
+    # found the operating branch folds before the target (a saddle-node
+    # bifurcation -- the operating point is past the survival limit, e.g. digester
+    # washout, so only a different branch exists). ``None`` when not determined
+    # (the arclength layer was not invoked). A screen should *exclude* a sample
+    # whose operating point does not exist (``method == "past_fold"``).
+    operating_point_exists: Optional[bool] = None
 
 
 def _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=None):
@@ -570,6 +578,29 @@ class SteadyStateDGSMResult:
     n_valid: jnp.ndarray
     cond: jnp.ndarray
     cond_factor: Optional[float] = None
+    # Per-sample final scaled steady-state residual ``max_i |F_i|/max(|y_i|,floor)``
+    # (shape ``(N,)``). A sample whose solve did not converge carries a large
+    # residual; it can be excluded as an invalid operating point, more directly
+    # than by a conditioning or output-magnitude test. ``None`` on results built
+    # before this was recorded. A sample solved by the forward backstop carries
+    # ``NaN`` here (the forward solve reports no PTC scaled residual).
+    residual: Optional[jnp.ndarray] = None
+    # Per-sample solver method from the layered solve -- ``"ptc"`` (direct),
+    # ``"continuation"`` (deformed from the nominal), or ``"ptc->forward"`` (forward
+    # backstop, the near-bifurcation samples a fast algebraic solve cannot tighten).
+    # A Python list of length ``N``; the coverage tally is ``Counter(solve_method)``.
+    # ``None`` on results built before this was recorded.
+    solve_method: Optional[list] = None
+    # Per-sample convergence flag (shape ``(N,)`` bool) from the layered solve.
+    converged: Optional[jnp.ndarray] = None
+    # Per-sample operating-point existence (length ``N`` list of ``True`` /
+    # ``False`` / ``None``): ``False`` marks a ``past_fold`` sample (the operating
+    # branch folds before its parameters, so no operating-branch steady state
+    # exists -- past a saddle-node bifurcation). These are **excluded** from the
+    # screen (``sobol_total_bound``) as outside the viable operating regime -- the
+    # physical, fold-based exclusion criterion. ``None`` on results built before
+    # this was recorded.
+    operating_point_exists: Optional[list] = None
 
     def ranked(self, output=0):
         """``[(input_name, bound)]`` for one output, sorted by decreasing bound.
@@ -612,9 +643,13 @@ class SteadyStateDGSMResult:
         gs = np.asarray(self.grad_sq)                                     # (N, m, k)
         ov = np.asarray(self.outputs)                                     # (N, m)
         cond = np.asarray(self.cond)                                      # (N,)
+        op = (np.array([e is not False for e in self.operating_point_exists],
+                       dtype=bool)
+              if self.operating_point_exists is not None
+              else np.ones(n, dtype=bool))                               # past-fold
         b_list, se_list = [], []
         for k in counts:
-            mask = _cond_mask(cond[:k], self.cond_factor)
+            mask = _cond_mask(cond[:k], self.cond_factor) & op[:k]
             bound, se, *_ = _dgsm_aggregate(gs[:k], ov[:k], rng2, sample_mask=mask)
             b_list.append(bound)
             se_list.append(se)
@@ -632,7 +667,11 @@ class SteadyStateDGSMResult:
         import numpy as np
         from dataclasses import replace
         rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)
-        mask = _cond_mask(np.asarray(self.cond), cond_factor)
+        op = (np.array([e is not False for e in self.operating_point_exists],
+                       dtype=bool)
+              if self.operating_point_exists is not None
+              else np.ones(len(self.cond), dtype=bool))           # past-fold excl.
+        mask = _cond_mask(np.asarray(self.cond), cond_factor) & op
         bound, se, nu, var, n_valid = _dgsm_aggregate(
             np.asarray(self.grad_sq), np.asarray(self.outputs), rng2,
             sample_mask=mask)
@@ -4815,6 +4854,101 @@ class Plant:
             method="forward",
         )
 
+    def _steady_continuation_fallback(
+        self, rhs, params, y0, scale_floor, continuation_from, continuation_kwargs,
+        *, dt0, dt_max, growth_cap, max_iter, tol, nonneg, influent_time,
+    ):
+        """Continuation fallback for a non-converged direct PTC solve.
+
+        Reach the steady state at ``params`` by deforming from the known solution
+        ``continuation_from = (params_known, y_known)`` -- predictor-corrector with
+        the same PTC as the corrector -- for a parameter set whose direct warm
+        start is out of basin. Returns a converged :class:`SteadyStateResult`, or
+        ``None`` if continuation is not configured or did not reach the target (a
+        fold the natural-parameter path cannot turn, left to the forward backstop /
+        a future pseudo-arclength layer). The jitted kernels are cached per
+        settings, so a screen over many targets from one known point compiles once.
+        """
+        if continuation_from is None:
+            return None
+        from aquakin.plant.steady import (
+            continuation_solve, make_continuation_kernels)
+        pk, yk = continuation_from
+        pk = self._coerce_params(pk)
+        yk = jnp.asarray(yk)
+        ckey = (float(dt0), float(dt_max), float(growth_cap), int(max_iter),
+                float(tol), bool(nonneg), float(influent_time))
+        cache = getattr(self, "_continuation_kernel_cache", None)
+        if cache is None:
+            cache = {}
+            self._continuation_kernel_cache = cache
+        kernels = cache.get(ckey)
+        if kernels is None:
+            ptc_kw = dict(dt0=dt0, dt_max=dt_max, growth_cap=growth_cap,
+                          max_iter=max_iter, tol=tol,
+                          scale_floor=jnp.asarray(scale_floor), nonneg=nonneg)
+            kernels = make_continuation_kernels(rhs, None, ptc_kw)
+            cache[ckey] = kernels
+        cres = continuation_solve(
+            rhs, pk, yk, params, kernels=kernels, **(continuation_kwargs or {}))
+        if bool(cres.converged):
+            return SteadyStateResult(
+                state=cres.state, converged=True, method="continuation",
+                iterations=int(cres.corrector_iterations),
+                residual=float(cres.residual))
+        return None
+
+    def _steady_arclength_fallback(
+        self, rhs, params, scale_floor, continuation_from, *, tol, nonneg,
+        influent_time, arclength_kwargs=None,
+    ):
+        """Pseudo-arclength fallback: track the steady-state branch to a far target.
+
+        Reaches operating points behind a near-singular ``dF/dy`` (where PTC and
+        natural-parameter continuation overshoot -- the augmented arclength operator
+        does not invert it), AND classifies existence: it detects when the operating
+        branch **folds before the target** (a saddle-node bifurcation -- the
+        operating point is past the survival limit, e.g. digester washout, so it
+        does not exist there). Returns a converged result (``method="arclength"``,
+        ``operating_point_exists=True``), a past-fold result (``method="past_fold"``,
+        ``operating_point_exists=False`` -- a screen should *exclude* it), or
+        ``None`` if inconclusive (the caller falls through to the forward backstop).
+        Kernels are cached per settings (the ``rhs`` and the known-solution-derived
+        scale are fixed across a sweep from one known point).
+        """
+        if continuation_from is None:
+            return None
+        from aquakin.plant.steady import (
+            arclength_continuation_solve, make_arclength_kernels)
+        pk, yk = continuation_from
+        pk = self._coerce_params(pk)
+        yk = jnp.asarray(yk)
+        scale = jnp.maximum(jnp.abs(yk), 1e-3)
+        ptc_kw = dict(scale_floor=jnp.asarray(scale_floor), tol=tol, nonneg=nonneg)
+        ckey = (float(tol), bool(nonneg), float(influent_time))
+        cache = getattr(self, "_arclength_kernel_cache", None)
+        if cache is None:
+            cache = {}
+            self._arclength_kernel_cache = cache
+        kernels = cache.get(ckey)
+        if kernels is None:
+            kernels = make_arclength_kernels(rhs, scale, ptc_kw)
+            cache[ckey] = kernels
+        res = arclength_continuation_solve(
+            rhs, pk, yk, params, kernels=kernels, scale=scale, ptc_kwargs=ptc_kw,
+            **(arclength_kwargs or {}))
+        if res.status == "converged":
+            return SteadyStateResult(
+                state=res.state, converged=True, method="arclength",
+                iterations=int(res.corrector_iterations),
+                residual=float(res.residual), operating_point_exists=True)
+        if res.status == "past_fold":
+            return SteadyStateResult(
+                state=res.state, converged=False, method="past_fold",
+                iterations=int(res.corrector_iterations),
+                residual=float(res.residual), operating_point_exists=False)
+        return None
+
     def steady_state(
         self,
         params: Optional[jnp.ndarray] = None,
@@ -4832,6 +4966,10 @@ class Plant:
         colored_jacobian: bool = False,
         fallback: bool = True,
         fallback_kwargs: Optional[dict] = None,
+        continuation_from: Optional[tuple] = None,
+        continuation_kwargs: Optional[dict] = None,
+        arclength: bool = True,
+        arclength_kwargs: Optional[dict] = None,
     ) -> "SteadyStateResult":
         """Solve the plant steady state algebraically by pseudo-transient continuation.
 
@@ -5030,11 +5168,26 @@ class Plant:
             y_star, residual_a, iters_a, conv_a = jitted(
                 y0, params, jnp.asarray(scale_floor))
             converged = bool(conv_a)
-            if fallback and not converged:
-                fb = self.run_to_steady_state(
-                    params, y0=y0, **(fallback_kwargs or {}))
-                fb.method = "ptc->forward"
-                return fb
+            if not converged:
+                alt = self._steady_continuation_fallback(
+                    rhs, params, y0, scale_floor, continuation_from,
+                    continuation_kwargs, dt0=dt0, dt_max=dt_max,
+                    growth_cap=growth_cap, max_iter=max_iter, tol=tol,
+                    nonneg=nonneg, influent_time=influent_time)
+                if alt is not None:
+                    return alt
+                if arclength:
+                    arc = self._steady_arclength_fallback(
+                        rhs, params, scale_floor, continuation_from, tol=tol,
+                        nonneg=nonneg, influent_time=influent_time,
+                        arclength_kwargs=arclength_kwargs)
+                    if arc is not None:
+                        return arc
+                if fallback:
+                    fb = self.run_to_steady_state(
+                        params, y0=y0, **(fallback_kwargs or {}))
+                    fb.method = "ptc->forward"
+                    return fb
             return SteadyStateResult(
                 state=y_star, converged=converged, method="ptc",
                 iterations=int(iters_a), residual=float(residual_a),
@@ -5061,11 +5214,26 @@ class Plant:
                 iterations=res.iterations, residual=res.residual,
             )
 
-        if fallback and not converged:
-            fb = self.run_to_steady_state(
-                params, y0=y0, **(fallback_kwargs or {}))
-            fb.method = "ptc->forward"
-            return fb
+        if not converged:
+            alt = self._steady_continuation_fallback(
+                rhs, params, y0, scale_floor, continuation_from,
+                continuation_kwargs, dt0=dt0, dt_max=dt_max,
+                growth_cap=growth_cap, max_iter=max_iter, tol=tol,
+                nonneg=nonneg, influent_time=influent_time)
+            if alt is not None:
+                return alt
+            if arclength:
+                arc = self._steady_arclength_fallback(
+                    rhs, params, scale_floor, continuation_from, tol=tol,
+                    nonneg=nonneg, influent_time=influent_time,
+                    arclength_kwargs=arclength_kwargs)
+                if arc is not None:
+                    return arc
+            if fallback:
+                fb = self.run_to_steady_state(
+                    params, y0=y0, **(fallback_kwargs or {}))
+                fb.method = "ptc->forward"
+                return fb
 
         return SteadyStateResult(
             state=res.state, converged=converged, method="ptc",
@@ -5218,6 +5386,7 @@ class Plant:
         seed: int = 0,
         mode: str = "auto",
         cond_factor: Optional[float] = None,
+        continuation: bool = True,
         progress: Optional[int] = None,
         **steady_kwargs,
     ) -> "SteadyStateDGSMResult":
@@ -5294,33 +5463,63 @@ class Plant:
         lo, hi = ranges_arr[:, 0], ranges_arr[:, 1]
         wrt_j = jnp.asarray(wrt_idx)
 
+        # The steady-state solve uses the LAYERED fallback (direct PTC ->
+        # parameter continuation from the nominal -> forward integration), which is
+        # eager Python control flow and so cannot run inside a jit (under a trace
+        # the fallback branches are skipped and only the un-converged direct PTC
+        # result survives). The nominal steady state is solved once as the
+        # continuation known point -- and as a better per-sample warm start than the
+        # cold default. Only the implicit-function-theorem sensitivity at the found
+        # state is jitted (compiled once, reused across samples).
+        known = None
+        if continuation:
+            nom = self.steady_state(base, y0=y0, **steady_kwargs)
+            known = (base, nom.state)
+            if y0 is None:
+                y0 = nom.state
+
         @jax.jit
-        def _per_sample(z):
-            p = base.at[wrt_j].set(z)
-            ss = self.steady_state(p, y0=y0, **steady_kwargs).state
+        def _sens_at(p, ss):
             S, J_y = self.steady_state_sensitivity(
                 p, state=ss, output_fn=output_fn, wrt=wrt_idx, mode=mode,
                 return_jacobian=True)                                # (m, k), (n, n)
             return jnp.atleast_1d(output_fn(ss)), S, jnp.linalg.cond(J_y)
 
         Z, n_drawn = _sobol_sample(lo, hi, k, n_samples, seed)
-        outs, grads, conds = [], [], []
+        outs, grads, conds, resids, smethods, sconv, sexist = (
+            [], [], [], [], [], [], [])
         for i in range(n_drawn):
-            o, S, c = _per_sample(Z[i])
+            p = base.at[wrt_j].set(jnp.asarray(Z[i]))
+            ssr = self.steady_state(
+                p, y0=y0, continuation_from=known, **steady_kwargs)
+            o, S, c = _sens_at(p, ssr.state)
             outs.append(np.asarray(o))
             grads.append(np.asarray(S))
             conds.append(float(c))
+            resids.append(float(ssr.residual)
+                          if ssr.residual is not None else float("nan"))
+            smethods.append(ssr.method)
+            sconv.append(bool(ssr.converged))
+            sexist.append(ssr.operating_point_exists)     # True / False / None
             if progress and (i + 1) % progress == 0:
-                print(f"  [steady_state_dgsm] {i + 1}/{n_drawn} samples",
-                      flush=True)
+                print(f"  [steady_state_dgsm] {i + 1}/{n_drawn} samples "
+                      f"(last: {ssr.method})", flush=True)
 
         outputs = np.stack(outs)                          # (N, m)
         grad_sq = np.stack(grads) ** 2                    # (N, m, k)
         cond = np.asarray(conds)                          # (N,)
+        residual = np.asarray(resids)                     # (N,) final scaled residual
+        # Operating-regime exclusion: a sample whose operating branch folds before
+        # its parameters has NO operating-branch steady state (pseudo-arclength
+        # classified it ``past_fold``); it is outside the viable regime and is
+        # excluded from the screen -- the physical, fold-based criterion replacing
+        # the conditioning heuristic for those samples.
+        operating_mask = np.array([e is not False for e in sexist], dtype=bool)
         rng2 = np.asarray((hi - lo) ** 2)                 # (k,)
         # Drop, per output, any non-finite sample, plus (if cond_factor is set) any
-        # near-singular-Jacobian operating point where the sensitivity blows up.
-        sample_mask = _cond_mask(cond, cond_factor)
+        # near-singular-Jacobian operating point where the sensitivity blows up,
+        # plus the past-fold (non-operating) samples.
+        sample_mask = _cond_mask(cond, cond_factor) & operating_mask
         bound, std_error, nu, var, n_valid = _dgsm_aggregate(
             grad_sq, outputs, rng2, sample_mask=sample_mask)
 
@@ -5336,7 +5535,9 @@ class Plant:
             ranges=ranges_arr, n_samples=int(n_drawn), seed=int(seed),
             grad_sq=jnp.asarray(grad_sq), outputs=jnp.asarray(outputs),
             n_valid=jnp.asarray(n_valid), cond=jnp.asarray(cond),
-            cond_factor=cond_factor)
+            cond_factor=cond_factor, residual=jnp.asarray(residual),
+            solve_method=smethods, converged=jnp.asarray(sconv),
+            operating_point_exists=sexist)
 
     def solve_sensitivity(
         self,
