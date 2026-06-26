@@ -287,8 +287,7 @@ def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     assert grad_cached == pytest.approx(grad_probed, rel=1e-9)
 
 
-@pytest.mark.validation
-@pytest.mark.heavy
+@pytest.mark.slow
 def test_stable_adjoint_colored_jacobian_matches_dense():
     """``colored_jacobian=True`` colors the per-step ``df/dy`` Jacobian build in
     the stable_adjoint **backward** pass (its dominant cost for a large plant).
@@ -328,13 +327,15 @@ def test_stable_adjoint_colored_jacobian_matches_dense():
     assert g_colored == pytest.approx(g_dense, rel=1e-8)
 
 
-@pytest.mark.validation
-@pytest.mark.heavy
-def test_stable_adjoint_colored_jacobian_auto_off_for_small_plant():
+@pytest.mark.slow
+def test_stable_adjoint_colored_jacobian_auto_decision_is_consistent():
     """``colored_jacobian="auto"`` (the default) measures the colored vs dense
-    build time and enables coloring only when it pays. On a small plant (BSM1) the
-    colored build is *slower* than dense, so auto picks dense -- and the gradient
-    is then the dense gradient. Guards the auto decision and the accessor."""
+    build time and enables coloring only when it pays. The decision is a wall-clock
+    measurement (``ratio = t_dense/t_colored`` against the margin), so on a
+    borderline-size plant like BSM1 -- where the two builds are close -- the outcome
+    is machine-dependent and either can win. Guards the decision LOGIC (the choice is
+    consistent with the measured ratio) and the gradient correctness (equal to the
+    dense gradient whichever build is chosen), not a fixed outcome."""
     asm1 = aquakin.load_network("asm1")
     plant = build_bsm1(asm1)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
@@ -352,17 +353,21 @@ def test_stable_adjoint_colored_jacobian_auto_off_for_small_plant():
         return jnp.sum(sol.state ** 2)
 
     # A concrete solve under the default "auto" derives the coloring and measures
-    # the build speedup; on BSM1 the colored build is the slower one.
+    # the build speedup.
     assert plant.colored_jacobian_decision() is None        # not decided yet
     _ = g(theta0, "auto")
     choice, ratio = plant.colored_jacobian_decision()
-    # Assert the DECISION (auto picked dense), not the raw wall-clock ratio: the
-    # measured ratio is machine-dependent, and ``choice`` already encodes the
-    # margin comparison the implementation makes, so it is the robust assertion.
-    assert choice == "dense"
     assert isinstance(ratio, float)        # a real measurement was taken
+    # Assert the decision LOGIC, not a fixed outcome: ``ratio`` is a wall-clock
+    # build-time measurement, so which side of the margin BSM1 lands on is
+    # machine-dependent. The robust invariant is that ``choice`` agrees with the
+    # measured ratio and the margin the implementation compares against.
+    expected = "colored" if ratio > plant._COLORED_BACKWARD_MARGIN else "dense"
+    assert choice == expected
 
-    # auto picked dense, so its gradient equals the explicit-dense gradient.
+    # Whichever build auto chose, its gradient equals the explicit-dense gradient
+    # (the colored Jacobian is exact on the superset pattern -- only the float
+    # summation order differs), so correctness is independent of the decision.
     g_auto = float(jax.grad(lambda th: g(th, "auto"))(theta0))
     g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
     assert np.isfinite(g_auto) and g_auto != 0.0
@@ -550,8 +555,7 @@ def test_stable_adjoint_forward_solve_is_cached():
     assert len(_sa_keys()) == n_before
 
 
-@pytest.mark.validation
-@pytest.mark.heavy
+@pytest.mark.slow
 def test_stable_adjoint_colored_jacobian_flow_setpoint_matches_dense():
     """The intersection of the two backward features: ``colored_jacobian`` AND a
     FLOW-SETPOINT parameter (the RAS recycle flow). The primal/``rhs`` split puts

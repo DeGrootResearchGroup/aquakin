@@ -3517,19 +3517,28 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   concrete `stable_adjoint` solve `_colored_build_speedup` jit-compiles the dense
   and colored builds once (a few-seconds one-time cost, cached, amortized over a
   calibration) and stores `ratio = t_dense/t_colored`; `"auto"` enables coloring
-  iff `ratio > _COLORED_BACKWARD_MARGIN` (1.05). Validated: BSM1 → `("dense",
-  0.50)`, BSM2 → `("colored", 1.65)`, each matching the measured outcome (BSM2
-  colored is ~9% faster, BSM1 colored is slower), with the auto gradient equal to
-  the dense gradient. `plant.colored_jacobian_decision()`
-  returns `("colored"|"dense", ratio)`. **`"auto"` governs only the
+  iff `ratio > _COLORED_BACKWARD_MARGIN` (1.05). The `ratio` is a host-specific
+  wall-clock measurement, so the *outcome* is not a portable invariant: a large
+  stiff plant (BSM2) clears the margin robustly (colored ~9% faster on the
+  backward), but a borderline-size plant (BSM1, whose dense and colored builds are
+  close) lands on either side by machine — the dev box measures `ratio≈0.5`
+  (dense), some CI hosts measure `>1` (colored), and **both are correct**, since
+  the colored and dense gradients are equal on the superset pattern. So the auto
+  decision is a per-host *performance* choice, never a tested outcome — the tests
+  assert its self-consistency and gradient correctness, not which branch it picks.
+  `plant.colored_jacobian_decision()` returns `("colored"|"dense", ratio)`. **`"auto"` governs only the
   `stable_adjoint` backward** — it leaves the **forward** `jax_adjoint` solve dense
   (forward coloring swaps the implicit linear solver and so is not guaranteed
   bit-identical; making it the all-solves default is a separate, full-suite-
   validated change). `colored_jacobian=True` forces coloring on **both** paths
   (skipping the measurement); `False` disables it. Covered by
   `test_plant_stable_adjoint.py` (`test_stable_adjoint_colored_jacobian_matches_dense`,
-  the forced path; `test_stable_adjoint_colored_jacobian_auto_off_for_small_plant`,
-  the auto decision).
+  the forced path; `test_stable_adjoint_colored_jacobian_auto_decision_is_consistent`,
+  which asserts the auto decision's self-consistency and gradient correctness —
+  machine-independent invariants — not the wall-clock outcome). These BSM1 colored
+  tests are `@slow` (free runner, not the paid `heavy` larger runner): they are
+  small-plant correctness checks, not the OOM-prone whole-plant BSM2 solves the
+  `heavy` marker is for.
 
 **`Plant.solve(forward_fast=True)` — lean non-AD forward integrator
 ([`integrate/forward_solve.py`](aquakin/integrate/forward_solve.py)).** A stiff
