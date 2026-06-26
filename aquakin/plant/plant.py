@@ -5254,6 +5254,71 @@ class Plant:
             iterations=iterations, residual=residual,
         )
 
+    # -- Operating-condition sensitivity inputs (shared steady + dynamic) -------
+    #
+    # A single spec + helper so every sensitivity entry point -- the steady-state
+    # implicit-function-theorem path and the dynamic augmented-variational path,
+    # and their dgsm screens -- accepts an IDENTICAL operating-input description.
+    # This is the unification point: a new operating kind is added here once and
+    # both stacks gain it, and the parity guard test asserts they stay in step.
+    def _parse_operating(self, operating):
+        """Validate operating-condition sensitivity specs into ``op_meta``.
+
+        Each spec is one of
+
+        * ``{"kind": "influent_flow", "port": p}`` -- a differentiable
+          multiplicative scale (nominal ``1.0``) on that influent's flow, or
+        * ``{"kind": "influent_concentration", "port": p, "species": s}`` -- a
+          scale on one species' influent load.
+
+        Returns a list of ``(port, is_flow, species_idx, n_species)`` tuples, one
+        per operating parameter, in the order given.
+        """
+        op_meta = []
+        for spec in (operating or []):
+            port = spec["port"]
+            if port not in self.influents:
+                raise KeyError(
+                    f"operating influent port {port!r} is not an influent of this "
+                    f"plant; have {sorted(self.influents)}.")
+            net = self.influents[port].network
+            kind = spec.get("kind")
+            if kind == "influent_flow":
+                op_meta.append((port, True, -1, int(net.n_species)))
+            elif kind == "influent_concentration":
+                sp = spec["species"]
+                if sp not in net.species_index:
+                    raise KeyError(
+                        f"operating species {sp!r} is not in the influent network "
+                        f"for port {port!r}.")
+                op_meta.append(
+                    (port, False, int(net.species_index[sp]), int(net.n_species)))
+            else:
+                raise ValueError(
+                    f"operating spec 'kind' must be 'influent_flow' or "
+                    f"'influent_concentration'; got {kind!r}.")
+        return op_meta
+
+    @staticmethod
+    def _operating_design(op_meta, op_vals):
+        """Build the influent ``design`` dict that applies the operating scales
+        ``op_vals`` (one per ``op_meta`` entry, nominal ``1.0``).
+
+        A flow spec sets ``Q_scale``; a concentration spec sets the species' entry
+        of a per-species ``C_scale`` (ones elsewhere). The design threads through
+        the same ``_resolve_streams`` / ``_flow_one_pass`` override the
+        steady-state IFT uses, so the cached recycle/flow maps stay exact.
+        """
+        influent: dict = {}
+        for k, (port, is_flow, sp_idx, nsp) in enumerate(op_meta):
+            d = influent.setdefault(port, {})
+            if is_flow:
+                d["Q_scale"] = op_vals[k]
+            else:
+                cs = d.get("C_scale", jnp.ones(nsp))
+                d["C_scale"] = cs.at[sp_idx].set(op_vals[k])
+        return {"influent": influent}
+
     def steady_state_sensitivity(
         self,
         params: Optional[jnp.ndarray] = None,
@@ -5262,6 +5327,7 @@ class Plant:
         state: Optional[jnp.ndarray] = None,
         output_fn: Optional[Callable] = None,
         wrt: Optional[Sequence] = None,
+        operating: Optional[Sequence] = None,
         mode: str = "auto",
         elasticity: bool = False,
         return_jacobian: bool = False,
@@ -5355,9 +5421,17 @@ class Plant:
                 for w in wrt])
         n_wrt = int(wrt_idx.shape[0])
 
+        # Operating-condition inputs (the influent scales, nominal 1.0): their IFT
+        # columns are appended after the kinetic-parameter columns below, through
+        # the same ``design`` override the steady-state solve uses. The
+        # no-operating path is byte-for-byte unchanged.
+        op_meta = self._parse_operating(operating)
+        n_op = len(op_meta)
+
         J_y = jax.jacfwd(lambda y: F(y, params))(y_star)
 
-        chosen = ("forward" if n_wrt <= m else "reverse") if mode == "auto" else mode
+        chosen = ("forward" if (n_wrt + n_op) <= m else "reverse") \
+            if mode == "auto" else mode
         if chosen == "forward":
             # Differentiate only the selected parameters: k forward passes, not
             # n_params. (k == n_params when wrt is None.)
@@ -5382,8 +5456,35 @@ class Plant:
             raise ValueError(
                 f"mode must be 'auto', 'forward', or 'reverse'; got {mode!r}.")
 
+        # Append the operating-condition columns: the same IFT, with
+        # ``dF/d(scale)`` taken through the influent ``design`` override, in the
+        # chosen AD direction. The constant influent is sampled at ``t=0`` (the
+        # derivative's evaluation time).
+        if n_op:
+            self._build_state_layout()
+            self._build_parameter_layout()
+            t0 = jnp.asarray(0.0)
+            op0 = jnp.ones(n_op)
+            pf = self._coerce_params(params)
+
+            def F_op(op_vals):
+                return self._rhs(
+                    t0, y_star, pf,
+                    design=self._operating_design(op_meta, op_vals))
+
+            if chosen == "forward":
+                J_op = jax.jacfwd(F_op)(op0)                       # (n, n_op)
+                dg_op = G @ jnp.linalg.solve(J_y, -J_op)           # (m, n_op)
+            else:
+                _, vjp_op = jax.vjp(F_op, op0)
+                dg_op = jax.vmap(
+                    lambda g_i: vjp_op(jnp.linalg.solve(J_y.T, -g_i))[0])(G)
+            dgdth = jnp.concatenate([dgdth, dg_op], axis=1)        # (m, n_wrt+n_op)
+
         if elasticity:
-            dgdth = dgdth * (params[wrt_idx][None, :] / g0[:, None])
+            theta_all = (jnp.concatenate([params[wrt_idx], jnp.ones(n_op)])
+                         if n_op else params[wrt_idx])
+            dgdth = dgdth * (theta_all[None, :] / g0[:, None])
         if return_jacobian:
             return dgdth, J_y
         return dgdth
@@ -5676,34 +5777,11 @@ class Plant:
         # scalar column to the augmented parameter vector, threaded into the RHS
         # through the ``design`` influent override -- the same path the
         # steady-state IFT uses -- so the cached recycle/flow maps, which are
-        # influent-independent, stay exact. Supported specs:
-        #   {"kind": "influent_flow", "port": p}            -> scale that influent Q
-        #   {"kind": "influent_concentration", "port": p, "species": s}
-        #                                                   -> scale that load
+        # influent-independent, stay exact. The spec + design build are the shared
+        # ``_parse_operating`` / ``_operating_design`` (see above), so the steady
+        # and dynamic stacks accept an identical operating-input description.
         n_params = int(params_full.shape[0])
-        op_meta = []
-        for spec in (operating or []):
-            port = spec["port"]
-            if port not in self.influents:
-                raise KeyError(
-                    f"operating influent port {port!r} is not an influent of "
-                    f"this plant; have {sorted(self.influents)}.")
-            net = self.influents[port].network
-            kind = spec.get("kind")
-            if kind == "influent_flow":
-                op_meta.append((port, True, -1, int(net.n_species)))
-            elif kind == "influent_concentration":
-                sp = spec["species"]
-                if sp not in net.species_index:
-                    raise KeyError(
-                        f"operating species {sp!r} is not in the influent "
-                        f"network for port {port!r}.")
-                op_meta.append(
-                    (port, False, int(net.species_index[sp]), int(net.n_species)))
-            else:
-                raise ValueError(
-                    f"operating spec 'kind' must be 'influent_flow' or "
-                    f"'influent_concentration'; got {kind!r}.")
+        op_meta = self._parse_operating(operating)
         n_op = len(op_meta)
 
         if n_op:
@@ -5712,19 +5790,9 @@ class Plant:
         else:
             theta_aug, free_aug = params_full, free_idx
 
-        def _operating_design(op_vals):
-            influent: dict = {}
-            for k, (port, is_flow, sp_idx, nsp) in enumerate(op_meta):
-                d = influent.setdefault(port, {})
-                if is_flow:
-                    d["Q_scale"] = op_vals[k]
-                else:
-                    cs = d.get("C_scale", jnp.ones(nsp))
-                    d["C_scale"] = cs.at[sp_idx].set(op_vals[k])
-            return {"influent": influent}
-
         def f_flat(t, y, theta):
-            design = _operating_design(theta[n_params:]) if n_op else None
+            design = (self._operating_design(op_meta, theta[n_params:])
+                      if n_op else None)
             return self._rhs(t, y, theta[:n_params], recycle_map=rmap,
                              flow_map=fmap, design=design)
 
