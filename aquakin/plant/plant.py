@@ -5823,7 +5823,7 @@ class Plant:
             f"mode must be 'reverse', 'forward', or 'auto'; got {mode!r}.")
 
     def _dynamic_value_jac(self, params, wrt_idx, theta, *, output_fn,
-                           t_span, t_eval, y0, mode, solve_kwargs):
+                           t_span, t_eval, y0, mode, solve_kwargs, operating=None):
         """``(value, (m, k) Jacobian)`` of ``output_fn(solve(theta))`` using the
         STABLE method for ``mode``, shared by :meth:`dynamic_sensitivity` and
         :meth:`dynamic_dgsm`.
@@ -5850,7 +5850,7 @@ class Plant:
             full = params.at[wrt_j].set(theta)
             ts, ys, S_state = self.solve_sensitivity(
                 full, list(wrt_idx), t_span=t_span, t_eval=t_eval, y0=y0,
-                **solve_kwargs)
+                operating=operating, **solve_kwargs)
 
             def g_of_ys(ys_traj):
                 return jnp.atleast_1d(
@@ -5886,6 +5886,7 @@ class Plant:
         t_span: tuple,
         t_eval: Optional[jnp.ndarray] = None,
         wrt: Optional[Sequence] = None,
+        operating: Optional[Sequence] = None,
         mode: str = "reverse",
         y0: Optional[jnp.ndarray] = None,
         elasticity: bool = False,
@@ -5956,12 +5957,22 @@ class Plant:
                        for w in wrt]
         wrt_j = jnp.asarray(wrt_idx)
         theta0 = params[wrt_j]
-        chosen = "reverse" if mode == "auto" else mode
+        n_op = len(self._parse_operating(operating))
+        # Operating-condition sensitivity rides the augmented variational solve, so
+        # it is forward-mode only; default to forward when it is requested.
+        chosen = ("forward" if n_op else "reverse") if mode == "auto" else mode
+        if n_op and chosen != "forward":
+            raise ValueError(
+                "operating-condition sensitivity is available only in forward "
+                "mode (the augmented variational solve); pass mode='forward'.")
         g, S = self._dynamic_value_jac(
             params, wrt_idx, theta0, output_fn=output_fn, t_span=t_span,
-            t_eval=t_eval, y0=y0, mode=chosen, solve_kwargs=solve_kwargs)
+            t_eval=t_eval, y0=y0, mode=chosen, solve_kwargs=solve_kwargs,
+            operating=operating)
         if elasticity:
-            S = S * (theta0[None, :] / g[:, None])
+            theta_all = (jnp.concatenate([theta0, jnp.ones(n_op)])
+                         if n_op else theta0)
+            S = S * (theta_all[None, :] / g[:, None])
         return S
 
     def dynamic_dgsm(
