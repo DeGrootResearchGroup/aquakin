@@ -2238,9 +2238,18 @@ class Plant:
         for port_name, series in self.influents.items():
             if port_name in influent_override:
                 ov = influent_override[port_name]
+                base = series.at(t)
+                # An influent override may be an ABSOLUTE replacement (a constant
+                # design, e.g. the steady-state IFT samples the influent at one
+                # time and overrides it) and/or a MULTIPLICATIVE scale on the
+                # time-sampled series (a dynamic operating-parameter sensitivity:
+                # scale the flow or a species' load). Both default to identity, so
+                # an absent key / a scale of 1.0 leaves the recorded influent
+                # unchanged. ``C_scale`` may be a scalar or a per-species array.
+                Q = ov.get("Q", base.Q) * ov.get("Q_scale", 1.0)
+                C = ov.get("C", base.C) * ov.get("C_scale", 1.0)
                 streams[(None, port_name)] = Stream(
-                    Q=ov["Q"], C=ov["C"], network=series.network,
-                    T=ov.get("T"))
+                    Q=Q, C=C, network=series.network, T=ov.get("T", base.T))
             else:
                 streams[(None, port_name)] = series.at(t)
         resolved_flows = self._resolve_flows(t, params_full, states, design=design,
@@ -3788,9 +3797,14 @@ class Plant:
         influent_override = (design or {}).get("influent", {})
         base: dict[tuple[Optional[str], str], jnp.ndarray] = {}
         for port_name, series in self.influents.items():
-            base[(None, port_name)] = (
-                influent_override[port_name]["Q"] if port_name in influent_override
-                else series.at(t).Q)
+            if port_name in influent_override:
+                ov = influent_override[port_name]
+                # Absolute override and/or multiplicative flow scale (see
+                # _resolve_streams); both default to identity.
+                base[(None, port_name)] = (
+                    ov.get("Q", series.at(t).Q) * ov.get("Q_scale", 1.0))
+            else:
+                base[(None, port_name)] = series.at(t).Q
         recycle_keys = self._recycle_keys
         n = len(recycle_keys)
 
@@ -5544,6 +5558,7 @@ class Plant:
         params,
         wrt,
         *,
+        operating=None,
         t_span,
         t_eval=None,
         y0=None,
@@ -5580,6 +5595,16 @@ class Plant:
             indices. The cached recycle map drops the ``dM/dtheta`` term, so this
             is exact for kinetic parameters; a flow-setpoint sensitivity would
             need the per-call map (not wired here).
+        operating : sequence of dict, optional
+            Operating-parameter sensitivities computed alongside ``wrt``, each a
+            differentiable multiplicative scale on an influent (nominal 1.0, so
+            the sensitivity is ``d output / d(scale)`` at the recorded influent).
+            Each spec is ``{"kind": "influent_flow", "port": p}`` (scale that
+            influent's flow) or ``{"kind": "influent_concentration", "port": p,
+            "species": s}`` (scale that species' load). They append columns to
+            ``S`` after the ``wrt`` columns, in order. Exact through the
+            variational solve -- the cached recycle/flow maps are
+            influent-independent, so no term is dropped (unlike a flow setpoint).
         t_span : tuple of float
             ``(t0, t1)`` integration interval (plant time units).
         t_eval : jnp.ndarray, optional
@@ -5626,7 +5651,7 @@ class Plant:
         y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
         free_idx = jnp.asarray(
             [self.parameter_index(w) if isinstance(w, str) else int(w)
-             for w in wrt])
+             for w in wrt], dtype=int)   # int even when wrt is empty (operating-only)
         t0, t1 = float(t_span[0]), float(t_span[1])
         t0a = jnp.asarray(t0)
 
@@ -5645,16 +5670,71 @@ class Plant:
         rmap = self._maybe_recycle_map(t0a, states0, params_full)
         fmap = self._maybe_flow_map(t0a, states0, params_full)
 
-        def f_flat(t, y, p):
-            return self._rhs(t, y, p, recycle_map=rmap, flow_map=fmap)
+        # Operating-parameter sensitivity: alongside the kinetic ``wrt`` params,
+        # differentiate w.r.t. multiplicative scales on the influent (a
+        # differentiable operating input, nominal 1.0). Each spec appends one
+        # scalar column to the augmented parameter vector, threaded into the RHS
+        # through the ``design`` influent override -- the same path the
+        # steady-state IFT uses -- so the cached recycle/flow maps, which are
+        # influent-independent, stay exact. Supported specs:
+        #   {"kind": "influent_flow", "port": p}            -> scale that influent Q
+        #   {"kind": "influent_concentration", "port": p, "species": s}
+        #                                                   -> scale that load
+        n_params = int(params_full.shape[0])
+        op_meta = []
+        for spec in (operating or []):
+            port = spec["port"]
+            if port not in self.influents:
+                raise KeyError(
+                    f"operating influent port {port!r} is not an influent of "
+                    f"this plant; have {sorted(self.influents)}.")
+            net = self.influents[port].network
+            kind = spec.get("kind")
+            if kind == "influent_flow":
+                op_meta.append((port, True, -1, int(net.n_species)))
+            elif kind == "influent_concentration":
+                sp = spec["species"]
+                if sp not in net.species_index:
+                    raise KeyError(
+                        f"operating species {sp!r} is not in the influent "
+                        f"network for port {port!r}.")
+                op_meta.append(
+                    (port, False, int(net.species_index[sp]), int(net.n_species)))
+            else:
+                raise ValueError(
+                    f"operating spec 'kind' must be 'influent_flow' or "
+                    f"'influent_concentration'; got {kind!r}.")
+        n_op = len(op_meta)
+
+        if n_op:
+            theta_aug = jnp.concatenate([params_full, jnp.ones(n_op)])
+            free_aug = jnp.concatenate([free_idx, n_params + jnp.arange(n_op)])
+        else:
+            theta_aug, free_aug = params_full, free_idx
+
+        def _operating_design(op_vals):
+            influent: dict = {}
+            for k, (port, is_flow, sp_idx, nsp) in enumerate(op_meta):
+                d = influent.setdefault(port, {})
+                if is_flow:
+                    d["Q_scale"] = op_vals[k]
+                else:
+                    cs = d.get("C_scale", jnp.ones(nsp))
+                    d["C_scale"] = cs.at[sp_idx].set(op_vals[k])
+            return {"influent": influent}
+
+        def f_flat(t, y, theta):
+            design = _operating_design(theta[n_params:]) if n_op else None
+            return self._rhs(t, y, theta[:n_params], recycle_map=rmap,
+                             flow_map=fmap, design=design)
 
         atol_arr = default_atol(y0) if atol is None else jnp.asarray(atol)
         te = None if t_eval is None else jnp.asarray(t_eval)
         return augmented_forward_sensitivity(
-            f_flat, y0, params_full, free_idx,
+            f_flat, y0, theta_aug, free_aug,
             t0=t0, t1=t1, t_eval=te, rtol=rtol, atol_y=atol_arr,
             sens_rtol=sens_rtol, dtmax=dtmax, max_steps=max_steps,
-            shared_factor=int(free_idx.shape[0]) > 1,
+            shared_factor=int(free_aug.shape[0]) > 1,
             order=3, factormax=factormax,
         )
 

@@ -1049,6 +1049,25 @@ Jacobian) or the steady-state IFT (which already factors `∂F/∂y` once and re
 it across parameters). `build_implicit_solver` gained a `linear_solver=` slot to
 inject the corrector into the decoupled root finder. Validated in
 `tests/integration/test_dynamic_sensitivity.py::test_solve_sensitivity_matches_jacfwd`.
+**Operating-parameter sensitivity (`operating=`).** Beyond the kinetic `wrt`
+parameters, `solve_sensitivity(operating=[...])` differentiates the dynamic output
+w.r.t. **operating conditions** — a differentiable multiplicative scale (nominal
+`1.0`) on an influent's flow (`{"kind": "influent_flow", "port": p}`) or on a
+species' load (`{"kind": "influent_concentration", "port": p, "species": s}`). Each
+appends one column to `S` after the `wrt` columns. They thread into the augmented
+RHS through the influent `design=` override (the same path the steady-state IFT
+uses — extended from an absolute replacement to also accept `Q_scale`/`C_scale`
+multipliers on the time-sampled series), so the variational `[y; S]` solve
+differentiates them **exactly**: the cached recycle/flow maps are
+influent-independent, so (unlike a flow setpoint) no term is dropped. This lets a
+forward sensitivity screen include the **boundary-condition drivers** (the influent
+load/flow) alongside the kinetic parameters — e.g. resolving that a permit-relevant
+effluent *peak* is governed by the influent load and the oxygen system rather than
+the kinetic rates, which a kinetic-parameter-only screen cannot show. Matches
+finite differences in
+`test_dynamic_sensitivity.py::test_solve_sensitivity_operating_influent_matches_fd`.
+(Unit-level setpoints such as `kLa` are a follow-up — they are baked into
+precomputed aeration vectors with no per-RHS `design` hook.)
 
 **`shared_factor` — dense (Option B) vs simultaneous corrector (Option A).**
 The per-step implicit solve has two implementations, selected by

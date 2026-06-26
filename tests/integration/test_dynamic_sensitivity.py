@@ -119,6 +119,50 @@ def test_solve_sensitivity_matches_jacfwd():
 
 @pytest.mark.slow
 @pytest.mark.heavy
+def test_solve_sensitivity_operating_influent_matches_fd():
+    """solve_sensitivity differentiates OPERATING parameters -- a multiplicative
+    scale on the influent flow and on a species' load -- through the same augmented
+    [y;S] solve, matching finite differences. These are operating conditions, not
+    kinetic parameters, so they reach the sensitivity only through the influent
+    design override; the variational solve gains them over a parameter-only screen.
+    """
+    from aquakin.plant.bsm import build_bsm1
+    from aquakin.plant.influent import InfluentSeries
+    p, asm1, y0 = _bsm1()
+    base = p.default_parameters()
+    T = 0.5
+    te = jnp.array([T])
+    op = [{"kind": "influent_concentration", "port": "feed", "species": "SNH"},
+          {"kind": "influent_flow", "port": "feed"}]
+    ts, ys, S = p.solve_sensitivity(base, [], operating=op, t_span=(0.0, T),
+                                    t_eval=te, y0=y0, max_steps=_MAX_STEPS)
+    S = np.asarray(S)
+    assert S.shape == (1, y0.shape[0], 2) and np.all(np.isfinite(S))
+    p._build_state_layout()
+    s0, _ = p._state_layout["tank5"]
+    out = s0 + asm1.species_index["SNO"]
+    sv = S[-1, out, :]                        # d(tank5 SNO @T)/d[nh_scale, q_scale]
+    yb = float(np.asarray(ys)[-1, out])       # unscaled output = the variational primal
+
+    infl = p.influents["feed"]
+    eps = 1e-3
+
+    def fd(snh=1.0, q=1.0):                    # re-solve at a scaled influent
+        c = np.asarray(infl.C).copy()
+        c[:, asm1.species_index["SNH"]] *= snh
+        i2 = InfluentSeries(t=infl.t, Q=infl.Q * q, C=jnp.asarray(c),
+                            network=asm1, T=infl.T)
+        p2 = build_bsm1()
+        p2.add_influent("feed", i2)
+        return float(p2.solve((0.0, T), t_eval=te, params=base, y0=y0,
+                              max_steps=_MAX_STEPS).C_named("tank5", "SNO")[-1])
+
+    assert sv[0] == pytest.approx((fd(snh=1 + eps) - yb) / eps, rel=5e-3)
+    assert sv[1] == pytest.approx((fd(q=1 + eps) - yb) / eps, rel=5e-3)
+
+
+@pytest.mark.slow
+@pytest.mark.heavy
 def test_dynamic_dgsm_matches_dgsm():
     """plant.dynamic_dgsm screens a transient output globally by reusing
     dynamic_sensitivity per sample. With the same Sobol seed it gives the same
