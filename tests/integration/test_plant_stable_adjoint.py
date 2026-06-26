@@ -287,8 +287,7 @@ def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     assert grad_cached == pytest.approx(grad_probed, rel=1e-9)
 
 
-@pytest.mark.validation
-@pytest.mark.heavy
+@pytest.mark.slow
 def test_stable_adjoint_colored_jacobian_matches_dense():
     """``colored_jacobian=True`` colors the per-step ``df/dy`` Jacobian build in
     the stable_adjoint **backward** pass (its dominant cost for a large plant).
@@ -328,9 +327,8 @@ def test_stable_adjoint_colored_jacobian_matches_dense():
     assert g_colored == pytest.approx(g_dense, rel=1e-8)
 
 
-@pytest.mark.validation
-@pytest.mark.heavy
-def test_stable_adjoint_colored_jacobian_auto_off_for_small_plant():
+@pytest.mark.slow
+def test_stable_adjoint_colored_jacobian_auto_decision_is_consistent():
     """``colored_jacobian="auto"`` (the default) measures the colored vs dense
     build time and enables coloring only when it pays. The decision is a wall-clock
     measurement (``ratio = t_dense/t_colored`` against the margin), so on a
@@ -557,8 +555,7 @@ def test_stable_adjoint_forward_solve_is_cached():
     assert len(_sa_keys()) == n_before
 
 
-@pytest.mark.validation
-@pytest.mark.heavy
+@pytest.mark.slow
 def test_stable_adjoint_colored_jacobian_flow_setpoint_matches_dense():
     """The intersection of the two backward features: ``colored_jacobian`` AND a
     FLOW-SETPOINT parameter (the RAS recycle flow). The primal/``rhs`` split puts
