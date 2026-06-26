@@ -482,6 +482,48 @@ def test_steady_state_dgsm_matches_dgsm():
     assert float(se[-1, 0, j]) < float(se[0, 0, j])     # std error shrinks with N
 
 
+def test_steady_state_dgsm_normal_input():
+    """The Gaussian-prior input path (``input_dist="normal"``) samples each
+    parameter in its calibration-transform space (log-normal for a rate) and
+    bounds the Sobol index with the sigma^2 Poincare constant in place of the
+    uniform (b-a)^2/pi^2. It runs end-to-end, records the per-parameter Poincare
+    constant on the result, and convergence() re-aggregates on it consistently."""
+    plant, asm1, y0 = _bsm1()
+    base = plant.default_parameters()
+    si = asm1.species_index
+    screen = ["asm1.muH", "asm1.muA", "asm1.bA"]
+    idx = [plant.parameter_index(s) for s in screen]
+    val = np.array([float(base[i]) for i in idx])
+    ranges = np.array([[v * 0.7, v * 1.4] for v in val])     # read as a +-2sigma band
+    transforms = [asm1.parameter_transforms.get(s.split(".")[1], "none")
+                  for s in screen]
+
+    def out_fn(y):
+        return jnp.array([plant.states_by_unit(y)["tank5"][si["SNO"]]])
+
+    res = plant.steady_state_dgsm(
+        ranges, output_fn=out_fn, output_names=["SNO"], wrt=screen,
+        n_samples=16, seed=0, y0=y0,
+        input_dist="normal", input_transforms=transforms)
+    assert res.poincare is not None and res.poincare.shape == (3,)
+    # the band [lo,hi] is +-2sigma in transform space => sigma_z = (t(hi)-t(lo))/4,
+    # so for a positive_log rate the Poincare constant is (log(1.4/0.7)/4)^2.
+    expected = (np.log(1.4 / 0.7) / 4.0) ** 2
+    assert np.allclose(np.asarray(res.poincare), expected, rtol=1e-6)
+    assert np.all(np.isfinite(np.asarray(res.sobol_total_bound)))
+
+    # convergence() recomputes the bound from the retained per-sample data using
+    # the SAME Poincare constant, so its last prefix matches the headline bound.
+    counts, bound, se = res.convergence()
+    assert np.allclose(np.asarray(bound[-1]),
+                       np.asarray(res.sobol_total_bound), rtol=1e-6, equal_nan=True)
+
+    # input_dist="normal" requires transforms aligned with the screened parameters
+    with pytest.raises(ValueError):
+        plant.steady_state_dgsm(ranges, output_fn=out_fn, wrt=screen,
+                                n_samples=8, seed=0, y0=y0, input_dist="normal")
+
+
 def test_dgsm_cond_filter_and_with_cond_factor():
     """The near-singular-Jacobian filter (the heavy-tail robustification) drops the
     samples it should and re-aggregation reuses the retained per-sample data. Fast

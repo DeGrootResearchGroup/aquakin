@@ -440,7 +440,7 @@ class SteadyStateResult:
     operating_point_exists: Optional[bool] = None
 
 
-def _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=None):
+def _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=None, poincare=None):
     """Sobol total-index bound from per-sample squared sensitivities, robustly.
 
     Drops, **per output**, any sample with a non-finite output or sensitivity --
@@ -482,9 +482,14 @@ def _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=None):
         nu[i] = g.mean(axis=0)
         se[i] = g.std(axis=0) / np.sqrt(int(v.sum()))
         var[i] = outputs[v, i].var()
+    # Poincare constant of the input measure: uniform default ``(b_j-a_j)^2/pi^2``;
+    # for a Gaussian-distributed input the bound instead carries ``poincare_j =
+    # std_j^2`` (Sobol & Kucherenko 2010, Sec. 8; Lamboni et al. 2013, Thm 3.1),
+    # passed in directly. ``bound = nu * C_j / Var(g)`` either way.
+    const = (np.asarray(poincare)[None, :] if poincare is not None
+             else rng2[None, :] / (np.pi ** 2))
     with np.errstate(divide="ignore", invalid="ignore"):
-        scale = np.where((var > 0)[:, None],
-                         rng2[None, :] / (np.pi ** 2 * var[:, None]), np.nan)
+        scale = np.where((var > 0)[:, None], const / var[:, None], np.nan)
     return nu * scale, se * scale, nu, var, n_valid
 
 
@@ -507,6 +512,40 @@ def _cond_mask(cond, cond_factor):
         return finite
     med = np.median(cond[finite]) if finite.any() else np.inf
     return finite & (cond <= cond_factor * med)
+
+
+def _to_z(theta, kind):
+    """Physical parameter -> calibration-transform space (where a prior is normal).
+
+    ``positive_log`` -> natural log, ``logit`` -> log-odds, ``none`` -> identity.
+    """
+    import numpy as np
+    if kind == "positive_log":
+        return np.log(theta)
+    if kind == "logit":
+        return np.log(theta / (1.0 - theta))
+    return theta
+
+
+def _from_z(z, kind):
+    """Inverse of :func:`_to_z`: transform-space variable -> physical parameter."""
+    import numpy as np
+    if kind == "positive_log":
+        return np.exp(z)
+    if kind == "logit":
+        return 1.0 / (1.0 + np.exp(-z))
+    return z
+
+
+def _dtheta_dz(theta, kind):
+    """``d(physical)/d(transform)`` at ``theta`` -- the DGSM chain-rule factor that
+    converts a physical sensitivity ``dg/dtheta`` to the transform-space
+    ``dg/dz`` in which the input is Gaussian."""
+    if kind == "positive_log":
+        return theta
+    if kind == "logit":
+        return theta * (1.0 - theta)
+    return 1.0  # none
 
 
 @dataclass
@@ -601,6 +640,13 @@ class SteadyStateDGSMResult:
     # physical, fold-based exclusion criterion. ``None`` on results built before
     # this was recorded.
     operating_point_exists: Optional[list] = None
+    # Per-parameter Poincare constant of the input measure, shape ``(k,)``. When
+    # set (Gaussian/prior input sampling, ``input_dist="normal"``) the bound is
+    # ``nu_ij * poincare_j / Var(g_i)`` with ``poincare_j = sigma_zj^2`` the
+    # transform-space prior variance; ``None`` is the uniform default, where the
+    # bound uses ``(b_j-a_j)^2/pi^2`` from ``ranges``. Consumed by ``convergence``
+    # and ``with_cond_factor`` so they re-aggregate on the correct constant.
+    poincare: Optional[jnp.ndarray] = None
 
     def ranked(self, output=0):
         """``[(input_name, bound)]`` for one output, sorted by decreasing bound.
@@ -640,6 +686,7 @@ class SteadyStateDGSMResult:
             if not counts or counts[-1] != n:
                 counts.append(n)
         rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)   # (k,)
+        pc = None if self.poincare is None else np.asarray(self.poincare)  # (k,)
         gs = np.asarray(self.grad_sq)                                     # (N, m, k)
         ov = np.asarray(self.outputs)                                     # (N, m)
         cond = np.asarray(self.cond)                                      # (N,)
@@ -650,7 +697,8 @@ class SteadyStateDGSMResult:
         b_list, se_list = [], []
         for k in counts:
             mask = _cond_mask(cond[:k], self.cond_factor) & op[:k]
-            bound, se, *_ = _dgsm_aggregate(gs[:k], ov[:k], rng2, sample_mask=mask)
+            bound, se, *_ = _dgsm_aggregate(gs[:k], ov[:k], rng2,
+                                            sample_mask=mask, poincare=pc)
             b_list.append(bound)
             se_list.append(se)
         return (jnp.asarray(counts), jnp.asarray(np.stack(b_list)),
@@ -672,9 +720,10 @@ class SteadyStateDGSMResult:
               if self.operating_point_exists is not None
               else np.ones(len(self.cond), dtype=bool))           # past-fold excl.
         mask = _cond_mask(np.asarray(self.cond), cond_factor) & op
+        pc = None if self.poincare is None else np.asarray(self.poincare)
         bound, se, nu, var, n_valid = _dgsm_aggregate(
             np.asarray(self.grad_sq), np.asarray(self.outputs), rng2,
-            sample_mask=mask)
+            sample_mask=mask, poincare=pc)
         return replace(
             self, sobol_total_bound=jnp.asarray(bound), std_error=jnp.asarray(se),
             nu=jnp.asarray(nu), output_variance=jnp.asarray(var),
@@ -699,7 +748,7 @@ def _dynamic_value_and_jacobian(f, x, mode):
     return g, S
 
 
-def _dynamic_dgsm_bounds(grad_sq, outputs, rng2):
+def _dynamic_dgsm_bounds(grad_sq, outputs, rng2, poincare=None):
     """Sobol total-index bound from per-sample squared sensitivities of a transient
     output, dropping (per output) any non-finite sample. The dynamic analogue of
     the steady-state aggregation; there is no Jacobian-conditioning filter because
@@ -723,9 +772,14 @@ def _dynamic_dgsm_bounds(grad_sq, outputs, rng2):
         nu[i] = g.mean(axis=0)
         se[i] = g.std(axis=0) / np.sqrt(int(v.sum()))
         var[i] = outputs[v, i].var()
+    # Poincare constant of the input measure: uniform default ``(b_j-a_j)^2/pi^2``;
+    # for a Gaussian-distributed input the bound instead carries ``poincare_j =
+    # std_j^2`` (Sobol & Kucherenko 2010, Sec. 8; Lamboni et al. 2013, Thm 3.1),
+    # passed in directly. ``bound = nu * C_j / Var(g)`` either way.
+    const = (np.asarray(poincare)[None, :] if poincare is not None
+             else rng2[None, :] / (np.pi ** 2))
     with np.errstate(divide="ignore", invalid="ignore"):
-        scale = np.where((var > 0)[:, None],
-                         rng2[None, :] / (np.pi ** 2 * var[:, None]), np.nan)
+        scale = np.where((var > 0)[:, None], const / var[:, None], np.nan)
     return nu * scale, se * scale, nu, var, n_valid
 
 
@@ -5386,6 +5440,8 @@ class Plant:
         seed: int = 0,
         mode: str = "auto",
         cond_factor: Optional[float] = None,
+        input_dist: str = "uniform",
+        input_transforms: Optional[Sequence[str]] = None,
         continuation: bool = True,
         progress: Optional[int] = None,
         **steady_kwargs,
@@ -5407,7 +5463,12 @@ class Plant:
         ----------
         ranges : array-like, shape ``(k, 2)``
             ``[a_j, b_j]`` sampling range for each screened parameter, aligned with
-            ``wrt``. Inputs are sampled uniformly within.
+            ``wrt``. For ``input_dist="uniform"`` (default) inputs are sampled
+            uniformly within. For ``input_dist="normal"`` the range is read as the
+            ``+/-2 sigma`` band of the input's prior *in its calibration-transform
+            space*, i.e. ``[a_j, b_j] = [t^{-1}(m_j - 2 sigma_j), t^{-1}(m_j +
+            2 sigma_j)]``, so ``m_j = t(nominal_j)`` and ``sigma_j = (t(b_j) -
+            t(a_j))/4`` with ``t`` the parameter's transform.
         output_fn : callable
             Maps the flat plant state to a length-``m`` vector of scalar outputs.
         output_names : sequence of str, optional
@@ -5434,6 +5495,23 @@ class Plant:
             (default) keeps every sample (then the bounds match :func:`~aquakin.dgsm`
             exactly). A value around ``1e2`` removes the marginal-stability outliers
             of a stiff plant; the dropped count is reported in ``n_valid``.
+        input_dist : {"uniform", "normal"}, optional
+            Input sampling distribution. ``"uniform"`` (default) draws uniformly
+            over ``ranges`` and bounds the Sobol total index with the uniform
+            Poincare constant ``(b_j-a_j)^2/pi^2``. ``"normal"`` draws each input
+            from its Gaussian prior in the calibration-transform space (a
+            log-normal for a positive rate, logit-normal for a fraction), reads the
+            sensitivity in that space (chain-ruling ``dg/dz = (dg/dtheta)
+            (dtheta/dz)``), and uses the Gaussian Poincare constant ``sigma_j^2`` --
+            the established generalization of the DGSM bound to non-uniform inputs
+            (Sobol & Kucherenko 2010, Sec. 8; Lamboni et al. 2013, Thm 3.1). It
+            samples the prior we believe rather than a box, so an improbable
+            corner is weighted by its prior density. Requires ``input_transforms``.
+        input_transforms : sequence of str, optional
+            Required for ``input_dist="normal"``: the calibration transform of each
+            screened parameter (``"positive_log"`` / ``"logit"`` / ``"none"``),
+            aligned with ``wrt`` -- the space in which its prior is Gaussian.
+            Ignored for ``"uniform"``.
         progress : int, optional
             If set, print a progress line every ``progress`` samples.
         **steady_kwargs
@@ -5485,7 +5563,33 @@ class Plant:
                 return_jacobian=True)                                # (m, k), (n, n)
             return jnp.atleast_1d(output_fn(ss)), S, jnp.linalg.cond(J_y)
 
-        Z, n_drawn = _sobol_sample(lo, hi, k, n_samples, seed)
+        if input_dist == "normal":
+            from ..integrate.sensitivity import _sobol_normal_sample
+            if input_transforms is None or len(input_transforms) != k:
+                raise ValueError(
+                    "input_dist='normal' requires input_transforms aligned with "
+                    f"the {k} screened parameters (got "
+                    f"{None if input_transforms is None else len(input_transforms)}).")
+            nominal = np.asarray(base[wrt_j])
+            lo_np, hi_np = np.asarray(lo), np.asarray(hi)
+            # The +/-2 sigma band [lo, hi] is read in the calibration-transform
+            # space (where the prior is Gaussian): mean = transform(nominal), and
+            # the band spans +/-2 sigma there, so sigma_z = (t(hi) - t(lo)) / 4.
+            m_z = np.array([_to_z(nominal[j], input_transforms[j])
+                            for j in range(k)])
+            s_z = np.array([(_to_z(hi_np[j], input_transforms[j])
+                             - _to_z(lo_np[j], input_transforms[j])) / 4.0
+                            for j in range(k)])
+            Zz, n_drawn = _sobol_normal_sample(m_z, s_z, k, n_samples, seed)
+            Z = np.column_stack([_from_z(Zz[:, j], input_transforms[j])
+                                 for j in range(k)])          # physical samples
+            poincare_const = s_z ** 2                         # Gaussian Poincare C_j
+        elif input_dist == "uniform":
+            Z, n_drawn = _sobol_sample(lo, hi, k, n_samples, seed)
+            poincare_const = None
+        else:
+            raise ValueError(
+                f"input_dist must be 'uniform' or 'normal', got {input_dist!r}.")
         outs, grads, conds, resids, smethods, sconv, sexist = (
             [], [], [], [], [], [], [])
         for i in range(n_drawn):
@@ -5493,8 +5597,16 @@ class Plant:
             ssr = self.steady_state(
                 p, y0=y0, continuation_from=known, **steady_kwargs)
             o, S, c = _sens_at(p, ssr.state)
+            S = np.asarray(S)
+            if input_dist == "normal":
+                # Chain rule dg/dz = (dg/dtheta) * (dtheta/dz): express the
+                # sensitivity in the transform space where the input is Gaussian,
+                # so the DGSM and its Poincare constant are consistent.
+                mult = np.array([_dtheta_dz(float(Z[i, j]), input_transforms[j])
+                                 for j in range(k)])
+                S = S * mult[None, :]
             outs.append(np.asarray(o))
-            grads.append(np.asarray(S))
+            grads.append(S)
             conds.append(float(c))
             resids.append(float(ssr.residual)
                           if ssr.residual is not None else float("nan"))
@@ -5521,7 +5633,8 @@ class Plant:
         # plus the past-fold (non-operating) samples.
         sample_mask = _cond_mask(cond, cond_factor) & operating_mask
         bound, std_error, nu, var, n_valid = _dgsm_aggregate(
-            grad_sq, outputs, rng2, sample_mask=sample_mask)
+            grad_sq, outputs, rng2, sample_mask=sample_mask,
+            poincare=poincare_const)
 
         names = self.parameter_names()
         input_names = [names[i] for i in wrt_idx]
@@ -5537,7 +5650,9 @@ class Plant:
             n_valid=jnp.asarray(n_valid), cond=jnp.asarray(cond),
             cond_factor=cond_factor, residual=jnp.asarray(residual),
             solve_method=smethods, converged=jnp.asarray(sconv),
-            operating_point_exists=sexist)
+            operating_point_exists=sexist,
+            poincare=(None if poincare_const is None
+                      else jnp.asarray(poincare_const)))
 
     def solve_sensitivity(
         self,
