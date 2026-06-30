@@ -57,9 +57,17 @@ Key types:
 - `StateTranslator` Protocol — converts streams between networks.
   `IdentityTranslator` covers single-network plants (BSM1).
 - `Plant` — assembles units and connections, drives the monolithic
-  integration. Recycles are resolved **exactly and gain-independently** per RHS,
-  in two decoupled steps that both use the same affine-probe + linear-solve trick
-  (no iterate-to-tolerance — the RHS is jitted/differentiated):
+  integration. **Recycle resolution** — the methods named below (`_resolve_flows`,
+  `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
+  `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)
+  and the tri-state map-constant caches — lives in a
+  [`RecycleResolver`](aquakin/plant/recycle.py) collaborator
+  (`plant._recycle`), which keeps a back-reference to its `Plant` for the
+  topology, state layout, signal bus and output sweep. The flowsheet drives it
+  from its RHS / solve paths. Recycles are resolved **exactly and
+  gain-independently** per RHS, in two decoupled steps that both use the same
+  affine-probe + linear-solve trick (no iterate-to-tolerance — the RHS is
+  jitted/differentiated):
   - **Flows** — `_resolve_flows` probes the (affine) recycle-flow map and solves
     `(I − A)x = b` for the back-edge flows.
   - **Concentrations** — `_resolve_recycle_concentrations` does the same for the
@@ -103,7 +111,7 @@ Key types:
     ([`core/ph_solver.py`](aquakin/core/ph_solver.py)): the recycle back-edge
     **streams** — flow `Q`, concentration `C`, and (when carried) temperature `T`
     — are the fixed point `x = G(x)` of one forward output sweep
-    (`Plant._recycle_context`'s `forward_full`, which lets `Q` vary so the true
+    (`RecycleResolver._recycle_context`'s `forward_full`, which lets `Q` vary so the true
     `Q↔C` reject-loop coupling is captured; iterating `C` alone solves the wrong
     problem), warm-started from the exact affine seed and iterated by a
     `jax.lax.while_loop` that **stops once the actual residual clears** (capped at
@@ -113,7 +121,7 @@ Key types:
     ~tens of channels), the vector generalisation of the pH solver's scalar
     `y / g(1)`. AD (forward and reverse) is therefore **O(1) in the iteration
     count** rather than differentiating through every sweep
-    (`Plant._adaptive_recycle_refine`). It converges for any `rho < 1`, stops
+    (`RecycleResolver._adaptive_recycle_refine`). It converges for any `rho < 1`, stops
     early on a low-gain plant, and is **on by default** at `1e-8` (well below the
     typical solver `rtol`, a strict improvement on the old fixed-3-pass ~1e-6 at
     ~neutral cost — ~3 iterations from the affine seed for BSM); `recycle_tol=None`
