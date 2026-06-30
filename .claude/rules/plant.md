@@ -57,14 +57,20 @@ Key types:
 - `StateTranslator` Protocol — converts streams between networks.
   `IdentityTranslator` covers single-network plants (BSM1).
 - `Plant` — assembles units and connections, drives the monolithic
-  integration. **Recycle resolution** — the methods named below (`_resolve_flows`,
+  integration. Its **sensitivity / uncertainty-quantification surface** —
+  `steady_state_sensitivity` / `steady_state_dgsm` / `solve_sensitivity` /
+  `dynamic_sensitivity` / `dynamic_dgsm` and their result dataclasses — lives in
+  [`plant/sensitivity.py`](aquakin/plant/sensitivity.py) as free functions taking
+  the plant, bound onto `Plant` as methods (the public `plant.steady_state_dgsm(...)`
+  API is unchanged); that layer only *consumes* the public solve API.
+  **Recycle resolution** — the methods named below (`_resolve_flows`,
   `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
   `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)
   and the tri-state map-constant caches — lives in a
   [`RecycleResolver`](aquakin/plant/recycle.py) collaborator
   (`plant._recycle`), which keeps a back-reference to its `Plant` for the
-  topology, state layout, signal bus and output sweep. The flowsheet drives it
-  from its RHS / solve paths. Recycles are resolved **exactly and
+  topology, state layout, signal bus and output sweep. Both layers are kept out of
+  the assembly code below. Recycles are resolved **exactly and
   gain-independently** per RHS, in two decoupled steps that both use the same
   affine-probe + linear-solve trick (no iterate-to-tolerance — the RHS is
   jitted/differentiated):
