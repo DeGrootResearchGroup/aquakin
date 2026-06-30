@@ -1006,7 +1006,10 @@ referenced corrections) for the faithful match. The default `T=None` keeps the
 historic temperature-agnostic behaviour (reactors fall back to their static 15 °C
 condition); do **not** pass `T` with the plain 20 °C `load_network("asm1")` — a
 14.858 °C inlet on a 20 °C-referenced network applies a large spurious slowdown
-(~40% on nitrification). aquakin carries the reactor temperature *algebraically*
+(~40% on nitrification). `bsm2_constant_influent` guards this footgun: a `T`
+more than `BSM2_INFLUENT_REF_T_TOL` (1 K) from the network's Arrhenius `ref_T`
+warns, naming both values (the benchmark pairing is 0.14 K, well inside; the
+20 °C-network mismatch is ~5 K, caught). aquakin carries the reactor temperature *algebraically*
 (the flow-weighted inlet each RHS, resolved with the recycle solve), not as a
 BSM2-style heat-balance state `dT/dt=(Q/V)(T_in−T)`; the two agree at steady
 state (both give T=T_in) and differ only by the (sub-hour) thermal lag in
