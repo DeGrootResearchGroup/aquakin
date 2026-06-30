@@ -74,13 +74,11 @@ the dominant cost; the per-step Jacobian factorization is only ~8% (so block /
 sparse factorization is not worth it at this scale -- it loses to XLA's dense LU).
 """
 
-from functools import partial
 from typing import Callable
 
 import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jsla
-
 
 # --- Kvaerno3 tableau (Kvaerno 2004; coefficients as in diffrax) -------------
 _G = 0.43586652150

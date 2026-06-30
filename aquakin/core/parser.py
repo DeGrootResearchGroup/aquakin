@@ -32,8 +32,8 @@ from aquakin.core.nodes import (
     ConditionNode,
     ConstantNode,
     DivideNode,
-    MonodInhibitionNode,
     MaxNode,
+    MonodInhibitionNode,
     MonodInhibitionRatioNode,
     MonodNode,
     MonodRatioNode,
@@ -47,7 +47,6 @@ from aquakin.core.nodes import (
     pHInhibitNode,
     pHSwitchNode,
 )
-
 
 # Built-in domain functions: name -> (node class, argument names). The arity is
 # ``len(arg_names)``. This single registry drives both ``_make_function_call``

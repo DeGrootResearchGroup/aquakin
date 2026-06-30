@@ -167,7 +167,8 @@ def augmented_forward_sensitivity(
         Maximum solver steps.
     shared_factor : bool, optional
         If ``True``, solve each stiff Newton step with the CVODES
-        simultaneous-corrector (:class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`):
+        simultaneous-corrector
+        (:class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`):
         factorise the shared diagonal block ``D = I - gamma.dt.J`` once and
         forward-substitute across the ``S`` columns, instead of factorising the
         full ``n(1+k)`` augmented system. Exact (the Newton step is identical to
@@ -240,8 +241,7 @@ def augmented_forward_sensitivity(
     # the forward / discrete-adjoint paths use and cannot drift from them. ``order``
     # selects the ESDIRK (5 for the reactors, 3 for the stiff plant); the block-arrow
     # SimultaneousCorrector is the per-stage linear solver when shared_factor.
-    from aquakin.integrate._common import (build_implicit_solver,
-                                           build_step_controller)
+    from aquakin.integrate._common import build_implicit_solver, build_step_controller
 
     solver = build_implicit_solver(rtol, atol_aug, order=order, linear_solver=sc)
     controller = build_step_controller(rtol_aug, atol_aug,

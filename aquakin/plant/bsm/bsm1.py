@@ -127,7 +127,6 @@ def build_bsm1(
     for i in range(5):
         aeration = (Aeration(kla=BSM1_KLA[i], do_sat=BSM1_DO_SATURATION)
                     if BSM1_KLA[i] > 0 else None)
-        upstream = "inlet_mix" if i == 0 else f"tank{i}"
         plant.add_unit(
             CSTRUnit(
                 name=f"tank{i + 1}",

@@ -257,7 +257,6 @@ def build_a2o(
 
     # ----- Anaerobic selector (no aeration) -----
     for i, vol in enumerate(A2O_ANAEROBIC_VOLUMES):
-        upstream = "front_mix" if i == 0 else f"anaer{i}"
         plant.add_unit(
             CSTRUnit(
                 name=f"anaer{i + 1}",

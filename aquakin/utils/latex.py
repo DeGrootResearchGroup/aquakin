@@ -6,8 +6,8 @@ from aquakin.core.nodes import (
     AddNode,
     ArrheniusNode,
     ASTNode,
-    ConstantNode,
     ConditionNode,
+    ConstantNode,
     DivideNode,
     MaxNode,
     MonodInhibitionNode,
@@ -24,7 +24,6 @@ from aquakin.core.nodes import (
     pHInhibitNode,
     pHSwitchNode,
 )
-
 
 # LaTeX text-mode special characters that must be escaped when a species or
 # condition name is rendered literally (e.g. the underscore in ``S_NO``, which

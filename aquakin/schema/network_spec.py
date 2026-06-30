@@ -328,8 +328,10 @@ class PositivityLimiterSpec(BaseModel):
 
 # Single source of truth lives in core/precipitation.py (the runtime consumer).
 from aquakin.core.precipitation import (
-    VALID_PRECIP_FRACTIONS as _VALID_PRECIP_FRACTIONS,
     _PH_SPECIALS as _PRECIP_PH_SPECIALS,
+)
+from aquakin.core.precipitation import (
+    VALID_PRECIP_FRACTIONS as _VALID_PRECIP_FRACTIONS,
 )
 
 

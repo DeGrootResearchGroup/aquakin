@@ -29,6 +29,7 @@ Run from this directory (needs ruamel.yaml):  python _make_khalil_paper.py
 from __future__ import annotations
 
 import os
+
 from ruamel.yaml import YAML
 
 HERE = os.path.dirname(os.path.abspath(__file__))

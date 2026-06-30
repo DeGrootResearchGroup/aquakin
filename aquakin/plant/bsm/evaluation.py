@@ -30,10 +30,10 @@ from typing import Optional
 import jax
 import jax.numpy as jnp
 
+from aquakin.plant.aeration_system import blower_airflow_total, blower_energy
 from aquakin.plant.metrics import (
-    _composition,
     _EQI_WEIGHTS,
-    _time_average as _metrics_time_average,
+    _composition,
     aeration_energy,
     carbon_mass,
     derived_BOD,
@@ -47,7 +47,9 @@ from aquakin.plant.metrics import (
     pumping_energy,
     pumping_energy_bsm2,
 )
-from aquakin.plant.aeration_system import blower_airflow_total, blower_energy
+from aquakin.plant.metrics import (
+    _time_average as _metrics_time_average,
+)
 
 # Default BSM1 port names (as wired by build_bsm1).
 _BSM1_EFFLUENT_PORT = "clarifier.overflow"
@@ -832,8 +834,6 @@ def direct_n2o_emission(
     """
     from aquakin.plant.ghg import stripped_n2o
 
-    params_full = (plant.default_parameters() if params is None
-                   else jnp.asarray(params))
     reactors = _as_reactors(plant)
     # Reactors whose network resolves the dissolved N₂O state.
     n2o_reactors = [n for n in reactors

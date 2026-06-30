@@ -45,15 +45,15 @@ from typing import Optional
 import jax.numpy as jnp
 
 from aquakin.plant.cstr import Aeration, CSTRUnit
-from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.digester import ADM1DigesterUnit
+from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import Plant
-from aquakin.plant.streams import Stream
 from aquakin.plant.primary_clarifier import PrimaryClarifier
 from aquakin.plant.separators import IdealThickener
+from aquakin.plant.streams import Stream
 from aquakin.plant.takacs import TakacsClarifier
 
 # Reference BSM2 design values (Gernaey et al. 2014; asm1init/adm1init).
@@ -100,7 +100,7 @@ BSM2_AS_TEMPERATURE_K = 288.15  # K (15 °C) -- the BSM2 ASM1 reference temperat
 # corrections apply a small slowdown -- omitting it runs the line ~0.14 °C warm
 # and over-predicts nitrification by ~1.4 %, the difference between the bare
 # 15 °C rates and the benchmark steady state.
-BSM2_CONSTANT_INFLUENT_T = 288.00808  # K (14.85808 °C): the benchmark steady-state influent temperature
+BSM2_CONSTANT_INFLUENT_T = 288.00808  # K (14.85808 °C): benchmark steady-state influent temp
 
 # Closed-loop dissolved-oxygen / kLa control (reginit_bsm2). A PI controller
 # senses SO in reactor 4 and manipulates its aeration kLa; reactors 3 and 5
@@ -415,9 +415,9 @@ def build_bsm2(
         ``plant.add_influent("feed", series)`` (which wires to the recorded
         front) or ``to=plant.influent_endpoint``. Mirrors :func:`build_bsm1`.
     """
+    import aquakin
     from aquakin.plant.delay import HydraulicDelayUnit
     from aquakin.plant.storage import StorageTank
-    import aquakin
 
     # ----- Translate the feature option objects into the internal flags/values
     # the wiring below uses. A ``None`` argument means the feature is off.

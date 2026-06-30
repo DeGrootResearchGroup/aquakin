@@ -53,6 +53,35 @@ env:
   XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false"
 
 jobs:
+  # ---- Lint gate: ruff (fast, always-on) --------------------------------------
+  # Static checks only -- no JAX import, no compile -- so it is cheap and runs on
+  # every push/PR (skipped on the bare `labeled` event and the schedule/dispatch
+  # refresh, like the fast gate). Runs `ruff check` over the package; the rule set
+  # and per-file ignores live in `pyproject.toml`. The repo-wide `ruff format`
+  # reflow is not yet applied, so `format --check` is intentionally not gated here.
+  lint:
+    name: lint (ruff)
+    if: >-
+      github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+      && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[lint]"
+
+      - name: Run ruff
+        run: ruff check aquakin
+
   # ---- Fast merge gate: unit + fast integration (sharded) ---------------------
   # Runs on every pull request AND every push to main. Excludes the multi-minute
   # stiff/plant solves (marked `slow`) and the published-data `validation` suite,

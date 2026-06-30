@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-
-import math
 
 import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.context import CompileContext
 from aquakin.core.hints import did_you_mean
-from aquakin.core.temperature import arrhenius_factor
-from aquakin.core.units import prettify_units
 from aquakin.core.nodes import (
     ASTNode,
     ConditionNode,
@@ -26,7 +23,8 @@ from aquakin.core.nodes import (
 )
 from aquakin.core.parser import parse_rate_expression
 from aquakin.core.stoich_resolve import resolve_auto_coefficients
-
+from aquakin.core.temperature import arrhenius_factor
+from aquakin.core.units import prettify_units
 
 # Used to detect references-to-other-expressions during AST inspection.
 _LEAF_TYPES = (ConstantNode, SpeciesNode, ConditionNode, ParamNode)
@@ -114,7 +112,7 @@ def _topo_sort_expressions(
     return order
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.schema.network_spec import NetworkSpec
+    pass
 
 
 @dataclass
@@ -809,7 +807,7 @@ class CompiledNetwork:
             no parameter declares a time unit, or different rate constants
             disagree.
         """
-        from aquakin.utils.units import parse_units, _TIME_TOKENS
+        from aquakin.utils.units import _TIME_TOKENS, parse_units
 
         found = set()
         for unit in self.parameter_units.values():
@@ -873,7 +871,8 @@ class CompiledNetwork:
         for p in self.parameters:
             bounds = self.parameter_bounds.get(p)
             bounds_s = f" bounds={bounds}" if bounds is not None else ""
-            lines.append(f"    {p} = {float(self._default_parameters[self.param_index[p]]):g}{bounds_s}")
+            val = float(self._default_parameters[self.param_index[p]])
+            lines.append(f"    {p} = {val:g}{bounds_s}")
         if self.references:
             lines.append("  References:")
             for ref in self.references:

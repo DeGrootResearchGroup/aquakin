@@ -30,10 +30,12 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.plant.metrics import (
+    _time_average as _metrics_time_average,
+)
+from aquakin.plant.metrics import (
     derived_BOD,
     derived_COD,
     derived_TSS,
-    _time_average as _metrics_time_average,
 )
 
 if TYPE_CHECKING:  # pragma: no cover

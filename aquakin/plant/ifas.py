@@ -277,8 +277,8 @@ class IFASUnit(AerationUnit, CouplingAware):
         the inflow enters the bulk row only; the biofilm couples to it solely by
         diffusion (captured in ``self``).
         """
-        import numpy as np
         import jax
+        import numpy as np
 
         from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
         from aquakin.plant.coupling import CouplingPattern, ad_union

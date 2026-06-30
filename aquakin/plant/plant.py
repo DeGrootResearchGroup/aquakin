@@ -28,14 +28,12 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional, Sequence, Union
 
 import diffrax
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
 from aquakin.core.hints import did_you_mean
 from aquakin.core.network import CompiledNetwork
-from aquakin.integrate.events import Event, solve_with_events
 from aquakin.integrate._common import (
     DifferentiationConfig,
     IntegratorConfig,
@@ -48,6 +46,7 @@ from aquakin.integrate._common import (
     to_native_time,
 )
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
+from aquakin.integrate.events import Event, solve_with_events
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.streams import Stream, StreamSeries
 from aquakin.plant.temperature import (
@@ -681,6 +680,7 @@ class SteadyStateDGSMResult:
             ``(n_counts, m, k)`` the Monte-Carlo standard error of each.
         """
         import math
+
         import numpy as np
         n = int(self.outputs.shape[0])
         if counts is None:
@@ -715,8 +715,9 @@ class SteadyStateDGSMResult:
         given ``cond_factor`` -- so the filter can be tuned (and the convergence
         re-read) without re-solving. See :meth:`Plant.steady_state_dgsm`.
         """
-        import numpy as np
         from dataclasses import replace
+
+        import numpy as np
         rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)
         op = (np.array([e is not False for e in self.operating_point_exists],
                        dtype=bool)
@@ -821,6 +822,7 @@ class DynamicDGSMResult:
         recomputed from the retained per-sample data (no re-solving).
         """
         import math
+
         import numpy as np
         n = int(self.outputs.shape[0])
         if counts is None:
@@ -1377,7 +1379,8 @@ class Plant:
         # corrections / parameters) -- from a genuine cross-network connection.
         same_model = (
             getattr(source_network, "name", object()) == getattr(target_network, "name", None)
-            and getattr(source_network, "species", object()) == getattr(target_network, "species", None)
+            and getattr(source_network, "species", object())
+            == getattr(target_network, "species", None)
         )
         if same_model:
             raise ValueError(
@@ -3396,8 +3399,10 @@ class Plant:
         only costs solver steps, never accuracy.
         """
         from aquakin.integrate.colored_jacobian import (
-            build_colored_root_finder, colored_jacobian_guard,
-            jacobian_sparsity_pattern)
+            build_colored_root_finder,
+            colored_jacobian_guard,
+            jacobian_sparsity_pattern,
+        )
 
         if self._colored_root_finder is None:
             if (isinstance(params, jax.core.Tracer)
@@ -3464,11 +3469,14 @@ class Plant:
         Jacobian at the default state; a mismatch falls back to dense (with a
         warning).
         """
-        from aquakin.integrate.colored_jacobian import (
-            build_colored_root_finder, colored_jacobian_guard,
-            jacobian_sparsity_pattern, materialize_colored_jacobian)
         import numpy as np
 
+        from aquakin.integrate.colored_jacobian import (
+            build_colored_root_finder,
+            colored_jacobian_guard,
+            jacobian_sparsity_pattern,
+            materialize_colored_jacobian,
+        )
         from aquakin.integrate.discrete_adjoint import _autonomize
 
         if self._colored_adjoint_builder is not None:
@@ -3589,11 +3597,13 @@ class Plant:
         Returns a builder ``(F, y) -> dF/dy``, or ``None`` (dense) when called
         under a trace (the probe needs concrete arrays) or when the guard fails.
         """
-        import numpy as np
 
         from aquakin.integrate.colored_jacobian import (
-            build_colored_root_finder, colored_jacobian_guard,
-            jacobian_sparsity_pattern, materialize_colored_jacobian)
+            build_colored_root_finder,
+            colored_jacobian_guard,
+            jacobian_sparsity_pattern,
+            materialize_colored_jacobian,
+        )
 
         if self._colored_steady_builder is None:
             if any(isinstance(leaf, jax.core.Tracer)
@@ -4228,7 +4238,7 @@ class Plant:
                 f"{colored_jacobian!r}."
             )
         self._build_state_layout()
-        layout = self._build_parameter_layout()
+        self._build_parameter_layout()
         if params is None:
             params = self.default_parameters()
         else:
@@ -4926,8 +4936,7 @@ class Plant:
         """
         if continuation_from is None:
             return None
-        from aquakin.plant.steady import (
-            continuation_solve, make_continuation_kernels)
+        from aquakin.plant.steady import continuation_solve, make_continuation_kernels
         pk, yk = continuation_from
         pk = self._coerce_params(pk)
         yk = jnp.asarray(yk)
@@ -4973,8 +4982,7 @@ class Plant:
         """
         if continuation_from is None:
             return None
-        from aquakin.plant.steady import (
-            arclength_continuation_solve, make_arclength_kernels)
+        from aquakin.plant.steady import arclength_continuation_solve, make_arclength_kernels
         pk, yk = continuation_from
         pk = self._coerce_params(pk)
         yk = jnp.asarray(yk)
@@ -5626,6 +5634,7 @@ class Plant:
             retained per-sample data.
         """
         import numpy as np
+
         from ..integrate.sensitivity import _sobol_sample
 
         base = self.default_parameters()
@@ -6120,6 +6129,7 @@ class Plant:
         ``(m, k)``, ``.ranked(output)``, ``.convergence()``).
         """
         import numpy as np
+
         from ..integrate.sensitivity import _sobol_sample
 
         params = self.default_parameters()

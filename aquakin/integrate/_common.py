@@ -820,7 +820,7 @@ def friendly_solve_errors(max_steps, *, what: str = "solve"):
     """
     try:
         yield
-    except Exception as exc:  # noqa: BLE001 -- re-interpret two specific failures
+    except Exception as exc:
         msg = str(exc).lower()
         if "maximum number of solver steps" in msg:
             raise RuntimeError(

@@ -34,7 +34,7 @@ from __future__ import annotations
 import warnings
 from collections import namedtuple
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Optional
+from typing import Optional
 
 import diffrax
 import jax

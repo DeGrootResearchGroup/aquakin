@@ -15,7 +15,7 @@ oxygen demand -- is the downstream reactor's chemistry, not this unit's job.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import jax.numpy as jnp

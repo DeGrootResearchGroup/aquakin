@@ -31,7 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.integrate._common import Reactor
-from aquakin.integrate.calibrate import CalibrationResult, calibrate
+from aquakin.integrate.calibrate import calibrate
 
 
 @dataclass

@@ -73,6 +73,8 @@ import jax.numpy as jnp
 
 from aquakin.core.temperature import (
     LN10 as _LN10,
+)
+from aquakin.core.temperature import (
     van_t_hoff_factor,
 )
 
@@ -292,7 +294,8 @@ def charge_balance_residual(
     ----------
     h : scalar
         Trial hydrogen-ion concentration ``[H+]`` (mol/L).
-    tot_carbonate, tot_acetate, tot_propionate, tot_butyrate, tot_valerate, tot_ammonia, tot_phosphate, tot_sulfide : scalar
+    tot_carbonate, tot_acetate, tot_propionate, tot_butyrate, tot_valerate,
+    tot_ammonia, tot_phosphate, tot_sulfide : scalar
         Total molar concentrations (mol/L) of each acid/base system. Propionate,
         butyrate and valerate are monoprotic weak acids treated exactly like
         acetate (the ADM1 volatile-fatty-acid set).
@@ -603,7 +606,8 @@ def solve_ph(
 
     Parameters
     ----------
-    tot_carbonate, tot_acetate, tot_propionate, tot_butyrate, tot_valerate, tot_ammonia, tot_phosphate, tot_sulfide : scalar, optional
+    tot_carbonate, tot_acetate, tot_propionate, tot_butyrate, tot_valerate,
+    tot_ammonia, tot_phosphate, tot_sulfide : scalar, optional
         Total molar concentrations of each acid/base system.
     strong_anion_eq : scalar, optional
         Strong-anion charge equivalents (e.g. ``2*[SO4]+[NO3]``).

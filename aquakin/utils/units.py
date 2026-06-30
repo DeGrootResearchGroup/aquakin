@@ -31,12 +31,12 @@ from typing import NamedTuple, Optional
 
 from aquakin.core.nodes import (
     AddNode,
-    MaxNode,
     ArrheniusNode,
     ASTNode,
     ConditionNode,
     ConstantNode,
     DivideNode,
+    MaxNode,
     MonodInhibitionNode,
     MonodInhibitionRatioNode,
     MonodNode,
@@ -46,12 +46,11 @@ from aquakin.core.nodes import (
     ParamNode,
     PowerNode,
     SafeDivideNode,
-    pHInhibitNode,
-    pHSwitchNode,
     SpeciesNode,
     SubtractNode,
+    pHInhibitNode,
+    pHSwitchNode,
 )
-
 
 # --- the currency-token dimension algebra -----------------------------------
 

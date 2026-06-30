@@ -32,7 +32,6 @@ import numpy as np
 
 from aquakin.integrate.sensitivity import _sobol_sample
 
-
 # --- distributions -----------------------------------------------------------
 # A per-input distribution is given either as a ``(low, high)`` tuple (uniform)
 # or a mapping ``{"dist": ..., ...}``. Supported: uniform(low, high),

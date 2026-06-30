@@ -19,10 +19,10 @@ import jax.numpy as jnp
 
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
-    _HasNamedSpecies,
     DifferentiationConfig,
     GradientCheckMixin,
     IntegratorConfig,
+    _HasNamedSpecies,
     _interp_fields_to_scalar,
     cached_jitted_solver,
     friendly_solve_errors,

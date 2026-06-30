@@ -68,9 +68,9 @@ def translator_coupling_pattern(translator, n_states: int = 96, seed: int = 0):
     point that lets a user add a custom cross-network translator and have it work
     with the colored solver automatically.
     """
-    import numpy as np
     import jax
     import jax.numpy as jnp
+    import numpy as np
 
     override = getattr(translator, "coupling_pattern", None)
     if callable(override):

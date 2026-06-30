@@ -28,6 +28,7 @@ Run from this directory:  python _make_khalil_thesis.py
 from __future__ import annotations
 
 import os
+
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,7 +57,7 @@ THESIS = {
     "q_ferm": 2.0,
     "mu_h": 7.0,           # thesis Table 3-1 max aerobic growth rate (paper uses 6.7)
     "eta_an": 0.18,        # thesis anaerobic hydrolysis correction (paper uses 0.21)
-    "k_12_o2": 4.0,        # thesis Table 3-1 aerobic biofilm half-order growth const (paper uses 18)
+    "k_12_o2": 4.0,        # thesis Table 3-1 aerobic biofilm half-order growth (paper uses 18)
     "k_no": 2.0,            # bulk nitrate half-saturation (paper)
     "k_h2s_acid": 2.5,      # sulfate reduction (paper)
     "k_s0_acid": 15.5,      # elemental-sulfur reduction (paper, as printed)

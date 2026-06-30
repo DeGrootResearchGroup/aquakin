@@ -251,8 +251,8 @@ class SBRUnit(CouplingAware):
         representative time). ``inlet``: the convective dilution diagonal on the
         species (active during fill); the feed couples no other state.
         """
-        import numpy as np
         import jax
+        import numpy as np
 
         from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
         from aquakin.plant.coupling import CouplingPattern, ad_union

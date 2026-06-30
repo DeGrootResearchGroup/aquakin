@@ -35,6 +35,10 @@ dependencies = [
 # solving, only for postprocessing.
 dataframe = ["pandas>=2.0"]
 plot = ["matplotlib>=3.5"]
+# `lint` pins the linter so a new ruff release cannot introduce rules that turn
+# the gate red without a deliberate bump. Capped to the 0.15 series for the same
+# reason; raise the cap intentionally.
+lint = ["ruff>=0.15,<0.16"]
 test = ["pytest>=7", "pytest-xdist>=3", "pytest-timeout>=2", "pytest-split>=0.8", "pandas>=2.0", "matplotlib>=3.5"]
 
 [tool.setuptools.packages.find]
@@ -52,3 +56,54 @@ markers = [
     "xheavy: the ONE heavy test (`test_dynamic_dgsm_matches_dgsm`) that exceeds 16 GB even isolated -- it runs two DGSM engines back-to-back and holds two multi-GB BSM1 `stable_adjoint` adjoint programs live at once. It OOM-crashes the free 16 GB `ubuntu-latest` runner even one-per-process, so it is split off from the free `heavy` job (which runs `heavy and not xheavy`) onto a small larger runner (`aquakin-heavy`, 8-core/32 GB) via the `xheavy` CI job, gated identically (path filter + `full-ci`). `xheavy` IS-A `heavy` (it also carries `heavy`/`slow`), so the slow/validation/smoke jobs still exclude it; `pytest -m heavy` runs it locally.",
 ]
 testpaths = ["tests"]
+
+# ---------------------------------------------------------------------------
+# ruff -- linter (and formatter config). The CI `lint` job runs `ruff check`
+# over `aquakin/` as a required gate. The 100-column width matches how the
+# package is already written. The formatter is configured here but the
+# repo-wide reflow is NOT yet applied (it would touch most files at once and
+# bury real diffs), so `ruff format --check` is intentionally not gated yet.
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Start broad on the high-signal families; the `ignore` list below defers the
+# rules that map to dedicated open audit issues so they can be tackled (and the
+# ignore removed) in their own PRs rather than churning this tooling change.
+#   E,W  pycodestyle   F  pyflakes   I  isort
+#   B    flake8-bugbear            RUF  ruff-specific
+# `UP` (pyupgrade) is deliberately NOT selected yet: it flags ~530 typing
+# modernizations (Optional -> X | None, dropping quoted annotations) tracked in
+# issue #467; enable it there so its large auto-fix lands as one reviewable PR.
+select = ["E", "F", "W", "I", "B", "RUF"]
+ignore = [
+    # Intentional scientific Unicode in docstrings/comments (µ, α, β, ×, ⁻, °).
+    "RUF002",
+    "RUF003",
+    # --- deferred to dedicated audit issues (remove the ignore in that PR) ---
+    "F821",   # quoted type-only annotations (e.g. "Callable | None") -> #467
+    "RUF013", # implicit Optional from `= None` defaults              -> #467
+    "E741",   # ambiguous names (l/r lambdas)                          -> #470 / #474
+    "E702",   # multiple statements on one line (semicolons)           -> #462
+    "E731",   # lambda assigned to a name                              -> #474
+    "B023",   # function uses loop variable (guarded by default-arg)   -> #470
+    "B905",   # `zip()` without explicit `strict=`                     -> #474
+    "B007",   # unused loop control variable                           -> #474
+    "B008",   # function call in default argument                      -> #474
+    "RUF005", # collection-literal concatenation                       -> #474
+    "RUF007", # `zip()` instead of `itertools.pairwise`                -> #474
+    "RUF022", # unsorted `__all__`                                     -> #477
+    "RUF059", # unused unpacked variable                               -> #474
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Package __init__ re-export files carry deliberate, sometimes load-bearing
+# import ordering -- e.g. aquakin/plant/__init__.py imports a2o / bsm.evaluation
+# last to avoid an import cycle, and aquakin/__init__.py must enable x64 before
+# any submodule import that builds JAX state (documented in CLAUDE.md). So they
+# are exempt from import-sorting (I001) and module-import-position (E402).
+"**/__init__.py" = ["I001", "E402"]
+# Speciation/precipitation are imported mid-module to break an import cycle with
+# core (documented at the import sites).
+"aquakin/schema/network_spec.py" = ["E402"]

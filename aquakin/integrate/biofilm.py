@@ -55,10 +55,10 @@ import jax.numpy as jnp
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
-    _HasNamedSpecies,
     DifferentiationConfig,
     GradientCheckMixin,
     IntegratorConfig,
+    _HasNamedSpecies,
     _run_diffeqsolve,
     friendly_solve_errors,
     init_solver_settings,

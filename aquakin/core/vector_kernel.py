@@ -35,12 +35,14 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.nodes import (
+    _PH_INHIBIT_HILL_SLOPE,
+    _PH_INHIBIT_MIN_WIDTH,
+    GAS_CONSTANT,
     AddNode,
     ArrheniusNode,
     ConditionNode,
     ConstantNode,
     DivideNode,
-    GAS_CONSTANT,
     MaxNode,
     MonodInhibitionNode,
     MonodInhibitionRatioNode,
@@ -53,8 +55,6 @@ from aquakin.core.nodes import (
     SafeDivideNode,
     SpeciesNode,
     SubtractNode,
-    _PH_INHIBIT_HILL_SLOPE,
-    _PH_INHIBIT_MIN_WIDTH,
     _safe_ratio,
     pHInhibitNode,
     pHSwitchNode,

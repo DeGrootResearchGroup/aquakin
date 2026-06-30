@@ -304,9 +304,9 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         a standalone derivation. ``self`` = d(rhs)/d(layer state); ``inlet`` =
         d(rhs)/d(feed concentration).
         """
-        import numpy as np
         import jax
         import jax.numpy as jnp
+        import numpy as np
 
         from aquakin.plant.coupling import CouplingPattern, ad_union
         from aquakin.plant.streams import Stream
@@ -565,8 +565,12 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         )
 
         return {
-            self.overflow_port: Stream(Q=overflow_Q, C=C_overflow, network=self.network, T=s_in.T),
-            self.underflow_port: Stream(Q=underflow_Q, C=C_underflow, network=self.network, T=s_in.T),
+            self.overflow_port: Stream(
+                Q=overflow_Q, C=C_overflow, network=self.network, T=s_in.T
+            ),
+            self.underflow_port: Stream(
+                Q=underflow_Q, C=C_underflow, network=self.network, T=s_in.T
+            ),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:

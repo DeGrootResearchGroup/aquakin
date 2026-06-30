@@ -7,6 +7,11 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+import jax
+import jax.numpy as jnp
+import numpy as np
+from scipy.optimize import minimize
+
 from aquakin.core.conditions import SpatialConditions
 from aquakin.integrate._common import (
     ConditionedReactor,
@@ -16,11 +21,6 @@ from aquakin.integrate._common import (
     forward_adjoint,
     with_adjoint,
 )
-
-import jax
-import jax.numpy as jnp
-import numpy as np
-from scipy.optimize import minimize
 
 
 @dataclass

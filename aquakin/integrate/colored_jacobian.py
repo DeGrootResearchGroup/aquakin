@@ -45,10 +45,8 @@ import lineax as lx
 import lineax.internal as lxi
 import numpy as np
 import optimistix as optx
-from lineax.internal import complex_to_real_dtype
-
 from diffrax._root_finder._verychord import VeryChord, _NoAux, _VeryChordState
-
+from lineax.internal import complex_to_real_dtype
 
 __all__ = [
     "ColoredVeryChord",
