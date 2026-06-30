@@ -20,6 +20,13 @@ GAS_CONSTANT = 8.314462618  # J / (mol K)
 # (Batstone et al. 2002; Rosen & Jeppsson 2006).
 _PH_INHIBIT_HILL_SLOPE = 3.0
 
+# Floor on the (pH_UL - pH_LL) window so a degenerate or inverted window does not
+# make the Hill exponent (and the rate) non-finite. A real window is ~1-2 pH
+# units, far above this floor, so it is identity for any sane input; at the
+# zero-width limit the inhibition becomes an (infinitely) steep but finite step
+# at the midpoint, the physical limit of a vanishing window.
+_PH_INHIBIT_MIN_WIDTH = 1.0e-6
+
 
 def _safe_ratio(num, denom):
     """``num / denom`` that returns 0 (not NaN) where ``denom == 0``, with a
@@ -531,7 +538,11 @@ class pHInhibitNode(ASTNode):
             pH = condition_arrays["pH"][loc_idx]
             ll = ll_f(C, params, condition_arrays, loc_idx)
             ul = ul_f(C, params, condition_arrays, loc_idx)
-            n = _PH_INHIBIT_HILL_SLOPE / (ul - ll)
+            # Floor the window width so an equal/inverted (pH_LL, pH_UL) -- which a
+            # calibration can drive into -- gives a finite (steep) factor instead
+            # of a division by zero (NaN); identity for any real window.
+            width = jnp.maximum(ul - ll, _PH_INHIBIT_MIN_WIDTH)
+            n = _PH_INHIBIT_HILL_SLOPE / width
             return jax.nn.sigmoid(ln10 * n * (pH - 0.5 * (ul + ll)))
 
         return _eval

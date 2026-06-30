@@ -290,6 +290,61 @@ def test_ph_inhibit_grad_finite():
     assert jnp.all(jnp.isfinite(g))
 
 
+def test_ph_switch_requires_pH():
+    """pH_switch needs a 'pH' condition field, like arrhenius needs 'T'."""
+    ctx = _ctx(condition_fields=frozenset({"T"}))
+    with pytest.raises(KeyError):
+        pHSwitchNode(ConstantNode(7.0)).compile(ctx)
+
+
+def test_ph_inhibit_requires_pH():
+    from aquakin.core.nodes import pHInhibitNode
+
+    ctx = _ctx(condition_fields=frozenset({"T"}))
+    with pytest.raises(KeyError):
+        pHInhibitNode(ConstantNode(4.0), ConstantNode(5.5)).compile(ctx)
+
+
+def test_ph_inhibit_equal_limits_is_finite():
+    """A degenerate (zero-width) inhibition window must not divide by zero. The
+    window floor keeps the factor finite -- a steep step at the midpoint (0.5 at
+    the limits' shared value, ->1 above, ->0 below) instead of NaN. A calibration
+    can drive pH_UL -> pH_LL, so this must never inject NaN into a solve."""
+    from aquakin.core.nodes import pHInhibitNode
+
+    node = pHInhibitNode(ConstantNode(5.0), ConstantNode(5.0))
+    assert _eval(node, pH=5.0) == pytest.approx(0.5, abs=1e-9)
+    assert jnp.isfinite(_eval(node, pH=4.0)) and _eval(node, pH=4.0) < 0.01
+    assert jnp.isfinite(_eval(node, pH=6.0)) and _eval(node, pH=6.0) > 0.99
+
+
+def test_ph_inhibit_equal_limits_gradient_finite():
+    """The window floor also keeps the gradient finite at the degenerate point."""
+    from aquakin.core.nodes import pHInhibitNode
+
+    node = pHInhibitNode(ParamNode("r.k"), ParamNode("r.A"))  # LL, UL as params
+    fn = node.compile(_ctx())
+
+    def f(p):
+        return fn(jnp.zeros(2), p, {"pH": jnp.asarray([5.0]), "T": jnp.asarray([293.15])}, 0)
+
+    val, g = jax.value_and_grad(f)(jnp.asarray([5.0, 5.0, 0.0, 0.0]))  # LL == UL
+    assert jnp.isfinite(val)
+    assert jnp.all(jnp.isfinite(g))
+
+
+def test_ph_inhibit_normal_window_unchanged_by_floor():
+    """The window floor is identity for any real (>= ~1 pH unit) window: the
+    midpoint value and shape are exactly the documented Hill factor."""
+    from aquakin.core.nodes import pHInhibitNode
+
+    node = pHInhibitNode(ConstantNode(4.0), ConstantNode(5.5))
+    # Same assertions as test_ph_inhibit_node -- the guard must not perturb them.
+    assert _eval(node, pH=4.75) == pytest.approx(0.5, abs=1e-6)
+    assert _eval(node, pH=8.0) > 0.999
+    assert _eval(node, pH=3.0) < 0.01
+
+
 # ---------- generic children() / map_children() ----------
 
 

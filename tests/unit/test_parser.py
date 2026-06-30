@@ -207,6 +207,62 @@ def test_trailing_tokens():
         parse_rate_expression("k * [A] foo")
 
 
+@pytest.mark.parametrize("expr", ["", "   ", "\t \n"])
+def test_empty_or_whitespace_expression_is_parse_error(expr):
+    """An empty or whitespace-only expression has no primary, so the parser hits
+    EOF in `_primary` and raises rather than returning None."""
+    with pytest.raises(ParseError):
+        parse_rate_expression(expr)
+
+
+@pytest.mark.parametrize("expr", ["[]", "[3A]", "[Br -]"])
+def test_malformed_species_bracket_is_parse_error(expr):
+    """`[` must be followed by an identifier species name: empty brackets and a
+    digit-leading name fail; whitespace splitting a charge suffix (`[Br -]`) ends
+    the name early and leaves a stray `-]` that fails to close the bracket. (The
+    `{}` counterpart is already covered.)"""
+    with pytest.raises(ParseError):
+        parse_rate_expression(expr)
+
+
+@pytest.mark.parametrize("expr", ["{3}", "{a b}", "{1pH}"])
+def test_malformed_condition_brace_is_parse_error(expr):
+    """`{` must wrap exactly one identifier: a number, two idents, or a digit-led
+    name all fail."""
+    with pytest.raises(ParseError):
+        parse_rate_expression(expr)
+
+
+@pytest.mark.parametrize("expr", ["monod([SS], KS,)", "max()", "max(1,)"])
+def test_bad_arglist_is_parse_error(expr):
+    """A trailing comma or an empty argument list leaves a primary with no
+    expression to parse, which raises (before the arity check is even reached)."""
+    with pytest.raises(ParseError):
+        parse_rate_expression(expr)
+
+
+@pytest.mark.parametrize("expr", ["1 2", "1.2.3", "[A] [B]"])
+def test_adjacent_primaries_without_operator_is_parse_error(expr):
+    """Two primaries with no operator between them leave trailing tokens after the
+    first expression parses, which `parse()` rejects."""
+    with pytest.raises(ParseError):
+        parse_rate_expression(expr)
+
+
+def test_max_function_parses():
+    """`max(a, b)` is a built-in but had no parse test (only an eval test)."""
+    from aquakin.core.nodes import MaxNode
+    tree = parse_rate_expression("max(0, [A] - 3.0)")
+    assert isinstance(tree, MaxNode)
+
+
+def test_monod_inh_ratio_function_parses():
+    """`monod_inh_ratio(A, B, K)` is a built-in but had no direct parse test."""
+    from aquakin.core.nodes import MonodInhibitionRatioNode
+    tree = parse_rate_expression("monod_inh_ratio([XPHA], [XPAO], KPHA)")
+    assert isinstance(tree, MonodInhibitionRatioNode)
+
+
 def test_full_expression_compiles_and_evaluates():
     """End-to-end compile + evaluate of a parsed expression."""
     tree = parse_rate_expression("k1 * [A] + 2.0")

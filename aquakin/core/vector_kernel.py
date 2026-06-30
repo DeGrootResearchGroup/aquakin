@@ -54,6 +54,7 @@ from aquakin.core.nodes import (
     SpeciesNode,
     SubtractNode,
     _PH_INHIBIT_HILL_SLOPE,
+    _PH_INHIBIT_MIN_WIDTH,
     _safe_ratio,
     pHInhibitNode,
     pHSwitchNode,
@@ -174,7 +175,11 @@ def _k_phswitch(o):
 def _k_phinhibit(o):
     # operands: (pH_LL, pH_UL, pH)
     ll, ul, pH = o
-    n = _PH_INHIBIT_HILL_SLOPE / (ul - ll)
+    # Floor the window width identically to the scalar pHInhibitNode so a
+    # degenerate/inverted window gives a finite factor (not NaN); identity for any
+    # real window, so the two paths stay bit-identical.
+    width = jnp.maximum(ul - ll, _PH_INHIBIT_MIN_WIDTH)
+    n = _PH_INHIBIT_HILL_SLOPE / width
     return jax.nn.sigmoid(_LN10 * n * (pH - 0.5 * (ul + ll)))
 
 

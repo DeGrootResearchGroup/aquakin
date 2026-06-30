@@ -215,6 +215,57 @@ def test_non_validation_error_propagates(tmp_path, monkeypatch):
         aquakin.load_network_from_file(p)
 
 
+def test_extends_base_not_a_mapping_rejected(tmp_path):
+    """A base file whose top-level YAML is not a mapping (here a list) is a clear
+    error, not an opaque downstream failure."""
+    (tmp_path / "base.yaml").write_text("- 1\n- 2\n- 3\n")
+    derived = tmp_path / "derived.yaml"
+    derived.write_text(textwrap.dedent("""
+        network: {name: d, extends: base.yaml}
+        """))
+    with pytest.raises(ValueError, match="must be a mapping"):
+        aquakin.load_network_from_file(derived)
+
+
+def test_empty_composition_quantity_name_rejected(tmp_path):
+    """A composition entry keyed by the empty string is rejected at validation."""
+    p = _write(
+        tmp_path,
+        """
+        network: {name: bad}
+        species:
+          - {name: A, default_concentration: 1.0, composition: {"": 1.0}}
+        reactions:
+          - name: r1
+            rate: "k * [A]"
+            parameters: {k: {value: 1.0}}
+            stoichiometry: {A: -1}
+        """,
+    )
+    with pytest.raises(ValueError, match="empty composition"):
+        aquakin.load_network_from_file(p)
+
+
+@pytest.mark.parametrize("bad", [".nan", ".inf", "-.inf"])
+def test_non_finite_composition_value_rejected(tmp_path, bad):
+    """NaN / +-inf composition content is rejected -- such a value would poison the
+    conservation check it feeds."""
+    body = (
+        "network: {name: bad}\n"
+        "species:\n"
+        "  - {name: A, default_concentration: 1.0, composition: {COD: " + bad + "}}\n"
+        "reactions:\n"
+        "  - name: r1\n"
+        '    rate: "k * [A]"\n'
+        "    parameters: {k: {value: 1.0}}\n"
+        "    stoichiometry: {A: -1}\n"
+    )
+    p = tmp_path / "net.yaml"
+    p.write_text(body)
+    with pytest.raises(ValueError, match="must be finite"):
+        aquakin.load_network_from_file(p)
+
+
 # ----- speciation activity_model override (issue #205) ---------------------
 
 def test_load_network_activity_override_shifts_ph_and_keeps_default():
