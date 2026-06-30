@@ -42,6 +42,9 @@ stage values exactly in the backward pass -- no Newton recompute -- and applies
 the transposed-stage recurrence (see that function). Either way every per-step
 solve is the same well-conditioned
 ``I - gamma*dt*J`` (a contraction), so the cotangents stay bounded with no cap.
+Its ``low_memory=True`` option trades that saved stage buffer (``~s``x the
+trajectory) for a per-step stage recompute in the backward pass, for when the
+buffer is the binding memory constraint on a long, large-state solve.
 
 **Loss at observation times.** With ``t_eval`` the solve returns the states at
 those times, with the discrete adjoint injecting each observation's cotangent at
@@ -54,6 +57,7 @@ calibration case), not just a final-state loss.
 
 from __future__ import annotations
 
+import warnings
 from typing import Callable, Optional
 
 import diffrax
@@ -72,6 +76,7 @@ _DEFAULT_RTOL = 1e-6              # PID controller relative tolerance
 _DEFAULT_ATOL = 1e-9             # PID controller absolute tolerance
 _DEFAULT_DT0 = 1e-6             # initial step (the adaptive controller grows it)
 _DEFAULT_MAX_STEPS = 200_000   # saved-trajectory buffer the backward scan walks
+_DEFAULT_NEWTON_ITERS = 12     # per-stage Newton iters when low_memory recomputes stages
 
 
 # The decoupled-Newton root finder, the colored-Jacobian root finder, and the PID
@@ -418,6 +423,21 @@ def _esdirk_tableau(solver):
     return jnp.asarray(A), jnp.asarray(np.asarray(t.b_sol, dtype=float)), diag, s
 
 
+def _is_singly_diagonal_esdirk(diag):
+    """Whether ``diag`` (the Butcher diagonal ``a_diagonal``) has the singly-
+    diagonal ESDIRK shape the low-memory stage recompute assumes: an explicit
+    first stage (``gamma_0 = 0``) and a single constant positive implicit
+    coefficient ``gamma`` on the remaining stages. True for ``Kvaerno3`` /
+    ``Kvaerno5``; any other tableau takes the saved-stage path instead, so the
+    low-memory option never silently mis-handles an exotic solver."""
+    diag = np.asarray(diag, dtype=float)
+    if diag.size == 0 or diag[0] != 0.0:
+        return False
+    implicit = diag[1:]
+    return bool(implicit.size and np.all(implicit > 0.0)
+                and np.allclose(implicit, implicit[0]))
+
+
 def esdirk_adjoint_solve(
     rhs: Callable,
     y0: jnp.ndarray,
@@ -436,6 +456,8 @@ def esdirk_adjoint_solve(
     jacobian_builder: Optional[Callable] = None,
     forward_root_finder: Optional[object] = None,
     factormax: Optional[float] = None,
+    low_memory: bool = False,
+    newton_iters: int = _DEFAULT_NEWTON_ITERS,
 ) -> jnp.ndarray:
     """Cap-free reverse-mode gradient through a high-order ESDIRK solve.
 
@@ -448,6 +470,10 @@ def esdirk_adjoint_solve(
     dt-scaled stage increment) -- no Newton recompute, which
     was the dominant backward cost -- then the per-stage transposed solves
     accumulate the gradient. Finite for stiff networks with no ``dtmax`` cap.
+
+    Trades memory for compute with ``low_memory=True`` (see below): the forward
+    then stores only the step states (not the dense-output stage buffer, ~``s``x
+    the trajectory) and the backward re-solves each step's stages by Newton.
 
     Parameters
     ----------
@@ -496,6 +522,28 @@ def esdirk_adjoint_solve(
         start state and falls back to dense on a mismatch), so the discrete
         adjoint -- and the gradient -- is unchanged. Affects only the backward
         Jacobian build; the forward solve and the parameter vjp are untouched.
+    low_memory : bool, optional
+        Trade memory for compute in the backward pass. ``False`` (default) saves
+        each forward step's dense-output stage increments and reconstructs the
+        stages by the Butcher linear combination -- fast, but the saved buffer is
+        ``~s``x the trajectory (shape ``(max_steps, s, n)``). ``True`` instead
+        stores only the step states and **recomputes** each step's stage values
+        in the backward pass by re-solving the ESDIRK stage equations (a fixed
+        ``newton_iters``-iteration Newton scan per implicit stage), so the
+        ``(max_steps, s, n)`` dense buffer is never allocated. The recompute is a
+        contraction through the same well-conditioned ``I - dt*gamma*J`` the
+        forward inverts, so the reconstructed stages -- and the gradient -- match
+        the saved-stage path to machine precision; the cost is roughly a second
+        per-step stage solve. Use it when the dense-stage buffer is the binding
+        memory constraint (a long, large-state plant solve). Guarded to the
+        singly-diagonal ESDIRK shape it assumes (explicit first stage, constant
+        implicit ``gamma`` -- ``Kvaerno3`` / ``Kvaerno5``); any other tableau
+        falls back to the saved-stage path with a :class:`RuntimeWarning`.
+    newton_iters : int, optional
+        Newton iterations used to recompute each implicit stage when
+        ``low_memory=True`` (ignored otherwise). The default converges the
+        well-conditioned stage equation to machine precision at the step sizes
+        the adaptive forward selects.
 
     Returns
     -------
@@ -541,16 +589,12 @@ def esdirk_adjoint_solve(
             return jax.jacfwd(f)(y)
         return jacobian_builder(f, y)
 
-    def step_adjoint(y_prev_k, y_k, params_, dt, lam, ks):
-        # ESDIRK adjoint: the stage values are RECONSTRUCTED from the saved stage
-        # increments ks[j] (diffrax dense-output ``k``, which is the dt-SCALED
-        # stage derivative dt*f(Y_j)), then the backward sweep applies the
-        # per-stage transposed solves. Each stage satisfies Y_i = y_n +
-        # sum_j A[i,j]*k_j with A the full lower-triangular Butcher matrix (the
-        # dt is already folded into k), so the reconstruction is exact -- no
-        # Newton recompute, the dominant backward cost removed. The post-step
-        # state y_k is unused (the stages carry the dependence).
-        Ys = y_prev_k[None, :] + (A @ ks)             # (s, n)
+    def _stage_adjoint_sweep(Ys, params_, dt, lam):
+        # The transposed-stage discrete-adjoint recurrence, shared by both the
+        # saved-stage and the low-memory recompute paths -- they differ ONLY in
+        # how ``Ys`` (the stage values) is obtained. Sweeps the stages in reverse
+        # applying the per-stage bounded transposed solve
+        # (I - dt*gamma_i J_i^T)^{-1} and accumulating the parameter cotangent.
         # df/dy stage Jacobians from ``primal`` (cached sub-computation); the
         # df/dtheta vjp below from ``rhs`` (recomputes it -> exact dM/dtheta).
         f = lambda y: primal(0.0, y, params_)
@@ -571,10 +615,70 @@ def esdirk_adjoint_solve(
         lam_n = lam + sum(Ybar)
         return lam_n, pbar
 
+    # The low-memory option recomputes the stage values in the backward pass, so
+    # the forward need NOT store the dense-output stage increments (the
+    # ``(max_steps, s, n)`` ``k`` buffer, ~``s``x the trajectory). It is guarded
+    # to the singly-diagonal ESDIRK shape the recompute assumes (KV3/KV5); any
+    # other tableau falls back to the saved-stage path, so genericity over an
+    # exotic solver is never silently broken.
+    use_low_memory = low_memory and _is_singly_diagonal_esdirk(diag_np)
+    if low_memory and not use_low_memory:
+        warnings.warn(
+            "low_memory=True needs a singly-diagonal ESDIRK tableau (explicit "
+            "first stage, constant implicit gamma); this solver is not one, so "
+            "the saved-stage path is used instead.",
+            RuntimeWarning, stacklevel=2,
+        )
+
+    if use_low_memory:
+        def _stages(y_n, params_, dt):
+            # Re-solve the ESDIRK stage values Y_i forward from the pre-step
+            # state: each stage solves Y_i = pred_i + dt*gamma_i f(Y_i) by Newton
+            # (the explicit first stage, gamma_i=0, solves trivially). The stage
+            # operator I - dt*gamma_i J is the same well-conditioned one the
+            # forward inverts, so the fixed Newton scan converges to machine
+            # precision at the steps the adaptive forward selects -- the
+            # reconstruction matches the saved-stage path. Uses ``primal`` (the
+            # stage VALUES need only the correct f / df-dy).
+            f = lambda y: primal(0.0, y, params_)
+            ks, Ys = [], []
+            for i in range(s):
+                pred = y_n
+                for j in range(i):
+                    pred = pred + dt * A[i, j] * ks[j]
+                Yi = pred
+                if diag_np[i] != 0.0:
+                    gi = diag[i]
+
+                    def newton(Y, _, pred=pred, gi=gi):
+                        G = Y - pred - dt * gi * f(Y)
+                        J = _build_jac(f, Y)
+                        return Y - jnp.linalg.solve(
+                            jnp.eye(n) - dt * gi * J, G), None
+
+                    Yi, _ = jax.lax.scan(newton, Yi, None, length=newton_iters)
+                Ys.append(Yi)
+                ks.append(f(Yi))
+            return jnp.stack(Ys)                      # (s, n)
+
+        def step_adjoint(y_prev_k, y_k, params_, dt, lam):
+            # Recompute the stages from the pre-step state, then sweep. The
+            # post-step state y_k is unused (the stages carry the dependence).
+            Ys = _stages(y_prev_k, params_, dt)
+            return _stage_adjoint_sweep(Ys, params_, dt, lam)
+    else:
+        def step_adjoint(y_prev_k, y_k, params_, dt, lam, ks):
+            # Reconstruct the stages from the saved dt-scaled stage increments ks
+            # (diffrax dense output): Y_i = y_n + sum_j A[i,j]*k_j with A the full
+            # lower-triangular Butcher matrix (dt already folded into k) -- exact,
+            # no Newton recompute. The post-step state y_k is unused.
+            Ys = y_prev_k[None, :] + (A @ ks)             # (s, n)
+            return _stage_adjoint_sweep(Ys, params_, dt, lam)
+
     out = _discrete_adjoint_solve(
         primal, y0, params, t_span, t_eval,
         solver=solver, step_adjoint=step_adjoint,
         rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
-        save_stages=True, factormax=factormax,
+        save_stages=not use_low_memory, factormax=factormax,
     )
     return out[..., :n0] if time_dependent else out

@@ -694,6 +694,9 @@ def calibrate(
         (allocated) forward step count for the ``method="stable"`` solve -- the
         backward scan walks this whole saved-trajectory buffer, so set it to a
         tight upper bound on the step count (ignored for ``through_solve``).
+        ``adjoint_low_memory`` recomputes each step's stages in the backward pass
+        instead of saving the ``~n_stages``x dense-stage buffer -- memory for
+        compute, with the gradient unchanged.
     n_starts : int, optional
         Number of optimiser starts (default ``1``). With ``n_starts > 1`` the
         calibration is run from several starting points and the lowest-loss
@@ -739,6 +742,7 @@ def calibrate(
     gradient = "stable_adjoint" if diff.method == "stable" else "jax_adjoint"
     check_finite = diff.check_finite
     stable_adjoint_max_steps = int(diff.adjoint_max_steps)
+    stable_adjoint_low_memory = bool(diff.adjoint_low_memory)
 
     if not free_params:
         raise ValueError("free_params must be non-empty.")
@@ -1010,6 +1014,7 @@ def calibrate(
                     _da_rhs, C0_k, p, tspan_i, tobs_i,
                     rtol=reactor.rtol, atol=reactor.atol,
                     max_steps=stable_adjoint_max_steps,
+                    low_memory=stable_adjoint_low_memory,
                 )
                 preds.append(ys[:, obs_species_indices])
             else:
