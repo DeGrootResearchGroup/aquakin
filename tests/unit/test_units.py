@@ -18,6 +18,14 @@ from aquakin.core.units import prettify_units
         ("", ""),               # empty
         ("m2", "m²"),
         ("d-1", "d⁻¹"),
+        # Longest-match-first alternation: `min` / `mol` must win over `m`, so the
+        # whole symbol carries the exponent (not the `m` leaving `in1` / `ol1`).
+        ("min-1", "min⁻¹"),
+        ("mol-1", "mol⁻¹"),
+        ("mol2", "mol²"),
+        # Multi-character symbols carry exponents too.
+        ("kg2", "kg²"),
+        ("Pa-1", "Pa⁻¹"),
     ],
 )
 def test_prettify_units(plain, pretty):

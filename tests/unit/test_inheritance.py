@@ -105,6 +105,22 @@ remove:
     assert "ammonification" in aquakin.load_network("asm1").reaction_names
 
 
+def test_remove_block_explicit_null_is_treated_as_empty(tmp_path):
+    """A `remove:` block set to an explicit null (e.g. `reactions: null`) removes
+    nothing for that block -- `remove.get(block) or []` collapses None to empty --
+    rather than erroring. The base is inherited intact."""
+    net = aquakin.load_network_from_file(_derived(tmp_path, """
+network:
+  name: asm1_remove_null
+  extends: asm1
+remove:
+  reactions: null
+"""))
+    base = aquakin.load_network("asm1")
+    assert net.reaction_names == base.reaction_names      # nothing removed
+    assert net.species == base.species
+
+
 # --- error handling ----------------------------------------------------------
 
 def test_unknown_base_errors(tmp_path):

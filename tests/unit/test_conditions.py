@@ -39,6 +39,40 @@ def test_operating_conditions_works_in_reactor():
     assert jnp.all(jnp.isfinite(sol.C))
 
 
+# ----- construction-time validation ---------------------------------------
+
+def test_mismatched_field_lengths_rejected():
+    """Every field must span the same number of locations; a length mismatch is a
+    construction-time ValueError, not a silent broadcast."""
+    with pytest.raises(ValueError, match="length"):
+        SpatialConditions(fields={"pH": jnp.array([7.0, 7.1]),
+                                  "T": jnp.array([293.15])})
+
+
+def test_non_1d_field_rejected():
+    """A condition field must be scalar (promoted to length-1) or 1-D; a 2-D array
+    is rejected."""
+    with pytest.raises(ValueError, match="1-D"):
+        SpatialConditions(fields={"pH": jnp.ones((2, 2))})
+
+
+def test_uniform_rejects_nonpositive_location_count():
+    with pytest.raises(ValueError, match="n_locations"):
+        SpatialConditions.uniform(0, pH=7.0)
+
+
+def test_n_locations_zero_for_empty():
+    assert SpatialConditions().n_locations == 0
+
+
+def test_with_rejects_wrong_length_array_override():
+    """A 1-D override is used as-is, so it must match the object's location count;
+    a wrong length is caught when the merged object is re-validated."""
+    sc = SpatialConditions.uniform(3, pH=7.0)
+    with pytest.raises(ValueError, match="length"):
+        sc.with_(T=jnp.array([280.0, 285.0]))
+
+
 # ----- with_ ---------------------------------------------------------------
 
 def test_with_overrides_field_and_leaves_original():

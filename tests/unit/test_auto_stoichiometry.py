@@ -191,6 +191,80 @@ def test_auto_parameter_expression_coefficient_is_differentiable(tmp_path):
     assert float(g) == pytest.approx(1.0 / 0.67**2, rel=1e-6)
 
 
+def test_auto_skips_reactions_without_auto_coefficients(tmp_path):
+    """A network mixing a fully-numeric reaction with an `auto` one: the numeric
+    reaction is passed through untouched (the `if not auto_species: continue`
+    branch), the auto one is resolved. Every prior test used auto-only reactions."""
+    net = _load(tmp_path, """
+        network: {name: auto_mixed}
+        conserved_for: [COD]
+        species:
+          - {name: S_S, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
+          - {name: S_O, units: gO2/m3,  default_concentration: 8.0, composition: {COD: -1.0}}
+          - {name: X,   units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
+        reactions:
+          - name: decay
+            rate: "b * [X]"
+            parameters: {b: {value: 0.1}}
+            stoichiometry: {X: -1.0, S_S: 1.0}
+          - name: growth
+            rate: "mu * [S_S] * [X]"
+            parameters: {mu: {value: 1.0}}
+            stoichiometry: {S_S: -2.0, S_O: auto, X: 1.0}
+        """)
+    i_decay = net.reaction_names.index("decay")
+    i_growth = net.reaction_names.index("growth")
+    # Numeric reaction untouched.
+    assert float(net.stoich_matrix[i_decay, net.species_index["X"]]) == pytest.approx(-1.0)
+    assert float(net.stoich_matrix[i_decay, net.species_index["S_S"]]) == pytest.approx(1.0)
+    assert float(net.stoich_matrix[i_decay, net.species_index["S_O"]]) == pytest.approx(0.0, abs=1e-12)
+    # Auto reaction resolved (S_S -2 destroys 1 gCOD/unit -> S_O demand -1).
+    assert float(net.stoich_matrix[i_growth, net.species_index["S_O"]]) == pytest.approx(-1.0)
+    assert net.check_conservation(tol=1e-12) == []
+
+
+def test_symbolic_auto_drops_structural_zero_weight_terms(tmp_path):
+    """The symbolic (parameter-expression) auto path emits each coefficient as a
+    weighted sum of the known coefficients, dropping structural-zero weights.
+
+    Two conserved quantities (COD, N) with two auto unknowns (SO from COD, SN from
+    N), and a parameter-expression known coefficient (the symbolic path):
+
+    - SO's expression keeps the COD-bearing knowns (S_S, X) and DROPS the P-only
+      inert Z, whose COD weight is a structural zero (exercises ``abs(w) > tol``);
+    - SN has no N source among the knowns, so ALL its weights drop and it resolves
+      to the literal ``"0.0"`` (exercises the ``terms else "0.0"`` branch).
+    """
+    import numpy as np
+    net = _load(tmp_path, """
+        network: {name: auto_symb_zero}
+        conserved_for: [COD, N]
+        parameters: {Y: {value: 0.6}}
+        species:
+          - {name: S_S, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
+          - {name: SO,  units: gO2/m3,  default_concentration: 8.0, composition: {COD: -1.0}}
+          - {name: SN,  units: gN/m3,   default_concentration: 1.0, composition: {N: 1.0}}
+          - {name: X,   units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
+          - {name: Z,   units: g/m3,    default_concentration: 1.0, composition: {P: 1.0}}
+        reactions:
+          - name: growth
+            rate: "mu * [S_S]"
+            parameters: {mu: {value: 1.0}}
+            stoichiometry: {S_S: "0.0 - 1.0 / Y", X: 1.0, Z: 1.0, SO: auto, SN: auto}
+        """)
+    assert net.stoich_dynamic, "SO is parameter-dependent -> a dynamic coefficient"
+    j_SO, j_SN, iY = net.species_index["SO"], net.species_index["SN"], net.param_index["Y"]
+    for Y in (0.4, 0.6, 0.9):
+        p = np.array(net.default_parameters())
+        p[iY] = Y
+        coef = net.compute_stoich(p)
+        # SN -> constant 0.0 for every Y (all weight terms dropped).
+        assert float(coef[0, j_SN]) == pytest.approx(0.0, abs=1e-12)
+        # SO balances COD from S_S (-1/Y) and X (+1); Z's COD weight was dropped.
+        assert float(coef[0, j_SO]) == pytest.approx((Y - 1.0) / Y, rel=1e-9)
+        assert net.check_conservation(tol=1e-9, params=p, quantities=["COD"]) == []
+
+
 def test_symbolic_auto_requires_square_system(tmp_path):
     # Two balances (COD, N) but a single auto unknown alongside a parameter
     # expression: the over-determined symbolic consistency would be
