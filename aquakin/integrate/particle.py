@@ -19,10 +19,10 @@ import jax.numpy as jnp
 
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
-    _HasNamedSpecies,
     DifferentiationConfig,
     GradientCheckMixin,
     IntegratorConfig,
+    _HasNamedSpecies,
     _interp_fields_to_scalar,
     cached_jitted_solver,
     friendly_solve_errors,
@@ -64,9 +64,7 @@ class Track:
         for name, value in self.fields.items():
             arr = jnp.asarray(value)
             if arr.shape != (n,):
-                raise ValueError(
-                    f"Track field '{name}' has shape {arr.shape}, expected ({n},)"
-                )
+                raise ValueError(f"Track field '{name}' has shape {arr.shape}, expected ({n},)")
             normalised[name] = arr
         self.t = t
         self.fields = normalised
@@ -138,8 +136,7 @@ class ParticleTrackReactor(GradientCheckMixin):
                 f"Track is missing required condition fields: {missing}. "
                 f"Provided: {sorted(track.fields)}"
             )
-        init_solver_settings(self, network, rtol=rtol, integrator=integrator,
-                             diff=diff)
+        init_solver_settings(self, network, rtol=rtol, integrator=integrator, diff=diff)
         self.track = track
         self.n_save = int(n_save) if n_save is not None else track.n_points
         if self.n_save < 2:
@@ -162,9 +159,7 @@ class ParticleTrackReactor(GradientCheckMixin):
         TrackSolution
         """
         C0 = jnp.asarray(C0)
-        params = (
-            self.network.default_parameters() if params is None else jnp.asarray(params)
-        )
+        params = self.network.default_parameters() if params is None else jnp.asarray(params)
         validate_C0_params(self.network, C0, params)
 
         t_grid = jnp.asarray(self.track.t)
@@ -178,10 +173,10 @@ class ParticleTrackReactor(GradientCheckMixin):
         # integrate_ensemble). JAX's per-shape cache covers tracks that differ in
         # length, so the key need only carry the network + settings.
         settings = reactor_settings_key(self)
-        cache_key = (None if settings is None
-                     else ("particle", id(self.network), settings))
+        cache_key = None if settings is None else ("particle", id(self.network), settings)
         jitted = cached_jitted_solver(
-            cache_key, self._build_jitted_solve, self.network, self.adjoint)
+            cache_key, self._build_jitted_solve, self.network, self.adjoint
+        )
         with friendly_solve_errors(self.max_steps, what="particle-track solve"):
             ts, ys = jitted(C0, params, t_grid, self.track.fields, t_save)
         return TrackSolution(t=ts, C=ys, network=self.network)
@@ -207,12 +202,21 @@ class ParticleTrackReactor(GradientCheckMixin):
         @jax.jit
         def _solve(C0, params, t_grid, fields, t_save):
             sol = solve_chemistry(
-                network, C0, params,
+                network,
+                C0,
+                params,
                 cond_fn=lambda t: _interp_fields_to_scalar(t, t_grid, fields),
                 saveat=diffrax.SaveAt(ts=t_save),
-                t0=t_grid[0], t1=t_grid[-1], rtol=rtol, atol=atol,
-                adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
-                order=order, factormax=factormax, solver=solver,
+                t0=t_grid[0],
+                t1=t_grid[-1],
+                rtol=rtol,
+                atol=atol,
+                adjoint=adjoint,
+                dtmax=dtmax,
+                max_steps=max_steps,
+                order=order,
+                factormax=factormax,
+                solver=solver,
             )
             return sol.ts, sol.ys
 
@@ -256,8 +260,13 @@ def integrate_ensemble(
     results: dict[int, TrackSolution] = {}
     for pid, track in tracks.items():
         reactor = ParticleTrackReactor(
-            network, track, n_save=n_save, rtol=rtol, atol=atol,
-            integrator=integrator, diff=diff,
+            network,
+            track,
+            n_save=n_save,
+            rtol=rtol,
+            atol=atol,
+            integrator=integrator,
+            diff=diff,
         )
         results[pid] = reactor.solve(C0_fn(pid), params=params)
     return results

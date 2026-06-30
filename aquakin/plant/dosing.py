@@ -15,7 +15,7 @@ oxygen demand -- is the downstream reactor's chemistry, not this unit's job.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
@@ -59,8 +59,7 @@ class Reagent:
     label: str = "reagent"
 
     @classmethod
-    def from_species(cls, network, overrides=None, /, *, label="reagent",
-                     **species) -> "Reagent":
+    def from_species(cls, network, overrides=None, /, *, label="reagent", **species) -> "Reagent":
         """Build a reagent from named species concentrations (everything else 0).
 
         Thin wrapper over :meth:`CompiledNetwork.concentrations` with
@@ -155,18 +154,16 @@ class DosingUnit:
                 f"or setpoint= (feedback)."
             )
         if self.flow is not None and self.flow < 0.0:
-            raise ValueError(
-                f"DosingUnit '{self.name}' flow must be >= 0, got {self.flow}."
-            )
-        if self.setpoint is not None and (
-            self.measured_species is None or self.sensor is None
-        ):
+            raise ValueError(f"DosingUnit '{self.name}' flow must be >= 0, got {self.flow}.")
+        if self.setpoint is not None and (self.measured_species is None or self.sensor is None):
             raise ValueError(
                 f"DosingUnit '{self.name}' feedback dosing needs both "
                 f"measured_species= and sensor=."
             )
-        if self.measured_species is not None \
-                and self.measured_species not in self.network.species_index:
+        if (
+            self.measured_species is not None
+            and self.measured_species not in self.network.species_index
+        ):
             raise ValueError(
                 f"DosingUnit '{self.name}' measured species "
                 f"'{self.measured_species}' not in the reagent's network."
@@ -195,8 +192,7 @@ class DosingUnit:
 
     def controller_id(self) -> str:
         """The id of the (shared or dedicated) controller for this dose."""
-        return self.controller if self.controller is not None \
-            else f"{self.name}_dosing"
+        return self.controller if self.controller is not None else f"{self.name}_dosing"
 
     @property
     def required_signals(self) -> tuple[str, ...]:
@@ -239,11 +235,9 @@ class DosingUnit:
         # The reagent carries no temperature of its own; the dosed stream keeps
         # the through-stream's temperature (a small ambient dose into a large flow
         # does not move it appreciably).
-        return {self.output_port: Stream(Q=q_out, C=c_out, network=self.network,
-                                         T=s_in.T)}
+        return {self.output_port: Stream(Q=q_out, C=c_out, network=self.network, T=s_in.T)}
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray,
-                     ctx=None) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output flow = inflow + dose flow. For a feedback dose the actual flow
         is signal- (and thus concentration-) dependent, so the linear flow solve
         uses the nominal ``flow_offset`` here and the exact value is applied in

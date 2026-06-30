@@ -185,25 +185,23 @@ class CarbonFootprint:
         terms = [
             ("Direct N2O", self.direct_n2o, "kg N/d", self.direct_n2o_co2e),
             ("Energy (grid)", self.energy_kwh, "kWh/d", self.energy_co2e),
-            ("CH4 fugitive", self.ch4_fugitive, "kg CH4/d",
-             self.ch4_fugitive_co2e),
-            ("Biogas credit", self.biogas_recovered_kwh, "kWh/d",
-             -self.biogas_credit_co2e),
+            ("CH4 fugitive", self.ch4_fugitive, "kg CH4/d", self.ch4_fugitive_co2e),
+            ("Biogas credit", self.biogas_recovered_kwh, "kWh/d", -self.biogas_credit_co2e),
         ]
         width = max(len(lbl) for lbl, *_ in terms)
         lines = [
-            title, "=" * len(title),
-            f"  Net footprint = {self.total_co2e:14.1f}  kg CO2e/d "
-            f"(lower is better)",
+            title,
+            "=" * len(title),
+            f"  Net footprint = {self.total_co2e:14.1f}  kg CO2e/d (lower is better)",
             "",
-            f"  {'source':<{width}}  {'amount':>12}  {'unit':<9}  "
-            f"{'kg CO2e/d':>12}",
+            f"  {'source':<{width}}  {'amount':>12}  {'unit':<9}  {'kg CO2e/d':>12}",
         ]
         for lbl, val, unit, co2e in terms:
             lines.append(f"  {lbl:<{width}}  {val:12.3f}  {unit:<9}  {co2e:12.1f}")
         lines.append("")
-        lines += textwrap.wrap(self.note, width=76, initial_indent="  Note: ",
-                               subsequent_indent="        ")
+        lines += textwrap.wrap(
+            self.note, width=76, initial_indent="  Note: ", subsequent_indent="        "
+        )
         return "\n".join(lines)
 
     def __str__(self) -> str:
@@ -262,8 +260,10 @@ def carbon_footprint(
         ch4_fugitive=ch4_fugitive,
         biogas_recovered_kwh=float(biogas_recovered_kwh),
         grid_factor=float(grid_factor),
-        gwp_n2o=float(gwp_n2o), gwp_ch4=float(gwp_ch4),
-        direct_n2o_co2e=direct_n2o_co2e, energy_co2e=energy_co2e,
+        gwp_n2o=float(gwp_n2o),
+        gwp_ch4=float(gwp_ch4),
+        direct_n2o_co2e=direct_n2o_co2e,
+        energy_co2e=energy_co2e,
         ch4_fugitive_co2e=ch4_fugitive_co2e,
         biogas_credit_co2e=biogas_credit_co2e,
         total_co2e=total,

@@ -216,8 +216,12 @@ class StreamSeries(_HasNamedSpecies):
         columns = [(sp, self.C[:, j]) for j, sp in enumerate(self.network.species)]
         units = {sp: self.network.units_of(sp) for sp in self.network.species}
         return build_dataframe(
-            self.t, columns, index_name="t", units=units,
-            units_in_columns=units_in_columns, extra=[("Q", self.Q)],
+            self.t,
+            columns,
+            index_name="t",
+            units=units,
+            units_in_columns=units_in_columns,
+            extra=[("Q", self.Q)],
         )
 
     def to_csv(self, path_or_buf=None, *, units_in_columns: bool = True, **kwargs):
@@ -227,6 +231,4 @@ class StreamSeries(_HasNamedSpecies):
         self-describing (a CSV cannot carry ``df.attrs``). Extra keyword
         arguments are forwarded to ``pandas.DataFrame.to_csv``.
         """
-        return self.to_dataframe(units_in_columns=units_in_columns).to_csv(
-            path_or_buf, **kwargs
-        )
+        return self.to_dataframe(units_in_columns=units_in_columns).to_csv(path_or_buf, **kwargs)

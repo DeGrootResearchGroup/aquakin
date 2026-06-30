@@ -139,19 +139,18 @@ class SBRUnit(CouplingAware):
         if any(p.duration <= 0 for p in self.phases):
             raise ValueError(f"SBRUnit '{self.name}' phase durations must be > 0.")
         if not (0.0 < self.initial_fraction <= 1.0):
-            raise ValueError(
-                f"SBRUnit '{self.name}' initial_fraction must be in (0, 1].")
-        missing = [c for c in self.network.conditions_required
-                   if c not in self.conditions]
+            raise ValueError(f"SBRUnit '{self.name}' initial_fraction must be in (0, 1].")
+        missing = [c for c in self.network.conditions_required if c not in self.conditions]
         if missing:
             raise ValueError(
                 f"SBRUnit '{self.name}' is missing condition values for: "
-                f"{missing}. Provided: {list(self.conditions)}.")
+                f"{missing}. Provided: {list(self.conditions)}."
+            )
         for s in self.particulate_species:
             if s not in self.network.species_index:
                 raise ValueError(
-                    f"SBRUnit '{self.name}' particulate species '{s}' not in "
-                    f"the network.")
+                    f"SBRUnit '{self.name}' particulate species '{s}' not in the network."
+                )
 
         # Phase schedule (concrete floats; static).
         durations = [float(p.duration) for p in self.phases]
@@ -161,8 +160,8 @@ class SBRUnit(CouplingAware):
         for d in durations:
             acc += d
             cum.append(acc)
-        self._interior_breaks = jnp.asarray(cum[:-1])      # within-cycle boundaries
-        self._phase_starts = [0.0] + cum[:-1]              # phase start offsets
+        self._interior_breaks = jnp.asarray(cum[:-1])  # within-cycle boundaries
+        self._phase_starts = [0.0] + cum[:-1]  # phase start offsets
 
         # Per-phase flag/value arrays, indexed by phase index.
         self._feed = jnp.asarray([1.0 if p.feed else 0.0 for p in self.phases])
@@ -179,6 +178,7 @@ class SBRUnit(CouplingAware):
             if p.mixed is not None:
                 return bool(p.mixed)
             return bool(p.feed or p.kla > 0.0)
+
         self._mixed = jnp.asarray([1.0 if _is_mixed(p) else 0.0 for p in self.phases])
 
         # Oxygen-transfer mask (a single aerated species).
@@ -190,8 +190,7 @@ class SBRUnit(CouplingAware):
             self._o2_mask = jnp.zeros((n,))
 
         # Condition arrays for the rate evaluation (as on a CSTR).
-        self._condition_arrays = {
-            k: jnp.asarray([float(v)]) for k, v in self.conditions.items()}
+        self._condition_arrays = {k: jnp.asarray([float(v)]) for k, v in self.conditions.items()}
 
         # Bind the settling model's particulate mask.
         self.settling.bind(self.network, list(self.particulate_species))
@@ -219,9 +218,11 @@ class SBRUnit(CouplingAware):
         return [self.output_port]
 
     def initial_state(self) -> jnp.ndarray:
-        C0 = (self.network.default_concentrations()
-              if self.initial_concentrations is None
-              else jnp.asarray(self.initial_concentrations))
+        C0 = (
+            self.network.default_concentrations()
+            if self.initial_concentrations is None
+            else jnp.asarray(self.initial_concentrations)
+        )
         V0 = jnp.asarray([self.initial_fraction * float(self.full_volume)])
         return jnp.concatenate([C0, V0, self.settling.initial_extra_state()])
 
@@ -233,7 +234,7 @@ class SBRUnit(CouplingAware):
 
     def _split(self, state: jnp.ndarray):
         n = self.network.n_species
-        return state[:n], state[n], state[n + 1:]
+        return state[:n], state[n], state[n + 1 :]
 
     # ----- structural coupling (issue #388) ------------------------------
     def coupling_pattern(self):
@@ -251,8 +252,8 @@ class SBRUnit(CouplingAware):
         representative time). ``inlet``: the convective dilution diagonal on the
         species (active during fill); the feed couples no other state.
         """
-        import numpy as np
         import jax
+        import numpy as np
 
         from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
         from aquakin.plant.coupling import CouplingPattern, ad_union
@@ -262,22 +263,18 @@ class SBRUnit(CouplingAware):
         m = self.state_size
         params = net.default_parameters()
         state0 = np.asarray(self.initial_state())
-        base_C = jnp.asarray(np.maximum(np.abs(np.asarray(
-            net.default_concentrations())), 1e-3))
-        inlet = {self.input_port: Stream(Q=jnp.asarray(self.feed_flow),
-                                         C=base_C, network=net)}
+        base_C = jnp.asarray(np.maximum(np.abs(np.asarray(net.default_concentrations())), 1e-3))
+        inlet = {self.input_port: Stream(Q=jnp.asarray(self.feed_flow), C=base_C, network=net)}
 
         # AD over diverse states, unioned over a representative time in each phase
         # (so the fill/decant/settle couplings all appear). A Monod term is invisible
         # to this, so the rate AST is unioned in below.
         self_pat = np.zeros((m, m), dtype=bool)
         for p, start in enumerate(self._phase_starts):
-            t_p = jnp.asarray(self.cycle_origin + start
-                              + 0.5 * float(self.phases[p].duration))
-            jac = lambda s, _t=t_p: jax.jacfwd(
-                lambda x: self.rhs(_t, x, inlet, params))(s)
+            t_p = jnp.asarray(self.cycle_origin + start + 0.5 * float(self.phases[p].duration))
+            jac = lambda s, _t=t_p: jax.jacfwd(lambda x: self.rhs(_t, x, inlet, params))(s)
             self_pat |= ad_union(jac, state0)
-        self_pat[:n, :n] |= structural_sparsity_pattern(net)   # saturated kinetics
+        self_pat[:n, :n] |= structural_sparsity_pattern(net)  # saturated kinetics
         np.fill_diagonal(self_pat, True)
 
         # Feed enters only through ``q_in/V*(C_in - C)`` -- diagonal in species, no
@@ -301,8 +298,7 @@ class SBRUnit(CouplingAware):
         c_decant = self.settling.decant_multiplier(C, V, extra) * C
         return {self.output_port: Stream(Q=q_out, C=c_decant, network=self.network)}
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray,
-                     ctx=None) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Effluent flow = ``decant_flow`` during a decant phase, else 0. Reads
         the time from the flow context (a scheduled split)."""
         t = jnp.zeros(()) if (ctx is None or ctx.t is None) else ctx.t

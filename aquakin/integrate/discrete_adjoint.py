@@ -72,11 +72,11 @@ from aquakin.integrate._common import (
 )
 
 # Shared forward-solve defaults for both discrete-adjoint solvers.
-_DEFAULT_RTOL = 1e-6              # PID controller relative tolerance
-_DEFAULT_ATOL = 1e-9             # PID controller absolute tolerance
-_DEFAULT_DT0 = 1e-6             # initial step (the adaptive controller grows it)
-_DEFAULT_MAX_STEPS = 200_000   # saved-trajectory buffer the backward scan walks
-_DEFAULT_NEWTON_ITERS = 12     # per-stage Newton iters when low_memory recomputes stages
+_DEFAULT_RTOL = 1e-6  # PID controller relative tolerance
+_DEFAULT_ATOL = 1e-9  # PID controller absolute tolerance
+_DEFAULT_DT0 = 1e-6  # initial step (the adaptive controller grows it)
+_DEFAULT_MAX_STEPS = 200_000  # saved-trajectory buffer the backward scan walks
+_DEFAULT_NEWTON_ITERS = 12  # per-stage Newton iters when low_memory recomputes stages
 
 
 # The decoupled-Newton root finder, the colored-Jacobian root finder, and the PID
@@ -141,7 +141,8 @@ def _discrete_adjoint_solve(
     # forces steps to land on the observation times -- so each is a step boundary
     # and the discrete adjoint needs no interpolation.
     controller = diffrax.ClipStepSizeController(
-        build_step_controller(rtol, atol, factormax=factormax), step_ts=teval)
+        build_step_controller(rtol, atol, factormax=factormax), step_ts=teval
+    )
 
     # ``dense=save_stages`` makes diffrax also store each step's dense-output
     # info, which for a Runge-Kutta solver carries the stage derivatives ``k`` --
@@ -151,9 +152,16 @@ def _discrete_adjoint_solve(
 
     def _forward(y0_, params_):
         return diffrax.diffeqsolve(
-            term, solver, t0, t1, dt0, y0_, args=params_,
+            term,
+            solver,
+            t0,
+            t1,
+            dt0,
+            y0_,
+            args=params_,
             stepsize_controller=controller,
-            saveat=saveat, max_steps=max_steps,
+            saveat=saveat,
+            max_steps=max_steps,
         )
 
     def _extract(sol, y0_):
@@ -194,23 +202,19 @@ def _discrete_adjoint_solve(
         ybar0_obs = jnp.zeros((n,), dtype=ys.dtype)
         for i in range(teval.shape[0]):
             step_idx = jnp.maximum(idx[i] - 1, 0)
-            injected = injected.at[step_idx].add(
-                jnp.where(idx[i] >= 1, ybar[i], 0.0)
-            )
+            injected = injected.at[step_idx].add(jnp.where(idx[i] >= 1, ybar[i], 0.0))
             ybar0_obs = ybar0_obs + jnp.where(idx[i] == 0, ybar[i], 0.0)
 
         def back_step(carry, k):
             lam, pbar = carry
             ok = valid[k] & (dts[k] > 0)
-            lam_k = lam + injected[k]            # add this step's observation cotangent
+            lam_k = lam + injected[k]  # add this step's observation cotangent
 
             def do(_):
                 if save_stages:
-                    lam_n, dpar = step_adjoint(
-                        y_prev[k], ys[k], params_, dts[k], lam_k, ks[k])
+                    lam_n, dpar = step_adjoint(y_prev[k], ys[k], params_, dts[k], lam_k, ks[k])
                 else:
-                    lam_n, dpar = step_adjoint(
-                        y_prev[k], ys[k], params_, dts[k], lam_k)
+                    lam_n, dpar = step_adjoint(y_prev[k], ys[k], params_, dts[k], lam_k)
                 return lam_n, pbar + dpar
 
             return jax.lax.cond(ok, do, lambda _: (lam_k, pbar), None)
@@ -230,7 +234,8 @@ def _discrete_adjoint_solve(
         # through the stiff solve is avoided elsewhere regardless.)
         n_steps = jnp.sum(valid).astype(jnp.int32)
         lam0, pbar = jax.lax.fori_loop(
-            0, n_steps,
+            0,
+            n_steps,
             lambda i, carry: back_step(carry, n_steps - 1 - i),
             (jnp.zeros((n,), dtype=ys.dtype), jnp.zeros_like(params_)),
         )
@@ -355,7 +360,8 @@ def implicit_euler_adjoint_solve(
     # the supplied ImplicitEuler gets explicit tolerances for the step-clipping
     # controller), matching the forward path's per-stage Newton configuration.
     solver = build_implicit_solver(
-        rtol, atol, solver=diffrax.ImplicitEuler(), force_root_finder=True)
+        rtol, atol, solver=diffrax.ImplicitEuler(), force_root_finder=True
+    )
 
     def step_adjoint(y_prev_k, y_k, params_, dt, lam_k):
         # Implicit Euler step y_{n+1} = y_n + dt f(y_{n+1}); its adjoint uses the
@@ -370,9 +376,17 @@ def implicit_euler_adjoint_solve(
         return mu, dpar
 
     out = _discrete_adjoint_solve(
-        primal, y0, params, t_span, t_eval,
-        solver=solver, step_adjoint=step_adjoint,
-        rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
+        primal,
+        y0,
+        params,
+        t_span,
+        t_eval,
+        solver=solver,
+        step_adjoint=step_adjoint,
+        rtol=rtol,
+        atol=atol,
+        dt0=dt0,
+        max_steps=max_steps,
     )
     return out[..., :n0] if time_dependent else out
 
@@ -418,7 +432,7 @@ def _esdirk_tableau(solver):
     diag = np.asarray(t.a_diagonal, dtype=float)
     for i in range(s):
         A[i, i] = diag[i]
-    for k, row in enumerate(t.a_lower):       # a_lower[k] is row k+1's sub-diagonal
+    for k, row in enumerate(t.a_lower):  # a_lower[k] is row k+1's sub-diagonal
         A[k + 1, : k + 1] = np.asarray(row, dtype=float)
     return jnp.asarray(A), jnp.asarray(np.asarray(t.b_sol, dtype=float)), diag, s
 
@@ -434,8 +448,7 @@ def _is_singly_diagonal_esdirk(diag):
     if diag.size == 0 or diag[0] != 0.0:
         return False
     implicit = diag[1:]
-    return bool(implicit.size and np.all(implicit > 0.0)
-                and np.allclose(implicit, implicit[0]))
+    return bool(implicit.size and np.all(implicit > 0.0) and np.allclose(implicit, implicit[0]))
 
 
 def esdirk_adjoint_solve(
@@ -573,8 +586,13 @@ def esdirk_adjoint_solve(
     # exact and a missed coupling only costs steps (the forward chord
     # self-corrects), so it never affects the result.
     solver = build_implicit_solver(
-        rtol, atol, order=order, solver=solver,
-        colored_root_finder=forward_root_finder, force_root_finder=True)
+        rtol,
+        atol,
+        order=order,
+        solver=solver,
+        colored_root_finder=forward_root_finder,
+        force_root_finder=True,
+    )
     A, b, diag_np, s = _esdirk_tableau(solver)
     diag = jnp.asarray(diag_np)
     n = y0.shape[0]
@@ -627,10 +645,12 @@ def esdirk_adjoint_solve(
             "low_memory=True needs a singly-diagonal ESDIRK tableau (explicit "
             "first stage, constant implicit gamma); this solver is not one, so "
             "the saved-stage path is used instead.",
-            RuntimeWarning, stacklevel=2,
+            RuntimeWarning,
+            stacklevel=2,
         )
 
     if use_low_memory:
+
         def _stages(y_n, params_, dt):
             # Re-solve the ESDIRK stage values Y_i forward from the pre-step
             # state: each stage solves Y_i = pred_i + dt*gamma_i f(Y_i) by Newton
@@ -653,13 +673,12 @@ def esdirk_adjoint_solve(
                     def newton(Y, _, pred=pred, gi=gi):
                         G = Y - pred - dt * gi * f(Y)
                         J = _build_jac(f, Y)
-                        return Y - jnp.linalg.solve(
-                            jnp.eye(n) - dt * gi * J, G), None
+                        return Y - jnp.linalg.solve(jnp.eye(n) - dt * gi * J, G), None
 
                     Yi, _ = jax.lax.scan(newton, Yi, None, length=newton_iters)
                 Ys.append(Yi)
                 ks.append(f(Yi))
-            return jnp.stack(Ys)                      # (s, n)
+            return jnp.stack(Ys)  # (s, n)
 
         def step_adjoint(y_prev_k, y_k, params_, dt, lam):
             # Recompute the stages from the pre-step state, then sweep. The
@@ -667,18 +686,28 @@ def esdirk_adjoint_solve(
             Ys = _stages(y_prev_k, params_, dt)
             return _stage_adjoint_sweep(Ys, params_, dt, lam)
     else:
+
         def step_adjoint(y_prev_k, y_k, params_, dt, lam, ks):
             # Reconstruct the stages from the saved dt-scaled stage increments ks
             # (diffrax dense output): Y_i = y_n + sum_j A[i,j]*k_j with A the full
             # lower-triangular Butcher matrix (dt already folded into k) -- exact,
             # no Newton recompute. The post-step state y_k is unused.
-            Ys = y_prev_k[None, :] + (A @ ks)             # (s, n)
+            Ys = y_prev_k[None, :] + (A @ ks)  # (s, n)
             return _stage_adjoint_sweep(Ys, params_, dt, lam)
 
     out = _discrete_adjoint_solve(
-        primal, y0, params, t_span, t_eval,
-        solver=solver, step_adjoint=step_adjoint,
-        rtol=rtol, atol=atol, dt0=dt0, max_steps=max_steps,
-        save_stages=not use_low_memory, factormax=factormax,
+        primal,
+        y0,
+        params,
+        t_span,
+        t_eval,
+        solver=solver,
+        step_adjoint=step_adjoint,
+        rtol=rtol,
+        atol=atol,
+        dt0=dt0,
+        max_steps=max_steps,
+        save_stages=not use_low_memory,
+        factormax=factormax,
     )
     return out[..., :n0] if time_dependent else out

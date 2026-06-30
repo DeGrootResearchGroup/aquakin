@@ -31,7 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.integrate._common import Reactor
-from aquakin.integrate.calibrate import CalibrationResult, calibrate
+from aquakin.integrate.calibrate import calibrate
 
 
 @dataclass
@@ -216,9 +216,7 @@ def profile_likelihood(
     ProfileResult
     """
     if (profile_param is None) == (profile_ic is None):
-        raise ValueError(
-            "Pass exactly one of profile_param or profile_ic."
-        )
+        raise ValueError("Pass exactly one of profile_param or profile_ic.")
     if isinstance(C0, (list, tuple)):
         raise NotImplementedError(
             "profile_likelihood supports a single batch; C0 must be one vector."
@@ -232,8 +230,7 @@ def profile_likelihood(
     network = reactor.network
     C0 = jnp.asarray(C0)
     base_params = (
-        jnp.asarray(initial_params) if initial_params is not None
-        else network.default_parameters()
+        jnp.asarray(initial_params) if initial_params is not None else network.default_parameters()
     )
 
     # Resolve the profiled quantity and strip it from the relevant free set.
@@ -242,17 +239,14 @@ def profile_likelihood(
     if profile_param is not None:
         if profile_param not in network.param_index:
             raise KeyError(
-                f"Unknown profile_param '{profile_param}'. "
-                f"Available: {network.parameters}"
+                f"Unknown profile_param '{profile_param}'. Available: {network.parameters}"
             )
         inner_free = [p for p in inner_free if p != profile_param]
         p_idx = network.param_index[profile_param]
         profiled = profile_param
     else:
         if profile_ic not in network.species_index:
-            raise KeyError(
-                f"Unknown profile_ic '{profile_ic}'. Available: {network.species}"
-            )
+            raise KeyError(f"Unknown profile_ic '{profile_ic}'. Available: {network.species}")
         inner_free_ic = [s for s in inner_free_ic if s != profile_ic]
         s_idx = network.species_index[profile_ic]
         profiled = profile_ic
@@ -271,12 +265,23 @@ def profile_likelihood(
     # calibrate threads as runtime arguments -- so they reuse one compiled
     # program instead of recompiling the stiff objective + Jacobian per point.
     inner_kw = dict(
-        transforms=transforms, observed_species=observed_species, loss=loss,
-        sigma=sigma, priors=priors, use_priors=use_priors,
-        free_ic=(inner_free_ic or None), ic_bounds=ic_bounds,
-        ic_prior_log_std=ic_prior_log_std, param_halfwidth=param_halfwidth,
-        optimizer=optimizer, jitter=jitter, jitter_schedule=jitter_schedule,
-        seed=seed, max_iter=max_iter, tol=tol, laplace=False,
+        transforms=transforms,
+        observed_species=observed_species,
+        loss=loss,
+        sigma=sigma,
+        priors=priors,
+        use_priors=use_priors,
+        free_ic=(inner_free_ic or None),
+        ic_bounds=ic_bounds,
+        ic_prior_log_std=ic_prior_log_std,
+        param_halfwidth=param_halfwidth,
+        optimizer=optimizer,
+        jitter=jitter,
+        jitter_schedule=jitter_schedule,
+        seed=seed,
+        max_iter=max_iter,
+        tol=tol,
+        laplace=False,
         _compiled_cache={},
     )
 
@@ -299,8 +304,14 @@ def profile_likelihood(
         n = n_starts if warm is None else 1
         try:
             return calibrate(
-                reactor, C0_pt, observations, t_obs, inner_free,
-                initial_params=init_p, n_starts=n, **inner_kw,
+                reactor,
+                C0_pt,
+                observations,
+                t_obs,
+                inner_free,
+                initial_params=init_p,
+                n_starts=n,
+                **inner_kw,
             )
         except Exception as exc:
             # Record this point as a gap (NaN) but surface the failure: a real
@@ -320,16 +331,15 @@ def profile_likelihood(
     fits: list = [None] * n
 
     if warm_start:
-        a_idx = (n // 2 if anchor is None
-                 else int(np.argmin(np.abs(grid - float(anchor)))))
+        a_idx = n // 2 if anchor is None else int(np.argmin(np.abs(grid - float(anchor))))
         fits[a_idx] = _fit_point(grid[a_idx], None)
         last_good = fits[a_idx]
-        for i in range(a_idx + 1, n):                 # sweep up
+        for i in range(a_idx + 1, n):  # sweep up
             fits[i] = _fit_point(grid[i], last_good)
             if fits[i] is not None:
                 last_good = fits[i]
         last_good = fits[a_idx]
-        for i in range(a_idx - 1, -1, -1):            # sweep down
+        for i in range(a_idx - 1, -1, -1):  # sweep down
             fits[i] = _fit_point(grid[i], last_good)
             if fits[i] is not None:
                 last_good = fits[i]
@@ -361,13 +371,25 @@ def profile_likelihood(
         # report a clean 'unidentified' result rather than letting nanmin /
         # nanargmin raise on the all-NaN array.
         return ProfileResult(
-            profiled=profiled, grid=grid, loss=loss, delta_loss=loss.copy(),
-            mle=float("nan"), ci=(None, None), fits=fits, delta=delta,
+            profiled=profiled,
+            grid=grid,
+            loss=loss,
+            delta_loss=loss.copy(),
+            mle=float("nan"),
+            ci=(None, None),
+            fits=fits,
+            delta=delta,
         )
     delta_loss = loss - np.nanmin(loss)
     mle = float(grid[int(np.nanargmin(loss))])
     ci = _interp_ci(grid, delta_loss, delta)
     return ProfileResult(
-        profiled=profiled, grid=grid, loss=loss, delta_loss=delta_loss,
-        mle=mle, ci=ci, fits=fits, delta=delta,
+        profiled=profiled,
+        grid=grid,
+        loss=loss,
+        delta_loss=delta_loss,
+        mle=mle,
+        ci=ci,
+        fits=fits,
+        delta=delta,
     )

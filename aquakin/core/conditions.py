@@ -33,15 +33,12 @@ class SpatialConditions:
             if arr.ndim == 0:
                 arr = arr[None]
             elif arr.ndim != 1:
-                raise ValueError(
-                    f"Condition field '{name}' must be 1-D, got shape {arr.shape}"
-                )
+                raise ValueError(f"Condition field '{name}' must be 1-D, got shape {arr.shape}")
             if n_locations is None:
                 n_locations = int(arr.shape[0])
             elif int(arr.shape[0]) != n_locations:
                 raise ValueError(
-                    f"Condition field '{name}' has length {arr.shape[0]}, "
-                    f"expected {n_locations}"
+                    f"Condition field '{name}' has length {arr.shape[0]}, expected {n_locations}"
                 )
             normalised[name] = arr
         self.fields = normalised
@@ -78,8 +75,10 @@ class SpatialConditions:
         # Broadcast (don't ``float()``-coerce) so a *traced* condition value -- a
         # user differentiating a solve w.r.t. pH/T -- flows through instead of
         # raising a ConcretizationTypeError. Identity for a concrete value.
-        fields = {name: jnp.broadcast_to(jnp.asarray(value), (n_locations,))
-                  for name, value in kwargs.items()}
+        fields = {
+            name: jnp.broadcast_to(jnp.asarray(value), (n_locations,))
+            for name, value in kwargs.items()
+        }
         return cls(fields=fields)
 
     def with_(self, **kwargs: float) -> "SpatialConditions":
@@ -160,6 +159,4 @@ class OperatingConditions(SpatialConditions):
         # ``jnp.asarray(value)`` (not ``float(value)``) so a traced condition --
         # a gradient w.r.t. an operating condition -- flows through rather than
         # raising a ConcretizationTypeError. Identity for a concrete value.
-        super().__init__(
-            fields={name: jnp.asarray(value)
-                    for name, value in kwargs.items()})
+        super().__init__(fields={name: jnp.asarray(value) for name, value in kwargs.items()})

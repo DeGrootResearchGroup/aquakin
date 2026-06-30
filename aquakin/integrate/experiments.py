@@ -20,6 +20,7 @@ random sampling, and maps the low-discrepancy unit points through each input's
 inverse CDF (uniform / normal / lognormal), so non-uniform marginals still get a
 low-discrepancy design.
 """
+
 from __future__ import annotations
 
 import math
@@ -32,11 +33,11 @@ import numpy as np
 
 from aquakin.integrate.sensitivity import _sobol_sample
 
-
 # --- distributions -----------------------------------------------------------
 # A per-input distribution is given either as a ``(low, high)`` tuple (uniform)
 # or a mapping ``{"dist": ..., ...}``. Supported: uniform(low, high),
 # normal(mean, std), lognormal(mean, std) -- mean/std in PHYSICAL space.
+
 
 def _ppf(spec) -> Callable[[np.ndarray], np.ndarray]:
     """Return the inverse-CDF (quantile function) ``u in [0,1] -> value`` for one
@@ -47,7 +48,8 @@ def _ppf(spec) -> Callable[[np.ndarray], np.ndarray]:
     if not isinstance(spec, dict) or "dist" not in spec:
         raise ValueError(
             f"distribution must be a (low, high) tuple or a mapping with a "
-            f"'dist' key; got {spec!r}.")
+            f"'dist' key; got {spec!r}."
+        )
     kind = spec["dist"]
     if kind == "uniform":
         lo, hi = float(spec["low"]), float(spec["high"])
@@ -56,20 +58,21 @@ def _ppf(spec) -> Callable[[np.ndarray], np.ndarray]:
         return lambda u: lo + (hi - lo) * u
     if kind == "normal":
         from scipy.stats import norm
+
         m, s = float(spec["mean"]), float(spec["std"])
         if s <= 0:
             raise ValueError("normal needs std > 0.")
         return lambda u: norm.ppf(u, loc=m, scale=s)
     if kind == "lognormal":
         from scipy.stats import norm
-        m, s = float(spec["mean"]), float(spec["std"])   # physical mean / std
+
+        m, s = float(spec["mean"]), float(spec["std"])  # physical mean / std
         if m <= 0 or s <= 0:
             raise ValueError("lognormal needs mean > 0 and std > 0.")
-        sigma = math.sqrt(math.log1p((s / m) ** 2))      # log-space sigma
-        mu = math.log(m) - 0.5 * sigma ** 2              # log-space mu
+        sigma = math.sqrt(math.log1p((s / m) ** 2))  # log-space sigma
+        mu = math.log(m) - 0.5 * sigma**2  # log-space mu
         return lambda u: np.exp(mu + sigma * norm.ppf(u))
-    raise ValueError(
-        f"unknown distribution '{kind}'; use 'uniform', 'normal' or 'lognormal'.")
+    raise ValueError(f"unknown distribution '{kind}'; use 'uniform', 'normal' or 'lognormal'.")
 
 
 def _normalise_distributions(distributions):
@@ -91,6 +94,7 @@ def _unit_sample(d, n_samples, sampler, seed):
         return np.asarray(Z), n
     if sampler == "lhs":
         from scipy.stats import qmc
+
         U = qmc.LatinHypercube(d=d, seed=seed).random(n=n_samples)
         return np.asarray(U), int(U.shape[0])
     if sampler == "random":
@@ -100,6 +104,7 @@ def _unit_sample(d, n_samples, sampler, seed):
 
 
 # --- shared evaluation -------------------------------------------------------
+
 
 def _eval_fn_over(fn, X, batched):
     """Evaluate ``fn`` over the rows of ``X`` (shape (n, d)); return a
@@ -119,12 +124,12 @@ def _resolve_output_names(output_names, m):
     if output_names is None:
         return [f"y{i}" for i in range(m)] if m > 1 else ["output"]
     if len(output_names) != m:
-        raise ValueError(
-            f"output_names has {len(output_names)} entries but fn returns m={m}.")
+        raise ValueError(f"output_names has {len(output_names)} entries but fn returns m={m}.")
     return list(output_names)
 
 
 # --- Monte-Carlo -------------------------------------------------------------
+
 
 @dataclass
 class MonteCarloResult:
@@ -146,6 +151,7 @@ class MonteCarloResult:
     sampler, seed : str, int
         Sampler used and its seed (fixing it makes the result reproducible).
     """
+
     input_names: list[str]
     output_names: list[str]
     samples: np.ndarray
@@ -180,16 +186,22 @@ class MonteCarloResult:
         """A human-readable table of mean / std / percentiles per output."""
         mean, std = self.mean(), self.std()
         pct = self.percentiles(q)
-        head = (f"Monte-Carlo ({self.sampler}, {self.n_valid}/{self.n_drawn} "
-                f"valid, seed {self.seed})")
+        head = (
+            f"Monte-Carlo ({self.sampler}, {self.n_valid}/{self.n_drawn} valid, seed {self.seed})"
+        )
         cols = ["output", "mean", "std"] + [f"p{g:g}" for g in q]
         rows = [cols]
         for i, name in enumerate(self.output_names):
-            rows.append([name, f"{mean[i]:.4g}", f"{std[i]:.4g}",
-                         *[f"{pct[k, i]:.4g}" for k in range(len(q))]])
+            rows.append(
+                [
+                    name,
+                    f"{mean[i]:.4g}",
+                    f"{std[i]:.4g}",
+                    *[f"{pct[k, i]:.4g}" for k in range(len(q))],
+                ]
+            )
         w = [max(len(r[c]) for r in rows) for c in range(len(cols))]
-        body = "\n".join("  ".join(r[c].ljust(w[c]) for c in range(len(cols)))
-                         for r in rows)
+        body = "\n".join("  ".join(r[c].ljust(w[c]) for c in range(len(cols))) for r in rows)
         return head + "\n" + body
 
 
@@ -244,8 +256,8 @@ def monte_carlo(
     if input_names is not None:
         if len(input_names) != d:
             raise ValueError(
-                f"input_names has {len(input_names)} entries but there are "
-                f"{d} distributions.")
+                f"input_names has {len(input_names)} entries but there are {d} distributions."
+            )
         names = list(input_names)
     elif names is None:
         names = [f"z{j}" for j in range(d)]
@@ -261,12 +273,17 @@ def monte_carlo(
     return MonteCarloResult(
         input_names=names,
         output_names=_resolve_output_names(output_names, Yv.shape[1]),
-        samples=Xv, outputs=Yv,
-        n_drawn=n_drawn, n_valid=int(Xv.shape[0]), sampler=sampler, seed=seed,
+        samples=Xv,
+        outputs=Yv,
+        n_drawn=n_drawn,
+        n_valid=int(Xv.shape[0]),
+        sampler=sampler,
+        seed=seed,
     )
 
 
 # --- Scenario comparison -----------------------------------------------------
+
 
 @dataclass
 class ScenarioComparison:
@@ -283,6 +300,7 @@ class ScenarioComparison:
     outputs : np.ndarray
         ``(n_scenarios, m)`` outputs.
     """
+
     scenario_names: list[str]
     input_names: list[str]
     output_names: list[str]
@@ -309,11 +327,11 @@ class ScenarioComparison:
         cols = ["scenario"] + list(self.output_names)
         rows = [cols]
         for i, name in enumerate(self.scenario_names):
-            rows.append([name] + [f"{self.outputs[i, k]:.4g}"
-                                  for k in range(len(self.output_names))])
+            rows.append(
+                [name] + [f"{self.outputs[i, k]:.4g}" for k in range(len(self.output_names))]
+            )
         w = [max(len(r[c]) for r in rows) for c in range(len(cols))]
-        return "\n".join("  ".join(r[c].ljust(w[c]) for c in range(len(cols)))
-                         for r in rows)
+        return "\n".join("  ".join(r[c].ljust(w[c]) for c in range(len(cols))) for r in rows)
 
 
 def compare_scenarios(
@@ -353,8 +371,7 @@ def compare_scenarios(
     """
     input_names = list(input_names)
     d = len(input_names)
-    base = (np.zeros(d) if baseline is None
-            else np.asarray(baseline, dtype=float))
+    base = np.zeros(d) if baseline is None else np.asarray(baseline, dtype=float)
     if base.shape != (d,):
         raise ValueError(f"baseline must have shape ({d},); got {base.shape}.")
     idx = {n: i for i, n in enumerate(input_names)}
@@ -369,14 +386,13 @@ def compare_scenarios(
                 if k not in idx:
                     raise KeyError(
                         f"scenario '{name}' overrides unknown input '{k}'; "
-                        f"inputs are {input_names}.")
+                        f"inputs are {input_names}."
+                    )
                 x[idx[k]] = float(v)
         else:
             x = np.asarray(ov, dtype=float)
             if x.shape != (d,):
-                raise ValueError(
-                    f"scenario '{name}' vector must have shape ({d},); "
-                    f"got {x.shape}.")
+                raise ValueError(f"scenario '{name}' vector must have shape ({d},); got {x.shape}.")
         X[r] = x
 
     Y, finite = _eval_fn_over(fn, X, batched)
@@ -384,13 +400,16 @@ def compare_scenarios(
         bad = [names[i] for i in range(len(names)) if not finite[i]]
         raise ValueError(f"scenario(s) gave a non-finite output: {bad}.")
     return ScenarioComparison(
-        scenario_names=names, input_names=input_names,
+        scenario_names=names,
+        input_names=input_names,
         output_names=_resolve_output_names(output_names, Y.shape[1]),
-        inputs=X, outputs=Y,
+        inputs=X,
+        outputs=Y,
     )
 
 
 # --- Standardized KPI comparison ---------------------------------------------
+
 
 @dataclass
 class KPIComparison:
@@ -442,8 +461,7 @@ class KPIComparison:
                 row.append("" if v is None else f"{v:.4g}")
             rows.append(row)
         w = [max(len(r[c]) for r in rows) for c in range(len(rows[0]))]
-        return "\n".join("  ".join(r[c].ljust(w[c]) for c in range(len(r)))
-                         for r in rows)
+        return "\n".join("  ".join(r[c].ljust(w[c]) for c in range(len(r))) for r in rows)
 
     def __str__(self) -> str:
         return self.table()
@@ -457,8 +475,8 @@ def _kpis_of(report) -> dict:
     if callable(kpis):
         return dict(kpis())
     raise TypeError(
-        f"a KPI report must be a dict or expose a kpis() method; got "
-        f"{type(report).__name__}.")
+        f"a KPI report must be a dict or expose a kpis() method; got {type(report).__name__}."
+    )
 
 
 def kpi_comparison(reports: dict) -> KPIComparison:
@@ -495,6 +513,7 @@ def kpi_comparison(reports: dict) -> KPIComparison:
 
 # --- Constrained design optimization -----------------------------------------
 
+
 @dataclass
 class Constraint:
     """An inequality constraint on a design optimization.
@@ -505,6 +524,7 @@ class Constraint:
     both. ``fn`` should be JAX-differentiable -- its gradient is taken by autodiff
     and handed to the optimizer.
     """
+
     fn: Callable
     upper: Optional[float] = None
     lower: Optional[float] = None
@@ -539,6 +559,7 @@ class OptimizeResult:
     n_iter, n_starts : int
         Iterations of the winning run; number of multistart runs.
     """
+
     input_names: list[str]
     x: np.ndarray
     objective: float
@@ -555,9 +576,11 @@ class OptimizeResult:
         return {n: float(v) for n, v in zip(self.input_names, self.x)}
 
     def report(self) -> str:
-        lines = [f"optimize_design: objective = {self.objective:.6g} "
-                 f"({'feasible' if self.feasible else 'INFEASIBLE'}, "
-                 f"{'converged' if self.success else 'not converged'})"]
+        lines = [
+            f"optimize_design: objective = {self.objective:.6g} "
+            f"({'feasible' if self.feasible else 'INFEASIBLE'}, "
+            f"{'converged' if self.success else 'not converged'})"
+        ]
         for n, v in self.x_named.items():
             lines.append(f"  {n} = {v:.6g}")
         for n, v in self.constraint_values.items():
@@ -568,10 +591,13 @@ class OptimizeResult:
 def _jax_value_and_grad(f):
     """Return numpy ``value(x)`` and ``grad(x)`` callables for a scalar JAX fn."""
     vg = jax.jit(jax.value_and_grad(lambda x: jnp.asarray(f(x), dtype=float).reshape(())))
+
     def value(x):
         return float(vg(jnp.asarray(x, dtype=float))[0])
+
     def grad(x):
         return np.asarray(vg(jnp.asarray(x, dtype=float))[1], dtype=float)
+
     return value, grad
 
 
@@ -638,8 +664,7 @@ def optimize_design(
     if input_names is None:
         input_names = [f"x{j}" for j in range(d)]
     elif len(input_names) != d:
-        raise ValueError(
-            f"input_names has {len(input_names)} entries but bounds has d={d}.")
+        raise ValueError(f"input_names has {len(input_names)} entries but bounds has d={d}.")
     input_names = list(input_names)
     sign = -1.0 if maximize else 1.0
 
@@ -651,13 +676,21 @@ def optimize_design(
     scipy_cons = []
     for c, cval, cgrad in con_val_grad:
         if c.upper is not None:
-            scipy_cons.append({"type": "ineq",
-                               "fun": (lambda x, cv=cval, u=c.upper: u - cv(x)),
-                               "jac": (lambda x, cg=cgrad: -cg(x))})
+            scipy_cons.append(
+                {
+                    "type": "ineq",
+                    "fun": (lambda x, cv=cval, u=c.upper: u - cv(x)),
+                    "jac": (lambda x, cg=cgrad: -cg(x)),
+                }
+            )
         if c.lower is not None:
-            scipy_cons.append({"type": "ineq",
-                               "fun": (lambda x, cv=cval, lo=c.lower: cv(x) - lo),
-                               "jac": (lambda x, cg=cgrad: cg(x))})
+            scipy_cons.append(
+                {
+                    "type": "ineq",
+                    "fun": (lambda x, cv=cval, lo=c.lower: cv(x) - lo),
+                    "jac": (lambda x, cg=cgrad: cg(x)),
+                }
+            )
 
     # Starting points: x0 (or box centre) for a single start; quasi-random
     # otherwise.
@@ -683,9 +716,15 @@ def optimize_design(
 
     best = None
     for s in starts:
-        res = minimize(obj_val, np.asarray(s, dtype=float), jac=obj_grad,
-                       bounds=bounds, constraints=scipy_cons, method=method,
-                       tol=tol)
+        res = minimize(
+            obj_val,
+            np.asarray(s, dtype=float),
+            jac=obj_grad,
+            bounds=bounds,
+            constraints=scipy_cons,
+            method=method,
+            tol=tol,
+        )
         feas = _feasible(res.x)
         # Prefer a feasible point; among equally feasible, a converged optimizer
         # result over a non-converged one (don't let a failed solve with a lower
@@ -695,8 +734,7 @@ def optimize_design(
             best = (key, res, feas)
 
     _, res, feas = best
-    cvals = {(c.name or f"c{i}"): float(cval(res.x))
-             for i, (c, cval, _) in enumerate(con_val_grad)}
+    cvals = {(c.name or f"c{i}"): float(cval(res.x)) for i, (c, cval, _) in enumerate(con_val_grad)}
     return OptimizeResult(
         input_names=input_names,
         x=np.asarray(res.x, dtype=float),

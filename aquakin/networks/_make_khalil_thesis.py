@@ -25,9 +25,11 @@ speciation machinery.
 
 Run from this directory:  python _make_khalil_thesis.py
 """
+
 from __future__ import annotations
 
 import os
+
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -50,18 +52,22 @@ PH_FIXED = 7.5
 # Thesis / paper parameter values (revert the wats_sewer_extended deviations).
 THESIS = {
     # single heterotroph yield Y_H = 0.55 for aerobic AND anoxic growth
-    "y_h_anox": 0.55, "y_hw": 0.55, "y_hf": 0.55,
+    "y_h_anox": 0.55,
+    "y_hw": 0.55,
+    "y_hf": 0.55,
     # thesis hydrolysis is much faster than the paper's printed 5 / 0.5
-    "k_h1": 12.0, "k_h2": 5.0, "k_fe": 20.0,
+    "k_h1": 12.0,
+    "k_h2": 5.0,
+    "k_fe": 20.0,
     "q_ferm": 2.0,
-    "mu_h": 7.0,           # thesis Table 3-1 max aerobic growth rate (paper uses 6.7)
-    "eta_an": 0.18,        # thesis anaerobic hydrolysis correction (paper uses 0.21)
-    "k_12_o2": 4.0,        # thesis Table 3-1 aerobic biofilm half-order growth const (paper uses 18)
-    "k_no": 2.0,            # bulk nitrate half-saturation (paper)
-    "k_h2s_acid": 2.5,      # sulfate reduction (paper)
-    "k_s0_acid": 15.5,      # elemental-sulfur reduction (paper, as printed)
-    "k_sII_anox_f": 12.1,   # thesis-calibrated anoxic sulfide oxidation
-    "k_s0_anox_f": 2.2,     # anoxic elemental-sulfur oxidation
+    "mu_h": 7.0,  # thesis Table 3-1 max aerobic growth rate (paper uses 6.7)
+    "eta_an": 0.18,  # thesis anaerobic hydrolysis correction (paper uses 0.21)
+    "k_12_o2": 4.0,  # thesis Table 3-1 aerobic biofilm half-order growth (paper uses 18)
+    "k_no": 2.0,  # bulk nitrate half-saturation (paper)
+    "k_h2s_acid": 2.5,  # sulfate reduction (paper)
+    "k_s0_acid": 15.5,  # elemental-sulfur reduction (paper, as printed)
+    "k_sII_anox_f": 12.1,  # thesis-calibrated anoxic sulfide oxidation
+    "k_s0_anox_f": 2.2,  # anoxic elemental-sulfur oxidation
 }
 
 
@@ -83,27 +89,28 @@ def main():
         "dropped) and parameters reverted to thesis/paper values (single yield "
         "0.55; k_h1=12, k_h2=5; q_ferm=2; Table 4-1 sulfur kinetics). Generated "
         "by _make_khalil_thesis.py to test reproduction of the published batch "
-        "nitrate-dosing results.")
+        "nitrate-dosing results."
+    )
 
     # (1) Drop the charge-balance pH solver; supply pH as a fixed condition so
     #     the pH-dependent bulk sulfide-oxidation rates still compile.
     net.pop("speciation", None)
     cond_names = {c["name"] for c in net["conditions"]}
     if "pH" not in cond_names:
-        net["conditions"].append({
-            "name": "pH",
-            "description": "Fixed operating pH of the batch (thesis uses a "
-                           "fixed pH rather than a charge-balance solver).",
-            "units": "-",
-            "default": PH_FIXED,
-        })
+        net["conditions"].append(
+            {
+                "name": "pH",
+                "description": "Fixed operating pH of the batch (thesis uses a "
+                "fixed pH rather than a charge-balance solver).",
+                "units": "-",
+                "default": PH_FIXED,
+            }
+        )
 
     # (2) Drop nitrification / autotroph decay (not in the WATS process matrix
     #     or the thesis heterotrophic model).
-    net["reactions"] = [rx for rx in net["reactions"]
-                        if rx["name"] not in DROP_REACTIONS]
-    net["species"] = [sp for sp in net["species"]
-                      if sp["name"] not in DROP_SPECIES]
+    net["reactions"] = [rx for rx in net["reactions"] if rx["name"] not in DROP_REACTIONS]
+    net["species"] = [sp for sp in net["species"] if sp["name"] not in DROP_SPECIES]
     net["parameters"].pop("k_fes_p", None)
 
     # (3) Revert kinetic parameters to thesis/paper values.
@@ -112,12 +119,16 @@ def main():
             net["parameters"][k]["value"] = v
 
     with open(OUT, "w") as f:
-        f.write("# Auto-generated from wats_sewer_extended.yaml by _make_khalil_thesis.py "
-                "-- do not edit by hand.\n")
+        f.write(
+            "# Auto-generated from wats_sewer_extended.yaml by _make_khalil_thesis.py "
+            "-- do not edit by hand.\n"
+        )
         yaml.safe_dump(net, f, sort_keys=False, default_flow_style=False, width=100)
-    print(f"wrote {os.path.basename(OUT)} "
-          f"({net['network']['name']}, {len(net['reactions'])} reactions, "
-          f"{len(net['conditions'])} conditions)")
+    print(
+        f"wrote {os.path.basename(OUT)} "
+        f"({net['network']['name']}, {len(net['reactions'])} reactions, "
+        f"{len(net['conditions'])} conditions)"
+    )
 
 
 if __name__ == "__main__":

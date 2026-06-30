@@ -45,14 +45,14 @@ class SpeciesSpec(BaseModel):
     @model_validator(mode="after")
     def _composition_finite(self) -> "SpeciesSpec":
         import math
+
         for q, v in self.composition.items():
             if not q:
-                raise ValueError(
-                    f"species '{self.name}' has an empty composition quantity name")
+                raise ValueError(f"species '{self.name}' has an empty composition quantity name")
             if not math.isfinite(v):
                 raise ValueError(
-                    f"species '{self.name}' composition[{q!r}] must be finite; "
-                    f"got {v}")
+                    f"species '{self.name}' composition[{q!r}] must be finite; got {v}"
+                )
         return self
 
 
@@ -96,9 +96,7 @@ class PriorSpec(BaseModel):
         has_mean_std = self.mean is not None and self.std is not None
         has_range = self.range is not None
         if has_mean_std == has_range:
-            raise ValueError(
-                "prior must declare exactly one of {mean and std} or {range}"
-            )
+            raise ValueError("prior must declare exactly one of {mean and std} or {range}")
         if has_mean_std and self.std <= 0.0:
             raise ValueError(f"prior std must be > 0, got {self.std}")
         if has_range:
@@ -163,9 +161,7 @@ class ParameterSpec(BaseModel):
             if not (low <= high):
                 raise ValueError(f"bounds must satisfy low <= high, got {self.bounds}")
             if not (low <= self.value <= high):
-                raise ValueError(
-                    f"parameter value {self.value} is outside bounds {self.bounds}"
-                )
+                raise ValueError(f"parameter value {self.value} is outside bounds {self.bounds}")
         return self
 
     @model_validator(mode="after")
@@ -175,13 +171,9 @@ class ParameterSpec(BaseModel):
                 f"transform must be one of {_VALID_TRANSFORMS}, got {self.transform!r}"
             )
         if self.transform == "positive_log" and self.value <= 0.0:
-            raise ValueError(
-                f"transform 'positive_log' requires value > 0; got {self.value}"
-            )
+            raise ValueError(f"transform 'positive_log' requires value > 0; got {self.value}")
         if self.transform == "logit" and not (0.0 < self.value < 1.0):
-            raise ValueError(
-                f"transform 'logit' requires 0 < value < 1; got {self.value}"
-            )
+            raise ValueError(f"transform 'logit' requires 0 < value < 1; got {self.value}")
         return self
 
 
@@ -225,9 +217,7 @@ class ReactionSpec(BaseModel):
         # The "all coefficients are zero" check applies only when every
         # entry is a numeric literal — string expressions may still evaluate
         # non-zero depending on parameter values.
-        all_numeric = all(
-            isinstance(coef, (int, float)) for coef in self.stoichiometry.values()
-        )
+        all_numeric = all(isinstance(coef, (int, float)) for coef in self.stoichiometry.values())
         if all_numeric and all(coef == 0 for coef in self.stoichiometry.values()):
             raise ValueError(
                 f"Reaction '{self.name}' has all-zero stoichiometric "
@@ -291,10 +281,10 @@ class SpeciationSpec(BaseModel):
     def _validate(self) -> "SpeciationSpec":
         if self.temperature_units not in ("celsius", "kelvin"):
             raise ValueError(
-                f"temperature_units must be 'celsius' or 'kelvin', "
-                f"got {self.temperature_units!r}"
+                f"temperature_units must be 'celsius' or 'kelvin', got {self.temperature_units!r}"
             )
         from aquakin.core.ph_solver import _ACTIVITY_MODELS
+
         if self.activity_model not in _ACTIVITY_MODELS:
             raise ValueError(
                 f"speciation.activity_model must be one of {_ACTIVITY_MODELS}; "
@@ -307,10 +297,7 @@ class SpeciationSpec(BaseModel):
                 f"valid keys are {_VALID_TOTAL_KEYS}"
             )
         if isinstance(self.z_cation_eq, dict) and set(self.z_cation_eq) != {"condition"}:
-            raise ValueError(
-                "speciation.z_cation_eq mapping must have exactly the key "
-                "'condition'"
-            )
+            raise ValueError("speciation.z_cation_eq mapping must have exactly the key 'condition'")
         return self
 
 
@@ -328,8 +315,10 @@ class PositivityLimiterSpec(BaseModel):
 
 # Single source of truth lives in core/precipitation.py (the runtime consumer).
 from aquakin.core.precipitation import (
-    VALID_PRECIP_FRACTIONS as _VALID_PRECIP_FRACTIONS,
     _PH_SPECIALS as _PRECIP_PH_SPECIALS,
+)
+from aquakin.core.precipitation import (
+    VALID_PRECIP_FRACTIONS as _VALID_PRECIP_FRACTIONS,
 )
 
 
@@ -387,25 +376,25 @@ class MineralSpec(BaseModel):
     name: str
     pKsp: float
     order: float = Field(default=1.0, gt=0.0)
-    dH_sp: float = 0.0          # enthalpy of dissolution (J/mol); van't Hoff Ksp(T)
-    mode: str = "kinetic"       # "kinetic" (default) or "equilibrium"
-    supersaturation_form: str = "power"     # kinetic mode: "power" or "bounded"
+    dH_sp: float = 0.0  # enthalpy of dissolution (J/mol); van't Hoff Ksp(T)
+    mode: str = "kinetic"  # "kinetic" (default) or "equilibrium"
+    supersaturation_form: str = "power"  # kinetic mode: "power" or "bounded"
     ions: list[MineralIonSpec] = Field(min_length=1)
-    solid: Optional[str] = None             # precipitate species
-    rate_constant: Optional[ParameterSpec] = None   # crystallisation rate coefficient
+    solid: Optional[str] = None  # precipitate species
+    rate_constant: Optional[ParameterSpec] = None  # crystallisation rate coefficient
 
     @model_validator(mode="after")
     def _validate_mode(self) -> "MineralSpec":
         if self.mode not in ("kinetic", "equilibrium"):
             raise ValueError(
-                f"mineral '{self.name}' mode must be 'kinetic' or 'equilibrium'; "
-                f"got {self.mode!r}.")
+                f"mineral '{self.name}' mode must be 'kinetic' or 'equilibrium'; got {self.mode!r}."
+            )
         if self.supersaturation_form not in ("power", "bounded"):
             raise ValueError(
                 f"mineral '{self.name}' supersaturation_form must be 'power' or "
-                f"'bounded'; got {self.supersaturation_form!r}.")
-        if (self.mode == "kinetic" and self.supersaturation_form == "power"
-                and self.order < 1.0):
+                f"'bounded'; got {self.supersaturation_form!r}."
+            )
+        if self.mode == "kinetic" and self.supersaturation_form == "power" and self.order < 1.0:
             # The power driver sign(sigma)*|sigma|^order has derivative
             # order*|sigma|^(order-1) -> infinity as sigma -> 0 (at SI = 0, i.e.
             # equilibrium) when order < 1, so the rate Jacobian is unbounded there
@@ -415,23 +404,27 @@ class MineralSpec(BaseModel):
                 f"mineral '{self.name}' has order={self.order} < 1 with the "
                 f"'power' supersaturation form, whose rate gradient is infinite at "
                 f"saturation (SI=0); use order >= 1, or supersaturation_form: "
-                f"'bounded'.")
+                f"'bounded'."
+            )
         if self.mode == "equilibrium":
             if self.solid is None:
                 raise ValueError(
                     f"equilibrium-mode mineral '{self.name}' needs a 'solid:' "
                     f"species (the phase its equilibrium amount Xeq_{self.name} is "
-                    f"reported for).")
+                    f"reported for)."
+                )
             if self.rate_constant is not None:
                 raise ValueError(
                     f"equilibrium-mode mineral '{self.name}' takes no "
                     f"'rate_constant' (its reaction is the relaxation toward "
-                    f"Xeq_{self.name}, written by hand).")
+                    f"Xeq_{self.name}, written by hand)."
+                )
         elif (self.solid is None) != (self.rate_constant is None):
             raise ValueError(
                 f"mineral '{self.name}': 'solid' and 'rate_constant' must be set "
                 f"together (they auto-derive the precipitation reaction), or both "
-                f"omitted (the reaction is written by hand).")
+                f"omitted (the reaction is written by hand)."
+            )
         return self
 
 
@@ -462,13 +455,15 @@ class PrecipitationSpec(BaseModel):
     def _validate(self) -> "PrecipitationSpec":
         if self.temperature_units not in ("celsius", "kelvin"):
             raise ValueError(
-                f"temperature_units must be 'celsius' or 'kelvin', "
-                f"got {self.temperature_units!r}")
+                f"temperature_units must be 'celsius' or 'kelvin', got {self.temperature_units!r}"
+            )
         from aquakin.core.ph_solver import _ACTIVITY_MODELS
+
         if self.activity_model not in _ACTIVITY_MODELS:
             raise ValueError(
                 f"precipitation.activity_model must be one of {_ACTIVITY_MODELS}; "
-                f"got {self.activity_model!r}")
+                f"got {self.activity_model!r}"
+            )
         names = [m.name for m in self.minerals]
         if len(set(names)) != len(names):
             raise ValueError(f"duplicate mineral names: {names}")
@@ -479,11 +474,13 @@ class PrecipitationSpec(BaseModel):
                 if ion.fraction is not None and ion.fraction not in _VALID_PRECIP_FRACTIONS:
                     raise ValueError(
                         f"mineral '{m.name}' ion fraction {ion.fraction!r} is "
-                        f"invalid; valid: {_VALID_PRECIP_FRACTIONS} (or omit).")
+                        f"invalid; valid: {_VALID_PRECIP_FRACTIONS} (or omit)."
+                    )
                 if ion.fraction not in _PRECIP_PH_SPECIALS and ion.species is None:
                     raise ValueError(
                         f"mineral '{m.name}' ion needs a 'species' unless its "
-                        f"fraction is one of {_PRECIP_PH_SPECIALS}.")
+                        f"fraction is one of {_PRECIP_PH_SPECIALS}."
+                    )
         return self
 
 
@@ -506,25 +503,24 @@ def _synthesize_precipitation_reactions(
         if m.solid is None or m.mode == "equilibrium":
             continue
         if m.solid not in species_set:
-            raise ValueError(
-                f"mineral '{m.name}' solid '{m.solid}' is not a declared species.")
+            raise ValueError(f"mineral '{m.name}' solid '{m.solid}' is not a declared species.")
         stoich: dict[str, float] = {}
         for ion in m.ions:
             if ion.species is None:
                 continue
             if ion.species not in species_set:
-                raise ValueError(
-                    f"mineral '{m.name}' ion species '{ion.species}' is not "
-                    f"declared.")
+                raise ValueError(f"mineral '{m.name}' ion species '{ion.species}' is not declared.")
             stoich[ion.species] = stoich.get(ion.species, 0.0) - float(ion.count)
         stoich[m.solid] = stoich.get(m.solid, 0.0) + 1.0
-        out.append(ReactionSpec(
-            name=f"{m.name}_precipitation",
-            description=f"Auto-derived SI-driven precipitation / dissolution of {m.name}.",
-            rate=f"k * [{m.solid}] * {{R_{m.name}}}",
-            parameters={"k": m.rate_constant},
-            stoichiometry=stoich,
-        ))
+        out.append(
+            ReactionSpec(
+                name=f"{m.name}_precipitation",
+                description=f"Auto-derived SI-driven precipitation / dissolution of {m.name}.",
+                rate=f"k * [{m.solid}] * {{R_{m.name}}}",
+                parameters={"k": m.rate_constant},
+                stoichiometry=stoich,
+            )
+        )
     return out
 
 
@@ -573,15 +569,16 @@ class NetworkSpec(BaseModel):
             # present, so the synthesized reactions are not double-appended.
             existing = {r.name for r in self.reactions}
             self.reactions = self.reactions + [
-                r for r in _synthesize_precipitation_reactions(
-                    self.precipitation, set(species_names))
+                r
+                for r in _synthesize_precipitation_reactions(self.precipitation, set(species_names))
                 if r.name not in existing
             ]
         if not self.reactions:
             raise ValueError(
                 "network has no reactions: declare a 'reactions:' list, or a "
                 "'precipitation:' block whose minerals carry 'solid' + "
-                "'rate_constant' (which auto-derive the reactions).")
+                "'rate_constant' (which auto-derive the reactions)."
+            )
         condition_names = [c.name for c in self.conditions]
         if len(set(condition_names)) != len(condition_names):
             raise ValueError(f"Duplicate condition names: {condition_names}")

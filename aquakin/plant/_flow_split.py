@@ -32,9 +32,7 @@ def validate_controlled_split(name: str, overflow_Q, underflow_Q) -> None:
         If both or neither is given, or a given value is negative.
     """
     if (overflow_Q is None) == (underflow_Q is None):
-        raise ValueError(
-            f"{name}: supply exactly one of overflow_Q or underflow_Q."
-        )
+        raise ValueError(f"{name}: supply exactly one of overflow_Q or underflow_Q.")
     if overflow_Q is not None and _min_setpoint(overflow_Q) < 0:
         raise ValueError(f"{name}: overflow_Q must be non-negative; got {overflow_Q}")
     if underflow_Q is not None and _min_setpoint(underflow_Q) < 0:

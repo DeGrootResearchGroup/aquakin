@@ -54,8 +54,6 @@ class OpenFOAMBridge:
         for name, arr in cell_fields.items():
             a = jnp.asarray(arr)
             if a.shape != (n_cells,):
-                raise ValueError(
-                    f"Field '{name}' has shape {a.shape}, expected ({n_cells},)"
-                )
+                raise ValueError(f"Field '{name}' has shape {a.shape}, expected ({n_cells},)")
             fields[name] = a
         return SpatialConditions(fields=fields)

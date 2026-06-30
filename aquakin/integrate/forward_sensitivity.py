@@ -85,16 +85,13 @@ def resolve_sens_indices(network, sens_params) -> jnp.ndarray:
     for item in sens_params:
         if isinstance(item, str):
             if item not in network.param_index:
-                raise KeyError(
-                    f"Unknown parameter '{item}'. Available: {network.parameters}"
-                )
+                raise KeyError(f"Unknown parameter '{item}'. Available: {network.parameters}")
             idx.append(network.param_index[item])
         else:
             i = int(item)
             if not (0 <= i < network.n_params):
                 raise IndexError(
-                    f"Sensitivity parameter index {i} out of range "
-                    f"[0, {network.n_params})."
+                    f"Sensitivity parameter index {i} out of range [0, {network.n_params})."
                 )
             idx.append(i)
     return jnp.asarray(idx, dtype=jnp.int64 if jax.config.x64_enabled else jnp.int32)
@@ -167,7 +164,8 @@ def augmented_forward_sensitivity(
         Maximum solver steps.
     shared_factor : bool, optional
         If ``True``, solve each stiff Newton step with the CVODES
-        simultaneous-corrector (:class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`):
+        simultaneous-corrector
+        (:class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`):
         factorise the shared diagonal block ``D = I - gamma.dt.J`` once and
         forward-substitute across the ``S`` columns, instead of factorising the
         full ``n(1+k)`` augmented system. Exact (the Newton step is identical to
@@ -196,13 +194,13 @@ def augmented_forward_sensitivity(
     def aug_rhs(t, z, args):
         p = args
         y = z[:ndof]
-        S = z[ndof:].reshape(k, ndof)        # row j = sensitivity column j
+        S = z[ndof:].reshape(k, ndof)  # row j = sensitivity column j
         # Linearise f once at the shared point (y, theta): dy = f(y) (the primal,
         # computed once) and each sensitivity column is the same linear map
         # applied to (S_j, e_j). This is the variational RHS
         # dS_j/dt = J . S_j + f_theta_j without forming J.
         dy, f_jvp = jax.linearize(lambda yy, pp: f_flat(t, yy, pp), y, p)
-        dS = jax.vmap(f_jvp, in_axes=(0, 0))(S, E)   # (k, ndof)
+        dS = jax.vmap(f_jvp, in_axes=(0, 0))(S, E)  # (k, ndof)
         return jnp.concatenate([dy, dS.reshape(-1)])
 
     z0 = jnp.concatenate([y0_flat, jnp.zeros(ndof * k)])
@@ -217,17 +215,15 @@ def augmented_forward_sensitivity(
 
     # atol_S (k, ndof), row j = atol_y / scale_j -- column-major to match z.
     if sens_atol is None:
-        atol_S = atol_y[None, :] / scale[:, None]          # (k, ndof)
+        atol_S = atol_y[None, :] / scale[:, None]  # (k, ndof)
     else:
-        atol_S = jnp.broadcast_to(
-            jnp.asarray(sens_atol, dtype=float), (k,)
-        )[:, None] * jnp.ones((1, ndof))
+        atol_S = jnp.broadcast_to(jnp.asarray(sens_atol, dtype=float), (k,))[:, None] * jnp.ones(
+            (1, ndof)
+        )
     sens_rtol_v = rtol if sens_rtol is None else float(sens_rtol)
 
     atol_aug = jnp.concatenate([atol_y, atol_S.reshape(-1)])
-    rtol_aug = jnp.concatenate(
-        [jnp.full((ndof,), float(rtol)), jnp.full((ndof * k,), sens_rtol_v)]
-    )
+    rtol_aug = jnp.concatenate([jnp.full((ndof,), float(rtol)), jnp.full((ndof * k,), sens_rtol_v)])
 
     sc = None
     if shared_factor:
@@ -240,18 +236,12 @@ def augmented_forward_sensitivity(
     # the forward / discrete-adjoint paths use and cannot drift from them. ``order``
     # selects the ESDIRK (5 for the reactors, 3 for the stiff plant); the block-arrow
     # SimultaneousCorrector is the per-stage linear solver when shared_factor.
-    from aquakin.integrate._common import (build_implicit_solver,
-                                           build_step_controller)
+    from aquakin.integrate._common import build_implicit_solver, build_step_controller
 
     solver = build_implicit_solver(rtol, atol_aug, order=order, linear_solver=sc)
-    controller = build_step_controller(rtol_aug, atol_aug,
-                                        factormax=factormax, dtmax=dtmax)
+    controller = build_step_controller(rtol_aug, atol_aug, factormax=factormax, dtmax=dtmax)
 
-    saveat = (
-        diffrax.SaveAt(t1=True)
-        if t_eval is None
-        else diffrax.SaveAt(ts=jnp.asarray(t_eval))
-    )
+    saveat = diffrax.SaveAt(t1=True) if t_eval is None else diffrax.SaveAt(ts=jnp.asarray(t_eval))
     sol = diffrax.diffeqsolve(
         diffrax.ODETerm(aug_rhs),
         solver,
@@ -298,24 +288,45 @@ def build_jitted_sensitivity_solve(
     sample times of the same shape reuse the same compiled function.
     """
     if has_t_eval:
+
         @jax.jit
         def _solve(y0_flat, params, condition_arrays, t_eval):
             return augmented_forward_sensitivity(
-                make_f_flat(condition_arrays), y0_flat, params, free_idx,
-                t0=t0, t1=t1, t_eval=t_eval, rtol=rtol, atol_y=atol_y,
-                sens_rtol=sens_rtol, dtmax=dtmax, max_steps=max_steps,
+                make_f_flat(condition_arrays),
+                y0_flat,
+                params,
+                free_idx,
+                t0=t0,
+                t1=t1,
+                t_eval=t_eval,
+                rtol=rtol,
+                atol_y=atol_y,
+                sens_rtol=sens_rtol,
+                dtmax=dtmax,
+                max_steps=max_steps,
                 shared_factor=shared_factor,
             )
+
         return _solve
 
     @jax.jit
     def _solve(y0_flat, params, condition_arrays):
         return augmented_forward_sensitivity(
-            make_f_flat(condition_arrays), y0_flat, params, free_idx,
-            t0=t0, t1=t1, t_eval=None, rtol=rtol, atol_y=atol_y,
-            sens_rtol=sens_rtol, dtmax=dtmax, max_steps=max_steps,
+            make_f_flat(condition_arrays),
+            y0_flat,
+            params,
+            free_idx,
+            t0=t0,
+            t1=t1,
+            t_eval=None,
+            rtol=rtol,
+            atol_y=atol_y,
+            sens_rtol=sens_rtol,
+            dtmax=dtmax,
+            max_steps=max_steps,
             shared_factor=shared_factor,
         )
+
     return _solve
 
 
@@ -386,17 +397,35 @@ def run_forward_sensitivity(
     """
     if sens_atol is not None or param_scale is not None:
         return augmented_forward_sensitivity(
-            make_f_flat(cond), y0_flat, params, free_idx,
-            t0=t0, t1=t1, t_eval=t_eval, rtol=rtol, atol_y=atol_y,
-            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
-            dtmax=dtmax, max_steps=max_steps, shared_factor=shared_factor,
+            make_f_flat(cond),
+            y0_flat,
+            params,
+            free_idx,
+            t0=t0,
+            t1=t1,
+            t_eval=t_eval,
+            rtol=rtol,
+            atol_y=atol_y,
+            sens_rtol=sens_rtol,
+            sens_atol=sens_atol,
+            param_scale=param_scale,
+            dtmax=dtmax,
+            max_steps=max_steps,
+            shared_factor=shared_factor,
         )
     jitted = cache.get(cache_key)
     if jitted is None:
         jitted = build_jitted_sensitivity_solve(
-            make_f_flat, free_idx, t0=t0, t1=t1,
-            has_t_eval=t_eval is not None, rtol=rtol, atol_y=atol_y,
-            sens_rtol=sens_rtol, dtmax=dtmax, max_steps=max_steps,
+            make_f_flat,
+            free_idx,
+            t0=t0,
+            t1=t1,
+            has_t_eval=t_eval is not None,
+            rtol=rtol,
+            atol_y=atol_y,
+            sens_rtol=sens_rtol,
+            dtmax=dtmax,
+            max_steps=max_steps,
             shared_factor=shared_factor,
         )
         cache[cache_key] = jitted
@@ -432,17 +461,14 @@ class ForwardSensitivityResult:
     def S_named(self, species: str) -> jnp.ndarray:
         """Sensitivity of one species over time, shape ``(n_t, n_sens_params)``."""
         if species not in self.network.species_index:
-            raise KeyError(
-                f"Unknown species '{species}'. Available: {self.network.species}"
-            )
+            raise KeyError(f"Unknown species '{species}'. Available: {self.network.species}")
         return self.S[:, self.network.species_index[species], :]
 
     def dC_dparam(self, species: str, param: str) -> jnp.ndarray:
         """Sensitivity of one species w.r.t. one parameter, shape ``(n_t,)``."""
         if param not in self.sens_params:
             raise KeyError(
-                f"'{param}' is not a sensitivity parameter. Available: "
-                f"{self.sens_params}"
+                f"'{param}' is not a sensitivity parameter. Available: {self.sens_params}"
             )
         j = self.sens_params.index(param)
         return self.S_named(species)[:, j]
@@ -484,9 +510,5 @@ def forward_sensitivity(
     network = reactor.network
     free_idx = resolve_sens_indices(network, sens_params)
     names = [network.parameters[int(i)] for i in free_idx]
-    sol, S = reactor.solve_sensitivity(
-        C0, params, sens_params=sens_params, **solve_kwargs
-    )
-    return ForwardSensitivityResult(
-        solution=sol, S=S, sens_params=names, network=network
-    )
+    sol, S = reactor.solve_sensitivity(C0, params, sens_params=sens_params, **solve_kwargs)
+    return ForwardSensitivityResult(solution=sol, S=S, sens_params=names, network=network)

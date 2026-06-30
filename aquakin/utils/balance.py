@@ -73,9 +73,9 @@ def conservation_residuals(
         of quantity ``j`` in reaction ``i`` (zero means conserved).
     """
     p = network.default_parameters() if params is None else params
-    stoich = np.asarray(network.compute_stoich(p))     # (n_rxn, n_species)
+    stoich = np.asarray(network.compute_stoich(p))  # (n_rxn, n_species)
     quantities, comp_mat = _composition_matrix(network, composition)
-    residuals = stoich @ comp_mat.T                    # (n_rxn, n_quantities)
+    residuals = stoich @ comp_mat.T  # (n_rxn, n_quantities)
     return list(network.reaction_names), quantities, residuals
 
 
@@ -125,8 +125,7 @@ def check_nitrogen(
 ) -> list[tuple[str, float]]:
     """Return nitrogen-balance violations ``(reaction, residual)`` above ``tol``."""
     names, residual = nitrogen_residuals(network, composition, **kwargs)
-    return [(names[i], float(residual[i]))
-            for i in range(len(names)) if abs(residual[i]) > tol]
+    return [(names[i], float(residual[i])) for i in range(len(names)) if abs(residual[i]) > tol]
 
 
 def check_conservation(

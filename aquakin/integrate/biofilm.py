@@ -55,10 +55,10 @@ import jax.numpy as jnp
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
-    _HasNamedSpecies,
     DifferentiationConfig,
     GradientCheckMixin,
     IntegratorConfig,
+    _HasNamedSpecies,
     _run_diffeqsolve,
     friendly_solve_errors,
     init_solver_settings,
@@ -104,9 +104,7 @@ class BiofilmSolution(_HasNamedSpecies):
     def profile_named(self, species: str) -> jnp.ndarray:
         """Depth profile of one species over time, shape ``(n_t, n_compartments)``."""
         if species not in self.network.species_index:
-            raise KeyError(
-                f"Unknown species '{species}'. Available: {self.network.species}"
-            )
+            raise KeyError(f"Unknown species '{species}'. Available: {self.network.species}")
         return self.profile[:, :, self.network.species_index[species]]
 
     def to_dataframe(self, *, profile: bool = False, units_in_columns: bool = False):
@@ -134,7 +132,7 @@ class BiofilmSolution(_HasNamedSpecies):
         from aquakin.integrate._common import build_dataframe, require_pandas
 
         pd = require_pandas()
-        prof = np.asarray(self.profile)            # (n_t, n_comp, n_species)
+        prof = np.asarray(self.profile)  # (n_t, n_comp, n_species)
         n_t, n_comp, _ = prof.shape
         t = np.asarray(self.t)
         index = pd.MultiIndex.from_arrays(
@@ -148,7 +146,10 @@ class BiofilmSolution(_HasNamedSpecies):
         columns = [(sp, flat[:, j]) for j, sp in enumerate(self.network.species)]
         units = {sp: self.network.units_of(sp) for sp in self.network.species}
         return build_dataframe(
-            index, columns, units=units, units_in_columns=units_in_columns,
+            index,
+            columns,
+            units=units,
+            units_in_columns=units_in_columns,
             extra=[("depth", depth_col)],
         )
 
@@ -162,17 +163,17 @@ def _diffusion_transport(C, D, kL, dz, area_per_volume, n_species):
     the conservative finite-volume (face-flux) form: only first-order face
     differences, so the volume-weighted total is conserved exactly.
     """
-    bulk = C[0]                       # (n_species,)
-    layers = C[1:]                    # (n_layers, n_species)
+    bulk = C[0]  # (n_species,)
+    layers = C[1:]  # (n_layers, n_species)
     # Internal interface fluxes between layer j and j+1 (positive toward the wall).
-    f_internal = D[None, :] * (layers[:-1] - layers[1:]) / dz   # (n_layers-1, n_species)
+    f_internal = D[None, :] * (layers[:-1] - layers[1:]) / dz  # (n_layers-1, n_species)
     # Bulk <-> surface flux across the boundary layer (positive into the film).
-    f_bs = kL * (bulk - layers[0])                              # (n_species,)
+    f_bs = kL * (bulk - layers[0])  # (n_species,)
     flux_in = jnp.concatenate([f_bs[None, :], f_internal], axis=0)
     zero = jnp.zeros((1, n_species))
-    flux_out = jnp.concatenate([f_internal, zero], axis=0)      # wall: no flux out
-    d_layers = (flux_in - flux_out) / dz                        # (n_layers, n_species)
-    d_bulk = -area_per_volume * f_bs                            # bulk loses surface flux
+    flux_out = jnp.concatenate([f_internal, zero], axis=0)  # wall: no flux out
+    d_layers = (flux_in - flux_out) / dz  # (n_layers, n_species)
+    d_bulk = -area_per_volume * f_bs  # bulk loses surface flux
     return jnp.concatenate([d_bulk[None, :], d_layers], axis=0)
 
 
@@ -185,11 +186,11 @@ def _attachment_transport(C, k_att, attach_mask, dz, area_per_volume, n_species)
     ``k_att*X_bulk/(A_V*dz)`` over the layer volume (A*dz). Returns a
     ``(n_comp, n_species)`` rate; zero everywhere if ``k_att == 0``.
     """
-    bulk = C[0]                                              # (n_species,)
-    r = (k_att * bulk) * attach_mask                         # (n_species,) bulk loss rate
+    bulk = C[0]  # (n_species,)
+    r = (k_att * bulk) * attach_mask  # (n_species,) bulk loss rate
     d = jnp.zeros((C.shape[0], n_species))
-    d = d.at[0].add(-r)                                      # bulk loses attached mass
-    d = d.at[1].add(r / (area_per_volume * dz))             # surface layer gains it
+    d = d.at[0].add(-r)  # bulk loses attached mass
+    d = d.at[1].add(r / (area_per_volume * dz))  # surface layer gains it
     return d
 
 
@@ -201,10 +202,10 @@ def _detachment_transport(C, k_det, detach_mask, dz, area_per_volume, n_species)
     over the layer volume (A*dz) equals the bulk gain over the bulk volume. Zero
     if ``k_det == 0``.
     """
-    layers = C[1:]                                          # (n_layers, n_species)
-    r = (k_det * layers) * detach_mask[None, :]            # per-layer loss rate
+    layers = C[1:]  # (n_layers, n_species)
+    r = (k_det * layers) * detach_mask[None, :]  # per-layer loss rate
     d = jnp.zeros((C.shape[0], n_species))
-    d = d.at[1:].add(-r)                                    # layers lose biomass
+    d = d.at[1:].add(-r)  # layers lose biomass
     d = d.at[0].add(r.sum(axis=0) * dz * area_per_volume)  # bulk gains it
     return d
 
@@ -216,9 +217,7 @@ def _default_soluble_mask(network: CompiledNetwork) -> jnp.ndarray:
     ``S`` (``S_*``, ``sumS``), particulate names start with ``X``. Callers can
     override with an explicit mask.
     """
-    return jnp.asarray(
-        [not s.startswith("X") for s in network.species], dtype=bool
-    )
+    return jnp.asarray([not s.startswith("X") for s in network.species], dtype=bool)
 
 
 class BiofilmReactor(GradientCheckMixin):
@@ -360,11 +359,8 @@ class BiofilmReactor(GradientCheckMixin):
         if n_layers < 1:
             raise ValueError(f"n_layers must be >= 1; got {n_layers}.")
         if not (thickness > 0 and boundary_layer > 0 and area_per_volume > 0):
-            raise ValueError(
-                "thickness, boundary_layer and area_per_volume must be positive."
-            )
-        init_solver_settings(self, network, rtol=rtol, integrator=integrator,
-                             diff=diff)
+            raise ValueError("thickness, boundary_layer and area_per_volume must be positive.")
+        init_solver_settings(self, network, rtol=rtol, integrator=integrator, diff=diff)
         self.conditions = conditions
         self.n_layers = int(n_layers)
         self.thickness = float(thickness)
@@ -380,9 +376,7 @@ class BiofilmReactor(GradientCheckMixin):
             soluble_mask = _default_soluble_mask(network)
         self.soluble_mask = jnp.asarray(soluble_mask, dtype=bool)
         if self.soluble_mask.shape != (n,):
-            raise ValueError(
-                f"soluble_mask must have shape ({n},); got {self.soluble_mask.shape}"
-            )
+            raise ValueError(f"soluble_mask must have shape ({n},); got {self.soluble_mask.shape}")
 
         # Which species are held fixed (net rate zeroed). Decoupled from
         # diffusion: a reactive particulate diffuses (soluble_mask False) yet must
@@ -392,9 +386,7 @@ class BiofilmReactor(GradientCheckMixin):
             fixed_mask = ~self.soluble_mask
         self.fixed_mask = jnp.asarray(fixed_mask, dtype=bool)
         if self.fixed_mask.shape != (n,):
-            raise ValueError(
-                f"fixed_mask must have shape ({n},); got {self.fixed_mask.shape}"
-            )
+            raise ValueError(f"fixed_mask must have shape ({n},); got {self.fixed_mask.shape}")
         # Footgun guard: the default freezes every particulate, which is wrong for
         # a REACTIVE particulate (one that some reaction produces/consumes) -- a
         # frozen reactive particulate becomes a non-depleting source/sink and
@@ -412,10 +404,9 @@ class BiofilmReactor(GradientCheckMixin):
         # right "pass an explicit mask here" signal.
         if fixed_defaulted:
             stoich = network.compute_stoich(network.default_parameters())
-            reactive = jnp.any(stoich != 0.0, axis=0)            # (n_species,)
+            reactive = jnp.any(stoich != 0.0, axis=0)  # (n_species,)
             frozen_reactive = reactive & self.fixed_mask
-            offenders = [s for s, f in zip(network.species,
-                                           list(map(bool, frozen_reactive))) if f]
+            offenders = [s for s, f in zip(network.species, list(map(bool, frozen_reactive))) if f]
             if offenders:
                 warnings.warn(
                     "BiofilmReactor is holding reactive particulate(s) "
@@ -454,7 +445,7 @@ class BiofilmReactor(GradientCheckMixin):
 
         D = jnp.broadcast_to(jnp.asarray(diffusivity, dtype=float), (n,))
         # Particulates do not diffuse: zero their diffusivity regardless.
-        self._D = jnp.where(self.soluble_mask, D, 0.0)          # (n_species,)
+        self._D = jnp.where(self.soluble_mask, D, 0.0)  # (n_species,)
         self._dz = self.thickness / self.n_layers
         # Boundary layer is liquid: use the free-water diffusivity if supplied,
         # else fall back to the in-biofilm value (backward compatible).
@@ -463,7 +454,7 @@ class BiofilmReactor(GradientCheckMixin):
         else:
             D_bl = jnp.broadcast_to(jnp.asarray(boundary_diffusivity, dtype=float), (n,))
             D_bl = jnp.where(self.soluble_mask, D_bl, 0.0)
-        self._kL = D_bl / self.boundary_layer                   # (n_species,)
+        self._kL = D_bl / self.boundary_layer  # (n_species,)
         # Mid-point depth of each layer from the surface (for reporting).
         self._depth = (jnp.arange(self.n_layers) + 0.5) * self._dz
 
@@ -499,12 +490,10 @@ class BiofilmReactor(GradientCheckMixin):
         self._k_det = float(k_det)
         self._has_det = self._k_det != 0.0
         if detach_mask is None:
-            detach_mask = ~self.soluble_mask          # particulates detach
+            detach_mask = ~self.soluble_mask  # particulates detach
         self._detach_mask = jnp.asarray(detach_mask, dtype=bool)
         if self._detach_mask.shape != (n,):
-            raise ValueError(
-                f"detach_mask must have shape ({n},); got {self._detach_mask.shape}"
-            )
+            raise ValueError(f"detach_mask must have shape ({n},); got {self._detach_mask.shape}")
 
         # Hold the bulk (compartment 0) fixed as a reservoir at its initial value
         # -- a Dirichlet boundary representing a sustained operating condition
@@ -521,12 +510,10 @@ class BiofilmReactor(GradientCheckMixin):
         else:
             self._feed = jnp.broadcast_to(jnp.asarray(feed, dtype=float), (n,))
         if attach_mask is None:
-            attach_mask = ~self.soluble_mask          # particulates attach
+            attach_mask = ~self.soluble_mask  # particulates attach
         self._attach_mask = jnp.asarray(attach_mask, dtype=bool)
         if self._attach_mask.shape != (n,):
-            raise ValueError(
-                f"attach_mask must have shape ({n},); got {self._attach_mask.shape}"
-            )
+            raise ValueError(f"attach_mask must have shape ({n},); got {self._attach_mask.shape}")
 
         self._jit_cache: dict = {}
         self._sens_jit_cache: dict = {}
@@ -554,9 +541,7 @@ class BiofilmReactor(GradientCheckMixin):
             return jnp.broadcast_to(C0, (n_comp, n))
         if C0.shape == (n_comp, n):
             return C0
-        raise ValueError(
-            f"C0 has shape {C0.shape}, expected ({n},) or ({n_comp}, {n})."
-        )
+        raise ValueError(f"C0 has shape {C0.shape}, expected ({n},) or ({n_comp}, {n}).")
 
     def solve(
         self,
@@ -605,7 +590,8 @@ class BiofilmReactor(GradientCheckMixin):
         if t_span is None:
             raise ValueError("t_span=(t_start, t_end) is required.")
         t_span, t_eval, _time_factor = to_native_time(
-            self.network.time_unit, time_unit, t_span, t_eval)
+            self.network.time_unit, time_unit, t_span, t_eval
+        )
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
@@ -631,7 +617,7 @@ class BiofilmReactor(GradientCheckMixin):
                 ts, ys = jitted(y0, params, condition_arrays, t_eval_arr)
         # ys: (n_t, n_comp, n_species). Bulk is compartment 0.
         if _time_factor != 1.0:
-            ts = ts / _time_factor          # native -> requested unit
+            ts = ts / _time_factor  # native -> requested unit
         sol = BiofilmSolution(
             t=ts, C=ys[:, 0, :], profile=ys, depth=self._depth, network=self.network
         )
@@ -719,8 +705,11 @@ class BiofilmReactor(GradientCheckMixin):
             profile = y_traj.reshape(n_t, n_comp, n)
             S_full = S_traj.reshape(n_t, n_comp, n, k)
             sol = BiofilmSolution(
-                t=ts, C=profile[:, 0, :], profile=profile,
-                depth=self._depth, network=self.network,
+                t=ts,
+                C=profile[:, 0, :],
+                profile=profile,
+                depth=self._depth,
+                network=self.network,
             )
             return sol, S_full[:, 0, :, :]
 
@@ -729,20 +718,39 @@ class BiofilmReactor(GradientCheckMixin):
                 return self._make_rhs(condition_arrays, p)(
                     0.0, y_flat.reshape(n_comp, n), p
                 ).reshape(-1)
+
             return f_flat
 
         cache_key = (
-            t0, t1, None if t_eval_arr is None else tuple(t_eval_arr.shape),
-            tuple(int(i) for i in free_idx), bool(shared_factor),
+            t0,
+            t1,
+            None if t_eval_arr is None else tuple(t_eval_arr.shape),
+            tuple(int(i) for i in free_idx),
+            bool(shared_factor),
             None if sens_rtol is None else float(sens_rtol),
         )
-        return _finish(*run_forward_sensitivity(
-            make_f_flat, y0_flat, params, free_idx, cond,
-            t0=t0, t1=t1, t_eval=t_eval_arr, rtol=self.rtol, atol_y=atol_y,
-            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
-            dtmax=self.dtmax, max_steps=self.max_steps, shared_factor=shared_factor,
-            cache=self._sens_jit_cache, cache_key=cache_key,
-        ))
+        return _finish(
+            *run_forward_sensitivity(
+                make_f_flat,
+                y0_flat,
+                params,
+                free_idx,
+                cond,
+                t0=t0,
+                t1=t1,
+                t_eval=t_eval_arr,
+                rtol=self.rtol,
+                atol_y=atol_y,
+                sens_rtol=sens_rtol,
+                sens_atol=sens_atol,
+                param_scale=param_scale,
+                dtmax=self.dtmax,
+                max_steps=self.max_steps,
+                shared_factor=shared_factor,
+                cache=self._sens_jit_cache,
+                cache_key=cache_key,
+            )
+        )
 
     def _make_rhs(self, condition_arrays, params):
         """Build the depth-resolved diffusion--reaction RHS ``f(t, y, args)``.
@@ -774,8 +782,8 @@ class BiofilmReactor(GradientCheckMixin):
         if biofilm_mask is None:
             stoich_bulk = stoich_film = stoich
         else:
-            stoich_bulk = stoich * (~biofilm_mask)[:, None]   # bulk + chemical
-            stoich_film = stoich * biofilm_mask[:, None]      # biofilm only
+            stoich_bulk = stoich * (~biofilm_mask)[:, None]  # bulk + chemical
+            stoich_film = stoich * biofilm_mask[:, None]  # biofilm only
         # Growth reactions: those producing a density-capped species. The cap
         # throttles the WHOLE reaction (not the net per-species rate), so substrate
         # uptake and biomass production scale together -- mass-conserving.
@@ -792,16 +800,13 @@ class BiofilmReactor(GradientCheckMixin):
                 # space availability: 1 when empty, 0 at the packing limit
                 s = jnp.clip(1.0 - (c @ inv_rho) / packing, 0.0, 1.0)
                 rate_scale = jnp.where(growth_rxn, s, 1.0)
-            return network.dCdt(c, args, condition_arrays, 0,
-                                stoich=st, rate_scale=rate_scale)
+            return network.dCdt(c, args, condition_arrays, 0, stoich=st, rate_scale=rate_scale)
 
         def rhs(t, y, args):
             bulk = cell(y[0], stoich_bulk, args)
             layers = jax.vmap(lambda c: cell(c, stoich_film, args))(y[1:])
             react = jnp.concatenate([bulk[None, :], layers], axis=0)
-            transport = _diffusion_transport(
-                y, D, kL, dz, area_per_volume, n_species
-            )
+            transport = _diffusion_transport(y, D, kL, dz, area_per_volume, n_species)
             if has_att:
                 transport = transport + _attachment_transport(
                     y, k_att, attach_mask, dz, area_per_volume, n_species
@@ -818,7 +823,7 @@ class BiofilmReactor(GradientCheckMixin):
             # (D==0, not in fixed_mask) react but do not diffuse.
             dydt = jnp.where(fixed_mask[None, :], 0.0, dydt)
             if clamp_bulk:
-                dydt = dydt.at[0].set(0.0)   # bulk held as a fixed reservoir
+                dydt = dydt.at[0].set(0.0)  # bulk held as a fixed reservoir
             return dydt
 
         return rhs
@@ -830,30 +835,49 @@ class BiofilmReactor(GradientCheckMixin):
         order, factormax, solver = self.order, self.factormax, self.solver
 
         if has_t_eval:
+
             @jax.jit
             def _solve(y0, params, condition_arrays, t_eval):
                 sol = _run_diffeqsolve(
                     make_rhs(condition_arrays, params),
-                    t0=t0, t1=t1, y0=y0, args=params,
+                    t0=t0,
+                    t1=t1,
+                    y0=y0,
+                    args=params,
                     saveat=diffrax.SaveAt(ts=t_eval),
-                    rtol=rtol, atol=atol, adjoint=adjoint, dtmax=dtmax,
+                    rtol=rtol,
+                    atol=atol,
+                    adjoint=adjoint,
+                    dtmax=dtmax,
                     max_steps=max_steps,
-                    order=order, factormax=factormax, solver=solver,
+                    order=order,
+                    factormax=factormax,
+                    solver=solver,
                 )
                 return sol.ts, sol.ys
+
             return _solve
 
         @jax.jit
         def _solve(y0, params, condition_arrays):
             sol = _run_diffeqsolve(
                 make_rhs(condition_arrays, params),
-                t0=t0, t1=t1, y0=y0, args=params,
+                t0=t0,
+                t1=t1,
+                y0=y0,
+                args=params,
                 saveat=diffrax.SaveAt(t1=True),
-                rtol=rtol, atol=atol, adjoint=adjoint, dtmax=dtmax,
+                rtol=rtol,
+                atol=atol,
+                adjoint=adjoint,
+                dtmax=dtmax,
                 max_steps=max_steps,
-                order=order, factormax=factormax, solver=solver,
+                order=order,
+                factormax=factormax,
+                solver=solver,
             )
             return sol.ts, sol.ys
+
         return _solve
 
     def steady_state(
@@ -929,7 +953,7 @@ class BiofilmReactor(GradientCheckMixin):
             ).profile[-1]
         else:
             seed = y0
-        seed = jax.lax.stop_gradient(seed)        # root-find seed: no path gradient
+        seed = jax.lax.stop_gradient(seed)  # root-find seed: no path gradient
 
         # Solve RHS=0 on the flattened ``(n_comp, n)`` profile by pseudo-transient
         # continuation. PTC damps each step by a per-state pseudo-time that ramps
@@ -947,8 +971,13 @@ class BiofilmReactor(GradientCheckMixin):
             return rhs(0.0, y_flat.reshape(n_comp, n), p).reshape(-1)
 
         sol = solve_steady_state(
-            rhs_flat, params, seed.reshape(-1),
-            tol=rtol, max_iter=newton_steps, scale_floor=1.0, nonneg=True,
+            rhs_flat,
+            params,
+            seed.reshape(-1),
+            tol=rtol,
+            max_iter=newton_steps,
+            scale_floor=1.0,
+            nonneg=True,
         )
         y_star = sol.state.reshape(n_comp, n)
         return BiofilmSolution(

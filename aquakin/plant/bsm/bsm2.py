@@ -45,15 +45,15 @@ from typing import Optional
 import jax.numpy as jnp
 
 from aquakin.plant.cstr import Aeration, CSTRUnit
-from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.digester import ADM1DigesterUnit
+from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
 from aquakin.plant.mixer import MixerUnit, SplitterUnit
 from aquakin.plant.plant import Plant
-from aquakin.plant.streams import Stream
 from aquakin.plant.primary_clarifier import PrimaryClarifier
 from aquakin.plant.separators import IdealThickener
+from aquakin.plant.streams import Stream
 from aquakin.plant.takacs import TakacsClarifier
 
 # Reference BSM2 design values (Gernaey et al. 2014; asm1init/adm1init).
@@ -61,37 +61,37 @@ BSM2_Q_REF = 20648.0  # m³/d, reference dry-weather average (sizes the pumps)
 BSM2_TANK_VOLUMES = (1500.0, 1500.0, 3000.0, 3000.0, 3000.0)  # m³
 BSM2_KLA = (0.0, 0.0, 120.0, 120.0, 60.0)  # d⁻¹ (open-loop)
 BSM2_DO_SATURATION = 8.0  # gO2/m³
-BSM2_INTERNAL_RECYCLE = 3.0 * BSM2_Q_REF   # Qintr
-BSM2_RAS = 1.0 * BSM2_Q_REF                # Qr
-BSM2_WASTAGE = 300.0                       # Qw
+BSM2_INTERNAL_RECYCLE = 3.0 * BSM2_Q_REF  # Qintr
+BSM2_RAS = 1.0 * BSM2_Q_REF  # Qr
+BSM2_WASTAGE = 300.0  # Qw
 # Scheduled (timed) wastage: the waste pump alternates between a low and a high
 # rate over the 609-day evaluation to manage the sludge inventory (reginit
 # Qw_low / Qw_high; step times from the reference wastage reference vector --
 # ~182-day half-year blocks: low, high, low, high).
-BSM2_WASTAGE_LOW = 300.0                    # Qw_low
-BSM2_WASTAGE_HIGH = 450.0                   # Qw_high
+BSM2_WASTAGE_LOW = 300.0  # Qw_low
+BSM2_WASTAGE_HIGH = 450.0  # Qw_high
 BSM2_WASTAGE_STEPS = (182.0, 364.0, 546.0)  # d, schedule step times
-BSM2_STORAGE_VOLUME = 160.0                # m³, reject equalisation tank (VOL_S)
-BSM2_STORAGE_OUTFLOW = 0.0                 # m³/d, controlled release (Qstorage)
-BSM2_STORAGE_OUTFLOW_MAX = 1500.0          # m³/d, release pump capacity (Qstorage_max)
+BSM2_STORAGE_VOLUME = 160.0  # m³, reject equalisation tank (VOL_S)
+BSM2_STORAGE_OUTFLOW = 0.0  # m³/d, controlled release (Qstorage)
+BSM2_STORAGE_OUTFLOW_MAX = 1500.0  # m³/d, release pump capacity (Qstorage_max)
 # Closed-loop reject control: a proportional level controller on the storage
 # release, holding the tank near a mid setpoint and releasing the reject
 # smoothly (instead of fill-and-bypass).
-BSM2_STORAGE_LEVEL_SETPOINT_FRAC = 0.5     # target level as a fraction of Vmax
-BSM2_STORAGE_LEVEL_GAIN = 30.0             # m³/d release per m³ above setpoint
-BSM2_BYPASS_Q = 60000.0                    # influent flow above this bypasses treatment
-BSM2_HYDRAULIC_DELAY_TAU = 0.02            # d, influent hydraulic-lag time constant (~30 min)
+BSM2_STORAGE_LEVEL_SETPOINT_FRAC = 0.5  # target level as a fraction of Vmax
+BSM2_STORAGE_LEVEL_GAIN = 30.0  # m³/d release per m³ above setpoint
+BSM2_BYPASS_Q = 60000.0  # influent flow above this bypasses treatment
+BSM2_HYDRAULIC_DELAY_TAU = 0.02  # d, influent hydraulic-lag time constant (~30 min)
 BSM2_PRIMARY_VOLUME = 900.0  # m³
 BSM2_PRIMARY_FPS = 0.007
 BSM2_CLARIFIER_AREA = 1500.0  # m²
-BSM2_CLARIFIER_HEIGHT = 4.0   # m
+BSM2_CLARIFIER_HEIGHT = 4.0  # m
 BSM2_DIGESTER_VOLUME = 3400.0  # m³ liquid
-BSM2_DIGESTER_T = 308.15       # K (35 °C)
+BSM2_DIGESTER_T = 308.15  # K (35 °C)
 BSM2_THICKENER_TSS_PERCENT = 7.0
 BSM2_DEWATERING_TSS_PERCENT = 28.0
 BSM2_SEPARATOR_REMOVAL = 98.0
-BSM2_CARBON_FLOW = 2.0          # m³/d external carbon dosed to reactor 1
-BSM2_CARBON_CONC = 400000.0     # gCOD/m³ readily-biodegradable (SS) carbon source
+BSM2_CARBON_FLOW = 2.0  # m³/d external carbon dosed to reactor 1
+BSM2_CARBON_CONC = 400000.0  # gCOD/m³ readily-biodegradable (SS) carbon source
 BSM2_AS_TEMPERATURE_K = 288.15  # K (15 °C) -- the BSM2 ASM1 reference temperature
 
 # The published BSM2 constant influent carries its own temperature, 14.858 °C
@@ -100,27 +100,37 @@ BSM2_AS_TEMPERATURE_K = 288.15  # K (15 °C) -- the BSM2 ASM1 reference temperat
 # corrections apply a small slowdown -- omitting it runs the line ~0.14 °C warm
 # and over-predicts nitrification by ~1.4 %, the difference between the bare
 # 15 °C rates and the benchmark steady state.
-BSM2_CONSTANT_INFLUENT_T = 288.00808  # K (14.85808 °C): the benchmark steady-state influent temperature
+BSM2_CONSTANT_INFLUENT_T = 288.00808  # K (14.85808 °C): benchmark steady-state influent temp
 
 # Closed-loop dissolved-oxygen / kLa control (reginit_bsm2). A PI controller
 # senses SO in reactor 4 and manipulates its aeration kLa; reactors 3 and 5
 # scale off the same signal. The constants are the reference DO loop tuning
 # (Kp=KSO4, Ti=TiSO4, Tt=TtSO4 in days; the kLa offset and DO setpoint).
-BSM2_DO_SETPOINT = 2.0          # gO2/m³ (SO4ref)
-BSM2_DO_KP = 25.0               # PI proportional gain (KSO4)
-BSM2_DO_TI = 0.002              # PI integral time, d (TiSO4)
-BSM2_DO_TT = 0.001              # anti-windup tracking time, d (TtSO4)
-BSM2_DO_KLA_OFFSET = 120.0      # kLa bias, d⁻¹ (KLa4offset)
-BSM2_DO_KLA_MAX = 360.0         # kLa saturation upper bound, d⁻¹
+BSM2_DO_SETPOINT = 2.0  # gO2/m³ (SO4ref)
+BSM2_DO_KP = 25.0  # PI proportional gain (KSO4)
+BSM2_DO_TI = 0.002  # PI integral time, d (TiSO4)
+BSM2_DO_TT = 0.001  # anti-windup tracking time, d (TtSO4)
+BSM2_DO_KLA_OFFSET = 120.0  # kLa bias, d⁻¹ (KLa4offset)
+BSM2_DO_KLA_MAX = 360.0  # kLa saturation upper bound, d⁻¹
 # Per-tank kLa gains relative to the reactor-4 control signal (KLa{3,4,5}gain).
 BSM2_DO_KLA_GAINS = {"tank3": 1.0, "tank4": 1.0, "tank5": 0.5}
 
 # Published BSM2 constant-influent composition (the open-loop operating point;
 # gCOD/m³ or gN/m³, SALK in mol/m³). Q is BSM2_Q_REF.
 BSM2_CONSTANT_INFLUENT = {
-    "SI": 27.2262, "SS": 58.1762, "XI": 92.499, "XS": 363.9435, "XB_H": 50.6833,
-    "XB_A": 0.0, "XP": 0.0, "SO": 0.0, "SNO": 0.0, "SNH": 23.8595, "SND": 5.6516,
-    "XND": 16.1298, "SALK": 7.0,
+    "SI": 27.2262,
+    "SS": 58.1762,
+    "XI": 92.499,
+    "XS": 363.9435,
+    "XB_H": 50.6833,
+    "XB_A": 0.0,
+    "XP": 0.0,
+    "SO": 0.0,
+    "SNO": 0.0,
+    "SNH": 23.8595,
+    "SND": 5.6516,
+    "XND": 16.1298,
+    "SALK": 7.0,
 }
 
 # BSM2 ASM1 kinetic/stoichiometric parameters (asm1init_bsm2, calibrated at
@@ -128,10 +138,25 @@ BSM2_CONSTANT_INFLUENT = {
 # ammonia-limitation term, so no neutralising override is needed here. Names are
 # aquakin's ASM1 parameter names.
 BSM2_ASM1_PARAMETERS = {
-    "muH": 4.0, "KS": 10.0, "KOH": 0.2, "KNO": 0.5, "etag": 0.8,
-    "muA": 0.5, "KNH_A": 1.0, "KOA": 0.4, "bH": 0.3, "bA": 0.05, "ka": 0.05,
-    "kh": 3.0, "KX": 0.1, "etah": 0.8, "Y_H": 0.67, "Y_A": 0.24, "i_XB": 0.08,
-    "i_XP": 0.06, "f_P": 0.08,
+    "muH": 4.0,
+    "KS": 10.0,
+    "KOH": 0.2,
+    "KNO": 0.5,
+    "etag": 0.8,
+    "muA": 0.5,
+    "KNH_A": 1.0,
+    "KOA": 0.4,
+    "bH": 0.3,
+    "bA": 0.05,
+    "ka": 0.05,
+    "kh": 3.0,
+    "KX": 0.1,
+    "etah": 0.8,
+    "Y_H": 0.67,
+    "Y_A": 0.24,
+    "i_XB": 0.08,
+    "i_XP": 0.06,
+    "f_P": 0.08,
 }
 
 
@@ -146,13 +171,17 @@ def bsm2_asm1_network(asm1_network=None):
     the AS kinetics from the correct 15 °C base.
     """
     import aquakin
+
     asm1 = asm1_network if asm1_network is not None else aquakin.load_network("asm1")
     if not getattr(asm1, "temperature_corrections", None):
         return asm1
-    return dataclasses.replace(asm1, temperature_corrections=[
-        (idx, ln_theta, BSM2_AS_TEMPERATURE_K, cond)
-        for (idx, ln_theta, _ref, cond) in asm1.temperature_corrections
-    ])
+    return dataclasses.replace(
+        asm1,
+        temperature_corrections=[
+            (idx, ln_theta, BSM2_AS_TEMPERATURE_K, cond)
+            for (idx, ln_theta, _ref, cond) in asm1.temperature_corrections
+        ],
+    )
 
 
 def bsm2_asm1_parameter_vector(asm1_network):
@@ -171,14 +200,15 @@ def bsm2_parameters(asm1_network, adm1_network):
     ASM1 values (the network defaults are the BSM1/20 °C set); the digester block
     uses the ADM1 defaults, which are already the BSM2 values.
     """
-    return jnp.concatenate([
-        bsm2_asm1_parameter_vector(asm1_network),
-        adm1_network.default_parameters(),
-    ])
+    return jnp.concatenate(
+        [
+            bsm2_asm1_parameter_vector(asm1_network),
+            adm1_network.default_parameters(),
+        ]
+    )
 
 
-def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF,
-                           T: float = None) -> InfluentSeries:
+def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF, T: float = None) -> InfluentSeries:
     """The published BSM2 constant influent as an :class:`InfluentSeries`.
 
     ``T`` defaults to ``None`` (temperature-agnostic): the reactors then fall back
@@ -203,6 +233,7 @@ def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF,
 # cross-coupled boolean/float flags. Passing the object (with its defaults)
 # enables the feature; leaving the argument ``None`` leaves it off. Frozen so an
 # instance is a safe shared default.
+
 
 @dataclasses.dataclass(frozen=True)
 class ExternalCarbon:
@@ -298,9 +329,9 @@ class HydraulicDelay:
 _DEFAULT_CARBON = ExternalCarbon()
 
 
-def bsm2_wastage_schedule(low: float = BSM2_WASTAGE_LOW,
-                          high: float = BSM2_WASTAGE_HIGH,
-                          steps=BSM2_WASTAGE_STEPS):
+def bsm2_wastage_schedule(
+    low: float = BSM2_WASTAGE_LOW, high: float = BSM2_WASTAGE_HIGH, steps=BSM2_WASTAGE_STEPS
+):
     """The BSM2 scheduled wastage flow ``Qw(t)`` as a
     :class:`~aquakin.plant.schedule.PiecewiseConstantSchedule`.
 
@@ -309,6 +340,7 @@ def bsm2_wastage_schedule(low: float = BSM2_WASTAGE_LOW,
     the sludge inventory seasonally. Pass to ``build_bsm2(wastage_schedule=...)``.
     """
     from aquakin.plant.schedule import PiecewiseConstantSchedule
+
     values = [low, high, low, high]
     if len(values) != len(steps) + 1:
         raise ValueError("wastage schedule needs len(steps)+1 values")
@@ -415,17 +447,16 @@ def build_bsm2(
         ``plant.add_influent("feed", series)`` (which wires to the recorded
         front) or ``to=plant.influent_endpoint``. Mirrors :func:`build_bsm1`.
     """
+    import aquakin
     from aquakin.plant.delay import HydraulicDelayUnit
     from aquakin.plant.storage import StorageTank
-    import aquakin
 
     # ----- Translate the feature option objects into the internal flags/values
     # the wiring below uses. A ``None`` argument means the feature is off.
     reject_storage = reject is not None
     reject_control = reject is not None and reject.control
     storage_volume = reject.volume if reject is not None else BSM2_STORAGE_VOLUME
-    storage_output_flow = (reject.output_flow if reject is not None
-                           else BSM2_STORAGE_OUTFLOW)
+    storage_output_flow = reject.output_flow if reject is not None else BSM2_STORAGE_OUTFLOW
     influent_bypass = bypass is not None
     bypass_threshold = bypass.threshold if bypass is not None else BSM2_BYPASS_Q
     use_delay = hydraulic_delay is not None
@@ -452,8 +483,7 @@ def build_bsm2(
     # reproduces the (uncorrected) reference exactly; a temperature-carrying
     # influent then drives the correction away from it (seasonal kinetics).
     if conditions is None:
-        conditions = {name: asm1._condition_defaults[name]
-                      for name in asm1.conditions_required}
+        conditions = {name: asm1._condition_defaults[name] for name in asm1.conditions_required}
         if "T" in conditions and getattr(asm1, "temperature_corrections", None):
             conditions["T"] = float(asm1.temperature_corrections[0][2])
 
@@ -477,8 +507,12 @@ def build_bsm2(
     # is overwritten within a couple of passes by the real recycle temperature).
     # For a temperature-agnostic influent the front mixer sees the (None) fresh
     # feed and the seed temperature is simply never used.
-    seed = Stream(Q=jnp.asarray(0.0), C=asm1.default_concentrations(),
-                  network=asm1, T=jnp.asarray(BSM2_AS_TEMPERATURE_K))
+    seed = Stream(
+        Q=jnp.asarray(0.0),
+        C=asm1.default_concentrations(),
+        network=asm1,
+        T=jnp.asarray(BSM2_AS_TEMPERATURE_K),
+    )
 
     # A storage tank is built when either the fixed-release storage or the
     # closed-loop reject controller is requested.
@@ -489,29 +523,43 @@ def build_bsm2(
     # front-most; its outlet feeds whatever the influent would otherwise enter.
     if use_delay:
         delay_C = asm1.concentrations(BSM2_CONSTANT_INFLUENT)
-        plant.add_unit(HydraulicDelayUnit(
-            name="influent_delay", network=asm1, tau=float(delay_tau),
-            initial_flow=Q_ref, initial_concentrations=delay_C))
+        plant.add_unit(
+            HydraulicDelayUnit(
+                name="influent_delay",
+                network=asm1,
+                tau=float(delay_tau),
+                initial_flow=Q_ref,
+                initial_concentrations=delay_C,
+            )
+        )
 
     # ----- Influent bypass (optional): divert wet-weather peak flow around the
     # whole treatment train. The split is on the *raw influent* flow (an external
     # input, so the exact recycle-flow solve stays valid); the diverted raw flow
     # rejoins the clarified effluent downstream of the secondary clarifier.
     if influent_bypass:
-        plant.add_unit(SplitterUnit(
-            name="bypass_split", network=asm1, threshold=float(bypass_threshold),
-            threshold_port="bypass", remainder_port="to_plant"))
+        plant.add_unit(
+            SplitterUnit(
+                name="bypass_split",
+                network=asm1,
+                threshold=float(bypass_threshold),
+                threshold_port="bypass",
+                remainder_port="to_plant",
+            )
+        )
 
     # ----- Front: combine raw influent with the recycled reject water. With a
     # reject storage tank the reject returns on two ports (the released stream
     # and the level-gated overflow bypass); otherwise on one combined port.
-    front_reject_ports = (["storage_out", "storage_bypass"] if use_storage
-                          else ["reject"])
-    plant.add_unit(MixerUnit(name="front_mix",
-                             input_port_names=["fresh"] + front_reject_ports,
-                             network=asm1))
-    plant.add_unit(PrimaryClarifier(name="primary", network=asm1,
-                                    volume=BSM2_PRIMARY_VOLUME, f_PS=BSM2_PRIMARY_FPS))
+    front_reject_ports = ["storage_out", "storage_bypass"] if use_storage else ["reject"]
+    plant.add_unit(
+        MixerUnit(name="front_mix", input_port_names=["fresh"] + front_reject_ports, network=asm1)
+    )
+    plant.add_unit(
+        PrimaryClarifier(
+            name="primary", network=asm1, volume=BSM2_PRIMARY_VOLUME, f_PS=BSM2_PRIMARY_FPS
+        )
+    )
 
     # ----- Activated sludge: mixer + 5 CSTRs + internal recycle. -----
     as_ports = ["primary_eff", "internal_recycle", "ras"]
@@ -520,18 +568,25 @@ def build_bsm2(
         # External carbon (a readily-biodegradable SS source) dosed into reactor 1
         # to support denitrification -- a fixed-flow DosingUnit on the
         # as_mix -> tank1 line, generalising the former hard-coded carbon influent.
-        plant.add_unit(DosingUnit(
-            name="external_carbon", flow=carbon_flow,
-            reagent=Reagent.from_species(asm1, SS=carbon_conc,
-                                         label="external carbon")))
+        plant.add_unit(
+            DosingUnit(
+                name="external_carbon",
+                flow=carbon_flow,
+                reagent=Reagent.from_species(asm1, SS=carbon_conc, label="external carbon"),
+            )
+        )
     # Aeration temperature-correction kwargs, shared by both construction
     # branches. The reference temperature is the reactors' static T, so the
     # correction is unity at the benchmark operating point and only a
     # temperature-carrying influent drives it. Empty (no correction) by default.
     do_corr = (
-        {"temperature_correction": True, "ref_T": float(conditions["T"]),
-         "saturation_model": "bsm2"}
-        if do_temperature_correction and "T" in conditions else {}
+        {
+            "temperature_correction": True,
+            "ref_T": float(conditions["T"]),
+            "saturation_model": "bsm2",
+        }
+        if do_temperature_correction and "T" in conditions
+        else {}
     )
     for i in range(5):
         tank = f"tank{i + 1}"
@@ -540,60 +595,113 @@ def build_bsm2(
             # reactor 4's oxygen drives the aerobic reactors' kLa, at per-tank
             # gains. The plant auto-wires the shared controller from these specs.
             aeration = Aeration(
-                do_setpoint=BSM2_DO_SETPOINT, do_sat=BSM2_DO_SATURATION,
-                controller="do_control", sensor="tank4",
-                gain=BSM2_DO_KLA_GAINS[tank], Kp=BSM2_DO_KP, Ti=BSM2_DO_TI,
-                Tt=BSM2_DO_TT, kla_offset=BSM2_DO_KLA_OFFSET, kla_min=0.0,
-                kla_max=BSM2_DO_KLA_MAX, **do_corr)
+                do_setpoint=BSM2_DO_SETPOINT,
+                do_sat=BSM2_DO_SATURATION,
+                controller="do_control",
+                sensor="tank4",
+                gain=BSM2_DO_KLA_GAINS[tank],
+                Kp=BSM2_DO_KP,
+                Ti=BSM2_DO_TI,
+                Tt=BSM2_DO_TT,
+                kla_offset=BSM2_DO_KLA_OFFSET,
+                kla_min=0.0,
+                kla_max=BSM2_DO_KLA_MAX,
+                **do_corr,
+            )
         elif BSM2_KLA[i] > 0:
-            aeration = Aeration(kla=BSM2_KLA[i], do_sat=BSM2_DO_SATURATION,
-                                **do_corr)
+            aeration = Aeration(kla=BSM2_KLA[i], do_sat=BSM2_DO_SATURATION, **do_corr)
         else:
             aeration = None
-        plant.add_unit(CSTRUnit(
-            name=tank, network=asm1, volume=BSM2_TANK_VOLUMES[i],
-            input_port_names=["inlet"], conditions=conditions, aeration=aeration))
+        plant.add_unit(
+            CSTRUnit(
+                name=tank,
+                network=asm1,
+                volume=BSM2_TANK_VOLUMES[i],
+                input_port_names=["inlet"],
+                conditions=conditions,
+                aeration=aeration,
+            )
+        )
 
-    plant.add_unit(SplitterUnit(
-        name="tank5_split", network=asm1,
-        output_port_flows={"internal_recycle": Qintr}, remainder_port="to_settler"))
+    plant.add_unit(
+        SplitterUnit(
+            name="tank5_split",
+            network=asm1,
+            output_port_flows={"internal_recycle": Qintr},
+            remainder_port="to_settler",
+        )
+    )
 
     # ----- Secondary clarifier (Takács) + RAS/wastage split. -----
-    plant.add_unit(TakacsClarifier(
-        name="settler", network=asm1, area=BSM2_CLARIFIER_AREA,
-        height=BSM2_CLARIFIER_HEIGHT, underflow_Q=Q_settler_underflow,
-        init_underflow_Q=Q_settler_underflow_init,
-        composition_mode=settler_composition_mode,
-        soluble_holdup=settler_soluble_holdup))
-    plant.add_unit(SplitterUnit(
-        name="underflow_split", network=asm1,
-        output_port_flows={"ras": Qr}, remainder_port="waste"))
+    plant.add_unit(
+        TakacsClarifier(
+            name="settler",
+            network=asm1,
+            area=BSM2_CLARIFIER_AREA,
+            height=BSM2_CLARIFIER_HEIGHT,
+            underflow_Q=Q_settler_underflow,
+            init_underflow_Q=Q_settler_underflow_init,
+            composition_mode=settler_composition_mode,
+            soluble_holdup=settler_soluble_holdup,
+        )
+    )
+    plant.add_unit(
+        SplitterUnit(
+            name="underflow_split",
+            network=asm1,
+            output_port_flows={"ras": Qr},
+            remainder_port="waste",
+        )
+    )
 
     # Final-effluent combiner: clarified effluent + the bypassed raw influent.
     if influent_bypass:
-        plant.add_unit(MixerUnit(
-            name="effluent_mix",
-            input_port_names=["treated", "bypass"], network=asm1))
+        plant.add_unit(
+            MixerUnit(name="effluent_mix", input_port_names=["treated", "bypass"], network=asm1)
+        )
 
     # ----- Sludge train: thickener -> digester -> dewatering. -----
-    plant.add_unit(IdealThickener(
-        name="thickener", network=asm1, target_tss_percent=BSM2_THICKENER_TSS_PERCENT,
-        tss_removal_percent=BSM2_SEPARATOR_REMOVAL, nominal_underflow_fraction=0.03))
+    plant.add_unit(
+        IdealThickener(
+            name="thickener",
+            network=asm1,
+            target_tss_percent=BSM2_THICKENER_TSS_PERCENT,
+            tss_removal_percent=BSM2_SEPARATOR_REMOVAL,
+            nominal_underflow_fraction=0.03,
+        )
+    )
     # Combine primary sludge + thickened secondary sludge into the digester feed.
-    plant.add_unit(MixerUnit(
-        name="sludge_mix",
-        input_port_names=["primary_sludge", "thickener_under"], network=asm1))
-    plant.add_unit(ADM1DigesterUnit(
-        name="digester", network=adm1, volume=BSM2_DIGESTER_VOLUME,
-        conditions={"T": BSM2_DIGESTER_T}))
-    plant.add_unit(IdealThickener(
-        name="dewatering", network=asm1, target_tss_percent=BSM2_DEWATERING_TSS_PERCENT,
-        tss_removal_percent=BSM2_SEPARATOR_REMOVAL, nominal_underflow_fraction=0.02))
+    plant.add_unit(
+        MixerUnit(
+            name="sludge_mix", input_port_names=["primary_sludge", "thickener_under"], network=asm1
+        )
+    )
+    plant.add_unit(
+        ADM1DigesterUnit(
+            name="digester",
+            network=adm1,
+            volume=BSM2_DIGESTER_VOLUME,
+            conditions={"T": BSM2_DIGESTER_T},
+        )
+    )
+    plant.add_unit(
+        IdealThickener(
+            name="dewatering",
+            network=asm1,
+            target_tss_percent=BSM2_DEWATERING_TSS_PERCENT,
+            tss_removal_percent=BSM2_SEPARATOR_REMOVAL,
+            nominal_underflow_fraction=0.02,
+        )
+    )
 
     # Combine the two reject-water streams for the recycle to the front.
-    plant.add_unit(MixerUnit(
-        name="reject_mix",
-        input_port_names=["thickener_reject", "dewatering_reject"], network=asm1))
+    plant.add_unit(
+        MixerUnit(
+            name="reject_mix",
+            input_port_names=["thickener_reject", "dewatering_reject"],
+            network=asm1,
+        )
+    )
 
     # Optional reject equalisation tank: buffer the combined reject and release
     # it at a controlled rate, with a level-gated overflow bypass. Under
@@ -603,14 +711,20 @@ def build_bsm2(
     if use_storage:
         if reject_control:
             storage = StorageTank(
-                name="reject_storage", network=asm1, volume=storage_volume,
+                name="reject_storage",
+                network=asm1,
+                volume=storage_volume,
                 level_setpoint=BSM2_STORAGE_LEVEL_SETPOINT_FRAC * storage_volume,
                 level_gain=BSM2_STORAGE_LEVEL_GAIN,
-                output_flow_max=BSM2_STORAGE_OUTFLOW_MAX)
+                output_flow_max=BSM2_STORAGE_OUTFLOW_MAX,
+            )
         else:
             storage = StorageTank(
-                name="reject_storage", network=asm1, volume=storage_volume,
-                output_flow=storage_output_flow)
+                name="reject_storage",
+                network=asm1,
+                volume=storage_volume,
+                output_flow=storage_output_flow,
+            )
         plant.add_unit(storage)
 
     # Cross-network interfaces (ASM1 <-> ADM1).
@@ -649,8 +763,7 @@ def build_bsm2(
     # AS recycles (back-edges). Seeded with a temperature-carrying zero-flow
     # stream (not the default auto-seed, which is temperature-agnostic) so a
     # temperature-aware influent ignites T propagation around the loop.
-    plant.connect("tank5_split.internal_recycle", "as_mix.internal_recycle",
-                  initial_value=seed)
+    plant.connect("tank5_split.internal_recycle", "as_mix.internal_recycle", initial_value=seed)
     plant.connect("underflow_split.ras", "as_mix.ras", initial_value=seed)
     # Sludge train (the digester crosses ASM1 <-> ADM1 via the interfaces).
     plant.connect("primary.underflow", "sludge_mix.primary_sludge")
@@ -665,10 +778,8 @@ def build_bsm2(
         # reject_mix -> storage tank; the released stream and the overflow
         # bypass both return to the front (both back-edges, seeded).
         plant.connect("reject_mix", "reject_storage.in", initial_value=seed)
-        plant.connect("reject_storage.out", "front_mix.storage_out",
-                      initial_value=seed)
-        plant.connect("reject_storage.bypass", "front_mix.storage_bypass",
-                      initial_value=seed)
+        plant.connect("reject_storage.out", "front_mix.storage_out", initial_value=seed)
+        plant.connect("reject_storage.bypass", "front_mix.storage_bypass", initial_value=seed)
     else:
         plant.connect("reject_mix", "front_mix.reject", initial_value=seed)
     # dewatering:underflow -> sludge disposal (leaves the plant; not routed).
@@ -679,11 +790,13 @@ def build_bsm2(
     # the bypass splitter if present, else the front mixer; the final effluent is
     # the bypass combiner's outlet when bypassing, else the secondary overflow.
     plant.influent_endpoint = (
-        "influent_delay.in" if use_delay
-        else "bypass_split.in" if influent_bypass
-        else "front_mix.fresh")
-    plant.effluent_endpoint = (
-        "effluent_mix.out" if influent_bypass else "settler.overflow")
+        "influent_delay.in"
+        if use_delay
+        else "bypass_split.in"
+        if influent_bypass
+        else "front_mix.fresh"
+    )
+    plant.effluent_endpoint = "effluent_mix.out" if influent_bypass else "settler.overflow"
 
     # Semantic stream shortcuts (plant.stream(sol, "effluent"), plant.list_streams())
     # so the engineer reads "effluent" / "ras" / "reject" / "primary_sludge" /

@@ -26,9 +26,7 @@ def _ensure_1d(t, C):
     t = jnp.asarray(t)
     C = jnp.asarray(C)
     if t.ndim != 1 or C.ndim != 1:
-        raise ValueError(
-            f"t and C must be 1-D, got shapes {t.shape} and {C.shape}"
-        )
+        raise ValueError(f"t and C must be 1-D, got shapes {t.shape} and {C.shape}")
     if t.shape != C.shape:
         raise ValueError(f"t and C must have the same length, got {t.shape} vs {C.shape}")
     return t, C
@@ -57,8 +55,7 @@ def E_curve(t, C) -> jnp.ndarray:
     total = jnp.trapezoid(C, t)
     if not float(total) > 0:
         raise ValueError(
-            f"Tracer response integrates to {float(total):g}; E_curve requires "
-            f"a positive integral."
+            f"Tracer response integrates to {float(total):g}; E_curve requires a positive integral."
         )
     return C / total
 
@@ -170,7 +167,6 @@ def morrill_index(t, C) -> jnp.ndarray:
     # single Morrill evaluation does not emit the same warning twice.
     t1, C1 = _ensure_1d(t, C)
     _warn_if_truncated(C1, stacklevel=2)
-    return (
-        percentile_time(t, C, 0.9, _warn_truncated=False)
-        / percentile_time(t, C, 0.1, _warn_truncated=False)
+    return percentile_time(t, C, 0.9, _warn_truncated=False) / percentile_time(
+        t, C, 0.1, _warn_truncated=False
     )

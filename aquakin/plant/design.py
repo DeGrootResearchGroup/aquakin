@@ -30,10 +30,12 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.plant.metrics import (
+    _time_average as _metrics_time_average,
+)
+from aquakin.plant.metrics import (
     derived_BOD,
     derived_COD,
     derived_TSS,
-    _time_average as _metrics_time_average,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -43,6 +45,7 @@ if TYPE_CHECKING:  # pragma: no cover
 # ---------------------------------------------------------------------------
 # Forward sizing
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ActivatedSludgeSizing:
@@ -101,12 +104,10 @@ class ActivatedSludgeSizing:
             vols = ", ".join(f"{v:.0f}" for v in self.tank_volumes)
             lines.append(f"  tank volumes      = [{vols}]  m3")
         lines.append(
-            f"  wastage Qw        = {self.wastage_flow:10.2f}  m3/d "
-            f"(from {self.wastage_from})"
+            f"  wastage Qw        = {self.wastage_flow:10.2f}  m3/d (from {self.wastage_from})"
         )
         if self.internal_recycle_flow is not None:
-            lines.append(
-                f"  internal recycle  = {self.internal_recycle_flow:10.1f}  m3/d")
+            lines.append(f"  internal recycle  = {self.internal_recycle_flow:10.1f}  m3/d")
         if self.ras_flow is not None:
             lines.append(f"  RAS flow          = {self.ras_flow:10.1f}  m3/d")
         return "\n".join(lines)
@@ -202,8 +203,8 @@ def size_activated_sludge(
         raise ValueError(f"HRT must be > 0; got {HRT_days} d")
     if wastage_from not in ("mixed_liquor", "underflow"):
         raise ValueError(
-            f"wastage_from must be 'mixed_liquor' or 'underflow'; got "
-            f"{wastage_from!r}")
+            f"wastage_from must be 'mixed_liquor' or 'underflow'; got {wastage_from!r}"
+        )
     if thickening_ratio <= 0:
         raise ValueError(f"thickening_ratio must be > 0; got {thickening_ratio}")
 
@@ -215,8 +216,7 @@ def size_activated_sludge(
         if any(f <= 0 for f in fracs):
             raise ValueError("volume_fractions must all be > 0.")
         if abs(sum(fracs) - 1.0) > 1e-6:
-            raise ValueError(
-                f"volume_fractions must sum to 1; got {sum(fracs)}")
+            raise ValueError(f"volume_fractions must sum to 1; got {sum(fracs)}")
         tank_volumes = tuple(volume * f for f in fracs)
     elif n_tanks > 1:
         tank_volumes = tuple(volume / n_tanks for _ in range(n_tanks))
@@ -228,18 +228,25 @@ def size_activated_sludge(
     wastage_flow = volume / (float(SRT) * ratio)
 
     return ActivatedSludgeSizing(
-        SRT=float(SRT), HRT=HRT_days, Q=float(Q), volume=volume,
-        wastage_flow=wastage_flow, tank_volumes=tank_volumes,
-        internal_recycle_flow=(None if internal_recycle_ratio is None
-                               else float(internal_recycle_ratio) * float(Q)),
+        SRT=float(SRT),
+        HRT=HRT_days,
+        Q=float(Q),
+        volume=volume,
+        wastage_flow=wastage_flow,
+        tank_volumes=tank_volumes,
+        internal_recycle_flow=(
+            None if internal_recycle_ratio is None else float(internal_recycle_ratio) * float(Q)
+        ),
         ras_flow=(None if ras_ratio is None else float(ras_ratio) * float(Q)),
-        wastage_from=wastage_from, thickening_ratio=ratio,
+        wastage_from=wastage_from,
+        thickening_ratio=ratio,
     )
 
 
 # ---------------------------------------------------------------------------
 # Achieved metrics from a solved plant
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class SludgeMetrics:
@@ -299,30 +306,29 @@ class SludgeMetrics:
 
     def summary(self) -> str:
         """A human-readable one-block summary of the achieved metrics."""
-        return "\n".join([
-            "Achieved activated-sludge metrics:",
-            f"  SRT (sludge age) = {self.SRT:10.2f}  d",
-            f"  HRT              = {self.HRT * 24.0:10.2f}  h  ({self.HRT:.3f} d)",
-            f"  F:M              = {self.FM:10.3f}  g BOD / g TSS / d",
-            f"  MLSS             = {self.mlss:10.1f}  g/m3",
-            f"  solids inventory = {self.solids_inventory:10.1f}  kg TSS",
-            f"  solids wasted    = {self.solids_wasted:10.1f}  kg TSS/d",
-            f"  solids effluent  = {self.solids_effluent:10.1f}  kg TSS/d",
-            f"  reactors counted = {self.reactor_units}",
-        ])
+        return "\n".join(
+            [
+                "Achieved activated-sludge metrics:",
+                f"  SRT (sludge age) = {self.SRT:10.2f}  d",
+                f"  HRT              = {self.HRT * 24.0:10.2f}  h  ({self.HRT:.3f} d)",
+                f"  F:M              = {self.FM:10.3f}  g BOD / g TSS / d",
+                f"  MLSS             = {self.mlss:10.1f}  g/m3",
+                f"  solids inventory = {self.solids_inventory:10.1f}  kg TSS",
+                f"  solids wasted    = {self.solids_wasted:10.1f}  kg TSS/d",
+                f"  solids effluent  = {self.solids_effluent:10.1f}  kg TSS/d",
+                f"  reactors counted = {self.reactor_units}",
+            ]
+        )
 
 
 # Effluent / wastage endpoint candidates, in preference order (BSM2 first).
-_EFFLUENT_CANDIDATES = (
-    "effluent_mix.out", "settler.overflow", "clarifier.overflow")
+_EFFLUENT_CANDIDATES = ("effluent_mix.out", "settler.overflow", "clarifier.overflow")
 _WASTE_CANDIDATES = ("dewatering.underflow", "underflow_split.waste")
 
 
 def _available_endpoints(plant) -> set:
     """The ``"unit.port"`` strings the plant can produce."""
-    return {f"{name}.{port}"
-            for name, unit in plant.units.items()
-            for port in unit.output_ports}
+    return {f"{name}.{port}" for name, unit in plant.units.items() for port in unit.output_ports}
 
 
 def _pick_endpoint(plant, explicit, candidates, role):
@@ -333,14 +339,16 @@ def _pick_endpoint(plant, explicit, candidates, role):
         if explicit not in available:
             raise ValueError(
                 f"{role} port {explicit!r} is not an output of this plant. "
-                f"Available: {sorted(available)}")
+                f"Available: {sorted(available)}"
+            )
         return explicit
     for cand in candidates:
         if cand in available:
             return cand
     raise ValueError(
         f"Could not auto-detect the {role} port; pass it explicitly. "
-        f"Tried {candidates}; available: {sorted(available)}")
+        f"Tried {candidates}; available: {sorted(available)}"
+    )
 
 
 def _reactor_units(plant, explicit):
@@ -355,8 +363,8 @@ def _reactor_units(plant, explicit):
     reactors = plant.activated_sludge_reactors(require_volume=True)
     if not reactors:
         raise ValueError(
-            "Could not auto-detect activated-sludge reactors; pass "
-            "reactor_units=[...] explicitly.")
+            "Could not auto-detect activated-sludge reactors; pass reactor_units=[...] explicitly."
+        )
     return reactors
 
 
@@ -374,16 +382,15 @@ def _pick_influent(plant, influent_name):
     influents = plant.influents
     if influent_name is not None:
         if influent_name not in influents:
-            raise ValueError(
-                f"Unknown influent {influent_name!r}; have {list(influents)}.")
+            raise ValueError(f"Unknown influent {influent_name!r}; have {list(influents)}.")
         return influents[influent_name]
     if len(influents) == 1:
         return next(iter(influents.values()))
     if "feed" in influents:
         return influents["feed"]
     raise ValueError(
-        f"Multiple influents {list(influents)}; pass influent_name= to pick the "
-        f"main feed.")
+        f"Multiple influents {list(influents)}; pass influent_name= to pick the main feed."
+    )
 
 
 def sludge_metrics(
@@ -433,8 +440,7 @@ def sludge_metrics(
     >>> m = aquakin.plant.design.sludge_metrics(plant, solution)  # doctest: +SKIP
     >>> print(m.summary())                                        # doctest: +SKIP
     """
-    params_full = (plant.default_parameters() if params is None
-                   else jnp.asarray(params))
+    params_full = plant.default_parameters() if params is None else jnp.asarray(params)
     reactors = _reactor_units(plant, reactor_units)
     network = plant.units[reactors[0]].network
     t = solution.t
@@ -443,30 +449,32 @@ def sludge_metrics(
     reactor_volume = sum(float(plant.units[n].volume) for n in reactors)
     reactor_solids = jnp.zeros_like(t)  # (n_t,) g
     for name in reactors:
-        X = solution.unit_state(name)               # (n_t, n_species)
-        reactor_solids = reactor_solids + derived_TSS(X, network) * float(
-            plant.units[name].volume)
+        X = solution.unit_state(name)  # (n_t, n_species)
+        reactor_solids = reactor_solids + derived_TSS(X, network) * float(plant.units[name].volume)
 
     clarifier_solids = jnp.zeros_like(t)
     for name, unit in plant.units.items():
         # Any stateful separator that can report its sludge blanket (the Takács
         # clarifier); the stateless IdealClarifier holds ~0 inventory.
         if hasattr(unit, "solids_mass") and unit.state_size > 0:
-            states = solution.unit_state(name)      # (n_t, state_size)
+            states = solution.unit_state(name)  # (n_t, state_size)
             clarifier_solids = clarifier_solids + jax.vmap(unit.solids_mass)(states)
 
     system_solids = reactor_solids + clarifier_solids  # (n_t,) g
-    inventory_mean = _time_average(t, system_solids)   # g
+    inventory_mean = _time_average(t, system_solids)  # g
     reactor_solids_mean = _time_average(t, reactor_solids)  # g
 
     # ----- Solids leaving via wastage + effluent (g/d). -----
     eff_port = _pick_endpoint(
-        plant, effluent_port or getattr(plant, "effluent_endpoint", None),
-        _EFFLUENT_CANDIDATES, "effluent")
+        plant,
+        effluent_port or getattr(plant, "effluent_endpoint", None),
+        _EFFLUENT_CANDIDATES,
+        "effluent",
+    )
     w_port = _pick_endpoint(plant, waste_port, _WASTE_CANDIDATES, "wastage")
     eff = plant.stream(solution, eff_port, params_full)
     waste = plant.stream(solution, w_port, params_full)
-    eff_solids_rate = eff.Q * derived_TSS(eff.C, network)      # (n_t,) g/d
+    eff_solids_rate = eff.Q * derived_TSS(eff.C, network)  # (n_t,) g/d
     waste_solids_rate = waste.Q * derived_TSS(waste.C, network)
     loss_mean = _time_average(t, eff_solids_rate + waste_solids_rate)  # g/d
 
@@ -475,23 +483,28 @@ def sludge_metrics(
     # ----- HRT and F:M from the external influent. -----
     influent = _pick_influent(plant, influent_name)
     inf_streams = [influent.at(ti) for ti in t]
-    inf_Q = jnp.asarray([s.Q for s in inf_streams])           # (n_t,)
-    inf_C = jnp.stack([s.C for s in inf_streams])             # (n_t, n_species)
+    inf_Q = jnp.asarray([s.Q for s in inf_streams])  # (n_t,)
+    inf_C = jnp.stack([s.C for s in inf_streams])  # (n_t, n_species)
     Q_mean = _time_average(t, inf_Q)
-    HRT = reactor_volume / (Q_mean + 1e-12)                  # days
+    HRT = reactor_volume / (Q_mean + 1e-12)  # days
 
     load_fn = derived_BOD if substrate.upper() == "BOD" else derived_COD
-    bod_load_rate = inf_Q * load_fn(inf_C, network)          # (n_t,) g/d
-    bod_load_mean = _time_average(t, bod_load_rate)          # g/d
+    bod_load_rate = inf_Q * load_fn(inf_C, network)  # (n_t,) g/d
+    bod_load_mean = _time_average(t, bod_load_rate)  # g/d
     # F:M is the substrate load over the reactor (aeration-basin) solids mass.
-    FM = bod_load_mean / (reactor_solids_mean + 1e-12)       # 1/d
-    mlss = reactor_solids_mean / (reactor_volume + 1e-12)    # g/m3
+    FM = bod_load_mean / (reactor_solids_mean + 1e-12)  # 1/d
+    mlss = reactor_solids_mean / (reactor_volume + 1e-12)  # g/m3
 
     return SludgeMetrics(
-        SRT=SRT, HRT=HRT, FM=FM, mlss=mlss, reactor_volume=reactor_volume,
-        solids_inventory=inventory_mean * 1e-3,   # kg
+        SRT=SRT,
+        HRT=HRT,
+        FM=FM,
+        mlss=mlss,
+        reactor_volume=reactor_volume,
+        solids_inventory=inventory_mean * 1e-3,  # kg
         solids_wasted=_time_average(t, waste_solids_rate) * 1e-3,
         solids_effluent=_time_average(t, eff_solids_rate) * 1e-3,
-        influent_flow=Q_mean, influent_bod_load=bod_load_mean * 1e-3,
+        influent_flow=Q_mean,
+        influent_bod_load=bod_load_mean * 1e-3,
         reactor_units=reactors,
     )

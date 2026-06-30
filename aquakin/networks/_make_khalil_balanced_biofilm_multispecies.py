@@ -47,10 +47,12 @@ electron stoichiometry (which set the conserving mass balance), not the rates.
 
 Run from this directory:  python _make_khalil_balanced_biofilm_multispecies.py
 """
+
 from __future__ import annotations
 
 import os
 import re
+
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,7 +63,9 @@ OUT = os.path.join(HERE, "wats_sewer_khalil_paper_balanced_biofilm_multispecies.
 # COD=1 with the biomass N / P / S micro-contents, so the conserved-quantity table
 # (check_conservation) closes the growth/decay balances for these groups too.
 _BIOMASS_SPECIES = lambda name, desc: {
-    "name": name, "description": desc, "units": "gCOD/m3",
+    "name": name,
+    "description": desc,
+    "units": "gCOD/m3",
     "default_concentration": 1.0,
     "composition": {"COD": 1.0, "N": 0.07, "P": 0.02, "S": 0.01},
 }
@@ -101,35 +105,49 @@ REPLACE = {
         name="sulfate_reduction",
         rate="mu_srb * monod([S_B], k_srb) * monod([S_SO4], K_SO4) * no_gate * [X_SRB]",
         stoichiometry={
-            "X_SRB": 1, "S_B": "0.0 - 1.0 / Y_srb",
+            "X_SRB": 1,
+            "S_B": "0.0 - 1.0 / Y_srb",
             "sumS": "(1.0 - Y_srb) / (2.0 * Y_srb)",
             "S_SO4": "0.0 - (1.0 - Y_srb) / (2.0 * Y_srb)",
-            "S_NH": NN, "S_PO4": NP,
-        }),
+            "S_NH": NN,
+            "S_PO4": NP,
+        },
+    ),
     "elemental_S_reduction_SB": dict(
         name="elemental_S_reduction",
         rate="mu_srb_s0 * monod([S_B], k_srb) * monod([X_S0], K_S0) * no_gate * [X_SRB]",
         stoichiometry={
-            "X_SRB": 1, "S_B": "0.0 - 1.0 / Y_srb",
+            "X_SRB": 1,
+            "S_B": "0.0 - 1.0 / Y_srb",
             "sumS": "2.0 * (1.0 - Y_srb) / Y_srb",
             "X_S0": "0.0 - 2.0 * (1.0 - Y_srb) / Y_srb",
-            "S_NH": NN, "S_PO4": NP,
-        }),
+            "S_NH": NN,
+            "S_PO4": NP,
+        },
+    ),
     # ---- X_MA ----------------------------------------------------------------
     "methanogenesis_VFA": dict(
         name="methanogenesis_VFA",
         rate="mu_ma * monod([S_VFA], k_vfa_mb) * monod_inh([S_NO], K_NO_f) * [X_MA]",
         stoichiometry={
-            "X_MA": 1, "S_VFA": "0.0 - 1.0 / Y_ma",
-            "S_CH4": "(1.0 - Y_ma) / Y_ma", "S_NH": NN, "S_PO4": NP,
-        }),
+            "X_MA": 1,
+            "S_VFA": "0.0 - 1.0 / Y_ma",
+            "S_CH4": "(1.0 - Y_ma) / Y_ma",
+            "S_NH": NN,
+            "S_PO4": NP,
+        },
+    ),
     "methanogenesis_H2": dict(
         name="methanogenesis_H2",
         rate="mu_ma_h2 * monod([S_H2], k_h2_mb) * monod_inh([S_NO], K_NO_f) * [X_MA]",
         stoichiometry={
-            "X_MA": 1, "S_H2": "0.0 - 1.0 / Y_ma_h2",
-            "S_CH4": "(1.0 - Y_ma_h2) / Y_ma_h2", "S_NH": NN, "S_PO4": NP,
-        }),
+            "X_MA": 1,
+            "S_H2": "0.0 - 1.0 / Y_ma_h2",
+            "S_CH4": "(1.0 - Y_ma_h2) / Y_ma_h2",
+            "S_NH": NN,
+            "S_PO4": NP,
+        },
+    ),
     # ---- X_SOB ---------------------------------------------------------------
     # sumS -> X_S0 releases 0.5 gCOD/gS; X_S0 -> SO4 releases 1.5 gCOD/gS. Per
     # gCOD biomass the donor must supply 1/Y_sob gCOD of electrons.
@@ -137,32 +155,50 @@ REPLACE = {
         name="sulfide_oxidation_anoxic",
         rate="mu_sob * monod([sumS], K_S2) * monod([S_NO], K_NO_S_f) * [X_SOB]",
         stoichiometry={
-            "X_SOB": 1, "sumS": "0.0 - 2.0 / Y_sob", "X_S0": "2.0 / Y_sob",
-            "S_NO": "0.0 - (1.0 / Y_sob - 1.0) / 2.86", "S_NH": NN, "S_PO4": NP,
-        }),
+            "X_SOB": 1,
+            "sumS": "0.0 - 2.0 / Y_sob",
+            "X_S0": "2.0 / Y_sob",
+            "S_NO": "0.0 - (1.0 / Y_sob - 1.0) / 2.86",
+            "S_NH": NN,
+            "S_PO4": NP,
+        },
+    ),
     "elemental_S_oxidation_anoxic": dict(
         name="elemental_S_oxidation_anoxic",
         rate="mu_sob_s0 * monod([X_S0], K_S0) * monod([S_NO], K_NO_S_f) * [X_SOB]",
         stoichiometry={
-            "X_SOB": 1, "X_S0": "0.0 - 2.0 / (3.0 * Y_sob)",
+            "X_SOB": 1,
+            "X_S0": "0.0 - 2.0 / (3.0 * Y_sob)",
             "S_SO4": "2.0 / (3.0 * Y_sob)",
-            "S_NO": "0.0 - (1.0 / Y_sob - 1.0) / 2.86", "S_NH": NN, "S_PO4": NP,
-        }),
+            "S_NO": "0.0 - (1.0 / Y_sob - 1.0) / 2.86",
+            "S_NH": NN,
+            "S_PO4": NP,
+        },
+    ),
     "sulfide_biooxidation_aerobic": dict(
         name="sulfide_biooxidation_aerobic",
         rate="mu_sob_aer * monod([sumS], K_S2) * monod([S_O], k_o) * [X_SOB]",
         stoichiometry={
-            "X_SOB": 1, "sumS": "0.0 - 2.0 / Y_sob", "X_S0": "2.0 / Y_sob",
-            "S_O": "0.0 - (1.0 / Y_sob - 1.0)", "S_NH": NN, "S_PO4": NP,
-        }),
+            "X_SOB": 1,
+            "sumS": "0.0 - 2.0 / Y_sob",
+            "X_S0": "2.0 / Y_sob",
+            "S_O": "0.0 - (1.0 / Y_sob - 1.0)",
+            "S_NH": NN,
+            "S_PO4": NP,
+        },
+    ),
     "elemental_S_oxidation_aerobic": dict(
         name="elemental_S_oxidation_aerobic",
         rate="mu_sob_s0_aer * monod([X_S0], K_S0) * monod([S_O], k_o) * [X_SOB]",
         stoichiometry={
-            "X_SOB": 1, "X_S0": "0.0 - 2.0 / (3.0 * Y_sob)",
+            "X_SOB": 1,
+            "X_S0": "0.0 - 2.0 / (3.0 * Y_sob)",
             "S_SO4": "2.0 / (3.0 * Y_sob)",
-            "S_O": "0.0 - (1.0 / Y_sob - 1.0)", "S_NH": NN, "S_PO4": NP,
-        }),
+            "S_O": "0.0 - (1.0 / Y_sob - 1.0)",
+            "S_NH": NN,
+            "S_PO4": NP,
+        },
+    ),
 }
 
 # First-order decay (inactivation) of each functional group -> inert X_I, N/P
@@ -212,9 +248,12 @@ def main():
     for rx in net["reactions"]:
         if rx["name"] in REPLACE:
             spec = REPLACE[rx["name"]]
-            new = {"name": spec["name"],
-                   "description": rx.get("description", rx["name"]),
-                   "rate": spec["rate"], "stoichiometry": spec["stoichiometry"]}
+            new = {
+                "name": spec["name"],
+                "description": rx.get("description", rx["name"]),
+                "rate": spec["rate"],
+                "stoichiometry": spec["stoichiometry"],
+            }
             if "reference" in rx:
                 new["reference"] = rx["reference"]
             out.append(new)
@@ -223,12 +262,14 @@ def main():
             out.append(rx)
     # 4. Add decay reactions.
     for rname, bcoef, grp in DECAYS:
-        out.append({
-            "name": rname,
-            "description": f"First-order decay (inactivation) of {grp} to inert.",
-            "rate": f"{bcoef} * [{grp}]",
-            "stoichiometry": {grp: -1, "X_I": 1, "S_NH": "i_n_bio", "S_PO4": "i_p_bio"},
-        })
+        out.append(
+            {
+                "name": rname,
+                "description": f"First-order decay (inactivation) of {grp} to inert.",
+                "rate": f"{bcoef} * [{grp}]",
+                "stoichiometry": {grp: -1, "X_I": 1, "S_NH": "i_n_bio", "S_PO4": "i_p_bio"},
+            }
+        )
     net["reactions"] = out
 
     # 5. Prune parameters orphaned by the replacement (the old areal rate
@@ -247,13 +288,17 @@ def main():
         n_pruned += 1
 
     with open(OUT, "w") as f:
-        f.write("# Auto-generated from wats_sewer_khalil_paper_balanced_biofilm_biomass.yaml "
-                "by _make_khalil_balanced_biofilm_multispecies.py -- do not edit by hand.\n")
+        f.write(
+            "# Auto-generated from wats_sewer_khalil_paper_balanced_biofilm_biomass.yaml "
+            "by _make_khalil_balanced_biofilm_multispecies.py -- do not edit by hand.\n"
+        )
         yaml.safe_dump(net, f, sort_keys=False, default_flow_style=False, width=100)
 
-    print(f"wrote {os.path.basename(OUT)} ({len(net['reactions'])} reactions, "
-          f"{len(net['species'])} species; replaced {n_repl} processes, added "
-          f"{len(DECAYS)} decays, pruned {n_pruned} dead params)")
+    print(
+        f"wrote {os.path.basename(OUT)} ({len(net['reactions'])} reactions, "
+        f"{len(net['species'])} species; replaced {n_repl} processes, added "
+        f"{len(DECAYS)} decays, pruned {n_pruned} dead params)"
+    )
     for grp in ("X_SRB", "X_MA", "X_SOB"):
         rxns = [r["name"] for r in net["reactions"] if f"[{grp}]" in r["rate"]]
         print(f"  {grp}: {rxns}")

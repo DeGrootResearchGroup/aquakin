@@ -46,39 +46,48 @@ if TYPE_CHECKING:  # pragma: no cover
 # soluble S* component). XTSS is the lumped solids tracer; XMeOH / XMeP are the
 # metal-hydroxide / metal-phosphate precipitate solids.
 ASM2D_PARTICULATES = (
-    "XI", "XS", "XH", "XPAO", "XPP", "XPHA", "XAUT", "XTSS", "XMeOH", "XMeP",
+    "XI",
+    "XS",
+    "XH",
+    "XPAO",
+    "XPP",
+    "XPHA",
+    "XAUT",
+    "XTSS",
+    "XMeOH",
+    "XMeP",
 )
 
 # Default A²O design (a defensible municipal layout, not a published benchmark).
 A2O_Q_AVG = 18446.0  # m³/d, dry-weather average (BSM scale, for a familiar size)
-A2O_ANAEROBIC_VOLUMES = (750.0, 750.0)      # m³ — anaerobic selector
-A2O_ANOXIC_VOLUMES = (750.0, 750.0)          # m³
+A2O_ANAEROBIC_VOLUMES = (750.0, 750.0)  # m³ — anaerobic selector
+A2O_ANOXIC_VOLUMES = (750.0, 750.0)  # m³
 A2O_AEROBIC_VOLUMES = (1333.0, 1333.0, 1333.0)  # m³
-A2O_AEROBIC_KLA = (360.0, 360.0, 240.0)      # d⁻¹ (open-loop; high enough that
-                                              #   nitrifiers and PAOs coexist)
-A2O_DO_SATURATION = 8.0                       # g O₂ / m³
-A2O_INTERNAL_RECYCLE_RATIO = 1.0              # Q_a / Q_in (aerobic → anoxic)
-A2O_RAS_RATIO = 0.75                          # Q_r / Q_in (underflow → anaerobic)
-A2O_WASTAGE_FLOW = 120.0                      # m³/d (a long SRT, to retain PAOs)
-A2O_CLARIFIER_AREA = 1500.0                   # m²
-A2O_CLARIFIER_HEIGHT = 4.0                    # m
+A2O_AEROBIC_KLA = (360.0, 360.0, 240.0)  # d⁻¹ (open-loop; high enough that
+#   nitrifiers and PAOs coexist)
+A2O_DO_SATURATION = 8.0  # g O₂ / m³
+A2O_INTERNAL_RECYCLE_RATIO = 1.0  # Q_a / Q_in (aerobic → anoxic)
+A2O_RAS_RATIO = 0.75  # Q_r / Q_in (underflow → anaerobic)
+A2O_WASTAGE_FLOW = 120.0  # m³/d (a long SRT, to retain PAOs)
+A2O_CLARIFIER_AREA = 1500.0  # m²
+A2O_CLARIFIER_HEIGHT = 4.0  # m
 
 # A typical municipal ASM2d raw-influent composition (g/m³ except SALK in
 # mol HCO₃⁻/m³). The fermentation product SA (volatile fatty acids) is what
 # drives biological P removal in the anaerobic selector, so it is non-trivial.
 A2O_INFLUENT = {
     "SO2": 0.0,
-    "SF": 40.0,     # fermentable COD
-    "SA": 50.0,     # volatile fatty acids (the bio-P electron / carbon donor)
-    "SNH4": 25.0,   # ammonia N
+    "SF": 40.0,  # fermentable COD
+    "SA": 50.0,  # volatile fatty acids (the bio-P electron / carbon donor)
+    "SNH4": 25.0,  # ammonia N
     "SNO3": 0.0,
-    "SPO4": 8.0,    # soluble inorganic P
-    "SI": 30.0,     # soluble inert COD
-    "SALK": 7.0,    # alkalinity
+    "SPO4": 8.0,  # soluble inorganic P
+    "SI": 30.0,  # soluble inert COD
+    "SALK": 7.0,  # alkalinity
     "SN2": 0.0,
-    "XI": 30.0,     # particulate inert COD
-    "XS": 180.0,    # slowly biodegradable COD
-    "XH": 40.0,     # heterotroph seed
+    "XI": 30.0,  # particulate inert COD
+    "XS": 180.0,  # slowly biodegradable COD
+    "XH": 40.0,  # heterotroph seed
 }
 
 
@@ -144,10 +153,25 @@ def a2o_influent(
 # PAO population; the solve relaxes it to the steady state, so the exact values
 # affect settling time, not the operating point.
 A2O_WARM_REACTOR_COMPOSITION = {
-    "SO2": 2.0, "SF": 2.0, "SA": 2.0, "SNH4": 8.0, "SNO3": 2.0, "SPO4": 4.0,
-    "SI": 30.0, "SALK": 7.0, "SN2": 5.0, "XI": 1500.0, "XS": 80.0, "XH": 1500.0,
-    "XPAO": 900.0, "XPP": 250.0, "XPHA": 20.0, "XAUT": 150.0, "XTSS": 5500.0,
-    "XMeOH": 0.0, "XMeP": 0.0,
+    "SO2": 2.0,
+    "SF": 2.0,
+    "SA": 2.0,
+    "SNH4": 8.0,
+    "SNO3": 2.0,
+    "SPO4": 4.0,
+    "SI": 30.0,
+    "SALK": 7.0,
+    "SN2": 5.0,
+    "XI": 1500.0,
+    "XS": 80.0,
+    "XH": 1500.0,
+    "XPAO": 900.0,
+    "XPP": 250.0,
+    "XPHA": 20.0,
+    "XAUT": 150.0,
+    "XTSS": 5500.0,
+    "XMeOH": 0.0,
+    "XMeP": 0.0,
 }
 
 
@@ -169,9 +193,11 @@ def a2o_warm_start(plant: Plant) -> "jnp.ndarray":
     jnp.ndarray
         Flat initial-state vector for ``plant.solve(y0=...)``.
     """
-    reactors = [n for n in plant.list_units()
-                if n.startswith(("anaer", "anox", "aer"))
-                and "mix" not in n and "split" not in n]
+    reactors = [
+        n
+        for n in plant.list_units()
+        if n.startswith(("anaer", "anox", "aer")) and "mix" not in n and "split" not in n
+    ]
     if not reactors:  # pragma: no cover - a build_a2o plant always has reactors
         raise ValueError("no activated-sludge reactor found in the plant")
     network = plant.units[reactors[0]].network
@@ -230,19 +256,21 @@ def build_a2o(
     """
     if network is None:
         import aquakin
+
         network = aquakin.load_network("asm2d")
 
     if conditions is None:
-        conditions = {name: network._condition_defaults[name]
-                      for name in network.conditions_required}
+        conditions = {
+            name: network._condition_defaults[name] for name in network.conditions_required
+        }
 
     plant = Plant("A2O")
 
     # Controlled recycle-pump flows (constant volumetric setpoints off the design
     # flow, like the BSM plants — modelling them as fractions of throughput makes
     # the recycle-flow loop gain near-singular off the design influent).
-    Qa = internal_recycle_ratio * Q_avg     # internal (nitrate) recycle
-    Qr = ras_ratio * Q_avg                   # return activated sludge
+    Qa = internal_recycle_ratio * Q_avg  # internal (nitrate) recycle
+    Qr = ras_ratio * Q_avg  # return activated sludge
     Qw = wastage_flow
     Q_underflow = Qr + Qw
 
@@ -257,7 +285,6 @@ def build_a2o(
 
     # ----- Anaerobic selector (no aeration) -----
     for i, vol in enumerate(A2O_ANAEROBIC_VOLUMES):
-        upstream = "front_mix" if i == 0 else f"anaer{i}"
         plant.add_unit(
             CSTRUnit(
                 name=f"anaer{i + 1}",
@@ -300,8 +327,7 @@ def build_a2o(
                 volume=vol,
                 input_port_names=["inlet"],
                 conditions=conditions,
-                aeration=Aeration(kla=A2O_AEROBIC_KLA[i], do_sat=A2O_DO_SATURATION,
-                                  species="SO2"),
+                aeration=Aeration(kla=A2O_AEROBIC_KLA[i], do_sat=A2O_DO_SATURATION, species="SO2"),
             )
         )
 
@@ -364,8 +390,7 @@ def build_a2o(
         # Insert a metal-salt dosing unit on the line into the aerobic zone, so
         # the dosed metal hydroxide precipitates phosphate (chemical-P) in the
         # aerated reactors alongside the biological uptake.
-        reagent = Reagent.from_species(
-            network, {"XMeOH": ferric.xmeoh_conc}, label="ferric")
+        reagent = Reagent.from_species(network, {"XMeOH": ferric.xmeoh_conc}, label="ferric")
         plant.add_unit(DosingUnit("ferric_dose", reagent, flow=ferric.flow))
         plant.connect(last_anox, "ferric_dose.in")
         plant.connect("ferric_dose.out", "aer1")

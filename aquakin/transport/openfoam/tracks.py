@@ -65,14 +65,11 @@ def read_tracks_csv(path: PathLike) -> dict[int, Track]:
         for required in _REQUIRED_COLUMNS:
             if required not in header:
                 raise ValueError(
-                    f"Track file {p} is missing required column '{required}'. "
-                    f"Got header: {header}"
+                    f"Track file {p} is missing required column '{required}'. Got header: {header}"
                 )
         pid_col = header.index("particle_id")
         t_col = header.index("t")
-        field_cols = [
-            (i, name) for i, name in enumerate(header) if name not in _REQUIRED_COLUMNS
-        ]
+        field_cols = [(i, name) for i, name in enumerate(header) if name not in _REQUIRED_COLUMNS]
 
         def _parse_float(row_no: int, col_name: str, raw: str) -> float:
             try:
@@ -93,8 +90,7 @@ def read_tracks_csv(path: PathLike) -> dict[int, Track]:
         for row_no, row in enumerate(reader, start=2):
             if len(row) != len(header):
                 raise ValueError(
-                    f"Track file {p} row {row_no} has {len(row)} columns, "
-                    f"expected {len(header)}"
+                    f"Track file {p} row {row_no} has {len(row)} columns, expected {len(header)}"
                 )
             try:
                 pid = int(row[pid_col])
@@ -112,13 +108,10 @@ def read_tracks_csv(path: PathLike) -> dict[int, Track]:
         ts = jnp.asarray([s[0] for s in samples])
         diffs = jnp.diff(ts)
         if bool(jnp.any(diffs == 0)):
-            raise ValueError(
-                f"Track file {p}: particle_id {pid} has duplicate t values."
-            )
+            raise ValueError(f"Track file {p}: particle_id {pid} has duplicate t values.")
         if not bool(jnp.all(diffs > 0)):
             raise ValueError(
-                f"Track file {p}: particle_id {pid} samples are not strictly "
-                f"ascending in t."
+                f"Track file {p}: particle_id {pid} samples are not strictly ascending in t."
             )
         fields = {
             name: jnp.asarray([s[1][col_index] for s in samples])
@@ -145,8 +138,7 @@ def write_tracks_csv(path: PathLike, tracks: Mapping[int, Track]) -> None:
             field_order = names
         elif names != field_order:
             raise ValueError(
-                f"All tracks must share the same field names; got {names} vs "
-                f"{field_order}"
+                f"All tracks must share the same field names; got {names} vs {field_order}"
             )
     assert field_order is not None
 

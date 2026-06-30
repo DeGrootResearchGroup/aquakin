@@ -35,12 +35,14 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.nodes import (
+    _PH_INHIBIT_HILL_SLOPE,
+    _PH_INHIBIT_MIN_WIDTH,
+    GAS_CONSTANT,
     AddNode,
     ArrheniusNode,
     ConditionNode,
     ConstantNode,
     DivideNode,
-    GAS_CONSTANT,
     MaxNode,
     MonodInhibitionNode,
     MonodInhibitionRatioNode,
@@ -53,8 +55,6 @@ from aquakin.core.nodes import (
     SafeDivideNode,
     SpeciesNode,
     SubtractNode,
-    _PH_INHIBIT_HILL_SLOPE,
-    _PH_INHIBIT_MIN_WIDTH,
     _safe_ratio,
     pHInhibitNode,
     pHSwitchNode,
@@ -86,8 +86,13 @@ _PROMISE_IN_BOUNDS = jax.lax.GatherScatterMode.PROMISE_IN_BOUNDS
 def _gather(src, idx):
     """``src[idx]`` for a 1-D ``src`` and 1-D non-negative in-bounds ``idx``."""
     return jax.lax.gather(
-        src, idx[:, None], dimension_numbers=_GATHER_DN, slice_sizes=(1,),
-        mode=_PROMISE_IN_BOUNDS, indices_are_sorted=False, unique_indices=False,
+        src,
+        idx[:, None],
+        dimension_numbers=_GATHER_DN,
+        slice_sizes=(1,),
+        mode=_PROMISE_IN_BOUNDS,
+        indices_are_sorted=False,
+        unique_indices=False,
     )
 
 
@@ -97,6 +102,7 @@ def _gather(src, idx):
 # one array per operand slot, all the same length = the number of instances of
 # this kind at this depth) and returns the array of results. The arithmetic is
 # byte-for-byte the scalar form in ``core/nodes.py``.
+
 
 def _k_add(o):
     return o[0] + o[1]
@@ -272,8 +278,7 @@ class _Interner:
             i = _resolve_param(node.name, reaction_name, self.param_index)
             return self._add(("param", i), "param", (), i)
         if isinstance(node, ConditionNode):
-            return self._add(("cond", node.field_name), "cond", (),
-                             node.field_name)
+            return self._add(("cond", node.field_name), "cond", (), node.field_name)
 
         # Power: a constant exponent stays static (see _k_powc) so its JVP
         # matches the scalar PowerNode and stays finite at base 0.
@@ -288,7 +293,9 @@ class _Interner:
 
         # Binary arithmetic --------------------------------------------------
         binkind = {
-            AddNode: "add", SubtractNode: "sub", MultiplyNode: "mul",
+            AddNode: "add",
+            SubtractNode: "sub",
+            MultiplyNode: "mul",
             DivideNode: "div",
         }.get(type(node))
         if binkind is not None:
@@ -300,26 +307,41 @@ class _Interner:
 
         # Domain functions ---------------------------------------------------
         if isinstance(node, MonodNode):
-            return self._op("monod", (self.intern(node.X, reaction_name),
-                                      self.intern(node.K, reaction_name)))
+            return self._op(
+                "monod", (self.intern(node.X, reaction_name), self.intern(node.K, reaction_name))
+            )
         if isinstance(node, MonodInhibitionNode):
-            return self._op("monod_inh", (self.intern(node.X, reaction_name),
-                                          self.intern(node.K, reaction_name)))
+            return self._op(
+                "monod_inh",
+                (self.intern(node.X, reaction_name), self.intern(node.K, reaction_name)),
+            )
         if isinstance(node, MonodRatioNode):
-            return self._op("monod_ratio", (self.intern(node.A, reaction_name),
-                                            self.intern(node.B, reaction_name),
-                                            self.intern(node.K, reaction_name)))
+            return self._op(
+                "monod_ratio",
+                (
+                    self.intern(node.A, reaction_name),
+                    self.intern(node.B, reaction_name),
+                    self.intern(node.K, reaction_name),
+                ),
+            )
         if isinstance(node, MonodInhibitionRatioNode):
-            return self._op("monod_inh_ratio",
-                            (self.intern(node.A, reaction_name),
-                             self.intern(node.B, reaction_name),
-                             self.intern(node.K, reaction_name)))
+            return self._op(
+                "monod_inh_ratio",
+                (
+                    self.intern(node.A, reaction_name),
+                    self.intern(node.B, reaction_name),
+                    self.intern(node.K, reaction_name),
+                ),
+            )
         if isinstance(node, SafeDivideNode):
-            return self._op("safediv", (self.intern(node.num, reaction_name),
-                                        self.intern(node.denom, reaction_name)))
+            return self._op(
+                "safediv",
+                (self.intern(node.num, reaction_name), self.intern(node.denom, reaction_name)),
+            )
         if isinstance(node, MaxNode):
-            return self._op("max", (self.intern(node.a, reaction_name),
-                                    self.intern(node.b, reaction_name)))
+            return self._op(
+                "max", (self.intern(node.a, reaction_name), self.intern(node.b, reaction_name))
+            )
         # pH / Arrhenius read a condition; intern it as a trailing operand so
         # the batched kernel reads it from the pool like any other value.
         if isinstance(node, pHSwitchNode):
@@ -382,9 +404,9 @@ class VectorizedRates:
         if self.const_vals.size:
             blocks.append(self.const_vals.astype(C.dtype))
         if self.cond_fields:
-            blocks.append(jnp.stack(
-                [condition_arrays[f][loc_idx] for f in self.cond_fields]
-            ).astype(C.dtype))
+            blocks.append(
+                jnp.stack([condition_arrays[f][loc_idx] for f in self.cond_fields]).astype(C.dtype)
+            )
         P = jnp.concatenate(blocks) if len(blocks) > 1 else blocks[0]
         for kernel, operand_arrays, aux in self.steps:
             operands = tuple(_gather(P, a) for a in operand_arrays)
@@ -409,8 +431,7 @@ def build_vectorized_rates(
     """
     interner = _Interner(species_index, param_index)
     root_ids = [
-        interner.intern(ast, name)
-        for ast, name in zip(rate_asts, reaction_names, strict=True)
+        interner.intern(ast, name) for ast, name in zip(rate_asts, reaction_names, strict=True)
     ]
 
     import numpy as np
@@ -479,8 +500,7 @@ def build_vectorized_rates(
         )
         # ``powc`` carries its per-instance constant exponents as a static array
         # (kept off the traced pool so the pow JVP stays finite at base 0).
-        aux = (np.asarray([literals[i] for i in ids], dtype=np.float64)
-               if kind == "powc" else None)
+        aux = np.asarray([literals[i] for i in ids], dtype=np.float64) if kind == "powc" else None
         steps.append((kernel, operand_arrays, aux))
 
     return VectorizedRates(

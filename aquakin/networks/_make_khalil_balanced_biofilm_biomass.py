@@ -58,10 +58,12 @@ stratification behaviour until it is re-calibrated against the data.
 
 Run from this directory:  python _make_khalil_balanced_biofilm_biomass.py
 """
+
 from __future__ import annotations
 
 import os
 import re
+
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -70,8 +72,10 @@ OUT = os.path.join(HERE, "wats_sewer_khalil_paper_balanced_biofilm_biomass.yaml"
 
 # Heterotroph growth biofilm-duplicates to drop (their [X_BH] bulk twins remain).
 DROP = {
-    "anox_growth_SB_biofilm", "anox_growth_VFA_biofilm",
-    "aer_growth_SB_biofilm", "aer_growth_VFA_biofilm",
+    "anox_growth_SB_biofilm",
+    "anox_growth_VFA_biofilm",
+    "aer_growth_SB_biofilm",
+    "aer_growth_VFA_biofilm",
 }
 LOCAL_BIOMASS = "[X_BH]"
 
@@ -119,8 +123,7 @@ def main():
     net["reactions"] = out
 
     # Drop the now-unused lumped-activity conditions; keep pH.
-    net["conditions"] = [c for c in net.get("conditions", [])
-                         if c["name"] not in ("A_V", "X_BF")]
+    net["conditions"] = [c for c in net.get("conditions", []) if c["name"] not in ("A_V", "X_BF")]
     # bio_hf is fully inlined away.
     if "expressions" in net and "bio_hf" in net["expressions"]:
         del net["expressions"]["bio_hf"]
@@ -154,14 +157,18 @@ def main():
             n_pruned += 1
 
     with open(OUT, "w") as f:
-        f.write("# Auto-generated from wats_sewer_khalil_paper_balanced.yaml by "
-                "_make_khalil_balanced_biofilm_biomass.py -- do not edit by hand.\n")
+        f.write(
+            "# Auto-generated from wats_sewer_khalil_paper_balanced.yaml by "
+            "_make_khalil_balanced_biofilm_biomass.py -- do not edit by hand.\n"
+        )
         yaml.safe_dump(net, f, sort_keys=False, default_flow_style=False, width=100)
 
-    print(f"wrote {os.path.basename(OUT)} "
-          f"({len(net['reactions'])} reactions, {len(net['species'])} species; "
-          f"dropped {n_drop} growth duplicates, converted {n_av} {{A_V}} + "
-          f"{n_hf} bio_hf rates to {LOCAL_BIOMASS}, pruned {n_pruned} dead params)")
+    print(
+        f"wrote {os.path.basename(OUT)} "
+        f"({len(net['reactions'])} reactions, {len(net['species'])} species; "
+        f"dropped {n_drop} growth duplicates, converted {n_av} {{A_V}} + "
+        f"{n_hf} bio_hf rates to {LOCAL_BIOMASS}, pruned {n_pruned} dead params)"
+    )
     biomass_rxns = [r["name"] for r in net["reactions"] if "[X_BH]" in r["rate"]]
     print(f"  reactions on [X_BH] ({len(biomass_rxns)}): {biomass_rxns}")
 

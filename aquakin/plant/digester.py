@@ -72,8 +72,7 @@ class ADM1DigesterUnit(CouplingAware):
     def __post_init__(self) -> None:
         # Fill in any unspecified required conditions from the network defaults.
         defaults = {
-            name: float(arr[0])
-            for name, arr in self.network.default_conditions().fields.items()
+            name: float(arr[0]) for name, arr in self.network.default_conditions().fields.items()
         }
         conds = {**defaults, **self.conditions}
         missing = set(self.network.conditions_required) - set(conds)
@@ -83,8 +82,7 @@ class ADM1DigesterUnit(CouplingAware):
                 f"for: {sorted(missing)}."
             )
         self._condition_arrays = {
-            name: jnp.asarray([float(conds[name])])
-            for name in self.network.conditions_required
+            name: jnp.asarray([float(conds[name])]) for name in self.network.conditions_required
         }
         # liquid_mask: 1.0 on liquid states, 0.0 on the gas-headspace states.
         mask = jnp.ones((self.network.n_species,))
@@ -162,8 +160,7 @@ class ADM1DigesterUnit(CouplingAware):
         for name in self.input_port_names:
             Q_total = Q_total + inputs[name].Q
         T_in = mixed_temperature(inputs, self.input_port_names)
-        return {self.output_port: Stream(Q=Q_total, C=state, network=self.network,
-                                         T=T_in)}
+        return {self.output_port: Stream(Q=Q_total, C=state, network=self.network, T=T_in)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         Q_total = jnp.zeros(())

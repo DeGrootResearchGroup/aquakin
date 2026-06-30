@@ -6,8 +6,8 @@ from aquakin.core.nodes import (
     AddNode,
     ArrheniusNode,
     ASTNode,
-    ConstantNode,
     ConditionNode,
+    ConstantNode,
     DivideNode,
     MaxNode,
     MonodInhibitionNode,
@@ -25,13 +25,17 @@ from aquakin.core.nodes import (
     pHSwitchNode,
 )
 
-
 # LaTeX text-mode special characters that must be escaped when a species or
 # condition name is rendered literally (e.g. the underscore in ``S_NO``, which
 # would otherwise be read as a subscript operator and mis-render the name).
 _LATEX_ESCAPES = {
-    "_": r"\_", "#": r"\#", "%": r"\%", "&": r"\&",
-    "$": r"\$", "{": r"\{", "}": r"\}",
+    "_": r"\_",
+    "#": r"\#",
+    "%": r"\%",
+    "&": r"\&",
+    "$": r"\$",
+    "{": r"\{",
+    "}": r"\}",
 }
 
 
@@ -135,8 +139,7 @@ def _paren_pow_base(node: ASTNode) -> str:
     wrapped.
     """
     rendered = to_latex(node)
-    atomic = (
-        isinstance(node, (SpeciesNode, ParamNode, ConditionNode))
-        or (isinstance(node, ConstantNode) and node.value >= 0)
+    atomic = isinstance(node, (SpeciesNode, ParamNode, ConditionNode)) or (
+        isinstance(node, ConstantNode) and node.value >= 0
     )
     return rendered if atomic else _paren(rendered)

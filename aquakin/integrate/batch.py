@@ -12,10 +12,10 @@ import jax.numpy as jnp
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
-    _HasNamedSpecies,
     DifferentiationConfig,
     GradientCheckMixin,
     IntegratorConfig,
+    _HasNamedSpecies,
     cached_jitted_solver,
     friendly_solve_errors,
     init_solver_settings,
@@ -131,8 +131,7 @@ class BatchReactor(GradientCheckMixin):
         diff: DifferentiationConfig = DifferentiationConfig(),
     ) -> None:
         conditions.validate_required(network.conditions_required)
-        init_solver_settings(self, network, rtol=rtol, integrator=integrator,
-                             diff=diff)
+        init_solver_settings(self, network, rtol=rtol, integrator=integrator, diff=diff)
         self.conditions = conditions
         self.atol = resolve_state_atol(network, atol)
         # Cache jit-compiled inner solve keyed on (t0, t1, t_eval_shape).
@@ -205,28 +204,25 @@ class BatchReactor(GradientCheckMixin):
         BatchSolution
         """
         C0 = jnp.asarray(C0)
-        params = (
-            self.network.default_parameters() if params is None else jnp.asarray(params)
-        )
+        params = self.network.default_parameters() if params is None else jnp.asarray(params)
         validate_C0_params(self.network, C0, params)
         if t_span is None:
             raise ValueError("t_span=(t_start, t_end) is required.")
 
         t_span, t_eval, _time_factor = to_native_time(
-            self.network.time_unit, time_unit, t_span, t_eval)
+            self.network.time_unit, time_unit, t_span, t_eval
+        )
 
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
-            raise ValueError(
-                f"t_span end must exceed start; got ({t0}, {t1})."
-            )
+            raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
         active_conditions = conditions if conditions is not None else self.conditions
         condition_arrays = active_conditions.fields
 
         if events is not None:
             return self._solve_with_events(
-                C0, params, condition_arrays, t0, t1, t_eval, events,
-                _time_factor)
+                C0, params, condition_arrays, t0, t1, t_eval, events, _time_factor
+            )
 
         if t_eval is None:
             t_eval_arr = None
@@ -241,12 +237,12 @@ class BatchReactor(GradientCheckMixin):
         # traced call (solve inside an outer jit/grad) yields a None settings key
         # and bypasses the cache -- it cannot benefit from it anyway.
         settings = reactor_settings_key(self)
-        cache_key = (None if settings is None
-                     else ("batch", id(self.network), sig, settings))
+        cache_key = None if settings is None else ("batch", id(self.network), sig, settings)
         jitted = cached_jitted_solver(
             cache_key,
             lambda: self._build_jitted_solve(t0, t1, t_eval_arr is not None),
-            self.network, self.adjoint,
+            self.network,
+            self.adjoint,
         )
 
         with friendly_solve_errors(self.max_steps, what="batch reactor solve"):
@@ -255,14 +251,13 @@ class BatchReactor(GradientCheckMixin):
             else:
                 ts, ys = jitted(C0, params, condition_arrays, t_eval_arr)
         if _time_factor != 1.0:
-            ts = ts / _time_factor          # native -> requested unit
+            ts = ts / _time_factor  # native -> requested unit
         sol = BatchSolution(t=ts, C=ys, network=self.network)
         if time_unit is not None:
             sol._requested_time_unit = time_unit
         return sol
 
-    def _solve_with_events(self, C0, params, condition_arrays, t0, t1, t_eval,
-                           events, time_factor):
+    def _solve_with_events(self, C0, params, condition_arrays, t0, t1, t_eval, events, time_factor):
         """Run the event-driven segmented solve (the ``events=`` path).
 
         Builds the same constant-condition RHS the plain batch solve uses --
@@ -274,22 +269,31 @@ class BatchReactor(GradientCheckMixin):
         data-dependent), and time-only events still differentiate because each
         segment is a plain differentiable sub-solve.
         """
-        rhs = make_chemistry_rhs(
-            self.network, params, cond_fn=lambda t: condition_arrays)
+        rhs = make_chemistry_rhs(self.network, params, cond_fn=lambda t: condition_arrays)
 
         t_eval_arr = None if t_eval is None else jnp.asarray(t_eval)
         if t_eval_arr is not None:
             self._validate_t_eval(t_eval_arr, t0, t1)
         with friendly_solve_errors(self.max_steps, what="batch reactor solve"):
             res = solve_with_events(
-                rhs, C0, params, t0=t0, t1=t1, t_eval=t_eval_arr, events=events,
-                rtol=self.rtol, atol=self.atol, dtmax=self.dtmax,
-                adjoint=self.adjoint, max_steps=self.max_steps,
-                order=self.order, factormax=self.factormax, solver=self.solver,
+                rhs,
+                C0,
+                params,
+                t0=t0,
+                t1=t1,
+                t_eval=t_eval_arr,
+                events=events,
+                rtol=self.rtol,
+                atol=self.atol,
+                dtmax=self.dtmax,
+                adjoint=self.adjoint,
+                max_steps=self.max_steps,
+                order=self.order,
+                factormax=self.factormax,
+                solver=self.solver,
             )
         ts = res.ts / time_factor if time_factor != 1.0 else res.ts
-        return BatchSolution(t=ts, C=res.ys, network=self.network,
-                             events_log=res.log)
+        return BatchSolution(t=ts, C=res.ys, network=self.network, events_log=res.log)
 
     def solve_sensitivity(
         self,
@@ -356,8 +360,7 @@ class BatchReactor(GradientCheckMixin):
         active = conditions if conditions is not None else self.conditions
         cond = active.fields
         network = self.network
-        atol_y = jnp.broadcast_to(jnp.asarray(self.atol, dtype=float),
-                                  (network.n_species,))
+        atol_y = jnp.broadcast_to(jnp.asarray(self.atol, dtype=float), (network.n_species,))
         t_eval_arr = None if t_eval is None else jnp.asarray(t_eval)
         if t_eval_arr is not None:
             self._validate_t_eval(t_eval_arr, t0, t1)
@@ -366,16 +369,32 @@ class BatchReactor(GradientCheckMixin):
             return lambda t, y, p: network.dCdt(y, p, condition_arrays, 0)
 
         cache_key = (
-            t0, t1, None if t_eval_arr is None else tuple(t_eval_arr.shape),
-            tuple(int(i) for i in free_idx), bool(shared_factor),
+            t0,
+            t1,
+            None if t_eval_arr is None else tuple(t_eval_arr.shape),
+            tuple(int(i) for i in free_idx),
+            bool(shared_factor),
             None if sens_rtol is None else float(sens_rtol),
         )
         ts, y_traj, S_traj = run_forward_sensitivity(
-            make_f_flat, C0, params, free_idx, cond,
-            t0=t0, t1=t1, t_eval=t_eval_arr, rtol=self.rtol, atol_y=atol_y,
-            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
-            dtmax=self.dtmax, max_steps=self.max_steps, shared_factor=shared_factor,
-            cache=self._sens_jit_cache, cache_key=cache_key,
+            make_f_flat,
+            C0,
+            params,
+            free_idx,
+            cond,
+            t0=t0,
+            t1=t1,
+            t_eval=t_eval_arr,
+            rtol=self.rtol,
+            atol_y=atol_y,
+            sens_rtol=sens_rtol,
+            sens_atol=sens_atol,
+            param_scale=param_scale,
+            dtmax=self.dtmax,
+            max_steps=self.max_steps,
+            shared_factor=shared_factor,
+            cache=self._sens_jit_cache,
+            cache_key=cache_key,
         )
         return BatchSolution(t=ts, C=y_traj, network=network), S_traj
 
@@ -385,18 +404,29 @@ class BatchReactor(GradientCheckMixin):
         """Build a jit-compiled inner solver for a specific call signature."""
         network = self.network
         kw = dict(
-            t0=t0, t1=t1, rtol=self.rtol, atol=self.atol,
-            adjoint=self.adjoint, dtmax=self.dtmax, max_steps=self.max_steps,
-            order=self.order, factormax=self.factormax, solver=self.solver,
+            t0=t0,
+            t1=t1,
+            rtol=self.rtol,
+            atol=self.atol,
+            adjoint=self.adjoint,
+            dtmax=self.dtmax,
+            max_steps=self.max_steps,
+            order=self.order,
+            factormax=self.factormax,
+            solver=self.solver,
         )
 
         if has_t_eval:
+
             @jax.jit
             def _solve(C0, params, condition_arrays, t_eval):
                 sol = solve_chemistry(
-                    network, C0, params,
+                    network,
+                    C0,
+                    params,
                     cond_fn=lambda t: condition_arrays,
-                    saveat=diffrax.SaveAt(ts=t_eval), **kw,
+                    saveat=diffrax.SaveAt(ts=t_eval),
+                    **kw,
                 )
                 return sol.ts, sol.ys
 
@@ -405,9 +435,12 @@ class BatchReactor(GradientCheckMixin):
         @jax.jit
         def _solve(C0, params, condition_arrays):
             sol = solve_chemistry(
-                network, C0, params,
+                network,
+                C0,
+                params,
                 cond_fn=lambda t: condition_arrays,
-                saveat=diffrax.SaveAt(t1=True), **kw,
+                saveat=diffrax.SaveAt(t1=True),
+                **kw,
             )
             return sol.ts, sol.ys
 

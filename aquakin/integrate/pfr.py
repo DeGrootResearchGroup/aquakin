@@ -12,10 +12,10 @@ import jax.numpy as jnp
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
-    _HasNamedSpecies,
     DifferentiationConfig,
     GradientCheckMixin,
     IntegratorConfig,
+    _HasNamedSpecies,
     _interp_fields_to_scalar,
     cached_jitted_solver,
     friendly_solve_errors,
@@ -119,8 +119,7 @@ class PlugFlowReactor(GradientCheckMixin):
             raise ValueError(f"length must be positive, got {length}")
         if velocity <= 0:
             raise ValueError(f"velocity must be positive, got {velocity}")
-        init_solver_settings(self, network, rtol=rtol, integrator=integrator,
-                             diff=diff)
+        init_solver_settings(self, network, rtol=rtol, integrator=integrator, diff=diff)
         self.conditions = conditions
         self.n_points = int(n_points)
         self.length = float(length)
@@ -161,9 +160,7 @@ class PlugFlowReactor(GradientCheckMixin):
         PFRSolution
         """
         C0 = jnp.asarray(C0)
-        params = (
-            self.network.default_parameters() if params is None else jnp.asarray(params)
-        )
+        params = self.network.default_parameters() if params is None else jnp.asarray(params)
         validate_C0_params(self.network, C0, params)
 
         active_conditions = conditions if conditions is not None else self.conditions
@@ -181,11 +178,22 @@ class PlugFlowReactor(GradientCheckMixin):
         # the closure, so the key carries it; the condition *values* are a
         # runtime argument. A traced call bypasses the cache (settings is None).
         settings = reactor_settings_key(self)
-        cache_key = (None if settings is None
-                     else ("pfr", id(self.network), settings, self.velocity,
-                           self.length, self.n_points, self.n_locations))
+        cache_key = (
+            None
+            if settings is None
+            else (
+                "pfr",
+                id(self.network),
+                settings,
+                self.velocity,
+                self.length,
+                self.n_points,
+                self.n_locations,
+            )
+        )
         jitted = cached_jitted_solver(
-            cache_key, self._build_jitted_solve, self.network, self.adjoint)
+            cache_key, self._build_jitted_solve, self.network, self.adjoint
+        )
         with friendly_solve_errors(self.max_steps, what="plug-flow reactor solve"):
             ts, ys = jitted(C0, params, fields)
         return PFRSolution(x=ts, C=ys, network=self.network)
@@ -255,31 +263,44 @@ class PlugFlowReactor(GradientCheckMixin):
         x_grid = self._x_grid
         single_loc = self.conditions.n_locations <= 1
         x_eval = jnp.linspace(0.0, self.length, self.n_points)
-        atol_y = jnp.broadcast_to(jnp.asarray(self.atol, dtype=float),
-                                  (network.n_species,))
+        atol_y = jnp.broadcast_to(jnp.asarray(self.atol, dtype=float), (network.n_species,))
 
         def make_f_flat(cond_arrays):
             def f_flat(x, C, p):
                 cond = (
-                    cond_arrays if single_loc
-                    else _interp_fields_to_scalar(x, x_grid, cond_arrays)
+                    cond_arrays if single_loc else _interp_fields_to_scalar(x, x_grid, cond_arrays)
                 )
                 return network.dCdt(C, p, cond, 0) / velocity
+
             return f_flat
 
         cache_key = (
-            tuple(int(i) for i in free_idx), bool(shared_factor),
+            tuple(int(i) for i in free_idx),
+            bool(shared_factor),
             None if sens_rtol is None else float(sens_rtol),
         )
         # The augmented [y; S] solve resolves the sensitivity transient and is
         # step-hungrier than the primal; it honours the reactor's own max_steps
         # (the shared convention -- raise it on the reactor if the budget is hit).
         xs, y_traj, S_traj = run_forward_sensitivity(
-            make_f_flat, C0, params, free_idx, fields,
-            t0=0.0, t1=self.length, t_eval=x_eval, rtol=self.rtol, atol_y=atol_y,
-            sens_rtol=sens_rtol, sens_atol=sens_atol, param_scale=param_scale,
-            dtmax=self.dtmax, max_steps=self.max_steps, shared_factor=shared_factor,
-            cache=self._sens_jit_cache, cache_key=cache_key,
+            make_f_flat,
+            C0,
+            params,
+            free_idx,
+            fields,
+            t0=0.0,
+            t1=self.length,
+            t_eval=x_eval,
+            rtol=self.rtol,
+            atol_y=atol_y,
+            sens_rtol=sens_rtol,
+            sens_atol=sens_atol,
+            param_scale=param_scale,
+            dtmax=self.dtmax,
+            max_steps=self.max_steps,
+            shared_factor=shared_factor,
+            cache=self._sens_jit_cache,
+            cache_key=cache_key,
         )
         return PFRSolution(x=xs, C=y_traj, network=network), S_traj
 
@@ -308,15 +329,24 @@ class PlugFlowReactor(GradientCheckMixin):
                 return fields if single_loc else _interp_fields_to_scalar(x, x_grid, fields)
 
             sol = solve_chemistry(
-                network, C0, params,
+                network,
+                C0,
+                params,
                 cond_fn=cond_fn,
                 # Steady-state PFR: integrate over axial position, dC/dx =
                 # (1/velocity) * dCdt.
                 rate_scale=1.0 / velocity,
                 saveat=diffrax.SaveAt(ts=x_eval),
-                t0=0.0, t1=length, rtol=rtol, atol=atol,
-                adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
-                order=order, factormax=factormax, solver=solver,
+                t0=0.0,
+                t1=length,
+                rtol=rtol,
+                atol=atol,
+                adjoint=adjoint,
+                dtmax=dtmax,
+                max_steps=max_steps,
+                order=order,
+                factormax=factormax,
+                solver=solver,
             )
             return sol.ts, sol.ys
 

@@ -45,10 +45,8 @@ import lineax as lx
 import lineax.internal as lxi
 import numpy as np
 import optimistix as optx
-from lineax.internal import complex_to_real_dtype
-
 from diffrax._root_finder._verychord import VeryChord, _NoAux, _VeryChordState
-
+from lineax.internal import complex_to_real_dtype
 
 __all__ = [
     "ColoredVeryChord",
@@ -100,8 +98,8 @@ def materialize_colored_jacobian(root_finder, f, y):
         The ``(n, n)`` Jacobian on the pattern's support.
     """
     _, lin = jax.linearize(f, y)
-    JS = jax.vmap(lin, in_axes=1, out_axes=1)(root_finder.seed_matrix)   # (n, C)
-    return JS[:, root_finder.color_of] * root_finder.pattern            # (n, n)
+    JS = jax.vmap(lin, in_axes=1, out_axes=1)(root_finder.seed_matrix)  # (n, C)
+    return JS[:, root_finder.color_of] * root_finder.pattern  # (n, n)
 
 
 def greedy_color(pattern: np.ndarray) -> np.ndarray:
@@ -129,7 +127,7 @@ def greedy_color(pattern: np.ndarray) -> np.ndarray:
     # columns j, k conflict iff they share a nonzero row: (P^T P)[j, k] > 0.
     conflict = (P.T @ P) > 0
     np.fill_diagonal(conflict, False)
-    order = np.argsort(-conflict.sum(axis=1))   # most-constrained first
+    order = np.argsort(-conflict.sum(axis=1))  # most-constrained first
     color = -np.ones(n, dtype=int)
     for j in order:
         used = {color[k] for k in np.where(conflict[j])[0] if color[k] >= 0}
@@ -208,7 +206,7 @@ def jacobian_sparsity_pattern(
     # the rate kinetics are well defined).
     typ = float(np.median(ay0[ay0 > 0])) if np.any(ay0 > 0) else 1.0
     own = np.where(ay0 > 0.0, ay0, typ * 1e-6)
-    lifted = ay0 + 1.0                            # lift depleted components above 1
+    lifted = ay0 + 1.0  # lift depleted components above 1
     P = np.eye(n, dtype=bool)
 
     def _accumulate(ys):
@@ -220,9 +218,9 @@ def jacobian_sparsity_pattern(
     # the rates are evaluated at a strictly-positive state near y0). This makes
     # the start-state guard pass and captures small-natural-scale columns.
     _accumulate(np.where(ay0 > 0.0, ay0, own))
-    for _ in range(n_probe):                      # own-scale: physical regime
+    for _ in range(n_probe):  # own-scale: physical regime
         _accumulate(own * np.exp(rng.normal(0.0, 1.0, size=n)))
-    for _ in range(n_probe):                      # lifted: depleted-coupling regime
+    for _ in range(n_probe):  # lifted: depleted-coupling regime
         _accumulate(lifted * np.exp(rng.normal(0.0, 1.0, size=n)))
     return P
 
@@ -280,9 +278,8 @@ def structural_sparsity_pattern(network, params=None) -> np.ndarray:
 
     # affects[r] = species reaction r can change (static + symbolic stoichiometry)
     stoich = np.asarray(network.stoich_matrix)
-    affects = [set(np.nonzero(stoich[r])[0].tolist())
-               for r in range(stoich.shape[0])]
-    for (r, j, _fn) in network.stoich_dynamic:
+    affects = [set(np.nonzero(stoich[r])[0].tolist()) for r in range(stoich.shape[0])]
+    for r, j, _fn in network.stoich_dynamic:
         affects[r].add(int(j))
 
     # derived condition (pH, ...) -> the species that feed it. The charge balance
@@ -290,8 +287,7 @@ def structural_sparsity_pattern(network, params=None) -> np.ndarray:
     # the always-on derived fn gives the exact structural dependency set.
     derived_deps: dict[str, set[int]] = {}
     if network.derived_condition_fn is not None and network.derived_fields:
-        conds = {k: jnp.asarray(v)
-                 for k, v in network.default_conditions().fields.items()}
+        conds = {k: jnp.asarray(v) for k, v in network.default_conditions().fields.items()}
         c_generic = jnp.maximum(jnp.abs(network.default_concentrations()), 1.0)
         fields = list(network.derived_fields)
 
@@ -299,7 +295,7 @@ def structural_sparsity_pattern(network, params=None) -> np.ndarray:
             out = network.derived_condition_fn(c, params, conds, 0)
             return jnp.stack([jnp.reshape(out[f], ()) for f in fields])
 
-        jac_derived = np.asarray(jax.jacfwd(_derived)(c_generic))   # (n_fields, n)
+        jac_derived = np.asarray(jax.jacfwd(_derived)(c_generic))  # (n_fields, n)
         for k, f in enumerate(fields):
             derived_deps[f] = set(np.nonzero(jac_derived[k] != 0.0)[0].tolist())
 
@@ -410,7 +406,7 @@ def build_colored_root_finder(
     Returns ``(root_finder, n_colors)``.
     """
     if probe_pattern is not None:
-        P = np.asarray(probe_pattern, dtype=bool)      # caller already probed
+        P = np.asarray(probe_pattern, dtype=bool)  # caller already probed
     else:
         P = jacobian_sparsity_pattern(rhs, y0, n_probe=n_probe, seed=seed)
     if extra_pattern is not None:
@@ -491,5 +487,7 @@ def colored_jacobian_guard(
             f"the dense Jacobian at the start state (max abs error {err:.2e}, "
             f"scale {jscale:.2e}); falling back to dense. This indicates the "
             f"structural pattern missed a nonzero -- please report it.",
-            RuntimeWarning, stacklevel=stacklevel)
+            RuntimeWarning,
+            stacklevel=stacklevel,
+        )
     return ok
