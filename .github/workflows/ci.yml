@@ -233,10 +233,9 @@ jobs:
   # accumulate (freed XLA caches are not returned to the OS) and exhaust it, so the
   # set is sharded one-test-per-process across the FREE runner. (The lighter BSM1
   # plant-AD gradient tests are NOT heavy -- they carry only `slow` / `validation`
-  # and run in those free jobs.) This replaces the former paid 16-core/64GB
-  # `aquakin-heavy` larger runner, whose per-minute billing was the entire CI cost
-  # (public-repo standard-runner minutes are free); the one-test-per-process shard
-  # is what makes the 16 GB free runner sufficient.
+  # and run in those free jobs.) Public-repo standard-runner minutes are free, so
+  # the one-test-per-process shard across the 16 GB runner is what keeps this job
+  # both free and within memory.
   #
   # WHEN IT RUNS (cost control), two triggers:
   #   * push to main -- but ONLY when adjoint/plant-relevant files changed (the
@@ -326,11 +325,12 @@ jobs:
     # multi-GB plant-adjoint program (~2-5 GB resident) that fits a stock 16 GB
     # `ubuntu-latest` runner ALONE, but accumulates across a process (freed XLA
     # caches are not returned to the OS, so RSS climbs test-by-test). Seven fresh
-    # shards keep each process to ~one test, so the free runner suffices and no paid
-    # larger runner is needed (public-repo Actions minutes are free). If a single
-    # test ever needs >16 GB, raise the shard count or move just this job to a
-    # cheaper-than-64GB larger-runner tier. The heavy tests are not in
-    # `.test_durations`, so pytest-split partitions them evenly by count (~1/shard).
+    # shards keep each process to ~one test, so the free 16 GB runner suffices
+    # (public-repo Actions minutes are free). If a single test ever needs >16 GB,
+    # move just this job to a larger-runner tier with >16 GB at one-per-process
+    # (raising the shard count cannot shrink a single test's peak). The heavy tests
+    # are not in `.test_durations`, so pytest-split partitions them evenly by count
+    # (~1/shard).
     strategy:
       fail-fast: false
       matrix:
