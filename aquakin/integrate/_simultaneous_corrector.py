@@ -91,10 +91,10 @@ class SimultaneousCorrector(lx.AbstractLinearSolver):
         # M e_i: its state rows are column i of the diagonal block D, and its
         # S_j rows are column i of the off-diagonal coupling block L_j. So one
         # vmap materialises D and every L_j together.
-        basis = jnp.eye(N, n, dtype=in_struct.dtype)        # columns e_0..e_{n-1}
-        cols = jax.vmap(operator.mv, in_axes=1, out_axes=1)(basis)   # (N, n)
-        D = cols[:n]                                         # (n, n)
-        L = cols[n:].reshape(k, n, n)                        # L[j] = (n, n) block
+        basis = jnp.eye(N, n, dtype=in_struct.dtype)  # columns e_0..e_{n-1}
+        cols = jax.vmap(operator.mv, in_axes=1, out_axes=1)(basis)  # (N, n)
+        D = cols[:n]  # (n, n)
+        L = cols[n:].reshape(k, n, n)  # L[j] = (n, n) block
         lu = jsl.lu_factor(D)
         return (lu, L, eqxi.Static(False))
 
@@ -103,19 +103,19 @@ class SimultaneousCorrector(lx.AbstractLinearSolver):
         lu, L, transposed = state
         n, k = self.ndof, self.n_sens
         b_y = vector[:n]
-        b_S = vector[n:].reshape(k, n)                       # row j = b for S_j
+        b_S = vector[n:].reshape(k, n)  # row j = b for S_j
 
         if not transposed.value:
             # Forward substitution on the lower-arrow system:
             #   x_y    = D^{-1} b_y;  x_{Sj} = D^{-1} (b_{Sj} - L_j x_y).
             x_y = jsl.lu_solve(lu, b_y)
-            coupling = jnp.einsum("jab,b->ja", L, x_y)       # row j = L_j x_y
+            coupling = jnp.einsum("jab,b->ja", L, x_y)  # row j = L_j x_y
             x_S = jax.vmap(lambda r: jsl.lu_solve(lu, r))(b_S - coupling)
         else:
             # Transposed (upper-arrow) system M^T x = b: solve the S blocks
             # first, then y, with the coupling sum_j L_j^T x_{Sj}.
             x_S = jax.vmap(lambda r: jsl.lu_solve(lu, r, trans=1))(b_S)
-            coupling_y = jnp.einsum("jab,ja->b", L, x_S)     # sum_j L_j^T x_{Sj}
+            coupling_y = jnp.einsum("jab,ja->b", L, x_S)  # sum_j L_j^T x_{Sj}
             x_y = jsl.lu_solve(lu, b_y - coupling_y, trans=1)
 
         x = jnp.concatenate([x_y, x_S.reshape(-1)])
@@ -130,9 +130,7 @@ class SimultaneousCorrector(lx.AbstractLinearSolver):
         # Real-valued use only; conjugation is a no-op on real data. Conjugate
         # every array leaf so the contract conj(init(op)) == init(conj(op)) holds
         # generically without special-casing.
-        state = jax.tree_util.tree_map(
-            lambda x: jnp.conj(x) if eqx.is_array(x) else x, state
-        )
+        state = jax.tree_util.tree_map(lambda x: jnp.conj(x) if eqx.is_array(x) else x, state)
         return state, options
 
     def assume_full_rank(self) -> bool:

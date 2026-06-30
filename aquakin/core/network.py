@@ -97,10 +97,8 @@ def _topo_sort_expressions(
         if state == "done":
             return
         if state == "visiting":
-            cycle = stack[stack.index(name):] + [name]
-            raise ValueError(
-                f"Cycle in named expressions: {' -> '.join(cycle)}"
-            )
+            cycle = stack[stack.index(name) :] + [name]
+            raise ValueError(f"Cycle in named expressions: {' -> '.join(cycle)}")
         visited[name] = "visiting"
         for dep in expr_deps.get(name, set()):
             _visit(dep, stack + [name])
@@ -110,6 +108,7 @@ def _topo_sort_expressions(
     for name in expr_names:
         _visit(name, [])
     return order
+
 
 if TYPE_CHECKING:  # pragma: no cover
     pass
@@ -298,8 +297,10 @@ class CompiledNetwork:
             return
         try:
             self._rate_kernel = build_vectorized_rates(
-                self.rate_asts, self.reaction_names,
-                self.species_index, self.param_index,
+                self.rate_asts,
+                self.reaction_names,
+                self.species_index,
+                self.param_index,
             )
         except UnsupportedNode:
             self._rate_kernel = None
@@ -357,9 +358,7 @@ class CompiledNetwork:
         for name, value in merged.items():
             if name not in index_map:
                 suffix = did_you_mean(name, index_map)
-                raise KeyError(
-                    f"Unknown {kind} '{name}' for network '{self.name}'.{suffix}"
-                )
+                raise KeyError(f"Unknown {kind} '{name}' for network '{self.name}'.{suffix}")
             idxs.append(index_map[name])
             vals.append(jnp.asarray(value))
         # Assemble with jnp.stack rather than float()-coercing each value, so a
@@ -369,8 +368,7 @@ class CompiledNetwork:
         stacked = jnp.stack(vals).astype(base.dtype)
         return base.at[jnp.asarray(idxs)].set(stacked)
 
-    def concentrations(self, overrides=None, /, *, base: str = "defaults",
-                       **kwargs) -> jnp.ndarray:
+    def concentrations(self, overrides=None, /, *, base: str = "defaults", **kwargs) -> jnp.ndarray:
         """Initial-concentration vector with named species set.
 
         A by-name builder that avoids manual
@@ -420,15 +418,16 @@ class CompiledNetwork:
         elif base == "zero":
             vec = jnp.zeros_like(self._default_concentrations)
         else:
-            raise ValueError(
-                f"base must be 'defaults' or 'zero', got {base!r}."
-            )
+            raise ValueError(f"base must be 'defaults' or 'zero', got {base!r}.")
         return self._override_vector(
-            vec, self.species_index, overrides, kwargs, "species",
+            vec,
+            self.species_index,
+            overrides,
+            kwargs,
+            "species",
         )
 
-    def influent(self, overrides=None, /, *, Q: float, base: str = "zero",
-                 T=None, **kwargs):
+    def influent(self, overrides=None, /, *, Q: float, base: str = "zero", T=None, **kwargs):
         """Build a constant-in-time influent stream from a feed composition.
 
         Convenience for the common "constant feed of known composition" case:
@@ -463,9 +462,7 @@ class CompiledNetwork:
         """
         from aquakin.plant.influent import InfluentSeries
 
-        return InfluentSeries.constant(
-            self, overrides, Q=Q, base=base, T=T, **kwargs
-        )
+        return InfluentSeries.constant(self, overrides, Q=Q, base=base, T=T, **kwargs)
 
     def parameter_values(self, overrides=None, /, **kwargs) -> jnp.ndarray:
         """Parameter vector: defaults with named (namespaced) parameters set.
@@ -479,7 +476,10 @@ class CompiledNetwork:
         >>> network.parameter_values({"O3_Br_direct.k1": 175.0})
         """
         return self._override_vector(
-            self.default_parameters(), self.param_index, overrides, kwargs,
+            self.default_parameters(),
+            self.param_index,
+            overrides,
+            kwargs,
             "parameter",
         )
 
@@ -495,9 +495,7 @@ class CompiledNetwork:
         >>> reactor = BatchReactor(net, conds, atol=net.atol({"OH": 1e-20}, default=1e-12))
         """
         base = jnp.full((self.n_species,), float(default))
-        return self._override_vector(
-            base, self.species_index, overrides, kwargs, "species"
-        )
+        return self._override_vector(base, self.species_index, overrides, kwargs, "species")
 
     def default_conditions(self, n_locations: int = 1):
         """Build a :class:`SpatialConditions` from the network's declared defaults.
@@ -557,7 +555,8 @@ class CompiledNetwork:
         if self.precipitation_equilibrium_fn is None:
             raise ValueError(
                 "precipitation_equilibrium() requires a precipitation: block with "
-                "at least one 'mode: equilibrium' mineral; this network has none.")
+                "at least one 'mode: equilibrium' mineral; this network has none."
+            )
         C = self.default_concentrations() if C is None else jnp.asarray(C)
         if conditions is None:
             conditions = self.default_conditions()
@@ -594,16 +593,12 @@ class CompiledNetwork:
             # term and the unit outputs still use the raw, un-clamped state.
             C = jnp.maximum(C, 0.0)
         if self.derived_condition_fn is not None:
-            condition_arrays = self._augment_conditions(
-                C, params, condition_arrays, loc_idx
-            )
+            condition_arrays = self._augment_conditions(C, params, condition_arrays, loc_idx)
         if self.temperature_corrections:
             params = self._apply_temperature(params, condition_arrays, loc_idx)
         if self._rate_kernel is not None:
             return self._rate_kernel(C, params, condition_arrays, loc_idx)
-        return jnp.stack(
-            [f(C, params, condition_arrays, loc_idx) for f in self.rate_callables]
-        )
+        return jnp.stack([f(C, params, condition_arrays, loc_idx) for f in self.rate_callables])
 
     def _apply_temperature(
         self, params: jnp.ndarray, condition_arrays: dict, loc_idx
@@ -667,12 +662,10 @@ class CompiledNetwork:
         """
         if not self.stoich_dynamic:
             return self.stoich_matrix
-        values = jnp.stack(
-            [fn(params) for (_, _, fn) in self.stoich_dynamic]
+        values = jnp.stack([fn(params) for (_, _, fn) in self.stoich_dynamic])
+        return self.stoich_matrix.at[self._stoich_dynamic_rows, self._stoich_dynamic_cols].set(
+            values
         )
-        return self.stoich_matrix.at[
-            self._stoich_dynamic_rows, self._stoich_dynamic_cols
-        ].set(values)
 
     def dCdt(
         self,
@@ -712,9 +705,7 @@ class CompiledNetwork:
             R = self._apply_positivity_limiter(R, C)
         return R
 
-    def _apply_positivity_limiter(
-        self, R: jnp.ndarray, C: jnp.ndarray
-    ) -> jnp.ndarray:
+    def _apply_positivity_limiter(self, R: jnp.ndarray, C: jnp.ndarray) -> jnp.ndarray:
         """Throttle net consumption as a species approaches zero.
 
             R_lim = max(R, 0) + min(R, 0) * C / max(C, threshold)
@@ -752,9 +743,7 @@ class CompiledNetwork:
             If ``species`` is not a declared species.
         """
         if species not in self.species_index:
-            raise KeyError(
-                f"Unknown species '{species}'. Available: {self.species}"
-            )
+            raise KeyError(f"Unknown species '{species}'. Available: {self.species}")
         return self.species_units.get(species, "")
 
     def description_of(self, species: str) -> str:
@@ -777,9 +766,7 @@ class CompiledNetwork:
             If ``species`` is not a declared species.
         """
         if species not in self.species_index:
-            raise KeyError(
-                f"Unknown species '{species}'. Available: {self.species}"
-            )
+            raise KeyError(f"Unknown species '{species}'. Available: {self.species}")
         return self.species_descriptions.get(species, "")
 
     @property
@@ -824,10 +811,7 @@ class CompiledNetwork:
         _time_names = {"s": "seconds", "d": "days", "h": "hours", "min": "minutes"}
         tu = self.time_unit
         if tu is not None:
-            time_line = (
-                f"  Time unit: {tu} "
-                f"(t_span / t_eval are in {_time_names.get(tu, tu)})"
-            )
+            time_line = f"  Time unit: {tu} (t_span / t_eval are in {_time_names.get(tu, tu)})"
         else:
             time_line = "  Time unit: (could not infer from rate-constant units)"
         lines = [
@@ -837,8 +821,7 @@ class CompiledNetwork:
             f"  Species ({self.n_species}):",
         ]
         name_w = max((len(s) for s in self.species), default=0)
-        unit_w = max((len(self.species_units.get(s, "")) for s in self.species),
-                     default=0)
+        unit_w = max((len(self.species_units.get(s, "")) for s in self.species), default=0)
         for s in self.species:
             units = self.species_units.get(s, "")
             desc = self.species_descriptions.get(s, "")
@@ -961,15 +944,22 @@ class CompiledNetwork:
         if self.species_composition:
             return {sp: dict(c) for sp, c in self.species_composition.items()}
         from aquakin.utils.composition import composition_table
+
         try:
             return composition_table(
-                self, electron_acceptor_cod=electron_acceptor_cod, params=params)
+                self, electron_acceptor_cod=electron_acceptor_cod, params=params
+            )
         except KeyError:
             return {}
 
     def check_conservation(
-        self, *, tol: float = 1e-2, params=None, quantities=None,
-        composition=None, electron_acceptor_cod: bool = True,
+        self,
+        *,
+        tol: float = 1e-2,
+        params=None,
+        quantities=None,
+        composition=None,
+        electron_acceptor_cod: bool = True,
     ) -> list:
         """Conservation violations ``(reaction, quantity, residual)`` above ``tol``.
 
@@ -988,20 +978,29 @@ class CompiledNetwork:
         Raises ``ValueError`` only if no composition table is available (the
         network declares none and there is no shipped fallback).
         """
-        comp = (composition if composition is not None
-                else self.composition(params=params,
-                                      electron_acceptor_cod=electron_acceptor_cod))
+        comp = (
+            composition
+            if composition is not None
+            else self.composition(params=params, electron_acceptor_cod=electron_acceptor_cod)
+        )
         if not comp:
             raise ValueError(
                 f"network '{self.name}' has no composition metadata to check "
                 f"against: declare a `composition:` per species in the YAML, or "
-                f"pass an explicit composition=...")
+                f"pass an explicit composition=..."
+            )
         from aquakin.utils.balance import check_conservation as _check
+
         return _check(self, comp, tol=tol, params=params, quantities=quantities)
 
     def check_nitrogen(
-        self, *, tol: float = 1e-2, params=None, composition=None,
-        nitrate: str = "S_NO", n_key: str = "N",
+        self,
+        *,
+        tol: float = 1e-2,
+        params=None,
+        composition=None,
+        nitrate: str = "S_NO",
+        n_key: str = "N",
     ) -> list:
         """Nitrogen-balance violations ``(reaction, residual)`` above ``tol``.
 
@@ -1011,16 +1010,16 @@ class CompiledNetwork:
         for both nitrification (no nitrate consumed) and denitrification. Uses the
         network's :meth:`composition` table unless ``composition`` is passed.
         """
-        comp = composition if composition is not None else self.composition(
-            params=params)
+        comp = composition if composition is not None else self.composition(params=params)
         if not comp:
             raise ValueError(
                 f"network '{self.name}' has no composition metadata to check "
                 f"against: declare a `composition:` per species in the YAML, or "
-                f"pass an explicit composition=...")
+                f"pass an explicit composition=..."
+            )
         from aquakin.utils.balance import check_nitrogen as _check
-        return _check(self, comp, tol=tol, params=params, nitrate=nitrate,
-                      n_key=n_key)
+
+        return _check(self, comp, tol=tol, params=params, nitrate=nitrate, n_key=n_key)
 
 
 # --- compile_network stages --------------------------------------------
@@ -1043,14 +1042,8 @@ def _compile_speciation(spec, species_index, declared_conditions):
     from aquakin.core.speciation import build_ph_derived_fn
 
     # Accept either a plain dict or a Pydantic model (duck-typed).
-    cfg = (
-        speciation_cfg
-        if isinstance(speciation_cfg, dict)
-        else speciation_cfg.model_dump()
-    )
-    derived_condition_fn, produced_fields, required_fields = build_ph_derived_fn(
-        cfg, species_index
-    )
+    cfg = speciation_cfg if isinstance(speciation_cfg, dict) else speciation_cfg.model_dump()
+    derived_condition_fn, produced_fields, required_fields = build_ph_derived_fn(cfg, species_index)
     missing = sorted(required_fields - declared_conditions)
     if missing:
         raise ValueError(
@@ -1074,6 +1067,7 @@ def _compose_derived(first, second):
     return both outputs merged. This lets the precipitation saturation-index
     computation read the pH that the speciation block produced in the same RHS
     call (they share one ``derived_condition_fn`` slot)."""
+
     def composed(C, params, conditions, loc_idx):
         out1 = first(C, params, conditions, loc_idx)
         shape = jnp.shape(next(iter(conditions.values()))) if conditions else (1,)
@@ -1082,11 +1076,11 @@ def _compose_derived(first, second):
             merged[k] = jnp.broadcast_to(jnp.asarray(v), shape)
         out2 = second(C, params, merged, loc_idx)
         return {**out1, **out2}
+
     return composed
 
 
-def _compile_precipitation(spec, species_index, condition_fields, derived_fields,
-                           speciation_fn):
+def _compile_precipitation(spec, species_index, condition_fields, derived_fields, speciation_fn):
     """Wire an optional ``precipitation:`` block (SI-driven mineral precipitation).
 
     Composes after the speciation pH: the precipitation derived-fn needs the
@@ -1117,19 +1111,20 @@ def _compile_precipitation(spec, species_index, condition_fields, derived_fields
             raise ValueError(
                 f"precipitation ({what}) reads condition field(s) {missing} that "
                 f"are neither declared in 'conditions:' nor produced by "
-                f"'speciation:'.")
+                f"'speciation:'."
+            )
         clash = sorted(set(produced) & cond)
         if clash:
             raise ValueError(
                 f"precipitation ({what}) produces field(s) {clash} that collide "
-                f"with declared conditions or other derived fields.")
+                f"with declared conditions or other derived fields."
+            )
         fn = stage_fn if fn is None else _compose_derived(fn, stage_fn)
         new_fields = new_fields + list(produced)
         cond = cond | set(produced)
 
     # Kinetic minerals -> SI_/R_ (skips equilibrium-mode minerals).
-    kin_fn, kin_produced, kin_required = build_precipitation_derived_fn(
-        cfg, species_index)
+    kin_fn, kin_produced, kin_required = build_precipitation_derived_fn(cfg, species_index)
     if kin_produced:
         _add(kin_fn, kin_produced, kin_required, "kinetic")
 
@@ -1174,17 +1169,14 @@ def _build_param_index(spec):
             priors[key] = prior.resolved()
         tc = getattr(pspec, "temperature", None)
         if tc is not None:
-            temperature.append(
-                (idx, math.log(float(tc.theta)), float(tc.ref_T), tc.condition)
-            )
+            temperature.append((idx, math.log(float(tc.theta)), float(tc.ref_T), tc.condition))
 
     for local_name, pspec in getattr(spec, "parameters", {}).items():
         record(local_name, pspec)
     for rxn in spec.reactions:
         for local_name, pspec in rxn.parameters.items():
             record(f"{rxn.name}.{local_name}", pspec)
-    return (parameters, param_index, defaults, bounds, transforms, priors,
-            units, temperature)
+    return (parameters, param_index, defaults, bounds, transforms, priors, units, temperature)
 
 
 def _resolve_expressions(spec) -> dict[str, ASTNode]:
@@ -1198,9 +1190,7 @@ def _resolve_expressions(spec) -> dict[str, ASTNode]:
         try:
             expression_asts_raw[name] = parse_rate_expression(formula)
         except Exception as exc:
-            raise ValueError(
-                f"Failed to parse named expression '{name}': {exc}"
-            ) from exc
+            raise ValueError(f"Failed to parse named expression '{name}': {exc}") from exc
 
     # (An expression name colliding with a parameter name is already rejected by
     # the schema validator in schema/network_spec.py, so a collision never
@@ -1249,15 +1239,11 @@ def _validate_expression_refs(expression_asts, species_index, condition_fields):
     for name, ast in expression_asts.items():
         for sp in sorted(_collect_species_refs(ast)):
             if sp not in species_index:
-                raise KeyError(
-                    f"Named expression '{name}' references undeclared species "
-                    f"'{sp}'."
-                )
+                raise KeyError(f"Named expression '{name}' references undeclared species '{sp}'.")
         for cond in sorted(ast.condition_names()):
             if cond not in condition_fields:
                 raise ValueError(
-                    f"Named expression '{name}' references unknown condition "
-                    f"field '{cond}'."
+                    f"Named expression '{name}' references unknown condition field '{cond}'."
                 )
 
 
@@ -1265,13 +1251,13 @@ def _unresolved_params(ast: ASTNode, rxn_name: str, param_index: dict) -> list[s
     """ParamNode names in ``ast`` resolving to neither a reaction-local
     (``<rxn>.<name>``) nor a network-level parameter."""
     return [
-        p for p in ast.param_names()
+        p
+        for p in ast.param_names()
         if f"{rxn_name}.{p}" not in param_index and p not in param_index
     ]
 
 
-def _compile_reaction(rxn, species_index, param_index, condition_fields,
-                      expression_asts):
+def _compile_reaction(rxn, species_index, param_index, condition_fields, expression_asts):
     """Compile one reaction.
 
     Returns ``(static_coeffs, dynamic_entries, rate_callable, rate_ast)`` where
@@ -1284,8 +1270,7 @@ def _compile_reaction(rxn, species_index, param_index, condition_fields,
     for sp_name, coef in rxn.stoichiometry.items():
         if sp_name not in species_index:
             raise KeyError(
-                f"Reaction '{rxn.name}' references undeclared species "
-                f"'{sp_name}' in stoichiometry."
+                f"Reaction '{rxn.name}' references undeclared species '{sp_name}' in stoichiometry."
             )
         j = species_index[sp_name]
         if isinstance(coef, (int, float)):
@@ -1296,8 +1281,7 @@ def _compile_reaction(rxn, species_index, param_index, condition_fields,
             raw_stoich_ast = parse_rate_expression(coef)
         except Exception as exc:
             raise ValueError(
-                f"Failed to parse stoichiometric coefficient "
-                f"'{rxn.name}'/{sp_name!r}: {exc}"
+                f"Failed to parse stoichiometric coefficient '{rxn.name}'/{sp_name!r}: {exc}"
             ) from exc
         _validate_stoich_ast(raw_stoich_ast, rxn.name, sp_name)
         bad = _unresolved_params(raw_stoich_ast, rxn.name, param_index)
@@ -1328,14 +1312,12 @@ def _compile_reaction(rxn, species_index, param_index, condition_fields,
     for sp in ast.species():
         if sp not in species_index:
             raise KeyError(
-                f"Reaction '{rxn.name}' rate expression references undeclared "
-                f"species '{sp}'."
+                f"Reaction '{rxn.name}' rate expression references undeclared species '{sp}'."
             )
     for cf in ast.condition_names():
         if cf not in condition_fields:
             raise KeyError(
-                f"Reaction '{rxn.name}' rate expression references undeclared "
-                f"condition '{cf}'."
+                f"Reaction '{rxn.name}' rate expression references undeclared condition '{cf}'."
             )
     bad = _unresolved_params(ast, rxn.name, param_index)
     if bad:
@@ -1377,15 +1359,23 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     )
     # Stage 1b: optional mineral precipitation, composed after the speciation pH
     # (it adds each mineral's SI_<name> / R_<name> to the valid condition set).
-    (derived_condition_fn, derived_fields, condition_fields,
-     precipitation_equilibrium_fn) = _compile_precipitation(
-        spec, species_index, condition_fields, derived_fields, derived_condition_fn
+    (derived_condition_fn, derived_fields, condition_fields, precipitation_equilibrium_fn) = (
+        _compile_precipitation(
+            spec, species_index, condition_fields, derived_fields, derived_condition_fn
+        )
     )
 
     # Stage 2: the flat parameter index (network-level then reaction-local).
-    (parameters, param_index, parameter_defaults, parameter_bounds,
-     parameter_transforms, parameter_priors, parameter_units,
-     temperature_corrections) = _build_param_index(spec)
+    (
+        parameters,
+        param_index,
+        parameter_defaults,
+        parameter_bounds,
+        parameter_transforms,
+        parameter_priors,
+        parameter_units,
+        temperature_corrections,
+    ) = _build_param_index(spec)
 
     # Stage 3: parse + topo-sort + inline the named expressions, and validate the
     # species/condition references of every one (even those no reaction consumes).
@@ -1398,10 +1388,12 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     # numeric. Mutates spec.reactions in place; a no-op when no reaction uses `auto`.
     species_composition = {
         s.name: {q: float(v) for q, v in s.composition.items()}
-        for s in spec.species if getattr(s, "composition", None)
+        for s in spec.species
+        if getattr(s, "composition", None)
     }
     resolve_auto_coefficients(
-        spec.reactions, species_composition, getattr(spec, "conserved_for", None))
+        spec.reactions, species_composition, getattr(spec, "conserved_for", None)
+    )
 
     # Stage 4: compile each reaction's stoichiometry + rate.
     n_species = len(species_names)
@@ -1423,9 +1415,7 @@ def compile_network(spec: "Any") -> CompiledNetwork:
         rate_callables.append(rate_callable)
         rate_asts.append(ast)
 
-    default_concentrations = jnp.asarray(
-        [float(s.default_concentration) for s in spec.species]
-    )
+    default_concentrations = jnp.asarray([float(s.default_concentration) for s in spec.species])
     default_parameters = jnp.asarray(parameter_defaults)
 
     # Per-species metadata carried through to the runtime network and results.
@@ -1448,9 +1438,7 @@ def compile_network(spec: "Any") -> CompiledNetwork:
     limiter_cfg = getattr(spec, "positivity_limiter", None)
     if limiter_cfg is not None:
         positivity_threshold = float(
-            limiter_cfg["threshold"]
-            if isinstance(limiter_cfg, dict)
-            else limiter_cfg.threshold
+            limiter_cfg["threshold"] if isinstance(limiter_cfg, dict) else limiter_cfg.threshold
         )
 
     stoich = jnp.asarray(stoich_np)

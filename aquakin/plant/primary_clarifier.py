@@ -72,8 +72,7 @@ class PrimaryClarifier(FlowParameterized):
     def __post_init__(self) -> None:
         if not (0.0 < self.f_PS < 1.0):
             raise ValueError(
-                f"PrimaryClarifier '{self.name}': f_PS must be in (0, 1); "
-                f"got {self.f_PS}"
+                f"PrimaryClarifier '{self.name}': f_PS must be in (0, 1); got {self.f_PS}"
             )
         mask = jnp.zeros((self.network.n_species,))
         for sp in self.settling_species:
@@ -106,8 +105,10 @@ class PrimaryClarifier(FlowParameterized):
         """Particulate-COD removal fraction n_X in [0, 1] from the HRT."""
         hrt_days = self.volume / (Q_in + 1e-3)
         hrt_min = hrt_days * 1440.0
-        n_cod = self.f_corr * (2.88 * self.f_X - 0.118) * (
-            1.45 + 6.15 * jnp.log(jnp.maximum(hrt_min, 1e-6))
+        n_cod = (
+            self.f_corr
+            * (2.88 * self.f_X - 0.118)
+            * (1.45 + 6.15 * jnp.log(jnp.maximum(hrt_min, 1e-6)))
         )
         n_x = jnp.clip(n_cod / self.f_X, 0.0, 100.0) / 100.0
         return n_x
@@ -128,7 +129,7 @@ class PrimaryClarifier(FlowParameterized):
 
         f_PS = self._setpoints["f_PS"].resolve(self._flow_params(params))
         Qu = f_PS * Q_in
-        E = 1.0 / f_PS                            # thickening factor Q_in/Q_u
+        E = 1.0 / f_PS  # thickening factor Q_in/Q_u
         n_x = self._removal_fraction(Q_in)
 
         # ff_i = fraction of species i that stays in the effluent. Solubles
@@ -138,9 +139,7 @@ class PrimaryClarifier(FlowParameterized):
         C_sludge = jnp.maximum(((1.0 - ff) * E + ff) * state, 0.0)
 
         return {
-            self.effluent_port: Stream(
-                Q=Q_in - Qu, C=C_eff, network=self.network, T=T_out
-            ),
+            self.effluent_port: Stream(Q=Q_in - Qu, C=C_eff, network=self.network, T=T_out),
             self.sludge_port: Stream(Q=Qu, C=C_sludge, network=self.network, T=T_out),
         }
 

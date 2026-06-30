@@ -89,14 +89,14 @@ _A41 = (6 * _G - 1) / (12 * _G)
 _A42 = -1 / ((24 * _G - 12) * _G)
 _A43 = (-6 * _G**2 + 6 * _G - 1) / (6 * _G - 3)
 _TH = 1 / (2 * _G)
-_AL31, _AL32 = 1.0 - _TH, _TH            # stage-3 predictor
-_AL41, _AL42, _AL43 = _A31, _A32, _G     # stage-4 predictor
-_C2, _C3, _C4 = 2 * _G, 1.0, 1.0         # stage times
-_B = (_A41, _A42, _A43, _G)              # solution weights (stiffly accurate)
-_BE = (_A41 - _A31, _A42 - _A32, _A43 - _G, _G)   # embedded-error weights
+_AL31, _AL32 = 1.0 - _TH, _TH  # stage-3 predictor
+_AL41, _AL42, _AL43 = _A31, _A32, _G  # stage-4 predictor
+_C2, _C3, _C4 = 2 * _G, 1.0, 1.0  # stage times
+_B = (_A41, _A42, _A43, _G)  # solution weights (stiffly accurate)
+_BE = (_A41 - _A31, _A42 - _A32, _A43 - _G, _G)  # embedded-error weights
 
 _MAXNEWT = 12
-_KAPPA = 1e-1          # simplified-Newton convergence tolerance (Hairer eta test)
+_KAPPA = 1e-1  # simplified-Newton convergence tolerance (Hairer eta test)
 
 
 def _hermite(y0_, y1_, f0_, f1_, h, theta):
@@ -175,6 +175,7 @@ def forward_solve(
         """Simplified Newton for ``k = rhs(t_s, base + h*G*k, args)`` with frozen
         operator ``lu = LU(I - h*G*J)``. Hairer-Wanner (ODEs II, IV.8) contraction
         test: converge when ``eta*||dk|| < KAPPA``; diverge when rate >= 1."""
+
         def cond(c):
             k, dprev, it, rate, conv, div = c
             return (~conv) & (~div) & (it < _MAXNEWT)
@@ -192,16 +193,24 @@ def forward_solve(
             return k, d, it + 1, rate, conv, div
 
         k, _, _, rate, conv, _ = jax.lax.while_loop(
-            cond, body, (k_init, jnp.inf, 0, 0.5, False, False))
+            cond, body, (k_init, jnp.inf, 0, 0.5, False, False)
+        )
         return k, rate, conv
 
     def one_step(t, y, h, lu):
         k1 = rhs(t, y, args)
         k2, r2, c2 = stage(t + _C2 * h, y + h * _A21 * k1, k1, lu, h, y)
-        k3, r3, c3 = stage(t + _C3 * h, y + h * (_A31 * k1 + _A32 * k2),
-                           _AL31 * k1 + _AL32 * k2, lu, h, y)
-        k4, r4, c4 = stage(t + _C4 * h, y + h * (_A41 * k1 + _A42 * k2 + _A43 * k3),
-                           _AL41 * k1 + _AL42 * k2 + _AL43 * k3, lu, h, y)
+        k3, r3, c3 = stage(
+            t + _C3 * h, y + h * (_A31 * k1 + _A32 * k2), _AL31 * k1 + _AL32 * k2, lu, h, y
+        )
+        k4, r4, c4 = stage(
+            t + _C4 * h,
+            y + h * (_A41 * k1 + _A42 * k2 + _A43 * k3),
+            _AL41 * k1 + _AL42 * k2 + _AL43 * k3,
+            lu,
+            h,
+            y,
+        )
         y1 = y + h * (_B[0] * k1 + _B[1] * k2 + _B[2] * k3 + _B[3] * k4)
         err = h * (_BE[0] * k1 + _BE[1] * k2 + _BE[2] * k3 + _BE[3] * k4)
         rate = jnp.maximum(jnp.maximum(r2, r3), r4)
@@ -228,8 +237,7 @@ def forward_solve(
         def record_only():
             # already at this save time (e.g. t_eval[0] == t0): record, advance,
             # do not take a (zero-width) step.
-            return (t, y, h_ctrl, sidx + 1, ys.at[sidx].set(y), nstep, en_prev,
-                    dead)
+            return (t, y, h_ctrl, sidx + 1, ys.at[sidx].set(y), nstep, en_prev, dead)
 
         def do_step():
             # Take the NATURAL adaptive step, clipped only to the final time t1
@@ -255,11 +263,12 @@ def forward_solve(
             f_err = safety * jnp.where(en > 0, ens ** (-1.0 / 3.0) * f_pi, maxfac)
             f_conv = jnp.where(rate > 1e-3, theta_target / rate, maxfac)
             fac = jnp.clip(jnp.minimum(f_err, f_conv), minfac, maxfac)
-            fac = jnp.where(conv, fac, 0.25)        # nonconvergence -> shrink hard
+            fac = jnp.where(conv, fac, 0.25)  # nonconvergence -> shrink hard
             h_ctrl_new = h_ctrl * fac
             t_new = jnp.where(accept, t + h, t)
             y_new = jnp.where(accept, y1, y)
-            en_prev_new = jnp.where(accept, ens, en_prev)   # update only on accept
+            en_prev_new = jnp.where(accept, ens, en_prev)  # update only on accept
+
             # Dense output: on an accepted step, record EVERY save time in
             # (t, t_new] by interpolating within the step (a step may span several
             # saves at a sparse grid, or none at a dense one). f0=k1, f1=k4.
@@ -277,13 +286,29 @@ def forward_solve(
 
             ys_new, sidx_new = jax.lax.while_loop(rec_cond, rec_body, (ys, sidx))
             stuck = h_ctrl_new < 1e-13
-            return (t_new, y_new, h_ctrl_new, sidx_new, ys_new, nstep + 1,
-                    en_prev_new, dead | stuck)
+            return (
+                t_new,
+                y_new,
+                h_ctrl_new,
+                sidx_new,
+                ys_new,
+                nstep + 1,
+                en_prev_new,
+                dead | stuck,
+            )
 
         already = (next_save - t) <= _tol(next_save)
         return jax.lax.cond(already, record_only, do_step)
 
-    init = (jnp.asarray(float(t0)), y0, jnp.asarray(float(h0)), jnp.array(0),
-            ys0, jnp.array(0), jnp.array(1.0), jnp.array(False))
+    init = (
+        jnp.asarray(float(t0)),
+        y0,
+        jnp.asarray(float(h0)),
+        jnp.array(0),
+        ys0,
+        jnp.array(0),
+        jnp.array(1.0),
+        jnp.array(False),
+    )
     t, y, h, sidx, ys, nstep, en_prev, dead = jax.lax.while_loop(cond, body, init)
     return ys

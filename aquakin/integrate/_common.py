@@ -393,8 +393,9 @@ def atol_cache_key(atol):
     return (tuple(a.shape), tuple(float(x) for x in np.asarray(a).reshape(-1)))
 
 
-def settings_cache_key(rtol, atol, adjoint, dtmax, max_steps,
-                       *, order=None, factormax=None, solver=None):
+def settings_cache_key(
+    rtol, atol, adjoint, dtmax, max_steps, *, order=None, factormax=None, solver=None
+):
     """Hashable key for the solver settings that affect the compiled solve.
 
     ``adjoint`` is keyed by identity (``None`` for the default, which is shared);
@@ -416,8 +417,9 @@ def settings_cache_key(rtol, atol, adjoint, dtmax, max_steps,
     )
 
 
-def concrete_settings_key(rtol, atol, adjoint, dtmax, max_steps,
-                          *, order=None, factormax=None, solver=None):
+def concrete_settings_key(
+    rtol, atol, adjoint, dtmax, max_steps, *, order=None, factormax=None, solver=None
+):
     """Return :func:`settings_cache_key`, or ``None`` if a value is traced.
 
     The key materialises ``atol`` to Python floats, which is impossible when
@@ -427,8 +429,9 @@ def concrete_settings_key(rtol, atol, adjoint, dtmax, max_steps,
     whole -- so return ``None`` to signal "build without caching".
     """
     try:
-        return settings_cache_key(rtol, atol, adjoint, dtmax, max_steps,
-                                  order=order, factormax=factormax, solver=solver)
+        return settings_cache_key(
+            rtol, atol, adjoint, dtmax, max_steps, order=order, factormax=factormax, solver=solver
+        )
     except jax.errors.TracerArrayConversionError:
         return None
 
@@ -468,8 +471,7 @@ def reactor_settings_key(reactor):
         None if reactor.dtmax is None else float(reactor.dtmax),
         int(reactor.max_steps),
         None if getattr(reactor, "order", None) is None else int(reactor.order),
-        (None if getattr(reactor, "factormax", None) is None
-         else float(reactor.factormax)),
+        (None if getattr(reactor, "factormax", None) is None else float(reactor.factormax)),
         None if solver is None else type(solver).__name__,
     )
 
@@ -515,9 +517,7 @@ def validate_t_eval(t_eval_arr: jnp.ndarray, t0: float, t1: float) -> None:
         strictly ascending.
     """
     if t_eval_arr.ndim != 1:
-        raise ValueError(
-            f"t_eval must be 1-D; got shape {tuple(t_eval_arr.shape)}."
-        )
+        raise ValueError(f"t_eval must be 1-D; got shape {tuple(t_eval_arr.shape)}.")
     if isinstance(t_eval_arr, jax.core.Tracer):
         return
     t_eval_np = np.asarray(t_eval_arr)
@@ -525,10 +525,7 @@ def validate_t_eval(t_eval_arr: jnp.ndarray, t0: float, t1: float) -> None:
         return
     lo, hi = float(t_eval_np.min()), float(t_eval_np.max())
     if lo < t0 or hi > t1:
-        raise ValueError(
-            f"t_eval must lie within t_span [{t0}, {t1}]; got values in "
-            f"[{lo}, {hi}]."
-        )
+        raise ValueError(f"t_eval must lie within t_span [{t0}, {t1}]; got values in [{lo}, {hi}].")
     if t_eval_np.size > 1 and not np.all(np.diff(t_eval_np) > 0):
         raise ValueError("t_eval must be strictly ascending.")
 
@@ -548,8 +545,7 @@ class _HasNamedSpecies:
         if species not in self.network.species_index:
             suffix = did_you_mean(species, self.network.species)
             raise KeyError(
-                f"Unknown species '{species}'. Available: "
-                f"{self.network.species}.{suffix}"
+                f"Unknown species '{species}'. Available: {self.network.species}.{suffix}"
             )
         return self.C[:, self.network.species_index[species]]
 
@@ -647,9 +643,13 @@ class _HasNamedSpecies:
             If a species name is unknown (with a "did you mean?" hint).
         """
         plt = require_matplotlib()
-        names = ([species] if isinstance(species, str)
-                 else list(self.network.species) if species is None
-                 else list(species))
+        names = (
+            [species]
+            if isinstance(species, str)
+            else list(self.network.species)
+            if species is None
+            else list(species)
+        )
         if ax is None:
             _, ax = plt.subplots()
         _, x = self._table_index()
@@ -695,7 +695,10 @@ class _HasNamedSpecies:
         units = {sp: network.units_of(sp) for sp in network.species}
         name, index = self._table_index()
         return build_dataframe(
-            index, columns, index_name=name, units=units,
+            index,
+            columns,
+            index_name=name,
+            units=units,
             units_in_columns=units_in_columns,
         )
 
@@ -714,9 +717,7 @@ class _HasNamedSpecies:
         **kwargs
             Forwarded to ``pandas.DataFrame.to_csv``.
         """
-        return self.to_dataframe(units_in_columns=units_in_columns).to_csv(
-            path_or_buf, **kwargs
-        )
+        return self.to_dataframe(units_in_columns=units_in_columns).to_csv(path_or_buf, **kwargs)
 
 
 @runtime_checkable
@@ -781,9 +782,7 @@ def _coerce_atol(atol, n_species: int):
             return arr
         return float(arr)
     if arr.shape != (n_species,):
-        raise ValueError(
-            f"atol array must have shape ({n_species},), got {arr.shape}"
-        )
+        raise ValueError(f"atol array must have shape ({n_species},), got {arr.shape}")
     return arr
 
 
@@ -845,8 +844,9 @@ def friendly_solve_errors(max_steps, *, what: str = "solve"):
         raise
 
 
-def default_atol(scale_like, reference=None, *, atol_factor: float = 1e-6,
-                 floor_frac: float = 1e-6):
+def default_atol(
+    scale_like, reference=None, *, atol_factor: float = 1e-6, floor_frac: float = 1e-6
+):
     """Per-component absolute tolerance scaled off the states' operating magnitudes.
 
     The error test every adaptive solver uses weights each component by
@@ -940,8 +940,7 @@ def native_time_factor(network_time_unit, requested_unit) -> float:
         return 1.0
     if requested_unit not in _TIME_UNIT_SECONDS:
         raise ValueError(
-            f"Unknown time_unit {requested_unit!r}; expected one of "
-            f"{sorted(_TIME_UNIT_SECONDS)}."
+            f"Unknown time_unit {requested_unit!r}; expected one of {sorted(_TIME_UNIT_SECONDS)}."
         )
     if network_time_unit is None:
         raise ValueError(
@@ -990,7 +989,8 @@ def resolve_state_atol(network, atol):
     """
     return (
         default_atol(network.default_concentrations())
-        if atol is None else _coerce_atol(atol, network.n_species)
+        if atol is None
+        else _coerce_atol(atol, network.n_species)
     )
 
 
@@ -1025,13 +1025,9 @@ def validate_C0_params(network, C0, params):
     ``solve`` (``C0`` is ``(n_species,)``, ``params`` is ``(n_params,)``).
     """
     if C0.shape != (network.n_species,):
-        raise ValueError(
-            f"C0 has shape {C0.shape}, expected ({network.n_species},)"
-        )
+        raise ValueError(f"C0 has shape {C0.shape}, expected ({network.n_species},)")
     if params.shape != (network.n_params,):
-        raise ValueError(
-            f"params has shape {params.shape}, expected ({network.n_params},)"
-        )
+        raise ValueError(f"params has shape {params.shape}, expected ({network.n_params},)")
 
 
 # The per-stage Newton (root-find) tolerance is decoupled from the step tolerance
@@ -1052,9 +1048,16 @@ NEWTON_TOL_FACTOR = 10.0
 _CANONICAL_SOLVERS = {3: diffrax.Kvaerno3, 5: diffrax.Kvaerno5}
 
 
-def build_implicit_solver(rtol, atol, *, order=5, solver=None,
-                          colored_root_finder=None, force_root_finder=False,
-                          linear_solver=None):
+def build_implicit_solver(
+    rtol,
+    atol,
+    *,
+    order=5,
+    solver=None,
+    colored_root_finder=None,
+    force_root_finder=False,
+    linear_solver=None,
+):
     """The single source of truth for the implicit ODE solver, shared by EVERY
     aquakin solve so the forward and discrete-adjoint paths cannot silently drift.
 
@@ -1102,16 +1105,16 @@ def build_implicit_solver(rtol, atol, *, order=5, solver=None,
         rf = colored_root_finder
     else:
         rf_kw = {} if linear_solver is None else {"linear_solver": linear_solver}
-        rf = diffrax.VeryChord(rtol=NEWTON_TOL_FACTOR * rtol,
-                               atol=NEWTON_TOL_FACTOR * jnp.asarray(atol), **rf_kw)
+        rf = diffrax.VeryChord(
+            rtol=NEWTON_TOL_FACTOR * rtol, atol=NEWTON_TOL_FACTOR * jnp.asarray(atol), **rf_kw
+        )
     if solver is None:
         if order not in _CANONICAL_SOLVERS:
-            raise ValueError(
-                f"order must be one of {sorted(_CANONICAL_SOLVERS)}; got {order!r}.")
+            raise ValueError(f"order must be one of {sorted(_CANONICAL_SOLVERS)}; got {order!r}.")
         return _CANONICAL_SOLVERS[order](root_finder=rf)
     if force_root_finder or colored_root_finder is not None:
         return eqx.tree_at(lambda s: s.root_finder, solver, rf)
-    return solver       # forward path: a user-supplied solver is honoured verbatim
+    return solver  # forward path: a user-supplied solver is honoured verbatim
 
 
 def build_step_controller(rtol, atol, *, factormax=None, dtmax=None):
@@ -1184,8 +1187,7 @@ def _run_diffeqsolve(
     # path and the discrete-adjoint forward pass cannot drift in their per-step
     # configuration. A user-supplied ``solver`` is honoured verbatim here.
     solver = build_implicit_solver(rtol, atol, order=order, solver=solver)
-    controller = build_step_controller(rtol, atol, factormax=factormax,
-                                        dtmax=dtmax)
+    controller = build_step_controller(rtol, atol, factormax=factormax, dtmax=dtmax)
     return diffrax.diffeqsolve(
         term,
         solver,
@@ -1199,8 +1201,9 @@ def _run_diffeqsolve(
         adjoint=adjoint if adjoint is not None else diffrax.RecursiveCheckpointAdjoint(),
         max_steps=max_steps,
         event=event,
-        progress_meter=(progress_meter if progress_meter is not None
-                        else diffrax.NoProgressMeter()),
+        progress_meter=(
+            progress_meter if progress_meter is not None else diffrax.NoProgressMeter()
+        ),
     )
 
 
@@ -1235,11 +1238,14 @@ def make_chemistry_rhs(
     """
     stoich = network.compute_stoich(params)
     if rate_scale is None:
+
         def rhs(t, C, args):
             return network.dCdt(C, args, cond_fn(t), 0, stoich=stoich)
     else:
+
         def rhs(t, C, args):
             return network.dCdt(C, args, cond_fn(t), 0, stoich=stoich) * rate_scale
+
     return rhs
 
 
@@ -1281,8 +1287,7 @@ def solve_chemistry(
     Returns the diffrax ``Solution``; callers read ``sol.ts`` / ``sol.ys`` (or
     ``sol.ys[-1]`` for a single-endpoint step).
     """
-    rhs = make_chemistry_rhs(network, params, cond_fn=cond_fn,
-                             rate_scale=rate_scale)
+    rhs = make_chemistry_rhs(network, params, cond_fn=cond_fn, rate_scale=rate_scale)
 
     return _run_diffeqsolve(
         rhs,
@@ -1313,7 +1318,4 @@ def _interp_fields_to_scalar(
     pair this with ``loc_idx=0`` to satisfy the canonical rate-callable
     signature.
     """
-    return {
-        name: jnp.asarray([jnp.interp(t, t_grid, arr)])
-        for name, arr in fields.items()
-    }
+    return {name: jnp.asarray([jnp.interp(t, t_grid, arr)]) for name, arr in fields.items()}

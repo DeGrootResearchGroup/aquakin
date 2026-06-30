@@ -47,11 +47,12 @@ from aquakin.plant.streams import Stream
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.network import CompiledNetwork
 
-_EPS_Q = 1e-9            # guard 1/Q when the flow is ~zero
+_EPS_Q = 1e-9  # guard 1/Q when the flow is ~zero
 _SECONDS_PER_DAY = 86400.0
 
 
 # --- UV credit physics ------------------------------------------------------
+
 
 def uvt_intensity_factor(uvt, uvt_ref):
     """First-order UV-transmittance correction on the average fluence rate.
@@ -72,8 +73,7 @@ def uv_dose(intensity, exposure_time, *, uvt=None, uvt_ref=None):
     ``intensity`` is the average fluence rate (e.g. mW/cm²) and ``exposure_time``
     the contact time in the matching time unit (seconds → dose in mJ/cm²),
     optionally scaled by the UVT correction :func:`uvt_intensity_factor`."""
-    return jnp.asarray(intensity) * uvt_intensity_factor(uvt, uvt_ref) \
-        * jnp.asarray(exposure_time)
+    return jnp.asarray(intensity) * uvt_intensity_factor(uvt, uvt_ref) * jnp.asarray(exposure_time)
 
 
 def uv_log_inactivation(dose, d10, *, max_log=None):
@@ -89,6 +89,7 @@ def uv_log_inactivation(dose, d10, *, max_log=None):
 
 
 # --- chlorine credit physics ------------------------------------------------
+
 
 def t10_from_baffling(volume, flow, baffling_factor):
     """T10 contact time from the baffling factor: ``T10 = baffling·V/Q``.
@@ -106,6 +107,7 @@ def t10_from_rtd(t, C):
     ``q=0.10`` quantile -- of the cumulative residence-time distribution) -- the
     non-ideal-contactor alternative to a baffling-factor estimate."""
     from aquakin.utils.rtd import percentile_time
+
     return percentile_time(t, C, 0.10)
 
 
@@ -132,6 +134,7 @@ def _apply_log_removal(org_in, log_inactivation):
 
 
 # --- UV reactor unit --------------------------------------------------------
+
 
 @dataclass
 class UVUnit:
@@ -208,22 +211,27 @@ class UVUnit:
 
     def log_inactivation(self, flow) -> jnp.ndarray:
         """The UV log-inactivation at the given throughflow."""
-        dose = uv_dose(self.intensity, self.exposure_seconds(flow),
-                       uvt=self.uvt, uvt_ref=self.uvt_ref)
+        dose = uv_dose(
+            self.intensity, self.exposure_seconds(flow), uvt=self.uvt, uvt_ref=self.uvt_ref
+        )
         return uv_log_inactivation(dose, self.d10, max_log=self.max_log)
 
     def compute_outputs(self, t, state, inputs, params, signals=None) -> dict:
         s_in = inputs[self.input_port]
         org_in = s_in.org if s_in.org is not None else self.inlet_density
         org_out = _apply_log_removal(org_in, self.log_inactivation(s_in.Q))
-        return {self.output_port: Stream(Q=s_in.Q, C=s_in.C, network=self.network,
-                                         T=s_in.T, org=org_out)}
+        return {
+            self.output_port: Stream(
+                Q=s_in.Q, C=s_in.C, network=self.network, T=s_in.T, org=org_out
+            )
+        }
 
     def flow_outputs(self, input_flows: dict, params, ctx=None) -> dict:
         return {self.output_port: input_flows[self.input_port]}
 
 
 # --- chlorine contact unit --------------------------------------------------
+
 
 @dataclass
 class ChlorineContactUnit:
@@ -285,11 +293,9 @@ class ChlorineContactUnit:
 
     def __post_init__(self) -> None:
         if self.volume <= 0.0:
-            raise ValueError(
-                f"ChlorineContactUnit '{self.name}': volume must be > 0.")
+            raise ValueError(f"ChlorineContactUnit '{self.name}': volume must be > 0.")
         if self.ct_per_log <= 0.0:
-            raise ValueError(
-                f"ChlorineContactUnit '{self.name}': ct_per_log must be > 0.")
+            raise ValueError(f"ChlorineContactUnit '{self.name}': ct_per_log must be > 0.")
 
     # ----- one-state: chlorine residual -----------------------------------
     @property
@@ -315,16 +321,18 @@ class ChlorineContactUnit:
 
     def log_removal(self, residual, flow) -> jnp.ndarray:
         """The chlorine CT log-removal at the given residual and throughflow."""
-        return ct_log_removal(self.ct(residual, flow), self.ct_per_log,
-                              max_log=self.max_log)
+        return ct_log_removal(self.ct(residual, flow), self.ct_per_log, max_log=self.max_log)
 
     def compute_outputs(self, t, state, inputs, params, signals=None) -> dict:
         s_in = inputs[self.input_port]
         residual = state[0]
         org_in = s_in.org if s_in.org is not None else self.inlet_density
         org_out = _apply_log_removal(org_in, self.log_removal(residual, s_in.Q))
-        return {self.output_port: Stream(Q=s_in.Q, C=s_in.C, network=self.network,
-                                         T=s_in.T, org=org_out)}
+        return {
+            self.output_port: Stream(
+                Q=s_in.Q, C=s_in.C, network=self.network, T=s_in.T, org=org_out
+            )
+        }
 
     def flow_outputs(self, input_flows: dict, params, ctx=None) -> dict:
         return {self.output_port: input_flows[self.input_port]}

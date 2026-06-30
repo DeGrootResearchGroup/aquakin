@@ -36,6 +36,7 @@ All splits are plain arithmetic, so :func:`fractionate` works element-wise on
 scalars *or* arrays -- the per-row path :func:`read_influent_csv` uses to map an
 aggregate-measurement CSV (a COD / TKN time series) to ASM1 states on load.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -44,8 +45,21 @@ from dataclasses import dataclass
 import numpy as np
 
 # The ASM1 state names this module produces (the 13 ASM1 species).
-ASM1_STATES = ("SI", "SS", "XI", "XS", "XB_H", "XB_A", "XP", "SO",
-               "SNO", "SNH", "SND", "XND", "SALK")
+ASM1_STATES = (
+    "SI",
+    "SS",
+    "XI",
+    "XS",
+    "XB_H",
+    "XB_A",
+    "XP",
+    "SO",
+    "SNO",
+    "SNH",
+    "SND",
+    "XND",
+    "SALK",
+)
 
 
 @dataclass(frozen=True)
@@ -98,7 +112,7 @@ class InfluentFractions:
     iN_xb: float = 0.086
     iN_xp: float = 0.06
     caco3_eq: float = 50.0
-    default_alkalinity_mol: float = 7.0   # SALK when alkalinity is not supplied
+    default_alkalinity_mol: float = 7.0  # SALK when alkalinity is not supplied
 
 
 def fractionate(
@@ -151,25 +165,23 @@ def fractionate(
     # TKN includes ammonia, so ammonia > TKN is an inconsistent measurement that
     # would force the organic-N pools negative; reject it rather than clamp.
     if ammonia is not None and np.any(np.asarray(ammonia) > np.asarray(tkn)):
-        raise ValueError(
-            "ammonia exceeds tkn (TKN includes ammonia); check the measurements."
-        )
+        raise ValueError("ammonia exceeds tkn (TKN includes ammonia); check the measurements.")
 
     sccod = filtered_cod if filtered_cod is not None else f.f_sccod * total_cod
-    scod = (flocculated_filtered_cod if flocculated_filtered_cod is not None
-            else f.f_scod * total_cod)
-    ccod = sccod - scod                       # colloidal COD
-    pcod = total_cod - sccod                  # particulate COD
+    scod = (
+        flocculated_filtered_cod if flocculated_filtered_cod is not None else f.f_scod * total_cod
+    )
+    ccod = sccod - scod  # colloidal COD
+    pcod = total_cod - sccod  # particulate COD
 
-    su = (soluble_inert_cod if soluble_inert_cod is not None
-          else f.f_su * sccod)
-    sb = scod - su                            # soluble biodegradable (incl. VFA)
+    su = soluble_inert_cod if soluble_inert_cod is not None else f.f_su * sccod
+    sb = scod - su  # soluble biodegradable (incl. VFA)
     cu = f.f_cu * ccod
-    cb = ccod - cu                            # colloidal biodegradable
+    cb = ccod - cu  # colloidal biodegradable
     xu = f.f_xu * total_cod
     oho = f.f_oho * total_cod
     xe = f.f_xe * oho
-    xb = pcod - xu - oho - xe                 # particulate biodegradable
+    xb = pcod - xu - oho - xe  # particulate biodegradable
 
     SI = np.maximum(su, 0.0)
     SS = np.maximum(sb, 0.0)
@@ -193,19 +205,32 @@ def fractionate(
 
     SNH = ammonia if ammonia is not None else f.f_snh * tkn
     SNO = nox
-    SND = np.maximum(f.iN_sb * SS, 0.0)       # soluble biodegradable organic N
+    SND = np.maximum(f.iN_sb * SS, 0.0)  # soluble biodegradable organic N
     # particulate biodegradable organic N closes the TKN balance: TKN excludes
     # nitrate, and ASM1 carries biomass/product N via i_XB / i_XP.
     XND = np.maximum(tkn - SNH - SND - f.iN_xb * XB_H - f.iN_xp * XP, 0.0)
 
-    SALK = (alkalinity / f.caco3_eq if alkalinity is not None
-            else _broadcast_like(f.default_alkalinity_mol, total_cod))
+    SALK = (
+        alkalinity / f.caco3_eq
+        if alkalinity is not None
+        else _broadcast_like(f.default_alkalinity_mol, total_cod)
+    )
 
     zero = _broadcast_like(0.0, total_cod)
     return {
-        "SI": SI, "SS": SS, "XI": XI, "XS": XS, "XB_H": XB_H, "XB_A": zero,
-        "XP": XP, "SO": zero, "SNO": _broadcast_like(SNO, total_cod),
-        "SNH": SNH, "SND": SND, "XND": XND, "SALK": SALK,
+        "SI": SI,
+        "SS": SS,
+        "XI": XI,
+        "XS": XS,
+        "XB_H": XB_H,
+        "XB_A": zero,
+        "XP": XP,
+        "SO": zero,
+        "SNO": _broadcast_like(SNO, total_cod),
+        "SNH": SNH,
+        "SND": SND,
+        "XND": XND,
+        "SALK": SALK,
     }
 
 
@@ -263,13 +288,19 @@ def characterize_influent(
     """
     _require_asm1_states(network)
     states = fractionate(
-        total_cod=total_cod, tkn=tkn, ammonia=ammonia, nox=nox,
-        alkalinity=alkalinity, filtered_cod=filtered_cod,
+        total_cod=total_cod,
+        tkn=tkn,
+        ammonia=ammonia,
+        nox=nox,
+        alkalinity=alkalinity,
+        filtered_cod=filtered_cod,
         flocculated_filtered_cod=flocculated_filtered_cod,
-        soluble_inert_cod=soluble_inert_cod, fractions=fractions,
+        soluble_inert_cod=soluble_inert_cod,
+        fractions=fractions,
     )
-    return network.influent({k: float(v) for k, v in states.items()},
-                            Q=float(flow), T=T, base="zero")
+    return network.influent(
+        {k: float(v) for k, v in states.items()}, Q=float(flow), T=T, base="zero"
+    )
 
 
 def _require_asm1_states(network) -> None:

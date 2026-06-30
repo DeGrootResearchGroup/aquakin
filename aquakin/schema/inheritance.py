@@ -28,8 +28,7 @@ from __future__ import annotations
 # Blocks that are lists of ``{name: ..., ...}`` entries, merged by name.
 NAMED_LIST_BLOCKS = ("species", "conditions", "reactions")
 # Blocks a ``remove:`` mapping may target.
-REMOVABLE_BLOCKS = ("species", "conditions", "reactions", "parameters",
-                    "expressions")
+REMOVABLE_BLOCKS = ("species", "conditions", "reactions", "parameters", "expressions")
 
 
 def pop_inheritance_keys(data: dict, source: str):
@@ -46,8 +45,8 @@ def pop_inheritance_keys(data: dict, source: str):
     net_extends = net.pop("extends", None) if isinstance(net, dict) else None
     if top_extends is not None and net_extends is not None:
         raise ValueError(
-            f"{source}: declare 'extends' once -- either top-level or under "
-            f"'network:', not both.")
+            f"{source}: declare 'extends' once -- either top-level or under 'network:', not both."
+        )
     return (net_extends if net_extends is not None else top_extends), remove
 
 
@@ -85,7 +84,8 @@ def _require_named(entry, block: str, source: str):
     if not isinstance(entry, dict) or "name" not in entry:
         raise ValueError(
             f"{source}: every '{block}' entry must be a mapping with a 'name' "
-            f"to merge by; got {entry!r}.")
+            f"to merge by; got {entry!r}."
+        )
 
 
 def merge_spec(base: dict, derived: dict, *, source: str) -> dict:
@@ -93,8 +93,7 @@ def merge_spec(base: dict, derived: dict, *, source: str) -> dict:
     out = dict(base)
     for key, val in derived.items():
         if key in NAMED_LIST_BLOCKS:
-            out[key] = _merge_named_list(out.get(key), val, block=key,
-                                         source=source)
+            out[key] = _merge_named_list(out.get(key), val, block=key, source=source)
         elif isinstance(out.get(key), dict) and isinstance(val, dict):
             out[key] = _deep_merge(out[key], val)
         else:
@@ -105,33 +104,34 @@ def merge_spec(base: dict, derived: dict, *, source: str) -> dict:
 def apply_remove(data: dict, remove, source: str) -> dict:
     """Drop the named entries / keys listed in a ``remove:`` mapping."""
     if not isinstance(remove, dict):
-        raise ValueError(f"{source}: 'remove:' must be a mapping of "
-                         f"{list(REMOVABLE_BLOCKS)} to name lists.")
+        raise ValueError(
+            f"{source}: 'remove:' must be a mapping of {list(REMOVABLE_BLOCKS)} to name lists."
+        )
     unknown = set(remove) - set(REMOVABLE_BLOCKS)
     if unknown:
-        raise ValueError(f"{source}: remove: unknown block(s) {sorted(unknown)};"
-                         f" valid blocks: {list(REMOVABLE_BLOCKS)}.")
+        raise ValueError(
+            f"{source}: remove: unknown block(s) {sorted(unknown)};"
+            f" valid blocks: {list(REMOVABLE_BLOCKS)}."
+        )
     for block in NAMED_LIST_BLOCKS:
         names = set(remove.get(block) or [])
         if not names:
             continue
         # A base entry may legitimately lack a 'name' (malformed/partial); use
         # .get so it is simply un-targetable by remove: rather than a bare KeyError.
-        present = {e["name"] for e in data.get(block, [])
-                   if isinstance(e, dict) and "name" in e}
+        present = {e["name"] for e in data.get(block, []) if isinstance(e, dict) and "name" in e}
         missing = names - present
         if missing:
             raise ValueError(
-                f"{source}: remove.{block} names {sorted(missing)} are not in "
-                f"the base network.")
-        data[block] = [e for e in data.get(block, [])
-                       if not (isinstance(e, dict) and e.get("name") in names)]
+                f"{source}: remove.{block} names {sorted(missing)} are not in the base network."
+            )
+        data[block] = [
+            e for e in data.get(block, []) if not (isinstance(e, dict) and e.get("name") in names)
+        ]
     for block in ("parameters", "expressions"):
         block_map = data.get(block) or {}
         for name in remove.get(block) or []:
             if name not in block_map:
-                raise ValueError(
-                    f"{source}: remove.{block} '{name}' is not in the base "
-                    f"network.")
+                raise ValueError(f"{source}: remove.{block} '{name}' is not in the base network.")
             del block_map[name]
     return data

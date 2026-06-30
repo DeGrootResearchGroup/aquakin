@@ -57,8 +57,11 @@ class SettlingModel(ABC):
         by the SBR at construction). ``particulate_species`` is the list of
         species names that settle."""
         idx = [network.species_index[s] for s in particulate_species]
-        mask = jnp.zeros((network.n_species,)).at[jnp.asarray(idx, dtype=int)].set(1.0) \
-            if idx else jnp.zeros((network.n_species,))
+        mask = (
+            jnp.zeros((network.n_species,)).at[jnp.asarray(idx, dtype=int)].set(1.0)
+            if idx
+            else jnp.zeros((network.n_species,))
+        )
         self._particulate_mask = mask
         self._n_species = network.n_species
 
@@ -71,9 +74,14 @@ class SettlingModel(ABC):
         """Initial settling state, shape ``(extra_state_size(),)``."""
 
     @abstractmethod
-    def extra_rhs(self, C: jnp.ndarray, V: jnp.ndarray, extra: jnp.ndarray,
-                  settling_active: jnp.ndarray,
-                  mixing_active: jnp.ndarray) -> jnp.ndarray:
+    def extra_rhs(
+        self,
+        C: jnp.ndarray,
+        V: jnp.ndarray,
+        extra: jnp.ndarray,
+        settling_active: jnp.ndarray,
+        mixing_active: jnp.ndarray,
+    ) -> jnp.ndarray:
         """``d(extra)/dt`` of the settling state.
 
         Three regimes are driven by two 0/1 scalars:
@@ -91,8 +99,7 @@ class SettlingModel(ABC):
         """
 
     @abstractmethod
-    def decant_multiplier(self, C: jnp.ndarray, V: jnp.ndarray,
-                          extra: jnp.ndarray) -> jnp.ndarray:
+    def decant_multiplier(self, C: jnp.ndarray, V: jnp.ndarray, extra: jnp.ndarray) -> jnp.ndarray:
         """Per-species multiplier (shape ``(n_species,)``) the decant draw is
         scaled by: ``C_decant = multiplier * C``. 1 for solubles; ``<= 1`` for
         particulates that have settled below the decant level."""
@@ -136,12 +143,11 @@ class InterfaceSettling(SettlingModel):
     def extra_rhs(self, C, V, extra, settling_active, mixing_active) -> jnp.ndarray:
         c = extra[0]
         depth = jnp.maximum(V / self.area, 1e-9)
-        grow = self.v_settle / depth                  # interface descent -> clarity
+        grow = self.v_settle / depth  # interface descent -> clarity
         # Settling grows c toward 1; active mixing relaxes it to 0; a quiescent
         # phase (decant/idle: neither flag set) holds c so the decant draw stays
         # clarified.
-        dc = settling_active * grow * (1.0 - c) \
-            - mixing_active * self.remix_rate * c
+        dc = settling_active * grow * (1.0 - c) - mixing_active * self.remix_rate * c
         return jnp.reshape(dc, (1,))
 
     def decant_multiplier(self, C, V, extra) -> jnp.ndarray:
@@ -202,10 +208,10 @@ class LayeredSettling(SettlingModel):
         r = extra
         depth = jnp.maximum(V / self.area, 1e-9)
         layer_depth = depth / self.n_layers
-        k = self.v_settle / jnp.maximum(layer_depth, 1e-9)   # interlayer rate
+        k = self.v_settle / jnp.maximum(layer_depth, 1e-9)  # interlayer rate
         # Downward flux f_k = k * r_k out of each layer except the bottom.
         flux = k * r
-        flux = flux.at[-1].set(0.0)                          # bottom is a sink/floor
+        flux = flux.at[-1].set(0.0)  # bottom is a sink/floor
         # dr_k = (flux into k from above) - (flux out of k).
         inflow = jnp.concatenate([jnp.zeros((1,)), flux[:-1]])
         d_settle = inflow - flux

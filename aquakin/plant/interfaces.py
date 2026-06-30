@@ -100,16 +100,16 @@ class ASM1toADM1:
 
     # Interface stoichiometric parameters (BSM2 defaults).
     CODequiv: float = 40.0 / 14.0
-    fnaa: float = _N_aa * 14.0          # 0.098  gN/gCOD in amino acids / Xpr
-    fnxc: float = _N_xc * 14.0          # 0.0376 gN/gCOD in composites
-    fnbac: float = _N_bac * 14.0        # 0.08   gN/gCOD in biomass
-    fxni: float = _N_I * 14.0           # 0.06   gN/gCOD in particulate inerts
-    fsni: float = 0.0                   # gN/gCOD in SI (ASM1: 0)
-    fsni_adm: float = _N_I * 14.0       # 0.06   gN/gCOD in SI (ADM1)
-    frlixs: float = 0.7                 # lipid fraction of non-N XS
-    frlibac: float = 0.4                # lipid fraction of non-N biomass
-    frxs_adm: float = 0.68              # anaerobically degradable fraction of biomass
-    fdegrade_adm: float = 0.0           # AS XI/XP degradable in AD (BSM2: 0)
+    fnaa: float = _N_aa * 14.0  # 0.098  gN/gCOD in amino acids / Xpr
+    fnxc: float = _N_xc * 14.0  # 0.0376 gN/gCOD in composites
+    fnbac: float = _N_bac * 14.0  # 0.08   gN/gCOD in biomass
+    fxni: float = _N_I * 14.0  # 0.06   gN/gCOD in particulate inerts
+    fsni: float = 0.0  # gN/gCOD in SI (ASM1: 0)
+    fsni_adm: float = _N_I * 14.0  # 0.06   gN/gCOD in SI (ADM1)
+    frlixs: float = 0.7  # lipid fraction of non-N XS
+    frlibac: float = 0.4  # lipid fraction of non-N biomass
+    frxs_adm: float = 0.68  # anaerobically degradable fraction of biomass
+    fdegrade_adm: float = 0.0  # AS XI/XP degradable in AD (BSM2: 0)
 
     R: float = 0.083145
     T_base: float = 298.15
@@ -161,15 +161,30 @@ class ASM1toADM1:
         SALK = C_source[si["SALK"]]
 
         fnaa, fnbac, fxni, fsni, fsni_adm = (
-            self.fnaa, self.fnbac, self.fxni, self.fsni, self.fsni_adm)
+            self.fnaa,
+            self.fnbac,
+            self.fxni,
+            self.fsni,
+            self.fsni_adm,
+        )
         frlixs, frlibac, frxs_adm = self.frlixs, self.frlibac, self.frxs_adm
 
         # --- 1) Remove COD demand of O2 + NO3, hierarchically SS, XS, XBH, XBA.
         d = SO + self.CODequiv * SNO
-        take = jnp.minimum(d, SS);  ut_SS = SS - take;  d = d - take
-        take = jnp.minimum(d, XS);  ut_XS = XS - take;  d = d - take
-        take = jnp.minimum(d, XBH); ut_XBH = XBH - take; nrel = take * fnbac; d = d - take
-        take = jnp.minimum(d, XBA); ut_XBA = XBA - take; nrel = nrel + take * fnbac; d = d - take
+        take = jnp.minimum(d, SS)
+        ut_SS = SS - take
+        d = d - take
+        take = jnp.minimum(d, XS)
+        ut_XS = XS - take
+        d = d - take
+        take = jnp.minimum(d, XBH)
+        ut_XBH = XBH - take
+        nrel = take * fnbac
+        d = d - take
+        take = jnp.minimum(d, XBA)
+        ut_XBA = XBA - take
+        nrel = nrel + take * fnbac
+        d = d - take
         ut_SNH = SNH + nrel  # N released from consumed biomass
         if self.strict:
             # `d` > 0 here means the electron-acceptor demand outran every
@@ -177,11 +192,13 @@ class ASM1toADM1:
             # over-conserved). Flag it; AD-/jit-safe, and ut_SNH flows to the
             # output so the check is not eliminated.
             ut_SNH = eqx.error_if(
-                ut_SNH, d > self.strict_tol,
+                ut_SNH,
+                d > self.strict_tol,
                 "ASM1toADM1(strict=True): electron-acceptor (O2+NO3) COD demand "
                 "exceeds the degradable COD (SS+XS+XB_H+XB_A); the surplus is "
                 "dropped and total COD is over-conserved. This is a non-anoxic / "
-                "nitrate-heavy feed outside the interface's intended regime.")
+                "nitrate-heavy feed outside the interface's intended regime.",
+            )
 
         ut_SND = SND
         ut_XND = XND
@@ -201,7 +218,7 @@ class ASM1toADM1:
 
         # --- 4) Biomass (XBH+XBA) -> Xpr + XI; remainder -> Xli/Xch.
         biomass = ut_XBH + ut_XBA
-        biomass_nobio = biomass * (1.0 - frxs_adm)          # -> ADM XI
+        biomass_nobio = biomass * (1.0 - frxs_adm)  # -> ADM XI
         biomass_bioN = biomass * fnbac - biomass_nobio * fxni
         xpr2_base = biomass_bioN / fnaa
         remCOD0 = biomass - biomass_nobio - xpr2_base
@@ -231,11 +248,17 @@ class ASM1toADM1:
         inertS = SI * (fsni / fsni_adm)
         ut_SI = SI - SI * (fsni / fsni_adm)
         take = jnp.minimum(ut_SI, ut_SND / fsni_adm)
-        inertS = inertS + take; ut_SI = ut_SI - take; ut_SND = ut_SND - take * fsni_adm
+        inertS = inertS + take
+        ut_SI = ut_SI - take
+        ut_SND = ut_SND - take * fsni_adm
         take = jnp.minimum(ut_SI, ut_XND / fsni_adm)
-        inertS = inertS + take; ut_SI = ut_SI - take; ut_XND = ut_XND - take * fsni_adm
+        inertS = inertS + take
+        ut_SI = ut_SI - take
+        ut_XND = ut_XND - take * fsni_adm
         take = jnp.minimum(ut_SI, ut_SNH / fsni_adm)
-        inertS = inertS + take; ut_SI = ut_SI - take; ut_SNH = ut_SNH - take * fsni_adm
+        inertS = inertS + take
+        ut_SI = ut_SI - take
+        ut_SNH = ut_SNH - take * fsni_adm
         ut_SS = ut_SS + ut_SI  # leftover SI COD -> monosaccharides
         ut_SI = jnp.zeros(())
 
@@ -259,13 +282,9 @@ class ASM1toADM1:
         alfa_co2 = -1.0 / (1.0 + 10 ** (self._pK_a_co2 - pH))
         alfa_IN = (10 ** (self._pK_a_IN - pH)) / (1.0 + 10 ** (self._pK_a_IN - pH))
         S_IC = (
-            (SNO * self._alfa_NO + SNH * self._alfa_NH + SALK * self._alfa_alk)
-            - (S_IN * alfa_IN)
+            (SNO * self._alfa_NO + SNH * self._alfa_NH + SALK * self._alfa_alk) - (S_IN * alfa_IN)
         ) / alfa_co2
-        ScatminusSan = (
-            S_IN * alfa_IN + S_IC * alfa_co2
-            + 10 ** (-self._pK_w + pH) - 10 ** (-pH)
-        )
+        ScatminusSan = S_IN * alfa_IN + S_IC * alfa_co2 + 10 ** (-self._pK_w + pH) - 10 ** (-pH)
         S_cat = jnp.maximum(ScatminusSan, 0.0)
         S_an = jnp.maximum(-ScatminusSan, 0.0)
 
@@ -323,7 +342,7 @@ class ADM1toASM1:
     fxni: float = _N_I * 14.0
     fsni: float = 0.0
     fsni_adm: float = _N_I * 14.0
-    frxs_as: float = 0.79               # aerobically degradable fraction of AD biomass
+    frxs_as: float = 0.79  # aerobically degradable fraction of AD biomass
     fdegrade_as: float = 0.0
 
     R: float = 0.083145
@@ -369,10 +388,9 @@ class ADM1toASM1:
         # Biomass -> XS (degradable) + XP (inert); N bookkeeping to S_IN.
         biomass = 1000.0 * (X_su + X_aa + X_fa + X_c4 + X_pro + X_ac + X_h2)  # gCOD/m3
         XPtemp = biomass * (1.0 - self.frxs_as)
-        XStemp = biomass - XPtemp                                            # = biomass*frxs_as
+        XStemp = biomass - XPtemp  # = biomass*frxs_as
         S_IN_adj = (
-            S_IN + biomass * fnbac / 14000.0
-            - XPtemp * fxni / 14000.0 - XStemp * fnxc / 14000.0
+            S_IN + biomass * fnbac / 14000.0 - XPtemp * fxni / 14000.0 - XStemp * fnxc / 14000.0
         )
 
         # Inert XI (AD) -> XI (ASM); inert SI (AD) -> SI (ASM), N freed to S_IN.
@@ -402,8 +420,12 @@ class ADM1toASM1:
         alfa_co2 = -1.0 / (1.0 + 10 ** (self._pK_a_co2 - pH))
         alfa_IN = (10 ** (self._pK_a_IN - pH)) / (1.0 + 10 ** (self._pK_a_IN - pH))
         SALK = (
-            S_va * alfa_va + S_bu * alfa_bu + S_pro * alfa_pro
-            + S_ac * alfa_ac + S_IC * alfa_co2 + S_IN * alfa_IN
+            S_va * alfa_va
+            + S_bu * alfa_bu
+            + S_pro * alfa_pro
+            + S_ac * alfa_ac
+            + S_IC * alfa_co2
+            + S_IN * alfa_IN
             - SNH * self._alfa_NH
         ) / self._alfa_alk
 

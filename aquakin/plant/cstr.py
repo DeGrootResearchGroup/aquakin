@@ -50,11 +50,7 @@ def oxygen_saturation(T_K):
     """
     T = jnp.asarray(T_K, dtype=float)
     ln_cs = (
-        -139.34411
-        + 1.575701e5 / T
-        - 6.642308e7 / T**2
-        + 1.243800e10 / T**3
-        - 8.621949e11 / T**4
+        -139.34411 + 1.575701e5 / T - 6.642308e7 / T**2 + 1.243800e10 / T**3 - 8.621949e11 / T**4
     )
     return jnp.exp(ln_cs)
 
@@ -82,9 +78,11 @@ def oxygen_saturation_bsm2(T_K):
         Saturation dissolved-oxygen concentration in mg/L (== g/m3).
     """
     theta = jnp.asarray(T_K, dtype=float) / 100.0
-    return 0.9997743214 * 8.0 / 10.5 * (
-        56.12 * 6791.5
-        * jnp.exp(-66.7354 + 87.4755 / theta + 24.4526 * jnp.log(theta))
+    return (
+        0.9997743214
+        * 8.0
+        / 10.5
+        * (56.12 * 6791.5 * jnp.exp(-66.7354 + 87.4755 / theta + 24.4526 * jnp.log(theta)))
     )
 
 
@@ -214,8 +212,7 @@ class Aeration:
         n_modes = (self.kla is not None) + (self.do_setpoint is not None)
         if n_modes != 1:
             raise ValueError(
-                "Aeration requires exactly one of kla= (open loop) or "
-                "do_setpoint= (closed loop)."
+                "Aeration requires exactly one of kla= (open loop) or do_setpoint= (closed loop)."
             )
         if self.saturation_model not in _SATURATION_MODELS:
             raise ValueError(
@@ -226,13 +223,9 @@ class Aeration:
             raise ValueError(f"Aeration kla must be >= 0, got {self.kla}.")
         for name in ("alpha", "beta", "pressure_factor"):
             if getattr(self, name) < 0.0:
-                raise ValueError(
-                    f"Aeration {name} must be >= 0, got {getattr(self, name)}."
-                )
+                raise ValueError(f"Aeration {name} must be >= 0, got {getattr(self, name)}.")
         if self.kla_theta <= 0.0:
-            raise ValueError(
-                f"Aeration kla_theta must be > 0, got {self.kla_theta}."
-            )
+            raise ValueError(f"Aeration kla_theta must be > 0, got {self.kla_theta}.")
 
     @property
     def is_closed_loop(self) -> bool:
@@ -266,9 +259,9 @@ class AerationVectors:
     place.
     """
 
-    kla_vec: jnp.ndarray                     # (n_species,) fixed open-loop kLa
-    sat_vec: jnp.ndarray                     # (n_species,) saturation (beta/P folded)
-    controlled: dict                         # species -> (signal_name, gain)
+    kla_vec: jnp.ndarray  # (n_species,) fixed open-loop kLa
+    sat_vec: jnp.ndarray  # (n_species,) saturation (beta/P folded)
+    controlled: dict  # species -> (signal_name, gain)
     ref_T: float
     kla_theta: float
     temp_correct: bool
@@ -292,25 +285,23 @@ def build_aeration_vectors(aeration, network, unit_name: str) -> AerationVectors
     if aeration is not None:
         if aeration.species not in network.species_index:
             raise ValueError(
-                f"'{unit_name}' aeration species '{aeration.species}' is not in "
-                f"the network."
+                f"'{unit_name}' aeration species '{aeration.species}' is not in the network."
             )
         idx = network.species_index[aeration.species]
         sat_vec = sat_vec.at[idx].set(
-            float(aeration.do_sat) * float(aeration.beta)
-            * float(aeration.pressure_factor)
+            float(aeration.do_sat) * float(aeration.beta) * float(aeration.pressure_factor)
         )
         if aeration.is_closed_loop:
-            controlled[aeration.species] = (
-                aeration.signal_name(unit_name), aeration.gain)
+            controlled[aeration.species] = (aeration.signal_name(unit_name), aeration.gain)
         else:
             kla_vec = kla_vec.at[idx].set(float(aeration.kla) * float(aeration.alpha))
         ref_T = float(aeration.ref_T)
         kla_theta = float(aeration.kla_theta)
         temp_correct = bool(aeration.temperature_correction)
         saturation_model = aeration.saturation_model
-    return AerationVectors(kla_vec, sat_vec, controlled, ref_T, kla_theta,
-                           temp_correct, saturation_model)
+    return AerationVectors(
+        kla_vec, sat_vec, controlled, ref_T, kla_theta, temp_correct, saturation_model
+    )
 
 
 def aeration_transfer(av: AerationVectors, C, T_eff, signals, network):
@@ -369,9 +360,7 @@ class AerationUnit:
         closed-loop aeration signal, if any). The plant validates these are
         published -- by the controller it auto-wires from the ``Aeration`` spec --
         before solving."""
-        return tuple(
-            signal_name for signal_name, _gain in self._av.controlled.values()
-        )
+        return tuple(signal_name for signal_name, _gain in self._av.controlled.values())
 
     # Readers onto the canonical ``self._av`` store, for the aeration-energy /
     # O2-balance code (plant.bsm.evaluation, plant.balance) and tests that
@@ -473,7 +462,9 @@ class CSTRUnit(AerationUnit, CouplingAware):
             return
         self.conditions = {**self.conditions, "T": float(temperature_K)}
         self._condition_arrays = {
-            **self._condition_arrays, "T": jnp.asarray([float(temperature_K)])}
+            **self._condition_arrays,
+            "T": jnp.asarray([float(temperature_K)]),
+        }
 
     @property
     def input_ports(self) -> list[str]:
@@ -521,7 +512,9 @@ class CSTRUnit(AerationUnit, CouplingAware):
             Q_total = Q_total + inputs[name].Q
         return {
             self.output_port: Stream(
-                Q=Q_total, C=state, network=self.network,
+                Q=Q_total,
+                C=state,
+                network=self.network,
                 T=self._mixed_inlet_T(inputs),
             )
         }

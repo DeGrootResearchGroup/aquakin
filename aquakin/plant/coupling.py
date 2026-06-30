@@ -68,8 +68,9 @@ class CouplingAware(ABC):
         raise NotImplementedError
 
 
-def ad_union(jac_fn, base, *, n_states: int = 64, decades: float = 2.0,
-             seed: int = 0) -> np.ndarray:
+def ad_union(
+    jac_fn, base, *, n_states: int = 64, decades: float = 2.0, seed: int = 0
+) -> np.ndarray:
     """Boolean union of ``|jac_fn(x)| > 0`` over diverse positive inputs.
 
     Each component of ``base`` is independently scaled by
@@ -108,8 +109,7 @@ def ad_union(jac_fn, base, *, n_states: int = 64, decades: float = 2.0,
     fj = jax.jit(jac_fn)
     P = None
     for _ in range(n_states):
-        x = jnp.asarray(base * 10.0 ** rng.uniform(-decades, decades,
-                                                   size=base.shape))
+        x = jnp.asarray(base * 10.0 ** rng.uniform(-decades, decades, size=base.shape))
         Pi = np.abs(np.asarray(fj(x))) > 0.0
         P = Pi if P is None else (P | Pi)
     return P

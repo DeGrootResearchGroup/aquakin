@@ -50,12 +50,8 @@ class PiecewiseConstantSchedule:
                 "PiecewiseConstantSchedule: len(values) must be len(t_breaks)+1; "
                 f"got {self._values.shape[0]} and {self._t_breaks.shape[0]}."
             )
-        if self._t_breaks.shape[0] and bool(
-            jnp.any(jnp.diff(self._t_breaks) <= 0)
-        ):
-            raise ValueError(
-                "PiecewiseConstantSchedule: t_breaks must be strictly increasing."
-            )
+        if self._t_breaks.shape[0] and bool(jnp.any(jnp.diff(self._t_breaks) <= 0)):
+            raise ValueError("PiecewiseConstantSchedule: t_breaks must be strictly increasing.")
 
     def shifted(self, delta: float) -> "PiecewiseConstantSchedule":
         """A copy with every held value offset by ``delta`` (same step times)."""

@@ -129,9 +129,11 @@ class StorageTank:
         return ["out", "bypass"]
 
     def initial_state(self) -> jnp.ndarray:
-        C0 = (self.network.default_concentrations()
-              if self.initial_concentrations is None
-              else jnp.asarray(self.initial_concentrations))
+        C0 = (
+            self.network.default_concentrations()
+            if self.initial_concentrations is None
+            else jnp.asarray(self.initial_concentrations)
+        )
         V0 = jnp.asarray([self.initial_fraction * float(self.volume)])
         return jnp.concatenate([C0, V0])
 
@@ -139,8 +141,7 @@ class StorageTank:
         """The requested release flow: fixed, or the level-control law."""
         if self.level_setpoint is None:
             return jnp.asarray(float(self.output_flow))
-        Q = (self.output_flow_bias
-             + self.level_gain * (V - float(self.level_setpoint)))
+        Q = self.output_flow_bias + self.level_gain * (V - float(self.level_setpoint))
         return jnp.clip(Q, 0.0, self.output_flow_max)
 
     def _flow_split(self, V: jnp.ndarray, Q_in: jnp.ndarray):

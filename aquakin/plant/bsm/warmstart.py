@@ -38,17 +38,37 @@ if TYPE_CHECKING:  # pragma: no cover
 # BSM2: the reference reactor state -- the warm biomass the BSM2 plant settles
 # from to reproduce the validated open-loop steady state.
 BSM2_WARM_REACTOR_COMPOSITION = {
-    "SI": 28.06, "SS": 2.0, "XI": 1532.3, "XS": 45.0, "XB_H": 2244.0,
-    "XB_A": 167.0, "XP": 967.0, "SO": 1.0, "SNO": 7.0, "SNH": 3.0,
-    "SND": 0.7, "XND": 3.0, "SALK": 5.0,
+    "SI": 28.06,
+    "SS": 2.0,
+    "XI": 1532.3,
+    "XS": 45.0,
+    "XB_H": 2244.0,
+    "XB_A": 167.0,
+    "XP": 967.0,
+    "SO": 1.0,
+    "SNO": 7.0,
+    "SNH": 3.0,
+    "SND": 0.7,
+    "XND": 3.0,
+    "SALK": 5.0,
 }
 
 # BSM1: approximately aquakin's BSM1 open-loop steady-state reactor composition
 # (a representative mid-cascade tank). A warm-start seed; the solve relaxes it.
 BSM1_WARM_REACTOR_COMPOSITION = {
-    "SI": 30.0, "SS": 3.0, "XI": 1143.0, "XS": 70.0, "XB_H": 1768.0,
-    "XB_A": 1809.0, "XP": 1802.0, "SO": 1.0, "SNO": 6.5, "SNH": 1.0,
-    "SND": 0.85, "XND": 5.0, "SALK": 4.7,
+    "SI": 30.0,
+    "SS": 3.0,
+    "XI": 1143.0,
+    "XS": 70.0,
+    "XB_H": 1768.0,
+    "XB_A": 1809.0,
+    "XP": 1802.0,
+    "SO": 1.0,
+    "SNO": 6.5,
+    "SNH": 1.0,
+    "SND": 0.85,
+    "XND": 5.0,
+    "SALK": 4.7,
 }
 
 
@@ -59,15 +79,15 @@ def _as_reactor_names(plant: "Plant") -> list:
     if not reactors:
         raise ValueError(
             "No activated-sludge reactors found in this plant; cannot build a "
-            "warm start. (Expected CSTR reactor units with aeration.)")
+            "warm start. (Expected CSTR reactor units with aeration.)"
+        )
     return reactors
 
 
 def _warm_y0(plant, composition, asm1_network):
     """Build a flat plant ``y0`` seeding the AS reactors with ``composition``."""
     reactors = _as_reactor_names(plant)
-    asm1 = (asm1_network if asm1_network is not None
-            else plant.units[reactors[0]].network)
+    asm1 = asm1_network if asm1_network is not None else plant.units[reactors[0]].network
     warm = asm1.concentrations(composition)
     return plant.initial_state(overrides={name: warm for name in reactors})
 

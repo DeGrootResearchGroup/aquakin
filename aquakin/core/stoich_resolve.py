@@ -52,9 +52,7 @@ def is_auto(coef: Any) -> bool:
     return isinstance(coef, str) and coef.strip() in _AUTO_TOKENS
 
 
-def resolve_auto_coefficients(
-    reactions, species_composition: dict, network_conserved_for
-) -> None:
+def resolve_auto_coefficients(reactions, species_composition: dict, network_conserved_for) -> None:
     """Replace every ``auto`` / ``?`` coefficient with its conservation-derived
     numeric value, **in place** on each reaction's ``stoichiometry``.
 
@@ -84,14 +82,14 @@ def resolve_auto_coefficients(
         if not auto_species:
             continue
 
-        conserved = list(getattr(rxn, "conserved_for", None)
-                          or network_conserved_for or [])
+        conserved = list(getattr(rxn, "conserved_for", None) or network_conserved_for or [])
         if not conserved:
             raise ValueError(
                 f"reaction '{rxn.name}' has an 'auto' stoichiometric coefficient "
                 f"({auto_species}) but declares no quantities to conserve it from: "
                 f"add a per-reaction `conserved_for: [COD, ...]` or a network-level "
-                f"`conserved_for:`.")
+                f"`conserved_for:`."
+            )
 
         known = [sp for sp in stoich if sp not in auto_species]
         # A parameter-expression neighbour makes the auto value parameter-dependent
@@ -103,8 +101,7 @@ def resolve_auto_coefficients(
 
         n_eq, n_unknown = len(conserved), len(auto_species)
         # M[q, a] is auto-species a's content of quantity q.
-        M = np.array([[content(a, q) for a in auto_species] for q in conserved],
-                     dtype=float)
+        M = np.array([[content(a, q) for a in auto_species] for q in conserved], dtype=float)
         rank = int(np.linalg.matrix_rank(M)) if M.size else 0
         if rank < n_unknown:
             raise ValueError(
@@ -113,14 +110,17 @@ def resolve_auto_coefficients(
                 f"quantities {conserved} -- the system is under-determined "
                 f"(rank {rank} < {n_unknown} unknowns). Each auto species must "
                 f"carry content in enough conserved quantities; declare more "
-                f"`conserved_for` quantities, or give the species a `composition:`.")
+                f"`conserved_for` quantities, or give the species a `composition:`."
+            )
 
         if not symbolic:
             # Numeric: M x = b with b[q] = -(known content). lstsq tolerates an
             # over-determined-but-consistent system; the residual check rejects an
             # inconsistent one. The resolved values are constants.
-            b = np.array([-sum(float(stoich[sp]) * content(sp, q) for sp in known)
-                          for q in conserved], dtype=float)
+            b = np.array(
+                [-sum(float(stoich[sp]) * content(sp, q) for sp in known) for q in conserved],
+                dtype=float,
+            )
             x, *_ = np.linalg.lstsq(M, b, rcond=None)
             resid = float(np.max(np.abs(M @ x - b))) if b.size else 0.0
             scale = 1.0 + (float(np.max(np.abs(b))) if b.size else 0.0)
@@ -130,7 +130,8 @@ def resolve_auto_coefficients(
                     f"{auto_species} cannot conserve all of {conserved} "
                     f"simultaneously -- the declared balances are inconsistent "
                     f"(residual {resid:.3g}). Drop a conserved quantity, or fix the "
-                    f"known coefficients / composition.")
+                    f"known coefficients / composition."
+                )
             for a, sp in enumerate(auto_species):
                 stoich[sp] = float(x[a])
             continue
@@ -151,7 +152,8 @@ def resolve_auto_coefficients(
                 f"{auto_species} alongside a parameter-expression coefficient needs "
                 f"a square system (#auto == #conserved_for); got {n_unknown} auto "
                 f"vs {n_eq} conserved quantity/quantities {conserved}. Add or remove "
-                f"a `conserved_for` quantity, or make the coefficients numeric.")
+                f"a `conserved_for` quantity, or make the coefficients numeric."
+            )
         Minv = np.linalg.inv(M)
 
         def coeff_str(sp: str) -> str:
@@ -161,8 +163,7 @@ def resolve_auto_coefficients(
         for a, sp in enumerate(auto_species):
             terms = []
             for ksp in known:
-                w = -float(sum(Minv[a, q] * content(ksp, qn)
-                               for q, qn in enumerate(conserved)))
-                if abs(w) > _RESID_TOL:               # drop structural-zero weights
+                w = -float(sum(Minv[a, q] * content(ksp, qn) for q, qn in enumerate(conserved)))
+                if abs(w) > _RESID_TOL:  # drop structural-zero weights
                     terms.append(f"({w!r}) * ({coeff_str(ksp)})")
             stoich[sp] = " + ".join(terms) if terms else "0.0"

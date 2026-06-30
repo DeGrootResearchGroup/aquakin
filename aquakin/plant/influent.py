@@ -33,8 +33,14 @@ if TYPE_CHECKING:  # pragma: no cover
 # direct ASM-species names: aggregate lab/SCADA measurements, fractionated into
 # ASM1 states per row (see aquakin.plant.characterize.fractionate).
 _AGGREGATE_ROLES = (
-    "total_cod", "tkn", "ammonia", "nox", "alkalinity", "filtered_cod",
-    "flocculated_filtered_cod", "soluble_inert_cod",
+    "total_cod",
+    "tkn",
+    "ammonia",
+    "nox",
+    "alkalinity",
+    "filtered_cod",
+    "flocculated_filtered_cod",
+    "soluble_inert_cod",
 )
 
 
@@ -42,8 +48,21 @@ _AGGREGATE_ROLES = (
 # the start of the simulation; ``Q`` is in m³/d; all concentrations are
 # in g_COD/m³ or g_N/m³ per ASM1 conventions.
 _BSM1_COLUMN_ORDER = [
-    "t", "SI", "SS", "XI", "XS", "XB_H", "XB_A", "XP",
-    "SO", "SNO", "SNH", "SND", "XND", "SALK", "Q",
+    "t",
+    "SI",
+    "SS",
+    "XI",
+    "XS",
+    "XB_H",
+    "XB_A",
+    "XP",
+    "SO",
+    "SNO",
+    "SNH",
+    "SND",
+    "XND",
+    "SALK",
+    "Q",
 ]
 
 # BSM2 files add a time-varying influent temperature ``T`` (degC) as the last
@@ -82,26 +101,20 @@ class InfluentSeries:
         if self.t.ndim != 1:
             raise ValueError(f"t must be 1-D, got shape {self.t.shape}")
         if self.Q.shape != self.t.shape:
-            raise ValueError(
-                f"Q shape {self.Q.shape} does not match t shape {self.t.shape}"
-            )
+            raise ValueError(f"Q shape {self.Q.shape} does not match t shape {self.t.shape}")
         if self.C.ndim != 2 or self.C.shape[0] != self.t.shape[0]:
-            raise ValueError(
-                f"C shape {self.C.shape} expected ({self.t.shape[0]}, n_species)"
-            )
+            raise ValueError(f"C shape {self.C.shape} expected ({self.t.shape[0]}, n_species)")
         if self.C.shape[1] != self.network.n_species:
             raise ValueError(
-                f"C has {self.C.shape[1]} species columns but network has "
-                f"{self.network.n_species}"
+                f"C has {self.C.shape[1]} species columns but network has {self.network.n_species}"
             )
         if self.T is not None and self.T.shape != self.t.shape:
-            raise ValueError(
-                f"T shape {self.T.shape} does not match t shape {self.t.shape}"
-            )
+            raise ValueError(f"T shape {self.T.shape} does not match t shape {self.t.shape}")
 
     @classmethod
-    def constant(cls, network, overrides=None, /, *, Q, base: str = "zero",
-                 T=None, **species) -> "InfluentSeries":
+    def constant(
+        cls, network, overrides=None, /, *, Q, base: str = "zero", T=None, **species
+    ) -> "InfluentSeries":
         """Build a constant-in-time influent from a feed composition.
 
         The composition is built with ``network.concentrations(overrides,
@@ -206,9 +219,13 @@ def read_influent_csv(
     if not p.is_file():
         raise FileNotFoundError(f"Influent file not found: {p}")
     return _influent_from_text(
-        p.read_text(encoding="utf-8"), network,
-        column_order=column_order, column_map=column_map, fractions=fractions,
-        delimiter=delimiter, source=str(p),
+        p.read_text(encoding="utf-8"),
+        network,
+        column_order=column_order,
+        column_map=column_map,
+        fractions=fractions,
+        delimiter=delimiter,
+        source=str(p),
     )
 
 
@@ -229,8 +246,7 @@ def _influent_from_text(
     data through a temporary file. ``source`` only labels error messages.
     """
     if column_map is not None:
-        return _influent_from_column_map(
-            text, network, column_map, fractions, delimiter, source)
+        return _influent_from_column_map(text, network, column_map, fractions, delimiter, source)
     if column_order is None:
         column_order = _BSM1_COLUMN_ORDER
 
@@ -270,9 +286,7 @@ def _influent_from_text(
         try:
             rows.append([float(tok) for tok in tokens])
         except ValueError as exc:
-            raise ValueError(
-                f"Influent row '{raw_line}' has non-numeric field: {exc}"
-            ) from exc
+            raise ValueError(f"Influent row '{raw_line}' has non-numeric field: {exc}") from exc
 
     if not rows:
         raise ValueError(f"Influent source {source} contained no data rows.")
@@ -339,7 +353,12 @@ def _parse_named_table(text: str, delimiter: str | None):
 
 
 def _influent_from_column_map(
-    text: str, network, column_map: dict, fractions, delimiter, source: str,
+    text: str,
+    network,
+    column_map: dict,
+    fractions,
+    delimiter,
+    source: str,
 ) -> InfluentSeries:
     """Build an :class:`InfluentSeries` from an arbitrary-header CSV via a
     role -> header ``column_map``, fractionating any mapped aggregate columns
@@ -383,15 +402,19 @@ def _influent_from_column_map(
     n_t = data.shape[0]
     C = np.zeros((n_t, network.n_species))
     for sp in network.species:
-        if sp in column_map:                      # a directly-mapped species
+        if sp in column_map:  # a directly-mapped species
             C[:, network.species_index[sp]] = col(sp)
-        elif sp in produced:                      # a fractionated state
+        elif sp in produced:  # a fractionated state
             C[:, network.species_index[sp]] = np.asarray(produced[sp])
         # otherwise left at zero (zero-based influent)
 
     return InfluentSeries(
-        t=jnp.asarray(t), Q=jnp.asarray(Q), C=jnp.asarray(C), network=network,
-        T=None if T is None else jnp.asarray(T))
+        t=jnp.asarray(t),
+        Q=jnp.asarray(Q),
+        C=jnp.asarray(C),
+        network=network,
+        T=None if T is None else jnp.asarray(T),
+    )
 
 
 def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeries:
@@ -420,9 +443,7 @@ def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
     or g_N/m³ following ASM1 conventions.
     """
     if profile not in ("dry", "rain", "storm"):
-        raise ValueError(
-            f"profile must be 'dry', 'rain', or 'storm'; got {profile!r}"
-        )
+        raise ValueError(f"profile must be 'dry', 'rain', or 'storm'; got {profile!r}")
     resource = files("aquakin.plant.bsm.data") / f"BSM1_{profile}.csv"
     if not resource.is_file():
         raise FileNotFoundError(
@@ -430,7 +451,8 @@ def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
         )
     # Parse the package data directly from text -- no temporary-file round-trip.
     return _influent_from_text(
-        resource.read_text(encoding="utf-8"), network,
+        resource.read_text(encoding="utf-8"),
+        network,
         source=f"BSM1_{profile}.csv",
     )
 
@@ -461,17 +483,17 @@ def load_bsm2_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
     BSM2 15 degC base. TSS is omitted (it is derived, not a state).
     """
     if profile not in ("dry", "rain", "storm"):
-        raise ValueError(
-            f"profile must be 'dry', 'rain', or 'storm'; got {profile!r}"
-        )
+        raise ValueError(f"profile must be 'dry', 'rain', or 'storm'; got {profile!r}")
     resource = files("aquakin.plant.bsm.data") / f"BSM2_{profile}.csv"
     if not resource.is_file():
         raise FileNotFoundError(
             f"BSM2 influent file 'BSM2_{profile}.csv' not found in package data."
         )
     series = _influent_from_text(
-        resource.read_text(encoding="utf-8"), network,
-        column_order=_BSM2_COLUMN_ORDER, source=f"BSM2_{profile}.csv",
+        resource.read_text(encoding="utf-8"),
+        network,
+        column_order=_BSM2_COLUMN_ORDER,
+        source=f"BSM2_{profile}.csv",
     )
     # The file stores temperature in degC; reactors expect Kelvin.
     return dataclasses.replace(series, T=series.T + 273.15)

@@ -70,10 +70,7 @@ class ASTNode(ABC):
         drive off this, so a new node type's children can never be silently
         skipped by a hand-enumerated walk.
         """
-        return tuple(
-            v for f in fields(self)
-            if isinstance(v := getattr(self, f.name), ASTNode)
-        )
+        return tuple(v for f in fields(self) if isinstance(v := getattr(self, f.name), ASTNode))
 
     def map_children(self, fn: "Callable[[ASTNode], ASTNode]") -> "ASTNode":
         """Return a copy with each direct child replaced by ``fn(child)``.
@@ -264,7 +261,7 @@ class DivideNode(_BinaryNode):
 
 
 class PowerNode(_BinaryNode):
-    _op = staticmethod(lambda l, r: l ** r)
+    _op = staticmethod(lambda l, r: l**r)
 
 
 @dataclass(frozen=True)
@@ -298,9 +295,7 @@ class ArrheniusNode(ASTNode):
 
     def compile(self, ctx: CompileContext) -> RateCallable:
         if "T" not in ctx.condition_fields:
-            raise KeyError(
-                "arrhenius(...) requires a condition field named 'T' (Kelvin)."
-            )
+            raise KeyError("arrhenius(...) requires a condition field named 'T' (Kelvin).")
         af = self.A.compile(ctx)
         ef = self.Ea.compile(ctx)
 
@@ -492,9 +487,7 @@ class pHSwitchNode(ASTNode):
 
     def compile(self, ctx: CompileContext) -> RateCallable:
         if "pH" not in ctx.condition_fields:
-            raise KeyError(
-                "pH_switch(...) requires a condition field named 'pH'."
-            )
+            raise KeyError("pH_switch(...) requires a condition field named 'pH'.")
         kf = self.pKa.compile(ctx)
         ln10 = float(jnp.log(10.0))
 

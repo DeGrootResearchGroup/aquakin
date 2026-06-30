@@ -108,26 +108,28 @@ class MassBalance:
 
     def closed(self, rtol: float = 1.0e-2) -> bool:
         """True when every component's ``relative_imbalance`` is within ``rtol``."""
-        return all(abs(c.relative_imbalance) <= rtol
-                   for c in self.components.values())
+        return all(abs(c.relative_imbalance) <= rtol for c in self.components.values())
 
     def summary(self) -> str:
         """A printable per-component table (canonical g over the window)."""
         t0, t1 = self.window
-        lines = [f"Mass balance over t = [{t0:g}, {t1:g}] "
-                 f"(canonical g of component over the window):",
-                 f"  {'comp':4s} {'in':>13s} {'out':>13s} {'gas':>13s} "
-                 f"{'accum':>13s} {'imbalance':>13s} {'rel':>10s}"]
+        lines = [
+            f"Mass balance over t = [{t0:g}, {t1:g}] (canonical g of component over the window):",
+            f"  {'comp':4s} {'in':>13s} {'out':>13s} {'gas':>13s} "
+            f"{'accum':>13s} {'imbalance':>13s} {'rel':>10s}",
+        ]
         for name, c in self.components.items():
             lines.append(
                 f"  {name:4s} {c.inflow:13.4g} {c.outflow:13.4g} {c.gas:13.4g} "
                 f"{c.accumulation:13.4g} {c.imbalance:13.4g} "
-                f"{c.relative_imbalance:10.2e}")
+                f"{c.relative_imbalance:10.2e}"
+            )
         lines.append(f"  closed (rtol=1e-2): {self.closed()}")
         return "\n".join(lines)
 
 
 # --- per-unit inventory ------------------------------------------------------
+
 
 def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
     """Component inventory held in one unit (a ``{component: grams}`` dict).
@@ -146,7 +148,7 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
     net = getattr(unit, "network", None)
     if net is None or state_vec.size == 0:
         return {}
-    content = content_by_network[net.name]      # {component: (n_species,) array}
+    content = content_by_network[net.name]  # {component: (n_species,) array}
 
     # Layered Takács settler: the particulate head block is (n_layers, n_part);
     # inventory is the blanket summed over layers at the per-layer volume. With
@@ -178,11 +180,11 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
     # of risking silent misclassification.
     if hasattr(unit, "liquid_volume"):
         V = float(unit.liquid_volume(state_vec))
-        C = sv[:net.n_species]
+        C = sv[: net.n_species]
         return {comp: V * float(np.dot(C, vec)) for comp, vec in content.items()}
 
     if sv.size != net.n_species:
-        return {}                                # non-concentration state; skip
+        return {}  # non-concentration state; skip
     volume = float(getattr(unit, "volume", 0.0))
     if volume <= 0.0:
         return {}
@@ -191,8 +193,7 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
     vol_vec = np.full(net.n_species, volume)
     if "S_gas_ch4" in net.species_index:
         p_unit = plant._params_for_unit(unit_name, params)
-        v_gas = (float(p_unit[net.param_index["V_gas"]])
-                 if "V_gas" in net.param_index else volume)
+        v_gas = float(p_unit[net.param_index["V_gas"]]) if "V_gas" in net.param_index else volume
         for sp in ("S_gas_h2", "S_gas_ch4", "S_gas_co2"):
             if sp in net.species_index:
                 vol_vec[net.species_index[sp]] = v_gas
@@ -218,8 +219,7 @@ def mass_balance(
     :meth:`aquakin.plant.Plant.mass_balance`."""
     import jax.numpy as jnp
 
-    params = (plant.default_parameters() if params is None
-              else jnp.asarray(params))
+    params = plant.default_parameters() if params is None else jnp.asarray(params)
     plant._build_state_layout()
     plant._build_parameter_layout()
     t = np.asarray(solution.t)
@@ -227,7 +227,7 @@ def mass_balance(
 
     # Canonical content vectors per network, keeping only components the network
     # actually carries (a network with no P contributes nothing to the P balance).
-    networks = {}                                # name -> CompiledNetwork
+    networks = {}  # name -> CompiledNetwork
     for u in plant.units.values():
         net = getattr(u, "network", None)
         if net is not None:
@@ -245,9 +245,10 @@ def mass_balance(
         if net is not None and net.name not in net_params:
             net_params[net.name] = plant._params_for_unit(uname, params)
     content_by_network = {
-        name: {q: canonical_content(net, q, electron_acceptor_cod=False,
-                                    params=net_params.get(name))
-               for q in components}
+        name: {
+            q: canonical_content(net, q, electron_acceptor_cod=False, params=net_params.get(name))
+            for q in components
+        }
         for name, net in networks.items()
     }
     comps = list(components)
@@ -255,8 +256,7 @@ def mass_balance(
     # --- boundary ports ------------------------------------------------------
     if effluent_ports is None:
         effluent_ports = list(plant.check().dangling_outputs)
-    in_names = (list(plant.influents) if influent_ports is None
-                else list(influent_ports))
+    in_names = list(plant.influents) if influent_ports is None else list(influent_ports)
 
     # --- inflow (influent series) -------------------------------------------
     inflow = {q: 0.0 for q in comps}
@@ -283,10 +283,12 @@ def mass_balance(
             Q_dose = np.full(len(t), float(u.flow))
         else:
             sig = u.required_signals[0]
-            Q_dose = np.asarray([
-                float(plant.signals_at(tt, solution.state[i], params)[sig]
-                      * u.gain)
-                for i, tt in enumerate(t)])
+            Q_dose = np.asarray(
+                [
+                    float(plant.signals_at(tt, solution.state[i], params)[sig] * u.gain)
+                    for i, tt in enumerate(t)
+                ]
+            )
         C_dose = np.broadcast_to(comp_vec, (len(t), comp_vec.shape[0]))
         for q in comps:
             inflow[q] += float(np.trapezoid(_flux(Q_dose, C_dose, cvec[q]), t))
@@ -295,23 +297,25 @@ def mass_balance(
     outflow = {q: 0.0 for q in comps}
     if effluent_ports:
         from aquakin.plant.bsm.evaluation import _reconstruct
+
         recon = _reconstruct(plant, solution, params, effluent_ports)
         for ep in effluent_ports:
             Q, C = recon[ep]
             unit = plant._parse_endpoint(ep, role="source")[0]
             cvec = content_by_network[plant.units[unit].network.name]
             for q in comps:
-                outflow[q] += float(np.trapezoid(
-                    _flux(np.asarray(Q), np.asarray(C), cvec[q]), t))
+                outflow[q] += float(np.trapezoid(_flux(np.asarray(Q), np.asarray(C), cvec[q]), t))
 
     # --- accumulation (inventory change t1 - t0) ----------------------------
     accumulation = {q: 0.0 for q in comps}
     layout = plant._state_layout
     for unit_name, (start, size) in layout.items():
-        inv0 = _unit_inventory(plant, unit_name, solution.state[0][start:start + size],
-                               content_by_network, params)
-        inv1 = _unit_inventory(plant, unit_name, solution.state[-1][start:start + size],
-                               content_by_network, params)
+        inv0 = _unit_inventory(
+            plant, unit_name, solution.state[0][start : start + size], content_by_network, params
+        )
+        inv1 = _unit_inventory(
+            plant, unit_name, solution.state[-1][start : start + size], content_by_network, params
+        )
         for q in comps:
             accumulation[q] += inv1.get(q, 0.0) - inv0.get(q, 0.0)
 
@@ -327,8 +331,7 @@ def mass_balance(
     gas = {q: 0.0 for q in comps}
     gas_detail = {}
 
-    o2_transfer, R = _reaction_and_aeration_gas(
-        plant, solution, params, content_by_network, comps)
+    o2_transfer, R = _reaction_and_aeration_gas(plant, solution, params, content_by_network, comps)
     if "COD" in comps:
         gas["COD"] += o2_transfer - R.get("COD", 0.0)
         gas_detail["aeration_O2"] = o2_transfer
@@ -336,7 +339,7 @@ def mass_balance(
     if "N" in comps:
         gas["N"] += -R.get("N", 0.0)
         gas_detail["denitrification_N2"] = -R.get("N", 0.0)
-    biogas = _biogas_cod(plant, solution, params)        # informational only
+    biogas = _biogas_cod(plant, solution, params)  # informational only
     if biogas is not None:
         gas_detail["biogas_COD"] = biogas
 
@@ -344,11 +347,20 @@ def mass_balance(
     for q in comps:
         imb = inflow[q] - outflow[q] - gas[q] - accumulation[q]
         out[q] = ComponentBalance(
-            component=q, inflow=inflow[q], outflow=outflow[q], gas=gas[q],
-            accumulation=accumulation[q], imbalance=imb)
-    return MassBalance(components=out, window=window,
-                       influent_ports=in_names, effluent_ports=list(effluent_ports),
-                       gas_detail=gas_detail)
+            component=q,
+            inflow=inflow[q],
+            outflow=outflow[q],
+            gas=gas[q],
+            accumulation=accumulation[q],
+            imbalance=imb,
+        )
+    return MassBalance(
+        components=out,
+        window=window,
+        influent_ports=in_names,
+        effluent_ports=list(effluent_ports),
+        gas_detail=gas_detail,
+    )
 
 
 def _reaction_volume(plant, unit_name, params):
@@ -361,8 +373,7 @@ def _reaction_volume(plant, unit_name, params):
     vol = np.full(net.n_species, V)
     if "S_gas_ch4" in net.species_index:
         p_unit = plant._params_for_unit(unit_name, params)
-        v_gas = (float(p_unit[net.param_index["V_gas"]])
-                 if "V_gas" in net.param_index else V)
+        v_gas = float(p_unit[net.param_index["V_gas"]]) if "V_gas" in net.param_index else V
         for sp in ("S_gas_h2", "S_gas_ch4", "S_gas_co2"):
             if sp in net.species_index:
                 vol[net.species_index[sp]] = v_gas
@@ -377,11 +388,11 @@ def _reaction_term(plant, unit_name, C, params):
     unit = plant.units[unit_name]
     net = unit.network
     p_unit = plant._params_for_unit(unit_name, params)
-    if hasattr(unit, "_liquid_mask"):                # ADM1 digester
+    if hasattr(unit, "_liquid_mask"):  # ADM1 digester
         if getattr(unit, "_v_liq_idx", None) is not None:
             p_unit = p_unit.at[unit._v_liq_idx].set(float(unit.volume))
         return net.dCdt(C, p_unit, unit._condition_arrays, 0)
-    stoich = net.compute_stoich(p_unit)              # aerated/anoxic CSTR
+    stoich = net.compute_stoich(p_unit)  # aerated/anoxic CSTR
     rates = net.rates(C, p_unit, unit._condition_arrays, 0)
     return stoich.T @ rates
 
@@ -403,15 +414,22 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_network, comp
     t = np.asarray(solution.t)
     layout = plant._state_layout
 
-    reactive = [n for n in plant._unit_order
-                if hasattr(plant.units[n], "aeration")
-                or hasattr(plant.units[n], "_liquid_mask")]
+    reactive = [
+        n
+        for n in plant._unit_order
+        if hasattr(plant.units[n], "aeration") or hasattr(plant.units[n], "_liquid_mask")
+    ]
     aerated = [n for n in reactive if hasattr(plant.units[n], "aeration")]
     need_signals = any(plant.units[n]._controlled_kla for n in aerated)
     rqs = [q for q in comps if q in ("COD", "N")]
     vols = {n: _reaction_volume(plant, n, params) for n in reactive}
-    content = {n: {q: jnp.asarray(content_by_network[plant.units[n].network.name][q]
-                                  * vols[n]) for q in rqs} for n in reactive}
+    content = {
+        n: {
+            q: jnp.asarray(content_by_network[plant.units[n].network.name][q] * vols[n])
+            for q in rqs
+        }
+        for n in reactive
+    }
 
     # Which components each reactive unit can export to an untracked gas /
     # acceptor: an aerated/anoxic reactor reduces nitrate to N₂ (N) and oxidises
@@ -419,13 +437,14 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_network, comp
     # no nitrogen gas phase, so it must NOT contribute to the N gas term -- if its
     # reactions do not conserve N, that surfaces as a balance imbalance rather
     # than being silently absorbed.
-    gas_comps = {n: (set(rqs) if hasattr(plant.units[n], "aeration")
-                     else {q for q in rqs if q != "N"})
-                 for n in reactive}
+    gas_comps = {
+        n: (set(rqs) if hasattr(plant.units[n], "aeration") else {q for q in rqs if q != "N"})
+        for n in reactive
+    }
     o2_rows, R_rows = [], {q: [] for q in rqs}
     for i in range(t.shape[0]):
         state_i = solution.state[i]
-        sig = (plant.signals_at(t[i], state_i, params) if need_signals else {})
+        sig = plant.signals_at(t[i], state_i, params) if need_signals else {}
         o2 = 0.0
         R = {q: 0.0 for q in rqs}
         for name in reactive:
@@ -435,16 +454,15 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_network, comp
             # state (an MBR's fouling resistance), which the per-species reaction
             # and aeration terms must not see.
             n_sp = unit.network.n_species
-            C = state_i[start:start + n_sp]
+            C = state_i[start : start + n_sp]
             react = _reaction_term(plant, name, C, params)
             for q in gas_comps[name]:
                 R[q] += float(jnp.dot(react, content[name][q]))
-            if name in aerated:                      # aeration O2 source (only SO)
+            if name in aerated:  # aeration O2 source (only SO)
                 kla = unit._kla_vec
                 ctrl = unit._controlled_kla.get("SO")
                 if ctrl is not None and sig:
-                    kla = kla.at[unit.network.species_index["SO"]].set(
-                        sig[ctrl[0]] * ctrl[1])
+                    kla = kla.at[unit.network.species_index["SO"]].set(sig[ctrl[0]] * ctrl[1])
                 o2 += float(jnp.sum(kla * (unit._sat_vec - C)) * float(unit.volume))
         o2_rows.append(o2)
         for q in rqs:
@@ -465,5 +483,5 @@ def _biogas_cod(plant, solution, params):
     except ValueError:
         return None
     t = np.asarray(solution.t)
-    ch4_g_per_d = np.asarray(gas.ch4) * 1000.0 * _COD_PER_CH4   # kg/d -> g COD/d
+    ch4_g_per_d = np.asarray(gas.ch4) * 1000.0 * _COD_PER_CH4  # kg/d -> g COD/d
     return float(np.trapezoid(ch4_g_per_d, t))

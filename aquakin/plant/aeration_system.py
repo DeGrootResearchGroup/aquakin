@@ -44,8 +44,8 @@ import jax.numpy as jnp
 from aquakin.plant.metrics import _time_average as _metrics_time_average
 
 # Standard physical constants (SI).
-_RHO_WATER = 1000.0       # kg/m3
-_G = 9.80665              # m/s2
+_RHO_WATER = 1000.0  # kg/m3
+_G = 9.80665  # m/s2
 _SECONDS_PER_DAY = 86400.0
 _HOURS_PER_DAY = 24.0
 
@@ -119,13 +119,9 @@ class AerationSystem:
             )
         for name in ("o2_per_air", "blower_efficiency", "standard_do_sat"):
             if getattr(self, name) <= 0.0:
-                raise ValueError(
-                    f"AerationSystem {name} must be > 0, got {getattr(self, name)}."
-                )
+                raise ValueError(f"AerationSystem {name} must be > 0, got {getattr(self, name)}.")
         if self.gamma <= 1.0:
-            raise ValueError(
-                f"AerationSystem gamma must be > 1, got {self.gamma}."
-            )
+            raise ValueError(f"AerationSystem gamma must be > 1, got {self.gamma}.")
 
     def effective_sote(self) -> float:
         """The standard oxygen-transfer efficiency actually used: the declared
@@ -136,7 +132,7 @@ class AerationSystem:
     def discharge_pressure_kpa(self) -> float:
         """Blower discharge pressure: atmospheric + the static submergence head
         ``ρ_w·g·depth`` + the diffuser/piping ``headloss_kpa`` (kPa)."""
-        static = _RHO_WATER * _G * self.depth / 1000.0   # Pa -> kPa
+        static = _RHO_WATER * _G * self.depth / 1000.0  # Pa -> kPa
         return self.p_atm_kpa + static + self.headloss_kpa
 
 
@@ -174,12 +170,12 @@ def blower_power_kw(airflow_m3_per_d, system: AerationSystem):
     pressures in Pa, returned in kW. Linear in the airflow (the pressure ratio is
     fixed by the submergence), so AD-clean.
     """
-    Q = jnp.asarray(airflow_m3_per_d) / _SECONDS_PER_DAY        # m3/s
-    p1 = system.p_atm_kpa * 1000.0                              # Pa
-    p2 = system.discharge_pressure_kpa() * 1000.0              # Pa
+    Q = jnp.asarray(airflow_m3_per_d) / _SECONDS_PER_DAY  # m3/s
+    p1 = system.p_atm_kpa * 1000.0  # Pa
+    p2 = system.discharge_pressure_kpa() * 1000.0  # Pa
     n = (system.gamma - 1.0) / system.gamma
     watts = (Q * p1 / system.blower_efficiency) / n * ((p2 / p1) ** n - 1.0)
-    return watts / 1000.0                                       # kW
+    return watts / 1000.0  # kW
 
 
 def _time_average(values, t):
@@ -212,9 +208,9 @@ def blower_energy(t, kla_history, volumes, system: AerationSystem) -> float:
     """
     kla_history = jnp.asarray(kla_history)
     volumes = jnp.asarray(volumes)
-    q = required_airflow(kla_history, volumes[None, :], system)   # (n_t, n_tanks) m3/d
-    power = blower_power_kw(q, system)                           # (n_t, n_tanks) kW
-    total_power = jnp.sum(power, axis=1)                         # (n_t,) kW
+    q = required_airflow(kla_history, volumes[None, :], system)  # (n_t, n_tanks) m3/d
+    power = blower_power_kw(q, system)  # (n_t, n_tanks) kW
+    total_power = jnp.sum(power, axis=1)  # (n_t,) kW
     return float(_time_average(total_power, t) * _HOURS_PER_DAY)
 
 
@@ -222,13 +218,13 @@ def blower_energy(t, kla_history, volumes, system: AerationSystem) -> float:
 class AerationDesignPoint:
     """Sizing summary for one tank at one ``kLa`` (a design point)."""
 
-    kla: float                  # 1/d
-    volume: float               # m3
-    sote: float                 # effective standard transfer efficiency (fraction)
-    sotr: float                 # standard oxygen transfer rate (kg O2/d)
-    airflow: float              # m3/d
-    discharge_pressure: float   # kPa
-    power: float                # kW
+    kla: float  # 1/d
+    volume: float  # m3
+    sote: float  # effective standard transfer efficiency (fraction)
+    sotr: float  # standard oxygen transfer rate (kg O2/d)
+    airflow: float  # m3/d
+    discharge_pressure: float  # kPa
+    power: float  # kW
 
     def report(self) -> str:
         return (
@@ -256,7 +252,11 @@ def design_summary(kla, volume, system: AerationSystem) -> AerationDesignPoint:
     p = blower_power_kw(q, system)
     sotr = float(kla) * system.standard_do_sat * float(volume) / 1000.0
     return AerationDesignPoint(
-        kla=float(kla), volume=float(volume), sote=system.effective_sote(),
-        sotr=sotr, airflow=float(q),
-        discharge_pressure=system.discharge_pressure_kpa(), power=float(p),
+        kla=float(kla),
+        volume=float(volume),
+        sote=system.effective_sote(),
+        sotr=sotr,
+        airflow=float(q),
+        discharge_pressure=system.discharge_pressure_kpa(),
+        power=float(p),
     )

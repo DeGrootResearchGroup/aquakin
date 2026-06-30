@@ -43,6 +43,7 @@ The aqueous chemistry -- dissociation constants, acid/base free-ion fractions an
 activity coefficients -- is shared with the kinetic engine and the pH solver
 (:mod:`aquakin.core.ph_solver`, :mod:`aquakin.core.precipitation`).
 """
+
 from __future__ import annotations
 
 from typing import Callable
@@ -64,11 +65,11 @@ _LN10 = jnp.log(10.0)
 # (four competing minerals, free ion driven to ~1e-18 mol/L) to SI = 0 on the
 # present phases with the residual at machine zero; see the module tests.
 _N_ITER = 80
-_EPS_START = 1.0       # complementarity smoothing at the first iteration
-_EPS_END = 1.0e-9      # ... annealed geometrically to here (near-exact NCP)
-_LM_FLOOR = 1.0e-8     # Levenberg-Marquardt damping floor
-_LM_SCALE = 1.0e-2     # ... plus this times the residual norm (robust far out)
-_MAX_DLOG = 2.0        # max change in log10(free ion) per iteration
+_EPS_START = 1.0  # complementarity smoothing at the first iteration
+_EPS_END = 1.0e-9  # ... annealed geometrically to here (near-exact NCP)
+_LM_FLOOR = 1.0e-8  # Levenberg-Marquardt damping floor
+_LM_SCALE = 1.0e-2  # ... plus this times the residual norm (robust far out)
+_MAX_DLOG = 2.0  # max change in log10(free ion) per iteration
 
 
 def _build_equilibrium_system(minerals_cfg, species_index):
@@ -104,21 +105,23 @@ def _build_equilibrium_system(minerals_cfg, species_index):
 
     M = len(eq_minerals)
     N = len(ion_states)
-    Cmat = [[0.0] * N for _ in range(M)]        # conserved-ion count per mineral
+    Cmat = [[0.0] * N for _ in range(M)]  # conserved-ion count per mineral
     solid_idx: list[int] = []
-    log_ksp_ref: list[float] = []                # ln(Ksp) at the reference T
-    dH_sp: list[float] = []                      # enthalpy of dissolution (J/mol)
-    mineral_ions: list[list[tuple]] = []         # (kind, count, z2, frac, mm, ion_pos)
+    log_ksp_ref: list[float] = []  # ln(Ksp) at the reference T
+    dH_sp: list[float] = []  # enthalpy of dissolution (J/mol)
+    mineral_ions: list[list[tuple]] = []  # (kind, count, z2, frac, mm, ion_pos)
     produced: list[str] = []
     for mi, m in enumerate(eq_minerals):
         if m.get("solid") is None:
             raise ValueError(
                 f"equilibrium-mode mineral {m['name']!r} needs a 'solid:' species "
-                f"(the precipitated phase the equilibrium amount is reported for).")
+                f"(the precipitated phase the equilibrium amount is reported for)."
+            )
         if m["solid"] not in species_index:
             raise KeyError(
                 f"mineral {m['name']!r} solid {m['solid']!r} is not a declared "
-                f"species; declared: {sorted(species_index)}")
+                f"species; declared: {sorted(species_index)}"
+            )
         solid_idx.append(species_index[m["solid"]])
         log_ksp_ref.append(-float(m["pKsp"]) * float(_LN10))
         dH_sp.append(float(m.get("dH_sp", 0.0)))
@@ -138,9 +141,17 @@ def _build_equilibrium_system(minerals_cfg, species_index):
         mineral_ions.append(ions)
         produced.append(f"Xeq_{m['name']}")
 
-    return (produced, jnp.asarray(solid_idx), jnp.asarray(Cmat),
-            jnp.asarray(ion_states), jnp.asarray(ion_mm), ion_states,
-            mineral_ions, jnp.asarray(log_ksp_ref), jnp.asarray(dH_sp))
+    return (
+        produced,
+        jnp.asarray(solid_idx),
+        jnp.asarray(Cmat),
+        jnp.asarray(ion_states),
+        jnp.asarray(ion_mm),
+        ion_states,
+        mineral_ions,
+        jnp.asarray(log_ksp_ref),
+        jnp.asarray(dH_sp),
+    )
 
 
 def _make_si_fn(mineral_ions, log_ksp_ref, dH_sp):
@@ -153,6 +164,7 @@ def _make_si_fn(mineral_ions, log_ksp_ref, dH_sp):
     1/T)/R``), the same form and reference temperature as the kinetic engine.
     Returns each mineral's ``log10(IAP/Ksp)``.
     """
+
     def si(u, h, K, gamma, vant_hoff):
         out = []
         for ions, lk_ref, dH in zip(mineral_ions, log_ksp_ref, dH_sp):
@@ -163,17 +175,17 @@ def _make_si_fn(mineral_ions, log_ksp_ref, dH_sp):
                 elif kind == "hydroxide":
                     a = K["w"] / h
                 else:
-                    tot = jnp.power(10.0, u[pos]) / mm          # mol/L
+                    tot = jnp.power(10.0, u[pos]) / mm  # mol/L
                     fr = _FRACTIONS[frac](h, K) if kind in _FRACTIONS else 1.0
                     a = gamma(z2) * tot * fr
                 log_iap = log_iap + count * jnp.log(jnp.maximum(a, 1e-300))
             out.append((log_iap - (lk_ref + dH * vant_hoff)) / _LN10)
         return jnp.stack(out)
+
     return si
 
 
-def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model,
-                              ionic_strength_offset):
+def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model, ionic_strength_offset):
     """Solve the coupled mineral equilibrium for the phase amounts.
 
     Parameters
@@ -215,14 +227,15 @@ def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model,
         def gamma(z2):
             return jnp.power(10.0, _log10_gamma(z2, sqrt_I, I, A, model))
     else:
+
         def gamma(z2):
             return 1.0
 
     def residual(w, eps):
         u = w[:N]
         X = w[N:]
-        mass = jnp.power(10.0, u) + X @ Cmat - totals          # (N,) feasibility
-        si = si_fn(u, h, K, gamma, vant_hoff)                  # (M,)
+        mass = jnp.power(10.0, u) + X @ Cmat - totals  # (N,) feasibility
+        si = si_fn(u, h, K, gamma, vant_hoff)  # (M,)
         # Smoothed Fischer-Burmeister: phi(X, -SI) = 0  <=>  X>=0, SI<=0, X*SI=0.
         fb = X + (-si) - jnp.sqrt(X * X + si * si + eps * eps)
         return jnp.concatenate([mass, fb])
@@ -237,7 +250,7 @@ def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model,
         r = residual(w, eps)
         J = jax.jacobian(lambda ww: residual(ww, eps))(w)
         nrm = jnp.sqrt(jnp.sum(r * r))
-        lam = _LM_FLOOR + _LM_SCALE * nrm           # residual-adaptive damping
+        lam = _LM_FLOOR + _LM_SCALE * nrm  # residual-adaptive damping
         dw = jnp.linalg.solve(J.T @ J + lam * eye, -(J.T @ r))
         du = jnp.clip(dw[:N], -_MAX_DLOG, _MAX_DLOG)  # bounded log-free-ion step
         return w + jnp.concatenate([du, dw[N:]]), None
@@ -290,8 +303,17 @@ def build_precipitation_equilibrium_derived_fn(
     built = _build_equilibrium_system(config["minerals"], species_index)
     if built is None:
         return None
-    (produced, solid_idx, Cmat, ion_states_arr, _ion_mm, ion_states,
-     mineral_ions, log_ksp_ref, dH_sp) = built
+    (
+        produced,
+        solid_idx,
+        Cmat,
+        ion_states_arr,
+        _ion_mm,
+        ion_states,
+        mineral_ions,
+        log_ksp_ref,
+        dH_sp,
+    ) = built
 
     pH_field = config.get("pH_field", "pH")
     temp_field = config.get("temperature_field", "T")
@@ -309,12 +331,12 @@ def build_precipitation_equilibrium_derived_fn(
         h = jnp.power(10.0, -pH)
         # Total conserved-ion inventory = dissolved + that bound in the
         # equilibrium solids (so the solve captures redissolution / ripening).
-        dissolved = jnp.maximum(C[ion_states_arr], 0.0)               # (N,)
-        solids = jnp.maximum(C[solid_idx], 0.0)                       # (M,)
-        totals = dissolved + solids @ Cmat                           # (N,)
+        dissolved = jnp.maximum(C[ion_states_arr], 0.0)  # (N,)
+        solids = jnp.maximum(C[solid_idx], 0.0)  # (M,)
+        totals = dissolved + solids @ Cmat  # (N,)
         Xeq = solve_equilibrium_amounts(
-            totals, h, T_kelvin, si_fn=si_fn, Cmat=Cmat, model=model,
-            ionic_strength_offset=I_offset)
+            totals, h, T_kelvin, si_fn=si_fn, Cmat=Cmat, model=model, ionic_strength_offset=I_offset
+        )
         return Xeq, totals
 
     def derived(C, params, condition_arrays, loc_idx) -> dict:
@@ -326,7 +348,7 @@ def build_precipitation_equilibrium_derived_fn(
         equilibrium solid to its equilibrium amount and rebalance the conserved
         dissolved ions (mass-conserving)."""
         Xeq, totals = _solve(C, condition_arrays, loc_idx)
-        new_dissolved = totals - Xeq @ Cmat                          # (N,)
+        new_dissolved = totals - Xeq @ Cmat  # (N,)
         out = C
         out = out.at[ion_states_arr].set(new_dissolved)
         out = out.at[solid_idx].set(Xeq)

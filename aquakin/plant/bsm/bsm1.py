@@ -99,17 +99,18 @@ def build_bsm1(
     """
     if closed_loop_do:
         raise NotImplementedError(
-            "Closed-loop DO control will be added in a follow-up; "
-            "set closed_loop_do=False for now."
+            "Closed-loop DO control will be added in a follow-up; set closed_loop_do=False for now."
         )
 
     if network is None:
         import aquakin
+
         network = aquakin.load_network("asm1")
 
     if conditions is None:
-        conditions = {name: network._condition_defaults[name]
-                      for name in network.conditions_required}
+        conditions = {
+            name: network._condition_defaults[name] for name in network.conditions_required
+        }
 
     plant = Plant("BSM1")
 
@@ -125,8 +126,7 @@ def build_bsm1(
 
     # ----- 5 CSTR tanks -----
     for i in range(5):
-        aeration = (Aeration(kla=BSM1_KLA[i], do_sat=BSM1_DO_SATURATION)
-                    if BSM1_KLA[i] > 0 else None)
+        aeration = Aeration(kla=BSM1_KLA[i], do_sat=BSM1_DO_SATURATION) if BSM1_KLA[i] > 0 else None
         plant.add_unit(
             CSTRUnit(
                 name=f"tank{i + 1}",

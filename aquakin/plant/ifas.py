@@ -57,11 +57,10 @@ def _default_biofilm_fixed_mask(network, soluble_mask) -> jnp.ndarray:
     network (for ASM1 it freezes ``XI``/``XB_H``/``XB_A``/``XP`` and leaves
     ``XS``/``XND`` dynamic).
     """
-    stoich = network.compute_stoich(network.default_parameters())   # (n_rxn, n_sp)
+    stoich = network.compute_stoich(network.default_parameters())  # (n_rxn, n_sp)
     particulate = ~soluble_mask
     produces_soluble = jnp.any((stoich > 0) & soluble_mask[None, :], axis=1)
-    consumed_into_soluble = jnp.any(
-        (stoich < 0) & produces_soluble[:, None], axis=0)
+    consumed_into_soluble = jnp.any((stoich < 0) & produces_soluble[:, None], axis=0)
     return particulate & ~consumed_into_soluble
 
 
@@ -161,18 +160,19 @@ class IFASUnit(AerationUnit, CouplingAware):
             )
         if not (0.0 < self.fill_fraction <= 1.0):
             raise ValueError(
-                f"IFASUnit '{self.name}' fill_fraction must be in (0, 1]; got "
-                f"{self.fill_fraction}."
+                f"IFASUnit '{self.name}' fill_fraction must be in (0, 1]; got {self.fill_fraction}."
             )
         if self.specific_surface_area <= 0 or self.volume <= 0:
             raise ValueError(
-                f"IFASUnit '{self.name}' specific_surface_area and volume must be "
-                "positive."
+                f"IFASUnit '{self.name}' specific_surface_area and volume must be positive."
             )
 
         n = self.network.n_species
-        soluble = (_default_soluble_mask(self.network) if self.soluble_mask is None
-                   else jnp.asarray(self.soluble_mask, dtype=bool))
+        soluble = (
+            _default_soluble_mask(self.network)
+            if self.soluble_mask is None
+            else jnp.asarray(self.soluble_mask, dtype=bool)
+        )
 
         # Carrier area per bulk volume (1/m): SSA of the media times the fill.
         area_per_volume = float(self.specific_surface_area) * float(self.fill_fraction)
@@ -207,9 +207,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         else:
             layer_fixed = jnp.asarray(self.biofilm_fixed_mask, dtype=bool)
         if layer_fixed.shape != (n,):
-            raise ValueError(
-                f"biofilm_fixed_mask must have shape ({n},); got {layer_fixed.shape}"
-            )
+            raise ValueError(f"biofilm_fixed_mask must have shape ({n},); got {layer_fixed.shape}")
         self._layer_fixed = layer_fixed
 
         # Bulk aeration vectors (the AerationUnit mixin, shared with CSTRUnit).
@@ -244,8 +242,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         the network defaults.
         """
         bulk = self.network.default_concentrations()
-        layer = (bulk if self.biofilm_initial is None
-                 else jnp.asarray(self.biofilm_initial))
+        layer = bulk if self.biofilm_initial is None else jnp.asarray(self.biofilm_initial)
         rows = jnp.concatenate(
             [bulk[None, :], jnp.tile(layer[None, :], (self.n_layers, 1))], axis=0
         )
@@ -257,9 +254,12 @@ class IFASUnit(AerationUnit, CouplingAware):
             return
         self.conditions = {**self.conditions, "T": float(temperature_K)}
         self._condition_arrays = {
-            **self._condition_arrays, "T": jnp.asarray([float(temperature_K)])}
+            **self._condition_arrays,
+            "T": jnp.asarray([float(temperature_K)]),
+        }
         self._biofilm.conditions = SpatialConditions.uniform(
-            **{k: float(v) for k, v in self.conditions.items()})
+            **{k: float(v) for k, v in self.conditions.items()}
+        )
 
     def coupling_pattern(self):
         """Structural Jacobian sparsity (issue #388).
@@ -288,29 +288,26 @@ class IFASUnit(AerationUnit, CouplingAware):
         m = self.state_size
         params = net.default_parameters()
         state0 = np.asarray(self.initial_state())
-        base_C = jnp.asarray(np.maximum(np.abs(np.asarray(
-            net.default_concentrations())), 1e-3))
-        Q = jnp.asarray(self.volume)                 # representative positive inflow
-        inputs = {nm: Stream(Q=Q, C=base_C, network=net)
-                  for nm in self.input_port_names}
+        base_C = jnp.asarray(np.maximum(np.abs(np.asarray(net.default_concentrations())), 1e-3))
+        Q = jnp.asarray(self.volume)  # representative positive inflow
+        inputs = {nm: Stream(Q=Q, C=base_C, network=net) for nm in self.input_port_names}
 
         # AD over diverse states: the (linear) diffusion + convection + aeration
         # couplings are captured exactly; the reaction kinetics are unioned from the
         # AST below (saturated Monod is invisible to AD).
-        jac = lambda s: jax.jacfwd(lambda x: self.rhs(jnp.asarray(0.0), x, inputs,
-                                                      params))(s)
+        jac = lambda s: jax.jacfwd(lambda x: self.rhs(jnp.asarray(0.0), x, inputs, params))(s)
         self_pat = ad_union(jac, state0)
 
-        kin = structural_sparsity_pattern(net)       # (n, n) reaction couplings
+        kin = structural_sparsity_pattern(net)  # (n, n) reaction couplings
         layer_kin = kin.copy()
-        layer_kin[np.asarray(self._layer_fixed), :] = False   # frozen layer rates
+        layer_kin[np.asarray(self._layer_fixed), :] = False  # frozen layer rates
         for c in range(n_comp):
-            block = kin if c == 0 else layer_kin     # bulk fully dynamic
-            self_pat[c * n:(c + 1) * n, c * n:(c + 1) * n] |= block
+            block = kin if c == 0 else layer_kin  # bulk fully dynamic
+            self_pat[c * n : (c + 1) * n, c * n : (c + 1) * n] |= block
         np.fill_diagonal(self_pat, True)
 
         inlet_pat = np.zeros((m, n), dtype=bool)
-        inlet_pat[:n, :] = np.eye(n, dtype=bool)     # inflow dilutes the bulk row
+        inlet_pat[:n, :] = np.eye(n, dtype=bool)  # inflow dilutes the bulk row
         return CouplingPattern(self_pattern=self_pat, inlet_pattern=inlet_pat)
 
     def _bulk(self, state: jnp.ndarray) -> jnp.ndarray:
@@ -329,7 +326,9 @@ class IFASUnit(AerationUnit, CouplingAware):
             Q_total = Q_total + inputs[nm].Q
         return {
             self.output_port: Stream(
-                Q=Q_total, C=self._bulk(state), network=self.network,
+                Q=Q_total,
+                C=self._bulk(state),
+                network=self.network,
                 T=self._mixed_inlet_T(inputs),
             )
         }
@@ -349,7 +348,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         params: jnp.ndarray,
         signals: dict | None = None,
     ) -> jnp.ndarray:
-        y = state.reshape(self._n_comp, self._n)        # row 0 bulk, 1.. layers
+        y = state.reshape(self._n_comp, self._n)  # row 0 bulk, 1.. layers
 
         # Inlet temperature drives the (bulk + biofilm) kinetics through the 'T'
         # condition, exactly as for a CSTR.
@@ -362,7 +361,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         # the BiofilmReactor RHS, finite-volume face fluxes between bulk<->surface
         # <->...<->wall plus reaction in every cell. Reused, not reimplemented.
         bio_rhs = self._biofilm._make_rhs(conditions, params)
-        dydt = bio_rhs(t, y, params)                     # (n_comp, n_species)
+        dydt = bio_rhs(t, y, params)  # (n_comp, n_species)
 
         # Hold the mature attached biomass fixed in the LAYERS only (the suspended
         # bulk biomass stays dynamic): zero the fixed species' layer rates.

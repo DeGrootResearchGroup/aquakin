@@ -41,6 +41,7 @@ by the implicit function theorem -- differentiating *through* the iteration is
 neither possible (a ``while_loop``) nor necessary, since at the root
 ``F(y*, theta) = 0`` fixes ``dy*/dtheta = -(dF/dy)^{-1} (dF/dtheta)``.
 """
+
 from __future__ import annotations
 
 import functools
@@ -166,8 +167,8 @@ def ptc_forward(
     """
     n = y0.shape[0]
     eye = jnp.eye(n)
-    reject_shrink = 0.1     # dt multiplier on a rejected step (toward stability)
-    dt_min = 1e-12          # floor so a rejected dt cannot underflow to zero
+    reject_shrink = 0.1  # dt multiplier on a rejected step (toward stability)
+    dt_min = 1e-12  # floor so a rejected dt cannot underflow to zero
 
     def F(y):
         return rhs(y, params)
@@ -199,9 +200,9 @@ def ptc_forward(
     #      converges most cases quickly and hands the rest to those fallbacks.
     # On a step that cannot be brought within the bound, the iterate is held and dt
     # hard-shrunk for a stabler retry.
-    ftb_tau = 0.95          # fraction-to-boundary safety factor (item 1)
-    ls_beta = 0.5           # backtracking step factor (item 2)
-    ls_max = 20             # max backtracks (alpha shrinks to ~1e-6)
+    ftb_tau = 0.95  # fraction-to-boundary safety factor (item 1)
+    ls_beta = 0.5  # backtracking step factor (item 2)
+    ls_max = 20  # max backtracks (alpha shrinks to ~1e-6)
 
     def step(carry):
         y, dt, r, r_best, k = carry
@@ -224,7 +225,7 @@ def ptc_forward(
         def _trial(alpha):
             yt = y + alpha * dy
             if nonneg:
-                yt = jnp.maximum(yt, 0.0)   # clip any residual roundoff negatives
+                yt = jnp.maximum(yt, 0.0)  # clip any residual roundoff negatives
             return yt, _scaled_resnorm(F(yt), yt, scale_floor)
 
         # (2) Backtrack while the step overshoots beyond divergence_factor x the
@@ -244,7 +245,8 @@ def ptc_forward(
             return (a, yt, rt, j + 1)
 
         _, y_trial, r_trial, _ = jax.lax.while_loop(
-            _ls_cond, _ls_body, (alpha0, yt0, rt0, jnp.asarray(0)))
+            _ls_cond, _ls_body, (alpha0, yt0, rt0, jnp.asarray(0))
+        )
 
         # Accept a step within the bound; otherwise hold the iterate and hard-shrink
         # dt for a stabler retry (the net for a direction the line search could not
@@ -257,9 +259,9 @@ def ptc_forward(
         # ratio (capped above, floored below). Reject: hard-shrink dt toward the
         # stable limit (floored so it cannot underflow to zero).
         ser = jnp.clip(r / jnp.maximum(r_trial, 1e-30), shrink_floor, growth_cap)
-        dt_new = jnp.where(accept,
-                           jnp.minimum(dt_max, dt * ser),
-                           jnp.maximum(dt * reject_shrink, dt_min))
+        dt_new = jnp.where(
+            accept, jnp.minimum(dt_max, dt * ser), jnp.maximum(dt * reject_shrink, dt_min)
+        )
         return (y_new, dt_new, r_new, r_best_new, k + 1)
 
     def cond(carry):
@@ -334,17 +336,14 @@ def solve_steady_state(
         ``state`` carries the IFT gradient w.r.t. ``params``.
     """
     y_star, residual, iterations, converged = ptc_forward(
-        rhs if primal_rhs is None else primal_rhs,
-        params, y0, jac_fn=jac_fn, **ptc_kwargs
+        rhs if primal_rhs is None else primal_rhs, params, y0, jac_fn=jac_fn, **ptc_kwargs
     )
     # The iteration is not reverse-differentiable (a while_loop); block any
     # attempt to differentiate through it and re-inject the exact parameter
     # gradient via the implicit function theorem below.
     y_star = jax.lax.stop_gradient(y_star)
     state = _ift_state(rhs, y_star, params)
-    return PTCResult(
-        state=state, residual=residual, iterations=iterations, converged=converged
-    )
+    return PTCResult(state=state, residual=residual, iterations=iterations, converged=converged)
 
 
 @dataclass
@@ -586,10 +585,25 @@ def make_arclength_kernels(rhs, scale, ptc_kwargs=None):
 
 
 def arclength_continuation_solve(
-    rhs, params_known, y_known, params_target, *, kernels=None, scale=None,
-    ptc_kwargs=None, dsigma0=0.05, dsigma_min=1.0e-5, dsigma_max=2.0,
-    ds_grow=1.6, ds_shrink=0.5, max_steps=1500, corrector_iters=15, tol=1.0e-6,
-    nonneg=True, s_tol=1.0e-4, fold_margin=2.0e-2,
+    rhs,
+    params_known,
+    y_known,
+    params_target,
+    *,
+    kernels=None,
+    scale=None,
+    ptc_kwargs=None,
+    dsigma0=0.05,
+    dsigma_min=1.0e-5,
+    dsigma_max=2.0,
+    ds_grow=1.6,
+    ds_shrink=0.5,
+    max_steps=1500,
+    corrector_iters=15,
+    tol=1.0e-6,
+    nonneg=True,
+    s_tol=1.0e-4,
+    fold_margin=2.0e-2,
 ):
     """Reach a far operating point by scaled pseudo-arclength continuation.
 
@@ -615,8 +629,7 @@ def arclength_continuation_solve(
     if scale is None:
         scale = jnp.maximum(jnp.abs(y_known), 1.0e-3)
     if kernels is None:
-        corrector, tangent, init_tangent = make_arclength_kernels(
-            rhs, scale, ptc_kwargs)
+        corrector, tangent, init_tangent = make_arclength_kernels(rhs, scale, ptc_kwargs)
     else:
         corrector, tangent, init_tangent = kernels
     dtheta = params_target - params_known
@@ -632,8 +645,7 @@ def arclength_continuation_solve(
         zc, sc, A = z0, s0, None
         rF = jnp.asarray(jnp.inf)
         for _ in range(int(corrector_iters)):
-            zc, sc, rF, A = corrector(
-                zc, sc, params_known, dtheta, uz, us, tzc, tsc, ds)
+            zc, sc, rF, A = corrector(zc, sc, params_known, dtheta, uz, us, tzc, tsc, ds)
             ncorr[0] += 1
             if nonneg:
                 zc = jnp.maximum(zc, 0.0)
@@ -644,8 +656,8 @@ def arclength_continuation_solve(
     def _result(state, res, status, smax, step):
         y_star = jax.lax.stop_gradient(state)
         return ArclengthResult(
-            _ift_state(rhs, y_star, params_target), res, status,
-            float(smax), step, ncorr[0])
+            _ift_state(rhs, y_star, params_target), res, status, float(smax), step, ncorr[0]
+        )
 
     for step in range(int(max_steps)):
         ts_prev = float(ts)

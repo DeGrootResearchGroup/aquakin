@@ -35,6 +35,7 @@ declared ``ionic_strength_offset`` plus the mineral ions' contribution, unless a
 the ionic strength a ``speciation:`` block solved the pH at, so the pH and the
 saturation indices share one ionic strength).
 """
+
 from __future__ import annotations
 
 from typing import Callable
@@ -52,14 +53,20 @@ from aquakin.core.temperature import van_t_hoff_factor
 # Each returns the fraction present as the fully de/protonated ion the minerals
 # use: CO3^2-, PO4^3-, NH4+, S^2-.
 _FRACTIONS = {
-    "carbonate": lambda h, K: (K["co3_1"] * K["co3_2"])
-    / (h * h + K["co3_1"] * h + K["co3_1"] * K["co3_2"]),
-    "phosphate": lambda h, K: (K["po4_1"] * K["po4_2"] * K["po4_3"])
-    / (h ** 3 + K["po4_1"] * h * h + K["po4_1"] * K["po4_2"] * h
-       + K["po4_1"] * K["po4_2"] * K["po4_3"]),
+    "carbonate": lambda h, K: (
+        (K["co3_1"] * K["co3_2"]) / (h * h + K["co3_1"] * h + K["co3_1"] * K["co3_2"])
+    ),
+    "phosphate": lambda h, K: (
+        (K["po4_1"] * K["po4_2"] * K["po4_3"])
+        / (
+            h**3
+            + K["po4_1"] * h * h
+            + K["po4_1"] * K["po4_2"] * h
+            + K["po4_1"] * K["po4_2"] * K["po4_3"]
+        )
+    ),
     "ammonia": lambda h, K: h / (h + K["nh"]),
-    "sulfide": lambda h, K: (K["s_1"] * K["s_2"])
-    / (h * h + K["s_1"] * h + K["s_1"] * K["s_2"]),
+    "sulfide": lambda h, K: (K["s_1"] * K["s_2"]) / (h * h + K["s_1"] * h + K["s_1"] * K["s_2"]),
 }
 
 # Specials computed from pH / water alone (no species total): "proton" is the
@@ -127,8 +134,8 @@ def build_precipitation_derived_fn(
         if m.get("mode") == "equilibrium":
             continue
         name = m["name"]
-        Ksp_ref = 10.0 ** (-float(m["pKsp"]))   # at the reference temperature _T_BASE
-        dH_sp = float(m.get("dH_sp", 0.0))       # enthalpy of dissolution (J/mol), van't Hoff
+        Ksp_ref = 10.0 ** (-float(m["pKsp"]))  # at the reference temperature _T_BASE
+        dH_sp = float(m.get("dH_sp", 0.0))  # enthalpy of dissolution (J/mol), van't Hoff
         order = float(m["order"])
         form = m.get("supersaturation_form", "power")
         nu = sum(int(ion["count"]) for ion in m["ions"])
@@ -138,25 +145,30 @@ def build_precipitation_derived_fn(
             if frac is not None and frac not in VALID_PRECIP_FRACTIONS:
                 raise ValueError(
                     f"mineral {name!r} ion has unknown fraction {frac!r}; valid: "
-                    f"{VALID_PRECIP_FRACTIONS} (or omit for a free cation).")
+                    f"{VALID_PRECIP_FRACTIONS} (or omit for a free cation)."
+                )
             sp = ion.get("species")
             if frac not in _PH_SPECIALS:
                 if sp is None:
                     raise ValueError(
                         f"mineral {name!r} ion needs a 'species' (only the "
-                        f"{_PH_SPECIALS} fractions may omit it).")
+                        f"{_PH_SPECIALS} fractions may omit it)."
+                    )
                 if sp not in species_index:
                     raise KeyError(
                         f"mineral {name!r} references undeclared species {sp!r}; "
-                        f"declared: {sorted(species_index)}")
+                        f"declared: {sorted(species_index)}"
+                    )
             idx = species_index[sp] if sp is not None else -1
-            ions.append((
-                idx,
-                float(ion.get("molar_mass", 1.0)),
-                int(ion["count"]),
-                float(ion["charge"]) ** 2,   # z^2 for the activity coefficient
-                frac,
-            ))
+            ions.append(
+                (
+                    idx,
+                    float(ion.get("molar_mass", 1.0)),
+                    int(ion["count"]),
+                    float(ion["charge"]) ** 2,  # z^2 for the activity coefficient
+                    frac,
+                )
+            )
         minerals.append((name, Ksp_ref, dH_sp, order, nu, ions, form))
         produced += [f"SI_{name}", f"R_{name}"]
 
@@ -164,7 +176,7 @@ def build_precipitation_derived_fn(
         T = condition_arrays[temp_field][loc_idx]
         T_kelvin = T + 273.15 if temp_units == "celsius" else T
         pH = condition_arrays[pH_field][loc_idx]
-        h = jnp.power(10.0, -pH)              # H+ activity (measurable-pH basis)
+        h = jnp.power(10.0, -pH)  # H+ activity (measurable-pH basis)
         K = equilibrium_constants(T_kelvin)
 
         # Ionic strength + activity coefficients (Davies / Debye-Hückel) once.
@@ -201,16 +213,16 @@ def build_precipitation_derived_fn(
             Ksp = Ksp_ref * jnp.exp(dH_sp * vant_hoff)
             log_iap = 0.0
             for idx, mm, count, z2, frac in ions:
-                if frac == "proton":               # H+ activity is h directly
+                if frac == "proton":  # H+ activity is h directly
                     a = h
-                elif frac == "hydroxide":          # OH- activity = Kw / [H+]
+                elif frac == "hydroxide":  # OH- activity = Kw / [H+]
                     a = K["w"] / h
                 else:
                     tot = jnp.maximum(C[idx], 0.0) / mm
                     a = gamma(z2) * tot * (_FRACTIONS[frac](h, K) if frac in _FRACTIONS else 1.0)
                 # guard the log against a depleted ion (a -> 0)
                 log_iap = log_iap + count * jnp.log(jnp.maximum(a, 1e-300))
-            si = (log_iap - jnp.log(Ksp)) / jnp.log(10.0)         # log10(IAP/Ksp)
+            si = (log_iap - jnp.log(Ksp)) / jnp.log(10.0)  # log10(IAP/Ksp)
             if form == "bounded":
                 # Thermodynamic driver bounded in (-1, 1): tanh(SI/(2 nu) ln10) =
                 # (Omega^(1/nu) - 1)/(Omega^(1/nu) + 1). R -> +-1 far from

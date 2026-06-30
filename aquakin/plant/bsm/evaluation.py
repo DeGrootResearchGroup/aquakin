@@ -67,18 +67,21 @@ _PRIMARY_UNDERFLOW_PORT = "primary.underflow"
 _THICKENER_UNDERFLOW_PORT = "thickener.underflow"
 _DO_SATURATION = 8.0  # gO2/m^3
 _DIGESTER_FEED_PORT = "sludge_mix.out"
-_DIGESTER_TARGET_T_C = 35.0     # digester operating temperature (BSM2)
-_DIGESTER_FEED_T_C = 15.0       # default feed temperature when streams carry no T
+_DIGESTER_TARGET_T_C = 35.0  # digester operating temperature (BSM2)
+_DIGESTER_FEED_T_C = 15.0  # default feed temperature when streams carry no T
 
 # Units for the keys returned by effluent_averages (g/m³, currency-specific).
 _EFFLUENT_UNITS = {
-    "COD": "g COD/m³", "BOD": "g BOD/m³", "TSS": "g SS/m³",
-    "TKN": "g N/m³", "SNH": "g N/m³", "SNO": "g N/m³",
+    "COD": "g COD/m³",
+    "BOD": "g BOD/m³",
+    "TSS": "g SS/m³",
+    "TKN": "g N/m³",
+    "SNH": "g N/m³",
+    "SNO": "g N/m³",
 }
 
 
-def _render_eval_report(title, eqi, oci, oci_formula, terms, effluent,
-                        aerated_tanks, note):
+def _render_eval_report(title, eqi, oci, oci_formula, terms, effluent, aerated_tanks, note):
     """Render a labeled, units-annotated EQI / OCI report.
 
     ``terms`` is a list of ``(label, value, unit, contribution)`` rows, where
@@ -87,9 +90,9 @@ def _render_eval_report(title, eqi, oci, oci_formula, terms, effluent,
     """
     width = max((len(lbl) for lbl, *_ in terms), default=0)
     lines = [
-        title, "=" * len(title),
-        f"  EQI  Effluent Quality Index = {eqi:14.1f}  kg poll.-units/d "
-        f" (lower is better)",
+        title,
+        "=" * len(title),
+        f"  EQI  Effluent Quality Index = {eqi:14.1f}  kg poll.-units/d  (lower is better)",
         f"  OCI  Operational Cost Index = {oci:14.1f}  (weighted cost units)",
         "",
         f"  OCI = {oci_formula}",
@@ -106,8 +109,9 @@ def _render_eval_report(title, eqi, oci, oci_formula, terms, effluent,
         lines.append(f"  Aerated reactors counted: {', '.join(aerated_tanks)}")
     if note:
         lines.append("")
-        lines += textwrap.wrap(note, width=76, initial_indent="  Note: ",
-                               subsequent_indent="        ")
+        lines += textwrap.wrap(
+            note, width=76, initial_indent="  Note: ", subsequent_indent="        "
+        )
     return "\n".join(lines)
 
 
@@ -202,30 +206,43 @@ class BSM2Evaluation:
         published values.
         """
         heat = max(0.0, self.heating_energy - 7.0 * self.methane_production)
-        ae_label = ("Aeration energy  AE (blower)" if self.air_flow is not None
-                    else "Aeration energy  AE")
+        ae_label = (
+            "Aeration energy  AE (blower)" if self.air_flow is not None else "Aeration energy  AE"
+        )
         terms = [
-            (ae_label, self.aeration_energy, "kWh/d", self.aeration_energy),]
+            (ae_label, self.aeration_energy, "kWh/d", self.aeration_energy),
+        ]
         if self.air_flow is not None:
             terms.append(("  air flow", self.air_flow, "m3/d", None))
         terms += [
-            ("Pumping energy   PE", self.pumping_energy, "kWh/d",
-             self.pumping_energy),
-            ("Mixing energy    ME", self.mixing_energy, "kWh/d",
-             self.mixing_energy),
-            ("Sludge prod.  (x3)", self.sludge_production, "kg TSS/d",
-             3.0 * self.sludge_production),
-            ("Ext. carbon   (x3)", self.carbon_mass, "kg COD/d",
-             3.0 * self.carbon_mass),
-            ("Methane      (x-6)", self.methane_production, "kg CH4/d",
-             -6.0 * self.methane_production),
+            ("Pumping energy   PE", self.pumping_energy, "kWh/d", self.pumping_energy),
+            ("Mixing energy    ME", self.mixing_energy, "kWh/d", self.mixing_energy),
+            (
+                "Sludge prod.  (x3)",
+                self.sludge_production,
+                "kg TSS/d",
+                3.0 * self.sludge_production,
+            ),
+            ("Ext. carbon   (x3)", self.carbon_mass, "kg COD/d", 3.0 * self.carbon_mass),
+            (
+                "Methane      (x-6)",
+                self.methane_production,
+                "kg CH4/d",
+                -6.0 * self.methane_production,
+            ),
             ("Heating energy HE", self.heating_energy, "kWh/d", None),
             ("  net heating (>=0)", heat, "kWh/d", heat),
         ]
         return _render_eval_report(
-            "BSM2 performance indices", self.eqi, self.oci,
+            "BSM2 performance indices",
+            self.eqi,
+            self.oci,
             "AE + PE + ME + 3*sludge + 3*carbon - 6*methane + max(0, HE - 7*methane)",
-            terms, self.effluent, self.aerated_tanks, self.oci_note)
+            terms,
+            self.effluent,
+            self.aerated_tanks,
+            self.oci_note,
+        )
 
     def __str__(self) -> str:
         return self.report()
@@ -253,9 +270,12 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
     need_signals = any(plant.units[n]._controlled_kla for n in tanks)
     if not need_signals:
         # Every tank's kLa is fixed: one constant row, tiled over time.
-        row = jnp.asarray([
-            float(plant.units[n]._kla_vec[plant.units[n].network.species_index["SO"]])
-            for n in tanks])
+        row = jnp.asarray(
+            [
+                float(plant.units[n]._kla_vec[plant.units[n].network.species_index["SO"]])
+                for n in tanks
+            ]
+        )
         return jnp.broadcast_to(row, (n_t, len(tanks)))
 
     # Closed-loop DO control: the manipulated kLa comes from the control signal,
@@ -271,8 +291,7 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
                 signal_name, gain = controlled
                 vals.append(sig[signal_name] * gain)
             else:
-                vals.append(jnp.asarray(
-                    float(unit._kla_vec[unit.network.species_index["SO"]])))
+                vals.append(jnp.asarray(float(unit._kla_vec[unit.network.species_index["SO"]])))
         return jnp.stack(vals)
 
     return jax.vmap(_row)(jnp.asarray(solution.t), jnp.asarray(solution.state))
@@ -297,8 +316,7 @@ def _reconstruct(plant, solution, params_full, endpoints):
     indices' ~8 streams and any later ``plant.stream`` call share one pass.
     """
     allstreams = plant._cached_streams(solution, params_full)
-    return {ep: allstreams[plant._parse_endpoint(ep, role="source")]
-            for ep in endpoints}
+    return {ep: allstreams[plant._parse_endpoint(ep, role="source")] for ep in endpoints}
 
 
 @dataclass
@@ -357,8 +375,7 @@ def digester_gas(plant, solution, params=None) -> DigesterGas:
     """
     name = _digester_unit_name(plant)
     adm1 = plant.units[name].network
-    params_full = (plant.default_parameters() if params is None
-                   else jnp.asarray(params))
+    params_full = plant.default_parameters() if params is None else jnp.asarray(params)
     plant._build_parameter_layout()
     p = plant._params_for_unit(name, params_full)
 
@@ -381,10 +398,11 @@ def digester_gas(plant, solution, params=None) -> DigesterGas:
     # normalization understates the biogas flow, and hence the methane production
     # and its OCI credit, by P_gas/P_atm (about 5% at the benchmark operating
     # point), while leaving the gas-phase concentrations unchanged.
-    Q_gas = k_P * (P_gas - P_atm) * P_gas / P_atm       # m3/d, normalized to P_atm
+    Q_gas = k_P * (P_gas - P_atm) * P_gas / P_atm  # m3/d, normalized to P_atm
     ch4_density = (p_ch4 / P_gas) * P_atm * 16.0 / R_T  # kg CH4/m3
-    return DigesterGas(t=solution.t, Q=Q_gas, p_ch4=p_ch4, p_co2=p_co2,
-                       p_h2=p_h2, ch4=ch4_density * Q_gas)
+    return DigesterGas(
+        t=solution.t, Q=Q_gas, p_ch4=p_ch4, p_co2=p_co2, p_h2=p_h2, ch4=ch4_density * Q_gas
+    )
 
 
 def _methane_production(plant, solution, params_full) -> float:
@@ -470,8 +488,7 @@ def evaluate_bsm2(
         EQI, OCI and all component terms.
     """
     network = plant.units["tank1"].network
-    params_full = (plant.default_parameters() if params is None
-                   else jnp.asarray(params))
+    params_full = plant.default_parameters() if params is None else jnp.asarray(params)
     # Composition (i_XB / i_XP / f_P) is read with the ASM1 network's *local*
     # param_index, so it must be sliced from the ASM1 block of the concatenated
     # plant vector -- not indexed into the full vector (which is correct only while
@@ -484,16 +501,25 @@ def evaluate_bsm2(
     # secondary overflow); fall back to detection for a plant with no recorded
     # endpoint.
     if effluent_port is None:
-        effluent_port = (
-            getattr(plant, "effluent_endpoint", None)
-            or ("effluent_mix.out" if "effluent_mix" in plant.units
-                else _EFFLUENT_PORT))
+        effluent_port = getattr(plant, "effluent_endpoint", None) or (
+            "effluent_mix.out" if "effluent_mix" in plant.units else _EFFLUENT_PORT
+        )
     # Reconstruct every needed output stream in a single pass over the states.
-    streams = _reconstruct(plant, solution, params_full, [
-        effluent_port, disposal_port, internal_recycle_port, ras_port,
-        waste_port, _PRIMARY_UNDERFLOW_PORT, _THICKENER_UNDERFLOW_PORT,
-        _DIGESTER_FEED_PORT,
-    ])
+    streams = _reconstruct(
+        plant,
+        solution,
+        params_full,
+        [
+            effluent_port,
+            disposal_port,
+            internal_recycle_port,
+            ras_port,
+            waste_port,
+            _PRIMARY_UNDERFLOW_PORT,
+            _THICKENER_UNDERFLOW_PORT,
+            _DIGESTER_FEED_PORT,
+        ],
+    )
 
     # ----- Effluent quality. -----
     eff_Q, eff_C = streams[effluent_port]
@@ -510,15 +536,13 @@ def evaluate_bsm2(
     if "effluent_mix" in plant.units:
         # The two source streams feeding the bypass combiner: the treated
         # secondary-clarifier overflow and the diverted raw influent.
-        comp = _reconstruct(plant, solution, params_full,
-                            [_EFFLUENT_PORT, "bypass_split.bypass"])
+        comp = _reconstruct(plant, solution, params_full, [_EFFLUENT_PORT, "bypass_split.bypass"])
         Qt, Ct = comp[_EFFLUENT_PORT]
         Qb, Cb = comp["bypass_split.bypass"]
         _, _, f_P = _composition(network, params_asm)
-        base_t = derived_BOD(Ct, network, f_P=f_P) / 0.25   # SS+XS+(1-fP)(XBH+XBA)
+        base_t = derived_BOD(Ct, network, f_P=f_P) / 0.25  # SS+XS+(1-fP)(XBH+XBA)
         base_b = derived_BOD(Cb, network, f_P=f_P) / 0.25
-        bod_load = (_time_average(t, 0.25 * base_t * Qt)
-                    + _time_average(t, 0.65 * base_b * Qb))
+        bod_load = _time_average(t, 0.25 * base_t * Qt) + _time_average(t, 0.65 * base_b * Qb)
         total_flow = _time_average(t, Qt + Qb)
         averages = {**averages, "BOD": float(bod_load / total_flow)}
         # The flat-weight EQI scored the bypass BOD at the treated 0.25 coefficient
@@ -526,8 +550,9 @@ def evaluate_bsm2(
         # weight on the bypass BOD load so the scored EQI carries the benchmark
         # bypass coefficient too. derived_BOD is linear, so the combined-effluent
         # BOD load already equals 0.25·(base_t·Qt + base_b·Qb).
-        eqi = eqi + float(_EQI_WEIGHTS["BOD"] * (0.65 - 0.25)
-                          * _time_average(t, base_b * Qb) * 1e-3)
+        eqi = eqi + float(
+            _EQI_WEIGHTS["BOD"] * (0.65 - 0.25) * _time_average(t, base_b * Qb) * 1e-3
+        )
 
     # ----- Aeration + mixing energy (actual kLa over the run). Both span all AS
     # reactors: anoxic tanks add no aeration (kLa=0) but do need mixing. -----
@@ -545,18 +570,20 @@ def evaluate_bsm2(
         air_flow = None
     V_digester = float(plant.units["digester"].volume)
     ME = mixing_energy(t, kla_hist, volumes, V_digester)
-    aerated = [reactors[i] for i in range(len(reactors))
-               if float(jnp.max(kla_hist[:, i])) > 0.0]
+    aerated = [reactors[i] for i in range(len(reactors)) if float(jnp.max(kla_hist[:, i])) > 0.0]
 
     # ----- Pumping energy (the full BSM2 pump set). -----
-    PE = pumping_energy_bsm2(t, {
-        "internal": streams[internal_recycle_port][0],
-        "ras": streams[ras_port][0],
-        "wastage": streams[waste_port][0],
-        "primary_underflow": streams[_PRIMARY_UNDERFLOW_PORT][0],
-        "thickener_underflow": streams[_THICKENER_UNDERFLOW_PORT][0],
-        "dewatering_underflow": streams[disposal_port][0],
-    })
+    PE = pumping_energy_bsm2(
+        t,
+        {
+            "internal": streams[internal_recycle_port][0],
+            "ras": streams[ras_port][0],
+            "wastage": streams[waste_port][0],
+            "primary_underflow": streams[_PRIMARY_UNDERFLOW_PORT][0],
+            "thickener_underflow": streams[_THICKENER_UNDERFLOW_PORT][0],
+            "dewatering_underflow": streams[disposal_port][0],
+        },
+    )
 
     # ----- Sludge production (TSS mass flow leaving to disposal, kg/d). -----
     disp_Q, disp_C = streams[disposal_port]
@@ -572,16 +599,17 @@ def evaluate_bsm2(
         conc = float(carbon_unit.reagent.composition[ss_idx])
         if carbon_unit.flow is not None:
             # Fixed dose: constant flow over the window.
-            Q_carbon = jnp.full_like(jnp.asarray(t, dtype=float),
-                                     float(carbon_unit.flow))
+            Q_carbon = jnp.full_like(jnp.asarray(t, dtype=float), float(carbon_unit.flow))
         else:
             # Feedback dose: the manipulated dose flow is the controller signal
             # (gain-scaled), reconstructed per saved state from the control bus.
             sig = carbon_unit.required_signals[0]
-            Q_carbon = jnp.stack([
-                plant.signals_at(ti, solution.state[i], params_full)[sig]
-                * carbon_unit.gain
-                for i, ti in enumerate(t)])
+            Q_carbon = jnp.stack(
+                [
+                    plant.signals_at(ti, solution.state[i], params_full)[sig] * carbon_unit.gain
+                    for i, ti in enumerate(t)
+                ]
+            )
         carbon = carbon_mass(t, Q_carbon, conc)
     else:
         carbon = 0.0
@@ -595,9 +623,17 @@ def evaluate_bsm2(
     oci = operational_cost_index_bsm2(AE, PE, ME, sludge, carbon, methane, HE)
 
     return BSM2Evaluation(
-        eqi=eqi, oci=oci, aeration_energy=AE, pumping_energy=PE, mixing_energy=ME,
-        sludge_production=sludge, carbon_mass=carbon, methane_production=methane,
-        heating_energy=HE, effluent=averages, aerated_tanks=aerated,
+        eqi=eqi,
+        oci=oci,
+        aeration_energy=AE,
+        pumping_energy=PE,
+        mixing_energy=ME,
+        sludge_production=sludge,
+        carbon_mass=carbon,
+        methane_production=methane,
+        heating_energy=HE,
+        effluent=averages,
+        aerated_tanks=aerated,
         air_flow=air_flow,
     )
 
@@ -669,21 +705,31 @@ class BSM1Evaluation:
 
         Shows each OCI term with its value, units and signed contribution to the
         index, the effluent averages, and the ``oci_note`` caveat."""
-        ae_label = ("Aeration energy  AE (blower)" if self.air_flow is not None
-                    else "Aeration energy  AE")
+        ae_label = (
+            "Aeration energy  AE (blower)" if self.air_flow is not None else "Aeration energy  AE"
+        )
         terms = [(ae_label, self.aeration_energy, "kWh/d", self.aeration_energy)]
         if self.air_flow is not None:
             terms.append(("  air flow", self.air_flow, "m3/d", None))
         terms += [
-            ("Pumping energy   PE", self.pumping_energy, "kWh/d",
-             self.pumping_energy),
-            ("Sludge prod.  (x5)", self.sludge_production, "kg TSS/d",
-             5.0 * self.sludge_production),
+            ("Pumping energy   PE", self.pumping_energy, "kWh/d", self.pumping_energy),
+            (
+                "Sludge prod.  (x5)",
+                self.sludge_production,
+                "kg TSS/d",
+                5.0 * self.sludge_production,
+            ),
         ]
         return _render_eval_report(
-            "BSM1 performance indices", self.eqi, self.oci,
-            "AE + PE + 5*sludge", terms, self.effluent, self.aerated_tanks,
-            self.oci_note)
+            "BSM1 performance indices",
+            self.eqi,
+            self.oci,
+            "AE + PE + 5*sludge",
+            terms,
+            self.effluent,
+            self.aerated_tanks,
+            self.oci_note,
+        )
 
     def __str__(self) -> str:
         return self.report()
@@ -731,17 +777,24 @@ def evaluate_bsm1(
         EQI, OCI and all component terms.
     """
     network = plant.units["tank1"].network
-    params_full = (plant.default_parameters() if params is None
-                   else jnp.asarray(params))
+    params_full = plant.default_parameters() if params is None else jnp.asarray(params)
     # Composition is read with the ASM1 network's local param_index, so slice the
     # ASM1 block from the concatenated plant vector (see evaluate_bsm2).
     params_asm = plant._params_for_unit("tank1", params_full)
     t = solution.t
 
     # Reconstruct every needed output stream in a single pass over the states.
-    streams = _reconstruct(plant, solution, params_full, [
-        effluent_port, internal_recycle_port, ras_port, waste_port,
-    ])
+    streams = _reconstruct(
+        plant,
+        solution,
+        params_full,
+        [
+            effluent_port,
+            internal_recycle_port,
+            ras_port,
+            waste_port,
+        ],
+    )
 
     # ----- Effluent quality. -----
     eff_Q, eff_C = streams[effluent_port]
@@ -760,8 +813,7 @@ def evaluate_bsm1(
     else:
         AE = aeration_energy(t, kla_hist, volumes, saturation=do_saturation)
         air_flow = None
-    aerated = [reactors[i] for i in range(len(reactors))
-               if float(jnp.max(kla_hist[:, i])) > 0.0]
+    aerated = [reactors[i] for i in range(len(reactors)) if float(jnp.max(kla_hist[:, i])) > 0.0]
 
     # ----- Pumping energy (internal recycle + RAS + wastage). -----
     PE = pumping_energy(
@@ -779,8 +831,13 @@ def evaluate_bsm1(
     oci = operational_cost_index(AE, PE, sludge)
 
     return BSM1Evaluation(
-        eqi=eqi, oci=oci, aeration_energy=AE, pumping_energy=PE,
-        sludge_production=sludge, effluent=averages, aerated_tanks=aerated,
+        eqi=eqi,
+        oci=oci,
+        aeration_energy=AE,
+        pumping_energy=PE,
+        sludge_production=sludge,
+        effluent=averages,
+        aerated_tanks=aerated,
         air_flow=air_flow,
     )
 
@@ -836,14 +893,12 @@ def direct_n2o_emission(
 
     reactors = _as_reactors(plant)
     # Reactors whose network resolves the dissolved N₂O state.
-    n2o_reactors = [n for n in reactors
-                    if n2o_species in plant.units[n].network.species_index]
+    n2o_reactors = [n for n in reactors if n2o_species in plant.units[n].network.species_index]
     if not n2o_reactors:
         return 0.0
 
     t = solution.t
     kla_hist = _kla_history(plant, solution, params, n2o_reactors)
     volumes = jnp.asarray([float(plant.units[n].volume) for n in n2o_reactors])
-    s_n2o = jnp.stack(
-        [solution.C_named(n, n2o_species) for n in n2o_reactors], axis=1)
+    s_n2o = jnp.stack([solution.C_named(n, n2o_species) for n in n2o_reactors], axis=1)
     return stripped_n2o(t, kla_hist, s_n2o, volumes, kla_ratio=kla_ratio)

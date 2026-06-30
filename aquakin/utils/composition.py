@@ -33,11 +33,10 @@ Composition = dict[str, dict[str, float]]
 
 # NH4-referenced COD of nitrate (g COD / g N) for models without an explicit
 # parameter (ASM1): 8 electrons for NH4 -> NO3, 32/7 g O2 per g N.
-_ICOD_NO3 = -32.0 / 7.0          # = -4.571428...
+_ICOD_NO3 = -32.0 / 7.0  # = -4.571428...
 
 
-def _p(net: "CompiledNetwork", name: str, default: float = 0.0,
-       params=None) -> float:
+def _p(net: "CompiledNetwork", name: str, default: float = 0.0, params=None) -> float:
     """A network parameter value by name, or ``default`` if it has no such
     parameter (so one table serves a family with different parameter sets).
 
@@ -52,16 +51,16 @@ def _p(net: "CompiledNetwork", name: str, default: float = 0.0,
 
 # --- per-family species roles (names differ across ASM1/2d/3) ----------------
 _BIOMASS = {"XB_H", "XB_A", "XH", "XPAO", "XAUT", "XA", "XAOB", "XNOB", "XAMX", "XCMX"}
-_STORAGE = {"SA", "XPHA", "XSTO", "XGLY"}          # COD = 1, no N / P
-_NPOOL = {"SNH", "SNH4", "SND", "XND"}             # N = 1
-_PPOOL = {"SPO4", "SPO", "XPP"}                    # P = 1
-_OXYGEN = {"SO", "SO2"}                            # COD = -1 (electron acceptor)
-_NITRATE = {"SNO", "SNO3", "SNOX"}                 # COD = iCOD_NO3, N = 1
+_STORAGE = {"SA", "XPHA", "XSTO", "XGLY"}  # COD = 1, no N / P
+_NPOOL = {"SNH", "SNH4", "SND", "XND"}  # N = 1
+_PPOOL = {"SPO4", "SPO", "XPP"}  # P = 1
+_OXYGEN = {"SO", "SO2"}  # COD = -1 (electron acceptor)
+_NITRATE = {"SNO", "SNO3", "SNOX"}  # COD = iCOD_NO3, N = 1
 
 
-def _asm_composition(net: "CompiledNetwork",
-                     electron_acceptor_cod: bool = True,
-                     params=None) -> Composition:
+def _asm_composition(
+    net: "CompiledNetwork", electron_acceptor_cod: bool = True, params=None
+) -> Composition:
     """COD / N / P content for an ASM-family network, from its own composition
     parameters. Mirrors the Gujer-matrix continuity convention: organic COD
     carriers carry ``COD = 1``, oxygen ``COD = -1``, nitrate the NH4-referenced
@@ -122,11 +121,11 @@ def _asm_composition(net: "CompiledNetwork",
             # 8-electron value (the NO3->NO2 step is the 2-electron difference).
             no2_cod = (icod_no3 + P("iCOD_NO3NO2")) if electron_acceptor_cod else 0.0
             c = {"COD": no2_cod, "N": 1.0}
-        elif sp == "SNH2OH":          # hydroxylamine: 2 e- above NH4 (icod_no3 is 8)
+        elif sp == "SNH2OH":  # hydroxylamine: 2 e- above NH4 (icod_no3 is 8)
             c = {"COD": icod_no3 * 0.25, "N": 1.0}
-        elif sp == "SNO":             # nitric oxide: 5 e- above NH4
+        elif sp == "SNO":  # nitric oxide: 5 e- above NH4
             c = {"COD": icod_no3 * 0.625, "N": 1.0}
-        elif sp == "SN2O":            # nitrous oxide: 4 e- above NH4 (per N)
+        elif sp == "SN2O":  # nitrous oxide: 4 e- above NH4 (per N)
             c = {"COD": icod_no3 * 0.5, "N": 1.0}
         elif sp == "SN2":
             c = {"COD": n2_cod, "N": 1.0}
@@ -134,7 +133,7 @@ def _asm_composition(net: "CompiledNetwork",
             c = {"N": 1.0}
         elif sp in _PPOOL:
             c = {"P": 1.0}
-        elif sp == "XMeP":                          # precipitated phosphate
+        elif sp == "XMeP":  # precipitated phosphate
             c = {"P": 1.0 / fMeP} if fMeP else {}
         # SALK / XTSS / XSS / XMeOH / SHCO carry no COD / N / P
         comp[sp] = {k: v for k, v in c.items() if v != 0.0}
@@ -145,9 +144,30 @@ def _asm_composition(net: "CompiledNetwork",
 # COD carriers (all kg COD / m³): substrates, the four VFAs, H2, CH4, the soluble
 # inert, the composite/particulates, the biomass, and the H2/CH4 gas headspace.
 _ADM1_COD = {
-    "S_su", "S_aa", "S_fa", "S_va", "S_bu", "S_pro", "S_ac", "S_h2", "S_ch4",
-    "S_I", "X_c", "X_ch", "X_pr", "X_li", "X_su", "X_aa", "X_fa", "X_c4",
-    "X_pro", "X_ac", "X_h2", "X_I", "S_gas_h2", "S_gas_ch4",
+    "S_su",
+    "S_aa",
+    "S_fa",
+    "S_va",
+    "S_bu",
+    "S_pro",
+    "S_ac",
+    "S_h2",
+    "S_ch4",
+    "S_I",
+    "X_c",
+    "X_ch",
+    "X_pr",
+    "X_li",
+    "X_su",
+    "X_aa",
+    "X_fa",
+    "X_c4",
+    "X_pro",
+    "X_ac",
+    "X_h2",
+    "X_I",
+    "S_gas_h2",
+    "S_gas_ch4",
 }
 _ADM1_BIOMASS = {"X_su", "X_aa", "X_fa", "X_c4", "X_pro", "X_ac", "X_h2"}
 
@@ -208,9 +228,9 @@ _CONTENT_FACTOR = {
 _ASM_CONTENT_FACTOR = {"COD": 1.0, "N": 1.0, "P": 1.0}
 
 
-def composition_table(network: "CompiledNetwork", *,
-                      electron_acceptor_cod: bool = True,
-                      params=None) -> Composition:
+def composition_table(
+    network: "CompiledNetwork", *, electron_acceptor_cod: bool = True, params=None
+) -> Composition:
     """The shipped COD / N / P composition table for a network.
 
     Parameters
@@ -286,11 +306,12 @@ def canonical_content(
         Passed to :func:`composition_table` when ``composition`` is not given
         (``False`` selects the lab-COD convention; see there).
     """
-    comp = (composition_table(network, electron_acceptor_cod=electron_acceptor_cod,
-                              params=params)
-            if composition is None else composition)
-    factor = _CONTENT_FACTOR.get(network.name, _ASM_CONTENT_FACTOR).get(
-        component, 1.0)
+    comp = (
+        composition_table(network, electron_acceptor_cod=electron_acceptor_cod, params=params)
+        if composition is None
+        else composition
+    )
+    factor = _CONTENT_FACTOR.get(network.name, _ASM_CONTENT_FACTOR).get(component, 1.0)
     vec = np.zeros(network.n_species)
     for sp, content in comp.items():
         if sp in network.species_index and component in content:

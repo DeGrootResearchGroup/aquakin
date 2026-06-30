@@ -122,9 +122,9 @@ class OperatingCost:
         ]
         width = max(len(lbl) for lbl, _ in terms)
         lines = [
-            title, "=" * len(title),
-            f"  Total = {self.total_per_day:14.2f}  {c}/d "
-            f"({self.annual_total:,.0f} {c}/yr)",
+            title,
+            "=" * len(title),
+            f"  Total = {self.total_per_day:14.2f}  {c}/d ({self.annual_total:,.0f} {c}/yr)",
             "",
             f"  {'item':<{width}}  {c + '/d':>14}",
         ]
@@ -132,8 +132,7 @@ class OperatingCost:
             lines.append(f"  {lbl:<{width}}  {val:14.2f}")
         lines.append(f"  {'OPEX subtotal':<{width}}  {self.opex_per_day:14.2f}")
         if self.capex_per_day:
-            lines.append(f"  {'CAPEX (annualised)':<{width}}  "
-                         f"{self.capex_per_day:14.2f}")
+            lines.append(f"  {'CAPEX (annualised)':<{width}}  {self.capex_per_day:14.2f}")
         return "\n".join(lines)
 
     def __str__(self) -> str:
@@ -176,15 +175,19 @@ def operating_cost(
     carbon_cost = float(carbon_kg_cod_per_d) * f.carbon_price
     sludge_cost = float(sludge_kg_tss_per_d) * f.sludge_disposal_price
     biogas_credit = float(methane_kg_per_d) * f.biogas_value
-    ghg_cost = (0.0 if co2e_per_d is None
-                else float(co2e_per_d) * f.ghg_price)
+    ghg_cost = 0.0 if co2e_per_d is None else float(co2e_per_d) * f.ghg_price
     opex = energy_cost + carbon_cost + sludge_cost - biogas_credit + ghg_cost
     capex_per_day = f.capex_annual / _DAYS_PER_YEAR
     total = opex + capex_per_day
     return OperatingCost(
         currency=f.currency,
-        energy_cost=energy_cost, carbon_cost=carbon_cost, sludge_cost=sludge_cost,
-        biogas_credit=biogas_credit, ghg_cost=ghg_cost,
-        opex_per_day=opex, capex_per_day=capex_per_day,
-        total_per_day=total, annual_total=total * _DAYS_PER_YEAR,
+        energy_cost=energy_cost,
+        carbon_cost=carbon_cost,
+        sludge_cost=sludge_cost,
+        biogas_credit=biogas_credit,
+        ghg_cost=ghg_cost,
+        opex_per_day=opex,
+        capex_per_day=capex_per_day,
+        total_per_day=total,
+        annual_total=total * _DAYS_PER_YEAR,
     )

@@ -77,9 +77,7 @@ class HydraulicDelayUnit:
 
     def __post_init__(self) -> None:
         if self.tau <= 0:
-            raise ValueError(
-                f"HydraulicDelayUnit '{self.name}': tau must be > 0; got {self.tau}"
-            )
+            raise ValueError(f"HydraulicDelayUnit '{self.name}': tau must be > 0; got {self.tau}")
 
     @property
     def state_size(self) -> int:
@@ -94,9 +92,11 @@ class HydraulicDelayUnit:
         return [self.output_port]
 
     def initial_state(self) -> jnp.ndarray:
-        C0 = (self.network.default_concentrations()
-              if self.initial_concentrations is None
-              else jnp.asarray(self.initial_concentrations))
+        C0 = (
+            self.network.default_concentrations()
+            if self.initial_concentrations is None
+            else jnp.asarray(self.initial_concentrations)
+        )
         Q0 = jnp.asarray(float(self.initial_flow))
         return jnp.concatenate([Q0 * C0, jnp.reshape(Q0, (1,))])
 
@@ -117,8 +117,9 @@ class HydraulicDelayUnit:
     ) -> dict[str, Stream]:
         Q, C = self._flow_and_conc(state)
         # Temperature passes straight through (the reference treats T(out)=T(in)).
-        return {self.output_port: Stream(Q=Q, C=C, network=self.network,
-                                         T=inputs[self.input_port].T)}
+        return {
+            self.output_port: Stream(Q=Q, C=C, network=self.network, T=inputs[self.input_port].T)
+        }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """The outlet flow is the held-flow state (the delayed flow), read from

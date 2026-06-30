@@ -142,8 +142,7 @@ class HeatBalanceTemperature(TemperatureModel):
         names = self.tracked_units(plant)
         if not names:
             return jnp.zeros((0,))
-        return jnp.asarray([_unit_reference_T(plant.units[n]) for n in names],
-                           dtype=float)
+        return jnp.asarray([_unit_reference_T(plant.units[n]) for n in names], dtype=float)
 
     def state_rhs(self, plant, temp_state, inlet_by_unit: dict) -> jnp.ndarray:
         # The tracked-unit list and their volumes are fixed for the plant's

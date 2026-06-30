@@ -80,9 +80,7 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
     overflow_Q: "float | None" = None
     underflow_Q: "float | None" = None
     capture_efficiency: float = 0.998
-    particulate_species: list[str] = field(
-        default_factory=lambda: list(ASM1_SETTLING_SPECIES)
-    )
+    particulate_species: list[str] = field(default_factory=lambda: list(ASM1_SETTLING_SPECIES))
     input_port: str = "inlet"
     overflow_port: str = "overflow"
     underflow_port: str = "underflow"
@@ -91,9 +89,7 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.capture_efficiency <= 1.0):
-            raise ValueError(
-                f"capture_efficiency must be in [0, 1]; got {self.capture_efficiency}"
-            )
+            raise ValueError(f"capture_efficiency must be in [0, 1]; got {self.capture_efficiency}")
         validate_controlled_split(
             f"IdealClarifier '{self.name}'", self.overflow_Q, self.underflow_Q
         )
@@ -107,7 +103,8 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
             self._ctrl = "overflow"
             self._setpoints = {"overflow_Q": FlowSetpoint(float(self.overflow_Q), 0)}
         self._part_indices = [
-            self.network.species_index[s] for s in self.particulate_species
+            self.network.species_index[s]
+            for s in self.particulate_species
             if s in self.network.species_index
         ]
         # Pre-build a (n_species,) mask: 1.0 for particulates, 0.0 for solubles.

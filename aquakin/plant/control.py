@@ -89,9 +89,7 @@ class PIController:
         if self.Ti <= 0.0:
             raise ValueError(f"PIController '{self.name}': Ti must be > 0.")
         if self.use_antiwindup and self.Tt <= 0.0:
-            raise ValueError(
-                f"PIController '{self.name}': Tt must be > 0 with anti-windup."
-            )
+            raise ValueError(f"PIController '{self.name}': Tt must be > 0 with anti-windup.")
 
     @property
     def state_size(self) -> int:
@@ -126,14 +124,16 @@ class PIController:
         # species order) are still accepted.
         sensed_net = stream.network
         if sensed_net is not self.network and (
-                getattr(sensed_net, "species", None) != self.network.species):
+            getattr(sensed_net, "species", None) != self.network.species
+        ):
             raise ValueError(
                 f"PIController '{self.name}' senses a stream in network "
                 f"'{getattr(sensed_net, 'name', '?')}', but its measured_species "
                 f"'{self.measured_species}' index was resolved in network "
                 f"'{self.network.name}' with a different species ordering -- it "
                 f"would read the wrong species. Build the controller with the "
-                f"sensed unit's network.")
+                f"sensed unit's network."
+            )
         measured = stream.C[self._meas_idx]
         e = self.setpoint - measured
         u = self.offset + self.Kp * e + state[0]

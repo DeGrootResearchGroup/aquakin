@@ -70,11 +70,11 @@ _DEFAULT_TSS_FACTORS = {
 
 # Standard BSM1 Takács parameter set (Alex et al. 2008, Table 1.7).
 _BSM1_TAKACS_DEFAULTS = dict(
-    v0=474.0,        # max theoretical settling velocity, m/d
-    vmax=250.0,      # max practical settling velocity, m/d
-    rh=5.76e-4,      # hindered settling parameter, m³/g
-    rp=2.86e-3,      # flocculant settling parameter, m³/g
-    fns=2.28e-3,     # non-settleable fraction
+    v0=474.0,  # max theoretical settling velocity, m/d
+    vmax=250.0,  # max practical settling velocity, m/d
+    rh=5.76e-4,  # hindered settling parameter, m³/g
+    rp=2.86e-3,  # flocculant settling parameter, m³/g
+    fns=2.28e-3,  # non-settleable fraction
     # Clarification-zone flux-limiting threshold (g/m³): above the feed, the
     # downward settling flux is limited by the layer below only when that layer
     # exceeds this concentration (Takács 1991). NOT a settling-velocity cutoff.
@@ -167,9 +167,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     # is taken from the network's default particulate concentrations.
     init_underflow_Q: "float | None" = None
     init_feed_tss: "float | None" = None
-    particulate_species: list[str] = field(
-        default_factory=lambda: list(ASM1_SETTLING_SPECIES)
-    )
+    particulate_species: list[str] = field(default_factory=lambda: list(ASM1_SETTLING_SPECIES))
     settling_params: dict[str, float] = field(default_factory=lambda: dict(_BSM1_TAKACS_DEFAULTS))
     tss_factors: dict[str, float] = field(default_factory=lambda: dict(_DEFAULT_TSS_FACTORS))
     composition_mode: str = "per_species"
@@ -190,8 +188,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         for sp in self.particulate_species:
             if sp not in self.network.species_index:
                 raise ValueError(
-                    f"TakacsClarifier '{self.name}': particulate species "
-                    f"'{sp}' not in network."
+                    f"TakacsClarifier '{self.name}': particulate species '{sp}' not in network."
                 )
             self._part_indices.append(self.network.species_index[sp])
             self._part_tss_factors.append(self.tss_factors.get(sp, 1.0))
@@ -199,9 +196,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
 
         # Per-layer geometry.
         if self.feed_layer < 0 or self.feed_layer >= self.n_layers:
-            raise ValueError(
-                f"feed_layer must be in [0, {self.n_layers}); got {self.feed_layer}"
-            )
+            raise ValueError(f"feed_layer must be in [0, {self.n_layers}); got {self.feed_layer}")
         validate_controlled_split(
             f"TakacsClarifier '{self.name}'", self.overflow_Q, self.underflow_Q
         )
@@ -314,20 +309,20 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         net = self.network
         state0 = np.asarray(self.initial_state())
         base_C = np.asarray(net.default_concentrations())
-        Q0 = jnp.asarray(2.0e4)                  # representative positive throughput
+        Q0 = jnp.asarray(2.0e4)  # representative positive throughput
         t0 = jnp.asarray(0.0)
 
         def make_inputs(C):
             return {self.input_port: Stream(Q=Q0, C=C, network=net)}
 
         inlet0 = make_inputs(jnp.asarray(np.maximum(np.abs(base_C), 1e-3)))
-        self_jac = lambda s: jax.jacfwd(
-            lambda x: self.rhs(t0, x, inlet0, None))(s)
+        self_jac = lambda s: jax.jacfwd(lambda x: self.rhs(t0, x, inlet0, None))(s)
         self_pat = ad_union(self_jac, state0)
 
         state_fixed = jnp.asarray(np.maximum(np.abs(state0), 1e-3))
-        inlet_jac = lambda c: jax.jacfwd(
-            lambda C: self.rhs(t0, state_fixed, make_inputs(C), None))(c)
+        inlet_jac = lambda c: jax.jacfwd(lambda C: self.rhs(t0, state_fixed, make_inputs(C), None))(
+            c
+        )
         inlet_pat = ad_union(inlet_jac, base_C)
         return CouplingPattern(self_pattern=self_pat, inlet_pattern=inlet_pat)
 
@@ -340,7 +335,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         # seed only affects the initial transient.
         defaults = self.network.default_concentrations()
         sol_defaults = jnp.asarray([float(defaults[i]) for i in self._soluble_indices])
-        sol_block = jnp.tile(sol_defaults, self.n_layers)   # (n_layers * n_sol,)
+        sol_block = jnp.tile(sol_defaults, self.n_layers)  # (n_layers * n_sol,)
         return jnp.concatenate([part_state, sol_block])
 
     def _particulate_initial_state(self) -> jnp.ndarray:
@@ -366,8 +361,8 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         # Apportion each layer's TSS across particulate species by the feed
         # composition: C_k = d_k * (TSS_layer / X_f), so sum_k C_k * f_k = TSS.
         X_f = float(jnp.sum(part_defaults * self._factors_arr))
-        scale = tss / X_f                                   # (n_layers,)
-        state = scale[:, None] * part_defaults[None, :]     # (n_layers, n_part)
+        scale = tss / X_f  # (n_layers,)
+        state = scale[:, None] * part_defaults[None, :]  # (n_layers, n_part)
         return state.reshape(-1)
 
     def _initial_blanket_tss(self, part_defaults: jnp.ndarray) -> jnp.ndarray:
@@ -406,9 +401,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         # the blanket underflow as a stand-in (ratio ~2, right for BSM loading) --
         # this only seeds the initial profile, which then relaxes.
         Q_u = float(self.init_underflow_Q)
-        design_over = (
-            self.overflow_Q if self.overflow_Q is not None else self.init_underflow_Q
-        )
+        design_over = self.overflow_Q if self.overflow_Q is not None else self.init_underflow_Q
         ratio = (float(design_over) + Q_u) / Q_u
         X_u = X_f * ratio
         # Clarification (above-feed) layers sit at the non-settleable floor.
@@ -496,7 +489,8 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         return split_controlled_flows(
             self._resolve_setpoint(self.overflow_Q, t, params, "overflow_Q"),
             self._resolve_setpoint(self.underflow_Q, t, params, "underflow_Q"),
-            Q_in, clamp
+            Q_in,
+            clamp,
         )
 
     def compute_outputs(
@@ -535,7 +529,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             # feed concentrates every particulate by the same factor and a clear
             # layer dilutes them. (At steady state this matches the per-species
             # reading; under dynamic flow it has no composition lag.)
-            C_in_part = s_in.C[part_idx]                          # (n_part,)
+            C_in_part = s_in.C[part_idx]  # (n_part,)
             tss_feed = jnp.sum(C_in_part * self._factors_arr)
             # Guard the zero-feed division: with no feed solids the scaling is
             # undefined, so the outlets just carry the feed particulates through.
@@ -554,20 +548,14 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         # Build the per-species C vectors with two scatters each (not a Python
         # loop of scalar scatters): solubles pass through; particulates as above.
         C_overflow = (
-            jnp.zeros((n_species,))
-            .at[sol_idx].set(sol_overflow)
-            .at[part_idx].set(part_overflow)
+            jnp.zeros((n_species,)).at[sol_idx].set(sol_overflow).at[part_idx].set(part_overflow)
         )
         C_underflow = (
-            jnp.zeros((n_species,))
-            .at[sol_idx].set(sol_underflow)
-            .at[part_idx].set(part_underflow)
+            jnp.zeros((n_species,)).at[sol_idx].set(sol_underflow).at[part_idx].set(part_underflow)
         )
 
         return {
-            self.overflow_port: Stream(
-                Q=overflow_Q, C=C_overflow, network=self.network, T=s_in.T
-            ),
+            self.overflow_port: Stream(Q=overflow_Q, C=C_overflow, network=self.network, T=s_in.T),
             self.underflow_port: Stream(
                 Q=underflow_Q, C=C_underflow, network=self.network, T=s_in.T
             ),
@@ -622,22 +610,16 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             # helpers the per-species path uses, with a unit TSS factor and the
             # feed TSS as the single inlet "concentration". The result equals the
             # per-species dTSS/dt aggregated over species for the same profile.
-            tss = part_state[:, None]                             # (n_layers, 1)
-            settling = self._settling_divergence(
-                tss, X_min, h_layer, factors=jnp.ones((1,))
-            )
-            convection = self._convection(
-                tss, tss_in[None], Q_in, v_up, v_down, h_layer
-            )
+            tss = part_state[:, None]  # (n_layers, 1)
+            settling = self._settling_divergence(tss, X_min, h_layer, factors=jnp.ones((1,)))
+            convection = self._convection(tss, tss_in[None], Q_in, v_up, v_down, h_layer)
             part_dstate = (convection + settling).reshape((-1,))
         else:
             layered = self._layered(part_state)  # (n_layers, n_part)
             # The per-layer derivative is convection (bulk up/down transport plus
             # the feed inflow) plus the Takács settling divergence.
             settling = self._settling_divergence(layered, X_min, h_layer)
-            convection = self._convection(
-                layered, C_in_part, Q_in, v_up, v_down, h_layer
-            )
+            convection = self._convection(layered, C_in_part, Q_in, v_up, v_down, h_layer)
             part_dstate = (convection + settling).reshape((-1,))
 
         if not self.soluble_holdup:
@@ -646,14 +628,17 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         # Soluble holdup: bulk convection through the layers, no settling (the
         # feed soluble enters at the feed layer and is carried up/down by the
         # same v_up/v_down field). The shared _convection serves both blocks.
-        C_in_sol = s_in.C[self._sol_idx_arr]                      # (n_sol,)
-        sol_dstate = self._convection(
-            sol_layered, C_in_sol, Q_in, v_up, v_down, h_layer
-        ).reshape((-1,))
+        C_in_sol = s_in.C[self._sol_idx_arr]  # (n_sol,)
+        sol_dstate = self._convection(sol_layered, C_in_sol, Q_in, v_up, v_down, h_layer).reshape(
+            (-1,)
+        )
         return jnp.concatenate([part_dstate, sol_dstate])
 
     def _settling_divergence(
-        self, layered: jnp.ndarray, X_min: jnp.ndarray, h_layer: float,
+        self,
+        layered: jnp.ndarray,
+        X_min: jnp.ndarray,
+        h_layer: float,
         factors: "jnp.ndarray | None" = None,
     ) -> jnp.ndarray:
         """Net Takács (1991) settling flux per layer, shape ``(n_layers, n_comp)``.
@@ -686,14 +671,14 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         n_comp = layered.shape[1]
         tss_per_layer = jnp.sum(layered * factors[None, :], axis=1)
         # Interface i lies between layer i (below, receiving) and i+1 (above).
-        tss_above = tss_per_layer[1:]   # upper layer at each interface (n-1,)
+        tss_above = tss_per_layer[1:]  # upper layer at each interface (n-1,)
         tss_below = tss_per_layer[:-1]  # lower (receiving) layer at each interface
         f_above = self._settling_velocity(tss_above, X_min) * tss_above
         f_below = self._settling_velocity(tss_below, X_min) * tss_below
 
         min_flux = jnp.minimum(f_above, f_below)
         interface_idx = jnp.arange(self.n_layers - 1)
-        is_clarification = interface_idx >= self.feed_layer        # static bool
+        is_clarification = interface_idx >= self.feed_layer  # static bool
         below_threshold = tss_below <= self._X_threshold
         flux_tss = jnp.where(is_clarification & below_threshold, f_above, min_flux)
 
@@ -704,12 +689,12 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         # flux_per_species[i] is the flux from layer i+1 down to layer i: it
         # enters layer i from above and leaves layer i+1 below. Pad with a zero
         # row for the no-flux top/bottom boundaries.
-        flux_in_from_above = jnp.concatenate(
-            [flux_per_species, jnp.zeros((1, n_comp))], axis=0
-        ) / h_layer   # (n_layers, n_comp); top layer has 0
-        flux_out_to_below = jnp.concatenate(
-            [jnp.zeros((1, n_comp)), flux_per_species], axis=0
-        ) / h_layer   # (n_layers, n_comp); bottom layer has 0
+        flux_in_from_above = (
+            jnp.concatenate([flux_per_species, jnp.zeros((1, n_comp))], axis=0) / h_layer
+        )  # (n_layers, n_comp); top layer has 0
+        flux_out_to_below = (
+            jnp.concatenate([jnp.zeros((1, n_comp)), flux_per_species], axis=0) / h_layer
+        )  # (n_layers, n_comp); bottom layer has 0
         return flux_in_from_above - flux_out_to_below
 
     def _convection(
