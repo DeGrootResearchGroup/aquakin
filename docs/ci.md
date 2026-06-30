@@ -60,20 +60,22 @@ nor concentrating it in a few files makes the whole suite fast.
   alone — the failure is cumulative). So those tests carry the **`heavy`** marker
   and are excluded from every slow / validation / smoke / durations job (`... and
   not heavy`). They run instead on the dedicated **`heavy` job**, sharded
-  **one-test-per-process** (`--splits 7 -n 1`) across the free 16 GB
-  `ubuntu-latest` runner: a single heavy test fits 16 GB (it peaks near the limit
-  but completes), and one-per-process is exactly what prevents the cumulative
-  accumulation, so **no paid larger runner is needed**. This replaced a paid
-  16-core/64 GB `aquakin-heavy` larger runner whose per-minute billing was the
-  entire CI cost — public-repo standard-runner minutes are free. The heavy set is
-  the 7 BSM2 plant-gradient checks; the lighter BSM1 plant-AD gradient tests are
-  **not** heavy (they carry only `slow` / `validation` and run in those free jobs).
-  *(If a single heavy test ever exceeds 16 GB, the fallback is an 8-core/32 GB
+  **one-test-per-process** (`--splits 12 -n 1`) across the free 16 GB
+  `ubuntu-latest` runner: a single heavy test fits 16 GB, and one-per-process is
+  exactly what prevents the cumulative accumulation, so **no paid larger runner is
+  needed**. This replaced a paid 16-core/64 GB `aquakin-heavy` larger runner whose
+  per-minute billing was the entire CI cost — public-repo standard-runner minutes
+  are free. The heavy set is the 12 plant-gradient checks (7 BSM2 + 5 BSM1): the
+  **`heavy`** marker means "needs an isolated fresh process," which a BSM1
+  plant-gradient test earns as much as a BSM2 one — a BSM1 dynamic-DGSM test that
+  was demoted to `slow` OOM-crashed a shared shard, so the set is kept whole and
+  the cost win comes entirely from the free runner + path filter, not from shrinking
+  it. *(If a single heavy test ever exceeds 16 GB, the fallback is an 8-core/32 GB
   larger runner at one-per-process — still about half the per-minute cost of the
   old 16-core/64 GB tier — not more sharding, which cannot shrink a single test's
-  peak.)*
+  peak. Keep `--splits` ≥ the heavy-test count so it stays one-per-shard.)*
 - The **`heavy`** job (`pytest -m heavy -n 1`, 3.12) runs on `ubuntu-latest`,
-  sharded 7 ways (`--splits 7 --group i`), with two triggers: **push to `main`**
+  sharded 12 ways (`--splits 12 --group i`), with two triggers: **push to `main`**
   when the **`heavy-gate`** path filter sees a change under `aquakin/plant`,
   `aquakin/integrate`, `aquakin/core`, `aquakin/schema`, `aquakin/networks`, the
   two heavy test files, `pyproject.toml` or the workflow (so a docs / examples /

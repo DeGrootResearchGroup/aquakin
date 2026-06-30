@@ -225,17 +225,18 @@ jobs:
           --max-worker-restart=0
 
   # ---- Heavy whole-plant stable-adjoint gradient tests -------------------------
-  # The `heavy` set is the 7 BSM2 whole-plant stable-adjoint gradient checks, each
-  # of which compiles a multi-GB whole-plant BSM2 adjoint program. They are excluded
+  # The `heavy` set is the 12 whole-plant plant-gradient checks (7 BSM2 + 5 BSM1),
+  # each of which compiles a multi-GB whole-plant adjoint program. They are excluded
   # from the slow / validation / smoke jobs (`... and not heavy`) and run here
-  # instead, ONE PER FRESH PROCESS (the `heavy` job below, `--splits 7 -n 1`): a
-  # single test fits a stock 16 GB `ubuntu-latest` runner (~2-5 GB), but several
-  # accumulate (freed XLA caches are not returned to the OS) and exhaust it, so the
-  # set is sharded one-test-per-process across the FREE runner. (The lighter BSM1
-  # plant-AD gradient tests are NOT heavy -- they carry only `slow` / `validation`
-  # and run in those free jobs.) Public-repo standard-runner minutes are free, so
-  # the one-test-per-process shard across the 16 GB runner is what keeps this job
-  # both free and within memory.
+  # instead, ONE PER FRESH PROCESS (the `heavy` job below, `--splits 12 -n 1`): a
+  # single test fits a stock 16 GB `ubuntu-latest` runner, but a shard's worth
+  # accumulates (freed XLA caches are not returned to the OS) and exhausts it, so
+  # the set is sharded one-test-per-process across the FREE runner. The `heavy`
+  # marker means "needs an isolated fresh process" -- a BSM1 plant-gradient test
+  # earns it as much as a BSM2 one (a demoted BSM1 dynamic-DGSM test OOM-crashed a
+  # shared `slow` shard), independent of which is bigger. Public-repo
+  # standard-runner minutes are free, so the one-test-per-process shard across the
+  # 16 GB runner is what keeps this job both free and within memory.
   #
   # WHEN IT RUNS (cost control), two triggers:
   #   * push to main -- but ONLY when adjoint/plant-relevant files changed (the
@@ -312,7 +313,7 @@ jobs:
           fi
 
   heavy:
-    name: heavy stable-adjoint tests (shard ${{ matrix.group }}/7)
+    name: heavy stable-adjoint tests (shard ${{ matrix.group }}/12)
     needs: heavy-gate
     if: >-
       needs.heavy-gate.outputs.run == 'true'
@@ -321,20 +322,20 @@ jobs:
               && contains(github.event.pull_request.labels.*.name, 'full-ci')))
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # ONE heavy BSM2 test per fresh process (`--splits 7`, `-n 1`). Each compiles a
-    # multi-GB plant-adjoint program (~2-5 GB resident) that fits a stock 16 GB
+    # ONE heavy plant-gradient test per fresh process (`--splits 12`, `-n 1`). Each
+    # compiles a multi-GB plant-adjoint program that fits a stock 16 GB
     # `ubuntu-latest` runner ALONE, but accumulates across a process (freed XLA
-    # caches are not returned to the OS, so RSS climbs test-by-test). Seven fresh
+    # caches are not returned to the OS, so RSS climbs test-by-test). Twelve fresh
     # shards keep each process to ~one test, so the free 16 GB runner suffices
     # (public-repo Actions minutes are free). If a single test ever needs >16 GB,
     # move just this job to a larger-runner tier with >16 GB at one-per-process
     # (raising the shard count cannot shrink a single test's peak). The heavy tests
     # are not in `.test_durations`, so pytest-split partitions them evenly by count
-    # (~1/shard).
+    # (~1/shard). Keep `--splits` >= the heavy-test count so it stays one-per-shard.
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3, 4, 5, 6, 7]
+        group: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     # Override the top-level single-thread pin: with `-n 1` there is no xdist
     # oversubscription, so let JAX / BLAS use the runner's cores.
     env:
@@ -356,11 +357,11 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run heavy tests shard
-        # One BSM2 heavy test in a fresh process. The per-test timeout covers the
-        # multi-GB plant-adjoint compile.
+        # One heavy plant-gradient test in a fresh process. The per-test timeout
+        # covers the multi-GB plant-adjoint compile.
         run: >-
           pytest -m heavy -q -n 1
-          --splits 7 --group ${{ matrix.group }}
+          --splits 12 --group ${{ matrix.group }}
           --durations=15 --timeout=1200 --timeout-method=thread
 
   # ---- Validation suite (against published data): merge-to-main + opt-in -------
