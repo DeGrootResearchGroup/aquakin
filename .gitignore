@@ -44,7 +44,9 @@ coverage.xml
 .DS_Store
 Thumbs.db
 
-# Project-local settings
-.claude/
+# Project-local settings (worktrees, local settings) -- but track the
+# path-scoped guidance rules, which must ship with the repo to load.
+.claude/*
+!.claude/rules/
 reference/
 figures/
