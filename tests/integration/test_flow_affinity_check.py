@@ -1,6 +1,6 @@
 """The recycle-flow affinity consistency check.
 
-``Plant._resolve_flows`` resolves the recycle flows by treating the flow network
+``Plant._recycle._resolve_flows`` resolves the recycle flows by treating the flow network
 as an affine map and probing it at two points -- exact only if every unit's
 ``flow_outputs`` is affine in the recycle flows. A threshold-mode ``SplitterUnit``
 (or a ``StorageTank`` bypass) is piecewise-linear, so a recycle-dependent inlet
@@ -40,7 +40,7 @@ def _recycle_plant(net, threshold):
 
 
 def _check(plant, net):
-    return plant._resolve_flows(jnp.asarray(0.0), net.default_parameters(),
+    return plant._recycle._resolve_flows(jnp.asarray(0.0), net.default_parameters(),
                                 check_affine=True)
 
 

@@ -952,13 +952,13 @@ def solve_sensitivity(
     # closed over, so the augmented linearisation w.r.t. the wrt parameters
     # drops ``dM/dtheta`` -- exact for kinetic parameters (M depends only on
     # the flow setpoints).
-    if plant._recycle_map_constant is None:
-        plant._check_recycle_map_constant(t0a, y0, params_full)
-    if plant._flow_map_constant is None:
-        plant._check_flow_map_constant(t0a, y0, params_full)
+    if plant._recycle._recycle_map_constant is None:
+        plant._recycle._check_recycle_map_constant(t0a, y0, params_full)
+    if plant._recycle._flow_map_constant is None:
+        plant._recycle._check_flow_map_constant(t0a, y0, params_full)
     states0 = plant._split_state(y0)
-    rmap = plant._maybe_recycle_map(t0a, states0, params_full)
-    fmap = plant._maybe_flow_map(t0a, states0, params_full)
+    rmap = plant._recycle._maybe_recycle_map(t0a, states0, params_full)
+    fmap = plant._recycle._maybe_flow_map(t0a, states0, params_full)
 
     # Operating-parameter sensitivity: alongside the kinetic ``wrt`` params,
     # differentiate w.r.t. multiplicative scales on the influent (a

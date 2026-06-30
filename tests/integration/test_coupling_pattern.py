@@ -265,7 +265,7 @@ def test_plant_structural_pattern_superset_over_trajectory_bsm1():
             integrator=aquakin.IntegratorConfig(max_steps=100_000))
 
     t0 = jnp.asarray(0.0)
-    rmap = p._maybe_recycle_map(t0, p._split_state(y0), params)
+    rmap = p._recycle._maybe_recycle_map(t0, p._split_state(y0), params)
     rhs_y0 = lambda y: p._rhs(t0, y, params, recycle_map=rmap)
     probe = jacobian_sparsity_pattern(rhs_y0, y0) > 0
     P = probe | p._structural_plant_pattern(coupling_mask=probe)
@@ -283,7 +283,7 @@ def test_plant_structural_pattern_superset_over_trajectory_bsm1():
         rtol=1e-4, atol=atol,
         integrator=aquakin.IntegratorConfig(max_steps=2_000_000)).state)
     denseJ = jax.jit(lambda tt, y: jax.jacfwd(lambda z: p._rhs(
-        tt, z, params, recycle_map=p._maybe_recycle_map(
+        tt, z, params, recycle_map=p._recycle._maybe_recycle_map(
             jnp.asarray(tt), p._split_state(z), params)))(y))
     missing_within = 0
     for i in range(0, len(te), 3):
@@ -359,12 +359,12 @@ def test_single_unit_plant_no_within_unit_coupling_missing(kind):
         integrator=aquakin.IntegratorConfig(max_steps=2_000_000)).state)
 
     t0 = jnp.asarray(0.0)
-    rmap = p._maybe_recycle_map(t0, p._split_state(y0), params)
+    rmap = p._recycle._maybe_recycle_map(t0, p._split_state(y0), params)
     rhs_y0 = lambda y: p._rhs(t0, y, params, recycle_map=rmap)
     probe = jacobian_sparsity_pattern(rhs_y0, y0) > 0
     P = probe | p._structural_plant_pattern(coupling_mask=probe)
     denseJ = jax.jit(lambda tt, y: jax.jacfwd(lambda z: p._rhs(
-        tt, z, params, recycle_map=p._maybe_recycle_map(
+        tt, z, params, recycle_map=p._recycle._maybe_recycle_map(
             jnp.asarray(tt), p._split_state(z), params)))(y))
     missing = 0
     for i in range(len(te)):
