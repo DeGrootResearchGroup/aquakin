@@ -144,12 +144,8 @@ class IdealThickener(StatelessUnit):
         # by f (underflow) / thin_factor (overflow); solubles pass through (×1)
         # to the underflow and split by flow to the overflow (also ×1, the flow
         # split carries the partition).
-        uf_scale = jnp.where(
-            can, self._settle_mask * f + self._soluble_mask, 1.0
-        )
-        of_scale = jnp.where(
-            can, self._settle_mask * thin_factor + self._soluble_mask, 0.0
-        )
+        uf_scale = jnp.where(can, self._settle_mask * f + self._soluble_mask, 1.0)
+        of_scale = jnp.where(can, self._settle_mask * thin_factor + self._soluble_mask, 0.0)
         C_under = C * uf_scale
         C_over = C * of_scale
 

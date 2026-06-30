@@ -16,6 +16,7 @@ recycle-ratio design sweeps work. Used standalone (no plant), ``resolve`` return
 the fixed default, so a unit constructed on its own behaves exactly as a plain
 float setpoint.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

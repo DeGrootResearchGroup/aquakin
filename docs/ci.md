@@ -12,22 +12,24 @@ real stiff-ODE solves with AD (~irreducible seconds each) and the cost is spread
 across hundreds of tests — neither a JAX compile-cache (verified: cold ≈ warm)
 nor concentrating it in a few files makes the whole suite fast.
 
-- The **`lint`** job (`ruff check aquakin`, 3.12) runs on **every PR and every
-  push** — a purely static gate (no JAX import, no compile), so it finishes in
-  seconds and is the cheapest signal in the matrix. It installs only the `lint`
-  extra (`pip install -e ".[lint]"`, which pins `ruff>=0.15,<0.16` so a new ruff
-  release cannot redden the gate without a deliberate bump). The rule set and the
-  per-file ignores live in `[tool.ruff]` in `pyproject.toml`: `select = E,F,W,I,
-  B,RUF` at `line-length = 100` (the width the package is written to), with `UP`
-  (pyupgrade) deliberately deferred and several families `ignore`d against
-  dedicated audit issues so each can be tackled — and its ignore removed — in its
-  own PR. `**/__init__.py` is exempt from import-sorting (`I001`) and
-  module-import-position (`E402`) because the re-export packages carry deliberate,
-  load-bearing import order (`plant/__init__.py` imports `a2o` / `bsm.evaluation`
-  last to avoid an import cycle; `aquakin/__init__.py` enables x64 before any
-  submodule import that builds JAX state). The **`ruff format`** reflow is **not**
-  applied repo-wide yet, so `format --check` is intentionally not gated here — when
-  that lands, add it to this job. It skips the bare `labeled` event and the
+- The **`lint`** job (`ruff check aquakin` + `ruff format --check aquakin`, 3.12)
+  runs on **every PR and every push** — a purely static gate (no JAX import, no
+  compile), so it finishes in seconds and is the cheapest signal in the matrix. It
+  installs only the `lint` extra (`pip install -e ".[lint]"`, which pins
+  `ruff>=0.15,<0.16` so a new ruff release cannot redden the gate without a
+  deliberate bump). The rule set and the per-file ignores live in `[tool.ruff]` in
+  `pyproject.toml`: `select = E,F,W,I,B,RUF` at `line-length = 100` (the width the
+  package is written to), with `UP` (pyupgrade) deliberately deferred and several
+  families `ignore`d against dedicated audit issues so each can be tackled — and
+  its ignore removed — in its own PR. **`ruff format` owns line width**, so `E501`
+  is ignored (the formatter reflows all code to the line length and leaves only
+  un-splittable lines — long string literals, refs in comments — over it, where
+  E501 would be noise). `**/__init__.py` is exempt from import-sorting (`I001`)
+  and module-import-position (`E402`) because the re-export packages carry
+  deliberate, load-bearing import order (`plant/__init__.py` imports `a2o` /
+  `bsm.evaluation` last to avoid an import cycle; `aquakin/__init__.py` enables
+  x64 before any submodule import that builds JAX state). It skips the bare
+  `labeled` event and the
   schedule / dispatch refresh, exactly like the fast gate.
 - The **`test`** job (`pytest -m "not validation and not slow"`, Python
   3.11/3.12) runs on **every PR and every push** — unit + fast integration. It is

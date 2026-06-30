@@ -78,6 +78,10 @@ target-version = "py310"
 # issue #467; enable it there so its large auto-fix lands as one reviewable PR.
 select = ["E", "F", "W", "I", "B", "RUF"]
 ignore = [
+    # `ruff format` owns line width: it reflows all code to line-length and
+    # leaves only un-splittable lines long (string literals, URLs/refs in
+    # comments), so E501 on those is noise rather than an actionable finding.
+    "E501",
     # Intentional scientific Unicode in docstrings/comments (µ, α, β, ×, ⁻, °).
     "RUF002",
     "RUF003",

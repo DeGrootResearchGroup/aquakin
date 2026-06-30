@@ -74,8 +74,7 @@ class MixerUnit(StatelessUnit):
         T_out = mixed_temperature(inputs, self.input_port_names)
         # Indicator organism (disinfection): the same flow-weighted balance.
         org_out = mixed_organism(inputs, self.input_port_names)
-        return {"out": Stream(Q=Q_total, C=C_out, network=self.network,
-                              T=T_out, org=org_out)}
+        return {"out": Stream(Q=Q_total, C=C_out, network=self.network, T=T_out, org=org_out)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output port flows from input port flows (the linear flow rule).
@@ -163,8 +162,9 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
         return "threshold"
 
     def __post_init__(self) -> None:
-        n_modes = sum(m is not None for m in (
-            self.output_port_ratios, self.output_port_flows, self.threshold))
+        n_modes = sum(
+            m is not None for m in (self.output_port_ratios, self.output_port_flows, self.threshold)
+        )
         if n_modes != 1:
             raise ValueError(
                 f"SplitterUnit '{self.name}': supply exactly one of "
@@ -173,14 +173,11 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
         if self._mode == "ratio":
             total = sum(self.output_port_ratios.values())
             if not (abs(total - 1.0) < 1e-9):
-                raise ValueError(
-                    f"SplitterUnit '{self.name}' ratios must sum to 1.0; got {total}"
-                )
+                raise ValueError(f"SplitterUnit '{self.name}' ratios must sum to 1.0; got {total}")
         elif self._mode == "flow":
             if self.remainder_port is None:
                 raise ValueError(
-                    f"SplitterUnit '{self.name}': output_port_flows requires "
-                    f"remainder_port."
+                    f"SplitterUnit '{self.name}': output_port_flows requires remainder_port."
                 )
             if self.remainder_port in self.output_port_flows:
                 raise ValueError(
@@ -195,8 +192,7 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
                 )
             if self.threshold_port == self.remainder_port:
                 raise ValueError(
-                    f"SplitterUnit '{self.name}': threshold_port and "
-                    f"remainder_port must differ."
+                    f"SplitterUnit '{self.name}': threshold_port and remainder_port must differ."
                 )
         # Wrap the absolute flow setpoints (flow / threshold mode) as
         # FlowSetpoints so the recycle-flow rule and the material split read one
@@ -204,7 +200,8 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
         if self._mode == "flow":
             self._setpoints = {
                 port: FlowSetpoint(float(q), i)
-                for i, (port, q) in enumerate(self.output_port_flows.items())}
+                for i, (port, q) in enumerate(self.output_port_flows.items())
+            }
         elif self._mode == "threshold":
             self._setpoints = {"threshold": FlowSetpoint(float(self.threshold), 0)}
         else:
@@ -241,7 +238,9 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
         if self._mode == "ratio":
             for port, ratio in self.output_port_ratios.items():
                 outputs[port] = Stream(
-                    Q=s_in.Q * jnp.asarray(ratio), C=s_in.C, network=self.network,
+                    Q=s_in.Q * jnp.asarray(ratio),
+                    C=s_in.C,
+                    network=self.network,
                     T=s_in.T,
                 )
             return outputs
@@ -249,11 +248,10 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
             # Inlet flow above the limit is diverted; the rest passes through.
             limit = self._setpoints["threshold"].resolve(self._flow_params(params))
             above = jnp.maximum(s_in.Q - limit, 0.0)
-            outputs[self.threshold_port] = Stream(
-                Q=above, C=s_in.C, network=self.network, T=s_in.T)
+            outputs[self.threshold_port] = Stream(Q=above, C=s_in.C, network=self.network, T=s_in.T)
             outputs[self.remainder_port] = Stream(
-                Q=jnp.minimum(s_in.Q, limit), C=s_in.C, network=self.network,
-                T=s_in.T)
+                Q=jnp.minimum(s_in.Q, limit), C=s_in.C, network=self.network, T=s_in.T
+            )
             return outputs
         # Flow mode: fixed setpoints, remainder takes what is left. When the feed
         # is below the total setpoint the setpoint ports share the available flow
@@ -272,10 +270,11 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
             total_set = total_set + q
         scale = jnp.minimum(1.0, s_in.Q / jnp.maximum(total_set, 1e-12))
         for port, q in setpts.items():
-            outputs[port] = Stream(Q=q * scale, C=s_in.C,
-                                   network=self.network, T=s_in.T)
+            outputs[port] = Stream(Q=q * scale, C=s_in.C, network=self.network, T=s_in.T)
         outputs[self.remainder_port] = Stream(
-            Q=jnp.maximum(s_in.Q - total_set, 0.0), C=s_in.C, network=self.network,
+            Q=jnp.maximum(s_in.Q - total_set, 0.0),
+            C=s_in.C,
+            network=self.network,
             T=s_in.T,
         )
         return outputs
@@ -289,12 +288,15 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
         sweep), and the two agree wherever the unit is not starved."""
         Q_in = input_flows["in"]
         if self._mode == "ratio":
-            return {port: Q_in * jnp.asarray(ratio)
-                    for port, ratio in self.output_port_ratios.items()}
+            return {
+                port: Q_in * jnp.asarray(ratio) for port, ratio in self.output_port_ratios.items()
+            }
         if self._mode == "threshold":
             limit = self._setpoints["threshold"].resolve(self._flow_params(params))
-            return {self.threshold_port: jnp.maximum(Q_in - limit, 0.0),
-                    self.remainder_port: jnp.minimum(Q_in, limit)}
+            return {
+                self.threshold_port: jnp.maximum(Q_in - limit, 0.0),
+                self.remainder_port: jnp.minimum(Q_in, limit),
+            }
         fp = self._flow_params(params)
         out = {port: sp.resolve(fp) for port, sp in self._setpoints.items()}
         out[self.remainder_port] = Q_in - sum(out.values())

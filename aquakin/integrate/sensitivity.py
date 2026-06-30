@@ -129,9 +129,7 @@ def sensitivity(
         # Build an overlay SpatialConditions with the traced field array, and
         # pass it via the reactor's `conditions=` override. No mutation of
         # reactor state.
-        overlay = SpatialConditions(
-            fields={**base_fields, field_name: field_array}
-        )
+        overlay = SpatialConditions(fields={**base_fields, field_name: field_array})
         sol = reactor.solve(C0, params=params, conditions=overlay, **solve_kwargs)
         return jnp.asarray(output_fn(sol))
 
@@ -140,16 +138,14 @@ def sensitivity(
 
     dout_dconditions: dict[str, jnp.ndarray] = {}
     for fname, arr in base_fields.items():
-        dout_dconditions[fname] = _diff(
-            lambda a, fn=fname: _output_from_field(fn, a)
-        )(arr)
+        dout_dconditions[fname] = _diff(lambda a, fn=fname: _output_from_field(fn, a))(arr)
 
     if check_finite:
         remedy = (
             "Pass ad_mode='forward' (forward-mode AD is finite through a stiff "
             "solve), or build the reactor with a dtmax cap."
-            if ad_mode == "reverse" else
-            "Check the model and ranges; even forward-mode AD returned non-finite."
+            if ad_mode == "reverse"
+            else "Check the model and ranges; even forward-mode AD returned non-finite."
         )
         check_finite_gradient(dout_dparams, what="sensitivity", remedy=remedy)
         for arr in dout_dconditions.values():
@@ -266,17 +262,13 @@ def fit(
 
     network = reactor.network
     p0_full = (
-        jnp.asarray(initial_params)
-        if initial_params is not None
-        else network.default_parameters()
+        jnp.asarray(initial_params) if initial_params is not None else network.default_parameters()
     )
 
     free_indices = []
     for name in free_params:
         if name not in network.param_index:
-            raise KeyError(
-                f"Unknown parameter '{name}'. Available: {network.parameters}"
-            )
+            raise KeyError(f"Unknown parameter '{name}'. Available: {network.parameters}")
         free_indices.append(network.param_index[name])
     free_indices_arr = jnp.asarray(free_indices)
 
@@ -292,17 +284,14 @@ def fit(
         observations = observations[:, None]
     if observations.shape[0] != t_obs.shape[0]:
         raise ValueError(
-            f"observations has {observations.shape[0]} rows but t_obs has "
-            f"{t_obs.shape[0]} entries."
+            f"observations has {observations.shape[0]} rows but t_obs has {t_obs.shape[0]} entries."
         )
 
     if observed_species is None:
         obs_species_indices = jnp.arange(network.n_species)
         n_observed = network.n_species
     else:
-        obs_species_indices = jnp.asarray(
-            [network.species_index[s] for s in observed_species]
-        )
+        obs_species_indices = jnp.asarray([network.species_index[s] for s in observed_species])
         n_observed = len(observed_species)
     if observations.shape[1] != n_observed:
         raise ValueError(
@@ -419,9 +408,7 @@ class DGSMResult:
 
     def ranked(self) -> list[tuple[str, float]]:
         """Return ``(name, sobol_total_bound)`` pairs sorted by decreasing bound."""
-        pairs = [
-            (n, float(b)) for n, b in zip(self.input_names, self.sobol_total_bound)
-        ]
+        pairs = [(n, float(b)) for n, b in zip(self.input_names, self.sobol_total_bound)]
         return sorted(pairs, key=lambda kv: kv[1], reverse=True)
 
 
@@ -451,9 +438,7 @@ def _validate_dgsm_ranges(ranges, input_names):
     if input_names is None:
         input_names = [f"z{j}" for j in range(d)]
     elif len(input_names) != d:
-        raise ValueError(
-            f"input_names has {len(input_names)} entries but ranges has d={d}."
-        )
+        raise ValueError(f"input_names has {len(input_names)} entries but ranges has d={d}.")
     return ranges_np, lo, hi, d, list(input_names)
 
 
@@ -490,7 +475,7 @@ def _sobol_normal_sample(mean, std, d, n_samples, seed):
 
     n_pow = max(1, round(math.log2(max(n_samples, 2))))
     U = qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(n_pow)
-    U = np.clip(U, 1e-12, 1.0 - 1e-12)        # avoid +/-inf at the 0/1 endpoints
+    U = np.clip(U, 1e-12, 1.0 - 1e-12)  # avoid +/-inf at the 0/1 endpoints
     mean = np.asarray(mean)
     std = np.asarray(std)
     Z = mean[None, :] + std[None, :] * norm.ppf(U)
@@ -687,7 +672,7 @@ def dgsm(
         nu = np.mean(g2, axis=0)
         var_f = float(np.var(fv))
         if var_f > 0:
-            scale = (hi - lo) ** 2 / (math.pi ** 2 * var_f)
+            scale = (hi - lo) ** 2 / (math.pi**2 * var_f)
         else:
             # Every sample produced an identical output (e.g. a saturated or
             # clipped response): the Sobol total-index bound is undefined
@@ -717,22 +702,20 @@ def dgsm(
         )
 
     if not vector:
-        keep = _finite_mask(vals, jacs)              # vals (N,), jacs (N, d)
+        keep = _finite_mask(vals, jacs)  # vals (N,), jacs (N, d)
         return _assemble(vals[keep], jacs[keep] ** 2, None)
 
     if output_names is None:
         output_names = [f"output{i}" for i in range(m_out)]
     elif len(output_names) != m_out:
         raise ValueError(
-            f"output_names has {len(output_names)} entries but fn returns "
-            f"m={m_out} outputs."
+            f"output_names has {len(output_names)} entries but fn returns m={m_out} outputs."
         )
     # Mask finiteness PER OUTPUT: a sample non-finite in one output (or its
     # gradient) is dropped only for that output, not jointly for all of them, so
     # each output's nu_j and n_valid are unbiased by the others' failures.
     results = []
     for i in range(m_out):
-        keep_i = _finite_mask(vals[:, i], jacs[:, i, :])   # (N,)
-        results.append(
-            _assemble(vals[keep_i, i], jacs[keep_i, i, :] ** 2, output_names[i]))
+        keep_i = _finite_mask(vals[:, i], jacs[:, i, :])  # (N,)
+        results.append(_assemble(vals[keep_i, i], jacs[keep_i, i, :] ** 2, output_names[i]))
     return results

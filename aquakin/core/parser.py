@@ -181,8 +181,7 @@ class _Parser:
         if self._peek().kind != "EOF":
             tok = self._peek()
             raise ParseError(
-                f"Unexpected token {tok.value!r} at position {tok.pos} in expression "
-                f"{self.text!r}"
+                f"Unexpected token {tok.value!r} at position {tok.pos} in expression {self.text!r}"
             )
         return node
 
@@ -258,8 +257,7 @@ class _Parser:
                 return self._make_function_call(name, args)
             return ParamNode(name)
         raise ParseError(
-            f"Unexpected token {tok.value!r} at position {tok.pos} in expression "
-            f"{self.text!r}"
+            f"Unexpected token {tok.value!r} at position {tok.pos} in expression {self.text!r}"
         )
 
     def _read_species_name(self) -> str:
@@ -312,10 +310,7 @@ class _Parser:
     def _make_function_call(self, name: str, args: list[ASTNode]) -> ASTNode:
         spec = _FUNCTIONS.get(name)
         if spec is None:
-            raise ParseError(
-                f"Unknown function '{name}'. Built-ins are: "
-                f"{', '.join(_FUNCTIONS)}."
-            )
+            raise ParseError(f"Unknown function '{name}'. Built-ins are: {', '.join(_FUNCTIONS)}.")
         node_cls, arg_names = spec
         if len(args) != len(arg_names):
             raise ParseError(

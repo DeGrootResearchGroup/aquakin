@@ -22,6 +22,7 @@ two *known* units is reported.
 This is distinct from :mod:`aquakin.core.units`, which only *formats* unit
 strings for display.
 """
+
 from __future__ import annotations
 
 import re
@@ -54,6 +55,7 @@ from aquakin.core.nodes import (
 
 # --- the currency-token dimension algebra -----------------------------------
 
+
 @dataclass(frozen=True)
 class Dimension:
     """A free-abelian-group element over currency tokens: ``token -> exponent``.
@@ -68,9 +70,7 @@ class Dimension:
     tokens: frozenset  # frozenset of (token, Fraction) pairs with nonzero exp
 
     def __init__(self, mapping: Optional[dict] = None):
-        cleaned = {
-            k: Fraction(v) for k, v in (mapping or {}).items() if Fraction(v) != 0
-        }
+        cleaned = {k: Fraction(v) for k, v in (mapping or {}).items() if Fraction(v) != 0}
         object.__setattr__(self, "tokens", frozenset(cleaned.items()))
 
     def as_dict(self) -> dict:
@@ -104,9 +104,7 @@ class Dimension:
         den = [(k, -v) for k, v in items if v < 0]
 
         def fmt(pairs):
-            return ".".join(
-                k if v == 1 else f"{k}^{v}" for k, v in pairs
-            )
+            return ".".join(k if v == 1 else f"{k}^{v}" for k, v in pairs)
 
         if not den:
             return fmt(num)
@@ -125,8 +123,7 @@ DIMENSIONLESS = Dimension()
 # = m^3, ``s-1`` = s^-1, or a caret exponent ``^0.5``). Longest first so the
 # scan prefers ``mol`` over ``m`` and ``min`` over ``m``. ``M`` is molarity and
 # is normalised to ``mol/L`` after parsing.
-_UNIT_SYMBOLS = ["kmol", "mol", "min", "kg", "bar", "Pa", "g", "m", "L", "d",
-                 "s", "h", "M", "K"]
+_UNIT_SYMBOLS = ["kmol", "mol", "min", "kg", "bar", "Pa", "g", "m", "L", "d", "s", "h", "M", "K"]
 # Chemical "currency" tokens. ``O2`` carries the meaning of oxygen-as-O2;
 # ``TSS`` is suspended-solids mass (a distinct currency in the ASM2d/ASM3
 # models). These are the distinct base dimensions the check exists to keep
@@ -134,8 +131,20 @@ _UNIT_SYMBOLS = ["kmol", "mol", "min", "kg", "bar", "Pa", "g", "m", "L", "d",
 _CURRENCY_TOKENS = ["COD", "TSS", "O2", "N", "P", "S", "C"]
 
 _SUPERSCRIPT_TO_ASCII = str.maketrans(
-    {"⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5", "⁶": "6",
-     "⁷": "7", "⁸": "8", "⁹": "9", "⁻": "-", "⁺": "+"}
+    {
+        "⁰": "0",
+        "¹": "1",
+        "²": "2",
+        "³": "3",
+        "⁴": "4",
+        "⁵": "5",
+        "⁶": "6",
+        "⁷": "7",
+        "⁸": "8",
+        "⁹": "9",
+        "⁻": "-",
+        "⁺": "+",
+    }
 )
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_^.+\-]+")
@@ -244,9 +253,8 @@ def parse_units(text: str) -> Optional[Dimension]:
         return None
     # Accept the display multiplication dot (U+00B7 '·', U+22C5 '⋅') as '*', so
     # the prettified form round-trips through the parser.
-    s = (text.translate(_SUPERSCRIPT_TO_ASCII)
-         .replace("·", "*").replace("⋅", "*").strip())
-    if s == "" :
+    s = text.translate(_SUPERSCRIPT_TO_ASCII).replace("·", "*").replace("⋅", "*").strip()
+    if s == "":
         return None
     if s == "-":
         return DIMENSIONLESS
@@ -351,6 +359,7 @@ class _ProductParser:
 
 # --- unit propagation through a rate AST + the check ------------------------
 
+
 class UnitWarning(NamedTuple):
     """One dimensional-consistency finding for a rate expression.
 
@@ -375,9 +384,9 @@ class UnitWarning(NamedTuple):
 @dataclass
 class _Ctx:
     reaction: str
-    species_dim: dict          # species name -> Dimension|None
-    param_dim: dict            # namespaced param name -> Dimension|None
-    condition_dim: dict        # condition field -> Dimension|None
+    species_dim: dict  # species name -> Dimension|None
+    param_dim: dict  # namespaced param name -> Dimension|None
+    condition_dim: dict  # condition field -> Dimension|None
     warnings: list
 
     def warn(self, location: str, detail: str) -> None:
@@ -424,9 +433,7 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Optional[Dimension]:
             return lo
         if lo is not None and ro is not None and lo != ro:
             op = "+" if isinstance(node, AddNode) else "-"
-            ctx.warn(f"'{op}' operands",
-                     f"added/subtracted terms differ in units: "
-                     f"{lo} vs {ro}")
+            ctx.warn(f"'{op}' operands", f"added/subtracted terms differ in units: {lo} vs {ro}")
         # Result carries either side's dimension (they should agree); prefer a
         # known one so the rest of the expression can still be checked.
         return lo if lo is not None else ro
@@ -441,8 +448,7 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Optional[Dimension]:
         if isinstance(node.b, ConstantNode):
             return lo
         if lo is not None and ro is not None and lo != ro:
-            ctx.warn("'max' operands",
-                     f"max() operands differ in units: {lo} vs {ro}")
+            ctx.warn("'max' operands", f"max() operands differ in units: {lo} vs {ro}")
         return lo if lo is not None else ro
     if isinstance(node, MultiplyNode):
         lo = _infer(node.left, ctx)
@@ -471,9 +477,10 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Optional[Dimension]:
         dx = _infer(node.X, ctx)
         dk = _infer(node.K, ctx)
         if dx is not None and dk is not None and dx != dk:
-            ctx.warn("Monod term",
-                     f"saturation argument and half-saturation constant differ "
-                     f"in units: {dx} vs {dk}")
+            ctx.warn(
+                "Monod term",
+                f"saturation argument and half-saturation constant differ in units: {dx} vs {dk}",
+            )
         return DIMENSIONLESS
     if isinstance(node, (MonodRatioNode, MonodInhibitionRatioNode)):
         da = _infer(node.A, ctx)
@@ -481,9 +488,10 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Optional[Dimension]:
         dk = _infer(node.K, ctx)
         ratio = None if da is None or db is None else da / db
         if ratio is not None and dk is not None and ratio != dk:
-            ctx.warn("Monod-ratio term",
-                     f"saturation ratio and half-saturation constant differ in "
-                     f"units: {ratio} vs {dk}")
+            ctx.warn(
+                "Monod-ratio term",
+                f"saturation ratio and half-saturation constant differ in units: {ratio} vs {dk}",
+            )
         return DIMENSIONLESS
     if isinstance(node, (pHSwitchNode, pHInhibitNode)):
         return DIMENSIONLESS
@@ -529,8 +537,7 @@ def _root_issue(dim: Dimension) -> Optional[str]:
     # (``mol`` alone is a valid molar currency).
     masses = {k: v for k, v in rest.items() if k in _MASS_TOKENS}
     chems = {k: v for k, v in rest.items() if k in _CURRENCY_TOKENS}
-    other = {k: v for k, v in rest.items()
-             if k not in _MASS_TOKENS and k not in _CURRENCY_TOKENS}
+    other = {k: v for k, v in rest.items() if k not in _MASS_TOKENS and k not in _CURRENCY_TOKENS}
     if other:
         return f"unexpected factor(s) {Dimension(other)} in rate units {dim}"
     if len(masses) != 1 or next(iter(masses.values())) != 1:
@@ -584,25 +591,27 @@ def check_network_units(network, *, check_root: bool = True) -> list:
         *declared, parseable* units (it is not a proof of correctness, since
         unknown units are skipped).
     """
-    species_dim = {name: parse_units(u)
-                   for name, u in network.species_units.items()}
-    param_dim = {name: parse_units(u)
-                 for name, u in network.parameter_units.items()}
-    condition_dim = {name: parse_units(u)
-                     for name, u in network.condition_units.items()}
+    species_dim = {name: parse_units(u) for name, u in network.species_units.items()}
+    param_dim = {name: parse_units(u) for name, u in network.parameter_units.items()}
+    condition_dim = {name: parse_units(u) for name, u in network.condition_units.items()}
     warnings: list = []
     inv_time: dict = {}
     for name, ast in zip(network.reaction_names, network.rate_asts):
-        warnings.extend(check_rate_units(
-            ast, name, species_dim, param_dim, condition_dim,
-            check_root=check_root,
-        ))
+        warnings.extend(
+            check_rate_units(
+                ast,
+                name,
+                species_dim,
+                param_dim,
+                condition_dim,
+                check_root=check_root,
+            )
+        )
         # Record each rate's inverse-time token for the cross-reaction check
         # below (reuse the same root inference; cheap and advisory).
         root = _infer(ast, _Ctx(name, species_dim, param_dim, condition_dim, []))
         if root is not None:
-            inv = [k for k, v in root.as_dict().items()
-                   if k in _TIME_TOKENS and v < 0]
+            inv = [k for k, v in root.as_dict().items() if k in _TIME_TOKENS and v < 0]
             if len(inv) == 1:
                 inv_time[name] = inv[0]
 
@@ -615,8 +624,10 @@ def check_network_units(network, *, check_root: bool = True) -> list:
     # independent of ``check_root``.)
     distinct = set(inv_time.values())
     if len(distinct) > 1:
-        detail = ("rate constants disagree on the time unit, so the RHS is not "
-                  "dimensionally consistent: "
-                  + ", ".join(f"{r} -> 1/{u}" for r, u in sorted(inv_time.items())))
+        detail = (
+            "rate constants disagree on the time unit, so the RHS is not "
+            "dimensionally consistent: "
+            + ", ".join(f"{r} -> 1/{u}" for r, u in sorted(inv_time.items()))
+        )
         warnings.append(UnitWarning("(network)", "time unit", detail))
     return warnings

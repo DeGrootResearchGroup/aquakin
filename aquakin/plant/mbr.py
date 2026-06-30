@@ -107,21 +107,21 @@ class MBRUnit(AerationUnit, CouplingAware):
     def __post_init__(self) -> None:
         if not (0.0 <= self.rejection <= 1.0):
             raise ValueError(
-                f"MBRUnit '{self.name}' rejection must be in [0, 1], got "
-                f"{self.rejection}.")
+                f"MBRUnit '{self.name}' rejection must be in [0, 1], got {self.rejection}."
+            )
         if self.waste_flow < 0.0:
             raise ValueError(f"MBRUnit '{self.name}' waste_flow must be >= 0.")
-        missing = [c for c in self.network.conditions_required
-                   if c not in self.conditions]
+        missing = [c for c in self.network.conditions_required if c not in self.conditions]
         if missing:
             raise ValueError(
                 f"MBRUnit '{self.name}' is missing condition values for: "
-                f"{missing}. Provided: {list(self.conditions)}.")
+                f"{missing}. Provided: {list(self.conditions)}."
+            )
         for s in self.particulate_species:
             if s not in self.network.species_index:
                 raise ValueError(
-                    f"MBRUnit '{self.name}' particulate species '{s}' not in "
-                    f"the network.")
+                    f"MBRUnit '{self.name}' particulate species '{s}' not in the network."
+                )
 
         # Permeate multiplier: 1 for solubles, (1 - rejection) for particulates.
         n = self.network.n_species
@@ -134,13 +134,12 @@ class MBRUnit(AerationUnit, CouplingAware):
         # Aeration vectors via the AerationUnit mixin (the same CSTR machinery,
         # incl. auto-wired DO control).
         self._setup_aeration()
-        self._condition_arrays = {
-            k: jnp.asarray([float(v)]) for k, v in self.conditions.items()}
+        self._condition_arrays = {k: jnp.asarray([float(v)]) for k, v in self.conditions.items()}
 
     # ----- protocol: identity / layout -----------------------------------
     @property
     def state_size(self) -> int:
-        return self.network.n_species + 1   # bulk C + fouling resistance R_f
+        return self.network.n_species + 1  # bulk C + fouling resistance R_f
 
     @property
     def input_ports(self) -> list[str]:
@@ -151,9 +150,11 @@ class MBRUnit(AerationUnit, CouplingAware):
         return [self.permeate_port, self.waste_port]
 
     def initial_state(self) -> jnp.ndarray:
-        C0 = (self.network.default_concentrations()
-              if self.initial_concentrations is None
-              else jnp.asarray(self.initial_concentrations))
+        C0 = (
+            self.network.default_concentrations()
+            if self.initial_concentrations is None
+            else jnp.asarray(self.initial_concentrations)
+        )
         return jnp.concatenate([C0, jnp.asarray([float(self.initial_fouling)])])
 
     def _split(self, state):
@@ -190,14 +191,13 @@ class MBRUnit(AerationUnit, CouplingAware):
         n = self.network.n_species
         self_pat = np.zeros((n + 1, n + 1), dtype=bool)
         self_pat[:n, :n] = structural_sparsity_pattern(self.network)
-        self_pat[n, n] = True                       # dR_f/dt depends on R_f
+        self_pat[n, n] = True  # dR_f/dt depends on R_f
         inlet_pat = np.zeros((n + 1, n), dtype=bool)
-        inlet_pat[:n, :] = np.eye(n, dtype=bool)    # dilution: each C_i <- C_in,i
+        inlet_pat[:n, :] = np.eye(n, dtype=bool)  # dilution: each C_i <- C_in,i
         return CouplingPattern(self_pattern=self_pat, inlet_pattern=inlet_pat)
 
     # ----- membrane diagnostics ------------------------------------------
-    def tmp(self, fouling_resistance: jnp.ndarray,
-            permeate_flow: jnp.ndarray) -> jnp.ndarray:
+    def tmp(self, fouling_resistance: jnp.ndarray, permeate_flow: jnp.ndarray) -> jnp.ndarray:
         """Trans-membrane pressure ``tmp_viscosity * J * (R_m + R_f)`` at the
         given fouling resistance and permeate flow (``J = Q/area``)."""
         J = permeate_flow / self.membrane_area
@@ -221,15 +221,15 @@ class MBRUnit(AerationUnit, CouplingAware):
         C, _R_f = self._split(state)
         q_in = inputs[self.input_port].Q
         q_perm, q_waste = self._flows(q_in)
-        T_out = self._mixed_inlet_T(inputs)   # carry inlet T on
+        T_out = self._mixed_inlet_T(inputs)  # carry inlet T on
         return {
-            self.permeate_port: Stream(Q=q_perm, C=self._perm_mult * C,
-                                       network=self.network, T=T_out),
+            self.permeate_port: Stream(
+                Q=q_perm, C=self._perm_mult * C, network=self.network, T=T_out
+            ),
             self.waste_port: Stream(Q=q_waste, C=C, network=self.network, T=T_out),
         }
 
-    def flow_outputs(self, input_flows: dict, params: jnp.ndarray,
-                     ctx=None) -> dict:
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         q_perm, q_waste = self._flows(input_flows[self.input_port])
         return {self.permeate_port: q_perm, self.waste_port: q_waste}
 
@@ -250,8 +250,7 @@ class MBRUnit(AerationUnit, CouplingAware):
         # - Q_waste C + V(r + aer), with C_perm = perm_mult * C (membrane rejects
         # the particulates). Solids leave only via the waste draw, so the MLSS
         # concentrates -- the defining MBR behaviour, SRT = V / Q_waste.
-        convection = (q_in * s_in.C - q_perm * (self._perm_mult * C)
-                      - q_waste * C) / self.volume
+        convection = (q_in * s_in.C - q_perm * (self._perm_mult * C) - q_waste * C) / self.volume
 
         # Use the flow-weighted inlet temperature (seasonal influent) for both the
         # kinetics and the aeration, exactly as the CSTR does; fall back to the

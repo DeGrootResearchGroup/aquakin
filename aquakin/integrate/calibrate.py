@@ -122,28 +122,30 @@ def _build_loss(
     ``pred`` and ``observations`` have shape ``(n_t, n_observed)``.
     """
     if loss_type == "mse":
+
         def _loss(pred):
             return jnp.mean((pred - observations) ** 2)
+
         return _loss
     if loss_type == "wmse":
         if sigma is None:
             raise ValueError("loss='wmse' requires a sigma argument.")
         sig = sigma
+
         def _loss(pred):
             return jnp.mean(((pred - observations) / sig) ** 2)
+
         return _loss
     if loss_type == "nll":
         if sigma is None:
             raise ValueError("loss='nll' requires a sigma argument.")
         sig = sigma
+
         def _loss(pred):
-            return jnp.sum(
-                jnp.log(sig) + (pred - observations) ** 2 / (2.0 * sig ** 2)
-            )
+            return jnp.sum(jnp.log(sig) + (pred - observations) ** 2 / (2.0 * sig**2))
+
         return _loss
-    raise ValueError(
-        f"Unknown loss {loss_type!r}; choose one of {_VALID_LOSSES}."
-    )
+    raise ValueError(f"Unknown loss {loss_type!r}; choose one of {_VALID_LOSSES}.")
 
 
 def _build_residual(
@@ -163,25 +165,29 @@ def _build_residual(
     obs = observations
     if loss_type == "mse":
         scale = jnp.sqrt(2.0 / obs.size)
+
         def _resid(pred):
             return (scale * (pred - obs)).reshape(-1)
+
         return _resid
     if loss_type == "wmse":
         if sigma is None:
             raise ValueError("loss='wmse' requires a sigma argument.")
         scale = jnp.sqrt(2.0 / obs.size)
+
         def _resid(pred):
             return (scale * (pred - obs) / sigma).reshape(-1)
+
         return _resid
     if loss_type == "nll":
         if sigma is None:
             raise ValueError("loss='nll' requires a sigma argument.")
+
         def _resid(pred):
             return ((pred - obs) / sigma).reshape(-1)
+
         return _resid
-    raise ValueError(
-        f"Unknown loss {loss_type!r}; choose one of {_VALID_LOSSES}."
-    )
+    raise ValueError(f"Unknown loss {loss_type!r}; choose one of {_VALID_LOSSES}.")
 
 
 # --- Laplace covariance -----------------------------------------------
@@ -421,8 +427,7 @@ class CalibrationResult:
         """
         if self.posterior_cov is None:
             raise ValueError(
-                "predictive_band requires a Laplace posterior; call "
-                "calibrate(..., laplace=True)."
+                "predictive_band requires a Laplace posterior; call calibrate(..., laplace=True)."
             )
         if eig_keep is not None:
             warnings.warn(
@@ -435,10 +440,12 @@ class CalibrationResult:
         network = reactor.network
         names = self.parameter_names
         free_idx = jnp.asarray([network.param_index[n] for n in names])
-        theta_map = np.array([
-            float(_to_unconstrained(jnp.asarray(self.params_named[n]), t))
-            for n, t in zip(names, self.transforms)
-        ])
+        theta_map = np.array(
+            [
+                float(_to_unconstrained(jnp.asarray(self.params_named[n]), t))
+                for n, t in zip(names, self.transforms)
+            ]
+        )
 
         # Draw from N(theta_map, posterior_cov). posterior_cov is the
         # eigen-truncated covariance that also backs params_named_std, so the
@@ -457,9 +464,10 @@ class CalibrationResult:
             )
         std_k = np.sqrt(s[pos])
         rng = np.random.RandomState(seed)
-        draws = theta_map[None, :] + (
-            rng.standard_normal((n_draw, int(pos.sum()))) * std_k[None, :]
-        ) @ Q[:, pos].T
+        draws = (
+            theta_map[None, :]
+            + (rng.standard_normal((n_draw, int(pos.sum()))) * std_k[None, :]) @ Q[:, pos].T
+        )
 
         base = self.params
         C0_j = jnp.asarray(C0)
@@ -469,10 +477,12 @@ class CalibrationResult:
         curves = []
         first_error = None
         for theta in draws:
-            physical = jnp.stack([
-                _from_unconstrained(jnp.asarray(theta[i]), transforms[i])
-                for i in range(len(names))
-            ])
+            physical = jnp.stack(
+                [
+                    _from_unconstrained(jnp.asarray(theta[i]), transforms[i])
+                    for i in range(len(names))
+                ]
+            )
             p = base.at[free_idx].set(physical)
             try:
                 cc = np.asarray(
@@ -480,7 +490,7 @@ class CalibrationResult:
                 )
             except Exception as exc:
                 if first_error is None:
-                    first_error = exc      # keep the first cause, to report if all fail
+                    first_error = exc  # keep the first cause, to report if all fail
                 continue
             if np.all(np.isfinite(cc)):
                 curves.append(cc)
@@ -495,7 +505,8 @@ class CalibrationResult:
             raise RuntimeError(
                 "All posterior draws produced a non-finite trajectory (no "
                 "exception raised) -- the Laplace draws may leave the feasible "
-                "region; check the fit or tighten laplace_eig_keep.")
+                "region; check the fit or tighten laplace_eig_keep."
+            )
         curves = np.array(curves)
         lo = np.percentile(curves, percentiles[0], axis=0)
         hi = np.percentile(curves, percentiles[1], axis=0)
@@ -504,8 +515,12 @@ class CalibrationResult:
             sp_idx = [network.species_index[s] for s in observed_species]
             lo, hi, median = lo[:, sp_idx], hi[:, sp_idx], median[:, sp_idx]
         return PredictiveBand(
-            t=np.asarray(t_eval), median=median, lo=lo, hi=hi,
-            percentiles=tuple(percentiles), n_valid=len(curves),
+            t=np.asarray(t_eval),
+            median=median,
+            lo=lo,
+            hi=hi,
+            percentiles=tuple(percentiles),
+            n_valid=len(curves),
             species=list(observed_species) if observed_species is not None else None,
         )
 
@@ -736,8 +751,7 @@ def calibrate(
     if diff.mode not in ("reverse", "forward"):
         raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
     if diff.method not in ("stable", "through_solve"):
-        raise ValueError(
-            f"diff.method must be 'stable' or 'through_solve'; got {diff.method!r}.")
+        raise ValueError(f"diff.method must be 'stable' or 'through_solve'; got {diff.method!r}.")
     ad_mode = diff.mode
     gradient = "stable_adjoint" if diff.method == "stable" else "jax_adjoint"
     check_finite = diff.check_finite
@@ -747,15 +761,11 @@ def calibrate(
     if not free_params:
         raise ValueError("free_params must be non-empty.")
     if loss not in _VALID_LOSSES:
-        raise ValueError(
-            f"loss must be one of {_VALID_LOSSES}; got {loss!r}."
-        )
+        raise ValueError(f"loss must be one of {_VALID_LOSSES}; got {loss!r}.")
     if n_starts < 1:
         raise ValueError(f"n_starts must be >= 1; got {n_starts}.")
     if optimizer not in _VALID_OPTIMIZERS:
-        raise ValueError(
-            f"optimizer must be one of {_VALID_OPTIMIZERS}; got {optimizer!r}."
-        )
+        raise ValueError(f"optimizer must be one of {_VALID_OPTIMIZERS}; got {optimizer!r}.")
     if ad_mode == "forward" and gradient == "stable_adjoint":
         raise ValueError(
             "diff=DifferentiationConfig(mode='forward', method='stable') is "
@@ -790,9 +800,7 @@ def calibrate(
     network = reactor.network
     for name in free_params:
         if name not in network.param_index:
-            raise KeyError(
-                f"Unknown parameter '{name}'. Available: {network.parameters}"
-            )
+            raise KeyError(f"Unknown parameter '{name}'. Available: {network.parameters}")
 
     # Resolve transforms per free param.
     transforms = dict(transforms or {})
@@ -805,9 +813,7 @@ def calibrate(
 
     # Initial params (physical space).
     p0_full = (
-        jnp.asarray(initial_params)
-        if initial_params is not None
-        else network.default_parameters()
+        jnp.asarray(initial_params) if initial_params is not None else network.default_parameters()
     )
     free_indices = jnp.asarray([network.param_index[n] for n in free_params])
 
@@ -816,13 +822,11 @@ def calibrate(
         v = float(p0_full[network.param_index[name]])
         if t == "positive_log" and v <= 0.0:
             raise ValueError(
-                f"Parameter '{name}' has transform 'positive_log' but initial "
-                f"value {v} <= 0."
+                f"Parameter '{name}' has transform 'positive_log' but initial value {v} <= 0."
             )
         if t == "logit" and not (0.0 < v < 1.0):
             raise ValueError(
-                f"Parameter '{name}' has transform 'logit' but initial value "
-                f"{v} is not in (0, 1)."
+                f"Parameter '{name}' has transform 'logit' but initial value {v} is not in (0, 1)."
             )
 
     # --- Datasets (one or several batches sharing the parameter vector) ---
@@ -852,8 +856,7 @@ def calibrate(
         sigma_list = list(sigma)
         if len(sigma_list) != n_datasets:
             raise ValueError(
-                f"sigma list has {len(sigma_list)} entries but there are "
-                f"{n_datasets} datasets."
+                f"sigma list has {len(sigma_list)} entries but there are {n_datasets} datasets."
             )
     else:
         sigma_list = [sigma] * n_datasets
@@ -862,9 +865,7 @@ def calibrate(
         obs_species_indices = jnp.arange(network.n_species)
         n_observed = network.n_species
     else:
-        obs_species_indices = jnp.asarray(
-            [network.species_index[s] for s in observed_species]
-        )
+        obs_species_indices = jnp.asarray([network.species_index[s] for s in observed_species])
         n_observed = len(observed_species)
 
     # Validate each dataset and build its (C0, t_eval, t_span, loss) tuple.
@@ -876,13 +877,10 @@ def calibrate(
         tobs_i = jnp.asarray(tobs_i)
         if tobs_i.ndim != 1 or tobs_i.shape[0] < 1:
             raise ValueError(
-                f"dataset {ds}: t_obs must be a non-empty 1-D array, got shape "
-                f"{tobs_i.shape}."
+                f"dataset {ds}: t_obs must be a non-empty 1-D array, got shape {tobs_i.shape}."
             )
         if float(tobs_i[0]) < 0.0:
-            raise ValueError(
-                f"dataset {ds}: t_obs must be non-negative; got {float(tobs_i[0])}."
-            )
+            raise ValueError(f"dataset {ds}: t_obs must be non-negative; got {float(tobs_i[0])}.")
         if tobs_i.shape[0] > 1 and not bool(jnp.all(jnp.diff(tobs_i) > 0)):
             raise ValueError(f"dataset {ds}: t_obs must be strictly ascending.")
         obs_i = jnp.asarray(obs_i)
@@ -900,9 +898,13 @@ def calibrate(
             )
         sig_arr = jnp.asarray(sig_i) if sig_i is not None else None
         datasets.append(
-            (C0_i, tobs_i, (0.0, float(tobs_i[-1])),
-             _build_loss(loss, obs_i, sig_arr),
-             _build_residual(loss, obs_i, sig_arr))
+            (
+                C0_i,
+                tobs_i,
+                (0.0, float(tobs_i[-1])),
+                _build_loss(loss, obs_i, sig_arr),
+                _build_residual(loss, obs_i, sig_arr),
+            )
         )
 
     # Resolve Gaussian priors for the free parameters. Network-declared priors
@@ -918,15 +920,9 @@ def calibrate(
         for name, ms in priors.items():
             if name in free_params:
                 active_priors[name] = (float(ms[0]), float(ms[1]))
-    prior_mean = jnp.asarray(
-        [active_priors.get(n, (0.0, 1.0))[0] for n in free_params]
-    )
-    prior_std = jnp.asarray(
-        [active_priors.get(n, (0.0, 1.0))[1] for n in free_params]
-    )
-    prior_mask = jnp.asarray(
-        [1.0 if n in active_priors else 0.0 for n in free_params]
-    )
+    prior_mean = jnp.asarray([active_priors.get(n, (0.0, 1.0))[0] for n in free_params])
+    prior_std = jnp.asarray([active_priors.get(n, (0.0, 1.0))[1] for n in free_params])
+    prior_mask = jnp.asarray([1.0 if n in active_priors else 0.0 for n in free_params])
     has_priors = bool(active_priors)
 
     transform_array = resolved_transforms  # captured as Python list (static)
@@ -940,24 +936,18 @@ def calibrate(
     free_ic_list = list(free_ic or [])
     for s in free_ic_list:
         if s not in network.species_index:
-            raise KeyError(
-                f"Unknown free_ic species '{s}'. Available: {network.species}"
-            )
+            raise KeyError(f"Unknown free_ic species '{s}'. Available: {network.species}")
     m_ic = len(free_ic_list)
     if m_ic and not (0.0 < ic_bounds[0] < ic_bounds[1]):
         raise ValueError(f"ic_bounds must satisfy 0 < lo < hi; got {ic_bounds}.")
-    ic_species_idx = jnp.asarray(
-        [network.species_index[s] for s in free_ic_list], dtype=int
-    )
+    ic_species_idx = jnp.asarray([network.species_index[s] for s in free_ic_list], dtype=int)
     ic_center_blocks = []
     if m_ic:
         ic_np_idx = [network.species_index[s] for s in free_ic_list]
         for C0_i, *_rest in datasets:
             vals = np.clip(np.asarray(C0_i)[ic_np_idx], ic_bounds[0], ic_bounds[1])
             ic_center_blocks.append(np.log(vals))
-    ic_center_full = (
-        jnp.asarray(np.concatenate(ic_center_blocks)) if m_ic else jnp.zeros(0)
-    )
+    ic_center_full = jnp.asarray(np.concatenate(ic_center_blocks)) if m_ic else jnp.zeros(0)
 
     # The per-call-varying data is threaded into the compiled objective as
     # *arguments* (p0_full, the per-dataset initial states, the ic-prior centre),
@@ -976,8 +966,7 @@ def calibrate(
 
     def physical_from_theta(rate_thetas: jnp.ndarray) -> jnp.ndarray:
         return jnp.stack(
-            [_from_unconstrained(rate_thetas[i], transform_array[i])
-             for i in range(n_rate)]
+            [_from_unconstrained(rate_thetas[i], transform_array[i]) for i in range(n_rate)]
         )
 
     # Stable-adjoint backend: predictions come from the cap-free ESDIRK
@@ -1001,18 +990,19 @@ def calibrate(
         which needs no cap)."""
         rctr = reactor if rctr is None else rctr
         preds = []
-        for k, ((tobs_i, tspan_i, _loss_i, _resid_i), C0_i) in enumerate(
-            zip(dataset_static, C0s)
-        ):
+        for k, ((tobs_i, tspan_i, _loss_i, _resid_i), C0_i) in enumerate(zip(dataset_static, C0s)):
             C0_k = C0_i
             if m_ic:
-                C0_k = C0_i.at[ic_species_idx].set(
-                    jnp.exp(ic_thetas[k * m_ic:(k + 1) * m_ic])
-                )
+                C0_k = C0_i.at[ic_species_idx].set(jnp.exp(ic_thetas[k * m_ic : (k + 1) * m_ic]))
             if gradient == "stable_adjoint":
                 ys = esdirk_adjoint_solve(
-                    _da_rhs, C0_k, p, tspan_i, tobs_i,
-                    rtol=reactor.rtol, atol=reactor.atol,
+                    _da_rhs,
+                    C0_k,
+                    p,
+                    tspan_i,
+                    tobs_i,
+                    rtol=reactor.rtol,
+                    atol=reactor.atol,
                     max_steps=stable_adjoint_max_steps,
                     low_memory=stable_adjoint_low_memory,
                 )
@@ -1029,22 +1019,19 @@ def calibrate(
         p = p0_full_arg.at[free_indices].set(physical)
         # Sum the data terms over every dataset (the batches share ``p``).
         data_term = 0.0
-        for (_t, _ts, loss_fn_i, _r), pred in zip(
-            dataset_static, _predict(p, ic_thetas, C0s)
-        ):
+        for (_t, _ts, loss_fn_i, _r), pred in zip(dataset_static, _predict(p, ic_thetas, C0s)):
             data_term = data_term + loss_fn_i(pred)
         if has_priors:
             data_term = data_term + 0.5 * jnp.sum(
                 prior_mask * ((physical - prior_mean) / prior_std) ** 2
             )
         if m_ic and ic_prior_log_std:
-            data_term = data_term + 0.5 * jnp.sum(
-                ((ic_thetas - ic_center) / ic_prior_log_std) ** 2
-            )
+            data_term = data_term + 0.5 * jnp.sum(((ic_thetas - ic_center) / ic_prior_log_std) ** 2)
         return data_term
 
-    def _residual_parts(rate_thetas, ic_thetas, p0_full_arg, C0s, ic_center,
-                        rctr=None, *, include_ic_prior):
+    def _residual_parts(
+        rate_thetas, ic_thetas, p0_full_arg, C0s, ic_center, rctr=None, *, include_ic_prior
+    ):
         """The stacked residual vector whose 0.5*||.||^2 is the objective's
         theta-dependent part. Shared by the Gauss-Newton fit (full theta,
         ``include_ic_prior=True``) and the Gauss-Newton Laplace Hessian (rate
@@ -1082,8 +1069,14 @@ def calibrate(
             _compiled_cache[key] = fn
         return fn
 
-    _struct_key = (n_rate, m_ic, len(dataset_static), gradient, n_observed,
-                   tuple(int(ds[0].shape[0]) for ds in dataset_static))
+    _struct_key = (
+        n_rate,
+        m_ic,
+        len(dataset_static),
+        gradient,
+        n_observed,
+        tuple(int(ds[0].shape[0]) for ds in dataset_static),
+    )
     _obj_vg_jit = _cached_jit(
         ("obj_vg",) + _struct_key,
         lambda: jax.jit(jax.value_and_grad(objective)),
@@ -1121,8 +1114,7 @@ def calibrate(
     _has_bounds = (param_halfwidth is not None) or m_ic
     if _has_bounds:
         bounds = [
-            (None if not np.isfinite(lo) else float(lo),
-             None if not np.isfinite(hi) else float(hi))
+            (None if not np.isfinite(lo) else float(lo), None if not np.isfinite(hi) else float(hi))
             for lo, hi in zip(_lb, _ub)
         ]
     else:
@@ -1141,7 +1133,11 @@ def calibrate(
         # profile sweep reuses one compiled residual + Jacobian.
         def _full_residual(theta, p0_full_arg, C0s, ic_center):
             return _residual_parts(
-                theta[:n_rate], theta[n_rate:], p0_full_arg, C0s, ic_center,
+                theta[:n_rate],
+                theta[n_rate:],
+                p0_full_arg,
+                C0s,
+                ic_center,
                 include_ic_prior=True,
             )
 
@@ -1150,8 +1146,7 @@ def calibrate(
         _use_forward = _resolve_forward_jac(reactor)
         _jac = (jax.jacfwd if _use_forward else jax.jacrev)(_full_residual, argnums=0)
         _res_core = _cached_jit(("gn_res",) + _struct_key, lambda: jax.jit(_full_residual))
-        _jac_core = _cached_jit(
-            ("gn_jac", _use_forward) + _struct_key, lambda: jax.jit(_jac))
+        _jac_core = _cached_jit(("gn_jac", _use_forward) + _struct_key, lambda: jax.jit(_jac))
 
         def _res_j(theta):
             return _res_core(theta, *_data)
@@ -1172,14 +1167,18 @@ def calibrate(
                 bounds=bounds,
                 options={"maxiter": max_iter, "gtol": tol},
             )
-            return _OptOut(np.asarray(r.x), float(r.fun), bool(r.success),
-                           str(r.message), int(r.nit))
+            return _OptOut(
+                np.asarray(r.x), float(r.fun), bool(r.success), str(r.message), int(r.nit)
+            )
         r = least_squares(
             lambda x: np.asarray(_res_j(jnp.asarray(x)), dtype=float),
             np.asarray(x_start),
             jac=lambda x: np.asarray(_jac_j(jnp.asarray(x)), dtype=float),
-            method="trf", bounds=_ls_bounds, max_nfev=max_iter,
-            xtol=tol, ftol=tol,
+            method="trf",
+            bounds=_ls_bounds,
+            max_nfev=max_iter,
+            xtol=tol,
+            ftol=tol,
         )
         # ``n_iter`` reports optimiser ITERATIONS, consistent with L-BFGS-B's
         # ``nit`` above. scipy.least_squares exposes no iteration count, so use the
@@ -1187,8 +1186,7 @@ def calibrate(
         # rather than ``nfev`` (raw residual evaluations, which also counts
         # rejected trial steps and so is a different, larger scale).
         n_iter_ls = int(r.njev) if r.njev is not None else int(r.nfev)
-        return _OptOut(np.asarray(r.x), float(r.cost), bool(r.success),
-                       str(r.message), n_iter_ls)
+        return _OptOut(np.asarray(r.x), float(r.cost), bool(r.success), str(r.message), n_iter_ls)
 
     # Guard against the silent-NaN footgun: evaluate the gradient/Jacobian once
     # at the start point and fail loudly with the remedy if it is non-finite
@@ -1241,8 +1239,7 @@ def calibrate(
         for s in range(1, n_starts):
             if jitter_schedule:
                 jit = jitter_schedule[(s - 1) % len(jitter_schedule)]
-                noise = np.random.RandomState(seed + s).normal(
-                    0.0, jit, size=theta0_np.shape)
+                noise = np.random.RandomState(seed + s).normal(0.0, jit, size=theta0_np.shape)
             else:
                 noise = seq_rng.normal(0.0, jitter, size=theta0_np.shape)
             perturbed = theta0_np + noise
@@ -1264,7 +1261,7 @@ def calibrate(
         C0_fitted = []
         ic_named = []
         for k, (C0_i, *_rest) in enumerate(datasets):
-            vals = np.exp(np.asarray(ic_opt)[k * m_ic:(k + 1) * m_ic])
+            vals = np.exp(np.asarray(ic_opt)[k * m_ic : (k + 1) * m_ic])
             C0_fitted.append(C0_i.at[ic_species_idx].set(jnp.asarray(vals)))
             ic_named.append({s: float(v) for s, v in zip(free_ic_list, vals)})
 
@@ -1287,8 +1284,13 @@ def calibrate(
         if laplace_dtmax is not None and laplace_dtmax != getattr(reactor, "dtmax", None):
             lap_integrator = replace(reactor.integrator, dtmax=laplace_dtmax)
             lap_reactor = type(reactor)(
-                reactor.network, reactor.conditions, rtol=reactor.rtol,
-                atol=reactor.atol, integrator=lap_integrator, diff=reactor.diff)
+                reactor.network,
+                reactor.conditions,
+                rtol=reactor.rtol,
+                atol=reactor.atol,
+                integrator=lap_integrator,
+                diff=reactor.diff,
+            )
         else:
             lap_reactor = reactor
         if laplace_method == "gauss_newton":
@@ -1304,8 +1306,13 @@ def calibrate(
             # omitted (it does not depend on the rates).
             def _residual_vec(rate_thetas):
                 return _residual_parts(
-                    rate_thetas, ic_opt, p0_full, C0_base, ic_center_full,
-                    lap_reactor, include_ic_prior=False
+                    rate_thetas,
+                    ic_opt,
+                    p0_full,
+                    C0_base,
+                    ic_center_full,
+                    lap_reactor,
+                    include_ic_prior=False,
                 )
 
             _use_fwd_lap = _resolve_forward_jac(lap_reactor)
@@ -1324,7 +1331,8 @@ def calibrate(
                     total = total + loss_fn_i(pred)
                 if has_priors:
                     total = total + 0.5 * jnp.sum(
-                        prior_mask * ((physical - prior_mean) / prior_std) ** 2)
+                        prior_mask * ((physical - prior_mean) / prior_std) ** 2
+                    )
                 return total
 
             grad_fn = jax.jit(jax.grad(_objective_rate))
@@ -1338,8 +1346,7 @@ def calibrate(
             H = jnp.stack(H_rows)
         else:
             raise ValueError(
-                f"laplace_method must be 'fd' or 'gauss_newton'; got "
-                f"{laplace_method!r}."
+                f"laplace_method must be 'fd' or 'gauss_newton'; got {laplace_method!r}."
             )
         H = 0.5 * (H + H.T)  # symmetrise away asymmetry / FD noise
 
@@ -1360,9 +1367,7 @@ def calibrate(
             ]
         )
         std_physical = jnp.abs(jac) * posterior_std_unconstrained
-        params_named_std = {
-            name: float(std_physical[i]) for i, name in enumerate(free_params)
-        }
+        params_named_std = {name: float(std_physical[i]) for i, name in enumerate(free_params)}
 
     # Report the loss as the full scalar objective at the optimum, identical
     # across optimizers. The Gauss-Newton path's ``r.cost`` is 0.5*||residual||^2,

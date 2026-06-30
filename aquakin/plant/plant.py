@@ -235,8 +235,11 @@ class PlantSolution:
         """
         unit = self.plant._unit_or_raise(unit_name)
         if not self.plant._is_concentration_unit(unit):
-            indexable = [n for n in self.plant.list_units()
-                         if self.plant._is_concentration_unit(self.plant.units[n])]
+            indexable = [
+                n
+                for n in self.plant.list_units()
+                if self.plant._is_concentration_unit(self.plant.units[n])
+            ]
             raise KeyError(
                 f"Unit '{unit_name}' state is not a concentration vector, so it "
                 f"cannot be indexed by species (read it as a stream with "
@@ -274,8 +277,7 @@ class PlantSolution:
         (a post-processing read on an already-solved solution -- use
         ``C_named(unit, sp)[-1]`` if you need a differentiable last value).
         """
-        names = (self.plant.list_species(unit_name) if species is None
-                 else list(species))
+        names = self.plant.list_species(unit_name) if species is None else list(species)
         return {sp: float(self.C_named(unit_name, sp)[-1]) for sp in names}
 
     def plot(self, unit_name: str, species=None, *, ax=None, **kwargs):
@@ -312,9 +314,15 @@ class PlantSolution:
         import numpy as np
 
         from aquakin.integrate._common import require_matplotlib
+
         plt = require_matplotlib()
-        names = (self.plant.list_species(unit_name) if species is None
-                 else [species] if isinstance(species, str) else list(species))
+        names = (
+            self.plant.list_species(unit_name)
+            if species is None
+            else [species]
+            if isinstance(species, str)
+            else list(species)
+        )
         if ax is None:
             _, ax = plt.subplots()
         t = np.asarray(self.t)
@@ -362,10 +370,8 @@ class PlantSolution:
         from aquakin.integrate._common import build_dataframe
 
         if unit not in self.plant.units:
-            raise KeyError(
-                f"Unknown unit '{unit}'. Available: {list(self.plant.units)}"
-            )
-        sub = self.unit_state(unit)                 # (n_t, unit.state_size)
+            raise KeyError(f"Unknown unit '{unit}'. Available: {list(self.plant.units)}")
+        sub = self.unit_state(unit)  # (n_t, unit.state_size)
         unit_obj = self.plant.units[unit]
         if hasattr(unit_obj, "network"):
             net = unit_obj.network
@@ -375,12 +381,14 @@ class PlantSolution:
             columns = [(f"state_{j}", sub[:, j]) for j in range(sub.shape[1])]
             units = {}
         return build_dataframe(
-            self.t, columns, index_name="t", units=units,
+            self.t,
+            columns,
+            index_name="t",
+            units=units,
             units_in_columns=units_in_columns,
         )
 
-    def to_csv(self, path_or_buf=None, *, unit: str, units_in_columns: bool = True,
-               **kwargs):
+    def to_csv(self, path_or_buf=None, *, unit: str, units_in_columns: bool = True, **kwargs):
         """Write one unit's trajectory to CSV (delegates to :meth:`to_dataframe`).
 
         ``unit`` is required (the plant state is per-unit). ``units_in_columns``
@@ -466,10 +474,11 @@ def _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=None, poincare=None):
     var : ndarray, shape ``(m,)`` ; n_valid : ndarray int, shape ``(m,)``
     """
     import numpy as np
+
     grad_sq = np.asarray(grad_sq)
     outputs = np.asarray(outputs)
     _, m, k = grad_sq.shape
-    valid = np.isfinite(outputs) & np.isfinite(grad_sq).all(axis=2)   # (N, m)
+    valid = np.isfinite(outputs) & np.isfinite(grad_sq).all(axis=2)  # (N, m)
     if sample_mask is not None:
         valid = valid & np.asarray(sample_mask)[:, None]
     nu = np.full((m, k), np.nan)
@@ -488,8 +497,7 @@ def _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=None, poincare=None):
     # for a Gaussian-distributed input the bound instead carries ``poincare_j =
     # std_j^2`` (Sobol & Kucherenko 2010, Sec. 8; Lamboni et al. 2013, Thm 3.1),
     # passed in directly. ``bound = nu * C_j / Var(g)`` either way.
-    const = (np.asarray(poincare)[None, :] if poincare is not None
-             else rng2[None, :] / (np.pi ** 2))
+    const = np.asarray(poincare)[None, :] if poincare is not None else rng2[None, :] / (np.pi**2)
     with np.errstate(divide="ignore", invalid="ignore"):
         scale = np.where((var > 0)[:, None], const / var[:, None], np.nan)
     return nu * scale, se * scale, nu, var, n_valid
@@ -508,6 +516,7 @@ def _cond_mask(cond, cond_factor):
     Returns a boolean ``(N,)`` mask.
     """
     import numpy as np
+
     cond = np.asarray(cond)
     finite = np.isfinite(cond)
     if cond_factor is None:
@@ -522,6 +531,7 @@ def _to_z(theta, kind):
     ``positive_log`` -> natural log, ``logit`` -> log-odds, ``none`` -> identity.
     """
     import numpy as np
+
     if kind == "positive_log":
         return np.log(theta)
     if kind == "logit":
@@ -532,6 +542,7 @@ def _to_z(theta, kind):
 def _from_z(z, kind):
     """Inverse of :func:`_to_z`: transform-space variable -> physical parameter."""
     import numpy as np
+
     if kind == "positive_log":
         return np.exp(z)
     if kind == "logit":
@@ -655,10 +666,8 @@ class SteadyStateDGSMResult:
 
         ``output`` is an output name or row index.
         """
-        i = (self.output_names.index(output) if isinstance(output, str)
-             else int(output))
-        pairs = [(n, float(b))
-                 for n, b in zip(self.input_names, self.sobol_total_bound[i])]
+        i = self.output_names.index(output) if isinstance(output, str) else int(output)
+        pairs = [(n, float(b)) for n, b in zip(self.input_names, self.sobol_total_bound[i])]
         return sorted(pairs, key=lambda t: t[1], reverse=True)
 
     def convergence(self, counts=None):
@@ -682,30 +691,30 @@ class SteadyStateDGSMResult:
         import math
 
         import numpy as np
+
         n = int(self.outputs.shape[0])
         if counts is None:
             j0 = 4
-            counts = [2 ** j for j in range(j0, max(j0, int(math.log2(n))) + 1)]
+            counts = [2**j for j in range(j0, max(j0, int(math.log2(n))) + 1)]
             if not counts or counts[-1] != n:
                 counts.append(n)
-        rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)   # (k,)
+        rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)  # (k,)
         pc = None if self.poincare is None else np.asarray(self.poincare)  # (k,)
-        gs = np.asarray(self.grad_sq)                                     # (N, m, k)
-        ov = np.asarray(self.outputs)                                     # (N, m)
-        cond = np.asarray(self.cond)                                      # (N,)
-        op = (np.array([e is not False for e in self.operating_point_exists],
-                       dtype=bool)
-              if self.operating_point_exists is not None
-              else np.ones(n, dtype=bool))                               # past-fold
+        gs = np.asarray(self.grad_sq)  # (N, m, k)
+        ov = np.asarray(self.outputs)  # (N, m)
+        cond = np.asarray(self.cond)  # (N,)
+        op = (
+            np.array([e is not False for e in self.operating_point_exists], dtype=bool)
+            if self.operating_point_exists is not None
+            else np.ones(n, dtype=bool)
+        )  # past-fold
         b_list, se_list = [], []
         for k in counts:
             mask = _cond_mask(cond[:k], self.cond_factor) & op[:k]
-            bound, se, *_ = _dgsm_aggregate(gs[:k], ov[:k], rng2,
-                                            sample_mask=mask, poincare=pc)
+            bound, se, *_ = _dgsm_aggregate(gs[:k], ov[:k], rng2, sample_mask=mask, poincare=pc)
             b_list.append(bound)
             se_list.append(se)
-        return (jnp.asarray(counts), jnp.asarray(np.stack(b_list)),
-                jnp.asarray(np.stack(se_list)))
+        return (jnp.asarray(counts), jnp.asarray(np.stack(b_list)), jnp.asarray(np.stack(se_list)))
 
     def with_cond_factor(self, cond_factor):
         """Re-aggregate with a different near-singular-Jacobian threshold.
@@ -718,20 +727,27 @@ class SteadyStateDGSMResult:
         from dataclasses import replace
 
         import numpy as np
+
         rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)
-        op = (np.array([e is not False for e in self.operating_point_exists],
-                       dtype=bool)
-              if self.operating_point_exists is not None
-              else np.ones(len(self.cond), dtype=bool))           # past-fold excl.
+        op = (
+            np.array([e is not False for e in self.operating_point_exists], dtype=bool)
+            if self.operating_point_exists is not None
+            else np.ones(len(self.cond), dtype=bool)
+        )  # past-fold excl.
         mask = _cond_mask(np.asarray(self.cond), cond_factor) & op
         pc = None if self.poincare is None else np.asarray(self.poincare)
         bound, se, nu, var, n_valid = _dgsm_aggregate(
-            np.asarray(self.grad_sq), np.asarray(self.outputs), rng2,
-            sample_mask=mask, poincare=pc)
+            np.asarray(self.grad_sq), np.asarray(self.outputs), rng2, sample_mask=mask, poincare=pc
+        )
         return replace(
-            self, sobol_total_bound=jnp.asarray(bound), std_error=jnp.asarray(se),
-            nu=jnp.asarray(nu), output_variance=jnp.asarray(var),
-            n_valid=jnp.asarray(n_valid), cond_factor=cond_factor)
+            self,
+            sobol_total_bound=jnp.asarray(bound),
+            std_error=jnp.asarray(se),
+            nu=jnp.asarray(nu),
+            output_variance=jnp.asarray(var),
+            n_valid=jnp.asarray(n_valid),
+            cond_factor=cond_factor,
+        )
 
 
 def _dynamic_value_and_jacobian(f, x, mode):
@@ -745,10 +761,10 @@ def _dynamic_value_and_jacobian(f, x, mode):
     """
     if mode == "reverse":
         g, vjp_fn = jax.vjp(f, x)
-        S = jax.vmap(lambda c: vjp_fn(c)[0])(jnp.eye(int(g.shape[0])))   # (m, k)
+        S = jax.vmap(lambda c: vjp_fn(c)[0])(jnp.eye(int(g.shape[0])))  # (m, k)
         return g, S
     g, jvp_fn = jax.linearize(f, x)
-    S = jax.vmap(jvp_fn)(jnp.eye(int(x.shape[0]))).T                     # (m, k)
+    S = jax.vmap(jvp_fn)(jnp.eye(int(x.shape[0]))).T  # (m, k)
     return g, S
 
 
@@ -760,6 +776,7 @@ def _dynamic_dgsm_bounds(grad_sq, outputs, rng2, poincare=None):
     steady-state Jacobian.
     """
     import numpy as np
+
     grad_sq = np.asarray(grad_sq)
     outputs = np.asarray(outputs)
     _, m, k = grad_sq.shape
@@ -780,8 +797,7 @@ def _dynamic_dgsm_bounds(grad_sq, outputs, rng2, poincare=None):
     # for a Gaussian-distributed input the bound instead carries ``poincare_j =
     # std_j^2`` (Sobol & Kucherenko 2010, Sec. 8; Lamboni et al. 2013, Thm 3.1),
     # passed in directly. ``bound = nu * C_j / Var(g)`` either way.
-    const = (np.asarray(poincare)[None, :] if poincare is not None
-             else rng2[None, :] / (np.pi ** 2))
+    const = np.asarray(poincare)[None, :] if poincare is not None else rng2[None, :] / (np.pi**2)
     with np.errstate(divide="ignore", invalid="ignore"):
         scale = np.where((var > 0)[:, None], const / var[:, None], np.nan)
     return nu * scale, se * scale, nu, var, n_valid
@@ -811,10 +827,8 @@ class DynamicDGSMResult:
 
     def ranked(self, output=0):
         """``[(input_name, bound)]`` for one output, sorted by decreasing bound."""
-        i = (self.output_names.index(output) if isinstance(output, str)
-             else int(output))
-        pairs = [(n, float(b))
-                 for n, b in zip(self.input_names, self.sobol_total_bound[i])]
+        i = self.output_names.index(output) if isinstance(output, str) else int(output)
+        pairs = [(n, float(b)) for n, b in zip(self.input_names, self.sobol_total_bound[i])]
         return sorted(pairs, key=lambda t: t[1], reverse=True)
 
     def convergence(self, counts=None):
@@ -824,10 +838,11 @@ class DynamicDGSMResult:
         import math
 
         import numpy as np
+
         n = int(self.outputs.shape[0])
         if counts is None:
             j0 = 4
-            counts = [2 ** j for j in range(j0, max(j0, int(math.log2(n))) + 1)]
+            counts = [2**j for j in range(j0, max(j0, int(math.log2(n))) + 1)]
             if not counts or counts[-1] != n:
                 counts.append(n)
         rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)
@@ -838,8 +853,7 @@ class DynamicDGSMResult:
             bound, se, *_ = _dynamic_dgsm_bounds(gs[:k], ov[:k], rng2)
             b_list.append(bound)
             se_list.append(se)
-        return (jnp.asarray(counts), jnp.asarray(np.stack(b_list)),
-                jnp.asarray(np.stack(se_list)))
+        return (jnp.asarray(counts), jnp.asarray(np.stack(b_list)), jnp.asarray(np.stack(se_list)))
 
 
 def _senses_concentration(unit) -> bool:
@@ -955,8 +969,7 @@ class Plant:
             raise ValueError(f"recycle_tol must be > 0 or None; got {recycle_tol}")
         self.recycle_tol = recycle_tol
         if recycle_max_passes < 1:
-            raise ValueError(
-                f"recycle_max_passes must be >= 1; got {recycle_max_passes}")
+            raise ValueError(f"recycle_max_passes must be >= 1; got {recycle_max_passes}")
         self.recycle_max_passes = int(recycle_max_passes)
         self.units: dict[str, Unit] = {}
         # Units in the order they were added (the user's order; arbitrary).
@@ -1126,20 +1139,24 @@ class Plant:
         if to is not None:
             to_unit, to_port = self._parse_endpoint(to, role="destination")
             translator = self._default_translator(
-                series.network, to_unit, translator,
-                f"influent '{name}'", f"{to_unit}.{to_port}",
+                series.network,
+                to_unit,
+                translator,
+                f"influent '{name}'",
+                f"{to_unit}.{to_port}",
             )
             self.connections.append(
                 Connection(
-                    from_unit=None, from_port=name,
-                    to_unit=to_unit, to_port=to_port,
-                    translator=translator, initial_value=None,
+                    from_unit=None,
+                    from_port=name,
+                    to_unit=to_unit,
+                    to_port=to_port,
+                    translator=translator,
+                    initial_value=None,
                 )
             )
 
-    def set_temperature(
-        self, celsius: float, *, units: Optional[Iterable[str]] = None
-    ) -> "Plant":
+    def set_temperature(self, celsius: float, *, units: Optional[Iterable[str]] = None) -> "Plant":
         """Set the operating temperature of the reactors, in **degrees Celsius**.
 
         One knob for "run the plant at this temperature": converts to Kelvin and
@@ -1176,17 +1193,19 @@ class Plant:
         """
         kelvin = float(celsius) + 273.15
         if units is None:
-            targets = [n for n, u in self.units.items()
-                       if hasattr(u, "set_temperature")
-                       and "T" in getattr(u.network, "conditions_required", ())]
+            targets = [
+                n
+                for n, u in self.units.items()
+                if hasattr(u, "set_temperature")
+                and "T" in getattr(u.network, "conditions_required", ())
+            ]
         else:
             targets = list(units)
             for name in targets:
                 if name not in self.units:
                     raise ValueError(f"Unknown unit '{name}'.")
                 if not hasattr(self.units[name], "set_temperature"):
-                    raise ValueError(
-                        f"Unit '{name}' does not support set_temperature.")
+                    raise ValueError(f"Unit '{name}' does not support set_temperature.")
         for name in targets:
             self.units[name].set_temperature(kelvin)
         # The compiled solve bakes in the (now-changed) condition values, so it
@@ -1268,14 +1287,20 @@ class Plant:
         src_unit, src_port = self._parse_endpoint(source, role="source")
         dst_unit, dst_port = self._parse_endpoint(dest, role="destination")
         translator = self._default_translator(
-            self._unit_network(src_unit), dst_unit, translator,
-            f"{src_unit}.{src_port}", f"{dst_unit}.{dst_port}",
+            self._unit_network(src_unit),
+            dst_unit,
+            translator,
+            f"{src_unit}.{src_port}",
+            f"{dst_unit}.{dst_port}",
         )
         self.connections.append(
             Connection(
-                from_unit=src_unit, from_port=src_port,
-                to_unit=dst_unit, to_port=dst_port,
-                translator=translator, initial_value=initial_value,
+                from_unit=src_unit,
+                from_port=src_port,
+                to_unit=dst_unit,
+                to_port=dst_port,
+                translator=translator,
+                initial_value=initial_value,
             )
         )
 
@@ -1303,8 +1328,7 @@ class Plant:
         """
         self._finalize_topology()
         fed = {(c.to_unit, c.to_port) for c in self.connections}
-        consumed = {(c.from_unit, c.from_port)
-                    for c in self.connections if c.from_unit is not None}
+        consumed = {(c.from_unit, c.from_port) for c in self.connections if c.from_unit is not None}
         unfed, dangling = [], []
         for name in self._insertion_order:
             unit = self.units[name]
@@ -1315,13 +1339,16 @@ class Plant:
                 if (name, port) not in consumed:
                     dangling.append(f"{name}.{port}")
         result = PlantCheck(
-            unfed_ports=unfed, dangling_outputs=dangling,
-            recycles=[f"{u}.{p}" for (u, p) in self._recycle_keys])
+            unfed_ports=unfed,
+            dangling_outputs=dangling,
+            recycles=[f"{u}.{p}" for (u, p) in self._recycle_keys],
+        )
         if raise_on_error and not result.ok:
             raise ValueError(
                 f"Plant '{self.name}' has unfed input ports (no stream wired "
                 f"in): {unfed}. Wire them with connect()/add_influent() before "
-                f"solving.")
+                f"solving."
+            )
         return result
 
     def _parse_endpoint(self, spec: str, *, role: str) -> tuple[str, str]:
@@ -1341,14 +1368,14 @@ class Plant:
                 )
             raise KeyError(f"Unknown unit '{unit_name}' in endpoint '{spec}'.")
         ports = (
-            self.units[unit_name].output_ports if role == "source"
+            self.units[unit_name].output_ports
+            if role == "source"
             else self.units[unit_name].input_ports
         )
         if port:
             if port not in ports:
                 raise KeyError(
-                    f"Unit '{unit_name}' has no {role} port '{port}'; "
-                    f"available: {list(ports)}."
+                    f"Unit '{unit_name}' has no {role} port '{port}'; available: {list(ports)}."
                 )
             return unit_name, port
         if len(ports) != 1:
@@ -1377,10 +1404,10 @@ class Plant:
         # separate instances of the same model (e.g. calling bsm2_asm1_network()
         # twice, so the plant and the influent carry different temperature
         # corrections / parameters) -- from a genuine cross-network connection.
-        same_model = (
-            getattr(source_network, "name", object()) == getattr(target_network, "name", None)
-            and getattr(source_network, "species", object())
-            == getattr(target_network, "species", None)
+        same_model = getattr(source_network, "name", object()) == getattr(
+            target_network, "name", None
+        ) and getattr(source_network, "species", object()) == getattr(
+            target_network, "species", None
         )
         if same_model:
             raise ValueError(
@@ -1452,20 +1479,19 @@ class Plant:
         forced = [c for c in unit_conns if id(c) in forced_ids]
         auto_cut = [c for c in unit_conns if id(c) in cut_ids]
         self._recycle_conns = forced + auto_cut
-        self._recycle_keys = [(c.from_unit, c.from_port)
-                              for c in self._recycle_conns]
+        self._recycle_keys = [(c.from_unit, c.from_port) for c in self._recycle_conns]
         self._recycle_seeds = {}
         for c in auto_cut:
             net = self.units[c.from_unit].network
             self._recycle_seeds[(c.from_unit, c.from_port)] = Stream(
-                Q=jnp.asarray(0.0), C=net.default_concentrations(), network=net)
+                Q=jnp.asarray(0.0), C=net.default_concentrations(), network=net
+            )
 
     def _unit_network(self, unit_name: str) -> CompiledNetwork:
         unit = self.units[unit_name]
         if not hasattr(unit, "network"):
             raise KeyError(
-                f"Unit '{unit_name}' has no 'network' attribute; cannot "
-                f"infer translator default."
+                f"Unit '{unit_name}' has no 'network' attribute; cannot infer translator default."
             )
         return unit.network
 
@@ -1500,17 +1526,33 @@ class Plant:
             aer = getattr(self.units[name], "aeration", None)
             if aer is None or not aer.is_closed_loop:
                 continue
-            groups.setdefault(aer.controller_id(name), []).append(
-                (name, self.units[name], aer)
-            )
+            groups.setdefault(aer.controller_id(name), []).append((name, self.units[name], aer))
 
         for cid, members in groups.items():
             first_name, first_unit, a0 = members[0]
-            key = (a0.do_setpoint, a0.sensor, a0.species, a0.Kp, a0.Ti, a0.Tt,
-                   a0.kla_offset, a0.kla_min, a0.kla_max)
+            key = (
+                a0.do_setpoint,
+                a0.sensor,
+                a0.species,
+                a0.Kp,
+                a0.Ti,
+                a0.Tt,
+                a0.kla_offset,
+                a0.kla_min,
+                a0.kla_max,
+            )
             for nm, _u, a in members[1:]:
-                if (a.do_setpoint, a.sensor, a.species, a.Kp, a.Ti, a.Tt,
-                        a.kla_offset, a.kla_min, a.kla_max) != key:
+                if (
+                    a.do_setpoint,
+                    a.sensor,
+                    a.species,
+                    a.Kp,
+                    a.Ti,
+                    a.Tt,
+                    a.kla_offset,
+                    a.kla_min,
+                    a.kla_max,
+                ) != key:
                     raise ValueError(
                         f"CSTRUnits sharing aeration controller '{cid}' "
                         f"('{first_name}', '{nm}') must agree on its setpoint, "
@@ -1533,15 +1575,22 @@ class Plant:
             # The controller unit takes the shared id as its name (so it is
             # referenceable); a per-tank controller gets a derived name that
             # cannot collide with the tank it controls.
-            ctrl_name = a0.controller if a0.controller is not None \
-                else f"{first_name}_aeration"
-            self.add_unit(PIController(
-                name=ctrl_name, network=first_unit.network,
-                measured_species=a0.species, setpoint=a0.do_setpoint,
-                Kp=a0.Kp, Ti=a0.Ti, Tt=a0.Tt, offset=a0.kla_offset,
-                out_min=a0.kla_min, out_max=a0.kla_max,
-                signal_name=_aeration_signal_name(cid),
-            ))
+            ctrl_name = a0.controller if a0.controller is not None else f"{first_name}_aeration"
+            self.add_unit(
+                PIController(
+                    name=ctrl_name,
+                    network=first_unit.network,
+                    measured_species=a0.species,
+                    setpoint=a0.do_setpoint,
+                    Kp=a0.Kp,
+                    Ti=a0.Ti,
+                    Tt=a0.Tt,
+                    offset=a0.kla_offset,
+                    out_min=a0.kla_min,
+                    out_max=a0.kla_max,
+                    signal_name=_aeration_signal_name(cid),
+                )
+            )
             # Tap the sensor's first output port explicitly: the controller reads
             # the sensed value from the sensor's state (a reactor concentration),
             # so any output port carries it, but a bare endpoint is ambiguous for a
@@ -1580,11 +1629,29 @@ class Plant:
 
         for cid, members in groups.items():
             first_name, d0 = members[0]
-            key = (d0.setpoint, d0.sensor, d0.measured_species,
-                   d0.Kp, d0.Ti, d0.Tt, d0.flow_offset, d0.flow_min, d0.flow_max)
+            key = (
+                d0.setpoint,
+                d0.sensor,
+                d0.measured_species,
+                d0.Kp,
+                d0.Ti,
+                d0.Tt,
+                d0.flow_offset,
+                d0.flow_min,
+                d0.flow_max,
+            )
             for nm, d in members[1:]:
-                if (d.setpoint, d.sensor, d.measured_species, d.Kp, d.Ti, d.Tt,
-                        d.flow_offset, d.flow_min, d.flow_max) != key:
+                if (
+                    d.setpoint,
+                    d.sensor,
+                    d.measured_species,
+                    d.Kp,
+                    d.Ti,
+                    d.Tt,
+                    d.flow_offset,
+                    d.flow_min,
+                    d.flow_max,
+                ) != key:
                     raise ValueError(
                         f"DosingUnits sharing controller '{cid}' ('{first_name}', "
                         f"'{nm}') must agree on setpoint, sensor, measured species "
@@ -1603,13 +1670,21 @@ class Plant:
                     f"its state (e.g. a CSTRUnit), not a mixer/splitter/clarifier. "
                     f"Set sensor= to such a reactor."
                 )
-            self.add_unit(PIController(
-                name=cid, network=self.units[d0.sensor].network,
-                measured_species=d0.measured_species, setpoint=d0.setpoint,
-                Kp=d0.Kp, Ti=d0.Ti, Tt=d0.Tt, offset=d0.flow_offset,
-                out_min=d0.flow_min, out_max=d0.flow_max,
-                signal_name=dose_signal_name(cid),
-            ))
+            self.add_unit(
+                PIController(
+                    name=cid,
+                    network=self.units[d0.sensor].network,
+                    measured_species=d0.measured_species,
+                    setpoint=d0.setpoint,
+                    Kp=d0.Kp,
+                    Ti=d0.Ti,
+                    Tt=d0.Tt,
+                    offset=d0.flow_offset,
+                    out_min=d0.flow_min,
+                    out_max=d0.flow_max,
+                    signal_name=dose_signal_name(cid),
+                )
+            )
             self.connect(d0.sensor, f"{cid}.measured")
 
     def _build_state_layout(self) -> None:
@@ -1637,8 +1712,8 @@ class Plant:
         # keeps its index, so warm-starts and states_by_unit are unaffected.
         self._temperature_units = self.temperature_model.tracked_units(self)
         self._temperature_volumes = jnp.asarray(
-            [float(self.units[n].volume) for n in self._temperature_units],
-            dtype=float)
+            [float(self.units[n].volume) for n in self._temperature_units], dtype=float
+        )
         temp_size = self.temperature_model.state_size(self)
         self._temperature_block = (cursor, temp_size)
         cursor += temp_size
@@ -1710,9 +1785,7 @@ class Plant:
         sweep plus once per unit in the derivative pass). The recycle set is
         computed separately by :meth:`_finalize_topology`.
         """
-        inputs_by_unit: dict[str, list[Connection]] = {
-            name: [] for name in self._unit_order
-        }
+        inputs_by_unit: dict[str, list[Connection]] = {name: [] for name in self._unit_order}
         for conn in self.connections:
             inputs_by_unit.setdefault(conn.to_unit, []).append(conn)
             # A pH-feedback translator on the source side (needs_src_pH, e.g.
@@ -1721,8 +1794,7 @@ class Plant:
             # feedback would silently fall back to the fixed pH_adm. Not reachable
             # in shipped plants (the digester is always a real source unit); warn
             # if it is ever wired that way rather than failing silently.
-            if (conn.from_unit is None
-                    and getattr(conn.translator, "needs_src_pH", False)):
+            if conn.from_unit is None and getattr(conn.translator, "needs_src_pH", False):
                 warnings.warn(
                     f"Translator on the influent edge into '{conn.to_unit}."
                     f"{conn.to_port}' declares needs_src_pH but has no source "
@@ -1848,15 +1920,13 @@ class Plant:
         """Concatenated default parameters: kinetic networks then flow setpoints."""
         nets = self._ordered_networks()
         kinetic = (
-            jnp.concatenate([net.default_parameters() for net in nets])
-            if nets else jnp.zeros((0,))
+            jnp.concatenate([net.default_parameters() for net in nets]) if nets else jnp.zeros((0,))
         )
         flow_defaults: list[float] = []
         for name in self._unit_order:
             flow_defaults.extend(self._unit_flow_defaults(self.units[name]))
         if flow_defaults:
-            return jnp.concatenate(
-                [kinetic, jnp.asarray(flow_defaults, dtype=float)])
+            return jnp.concatenate([kinetic, jnp.asarray(flow_defaults, dtype=float)])
         return kinetic
 
     def _plant_param_index(self) -> dict[str, int]:
@@ -1991,8 +2061,7 @@ class Plant:
         """
         return list(self._insertion_order)
 
-    def list_ports(self, unit: Optional[str] = None, *,
-                   role: str = "output") -> list[str]:
+    def list_ports(self, unit: Optional[str] = None, *, role: str = "output") -> list[str]:
         """The ``"unit.port"`` endpoint strings, for discovering stream args.
 
         ``role="output"`` (default) returns every unit-*output* endpoint -- the
@@ -2036,8 +2105,7 @@ class Plant:
         """Whether a unit's state *is* its network's concentration vector (so it
         can be indexed by species: a CSTR or the digester, not a stateless
         mixer/splitter/ideal-clarifier nor the layered Takacs settler)."""
-        return (hasattr(unit, "network")
-                and getattr(unit, "state_size", 0) == unit.network.n_species)
+        return hasattr(unit, "network") and getattr(unit, "state_size", 0) == unit.network.n_species
 
     def list_species(self, unit: str) -> list[str]:
         """The species names of a concentration-vector unit's network.
@@ -2050,8 +2118,9 @@ class Plant:
         """
         u = self._unit_or_raise(unit)
         if not self._is_concentration_unit(u):
-            indexable = [n for n in self._insertion_order
-                         if self._is_concentration_unit(self.units[n])]
+            indexable = [
+                n for n in self._insertion_order if self._is_concentration_unit(self.units[n])
+            ]
             raise KeyError(
                 f"Unit '{unit}' state is not a concentration vector, so it has "
                 f"no per-species columns (read it as a stream with "
@@ -2060,9 +2129,7 @@ class Plant:
             )
         return list(u.network.species)
 
-    def _params_for_unit(
-        self, unit_name: str, params_full: jnp.ndarray
-    ) -> jnp.ndarray:
+    def _params_for_unit(self, unit_name: str, params_full: jnp.ndarray) -> jnp.ndarray:
         """Slice out one unit's parameters: its kinetic network block, then (for
         a flow-bearing unit) its appended flow-setpoint block.
 
@@ -2091,17 +2158,12 @@ class Plant:
             return self._slice_unit_params(unit_name, params_full)
         cache = self.__dict__.get("_params_unit_cache")
         if cache is None or cache[0] is not params_full:
-            built = {
-                name: self._slice_unit_params(name, params_full)
-                for name in self._unit_order
-            }
+            built = {name: self._slice_unit_params(name, params_full) for name in self._unit_order}
             cache = (params_full, built)
             self._params_unit_cache = cache
         return cache[1][unit_name]
 
-    def _slice_unit_params(
-        self, unit_name: str, params_full: jnp.ndarray
-    ) -> jnp.ndarray:
+    def _slice_unit_params(self, unit_name: str, params_full: jnp.ndarray) -> jnp.ndarray:
         """Compute one unit's parameter slice (uncached; see
         :meth:`_params_for_unit`)."""
         unit = self.units[unit_name]
@@ -2112,7 +2174,7 @@ class Plant:
             start, size = self._parameter_layout.network_param_blocks[net.name]
             # ``start``/``size`` are static Python ints, so a static slice lets
             # XLA constant-fold the index instead of emitting a dynamic_slice op.
-            kinetic = params_full[start:start + size]
+            kinetic = params_full[start : start + size]
         flow_block = self._parameter_layout.unit_flow_blocks.get(unit_name)
         if flow_block is None:
             return kinetic
@@ -2124,15 +2186,14 @@ class Plant:
         # silently clamp and read garbage). ``shape`` is static, so this branch
         # is resolved at trace time.
         if params_full.shape[0] >= fstart + fsize:
-            flow = params_full[fstart:fstart + fsize]
+            flow = params_full[fstart : fstart + fsize]
         else:
-            flow = jnp.asarray(self._unit_flow_defaults(self.units[unit_name]),
-                               dtype=params_full.dtype)
+            flow = jnp.asarray(
+                self._unit_flow_defaults(self.units[unit_name]), dtype=params_full.dtype
+            )
         return jnp.concatenate([kinetic, flow])
 
-    def initial_state(
-        self, overrides: Optional[dict[str, jnp.ndarray]] = None
-    ) -> jnp.ndarray:
+    def initial_state(self, overrides: Optional[dict[str, jnp.ndarray]] = None) -> jnp.ndarray:
         """Concatenated initial state from each unit's ``initial_state()``.
 
         Parameters
@@ -2187,9 +2248,7 @@ class Plant:
             pieces.append(self.temperature_model.initial_state(self))
         return jnp.concatenate(pieces)
 
-    def states_by_unit(
-        self, state_full: jnp.ndarray
-    ) -> dict[str, jnp.ndarray]:
+    def states_by_unit(self, state_full: jnp.ndarray) -> dict[str, jnp.ndarray]:
         """Split a flat plant vector into a ``{unit_name: sub-vector}`` map.
 
         The inverse of :meth:`initial_state` with ``overrides``: that assembles
@@ -2217,9 +2276,7 @@ class Plant:
 
     # ----- RHS -------------------------------------------------------------
 
-    def _split_state(
-        self, state_full: jnp.ndarray
-    ) -> dict[str, jnp.ndarray]:
+    def _split_state(self, state_full: jnp.ndarray) -> dict[str, jnp.ndarray]:
         """Split the flat state vector into a per-unit ``{name: state}`` map.
 
         The appended temperature-state block (if any) is exposed under the
@@ -2231,10 +2288,10 @@ class Plant:
             start, size = self._state_layout[name]
             # ``start``/``size`` are static Python ints; a static slice lets XLA
             # constant-fold the index rather than emit a dynamic_slice op.
-            states[name] = state_full[start:start + size]
+            states[name] = state_full[start : start + size]
         tstart, tsize = self._temperature_block
         if tsize:
-            states[_TEMPERATURE_KEY] = state_full[tstart:tstart + tsize]
+            states[_TEMPERATURE_KEY] = state_full[tstart : tstart + tsize]
         return states
 
     def _temperatures_by_unit(self, states: dict[str, jnp.ndarray]) -> dict:
@@ -2250,12 +2307,10 @@ class Plant:
         temp_state = states.get(_TEMPERATURE_KEY)
         if temp_state is None or not self._temperature_units:
             return {}
-        carries_T = any(getattr(s, "T", None) is not None
-                        for s in self.influents.values())
+        carries_T = any(getattr(s, "T", None) is not None for s in self.influents.values())
         if not carries_T:
             return {}
-        return {name: temp_state[i]
-                for i, name in enumerate(self._temperature_units)}
+        return {name: temp_state[i] for i, name in enumerate(self._temperature_units)}
 
     def _resolve_streams(
         self,
@@ -2309,21 +2364,22 @@ class Plant:
                 Q = ov.get("Q", base.Q) * ov.get("Q_scale", 1.0)
                 C = ov.get("C", base.C) * ov.get("C_scale", 1.0)
                 streams[(None, port_name)] = Stream(
-                    Q=Q, C=C, network=series.network, T=ov.get("T", base.T))
+                    Q=Q, C=C, network=series.network, T=ov.get("T", base.T)
+                )
             else:
                 streams[(None, port_name)] = series.at(t)
-        resolved_flows = self._resolve_flows(t, params_full, states, design=design,
-                                             flow_map=flow_map)
+        resolved_flows = self._resolve_flows(
+            t, params_full, states, design=design, flow_map=flow_map
+        )
         # Seed the recycle back-edges with their exact (affine) fixed point, so
         # the Gauss-Seidel mop-up starts at the answer for any linear topology
         # (gain-independent); it then only refines a genuinely non-affine
         # in-cycle unit, if any. Falls back to the zero auto-seed when there are
         # no recycle edges.
         seeded = self._resolve_recycle_concentrations(
-            t, states, params_full, resolved_flows, signals,
-            recycle_map=recycle_map)
-        all_outputs = self._sweep_outputs(t, states, streams, seeded, params_full,
-                                          signals=signals)
+            t, states, params_full, resolved_flows, signals, recycle_map=recycle_map
+        )
+        all_outputs = self._sweep_outputs(t, states, streams, seeded, params_full, signals=signals)
         return all_outputs, streams
 
     def outputs_at(
@@ -2356,15 +2412,13 @@ class Plant:
         """
         self._build_state_layout()
         self._build_parameter_layout()
-        params_full = (
-            self.default_parameters() if params is None else self._coerce_params(params)
-        )
+        params_full = self.default_parameters() if params is None else self._coerce_params(params)
         states = self._split_state(jnp.asarray(state_full))
         recycle_map = self._maybe_recycle_map(jnp.asarray(t), states, params_full)
         flow_map = self._maybe_flow_map(jnp.asarray(t), states, params_full)
         all_outputs, _ = self._resolve_streams(
-            jnp.asarray(t), states, params_full, recycle_map=recycle_map,
-            flow_map=flow_map)
+            jnp.asarray(t), states, params_full, recycle_map=recycle_map, flow_map=flow_map
+        )
         return all_outputs
 
     def _cached_streams(self, solution: "PlantSolution", params_full):
@@ -2397,10 +2451,8 @@ class Plant:
         # state-coupled (the resolver then probes per call). Built from
         # params_full so a differentiated reconstruction still flows the gradient
         # through M (the vmap below is traced when params_full is a tracer).
-        recycle_map = self._maybe_recycle_map(
-            ts[0], self._split_state(states_flat[0]), params_full)
-        flow_map = self._maybe_flow_map(
-            ts[0], self._split_state(states_flat[0]), params_full)
+        recycle_map = self._maybe_recycle_map(ts[0], self._split_state(states_flat[0]), params_full)
+        flow_map = self._maybe_flow_map(ts[0], self._split_state(states_flat[0]), params_full)
 
         # Reconstruct every (unit, port) output stream at one saved time, keeping
         # only the (Q, C) arrays (the Stream's `network` is a static, non-JAX
@@ -2410,9 +2462,9 @@ class Plant:
         # the cost of evaluating a long dynamic run.
         def _one(t_i, state_row):
             states = self._split_state(state_row)
-            outs, _ = self._resolve_streams(t_i, states, params_full,
-                                            recycle_map=recycle_map,
-                                            flow_map=flow_map)
+            outs, _ = self._resolve_streams(
+                t_i, states, params_full, recycle_map=recycle_map, flow_map=flow_map
+            )
             return {k: (s.Q, s.C) for k, s in outs.items()}
 
         result = jax.vmap(_one)(ts, states_flat)
@@ -2459,8 +2511,7 @@ class Plant:
             with a ``C_named(species)`` accessor.
         """
         resolved = self.named_streams.get(endpoint)
-        if (resolved is None and "." not in endpoint
-                and endpoint not in self.units):
+        if resolved is None and "." not in endpoint and endpoint not in self.units:
             # Looks like a semantic name (no port, not a unit) but isn't
             # registered -> hint at the available ones rather than the bare
             # "Unknown unit" that _parse_endpoint would give.
@@ -2472,13 +2523,10 @@ class Plant:
             )
         endpoint = resolved if resolved is not None else endpoint
         unit, port = self._parse_endpoint(endpoint, role="source")
-        params_full = (
-            self.default_parameters() if params is None else self._coerce_params(params)
-        )
+        params_full = self.default_parameters() if params is None else self._coerce_params(params)
         Q, C = self._cached_streams(solution, params_full)[(unit, port)]
         org = self._reconstruct_stream_org(solution, (unit, port), params_full)
-        return StreamSeries(t=solution.t, Q=Q, C=C,
-                            network=self.units[unit].network, org=org)
+        return StreamSeries(t=solution.t, Q=Q, C=C, network=self.units[unit].network, org=org)
 
     def _reconstruct_stream_org(self, solution, key, params_full):
         """Reconstruct an output stream's indicator-organism trajectory, or
@@ -2491,18 +2539,15 @@ class Plant:
         indicator-agnostic stream (every BSM stream with no disinfection unit)
         returns ``None`` and does no extra work."""
         states0 = self._split_state(jnp.asarray(solution.state)[0])
-        probe, _ = self._resolve_streams(jnp.asarray(solution.t)[0], states0,
-                                         params_full)
+        probe, _ = self._resolve_streams(jnp.asarray(solution.t)[0], states0, params_full)
         if probe[key].org is None:
             return None
 
         def _org_one(t_i, state_row):
-            outs, _ = self._resolve_streams(t_i, self._split_state(state_row),
-                                            params_full)
+            outs, _ = self._resolve_streams(t_i, self._split_state(state_row), params_full)
             return outs[key].org
 
-        return jax.vmap(_org_one)(jnp.asarray(solution.t),
-                                  jnp.asarray(solution.state))
+        return jax.vmap(_org_one)(jnp.asarray(solution.t), jnp.asarray(solution.state))
 
     def register_stream(self, name: str, endpoint: str) -> "Plant":
         """Register a **semantic name** for an output ``"unit.port"`` endpoint.
@@ -2526,8 +2571,9 @@ class Plant:
         """
         return dict(self.named_streams)
 
-    def effluent_stream(self, solution: "PlantSolution",
-                        params: Optional[jnp.ndarray] = None) -> StreamSeries:
+    def effluent_stream(
+        self, solution: "PlantSolution", params: Optional[jnp.ndarray] = None
+    ) -> StreamSeries:
         """The plant's final effluent stream (a shortcut for the most-read one).
 
         Reads the builder-recorded :attr:`effluent_endpoint` -- the right port
@@ -2542,8 +2588,7 @@ class Plant:
             )
         return self.stream(solution, self.effluent_endpoint, params)
 
-    def digester_gas(self, solution: "PlantSolution",
-                     params: Optional[jnp.ndarray] = None):
+    def digester_gas(self, solution: "PlantSolution", params: Optional[jnp.ndarray] = None):
         """The anaerobic digester's biogas trajectory.
 
         A :class:`~aquakin.plant.bsm.evaluation.DigesterGas` with the biogas flow
@@ -2553,13 +2598,18 @@ class Plant:
         state (not a material port). Raises if the plant has no ADM1 digester.
         """
         from aquakin.plant.bsm.evaluation import digester_gas
+
         return digester_gas(self, solution, params)
 
-    def mass_balance(self, solution: "PlantSolution", *,
-                     components=("COD", "N", "P"),
-                     influent_ports: Optional[list] = None,
-                     effluent_ports: Optional[list] = None,
-                     params: Optional[jnp.ndarray] = None):
+    def mass_balance(
+        self,
+        solution: "PlantSolution",
+        *,
+        components=("COD", "N", "P"),
+        influent_ports: Optional[list] = None,
+        effluent_ports: Optional[list] = None,
+        params: Optional[jnp.ndarray] = None,
+    ):
         """Results-level mass-balance closure of this plant over a solved window.
 
         Accounts, per component (COD / N / P), the component that flowed **in**
@@ -2603,12 +2653,17 @@ class Plant:
             ``.summary()``.
         """
         from aquakin.plant.balance import mass_balance
-        return mass_balance(
-            self, solution, components=components, influent_ports=influent_ports,
-            effluent_ports=effluent_ports, params=params)
 
-    def sludge_age(self, solution: "PlantSolution",
-                   params: Optional[jnp.ndarray] = None, **kwargs):
+        return mass_balance(
+            self,
+            solution,
+            components=components,
+            influent_ports=influent_ports,
+            effluent_ports=effluent_ports,
+            params=params,
+        )
+
+    def sludge_age(self, solution: "PlantSolution", params: Optional[jnp.ndarray] = None, **kwargs):
         """Achieved SRT / HRT / F:M of this activated-sludge plant.
 
         Convenience wrapper for :func:`aquakin.plant.design.sludge_metrics` --
@@ -2673,9 +2728,7 @@ class Plant:
         """
         self._build_state_layout()
         self._build_parameter_layout()
-        params_full = (
-            self.default_parameters() if params is None else self._coerce_params(params)
-        )
+        params_full = self.default_parameters() if params is None else self._coerce_params(params)
         return self._rhs(jnp.asarray(float(t)), jnp.asarray(state), params_full)
 
     def _rhs(
@@ -2701,8 +2754,14 @@ class Plant:
         # differentiable design-variable overrides -- currently the influent
         # streams -- so a steady-state / sweep can take gradients w.r.t. them.
         all_outputs, streams = self._resolve_streams(
-            t, states, params_full, signals=signals, design=design,
-            recycle_map=recycle_map, flow_map=flow_map)
+            t,
+            states,
+            params_full,
+            signals=signals,
+            design=design,
+            recycle_map=recycle_map,
+            flow_map=flow_map,
+        )
 
         # Collect each unit's converged input streams ONCE for the dstate pass.
         # The streams are fixed after the sweep, so re-collecting per unit would
@@ -2711,8 +2770,7 @@ class Plant:
         # unchanged. (The signal bus is computed up front from the states, above,
         # so it does not reuse this map.)
         inputs_by_unit = {
-            name: self._collect_inputs(name, all_outputs, streams, states,
-                                       params_full)
+            name: self._collect_inputs(name, all_outputs, streams, states, params_full)
             for name in self._unit_order
         }
 
@@ -2732,15 +2790,15 @@ class Plant:
             params_unit = self._params_for_unit(name, params_full)
             unit_signals = signals
             if temp_by_unit:
-                unit_signals = {**signals,
-                                _OPERATING_T_SIGNAL: temp_by_unit.get(name)}
+                unit_signals = {**signals, _OPERATING_T_SIGNAL: temp_by_unit.get(name)}
                 if name in temp_by_unit:
                     inlet_by_unit[name] = self._inlet_flow_temperature(inputs)
             dstate = unit.rhs(t, states[name], inputs, params_unit, unit_signals)
             dstates.append(dstate)
         if self._temperature_block[1]:
-            dstates.append(self.temperature_model.state_rhs(
-                self, states[_TEMPERATURE_KEY], inlet_by_unit))
+            dstates.append(
+                self.temperature_model.state_rhs(self, states[_TEMPERATURE_KEY], inlet_by_unit)
+            )
         return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
 
     @staticmethod
@@ -2799,12 +2857,16 @@ class Plant:
                 if conn.from_unit is None:
                     continue
                 sensed_outputs[(conn.from_unit, conn.from_port)] = Stream(
-                    Q=jnp.zeros(()), C=states[conn.from_unit],
-                    network=self.units[conn.from_unit].network)
+                    Q=jnp.zeros(()),
+                    C=states[conn.from_unit],
+                    network=self.units[conn.from_unit].network,
+                )
             inputs = self._collect_inputs(name, sensed_outputs, {})
-            signals.update(unit.signal_outputs(
-                t, states[name], inputs,
-                self._params_for_unit(name, params_full)))
+            signals.update(
+                unit.signal_outputs(
+                    t, states[name], inputs, self._params_for_unit(name, params_full)
+                )
+            )
         return signals
 
     def signals_at(
@@ -2836,9 +2898,7 @@ class Plant:
         """
         self._build_state_layout()
         self._build_parameter_layout()
-        params_full = (
-            self.default_parameters() if params is None else self._coerce_params(params)
-        )
+        params_full = self.default_parameters() if params is None else self._coerce_params(params)
         states = self._split_state(jnp.asarray(state_full))
         # The bus is computed from the reactor states alone (controllers sense
         # states), so no stream sweep is needed to reconstruct it.
@@ -2861,8 +2921,7 @@ class Plant:
         seeded: dict[tuple[str, str], Stream] = {}
         for conn in self._recycle_conns:
             key = (conn.from_unit, conn.from_port)
-            iv = conn.initial_value if conn.initial_value is not None \
-                else self._recycle_seeds[key]
+            iv = conn.initial_value if conn.initial_value is not None else self._recycle_seeds[key]
             q = resolved_flows[key]
             seeded[key] = Stream(Q=q, C=iv.C, network=iv.network, T=iv.T)
         return seeded
@@ -2921,11 +2980,10 @@ class Plant:
         keys = self._recycle_keys
         if not keys:
             return {}
-        ctx = self._recycle_context(t, states, params_full, resolved_flows,
-                                    signals)
+        ctx = self._recycle_context(t, states, params_full, resolved_flows, signals)
         seed_net, group_lists, forward, zeroC, zeroT, forward_full = ctx
 
-        dC, dT = forward(zeroC, zeroT)                       # constant part d
+        dC, dT = forward(zeroC, zeroT)  # constant part d
         resolve_T = all(dT[k] is not None for k in keys)
 
         # Concentration map M: cached (state-invariant) or probed. The cached
@@ -2954,7 +3012,7 @@ class Plant:
         for gkeys, M, MT in zip(group_lists, M_groups, MT_groups):
             m = len(gkeys)
             eye = jnp.eye(m)
-            d = jnp.stack([dC[gkeys[j]] for j in range(m)], axis=1)   # (nsp, m_j)
+            d = jnp.stack([dC[gkeys[j]] for j in range(m)], axis=1)  # (nsp, m_j)
             cs = jnp.linalg.solve(eye[None] - M, d[..., None])[..., 0]  # (nsp, m_j)
             for j, kj in enumerate(gkeys):
                 solved_C[kj] = cs[:, j]
@@ -2981,15 +3039,19 @@ class Plant:
         if self.recycle_tol is not None:
             seed_Q = {k: resolved_flows[k] for k in keys}
             solved_Q, solved_C, solved_T = self._adaptive_recycle_refine(
-                forward_full, keys, seed_Q, solved_C, solved_T, resolve_T)
-            return {k: Stream(Q=solved_Q[k], C=solved_C[k],
-                              network=seed_net[k], T=solved_T[k]) for k in keys}
+                forward_full, keys, seed_Q, solved_C, solved_T, resolve_T
+            )
+            return {
+                k: Stream(Q=solved_Q[k], C=solved_C[k], network=seed_net[k], T=solved_T[k])
+                for k in keys
+            }
 
-        return {k: Stream(Q=resolved_flows[k], C=solved_C[k],
-                          network=seed_net[k], T=solved_T[k]) for k in keys}
+        return {
+            k: Stream(Q=resolved_flows[k], C=solved_C[k], network=seed_net[k], T=solved_T[k])
+            for k in keys
+        }
 
-    def _adaptive_recycle_refine(self, forward_full, keys, seed_Q, seed_C,
-                                 seed_T, resolve_T):
+    def _adaptive_recycle_refine(self, forward_full, keys, seed_Q, seed_C, seed_T, resolve_T):
         """Iterate the nonlinear recycle map to ``recycle_tol``, AD-safe.
 
         The recycle back-edge *streams* -- flow ``Q``, concentration ``C`` and
@@ -3043,16 +3105,20 @@ class Plant:
         none_T = {k: None for k in keys}
 
         if resolve_T:
+
             def G(x):
                 Q, C, T = x
                 Cn, Tn, Qn = forward_full(Q, C, T)
                 return (Qn, Cn, Tn)
+
             x0 = (seed_Q, seed_C, seed_T)
         else:
+
             def G(x):
                 Q, C = x
                 Cn, _, Qn = forward_full(Q, C, none_T)
                 return (Qn, Cn)
+
             x0 = (seed_Q, seed_C)
 
         def F(x):
@@ -3063,8 +3129,7 @@ class Plant:
             # Per-leaf relative step (each channel -- a Q ~ 1e3, a C ~ 1e0 -- has
             # its own scale), then the worst across leaves.
             rel = jnp.array(0.0)
-            for a, b in zip(jax.tree_util.tree_leaves(x),
-                            jax.tree_util.tree_leaves(xn)):
+            for a, b in zip(jax.tree_util.tree_leaves(x), jax.tree_util.tree_leaves(xn)):
                 step = jnp.max(jnp.abs(b - a))
                 scale = jnp.max(jnp.abs(a)) + 1e-9
                 rel = jnp.maximum(rel, step / scale)
@@ -3082,8 +3147,7 @@ class Plant:
                 _x, err, i = carry
                 return (err > tol) & (i < max_passes)
 
-            xf, _, _ = jax.lax.while_loop(
-                cond, body, (init, jnp.inf, jnp.array(0)))
+            xf, _, _ = jax.lax.while_loop(cond, body, (init, jnp.inf, jnp.array(0)))
             return xf
 
         def tangent_solve(g, y):
@@ -3126,16 +3190,14 @@ class Plant:
         seed_net: dict = {}
         for conn in self._recycle_conns:
             key = (conn.from_unit, conn.from_port)
-            iv = conn.initial_value if conn.initial_value is not None \
-                else self._recycle_seeds[key]
+            iv = conn.initial_value if conn.initial_value is not None else self._recycle_seeds[key]
             seed_net[key] = iv.network
         nsp = {k: seed_net[k].n_species for k in keys}
         # Temperature propagates only when an influent carries it (the mixer
         # T-gate needs every inlet to have T); otherwise the whole plant is
         # T=None regardless of the nominal recycle-seed T. So resolve a T channel
         # only in that case -- a number around the loop ignites the gate.
-        carries_T = any(getattr(s, "T", None) is not None
-                        for s in self.influents.values())
+        carries_T = any(getattr(s, "T", None) is not None for s in self.influents.values())
         t_seed = jnp.zeros(()) if carries_T else None
 
         # The influent streams are independent of the probe trial values, so
@@ -3144,12 +3206,14 @@ class Plant:
         influent = {(None, pn): s.at(t) for pn, s in self.influents.items()}
 
         def forward(c_by_key, T_by_key):
-            seeded = {k: Stream(Q=resolved_flows[k], C=c_by_key[k],
-                                network=seed_net[k], T=T_by_key[k]) for k in keys}
-            out = self._sweep_outputs(t, states, influent, seeded, params_full,
-                                      passes=1, signals=signals)
-            return ({k: out[k].C for k in keys},
-                    {k: out[k].T for k in keys})
+            seeded = {
+                k: Stream(Q=resolved_flows[k], C=c_by_key[k], network=seed_net[k], T=T_by_key[k])
+                for k in keys
+            }
+            out = self._sweep_outputs(
+                t, states, influent, seeded, params_full, passes=1, signals=signals
+            )
+            return ({k: out[k].C for k in keys}, {k: out[k].T for k in keys})
 
         # Q-varying one-pass map for the adaptive solver: the recycle back-edge
         # Q is itself a fixed-point variable, because a concentration-dependent
@@ -3159,13 +3223,18 @@ class Plant:
         # this closure lets it vary so :meth:`_adaptive_recycle_refine` iterates
         # the true (Q, C, T) fixed point. Returns (C, T, Q) read back on the edges.
         def forward_full(q_by_key, c_by_key, T_by_key):
-            seeded = {k: Stream(Q=q_by_key[k], C=c_by_key[k],
-                                network=seed_net[k], T=T_by_key[k]) for k in keys}
-            out = self._sweep_outputs(t, states, influent, seeded, params_full,
-                                      passes=1, signals=signals)
-            return ({k: out[k].C for k in keys},
-                    {k: out[k].T for k in keys},
-                    {k: out[k].Q for k in keys})
+            seeded = {
+                k: Stream(Q=q_by_key[k], C=c_by_key[k], network=seed_net[k], T=T_by_key[k])
+                for k in keys
+            }
+            out = self._sweep_outputs(
+                t, states, influent, seeded, params_full, passes=1, signals=signals
+            )
+            return (
+                {k: out[k].C for k in keys},
+                {k: out[k].T for k in keys},
+                {k: out[k].Q for k in keys},
+            )
 
         groups: dict = {}
         for k in keys:
@@ -3211,10 +3280,10 @@ class Plant:
         M_groups = []
         for gkeys in group_lists:
             m = len(gkeys)
-            M = jnp.stack([
-                jnp.stack([colC[gkeys[i]][gkeys[j]] for i in range(m)], axis=1)
-                for j in range(m)
-            ], axis=1)                                        # (nsp, m_j, m_i)
+            M = jnp.stack(
+                [jnp.stack([colC[gkeys[i]][gkeys[j]] for i in range(m)], axis=1) for j in range(m)],
+                axis=1,
+            )  # (nsp, m_j, m_i)
             M_groups.append(M)
         return M_groups
 
@@ -3224,15 +3293,13 @@ class Plant:
         MT_groups = []
         for gkeys in group_lists:
             m = len(gkeys)
-            MT = jnp.stack([
-                jnp.stack([colT[gkeys[i]][gkeys[j]] for i in range(m)])
-                for j in range(m)
-            ])                                                # (m_j, m_i)
+            MT = jnp.stack(
+                [jnp.stack([colT[gkeys[i]][gkeys[j]] for i in range(m)]) for j in range(m)]
+            )  # (m_j, m_i)
             MT_groups.append(MT)
         return MT_groups
 
-    def _compute_recycle_map(self, t, states, params_full, resolved_flows,
-                             signals=None):
+    def _compute_recycle_map(self, t, states, params_full, resolved_flows, signals=None):
         """Probe and assemble the state-invariant recycle map(s) once, for reuse.
 
         Returns ``(M_groups, MT_groups)``: the per-group concentration map ``M``
@@ -3249,8 +3316,7 @@ class Plant:
         keys = self._recycle_keys
         if not keys:
             return None
-        ctx = self._recycle_context(t, states, params_full, resolved_flows,
-                                    signals)
+        ctx = self._recycle_context(t, states, params_full, resolved_flows, signals)
         _, group_lists, forward, zeroC, zeroT, _ = ctx
         dC, dT = forward(zeroC, zeroT)
         colC = self._probe_recycle_C(forward, keys, zeroC, zeroT, dC)
@@ -3330,7 +3396,7 @@ class Plant:
                 continue
             off, _ = self._state_layout[name]
             k = sp.shape[0]
-            P[off:off + k, off:off + k] |= sp
+            P[off : off + k, off : off + k] |= sp
 
         # Off-diagonal: J[A][B] = inlet_pattern_A composed with the species
         # coupling of the stream feeding A from B. For a same-network feed that
@@ -3349,19 +3415,20 @@ class Plant:
                 tcache[key] = None
                 for conn in self.connections:
                     T = getattr(conn, "translator", None)
-                    if (T is not None and T.source_network is src_net
-                            and T.target_network is tgt_net):
-                        tcache[key] = np.asarray(
-                            translator_coupling_pattern(T), dtype=bool)
+                    if (
+                        T is not None
+                        and T.source_network is src_net
+                        and T.target_network is tgt_net
+                    ):
+                        tcache[key] = np.asarray(translator_coupling_pattern(T), dtype=bool)
                         break
             return tcache[key]
 
-        conc = {nm: u for nm, u in self.units.items()
-                if self._is_concentration_unit(u)}
+        conc = {nm: u for nm, u in self.units.items() if self._is_concentration_unit(u)}
         for aname, (aunit, cp) in cps.items():
             if cp.inlet_pattern is None:
                 continue
-            ip = np.asarray(cp.inlet_pattern, dtype=bool)        # (a_rows, a_nsp)
+            ip = np.asarray(cp.inlet_pattern, dtype=bool)  # (a_rows, a_nsp)
             a_off, _ = self._state_layout[aname]
             a_rows = ip.shape[0]
             a_net = getattr(aunit, "network", None)
@@ -3371,17 +3438,19 @@ class Plant:
                 b_net = bunit.network
                 b_off, _ = self._state_layout[bname]
                 b_cols = b_net.n_species
-                if coupling_mask is not None and not coupling_mask[
-                        a_off:a_off + a_rows, b_off:b_off + b_cols].any():
-                    continue                                     # not really coupled
+                if (
+                    coupling_mask is not None
+                    and not coupling_mask[a_off : a_off + a_rows, b_off : b_off + b_cols].any()
+                ):
+                    continue  # not really coupled
                 if a_net is b_net:
                     coupling = np.eye(a_net.n_species, dtype=bool)
                 else:
-                    coupling = _translator(b_net, a_net)         # (a_nsp, b_nsp)
+                    coupling = _translator(b_net, a_net)  # (a_nsp, b_nsp)
                     if coupling is None:
                         continue
                 block = (ip.astype(np.int8) @ coupling.astype(np.int8)) > 0
-                P[a_off:a_off + a_rows, b_off:b_off + b_cols] |= block
+                P[a_off : a_off + a_rows, b_off : b_off + b_cols] |= block
         return P
 
     def _colored_jacobian_solver(self, solver, t0, y0, params, rtol, atol):
@@ -3405,26 +3474,28 @@ class Plant:
         )
 
         if self._colored_root_finder is None:
-            if (isinstance(params, jax.core.Tracer)
-                    or isinstance(y0, jax.core.Tracer)):
-                return solver           # can't build under trace; fall back
+            if isinstance(params, jax.core.Tracer) or isinstance(y0, jax.core.Tracer):
+                return solver  # can't build under trace; fall back
             t0a = jnp.asarray(float(t0))
             states0 = self._split_state(y0)
             rmap = self._maybe_recycle_map(t0a, states0, params)
             fmap = self._maybe_flow_map(t0a, states0, params)
 
             def rhs_y(y):
-                return self._rhs(t0a, y, params, recycle_map=rmap,
-                                 flow_map=fmap)
+                return self._rhs(t0a, y, params, recycle_map=rmap, flow_map=fmap)
 
             atol_arr = jnp.asarray(atol)
             probe = jacobian_sparsity_pattern(rhs_y, y0) > 0
             structural = self._structural_plant_pattern(coupling_mask=probe)
             rf, n_colors = build_colored_root_finder(
-                rhs_y, y0, rtol=10.0 * rtol, atol=10.0 * atol_arr,
-                probe_pattern=probe, extra_pattern=structural)
-            ok = colored_jacobian_guard(
-                rhs_y, y0, rf, context="colored_jacobian=True")
+                rhs_y,
+                y0,
+                rtol=10.0 * rtol,
+                atol=10.0 * atol_arr,
+                probe_pattern=probe,
+                extra_pattern=structural,
+            )
+            ok = colored_jacobian_guard(rhs_y, y0, rf, context="colored_jacobian=True")
             self._colored_root_finder = (rf, n_colors, ok)
 
         rf, n_colors, ok = self._colored_root_finder
@@ -3434,8 +3505,8 @@ class Plant:
         # root finder into the user-supplied solver, or into the canonical Kvaerno5
         # when none is given -- so the colored path constructs no solver of its own.
         from aquakin.integrate._common import build_implicit_solver
-        return build_implicit_solver(rtol, atol, solver=solver,
-                                     colored_root_finder=rf)
+
+        return build_implicit_solver(rtol, atol, solver=solver, colored_root_finder=rf)
 
     def _colored_adjoint_jacobian_builder(self, t0, rtol, atol):
         """Derive (once) the sparsity-colored ``df/dy`` Jacobian builder for the
@@ -3492,10 +3563,8 @@ class Plant:
             y0 = self.initial_state()
             params = self.default_parameters()
             t0f = float(t0)
-            rmap = self._maybe_recycle_map(
-                jnp.asarray(t0f), self._split_state(y0), params)
-            fmap = self._maybe_flow_map(
-                jnp.asarray(t0f), self._split_state(y0), params)
+            rmap = self._maybe_recycle_map(jnp.asarray(t0f), self._split_state(y0), params)
+            fmap = self._maybe_flow_map(jnp.asarray(t0f), self._split_state(y0), params)
 
             def primal(t, y, p):
                 return self._rhs(t, y, p, recycle_map=rmap, flow_map=fmap)
@@ -3518,8 +3587,9 @@ class Plant:
             # state reveals it -- which is why the default state serves as well as
             # the real y0).
             n = int(y0.shape[0])
-            plain_probe = jacobian_sparsity_pattern(
-                lambda y: primal(jnp.asarray(t0f), y, params), y0) > 0
+            plain_probe = (
+                jacobian_sparsity_pattern(lambda y: primal(jnp.asarray(t0f), y, params), y0) > 0
+            )
             structural = self._structural_plant_pattern(coupling_mask=plain_probe)
             aug_extra = np.zeros((n + 1, n + 1), dtype=bool)
             aug_extra[:n, :n] = plain_probe | structural
@@ -3529,11 +3599,11 @@ class Plant:
             # atol avoids augmenting the per-component vector for the probe.
             atol_s = float(jnp.max(jnp.asarray(atol)))
             rf, n_colors = build_colored_root_finder(
-                rhs_aug_y, y0_aug, rtol=10.0 * rtol, atol=10.0 * atol_s,
-                extra_pattern=aug_extra)
+                rhs_aug_y, y0_aug, rtol=10.0 * rtol, atol=10.0 * atol_s, extra_pattern=aug_extra
+            )
             ok = colored_jacobian_guard(
-                rhs_aug_y, y0_aug, rf,
-                context="colored_jacobian (stable_adjoint)")
+                rhs_aug_y, y0_aug, rf, context="colored_jacobian (stable_adjoint)"
+            )
 
         # ``builder`` is applied later in the backward to the real (traced) f/y;
         # it closes over the concrete ``rf`` (seed/coloring/pattern) built above.
@@ -3543,7 +3613,12 @@ class Plant:
         # ``rf`` is cached too: it is reused as the *forward* solve's root finder
         # so the adjoint's forward pass can color its per-step Jacobian as well.
         self._colored_adjoint_builder = (
-            builder if ok else None, n_colors, ok, n, rf if ok else None)
+            builder if ok else None,
+            n_colors,
+            ok,
+            n,
+            rf if ok else None,
+        )
         return self._colored_adjoint_builder[0]
 
     # Backward colored Jacobian is auto-enabled when the plant has at least this
@@ -3606,9 +3681,10 @@ class Plant:
         )
 
         if self._colored_steady_builder is None:
-            if any(isinstance(leaf, jax.core.Tracer)
-                   for leaf in jax.tree_util.tree_leaves((theta, y0))):
-                return None             # can't build under trace; fall back
+            if any(
+                isinstance(leaf, jax.core.Tracer) for leaf in jax.tree_util.tree_leaves((theta, y0))
+            ):
+                return None  # can't build under trace; fall back
 
             def rhs_y(y):
                 return rhs(y, theta)
@@ -3623,10 +3699,16 @@ class Plant:
             plain_probe = jacobian_sparsity_pattern(rhs_y, y0) > 0
             structural = self._structural_plant_pattern(coupling_mask=plain_probe)
             rf, n_colors = build_colored_root_finder(
-                rhs_y, y0, rtol=tol_s, atol=tol_s,
-                probe_pattern=plain_probe, extra_pattern=structural)
+                rhs_y,
+                y0,
+                rtol=tol_s,
+                atol=tol_s,
+                probe_pattern=plain_probe,
+                extra_pattern=structural,
+            )
             ok = colored_jacobian_guard(
-                rhs_y, y0, rf, context="colored_jacobian=True (steady_state)")
+                rhs_y, y0, rf, context="colored_jacobian=True (steady_state)"
+            )
 
             def builder(f, y):
                 return materialize_colored_jacobian(rf, f, y)
@@ -3678,11 +3760,9 @@ class Plant:
         for _pass in range(n_passes):
             for name in self._unit_order:
                 unit = self.units[name]
-                inputs = self._collect_inputs(name, all_outputs, streams, states,
-                                              params_full)
+                inputs = self._collect_inputs(name, all_outputs, streams, states, params_full)
                 params_unit = self._params_for_unit(name, params_full)
-                outputs = unit.compute_outputs(t, states[name], inputs,
-                                               params_unit, signals)
+                outputs = unit.compute_outputs(t, states[name], inputs, params_unit, signals)
                 override_T = temp_by_unit.get(name)
                 for port, stream in outputs.items():
                     if override_T is not None:
@@ -3729,9 +3809,11 @@ class Plant:
             # remove* (the non-affine-in-cycle part), not the gain-limited
             # convergence of the bare zero-seed the pre-solve replaced.
             seeded = self._resolve_recycle_concentrations(
-                t, states, params_full, resolved_flows, signals)
-            return self._sweep_outputs(t, states, streams, seeded, params_full,
-                                       passes=passes, signals=signals)
+                t, states, params_full, resolved_flows, signals
+            )
+            return self._sweep_outputs(
+                t, states, streams, seeded, params_full, passes=passes, signals=signals
+            )
 
         base = sweep(self.recycle_passes)
         deep = sweep(self.recycle_passes + extra_passes)
@@ -3824,14 +3906,17 @@ class Plant:
         def _max_dev(idx):
             base = probes[0][idx]
             return max(
-                (float(jnp.max(jnp.abs(a - b)))
-                 for other in probes[1:]
-                 for a, b in zip(base, other[idx])),
-                default=0.0)
+                (
+                    float(jnp.max(jnp.abs(a - b)))
+                    for other in probes[1:]
+                    for a, b in zip(base, other[idx])
+                ),
+                default=0.0,
+            )
 
         self._recycle_map_constant = bool(_max_dev(0) <= rtol)
         if MTa is None:
-            self._recycle_T_map_constant = True       # no T carried
+            self._recycle_T_map_constant = True  # no T carried
         else:
             self._recycle_T_map_constant = bool(_max_dev(1) <= rtol)
 
@@ -3851,8 +3936,7 @@ class Plant:
                 ov = influent_override[port_name]
                 # Absolute override and/or multiplicative flow scale (see
                 # _resolve_streams); both default to identity.
-                base[(None, port_name)] = (
-                    ov.get("Q", series.at(t).Q) * ov.get("Q_scale", 1.0))
+                base[(None, port_name)] = ov.get("Q", series.at(t).Q) * ov.get("Q_scale", 1.0)
             else:
                 base[(None, port_name)] = series.at(t).Q
         recycle_keys = self._recycle_keys
@@ -3865,8 +3949,11 @@ class Plant:
             for name in self._unit_order:
                 in_flows: dict[str, jnp.ndarray] = {}
                 for conn in self._inputs_by_unit.get(name, ()):
-                    src = (None, conn.from_port) if conn.from_unit is None \
+                    src = (
+                        (None, conn.from_port)
+                        if conn.from_unit is None
                         else (conn.from_unit, conn.from_port)
+                    )
                     in_flows[conn.to_port] = flows[src]
                 unit = self.units[name]
                 params_unit = self._params_for_unit(name, params_full)
@@ -3876,15 +3963,13 @@ class Plant:
                 # time-dependent split is constant in the recycle flows, so the
                 # probe stays exact). A fixed-split unit ignores the context.
                 ctx = FlowContext(
-                    state=None if states is None else states[name], t=t,
+                    state=None if states is None else states[name],
+                    t=t,
                 )
                 out = unit.flow_outputs(in_flows, params_unit, ctx)
                 for port, q in out.items():
                     flows[(name, port)] = q
-            recycled = (
-                jnp.stack([flows[k] for k in recycle_keys])
-                if n else jnp.zeros((0,))
-            )
+            recycled = jnp.stack([flows[k] for k in recycle_keys]) if n else jnp.zeros((0,))
             return recycled, flows
 
         return one_pass, n
@@ -3934,9 +4019,11 @@ class Plant:
             self._flow_map_constant = True
             return
         wA = max(
-            float(jnp.max(jnp.abs(
-                A0 - self._compute_flow_map(t, params_full, self._split_state(s)))))
-            for s in (1.3 * y0 + 1.0, 0.5 * y0 + 3.0))
+            float(
+                jnp.max(jnp.abs(A0 - self._compute_flow_map(t, params_full, self._split_state(s))))
+            )
+            for s in (1.3 * y0 + 1.0, 0.5 * y0 + 3.0)
+        )
         self._flow_map_constant = bool(wA <= rtol)
 
     def _resolve_flows(
@@ -4062,15 +4149,13 @@ class Plant:
             if states is not None:
                 if getattr(conn.translator, "needs_dest_pH", False):
                     # ASM->ADM: the digester is the destination.
-                    digester_pH = self._unit_operating_pH(
-                        unit_name, states, params_full)
-                elif (getattr(conn.translator, "needs_src_pH", False)
-                        and conn.from_unit is not None):
+                    digester_pH = self._unit_operating_pH(unit_name, states, params_full)
+                elif getattr(conn.translator, "needs_src_pH", False) and conn.from_unit is not None:
                     # ADM->ASM: the digester is the source.
-                    digester_pH = self._unit_operating_pH(
-                        conn.from_unit, states, params_full)
+                    digester_pH = self._unit_operating_pH(conn.from_unit, states, params_full)
             inputs[conn.to_port] = src.with_C(
-                conn.translator.translate(src.C, digester_pH=digester_pH))
+                conn.translator.translate(src.C, digester_pH=digester_pH)
+            )
         return inputs
 
     def _unit_operating_pH(self, unit_name, states, params_full):
@@ -4193,12 +4278,11 @@ class Plant:
         # forward + through   -> adjoint=forward_adjoint() (jvp/jacfwd through the solve)
         # forward + stable    -> the augmented [y; S] variational solve (use solve_sensitivity)
         if diff.mode not in ("reverse", "forward"):
-            raise ValueError(
-                f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
+            raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
         if diff.method not in ("stable", "through_solve"):
             raise ValueError(
-                f"diff.method must be 'stable' or 'through_solve'; "
-                f"got {diff.method!r}.")
+                f"diff.method must be 'stable' or 'through_solve'; got {diff.method!r}."
+            )
         adjoint = None
         if diff.mode == "reverse":
             gradient = "auto" if diff.method == "stable" else "jax_adjoint"
@@ -4207,7 +4291,8 @@ class Plant:
                 raise ValueError(
                     "diff=DifferentiationConfig(mode='forward', method='stable') is "
                     "the augmented variational solve; call plant.solve_sensitivity "
-                    "(or plant.dynamic_sensitivity) for it, not plant.solve.")
+                    "(or plant.dynamic_sensitivity) for it, not plant.solve."
+                )
             # forward + through_solve: jvp/jacfwd through the diffrax solve.
             gradient = "jax_adjoint"
             adjoint = forward_adjoint()
@@ -4225,17 +4310,16 @@ class Plant:
                 "diff=DifferentiationConfig(method='stable') forms its own discrete "
                 "adjoint and controls its own steps; do not also pass "
                 "integrator=IntegratorConfig(dtmax=...) (the stable method is "
-                "cap-free). Use method='through_solve' if you need the dtmax cap.")
+                "cap-free). Use method='through_solve' if you need the dtmax cap."
+            )
 
         if gradient not in ("auto", "jax_adjoint", "stable_adjoint"):
             raise ValueError(
-                "gradient must be 'auto', 'jax_adjoint' or 'stable_adjoint'; "
-                f"got {gradient!r}."
+                f"gradient must be 'auto', 'jax_adjoint' or 'stable_adjoint'; got {gradient!r}."
             )
         if colored_jacobian not in (True, False, "auto"):
             raise ValueError(
-                "colored_jacobian must be True, False or 'auto'; got "
-                f"{colored_jacobian!r}."
+                f"colored_jacobian must be True, False or 'auto'; got {colored_jacobian!r}."
             )
         self._build_state_layout()
         self._build_parameter_layout()
@@ -4251,9 +4335,7 @@ class Plant:
         else:
             y0 = jnp.asarray(y0)
             if y0.shape != (self._total_state_size,):
-                raise ValueError(
-                    f"y0 has shape {y0.shape}, expected ({self._total_state_size},)"
-                )
+                raise ValueError(f"y0 has shape {y0.shape}, expected ({self._total_state_size},)")
         # Default atol is a per-component noise floor scaled off the operating
         # magnitudes (the warm start y0 and the per-unit defaults), so a g/m³
         # plant solves without the old fixed 1e-9 forcing the step ceiling.
@@ -4263,8 +4345,7 @@ class Plant:
             atol_eff = _coerce_atol(atol, self._total_state_size)
         # Convert t_span / t_eval from a caller-supplied time_unit into the
         # plant's native (rate-constant) unit; _time_factor scales back on output.
-        t_span, t_eval, _time_factor = to_native_time(
-            self.time_unit, time_unit, t_span, t_eval)
+        t_span, t_eval, _time_factor = to_native_time(self.time_unit, time_unit, t_span, t_eval)
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
@@ -4281,8 +4362,7 @@ class Plant:
             if collect is not None:
                 unit_events.extend(collect(t0, t1))
         if unit_events:
-            events = (list(events) + unit_events) if events is not None \
-                else unit_events
+            events = (list(events) + unit_events) if events is not None else unit_events
 
         # Validate incompatible argument combinations BEFORE any concrete solve
         # work (the affinity/recycle-map probes below call _resolve_flows, which
@@ -4294,7 +4374,8 @@ class Plant:
                 raise ValueError(
                     "pass either events= (the user-facing located-event API) or "
                     "the low-level event= (a single diffrax terminating event), "
-                    "not both.")
+                    "not both."
+                )
             # The located-event solve runs a segmented solve through the diffrax
             # path (with the resolved adjoint), so the cap-free reverse *stable*
             # discrete adjoint -- which has no segmented form -- cannot back it.
@@ -4307,7 +4388,8 @@ class Plant:
                 raise ValueError(
                     "integrator.solver / colored_jacobian=True are not supported "
                     "with events=; the located-event solve manages its own "
-                    "integrator. Drop them.")
+                    "integrator. Drop them."
+                )
 
         # forward_fast is the lean non-AD forward integrator: no diffrax adjoint /
         # optimistix / lineax machinery, so the result is NOT differentiable and it
@@ -4316,18 +4398,21 @@ class Plant:
             if events is not None:
                 raise ValueError(
                     "forward_fast is not supported with events=; the located-event "
-                    "solve manages its own integrator. Drop one.")
+                    "solve manages its own integrator. Drop one."
+                )
             if gradient == "stable_adjoint":
                 raise ValueError(
                     "forward_fast is a non-differentiable forward path; it is "
                     "incompatible with gradient='stable_adjoint'. For a reverse-mode "
-                    "gradient use the default solve.")
+                    "gradient use the default solve."
+                )
             if any(isinstance(v, jax.core.Tracer) for v in (params, y0)):
                 raise ValueError(
                     "forward_fast requires concrete params/y0 -- it is a non-AD "
                     "fast path that is not differentiable and cannot be traced "
                     "(no jax.grad / jax.jit). For gradients or jit use the default "
-                    "solve (which routes through the differentiable diffrax path).")
+                    "solve (which routes through the differentiable diffrax path)."
+                )
 
         # One-time, concrete check that the recycle-flow solve is self-consistent
         # (every flow rule affine in the recycle flows). Skipped under tracing
@@ -4348,15 +4433,16 @@ class Plant:
             if not self._flow_affinity_checked:
                 self._flow_affinity_checked = True
                 self._resolve_flows(
-                    jnp.asarray(t0), params, states=self._split_state(y0),
+                    jnp.asarray(t0),
+                    params,
+                    states=self._split_state(y0),
                     check_affine=True,
                 )
             # Companion diagnostic: does the fixed-pass recycle concentration
             # sweep converge at recycle_passes? (warns once, never blocks.)
             if not self._recycle_convergence_checked:
                 self._recycle_convergence_checked = True
-                self._check_recycle_convergence(
-                    jnp.asarray(t0), self._split_state(y0), params)
+                self._check_recycle_convergence(jnp.asarray(t0), self._split_state(y0), params)
             # Is the recycle affine map M state-independent? If so, it can be
             # precomputed once per solve and reused -- a large per-RHS saving.
             if self._recycle_map_constant is None:
@@ -4372,11 +4458,23 @@ class Plant:
         if events is not None:
             # (argument combinations validated above, before the concrete checks)
             return self._solve_with_events(
-                t0, t1, t_eval, params, y0, events,
-                rtol=rtol, atol=atol_eff, dtmax=dtmax, adjoint=adjoint,
-                max_steps=max_steps, time_factor=_time_factor,
+                t0,
+                t1,
+                t_eval,
+                params,
+                y0,
+                events,
+                rtol=rtol,
+                atol=atol_eff,
+                dtmax=dtmax,
+                adjoint=adjoint,
+                max_steps=max_steps,
+                time_factor=_time_factor,
                 time_unit=time_unit,
-                order=order, factormax=factormax, solver=solver)
+                order=order,
+                factormax=factormax,
+                solver=solver,
+            )
 
         if gradient == "auto":
             # A concrete forward solve takes the fast cached jax_adjoint path; a
@@ -4385,12 +4483,10 @@ class Plant:
             # finite by default. event=/adjoint=/dtmax= are jax_adjoint-only, so
             # their presence pins jax_adjoint.
             differentiating = any(
-                isinstance(v, jax.core.Tracer)
-                for v in (params, y0) if v is not None
+                isinstance(v, jax.core.Tracer) for v in (params, y0) if v is not None
             )
             pin_jax = event is not None or adjoint is not None or dtmax is not None
-            gradient = "jax_adjoint" if (pin_jax or not differentiating) \
-                else "stable_adjoint"
+            gradient = "jax_adjoint" if (pin_jax or not differentiating) else "stable_adjoint"
 
         if gradient == "stable_adjoint":
             if adjoint is not None or dtmax is not None:
@@ -4427,15 +4523,13 @@ class Plant:
             # (any size), ``"auto"`` enables it past the size gate, ``False`` never
             # colors.
             n_states = int(y0.shape[0])
-            want_colored = (
-                colored_jacobian is True
-                or (colored_jacobian == "auto"
-                    and n_states >= self._COLORED_BACKWARD_MIN_STATES))
+            want_colored = colored_jacobian is True or (
+                colored_jacobian == "auto" and n_states >= self._COLORED_BACKWARD_MIN_STATES
+            )
             if want_colored and self._colored_adjoint_builder is None:
                 self._colored_adjoint_jacobian_builder(t0, rtol, atol_eff)
             cab = self._colored_adjoint_builder
-            use_colored = bool(
-                want_colored and cab is not None and cab[2])  # built + guard ok
+            use_colored = bool(want_colored and cab is not None and cab[2])  # built + guard ok
             jac_builder = cab[0] if use_colored else None
             # The infrastructure to also color the *forward* solve's per-step
             # implicit Jacobian is in place (``cab[4]`` is the ColoredVeryChord for
@@ -4471,8 +4565,7 @@ class Plant:
             adj_steps = adjoint_max_steps
             settings = concrete_settings_key(rtol, atol_eff, None, None, adj_steps)
             teval_key, teval_concrete = _concrete_teval_key(t_eval)
-            under_trace = (isinstance(params, jax.core.Tracer)
-                           or isinstance(y0, jax.core.Tracer))
+            under_trace = isinstance(params, jax.core.Tracer) or isinstance(y0, jax.core.Tracer)
             # The forward ESDIRK solver (e.g. the cheaper Kvaerno3) and factormax
             # change the compiled solve, so they key the cache -- the solver by
             # class, exactly as the forward jax_adjoint path does. The ESDIRK
@@ -4480,20 +4573,37 @@ class Plant:
             # ``adjoint_low_memory`` selects the recompute backward (no saved
             # dense-stage buffer), a different compiled solve, so it is keyed too.
             solver_key = type(solver).__name__ if solver is not None else None
-            cache_key = (None if (settings is None or not teval_concrete
-                                  or under_trace)
-                         else ("stable_adjoint", t0, t1, teval_key, settings,
-                               use_colored, solver_key, factormax, order,
-                               adjoint_low_memory))
+            cache_key = (
+                None
+                if (settings is None or not teval_concrete or under_trace)
+                else (
+                    "stable_adjoint",
+                    t0,
+                    t1,
+                    teval_key,
+                    settings,
+                    use_colored,
+                    solver_key,
+                    factormax,
+                    order,
+                    adjoint_low_memory,
+                )
+            )
             with friendly_solve_errors(adj_steps, what="plant solve"):
                 if cache_key is not None:
                     jitted = self._jit_cache.get(cache_key)
                     if jitted is None:
                         jitted = self._build_jitted_stable_adjoint_solve(
-                            t0, t1, t_eval,
-                            rtol=rtol, atol=atol_eff, max_steps=adj_steps,
+                            t0,
+                            t1,
+                            t_eval,
+                            rtol=rtol,
+                            atol=atol_eff,
+                            max_steps=adj_steps,
                             forward_root_finder=fwd_root_finder,
-                            solver=solver, factormax=factormax, order=order,
+                            solver=solver,
+                            factormax=factormax,
+                            order=order,
                             low_memory=adjoint_low_memory,
                         )
                         self._jit_cache[cache_key] = jitted
@@ -4505,19 +4615,28 @@ class Plant:
                     # colored backward Jacobian builder + colored forward root
                     # finder when requested.
                     ys = self._esdirk_stable_adjoint(
-                        y0, params, t0, t1, t_eval,
-                        rtol=rtol, atol=atol_eff, max_steps=adj_steps,
+                        y0,
+                        params,
+                        t0,
+                        t1,
+                        t_eval,
+                        rtol=rtol,
+                        atol=atol_eff,
+                        max_steps=adj_steps,
                         jacobian_builder=jac_builder,
                         forward_root_finder=fwd_root_finder,
-                        solver=solver, factormax=factormax, order=order,
-                        low_memory=adjoint_low_memory)
+                        solver=solver,
+                        factormax=factormax,
+                        order=order,
+                        low_memory=adjoint_low_memory,
+                    )
             if t_eval is None:
                 ts = jnp.asarray([t1])
                 ys = ys[None, :]
             else:
                 ts = jnp.asarray(t_eval)
             if _time_factor != 1.0:
-                ts = ts / _time_factor      # native -> requested unit
+                ts = ts / _time_factor  # native -> requested unit
             sol = PlantSolution(t=ts, state=ys, plant=self)
             if time_unit is not None:
                 sol._requested_time_unit = time_unit
@@ -4539,13 +4658,17 @@ class Plant:
             crf = self._colored_root_finder
             if crf is not None and crf[2]:
                 te = t_eval if t_eval is not None else jnp.asarray([float(t1)])
-                fkey = ("forward_fast", t0, t1, tuple(te.shape),
-                        concrete_settings_key(rtol, atol_eff, None, None, max_steps),
-                        self._recycle_map_constant)
+                fkey = (
+                    "forward_fast",
+                    t0,
+                    t1,
+                    tuple(te.shape),
+                    concrete_settings_key(rtol, atol_eff, None, None, max_steps),
+                    self._recycle_map_constant,
+                )
                 jitted = self._jit_cache.get(fkey)
                 if jitted is None:
-                    jitted = self._build_jitted_forward_fast(
-                        t0, t1, rtol=rtol, atol=atol_eff)
+                    jitted = self._build_jitted_forward_fast(t0, t1, rtol=rtol, atol=atol_eff)
                     self._jit_cache[fkey] = jitted
                 with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
                     ts, ys = jitted(y0, params, te)
@@ -4558,7 +4681,9 @@ class Plant:
             warnings.warn(
                 "forward_fast: the colored-Jacobian start-state guard failed; "
                 "falling back to the diffrax forward path for this plant.",
-                RuntimeWarning, stacklevel=2)
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         # Colored-AD Jacobian: reconfigure the solver to materialise the per-step
         # implicit Jacobian by sparse column compression (a large saving on the
@@ -4573,11 +4698,10 @@ class Plant:
         # -- making it the all-solves default needs its own full-suite validation
         # (a deliberate follow-up). ``True`` opts into both.
         if colored_jacobian is True:
-            solver = self._colored_jacobian_solver(
-                solver, t0, y0, params, rtol, atol_eff)
+            solver = self._colored_jacobian_solver(solver, t0, y0, params, rtol, atol_eff)
         colored_active = colored_jacobian is True and (
-            self._colored_root_finder is not None
-            and self._colored_root_finder[2])
+            self._colored_root_finder is not None and self._colored_root_finder[2]
+        )
 
         settings = concrete_settings_key(rtol, atol_eff, adjoint, dtmax, max_steps)
         sig = (t0, t1, None if t_eval is None else tuple(t_eval.shape))
@@ -4592,21 +4716,34 @@ class Plant:
         # before the first build, so they are constant for a given plant -- keying
         # on them only guards the rare case where the very first solve was traced
         # (flags still None) and a later concrete solve sets them.
-        recycle_key = (self._recycle_map_constant, self._recycle_T_map_constant,
-                       self._flow_map_constant)
+        recycle_key = (
+            self._recycle_map_constant,
+            self._recycle_T_map_constant,
+            self._flow_map_constant,
+        )
         # A progress meter is a one-off diagnostic (and carries host state), so it
         # bypasses the compiled-solve cache rather than being keyed into it.
-        cache_key = (None if (settings is None or event is not None
-                              or progress_meter is not None)
-                     else (sig, settings, solver_key, factormax, recycle_key,
-                           colored_active, order))
+        cache_key = (
+            None
+            if (settings is None or event is not None or progress_meter is not None)
+            else (sig, settings, solver_key, factormax, recycle_key, colored_active, order)
+        )
         jitted = self._jit_cache.get(cache_key) if cache_key is not None else None
         if jitted is None:
             jitted = self._build_jitted_solve(
-                t0, t1, t_eval is not None, event=event,
-                rtol=rtol, atol=atol_eff, adjoint=adjoint, dtmax=dtmax,
-                max_steps=max_steps, progress_meter=progress_meter, solver=solver,
-                factormax=factormax, order=order,
+                t0,
+                t1,
+                t_eval is not None,
+                event=event,
+                rtol=rtol,
+                atol=atol_eff,
+                adjoint=adjoint,
+                dtmax=dtmax,
+                max_steps=max_steps,
+                progress_meter=progress_meter,
+                solver=solver,
+                factormax=factormax,
+                order=order,
             )
             if cache_key is not None:
                 self._jit_cache[cache_key] = jitted
@@ -4617,15 +4754,32 @@ class Plant:
             else:
                 ts, ys = jitted(y0, params, t_eval)
         if _time_factor != 1.0:
-            ts = ts / _time_factor          # native -> requested unit
+            ts = ts / _time_factor  # native -> requested unit
         sol = PlantSolution(t=ts, state=ys, plant=self)
         if time_unit is not None:
             sol._requested_time_unit = time_unit
         return sol
 
-    def _solve_with_events(self, t0, t1, t_eval, params, y0, events, *,
-                           rtol, atol, dtmax, adjoint, max_steps, time_factor,
-                           time_unit, order=5, factormax=None, solver=None):
+    def _solve_with_events(
+        self,
+        t0,
+        t1,
+        t_eval,
+        params,
+        y0,
+        events,
+        *,
+        rtol,
+        atol,
+        dtmax,
+        adjoint,
+        max_steps,
+        time_factor,
+        time_unit,
+        order=5,
+        factormax=None,
+        solver=None,
+    ):
         """Run the monolithic plant solve with located events (the ``events=``
         path).
 
@@ -4642,21 +4796,29 @@ class Plant:
         ``None`` (the probe path) when the map is state-coupled or the constancy
         check has not run.
         """
-        recycle_map = self._maybe_recycle_map(
-            jnp.asarray(t0), self._split_state(y0), params)
-        flow_map = self._maybe_flow_map(
-            jnp.asarray(t0), self._split_state(y0), params)
+        recycle_map = self._maybe_recycle_map(jnp.asarray(t0), self._split_state(y0), params)
+        flow_map = self._maybe_flow_map(jnp.asarray(t0), self._split_state(y0), params)
 
         def rhs(t, y, args):
-            return self._rhs(t, y, args, recycle_map=recycle_map,
-                             flow_map=flow_map)
+            return self._rhs(t, y, args, recycle_map=recycle_map, flow_map=flow_map)
 
         with friendly_solve_errors(max_steps, what="plant solve"):
             res = solve_with_events(
-                rhs, y0, params, t0=t0, t1=t1, t_eval=t_eval, events=events,
-                rtol=rtol, atol=atol, dtmax=dtmax, adjoint=adjoint,
+                rhs,
+                y0,
+                params,
+                t0=t0,
+                t1=t1,
+                t_eval=t_eval,
+                events=events,
+                rtol=rtol,
+                atol=atol,
+                dtmax=dtmax,
+                adjoint=adjoint,
                 max_steps=max_steps,
-                order=order, factormax=factormax, solver=solver,
+                order=order,
+                factormax=factormax,
+                solver=solver,
             )
         ts = res.ts / time_factor if time_factor != 1.0 else res.ts
         sol = PlantSolution(t=ts, state=res.ys, plant=self, events_log=res.log)
@@ -4665,8 +4827,21 @@ class Plant:
         return sol
 
     def _build_jitted_solve(
-        self, t0, t1, has_t_eval, *, event, rtol, atol, adjoint, dtmax, max_steps,
-        progress_meter=None, solver=None, factormax=None, order=5,
+        self,
+        t0,
+        t1,
+        has_t_eval,
+        *,
+        event,
+        rtol,
+        atol,
+        adjoint,
+        dtmax,
+        max_steps,
+        progress_meter=None,
+        solver=None,
+        factormax=None,
+        order=5,
     ):
         """Build the jit-compiled forward solve for one call signature.
 
@@ -4692,32 +4867,51 @@ class Plant:
             flow_map = self._maybe_flow_map(t0_arr, states0, params)
 
             def rhs(t, y, args):
-                return self._rhs(t, y, args, recycle_map=recycle_map,
-                                 flow_map=flow_map)
+                return self._rhs(t, y, args, recycle_map=recycle_map, flow_map=flow_map)
+
             return rhs
 
-        kw = dict(t0=t0, t1=t1, rtol=rtol, atol=atol, adjoint=adjoint,
-                  dtmax=dtmax, max_steps=max_steps, event=event,
-                  progress_meter=progress_meter, solver=solver,
-                  factormax=factormax, order=order)
+        kw = dict(
+            t0=t0,
+            t1=t1,
+            rtol=rtol,
+            atol=atol,
+            adjoint=adjoint,
+            dtmax=dtmax,
+            max_steps=max_steps,
+            event=event,
+            progress_meter=progress_meter,
+            solver=solver,
+            factormax=factormax,
+            order=order,
+        )
 
         if has_t_eval:
+
             @jax.jit
             def _solve(y0, params, t_eval):
                 sol = _run_diffeqsolve(
-                    make_rhs(y0, params), y0=y0, args=params,
-                    saveat=diffrax.SaveAt(ts=t_eval), **kw,
+                    make_rhs(y0, params),
+                    y0=y0,
+                    args=params,
+                    saveat=diffrax.SaveAt(ts=t_eval),
+                    **kw,
                 )
                 return sol.ts, sol.ys
+
             return _solve
 
         @jax.jit
         def _solve(y0, params):
             sol = _run_diffeqsolve(
-                make_rhs(y0, params), y0=y0, args=params,
-                saveat=diffrax.SaveAt(t1=True), **kw,
+                make_rhs(y0, params),
+                y0=y0,
+                args=params,
+                saveat=diffrax.SaveAt(t1=True),
+                **kw,
             )
             return sol.ts, sol.ys
+
         return _solve
 
     def _build_jitted_forward_fast(self, t0, t1, *, rtol, atol):
@@ -4734,6 +4928,7 @@ class Plant:
         precomputed once per solve from ``params`` (the cached-M path).
         """
         from aquakin.integrate.forward_solve import forward_solve
+
         rf = self._colored_root_finder[0]
         S, col_of, pattern = rf.seed_matrix, rf.color_of, rf.pattern
         t0a = jnp.asarray(float(t0))
@@ -4751,14 +4946,27 @@ class Plant:
                 JS = jax.vmap(lin, in_axes=1, out_axes=1)(S)
                 return JS[:, col_of] * pattern
 
-            ys = forward_solve(rhs, jac, y0, params, float(t0), float(t1),
-                               t_eval, rtol=rtol, atol=atol)
+            ys = forward_solve(
+                rhs, jac, y0, params, float(t0), float(t1), t_eval, rtol=rtol, atol=atol
+            )
             return t_eval, ys
+
         return _solve
 
     def _build_jitted_stable_adjoint_solve(
-        self, t0, t1, t_eval, *, rtol, atol, max_steps, forward_root_finder=None,
-        solver=None, factormax=None, order=5, low_memory=False,
+        self,
+        t0,
+        t1,
+        t_eval,
+        *,
+        rtol,
+        atol,
+        max_steps,
+        forward_root_finder=None,
+        solver=None,
+        factormax=None,
+        order=5,
+        low_memory=False,
     ):
         """Build the jit-compiled cap-free stable-adjoint solve for one signature.
 
@@ -4772,20 +4980,45 @@ class Plant:
         shapes; ``t_eval`` is closed over because the discrete adjoint marks it
         non-differentiable (a traced ``t_eval`` cannot enter that slot).
         """
+
         @jax.jit
         def _solve(y0, params):
             return self._esdirk_stable_adjoint(
-                y0, params, t0, t1, t_eval,
-                rtol=rtol, atol=atol, max_steps=max_steps,
+                y0,
+                params,
+                t0,
+                t1,
+                t_eval,
+                rtol=rtol,
+                atol=atol,
+                max_steps=max_steps,
                 forward_root_finder=forward_root_finder,
-                solver=solver, factormax=factormax, order=order,
-                low_memory=low_memory)
+                solver=solver,
+                factormax=factormax,
+                order=order,
+                low_memory=low_memory,
+            )
+
         return _solve
 
-    def _esdirk_stable_adjoint(self, y0, params, t0, t1, t_eval, *,
-                               rtol, atol, max_steps, jacobian_builder=None,
-                               forward_root_finder=None, solver=None,
-                               factormax=None, order=5, low_memory=False):
+    def _esdirk_stable_adjoint(
+        self,
+        y0,
+        params,
+        t0,
+        t1,
+        t_eval,
+        *,
+        rtol,
+        atol,
+        max_steps,
+        jacobian_builder=None,
+        forward_root_finder=None,
+        solver=None,
+        factormax=None,
+        order=5,
+        low_memory=False,
+    ):
         """Cap-free reverse-mode plant solve with the cached recycle map hoisted
         out of the backward pass.
 
@@ -4805,13 +5038,12 @@ class Plant:
         ``rhs`` (probe per call -- correct, just unoptimised). Shared by the
         cached jit closure and the under-trace gradient path so both optimise.
         """
+
         def rhs(t, y, args):
             return self._rhs(t, y, args)
 
-        rmap = self._maybe_recycle_map(
-            jnp.asarray(t0), self._split_state(y0), params)
-        fmap = self._maybe_flow_map(
-            jnp.asarray(t0), self._split_state(y0), params)
+        rmap = self._maybe_recycle_map(jnp.asarray(t0), self._split_state(y0), params)
+        fmap = self._maybe_flow_map(jnp.asarray(t0), self._split_state(y0), params)
         if rmap is None:
             primal_rhs = None
         else:
@@ -4827,10 +5059,19 @@ class Plant:
                 return self._rhs(t, y, args, recycle_map=rmap, flow_map=fmap)
 
         return esdirk_adjoint_solve(
-            rhs, y0, params, (t0, t1), t_eval,
-            solver=solver, order=order, factormax=factormax,
-            rtol=rtol, atol=atol, max_steps=max_steps,
-            time_dependent=True, primal_rhs=primal_rhs,
+            rhs,
+            y0,
+            params,
+            (t0, t1),
+            t_eval,
+            solver=solver,
+            order=order,
+            factormax=factormax,
+            rtol=rtol,
+            atol=atol,
+            max_steps=max_steps,
+            time_dependent=True,
+            primal_rhs=primal_rhs,
             jacobian_builder=jacobian_builder,
             forward_root_finder=forward_root_finder,
             low_memory=low_memory,
@@ -4908,20 +5149,40 @@ class Plant:
             atol = default_atol(y0, self.initial_state(), atol_factor=atol_factor)
         event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
         sol = self.solve(
-            t_span=(0.0, float(max_time)), params=params, y0=y0,
-            rtol=rtol, atol=atol, event=event,
+            t_span=(0.0, float(max_time)),
+            params=params,
+            y0=y0,
+            rtol=rtol,
+            atol=atol,
+            event=event,
             integrator=IntegratorConfig(max_steps=max_steps),
         )
         t_final = float(sol.t[-1])
         converged = bool(t_final < float(max_time))
         return SteadyStateResult(
-            state=sol.state[-1], converged=converged, time=t_final, solution=sol,
+            state=sol.state[-1],
+            converged=converged,
+            time=t_final,
+            solution=sol,
             method="forward",
         )
 
     def _steady_continuation_fallback(
-        self, rhs, params, y0, scale_floor, continuation_from, continuation_kwargs,
-        *, dt0, dt_max, growth_cap, max_iter, tol, nonneg, influent_time,
+        self,
+        rhs,
+        params,
+        y0,
+        scale_floor,
+        continuation_from,
+        continuation_kwargs,
+        *,
+        dt0,
+        dt_max,
+        growth_cap,
+        max_iter,
+        tol,
+        nonneg,
+        influent_time,
     ):
         """Continuation fallback for a non-converged direct PTC solve.
 
@@ -4937,34 +5198,60 @@ class Plant:
         if continuation_from is None:
             return None
         from aquakin.plant.steady import continuation_solve, make_continuation_kernels
+
         pk, yk = continuation_from
         pk = self._coerce_params(pk)
         yk = jnp.asarray(yk)
-        ckey = (float(dt0), float(dt_max), float(growth_cap), int(max_iter),
-                float(tol), bool(nonneg), float(influent_time))
+        ckey = (
+            float(dt0),
+            float(dt_max),
+            float(growth_cap),
+            int(max_iter),
+            float(tol),
+            bool(nonneg),
+            float(influent_time),
+        )
         cache = getattr(self, "_continuation_kernel_cache", None)
         if cache is None:
             cache = {}
             self._continuation_kernel_cache = cache
         kernels = cache.get(ckey)
         if kernels is None:
-            ptc_kw = dict(dt0=dt0, dt_max=dt_max, growth_cap=growth_cap,
-                          max_iter=max_iter, tol=tol,
-                          scale_floor=jnp.asarray(scale_floor), nonneg=nonneg)
+            ptc_kw = dict(
+                dt0=dt0,
+                dt_max=dt_max,
+                growth_cap=growth_cap,
+                max_iter=max_iter,
+                tol=tol,
+                scale_floor=jnp.asarray(scale_floor),
+                nonneg=nonneg,
+            )
             kernels = make_continuation_kernels(rhs, None, ptc_kw)
             cache[ckey] = kernels
         cres = continuation_solve(
-            rhs, pk, yk, params, kernels=kernels, **(continuation_kwargs or {}))
+            rhs, pk, yk, params, kernels=kernels, **(continuation_kwargs or {})
+        )
         if bool(cres.converged):
             return SteadyStateResult(
-                state=cres.state, converged=True, method="continuation",
+                state=cres.state,
+                converged=True,
+                method="continuation",
                 iterations=int(cres.corrector_iterations),
-                residual=float(cres.residual))
+                residual=float(cres.residual),
+            )
         return None
 
     def _steady_arclength_fallback(
-        self, rhs, params, scale_floor, continuation_from, *, tol, nonneg,
-        influent_time, arclength_kwargs=None,
+        self,
+        rhs,
+        params,
+        scale_floor,
+        continuation_from,
+        *,
+        tol,
+        nonneg,
+        influent_time,
+        arclength_kwargs=None,
     ):
         """Pseudo-arclength fallback: track the steady-state branch to a far target.
 
@@ -4983,6 +5270,7 @@ class Plant:
         if continuation_from is None:
             return None
         from aquakin.plant.steady import arclength_continuation_solve, make_arclength_kernels
+
         pk, yk = continuation_from
         pk = self._coerce_params(pk)
         yk = jnp.asarray(yk)
@@ -4998,18 +5286,33 @@ class Plant:
             kernels = make_arclength_kernels(rhs, scale, ptc_kw)
             cache[ckey] = kernels
         res = arclength_continuation_solve(
-            rhs, pk, yk, params, kernels=kernels, scale=scale, ptc_kwargs=ptc_kw,
-            **(arclength_kwargs or {}))
+            rhs,
+            pk,
+            yk,
+            params,
+            kernels=kernels,
+            scale=scale,
+            ptc_kwargs=ptc_kw,
+            **(arclength_kwargs or {}),
+        )
         if res.status == "converged":
             return SteadyStateResult(
-                state=res.state, converged=True, method="arclength",
+                state=res.state,
+                converged=True,
+                method="arclength",
                 iterations=int(res.corrector_iterations),
-                residual=float(res.residual), operating_point_exists=True)
+                residual=float(res.residual),
+                operating_point_exists=True,
+            )
         if res.status == "past_fold":
             return SteadyStateResult(
-                state=res.state, converged=False, method="past_fold",
+                state=res.state,
+                converged=False,
+                method="past_fold",
                 iterations=int(res.corrector_iterations),
-                residual=float(res.residual), operating_point_exists=False)
+                residual=float(res.residual),
+                operating_point_exists=False,
+            )
         return None
 
     def steady_state(
@@ -5140,8 +5443,7 @@ class Plant:
 
         self._build_state_layout()
         self._build_parameter_layout()
-        params = (self.default_parameters() if params is None
-                  else self._coerce_params(params))
+        params = self.default_parameters() if params is None else self._coerce_params(params)
         y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
         t = jnp.asarray(float(influent_time))
 
@@ -5164,13 +5466,17 @@ class Plant:
         # overrides (e.g. the influent load). Without design, theta is just the
         # parameter vector (unchanged path).
         if design is None:
+
             def rhs(y, theta):
                 return self._rhs(t, y, theta)
+
             theta = params
         else:
+
             def rhs(y, theta):
                 p, d = theta
                 return self._rhs(t, y, p, design=d)
+
             theta = (params, design)
 
         # Colored PTC needs a leak-free, cached-recycle-map forward rhs: the
@@ -5186,20 +5492,21 @@ class Plant:
         if colored_jacobian:
             concrete = not any(
                 isinstance(leaf, jax.core.Tracer)
-                for leaf in jax.tree_util.tree_leaves((params, y0)))
+                for leaf in jax.tree_util.tree_leaves((params, y0))
+            )
             if design is None and concrete:
                 self._check_recycle_map_constant(t, y0, params)
                 self._check_flow_map_constant(t, y0, params)
                 rmap = self._maybe_recycle_map(t, self._split_state(y0), params)
                 fmap = self._maybe_flow_map(t, self._split_state(y0), params)
                 if rmap is not None:
+
                     def primal_rhs(y, theta):
-                        return self._rhs(t, y, theta, recycle_map=rmap,
-                                         flow_map=fmap)
-                    jac_fn = self._colored_steady_jacobian_builder(
-                        primal_rhs, y0, theta, tol=tol)
+                        return self._rhs(t, y, theta, recycle_map=rmap, flow_map=fmap)
+
+                    jac_fn = self._colored_steady_jacobian_builder(primal_rhs, y0, theta, tol=tol)
             if jac_fn is None:
-                primal_rhs = None       # colored unavailable -> dense forward too
+                primal_rhs = None  # colored unavailable -> dense forward too
 
         # Compiled-solve cache (the single-run compile lever). The eager
         # ``while_loop`` in ``ptc_forward`` re-traces and recompiles on EVERY call
@@ -5215,51 +5522,95 @@ class Plant:
         # amortized by the caller's own ``jit`` -- those keep ``solve_steady_state``.
         under_trace = any(
             isinstance(leaf, jax.core.Tracer)
-            for leaf in jax.tree_util.tree_leaves((theta, y0, scale_floor)))
+            for leaf in jax.tree_util.tree_leaves((theta, y0, scale_floor))
+        )
         if design is None and jac_fn is None and not under_trace:
-            key = (float(dt0), float(dt_max), float(growth_cap), int(max_iter),
-                   float(tol), bool(nonneg), float(influent_time))
+            key = (
+                float(dt0),
+                float(dt_max),
+                float(growth_cap),
+                int(max_iter),
+                float(tol),
+                bool(nonneg),
+                float(influent_time),
+            )
             jitted = self._steady_jit_cache.get(key)
             if jitted is None:
+
                 def _fwd(y0_, params_, scale_floor_):
                     return ptc_forward(
-                        rhs, params_, y0_, dt0=dt0, dt_max=dt_max,
-                        growth_cap=growth_cap, max_iter=max_iter, tol=tol,
-                        scale_floor=scale_floor_, nonneg=nonneg)
+                        rhs,
+                        params_,
+                        y0_,
+                        dt0=dt0,
+                        dt_max=dt_max,
+                        growth_cap=growth_cap,
+                        max_iter=max_iter,
+                        tol=tol,
+                        scale_floor=scale_floor_,
+                        nonneg=nonneg,
+                    )
+
                 jitted = jax.jit(_fwd)
                 self._steady_jit_cache[key] = jitted
-            y_star, residual_a, iters_a, conv_a = jitted(
-                y0, params, jnp.asarray(scale_floor))
+            y_star, residual_a, iters_a, conv_a = jitted(y0, params, jnp.asarray(scale_floor))
             converged = bool(conv_a)
             if not converged:
                 alt = self._steady_continuation_fallback(
-                    rhs, params, y0, scale_floor, continuation_from,
-                    continuation_kwargs, dt0=dt0, dt_max=dt_max,
-                    growth_cap=growth_cap, max_iter=max_iter, tol=tol,
-                    nonneg=nonneg, influent_time=influent_time)
+                    rhs,
+                    params,
+                    y0,
+                    scale_floor,
+                    continuation_from,
+                    continuation_kwargs,
+                    dt0=dt0,
+                    dt_max=dt_max,
+                    growth_cap=growth_cap,
+                    max_iter=max_iter,
+                    tol=tol,
+                    nonneg=nonneg,
+                    influent_time=influent_time,
+                )
                 if alt is not None:
                     return alt
                 if arclength:
                     arc = self._steady_arclength_fallback(
-                        rhs, params, scale_floor, continuation_from, tol=tol,
-                        nonneg=nonneg, influent_time=influent_time,
-                        arclength_kwargs=arclength_kwargs)
+                        rhs,
+                        params,
+                        scale_floor,
+                        continuation_from,
+                        tol=tol,
+                        nonneg=nonneg,
+                        influent_time=influent_time,
+                        arclength_kwargs=arclength_kwargs,
+                    )
                     if arc is not None:
                         return arc
                 if fallback:
-                    fb = self.run_to_steady_state(
-                        params, y0=y0, **(fallback_kwargs or {}))
+                    fb = self.run_to_steady_state(params, y0=y0, **(fallback_kwargs or {}))
                     fb.method = "ptc->forward"
                     return fb
             return SteadyStateResult(
-                state=y_star, converged=converged, method="ptc",
-                iterations=int(iters_a), residual=float(residual_a),
+                state=y_star,
+                converged=converged,
+                method="ptc",
+                iterations=int(iters_a),
+                residual=float(residual_a),
             )
 
         res = solve_steady_state(
-            rhs, theta, y0, jac_fn=jac_fn, primal_rhs=primal_rhs, dt0=dt0,
-            dt_max=dt_max, growth_cap=growth_cap, max_iter=max_iter, tol=tol,
-            scale_floor=scale_floor, nonneg=nonneg,
+            rhs,
+            theta,
+            y0,
+            jac_fn=jac_fn,
+            primal_rhs=primal_rhs,
+            dt0=dt0,
+            dt_max=dt_max,
+            growth_cap=growth_cap,
+            max_iter=max_iter,
+            tol=tol,
+            scale_floor=scale_floor,
+            nonneg=nonneg,
         )
 
         # Eager use gets concrete diagnostics and the forward fallback; under an
@@ -5273,34 +5624,55 @@ class Plant:
             # Under an outer jit/grad trace the diagnostics are traced values;
             # return them as-is and skip the (un-jittable) fallback branch.
             return SteadyStateResult(
-                state=res.state, converged=res.converged, method="ptc",
-                iterations=res.iterations, residual=res.residual,
+                state=res.state,
+                converged=res.converged,
+                method="ptc",
+                iterations=res.iterations,
+                residual=res.residual,
             )
 
         if not converged:
             alt = self._steady_continuation_fallback(
-                rhs, params, y0, scale_floor, continuation_from,
-                continuation_kwargs, dt0=dt0, dt_max=dt_max,
-                growth_cap=growth_cap, max_iter=max_iter, tol=tol,
-                nonneg=nonneg, influent_time=influent_time)
+                rhs,
+                params,
+                y0,
+                scale_floor,
+                continuation_from,
+                continuation_kwargs,
+                dt0=dt0,
+                dt_max=dt_max,
+                growth_cap=growth_cap,
+                max_iter=max_iter,
+                tol=tol,
+                nonneg=nonneg,
+                influent_time=influent_time,
+            )
             if alt is not None:
                 return alt
             if arclength:
                 arc = self._steady_arclength_fallback(
-                    rhs, params, scale_floor, continuation_from, tol=tol,
-                    nonneg=nonneg, influent_time=influent_time,
-                    arclength_kwargs=arclength_kwargs)
+                    rhs,
+                    params,
+                    scale_floor,
+                    continuation_from,
+                    tol=tol,
+                    nonneg=nonneg,
+                    influent_time=influent_time,
+                    arclength_kwargs=arclength_kwargs,
+                )
                 if arc is not None:
                     return arc
             if fallback:
-                fb = self.run_to_steady_state(
-                    params, y0=y0, **(fallback_kwargs or {}))
+                fb = self.run_to_steady_state(params, y0=y0, **(fallback_kwargs or {}))
                 fb.method = "ptc->forward"
                 return fb
 
         return SteadyStateResult(
-            state=res.state, converged=converged, method="ptc",
-            iterations=iterations, residual=residual,
+            state=res.state,
+            converged=converged,
+            method="ptc",
+            iterations=iterations,
+            residual=residual,
         )
 
     # -- Operating-condition sensitivity inputs (shared steady + dynamic) -------
@@ -5324,12 +5696,13 @@ class Plant:
         per operating parameter, in the order given.
         """
         op_meta = []
-        for spec in (operating or []):
+        for spec in operating or []:
             port = spec["port"]
             if port not in self.influents:
                 raise KeyError(
                     f"operating influent port {port!r} is not an influent of this "
-                    f"plant; have {sorted(self.influents)}.")
+                    f"plant; have {sorted(self.influents)}."
+                )
             net = self.influents[port].network
             kind = spec.get("kind")
             if kind == "influent_flow":
@@ -5339,13 +5712,14 @@ class Plant:
                 if sp not in net.species_index:
                     raise KeyError(
                         f"operating species {sp!r} is not in the influent network "
-                        f"for port {port!r}.")
-                op_meta.append(
-                    (port, False, int(net.species_index[sp]), int(net.n_species)))
+                        f"for port {port!r}."
+                    )
+                op_meta.append((port, False, int(net.species_index[sp]), int(net.n_species)))
             else:
                 raise ValueError(
                     f"operating spec 'kind' must be 'influent_flow' or "
-                    f"'influent_concentration'; got {kind!r}.")
+                    f"'influent_concentration'; got {kind!r}."
+                )
         return op_meta
 
     @staticmethod
@@ -5444,30 +5818,28 @@ class Plant:
         Exact when the steady Jacobian ``dF/dy`` is full rank (true for the shipped
         networks at their operating point; see :func:`solve_steady_state`).
         """
-        params = (self.default_parameters() if params is None
-                  else jnp.asarray(params))
+        params = self.default_parameters() if params is None else jnp.asarray(params)
         if state is not None:
             y_star = jax.lax.stop_gradient(jnp.asarray(state))
         else:
-            y_star = jax.lax.stop_gradient(
-                self.steady_state(params, y0=y0, **steady_kwargs).state)
+            y_star = jax.lax.stop_gradient(self.steady_state(params, y0=y0, **steady_kwargs).state)
 
         def F(y, p):
             return self.derivative(y, params=p)
 
         out_fn = output_fn if output_fn is not None else (lambda y: y)
         g0 = jnp.atleast_1d(out_fn(y_star))
-        G = jax.jacfwd(out_fn)(y_star)                  # (m, n) or (n,)
+        G = jax.jacfwd(out_fn)(y_star)  # (m, n) or (n,)
         if G.ndim == 1:
-            G = G[None, :]                              # scalar output -> (1, n)
+            G = G[None, :]  # scalar output -> (1, n)
         m, n_par = G.shape[0], int(params.shape[0])
 
         if wrt is None:
             wrt_idx = jnp.arange(n_par)
         else:
-            wrt_idx = jnp.asarray([
-                self.parameter_index(w) if isinstance(w, str) else int(w)
-                for w in wrt])
+            wrt_idx = jnp.asarray(
+                [self.parameter_index(w) if isinstance(w, str) else int(w) for w in wrt]
+            )
         n_wrt = int(wrt_idx.shape[0])
 
         # Operating-condition inputs (the influent scales, nominal 1.0): their IFT
@@ -5479,17 +5851,16 @@ class Plant:
 
         J_y = jax.jacfwd(lambda y: F(y, params))(y_star)
 
-        chosen = ("forward" if (n_wrt + n_op) <= m else "reverse") \
-            if mode == "auto" else mode
+        chosen = ("forward" if (n_wrt + n_op) <= m else "reverse") if mode == "auto" else mode
         if chosen == "forward":
             # Differentiate only the selected parameters: k forward passes, not
             # n_params. (k == n_params when wrt is None.)
             def F_sub(theta_sub):
                 return F(y_star, params.at[wrt_idx].set(theta_sub))
 
-            J_theta = jax.jacfwd(F_sub)(params[wrt_idx])           # (n, n_wrt)
-            S = jnp.linalg.solve(J_y, -J_theta)                    # (n, n_wrt)
-            dgdth = G @ S                                          # (m, n_wrt)
+            J_theta = jax.jacfwd(F_sub)(params[wrt_idx])  # (n, n_wrt)
+            S = jnp.linalg.solve(J_y, -J_theta)  # (n, n_wrt)
+            dgdth = G @ S  # (m, n_wrt)
         elif chosen == "reverse":
             # Each output's adjoint returns the sensitivity to every parameter;
             # select the requested subset afterwards.
@@ -5497,13 +5868,12 @@ class Plant:
             _, vjp_F = jax.vjp(lambda p: F(y_star, p), params)
 
             def _row(g_i):
-                lam = jnp.linalg.solve(J_yT, -g_i)                 # adjoint
-                return vjp_F(lam)[0][wrt_idx]                      # (n_wrt,)
+                lam = jnp.linalg.solve(J_yT, -g_i)  # adjoint
+                return vjp_F(lam)[0][wrt_idx]  # (n_wrt,)
 
-            dgdth = jax.vmap(_row)(G)                              # (m, n_wrt)
+            dgdth = jax.vmap(_row)(G)  # (m, n_wrt)
         else:
-            raise ValueError(
-                f"mode must be 'auto', 'forward', or 'reverse'; got {mode!r}.")
+            raise ValueError(f"mode must be 'auto', 'forward', or 'reverse'; got {mode!r}.")
 
         # Append the operating-condition columns: the same IFT, with
         # ``dF/d(scale)`` taken through the influent ``design`` override, in the
@@ -5517,22 +5887,20 @@ class Plant:
             pf = self._coerce_params(params)
 
             def F_op(op_vals):
-                return self._rhs(
-                    t0, y_star, pf,
-                    design=self._operating_design(op_meta, op_vals))
+                return self._rhs(t0, y_star, pf, design=self._operating_design(op_meta, op_vals))
 
             if chosen == "forward":
-                J_op = jax.jacfwd(F_op)(op0)                       # (n, n_op)
-                dg_op = G @ jnp.linalg.solve(J_y, -J_op)           # (m, n_op)
+                J_op = jax.jacfwd(F_op)(op0)  # (n, n_op)
+                dg_op = G @ jnp.linalg.solve(J_y, -J_op)  # (m, n_op)
             else:
                 _, vjp_op = jax.vjp(F_op, op0)
-                dg_op = jax.vmap(
-                    lambda g_i: vjp_op(jnp.linalg.solve(J_y.T, -g_i))[0])(G)
-            dgdth = jnp.concatenate([dgdth, dg_op], axis=1)        # (m, n_wrt+n_op)
+                dg_op = jax.vmap(lambda g_i: vjp_op(jnp.linalg.solve(J_y.T, -g_i))[0])(G)
+            dgdth = jnp.concatenate([dgdth, dg_op], axis=1)  # (m, n_wrt+n_op)
 
         if elasticity:
-            theta_all = (jnp.concatenate([params[wrt_idx], jnp.ones(n_op)])
-                         if n_op else params[wrt_idx])
+            theta_all = (
+                jnp.concatenate([params[wrt_idx], jnp.ones(n_op)]) if n_op else params[wrt_idx]
+            )
             dgdth = dgdth * (theta_all[None, :] / g0[:, None])
         if return_jacobian:
             return dgdth, J_y
@@ -5641,14 +6009,14 @@ class Plant:
         if wrt is None:
             wrt_idx = list(range(int(base.shape[0])))
         else:
-            wrt_idx = [self.parameter_index(w) if isinstance(w, str) else int(w)
-                       for w in wrt]
+            wrt_idx = [self.parameter_index(w) if isinstance(w, str) else int(w) for w in wrt]
         k = len(wrt_idx)
         ranges_arr = jnp.asarray(ranges, dtype=base.dtype)
         if ranges_arr.shape != (k, 2):
             raise ValueError(
                 f"ranges must have shape ({k}, 2) aligned with the {k} screened "
-                f"parameters; got {tuple(ranges_arr.shape)}.")
+                f"parameters; got {tuple(ranges_arr.shape)}."
+            )
         lo, hi = ranges_arr[:, 0], ranges_arr[:, 1]
         wrt_j = jnp.asarray(wrt_idx)
 
@@ -5670,82 +6038,85 @@ class Plant:
         @jax.jit
         def _sens_at(p, ss):
             S, J_y = self.steady_state_sensitivity(
-                p, state=ss, output_fn=output_fn, wrt=wrt_idx, mode=mode,
-                return_jacobian=True)                                # (m, k), (n, n)
+                p, state=ss, output_fn=output_fn, wrt=wrt_idx, mode=mode, return_jacobian=True
+            )  # (m, k), (n, n)
             return jnp.atleast_1d(output_fn(ss)), S, jnp.linalg.cond(J_y)
 
         if input_dist == "normal":
             from ..integrate.sensitivity import _sobol_normal_sample
+
             if input_transforms is None or len(input_transforms) != k:
                 raise ValueError(
                     "input_dist='normal' requires input_transforms aligned with "
                     f"the {k} screened parameters (got "
-                    f"{None if input_transforms is None else len(input_transforms)}).")
+                    f"{None if input_transforms is None else len(input_transforms)})."
+                )
             nominal = np.asarray(base[wrt_j])
             lo_np, hi_np = np.asarray(lo), np.asarray(hi)
             # The +/-2 sigma band [lo, hi] is read in the calibration-transform
             # space (where the prior is Gaussian): mean = transform(nominal), and
             # the band spans +/-2 sigma there, so sigma_z = (t(hi) - t(lo)) / 4.
-            m_z = np.array([_to_z(nominal[j], input_transforms[j])
-                            for j in range(k)])
-            s_z = np.array([(_to_z(hi_np[j], input_transforms[j])
-                             - _to_z(lo_np[j], input_transforms[j])) / 4.0
-                            for j in range(k)])
+            m_z = np.array([_to_z(nominal[j], input_transforms[j]) for j in range(k)])
+            s_z = np.array(
+                [
+                    (_to_z(hi_np[j], input_transforms[j]) - _to_z(lo_np[j], input_transforms[j]))
+                    / 4.0
+                    for j in range(k)
+                ]
+            )
             Zz, n_drawn = _sobol_normal_sample(m_z, s_z, k, n_samples, seed)
-            Z = np.column_stack([_from_z(Zz[:, j], input_transforms[j])
-                                 for j in range(k)])          # physical samples
-            poincare_const = s_z ** 2                         # Gaussian Poincare C_j
+            Z = np.column_stack(
+                [_from_z(Zz[:, j], input_transforms[j]) for j in range(k)]
+            )  # physical samples
+            poincare_const = s_z**2  # Gaussian Poincare C_j
         elif input_dist == "uniform":
             Z, n_drawn = _sobol_sample(lo, hi, k, n_samples, seed)
             poincare_const = None
         else:
-            raise ValueError(
-                f"input_dist must be 'uniform' or 'normal', got {input_dist!r}.")
-        outs, grads, conds, resids, smethods, sconv, sexist = (
-            [], [], [], [], [], [], [])
+            raise ValueError(f"input_dist must be 'uniform' or 'normal', got {input_dist!r}.")
+        outs, grads, conds, resids, smethods, sconv, sexist = ([], [], [], [], [], [], [])
         for i in range(n_drawn):
             p = base.at[wrt_j].set(jnp.asarray(Z[i]))
-            ssr = self.steady_state(
-                p, y0=y0, continuation_from=known, **steady_kwargs)
+            ssr = self.steady_state(p, y0=y0, continuation_from=known, **steady_kwargs)
             o, S, c = _sens_at(p, ssr.state)
             S = np.asarray(S)
             if input_dist == "normal":
                 # Chain rule dg/dz = (dg/dtheta) * (dtheta/dz): express the
                 # sensitivity in the transform space where the input is Gaussian,
                 # so the DGSM and its Poincare constant are consistent.
-                mult = np.array([_dtheta_dz(float(Z[i, j]), input_transforms[j])
-                                 for j in range(k)])
+                mult = np.array([_dtheta_dz(float(Z[i, j]), input_transforms[j]) for j in range(k)])
                 S = S * mult[None, :]
             outs.append(np.asarray(o))
             grads.append(S)
             conds.append(float(c))
-            resids.append(float(ssr.residual)
-                          if ssr.residual is not None else float("nan"))
+            resids.append(float(ssr.residual) if ssr.residual is not None else float("nan"))
             smethods.append(ssr.method)
             sconv.append(bool(ssr.converged))
-            sexist.append(ssr.operating_point_exists)     # True / False / None
+            sexist.append(ssr.operating_point_exists)  # True / False / None
             if progress and (i + 1) % progress == 0:
-                print(f"  [steady_state_dgsm] {i + 1}/{n_drawn} samples "
-                      f"(last: {ssr.method})", flush=True)
+                print(
+                    f"  [steady_state_dgsm] {i + 1}/{n_drawn} samples (last: {ssr.method})",
+                    flush=True,
+                )
 
-        outputs = np.stack(outs)                          # (N, m)
-        grad_sq = np.stack(grads) ** 2                    # (N, m, k)
-        cond = np.asarray(conds)                          # (N,)
-        residual = np.asarray(resids)                     # (N,) final scaled residual
+        outputs = np.stack(outs)  # (N, m)
+        grad_sq = np.stack(grads) ** 2  # (N, m, k)
+        cond = np.asarray(conds)  # (N,)
+        residual = np.asarray(resids)  # (N,) final scaled residual
         # Operating-regime exclusion: a sample whose operating branch folds before
         # its parameters has NO operating-branch steady state (pseudo-arclength
         # classified it ``past_fold``); it is outside the viable regime and is
         # excluded from the screen -- the physical, fold-based criterion replacing
         # the conditioning heuristic for those samples.
         operating_mask = np.array([e is not False for e in sexist], dtype=bool)
-        rng2 = np.asarray((hi - lo) ** 2)                 # (k,)
+        rng2 = np.asarray((hi - lo) ** 2)  # (k,)
         # Drop, per output, any non-finite sample, plus (if cond_factor is set) any
         # near-singular-Jacobian operating point where the sensitivity blows up,
         # plus the past-fold (non-operating) samples.
         sample_mask = _cond_mask(cond, cond_factor) & operating_mask
         bound, std_error, nu, var, n_valid = _dgsm_aggregate(
-            grad_sq, outputs, rng2, sample_mask=sample_mask,
-            poincare=poincare_const)
+            grad_sq, outputs, rng2, sample_mask=sample_mask, poincare=poincare_const
+        )
 
         names = self.parameter_names()
         input_names = [names[i] for i in wrt_idx]
@@ -5753,17 +6124,26 @@ class Plant:
         if output_names is None:
             output_names = [f"output{i}" for i in range(m)]
         return SteadyStateDGSMResult(
-            input_names=input_names, output_names=list(output_names),
-            sobol_total_bound=jnp.asarray(bound), std_error=jnp.asarray(std_error),
-            nu=jnp.asarray(nu), output_variance=jnp.asarray(var),
-            ranges=ranges_arr, n_samples=int(n_drawn), seed=int(seed),
-            grad_sq=jnp.asarray(grad_sq), outputs=jnp.asarray(outputs),
-            n_valid=jnp.asarray(n_valid), cond=jnp.asarray(cond),
-            cond_factor=cond_factor, residual=jnp.asarray(residual),
-            solve_method=smethods, converged=jnp.asarray(sconv),
+            input_names=input_names,
+            output_names=list(output_names),
+            sobol_total_bound=jnp.asarray(bound),
+            std_error=jnp.asarray(std_error),
+            nu=jnp.asarray(nu),
+            output_variance=jnp.asarray(var),
+            ranges=ranges_arr,
+            n_samples=int(n_drawn),
+            seed=int(seed),
+            grad_sq=jnp.asarray(grad_sq),
+            outputs=jnp.asarray(outputs),
+            n_valid=jnp.asarray(n_valid),
+            cond=jnp.asarray(cond),
+            cond_factor=cond_factor,
+            residual=jnp.asarray(residual),
+            solve_method=smethods,
+            converged=jnp.asarray(sconv),
             operating_point_exists=sexist,
-            poincare=(None if poincare_const is None
-                      else jnp.asarray(poincare_const)))
+            poincare=(None if poincare_const is None else jnp.asarray(poincare_const)),
+        )
 
     def solve_sensitivity(
         self,
@@ -5862,8 +6242,8 @@ class Plant:
         params_full = self._coerce_params(jnp.asarray(params))
         y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
         free_idx = jnp.asarray(
-            [self.parameter_index(w) if isinstance(w, str) else int(w)
-             for w in wrt], dtype=int)   # int even when wrt is empty (operating-only)
+            [self.parameter_index(w) if isinstance(w, str) else int(w) for w in wrt], dtype=int
+        )  # int even when wrt is empty (operating-only)
         t0, t1 = float(t_span[0]), float(t_span[1])
         t0a = jnp.asarray(t0)
 
@@ -5902,19 +6282,27 @@ class Plant:
             theta_aug, free_aug = params_full, free_idx
 
         def f_flat(t, y, theta):
-            design = (self._operating_design(op_meta, theta[n_params:])
-                      if n_op else None)
-            return self._rhs(t, y, theta[:n_params], recycle_map=rmap,
-                             flow_map=fmap, design=design)
+            design = self._operating_design(op_meta, theta[n_params:]) if n_op else None
+            return self._rhs(t, y, theta[:n_params], recycle_map=rmap, flow_map=fmap, design=design)
 
         atol_arr = default_atol(y0) if atol is None else jnp.asarray(atol)
         te = None if t_eval is None else jnp.asarray(t_eval)
         return augmented_forward_sensitivity(
-            f_flat, y0, theta_aug, free_aug,
-            t0=t0, t1=t1, t_eval=te, rtol=rtol, atol_y=atol_arr,
-            sens_rtol=sens_rtol, dtmax=dtmax, max_steps=max_steps,
+            f_flat,
+            y0,
+            theta_aug,
+            free_aug,
+            t0=t0,
+            t1=t1,
+            t_eval=te,
+            rtol=rtol,
+            atol_y=atol_arr,
+            sens_rtol=sens_rtol,
+            dtmax=dtmax,
+            max_steps=max_steps,
             shared_factor=int(free_aug.shape[0]) > 1,
-            order=3, factormax=factormax,
+            order=3,
+            factormax=factormax,
         )
 
     @staticmethod
@@ -5929,13 +6317,23 @@ class Plant:
         if mode == "reverse":
             return {"diff": DifferentiationConfig(mode="reverse", method="stable")}
         if mode == "forward":
-            return {"diff": DifferentiationConfig(mode="forward",
-                                                  method="through_solve")}
-        raise ValueError(
-            f"mode must be 'reverse', 'forward', or 'auto'; got {mode!r}.")
+            return {"diff": DifferentiationConfig(mode="forward", method="through_solve")}
+        raise ValueError(f"mode must be 'reverse', 'forward', or 'auto'; got {mode!r}.")
 
-    def _dynamic_value_jac(self, params, wrt_idx, theta, *, output_fn,
-                           t_span, t_eval, y0, mode, solve_kwargs, operating=None):
+    def _dynamic_value_jac(
+        self,
+        params,
+        wrt_idx,
+        theta,
+        *,
+        output_fn,
+        t_span,
+        t_eval,
+        y0,
+        mode,
+        solve_kwargs,
+        operating=None,
+    ):
         """``(value, (m, k) Jacobian)`` of ``output_fn(solve(theta))`` using the
         STABLE method for ``mode``, shared by :meth:`dynamic_sensitivity` and
         :meth:`dynamic_dgsm`.
@@ -5951,22 +6349,34 @@ class Plant:
         """
         wrt_j = jnp.asarray(wrt_idx)
         if mode == "forward":
-            extra = set(solve_kwargs) - {"max_steps", "dtmax", "factormax",
-                                         "rtol", "atol", "sens_rtol"}
+            extra = set(solve_kwargs) - {
+                "max_steps",
+                "dtmax",
+                "factormax",
+                "rtol",
+                "atol",
+                "sens_rtol",
+            }
             if extra:
                 raise TypeError(
                     f"forward-mode dynamic sensitivity runs the solve through "
                     f"solve_sensitivity, which does not accept {sorted(extra)}; "
                     f"it accepts max_steps / dtmax / factormax / rtol / atol / "
-                    f"sens_rtol.")
+                    f"sens_rtol."
+                )
             full = params.at[wrt_j].set(theta)
             ts, ys, S_state = self.solve_sensitivity(
-                full, list(wrt_idx), t_span=t_span, t_eval=t_eval, y0=y0,
-                operating=operating, **solve_kwargs)
+                full,
+                list(wrt_idx),
+                t_span=t_span,
+                t_eval=t_eval,
+                y0=y0,
+                operating=operating,
+                **solve_kwargs,
+            )
 
             def g_of_ys(ys_traj):
-                return jnp.atleast_1d(
-                    output_fn(PlantSolution(t=ts, state=ys_traj, plant=self)))
+                return jnp.atleast_1d(output_fn(PlantSolution(t=ts, state=ys_traj, plant=self)))
 
             # One linearization of the output map at the saved trajectory (no
             # solve), pushed across the k parameter columns of dy/dtheta -> (m, k).
@@ -5983,20 +6393,17 @@ class Plant:
             # dtmax / factormax); fold them into an IntegratorConfig for Plant.solve,
             # leaving the plain solve tolerances (rtol/atol) and any other kwargs.
             sk = dict(solve_kwargs)
-            int_kw = {k: sk.pop(k) for k in ("max_steps", "dtmax", "factormax")
-                      if k in sk}
+            int_kw = {k: sk.pop(k) for k in ("max_steps", "dtmax", "factormax") if k in sk}
             if int_kw:
                 solve_adj = {**solve_adj, "integrator": IntegratorConfig(**int_kw)}
 
             def f(th):
                 p = params.at[wrt_j].set(th)
-                sol = self.solve(t_span, t_eval=t_eval, params=p, y0=y0,
-                                 **solve_adj, **sk)
+                sol = self.solve(t_span, t_eval=t_eval, params=p, y0=y0, **solve_adj, **sk)
                 return jnp.atleast_1d(output_fn(sol))
 
             return _dynamic_value_and_jacobian(f, theta, "reverse")
-        raise ValueError(
-            f"mode must be 'reverse', 'forward', or 'auto'; got {mode!r}.")
+        raise ValueError(f"mode must be 'reverse', 'forward', or 'auto'; got {mode!r}.")
 
     def dynamic_sensitivity(
         self,
@@ -6068,13 +6475,11 @@ class Plant:
         jnp.ndarray
             ``(m, k)`` sensitivity of the ``m`` outputs to the ``k`` parameters.
         """
-        params = (self.default_parameters() if params is None
-                  else jnp.asarray(params))
+        params = self.default_parameters() if params is None else jnp.asarray(params)
         if wrt is None:
             wrt_idx = list(range(int(params.shape[0])))
         else:
-            wrt_idx = [self.parameter_index(w) if isinstance(w, str) else int(w)
-                       for w in wrt]
+            wrt_idx = [self.parameter_index(w) if isinstance(w, str) else int(w) for w in wrt]
         wrt_j = jnp.asarray(wrt_idx)
         theta0 = params[wrt_j]
         n_op = len(self._parse_operating(operating))
@@ -6084,14 +6489,22 @@ class Plant:
         if n_op and chosen != "forward":
             raise ValueError(
                 "operating-condition sensitivity is available only in forward "
-                "mode (the augmented variational solve); pass mode='forward'.")
+                "mode (the augmented variational solve); pass mode='forward'."
+            )
         g, S = self._dynamic_value_jac(
-            params, wrt_idx, theta0, output_fn=output_fn, t_span=t_span,
-            t_eval=t_eval, y0=y0, mode=chosen, solve_kwargs=solve_kwargs,
-            operating=operating)
+            params,
+            wrt_idx,
+            theta0,
+            output_fn=output_fn,
+            t_span=t_span,
+            t_eval=t_eval,
+            y0=y0,
+            mode=chosen,
+            solve_kwargs=solve_kwargs,
+            operating=operating,
+        )
         if elasticity:
-            theta_all = (jnp.concatenate([theta0, jnp.ones(n_op)])
-                         if n_op else theta0)
+            theta_all = jnp.concatenate([theta0, jnp.ones(n_op)]) if n_op else theta0
             S = S * (theta_all[None, :] / g[:, None])
         return S
 
@@ -6136,14 +6549,14 @@ class Plant:
         if wrt is None:
             wrt_idx = list(range(int(params.shape[0])))
         else:
-            wrt_idx = [self.parameter_index(w) if isinstance(w, str) else int(w)
-                       for w in wrt]
+            wrt_idx = [self.parameter_index(w) if isinstance(w, str) else int(w) for w in wrt]
         k = len(wrt_idx)
         ranges_arr = jnp.asarray(ranges, dtype=params.dtype)
         if ranges_arr.shape != (k, 2):
             raise ValueError(
                 f"ranges must have shape ({k}, 2) aligned with the {k} screened "
-                f"parameters; got {tuple(ranges_arr.shape)}.")
+                f"parameters; got {tuple(ranges_arr.shape)}."
+            )
         lo, hi = ranges_arr[:, 0], ranges_arr[:, 1]
         chosen = "reverse" if mode == "auto" else mode
 
@@ -6154,8 +6567,16 @@ class Plant:
             # setup that needs a concrete value does not see a tracer; the solve's
             # compiled-solve cache amortizes the integrator compile across samples.
             return self._dynamic_value_jac(
-                params, wrt_idx, z, output_fn=output_fn, t_span=t_span,
-                t_eval=t_eval, y0=y0, mode=chosen, solve_kwargs=solve_kwargs)
+                params,
+                wrt_idx,
+                z,
+                output_fn=output_fn,
+                t_span=t_span,
+                t_eval=t_eval,
+                y0=y0,
+                mode=chosen,
+                solve_kwargs=solve_kwargs,
+            )
 
         Z, n_drawn = _sobol_sample(lo, hi, k, n_samples, seed)
         outs, grads = [], []
@@ -6166,9 +6587,9 @@ class Plant:
             if progress and (i + 1) % progress == 0:
                 print(f"  [dynamic_dgsm] {i + 1}/{n_drawn} samples", flush=True)
 
-        outputs = np.stack(outs)                          # (N, m)
-        grad_sq = np.stack(grads) ** 2                    # (N, m, k)
-        rng2 = np.asarray((hi - lo) ** 2)                 # (k,)
+        outputs = np.stack(outs)  # (N, m)
+        grad_sq = np.stack(grads) ** 2  # (N, m, k)
+        rng2 = np.asarray((hi - lo) ** 2)  # (k,)
         bound, se, nu, var, n_valid = _dynamic_dgsm_bounds(grad_sq, outputs, rng2)
 
         names = self.parameter_names()
@@ -6177,9 +6598,16 @@ class Plant:
         if output_names is None:
             output_names = [f"output{i}" for i in range(m)]
         return DynamicDGSMResult(
-            input_names=input_names, output_names=list(output_names),
-            sobol_total_bound=jnp.asarray(bound), std_error=jnp.asarray(se),
-            nu=jnp.asarray(nu), output_variance=jnp.asarray(var),
-            ranges=ranges_arr, n_samples=int(n_drawn), seed=int(seed),
-            grad_sq=jnp.asarray(grad_sq), outputs=jnp.asarray(outputs),
-            n_valid=jnp.asarray(n_valid))
+            input_names=input_names,
+            output_names=list(output_names),
+            sobol_total_bound=jnp.asarray(bound),
+            std_error=jnp.asarray(se),
+            nu=jnp.asarray(nu),
+            output_variance=jnp.asarray(var),
+            ranges=ranges_arr,
+            n_samples=int(n_drawn),
+            seed=int(seed),
+            grad_sq=jnp.asarray(grad_sq),
+            outputs=jnp.asarray(outputs),
+            n_valid=jnp.asarray(n_valid),
+        )

@@ -31,18 +31,18 @@ def _read_base(extends: str, base_dir, source: str):
         if not p.is_absolute() and base_dir is not None:
             p = Path(base_dir) / p
         if not p.is_file():
-            raise FileNotFoundError(
-                f"{source}: extends: base file not found: {p}")
+            raise FileNotFoundError(f"{source}: extends: base file not found: {p}")
         return p.read_text(encoding="utf-8"), p.parent
     resource = files("aquakin.networks") / f"{extends}.yaml"
     if not resource.is_file():
         available = sorted(
             q.name.removesuffix(".yaml")
             for q in files("aquakin.networks").iterdir()
-            if q.name.endswith(".yaml"))
+            if q.name.endswith(".yaml")
+        )
         raise FileNotFoundError(
-            f"{source}: extends: base network '{extends}' not found. "
-            f"Available: {available}")
+            f"{source}: extends: base network '{extends}' not found. Available: {available}"
+        )
     return resource.read_text(encoding="utf-8"), None
 
 
@@ -55,22 +55,21 @@ def _resolve_inheritance(data: dict, source: str, base_dir, seen: tuple) -> dict
         if remove is not None:
             raise ValueError(
                 f"{source}: 'remove:' has no effect without 'extends:' "
-                f"(there is no base network to remove pieces from).")
+                f"(there is no base network to remove pieces from)."
+            )
         return data
     if extends in seen:
-        raise ValueError(
-            f"{source}: cyclic 'extends' chain: "
-            f"{' -> '.join(seen + (extends,))}.")
+        raise ValueError(f"{source}: cyclic 'extends' chain: {' -> '.join(seen + (extends,))}.")
     base_text, base_base_dir = _read_base(extends, base_dir, source)
     try:
         base_data = yaml.safe_load(base_text)
     except yaml.YAMLError as exc:
         raise ValueError(f"{source}: failed to parse base '{extends}': {exc}") from exc
     if not isinstance(base_data, dict):
-        raise ValueError(
-            f"{source}: base network '{extends}' top-level YAML must be a mapping.")
+        raise ValueError(f"{source}: base network '{extends}' top-level YAML must be a mapping.")
     base_data = _resolve_inheritance(
-        base_data, f"base network '{extends}'", base_base_dir, seen + (extends,))
+        base_data, f"base network '{extends}'", base_base_dir, seen + (extends,)
+    )
     merged = merge_spec(base_data, data, source=source)
     if remove is not None:
         merged = apply_remove(merged, remove, source)
@@ -106,14 +105,14 @@ def _apply_activity_override(spec: NetworkSpec, activity_model: str) -> NetworkS
 
     if activity_model not in _ACTIVITY_MODELS:
         raise ValueError(
-            f"activity_model must be one of {_ACTIVITY_MODELS}; got "
-            f"{activity_model!r}")
+            f"activity_model must be one of {_ACTIVITY_MODELS}; got {activity_model!r}"
+        )
     if spec.speciation is None:
         raise ValueError(
             "activity_model override requires the network to declare a "
-            "speciation: block (a state-derived pH); this network has none.")
-    spec.speciation = spec.speciation.model_copy(
-        update={"activity_model": activity_model})
+            "speciation: block (a state-derived pH); this network has none."
+        )
+    spec.speciation = spec.speciation.model_copy(update={"activity_model": activity_model})
     return spec
 
 
@@ -169,9 +168,7 @@ def load_network(name: str, *, activity_model: Union[str, None] = None) -> Compi
             for p in files("aquakin.networks").iterdir()
             if p.name.endswith(".yaml")
         )
-        raise FileNotFoundError(
-            f"Built-in network '{name}' not found. Available: {available}"
-        )
+        raise FileNotFoundError(f"Built-in network '{name}' not found. Available: {available}")
     text = resource.read_text(encoding="utf-8")
     spec = _yaml_to_spec(text, f"built-in network '{name}'")
     if activity_model is not None:

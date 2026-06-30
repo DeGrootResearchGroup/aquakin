@@ -162,5 +162,4 @@ class StatelessUnit(CouplingAware):
 
         from aquakin.plant.coupling import CouplingPattern
 
-        return CouplingPattern(self_pattern=np.zeros((0, 0), dtype=bool),
-                               inlet_pattern=None)
+        return CouplingPattern(self_pattern=np.zeros((0, 0), dtype=bool), inlet_pattern=None)

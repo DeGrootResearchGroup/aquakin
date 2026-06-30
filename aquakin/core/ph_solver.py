@@ -89,8 +89,8 @@ from aquakin.core.temperature import (
 # wide bracket. ``pH in [-20, 40]`` spans every physical charge balance and far
 # beyond (a charge imbalance of ~1e18 eq/L would be needed to push the root
 # outside), with ``exp(u)`` nowhere near overflow.
-_U_LO = -40.0 * math.log(10.0)   # pH 40  (basic extreme):  f(u) > 0
-_U_HI = 20.0 * math.log(10.0)    # pH -20 (acidic extreme): f(u) < 0
+_U_LO = -40.0 * math.log(10.0)  # pH 40  (basic extreme):  f(u) > 0
+_U_HI = 20.0 * math.log(10.0)  # pH -20 (acidic extreme): f(u) < 0
 
 # Physical ceiling on the ionic strength fed to the activity-coefficient models.
 # A real aqueous solution never exceeds a few mol/L (saturated brine ~6 M), and
@@ -109,19 +109,19 @@ _I_MAX = 10.0
 # temperature correction K(T) = K_base * exp(dH/R * (1/T_base - 1/T)).
 # Acetate is treated as temperature-independent (dH = 0).
 _PK_BASE = {
-    "w": (14.0, 55900.0),        # water self-ionisation
-    "ac": (4.76, 0.0),           # CH3COOH    <-> H+ + CH3COO-
-    "pro": (4.88, 0.0),          # propionate <-> H+ + propionate-
-    "bu": (4.82, 0.0),           # butyrate   <-> H+ + butyrate-
-    "va": (4.86, 0.0),           # valerate   <-> H+ + valerate-
-    "nh": (9.25, 51965.0),       # NH4+     <-> H+ + NH3
-    "co3_1": (6.35, 7646.0),     # H2CO3*   <-> H+ + HCO3-   (Ka1)
-    "co3_2": (10.33, 14900.0),   # HCO3-    <-> H+ + CO3 2-  (Ka2)
-    "s_1": (7.0, 21000.0),       # H2S      <-> H+ + HS-     (Ka1)
-    "s_2": (13.9, 50700.0),      # HS-      <-> H+ + S 2-    (Ka2)
-    "po4_1": (2.16, -24600.0),   # H3PO4    <-> H+ + H2PO4-  (Ka1)
-    "po4_2": (7.21, 4200.0),     # H2PO4-   <-> H+ + HPO4 2- (Ka2)
-    "po4_3": (12.32, 14700.0),   # HPO4 2-  <-> H+ + PO4 3-  (Ka3)
+    "w": (14.0, 55900.0),  # water self-ionisation
+    "ac": (4.76, 0.0),  # CH3COOH    <-> H+ + CH3COO-
+    "pro": (4.88, 0.0),  # propionate <-> H+ + propionate-
+    "bu": (4.82, 0.0),  # butyrate   <-> H+ + butyrate-
+    "va": (4.86, 0.0),  # valerate   <-> H+ + valerate-
+    "nh": (9.25, 51965.0),  # NH4+     <-> H+ + NH3
+    "co3_1": (6.35, 7646.0),  # H2CO3*   <-> H+ + HCO3-   (Ka1)
+    "co3_2": (10.33, 14900.0),  # HCO3-    <-> H+ + CO3 2-  (Ka2)
+    "s_1": (7.0, 21000.0),  # H2S      <-> H+ + HS-     (Ka1)
+    "s_2": (13.9, 50700.0),  # HS-      <-> H+ + S 2-    (Ka2)
+    "po4_1": (2.16, -24600.0),  # H3PO4    <-> H+ + H2PO4-  (Ka1)
+    "po4_2": (7.21, 4200.0),  # H2PO4-   <-> H+ + HPO4 2- (Ka2)
+    "po4_3": (12.32, 14700.0),  # HPO4 2-  <-> H+ + PO4 3-  (Ka3)
 }
 
 
@@ -206,9 +206,9 @@ def _conditional_constants(K, I, A, model: str):
     # identity there and does not change the converged result (see ``_I_MAX``).
     I = jnp.clip(I, 0.0, _I_MAX)
     sqrt_I = jnp.sqrt(I)
-    g1 = jnp.power(10.0, _log10_gamma(1.0, sqrt_I, I, A, model))   # |z| = 1
-    g2 = jnp.power(10.0, _log10_gamma(4.0, sqrt_I, I, A, model))   # |z| = 2
-    g3 = jnp.power(10.0, _log10_gamma(9.0, sqrt_I, I, A, model))   # |z| = 3
+    g1 = jnp.power(10.0, _log10_gamma(1.0, sqrt_I, I, A, model))  # |z| = 1
+    g2 = jnp.power(10.0, _log10_gamma(4.0, sqrt_I, I, A, model))  # |z| = 2
+    g3 = jnp.power(10.0, _log10_gamma(9.0, sqrt_I, I, A, model))  # |z| = 3
     g1_sq = g1 * g1
     Kc = dict(K)
     # Single proton release between a neutral/-1 acid and a -1/-2 base, plus
@@ -234,7 +234,7 @@ def _ionic_strength_total(h, K, I_strong, *, totals):
     speciation layer holds each strong ion's charge).
     """
     Kw = K["w"]
-    Iw = 0.5 * (h + Kw / h)                       # H+, OH- (z = 1)
+    Iw = 0.5 * (h + Kw / h)  # H+, OH- (z = 1)
 
     for key, tot in (
         ("ac", totals["tot_acetate"]),
@@ -243,27 +243,25 @@ def _ionic_strength_total(h, K, I_strong, *, totals):
         ("va", totals["tot_valerate"]),
     ):
         Ka = K[key]
-        Iw = Iw + 0.5 * tot * Ka / (h + Ka)       # A- (z = 1)
+        Iw = Iw + 0.5 * tot * Ka / (h + Ka)  # A- (z = 1)
 
     Ka_nh = K["nh"]
-    Iw = Iw + 0.5 * totals["tot_ammonia"] * h / (h + Ka_nh)   # NH4+ (z = 1)
+    Iw = Iw + 0.5 * totals["tot_ammonia"] * h / (h + Ka_nh)  # NH4+ (z = 1)
 
     k1, k2 = K["co3_1"], K["co3_2"]
     Dc = h * h + k1 * h + k1 * k2
     tc = totals["tot_carbonate"]
-    Iw = Iw + 0.5 * tc * (k1 * h + 4.0 * k1 * k2) / Dc        # HCO3- z1, CO3-- z2
+    Iw = Iw + 0.5 * tc * (k1 * h + 4.0 * k1 * k2) / Dc  # HCO3- z1, CO3-- z2
 
     s1, s2 = K["s_1"], K["s_2"]
     Ds = h * h + s1 * h + s1 * s2
     ts = totals["tot_sulfide"]
-    Iw = Iw + 0.5 * ts * (s1 * h + 4.0 * s1 * s2) / Ds        # HS- z1, S-- z2
+    Iw = Iw + 0.5 * ts * (s1 * h + 4.0 * s1 * s2) / Ds  # HS- z1, S-- z2
 
     p1, p2, p3 = K["po4_1"], K["po4_2"], K["po4_3"]
-    Dp = h ** 3 + p1 * h * h + p1 * p2 * h + p1 * p2 * p3
+    Dp = h**3 + p1 * h * h + p1 * p2 * h + p1 * p2 * p3
     tp = totals["tot_phosphate"]
-    Iw = Iw + 0.5 * tp * (
-        p1 * h * h + 4.0 * p1 * p2 * h + 9.0 * p1 * p2 * p3
-    ) / Dp                                                    # z1, z2, z3
+    Iw = Iw + 0.5 * tp * (p1 * h * h + 4.0 * p1 * p2 * h + 9.0 * p1 * p2 * p3) / Dp  # z1, z2, z3
 
     return I_strong + Iw
 
@@ -347,10 +345,8 @@ def charge_balance_residual(
 
     # Phosphate (triprotic): charge = (H2PO4- + 2 HPO4 2- + 3 PO4 3-) fractions.
     p1, p2, p3 = K["po4_1"], K["po4_2"], K["po4_3"]
-    Dp = h ** 3 + p1 * h * h + p1 * p2 * h + p1 * p2 * p3
-    f = f + tot_phosphate * (
-        p1 * h * h + 2.0 * p1 * p2 * h + 3.0 * p1 * p2 * p3
-    ) / Dp
+    Dp = h**3 + p1 * h * h + p1 * p2 * h + p1 * p2 * p3
+    f = f + tot_phosphate * (p1 * h * h + 2.0 * p1 * p2 * h + 3.0 * p1 * p2 * p3) / Dp
 
     return f
 
@@ -402,7 +398,7 @@ def charge_balance_residual_deriv(
     df = df + tot_sulfide * (s1 * Ds - nums * (2.0 * h + s1)) / (Ds * Ds)
 
     p1, p2, p3 = K["po4_1"], K["po4_2"], K["po4_3"]
-    Dp = h ** 3 + p1 * h * h + p1 * p2 * h + p1 * p2 * p3
+    Dp = h**3 + p1 * h * h + p1 * p2 * h + p1 * p2 * p3
     nump = p1 * h * h + 2.0 * p1 * p2 * h + 3.0 * p1 * p2 * p3
     nump_d = 2.0 * p1 * h + 2.0 * p1 * p2
     Dp_d = 3.0 * h * h + 2.0 * p1 * h + p1 * p2
@@ -473,7 +469,8 @@ def _adaptive_newton_bisection(f, dfdh, h_init, max_iter, out_shape, *, utol=1e-
     u_hi = jnp.broadcast_to(jnp.asarray(_U_HI), out_shape).astype(float)
     u0 = jnp.clip(
         jnp.broadcast_to(jnp.asarray(jnp.log(h_init)), out_shape).astype(float),
-        _U_LO, _U_HI,
+        _U_LO,
+        _U_HI,
     )
 
     def cond(state):
@@ -504,15 +501,25 @@ def _adaptive_newton_bisection(f, dfdh, h_init, max_iter, out_shape, *, utol=1e-
         converged = in_bracket & (jnp.abs(u_newton - u) <= utol)
         return (u_lo, u_hi, u_next, it + 1, converged)
 
-    init = (u_lo, u_hi, u0, jnp.asarray(0),
-            jnp.zeros(out_shape, dtype=bool))
+    init = (u_lo, u_hi, u0, jnp.asarray(0), jnp.zeros(out_shape, dtype=bool))
     _, _, u, _, _ = jax.lax.while_loop(cond, step, init)
     return jnp.exp(u)
 
 
 def _adaptive_activity_solve(
-    K, A, I_strong, activity_model, totals, strong_anion_eq, z_cation_eq,
-    h_init, I_init, max_iter, out_shape, *, utol=1e-11,
+    K,
+    A,
+    I_strong,
+    activity_model,
+    totals,
+    strong_anion_eq,
+    z_cation_eq,
+    h_init,
+    I_init,
+    max_iter,
+    out_shape,
+    *,
+    utol=1e-11,
 ):
     """Coupled ``(h, I)`` fixed point for the activity-corrected path, by the same
     adaptive safeguarded scheme as :func:`_adaptive_newton_bisection`.
@@ -533,7 +540,8 @@ def _adaptive_activity_solve(
     u_hi = jnp.broadcast_to(jnp.asarray(_U_HI), out_shape).astype(float)
     u0 = jnp.clip(
         jnp.broadcast_to(jnp.asarray(jnp.log(h_init)), out_shape).astype(float),
-        _U_LO, _U_HI,
+        _U_LO,
+        _U_HI,
     )
     I0 = jnp.broadcast_to(jnp.asarray(I_init), out_shape).astype(float)
 
@@ -546,8 +554,8 @@ def _adaptive_activity_solve(
         h = jnp.exp(u)
         Kc, _g1 = _conditional_constants(K, I, A, activity_model)
         fv = charge_balance_residual(
-            h, strong_anion_eq=strong_anion_eq, z_cation_eq=z_cation_eq,
-            K=Kc, **totals)
+            h, strong_anion_eq=strong_anion_eq, z_cation_eq=z_cation_eq, K=Kc, **totals
+        )
         dfdu = charge_balance_residual_deriv(h, K=Kc, **totals) * h
         pos = fv > 0.0
         u_lo = jnp.where(pos, u, u_lo)
@@ -555,16 +563,14 @@ def _adaptive_activity_solve(
         u_newton = u - fv / dfdu
         in_bracket = (u_newton - u_lo) * (u_newton - u_hi) <= 0.0
         u_next = jnp.where(in_bracket, u_newton, 0.5 * (u_lo + u_hi))
-        I_next = _ionic_strength_total(
-            jnp.exp(u_next), Kc, I_strong, totals=totals)
+        I_next = _ionic_strength_total(jnp.exp(u_next), Kc, I_strong, totals=totals)
         # Converged when the in-bracket Newton step on [H+] is tiny AND the ionic
         # strength has settled (relative, since I spans orders of magnitude).
         h_conv = in_bracket & (jnp.abs(u_newton - u) <= utol)
         I_conv = jnp.abs(I_next - I) <= utol * (jnp.abs(I) + 1.0)
         return (u_lo, u_hi, u_next, I_next, it + 1, h_conv & I_conv)
 
-    init = (u_lo, u_hi, u0, I0, jnp.asarray(0),
-            jnp.zeros(out_shape, dtype=bool))
+    init = (u_lo, u_hi, u0, I0, jnp.asarray(0), jnp.zeros(out_shape, dtype=bool))
     _, _, u, I, _, _ = jax.lax.while_loop(cond, step, init)
     return jnp.exp(u), I
 
@@ -670,8 +676,7 @@ def solve_ph(
     """
     if activity_model not in _ACTIVITY_MODELS:
         raise ValueError(
-            f"activity_model must be one of {_ACTIVITY_MODELS}; got "
-            f"{activity_model!r}"
+            f"activity_model must be one of {_ACTIVITY_MODELS}; got {activity_model!r}"
         )
     K = equilibrium_constants(jnp.asarray(T_kelvin, dtype=float))
 
@@ -722,8 +727,7 @@ def solve_ph(
         h0 = jnp.broadcast_to(jnp.asarray(h_init, dtype=float), out_shape)
 
         def solve_root(f, h_start):
-            return _adaptive_newton_bisection(
-                f, dresidual_dh, h_start, n_iter, out_shape)
+            return _adaptive_newton_bisection(f, dresidual_dh, h_start, n_iter, out_shape)
 
         def tangent_solve(g, y):
             # ``g`` is the elementwise linearisation ``z -> (df/d[H+]) z`` of
@@ -739,8 +743,7 @@ def solve_ph(
             # No activity model -> no self-consistent solution ionic strength is
             # computed; report the strong-ion contribution the caller supplied
             # (the best available; 0 by default).
-            return pH, jnp.broadcast_to(
-                jnp.asarray(ionic_strength_strong, dtype=float), out_shape)
+            return pH, jnp.broadcast_to(jnp.asarray(ionic_strength_strong, dtype=float), out_shape)
         return pH
 
     # Activity-corrected path (opt-in, not on the ADM1/BSM2 hot path). The
@@ -756,8 +759,7 @@ def solve_ph(
     # Jacobian at the root -- so AD is O(1) in the iteration count in both modes,
     # as on the ideal path.
     A = debye_huckel_A(jnp.asarray(T_kelvin, dtype=float))
-    I_strong = jnp.broadcast_to(
-        jnp.asarray(ionic_strength_strong, dtype=float), out_shape)
+    I_strong = jnp.broadcast_to(jnp.asarray(ionic_strength_strong, dtype=float), out_shape)
     I0 = jnp.maximum(I_strong, 0.0)
     h0 = jnp.broadcast_to(jnp.asarray(h_init, dtype=float), out_shape)
 
@@ -765,16 +767,26 @@ def solve_ph(
         h, I = x
         Kc, _g1 = _conditional_constants(K, I, A, activity_model)
         f1 = charge_balance_residual(
-            h, strong_anion_eq=strong_anion_eq, z_cation_eq=z_cation_eq,
-            K=Kc, **totals)
+            h, strong_anion_eq=strong_anion_eq, z_cation_eq=z_cation_eq, K=Kc, **totals
+        )
         f2 = _ionic_strength_total(h, Kc, I_strong, totals=totals) - I
         return (f1, f2)
 
     def solve_act(_F, x_init):
         h_start, I_start = x_init
         return _adaptive_activity_solve(
-            K, A, I_strong, activity_model, totals, strong_anion_eq,
-            z_cation_eq, h_start, I_start, n_iter, out_shape)
+            K,
+            A,
+            I_strong,
+            activity_model,
+            totals,
+            strong_anion_eq,
+            z_cation_eq,
+            h_start,
+            I_start,
+            n_iter,
+            out_shape,
+        )
 
     def tangent_solve_act(g, y):
         # g is the elementwise linear JVP of F_act at the root: (dh, dI) ->
@@ -784,8 +796,8 @@ def solve_ph(
         # is well-conditioned.
         zero = jnp.zeros(out_shape)
         one = jnp.ones(out_shape)
-        a, c = g((one, zero))    # (df1/dh, df2/dh)
-        b, d = g((zero, one))    # (df1/dI, df2/dI)
+        a, c = g((one, zero))  # (df1/dh, df2/dh)
+        b, d = g((zero, one))  # (df1/dI, df2/dI)
         det = a * d - b * c
         # At a physical root the 2x2 is well-conditioned (df1/dh <= -1 and the
         # I-fixed-point is a contraction, df2/dI ~ -1), so ``det`` is O(1). But a

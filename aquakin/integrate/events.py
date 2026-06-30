@@ -87,7 +87,8 @@ class Event:
         if has_cond == has_times:
             raise ValueError(
                 "an Event needs exactly one trigger: cond_fn (state event) OR "
-                "at_times (time event).")
+                "at_times (time event)."
+            )
         if self.direction not in (-1, 0, 1):
             raise ValueError("direction must be -1, 0 or +1.")
         if has_times:
@@ -122,8 +123,9 @@ class EventedResult:
     log: list = field(default_factory=list)
 
 
-def _make_segment_solver(rhs, *, rtol, atol, max_steps, dtmax, adjoint,
-                         order=5, factormax=None, solver=None):
+def _make_segment_solver(
+    rhs, *, rtol, atol, max_steps, dtmax, adjoint, order=5, factormax=None, solver=None
+):
     """Build a one-segment solver for the event driver.
 
     Delegates to the canonical :func:`_run_diffeqsolve` -- the **same**
@@ -133,12 +135,24 @@ def _make_segment_solver(rhs, *, rtol, atol, max_steps, dtmax, adjoint,
     terminating ``event``. So the event path's per-step integration matches the
     plain path's exactly, and the integrator config cannot drift between them.
     """
+
     def solve_segment(y0, t0, t1, args, saveat, event):
         return _run_diffeqsolve(
-            rhs, t0=t0, t1=t1, y0=y0, args=args, saveat=saveat,
-            rtol=rtol, atol=atol, adjoint=adjoint, max_steps=max_steps,
-            dtmax=dtmax, event=event,
-            order=order, factormax=factormax, solver=solver,
+            rhs,
+            t0=t0,
+            t1=t1,
+            y0=y0,
+            args=args,
+            saveat=saveat,
+            rtol=rtol,
+            atol=atol,
+            adjoint=adjoint,
+            max_steps=max_steps,
+            dtmax=dtmax,
+            event=event,
+            order=order,
+            factormax=factormax,
+            solver=solver,
         )
 
     return solve_segment
@@ -226,20 +240,40 @@ def solve_with_events(
         raise ValueError("t_eval must be sorted (ascending).")
 
     solve_segment = _make_segment_solver(
-        rhs, rtol=rtol, atol=atol, max_steps=max_steps, dtmax=dtmax,
-        adjoint=adjoint, order=order, factormax=factormax, solver=solver)
+        rhs,
+        rtol=rtol,
+        atol=atol,
+        max_steps=max_steps,
+        dtmax=dtmax,
+        adjoint=adjoint,
+        order=order,
+        factormax=factormax,
+        solver=solver,
+    )
 
     has_root = bool([ev for ev in events if not ev.is_time_event])
     # Wrap the segmented drive so a segment exhausting the integrator step budget
     # re-raises the friendly remedy message instead of the raw equinox
     # MaxStepsReached chatter (the per-segment solves execute eagerly here).
     with friendly_solve_errors(max_steps, what="event solve"):
-        return _drive(solve_segment, y0, args, t0, t1, t_eval_np, events,
-                      has_root, root_rtol, root_atol, max_segments)
+        return _drive(
+            solve_segment,
+            y0,
+            args,
+            t0,
+            t1,
+            t_eval_np,
+            events,
+            has_root,
+            root_rtol,
+            root_atol,
+            max_segments,
+        )
 
 
-def _drive(solve_segment, y0, args, t0, t1, t_eval_np, events,
-           has_root, root_rtol, root_atol, max_segments):
+def _drive(
+    solve_segment, y0, args, t0, t1, t_eval_np, events, has_root, root_rtol, root_atol, max_segments
+):
     """Segmented event driver, shared by the time- and state-event cases.
 
     With **no** state event (``has_root=False``) the segment boundaries are the
@@ -256,20 +290,22 @@ def _drive(solve_segment, y0, args, t0, t1, t_eval_np, events,
     tolerance makes that assignment robust to the root finder's float error.
     """
     root_events = [ev for ev in events if not ev.is_time_event]
-    time_times = sorted({t for ev in events
-                         for t in (ev.at_times or []) if t0 < t < t1})
+    time_times = sorted({t for ev in events for t in (ev.at_times or []) if t0 < t < t1})
     diffrax_event = None
     if has_root:
         root = optx.Newton(rtol=root_rtol, atol=root_atol)
         diffrax_event = diffrax.Event(
-            [_wrap_cond(ev) for ev in root_events], root_finder=root,
-            direction=[None if ev.direction == 0 else bool(ev.direction == 1)
-                       for ev in root_events])
-    tol = 1e-9 * max(1.0, abs(t1 - t0))   # boundary-assignment tolerance
+            [_wrap_cond(ev) for ev in root_events],
+            root_finder=root,
+            direction=[
+                None if ev.direction == 0 else bool(ev.direction == 1) for ev in root_events
+            ],
+        )
+    tol = 1e-9 * max(1.0, abs(t1 - t0))  # boundary-assignment tolerance
 
     log = []
     out_y = []
-    idx = 0                                # cursor into t_eval
+    idx = 0  # cursor into t_eval
     n_eval = 0 if t_eval_np is None else t_eval_np.shape[0]
     y = jnp.asarray(y0)
     seg_t0 = t0
@@ -312,9 +348,11 @@ def _drive(solve_segment, y0, args, t0, t1, t_eval_np, events,
             mask = [bool(m) for m in sol.event_mask]
             firing = [root_events[i] for i in range(len(root_events)) if mask[i]]
         elif not has_root or t_end >= seg_t1 - tol:
-            firing = [ev for ev in events
-                      if ev.at_times and any(abs(seg_t1 - t) <= tol
-                                             for t in ev.at_times)]
+            firing = [
+                ev
+                for ev in events
+                if ev.at_times and any(abs(seg_t1 - t) <= tol for t in ev.at_times)
+            ]
         else:
             firing = []
         y, terminal = _apply_resets(firing, t_end, y_end, args)
@@ -328,7 +366,8 @@ def _drive(solve_segment, y0, args, t0, t1, t_eval_np, events,
             raise RuntimeError(
                 f"event solve exceeded max_segments={max_segments}; a state "
                 f"event may be firing repeatedly without advancing (check its "
-                f"apply reset moves the state off the threshold).")
+                f"apply reset moves the state off the threshold)."
+            )
 
     return _assemble(out_y, t_eval_np, y, t1, log)
 
@@ -351,5 +390,4 @@ def _assemble(out_y, t_eval_np, y_final, t1, log):
         return EventedResult(ts=jnp.asarray([t1]), ys=y_final[None, :], log=log)
     while len(out_y) < t_eval_np.shape[0]:
         out_y.append(y_final)
-    return EventedResult(ts=jnp.asarray(t_eval_np), ys=jnp.stack(out_y, axis=0),
-                         log=log)
+    return EventedResult(ts=jnp.asarray(t_eval_np), ys=jnp.stack(out_y, axis=0), log=log)

@@ -103,8 +103,7 @@ def build_ph_derived_fn(
 
     if temp_units not in ("celsius", "kelvin"):
         raise ValueError(
-            f"speciation temperature_units must be 'celsius' or 'kelvin', "
-            f"got {temp_units!r}"
+            f"speciation temperature_units must be 'celsius' or 'kelvin', got {temp_units!r}"
         )
 
     def _species_idx(name: str) -> int:
@@ -201,8 +200,7 @@ def build_ph_derived_fn(
                 I_strong = I_strong + 0.5 * charge * charge * jnp.maximum(C[idx], 0.0) / mm
             for idx, mm, charge in cation_terms:
                 I_strong = I_strong + 0.5 * charge * charge * jnp.maximum(C[idx], 0.0) / mm
-            extra = dict(activity_model=activity_model,
-                         ionic_strength_strong=I_strong)
+            extra = dict(activity_model=activity_model, ionic_strength_strong=I_strong)
 
         result = solve_ph(
             strong_anion_eq=strong_anion_eq,

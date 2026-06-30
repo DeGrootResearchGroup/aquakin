@@ -26,6 +26,7 @@ edited in place; re-running re-splices the WATS pieces idempotently.
 
 Run from this directory (needs ruamel.yaml):  python _make_khalil_paper.py
 """
+
 from __future__ import annotations
 
 import os
@@ -44,13 +45,20 @@ ADD_REACTIONS = [
     "elemental_S_oxidation_aerobic_biofilm",
 ]
 MONOD_RATE = {
-    "sulfide_biooxidation_aerobic_biofilm":
-        "k_sII_ox_f * monod([sumS], K_S2) * monod([S_O], k_o) * {A_V}",
-    "elemental_S_oxidation_aerobic_biofilm":
-        "k_s0_ox_f * monod([X_S0], K_S0) * monod([S_O], k_o) * {A_V}",
+    "sulfide_biooxidation_aerobic_biofilm": "k_sII_ox_f * monod([sumS], K_S2) * monod([S_O], k_o) * {A_V}",
+    "elemental_S_oxidation_aerobic_biofilm": "k_s0_ox_f * monod([X_S0], K_S0) * monod([S_O], k_o) * {A_V}",
 }
-ADD_PARAMS = ["k_h2sc", "k_hsc", "n1", "n2", "k_sII_b_pHopt",
-              "omega_sII_b", "pH_optimum", "k_sII_ox_f", "k_s0_ox_f"]
+ADD_PARAMS = [
+    "k_h2sc",
+    "k_hsc",
+    "n1",
+    "n2",
+    "k_sII_b_pHopt",
+    "omega_sII_b",
+    "pH_optimum",
+    "k_sII_ox_f",
+    "k_s0_ox_f",
+]
 ADD_EXPRS = ["ho_sumS_n1", "ho_SO_n2"]
 PH_FIXED = 7.5
 
@@ -130,11 +138,13 @@ def main():
             sp.pop("composition", None)
 
     # (2) Fixed operating pH condition for the pH-dependent bulk oxidation.
-    ph = {"name": "pH",
-          "description": "Fixed operating pH (no charge-balance solver; used by "
-                         "the pH-dependent bulk sulfide-oxidation rates).",
-          "units": "-",
-          "default": PH_FIXED}
+    ph = {
+        "name": "pH",
+        "description": "Fixed operating pH (no charge-balance solver; used by "
+        "the pH-dependent bulk sulfide-oxidation rates).",
+        "units": "-",
+        "default": PH_FIXED,
+    }
     core["conditions"].append(ph)
 
     # (3) Expressions + parameters the added reactions reference (with comments).
@@ -174,16 +184,17 @@ def main():
         val = cpar.get("value")
         for key in ("prior", "bounds"):
             cpar.pop(key, None)
-            if key in ppar and val is not None \
-                    and _value_consistent(val, ppar[key], key):
+            if key in ppar and val is not None and _value_consistent(val, ppar[key], key):
                 cpar[key] = ppar[key]
 
     with open(CORE, "w") as f:
         yaml.dump(core, f)
-    print(f"wrote wats_sewer_khalil_paper.yaml "
-          f"({len(core['reactions'])} reactions, {len(core['species'])} species, "
-          f"{len(core['parameters'])} params, "
-          f"conditions={[c['name'] for c in core['conditions']]})")
+    print(
+        f"wrote wats_sewer_khalil_paper.yaml "
+        f"({len(core['reactions'])} reactions, {len(core['species'])} species, "
+        f"{len(core['parameters'])} params, "
+        f"conditions={[c['name'] for c in core['conditions']]})"
+    )
 
 
 if __name__ == "__main__":

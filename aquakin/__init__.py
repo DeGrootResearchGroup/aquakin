@@ -18,9 +18,7 @@ import jax
 
 if not jax.config.jax_enable_x64:
     _env_x64 = _os.environ.get("JAX_ENABLE_X64", "").strip().lower()
-    _overrides_explicit_choice = (
-        _jax_already_imported or _env_x64 in ("0", "false", "off", "no")
-    )
+    _overrides_explicit_choice = _jax_already_imported or _env_x64 in ("0", "false", "off", "no")
     if _overrides_explicit_choice:
         _warnings.warn(
             "aquakin is enabling JAX 64-bit (x64) mode, which it requires for "

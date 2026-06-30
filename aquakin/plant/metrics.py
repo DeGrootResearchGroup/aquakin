@@ -29,19 +29,17 @@ _TSS_SPECIES = ASM1_TSS_SPECIES
 
 # EQI weighting factors (g pollutant / m³)⁻¹ from Copp 2002 / Alex 2008.
 _EQI_WEIGHTS = {
-    "TSS":  2.0,
-    "COD":  1.0,
-    "BOD":  2.0,
+    "TSS": 2.0,
+    "COD": 1.0,
+    "BOD": 2.0,
     "TKN": 30.0,  # total Kjeldahl nitrogen
-    "NO":  10.0,  # nitrate-nitrogen
+    "NO": 10.0,  # nitrate-nitrogen
 }
 
 
 def _species_idx(network: "CompiledNetwork", names) -> jnp.ndarray:
     """Index array for the named species that exist in the network."""
-    return jnp.asarray(
-        [network.species_index[s] for s in names if s in network.species_index]
-    )
+    return jnp.asarray([network.species_index[s] for s in names if s in network.species_index])
 
 
 def _is_stream(x) -> bool:
@@ -66,6 +64,7 @@ def _composition(network, params=None):
     the standard ASM1 values. This keeps the post-processed nitrogen and BOD
     consistent with the model the states came from instead of a fixed constant.
     """
+
     def g(name, fallback):
         idx = getattr(network, "param_index", {}).get(name) if network else None
         if idx is None:
@@ -73,6 +72,7 @@ def _composition(network, params=None):
         if params is not None:
             return float(params[idx])
         return float(network.default_parameters()[idx])
+
     return g("i_XB", 0.086), g("i_XP", 0.06), g("f_P", 0.08)
 
 
@@ -146,8 +146,7 @@ def derived_COD(C, network: "CompiledNetwork" = None) -> jnp.ndarray:
     return jnp.sum(C[..., _species_idx(network, species)], axis=-1)
 
 
-def derived_BOD(C, network: "CompiledNetwork" = None, *,
-                f_P: float = None) -> jnp.ndarray:
+def derived_BOD(C, network: "CompiledNetwork" = None, *, f_P: float = None) -> jnp.ndarray:
     """BOD₅ proxy = 0.25 × (SS + XS + (1 - f_P) × (XB_H + XB_A)), Copp 2002.
 
     ``f_P`` defaults to the network's declared inert-fraction (the standard ASM1
@@ -159,13 +158,13 @@ def derived_BOD(C, network: "CompiledNetwork" = None, *,
         _, _, f_P = _composition(network)
     i = network.species_index
     return 0.25 * (
-        C[..., i["SS"]] + C[..., i["XS"]]
-        + (1.0 - f_P) * (C[..., i["XB_H"]] + C[..., i["XB_A"]])
+        C[..., i["SS"]] + C[..., i["XS"]] + (1.0 - f_P) * (C[..., i["XB_H"]] + C[..., i["XB_A"]])
     )
 
 
-def derived_TKN(C, network: "CompiledNetwork" = None, *,
-                i_XB: float = None, i_XP: float = None) -> jnp.ndarray:
+def derived_TKN(
+    C, network: "CompiledNetwork" = None, *, i_XB: float = None, i_XP: float = None
+) -> jnp.ndarray:
     """Total Kjeldahl Nitrogen = S_NH + S_ND + X_ND + i_XB × (XB_H + XB_A)
     + i_XP × (XP + XI).
 
@@ -181,7 +180,9 @@ def derived_TKN(C, network: "CompiledNetwork" = None, *,
         i_XP = d_XP if i_XP is None else i_XP
     i = network.species_index
     return (
-        C[..., i["SNH"]] + C[..., i["SND"]] + C[..., i["XND"]]
+        C[..., i["SNH"]]
+        + C[..., i["SND"]]
+        + C[..., i["XND"]]
         + i_XB * (C[..., i["XB_H"]] + C[..., i["XB_A"]])
         + i_XP * (C[..., i["XP"]] + C[..., i["XI"]])
     )
@@ -338,8 +339,11 @@ def operational_cost_index(
 
 # Default BSM2 pumping-energy factors (kWh/m³), one per pumped stream.
 _BSM2_PUMP_FACTORS = {
-    "internal": 0.004, "ras": 0.008, "wastage": 0.05,
-    "primary_underflow": 0.075, "thickener_underflow": 0.060,
+    "internal": 0.004,
+    "ras": 0.008,
+    "wastage": 0.05,
+    "primary_underflow": 0.075,
+    "thickener_underflow": 0.060,
     "dewatering_underflow": 0.004,
 }
 
@@ -400,7 +404,7 @@ def mixing_energy(
     volumes = jnp.asarray(volumes)
     # Time fraction each reactor is below the aeration threshold.
     unaerated = (kla_history < kla_threshold).astype(jnp.float64)  # (n_t, n_reac)
-    frac = _time_average(unaerated, t, axis=0)                     # (n_reac,)
+    frac = _time_average(unaerated, t, axis=0)  # (n_reac,)
     reactor_mix = reactor_unit * jnp.sum(volumes * frac)
     digester_mix = digester_unit * float(digester_volume)
     return float(24.0 * (reactor_mix + digester_mix))
@@ -445,8 +449,9 @@ def heating_energy(
     Q_feed : (n_t,) digester feed flow (m³/d).
     T_feed_C : (n_t,) or scalar feed temperature (°C).
     """
-    heatpower = ((float(T_target_C) - jnp.asarray(T_feed_C))
-                 * jnp.asarray(Q_feed) * rho * cp / 86400.0)  # kW
+    heatpower = (
+        (float(T_target_C) - jnp.asarray(T_feed_C)) * jnp.asarray(Q_feed) * rho * cp / 86400.0
+    )  # kW
     return float(24.0 * _time_average(heatpower, t))
 
 
@@ -468,8 +473,11 @@ def operational_cost_index_bsm2(
     methane credit and the methane-offset heating term reward biogas recovery.
     """
     return float(
-        aeration + pumping + mixing
-        + 3.0 * sludge_production + 3.0 * carbon
+        aeration
+        + pumping
+        + mixing
+        + 3.0 * sludge_production
+        + 3.0 * carbon
         - 6.0 * methane
         + max(0.0, heating - 7.0 * methane)
     )

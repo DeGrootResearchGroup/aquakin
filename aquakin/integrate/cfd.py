@@ -108,11 +108,8 @@ class CFDReactor:
         on_nan: str = "raise",
     ) -> None:
         if on_nan not in ("raise", "ignore"):
-            raise ValueError(
-                f"on_nan must be 'raise' or 'ignore', got {on_nan!r}"
-            )
-        init_solver_settings(self, network, rtol=rtol, integrator=integrator,
-                             diff=diff)
+            raise ValueError(f"on_nan must be 'raise' or 'ignore', got {on_nan!r}")
+        init_solver_settings(self, network, rtol=rtol, integrator=integrator, diff=diff)
         self.atol = resolve_state_atol(network, atol)
         self.on_nan = on_nan
         # Cache jit-compiled vmapped step keyed on n_cells.
@@ -170,9 +167,7 @@ class CFDReactor:
         """
         C_np = np.ascontiguousarray(np.asarray(C, dtype=np.float64))
         if C_np.ndim != 2:
-            raise ValueError(
-                f"C must be 2-D (n_cells, n_species); got shape {C_np.shape}"
-            )
+            raise ValueError(f"C must be 2-D (n_cells, n_species); got shape {C_np.shape}")
         n_cells, n_species_in = C_np.shape
         if n_species_in != self.network.n_species:
             raise ValueError(
@@ -193,8 +188,7 @@ class CFDReactor:
             arr = np.asarray(conditions[name], dtype=np.float64)
             if arr.shape != (n_cells,):
                 raise ValueError(
-                    f"conditions[{name!r}] has shape {arr.shape}, expected "
-                    f"({n_cells},)."
+                    f"conditions[{name!r}] has shape {arr.shape}, expected ({n_cells},)."
                 )
             cond_jax[name] = jnp.asarray(arr)
 
@@ -208,8 +202,7 @@ class CFDReactor:
             params_np = np.asarray(params, dtype=np.float64)
             if params_np.shape != (self.network.n_params,):
                 raise ValueError(
-                    f"params has shape {params_np.shape}, expected "
-                    f"({self.network.n_params},)."
+                    f"params has shape {params_np.shape}, expected ({self.network.n_params},)."
                 )
             params_jax = jnp.asarray(params_np)
 
@@ -255,12 +248,21 @@ class CFDReactor:
             # loc_idx=0.
             cond_arrays = {name: v[None] for name, v in cond_cell.items()}
             sol = solve_chemistry(
-                network, C_cell, params,
+                network,
+                C_cell,
+                params,
                 cond_fn=lambda t: cond_arrays,
                 saveat=diffrax.SaveAt(t1=True),
-                t0=0.0, t1=dt, rtol=rtol, atol=atol,
-                adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
-                order=order, factormax=factormax, solver=solver,
+                t0=0.0,
+                t1=dt,
+                rtol=rtol,
+                atol=atol,
+                adjoint=adjoint,
+                dtmax=dtmax,
+                max_steps=max_steps,
+                order=order,
+                factormax=factormax,
+                solver=solver,
             )
             return sol.ys[-1]
 
