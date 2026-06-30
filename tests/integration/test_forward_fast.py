@@ -10,6 +10,7 @@ pin the integrator math (analytic decay + order), the exact ``t_eval`` output,
 the agreement with the diffrax solve on BSM1/BSM2, and the guards.
 """
 
+import diffrax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -139,6 +140,47 @@ def test_forward_fast_rejects_events_and_grad(bsm1):
         jax.grad(lambda s: jnp.sum(plant.solve(
             t_span=(0.0, 1.0), t_eval=te, params=params * s, y0=y0,
             forward_fast=True).state[-1]))(1.0)
+
+
+# The integrator knobs forward_fast cannot thread through its hand-rolled ESDIRK
+# -- each paired with a non-default value. forward_fast must REJECT every one of
+# these, never silently drop it (the silent-footgun class, issue #446). dtmax is
+# paired with method="through_solve" because the default stable method rejects an
+# explicit dtmax even earlier (also correct -- the point is no silent drop).
+@pytest.mark.parametrize("override, diff", [
+    ({"solver": diffrax.Kvaerno5()}, None),
+    ({"order": 5}, None),
+    ({"factormax": 1.0}, None),
+    ({"factormax": None}, None),
+    ({"colored_jacobian": True}, None),
+    ({"colored_jacobian": False}, None),
+    ({"dtmax": 0.1}, aquakin.DifferentiationConfig(method="through_solve")),
+])
+def test_forward_fast_rejects_unhonored_integrator_knobs(bsm1, override, diff):
+    plant, y0 = bsm1()
+    params = plant.default_parameters()
+    te = jnp.array([1.0])
+    kw = {} if diff is None else {"diff": diff}
+    with pytest.raises(ValueError, match="forward_fast cannot honour integrator"):
+        plant.solve(t_span=(0.0, 1.0), t_eval=te, params=params, y0=y0,
+                    forward_fast=True,
+                    integrator=aquakin.IntegratorConfig(**override), **kw)
+
+
+# The honored knobs -- rtol / atol / max_steps -- must NOT be rejected: a
+# forward_fast solve that tunes only those validates and runs. (max_steps is the
+# one integrator field forward_fast threads through; the other knob a forward_fast
+# user routinely sets.) This is the "honors, not silently drops" half of the
+# (mode x knob) contract.
+def test_forward_fast_accepts_honored_knobs(bsm1):
+    plant, y0 = bsm1()
+    params = plant.default_parameters()
+    te = jnp.array([0.0, 1.0])
+    sol = plant.solve(t_span=(0.0, 1.0), t_eval=te, params=params, y0=y0,
+                      rtol=1e-5, atol=1e-3, forward_fast=True,
+                      integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
+    assert sol.state.shape[0] == te.shape[0]
+    assert np.all(np.isfinite(np.asarray(sol.state)))
 
 
 # --------------------------------------------------------------------------
