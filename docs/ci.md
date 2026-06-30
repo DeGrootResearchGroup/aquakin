@@ -59,32 +59,40 @@ nor concentrating it in a few files makes the whole suite fast.
   OOM-killing the runner regardless of shard count (a single such test runs fine
   alone — the failure is cumulative). So those tests carry the **`heavy`** marker
   and are excluded from every slow / validation / smoke / durations job (`... and
-  not heavy`). They run instead on the dedicated **`heavy` job**, sharded
-  **one-test-per-process** (`--splits 12 -n 1`) across the free 16 GB
-  `ubuntu-latest` runner: a single heavy test fits 16 GB, and one-per-process is
-  exactly what prevents the cumulative accumulation, so **no paid larger runner is
-  needed**. This replaced a paid 16-core/64 GB `aquakin-heavy` larger runner whose
-  per-minute billing was the entire CI cost — public-repo standard-runner minutes
-  are free. The heavy set is the 12 plant-gradient checks (7 BSM2 + 5 BSM1): the
-  **`heavy`** marker means "needs an isolated fresh process," which a BSM1
-  plant-gradient test earns as much as a BSM2 one — a BSM1 dynamic-DGSM test that
-  was demoted to `slow` OOM-crashed a shared shard, so the set is kept whole and
-  the cost win comes entirely from the free runner + path filter, not from shrinking
-  it. *(If a single heavy test ever exceeds 16 GB, the fallback is an 8-core/32 GB
-  larger runner at one-per-process — still about half the per-minute cost of the
-  old 16-core/64 GB tier — not more sharding, which cannot shrink a single test's
-  peak. Keep `--splits` ≥ the heavy-test count so it stays one-per-shard.)*
-- The **`heavy`** job (`pytest -m heavy -n 1`, 3.12) runs on `ubuntu-latest`,
-  sharded 12 ways (`--splits 12 --group i`), with two triggers: **push to `main`**
-  when the **`heavy-gate`** path filter sees a change under `aquakin/plant`,
-  `aquakin/integrate`, `aquakin/core`, `aquakin/schema`, `aquakin/networks`, the
-  two heavy test files, `pyproject.toml` or the workflow (so a docs / examples /
-  utils / unrelated-test merge does not run it at all); and a **`full-ci` PR** (the
-  pre-merge opt-in, so the adjoint machinery is validated before merge). The
-  **`skip-heavy`** label still force-skips a push-to-main run for a change that
-  touches a filtered path but cannot affect the adjoint. `heavy-gate` is
-  **fail-safe**: when the path filter cannot determine a base it treats every path
-  as changed (heavy runs), and a run is skipped only when `skip-heavy` is
+  not heavy`). The 12 plant-gradient checks (7 BSM2 + 5 BSM1) run in **two**
+  dedicated jobs, both **one-test-per-process** (`-n 1`):
+  - **`heavy`** — the **11** that fit a stock 16 GB `ubuntu-latest` runner when
+    isolated, sharded `--splits 11 -n 1` across the **free** runner. A single test
+    fits 16 GB; one-per-process prevents the cumulative accumulation, so they cost
+    nothing (public-repo standard-runner minutes are free). The **`heavy`** marker
+    means "needs an isolated fresh process," which a BSM1 plant-gradient test earns
+    as much as a BSM2 one (a BSM1 dynamic-DGSM test demoted to `slow` OOM-crashed a
+    shared shard).
+  - **`xheavy`** — the **1** test (`test_dynamic_dgsm_matches_dgsm`) that exceeds
+    16 GB **even isolated**: it runs two DGSM engines back-to-back and holds two
+    multi-GB BSM1 `stable_adjoint` adjoint programs live at once, which OOM-crashed
+    the free 16 GB runner even one-per-process. More sharding cannot shrink a single
+    test's peak, so it runs alone on a small **larger runner** (`aquakin-heavy`,
+    8-core/32 GB) via the `xheavy` job. 11 free + 1 tiny paid is the cost-minimal
+    split: the paid job is one ~20-min test, only on adjoint/plant merges. *(It is
+    known to fit the old 16-core/64 GB tier; 32 GB is the expected fit for its
+    two-engine peak — bump the runner a tier if it OOMs at 32 GB.)*
+
+  This replaced a paid 16-core/64 GB `aquakin-heavy` runner that ran on **every**
+  push to main (the entire CI cost); now only one test bills, and only on
+  adjoint/plant-relevant merges. Keep `--splits` (heavy job) ≥ the
+  `heavy and not xheavy` count so it stays one-per-shard.
+- The **`heavy`** (`pytest -m "heavy and not xheavy" -n 1`) and **`xheavy`**
+  (`pytest -m xheavy -n 1`) jobs are gated identically by **`heavy-gate`**, with two
+  triggers: **push to `main`** when the path filter sees a change under
+  `aquakin/plant`, `aquakin/integrate`, `aquakin/core`, `aquakin/schema`,
+  `aquakin/networks`, the two heavy test files, `pyproject.toml` or the workflow (so
+  a docs / examples / utils / unrelated-test merge does not run them at all); and a
+  **`full-ci` PR** (the pre-merge opt-in, so the adjoint machinery is validated
+  before merge). The **`skip-heavy`** label still force-skips a push-to-main run for
+  a change that touches a filtered path but cannot affect the adjoint. `heavy-gate`
+  is **fail-safe**: when the path filter cannot determine a base it treats every path
+  as changed (the jobs run), and a run is skipped only when `skip-heavy` is
   positively present.
 - The **`smoke`** job (`pytest -m "slow and not validation and not heavy" --splits
   18 --group <rotating>`, 3.12) runs on **every PR** as an early-warning slice of the

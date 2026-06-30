@@ -227,16 +227,25 @@ jobs:
   # ---- Heavy whole-plant stable-adjoint gradient tests -------------------------
   # The `heavy` set is the 12 whole-plant plant-gradient checks (7 BSM2 + 5 BSM1),
   # each of which compiles a multi-GB whole-plant adjoint program. They are excluded
-  # from the slow / validation / smoke jobs (`... and not heavy`) and run here
-  # instead, ONE PER FRESH PROCESS (the `heavy` job below, `--splits 12 -n 1`): a
-  # single test fits a stock 16 GB `ubuntu-latest` runner, but a shard's worth
-  # accumulates (freed XLA caches are not returned to the OS) and exhausts it, so
-  # the set is sharded one-test-per-process across the FREE runner. The `heavy`
-  # marker means "needs an isolated fresh process" -- a BSM1 plant-gradient test
-  # earns it as much as a BSM2 one (a demoted BSM1 dynamic-DGSM test OOM-crashed a
-  # shared `slow` shard), independent of which is bigger. Public-repo
-  # standard-runner minutes are free, so the one-test-per-process shard across the
-  # 16 GB runner is what keeps this job both free and within memory.
+  # from the slow / validation / smoke jobs (`... and not heavy`) and run in two
+  # dedicated jobs, both ONE PER FRESH PROCESS (`-n 1`):
+  #   * `heavy` (below) -- the 11 that fit a stock 16 GB `ubuntu-latest` runner when
+  #     isolated, sharded one-test-per-process across the FREE runner. A single test
+  #     fits 16 GB, but a shard's worth accumulates (freed XLA caches are not
+  #     returned to the OS) and exhausts it, so the per-process isolation is what
+  #     keeps it both free and within memory. The `heavy` marker means "needs an
+  #     isolated fresh process" -- a BSM1 plant-gradient test earns it as much as a
+  #     BSM2 one (a demoted BSM1 dynamic-DGSM test OOM-crashed a shared `slow`
+  #     shard), independent of which is bigger.
+  #   * `xheavy` (below `heavy`) -- the ONE test (`test_dynamic_dgsm_matches_dgsm`)
+  #     that exceeds 16 GB EVEN isolated (it holds two BSM1 `stable_adjoint` adjoint
+  #     programs live at once), so the free runner cannot hold it and more sharding
+  #     cannot shrink a single test's peak. It runs alone on a small larger runner
+  #     (`aquakin-heavy`, 8-core/32 GB). 11 free + 1 tiny paid is the cost-minimal
+  #     split (the paid job runs only on adjoint/plant merges, ~one 20-min test).
+  # Both jobs are gated identically by `heavy-gate` (path filter + `full-ci`).
+  # Public-repo standard-runner minutes are free, so only the one oversized test
+  # bills.
   #
   # WHEN IT RUNS (cost control), two triggers:
   #   * push to main -- but ONLY when adjoint/plant-relevant files changed (the
@@ -313,7 +322,7 @@ jobs:
           fi
 
   heavy:
-    name: heavy stable-adjoint tests (shard ${{ matrix.group }}/12)
+    name: heavy stable-adjoint tests (shard ${{ matrix.group }}/11)
     needs: heavy-gate
     if: >-
       needs.heavy-gate.outputs.run == 'true'
@@ -322,20 +331,20 @@ jobs:
               && contains(github.event.pull_request.labels.*.name, 'full-ci')))
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # ONE heavy plant-gradient test per fresh process (`--splits 12`, `-n 1`). Each
-    # compiles a multi-GB plant-adjoint program that fits a stock 16 GB
-    # `ubuntu-latest` runner ALONE, but accumulates across a process (freed XLA
-    # caches are not returned to the OS, so RSS climbs test-by-test). Twelve fresh
-    # shards keep each process to ~one test, so the free 16 GB runner suffices
-    # (public-repo Actions minutes are free). If a single test ever needs >16 GB,
-    # move just this job to a larger-runner tier with >16 GB at one-per-process
-    # (raising the shard count cannot shrink a single test's peak). The heavy tests
-    # are not in `.test_durations`, so pytest-split partitions them evenly by count
-    # (~1/shard). Keep `--splits` >= the heavy-test count so it stays one-per-shard.
+    # ONE `heavy and not xheavy` test per fresh process (`--splits 11`, `-n 1`) --
+    # the 11 plant-gradient checks that fit a stock 16 GB `ubuntu-latest` runner
+    # alone. Each compiles a multi-GB plant-adjoint program that fits 16 GB ALONE
+    # but accumulates across a process (freed XLA caches are not returned to the OS,
+    # so RSS climbs test-by-test); eleven fresh shards keep each process to ~one
+    # test, so the free runner suffices (public-repo Actions minutes are free). The
+    # 12th test (`xheavy`) exceeds 16 GB even isolated and runs in the `xheavy` job.
+    # The heavy tests are not in `.test_durations`, so pytest-split partitions them
+    # evenly by count (~1/shard). Keep `--splits` >= the (heavy and not xheavy)
+    # count so it stays one-per-shard.
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        group: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     # Override the top-level single-thread pin: with `-n 1` there is no xdist
     # oversubscription, so let JAX / BLAS use the runner's cores.
     env:
@@ -360,9 +369,52 @@ jobs:
         # One heavy plant-gradient test in a fresh process. The per-test timeout
         # covers the multi-GB plant-adjoint compile.
         run: >-
-          pytest -m heavy -q -n 1
-          --splits 12 --group ${{ matrix.group }}
+          pytest -m "heavy and not xheavy" -q -n 1
+          --splits 11 --group ${{ matrix.group }}
           --durations=15 --timeout=1200 --timeout-method=thread
+
+  # The single oversized test that exceeds 16 GB even isolated -- runs alone on a
+  # small larger runner (`aquakin-heavy`, 8-core/32 GB). Same gating as `heavy`.
+  # `runs-on: aquakin-heavy` is the larger-runner label; provision it as an
+  # 8-core/32 GB GitHub-hosted larger runner. (This test is known to fit the old
+  # 16-core/64 GB tier; 32 GB is the expected fit for its two-engine peak -- if it
+  # OOMs there, bump the runner to the next memory tier. Until the runner exists
+  # the job stays queued and blocks nothing.)
+  xheavy:
+    name: heavy stable-adjoint tests (oversized, >16 GB larger runner)
+    needs: heavy-gate
+    if: >-
+      needs.heavy-gate.outputs.run == 'true'
+      && (github.event_name == 'push'
+          || (github.event_name == 'pull_request'
+              && contains(github.event.pull_request.labels.*.name, 'full-ci')))
+    runs-on: aquakin-heavy
+    timeout-minutes: 45
+    # Override the top-level single-thread pin (with `-n 1` there is no xdist
+    # oversubscription, so let JAX / BLAS use the runner's cores).
+    env:
+      OMP_NUM_THREADS: "8"
+      XLA_FLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Run the oversized heavy test
+        # The lone >16 GB test, alone in a fresh process.
+        run: >-
+          pytest -m xheavy -q -n 1
+          --durations=15 --timeout=1800 --timeout-method=thread
 
   # ---- Validation suite (against published data): merge-to-main + opt-in -------
   # Runs on push to main, and on a PR carrying the `full-ci` label (the opt-in
