@@ -145,7 +145,8 @@ def test_particle_direct_adjoint_enables_forward_mode(simple_network):
     track = aquakin.Track(t=jnp.linspace(0.0, 10.0, 11),
                           fields={"T": jnp.full(11, 293.15)})
     reactor = aquakin.ParticleTrackReactor(
-        simple_network, track, adjoint=diffrax.DirectAdjoint())
+        simple_network, track,
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"))
     C0 = jnp.asarray([1.0, 0.0])
 
     def out(p):
@@ -168,7 +169,8 @@ def test_integrate_ensemble_forwards_adjoint_and_dtmax(simple_network):
     res = integrate_ensemble(
         simple_network, tracks, lambda pid: jnp.asarray([1.0, 0.0]),
         simple_network.default_parameters(),
-        adjoint=diffrax.DirectAdjoint(), dtmax=1.0,
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        integrator=aquakin.IntegratorConfig(dtmax=1.0),
     )
     assert set(res) == {0, 1}
     for sol in res.values():

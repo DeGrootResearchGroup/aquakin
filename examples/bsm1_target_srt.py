@@ -44,7 +44,8 @@ def achieved_srt(network, influent, Qw):
     plant.add_influent("feed", influent, to="inlet_mix.fresh")
     sol = plant.solve(
         t_span=(0.0, 80.0), t_eval=jnp.linspace(70.0, 80.0, 6),
-        rtol=1e-4, atol=1e-3, max_steps=300_000,
+        rtol=1e-4, atol=1e-3,
+        integrator=aquakin.IntegratorConfig(max_steps=300_000),
     )
     return plant.sludge_age(sol).SRT
 

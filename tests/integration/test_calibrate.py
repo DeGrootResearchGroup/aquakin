@@ -100,8 +100,13 @@ def test_ad_mode_forward_matches_reverse(setup):
         transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
         optimizer="gauss_newton", laplace=False,
     )
-    fwd = aquakin.calibrate(reactor, C0, ad_mode="forward", **common)
-    rev = aquakin.calibrate(reactor, C0, ad_mode="reverse", **common)
+    fwd = aquakin.calibrate(
+        reactor, C0,
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        **common)
+    rev = aquakin.calibrate(
+        reactor, C0,
+        diff=aquakin.DifferentiationConfig(mode="reverse"), **common)
     assert fwd.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
     assert fwd.params_named["A_to_B.k"] == pytest.approx(
         rev.params_named["A_to_B.k"], rel=1e-4)
@@ -109,10 +114,11 @@ def test_ad_mode_forward_matches_reverse(setup):
 
 def test_ad_mode_rejects_bad_value(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError, match="ad_mode"):
+    with pytest.raises(ValueError, match="mode"):
         aquakin.calibrate(reactor, C0, observations=obs_clean, t_obs=t_obs,
                           free_params=["A_to_B.k"], observed_species=["B"],
-                          laplace=False, ad_mode="sideways")
+                          laplace=False,
+                          diff=aquakin.DifferentiationConfig(mode="sideways"))
 
 
 def test_ad_mode_forward_incompatible_with_stable_adjoint(setup):
@@ -120,8 +126,9 @@ def test_ad_mode_forward_incompatible_with_stable_adjoint(setup):
     with pytest.raises(ValueError, match="incompatible"):
         aquakin.calibrate(reactor, C0, observations=obs_clean, t_obs=t_obs,
                           free_params=["A_to_B.k"], observed_species=["B"],
-                          laplace=False, ad_mode="forward",
-                          gradient="stable_adjoint")
+                          laplace=False,
+                          diff=aquakin.DifferentiationConfig(
+                              mode="forward", method="stable"))
 
 
 def test_recovers_known_parameter_nll_with_noise(setup):
@@ -206,7 +213,8 @@ def test_laplace_dtmax_reconstructs_tighter_reactor(simple_network):
     capped reactor; it reconstructs the reactor and gives a finite posterior. On
     this non-stiff problem the tighter cap barely changes the result."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15), dtmax=0.5)
+        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15),
+        integrator=aquakin.IntegratorConfig(dtmax=0.5))
     C0 = jnp.asarray([1.0, 0.0])
     tp = simple_network.default_parameters().at[0].set(0.25)
     t = jnp.linspace(0.5, 10.0, 20)
@@ -629,7 +637,7 @@ def test_gauss_newton_forward_mode_with_direct_adjoint(simple_network):
     (jacfwd); it must still recover the parameter."""
     reactor = aquakin.BatchReactor(
         simple_network, aquakin.SpatialConditions.uniform(1, T=293.15),
-        adjoint=diffrax.DirectAdjoint(),
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
     C0 = jnp.asarray([1.0, 0.0])
     true_k = 0.25

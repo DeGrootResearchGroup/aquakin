@@ -53,7 +53,8 @@ def _steady_state(asm1, adm1):
     y0 = bsm2_warm_start(plant)
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
                       params=bsm2_parameters(asm1, adm1), y0=y0,
-                      rtol=1e-5, atol=1e-3, max_steps=500_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=500_000))
     _SS_CACHE["y"] = sol.state[-1]
     return _SS_CACHE["y"]
 
@@ -66,7 +67,8 @@ def _run_dynamic(profile, t_end=14.0):
     sol = plant.solve(
         t_span=(0.0, t_end), t_eval=jnp.linspace(0.0, t_end, n_save),
         params=bsm2_parameters(asm1, adm1), y0=y_ss,
-        rtol=1e-4, atol=1e-3, max_steps=200_000,
+        rtol=1e-4, atol=1e-3,
+        integrator=aquakin.IntegratorConfig(max_steps=200_000),
     )
     return plant, sol
 

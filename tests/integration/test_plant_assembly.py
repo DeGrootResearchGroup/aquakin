@@ -728,7 +728,8 @@ def test_solve_step_ceiling_gives_friendly_error(simple_net):
     (warm-start / tolerances / max_steps), not a raw Diffrax/Equinox traceback."""
     plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
     with pytest.raises(RuntimeError, match="step budget"):
-        plant.solve(t_span=(0.0, 1000.0), max_steps=1)
+        plant.solve(t_span=(0.0, 1000.0),
+                    integrator=aquakin.IntegratorConfig(max_steps=1))
 
 
 def test_default_atol_solves_without_tuning(simple_net):
@@ -741,7 +742,11 @@ def test_default_atol_solves_without_tuning(simple_net):
     assert float(tank[simple_net.species_index["A"]]) == pytest.approx(0.5, abs=1e-3)
 
 
-@pytest.mark.parametrize("gradient", ["jax_adjoint", "stable_adjoint"])
+@pytest.mark.parametrize(
+    "gradient",
+    [aquakin.DifferentiationConfig(method="through_solve"),
+     aquakin.DifferentiationConfig(method="stable")],
+    ids=["jax_adjoint", "stable_adjoint"])
 @pytest.mark.parametrize("wrt", ["y0", "params"])
 def test_plant_solve_gradient_leaks_no_tracer(simple_net, gradient, wrt):
     """``Plant.solve`` must not leak a tracer when differentiated w.r.t. either
@@ -770,7 +775,7 @@ def test_plant_solve_gradient_leaks_no_tracer(simple_net, gradient, wrt):
 
     def loss(x):
         kw = dict(y0=y0, params=params, t_span=(0.0, 1.0), t_eval=t_eval,
-                  gradient=gradient)
+                  diff=gradient)
         kw[wrt] = x
         return jnp.sum(plant.solve(**kw).state[-1])
 
@@ -779,7 +784,7 @@ def test_plant_solve_gradient_leaks_no_tracer(simple_net, gradient, wrt):
     # differentiate. A leaked tracer would either raise UnexpectedTracerError in
     # the grad below or overwrite the memo with a tracer that outlives the trace.
     plant.solve(y0=y0, params=params, t_span=(0.0, 1.0), t_eval=t_eval,
-                gradient=gradient)
+                diff=gradient)
     g = jax.grad(loss)(x0)
     assert bool(jnp.all(jnp.isfinite(g)))
     # The per-unit param memo retains no tracer from the traced grad above.
@@ -886,7 +891,8 @@ def _recycle_warnings(plant):
     with _w.catch_warnings(record=True) as w:
         _w.simplefilter("always")
         plant.solve(t_span=(0.0, 0.05), t_eval=jnp.asarray([0.0, 0.05]),
-                    rtol=1e-4, atol=1e-3, max_steps=20000)
+                    rtol=1e-4, atol=1e-3,
+                    integrator=aquakin.IntegratorConfig(max_steps=20000))
     return [str(x.message) for x in w
             if "recycle concentration" in str(x.message)]
 
@@ -942,8 +948,9 @@ def test_recycle_presolve_differentiable():
     def loss(p):
         sol = plant.solve(t_span=(0.0, 0.02), t_eval=jnp.asarray([0.0, 0.02]),
                           params=p, y0=y0, rtol=1e-4, atol=1e-3,
-                          max_steps=20000, gradient="stable_adjoint",
-                          colored_jacobian=False)
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          integrator=aquakin.IntegratorConfig(
+                              max_steps=20000, colored_jacobian=False))
         return jnp.sum(sol.final_state)
 
     import warnings as _w

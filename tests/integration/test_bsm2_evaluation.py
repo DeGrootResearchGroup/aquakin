@@ -39,7 +39,8 @@ def evaluated(asm1, adm1):
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
     sol = plant.solve((0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 11),
-                      params=params, rtol=1e-4, atol=1e-3, max_steps=300_000)
+                      params=params, rtol=1e-4, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=300_000))
     return plant, sol, params, evaluate_bsm2(plant, sol, params)
 
 

@@ -70,7 +70,8 @@ def test_dynamic_sensitivity_modes_match_grad():
     def scalar(theta):
         pp = base.at[i].set(theta)
         sol = p.solve((0.0, 2.0), t_eval=t_eval, params=pp, y0=y0,
-                      gradient="stable_adjoint", max_steps=_MAX_STEPS)
+                      diff=aquakin.DifferentiationConfig(method="stable"),
+                      integrator=aquakin.IntegratorConfig(max_steps=_MAX_STEPS))
         return sol.C_named("tank5", "SNO")[-1]
 
     g = float(jax.grad(scalar)(th))
@@ -110,7 +111,9 @@ def test_solve_sensitivity_matches_jacfwd():
     def out(theta):
         pp = base.at[jnp.asarray(idx)].set(theta)
         sol = p.solve((0.0, T), t_eval=te, params=pp, y0=y0,
-                      adjoint=diffrax.DirectAdjoint(), max_steps=_MAX_STEPS)
+                      diff=aquakin.DifferentiationConfig(
+                          mode="forward", method="through_solve"),
+                      integrator=aquakin.IntegratorConfig(max_steps=_MAX_STEPS))
         return sol.C_named("tank5", "SNH")[-1]
 
     S_jf = np.asarray(jax.jacfwd(out)(base[jnp.asarray(idx)]))
@@ -154,8 +157,10 @@ def test_solve_sensitivity_operating_influent_matches_fd():
                             network=asm1, T=infl.T)
         p2 = build_bsm1()
         p2.add_influent("feed", i2)
-        return float(p2.solve((0.0, T), t_eval=te, params=base, y0=y0,
-                              max_steps=_MAX_STEPS).C_named("tank5", "SNO")[-1])
+        return float(p2.solve(
+            (0.0, T), t_eval=te, params=base, y0=y0,
+            integrator=aquakin.IntegratorConfig(max_steps=_MAX_STEPS),
+        ).C_named("tank5", "SNO")[-1])
 
     assert sv[0] == pytest.approx((fd(snh=1 + eps) - yb) / eps, rel=5e-3)
     assert sv[1] == pytest.approx((fd(q=1 + eps) - yb) / eps, rel=5e-3)
@@ -188,11 +193,12 @@ def test_dynamic_dgsm_matches_dgsm():
     def fn(x):
         pp = base.at[jnp.asarray(idx)].set(jnp.asarray(x))
         sol = p.solve((0.0, 2.0), t_eval=t_eval, params=pp, y0=y0,
-                      gradient="stable_adjoint", max_steps=_MAX_STEPS)
+                      diff=aquakin.DifferentiationConfig(method="stable"),
+                      integrator=aquakin.IntegratorConfig(max_steps=_MAX_STEPS))
         return sol.C_named("tank5", "SNO")[-1]
 
     d = aquakin.dgsm(fn, ranges, input_names=screen, n_samples=4, seed=0,
-                     ad_mode="reverse")
+                     diff=aquakin.DifferentiationConfig(mode="reverse"))
     mine, theirs = dict(res.ranked(0)), dict(d.ranked())
     for s in screen:
         assert mine[s] == pytest.approx(theirs[s], rel=1e-5, abs=1e-12)

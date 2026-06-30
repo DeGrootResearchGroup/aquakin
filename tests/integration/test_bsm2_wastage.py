@@ -87,7 +87,8 @@ def wastage_run(asm1, adm1):
     y0 = bsm2_warm_start(plant)
     sol = plant.solve((0.0, 250.0), t_eval=jnp.array([0.0, 150.0, 250.0]),
                       params=params, y0=jnp.asarray(y0),
-                      rtol=1e-5, atol=1e-3, max_steps=800_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=800_000))
     return plant, sol, params
 
 
@@ -121,7 +122,8 @@ def test_higher_wastage_lowers_biomass(wastage_run):
     y0 = bsm2_warm_start(ref)
     sol_ref = ref.solve((0.0, 250.0), t_eval=jnp.array([0.0, 250.0]),
                         params=params, y0=jnp.asarray(y0),
-                        rtol=1e-5, atol=1e-3, max_steps=800_000)
+                        rtol=1e-5, atol=1e-3,
+                        integrator=aquakin.IntegratorConfig(max_steps=800_000))
     xbh_sched = float(sol.C_named("tank5", "XB_H")[-1])
     xbh_const = float(sol_ref.C_named("tank5", "XB_H")[-1])
     assert xbh_sched < xbh_const

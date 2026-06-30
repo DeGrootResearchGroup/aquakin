@@ -13,7 +13,9 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
+    DifferentiationConfig,
     GradientCheckMixin,
+    IntegratorConfig,
     _interp_fields_to_scalar,
     cached_jitted_solver,
     friendly_solve_errors,
@@ -88,16 +90,13 @@ class PlugFlowReactor(GradientCheckMixin):
         Absolute tolerance, scalar or shape ``(n_species,)``. Defaults to
         ``None`` -> a per-component noise floor scaled off the network reference
         concentrations (see :class:`BatchReactor` for the per-species rationale).
-    adjoint : diffrax.AbstractAdjoint, optional
-        Adjoint strategy for the axial solve. Defaults to
-        :class:`diffrax.RecursiveCheckpointAdjoint` (reverse-mode). Pass
-        ``diffrax.DirectAdjoint()`` for forward-mode AD through the solve. See
-        :class:`BatchReactor` for the full rationale.
-    dtmax : float, optional
-        Maximum integrator step. Set it for reverse-mode differentiation of a
-        stiff network (see :class:`BatchReactor`).
-    max_steps : int, optional
-        Maximum number of internal solver steps (default 100000).
+    integrator : IntegratorConfig, optional
+        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
+        ``dtmax``, ``max_steps``, an explicit ``solver``). See
+        :class:`BatchReactor`. Set ``dtmax`` for reverse-mode differentiation of
+        a stiff network.
+    diff : DifferentiationConfig, optional
+        Autodiff configuration (``mode``, ``method``). See :class:`BatchReactor`.
     """
 
     def __init__(
@@ -110,9 +109,8 @@ class PlugFlowReactor(GradientCheckMixin):
         *,
         rtol: float = 1e-6,
         atol=None,
-        adjoint: Optional[diffrax.AbstractAdjoint] = None,
-        dtmax: Optional[float] = None,
-        max_steps: int = 100_000,
+        integrator: IntegratorConfig = IntegratorConfig(),
+        diff: DifferentiationConfig = DifferentiationConfig(),
     ) -> None:
         conditions.validate_required(network.conditions_required)
         if n_points < 2:
@@ -121,8 +119,8 @@ class PlugFlowReactor(GradientCheckMixin):
             raise ValueError(f"length must be positive, got {length}")
         if velocity <= 0:
             raise ValueError(f"velocity must be positive, got {velocity}")
-        init_solver_settings(self, network, rtol=rtol, adjoint=adjoint,
-                             dtmax=dtmax, max_steps=max_steps)
+        init_solver_settings(self, network, rtol=rtol, integrator=integrator,
+                             diff=diff)
         self.conditions = conditions
         self.n_points = int(n_points)
         self.length = float(length)
@@ -297,6 +295,9 @@ class PlugFlowReactor(GradientCheckMixin):
         adjoint = self.adjoint
         dtmax = self.dtmax
         max_steps = self.max_steps
+        order = self.order
+        factormax = self.factormax
+        solver = self.solver
         x_eval = jnp.linspace(0.0, length, self.n_points)
 
         @jax.jit
@@ -315,6 +316,7 @@ class PlugFlowReactor(GradientCheckMixin):
                 saveat=diffrax.SaveAt(ts=x_eval),
                 t0=0.0, t1=length, rtol=rtol, atol=atol,
                 adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
+                order=order, factormax=factormax, solver=solver,
             )
             return sol.ts, sol.ys
 

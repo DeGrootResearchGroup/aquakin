@@ -366,13 +366,18 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint():
     common = dict(observed_species=obs_species, loss="mse", laplace=False,
                   max_iter=150, tol=1e-9)
     r_ref = aquakin.calibrate(
-        aquakin.BatchReactor(net, cond, rtol=rtol, atol=atol, dtmax=5e-4),
-        C0, obs, t_obs, free, gradient="jax_adjoint", **common,
+        aquakin.BatchReactor(net, cond, rtol=rtol, atol=atol,
+                             integrator=aquakin.IntegratorConfig(dtmax=5e-4)),
+        C0, obs, t_obs, free,
+        diff=aquakin.DifferentiationConfig(mode="reverse", method="through_solve"),
+        **common,
     )
     r_da = aquakin.calibrate(
         aquakin.BatchReactor(net, cond, rtol=rtol, atol=atol),
-        C0, obs, t_obs, free, gradient="stable_adjoint",
-        stable_adjoint_max_steps=max_steps, **common,
+        C0, obs, t_obs, free,
+        diff=aquakin.DifferentiationConfig(method="stable",
+                                           adjoint_max_steps=max_steps),
+        **common,
     )
     assert r_ref.converged and r_da.converged
     v_ref = jnp.array([r_ref.params_named[n] for n in free])

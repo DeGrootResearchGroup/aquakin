@@ -231,7 +231,8 @@ def test_plant_time_event_resets_state():
         return plant.initial_state(overrides=units)
 
     ev = Event(at_times=[1.0], apply=spike, name="ss_spike")
-    sol = plant.solve((0.0, 2.0), teval, y0=y0, events=[ev], max_steps=300_000)
+    sol = plant.solve((0.0, 2.0), teval, y0=y0, events=[ev],
+                      integrator=aquakin.IntegratorConfig(max_steps=300_000))
 
     assert sol.events_log == [(1.0, "ss_spike")]
     assert sol.state.shape == (9, plant._total_state_size)
@@ -242,14 +243,24 @@ def test_plant_time_event_resets_state():
 
 
 @pytest.mark.slow
-def test_plant_events_reject_stable_adjoint():
+def test_plant_events_reject_unsupported_integrator():
+    """The located-event segmented solve manages its own integrator, so an
+    explicit colored-Jacobian / custom solver (which it cannot honour) is
+    rejected. The default IntegratorConfig (the fast stack) is accepted -- events
+    run their own segmented solve regardless of the differentiation config."""
+    import diffrax
+
     from aquakin.plant.bsm import build_bsm1
 
     net = aquakin.load_network("asm1")
     plant = build_bsm1(net)
     ev = Event(at_times=[1.0])
-    with pytest.raises(ValueError, match="stable_adjoint"):
-        plant.solve((0.0, 2.0), events=[ev], gradient="stable_adjoint")
+    with pytest.raises(ValueError, match="not supported"):
+        plant.solve((0.0, 2.0), events=[ev],
+                    integrator=aquakin.IntegratorConfig(colored_jacobian=True))
+    with pytest.raises(ValueError, match="not supported"):
+        plant.solve((0.0, 2.0), events=[ev],
+                    integrator=aquakin.IntegratorConfig(solver=diffrax.Kvaerno5()))
 
 
 def test_state_event_step_budget_raises_friendly(decay):

@@ -36,6 +36,8 @@ import numpy as np
 
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
+    DifferentiationConfig,
+    IntegratorConfig,
     init_solver_settings,
     resolve_state_atol,
     solve_chemistry,
@@ -60,14 +62,18 @@ class CFDReactor:
         Absolute tolerance. Scalar or shape ``(n_species,)``. Defaults to
         ``None`` -> a per-component noise floor scaled off the network reference
         concentrations (see :class:`BatchReactor` for the per-species rationale).
-    adjoint : diffrax.AbstractAdjoint, optional
-        Adjoint strategy for the per-cell solve. Defaults to
-        :class:`diffrax.RecursiveCheckpointAdjoint`. Note that the only public
-        method, :meth:`step`, returns NumPy (it converts at the pybind11
-        boundary and runs a host-side finiteness check), so gradients do not
-        flow through ``step`` and this argument is inert for that path. It is
-        retained for advanced use of the internal jitted per-cell step in a
-        differentiable context, and for symmetry with the other reactors.
+    integrator : IntegratorConfig, optional
+        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
+        ``dtmax``, ``max_steps``, an explicit ``solver``) for the per-cell solve.
+        See :class:`BatchReactor`.
+    diff : DifferentiationConfig, optional
+        Autodiff configuration (``mode``, ``method``) for the per-cell solve.
+        Note that the only public method, :meth:`step`, returns NumPy (it
+        converts at the pybind11 boundary and runs a host-side finiteness check),
+        so gradients do not flow through ``step`` and this argument is inert for
+        that path. It is retained for advanced use of the internal jitted
+        per-cell step in a differentiable context, and for symmetry with the
+        other reactors.
     on_nan : {"raise", "ignore"}, optional
         Policy when any cell produces a non-finite concentration (NaN or
         Inf) after the chemistry step.
@@ -97,17 +103,16 @@ class CFDReactor:
         *,
         rtol: float = 1e-6,
         atol=None,
-        adjoint: Optional[diffrax.AbstractAdjoint] = None,
+        integrator: IntegratorConfig = IntegratorConfig(),
+        diff: DifferentiationConfig = DifferentiationConfig(),
         on_nan: str = "raise",
-        dtmax: Optional[float] = None,
-        max_steps: int = 100_000,
     ) -> None:
         if on_nan not in ("raise", "ignore"):
             raise ValueError(
                 f"on_nan must be 'raise' or 'ignore', got {on_nan!r}"
             )
-        init_solver_settings(self, network, rtol=rtol, adjoint=adjoint,
-                             dtmax=dtmax, max_steps=max_steps)
+        init_solver_settings(self, network, rtol=rtol, integrator=integrator,
+                             diff=diff)
         self.atol = resolve_state_atol(network, atol)
         self.on_nan = on_nan
         # Cache jit-compiled vmapped step keyed on n_cells.
@@ -240,6 +245,9 @@ class CFDReactor:
         adjoint = self.adjoint
         dtmax = self.dtmax
         max_steps = self.max_steps
+        order = self.order
+        factormax = self.factormax
+        solver = self.solver
 
         def _per_cell(C_cell, cond_cell, dt, params):
             # cond_cell has scalar values (vmap stripped the cells axis);
@@ -252,6 +260,7 @@ class CFDReactor:
                 saveat=diffrax.SaveAt(t1=True),
                 t0=0.0, t1=dt, rtol=rtol, atol=atol,
                 adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
+                order=order, factormax=factormax, solver=solver,
             )
             return sol.ys[-1]
 

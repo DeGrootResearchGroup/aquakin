@@ -469,7 +469,7 @@ def test_steady_state_dgsm_matches_dgsm():
         return plant.states_by_unit(s)["tank5"][si["SNH"]]
 
     d = aquakin.dgsm(fn_snh, ranges, input_names=screen, n_samples=32, seed=0,
-                     ad_mode="reverse")
+                     diff=aquakin.DifferentiationConfig(mode="reverse"))
     mine, theirs = dict(res.ranked("SNH")), dict(d.ranked())
     for s in screen:
         assert mine[s] == pytest.approx(theirs[s], rel=1e-6, abs=1e-12)

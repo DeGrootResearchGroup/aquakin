@@ -57,7 +57,8 @@ def steady(plant):
     Requesting this fixture marks a test ``slow`` (it builds + integrates the
     full plant -- ~30 s to compile); see ``tests/conftest.py``."""
     sol = plant.solve(t_span=(0.0, 200.0), t_eval=jnp.array([0.0, 200.0]),
-                      rtol=1e-4, atol=1e-3, max_steps=400_000)
+                      rtol=1e-4, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=400_000))
     return plant, sol
 
 

@@ -185,9 +185,11 @@ def test_max_steps_is_enforced(net, cond):
     # guards the no-t_eval path, where the knob was once silently dropped.)
     C0 = jnp.array([1.0, 0.0])
     p = net.default_parameters()
-    assert _reactor(net, cond, max_steps=7).max_steps == 7
+    assert _reactor(
+        net, cond,
+        integrator=aquakin.IntegratorConfig(max_steps=7)).max_steps == 7
 
-    r_tight = _reactor(net, cond, max_steps=4)
+    r_tight = _reactor(net, cond, integrator=aquakin.IntegratorConfig(max_steps=4))
     capped = False
     try:
         sol = r_tight.solve(C0, params=p, t_span=(0.0, 5.0))     # no t_eval path
@@ -196,7 +198,10 @@ def test_max_steps_is_enforced(net, cond):
         capped = True
     assert capped
 
-    sol = _reactor(net, cond, max_steps=100_000).solve(C0, params=p, t_span=(0.0, 5.0))
+    sol = _reactor(
+        net, cond,
+        integrator=aquakin.IntegratorConfig(max_steps=100_000)
+    ).solve(C0, params=p, t_span=(0.0, 5.0))
     assert np.all(np.isfinite(np.asarray(sol.C)))
 
 

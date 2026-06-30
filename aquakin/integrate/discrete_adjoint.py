@@ -426,6 +426,7 @@ def esdirk_adjoint_solve(
     t_eval: Optional[jnp.ndarray] = None,
     *,
     solver: Optional[diffrax.AbstractSolver] = None,
+    order: int = 5,
     rtol: float = _DEFAULT_RTOL,
     atol: float = _DEFAULT_ATOL,
     dt0: float = _DEFAULT_DT0,
@@ -524,8 +525,8 @@ def esdirk_adjoint_solve(
     # exact and a missed coupling only costs steps (the forward chord
     # self-corrects), so it never affects the result.
     solver = build_implicit_solver(
-        rtol, atol, solver=solver, colored_root_finder=forward_root_finder,
-        force_root_finder=True)
+        rtol, atol, order=order, solver=solver,
+        colored_root_finder=forward_root_finder, force_root_finder=True)
     A, b, diag_np, s = _esdirk_tableau(solver)
     diag = jnp.asarray(diag_np)
     n = y0.shape[0]

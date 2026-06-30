@@ -56,7 +56,9 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
+    DifferentiationConfig,
     GradientCheckMixin,
+    IntegratorConfig,
     _run_diffeqsolve,
     friendly_solve_errors,
     init_solver_settings,
@@ -284,14 +286,15 @@ class BiofilmReactor(GradientCheckMixin):
         into each other.
     rtol, atol : float
         Solver tolerances (scalar; applied across the whole layered state).
-    adjoint : diffrax.AbstractAdjoint, optional
-        Adjoint strategy (see :class:`~aquakin.integrate.batch.BatchReactor`).
-    dtmax : float, optional
-        Maximum integrator step (see :class:`~aquakin.integrate.batch.BatchReactor`).
-    max_steps : int, optional
-        Maximum number of solver steps (default 100000). A stiff per-layer-biomass
-        network with a tight ``dtmax`` can exceed the default; raise this if the
-        solve raises a max-steps error.
+    integrator : IntegratorConfig, optional
+        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
+        ``dtmax``, ``max_steps``, an explicit ``solver``); see
+        :class:`~aquakin.integrate.batch.BatchReactor`. A stiff per-layer-biomass
+        network with a tight ``dtmax`` can exceed the default ``max_steps``; raise
+        it if the solve raises a max-steps error.
+    diff : DifferentiationConfig, optional
+        Autodiff configuration (``mode``, ``method``); see
+        :class:`~aquakin.integrate.batch.BatchReactor`.
 
     Notes
     -----
@@ -350,9 +353,8 @@ class BiofilmReactor(GradientCheckMixin):
         biofilm_reactions=None,
         rtol: float = 1e-6,
         atol: float = 1e-9,
-        adjoint: Optional[diffrax.AbstractAdjoint] = None,
-        dtmax: Optional[float] = None,
-        max_steps: int = 100_000,
+        integrator: IntegratorConfig = IntegratorConfig(),
+        diff: DifferentiationConfig = DifferentiationConfig(),
     ) -> None:
         conditions.validate_required(network.conditions_required)
         if n_layers < 1:
@@ -361,8 +363,8 @@ class BiofilmReactor(GradientCheckMixin):
             raise ValueError(
                 "thickness, boundary_layer and area_per_volume must be positive."
             )
-        init_solver_settings(self, network, rtol=rtol, adjoint=adjoint,
-                             dtmax=dtmax, max_steps=max_steps)
+        init_solver_settings(self, network, rtol=rtol, integrator=integrator,
+                             diff=diff)
         self.conditions = conditions
         self.n_layers = int(n_layers)
         self.thickness = float(thickness)
@@ -825,6 +827,7 @@ class BiofilmReactor(GradientCheckMixin):
         make_rhs = self._make_rhs
         rtol, atol, adjoint, dtmax = self.rtol, self.atol, self.adjoint, self.dtmax
         max_steps = self.max_steps
+        order, factormax, solver = self.order, self.factormax, self.solver
 
         if has_t_eval:
             @jax.jit
@@ -835,6 +838,7 @@ class BiofilmReactor(GradientCheckMixin):
                     saveat=diffrax.SaveAt(ts=t_eval),
                     rtol=rtol, atol=atol, adjoint=adjoint, dtmax=dtmax,
                     max_steps=max_steps,
+                    order=order, factormax=factormax, solver=solver,
                 )
                 return sol.ts, sol.ys
             return _solve
@@ -847,6 +851,7 @@ class BiofilmReactor(GradientCheckMixin):
                 saveat=diffrax.SaveAt(t1=True),
                 rtol=rtol, atol=atol, adjoint=adjoint, dtmax=dtmax,
                 max_steps=max_steps,
+                order=order, factormax=factormax, solver=solver,
             )
             return sol.ts, sol.ys
         return _solve

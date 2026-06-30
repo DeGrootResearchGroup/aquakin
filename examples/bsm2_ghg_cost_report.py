@@ -49,7 +49,8 @@ def _scenario(do_control, asm1, adm1, params):
     sol = plant.solve(
         t_span=(0.0, 30.0), t_eval=jnp.linspace(0.0, 30.0, 31),
         params=params, y0=jnp.asarray(y0),
-        rtol=1e-5, atol=1e-3, max_steps=500_000,
+        rtol=1e-5, atol=1e-3,
+        integrator=aquakin.IntegratorConfig(max_steps=500_000),
     )
     ev = evaluate_bsm2(plant, sol, params)
     n2o = direct_n2o_emission(plant, sol, params)   # 0 for ASM1 (no SN2O)

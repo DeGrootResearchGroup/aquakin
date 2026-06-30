@@ -50,7 +50,8 @@ def main() -> None:
     print("Driving BSM2 with a 2x influent flow pulse (days 0.5-0.6), "
           "delay tau=0.05 d ...")
     sol = plant.solve(t_span=(0.0, 2.0), t_eval=t_eval, params=params,
-                      y0=jnp.asarray(y0), rtol=1e-6, atol=1e-3, max_steps=600_000)
+                      y0=jnp.asarray(y0), rtol=1e-6, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=600_000))
 
     raw = plant.influents["feed"]
     delayed = plant.stream(sol, "influent_delay.out", params)

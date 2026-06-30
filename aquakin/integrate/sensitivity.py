@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 from aquakin.core.conditions import SpatialConditions
 from aquakin.integrate._common import (
     ConditionedReactor,
+    DifferentiationConfig,
     Reactor,
     check_finite_gradient,
     forward_adjoint,
@@ -62,8 +63,7 @@ def sensitivity(
     t_span: Optional[tuple[float, float]] = None,
     t_eval: Optional[jnp.ndarray] = None,
     solve_kwargs: Optional[dict] = None,
-    ad_mode: str = "reverse",
-    check_finite: bool = True,
+    diff: DifferentiationConfig = DifferentiationConfig(),
 ) -> SensitivityResult:
     """
     Compute gradients of a scalar output with respect to parameters and
@@ -88,16 +88,14 @@ def sensitivity(
         provide whichever reads better.
     solve_kwargs : dict, optional
         Any further keyword arguments forwarded to ``reactor.solve``.
-    ad_mode : {"reverse", "forward"}, optional
-        Autodiff direction through the solve. ``"reverse"`` (default) uses
-        ``jax.grad``. ``"forward"`` uses ``jax.jacfwd`` and rebuilds the reactor
-        internally with a forward-capable adjoint, so a *stiff* reactor whose
-        reverse adjoint is non-finite can be differentiated without a ``dtmax``
-        cap and without the caller touching ``diffrax``.
-    check_finite : bool, optional
-        When ``True`` (default), raise a friendly ``RuntimeError`` if the
-        computed sensitivities are non-finite (with the remedy), instead of
-        returning silent ``NaN``s.
+    diff : DifferentiationConfig, optional
+        Autodiff configuration. ``mode="reverse"`` (default) uses ``jax.grad``.
+        ``mode="forward"`` uses ``jax.jacfwd`` and rebuilds the reactor internally
+        with a forward-capable adjoint, so a *stiff* reactor whose reverse adjoint
+        is non-finite can be differentiated without a ``dtmax`` cap and without the
+        caller touching ``diffrax``. ``check_finite`` (default ``True``) raises a
+        friendly ``RuntimeError`` if the computed sensitivities are non-finite,
+        instead of returning silent ``NaN``s.
 
     Returns
     -------
@@ -105,8 +103,10 @@ def sensitivity(
     """
     if output_fn is None:
         raise ValueError("output_fn is required (a solution -> scalar callable).")
-    if ad_mode not in ("reverse", "forward"):
-        raise ValueError(f"ad_mode must be 'reverse' or 'forward'; got {ad_mode!r}.")
+    if diff.mode not in ("reverse", "forward"):
+        raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
+    ad_mode = diff.mode
+    check_finite = diff.check_finite
     if ad_mode == "forward":
         # Differentiate forward through the solve; needs a forward-capable
         # adjoint. Build it internally so diffrax never appears in user code.
@@ -574,8 +574,7 @@ def dgsm(
     output_names: Optional[list[str]] = None,
     n_samples: int = 64,
     seed: int = 0,
-    ad_mode: str = "reverse",
-    mode: Optional[str] = None,
+    diff: DifferentiationConfig = DifferentiationConfig(),
     batched: bool = True,
 ) -> Any:
     """Derivative-based global sensitivity measure via autodiff + Sobol QMC.
@@ -639,10 +638,9 @@ def dgsm(
     seed : int, optional
         Seed for the scrambled-Sobol sampler. Fixing it (the default ``0``)
         makes the analysis exactly reproducible.
-    ad_mode : {"reverse", "forward"}, optional
-        Autodiff direction used to form the per-sample sensitivities (see above).
-    mode : str, optional
-        Deprecated alias for ``ad_mode``; emits a ``DeprecationWarning``.
+    diff : DifferentiationConfig, optional
+        Autodiff configuration. ``mode`` ({"reverse", "forward"}) selects the
+        direction used to form the per-sample sensitivities (see above).
     batched : bool, optional
         When ``True`` (default) the whole sample is pushed through one
         ``jax.vmap`` dispatch and finiteness is filtered once on the stacked
@@ -665,15 +663,9 @@ def dgsm(
     >>> res.ranked()[0][0]
     'a'
     """
-    if mode is not None:
-        warnings.warn(
-            "dgsm(mode=...) is deprecated; use ad_mode=... instead.",
-            DeprecationWarning, stacklevel=2,
-        )
-        ad_mode = mode
-    if ad_mode not in ("reverse", "forward"):
-        raise ValueError(f"ad_mode must be 'reverse' or 'forward'; got {ad_mode!r}.")
-    mode = ad_mode
+    if diff.mode not in ("reverse", "forward"):
+        raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
+    mode = diff.mode
 
     ranges_np, lo, hi, d, input_names = _validate_dgsm_ranges(ranges, input_names)
     Z, n_drawn = _sobol_sample(lo, hi, d, n_samples, seed)

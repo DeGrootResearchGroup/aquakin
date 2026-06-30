@@ -34,7 +34,8 @@ def _solve_pna(t_end=400.0):
     y0 = plant.initial_state(overrides={"reactor": seed})
     sol = plant.solve(t_span=(0.0, t_end),
                       t_eval=jnp.linspace(0.0, t_end, int(t_end) + 1),
-                      y0=y0, max_steps=400_000)
+                      y0=y0,
+                      integrator=aquakin.IntegratorConfig(max_steps=400_000))
     eff = plant.stream(sol, "reactor.out")
     return {s: float(eff.C_named(s)[-1])
             for s in ("SNH4", "SNO2", "SNO3", "SN2", "XAOB", "XNOB", "XAMX")}

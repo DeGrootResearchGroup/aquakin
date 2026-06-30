@@ -29,7 +29,8 @@ def steady_effluent(ferric):
     plant.add_influent("feed", influent)
     y0 = a2o_warm_start(plant)
     sol = plant.solve(t_span=(0.0, 200.0), t_eval=jnp.array([200.0]), y0=y0,
-                      forward_fast=True, rtol=1e-5, atol=1e-3, max_steps=8_000_000)
+                      forward_fast=True, rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=8_000_000))
     eff = plant.stream(sol, "effluent")
     return float(eff.C_named("SPO4")[-1]), float(eff.C_named("XMeP")[-1])
 

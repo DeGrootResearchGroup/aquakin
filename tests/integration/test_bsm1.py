@@ -152,14 +152,13 @@ def test_bsm1_grad_through_plant(asm1, constant_influent):
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
 
     def loss(params):
-        # Cap the integrator step. The reverse-mode adjoint of this stiff plant
-        # is right at the edge of finiteness uncapped and tips to non-finite on
-        # some floating-point environments; capping dtmax to a small multiple of
-        # the fastest reaction timescale bounds the per-step stiffness and keeps
-        # the reverse accumulation finite (see the dtmax discussion in CLAUDE.md).
+        # The default reverse-mode gradient (diff.method="stable", the cap-free
+        # hand-written discrete adjoint) stays finite on this stiff plant with no
+        # dtmax cap -- the cap was only ever needed by the old through-the-solve
+        # adjoint (diff.method="through_solve").
         sol = plant.solve(
             t_span=(0.0, 5.0), t_eval=jnp.asarray([0.0, 5.0]),
-            params=params, rtol=1e-3, atol=1e-2, dtmax=0.005,
+            params=params, rtol=1e-3, atol=1e-2,
         )
         # Sum SNO across all tanks at endpoint (a quantity that depends
         # on every nitrification-related parameter).
@@ -183,7 +182,8 @@ def test_bsm1_takacs_reaches_steady_state(asm1, constant_influent):
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = plant.solve(
         t_span=(0.0, 150.0), t_eval=jnp.asarray([0.0, 150.0]),
-        rtol=1e-4, atol=1e-3, max_steps=300_000,
+        rtol=1e-4, atol=1e-3,
+        integrator=aquakin.IntegratorConfig(max_steps=300_000),
     )
     assert jnp.all(jnp.isfinite(sol.state))
     # Healthy steady state (not washed out): elevated biomass, nitrified.
@@ -218,7 +218,8 @@ def test_bsm1_takacs_dry_weather_runs(asm1):
     plant.add_influent("feed", load_bsm1_influent("dry", asm1), to="inlet_mix.fresh")
     sol = plant.solve(
         t_span=(0.0, 14.0), t_eval=jnp.linspace(0.0, 14.0, 8),
-        rtol=1e-4, atol=1e-3, max_steps=200_000,
+        rtol=1e-4, atol=1e-3,
+        integrator=aquakin.IntegratorConfig(max_steps=200_000),
     )
     assert jnp.all(jnp.isfinite(sol.state))
     assert float(sol.C_named("tank5", "XB_H")[-1]) > 1000.0
@@ -273,7 +274,8 @@ def test_evaluate_bsm1_indices(asm1, constant_influent):
     # Settle toward steady state so the indices are representative.
     sol = plant.solve(
         t_span=(0.0, 60.0), t_eval=jnp.linspace(50.0, 60.0, 6),
-        rtol=1e-4, atol=1e-3, max_steps=200_000,
+        rtol=1e-4, atol=1e-3,
+        integrator=aquakin.IntegratorConfig(max_steps=200_000),
     )
     ev = evaluate_bsm1(plant, sol)
     assert isinstance(ev, BSM1Evaluation)

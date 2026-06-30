@@ -28,7 +28,8 @@ def main():
     # Start from an established EBPR sludge and settle to steady state.
     y0 = a2o_warm_start(plant)
     sol = plant.solve(t_span=(0.0, 200.0), t_eval=jnp.linspace(0.0, 200.0, 41),
-                      y0=y0, rtol=1e-5, atol=1e-3, max_steps=4_000_000)
+                      y0=y0, rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=4_000_000))
 
     eff = plant.stream(sol, "effluent")
     inflC = influent.at(0.0).C

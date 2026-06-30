@@ -58,7 +58,8 @@ def _solve():
 
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
                       params=bsm2_parameters(asm1, adm1), y0=y0,
-                      rtol=1e-5, atol=1e-3, max_steps=500_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=500_000))
     return plant, sol
 
 

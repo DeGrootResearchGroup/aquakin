@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import warnings
 from collections import namedtuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Optional
 
 import diffrax
@@ -43,6 +43,7 @@ import numpy as np
 from scipy.optimize import least_squares, minimize
 
 from aquakin.integrate._common import (
+    DifferentiationConfig,
     Reactor,
     check_finite_gradient,
     forward_adjoint,
@@ -537,10 +538,7 @@ def calibrate(
     ic_prior_log_std: Optional[float] = None,
     param_halfwidth: Optional[float] = None,
     optimizer: str = "lbfgsb",
-    gradient: str = "jax_adjoint",
-    ad_mode: str = "auto",
-    check_finite: bool = True,
-    stable_adjoint_max_steps: int = 100_000,
+    diff: DifferentiationConfig = DifferentiationConfig(method="through_solve"),
     n_starts: int = 1,
     jitter: float = 0.5,
     jitter_schedule: Optional[tuple] = None,
@@ -665,30 +663,6 @@ def calibrate(
         wandering to extreme values. ``None`` (default) leaves rates unbounded
         (positivity is still enforced by the transform). Free initial pools are
         always bounded by ``ic_bounds`` regardless.
-    gradient : {"jax_adjoint", "stable_adjoint"}, optional
-        How parameter gradients of the data term are taken. Both compute a
-        discrete adjoint and both use JAX autodiff for the model derivatives
-        (``df/dy``, ``df/dtheta``); they differ only in how the *integrator's*
-        adjoint is formed. ``"jax_adjoint"`` (default) lets JAX/diffrax
-        differentiate the whole solve (``RecursiveCheckpointAdjoint``); for stiff
-        networks this reverse-mode pass goes non-finite above a step-size
-        threshold, so the reactor must carry a ``dtmax`` cap. ``"stable_adjoint"``
-        keeps the autodiff model derivatives but replaces the integrator's
-        adjoint with an explicit per-step transposed-stage solve
-        (:func:`~aquakin.esdirk_adjoint_solve`) -- a robust adaptive ESDIRK
-        forward (Kvaerno5, the same high-order method the reactors use) whose
-        backward is finite with no cap. It is reverse-mode only, so it forces a
-        reverse-mode residual Jacobian under ``optimizer="gauss_newton"``. Built
-        from the reactor's network and (single-location) ``conditions`` at the
-        reactor's ``rtol``/``atol``; supported for batch reactors. Because it
-        matches the reactor's forward solver, its gradients agree with the
-        capped ``"jax_adjoint"`` path to the optimiser's tolerance.
-    stable_adjoint_max_steps : int, optional
-        Maximum (and allocated) number of forward steps for the
-        ``gradient="stable_adjoint"`` solve. The backward scan walks this whole
-        saved-trajectory buffer, so its cost scales with this value -- set it to
-        a tight upper bound on the actual step count, not far above it. Ignored
-        for ``gradient="jax_adjoint"``.
     optimizer : {"lbfgsb", "gauss_newton"}, optional
         Optimisation backend. ``"lbfgsb"`` (default) minimises the scalar loss
         with SciPy L-BFGS-B (reverse-mode gradient). ``"gauss_newton"`` minimises
@@ -696,26 +670,30 @@ def calibrate(
         reflective) -- a Gauss-Newton method that exploits the least-squares
         structure and is markedly more robust on the multimodal landscapes of
         stiff reaction-network fits. The residual Jacobian is formed by AD;
-        the direction is chosen by ``ad_mode``.
-    ad_mode : {"auto", "reverse", "forward"}, optional
-        Autodiff direction for the residual Jacobian / objective gradient, and
-        the way to get a finite gradient for a *stiff* network without touching
-        ``diffrax`` or a ``dtmax`` cap. ``"forward"`` uses ``jacfwd`` and builds
-        a forward-capable reactor adjoint internally (forward-mode AD stays
-        finite at any integrator step -- the fix for a stiff network whose
-        reverse adjoint overflows); it takes effect through the Gauss-Newton
-        Jacobian, so pair it with ``optimizer="gauss_newton"``. ``"reverse"``
-        forces reverse mode (and ``gradient`` then chooses the cap-free
-        ``stable_adjoint`` vs ``jax_adjoint`` reverse backend). ``"auto"`` (the
-        default) preserves the legacy behaviour: forward iff the supplied
-        reactor was already built with a forward-capable adjoint, else reverse.
-        ``ad_mode="forward"`` and ``gradient="stable_adjoint"`` are mutually
-        exclusive (forward vs reverse-only discrete adjoint).
-    check_finite : bool, optional
-        When ``True`` (default), evaluate the gradient/Jacobian once at the
-        start point and raise a friendly ``RuntimeError`` naming the remedy if
-        it is non-finite, instead of letting the optimiser wander on silent
-        ``NaN``s (the classic stiff-reverse-adjoint footgun).
+        the direction is chosen by ``diff.mode``.
+    diff : DifferentiationConfig, optional
+        How the data-term gradient / residual Jacobian is formed.
+        ``mode`` ({"reverse", "forward"}) is the autodiff direction;
+        ``method`` ({"stable", "through_solve"}) is how the reverse adjoint is
+        formed. ``mode="reverse", method="through_solve"`` (the calibrate default)
+        differentiates *through* the diffrax solve (``RecursiveCheckpointAdjoint``);
+        for a stiff network this reverse pass goes non-finite above a step-size
+        threshold, so the reactor must carry a ``dtmax`` cap.
+        ``mode="reverse", method="stable"`` replaces the integrator's adjoint with
+        an explicit per-step transposed-stage solve
+        (:func:`~aquakin.esdirk_adjoint_solve`) -- a robust adaptive ESDIRK forward
+        whose backward is finite with no cap (batch reactors only; its gradient
+        agrees with the capped ``through_solve`` path to the optimiser tolerance).
+        ``mode="forward"`` uses ``jacfwd`` and builds a forward-capable reactor
+        adjoint internally (forward-mode AD stays finite at any step -- the fix for
+        a stiff network whose reverse adjoint overflows); pair it with
+        ``optimizer="gauss_newton"`` and ``method="through_solve"`` (forward +
+        ``method="stable"`` is rejected, the stable adjoint being reverse-only).
+        ``check_finite`` (default ``True``) raises a friendly error if the
+        start-point gradient is non-finite. ``adjoint_max_steps`` is the
+        (allocated) forward step count for the ``method="stable"`` solve -- the
+        backward scan walks this whole saved-trajectory buffer, so set it to a
+        tight upper bound on the step count (ignored for ``through_solve``).
     n_starts : int, optional
         Number of optimiser starts (default ``1``). With ``n_starts > 1`` the
         calibration is run from several starting points and the lowest-loss
@@ -745,6 +723,23 @@ def calibrate(
     -------
     CalibrationResult
     """
+    # Resolve the public DifferentiationConfig into the internal AD selectors the
+    # body operates on:
+    #   diff.mode    -> ad_mode  ("reverse" / "forward")
+    #   diff.method  -> gradient ("stable" -> "stable_adjoint",
+    #                             "through_solve" -> "jax_adjoint")
+    #   diff.check_finite        -> check_finite
+    #   diff.adjoint_max_steps   -> stable_adjoint_max_steps
+    if diff.mode not in ("reverse", "forward"):
+        raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
+    if diff.method not in ("stable", "through_solve"):
+        raise ValueError(
+            f"diff.method must be 'stable' or 'through_solve'; got {diff.method!r}.")
+    ad_mode = diff.mode
+    gradient = "stable_adjoint" if diff.method == "stable" else "jax_adjoint"
+    check_finite = diff.check_finite
+    stable_adjoint_max_steps = int(diff.adjoint_max_steps)
+
     if not free_params:
         raise ValueError("free_params must be non-empty.")
     if loss not in _VALID_LOSSES:
@@ -757,20 +752,12 @@ def calibrate(
         raise ValueError(
             f"optimizer must be one of {_VALID_OPTIMIZERS}; got {optimizer!r}."
         )
-    if gradient not in _VALID_GRADIENTS:
-        raise ValueError(
-            f"gradient must be one of {_VALID_GRADIENTS}; got {gradient!r}."
-        )
-    if ad_mode not in _VALID_AD_MODES:
-        raise ValueError(
-            f"ad_mode must be one of {_VALID_AD_MODES}; got {ad_mode!r}."
-        )
     if ad_mode == "forward" and gradient == "stable_adjoint":
         raise ValueError(
-            "ad_mode='forward' and gradient='stable_adjoint' are incompatible: "
-            "the stable adjoint is a reverse-only discrete adjoint. Use "
-            "ad_mode='forward' (forward-mode through the diffrax solve) OR "
-            "gradient='stable_adjoint' (cap-free reverse), not both."
+            "diff=DifferentiationConfig(mode='forward', method='stable') is "
+            "incompatible: the stable discrete adjoint is reverse-only. Use "
+            "mode='forward', method='through_solve' (forward-mode through the "
+            "diffrax solve) OR mode='reverse', method='stable' (cap-free reverse)."
         )
     # ad_mode='forward' needs a forward-capable adjoint; build it internally so
     # diffrax never appears in user code. The clone is the fit reactor below.
@@ -1293,10 +1280,10 @@ def calibrate(
         # Reconstruct the reactor at laplace_dtmax when given; else reuse the fit
         # reactor.
         if laplace_dtmax is not None and laplace_dtmax != getattr(reactor, "dtmax", None):
+            lap_integrator = replace(reactor.integrator, dtmax=laplace_dtmax)
             lap_reactor = type(reactor)(
                 reactor.network, reactor.conditions, rtol=reactor.rtol,
-                atol=reactor.atol, adjoint=reactor.adjoint, dtmax=laplace_dtmax,
-                max_steps=reactor.max_steps)
+                atol=reactor.atol, integrator=lap_integrator, diff=reactor.diff)
         else:
             lap_reactor = reactor
         if laplace_method == "gauss_newton":

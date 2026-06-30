@@ -121,16 +121,19 @@ def bsm1():
     return make
 
 
-def test_forward_fast_rejects_events_grad_stable_adjoint(bsm1):
+def test_forward_fast_rejects_events_and_grad(bsm1):
     plant, y0 = bsm1()
     params = plant.default_parameters()
     te = jnp.array([1.0])
     with pytest.raises(ValueError, match="forward_fast"):
         plant.solve(t_span=(0.0, 1.0), t_eval=te, params=params, y0=y0,
                     forward_fast=True, events=[aquakin.Event(at_times=[0.5])])
-    with pytest.raises(ValueError, match="forward_fast"):
-        plant.solve(t_span=(0.0, 1.0), t_eval=te, params=params, y0=y0,
-                    forward_fast=True, gradient="stable_adjoint")
+    # forward_fast is a plain forward solve, so it composes with the DEFAULT diff
+    # (method="stable"); the incompatibility is with DIFFERENTIATING it, which the
+    # concrete-input guard below enforces (not the diff config on a plain solve).
+    plant.solve(t_span=(0.0, 1.0), t_eval=te, params=params, y0=y0,
+                forward_fast=True,
+                diff=aquakin.DifferentiationConfig(method="stable"))
     # not differentiable: a reverse-mode trace must raise the concrete-input error
     with pytest.raises(ValueError, match="forward_fast requires concrete"):
         jax.grad(lambda s: jnp.sum(plant.solve(
@@ -148,7 +151,8 @@ def test_forward_fast_matches_diffrax_bsm1(bsm1):
     params = plant.default_parameters()
     te = jnp.linspace(0.0, 8.0, 17)
     kw = dict(t_span=(0.0, 8.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-5, atol=1e-3, max_steps=2_000_000)
+              rtol=1e-5, atol=1e-3,
+              integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
     ff = plant.solve(**kw, forward_fast=True)
     ref = plant.solve(**kw)
     a = np.asarray(ff.state)
@@ -175,9 +179,11 @@ def test_forward_fast_matches_diffrax_bsm2():
     y0 = bsm2_warm_start(p)
     te = jnp.linspace(0.0, 8.0, 17)
     kw = dict(t_span=(0.0, 8.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-4, atol=1e-3, max_steps=8_000_000)
-    ff = p.solve(**kw, forward_fast=True)
-    ref = p.solve(**kw, colored_jacobian=True)
+              rtol=1e-4, atol=1e-3)
+    ff = p.solve(**kw, forward_fast=True,
+                 integrator=aquakin.IntegratorConfig(max_steps=8_000_000))
+    ref = p.solve(**kw, integrator=aquakin.IntegratorConfig(
+        max_steps=8_000_000, colored_jacobian=True))
     a, b = np.asarray(ff.state), np.asarray(ref.state)
     assert p._colored_root_finder[2] is True                   # colored guard ok
     assert np.all(np.isfinite(a))

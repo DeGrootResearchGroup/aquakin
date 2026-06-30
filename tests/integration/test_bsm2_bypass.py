@@ -90,7 +90,8 @@ def bypass_run(asm1, adm1):
     plant = build_bsm2(asm1, adm1, bypass=InfluentBypass())
     plant.add_influent("feed", influent)
     sol = plant.solve((0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 11),
-                      params=params, rtol=1e-4, atol=1e-3, max_steps=400_000)
+                      params=params, rtol=1e-4, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=400_000))
     return plant, sol, params, Q_in
 
 

@@ -53,7 +53,8 @@ y0 = plant.initial_state(overrides={"reactor": seed})
 
 # Anammox is slow -- integrate to a long pseudo-steady state.
 t_eval = jnp.linspace(0.0, 400.0, 401)
-sol = plant.solve(t_span=(0.0, 400.0), t_eval=t_eval, y0=y0, max_steps=400_000)
+sol = plant.solve(t_span=(0.0, 400.0), t_eval=t_eval, y0=y0,
+                  integrator=aquakin.IntegratorConfig(max_steps=400_000))
 eff = plant.stream(sol, "reactor.out")
 g = lambda s: float(eff.C_named(s)[-1])
 

@@ -97,7 +97,7 @@ def test_pfr_direct_adjoint_enables_forward_mode(simple_network):
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.PlugFlowReactor(
         simple_network, conditions, n_points=5, length=10.0, velocity=1.0,
-        adjoint=diffrax.DirectAdjoint(),
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
     C0 = jnp.asarray([1.0, 0.0])
 
