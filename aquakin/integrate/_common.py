@@ -113,12 +113,25 @@ class DifferentiationConfig:
         Buffer length for the discrete-adjoint backward scan (the old
         ``stable_adjoint_max_steps``); set it to a tight upper bound on the
         forward step count.
+    adjoint_low_memory : bool
+        Low-memory mode for the ``method="stable"`` discrete adjoint. ``False``
+        (default) saves each forward step's dense-output stage increments, so the
+        backward reconstructs the stages cheaply -- but the saved buffer is
+        ``~n_stages``x the trajectory. ``True`` stores only the step states and
+        **recomputes** each step's stages in the backward pass (a per-step Newton
+        scan), so the dense buffer is never allocated -- trading compute for
+        memory when that buffer is the binding constraint on a long, large-state
+        plant solve. The recompute matches the saved-stage gradient (it is the
+        same well-conditioned per-stage solve), so it is a pure
+        memory/compute trade. Reverse ``method="stable"`` only -- ignored for a
+        ``through_solve`` or forward solve.
     """
 
     mode: str = "reverse"
     method: str = "stable"
     check_finite: bool = True
     adjoint_max_steps: int = 100_000
+    adjoint_low_memory: bool = False
 
 
 def _resolve_reactor_adjoint(diff: "DifferentiationConfig"):

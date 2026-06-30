@@ -342,7 +342,22 @@ backward scan's cost scales with `stable_adjoint_max_steps` (the padded trajecto
 length), and with `dense=True` the saved dense-output buffer is ~`n_stages`× the
 trajectory, so keep `max_steps` tight; Kvaerno5's high order keeps the step count
 low. The autonomous reaction RHS is assumed (the ESDIRK stage times `c` do not
-enter).
+enter). **Low-memory option.** When that ~`n_stages`× dense buffer is the binding
+memory constraint (a long, large-state solve), `esdirk_adjoint_solve(low_memory=True)`
+drops it: the forward stores only the step states (`dense=False`) and the backward
+**recomputes** each step's stages by a fixed Newton scan (`newton_iters`, default
+12) before the same transposed-stage sweep — trading the buffer for ~a second
+per-step stage solve. The recompute is a contraction through the same
+well-conditioned `I − dt·γ·J`, so the reconstructed stages — and the gradient —
+match the saved-stage path (machine precision on linear decay; `rel < 1e-5` on the
+stiff Khalil network, the residual being the forward root-finder tolerance vs the
+machine-precision recompute). It is **guarded to the singly-diagonal ESDIRK shape**
+it assumes (explicit first stage, constant implicit γ — Kvaerno3/Kvaerno5); any
+other tableau falls back to the saved-stage path with a `RuntimeWarning`. Exposed
+to the plant and calibration via `DifferentiationConfig(adjoint_low_memory=True)`,
+which threads down to `esdirk_adjoint_solve(low_memory=True)`; the plant folds the
+flag into its stable-adjoint compile-cache key so a low-memory compile never
+collides with a saved-stage one.
 
 ### Operator Splitting
 

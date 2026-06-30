@@ -4138,7 +4138,9 @@ class Plant:
             here; call :meth:`solve_sensitivity` / :meth:`dynamic_sensitivity`.
             ``check_finite`` raises on a non-finite gradient; ``adjoint_max_steps``
             bounds the discrete-adjoint backward-scan buffer (it must exceed the
-            forward step count). Passing ``event=`` pins the forward
+            forward step count); ``adjoint_low_memory`` recomputes the backward
+            stages instead of saving the ``~n_stages``x dense buffer (memory for
+            compute, gradient unchanged). Passing ``event=`` pins the forward
             ``jax_adjoint`` path.
         time_unit : str, optional
             The unit ``t_span`` / ``t_eval`` are in (``"s"``/``"min"``/``"h"``/
@@ -4200,6 +4202,7 @@ class Plant:
             gradient = "jax_adjoint"
             adjoint = forward_adjoint()
         adjoint_max_steps = int(diff.adjoint_max_steps)
+        adjoint_low_memory = bool(diff.adjoint_low_memory)
 
         # The reverse stable method forms its own cap-free discrete adjoint and
         # controls its own steps, so an explicit dtmax cap alongside it is a usage
@@ -4464,11 +4467,14 @@ class Plant:
             # change the compiled solve, so they key the cache -- the solver by
             # class, exactly as the forward jax_adjoint path does. The ESDIRK
             # ``order`` (3 vs 5) also changes the compiled solve, so it is keyed.
+            # ``adjoint_low_memory`` selects the recompute backward (no saved
+            # dense-stage buffer), a different compiled solve, so it is keyed too.
             solver_key = type(solver).__name__ if solver is not None else None
             cache_key = (None if (settings is None or not teval_concrete
                                   or under_trace)
                          else ("stable_adjoint", t0, t1, teval_key, settings,
-                               use_colored, solver_key, factormax, order))
+                               use_colored, solver_key, factormax, order,
+                               adjoint_low_memory))
             with friendly_solve_errors(adj_steps, what="plant solve"):
                 if cache_key is not None:
                     jitted = self._jit_cache.get(cache_key)
@@ -4478,6 +4484,7 @@ class Plant:
                             rtol=rtol, atol=atol_eff, max_steps=adj_steps,
                             forward_root_finder=fwd_root_finder,
                             solver=solver, factormax=factormax, order=order,
+                            low_memory=adjoint_low_memory,
                         )
                         self._jit_cache[cache_key] = jitted
                     ys = jitted(y0, params)
@@ -4492,7 +4499,8 @@ class Plant:
                         rtol=rtol, atol=atol_eff, max_steps=adj_steps,
                         jacobian_builder=jac_builder,
                         forward_root_finder=fwd_root_finder,
-                        solver=solver, factormax=factormax, order=order)
+                        solver=solver, factormax=factormax, order=order,
+                        low_memory=adjoint_low_memory)
             if t_eval is None:
                 ts = jnp.asarray([t1])
                 ys = ys[None, :]
@@ -4740,7 +4748,7 @@ class Plant:
 
     def _build_jitted_stable_adjoint_solve(
         self, t0, t1, t_eval, *, rtol, atol, max_steps, forward_root_finder=None,
-        solver=None, factormax=None, order=5,
+        solver=None, factormax=None, order=5, low_memory=False,
     ):
         """Build the jit-compiled cap-free stable-adjoint solve for one signature.
 
@@ -4760,13 +4768,14 @@ class Plant:
                 y0, params, t0, t1, t_eval,
                 rtol=rtol, atol=atol, max_steps=max_steps,
                 forward_root_finder=forward_root_finder,
-                solver=solver, factormax=factormax, order=order)
+                solver=solver, factormax=factormax, order=order,
+                low_memory=low_memory)
         return _solve
 
     def _esdirk_stable_adjoint(self, y0, params, t0, t1, t_eval, *,
                                rtol, atol, max_steps, jacobian_builder=None,
                                forward_root_finder=None, solver=None,
-                               factormax=None, order=5):
+                               factormax=None, order=5, low_memory=False):
         """Cap-free reverse-mode plant solve with the cached recycle map hoisted
         out of the backward pass.
 
@@ -4814,6 +4823,7 @@ class Plant:
             time_dependent=True, primal_rhs=primal_rhs,
             jacobian_builder=jacobian_builder,
             forward_root_finder=forward_root_finder,
+            low_memory=low_memory,
         )
 
     def run_to_steady_state(

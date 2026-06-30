@@ -544,3 +544,94 @@ def test_esdirk_dense_stage_reconstruction_convention():
         assert np.allclose(Y_last, ys[m], rtol=1e-9, atol=1e-12), (
             f"step {m}: reconstructed last stage {Y_last} != step output {ys[m]}"
         )
+
+
+# --- low_memory: stage-recompute (checkpointing) backward path ---------------
+#
+# ``low_memory=True`` does not store the forward's dense-output stage buffer
+# (~s x the trajectory); it recomputes each step's stages by Newton in the
+# backward pass. The reconstruction is exact, so the gradient must match the
+# default saved-stage path, and a tableau outside the singly-diagonal ESDIRK
+# shape the recompute assumes must fall back (with a warning) rather than silently
+# using it.
+
+
+@pytest.mark.parametrize("solver", [diffrax.Kvaerno5, diffrax.Kvaerno3])
+def test_low_memory_matches_saved_stage_gradient(simple_network, solver):
+    # On the (linear) decay network the stage equations solve exactly, so the
+    # recompute matches the saved-stage path to machine precision -- for both the
+    # default Kvaerno5 and the cheaper Kvaerno3.
+    rhs = _decay_rhs(simple_network)
+    C0 = jnp.array([1.0, 0.0])
+    p = simple_network.default_parameters()
+    t_obs = jnp.array([1.0, 4.0, 8.0])
+    rtol, atol = 1e-9, 1e-11
+
+    def loss(pp, low_memory):
+        return jnp.sum(
+            esdirk_adjoint_solve(rhs, C0, pp, (0.0, 8.0), t_obs, solver=solver(),
+                                 rtol=rtol, atol=atol, low_memory=low_memory) ** 2
+        )
+
+    g_saved = jax.grad(lambda pp: loss(pp, False))(p)
+    g_low = jax.grad(lambda pp: loss(pp, True))(p)
+    assert bool(jnp.all(jnp.isfinite(g_low)))
+    assert jnp.allclose(g_low, g_saved, rtol=1e-7, atol=1e-9)
+
+
+def test_low_memory_matches_saved_stage_stiff():
+    # The recompute must also match on a stiff network: the per-stage Newton
+    # converges through the same well-conditioned I - dt*gamma*J the forward
+    # inverts. The tiny residual vs the saved-stage path is the forward
+    # root-finder tolerance vs the machine-precision recompute of the stages.
+    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    cond = net.default_conditions(1)
+    C0 = net.default_concentrations()
+    p = net.default_parameters()
+    fields = cond.fields
+    rhs = lambda t, y, pp: net.dCdt(y, pp, fields, 0)
+    t_obs = jnp.array([0.05, 0.1, 0.2, 0.3])
+    si = net.species_index["S_SO4"]
+
+    def loss(pp, low_memory):
+        ys = esdirk_adjoint_solve(rhs, C0, pp, (0.0, 0.3), t_obs, rtol=1e-7,
+                                  atol=1e-10, max_steps=50_000,
+                                  low_memory=low_memory)
+        return jnp.sum(ys[:, si] ** 2) + 1e-3 * jnp.sum(ys ** 2)
+
+    g_saved = jax.jit(jax.grad(lambda pp: loss(pp, False)))(p)
+    g_low = jax.jit(jax.grad(lambda pp: loss(pp, True)))(p)
+    assert bool(jnp.all(jnp.isfinite(g_low)))
+    rel = float(jnp.linalg.norm(g_low - g_saved)
+                / (jnp.linalg.norm(g_saved) + 1e-30))
+    assert rel < 1e-5
+
+
+def test_is_singly_diagonal_esdirk_guard():
+    # The guard accepts the KV3/KV5 tableaus and rejects shapes the stage
+    # recompute does not assume (non-constant gamma; no explicit first stage).
+    import numpy as np
+    from aquakin.integrate.discrete_adjoint import (
+        _esdirk_tableau, _is_singly_diagonal_esdirk)
+
+    for solver in (diffrax.Kvaerno5(), diffrax.Kvaerno3()):
+        _A, _b, diag, _s = _esdirk_tableau(solver)
+        assert _is_singly_diagonal_esdirk(diag)
+    assert not _is_singly_diagonal_esdirk(np.array([0.0, 0.3, 0.4]))   # non-constant
+    assert not _is_singly_diagonal_esdirk(np.array([0.25, 0.25, 0.25]))  # implicit 1st
+
+
+def test_low_memory_falls_back_with_warning(simple_network, monkeypatch):
+    # A tableau outside the assumed shape must warn and fall back to the
+    # saved-stage path (still correct), not silently take the recompute.
+    import aquakin.integrate.discrete_adjoint as da
+    rhs = _decay_rhs(simple_network)
+    C0 = jnp.array([1.0, 0.0])
+    p = simple_network.default_parameters()
+    t_obs = jnp.array([1.0, 8.0])
+
+    monkeypatch.setattr(da, "_is_singly_diagonal_esdirk", lambda diag: False)
+    with pytest.warns(RuntimeWarning, match="singly-diagonal ESDIRK"):
+        ys = esdirk_adjoint_solve(rhs, C0, p, (0.0, 8.0), t_obs, low_memory=True)
+    ys_ref = esdirk_adjoint_solve(rhs, C0, p, (0.0, 8.0), t_obs, low_memory=False)
+    assert jnp.allclose(ys, ys_ref)

@@ -135,6 +135,33 @@ def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd():
     assert g_stable == pytest.approx(fd, rel=1e-3)
 
 
+def test_stable_adjoint_low_memory_matches_saved_stage_gradient():
+    """``DifferentiationConfig(adjoint_low_memory=True)`` recomputes the backward
+    stages instead of saving the dense-stage buffer; the plant gradient must equal
+    the default saved-stage path (it is the same discrete adjoint, the stages
+    obtained two ways)."""
+    net = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    plant = _single_cstr_plant(net)
+    base = net.default_parameters()
+    gidx = plant.parameter_index("simple_decay.A_to_B.k")
+    theta0 = float(base[gidx])
+    T = 40.0
+    teval = jnp.array([T])
+
+    def g(theta, low_memory):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(
+            t_span=(0.0, T), t_eval=teval, params=p,
+            diff=aquakin.DifferentiationConfig(
+                method="stable", adjoint_low_memory=low_memory))
+        return sol.C_named("tank", "B")[-1]
+
+    g_saved = float(jax.grad(lambda th: g(th, False))(theta0))
+    g_low = float(jax.grad(lambda th: g(th, True))(theta0))
+    assert np.isfinite(g_low) and g_low != 0.0
+    assert g_low == pytest.approx(g_saved, rel=1e-6)
+
+
 def test_stable_adjoint_initial_state_gradient_matches_jax_adjoint():
     """The cap-free stable-adjoint gradient w.r.t. the INITIAL STATE y0 (not just
     parameters) is finite and equals the standard jax_adjoint gradient.
