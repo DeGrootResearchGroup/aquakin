@@ -343,6 +343,10 @@ opt.report()                         # human-readable summary (str)
 result = aquakin.fit(reactor, C0, observations, t_obs, free_params, method="adjoint")
 result.params
 result.params_named
+# t_obs is in the network's native time unit; pass time_unit= (as on solve) to
+# carry an hour-/minute-valued t_obs straight from a solve(time_unit=...) run —
+# it is converted to native before the fit, so the axis matches the rate
+# constants instead of being silently mis-scaled. Same kwarg on calibrate().
 
 # MAP fit with parameter transforms + Laplace posterior approximation
 calib = aquakin.calibrate(

@@ -131,6 +131,47 @@ def test_ad_mode_forward_incompatible_with_stable_adjoint(setup):
                               mode="forward", method="stable"))
 
 
+# ---------- time_unit on the fitting path (issue #446/#447) ----------
+# simple_network's rate constant is in s^-1, so its native time unit is seconds;
+# the setup t_obs is in seconds. A user who standardises on hours must be able to
+# carry the same hour-valued t_obs into calibrate/fit and get the SAME fit -- not
+# a silently 3600x-compressed time axis.
+
+
+def test_calibrate_time_unit_converts_t_obs(setup):
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    common = dict(
+        observations=obs_clean, free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
+        loss="mse", laplace=False,
+    )
+    native = aquakin.calibrate(reactor, C0, t_obs=t_obs, **common)
+    # Same observations, t_obs expressed in hours -- conversion must reproduce the
+    # native-axis fit (the seconds native unit -> hours factor is 3600).
+    in_hours = aquakin.calibrate(
+        reactor, C0, t_obs=t_obs / 3600.0, time_unit="h", **common)
+    assert in_hours.params_named["A_to_B.k"] == pytest.approx(
+        native.params_named["A_to_B.k"], rel=1e-6)
+    assert in_hours.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+    # And without time_unit the hour-valued axis is the silent footgun: a
+    # different (wrong) optimum, not the native fit.
+    wrong = aquakin.calibrate(reactor, C0, t_obs=t_obs / 3600.0, **common)
+    assert wrong.params_named["A_to_B.k"] != pytest.approx(
+        native.params_named["A_to_B.k"], rel=1e-2)
+
+
+def test_fit_time_unit_converts_t_obs(setup):
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    native = aquakin.fit(reactor, C0, obs_clean, t_obs,
+                         free_params=["A_to_B.k"], observed_species=["B"])
+    in_hours = aquakin.fit(reactor, C0, obs_clean, t_obs / 3600.0,
+                           free_params=["A_to_B.k"], observed_species=["B"],
+                           time_unit="h")
+    assert in_hours.params_named["A_to_B.k"] == pytest.approx(
+        native.params_named["A_to_B.k"], rel=1e-6)
+    assert in_hours.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
 def test_recovers_known_parameter_nll_with_noise(setup):
     reactor, C0, t_obs, obs_clean, true_k = setup
     rng = np.random.default_rng(0)
