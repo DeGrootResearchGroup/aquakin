@@ -40,6 +40,7 @@ are omitted (open-loop steady state).
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from typing import Optional
 
 import jax.numpy as jnp
@@ -101,6 +102,14 @@ BSM2_AS_TEMPERATURE_K = 288.15  # K (15 °C) -- the BSM2 ASM1 reference temperat
 # and over-predicts nitrification by ~1.4 %, the difference between the bare
 # 15 °C rates and the benchmark steady state.
 BSM2_CONSTANT_INFLUENT_T = 288.00808  # K (14.85808 °C): benchmark steady-state influent temp
+
+# Largest |T - ref_T| (K) treated as a consistent influent/network pairing. The
+# benchmark inlet sits ~0.14 K below the 15 °C reference; anything beyond ~1 K is
+# almost certainly a mismatched network (e.g. a 14.86 °C inlet on the plain 20 °C
+# ``load_network("asm1")``, ~5 K off), which silently rescales the Arrhenius rate
+# corrections. The threshold clears the benchmark offset with wide margin while
+# catching a whole-network mismatch.
+BSM2_INFLUENT_REF_T_TOL = 1.0  # K
 
 # Closed-loop dissolved-oxygen / kLa control (reginit_bsm2). A PI controller
 # senses SO in reactor 4 and manipulates its aeration kLa; reactors 3 and 5
@@ -220,9 +229,38 @@ def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF, T: float = None)
     the line at the 15 °C reference, which over-predicts nitrification by ~1.4 %.
     Do **not** pass ``T`` with the plain 20 °C ``load_network("asm1")``: a
     14.858 °C inlet on a 20 °C-referenced network applies a large spurious
-    slowdown.
+    slowdown. Passing a ``T`` more than :data:`BSM2_INFLUENT_REF_T_TOL` K from the
+    network's Arrhenius reference temperature emits a warning naming both values.
     """
+    _warn_if_influent_T_inconsistent(asm1_network, T)
     return asm1_network.influent(BSM2_CONSTANT_INFLUENT, Q=Q, T=T)
+
+
+def _warn_if_influent_T_inconsistent(network, T):
+    """Warn when an influent ``T`` is far from the network's Arrhenius reference.
+
+    The influent temperature and the network's ``temperature_corrections``
+    reference ``ref_T`` are independent knobs that must agree: a ``T`` that
+    differs from ``ref_T`` by more than the expected BSM2 inlet offset
+    (:data:`BSM2_INFLUENT_REF_T_TOL` K) silently rescales every rate correction
+    by ``theta**(T - ref_T)`` -- e.g. a 14.86 °C inlet on the plain 20 °C
+    ``load_network("asm1")`` cuts nitrification by ~40 %. No-ops when ``T`` is
+    ``None`` (temperature-agnostic) or the network carries no corrections.
+    """
+    if T is None or not getattr(network, "temperature_corrections", None):
+        return
+    ref_T = float(network.temperature_corrections[0][2])
+    if abs(float(T) - ref_T) > BSM2_INFLUENT_REF_T_TOL:
+        warnings.warn(
+            f"bsm2_constant_influent: influent T={float(T):.5g} K is "
+            f"{abs(float(T) - ref_T):.3g} K from the network's Arrhenius "
+            f"reference ref_T={ref_T:.5g} K (>{BSM2_INFLUENT_REF_T_TOL:g} K). "
+            "This rescales every temperature correction by theta**(T-ref_T) and "
+            "is almost certainly a mismatched network -- pair "
+            "BSM2_CONSTANT_INFLUENT_T with bsm2_asm1_network() (15 °C ref), not "
+            'the plain 20 °C load_network("asm1").',
+            stacklevel=2,
+        )
 
 
 # ---------------------------------------------------------------------------
