@@ -92,14 +92,24 @@ def test_each_compile_affecting_setting_keys_the_cache(simple_network):
                       R(simple_network, cond, rtol=7.7e-5)), "rtol not in cache key"
     assert adds_entry(R(simple_network, cond, atol=3.3e-7),
                       R(simple_network, cond, atol=7.7e-7)), "atol not in cache key"
-    assert adds_entry(R(simple_network, cond, dtmax=0.37),
-                      R(simple_network, cond, dtmax=0.19)), "dtmax not in cache key"
-    assert adds_entry(R(simple_network, cond, max_steps=51_234),
-                      R(simple_network, cond, max_steps=61_234)), "max_steps not in cache key"
-    # A custom adjoint must not reuse the default (None) reactor's compiled solve.
-    assert adds_entry(R(simple_network, cond),
-                      R(simple_network, cond, adjoint=diffrax.DirectAdjoint())), \
-        "adjoint not in cache key"
+    assert adds_entry(
+        R(simple_network, cond, integrator=aquakin.IntegratorConfig(dtmax=0.37)),
+        R(simple_network, cond, integrator=aquakin.IntegratorConfig(dtmax=0.19)),
+    ), "dtmax not in cache key"
+    assert adds_entry(
+        R(simple_network, cond,
+          integrator=aquakin.IntegratorConfig(max_steps=51_234)),
+        R(simple_network, cond,
+          integrator=aquakin.IntegratorConfig(max_steps=61_234)),
+    ), "max_steps not in cache key"
+    # A custom differentiation config must not reuse the default reactor's
+    # compiled solve.
+    assert adds_entry(
+        R(simple_network, cond),
+        R(simple_network, cond,
+          diff=aquakin.DifferentiationConfig(mode="forward",
+                                             method="through_solve")),
+    ), "adjoint not in cache key"
 
 
 @pytest.mark.slow  # heavy: jax.grad through ASM1 solve

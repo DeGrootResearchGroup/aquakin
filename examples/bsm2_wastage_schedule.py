@@ -38,7 +38,8 @@ def main() -> None:
     t_eval = jnp.array([0.0, 90.0, 180.0, 220.0, 300.0])
     print("Driving BSM2 with the scheduled wastage (step up at day 182) ...")
     sol = plant.solve(t_span=(0.0, 300.0), t_eval=t_eval, params=params,
-                      y0=jnp.asarray(y0), rtol=1e-5, atol=1e-3, max_steps=900_000)
+                      y0=jnp.asarray(y0), rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=900_000))
 
     waste = plant.stream(sol, "underflow_split.waste", params)
     print()

@@ -49,7 +49,8 @@ def main() -> None:
           f"{Q_storm:.0f} m³/d (threshold {BSM2_BYPASS_Q:.0f}) ...")
     sol = plant.solve(t_span=(0.0, 30.0), t_eval=jnp.array([0.0, 30.0]),
                       params=params, y0=jnp.asarray(y0),
-                      rtol=1e-5, atol=1e-3, max_steps=500_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=500_000))
 
     bp = plant.stream(sol, "bypass_split.bypass", params)
     pl = plant.stream(sol, "bypass_split.to_plant", params)

@@ -40,7 +40,8 @@ def _steady_snh(asm1, adm1, params, T_kelvin):
 
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
                       params=params, y0=jnp.asarray(y0),
-                      rtol=1e-5, atol=1e-3, max_steps=500_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=500_000))
     return float(sol.C_named("tank5", "SNH")[-1])
 
 

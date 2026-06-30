@@ -187,7 +187,9 @@ def test_adm1_ph_operating_point_is_differentiable():
     si = net.species_index
     C0 = net.default_concentrations()
     p = net.default_parameters()
-    reactor = aquakin.BatchReactor(net, net.default_conditions(), dtmax=1e-2)
+    reactor = aquakin.BatchReactor(
+        net, net.default_conditions(),
+        integrator=aquakin.IntegratorConfig(dtmax=1e-2))
     t_eval = jnp.linspace(0.0, 0.5, 4)
 
     def loss(scat0):

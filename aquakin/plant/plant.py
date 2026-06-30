@@ -37,10 +37,13 @@ from aquakin.core.hints import did_you_mean
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate.events import Event, solve_with_events
 from aquakin.integrate._common import (
+    DifferentiationConfig,
+    IntegratorConfig,
     _coerce_atol,
     _run_diffeqsolve,
     concrete_settings_key,
     default_atol,
+    forward_adjoint,
     friendly_solve_errors,
     to_native_time,
 )
@@ -3429,32 +3432,37 @@ class Plant:
         return build_implicit_solver(rtol, atol, solver=solver,
                                      colored_root_finder=rf)
 
-    def _colored_adjoint_jacobian_builder(self, t0, y0, params, rtol, atol, *,
-                                          mode):
-        """Derive (once, concretely) the sparsity-colored ``df/dy`` Jacobian
-        builder for the stable_adjoint backward pass, plus its measured benefit.
+    def _colored_adjoint_jacobian_builder(self, t0, rtol, atol):
+        """Derive (once) the sparsity-colored ``df/dy`` Jacobian builder for the
+        stable_adjoint backward pass, from the plant's **own default operating
+        point**.
 
         The cap-free reverse-mode backward is dominated (~82% on BSM2) by per-step
         dense ``df/dy`` Jacobian builds -- one Jacobian-vector product per state.
         For a large block-sparse plant, coloring the Jacobian computes it in one
         JVP per *color* (BSM2: ~45 vs 167), cutting that cost while staying exact
         (the colored matrix equals the dense one when the pattern is a superset).
-        But for a *small* plant the colored build's overhead (the per-color scatter)
-        exceeds the saving and it is *slower* (BSM1: ~2x slower per build), so the
-        win is plant-dependent.
 
-        Caches ``(builder_or_None, n_colors, ok, ratio)`` on
+        The colored pattern is a **structural** property of the plant -- the unit
+        coupling graph plus the recycle block structure -- so it is built from the
+        plant's **default** state/params, NOT the solve's ``y0``/``params``. That
+        decouples it from the solve routing and the AD trace: it builds lazily on
+        first use even under a gradient trace, because it touches only concrete
+        plant defaults (wrapped in ``ensure_compile_time_eval`` so the probe is not
+        staged into the gradient). Whether to *use* the result is a separate,
+        size-based decision (:attr:`_COLORED_BACKWARD_MIN_STATES`), so no build-time
+        benchmark is needed -- which is what removes the old dependency on a
+        concrete ``stable_adjoint`` solve to trigger and time the build.
+
+        Caches ``(builder_or_None, n_colors, ok, n_states, rf)`` on
         ``_colored_adjoint_builder``: the augmented colored builder, the color
-        count, whether the start-state guard passed, and -- for ``mode="auto"`` --
-        the measured **jitted build-time speedup** ``ratio = t_dense / t_colored``
-        (``> 1`` means the colored build is cheaper, so coloring helps). ``ratio``
-        is ``None`` for ``mode=True`` (forced; no measurement) or a failed guard.
+        count, whether the default-state guard passed, the plant state count (for
+        the size gate), and the ``ColoredVeryChord``.
 
         Built for the **augmented** (time-carrying, ``n+1``) primal right-hand side
-        the discrete adjoint actually differentiates, mirroring
-        :meth:`_colored_jacobian_solver`. Guarded against the dense Jacobian at the
-        start state; a mismatch falls back to dense (with a warning). Skipped under
-        tracing (the probe needs concrete arrays).
+        the discrete adjoint actually differentiates. Guarded against the dense
+        Jacobian at the default state; a mismatch falls back to dense (with a
+        warning).
         """
         from aquakin.integrate.colored_jacobian import (
             build_colored_root_finder, colored_jacobian_guard,
@@ -3463,10 +3471,18 @@ class Plant:
 
         from aquakin.integrate.discrete_adjoint import _autonomize
 
-        if self._colored_adjoint_builder is None:
-            if (isinstance(params, jax.core.Tracer)
-                    or isinstance(y0, jax.core.Tracer)):
-                return None             # can't build under trace; fall back
+        if self._colored_adjoint_builder is not None:
+            return self._colored_adjoint_builder[0]
+
+        # Build from the plant's OWN default operating point -- a concrete,
+        # always-available representative state -- so the pattern (a structural
+        # property) is independent of the solve's inputs and computable even when
+        # the only caller is a gradient (whose y0/params are tracers).
+        # ``ensure_compile_time_eval`` keeps the concrete probe from being staged
+        # into the enclosing gradient computation.
+        with jax.ensure_compile_time_eval():
+            y0 = self.initial_state()
+            params = self.default_parameters()
             t0f = float(t0)
             rmap = self._maybe_recycle_map(
                 jnp.asarray(t0f), self._split_state(y0), params)
@@ -3484,17 +3500,16 @@ class Plant:
                 return rhs_aug(0.0, ya, params)
 
             # The backward feeds J directly into ``I - dt.gamma.J^T`` and the
-            # transposed solve, so a missed coupling does not cost steps (as it
-            # does for the self-correcting forward chord) -- it **silently
-            # corrupts the gradient**, undetected mid-transient by the start-state
-            # guard. So the pattern must be a *complete* structural superset, not
-            # a start-state-only or sampled one. Use the per-component structural
-            # pattern (each unit's equation-derived ``coupling_pattern()``,
-            # assembled by :meth:`_structural_plant_pattern`) for the plant
-            # ``df/dy`` block, embedded in the augmented ``[y; tau]`` layout's
-            # top-left block; the augmented probe inside ``build_colored_root_finder``
-            # supplies the (always-on, non-stale) ``tau`` time-dependence column.
-            n = y0.shape[0]
+            # transposed solve, so a missed coupling **silently corrupts the
+            # gradient**. So the pattern must be a *complete* structural superset.
+            # Use the per-component structural pattern (each unit's equation-derived
+            # ``coupling_pattern()``, assembled by :meth:`_structural_plant_pattern`)
+            # for the plant ``df/dy`` block, embedded in the augmented ``[y; tau]``
+            # layout's top-left block; the probe at the default state supplies the
+            # recycle block structure (connectivity-based, so any representative
+            # state reveals it -- which is why the default state serves as well as
+            # the real y0).
+            n = int(y0.shape[0])
             plain_probe = jacobian_sparsity_pattern(
                 lambda y: primal(jnp.asarray(t0f), y, params), y0) > 0
             structural = self._structural_plant_pattern(coupling_mask=plain_probe)
@@ -3512,72 +3527,43 @@ class Plant:
                 rhs_aug_y, y0_aug, rf,
                 context="colored_jacobian (stable_adjoint)")
 
-            def builder(f, y):
-                return materialize_colored_jacobian(rf, f, y)
+        # ``builder`` is applied later in the backward to the real (traced) f/y;
+        # it closes over the concrete ``rf`` (seed/coloring/pattern) built above.
+        def builder(f, y):
+            return materialize_colored_jacobian(rf, f, y)
 
-            ratio = None
-            if ok and mode == "auto":
-                ratio = self._colored_build_speedup(rhs_aug_y, y0_aug, builder)
-            # ``rf`` (the ColoredVeryChord for the autonomized forward RHS) is
-            # cached too: its seed/coloring/pattern drive the backward ``builder``,
-            # and the object itself is reused as the *forward* solve's root finder
-            # so the adjoint's forward pass colors its per-step Jacobian as well.
-            self._colored_adjoint_builder = (
-                builder if ok else None, n_colors, ok, ratio, rf if ok else None)
-
+        # ``rf`` is cached too: it is reused as the *forward* solve's root finder
+        # so the adjoint's forward pass can color its per-step Jacobian as well.
+        self._colored_adjoint_builder = (
+            builder if ok else None, n_colors, ok, n, rf if ok else None)
         return self._colored_adjoint_builder[0]
 
-    @staticmethod
-    def _colored_build_speedup(rhs_aug_y, y0_aug, builder):
-        """Measured jitted-build speedup ``t_dense / t_colored`` of the colored
-        ``df/dy`` build vs dense ``jacfwd``, at the start state.
-
-        This *is* the backward GO/NO-GO: the backward rebuilds ``df/dy`` ~79x per
-        step, so the sign of (dense - colored) build time is the sign of the
-        backward speedup. The decision must use **jitted** times (eager timing is
-        misleading -- XLA fuses the colored build's scatter away). Compiled once
-        here; the few-second compile is one-time and cached, negligible against a
-        calibration.
-        """
-        import time
-
-        dense = jax.jit(lambda y: jax.jacfwd(rhs_aug_y)(y))
-        colored = jax.jit(lambda y: builder(rhs_aug_y, y))
-        dense(y0_aug).block_until_ready()      # compile
-        colored(y0_aug).block_until_ready()
-
-        def _best(fn):
-            best = float("inf")
-            for _ in range(20):
-                t0 = time.perf_counter()
-                jax.block_until_ready(fn(y0_aug))
-                best = min(best, time.perf_counter() - t0)
-            return best
-
-        return _best(dense) / max(_best(colored), 1e-12)
-
-    # Backward colored Jacobian is auto-enabled when its measured build speedup
-    # clears this margin (colored build at least this much cheaper than dense).
-    _COLORED_BACKWARD_MARGIN = 1.05
+    # Backward colored Jacobian is auto-enabled when the plant has at least this
+    # many states. The win is set by absolute plant size, not sparsity: a small
+    # plant pays more in per-build overhead than it saves (BSM1, 65 states:
+    # colored is ~2x slower per build despite 4.7x fewer colors), while a large
+    # one benefits (BSM2, 167 states). The threshold sits between them. The colored
+    # backward is exact (== dense), so a mis-set gate only ever costs a little
+    # speed, never correctness -- which is what lets a deterministic size gate
+    # replace the old (concrete-solve-dependent) build-time benchmark.
+    _COLORED_BACKWARD_MIN_STATES = 100
 
     def colored_jacobian_decision(self):
-        """Report the auto colored-backward-Jacobian decision (after a concrete
-        ``gradient="stable_adjoint"`` solve), or ``None`` if not yet decided.
+        """Report the auto colored-backward-Jacobian decision:
+        ``("colored" | "dense", n_states)``, or ``None`` before the state layout
+        can be built.
 
-        Returns ``("colored" | "dense", detail)`` where ``detail`` is the measured
-        build speedup ``t_dense/t_colored`` (``mode="auto"``), the string
-        ``"forced"`` (``colored_jacobian=True``), or ``"guard failed"``.
+        Deterministic from the plant size (:attr:`_COLORED_BACKWARD_MIN_STATES`):
+        the colored backward is auto-enabled iff the plant has at least that many
+        states. (With ``colored_jacobian=True``/``False`` the choice is forced and
+        this size gate does not apply.)
         """
-        cab = self._colored_adjoint_builder
-        if cab is None:
+        try:
+            n = int(self.initial_state().shape[0])
+        except Exception:
             return None
-        _builder, _nc, ok, ratio, _rf = cab
-        if not ok:
-            return ("dense", "guard failed")
-        if ratio is None:
-            return ("colored", "forced")
-        choice = "colored" if ratio > self._COLORED_BACKWARD_MARGIN else "dense"
-        return (choice, ratio)
+        choice = "colored" if n >= self._COLORED_BACKWARD_MIN_STATES else "dense"
+        return (choice, n)
 
     def _colored_steady_jacobian_builder(self, rhs, y0, theta, *, tol):
         """Derive (once, concretely) a colored-AD materializer for the PTC steady
@@ -4098,18 +4084,13 @@ class Plant:
         *,
         rtol: float = 1e-6,
         atol: Union[float, jnp.ndarray, None] = None,
-        adjoint: Optional[diffrax.AbstractAdjoint] = None,
-        dtmax: Optional[float] = None,
-        max_steps: int = 100_000,
         y0: Optional[jnp.ndarray] = None,
-        gradient: str = "auto",
+        integrator: IntegratorConfig = IntegratorConfig(),
+        diff: DifferentiationConfig = DifferentiationConfig(),
+        time_unit: Optional[str] = None,
         event: Optional[diffrax.Event] = None,
         events: Optional[Sequence["Event"]] = None,
-        time_unit: Optional[str] = None,
         progress_meter: Optional["diffrax.AbstractProgressMeter"] = None,
-        solver: Optional["diffrax.AbstractSolver"] = None,
-        factormax: Optional[float] = None,
-        colored_jacobian: Union[bool, str] = "auto",
         forward_fast: bool = False,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
@@ -4123,129 +4104,116 @@ class Plant:
             Save times. If ``None`` only the endpoint is saved.
         params : jnp.ndarray, optional
             Flat plant parameter vector. Defaults to :meth:`default_parameters`.
-        rtol, atol : solver tolerances.
-        adjoint : diffrax adjoint strategy.
-        dtmax : float, optional
-            Maximum integrator step (threaded into the PIDController). Default
-            ``None`` (uncapped) is fastest for forward solves. Set it for a
-            stiff plant when *differentiating* through the solve: the
-            reverse-mode adjoint of stiff biofilm reactions returns non-finite
-            values uncapped, and capping ``dtmax`` to a small multiple of the
-            fastest reaction timescale restores finite gradients (same as the
-            reactor ``dtmax``; see the stiff-network discussion in CLAUDE.md).
-        max_steps : int, optional
-            Maximum number of internal solver steps (default 100000). Increase
-            it for stiff, long-horizon plants -- notably BSM1 with the Takács
-            clarifier, whose 10-layer settling dynamics need a larger budget than
-            the stateless ``IdealClarifier``. Under ``gradient="stable_adjoint"``
-            it also bounds the saved-trajectory buffer the backward scan walks, so
-            it must exceed the forward step count.
-        solver : diffrax.AbstractSolver, optional
-            Override the default ``Kvaerno5`` integrator with any diffrax solver
-            (``None`` keeps ``Kvaerno5``). A lower-order ESDIRK such as
-            ``diffrax.Kvaerno3`` does less implicit linear algebra per step (4
-            stages vs 7), which can be faster on a large stiff plant whose
-            per-step cost is dominated by the Jacobian factorisation -- it takes
-            somewhat more, but cheaper, steps. Applies to the forward
-            ``jax_adjoint`` path only; passing it together with
-            ``gradient="stable_adjoint"`` or ``events=`` (which manage their own
-            integrator) is an error. The compiled solve is cached per solver
-            *class*, so a custom-configured instance of a class also used with its
-            defaults should be passed consistently.
-
-            By default the forward solve uses a **decoupled root finder** (the
-            stage-Newton tolerance loosened 10x from the step tolerance), which
-            makes each step cheaper at preserved accuracy (~15-20% on dynamic
-            BSM2). Passing a ``solver`` opts out of that default (its own root
-            finder is used), so to keep the decoupling with a different order
-            pass it explicitly, e.g.
-            ``diffrax.Kvaerno3(root_finder=diffrax.VeryChord(rtol=10*rtol, atol=10*atol))``.
-        factormax : float, optional
-            Cap on the ``PIDController`` per-step growth factor (diffrax default
-            10). A smaller cap (e.g. 3) damps the overshoot-then-reject step
-            oscillation that inflates the rejection rate on a stiff, forced plant.
-            Combined with ``solver=diffrax.Kvaerno3(...)`` and the decoupled root
-            finder it gives the largest measured speedup (~40% on dynamic BSM2).
-            Forward ``jax_adjoint`` path only. ``None`` keeps the diffrax default.
-        colored_jacobian : {"auto", True, False}, optional
-            Materialise the per-step implicit Jacobian by sparse column
-            compression (colored forward AD) instead of densely. The flowsheet
-            Jacobian is sparse (dense per-unit kinetic blocks + sparse inter-unit
-            coupling), so it forms in ``C`` Jacobian-vector products (the color
-            count, set by the widest dense block -- ~45 for BSM2) instead of
-            ``n``. The reconstructed matrix equals the dense Jacobian, so the
-            trajectory and gradient are numerically unchanged (to integration
-            tolerance); only the cost of forming ``J`` drops. It applies to
-            **both** the forward ``jax_adjoint`` solve (where ``J`` is built once
-            per step) and the ``gradient="stable_adjoint"`` reverse adjoint (where
-            ``J`` is rebuilt ~80x per step, so it dominates -- ~1.95x on the BSM2
-            reverse gradient). Built and **guarded against the dense Jacobian once
-            per plant** at the start state, falling back to dense (with a warning)
-            on any mismatch; a first solve under reverse-mode tracing also falls
-            back (the pattern needs concrete arrays -- run one concrete solve
-            first, then differentiate). Composes with ``solver=``/``factormax=``
-            and the cached recycle map.
-
-            **Three settings:** ``"auto"`` (default) governs the
-            ``gradient="stable_adjoint"`` **backward** decision: on a concrete
-            solve it **measures** whether the colored ``df/dy`` build is actually
-            cheaper than dense (it can be slower on a small plant) and enables it
-            only when it pays -- so a large plant (BSM2) gets the ~1.95x reverse
-            speedup and a small one (BSM1) stays dense. The measured decision is
-            reported by :meth:`colored_jacobian_decision`. ``"auto"`` leaves the
-            **forward** solve dense (forward coloring swaps the implicit linear
-            solver, so enabling it everywhere needs separate validation). ``True``
-            forces coloring on **both** the forward solve and the reverse backward
-            (skipping the measurement); ``False`` disables it entirely.
-        gradient : {"auto", "jax_adjoint", "stable_adjoint"}, optional
-            How a reverse-mode gradient through the solve is formed.
-            ``"auto"`` (default) routes a plain forward solve to the fast,
-            cached ``jax_adjoint`` path and a solve that is being reverse-mode
-            differentiated (``params``/``y0`` are JAX tracers, e.g. under
-            ``jax.grad``) to the cap-free ``stable_adjoint``, so a stiff plant
-            gradient is finite by default with no ``dtmax`` to tune. Passing
-            ``event=``, ``adjoint=``, or ``dtmax=`` (all ``jax_adjoint``-only
-            knobs) pins ``jax_adjoint``. A ``jax.jit``-wrapped *forward* solve
-            also looks traced, so ``"auto"`` routes it to ``stable_adjoint``
-            (correct, but uncached) -- pass ``gradient="jax_adjoint"`` to force
-            the cached path there.
-            ``"jax_adjoint"`` lets JAX/Diffrax differentiate the whole
-            solve via the ``adjoint`` strategy; for a stiff plant this needs the
-            ``dtmax`` cap to stay finite. ``"stable_adjoint"`` instead forms the
-            gradient with a hand-written discrete adjoint
-            (:func:`~aquakin.esdirk_adjoint_solve`): the forward is a robust
-            adaptive ESDIRK solve and the reverse is a per-step transposed solve
-            over the saved trajectory, finite at any step size with no ``dtmax``
-            cap. It is reverse-mode only and is exact through a transient solve:
-            the explicit time dependence of the plant RHS (a time-varying
-            influent) is carried in the state so the discrete adjoint captures it
-            exactly. It manages its own adjoint and step control, so passing
-            ``adjoint`` or ``dtmax`` alongside it is an error.
+        rtol, atol : float or array, optional
+            Solver tolerances. ``atol=None`` auto-scales a per-component noise
+            floor off the operating magnitudes.
+        y0 : jnp.ndarray, optional
+            Warm-start initial state (e.g. a previously-computed steady state),
+            shape ``(total_state_size,)``. Defaults to the per-unit initial states.
+        integrator : IntegratorConfig, optional
+            Integrator / step configuration. ``order`` selects Kvaerno3 (default,
+            fast) or Kvaerno5; ``factormax`` caps the PID step-growth (default 3);
+            ``dtmax`` caps the step (set it only for a reverse gradient *through*
+            the solve, ``diff.method='through_solve'``); ``max_steps`` is the step
+            budget; ``solver`` is an explicit override (honoured verbatim);
+            ``colored_jacobian`` ({"auto", True, False}) selects sparse colored-AD
+            materialisation of the per-step Jacobian. ``"auto"`` (default) governs
+            the ``mode='reverse', method='stable'`` backward decision -- it measures
+            whether the colored ``df/dy`` build pays and enables it only then (a
+            large plant like BSM2 yes, a small one like BSM1 no), and leaves the
+            forward solve dense; ``True`` forces coloring on both paths; ``False``
+            disables it. Reported by :meth:`colored_jacobian_decision`.
+        diff : DifferentiationConfig, optional
+            How a gradient / sensitivity flows through the solve.
+            ``mode='reverse', method='stable'`` (the default) routes a plain
+            concrete forward solve to the fast cached path and a reverse-mode
+            differentiated solve to the cap-free hand-written discrete adjoint
+            (:func:`~aquakin.esdirk_adjoint_solve`) -- finite for a stiff plant
+            with no ``dtmax`` to tune. ``mode='reverse', method='through_solve'``
+            differentiates *through* the diffrax solve (``RecursiveCheckpointAdjoint``;
+            needs a ``dtmax`` cap for a stiff plant). ``mode='forward',
+            method='through_solve'`` builds a forward-capable adjoint so
+            ``jax.jvp`` / ``jacfwd`` flow through the solve. ``mode='forward',
+            method='stable'`` is the augmented variational solve -- not supported
+            here; call :meth:`solve_sensitivity` / :meth:`dynamic_sensitivity`.
+            ``check_finite`` raises on a non-finite gradient; ``adjoint_max_steps``
+            bounds the discrete-adjoint backward-scan buffer (it must exceed the
+            forward step count). Passing ``event=`` pins the forward
+            ``jax_adjoint`` path.
+        time_unit : str, optional
+            The unit ``t_span`` / ``t_eval`` are in (``"s"``/``"min"``/``"h"``/
+            ``"d"``). Default ``None`` uses the plant's native time unit. When
+            given, the input times are converted to the native unit for the solve
+            and ``solution.t`` is reported back in ``time_unit``.
+        event : diffrax.Event, optional
+            The low-level single terminating event (used internally by
+            :meth:`run_to_steady_state`); pins the forward ``jax_adjoint`` path.
         events : sequence of Event, optional
             Located plant-wide discontinuities (on/off pumps, SBR phase switches,
-            dosing on/off, tank-level limits). Each :class:`~aquakin.Event` fires
-            at a known time (``at_times=``) or when the flat plant state crosses a
-            ``cond_fn`` zero, and may reset the state (``apply=``) or terminate
-            the solve. The monolithic solve is split into segments at the firings
-            and ``solution.events_log`` records them. Time-only events keep
-            ``jax.grad`` finite (the segment boundaries are static); a state event
-            makes the run a forward simulation. Distinct from the low-level
-            ``event=`` (a single diffrax terminating event used internally for
-            steady-state detection): pass ``events=`` for the user-facing API.
-            Mutually exclusive with ``event=`` and ``gradient="stable_adjoint"``.
-        time_unit : str, optional
-            The time unit ``t_span`` / ``t_eval`` are in (``"s"``/``"min"``/
-            ``"h"``/``"d"``). Default ``None`` uses the plant's native time unit
-            (``plant.time_unit`` -- the unit shared by its networks' rate
-            constants). When given, the input times are converted to the native
-            unit for the solve and ``solution.t`` is reported back in
-            ``time_unit``. Raises if the plant's networks disagree on (or do not
-            declare) a time unit (``plant.time_unit is None``).
+            dosing on/off, tank-level limits). The monolithic solve is split into
+            segments at the firings and ``solution.events_log`` records them.
+            Time-only events keep ``jax.grad`` finite; a state event makes the run
+            a forward simulation. Mutually exclusive with ``event=`` and with
+            ``diff=DifferentiationConfig(method='stable')`` reverse differentiation.
+        progress_meter : diffrax.AbstractProgressMeter, optional
+            A diffrax progress meter for a long forward solve.
+        forward_fast : bool, optional
+            Use the lean non-AD forward integrator (no diffrax adjoint machinery):
+            a much faster compile + run for a one-off forward solve, but the result
+            is NOT differentiable and it needs concrete ``params``/``y0``.
 
         Returns
         -------
         PlantSolution
         """
+        # Resolve the public config objects into the internal primitive locals the
+        # rest of this method (and the build helpers) operate on. IntegratorConfig
+        # carries the step machinery; DifferentiationConfig carries the AD mode.
+        solver = integrator.solver
+        factormax = integrator.factormax
+        colored_jacobian = integrator.colored_jacobian
+        dtmax = integrator.dtmax
+        max_steps = int(integrator.max_steps)
+        order = int(integrator.order)
+        # DifferentiationConfig -> the legacy gradient / adjoint routing.
+        # reverse + stable    -> "auto"        (concrete fwd -> cached; diff -> discrete adjoint)
+        # reverse + through   -> "jax_adjoint" (differentiate through the diffrax solve)
+        # forward + through   -> adjoint=forward_adjoint() (jvp/jacfwd through the solve)
+        # forward + stable    -> the augmented [y; S] variational solve (use solve_sensitivity)
+        if diff.mode not in ("reverse", "forward"):
+            raise ValueError(
+                f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
+        if diff.method not in ("stable", "through_solve"):
+            raise ValueError(
+                f"diff.method must be 'stable' or 'through_solve'; "
+                f"got {diff.method!r}.")
+        adjoint = None
+        if diff.mode == "reverse":
+            gradient = "auto" if diff.method == "stable" else "jax_adjoint"
+        else:  # forward
+            if diff.method == "stable":
+                raise ValueError(
+                    "diff=DifferentiationConfig(mode='forward', method='stable') is "
+                    "the augmented variational solve; call plant.solve_sensitivity "
+                    "(or plant.dynamic_sensitivity) for it, not plant.solve.")
+            # forward + through_solve: jvp/jacfwd through the diffrax solve.
+            gradient = "jax_adjoint"
+            adjoint = forward_adjoint()
+        adjoint_max_steps = int(diff.adjoint_max_steps)
+
+        # The reverse stable method forms its own cap-free discrete adjoint and
+        # controls its own steps, so an explicit dtmax cap alongside it is a usage
+        # error (dtmax is meaningful only when differentiating *through* the diffrax
+        # solve, i.e. method='through_solve'). Catch it here, before the "auto"
+        # routing below would otherwise silently treat dtmax as a request to pin
+        # the jax_adjoint path.
+        if diff.mode == "reverse" and diff.method == "stable" and dtmax is not None:
+            raise ValueError(
+                "diff=DifferentiationConfig(method='stable') forms its own discrete "
+                "adjoint and controls its own steps; do not also pass "
+                "integrator=IntegratorConfig(dtmax=...) (the stable method is "
+                "cap-free). Use method='through_solve' if you need the dtmax cap.")
+
         if gradient not in ("auto", "jax_adjoint", "stable_adjoint"):
             raise ValueError(
                 "gradient must be 'auto', 'jax_adjoint' or 'stable_adjoint'; "
@@ -4314,16 +4282,19 @@ class Plant:
                     "pass either events= (the user-facing located-event API) or "
                     "the low-level event= (a single diffrax terminating event), "
                     "not both.")
-            if gradient == "stable_adjoint":
+            # The located-event solve runs a segmented solve through the diffrax
+            # path (with the resolved adjoint), so the cap-free reverse *stable*
+            # discrete adjoint -- which has no segmented form -- cannot back it.
+            # ``method="stable"`` is the default and routes a concrete events solve
+            # to the segmented jax_adjoint path fine; only an explicit request to
+            # differentiate the events solve via the stable discrete adjoint is the
+            # error, which the runtime trace below reports. Here we reject the two
+            # integrator opt-ins the segmented solve cannot honour.
+            if integrator.solver is not None or integrator.colored_jacobian is True:
                 raise ValueError(
-                    "events= runs a segmented solve and is not supported on the "
-                    "gradient='stable_adjoint' path; use the default 'auto'/"
-                    "'jax_adjoint' (time-only events keep jax.grad finite).")
-            if solver is not None or factormax is not None or colored_jacobian is True:
-                raise ValueError(
-                    "solver=/factormax=/colored_jacobian= are not supported with "
-                    "events=; the located-event solve manages its own integrator. "
-                    "Drop them.")
+                    "integrator.solver / colored_jacobian=True are not supported "
+                    "with events=; the located-event solve manages its own "
+                    "integrator. Drop them.")
 
         # forward_fast is the lean non-AD forward integrator: no diffrax adjoint /
         # optimistix / lineax machinery, so the result is NOT differentiable and it
@@ -4391,7 +4362,8 @@ class Plant:
                 t0, t1, t_eval, params, y0, events,
                 rtol=rtol, atol=atol_eff, dtmax=dtmax, adjoint=adjoint,
                 max_steps=max_steps, time_factor=_time_factor,
-                time_unit=time_unit)
+                time_unit=time_unit,
+                order=order, factormax=factormax, solver=solver)
 
         if gradient == "auto":
             # A concrete forward solve takes the fast cached jax_adjoint path; a
@@ -4434,26 +4406,23 @@ class Plant:
             # only when the measured build speedup clears the margin (so it is on
             # for a large block-sparse plant like BSM2 and off for a small one like
             # BSM1, where the colored build is slower), False never colors.
-            under_trace = (isinstance(params, jax.core.Tracer)
-                           or isinstance(y0, jax.core.Tracer))
-            # Derive (and, for "auto", benchmark) the colored backward builder on
-            # this concrete solve so a subsequent gradient can reuse it -- the
-            # builder is built only here (concretely), never under the gradient's
-            # own trace, which is why the auto benchmark cannot be deferred to the
-            # backward. The "auto" timing is a one-time per-plant cost in service
-            # of differentiation; a solve that is only ever run forward should use
-            # the default gradient="auto" (it routes forward-only solves to the
-            # fast jax_adjoint path and never reaches this stable_adjoint branch).
-            if (colored_jacobian is not False and not under_trace
-                    and self._colored_adjoint_builder is None):
-                self._colored_adjoint_jacobian_builder(
-                    t0, y0, params, rtol, atol_eff, mode=colored_jacobian)
+            # The colored backward Jacobian is enabled deterministically by plant
+            # SIZE (the reliable signal -- see _COLORED_BACKWARD_MIN_STATES), not a
+            # build-time benchmark, so no concrete probe solve is needed: the
+            # builder is derived from the plant's default operating point and so
+            # builds even here under the gradient's own trace. ``True`` forces it on
+            # (any size), ``"auto"`` enables it past the size gate, ``False`` never
+            # colors.
+            n_states = int(y0.shape[0])
+            want_colored = (
+                colored_jacobian is True
+                or (colored_jacobian == "auto"
+                    and n_states >= self._COLORED_BACKWARD_MIN_STATES))
+            if want_colored and self._colored_adjoint_builder is None:
+                self._colored_adjoint_jacobian_builder(t0, rtol, atol_eff)
             cab = self._colored_adjoint_builder
             use_colored = bool(
-                cab is not None and cab[2]                       # built + guard ok
-                and (colored_jacobian is True                    # forced on
-                     or (colored_jacobian == "auto" and cab[3] is not None
-                         and cab[3] > self._COLORED_BACKWARD_MARGIN)))  # auto: pays
+                want_colored and cab is not None and cab[2])  # built + guard ok
             jac_builder = cab[0] if use_colored else None
             # The infrastructure to also color the *forward* solve's per-step
             # implicit Jacobian is in place (``cab[4]`` is the ColoredVeryChord for
@@ -4482,27 +4451,33 @@ class Plant:
             # is traced directly into the outer computation -- routing it through
             # an inner ``jax.jit`` does not compose with an outer reverse-mode
             # pass -- which is the path the calibration gradient takes anyway.
-            settings = concrete_settings_key(rtol, atol_eff, None, None, max_steps)
+            # The discrete-adjoint backward scan walks a saved trajectory whose
+            # length is adjoint_max_steps (DifferentiationConfig.adjoint_max_steps);
+            # the forward solve must also fit in that buffer, so this single budget
+            # serves both roles here.
+            adj_steps = adjoint_max_steps
+            settings = concrete_settings_key(rtol, atol_eff, None, None, adj_steps)
             teval_key, teval_concrete = _concrete_teval_key(t_eval)
             under_trace = (isinstance(params, jax.core.Tracer)
                            or isinstance(y0, jax.core.Tracer))
             # The forward ESDIRK solver (e.g. the cheaper Kvaerno3) and factormax
             # change the compiled solve, so they key the cache -- the solver by
-            # class, exactly as the forward jax_adjoint path does.
+            # class, exactly as the forward jax_adjoint path does. The ESDIRK
+            # ``order`` (3 vs 5) also changes the compiled solve, so it is keyed.
             solver_key = type(solver).__name__ if solver is not None else None
             cache_key = (None if (settings is None or not teval_concrete
                                   or under_trace)
                          else ("stable_adjoint", t0, t1, teval_key, settings,
-                               use_colored, solver_key, factormax))
-            with friendly_solve_errors(max_steps, what="plant solve"):
+                               use_colored, solver_key, factormax, order))
+            with friendly_solve_errors(adj_steps, what="plant solve"):
                 if cache_key is not None:
                     jitted = self._jit_cache.get(cache_key)
                     if jitted is None:
                         jitted = self._build_jitted_stable_adjoint_solve(
                             t0, t1, t_eval,
-                            rtol=rtol, atol=atol_eff, max_steps=max_steps,
+                            rtol=rtol, atol=atol_eff, max_steps=adj_steps,
                             forward_root_finder=fwd_root_finder,
-                            solver=solver, factormax=factormax,
+                            solver=solver, factormax=factormax, order=order,
                         )
                         self._jit_cache[cache_key] = jitted
                     ys = jitted(y0, params)
@@ -4514,10 +4489,10 @@ class Plant:
                     # finder when requested.
                     ys = self._esdirk_stable_adjoint(
                         y0, params, t0, t1, t_eval,
-                        rtol=rtol, atol=atol_eff, max_steps=max_steps,
+                        rtol=rtol, atol=atol_eff, max_steps=adj_steps,
                         jacobian_builder=jac_builder,
                         forward_root_finder=fwd_root_finder,
-                        solver=solver, factormax=factormax)
+                        solver=solver, factormax=factormax, order=order)
             if t_eval is None:
                 ts = jnp.asarray([t1])
                 ys = ys[None, :]
@@ -4606,14 +4581,14 @@ class Plant:
         cache_key = (None if (settings is None or event is not None
                               or progress_meter is not None)
                      else (sig, settings, solver_key, factormax, recycle_key,
-                           colored_active))
+                           colored_active, order))
         jitted = self._jit_cache.get(cache_key) if cache_key is not None else None
         if jitted is None:
             jitted = self._build_jitted_solve(
                 t0, t1, t_eval is not None, event=event,
                 rtol=rtol, atol=atol_eff, adjoint=adjoint, dtmax=dtmax,
                 max_steps=max_steps, progress_meter=progress_meter, solver=solver,
-                factormax=factormax,
+                factormax=factormax, order=order,
             )
             if cache_key is not None:
                 self._jit_cache[cache_key] = jitted
@@ -4632,7 +4607,7 @@ class Plant:
 
     def _solve_with_events(self, t0, t1, t_eval, params, y0, events, *,
                            rtol, atol, dtmax, adjoint, max_steps, time_factor,
-                           time_unit):
+                           time_unit, order=5, factormax=None, solver=None):
         """Run the monolithic plant solve with located events (the ``events=``
         path).
 
@@ -4663,6 +4638,7 @@ class Plant:
                 rhs, y0, params, t0=t0, t1=t1, t_eval=t_eval, events=events,
                 rtol=rtol, atol=atol, dtmax=dtmax, adjoint=adjoint,
                 max_steps=max_steps,
+                order=order, factormax=factormax, solver=solver,
             )
         ts = res.ts / time_factor if time_factor != 1.0 else res.ts
         sol = PlantSolution(t=ts, state=res.ys, plant=self, events_log=res.log)
@@ -4672,7 +4648,7 @@ class Plant:
 
     def _build_jitted_solve(
         self, t0, t1, has_t_eval, *, event, rtol, atol, adjoint, dtmax, max_steps,
-        progress_meter=None, solver=None, factormax=None,
+        progress_meter=None, solver=None, factormax=None, order=5,
     ):
         """Build the jit-compiled forward solve for one call signature.
 
@@ -4705,7 +4681,7 @@ class Plant:
         kw = dict(t0=t0, t1=t1, rtol=rtol, atol=atol, adjoint=adjoint,
                   dtmax=dtmax, max_steps=max_steps, event=event,
                   progress_meter=progress_meter, solver=solver,
-                  factormax=factormax)
+                  factormax=factormax, order=order)
 
         if has_t_eval:
             @jax.jit
@@ -4764,7 +4740,7 @@ class Plant:
 
     def _build_jitted_stable_adjoint_solve(
         self, t0, t1, t_eval, *, rtol, atol, max_steps, forward_root_finder=None,
-        solver=None, factormax=None,
+        solver=None, factormax=None, order=5,
     ):
         """Build the jit-compiled cap-free stable-adjoint solve for one signature.
 
@@ -4784,13 +4760,13 @@ class Plant:
                 y0, params, t0, t1, t_eval,
                 rtol=rtol, atol=atol, max_steps=max_steps,
                 forward_root_finder=forward_root_finder,
-                solver=solver, factormax=factormax)
+                solver=solver, factormax=factormax, order=order)
         return _solve
 
     def _esdirk_stable_adjoint(self, y0, params, t0, t1, t_eval, *,
                                rtol, atol, max_steps, jacobian_builder=None,
                                forward_root_finder=None, solver=None,
-                               factormax=None):
+                               factormax=None, order=5):
         """Cap-free reverse-mode plant solve with the cached recycle map hoisted
         out of the backward pass.
 
@@ -4833,7 +4809,7 @@ class Plant:
 
         return esdirk_adjoint_solve(
             rhs, y0, params, (t0, t1), t_eval,
-            solver=solver, factormax=factormax,
+            solver=solver, order=order, factormax=factormax,
             rtol=rtol, atol=atol, max_steps=max_steps,
             time_dependent=True, primal_rhs=primal_rhs,
             jacobian_builder=jacobian_builder,
@@ -4913,7 +4889,8 @@ class Plant:
         event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
         sol = self.solve(
             t_span=(0.0, float(max_time)), params=params, y0=y0,
-            rtol=rtol, atol=atol, max_steps=max_steps, event=event,
+            rtol=rtol, atol=atol, event=event,
+            integrator=IntegratorConfig(max_steps=max_steps),
         )
         t_final = float(sol.t[-1])
         converged = bool(t_final < float(max_time))
@@ -5931,9 +5908,10 @@ class Plant:
         dynamic plant, and forward mode needs a non-``custom_vjp`` adjoint.
         """
         if mode == "reverse":
-            return {"gradient": "stable_adjoint"}
+            return {"diff": DifferentiationConfig(mode="reverse", method="stable")}
         if mode == "forward":
-            return {"adjoint": diffrax.DirectAdjoint()}
+            return {"diff": DifferentiationConfig(mode="forward",
+                                                  method="through_solve")}
         raise ValueError(
             f"mode must be 'reverse', 'forward', or 'auto'; got {mode!r}.")
 
@@ -5982,11 +5960,19 @@ class Plant:
             # which some plant setup needs); the solve's compiled-solve cache reuses
             # the integrator compile across calls.
             solve_adj = self._dynamic_adjoint_kwargs("reverse")
+            # solve_kwargs may carry the legacy integrator primitives (max_steps /
+            # dtmax / factormax); fold them into an IntegratorConfig for Plant.solve,
+            # leaving the plain solve tolerances (rtol/atol) and any other kwargs.
+            sk = dict(solve_kwargs)
+            int_kw = {k: sk.pop(k) for k in ("max_steps", "dtmax", "factormax")
+                      if k in sk}
+            if int_kw:
+                solve_adj = {**solve_adj, "integrator": IntegratorConfig(**int_kw)}
 
             def f(th):
                 p = params.at[wrt_j].set(th)
                 sol = self.solve(t_span, t_eval=t_eval, params=p, y0=y0,
-                                 **solve_adj, **solve_kwargs)
+                                 **solve_adj, **sk)
                 return jnp.atleast_1d(output_fn(sol))
 
             return _dynamic_value_and_jacobian(f, theta, "reverse")

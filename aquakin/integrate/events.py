@@ -122,20 +122,23 @@ class EventedResult:
     log: list = field(default_factory=list)
 
 
-def _make_segment_solver(rhs, *, rtol, atol, max_steps, dtmax, adjoint):
+def _make_segment_solver(rhs, *, rtol, atol, max_steps, dtmax, adjoint,
+                         order=5, factormax=None, solver=None):
     """Build a one-segment solver for the event driver.
 
     Delegates to the canonical :func:`_run_diffeqsolve` -- the **same**
-    Kvaerno5 + ``PIDController`` + adjoint setup the plain reactor/plant solves
-    use -- adding only the per-segment ``saveat`` and terminating ``event``. So
-    the event path's per-step integration is the plain path's, and the solver
-    defaults cannot drift between them.
+    integrator (``build_implicit_solver`` + ``PIDController`` + adjoint) the
+    plain reactor/plant solves use, with the caller's ``order`` / ``factormax``
+    / ``solver`` threaded through -- adding only the per-segment ``saveat`` and
+    terminating ``event``. So the event path's per-step integration matches the
+    plain path's exactly, and the integrator config cannot drift between them.
     """
     def solve_segment(y0, t0, t1, args, saveat, event):
         return _run_diffeqsolve(
             rhs, t0=t0, t1=t1, y0=y0, args=args, saveat=saveat,
             rtol=rtol, atol=atol, adjoint=adjoint, max_steps=max_steps,
             dtmax=dtmax, event=event,
+            order=order, factormax=factormax, solver=solver,
         )
 
     return solve_segment
@@ -166,6 +169,9 @@ def solve_with_events(
     max_steps: int = 100_000,
     dtmax: Optional[float] = None,
     adjoint: Optional[diffrax.AbstractAdjoint] = None,
+    order: int = 5,
+    factormax: Optional[float] = None,
+    solver=None,
     root_rtol: float = 1e-6,
     root_atol: float = 1e-9,
     max_segments: int = 10_000,
@@ -194,8 +200,9 @@ def solve_with_events(
         the final state.
     events : sequence of Event
         The events to locate.
-    rtol, atol, max_steps, dtmax, adjoint
-        Solver settings (as for the plain solve).
+    rtol, atol, max_steps, dtmax, adjoint, order, factormax, solver
+        Integrator settings (as for the plain solve), threaded into every
+        segment so the event path's integration matches a plain solve exactly.
     root_rtol, root_atol : float
         Tolerances of the root find that locates a state event.
     max_segments : int
@@ -220,7 +227,7 @@ def solve_with_events(
 
     solve_segment = _make_segment_solver(
         rhs, rtol=rtol, atol=atol, max_steps=max_steps, dtmax=dtmax,
-        adjoint=adjoint)
+        adjoint=adjoint, order=order, factormax=factormax, solver=solver)
 
     has_root = bool([ev for ev in events if not ev.is_time_event])
     # Wrap the segmented drive so a segment exhausting the integrator step budget

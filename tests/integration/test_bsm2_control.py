@@ -129,8 +129,10 @@ def params(asm1, adm1):
 
 @pytest.fixture(scope="module")
 def closed_sol(closed_plant, params):
-    return closed_plant.solve((0.0, _T_END), t_eval=_T_EVAL, params=params,
-                              rtol=1e-4, atol=1e-3, max_steps=200_000)
+    return closed_plant.solve(
+        (0.0, _T_END), t_eval=_T_EVAL, params=params,
+        rtol=1e-4, atol=1e-3,
+        integrator=aquakin.IntegratorConfig(max_steps=200_000))
 
 
 @pytest.fixture(scope="module")
@@ -138,8 +140,10 @@ def open_sol(asm1, adm1):
     plant = build_bsm2(asm1, adm1, do_control=False)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
-    return plant.solve((0.0, _T_END), t_eval=_T_EVAL, params=params,
-                       rtol=1e-4, atol=1e-3, max_steps=200_000)
+    return plant.solve(
+        (0.0, _T_END), t_eval=_T_EVAL, params=params,
+        rtol=1e-4, atol=1e-3,
+        integrator=aquakin.IntegratorConfig(max_steps=200_000))
 
 
 def test_closed_loop_builds_and_is_finite(closed_plant, closed_sol):

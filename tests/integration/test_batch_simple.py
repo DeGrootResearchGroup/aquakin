@@ -37,12 +37,16 @@ def test_max_steps_is_exposed_and_enforced(simple_network):
     params = simple_network.default_parameters()
     t_eval = jnp.linspace(0.0, 20.0, 21)
 
-    r_tight = aquakin.BatchReactor(simple_network, conditions, max_steps=2)
+    r_tight = aquakin.BatchReactor(
+        simple_network, conditions,
+        integrator=aquakin.IntegratorConfig(max_steps=2))
     assert r_tight.max_steps == 2
     with pytest.raises(Exception):
         r_tight.solve(C0, params=params, t_span=(0.0, 20.0), t_eval=t_eval)
 
-    r_ok = aquakin.BatchReactor(simple_network, conditions, max_steps=100_000)
+    r_ok = aquakin.BatchReactor(
+        simple_network, conditions,
+        integrator=aquakin.IntegratorConfig(max_steps=100_000))
     sol = r_ok.solve(C0, params=params, t_span=(0.0, 20.0), t_eval=t_eval)
     assert jnp.all(jnp.isfinite(sol.C))
 
@@ -223,7 +227,8 @@ def test_batch_step_ceiling_gives_friendly_error():
     runtime traceback -- the catch works through the reactor's jitted solve."""
     net = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
     cond = aquakin.SpatialConditions.uniform(T=293.15)
-    reactor = aquakin.BatchReactor(net, cond, max_steps=1)
+    reactor = aquakin.BatchReactor(
+        net, cond, integrator=aquakin.IntegratorConfig(max_steps=1))
     with pytest.raises(RuntimeError, match="step budget"):
         reactor.solve(net.concentrations(A=1.0), t_span=(0.0, 1000.0),
                       t_eval=jnp.linspace(0.0, 1000.0, 50))
@@ -259,8 +264,9 @@ def test_forward_adjoint_enables_forward_mode_through_batch(simple_network):
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_network.default_parameters()
 
-    fwd = aquakin.BatchReactor(simple_network, conditions,
-                               adjoint=aquakin.forward_adjoint())
+    fwd = aquakin.BatchReactor(
+        simple_network, conditions,
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"))
 
     def out(z):
         return fwd.solve(C0, params=p.at[0].set(z[0]), t_span=(0.0, 10.0)).C[-1, 1]

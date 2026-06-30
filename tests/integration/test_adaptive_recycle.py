@@ -142,7 +142,8 @@ def bsm2():
     y0 = bsm2_warm_start(p)
     # Prime the layouts / caches with a tiny solve.
     p.solve(t_span=(0.0, 0.02), t_eval=jnp.array([0.02]), params=params, y0=y0,
-            rtol=1e-3, atol=1e-2, max_steps=100_000)
+            rtol=1e-3, atol=1e-2,
+            integrator=aquakin.IntegratorConfig(max_steps=100_000))
     return p, params, y0
 
 
@@ -220,12 +221,16 @@ def test_bsm2_adaptive_forward_solve_matches_fixed(bsm2):
     te = jnp.linspace(0.0, 3.0, 13)
     p.recycle_tol = None
     p._jit_cache.clear()
-    s_fx = np.asarray(p.solve(t_span=(0.0, 3.0), t_eval=te, params=params, y0=y0,
-                              rtol=1e-6, atol=1e-5, max_steps=400_000).state[-1])
+    s_fx = np.asarray(p.solve(
+        t_span=(0.0, 3.0), t_eval=te, params=params, y0=y0,
+        rtol=1e-6, atol=1e-5,
+        integrator=aquakin.IntegratorConfig(max_steps=400_000)).state[-1])
     p.recycle_tol = 1e-10
     p._jit_cache.clear()
-    s_ad = np.asarray(p.solve(t_span=(0.0, 3.0), t_eval=te, params=params, y0=y0,
-                              rtol=1e-6, atol=1e-5, max_steps=400_000).state[-1])
+    s_ad = np.asarray(p.solve(
+        t_span=(0.0, 3.0), t_eval=te, params=params, y0=y0,
+        rtol=1e-6, atol=1e-5,
+        integrator=aquakin.IntegratorConfig(max_steps=400_000)).state[-1])
     p.recycle_tol = None
     p._jit_cache.clear()
     rel = float(np.max(np.abs(s_ad - s_fx)) / (np.max(np.abs(s_fx)) + 1e-9))

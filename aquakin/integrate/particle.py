@@ -20,7 +20,9 @@ import jax.numpy as jnp
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
+    DifferentiationConfig,
     GradientCheckMixin,
+    IntegratorConfig,
     _interp_fields_to_scalar,
     cached_jitted_solver,
     friendly_solve_errors,
@@ -109,16 +111,14 @@ class ParticleTrackReactor(GradientCheckMixin):
         Absolute tolerance, scalar or shape ``(n_species,)``. Defaults to
         ``None`` -> a per-component noise floor scaled off the network reference
         concentrations (see :class:`~aquakin.BatchReactor`).
-    adjoint : diffrax.AbstractAdjoint, optional
-        Adjoint strategy. Defaults to
-        :class:`diffrax.RecursiveCheckpointAdjoint` (reverse-mode); pass
-        ``diffrax.DirectAdjoint()`` for forward-mode AD through the track solve.
-        See :class:`~aquakin.BatchReactor` for the rationale.
-    dtmax : float, optional
-        Maximum integrator step; set it for reverse-mode differentiation of a
-        stiff network.
-    max_steps : int, optional
-        Maximum number of internal solver steps (default 100000).
+    integrator : IntegratorConfig, optional
+        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
+        ``dtmax``, ``max_steps``, an explicit ``solver``). See
+        :class:`~aquakin.BatchReactor`. Set ``dtmax`` for reverse-mode
+        differentiation of a stiff network.
+    diff : DifferentiationConfig, optional
+        Autodiff configuration (``mode``, ``method``). See
+        :class:`~aquakin.BatchReactor`.
     """
 
     def __init__(
@@ -129,9 +129,8 @@ class ParticleTrackReactor(GradientCheckMixin):
         n_save: int | None = None,
         rtol: float = 1e-6,
         atol=None,
-        adjoint: "diffrax.AbstractAdjoint | None" = None,
-        dtmax: float | None = None,
-        max_steps: int = 100_000,
+        integrator: IntegratorConfig = IntegratorConfig(),
+        diff: DifferentiationConfig = DifferentiationConfig(),
     ) -> None:
         missing = sorted(set(network.conditions_required) - set(track.fields))
         if missing:
@@ -139,8 +138,8 @@ class ParticleTrackReactor(GradientCheckMixin):
                 f"Track is missing required condition fields: {missing}. "
                 f"Provided: {sorted(track.fields)}"
             )
-        init_solver_settings(self, network, rtol=rtol, adjoint=adjoint,
-                             dtmax=dtmax, max_steps=max_steps)
+        init_solver_settings(self, network, rtol=rtol, integrator=integrator,
+                             diff=diff)
         self.track = track
         self.n_save = int(n_save) if n_save is not None else track.n_points
         if self.n_save < 2:
@@ -201,6 +200,9 @@ class ParticleTrackReactor(GradientCheckMixin):
         adjoint = self.adjoint
         dtmax = self.dtmax
         max_steps = self.max_steps
+        order = self.order
+        factormax = self.factormax
+        solver = self.solver
 
         @jax.jit
         def _solve(C0, params, t_grid, fields, t_save):
@@ -210,6 +212,7 @@ class ParticleTrackReactor(GradientCheckMixin):
                 saveat=diffrax.SaveAt(ts=t_save),
                 t0=t_grid[0], t1=t_grid[-1], rtol=rtol, atol=atol,
                 adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
+                order=order, factormax=factormax, solver=solver,
             )
             return sol.ts, sol.ys
 
@@ -225,9 +228,8 @@ def integrate_ensemble(
     rtol: float = 1e-6,
     atol=None,
     n_save: int | None = None,
-    adjoint: "diffrax.AbstractAdjoint | None" = None,
-    dtmax: float | None = None,
-    max_steps: int = 100_000,
+    integrator: IntegratorConfig = IntegratorConfig(),
+    diff: DifferentiationConfig = DifferentiationConfig(),
 ) -> dict[int, TrackSolution]:
     """
     Integrate the network along an ensemble of particle tracks.
@@ -242,8 +244,8 @@ def integrate_ensemble(
         ``lambda pid: network.default_concentrations()``.
     params : jnp.ndarray
         Flat parameter vector shared across all particles.
-    rtol, atol, n_save, adjoint, dtmax, max_steps : passed through to each
-        :class:`ParticleTrackReactor`. ``adjoint`` / ``dtmax`` let an ensemble
+    rtol, atol, n_save, integrator, diff : passed through to each
+        :class:`ParticleTrackReactor`. ``integrator`` / ``diff`` let an ensemble
         of stiff tracks be differentiated the same way a single track can.
 
     Returns
@@ -255,7 +257,7 @@ def integrate_ensemble(
     for pid, track in tracks.items():
         reactor = ParticleTrackReactor(
             network, track, n_save=n_save, rtol=rtol, atol=atol,
-            adjoint=adjoint, dtmax=dtmax, max_steps=max_steps,
+            integrator=integrator, diff=diff,
         )
         results[pid] = reactor.solve(C0_fn(pid), params=params)
     return results

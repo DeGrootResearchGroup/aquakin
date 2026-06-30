@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import contextlib
 import copy
-from typing import TYPE_CHECKING, Callable, Mapping, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Callable, Mapping, Optional, Protocol, runtime_checkable
 
 import diffrax
 import equinox as eqx
@@ -21,6 +22,119 @@ from aquakin.core.network import CompiledNetwork
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.conditions import SpatialConditions
+
+
+# --- Public solver / autodiff configuration objects --------------------------
+
+
+@dataclass(frozen=True)
+class IntegratorConfig:
+    """The integrator / step-size configuration for a solve.
+
+    A single frozen value object centralising the per-step solver settings that
+    used to be scattered as loose keyword arguments on ``Plant.solve`` and the
+    reactor constructors. Passed as ``integrator=IntegratorConfig(...)``; the
+    default flips the public solve stack to the fast configuration (Kvaerno3 +
+    a capped step-growth factor + an auto colored Jacobian).
+
+    ``rtol`` / ``atol`` are deliberately **not** here -- they stay separate
+    arguments of ``Plant.solve`` / the reactor constructors (a tolerance is the
+    accuracy contract, not the integrator machinery).
+
+    Parameters
+    ----------
+    order : int
+        ESDIRK order: ``3`` -> ``Kvaerno3`` (the new fast default, fewer stages),
+        ``5`` -> ``Kvaerno5`` (the robust higher-order method). Ignored when
+        ``solver`` is given.
+    factormax : float, optional
+        Cap on the PID controller's per-step growth factor (diffrax default 10).
+        A smaller cap (default 3) damps the overshoot-then-reject oscillation on a
+        stiff forced system. ``None`` keeps the diffrax default.
+    colored_jacobian : {"auto", True, False}
+        Sparse (colored-AD) materialisation of the per-step implicit Jacobian.
+        See ``Plant.solve`` for the full semantics. Plant-only -- reactors ignore
+        it.
+    dtmax : float, optional
+        Maximum integrator step size (``None`` = uncapped). Set it for a
+        reverse-mode gradient *through* a stiff solve (the ``through_solve``
+        differentiation method); the cap-free ``stable`` method does not need it.
+    max_steps : int
+        Maximum number of internal solver steps.
+    solver : diffrax.AbstractSolver, optional
+        An explicit solver object that overrides ``order`` and is honoured
+        verbatim (the one escape hatch). ``None`` builds the canonical solver of
+        ``order``.
+    """
+
+    order: int = 3
+    factormax: Optional[float] = 3.0
+    colored_jacobian: "bool | str" = "auto"
+    dtmax: Optional[float] = None
+    max_steps: int = 100_000
+    solver: "Optional[diffrax.AbstractSolver]" = None
+
+
+@dataclass(frozen=True)
+class DifferentiationConfig:
+    """How a gradient / sensitivity flows through a solve.
+
+    A single frozen value object replacing the old AD selectors (``adjoint=``,
+    ``gradient=``, ``ad_mode=``, ``check_finite=``, ``stable_adjoint_max_steps=``).
+    Passed as ``diff=DifferentiationConfig(...)``.
+
+    Parameters
+    ----------
+    mode : {"reverse", "forward"}
+        Autodiff direction. ``"reverse"`` (default) is the calibration-gradient
+        direction (``jax.grad`` / a discrete adjoint); ``"forward"`` is the
+        sensitivity-screen direction (``jax.jacfwd`` / a variational solve).
+    method : {"stable", "through_solve"}
+        How the adjoint / sensitivity is *formed* for the chosen ``mode``.
+
+        - ``mode="reverse", method="stable"`` (the default) -- a plant uses the
+          cap-free hand-written discrete adjoint (the old
+          ``gradient="stable_adjoint"`` / ``"auto"`` routing: a concrete forward
+          solve still takes the fast cached path, a differentiated solve takes the
+          discrete adjoint). A **reactor** has no stable reverse adjoint, so it
+          always uses ``RecursiveCheckpointAdjoint`` regardless of ``method``.
+        - ``mode="reverse", method="through_solve"`` -- differentiate *through*
+          the diffrax solve (``RecursiveCheckpointAdjoint``; the old
+          ``gradient="jax_adjoint"``). Needs a ``dtmax`` cap for a stiff network.
+        - ``mode="forward", method="stable"`` -- the augmented ``[y; S]``
+          variational solve (cap-free, exact). Routed through
+          ``solve_sensitivity`` / ``augmented_forward_sensitivity``.
+        - ``mode="forward", method="through_solve"`` -- ``jax.jvp`` / ``jacfwd``
+          via a forward-capable adjoint (``DirectAdjoint`` / ``ForwardMode``).
+    check_finite : bool
+        Raise a friendly error if a freshly computed gradient/Jacobian is
+        non-finite, instead of returning silent ``NaN``s.
+    adjoint_max_steps : int
+        Buffer length for the discrete-adjoint backward scan (the old
+        ``stable_adjoint_max_steps``); set it to a tight upper bound on the
+        forward step count.
+    """
+
+    mode: str = "reverse"
+    method: str = "stable"
+    check_finite: bool = True
+    adjoint_max_steps: int = 100_000
+
+
+def _resolve_reactor_adjoint(diff: "DifferentiationConfig"):
+    """Resolve the diffrax adjoint object a reactor should carry for ``diff``.
+
+    Reactors have no hand-written ("stable") reverse adjoint -- that is plant-only
+    -- so reverse mode always uses ``RecursiveCheckpointAdjoint`` (signalled here
+    by ``None``, the reactor default). ``method`` is meaningful only for reactor
+    *forward* mode: ``through_solve`` -> a forward-capable ``DirectAdjoint``;
+    ``stable`` -> the augmented ``solve_sensitivity`` backend, which is invoked
+    explicitly (not via the reactor ``adjoint``), so the reactor still carries the
+    reverse default here.
+    """
+    if diff.mode == "forward" and diff.method == "through_solve":
+        return forward_adjoint()
+    return None
 
 
 # --- AD-mode helpers (hide the diffrax adjoint plumbing) ---------------------
@@ -266,12 +380,16 @@ def atol_cache_key(atol):
     return (tuple(a.shape), tuple(float(x) for x in np.asarray(a).reshape(-1)))
 
 
-def settings_cache_key(rtol, atol, adjoint, dtmax, max_steps):
+def settings_cache_key(rtol, atol, adjoint, dtmax, max_steps,
+                       *, order=None, factormax=None, solver=None):
     """Hashable key for the solver settings that affect the compiled solve.
 
     ``adjoint`` is keyed by identity (``None`` for the default, which is shared);
     a custom adjoint object keys by ``id`` -- safe (never a false hit), and it
-    shares whenever the same object is reused.
+    shares whenever the same object is reused. ``order`` / ``factormax`` /
+    ``solver`` (the integrator-config fields that change the compiled reactor
+    solve) are keyed in when supplied -- ``solver`` by class name, matching the
+    plant path. ``None`` for any of them keeps the historic key shape.
     """
     return (
         float(rtol),
@@ -279,10 +397,14 @@ def settings_cache_key(rtol, atol, adjoint, dtmax, max_steps):
         None if adjoint is None else id(adjoint),
         None if dtmax is None else float(dtmax),
         int(max_steps),
+        None if order is None else int(order),
+        None if factormax is None else float(factormax),
+        None if solver is None else type(solver).__name__,
     )
 
 
-def concrete_settings_key(rtol, atol, adjoint, dtmax, max_steps):
+def concrete_settings_key(rtol, atol, adjoint, dtmax, max_steps,
+                          *, order=None, factormax=None, solver=None):
     """Return :func:`settings_cache_key`, or ``None`` if a value is traced.
 
     The key materialises ``atol`` to Python floats, which is impossible when
@@ -292,7 +414,8 @@ def concrete_settings_key(rtol, atol, adjoint, dtmax, max_steps):
     whole -- so return ``None`` to signal "build without caching".
     """
     try:
-        return settings_cache_key(rtol, atol, adjoint, dtmax, max_steps)
+        return settings_cache_key(rtol, atol, adjoint, dtmax, max_steps,
+                                  order=order, factormax=factormax, solver=solver)
     except jax.errors.TracerArrayConversionError:
         return None
 
@@ -324,12 +447,17 @@ def reactor_settings_key(reactor):
         except jax.errors.TracerArrayConversionError:
             return None
         reactor._atol_key = atol_key
+    solver = getattr(reactor, "solver", None)
     return (
         float(reactor.rtol),
         atol_key,
         None if reactor.adjoint is None else id(reactor.adjoint),
         None if reactor.dtmax is None else float(reactor.dtmax),
         int(reactor.max_steps),
+        None if getattr(reactor, "order", None) is None else int(reactor.order),
+        (None if getattr(reactor, "factormax", None) is None
+         else float(reactor.factormax)),
+        None if solver is None else type(solver).__name__,
     )
 
 
@@ -602,6 +730,9 @@ class Reactor(Protocol):
     adjoint: "diffrax.AbstractAdjoint | None"
     dtmax: "float | None"
     max_steps: int
+    order: int
+    factormax: "float | None"
+    solver: "diffrax.AbstractSolver | None"
 
     def solve(self, C0, params=None, *args, **kwargs):  # pragma: no cover
         ...
@@ -850,20 +981,28 @@ def resolve_state_atol(network, atol):
     )
 
 
-def init_solver_settings(reactor, network, *, rtol, adjoint, dtmax, max_steps):
+def init_solver_settings(reactor, network, *, rtol, integrator, diff):
     """Store the solver settings every reactor shares, on ``reactor``.
 
-    Sets ``network``, ``rtol``, ``adjoint``, ``dtmax`` and ``max_steps`` -- the
-    five settings common to every reactor constructor. ``atol`` is **not** set
-    here because its resolution depends on the reactor's state shape (see
+    Resolves the public :class:`IntegratorConfig` + :class:`DifferentiationConfig`
+    into the primitive attributes the cache + ``_run_diffeqsolve`` path read:
+    ``network``, ``rtol``, ``adjoint`` (the diffrax adjoint object, resolved from
+    the differentiation config), ``dtmax``, ``max_steps``, ``order``,
+    ``factormax`` and ``solver``. ``atol`` is **not** set here because its
+    resolution depends on the reactor's state shape (see
     :func:`resolve_state_atol` for the single-vector case); the caller sets
     ``reactor.atol`` itself.
     """
     reactor.network = network
     reactor.rtol = float(rtol)
-    reactor.adjoint = adjoint
-    reactor.dtmax = dtmax
-    reactor.max_steps = int(max_steps)
+    reactor.integrator = integrator
+    reactor.diff = diff
+    reactor.adjoint = _resolve_reactor_adjoint(diff)
+    reactor.dtmax = integrator.dtmax
+    reactor.max_steps = int(integrator.max_steps)
+    reactor.order = int(integrator.order)
+    reactor.factormax = integrator.factormax
+    reactor.solver = integrator.solver
 
 
 def validate_C0_params(network, C0, params):
@@ -988,8 +1127,9 @@ def _run_diffeqsolve(
     progress_meter: "diffrax.AbstractProgressMeter | None" = None,
     solver: "diffrax.AbstractSolver | None" = None,
     factormax: float | None = None,
+    order: int = 5,
 ):
-    """Wrapper around the canonical Kvaerno5 + PIDController + adjoint setup.
+    """Wrapper around the canonical Kvaerno + PIDController + adjoint setup.
 
     All reactors call this with their own ``rhs``. Adjusting the default
     solver, controller, or adjoint here changes behaviour for every reactor.
@@ -1030,7 +1170,7 @@ def _run_diffeqsolve(
     # (the decoupled-Newton default solver and the PID controller) so this forward
     # path and the discrete-adjoint forward pass cannot drift in their per-step
     # configuration. A user-supplied ``solver`` is honoured verbatim here.
-    solver = build_implicit_solver(rtol, atol, solver=solver)
+    solver = build_implicit_solver(rtol, atol, order=order, solver=solver)
     controller = build_step_controller(rtol, atol, factormax=factormax,
                                         dtmax=dtmax)
     return diffrax.diffeqsolve(
@@ -1105,6 +1245,9 @@ def solve_chemistry(
     dtmax: float | None = None,
     max_steps: int = 100_000,
     rate_scale=None,
+    order: int = 5,
+    factormax: float | None = None,
+    solver: "diffrax.AbstractSolver | None" = None,
 ):
     """The canonical chemistry sub-solve shared by every reactor.
 
@@ -1140,6 +1283,9 @@ def solve_chemistry(
         adjoint=adjoint,
         dtmax=dtmax,
         max_steps=max_steps,
+        order=order,
+        factormax=factormax,
+        solver=solver,
     )
 
 

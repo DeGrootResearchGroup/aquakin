@@ -60,7 +60,8 @@ def _prime(plant, params=None):
     """A trivial solve to build layouts + run the one-time constancy check."""
     y0 = plant.initial_state()
     plant.solve(t_span=(0.0, 0.05), t_eval=jnp.array([0.05]), params=params,
-                y0=y0, rtol=1e-4, atol=1e-3, max_steps=100_000)
+                y0=y0, rtol=1e-4, atol=1e-3,
+                integrator=aquakin.IntegratorConfig(max_steps=100_000))
     return y0
 
 
@@ -92,11 +93,13 @@ def test_cached_solve_matches_probe(asm1):
     y0 = _prime(plant)
     t_eval = jnp.linspace(0.0, 5.0, 11)
     cached = plant.solve(t_span=(0.0, 5.0), t_eval=t_eval, y0=y0,
-                         rtol=1e-6, atol=1e-8, max_steps=1_000_000)
+                         rtol=1e-6, atol=1e-8,
+                         integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
     plant._recycle_map_constant = False              # force the probe path
     plant._jit_cache.clear()
     probe = plant.solve(t_span=(0.0, 5.0), t_eval=t_eval, y0=y0,
-                        rtol=1e-6, atol=1e-8, max_steps=1_000_000)
+                        rtol=1e-6, atol=1e-8,
+                        integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
     rel = np.max(np.abs(np.asarray(cached.state) - np.asarray(probe.state))
                  / (np.abs(np.asarray(probe.state)) + 1e-6))
     assert rel < 1e-6
@@ -112,7 +115,8 @@ def test_temperature_map_constancy_by_mode(asm1):
     y0 = _prime(plant)
     assert plant._recycle_map_constant is True
     sol = plant.solve(t_span=(0.0, 3.0), t_eval=jnp.array([3.0]), y0=y0,
-                      rtol=1e-5, atol=1e-3, max_steps=1_000_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
     assert np.all(np.isfinite(np.asarray(sol.state)))
 
 
@@ -128,7 +132,8 @@ def test_no_recycle_plant_trivially_constant(asm1):
     assert plant._recycle_map_constant is True
     assert plant._recycle_T_map_constant is True
     sol = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]), y0=y0,
-                      rtol=1e-5, atol=1e-3, max_steps=100_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=100_000))
     assert np.all(np.isfinite(np.asarray(sol.state)))
 
 
@@ -140,8 +145,10 @@ def test_grad_flows_through_cached_path(asm1):
 
     def loss(scale):
         sol = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]),
-                          params=base * scale, y0=y0, gradient="jax_adjoint",
-                          rtol=1e-5, atol=1e-3, max_steps=1_000_000)
+                          params=base * scale, y0=y0,
+                          diff=aquakin.DifferentiationConfig(method="through_solve"),
+                          rtol=1e-5, atol=1e-3,
+                          integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
         return jnp.sum(sol.state[-1] ** 2)
 
     g = jax.grad(loss)(1.0)
@@ -172,7 +179,8 @@ def test_stream_reconstruction_cached_matches_probe(asm1):
     y0 = _prime(plant)
     t_eval = jnp.linspace(0.0, 4.0, 9)
     sol = plant.solve(t_span=(0.0, 4.0), t_eval=t_eval, y0=y0,
-                      rtol=1e-5, atol=1e-3, max_steps=1_000_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
     eff_cached = plant.stream(sol, "split.out")
     # force probing: clear the per-solution stream cache + flip the flag
     sol.__dict__.pop("_stream_cache", None)
@@ -192,10 +200,12 @@ def test_events_cached_matches_probe(asm1):
     ev = [aquakin.Event(at_times=[1.5, 3.0])]    # land steps, no reset
     t_eval = jnp.linspace(0.0, 4.0, 9)
     cached = plant.solve(t_span=(0.0, 4.0), t_eval=t_eval, y0=y0, events=ev,
-                         rtol=1e-6, atol=1e-8, max_steps=1_000_000)
+                         rtol=1e-6, atol=1e-8,
+                         integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
     plant._recycle_map_constant = False              # force probing
     probe = plant.solve(t_span=(0.0, 4.0), t_eval=t_eval, y0=y0, events=ev,
-                        rtol=1e-6, atol=1e-8, max_steps=1_000_000)
+                        rtol=1e-6, atol=1e-8,
+                        integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
     plant._recycle_map_constant = True
     rel = np.max(np.abs(np.asarray(cached.state) - np.asarray(probe.state))
                  / (np.abs(np.asarray(probe.state)) + 1e-6))
@@ -255,11 +265,13 @@ def test_cached_flow_steady_state_matches_probe(asm1):
     assert plant._flow_map_constant is True
     t_eval = jnp.linspace(0.0, 30.0, 7)
     cached = plant.solve(t_span=(0.0, 30.0), t_eval=t_eval, y0=y0,
-                         rtol=1e-6, atol=1e-8, max_steps=2_000_000)
+                         rtol=1e-6, atol=1e-8,
+                         integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
     plant._flow_map_constant = False                 # force the flow probe path
     plant._jit_cache.clear()
     probe = plant.solve(t_span=(0.0, 30.0), t_eval=t_eval, y0=y0,
-                        rtol=1e-6, atol=1e-8, max_steps=2_000_000)
+                        rtol=1e-6, atol=1e-8,
+                        integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
     plant._flow_map_constant = True
     d = np.max(np.abs(np.asarray(cached.state[-1]) - np.asarray(probe.state[-1])))
     assert d < 1e-9                                  # bit-identical at steady state
@@ -283,8 +295,10 @@ def test_grad_flows_through_cached_flow_path(asm1):
 
     def loss(scale):
         sol = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]),
-                          params=base * scale, y0=y0, gradient="jax_adjoint",
-                          rtol=1e-5, atol=1e-3, max_steps=1_000_000)
+                          params=base * scale, y0=y0,
+                          diff=aquakin.DifferentiationConfig(method="through_solve"),
+                          rtol=1e-5, atol=1e-3,
+                          integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
         return jnp.sum(sol.state[-1] ** 2)
 
     g = jax.grad(loss)(1.0)

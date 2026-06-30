@@ -71,7 +71,8 @@ def test_sensitivity_forward_matches_reverse(simple_network):
     rev = aquakin.sensitivity(reactor, C0, output_fn=out, t_span=(0.0, 10.0),
                               t_eval=jnp.linspace(0.0, 10.0, 11))
     fwd = aquakin.sensitivity(reactor, C0, output_fn=out, t_span=(0.0, 10.0),
-                              t_eval=jnp.linspace(0.0, 10.0, 11), ad_mode="forward")
+                              t_eval=jnp.linspace(0.0, 10.0, 11),
+                              diff=aquakin.DifferentiationConfig(mode="forward"))
     np.testing.assert_allclose(
         np.asarray(fwd.doutput_dparams), np.asarray(rev.doutput_dparams), rtol=1e-6
     )
@@ -81,10 +82,11 @@ def test_sensitivity_rejects_bad_ad_mode(simple_network):
     reactor = aquakin.BatchReactor(
         simple_network, aquakin.SpatialConditions.uniform(T=293.15)
     )
-    with pytest.raises(ValueError, match="ad_mode"):
+    with pytest.raises(ValueError, match="mode"):
         aquakin.sensitivity(reactor, jnp.asarray([1.0, 0.0]),
                             output_fn=lambda s: s.C_named("B")[-1],
-                            t_span=(0.0, 1.0), ad_mode="sideways")
+                            t_span=(0.0, 1.0),
+                            diff=aquakin.DifferentiationConfig(mode="sideways"))
 
 
 def test_ranked_params(simple_network):
@@ -408,18 +410,15 @@ def test_dgsm_through_reactor(simple_network):
 
 def test_dgsm_rejects_bad_ad_mode():
     with pytest.raises(ValueError):
-        aquakin.dgsm(lambda z: z[0], [(0.0, 1.0)], n_samples=8, ad_mode="sideways")
+        aquakin.dgsm(lambda z: z[0], [(0.0, 1.0)], n_samples=8,
+                     diff=aquakin.DifferentiationConfig(mode="sideways"))
 
 
 def test_dgsm_mode_alias_is_deprecated():
-    """The old ``mode=`` name still works but warns; it maps to ``ad_mode``."""
-    import warnings
-
+    """The differentiation mode is supplied via ``diff=DifferentiationConfig``."""
     fn = lambda z: 3.0 * z[0]
-    with warnings.catch_warnings(record=True) as rec:
-        warnings.simplefilter("always")
-        res = aquakin.dgsm(fn, [(0.0, 1.0), (0.0, 1.0)], n_samples=8, mode="reverse")
-    assert any(issubclass(w.category, DeprecationWarning) for w in rec)
+    res = aquakin.dgsm(fn, [(0.0, 1.0), (0.0, 1.0)], n_samples=8,
+                       diff=aquakin.DifferentiationConfig(mode="reverse"))
     assert res.ranked()[0][0] == "z0"
 
 
@@ -428,8 +427,10 @@ def test_dgsm_forward_matches_reverse():
     performance choice)."""
     fn = lambda z: jnp.sin(z[0]) * z[1] ** 2 + 0.3 * z[0] * z[1]
     rng = [(0.2, 1.5), (0.2, 1.5)]
-    rev = aquakin.dgsm(fn, rng, n_samples=32, seed=3, ad_mode="reverse")
-    fwd = aquakin.dgsm(fn, rng, n_samples=32, seed=3, ad_mode="forward")
+    rev = aquakin.dgsm(fn, rng, n_samples=32, seed=3,
+                       diff=aquakin.DifferentiationConfig(mode="reverse"))
+    fwd = aquakin.dgsm(fn, rng, n_samples=32, seed=3,
+                       diff=aquakin.DifferentiationConfig(mode="forward"))
     np.testing.assert_allclose(
         np.asarray(fwd.sobol_total_bound), np.asarray(rev.sobol_total_bound), rtol=1e-9
     )
@@ -448,8 +449,9 @@ def test_dgsm_forward_matches_reverse_through_reactor(simple_network):
     t_eval = jnp.linspace(0.0, 10.0, 11)
     rng = [(0.1, 0.5)]
 
-    def make_fn(adjoint):
-        reactor = aquakin.BatchReactor(simple_network, cond, adjoint=adjoint)
+    def make_fn(diff=None):
+        kw = {} if diff is None else {"diff": diff}
+        reactor = aquakin.BatchReactor(simple_network, cond, **kw)
 
         def fn(z):
             p = p_def.at[0].set(z[0])
@@ -458,12 +460,14 @@ def test_dgsm_forward_matches_reverse_through_reactor(simple_network):
 
         return fn
 
-    # default adjoint (reverse-capable); the dependency-free forward adjoint.
+    # default adjoint (reverse-capable); the forward-capable differentiation.
     rev = aquakin.dgsm(make_fn(None), rng, input_names=["A_to_B.k"],
-                       n_samples=8, seed=1, ad_mode="reverse")
-    fwd = aquakin.dgsm(make_fn(aquakin.forward_adjoint()), rng,
-                       input_names=["A_to_B.k"], n_samples=8, seed=1,
-                       ad_mode="forward")
+                       n_samples=8, seed=1,
+                       diff=aquakin.DifferentiationConfig(mode="reverse"))
+    fwd = aquakin.dgsm(
+        make_fn(aquakin.DifferentiationConfig(mode="forward", method="through_solve")),
+        rng, input_names=["A_to_B.k"], n_samples=8, seed=1,
+        diff=aquakin.DifferentiationConfig(mode="forward"))
     np.testing.assert_allclose(
         np.asarray(fwd.sobol_total_bound),
         np.asarray(rev.sobol_total_bound), rtol=1e-6,
@@ -478,7 +482,7 @@ def test_dgsm_vector_output_returns_per_output_results():
     rng = [(0.0, 1.0), (0.0, 1.0)]
     out = aquakin.dgsm(
         fn, rng, input_names=["a", "b"], output_names=["o0", "o1"],
-        n_samples=16, ad_mode="forward",
+        n_samples=16, diff=aquakin.DifferentiationConfig(mode="forward"),
     )
     assert isinstance(out, list) and len(out) == 2
     assert [r.output_name for r in out] == ["o0", "o1"]
@@ -500,7 +504,8 @@ def test_dgsm_finite_mask_is_per_output():
                               5.0 * z[1]])
     rng = [(0.0, 1.0), (0.0, 1.0)]
     out = aquakin.dgsm(fn, rng, input_names=["a", "b"],
-                       output_names=["dirty", "clean"], n_samples=16, ad_mode="forward")
+                       output_names=["dirty", "clean"], n_samples=16,
+                       diff=aquakin.DifferentiationConfig(mode="forward"))
     n_drawn = out[0].n_samples
     assert out[1].n_valid == n_drawn               # clean output: every sample kept
     assert 2 <= out[0].n_valid < n_drawn           # dirty output: NaN rows dropped
@@ -528,12 +533,15 @@ def test_dgsm_forward_through_reactor_matches_reverse(simple_network):
 
     rev = aquakin.dgsm(
         make_fn(aquakin.BatchReactor(simple_network, conds)),
-        [(0.1, 0.5)], n_samples=8, ad_mode="reverse",
+        [(0.1, 0.5)], n_samples=8,
+        diff=aquakin.DifferentiationConfig(mode="reverse"),
     )
     fwd = aquakin.dgsm(
-        make_fn(aquakin.BatchReactor(simple_network, conds,
-                                     adjoint=aquakin.forward_adjoint())),
-        [(0.1, 0.5)], n_samples=8, ad_mode="forward",
+        make_fn(aquakin.BatchReactor(
+            simple_network, conds,
+            diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"))),
+        [(0.1, 0.5)], n_samples=8,
+        diff=aquakin.DifferentiationConfig(mode="forward"),
     )
     np.testing.assert_allclose(
         np.asarray(fwd.sobol_total_bound), np.asarray(rev.sobol_total_bound), rtol=1e-8
@@ -557,7 +565,8 @@ def test_dgsm_forward_through_default_adjoint_errors():
         return sol.C[-1, 1]
 
     with pytest.raises(RuntimeError, match="forward_adjoint"):
-        aquakin.dgsm(fn, [(0.1, 0.5)], n_samples=8, ad_mode="forward")
+        aquakin.dgsm(fn, [(0.1, 0.5)], n_samples=8,
+                     diff=aquakin.DifferentiationConfig(mode="forward"))
 
 
 def test_dgsm_batched_matches_unbatched():
@@ -602,7 +611,9 @@ def test_dgsm_unbatched_forward_default_adjoint_errors():
         return reactor.solve(C0, params=p, t_span=(0.0, 10.0)).C[-1, 1]
 
     with pytest.raises(RuntimeError, match="forward_adjoint"):
-        aquakin.dgsm(fn, [(0.1, 0.5)], n_samples=8, ad_mode="forward", batched=False)
+        aquakin.dgsm(fn, [(0.1, 0.5)], n_samples=8,
+                     diff=aquakin.DifferentiationConfig(mode="forward"),
+                     batched=False)
 
 
 def test_dgsm_helpers_validate_and_sample():

@@ -40,7 +40,8 @@ def _steady(plant, asm1, params):
     y0 = bsm2_warm_start(plant)
     return plant.solve(t_span=(0.0, 80.0), t_eval=jnp.array([0.0, 80.0]),
                        params=params, y0=jnp.asarray(y0),
-                       rtol=1e-5, atol=1e-3, max_steps=600_000)
+                       rtol=1e-5, atol=1e-3,
+                       integrator=aquakin.IntegratorConfig(max_steps=600_000))
 
 
 def main() -> None:

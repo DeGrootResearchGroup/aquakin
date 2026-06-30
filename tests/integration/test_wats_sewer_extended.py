@@ -151,7 +151,9 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
     C0 = net.concentrations({"S_NO": 20.0})
     p = net.default_parameters()
     ia = net.param_index["k_sII_anox_f"]
-    reactor = aquakin.BatchReactor(net, cond, rtol=1e-6, atol=1e-9, dtmax=5.0e-4)
+    reactor = aquakin.BatchReactor(
+        net, cond, rtol=1e-6, atol=1e-9,
+        integrator=aquakin.IntegratorConfig(dtmax=5.0e-4))
 
     def final_sumS(pp):
         return reactor.solve(C0, params=pp, t_span=(0.0, 0.1)).C_named("sumS")[-1]
@@ -170,7 +172,9 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
 
     # forward mode must agree with reverse mode at the same cap
     fwd_reactor = aquakin.BatchReactor(
-        net, cond, rtol=1e-6, atol=1e-9, dtmax=5.0e-4, adjoint=diffrax.ForwardMode()
+        net, cond, rtol=1e-6, atol=1e-9,
+        integrator=aquakin.IntegratorConfig(dtmax=5.0e-4),
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
     tangent = jnp.zeros_like(p).at[ia].set(1.0)
     _, jvp = jax.jvp(

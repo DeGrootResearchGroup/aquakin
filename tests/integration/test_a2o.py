@@ -151,7 +151,8 @@ def test_a2o_removes_nitrogen_and_phosphorus(asm2d):
     plant.add_influent("feed", a2o_influent(net))
     y0 = a2o_warm_start(plant)
     sol = plant.solve(t_span=(0.0, 200.0), t_eval=jnp.array([200.0]), y0=y0,
-                      rtol=1e-5, atol=1e-3, max_steps=4_000_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=4_000_000))
     eff = plant.stream(sol, "effluent")
     last = {s: float(eff.C_named(s)[-1])
             for s in ("SNH4", "SNO3", "SPO4", "SF", "SA", "SI")}
@@ -189,7 +190,8 @@ def test_ferric_dosing_polishes_phosphorus(asm2d):
         plant.add_influent("feed", a2o_influent(net, overrides=overrides))
         y0 = a2o_warm_start(plant)
         sol = plant.solve(t_span=(0.0, 200.0), t_eval=jnp.array([200.0]), y0=y0,
-                          rtol=1e-5, atol=1e-3, max_steps=8_000_000)
+                          rtol=1e-5, atol=1e-3,
+                          integrator=aquakin.IntegratorConfig(max_steps=8_000_000))
         eff = plant.stream(sol, "effluent")
         return float(eff.C_named("SPO4")[-1]), float(eff.C_named("XMeP")[-1])
 
@@ -210,7 +212,8 @@ def test_asm2d_grad_flows(asm2d):
     cond = aquakin.OperatingConditions(T=293.15)
     # dtmax caps the reverse-mode adjoint of the stiff bio-P kinetics (the
     # documented stiff-network gradient remedy).
-    reactor = aquakin.BatchReactor(net, cond, dtmax=1e-3)
+    reactor = aquakin.BatchReactor(
+        net, cond, integrator=aquakin.IntegratorConfig(dtmax=1e-3))
     C0 = net.concentrations({
         "SO2": 2.0, "SF": 20.0, "SA": 20.0, "SNH4": 20.0, "SNO3": 2.0,
         "SPO4": 8.0, "SI": 30.0, "SALK": 7.0, "XH": 1500.0, "XPAO": 600.0,

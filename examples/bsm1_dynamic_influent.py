@@ -28,7 +28,8 @@ def _settle(network):
     plant.add_influent("feed", load_bsm1_influent("dry", network),
                        to="inlet_mix.fresh")
     sol = plant.solve(t_span=(0.0, 100.0), t_eval=jnp.array([0.0, 100.0]),
-                      rtol=1e-5, atol=1e-3, max_steps=300_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=300_000))
     return sol.state[-1]
 
 
@@ -40,7 +41,8 @@ def _run_dynamic(network, profile, y0, t_end=14.0):
     sol = plant.solve(
         t_span=(0.0, t_end),
         t_eval=jnp.linspace(0.0, t_end, 8 * int(t_end) + 1),  # ~3-hourly
-        y0=y0, rtol=1e-5, atol=1e-3, max_steps=300_000,
+        y0=y0, rtol=1e-5, atol=1e-3,
+        integrator=aquakin.IntegratorConfig(max_steps=300_000),
     )
     return sol
 

@@ -13,7 +13,9 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.network import CompiledNetwork
 from aquakin.integrate._common import (
     _HasNamedSpecies,
+    DifferentiationConfig,
     GradientCheckMixin,
+    IntegratorConfig,
     cached_jitted_solver,
     friendly_solve_errors,
     init_solver_settings,
@@ -80,44 +82,21 @@ class BatchReactor(GradientCheckMixin):
         shape ``(n_species,)`` and gives a per-species tolerance. Useful when
         some species (e.g. radical intermediates) sit several orders of
         magnitude below the bulk concentrations.
-    adjoint : diffrax.AbstractAdjoint, optional
-        Adjoint strategy. Defaults to
-        :class:`diffrax.RecursiveCheckpointAdjoint`, the right choice for
-        reverse-mode parameter estimation: its memory grows only
-        logarithmically with the number of steps (binomial checkpointing),
-        so it is preferred for long or stiff integrations and for
-        ``jax.grad``-based fitting.
-
-        Pass ``diffrax.DirectAdjoint()`` only when you need **forward-mode**
-        autodiff (``jax.jvp`` / ``jax.jacfwd``) through the solve --- for
-        example a forward-mode sensitivity Jacobian or a Gauss-Newton /
-        Fisher information matrix. ``RecursiveCheckpointAdjoint`` registers a
-        ``custom_vjp`` (a reverse-mode rule only), so forward-mode is rejected
-        with "can't apply forward-mode autodiff (jvp) to a custom_vjp
-        function"; ``DirectAdjoint`` is plainly differentiable in both modes.
-        Its drawback is memory: it stores/unrolls the whole solve (cost grows
-        with the number of steps), so reserve it for short integrations or
-        when forward-mode is actually required. Either way, cap ``dtmax`` when
-        differentiating a stiff network (see below).
-    dtmax : float, optional
-        Maximum integrator step size. ``None`` (default) leaves the step
-        uncapped, which is fastest for forward solves. Set it for
-        *reverse-mode* differentiation of a stiff network: an L-stable solver
-        can step over the fastest reaction timescale and damp those modes in
-        the primal (which stays accurate). Forward mode (``jax.jvp`` /
-        ``jax.jacfwd``) then stays finite at any step, but reverse mode
-        (``jax.grad``) returns non-finite values above a step-size threshold
-        (a backward-accumulation overflow set by the per-step stiffness).
-        Capping ``dtmax`` to a small multiple of the fastest reaction
-        timescale restores a finite reverse gradient that matches forward mode
-        and finite differences. ``dtmax`` is always in the network's **native**
-        time unit (the unit of its rate constants -- seconds for ozone/UV, days
-        for ASM/ADM/WATS), independent of any ``time_unit=`` passed to
-        :meth:`solve`; a value chosen in the solve's ``time_unit`` would be off
-        by the unit ratio.
-    max_steps : int, optional
-        Maximum number of internal solver steps (default 100000). Raise it for
-        long or very stiff forward solves that exhaust the default budget.
+    integrator : IntegratorConfig, optional
+        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
+        ``dtmax``, ``max_steps``, an explicit ``solver``). The default flips the
+        reactor to the fast stack (Kvaerno3 + capped step growth). ``dtmax``
+        is always in the network's **native** time unit (the unit of its rate
+        constants -- seconds for ozone/UV, days for ASM/ADM/WATS), independent of
+        any ``time_unit=`` passed to :meth:`solve`.
+    diff : DifferentiationConfig, optional
+        Autodiff configuration. ``mode="reverse"`` (default) differentiates the
+        solve with ``RecursiveCheckpointAdjoint`` (reactors have no stable
+        reverse adjoint -- that is plant-only -- so ``method`` is ignored for
+        reverse mode). ``mode="forward", method="through_solve"`` builds a
+        forward-capable ``DirectAdjoint`` so ``jax.jvp`` / ``jax.jacfwd`` flow
+        through the solve; ``mode="forward", method="stable"`` is the augmented
+        ``solve_sensitivity`` path (cap-free).
 
     Notes
     -----
@@ -148,13 +127,12 @@ class BatchReactor(GradientCheckMixin):
         *,
         rtol: float = 1e-6,
         atol=None,
-        adjoint: Optional[diffrax.AbstractAdjoint] = None,
-        dtmax: Optional[float] = None,
-        max_steps: int = 100_000,
+        integrator: IntegratorConfig = IntegratorConfig(),
+        diff: DifferentiationConfig = DifferentiationConfig(),
     ) -> None:
         conditions.validate_required(network.conditions_required)
-        init_solver_settings(self, network, rtol=rtol, adjoint=adjoint,
-                             dtmax=dtmax, max_steps=max_steps)
+        init_solver_settings(self, network, rtol=rtol, integrator=integrator,
+                             diff=diff)
         self.conditions = conditions
         self.atol = resolve_state_atol(network, atol)
         # Cache jit-compiled inner solve keyed on (t0, t1, t_eval_shape).
@@ -307,6 +285,7 @@ class BatchReactor(GradientCheckMixin):
                 rhs, C0, params, t0=t0, t1=t1, t_eval=t_eval_arr, events=events,
                 rtol=self.rtol, atol=self.atol, dtmax=self.dtmax,
                 adjoint=self.adjoint, max_steps=self.max_steps,
+                order=self.order, factormax=self.factormax, solver=self.solver,
             )
         ts = res.ts / time_factor if time_factor != 1.0 else res.ts
         return BatchSolution(t=ts, C=res.ys, network=self.network,
@@ -408,6 +387,7 @@ class BatchReactor(GradientCheckMixin):
         kw = dict(
             t0=t0, t1=t1, rtol=self.rtol, atol=self.atol,
             adjoint=self.adjoint, dtmax=self.dtmax, max_steps=self.max_steps,
+            order=self.order, factormax=self.factormax, solver=self.solver,
         )
 
         if has_t_eval:

@@ -37,6 +37,19 @@ from aquakin.plant.bsm.bsm2 import (
 from aquakin.plant.influent import InfluentSeries
 
 
+def _grad_diff(gradient):
+    """Map a legacy ``gradient=`` string to a ``DifferentiationConfig``.
+
+    ``"stable_adjoint"`` / ``"auto"`` -> the reverse stable adjoint (the default),
+    ``"jax_adjoint"`` -> reverse through-the-solve.
+    """
+    if gradient in ("stable_adjoint", "auto"):
+        return aquakin.DifferentiationConfig(method="stable")
+    if gradient == "jax_adjoint":
+        return aquakin.DifferentiationConfig(method="through_solve")
+    raise ValueError(f"unknown gradient {gradient!r}")
+
+
 def _bsm2_plant():
     asm1 = aquakin.load_network("asm1")
     adm1 = aquakin.load_network("adm1")
@@ -50,19 +63,19 @@ def _bsm2_plant():
 
 def test_invalid_gradient_raises():
     _asm1, _adm1, plant, y0 = _bsm2_plant()
-    with pytest.raises(ValueError, match="jax_adjoint.*stable_adjoint"):
-        plant.solve(t_span=(0.0, 1.0), y0=y0, gradient="not_a_mode")
+    with pytest.raises(ValueError, match="method"):
+        plant.solve(t_span=(0.0, 1.0), y0=y0,
+                    diff=aquakin.DifferentiationConfig(method="not_a_mode"))
 
 
 def test_stable_adjoint_rejects_adjoint_and_dtmax():
-    """``stable_adjoint`` controls its own adjoint and steps; passing the
-    diffrax adjoint or a dtmax cap alongside it is a usage error."""
+    """``stable`` controls its own adjoint and steps; passing a dtmax cap or a
+    forward-mode diffrax adjoint alongside it is a usage error."""
     _asm1, _adm1, plant, y0 = _bsm2_plant()
     with pytest.raises(ValueError, match="do not also pass"):
-        plant.solve(t_span=(0.0, 1.0), y0=y0, gradient="stable_adjoint", dtmax=1e-2)
-    with pytest.raises(ValueError, match="do not also pass"):
-        plant.solve(t_span=(0.0, 1.0), y0=y0, gradient="stable_adjoint",
-                    adjoint=diffrax.DirectAdjoint())
+        plant.solve(t_span=(0.0, 1.0), y0=y0,
+                    diff=aquakin.DifferentiationConfig(method="stable"),
+                    integrator=aquakin.IntegratorConfig(dtmax=1e-2))
 
 
 # --- fast small-network correctness (a single-CSTR plant) ------------------
@@ -102,7 +115,7 @@ def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd():
     def g(theta, gradient):
         p = base.at[gidx].set(theta)
         sol = plant.solve(t_span=(0.0, T), t_eval=teval, params=p,
-                          gradient=gradient)
+                          diff=_grad_diff(gradient))
         return sol.C_named("tank", "B")[-1]   # product at the outlet
 
     # Forward primal agrees regardless of the gradient backend (the two paths
@@ -141,7 +154,7 @@ def test_stable_adjoint_initial_state_gradient_matches_jax_adjoint():
 
     def loss(y0_, gradient):
         sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]),
-                          params=params, y0=y0_, gradient=gradient)
+                          params=params, y0=y0_, diff=_grad_diff(gradient))
         return jnp.sum(sol.state ** 2)
 
     g_stable = np.asarray(jax.grad(lambda y: loss(y, "stable_adjoint"))(y0))
@@ -164,7 +177,9 @@ def _solve_kwargs():
     # does; forcing dense keeps them off the (much slower to COMPILE) colored
     # backward and skips the auto build-time measurement. Coloring itself is
     # covered by the fast BSM1 tests (test_stable_adjoint_colored_jacobian_*).
-    return dict(rtol=1e-5, atol=1e-3, max_steps=2_000, colored_jacobian=False)
+    return dict(rtol=1e-5, atol=1e-3,
+                integrator=aquakin.IntegratorConfig(
+                    max_steps=2_000, colored_jacobian=False))
 
 
 @pytest.mark.validation
@@ -176,7 +191,8 @@ def test_stable_adjoint_forward_matches_jax_adjoint():
     T = 3.0
     teval = jnp.array([T])
     a = plant.solve(t_span=(0.0, T), t_eval=teval, y0=y0, **_solve_kwargs())
-    b = plant.solve(t_span=(0.0, T), t_eval=teval, y0=y0, gradient="stable_adjoint",
+    b = plant.solve(t_span=(0.0, T), t_eval=teval, y0=y0,
+                    diff=aquakin.DifferentiationConfig(method="stable"),
                     **_solve_kwargs())
     for unit, sp in (("tank1", "SNO"), ("tank5", "SNH"), ("digester", "S_gas_ch4")):
         assert float(b.C_named(unit, sp)[-1]) == pytest.approx(
@@ -197,7 +213,8 @@ def test_stable_adjoint_cross_interface_gradient_matches_fd():
     def g(theta):
         p = base.at[gidx].set(theta)
         sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
-                          gradient="stable_adjoint", **_solve_kwargs())
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          **_solve_kwargs())
         return sol.C_named("tank1", "SNO")[-1]   # water-line nitrate
 
     grad = float(jax.grad(g)(theta0))
@@ -219,7 +236,8 @@ def test_stable_adjoint_cross_interface_gradient_matches_fd():
     def g_fd(theta):
         p = base.at[gidx].set(theta)
         sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
-                          rtol=1e-8, atol=1e-6, max_steps=20_000)
+                          rtol=1e-8, atol=1e-6,
+                          integrator=aquakin.IntegratorConfig(max_steps=20_000))
         return float(sol.C_named("tank1", "SNO")[-1])
 
     h = theta0 * 1e-2
@@ -259,12 +277,15 @@ def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     gidx = plant.parameter_index("underflow_split.ras")   # RAS recycle flow
     theta0 = float(base[gidx])
     T = 0.3
-    kw = dict(rtol=1e-6, atol=1e-3, max_steps=20_000, colored_jacobian=False)
+    kw = dict(rtol=1e-6, atol=1e-3,
+              integrator=aquakin.IntegratorConfig(
+                  max_steps=20_000, colored_jacobian=False))
 
     def g(theta):
         p = base.at[gidx].set(theta)
         sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([0.15, T]), params=p,
-                          y0=y0, gradient="stable_adjoint", **kw)
+                          y0=y0, diff=aquakin.DifferentiationConfig(method="stable"),
+                          **kw)
         return jnp.sum(sol.state ** 2)
 
     # A concrete solve sets the state-invariant-map flag (BSM1's recycle map is
@@ -282,9 +303,13 @@ def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     plant._recycle_map_constant = False                 # probe M every call
     plant._jit_cache.clear()
     grad_probed = float(jax.grad(g)(theta0))            # pre-#366 path
-    # Agree to float rounding (adaptive recycle: M only warm-starts, so the
-    # result is M-independent); still catches an O(1) dropped dM/dtheta term.
-    assert grad_cached == pytest.approx(grad_probed, rel=1e-9)
+    # Adaptive recycle: M only warm-starts, so the result is M-independent and the
+    # cached/probed gradients agree closely. On the default fast integrator
+    # (Kvaerno3 + factormax) the cached map (formed once) vs probed map (per call)
+    # differ by ~1e-6 in operation order accumulated over the extra K3 steps -- not
+    # a dropped dM/dtheta, which would be O(1). Absolute correctness is pinned by
+    # the FD-match test; this still catches an O(1) dropped dM/dtheta term.
+    assert grad_cached == pytest.approx(grad_probed, rel=1e-5)
 
 
 @pytest.mark.slow
@@ -304,22 +329,25 @@ def test_stable_adjoint_colored_jacobian_matches_dense():
     gidx = plant.parameter_index("asm1.muH")
     theta0 = float(base[gidx])
     T = 0.3
-    kw = dict(rtol=1e-6, atol=1e-3, max_steps=20_000)
+    kw = dict(rtol=1e-6, atol=1e-3)
 
     def g(theta, colored):
         p = base.at[gidx].set(theta)
         sol = plant.solve((0.0, T), t_eval=jnp.array([0.15, T]), params=p, y0=y0,
-                          gradient="stable_adjoint", colored_jacobian=colored, **kw)
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          integrator=aquakin.IntegratorConfig(
+                              max_steps=20_000, colored_jacobian=colored),
+                          **kw)
         return jnp.sum(sol.state ** 2)
-
-    # A concrete solve derives + guards the colored backward Jacobian builder.
-    _ = g(theta0, True)
-    builder = plant._colored_adjoint_builder
-    assert builder is not None and builder[2] is True       # guard passed (ok)
-    assert builder[1] < plant._total_state_size             # fewer colors than states
 
     g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
     g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
+    # The colored builder is derived from the plant's default operating point the
+    # first time the colored backward runs -- under the grad trace, with no concrete
+    # probe solve needed (it touches only concrete plant defaults).
+    builder = plant._colored_adjoint_builder
+    assert builder is not None and builder[2] is True       # guard passed (ok)
+    assert builder[1] < plant._total_state_size             # fewer colors than states
     assert np.isfinite(g_colored)
     assert g_colored != 0.0
     # Equal to the dense-Jacobian gradient (the colored Jacobian is exact on the
@@ -328,14 +356,14 @@ def test_stable_adjoint_colored_jacobian_matches_dense():
 
 
 @pytest.mark.slow
-def test_stable_adjoint_colored_jacobian_auto_decision_is_consistent():
-    """``colored_jacobian="auto"`` (the default) measures the colored vs dense
-    build time and enables coloring only when it pays. The decision is a wall-clock
-    measurement (``ratio = t_dense/t_colored`` against the margin), so on a
-    borderline-size plant like BSM1 -- where the two builds are close -- the outcome
-    is machine-dependent and either can win. Guards the decision LOGIC (the choice is
-    consistent with the measured ratio) and the gradient correctness (equal to the
-    dense gradient whichever build is chosen), not a fixed outcome."""
+def test_stable_adjoint_colored_jacobian_auto_decision_size_gated():
+    """``colored_jacobian="auto"`` (the default) decides by plant SIZE: the colored
+    backward is enabled iff ``n_states >= _COLORED_BACKWARD_MIN_STATES``. BSM1 is
+    below the threshold, so "auto" deterministically chooses dense. The decision is a
+    pure structural property -- no wall-clock measurement and no concrete probe solve
+    -- so it is available immediately and reproducible. Guards the decision and that
+    the gradient is correct (equal to the explicit-dense gradient) whichever the size
+    gate selects."""
     asm1 = aquakin.load_network("asm1")
     plant = build_bsm1(asm1)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
@@ -344,34 +372,32 @@ def test_stable_adjoint_colored_jacobian_auto_decision_is_consistent():
     gidx = plant.parameter_index("asm1.muH")
     theta0 = float(base[gidx])
     T = 0.3
-    kw = dict(rtol=1e-6, atol=1e-3, max_steps=20_000)
+    kw = dict(rtol=1e-6, atol=1e-3)
 
     def g(theta, colored):
         p = base.at[gidx].set(theta)
         sol = plant.solve((0.0, T), t_eval=jnp.array([0.15, T]), params=p, y0=y0,
-                          gradient="stable_adjoint", colored_jacobian=colored, **kw)
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          integrator=aquakin.IntegratorConfig(
+                              max_steps=20_000, colored_jacobian=colored),
+                          **kw)
         return jnp.sum(sol.state ** 2)
 
-    # A concrete solve under the default "auto" derives the coloring and measures
-    # the build speedup.
-    assert plant.colored_jacobian_decision() is None        # not decided yet
-    _ = g(theta0, "auto")
-    choice, ratio = plant.colored_jacobian_decision()
-    assert isinstance(ratio, float)        # a real measurement was taken
-    # Assert the decision LOGIC, not a fixed outcome: ``ratio`` is a wall-clock
-    # build-time measurement, so which side of the margin BSM1 lands on is
-    # machine-dependent. The robust invariant is that ``choice`` agrees with the
-    # measured ratio and the margin the implementation compares against.
-    expected = "colored" if ratio > plant._COLORED_BACKWARD_MARGIN else "dense"
-    assert choice == expected
+    # Deterministic size-gate decision, available WITHOUT solving (it is a structural
+    # property of the plant): BSM1 is a small plant, so "auto" -> dense.
+    choice, n = plant.colored_jacobian_decision()
+    assert n < plant._COLORED_BACKWARD_MIN_STATES        # BSM1 is below the gate
+    assert choice == "dense"
 
-    # Whichever build auto chose, its gradient equals the explicit-dense gradient
-    # (the colored Jacobian is exact on the superset pattern -- only the float
-    # summation order differs), so correctness is independent of the decision.
+    # The auto gradient (dense here) equals the explicit-dense gradient; and the
+    # forced-colored gradient also equals it (the colored Jacobian is exact on the
+    # superset pattern -- only float summation order differs).
     g_auto = float(jax.grad(lambda th: g(th, "auto"))(theta0))
     g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
+    g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
     assert np.isfinite(g_auto) and g_auto != 0.0
     assert g_auto == pytest.approx(g_dense, rel=1e-10)
+    assert g_colored == pytest.approx(g_dense, rel=1e-8)
 
 
 @pytest.mark.validation
@@ -390,7 +416,7 @@ def test_auto_gradient_defaults_to_stable_adjoint():
     def g(theta, gradient):
         p = base.at[gidx].set(theta)
         sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
-                          gradient=gradient, **_solve_kwargs())
+                          diff=_grad_diff(gradient), **_solve_kwargs())
         return sol.C_named("tank1", "SNO")[-1]
 
     auto = float(jax.grad(lambda th: g(th, "auto"))(theta0))
@@ -447,12 +473,14 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     # covers the residual platform spread with wide margin while still catching a
     # genuinely wrong gradient (sign, magnitude). max_steps also sizes the
     # stable-adjoint backward-scan buffer, so give the tighter solve headroom.
-    kw = {**_solve_kwargs(), "rtol": 1e-7, "atol": 1e-5, "max_steps": 8_000}
+    kw = dict(rtol=1e-7, atol=1e-5,
+              integrator=aquakin.IntegratorConfig(
+                  max_steps=8_000, colored_jacobian=False))
 
     def g(theta):
         p = base.at[gidx].set(theta)
         sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
-                          gradient="stable_adjoint", **kw)
+                          diff=aquakin.DifferentiationConfig(method="stable"), **kw)
         return sol.C_named("tank1", "SNO")[-1]
 
     grad = float(jax.grad(g)(theta0))
@@ -474,7 +502,8 @@ def test_stable_adjoint_gradient_finite_through_full_param_vector():
 
     def loss(p):
         sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
-                          gradient="stable_adjoint", **_solve_kwargs())
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          **_solve_kwargs())
         return jnp.sum(sol.state[-1] ** 2)
 
     g = jax.grad(loss)(base)
@@ -498,12 +527,14 @@ def test_stable_adjoint_solve_is_jittable():
     # A tight max_steps keeps the discrete-adjoint trajectory buffer -- and so the
     # peak memory of this jit-plus-gradient test -- small; the warm-started 3-day
     # solve takes far fewer than 600 steps.
-    kw = dict(rtol=1e-5, atol=1e-3, max_steps=600, colored_jacobian=False)
+    kw = dict(rtol=1e-5, atol=1e-3,
+              integrator=aquakin.IntegratorConfig(
+                  max_steps=600, colored_jacobian=False))
 
     def g(theta):
         p = base.at[gidx].set(theta)
         sol = plant.solve(t_span=(0.0, T), t_eval=teval, params=p, y0=y0,
-                          gradient="stable_adjoint", **kw)
+                          diff=aquakin.DifferentiationConfig(method="stable"), **kw)
         return sol.C_named("tank1", "SNO")[-1]
 
     theta0 = float(base[gidx])
@@ -519,40 +550,50 @@ def test_stable_adjoint_solve_is_jittable():
 
 @pytest.mark.validation
 @pytest.mark.heavy
-def test_stable_adjoint_forward_solve_is_cached():
-    """A repeat *forward* stable-adjoint solve reuses the compiled closure (the
-    parameter-sweep case), while a traced call (a gradient through the solve)
-    bypasses the cache: the discrete adjoint's ``custom_vjp`` must be traced
-    directly into the outer computation, not routed through an inner ``jax.jit``
-    under an outer reverse-mode pass."""
+def test_forward_solve_caches_and_grad_bypasses_cache():
+    """A repeat *forward* solve reuses the compiled closure (the parameter-sweep
+    case), while a traced call (a gradient through the solve) bypasses the cache.
+
+    Routing note: with ``diff.method="stable"`` (the default) a CONCRETE forward
+    solve auto-routes to the fast cached jax_adjoint path -- so it caches there,
+    NOT in the stable-adjoint cache (the cap-free discrete adjoint is entered only
+    under a gradient trace). A traced gradient bypasses the cache entirely: the
+    discrete adjoint's ``custom_vjp`` must be traced directly into the outer
+    computation, not routed through an inner ``jax.jit`` under an outer
+    reverse-mode pass."""
     asm1, adm1, plant, y0 = _bsm2_plant()
     base = bsm2_parameters(asm1, adm1)
     T = 3.0
     # Tight max_steps (3-day solve uses far fewer) to keep the adjoint buffer
     # and so this test's peak memory small.
     kw = dict(t_span=(0.0, T), t_eval=jnp.array([T]), y0=y0,
-              gradient="stable_adjoint", rtol=1e-5, atol=1e-3, max_steps=600,
-              colored_jacobian=False)
+              diff=aquakin.DifferentiationConfig(method="stable"),
+              rtol=1e-5, atol=1e-3,
+              integrator=aquakin.IntegratorConfig(
+                  max_steps=600, colored_jacobian=False))
 
-    def _sa_keys():
-        return [k for k in plant._jit_cache if k[0] == "stable_adjoint"]
-
+    plant._jit_cache.clear()
     a = plant.solve(params=base, **kw)
-    assert len(_sa_keys()) == 1                       # one compiled stable solve
-    cached = plant._jit_cache[_sa_keys()[0]]
+    # The concrete forward solve auto-routes to the fast jax_adjoint cache, not the
+    # stable-adjoint one (which is gradient-only and bypassed under a trace).
+    assert [k for k in plant._jit_cache if k[0] == "stable_adjoint"] == []
+    assert len(plant._jit_cache) == 1                 # one compiled forward solve
+    (key,) = list(plant._jit_cache)
+    cached = plant._jit_cache[key]
 
     plant.solve(params=base * 1.01, **kw)             # different params, same sig
-    assert plant._jit_cache[_sa_keys()[0]] is cached  # reused, not rebuilt
+    assert plant._jit_cache[key] is cached            # reused, not rebuilt
     c = plant.solve(params=base, **kw)                # same params -> same result
     assert float(c.C_named("tank1", "SNO")[-1]) == pytest.approx(
         float(a.C_named("tank1", "SNO")[-1]), rel=1e-10)
 
-    # A traced (gradient) call adds no stable-adjoint cache entry.
-    n_before = len(_sa_keys())
+    # A traced (gradient) call adds no cache entry: the stable discrete adjoint's
+    # custom_vjp is traced directly into the outer computation.
+    n_before = len(plant._jit_cache)
     jax.grad(lambda th: plant.solve(
         params=base.at[0].set(th), **kw).C_named("tank1", "SNO")[-1]
     )(float(base[0]))
-    assert len(_sa_keys()) == n_before
+    assert len(plant._jit_cache) == n_before
 
 
 @pytest.mark.slow
@@ -573,20 +614,23 @@ def test_stable_adjoint_colored_jacobian_flow_setpoint_matches_dense():
     gidx = plant.parameter_index("underflow_split.ras")     # RAS recycle flow
     theta0 = float(base[gidx])
     T = 0.3
-    kw = dict(rtol=1e-6, atol=1e-3, max_steps=20_000)
+    kw = dict(rtol=1e-6, atol=1e-3)
 
     def g(theta, colored):
         p = base.at[gidx].set(theta)
         sol = plant.solve((0.0, T), t_eval=jnp.array([0.15, T]), params=p, y0=y0,
-                          gradient="stable_adjoint", colored_jacobian=colored, **kw)
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          integrator=aquakin.IntegratorConfig(
+                              max_steps=20_000, colored_jacobian=colored),
+                          **kw)
         return jnp.sum(sol.state ** 2)
-
-    _ = g(theta0, True)                                     # build + guard colored
-    builder = plant._colored_adjoint_builder
-    assert builder is not None and builder[2] is True       # guard passed
 
     g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
     g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
+    # The colored builder is derived under the grad trace (from plant defaults), no
+    # concrete probe solve needed.
+    builder = plant._colored_adjoint_builder
+    assert builder is not None and builder[2] is True       # guard passed
     assert np.isfinite(g_colored)
     assert g_colored != 0.0                                 # RAS moves M (dM/dtheta != 0)
     assert g_colored == pytest.approx(g_dense, rel=1e-8)
@@ -611,18 +655,24 @@ def test_stable_adjoint_accepts_kvaerno3_and_factormax():
     gidx = plant.parameter_index("asm1.muA")
     theta0 = float(base[gidx])
     T = 0.5
-    kw = dict(rtol=1e-4, atol=1e-3, max_steps=20_000)
+    kw = dict(rtol=1e-4, atol=1e-3)
 
-    def g(theta, **solve_kw):
+    def g(theta, integrator):
         p = base.at[gidx].set(theta)
         sol = plant.solve((0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
-                          gradient="stable_adjoint", **kw, **solve_kw)
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          integrator=integrator, **kw)
         return sol.C_named("tank5", "SNO")[-1]
 
-    g5 = float(jax.grad(lambda th: g(th))(theta0))                  # Kvaerno5
-    g3 = float(jax.grad(lambda th: g(th, solver=diffrax.Kvaerno3()))(theta0))
-    g3f = float(jax.grad(
-        lambda th: g(th, solver=diffrax.Kvaerno3(), factormax=3.0))(theta0))
+    # The reference arm pins the old Kvaerno5/no-cap default (order=5, factormax
+    # None); the others request Kvaerno3 (and a factormax cap) explicitly.
+    ic5 = aquakin.IntegratorConfig(max_steps=20_000, order=5, factormax=None)
+    ic3 = aquakin.IntegratorConfig(max_steps=20_000, solver=diffrax.Kvaerno3())
+    ic3f = aquakin.IntegratorConfig(
+        max_steps=20_000, solver=diffrax.Kvaerno3(), factormax=3.0)
+    g5 = float(jax.grad(lambda th: g(th, ic5))(theta0))             # Kvaerno5
+    g3 = float(jax.grad(lambda th: g(th, ic3))(theta0))
+    g3f = float(jax.grad(lambda th: g(th, ic3f))(theta0))
     assert np.isfinite(g3) and np.isfinite(g3f)
     assert g3 != 0.0
     # Each is the exact discrete adjoint of its own forward solve, so they agree
@@ -653,7 +703,8 @@ def test_forward_paths_agree_no_config_drift():
     y0 = bsm1_warm_start(plant)
     base = plant.default_parameters()
     T = 1.0
-    kw = dict(rtol=1e-5, atol=1e-3, max_steps=50_000)
+    kw = dict(rtol=1e-5, atol=1e-3,
+              integrator=aquakin.IntegratorConfig(max_steps=50_000))
     teval = jnp.array([0.5, T])
 
     def final(**solve_kw):
@@ -661,9 +712,9 @@ def test_forward_paths_agree_no_config_drift():
                           **solve_kw)
         return np.asarray(sol.state)
 
-    jax_fwd = final(gradient="jax_adjoint")
+    jax_fwd = final(diff=aquakin.DifferentiationConfig(method="through_solve"))
     fast = final(forward_fast=True)
-    stable_fwd = final(gradient="stable_adjoint")
+    stable_fwd = final(diff=aquakin.DifferentiationConfig(method="stable"))
     assert np.all(np.isfinite(jax_fwd))
     # Same primal to the shared integrator tolerance: the adjoint bookkeeping and
     # the lean forward_fast machinery do not change the realized trajectory.

@@ -14,8 +14,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import diffrax
-
 import aquakin
 
 # This module mixes three tiers (see the per-test markers):
@@ -68,7 +66,9 @@ def test_matches_jacfwd_multi_param():
     names = list(net.parameters)
     t_eval = jnp.linspace(0.0, 5.0, 6)
 
-    ref = aquakin.BatchReactor(net, cond, adjoint=diffrax.DirectAdjoint())
+    ref = aquakin.BatchReactor(
+        net, cond,
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"))
 
     def Cfn(pp):
         return ref.solve(C0, (0.0, 5.0), t_eval, params=pp).C
@@ -128,7 +128,9 @@ def test_biofilm_sensitivity_matches_jacfwd(simple_network):
     t_eval = jnp.linspace(0.0, 5.0, 6)
 
     ref = aquakin.BiofilmReactor(
-        simple_network, cond, adjoint=diffrax.DirectAdjoint(), **kw
+        simple_network, cond,
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        **kw,
     )
 
     def bulkC(pp):
@@ -299,7 +301,8 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
 
     # Uncapped forward-mode AD: expected to be non-finite (raises or NaNs).
     uncapped = aquakin.BatchReactor(
-        net, cond, adjoint=diffrax.DirectAdjoint(), dtmax=None
+        net, cond,  # dtmax=None (uncapped)
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
 
     def Cfn_uncapped(pp):
@@ -315,7 +318,9 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
 
     # Capped jacfwd reference (finite, the current workaround).
     capped = aquakin.BatchReactor(
-        net, cond, adjoint=diffrax.DirectAdjoint(), dtmax=3e-3
+        net, cond,
+        integrator=aquakin.IntegratorConfig(dtmax=3e-3),
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
 
     def Cfn_capped(pp):
@@ -325,10 +330,14 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
     assert bool(jnp.all(jnp.isfinite(J_cap)))
 
     # Augmented forward sensitivity, uncapped -- finite and matching.
-    r = aquakin.BatchReactor(net, cond, dtmax=None)
+    r = aquakin.BatchReactor(net, cond)  # dtmax=None (uncapped)
     _, S = r.solve_sensitivity(C0, p, (0.0, 0.1), t_eval, sens_params=names)
     assert bool(jnp.all(jnp.isfinite(S)))
-    assert float(jnp.max(jnp.abs(S - J_cap))) < 1e-6
+    # The augmented [y; S] solve and the capped jacfwd are two different methods;
+    # on the default fast integrator (Kvaerno3, 3rd order) they agree to ~7e-6 on
+    # this stiff net (it was <1e-6 on the old 5th-order Kvaerno5 default). The
+    # point is that the uncapped augmented solve is finite and tracks jacfwd.
+    assert float(jnp.max(jnp.abs(S - J_cap))) < 2e-5
 
 
 @pytest.mark.validation
@@ -377,7 +386,9 @@ def test_state_derived_ph_jvp_flows_and_matches():
     t_eval = jnp.array([0.0, 0.05, 0.1])
 
     capped = aquakin.BatchReactor(
-        net, cond, adjoint=diffrax.DirectAdjoint(), dtmax=1e-3
+        net, cond,
+        integrator=aquakin.IntegratorConfig(dtmax=1e-3),
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
 
     def Cfn(pp):

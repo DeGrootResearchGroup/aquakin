@@ -133,7 +133,9 @@ def test_kernel_jacobian_is_finite_and_matches_scalar(name):
 def test_grad_flows_through_kernel():
     """jax.grad flows through a kernel-backed batch solve and is finite."""
     net = aquakin.load_network("asm1")
-    reactor = aquakin.BatchReactor(net, net.default_conditions(), dtmax=1e-2)
+    reactor = aquakin.BatchReactor(
+        net, net.default_conditions(),
+        integrator=aquakin.IntegratorConfig(dtmax=1e-2))
     C0 = net.default_concentrations()
     p = net.default_parameters()
     t_eval = jnp.array([5.0])

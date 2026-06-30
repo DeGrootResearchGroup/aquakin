@@ -87,7 +87,7 @@ def test_variant_solves_and_stratifies(variant, biofilm_rxns):
     bio = aquakin.BiofilmReactor(
         variant, cond, n_layers=6, thickness=L_F, area_per_volume=A_V_LUMPED,
         diffusivity=1e-4, boundary_layer=1e-4, biofilm_reactions=biofilm_rxns,
-        fixed_mask=fixed, dtmax=3e-5,
+        fixed_mask=fixed, integrator=aquakin.IntegratorConfig(dtmax=3e-5),
     )
     sol = bio.solve(C0, params=variant.default_parameters(), t_span=(0.0, 5.0 / 24.0))
     assert bool(jnp.all(jnp.isfinite(sol.profile)))
@@ -121,7 +121,8 @@ def test_multispecies_groups_grow_and_stratify():
     bio = aquakin.BiofilmReactor(
         net, aquakin.SpatialConditions.uniform(1, pH=7.5),
         n_layers=n_layers, thickness=2e-3, area_per_volume=A_V_LUMPED,
-        diffusivity=1e-4, boundary_layer=1e-4, fixed_mask=fixed, dtmax=3e-5,
+        diffusivity=1e-4, boundary_layer=1e-4, fixed_mask=fixed,
+        integrator=aquakin.IntegratorConfig(dtmax=3e-5),
     )
     sol = bio.solve(jnp.asarray(y0), t_span=(0.0, 5.0 / 24.0),
                     params=net.default_parameters())

@@ -76,10 +76,11 @@ def test_reactor_solve_sensitivity_contract(cls):
 def test_plant_solve_contract():
     """Plant.solve keeps the surface a calibration / dynamic run depends on:
     ``t_span`` leads the positionals, ``params`` is accepted, and the
-    operationally-important ``y0`` (warm start) and ``gradient`` (adjoint mode)
-    are KEYWORD_ONLY so they can't be shifted by a positional argument."""
+    operationally-important ``y0`` (warm start), ``integrator`` (step config) and
+    ``diff`` (autodiff config) are KEYWORD_ONLY so they can't be shifted by a
+    positional argument."""
     params = inspect.signature(Plant.solve).parameters
-    for name in ("params", "t_span", "t_eval", "y0", "gradient"):
+    for name in ("params", "t_span", "t_eval", "y0", "integrator", "diff"):
         assert name in params, f"Plant.solve lost '{name}'"
     positional = [
         n for n, p in params.items()
@@ -89,7 +90,7 @@ def test_plant_solve_contract():
     assert positional[0] == "t_span", (
         f"Plant.solve must take t_span first positionally; got {positional}"
     )
-    for name in ("y0", "gradient"):
+    for name in ("y0", "integrator", "diff"):
         assert params[name].kind is inspect.Parameter.KEYWORD_ONLY, (
             f"Plant.solve '{name}' must stay KEYWORD_ONLY"
         )

@@ -188,7 +188,7 @@ def test_plant_pattern_superset_over_trajectory(bsm1):
     # gather real trajectory states and check each state's J nonzeros are covered
     sol = plant.solve(t_span=(0.0, 6.0), t_eval=jnp.linspace(0.0, 6.0, 60),
                       params=params, y0=y0, rtol=1e-5, atol=1e-3,
-                      max_steps=2_000_000)
+                      integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
     fj = jax.jit(jax.jacfwd(rhs))
     for row in np.asarray(sol.state):
         J = np.asarray(fj(jnp.maximum(jnp.asarray(row), 0.0)))
@@ -216,9 +216,12 @@ def test_plant_colored_solve_matches_default(bsm1):
     params = plant.default_parameters()
     te = jnp.linspace(0.0, 8.0, 41)
     kw = dict(t_span=(0.0, 8.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-5, atol=1e-3, max_steps=2_000_000)
-    s_def = plant.solve(**kw)
-    s_col = plant.solve(**kw, colored_jacobian=True)
+              rtol=1e-5, atol=1e-3)
+    s_def = plant.solve(
+        **kw, integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
+    s_col = plant.solve(
+        **kw, integrator=aquakin.IntegratorConfig(
+            max_steps=2_000_000, colored_jacobian=True))
     assert plant._colored_root_finder[2] is True          # guard passed
     a, b = np.asarray(s_def.state), np.asarray(s_col.state)
     assert np.all(np.isfinite(b))
@@ -232,20 +235,29 @@ def test_plant_colored_gradient_matches_default(bsm1):
     base = plant.default_parameters()
     # build the colored RF concretely first (the pattern needs concrete arrays)
     plant.solve(t_span=(0.0, 0.1), t_eval=jnp.array([0.1]), params=base, y0=y0,
-                rtol=1e-4, atol=1e-3, max_steps=1_000_000, colored_jacobian=True)
+                rtol=1e-4, atol=1e-3,
+                integrator=aquakin.IntegratorConfig(
+                    max_steps=1_000_000, colored_jacobian=True))
     assert plant._colored_root_finder[2] is True
 
     def loss(scale, colored):
         s = plant.solve(t_span=(0.0, 3.0), t_eval=jnp.array([3.0]),
-                        params=base * scale, y0=y0, gradient="jax_adjoint",
-                        rtol=1e-5, atol=1e-3, max_steps=2_000_000,
-                        colored_jacobian=colored)
+                        params=base * scale, y0=y0,
+                        diff=aquakin.DifferentiationConfig(method="through_solve"),
+                        rtol=1e-5, atol=1e-3,
+                        integrator=aquakin.IntegratorConfig(
+                            max_steps=2_000_000, colored_jacobian=colored))
         return jnp.sum(s.state[-1] ** 2)
 
     g_def = jax.grad(lambda s: loss(s, False))(1.0)
     g_col = jax.grad(lambda s: loss(s, True))(1.0)
     assert np.isfinite(g_def) and np.isfinite(g_col)
-    assert abs(g_col - g_def) / (abs(g_def) + 1e-12) < 1e-5
+    # This is the FORWARD colored solve: it feeds the colored J into the implicit
+    # chord, whose decoupled-Newton convergence point depends on the J
+    # approximation, so colored vs dense differ at the ~Newton-tolerance level
+    # (~1e-4), amplified by the K3 default's larger step count. (The colored
+    # BACKWARD adjoint, by contrast, is exact == dense.)
+    assert abs(g_col - g_def) / (abs(g_def) + 1e-12) < 1e-4
 
 
 @pytest.mark.slow
@@ -264,10 +276,13 @@ def test_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch):
 
     te = jnp.linspace(0.0, 5.0, 26)
     kw = dict(t_span=(0.0, 5.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-5, atol=1e-3, max_steps=2_000_000)
-    s_def = plant.solve(**kw)
+              rtol=1e-5, atol=1e-3)
+    s_def = plant.solve(
+        **kw, integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
     with pytest.warns(RuntimeWarning, match="falling back to dense"):
-        s_col = plant.solve(**kw, colored_jacobian=True)
+        s_col = plant.solve(
+            **kw, integrator=aquakin.IntegratorConfig(
+                max_steps=2_000_000, colored_jacobian=True))
     assert plant._colored_root_finder[2] is False         # guard failed
     # fallback path == dense default, so trajectories match tightly
     rel = np.max(np.abs(np.asarray(s_def.state) - np.asarray(s_col.state))
@@ -285,7 +300,8 @@ def test_colored_rejected_with_events(bsm1):
     ev = [aquakin.Event(at_times=[1.0])]
     with pytest.raises(ValueError, match="colored_jacobian"):
         plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]), params=params,
-                    y0=y0, events=ev, colored_jacobian=True)
+                    y0=y0, events=ev,
+                    integrator=aquakin.IntegratorConfig(colored_jacobian=True))
 
 
 # --------------------------------------------------------------------------
@@ -310,9 +326,12 @@ def test_colored_bsm2_matches_default():
     y0 = bsm2_warm_start(p)
     te = jnp.linspace(0.0, 6.0, 25)
     kw = dict(t_span=(0.0, 6.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-4, atol=1e-3, max_steps=8_000_000)
-    s_def = p.solve(**kw)
-    s_col = p.solve(**kw, colored_jacobian=True)
+              rtol=1e-4, atol=1e-3)
+    s_def = p.solve(
+        **kw, integrator=aquakin.IntegratorConfig(max_steps=8_000_000))
+    s_col = p.solve(
+        **kw, integrator=aquakin.IntegratorConfig(
+            max_steps=8_000_000, colored_jacobian=True))
     assert p._colored_root_finder[2] is True
     a, b = np.asarray(s_def.state), np.asarray(s_col.state)
     assert np.all(np.isfinite(b))
@@ -343,9 +362,12 @@ def test_colored_bsm2_soluble_holdup_no_fallback():
     y0 = p.steady_state(params, y0=bsm2_warm_start(p)).state
     te = jnp.linspace(0.0, 6.0, 13)
     kw = dict(t_span=(0.0, 6.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-4, atol=1e-3, max_steps=8_000_000)
-    s_def = p.solve(**kw)
-    s_col = p.solve(**kw, colored_jacobian=True)
+              rtol=1e-4, atol=1e-3)
+    s_def = p.solve(
+        **kw, integrator=aquakin.IntegratorConfig(max_steps=8_000_000))
+    s_col = p.solve(
+        **kw, integrator=aquakin.IntegratorConfig(
+            max_steps=8_000_000, colored_jacobian=True))
     assert p._colored_root_finder[2] is True       # guard passed: colored, not dense
     a, b = np.asarray(s_def.state), np.asarray(s_col.state)
     assert np.all(np.isfinite(b))
@@ -428,26 +450,33 @@ def test_colored_adjoint_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch
     off the structural pattern's cross-unit placement, so the cross-unit and
     time-dependence couplings are missing and the guard fires."""
     plant, y0 = bsm1()
-    params = plant.default_parameters()
+    base = plant.default_parameters()
+    gidx = plant.parameter_index("asm1.muH")
+    theta0 = float(base[gidx])
 
     def _diag_only(rhs, y0_, **kw):
         n = jnp.asarray(y0_).shape[0]
         return np.eye(n, dtype=bool)
     monkeypatch.setattr(cj, "jacobian_sparsity_pattern", _diag_only)
 
-    kw = dict(t_span=(0.0, 0.3), t_eval=jnp.array([0.15, 0.3]), params=params,
-              y0=y0, gradient="stable_adjoint", rtol=1e-6, atol=1e-3,
-              max_steps=20_000)
-    s_def = plant.solve(**kw, colored_jacobian=False)
+    def g(theta, colored):
+        p = base.at[gidx].set(theta)
+        s = plant.solve(t_span=(0.0, 0.3), t_eval=jnp.array([0.15, 0.3]), params=p,
+                        y0=y0, diff=aquakin.DifferentiationConfig(method="stable"),
+                        rtol=1e-6, atol=1e-3,
+                        integrator=aquakin.IntegratorConfig(
+                            max_steps=20_000, colored_jacobian=colored))
+        return jnp.sum(s.state ** 2)
+
+    # The backward builder is derived (and guarded) under the grad trace, from the
+    # plant's default operating point. The truncated (diagonal) pattern fails the
+    # guard -> warn + fall back to the dense backward Jacobian.
+    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
     with pytest.warns(RuntimeWarning, match="falling back to dense"):
-        s_col = plant.solve(**kw, colored_jacobian=True)
-    builder, _n, ok, _ratio, _rf = plant._colored_adjoint_builder
+        g_col = float(jax.grad(lambda th: g(th, True))(theta0))
+    builder, _n, ok, _nstates, _rf = plant._colored_adjoint_builder
     assert ok is False and builder is None              # guard failed -> dense
-    # The forward trajectory is unaffected by the (backward-only) Jacobian build,
-    # so the fallback solve equals the dense one.
-    rel = np.max(np.abs(np.asarray(s_def.state) - np.asarray(s_col.state))
-                 / (np.abs(np.asarray(s_def.state)) + 1e-9))
-    assert rel < 1e-10
+    assert g_col == pytest.approx(g_dense, rel=1e-8)     # dense fallback -> correct
 
 
 @pytest.mark.slow

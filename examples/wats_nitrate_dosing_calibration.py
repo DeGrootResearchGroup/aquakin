@@ -16,9 +16,9 @@ Workflow:
    Gauss-Newton Laplace posterior for parameter uncertainty.
 
 The network carries a state-derived (charge-balance) pH, so no pH condition is
-supplied. ``ad_mode="forward"`` asks ``calibrate`` to form the Jacobian in
-forward mode and to build the forward-capable solver adjoint internally -- so the
-script needs no ``diffrax`` import. (A ``dtmax`` cap is still set on the reactor:
+supplied. ``DifferentiationConfig(mode="forward")`` asks ``calibrate`` to form
+the Jacobian in forward mode and to build the forward-capable solver adjoint
+internally -- so the script needs no ``diffrax`` import. (A ``dtmax`` cap is still set on the reactor:
 this WATS variant is stiff enough that the *forward solve itself* needs a bounded
 step to stay finite, independent of how the gradient is formed.)
 """
@@ -50,7 +50,9 @@ def main() -> None:
     rng = np.random.default_rng(0)
     network = aquakin.load_network("wats_sewer_extended")
     conditions = network.default_conditions()
-    reactor = aquakin.BatchReactor(network, conditions, dtmax=1e-3)
+    reactor = aquakin.BatchReactor(
+        network, conditions,
+        integrator=aquakin.IntegratorConfig(dtmax=1e-3))
 
     C0 = network.concentrations(BATCH_IC)        # YAML defaults + the dosed batch
     t_obs = jnp.linspace(0.0, T_END, 13)
@@ -70,7 +72,8 @@ def main() -> None:
         free_params=FREE, observed_species=OBSERVED,
         transforms={name: "positive_log" for name in FREE},
         loss="nll", sigma=sigma,
-        optimizer="gauss_newton", ad_mode="forward",
+        optimizer="gauss_newton",
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
         laplace=True, laplace_method="gauss_newton",
     )
 

@@ -345,9 +345,11 @@ for parameter estimation and sensitivity analysis; a plain forward simulation
 > (ASM / ADM / WATS) returns silent `NaN`/`Inf` when the reactor's `dtmax` is
 > uncapped — no exception, so the garbage gradient flows into your optimizer and
 > the fit never converges. `aquakin.calibrate` and `aquakin.sensitivity` guard
-> this for you; if you roll your own loss + optimizer, either cap `dtmax`, use
-> forward mode (`jax.jacfwd` with `adjoint=aquakin.forward_adjoint()`), or wrap
-> your gradient in `reactor.check_gradient_finite(jax.grad(loss)(p))`
+> this for you; if you roll your own loss + optimizer, either cap `dtmax` (via
+> `integrator=aquakin.IntegratorConfig(dtmax=...)`), use forward mode (`jax.jacfwd`
+> through a reactor built with
+> `diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")`),
+> or wrap your gradient in `reactor.check_gradient_finite(jax.grad(loss)(p))`
 > (equivalently the free `aquakin.check_finite_gradient`) to get an actionable
 > error instead of silent `NaN`.
 
@@ -411,10 +413,11 @@ and that is the mode the `dtmax` cap exists for. The cap-free alternative there 
 a hand-written discrete adjoint: the forward is an ordinary robust adaptive ESDIRK
 (Kvaerno5) solve and the reverse is a per-step transposed solve over the saved
 trajectory, finite at any step size with no cap. **`Plant.solve` uses it
-automatically:** `gradient` defaults to `"auto"`, which keeps a plain forward solve
-on the fast cached path but routes a solve under `jax.grad` to the cap-free
-stable adjoint — so a stiff plant gradient is finite by default with nothing to
-tune:
+automatically:** the differentiation default is
+`diff=DifferentiationConfig(mode="reverse", method="stable")`, which keeps a plain
+forward solve on the fast cached path but routes a solve under `jax.grad` to the
+cap-free stable adjoint — so a stiff plant gradient is finite by default with
+nothing to tune:
 
 ```python
 sol = plant.solve(t_span=(0.0, T), t_eval=t_eval, params=params, y0=y0)
@@ -427,57 +430,63 @@ solve — across the ASM↔ADM interface and the recycle loops — where differe
 `plant.solve` carries the integration time in the state, so the explicit time
 dependence of a time-varying influent is captured exactly in the gradient.
 
-### Choosing the integrator (`solver=`, `factormax=`)
+### Choosing the integrator (`integrator=IntegratorConfig(...)`)
+
+The integrator / step machinery is configured with one value object,
+`aquakin.IntegratorConfig`, passed as `integrator=`:
+
+```python
+IntegratorConfig(order=3, factormax=3.0, colored_jacobian="auto",
+                 dtmax=None, max_steps=100_000, solver=None)
+```
+
+`order` selects the ESDIRK method (`3` → `Kvaerno3`, the fast default; `5` →
+`Kvaerno5`), `factormax` caps the PID step-growth, `dtmax` caps the step (set it
+only for a reverse gradient *through* the solve), `max_steps` is the step budget,
+`solver` is an explicit override, and `colored_jacobian` selects sparse
+colored-AD Jacobian materialisation. `rtol` / `atol` stay separate arguments of
+`plant.solve` (the accuracy contract, not the machinery).
 
 A long dynamic plant run — the multi-hundred-day dynamic BSM2 simulation — is
 **stiffness-bound**: the step count barely depends on the tolerance, and the
 per-step cost is dominated by the implicit Jacobian factorisation of the whole
-167-state plant. The forward solve defaults to `Kvaerno5` (a 7-stage L-stable
-ESDIRK) **with a decoupled root finder** — the per-stage Newton tolerance is
-loosened 10× from the step tolerance, so each step ends in fewer iterations and
-is ~15–20% cheaper at preserved accuracy (the step controller still enforces the
-solution accuracy). That speedup is automatic; nothing to pass.
-
-Two knobs go further on the long stiff run:
-
-```python
-import diffrax
-sol = plant.solve(t_span=(0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
-                  solver=diffrax.Kvaerno3(),   # 4 stages, less linear algebra/step
-                  factormax=3.0)               # cap step growth (damps reject churn)
-```
-
-`Kvaerno3` takes somewhat more, but cheaper, steps; with `factormax` the two
-stack to **~40% faster** than the old default, matching `Kvaerno5` to ~6e-5 on
-the final state. Passing a `solver` opts out of the default Newton decoupling
-(the solver's own root finder is used) — to keep it with a different order, pass
-it explicitly: `diffrax.Kvaerno3(root_finder=diffrax.VeryChord(rtol=10*rtol,
-atol=10*atol))`. Both knobs apply to the forward solve only (rejected alongside
-`gradient="stable_adjoint"` or `events=`, which manage their own integrator).
-
-A third knob, `colored_jacobian` (default `"auto"`), forms the per-step implicit
-Jacobian by **sparse column compression** instead of densely:
+167-state plant. Every implicit solve uses a **decoupled root finder** (the
+per-stage Newton tolerance loosened 10× from the step tolerance, ~15–20% cheaper
+per step at preserved accuracy) automatically. The default
+`IntegratorConfig(order=3, factormax=3.0)` is the fast stack — `Kvaerno3` (4
+stages, less linear algebra per step) with a capped step growth — which together
+run **~40% faster** than a plain `Kvaerno5`/no-cap solve:
 
 ```python
-sol = plant.solve(t_span=(0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
-                  colored_jacobian=True)   # force coloring on both solve paths
+sol = plant.solve((0.0, 609.0), t_eval=t_eval, params=params, y0=y0)  # fast default
+
+# the older robust higher-order stack:
+sol = plant.solve((0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
+                  integrator=aquakin.IntegratorConfig(order=5, factormax=None))
 ```
+
+`colored_jacobian` (default `"auto"`) forms the per-step implicit Jacobian by
+**sparse column compression** instead of densely:
+
+```python
+sol = plant.solve((0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
+                  integrator=aquakin.IntegratorConfig(colored_jacobian=True))
 
 The plant Jacobian is sparse (dense per-unit kinetic blocks + sparse inter-unit
 coupling), so it is built in a handful of colored Jacobian-vector products (~45
 for BSM2) rather than one per state (167) — a dominant per-step linear-algebra
 cost. The reconstructed matrix equals the dense Jacobian, so the trajectory and
 gradient are unchanged to integration tolerance; only the cost of forming it
-drops, and it stacks with `Kvaerno3`/`factormax`. It applies to **both** the
-forward `jax_adjoint` solve (where `J` is built once per step) and the
-`gradient="stable_adjoint"` reverse adjoint (where `J` is rebuilt many times per
-step, so it dominates). It is built and guarded against the dense Jacobian once
-per plant, falling back to the dense solver if the guard fails.
+drops, and it stacks with `order`/`factormax`. It applies to **both** the
+forward solve (where `J` is built once per step) and the reverse stable discrete
+adjoint (where `J` is rebuilt many times per step, so it dominates). It is built
+and guarded against the dense Jacobian once per plant, falling back to the dense
+solver if the guard fails.
 
 The three settings:
 
-- **`"auto"`** (default) governs the `stable_adjoint` **backward** only: on a
-  concrete solve it *measures* whether the colored `df/dy` build is actually
+- **`"auto"`** (default) governs the reverse stable-adjoint **backward** only: on
+  a concrete solve it *measures* whether the colored `df/dy` build is actually
   cheaper than dense (it can be slower on a small plant) and enables it only when
   it pays — so a large plant (BSM2) gets the reverse-gradient speedup while a
   small one (BSM1) stays dense. The measured decision is reported by
@@ -512,8 +521,9 @@ concrete `params`/`y0` and raises a clear error under `jax.grad`/`jax.jit` or wi
 `events=`, and falls back to the diffrax path if the colored-Jacobian guard fails.
 
 For reactor-level fits, the adjoint plumbing is hidden too: `aquakin.calibrate`
-and `aquakin.sensitivity` take `ad_mode="forward"|"reverse"` and build the right
-adjoint internally (no `diffrax` import), and `calibrate(check_finite=True)` (the
+and `aquakin.sensitivity` take `diff=DifferentiationConfig(mode=...)` and build
+the right adjoint internally (no `diffrax` import), and
+`DifferentiationConfig(check_finite=True)` (the
 default) raises a friendly error with the remedy instead of returning silent
 `NaN` gradients on a stiff network.
 

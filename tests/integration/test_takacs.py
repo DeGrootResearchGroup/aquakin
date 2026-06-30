@@ -134,7 +134,8 @@ def test_takacs_blanket_profile_and_clarification(asm1):
         t=jnp.asarray([0.0, 50.0]), Q=jnp.full((2,), Q_in),
         C=jnp.stack([C, C]), network=asm1), to="clar.inlet")
     sol = plant.solve(t_span=(0.0, 5.0), t_eval=jnp.asarray([0.0, 5.0]),
-                      rtol=1e-5, atol=1e-3, max_steps=200_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=200_000))
     assert jnp.all(jnp.isfinite(sol.state))
 
     st0, sz = plant._state_layout["clar"]
@@ -378,7 +379,8 @@ def test_lumped_tss_plant_solve(asm1):
         t=jnp.asarray([0.0, 50.0]), Q=jnp.full((2,), Q_in),
         C=jnp.stack([C, C]), network=asm1), to="clar.inlet")
     sol = plant.solve(t_span=(0.0, 5.0), t_eval=jnp.asarray([0.0, 5.0]),
-                      rtol=1e-5, atol=1e-3, max_steps=200_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=200_000))
     assert jnp.all(jnp.isfinite(sol.state))
 
     st0, sz = plant._state_layout["clar"]
@@ -469,7 +471,8 @@ def test_soluble_holdup_damps_vs_passthrough(asm1):
         t=jnp.asarray([0.0, 0.0, 50.0]), Q=jnp.full((3,), Q_in),
         C=jnp.stack([C_lo, C_hi, C_hi]), network=asm1), to="clar.inlet")
     sol = plant.solve(t_span=(0.0, 0.05), t_eval=jnp.asarray([0.0, 0.05]),
-                      rtol=1e-5, atol=1e-4, max_steps=200_000)
+                      rtol=1e-5, atol=1e-4,
+                      integrator=aquakin.IntegratorConfig(max_steps=200_000))
     assert jnp.all(jnp.isfinite(sol.state))
     SS_idx = asm1.species_index["SS"]
     out = clar.compute_outputs(

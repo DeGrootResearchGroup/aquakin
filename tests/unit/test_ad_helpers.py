@@ -79,7 +79,9 @@ def test_check_gradient_finite_remedy_depends_on_dtmax(simple_network):
     with pytest.raises(RuntimeError, match="dtmax cap"):
         uncapped.check_gradient_finite(nan)
 
-    capped = aquakin.BatchReactor(simple_network, cond, dtmax=1e-3)
+    capped = aquakin.BatchReactor(
+        simple_network, cond,
+        integrator=aquakin.IntegratorConfig(dtmax=1e-3))
     with pytest.raises(RuntimeError, match="already caps dtmax"):
         capped.check_gradient_finite(nan)
 

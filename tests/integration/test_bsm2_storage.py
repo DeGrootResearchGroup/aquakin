@@ -137,7 +137,8 @@ def storage_run(asm1, adm1):
     y0 = bsm2_warm_start(plant)
     sol = plant.solve((0.0, 80.0), t_eval=jnp.array([0.0, 80.0]),
                       params=params, y0=jnp.asarray(y0),
-                      rtol=1e-5, atol=1e-3, max_steps=500_000)
+                      rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=500_000))
     return plant, sol, params
 
 
@@ -181,7 +182,8 @@ def test_grad_through_storage_plant_is_finite(asm1):
         # small non-stiff storage plant and exercises the 1/V reverse division.
         # (stable_adjoint w.r.t. y0 currently leaks a tracer -- issue #420.)
         sol = plant.solve((0.0, 1.0), t_eval=jnp.array([1.0]), y0=y0_,
-                          gradient="jax_adjoint")
+                          diff=aquakin.DifferentiationConfig(
+                              mode="reverse", method="through_solve"))
         return jnp.sum(sol.state)
 
     g = jax.grad(loss)(y0)
