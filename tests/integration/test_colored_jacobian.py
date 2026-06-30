@@ -171,9 +171,9 @@ def _rhs_at(plant, y0, params):
     plant._build_state_layout()
     plant._build_parameter_layout()
     t0 = jnp.asarray(0.0)
-    plant._check_recycle_map_constant(t0, y0, params)
+    plant._recycle._check_recycle_map_constant(t0, y0, params)
     states0 = plant._split_state(y0)
-    rmap = plant._maybe_recycle_map(t0, states0, params)
+    rmap = plant._recycle._maybe_recycle_map(t0, states0, params)
     return lambda y: plant._rhs(t0, y, params, recycle_map=rmap)
 
 

@@ -915,8 +915,8 @@ def test_recycle_presolve_is_exact_and_gain_independent(capture):
     states = plant._split_state(y0)
     params = plant.default_parameters()
     t = jnp.asarray(0.0)
-    flows = plant._resolve_flows(t, params, states)
-    presolved = plant._resolve_recycle_concentrations(t, states, params, flows)
+    flows = plant._recycle._resolve_flows(t, params, states)
+    presolved = plant._recycle._resolve_recycle_concentrations(t, states, params, flows)
     key = list(plant._recycle_keys)[0]
     # Exactness as a fixed point: one forward pass from the pre-solved seed
     # reproduces the recycle concentration (gain-independent -- a deep

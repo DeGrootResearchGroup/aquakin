@@ -12,7 +12,7 @@ plant. ``recycle_tol`` replaces the fixed count with an adaptive
 correct for any ``rho < 1``, and the gradient is the exact implicit-function-
 theorem tangent.
 
-The synthetic tests drive :meth:`Plant._adaptive_recycle_refine` directly with a
+The synthetic tests drive :meth:`Plant._recycle._adaptive_recycle_refine` directly with a
 controllable-``rho`` map (fast, no plant solve) to pin the generality guarantee
 and the gradient; the BSM2 tests pin it on a real two-network plant.
 """
@@ -69,7 +69,7 @@ def test_adaptive_converges_for_high_rho(rho):
     p.recycle_tol = 1e-12
     p.recycle_max_passes = 5000
     seed_C = {_KEY: jnp.zeros(3)}  # deliberately far from the fixed point
-    _, Cr, _ = p._adaptive_recycle_refine(
+    _, Cr, _ = p._recycle._adaptive_recycle_refine(
         fwd, _KEYS, {_KEY: jnp.array(5.0)}, seed_C, {_KEY: None}, False)
     xstar = _true_C_fixed_point(theta, rho)
     err_adaptive = float(np.max(np.abs(Cr[_KEY] - xstar)) / np.max(np.abs(xstar)))
@@ -95,7 +95,7 @@ def test_adaptive_ift_gradient_matches_finite_difference():
         p.recycle_tol = 1e-13
         p.recycle_max_passes = 5000
         fwd = _synthetic_forward(theta, rho)
-        _, Cr, _ = p._adaptive_recycle_refine(
+        _, Cr, _ = p._recycle._adaptive_recycle_refine(
             fwd, _KEYS, {_KEY: jnp.array(5.0)}, dict(seed), {_KEY: None}, False)
         return jnp.sum(Cr[_KEY] ** 2)
 
@@ -158,16 +158,16 @@ def test_bsm2_adaptive_matches_deep_sweep(bsm2):
     yp = jnp.asarray(np.asarray(y0) * 1.3 + 1.0)
     states = p._split_state(yp)
     sig = p._compute_signals(t0, states, pf)
-    flows = p._resolve_flows(t0, pf, states)
+    flows = p._recycle._resolve_flows(t0, pf, states)
     influent = {(None, pn): s.at(t0) for pn, s in p.influents.items()}
 
     p.recycle_tol = None
-    seed_aff = p._resolve_recycle_concentrations(t0, states, pf, flows, sig)
+    seed_aff = p._recycle._resolve_recycle_concentrations(t0, states, pf, flows, sig)
     deep = p._sweep_outputs(t0, states, dict(influent), seed_aff, pf,
                             passes=14, signals=sig)
 
     p.recycle_tol = 1e-12
-    seed_ad = p._resolve_recycle_concentrations(t0, states, pf, flows, sig)
+    seed_ad = p._recycle._resolve_recycle_concentrations(t0, states, pf, flows, sig)
     out_ad = p._sweep_outputs(t0, states, dict(influent), seed_ad, pf,
                               passes=1, signals=sig)
     p.recycle_tol = None
@@ -195,8 +195,8 @@ def test_bsm2_adaptive_ift_tangent_matches_deep(bsm2):
     def loss(y):
         st = p._split_state(y)
         s = p._compute_signals(t0, st, pf)
-        fl = p._resolve_flows(t0, pf, st)
-        seed = p._resolve_recycle_concentrations(t0, st, pf, fl, s)
+        fl = p._recycle._resolve_flows(t0, pf, st)
+        seed = p._recycle._resolve_recycle_concentrations(t0, st, pf, fl, s)
         outs = p._sweep_outputs(t0, st, dict(influent), seed, pf, signals=s)
         return jnp.sum(outs[("front_mix", "out")].C)
 

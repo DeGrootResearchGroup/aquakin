@@ -318,7 +318,7 @@ def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     # A concrete solve sets the state-invariant-map flag (BSM1's recycle map is
     # constant), so the cached-map primal is exercised.
     _ = g(theta0)
-    assert plant._recycle_map_constant is True
+    assert plant._recycle._recycle_map_constant is True
 
     plant._jit_cache.clear()
     grad_cached = float(jax.grad(g)(theta0))            # cached-map primal (#366)
@@ -327,7 +327,7 @@ def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     # were 0 the guard would be vacuous.
     assert grad_cached != 0.0
 
-    plant._recycle_map_constant = False                 # probe M every call
+    plant._recycle._recycle_map_constant = False                 # probe M every call
     plant._jit_cache.clear()
     grad_probed = float(jax.grad(g)(theta0))            # pre-#366 path
     # Adaptive recycle: M only warm-starts, so the result is M-independent and the

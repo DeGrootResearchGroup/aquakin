@@ -104,7 +104,7 @@ def test_bsm2_flow_balance(plant):
     plant._build_state_layout()
     plant._build_parameter_layout()
     params = plant.default_parameters()
-    fl = plant._resolve_flows(jnp.asarray(0.0), params)
+    fl = plant._recycle._resolve_flows(jnp.asarray(0.0), params)
     # Fixed recycle pumps at their setpoints.
     assert float(fl[("tank5_split", "internal_recycle")]) == pytest.approx(3 * BSM2_Q_REF, rel=1e-9)
     assert float(fl[("underflow_split", "ras")]) == pytest.approx(BSM2_Q_REF, rel=1e-9)
