@@ -528,8 +528,8 @@ def test_dgsm_cond_filter_and_with_cond_factor():
     """The near-singular-Jacobian filter (the heavy-tail robustification) drops the
     samples it should and re-aggregation reuses the retained per-sample data. Fast
     and deterministic -- exercises the aggregation directly, no plant solve."""
-    from aquakin.plant.plant import (_dgsm_aggregate, _cond_mask,
-                                     SteadyStateDGSMResult)
+    from aquakin.plant.sensitivity import (_dgsm_aggregate, _cond_mask,
+                                           SteadyStateDGSMResult)
     rng = np.random.default_rng(0)
     N, m, k = 200, 1, 3
     grad = rng.normal(size=(N, m, k))
