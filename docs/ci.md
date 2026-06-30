@@ -169,13 +169,25 @@ its heavier jaxlib 0.6.2 build ran close to the hosted runner's
 resource/time limits and the job was intermittently killed mid-run, while
 3.11/3.12 stayed green and the suite passed locally on 3.10. When adding a runtime
 dependency, add it to `pyproject.toml` `dependencies` so the CI install
-(`pip install -e ".[test]"`) picks it up — the `_make_*` network
-generators' `ruamel` need is intentionally *not* a runtime dep (they are
-run manually, never imported by the package or tests). `pandas` is an
-**optional** dependency (the `dataframe` extra, for the `to_dataframe()` /
-`to_csv()` result exporters), but it is also in the `test` extra so the fast
-gate exercises those exporters; the library imports it lazily inside the
-exporters (`require_pandas`), so solving never needs it.
+(`pip install -e ".[test]" -c constraints.txt`) picks it up — the `_make_*`
+network generators' `ruamel` need is intentionally *not* a runtime dep (they are
+run manually, never imported by the package or tests). `pandas`/`matplotlib` are
+**optional** dependencies (the `dataframe` / `plot` extras, for the
+`to_dataframe()` / `to_csv()` / `sol.plot(...)` helpers), pulled into the `test`
+extra by self-reference (`aquakin[dataframe,plot]`) so the fast gate exercises
+them; the library imports them lazily (`require_pandas`), so solving never needs
+them.
+
+**Reproducible install (`constraints.txt`).** The abstract `dependencies` floors
+in `pyproject.toml` are loose with **no upper caps** (upper-bounding a *library's*
+deps propagates to consumers and causes resolver conflicts), so a bare install can
+drift as the fast-moving JAX stack (jax / jaxlib / diffrax / optimistix) releases.
+Reproducibility for CI therefore lives in the committed **`constraints.txt`** lock
+— exact pins of the known-good runtime + test closure — which every `[test]`
+install applies via `-c constraints.txt`. A dependency upgrade is then a
+deliberate edit: bump the pin(s) in `constraints.txt` (and the matching floor in
+`pyproject.toml` if the new minimum rises), run the suite, commit. The `lint` job
+does **not** use the lock (it installs only the version-pinned `ruff`).
 
 ---
 

@@ -9,7 +9,7 @@ description = "Reactive scalar transport kinetics for aqueous environmental syst
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "aquakin contributors" }]
+authors = [{ name = "Christopher DeGroot", email = "christopher.degroot@uwo.ca" }]
 keywords = ["chemistry", "kinetics", "ozone", "bromate", "jax", "diffrax"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -19,15 +19,27 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 dependencies = [
-    "jax>=0.4.30",
-    "jaxlib>=0.4.30",
-    "diffrax>=0.5",
-    "optimistix>=0.0.6",
+    # Floors are the known-good minimums the suite is tested against. The
+    # fast-moving JAX stack (jax/jaxlib/diffrax/optimistix) had moved many
+    # releases past its original floors, so those claimed support for ancient,
+    # untested versions; they are raised to the tested baseline here. No upper
+    # caps: upper-bounding a library's deps propagates to consumers and causes
+    # resolver conflicts. Exact, reproducible versions for CI live in the
+    # committed `constraints.txt` lock instead (see the CI install step).
+    "jax>=0.10",
+    "jaxlib>=0.10",
+    "diffrax>=0.7",
+    "optimistix>=0.1",
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "numpy>=1.24",
     "scipy>=1.10",
 ]
+
+[project.urls]
+Homepage = "https://github.com/DeGrootResearchGroup/aquakin"
+Repository = "https://github.com/DeGrootResearchGroup/aquakin"
+Issues = "https://github.com/DeGrootResearchGroup/aquakin/issues"
 
 [project.optional-dependencies]
 # pandas powers the optional ``to_dataframe()`` / ``to_csv()`` result exporters;
@@ -39,7 +51,16 @@ plot = ["matplotlib>=3.5"]
 # the gate red without a deliberate bump. Capped to the 0.15 series for the same
 # reason; raise the cap intentionally.
 lint = ["ruff>=0.15,<0.16"]
-test = ["pytest>=7", "pytest-xdist>=3", "pytest-timeout>=2", "pytest-split>=0.8", "pandas>=2.0", "matplotlib>=3.5"]
+# `test` pulls in the `dataframe` + `plot` extras by self-reference so their
+# pandas/matplotlib pins live in one place (the fast gate exercises the optional
+# exporters/plotting helpers).
+test = [
+    "pytest>=7",
+    "pytest-xdist>=3",
+    "pytest-timeout>=2",
+    "pytest-split>=0.8",
+    "aquakin[dataframe,plot]",
+]
 
 [tool.setuptools.packages.find]
 include = ["aquakin*"]

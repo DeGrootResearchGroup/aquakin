@@ -1,0 +1,40 @@
+# Reproducible CI lock for aquakin.
+#
+# Exact, known-good versions of the runtime + test dependency closure -- the set
+# the test suite is verified against. The abstract floors in pyproject.toml stay
+# loose (no upper caps) so downstream installs of aquakin are not constrained;
+# reproducibility for *our* CI lives here. CI installs with:
+#
+#     pip install -e ".[test]" -c constraints.txt
+#
+# To refresh after a deliberate dependency upgrade: update the relevant pins to
+# the new known-good versions and re-run the suite before committing. Keep this
+# in sync with the (raised) floors in pyproject.toml.
+
+# --- JAX numerical stack (fast-moving; the main reason this lock exists) ------
+jax==0.10.2
+jaxlib==0.10.2
+diffrax==0.7.2
+optimistix==0.1.0
+equinox==0.13.8
+lineax==0.1.1
+jaxtyping==0.3.11
+ml-dtypes==0.5.4
+opt-einsum==3.4.0
+
+# --- schema / IO / numerics ---------------------------------------------------
+pydantic==2.13.4
+pydantic-core==2.46.4
+numpy==2.4.4
+scipy==1.17.1
+pyyaml==6.0.3
+
+# --- test tooling -------------------------------------------------------------
+pytest==9.0.3
+pytest-xdist==3.8.0
+pytest-timeout==2.4.0
+pytest-split==0.11.0
+
+# --- optional postprocessing extras (installed in the test env) ---------------
+pandas==3.0.3
+matplotlib==3.10.8
