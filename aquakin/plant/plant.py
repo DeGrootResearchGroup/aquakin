@@ -2849,11 +2849,140 @@ class Plant:
         if unit_events:
             events = (list(events) + unit_events) if events is not None else unit_events
 
-        # Validate incompatible argument combinations BEFORE any concrete solve
-        # work (the affinity/recycle-map probes below call _resolve_flows, which
-        # would raise an obscure error on an intentionally-minimal plant). The
-        # events dispatch itself stays after the concrete checks so a valid events
-        # solve still gets the cached recycle map.
+        # Reject incompatible argument combinations BEFORE any concrete solve work
+        # (the affinity/recycle-map probes below call _resolve_flows, which would
+        # raise an obscure error on an intentionally-minimal plant).
+        self._validate_solve_args(
+            events=events,
+            event=event,
+            integrator=integrator,
+            forward_fast=forward_fast,
+            gradient=gradient,
+            params=params,
+            y0=y0,
+        )
+
+        # One-time, concrete check that the recycle-flow solve is self-consistent
+        # (every flow rule affine in the recycle flows). Skipped under tracing
+        # (params/y0 are JAX tracers -- can't compare/warn) and guarded to run
+        # once per plant. It only warns, never blocks the solve. Run before the
+        # events branch too, so an events-only plant (an SBR/control study) still
+        # gets these diagnostics and the cached recycle map.
+        #
+        # LIMITATION: this probes affinity only at (t0, y0). A unit with a
+        # piecewise-linear flow rule -- a threshold-mode SplitterUnit (influent
+        # bypass) or a StorageTank level-gated bypass -- that is on one side of
+        # its kink at t0 but crosses it *later* in a dynamic run is NOT caught:
+        # _resolve_flows then linearises across the kink at that time with no
+        # warning. The resolved flows stay exact only while every unit remains in
+        # the affine regime it occupied at t0. (Re-probing at sampled times would
+        # close this; deferred as a known limitation -- see issue #255.)
+        self._run_one_time_guards(t0, params, y0)
+
+        if events is not None:
+            # (argument combinations validated above, before the concrete checks)
+            return self._solve_with_events(
+                t0,
+                t1,
+                t_eval,
+                params,
+                y0,
+                events,
+                rtol=rtol,
+                atol=atol_eff,
+                dtmax=dtmax,
+                adjoint=adjoint,
+                max_steps=max_steps,
+                time_factor=_time_factor,
+                time_unit=time_unit,
+                order=order,
+                factormax=factormax,
+                solver=solver,
+            )
+
+        if gradient == "auto":
+            # A concrete forward solve takes the fast cached jax_adjoint path; a
+            # solve under reverse-mode differentiation (params/y0 are tracers)
+            # takes the cap-free stable_adjoint, so a stiff plant gradient is
+            # finite by default. event=/adjoint=/dtmax= are jax_adjoint-only, so
+            # their presence pins jax_adjoint.
+            differentiating = any(
+                isinstance(v, jax.core.Tracer) for v in (params, y0) if v is not None
+            )
+            pin_jax = event is not None or adjoint is not None or dtmax is not None
+            gradient = "jax_adjoint" if (pin_jax or not differentiating) else "stable_adjoint"
+
+        if gradient == "stable_adjoint":
+            return self._solve_stable_adjoint(
+                t0,
+                t1,
+                t_eval,
+                params,
+                y0,
+                rtol=rtol,
+                atol=atol_eff,
+                solver=solver,
+                factormax=factormax,
+                colored_jacobian=colored_jacobian,
+                order=order,
+                adjoint=adjoint,
+                dtmax=dtmax,
+                event=event,
+                adjoint_max_steps=adjoint_max_steps,
+                adjoint_low_memory=adjoint_low_memory,
+                time_factor=_time_factor,
+                time_unit=time_unit,
+            )
+
+        if forward_fast:
+            sol = self._solve_forward_fast(
+                t0,
+                t1,
+                t_eval,
+                params,
+                y0,
+                rtol=rtol,
+                atol=atol_eff,
+                max_steps=max_steps,
+                time_factor=_time_factor,
+                time_unit=time_unit,
+            )
+            if sol is not None:
+                return sol
+
+        return self._solve_jax_adjoint(
+            t0,
+            t1,
+            t_eval,
+            params,
+            y0,
+            rtol=rtol,
+            atol=atol_eff,
+            event=event,
+            adjoint=adjoint,
+            dtmax=dtmax,
+            max_steps=max_steps,
+            progress_meter=progress_meter,
+            solver=solver,
+            factormax=factormax,
+            order=order,
+            colored_jacobian=colored_jacobian,
+            time_factor=_time_factor,
+            time_unit=time_unit,
+        )
+
+    def _validate_solve_args(
+        self, *, events, event, integrator, forward_fast, gradient, params, y0
+    ):
+        """Reject incompatible :meth:`solve` argument combinations up front.
+
+        Raises ``ValueError`` for the combinations the dispatch below cannot
+        honour: ``events=`` with the low-level ``event=`` or with
+        ``integrator.solver`` / ``colored_jacobian=True`` (the segmented
+        located-event solve manages its own integrator), and ``forward_fast``
+        with ``events=`` / ``gradient='stable_adjoint'`` / traced inputs (it is a
+        non-differentiable concrete-only path).
+        """
         if events is not None:
             if event is not None:
                 raise ValueError(
@@ -2899,21 +3028,15 @@ class Plant:
                     "solve (which routes through the differentiable diffrax path)."
                 )
 
-        # One-time, concrete check that the recycle-flow solve is self-consistent
-        # (every flow rule affine in the recycle flows). Skipped under tracing
-        # (params/y0 are JAX tracers -- can't compare/warn) and guarded to run
-        # once per plant. It only warns, never blocks the solve. Run before the
-        # events branch too, so an events-only plant (an SBR/control study) still
-        # gets these diagnostics and the cached recycle map.
-        #
-        # LIMITATION: this probes affinity only at (t0, y0). A unit with a
-        # piecewise-linear flow rule -- a threshold-mode SplitterUnit (influent
-        # bypass) or a StorageTank level-gated bypass -- that is on one side of
-        # its kink at t0 but crosses it *later* in a dynamic run is NOT caught:
-        # _resolve_flows then linearises across the kink at that time with no
-        # warning. The resolved flows stay exact only while every unit remains in
-        # the affine regime it occupied at t0. (Re-probing at sampled times would
-        # close this; deferred as a known limitation -- see issue #255.)
+    def _run_one_time_guards(self, t0, params, y0):
+        """One-time, concrete recycle diagnostics + map-constancy caching.
+
+        Skipped under tracing (``params``/``y0`` are JAX tracers). Runs the
+        affinity / sweep-convergence warnings once per plant, and probes whether
+        the recycle concentration map ``M`` and flow map ``A`` are
+        state-independent (so they can be cached once per solve). Only warns;
+        never blocks the solve.
+        """
         if not any(isinstance(v, jax.core.Tracer) for v in (params, y0)):
             if not self._flow_affinity_checked:
                 self._flow_affinity_checked = True
@@ -2942,236 +3065,284 @@ class Plant:
             # stable_adjoint branch below, only when that path is actually taken,
             # so a forward jax_adjoint solve never builds it.)
 
-        if events is not None:
-            # (argument combinations validated above, before the concrete checks)
-            return self._solve_with_events(
+    def _solve_stable_adjoint(
+        self,
+        t0,
+        t1,
+        t_eval,
+        params,
+        y0,
+        *,
+        rtol,
+        atol,
+        solver,
+        factormax,
+        colored_jacobian,
+        order,
+        adjoint,
+        dtmax,
+        event,
+        adjoint_max_steps,
+        adjoint_low_memory,
+        time_factor,
+        time_unit,
+    ):
+        """The cap-free reverse-mode discrete-adjoint solve (``gradient='stable_adjoint'``).
+
+        A robust adaptive ESDIRK forward paired with the per-step transposed-solve
+        discrete adjoint over the saved trajectory, which stays finite at any step
+        size. The compiled solve is cached per instance and reused across repeat
+        forward solves; under a trace it runs uncached so the ``custom_vjp``
+        composes with the enclosing reverse-mode pass.
+        """
+        if adjoint is not None or dtmax is not None:
+            raise ValueError(
+                "gradient='stable_adjoint' forms its own discrete adjoint and "
+                "controls its own steps; do not also pass adjoint= or dtmax=."
+            )
+        if event is not None:
+            raise ValueError(
+                "event= (e.g. a steady-state terminating event) is only "
+                "supported on the forward gradient='jax_adjoint' path."
+            )
+        # solver=/factormax= ARE supported here: the discrete adjoint builds
+        # its backward from the forward solver's Butcher tableau generically
+        # (any ESDIRK with a tableau -- e.g. the cheaper 4-stage Kvaerno3 in
+        # place of the default 7-stage Kvaerno5), and factormax caps the
+        # per-step growth of its PID controller, exactly as on the forward
+        # path. A non-ESDIRK solver raises a clear error from the tableau
+        # extraction. ``solver=None`` keeps the default Kvaerno5.
+        # colored_jacobian colors the per-step df/dy Jacobian build in the
+        # BACKWARD pass (its dominant cost), exact (machine-precision) vs dense.
+        # On a concrete solve, derive + cache the colored builder and -- for
+        # "auto" -- measure whether it actually pays (the build is cheaper than
+        # dense); under a first traced solve (before it is built) it is None ->
+        # dense fallback. The decision: True forces it on, "auto" enables it
+        # only when the measured build speedup clears the margin (so it is on
+        # for a large block-sparse plant like BSM2 and off for a small one like
+        # BSM1, where the colored build is slower), False never colors.
+        # The colored backward Jacobian is enabled deterministically by plant
+        # SIZE (the reliable signal -- see _COLORED_BACKWARD_MIN_STATES), not a
+        # build-time benchmark, so no concrete probe solve is needed: the
+        # builder is derived from the plant's default operating point and so
+        # builds even here under the gradient's own trace. ``True`` forces it on
+        # (any size), ``"auto"`` enables it past the size gate, ``False`` never
+        # colors.
+        n_states = int(y0.shape[0])
+        want_colored = colored_jacobian is True or (
+            colored_jacobian == "auto" and n_states >= self._COLORED_BACKWARD_MIN_STATES
+        )
+        if want_colored and self._colored_adjoint_builder is None:
+            self._colored_adjoint_jacobian_builder(t0, rtol, atol)
+        cab = self._colored_adjoint_builder
+        use_colored = bool(want_colored and cab is not None and cab[2])  # built + guard ok
+        jac_builder = cab[0] if use_colored else None
+        # The infrastructure to also color the *forward* solve's per-step
+        # implicit Jacobian is in place (``cab[4]`` is the ColoredVeryChord for
+        # the autonomized forward RHS, and ``esdirk_adjoint_solve`` accepts it
+        # as ``forward_root_finder``), but it is NOT auto-enabled: unlike the
+        # colored *backward* (which feeds J directly into the transposed solve,
+        # exact on a superset pattern), the colored forward feeds J into an
+        # iterative chord whose decoupled-Newton convergence point depends on
+        # the J approximation, so a colored-vs-dense difference shifts the
+        # forward trajectory at the ~Newton-tolerance level (~1e-4) -- it would
+        # break the bit-identical ``colored_jacobian=True`` == dense invariant.
+        # Enabling it as a default needs the structural pattern reconciled so
+        # the colored and dense forward chords converge identically.
+        fwd_root_finder = None
+        # Cap-free reverse-mode gradient through the stiff plant solve: the
+        # forward is a robust adaptive ESDIRK solve and the reverse is the
+        # per-step transposed-solve discrete adjoint over the saved
+        # trajectory, which stays finite at any step size. The compiled solve
+        # is cached per instance and reused across repeat *forward* solves
+        # (the parameter-sweep case), keyed like the forward path but tagged
+        # so it never collides with it. ``t_eval`` is baked into the compiled
+        # closure (the adjoint marks it non-differentiable, so it cannot be a
+        # traced runtime argument), so the key carries its values. The cache
+        # is used only when the inputs are concrete: under a trace (a gradient
+        # through the solve, or an enclosing jit) the adjoint's ``custom_vjp``
+        # is traced directly into the outer computation -- routing it through
+        # an inner ``jax.jit`` does not compose with an outer reverse-mode
+        # pass -- which is the path the calibration gradient takes anyway.
+        # The discrete-adjoint backward scan walks a saved trajectory whose
+        # length is adjoint_max_steps (DifferentiationConfig.adjoint_max_steps);
+        # the forward solve must also fit in that buffer, so this single budget
+        # serves both roles here.
+        adj_steps = adjoint_max_steps
+        settings = concrete_settings_key(rtol, atol, None, None, adj_steps)
+        teval_key, teval_concrete = _concrete_teval_key(t_eval)
+        under_trace = isinstance(params, jax.core.Tracer) or isinstance(y0, jax.core.Tracer)
+        # The forward ESDIRK solver (e.g. the cheaper Kvaerno3) and factormax
+        # change the compiled solve, so they key the cache -- the solver by
+        # class, exactly as the forward jax_adjoint path does. The ESDIRK
+        # ``order`` (3 vs 5) also changes the compiled solve, so it is keyed.
+        # ``adjoint_low_memory`` selects the recompute backward (no saved
+        # dense-stage buffer), a different compiled solve, so it is keyed too.
+        solver_key = type(solver).__name__ if solver is not None else None
+        cache_key = (
+            None
+            if (settings is None or not teval_concrete or under_trace)
+            else (
+                "stable_adjoint",
                 t0,
                 t1,
-                t_eval,
-                params,
-                y0,
-                events,
-                rtol=rtol,
-                atol=atol_eff,
-                dtmax=dtmax,
-                adjoint=adjoint,
-                max_steps=max_steps,
-                time_factor=_time_factor,
-                time_unit=time_unit,
-                order=order,
-                factormax=factormax,
-                solver=solver,
+                teval_key,
+                settings,
+                use_colored,
+                solver_key,
+                factormax,
+                order,
+                adjoint_low_memory,
             )
-
-        if gradient == "auto":
-            # A concrete forward solve takes the fast cached jax_adjoint path; a
-            # solve under reverse-mode differentiation (params/y0 are tracers)
-            # takes the cap-free stable_adjoint, so a stiff plant gradient is
-            # finite by default. event=/adjoint=/dtmax= are jax_adjoint-only, so
-            # their presence pins jax_adjoint.
-            differentiating = any(
-                isinstance(v, jax.core.Tracer) for v in (params, y0) if v is not None
-            )
-            pin_jax = event is not None or adjoint is not None or dtmax is not None
-            gradient = "jax_adjoint" if (pin_jax or not differentiating) else "stable_adjoint"
-
-        if gradient == "stable_adjoint":
-            if adjoint is not None or dtmax is not None:
-                raise ValueError(
-                    "gradient='stable_adjoint' forms its own discrete adjoint and "
-                    "controls its own steps; do not also pass adjoint= or dtmax=."
-                )
-            if event is not None:
-                raise ValueError(
-                    "event= (e.g. a steady-state terminating event) is only "
-                    "supported on the forward gradient='jax_adjoint' path."
-                )
-            # solver=/factormax= ARE supported here: the discrete adjoint builds
-            # its backward from the forward solver's Butcher tableau generically
-            # (any ESDIRK with a tableau -- e.g. the cheaper 4-stage Kvaerno3 in
-            # place of the default 7-stage Kvaerno5), and factormax caps the
-            # per-step growth of its PID controller, exactly as on the forward
-            # path. A non-ESDIRK solver raises a clear error from the tableau
-            # extraction. ``solver=None`` keeps the default Kvaerno5.
-            # colored_jacobian colors the per-step df/dy Jacobian build in the
-            # BACKWARD pass (its dominant cost), exact (machine-precision) vs dense.
-            # On a concrete solve, derive + cache the colored builder and -- for
-            # "auto" -- measure whether it actually pays (the build is cheaper than
-            # dense); under a first traced solve (before it is built) it is None ->
-            # dense fallback. The decision: True forces it on, "auto" enables it
-            # only when the measured build speedup clears the margin (so it is on
-            # for a large block-sparse plant like BSM2 and off for a small one like
-            # BSM1, where the colored build is slower), False never colors.
-            # The colored backward Jacobian is enabled deterministically by plant
-            # SIZE (the reliable signal -- see _COLORED_BACKWARD_MIN_STATES), not a
-            # build-time benchmark, so no concrete probe solve is needed: the
-            # builder is derived from the plant's default operating point and so
-            # builds even here under the gradient's own trace. ``True`` forces it on
-            # (any size), ``"auto"`` enables it past the size gate, ``False`` never
-            # colors.
-            n_states = int(y0.shape[0])
-            want_colored = colored_jacobian is True or (
-                colored_jacobian == "auto" and n_states >= self._COLORED_BACKWARD_MIN_STATES
-            )
-            if want_colored and self._colored_adjoint_builder is None:
-                self._colored_adjoint_jacobian_builder(t0, rtol, atol_eff)
-            cab = self._colored_adjoint_builder
-            use_colored = bool(want_colored and cab is not None and cab[2])  # built + guard ok
-            jac_builder = cab[0] if use_colored else None
-            # The infrastructure to also color the *forward* solve's per-step
-            # implicit Jacobian is in place (``cab[4]`` is the ColoredVeryChord for
-            # the autonomized forward RHS, and ``esdirk_adjoint_solve`` accepts it
-            # as ``forward_root_finder``), but it is NOT auto-enabled: unlike the
-            # colored *backward* (which feeds J directly into the transposed solve,
-            # exact on a superset pattern), the colored forward feeds J into an
-            # iterative chord whose decoupled-Newton convergence point depends on
-            # the J approximation, so a colored-vs-dense difference shifts the
-            # forward trajectory at the ~Newton-tolerance level (~1e-4) -- it would
-            # break the bit-identical ``colored_jacobian=True`` == dense invariant.
-            # Enabling it as a default needs the structural pattern reconciled so
-            # the colored and dense forward chords converge identically.
-            fwd_root_finder = None
-            # Cap-free reverse-mode gradient through the stiff plant solve: the
-            # forward is a robust adaptive ESDIRK solve and the reverse is the
-            # per-step transposed-solve discrete adjoint over the saved
-            # trajectory, which stays finite at any step size. The compiled solve
-            # is cached per instance and reused across repeat *forward* solves
-            # (the parameter-sweep case), keyed like the forward path but tagged
-            # so it never collides with it. ``t_eval`` is baked into the compiled
-            # closure (the adjoint marks it non-differentiable, so it cannot be a
-            # traced runtime argument), so the key carries its values. The cache
-            # is used only when the inputs are concrete: under a trace (a gradient
-            # through the solve, or an enclosing jit) the adjoint's ``custom_vjp``
-            # is traced directly into the outer computation -- routing it through
-            # an inner ``jax.jit`` does not compose with an outer reverse-mode
-            # pass -- which is the path the calibration gradient takes anyway.
-            # The discrete-adjoint backward scan walks a saved trajectory whose
-            # length is adjoint_max_steps (DifferentiationConfig.adjoint_max_steps);
-            # the forward solve must also fit in that buffer, so this single budget
-            # serves both roles here.
-            adj_steps = adjoint_max_steps
-            settings = concrete_settings_key(rtol, atol_eff, None, None, adj_steps)
-            teval_key, teval_concrete = _concrete_teval_key(t_eval)
-            under_trace = isinstance(params, jax.core.Tracer) or isinstance(y0, jax.core.Tracer)
-            # The forward ESDIRK solver (e.g. the cheaper Kvaerno3) and factormax
-            # change the compiled solve, so they key the cache -- the solver by
-            # class, exactly as the forward jax_adjoint path does. The ESDIRK
-            # ``order`` (3 vs 5) also changes the compiled solve, so it is keyed.
-            # ``adjoint_low_memory`` selects the recompute backward (no saved
-            # dense-stage buffer), a different compiled solve, so it is keyed too.
-            solver_key = type(solver).__name__ if solver is not None else None
-            cache_key = (
-                None
-                if (settings is None or not teval_concrete or under_trace)
-                else (
-                    "stable_adjoint",
-                    t0,
-                    t1,
-                    teval_key,
-                    settings,
-                    use_colored,
-                    solver_key,
-                    factormax,
-                    order,
-                    adjoint_low_memory,
-                )
-            )
-            with friendly_solve_errors(adj_steps, what="plant solve"):
-                if cache_key is not None:
-                    jitted = self._jit_cache.get(cache_key)
-                    if jitted is None:
-                        jitted = self._build_jitted_stable_adjoint_solve(
-                            t0,
-                            t1,
-                            t_eval,
-                            rtol=rtol,
-                            atol=atol_eff,
-                            max_steps=adj_steps,
-                            forward_root_finder=fwd_root_finder,
-                            solver=solver,
-                            factormax=factormax,
-                            order=order,
-                            low_memory=adjoint_low_memory,
-                        )
-                        self._jit_cache[cache_key] = jitted
-                    ys = jitted(y0, params)
-                else:
-                    # Under-trace (the calibration-gradient path): not cached, but
-                    # still hoists the recycle probe via the cached-map primal RHS
-                    # (the same exact split as the jitted closure) and uses the
-                    # colored backward Jacobian builder + colored forward root
-                    # finder when requested.
-                    ys = self._esdirk_stable_adjoint(
-                        y0,
-                        params,
+        )
+        with friendly_solve_errors(adj_steps, what="plant solve"):
+            if cache_key is not None:
+                jitted = self._jit_cache.get(cache_key)
+                if jitted is None:
+                    jitted = self._build_jitted_stable_adjoint_solve(
                         t0,
                         t1,
                         t_eval,
                         rtol=rtol,
-                        atol=atol_eff,
+                        atol=atol,
                         max_steps=adj_steps,
-                        jacobian_builder=jac_builder,
                         forward_root_finder=fwd_root_finder,
                         solver=solver,
                         factormax=factormax,
                         order=order,
                         low_memory=adjoint_low_memory,
                     )
-            if t_eval is None:
-                ts = jnp.asarray([t1])
-                ys = ys[None, :]
+                    self._jit_cache[cache_key] = jitted
+                ys = jitted(y0, params)
             else:
-                ts = jnp.asarray(t_eval)
-            if _time_factor != 1.0:
-                ts = ts / _time_factor  # native -> requested unit
-            sol = PlantSolution(t=ts, state=ys, plant=self)
-            if time_unit is not None:
-                sol._requested_time_unit = time_unit
-            return sol
+                # Under-trace (the calibration-gradient path): not cached, but
+                # still hoists the recycle probe via the cached-map primal RHS
+                # (the same exact split as the jitted closure) and uses the
+                # colored backward Jacobian builder + colored forward root
+                # finder when requested.
+                ys = self._esdirk_stable_adjoint(
+                    y0,
+                    params,
+                    t0,
+                    t1,
+                    t_eval,
+                    rtol=rtol,
+                    atol=atol,
+                    max_steps=adj_steps,
+                    jacobian_builder=jac_builder,
+                    forward_root_finder=fwd_root_finder,
+                    solver=solver,
+                    factormax=factormax,
+                    order=order,
+                    low_memory=adjoint_low_memory,
+                )
+        if t_eval is None:
+            ts = jnp.asarray([t1])
+            ys = ys[None, :]
+        else:
+            ts = jnp.asarray(t_eval)
+        if time_factor != 1.0:
+            ts = ts / time_factor  # native -> requested unit
+        sol = PlantSolution(t=ts, state=ys, plant=self)
+        if time_unit is not None:
+            sol._requested_time_unit = time_unit
+        return sol
 
-        # Forward (jax_adjoint) path. The compiled solve is cached per instance
-        # and reused across repeat solves of this plant (see ``_jit_cache``). An
-        # event-terminated solve (e.g. run_to_steady_state) is not cached -- the
-        # event closure varies and that path is run once -- and a traced call
-        # (settings key None) bypasses the cache. Caching does not change the
-        # first solve; it only avoids recompiling on subsequent ones.
+    def _solve_forward_fast(
+        self,
+        t0,
+        t1,
+        t_eval,
+        params,
+        y0,
+        *,
+        rtol,
+        atol,
+        max_steps,
+        time_factor,
+        time_unit,
+    ):
+        """The lean non-AD forward integrator (``forward_fast=True``).
+
+        Returns the :class:`PlantSolution` on success, or ``None`` when the
+        colored-Jacobian start-state guard fails (after warning) so the caller
+        falls back to the differentiable diffrax forward path.
+        """
         # Forward-fast: the lean non-AD integrator (no diffrax adjoint / optimistix
         # / lineax). It needs the colored-Jacobian pattern (for a cheap per-step
         # Jacobian); build + guard it, and fall back to the diffrax path if the
         # guard fails. Concrete-only (validated above). Its compiled solve is
         # cached per instance like the diffrax path.
-        if forward_fast:
-            self._colored_jacobian_solver(None, t0, y0, params, rtol, atol_eff)
-            crf = self._colored_root_finder
-            if crf is not None and crf[2]:
-                te = t_eval if t_eval is not None else jnp.asarray([float(t1)])
-                fkey = (
-                    "forward_fast",
-                    t0,
-                    t1,
-                    tuple(te.shape),
-                    concrete_settings_key(rtol, atol_eff, None, None, max_steps),
-                    self._recycle._recycle_map_constant,
-                )
-                jitted = self._jit_cache.get(fkey)
-                if jitted is None:
-                    jitted = self._build_jitted_forward_fast(t0, t1, rtol=rtol, atol=atol_eff)
-                    self._jit_cache[fkey] = jitted
-                with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
-                    ts, ys = jitted(y0, params, te)
-                if _time_factor != 1.0:
-                    ts = ts / _time_factor
-                sol = PlantSolution(t=ts, state=ys, plant=self)
-                if time_unit is not None:
-                    sol._requested_time_unit = time_unit
-                return sol
-            warnings.warn(
-                "forward_fast: the colored-Jacobian start-state guard failed; "
-                "falling back to the diffrax forward path for this plant.",
-                RuntimeWarning,
-                stacklevel=2,
+        self._colored_jacobian_solver(None, t0, y0, params, rtol, atol)
+        crf = self._colored_root_finder
+        if crf is not None and crf[2]:
+            te = t_eval if t_eval is not None else jnp.asarray([float(t1)])
+            fkey = (
+                "forward_fast",
+                t0,
+                t1,
+                tuple(te.shape),
+                concrete_settings_key(rtol, atol, None, None, max_steps),
+                self._recycle._recycle_map_constant,
             )
+            jitted = self._jit_cache.get(fkey)
+            if jitted is None:
+                jitted = self._build_jitted_forward_fast(t0, t1, rtol=rtol, atol=atol)
+                self._jit_cache[fkey] = jitted
+            with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
+                ts, ys = jitted(y0, params, te)
+            if time_factor != 1.0:
+                ts = ts / time_factor
+            sol = PlantSolution(t=ts, state=ys, plant=self)
+            if time_unit is not None:
+                sol._requested_time_unit = time_unit
+            return sol
+        warnings.warn(
+            "forward_fast: the colored-Jacobian start-state guard failed; "
+            "falling back to the diffrax forward path for this plant.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
+    def _solve_jax_adjoint(
+        self,
+        t0,
+        t1,
+        t_eval,
+        params,
+        y0,
+        *,
+        rtol,
+        atol,
+        event,
+        adjoint,
+        dtmax,
+        max_steps,
+        progress_meter,
+        solver,
+        factormax,
+        order,
+        colored_jacobian,
+        time_factor,
+        time_unit,
+    ):
+        """The ``gradient="jax_adjoint"`` diffrax solve -- the default path.
+
+        Runs the plant under the standard diffrax integrator: a plain concrete
+        forward integration, or -- when wrapped in ``jax.grad`` / ``jacfwd`` --
+        differentiation *through* the solve via ``adjoint`` (reverse or forward
+        mode). Distinct from the augmented ``[y; S]`` variational solve, which is
+        a separate method (:meth:`solve_sensitivity`). Supports an optional colored
+        per-step implicit Jacobian. The compiled solve is cached per instance and
+        reused across repeat solves; an event-terminated or traced call bypasses
+        the cache.
+        """
+        # The compiled solve is cached per instance
+        # and reused across repeat solves of this plant (see ``_jit_cache``). An
+        # event-terminated solve (e.g. run_to_steady_state) is not cached -- the
+        # event closure varies and that path is run once -- and a traced call
+        # (settings key None) bypasses the cache. Caching does not change the
+        # first solve; it only avoids recompiling on subsequent ones.
         # Colored-AD Jacobian: reconfigure the solver to materialise the per-step
         # implicit Jacobian by sparse column compression (a large saving on the
         # dense flowsheet Jacobian). Built+guarded once per plant; falls back to
@@ -3185,12 +3356,12 @@ class Plant:
         # -- making it the all-solves default needs its own full-suite validation
         # (a deliberate follow-up). ``True`` opts into both.
         if colored_jacobian is True:
-            solver = self._colored_jacobian_solver(solver, t0, y0, params, rtol, atol_eff)
+            solver = self._colored_jacobian_solver(solver, t0, y0, params, rtol, atol)
         colored_active = colored_jacobian is True and (
             self._colored_root_finder is not None and self._colored_root_finder[2]
         )
 
-        settings = concrete_settings_key(rtol, atol_eff, adjoint, dtmax, max_steps)
+        settings = concrete_settings_key(rtol, atol, adjoint, dtmax, max_steps)
         sig = (t0, t1, None if t_eval is None else tuple(t_eval.shape))
         # The solver is keyed by class name: a fresh stock solver instance (the
         # common case) shares the cache with another of the same class, while a
@@ -3223,7 +3394,7 @@ class Plant:
                 t_eval is not None,
                 event=event,
                 rtol=rtol,
-                atol=atol_eff,
+                atol=atol,
                 adjoint=adjoint,
                 dtmax=dtmax,
                 max_steps=max_steps,
@@ -3240,8 +3411,8 @@ class Plant:
                 ts, ys = jitted(y0, params)
             else:
                 ts, ys = jitted(y0, params, t_eval)
-        if _time_factor != 1.0:
-            ts = ts / _time_factor  # native -> requested unit
+        if time_factor != 1.0:
+            ts = ts / time_factor  # native -> requested unit
         sol = PlantSolution(t=ts, state=ys, plant=self)
         if time_unit is not None:
             sol._requested_time_unit = time_unit
