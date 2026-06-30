@@ -47,6 +47,7 @@ from aquakin.integrate._common import (
     Reactor,
     check_finite_gradient,
     forward_adjoint,
+    native_time_factor,
     with_adjoint,
 )
 
@@ -538,6 +539,7 @@ def calibrate(
     transforms: Optional[dict[str, str]] = None,
     initial_params: Optional[jnp.ndarray] = None,
     observed_species: Optional[list[str]] = None,
+    time_unit: Optional[str] = None,
     loss: str = "mse",
     sigma: Optional[jnp.ndarray] = None,
     priors: Optional[dict[str, tuple[float, float]]] = None,
@@ -581,7 +583,8 @@ def calibrate(
     t_obs : jnp.ndarray or list of jnp.ndarray
         Observation times, shape ``(n_t,)``. ``C0`` is taken at ``t=0``;
         the solver integrates from ``0`` to ``t_obs[-1]``. In multi-batch mode,
-        a list of time grids, one per dataset.
+        a list of time grids, one per dataset. In the network's native time unit
+        unless ``time_unit`` is given.
     free_params : list[str]
         Namespaced parameter names to calibrate. Others held fixed.
     transforms : dict[str, str], optional
@@ -594,6 +597,15 @@ def calibrate(
     observed_species : list[str], optional
         Species names corresponding to columns of ``observations``. If
         ``None``, every network species is taken to be observed.
+    time_unit : str, optional
+        The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
+        ``"d"``), matching :meth:`BatchReactor.solve`. Every dataset's ``t_obs``
+        is converted into the network's native (rate-constant) time unit before
+        the solve, so an hour-valued ``t_obs`` carried over from a
+        ``solve(time_unit="h")`` run is interpreted correctly rather than as
+        native-unit days (the silent 24x time-axis compression this guards
+        against). Default ``None`` interprets ``t_obs`` in the native unit. The
+        fitted rate constants are always in native units.
     loss : {"mse", "wmse", "nll"}, optional
         Loss function.
     sigma : jnp.ndarray, optional
@@ -883,6 +895,11 @@ def calibrate(
             raise ValueError(f"dataset {ds}: t_obs must be non-negative; got {float(tobs_i[0])}.")
         if tobs_i.shape[0] > 1 and not bool(jnp.all(jnp.diff(tobs_i) > 0)):
             raise ValueError(f"dataset {ds}: t_obs must be strictly ascending.")
+        # Convert this dataset's t_obs into the network's native (rate-constant)
+        # time unit, the same way reactor.solve(time_unit=...) does. Done after
+        # the validation so the error messages report the user's own values;
+        # native_time_factor raises if the network has no declared native unit.
+        tobs_i = tobs_i * native_time_factor(network.time_unit, time_unit)
         obs_i = jnp.asarray(obs_i)
         if obs_i.ndim == 1:
             obs_i = obs_i[:, None]

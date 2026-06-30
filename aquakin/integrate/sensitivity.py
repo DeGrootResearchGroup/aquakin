@@ -19,6 +19,7 @@ from aquakin.integrate._common import (
     Reactor,
     check_finite_gradient,
     forward_adjoint,
+    native_time_factor,
     with_adjoint,
 )
 
@@ -87,7 +88,9 @@ def sensitivity(
         (the common batch case). Equivalent to putting them in ``solve_kwargs``;
         provide whichever reads better.
     solve_kwargs : dict, optional
-        Any further keyword arguments forwarded to ``reactor.solve``.
+        Any further keyword arguments forwarded to ``reactor.solve`` -- including
+        ``time_unit=`` if ``t_span`` / ``t_eval`` are in a non-native unit
+        (``solve`` converts them, so the sensitivities stay consistent).
     diff : DifferentiationConfig, optional
         Autodiff configuration. ``mode="reverse"`` (default) uses ``jax.grad``.
         ``mode="forward"`` uses ``jax.jacfwd`` and rebuilds the reactor internally
@@ -198,6 +201,7 @@ def fit(
     method: str = "adjoint",
     initial_params: Optional[jnp.ndarray] = None,
     observed_species: Optional[list[str]] = None,
+    time_unit: Optional[str] = None,
 ) -> FitResult:
     """
     Least-squares fit of selected parameters to time-series observations.
@@ -229,7 +233,8 @@ def fit(
     t_obs : jnp.ndarray
         Observation times, shape ``(n_t,)``. ``C0`` is taken to be the state
         at ``t = 0``; integration runs from ``0`` to ``t_obs[-1]`` and the
-        solution is sampled at ``t_obs``.
+        solution is sampled at ``t_obs``. In the network's native time unit
+        unless ``time_unit`` is given.
     free_params : list[str]
         Namespaced parameter names to optimise. Other parameters are held at
         their default (or ``initial_params``) values.
@@ -242,6 +247,13 @@ def fit(
         Species names corresponding to columns of ``observations``. If
         ``None``, ``observations`` is assumed to be over all species in
         network order.
+    time_unit : str, optional
+        The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
+        ``"d"``), matching :meth:`BatchReactor.solve`. ``t_obs`` is converted
+        into the network's native (rate-constant) time unit before the solve, so
+        a user who standardises on e.g. hours can pass the same hour-valued
+        ``t_obs`` here as to ``solve``. Default ``None`` interprets ``t_obs`` in
+        the native unit. The fitted rate constants are always in native units.
 
     Returns
     -------
@@ -280,6 +292,11 @@ def fit(
         raise ValueError(f"t_obs must be non-negative; got t_obs[0] = {float(t_obs[0])}.")
     if t_obs.shape[0] > 1 and not bool(jnp.all(jnp.diff(t_obs) > 0)):
         raise ValueError("t_obs must be strictly ascending.")
+    # Convert t_obs into the network's native (rate-constant) time unit, the same
+    # way reactor.solve(time_unit=...) does, so the data axis and the rate
+    # constants share a unit. native_time_factor raises if the network has no
+    # declared native unit to convert to (no silent mismatch at this boundary).
+    t_obs = t_obs * native_time_factor(network.time_unit, time_unit)
     if observations.ndim == 1:
         observations = observations[:, None]
     if observations.shape[0] != t_obs.shape[0]:
@@ -608,7 +625,11 @@ def dgsm(
         uncertain inputs into a parameter vector / initial state, calls
         ``reactor.solve`` and reduces the solution to the output(s). If the
         network is stiff, build the reactor with a suitable ``dtmax`` so the
-        differentiated solve stays finite.
+        differentiated solve stays finite. ``dgsm`` does not own the solve (your
+        ``fn`` builds the reactor and chooses the ``t_eval``), so it cannot apply
+        a ``time_unit`` conversion for you: any ``t_eval`` / ``t_span`` inside
+        ``fn`` must be in the network's **native** time unit, or ``fn`` must pass
+        ``time_unit=`` to its own ``reactor.solve`` call.
     ranges : array-like, shape (d, 2)
         ``[lower, upper]`` bound for each input; sampling is uniform within.
     input_names : list[str], optional
