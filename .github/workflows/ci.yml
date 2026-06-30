@@ -137,7 +137,7 @@ jobs:
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          pip install -e ".[test]" -c constraints.txt
 
       - name: Run fast tests shard (unit + fast integration)
         # --timeout fires inside a worker if a single test deadlocks, naming the
@@ -228,7 +228,7 @@ jobs:
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          pip install -e ".[test]" -c constraints.txt
 
       - name: Run slow suite shard
         # `slow and not validation`: a few tests carry BOTH markers (a module-
@@ -395,7 +395,7 @@ jobs:
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          pip install -e ".[test]" -c constraints.txt
 
       - name: Run heavy tests shard
         # One heavy plant-gradient test in a fresh process. The per-test timeout
@@ -440,7 +440,7 @@ jobs:
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          pip install -e ".[test]" -c constraints.txt
 
       - name: Run the oversized heavy test
         # The lone >16 GB test, alone in a fresh process.
@@ -495,7 +495,7 @@ jobs:
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          pip install -e ".[test]" -c constraints.txt
 
       - name: Run validation suite shard
         # `-n 1` (serial within the shard): the validation tests are the most
@@ -553,7 +553,7 @@ jobs:
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          pip install -e ".[test]" -c constraints.txt
 
       - name: Run a rotating slow-suite shard
         # Pick the shard from the run number so consecutive runs rotate through
@@ -614,7 +614,7 @@ jobs:
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          pip install -e ".[test]" -c constraints.txt
 
       - name: Record this shard's durations
         # Exclude `heavy`: those whole-plant stable-adjoint tests do not run in
