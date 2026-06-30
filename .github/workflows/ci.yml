@@ -224,40 +224,40 @@ jobs:
           --durations=15 --timeout=900 --timeout-method=thread
           --max-worker-restart=0
 
-  # ---- Heavy whole-plant stable-adjoint gradient tests (larger runner) ---------
-  # The `heavy` tests each compile a multi-GB whole-plant BSM2 adjoint program and
-  # accumulate across a process, so no free 16 GB runner fits them (issue #326), and
-  # the slow / validation / smoke jobs all exclude them (`... and not heavy`). This
-  # job runs them instead on a GitHub-hosted LARGER runner (Team plan): 16-core /
-  # 64 GB has the RAM headroom to run every heavy test in one shared process and the
-  # cores to cut the compile-dominated wall time. Covers both the BSM2
-  # validation-heavy tests and the BSM1 slow-heavy dynamic-sensitivity tests
-  # (`-m heavy` selects on the marker, regardless of slow/validation).
+  # ---- Heavy whole-plant stable-adjoint gradient tests -------------------------
+  # The `heavy` set is the 7 BSM2 whole-plant stable-adjoint gradient checks, each
+  # of which compiles a multi-GB whole-plant BSM2 adjoint program. They are excluded
+  # from the slow / validation / smoke jobs (`... and not heavy`) and run here
+  # instead, ONE PER FRESH PROCESS (the `heavy` job below, `--splits 7 -n 1`): a
+  # single test fits a stock 16 GB `ubuntu-latest` runner (~2-5 GB), but several
+  # accumulate (freed XLA caches are not returned to the OS) and exhaust it, so the
+  # set is sharded one-test-per-process across the FREE runner. (The lighter BSM1
+  # plant-AD gradient tests are NOT heavy -- they carry only `slow` / `validation`
+  # and run in those free jobs.) This replaces the former paid 16-core/64GB
+  # `aquakin-heavy` larger runner, whose per-minute billing was the entire CI cost
+  # (public-repo standard-runner minutes are free); the one-test-per-process shard
+  # is what makes the 16 GB free runner sufficient.
   #
-  # Push-to-main only (like slow / validation): catch a regression within minutes of
-  # merge and revert if needed; PRs stay covered by the fast gate, the pre-merge
-  # smoke, and the small single-CSTR stable-adjoint smoke test in the fast gate.
-  # Larger hosted runners are GitHub-managed sandboxes (NOT self-hosted), so a fork
-  # PR cannot execute on them -- the issue #326 self-hosted security concern does not
-  # apply; per-minute billing is the only reason this stays off the PR path.
-  #
-  # `runs-on: aquakin-heavy` is the NAME/label of the larger runner. Create it once
-  # in Settings -> Actions -> Runners -> "New runner" -> "New GitHub-hosted runner"
-  # (Ubuntu image, 16-core / 64 GB size, named `aquakin-heavy`) and grant this repo
-  # access. Until it exists the `heavy` job simply stays queued; nothing depends on
-  # it, so it blocks no other job or the merge gate.
-  #
-  # COST OPT-OUT: label a PR `skip-heavy` to skip this (paid) job when it merges --
-  # for docs-only / low-risk changes that cannot affect the whole-plant adjoint. The
-  # `heavy-gate` job below resolves the merged PR for the pushed commit and reads its
-  # labels; `heavy` runs only when the gate says so. Fail-SAFE: any lookup miss, or a
-  # direct push to main (no PR), leaves `run=true`, so heavy is skipped ONLY when the
-  # `skip-heavy` label is positively present -- a risky merge can never silently skip.
+  # WHEN IT RUNS (cost control), two triggers:
+  #   * push to main -- but ONLY when adjoint/plant-relevant files changed (the
+  #     `heavy-gate` path filter), and not when a `skip-heavy` label is present. A
+  #     docs / examples / utils / unrelated-test merge does not run it at all.
+  #   * a PR labeled `full-ci` -- the explicit pre-merge opt-in (mirrors slow /
+  #     validation), so a change to the adjoint machinery is validated before merge.
+  # PRs are otherwise covered by the fast gate, the pre-merge smoke, and the small
+  # single-CSTR stable-adjoint smoke test in the fast gate. A `skip-heavy` label
+  # still force-skips a push-to-main run for a change that touches a filtered path
+  # but cannot affect the adjoint.
 
-  # Gate that decides whether the paid `heavy` job runs (see the cost opt-out above).
+  # Gate that decides whether `heavy` runs: the skip-heavy label, then the path
+  # filter (see the cost-control note above). Also runs on a `full-ci` PR so the
+  # adjoint machinery can be validated pre-merge.
   heavy-gate:
     name: heavy gate
-    if: github.event_name == 'push'
+    if: >-
+      github.event_name == 'push'
+      || (github.event_name == 'pull_request'
+          && contains(github.event.pull_request.labels.*.name, 'full-ci'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -265,43 +265,80 @@ jobs:
     outputs:
       run: ${{ steps.decide.outputs.run }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # paths-filter needs history to diff the push
+      - id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          # Files that can affect a whole-plant stable-adjoint gradient. Fail-SAFE:
+          # when paths-filter cannot determine a base (e.g. a branch creation push)
+          # it reports every path as changed, so `heavy` runs rather than silently
+          # skipping. `aquakin/utils`, `transport`, docs, examples and unrelated
+          # tests are intentionally NOT here -- they cannot change a plant gradient.
+          filters: |
+            heavy:
+              - 'aquakin/plant/**'
+              - 'aquakin/integrate/**'
+              - 'aquakin/core/**'
+              - 'aquakin/schema/**'
+              - 'aquakin/networks/**'
+              - 'tests/integration/test_plant_stable_adjoint.py'
+              - 'tests/integration/test_dynamic_sensitivity.py'
+              - 'pyproject.toml'
+              - '.github/workflows/ci.yml'
       - id: decide
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Labels of the PR(s) this pushed commit introduced (empty for a direct push).
+          # A `full-ci` PR is an explicit pre-merge opt-in -> always run.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "full-ci PR -> running heavy for pre-merge validation."
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Push to main: a `skip-heavy` label on the merged PR wins.
           labels=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
                      --jq '.[].labels[].name' 2>/dev/null || true)
           if printf '%s\n' "$labels" | grep -qx 'skip-heavy'; then
             echo "Merged PR is labeled 'skip-heavy' -> skipping the heavy job."
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "No 'skip-heavy' label -> running the heavy job."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Otherwise run ONLY if adjoint/plant-relevant files changed (path filter).
+          if [ "${{ steps.changes.outputs.heavy }}" = "true" ]; then
+            echo "Adjoint/plant-relevant files changed -> running the heavy job."
             echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No adjoint/plant-relevant changes -> skipping the heavy job."
+            echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
   heavy:
-    name: heavy stable-adjoint tests (larger runner, shard ${{ matrix.group }}/2)
+    name: heavy stable-adjoint tests (shard ${{ matrix.group }}/7)
     needs: heavy-gate
-    if: github.event_name == 'push' && needs.heavy-gate.outputs.run == 'true'
-    runs-on: aquakin-heavy
-    timeout-minutes: 90
-    # Sharded across fresh processes (pytest-split), like the slow/validation
-    # suites: the heavy tests each compile a multi-GB plant program, and a single
-    # process accumulating all ~14 of them exceeds even the 64 GB runner -- the
-    # freed XLA caches are not returned to the OS, so RSS climbs test-by-test until
-    # the interpreter aborts (the failure is cumulative; the heaviest test runs fine
-    # alone at ~2-5 GB). Two fresh shards bound each process to ~half the set, well
-    # under the runner's memory. The heavy tests are not in `.test_durations`, so
-    # pytest-split partitions them evenly by count.
+    if: >-
+      needs.heavy-gate.outputs.run == 'true'
+      && (github.event_name == 'push'
+          || (github.event_name == 'pull_request'
+              && contains(github.event.pull_request.labels.*.name, 'full-ci')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # ONE heavy BSM2 test per fresh process (`--splits 7`, `-n 1`). Each compiles a
+    # multi-GB plant-adjoint program (~2-5 GB resident) that fits a stock 16 GB
+    # `ubuntu-latest` runner ALONE, but accumulates across a process (freed XLA
+    # caches are not returned to the OS, so RSS climbs test-by-test). Seven fresh
+    # shards keep each process to ~one test, so the free runner suffices and no paid
+    # larger runner is needed (public-repo Actions minutes are free). If a single
+    # test ever needs >16 GB, raise the shard count or move just this job to a
+    # cheaper-than-64GB larger-runner tier. The heavy tests are not in
+    # `.test_durations`, so pytest-split partitions them evenly by count (~1/shard).
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2]
+        group: [1, 2, 3, 4, 5, 6, 7]
     # Override the top-level single-thread pin: with `-n 1` there is no xdist
-    # oversubscription, so let JAX / BLAS use the runner's 16 cores.
+    # oversubscription, so let JAX / BLAS use the runner's cores.
     env:
-      OMP_NUM_THREADS: "16"
+      OMP_NUM_THREADS: "4"
       XLA_FLAGS: ""
     steps:
       - uses: actions/checkout@v4
@@ -319,12 +356,12 @@ jobs:
           pip install -e ".[test]"
 
       - name: Run heavy tests shard
-        # This shard's ~half of the heavy set in one fresh process. A generous
-        # per-test timeout covers the multi-GB plant-adjoint compiles.
+        # One BSM2 heavy test in a fresh process. The per-test timeout covers the
+        # multi-GB plant-adjoint compile.
         run: >-
           pytest -m heavy -q -n 1
-          --splits 2 --group ${{ matrix.group }}
-          --durations=15 --timeout=2400 --timeout-method=thread
+          --splits 7 --group ${{ matrix.group }}
+          --durations=15 --timeout=1200 --timeout-method=thread
 
   # ---- Validation suite (against published data): merge-to-main + opt-in -------
   # Runs on push to main, and on a PR carrying the `full-ci` label (the opt-in

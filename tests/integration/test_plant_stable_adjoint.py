@@ -228,7 +228,6 @@ def test_stable_adjoint_cross_interface_gradient_matches_fd():
 
 
 @pytest.mark.validation
-@pytest.mark.heavy
 def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     """The gradient w.r.t. a FLOW-SETPOINT parameter (the RAS recycle flow) is
     unchanged by the cached-recycle-map optimisation -- the ``dM/dtheta`` guard

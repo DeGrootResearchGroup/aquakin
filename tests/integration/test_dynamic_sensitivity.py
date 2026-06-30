@@ -44,7 +44,6 @@ def _bsm1():
 
 
 @pytest.mark.slow
-@pytest.mark.heavy
 def test_dynamic_sensitivity_modes_match_grad():
     """Reverse and forward dynamic sensitivity agree, match a manual stable-adjoint
     gradient (to machine precision) and finite differences. The wrapper selects the
@@ -81,7 +80,6 @@ def test_dynamic_sensitivity_modes_match_grad():
 
 
 @pytest.mark.slow
-@pytest.mark.heavy
 def test_solve_sensitivity_matches_jacfwd():
     """Plant.solve_sensitivity -- the stable forward [y; S] variational solve, on
     the plant's enhanced solver config (Kvaerno3 + decoupled Newton + cached
@@ -118,7 +116,6 @@ def test_solve_sensitivity_matches_jacfwd():
 
 
 @pytest.mark.slow
-@pytest.mark.heavy
 def test_solve_sensitivity_operating_influent_matches_fd():
     """solve_sensitivity differentiates OPERATING parameters -- a multiplicative
     scale on the influent flow and on a species' load -- through the same augmented
@@ -162,7 +159,6 @@ def test_solve_sensitivity_operating_influent_matches_fd():
 
 
 @pytest.mark.slow
-@pytest.mark.heavy
 def test_dynamic_dgsm_matches_dgsm():
     """plant.dynamic_dgsm screens a transient output globally by reusing
     dynamic_sensitivity per sample. With the same Sobol seed it gives the same
