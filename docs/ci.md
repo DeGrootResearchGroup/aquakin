@@ -12,6 +12,23 @@ real stiff-ODE solves with AD (~irreducible seconds each) and the cost is spread
 across hundreds of tests — neither a JAX compile-cache (verified: cold ≈ warm)
 nor concentrating it in a few files makes the whole suite fast.
 
+- The **`lint`** job (`ruff check aquakin`, 3.12) runs on **every PR and every
+  push** — a purely static gate (no JAX import, no compile), so it finishes in
+  seconds and is the cheapest signal in the matrix. It installs only the `lint`
+  extra (`pip install -e ".[lint]"`, which pins `ruff>=0.15,<0.16` so a new ruff
+  release cannot redden the gate without a deliberate bump). The rule set and the
+  per-file ignores live in `[tool.ruff]` in `pyproject.toml`: `select = E,F,W,I,
+  B,RUF` at `line-length = 100` (the width the package is written to), with `UP`
+  (pyupgrade) deliberately deferred and several families `ignore`d against
+  dedicated audit issues so each can be tackled — and its ignore removed — in its
+  own PR. `**/__init__.py` is exempt from import-sorting (`I001`) and
+  module-import-position (`E402`) because the re-export packages carry deliberate,
+  load-bearing import order (`plant/__init__.py` imports `a2o` / `bsm.evaluation`
+  last to avoid an import cycle; `aquakin/__init__.py` enables x64 before any
+  submodule import that builds JAX state). The **`ruff format`** reflow is **not**
+  applied repo-wide yet, so `format --check` is intentionally not gated here — when
+  that lands, add it to this job. It skips the bare `labeled` event and the
+  schedule / dispatch refresh, exactly like the fast gate.
 - The **`test`** job (`pytest -m "not validation and not slow"`, Python
   3.11/3.12) runs on **every PR and every push** — unit + fast integration. It is
   the merge gate, and is **`pytest-split`-sharded** (`--splits 4 --group i`, `-n
@@ -140,7 +157,9 @@ names/count change when the shard count is tuned) and **not** `slow`/`validation
 the same gate with a stable name. (When the fast gate was sharded, the old
 required checks `fast tests (py3.11)` / `(py3.12)` ceased to exist; branch
 protection must be repointed to `fast gate` or merges block forever waiting on
-checks that never report.)
+checks that never report.) The **`lint (ruff)`** job has a stable name and can be
+added as a second required check once the lint debt tracked in the audit issues is
+burned down enough to keep it reliably green.
 
 A green fast gate is the merge gate. Python 3.10 stays
 install-compatible (`requires-python >= 3.10`) but is **not** CI-tested:
