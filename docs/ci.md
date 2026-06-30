@@ -58,28 +58,42 @@ nor concentrating it in a few files makes the whole suite fast.
   shard's worth piles up faster than any between-test clear can reclaim,
   OOM-killing the runner regardless of shard count (a single such test runs fine
   alone — the failure is cumulative). So those tests carry the **`heavy`** marker
-  and are kept off the free-runner jobs — every slow / validation / smoke /
-  durations job runs `... and not heavy`. They run instead on the **`heavy` job**:
-  a GitHub-hosted **larger runner** (16-core / 64 GB, Team plan; `runs-on:
-  aquakin-heavy`) whose RAM fits every heavy test in one shared process, gated to
-  **push-to-main** like slow/validation (a fork PR cannot reach a hosted runner, so
-  there is no self-hosted security concern; per-minute billing is why it stays off
-  the PR path). It runs `pytest -m heavy`, covering both the BSM2 validation-heavy
-  tests and the BSM1 slow-heavy dynamic-sensitivity tests; locally they run the
-  same way. (If the `aquakin-heavy` runner does not exist the job stays queued and
-  blocks nothing.) Sharding still earns its keep on **wall time** (parallel
-  shards), not memory.
-- The **`heavy`** job (`pytest -m heavy`, 3.12) runs the whole-plant
-  stable-adjoint gradient tests that no free runner fits, on a GitHub-hosted
-  **larger runner** (`runs-on: aquakin-heavy`, 16-core/64 GB, Team plan), **only on
-  push to `main`** (`if: github.event_name == 'push'`). One shared process (the
-  64 GB RAM fits the accumulated compiles), with the top-level single-thread `env:`
-  overridden to use the runner's cores. See the memory discussion above for why
-  these are off the free-runner jobs. **Cost opt-out:** label a PR **`skip-heavy`**
-  to skip this paid job on its merge (docs-only / low-risk changes). A small
-  `heavy-gate` job resolves the merged PR for the pushed commit and reads its
-  labels; it is **fail-safe** — a direct push (no PR) or any lookup miss leaves the
-  job *running*, so heavy is skipped only when the label is positively present.
+  and are excluded from every slow / validation / smoke / durations job (`... and
+  not heavy`). The 12 plant-gradient checks (7 BSM2 + 5 BSM1) run in **two**
+  dedicated jobs, both **one-test-per-process** (`-n 1`):
+  - **`heavy`** — the **11** that fit a stock 16 GB `ubuntu-latest` runner when
+    isolated, sharded `--splits 11 -n 1` across the **free** runner. A single test
+    fits 16 GB; one-per-process prevents the cumulative accumulation, so they cost
+    nothing (public-repo standard-runner minutes are free). The **`heavy`** marker
+    means "needs an isolated fresh process," which a BSM1 plant-gradient test earns
+    as much as a BSM2 one (a BSM1 dynamic-DGSM test demoted to `slow` OOM-crashed a
+    shared shard).
+  - **`xheavy`** — the **1** test (`test_dynamic_dgsm_matches_dgsm`) that exceeds
+    16 GB **even isolated**: it runs two DGSM engines back-to-back and holds two
+    multi-GB BSM1 `stable_adjoint` adjoint programs live at once, which OOM-crashed
+    the free 16 GB runner even one-per-process. More sharding cannot shrink a single
+    test's peak, so it runs alone on a small **larger runner** (`aquakin-heavy`,
+    8-core/32 GB) via the `xheavy` job. 11 free + 1 tiny paid is the cost-minimal
+    split: the paid job is one ~20-min test, only on adjoint/plant merges. *(It is
+    known to fit the old 16-core/64 GB tier; 32 GB is the expected fit for its
+    two-engine peak — bump the runner a tier if it OOMs at 32 GB.)*
+
+  This replaced a paid 16-core/64 GB `aquakin-heavy` runner that ran on **every**
+  push to main (the entire CI cost); now only one test bills, and only on
+  adjoint/plant-relevant merges. Keep `--splits` (heavy job) ≥ the
+  `heavy and not xheavy` count so it stays one-per-shard.
+- The **`heavy`** (`pytest -m "heavy and not xheavy" -n 1`) and **`xheavy`**
+  (`pytest -m xheavy -n 1`) jobs are gated identically by **`heavy-gate`**, with two
+  triggers: **push to `main`** when the path filter sees a change under
+  `aquakin/plant`, `aquakin/integrate`, `aquakin/core`, `aquakin/schema`,
+  `aquakin/networks`, the two heavy test files, `pyproject.toml` or the workflow (so
+  a docs / examples / utils / unrelated-test merge does not run them at all); and a
+  **`full-ci` PR** (the pre-merge opt-in, so the adjoint machinery is validated
+  before merge). The **`skip-heavy`** label still force-skips a push-to-main run for
+  a change that touches a filtered path but cannot affect the adjoint. `heavy-gate`
+  is **fail-safe**: when the path filter cannot determine a base it treats every path
+  as changed (the jobs run), and a run is skipped only when `skip-heavy` is
+  positively present.
 - The **`smoke`** job (`pytest -m "slow and not validation and not heavy" --splits
   18 --group <rotating>`, 3.12) runs on **every PR** as an early-warning slice of the
   merge-only `slow` set: it *executes* a bounded ~1/18 shard (~8 tests) so

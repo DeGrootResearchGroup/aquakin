@@ -163,6 +163,7 @@ def test_solve_sensitivity_operating_influent_matches_fd():
 
 @pytest.mark.slow
 @pytest.mark.heavy
+@pytest.mark.xheavy
 def test_dynamic_dgsm_matches_dgsm():
     """plant.dynamic_dgsm screens a transient output globally by reusing
     dynamic_sensitivity per sample. With the same Sobol seed it gives the same
