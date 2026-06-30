@@ -341,7 +341,12 @@ one cost vs diffrax's interpolation — a future dense-output refinement).
   differentiable w.r.t. parameters / initial conditions. So `J` uses AD locally;
   the solve is just not wrapped to be differentiable globally.
 - **Opt-in, forward-only, concrete-only.** Rejected with `events=` and
-  `gradient="stable_adjoint"`, and **requires concrete `params`/`y0`** (a `jax.grad`
+  `gradient="stable_adjoint"`. It threads only `rtol` / `atol` /
+  `integrator.max_steps`; a **non-default** integrator `solver` / `order` /
+  `factormax` / `dtmax` / `colored_jacobian` is **rejected** (it runs its own
+  hand-rolled Kvaerno3 with an internal colored Jacobian and the diffrax default
+  step growth, so those knobs cannot reach it — rejecting beats silently dropping,
+  #446). And it **requires concrete `params`/`y0`** (a `jax.grad`
   / `jax.jit` of a `forward_fast` solve raises a clear error — the `lax.while_loop`
   is not reverse-mode differentiable and the colored pattern needs concrete arrays
   to build). It needs the colored-Jacobian pattern; it builds + guards it like

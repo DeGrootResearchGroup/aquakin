@@ -2742,7 +2742,11 @@ class Plant:
         forward_fast : bool, optional
             Use the lean non-AD forward integrator (no diffrax adjoint machinery):
             a much faster compile + run for a one-off forward solve, but the result
-            is NOT differentiable and it needs concrete ``params``/``y0``.
+            is NOT differentiable and it needs concrete ``params``/``y0``. It runs
+            its own hand-rolled ESDIRK and honours only ``rtol`` / ``atol`` /
+            ``integrator.max_steps``; a non-default integrator ``solver`` /
+            ``order`` / ``factormax`` / ``dtmax`` / ``colored_jacobian`` is
+            **rejected** (rather than silently dropped).
 
         Returns
         -------
@@ -2981,7 +2985,9 @@ class Plant:
         ``integrator.solver`` / ``colored_jacobian=True`` (the segmented
         located-event solve manages its own integrator), and ``forward_fast``
         with ``events=`` / ``gradient='stable_adjoint'`` / traced inputs (it is a
-        non-differentiable concrete-only path).
+        non-differentiable concrete-only path) / a non-default integrator
+        ``solver`` / ``order`` / ``factormax`` / ``dtmax`` / ``colored_jacobian``
+        (it honours only ``rtol`` / ``atol`` / ``max_steps``).
         """
         if events is not None:
             if event is not None:
@@ -3026,6 +3032,28 @@ class Plant:
                     "fast path that is not differentiable and cannot be traced "
                     "(no jax.grad / jax.jit). For gradients or jit use the default "
                     "solve (which routes through the differentiable diffrax path)."
+                )
+            # forward_fast runs its own hand-rolled ESDIRK (Kvaerno3 with an
+            # internal colored Jacobian and the diffrax default step growth) and
+            # threads only rtol / atol / max_steps. The integrator's solver / order
+            # / factormax / dtmax / colored_jacobian knobs cannot reach it, so a
+            # *non-default* value would be silently dropped -- reject it instead,
+            # mirroring the events= path. (max_steps IS honoured, so it stays
+            # tunable; a value left at its default signals no intent to deviate.)
+            default = IntegratorConfig()
+            dropped = [
+                name
+                for name in ("solver", "order", "factormax", "dtmax", "colored_jacobian")
+                if getattr(integrator, name) != getattr(default, name)
+            ]
+            if dropped:
+                raise ValueError(
+                    "forward_fast cannot honour integrator "
+                    f"{' / '.join(dropped)}: it runs its own hand-rolled ESDIRK "
+                    "(Kvaerno3 with an internal colored Jacobian and the diffrax "
+                    "default step growth) and threads only rtol / atol / max_steps. "
+                    "Drop the non-default integrator setting(s), or use the default "
+                    "solve (which honours them)."
                 )
 
     def _run_one_time_guards(self, t0, params, y0):
