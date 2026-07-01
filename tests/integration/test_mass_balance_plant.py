@@ -137,6 +137,33 @@ def test_mass_balance_closes_on_bsm1_steady_state():
 
 
 @pytest.mark.slow
+def test_mass_balance_closes_on_bsm1_takacs_lumped_settler():
+    """The BSM1 plant with the Takács reference settler closes COD and N at
+    steady state. ``build_bsm1(use_takacs=True)`` defaults to the reference
+    ``settler1dv4`` config (``composition_mode="lumped_tss"``, soluble holdup),
+    whose head block is one TSS value per layer rather than per species -- the
+    regression guard for the lumped-settler inventory in ``_unit_inventory``
+    (which would otherwise fail to reshape the TSS head block)."""
+    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
+
+    net = aquakin.load_network("asm1")
+    plant = build_bsm1(network=net, use_takacs=True)
+    cl = plant.units["clarifier"]
+    assert cl.composition_mode == "lumped_tss" and cl.soluble_holdup is True
+    feed = net.influent({"SS": 69.5, "XS": 202.32, "XB_H": 28.17, "SNH": 31.56,
+                         "SND": 6.95, "XND": 10.59, "SI": 30.0, "XI": 51.2,
+                         "SALK": 7.0}, Q=18446.0)
+    plant.add_influent("feed", feed, to="inlet_mix.fresh")
+    ss = plant.run_to_steady_state(y0=jnp.asarray(bsm1_warm_start(plant)),
+                                   max_time=200.0)
+    sol = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.linspace(0.0, 2.0, 9),
+                      y0=ss.state)
+    mb = plant.mass_balance(sol, components=("COD", "N"))
+    assert abs(mb["COD"].relative_imbalance) < 1e-4
+    assert abs(mb["N"].relative_imbalance) < 1e-4
+
+
+@pytest.mark.slow
 def test_mass_balance_closes_on_bsm2_steady_state():
     """The two-network BSM2 plant (ASM1 water line + ADM1 digester, biogas, the
     reject recycle) closes COD and N to <0.5% at steady state -- the digester
