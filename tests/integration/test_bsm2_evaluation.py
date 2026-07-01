@@ -340,16 +340,18 @@ def test_bsm2_report_is_labeled_with_units_and_breakdown():
 def test_bsm1_report_is_labeled_and_str_delegates():
     from aquakin.plant.bsm import BSM1Evaluation
     ev = BSM1Evaluation(
-        eqi=6443.2, oci=3341.4 + 388.2 + 5.0 * 2082.3, aeration_energy=3341.4,
-        pumping_energy=388.2, sludge_production=2082.3, effluent=_EFF,
+        eqi=6443.2, oci=3341.4 + 388.2 + 240.0 + 5.0 * 2082.3, aeration_energy=3341.4,
+        pumping_energy=388.2, sludge_production=2082.3, mixing_energy=240.0, effluent=_EFF,
         aerated_tanks=["tank3", "tank4", "tank5"])
     r = str(ev)
     assert "BSM1 performance indices" in r
-    assert "AE + PE + 5*sludge" in r and "Copp 2002" in r
+    assert "AE + PE + ME + 5*sludge" in r and "Copp 2002" in r
+    assert "Mixing energy" in r
     assert "kWh/d" in r and "kg TSS/d" in r and "kg poll.-units/d" in r
     # the OCI equals the sum of the displayed contributions
     assert ev.oci == pytest.approx(
-        ev.aeration_energy + ev.pumping_energy + 5.0 * ev.sludge_production)
+        ev.aeration_energy + ev.pumping_energy + ev.mixing_energy
+        + 5.0 * ev.sludge_production)
 
 
 def test_eqi_weights_are_copp_alex_standard(asm1):

@@ -651,13 +651,17 @@ class BSM1Evaluation:
     eqi : float
         Effluent Quality Index (kg pollutant / day), lower is better.
     oci : float
-        BSM1 Operational Cost Index (Copp 2002): ``AE + PE + 5·sludge``.
+        BSM1 Operational Cost Index: ``AE + PE + ME + 5·sludge`` (the updated
+        benchmark convention, which adds mixing energy to the original Copp 2002
+        ``AE + PE + 5·sludge``).
     aeration_energy : float
         Aeration energy AE (kWh/d).
     pumping_energy : float
         Pumping energy PE (kWh/d): the internal recycle, RAS and wastage pumps.
     sludge_production : float
         Wasted-sludge TSS mass flow (kg TSS/d), time-averaged.
+    mixing_energy : float
+        Mixing energy ME (kWh/d): mechanical mixing of the unaerated reactors.
     effluent : dict
         Time/flow-weighted average effluent concentrations (COD, BOD, TSS, TKN,
         SNH, SNO; g/m^3) from :func:`effluent_averages`.
@@ -675,19 +679,21 @@ class BSM1Evaluation:
     aeration_energy: float
     pumping_energy: float
     sludge_production: float
+    mixing_energy: float = 0.0
     effluent: dict = field(default_factory=dict)
     aerated_tanks: list = field(default_factory=list)
     air_flow: float | None = None
     oci_note: str = (
-        "BSM1 OCI (Copp 2002): AE + PE + 5*sludge. Sludge production is the "
-        "wastage TSS mass flow (plant TSS-inventory change neglected -- ~0 at "
-        "steady state)."
+        "BSM1 OCI (updated benchmark): AE + PE + ME + 5*sludge, where ME is the "
+        "mechanical-mixing energy of the unaerated reactors (the original Copp "
+        "2002 index omits it). Sludge production is the wastage TSS mass flow "
+        "(plant TSS-inventory change neglected -- ~0 at steady state)."
     )
 
     def total_energy(self) -> float:
-        """Total electricity draw (kWh/d) = aeration + pumping -- the energy
-        basis for the GHG and cost layers (BSM1 has no mixing/digester term)."""
-        return self.aeration_energy + self.pumping_energy
+        """Total electricity draw (kWh/d) = aeration + pumping + mixing -- the
+        energy basis for the GHG and cost layers."""
+        return self.aeration_energy + self.pumping_energy + self.mixing_energy
 
     def kpis(self) -> dict:
         """Headline performance KPIs for a scenario comparison table."""
@@ -713,6 +719,7 @@ class BSM1Evaluation:
             terms.append(("  air flow", self.air_flow, "m3/d", None))
         terms += [
             ("Pumping energy   PE", self.pumping_energy, "kWh/d", self.pumping_energy),
+            ("Mixing energy    ME", self.mixing_energy, "kWh/d", self.mixing_energy),
             (
                 "Sludge prod.  (x5)",
                 self.sludge_production,
@@ -724,7 +731,7 @@ class BSM1Evaluation:
             "BSM1 performance indices",
             self.eqi,
             self.oci,
-            "AE + PE + 5*sludge",
+            "AE + PE + ME + 5*sludge",
             terms,
             self.effluent,
             self.aerated_tanks,
@@ -828,7 +835,12 @@ def evaluate_bsm1(
     tss_mass_flow = derived_TSS(waste_C, network) * waste_Q * 1e-3
     sludge = _time_average(t, tss_mass_flow)
 
-    oci = operational_cost_index(AE, PE, sludge)
+    # ----- Mixing energy (mechanical mixing of the unaerated reactors). -----
+    # BSM1 has no digester, so the digester mixing volume is zero. The updated
+    # benchmark OCI includes this term; the original Copp (2002) index omits it.
+    ME = mixing_energy(t, kla_hist, volumes, 0.0)
+
+    oci = operational_cost_index(AE, PE, sludge, mixing=ME)
 
     return BSM1Evaluation(
         eqi=eqi,
@@ -836,6 +848,7 @@ def evaluate_bsm1(
         aeration_energy=AE,
         pumping_energy=PE,
         sludge_production=sludge,
+        mixing_energy=ME,
         effluent=averages,
         aerated_tanks=aerated,
         air_flow=air_flow,

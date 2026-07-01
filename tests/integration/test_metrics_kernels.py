@@ -55,9 +55,11 @@ def test_derived_kernels_vectorize_over_a_trajectory(asm1):
 
 
 def test_operational_cost_index_bsm1_form():
-    # BSM1 OCI = aeration + pumping + 5 * sludge_production.
+    # BSM1 OCI = aeration + pumping + mixing + 5 * sludge_production.
     assert aquakin.operational_cost_index(10.0, 5.0, 2.0) == pytest.approx(25.0)
     # weight is exactly 5 on the sludge term
     base = aquakin.operational_cost_index(10.0, 5.0, 0.0)
     assert aquakin.operational_cost_index(10.0, 5.0, 1.0) - base == pytest.approx(5.0)
+    # the optional mixing term adds directly (default 0 keeps the Copp 2002 form)
+    assert aquakin.operational_cost_index(10.0, 5.0, 2.0, mixing=3.0) == pytest.approx(28.0)
     assert isinstance(aquakin.operational_cost_index(1.0, 1.0, 1.0), float)
