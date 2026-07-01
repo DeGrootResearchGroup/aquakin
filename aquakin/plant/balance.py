@@ -175,9 +175,7 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
             for comp, vec in content.items():
                 part_content = np.asarray([vec[i] for i in unit._part_indices])
                 per_tss = (
-                    float(np.sum(frac * part_content)) / tss_per_unit
-                    if tss_per_unit > 0
-                    else 0.0
+                    float(np.sum(frac * part_content)) / tss_per_unit if tss_per_unit > 0 else 0.0
                 )
                 out[comp] = solids_mass * per_tss
         else:
