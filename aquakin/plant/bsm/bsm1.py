@@ -53,6 +53,8 @@ def build_bsm1(
     do_setpoint_tank5: float = 2.0,
     conditions: Optional[dict[str, float]] = None,
     use_takacs: bool = False,
+    settler_soluble_holdup: bool = True,
+    settler_composition_mode: str = "lumped_tss",
 ) -> Plant:
     """Assemble the canonical BSM1 plant.
 
@@ -84,6 +86,22 @@ def build_bsm1(
         is stiffer, so its ``solve()`` needs a larger ``max_steps`` (the
         clarifier alone is cheap, but the full plant with recycles benefits from
         ``max_steps`` of a few hundred thousand).
+    settler_soluble_holdup : bool
+        When ``use_takacs=True``, carry the soluble species through the ten
+        settler layers as well-mixed convective states, so the clarifier liquid
+        volume damps the dynamic soluble effluent signal. Default True, matching
+        the BSM1 reference settler ``settler1dv4`` (MODELTYPE=0, the COST
+        benchmark). Set False for the simpler soluble pass-through. Ignored when
+        ``use_takacs=False``. Leaves the steady state unchanged.
+    settler_composition_mode : {"lumped_tss", "per_species"}
+        When ``use_takacs=True``, how the settler tracks the particulate phase.
+        ``"lumped_tss"`` (default) carries one total-suspended-solids value per
+        layer and scales the outlet particulate composition from the
+        instantaneous feed, reproducing the BSM1 reference ``settler1dv4``.
+        ``"per_species"`` carries each particulate per layer (per-layer
+        composition memory), matching the BSM2 reference ``settler1dv5``; it
+        agrees with ``"lumped_tss"`` at steady state but diverges under dynamic
+        flow. Ignored when ``use_takacs=False``.
 
     Returns
     -------
@@ -182,6 +200,20 @@ def build_bsm1(
                 # the thickening ratio so the clarifier starts settled rather
                 # than uniform, avoiding the violent startup transient.
                 init_underflow_Q=Q_underflow,
+                # The BSM1 reference settler (settler1dv4, MODELTYPE=0, the COST
+                # benchmark) carries the solubles through the ten layers, so the
+                # clarifier liquid volume damps the dynamic soluble effluent
+                # signal. On by default to reproduce the reference; set False for
+                # the simpler soluble pass-through. Leaves the steady state
+                # unchanged.
+                soluble_holdup=settler_soluble_holdup,
+                # The reference settler1dv4 sets the outlet particulate
+                # composition from the instantaneous feed scaled by the
+                # boundary-layer TSS ratio ("lumped_tss", the default here). The
+                # "per_species" alternative carries per-layer composition memory
+                # the reference lacks, which diverges under dynamic flow (same
+                # steady state); it matches the BSM2 settler1dv5 instead.
+                composition_mode=settler_composition_mode,
             )
         )
     else:

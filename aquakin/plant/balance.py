@@ -150,24 +150,46 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
         return {}
     content = content_by_network[net.name]  # {component: (n_species,) array}
 
-    # Layered Takács settler: the particulate head block is (n_layers, n_part);
-    # inventory is the blanket summed over layers at the per-layer volume. With
+    # Layered Takács settler: inventory is the blanket summed over layers at the
+    # per-layer volume. In ``per_species`` mode the particulate head block is
+    # (n_layers, n_part) and each species' content is summed directly. In
+    # ``lumped_tss`` mode the head block is one TSS value per layer with no
+    # per-species split (the lumped model scales the outlet particulates from the
+    # feed), so the stored TSS is distributed over the particulate species by the
+    # network-default solids composition to recover the per-component content per
+    # unit TSS -- exact for COD (the composition-independent 1/TSS-factor ratio),
+    # the default solids composition for N/P (a small inventory term). With
     # soluble_holdup the soluble tail block (n_layers, n_sol) adds its own
-    # convective-only inventory (the liquid holdup).
+    # convective-only inventory (the liquid holdup), same layout in both modes.
     if hasattr(unit, "_part_indices") and hasattr(unit, "n_layers"):
         layer_vol = float(unit.area) * float(unit.height) / int(unit.n_layers)
         sv = np.asarray(state_vec)
         pb = int(unit._part_block_size)
-        prof = sv[:pb].reshape(int(unit.n_layers), unit._n_part)
         out = {}
-        for comp, vec in content.items():
-            part_content = np.asarray([vec[i] for i in unit._part_indices])
-            out[comp] = layer_vol * float(np.sum(prof * part_content[None, :]))
+        if getattr(unit, "composition_mode", "per_species") == "lumped_tss":
+            solids_mass = layer_vol * float(np.sum(sv[:pb]))  # total g TSS held
+            defaults = np.asarray(unit.network.default_concentrations())
+            frac = np.asarray([float(defaults[i]) for i in unit._part_indices])
+            factors = np.asarray(unit._part_tss_factors)
+            tss_per_unit = float(np.sum(frac * factors))
+            for comp, vec in content.items():
+                part_content = np.asarray([vec[i] for i in unit._part_indices])
+                per_tss = (
+                    float(np.sum(frac * part_content)) / tss_per_unit if tss_per_unit > 0 else 0.0
+                )
+                out[comp] = solids_mass * per_tss
+        else:
+            prof = sv[:pb].reshape(int(unit.n_layers), unit._n_part)
+            for comp, vec in content.items():
+                part_content = np.asarray([vec[i] for i in unit._part_indices])
+                out[comp] = layer_vol * float(np.sum(prof * part_content[None, :]))
         if getattr(unit, "soluble_holdup", False):
             sol = sv[pb:].reshape(int(unit.n_layers), unit._n_sol)
             for comp, vec in content.items():
                 sol_content = np.asarray([vec[i] for i in unit._soluble_indices])
-                out[comp] += layer_vol * float(np.sum(sol * sol_content[None, :]))
+                out[comp] = out.get(comp, 0.0) + layer_vol * float(
+                    np.sum(sol * sol_content[None, :])
+                )
         return out
 
     sv = np.asarray(state_vec)

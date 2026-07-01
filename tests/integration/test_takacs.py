@@ -531,3 +531,24 @@ def test_controlled_split_helper():
     # clamp=False leaves the split affine (overflow may exceed Q_in).
     o, u = split_controlled_flows(None, 30.0, jnp.asarray(20.0), clamp=False)
     assert float(o) == pytest.approx(-10.0)  # 20 - 30, affine
+
+
+def test_build_bsm1_takacs_defaults_to_reference_settler(asm1):
+    """build_bsm1(use_takacs=True) reproduces the BSM1 reference secondary
+    settler settler1dv4 (MODELTYPE=0): the solubles are held through the layers
+    and the particulate phase is lumped TSS with the feed-scaled outlet
+    composition. These are dynamic-only properties (the steady state is
+    invariant to them); ``per_species`` matches the BSM2 settler1dv5 instead."""
+    from aquakin.plant.bsm import build_bsm1
+
+    cl = build_bsm1(network=asm1, use_takacs=True).units["clarifier"]
+    assert isinstance(cl, TakacsClarifier)
+    assert cl.composition_mode == "lumped_tss"
+    assert cl.soluble_holdup is True
+
+    # The settings remain overridable for the BSM2-style settler.
+    cl2 = build_bsm1(network=asm1, use_takacs=True,
+                     settler_composition_mode="per_species",
+                     settler_soluble_holdup=False).units["clarifier"]
+    assert cl2.composition_mode == "per_species"
+    assert cl2.soluble_holdup is False
