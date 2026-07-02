@@ -27,7 +27,7 @@ from aquakin.plant.influent import InfluentSeries
 # fast PR gate.
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 @pytest.fixture(scope="module")
@@ -38,14 +38,14 @@ def constant_influent(asm1):
             "SND": 4.0, "XND": 15.0, "SALK": 7.0}
     C0 = asm1.concentrations(over)
     return InfluentSeries(t=jnp.array([0.0, 1e4]), Q=jnp.full((2,), BSM2_Q_REF),
-                          C=jnp.tile(C0, (2, 1)), network=asm1)
+                          C=jnp.tile(C0, (2, 1)), model=asm1)
 
 
 @pytest.fixture(scope="module")
 def plant(asm1, constant_influent):
     """The assembled open-loop BSM2 plant (no solve) -- a cheap fixture for the
     assembly / flow-resolution check that stays on the fast PR gate."""
-    p = build_bsm2(asm1_network=asm1)
+    p = build_bsm2(asm1_model=asm1)
     p.add_influent("feed", constant_influent)
     return p
 
@@ -83,7 +83,7 @@ def test_bsm2_digester_produces_methane(steady):
     """The ADM1 digester reaches a methanogenic steady state (headspace CH4
     near the BSM2 reference) inside the coupled plant."""
     plant, sol = steady
-    adm1 = plant.units["digester"].network
+    adm1 = plant.units["digester"].model
     dstate = plant.states_by_unit(sol.final_state)["digester"]
     g = lambda n: float(dstate[adm1.species_index[n]])
     assert jnp.all(jnp.isfinite(dstate))

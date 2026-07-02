@@ -9,7 +9,7 @@ comparisons, users should replace them with the official BSM2 influent file.
 
 The columns are the BSM1 fixtures (``t``, the 13 ASM1 species, ``Q``) plus a
 time-varying influent temperature ``T`` (degC) -- ASM1 is now temperature-
-dependent (a seasonal kinetic effect; see ``bsm2_asm1_network``). TSS is still
+dependent (a seasonal kinetic effect; see ``bsm2_asm1_model``). TSS is still
 omitted (it is a derived quantity, not a state).
 
 Run once at repo setup; the resulting CSVs are committed as package data.

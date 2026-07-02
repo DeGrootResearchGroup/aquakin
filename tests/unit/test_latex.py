@@ -129,7 +129,7 @@ def test_power_parenthesises_divide_base():
 
 def test_ph_inhibit_renders():
     """pH_inhibit must render (it is inlined into ADM1 reaction ASTs); a missing
-    branch previously raised TypeError from network.to_latex()."""
+    branch previously raised TypeError from model.to_latex()."""
     node = pHInhibitNode(ConstantNode(4.0), ConstantNode(5.5))
     out = to_latex(node)
     # Stable sigmoid closed form: 1 / (1 + 10^{n(m - pH)}).

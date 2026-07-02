@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 class SettlingModel(ABC):
@@ -45,25 +45,25 @@ class SettlingModel(ABC):
     A model owns an optional block of *settling* state (appended to the SBR
     state after the bulk concentrations and volume) and answers, each RHS call,
     how that state evolves and what multiplier the decant draw is scaled by per
-    species. It is *bound* to a network once (``bind``) so it can resolve which
+    species. It is *bound* to a model once (``bind``) so it can resolve which
     species are particulate; the SBR calls ``bind`` at construction.
     """
 
     #: set by ``bind`` -- the (n_species,) 0/1 mask of particulate species.
     _particulate_mask: "jnp.ndarray | None" = None
 
-    def bind(self, network: "CompiledNetwork", particulate_species) -> None:
-        """Resolve the particulate-species mask against ``network`` (called once
+    def bind(self, model: "CompiledModel", particulate_species) -> None:
+        """Resolve the particulate-species mask against ``model`` (called once
         by the SBR at construction). ``particulate_species`` is the list of
         species names that settle."""
-        idx = [network.species_index[s] for s in particulate_species]
+        idx = [model.species_index[s] for s in particulate_species]
         mask = (
-            jnp.zeros((network.n_species,)).at[jnp.asarray(idx, dtype=int)].set(1.0)
+            jnp.zeros((model.n_species,)).at[jnp.asarray(idx, dtype=int)].set(1.0)
             if idx
-            else jnp.zeros((network.n_species,))
+            else jnp.zeros((model.n_species,))
         )
         self._particulate_mask = mask
-        self._n_species = network.n_species
+        self._n_species = model.n_species
 
     @abstractmethod
     def extra_state_size(self) -> int:

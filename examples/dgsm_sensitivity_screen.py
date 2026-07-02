@@ -1,7 +1,7 @@
 """Derivative-based global sensitivity (DGSM) screen.
 
 Ranks how strongly each of several rate constants controls the final bromate
-yield of the ozone/bromate network, using ``aquakin.dgsm`` -- an AD analogue of
+yield of the ozone/bromate model, using ``aquakin.dgsm`` -- an AD analogue of
 the Sobol total-order index. It draws scrambled-Sobol quasi-random samples
 across each parameter's uncertainty range, accumulates the mean-squared
 gradient at each, and reports an upper bound on the Sobol total index per input.
@@ -20,25 +20,25 @@ import aquakin
 
 
 def main() -> None:
-    network = aquakin.load_network("ozone_bromate")
+    model = aquakin.load_model("ozone_bromate")
     conditions = aquakin.OperatingConditions(pH=7.5, T=293.15,
                                              OH_scavenging=5.0e4)
 
     # Per-species atol: OH lives in the 1e-12 M band.
-    atol = network.atol({"OH": 1e-20}, default=1e-12)
+    atol = model.atol({"OH": 1e-20}, default=1e-12)
     # forward mode so the *forward*-mode screen works (finite at any step).
     reactor = aquakin.BatchReactor(
-        network, conditions, atol=atol,
+        model, conditions, atol=atol,
         diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"))
 
-    C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
-    base = network.default_parameters()
+    C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
+    base = model.default_parameters()
 
     # Screen these rate constants; each varies +/- a factor of 3 about its default.
     screened = ["O3_Br_direct.k1", "O3_OBr_oxidation.k2",
                 "O3_BrO2_oxidation.k3", "O3_decay_OH.k_dec"]
-    idx = jnp.array([network.param_index[n] for n in screened])
-    defaults = jnp.array([float(base[network.param_index[n]]) for n in screened])
+    idx = jnp.array([model.param_index[n] for n in screened])
+    defaults = jnp.array([float(base[model.param_index[n]]) for n in screened])
     ranges = [(float(d) / 3.0, float(d) * 3.0) for d in defaults]
 
     t_eval = jnp.linspace(0.0, 600.0, 31)

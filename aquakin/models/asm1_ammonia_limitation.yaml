@@ -1,0 +1,37 @@
+model:
+  name: asm1_ammonia_limitation
+  version: "2.0"
+  # Inherit the whole textbook ``asm1`` model (species, stoichiometry,
+  # conditions, parameters, temperature corrections, clip_negative_states) and
+  # add only the nutrient switch. See aquakin/schema/inheritance.py for the
+  # ``extends`` merge semantics. This file used to be a 200-line copy of asm1.
+  extends: asm1
+  description: >
+    Activated Sludge Model No. 1 (ASM1) extended with a heterotroph ammonia
+    (nitrogen-source) availability switch — the vendor-style nutrient-limitation
+    term used by BioWin and SUMO, but NOT part of the reference Gujer matrix.
+
+    This is the shipped ``asm1`` model with one addition: both heterotrophic
+    growth rates carry an extra Monod factor ``[SNH] / (KNH_H + [SNH])``, so
+    heterotroph growth shuts down when ammonia (the nitrogen source for cell
+    synthesis) is exhausted. It prevents unphysical biomass growth in a
+    nitrogen-depleted regime. With the default half-saturation ``KNH_H = 0.05
+    g_N/m3`` the factor is ~1 in nitrogen-rich domestic influent (so this model
+    matches ``asm1`` there) and only bites where ammonia is driven low.
+
+    Use the plain ``asm1`` model for textbook / BSM-faithful results; use this
+    variant when you want the BioWin/SUMO nutrient-availability behaviour. Apart
+    from the two extra rate factors (and the ``KNH_H`` parameter) the model is
+    identical to ``asm1`` — same species, stoichiometry, and every other rate.
+
+# Add the nutrient half-saturation (a new model-level parameter slot).
+parameters:
+  KNH_H:  {value: 0.05,  units: "g_N/m3",  bounds: [0.001, 1.0],  transform: positive_log}
+
+# Override the two heterotroph growth-rate expressions with the extra
+# ``[SNH] / (KNH_H + [SNH])`` factor. The reactions reference these named
+# expressions, so they pick up the change automatically; every other
+# expression (rho_auto_aerobic, rho_hetero_decay, ...) is inherited from asm1.
+expressions:
+  rho_hetero_aerobic:  "muH * [SS] / (KS + [SS]) * [SO] / (KOH + [SO]) * [SNH] / (KNH_H + [SNH]) * [XB_H]"
+  rho_hetero_anoxic:   "muH * [SS] / (KS + [SS]) * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]) * [SNH] / (KNH_H + [SNH]) * etag * [XB_H]"

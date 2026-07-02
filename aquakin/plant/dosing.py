@@ -23,7 +23,7 @@ import jax.numpy as jnp
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 _EPS_Q = 1e-12  # guard the flow-weighted division when the through-flow is ~zero
 
@@ -34,7 +34,7 @@ _EPS_Q = 1e-12  # guard the flow-weighted division when the through-flow is ~zer
 @dataclass(frozen=True, eq=False)
 class Reagent:
     """The neat composition of a dosing reagent: a concentration vector in the
-    dosed stream's network, plus a label.
+    dosed stream's model, plus a label.
 
     Build it by name from the species the reagent actually contains -- a methanol
     carbon source is just readily-biodegradable COD, a ferric solution is just the
@@ -45,28 +45,28 @@ class Reagent:
 
     Attributes
     ----------
-    network : CompiledNetwork
-        The network whose species ordering ``composition`` follows (the dosed
-        stream's network).
+    model : CompiledModel
+        The model whose species ordering ``composition`` follows (the dosed
+        stream's model).
     composition : jnp.ndarray
         Concentration vector of the neat reagent, shape ``(n_species,)``.
     label : str
         A human-readable name for the reagent (used in unit names / messages).
     """
 
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     composition: jnp.ndarray
     label: str = "reagent"
 
     @classmethod
-    def from_species(cls, network, overrides=None, /, *, label="reagent", **species) -> "Reagent":
+    def from_species(cls, model, overrides=None, /, *, label="reagent", **species) -> "Reagent":
         """Build a reagent from named species concentrations (everything else 0).
 
-        Thin wrapper over :meth:`CompiledNetwork.concentrations` with
+        Thin wrapper over :meth:`CompiledModel.concentrations` with
         ``base="zero"`` -- the neat reagent contains only the species you name.
         """
-        comp = network.concentrations(overrides, base="zero", **species)
-        return cls(network=network, composition=comp, label=label)
+        comp = model.concentrations(overrides, base="zero", **species)
+        return cls(model=model, composition=comp, label=label)
 
 
 def dose_signal_name(controller_id: str) -> str:
@@ -104,7 +104,7 @@ class DosingUnit:
     name : str
         Unit identifier.
     reagent : Reagent
-        The dosed reagent. Its ``network`` is the unit's network.
+        The dosed reagent. Its ``model`` is the unit's model.
     flow : float, optional
         Fixed dose flow (volume/time). Mutually exclusive with ``setpoint``.
     setpoint : float, optional
@@ -162,17 +162,17 @@ class DosingUnit:
             )
         if (
             self.measured_species is not None
-            and self.measured_species not in self.network.species_index
+            and self.measured_species not in self.model.species_index
         ):
             raise ValueError(
                 f"DosingUnit '{self.name}' measured species "
-                f"'{self.measured_species}' not in the reagent's network."
+                f"'{self.measured_species}' not in the reagent's model."
             )
 
     # ----- identity / protocol -------------------------------------------
     @property
-    def network(self) -> "CompiledNetwork":
-        return self.reagent.network
+    def model(self) -> "CompiledModel":
+        return self.reagent.model
 
     @property
     def state_size(self) -> int:
@@ -235,7 +235,7 @@ class DosingUnit:
         # The reagent carries no temperature of its own; the dosed stream keeps
         # the through-stream's temperature (a small ambient dose into a large flow
         # does not move it appreciably).
-        return {self.output_port: Stream(Q=q_out, C=c_out, network=self.network, T=s_in.T)}
+        return {self.output_port: Stream(Q=q_out, C=c_out, model=self.model, T=s_in.T)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output flow = inflow + dose flow. For a feedback dose the actual flow

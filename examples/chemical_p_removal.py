@@ -21,7 +21,7 @@ PERMIT_TP = 1.0  # g P / m³ effluent target
 
 
 def steady_effluent(ferric):
-    net = aquakin.load_network("asm2d")
+    net = aquakin.load_model("asm2d")
     # A phosphorus-rich, VFA-limited influent: biological P removal alone leaves
     # residual phosphate above the permit.
     influent = a2o_influent(net, overrides={"SPO4": 15.0, "SA": 20.0})

@@ -108,14 +108,14 @@ def bsm1():
     from aquakin.plant.influent import InfluentSeries
 
     def make():
-        asm1 = aquakin.load_network("asm1")
-        p = build_bsm1(network=asm1)
+        asm1 = aquakin.load_model("asm1")
+        p = build_bsm1(model=asm1)
         C0 = asm1.concentrations({
             "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
             "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0})
         inf = InfluentSeries(t=jnp.array([0.0, 100.0]),
                              Q=jnp.full((2,), BSM1_Q_AVG),
-                             C=jnp.tile(C0, (2, 1)), network=asm1)
+                             C=jnp.tile(C0, (2, 1)), model=asm1)
         p.add_influent("feed", inf, to="inlet_mix.fresh")
         return p, bsm1_warm_start(p)
 
@@ -210,11 +210,11 @@ def test_forward_fast_matches_diffrax_bsm1(bsm1):
 def test_forward_fast_matches_diffrax_bsm2():
     from aquakin.plant.bsm import bsm2_warm_start
     from aquakin.plant.bsm.bsm2 import (
-        InfluentBypass, build_bsm2, bsm2_asm1_network, bsm2_parameters)
+        InfluentBypass, build_bsm2, bsm2_asm1_model, bsm2_parameters)
     from aquakin.plant.influent import load_bsm2_influent
-    asm1 = bsm2_asm1_network(); adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model(); adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
-    p = build_bsm2(asm1_network=asm1, adm1_network=adm1,
+    p = build_bsm2(asm1_model=asm1, adm1_model=adm1,
                    do_temperature_correction=True,
                    bypass=InfluentBypass(threshold=60000.0))
     p.add_influent("feed", load_bsm2_influent("dry", asm1))

@@ -225,8 +225,8 @@ def jacobian_sparsity_pattern(
     return P
 
 
-def structural_sparsity_pattern(network, params=None) -> np.ndarray:
-    """Exact **structural** Jacobian sparsity pattern from a network's equations.
+def structural_sparsity_pattern(model, params=None) -> np.ndarray:
+    """Exact **structural** Jacobian sparsity pattern from a model's equations.
 
     Unlike :func:`jacobian_sparsity_pattern`, which thresholds ``|J| > tol`` at
     sampled states, this is **state-free**: it asks which species each rate
@@ -255,13 +255,13 @@ def structural_sparsity_pattern(network, params=None) -> np.ndarray:
 
     Parameters
     ----------
-    network : CompiledNetwork
-        The compiled network (its ``rate_asts``, ``stoich_matrix`` /
+    model : CompiledModel
+        The compiled model (its ``rate_asts``, ``stoich_matrix`` /
         ``stoich_dynamic``, ``species_index`` and optional
         ``derived_condition_fn`` / ``derived_fields``).
     params : jnp.ndarray, optional
         Parameter vector for evaluating the derived-condition AD (default
-        ``network.default_parameters()``); only its structure matters, not its
+        ``model.default_parameters()``); only its structure matters, not its
         values.
 
     Returns
@@ -270,36 +270,36 @@ def structural_sparsity_pattern(network, params=None) -> np.ndarray:
         Boolean ``(n_species, n_species)`` structural superset (diagonal
         included).
     """
-    n = network.n_species
-    si = network.species_index
+    n = model.n_species
+    si = model.species_index
     P = np.eye(n, dtype=bool)
     if params is None:
-        params = network.default_parameters()
+        params = model.default_parameters()
 
     # affects[r] = species reaction r can change (static + symbolic stoichiometry)
-    stoich = np.asarray(network.stoich_matrix)
+    stoich = np.asarray(model.stoich_matrix)
     affects = [set(np.nonzero(stoich[r])[0].tolist()) for r in range(stoich.shape[0])]
-    for r, j, _fn in network.stoich_dynamic:
+    for r, j, _fn in model.stoich_dynamic:
         affects[r].add(int(j))
 
     # derived condition (pH, ...) -> the species that feed it. The charge balance
     # depends on every total it carries at any state, so one forward-AD pass of
     # the always-on derived fn gives the exact structural dependency set.
     derived_deps: dict[str, set[int]] = {}
-    if network.derived_condition_fn is not None and network.derived_fields:
-        conds = {k: jnp.asarray(v) for k, v in network.default_conditions().fields.items()}
-        c_generic = jnp.maximum(jnp.abs(network.default_concentrations()), 1.0)
-        fields = list(network.derived_fields)
+    if model.derived_condition_fn is not None and model.derived_fields:
+        conds = {k: jnp.asarray(v) for k, v in model.default_conditions().fields.items()}
+        c_generic = jnp.maximum(jnp.abs(model.default_concentrations()), 1.0)
+        fields = list(model.derived_fields)
 
         def _derived(c):
-            out = network.derived_condition_fn(c, params, conds, 0)
+            out = model.derived_condition_fn(c, params, conds, 0)
             return jnp.stack([jnp.reshape(out[f], ()) for f in fields])
 
         jac_derived = np.asarray(jax.jacfwd(_derived)(c_generic))  # (n_fields, n)
         for k, f in enumerate(fields):
             derived_deps[f] = set(np.nonzero(jac_derived[k] != 0.0)[0].tolist())
 
-    for r, ast in enumerate(network.rate_asts):
+    for r, ast in enumerate(model.rate_asts):
         deps = {si[s] for s in ast.species()}
         for cond in ast.condition_names():
             if cond in derived_deps:

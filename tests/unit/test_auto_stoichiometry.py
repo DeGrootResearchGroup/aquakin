@@ -2,7 +2,7 @@
 Phase 2).
 
 A coefficient written ``auto`` is left unknown and solved at compile time from
-the reaction's declared conservation laws (its ``conserved_for``, or the network
+the reaction's declared conservation laws (its ``conserved_for``, or the model
 default), using the per-species ``composition:`` content. These tests pin:
 
 - a single ``auto`` coefficient is solved so the reaction conserves, and the
@@ -24,13 +24,13 @@ import aquakin
 def _load(tmp_path, body, name="auto.yaml"):
     p = tmp_path / name
     p.write_text(textwrap.dedent(body))
-    return aquakin.load_network_from_file(p)
+    return aquakin.load_model_from_file(p)
 
 
 def test_auto_solves_single_coefficient_from_cod(tmp_path):
     # S_S -2, X +1 destroys 1 gCOD, so the O2 electron-acceptor demand must be -1.
     net = _load(tmp_path, """
-        network: {name: auto_cod}
+        model: {name: auto_cod}
         conserved_for: [COD]
         species:
           - {name: S_S, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
@@ -44,7 +44,7 @@ def test_auto_solves_single_coefficient_from_cod(tmp_path):
         """)
     j = net.species_index["S_O"]
     assert float(net.stoich_matrix[0, j]) == pytest.approx(-1.0, abs=1e-12)
-    # The compiled network conserves COD by construction, and the coefficient is
+    # The compiled model conserves COD by construction, and the coefficient is
     # numeric (not a parameter-dependent entry).
     assert net.check_conservation(tol=1e-12) == []
     assert net.stoich_dynamic == []
@@ -53,7 +53,7 @@ def test_auto_solves_single_coefficient_from_cod(tmp_path):
 def test_auto_solves_two_coupled_coefficients(tmp_path):
     # Two unknowns (S_O from COD, S_NH from N) solved from the two balances.
     net = _load(tmp_path, """
-        network: {name: auto_cod_n}
+        model: {name: auto_cod_n}
         species:
           - {name: S_S,  units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0, N: 0.05}}
           - {name: S_O,  units: gO2/m3,  default_concentration: 8.0, composition: {COD: -1.0}}
@@ -73,7 +73,7 @@ def test_auto_solves_two_coupled_coefficients(tmp_path):
 
 def test_question_mark_is_an_alias(tmp_path):
     net = _load(tmp_path, """
-        network: {name: auto_qmark}
+        model: {name: auto_qmark}
         conserved_for: [COD]
         species:
           - {name: S_S, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
@@ -90,7 +90,7 @@ def test_question_mark_is_an_alias(tmp_path):
 def test_auto_without_conserved_for_raises(tmp_path):
     with pytest.raises(ValueError, match="no quantities to conserve"):
         _load(tmp_path, """
-            network: {name: auto_noconserve}
+            model: {name: auto_noconserve}
             species:
               - {name: S_S, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
               - {name: S_O, units: gO2/m3,  default_concentration: 8.0, composition: {COD: -1.0}}
@@ -107,7 +107,7 @@ def test_auto_underdetermined_raises(tmp_path):
     # the balance cannot constrain it: under-determined.
     with pytest.raises(ValueError, match="under-determined"):
         _load(tmp_path, """
-            network: {name: auto_under}
+            model: {name: auto_under}
             conserved_for: [COD]
             species:
               - {name: S_S, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
@@ -126,7 +126,7 @@ def test_auto_inconsistent_overdetermined_raises(tmp_path):
     # COD opens N. Inconsistent.
     with pytest.raises(ValueError, match="cannot conserve all"):
         _load(tmp_path, """
-            network: {name: auto_incons}
+            model: {name: auto_incons}
             conserved_for: [COD, N]
             species:
               - {name: S_S, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
@@ -143,7 +143,7 @@ def _symbolic_growth(tmp_path):
     # Yield-dependent O2 demand: SS coeff = -1/Y_H, SO solved from COD. The derived
     # coefficient must conserve COD for EVERY Y_H, not just the nominal value.
     return _load(tmp_path, """
-        network: {name: auto_paramexpr}
+        model: {name: auto_paramexpr}
         conserved_for: [COD]
         parameters: {Y_H: {value: 0.67}}
         species:
@@ -192,11 +192,11 @@ def test_auto_parameter_expression_coefficient_is_differentiable(tmp_path):
 
 
 def test_auto_skips_reactions_without_auto_coefficients(tmp_path):
-    """A network mixing a fully-numeric reaction with an `auto` one: the numeric
+    """A model mixing a fully-numeric reaction with an `auto` one: the numeric
     reaction is passed through untouched (the `if not auto_species: continue`
     branch), the auto one is resolved. Every prior test used auto-only reactions."""
     net = _load(tmp_path, """
-        network: {name: auto_mixed}
+        model: {name: auto_mixed}
         conserved_for: [COD]
         species:
           - {name: S_S, units: gCOD/m3, default_concentration: 1.0, composition: {COD: 1.0}}
@@ -237,7 +237,7 @@ def test_symbolic_auto_drops_structural_zero_weight_terms(tmp_path):
     """
     import numpy as np
     net = _load(tmp_path, """
-        network: {name: auto_symb_zero}
+        model: {name: auto_symb_zero}
         conserved_for: [COD, N]
         parameters: {Y: {value: 0.6}}
         species:
@@ -271,7 +271,7 @@ def test_symbolic_auto_requires_square_system(tmp_path):
     # parameter-dependent, so it is rejected at compile time.
     with pytest.raises(ValueError, match="square system"):
         _load(tmp_path, """
-            network: {name: auto_symb_over}
+            model: {name: auto_symb_over}
             conserved_for: [COD, N]
             parameters: {Y: {value: 0.5}}
             species:

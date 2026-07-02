@@ -7,7 +7,7 @@ temperature, and the ASM1 temperature corrections slow the kinetics in the cold.
 Nitrification -- the most temperature-sensitive process -- slows most, so colder
 water leaves more residual ammonia in the effluent.
 
-Use ``bsm2_asm1_network()`` (its temperature corrections are referenced to the
+Use ``bsm2_asm1_model()`` (its temperature corrections are referenced to the
 BSM2 15 °C base) for *both* the plant and the influent, so a constant-15 °C run
 reproduces the validated steady state and a temperature-carrying influent drives
 it away from there.
@@ -19,7 +19,7 @@ import aquakin
 from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     build_bsm2,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
 )
@@ -30,10 +30,10 @@ def _steady_snh(asm1, adm1, params, T_kelvin):
     """Steady-state tank-5 effluent ammonia at a constant influent temperature."""
     # The published constant influent, re-tagged with the season's temperature.
     base = bsm2_constant_influent(asm1)
-    influent = InfluentSeries(t=base.t, Q=base.Q, C=base.C, network=asm1,
+    influent = InfluentSeries(t=base.t, Q=base.Q, C=base.C, model=asm1,
                               T=jnp.full_like(base.Q, float(T_kelvin)))
 
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", influent)
 
     y0 = bsm2_warm_start(plant)
@@ -46,12 +46,12 @@ def _steady_snh(asm1, adm1, params, T_kelvin):
 
 
 def main() -> None:
-    asm1 = bsm2_asm1_network()           # corrections referenced to 15 °C
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()           # corrections referenced to 15 °C
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
 
     print("BSM2 effluent ammonia vs influent temperature:")
-    snh_units = asm1.units_of("SNH")     # units from the network, not hardcoded
+    snh_units = asm1.units_of("SNH")     # units from the model, not hardcoded
     print(f"  {'season':<10} {'T [°C]':>7} {f'SNH [{snh_units}]':>14}")
     for season, T_c in (("winter", 10.0), ("spring", 15.0), ("summer", 20.0)):
         snh = _steady_snh(asm1, adm1, params, 273.15 + T_c)

@@ -5,7 +5,7 @@ paths:
 
 # Rules — `aquakin/integrate/`
 
-ODE integration strategy: solver choice, differentiating stiff networks
+ODE integration strategy: solver choice, differentiating stiff models
 (`dtmax`, forward/reverse adjoints, the discrete adjoint), operator splitting,
 located events, and compiled-solve caching. Loaded automatically when editing
 files under `aquakin/integrate/`.
@@ -50,7 +50,7 @@ default) auto-routes a differentiated stiff plant to the cap-free `stable_adjoin
 while keeping a plain forward solve on the fast cached path — so a plant gradient
 is finite by default with no `dtmax` to tune.
 `dgsm(..., ad_mode="forward")` is the first-class consumer of this (see the DGSM API
-below): for a **multi-output sensitivity screen of a stiff network** forward mode
+below): for a **multi-output sensitivity screen of a stiff model** forward mode
 can be *faster and lighter* than reverse — the reverse adjoint is paid once per
 output and is inflated by the `dtmax` step cap, whereas forward pushes all `d`
 tangents through one solve, independent of the output count. (Benchmarked at
@@ -64,13 +64,13 @@ the second derivatives through the stiff implicit solve are unreliable
 (they disagree with finite differences). Use a first-order Gauss–Newton
 `H = JᵀJ` instead (see `calibrate(laplace_method="gauss_newton")`).
 
-### Differentiating stiff networks (`dtmax`)
+### Differentiating stiff models (`dtmax`)
 
 Every reactor takes an optional `dtmax` (maximum integrator step), threaded
 into the `PIDController`. Default `None` (uncapped) — fastest for plain forward
 solves.
 
-**Set `dtmax` when taking a *reverse-mode* gradient of a very stiff network.**
+**Set `dtmax` when taking a *reverse-mode* gradient of a very stiff model.**
 `Kvaerno5` is L-stable, so a solve can take steps far larger than the fastest
 reaction timescale and simply damp the unresolved fast modes — the primal is
 fine at any step. Differentiation splits by mode: **forward mode**
@@ -218,7 +218,7 @@ So `jacfwd` is faster for short solves and Option A overtakes it for long ones
 (measured crossover ≈ 8–10 days: `0.78× → 0.92× → 1.16×` at 2/5/10 d), with a
 large Option-A win expected at the multi-week maturation spans the cap was
 introduced for. Net guidance: **for a multi-parameter sensitivity of a stiff
-network, `shared_factor=True` (the default) is the best forward-sensitivity
+model, `shared_factor=True` (the default) is the best forward-sensitivity
 option; whether it also beats capped `jacfwd` depends on the span.**
 
 The known cost of the non-invasive design (a custom *solver*, not a custom
@@ -336,7 +336,7 @@ and flow-setpoint `∂M/∂θ` gradients all match FD / the capped `jax_adjoint`
 **`calibrate(gradient="stable_adjoint")` uses this Kvaerno5 ESDIRK adjoint**, so
 its forward matches the reactor exactly and its gradients agree with the capped
 `jax_adjoint` path to the optimiser tolerance (analytic decay `rel ≈ 1e-6`; stiff
-network finite-uncapped, matching capped Kvaerno5 to `rel ≈ 2.5e-5`, the residual
+model finite-uncapped, matching capped Kvaerno5 to `rel ≈ 2.5e-5`, the residual
 being the capped-vs-uncapped *forward* difference, FD-confirmed). **Cost note:** the
 backward scan's cost scales with `stable_adjoint_max_steps` (the padded trajectory
 length), and with `dense=True` the saved dense-output buffer is ~`n_stages`× the
@@ -350,7 +350,7 @@ drops it: the forward stores only the step states (`dense=False`) and the backwa
 per-step stage solve. The recompute is a contraction through the same
 well-conditioned `I − dt·γ·J`, so the reconstructed stages — and the gradient —
 match the saved-stage path (machine precision on linear decay; `rel < 1e-5` on the
-stiff Khalil network, the residual being the forward root-finder tolerance vs the
+stiff Khalil model, the residual being the forward root-finder tolerance vs the
 machine-precision recompute). It is **guarded to the singly-diagonal ESDIRK shape**
 it assumes (explicit first stage, constant implicit γ — Kvaerno3/Kvaerno5); any
 other tableau falls back to the saved-stage path with a `RuntimeWarning`. Exposed
@@ -433,23 +433,23 @@ ASM1 batch solve; ~34 s vs ~4 s for the full BSM2 plant). So the cost of code
 that solves repeatedly is *recompilation*, and the integrators cache the
 compiled solve to avoid it:
 
-- **Networks** (`load_network`) are cached by name, so repeated
-  `load_network("asm1")` returns the **same** object (and skips re-parsing the
-  YAML). A `CompiledNetwork` is immutable in use; `clear_network_cache()` resets
+- **Models** (`load_model`) are cached by name, so repeated
+  `load_model("asm1")` returns the **same** object (and skips re-parsing the
+  YAML). A `CompiledModel` is immutable in use; `clear_model_cache()` resets
   the cache. The stable identity is what lets the solver caches key on the
-  network across calls.
+  model across calls.
 - **Reactor solves** are cached **across instances** in a module-level cache
-  (`integrate/_common.py`) keyed by `(network identity, solver settings, call
-  signature)`. Two *fresh* reactors for the same network + settings + signature
+  (`integrate/_common.py`) keyed by `(model identity, solver settings, call
+  signature)`. Two *fresh* reactors for the same model + settings + signature
   reuse one compiled solve — so building many short-lived reactors (ensembles,
   library code that constructs reactors internally) no longer recompiles each
-  time. (The `_build_jitted_solve` closure captures only the network and the
+  time. (The `_build_jitted_solve` closure captures only the model and the
   scalar settings, so the key is complete; argument shapes/dtypes are handled by
   JAX's own per-function cache.) `BatchReactor`, `PlugFlowReactor` and
   `ParticleTrackReactor` all route through this cache: the batch key carries the
   `(t0, t1, t_eval shape)` call signature, the PFR key the fixed geometry
   (`velocity`/`length`/`n_points`/`n_locations`), and the particle key only the
-  `(network, settings)` — the particle reactor passes the track's sample times
+  `(model, settings)` — the particle reactor passes the track's sample times
   and condition fields as **runtime arguments** (not baked into the closure), so
   an `integrate_ensemble` over same-shape tracks compiles **once** and JAX's
   per-shape cache covers tracks of differing length. (`BiofilmReactor` keeps a
@@ -487,12 +487,12 @@ computation. The key materialises `atol` values, which is impossible **under
 tracing** (a calibration loss differentiating through `solve`); in that case the
 key is `None` and the cache is bypassed (the solve is traced into the outer
 computation, which JAX compiles as a whole, so caching gives nothing there
-anyway). Both caches assume the network / plant is not structurally mutated
+anyway). Both caches assume the model / plant is not structurally mutated
 after the first solve — the same assumption reactors already make about their
-fixed network and conditions.
+fixed model and conditions.
 
 **What this is and isn't.** It removes *duplicate* compiles; it does not remove
-the first compile of each distinct `(network/plant, settings, signature)`, and
+the first compile of each distinct `(model/plant, settings, signature)`, and
 the JAX **persistent** (cross-process / cross-run) compilation cache does *not*
 help these Diffrax solves (verified: no reuse across processes for either an
 ASM1 reactor or the BSM2 plant — it caches only the XLA step, not tracing, and

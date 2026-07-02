@@ -83,10 +83,10 @@ def _aquakin_dtss(tss_top2bot, feed_tss):
     layer 0 is the bottom; the returned array is ordered top->bottom to match
     :func:`_official_dtss`.
     """
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     si = net.species_index
     clar = TakacsClarifier(
-        name="c", network=net, area=_AREA, height=_HEIGHT,
+        name="c", model=net, area=_AREA, height=_HEIGHT,
         overflow_Q=_Q_FEED - _Q_UNDER,   # underflow_Q = Q_in - overflow = Q_under
     )
     F = clar.tss_factors["XS"]
@@ -96,7 +96,7 @@ def _aquakin_dtss(tss_top2bot, feed_tss):
     state[:, xs_pos] = tss_bot2top / F            # 0.75 * XS = TSS
     C_in = np.zeros(net.n_species)
     C_in[si["XS"]] = feed_tss / F
-    s_in = Stream(Q=jnp.asarray(_Q_FEED), C=jnp.asarray(C_in), network=net)
+    s_in = Stream(Q=jnp.asarray(_Q_FEED), C=jnp.asarray(C_in), model=net)
     d = np.asarray(
         clar.rhs(0.0, jnp.asarray(state.reshape(-1)), {"inlet": s_in},
                  net.default_parameters())
@@ -144,9 +144,9 @@ def test_takacs_per_species_flux_conserves_total_solids():
     """Multi-species: the per-species settling fluxes sum (TSS-weighted) back
     to the bulk TSS flux, so apportioning across species conserves total
     settleable solids (the units-correctness invariant)."""
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     si = net.species_index
-    clar = TakacsClarifier(name="c", network=net, area=_AREA, height=_HEIGHT,
+    clar = TakacsClarifier(name="c", model=net, area=_AREA, height=_HEIGHT,
                            overflow_Q=_Q_FEED - _Q_UNDER)
     # Distribute a dense blanket across the real particulate species.
     tss_bot2top = np.linspace(6000.0, 20.0, _NL)
@@ -163,7 +163,7 @@ def test_takacs_per_species_flux_conserves_total_solids():
         fk = clar.tss_factors.get(sp, 0.0)
         if fk > 0:
             C_in[si[sp]] = fr * 3000.0 / fk
-    s_in = Stream(Q=jnp.asarray(_Q_FEED), C=jnp.asarray(C_in), network=net)
+    s_in = Stream(Q=jnp.asarray(_Q_FEED), C=jnp.asarray(C_in), model=net)
     d = np.asarray(
         clar.rhs(0.0, jnp.asarray(state.reshape(-1)), {"inlet": s_in},
                  net.default_parameters())

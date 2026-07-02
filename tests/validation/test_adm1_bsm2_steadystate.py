@@ -6,7 +6,7 @@ headspace, fed a constant particulate-rich sludge at 178 m3/d (hydraulic
 retention time ~19 d). The published open-loop steady-state digester
 composition is a standard reference point for ADM1 implementations.
 
-This test runs the shipped ``adm1`` network as that CSTR -- the reaction RHS
+This test runs the shipped ``adm1`` model as that CSTR -- the reaction RHS
 plus a dilution term ``(Q/V_liq)*(C_in - C)`` on the liquid states -- integrates
 to steady state, and checks it reproduces the published composition. It also
 checks the state-derived charge-balance pH against the reference electroneutrality
@@ -76,8 +76,8 @@ _GAS = ("S_gas_h2", "S_gas_ch4", "S_gas_co2")
 
 
 def _digester_cstr_solution():
-    """Integrate the adm1 network as the BSM2 CSTR to steady state."""
-    net = aquakin.load_network("adm1")
+    """Integrate the adm1 model as the BSM2 CSTR to steady state."""
+    net = aquakin.load_model("adm1")
     si = net.species_index
     p = net.default_parameters()
     cond_fields = net.default_conditions().fields
@@ -119,7 +119,7 @@ def test_adm1_reproduces_bsm2_digester_steady_state():
     C/N balances, match to machine precision), and the kinetic / equilibrium
     constants match ``adm1init_bsm2.m`` (including the carbonate Ka1 van't Hoff
     enthalpy). With the exact published feed, the residual ~1% is the difference
-    between this network's charge-balance pH solver and the reference DAE."""
+    between this model's charge-balance pH solver and the reference DAE."""
     net, C = _digester_cstr_solution()
     si = net.species_index
 
@@ -160,7 +160,7 @@ def test_adm1_steady_state_is_stationary():
 def test_adm1_ph_matches_reference_charge_balance():
     """The state-derived pH matches the ADM1 reference electroneutrality
     relation evaluated at the same composition."""
-    net = aquakin.load_network("adm1")
+    net = aquakin.load_model("adm1")
     si = net.species_index
     C = np.zeros(net.n_species)
     for name, val in REFERENCE_SS.items():

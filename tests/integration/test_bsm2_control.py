@@ -14,7 +14,7 @@ import aquakin
 from aquakin.plant.bsm.bsm2 import (
     BSM2_DO_KLA_MAX,
     BSM2_DO_SETPOINT,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
     build_bsm2,
@@ -27,12 +27,12 @@ from aquakin.plant.streams import Stream
 
 @pytest.fixture(scope="module")
 def asm1():
-    return bsm2_asm1_network()
+    return bsm2_asm1_model()
 
 
 def _controller(asm1, **over):
     cfg = dict(
-        name="do", network=asm1, measured_species="SO", setpoint=2.0,
+        name="do", model=asm1, measured_species="SO", setpoint=2.0,
         Kp=25.0, Ti=0.002, Tt=0.001, offset=120.0, out_min=0.0, out_max=360.0,
         signal_name="do_kla",
     )
@@ -43,7 +43,7 @@ def _controller(asm1, **over):
 def _so_stream(asm1, so):
     C = asm1.default_concentrations() * 0.0
     C = C.at[asm1.species_index["SO"]].set(so)
-    return {"measured": Stream(Q=jnp.asarray(1.0), C=C, network=asm1)}
+    return {"measured": Stream(Q=jnp.asarray(1.0), C=C, model=asm1)}
 
 
 def test_controller_signal_raises_kla_when_oxygen_low(asm1):
@@ -99,7 +99,7 @@ def test_controller_validates_species(asm1):
 
 @pytest.fixture(scope="module")
 def adm1():
-    return aquakin.load_network("adm1")
+    return aquakin.load_model("adm1")
 
 
 def _closed_loop_plant(asm1, adm1):
@@ -207,14 +207,14 @@ def test_ad_flows_through_control_bus(closed_plant, asm1, adm1):
     assert float(jnp.abs(g[so4_idx])) > 0.0
 
 
-def test_controller_rejects_mismatched_sensed_network(asm1):
-    """The sensed stream must share the controller's network species ordering;
+def test_controller_rejects_mismatched_sensed_model(asm1):
+    """The sensed stream must share the controller's model species ordering;
     otherwise the resolved measured-species index would read the wrong species, so
     the controller raises instead of silently mis-sensing."""
     ctrl = _controller(asm1)
-    asm3 = aquakin.load_network("asm3")    # a different species ordering
+    asm3 = aquakin.load_model("asm3")    # a different species ordering
     bad = {"measured": Stream(Q=jnp.asarray(1.0),
-                              C=asm3.default_concentrations(), network=asm3)}
+                              C=asm3.default_concentrations(), model=asm3)}
     with pytest.raises(ValueError, match="wrong species"):
         ctrl._output(ctrl.initial_state(), bad)
     ctrl._output(ctrl.initial_state(), _so_stream(asm1, 2.0))   # matching: OK

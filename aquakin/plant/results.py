@@ -83,7 +83,7 @@ class PlantSolution:
         Save times, shape ``(n_t,)``.
     state : jnp.ndarray
         Full plant state, shape ``(n_t, total_state_size)``. This is the raw
-        integrated state. Where a unit's network sets ``clip_negative_states``
+        integrated state. Where a unit's model sets ``clip_negative_states``
         (on by default for ASM1, so the activated-sludge reactors in BSM1/BSM2),
         entries may be **small transient negatives** -- the ``max(x, 0)`` clamp
         is applied only when evaluating that unit's reaction rates, not to the
@@ -157,7 +157,7 @@ class PlantSolution:
         """Return a single species' trajectory in a single unit.
 
         Only valid for units whose state is a concentration vector in the unit's
-        network (CSTRs and other kinetic units). See ``plant.list_units()`` /
+        model (CSTRs and other kinetic units). See ``plant.list_units()`` /
         ``plant.list_species(unit)`` for the valid names.
         """
         unit = self.plant._unit_or_raise(unit_name)
@@ -173,14 +173,14 @@ class PlantSolution:
                 f"plant.stream(sol, '{unit_name}.<port>') instead). "
                 f"Concentration units: {indexable}."
             )
-        if species not in unit.network.species_index:
-            suffix = did_you_mean(species, unit.network.species)
+        if species not in unit.model.species_index:
+            suffix = did_you_mean(species, unit.model.species)
             raise KeyError(
                 f"Unknown species '{species}' in unit '{unit_name}'. Species "
                 f"(see plant.list_species('{unit_name}')): "
-                f"{list(unit.network.species)}.{suffix}"
+                f"{list(unit.model.species)}.{suffix}"
             )
-        idx = unit.network.species_index[species]
+        idx = unit.model.species_index[species]
         return self.unit_state(unit_name)[:, idx]
 
     def C_named_many(self, unit_name: str, species) -> "dict[str, jnp.ndarray]":
@@ -199,7 +199,7 @@ class PlantSolution:
         The reporting shortcut for a steady-state value: instead of
         ``float(sol.C_named("tank5", "SNH")[-1])`` per species,
         ``sol.final_named("tank5", ["SNH", "SNO"])`` returns them in one dict.
-        With ``species=None`` (default) every species of the unit's network is
+        With ``species=None`` (default) every species of the unit's model is
         returned (see :meth:`Plant.list_species`). Values are plain Python floats
         (a post-processing read on an already-solved solution -- use
         ``C_named(unit, sp)[-1]`` if you need a differentiable last value).
@@ -221,7 +221,7 @@ class PlantSolution:
             A concentration-vector unit (see :meth:`Plant.list_species`).
         species : str or iterable of str, optional
             Species to plot; a single name, an iterable (legended), or ``None``
-            for every species of the unit's network.
+            for every species of the unit's model.
         ax : matplotlib.axes.Axes, optional
             Axes to draw on; a new one is created if omitted.
         **kwargs
@@ -253,7 +253,7 @@ class PlantSolution:
         if ax is None:
             _, ax = plt.subplots()
         t = np.asarray(self.t)
-        net = self.plant.units[unit_name].network
+        net = self.plant.units[unit_name].model
         for sp in names:
             ax.plot(t, np.asarray(self.C_named(unit_name, sp)), label=sp, **kwargs)
         unit = self.time_unit
@@ -270,7 +270,7 @@ class PlantSolution:
 
         The plant integrates a heterogeneous flat state across many units, so a
         single whole-plant table is not meaningful; pick one unit. For a
-        kinetic unit (one with a ``network``) the columns are species names; for
+        kinetic unit (one with a ``model``) the columns are species names; for
         any other unit they are generic ``state_0..state_{n-1}`` columns.
 
         Parameters
@@ -300,8 +300,8 @@ class PlantSolution:
             raise KeyError(f"Unknown unit '{unit}'. Available: {list(self.plant.units)}")
         sub = self.unit_state(unit)  # (n_t, unit.state_size)
         unit_obj = self.plant.units[unit]
-        if hasattr(unit_obj, "network"):
-            net = unit_obj.network
+        if hasattr(unit_obj, "model"):
+            net = unit_obj.model
             columns = [(sp, sub[:, j]) for j, sp in enumerate(net.species)]
             units = {sp: net.units_of(sp) for sp in net.species}
         else:

@@ -30,7 +30,7 @@ from aquakin.plant.streams import Stream, mixed_organism
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 # --- credit physics ---------------------------------------------------------
@@ -69,17 +69,17 @@ def test_t10_from_rtd_uses_percentile():
 
 def test_stream_org_roundtrip_and_mixing(asm1):
     C = asm1.default_concentrations()
-    s = Stream(Q=jnp.asarray(10.0), C=C, network=asm1)
+    s = Stream(Q=jnp.asarray(10.0), C=C, model=asm1)
     assert s.org is None
     assert float(s.with_org(jnp.asarray(5.0)).org) == 5.0
     assert s.with_C(C).org is None                            # preserved (was None)
     # flow-weighted mix of two indicator-carrying inlets
-    a = Stream(Q=jnp.asarray(10.0), C=C, network=asm1, org=jnp.asarray(100.0))
-    b = Stream(Q=jnp.asarray(30.0), C=C, network=asm1, org=jnp.asarray(200.0))
+    a = Stream(Q=jnp.asarray(10.0), C=C, model=asm1, org=jnp.asarray(100.0))
+    b = Stream(Q=jnp.asarray(30.0), C=C, model=asm1, org=jnp.asarray(200.0))
     org = mixed_organism({"a": a, "b": b}, ["a", "b"])
     assert float(org) == pytest.approx((10 * 100 + 30 * 200) / 40)
     # an org-agnostic inlet is ignored, not allowed to poison the mix
-    n = Stream(Q=jnp.asarray(5.0), C=C, network=asm1)
+    n = Stream(Q=jnp.asarray(5.0), C=C, model=asm1)
     assert float(mixed_organism({"a": a, "n": n}, ["a", "n"])) == pytest.approx(100.0)
     assert mixed_organism({"n": n}, ["n"]) is None            # fully agnostic -> None
 
@@ -90,7 +90,7 @@ def test_uv_unit_reduces_indicator_and_passes_process_through(asm1):
     uv = UVUnit("uv", asm1, volume=0.1, intensity=3.5, d10=6.0, inlet_density=1e6)
     C = asm1.default_concentrations()
     flow = jnp.asarray(1000.0)
-    s_in = Stream(Q=flow, C=C, network=asm1, T=jnp.asarray(293.0),
+    s_in = Stream(Q=flow, C=C, model=asm1, T=jnp.asarray(293.0),
                   org=jnp.asarray(1e6))
     out = uv.compute_outputs(0.0, uv.initial_state(), {"in": s_in},
                              asm1.default_parameters())["out"]
@@ -101,7 +101,7 @@ def test_uv_unit_reduces_indicator_and_passes_process_through(asm1):
     assert uv.state_size == 0
     # falls back to inlet_density when the inlet carries no indicator
     out2 = uv.compute_outputs(0.0, uv.initial_state(),
-                              {"in": Stream(Q=flow, C=C, network=asm1)},
+                              {"in": Stream(Q=flow, C=C, model=asm1)},
                               asm1.default_parameters())["out"]
     assert float(out2.org) == pytest.approx(1e6 * 10 ** (-log), rel=1e-9)
 
@@ -112,7 +112,7 @@ def test_chlorine_residual_dynamics_and_validation(asm1):
     cl = ChlorineContactUnit("cl", asm1, volume=500.0, dose=5.0, ct_per_log=0.05,
                              decay_rate=2.0, baffling_factor=0.5)
     C = asm1.default_concentrations()
-    s_in = Stream(Q=jnp.asarray(1000.0), C=C, network=asm1)
+    s_in = Stream(Q=jnp.asarray(1000.0), C=C, model=asm1)
     # dCl/dt = (Q/V)(dose - Cl) - k*Cl  ; at Cl=2: (1000/500)(5-2) - 2*2 = 2
     d = cl.rhs(0.0, jnp.asarray([2.0]), {"in": s_in}, asm1.default_parameters())
     assert float(d[0]) == pytest.approx((1000.0 / 500.0) * (5.0 - 2.0) - 2.0 * 2.0)

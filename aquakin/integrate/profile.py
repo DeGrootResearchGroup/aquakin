@@ -227,28 +227,28 @@ def profile_likelihood(
     if delta <= 0:
         raise ValueError(f"delta must be > 0; got {delta}.")
 
-    network = reactor.network
+    model = reactor.model
     C0 = jnp.asarray(C0)
     base_params = (
-        jnp.asarray(initial_params) if initial_params is not None else network.default_parameters()
+        jnp.asarray(initial_params) if initial_params is not None else model.default_parameters()
     )
 
     # Resolve the profiled quantity and strip it from the relevant free set.
     inner_free = list(free_params)
     inner_free_ic = list(free_ic or [])
     if profile_param is not None:
-        if profile_param not in network.param_index:
+        if profile_param not in model.param_index:
             raise KeyError(
-                f"Unknown profile_param '{profile_param}'. Available: {network.parameters}"
+                f"Unknown profile_param '{profile_param}'. Available: {model.parameters}"
             )
         inner_free = [p for p in inner_free if p != profile_param]
-        p_idx = network.param_index[profile_param]
+        p_idx = model.param_index[profile_param]
         profiled = profile_param
     else:
-        if profile_ic not in network.species_index:
-            raise KeyError(f"Unknown profile_ic '{profile_ic}'. Available: {network.species}")
+        if profile_ic not in model.species_index:
+            raise KeyError(f"Unknown profile_ic '{profile_ic}'. Available: {model.species}")
         inner_free_ic = [s for s in inner_free_ic if s != profile_ic]
-        s_idx = network.species_index[profile_ic]
+        s_idx = model.species_index[profile_ic]
         profiled = profile_ic
     if not inner_free:
         raise ValueError(

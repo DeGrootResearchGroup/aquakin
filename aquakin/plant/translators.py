@@ -1,6 +1,6 @@
-"""State translators: convert a stream from one kinetic network to another.
+"""State translators: convert a stream from one kinetic model to another.
 
-For single-network plants like BSM1, every translator is the
+For single-model plants like BSM1, every translator is the
 :class:`IdentityTranslator`. The interface exists so that BSM2-style
 plants — which use ASM1 in the activated-sludge tanks and ADM1 in the
 anaerobic digester — can plug an ASM↔ADM mapping into the framework
@@ -14,29 +14,29 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import jax.numpy as jnp
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 @runtime_checkable
 class StateTranslator(Protocol):
-    """Maps a concentration vector from one network's species ordering to
+    """Maps a concentration vector from one model's species ordering to
     another's. Must be AD-clean (used inside the plant RHS).
 
     Attributes
     ----------
-    source_network : CompiledNetwork
-        The kinetic network whose species ordering the input concentration
+    source_model : CompiledModel
+        The kinetic model whose species ordering the input concentration
         vector follows.
-    target_network : CompiledNetwork
-        The kinetic network the output concentration vector is expressed
+    target_model : CompiledModel
+        The kinetic model the output concentration vector is expressed
         in.
     """
 
-    source_network: "CompiledNetwork"
-    target_network: "CompiledNetwork"
+    source_model: "CompiledModel"
+    target_model: "CompiledModel"
 
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
-        """Map ``C_source`` to the target network's species ordering.
+        """Map ``C_source`` to the target model's species ordering.
 
         ``digester_pH`` optionally supplies the digester's instantaneous,
         state-derived pH for a translator whose mapping has a pH-dependent
@@ -51,8 +51,8 @@ def translator_coupling_pattern(translator, n_states: int = 96, seed: int = 0):
     species can influence, as a boolean ``(n_target, n_source)`` matrix.
 
     This is what lets a translator participate in the plant's colored-Jacobian
-    sparsity pattern (issue #388): a cross-network edge (ASM<->ADM) introduces
-    couplings that live in the *translator*, not in either network, and that are
+    sparsity pattern (issue #388): a cross-model edge (ASM<->ADM) introduces
+    couplings that live in the *translator*, not in either model, and that are
     regime-dependent (an interface's greedy nitrogen-budget allocation switches
     branches with the influent), so a numerical probe at one operating point
     misses the branches that activate at another.
@@ -65,7 +65,7 @@ def translator_coupling_pattern(translator, n_states: int = 96, seed: int = 0):
     translator may **override** this by defining its own ``coupling_pattern()``
     method -- e.g. a declarative translator built from per-species expressions
     could emit its pattern exactly from that declaration. This is the extension
-    point that lets a user add a custom cross-network translator and have it work
+    point that lets a user add a custom cross-model translator and have it work
     with the colored solver automatically.
     """
     import jax
@@ -76,9 +76,9 @@ def translator_coupling_pattern(translator, n_states: int = 96, seed: int = 0):
     if callable(override):
         return np.asarray(override(), dtype=bool)
 
-    src = translator.source_network
+    src = translator.source_model
     n_src = src.n_species
-    n_tgt = translator.target_network.n_species
+    n_tgt = translator.target_model.n_species
     base = np.maximum(np.abs(np.asarray(src.default_concentrations())), 1e-3)
     # fixed representative pH for the (value-independent) coupling structure
     fj = jax.jit(lambda c: jax.jacfwd(lambda x: translator.translate(x, 7.0))(c))
@@ -91,17 +91,17 @@ def translator_coupling_pattern(translator, n_states: int = 96, seed: int = 0):
 
 
 class IdentityTranslator:
-    """Pass-through translator for when source and target networks are the
+    """Pass-through translator for when source and target models are the
     same — the only kind of translator BSM1 needs.
 
     The plant inserts one of these automatically on any connection whose
-    source and target units share a network reference, so users don't
+    source and target units share a model reference, so users don't
     normally need to instantiate it directly.
     """
 
-    def __init__(self, network: "CompiledNetwork") -> None:
-        self.source_network = network
-        self.target_network = network
+    def __init__(self, model: "CompiledModel") -> None:
+        self.source_model = model
+        self.target_model = model
 
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         return C_source
@@ -110,4 +110,4 @@ class IdentityTranslator:
         """The identity map couples each species only to itself."""
         import numpy as np
 
-        return np.eye(self.source_network.n_species, dtype=bool)
+        return np.eye(self.source_model.n_species, dtype=bool)

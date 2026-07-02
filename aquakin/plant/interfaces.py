@@ -52,7 +52,7 @@ import equinox as eqx
 import jax.numpy as jnp
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 # ADM1 nitrogen contents (kmolN/kgCOD) and derived gN/gCOD fractions, BSM2.
@@ -68,18 +68,18 @@ class ASM1toADM1:
 
     Parameters
     ----------
-    source_network : CompiledNetwork
-        ASM1 network (13 states).
-    target_network : CompiledNetwork
-        ADM1 network (BSM2 form, 26 liquid + 3 gas states).
+    source_model : CompiledModel
+        ASM1 model (13 states).
+    target_model : CompiledModel
+        ADM1 model (BSM2 form, 26 liquid + 3 gas states).
     pH_adm : float
         Digester pH used in the inorganic-carbon / charge balance (default 7.0).
     T_op : float
         Operating temperature (K) of the digester/interface (default 308.15).
     """
 
-    source_network: "CompiledNetwork"
-    target_network: "CompiledNetwork"
+    source_model: "CompiledModel"
+    target_model: "CompiledModel"
     pH_adm: float = 7.0
     T_op: float = 308.15
     # The inorganic-carbon charge balance is evaluated at the digester pH. When
@@ -127,7 +127,7 @@ class ASM1toADM1:
                 "ASM1toADM1 only implements fdegrade_adm = 0 (the BSM2 value); "
                 "the biodegradable-inert composite cascade is not ported."
             )
-        si = self.source_network.species_index
+        si = self.source_model.species_index
         self._si = si
         # Temperature-corrected pK's (van't Hoff), precomputed constants.
         factor = (1.0 / self.T_base - 1.0 / self.T_op) / (100.0 * self.R)
@@ -141,7 +141,7 @@ class ASM1toADM1:
         self._alfa_alk = -0.001
         self._alfa_NO = -1.0 / 14000.0
         # Target indices for assembling the ADM1 output vector by name.
-        self._ti = self.target_network.species_index
+        self._ti = self.target_model.species_index
 
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         si = self._si
@@ -289,7 +289,7 @@ class ASM1toADM1:
         S_an = jnp.maximum(-ScatminusSan, 0.0)
 
         ti = self._ti
-        out = jnp.zeros((self.target_network.n_species,))
+        out = jnp.zeros((self.target_model.n_species,))
         out = out.at[ti["S_su"]].set(S_su)
         out = out.at[ti["S_aa"]].set(S_aa)
         out = out.at[ti["S_IC"]].set(S_IC)
@@ -318,16 +318,16 @@ class ADM1toASM1:
 
     Parameters
     ----------
-    source_network : CompiledNetwork
-        ADM1 network (BSM2 form).
-    target_network : CompiledNetwork
-        ASM1 network.
+    source_model : CompiledModel
+        ADM1 model (BSM2 form).
+    target_model : CompiledModel
+        ASM1 model.
     pH_adm, T_op : float
         Digester pH and operating temperature for the charge balance.
     """
 
-    source_network: "CompiledNetwork"
-    target_network: "CompiledNetwork"
+    source_model: "CompiledModel"
+    target_model: "CompiledModel"
     pH_adm: float = 7.0
     T_op: float = 308.15
     # The alkalinity (SALK) charge balance is evaluated at the digester pH. The
@@ -360,8 +360,8 @@ class ADM1toASM1:
             raise NotImplementedError(
                 "ADM1toASM1 only implements fdegrade_as = 0 (the BSM2 value)."
             )
-        self._si = self.source_network.species_index
-        self._ti = self.target_network.species_index
+        self._si = self.source_model.species_index
+        self._ti = self.target_model.species_index
         factor = (1.0 / self.T_base - 1.0 / self.T_op) / (100.0 * self.R)
         self._pK_a_co2 = self.pK_a_co2_base - math.log10(math.exp(7646.0 * factor))
         self._pK_a_IN = self.pK_a_IN_base - math.log10(math.exp(51965.0 * factor))
@@ -430,7 +430,7 @@ class ADM1toASM1:
         ) / self._alfa_alk
 
         ti = self._ti
-        out = jnp.zeros((self.target_network.n_species,))
+        out = jnp.zeros((self.target_model.n_species,))
         out = out.at[ti["SI"]].set(SI)
         out = out.at[ti["SS"]].set(SS)
         out = out.at[ti["XI"]].set(XI)

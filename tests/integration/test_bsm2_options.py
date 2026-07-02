@@ -16,14 +16,14 @@ from aquakin.plant.bsm import (
     RejectStorage,
     build_bsm1,
     build_bsm2,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
 )
 
 
 @pytest.fixture(scope="module")
 def nets():
-    return bsm2_asm1_network(), aquakin.load_network("adm1")
+    return bsm2_asm1_model(), aquakin.load_model("adm1")
 
 
 # ----- Endpoints move with the front-end features -------------------------

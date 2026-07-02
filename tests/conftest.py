@@ -10,9 +10,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
-def simple_network():
-    """Load the simple A -> B test network."""
-    return aquakin.load_network_from_file(FIXTURES / "simple_network.yaml")
+def simple_model():
+    """Load the simple A -> B test model."""
+    return aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
 
 
 # --- Tiering: defer full-plant integration tests to the merge-only `slow` job --

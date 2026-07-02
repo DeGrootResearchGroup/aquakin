@@ -272,7 +272,7 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
         # Every tank's kLa is fixed: one constant row, tiled over time.
         row = jnp.asarray(
             [
-                float(plant.units[n]._kla_vec[plant.units[n].network.species_index["SO"]])
+                float(plant.units[n]._kla_vec[plant.units[n].model.species_index["SO"]])
                 for n in tanks
             ]
         )
@@ -291,7 +291,7 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
                 signal_name, gain = controlled
                 vals.append(sig[signal_name] * gain)
             else:
-                vals.append(jnp.asarray(float(unit._kla_vec[unit.network.species_index["SO"]])))
+                vals.append(jnp.asarray(float(unit._kla_vec[unit.model.species_index["SO"]])))
         return jnp.stack(vals)
 
     return jax.vmap(_row)(jnp.asarray(solution.t), jnp.asarray(solution.state))
@@ -355,7 +355,7 @@ def _digester_unit_name(plant) -> str:
     """The name of the ADM1 anaerobic digester (the unit carrying the headspace
     gas states), or a clear error if the plant has none."""
     for name in plant.list_units():
-        net = getattr(plant.units[name], "network", None)
+        net = getattr(plant.units[name], "model", None)
         if net is not None and "S_gas_ch4" in net.species_index:
             return name
     raise ValueError(
@@ -374,7 +374,7 @@ def digester_gas(plant, solution, params=None) -> DigesterGas:
     Reached as ``plant.digester_gas(solution)``.
     """
     name = _digester_unit_name(plant)
-    adm1 = plant.units[name].network
+    adm1 = plant.units[name].model
     params_full = plant.default_parameters() if params is None else jnp.asarray(params)
     plant._build_parameter_layout()
     p = plant._params_for_unit(name, params_full)
@@ -487,9 +487,9 @@ def evaluate_bsm2(
     BSM2Evaluation
         EQI, OCI and all component terms.
     """
-    network = plant.units["tank1"].network
+    model = plant.units["tank1"].model
     params_full = plant.default_parameters() if params is None else jnp.asarray(params)
-    # Composition (i_XB / i_XP / f_P) is read with the ASM1 network's *local*
+    # Composition (i_XB / i_XP / f_P) is read with the ASM1 model's *local*
     # param_index, so it must be sliced from the ASM1 block of the concatenated
     # plant vector -- not indexed into the full vector (which is correct only while
     # ASM1 sits at block offset 0).
@@ -523,8 +523,8 @@ def evaluate_bsm2(
 
     # ----- Effluent quality. -----
     eff_Q, eff_C = streams[effluent_port]
-    eqi = effluent_quality_index(t, eff_C, eff_Q, network, params=params_asm)
-    averages = effluent_averages(t, eff_C, eff_Q, network, params=params_asm)
+    eqi = effluent_quality_index(t, eff_C, eff_Q, model, params=params_asm)
+    averages = effluent_averages(t, eff_C, eff_Q, model, params=params_asm)
 
     # BSM2 weights the BOD of *bypassed* (untreated) flow at the raw-sewage 0.65
     # BOD5/BODu coefficient rather than the 0.25 applied to treated effluent. When
@@ -539,9 +539,9 @@ def evaluate_bsm2(
         comp = _reconstruct(plant, solution, params_full, [_EFFLUENT_PORT, "bypass_split.bypass"])
         Qt, Ct = comp[_EFFLUENT_PORT]
         Qb, Cb = comp["bypass_split.bypass"]
-        _, _, f_P = _composition(network, params_asm)
-        base_t = derived_BOD(Ct, network, f_P=f_P) / 0.25  # SS+XS+(1-fP)(XBH+XBA)
-        base_b = derived_BOD(Cb, network, f_P=f_P) / 0.25
+        _, _, f_P = _composition(model, params_asm)
+        base_t = derived_BOD(Ct, model, f_P=f_P) / 0.25  # SS+XS+(1-fP)(XBH+XBA)
+        base_b = derived_BOD(Cb, model, f_P=f_P) / 0.25
         bod_load = _time_average(t, 0.25 * base_t * Qt) + _time_average(t, 0.65 * base_b * Qb)
         total_flow = _time_average(t, Qt + Qb)
         averages = {**averages, "BOD": float(bod_load / total_flow)}
@@ -587,7 +587,7 @@ def evaluate_bsm2(
 
     # ----- Sludge production (TSS mass flow leaving to disposal, kg/d). -----
     disp_Q, disp_C = streams[disposal_port]
-    tss_mass_flow = derived_TSS(disp_C, network) * disp_Q * 1e-3
+    tss_mass_flow = derived_TSS(disp_C, model) * disp_Q * 1e-3
     sludge = _time_average(t, tss_mass_flow)
 
     # ----- External-carbon dose (kg COD/d). -----
@@ -595,7 +595,7 @@ def evaluate_bsm2(
     # flow times the reagent's readily-biodegradable (SS) concentration.
     carbon_unit = plant.units.get("external_carbon")
     if carbon_unit is not None and hasattr(carbon_unit, "reagent"):
-        ss_idx = network.species_index["SS"]
+        ss_idx = model.species_index["SS"]
         conc = float(carbon_unit.reagent.composition[ss_idx])
         if carbon_unit.flow is not None:
             # Fixed dose: constant flow over the window.
@@ -776,9 +776,9 @@ def evaluate_bsm1(
     BSM1Evaluation
         EQI, OCI and all component terms.
     """
-    network = plant.units["tank1"].network
+    model = plant.units["tank1"].model
     params_full = plant.default_parameters() if params is None else jnp.asarray(params)
-    # Composition is read with the ASM1 network's local param_index, so slice the
+    # Composition is read with the ASM1 model's local param_index, so slice the
     # ASM1 block from the concatenated plant vector (see evaluate_bsm2).
     params_asm = plant._params_for_unit("tank1", params_full)
     t = solution.t
@@ -798,8 +798,8 @@ def evaluate_bsm1(
 
     # ----- Effluent quality. -----
     eff_Q, eff_C = streams[effluent_port]
-    eqi = effluent_quality_index(t, eff_C, eff_Q, network, params=params_asm)
-    averages = effluent_averages(t, eff_C, eff_Q, network, params=params_asm)
+    eqi = effluent_quality_index(t, eff_C, eff_Q, model, params=params_asm)
+    averages = effluent_averages(t, eff_C, eff_Q, model, params=params_asm)
 
     # ----- Aeration energy (actual kLa over the run). -----
     reactors = _as_reactors(plant)
@@ -825,7 +825,7 @@ def evaluate_bsm1(
 
     # ----- Sludge production (TSS mass flow leaving via wastage, kg/d). -----
     waste_Q, waste_C = streams[waste_port]
-    tss_mass_flow = derived_TSS(waste_C, network) * waste_Q * 1e-3
+    tss_mass_flow = derived_TSS(waste_C, model) * waste_Q * 1e-3
     sludge = _time_average(t, tss_mass_flow)
 
     oci = operational_cost_index(AE, PE, sludge)
@@ -844,7 +844,7 @@ def evaluate_bsm1(
 
 # ---- GHG / carbon-footprint coupling ---------------------------------------
 
-# The dissolved N₂O state name in the N₂O kinetic networks (Pocquet 2016 form).
+# The dissolved N₂O state name in the N₂O kinetic models (Pocquet 2016 form).
 _N2O_SPECIES = "SN2O"
 
 
@@ -858,17 +858,17 @@ def direct_n2o_emission(
 ) -> float:
     """Direct N₂O stripped from the activated-sludge reactors (kg N₂O-N/d).
 
-    The activated-sludge network must track a dissolved nitrous-oxide state
-    (``n2o_species``, default ``"SN2O"`` -- present in the N₂O kinetic networks,
+    The activated-sludge model must track a dissolved nitrous-oxide state
+    (``n2o_species``, default ``"SN2O"`` -- present in the N₂O kinetic models,
     e.g. ``asm3_2step_n2o``). N₂O is stripped at the aeration mass-transfer rate,
     so only the aerated reactors emit; this reconstructs each reactor's oxygen
     ``kLa`` (the same control-aware reconstruction ``evaluate_bsm2`` uses) and its
     dissolved N₂O trajectory, and time-averages the stripping flux
     (:func:`aquakin.plant.ghg.stripped_n2o`).
 
-    If the network has no ``n2o_species`` state (the standard ASM1 BSM2 plant,
+    If the model has no ``n2o_species`` state (the standard ASM1 BSM2 plant,
     which does not resolve N₂O), the direct N₂O emission is **0** -- the model has
-    no nitrous oxide to strip. Use an N₂O-capable activated-sludge network to get
+    no nitrous oxide to strip. Use an N₂O-capable activated-sludge model to get
     a non-zero direct footprint.
 
     Parameters
@@ -892,8 +892,8 @@ def direct_n2o_emission(
     from aquakin.plant.ghg import stripped_n2o
 
     reactors = _as_reactors(plant)
-    # Reactors whose network resolves the dissolved N₂O state.
-    n2o_reactors = [n for n in reactors if n2o_species in plant.units[n].network.species_index]
+    # Reactors whose model resolves the dissolved N₂O state.
+    n2o_reactors = [n for n in reactors if n2o_species in plant.units[n].model.species_index]
     if not n2o_reactors:
         return 0.0
 

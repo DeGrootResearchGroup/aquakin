@@ -1,0 +1,119 @@
+model:
+  name: precipitation_metal_phosphate_equilibrium
+  version: "1.0"
+  description: >
+    Equilibrium-mode counterpart of ``precipitation_metal_phosphate``: chemical
+    phosphorus removal by ferric / aluminium dosing, with the very insoluble
+    phosphates (strengite FePO4, variscite AlPO4) and the competing metal
+    hydroxides (ferrihydrite Fe(OH)3, gibbsite Al(OH)3) solved to their algebraic
+    saturation EQUILIBRIUM rather than integrated as stiff kinetics.
+
+    The kinetic ``precipitation_metal_phosphate`` is the default physico-chemical
+    model (matching the wastewater-process-simulator convention), but the metal
+    phosphates are so insoluble (SI ~ 14, IAP/Ksp ~ 1e14) that the kinetic rate
+    Jacobian is ~1e13 and no sensitivity/gradient method survives the dosing
+    transient. This variant instead declares every mineral ``mode: equilibrium``:
+    the engine solves the coupled equilibrium (IAP = Ksp on every precipitated
+    mineral, undersaturation on every absent one, mass-balanced across the shared
+    metal) and exposes each mineral's equilibrium solid amount ``Xeq_<name>``. A
+    reaction relaxes the solid toward that target at a finite rate
+    ``k_relax * (Xeq_<name> - X_<name>)``, whose Jacobian is ~k_relax (non-stiff)
+    and whose steady state is exactly the algebraic equilibrium. The result is
+    differentiable (``jax.grad`` / ``calibrate`` / ``sensitivity`` all flow) and
+    faster, while reproducing the long-time limit of the kinetic model -- where
+    ferric migrates from FePO4 to the more stable Fe(OH)3, so the equilibrium P
+    removal is the thermodynamic (not the transient) value and worsens with pH.
+
+    USAGE: compute the equilibrium directly with
+    ``model.precipitation_equilibrium(C, conditions)`` -- exact, fast and
+    differentiable. The relaxation reactions below integrate the dynamic approach
+    to that equilibrium, but they re-solve the coupled equilibrium on every RHS
+    evaluation, which is slow; for a differentiable *dynamic* solve prefer the
+    bounded-driver model ``precipitation_metal_phosphate_bounded`` instead.
+
+    Concentrations are in mol/m3 (= mmol/L); the per-ion molar_mass = 1000
+    converts to the mol/L the ion-activity product / Ksp use. pH is a fixed
+    operating condition. Activity coefficients use the Davies approximation.
+  references:
+    - "Kazadi Mbamba, C., Batstone, D.J., Flores-Alsina, X. & Tait, S. (2015). A generalised chemical precipitation modelling approach in wastewater treatment applied to calcite. Water Research 68, 342-353."
+    - "Flores-Alsina, X., Solon, K., Kazadi Mbamba, C., Tait, S., Gernaey, K.V., Jeppsson, U. & Batstone, D.J. (2016). Modelling phosphorus (P), sulfur (S) and iron (Fe) interactions for dynamic simulations of anaerobic digestion processes. Water Research 95, 370-382."
+    - "Lindsay, W.L. (1979). Chemical Equilibria in Soils. Wiley, New York. (mineral solubility products)"
+
+species:
+  - {name: S_Fe3, default_concentration: 2.0, units: "mol/m3", description: "Total ferric iron (Fe3+), dosed"}
+  - {name: S_Al,  default_concentration: 0.0, units: "mol/m3", description: "Total aluminium (Al3+); 0 by default (raise to dose alum)"}
+  - {name: S_PO4, default_concentration: 2.0, units: "mol/m3", description: "Total inorganic orthophosphate"}
+  - {name: X_FePO4, default_concentration: 1.0e-4, units: "mol/m3", description: "Strengite FePO4 solid"}
+  - {name: X_AlPO4, default_concentration: 1.0e-4, units: "mol/m3", description: "Variscite AlPO4 solid"}
+  - {name: X_FeOH3, default_concentration: 1.0e-4, units: "mol/m3", description: "Ferrihydrite Fe(OH)3 solid"}
+  - {name: X_AlOH3, default_concentration: 1.0e-4, units: "mol/m3", description: "Gibbsite Al(OH)3 solid"}
+
+conditions:
+  - {name: T,  default: 293.15, description: "Temperature (K); 20 C water line."}
+  - {name: pH, default: 7.0,    description: "Operating pH (fixed)."}
+
+# Protect the equilibrium inventory totals from a transiently-negative state.
+clip_negative_states: true
+
+precipitation:
+  pH_field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  activity_model: davies
+  ionic_strength_offset: 0.02
+  minerals:
+    - name: FePO4
+      pKsp: 26.4
+      mode: equilibrium
+      solid: X_FePO4
+      ions:
+        - {species: S_Fe3, molar_mass: 1000, count: 1, charge: 3}
+        - {species: S_PO4, molar_mass: 1000, count: 1, charge: 3, fraction: phosphate}
+    - name: AlPO4
+      pKsp: 22.36
+      mode: equilibrium
+      solid: X_AlPO4
+      ions:
+        - {species: S_Al,  molar_mass: 1000, count: 1, charge: 3}
+        - {species: S_PO4, molar_mass: 1000, count: 1, charge: 3, fraction: phosphate}
+    - name: FeOH3
+      pKsp: 38.8
+      mode: equilibrium
+      solid: X_FeOH3
+      ions:
+        - {species: S_Fe3, molar_mass: 1000, count: 1, charge: 3}
+        - {count: 3, charge: 1, fraction: hydroxide}
+    - name: AlOH3
+      pKsp: 32.3
+      mode: equilibrium
+      solid: X_AlOH3
+      ions:
+        - {species: S_Al, molar_mass: 1000, count: 1, charge: 3}
+        - {count: 3, charge: 1, fraction: hydroxide}
+
+parameters:
+  # Relaxation rate toward the algebraic equilibrium (1/d). Large enough to reach
+  # equilibrium well within the integration span; the Jacobian stays ~k_relax
+  # (non-stiff, differentiable), unlike the ~1e13 of the kinetic SI-driven rate.
+  k_relax: {value: 100.0, units: "1/d", bounds: [1.0, 1.0e4], transform: positive_log}
+
+reactions:
+  - name: FePO4_equilibrium
+    description: "Relax strengite toward its equilibrium amount Xeq_FePO4."
+    rate: "k_relax * ({Xeq_FePO4} - [X_FePO4])"
+    stoichiometry: {S_Fe3: -1.0, S_PO4: -1.0, X_FePO4: 1.0}
+
+  - name: AlPO4_equilibrium
+    description: "Relax variscite toward its equilibrium amount Xeq_AlPO4."
+    rate: "k_relax * ({Xeq_AlPO4} - [X_AlPO4])"
+    stoichiometry: {S_Al: -1.0, S_PO4: -1.0, X_AlPO4: 1.0}
+
+  - name: FeOH3_equilibrium
+    description: "Relax ferrihydrite toward its equilibrium amount Xeq_FeOH3."
+    rate: "k_relax * ({Xeq_FeOH3} - [X_FeOH3])"
+    stoichiometry: {S_Fe3: -1.0, X_FeOH3: 1.0}
+
+  - name: AlOH3_equilibrium
+    description: "Relax gibbsite toward its equilibrium amount Xeq_AlOH3."
+    rate: "k_relax * ({Xeq_AlOH3} - [X_AlOH3])"
+    stoichiometry: {S_Al: -1.0, X_AlOH3: 1.0}

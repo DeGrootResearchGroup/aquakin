@@ -1,6 +1,6 @@
 """Vectorized rate kernel.
 
-Builds, from a network's per-reaction rate ASTs, a single callable that returns
+Builds, from a model's per-reaction rate ASTs, a single callable that returns
 the ``(n_reactions,)`` rate vector by **interning every distinct subexpression**
 (node type + operand positions) and evaluating **all instances of each
 primitive in one batched elementwise operation**, in topological order.
@@ -23,7 +23,7 @@ because the scalar path recomputes them to the same bits.
 
 If a future AST node type is not handled here, :func:`build_vectorized_rates`
 raises :class:`UnsupportedNode`; the caller falls back to the scalar path for
-the whole network, so the kernel is a safe, transparent overlay.
+the whole model, so the kernel is a safe, transparent overlay.
 """
 
 from __future__ import annotations
@@ -222,7 +222,7 @@ def _resolve_param(name: str, reaction_name: str, param_index: dict[str, int]) -
     """Resolve a (possibly reaction-local) parameter name to its flat index.
 
     Mirrors :meth:`ParamNode.compile`: reaction-local (``<reaction>.<name>``)
-    first, then network-level.
+    first, then model-level.
     """
     if reaction_name:
         local = f"{reaction_name}.{name}"
@@ -238,7 +238,7 @@ def _resolve_param(name: str, reaction_name: str, param_index: dict[str, int]) -
 
 @dataclass
 class _Interner:
-    """Builds the deduplicated subexpression table for the whole network."""
+    """Builds the deduplicated subexpression table for the whole model."""
 
     species_index: dict[str, int]
     param_index: dict[str, int]

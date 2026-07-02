@@ -7,7 +7,7 @@ the provenance is not lost (and so the paper can narrate it). Each entry is a
 *structural* change and what it bought, with the diagnostic that motivated it.
 The faithful model (`wats_sewer_khalil_paper`) is frozen as the published
 baseline; every correction below lives only in the `_balanced` model and its
-generator [`networks/_make_khalil_balanced.py`](aquakin/networks/_make_khalil_balanced.py).
+generator [`models/_make_khalil_balanced.py`](aquakin/models/_make_khalil_balanced.py).
 
 1. **Hydrolysis saturation form** (faithful + balanced). The first
    reconstruction used the substrate *fraction* `X_S1/(X_S1+X_S2)`; the WATS
@@ -27,7 +27,7 @@ generator [`networks/_make_khalil_balanced.py`](aquakin/networks/_make_khalil_ba
 4. **Full nitrogen / phosphorus tracking** (balanced only). The published model
    omits ammonia uptake on growth, release on hydrolysis, and ammonification on
    decay, so it does not conserve N. Restoring the WATS `i_n_bio`/`i_p_bio`/
-   `i_n_xb` terms makes the balanced model the only Khalil network conserving
+   `i_n_xb` terms makes the balanced model the only Khalil model conserving
    all of COD, S, Fe and N.
 5. **SRB consume fermentable substrate `S_B`, not VFA** (balanced only). The
    peer review of the original submission (Reviewer 1 and co-author Batstone)
@@ -158,25 +158,25 @@ generator [`networks/_make_khalil_balanced.py`](aquakin/networks/_make_khalil_ba
     reproduce the batch (items 7–9), but adding two rapidly-mobilized biofilm
     storage pools — organic `X_S2` and elemental sulfur `X_S0` — is necessary and
     sufficient, with `X_S0` constrained rather than fit. (This is a calibration /
-    initial-condition configuration on the existing balanced network, explored in
+    initial-condition configuration on the existing balanced model, explored in
     the JRN-055 batch-fit scripts; it is *not* a new shipped reaction.)
 
-The four ASM networks `asm2d` / `asm2d_tud` / `asm3` / `asm3_biop` were
+The four ASM models `asm2d` / `asm2d_tud` / `asm3` / `asm3_biop` were
 **originally derived** from WastewaterAD's SUMO model export
 (`wastewaterad.tools.sumo_import`) and are now **maintained directly as YAML**
 (the one-shot import converter has been retired). Stoichiometric coefficients
 that depend on yield / N-content / fraction parameters are **live symbolic string
 expressions**, re-evaluated from the current parameter vector every `solve()`
-(via `CompiledNetwork.compute_stoich`), so calibrating `Y_H` / `i_XB` / `f_P` and
+(via `CompiledModel.compute_stoich`), so calibrating `Y_H` / `i_XB` / `f_P` and
 the like propagates to every dependent coefficient — matching GPS-X/BioWin/SUMO,
 which keep the Gujer matrix live-coupled. Only cells with no parameter leaf are
-numeric literals. Each YAML carries real units that follow the network's own
+numeric literals. Each YAML carries real units that follow the model's own
 structure — half-saturation constants the currency of the species their Monod
 term limits (so `check_units` always matches), rate constants `1/d` (the
 second-order precipitation constant `kPRE` is `m3/(g_TSS*d)`), species the
 parseable `g_<currency>/m3` form (oxygen → `g_O2/m3` per the `asm1` convention),
 and the stoichiometry-only yields / composition / charge constants best-effort
-advisory units. All four resolve `network.time_unit` to `"d"` and are
+advisory units. All four resolve `model.time_unit` to `"d"` and are
 `check_units`-clean **except** the two ASM2d-TUD biomass-normalised PP-storage
 rates (`qPP·XPAO²/XPP·…`), whose root is irreducibly cross-currency (`COD²/P`) —
 a documented property of that model's rate form, surfaced (not fixed) by the root
@@ -201,7 +201,7 @@ parenthesis on the right operand of a left-associative `/` or `-` at equal
 precedence); corrected in the two YAMLs. The legitimate `(-1/YH)·iN_SF`-style
 coefficients are genuine `(a/b)·c` and are unchanged.
 
-Future networks include UV/TiO₂ and chlorine decay.
+Future models include UV/TiO₂ and chlorine decay.
 
 **The library is a standalone scientific contribution.** It is not tied to any
 specific application project.

@@ -1,0 +1,33 @@
+model:
+  name: simple_decay
+  version: "1.0"
+  description: "Two-species first-order decay A -> B for testing."
+  references: []
+
+species:
+  - name: A
+    description: "Reactant"
+    units: mol/L
+    default_concentration: 1.0
+  - name: B
+    description: "Product"
+    units: mol/L
+    default_concentration: 0.0
+
+conditions:
+  - name: T
+    description: "Temperature (K), unused in rate."
+    default: 293.15
+
+reactions:
+  - name: A_to_B
+    description: "First-order decay."
+    rate: "k * [A]"
+    parameters:
+      k:
+        value: 0.1
+        units: "s-1"
+        bounds: [1.0e-3, 10.0]
+    stoichiometry:
+      A: -1
+      B: +1

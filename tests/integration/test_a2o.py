@@ -21,11 +21,11 @@ from aquakin.plant import build_a2o, a2o_influent, a2o_warm_start, FerricDose
 
 @pytest.fixture(scope="module")
 def asm2d():
-    return aquakin.load_network("asm2d")
+    return aquakin.load_model("asm2d")
 
 
 # --------------------------------------------------------------------------
-# Fast network-level checks (no plant solve): the process-matrix fixes.
+# Fast model-level checks (no plant solve): the process-matrix fixes.
 # --------------------------------------------------------------------------
 
 def test_lysis_consumes_the_correct_biomass(asm2d):
@@ -87,7 +87,7 @@ def test_polyp_storage_has_kmax_term(asm2d):
     """The aerobic poly-P storage inhibition must carry the maximum-ratio K_MAX
     term, so stored poly-P can reach ~K_MAX*XPAO rather than being capped ~17x
     too low. Probe: at a low stored fraction the storage inhibition factor is
-    near 1 (storage enabled), and KMAX is a network parameter."""
+    near 1 (storage enabled), and KMAX is a model parameter."""
     net = asm2d
     assert "KMAX" in net.param_index
     # KO2_AUT / KNH4_AUT / KPS distinct from the heterotroph/hydrolysis values.
@@ -99,7 +99,7 @@ def test_polyp_storage_has_kmax_term(asm2d):
 
 
 def test_cstr_reaction_term_routes_through_dCdt(asm2d):
-    """A plant CSTR's reaction term must be the network's canonical ``dCdt`` --
+    """A plant CSTR's reaction term must be the model's canonical ``dCdt`` --
     so ``clip_negative_states`` and the positivity limiter are applied identically
     to a standalone reactor, and cannot be silently bypassed. (The original plant
     bug was CSTRUnit building its RHS from ``rates()`` directly, leaving the
@@ -113,7 +113,7 @@ def test_cstr_reaction_term_routes_through_dCdt(asm2d):
 
     net = asm2d
     assert net.positivity_threshold is not None  # asm2d carries the limiter
-    unit = CSTRUnit(name="t", network=net, volume=1000.0,
+    unit = CSTRUnit(name="t", model=net, volume=1000.0,
                     input_port_names=[], conditions={"T": 293.15})
     params = net.default_parameters()
     cond = {"T": jnp.asarray([293.15])}
@@ -211,7 +211,7 @@ def test_asm2d_grad_flows(asm2d):
     net = asm2d
     cond = aquakin.OperatingConditions(T=293.15)
     # dtmax caps the reverse-mode adjoint of the stiff bio-P kinetics (the
-    # documented stiff-network gradient remedy).
+    # documented stiff-model gradient remedy).
     reactor = aquakin.BatchReactor(
         net, cond, integrator=aquakin.IntegratorConfig(dtmax=1e-3))
     C0 = net.concentrations({

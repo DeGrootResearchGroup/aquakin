@@ -1,4 +1,4 @@
-"""Smoke / integration tests for the paper-faithful wats_sewer_khalil_paper network.
+"""Smoke / integration tests for the paper-faithful wats_sewer_khalil_paper model.
 
 These check that the re-implementation of the published Khalil et al. (2025)
 sewer nitrate-dosing model -- the full WATS model (carbon backbone plus the
@@ -21,11 +21,11 @@ import pytest
 
 import aquakin
 
-# Slow module: stiff WATS/Khalil sewer-network solves. Excluded from the fast
+# Slow module: stiff WATS/Khalil sewer-model solves. Excluded from the fast
 # PR gate; runs in the merge-to-main suite (see the ``slow`` marker).
 pytestmark = pytest.mark.slow
 
-_NDIR = os.path.join(os.path.dirname(aquakin.__file__), "networks")
+_NDIR = os.path.join(os.path.dirname(aquakin.__file__), "models")
 _VARIANTS = [
     "wats_sewer_khalil_paper_halforder",
     "wats_sewer_khalil_paper_directsulfate",
@@ -36,7 +36,7 @@ _VARIANTS = [
 
 @pytest.fixture(scope="module")
 def net():
-    return aquakin.load_network("wats_sewer_khalil_paper")
+    return aquakin.load_model("wats_sewer_khalil_paper")
 
 
 @pytest.fixture
@@ -57,7 +57,7 @@ def test_compiles_with_expected_shape(net):
 
 @pytest.mark.parametrize("variant", _VARIANTS)
 def test_structural_variants_compile(variant):
-    v = aquakin.load_network_from_file(os.path.join(_NDIR, variant + ".yaml"))
+    v = aquakin.load_model_from_file(os.path.join(_NDIR, variant + ".yaml"))
     assert v.name == variant
     assert v.n_species == 18
     assert v.n_reactions == 27
@@ -130,7 +130,7 @@ def test_literature_priors_propagated_from_parent(net):
 def test_structural_variants_inherit_propagated_priors(variant):
     """The structural variants are built from the paper model, so they inherit
     the same propagated priors and the same value-guarded exclusions."""
-    v = aquakin.load_network_from_file(os.path.join(_NDIR, variant + ".yaml"))
+    v = aquakin.load_model_from_file(os.path.join(_NDIR, variant + ".yaml"))
     pr = v.parameter_priors
     for name in _PROPAGATED_PRESENT:
         assert name in pr, f"{variant}: missing propagated prior on {name!r}"
@@ -201,7 +201,7 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
 def test_halforder_variant_is_ad_differentiable_with_tighter_cap():
     """The square-root kinetics of the half-order variant need a tighter
     integrator-step cap for the reverse-mode adjoint to stay finite."""
-    v = aquakin.load_network_from_file(
+    v = aquakin.load_model_from_file(
         os.path.join(_NDIR, "wats_sewer_khalil_paper_halforder.yaml"))
     cond = aquakin.SpatialConditions.uniform(A_V=56.7, X_BF=10.0, pH=7.5)
     C0 = v.default_concentrations()

@@ -3,11 +3,11 @@
 [![CI](https://github.com/DeGrootResearchGroup/aquakin/actions/workflows/ci.yml/badge.svg)](https://github.com/DeGrootResearchGroup/aquakin/actions/workflows/ci.yml)
 
 `aquakin` is a Python library for modelling reactive scalar transport in
-aqueous environmental systems. Reaction networks are declared at runtime in
+aqueous environmental systems. Reaction models are declared at runtime in
 YAML and compiled to JAX-native, automatic-differentiable rate functions
 integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
 
-Shipped networks span chemistry (ozonation/bromate after Acero & von Gunten,
+Shipped models span chemistry (ozonation/bromate after Acero & von Gunten,
 2001; UV/H₂O₂) and biology (the ASM activated-sludge family, including a
 two-step nitrification/denitrification variant with explicit nitrite, a
 two-pathway AOB nitrous-oxide (N₂O) model, an anammox / deammonification
@@ -21,14 +21,14 @@ iron/aluminium chemical-phosphorus removal — after Kazadi Mbamba et al. 2015 a
 Flores-Alsina et al. 2016. A very insoluble mineral's stiff kinetics defeat every
 sensitivity method, so two opt-in differentiable variants are provided: an
 **algebraic equilibrium** mode that solves `IAP = Ksp` directly
-(`network.precipitation_equilibrium(...)`) and a **bounded-driver** kinetic form
-for differentiable dynamics). The network
-YAML files live under `aquakin/networks/`; see `CLAUDE.md` for the full list.
-Future networks include UV/TiO₂ and chlorine decay.
+(`model.precipitation_equilibrium(...)`) and a **bounded-driver** kinetic form
+for differentiable dynamics). The model
+YAML files live under `aquakin/models/`; see `CLAUDE.md` for the full list.
+Future models include UV/TiO₂ and chlorine decay.
 
 ## Features
 
-- Reaction networks declared in YAML — no recompilation required.
+- Reaction models declared in YAML — no recompilation required.
 - Full automatic differentiation through `solve()` via JAX.
 - JAX-native stiff ODE integration via Diffrax (`Kvaerno5` by default).
 - Safe rate expression evaluation via a custom AST (no `eval()`).
@@ -74,50 +74,50 @@ pip install -e ".[test]"
 import jax.numpy as jnp
 import aquakin
 
-network = aquakin.load_network("asm1")   # Activated Sludge Model No. 1 (IAWQ)
+model = aquakin.load_model("asm1")   # Activated Sludge Model No. 1 (IAWQ)
 
-# 0-D (a single well-mixed tank): start from the network's declared condition
+# 0-D (a single well-mixed tank): start from the model's declared condition
 # defaults (ASM1 runs at a temperature T) and change only what differs.
-conditions = network.default_conditions()                   # YAML defaults (T = 20 C)
-# conditions = network.default_conditions().with_(T=283.15)   # ...or run it at 10 C
+conditions = model.default_conditions()                   # YAML defaults (T = 20 C)
+# conditions = model.default_conditions().with_(T=283.15)   # ...or run it at 10 C
 # (OperatingConditions(T=293.15) is the scalar 0-D shorthand; use SpatialConditions
 #  for a spatially varying PFR/CFD case.)
 
-reactor = aquakin.BatchReactor(network, conditions)
+reactor = aquakin.BatchReactor(model, conditions)
 
 # Build the initial state by name -- no .at[species_index[...]].set() chains.
 # A simple aerobic batch: activated-sludge biomass + substrate + ammonia.
 # (A dict, since some ASM species names aren't valid kwargs; rest = YAML defaults.)
-C0 = network.concentrations({
+C0 = model.concentrations({
     "SS": 60.0, "SNH": 25.0, "XB_H": 500.0, "XB_A": 80.0, "SO": 2.0})
 
-# For a FEED composition use base="zero" (or network.influent): unlisted species
+# For a FEED composition use base="zero" (or model.influent): unlisted species
 # are absent, not silently left at their YAML reference value.
-feed = network.concentrations({"SS": 60.0, "SNH": 25.0}, base="zero")
-influent = network.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)   # InfluentSeries
+feed = model.concentrations({"SS": 60.0, "SNH": 25.0}, base="zero")
+influent = model.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)   # InfluentSeries
 
 # Or characterize an influent from lab measurements (total COD, TKN, ammonia,
 # alkalinity, ...): the SUMO-style fractionation splits them into the ASM1 states.
-influent = aquakin.characterize_influent(network, flow=24000.0, total_cod=420.0,
+influent = aquakin.characterize_influent(model, flow=24000.0, total_cod=420.0,
                                          tkn=34.4, ammonia=24.0, alkalinity=330.0)
 # A lab/SCADA CSV with arbitrary headers maps + fractionates per row, no renaming:
-#   aquakin.read_influent_csv("plant_log.csv", network,
+#   aquakin.read_influent_csv("plant_log.csv", model,
 #       column_map={"t": "day", "Q": "flow_m3d", "total_cod": "COD",
 #                   "tkn": "TKN", "ammonia": "NH4-N", "alkalinity": "Alk"})
 
 # There is NO global time unit: t_span / t_eval are in whatever unit the
-# network's rate constants use, and it differs by network -- ozone/UV are in
+# model's rate constants use, and it differs by model -- ozone/UV are in
 # SECONDS (M-1 s-1), the biological models (ASM/ADM/WATS) in DAYS (1/d). Check
 # it before choosing a span:
-network.time_unit                    # "d" for asm1 (the ozone/UV networks are in "s")
+model.time_unit                    # "d" for asm1 (the ozone/UV models are in "s")
 
 # ...or pass time_unit= to work in a unit of your choice: the input times are
-# converted to the network's native unit for the solve and solution.t comes back
+# converted to the model's native unit for the solve and solution.t comes back
 # in the unit you asked for (solution.time_unit reports it). Works the same on
 # BatchReactor / BiofilmReactor / Plant.solve. e.g. an ASM run in hours:
 #   sol = reactor.solve(C0, t_span=(0.0, 48.0), t_eval=..., time_unit="h")
 
-# params is optional and defaults to network.default_parameters().
+# params is optional and defaults to model.default_parameters().
 t_eval = jnp.linspace(0.0, 1.0, 121)        # one day, in days (asm1's native unit)
 solution = reactor.solve(C0, t_span=(0.0, 1.0), t_eval=t_eval)
 
@@ -130,17 +130,17 @@ solution.C_named_many(["SNH", "SNO"])   # several full trajectories -> {name: ar
 
 # Species units and descriptions are carried from the YAML to results, so you
 # never have to re-derive units by string-matching names.
-network.units_of("SNH")              # e.g. "g_N/m³"
-network.description_of("SNH")
+model.units_of("SNH")              # e.g. "g_N/m³"
+model.description_of("SNH")
 solution.units_named("SNH")          # same, for axis/column labels
-network.summary()                    # tabulates every species with its units
+model.summary()                    # tabulates every species with its units
 
 # Dimensional ("unit") consistency check of the rate expressions. Currency-aware:
 # g_COD/m3 and g_N/m3 are different dimensions, so it catches a dropped
 # concentration factor, a wrong rate-constant exponent, or a Monod term mixing
 # two currencies -- bugs a plain SI dimension check misses. Opt-in and advisory
 # (never raises; unknown/unparseable units are skipped).
-for w in network.check_units():      # -> list of (reaction, location, detail)
+for w in model.check_units():      # -> list of (reaction, location, detail)
     print(w)
 
 # Conservation (mass / electron balance) check. The companion to check_units:
@@ -150,12 +150,12 @@ for w in network.check_units():      # -> list of (reaction, location, detail)
 # against the stoichiometry -- so a wrong electron-acceptor demand breaks COD and
 # a wrong product split breaks an elemental (S/N/P/Fe) balance. Opt-in and
 # advisory (never raises). The ASM/ADM families fall back to a shipped table.
-network.composition()                # -> {species: {quantity: content}}
-for r, q, residual in network.check_conservation(quantities=["COD"]):
+model.composition()                # -> {species: {quantity: content}}
+for r, q, residual in model.check_conservation(quantities=["COD"]):
     print(r, q, residual)            # reactions whose COD content does not balance
 # (For ASM1 this lists only `anoxic_growth_heterotrophs`: denitrification's
 # electrons leave as N2 gas, which ASM1 does not track -- a known, intentional
-# exception. The WATS sewer networks declare composition in their YAML and close
+# exception. The WATS sewer models declare composition in their YAML and close
 # COD/S/N/Fe exactly.)
 
 # Better than checking after the fact: write a conservation-determined coefficient
@@ -163,7 +163,7 @@ for r, q, residual in network.check_conservation(quantities=["COD"]):
 # never be typed wrong. With composition declared on each species:
 #   reactions:
 #     - name: growth
-#       conserved_for: [COD]                 # or a network-level `conserved_for:`
+#       conserved_for: [COD]                 # or a model-level `conserved_for:`
 #       rate: "mu * [SS] * [XBH]"
 #       stoichiometry: {SS: "-1/Y_H", XBH: 1.0, SO: auto}   # O2 demand solved from COD
 # When a neighbour is a parameter expression (here -1/Y_H), the solved `auto`
@@ -177,7 +177,7 @@ df.attrs["units"]                    # {species: unit} (units kept off the label
 solution.to_csv("run.csv")           # units embedded in the CSV header
 
 # Plot a species (or several) without matplotlib boilerplate -- the x-axis is
-# labelled with the network's time unit, the y-axis with the species' units.
+# labelled with the model's time unit, the y-axis with the species' units.
 # Returns a matplotlib Axes. Requires the optional `plot` extra: aquakin[plot]
 ax = solution.plot("SNH")            # one line; y-axis "SNH [g_N/m³]"
 solution.plot(["SNH", "SNO"])        # several, legended; pass ax= to overlay
@@ -191,9 +191,9 @@ plant). A time event fires at a known time (AD-safe), a state event when a
 ```python
 # An anoxic (denitrification) batch: dose external carbon partway through to
 # drive denitrification, and stop once the nitrate has been removed.
-i_ss = network.species_index["SS"]
-i_sno = network.species_index["SNO"]
-anoxic = network.concentrations(
+i_ss = model.species_index["SS"]
+i_sno = model.species_index["SNO"]
+anoxic = model.concentrations(
     {"SS": 70.0, "SNO": 12.0, "SNH": 20.0, "XB_H": 150.0, "SO": 0.0})
 events = [
     aquakin.Event(at_times=[0.1],                           # dose carbon at t = 0.1 d
@@ -217,12 +217,12 @@ import jax.numpy as jnp
 import aquakin
 from aquakin.plant.bsm import build_bsm1, load_bsm1_influent, evaluate_bsm1
 
-network = aquakin.load_network("asm1")
-plant = build_bsm1(network)            # 5 reactors + secondary clarifier + recycles
+model = aquakin.load_model("asm1")
+plant = build_bsm1(model)            # 5 reactors + secondary clarifier + recycles
 
 # A constant average-load influent. add_influent wires it to the plant's
 # canonical front -- no "unit.port" string to hard-code.
-plant.add_influent("feed", network.influent(
+plant.add_influent("feed", model.influent(
     {"SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
      "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0}, Q=18446.0))
 
@@ -246,8 +246,8 @@ For a dynamic run, drive a fresh plant with a diurnal dry-weather influent,
 warm-started from the steady state, and score the headline performance indices:
 
 ```python
-dyn = build_bsm1(network)
-dyn.add_influent("feed", load_bsm1_influent("dry", network))   # a 14-day diurnal load
+dyn = build_bsm1(model)
+dyn.add_influent("feed", load_bsm1_influent("dry", model))   # a 14-day diurnal load
 sol = dyn.solve(t_span=(0.0, 14.0), t_eval=jnp.linspace(0.0, 14.0, 15), y0=ss.state)
 
 ev = evaluate_bsm1(dyn, sol)           # Effluent Quality / Operational Cost indices
@@ -308,7 +308,7 @@ scenarios side by side:
 ```python
 ev  = evaluate_bsm2(plant, sol, params)          # EQI / OCI + physical flows
 n2o = aquakin.direct_n2o_emission(plant, sol)    # stripped N₂O (0 unless the AS
-                                                 # network resolves an SN2O state)
+                                                 # model resolves an SN2O state)
 
 fp = aquakin.carbon_footprint(                   # kg CO₂e/d, with breakdown
     ev.total_energy(), grid_factor=0.4, n2o_emission=n2o,
@@ -341,7 +341,7 @@ for parameter estimation and sensitivity analysis; a plain forward simulation
 (above) never needs it.
 
 > **Heads-up — silent non-finite reverse gradients.** A reverse-mode gradient
-> (`jax.grad` / `jax.jacrev`) taken *directly* through a stiff network's `solve`
+> (`jax.grad` / `jax.jacrev`) taken *directly* through a stiff model's `solve`
 > (ASM / ADM / WATS) returns silent `NaN`/`Inf` when the reactor's `dtmax` is
 > uncapped — no exception, so the garbage gradient flows into your optimizer and
 > the fit never converges. `aquakin.calibrate` and `aquakin.sensitivity` guard
@@ -355,7 +355,7 @@ for parameter estimation and sensitivity analysis; a plain forward simulation
 
 ### Forward sensitivity (cap-free stiff gradients)
 
-Differentiating *through* a stiff reaction-network solve with ordinary AD goes
+Differentiating *through* a stiff reaction-model solve with ordinary AD goes
 non-finite above an integrator-step threshold, and the usual workaround — a
 global `dtmax` cap — forces tiny steps over the whole solve. `solve_sensitivity`
 avoids both: it integrates the sensitivity `S = dC/dθ` *alongside* the state and
@@ -366,12 +366,12 @@ tightens only where the sensitivity is stiff and the result is exact with no cap
 import jax.numpy as jnp
 import aquakin
 
-network = aquakin.load_network("uv_h2o2")
-conditions = network.default_conditions(1)
-reactor = aquakin.BatchReactor(network, conditions)
+model = aquakin.load_model("uv_h2o2")
+conditions = model.default_conditions(1)
+reactor = aquakin.BatchReactor(model, conditions)
 
-C0 = network.default_concentrations()
-params = network.default_parameters()
+C0 = model.default_concentrations()
+params = model.default_parameters()
 t_eval = jnp.linspace(0.0, 5.0, 6)
 
 sol, S = reactor.solve_sensitivity(
@@ -525,7 +525,7 @@ and `aquakin.sensitivity` take `diff=DifferentiationConfig(mode=...)` and build
 the right adjoint internally (no `diffrax` import), and
 `DifferentiationConfig(check_finite=True)` (the
 default) raises a friendly error with the remedy instead of returning silent
-`NaN` gradients on a stiff network.
+`NaN` gradients on a stiff model.
 
 ## Testing
 

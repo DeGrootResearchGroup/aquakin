@@ -296,7 +296,7 @@ def solve_steady_state(
 
     .. note::
        The gradient assumes a **full-rank** steady Jacobian ``dF/dy`` at the
-       root -- the case for every shipped network at its operating point, where
+       root -- the case for every shipped model at its operating point, where
        the transposed solve is exact. If the Jacobian is rank-deficient (a fully
        dormant/depleted species gives a zero row, so the root is not locally
        unique along that null direction), the true IFT cotangent is undefined and
@@ -725,7 +725,7 @@ def _ift_state(rhs, y_star, params):
     calibration-gradient direction) alike. The (already-converged) ``y_star``
     input carries no tangent: the root does not depend on the initial guess.
 
-    ``J = dF/dy`` is full rank for every shipped/validated network at its operating
+    ``J = dF/dy`` is full rank for every shipped/validated model at its operating
     point, where ``jnp.linalg.solve`` is exact (and equals the plain solve the
     forward PTC step uses, so forward and reverse agree). If ``J`` were
     rank-deficient -- a fully dormant/depleted species contributing a zero row, so

@@ -10,7 +10,7 @@ import aquakin
 
 
 _TNET = """
-network:
+model:
   name: ttest
   version: "1.0"
   description: "temperature correction test"
@@ -34,7 +34,7 @@ reactions:
 def _load(text, tmp_path, name="t.yaml"):
     p = tmp_path / name
     p.write_text(text)
-    return aquakin.load_network_from_file(str(p))
+    return aquakin.load_model_from_file(str(p))
 
 
 def _rate(net, T):
@@ -82,22 +82,22 @@ def test_negative_theta_rejected(tmp_path):
         _load(bad, tmp_path, name="bad.yaml")
 
 
-def test_network_without_temperature_unaffected():
-    """A network with no temperature specs has no corrections (back-compat)."""
-    net = aquakin.load_network_from_file  # sanity: shipped simple network
+def test_model_without_temperature_unaffected():
+    """A model with no temperature specs has no corrections (back-compat)."""
+    net = aquakin.load_model_from_file  # sanity: shipped simple model
     from importlib.resources import files
-    # The fixtures network has no temperature spec.
+    # The fixtures model has no temperature spec.
     import aquakin as ak
-    n = ak.load_network("uv_h2o2")
+    n = ak.load_model("uv_h2o2")
     assert n.temperature_corrections == []
 
 
-# --- ASM1 (shipped network) -------------------------------------------------
+# --- ASM1 (shipped model) -------------------------------------------------
 
 def test_asm1_unchanged_at_reference():
     """At the default 20 °C condition the ASM1 rates are identical to the
     uncorrected values (the correction is unity)."""
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     assert len(net.temperature_corrections) == 6
     C = net.concentrations(SS=10.0, SO=2.0, XB_H=2000.0)
     p = net.default_parameters()
@@ -114,7 +114,7 @@ def test_asm1_unchanged_at_reference():
 def test_asm1_nitrification_slows_in_the_cold():
     """Autotroph growth (nitrification) is the most temperature-sensitive: at
     10 °C it drops to ~36% of the 20 °C rate (theta_muA^-10)."""
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     C = net.concentrations(SO=2.0, SNH=5.0, XB_A=150.0)
     p = net.default_parameters()
     i = net.reaction_names.index("aerobic_growth_autotrophs")

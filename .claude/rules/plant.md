@@ -21,23 +21,23 @@ into one flat vector and integrates the whole thing under a monolithic
 Diffrax solve — so `jax.grad` flows end-to-end across the plant, and
 `aquakin.calibrate()` works on plant-level parameter vectors.
 
-**By-name plant parameters.** A `Plant` concatenates its networks' parameter
+**By-name plant parameters.** A `Plant` concatenates its models' parameter
 vectors into one flat `default_parameters()`. `Plant.parameter_values(overrides)`
 gives that flat vector the same friendly by-name API as
-`CompiledNetwork.parameter_values`, keyed by `"<network>.<param>"` (the network
-name plus the network's own namespaced parameter name) — e.g.
+`CompiledModel.parameter_values`, keyed by `"<model>.<param>"` (the model
+name plus the model's own namespaced parameter name) — e.g.
 `plant.parameter_values({"asm1.muH": 4.0, "adm1.k_hyd_ch": 10.0})` to bump one
-rate in a multi-network plant (BSM2's ASM1 water line + ADM1 digester) without
+rate in a multi-model plant (BSM2's ASM1 water line + ADM1 digester) without
 hand-computing the block offset. `parameter_names()` lists the valid keys;
 `parameter_index(name)` returns the flat index (the companion for `jax.grad`
 w.r.t. one parameter, which can't go through `parameter_values` — that
 materialises concrete values). All three reuse the existing
-`network_param_blocks` layout. Unknown names raise a `KeyError` with a
+`model_param_blocks` layout. Unknown names raise a `KeyError` with a
 close-match hint.
 
 Key types:
 
-- `Stream(Q, C, network)` — the bulk-flow + concentration record passed
+- `Stream(Q, C, model)` — the bulk-flow + concentration record passed
   between units.
 - `Unit` Protocol — every unit declares `state_size`, `input_ports`,
   `output_ports`, and implements `initial_state()`, `compute_outputs()`,
@@ -54,8 +54,8 @@ Key types:
   state members (`state_size → 0`, empty `initial_state`, no-op `rhs`), so it
   only writes `compute_outputs` / `flow_outputs`. It is a plain mixin, not part
   of the Protocol, so it composes with the `@dataclass` units.
-- `StateTranslator` Protocol — converts streams between networks.
-  `IdentityTranslator` covers single-network plants (BSM1).
+- `StateTranslator` Protocol — converts streams between models.
+  `IdentityTranslator` covers single-model plants (BSM1).
 - `Plant` — assembles units and connections, drives the monolithic
   integration. Its **sensitivity / uncertainty-quantification surface** —
   `steady_state_sensitivity` / `steady_state_dgsm` / `solve_sensitivity` /
@@ -85,13 +85,13 @@ Key types:
     species-coupling unit, an ASM↔ADM translator, is fed by a digester *state* so
     never enters the cyclic map), so one probe per edge yields its whole column
     across all species — `n_recycle_edges + 1` cheap passes, like the flow probe.
-    Edges of **different networks** don't couple (the translator that would couple
-    them is broken by the digester state), so the solve is grouped by network;
+    Edges of **different models** don't couple (the translator that would couple
+    them is broken by the digester state), so the solve is grouped by model;
     **temperature**, when an influent carries it, is one more decoupled scalar
     channel. Exact and gain-independent: a recycle loop whose bare Gauss-Seidel
     would need thousands of passes (a clarifier in a high-capture stateless loop)
     is solved in one linear solve. Validated as a fixed point on BSM1, the
-    multi-network BSM2, and a temperature-carrying loop (residual ~1e-12).
+    multi-model BSM2, and a temperature-carrying loop (residual ~1e-12).
   The exact concentration solve **seeds** the `recycle_passes` Gauss-Seidel
   mop-up (default 3), which therefore does no work for any linear topology (every
   shipped plant) and only refines a genuinely *non-affine* in-cycle unit (a
@@ -269,7 +269,7 @@ Key types:
     `plant.add_influent(name, series, to="unit.port")` — they are *not*
     valid `connect` sources (a clear error redirects you). `connect`
     resolves the default `IdentityTranslator` when the two ends share a
-    network and requires an explicit `translator=` across networks (e.g.
+    model and requires an explicit `translator=` across models (e.g.
     the BSM2 ASM1↔ADM1 digester edges). The endpoint parsing lives in
     `Plant._parse_endpoint`.
   - **Arbitrary add order; topological sort.** Units may be `add_unit`-ed in
@@ -318,7 +318,7 @@ Key types:
     digester's ~19-day retention makes a cold start slow and stiff (the
     near-empty AS basin filling against the recycle loops can crawl or hit the
     step ceiling), and the warm seed removes that transient so only the digester
-    has to settle. The reactor set and water-line network are auto-detected from
+    has to settle. The reactor set and water-line model are auto-detected from
     the plant, so a single `bsm2_warm_start(plant)` replaces the
     seed-composition dict + tank list + `initial_state(overrides=…)` boilerplate
     the BSM2 scripts used to copy-paste. (The BSM2 composition is the validated
@@ -334,10 +334,10 @@ Key types:
     columns). All three work **before** solving (plant structure) and raise a
     `KeyError` with a `difflib` "did you mean?" hint for an unknown name.
     `list_species` / `C_named` are restricted to units whose *state is a
-    concentration vector* (`state_size == network.n_species`: the CSTRs, the
+    concentration vector* (`state_size == model.n_species`: the CSTRs, the
     primary clarifier holding tank, the digester) via `Plant._is_concentration_unit`
     — a stateless mixer/splitter/ideal-clarifier or the **layered Takács settler**
-    (which carries a network but a non-species state) is rejected with a clear
+    (which carries a model but a non-species state) is rejected with a clear
     "read it as a stream with `plant.stream(...)`" message rather than an
     `IndexError`. `PlantSolution.available_streams()` is a convenience alias for
     `plant.list_ports()`, and `solution.C_named(unit, species)` now gives the same
@@ -364,7 +364,7 @@ Key types:
     states — it is *not* in the solution. `plant.stream(solution,
     "clarifier.overflow")` (or the convenience `solution.stream("effluent")`,
     plant carried on the solution) returns a `StreamSeries` (`t`, `Q`, `C` shape
-    `(n_t, n_species)`, `network`, with a `C_named(species)` accessor) — feed it
+    `(n_t, n_species)`, `model`, with a `C_named(species)` accessor) — feed it
     straight to `effluent_averages`. **The whole output sweep (every `(unit,
     port)`) is reconstructed in one `jax.vmap` pass over the saved times and
     cached on the solution** (`Plant._cached_streams`, keyed by the parameter
@@ -426,10 +426,10 @@ Key types:
     `composition_table(net, electron_acceptor_cod=False)` = lab COD, the default
     `True` = the electron-equivalent convention `check_conservation` wants;
     `params=` reads a calibrated/BSM-specific composition such as `i_XB`). Closes
-    BSM1 to ~1e-7 and BSM2 (two networks, biogas, recycles) to COD ~0.08% / N
+    BSM1 to ~1e-7 and BSM2 (two models, biogas, recycles) to COD ~0.08% / N
     ~0.03% at steady state; the gas integrals are exact at steady state and
     otherwise accurate to the `t_eval` sampling. **This is the tool that found the
-    ADM1 nitrogen transcription error** (see the `adm1` network note).
+    ADM1 nitrogen transcription error** (see the `adm1` model note).
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `IFASUnit` / `MBBRUnit`
 (an IFAS/MBBR tank: a CSTR bulk coupled to a depth-resolved attached biofilm —

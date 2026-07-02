@@ -1,0 +1,191 @@
+model:
+  name: asm1
+  version: "3.0"
+  description: >
+    Activated Sludge Model No. 1 (ASM1), the IAWQ-sponsored reference model
+    for biological wastewater treatment. 13 state variables, 8 processes
+    covering heterotrophic and autotrophic growth (aerobic + anoxic), decay,
+    hydrolysis, and ammonification. This is the textbook / BSM-faithful Gujer
+    matrix: heterotroph growth has NO ammonia (nitrogen-source) availability
+    switch. For the BioWin/SUMO-style nutrient-limitation extension (an extra
+    ``[SNH] / (KNH_H + [SNH])`` factor on heterotroph growth), load the
+    ``asm1_ammonia_limitation`` model instead.
+
+    Stoichiometric coefficients are written as SYMBOLIC EXPRESSIONS in the
+    yield / composition / fraction parameters (Y_H, Y_A, i_XB, i_XP, f_P).
+    Those parameters now sit alongside the kinetic constants at the model
+    level and can be calibrated as a single slot apiece — e.g. fitting Y_H
+    automatically adjusts every stoichiometric coefficient that depends on
+    it, across both aerobic and anoxic heterotrophic growth.
+
+    Kinetic parameters are declared once at the model level (so they
+    share a single slot across all reactions that use them) and named
+    process rates are factored out under ``expressions:`` for readability
+    and reuse.
+
+    Standard caveat: the hydrolysis rate denominator ``KX * [XB_H] + [XS]``
+    is zero only when both XB_H and XS are zero. Seed simulations with
+    XB_H > 0 (typical activated-sludge MLSS).
+  references:
+    - "Henze, M., Grady, C.P.L., Gujer, W., Marais, G.v.R. & Matsuo, T. (1987). Activated Sludge Model No. 1. IAWPRC Sci. Tech. Rep. No. 1."
+    - "Henze, M. et al. (2000). Activated Sludge Models ASM1, ASM2, ASM2d and ASM3. IWA Sci. Tech. Rep. No. 9."
+
+species:
+  - {name: SI,    description: "Soluble inert organic matter",                 units: "g_COD/m3", default_concentration: 30.0}
+  - {name: SS,    description: "Readily biodegradable soluble substrate",      units: "g_COD/m3", default_concentration: 60.0}
+  - {name: XI,    description: "Particulate inert organic matter",             units: "g_COD/m3", default_concentration: 25.0}
+  - {name: XS,    description: "Slowly biodegradable particulate substrate",   units: "g_COD/m3", default_concentration: 200.0}
+  - {name: XB_H,  description: "Heterotrophic biomass",                        units: "g_COD/m3", default_concentration: 500.0}
+  - {name: XB_A,  description: "Autotrophic (nitrifying) biomass",             units: "g_COD/m3", default_concentration: 100.0}
+  - {name: XP,    description: "Particulate products from biomass decay",      units: "g_COD/m3", default_concentration: 50.0}
+  - {name: SO,    description: "Dissolved oxygen",                             units: "g_O2/m3",  default_concentration: 2.0}
+  - {name: SNO,   description: "Nitrate + nitrite nitrogen",                   units: "g_N/m3",   default_concentration: 5.0}
+  - {name: SNH,   description: "Ammonia + ammonium nitrogen",                  units: "g_N/m3",   default_concentration: 10.0}
+  - {name: SND,   description: "Soluble biodegradable organic nitrogen",       units: "g_N/m3",   default_concentration: 1.0}
+  - {name: XND,   description: "Particulate biodegradable organic nitrogen",   units: "g_N/m3",   default_concentration: 5.0}
+  - {name: SALK,  description: "Alkalinity (carbonate-equivalent charge)",     units: "mol/m3",   default_concentration: 4.0}
+
+conditions:
+  - name: T
+    description: "Temperature (K). Provided for completeness; default ASM1 rate constants are at 20 deg C."
+    default: 293.15
+
+# Clamp concentrations to >= 0 when evaluating the Monod / hydrolysis-ratio
+# rate terms, matching the reference IWA/BSM ASM1 S-function (xtemp = max(x, 0)
+# before the process rates). A coupled plant (e.g. BSM1 with the settler
+# recycling concentrated solids into a small reactor) can transiently overshoot
+# a particulate state below zero; without this clamp the nonlinear rates blow up
+# there and the stiff solver stalls. The raw state still drives the linear
+# transport/washout and the unit outputs, so this is identity at feasible states
+# and preserves the inter-unit mass balance.
+clip_negative_states: true
+
+# Model-level parameters. Kinetic rate constants AND stoichiometric
+# coefficients (yields, N-content, decay fraction) are declared here as a
+# single slot each. Calibrating Y_H or i_XB therefore propagates through
+# every reaction that uses them — see the symbolic stoichiometry entries
+# below.
+parameters:
+  # --- Kinetic constants ---
+  # The six rate constants (muH, muA, bH, bA, ka, kh) carry an Arrhenius-style
+  # temperature correction ``theta^(T - ref_T)``: the value is at ref_T = 293.15 K
+  # (20 degC), and the correction is unity there, so a model run at the default
+  # 20 degC behaves exactly as before. The theta slopes are the standard BSM
+  # values (asm1_bsm2.c), derived from the documented 15 degC / 10 degC pairs,
+  # e.g. muH theta = (4.0/3.0)**(1/5). Half-saturation / switching constants are
+  # treated as temperature-independent (BSM convention).
+  muH:    {value: 6.0,   units: "1/d",          bounds: [1.0, 12.0],   transform: positive_log, temperature: {theta: 1.059224, ref_T: 293.15}, prior: {mean: 6, std: 0.36}}
+  KS:     {value: 20.0,  units: "g_COD/m3",     bounds: [1.0, 200.0],  transform: positive_log, prior: {mean: 20, std: 10}}
+  KOH:    {value: 0.2,   units: "g_O2/m3",      bounds: [0.01, 2.0],   transform: positive_log, prior: {mean: 0.2, std: 0.016}}
+  KNO:    {value: 0.5,   units: "g_N/m3",       bounds: [0.05, 5.0],   transform: positive_log, prior: {mean: 0.5, std: 0.4}}
+  etag:   {value: 0.8,   units: "-",            bounds: [0.05, 0.95],  transform: logit, prior: {mean: 0.8, std: 0.04}}
+  muA:    {value: 0.8,   units: "1/d",          bounds: [0.1, 2.0],    transform: positive_log, temperature: {theta: 1.107568, ref_T: 293.15}, prior: {mean: 0.8, std: 0.24}}
+  KNH_A:  {value: 1.0,   units: "g_N/m3",       bounds: [0.1, 10.0],   transform: positive_log, prior: {mean: 1, std: 0.25}}
+  KOA:    {value: 0.4,   units: "g_O2/m3",      bounds: [0.05, 4.0],   transform: positive_log, prior: {mean: 0.4, std: 0.02}}
+  bH:     {value: 0.62,  units: "1/d",          bounds: [0.05, 2.0],   transform: positive_log, temperature: {theta: 1.084473, ref_T: 293.15}, prior: {mean: 0.62, std: 0.0124}}
+  bA:     {value: 0.05,  units: "1/d",          bounds: [0.005, 0.5],  transform: positive_log, temperature: {theta: 1.107568, ref_T: 293.15}, prior: {mean: 0.05, std: 0.035}}
+  ka:     {value: 0.08,  units: "m3/(g_COD*d)", bounds: [0.005, 1.0],  transform: positive_log, temperature: {theta: 1.045640, ref_T: 293.15}, prior: {mean: 0.08, std: 0.0096}}
+  kh:     {value: 3.0,   units: "1/d",          bounds: [0.1, 10.0],   transform: positive_log, temperature: {theta: 1.037137, ref_T: 293.15}, prior: {mean: 3, std: 0.78}}
+  KX:     {value: 0.03,  units: "-",            bounds: [0.001, 1.0],  transform: positive_log, prior: {mean: 0.03, std: 0.0015}}
+  etah:   {value: 0.4,   units: "-",            bounds: [0.05, 0.95],  transform: logit, prior: {mean: 0.4, std: 0.1}}
+  # --- Stoichiometric constants (now calibratable) ---
+  Y_H:    {value: 0.67,  units: "g_COD/g_COD",  bounds: [0.4, 0.85],   transform: logit, prior: {mean: 0.67, std: 0.0469}}
+  Y_A:    {value: 0.24,  units: "g_COD/g_N",    bounds: [0.05, 0.5],   transform: logit, prior: {mean: 0.24, std: 0.012}}
+  i_XB:   {value: 0.086, units: "g_N/g_COD",    bounds: [0.04, 0.15],  transform: logit, prior: {mean: 0.086, std: 0.00688}}
+  i_XP:   {value: 0.06,  units: "g_N/g_COD",    bounds: [0.02, 0.10],  transform: logit, prior: {mean: 0.06, std: 0.003}}
+  f_P:    {value: 0.08,  units: "-",            bounds: [0.02, 0.20],  transform: logit, prior: {mean: 0.08, std: 0.004}}
+
+# Named process rates. Each is a closed-form expression in the species and
+# model-level parameters above. Reactions reference these by name.
+expressions:
+  rho_hetero_aerobic:  "muH * [SS] / (KS + [SS]) * [SO] / (KOH + [SO]) * [XB_H]"
+  rho_hetero_anoxic:   "muH * [SS] / (KS + [SS]) * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]) * etag * [XB_H]"
+  rho_auto_aerobic:    "muA * [SNH] / (KNH_A + [SNH]) * [SO] / (KOA + [SO]) * [XB_A]"
+  rho_hetero_decay:    "bH * [XB_H]"
+  rho_auto_decay:      "bA * [XB_A]"
+  rho_ammonification:  "ka * [SND] * [XB_H]"
+  rho_hydrolysis:      "kh * [XS] * [XB_H] / (KX * [XB_H] + [XS]) * ([SO] / (KOH + [SO]) + etah * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]))"
+  rho_hydrolysis_n:    "kh * [XND] * [XB_H] / (KX * [XB_H] + [XS]) * ([SO] / (KOH + [SO]) + etah * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]))"
+
+reactions:
+  - name: aerobic_growth_heterotrophs
+    description: "Heterotrophic growth on SS with O2 as electron acceptor."
+    reference: "Henze et al. (1987)"
+    rate: "rho_hetero_aerobic"
+    stoichiometry:
+      SS:    "-1 / Y_H"
+      XB_H:  1.0
+      SO:    "-(1 - Y_H) / Y_H"
+      SNH:   "-i_XB"
+      SALK:  "-i_XB / 14"
+
+  - name: anoxic_growth_heterotrophs
+    description: "Heterotrophic growth on SS with NO3- as electron acceptor."
+    reference: "Henze et al. (1987)"
+    rate: "rho_hetero_anoxic"
+    stoichiometry:
+      SS:    "-1 / Y_H"
+      XB_H:  1.0
+      SNO:   "-(1 - Y_H) / (2.86 * Y_H)"
+      SNH:   "-i_XB"
+      SALK:  "-i_XB / 14 + (1 - Y_H) / (14 * 2.86 * Y_H)"
+
+  - name: aerobic_growth_autotrophs
+    description: "Autotrophic growth on NH4+ -> NO3-, with O2 as electron acceptor."
+    reference: "Henze et al. (1987)"
+    rate: "rho_auto_aerobic"
+    stoichiometry:
+      XB_A:  1.0
+      SO:    "-(4.57 - Y_A) / Y_A"
+      SNH:   "-(i_XB + 1 / Y_A)"
+      SNO:   "1 / Y_A"
+      SALK:  "-i_XB / 14 - 1 / (7 * Y_A)"
+
+  - name: decay_heterotrophs
+    description: "Endogenous decay of heterotrophic biomass."
+    reference: "Henze et al. (1987)"
+    rate: "rho_hetero_decay"
+    stoichiometry:
+      XB_H:  -1.0
+      XS:    "1 - f_P"
+      XP:    "f_P"
+      XND:   "i_XB - f_P * i_XP"
+
+  - name: decay_autotrophs
+    description: "Endogenous decay of autotrophic biomass."
+    reference: "Henze et al. (1987)"
+    rate: "rho_auto_decay"
+    stoichiometry:
+      XB_A:  -1.0
+      XS:    "1 - f_P"
+      XP:    "f_P"
+      XND:   "i_XB - f_P * i_XP"
+
+  - name: ammonification
+    description: "Hydrolysis of soluble organic N to ammonia."
+    reference: "Henze et al. (1987)"
+    rate: "rho_ammonification"
+    stoichiometry:
+      SND:   -1.0
+      SNH:   1.0
+      SALK:  0.07142857   # = 1/14, a physical charge factor (no calibration handle)
+
+  - name: hydrolysis_organics
+    description: >
+      Hydrolysis of slowly-biodegradable XS to readily-biodegradable SS.
+      Surface-area form with switching between aerobic and anoxic conditions.
+    reference: "Henze et al. (1987)"
+    rate: "rho_hydrolysis"
+    stoichiometry:
+      XS:    -1.0
+      SS:    1.0
+
+  - name: hydrolysis_organic_n
+    description: >
+      Hydrolysis of XND in parallel with XS. Mathematically equivalent to
+      process 7 with XND substituted for XS in the numerator only.
+    reference: "Henze et al. (1987)"
+    rate: "rho_hydrolysis_n"
+    stoichiometry:
+      XND:   -1.0
+      SND:   1.0

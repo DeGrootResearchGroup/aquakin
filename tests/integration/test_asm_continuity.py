@@ -4,7 +4,7 @@ Commercial simulators enforce composition-matrix continuity (COD, N, P close to
 machine precision) as a first-class invariant. aquakin's ASM stoichiometry is
 live-symbolic, so continuity holds under yield calibration *iff* the coefficients
 are right -- and the asm2d / asm3 coefficients are generator-derived. This pins
-that: for each ASM network, every reaction conserves COD, N and (where modelled)
+that: for each ASM model, every reaction conserves COD, N and (where modelled)
 P, given a per-species composition vector, evaluated against the live
 ``compute_stoich`` so the symbolic coefficients are exercised.
 
@@ -21,7 +21,7 @@ Conventions (matching ``aquakin/utils/balance.py`` and the WATS coverage in
   with the untracked N2 gas) and the N balance accounts for it via
   ``check_nitrogen``.
 - N / P contents of organics are the model's own ``i_XB`` / ``iN_*`` / ``iP_*``
-  parameters, read from the network so the test tracks the model's constants.
+  parameters, read from the model so the test tracks the model's constants.
 """
 import pytest
 
@@ -42,7 +42,7 @@ _NITRATE = {"asm1": "SNO", "asm1_ammonia_limitation": "SNO", "asm3_2step": "SNO3
             "asm3_2step_comammox": "SNO3", "asm2d": "SNO3", "asm2d_tud": "SNO",
             "asm3": "SNOX", "asm3_biop": "SNO"}
 # Models that carry dissolved N2 as a state (so N2 is in the COD/N balance, not
-# lost as gas). The ASM1 networks are the exception. asm3_2step carries SN2 and
+# lost as gas). The ASM1 models are the exception. asm3_2step carries SN2 and
 # its two-step denitrification (NO3->NO2->N2) conserves COD/N exactly;
 # asm3_2step_n2o additionally carries the dissolved NH2OH/NO/N2O intermediates;
 # asm3_2step_anammox adds the anammox NH4+NO2->N2 (+NO3) process.
@@ -56,7 +56,7 @@ _COD_EXCLUDED = {"asm1": {"anoxic_growth_heterotrophs"},
 
 @pytest.mark.parametrize("model", _MODELS)
 def test_cod_continuity(model):
-    net = aquakin.load_network(model)
+    net = aquakin.load_model(model)
     excl = _COD_EXCLUDED.get(model, set())
     viol = [(r, v) for r, _, v in
             check_conservation(net, composition_table(net), tol=_TOL, quantities=["COD"])
@@ -67,7 +67,7 @@ def test_cod_continuity(model):
 
 @pytest.mark.parametrize("model", _MODELS)
 def test_nitrogen_continuity(model):
-    net = aquakin.load_network(model)
+    net = aquakin.load_model(model)
     comp = composition_table(net)
     if model in _TRACKS_N2:
         # N2 is a tracked state carrying N=1, so the plain balance closes.
@@ -83,7 +83,7 @@ def test_nitrogen_continuity(model):
 
 @pytest.mark.parametrize("model", ["asm2d", "asm2d_tud", "asm3_biop"])
 def test_phosphorus_continuity(model):
-    net = aquakin.load_network(model)
+    net = aquakin.load_model(model)
     viol = check_conservation(net, composition_table(net), tol=_TOL, quantities=["P"])
     assert not viol, f"{model} P imbalance: " + "; ".join(
         f"{r} {v:+.3f}" for r, _, v in viol)
@@ -92,7 +92,7 @@ def test_phosphorus_continuity(model):
 def test_cod_continuity_holds_under_yield_calibration():
     # The point of the live-symbolic stoichiometry: continuity must survive a
     # changed yield. Move YH well off its default and re-check COD closes.
-    net = aquakin.load_network("asm2d")
+    net = aquakin.load_model("asm2d")
     p = net.default_parameters().at[net.param_index["YH"]].set(0.5)
     viol = check_conservation(net, composition_table(net, params=p), tol=_TOL,
                               quantities=["COD"], params=p)

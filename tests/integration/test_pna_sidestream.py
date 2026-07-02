@@ -1,6 +1,6 @@
 """Single-stage partial-nitritation/anammox (PN/A) sidestream deammonification.
 
-A continuously-fed low-DO CSTR on the asm3_2step_anammox network must reach an
+A continuously-fed low-DO CSTR on the asm3_2step_anammox model must reach an
 autotrophic-nitrogen-removal steady state: anammox is retained, NOB are out-
 competed for nitrite and wash out, and most of the ammonium leaves as N2 with no
 organic carbon. This is a long (slow-anammox) plant solve, so it runs in the
@@ -17,9 +17,9 @@ pytestmark = pytest.mark.slow
 
 
 def _solve_pna(t_end=400.0):
-    net = aquakin.load_network("asm3_2step_anammox")
+    net = aquakin.load_model("asm3_2step_anammox")
     tank = CSTRUnit(
-        name="reactor", network=net, volume=3000.0, input_port_names=["in"],
+        name="reactor", model=net, volume=3000.0, input_port_names=["in"],
         conditions={"T": 303.15},
         aeration=Aeration(kla=4.0, species="SO2"), output_port="out",
     )

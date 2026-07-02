@@ -36,7 +36,7 @@ from aquakin.plant.streams import Stream
 from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 @dataclass
@@ -46,7 +46,7 @@ class IdealThickener(StatelessUnit):
     Parameters
     ----------
     name : str
-    network : CompiledNetwork
+    model : CompiledModel
     target_tss_percent : float
         Target solids fraction of the underflow, in percent (BSM2: 7 for the
         thickener, 28 for dewatering). The underflow is concentrated so its TSS
@@ -69,7 +69,7 @@ class IdealThickener(StatelessUnit):
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     target_tss_percent: float
     tss_removal_percent: float = 98.0
     settling_species: tuple[str, ...] = ASM1_SETTLING_SPECIES
@@ -93,8 +93,8 @@ class IdealThickener(StatelessUnit):
                 f"IdealThickener '{self.name}': target_tss_percent must be "
                 f"positive; got {self.target_tss_percent}"
             )
-        n = self.network.n_species
-        idx = self.network.species_index
+        n = self.model.n_species
+        idx = self.model.species_index
         # Mask of separated particulates (1.0 where concentrated/thinned).
         settle = jnp.zeros((n,))
         for sp in self.settling_species:
@@ -153,8 +153,8 @@ class IdealThickener(StatelessUnit):
         Q_over = jnp.where(can, Q_in * (1.0 - Qu_factor), 0.0)
 
         return {
-            self.underflow_port: Stream(Q=Q_under, C=C_under, network=self.network, T=s_in.T),
-            self.overflow_port: Stream(Q=Q_over, C=C_over, network=self.network, T=s_in.T),
+            self.underflow_port: Stream(Q=Q_under, C=C_under, model=self.model, T=s_in.T),
+            self.overflow_port: Stream(Q=Q_over, C=C_over, model=self.model, T=s_in.T),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:

@@ -487,7 +487,7 @@ def steady_state_sensitivity(
         the result is the ``(n_states, n_params)`` sensitivity ``dy*/dtheta``).
     wrt : sequence of int or str, optional
         The parameters to differentiate with respect to -- flat indices or
-        ``"<network>.<param>"`` names (resolved by :meth:`parameter_index`).
+        ``"<model>.<param>"`` names (resolved by :meth:`parameter_index`).
         Defaults to all parameters. Restricting to a subset of ``k`` parameters
         makes **forward** mode cost ``k`` solves (one per chosen parameter)
         rather than ``n_params``; reverse mode returns all parameters from the
@@ -515,7 +515,7 @@ def steady_state_sensitivity(
     Notes
     -----
     Exact when the steady Jacobian ``dF/dy`` is full rank (true for the shipped
-    networks at their operating point; see :func:`solve_steady_state`).
+    models at their operating point; see :func:`solve_steady_state`).
     """
     params = plant.default_parameters() if params is None else jnp.asarray(params)
     if state is not None:
@@ -650,7 +650,7 @@ def steady_state_dgsm(
     output_names : sequence of str, optional
         Names for the ``m`` outputs (default ``"output0"`` ...).
     wrt : sequence of int or str, optional
-        The screened parameters -- flat indices or ``"<network>.<param>"``
+        The screened parameters -- flat indices or ``"<model>.<param>"``
         names (default: all parameters; usually pass an explicit subset).
     y0 : jnp.ndarray, optional
         Warm start for each steady-state solve.
@@ -881,7 +881,7 @@ def solve_sensitivity(
     params : jnp.ndarray
         Plant parameter vector.
     wrt : sequence of str or int
-        The sensitivity parameters, as ``"<network>.<param>"`` names or flat
+        The sensitivity parameters, as ``"<model>.<param>"`` names or flat
         indices. The cached recycle map drops the ``dM/dtheta`` term, so this
         is exact for kinetic parameters; a flow-setpoint sensitivity would
         need the per-call map (not wired here).
@@ -1155,7 +1155,7 @@ def dynamic_sensitivity(
         Integration interval and the times at which the trajectory is saved
         (passed straight to :meth:`solve`).
     wrt : sequence of int or str, optional
-        Parameters to differentiate (flat indices or ``"<network>.<param>"``
+        Parameters to differentiate (flat indices or ``"<model>.<param>"``
         names; default all).
     mode : {"reverse", "forward", "auto"}
         AD direction. ``"reverse"`` (default; ``"auto"`` resolves to it) suits

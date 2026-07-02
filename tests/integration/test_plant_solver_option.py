@@ -20,7 +20,7 @@ from aquakin.plant.plant import Plant
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _mini_plant(asm1):

@@ -26,7 +26,7 @@ from aquakin.plant.influent import InfluentSeries
 
 @pytest.fixture
 def simple_net():
-    return aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    return aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
 
 
 def _constant_influent(net, *, Q=10.0, C=(1.0, 0.0), t_end=100.0):
@@ -34,7 +34,7 @@ def _constant_influent(net, *, Q=10.0, C=(1.0, 0.0), t_end=100.0):
         t=jnp.asarray([0.0, t_end]),
         Q=jnp.asarray([Q, Q]),
         C=jnp.asarray([list(C), list(C)]),
-        network=net,
+        model=net,
     )
 
 
@@ -50,7 +50,7 @@ def test_single_cstr_steady_state(simple_net):
     plant.add_unit(
         CSTRUnit(
             name="tank",
-            network=simple_net,
+            model=simple_net,
             volume=100.0,
             input_port_names=["inlet"],
             conditions={"T": 293.15},
@@ -67,7 +67,7 @@ def test_single_cstr_steady_state(simple_net):
 def _single_cstr_plant(net):
     plant = Plant("single_cstr")
     plant.add_unit(CSTRUnit(
-        name="tank", network=net, volume=100.0,
+        name="tank", model=net, volume=100.0,
         input_port_names=["inlet"], conditions={"T": 293.15},
     ))
     plant.add_influent("feed", _constant_influent(net), to="tank.inlet")
@@ -75,7 +75,7 @@ def _single_cstr_plant(net):
 
 
 def test_plant_time_unit_and_conversion(simple_net):
-    """Plant.time_unit reflects its network's unit (the fixture is in seconds),
+    """Plant.time_unit reflects its model's unit (the fixture is in seconds),
     and solve(time_unit=...) converts in and out equivalently."""
     plant = _single_cstr_plant(simple_net)
     assert plant.time_unit == "s"
@@ -99,7 +99,7 @@ def test_two_cstrs_in_series(simple_net):
     for name in ("t1", "t2"):
         plant.add_unit(
             CSTRUnit(
-                name=name, network=simple_net, volume=100.0,
+                name=name, model=simple_net, volume=100.0,
                 input_port_names=["inlet"], conditions={"T": 293.15},
             )
         )
@@ -117,18 +117,18 @@ def test_mixer_mass_balance(simple_net):
     plant = Plant("mixer_test")
     plant.add_unit(
         CSTRUnit(
-            name="t1", network=simple_net, volume=100.0,
+            name="t1", model=simple_net, volume=100.0,
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
     plant.add_unit(
         MixerUnit(
-            name="mix", input_port_names=["a", "b"], network=simple_net,
+            name="mix", input_port_names=["a", "b"], model=simple_net,
         )
     )
     plant.add_unit(
         CSTRUnit(
-            name="t2", network=simple_net, volume=100.0,
+            name="t2", model=simple_net, volume=100.0,
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
@@ -149,13 +149,13 @@ def test_splitter_flow_mode_conserves_under_low_feed(simple_net):
     creating flow). flow_outputs stays the exact AFFINE rule the recycle solve
     needs (an unclamped remainder), and the two agree wherever the unit is not
     starved."""
-    sp = SplitterUnit(name="s", network=simple_net,
+    sp = SplitterUnit(name="s", model=simple_net,
                       output_port_flows={"a": 100.0, "b": 100.0}, remainder_port="r")
     C = simple_net.default_concentrations()
     p = simple_net.default_parameters()
 
     def material(Q_in):
-        ins = {"in": Stream(Q=jnp.asarray(float(Q_in)), C=C, network=simple_net)}
+        ins = {"in": Stream(Q=jnp.asarray(float(Q_in)), C=C, model=simple_net)}
         out = sp.compute_outputs(jnp.asarray(0.0), None, ins, p)
         return {k: float(v.Q) for k, v in out.items()}
 
@@ -185,7 +185,7 @@ def test_splitter_flow_ratios(simple_net):
     plant = Plant("split_test")
     plant.add_unit(
         CSTRUnit(
-            name="src", network=simple_net, volume=100.0,
+            name="src", model=simple_net, volume=100.0,
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
@@ -193,20 +193,20 @@ def test_splitter_flow_ratios(simple_net):
         SplitterUnit(
             name="split",
             output_port_ratios={"a": 0.6, "b": 0.4},
-            network=simple_net,
+            model=simple_net,
         )
     )
     # Volumes proportional to flow so both sinks have HRT = V/Q = 10 d
     # and therefore the same steady-state concentration.
     plant.add_unit(
         CSTRUnit(
-            name="sink_a", network=simple_net, volume=60.0,
+            name="sink_a", model=simple_net, volume=60.0,
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
     plant.add_unit(
         CSTRUnit(
-            name="sink_b", network=simple_net, volume=40.0,
+            name="sink_b", model=simple_net, volume=40.0,
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
@@ -239,12 +239,12 @@ def test_recycle_with_initial_value(simple_net):
     plant = Plant("recycle_test")
     plant.add_unit(
         MixerUnit(
-            name="mix", input_port_names=["fresh", "recycle"], network=simple_net
+            name="mix", input_port_names=["fresh", "recycle"], model=simple_net
         )
     )
     plant.add_unit(
         CSTRUnit(
-            name="tank", network=simple_net, volume=100.0,
+            name="tank", model=simple_net, volume=100.0,
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
@@ -252,7 +252,7 @@ def test_recycle_with_initial_value(simple_net):
         SplitterUnit(
             name="split",
             output_port_ratios={"out_product": 0.5, "out_recycle": 0.5},
-            network=simple_net,
+            model=simple_net,
         )
     )
     plant.add_influent("feed", _constant_influent(simple_net, Q=10.0), to="mix.fresh")
@@ -265,7 +265,7 @@ def test_recycle_with_initial_value(simple_net):
         initial_value=Stream(
             Q=jnp.asarray(5.0),
             C=jnp.asarray([0.0, 0.0]),
-            network=simple_net,
+            model=simple_net,
         ),
     )
     sol = plant.solve(t_span=(0.0, 500.0), t_eval=jnp.linspace(0.0, 500.0, 5))
@@ -284,11 +284,11 @@ def test_connection_index_groups_inputs_and_recycle_keys(simple_net):
     connections each step."""
     plant = Plant("idx_test")
     plant.add_unit(
-        MixerUnit(name="mix", input_port_names=["fresh", "recycle"], network=simple_net)
+        MixerUnit(name="mix", input_port_names=["fresh", "recycle"], model=simple_net)
     )
     plant.add_unit(
         CSTRUnit(
-            name="tank", network=simple_net, volume=100.0,
+            name="tank", model=simple_net, volume=100.0,
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
@@ -296,7 +296,7 @@ def test_connection_index_groups_inputs_and_recycle_keys(simple_net):
         SplitterUnit(
             name="split",
             output_port_ratios={"out_product": 0.5, "out_recycle": 0.5},
-            network=simple_net,
+            model=simple_net,
         )
     )
     plant.add_influent("feed", _constant_influent(simple_net, Q=10.0), to="mix.fresh")
@@ -328,7 +328,7 @@ def test_ad_grad_through_plant(simple_net):
     plant = Plant("grad_test")
     plant.add_unit(
         CSTRUnit(
-            name="t1", network=simple_net, volume=100.0,
+            name="t1", model=simple_net, volume=100.0,
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
@@ -360,12 +360,12 @@ def test_influent_interpolation(simple_net):
     t_grid = jnp.linspace(0.0, 50.0, n_t)
     Q_var = 10.0 + 5.0 * jnp.sin(2 * jnp.pi * t_grid / 5.0)  # 5-day period
     C_const = jnp.tile(jnp.asarray([1.0, 0.0]), (n_t, 1))
-    inf = InfluentSeries(t=t_grid, Q=Q_var, C=C_const, network=simple_net)
+    inf = InfluentSeries(t=t_grid, Q=Q_var, C=C_const, model=simple_net)
 
     plant = Plant("varying_inf")
     plant.add_unit(
         CSTRUnit(
-            name="tank", network=simple_net, volume=100.0,
+            name="tank", model=simple_net, volume=100.0,
             input_port_names=["inlet"], conditions={"T": 293.15},
         )
     )
@@ -376,17 +376,17 @@ def test_influent_interpolation(simple_net):
     assert float(jnp.max(A_traj) - jnp.min(A_traj)) > 0.05
 
 
-def test_param_layout_and_defaults_agree_for_shared_network(simple_net):
+def test_param_layout_and_defaults_agree_for_shared_model(simple_net):
     """The parameter layout and the default-parameter vector must stay in sync.
 
-    Both derive from the same identity-deduped network list, so a plant whose
-    units share one compiled network gets exactly one parameter block and a
+    Both derive from the same identity-deduped model list, so a plant whose
+    units share one compiled model gets exactly one parameter block and a
     default vector of matching length.
     """
     plant = Plant("two_tanks")
     for nm in ("t1", "t2"):
         plant.add_unit(
-            CSTRUnit(name=nm, network=simple_net, volume=100.0,
+            CSTRUnit(name=nm, model=simple_net, volume=100.0,
                      input_port_names=["inlet"], conditions={"T": 293.15})
         )
     layout = plant._build_parameter_layout()
@@ -394,17 +394,17 @@ def test_param_layout_and_defaults_agree_for_shared_network(simple_net):
     assert plant.default_parameters().shape == (layout.total_size,)
 
 
-def test_distinct_networks_sharing_a_name_rejected():
-    """Two *distinct* networks with the same name would collide in the
+def test_distinct_models_sharing_a_name_rejected():
+    """Two *distinct* models with the same name would collide in the
     name-keyed parameter blocks; the plant must reject that rather than
     silently mis-slice the parameter vector."""
-    net_a = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
-    net_b = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    net_a = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
+    net_b = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     assert net_a is not net_b and net_a.name == net_b.name
     plant = Plant("collision")
-    plant.add_unit(CSTRUnit(name="a", network=net_a, volume=100.0,
+    plant.add_unit(CSTRUnit(name="a", model=net_a, volume=100.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
-    plant.add_unit(CSTRUnit(name="b", network=net_b, volume=100.0,
+    plant.add_unit(CSTRUnit(name="b", model=net_b, volume=100.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     with pytest.raises(ValueError, match="share the name"):
         plant.default_parameters()
@@ -416,10 +416,10 @@ def test_unit_ports_are_lists(simple_net):
     tuple fields."""
     from aquakin.plant.units import Unit
 
-    mixer = MixerUnit(name="m", input_port_names=["a", "b"], network=simple_net)
+    mixer = MixerUnit(name="m", input_port_names=["a", "b"], model=simple_net)
     splitter = SplitterUnit(
-        name="s", output_port_ratios={"x": 0.5, "y": 0.5}, network=simple_net)
-    cstr = CSTRUnit(name="t", network=simple_net, volume=1.0,
+        name="s", output_port_ratios={"x": 0.5, "y": 0.5}, model=simple_net)
+    cstr = CSTRUnit(name="t", model=simple_net, volume=1.0,
                     input_port_names=["inlet"], conditions={"T": 293.15})
     for u in (mixer, splitter, cstr):
         assert isinstance(u, Unit)
@@ -436,11 +436,11 @@ def test_stateless_units_expose_state_size_as_property(simple_net):
     from aquakin.plant.clarifier import IdealClarifier
     from aquakin.plant.separators import IdealThickener
 
-    mixer = MixerUnit(name="m", input_port_names=["a", "b"], network=simple_net)
+    mixer = MixerUnit(name="m", input_port_names=["a", "b"], model=simple_net)
     splitter = SplitterUnit(
-        name="s", output_port_ratios={"x": 0.5, "y": 0.5}, network=simple_net)
-    clar = IdealClarifier(name="c", network=simple_net, underflow_Q=10.0)
-    thick = IdealThickener(name="th", network=simple_net, target_tss_percent=7.0)
+        name="s", output_port_ratios={"x": 0.5, "y": 0.5}, model=simple_net)
+    clar = IdealClarifier(name="c", model=simple_net, underflow_Q=10.0)
+    thick = IdealThickener(name="th", model=simple_net, target_tss_percent=7.0)
 
     for u in (mixer, splitter, clar, thick):
         assert u.state_size == 0
@@ -455,10 +455,10 @@ def _recycle_plant(simple_net):
     """A mixer -> tank -> splitter loop, the splitter recycling to the mixer."""
     plant = Plant("rc")
     plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "recycle"],
-                             network=simple_net))
-    plant.add_unit(CSTRUnit(name="tank", network=simple_net, volume=100.0,
+                             model=simple_net))
+    plant.add_unit(CSTRUnit(name="tank", model=simple_net, volume=100.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
-    plant.add_unit(SplitterUnit(name="split", network=simple_net,
+    plant.add_unit(SplitterUnit(name="split", model=simple_net,
                                 output_port_ratios={"out": 0.5, "rec": 0.5}))
     return plant
 
@@ -477,7 +477,7 @@ def test_connect_infers_sole_ports(simple_net):
 def test_recycle_edge_auto_detected_and_seeded(simple_net):
     """A recycle (graph back-edge) given no initial_value is detected by the
     topological sort and auto-seeded with a zero-flow stream of the source
-    network. (connect() no longer seeds at wire time -- recycles are found from
+    model. (connect() no longer seeds at wire time -- recycles are found from
     the graph at finalize, regardless of add order.)"""
     plant = _recycle_plant(simple_net)
     plant.connect("mix", "tank")
@@ -490,7 +490,7 @@ def test_recycle_edge_auto_detected_and_seeded(simple_net):
     assert ("split", "rec") in plant._recycle_keys
     seed = plant._recycle_seeds[("split", "rec")]
     assert float(seed.Q) == 0.0
-    assert seed.network is simple_net
+    assert seed.model is simple_net
 
 
 def test_connect_explicit_initial_value_overrides_autoseed(simple_net):
@@ -499,7 +499,7 @@ def test_connect_explicit_initial_value_overrides_autoseed(simple_net):
     plant.connect("mix", "tank")
     plant.connect("tank", "split")
     warm = Stream(Q=jnp.asarray(7.0), C=simple_net.default_concentrations(),
-                  network=simple_net)
+                  model=simple_net)
     plant.connect("split.rec", "mix.recycle", initial_value=warm)
     assert plant.connections[2].initial_value is warm
 
@@ -540,11 +540,11 @@ def test_add_influent_to_creates_connection(simple_net):
 
 
 def _two_tank_plant(simple_net):
-    """Two CSTRs in series (a -> b), each carrying the 2-species network."""
+    """Two CSTRs in series (a -> b), each carrying the 2-species model."""
     plant = Plant("two_tank")
-    plant.add_unit(CSTRUnit(name="a", network=simple_net, volume=100.0,
+    plant.add_unit(CSTRUnit(name="a", model=simple_net, volume=100.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
-    plant.add_unit(CSTRUnit(name="b", network=simple_net, volume=100.0,
+    plant.add_unit(CSTRUnit(name="b", model=simple_net, volume=100.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     plant.connect("a", "b")
     return plant
@@ -579,7 +579,7 @@ def test_initial_state_override_wrong_length_errors(simple_net):
 def _fed_cstr_plant(simple_net, *, Q=10.0, C=(1.0, 0.0)):
     """A single CSTR fed by a constant influent."""
     plant = Plant("one")
-    plant.add_unit(CSTRUnit(name="tank", network=simple_net, volume=100.0,
+    plant.add_unit(CSTRUnit(name="tank", model=simple_net, volume=100.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     plant.add_influent("feed", _constant_influent(simple_net, Q=Q, C=C),
                        to="tank.inlet")
@@ -796,24 +796,24 @@ def test_plant_solve_gradient_leaks_no_tracer(simple_net, gradient, wrt):
 # ----- By-name plant parameter overrides (#134) ----------------------------
 
 def _bsm2_no_solve():
-    """The two-network BSM2 plant (ASM1 + ADM1), assembled but not solved --
+    """The two-model BSM2 plant (ASM1 + ADM1), assembled but not solved --
     cheap, for the by-name parameter API."""
-    from aquakin.plant.bsm import build_bsm2, bsm2_asm1_network
+    from aquakin.plant.bsm import build_bsm2, bsm2_asm1_model
 
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     return build_bsm2(asm1, adm1), asm1, adm1
 
 
-def test_plant_parameter_names_are_network_prefixed():
+def test_plant_parameter_names_are_model_prefixed():
     plant, asm1, adm1 = _bsm2_no_solve()
     names = plant.parameter_names()
-    # The kinetic parameters: one block per network, network-prefixed.
+    # The kinetic parameters: one block per model, model-prefixed.
     kinetic = [n for n in names if n.split(".")[0] in ("asm1", "adm1")]
     assert len(kinetic) == asm1.n_params + adm1.n_params
     assert "asm1.muH" in names            # ASM1 water line
     assert "adm1.k_m_ac" in names         # ADM1 digester
-    # No bare names; every key carries a prefix (network for kinetic params,
+    # No bare names; every key carries a prefix (model for kinetic params,
     # unit for the appended flow setpoints).
     assert all("." in n for n in names)
     # Flow setpoints are addressed "<unit>.<setpoint>" -- the differentiable
@@ -869,15 +869,15 @@ def _clarifier_recycle_loop(recycle_passes, *, capture):
     exactly in one linear solve, gain-independent."""
     from aquakin.plant.clarifier import IdealClarifier
 
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     infl = net.influent({"SS": 60.0, "XS": 200.0, "XB_H": 50.0, "XI": 25.0,
                          "SNH": 25.0}, Q=1.0)
     plant = Plant("clar_loop", recycle_passes=recycle_passes)
     plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "ras"],
-                             network=net))
-    plant.add_unit(IdealClarifier(name="clar", network=net, underflow_Q=2.0,
+                             model=net))
+    plant.add_unit(IdealClarifier(name="clar", model=net, underflow_Q=2.0,
                                   capture_efficiency=capture))
-    plant.add_unit(CSTRUnit(name="tank", network=net, volume=50.0,
+    plant.add_unit(CSTRUnit(name="tank", model=net, volume=50.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     plant.add_influent("fresh", infl, to="mix.fresh")
     plant.connect("mix", "clar.inlet")
@@ -932,7 +932,7 @@ def test_recycle_presolve_is_exact_and_gain_independent(capture):
 def test_recycle_presolve_skipped_without_recycle(simple_net):
     # A plant with no recycle edges has nothing to pre-solve -> no warning.
     plant = Plant("no_recycle")
-    plant.add_unit(CSTRUnit(name="tank", network=simple_net, volume=100.0,
+    plant.add_unit(CSTRUnit(name="tank", model=simple_net, volume=100.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     plant.add_influent("feed", _constant_influent(simple_net), to="tank.inlet")
     assert _recycle_warnings(plant) == []
@@ -981,7 +981,7 @@ def test_list_units_ports_species():
 
 
 def test_list_species_rejects_non_concentration_units():
-    # stateless mixers/splitters and the layered Takacs settler carry a network
+    # stateless mixers/splitters and the layered Takacs settler carry a model
     # but their state is not a concentration vector -> clear error, not a wrong
     # or empty result.
     plant, _asm1, _adm1 = _bsm2_no_solve()
@@ -1040,7 +1040,7 @@ def test_plant_final_named_and_C_named_many():
     fn = sol.final_named("tank5", ["SNH", "XB_H"])
     assert isinstance(fn["XB_H"], float)
     assert fn["SNH"] == float(sol.C_named("tank5", "SNH")[-1])
-    # species=None covers the unit's whole network
+    # species=None covers the unit's whole model
     assert set(sol.final_named("tank5")) == set(plant.list_species("tank5"))
     # C_named_many returns one trajectory per name
     many = sol.C_named_many("tank5", ["SNH", "SNO"])
@@ -1151,7 +1151,7 @@ def test_digester_gas_normalized_to_published_steady_state():
     plant._build_state_layout()
     y0 = bsm2_warm_start(plant)
     dig = plant.units["digester"]
-    si = dig.network.species_index
+    si = dig.model.species_index
     dvec = plant.states_by_unit(y0)["digester"]
     dvec = dvec.at[jnp.array([si[k] for k in REF_GAS])].set(
         jnp.array([REF_GAS[k] for k in REF_GAS]))
@@ -1171,7 +1171,7 @@ def test_stream_series_named_accessors(simple_net):
     n = simple_net.n_species
     t = jnp.asarray([0.0, 1.0, 2.0])
     C = jnp.stack([jnp.full((n,), 0.1 * (i + 1)) for i in range(3)])
-    eff = StreamSeries(t=t, Q=jnp.full((3,), 5.0), C=C, network=simple_net)
+    eff = StreamSeries(t=t, Q=jnp.full((3,), 5.0), C=C, model=simple_net)
 
     sp0 = simple_net.species[0]
     assert jnp.array_equal(eff.C_named_many([sp0])[sp0], eff.C_named(sp0))

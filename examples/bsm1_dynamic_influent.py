@@ -22,10 +22,10 @@ import aquakin
 from aquakin.plant.bsm import build_bsm1, load_bsm1_influent
 
 
-def _settle(network):
+def _settle(model):
     """Run the dry influent to a steady state and return the final plant state."""
-    plant = build_bsm1(network=network)
-    plant.add_influent("feed", load_bsm1_influent("dry", network),
+    plant = build_bsm1(model=model)
+    plant.add_influent("feed", load_bsm1_influent("dry", model),
                        to="inlet_mix.fresh")
     sol = plant.solve(t_span=(0.0, 100.0), t_eval=jnp.array([0.0, 100.0]),
                       rtol=1e-5, atol=1e-3,
@@ -33,10 +33,10 @@ def _settle(network):
     return sol.state[-1]
 
 
-def _run_dynamic(network, profile, y0, t_end=14.0):
+def _run_dynamic(model, profile, y0, t_end=14.0):
     """Play a dynamic influent through a fresh plant, warm-started from y0."""
-    plant = build_bsm1(network=network)
-    plant.add_influent("feed", load_bsm1_influent(profile, network),
+    plant = build_bsm1(model=model)
+    plant.add_influent("feed", load_bsm1_influent(profile, model),
                        to="inlet_mix.fresh")
     sol = plant.solve(
         t_span=(0.0, t_end),
@@ -48,19 +48,19 @@ def _run_dynamic(network, profile, y0, t_end=14.0):
 
 
 def main() -> None:
-    network = aquakin.load_network("asm1")
+    model = aquakin.load_model("asm1")
 
     print("Settling BSM1 to a dry-weather steady state ...")
-    y_ss = _settle(network)
+    y_ss = _settle(model)
 
     print("Playing 14-day dynamic influents (dry vs rain), warm-started ...")
-    sols = {p: _run_dynamic(network, p, y_ss) for p in ("dry", "rain")}
+    sols = {p: _run_dynamic(model, p, y_ss) for p in ("dry", "rain")}
 
     # Effluent ammonia is the headline regulated quantity; track it over time.
     print()
     print("Tank-5 effluent response (SNH = ammonia, SNO = nitrate):")
     print(f"  {'profile':<8} {'SNH peak':>10} {'SNH mean':>10} "
-          f"{'SNO peak':>10}  [{network.units_of('SNH')}]")
+          f"{'SNO peak':>10}  [{model.units_of('SNH')}]")
     for profile, sol in sols.items():
         snh = sol.C_named("tank5", "SNH")
         sno = sol.C_named("tank5", "SNO")
@@ -73,9 +73,9 @@ def main() -> None:
     for i in range(0, sol.t.shape[0], 14):
         print(f"  t = {float(sol.t[i]):5.2f} d   "
               f"SNH = {float(sol.C_named('tank5', 'SNH')[i]):6.3f} "
-              f"{network.units_of('SNH')}   "
+              f"{model.units_of('SNH')}   "
               f"SO = {float(sol.C_named('tank5', 'SO')[i]):6.3f} "
-              f"{network.units_of('SO')}")
+              f"{model.units_of('SO')}")
 
 
 if __name__ == "__main__":

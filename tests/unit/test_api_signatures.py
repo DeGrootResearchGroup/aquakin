@@ -10,10 +10,10 @@ surfaced only after merge). The tests here run in the **fast gate** and:
    signature change to a hot method lights up the PR immediately, forcing the
    author to reconcile every caller (including ``slow``/``validation``-only
    ones) in the same change; and
-2. execute the documented calling conventions on the tiny A->B network, so a
+2. execute the documented calling conventions on the tiny A->B model, so a
    break in how keyword arguments thread through is caught fast, not at merge.
 
-They are deliberately cheap (the 2-species toy network), so they belong in the
+They are deliberately cheap (the 2-species toy model), so they belong in the
 fast gate where signature drift must be caught.
 """
 
@@ -103,14 +103,14 @@ def test_every_reactor_has_check_gradient_finite():
         assert hasattr(cls, "check_gradient_finite")
 
 
-def test_batch_solve_documented_call_forms_execute(simple_network):
+def test_batch_solve_documented_call_forms_execute(simple_model):
     """The documented BatchReactor.solve call forms actually run on the tiny
-    A->B network -- a fast behavioural smoke that catches a kwarg no longer
+    A->B model -- a fast behavioural smoke that catches a kwarg no longer
     threading through (which a pure signature check would miss)."""
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
-    r = BatchReactor(simple_network, cond)
+    r = BatchReactor(simple_model, cond)
     C0 = jnp.asarray([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     t_eval = jnp.linspace(0.0, 1.0, 3)
     # keyword params + keyword t_span/t_eval (the README/quickstart form)
     s1 = r.solve(C0, params=p, t_span=(0.0, 1.0), t_eval=t_eval)
@@ -123,29 +123,29 @@ def test_batch_solve_documented_call_forms_execute(simple_network):
         r.solve(C0, p, (0.0, 1.0), t_eval)
 
 
-def test_batch_solve_sensitivity_executes(simple_network):
+def test_batch_solve_sensitivity_executes(simple_model):
     """solve_sensitivity runs with its documented (C0, params, t_span, t_eval,
     sens_params=...) form and returns a finite sensitivity of the right shape."""
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
-    r = BatchReactor(simple_network, cond)
+    r = BatchReactor(simple_model, cond)
     C0 = jnp.asarray([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     sol, S = r.solve_sensitivity(
         C0, p, (0.0, 1.0), jnp.linspace(0.0, 1.0, 3), sens_params=[0],
     )
-    assert S.shape == (3, simple_network.n_species, 1)
+    assert S.shape == (3, simple_model.n_species, 1)
     assert jnp.all(jnp.isfinite(S))
 
 
-def test_check_gradient_finite_guards_a_reverse_gradient(simple_network):
+def test_check_gradient_finite_guards_a_reverse_gradient(simple_model):
     """The reverse-gradient guard composes with a real jax.grad through solve
     (keyword params) -- the recommended DIY-loss pattern, fast-gate-covered."""
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
-    r = BatchReactor(simple_network, cond)
+    r = BatchReactor(simple_model, cond)
     C0 = jnp.asarray([1.0, 0.0])
 
     def loss(p):
         return r.solve(C0, params=p, t_span=(0.0, 1.0)).C[-1, 1]
 
-    g = r.check_gradient_finite(jax.grad(loss)(simple_network.default_parameters()))
+    g = r.check_gradient_finite(jax.grad(loss)(simple_model.default_parameters()))
     assert jnp.all(jnp.isfinite(g))

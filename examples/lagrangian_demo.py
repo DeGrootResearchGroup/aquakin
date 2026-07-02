@@ -2,7 +2,7 @@
 
 Synthesises a small ensemble of particle tracks (without needing a real
 OpenFOAM run), writes them through the CSV track format, reads them back,
-integrates the expanded ozone/bromate network along each, and prints a
+integrates the expanded ozone/bromate model along each, and prints a
 summary of bromate yields plus the RTD Morrill index of the synthetic
 tracer.
 """
@@ -43,8 +43,8 @@ def _synthetic_tracer(t_end: float, n_samples: int) -> tuple[jnp.ndarray, jnp.nd
 
 
 def main() -> None:
-    network = aquakin.load_network("ozone_bromate")
-    atol = network.atol({"OH": 1e-20}, default=1e-12)
+    model = aquakin.load_model("ozone_bromate")
+    atol = model.atol({"OH": 1e-20}, default=1e-12)
 
     t_end = 600.0
     n_samples = 61
@@ -59,13 +59,13 @@ def main() -> None:
     print(f"Loaded {len(loaded)} particles back from CSV.")
 
     def C0_fn(_pid: int) -> jnp.ndarray:
-        return network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
+        return model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
 
     solutions = aquakin.integrate_ensemble(
-        network,
+        model,
         loaded,
         C0_fn=C0_fn,
-        params=network.default_parameters(),
+        params=model.default_parameters(),
         atol=atol,
     )
 

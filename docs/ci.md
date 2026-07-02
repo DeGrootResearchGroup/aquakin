@@ -105,7 +105,7 @@ nor concentrating it in a few files makes the whole suite fast.
   (`pytest -m xheavy -n 1`) jobs are gated identically by **`heavy-gate`**, with two
   triggers: **push to `main`** when the path filter sees a change under
   `aquakin/plant`, `aquakin/integrate`, `aquakin/core`, `aquakin/schema`,
-  `aquakin/networks`, the two heavy test files, `pyproject.toml` or the workflow (so
+  `aquakin/models`, the two heavy test files, `pyproject.toml` or the workflow (so
   a docs / examples / utils / unrelated-test merge does not run them at all); and a
   **`full-ci` PR** (the pre-merge opt-in, so the adjoint machinery is validated
   before merge). The **`skip-heavy`** label still force-skips a push-to-main run for
@@ -138,7 +138,7 @@ nor concentrating it in a few files makes the whole suite fast.
   disturbs the required checks.
   - **Convention — apply `full-ci` to any PR that touches convergence-sensitive
     code:** the integrators / adjoints, the PTC steady-state solver
-    (`plant/steady.py`), the plant assembly / recycle resolution, a network's
+    (`plant/steady.py`), the plant assembly / recycle resolution, a model's
     stoichiometry, the pH / precipitation solvers, or the metric / mass-balance
     kernels. Those are exactly the changes whose regressions live in the `slow` /
     `validation` suites, which **do not run on the PR fast gate** — so the
@@ -149,7 +149,7 @@ nor concentrating it in a few files makes the whole suite fast.
     `full-ci` before merge would have caught it. The fix was to make the test
     deterministic, but the label is the process guard.) Skipping the label is fine
     only for changes that cannot reach the slow/validation paths (docs, a new
-    isolated unit, a fast-gated network add).
+    isolated unit, a fast-gated model add).
 
 **Branch protection:** the required status check must be the **`fast gate`**
 aggregator job — **not** the per-shard `fast tests (py3.x shard i/4)` jobs (their
@@ -170,7 +170,7 @@ resource/time limits and the job was intermittently killed mid-run, while
 3.11/3.12 stayed green and the suite passed locally on 3.10. When adding a runtime
 dependency, add it to `pyproject.toml` `dependencies` so the CI install
 (`pip install -e ".[test]" -c constraints.txt`) picks it up — the `_make_*`
-network generators' `ruamel` need is intentionally *not* a runtime dep (they are
+model generators' `ruamel` need is intentionally *not* a runtime dep (they are
 run manually, never imported by the package or tests). `pandas`/`matplotlib` are
 **optional** dependencies (the `dataframe` / `plot` extras, for the
 `to_dataframe()` / `to_csv()` / `sol.plot(...)` helpers), pulled into the `test`

@@ -31,7 +31,7 @@ from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream, mixed_temperature
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 @dataclass
@@ -41,7 +41,7 @@ class PrimaryClarifier(FlowParameterized):
     Parameters
     ----------
     name : str
-    network : CompiledNetwork
+    model : CompiledModel
     volume : float
         Clarifier liquid volume (m³); sets the hydraulic retention time.
     input_port_names : list[str]
@@ -59,7 +59,7 @@ class PrimaryClarifier(FlowParameterized):
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     volume: float
     input_port_names: list[str] = field(default_factory=lambda: ["inlet"])
     f_corr: float = 0.65
@@ -74,10 +74,10 @@ class PrimaryClarifier(FlowParameterized):
             raise ValueError(
                 f"PrimaryClarifier '{self.name}': f_PS must be in (0, 1); got {self.f_PS}"
             )
-        mask = jnp.zeros((self.network.n_species,))
+        mask = jnp.zeros((self.model.n_species,))
         for sp in self.settling_species:
-            if sp in self.network.species_index:
-                mask = mask.at[self.network.species_index[sp]].set(1.0)
+            if sp in self.model.species_index:
+                mask = mask.at[self.model.species_index[sp]].set(1.0)
         self._settle_mask = mask
         # Primary-sludge fraction as a differentiable setpoint, read by both the
         # flow rule and the material split.
@@ -88,7 +88,7 @@ class PrimaryClarifier(FlowParameterized):
 
     @property
     def state_size(self) -> int:
-        return self.network.n_species
+        return self.model.n_species
 
     @property
     def input_ports(self) -> list[str]:
@@ -99,7 +99,7 @@ class PrimaryClarifier(FlowParameterized):
         return [self.effluent_port, self.sludge_port]
 
     def initial_state(self) -> jnp.ndarray:
-        return self.network.default_concentrations()
+        return self.model.default_concentrations()
 
     def _removal_fraction(self, Q_in: jnp.ndarray) -> jnp.ndarray:
         """Particulate-COD removal fraction n_X in [0, 1] from the HRT."""
@@ -139,8 +139,8 @@ class PrimaryClarifier(FlowParameterized):
         C_sludge = jnp.maximum(((1.0 - ff) * E + ff) * state, 0.0)
 
         return {
-            self.effluent_port: Stream(Q=Q_in - Qu, C=C_eff, network=self.network, T=T_out),
-            self.sludge_port: Stream(Q=Qu, C=C_sludge, network=self.network, T=T_out),
+            self.effluent_port: Stream(Q=Q_in - Qu, C=C_eff, model=self.model, T=T_out),
+            self.sludge_port: Stream(Q=Qu, C=C_sludge, model=self.model, T=T_out),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
@@ -162,7 +162,7 @@ class PrimaryClarifier(FlowParameterized):
     ) -> jnp.ndarray:
         # Well-mixed holding tank: convection only (no reaction).
         Q_total = jnp.zeros(())
-        mass_total = jnp.zeros((self.network.n_species,))
+        mass_total = jnp.zeros((self.model.n_species,))
         for name in self.input_port_names:
             s = inputs[name]
             Q_total = Q_total + s.Q

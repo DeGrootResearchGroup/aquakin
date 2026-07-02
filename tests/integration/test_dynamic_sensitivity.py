@@ -34,7 +34,7 @@ _MAX_STEPS = 8_000
 
 def _bsm1():
     from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     infl = asm1.influent({"SS": 60., "SNH": 25., "XS": 200., "XB_H": 50.,
                           "SI": 30., "XI": 25., "SND": 6., "XND": 10.,
                           "SALK": 7.}, Q=18446.0)
@@ -154,7 +154,7 @@ def test_solve_sensitivity_operating_influent_matches_fd():
         c = np.asarray(infl.C).copy()
         c[:, asm1.species_index["SNH"]] *= snh
         i2 = InfluentSeries(t=infl.t, Q=infl.Q * q, C=jnp.asarray(c),
-                            network=asm1, T=infl.T)
+                            model=asm1, T=infl.T)
         p2 = build_bsm1()
         p2.add_influent("feed", i2)
         return float(p2.solve(

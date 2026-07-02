@@ -1,4 +1,4 @@
-"""Plant.set_temperature and the influent/plant network-mismatch error."""
+"""Plant.set_temperature and the influent/plant model-mismatch error."""
 
 import jax.numpy as jnp
 import pytest
@@ -7,7 +7,7 @@ import aquakin
 from aquakin.plant.bsm import (
     build_bsm1,
     build_bsm2,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
 )
 from aquakin.plant.cstr import CSTRUnit
@@ -18,7 +18,7 @@ from aquakin.plant.plant import Plant
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 # ----- set_temperature (construction only; fast) --------------------------
@@ -43,8 +43,8 @@ def test_set_temperature_clears_compiled_cache(asm1):
 
 
 def test_set_temperature_leaves_heated_digester_untouched():
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     plant = build_bsm2(asm1, adm1)
     dig_T = plant.units["digester"].conditions["T"]
     plant.set_temperature(12.0)
@@ -52,21 +52,21 @@ def test_set_temperature_leaves_heated_digester_untouched():
     assert plant.units["digester"].conditions["T"] == dig_T  # unchanged (heated)
 
 
-def test_build_bsm2_defaults_to_15C_bsm2_network():
-    """build_bsm2() with no asm1_network defaults to the BSM2-configured (15 degC)
-    network, so a temperature-carrying influent is referenced to 15 degC -- not
+def test_build_bsm2_defaults_to_15C_bsm2_model():
+    """build_bsm2() with no asm1_model defaults to the BSM2-configured (15 degC)
+    model, so a temperature-carrying influent is referenced to 15 degC -- not
     the plain 20 degC asm1, which would apply a spurious slowdown on top of the
-    already-15 degC bsm2_parameters values. Passing the plain network still gives
+    already-15 degC bsm2_parameters values. Passing the plain model still gives
     the 20 degC reference."""
     from aquakin.plant.bsm.bsm2 import BSM2_AS_TEMPERATURE_K
 
     default = build_bsm2()
     tank = default.units["tank1"]
     assert tank.conditions["T"] == pytest.approx(BSM2_AS_TEMPERATURE_K)   # 288.15
-    ref_Ts = [ref for (_i, _ln, ref, _c) in tank.network.temperature_corrections]
+    ref_Ts = [ref for (_i, _ln, ref, _c) in tank.model.temperature_corrections]
     assert ref_Ts and all(r == pytest.approx(BSM2_AS_TEMPERATURE_K) for r in ref_Ts)
 
-    plain = build_bsm2(asm1_network=aquakin.load_network("asm1"))
+    plain = build_bsm2(asm1_model=aquakin.load_model("asm1"))
     assert plain.units["tank1"].conditions["T"] == pytest.approx(293.15)  # 20 degC
 
 
@@ -85,31 +85,31 @@ def test_set_temperature_rejects_bad_units(asm1):
         plant.set_temperature(10.0, units=["clarifier"])  # a separator, no T
 
 
-# ----- network-mismatch error --------------------------------------------
+# ----- model-mismatch error --------------------------------------------
 
-def test_influent_network_instance_mismatch_is_clear():
+def test_influent_model_instance_mismatch_is_clear():
     """A different *instance* of the same model gives a 'reuse one object'
     error, not the misleading 'supply a translator'."""
-    adm1 = aquakin.load_network("adm1")
-    plant = build_bsm2(bsm2_asm1_network(), adm1)
+    adm1 = aquakin.load_model("adm1")
+    plant = build_bsm2(bsm2_asm1_model(), adm1)
     with pytest.raises(ValueError, match="different \\*instances\\* of the same"):
-        # bsm2_asm1_network() builds a fresh instance each call.
-        plant.add_influent("feed", bsm2_constant_influent(bsm2_asm1_network()))
+        # bsm2_asm1_model() builds a fresh instance each call.
+        plant.add_influent("feed", bsm2_constant_influent(bsm2_asm1_model()))
 
 
-def test_genuine_cross_network_still_asks_for_translator(asm1):
+def test_genuine_cross_model_still_asks_for_translator(asm1):
     """An influent of a genuinely different model still raises the
-    cross-networks/translator error (the instances message does not apply)."""
-    adm1 = aquakin.load_network("adm1")
+    cross-models/translator error (the instances message does not apply)."""
+    adm1 = aquakin.load_model("adm1")
     plant = build_bsm1(asm1)
     bad = InfluentSeries(
         t=jnp.array([0.0, 1.0]), Q=jnp.array([1.0, 1.0]),
-        C=jnp.tile(adm1.default_concentrations(), (2, 1)), network=adm1)
-    with pytest.raises(ValueError, match="crosses networks"):
+        C=jnp.tile(adm1.default_concentrations(), (2, 1)), model=adm1)
+    with pytest.raises(ValueError, match="crosses models"):
         plant.add_influent("feed", bad)
 
 
-def test_matched_network_instance_wires_fine(asm1):
+def test_matched_model_instance_wires_fine(asm1):
     plant = build_bsm1(asm1)
     plant.add_influent("feed", asm1.influent({"SS": 60.0}, Q=18446.0))  # same object
     assert any(c.from_port == "feed" for c in plant.connections)

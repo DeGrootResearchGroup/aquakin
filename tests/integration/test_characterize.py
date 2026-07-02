@@ -23,7 +23,7 @@ _COD_STATES = ("SI", "SS", "XI", "XS", "XB_H", "XB_A", "XP")
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 # --- fractionate against the SUMO Sumo1 raw-influent worked example ----------
@@ -129,7 +129,7 @@ def test_characterize_influent_builds_series(asm1):
 
 
 def test_characterize_requires_asm1_states():
-    ozone = aquakin.load_network("ozone_bromate")
+    ozone = aquakin.load_model("ozone_bromate")
     with pytest.raises(ValueError, match="ASM1 state"):
         characterize_influent(ozone, flow=1.0, total_cod=1.0, tkn=1.0)
 

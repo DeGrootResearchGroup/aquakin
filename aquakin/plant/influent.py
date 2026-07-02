@@ -26,7 +26,7 @@ import numpy as np
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 # Roles a ``column_map`` may target besides ``"t"`` / ``"Q"`` / ``"T"`` and
@@ -82,8 +82,8 @@ class InfluentSeries:
         Volumetric flow rate at each sample, shape ``(n_t,)``.
     C : jnp.ndarray
         Concentration at each sample, shape ``(n_t, n_species)`` where
-        columns follow ``network.species`` ordering.
-    network : CompiledNetwork
+        columns follow ``model.species`` ordering.
+    model : CompiledModel
     T : jnp.ndarray, optional
         Influent temperature at each sample (Kelvin), shape ``(n_t,)``. When
         given, ``at(t)`` returns a stream carrying the interpolated temperature,
@@ -94,7 +94,7 @@ class InfluentSeries:
     t: jnp.ndarray
     Q: jnp.ndarray
     C: jnp.ndarray
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     T: "jnp.ndarray | None" = None
 
     def __post_init__(self) -> None:
@@ -104,20 +104,20 @@ class InfluentSeries:
             raise ValueError(f"Q shape {self.Q.shape} does not match t shape {self.t.shape}")
         if self.C.ndim != 2 or self.C.shape[0] != self.t.shape[0]:
             raise ValueError(f"C shape {self.C.shape} expected ({self.t.shape[0]}, n_species)")
-        if self.C.shape[1] != self.network.n_species:
+        if self.C.shape[1] != self.model.n_species:
             raise ValueError(
-                f"C has {self.C.shape[1]} species columns but network has {self.network.n_species}"
+                f"C has {self.C.shape[1]} species columns but model has {self.model.n_species}"
             )
         if self.T is not None and self.T.shape != self.t.shape:
             raise ValueError(f"T shape {self.T.shape} does not match t shape {self.t.shape}")
 
     @classmethod
     def constant(
-        cls, network, overrides=None, /, *, Q, base: str = "zero", T=None, **species
+        cls, model, overrides=None, /, *, Q, base: str = "zero", T=None, **species
     ) -> "InfluentSeries":
         """Build a constant-in-time influent from a feed composition.
 
-        The composition is built with ``network.concentrations(overrides,
+        The composition is built with ``model.concentrations(overrides,
         base=base, **species)`` -- ``base="zero"`` by default, so an unspecified
         species is absent from the feed rather than at its YAML reference value.
         The series carries two identical samples, so ``at(t)`` returns the same
@@ -125,8 +125,8 @@ class InfluentSeries:
 
         Parameters
         ----------
-        network : CompiledNetwork
-            Kinetic network whose species ordering ``C`` follows.
+        model : CompiledModel
+            Kinetic model whose species ordering ``C`` follows.
         overrides : dict[str, float], optional
             Species name -> feed concentration. Positional-only.
         Q : float
@@ -147,7 +147,7 @@ class InfluentSeries:
         >>> InfluentSeries.constant(net, {"SS": 60.0, "SNH": 25.0}, Q=18446.0)
         >>> InfluentSeries.constant(net, SS=400.0, Q=2.0)
         """
-        C = network.concentrations(overrides, base=base, **species)
+        C = model.concentrations(overrides, base=base, **species)
         # Two identical samples -> a genuine constant: jnp.interp clamps outside
         # the range and interpolates a flat line within it, so any solve horizon
         # sees the same value.
@@ -155,7 +155,7 @@ class InfluentSeries:
         Q_arr = jnp.full((2,), float(Q))
         C_arr = jnp.tile(C, (2, 1))
         T_arr = None if T is None else jnp.full((2,), float(T))
-        return cls(t=t, Q=Q_arr, C=C_arr, network=network, T=T_arr)
+        return cls(t=t, Q=Q_arr, C=C_arr, model=model, T=T_arr)
 
     def at(self, t: jnp.ndarray) -> Stream:
         """Return the influent :class:`Stream` at time ``t``.
@@ -168,12 +168,12 @@ class InfluentSeries:
         # axis) rather than a Python loop of n_species separate interp calls.
         C_t = jax.vmap(lambda col: jnp.interp(t, self.t, col), in_axes=1)(self.C)
         T_t = None if self.T is None else jnp.interp(t, self.t, self.T)
-        return Stream(Q=Q_t, C=C_t, network=self.network, T=T_t)
+        return Stream(Q=Q_t, C=C_t, model=self.model, T=T_t)
 
 
 def read_influent_csv(
     path: Union[str, Path],
-    network: "CompiledNetwork",
+    model: "CompiledModel",
     *,
     column_order: list[str] | None = None,
     column_map: dict | None = None,
@@ -186,12 +186,12 @@ def read_influent_csv(
     ----------
     path : str | Path
         Path to the CSV file.
-    network : CompiledNetwork
-        Kinetic network whose species ordering ``C`` is built against.
+    model : CompiledModel
+        Kinetic model whose species ordering ``C`` is built against.
     column_order : list[str], optional
         Positional column layout, used when ``column_map`` is not given. The
         first column is time ``t``, the column named ``"Q"`` is the flow, and
-        every other name must be a species the network declares. Defaults to the
+        every other name must be a species the model declares. Defaults to the
         standard BSM1 ordering.
     column_map : dict, optional
         Map of role -> CSV header name, for an arbitrary-header file (a lab /
@@ -220,7 +220,7 @@ def read_influent_csv(
         raise FileNotFoundError(f"Influent file not found: {p}")
     return _influent_from_text(
         p.read_text(encoding="utf-8"),
-        network,
+        model,
         column_order=column_order,
         column_map=column_map,
         fractions=fractions,
@@ -231,7 +231,7 @@ def read_influent_csv(
 
 def _influent_from_text(
     text: str,
-    network: "CompiledNetwork",
+    model: "CompiledModel",
     *,
     column_order: list[str] | None = None,
     column_map: dict | None = None,
@@ -246,7 +246,7 @@ def _influent_from_text(
     data through a temporary file. ``source`` only labels error messages.
     """
     if column_map is not None:
-        return _influent_from_column_map(text, network, column_map, fractions, delimiter, source)
+        return _influent_from_column_map(text, model, column_map, fractions, delimiter, source)
     if column_order is None:
         column_order = _BSM1_COLUMN_ORDER
 
@@ -302,11 +302,11 @@ def _influent_from_text(
     # Build the (n_t, n_species) C matrix, gathering each declared species
     # from its column.
     species_idx_in_file: list[int] = []
-    for sp in network.species:
+    for sp in model.species:
         if sp not in column_order:
             raise ValueError(
                 f"Influent file is missing species column '{sp}' "
-                f"(declared by network '{network.name}')."
+                f"(declared by model '{model.name}')."
             )
         species_idx_in_file.append(column_order.index(sp))
     species_idx_arr = jnp.asarray(species_idx_in_file)
@@ -318,7 +318,7 @@ def _influent_from_text(
     # units (the caller converts if needed -- e.g. load_bsm2_influent's degC).
     T = data[:, column_order.index("T")] if "T" in column_order else None
 
-    return InfluentSeries(t=t, Q=Q, C=C, network=network, T=T)
+    return InfluentSeries(t=t, Q=Q, C=C, model=model, T=T)
 
 
 def _split_row(line: str, delimiter: str | None) -> list[str]:
@@ -354,7 +354,7 @@ def _parse_named_table(text: str, delimiter: str | None):
 
 def _influent_from_column_map(
     text: str,
-    network,
+    model,
     column_map: dict,
     fractions,
     delimiter,
@@ -400,32 +400,32 @@ def _influent_from_column_map(
         produced = fractionate(**kw)
 
     n_t = data.shape[0]
-    C = np.zeros((n_t, network.n_species))
-    for sp in network.species:
+    C = np.zeros((n_t, model.n_species))
+    for sp in model.species:
         if sp in column_map:  # a directly-mapped species
-            C[:, network.species_index[sp]] = col(sp)
+            C[:, model.species_index[sp]] = col(sp)
         elif sp in produced:  # a fractionated state
-            C[:, network.species_index[sp]] = np.asarray(produced[sp])
+            C[:, model.species_index[sp]] = np.asarray(produced[sp])
         # otherwise left at zero (zero-based influent)
 
     return InfluentSeries(
         t=jnp.asarray(t),
         Q=jnp.asarray(Q),
         C=jnp.asarray(C),
-        network=network,
+        model=model,
         T=None if T is None else jnp.asarray(T),
     )
 
 
-def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeries:
+def load_bsm1_influent(profile: str, model: "CompiledModel") -> InfluentSeries:
     """Load one of the synthesised BSM1 influent files.
 
     Parameters
     ----------
     profile : {"dry", "rain", "storm"}
         Which BSM1 influent to load.
-    network : CompiledNetwork
-        ASM1 network (the influent species map to ASM1 state ordering).
+    model : CompiledModel
+        ASM1 model (the influent species map to ASM1 state ordering).
 
     Returns
     -------
@@ -452,20 +452,20 @@ def load_bsm1_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
     # Parse the package data directly from text -- no temporary-file round-trip.
     return _influent_from_text(
         resource.read_text(encoding="utf-8"),
-        network,
+        model,
         source=f"BSM1_{profile}.csv",
     )
 
 
-def load_bsm2_influent(profile: str, network: "CompiledNetwork") -> InfluentSeries:
+def load_bsm2_influent(profile: str, model: "CompiledModel") -> InfluentSeries:
     """Load one of the BSM2 influent files.
 
     Parameters
     ----------
     profile : {"dry", "rain", "storm"}
         Which BSM2 influent to load.
-    network : CompiledNetwork
-        ASM1 network (the water-line influent species map to ASM1 ordering).
+    model : CompiledModel
+        ASM1 model (the water-line influent species map to ASM1 ordering).
 
     Returns
     -------
@@ -478,8 +478,8 @@ def load_bsm2_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
     diurnal flow / load pattern, but are not the canonical 609-day IWA series.
     The layout is the BSM1 columns plus a time-varying influent temperature
     ``T`` (stored in degC; returned as ``InfluentSeries.T`` in Kelvin), which
-    drives the ASM1 temperature corrections seasonally -- pair the network with
-    :func:`aquakin.plant.bsm.bsm2_asm1_network` so the kinetics reference the
+    drives the ASM1 temperature corrections seasonally -- pair the model with
+    :func:`aquakin.plant.bsm.bsm2_asm1_model` so the kinetics reference the
     BSM2 15 degC base. TSS is omitted (it is derived, not a state).
     """
     if profile not in ("dry", "rain", "storm"):
@@ -491,7 +491,7 @@ def load_bsm2_influent(profile: str, network: "CompiledNetwork") -> InfluentSeri
         )
     series = _influent_from_text(
         resource.read_text(encoding="utf-8"),
-        network,
+        model,
         column_order=_BSM2_COLUMN_ORDER,
         source=f"BSM2_{profile}.csv",
     )

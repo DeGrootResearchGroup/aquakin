@@ -15,7 +15,7 @@ from aquakin.plant.bsm import (
     bsm2_warm_start,
     build_bsm2,
     RejectStorage,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
 )
@@ -27,11 +27,11 @@ from aquakin.plant.units import FlowContext
 
 @pytest.fixture(scope="module")
 def asm1():
-    return bsm2_asm1_network()
+    return bsm2_asm1_model()
 
 
 def _controlled_tank(asm1, setpoint=80.0, gain=30.0, bias=0.0, qmax=1500.0):
-    return StorageTank(name="store", network=asm1, volume=160.0,
+    return StorageTank(name="store", model=asm1, volume=160.0,
                        level_setpoint=setpoint, level_gain=gain,
                        output_flow_bias=bias, output_flow_max=qmax)
 
@@ -42,7 +42,7 @@ def _state(asm1, V):
 
 def _stream(asm1, Q):
     return {"in": Stream(Q=jnp.asarray(float(Q)), C=asm1.default_concentrations(),
-                         network=asm1)}
+                         model=asm1)}
 
 
 # ----- Level-control release law (no plant solve) -------------------------
@@ -97,7 +97,7 @@ def test_flow_outputs_match_compute_outputs(asm1):
 
 @pytest.fixture(scope="module")
 def adm1():
-    return aquakin.load_network("adm1")
+    return aquakin.load_model("adm1")
 
 
 @pytest.fixture(scope="module")

@@ -11,18 +11,18 @@ import pytest
 import yaml
 
 import aquakin
-from aquakin import BatchReactor, SpatialConditions, compile_network
+from aquakin import BatchReactor, SpatialConditions, compile_model
 from aquakin.core.ph_solver import solve_ph
-from aquakin.schema.network_spec import NetworkSpec
+from aquakin.schema.model_spec import ModelSpec
 
-# A minimal sewer-like network: a carbonate/ammonia/sulfide pool sets pH, and a
+# A minimal sewer-like model: a carbonate/ammonia/sulfide pool sets pH, and a
 # tracer X is removed by a pH-gated (pH_switch) process. pH is never supplied
 # externally -- it is derived from the state every RHS step.
 YAML = """
-network:
+model:
   name: ph_toy
   version: "1.0"
-  description: "Toy network exercising state-derived pH."
+  description: "Toy model exercising state-derived pH."
 
 species:
   - {name: S_CO2, units: mgC/L, default_concentration: 24.0}
@@ -60,8 +60,8 @@ reactions:
 
 
 def _build():
-    spec = NetworkSpec.model_validate(yaml.safe_load(YAML))
-    return compile_network(spec)
+    spec = ModelSpec.model_validate(yaml.safe_load(YAML))
+    return compile_model(spec)
 
 
 def test_pH_is_not_a_required_condition():
@@ -119,13 +119,13 @@ def test_grad_flows_through_pH():
     assert abs(float(g[net.species_index["S_CO2"]])) > 0.0
 
 
-# A network whose net cation charge comes from a strong-cation STATE (S_cat),
+# A model whose net cation charge comes from a strong-cation STATE (S_cat),
 # in addition to the strong-anion state (S_an) -- the ADM1 explicit-ion pattern.
 YAML_IONS = """
-network:
+model:
   name: ph_ions_toy
   version: "1.0"
-  description: "Toy network with explicit strong-ion states driving pH."
+  description: "Toy model with explicit strong-ion states driving pH."
 
 species:
   - {name: S_CO2, units: mgC/L, default_concentration: 24.0}
@@ -161,8 +161,8 @@ reactions:
 def test_strong_cation_state_drives_pH():
     """A strong-cation STATE feeds the net cation charge, equivalent to a
     z_cation_eq offset of (S_cat - S_an); raising S_cat raises pH."""
-    spec = NetworkSpec.model_validate(yaml.safe_load(YAML_IONS))
-    net = compile_network(spec)
+    spec = ModelSpec.model_validate(yaml.safe_load(YAML_IONS))
+    net = compile_model(spec)
     si = net.species_index
     C0 = net.default_concentrations()
     p = net.default_parameters()

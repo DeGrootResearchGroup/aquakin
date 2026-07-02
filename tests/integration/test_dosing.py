@@ -21,11 +21,11 @@ from aquakin.plant.streams import Stream
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _tank(asm1, name="tank"):
-    return CSTRUnit(name=name, network=asm1, volume=1000.0,
+    return CSTRUnit(name=name, model=asm1, volume=1000.0,
                     input_port_names=["in"], conditions={"T": 293.15})
 
 
@@ -36,7 +36,7 @@ def test_reagent_from_species_is_base_zero(asm1):
     ss = asm1.species_index["SS"]
     assert r.label == "methanol"
     assert float(r.composition[ss]) == 4e5
-    # everything not named is zero (a neat reagent, not the network defaults)
+    # everything not named is zero (a neat reagent, not the model defaults)
     assert float(jnp.sum(r.composition)) == 4e5
 
 
@@ -56,7 +56,7 @@ def test_feedback_needs_sensor_and_species(asm1):
     r = Reagent.from_species(asm1, SS=4e5)
     with pytest.raises(ValueError, match="measured_species= and sensor="):
         DosingUnit("d", r, setpoint=1.0)                     # no sensor/species
-    with pytest.raises(ValueError, match="not in the reagent's network"):
+    with pytest.raises(ValueError, match="not in the reagent's model"):
         DosingUnit("d", r, setpoint=1.0, measured_species="NOPE", sensor="tank")
 
 
@@ -73,7 +73,7 @@ def test_fixed_dose_mass_balance(asm1):
     """The dosed stream is the flow-weighted mix of the inlet and the reagent."""
     d = DosingUnit("d", Reagent.from_species(asm1, SS=4e5), flow=2.0)
     C_in = asm1.concentrations({"SS": 60.0}, base="zero")
-    s_in = Stream(Q=jnp.asarray(1000.0), C=C_in, network=asm1, T=jnp.asarray(291.0))
+    s_in = Stream(Q=jnp.asarray(1000.0), C=C_in, model=asm1, T=jnp.asarray(291.0))
     out = d.compute_outputs(jnp.asarray(0.0), jnp.zeros((0,)), {"in": s_in},
                             asm1.default_parameters())["out"]
     ss = asm1.species_index["SS"]
@@ -185,7 +185,7 @@ def test_controlled_dose_without_bus_raises(asm1):
     p._build_state_layout()
     d = p.units["carbon"]
     s_in = Stream(Q=jnp.asarray(1000.0), C=asm1.default_concentrations(),
-                  network=asm1)
+                  model=asm1)
     with pytest.raises(ValueError, match="control-signal bus"):
         d.compute_outputs(jnp.asarray(0.0), jnp.zeros((0,)), {"in": s_in},
                           asm1.default_parameters())          # signals=None

@@ -1,0 +1,16 @@
+# Auto-generated from wats_sewer_khalil_paper.yaml by _make_khalil_variants.py -- do not edit by hand.
+model:
+  name: wats_sewer_khalil_paper_halforder
+  extends: wats_sewer_khalil_paper
+  description: Structural variant of wats_sewer_khalil_paper. Half-order (square-root) kinetics for the
+    nitrate-driven biofilm sulfur-oxidation reactions, in place of the Monod terms. All other reactions,
+    parameters, species and conditions are inherited from the base via 'extends'.
+expressions:
+  ho_sumS_half: '[sumS] * ([sumS] + 1.0e-2) ** (0.0 - 0.5)'
+  ho_XS0_half: '[X_S0] * ([X_S0] + 1.0e-2) ** (0.0 - 0.5)'
+  ho_SNO_half: '[S_NO] * ([S_NO] + 1.0e-2) ** (0.0 - 0.5)'
+reactions:
+- name: sulfide_oxidation_anoxic_biofilm
+  rate: k_sII_anox_f * ho_sumS_half * ho_SNO_half * {A_V}
+- name: elemental_S_oxidation_anoxic_biofilm
+  rate: k_s0_anox_f * ho_XS0_half * ho_SNO_half * {A_V}

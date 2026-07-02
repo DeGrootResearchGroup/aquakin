@@ -26,7 +26,7 @@ _PARTS = ["XI", "XS", "XB_H", "XB_A", "XP", "XND"]
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _phases():

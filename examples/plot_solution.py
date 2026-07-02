@@ -1,8 +1,8 @@
 """Plotting a solution with ``sol.plot()`` (optional matplotlib).
 
 ``sol.plot(species)`` returns a matplotlib ``Axes`` -- no manual ``C_named`` /
-unit-casting / time-axis boilerplate. The x-axis is labelled with the network's
-time unit (days here; seconds for the ozone/UV networks), and a single-species
+unit-casting / time-axis boilerplate. The x-axis is labelled with the model's
+time unit (days here; seconds for the ozone/UV models), and a single-species
 plot labels the y-axis with that species' units.
 
 Requires the optional ``plot`` extra:  ``pip install aquakin[plot]``.
@@ -14,7 +14,7 @@ import aquakin
 
 
 def main() -> None:
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     reactor = aquakin.BatchReactor(net, aquakin.OperatingConditions(T=293.15))
     sol = reactor.solve(net.default_concentrations(),
                         t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 50))

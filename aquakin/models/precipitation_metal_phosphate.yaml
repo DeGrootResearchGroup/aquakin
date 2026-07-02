@@ -1,0 +1,98 @@
+model:
+  name: precipitation_metal_phosphate
+  version: "1.0"
+  description: >
+    Chemical phosphorus removal by metal-salt dosing: ferric (Fe3+) and
+    aluminium (Al3+) precipitate dissolved orthophosphate as the very insoluble
+    phosphates strengite (FePO4) and variscite (AlPO4), while the same dosed
+    metal competes to form the hydroxides ferrihydrite (Fe(OH)3) and gibbsite
+    (Al(OH)3). The metal-hydroxide precipitation buffers the free metal and so
+    sets a pH-dependent floor on how low the phosphate can be drawn: at neutral
+    pH the FePO4/Fe(OH)3 coexistence pins a residual orthophosphate that rises
+    with pH (more OH-), which is why chemical-P removal worsens at high pH and
+    needs a metal dose in excess of the P-stoichiometric amount. Built on the
+    generalised precipitation framework of Kazadi Mbamba et al. (2015); the
+    iron/aluminium phosphate chemistry follows the plant-wide P/S/Fe extension of
+    Flores-Alsina et al. (2016).
+
+    Ferric is the dosed metal by default (the clean single-metal story: iron
+    removes phosphate as FePO4, with the excess iron going to Fe(OH)3). The
+    aluminium analogues (AlPO4, Al(OH)3) are declared too -- dose aluminium by
+    raising S_Al (and lowering S_Fe3) for the alum case, or co-dose both.
+
+    This model exercises the ``precipitation:`` block's ``hydroxide`` ion
+    fraction (OH- activity = Kw/[H+]) for the metal hydroxides, alongside the
+    ``phosphate`` fraction (PO4^3- fraction at pH) for the phosphates and a
+    fully-free trivalent metal cation. Concentrations are in mol/m3 (= mmol/L) so
+    the precipitation stoichiometry is exact (one mole of mineral consumes one
+    mole of each constituent ion); the per-ion molar_mass = 1000 converts mol/m3
+    to the mol/L the ion-activity product / Ksp use. Free Fe3+/Al3+ are taken as
+    the declared total (hydrolysis/ion-pairing not subtracted -- a documented
+    simplification; the hydroxide precipitation is what drains the free metal at
+    neutral pH). pH is a fixed operating condition here. Activity coefficients
+    use the Davies approximation at the declared background ionic strength.
+  references:
+    - "Kazadi Mbamba, C., Batstone, D.J., Flores-Alsina, X. & Tait, S. (2015). A generalised chemical precipitation modelling approach in wastewater treatment applied to calcite. Water Research 68, 342-353."
+    - "Flores-Alsina, X., Solon, K., Kazadi Mbamba, C., Tait, S., Gernaey, K.V., Jeppsson, U. & Batstone, D.J. (2016). Modelling phosphorus (P), sulfur (S) and iron (Fe) interactions for dynamic simulations of anaerobic digestion processes. Water Research 95, 370-382."
+    - "Lindsay, W.L. (1979). Chemical Equilibria in Soils. Wiley, New York. (mineral solubility products)"
+
+species:
+  - {name: S_Fe3, default_concentration: 2.0, units: "mol/m3", description: "Total ferric iron (Fe3+), dosed"}
+  - {name: S_Al,  default_concentration: 0.0, units: "mol/m3", description: "Total aluminium (Al3+); 0 by default (raise to dose alum)"}
+  - {name: S_PO4, default_concentration: 2.0, units: "mol/m3", description: "Total inorganic orthophosphate"}
+  - {name: X_FePO4, default_concentration: 1.0e-4, units: "mol/m3", description: "Strengite FePO4.2H2O solid; small seed enables nucleation"}
+  - {name: X_AlPO4, default_concentration: 1.0e-4, units: "mol/m3", description: "Variscite AlPO4.2H2O solid; small seed enables nucleation"}
+  - {name: X_FeOH3, default_concentration: 1.0e-4, units: "mol/m3", description: "Ferrihydrite Fe(OH)3 solid; small seed enables nucleation"}
+  - {name: X_AlOH3, default_concentration: 1.0e-4, units: "mol/m3", description: "Gibbsite Al(OH)3 solid; small seed enables nucleation"}
+
+conditions:
+  - {name: T,  default: 293.15, description: "Temperature (K); 20 C water line."}
+  - {name: pH, default: 7.0,    description: "Operating pH (fixed)."}
+
+# Protect the supersaturation term from a transiently-negative ion state.
+clip_negative_states: true
+
+precipitation:
+  pH_field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  activity_model: davies
+  ionic_strength_offset: 0.02         # background electrolyte (mol/L)
+  minerals:
+    # Each reaction is auto-derived from the mineral: declaring the precipitate
+    # species (solid) and the crystallisation rate_constant is enough -- the
+    # engine consumes each ion's species at -count and produces the solid at +1
+    # (a hydroxide OH- ion carries no species, so it contributes no mass term).
+    # Rate coefficients (1/d) are fast enough to reach saturation within the span.
+    - name: FePO4                      # strengite: Fe3+ + PO4^3- -> FePO4
+      pKsp: 26.4                       # Lindsay (1979), strengite FePO4.2H2O
+      order: 2
+      solid: X_FePO4
+      rate_constant: {value: 20.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
+      ions:
+        - {species: S_Fe3, molar_mass: 1000, count: 1, charge: 3}                      # Fe3+ (free)
+        - {species: S_PO4, molar_mass: 1000, count: 1, charge: 3, fraction: phosphate} # PO4^3- fraction at pH
+    - name: AlPO4                      # variscite: Al3+ + PO4^3- -> AlPO4
+      pKsp: 22.36                      # Lindsay (1979), variscite AlPO4.2H2O
+      order: 2
+      solid: X_AlPO4
+      rate_constant: {value: 20.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
+      ions:
+        - {species: S_Al,  molar_mass: 1000, count: 1, charge: 3}                      # Al3+ (free)
+        - {species: S_PO4, molar_mass: 1000, count: 1, charge: 3, fraction: phosphate} # PO4^3- fraction at pH
+    - name: FeOH3                      # ferrihydrite: Fe3+ + 3 OH- -> Fe(OH)3 (competes with FePO4 for ferric)
+      pKsp: 38.8                       # Lindsay (1979), amorphous Fe(OH)3
+      order: 2
+      solid: X_FeOH3
+      rate_constant: {value: 20.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
+      ions:
+        - {species: S_Fe3, molar_mass: 1000, count: 1, charge: 3}             # Fe3+ (free)
+        - {count: 3, charge: 1, fraction: hydroxide}                          # 3 OH- (Kw/[H+])
+    - name: AlOH3                      # gibbsite: Al3+ + 3 OH- -> Al(OH)3 (competes with AlPO4 for aluminium)
+      pKsp: 32.3                       # Lindsay (1979), amorphous Al(OH)3
+      order: 2
+      solid: X_AlOH3
+      rate_constant: {value: 20.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
+      ions:
+        - {species: S_Al, molar_mass: 1000, count: 1, charge: 3}             # Al3+ (free)
+        - {count: 3, charge: 1, fraction: hydroxide}                         # 3 OH- (Kw/[H+])

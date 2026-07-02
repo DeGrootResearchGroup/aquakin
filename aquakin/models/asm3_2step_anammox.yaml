@@ -1,0 +1,95 @@
+model:
+  name: asm3_2step_anammox
+  # Inherit the two-step nitrification/denitrification model and add the
+  # anammox (anaerobic ammonium oxidation) organism. This is a genuinely additive
+  # extends layer (a new biomass + its processes); see schema/inheritance.py.
+  extends: asm3_2step
+  version: "1.0"
+  description: >
+    asm3_2step extended with anammox (anaerobic ammonium-oxidising) bacteria,
+    after Strous et al. (1998, 1999). Anammox biomass XAMX oxidises ammonium with
+    nitrite as the electron acceptor to dinitrogen, oxidising a small extra amount
+    of nitrite to nitrate to fix CO2 for autotrophic growth -- the canonical
+    Strous stoichiometry NH4 : NO2 : NO3 ~ 1 : 1.32 : 0.26 (1.02 N2 per NH4).
+
+    With AOB (nitritation), NOB (nitratation) and now anammox all present, the
+    model supports partial-nitritation/anammox (PN/A) deammonification: under
+    low dissolved oxygen AOB produces nitrite from ammonium, NOB is out-competed,
+    and anammox removes ammonium + nitrite to N2 -- autotrophic nitrogen removal
+    without organic carbon, the basis of sidestream deammonification.
+
+    Anammox is very slow-growing (max growth ~0.08/d, doubling ~9-11 days) with a
+    very high substrate affinity (K_NH4/K_NO2 ~ 0.05-0.1 gN/m3) and is reversibly
+    inhibited by oxygen (a monod_inh O2 term). The growth temperature dependency
+    uses the source activation energy (70 kJ/mol -> theta ~ 1.10).
+
+    The anammox stoichiometry is written symbolically in the yield Y_AMX and the
+    nitrate-production ratio f_NO3_AMX, derived to conserve COD, N and charge
+    exactly while reproducing the Strous ratios: NH4 is the electron donor and N
+    source, nitrite the acceptor (-> N2) and the source of reducing equivalents
+    (a fraction -> NO3) for CO2 fixation. COD, N and charge close to machine
+    precision across all processes (continuity suite). Everything else -- the AOB
+    nitritation, NOB nitratation, heterotrophs and endogenous respiration -- is
+    inherited from asm3_2step unchanged.
+  references:
+    - "Strous, M., Heijnen, J.J., Kuenen, J.G. & Jetten, M.S.M. (1998). The sequencing batch reactor as a powerful tool for the study of slowly growing anaerobic ammonium-oxidizing microorganisms. Appl. Microbiol. Biotechnol. 50(5), 589-596."
+    - "Strous, M., Kuenen, J.G. & Jetten, M.S.M. (1999). Key physiology of anaerobic ammonium oxidation. Appl. Environ. Microbiol. 65(7), 3248-3250."
+
+species:
+  - {name: XAMX, default_concentration: 10.0, units: "g_COD/m3", description: "Anaerobic ammonium-oxidising bacteria (anammox)"}
+
+parameters:
+  # Very slow growth; reversible O2 inhibition; high substrate affinity (Strous).
+  # Growth carries the source activation-energy temperature dependency (70 kJ/mol
+  # -> theta ~ exp(70000/(R*293.15^2)) ~ 1.103), ref 20 deg C.
+  mu_AMX:       {value: 0.08,  units: "1/d", bounds: [0.01, 0.5], transform: positive_log, temperature: {theta: 1.103, ref_T: 293.15}}
+  b_AMX_O2:     {value: 0.003, units: "1/d", bounds: [1.0e-4, 0.05], transform: positive_log}
+  K_NH4_AMX:    {value: 0.07,  units: "g_N/m3",  bounds: [0.005, 1.0],  transform: positive_log}
+  K_NO2_AMX:    {value: 0.05,  units: "g_N/m3",  bounds: [0.005, 1.0],  transform: positive_log}
+  K_O2_AMX_inh: {value: 0.01,  units: "g_O2/m3", bounds: [0.001, 1.0],  transform: positive_log}
+  # Stoichiometry. Y_AMX (g COD biomass / g NH4-N) and f_NO3_AMX (the Strous
+  # NO3-produced : NH4-consumed mol ratio, ~0.26) together set the canonical
+  # NH4 : NO2 : NO3 ~ 1 : 1.32 : 0.26 anammox stoichiometry.
+  Y_AMX:        {value: 0.159, units: "g_COD/g_N", bounds: [0.05, 0.4], transform: logit}
+  f_NO3_AMX:    {value: 0.26,  units: "-", bounds: [0.1, 0.5], transform: positive_log}
+
+expressions:
+  M_SNH4_AMX:  "monod([SNH4], K_NH4_AMX)"
+  M_SNO2_AMX:  "monod([SNO2], K_NO2_AMX)"
+  M_O2_AMX_inh: "monod_inh([SO2], K_O2_AMX_inh)"
+
+reactions:
+  - name: Anammox_growth
+    description: "Anammox: NH4 + NO2 -> N2 (+ a little NO3 for autotrophic growth); O2-inhibited."
+    rate: "mu_AMX * M_SNH4_AMX * M_SNO2_AMX * M_O2_AMX_inh * [XAMX]"
+    stoichiometry:
+      SNH4: "(-1) / Y_AMX - iN_BM"
+      SNO3: "f_NO3_AMX * (1 / Y_AMX + iN_BM)"
+      SNO2: "7.0 / 12.0 - (5.0 / 3.0) * f_NO3_AMX * (1 / Y_AMX + iN_BM) - 1 / Y_AMX"
+      SN2: "2 / Y_AMX + (2.0 / 3.0) * f_NO3_AMX * (1 / Y_AMX + iN_BM) - 7.0 / 12.0"
+      XAMX: 1.0
+      XSS: "iSS_BM"
+      SALK: "((-1) / Y_AMX - iN_BM) * iCharge_SNHx + (7.0 / 12.0 - (2.0 / 3.0) * f_NO3_AMX * (1 / Y_AMX + iN_BM) - 1 / Y_AMX) * iCharge_SNOx"
+
+  - name: Aerobic_endogenous_respiration_of_XAMX
+    description: "Aerobic endogenous respiration of anammox biomass."
+    rate: "b_AMX_O2 * M_SO2_H * [XAMX]"
+    stoichiometry:
+      SO2: "(-1) * (1 - fXI)"
+      SNH4: "(-1) * fXI * iN_XI + iN_BM"
+      SALK: "((-1) * fXI * iN_XI + iN_BM) * iCharge_SNHx"
+      XI: "fXI"
+      XAMX: -1.0
+      XSS: "(-1) * iSS_BM + fXI * iSS_XI"
+
+  - name: Anoxic_endogenous_respiration_of_XAMX
+    description: "Anoxic endogenous respiration of anammox biomass (full denitrification NO3 -> N2)."
+    rate: "b_AMX_O2 * etaN_end * M_SNO3 * M_SO2inh_H * [XAMX]"
+    stoichiometry:
+      SNH4: "(-1) * fXI * iN_XI + iN_BM"
+      SNO3: "(-1) * (1 - fXI) / iNO3_N2"
+      SN2: "(1 - fXI) / iNO3_N2"
+      SALK: "((-1) * fXI * iN_XI + iN_BM) * iCharge_SNHx + (-1) * (1 - fXI) / iNO3_N2 * iCharge_SNOx"
+      XI: "fXI"
+      XAMX: -1.0
+      XSS: "(-1) * iSS_BM + fXI * iSS_XI"

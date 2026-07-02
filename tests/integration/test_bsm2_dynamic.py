@@ -3,7 +3,7 @@
 Drives the open-loop BSM2 plant with a time-varying influent and checks it
 integrates efficiently to a finite, stable trajectory. This is the BSM2-scale
 counterpart of the BSM1 dynamic test and exercises the fixed-flow-pump fix on
-the 167-state, two-network (ASM1 + ADM1) plant: the recycle flows stay bounded
+the 167-state, two-model (ASM1 + ADM1) plant: the recycle flows stay bounded
 under diurnal / wet-weather forcing, so the monolithic solve does not blow up.
 
 The influent files are synthesised (see ``scripts/generate_bsm2_influent.py``),
@@ -18,13 +18,13 @@ import aquakin
 from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     build_bsm2,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
 )
 from aquakin.plant.influent import load_bsm2_influent
 
-# Slow module: full two-network BSM2 plant solves (steady-state warmup + dynamic
+# Slow module: full two-model BSM2 plant solves (steady-state warmup + dynamic
 # runs). Excluded from the fast PR gate; runs in the merge-to-main suite.
 pytestmark = pytest.mark.slow
 
@@ -32,14 +32,14 @@ pytestmark = pytest.mark.slow
 _SS_CACHE = {}
 
 
-def _networks():
+def _models():
     # The BSM2-configured ASM1 (temperature corrections referenced to 15 °C) so
     # the seasonal influent temperature drives the kinetics from the right base.
-    return bsm2_asm1_network(), aquakin.load_network("adm1")
+    return bsm2_asm1_model(), aquakin.load_model("adm1")
 
 
 def _build(asm1, adm1, influent):
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", influent)
     return plant
 
@@ -60,7 +60,7 @@ def _steady_state(asm1, adm1):
 
 
 def _run_dynamic(profile, t_end=14.0):
-    asm1, adm1 = _networks()
+    asm1, adm1 = _models()
     y_ss = _steady_state(asm1, adm1)
     plant = _build(asm1, adm1, load_bsm2_influent(profile, asm1))
     n_save = int(t_end) + 1
@@ -84,7 +84,7 @@ def test_bsm2_dry_weather_runs_dynamic():
     assert float(sol.C_named("tank5", "SNH")[-1]) < 3.0
     assert float(sol.C_named("tank5", "SNO")[-1]) > 3.0
     # Digester keeps producing methane.
-    adm1 = plant.units["digester"].network
+    adm1 = plant.units["digester"].model
     dstate = plant.states_by_unit(sol.final_state)["digester"]
     assert float(dstate[adm1.species_index["S_gas_ch4"]]) > 1.0
 

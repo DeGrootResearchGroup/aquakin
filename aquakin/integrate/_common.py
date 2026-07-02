@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.hints import did_you_mean
-from aquakin.core.network import CompiledNetwork
+from aquakin.core.model import CompiledModel
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.conditions import SpatialConditions
@@ -100,7 +100,7 @@ class DifferentiationConfig:
           always uses ``RecursiveCheckpointAdjoint`` regardless of ``method``.
         - ``mode="reverse", method="through_solve"`` -- differentiate *through*
           the diffrax solve (``RecursiveCheckpointAdjoint``; the old
-          ``gradient="jax_adjoint"``). Needs a ``dtmax`` cap for a stiff network.
+          ``gradient="jax_adjoint"``). Needs a ``dtmax`` cap for a stiff model.
         - ``mode="forward", method="stable"`` -- the augmented ``[y; S]``
           variational solve (cap-free, exact). Routed through
           ``solve_sensitivity`` / ``augmented_forward_sensitivity``.
@@ -208,7 +208,7 @@ class GradientCheckMixin:
     """Give every reactor a finiteness check for a hand-rolled reverse gradient.
 
     A reverse-mode gradient (``jax.grad``/``jax.jacrev``) taken *directly*
-    through a stiff network's :meth:`solve` -- a user's own loss + optimizer,
+    through a stiff model's :meth:`solve` -- a user's own loss + optimizer,
     outside :func:`aquakin.calibrate` / :func:`aquakin.sensitivity`, which guard
     this internally -- can return silent ``NaN``/``Inf`` when the integrator step
     is uncapped (the backward accumulation overflows; see the ``dtmax`` note on
@@ -358,23 +358,23 @@ def build_dataframe(
 # --- Cross-instance compiled-solver cache ------------------------------------
 #
 # Each ``reactor.solve(...)`` jit-compiles an inner ``_solve`` closure that
-# captures the network and the solver settings. Compilation (trace + lower +
+# captures the model and the solver settings. Compilation (trace + lower +
 # XLA) dominates the cost of a solve -- the run itself is comparatively free --
 # so rebuilding that closure for every reactor instance means every fresh
-# reactor pays a full from-scratch compile, even for an identical network and
+# reactor pays a full from-scratch compile, even for an identical model and
 # settings. That is the dominant cost of the test suite (build a reactor, solve
 # once) and of any code that constructs many short-lived reactors.
 #
 # This module-level cache shares the compiled solver across *all* reactor
 # instances keyed by everything the compiled computation depends on: the
-# network identity, the solver settings, and the call signature. A repeat solve
-# of the same (network, settings, signature) then reuses the compiled graph and
-# runs in milliseconds. The cache holds a reference to the network (and any
+# model identity, the solver settings, and the call signature. A repeat solve
+# of the same (model, settings, signature) then reuses the compiled graph and
+# runs in milliseconds. The cache holds a reference to the model (and any
 # settings objects, e.g. a custom adjoint) so their ``id()`` cannot be reused by
 # a later object while the entry is live -- keying on ``id`` is therefore safe.
 #
-# Built-in networks are themselves cached by name (``load_network``), so the
-# same network object is reused across calls and the ``id()`` key is stable
+# Built-in models are themselves cached by name (``load_model``), so the
+# same model object is reused across calls and the ``id()`` key is stable
 # across the whole process. The key NEVER omits anything that changes the
 # compiled result, so a hit always returns a solver compiled for the exact same
 # computation (no false hits); argument shapes/dtypes (C0, params, conditions,
@@ -385,7 +385,7 @@ _SOLVER_CACHE: dict = {}
 def atol_cache_key(atol):
     """A hashable, value-based key for an (array or scalar) absolute tolerance.
 
-    ``atol`` is often a per-component array derived from the network, so a fresh
+    ``atol`` is often a per-component array derived from the model, so a fresh
     array object each reactor; key on its *values* so identical tolerances share
     a cache entry.
     """
@@ -480,7 +480,7 @@ def cached_jitted_solver(key, build, *keep_alive):
     """Return the cached compiled solver for ``key``, building it once.
 
     ``build`` is a zero-arg factory returning the jitted ``_solve``; it is called
-    only on a cache miss. ``keep_alive`` objects (the network, a custom adjoint)
+    only on a cache miss. ``keep_alive`` objects (the model, a custom adjoint)
     are retained by the cache so their ``id()`` stays valid for the lifetime of
     the entry. A ``key`` of ``None`` (an un-cacheable, traced call) bypasses the
     cache and just builds.
@@ -531,23 +531,21 @@ def validate_t_eval(t_eval_arr: jnp.ndarray, t0: float, t1: float) -> None:
 
 
 class _HasNamedSpecies:
-    """Mixin: provides ``C_named`` given a ``.C`` array and ``.network``.
+    """Mixin: provides ``C_named`` given a ``.C`` array and ``.model``.
 
     Solution dataclasses inherit from this to share the species-by-name
     accessor without duplicating the implementation.
     """
 
     C: jnp.ndarray  # set by the dataclass subclass
-    network: CompiledNetwork  # set by the dataclass subclass
+    model: CompiledModel  # set by the dataclass subclass
 
     def C_named(self, species: str) -> jnp.ndarray:
         """Return the trajectory of a single species by name."""
-        if species not in self.network.species_index:
-            suffix = did_you_mean(species, self.network.species)
-            raise KeyError(
-                f"Unknown species '{species}'. Available: {self.network.species}.{suffix}"
-            )
-        return self.C[:, self.network.species_index[species]]
+        if species not in self.model.species_index:
+            suffix = did_you_mean(species, self.model.species)
+            raise KeyError(f"Unknown species '{species}'. Available: {self.model.species}.{suffix}")
+        return self.C[:, self.model.species_index[species]]
 
     def C_named_many(self, species) -> "dict[str, jnp.ndarray]":
         """Trajectories of several species by name, as ``{name: array}``.
@@ -565,11 +563,11 @@ class _HasNamedSpecies:
         The reporting shortcut for a steady-state / end-of-run value: instead of
         ``float(sol.C_named("SNH")[-1])`` per species, ``sol.final_named(["SNH",
         "SNO"])`` returns them in one dict. With ``species=None`` (default) every
-        network species is returned. Values are plain Python floats (this is a
+        model species is returned. Values are plain Python floats (this is a
         post-processing read on an already-solved solution -- use
         ``C_named(sp)[-1]`` if you need a differentiable last value).
         """
-        names = list(self.network.species) if species is None else list(species)
+        names = list(self.model.species) if species is None else list(species)
         return {sp: float(self.C_named(sp)[-1]) for sp in names}
 
     @property
@@ -584,20 +582,20 @@ class _HasNamedSpecies:
 
         Convenience for plotting and tabulating results without re-deriving
         units by string-matching species names. Equivalent to
-        ``self.network.units_of(species)``.
+        ``self.model.units_of(species)``.
         """
-        return self.network.units_of(species)
+        return self.model.units_of(species)
 
     @property
     def time_unit(self) -> "str | None":
         """The time unit of ``self.t`` (``"s"``, ``"d"``, ... or ``None``).
 
-        Defaults to the network's native unit (:attr:`CompiledNetwork.time_unit`),
+        Defaults to the model's native unit (:attr:`CompiledModel.time_unit`),
         surfaced here so a plot or table can label the time axis unambiguously.
         When the solve was called with an explicit ``time_unit=`` the result times
         are reported in *that* unit, and this returns it."""
         override = getattr(self, "_requested_time_unit", None)
-        return override if override is not None else self.network.time_unit
+        return override if override is not None else self.model.time_unit
 
     def _table_index(self) -> "tuple[str, jnp.ndarray]":
         """Return ``(name, array)`` for the dataframe index. Time by default;
@@ -605,7 +603,7 @@ class _HasNamedSpecies:
         return "t", self.t
 
     def _independent_axis_label(self) -> str:
-        """Label for the plot's independent axis. Time (with the network's
+        """Label for the plot's independent axis. Time (with the model's
         time unit) by default; a space-indexed PFR overrides this."""
         unit = self.time_unit
         return f"time [{unit}]" if unit else "time"
@@ -616,7 +614,7 @@ class _HasNamedSpecies:
 
         A thin wrapper over matplotlib so "plot SNH over time" needs no manual
         ``C_named`` / unit / axis-label boilerplate. The x-axis is labelled with
-        the network's time unit (or position for a PFR), and a single-species
+        the model's time unit (or position for a PFR), and a single-species
         plot labels the y-axis with that species' units.
 
         Parameters
@@ -646,7 +644,7 @@ class _HasNamedSpecies:
         names = (
             [species]
             if isinstance(species, str)
-            else list(self.network.species)
+            else list(self.model.species)
             if species is None
             else list(species)
         )
@@ -667,7 +665,7 @@ class _HasNamedSpecies:
     def to_dataframe(self, *, units_in_columns: bool = False):
         """Return the solution as a pandas ``DataFrame``.
 
-        One row per recorded point, one column per species (in network
+        One row per recorded point, one column per species (in model
         ordering), indexed by the independent axis (time ``t`` for batch /
         track / biofilm solutions, axial position ``x`` for a PFR).
 
@@ -690,9 +688,9 @@ class _HasNamedSpecies:
             If pandas is not installed (it is an optional dependency; install
             with ``pip install aquakin[dataframe]``).
         """
-        network = self.network
-        columns = [(sp, self.C[:, j]) for j, sp in enumerate(network.species)]
-        units = {sp: network.units_of(sp) for sp in network.species}
+        model = self.model
+        columns = [(sp, self.C[:, j]) for j, sp in enumerate(model.species)]
+        units = {sp: model.units_of(sp) for sp in model.species}
         name, index = self._table_index()
         return build_dataframe(
             index,
@@ -726,7 +724,7 @@ class Reactor(Protocol):
     ``fit`` / ``calibrate`` / ``profile_likelihood`` consume.
 
     Declares the contract those consumers actually rely on: the compiled
-    ``network``, the five solver settings every reactor exposes (set uniformly
+    ``model``, the five solver settings every reactor exposes (set uniformly
     by :func:`init_solver_settings` + :func:`resolve_state_atol`), and a
     ``solve(C0, params=None, ...)`` whose extra arguments are reactor-specific
     (a batch/biofilm reactor takes ``t_span`` / ``t_eval``; a PFR fixes its grid
@@ -738,7 +736,7 @@ class Reactor(Protocol):
     reactor carries a ``track`` instead and does not.
     """
 
-    network: CompiledNetwork
+    model: CompiledModel
     rtol: float
     atol: "float | jnp.ndarray"
     adjoint: "diffrax.AbstractAdjoint | None"
@@ -871,7 +869,7 @@ def default_atol(
         ``y0`` (the operating magnitudes).
     reference : array, optional
         A second magnitude source merged in via elementwise max -- typically the
-        network's ``default_concentrations`` (the YAML reference values), so a
+        model's ``default_concentrations`` (the YAML reference values), so a
         component that starts at 0 but has a nonzero reference is still floored
         sensibly.
     atol_factor : float
@@ -908,31 +906,31 @@ def default_atol(
 
 
 # Seconds per time unit, for converting a user-supplied ``time_unit`` to a
-# network's native (rate-constant) time unit. The keys match
-# ``CompiledNetwork.time_unit`` / ``utils.units._TIME_TOKENS``.
+# model's native (rate-constant) time unit. The keys match
+# ``CompiledModel.time_unit`` / ``utils.units._TIME_TOKENS``.
 _TIME_UNIT_SECONDS = {"s": 1.0, "min": 60.0, "h": 3600.0, "d": 86400.0}
 
 
-def native_time_factor(network_time_unit, requested_unit) -> float:
+def native_time_factor(model_time_unit, requested_unit) -> float:
     """Factor ``f`` such that ``t_native = f * t_requested``.
 
-    Converts a time expressed in ``requested_unit`` into the network's native
+    Converts a time expressed in ``requested_unit`` into the model's native
     (rate-constant) time unit, so a caller can pass ``t_span`` / ``t_eval`` in a
-    convenient unit (e.g. hours) and have the solve run with the network's
+    convenient unit (e.g. hours) and have the solve run with the model's
     unchanged rate constants. Returns ``1.0`` when ``requested_unit is None``
     (no conversion -- the default, native-unit path).
 
     Parameters
     ----------
-    network_time_unit : str or None
-        The network's native time unit (``CompiledNetwork.time_unit``).
+    model_time_unit : str or None
+        The model's native time unit (``CompiledModel.time_unit``).
     requested_unit : str or None
         The unit the caller's times are in. ``None`` means "native".
 
     Raises
     ------
     ValueError
-        If ``requested_unit`` is unknown, or it is given but the network's own
+        If ``requested_unit`` is unknown, or it is given but the model's own
         time unit could not be inferred (``None``) and so there is no native
         unit to convert to.
     """
@@ -942,20 +940,20 @@ def native_time_factor(network_time_unit, requested_unit) -> float:
         raise ValueError(
             f"Unknown time_unit {requested_unit!r}; expected one of {sorted(_TIME_UNIT_SECONDS)}."
         )
-    if network_time_unit is None:
+    if model_time_unit is None:
         raise ValueError(
             f"Cannot convert times to time_unit={requested_unit!r}: this "
-            "network's own time unit could not be inferred from its "
-            "rate-constant units (network.time_unit is None), so there is no "
+            "model's own time unit could not be inferred from its "
+            "rate-constant units (model.time_unit is None), so there is no "
             "native unit to convert to. Pass t_span / t_eval already in the "
-            "network's rate-constant time unit and omit time_unit."
+            "model's rate-constant time unit and omit time_unit."
         )
-    # network_time_unit comes from CompiledNetwork.time_unit, which only ever
+    # model_time_unit comes from CompiledModel.time_unit, which only ever
     # returns a known token, so it is guaranteed to be in the table.
-    return _TIME_UNIT_SECONDS[requested_unit] / _TIME_UNIT_SECONDS[network_time_unit]
+    return _TIME_UNIT_SECONDS[requested_unit] / _TIME_UNIT_SECONDS[model_time_unit]
 
 
-def to_native_time(network_time_unit, requested_unit, t_span, t_eval):
+def to_native_time(model_time_unit, requested_unit, t_span, t_eval):
     """Scale ``(t_span, t_eval)`` from ``requested_unit`` into native time.
 
     Returns ``(t_span_native, t_eval_native, factor)`` where ``factor`` is the
@@ -964,7 +962,7 @@ def to_native_time(network_time_unit, requested_unit, t_span, t_eval):
     ``factor`` of ``1.0`` (the ``requested_unit is None`` default, or a unit
     equal to the native one) leaves the inputs untouched.
     """
-    factor = native_time_factor(network_time_unit, requested_unit)
+    factor = native_time_factor(model_time_unit, requested_unit)
     if factor == 1.0:
         return t_span, t_eval, factor
     if t_span is not None:
@@ -974,13 +972,13 @@ def to_native_time(network_time_unit, requested_unit, t_span, t_eval):
     return t_span, t_eval, factor
 
 
-def resolve_state_atol(network, atol):
+def resolve_state_atol(model, atol):
     """Resolve the ``atol`` for a reactor whose state is one ``(n_species,)``
     concentration vector.
 
     ``atol=None`` -> the per-component :func:`default_atol` noise floor scaled off
-    the network's reference concentrations (so a g/m³ ASM network and a mol/L
-    ozone network each get sensible tolerances without hand-tuning, instead of a
+    the model's reference concentrations (so a g/m³ ASM model and a mol/L
+    ozone model each get sensible tolerances without hand-tuning, instead of a
     fixed scalar that is ~9 orders too tight for g/m³ states). An explicit scalar
     or ``(n_species,)`` array is validated and returned verbatim. Shared by every
     reactor with a single-concentration-vector state (Batch / PFR / Particle /
@@ -988,25 +986,25 @@ def resolve_state_atol(network, atol):
     compartments, sets its own scalar ``atol`` instead.
     """
     return (
-        default_atol(network.default_concentrations())
+        default_atol(model.default_concentrations())
         if atol is None
-        else _coerce_atol(atol, network.n_species)
+        else _coerce_atol(atol, model.n_species)
     )
 
 
-def init_solver_settings(reactor, network, *, rtol, integrator, diff):
+def init_solver_settings(reactor, model, *, rtol, integrator, diff):
     """Store the solver settings every reactor shares, on ``reactor``.
 
     Resolves the public :class:`IntegratorConfig` + :class:`DifferentiationConfig`
     into the primitive attributes the cache + ``_run_diffeqsolve`` path read:
-    ``network``, ``rtol``, ``adjoint`` (the diffrax adjoint object, resolved from
+    ``model``, ``rtol``, ``adjoint`` (the diffrax adjoint object, resolved from
     the differentiation config), ``dtmax``, ``max_steps``, ``order``,
     ``factormax`` and ``solver``. ``atol`` is **not** set here because its
     resolution depends on the reactor's state shape (see
     :func:`resolve_state_atol` for the single-vector case); the caller sets
     ``reactor.atol`` itself.
     """
-    reactor.network = network
+    reactor.model = model
     reactor.rtol = float(rtol)
     reactor.integrator = integrator
     reactor.diff = diff
@@ -1018,16 +1016,16 @@ def init_solver_settings(reactor, network, *, rtol, integrator, diff):
     reactor.solver = integrator.solver
 
 
-def validate_C0_params(network, C0, params):
-    """Raise ``ValueError`` if ``C0`` / ``params`` do not match the network.
+def validate_C0_params(model, C0, params):
+    """Raise ``ValueError`` if ``C0`` / ``params`` do not match the model.
 
     The shared shape check every single-vector-state reactor runs at the top of
     ``solve`` (``C0`` is ``(n_species,)``, ``params`` is ``(n_params,)``).
     """
-    if C0.shape != (network.n_species,):
-        raise ValueError(f"C0 has shape {C0.shape}, expected ({network.n_species},)")
-    if params.shape != (network.n_params,):
-        raise ValueError(f"params has shape {params.shape}, expected ({network.n_params},)")
+    if C0.shape != (model.n_species,):
+        raise ValueError(f"C0 has shape {C0.shape}, expected ({model.n_species},)")
+    if params.shape != (model.n_params,):
+        raise ValueError(f"params has shape {params.shape}, expected ({model.n_params},)")
 
 
 # The per-stage Newton (root-find) tolerance is decoupled from the step tolerance
@@ -1167,7 +1165,7 @@ def _run_diffeqsolve(
 
     ``dtmax`` caps the integrator step size. It is ``None`` (uncapped) by
     default, which is fastest for plain forward solves. For *reverse-mode*
-    differentiation of a stiff network it must be set. An L-stable solver may
+    differentiation of a stiff model it must be set. An L-stable solver may
     take steps far larger than the fastest reaction timescale and simply damp
     the unresolved fast modes in the primal (which stays accurate). The two AD
     modes then diverge: **forward mode** (``jax.jvp`` / ``jax.jacfwd``) stays
@@ -1179,7 +1177,7 @@ def _run_diffeqsolve(
     the fastest reaction timescale bounds that product; the resulting reverse
     gradient is finite and matches both forward mode and finite differences.
     This is reverse-mode-specific and independent of the adjoint flavour. See
-    the "Differentiating stiff networks" discussion in CLAUDE.md.
+    the "Differentiating stiff models" discussion in CLAUDE.md.
     """
     term = diffrax.ODETerm(rhs)
     # Build the solver + controller from the shared single-source-of-truth helpers
@@ -1208,7 +1206,7 @@ def _run_diffeqsolve(
 
 
 def make_chemistry_rhs(
-    network: CompiledNetwork,
+    model: CompiledModel,
     params: jnp.ndarray,
     *,
     cond_fn: Callable[[jnp.ndarray], Mapping[str, jnp.ndarray]],
@@ -1226,7 +1224,7 @@ def make_chemistry_rhs(
 
     Parameters
     ----------
-    network : CompiledNetwork
+    model : CompiledModel
     params : jnp.ndarray
         Parameter vector; the stoichiometry is hoisted from it once.
     cond_fn : callable
@@ -1236,21 +1234,21 @@ def make_chemistry_rhs(
         ``None`` (identity) or a scalar multiplying the rate (e.g. ``1/velocity``
         for the steady-state PFR).
     """
-    stoich = network.compute_stoich(params)
+    stoich = model.compute_stoich(params)
     if rate_scale is None:
 
         def rhs(t, C, args):
-            return network.dCdt(C, args, cond_fn(t), 0, stoich=stoich)
+            return model.dCdt(C, args, cond_fn(t), 0, stoich=stoich)
     else:
 
         def rhs(t, C, args):
-            return network.dCdt(C, args, cond_fn(t), 0, stoich=stoich) * rate_scale
+            return model.dCdt(C, args, cond_fn(t), 0, stoich=stoich) * rate_scale
 
     return rhs
 
 
 def solve_chemistry(
-    network: CompiledNetwork,
+    model: CompiledModel,
     C0: jnp.ndarray,
     params: jnp.ndarray,
     *,
@@ -1287,7 +1285,7 @@ def solve_chemistry(
     Returns the diffrax ``Solution``; callers read ``sol.ts`` / ``sol.ys`` (or
     ``sol.ys[-1]`` for a single-endpoint step).
     """
-    rhs = make_chemistry_rhs(network, params, cond_fn=cond_fn, rate_scale=rate_scale)
+    rhs = make_chemistry_rhs(model, params, cond_fn=cond_fn, rate_scale=rate_scale)
 
     return _run_diffeqsolve(
         rhs,

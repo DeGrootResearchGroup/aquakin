@@ -14,10 +14,10 @@ from aquakin.plant.influent import (
 
 @pytest.fixture
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
-def _csv_text(network):
+def _csv_text(model):
     # One header row + two data rows, in the default BSM1 column order.
     from aquakin.plant.influent import _BSM1_COLUMN_ORDER
 
@@ -31,7 +31,7 @@ def _csv_text(network):
 
 
 def test_influent_constant_is_zero_based(asm1):
-    """``network.influent`` builds a zero-based constant feed: only the named
+    """``model.influent`` builds a zero-based constant feed: only the named
     species are present, everything else is absent (not at its YAML default)."""
     from aquakin.plant.influent import InfluentSeries
 
@@ -59,7 +59,7 @@ def test_influent_carries_temperature(asm1):
 
 
 def test_influent_series_constant_classmethod(asm1):
-    """``InfluentSeries.constant`` is the same builder as ``network.influent``."""
+    """``InfluentSeries.constant`` is the same builder as ``model.influent``."""
     from aquakin.plant.influent import InfluentSeries
 
     a = asm1.influent({"SS": 60.0}, Q=100.0)

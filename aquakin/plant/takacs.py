@@ -55,7 +55,7 @@ from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 # A standard ASM1 ↔ TSS conversion used to identify the "particulate
@@ -89,8 +89,8 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     Parameters
     ----------
     name : str
-    network : CompiledNetwork
-        The network whose species ordering applies to the inlet and
+    model : CompiledModel
+        The model whose species ordering applies to the inlet and
         outlet streams.
     area : float
         Cross-sectional area (m²).
@@ -151,7 +151,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     area: float
     height: float
     overflow_Q: "float | None" = None
@@ -164,7 +164,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     # thickened bottom blanket -- instead of a uniform fill, which avoids the
     # violent startup transient (the blanket forming from scratch through the
     # flux kinks). ``init_feed_tss`` is the expected feed TSS (MLSS); if None it
-    # is taken from the network's default particulate concentrations.
+    # is taken from the model's default particulate concentrations.
     init_underflow_Q: "float | None" = None
     init_feed_tss: "float | None" = None
     particulate_species: list[str] = field(default_factory=lambda: list(ASM1_SETTLING_SPECIES))
@@ -186,11 +186,11 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         self._part_indices: list[int] = []
         self._part_tss_factors: list[float] = []
         for sp in self.particulate_species:
-            if sp not in self.network.species_index:
+            if sp not in self.model.species_index:
                 raise ValueError(
-                    f"TakacsClarifier '{self.name}': particulate species '{sp}' not in network."
+                    f"TakacsClarifier '{self.name}': particulate species '{sp}' not in model."
                 )
-            self._part_indices.append(self.network.species_index[sp])
+            self._part_indices.append(self.model.species_index[sp])
             self._part_tss_factors.append(self.tss_factors.get(sp, 1.0))
         n_part = len(self._part_indices)
 
@@ -210,7 +210,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             self._setpoints[ctrl_name] = FlowSetpoint(float(ctrl_val), 0)
         # Soluble = everything not in particulate.
         self._soluble_indices = [
-            i for i in range(self.network.n_species) if i not in self._part_indices
+            i for i in range(self.model.n_species) if i not in self._part_indices
         ]
         self._n_sol = len(self._soluble_indices)
 
@@ -306,14 +306,14 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         from aquakin.plant.coupling import CouplingPattern, ad_union
         from aquakin.plant.streams import Stream
 
-        net = self.network
+        net = self.model
         state0 = np.asarray(self.initial_state())
         base_C = np.asarray(net.default_concentrations())
         Q0 = jnp.asarray(2.0e4)  # representative positive throughput
         t0 = jnp.asarray(0.0)
 
         def make_inputs(C):
-            return {self.input_port: Stream(Q=Q0, C=C, network=net)}
+            return {self.input_port: Stream(Q=Q0, C=C, model=net)}
 
         inlet0 = make_inputs(jnp.asarray(np.maximum(np.abs(base_C), 1e-3)))
         self_jac = lambda s: jax.jacfwd(lambda x: self.rhs(t0, x, inlet0, None))(s)
@@ -330,10 +330,10 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         part_state = self._particulate_initial_state()
         if not self.soluble_holdup:
             return part_state
-        # Seed every layer at the network's default soluble concentrations; a
+        # Seed every layer at the model's default soluble concentrations; a
         # non-reacting soluble relaxes to the feed concentration anyway, so the
         # seed only affects the initial transient.
-        defaults = self.network.default_concentrations()
+        defaults = self.model.default_concentrations()
         sol_defaults = jnp.asarray([float(defaults[i]) for i in self._soluble_indices])
         sol_block = jnp.tile(sol_defaults, self.n_layers)  # (n_layers * n_sol,)
         return jnp.concatenate([part_state, sol_block])
@@ -341,7 +341,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     def _particulate_initial_state(self) -> jnp.ndarray:
         """The particulate head block of the initial state (layout per
         ``composition_mode``); unchanged by ``soluble_holdup``."""
-        defaults = self.network.default_concentrations()
+        defaults = self.model.default_concentrations()
         part_defaults = jnp.asarray([float(defaults[i]) for i in self._part_indices])
 
         if self.init_underflow_Q is None:
@@ -370,7 +370,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
 
         Builds a state-point-analysis profile -- clarification (above-feed)
         layers near the non-settleable floor, a thickened bottom blanket -- from
-        the network's default particulate concentrations and the blanket
+        the model's default particulate concentrations and the blanket
         operating point. Layer 0 is the bottom (underflow); ``n_layers - 1`` is
         the top (effluent). Shared by both composition modes.
 
@@ -387,7 +387,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         # --- State-point-analysis settled blanket ----------------------
         # Feed TSS (MLSS) the blanket is built for. The clarifier feed at
         # startup is the reactors' initial mixed-liquor, so default to the TSS
-        # implied by the network's particulate defaults.
+        # implied by the model's particulate defaults.
         factors = self._factors_arr
         X_f = (
             float(self.init_feed_tss)
@@ -509,7 +509,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         # make the downstream mixer produce negative concentrations).
         overflow_Q, underflow_Q = self._split_flows(s_in.Q, clamp=True, t=t, params=params)
 
-        n_species = self.network.n_species
+        n_species = self.model.n_species
         sol_idx, part_idx = self._sol_idx_arr, self._part_idx_arr
         part_state, sol_layered = self._unpack(state)
 
@@ -555,10 +555,8 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         )
 
         return {
-            self.overflow_port: Stream(Q=overflow_Q, C=C_overflow, network=self.network, T=s_in.T),
-            self.underflow_port: Stream(
-                Q=underflow_Q, C=C_underflow, network=self.network, T=s_in.T
-            ),
+            self.overflow_port: Stream(Q=overflow_Q, C=C_overflow, model=self.model, T=s_in.T),
+            self.underflow_port: Stream(Q=underflow_Q, C=C_underflow, model=self.model, T=s_in.T),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:

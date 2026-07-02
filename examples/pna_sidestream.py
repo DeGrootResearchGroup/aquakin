@@ -26,12 +26,12 @@ import jax.numpy as jnp
 import aquakin
 from aquakin.plant import Aeration, CSTRUnit, InfluentSeries, Plant
 
-net = aquakin.load_network("asm3_2step_anammox")
+net = aquakin.load_model("asm3_2step_anammox")
 
 # One low-DO CSTR. V/Q = 30 d HRT (retains anammox); kLa = 4/d holds DO ~ 0.05.
 V, Q = 3000.0, 100.0
 tank = CSTRUnit(
-    name="reactor", network=net, volume=V, input_port_names=["in"],
+    name="reactor", model=net, volume=V, input_port_names=["in"],
     conditions={"T": 303.15},                       # 30 C sidestream
     aeration=Aeration(kla=4.0, species="SO2"),       # low DO; SO2 is the O2 species
     output_port="out",

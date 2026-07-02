@@ -10,7 +10,7 @@ from aquakin.plant.units import StatelessUnit, Unit
 
 
 def _net():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def test_stateless_units_inherit_the_mixin():
@@ -18,8 +18,8 @@ def test_stateless_units_inherit_the_mixin():
     units = [
         MixerUnit("mix", ["a", "b"], net),
         SplitterUnit("split", net, output_port_ratios={"x": 0.5, "y": 0.5}),
-        IdealClarifier(name="clar", network=net, underflow_Q=100.0),
-        IdealThickener(name="thick", network=net, target_tss_percent=5.0),
+        IdealClarifier(name="clar", model=net, underflow_Q=100.0),
+        IdealThickener(name="thick", model=net, target_tss_percent=5.0),
     ]
     for u in units:
         assert isinstance(u, StatelessUnit)
@@ -42,4 +42,4 @@ def test_mixin_composes_with_dataclass_fields():
     m = MixerUnit("mix", ["a", "b"], net)
     assert m.name == "mix"
     assert m.input_port_names == ["a", "b"]
-    assert m.network is net
+    assert m.model is net

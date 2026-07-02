@@ -19,10 +19,10 @@ from aquakin.core.vector_kernel import (
 )
 
 
-# Networks spanning the node set: inline-division Monods (asm1), pH-switch /
+# Models spanning the node set: inline-division Monods (asm1), pH-switch /
 # pH-inhibit / safe_div / max (adm1), Arrhenius / state-derived pH (wats),
-# the SUMO bio-P models, and a precipitation network (derived SI_/R_ fields).
-_NETWORKS = [
+# the SUMO bio-P models, and a precipitation model (derived SI_/R_ fields).
+_MODELS = [
     "ozone_bromate", "uv_h2o2", "asm1", "asm2d", "asm2d_tud", "asm3",
     "asm3_2step", "adm1", "wats_sewer", "wats_sewer_extended",
     "precipitation_struvite_calcite",
@@ -64,12 +64,12 @@ def _prepared_inputs(net, C, loc_idx=0):
     return Cc, p, ca
 
 
-@pytest.mark.parametrize("name", _NETWORKS)
+@pytest.mark.parametrize("name", _MODELS)
 def test_kernel_is_bit_identical_to_scalar(name):
     """The kernel reproduces the scalar rate vector exactly (every byte), at a
     randomized feasible state -- not merely close. Bit-identicality is the whole
     safety guarantee (every validated steady state is preserved)."""
-    net = aquakin.load_network(name)
+    net = aquakin.load_model(name)
     assert net._rate_kernel is not None, f"{name}: kernel should be built"
     rng = np.random.default_rng(12345)
     for _ in range(8):
@@ -81,12 +81,12 @@ def test_kernel_is_bit_identical_to_scalar(name):
         assert jnp.array_equal(r_scalar, r_kernel), name
 
 
-@pytest.mark.parametrize("name", _NETWORKS)
+@pytest.mark.parametrize("name", _MODELS)
 def test_kernel_reduces_op_count(name):
     """The kernel's traced jaxpr is no larger than the scalar stack's -- the
-    compile-time payoff. (For the big stiff networks it is several-fold smaller;
+    compile-time payoff. (For the big stiff models it is several-fold smaller;
     here we only assert it never regresses.)"""
-    net = aquakin.load_network(name)
+    net = aquakin.load_model(name)
     C = net.default_concentrations()
     Cc, p, ca = _prepared_inputs(net, C)
     scalar_eqns = _count_eqns(
@@ -100,10 +100,10 @@ def test_kernel_reduces_op_count(name):
     )
 
 
-def test_kernel_op_count_reduction_is_large_on_a_big_network():
+def test_kernel_op_count_reduction_is_large_on_a_big_model():
     """A concrete floor: the kernel cuts the WATS rate jaxpr by >= 3x, the
     headline result of issue #373."""
-    net = aquakin.load_network("wats_sewer_extended")
+    net = aquakin.load_model("wats_sewer_extended")
     C = net.default_concentrations()
     Cc, p, ca = _prepared_inputs(net, C)
     scalar = _count_eqns(
@@ -113,14 +113,14 @@ def test_kernel_op_count_reduction_is_large_on_a_big_network():
     assert scalar / kernel >= 3.0
 
 
-@pytest.mark.parametrize("name", _NETWORKS)
+@pytest.mark.parametrize("name", _MODELS)
 def test_kernel_jacobian_is_finite_and_matches_scalar(name):
     """``dr/dC`` through the kernel is finite and matches the scalar Jacobian on
-    every network. The forward value being bit-identical does NOT imply the
+    every model. The forward value being bit-identical does NOT imply the
     derivative is sound (a constant-exponent pow can NaN the derivative while the
     value is exact), so this gradient-level check is the necessary companion to
     the forward bit-identicality test."""
-    net = aquakin.load_network(name)
+    net = aquakin.load_model(name)
     rng = np.random.default_rng(7)
     C = jnp.asarray(rng.uniform(0.0, 5.0, net.n_species))
     Cc, p, ca = _prepared_inputs(net, C)
@@ -132,7 +132,7 @@ def test_kernel_jacobian_is_finite_and_matches_scalar(name):
 
 def test_grad_flows_through_kernel():
     """jax.grad flows through a kernel-backed batch solve and is finite."""
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     reactor = aquakin.BatchReactor(
         net, net.default_conditions(),
         integrator=aquakin.IntegratorConfig(dtmax=1e-2))
@@ -155,7 +155,7 @@ def test_kernel_matches_scalar_gradient():
     through different ops (gather / concatenate vs slice / stack), so cotangents
     accumulate in a different summation order -- the gradients agree to
     machine precision, not bit-for-bit. A tight tolerance pins AD parity."""
-    net = aquakin.load_network("asm3")
+    net = aquakin.load_model("asm3")
     C = net.default_concentrations()
     ca = net.default_conditions().fields
 
@@ -180,9 +180,9 @@ def test_constant_exponent_keeps_derivative_finite():
     value activates the generic pow JVP's ``base**exp * log(base)`` term
     (``0 * log(0) = NaN`` at ``base == 0``). The kernel keeps constant exponents
     static (the ``powc`` kind) so it matches the scalar path's finite gradient.
-    The whole-network forward bit-identicality test does NOT catch this -- only a
+    The whole-model forward bit-identicality test does NOT catch this -- only a
     derivative check does."""
-    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     C = net.default_concentrations()
     ca = net.default_conditions(1).fields
 
@@ -201,7 +201,7 @@ def test_constant_exponent_keeps_derivative_finite():
 
 
 def test_unsupported_node_falls_back_to_scalar():
-    """A network with an AST node type the kernel does not handle leaves
+    """A model with an AST node type the kernel does not handle leaves
     ``_rate_kernel`` as ``None`` (scalar fallback), rather than raising at load.
     """
     from aquakin.core import nodes
@@ -211,7 +211,7 @@ def test_unsupported_node_falls_back_to_scalar():
         def compile(self, ctx):  # pragma: no cover - not evaluated here
             raise NotImplementedError
 
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     with pytest.raises(UnsupportedNode):
         build_vectorized_rates(
             [_UnknownNode()], ["r"], net.species_index, net.param_index

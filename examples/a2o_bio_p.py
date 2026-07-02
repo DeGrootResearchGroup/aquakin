@@ -1,6 +1,6 @@
 """A²O biological-nutrient-removal plant (ASM2d): simultaneous C/N/P removal.
 
-Builds the default Anaerobic–Anoxic–Oxic flowsheet on the ASM2d network, warm-
+Builds the default Anaerobic–Anoxic–Oxic flowsheet on the ASM2d model, warm-
 started from a healthy enhanced-biological-phosphorus-removal (EBPR) sludge, and
 reports the effluent and the bio-P signature (anaerobic phosphate release +
 aerobic luxury uptake / poly-P storage).
@@ -20,7 +20,7 @@ from aquakin.plant import build_a2o, a2o_influent, a2o_warm_start
 
 
 def main():
-    net = aquakin.load_network("asm2d")
+    net = aquakin.load_model("asm2d")
     plant = build_a2o(net)
     influent = a2o_influent(net)
     plant.add_influent("feed", influent)

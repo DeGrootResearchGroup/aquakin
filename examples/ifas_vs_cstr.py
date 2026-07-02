@@ -17,12 +17,12 @@ import aquakin
 from aquakin.plant import Aeration, CSTRUnit, IFASUnit, Plant
 
 
-def _single_tank_plant(unit, network):
+def _single_tank_plant(unit, model):
     plant = Plant("demo")
     plant.add_unit(unit)
     plant.add_influent(
         "feed",
-        network.influent({"SS": 60.0, "SNH": 25.0, "XB_H": 50.0, "SO": 2.0},
+        model.influent({"SS": 60.0, "SNH": 25.0, "XB_H": 50.0, "SO": 2.0},
                          Q=500.0),
         to="r.in",
     )
@@ -30,7 +30,7 @@ def _single_tank_plant(unit, network):
 
 
 def main() -> None:
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     aeration = Aeration(kla=600.0)
 
     cstr = CSTRUnit("r", net, volume=1000.0, input_port_names=["in"],

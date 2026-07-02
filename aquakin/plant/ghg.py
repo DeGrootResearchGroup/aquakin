@@ -7,7 +7,7 @@ warming potentials (GWPs):
 * **Direct N₂O** -- nitrous oxide stripped from the aerated reactors. N₂O is a
   potent greenhouse gas (GWP ~273) and the dominant *direct* footprint of an
   activated-sludge plant. It is produced by the nitrifier pathways resolved in
-  the N₂O kinetic networks (a tracked dissolved ``SN2O`` state); the stripping
+  the N₂O kinetic models (a tracked dissolved ``SN2O`` state); the stripping
   to atmosphere is a reactor concern, computed here from the dissolved
   concentration and the aeration intensity (:func:`stripped_n2o`).
 * **Energy CO₂e** -- the indirect footprint of the electricity the plant draws

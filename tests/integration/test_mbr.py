@@ -22,7 +22,7 @@ _PARTS = ["XI", "XS", "XB_H", "XB_A", "XP", "XND"]
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _mbr(asm1, **kw):
@@ -70,7 +70,7 @@ def test_permeate_rejects_particulates_passes_solubles(asm1):
     mbr = _mbr(asm1, rejection=0.99)
     C = asm1.concentrations({"XB_H": 2000.0, "SS": 5.0})
     s_in = Stream(Q=jnp.asarray(1000.0), C=asm1.default_concentrations(),
-                  network=asm1)
+                  model=asm1)
     state = jnp.concatenate([C, jnp.zeros((1,))])
     outs = mbr.compute_outputs(jnp.asarray(0.0), state, {"feed": s_in},
                                asm1.default_parameters())
@@ -166,9 +166,9 @@ def test_inlet_temperature_propagates_and_drives_kinetics(asm1):
     state = jnp.concatenate([C, jnp.zeros((1,))])
     p = asm1.default_parameters()
     cold = Stream(Q=jnp.asarray(1000.0), C=asm1.default_concentrations(),
-                  network=asm1, T=283.15)
+                  model=asm1, T=283.15)
     warm = Stream(Q=jnp.asarray(1000.0), C=asm1.default_concentrations(),
-                  network=asm1, T=303.15)
+                  model=asm1, T=303.15)
     outs = mbr.compute_outputs(jnp.asarray(0.0), state, {"feed": cold}, p)
     assert float(outs["permeate"].T) == pytest.approx(283.15)   # carried downstream
     assert float(outs["waste"].T) == pytest.approx(283.15)

@@ -1,7 +1,7 @@
 """Reference warm-start states for the BSM plants.
 
 **Why BSM2 needs a warm start.** The BSM2 anaerobic digester has a ~19-day
-hydraulic retention time, so from a cold start (network defaults) the plant's
+hydraulic retention time, so from a cold start (model defaults) the plant's
 slowest mode takes weeks of simulated time to settle, and the cold-start
 transient -- a near-empty activated-sludge basin filling against the recycle
 loops -- is stiff enough to crawl or hit the integrator step ceiling. Seeding
@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Optional
 import jax.numpy as jnp
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
     from aquakin.plant.plant import Plant
 
 
@@ -84,17 +84,17 @@ def _as_reactor_names(plant: "Plant") -> list:
     return reactors
 
 
-def _warm_y0(plant, composition, asm1_network):
+def _warm_y0(plant, composition, asm1_model):
     """Build a flat plant ``y0`` seeding the AS reactors with ``composition``."""
     reactors = _as_reactor_names(plant)
-    asm1 = asm1_network if asm1_network is not None else plant.units[reactors[0]].network
+    asm1 = asm1_model if asm1_model is not None else plant.units[reactors[0]].model
     warm = asm1.concentrations(composition)
     return plant.initial_state(overrides={name: warm for name in reactors})
 
 
 def bsm2_warm_start(
     plant: "Plant",
-    asm1_network: Optional["CompiledNetwork"] = None,
+    asm1_model: Optional["CompiledModel"] = None,
 ) -> jnp.ndarray:
     """A warm-start initial state ``y0`` for a BSM2 plant.
 
@@ -109,9 +109,9 @@ def bsm2_warm_start(
     plant : Plant
         A BSM2 plant from :func:`aquakin.plant.bsm.build_bsm2`, with its
         influent already added.
-    asm1_network : CompiledNetwork, optional
-        The water-line ASM1 network (for the composition vector). Defaults to
-        the network of the plant's first AS reactor.
+    asm1_model : CompiledModel, optional
+        The water-line ASM1 model (for the composition vector). Defaults to
+        the model of the plant's first AS reactor.
 
     Returns
     -------
@@ -125,12 +125,12 @@ def bsm2_warm_start(
     >>> y0 = bsm2_warm_start(plant)                          # doctest: +SKIP
     >>> sol = plant.solve(t_span=(0.0, 200.0), params=params, y0=y0)  # doctest: +SKIP
     """
-    return _warm_y0(plant, BSM2_WARM_REACTOR_COMPOSITION, asm1_network)
+    return _warm_y0(plant, BSM2_WARM_REACTOR_COMPOSITION, asm1_model)
 
 
 def bsm1_warm_start(
     plant: "Plant",
-    asm1_network: Optional["CompiledNetwork"] = None,
+    asm1_model: Optional["CompiledModel"] = None,
 ) -> jnp.ndarray:
     """A warm-start initial state ``y0`` for a BSM1 plant.
 
@@ -144,12 +144,12 @@ def bsm1_warm_start(
     plant : Plant
         A BSM1 plant from :func:`aquakin.plant.bsm.build_bsm1`, with its
         influent already added.
-    asm1_network : CompiledNetwork, optional
-        The ASM1 network. Defaults to the network of the plant's first reactor.
+    asm1_model : CompiledModel, optional
+        The ASM1 model. Defaults to the model of the plant's first reactor.
 
     Returns
     -------
     jnp.ndarray
         The flat warm-start plant state, shape ``(total_state_size,)``.
     """
-    return _warm_y0(plant, BSM1_WARM_REACTOR_COMPOSITION, asm1_network)
+    return _warm_y0(plant, BSM1_WARM_REACTOR_COMPOSITION, asm1_model)

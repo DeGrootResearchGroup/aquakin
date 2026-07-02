@@ -24,7 +24,7 @@ from aquakin.plant.streams import Stream, mixed_temperature
 from aquakin.plant.temperature import OPERATING_T_SIGNAL
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 def oxygen_saturation(T_K):
@@ -268,7 +268,7 @@ class AerationVectors:
     saturation_model: str = "benson_krause"
 
 
-def build_aeration_vectors(aeration, network, unit_name: str) -> AerationVectors:
+def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
     """Translate an :class:`Aeration` spec into the per-species RHS vectors.
 
     The constant (temperature-independent) corrections fold straight in: beta
@@ -278,16 +278,16 @@ def build_aeration_vectors(aeration, network, unit_name: str) -> AerationVectors
     / off, so a plain ``Aeration(kla=...)`` or ``aeration=None`` is unchanged.
     """
     controlled: dict[str, tuple[str, float]] = {}
-    kla_vec = jnp.zeros((network.n_species,))
-    sat_vec = jnp.zeros((network.n_species,))
+    kla_vec = jnp.zeros((model.n_species,))
+    sat_vec = jnp.zeros((model.n_species,))
     ref_T, kla_theta, temp_correct = 293.15, 1.024, False
     saturation_model = "benson_krause"
     if aeration is not None:
-        if aeration.species not in network.species_index:
+        if aeration.species not in model.species_index:
             raise ValueError(
-                f"'{unit_name}' aeration species '{aeration.species}' is not in the network."
+                f"'{unit_name}' aeration species '{aeration.species}' is not in the model."
             )
-        idx = network.species_index[aeration.species]
+        idx = model.species_index[aeration.species]
         sat_vec = sat_vec.at[idx].set(
             float(aeration.do_sat) * float(aeration.beta) * float(aeration.pressure_factor)
         )
@@ -304,7 +304,7 @@ def build_aeration_vectors(aeration, network, unit_name: str) -> AerationVectors
     )
 
 
-def aeration_transfer(av: AerationVectors, C, T_eff, signals, network):
+def aeration_transfer(av: AerationVectors, C, T_eff, signals, model):
     """The per-species mass-transfer term ``kLa * (C_sat - C)`` for state ``C``.
 
     Applies the temperature correction (saturation by ``C_s(T)/C_s(ref)``, the
@@ -331,7 +331,7 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, network):
                 "silently leave it unaerated."
             )
         for sp, (signal_name, gain) in av.controlled.items():
-            idx = network.species_index[sp]
+            idx = model.species_index[sp]
             kla_vec = kla_vec.at[idx].set(signals[signal_name] * gain)
     return kla_vec * (sat_vec - C)
 
@@ -342,7 +342,7 @@ class AerationUnit:
     Translates the ``Aeration`` spec into the per-species RHS vectors once and
     exposes the readers the aeration-energy / O2-balance code and the control bus
     use, so a CSTR, an IFAS/MBBR tank and an MBR share one definition instead of
-    each re-deriving them. A consumer sets ``self.aeration`` / ``self.network`` /
+    each re-deriving them. A consumer sets ``self.aeration`` / ``self.model`` /
     ``self.name`` and calls :meth:`_setup_aeration` from its ``__post_init__``;
     the flow-weighted inlet temperature reads the unit's ``input_ports``.
     """
@@ -350,9 +350,9 @@ class AerationUnit:
     def _setup_aeration(self) -> None:
         """Build the per-species aeration vectors (fixed-kLa / saturation, the
         closed-loop signal map, the temperature-correction config) into
-        ``self._av``. Call from ``__post_init__`` once ``aeration`` / ``network``
+        ``self._av``. Call from ``__post_init__`` once ``aeration`` / ``model``
         / ``name`` are set."""
-        self._av = build_aeration_vectors(self.aeration, self.network, self.name)
+        self._av = build_aeration_vectors(self.aeration, self.model, self.name)
 
     @property
     def required_signals(self) -> tuple[str, ...]:
@@ -396,8 +396,8 @@ class CSTRUnit(AerationUnit, CouplingAware):
     ----------
     name : str
         Unit identifier.
-    network : CompiledNetwork
-        Kinetic network whose rate functions provide the chemistry term.
+    model : CompiledModel
+        Kinetic model whose rate functions provide the chemistry term.
     volume : float
         Tank liquid volume.
     input_port_names : list[str]
@@ -405,7 +405,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
         (treated as a built-in mixer) before the mass balance.
     conditions : dict[str, float]
         Spatially-uniform condition values (e.g. ``{"T": 293.15}``). One
-        value per condition declared by the network.
+        value per condition declared by the model.
     aeration : Aeration, optional
         How the tank is aerated. ``None`` (default) is an anoxic/anaerobic tank
         (no aeration). ``Aeration(kla=120)`` is open-loop aeration at a fixed
@@ -417,7 +417,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     volume: float
     input_port_names: list[str]
     conditions: dict[str, float] = field(default_factory=dict)
@@ -425,7 +425,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
     output_port: str = "out"
 
     def __post_init__(self) -> None:
-        missing = set(self.network.conditions_required) - set(self.conditions)
+        missing = set(self.model.conditions_required) - set(self.conditions)
         if missing:
             raise ValueError(
                 f"CSTRUnit '{self.name}' is missing required condition values "
@@ -442,12 +442,12 @@ class CSTRUnit(AerationUnit, CouplingAware):
         # loc_idx=0 — same convention as BatchReactor.
         self._condition_arrays = {
             name: jnp.asarray([float(self.conditions[name])])
-            for name in self.network.conditions_required
+            for name in self.model.conditions_required
         }
 
     @property
     def state_size(self) -> int:
-        return self.network.n_species
+        return self.model.n_species
 
     def set_temperature(self, temperature_K: float) -> None:
         """Set this reactor's static operating temperature (Kelvin).
@@ -455,10 +455,10 @@ class CSTRUnit(AerationUnit, CouplingAware):
         Updates the ``T`` condition (and its precomputed rate-evaluation array)
         in place, so a re-solve runs the kinetics -- including any Arrhenius
         ``temperature_corrections`` -- at the new temperature. A no-op for a
-        network that declares no ``T`` condition. The plant clears its compiled-
+        model that declares no ``T`` condition. The plant clears its compiled-
         solve cache after calling this; on a bare unit, rebuild any cached solve.
         """
-        if "T" not in self.network.conditions_required:
+        if "T" not in self.model.conditions_required:
             return
         self.conditions = {**self.conditions, "T": float(temperature_K)}
         self._condition_arrays = {
@@ -475,7 +475,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
         return [self.output_port]
 
     def initial_state(self) -> jnp.ndarray:
-        return self.network.default_concentrations()
+        return self.model.default_concentrations()
 
     def coupling_pattern(self):
         """Structural Jacobian sparsity (issue #388).
@@ -491,9 +491,9 @@ class CSTRUnit(AerationUnit, CouplingAware):
         from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
         from aquakin.plant.coupling import CouplingPattern
 
-        n = self.network.n_species
+        n = self.model.n_species
         return CouplingPattern(
-            self_pattern=structural_sparsity_pattern(self.network),
+            self_pattern=structural_sparsity_pattern(self.model),
             inlet_pattern=np.eye(n, dtype=bool),
         )
 
@@ -514,7 +514,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
             self.output_port: Stream(
                 Q=Q_total,
                 C=state,
-                network=self.network,
+                model=self.model,
                 T=self._mixed_inlet_T(inputs),
             )
         }
@@ -536,7 +536,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
     ) -> jnp.ndarray:
         # Mix inflows (Q-weighted).
         Q_total = jnp.zeros(())
-        mass_total = jnp.zeros((self.network.n_species,))
+        mass_total = jnp.zeros((self.model.n_species,))
         for name in self.input_port_names:
             s = inputs[name]
             Q_total = Q_total + s.Q
@@ -550,7 +550,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
         # plant-supplied operating temperature (the lagged tank state under a
         # heat-balance temperature model, threaded in via the control-signal bus);
         # else the flow-weighted inlet temperature (the instantaneous/algebraic
-        # default); else the static condition value. When set and the network uses
+        # default); else the static condition value. When set and the model uses
         # a 'T' condition, temperature-dependent kinetics run at it -- so they
         # track the season.
         conditions = self._condition_arrays
@@ -561,13 +561,13 @@ class CSTRUnit(AerationUnit, CouplingAware):
             T_in = self._mixed_inlet_T(inputs)
         if T_in is not None and "T" in self._condition_arrays:
             conditions = {**self._condition_arrays, "T": jnp.reshape(T_in, (1,))}
-        # The reaction term is the network's canonical dCdt -- it applies
+        # The reaction term is the model's canonical dCdt -- it applies
         # clip_negative_states to the rate inputs and the positivity limiter to
         # the net term, so a fully consumed soluble cannot integrate negative and
         # recirculate. Convection/aeration are added on top, unlimited (the
         # reaction term is the only one the limiter guards).
-        stoich = self.network.compute_stoich(params)
-        chemistry = self.network.dCdt(state, params, conditions, 0, stoich=stoich)
+        stoich = self.model.compute_stoich(params)
+        chemistry = self.model.dCdt(state, params, conditions, 0, stoich=stoich)
 
         # Aeration (mass transfer). The operating temperature for the optional
         # driving-force correction is the (flow-weighted) inlet T the kinetics use,
@@ -575,6 +575,6 @@ class CSTRUnit(AerationUnit, CouplingAware):
         # only when the spec enables it, then overrides any closed-loop kLa with
         # its control signal.
         T_eff = T_in if T_in is not None else self.conditions.get("T")
-        aeration = aeration_transfer(self._av, state, T_eff, signals, self.network)
+        aeration = aeration_transfer(self._av, state, T_eff, signals, self.model)
 
         return convection + chemistry + aeration

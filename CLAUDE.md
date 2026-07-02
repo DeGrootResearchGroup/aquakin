@@ -23,22 +23,22 @@ Checklist still governs).
 | Rule | Loads for | Covers |
 |---|---|---|
 | `.claude/rules/core.md` | `aquakin/core/**` | AST rate evaluation, parser, vectorized kernel, `SpatialConditions`, parameter namespacing, charge-balance pH / `speciation:`, mineral `precipitation:` |
-| `.claude/rules/integration.md` | `aquakin/integrate/**` | solver choice, differentiating stiff networks (`dtmax`, adjoints, discrete adjoint), operator splitting, located events, compiled-solve caching |
-| `.claude/rules/schema.md` | `aquakin/schema/**`, `**/*.yaml` | YAML network format + Pydantic schema rules (stoichiometry expressions, `extends:`, `auto`, `composition:`, `speciation:`, `precipitation:`) |
+| `.claude/rules/integration.md` | `aquakin/integrate/**` | solver choice, differentiating stiff models (`dtmax`, adjoints, discrete adjoint), operator splitting, located events, compiled-solve caching |
+| `.claude/rules/schema.md` | `aquakin/schema/**`, `**/*.yaml` | YAML model format + Pydantic schema rules (stoichiometry expressions, `extends:`, `auto`, `composition:`, `speciation:`, `precipitation:`) |
 | `.claude/rules/plant.md` | `aquakin/plant/**` | plant-wide simulation: units, recycle resolution, BSM1/BSM2/A²O builders, control, dosing, design, evaluation |
-| `.claude/rules/networks.md` | `aquakin/networks/**` | network authoring: pointers to the catalog, the schema rules, and the `_make_*` generators |
+| `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog, the schema rules, and the `_make_*` generators |
 
 **On-demand docs (read when needed):**
 
 | Doc | Contents |
 |---|---|
-| `docs/network_catalog.md` | the full per-network catalog (every shipped network, provenance, documented corrections) |
+| `docs/model_catalog.md` | the full per-model catalog (every shipped model, provenance, documented corrections) |
 | `docs/khalil_reproduction_log.md` | the JRN-055 Khalil model-improvement sequence |
 | `docs/public_api.md` | the full public API reference with worked usage |
 | `docs/package_structure.md` | the annotated package file tree |
 | `docs/plant_performance.md` | the dynamic-solve performance log (the stiffness-bound regime and its levers) |
 | `docs/ci.md` | the CI architecture (sharding, gates, heavy runner, labels) |
-| `docs/network_format.md`, `docs/adding_networks.md`, `docs/index.md` | existing reference docs |
+| `docs/model_format.md`, `docs/adding_models.md`, `docs/index.md` | existing reference docs |
 
 ---
 
@@ -50,20 +50,20 @@ configurable kinetics engine that can be coupled to any flow solver.
 
 Both **chemistry** (ozonation, advanced oxidation, chlorine decay, ...) and
 **biology** (activated sludge models, anaerobic digestion, ...) are in scope.
-> The full per-network catalog (what each shipped network is, its provenance,
-> and the documented corrections) is in **`docs/network_catalog.md`**; the
+> The full per-model catalog (what each shipped model is, its provenance,
+> and the documented corrections) is in **`docs/model_catalog.md`**; the
 > Khalil model-improvement log is in **`docs/khalil_reproduction_log.md`**.
 
 ---
 
 ## Design Goals
 
-- Reaction networks defined at runtime via YAML — no recompilation required
+- Reaction models defined at runtime via YAML — no recompilation required
 - Full automatic differentiation (AD) throughout via JAX
 - JAX-native stiff ODE integration via Diffrax
 - Clean separation between flow solver and kinetic system
 - Safe, introspectable rate expression evaluation via AST (no `eval()`)
-- Graduate-student-friendly authoring experience for network files
+- Graduate-student-friendly authoring experience for model files
 
 ---
 
@@ -77,7 +77,7 @@ Both **chemistry** (ozonation, advanced oxidation, chlorine decay, ...) and
 | ODE integration | Diffrax | JAX-native stiff solvers, adjoint support |
 | Schema validation | Pydantic | Clear load-time errors for malformed YAML |
 | Runtime data model | Python dataclasses | JAX-friendly, no Pydantic overhead at runtime |
-| Network format | YAML | Human-readable, supports inline comments for literature citations |
+| Model format | YAML | Human-readable, supports inline comments for literature citations |
 | Rate expression evaluation | Custom AST + recursive descent parser | Safe, differentiable, introspectable |
 
 ---
@@ -88,11 +88,11 @@ Both **chemistry** (ozonation, advanced oxidation, chlorine decay, ...) and
 ### Two-Layer Data Model
 
 **Layer 1 — Pydantic schema (load time)**
-Parses and validates YAML network files. Produces clean Python objects with
+Parses and validates YAML model files. Produces clean Python objects with
 clear error messages for malformed input. Pydantic is used only during loading
 — it never appears in the runtime hot path.
 
-**Layer 2 — Compiled runtime (CompiledNetwork dataclass)**
+**Layer 2 — Compiled runtime (CompiledModel dataclass)**
 JAX-friendly dataclasses built from the validated schema via a `compile()`
 step. This is what the integrators and rate functions operate on. No Pydantic
 dependency at runtime.
@@ -102,9 +102,9 @@ dependency at runtime.
 ```
 YAML file
    ↓  loader.py (Pydantic validation)
-NetworkSpec
+ModelSpec
    ↓  compile()
-CompiledNetwork  ←→  SpatialConditions
+CompiledModel  ←→  SpatialConditions
    ↓
 rates(C, params, condition_arrays, loc_idx)
    ↓
@@ -140,7 +140,7 @@ and sensitivity analysis.
 
 Shape `(n_reactions, n_species)`. Entry `[i, j]` is the stoichiometric
 coefficient of species j in reaction i. Built once at compile time and stored
-in `CompiledNetwork`.
+in `CompiledModel`.
 
 ---
 
@@ -191,7 +191,7 @@ pytest                                     # everything
 
 First-order decay `A → B` with rate `k * [A]` has the analytical solution
 `[A](t) = [A]₀ * exp(-k*t)`. This is the primary integration test and must
-always pass. It lives in `tests/fixtures/simple_network.yaml` and
+always pass. It lives in `tests/fixtures/simple_model.yaml` and
 `tests/integration/test_batch_simple.py`.
 
 ### AD Correctness Test
@@ -218,7 +218,7 @@ private source files (e.g. a `.c` we ported from), internal model names, paper
 filenames, or "the reference" / "the original". Such notes are meaningless to
 anyone but the original authors and rot immediately. Explain the code on its
 own terms (what the math/logic is and why), not by pointing at something the
-reader cannot see. Genuine scientific provenance belongs in a network YAML's
+reader cannot see. Genuine scientific provenance belongs in a model YAML's
 `references:` block as a proper literature citation, not scattered through code
 comments.
 
@@ -230,7 +230,7 @@ All functions, classes, and methods use **NumPy docstring format**:
 ```python
 def solve(self, C0, params, t_span, t_eval=None):
     """
-    Integrate the reaction network over a time span.
+    Integrate the reaction model over a time span.
 
     Parameters
     ----------
@@ -238,7 +238,7 @@ def solve(self, C0, params, t_span, t_eval=None):
         Initial concentration vector, shape (n_species,).
     params : jnp.ndarray
         Rate constant vector, shape (n_params,). Use
-        ``network.default_parameters()`` as a starting point.
+        ``model.default_parameters()`` as a starting point.
     t_span : tuple of float
         (t_start, t_end) integration interval in seconds.
     t_eval : jnp.ndarray, optional
@@ -258,9 +258,9 @@ def solve(self, C0, params, t_span, t_eval=None):
 
     Examples
     --------
-    >>> reactor = aquakin.BatchReactor(network, conditions)
-    >>> sol = reactor.solve(network.default_concentrations(),
-    ...                     network.default_parameters(),
+    >>> reactor = aquakin.BatchReactor(model, conditions)
+    >>> sol = reactor.solve(model.default_concentrations(),
+    ...                     model.default_parameters(),
     ...                     t_span=(0.0, 600.0))
     >>> sol.C_named("BrO3-")
     """
@@ -313,7 +313,7 @@ Don't try to `git push` from inside the sandbox; it fails with
 > rationale, and the `full-ci` / `skip-heavy` labels — is in **`docs/ci.md`**.
 > A green **`fast gate`** is the merge gate; apply the **`full-ci`** label to any
 > PR touching convergence-sensitive code (integrators/adjoints, the PTC steady
-> solver, plant assembly/recycle, network stoichiometry, the pH/precipitation
+> solver, plant assembly/recycle, model stoichiometry, the pH/precipitation
 > solvers, or the metric/mass-balance kernels).
 
 ---
@@ -326,7 +326,7 @@ act on the following:
 1. **Tests** — Are new tests needed for the changed or added functionality?
    - New node type → unit test in `test_nodes.py`
    - New public API function → integration test
-   - New built-in network → validation test against literature data
+   - New built-in model → validation test against literature data
    - Bug fix → regression test
 
 2. **CLAUDE.md** — Does this file need updating?
@@ -338,7 +338,7 @@ act on the following:
 
 3. **README.md** — Does the user-facing documentation need updating?
    - New public API functions
-   - New built-in networks
+   - New built-in models
    - Installation or dependency changes
    - New examples
 

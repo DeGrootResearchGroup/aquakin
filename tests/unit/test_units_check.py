@@ -2,7 +2,7 @@
 
 Three layers: the currency-token :class:`Dimension` algebra, the tolerant
 unit-string parser, and the propagation/check over a rate AST. The check must
-(a) stay silent on the correctly-annotated shipped networks (no false alarm) and
+(a) stay silent on the correctly-annotated shipped models (no false alarm) and
 (b) actually catch the authoring bugs it targets -- a dropped concentration
 factor, a Monod term mixing two currencies, a cross-currency sum.
 
@@ -185,7 +185,7 @@ def test_check_root_toggle():
 # --- the full load -> check_units path --------------------------------------
 
 def test_units_metadata_carried_through():
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     # the new ConditionSpec.units field and the parameter units reach compile
     assert isinstance(net.condition_units, dict)
     assert isinstance(net.parameter_units, dict)
@@ -196,22 +196,22 @@ def test_units_metadata_carried_through():
     "asm1", "asm2d", "asm3", "asm3_biop", "ozone_bromate", "uv_h2o2",
     "wats_sewer",
 ])
-def test_shipped_networks_are_unit_clean(name):
-    # the correctly-annotated shipped networks raise no warning (the check is
+def test_shipped_models_are_unit_clean(name):
+    # the correctly-annotated shipped models raise no warning (the check is
     # advisory, so this is the no-false-positive guard, not a proof of math).
     # The SUMO-derived asm2d/asm3/asm3_biop carry real units (issue #199), so
     # they are now actually checked, not skipped, and come out clean.
-    assert aquakin.load_network(name).check_units() == []
+    assert aquakin.load_model(name).check_units() == []
 
 
-def test_sumo_networks_have_real_units():
-    # The four SUMO-derived ASM networks were imported with placeholder parameter
+def test_sumo_models_have_real_units():
+    # The four SUMO-derived ASM models were imported with placeholder parameter
     # units ("0"/"SmallNumber"/"-BigNumber") and an unparseable species-unit
     # dialect; the shipped YAMLs carry real units, so their rate constants declare
     # a time unit (the inverse-time token parses) and the species units parse.
     from aquakin.utils.units import parse_units
     for name in ("asm2d", "asm2d_tud", "asm3", "asm3_biop"):
-        net = aquakin.load_network(name)
+        net = aquakin.load_model(name)
         assert "0" not in net.parameter_units.values()
         # at least one rate constant declares 1/d
         assert any(parse_units(u) == parse_units("1/d")
@@ -225,7 +225,7 @@ def test_asm2d_tud_warnings_confined_to_pp_storage():
     # (qPP * XPAO**2 / XPP * ...), whose root is irreducibly cross-currency
     # (COD^2/P) -- a property of that model's rate form, which the root check
     # correctly surfaces. Guards that nothing else regresses.
-    ws = aquakin.load_network("asm2d_tud").check_units()
+    ws = aquakin.load_model("asm2d_tud").check_units()
     storage = {"Anoxic_storage_of_XPP", "Aerobic_storage_of_XPP"}
     assert ws, "expected the PP-storage root finding to be surfaced"
     assert {w.reaction for w in ws} <= storage
@@ -236,31 +236,31 @@ def test_adm1_warnings_confined_to_gas_headspace():
     # the gas-headspace pressure sum, which mixes COD-carried H2/CH4 with
     # carbon-carried CO2 (a documented BSM2 gas-phase unit characteristic, not a
     # model error). Guards that the check does not leak into the biology.
-    ws = aquakin.load_network("adm1").check_units()
+    ws = aquakin.load_model("adm1").check_units()
     gas = {"gas_outflow_h2", "gas_outflow_ch4", "gas_outflow_co2"}
     assert ws, "expected the gas-headspace finding to be surfaced"
     assert {w.reaction for w in ws} <= gas
 
 
-def test_check_network_units_free_function_matches_method():
-    # The exported free function aquakin.check_network_units(net) is the
-    # implementation the CompiledNetwork.check_units() method delegates to, so
+def test_check_model_units_free_function_matches_method():
+    # The exported free function aquakin.check_model_units(net) is the
+    # implementation the CompiledModel.check_units() method delegates to, so
     # the two must return the same findings -- including under check_root=False.
-    net = aquakin.load_network("adm1")          # has nonzero (gas-headspace) findings
-    via_fn = aquakin.check_network_units(net)
+    net = aquakin.load_model("adm1")          # has nonzero (gas-headspace) findings
+    via_fn = aquakin.check_model_units(net)
     via_method = net.check_units()
     assert via_fn == via_method
     assert via_fn, "adm1 should surface the gas-headspace findings"
     # the check_root toggle threads through identically
-    assert (aquakin.check_network_units(net, check_root=False)
+    assert (aquakin.check_model_units(net, check_root=False)
             == net.check_units(check_root=False))
-    # a clean network gives an empty list through the free function too
-    assert aquakin.check_network_units(aquakin.load_network("asm1")) == []
+    # a clean model gives an empty list through the free function too
+    assert aquakin.check_model_units(aquakin.load_model("asm1")) == []
 
 
 def _broken_yaml(rate):
     return f"""
-network:
+model:
   name: broken
   version: "1.0"
   description: "deliberately dimensionally inconsistent rate"
@@ -285,24 +285,24 @@ reactions:
 """
 
 
-def test_broken_network_dropped_factor(tmp_path):
+def test_broken_model_dropped_factor(tmp_path):
     # "k * monod(A, A)" forgets the concentration factor -> 1/d root
     p = tmp_path / "broken.yaml"
     p.write_text(_broken_yaml("k * monod([A], [A])"))
-    net = aquakin.load_network_from_file(str(p))
+    net = aquakin.load_model_from_file(str(p))
     assert any(w.location == "rate root" for w in net.check_units())
 
 
-def test_broken_network_cross_currency_sum(tmp_path):
+def test_broken_model_cross_currency_sum(tmp_path):
     # A is COD, B is N: adding them is the currency bug an SI check misses
     p = tmp_path / "broken2.yaml"
     p.write_text(_broken_yaml("k * ([A] + [B])"))
-    net = aquakin.load_network_from_file(str(p))
+    net = aquakin.load_model_from_file(str(p))
     assert any("operands" in w.location for w in net.check_units())
 
 
 _MIXED_TIME_YAML = """
-network:
+model:
   name: mixed_time
   description: "Two rate constants in different time units."
 species:
@@ -324,23 +324,23 @@ reactions:
 def test_mixed_time_units_flagged(tmp_path):
     """Rate constants in different time units make the RHS dimensionally
     inconsistent (terms summed on different time bases); each rate passes its own
-    root check, so the disagreement is flagged once at network scope."""
+    root check, so the disagreement is flagged once at model scope."""
     p = tmp_path / "mixed_time.yaml"
     p.write_text(_MIXED_TIME_YAML)
-    net = aquakin.load_network_from_file(str(p))
+    net = aquakin.load_model_from_file(str(p))
     ws = net.check_units()
-    network_ws = [w for w in ws if w.reaction == "(network)"
+    model_ws = [w for w in ws if w.reaction == "(model)"
                   and w.location == "time unit"]
-    assert len(network_ws) == 1
-    assert "1/d" in network_ws[0].detail and "1/s" in network_ws[0].detail
+    assert len(model_ws) == 1
+    assert "1/d" in model_ws[0].detail and "1/s" in model_ws[0].detail
 
 
 def test_consistent_time_units_not_flagged(tmp_path):
-    """A network whose rate constants share one time unit gets no network-scope
-    time-unit warning (the shipped networks are already covered above)."""
+    """A model whose rate constants share one time unit gets no model-scope
+    time-unit warning (the shipped models are already covered above)."""
     p = tmp_path / "ok_time.yaml"
     p.write_text(_MIXED_TIME_YAML.replace('units: "1/s"', 'units: "1/d"'))
-    net = aquakin.load_network_from_file(str(p))
+    net = aquakin.load_model_from_file(str(p))
     assert not [w for w in net.check_units() if w.location == "time unit"]
 
 

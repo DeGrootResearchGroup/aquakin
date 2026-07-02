@@ -1,10 +1,10 @@
-"""Pydantic schema layer for YAML network files (load-time only)."""
+"""Pydantic schema layer for YAML model files (load-time only)."""
 
-from aquakin.schema.loader import load_network, load_network_from_file
-from aquakin.schema.network_spec import (
+from aquakin.schema.loader import load_model, load_model_from_file
+from aquakin.schema.model_spec import (
     ConditionSpec,
-    NetworkMeta,
-    NetworkSpec,
+    ModelMeta,
+    ModelSpec,
     ParameterSpec,
     ReactionSpec,
     SpeciesSpec,
@@ -12,11 +12,11 @@ from aquakin.schema.network_spec import (
 
 __all__ = [
     "ConditionSpec",
-    "NetworkMeta",
-    "NetworkSpec",
+    "ModelMeta",
+    "ModelSpec",
     "ParameterSpec",
     "ReactionSpec",
     "SpeciesSpec",
-    "load_network",
-    "load_network_from_file",
+    "load_model",
+    "load_model_from_file",
 ]

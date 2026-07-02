@@ -15,7 +15,7 @@ from aquakin.plant.bsm import (
     bsm2_warm_start,
     build_bsm2,
     RejectStorage,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
 )
@@ -26,11 +26,11 @@ from aquakin.plant.units import FlowContext
 
 @pytest.fixture(scope="module")
 def asm1():
-    return bsm2_asm1_network()
+    return bsm2_asm1_model()
 
 
 def _tank(asm1, output_flow=0.0, volume=160.0):
-    return StorageTank(name="store", network=asm1, volume=volume,
+    return StorageTank(name="store", model=asm1, volume=volume,
                        output_flow=output_flow)
 
 
@@ -41,7 +41,7 @@ def _state(tank, asm1, V):
 
 def _stream(asm1, Q):
     return {"in": Stream(
-        Q=jnp.asarray(float(Q)), C=asm1.default_concentrations(), network=asm1)}
+        Q=jnp.asarray(float(Q)), C=asm1.default_concentrations(), model=asm1)}
 
 
 # ----- StorageTank regimes (no plant solve) -------------------------------
@@ -112,7 +112,7 @@ def test_flow_volume_conservation(asm1, V, Qreq, Qin):
 
 
 def test_flow_outputs_match_compute_outputs(asm1):
-    """The flow-network rule agrees with the concentration-stage flows."""
+    """The flow-model rule agrees with the concentration-stage flows."""
     tank = _tank(asm1, output_flow=200.0)
     state = _state(tank, asm1, V=80.0)
     flows = tank.flow_outputs({"in": jnp.asarray(500.0)}, None, FlowContext(state=state))
@@ -126,7 +126,7 @@ def test_flow_outputs_match_compute_outputs(asm1):
 
 @pytest.fixture(scope="module")
 def adm1():
-    return aquakin.load_network("adm1")
+    return aquakin.load_model("adm1")
 
 
 @pytest.fixture(scope="module")
@@ -172,7 +172,7 @@ def test_grad_through_storage_plant_is_finite(asm1):
     import jax
     from aquakin.plant import Plant
     plant = Plant("t")
-    plant.add_unit(StorageTank(name="store", network=asm1, volume=160.0,
+    plant.add_unit(StorageTank(name="store", model=asm1, volume=160.0,
                                output_flow=50.0))
     plant.add_influent("feed", asm1.influent({"SS": 60.0}, Q=100.0), to="store.in")
     y0 = plant.initial_state()

@@ -32,7 +32,7 @@ from aquakin.plant.streams import Stream
 from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 @dataclass
@@ -53,7 +53,7 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
     Parameters
     ----------
     name : str
-    network : CompiledNetwork
+    model : CompiledModel
     overflow_Q : float, optional
         Fixed overflow (effluent) flow rate; underflow takes the remainder.
         Supply exactly one of ``overflow_Q`` or ``underflow_Q``.
@@ -76,7 +76,7 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     overflow_Q: "float | None" = None
     underflow_Q: "float | None" = None
     capture_efficiency: float = 0.998
@@ -103,12 +103,12 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
             self._ctrl = "overflow"
             self._setpoints = {"overflow_Q": FlowSetpoint(float(self.overflow_Q), 0)}
         self._part_indices = [
-            self.network.species_index[s]
+            self.model.species_index[s]
             for s in self.particulate_species
-            if s in self.network.species_index
+            if s in self.model.species_index
         ]
         # Pre-build a (n_species,) mask: 1.0 for particulates, 0.0 for solubles.
-        mask = jnp.zeros((self.network.n_species,))
+        mask = jnp.zeros((self.model.n_species,))
         for i in self._part_indices:
             mask = mask.at[i].set(1.0)
         self._particulate_mask = mask
@@ -171,8 +171,8 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
         C_under = sol_C_under + part_C_under
 
         return {
-            self.overflow_port: Stream(Q=Q_over, C=C_over, network=self.network, T=s_in.T),
-            self.underflow_port: Stream(Q=Q_under, C=C_under, network=self.network, T=s_in.T),
+            self.overflow_port: Stream(Q=Q_over, C=C_over, model=self.model, T=s_in.T),
+            self.underflow_port: Stream(Q=Q_under, C=C_under, model=self.model, T=s_in.T),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:

@@ -1,4 +1,4 @@
-"""The asm3_2step_n2o network: asm3_2step with the two-pathway AOB N2O model of
+"""The asm3_2step_n2o model: asm3_2step with the two-pathway AOB N2O model of
 Pocquet et al. (2016).
 
 Checks that the AOB nitritation step is replaced by the electron-pathway
@@ -17,7 +17,7 @@ import aquakin
 
 @pytest.fixture
 def net():
-    return aquakin.load_network("asm3_2step_n2o")
+    return aquakin.load_model("asm3_2step_n2o")
 
 
 def _final_n2o(net, DO, no2, pH=7.5, t_end=0.3):

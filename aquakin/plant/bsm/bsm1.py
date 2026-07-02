@@ -28,7 +28,7 @@ from aquakin.plant.plant import Plant
 from aquakin.plant.takacs import TakacsClarifier
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 # Reference design values (Copp 2002 Table 1.1 / Alex 2008 Table 1.7).
@@ -45,7 +45,7 @@ BSM1_CLARIFIER_HEIGHT = 4.0  # m
 
 
 def build_bsm1(
-    network: Optional["CompiledNetwork"] = None,
+    model: Optional["CompiledModel"] = None,
     *,
     Q_avg: float = BSM1_Q_AVG,
     wastage_flow: float = BSM1_WASTAGE_FLOW,
@@ -60,8 +60,8 @@ def build_bsm1(
 
     Parameters
     ----------
-    network : CompiledNetwork, optional
-        ASM1 network. Defaults to ``aquakin.load_network("asm1")``.
+    model : CompiledModel, optional
+        ASM1 model. Defaults to ``aquakin.load_model("asm1")``.
     Q_avg : float
         Average dry-weather inlet flow. Used to size the recycle streams
         (internal recycle and RAS). Default 18446 m³/d per Copp 2002.
@@ -78,7 +78,7 @@ def build_bsm1(
         DO setpoint when ``closed_loop_do=True``. Ignored otherwise.
     conditions : dict[str, float], optional
         Override the per-tank conditions vector (e.g. set ``T=288.15`` for
-        winter). Defaults to network's declared defaults.
+        winter). Defaults to model's declared defaults.
     use_takacs : bool
         If True, use the full Takács 1-D layered secondary clarifier (the BSM1
         reference settler, with its own per-layer solids state). If False
@@ -120,15 +120,13 @@ def build_bsm1(
             "Closed-loop DO control will be added in a follow-up; set closed_loop_do=False for now."
         )
 
-    if network is None:
+    if model is None:
         import aquakin
 
-        network = aquakin.load_network("asm1")
+        model = aquakin.load_model("asm1")
 
     if conditions is None:
-        conditions = {
-            name: network._condition_defaults[name] for name in network.conditions_required
-        }
+        conditions = {name: model._condition_defaults[name] for name in model.conditions_required}
 
     plant = Plant("BSM1")
 
@@ -138,7 +136,7 @@ def build_bsm1(
         MixerUnit(
             name="inlet_mix",
             input_port_names=["fresh", "internal_recycle", "ras"],
-            network=network,
+            model=model,
         )
     )
 
@@ -148,7 +146,7 @@ def build_bsm1(
         plant.add_unit(
             CSTRUnit(
                 name=f"tank{i + 1}",
-                network=network,
+                model=model,
                 volume=BSM1_TANK_VOLUMES[i],
                 input_port_names=["inlet"],
                 conditions=conditions,
@@ -175,7 +173,7 @@ def build_bsm1(
     plant.add_unit(
         SplitterUnit(
             name="tank5_split",
-            network=network,
+            model=model,
             output_port_flows={"internal_recycle": Qa},
             remainder_port="to_clarifier",
         )
@@ -190,7 +188,7 @@ def build_bsm1(
         plant.add_unit(
             TakacsClarifier(
                 name="clarifier",
-                network=network,
+                model=model,
                 area=BSM1_CLARIFIER_AREA,
                 height=BSM1_CLARIFIER_HEIGHT,
                 # Fixed underflow pump flow (Qr + Qw); the effluent overflow is
@@ -220,7 +218,7 @@ def build_bsm1(
         plant.add_unit(
             IdealClarifier(
                 name="clarifier",
-                network=network,
+                model=model,
                 underflow_Q=Q_underflow,
                 capture_efficiency=0.998,
             )
@@ -232,7 +230,7 @@ def build_bsm1(
     plant.add_unit(
         SplitterUnit(
             name="underflow_split",
-            network=network,
+            model=model,
             output_port_flows={"ras": Qr},
             remainder_port="waste",
         )

@@ -1,4 +1,4 @@
-"""Mass and electron (COD) conservation checks for reaction networks.
+"""Mass and electron (COD) conservation checks for reaction models.
 
 A reaction conserves a quantity ``Q`` when the stoichiometry-weighted sum of the
 per-species content of ``Q`` is zero::
@@ -16,8 +16,8 @@ species' own measure -- e.g. ``{"COD": 1.0}`` for an organic (g COD per g COD),
 ``{"COD": -1.0}`` for dissolved oxygen (oxygen is an electron acceptor, i.e.
 negative COD), ``{"COD": -2.86, "N": 1.0}`` for nitrate-N (2.86 g COD accepted
 per g N reduced to N2), ``{"COD": 2.0, "S": 1.0}`` for sulfide (2 g COD per g S),
-and so on. Species absent from a network are ignored, so one composition table
-can serve a family of related networks.
+and so on. Species absent from a model are ignored, so one composition table
+can serve a family of related models.
 """
 
 from __future__ import annotations
@@ -27,18 +27,18 @@ from typing import TYPE_CHECKING, Any, Optional
 import numpy as np
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 # species name -> {quantity name -> content per unit of the species' measure}
 Composition = dict[str, dict[str, float]]
 
 
 def _composition_matrix(
-    network: "CompiledNetwork", composition: Composition
+    model: "CompiledModel", composition: Composition
 ) -> tuple[list[str], np.ndarray]:
     """(n_quantities, n_species) content matrix and the quantity-name list."""
     quantities = sorted({q for c in composition.values() for q in c})
-    sidx = network.species_index
+    sidx = model.species_index
     mat = np.zeros((len(quantities), len(sidx)))
     for j, q in enumerate(quantities):
         for sp, content in composition.items():
@@ -48,7 +48,7 @@ def _composition_matrix(
 
 
 def conservation_residuals(
-    network: "CompiledNetwork",
+    model: "CompiledModel",
     composition: Composition,
     params: Optional[Any] = None,
 ) -> tuple[list[str], list[str], np.ndarray]:
@@ -56,13 +56,13 @@ def conservation_residuals(
 
     Parameters
     ----------
-    network : CompiledNetwork
-        The compiled reaction network.
+    model : CompiledModel
+        The compiled reaction model.
     composition : dict
         ``{species_name: {quantity: content_per_unit}}``.
     params : array-like, optional
         Parameter vector (string-expression stoichiometry is evaluated with it).
-        Defaults to ``network.default_parameters()``.
+        Defaults to ``model.default_parameters()``.
 
     Returns
     -------
@@ -72,15 +72,15 @@ def conservation_residuals(
         Shape ``(n_reactions, n_quantities)``; entry ``[i, j]`` is the residual
         of quantity ``j`` in reaction ``i`` (zero means conserved).
     """
-    p = network.default_parameters() if params is None else params
-    stoich = np.asarray(network.compute_stoich(p))  # (n_rxn, n_species)
-    quantities, comp_mat = _composition_matrix(network, composition)
+    p = model.default_parameters() if params is None else params
+    stoich = np.asarray(model.compute_stoich(p))  # (n_rxn, n_species)
+    quantities, comp_mat = _composition_matrix(model, composition)
     residuals = stoich @ comp_mat.T  # (n_rxn, n_quantities)
-    return list(network.reaction_names), quantities, residuals
+    return list(model.reaction_names), quantities, residuals
 
 
 def nitrogen_residuals(
-    network: "CompiledNetwork",
+    model: "CompiledModel",
     composition: Composition,
     *,
     params: Optional[Any] = None,
@@ -103,9 +103,9 @@ def nitrogen_residuals(
 
     Returns ``(reaction_names, residuals)``.
     """
-    p = network.default_parameters() if params is None else params
-    stoich = np.asarray(network.compute_stoich(p))
-    sidx = network.species_index
+    p = model.default_parameters() if params is None else params
+    stoich = np.asarray(model.compute_stoich(p))
+    sidx = model.species_index
     n_content = np.zeros(stoich.shape[1])
     for sp, content in composition.items():
         if sp in sidx:
@@ -113,23 +113,23 @@ def nitrogen_residuals(
     residual = stoich @ n_content
     if nitrate in sidx:
         residual = residual + np.maximum(0.0, -stoich[:, sidx[nitrate]])
-    return list(network.reaction_names), residual
+    return list(model.reaction_names), residual
 
 
 def check_nitrogen(
-    network: "CompiledNetwork",
+    model: "CompiledModel",
     composition: Composition,
     *,
     tol: float = 1e-2,
     **kwargs: Any,
 ) -> list[tuple[str, float]]:
     """Return nitrogen-balance violations ``(reaction, residual)`` above ``tol``."""
-    names, residual = nitrogen_residuals(network, composition, **kwargs)
+    names, residual = nitrogen_residuals(model, composition, **kwargs)
     return [(names[i], float(residual[i])) for i in range(len(names)) if abs(residual[i]) > tol]
 
 
 def check_conservation(
-    network: "CompiledNetwork",
+    model: "CompiledModel",
     composition: Composition,
     *,
     tol: float = 1e-2,
@@ -143,7 +143,7 @@ def check_conservation(
     stoichiometric coefficients while still flagging genuine imbalances (which
     are typically order 0.1-1). Restrict to specific ``quantities`` if desired.
     """
-    names, all_q, res = conservation_residuals(network, composition, params)
+    names, all_q, res = conservation_residuals(model, composition, params)
     keep = set(quantities) if quantities is not None else set(all_q)
     out = []
     for i, rxn in enumerate(names):

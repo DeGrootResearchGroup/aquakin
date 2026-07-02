@@ -34,7 +34,7 @@ from aquakin.plant.cstr import Aeration, AerationUnit, aeration_transfer
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 @dataclass
@@ -44,7 +44,7 @@ class MBRUnit(AerationUnit, CouplingAware):
     Parameters
     ----------
     name : str
-    network : CompiledNetwork
+    model : CompiledModel
     volume : float
         Reactor liquid volume (held constant; the permeate pump matches the feed
         less wasting).
@@ -76,9 +76,9 @@ class MBRUnit(AerationUnit, CouplingAware):
         Permeate viscosity factor in ``TMP = tmp_viscosity * J * (R_m + R_f)``.
         Default 1 (TMP reported in the model's consistent flux*resistance units).
     conditions : dict
-        Per-network condition values (e.g. ``{"T": 293.15}``).
+        Per-model condition values (e.g. ``{"T": 293.15}``).
     initial_concentrations : jnp.ndarray, optional
-        Initial bulk concentrations (defaults to the network defaults).
+        Initial bulk concentrations (defaults to the model defaults).
     initial_fouling : float
         Initial fouling resistance (default 0).
     input_port, permeate_port, waste_port : str
@@ -86,7 +86,7 @@ class MBRUnit(AerationUnit, CouplingAware):
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     volume: float
     aeration: Optional[Aeration] = None
     waste_flow: float = 0.0
@@ -111,23 +111,23 @@ class MBRUnit(AerationUnit, CouplingAware):
             )
         if self.waste_flow < 0.0:
             raise ValueError(f"MBRUnit '{self.name}' waste_flow must be >= 0.")
-        missing = [c for c in self.network.conditions_required if c not in self.conditions]
+        missing = [c for c in self.model.conditions_required if c not in self.conditions]
         if missing:
             raise ValueError(
                 f"MBRUnit '{self.name}' is missing condition values for: "
                 f"{missing}. Provided: {list(self.conditions)}."
             )
         for s in self.particulate_species:
-            if s not in self.network.species_index:
+            if s not in self.model.species_index:
                 raise ValueError(
-                    f"MBRUnit '{self.name}' particulate species '{s}' not in the network."
+                    f"MBRUnit '{self.name}' particulate species '{s}' not in the model."
                 )
 
         # Permeate multiplier: 1 for solubles, (1 - rejection) for particulates.
-        n = self.network.n_species
+        n = self.model.n_species
         mask = jnp.zeros((n,))
         if self.particulate_species:
-            idx = [self.network.species_index[s] for s in self.particulate_species]
+            idx = [self.model.species_index[s] for s in self.particulate_species]
             mask = mask.at[jnp.asarray(idx, dtype=int)].set(1.0)
         self._perm_mult = 1.0 - self.rejection * mask
 
@@ -139,7 +139,7 @@ class MBRUnit(AerationUnit, CouplingAware):
     # ----- protocol: identity / layout -----------------------------------
     @property
     def state_size(self) -> int:
-        return self.network.n_species + 1  # bulk C + fouling resistance R_f
+        return self.model.n_species + 1  # bulk C + fouling resistance R_f
 
     @property
     def input_ports(self) -> list[str]:
@@ -151,14 +151,14 @@ class MBRUnit(AerationUnit, CouplingAware):
 
     def initial_state(self) -> jnp.ndarray:
         C0 = (
-            self.network.default_concentrations()
+            self.model.default_concentrations()
             if self.initial_concentrations is None
             else jnp.asarray(self.initial_concentrations)
         )
         return jnp.concatenate([C0, jnp.asarray([float(self.initial_fouling)])])
 
     def _split(self, state):
-        n = self.network.n_species
+        n = self.model.n_species
         return state[:n], state[n]
 
     def liquid_volume(self, state: jnp.ndarray):
@@ -188,9 +188,9 @@ class MBRUnit(AerationUnit, CouplingAware):
         from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
         from aquakin.plant.coupling import CouplingPattern
 
-        n = self.network.n_species
+        n = self.model.n_species
         self_pat = np.zeros((n + 1, n + 1), dtype=bool)
-        self_pat[:n, :n] = structural_sparsity_pattern(self.network)
+        self_pat[:n, :n] = structural_sparsity_pattern(self.model)
         self_pat[n, n] = True  # dR_f/dt depends on R_f
         inlet_pat = np.zeros((n + 1, n), dtype=bool)
         inlet_pat[:n, :] = np.eye(n, dtype=bool)  # dilution: each C_i <- C_in,i
@@ -223,10 +223,8 @@ class MBRUnit(AerationUnit, CouplingAware):
         q_perm, q_waste = self._flows(q_in)
         T_out = self._mixed_inlet_T(inputs)  # carry inlet T on
         return {
-            self.permeate_port: Stream(
-                Q=q_perm, C=self._perm_mult * C, network=self.network, T=T_out
-            ),
-            self.waste_port: Stream(Q=q_waste, C=C, network=self.network, T=T_out),
+            self.permeate_port: Stream(Q=q_perm, C=self._perm_mult * C, model=self.model, T=T_out),
+            self.waste_port: Stream(Q=q_waste, C=C, model=self.model, T=T_out),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
@@ -261,12 +259,12 @@ class MBRUnit(AerationUnit, CouplingAware):
         else:
             conditions = self._condition_arrays
 
-        stoich = self.network.compute_stoich(params)
-        rates = self.network.rates(C, params, conditions, 0)
+        stoich = self.model.compute_stoich(params)
+        rates = self.model.rates(C, params, conditions, 0)
         chemistry = stoich.T @ rates
 
         T_eff = T_in if T_in is not None else self.conditions.get("T")
-        aeration = aeration_transfer(self._av, C, T_eff, signals, self.network)
+        aeration = aeration_transfer(self._av, C, T_eff, signals, self.model)
 
         dC = convection + chemistry + aeration
 

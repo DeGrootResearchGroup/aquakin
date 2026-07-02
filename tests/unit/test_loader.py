@@ -14,27 +14,27 @@ def _write(tmp_path, body: str):
 
 
 def test_load_builtin_ozone_bromate():
-    network = aquakin.load_network("ozone_bromate")
-    assert network.name == "ozone_bromate"
-    assert "O3" in network.species
-    assert "BrO3-" in network.species
+    model = aquakin.load_model("ozone_bromate")
+    assert model.name == "ozone_bromate"
+    assert "O3" in model.species
+    assert "BrO3-" in model.species
 
 
-def test_load_simple_from_file(simple_network):
-    assert simple_network.name == "simple_decay"
-    assert simple_network.species == ["A", "B"]
+def test_load_simple_from_file(simple_model):
+    assert simple_model.name == "simple_decay"
+    assert simple_model.species == ["A", "B"]
 
 
 def test_unknown_builtin_raises():
     with pytest.raises(FileNotFoundError):
-        aquakin.load_network("does_not_exist")
+        aquakin.load_model("does_not_exist")
 
 
 def test_undeclared_species_in_stoichiometry_rejected(tmp_path):
     p = _write(
         tmp_path,
         """
-        network: {name: bad, version: "1.0"}
+        model: {name: bad, version: "1.0"}
         species:
           - {name: A, default_concentration: 1.0}
         reactions:
@@ -48,14 +48,14 @@ def test_undeclared_species_in_stoichiometry_rejected(tmp_path):
         """,
     )
     with pytest.raises(ValueError):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)
 
 
 def test_undeclared_species_in_rate_rejected(tmp_path):
     p = _write(
         tmp_path,
         """
-        network: {name: bad, version: "1.0"}
+        model: {name: bad, version: "1.0"}
         species:
           - {name: A, default_concentration: 1.0}
         reactions:
@@ -68,14 +68,14 @@ def test_undeclared_species_in_rate_rejected(tmp_path):
         """,
     )
     with pytest.raises((KeyError, ValueError)):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)
 
 
 def test_undeclared_condition_rejected(tmp_path):
     p = _write(
         tmp_path,
         """
-        network: {name: bad, version: "1.0"}
+        model: {name: bad, version: "1.0"}
         species:
           - {name: A, default_concentration: 1.0}
         reactions:
@@ -88,14 +88,14 @@ def test_undeclared_condition_rejected(tmp_path):
         """,
     )
     with pytest.raises((KeyError, ValueError)):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)
 
 
 def test_bounds_validation(tmp_path):
     p = _write(
         tmp_path,
         """
-        network: {name: bad, version: "1.0"}
+        model: {name: bad, version: "1.0"}
         species:
           - {name: A, default_concentration: 1.0}
         reactions:
@@ -110,14 +110,14 @@ def test_bounds_validation(tmp_path):
         """,
     )
     with pytest.raises(ValueError):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)
 
 
 def test_duplicate_species_rejected(tmp_path):
     p = _write(
         tmp_path,
         """
-        network: {name: bad, version: "1.0"}
+        model: {name: bad, version: "1.0"}
         species:
           - {name: A, default_concentration: 1.0}
           - {name: A, default_concentration: 2.0}
@@ -131,7 +131,7 @@ def test_duplicate_species_rejected(tmp_path):
         """,
     )
     with pytest.raises(ValueError):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)
 
 
 def test_unreferenced_expression_bad_species_rejected(tmp_path):
@@ -141,7 +141,7 @@ def test_unreferenced_expression_bad_species_rejected(tmp_path):
     p = _write(
         tmp_path,
         """
-        network: {name: bad, version: "1.0"}
+        model: {name: bad, version: "1.0"}
         species:
           - {name: A, default_concentration: 1.0}
         expressions:
@@ -156,7 +156,7 @@ def test_unreferenced_expression_bad_species_rejected(tmp_path):
         """,
     )
     with pytest.raises(KeyError, match="undeclared species"):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)
 
 
 def test_unreferenced_expression_valid_refs_loads(tmp_path):
@@ -164,7 +164,7 @@ def test_unreferenced_expression_valid_refs_loads(tmp_path):
     p = _write(
         tmp_path,
         """
-        network: {name: ok, version: "1.0"}
+        model: {name: ok, version: "1.0"}
         species:
           - {name: A, default_concentration: 1.0}
         expressions:
@@ -178,28 +178,28 @@ def test_unreferenced_expression_valid_refs_loads(tmp_path):
               A: -1
         """,
     )
-    net = aquakin.load_network_from_file(p)
+    net = aquakin.load_model_from_file(p)
     assert net.species == ["A"]
 
 
 def test_missing_file():
     with pytest.raises(FileNotFoundError):
-        aquakin.load_network_from_file("/no/such/file.yaml")
+        aquakin.load_model_from_file("/no/such/file.yaml")
 
 
 def test_non_validation_error_propagates(tmp_path, monkeypatch):
     """A genuine bug during validation must propagate, not be relabelled as an
-    invalid network specification."""
+    invalid model specification."""
     from aquakin.schema import loader
 
     def _boom(_data):
         raise RecursionError("maximum recursion depth exceeded")
 
-    monkeypatch.setattr(loader.NetworkSpec, "model_validate", staticmethod(_boom))
+    monkeypatch.setattr(loader.ModelSpec, "model_validate", staticmethod(_boom))
     p = _write(
         tmp_path,
         """
-        network: {name: ok, version: "1.0"}
+        model: {name: ok, version: "1.0"}
         species:
           - {name: A, default_concentration: 1.0}
         reactions:
@@ -212,7 +212,7 @@ def test_non_validation_error_propagates(tmp_path, monkeypatch):
         """,
     )
     with pytest.raises(RecursionError):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)
 
 
 def test_extends_base_not_a_mapping_rejected(tmp_path):
@@ -221,10 +221,10 @@ def test_extends_base_not_a_mapping_rejected(tmp_path):
     (tmp_path / "base.yaml").write_text("- 1\n- 2\n- 3\n")
     derived = tmp_path / "derived.yaml"
     derived.write_text(textwrap.dedent("""
-        network: {name: d, extends: base.yaml}
+        model: {name: d, extends: base.yaml}
         """))
     with pytest.raises(ValueError, match="must be a mapping"):
-        aquakin.load_network_from_file(derived)
+        aquakin.load_model_from_file(derived)
 
 
 def test_empty_composition_quantity_name_rejected(tmp_path):
@@ -232,7 +232,7 @@ def test_empty_composition_quantity_name_rejected(tmp_path):
     p = _write(
         tmp_path,
         """
-        network: {name: bad}
+        model: {name: bad}
         species:
           - {name: A, default_concentration: 1.0, composition: {"": 1.0}}
         reactions:
@@ -243,7 +243,7 @@ def test_empty_composition_quantity_name_rejected(tmp_path):
         """,
     )
     with pytest.raises(ValueError, match="empty composition"):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)
 
 
 @pytest.mark.parametrize("bad", [".nan", ".inf", "-.inf"])
@@ -251,7 +251,7 @@ def test_non_finite_composition_value_rejected(tmp_path, bad):
     """NaN / +-inf composition content is rejected -- such a value would poison the
     conservation check it feeds."""
     body = (
-        "network: {name: bad}\n"
+        "model: {name: bad}\n"
         "species:\n"
         "  - {name: A, default_concentration: 1.0, composition: {COD: " + bad + "}}\n"
         "reactions:\n"
@@ -263,21 +263,21 @@ def test_non_finite_composition_value_rejected(tmp_path, bad):
     p = tmp_path / "net.yaml"
     p.write_text(body)
     with pytest.raises(ValueError, match="must be finite"):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)
 
 
 # ----- speciation activity_model override (issue #205) ---------------------
 
-def test_load_network_activity_override_shifts_ph_and_keeps_default():
-    """load_network(..., activity_model=) overrides the speciation activity
-    model on a shipped network; the cached default is untouched."""
+def test_load_model_activity_override_shifts_ph_and_keeps_default():
+    """load_model(..., activity_model=) overrides the speciation activity
+    model on a shipped model; the cached default is untouched."""
     import jax.numpy as jnp
-    from aquakin import load_network
+    from aquakin import load_model
 
-    base = load_network("adm1")                      # cached default (none)
-    dav = load_network("adm1", activity_model="davies")
+    base = load_model("adm1")                      # cached default (none)
+    dav = load_model("adm1", activity_model="davies")
     assert dav is not base
-    assert load_network("adm1") is base              # default still cached/unchanged
+    assert load_model("adm1") is base              # default still cached/unchanged
 
     C = base.default_concentrations()
     conds = {f: jnp.asarray([v]) for f, v in base._condition_defaults.items()}
@@ -292,21 +292,21 @@ def test_load_network_activity_override_shifts_ph_and_keeps_default():
 
 
 def test_activity_override_requires_speciation_block():
-    from aquakin import load_network
+    from aquakin import load_model
     with pytest.raises(ValueError, match="speciation"):
-        load_network("asm1", activity_model="davies")   # no pH solver
+        load_model("asm1", activity_model="davies")   # no pH solver
 
 
 def test_activity_override_validates_model_name():
-    from aquakin import load_network
+    from aquakin import load_model
     with pytest.raises(ValueError, match="activity_model"):
-        load_network("adm1", activity_model="bogus")
+        load_model("adm1", activity_model="bogus")
 
 
 def test_speciation_activity_model_validated_in_yaml(tmp_path):
     """A bad activity_model in a speciation: block is rejected at load."""
     body = """
-    network:
+    model:
       name: t
       version: "1"
     species:
@@ -322,20 +322,20 @@ def test_speciation_activity_model_validated_in_yaml(tmp_path):
       - {name: r, rate: "0.0 * [S_IC]", stoichiometry: {S_IC: -1}}
     """
     with pytest.raises(ValueError, match="activity_model"):
-        aquakin.load_network_from_file(_write(tmp_path, body))
+        aquakin.load_model_from_file(_write(tmp_path, body))
 
 
-def test_clear_network_cache_is_exported():
+def test_clear_model_cache_is_exported():
     # Documented public API: must be importable from the top-level package and in
     # __all__ (it was missing despite being referenced in the docs).
     import aquakin
-    assert "clear_network_cache" in aquakin.__all__
-    assert callable(aquakin.clear_network_cache)
+    assert "clear_model_cache" in aquakin.__all__
+    assert callable(aquakin.clear_model_cache)
     # Cached identity, then cleared.
-    a = aquakin.load_network("asm1")
-    assert aquakin.load_network("asm1") is a
-    aquakin.clear_network_cache()
-    assert aquakin.load_network("asm1") is not a
+    a = aquakin.load_model("asm1")
+    assert aquakin.load_model("asm1") is a
+    aquakin.clear_model_cache()
+    assert aquakin.load_model("asm1") is not a
 
 
 def test_asm1_adm1_ship_literature_priors():
@@ -347,8 +347,8 @@ def test_asm1_adm1_ship_literature_priors():
     # across-substrate ranges, which measure digester-type variation (grass
     # silage, food/agricultural/industrial waste) rather than the uncertainty of
     # a mesophilic municipal-sludge digester.
-    asm1 = aquakin.load_network("asm1")
-    adm1 = aquakin.load_network("adm1")
+    asm1 = aquakin.load_model("asm1")
+    adm1 = aquakin.load_model("adm1")
     assert len(asm1.parameter_priors) == 19
     assert len(adm1.parameter_priors) == 38
     # Every prior is physically valid and centred on the parameter's nominal.

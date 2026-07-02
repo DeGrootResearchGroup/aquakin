@@ -1,6 +1,6 @@
-"""Smoke tests for the wats_sewer_extended network and its state-derived pH.
+"""Smoke tests for the wats_sewer_extended model and its state-derived pH.
 
-These check that the (under-construction) WATS sewer network compiles, that pH
+These check that the (under-construction) WATS sewer model compiles, that pH
 is solved from the state rather than supplied, and that the chemistry RHS is
 finite and differentiable end-to-end -- the property the AD-based sensitivity
 and calibration workflows depend on. Full stiff time-integration to steady
@@ -15,14 +15,14 @@ import pytest
 
 import aquakin
 
-# Slow module: stiff WATS sewer-network solves and AD gradients. Excluded from
+# Slow module: stiff WATS sewer-model solves and AD gradients. Excluded from
 # the fast PR gate; runs in the merge-to-main suite (see the ``slow`` marker).
 pytestmark = pytest.mark.slow
 
 
 @pytest.fixture(scope="module")
 def net():
-    return aquakin.load_network("wats_sewer_extended")
+    return aquakin.load_model("wats_sewer_extended")
 
 
 @pytest.fixture
@@ -52,10 +52,10 @@ def test_compiles_with_expected_shape(net):
     ],
 )
 def test_structural_variants_compile(variant):
-    """The model-structure-study variant networks load and compile."""
+    """The model-structure-study variant models load and compile."""
     import os
-    ndir = os.path.join(os.path.dirname(aquakin.__file__), "networks")
-    v = aquakin.load_network_from_file(os.path.join(ndir, variant + ".yaml"))
+    ndir = os.path.join(os.path.dirname(aquakin.__file__), "models")
+    v = aquakin.load_model_from_file(os.path.join(ndir, variant + ".yaml"))
     assert v.name == variant
     assert v.n_species == 18
     assert v.n_reactions == 46

@@ -1,6 +1,6 @@
 """End-to-end calibration + uncertainty demo.
 
-1. Load the shipped ozone/bromate network.
+1. Load the shipped ozone/bromate model.
 2. Synthesise noisy observations of bromate at known parameter values.
 3. Calibrate selected rate constants via MAP with positive-log transforms.
 4. Compute the Laplace covariance and report per-parameter standard
@@ -17,13 +17,13 @@ import aquakin
 def main() -> None:
     rng = np.random.default_rng(0)
 
-    network = aquakin.load_network("ozone_bromate")
+    model = aquakin.load_model("ozone_bromate")
     # Per-species atol: OH lives in the 1e-12 M band.
-    atol = network.atol({"OH": 1e-20}, default=1e-12)
+    atol = model.atol({"OH": 1e-20}, default=1e-12)
     conditions = aquakin.OperatingConditions(pH=7.5, T=293.15, OH_scavenging=5.0e4)
-    reactor = aquakin.BatchReactor(network, conditions, atol=atol)
+    reactor = aquakin.BatchReactor(model, conditions, atol=atol)
 
-    C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
+    C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
 
     t_obs = jnp.linspace(30.0, 600.0, 20)
     sol = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_obs)
@@ -50,7 +50,7 @@ def main() -> None:
         laplace=True,
     )
 
-    truth = {name: float(network.default_parameters()[network.param_index[name]])
+    truth = {name: float(model.default_parameters()[model.param_index[name]])
              for name in free_params}
 
     print()

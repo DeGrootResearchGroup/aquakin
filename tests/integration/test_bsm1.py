@@ -30,7 +30,7 @@ pytestmark = pytest.mark.slow
 
 @pytest.fixture
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def constant_influent(asm1):
     n_t = 2
     t = jnp.asarray([0.0, 100.0])
     Q = jnp.full((n_t,), BSM1_Q_AVG)
-    # The documented Table 5.1 inlet composition (rest = network defaults).
+    # The documented Table 5.1 inlet composition (rest = model defaults).
     C0 = asm1.concentrations({
         "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32,
         "XB_H": 28.17, "XB_A": 0.0, "XP": 0.0,
@@ -48,7 +48,7 @@ def constant_influent(asm1):
         "SND": 6.95, "XND": 10.59, "SALK": 7.0,
     })
     C = jnp.tile(C0, (n_t, 1))
-    return InfluentSeries(t=t, Q=Q, C=C, network=asm1)
+    return InfluentSeries(t=t, Q=Q, C=C, model=asm1)
 
 
 def _run(plant, t_end=30.0, n_save=4, **kwargs):
@@ -61,7 +61,7 @@ def _run(plant, t_end=30.0, n_save=4, **kwargs):
 
 
 def test_bsm1_builds_and_solves(asm1, constant_influent):
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=10.0)
     assert jnp.all(jnp.isfinite(sol.state))
@@ -78,7 +78,7 @@ def test_recycle_presolve_makes_mopup_passes_irrelevant(
     passes; now it is exact at any count, gain-independent.)"""
     import numpy as np
 
-    plant = build_bsm1(network=asm1, use_takacs=use_takacs)
+    plant = build_bsm1(model=asm1, use_takacs=use_takacs)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     y0 = plant.initial_state()
 
@@ -103,7 +103,7 @@ def test_recycle_passes_validated_and_configurable(asm1):
 
 def test_bsm1_nitrification_active(asm1, constant_influent):
     """Under aerobic conditions in tank 5, NH4 should be largely oxidised."""
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=15.0)
     tank5_SNH = float(sol.C_named("tank5", "SNH")[-1])
@@ -115,7 +115,7 @@ def test_bsm1_nitrification_active(asm1, constant_influent):
 
 def test_bsm1_biomass_sustained(asm1, constant_influent):
     """RAS recycle should keep biomass concentrations elevated."""
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=15.0)
     # Heterotrophic biomass should grow well above the influent value
@@ -129,7 +129,7 @@ def test_bsm1_biomass_sustained(asm1, constant_influent):
 
 def test_bsm1_aerobic_anoxic_separation(asm1, constant_influent):
     """Aerobic tanks should have positive SO; anoxic tanks ~zero."""
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=10.0)
     so1 = float(sol.C_named("tank1", "SO")[-1])
@@ -148,7 +148,7 @@ def test_bsm1_aerobic_anoxic_separation(asm1, constant_influent):
 
 def test_bsm1_grad_through_plant(asm1, constant_influent):
     """jax.grad through plant.solve must produce finite gradients."""
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
 
     def loss(params):
@@ -178,7 +178,7 @@ def test_bsm1_takacs_reaches_steady_state(asm1, constant_influent):
     flow loop is under-resolved, the underflow is starved, and the plant washes
     out. The Takács result should match the IdealClarifier's healthy steady
     state."""
-    plant = build_bsm1(network=asm1, use_takacs=True)
+    plant = build_bsm1(model=asm1, use_takacs=True)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = plant.solve(
         t_span=(0.0, 150.0), t_eval=jnp.asarray([0.0, 150.0]),
@@ -200,7 +200,7 @@ def test_bsm1_dry_weather_runs(asm1):
     throughput tracks the influent smoothly instead of the near-singular
     fixed-fraction gain that blew the throughput up to ~20x Qin and made the
     monolithic solve hit the step ceiling under diurnal forcing (issue #30)."""
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", load_bsm1_influent("dry", asm1), to="inlet_mix.fresh")
     sol = _run(plant, t_end=14.0, n_save=8)
     assert jnp.all(jnp.isfinite(sol.state))
@@ -214,7 +214,7 @@ def test_bsm1_takacs_dry_weather_runs(asm1):
     """The full Takács 1-D clarifier plant also integrates the dynamic dry
     influent to a healthy state (issue #30): the fixed-setpoint recycle pumps
     keep the layered settler's flows bounded under diurnal forcing."""
-    plant = build_bsm1(network=asm1, use_takacs=True)
+    plant = build_bsm1(model=asm1, use_takacs=True)
     plant.add_influent("feed", load_bsm1_influent("dry", asm1), to="inlet_mix.fresh")
     sol = plant.solve(
         t_span=(0.0, 14.0), t_eval=jnp.linspace(0.0, 14.0, 8),
@@ -228,7 +228,7 @@ def test_bsm1_takacs_dry_weather_runs(asm1):
 
 def test_metrics_compute_finite(asm1, constant_influent):
     """The metrics module produces finite values on a BSM1 trajectory."""
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=10.0, n_save=11)
 
@@ -245,9 +245,9 @@ def test_metrics_compute_finite(asm1, constant_influent):
 
 
 def test_metrics_accept_stream_series(asm1, constant_influent):
-    """The metric kernels take a StreamSeries directly (network from the stream),
+    """The metric kernels take a StreamSeries directly (model from the stream),
     giving the same result as the unpacked-array call."""
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     sol = _run(plant, t_end=10.0, n_save=11)
     eff = plant.stream(sol, "clarifier.overflow")
@@ -261,7 +261,7 @@ def test_metrics_accept_stream_series(asm1, constant_influent):
     avg_arrays = effluent_averages(eff.t, eff.C, eff.Q, asm1)
     assert avg_stream == pytest.approx(avg_arrays)
 
-    # derived_* take a StreamSeries (network from it) and match the array form.
+    # derived_* take a StreamSeries (model from it) and match the array form.
     tss_stream = derived_TSS(eff)
     tss_arrays = derived_TSS(eff.C, asm1)
     assert jnp.allclose(tss_stream, tss_arrays)
@@ -269,7 +269,7 @@ def test_metrics_accept_stream_series(asm1, constant_influent):
 
 def test_evaluate_bsm1_indices(asm1, constant_influent):
     """evaluate_bsm1 returns finite, positive EQI / OCI and component terms."""
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     # Settle toward steady state so the indices are representative.
     sol = plant.solve(
@@ -295,7 +295,7 @@ def test_evaluate_bsm1_on_single_point_steady_state(asm1, constant_influent):
     ZeroDivisionError, because run_to_steady_state returns a one-point solution
     and aeration_energy divided by a zero window. It now returns finite, positive
     indices -- the instantaneous steady-state values (issue #180)."""
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
     ss = plant.run_to_steady_state()
     assert ss.solution.t.shape[0] == 1            # the degenerate single point

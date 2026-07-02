@@ -66,7 +66,7 @@ def _reference_outputs(asm1, x, Q, Q_smooth):
 
 
 def _aquakin_outputs(clar, asm1, state, Q):
-    s_in = Stream(Q=jnp.asarray(float(Q)), C=state, network=asm1)
+    s_in = Stream(Q=jnp.asarray(float(Q)), C=state, model=asm1)
     out = clar.compute_outputs(0.0, state, {clar.input_port_names[0]: s_in},
                                asm1.default_parameters())
     eff, sludge = out[clar.effluent_port], out[clar.sludge_port]
@@ -76,8 +76,8 @@ def _aquakin_outputs(clar, asm1, state, Q):
 
 @pytest.fixture(scope="module")
 def setup():
-    asm1 = aquakin.load_network("asm1")
-    clar = PrimaryClarifier(name="p", network=asm1, volume=_VOL, f_PS=_F_PS)
+    asm1 = aquakin.load_model("asm1")
+    clar = PrimaryClarifier(name="p", model=asm1, volume=_VOL, f_PS=_F_PS)
     state = np.zeros(asm1.n_species)
     for k, v in _STATE.items():
         state[asm1.species_index[k]] = v

@@ -1,4 +1,4 @@
-"""ODE integration over compiled reaction networks (Diffrax-backed)."""
+"""ODE integration over compiled reaction models (Diffrax-backed)."""
 
 from aquakin.integrate.batch import BatchReactor, BatchSolution
 from aquakin.integrate.calibrate import CalibrationResult, calibrate

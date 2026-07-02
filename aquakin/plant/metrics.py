@@ -20,7 +20,7 @@ import jax.numpy as jnp
 from aquakin.plant._constants import ASM1_TSS_FACTOR, ASM1_TSS_SPECIES
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 # ASM1 → TSS conversion (Copp 2002): TSS = 0.75 * (X_S + X_I + X_BH + X_BA + X_P).
@@ -37,57 +37,57 @@ _EQI_WEIGHTS = {
 }
 
 
-def _species_idx(network: "CompiledNetwork", names) -> jnp.ndarray:
-    """Index array for the named species that exist in the network."""
-    return jnp.asarray([network.species_index[s] for s in names if s in network.species_index])
+def _species_idx(model: "CompiledModel", names) -> jnp.ndarray:
+    """Index array for the named species that exist in the model."""
+    return jnp.asarray([model.species_index[s] for s in names if s in model.species_index])
 
 
 def _is_stream(x) -> bool:
     """True for a :class:`~aquakin.plant.streams.StreamSeries` (duck-typed)."""
-    return hasattr(x, "C") and hasattr(x, "network") and hasattr(x, "t")
+    return hasattr(x, "C") and hasattr(x, "model") and hasattr(x, "t")
 
 
-def _conc_network(C, network):
-    """Accept a ``StreamSeries`` (use its ``C`` + ``network``) or an explicit
-    ``(C, network)`` pair. Lets ``derived_TSS(effluent)`` work."""
+def _conc_model(C, model):
+    """Accept a ``StreamSeries`` (use its ``C`` + ``model``) or an explicit
+    ``(C, model)`` pair. Lets ``derived_TSS(effluent)`` work."""
     if _is_stream(C):
-        return C.C, (network if network is not None else C.network)
-    return C, network
+        return C.C, (model if model is not None else C.model)
+    return C, model
 
 
-def _composition(network, params=None):
+def _composition(model, params=None):
     """``(i_XB, i_XP, f_P)`` for the derived TKN and BOD quantities.
 
     Read from ``params`` when given (the composition the simulation actually
     used, so a calibrated or benchmark-specific value such as the BSM2
-    ``i_XB = 0.08`` is honoured), else from the network's declared defaults, else
+    ``i_XB = 0.08`` is honoured), else from the model's declared defaults, else
     the standard ASM1 values. This keeps the post-processed nitrogen and BOD
     consistent with the model the states came from instead of a fixed constant.
     """
 
     def g(name, fallback):
-        idx = getattr(network, "param_index", {}).get(name) if network else None
+        idx = getattr(model, "param_index", {}).get(name) if model else None
         if idx is None:
             return fallback
         if params is not None:
             return float(params[idx])
-        return float(network.default_parameters()[idx])
+        return float(model.default_parameters()[idx])
 
     return g("i_XB", 0.086), g("i_XP", 0.06), g("f_P", 0.08)
 
 
-def _effluent_args(stream_or_t, C, Q, network):
+def _effluent_args(stream_or_t, C, Q, model):
     """Normalise the effluent-metric arguments.
 
     Accepts either a ``StreamSeries`` -- in which case the *second* positional is
-    an optional ``network`` override (the stream already carries ``t/C/Q``), so
-    ``effluent_quality_index(eff)`` and ``effluent_quality_index(eff, network)``
-    both work -- or the explicit ``(t, C, Q, network)`` form.
+    an optional ``model`` override (the stream already carries ``t/C/Q``), so
+    ``effluent_quality_index(eff)`` and ``effluent_quality_index(eff, model)``
+    both work -- or the explicit ``(t, C, Q, model)`` form.
     """
     if _is_stream(stream_or_t):
         s = stream_or_t
-        return s.t, s.C, s.Q, (C if C is not None else s.network)
-    return stream_or_t, C, Q, network
+        return s.t, s.C, s.Q, (C if C is not None else s.model)
+    return stream_or_t, C, Q, model
 
 
 def _time_average(integrand, t, axis: int = 0):
@@ -125,60 +125,60 @@ def _time_average(integrand, t, axis: int = 0):
 # ``(n_t, n_species)`` -> vector, so no rank branch is needed.
 
 
-def derived_TSS(C, network: "CompiledNetwork" = None) -> jnp.ndarray:
+def derived_TSS(C, model: "CompiledModel" = None) -> jnp.ndarray:
     """Total suspended solids from ASM1 particulate species.
 
     ``TSS = 0.75 × (XS + XI + XB_H + XB_A + XP)``. Scalar for 1-D ``C``, a
     leading-axis vector for 2-D ``C``. ``C`` may be a concentration array (with
-    an explicit ``network``) or a ``StreamSeries`` (network taken from it).
+    an explicit ``model``) or a ``StreamSeries`` (model taken from it).
     """
-    C, network = _conc_network(C, network)
-    return _TSS_FACTOR * jnp.sum(C[..., _species_idx(network, _TSS_SPECIES)], axis=-1)
+    C, model = _conc_model(C, model)
+    return _TSS_FACTOR * jnp.sum(C[..., _species_idx(model, _TSS_SPECIES)], axis=-1)
 
 
-def derived_COD(C, network: "CompiledNetwork" = None) -> jnp.ndarray:
+def derived_COD(C, model: "CompiledModel" = None) -> jnp.ndarray:
     """Total COD = SI + SS + XI + XS + XB_H + XB_A + XP.
 
-    ``C`` may be a concentration array (with ``network``) or a ``StreamSeries``.
+    ``C`` may be a concentration array (with ``model``) or a ``StreamSeries``.
     """
-    C, network = _conc_network(C, network)
+    C, model = _conc_model(C, model)
     species = ("SI", "SS", "XI", "XS", "XB_H", "XB_A", "XP")
-    return jnp.sum(C[..., _species_idx(network, species)], axis=-1)
+    return jnp.sum(C[..., _species_idx(model, species)], axis=-1)
 
 
-def derived_BOD(C, network: "CompiledNetwork" = None, *, f_P: float = None) -> jnp.ndarray:
+def derived_BOD(C, model: "CompiledModel" = None, *, f_P: float = None) -> jnp.ndarray:
     """BOD₅ proxy = 0.25 × (SS + XS + (1 - f_P) × (XB_H + XB_A)), Copp 2002.
 
-    ``f_P`` defaults to the network's declared inert-fraction (the standard ASM1
-    0.08 when undeclared). ``C`` may be a concentration array (with ``network``)
+    ``f_P`` defaults to the model's declared inert-fraction (the standard ASM1
+    0.08 when undeclared). ``C`` may be a concentration array (with ``model``)
     or a ``StreamSeries``.
     """
-    C, network = _conc_network(C, network)
+    C, model = _conc_model(C, model)
     if f_P is None:
-        _, _, f_P = _composition(network)
-    i = network.species_index
+        _, _, f_P = _composition(model)
+    i = model.species_index
     return 0.25 * (
         C[..., i["SS"]] + C[..., i["XS"]] + (1.0 - f_P) * (C[..., i["XB_H"]] + C[..., i["XB_A"]])
     )
 
 
 def derived_TKN(
-    C, network: "CompiledNetwork" = None, *, i_XB: float = None, i_XP: float = None
+    C, model: "CompiledModel" = None, *, i_XB: float = None, i_XP: float = None
 ) -> jnp.ndarray:
     """Total Kjeldahl Nitrogen = S_NH + S_ND + X_ND + i_XB × (XB_H + XB_A)
     + i_XP × (XP + XI).
 
-    ``i_XB`` / ``i_XP`` default to the network's declared N-fractions (the
+    ``i_XB`` / ``i_XP`` default to the model's declared N-fractions (the
     standard ASM1 0.086 / 0.06 when undeclared); the BSM2 parameter set uses
-    ``i_XB = 0.08``. ``C`` may be a concentration array (with ``network``) or a
+    ``i_XB = 0.08``. ``C`` may be a concentration array (with ``model``) or a
     ``StreamSeries``.
     """
-    C, network = _conc_network(C, network)
+    C, model = _conc_model(C, model)
     if i_XB is None or i_XP is None:
-        d_XB, d_XP, _ = _composition(network)
+        d_XB, d_XP, _ = _composition(model)
         i_XB = d_XB if i_XB is None else i_XB
         i_XP = d_XP if i_XP is None else i_XP
-    i = network.species_index
+    i = model.species_index
     return (
         C[..., i["SNH"]]
         + C[..., i["SND"]]
@@ -192,7 +192,7 @@ def effluent_averages(
     stream_or_t,
     C_traj=None,
     Q_traj=None,
-    network: "CompiledNetwork" = None,
+    model: "CompiledModel" = None,
     *,
     params=None,
 ) -> dict[str, float]:
@@ -200,7 +200,7 @@ def effluent_averages(
 
     Accepts either a :class:`~aquakin.plant.streams.StreamSeries` (the usual
     ``plant.stream(sol, "clarifier.overflow")`` result) -- ``effluent_averages(eff)``
-    -- or the explicit ``(t, C_traj, Q_traj, network)`` form.
+    -- or the explicit ``(t, C_traj, Q_traj, model)`` form.
 
     Parameters
     ----------
@@ -211,16 +211,16 @@ def effluent_averages(
         ``stream_or_t`` is a time vector).
     Q_traj : jnp.ndarray, optional
         Effluent flow rate trajectory, shape ``(n_t,)`` (likewise).
-    network : CompiledNetwork, optional
-        Network; taken from the stream when one is passed.
+    model : CompiledModel, optional
+        Model; taken from the stream when one is passed.
 
     Returns
     -------
     dict[str, float]
         Time-averaged COD, BOD, TSS, TKN, SNH, SNO (g/m³).
     """
-    t, C_traj, Q_traj, network = _effluent_args(stream_or_t, C_traj, Q_traj, network)
-    i_XB, i_XP, f_P = _composition(network, params)
+    t, C_traj, Q_traj, model = _effluent_args(stream_or_t, C_traj, Q_traj, model)
+    i_XB, i_XP, f_P = _composition(model, params)
     t = jnp.asarray(t)
     single_point = t.shape[0] <= 1
     # Use trapezoidal integration over time.
@@ -238,12 +238,12 @@ def effluent_averages(
         return float(jnp.sum(v_mid * weight) / (total_w + 1e-12))
 
     return {
-        "TSS": time_avg(derived_TSS(C_traj, network)),
-        "COD": time_avg(derived_COD(C_traj, network)),
-        "BOD": time_avg(derived_BOD(C_traj, network, f_P=f_P)),
-        "TKN": time_avg(derived_TKN(C_traj, network, i_XB=i_XB, i_XP=i_XP)),
-        "SNH": time_avg(C_traj[:, network.species_index["SNH"]]),
-        "SNO": time_avg(C_traj[:, network.species_index["SNO"]]),
+        "TSS": time_avg(derived_TSS(C_traj, model)),
+        "COD": time_avg(derived_COD(C_traj, model)),
+        "BOD": time_avg(derived_BOD(C_traj, model, f_P=f_P)),
+        "TKN": time_avg(derived_TKN(C_traj, model, i_XB=i_XB, i_XP=i_XP)),
+        "SNH": time_avg(C_traj[:, model.species_index["SNH"]]),
+        "SNO": time_avg(C_traj[:, model.species_index["SNO"]]),
     }
 
 
@@ -251,7 +251,7 @@ def effluent_quality_index(
     stream_or_t,
     C_traj=None,
     Q_traj=None,
-    network: "CompiledNetwork" = None,
+    model: "CompiledModel" = None,
     *,
     params=None,
 ) -> float:
@@ -262,15 +262,15 @@ def effluent_quality_index(
 
     Units: kg pollutant / day, averaged over the simulation window. Accepts either
     a :class:`~aquakin.plant.streams.StreamSeries` -- ``effluent_quality_index(eff)``
-    -- or the explicit ``(t, C_traj, Q_traj, network)`` form.
+    -- or the explicit ``(t, C_traj, Q_traj, model)`` form.
     """
-    t, C_traj, Q_traj, network = _effluent_args(stream_or_t, C_traj, Q_traj, network)
-    i_XB, i_XP, f_P = _composition(network, params)
-    TSS_t = derived_TSS(C_traj, network)
-    COD_t = derived_COD(C_traj, network)
-    BOD_t = derived_BOD(C_traj, network, f_P=f_P)
-    TKN_t = derived_TKN(C_traj, network, i_XB=i_XB, i_XP=i_XP)
-    SNO_t = C_traj[:, network.species_index["SNO"]]
+    t, C_traj, Q_traj, model = _effluent_args(stream_or_t, C_traj, Q_traj, model)
+    i_XB, i_XP, f_P = _composition(model, params)
+    TSS_t = derived_TSS(C_traj, model)
+    COD_t = derived_COD(C_traj, model)
+    BOD_t = derived_BOD(C_traj, model, f_P=f_P)
+    TKN_t = derived_TKN(C_traj, model, i_XB=i_XB, i_XP=i_XP)
+    SNO_t = C_traj[:, model.species_index["SNO"]]
 
     integrand = Q_traj * (
         _EQI_WEIGHTS["TSS"] * TSS_t

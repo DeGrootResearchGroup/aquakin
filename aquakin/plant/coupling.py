@@ -13,7 +13,7 @@ numerically zero there but structurally present). So instead each component
 
 - a reactor's kinetics from the rate AST (:func:`structural_sparsity_pattern`),
 - a settler's settling law by AD over diverse physical states,
-- a cross-network translator from its emitted ``coupling_pattern()``.
+- a cross-model translator from its emitted ``coupling_pattern()``.
 
 This module defines the contract (:class:`CouplingAware`, :class:`CouplingPattern`)
 and a helper (:func:`ad_union`) for the AD-derived case. The plant assembles the
@@ -42,7 +42,7 @@ class CouplingPattern:
         diagonal block of the plant Jacobian.
     inlet_pattern : np.ndarray or None
         ``(state_size, n_inlet_species)`` boolean -- which inlet concentrations
-        (in the unit's network species ordering) each state-derivative depends
+        (in the unit's model species ordering) each state-derivative depends
         on. ``None`` for a unit with no concentration inlet (it then contributes
         no off-diagonal coupling). The plant composes this with the translator
         coupling(s) on the stream path feeding the unit to form the off-diagonal

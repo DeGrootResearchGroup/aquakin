@@ -26,17 +26,17 @@ from aquakin.integrate.discrete_adjoint import (
 )
 
 
-def _decay_rhs(simple_network):
+def _decay_rhs(simple_model):
     fields = aquakin.SpatialConditions.uniform(1, T=293.15).fields
-    return lambda t, y, p: simple_network.dCdt(y, p, fields, 0)
+    return lambda t, y, p: simple_model.dCdt(y, p, fields, 0)
 
 
-def test_analytic_decay_gradient(simple_network):
+def test_analytic_decay_gradient(simple_model):
     # A -> B, dA/dt = -k A, A(t) = A0 e^{-kt}. Loss = A(T)^2, so
     # dLoss/dk = 2 A(T) (dA/dk) = 2 e^{-kT} (-T e^{-kT}).
-    rhs = _decay_rhs(simple_network)
+    rhs = _decay_rhs(simple_model)
     C0 = jnp.array([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     k = float(p[0])
     T = 15.0
 
@@ -51,12 +51,12 @@ def test_analytic_decay_gradient(simple_network):
     assert abs(float(g) - exact) / abs(exact) < 1e-4
 
 
-def test_trajectory_loss_gradient(simple_network):
+def test_trajectory_loss_gradient(simple_model):
     # Loss over several observation times: L = sum_i A(t_i)^2, with the closed
     # form dL/dk = sum_i 2 A(t_i) (-t_i A(t_i)), A(t)=e^{-kt}.
-    rhs = _decay_rhs(simple_network)
+    rhs = _decay_rhs(simple_model)
     C0 = jnp.array([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     k = float(p[0])
     t_obs = jnp.array([2.0, 5.0, 9.0, 15.0])
 
@@ -74,12 +74,12 @@ def test_trajectory_loss_gradient(simple_network):
     assert abs(float(g) - exact) / abs(exact) < 1e-4
 
 
-def test_t_eval_returns_states_at_times(simple_network):
+def test_t_eval_returns_states_at_times(simple_model):
     # With t_eval the solve returns the state at each observation time, matching
     # a plain diffrax solve sampled at those times.
-    rhs = _decay_rhs(simple_network)
+    rhs = _decay_rhs(simple_model)
     C0 = jnp.array([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     t_obs = jnp.array([1.0, 3.0, 7.0])
     ys = implicit_euler_adjoint_solve(rhs, C0, p, (0.0, 7.0), t_obs, rtol=1e-9, atol=1e-11)
     assert ys.shape == (3, 2)
@@ -87,16 +87,16 @@ def test_t_eval_returns_states_at_times(simple_network):
     assert jnp.allclose(ys[:, 0], jnp.exp(-k * t_obs), atol=1e-5, rtol=1e-4)
 
 
-def test_equals_autodiff_through_same_solve(simple_network):
+def test_equals_autodiff_through_same_solve(simple_model):
     # Permanent guard: the hand-written discrete adjoint computes the SAME
     # gradient that JAX autodiff would, when autodiff can run. On a small
-    # (non-stiff) network, differentiate the identical implicit-Euler solve --
+    # (non-stiff) model, differentiate the identical implicit-Euler solve --
     # same forced-step controller, same tolerances -- both ways and require
     # machine-precision agreement. (Only the integrator's adjoint is hand-coded;
     # the model derivatives are autodiff in both. This pins that they match.)
-    rhs = _decay_rhs(simple_network)
+    rhs = _decay_rhs(simple_model)
     C0 = jnp.array([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     t_obs = jnp.array([1.0, 4.0, 8.0])
     rtol, atol = 1e-8, 1e-10
 
@@ -129,9 +129,9 @@ def test_equals_autodiff_through_same_solve(simple_network):
     assert jnp.allclose(g_stable, g_autodiff, rtol=1e-7, atol=1e-10)
 
 
-def test_gradient_wrt_y0_finite(simple_network):
-    rhs = _decay_rhs(simple_network)
-    p = simple_network.default_parameters()
+def test_gradient_wrt_y0_finite(simple_model):
+    rhs = _decay_rhs(simple_model)
+    p = simple_model.default_parameters()
 
     def loss(C0):
         return jnp.sum(
@@ -146,11 +146,11 @@ def test_gradient_wrt_y0_finite(simple_network):
 
 @pytest.mark.validation
 def test_stiff_finite_uncapped_and_matches_capped():
-    # The canonical stiff network. Differentiating through diffrax's own solve is
+    # The canonical stiff model. Differentiating through diffrax's own solve is
     # non-finite without a dtmax cap; the discrete adjoint is finite uncapped and
     # must match the (correct) capped RecursiveCheckpointAdjoint gradient of the
     # same implicit-Euler solve.
-    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -184,13 +184,13 @@ def test_stiff_finite_uncapped_and_matches_capped():
     assert rel < 1e-5
 
 
-def test_esdirk_analytic_trajectory_gradient(simple_network):
+def test_esdirk_analytic_trajectory_gradient(simple_model):
     # The high-order (Kvaerno5) discrete adjoint on the closed-form decay
     # trajectory loss; Kvaerno5's 5th order makes the primal -- and so the
     # gradient -- tighter than implicit Euler at the same tolerance.
-    rhs = _decay_rhs(simple_network)
+    rhs = _decay_rhs(simple_model)
     C0 = jnp.array([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     k = float(p[0])
     t_obs = jnp.array([2.0, 5.0, 9.0, 15.0])
 
@@ -207,14 +207,14 @@ def test_esdirk_analytic_trajectory_gradient(simple_network):
 
 
 @pytest.mark.parametrize("solve", [implicit_euler_adjoint_solve, esdirk_adjoint_solve])
-def test_gradient_with_t0_in_t_eval(simple_network, solve):
+def test_gradient_with_t0_in_t_eval(simple_model, solve):
     # A t_eval that INCLUDES t0 exercises the discrete adjoint's idx==0 branch:
     # the observation at t0 is y0 itself, so its cotangent flows straight to y0
     # (via ybar0_obs), not through any backward step. The parameter and y0
     # gradients must both stay finite and match the closed form.
-    rhs = _decay_rhs(simple_network)
+    rhs = _decay_rhs(simple_model)
     C0 = jnp.array([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     k = float(p[0])
     t_obs = jnp.array([0.0, 5.0, 15.0])               # t0 included
 
@@ -236,16 +236,16 @@ def test_gradient_with_t0_in_t_eval(simple_network, solve):
 
 
 @pytest.mark.parametrize("solve", [implicit_euler_adjoint_solve, esdirk_adjoint_solve])
-def test_gradient_independent_of_max_steps(simple_network, solve):
+def test_gradient_independent_of_max_steps(simple_model, solve):
     # The backward recurrence is bounded by the real accepted-step count, not the
     # allocated ``max_steps`` buffer: diffrax saves accepted steps contiguously
     # from index 0 and pads the tail, and the bounded loop never visits the
     # padding. So a generously-oversized ``max_steps`` (a loose upper bound) must
     # give the *bit-identical* gradient of a tightly-sized one -- the only effect
     # of the extra capacity is the never-traversed padding.
-    rhs = _decay_rhs(simple_network)
+    rhs = _decay_rhs(simple_model)
     C0 = jnp.array([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     t_obs = jnp.array([2.0, 5.0, 9.0, 15.0])
 
     def loss(pp, max_steps):
@@ -262,13 +262,13 @@ def test_gradient_independent_of_max_steps(simple_network, solve):
     assert float(g_tight) == float(g_loose)   # bit-identical, not merely close
 
 
-def test_esdirk_equals_autodiff_through_same_solve(simple_network):
+def test_esdirk_equals_autodiff_through_same_solve(simple_model):
     # Same machine-precision guard as the implicit-Euler one, but for the
     # Kvaerno5 discrete adjoint: it must equal jax.grad through the identical
-    # forced-step Kvaerno5 solve on a small network.
-    rhs = _decay_rhs(simple_network)
+    # forced-step Kvaerno5 solve on a small model.
+    rhs = _decay_rhs(simple_model)
     C0 = jnp.array([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     t_obs = jnp.array([1.0, 4.0, 8.0])
     rtol, atol = 1e-9, 1e-11
 
@@ -299,9 +299,9 @@ def test_esdirk_equals_autodiff_through_same_solve(simple_network):
 
 @pytest.mark.validation
 def test_esdirk_stiff_trajectory_matches_capped_kvaerno5():
-    # The Kvaerno5 discrete adjoint on the stiff network: finite uncapped, and
+    # The Kvaerno5 discrete adjoint on the stiff model: finite uncapped, and
     # matching the capped-Kvaerno5 jax-adjoint of the same forced-step forward.
-    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -342,7 +342,7 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint():
     # gradient="jax_adjoint" path. Synthetic recovery; compare the fitted params.
     import diffrax
 
-    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p_def = net.default_parameters()
@@ -391,7 +391,7 @@ def test_stiff_trajectory_loss_matches_capped():
     # A multi-observation (trajectory) loss -- the calibration shape -- must be
     # finite uncapped and match the capped reference using the same forced-step
     # forward solve.
-    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -557,13 +557,13 @@ def test_esdirk_dense_stage_reconstruction_convention():
 
 
 @pytest.mark.parametrize("solver", [diffrax.Kvaerno5, diffrax.Kvaerno3])
-def test_low_memory_matches_saved_stage_gradient(simple_network, solver):
-    # On the (linear) decay network the stage equations solve exactly, so the
+def test_low_memory_matches_saved_stage_gradient(simple_model, solver):
+    # On the (linear) decay model the stage equations solve exactly, so the
     # recompute matches the saved-stage path to machine precision -- for both the
     # default Kvaerno5 and the cheaper Kvaerno3.
-    rhs = _decay_rhs(simple_network)
+    rhs = _decay_rhs(simple_model)
     C0 = jnp.array([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     t_obs = jnp.array([1.0, 4.0, 8.0])
     rtol, atol = 1e-9, 1e-11
 
@@ -580,11 +580,11 @@ def test_low_memory_matches_saved_stage_gradient(simple_network, solver):
 
 
 def test_low_memory_matches_saved_stage_stiff():
-    # The recompute must also match on a stiff network: the per-stage Newton
+    # The recompute must also match on a stiff model: the per-stage Newton
     # converges through the same well-conditioned I - dt*gamma*J the forward
     # inverts. The tiny residual vs the saved-stage path is the forward
     # root-finder tolerance vs the machine-precision recompute of the stages.
-    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -621,13 +621,13 @@ def test_is_singly_diagonal_esdirk_guard():
     assert not _is_singly_diagonal_esdirk(np.array([0.25, 0.25, 0.25]))  # implicit 1st
 
 
-def test_low_memory_falls_back_with_warning(simple_network, monkeypatch):
+def test_low_memory_falls_back_with_warning(simple_model, monkeypatch):
     # A tableau outside the assumed shape must warn and fall back to the
     # saved-stage path (still correct), not silently take the recompute.
     import aquakin.integrate.discrete_adjoint as da
-    rhs = _decay_rhs(simple_network)
+    rhs = _decay_rhs(simple_model)
     C0 = jnp.array([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     t_obs = jnp.array([1.0, 8.0])
 
     monkeypatch.setattr(da, "_is_singly_diagonal_esdirk", lambda diag: False)

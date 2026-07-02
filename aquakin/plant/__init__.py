@@ -1,6 +1,6 @@
 """Plant-wide simulation: compose kinetic reactors with non-reactive unit ops.
 
-Provides the :class:`Plant` flowsheet that integrates a network of
+Provides the :class:`Plant` flowsheet that integrates a model of
 :class:`Unit`-Protocol-conforming components (CSTRs, clarifiers, mixers,
 splitters, controllers) under one monolithic Diffrax integration. The
 plant graph supports recycles natively (recycle streams are functions of

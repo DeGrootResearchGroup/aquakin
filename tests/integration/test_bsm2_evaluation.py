@@ -15,7 +15,7 @@ import aquakin
 from aquakin.plant.bsm import (
     BSM2Evaluation,
     build_bsm2,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
     evaluate_bsm2,
@@ -24,12 +24,12 @@ from aquakin.plant.bsm import (
 
 @pytest.fixture(scope="module")
 def asm1():
-    return bsm2_asm1_network()
+    return bsm2_asm1_model()
 
 
 @pytest.fixture(scope="module")
 def adm1():
-    return aquakin.load_network("adm1")
+    return aquakin.load_model("adm1")
 
 
 @pytest.fixture(scope="module")

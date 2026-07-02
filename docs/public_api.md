@@ -8,41 +8,41 @@ The compiled-solve caching section is in `.claude/rules/integration.md`.
 import aquakin
 
 # Loading
-network = aquakin.load_network("ozone_bromate")
-network = aquakin.load_network_from_file("path/to/network.yaml")
+model = aquakin.load_model("ozone_bromate")
+model = aquakin.load_model_from_file("path/to/model.yaml")
 
 # Inspection
-network.name
-network.species
-network.parameters
-network.conditions_required
-network.species_units                # {species: units} carried from the YAML
-network.species_descriptions         # {species: description}
-network.units_of("SNH")              # "g_N/m³" (YAML "g_N/m3" prettified; raises KeyError on unknown)
-network.description_of("SNH")        # "Ammonia + ammonium nitrogen"
-network.time_unit                    # "d" | "s" | "h" | "min" | None — integration
+model.name
+model.species
+model.parameters
+model.conditions_required
+model.species_units                # {species: units} carried from the YAML
+model.species_descriptions         # {species: description}
+model.units_of("SNH")              # "g_N/m³" (YAML "g_N/m3" prettified; raises KeyError on unknown)
+model.description_of("SNH")        # "Ammonia + ammonium nitrogen"
+model.time_unit                    # "d" | "s" | "h" | "min" | None — integration
                                      #   time unit, inferred from the rate-constant
                                      #   units (the inverse-time token they share).
                                      #   t_span / t_eval are in THIS unit; it differs
-                                     #   by network (ozone/UV "s", ASM/ADM/WATS "d"),
+                                     #   by model (ozone/UV "s", ASM/ADM/WATS "d"),
                                      #   so there is no global time unit. None only
-                                     #   when it can't be inferred — a network that
+                                     #   when it can't be inferred — a model that
                                      #   declares no rate-constant time unit, or whose
                                      #   rate constants disagree on one. (All shipped
-                                     #   networks, including the SUMO-derived ASM ones,
+                                     #   models, including the SUMO-derived ASM ones,
                                      #   resolve to "d"/"s".)
-network.default_concentrations()     # jnp.array (all YAML defaults)
-network.default_parameters()         # jnp.array
-network.summary()                    # human-readable table (species listed with units)
-network.to_latex()                   # LaTeX rate expressions
+model.default_concentrations()     # jnp.array (all YAML defaults)
+model.default_parameters()         # jnp.array
+model.summary()                    # human-readable table (species listed with units)
+model.to_latex()                   # LaTeX rate expressions
 # Project a composition onto its mineral precipitation EQUILIBRIUM (only for a
-#   precipitation network with `mode: equilibrium` minerals): solve IAP=Ksp with
+#   precipitation model with `mode: equilibrium` minerals): solve IAP=Ksp with
 #   complementarity, mass-balanced, and return the equilibrium-projected state.
 #   Differentiable via the implicit function theorem -- the non-stiff alternative
 #   to integrating an ultra-insoluble mineral's ~1e13 kinetics (issue #295).
-network.precipitation_equilibrium(C, conditions)   # -> equilibrium state (n_species,)
+model.precipitation_equilibrium(C, conditions)   # -> equilibrium state (n_species,)
 # Solutions carry the labels too: solution.units_named("SNH") for axis/columns,
-#   and solution.time_unit for the time axis (delegates to network.time_unit).
+#   and solution.time_unit for the time axis (delegates to model.time_unit).
 
 # Dimensional ('unit') consistency check of the rate expressions (issue #161).
 # Currency-AWARE: units are a free abelian group over currency tokens
@@ -54,17 +54,17 @@ network.precipitation_equilibrium(C, conditions)   # -> equilibrium state (n_spe
 # concentration factor, a wrong rate-constant exponent, a Monod mixing
 # currencies. It also runs ONE cross-reaction rule: every rate constant drives
 # dC/dt against the same integration time, so all rates must share one
-# inverse-time unit -- a network mixing 1/d and 1/s rates is malformed (its RHS
+# inverse-time unit -- a model mixing 1/d and 1/s rates is malformed (its RHS
 # sums terms on inconsistent time bases) yet each rate passes the per-rate root
-# check on its own, so the disagreement is flagged once at network scope
-# (reaction "(network)", location "time unit"). The shipped networks all share
+# check on its own, so the disagreement is flagged once at model scope
+# (reaction "(model)", location "time unit"). The shipped models all share
 # one time unit, so this never fires on them. ADVISORY + opt-in: never run at load, never raises; a blank or
 # unparseable unit is treated as unknown and skipped (no false alarm), so an
 # empty result means "no inconsistency among the declared, parseable units", not
 # a proof. Stoichiometry (deliberately cross-currency yields) is OUT of scope --
 # that is conservation, via check_conservation / utils/balance.py.
-network.check_units()                # -> list[UnitWarning] (reaction, location, detail)
-network.check_units(check_root=False)  # local rules only (skip currency/vol/time root)
+model.check_units()                # -> list[UnitWarning] (reaction, location, detail)
+model.check_units(check_root=False)  # local rules only (skip currency/vol/time root)
 aquakin.parse_units("g_COD/m3")      # -> Dimension (or None if unknown); aquakin.UnitWarning
 
 # Conservation (mass / electron balance). The currency-aware companion to
@@ -72,17 +72,17 @@ aquakin.parse_units("g_COD/m3")      # -> Dimension (or None if unknown); aquaki
 # so a wrong electron-acceptor (O2/NO3) demand breaks COD and a wrong product
 # split breaks an elemental (S/N/P/Fe) balance. ADVISORY + opt-in like check_units
 # (never run at load, never raises on a violation -- it returns the list).
-network.composition()                # -> {species: {quantity: content}}; declared
+model.composition()                # -> {species: {quantity: content}}; declared
                                      #   `composition:` metadata, else the shipped
                                      #   role-based table (composition_table) for
                                      #   ASM/ADM, else {}.
-network.check_conservation()         # -> [(reaction, quantity, residual)] above tol
-network.check_conservation(tol=1e-2, quantities=["COD"], params=p)  # restrict / calibrated
-network.check_nitrogen()             # -> [(reaction, residual)]; credits nitrate -> N2 gas
+model.check_conservation()         # -> [(reaction, quantity, residual)] above tol
+model.check_conservation(tol=1e-2, quantities=["COD"], params=p)  # restrict / calibrated
+model.check_nitrogen()             # -> [(reaction, residual)]; credits nitrate -> N2 gas
 # Raises ValueError if no composition is available (declare a `composition:` per
-# species or pass composition=...). Quantity content lives in the network YAML
+# species or pass composition=...). Quantity content lives in the model YAML
 # (the WATS family) or the shipped composition_table (ASM/ADM); both feed one API.
-# The shipped ASM1/2d/3, ozone, UV and WATS networks are unit-clean (0
+# The shipped ASM1/2d/3, ozone, UV and WATS models are unit-clean (0
 # warnings); ADM1 is clean on its dissolved/biological reactions but the check
 # DOES flag the three gas_outflow reactions -- the BSM2 gas headspace carries
 # H2/CH4 in COD (kgCOD/m3) and CO2 in carbon (kmolC/m3) and the /16, /64 molar
@@ -103,32 +103,32 @@ network.check_nitrogen()             # -> [(reaction, residual)]; credits nitrat
 # identifiers ("Br-", the namespaced "O3_Br_direct.k1"); kwargs are a
 # convenience for identifier-safe names. Unknown names raise with a
 # difflib "did you mean?" hint.
-network.concentrations({"O3": 1e-4, "Br-": 1e-5})   # YAML defaults + overrides
-network.concentrations({"SS": 60.0}, base="zero")   # FEED: unlisted species = 0,
+model.concentrations({"O3": 1e-4, "Br-": 1e-5})   # YAML defaults + overrides
+model.concentrations({"SS": 60.0}, base="zero")   # FEED: unlisted species = 0,
                                                     #   not at their reference value
-network.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0, T=288.15)  # zero-based,
+model.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0, T=288.15)  # zero-based,
                                                     #   constant-in-time InfluentSeries
                                                     #   (== InfluentSeries.constant(net, ...))
-network.parameter_values({"O3_Br_direct.k1": 175.0})
-network.atol({"OH": 1e-20}, default=1e-12)          # per-species tolerance vector
+model.parameter_values({"O3_Br_direct.k1": 175.0})
+model.atol({"OH": 1e-20}, default=1e-12)          # per-species tolerance vector
 
 # Conditions  (n_locations defaults to 1, for the 0-D batch case)
 conditions = aquakin.OperatingConditions(pH=7.5, T=293.15)   # 0-D alias (1 location)
-conditions = network.default_conditions().with_(T=283.15)    # edit from YAML defaults
+conditions = model.default_conditions().with_(T=283.15)    # edit from YAML defaults
 conditions = aquakin.SpatialConditions.uniform(pH=7.5, T=293.15)
 conditions = aquakin.SpatialConditions(fields={"pH": jnp.array([...]), ...})  # PFR/CFD
 
-# Batch reactor  (params defaults to network.default_parameters())
-reactor = aquakin.BatchReactor(network, conditions)
+# Batch reactor  (params defaults to model.default_parameters())
+reactor = aquakin.BatchReactor(model, conditions)
 solution = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_eval)
 solution = reactor.solve(C0, t_span, t_eval, params=params)   # t_span is the 2nd
 #   positional arg; params is KEYWORD-ONLY, so a positional t_span tuple can never
 #   land in it -- reactor.solve(C0, (0.0, 600.0)) just works (no shape-error footgun).
-# t_span / t_eval are in the network's native time unit (network.time_unit); pass
+# t_span / t_eval are in the model's native time unit (model.time_unit); pass
 # time_unit= to work in another unit. The input times are converted into the
 # native unit for the solve (rate constants unchanged) and solution.t is reported
 # back in the requested unit (solution.time_unit is set to it). Raises if the
-# network's own time unit is undeclared (network.time_unit is None). Wired on
+# model's own time unit is undeclared (model.time_unit is None). Wired on
 # BatchReactor / BiofilmReactor / Plant.solve (PFR is space-indexed -> N/A; the
 # AD/fitting paths -- solve_sensitivity / calibrate / sensitivity -- stay native).
 solution = reactor.solve(C0, t_span=(0.0, 24.0), t_eval=t_eval, time_unit="h")
@@ -156,7 +156,7 @@ solution.to_csv("run.csv")           # delegates to to_dataframe().to_csv(...)
 solution.plot("SNH")                 # matplotlib Axes: one species over the
 solution.plot(["SNH", "SNO"], ax=ax) #   independent axis, no boilerplate
 # plot(species=None|str|iterable, ax=None, **plot_kwargs) -> matplotlib.axes.Axes.
-#   The x-axis is labelled with the network's time unit (PFR: "axial position
+#   The x-axis is labelled with the model's time unit (PFR: "axial position
 #   [m]"); a single species labels the y-axis with its units, several get a
 #   legend; None plots every species. matplotlib is the optional `plot` extra
 #   (also in the `test` extra). Same mixin as to_dataframe, so every single-vector
@@ -165,7 +165,7 @@ solution.plot(["SNH", "SNO"], ax=ax) #   independent axis, no boilerplate
 #   non-concentration unit raise the same hinted errors as C_named.
 
 # Plug flow reactor
-reactor = aquakin.PlugFlowReactor(network, conditions, n_points, length, velocity)
+reactor = aquakin.PlugFlowReactor(model, conditions, n_points, length, velocity)
 solution = reactor.solve(C0, params=params)            # params keyword-only
 solution.x                           # (n_points,)
 solution.C                           # (n_points, n_species)
@@ -187,20 +187,20 @@ solution.C                           # (n_points, n_species)
 # precipitated FeS -- whose inventory genuinely drains/fills. Freezing such a
 # species turns it into an unbounded source/sink and silently breaks mass balance
 # (e.g. a frozen X_S0 makes the nitrate-driven X_S0->SO4 oxidation a non-depleting
-# sulfate source). For those networks pass fixed_mask holding only the inert
-# biomass/solids fixed. The same CompiledNetwork runs in every compartment, so
+# sulfate source). For those models pass fixed_mask holding only the inert
+# biomass/solids fixed. The same CompiledModel runs in every compartment, so
 # identical chemistry behaves differently once depth is resolved (Wanner & Gujer
 # 1986; Jiang et al. 2009; Sun et al. 2014). In the well-mixed limit it reduces to
 # BatchReactor *under the fixed-particulate assumption* (exact only for species
 # that are fixed on both sides; particulates that evolve in a plain BatchReactor
 # but are held fixed here diverge over finite time).
-# A WATS-style network has two phases: bulk-suspended reactions (carry [X_BH]) and
+# A WATS-style model has two phases: bulk-suspended reactions (carry [X_BH]) and
 # biofilm reactions (carry the {A_V} area factor). biofilm_reactions=[names...]
 # runs those reactions in the LAYERS only and the rest in the BULK only -- an
 # explicit per-reaction phase split (no reliance on a zeroed biomass state). A
 # composite term like bio_hf=[X_BH]+eps*{X_BF}*{A_V} is handled by splitting the
 # reaction into _bulk ([X_BH]) and _biofilm (eps*{X_BF}*{A_V}) halves in the
-# network YAML; biofilm rate constants are areal (per m^2), so set A_V=1/thickness
+# model YAML; biofilm rate constants are areal (per m^2), so set A_V=1/thickness
 # per layer (the lumped model is then the well-mixed limit, conserving mass).
 #
 # BIOFILM-GROWTH / MATURATION features (all off by default; used to mature a
@@ -231,7 +231,7 @@ solution.C                           # (n_points, n_species)
 #     the physical maturation time (~90 d for the Khalil rig) and use that profile
 #     as the IC instead.
 reactor = aquakin.BiofilmReactor(
-    network, conditions, n_layers=6, thickness=8e-4, area_per_volume=50.0,
+    model, conditions, n_layers=6, thickness=8e-4, area_per_volume=50.0,
     diffusivity=1e-4, boundary_layer=1e-4,
     biofilm_reactions=[...])             # names of the {A_V} reactions (run in layers only)
 solution = reactor.solve(C0, t_span, t_eval, params=params)  # C0 (n_species,) or (n_layers+1, n_species); params keyword-only
@@ -240,7 +240,7 @@ solution.profile                     # (n_t, n_layers+1, n_species) -- depth-res
 solution.depth                       # (n_layers,) layer mid-depths from the surface
 solution.profile_named("S_NO")       # (n_t, n_layers+1) depth profile over time
 
-# Sensitivity and fitting  (params defaults to network defaults; t_span/t_eval
+# Sensitivity and fitting  (params defaults to model defaults; t_span/t_eval
 # can be passed directly instead of via solve_kwargs)
 sens = aquakin.sensitivity(reactor, C0, output_fn=out, t_span=(0.0, 600.0), t_eval=t_obs)
 sens.doutput_dparams                 # (n_params,)
@@ -249,8 +249,8 @@ sens.ranked_params()
 
 # Forward (variational) sensitivity — integrate S = dC/dθ ALONGSIDE the state,
 # with the adaptive controller bounding S too, so the sensitivity is exact and
-# finite WITHOUT a dtmax cap (the cap-free alternative for stiff networks; see
-# "Differentiating stiff networks" above). Each reactor exposes solve_sensitivity:
+# finite WITHOUT a dtmax cap (the cap-free alternative for stiff models; see
+# "Differentiating stiff models" above). Each reactor exposes solve_sensitivity:
 sol, S = reactor.solve_sensitivity(
     C0, params, t_span, t_eval,
     sens_params=["mu_h", "q_m"],     # names or int indices of the free params
@@ -343,7 +343,7 @@ opt.report()                         # human-readable summary (str)
 result = aquakin.fit(reactor, C0, observations, t_obs, free_params, method="adjoint")
 result.params
 result.params_named
-# t_obs is in the network's native time unit; pass time_unit= (as on solve) to
+# t_obs is in the model's native time unit; pass time_unit= (as on solve) to
 # carry an hour-/minute-valued t_obs straight from a solve(time_unit=...) run —
 # it is converted to native before the fit, so the axis matches the rate
 # constants instead of being silently mis-scaled. Same kwarg on calibrate().
@@ -389,9 +389,9 @@ band.median, band.lo, band.hi        # (n_t, n_species) envelopes -> PredictiveB
 
 # optimizer="gauss_newton" minimises the residual vector with scipy.least_squares
 # (trf), forming the Jacobian by forward-mode AD when the reactor uses
-# adjoint=diffrax.DirectAdjoint() (finite at any step, for very stiff networks
+# adjoint=diffrax.DirectAdjoint() (finite at any step, for very stiff models
 # whose reverse-mode adjoint is non-finite), else reverse-mode. It is markedly
-# more robust than L-BFGS-B on the multimodal landscapes of stiff network fits.
+# more robust than L-BFGS-B on the multimodal landscapes of stiff model fits.
 
 # Profile-likelihood identifiability analysis (the exact companion to the local
 # Laplace covariance). Fix one quantity -- a parameter OR an initial condition --

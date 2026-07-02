@@ -22,19 +22,19 @@ import aquakin
 
 @pytest.fixture
 def cfd_setup():
-    """The expanded ozone/bromate network plus per-cell initial state."""
-    network = aquakin.load_network("ozone_bromate")
+    """The expanded ozone/bromate model plus per-cell initial state."""
+    model = aquakin.load_model("ozone_bromate")
     n_cells = 8
 
     # Per-species absolute tolerance: OH lives at ~1e-12 M.
-    atol = np.full(network.n_species, 1e-12)
-    atol[network.species_index["OH"]] = 1e-20
-    reactor = aquakin.CFDReactor(network, atol=jnp.asarray(atol))
+    atol = np.full(model.n_species, 1e-12)
+    atol[model.species_index["OH"]] = 1e-20
+    reactor = aquakin.CFDReactor(model, atol=jnp.asarray(atol))
 
     # Initial cell state: identical inlet concentration across cells.
-    C0 = np.zeros((n_cells, network.n_species), dtype=np.float64)
-    C0[:, network.species_index["O3"]] = 1.0e-4
-    C0[:, network.species_index["Br-"]] = 1.0e-5
+    C0 = np.zeros((n_cells, model.n_species), dtype=np.float64)
+    C0[:, model.species_index["O3"]] = 1.0e-4
+    C0[:, model.species_index["Br-"]] = 1.0e-5
 
     # Per-cell condition fields. Sweep OH_scavenging log-spaced across cells
     # to simulate streamlines passing through differing matrix scavenging.
@@ -62,7 +62,7 @@ def test_full_loop_runs_and_returns_numpy(cfd_setup):
     reactor, C0, conditions = cfd_setup
     history, _ = _fake_cfd_loop(reactor, C0, conditions, total_time=300.0, n_steps=10)
     assert isinstance(history, np.ndarray)
-    assert history.shape == (11, C0.shape[0], reactor.network.n_species)
+    assert history.shape == (11, C0.shape[0], reactor.model.n_species)
     assert np.all(np.isfinite(history))
 
 
@@ -82,10 +82,10 @@ def test_bromide_atom_balance(cfd_setup):
     OH is not Br-bearing, so it is excluded from the count.
     """
     reactor, C0, conditions = cfd_setup
-    network = reactor.network
+    model = reactor.model
     history, _ = _fake_cfd_loop(reactor, C0, conditions, total_time=600.0, n_steps=12)
     br_species = ["Br-", "HOBr", "BrO2-", "BrO3-"]
-    idxs = [network.species_index[s] for s in br_species]
+    idxs = [model.species_index[s] for s in br_species]
     initial = history[0, :, idxs].sum(axis=0)
     final = history[-1, :, idxs].sum(axis=0)
     # Conservation to integration tolerance.
@@ -95,9 +95,9 @@ def test_bromide_atom_balance(cfd_setup):
 def test_ozone_monotone_per_cell(cfd_setup):
     """O3 decays monotonically (within solver tolerance) in every cell."""
     reactor, C0, conditions = cfd_setup
-    network = reactor.network
+    model = reactor.model
     history, _ = _fake_cfd_loop(reactor, C0, conditions, total_time=600.0, n_steps=12)
-    o3 = history[:, :, network.species_index["O3"]]
+    o3 = history[:, :, model.species_index["O3"]]
     diffs = np.diff(o3, axis=0)
     # Allow a small positive tolerance to absorb solver noise.
     assert np.all(diffs <= 1e-12)
@@ -107,9 +107,9 @@ def test_per_cell_results_differ_with_conditions(cfd_setup):
     """Cells with very different OH_scavenging must produce visibly different
     bromate yields after the simulation."""
     reactor, C0, conditions = cfd_setup
-    network = reactor.network
+    model = reactor.model
     history, _ = _fake_cfd_loop(reactor, C0, conditions, total_time=600.0, n_steps=12)
-    bro3_final = history[-1, :, network.species_index["BrO3-"]]
+    bro3_final = history[-1, :, model.species_index["BrO3-"]]
     # Low-scavenging cells (index 0) should yield more bromate than
     # high-scavenging cells (index -1).
     assert bro3_final[0] > bro3_final[-1]
@@ -134,7 +134,7 @@ def test_matches_per_cell_BatchReactor(cfd_setup):
     semantically identical to running ``BatchReactor`` per cell.
     """
     reactor, C0, conditions = cfd_setup
-    network = reactor.network
+    model = reactor.model
     dt = 60.0
     out_cfd = reactor.step(C0, conditions, dt)
 
@@ -143,17 +143,17 @@ def test_matches_per_cell_BatchReactor(cfd_setup):
         sc = aquakin.SpatialConditions(
             fields={
                 name: jnp.asarray([float(conditions[name][i])])
-                for name in network.conditions_required
+                for name in model.conditions_required
             }
         )
         # Same per-species atol as the CFD reactor.
-        atol = np.full(network.n_species, 1e-12)
-        atol[network.species_index["OH"]] = 1e-20
-        br = aquakin.BatchReactor(network, sc, atol=jnp.asarray(atol))
+        atol = np.full(model.n_species, 1e-12)
+        atol[model.species_index["OH"]] = 1e-20
+        br = aquakin.BatchReactor(model, sc, atol=jnp.asarray(atol))
         sol = br.solve(
             jnp.asarray(C0[i]),
             t_span=(0.0, dt),
-            params=network.default_parameters(),
+            params=model.default_parameters(),
         )
         out_batch[i] = np.asarray(sol.C[-1])
 
@@ -167,7 +167,7 @@ def test_step_is_ad_clean(cfd_setup):
     through the runtime-coupled CFD path.
     """
     reactor, C0, conditions = cfd_setup
-    network = reactor.network
+    model = reactor.model
 
     # Convert to JAX for the grad path; CFDReactor.step does NumPy conversion
     # internally, so we drive the underlying jit directly here.
@@ -177,11 +177,11 @@ def test_step_is_ad_clean(cfd_setup):
 
     def output(params):
         C_new = inner(C0_jax, cond_jax, jnp.asarray(60.0), params)
-        return jnp.mean(C_new[:, network.species_index["BrO3-"]])
+        return jnp.mean(C_new[:, model.species_index["BrO3-"]])
 
-    g = jax.grad(output)(network.default_parameters())
+    g = jax.grad(output)(model.default_parameters())
     assert jnp.all(jnp.isfinite(g))
     # The bromate-formation rate constants should have positive gradient
     # contribution.
-    k1_idx = network.param_index["O3_Br_direct.k1"]
+    k1_idx = model.param_index["O3_Br_direct.k1"]
     assert float(g[k1_idx]) > 0.0

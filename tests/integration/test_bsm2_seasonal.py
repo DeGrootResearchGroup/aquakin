@@ -3,7 +3,7 @@
 Exercises the end-to-end temperature path -- a temperature-carrying influent
 flows through the plant (mixers heat-balance it, units pass it through), each AS
 reactor reads its inlet temperature, and the ASM1 temperature corrections
-(re-referenced to the BSM2 15 degC base by ``bsm2_asm1_network``) slow the
+(re-referenced to the BSM2 15 degC base by ``bsm2_asm1_model``) slow the
 kinetics in the cold. At the 15 degC reference temperature the plant reproduces
 the validated steady state exactly (the correction is unity there); colder
 influent leaves more residual ammonia (nitrification, the most
@@ -19,7 +19,7 @@ from aquakin.plant.bsm.bsm2 import (
     BSM2_CONSTANT_INFLUENT,
     BSM2_Q_REF,
     build_bsm2,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_parameters,
 )
 from aquakin.plant.influent import InfluentSeries
@@ -30,9 +30,9 @@ def _tank5_snh_at(asm1, adm1, params, T_kelvin):
     for sp, v in BSM2_CONSTANT_INFLUENT.items():
         C = C.at[asm1.species_index[sp]].set(v)
     infl = InfluentSeries(t=jnp.array([0.0, 1e4]), Q=jnp.full((2,), BSM2_Q_REF),
-                          C=jnp.tile(C, (2, 1)), network=asm1,
+                          C=jnp.tile(C, (2, 1)), model=asm1,
                           T=jnp.full((2,), float(T_kelvin)))
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", infl)
     y0 = bsm2_warm_start(plant)
     sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
@@ -45,8 +45,8 @@ def _tank5_snh_at(asm1, adm1, params, T_kelvin):
 
 @pytest.mark.validation
 def test_bsm2_cold_influent_slows_nitrification():
-    asm1 = bsm2_asm1_network()           # temperature corrections referenced to 15 °C
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()           # temperature corrections referenced to 15 °C
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
     snh_cold = _tank5_snh_at(asm1, adm1, params, 283.15)   # 10 °C
     snh_warm = _tank5_snh_at(asm1, adm1, params, 293.15)   # 20 °C
@@ -61,8 +61,8 @@ def test_temperature_influent_rhs_finite_and_active():
     and the tank-5 ammonia derivative differs between a cold and a warm influent
     (the temperature reaches the kinetics through the recycle loop -- it does not
     if the seeded recycle stream drops its temperature)."""
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
     C = asm1.default_concentrations() * 0.0
     for sp, v in BSM2_CONSTANT_INFLUENT.items():
@@ -70,9 +70,9 @@ def test_temperature_influent_rhs_finite_and_active():
 
     def rhs_dsnh(T_kelvin):
         infl = InfluentSeries(t=jnp.array([0.0, 1e4]), Q=jnp.full((2,), BSM2_Q_REF),
-                              C=jnp.tile(C, (2, 1)), network=asm1,
+                              C=jnp.tile(C, (2, 1)), model=asm1,
                               T=jnp.full((2,), float(T_kelvin)))
-        plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+        plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
         plant.add_influent("feed", infl)
         y0 = bsm2_warm_start(plant)
         d = plant.derivative(y0, params)          # dstate/dt, no full solve
