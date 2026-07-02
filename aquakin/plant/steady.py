@@ -671,11 +671,15 @@ def arclength_continuation_solve(
         y_star = jax.lax.stop_gradient(state)
         branch = None
         if record_branch:
-            branch = (jnp.asarray(_branch_s),
-                      jnp.stack([jnp.asarray(v) for v in _branch_y]))
+            branch = (jnp.asarray(_branch_s), jnp.stack([jnp.asarray(v) for v in _branch_y]))
         return ArclengthResult(
-            _ift_state(rhs, y_star, params_target), res, status, float(smax), step,
-            ncorr[0], branch,
+            _ift_state(rhs, y_star, params_target),
+            res,
+            status,
+            float(smax),
+            step,
+            ncorr[0],
+            branch,
         )
 
     for step in range(int(max_steps)):
@@ -729,7 +733,7 @@ def arclength_continuation_solve(
         # would wrongly exclude real operating points.
         if ts_prev > 0.0 and float(ts) <= 0.0 and s_max < 1.0 - fold_margin:
             if record_branch:
-                if not fold_hit[0]:      # note the fold, but keep tracing the unstable arm
+                if not fold_hit[0]:  # note the fold, but keep tracing the unstable arm
                     fold_hit[0], fold_hit[1] = True, s_max
             else:
                 return _result(scale * z, rF, "past_fold", s_max, step)
