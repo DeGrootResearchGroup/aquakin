@@ -283,9 +283,12 @@ def test_evaluate_bsm1_indices(asm1, constant_influent):
     assert ev.aeration_energy > 0.0
     assert ev.pumping_energy > 0.0
     assert ev.sludge_production > 0.0
-    # OCI is the BSM1 form AE + PE + 5*sludge.
+    # The two unaerated reactors (tanks 1-2) are mechanically mixed.
+    assert ev.mixing_energy > 0.0
+    # OCI is the updated BSM1 form AE + PE + ME + 5*sludge.
     assert ev.oci == pytest.approx(
-        ev.aeration_energy + ev.pumping_energy + 5.0 * ev.sludge_production)
+        ev.aeration_energy + ev.pumping_energy + ev.mixing_energy
+        + 5.0 * ev.sludge_production)
     # The three aerated tanks (tanks 3-5) are counted.
     assert ev.aerated_tanks == ["tank3", "tank4", "tank5"]
 
@@ -305,4 +308,5 @@ def test_evaluate_bsm1_on_single_point_steady_state(asm1, constant_influent):
         v = getattr(ev, name)
         assert jnp.isfinite(v) and v > 0.0, name
     assert ev.oci == pytest.approx(
-        ev.aeration_energy + ev.pumping_energy + 5.0 * ev.sludge_production)
+        ev.aeration_energy + ev.pumping_energy + ev.mixing_energy
+        + 5.0 * ev.sludge_production)

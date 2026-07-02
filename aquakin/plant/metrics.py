@@ -324,15 +324,19 @@ def operational_cost_index(
     aeration: float,
     pumping: float,
     sludge_production: float,
+    mixing: float = 0.0,
 ) -> float:
-    """OCI per Copp 2002 eq (BSM1 form):
+    """OCI (BSM1 form):
 
-    OCI = aeration + pumping + 5 × sludge_production
+    OCI = aeration + pumping + mixing + 5 × sludge_production
 
+    The original Copp (2002) index omits the mixing term (``mixing=0``); the
+    updated open-loop benchmark adds the mechanical-mixing energy of the
+    unaerated reactors, so the two conventions differ only by that term.
     Sludge_production is the time-averaged TSS mass flow leaving via
     wastage + the change in plant TSS inventory.
     """
-    return float(aeration + pumping + 5.0 * sludge_production)
+    return float(aeration + pumping + mixing + 5.0 * sludge_production)
 
 
 # ---- BSM2 OCI component kernels (Gernaey et al. 2014) -----------------------
