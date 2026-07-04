@@ -110,6 +110,29 @@ def test_arclength_solves_reachable_and_detects_past_fold():
     assert float(r_fold.s_max) < 1.0
     # The fold of this system is at s=0.5 (lambda crosses 0 halfway).
     assert 0.4 < float(r_fold.s_max) < 0.65
+    # Default records no branch.
+    assert r_fold.branch is None
+
+
+def test_arclength_record_branch_traces_the_curve():
+    """``record_branch=True`` returns the traced ``(s, y)`` path and still reports
+    the fold; every recorded point lies on the branch ``y**2 = p``."""
+    from aquakin.plant.steady import arclength_continuation_solve
+
+    def rhs(y, p):
+        return jnp.array([p[0] - y[0] ** 2])
+
+    pk, yk = jnp.array([1.0]), jnp.array([1.0])
+    kw = dict(scale=jnp.array([1.0]), ptc_kwargs=dict(scale_floor=jnp.array([1.0])))
+    r = arclength_continuation_solve(rhs, pk, yk, jnp.array([-1.0]),
+                                     record_branch=True, max_steps=300, **kw)
+    assert r.status == "past_fold" and 0.4 < float(r.s_max) < 0.65
+    s, ys = r.branch
+    assert s.shape[0] == ys.shape[0] >= 3
+    p = 1.0 - 2.0 * np.asarray(s)                    # p = pk + s*(target - pk)
+    y = np.asarray(ys)[:, 0]
+    np.testing.assert_allclose(y ** 2, p, atol=1e-4)  # each point solves F=0
+    assert float(y[0]) == pytest.approx(1.0, abs=1e-3) and p.min() < 0.05  # traced to the nose
 
 
 # --- full plant: BSM1 / BSM2 (slow) ------------------------------------------

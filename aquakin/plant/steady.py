@@ -529,6 +529,13 @@ class ArclengthResult:
     s_max: float
     continuation_steps: int
     corrector_iterations: int
+    branch: Optional[tuple] = None
+    """When ``record_branch=True``, the traced branch as ``(s, ys)``: ``s`` shape
+    ``(n_pts,)`` is the continuation parameter (``params_known + s*dtheta``) and
+    ``ys`` shape ``(n_pts, n_state)`` the corresponding states, in trace order.
+    With recording on, the trace continues **past** a fold onto the unstable arm
+    (so a full saddle-node S-curve is captured), while ``status``/``s_max`` still
+    report the fold. ``None`` when recording is off (the default)."""
 
     @property
     def converged(self):
@@ -604,6 +611,7 @@ def arclength_continuation_solve(
     nonneg=True,
     s_tol=1.0e-4,
     fold_margin=2.0e-2,
+    record_branch=False,
 ):
     """Reach a far operating point by scaled pseudo-arclength continuation.
 
@@ -640,6 +648,12 @@ def arclength_continuation_solve(
     ncorr = [0]
     s_max = 0.0
     last_rF = jnp.asarray(jnp.inf)
+    # Optional branch recording: keep the traced (s, y) path. When on, the trace
+    # is not stopped at the fold -- it continues onto the unstable arm so a full
+    # S-curve is captured -- while status/s_max still report the saddle-node.
+    _branch_s = [0.0] if record_branch else None
+    _branch_y = [jnp.asarray(y_known)] if record_branch else None
+    fold_hit = [False, 0.0]  # (fold detected, fold s_max)
 
     def _correct(z0, s0, uz, us, tzc, tsc, ds):
         zc, sc, A = z0, s0, None
@@ -655,8 +669,17 @@ def arclength_continuation_solve(
 
     def _result(state, res, status, smax, step):
         y_star = jax.lax.stop_gradient(state)
+        branch = None
+        if record_branch:
+            branch = (jnp.asarray(_branch_s), jnp.stack([jnp.asarray(v) for v in _branch_y]))
         return ArclengthResult(
-            _ift_state(rhs, y_star, params_target), res, status, float(smax), step, ncorr[0]
+            _ift_state(rhs, y_star, params_target),
+            res,
+            status,
+            float(smax),
+            step,
+            ncorr[0],
+            branch,
         )
 
     for step in range(int(max_steps)):
@@ -669,13 +692,14 @@ def arclength_continuation_solve(
         if not conv:
             dsig *= ds_shrink
             if dsig < dsigma_min:
-                return _result(scale * z, last_rF, "failed", s_max, step)
+                st, sm = ("past_fold", fold_hit[1]) if fold_hit[0] else ("failed", s_max)
+                return _result(scale * z, last_rF, st, sm, step)
             continue
         s_new = float(sc)
         # Reachable: the branch crosses s=1 while still advancing forward -- secant
         # on the arclength step to land exactly on the target (the augmented
         # corrector stays well-conditioned, unlike a natural-parameter solve).
-        if (s < 1.0 <= s_new) and ts_prev > 0.0:
+        if (not fold_hit[0]) and (s < 1.0 <= s_new) and ts_prev > 0.0:
             d_lo, s_lo, d_hi, s_hi = 0.0, s, dsig, s_new
             zp, rp = zc, rF
             for _ in range(12):
@@ -696,6 +720,9 @@ def arclength_continuation_solve(
         z, s = zc, sc
         last_rF = rF
         s_max = max(s_max, s)
+        if record_branch:
+            _branch_s.append(float(s))
+            _branch_y.append(scale * z)
         tz, ts = tangent(A, tz, ts)
         # Fold: the s-velocity actually REVERSED (the branch reached its nose and
         # turned back) while short of the target -- a saddle-node bifurcation, so no
@@ -705,9 +732,14 @@ def arclength_continuation_solve(
         # marginally-stable operating point that does exist), so a small-``ts`` test
         # would wrongly exclude real operating points.
         if ts_prev > 0.0 and float(ts) <= 0.0 and s_max < 1.0 - fold_margin:
-            return _result(scale * z, rF, "past_fold", s_max, step)
+            if record_branch:
+                if not fold_hit[0]:  # note the fold, but keep tracing the unstable arm
+                    fold_hit[0], fold_hit[1] = True, s_max
+            else:
+                return _result(scale * z, rF, "past_fold", s_max, step)
         dsig = min(dsig * ds_grow, dsigma_max)
-    return _result(scale * z, last_rF, "failed", s_max, max_steps)
+    st, sm = ("past_fold", fold_hit[1]) if fold_hit[0] else ("failed", s_max)
+    return _result(scale * z, last_rF, st, sm, max_steps)
 
 
 @functools.partial(jax.custom_jvp, nondiff_argnums=(0,))
