@@ -443,13 +443,23 @@ Key types:
     the digester deliberately excluded from the N gas term since it has no N gas
     phase) and **accumulation** (ΔInventory across every unit — reactor / clarifier
     / digester liquid+headspace at `V_liq`/`V_gas` / storage / Takács blanket).
-    A unit holding a single well-mixed liquid volume (`StorageTank` / `MBRUnit` /
-    `SBRUnit`, whose states are `[C…, scalar(s)]`) declares that volume through an
-    explicit **`liquid_volume(state)`** contract, so its inventory is `V·C` — the
-    `_unit_inventory` dispatch reads that method instead of the former fragile
-    `hasattr`/state-size guessing (whose MBR-before-storage ordering existed only
-    because both states were `[C.., scalar]`); a future such unit just implements
-    the contract.
+    `_unit_inventory` **dispatches on unit-implemented contracts, never on private
+    state layout** (#505): a unit whose state layout is non-trivial declares
+    **`component_inventory(state, content, params)`** returning its own
+    `{component: grams}` — the layered **`TakacsClarifier`** (blanket summed over
+    layers, both `composition_mode`s + `soluble_holdup`) and the
+    **`ADM1DigesterUnit`** (liquid states at `V_liq`, the three gas-headspace states
+    at `V_gas`, via its own `_state_volume_vector(params)` which `_reaction_volume`
+    also reuses for the reaction integral). A unit holding a single well-mixed
+    liquid volume (`StorageTank` / `MBRUnit` / `SBRUnit`, whose states are
+    `[C…, scalar(s)]`) instead declares that volume through **`liquid_volume(state)`**,
+    so its inventory is `V·C`; a plain concentration-vector unit (`CSTRUnit` /
+    `PrimaryClarifier`) falls through to the generic `volume·C`. This completes the
+    inversion `liquid_volume` started — the balance no longer reaches into
+    `_part_block_size` / `_n_part` / `param_index["V_gas"]` etc., and a unit with a
+    new state representation participates by implementing `component_inventory`
+    rather than editing the balance helper. Contract covered by
+    `test_mass_balance_plant.py::test_stateful_units_own_their_component_inventory`.
     `imbalance = in − out − gas − accumulation` is the closure; `mb["N"]`,
     `mb.closed(rtol)`, `mb.summary()`, `mb[q].relative_imbalance`. Everything is on
     one canonical g basis (g COD / g N / g P), so the ASM water line (g/m³) and the

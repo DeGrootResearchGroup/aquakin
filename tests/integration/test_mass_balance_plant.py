@@ -106,6 +106,51 @@ def test_mass_balance_closes_on_aerated_cstr():
     assert "closed" in mb.summary()
 
 
+def test_stateful_units_own_their_component_inventory():
+    """The #505 inversion: a unit whose state layout is non-trivial (the layered
+    Takács settler, the ADM1 digester with its gas headspace) declares its own
+    ``component_inventory`` contract, so the mass balance dispatches on a method
+    instead of reaching into private layout attributes. A plain
+    concentration-vector unit does *not* implement the contract -- it falls
+    through to the generic ``volume·C`` path in ``_unit_inventory``.
+    """
+    from aquakin.plant.digester import ADM1DigesterUnit
+    from aquakin.plant.takacs import TakacsClarifier
+
+    # The two special-layout units expose the contract; a plain CSTR does not.
+    assert hasattr(TakacsClarifier, "component_inventory")
+    assert hasattr(ADM1DigesterUnit, "component_inventory")
+    assert hasattr(ADM1DigesterUnit, "_state_volume_vector")
+    assert not hasattr(CSTRUnit, "component_inventory")
+
+    asm1 = aquakin.load_model("asm1")
+    tak = TakacsClarifier(name="t", model=asm1, area=1000.0, height=4.0, overflow_Q=1.0)
+    # per_species blanket: unit concentration of the first particulate species in
+    # every layer, unit content on that species -> inventory = layer_vol·n_layers.
+    layer_vol = tak.area * tak.height / tak.n_layers
+    content_vec = np.zeros(asm1.n_species)
+    content_vec[tak._part_indices[0]] = 1.0
+    prof = np.zeros((tak.n_layers, tak._n_part))
+    prof[:, 0] = 1.0
+    state = np.zeros(tak.state_size)
+    state[: tak._part_block_size] = prof.reshape(-1)
+    inv = tak.component_inventory(state, {"X": content_vec}, asm1.default_parameters())
+    assert inv["X"] == pytest.approx(layer_vol * tak.n_layers)
+
+    # Digester: the three gas-headspace states live in V_gas, the liquid states
+    # in the liquid volume -- the layout the balance no longer hard-codes.
+    adm1 = aquakin.load_model("adm1")
+    dig = ADM1DigesterUnit(name="d", model=adm1, volume=3400.0)
+    params = adm1.default_parameters()
+    vol = dig._state_volume_vector(params)
+    v_gas = float(params[adm1.param_index["V_gas"]])
+    for sp in ("S_gas_h2", "S_gas_ch4", "S_gas_co2"):
+        assert vol[adm1.species_index[sp]] == pytest.approx(v_gas)
+    liquid_states = [i for i in range(adm1.n_species) if vol[i] != v_gas]
+    assert liquid_states  # there are liquid states
+    assert all(vol[i] == pytest.approx(3400.0) for i in liquid_states)
+
+
 def test_mass_balance_default_ports_are_influents_and_dangling_outputs():
     net = aquakin.load_model("asm1")
     plant = _aerated_cstr_plant(net)
@@ -142,8 +187,9 @@ def test_mass_balance_closes_on_bsm1_takacs_lumped_settler():
     steady state. ``build_bsm1(use_takacs=True)`` defaults to the reference
     ``settler1dv4`` config (``composition_mode="lumped_tss"``, soluble holdup),
     whose head block is one TSS value per layer rather than per species -- the
-    regression guard for the lumped-settler inventory in ``_unit_inventory``
-    (which would otherwise fail to reshape the TSS head block)."""
+    regression guard for the lumped-settler branch of the settler's
+    ``component_inventory`` (which would otherwise fail to reshape the TSS head
+    block)."""
     from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
 
     net = aquakin.load_model("asm1")
