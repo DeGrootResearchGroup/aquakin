@@ -1,20 +1,28 @@
+# PEP 639 SPDX license metadata (`license = "MIT"` + `license-files`) needs
+# setuptools >= 77. `wheel` is no longer listed: setuptools vendors it and
+# declaring it here is a documented no-op that only risks version skew.
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "aquakin"
-version = "0.1.0"
+# Single-sourced from ``aquakin.__version__`` via [tool.setuptools.dynamic]
+# below, so the version lives in exactly one place (aquakin/__init__.py).
+dynamic = ["version"]
 description = "Reactive scalar transport kinetics for aqueous environmental systems"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Christopher DeGroot", email = "christopher.degroot@uwo.ca" }]
 keywords = ["chemistry", "kinetics", "ozone", "bromate", "jax", "diffrax"]
+# No `License :: OSI Approved` classifier: with a PEP 639 SPDX `license`
+# expression above, setuptools treats a license classifier as a duplicate and
+# errors on it.
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
@@ -38,8 +46,10 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/DeGrootResearchGroup/aquakin"
+Documentation = "https://aquakin.readthedocs.io"
 Repository = "https://github.com/DeGrootResearchGroup/aquakin"
 Issues = "https://github.com/DeGrootResearchGroup/aquakin/issues"
+Changelog = "https://github.com/DeGrootResearchGroup/aquakin/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # pandas powers the optional ``to_dataframe()`` / ``to_csv()`` result exporters;
@@ -61,6 +71,13 @@ test = [
     "pytest-split>=0.8",
     "aquakin[dataframe,plot]",
 ]
+
+# Version is read statically from the ``__version__`` string literal in
+# aquakin/__init__.py -- setuptools parses it via AST without importing the
+# package, so this does not trigger the JAX import / x64 side effect at build
+# time.
+[tool.setuptools.dynamic]
+version = { attr = "aquakin.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["aquakin*"]
