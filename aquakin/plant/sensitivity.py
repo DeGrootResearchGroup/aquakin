@@ -33,6 +33,11 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.integrate._common import DifferentiationConfig, IntegratorConfig
+from aquakin.integrate._transforms import (
+    dphysical_dunconstrained,
+    from_unconstrained,
+    to_unconstrained,
+)
 
 
 def _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=None, poincare=None):
@@ -114,36 +119,27 @@ def _to_z(theta, kind):
     """Physical parameter -> calibration-transform space (where a prior is normal).
 
     ``positive_log`` -> natural log, ``logit`` -> log-odds, ``none`` -> identity.
+    Host-side (NumPy) view of :func:`aquakin.integrate._transforms.to_unconstrained`.
     """
     import numpy as np
 
-    if kind == "positive_log":
-        return np.log(theta)
-    if kind == "logit":
-        return np.log(theta / (1.0 - theta))
-    return theta
+    return to_unconstrained(theta, kind, xp=np)
 
 
 def _from_z(z, kind):
     """Inverse of :func:`_to_z`: transform-space variable -> physical parameter."""
     import numpy as np
 
-    if kind == "positive_log":
-        return np.exp(z)
-    if kind == "logit":
-        return 1.0 / (1.0 + np.exp(-z))
-    return z
+    return from_unconstrained(z, kind, xp=np)
 
 
 def _dtheta_dz(theta, kind):
     """``d(physical)/d(transform)`` at ``theta`` -- the DGSM chain-rule factor that
     converts a physical sensitivity ``dg/dtheta`` to the transform-space
     ``dg/dz`` in which the input is Gaussian."""
-    if kind == "positive_log":
-        return theta
-    if kind == "logit":
-        return theta * (1.0 - theta)
-    return 1.0  # none
+    import numpy as np
+
+    return dphysical_dunconstrained(theta, kind, xp=np)
 
 
 @dataclass
