@@ -342,6 +342,81 @@ def test_plant_calibrate_free_ic_bad_bounds(decay_plant):
         )
 
 
+@pytest.mark.slow  # two plant solves per objective evaluation
+def test_plant_calibrate_multibatch_recovers(decay_plant):
+    """Joint multi-batch fit: two runs of the same plant from different initial
+    states share one rate constant, and their summed data terms recover it."""
+    net, plant = decay_plant
+    plant._build_state_layout()
+    a_idx = plant._state_layout["tank"][0] + net.species_index["A"]
+    base = plant.default_parameters()
+    true_k = float(base[plant.parameter_index(PARAM)])
+    t_obs = jnp.linspace(0.5, 8.0, 6)
+
+    def _run(a0):
+        y0 = plant.initial_state().at[a_idx].set(a0)
+        obs = plant.stream(
+            plant.solve(t_span=(0.0, 8.0), t_eval=t_obs, y0=y0), "tank", None
+        ).C_named("B")
+        return obs, y0
+
+    o1, y1 = _run(3.0)
+    o2, y2 = _run(8.0)  # a genuinely different transient
+
+    result = plant.calibrate(
+        [o1, o2],
+        [t_obs, t_obs],
+        [PARAM],
+        target="tank",
+        observed_channels=["B"],
+        params=base.at[plant.parameter_index(PARAM)].set(true_k * 0.4),
+        y0=[y1, y2],
+        t_span=[(0.0, 8.0), (0.0, 8.0)],
+        transforms={PARAM: "positive_log"},
+        max_iter=60,
+    )
+    assert result.converged
+    assert result.params_named[PARAM] == pytest.approx(true_k, rel=5e-2)
+
+
+def test_plant_calibrate_multibatch_requires_y0_list(decay_plant):
+    """A multi-batch fit (list of observation arrays) needs one y0 per dataset."""
+    net, plant = decay_plant
+    obs = [jnp.zeros((3, 1)), jnp.zeros((3, 1))]
+    t = [jnp.array([0.2, 0.4, 0.6]), jnp.array([0.2, 0.4, 0.6])]
+    with pytest.raises(ValueError, match="needs y0 as a list"):
+        plant.calibrate(obs, t, [PARAM], target="tank", observed_channels=["B"], y0=None)
+
+
+def test_plant_calibrate_multibatch_rejects_free_ic(decay_plant):
+    net, plant = decay_plant
+    obs = [jnp.zeros((3, 1)), jnp.zeros((3, 1))]
+    t = [jnp.array([0.2, 0.4, 0.6]), jnp.array([0.2, 0.4, 0.6])]
+    with pytest.raises(ValueError, match="free_ic is not yet supported"):
+        plant.calibrate(
+            obs,
+            t,
+            [PARAM],
+            target="tank",
+            observed_channels=["B"],
+            y0=[plant.initial_state(), plant.initial_state()],
+            free_ic=["tank.A"],
+        )
+
+
+def test_plant_calibrate_multibatch_length_mismatch(decay_plant):
+    net, plant = decay_plant
+    with pytest.raises(ValueError, match="lists of equal length"):
+        plant.calibrate(
+            [jnp.zeros((3, 1)), jnp.zeros((3, 1))],
+            [jnp.array([0.2, 0.4, 0.6])],
+            [PARAM],
+            target="tank",
+            observed_channels=["B"],
+            y0=[plant.initial_state(), plant.initial_state()],
+        )
+
+
 # ---------- validation (fast, no solve) ----------
 
 
