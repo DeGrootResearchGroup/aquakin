@@ -64,6 +64,29 @@ the second derivatives through the stiff implicit solve are unreliable
 (they disagree with finite differences). Use a first-order Gauss–Newton
 `H = JᵀJ` instead (see `calibrate(laplace_method="gauss_newton")`).
 
+### `calibrate()` internal structure
+
+`calibrate` has a large public surface (~38 args) but a decomposed body
+([`integrate/calibrate.py`](aquakin/integrate/calibrate.py)). The argument
+handling is resolved **once** into a `_CalibrationProblem` dataclass (datasets,
+`free_indices`, resolved transforms, priors, free-IC blocks, `p0_full`) by
+`_resolve_problem`; the fit run is then three free functions taking that
+`problem`: `_build_objective` (the jit-cached objective / residual / Jacobian,
+data threaded as *arguments* so a `profile_likelihood` sweep reuses one compiled
+program via the shared `_compiled_cache`), `_run_multistart`, and
+`_laplace_posterior`. All are unit-tested directly in
+`tests/unit/test_calibrate_internals.py` (no fit/solve). **The forward-solve is a
+seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
+— it turns `(params, C0)` into an observed-species trajectory (via the reactor's
+diffrax `solve`, or the cap-free ESDIRK adjoint on `gradient="stable_adjoint"`),
+and exposes `solve_trajectory` + `with_dtmax`. Everything else is generic over
+that contract. Calibration is **reactor-only today** — a `Plant` has a different
+solve contract (flat assembled state, `plant.solve(t_span, …)`, no `.model`/
+`.conditions`), so plant calibration would be a *new* forward-model implementing
+the same two methods, not a change to the generic layer. Behaviour equivalence of
+the decomposition to the old monolith is pinned by the full-fit suite
+(`tests/integration/test_calibrate.py`, `test_profile.py`).
+
 ### Differentiating stiff models (`dtmax`)
 
 Every reactor takes an optional `dtmax` (maximum integrator step), threaded
