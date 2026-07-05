@@ -474,10 +474,12 @@ Fit **assembled-state initial conditions** alongside the parameters with
 state `y0` (a concentration unit: a CSTR or the digester), fit in log space:
 
 ```python
+from aquakin import FreeICConfig
+
 result = plant.calibrate(
     observations, t_obs, ["asm1.muH"],
     target="effluent", observed_channels=["SNH"],
-    free_ic=["reactor1.S_S", "reactor1.X_BH"],   # fit these initial pools too
+    free_ic=FreeICConfig(["reactor1.S_S", "reactor1.X_BH"]),   # fit these initial pools too
     y0=bsm1_warm_start(plant),
 )
 result.ic_named[0]     # {"reactor1.S_S": ..., "reactor1.X_BH": ...}
