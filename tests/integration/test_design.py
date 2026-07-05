@@ -172,6 +172,15 @@ def test_sludge_metrics_sensible(ideal_run, asm1):
     assert "SRT" in m.summary()
 
 
+@pytest.mark.parametrize("bad", ["BOD5", "bod ", "tss", ""])
+def test_sludge_metrics_rejects_unknown_substrate(bad):
+    """An unrecognized ``substrate`` must raise, not silently fall back to COD
+    (which would report an F:M load ~2x off). Validation precedes any use of
+    ``plant``/``solution``, so no solve is needed."""
+    with pytest.raises(ValueError, match="substrate must be one of"):
+        sludge_metrics(None, None, substrate=bad)
+
+
 @pytest.mark.slow
 def test_plant_sludge_age_matches_sludge_metrics(ideal_run):
     plant, sol = ideal_run
