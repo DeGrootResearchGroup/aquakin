@@ -50,6 +50,11 @@ from aquakin.integrate._common import (
     native_time_factor,
     with_adjoint,
 )
+from aquakin.integrate._transforms import (
+    dphysical_dunconstrained,
+    from_unconstrained,
+    to_unconstrained,
+)
 
 # --- Parameter transforms ----------------------------------------------
 
@@ -79,35 +84,16 @@ _OptOut = namedtuple("_OptOut", "x fun success message nit")
 
 
 def _to_unconstrained(value: jnp.ndarray, transform: str) -> jnp.ndarray:
-    if transform == "none":
-        return value
-    if transform == "positive_log":
-        return jnp.log(value)
-    if transform == "logit":
-        return jnp.log(value / (1.0 - value))
-    raise ValueError(f"Unknown transform {transform!r}")
+    return to_unconstrained(value, transform)
 
 
 def _from_unconstrained(theta: jnp.ndarray, transform: str) -> jnp.ndarray:
-    if transform == "none":
-        return theta
-    if transform == "positive_log":
-        return jnp.exp(theta)
-    if transform == "logit":
-        return jax.nn.sigmoid(theta)
-    raise ValueError(f"Unknown transform {transform!r}")
+    return from_unconstrained(theta, transform)
 
 
 def _jacobian_physical_wrt_theta(theta: jnp.ndarray, transform: str) -> jnp.ndarray:
     """``dp/dtheta`` at the given ``theta``, used for the delta-method std."""
-    if transform == "none":
-        return jnp.ones_like(theta)
-    if transform == "positive_log":
-        return jnp.exp(theta)
-    if transform == "logit":
-        s = jax.nn.sigmoid(theta)
-        return s * (1.0 - s)
-    raise ValueError(f"Unknown transform {transform!r}")
+    return dphysical_dunconstrained(from_unconstrained(theta, transform), transform)
 
 
 # --- Loss factory ------------------------------------------------------
