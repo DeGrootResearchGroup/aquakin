@@ -12,14 +12,14 @@ implicit-Euler solve.
 
 import math
 
+import diffrax
 import jax
 import jax.numpy as jnp
+import optimistix
 import pytest
 
-import diffrax
-import optimistix
-
 import aquakin
+from aquakin import OptimizerConfig
 from aquakin.integrate.discrete_adjoint import (
     esdirk_adjoint_solve,
     implicit_euler_adjoint_solve,
@@ -340,7 +340,6 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint():
     # End-to-end: a Khalil-model calibration with gradient="stable_adjoint"
     # (cap-free) must reach the same optimum as the existing capped-Kvaerno5
     # gradient="jax_adjoint" path. Synthetic recovery; compare the fitted params.
-    import diffrax
 
     net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
@@ -364,7 +363,7 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint():
     # for the forward across all params the optimiser explores.
     max_steps = 4000
     common = dict(observed_species=obs_species, loss="mse", laplace=False,
-                  max_iter=150, tol=1e-9)
+                  optimizer=OptimizerConfig(max_iter=150, tol=1e-9))
     r_ref = aquakin.calibrate(
         aquakin.BatchReactor(net, cond, rtol=rtol, atol=atol,
                              integrator=aquakin.IntegratorConfig(dtmax=5e-4)),
@@ -520,6 +519,7 @@ def test_esdirk_dense_stage_reconstruction_convention():
     gradients.
     """
     import numpy as np
+
     from aquakin.integrate.discrete_adjoint import _esdirk_tableau
 
     solver = diffrax.Kvaerno5()
@@ -611,8 +611,8 @@ def test_is_singly_diagonal_esdirk_guard():
     # The guard accepts the KV3/KV5 tableaus and rejects shapes the stage
     # recompute does not assume (non-constant gamma; no explicit first stage).
     import numpy as np
-    from aquakin.integrate.discrete_adjoint import (
-        _esdirk_tableau, _is_singly_diagonal_esdirk)
+
+    from aquakin.integrate.discrete_adjoint import _esdirk_tableau, _is_singly_diagonal_esdirk
 
     for solver in (diffrax.Kvaerno5(), diffrax.Kvaerno3()):
         _A, _b, diag, _s = _esdirk_tableau(solver)
