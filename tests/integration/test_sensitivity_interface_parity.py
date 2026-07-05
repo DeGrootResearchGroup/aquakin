@@ -71,7 +71,7 @@ def test_operating_specs_parse_identically():
     """The same operating spec is accepted (and rejected) identically by the shared
     parser every entry point uses, so the stacks cannot drift in what they take."""
     from aquakin.plant.bsm import build_bsm1
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     p = build_bsm1()
     p.add_influent("feed", asm1.influent({"SNH": 25.0}, Q=18446.0))
     ok = [{"kind": "influent_flow", "port": "feed"},
@@ -87,7 +87,7 @@ def test_dynamic_operating_is_forward_only():
     """Operating sensitivity rides the augmented variational solve, so reverse mode
     rejects it with a clear message (cheap -- raises before any solve)."""
     from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     p = build_bsm1()
     p.add_influent("feed", asm1.influent({"SNH": 25.0, "SS": 60.0}, Q=18446.0))
     y0 = bsm1_warm_start(p)
@@ -107,7 +107,7 @@ def test_steady_and_dynamic_operating_sensitivity_agree():
     the influent-load scale, run toward steady state, matches the steady-state
     operating column."""
     from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     infl = asm1.influent({"SS": 60., "SNH": 25., "XS": 200., "XB_H": 50.,
                           "SI": 30., "XI": 25., "SND": 6., "XND": 10.,
                           "SALK": 7.}, Q=18446.0)

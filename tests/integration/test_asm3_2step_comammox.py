@@ -1,4 +1,4 @@
-"""The asm3_2step_comammox network: asm3_2step plus a complete-ammonia-oxidising
+"""The asm3_2step_comammox model: asm3_2step plus a complete-ammonia-oxidising
 (comammox) organism, parameterised from Kits et al. (2017).
 
 Checks the structure, the complete-nitrification behaviour (NH4 -> NO3 in one
@@ -16,7 +16,7 @@ import aquakin
 
 @pytest.fixture
 def net():
-    return aquakin.load_network("asm3_2step_comammox")
+    return aquakin.load_model("asm3_2step_comammox")
 
 
 def _rate(net, name, **C):

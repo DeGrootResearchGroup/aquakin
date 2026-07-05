@@ -25,7 +25,7 @@ For each component (COD / N / P) the balance accounts, over ``[t0, t1]``:
 
 The **imbalance** ``inflow − outflow − gas − accumulation`` is zero for a closed
 balance. Everything is reported on one canonical gram basis (g COD / g N / g P),
-so inventories and fluxes sum across networks of different units (the ASM water
+so inventories and fluxes sum across models of different units (the ASM water
 line in g/m³, the ADM digester in kg/m³ and kmol/m³) via
 :func:`aquakin.canonical_content`.
 
@@ -131,7 +131,7 @@ class MassBalance:
 # --- per-unit inventory ------------------------------------------------------
 
 
-def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
+def _unit_inventory(plant, unit_name, state_vec, content_by_model, params):
     """Component inventory held in one unit (a ``{component: grams}`` dict).
 
     Handles every shipped unit type: a concentration-vector unit (CSTR /
@@ -145,10 +145,10 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
     layers; stateless units hold nothing.
     """
     unit = plant.units[unit_name]
-    net = getattr(unit, "network", None)
+    net = getattr(unit, "model", None)
     if net is None or state_vec.size == 0:
         return {}
-    content = content_by_network[net.name]  # {component: (n_species,) array}
+    content = content_by_model[net.name]  # {component: (n_species,) array}
 
     # Layered Takács settler: inventory is the blanket summed over layers at the
     # per-layer volume. In ``per_species`` mode the particulate head block is
@@ -156,7 +156,7 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
     # ``lumped_tss`` mode the head block is one TSS value per layer with no
     # per-species split (the lumped model scales the outlet particulates from the
     # feed), so the stored TSS is distributed over the particulate species by the
-    # network-default solids composition to recover the per-component content per
+    # model-default solids composition to recover the per-component content per
     # unit TSS -- exact for COD (the composition-independent 1/TSS-factor ratio),
     # the default solids composition for N/P (a small inventory term). With
     # soluble_holdup the soluble tail block (n_layers, n_sol) adds its own
@@ -168,7 +168,7 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_network, params):
         out = {}
         if getattr(unit, "composition_mode", "per_species") == "lumped_tss":
             solids_mass = layer_vol * float(np.sum(sv[:pb]))  # total g TSS held
-            defaults = np.asarray(unit.network.default_concentrations())
+            defaults = np.asarray(unit.model.default_concentrations())
             frac = np.asarray([float(defaults[i]) for i in unit._part_indices])
             factors = np.asarray(unit._part_tss_factors)
             tss_per_unit = float(np.sum(frac * factors))
@@ -247,31 +247,31 @@ def mass_balance(
     t = np.asarray(solution.t)
     window = (float(t[0]), float(t[-1]))
 
-    # Canonical content vectors per network, keeping only components the network
-    # actually carries (a network with no P contributes nothing to the P balance).
-    networks = {}  # name -> CompiledNetwork
+    # Canonical content vectors per model, keeping only components the model
+    # actually carries (a model with no P contributes nothing to the P balance).
+    models = {}  # name -> CompiledModel
     for u in plant.units.values():
-        net = getattr(u, "network", None)
+        net = getattr(u, "model", None)
         if net is not None:
-            networks[net.name] = net
+            models[net.name] = net
     for s in plant.influents.values():
-        networks[s.network.name] = s.network
+        models[s.model.name] = s.model
     # Lab-COD convention for reporting: nitrate / N₂ carry no COD, so a reported
     # COD is the organic oxygen demand (an analyst's COD), not a total electron
     # demand. The closure is self-consistent under either convention. Each
-    # network's composition fractions are read from the *run* parameters (a unit
-    # of that network), so a calibrated / BSM-specific i_XB flows through.
+    # model's composition fractions are read from the *run* parameters (a unit
+    # of that model), so a calibrated / BSM-specific i_XB flows through.
     net_params = {}
     for uname, u in plant.units.items():
-        net = getattr(u, "network", None)
+        net = getattr(u, "model", None)
         if net is not None and net.name not in net_params:
             net_params[net.name] = plant._params_for_unit(uname, params)
-    content_by_network = {
+    content_by_model = {
         name: {
             q: canonical_content(net, q, electron_acceptor_cod=False, params=net_params.get(name))
             for q in components
         }
-        for name, net in networks.items()
+        for name, net in models.items()
     }
     comps = list(components)
 
@@ -284,8 +284,8 @@ def mass_balance(
     inflow = {q: 0.0 for q in comps}
     for name in in_names:
         series = plant.influents[name]
-        net = series.network
-        cvec = content_by_network[net.name]
+        net = series.model
+        cvec = content_by_model[net.name]
         Q = np.asarray([float(series.at(tt).Q) for tt in t])
         C = np.asarray([np.asarray(series.at(tt).C) for tt in t])
         for q in comps:
@@ -299,7 +299,7 @@ def mass_balance(
         comp_vec = getattr(getattr(u, "reagent", None), "composition", None)
         if comp_vec is None:
             continue
-        cvec = content_by_network[u.network.name]
+        cvec = content_by_model[u.model.name]
         comp_vec = np.asarray(comp_vec)
         if u.flow is not None:
             Q_dose = np.full(len(t), float(u.flow))
@@ -324,7 +324,7 @@ def mass_balance(
         for ep in effluent_ports:
             Q, C = recon[ep]
             unit = plant._parse_endpoint(ep, role="source")[0]
-            cvec = content_by_network[plant.units[unit].network.name]
+            cvec = content_by_model[plant.units[unit].model.name]
             for q in comps:
                 outflow[q] += float(np.trapezoid(_flux(np.asarray(Q), np.asarray(C), cvec[q]), t))
 
@@ -333,10 +333,10 @@ def mass_balance(
     layout = plant._state_layout
     for unit_name, (start, size) in layout.items():
         inv0 = _unit_inventory(
-            plant, unit_name, solution.state[0][start : start + size], content_by_network, params
+            plant, unit_name, solution.state[0][start : start + size], content_by_model, params
         )
         inv1 = _unit_inventory(
-            plant, unit_name, solution.state[-1][start : start + size], content_by_network, params
+            plant, unit_name, solution.state[-1][start : start + size], content_by_model, params
         )
         for q in comps:
             accumulation[q] += inv1.get(q, 0.0) - inv0.get(q, 0.0)
@@ -353,7 +353,7 @@ def mass_balance(
     gas = {q: 0.0 for q in comps}
     gas_detail = {}
 
-    o2_transfer, R = _reaction_and_aeration_gas(plant, solution, params, content_by_network, comps)
+    o2_transfer, R = _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
     if "COD" in comps:
         gas["COD"] += o2_transfer - R.get("COD", 0.0)
         gas_detail["aeration_O2"] = o2_transfer
@@ -390,7 +390,7 @@ def _reaction_volume(plant, unit_name, params):
     liquid volume for every state, except an ADM1 digester's three gas-headspace
     states, which live in the headspace volume ``V_gas``."""
     unit = plant.units[unit_name]
-    net = unit.network
+    net = unit.model
     V = float(unit.volume)
     vol = np.full(net.n_species, V)
     if "S_gas_ch4" in net.species_index:
@@ -405,10 +405,10 @@ def _reaction_volume(plant, unit_name, params):
 def _reaction_term(plant, unit_name, C, params):
     """The reaction (chemistry) term ``dC/dt`` of a reactive unit, reproducing
     exactly what its ``rhs`` evaluates: an aerated CSTR's ``stoichᵀ·rates``, or an
-    ADM1 digester's ``network.dCdt`` (which also runs the gas-liquid transfer and
+    ADM1 digester's ``model.dCdt`` (which also runs the gas-liquid transfer and
     overpressure gas outflow, so the biogas export is included)."""
     unit = plant.units[unit_name]
-    net = unit.network
+    net = unit.model
     p_unit = plant._params_for_unit(unit_name, params)
     if hasattr(unit, "_liquid_mask"):  # ADM1 digester
         if getattr(unit, "_v_liq_idx", None) is not None:
@@ -419,7 +419,7 @@ def _reaction_term(plant, unit_name, C, params):
     return stoich.T @ rates
 
 
-def _reaction_and_aeration_gas(plant, solution, params, content_by_network, comps):
+def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps):
     """Integrate, over the saved trajectory, the aeration oxygen transfer (g O2/d
     == g COD/d removed) and the reaction-production of each component summed over
     every reactive unit (the activated-sludge reactors and the ADM1 digester).
@@ -446,10 +446,7 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_network, comp
     rqs = [q for q in comps if q in ("COD", "N")]
     vols = {n: _reaction_volume(plant, n, params) for n in reactive}
     content = {
-        n: {
-            q: jnp.asarray(content_by_network[plant.units[n].network.name][q] * vols[n])
-            for q in rqs
-        }
+        n: {q: jnp.asarray(content_by_model[plant.units[n].model.name][q] * vols[n]) for q in rqs}
         for n in reactive
     }
 
@@ -475,7 +472,7 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_network, comp
             # Use the species part only: a unit may carry trailing non-species
             # state (an MBR's fouling resistance), which the per-species reaction
             # and aeration terms must not see.
-            n_sp = unit.network.n_species
+            n_sp = unit.model.n_species
             C = state_i[start : start + n_sp]
             react = _reaction_term(plant, name, C, params)
             for q in gas_comps[name]:
@@ -484,7 +481,7 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_network, comp
                 kla = unit._kla_vec
                 ctrl = unit._controlled_kla.get("SO")
                 if ctrl is not None and sig:
-                    kla = kla.at[unit.network.species_index["SO"]].set(sig[ctrl[0]] * ctrl[1])
+                    kla = kla.at[unit.model.species_index["SO"]].set(sig[ctrl[0]] * ctrl[1])
                 o2 += float(jnp.sum(kla * (unit._sat_vec - C)) * float(unit.volume))
         o2_rows.append(o2)
         for q in rqs:

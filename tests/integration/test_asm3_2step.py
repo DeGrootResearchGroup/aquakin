@@ -1,4 +1,4 @@
-"""The asm3_2step network: ASM3 with explicit nitrite (two-step nitrification
+"""The asm3_2step model: ASM3 with explicit nitrite (two-step nitrification
 and two-step denitrification), after Kaelin et al. (2009).
 
 These check the structure (the two split state variables, 19 processes), the
@@ -16,7 +16,7 @@ import aquakin
 
 @pytest.fixture
 def net():
-    return aquakin.load_network("asm3_2step")
+    return aquakin.load_model("asm3_2step")
 
 
 def _batch(net, t_end, t_n=21, **C0):

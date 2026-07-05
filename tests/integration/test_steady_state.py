@@ -141,14 +141,14 @@ def _bsm1():
     from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
     from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
     from aquakin.plant.influent import InfluentSeries
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     C0 = asm1.concentrations({
         "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
         "XB_A": 0.0, "XP": 0.0, "SO": 0.0, "SNO": 0.0, "SNH": 31.56,
         "SND": 6.95, "XND": 10.59, "SALK": 7.0})
     feed = InfluentSeries(t=jnp.asarray([0.0, 100.0]), Q=jnp.full((2,), BSM1_Q_AVG),
-                          C=jnp.tile(C0, (2, 1)), network=asm1)
-    plant = build_bsm1(network=asm1)
+                          C=jnp.tile(C0, (2, 1)), model=asm1)
+    plant = build_bsm1(model=asm1)
     plant.add_influent("feed", feed, to="inlet_mix.fresh")
     return plant, asm1, bsm1_warm_start(plant)
 
@@ -194,7 +194,7 @@ def test_bsm1_steady_state_differentiable(bsm1):
 
     g = jax.grad(loss)(params)
     assert bool(jnp.all(jnp.isfinite(g)))
-    k = plant._parameter_layout.network_param_blocks["asm1"][0] + asm1.param_index["muH"]
+    k = plant._parameter_layout.model_param_blocks["asm1"][0] + asm1.param_index["muH"]
     h = 1e-3 * float(params[k])
     fd = (float(loss(params.at[k].add(h))) - float(loss(params.at[k].add(-h)))) / (2 * h)
     assert abs(float(g[k]) - fd) <= 1e-4 * abs(fd) + 1e-6
@@ -295,9 +295,9 @@ def test_bsm2_steady_state_matches_forward():
     from aquakin.plant.bsm.bsm2 import (
         build_bsm2, bsm2_constant_influent, bsm2_parameters)
     from aquakin.plant.bsm import bsm2_warm_start
-    asm1 = aquakin.load_network("asm1")
-    adm1 = aquakin.load_network("adm1")
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    asm1 = aquakin.load_model("asm1")
+    adm1 = aquakin.load_model("adm1")
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
     params = bsm2_parameters(asm1, adm1)
@@ -356,9 +356,9 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
     from aquakin.plant.bsm.bsm2 import (
         build_bsm2, bsm2_constant_influent, bsm2_parameters)
     from aquakin.plant.bsm import bsm2_warm_start
-    asm1 = aquakin.load_network("asm1")
-    adm1 = aquakin.load_network("adm1")
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    asm1 = aquakin.load_model("asm1")
+    adm1 = aquakin.load_model("adm1")
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
     params = bsm2_parameters(asm1, adm1)

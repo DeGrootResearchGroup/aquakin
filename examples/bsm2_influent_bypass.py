@@ -19,7 +19,7 @@ from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
     build_bsm2,
     InfluentBypass,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
     evaluate_bsm2,
@@ -30,15 +30,15 @@ from aquakin.plant.metrics import derived_COD, derived_TSS
 
 
 def main() -> None:
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
 
     # A sustained storm flow at 1.5x the bypass threshold.
     Q_storm = 1.5 * BSM2_BYPASS_Q
     C = bsm2_constant_influent(asm1).C[0]
     influent = InfluentSeries(t=jnp.array([0.0, 1e4]), Q=jnp.full((2,), Q_storm),
-                              C=jnp.tile(C, (2, 1)), network=asm1)
+                              C=jnp.tile(C, (2, 1)), model=asm1)
 
     plant = build_bsm2(asm1, adm1, bypass=InfluentBypass())
     plant.add_influent("feed", influent)

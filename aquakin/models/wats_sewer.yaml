@@ -1,0 +1,387 @@
+# Original reference-book WATS model. The extended model and the Khalil paper/thesis models build on this base.
+model:
+  name: wats_sewer
+  version: "1.0"
+  description: >-
+    Original (reference-book) WATS sewer-process model: Hvitved-Jacobsen, Vollertsen & Nielsen (2013), Sewer Processes, 2nd ed., process matrices Tables 9.1-9.4. Aerobic/anoxic/anaerobic heterotrophic carbon turnover (growth bulk+biofilm, endogenous maintenance, fast/slow hydrolysis in all three redox regimes, fermentation) and the sulfur cycle: sulfate reduction (H2S formation, Eq 6.24) and chemical + biological sulfide oxidation to sulfate (bulk, Eqs 5.13-5.15; biofilm, Eq 5.16). pH is state-derived from the acid/base charge balance (the WATS pH chemistry). This is the base model WITHOUT the nitrate-dosing/methane/elemental-sulfur extensions of wats_sewer_extended; the extended model and the Khalil paper/thesis models add to this base. Rate constants are the book values: a_h2s = 0.036 d^-1 (Eq 6.24, domestic wastewater, 0.0015 g^0.5 m^-0.5 h^-1 x 24); the chemical/biological bulk-oxidation constants and orders, pKa, omega, pHopt and temperature coefficients are the Nielsen et al. values carried from the WATS reference. The biofilm sulfide-oxidation constant k_sox_f follows Eq 5.16 in FORM, but the book states this constant is site-specific (Nielsen et al. 2005) with no tabulated default; the value here is representative and should be calibrated per site.
+  references:
+  - "Hvitved-Jacobsen, Vollertsen & Nielsen (2013). Sewer Processes (WATS), 2nd ed. (process matrices Tables 9.1-9.4; growth, hydrolysis, maintenance, fermentation, sulfide formation Eq 6.24, sulfide oxidation Eqs 5.13-5.16, saturation constants, temperature coefficients)."
+  - "Hvitved-Jacobsen, Vollertsen & Nielsen (1988); Nielsen et al. (1998). Sulfide formation rate, Eq 6.24 / Table 6.6 Eq. 4 (half-order, substrate (SF+SA+XS1))."
+  - "Nielsen, Hvitved-Jacobsen & Vollertsen (2003, 2004, 2006). Chemical and biological sulfide oxidation in wastewater (Eqs 5.13-5.15; rate constants, reaction orders, pH and temperature dependence)."
+  - "Nielsen, Vollertsen & Hvitved-Jacobsen (2005). Sulfide oxidation in sewer biofilms (Eq 5.16, half-order; elemental-sulfur intermediate)."
+  - "Calabro, Mannina & Viviani (2009). In-sewer processes (fermentation, anaerobic correction)."
+
+# --- State species. Inert fractions (S_I, X_I) advect but do not react.
+# composition: per-species content of the conserved quantities (COD / N / P / S),
+# in the species' own measure -- the table check_conservation() dots against the
+# stoichiometry. Organics carry COD=1; oxygen is an electron acceptor (COD=-1);
+# nitrate-N carries the electron COD -2.86 gCOD/gN reduced to N2; sulfide 2 and
+# sulfate 0 gCOD/gS. Biomass/substrate micro-contents (i_s_*, i_n_xb, i_n_bio,
+# i_p_bio) close the heterotrophic balances. S_CO2 (inorganic carbon) carries no
+# COD/N/P/S, so it has no composition entry.
+species:
+- {name: S_B, description: "Readily biodegradable substrate (non-VFA)", units: gCOD/m3, default_concentration: 40.0, composition: {COD: 1.0, S: 0.0015}}
+- {name: S_VFA, description: "Volatile fatty acids (as acetate)", units: gCOD/m3, default_concentration: 40.0, composition: {COD: 1.0}}
+- {name: X_BH, description: "Heterotrophic biomass", units: gCOD/m3, default_concentration: 30.0, composition: {COD: 1.0, N: 0.07, P: 0.02, S: 0.01}}
+- {name: X_S1, description: "Rapidly hydrolysable substrate", units: gCOD/m3, default_concentration: 160.3, composition: {COD: 1.0, N: 0.07, S: 0.0015}}
+- {name: X_S2, description: "Slowly hydrolysable substrate", units: gCOD/m3, default_concentration: 108.4, composition: {COD: 1.0, N: 0.07, S: 0.0015}}
+- {name: S_O, description: "Dissolved oxygen", units: gO2/m3, default_concentration: 0.0, composition: {COD: -1.0}}
+- {name: S_NO, description: "Nitrate (as N)", units: gN/m3, default_concentration: 0.0, composition: {COD: -2.86, N: 1.0}}
+- {name: S_NH, description: "Ammonia (as N)", units: gN/m3, default_concentration: 44.0, composition: {N: 1.0}}
+- {name: sumS, description: "Total dissolved sulfide (as S)", units: gS/m3, default_concentration: 0.65, composition: {COD: 2.0, S: 1.0}}
+- {name: S_SO4, description: "Sulfate (as S)", units: gS/m3, default_concentration: 16.0, composition: {S: 1.0}}
+- {name: S_PO4, description: "Total phosphate (as P)", units: gP/m3, default_concentration: 10.0, composition: {P: 1.0}}
+- {name: S_H2, description: "Dissolved hydrogen", units: gCOD/m3, default_concentration: 0.0, composition: {COD: 1.0}}
+- {name: S_CO2, description: "Dissolved inorganic carbon (as C)", units: gC/m3, default_concentration: 20.0}
+- {name: S_I, description: "Inert soluble COD (non-reactive)", units: gCOD/m3, default_concentration: 20.0, composition: {COD: 1.0}}
+- {name: X_I, description: "Inert particulate COD (non-reactive)", units: gCOD/m3, default_concentration: 20.0, composition: {COD: 1.0}}
+conditions:
+- {name: T, description: "Temperature (degC)", default: 20.0}
+- {name: A_V, description: "Biofilm area-to-volume ratio (m2/m3)", default: 56.7}
+- {name: X_BF, description: "Biofilm heterotrophic biomass (gCOD/m2)", default: 10.0}
+
+# --- State-derived pH via the differentiable charge-balance solver.
+speciation:
+  field: pH
+  temperature_field: T
+  temperature_units: celsius
+  z_cation_eq: 3.28e-3          # net fixed cation charge (eq/L)
+  n_iter: 40
+  totals:
+    carbonate: {species: S_CO2, molar_mass: 12000}   # gC/m3 -> mol/L
+    acetate: {species: S_VFA, molar_mass: 64000}     # gCOD/m3 (acetate, 64 gCOD/mol)
+    ammonia: {species: S_NH, molar_mass: 14000}
+    phosphate: {species: S_PO4, molar_mass: 31000}
+    sulfide: {species: sumS, molar_mass: 32000}
+  strong_anions:
+  - {species: S_SO4, molar_mass: 32000, charge: 2}
+  - {species: S_NO, molar_mass: 14000, charge: 1}
+
+# --- Positivity scheme: throttle net consumption as a species approaches
+#     `threshold`, preventing negative states / stiffness.
+positivity_limiter:
+  threshold: 1.0e-3
+
+expressions:
+  # Temperature correction factors (theta^(T-20)).
+  theta_w: "a_w ** ({T} - 20.0)"
+  theta_f: "a_f ** ({T} - 20.0)"
+  theta_s: "a_s ** ({T} - 20.0)"
+  theta_sob: "a_sob ** ({T} - 20.0)"   # biological water-phase sulfide oxidation (Sec. 5.5.1.2.4, alpha=1.10)
+  # Energy-maintenance split (substrate-oxidation vs endogenous-biomass paths).
+  em_frac_sub: "([S_B] + [S_VFA]) / (0.1 + [S_B] + [S_VFA])"
+  em_frac_bio: "0.1 / (0.1 + [S_B] + [S_VFA])"
+  # AD-safe half-order terms x^p ~= x*(x+eps)^(p-1) (exact for x >> eps,
+  # zero at x=0, finite & well-conditioned Jacobian). The eps floor bounds the
+  # curvature near zero so the stiff implicit solver's Newton step stays
+  # well-posed under differentiation; it only perturbs the aerobic oxidation
+  # kinetics for substrate < ~eps, which is negligible (these terms vanish at
+  # zero oxygen anyway). Used by the aerobic oxidation kinetics.
+  ho_sumS_n1: "[sumS] * ([sumS] + 1.0e-3) ** (n1 - 1.0)"
+  ho_SO_n2: "[S_O] * ([S_O] + 1.0e-3) ** (n2 - 1.0)"
+  ho_sumS_half: "[sumS] * ([sumS] + 1.0e-3) ** (0.0 - 0.5)"
+  ho_SO_half: "[S_O] * ([S_O] + 1.0e-3) ** (0.0 - 0.5)"
+  ho_SNO_half: "[S_NO] * ([S_NO] + 1.0e-3) ** (0.0 - 0.5)"   # AD-safe S_NO^0.5 (anoxic biofilm growth, Eq 5.30)
+  # Bell-shaped pH dependence of biological sulfide oxidation (WATS Eq 5.15):
+  # f = omega / (omega + 10^|pH - pHopt| - 1). Same pHopt/omega in bulk and
+  # biofilm (Sec. 5.5.2).
+  f_sII_pH: "omega_sII_b / (omega_sII_b + 10.0 ** ((({pH} - pH_optimum) ** 2 + 1.0e-12) ** 0.5) - 1.0)"
+
+# --- Shared kinetic + stoichiometric parameters (global; referenced by bare
+#     name in rate and stoichiometry expressions). Each value carries its
+#     literature source so the provenance is unambiguous. Source key:
+#       WATS      = Hvitved-Jacobsen, Vollertsen & Nielsen (2013), Sewer Processes (Table 9.6)
+#       Calabro   = Calabro, Mannina & Viviani (2009)
+#       Guisasola = Guisasola, Sharma, Keller & Yuan (2009)
+#       JiangBF   = Jiang, Leung, Li, Chen & Okabe (2009), sewer biofilm model (orig. IWA, 2000)
+#       JiangS    = Jiang, Sharma & Yuan (2009), sulfur transformation in rising mains
+#       calib     = this study's calibration to the batch nitrate-dosing data (Table 4)
+  ho_srbsub_half: ([S_B] + [S_VFA] + [X_S1]) * (([S_B] + [S_VFA] + [X_S1]) + 1.0e-3) ** (0.0 - 0.5)
+parameters:
+  mu_h: {value: 6.7, units: "1/d", prior: {range: [4.0, 8.0]}}               # WATS/Calabro muH (WATS range 4-8)
+  k_12_o2: {value: 18.0, units: "gO2^0.5 m^-0.5 d^-1"}       # half-order aerobic biofilm growth const
+  k_12_no: {value: 7.95, units: "gN^0.5 m^-0.5 d^-1", bounds: [1.0, 30.0]}       # calib (k_1/2,NO)
+  eps: {value: 0.15, units: "-", prior: {range: [0.1, 0.2]}}                 # WATS biofilm efficiency eps (range 0.1-0.2)
+  k_sw: {value: 1.0, units: "gCOD/m3", prior: {range: [0.5, 2.0]}}           # WATS K_Sw (range 0.5-2.0)
+  k_sf: {value: 5.0, units: "gCOD/m3"}                       # WATS K_sf
+  k_o: {value: 0.05, units: "gO2/m3", prior: {range: [0.01, 0.5]}}           # WATS K_O (range 0.01-0.5)
+  k_no: {value: 0.5, units: "gN/m3", prior: {range: [0.5, 1.0]}}             # WATS K_NO3 (0.5-1.0; JiangBF/IWA use 2)
+  k_h1: {value: 5.0, units: "1/d"}                           # WATS k_h1 fast hydrolysis = 5
+  k_h2: {value: 0.5, units: "1/d"}                           # WATS k_h2 slow hydrolysis = 0.5
+  k_x1: {value: 1.5, units: "gCOD/gCOD"}                     # WATS/Calabro K_X1 fast = 1.5
+  k_x2: {value: 0.5, units: "gCOD/gCOD"}                     # WATS/Calabro K_X2 slow = 0.5
+  eta_no: {value: 0.6, units: "-"}                           # JiangBF anoxic correction (~0.51)
+  eta_an: {value: 0.21, units: "-", prior: {range: [0.14, 0.21]}}            # Calabro anaerobic correction (range 0.14-0.21)
+  q_m: {value: 1.0, units: "1/d", prior: {range: [0.5, 1.0]}}                # WATS q_m (range 0.5-1.0)
+  q_ferm: {value: 3.0, units: "gCOD/gCOD/d", prior: {range: [1.0, 3.0]}}         # Calabro q_fe (range 1.0-3.0)
+  k_fe: {value: 10.0, units: "gCOD/m3"}                      # WATS/Calabro K_fe
+  k_h2sc: {value: 0.96, units: "(gS/m3)(gO2/m3) /d"}        # aerobic chemical sulfide ox, molecular H2S
+  k_hsc: {value: 12.0, units: "(gS/m3)(gO2/m3) /d"}         # aerobic chemical sulfide ox, ionic HS-
+  k_sII_b_pHopt: {value: 19.92, units: "(gS/m3)(gO2/m3) /d"} # aerobic biological bulk sulfide ox at pH optimum
+  omega_sII_b: {value: 25.0, units: "-"}                    # pH-sensitivity width, bulk bio sulfide ox
+  pH_optimum: {value: 8.0, units: "-"}                      # optimum pH for bulk bio sulfide ox
+  n1: {value: 0.9, units: "-"}                              # WATS reaction order in sulfide (0.8-1.0)
+  n2: {value: 0.15, units: "-"}                             # WATS reaction order in oxygen (0.1-0.2)
+  y_hw: {value: 0.55, units: "-", bounds: [0.3, 0.7]}                 # JiangBF aerobic heterotroph yield (Y_H=0.55)
+  y_hf: {value: 0.55, units: "-", bounds: [0.3, 0.7]}                 # biofilm aerobic heterotroph yield
+  # Anoxic (denitrifying) heterotroph yield. The WATS reference gives a
+  # distinctly LOWER yield for anoxic growth, Y_H,NO3 = 0.30-0.40, than the
+  # aerobic Y_H = 0.55 -- less biomass is formed per unit substrate when
+  # nitrate rather than oxygen is the electron acceptor. Y_H is a stoichiometric
+  # (COD/electron-balance) coefficient, not a kinetic rate, so it is fixed from
+  # the literature rather than calibrated. DEVIATION FROM THE ORIGINAL PUBLISHED
+  # MODEL: that implementation reused the single aerobic yield (0.55) for the
+  # denitrifying growth terms; aquakin applies the proper lower anoxic yield to
+  # every anoxic heterotrophic growth reaction (bulk + biofilm). Because these
+  # nitrate-dosing batches are almost entirely anoxic, this shifts the
+  # nitrate / COD / sulfate partition relative to the original model.
+  y_h_anox: {value: 0.35, units: "-", bounds: [0.3, 0.7]}             # WATS Y_H,NO3 anoxic yield (range 0.30-0.40)
+  i_n_bio: {value: 0.07, units: "gN/gCOD"}                  # N content of biomass
+  i_n_xb: {value: 0.07, units: "gN/gCOD"}                   # N content of particulate substrate
+  i_p_bio: {value: 0.02, units: "gP/gCOD"}                  # P content of biomass
+  i_s_bio: {value: 0.01, units: "gS/gCOD"}                  # S content of biomass
+  i_s_sb: {value: 0.0015, units: "gS/gCOD"}                 # S content of soluble substrate
+  i_s_xb: {value: 0.0015, units: "gS/gCOD"}                 # S content of particulate substrate
+  i_cit_bio: {value: 0.35, units: "gC/gCOD"}                # inorganic-C content of biomass
+  i_cit_sb: {value: 0.29, units: "gC/gCOD"}                 # inorganic-C content of substrate
+  a_w: {value: 1.07, units: "-"}                            # WATS alpha_w = 1.07 (water-phase processes)
+  a_f: {value: 1.05, units: "-"}                            # WATS alpha_f = 1.05 (biofilm processes)
+  a_s: {value: 1.03, units: "-"}                            # WATS alpha = 1.03 (biofilm sulfur: sulfate reduction Eq 6.24, biofilm sulfide ox Eq 5.16)
+  a_sob: {value: 1.10, units: "-"}                          # WATS alpha = 1.10 (biological water-phase sulfide oxidation, Sec. 5.5.1.2.4); chemical oxidation uses a_w = 1.07
+
+  # Sulfide-formation rate constant, WATS Eq 6.24 (= Table 6.6 Eq. 4):
+  # ra = a*(SF+SA+XS1)^0.5 * KO/(KO+SO) * KNO3/(KNO3+SNO3) * (A/V) * 1.03^(T-20).
+  # Book value a = 0.001-0.002 (g^0.5 m^-0.5 h^-1) for domestic wastewater without
+  # food-industry sewage (0.003-0.006 mixed; 0.007-0.010 food industry); domestic
+  # midpoint 0.0015 h^-1 x 24 = 0.036 d^-1 (Hvitved-Jacobsen et al. 1988; Nielsen et al. 1998).
+  a_h2s:
+    value: 0.036
+    units: gS gO2^-0.5 m^-0.5 d^-1
+  # Biofilm sulfide-oxidation rate constant, WATS Eq 5.16:
+  # r = k_sox_f * S(-II)^0.5 * SO^0.5 (half-order in sulfide AND DO), areal.
+  # The book gives the rate FORM but states this constant is site-specific
+  # (Nielsen et al. 2005) with no tabulated default value -- this is a
+  # representative magnitude and SHOULD be calibrated per site.
+  k_sox_f:
+    value: 2.0
+    units: gS^0.5 gO2^-0.5 m^-0.5 d^-1
+reactions:
+  # ============================ HETEROTROPHIC GROWTH ====================
+- name: aer_growth_SB_bulk
+  description: "Aerobic heterotrophic growth on S_B, bulk water."
+  rate: "mu_h * [S_B] / (k_sw + [S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w"
+  stoichiometry:
+    S_B: "0.0 - 1.0 / y_hw"
+    X_BH: 1
+    S_O: "(y_hw - 1.0) / y_hw"
+    S_NH: "0.0 - i_n_bio"
+    S_PO4: "0.0 - i_p_bio"
+    S_SO4: "(1.0 / y_hw) * i_s_sb - i_s_bio"
+    S_CO2: "i_cit_sb / y_hw - i_cit_bio"
+
+- name: anox_growth_SB_bulk
+    # Uses the anoxic yield y_h_anox (not the aerobic y_hw); see y_h_anox note.
+  description: "Anoxic (denitrifying) heterotrophic growth on S_B, bulk water."
+  rate: "eta_no * mu_h * [S_B] / (k_sw + [S_B] + [S_VFA]) * monod([S_NO], k_no) * monod_inh([S_O], k_o) * [X_BH] * theta_w"
+  stoichiometry:
+    S_B: "0.0 - 1.0 / y_h_anox"
+    X_BH: 1
+    S_NO: "(y_h_anox - 1.0) / (2.86 * y_h_anox)"
+    S_NH: "0.0 - i_n_bio"
+    S_PO4: "0.0 - i_p_bio"
+    S_SO4: "(1.0 / y_h_anox) * i_s_sb - i_s_bio"
+    S_CO2: "i_cit_sb / y_h_anox - i_cit_bio"
+
+- name: aer_growth_VFA_bulk
+  description: "Aerobic heterotrophic growth on VFA, bulk water."
+  rate: "mu_h * [S_VFA] / (k_sw + [S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w"
+  stoichiometry:
+    S_VFA: "0.0 - 1.0 / y_hw"
+    X_BH: 1
+    S_O: "(y_hw - 1.0) / y_hw"
+    S_NH: "0.0 - i_n_bio"
+    S_PO4: "0.0 - i_p_bio"
+    S_SO4: "0.0 - i_s_bio"
+    S_CO2: "i_cit_sb / y_hw - i_cit_bio"
+
+- name: anox_growth_VFA_bulk
+    # Uses the anoxic yield y_h_anox (not the aerobic y_hw); see y_h_anox note.
+  description: "Anoxic heterotrophic growth on VFA, bulk water."
+  rate: "eta_no * mu_h * [S_VFA] / (k_sw + [S_B] + [S_VFA]) * monod([S_NO], k_no) * monod_inh([S_O], k_o) * [X_BH] * theta_w"
+  stoichiometry:
+    S_VFA: "0.0 - 1.0 / y_h_anox"
+    X_BH: 1
+    S_NO: "(y_h_anox - 1.0) / (2.86 * y_h_anox)"
+    S_NH: "0.0 - i_n_bio"
+    S_PO4: "0.0 - i_p_bio"
+    S_SO4: "0.0 - i_s_bio"
+    S_CO2: "i_cit_sb / y_h_anox - i_cit_bio"
+
+- name: aer_growth_SB_biofilm
+  description: "Aerobic heterotrophic growth on S_B, biofilm (WATS Eq 5.3: half-order in DO, S_O^0.5)."
+  rate: "k_12_o2 * ho_SO_half * y_hf / (1.0 - y_hf) * [S_B] / (k_sf + [S_B] + [S_VFA]) * theta_f * {A_V}"
+  stoichiometry:
+    S_B: "0.0 - 1.0 / y_hf"
+    X_BH: 1
+    S_O: "(y_hf - 1.0) / y_hf"
+    S_NH: "0.0 - i_n_bio"
+    S_PO4: "0.0 - i_p_bio"
+    S_SO4: "(1.0 / y_hf) * i_s_sb - i_s_bio"
+    S_CO2: "i_cit_sb / y_hw - i_cit_bio"
+
+- name: anox_growth_SB_biofilm
+    # Uses the anoxic yield y_h_anox (not the aerobic y_hf); see y_h_anox note.
+  description: "Anoxic heterotrophic growth on S_B, biofilm."
+  rate: "k_12_no * ho_SNO_half * 2.86 * y_h_anox / (1.0 - y_h_anox) * [S_B] / (k_sf + [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * theta_f * {A_V}"
+  stoichiometry:
+    S_B: "0.0 - 1.0 / y_h_anox"
+    X_BH: 1
+    S_NO: "(y_h_anox - 1.0) / (2.86 * y_h_anox)"
+    S_NH: "0.0 - i_n_bio"
+    S_PO4: "0.0 - i_p_bio"
+    S_SO4: "(1.0 / y_h_anox) * i_s_sb - i_s_bio"
+    S_CO2: "i_cit_sb / y_h_anox - i_cit_bio"
+
+- name: aer_growth_VFA_biofilm
+  description: "Aerobic heterotrophic growth on VFA, biofilm."
+  rate: "k_12_o2 * ho_SO_half * y_hf / (1.0 - y_hf) * [S_VFA] / (k_sf + [S_B] + [S_VFA]) * theta_f * {A_V}"
+  stoichiometry:
+    S_VFA: "0.0 - 1.0 / y_hf"
+    X_BH: 1
+    S_O: "(y_hf - 1.0) / y_hf"
+    S_NH: "0.0 - i_n_bio"
+    S_PO4: "0.0 - i_p_bio"
+    S_SO4: "0.0 - i_s_bio"
+    S_CO2: "i_cit_sb / y_hw - i_cit_bio"
+
+- name: anox_growth_VFA_biofilm
+    # Uses the anoxic yield y_h_anox (not the aerobic y_hf); see y_h_anox note.
+  description: "Anoxic heterotrophic growth on VFA, biofilm."
+  rate: "k_12_no * ho_SNO_half * 2.86 * y_h_anox / (1.0 - y_h_anox) * [S_VFA] / (k_sf + [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * theta_f * {A_V}"
+  stoichiometry:
+    S_VFA: "0.0 - 1.0 / y_h_anox"
+    X_BH: 1
+    S_NO: "(y_h_anox - 1.0) / (2.86 * y_h_anox)"
+    S_NH: "0.0 - i_n_bio"
+    S_PO4: "0.0 - i_p_bio"
+    S_SO4: "0.0 - i_s_bio"
+    S_CO2: "i_cit_sb / y_h_anox - i_cit_bio"
+
+  # ============================ HYDROLYSIS (XS1) ========================
+- name: aer_hydrolysis_XS1_bulk
+  description: "Aerobic hydrolysis of rapidly hydrolysable substrate, bulk."
+  rate: "k_h1 * monod_ratio([X_S1], [X_BH], k_x1) * monod([S_O], k_o) * [X_BH] * theta_w"
+  stoichiometry: {X_S1: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: anox_hydrolysis_XS1_bulk
+  description: "Anoxic hydrolysis of XS1, bulk."
+  rate: "eta_no * k_h1 * monod_ratio([X_S1], [X_BH], k_x1) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w"
+  stoichiometry: {X_S1: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: anae_hydrolysis_XS1_bulk
+  description: "Anaerobic hydrolysis of XS1, bulk."
+  rate: "eta_an * k_h1 * monod_ratio([X_S1], [X_BH], k_x1) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * [X_BH] * theta_w"
+  stoichiometry: {X_S1: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: aer_hydrolysis_XS1_biofilm
+  description: "Aerobic hydrolysis of XS1, biofilm."
+  rate: "k_h1 * monod_ratio([X_S1], [X_BH], k_x1) * monod([S_O], k_o) * {X_BF} * eps * theta_f * {A_V}"
+  stoichiometry: {X_S1: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: anox_hydrolysis_XS1_biofilm
+  description: "Anoxic hydrolysis of XS1, biofilm."
+  rate: "eta_no * k_h1 * monod_ratio([X_S1], [X_BH], k_x1) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * {X_BF} * eps * theta_f * {A_V}"
+  stoichiometry: {X_S1: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: anae_hydrolysis_XS1_biofilm
+  description: "Anaerobic hydrolysis of XS1, biofilm."
+  rate: "eta_an * k_h1 * monod_ratio([X_S1], [X_BH], k_x1) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * {X_BF} * eps * theta_f * {A_V}"
+  stoichiometry: {X_S1: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: aer_hydrolysis_XS2_bulk
+  description: "Aerobic hydrolysis of slowly hydrolysable substrate, bulk."
+  rate: "k_h2 * monod_ratio([X_S2], [X_BH], k_x2) * monod([S_O], k_o) * [X_BH] * theta_w"
+  stoichiometry: {X_S2: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: anox_hydrolysis_XS2_bulk
+  description: "Anoxic hydrolysis of XS2, bulk."
+  rate: "eta_no * k_h2 * monod_ratio([X_S2], [X_BH], k_x2) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w"
+  stoichiometry: {X_S2: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: anae_hydrolysis_XS2_bulk
+  description: "Anaerobic hydrolysis of XS2, bulk."
+  rate: "eta_an * k_h2 * monod_ratio([X_S2], [X_BH], k_x2) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * [X_BH] * theta_w"
+  stoichiometry: {X_S2: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: aer_hydrolysis_XS2_biofilm
+  description: "Aerobic hydrolysis of XS2, biofilm."
+  rate: "k_h2 * monod_ratio([X_S2], [X_BH], k_x2) * monod([S_O], k_o) * {X_BF} * eps * theta_f * {A_V}"
+  stoichiometry: {X_S2: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: anox_hydrolysis_XS2_biofilm
+  description: "Anoxic hydrolysis of XS2, biofilm."
+  rate: "eta_no * k_h2 * monod_ratio([X_S2], [X_BH], k_x2) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * {X_BF} * eps * theta_f * {A_V}"
+  stoichiometry: {X_S2: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: anae_hydrolysis_XS2_biofilm
+  description: "Anaerobic hydrolysis of XS2, biofilm."
+  rate: "eta_an * k_h2 * monod_ratio([X_S2], [X_BH], k_x2) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * {X_BF} * eps * theta_f * {A_V}"
+  stoichiometry: {X_S2: -1, S_B: 1, S_NH: "i_n_xb", S_SO4: "i_s_xb - i_s_sb"}
+- name: maint_aer_SB_substrate
+  description: "Aerobic energy maintenance on S_B (substrate-oxidation path)."
+  rate: "q_m * [S_B] / ([S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_sub"
+  stoichiometry: {S_B: -1, S_O: -1, S_CO2: 0.375}
+- name: maint_aer_SB_biomass
+  description: "Aerobic energy maintenance on S_B (endogenous-biomass path)."
+  rate: "q_m * [S_B] / ([S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_bio"
+  stoichiometry: {X_BH: -1, S_O: -1, S_CO2: 0.375}
+- name: maint_aer_VFA_substrate
+  description: "Aerobic energy maintenance on VFA (substrate-oxidation path)."
+  rate: "q_m * [S_VFA] / ([S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_sub"
+  stoichiometry: {S_VFA: -1, S_O: -1, S_CO2: 0.375}
+- name: maint_aer_VFA_biomass
+  description: "Aerobic energy maintenance on VFA (endogenous-biomass path)."
+  rate: "q_m * [S_VFA] / ([S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_bio"
+  stoichiometry: {X_BH: -1, S_O: -1, S_CO2: 0.375}
+- name: maint_anox_SB_substrate
+  description: "Anoxic energy maintenance on S_B (substrate-oxidation path)."
+  rate: "q_m * [S_B] / ([S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w * em_frac_sub"
+  stoichiometry: {S_B: -1, S_NO: "0.0 - 1.0 / 2.86", S_CO2: 0.375}
+- name: maint_anox_SB_biomass
+  description: "Anoxic energy maintenance on S_B (endogenous-biomass path)."
+  rate: "q_m * [S_B] / ([S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w * em_frac_bio"
+  stoichiometry: {X_BH: -1, S_NO: "0.0 - 1.0 / 2.86", S_CO2: 0.375}
+- name: maint_anox_VFA_substrate
+  description: "Anoxic energy maintenance on VFA (substrate-oxidation path)."
+  rate: "q_m * [S_VFA] / ([S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w * em_frac_sub"
+  stoichiometry: {S_VFA: -1, S_NO: "0.0 - 1.0 / 2.86", S_CO2: 0.375}
+- name: maint_anox_VFA_biomass
+  description: "Anoxic energy maintenance on VFA (endogenous-biomass path)."
+  rate: "q_m * [S_VFA] / ([S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w * em_frac_bio"
+  stoichiometry: {X_BH: -1, S_NO: "0.0 - 1.0 / 2.86", S_CO2: 0.375}
+- name: fermentation_bulk
+  description: "Fermentation of S_B to VFA, bulk water (WATS Table 9.3: S_F -> S_A)."
+  rate: "q_ferm * [S_B] / ([S_B] + k_fe) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * [X_BH] * theta_w"
+  stoichiometry: {S_B: -1, S_VFA: 1.0, S_SO4: "i_s_sb", S_CO2: 0.125}
+- name: fermentation_biofilm
+  description: "Fermentation of S_B to VFA, biofilm (WATS Table 9.3: S_F -> S_A)."
+  rate: "q_ferm * [S_B] / ([S_B] + k_fe) * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * eps * {X_BF} * theta_w * {A_V}"
+  stoichiometry: {S_B: -1, S_VFA: 1.0, S_SO4: "i_s_sb", S_CO2: 0.125}
+- name: sulfide_chemoxidation_bulk
+  description: "Aerobic chemical sulfide oxidation, bulk (WATS Eqs 5.13-5.14: power-law in sulfide/DO, rate const a pH-weighted H2S/HS- average; temperature coefficient 1.07 via theta_w)."
+  rate: "(k_h2sc * pH_switch(pKa) + k_hsc * (1.0 - pH_switch(pKa))) * ho_sumS_n1 * ho_SO_n2 * theta_w"
+  parameters:
+    pKa: {value: 7.1, units: "-"}     # H2S/HS- pKa weighting the chemical-oxidation rate
+  stoichiometry: {sumS: -1, S_SO4: 1, S_O: -2.0}
+- name: sulfide_biooxidation_bulk
+  description: "Aerobic biological sulfide oxidation, bulk (WATS Eqs 5.13-5.15: power-law in sulfide/DO, bell-shaped pH dependence f_sII_pH about pH_optimum; temperature coefficient 1.10 via theta_sob)."
+  rate: "k_sII_b_pHopt * f_sII_pH * ho_sumS_n1 * ho_SO_n2 * theta_sob"
+  stoichiometry: {sumS: -1, S_SO4: 1, S_O: -2.0}
+- name: sulfate_reduction_biofilm
+  description: 'Sulfide formation by sulfate-reducing bacteria, biofilm (WATS Eq 6.24): half-order in readily available substrate (SF+SA+XS1), O2- and nitrate-inhibited, areal.'
+  rate: a_h2s * ho_srbsub_half * monod_inh([S_O], k_o) * monod_inh([S_NO], k_no) * theta_s * {A_V}
+  stoichiometry:
+    S_B: -2
+    sumS: 1
+    S_SO4: -1
+- name: sulfide_oxidation_biofilm
+  description: 'Biological sulfide oxidation in the biofilm (WATS Eq 5.16): half-order in
+    sulfide and oxygen, areal, with the bell-shaped pH dependence f_sII_pH (Eq 5.15, same
+    pHopt/omega as the bulk water phase, Sec. 5.5.2) and temperature coefficient 1.03 (a_s).
+    Written net to sulfate as in the WATS process matrix (Table 9.4); mechanistically
+    elemental sulfur is the main intermediate, captured explicitly by the elemental-sulfur
+    cycle of the extended/Khalil models.'
+  rate: k_sox_f * ho_sumS_half * ho_SO_half * f_sII_pH * theta_s * {A_V}
+  stoichiometry:
+    sumS: -1
+    S_SO4: 1
+    S_O: -2

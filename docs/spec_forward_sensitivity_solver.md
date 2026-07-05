@@ -8,7 +8,7 @@ Status: proposed. This document is a self-contained implementation spec for a ne
 ## 1. Problem this solves
 
 `aquakin` is AD-throughout. To calibrate or do sensitivity analysis we need
-`d(output)/d(params)` of a reactor solve. For **stiff** networks (the WATS/Khalil
+`d(output)/d(params)` of a reactor solve. For **stiff** models (the WATS/Khalil
 sewer-biofilm models, `A_V`-scaled biofilm reactions ~1000 d⁻¹, etc.) AD *through*
 the ODE solve becomes non-finite above an integrator-step threshold:
 
@@ -18,7 +18,7 @@ the ODE solve becomes non-finite above an integrator-step threshold:
   non-finite values above a (looser) threshold.
 
 The current workaround is a **global `dtmax` cap** (see CLAUDE.md
-"Differentiating stiff networks (dtmax)"). This is crude: it forces tiny steps
+"Differentiating stiff models (dtmax)"). This is crude: it forces tiny steps
 over the *entire* solve even though the tight step is only needed in small,
 *local* stiff regions. Measured cost of the cap on the multispecies biofilm
 90-day maturation: `dtmax=3e-3` ⇒ ~30,000 steps and ~33 s/solve, vs **~2,800
@@ -222,8 +222,8 @@ in CLAUDE.md that it supersedes the `dtmax`-capped `jacfwd` for those.
 1. **Analytic test** (unit, fast). First-order decay `A→B`, `dA/dt=-k A`,
    `A(t)=A0 e^{-kt}`. The sensitivity `∂A/∂k = -t A0 e^{-kt}` is known in closed
    form. `solve_sensitivity` must match it to `~1e-8`. Use
-   `tests/fixtures/simple_network.yaml`.
-2. **Stiff-network exactness** (integration). On
+   `tests/fixtures/simple_model.yaml`.
+2. **Stiff-model exactness** (integration). On
    `wats_sewer_khalil_paper_balanced_biofilm_multispecies` (the canonical stiff
    case), `solve_sensitivity` (uncapped) must match `jax.jacfwd` (at a tight
    `dtmax`) to `~1e-6`. The validated prototype already shows `1e-8` agreement —
@@ -288,7 +288,7 @@ that is the gap Option A (factorization sharing) must close.
 - Maly, T. & Petzold, L.R. (1996). *Numerical methods and software for
   sensitivity analysis of DAE systems.* (Staggered/simultaneous corrector.)
 - Kidger, P. (2021). *On Neural Differential Equations.* (diffrax design.)
-- aquakin `CLAUDE.md`, section **"Differentiating stiff networks (dtmax)"** — the
+- aquakin `CLAUDE.md`, section **"Differentiating stiff models (dtmax)"** — the
   problem this feature removes; update it once shipped.
 
 ---
@@ -303,13 +303,13 @@ that is the gap Option A (factorization sharing) must close.
   with a `vmap` over the `p` unit param-tangents sharing the same `(y, θ)`
   linearization point.
 - `pH`/speciation (`derived_condition_fn`): the multispecies biofilm uses fixed
-  pH, but networks with a state-derived pH have an extra implicit dependence
+  pH, but models with a state-derived pH have an extra implicit dependence
   inside `f`. The JVP handles it automatically (it differentiates through
-  `network.rates`, which calls the speciation solver) — no special-casing, but
-  add a state-derived-pH network to the exactness test.
+  `model.rates`, which calls the speciation solver) — no special-casing, but
+  add a state-derived-pH model to the exactness test.
 - The positivity limiter and density-cap throttle are smooth (`maximum`/`minimum`
   / `clip`) and differentiate fine; they are part of `f`, so the sensitivity sees
-  them. No action needed, but include a capped/limited network in the tests.
+  them. No action needed, but include a capped/limited model in the tests.
 - Block-triangular linear operator (Option A): the diagonal block `(I − γ·dt·J)`
   is the same one `diffrax` already forms for the un-augmented solve. The
   off-diagonal blocks act only on the RHS during forward substitution and never

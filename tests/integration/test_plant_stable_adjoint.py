@@ -11,7 +11,7 @@ at any step size.
 
 The headline check is a gradient that flows from a *water-line* observation back
 through the digester, the activated-sludge to anaerobic-digestion interface, and
-the recycle to an ADM1 (digester) parameter -- a cross-network gradient -- and
+the recycle to an ADM1 (digester) parameter -- a cross-model gradient -- and
 matches a central finite difference. The cheap API-guard tests do not integrate.
 """
 
@@ -51,9 +51,9 @@ def _grad_diff(gradient):
 
 
 def _bsm2_plant():
-    asm1 = aquakin.load_network("asm1")
-    adm1 = aquakin.load_network("adm1")
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    asm1 = aquakin.load_model("asm1")
+    adm1 = aquakin.load_model("adm1")
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
     return asm1, adm1, plant, y0
@@ -78,10 +78,10 @@ def test_stable_adjoint_rejects_adjoint_and_dtmax():
                     integrator=aquakin.IntegratorConfig(dtmax=1e-2))
 
 
-# --- fast small-network correctness (a single-CSTR plant) ------------------
+# --- fast small-model correctness (a single-CSTR plant) ------------------
 
 def _single_cstr_plant(net):
-    """A one-unit plant: a CSTR on the toy decay network fed a constant flow.
+    """A one-unit plant: a CSTR on the toy decay model fed a constant flow.
 
     Small and non-stiff, so the stable-adjoint gradient through the *plant*
     solve can be checked against the standard ``jax_adjoint`` gradient and a
@@ -90,12 +90,12 @@ def _single_cstr_plant(net):
     """
     plant = Plant("single_cstr")
     plant.add_unit(CSTRUnit(
-        name="tank", network=net, volume=100.0,
+        name="tank", model=net, volume=100.0,
         input_port_names=["inlet"], conditions={"T": 293.15},
     ))
     influent = InfluentSeries(
         t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
-        C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), network=net,
+        C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=net,
     )
     plant.add_influent("feed", influent, to="tank.inlet")
     return plant
@@ -104,7 +104,7 @@ def _single_cstr_plant(net):
 def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd():
     """On a small single-CSTR plant the cap-free stable-adjoint gradient equals
     the standard through-the-solve (jax_adjoint) gradient and a central FD."""
-    net = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     plant = _single_cstr_plant(net)
     base = net.default_parameters()
     gidx = plant.parameter_index("simple_decay.A_to_B.k")
@@ -140,7 +140,7 @@ def test_stable_adjoint_low_memory_matches_saved_stage_gradient():
     stages instead of saving the dense-stage buffer; the plant gradient must equal
     the default saved-stage path (it is the same discrete adjoint, the stages
     obtained two ways)."""
-    net = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     plant = _single_cstr_plant(net)
     base = net.default_parameters()
     gidx = plant.parameter_index("simple_decay.A_to_B.k")
@@ -173,7 +173,7 @@ def test_stable_adjoint_initial_state_gradient_matches_jax_adjoint():
     a leaked tracer. ``default_atol`` now ``stop_gradient``s the floor (it is a
     non-differentiable solver tolerance), so the initial-condition gradient flows
     -- the direction the standard adjoint already handled."""
-    net = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     plant = _single_cstr_plant(net)
     params = plant.default_parameters()
     y0 = plant.initial_state()
@@ -296,7 +296,7 @@ def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     rounding (~1e-13, the warm-start arithmetic-order difference) rather than
     bit-for-bit; the tight relative tolerance still catches an O(1) dropped
     ``dM/dtheta`` term."""
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     plant = build_bsm1(asm1)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
     y0 = bsm1_warm_start(plant)
@@ -348,7 +348,7 @@ def test_stable_adjoint_colored_jacobian_matches_dense():
     backward path: a missed pattern entry would change the gradient by O(1) in a
     component, which this catches; the float-order difference of the exact case
     is ~1e-15 here."""
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     plant = build_bsm1(asm1)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
     y0 = bsm1_warm_start(plant)
@@ -391,7 +391,7 @@ def test_stable_adjoint_colored_jacobian_auto_decision_size_gated():
     -- so it is available immediately and reproducible. Guards the decision and that
     the gradient is correct (equal to the explicit-dense gradient) whichever the size
     gate selects."""
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     plant = build_bsm1(asm1)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
     y0 = bsm1_warm_start(plant)
@@ -467,9 +467,9 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     from aquakin.plant.bsm.bsm2 import BSM2_Q_REF
     from aquakin.plant.influent import InfluentSeries
 
-    asm1 = aquakin.load_network("asm1")
-    adm1 = aquakin.load_network("adm1")
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    asm1 = aquakin.load_model("asm1")
+    adm1 = aquakin.load_model("adm1")
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     # A diurnal flow modulation makes the plant RHS explicitly time-dependent.
     c_const = bsm2_constant_influent(asm1).C[0]
     n = 120
@@ -477,7 +477,7 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     q_inf = BSM2_Q_REF * (1.0 + 0.3 * jnp.sin(2.0 * jnp.pi * t_inf))
     plant.add_influent(
         "feed",
-        InfluentSeries(t=t_inf, Q=q_inf, C=jnp.tile(c_const, (n, 1)), network=asm1),
+        InfluentSeries(t=t_inf, Q=q_inf, C=jnp.tile(c_const, (n, 1)), model=asm1),
     )
     y0 = bsm2_warm_start(plant)
     base = bsm2_parameters(asm1, adm1)
@@ -633,7 +633,7 @@ def test_stable_adjoint_colored_jacobian_flow_setpoint_matches_dense():
     w.r.t. RAS (where ``dM/dtheta != 0``) must equal the dense-Jacobian gradient.
     The kinetic-param colored test cannot catch a dropped ``dM/dtheta`` (it is 0
     there); this is the test that does."""
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     plant = build_bsm1(asm1)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
     y0 = bsm1_warm_start(plant)
@@ -674,7 +674,7 @@ def test_stable_adjoint_accepts_kvaerno3_and_factormax():
     default ``Kvaerno5`` discrete adjoint to the two methods' truncation
     difference (they differ in the realized step sequence, each exact for its
     own)."""
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     plant = build_bsm1(asm1)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
     y0 = bsm1_warm_start(plant)
@@ -724,7 +724,7 @@ def test_forward_paths_agree_no_config_drift():
     others, the primals diverge and this fails -- the regression guard the
     silently-drifted adjoint forward never had.
     """
-    asm1 = aquakin.load_network("asm1")
+    asm1 = aquakin.load_model("asm1")
     plant = build_bsm1(asm1)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
     y0 = bsm1_warm_start(plant)

@@ -10,7 +10,7 @@ import jax.numpy as jnp
 from aquakin.integrate._common import _HasNamedSpecies
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class Stream:
     downstream units' ``rhs`` / ``compute_outputs`` calls. They are
     intentionally immutable per evaluation: a connection delivers the
     upstream output directly, with optional :class:`StateTranslator`
-    interposed for cross-network mappings.
+    interposed for cross-model mappings.
 
     Attributes
     ----------
@@ -30,9 +30,9 @@ class Stream:
         plant (typically m³/d for BSM-family plants).
     C : jnp.ndarray
         Concentration vector, shape ``(n_species,)`` where species ordering
-        is ``network.species``.
-    network : CompiledNetwork
-        The kinetic network whose species ordering applies to ``C``.
+        is ``model.species``.
+    model : CompiledModel
+        The kinetic model whose species ordering applies to ``C``.
     T : jnp.ndarray, optional
         Stream temperature (scalar, Kelvin). Carried algebraically through the
         flowsheet: mixers flow-weight it (a heat balance) and pass-through units
@@ -54,7 +54,7 @@ class Stream:
 
     Q: jnp.ndarray
     C: jnp.ndarray
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     T: "jnp.ndarray | None" = None
     org: "jnp.ndarray | None" = None
 
@@ -63,21 +63,21 @@ class Stream:
         return self.Q * self.C
 
     def with_C(self, C: jnp.ndarray) -> "Stream":
-        """Return a new stream with the same Q/T/org/network but a new C vector."""
-        return Stream(Q=self.Q, C=C, network=self.network, T=self.T, org=self.org)
+        """Return a new stream with the same Q/T/org/model but a new C vector."""
+        return Stream(Q=self.Q, C=C, model=self.model, T=self.T, org=self.org)
 
     def with_Q(self, Q: jnp.ndarray) -> "Stream":
-        """Return a new stream with the same C/T/org/network but a new flow rate."""
-        return Stream(Q=Q, C=self.C, network=self.network, T=self.T, org=self.org)
+        """Return a new stream with the same C/T/org/model but a new flow rate."""
+        return Stream(Q=Q, C=self.C, model=self.model, T=self.T, org=self.org)
 
     def with_T(self, T: "jnp.ndarray | None") -> "Stream":
-        """Return a new stream with the same Q/C/org/network but a new temperature."""
-        return Stream(Q=self.Q, C=self.C, network=self.network, T=T, org=self.org)
+        """Return a new stream with the same Q/C/org/model but a new temperature."""
+        return Stream(Q=self.Q, C=self.C, model=self.model, T=T, org=self.org)
 
     def with_org(self, org: "jnp.ndarray | None") -> "Stream":
-        """Return a new stream with the same Q/C/T/network but a new indicator
+        """Return a new stream with the same Q/C/T/model but a new indicator
         density."""
-        return Stream(Q=self.Q, C=self.C, network=self.network, T=self.T, org=org)
+        return Stream(Q=self.Q, C=self.C, model=self.model, T=self.T, org=org)
 
 
 _EPS_Q = 1e-12  # guard the flow-weighted division when total inflow is ~zero
@@ -171,10 +171,10 @@ class StreamSeries(_HasNamedSpecies):
     Q : jnp.ndarray
         Volumetric flow rate at each time, shape ``(n_t,)``.
     C : jnp.ndarray
-        Concentration over time, shape ``(n_t, n_species)`` in the network's
+        Concentration over time, shape ``(n_t, n_species)`` in the model's
         species ordering.
-    network : CompiledNetwork
-        The kinetic network whose species ordering applies to ``C``.
+    model : CompiledModel
+        The kinetic model whose species ordering applies to ``C``.
     org : jnp.ndarray, optional
         Indicator-organism density trajectory, shape ``(n_t,)``, when the stream
         carries one (e.g. downstream of a disinfection unit); ``None`` otherwise.
@@ -183,17 +183,17 @@ class StreamSeries(_HasNamedSpecies):
     t: jnp.ndarray
     Q: jnp.ndarray
     C: jnp.ndarray
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     org: "jnp.ndarray | None" = None
 
     # C_named / C_named_many / final_named / .final come from _HasNamedSpecies
-    # (shared with the reactor solutions), keyed off .C and .network.
+    # (shared with the reactor solutions), keyed off .C and .model.
 
     def to_dataframe(self, *, units_in_columns: bool = False):
         """Return the stream trajectory as a pandas ``DataFrame``.
 
         One row per save time, indexed by time ``t``, with a flow column ``Q``
-        followed by one column per species (in network ordering).
+        followed by one column per species (in model ordering).
 
         Parameters
         ----------
@@ -213,8 +213,8 @@ class StreamSeries(_HasNamedSpecies):
         """
         from aquakin.integrate._common import build_dataframe
 
-        columns = [(sp, self.C[:, j]) for j, sp in enumerate(self.network.species)]
-        units = {sp: self.network.units_of(sp) for sp in self.network.species}
+        columns = [(sp, self.C[:, j]) for j, sp in enumerate(self.model.species)]
+        units = {sp: self.model.units_of(sp) for sp in self.model.species}
         return build_dataframe(
             self.t,
             columns,

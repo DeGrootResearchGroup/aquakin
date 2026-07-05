@@ -12,7 +12,7 @@ from aquakin.integrate.calibrate import (
     _jacobian_physical_wrt_theta,
     _to_unconstrained,
 )
-from aquakin.schema.network_spec import PriorSpec
+from aquakin.schema.model_spec import PriorSpec
 from pydantic import ValidationError
 
 
@@ -60,13 +60,13 @@ def test_unknown_transform_rejected():
 
 
 @pytest.fixture
-def setup(simple_network):
+def setup(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     C0 = jnp.asarray([1.0, 0.0])
     true_k = 0.25
-    true_params = simple_network.default_parameters().at[0].set(true_k)
+    true_params = simple_model.default_parameters().at[0].set(true_k)
     t_obs = jnp.linspace(0.5, 10.0, 20)
     sol = reactor.solve(C0, params=true_params, t_span=(0.0, 10.0), t_eval=t_obs)
     obs_clean = sol.C_named("B")
@@ -132,7 +132,7 @@ def test_ad_mode_forward_incompatible_with_stable_adjoint(setup):
 
 
 # ---------- time_unit on the fitting path (issue #446/#447) ----------
-# simple_network's rate constant is in s^-1, so its native time unit is seconds;
+# simple_model's rate constant is in s^-1, so its native time unit is seconds;
 # the setup t_obs is in seconds. A user who standardises on hours must be able to
 # carry the same hour-valued t_obs into calibrate/fit and get the SAME fit -- not
 # a silently 3600x-compressed time axis.
@@ -249,15 +249,15 @@ def test_gauss_newton_laplace_matches_fd(setup):
 
 
 @pytest.mark.slow  # heavy: calibrate through stiff solve
-def test_laplace_dtmax_reconstructs_tighter_reactor(simple_network):
+def test_laplace_dtmax_reconstructs_tighter_reactor(simple_model):
     """laplace_dtmax computes the Laplace Hessian with a separately (tighter)
     capped reactor; it reconstructs the reactor and gives a finite posterior. On
     this non-stiff problem the tighter cap barely changes the result."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15),
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15),
         integrator=aquakin.IntegratorConfig(dtmax=0.5))
     C0 = jnp.asarray([1.0, 0.0])
-    tp = simple_network.default_parameters().at[0].set(0.25)
+    tp = simple_model.default_parameters().at[0].set(0.25)
     t = jnp.linspace(0.5, 10.0, 20)
     obs = reactor.solve(C0, params=tp, t_span=(0.0, 10.0), t_eval=t).C_named("B")
     common = dict(
@@ -283,10 +283,10 @@ def test_unknown_laplace_method_rejected(setup):
         )
 
 
-def test_falls_back_to_schema_transform_when_omitted(simple_network):
+def test_falls_back_to_schema_transform_when_omitted(simple_model):
     """If transforms={} is passed, the per-parameter declared transform is used."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     C0 = jnp.asarray([1.0, 0.0])
     obs = jnp.asarray([0.0, 0.5, 0.8])
@@ -298,7 +298,7 @@ def test_falls_back_to_schema_transform_when_omitted(simple_network):
         loss="mse",
         laplace=False,
     )
-    # The fixture network declares no explicit transform -> defaults to "none".
+    # The fixture model declares no explicit transform -> defaults to "none".
     assert result.transforms == ["none"]
 
 
@@ -376,7 +376,7 @@ def test_multistart_reproducible(setup):
 def test_multistart_recovers_from_bad_initial(setup):
     """A start far from the truth still recovers k with several restarts."""
     reactor, C0, t_obs, obs_clean, true_k = setup
-    bad = reactor.network.default_parameters().at[0].set(40.0)
+    bad = reactor.model.default_parameters().at[0].set(40.0)
     result = aquakin.calibrate(
         reactor, C0, observations=obs_clean, t_obs=t_obs,
         free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"},
@@ -418,7 +418,7 @@ def test_param_halfwidth_bounds_the_rate(setup):
     tight halfwidth keeps the fit from reaching a far-away true value, while the
     default (None) lets it reach it."""
     reactor, C0, t_obs, obs_clean, true_k = setup   # true_k=0.25
-    k_start = float(reactor.network.default_parameters()[0])   # 0.1
+    k_start = float(reactor.model.default_parameters()[0])   # 0.1
     common = dict(
         observations=obs_clean, t_obs=t_obs, free_params=["A_to_B.k"],
         transforms={"A_to_B.k": "positive_log"}, observed_species=["B"],
@@ -496,8 +496,8 @@ def test_predictive_band_reproducible(setup):
 def test_predictive_band_all_species_shape(setup):
     reactor, C0, t_obs, _, result = _band_setup(setup)
     band = result.predictive_band(reactor, C0, t_obs, n_draw=50, seed=0)
-    # No observed_species -> all network species (A and B) as columns.
-    assert band.median.shape == (len(t_obs), reactor.network.n_species)
+    # No observed_species -> all model species (A and B) as columns.
+    assert band.median.shape == (len(t_obs), reactor.model.n_species)
     assert band.species is None
 
 
@@ -590,7 +590,7 @@ def test_calibrate_nll_small_scale_observable_gives_finite_posterior(setup):
     finite, positive-variance posterior rather than a false 'degenerate' error
     (the bug reproduced through the full calibrate path)."""
     reactor, C0, t_obs, _obs_clean, true_k = setup
-    true_params = reactor.network.default_parameters().at[0].set(true_k)
+    true_params = reactor.model.default_parameters().at[0].set(true_k)
     # Scale the observable down to ~1e-6 so the Hessian is uniformly small.
     scale = 1e-6
     C0s = C0 * scale
@@ -673,16 +673,16 @@ def test_nll_loss_is_comparable_across_optimizers(setup):
     assert gn.loss == pytest.approx(expected_const, abs=1e-3)
 
 
-def test_gauss_newton_forward_mode_with_direct_adjoint(simple_network):
+def test_gauss_newton_forward_mode_with_direct_adjoint(simple_model):
     """With a DirectAdjoint reactor the GN Jacobian is formed in forward mode
     (jacfwd); it must still recover the parameter."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15),
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15),
         diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
     C0 = jnp.asarray([1.0, 0.0])
     true_k = 0.25
-    true_params = simple_network.default_parameters().at[0].set(true_k)
+    true_params = simple_model.default_parameters().at[0].set(true_k)
     t_obs = jnp.linspace(0.5, 10.0, 20)
     obs = reactor.solve(C0, params=true_params, t_span=(0.0, 10.0), t_eval=t_obs).C_named("B")
     result = aquakin.calibrate(
@@ -694,13 +694,13 @@ def test_gauss_newton_forward_mode_with_direct_adjoint(simple_network):
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
 
 
-def test_gauss_newton_with_free_ic_and_multistart(simple_network):
+def test_gauss_newton_with_free_ic_and_multistart(simple_model):
     """GN composes with free_ic and multistart: recover both k and A0."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     true_k, true_A0 = 0.25, 1.6
-    true_params = simple_network.default_parameters().at[0].set(true_k)
+    true_params = simple_model.default_parameters().at[0].set(true_k)
     t_obs = jnp.linspace(0.5, 12.0, 25)
     sol = reactor.solve(jnp.asarray([true_A0, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t_obs)
     obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
@@ -728,13 +728,13 @@ def test_unknown_optimizer_rejected(setup):
 # ---------- free initial conditions ----------
 
 
-def test_free_ic_recovers_initial_condition(simple_network):
+def test_free_ic_recovers_initial_condition(simple_model):
     """Fit an unknown initial A0 jointly with the rate; recover both."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     true_k, true_A0 = 0.25, 1.7
-    true_params = simple_network.default_parameters().at[0].set(true_k)
+    true_params = simple_model.default_parameters().at[0].set(true_k)
     C0_true = jnp.asarray([true_A0, 0.0])
     t_obs = jnp.linspace(0.5, 12.0, 25)
     sol = reactor.solve(C0_true, params=true_params, t_span=(0.0, 12.0), t_eval=t_obs)
@@ -753,14 +753,14 @@ def test_free_ic_recovers_initial_condition(simple_network):
     assert float(result.C0_fitted[0][0]) == pytest.approx(true_A0, rel=1e-2)
 
 
-def test_free_ic_per_dataset_in_multibatch(simple_network):
+def test_free_ic_per_dataset_in_multibatch(simple_model):
     """Two batches with different (unknown) A0 but a shared k; each batch's
     initial pool is fitted separately."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     true_k = 0.3
-    true_params = simple_network.default_parameters().at[0].set(true_k)
+    true_params = simple_model.default_parameters().at[0].set(true_k)
     A0a, A0b = 1.2, 2.4
     ta = jnp.linspace(0.5, 10.0, 20)
     tb = jnp.linspace(0.5, 10.0, 20)
@@ -780,13 +780,13 @@ def test_free_ic_per_dataset_in_multibatch(simple_network):
     assert result.ic_named[1]["A"] == pytest.approx(A0b, rel=2e-2)
 
 
-def test_free_ic_laplace_is_over_rates_only(simple_network):
+def test_free_ic_laplace_is_over_rates_only(simple_model):
     """With free_ic + laplace, the posterior covers the rate parameters only
     (pools held at their MAP), so its shape matches the rate count."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
-    true_params = simple_network.default_parameters().at[0].set(0.25)
+    true_params = simple_model.default_parameters().at[0].set(0.25)
     t_obs = jnp.linspace(0.5, 12.0, 25)
     sol = reactor.solve(jnp.asarray([1.5, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t_obs)
     obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
@@ -823,13 +823,13 @@ def test_free_ic_bad_bounds_rejected(setup):
 # ---------- joint multi-batch fit ----------
 
 
-def test_joint_multibatch_recovers_known_parameter(simple_network):
+def test_joint_multibatch_recovers_known_parameter(simple_model):
     """Two batches with different C0 / time grids, fit jointly, recover k."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     true_k = 0.3
-    true_params = simple_network.default_parameters().at[0].set(true_k)
+    true_params = simple_model.default_parameters().at[0].set(true_k)
     C0a = jnp.asarray([1.0, 0.0])
     C0b = jnp.asarray([2.0, 0.0])
     ta = jnp.linspace(0.5, 8.0, 12)
@@ -851,9 +851,9 @@ def test_joint_multibatch_recovers_known_parameter(simple_network):
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
 
 
-def test_multibatch_length_mismatch_rejected(simple_network):
+def test_multibatch_length_mismatch_rejected(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     C0a = jnp.asarray([1.0, 0.0])
     t = jnp.asarray([0.0, 1.0])
@@ -895,12 +895,12 @@ def test_rejects_wmse_without_sigma(setup):
         )
 
 
-def test_positive_log_initial_negative_rejected(simple_network):
+def test_positive_log_initial_negative_rejected(simple_model):
     """If initial value is <= 0 the transform is invalid."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
-    init_bad = simple_network.default_parameters().at[0].set(-1.0)
+    init_bad = simple_model.default_parameters().at[0].set(-1.0)
     with pytest.raises(ValueError):
         aquakin.calibrate(
             reactor,
@@ -914,11 +914,11 @@ def test_positive_log_initial_negative_rejected(simple_network):
         )
 
 
-def test_logit_initial_out_of_range_rejected(simple_network):
+def test_logit_initial_out_of_range_rejected(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
-    init_bad = simple_network.default_parameters().at[0].set(1.5)
+    init_bad = simple_model.default_parameters().at[0].set(1.5)
     with pytest.raises(ValueError):
         aquakin.calibrate(
             reactor,

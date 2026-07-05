@@ -13,7 +13,7 @@ close the loop:
 - **Return activated sludge** ``Q_r`` from the clarifier underflow back to the
   anaerobic zone, with the remainder wasted as ``Q_w``.
 
-It runs the shipped ``asm2d`` network, which already carries the biological
+It runs the shipped ``asm2d`` model, which already carries the biological
 phosphorus model (PAO / poly-P / PHA) and ASM2d's own simple metal-phosphate
 precipitation (``XMeOH`` / ``XMeP``), so the plant simultaneously removes carbon,
 nitrogen and phosphorus. It is the home for the chemical-phosphorus (metal-salt
@@ -38,7 +38,7 @@ from aquakin.plant.plant import Plant
 from aquakin.plant.takacs import TakacsClarifier
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
     from aquakin.plant.influent import InfluentSeries
 
 
@@ -116,7 +116,7 @@ class FerricDose:
 
 
 def a2o_influent(
-    network: "CompiledNetwork",
+    model: "CompiledModel",
     *,
     Q: float = A2O_Q_AVG,
     T: float = 293.15,
@@ -126,8 +126,8 @@ def a2o_influent(
 
     Parameters
     ----------
-    network : CompiledNetwork
-        The ASM2d network (must match the one passed to :func:`build_a2o`).
+    model : CompiledModel
+        The ASM2d model (must match the one passed to :func:`build_a2o`).
     Q : float
         Influent flow (m³/d). Default the dry-weather average ``A2O_Q_AVG``.
     T : float
@@ -144,7 +144,7 @@ def a2o_influent(
     comp = dict(A2O_INFLUENT)
     if overrides:
         comp.update(overrides)
-    return network.influent(comp, Q=Q, T=T)
+    return model.influent(comp, Q=Q, T=T)
 
 
 # A healthy bio-P mixed-liquor seed (g/m³): an established EBPR sludge with a
@@ -200,13 +200,13 @@ def a2o_warm_start(plant: Plant) -> "jnp.ndarray":
     ]
     if not reactors:  # pragma: no cover - a build_a2o plant always has reactors
         raise ValueError("no activated-sludge reactor found in the plant")
-    network = plant.units[reactors[0]].network
-    ml = network.concentrations(A2O_WARM_REACTOR_COMPOSITION, base="zero")
+    model = plant.units[reactors[0]].model
+    ml = model.concentrations(A2O_WARM_REACTOR_COMPOSITION, base="zero")
     return plant.initial_state(overrides={n: ml for n in reactors})
 
 
 def build_a2o(
-    network: Optional["CompiledNetwork"] = None,
+    model: Optional["CompiledModel"] = None,
     *,
     Q_avg: float = A2O_Q_AVG,
     wastage_flow: float = A2O_WASTAGE_FLOW,
@@ -225,8 +225,8 @@ def build_a2o(
 
     Parameters
     ----------
-    network : CompiledNetwork, optional
-        ASM2d network. Defaults to ``aquakin.load_network("asm2d")``.
+    model : CompiledModel, optional
+        ASM2d model. Defaults to ``aquakin.load_model("asm2d")``.
     Q_avg : float
         Design inlet flow used to size the recycle pumps (m³/d).
     wastage_flow : float
@@ -237,7 +237,7 @@ def build_a2o(
         (underflow → anaerobic return sludge).
     conditions : dict, optional
         Per-tank condition overrides (e.g. ``{"T": 288.15}`` for winter).
-        Defaults to the network's declared defaults.
+        Defaults to the model's declared defaults.
     use_takacs : bool
         Use the layered Takács secondary clarifier instead of the fast
         stateless ``IdealClarifier`` (the default).
@@ -246,7 +246,7 @@ def build_a2o(
     -------
     Plant
         Fully wired A²O plant. Add the influent with
-        ``plant.add_influent("feed", a2o_influent(network))`` and read the
+        ``plant.add_influent("feed", a2o_influent(model))`` and read the
         effluent off ``plant.effluent_endpoint``.
 
     Notes
@@ -254,15 +254,13 @@ def build_a2o(
     Not a standardised benchmark — the sizing is a representative municipal A²O
     design. Use :func:`a2o_influent` for a matching constant influent.
     """
-    if network is None:
+    if model is None:
         import aquakin
 
-        network = aquakin.load_network("asm2d")
+        model = aquakin.load_model("asm2d")
 
     if conditions is None:
-        conditions = {
-            name: network._condition_defaults[name] for name in network.conditions_required
-        }
+        conditions = {name: model._condition_defaults[name] for name in model.conditions_required}
 
     plant = Plant("A2O")
 
@@ -279,7 +277,7 @@ def build_a2o(
         MixerUnit(
             name="front_mix",
             input_port_names=["fresh", "ras"],
-            network=network,
+            model=model,
         )
     )
 
@@ -288,7 +286,7 @@ def build_a2o(
         plant.add_unit(
             CSTRUnit(
                 name=f"anaer{i + 1}",
-                network=network,
+                model=model,
                 volume=vol,
                 input_port_names=["inlet"],
                 conditions=conditions,
@@ -301,7 +299,7 @@ def build_a2o(
         MixerUnit(
             name="anoxic_mix",
             input_port_names=["upstream", "internal_recycle"],
-            network=network,
+            model=model,
         )
     )
 
@@ -310,7 +308,7 @@ def build_a2o(
         plant.add_unit(
             CSTRUnit(
                 name=f"anox{i + 1}",
-                network=network,
+                model=model,
                 volume=vol,
                 input_port_names=["inlet"],
                 conditions=conditions,
@@ -323,7 +321,7 @@ def build_a2o(
         plant.add_unit(
             CSTRUnit(
                 name=f"aer{i + 1}",
-                network=network,
+                model=model,
                 volume=vol,
                 input_port_names=["inlet"],
                 conditions=conditions,
@@ -337,7 +335,7 @@ def build_a2o(
     plant.add_unit(
         SplitterUnit(
             name="aer_split",
-            network=network,
+            model=model,
             output_port_flows={"internal_recycle": Qa},
             remainder_port="to_clarifier",
         )
@@ -348,7 +346,7 @@ def build_a2o(
         plant.add_unit(
             TakacsClarifier(
                 name="clarifier",
-                network=network,
+                model=model,
                 area=A2O_CLARIFIER_AREA,
                 height=A2O_CLARIFIER_HEIGHT,
                 underflow_Q=Q_underflow,
@@ -360,7 +358,7 @@ def build_a2o(
         plant.add_unit(
             IdealClarifier(
                 name="clarifier",
-                network=network,
+                model=model,
                 underflow_Q=Q_underflow,
                 capture_efficiency=0.998,
                 particulate_species=list(ASM2D_PARTICULATES),
@@ -371,7 +369,7 @@ def build_a2o(
     plant.add_unit(
         SplitterUnit(
             name="underflow_split",
-            network=network,
+            model=model,
             output_port_flows={"ras": Qr},
             remainder_port="waste",
         )
@@ -390,7 +388,7 @@ def build_a2o(
         # Insert a metal-salt dosing unit on the line into the aerobic zone, so
         # the dosed metal hydroxide precipitates phosphate (chemical-P) in the
         # aerated reactors alongside the biological uptake.
-        reagent = Reagent.from_species(network, {"XMeOH": ferric.xmeoh_conc}, label="ferric")
+        reagent = Reagent.from_species(model, {"XMeOH": ferric.xmeoh_conc}, label="ferric")
         plant.add_unit(DosingUnit("ferric_dose", reagent, flow=ferric.flow))
         plant.connect(last_anox, "ferric_dose.in")
         plant.connect("ferric_dose.out", "aer1")

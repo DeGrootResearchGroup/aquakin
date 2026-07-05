@@ -29,7 +29,7 @@ particle_id,t,<field1>,<field2>,...
 - `t` (float, seconds): time at which this sample is taken; must be strictly
   ascending within each particle.
 - All remaining columns are condition field values; their names become
-  `Track.fields` keys and must cover every field declared in the network's
+  `Track.fields` keys and must cover every field declared in the model's
   `conditions:` block.
 
 Read / write through `aquakin.transport.openfoam.read_tracks_csv` and
@@ -41,14 +41,14 @@ Read / write through `aquakin.transport.openfoam.read_tracks_csv` and
 import aquakin
 from aquakin.transport.openfoam import read_tracks_csv
 
-network = aquakin.load_network("ozone_bromate")
+model = aquakin.load_model("ozone_bromate")
 tracks = read_tracks_csv("particles.csv")
 
 solutions = aquakin.integrate_ensemble(
-    network,
+    model,
     tracks,
-    C0_fn=lambda pid: network.default_concentrations(),
-    params=network.default_parameters(),
+    C0_fn=lambda pid: model.default_concentrations(),
+    params=model.default_parameters(),
 )
 
 for pid, sol in solutions.items():
@@ -66,7 +66,7 @@ The Python entry point is `aquakin.CFDReactor`. A C++ `fvOptions` plugin
 
 ```python
 reactor = aquakin.CFDReactor(
-    network,        # CompiledNetwork loaded via aquakin.load_network(...)
+    model,        # CompiledModel loaded via aquakin.load_model(...)
     rtol=1e-6,
     atol=1e-9,      # scalar or (n_species,) array for per-species tolerance
     adjoint=None,   # diffrax adjoint strategy; defaults to RecursiveCheckpoint
@@ -82,7 +82,7 @@ C_new = reactor.step(
     C,             # (n_cells, n_species) float64 NumPy
     conditions,    # {name: (n_cells,) float64 NumPy}
     dt,            # scalar float (seconds)
-    params,        # optional (n_params,) NumPy; defaults to network.default_parameters()
+    params,        # optional (n_params,) NumPy; defaults to model.default_parameters()
 )                  # returns (n_cells, n_species) float64 NumPy
 ```
 
@@ -90,7 +90,7 @@ C_new = reactor.step(
 
 1. **At simulation start (once per MPI rank):**
    - Start an embedded Python interpreter via pybind11.
-   - Import `aquakin`, load the network YAML, construct one `CFDReactor`.
+   - Import `aquakin`, load the model YAML, construct one `CFDReactor`.
    - Read `reactor.species_field_order` and `reactor.condition_field_names`
      to discover what `volScalarField`s the OpenFOAM case must provide.
 
@@ -146,7 +146,7 @@ the entry point.)
 ### Contract test
 
 `tests/integration/test_cfd_fake_caller.py` exercises the full timestep
-loop with NumPy inputs/outputs against the ozone/bromate network, and
+loop with NumPy inputs/outputs against the ozone/bromate model, and
 asserts that one `CFDReactor.step` call is numerically identical to running
 a `BatchReactor` independently on each cell. If the C++ plugin matches the
 calling convention documented above, that test is sufficient to guarantee
@@ -162,5 +162,5 @@ Transport and reaction are split:
 | 3D CFD (Option C) | OpenFOAM advection / diffusion | `CFDReactor.step` per timestep |
 
 The reaction sub-step is pure chemistry at fixed location / along a
-trajectory, so the existing `network.dCdt(...)` is sufficient. No special
+trajectory, so the existing `model.dCdt(...)` is sufficient. No special
 CFD-aware reactor is needed beyond the vmapped wrapper.

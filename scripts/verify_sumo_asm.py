@@ -1,6 +1,6 @@
-"""Verify the SUMO-imported ASM networks against their source spreadsheets.
+"""Verify the SUMO-imported ASM models against their source spreadsheets.
 
-Cross-checks each shipped ASM network, term-by-term and value-by-value, against
+Cross-checks each shipped ASM model, term-by-term and value-by-value, against
 the SUMO ``Process code/Model base/Museum/*.xlsm`` source it was generated from:
 
 1. **Parameter values** -- every aquakin parameter vs the SUMO Parameters sheet.
@@ -138,13 +138,13 @@ def verify(base_dir):
 
     total_issues = 0
     for name, xlsm in MODELS.items():
-        net = aquakin.load_network(name)
+        net = aquakin.load_model(name)
         aqpar = {_norm(p): float(net.parameter_values({})[net.param_index[p]])
                  for p in net.param_index}
         S = np.asarray(net.compute_stoich(net.default_parameters()))
         rn = {_norm(n): i for i, n in enumerate(net.reaction_names)}
         si = net.species_index
-        txt = (ir.files("aquakin.networks") / f"{name}.yaml").read_text()
+        txt = (ir.files("aquakin.models") / f"{name}.yaml").read_text()
         exprs = dict(re.findall(r'\n  (\w+):\s*"([^"]+)"', txt.split("reactions:")[0]))
         aqproc = {}
         for b in re.split(r"\n  - name: ", txt)[1:]:

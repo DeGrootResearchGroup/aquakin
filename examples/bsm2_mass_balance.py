@@ -6,7 +6,7 @@ accounts COD / N / P over the simulation window -- inflow, outflow (effluent +
 disposal cake), gas (aeration oxygen, digester biogas, denitrification N2) and
 the change in plant inventory -- and reports the closure imbalance.
 
-It works across the two-network BSM2 (ASM1 water line + ADM1 digester): the
+It works across the two-model BSM2 (ASM1 water line + ADM1 digester): the
 inventories and fluxes are summed on one canonical gram basis via the shipped
 ``aquakin.composition_table``, so the g/m3 water line and the kg/m3, kmol/m3
 digester add up. At steady state the balance closes to well under 1%.
@@ -28,10 +28,10 @@ from aquakin.plant.bsm import (
 
 
 def main() -> None:
-    asm1 = aquakin.load_network("asm1")
-    adm1 = aquakin.load_network("adm1")
+    asm1 = aquakin.load_model("asm1")
+    adm1 = aquakin.load_model("adm1")
 
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
 

@@ -8,7 +8,7 @@ import aquakin
 
 @pytest.fixture
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _batch_final(asm1, T_kelvin):
@@ -33,7 +33,7 @@ def test_batch_slower_in_the_cold(asm1):
 
 def test_batch_matches_uncorrected_at_reference(asm1):
     """At the reference 20 °C the corrected run equals an explicitly-uncorrected
-    network (temperature is unity at ref_T)."""
+    model (temperature is unity at ref_T)."""
     # Build an ASM1 with the corrections stripped, compare final states at 20 °C.
     import dataclasses
     bare = dataclasses.replace(asm1, temperature_corrections=[])

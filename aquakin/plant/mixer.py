@@ -12,7 +12,7 @@ from aquakin.plant.streams import Stream, mixed_organism, mixed_temperature
 from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 _EPS_Q = 1e-12  # guard against 0/0 when all inflows are zero
@@ -23,7 +23,7 @@ class MixerUnit(StatelessUnit):
     """Combines two or more input streams into a single output stream by
     mass balance: ``Q_out = sum(Q_in_i)``, ``C_out = sum(Q_in_i * C_in_i) / Q_out``.
 
-    Stateless. All input streams must reference the same kinetic network
+    Stateless. All input streams must reference the same kinetic model
     (translators are applied upstream by the plant).
 
     Parameters
@@ -33,13 +33,13 @@ class MixerUnit(StatelessUnit):
     input_port_names : list[str]
         Names of the input ports. Order is not significant for the
         computation, but the plant uses them when wiring connections.
-    network : CompiledNetwork
-        Network of all input streams and the single output stream.
+    model : CompiledModel
+        Model of all input streams and the single output stream.
     """
 
     name: str
     input_port_names: list[str]
-    network: "CompiledNetwork"
+    model: "CompiledModel"
 
     # state_size / initial_state / rhs come from StatelessUnit.
 
@@ -62,7 +62,7 @@ class MixerUnit(StatelessUnit):
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         Q_total = jnp.zeros(())
-        mass_total = jnp.zeros((self.network.n_species,))
+        mass_total = jnp.zeros((self.model.n_species,))
         for name in self.input_port_names:
             s = inputs[name]
             Q_total = Q_total + s.Q
@@ -74,7 +74,7 @@ class MixerUnit(StatelessUnit):
         T_out = mixed_temperature(inputs, self.input_port_names)
         # Indicator organism (disinfection): the same flow-weighted balance.
         org_out = mixed_organism(inputs, self.input_port_names)
-        return {"out": Stream(Q=Q_total, C=C_out, network=self.network, T=T_out, org=org_out)}
+        return {"out": Stream(Q=Q_total, C=C_out, model=self.model, T=T_out, org=org_out)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output port flows from input port flows (the linear flow rule).
@@ -128,7 +128,7 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
     ----------
     name : str
         Unit identifier.
-    network : CompiledNetwork
+    model : CompiledModel
     output_port_ratios : dict[str, float], optional
         Ratio mode: output port name -> fraction of inlet flow (sum to 1).
     output_port_flows : dict[str, float], optional
@@ -144,7 +144,7 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     output_port_ratios: "dict[str, float] | None" = None
     output_port_flows: "dict[str, float] | None" = None
     threshold: "float | None" = None
@@ -240,7 +240,7 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
                 outputs[port] = Stream(
                     Q=s_in.Q * jnp.asarray(ratio),
                     C=s_in.C,
-                    network=self.network,
+                    model=self.model,
                     T=s_in.T,
                 )
             return outputs
@@ -248,9 +248,9 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
             # Inlet flow above the limit is diverted; the rest passes through.
             limit = self._setpoints["threshold"].resolve(self._flow_params(params))
             above = jnp.maximum(s_in.Q - limit, 0.0)
-            outputs[self.threshold_port] = Stream(Q=above, C=s_in.C, network=self.network, T=s_in.T)
+            outputs[self.threshold_port] = Stream(Q=above, C=s_in.C, model=self.model, T=s_in.T)
             outputs[self.remainder_port] = Stream(
-                Q=jnp.minimum(s_in.Q, limit), C=s_in.C, network=self.network, T=s_in.T
+                Q=jnp.minimum(s_in.Q, limit), C=s_in.C, model=self.model, T=s_in.T
             )
             return outputs
         # Flow mode: fixed setpoints, remainder takes what is left. When the feed
@@ -270,11 +270,11 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
             total_set = total_set + q
         scale = jnp.minimum(1.0, s_in.Q / jnp.maximum(total_set, 1e-12))
         for port, q in setpts.items():
-            outputs[port] = Stream(Q=q * scale, C=s_in.C, network=self.network, T=s_in.T)
+            outputs[port] = Stream(Q=q * scale, C=s_in.C, model=self.model, T=s_in.T)
         outputs[self.remainder_port] = Stream(
             Q=jnp.maximum(s_in.Q - total_set, 0.0),
             C=s_in.C,
-            network=self.network,
+            model=self.model,
             T=s_in.T,
         )
         return outputs

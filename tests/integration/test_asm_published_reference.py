@@ -1,6 +1,6 @@
 """Literature-anchored correctness gate for the bio-P / nitrification ASM models.
 
-The ASM2d / ASM2d-TUD / ASM3 / ASM3-BioP networks were imported from a vendor
+The ASM2d / ASM2d-TUD / ASM3 / ASM3-BioP models were imported from a vendor
 tool and carried six latent bugs (a heterotroph-decay biomass swap, autotroph
 and PAO Monod terms collapsed onto the heterotroph half-saturation constants,
 and dropped chemical-precipitation metals). Every one of them **conserves COD /
@@ -34,7 +34,7 @@ regardless of the mol/L-vs-mol/m3 conventions a particular port happens to use:
 
 The vendor cross-check (``scripts/verify_sumo_asm.py``) is a separate,
 spreadsheet-dependent tool run by hand; this gate needs nothing but the shipped
-networks and runs in the PR fast gate.
+models and runs in the PR fast gate.
 """
 
 import jax.numpy as jnp
@@ -43,7 +43,7 @@ import pytest
 import aquakin
 
 
-# Per network: the published facts the conservation suite cannot see. See the
+# Per model: the published facts the conservation suite cannot see. See the
 # module docstring for the structure and the literature anchor.
 #
 #   value_constants : {param: published value}                 (unambiguous g/m3)
@@ -144,15 +144,15 @@ def _perturbed(params, idx):
     return params.at[idx].set(new)
 
 
-_NETWORKS = list(ASM_REFERENCE)
+_MODELS = list(ASM_REFERENCE)
 
 
-@pytest.mark.parametrize("name", _NETWORKS)
+@pytest.mark.parametrize("name", _MODELS)
 def test_value_constants_match_published(name):
     """The unambiguous-basis published constants (nitrifier NH4 affinity, PAO
     max poly-P ratio) are at their literature values -- not a heterotroph value
     a collapsed term inherited."""
-    net = aquakin.load_network(name)
+    net = aquakin.load_model(name)
     pv = net.parameter_values({})
     for param, expected in ASM_REFERENCE[name]["value_constants"].items():
         assert param in net.param_index, f"{name}: missing parameter {param}"
@@ -161,13 +161,13 @@ def test_value_constants_match_published(name):
             f"{name}.{param} = {got}, published {expected}")
 
 
-@pytest.mark.parametrize("name", _NETWORKS)
+@pytest.mark.parametrize("name", _MODELS)
 def test_group_kinetics_use_their_own_constants(name):
     """Each nitrifier / PAO process depends on its own group's half-saturation
     constants and is independent of the heterotroph counterparts -- the
     published kinetic structure the import collapsed. Unit-basis-agnostic: it
     perturbs a parameter and checks whether the single reaction's rate moves."""
-    net = aquakin.load_network(name)
+    net = aquakin.load_model(name)
     params = net.default_parameters()
     cond = net.default_conditions().fields
     state = _probe_state(net)
@@ -189,12 +189,12 @@ def test_group_kinetics_use_their_own_constants(name):
                 f"(autotroph term collapsed onto the heterotroph value?)")
 
 
-@pytest.mark.parametrize("name", _NETWORKS)
+@pytest.mark.parametrize("name", _MODELS)
 def test_structural_participation_matches_published(name):
     """The sign of each species' stoichiometric coefficient in a process matches
     the published process matrix -- catching a swapped biomass (heterotroph
     decay applied to nitrifiers) or a dropped species (precipitation metals)."""
-    net = aquakin.load_network(name)
+    net = aquakin.load_model(name)
     S = net.compute_stoich(net.default_parameters())
     ridx = {n: i for i, n in enumerate(net.reaction_names)}
     sidx = net.species_index

@@ -32,7 +32,7 @@ if not jax.config.jax_enable_x64:
     jax.config.update("jax_enable_x64", True)
 
 from aquakin.core.conditions import OperatingConditions, SpatialConditions
-from aquakin.core.network import CompiledNetwork, compile_network
+from aquakin.core.model import CompiledModel, compile_model
 from aquakin.core.parser import parse_rate_expression
 from aquakin.integrate.batch import BatchReactor, BatchSolution
 from aquakin.integrate.biofilm import BiofilmReactor, BiofilmSolution
@@ -152,9 +152,9 @@ from aquakin.plant import (
     uv_log_inactivation,
 )
 from aquakin.schema.loader import (
-    clear_network_cache,
-    load_network,
-    load_network_from_file,
+    clear_model_cache,
+    load_model,
+    load_model_from_file,
 )
 from aquakin.utils.balance import check_conservation
 from aquakin.utils.composition import (
@@ -163,7 +163,7 @@ from aquakin.utils.composition import (
 )
 from aquakin.utils.units import (
     UnitWarning,
-    check_network_units,
+    check_model_units,
     parse_units,
 )
 
@@ -199,7 +199,7 @@ __all__ = [
     "CalibrationResult",
     "PredictiveBand",
     "ProfileResult",
-    "CompiledNetwork",
+    "CompiledModel",
     "FitResult",
     "IdentityTranslator",
     "InfluentFractions",
@@ -233,11 +233,11 @@ __all__ = [
     "canonical_content",
     "check_conservation",
     "composition_table",
-    "check_network_units",
+    "check_model_units",
     "parse_units",
     "UnitWarning",
     "profile_likelihood",
-    "compile_network",
+    "compile_model",
     "derived_BOD",
     "derived_COD",
     "derived_TKN",
@@ -279,9 +279,9 @@ __all__ = [
     "heating_energy",
     "implicit_euler_adjoint_solve",
     "integrate_ensemble",
-    "load_network",
-    "load_network_from_file",
-    "clear_network_cache",
+    "load_model",
+    "load_model_from_file",
+    "clear_model_cache",
     "ComponentBalance",
     "MassBalance",
     "mass_balance",

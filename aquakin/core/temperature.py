@@ -4,7 +4,7 @@ The equilibrium / rate constants used across the library are tabulated at a
 reference temperature and corrected to the operating temperature in one of two
 forms. Both live here so the formula and the physical constants have a single
 home -- the pH solver, the kinetic and equilibrium precipitation engines, and
-the network rate-constant corrections all call these instead of re-deriving the
+the model rate-constant corrections all call these instead of re-deriving the
 exponent inline.
 
 * **van't Hoff** -- a thermodynamic equilibrium constant ``K`` measured at
@@ -55,7 +55,7 @@ def van_t_hoff_factor(T_kelvin, T_ref=T_REF_THERMO):
 def arrhenius_factor(T, ref_T, ln_theta):
     """The per-degree rate correction ``theta**(T - ref_T) = exp(ln_theta*(T-ref_T))``.
 
-    Unity at ``T == ref_T``, so a network whose conditions sit at the reference
+    Unity at ``T == ref_T``, so a model whose conditions sit at the reference
     temperature is unaffected. ``T``/``ref_T``/``ln_theta`` may be arrays (the
     correction is applied element-wise across a vector of rate constants).
 

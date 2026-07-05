@@ -15,10 +15,10 @@ Composition convention (content per unit of the species' own measure):
 Organic micro-contents of S/N/P (the i_s_*, i_n_bio, i_p_bio coefficients the
 model balances through S_SO4 / S_NH / S_PO4) close the heterotrophic balances.
 
-The composition table is no longer a literal dict here: each WATS network now
+The composition table is no longer a literal dict here: each WATS model now
 declares its own per-species ``composition:`` in the YAML, read back through
-``network.composition()`` and checked with ``network.check_conservation()`` /
-``network.check_nitrogen()`` (the conservation table is a first-class network
+``model.composition()`` and checked with ``model.check_conservation()`` /
+``model.check_nitrogen()`` (the conservation table is a first-class model
 property, so a value can no longer drift out of sync with the model it describes).
 """
 
@@ -28,7 +28,7 @@ import pytest
 
 import aquakin
 
-_NDIR = os.path.join(os.path.dirname(aquakin.__file__), "networks")
+_NDIR = os.path.join(os.path.dirname(aquakin.__file__), "models")
 
 _MODELS = [
     "wats_sewer",
@@ -64,9 +64,9 @@ _MODELS = [
     "wats_sewer_khalil_paper_balanced_biofilm_multispecies",
 ]
 
-# Shipped wats_sewer*.yaml networks deliberately NOT under the conservation
+# Shipped wats_sewer*.yaml models deliberately NOT under the conservation
 # checks, each with the reason. The completeness guard below asserts that every
-# shipped WATS network is either in _MODELS (checked) or listed here, so a new
+# shipped WATS model is either in _MODELS (checked) or listed here, so a new
 # variant from the _make_* generators cannot be added without a conservation
 # decision. The extended-model structural variants carry COD imbalances in the
 # sulfur-oxidation / elemental-S reactions (the same class the Khalil-family
@@ -90,7 +90,7 @@ _BALANCE_EXEMPT = {
 }
 
 
-def test_every_wats_network_is_checked_or_exempt():
+def test_every_wats_model_is_checked_or_exempt():
     """Completeness guard: every shipped ``wats_sewer*.yaml`` is either under the
     conservation checks (``_MODELS``) or explicitly exempt (``_BALANCE_EXEMPT``)
     with a reason. Catches the failure mode where a new variant added to the
@@ -102,12 +102,12 @@ def test_every_wats_network_is_checked_or_exempt():
     accounted = set(_MODELS) | set(_BALANCE_EXEMPT)
     unaccounted = on_disk - accounted
     assert not unaccounted, (
-        "shipped WATS networks neither checked nor exempt (add to _MODELS if they "
+        "shipped WATS models neither checked nor exempt (add to _MODELS if they "
         f"conserve, else to _BALANCE_EXEMPT with a reason): {sorted(unaccounted)}"
     )
-    # And no stale entries pointing at deleted networks.
+    # And no stale entries pointing at deleted models.
     stale = accounted - on_disk
-    assert not stale, f"_MODELS/_BALANCE_EXEMPT reference missing networks: {sorted(stale)}"
+    assert not stale, f"_MODELS/_BALANCE_EXEMPT reference missing models: {sorted(stale)}"
 
 # Nitrification / autotroph decay oxidise nitrogen (NH3 -> NO3), which is not
 # part of the carbon/sulfur COD continuity (its electron transfer is carried by
@@ -138,7 +138,7 @@ _TOL = 1.0e-2
 
 
 def _net(name):
-    return aquakin.load_network_from_file(os.path.join(_NDIR, name + ".yaml"))
+    return aquakin.load_model_from_file(os.path.join(_NDIR, name + ".yaml"))
 
 
 @pytest.mark.parametrize("model", _MODELS)

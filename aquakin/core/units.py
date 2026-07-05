@@ -1,8 +1,8 @@
 """Format unit strings for display.
 
-Network YAML keeps units in a plain ASCII form that is easy for an engineer to
+Model YAML keeps units in a plain ASCII form that is easy for an engineer to
 type (``g_COD/m3``, ``M-1 s-1``). When those units are carried onto the compiled
-network they are *prettified*: an exponent written as a trailing (optionally
+model they are *prettified*: an exponent written as a trailing (optionally
 signed) integer on a unit symbol becomes a Unicode superscript
 (``m3`` -> ``m³``, ``s-1`` -> ``s⁻¹``). Chemical formulae embedded in a species
 token are deliberately left untouched -- the ``O2`` in ``g_O2`` is a subscript,
@@ -46,7 +46,7 @@ def prettify_units(units: str) -> str:
     Parameters
     ----------
     units : str
-        A plain-ASCII unit string as written in a network YAML, e.g.
+        A plain-ASCII unit string as written in a model YAML, e.g.
         ``"g_COD/m3"``, ``"M-1 s-1"``, ``"mol/m3"``, ``"-"``.
 
     Returns

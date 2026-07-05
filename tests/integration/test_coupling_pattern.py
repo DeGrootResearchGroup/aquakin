@@ -21,7 +21,7 @@ from aquakin.plant.coupling import CouplingAware, CouplingPattern, ad_union
 
 @pytest.fixture(scope="module")
 def asm1_net():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 # --------------------------------------------------------------------------
@@ -32,8 +32,8 @@ def test_cstr_coupling_pattern():
     from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
     from aquakin.plant.cstr import CSTRUnit
 
-    net = aquakin.load_network("asm1")
-    unit = CSTRUnit(name="t", network=net, volume=1000.0,
+    net = aquakin.load_model("asm1")
+    unit = CSTRUnit(name="t", model=net, volume=1000.0,
                     input_port_names=["inlet"], conditions={"T": 293.15})
     cp = unit.coupling_pattern()
     n = net.n_species
@@ -47,8 +47,8 @@ def test_cstr_coupling_pattern():
 def test_stateless_coupling_pattern_is_empty():
     from aquakin.plant.mixer import MixerUnit
 
-    net = aquakin.load_network("asm1")
-    mixer = MixerUnit(name="m", network=net, input_port_names=["a", "b"])
+    net = aquakin.load_model("asm1")
+    mixer = MixerUnit(name="m", model=net, input_port_names=["a", "b"])
     cp = mixer.coupling_pattern()
     assert cp.self_pattern.shape == (0, 0)
     assert cp.inlet_pattern is None
@@ -60,8 +60,8 @@ def test_settler_coupling_pattern_is_superset_of_dense_jacobian():
     from aquakin.plant.streams import Stream
     from aquakin.plant.takacs import TakacsClarifier
 
-    net = aquakin.load_network("asm1")
-    s = TakacsClarifier(name="s", network=net, area=1500.0, height=4.0,
+    net = aquakin.load_model("asm1")
+    s = TakacsClarifier(name="s", model=net, area=1500.0, height=4.0,
                         underflow_Q=1.8e4, soluble_holdup=True)
     cp = s.coupling_pattern()
     m = s.state_size
@@ -71,7 +71,7 @@ def test_settler_coupling_pattern_is_superset_of_dense_jacobian():
     # dense self-Jacobian at a few random positive states must be covered.
     base_C = np.maximum(np.abs(np.asarray(net.default_concentrations())), 1e-3)
     inlet = {s.input_port: Stream(Q=jnp.asarray(2.0e4),
-                                  C=jnp.asarray(base_C), network=net)}
+                                  C=jnp.asarray(base_C), model=net)}
     fj = jax.jit(lambda x: jax.jacfwd(lambda z: s.rhs(jnp.asarray(0.0), z,
                                                       inlet, None))(x))
     rng = np.random.default_rng(1)
@@ -94,7 +94,7 @@ def _superset_holds(unit, make_inputs, *, times=(0.0,), seed=0, n=8):
     """The unit's ``self_pattern`` covers its dense RHS self-Jacobian at diverse
     positive states (and times, for a time-phased unit) -- the superset property."""
     cp = unit.coupling_pattern()
-    net = unit.network
+    net = unit.model
     base = np.maximum(np.abs(np.asarray(unit.initial_state())), 1e-3)
     params = net.default_parameters()
     rng = np.random.default_rng(seed)
@@ -139,7 +139,7 @@ def test_mbr_coupling_pattern(asm1_net):
     base_C = jnp.asarray(np.maximum(np.abs(np.asarray(
         net.default_concentrations())), 1e-3))
     _superset_holds(unit, lambda: {
-        "feed": Stream(Q=jnp.asarray(500.0), C=base_C, network=net)})
+        "feed": Stream(Q=jnp.asarray(500.0), C=base_C, model=net)})
 
 
 def test_sbr_coupling_pattern(asm1_net):
@@ -166,7 +166,7 @@ def test_sbr_coupling_pattern(asm1_net):
         times = [s + 0.5 * float(phases[p].duration)
                  for p, s in enumerate(unit._phase_starts)]
         _superset_holds(unit, lambda: {
-            "feed": Stream(Q=jnp.asarray(500.0), C=base_C, network=net)},
+            "feed": Stream(Q=jnp.asarray(500.0), C=base_C, model=net)},
             times=times, n=6)
 
 
@@ -191,7 +191,7 @@ def test_ifas_coupling_pattern(asm1_net):
     base_C = jnp.asarray(np.maximum(np.abs(np.asarray(
         net.default_concentrations())), 1e-3))
     _superset_holds(unit, lambda: {
-        "in": Stream(Q=jnp.asarray(500.0), C=base_C, network=net)})
+        "in": Stream(Q=jnp.asarray(500.0), C=base_C, model=net)})
 
 
 def test_couplingaware_abc_requires_coupling_pattern():
@@ -250,13 +250,13 @@ def test_plant_structural_pattern_superset_over_trajectory_bsm1():
     from aquakin.plant.influent import InfluentSeries
     from aquakin.plant.plant import default_atol
 
-    asm1 = aquakin.load_network("asm1")
-    p = build_bsm1(network=asm1, use_takacs=True)
+    asm1 = aquakin.load_model("asm1")
+    p = build_bsm1(model=asm1, use_takacs=True)
     C0 = asm1.concentrations({
         "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
         "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0})
     inf = InfluentSeries(t=jnp.array([0.0, 100.0]), Q=jnp.full((2,), BSM1_Q_AVG),
-                         C=jnp.tile(C0, (2, 1)), network=asm1)
+                         C=jnp.tile(C0, (2, 1)), model=asm1)
     p.add_influent("feed", inf, to="inlet_mix.fresh")
     y0 = bsm1_warm_start(p)
     params = p.default_parameters()
@@ -304,7 +304,7 @@ def _build_single_unit_plant(kind):
     from aquakin.plant.sbr import SBRPhase, SBRUnit
     from aquakin.plant.settling import InterfaceSettling
 
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     inf = InfluentSeries.constant(net, SS=300.0, SNH=40.0, XS=200.0, XB_H=80.0,
                                   Q=1000.0)
     p = Plant(f"{kind}_plant")

@@ -7,11 +7,11 @@ import pytest
 import aquakin
 
 
-def test_autodiff_matches_finite_difference(simple_network):
+def test_autodiff_matches_finite_difference(simple_model):
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
-    reactor = aquakin.BatchReactor(simple_network, conditions)
+    reactor = aquakin.BatchReactor(simple_model, conditions)
     C0 = jnp.asarray([1.0, 0.0])
-    params = simple_network.default_parameters()
+    params = simple_model.default_parameters()
 
     t_eval = jnp.linspace(0.0, 10.0, 11)
 
@@ -34,11 +34,11 @@ def test_autodiff_matches_finite_difference(simple_network):
     assert ad == pytest.approx(fd, rel=1e-3, abs=1e-6)
 
 
-def test_sensitivity_direct_t_span_matches_solve_kwargs(simple_network):
+def test_sensitivity_direct_t_span_matches_solve_kwargs(simple_model):
     """Passing t_span/t_eval directly to sensitivity equals putting them in
-    solve_kwargs, and params defaults to the network defaults."""
+    solve_kwargs, and params defaults to the model defaults."""
     conditions = aquakin.SpatialConditions.uniform(T=293.15)
-    reactor = aquakin.BatchReactor(simple_network, conditions)
+    reactor = aquakin.BatchReactor(simple_model, conditions)
     C0 = jnp.asarray([1.0, 0.0])
     t_eval = jnp.linspace(0.0, 10.0, 11)
     out = lambda sol: sol.C_named("B")[-1]
@@ -46,25 +46,25 @@ def test_sensitivity_direct_t_span_matches_solve_kwargs(simple_network):
     direct = aquakin.sensitivity(reactor, C0, output_fn=out,
                                  t_span=(0.0, 10.0), t_eval=t_eval)
     via_kwargs = aquakin.sensitivity(
-        reactor, C0, simple_network.default_parameters(), output_fn=out,
+        reactor, C0, simple_model.default_parameters(), output_fn=out,
         solve_kwargs={"t_span": (0.0, 10.0), "t_eval": t_eval},
     )
     assert jnp.allclose(direct.doutput_dparams, via_kwargs.doutput_dparams)
 
 
-def test_sensitivity_requires_output_fn(simple_network):
+def test_sensitivity_requires_output_fn(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(T=293.15)
     )
     with pytest.raises(ValueError, match="output_fn"):
         aquakin.sensitivity(reactor, jnp.asarray([1.0, 0.0]), t_span=(0.0, 10.0))
 
 
-def test_sensitivity_forward_matches_reverse(simple_network):
+def test_sensitivity_forward_matches_reverse(simple_model):
     """ad_mode='forward' builds the forward-capable adjoint internally and gives
     the same sensitivities as the default reverse mode."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(T=293.15)
     )
     C0 = jnp.asarray([1.0, 0.0])
     out = lambda sol: sol.C_named("B")[-1]
@@ -78,9 +78,9 @@ def test_sensitivity_forward_matches_reverse(simple_network):
     )
 
 
-def test_sensitivity_rejects_bad_ad_mode(simple_network):
+def test_sensitivity_rejects_bad_ad_mode(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(T=293.15)
     )
     with pytest.raises(ValueError, match="mode"):
         aquakin.sensitivity(reactor, jnp.asarray([1.0, 0.0]),
@@ -89,13 +89,13 @@ def test_sensitivity_rejects_bad_ad_mode(simple_network):
                             diff=aquakin.DifferentiationConfig(mode="sideways"))
 
 
-def test_ranked_params(simple_network):
+def test_ranked_params(simple_model):
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
-    reactor = aquakin.BatchReactor(simple_network, conditions)
+    reactor = aquakin.BatchReactor(simple_model, conditions)
     result = aquakin.sensitivity(
         reactor,
         jnp.asarray([1.0, 0.0]),
-        simple_network.default_parameters(),
+        simple_model.default_parameters(),
         output_fn=lambda sol: sol.C_named("B")[-1],
         solve_kwargs={"t_span": (0.0, 5.0), "t_eval": jnp.linspace(0.0, 5.0, 6)},
     )
@@ -104,19 +104,19 @@ def test_ranked_params(simple_network):
 
 
 @pytest.mark.slow  # heavy: sensitivity vs FD
-def test_sensitivity_doutput_dconditions_matches_finite_diff(simple_network):
+def test_sensitivity_doutput_dconditions_matches_finite_diff(simple_model):
     """Verify the conditions-override grad path is non-zero where expected."""
-    # Build a tiny network rate that depends on T via Arrhenius so dF/dT != 0.
-    # The shipped simple_network's rate is k*[A] only — independent of T —
-    # so we exercise the override path with the ozone_bromate network instead.
-    network = aquakin.load_network("ozone_bromate")
-    atol = network.atol({"OH": 1e-20}, default=1e-12)
+    # Build a tiny model rate that depends on T via Arrhenius so dF/dT != 0.
+    # The shipped simple_model's rate is k*[A] only — independent of T —
+    # so we exercise the override path with the ozone_bromate model instead.
+    model = aquakin.load_model("ozone_bromate")
+    atol = model.atol({"OH": 1e-20}, default=1e-12)
     conditions = aquakin.SpatialConditions.uniform(
         pH=7.5, T=293.15, OH_scavenging=5.0e4
     )
-    reactor = aquakin.BatchReactor(network, conditions, atol=atol)
-    C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
-    params = network.default_parameters()
+    reactor = aquakin.BatchReactor(model, conditions, atol=atol)
+    C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
+    params = model.default_parameters()
     t_eval = jnp.linspace(0.0, 300.0, 31)
 
     result = aquakin.sensitivity(
@@ -135,9 +135,9 @@ def test_sensitivity_doutput_dconditions_matches_finite_diff(simple_network):
         assert jnp.all(jnp.isfinite(g)), f"non-finite grad for {name}"
 
 
-def test_fit_rejects_empty_free_params(simple_network):
+def test_fit_rejects_empty_free_params(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     with pytest.raises(ValueError):
         aquakin.fit(
@@ -149,9 +149,9 @@ def test_fit_rejects_empty_free_params(simple_network):
         )
 
 
-def test_fit_rejects_unknown_method(simple_network):
+def test_fit_rejects_unknown_method(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     with pytest.raises(ValueError):
         aquakin.fit(
@@ -164,9 +164,9 @@ def test_fit_rejects_unknown_method(simple_network):
         )
 
 
-def test_fit_rejects_unknown_param(simple_network):
+def test_fit_rejects_unknown_param(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     with pytest.raises(KeyError):
         aquakin.fit(
@@ -178,9 +178,9 @@ def test_fit_rejects_unknown_param(simple_network):
         )
 
 
-def test_fit_rejects_observation_shape_mismatch(simple_network):
+def test_fit_rejects_observation_shape_mismatch(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     with pytest.raises(ValueError):
         aquakin.fit(
@@ -193,9 +193,9 @@ def test_fit_rejects_observation_shape_mismatch(simple_network):
         )
 
 
-def test_fit_rejects_descending_t_obs(simple_network):
+def test_fit_rejects_descending_t_obs(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     with pytest.raises(ValueError):
         aquakin.fit(
@@ -208,19 +208,19 @@ def test_fit_rejects_descending_t_obs(simple_network):
         )
 
 
-def test_fit_recovers_known_rate(simple_network):
+def test_fit_recovers_known_rate(simple_model):
     """Generate synthetic observations from a known k, then re-fit."""
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
-    reactor = aquakin.BatchReactor(simple_network, conditions)
+    reactor = aquakin.BatchReactor(simple_model, conditions)
     C0 = jnp.asarray([1.0, 0.0])
 
     true_k = 0.25
-    true_params = simple_network.default_parameters().at[0].set(true_k)
+    true_params = simple_model.default_parameters().at[0].set(true_k)
     t_obs = jnp.linspace(0.5, 10.0, 20)
     sol = reactor.solve(C0, params=true_params, t_span=(0.0, 10.0), t_eval=t_obs)
     obs = sol.C_named("B")
 
-    # Start from a wrong initial guess (the network default, k = 0.1).
+    # Start from a wrong initial guess (the model default, k = 0.1).
     result = aquakin.fit(
         reactor,
         C0,
@@ -235,7 +235,7 @@ def test_fit_recovers_known_rate(simple_network):
 
 
 _PARTIAL_BOUNDS_YAML = """
-network:
+model:
   name: chain_decay
   version: "1.0"
   description: "A -> B -> C; k1 bounded, k2 unbounded."
@@ -262,7 +262,7 @@ reactions:
 def _chain_fit_setup(tmp_path):
     p = tmp_path / "chain.yaml"
     p.write_text(_PARTIAL_BOUNDS_YAML)
-    net = aquakin.load_network_from_file(str(p))
+    net = aquakin.load_model_from_file(str(p))
     reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = jnp.asarray([1.0, 0.0, 0.0])
     t_obs = jnp.linspace(0.5, 10.0, 12)
@@ -389,13 +389,13 @@ def test_dgsm_rejects_bad_ranges():
         aquakin.dgsm(lambda z: z[0], [(1.0, 0.0)], n_samples=8)  # upper <= lower
 
 
-def test_dgsm_through_reactor(simple_network):
+def test_dgsm_through_reactor(simple_model):
     """DGSM flows through reactor.solve and finds the rate constant influential."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     C0 = jnp.asarray([1.0, 0.0])
-    p_def = simple_network.default_parameters()
+    p_def = simple_model.default_parameters()
     t_eval = jnp.linspace(0.0, 10.0, 11)
 
     def fn(z):
@@ -436,7 +436,7 @@ def test_dgsm_forward_matches_reverse():
     )
 
 
-def test_dgsm_forward_matches_reverse_through_reactor(simple_network):
+def test_dgsm_forward_matches_reverse_through_reactor(simple_model):
     """forward and reverse DGSM agree when ``fn`` integrates a reactor solve --
     the real use case the forward path exists for. The forward screen drives
     ``reactor.solve`` through ``aquakin.forward_adjoint()`` (DirectAdjoint, which
@@ -445,13 +445,13 @@ def test_dgsm_forward_matches_reverse_through_reactor(simple_network):
     choice)."""
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0 = jnp.asarray([1.0, 0.0])
-    p_def = simple_network.default_parameters()
+    p_def = simple_model.default_parameters()
     t_eval = jnp.linspace(0.0, 10.0, 11)
     rng = [(0.1, 0.5)]
 
     def make_fn(diff=None):
         kw = {} if diff is None else {"diff": diff}
-        reactor = aquakin.BatchReactor(simple_network, cond, **kw)
+        reactor = aquakin.BatchReactor(simple_model, cond, **kw)
 
         def fn(z):
             p = p_def.at[0].set(z[0])
@@ -515,13 +515,13 @@ def test_dgsm_finite_mask_is_per_output():
     assert float(out[0].dgsm[0]) == pytest.approx(4.0, rel=1e-6)
 
 
-def test_dgsm_forward_through_reactor_matches_reverse(simple_network):
+def test_dgsm_forward_through_reactor_matches_reverse(simple_model):
     """Forward mode through a reactor solve agrees with the reverse-mode result
     to machine precision. The forward-capable adjoint is built with the
     ``aquakin.forward_adjoint()`` helper (no direct ``diffrax`` import)."""
     conds = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0 = jnp.asarray([1.0, 0.0])
-    p_def = simple_network.default_parameters()
+    p_def = simple_model.default_parameters()
     t_eval = jnp.linspace(0.0, 10.0, 11)
 
     def make_fn(reactor):
@@ -532,13 +532,13 @@ def test_dgsm_forward_through_reactor_matches_reverse(simple_network):
         return fn
 
     rev = aquakin.dgsm(
-        make_fn(aquakin.BatchReactor(simple_network, conds)),
+        make_fn(aquakin.BatchReactor(simple_model, conds)),
         [(0.1, 0.5)], n_samples=8,
         diff=aquakin.DifferentiationConfig(mode="reverse"),
     )
     fwd = aquakin.dgsm(
         make_fn(aquakin.BatchReactor(
-            simple_network, conds,
+            simple_model, conds,
             diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"))),
         [(0.1, 0.5)], n_samples=8,
         diff=aquakin.DifferentiationConfig(mode="forward"),
@@ -551,8 +551,8 @@ def test_dgsm_forward_through_reactor_matches_reverse(simple_network):
 def test_dgsm_forward_through_default_adjoint_errors():
     """Forward mode through the default RecursiveCheckpointAdjoint raises a
     helpful error pointing to aquakin.forward_adjoint()."""
-    net = aquakin.load_network_from_file(
-        str(__import__("pathlib").Path(__file__).parents[1] / "fixtures" / "simple_network.yaml")
+    net = aquakin.load_model_from_file(
+        str(__import__("pathlib").Path(__file__).parents[1] / "fixtures" / "simple_model.yaml")
     )
     conds = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.BatchReactor(net, conds)  # default reverse-only adjoint
@@ -598,8 +598,8 @@ def test_dgsm_batched_matches_unbatched_vector():
 def test_dgsm_unbatched_forward_default_adjoint_errors():
     """The per-sample fallback also raises the forward-adjoint guidance when a
     forward-mode screen hits the default reactor adjoint."""
-    net = aquakin.load_network_from_file(
-        str(__import__("pathlib").Path(__file__).parents[1] / "fixtures" / "simple_network.yaml")
+    net = aquakin.load_model_from_file(
+        str(__import__("pathlib").Path(__file__).parents[1] / "fixtures" / "simple_model.yaml")
     )
     conds = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.BatchReactor(net, conds)  # default reverse-only adjoint

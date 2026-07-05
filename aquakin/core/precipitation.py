@@ -20,7 +20,7 @@ The aqueous chemistry -- the temperature-corrected dissociation constants, the
 free-ion fractions of the carbonate/phosphate/ammonia/sulfide acid-base systems,
 and the Davies / Debye-Hückel activity coefficients -- is shared with the
 charge-balance pH solver (:mod:`aquakin.core.ph_solver`). This module turns a
-``precipitation:`` network block into a derived-condition callable that, given
+``precipitation:`` model block into a derived-condition callable that, given
 the state and the system pH (supplied as a condition, e.g. by a ``speciation:``
 block), exposes each mineral's saturation index ``SI_<name>`` and supersaturation
 rate factor ``R_<name>`` as condition fields. A precipitation reaction then reads
@@ -93,7 +93,7 @@ def build_precipitation_derived_fn(
     ----------
     config : dict
         The validated ``precipitation:`` declaration (see the module docstring /
-        the network schema): ``pH_field``, ``temperature_field``,
+        the model schema): ``pH_field``, ``temperature_field``,
         ``temperature_units``, ``activity_model``, ``ionic_strength_offset`` and
         a list of ``minerals``, each ``{name, pKsp, order, dH_sp, ions: [...]}``
         (``pKsp`` at the reference temperature; ``dH_sp`` the enthalpy of

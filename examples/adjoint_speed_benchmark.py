@@ -1,10 +1,10 @@
 """Reverse-mode gradient speed: capped autodiff vs the cap-free discrete adjoint.
 
-Two ways to get a reverse-mode parameter gradient through a stiff reaction-network
+Two ways to get a reverse-mode parameter gradient through a stiff reaction-model
 solve:
 
 - ``jax_adjoint`` -- let JAX/diffrax differentiate the whole solve
-  (``RecursiveCheckpointAdjoint``). For stiff networks this overflows above a
+  (``RecursiveCheckpointAdjoint``). For stiff models this overflows above a
   step-size threshold, so the solver must carry a ``dtmax`` cap that forces many
   small steps over the whole integration.
 - ``stable_adjoint`` -- the hand-written ESDIRK discrete adjoint
@@ -39,7 +39,7 @@ from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 
 RTOL, ATOL = 1e-7, 1e-10
 # The loosest cap that keeps the capped autodiff gradient finite at this rtol on
-# this network. (Too loose -> overflow; the value shifts with rtol/span/model --
+# this model. (Too loose -> overflow; the value shifts with rtol/span/model --
 # which is exactly the tuning the discrete adjoint removes.)
 DTMAX = 3e-4
 
@@ -73,7 +73,7 @@ def _time_ms(fn, reps=3):
 
 
 def main() -> None:
-    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     params = net.default_parameters()
@@ -81,7 +81,7 @@ def main() -> None:
     rhs = lambda t, y, p: net.dCdt(y, p, fields, 0)
     si = net.species_index["S_SO4"]
 
-    print(f"stiff Khalil network: n={net.n_species} species, {net.n_params} params")
+    print(f"stiff Khalil model: n={net.n_species} species, {net.n_params} params")
     print(f"rtol={RTOL}, atol={ATOL}; capped autodiff uses dtmax={DTMAX}\n")
     header = (f"{'span(d)':>7} {'capped':>8} {'adaptive':>9} "
               f"{'jax_adjoint':>12} {'stable_adjoint':>15} {'speedup':>8} {'rel.diff':>9}")

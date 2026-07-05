@@ -21,11 +21,11 @@ from aquakin.plant.streams import Stream
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _ifas(asm1, **kw):
-    base = dict(name="r", network=asm1, volume=1000.0, input_port_names=["in"],
+    base = dict(name="r", model=asm1, volume=1000.0, input_port_names=["in"],
                 specific_surface_area=500.0, fill_fraction=0.4,
                 biofilm_thickness=5e-4, n_layers=4, conditions={"T": 293.15})
     base.update(kw)
@@ -76,7 +76,7 @@ def test_initial_state_seeds_bulk_and_layers(asm1):
 def test_compute_outputs_is_the_bulk(asm1):
     u = _ifas(asm1, aeration=Aeration(kla=240.0))
     y0 = u.initial_state()
-    s = Stream(Q=jnp.asarray(500.0), C=asm1.default_concentrations(), network=asm1)
+    s = Stream(Q=jnp.asarray(500.0), C=asm1.default_concentrations(), model=asm1)
     out = u.compute_outputs(jnp.asarray(0.0), y0, {"in": s}, asm1.default_parameters())
     bulk = y0.reshape(u._n_comp, asm1.n_species)[0]
     assert jnp.allclose(out["out"].C, bulk)
@@ -88,7 +88,7 @@ def test_rhs_is_finite(asm1):
               biofilm_initial=asm1.concentrations({"XB_H": 3000.0}))
     s = Stream(Q=jnp.asarray(500.0),
                C=asm1.concentrations({"SS": 60.0, "SNH": 25.0, "SO": 2.0}),
-               network=asm1)
+               model=asm1)
     d = u.rhs(jnp.asarray(0.0), u.initial_state(), {"in": s}, asm1.default_parameters())
     assert d.shape == (u.state_size,)
     assert jnp.all(jnp.isfinite(d))

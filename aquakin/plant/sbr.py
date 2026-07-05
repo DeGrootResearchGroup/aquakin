@@ -34,7 +34,7 @@ from aquakin.plant.settling import SettlingModel
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 _EPS_V = 1e-9  # guard 1/V when the tank is near-empty
 
@@ -85,7 +85,7 @@ class SBRUnit(CouplingAware):
     Parameters
     ----------
     name : str
-    network : CompiledNetwork
+    model : CompiledModel
     phases : sequence of SBRPhase
         One cycle, in order. The cycle repeats with period ``sum(durations)``.
     full_volume : float
@@ -103,13 +103,13 @@ class SBRUnit(CouplingAware):
         Starting fill level ``V0 / full_volume`` (the heel left after the
         previous decant). Default 0.25.
     conditions : dict
-        Per-network condition values (e.g. ``{"T": 293.15}``), as for a CSTR.
+        Per-model condition values (e.g. ``{"T": 293.15}``), as for a CSTR.
     do_sat : float
         Oxygen saturation in the aeration term ``kLa*(do_sat - C_O2)``.
     oxygen_species : str
-        The aerated species (default ``"SO"``); ignored if absent from the network.
+        The aerated species (default ``"SO"``); ignored if absent from the model.
     initial_concentrations : jnp.ndarray, optional
-        Initial bulk concentration vector (defaults to the network defaults).
+        Initial bulk concentration vector (defaults to the model defaults).
     cycle_origin : float
         Time at which phase 0 of a cycle begins (default 0).
     input_port, output_port : str
@@ -117,7 +117,7 @@ class SBRUnit(CouplingAware):
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     phases: Sequence[SBRPhase]
     full_volume: float
     feed_flow: float
@@ -140,16 +140,16 @@ class SBRUnit(CouplingAware):
             raise ValueError(f"SBRUnit '{self.name}' phase durations must be > 0.")
         if not (0.0 < self.initial_fraction <= 1.0):
             raise ValueError(f"SBRUnit '{self.name}' initial_fraction must be in (0, 1].")
-        missing = [c for c in self.network.conditions_required if c not in self.conditions]
+        missing = [c for c in self.model.conditions_required if c not in self.conditions]
         if missing:
             raise ValueError(
                 f"SBRUnit '{self.name}' is missing condition values for: "
                 f"{missing}. Provided: {list(self.conditions)}."
             )
         for s in self.particulate_species:
-            if s not in self.network.species_index:
+            if s not in self.model.species_index:
                 raise ValueError(
-                    f"SBRUnit '{self.name}' particulate species '{s}' not in the network."
+                    f"SBRUnit '{self.name}' particulate species '{s}' not in the model."
                 )
 
         # Phase schedule (concrete floats; static).
@@ -182,9 +182,9 @@ class SBRUnit(CouplingAware):
         self._mixed = jnp.asarray([1.0 if _is_mixed(p) else 0.0 for p in self.phases])
 
         # Oxygen-transfer mask (a single aerated species).
-        n = self.network.n_species
-        if self.oxygen_species in self.network.species_index:
-            o2 = self.network.species_index[self.oxygen_species]
+        n = self.model.n_species
+        if self.oxygen_species in self.model.species_index:
+            o2 = self.model.species_index[self.oxygen_species]
             self._o2_mask = jnp.zeros((n,)).at[o2].set(1.0)
         else:
             self._o2_mask = jnp.zeros((n,))
@@ -193,12 +193,12 @@ class SBRUnit(CouplingAware):
         self._condition_arrays = {k: jnp.asarray([float(v)]) for k, v in self.conditions.items()}
 
         # Bind the settling model's particulate mask.
-        self.settling.bind(self.network, list(self.particulate_species))
+        self.settling.bind(self.model, list(self.particulate_species))
 
     # ----- protocol: identity / layout -----------------------------------
     @property
     def state_size(self) -> int:
-        return self.network.n_species + 1 + self.settling.extra_state_size()
+        return self.model.n_species + 1 + self.settling.extra_state_size()
 
     def liquid_volume(self, state: jnp.ndarray):
         """The current liquid volume (the settling-state tail carries no mass).
@@ -219,7 +219,7 @@ class SBRUnit(CouplingAware):
 
     def initial_state(self) -> jnp.ndarray:
         C0 = (
-            self.network.default_concentrations()
+            self.model.default_concentrations()
             if self.initial_concentrations is None
             else jnp.asarray(self.initial_concentrations)
         )
@@ -233,7 +233,7 @@ class SBRUnit(CouplingAware):
         return jnp.searchsorted(self._interior_breaks, tau, side="right")
 
     def _split(self, state: jnp.ndarray):
-        n = self.network.n_species
+        n = self.model.n_species
         return state[:n], state[n], state[n + 1 :]
 
     # ----- structural coupling (issue #388) ------------------------------
@@ -245,7 +245,7 @@ class SBRUnit(CouplingAware):
         the located cycle events, not with the state), so the structural superset
         is the **union over phases**. Two nonlinearities feed the ``self`` block:
         the reaction kinetics (a saturated Monod term is numerically invisible to
-        a probe, so the network's syntactic AST pattern is unioned into the species
+        a probe, so the model's syntactic AST pattern is unioned into the species
         sub-block) and the settling clarity dynamics + the ``1/V`` convection
         (smooth nonlinearities whose branches AD over diverse states exercises, as
         for the Takacs settler -- unioned via :func:`ad_union` at each phase's
@@ -258,13 +258,13 @@ class SBRUnit(CouplingAware):
         from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
         from aquakin.plant.coupling import CouplingPattern, ad_union
 
-        net = self.network
+        net = self.model
         n = net.n_species
         m = self.state_size
         params = net.default_parameters()
         state0 = np.asarray(self.initial_state())
         base_C = jnp.asarray(np.maximum(np.abs(np.asarray(net.default_concentrations())), 1e-3))
-        inlet = {self.input_port: Stream(Q=jnp.asarray(self.feed_flow), C=base_C, network=net)}
+        inlet = {self.input_port: Stream(Q=jnp.asarray(self.feed_flow), C=base_C, model=net)}
 
         # AD over diverse states, unioned over a representative time in each phase
         # (so the fill/decant/settle couplings all appear). A Monod term is invisible
@@ -296,7 +296,7 @@ class SBRUnit(CouplingAware):
         idx = self._phase_index(t)
         q_out = self._decant[idx] * self.decant_flow
         c_decant = self.settling.decant_multiplier(C, V, extra) * C
-        return {self.output_port: Stream(Q=q_out, C=c_decant, network=self.network)}
+        return {self.output_port: Stream(Q=q_out, C=c_decant, model=self.model)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Effluent flow = ``decant_flow`` during a decant phase, else 0. Reads
@@ -331,8 +331,8 @@ class SBRUnit(CouplingAware):
         # solids -- mass is conserved whatever the settling model reports.
         convection = q_in / V_safe * (C_in - C) - q_out / V_safe * (c_decant - C)
 
-        stoich = self.network.compute_stoich(params)
-        rates = self.network.rates(C, params, self._condition_arrays, 0)
+        stoich = self.model.compute_stoich(params)
+        rates = self.model.rates(C, params, self._condition_arrays, 0)
         chemistry = stoich.T @ rates
 
         aeration = kla * self._o2_mask * (self.do_sat - C)

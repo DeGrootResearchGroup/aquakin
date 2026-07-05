@@ -16,7 +16,7 @@ from aquakin import BatchReactor, Event, SpatialConditions, solve_with_events
 
 @pytest.fixture(scope="module")
 def decay():
-    net = aquakin.load_network_from_file("tests/fixtures/simple_network.yaml")
+    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     return net
 
 
@@ -218,7 +218,7 @@ def test_batch_reactor_grad_through_event(reactor, decay):
 def test_plant_time_event_resets_state():
     from aquakin.plant.bsm import build_bsm1, bsm1_warm_start, load_bsm1_influent
 
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     plant = build_bsm1(net)
     plant.add_influent("feed", load_bsm1_influent("dry", net))
     y0 = jnp.asarray(bsm1_warm_start(plant))
@@ -252,7 +252,7 @@ def test_plant_events_reject_unsupported_integrator():
 
     from aquakin.plant.bsm import build_bsm1
 
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     plant = build_bsm1(net)
     ev = Event(at_times=[1.0])
     with pytest.raises(ValueError, match="not supported"):

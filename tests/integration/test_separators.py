@@ -11,12 +11,12 @@ from aquakin.plant.streams import Stream
 
 @pytest.fixture
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _inlet(asm1, Q, overrides):
     C = asm1.concentrations(overrides)
-    return Stream(Q=jnp.asarray(float(Q)), C=C, network=asm1)
+    return Stream(Q=jnp.asarray(float(Q)), C=C, model=asm1)
 
 
 def _tss(asm1, C):
@@ -31,7 +31,7 @@ def _run(unit, s_in):
 
 def test_underflow_hits_target_tss(asm1):
     """The underflow is concentrated to exactly target_tss_percent (in mg/L)."""
-    unit = IdealThickener(name="thk", network=asm1, target_tss_percent=7.0)
+    unit = IdealThickener(name="thk", model=asm1, target_tss_percent=7.0)
     s_in = _inlet(asm1, 300.0, {"XI": 1000.0, "XS": 0.0, "XB_H": 2000.0,
                                 "XB_A": 100.0, "XP": 500.0})
     under, _ = _run(unit, s_in)
@@ -39,7 +39,7 @@ def test_underflow_hits_target_tss(asm1):
 
 
 def test_dewatering_target(asm1):
-    unit = IdealThickener(name="dw", network=asm1, target_tss_percent=28.0)
+    unit = IdealThickener(name="dw", model=asm1, target_tss_percent=28.0)
     s_in = _inlet(asm1, 100.0, {"XI": 1000.0, "XB_H": 2000.0, "XP": 500.0})
     under, _ = _run(unit, s_in)
     assert _tss(asm1, under.C) == pytest.approx(28.0 * 1e4, rel=1e-6)
@@ -48,7 +48,7 @@ def test_dewatering_target(asm1):
 def test_flow_and_solids_mass_balance(asm1):
     """Per-species mass conserved; flows sum to the feed; removal fraction of the
     solids reports to the underflow."""
-    unit = IdealThickener(name="thk", network=asm1, target_tss_percent=7.0,
+    unit = IdealThickener(name="thk", model=asm1, target_tss_percent=7.0,
                           tss_removal_percent=98.0)
     Q = 300.0
     over = {"XI": 1000.0, "XS": 50.0, "XB_H": 2000.0, "XB_A": 100.0, "XP": 500.0,
@@ -79,7 +79,7 @@ def test_flow_and_solids_mass_balance(asm1):
 def test_overconcentrated_feed_all_to_underflow(asm1):
     """A feed already above the target %TSS cannot be thickened: everything
     leaves with the underflow and the overflow is empty."""
-    unit = IdealThickener(name="thk", network=asm1, target_tss_percent=7.0)
+    unit = IdealThickener(name="thk", model=asm1, target_tss_percent=7.0)
     # TSS_in = 0.75 * 100000 = 75000 mg/L > 70000 target.
     s_in = _inlet(asm1, 300.0, {"XI": 100000.0, "XS": 0.0, "XB_H": 0.0,
                                 "XB_A": 0.0, "XP": 0.0})
@@ -92,11 +92,11 @@ def test_overconcentrated_feed_all_to_underflow(asm1):
 def test_grad_through_separator(asm1):
     """compute_outputs is differentiable w.r.t. the inlet concentration."""
     import jax
-    unit = IdealThickener(name="thk", network=asm1, target_tss_percent=7.0)
+    unit = IdealThickener(name="thk", model=asm1, target_tss_percent=7.0)
     C0 = asm1.concentrations(XB_H=2500.0)
 
     def loss(C):
-        s_in = Stream(Q=jnp.asarray(300.0), C=C, network=asm1)
+        s_in = Stream(Q=jnp.asarray(300.0), C=C, model=asm1)
         under, _ = _run(unit, s_in)
         return jnp.sum(under.C)
 

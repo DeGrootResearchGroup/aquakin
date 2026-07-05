@@ -1,4 +1,4 @@
-"""The asm3_2step_anammox network: asm3_2step plus anammox (anaerobic ammonium
+"""The asm3_2step_anammox model: asm3_2step plus anammox (anaerobic ammonium
 oxidation), after Strous et al. (1998, 1999).
 
 Checks the anammox stoichiometry (the canonical Strous NH4:NO2:NO3 ~ 1:1.32:0.26
@@ -16,7 +16,7 @@ import aquakin
 
 @pytest.fixture
 def net():
-    return aquakin.load_network("asm3_2step_anammox")
+    return aquakin.load_model("asm3_2step_anammox")
 
 
 def test_structure(net):

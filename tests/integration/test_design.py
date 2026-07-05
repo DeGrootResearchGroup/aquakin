@@ -88,8 +88,8 @@ def test_takacs_solids_mass():
     """solids_mass = sum over layers of TSS_layer * layer_volume."""
     from aquakin.plant.takacs import TakacsClarifier
 
-    asm1 = aquakin.load_network("asm1")
-    clar = TakacsClarifier(name="c", network=asm1, area=1500.0, height=4.0,
+    asm1 = aquakin.load_model("asm1")
+    clar = TakacsClarifier(name="c", model=asm1, area=1500.0, height=4.0,
                            underflow_Q=18831.0)
     state = clar.initial_state()
     mass = float(clar.solids_mass(state))
@@ -126,18 +126,18 @@ def test_reactor_autodetection_finds_as_reactors_not_digester():
 
 # ----- Achieved metrics from a solved plant (slow: BSM1 plant solves) -----
 
-def _influent(network):
-    C0 = network.concentrations({
+def _influent(model):
+    C0 = model.concentrations({
         "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
         "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0,
     })
     return InfluentSeries(t=jnp.array([0.0, 300.0]),
                           Q=jnp.full((2,), BSM1_Q_AVG),
-                          C=jnp.tile(C0, (2, 1)), network=network)
+                          C=jnp.tile(C0, (2, 1)), model=model)
 
 
-def _solve(network, influent, Qw=385.0, use_takacs=False):
-    plant = build_bsm1(network=network, wastage_flow=Qw, use_takacs=use_takacs)
+def _solve(model, influent, Qw=385.0, use_takacs=False):
+    plant = build_bsm1(model=model, wastage_flow=Qw, use_takacs=use_takacs)
     plant.add_influent("feed", influent, to="inlet_mix.fresh")
     sol = plant.solve(t_span=(0.0, 80.0), t_eval=jnp.linspace(70.0, 80.0, 6),
                       rtol=1e-4, atol=1e-3,
@@ -147,7 +147,7 @@ def _solve(network, influent, Qw=385.0, use_takacs=False):
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 @pytest.fixture(scope="module")

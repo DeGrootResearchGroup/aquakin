@@ -1,7 +1,7 @@
 """Declarative YAML model inheritance.
 
-A network YAML may declare ``network.extends: <base>`` to inherit a base
-network and then **add / modify / remove** pieces, instead of copying the whole
+A model YAML may declare ``model.extends: <base>`` to inherit a base
+model and then **add / modify / remove** pieces, instead of copying the whole
 file. The base is resolved and parsed to a raw mapping, the derived mapping is
 merged onto it (this module), and the merged whole is handed to the normal
 Pydantic schema validation -- so a variant that differs by one parameter and a
@@ -13,7 +13,7 @@ Merge semantics (applied to the raw mappings, before validation):
   by ``name``: a derived entry's fields are deep-merged onto the base entry (so
   overriding just ``rate`` keeps the base ``stoichiometry``); a name absent from
   the base is appended in order.
-- every other block (``network``, ``parameters``, ``expressions``,
+- every other block (``model``, ``parameters``, ``expressions``,
   ``speciation``, ``positivity_limiter``, ``clip_negative_states`` ...) is
   deep-merged: nested mappings merge key-wise, scalars/lists in the derived
   mapping replace the base's.
@@ -32,20 +32,20 @@ REMOVABLE_BLOCKS = ("species", "conditions", "reactions", "parameters", "express
 
 
 def pop_inheritance_keys(data: dict, source: str):
-    """Extract and strip the inheritance directives from a raw network mapping.
+    """Extract and strip the inheritance directives from a raw model mapping.
 
-    Returns ``(extends, remove)``. ``extends`` is read from ``network.extends``
+    Returns ``(extends, remove)``. ``extends`` is read from ``model.extends``
     (canonical) or a top-level ``extends:`` (convenience); declaring both is an
     error. Both keys are removed from ``data`` so the remaining mapping is a
-    plain network spec.
+    plain model spec.
     """
     remove = data.pop("remove", None)
     top_extends = data.pop("extends", None)
-    net = data.get("network")
+    net = data.get("model")
     net_extends = net.pop("extends", None) if isinstance(net, dict) else None
     if top_extends is not None and net_extends is not None:
         raise ValueError(
-            f"{source}: declare 'extends' once -- either top-level or under 'network:', not both."
+            f"{source}: declare 'extends' once -- either top-level or under 'model:', not both."
         )
     return (net_extends if net_extends is not None else top_extends), remove
 
@@ -89,7 +89,7 @@ def _require_named(entry, block: str, source: str):
 
 
 def merge_spec(base: dict, derived: dict, *, source: str) -> dict:
-    """Merge a derived network mapping onto its base, returning a new mapping."""
+    """Merge a derived model mapping onto its base, returning a new mapping."""
     out = dict(base)
     for key, val in derived.items():
         if key in NAMED_LIST_BLOCKS:
@@ -123,7 +123,7 @@ def apply_remove(data: dict, remove, source: str) -> dict:
         missing = names - present
         if missing:
             raise ValueError(
-                f"{source}: remove.{block} names {sorted(missing)} are not in the base network."
+                f"{source}: remove.{block} names {sorted(missing)} are not in the base model."
             )
         data[block] = [
             e for e in data.get(block, []) if not (isinstance(e, dict) and e.get("name") in names)
@@ -132,6 +132,6 @@ def apply_remove(data: dict, remove, source: str) -> dict:
         block_map = data.get(block) or {}
         for name in remove.get(block) or []:
             if name not in block_map:
-                raise ValueError(f"{source}: remove.{block} '{name}' is not in the base network.")
+                raise ValueError(f"{source}: remove.{block} '{name}' is not in the base model.")
             del block_map[name]
     return data

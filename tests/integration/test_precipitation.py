@@ -1,6 +1,6 @@
 """Mineral precipitation: the ``precipitation:`` block (Kazadi Mbamba et al. 2015).
 
-Covers the shipped struvite + calcite network (precipitation under
+Covers the shipped struvite + calcite model (precipitation under
 supersaturation, exact elemental mass balance, relaxation to saturation,
 dissolution when undersaturated, pH dependence, gradients) and the
 speciation->precipitation composition (a state-derived pH feeding the saturation
@@ -20,7 +20,7 @@ import aquakin
 
 @pytest.fixture
 def net():
-    return aquakin.load_network("precipitation_struvite_calcite")
+    return aquakin.load_model("precipitation_struvite_calcite")
 
 
 def _solve(net, t_end=1.0, n=11, T=308.15, pH=7.8, **C0):
@@ -106,7 +106,7 @@ def test_grad_through_solve_is_finite(net):
 # --- speciation -> precipitation composition ---------------------------------
 
 _COMPOSED_YAML = textwrap.dedent("""
-network: {name: precip_speciation, version: "1.0", description: "x"}
+model: {name: precip_speciation, version: "1.0", description: "x"}
 species:
   - {name: S_Ca,  default_concentration: 3.0,  units: "mol/m3"}
   - {name: S_IC,  default_concentration: 50.0, units: "mol/m3"}
@@ -147,7 +147,7 @@ def test_speciation_pH_feeds_precipitation():
         f.write(_COMPOSED_YAML)
         path = f.name
     try:
-        net = aquakin.load_network_from_file(path)
+        net = aquakin.load_model_from_file(path)
         assert "pH" not in net.conditions_required          # pH is derived, not supplied
         assert "SI_calcite" in net.derived_fields and "pH" in net.derived_fields
         # The composed derived fn produces both pH and the saturation index.
@@ -170,7 +170,7 @@ def test_speciation_pH_feeds_precipitation():
 
 def _load_bad(block):
     head = textwrap.dedent("""
-    network: {name: bad, version: "1.0", description: "x"}
+    model: {name: bad, version: "1.0", description: "x"}
     species: [{name: S_Ca, default_concentration: 1.0, units: "mol/m3"}]
     conditions: [{name: T, default: 298.15}, {name: pH, default: 8.0}]
     """)
@@ -183,7 +183,7 @@ def _load_bad(block):
         f.write(yaml)
         path = f.name
     try:
-        aquakin.load_network_from_file(path)
+        aquakin.load_model_from_file(path)
     finally:
         os.unlink(path)
 
@@ -211,7 +211,7 @@ def test_schema_rejects_undeclared_species():
 
 
 # --- metal-phosphate chemical-P removal + the hydroxide ion fraction ----------
-# The shipped precipitation_metal_phosphate network: ferric / aluminium dosing
+# The shipped precipitation_metal_phosphate model: ferric / aluminium dosing
 # precipitates orthophosphate as FePO4 / AlPO4, while the same metal competes to
 # form the hydroxides Fe(OH)3 / Al(OH)3 (the new "hydroxide" ion fraction, OH-
 # activity = Kw/[H+]). Ferric (Fe3+) is the dosed metal by default.
@@ -220,13 +220,13 @@ def test_schema_rejects_undeclared_species():
 # equilibrium dose sits at SI ~ 14, where the SI-driven rate Jacobian is ~1e13.
 # The L-stable solver damps this so the forward solve is exact, but no current
 # sensitivity method (reverse adjoint, forward sensitivity) survives the initial
-# transient -- this network is a *forward-simulation* demonstration. The
+# transient -- this model is a *forward-simulation* demonstration. The
 # hydroxide ion fraction itself is AD-clean at moderate supersaturation, which
 # the toy below verifies (this is what the new engine code path needs to prove).
 
 @pytest.fixture
 def metal():
-    return aquakin.load_network("precipitation_metal_phosphate")
+    return aquakin.load_model("precipitation_metal_phosphate")
 
 
 def _solve_metal(metal, t_end=3.0, n=7, T=293.15, pH=7.0, **C0):
@@ -289,7 +289,7 @@ def test_metal_phosphate_forward_solve_is_finite(metal):
 # The hydroxide ion fraction at moderate supersaturation: a metal hydroxide
 # M(OH)2 that precipitates as pH rises, with a finite gradient through solve.
 _HYDROXIDE_TOY_YAML = textwrap.dedent("""
-network: {name: hydroxide_toy, version: "1.0", description: "x"}
+model: {name: hydroxide_toy, version: "1.0", description: "x"}
 species:
   - {name: S_M,    default_concentration: 1.0,  units: "mol/m3"}
   - {name: X_MOH2, default_concentration: 0.02, units: "mol/m3"}
@@ -317,7 +317,7 @@ def _load_toy():
         f.write(_HYDROXIDE_TOY_YAML)
         path = f.name
     try:
-        return aquakin.load_network_from_file(path)
+        return aquakin.load_model_from_file(path)
     finally:
         os.unlink(path)
 
@@ -381,14 +381,14 @@ def test_schema_hydroxide_ion_may_omit_species():
 # --- auto-derived precipitation reactions + Ksp(T) ---------------------------
 # A mineral declaring a `solid` + `rate_constant` auto-derives its precipitation
 # reaction (stoichiometry from the ion counts), so the reaction is not written a
-# second time in `reactions:`. The shipped networks above all use this form;
+# second time in `reactions:`. The shipped models above all use this form;
 # these tests pin the derivation itself.
 
 def test_autoderived_reaction_names_and_params():
-    # The shipped struvite/calcite network declares no `reactions:` -- both come
+    # The shipped struvite/calcite model declares no `reactions:` -- both come
     # from the minerals. The synthesized reaction is `<name>_precipitation` with
     # a namespaced rate constant `<name>_precipitation.k`.
-    net = aquakin.load_network("precipitation_struvite_calcite")
+    net = aquakin.load_model("precipitation_struvite_calcite")
     assert net.n_reactions == 2
     assert "struvite_precipitation.k" in net.param_index
     assert "calcite_precipitation.k" in net.param_index
@@ -399,7 +399,7 @@ def _load_yaml(text):
         f.write(textwrap.dedent(text))
         path = f.name
     try:
-        return aquakin.load_network_from_file(path)
+        return aquakin.load_model_from_file(path)
     finally:
         os.unlink(path)
 
@@ -409,7 +409,7 @@ def test_autoderived_stoichiometry_follows_ion_counts():
     # as -3 / -2, and the solid as +1 -- the duplication-free path the manual
     # form was prone to getting wrong.
     net = _load_yaml("""
-    network: {name: vivianite, version: "1.0", description: "x"}
+    model: {name: vivianite, version: "1.0", description: "x"}
     species:
       - {name: S_Fe2, default_concentration: 6.0, units: "mol/m3"}
       - {name: S_PO4, default_concentration: 4.0, units: "mol/m3"}
@@ -470,7 +470,7 @@ def test_ksp_temperature_correction():
     # dH_sp van't Hoff-corrects Ksp: a positive enthalpy of dissolution makes the
     # mineral MORE soluble as temperature rises, lowering its saturation index.
     net = _load_yaml("""
-    network: {name: ksp_t, version: "1.0", description: "x"}
+    model: {name: ksp_t, version: "1.0", description: "x"}
     species:
       - {name: S_M, default_concentration: 1.0, units: "mol/m3"}
       - {name: S_X, default_concentration: 1.0, units: "mol/m3"}
@@ -502,7 +502,7 @@ def test_ksp_temperature_correction():
 def test_ksp_temperature_correction_off_by_default():
     # With dH_sp = 0 (default) Ksp is temperature-independent: SI moves with T only
     # through the dissociation-constant van't Hoff, identical to before this change.
-    net = aquakin.load_network("precipitation_struvite_calcite")
+    net = aquakin.load_model("precipitation_struvite_calcite")
     p = net.default_parameters()
     C0 = net.default_concentrations()
     d = net.derived_condition_fn(C0, p, {"T": jnp.array([308.15]),
@@ -517,7 +517,7 @@ def test_ksp_temperature_correction_off_by_default():
 # precipitation seeing only its own mineral ions, missing the bulk electrolyte).
 
 _SHARED_I_YAML = """
-network: {name: shared_I, version: "1.0", description: "x"}
+model: {name: shared_I, version: "1.0", description: "x"}
 species:
   - {name: S_Ca,  default_concentration: 3.0,  units: "mol/m3"}
   - {name: S_IC,  default_concentration: 50.0, units: "mol/m3"}
@@ -583,7 +583,7 @@ def test_shared_ionic_strength_solves_and_differentiates():
 def test_power_order_below_one_rejected_at_load():
     # The power driver's gradient is infinite at SI=0 for order<1, so it is
     # rejected at validation; the bounded form has no such restriction.
-    from aquakin.schema.network_spec import MineralSpec, MineralIonSpec
+    from aquakin.schema.model_spec import MineralSpec, MineralIonSpec
     ion = MineralIonSpec(species="S_Ca", molar_mass=1000, count=1, charge=2)
     kw = dict(name="x", pKsp=8.0, ions=[ion], solid="X",
               rate_constant={"value": 1.0})
@@ -594,14 +594,14 @@ def test_power_order_below_one_rejected_at_load():
 
 
 def test_precipitation_reaction_synthesis_is_idempotent():
-    # Re-validating a precipitation NetworkSpec (e.g. model_dump -> model_validate)
+    # Re-validating a precipitation ModelSpec (e.g. model_dump -> model_validate)
     # must NOT re-append the auto-synthesized precipitation reactions.
     import importlib.resources
     from aquakin.schema.loader import _yaml_to_spec
-    from aquakin.schema.network_spec import NetworkSpec
-    txt = (importlib.resources.files("aquakin.networks")
+    from aquakin.schema.model_spec import ModelSpec
+    txt = (importlib.resources.files("aquakin.models")
            .joinpath("precipitation_struvite_calcite.yaml").read_text())
     spec = _yaml_to_spec(txt, "test")
     n = len(spec.reactions)
-    spec2 = NetworkSpec.model_validate(spec.model_dump())
+    spec2 = ModelSpec.model_validate(spec.model_dump())
     assert len(spec2.reactions) == n

@@ -6,7 +6,7 @@ no sensitivity / gradient method survives the transient. Two opt-in alternatives
 restore differentiability while leaving the default power-law model untouched:
 
 * **algebraic equilibrium** (``mode: equilibrium``): solve the precipitation
-  equilibrium directly and project onto it (``network.precipitation_equilibrium``)
+  equilibrium directly and project onto it (``model.precipitation_equilibrium``)
   -- exact, fast, differentiable via the implicit function theorem; and
 * **bounded-driver kinetics** (``supersaturation_form: bounded``): a non-stiff
   rate form whose Jacobian is ~k, so a *dynamic* reactor solve is differentiable
@@ -32,7 +32,7 @@ def _ph_T(pH, T=293.15):
 # --- A: algebraic equilibrium projection -------------------------------------
 
 def test_projection_conserves_mass_and_hits_solubility():
-    net = aquakin.load_network(_EQ)
+    net = aquakin.load_model(_EQ)
     si = net.species_index
     C0 = net.default_concentrations()
     Ceq = net.precipitation_equilibrium()
@@ -53,7 +53,7 @@ def test_projection_conserves_mass_and_hits_solubility():
 
 def test_projection_pH_trend():
     # Chemical-P removal worsens at higher pH (Fe(OH)3 outcompetes FePO4 for Fe).
-    net = aquakin.load_network(_EQ)
+    net = aquakin.load_model(_EQ)
     i = net.species_index["S_PO4"]
     resid = [float(net.precipitation_equilibrium(conditions=_ph_T(ph))[i])
              for ph in (6.0, 7.0, 8.0)]
@@ -61,7 +61,7 @@ def test_projection_pH_trend():
 
 
 def test_projection_is_differentiable_in_dose_and_pH():
-    net = aquakin.load_network(_EQ)
+    net = aquakin.load_model(_EQ)
     si = net.species_index
 
     def resP(args):
@@ -76,8 +76,8 @@ def test_projection_is_differentiable_in_dose_and_pH():
 
 
 def test_projection_requires_equilibrium_minerals():
-    # The kinetic network has no mode: equilibrium minerals -> clear error.
-    net = aquakin.load_network(_KIN)
+    # The kinetic model has no mode: equilibrium minerals -> clear error.
+    net = aquakin.load_model(_KIN)
     assert net.precipitation_equilibrium_fn is None
     with pytest.raises(ValueError, match="mode: equilibrium"):
         net.precipitation_equilibrium()
@@ -86,7 +86,7 @@ def test_projection_requires_equilibrium_minerals():
 # --- C: bounded-driver kinetics (differentiable dynamics) --------------------
 
 def test_bounded_jacobian_is_tame():
-    net = aquakin.load_network(_BD)
+    net = aquakin.load_model(_BD)
     cond = net.default_conditions()
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -96,8 +96,8 @@ def test_bounded_jacobian_is_tame():
 
 
 def test_kinetic_default_is_unchanged():
-    # The default (power-law) network keeps its huge R -- the documented limitation.
-    net = aquakin.load_network(_KIN)
+    # The default (power-law) model keeps its huge R -- the documented limitation.
+    net = aquakin.load_model(_KIN)
     cond = net.default_conditions()
     d = net.derived_condition_fn(net.default_concentrations(),
                                  net.default_parameters(), cond.fields, 0)
@@ -107,10 +107,10 @@ def test_kinetic_default_is_unchanged():
 @pytest.mark.slow
 def test_bounded_dynamic_solve_is_differentiable():
     # The headline #295 win for the dynamic case: a reverse gradient through the
-    # time integration of the ultra-insoluble network is finite (the power-law
-    # network's is non-finite). Use a short span so the rate constant still moves
+    # time integration of the ultra-insoluble model is finite (the power-law
+    # model's is non-finite). Use a short span so the rate constant still moves
     # the output (at equilibrium the endpoint is k-independent).
-    net = aquakin.load_network(_BD)
+    net = aquakin.load_model(_BD)
     cond = net.default_conditions()
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -129,8 +129,8 @@ def test_bounded_dynamic_solve_is_differentiable():
 def test_bounded_dynamics_relax_to_the_projection_equilibrium():
     # A long bounded-driver solve reaches the same equilibrium the algebraic
     # projection gives directly (cross-validates A and C).
-    bd = aquakin.load_network(_BD)
-    eq = aquakin.load_network(_EQ)
+    bd = aquakin.load_model(_BD)
+    eq = aquakin.load_model(_EQ)
     r = aquakin.BatchReactor(bd, bd.default_conditions())
     sol = r.solve(bd.default_concentrations(), params=bd.default_parameters(),
                   t_span=(0.0, 20.0), t_eval=jnp.array([20.0]))
@@ -144,7 +144,7 @@ def test_bounded_dynamics_relax_to_the_projection_equilibrium():
 def test_equilibrium_solver_satisfies_complementarity():
     # At the solved equilibrium every precipitated mineral is on its solubility
     # (SI ~ 0) and every absent one is undersaturated (SI < 0).
-    net = aquakin.load_network(_EQ)
+    net = aquakin.load_model(_EQ)
     si = net.species_index
     cond = net.default_conditions()
     Ceq = net.precipitation_equilibrium()
@@ -166,7 +166,7 @@ def _moderate_equilibrium_yaml(dH_sp):
     # at equilibrium [M][A]/1e6 = Ksp(T), and with M=A by symmetry the residual
     # ion scales as sqrt(Ksp(T)).
     return f"""
-network: {{name: vh, version: "1.0", description: x}}
+model: {{name: vh, version: "1.0", description: x}}
 species:
   - {{name: S_M, default_concentration: 1.0, units: "mol/m3"}}
   - {{name: S_A, default_concentration: 1.0, units: "mol/m3"}}
@@ -201,7 +201,7 @@ def test_vant_hoff_shifts_equilibrium_with_temperature(tmp_path):
     def residual_M(dH, T):
         f = tmp_path / f"vh_{dH}.yaml"
         f.write_text(_moderate_equilibrium_yaml(dH), encoding="utf-8")
-        net = aquakin.load_network_from_file(f)
+        net = aquakin.load_model_from_file(f)
         cond = SpatialConditions(fields={"pH": jnp.array([7.0]), "T": jnp.array([T])})
         return float(net.precipitation_equilibrium(conditions=cond)[net.species_index["S_M"]])
 
@@ -223,7 +223,7 @@ def test_vant_hoff_shifts_equilibrium_with_temperature(tmp_path):
 def test_equilibrium_mode_requires_solid(tmp_path):
     p = tmp_path / "bad.yaml"
     p.write_text("""
-network: {name: bad, version: "1.0", description: x}
+model: {name: bad, version: "1.0", description: x}
 species:
   - {name: S_M, default_concentration: 1.0}
   - {name: S_P, default_concentration: 1.0}
@@ -242,13 +242,13 @@ reactions:
   - {name: r, rate: "1.0", stoichiometry: {S_M: -1}}
 """, encoding="utf-8")
     with pytest.raises(ValueError, match="needs a 'solid:'"):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)
 
 
 def test_invalid_supersaturation_form(tmp_path):
     p = tmp_path / "bad.yaml"
     p.write_text("""
-network: {name: bad2, version: "1.0", description: x}
+model: {name: bad2, version: "1.0", description: x}
 species:
   - {name: S_M, default_concentration: 1.0}
 conditions:
@@ -265,4 +265,4 @@ reactions:
   - {name: r, rate: "1.0", stoichiometry: {S_M: -1}}
 """, encoding="utf-8")
     with pytest.raises(ValueError, match="supersaturation_form"):
-        aquakin.load_network_from_file(p)
+        aquakin.load_model_from_file(p)

@@ -14,7 +14,7 @@ from aquakin.plant.bsm import (
     BSM2_WARM_REACTOR_COMPOSITION,
     bsm1_warm_start,
     bsm2_warm_start,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     build_bsm1,
     build_bsm2,
@@ -25,7 +25,7 @@ _TANKS = ("tank1", "tank2", "tank3", "tank4", "tank5")
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def test_compositions_are_valid_asm1_species(asm1):
@@ -39,8 +39,8 @@ def test_compositions_are_valid_asm1_species(asm1):
 
 def test_bsm2_warm_start_matches_manual_seed():
     """bsm2_warm_start == the hand-written initial_state(overrides=...) seed."""
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     plant = build_bsm2(asm1, adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
 
@@ -53,8 +53,8 @@ def test_bsm2_warm_start_matches_manual_seed():
 def test_bsm2_warm_start_only_seeds_reactors():
     """Non-reactor units (digester, clarifiers, recycle units) keep their
     default initial state; only the five AS reactors are overridden."""
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     plant = build_bsm2(asm1, adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
 
@@ -70,7 +70,7 @@ def test_bsm2_warm_start_only_seeds_reactors():
 
 
 def test_bsm1_warm_start_shape_and_finite(asm1):
-    plant = build_bsm1(network=asm1)
+    plant = build_bsm1(model=asm1)
     y0 = bsm1_warm_start(plant)
     assert y0.shape == (sum(u.state_size for u in plant.units.values()),)
     assert jnp.all(jnp.isfinite(y0))
@@ -80,8 +80,8 @@ def test_bsm1_warm_start_shape_and_finite(asm1):
     assert jnp.allclose(by_unit["tank3"], warm)
 
 
-def test_warm_start_accepts_explicit_network(asm1):
-    """An explicit asm1_network gives the same result as auto-detection."""
-    plant = build_bsm1(network=asm1)
+def test_warm_start_accepts_explicit_model(asm1):
+    """An explicit asm1_model gives the same result as auto-detection."""
+    plant = build_bsm1(model=asm1)
     assert jnp.allclose(bsm1_warm_start(plant),
-                        bsm1_warm_start(plant, asm1_network=asm1))
+                        bsm1_warm_start(plant, asm1_model=asm1))

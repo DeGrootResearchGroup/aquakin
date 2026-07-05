@@ -8,7 +8,7 @@ carbon-footprint / cost trade-off study actually reports:
   carbon intensity), the digester methane fugitive emission, the avoided-emission
   biogas credit, and the direct N2O (``direct_n2o_emission`` -- 0 here because
   the standard BSM2 plant runs ASM1, which does not resolve nitrous oxide; an
-  N2O-capable activated-sludge network gives a non-zero term);
+  N2O-capable activated-sludge model gives a non-zero term);
 - a monetised **operating cost** (``operating_cost``): energy / carbon / sludge
   OPEX, the biogas value credit, an optional CAPEX and carbon charge.
 
@@ -27,7 +27,7 @@ import jax.numpy as jnp
 import aquakin
 from aquakin.plant.bsm import (
     build_bsm2,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
     bsm2_warm_start,
@@ -68,8 +68,8 @@ def _scenario(do_control, asm1, adm1, params):
 
 
 def main() -> None:
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
 
     print("Running BSM2 open-loop vs closed-loop DO control "

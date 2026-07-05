@@ -39,7 +39,7 @@ import jax.numpy as jnp
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 _EPS_V = 1e-9  # guard the 1/V mixing term
 
@@ -52,8 +52,8 @@ class StorageTank:
     ----------
     name : str
         Unit identifier.
-    network : CompiledNetwork
-        Network of the stored / passed streams.
+    model : CompiledModel
+        Model of the stored / passed streams.
     volume : float
         Maximum (total) tank volume ``Vmax`` (m³).
     output_flow : float, optional
@@ -87,13 +87,13 @@ class StorageTank:
         0.1) at which the bypass / fill-only behaviour engages.
     initial_concentrations : jnp.ndarray, optional
         Initial tank concentrations, shape ``(n_species,)``. Defaults to the
-        network's default concentrations.
+        model's default concentrations.
     input_port : str, optional
         Inlet port name (default ``"in"``).
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     volume: float
     output_flow: float = 0.0
     level_setpoint: Optional[float] = None
@@ -108,7 +108,7 @@ class StorageTank:
 
     @property
     def state_size(self) -> int:
-        return self.network.n_species + 1  # concentrations + liquid volume
+        return self.model.n_species + 1  # concentrations + liquid volume
 
     def liquid_volume(self, state: jnp.ndarray):
         """The liquid volume held (the trailing state entry).
@@ -118,7 +118,7 @@ class StorageTank:
         well-mixed liquid volume returns it here, so its inventory is ``V*C`` with
         no fragile state-shape guessing.
         """
-        return state[self.network.n_species]
+        return state[self.model.n_species]
 
     @property
     def input_ports(self) -> list[str]:
@@ -130,7 +130,7 @@ class StorageTank:
 
     def initial_state(self) -> jnp.ndarray:
         C0 = (
-            self.network.default_concentrations()
+            self.model.default_concentrations()
             if self.initial_concentrations is None
             else jnp.asarray(self.initial_concentrations)
         )
@@ -165,14 +165,14 @@ class StorageTank:
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         s_in = inputs[self.input_port]
-        C_tank = state[: self.network.n_species]
+        C_tank = state[: self.model.n_species]
         V = state[-1]
         Q_out, Q_bypass, _ = self._flow_split(V, s_in.Q)
         return {
             # Released stream carries the (well-mixed) tank concentration.
-            "out": Stream(Q=Q_out, C=C_tank, network=self.network, T=s_in.T),
+            "out": Stream(Q=Q_out, C=C_tank, model=self.model, T=s_in.T),
             # Bypassed inflow passes straight through at its inlet concentration.
-            "bypass": Stream(Q=Q_bypass, C=s_in.C, network=self.network, T=s_in.T),
+            "bypass": Stream(Q=Q_bypass, C=s_in.C, model=self.model, T=s_in.T),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
@@ -194,7 +194,7 @@ class StorageTank:
         signals: "dict | None" = None,
     ) -> jnp.ndarray:
         s_in = inputs[self.input_port]
-        C_tank = state[: self.network.n_species]
+        C_tank = state[: self.model.n_species]
         V = state[-1]
         Q_out, _, Q_in_stored = self._flow_split(V, s_in.Q)
         V_safe = jnp.maximum(V, _EPS_V)

@@ -6,16 +6,16 @@ import aquakin
 
 
 def main() -> None:
-    network = aquakin.load_network("ozone_bromate")
-    print(network.summary())
+    model = aquakin.load_model("ozone_bromate")
+    print(model.summary())
 
     conditions = aquakin.OperatingConditions(pH=7.5, T=293.15, OH_scavenging=5.0e4)
 
     # Per-species absolute tolerance: OH lives at ~1e-12 M, others at ~1e-4 M.
-    atol = network.atol({"OH": 1e-20}, default=1e-12)
-    reactor = aquakin.BatchReactor(network, conditions, atol=atol)
+    atol = model.atol({"OH": 1e-20}, default=1e-12)
+    reactor = aquakin.BatchReactor(model, conditions, atol=atol)
 
-    C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
+    C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
 
     t_eval = jnp.linspace(0.0, 600.0, 121)
     sol = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_eval)

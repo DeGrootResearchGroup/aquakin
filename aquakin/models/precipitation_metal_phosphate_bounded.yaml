@@ -1,0 +1,109 @@
+model:
+  name: precipitation_metal_phosphate_bounded
+  version: "1.0"
+  description: >
+    Differentiable-dynamics counterpart of ``precipitation_metal_phosphate``:
+    chemical phosphorus removal by ferric / aluminium dosing (the very insoluble
+    phosphates FePO4 / AlPO4 and the competing hydroxides Fe(OH)3 / Al(OH)3),
+    with the kinetic supersaturation driver in the BOUNDED form rather than the
+    default power law.
+
+    The default kinetic model (``precipitation_metal_phosphate``) uses
+    ``R = sign(sigma)*|sigma|^order``; for a metal phosphate at SI ~ 14 that R is
+    ~1e13 and its rate Jacobian ~1e13, so the forward solve is fine but no
+    sensitivity / gradient method survives the dosing transient. This variant
+    declares every mineral ``supersaturation_form: bounded``, replacing the driver
+    with the thermodynamically-grounded ``R = tanh(SI/(2*nu) * ln10)`` (bounded in
+    (-1, 1)). The rate Jacobian is then ~k_cryst (non-stiff), so a DYNAMIC reactor
+    / plant solve of this model is differentiable -- ``jax.grad`` / ``calibrate``
+    / ``sensitivity`` all flow through the time integration. The driver is 0 at
+    SI = 0, so the steady state is the same precipitation equilibrium as the power
+    law (which ``precipitation_metal_phosphate_equilibrium`` also gives directly);
+    the trade-off is a slower precipitation rate far from saturation. Raise
+    ``k_cryst`` to reach equilibrium faster within the integration span.
+
+    The reaction expressions are identical to the kinetic model
+    (``k_cryst * X_cryst * {R_<name>}``); only the meaning of ``R`` differs.
+    Concentrations are in mol/m3; the per-ion molar_mass = 1000 converts to the
+    mol/L the ion-activity product / Ksp use. pH is a fixed operating condition;
+    activity coefficients use the Davies approximation.
+  references:
+    - "Kazadi Mbamba, C., Batstone, D.J., Flores-Alsina, X. & Tait, S. (2015). A generalised chemical precipitation modelling approach in wastewater treatment applied to calcite. Water Research 68, 342-353."
+    - "Flores-Alsina, X., Solon, K., Kazadi Mbamba, C., Tait, S., Gernaey, K.V., Jeppsson, U. & Batstone, D.J. (2016). Modelling phosphorus (P), sulfur (S) and iron (Fe) interactions for dynamic simulations of anaerobic digestion processes. Water Research 95, 370-382."
+    - "Lindsay, W.L. (1979). Chemical Equilibria in Soils. Wiley, New York. (mineral solubility products)"
+
+species:
+  - {name: S_Fe3, default_concentration: 2.0, units: "mol/m3", description: "Total ferric iron (Fe3+), dosed"}
+  - {name: S_Al,  default_concentration: 0.0, units: "mol/m3", description: "Total aluminium (Al3+); 0 by default (raise to dose alum)"}
+  - {name: S_PO4, default_concentration: 2.0, units: "mol/m3", description: "Total inorganic orthophosphate"}
+  - {name: X_FePO4, default_concentration: 1.0e-4, units: "mol/m3", description: "Strengite FePO4 solid; small seed enables nucleation"}
+  - {name: X_AlPO4, default_concentration: 1.0e-4, units: "mol/m3", description: "Variscite AlPO4 solid; small seed enables nucleation"}
+  - {name: X_FeOH3, default_concentration: 1.0e-4, units: "mol/m3", description: "Ferrihydrite Fe(OH)3 solid; small seed enables nucleation"}
+  - {name: X_AlOH3, default_concentration: 1.0e-4, units: "mol/m3", description: "Gibbsite Al(OH)3 solid; small seed enables nucleation"}
+
+conditions:
+  - {name: T,  default: 293.15, description: "Temperature (K); 20 C water line."}
+  - {name: pH, default: 7.0,    description: "Operating pH (fixed)."}
+
+clip_negative_states: true
+
+precipitation:
+  pH_field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  activity_model: davies
+  ionic_strength_offset: 0.02
+  minerals:
+    - name: FePO4
+      pKsp: 26.4
+      supersaturation_form: bounded
+      ions:
+        - {species: S_Fe3, molar_mass: 1000, count: 1, charge: 3}
+        - {species: S_PO4, molar_mass: 1000, count: 1, charge: 3, fraction: phosphate}
+    - name: AlPO4
+      pKsp: 22.36
+      supersaturation_form: bounded
+      ions:
+        - {species: S_Al,  molar_mass: 1000, count: 1, charge: 3}
+        - {species: S_PO4, molar_mass: 1000, count: 1, charge: 3, fraction: phosphate}
+    - name: FeOH3
+      pKsp: 38.8
+      supersaturation_form: bounded
+      ions:
+        - {species: S_Fe3, molar_mass: 1000, count: 1, charge: 3}
+        - {count: 3, charge: 1, fraction: hydroxide}
+    - name: AlOH3
+      pKsp: 32.3
+      supersaturation_form: bounded
+      ions:
+        - {species: S_Al, molar_mass: 1000, count: 1, charge: 3}
+        - {count: 3, charge: 1, fraction: hydroxide}
+
+parameters:
+  # Crystallisation rates (1/d). With the bounded driver the rate is ~k_cryst*X
+  # near the dose, so make these large enough to reach equilibrium within the span.
+  k_FePO4: {value: 200.0, units: "1/d", bounds: [1.0, 1.0e4], transform: positive_log}
+  k_AlPO4: {value: 200.0, units: "1/d", bounds: [1.0, 1.0e4], transform: positive_log}
+  k_FeOH3: {value: 200.0, units: "1/d", bounds: [1.0, 1.0e4], transform: positive_log}
+  k_AlOH3: {value: 200.0, units: "1/d", bounds: [1.0, 1.0e4], transform: positive_log}
+
+reactions:
+  - name: FePO4_precipitation
+    description: "Fe3+ + PO4^3- -> FePO4 (bounded-driver kinetics)."
+    rate: "k_FePO4 * [X_FePO4] * {R_FePO4}"
+    stoichiometry: {S_Fe3: -1.0, S_PO4: -1.0, X_FePO4: 1.0}
+
+  - name: AlPO4_precipitation
+    description: "Al3+ + PO4^3- -> AlPO4 (bounded-driver kinetics)."
+    rate: "k_AlPO4 * [X_AlPO4] * {R_AlPO4}"
+    stoichiometry: {S_Al: -1.0, S_PO4: -1.0, X_AlPO4: 1.0}
+
+  - name: FeOH3_precipitation
+    description: "Fe3+ + 3 OH- -> Fe(OH)3 (bounded-driver kinetics)."
+    rate: "k_FeOH3 * [X_FeOH3] * {R_FeOH3}"
+    stoichiometry: {S_Fe3: -1.0, X_FeOH3: 1.0}
+
+  - name: AlOH3_precipitation
+    description: "Al3+ + 3 OH- -> Al(OH)3 (bounded-driver kinetics)."
+    rate: "k_AlOH3 * [X_AlOH3] * {R_AlOH3}"
+    stoichiometry: {S_Al: -1.0, X_AlOH3: 1.0}

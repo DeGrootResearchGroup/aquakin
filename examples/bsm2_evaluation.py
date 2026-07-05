@@ -26,7 +26,7 @@ import jax.numpy as jnp
 import aquakin
 from aquakin.plant.bsm import (
     build_bsm2,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
     bsm2_warm_start,
@@ -51,8 +51,8 @@ def _run_and_evaluate(do_control, asm1, adm1, params):
 
 
 def main() -> None:
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
 
     print("Evaluating BSM2 open-loop vs closed-loop DO control "
@@ -64,7 +64,7 @@ def main() -> None:
     header = f"{'index':<22}{'open-loop':>14}{'closed-loop':>14}{'change':>12}"
     print(header)
     print("-" * len(header))
-    # Species units come from the network; the plant-level metric units
+    # Species units come from the model; the plant-level metric units
     # (EQI/OCI/energy/sludge) are not species, so they keep explicit labels.
     rows = [
         (f"reactor-4 SO ({asm1.units_of('SO')})", open_so4, closed_so4),

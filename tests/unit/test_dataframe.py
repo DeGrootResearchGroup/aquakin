@@ -15,15 +15,15 @@ from aquakin.plant.streams import StreamSeries
 
 
 @pytest.fixture
-def net(simple_network):
+def net(simple_model):
     # Two species A, B, both "mol/L".
-    return simple_network
+    return simple_model
 
 
 def test_batch_to_dataframe_basic(net):
     t = jnp.array([0.0, 1.0, 2.0])
     C = jnp.array([[1.0, 0.0], [0.5, 0.5], [0.25, 0.75]])
-    sol = BatchSolution(t=t, C=C, network=net)
+    sol = BatchSolution(t=t, C=C, model=net)
 
     df = sol.to_dataframe()
     assert list(df.columns) == ["A", "B"]
@@ -35,14 +35,14 @@ def test_batch_to_dataframe_basic(net):
 
 
 def test_units_in_columns(net):
-    sol = BatchSolution(t=jnp.array([0.0]), C=jnp.array([[1.0, 2.0]]), network=net)
+    sol = BatchSolution(t=jnp.array([0.0]), C=jnp.array([[1.0, 2.0]]), model=net)
     df = sol.to_dataframe(units_in_columns=True)
     assert list(df.columns) == ["A [mol/L]", "B [mol/L]"]
 
 
 def test_to_csv_string_embeds_units_by_default(net):
     sol = BatchSolution(t=jnp.array([0.0, 1.0]),
-                        C=jnp.array([[1.0, 0.0], [0.5, 0.5]]), network=net)
+                        C=jnp.array([[1.0, 0.0], [0.5, 0.5]]), model=net)
     csv = sol.to_csv()
     header = csv.splitlines()[0]
     assert "A [mol/L]" in header and "B [mol/L]" in header
@@ -51,7 +51,7 @@ def test_to_csv_string_embeds_units_by_default(net):
 
 def test_to_csv_to_file(net, tmp_path):
     sol = BatchSolution(t=jnp.array([0.0, 1.0]),
-                        C=jnp.array([[1.0, 0.0], [0.5, 0.5]]), network=net)
+                        C=jnp.array([[1.0, 0.0], [0.5, 0.5]]), model=net)
     path = tmp_path / "out.csv"
     sol.to_csv(path)
     text = path.read_text()
@@ -61,7 +61,7 @@ def test_to_csv_to_file(net, tmp_path):
 def test_pfr_indexed_by_position(net):
     x = jnp.array([0.0, 0.5, 1.0])
     C = jnp.array([[1.0, 0.0], [0.6, 0.4], [0.3, 0.7]])
-    sol = PFRSolution(x=x, C=C, network=net)
+    sol = PFRSolution(x=x, C=C, model=net)
     df = sol.to_dataframe()
     assert df.index.name == "x"
     np.testing.assert_allclose(df.index.to_numpy(), np.asarray(x))
@@ -71,7 +71,7 @@ def test_stream_series_has_flow_column(net):
     t = jnp.array([0.0, 1.0])
     Q = jnp.array([100.0, 120.0])
     C = jnp.array([[1.0, 0.0], [0.5, 0.5]])
-    ss = StreamSeries(t=t, Q=Q, C=C, network=net)
+    ss = StreamSeries(t=t, Q=Q, C=C, model=net)
     df = ss.to_dataframe()
     # Q precedes the species columns.
     assert list(df.columns) == ["Q", "A", "B"]
@@ -85,7 +85,7 @@ def test_biofilm_bulk_default(net):
     n_layers = 2
     profile = jnp.zeros((2, n_layers + 1, 2))
     depth = jnp.array([1e-4, 2e-4])
-    sol = BiofilmSolution(t=t, C=C, profile=profile, depth=depth, network=net)
+    sol = BiofilmSolution(t=t, C=C, profile=profile, depth=depth, model=net)
     df = sol.to_dataframe()
     assert list(df.columns) == ["A", "B"]
     assert df.index.name == "t"
@@ -100,7 +100,7 @@ def test_biofilm_profile_multiindex(net):
     # Distinct values per (time, compartment, species) so we can check layout.
     profile = jnp.arange(2 * n_comp * 2, dtype=float).reshape(2, n_comp, 2)
     depth = jnp.array([1e-4, 2e-4])
-    sol = BiofilmSolution(t=t, C=C, profile=profile, depth=depth, network=net)
+    sol = BiofilmSolution(t=t, C=C, profile=profile, depth=depth, model=net)
 
     df = sol.to_dataframe(profile=True)
     assert list(df.index.names) == ["t", "compartment"]
@@ -117,8 +117,8 @@ def test_biofilm_profile_multiindex(net):
 
 def _fake_plant(net):
     """A minimal stand-in exposing what PlantSolution's exporters use."""
-    kinetic = SimpleNamespace(network=net, state_size=2)
-    passive = SimpleNamespace(state_size=1)            # no .network
+    kinetic = SimpleNamespace(model=net, state_size=2)
+    passive = SimpleNamespace(state_size=1)            # no .model
     return SimpleNamespace(
         units={"tank": kinetic, "mixer": passive},
         _state_layout={"tank": (0, 2), "mixer": (2, 1)},

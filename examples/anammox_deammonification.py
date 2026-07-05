@@ -1,4 +1,4 @@
-"""Anaerobic deammonification with the asm3_2step_anammox network.
+"""Anaerobic deammonification with the asm3_2step_anammox model.
 
 Anammox (anaerobic ammonium-oxidising) bacteria remove nitrogen autotrophically:
 ammonium is oxidised with nitrite as the electron acceptor straight to dinitrogen
@@ -6,7 +6,7 @@ gas, with no organic carbon and a little nitrate produced for cell synthesis
 (the canonical Strous et al. 1998 stoichiometry NH4 : NO2 : NO3 ~ 1 : 1.32 :
 0.26). This is the second, anammox half of a partial-nitritation/anammox (PN/A)
 sidestream process: an upstream aerobic step (the AOB nitritation already in the
-network) converts part of the ammonium to nitrite, then anammox finishes it here.
+model) converts part of the ammonium to nitrite, then anammox finishes it here.
 
 Run a warm (30 C) anaerobic batch with ammonium and nitrite present and watch the
 two substrates disappear into N2. Nitrite is the limiting acceptor (1.32 per
@@ -17,7 +17,7 @@ import numpy as np
 
 import aquakin
 
-net = aquakin.load_network("asm3_2step_anammox")
+net = aquakin.load_model("asm3_2step_anammox")
 conditions = aquakin.SpatialConditions.uniform(T=303.15)  # 30 C sidestream
 reactor = aquakin.BatchReactor(net, conditions)
 

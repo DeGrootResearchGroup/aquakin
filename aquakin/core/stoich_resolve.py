@@ -1,11 +1,11 @@
 """Conservation-derived stoichiometric coefficients (``auto`` / ``?``).
 
 A coefficient written ``auto`` (or ``?``) in a reaction's stoichiometry is left
-*unknown* and **solved from the network's declared conservation laws**, so it
+*unknown* and **solved from the model's declared conservation laws**, so it
 cannot be written wrong -- the failure mode that has caused almost every
 stoichiometry bug in this codebase (a hand-typed electron-acceptor demand, an
 elemental-sulfur reduction donor, a product split). For each conserved quantity
-``q`` the reaction conserves (its ``conserved_for``, or the network default), the
+``q`` the reaction conserves (its ``conserved_for``, or the model default), the
 stoichiometry-weighted species content must sum to zero::
 
     sum_species  stoich[species] * composition[species][q]  ==  0
@@ -52,7 +52,7 @@ def is_auto(coef: Any) -> bool:
     return isinstance(coef, str) and coef.strip() in _AUTO_TOKENS
 
 
-def resolve_auto_coefficients(reactions, species_composition: dict, network_conserved_for) -> None:
+def resolve_auto_coefficients(reactions, species_composition: dict, model_conserved_for) -> None:
     """Replace every ``auto`` / ``?`` coefficient with its conservation-derived
     numeric value, **in place** on each reaction's ``stoichiometry``.
 
@@ -64,8 +64,8 @@ def resolve_auto_coefficients(reactions, species_composition: dict, network_cons
     species_composition : dict
         ``{species: {quantity: content}}`` -- the per-species conserved-quantity
         content (the declared ``composition:`` metadata).
-    network_conserved_for : list[str] or None
-        The network-level default list of conserved quantities, used for any
+    model_conserved_for : list[str] or None
+        The model-level default list of conserved quantities, used for any
         reaction that does not declare its own ``conserved_for``.
 
     Raises
@@ -82,12 +82,12 @@ def resolve_auto_coefficients(reactions, species_composition: dict, network_cons
         if not auto_species:
             continue
 
-        conserved = list(getattr(rxn, "conserved_for", None) or network_conserved_for or [])
+        conserved = list(getattr(rxn, "conserved_for", None) or model_conserved_for or [])
         if not conserved:
             raise ValueError(
                 f"reaction '{rxn.name}' has an 'auto' stoichiometric coefficient "
                 f"({auto_species}) but declares no quantities to conserve it from: "
-                f"add a per-reaction `conserved_for: [COD, ...]` or a network-level "
+                f"add a per-reaction `conserved_for: [COD, ...]` or a model-level "
                 f"`conserved_for:`."
             )
 

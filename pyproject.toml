@@ -66,7 +66,7 @@ test = [
 include = ["aquakin*"]
 
 [tool.setuptools.package-data]
-"aquakin.networks" = ["*.yaml"]
+"aquakin.models" = ["*.yaml"]
 "aquakin.plant.bsm.data" = ["*.csv"]
 
 [tool.pytest.ini_options]
@@ -131,4 +131,4 @@ ignore = [
 "**/__init__.py" = ["I001", "E402"]
 # Speciation/precipitation are imported mid-module to break an import cycle with
 # core (documented at the import sites).
-"aquakin/schema/network_spec.py" = ["E402"]
+"aquakin/schema/model_spec.py" = ["E402"]

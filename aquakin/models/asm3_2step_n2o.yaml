@@ -1,0 +1,132 @@
+model:
+  name: asm3_2step_n2o
+  # Inherit the two-step nitrification/denitrification model and replace the
+  # lumped AOB nitritation with the electron-pathway AOB metabolism of Pocquet et
+  # al. (2016), which resolves nitric oxide (NO) and nitrous oxide (N2O). See
+  # aquakin/schema/inheritance.py for the extends merge semantics.
+  extends: asm3_2step
+  version: "1.0"
+  description: >
+    asm3_2step extended with the two-pathway AOB nitrous-oxide (N2O) model of
+    Pocquet et al. (2016). The single lumped ammonia-oxidiser nitritation step of
+    asm3_2step is replaced by the AOB electron-transport chain through explicit
+    intermediates: ammonia -> hydroxylamine (NH2OH, AMO enzyme) -> nitric oxide
+    (NO, HAO) -> nitrite (NO2). N2O is produced by two competing pathways: the
+    NN (hydroxylamine/nitrifier-nitrification) pathway, where Nor reduces NO to
+    N2O coupled to NH2OH oxidation, and the ND (nitrifier-denitrification)
+    pathway, where free nitrous acid (HNO2) is reduced to N2O. Five AOB processes
+    replace the one nitritation process; nitrite oxidation (XNOB), the
+    heterotrophs and the endogenous-respiration processes are inherited unchanged.
+
+    New dissolved states (all g_N/m3, electrically neutral): SNH2OH, SNO, SN2O.
+    Free nitrous acid is the acid fraction of nitrite, ``[SNO2] * pH_switch(pKa)``
+    at the operating pH (a fixed condition, as in the source study). The ND
+    pathway carries the source study's Haldane-type dissolved-oxygen term
+    (production rises as DO falls, to a maximum, then falls toward zero DO).
+
+    Stoichiometry is mass- and electron-balanced: each AOB intermediate carries
+    its NH4-referenced electron COD (NH2OH 16/14, NO 40/14, N2O 32/14, NO2 48/14
+    gO2/gN), so COD, N and charge close to machine precision across all processes.
+    Source rates (per hour) are converted to per day; growth yield is the
+    Pocquet AOB value (Y_AOB = 0.15). N2O/NO are kept as dissolved states (gas
+    stripping is a reactor concern, not modelled here), so the nitrogen balance
+    closes.
+  references:
+    - "Pocquet, M., Wu, Z., Queinnec, I. & Sperandio, M. (2016). A two pathway model for N2O emissions by ammonium oxidizing bacteria supported by the NO/N2O variation. Water Research 88, 948-959."
+    - "Kaelin, D. et al. (2009). Extension of ASM3 for two-step nitrification and denitrification. Water Research 43(6), 1680-1692."
+
+conditions:
+  - {name: pH, default: 7.5, description: "Operating pH (fixed), used for the free-nitrous-acid fraction of nitrite."}
+
+species:
+  - {name: SNH2OH, default_concentration: 0.0, units: "g_N/m3", description: "Hydroxylamine (NH2OH-N), AOB intermediate"}
+  - {name: SNO,    default_concentration: 0.0, units: "g_N/m3", description: "Nitric oxide (NO-N), AOB intermediate"}
+  - {name: SN2O,   default_concentration: 0.0, units: "g_N/m3", description: "Nitrous oxide (N2O-N), dissolved"}
+
+parameters:
+  # Pocquet (2016) AOB yield (overrides the asm3_2step value).
+  YAOB: {value: 0.15, units: "g_COD/g_N", bounds: [0.05, 0.5], transform: logit}
+  # Maximum process rates (1/d) = source per-hour values x 24. The AMO and HAO
+  # rates derive from the growth rate / yield; the N2O rates from HAO x reduction
+  # factor. AMO and HAO carry the source growth-rate temperature dependency
+  # (theta = exp(0.094) = 1.0986), ref 20 deg C.
+  q_AOB_AMO:     {value: 5.20, units: "1/d", bounds: [0.5, 50.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
+  q_AOB_HAO:     {value: 5.20, units: "1/d", bounds: [0.5, 50.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
+  q_AOB_N2O_NN:  {value: 0.0078, units: "1/d", bounds: [1.0e-4, 1.0], transform: positive_log}
+  q_AOB_N2O_ND:  {value: 1.30, units: "1/d", bounds: [0.05, 20.0], transform: positive_log}
+  # Affinity / inhibition constants (mg/L unless noted).
+  K_O2_AOB_1:   {value: 1.0,    units: "g_O2/m3", bounds: [0.05, 10.0],  transform: positive_log}
+  K_O2_AOB_2:   {value: 0.6,    units: "g_O2/m3", bounds: [0.05, 10.0],  transform: positive_log}
+  K_NH3_AOB:    {value: 0.20,   units: "g_N/m3",  bounds: [0.01, 5.0],   transform: positive_log}
+  K_NH2OH_AOB:  {value: 0.90,   units: "g_N/m3",  bounds: [0.05, 10.0],  transform: positive_log}
+  K_NO_AOB_HAO: {value: 3.0e-4, units: "g_N/m3",  bounds: [1.0e-5, 0.1], transform: positive_log}
+  K_NO_AOB_NN:  {value: 0.008,  units: "g_N/m3",  bounds: [1.0e-4, 0.5], transform: positive_log}
+  K_HNO2_AOB:   {value: 0.004,  units: "g_N/m3",  bounds: [1.0e-4, 0.5], transform: positive_log}
+  K_O2_AOB_ND:  {value: 0.5,    units: "g_O2/m3", bounds: [0.05, 10.0],  transform: positive_log}
+  KI_O2_AOB:    {value: 0.8,    units: "g_O2/m3", bounds: [0.05, 10.0],  transform: positive_log}
+  # Near-step ammonium switch on growth (process 2): growth stops only at SNH4=0.
+  K_NH3_limit:  {value: 1.0e-9, units: "g_N/m3",  bounds: [1.0e-12, 1.0e-6], transform: positive_log}
+  # Free nitrous acid pKa (HNO2 <-> NO2- + H+), ~20 deg C.
+  pKa_HNO2:     {value: 3.4, units: "-", bounds: [2.5, 4.5], transform: none}
+
+remove:
+  reactions:
+    - Aerobic_growth_of_XAOB_nitritation
+
+expressions:
+  # Free nitrous acid = the protonated (acid) fraction of nitrite at the
+  # operating pH. pH_switch(pKa) = 1 / (1 + 10^(pH - pKa)).
+  S_HNO2: "[SNO2] * pH_switch(pKa_HNO2)"
+  # Haldane-type DO dependence of the ND-pathway N2O production (Pocquet 2016):
+  # rises as DO drops to a maximum, then falls toward zero DO.
+  f_DO_ND: "[SO2] / (K_O2_AOB_ND + (1 - 2 * (KI_O2_AOB / K_O2_AOB_ND) ** 0.5) * [SO2] + [SO2] * [SO2] / KI_O2_AOB)"
+
+reactions:
+  - name: AOB_NH3_oxidation_to_NH2OH
+    description: "AMO: ammonia oxidation to hydroxylamine (NH4 -> NH2OH), O2 consumed."
+    rate: "q_AOB_AMO * monod([SO2], K_O2_AOB_1) * monod([SNH4], K_NH3_AOB) * [XAOB]"
+    stoichiometry:
+      SNH4: -1.0
+      SNH2OH: 1.0
+      SO2: "(-8) / 7"
+      SALK: "(-1) * iCharge_SNHx"
+
+  - name: AOB_NH2OH_oxidation_to_NO_growth
+    description: "HAO: hydroxylamine oxidation to nitric oxide (NH2OH -> NO), AOB growth, O2 consumed."
+    rate: "q_AOB_HAO * monod([SO2], K_O2_AOB_2) * monod([SNH2OH], K_NH2OH_AOB) * monod([SNH4], K_NH3_limit) * [XAOB]"
+    stoichiometry:
+      SNH4: "(-1) * iN_BM"
+      SNH2OH: "(-1) / YAOB"
+      SNO: "1 / YAOB"
+      SO2: "(-1) * (12.0 / 7.0 - YAOB) / YAOB"
+      SALK: "(-1) * iN_BM * iCharge_SNHx"
+      XAOB: 1.0
+      XSS: "iSS_BM"
+
+  - name: AOB_NO_oxidation_to_NO2
+    description: "HAO: nitric oxide oxidation to nitrite (NO -> NO2), O2 consumed."
+    rate: "q_AOB_HAO * monod([SO2], K_O2_AOB_2) * monod([SNO], K_NO_AOB_HAO) * [XAOB]"
+    stoichiometry:
+      SNO: -1.0
+      SNO2: 1.0
+      SO2: "(-4) / 7"
+      SALK: "1 * iCharge_SNOx"
+
+  - name: AOB_N2O_production_NN_pathway
+    description: "NN pathway: Nor reduces NO to N2O coupled to NH2OH oxidation to nitrite."
+    rate: "q_AOB_N2O_NN * monod([SNH2OH], K_NH2OH_AOB) * monod([SNO], K_NO_AOB_NN) * [XAOB]"
+    stoichiometry:
+      SNH2OH: -1.0
+      SNO: -4.0
+      SNO2: 1.0
+      SN2O: 4.0
+      SALK: "1 * iCharge_SNOx"
+
+  - name: AOB_N2O_production_ND_pathway
+    description: "ND pathway: free nitrous acid reduced to N2O coupled to NH2OH oxidation to nitrite, with Haldane DO dependence."
+    rate: "q_AOB_N2O_ND * monod([SNH2OH], K_NH2OH_AOB) * (S_HNO2 / (K_HNO2_AOB + S_HNO2)) * f_DO_ND * [XAOB]"
+    stoichiometry:
+      SNH2OH: -1.0
+      SNO2: -1.0
+      SN2O: 2.0
+      SALK: "(-1) * iCharge_SNOx"

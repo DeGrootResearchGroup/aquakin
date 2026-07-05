@@ -4,7 +4,7 @@ Builds the full BSM2 plant -- the BSM1 activated-sludge core wrapped with the
 sludge train (primary clarifier, thickener, ADM1 anaerobic digester with the
 ASM1<->ADM1 interfaces, and dewatering, with the two reject streams recycled to
 the front) -- and drives it with the published constant influent to its
-open-loop steady state. This is a genuinely two-network plant (ASM1 water line +
+open-loop steady state. This is a genuinely two-model plant (ASM1 water line +
 ADM1 digester) integrated under one monolithic solve.
 
 It prints the headline activated-sludge reactor state and the digester biogas,
@@ -28,10 +28,10 @@ from aquakin.plant.bsm.bsm2 import (
 
 
 def main() -> None:
-    asm1 = aquakin.load_network("asm1")
-    adm1 = aquakin.load_network("adm1")
+    asm1 = aquakin.load_model("asm1")
+    adm1 = aquakin.load_model("adm1")
 
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
 
@@ -50,7 +50,7 @@ def main() -> None:
     print()
     print("Activated-sludge reactor 5 (effluent) at steady state:")
     # final_named reads the steady-state (last-point) values for several species
-    # in one call. Units come from the ASM1 network (carried through compile),
+    # in one call. Units come from the ASM1 model (carried through compile),
     # not a hand-kept name->unit table.
     finals = sol.final_named("tank5", ("SNH", "SNO", "SO", "XB_H", "XB_A", "XI"))
     for sp, val in finals.items():

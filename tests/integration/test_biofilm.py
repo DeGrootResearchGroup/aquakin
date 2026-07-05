@@ -20,13 +20,13 @@ import aquakin
 pytestmark = pytest.mark.slow
 
 FIXTURE = os.path.join(
-    os.path.dirname(__file__), "..", "fixtures", "simple_network.yaml"
+    os.path.dirname(__file__), "..", "fixtures", "simple_model.yaml"
 )
 
 
 @pytest.fixture(scope="module")
 def net():
-    return aquakin.load_network_from_file(FIXTURE)
+    return aquakin.load_model_from_file(FIXTURE)
 
 
 @pytest.fixture
@@ -76,7 +76,7 @@ def test_boundary_diffusivity_sets_transfer_and_defaults(net, cond):
     r_equal = _reactor(net, cond, diffusivity=d_film, boundary_diffusivity=d_film)
     r_fast = _reactor(net, cond, diffusivity=d_film, boundary_diffusivity=10 * d_film)
     # k_L = D_bl / boundary_layer, applied to solubles only.
-    sidx = net.species_index["A"]  # A is soluble in the toy network
+    sidx = net.species_index["A"]  # A is soluble in the toy model
     assert float(r_default._kL[sidx]) == pytest.approx(float(r_equal._kL[sidx]))
     assert float(r_fast._kL[sidx]) == pytest.approx(10 * float(r_default._kL[sidx]))
 
@@ -121,7 +121,7 @@ def test_reactive_particulate_evolves_and_conserves(net, cond):
 
 
 def test_default_fixed_mask_warns_on_reactive_particulate(net, cond):
-    # The toy network A -> B; mark B a (reactive) particulate via soluble_mask.
+    # The toy model A -> B; mark B a (reactive) particulate via soluble_mask.
     # The DEFAULT fixed_mask freezes every particulate, which would silently turn
     # the reactive B into a non-depleting sink -> the reactor must warn. An
     # explicit fixed_mask is a deliberate choice and must NOT warn.

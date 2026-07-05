@@ -42,10 +42,10 @@ from aquakin.plant.cstr import (
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
-def _default_biofilm_fixed_mask(network, soluble_mask) -> jnp.ndarray:
+def _default_biofilm_fixed_mask(model, soluble_mask) -> jnp.ndarray:
     """Which particulates are the sustained mature-biofilm structure (held fixed).
 
     Freeze every particulate **except** a hydrolysis substrate -- one that some
@@ -54,10 +54,10 @@ def _default_biofilm_fixed_mask(network, soluble_mask) -> jnp.ndarray:
     footgun); biomass and inert solids, by contrast, are not hydrolysed into
     solubles, so holding them as the attached-biomass reservoir is the intended
     mature-biofilm assumption. Derived from the stoichiometry, so it adapts to the
-    network (for ASM1 it freezes ``XI``/``XB_H``/``XB_A``/``XP`` and leaves
+    model (for ASM1 it freezes ``XI``/``XB_H``/``XB_A``/``XP`` and leaves
     ``XS``/``XND`` dynamic).
     """
-    stoich = network.compute_stoich(network.default_parameters())  # (n_rxn, n_sp)
+    stoich = model.compute_stoich(model.default_parameters())  # (n_rxn, n_sp)
     particulate = ~soluble_mask
     produces_soluble = jnp.any((stoich > 0) & soluble_mask[None, :], axis=1)
     consumed_into_soluble = jnp.any((stoich < 0) & produces_soluble[:, None], axis=0)
@@ -72,8 +72,8 @@ class IFASUnit(AerationUnit, CouplingAware):
     ----------
     name : str
         Unit identifier.
-    network : CompiledNetwork
-        Kinetic network, run in the bulk and in every biofilm layer.
+    model : CompiledModel
+        Kinetic model, run in the bulk and in every biofilm layer.
     volume : float
         Bulk liquid volume (m^3).
     input_port_names : list[str]
@@ -101,7 +101,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         ``diffusivity`` (see :class:`~aquakin.integrate.biofilm.BiofilmReactor`).
     conditions : dict[str, float]
         Spatially-uniform condition values (e.g. ``{"T": 293.15}``); one per
-        condition the network declares. Used in the bulk and every layer.
+        condition the model declares. Used in the bulk and every layer.
     aeration : Aeration, optional
         Bulk aeration (open- or closed-loop), exactly as for a
         :class:`~aquakin.plant.cstr.CSTRUnit`. Oxygen enters the **bulk**; it
@@ -122,18 +122,18 @@ class IFASUnit(AerationUnit, CouplingAware):
     biofilm_reactions : list[str] or jnp.ndarray, optional
         Reactions that run in the biofilm layers only (the rest run in the bulk
         only). ``None`` (default) runs every reaction in every compartment -- the
-        right choice for a single-phase network (ASM1/2/3), where the same
+        right choice for a single-phase model (ASM1/2/3), where the same
         kinetics act on whatever biomass is locally present.
     biofilm_initial : jnp.ndarray, optional
         Initial biofilm-layer concentrations ``(n_species,)``, tiled across the
         layers -- the attached-biomass inventory of the mature biofilm. Defaults
-        to the network's default concentrations.
+        to the model's default concentrations.
     output_port : str
         Name of the single output port (default ``"out"``).
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     volume: float
     input_port_names: list[str]
     specific_surface_area: float
@@ -152,7 +152,7 @@ class IFASUnit(AerationUnit, CouplingAware):
     output_port: str = "out"
 
     def __post_init__(self) -> None:
-        missing = set(self.network.conditions_required) - set(self.conditions)
+        missing = set(self.model.conditions_required) - set(self.conditions)
         if missing:
             raise ValueError(
                 f"IFASUnit '{self.name}' is missing required condition values "
@@ -167,9 +167,9 @@ class IFASUnit(AerationUnit, CouplingAware):
                 f"IFASUnit '{self.name}' specific_surface_area and volume must be positive."
             )
 
-        n = self.network.n_species
+        n = self.model.n_species
         soluble = (
-            _default_soluble_mask(self.network)
+            _default_soluble_mask(self.model)
             if self.soluble_mask is None
             else jnp.asarray(self.soluble_mask, dtype=bool)
         )
@@ -184,7 +184,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         # feed/dilution are off -- the plant supplies the bulk convection.
         nothing_fixed = jnp.zeros((n,), dtype=bool)
         self._biofilm = BiofilmReactor(
-            self.network,
+            self.model,
             SpatialConditions.uniform(**{k: float(v) for k, v in self.conditions.items()}),
             n_layers=self.n_layers,
             thickness=self.biofilm_thickness,
@@ -203,7 +203,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         # those would make them spurious soluble sources). Derived from the
         # stoichiometry; override with an explicit mask.
         if self.biofilm_fixed_mask is None:
-            layer_fixed = _default_biofilm_fixed_mask(self.network, soluble)
+            layer_fixed = _default_biofilm_fixed_mask(self.model, soluble)
         else:
             layer_fixed = jnp.asarray(self.biofilm_fixed_mask, dtype=bool)
         if layer_fixed.shape != (n,):
@@ -215,7 +215,7 @@ class IFASUnit(AerationUnit, CouplingAware):
 
         self._condition_arrays = {
             cname: jnp.asarray([float(self.conditions[cname])])
-            for cname in self.network.conditions_required
+            for cname in self.model.conditions_required
         }
         self._n = n
         self._n_comp = self.n_layers + 1
@@ -237,11 +237,11 @@ class IFASUnit(AerationUnit, CouplingAware):
     def initial_state(self) -> jnp.ndarray:
         """Flat ``(n_comp * n_species,)`` state: bulk row + the biofilm layers.
 
-        The bulk seeds at the network defaults; the layers seed at
+        The bulk seeds at the model defaults; the layers seed at
         ``biofilm_initial`` (the mature attached-biomass inventory), defaulting to
-        the network defaults.
+        the model defaults.
         """
-        bulk = self.network.default_concentrations()
+        bulk = self.model.default_concentrations()
         layer = bulk if self.biofilm_initial is None else jnp.asarray(self.biofilm_initial)
         rows = jnp.concatenate(
             [bulk[None, :], jnp.tile(layer[None, :], (self.n_layers, 1))], axis=0
@@ -250,7 +250,7 @@ class IFASUnit(AerationUnit, CouplingAware):
 
     def set_temperature(self, temperature_K: float) -> None:
         """Set the static operating temperature (Kelvin) for the bulk + biofilm."""
-        if "T" not in self.network.conditions_required:
+        if "T" not in self.model.conditions_required:
             return
         self.conditions = {**self.conditions, "T": float(temperature_K)}
         self._condition_arrays = {
@@ -270,7 +270,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         (their Jacobian is state-independent, so AD over diverse states captures
         them exactly -- :func:`ad_union`), while the per-compartment reaction
         kinetics carry saturated Monod terms that are numerically invisible to a
-        probe, so the network's syntactic AST pattern is unioned into each
+        probe, so the model's syntactic AST pattern is unioned into each
         compartment's diagonal sub-block. In the biofilm layers the fixed
         attached-biomass species have their rate zeroed, so their rows are dropped
         from the layer kinetics blocks. ``inlet``: the bulk dilution diagonal --
@@ -283,14 +283,14 @@ class IFASUnit(AerationUnit, CouplingAware):
         from aquakin.integrate.colored_jacobian import structural_sparsity_pattern
         from aquakin.plant.coupling import CouplingPattern, ad_union
 
-        net = self.network
+        net = self.model
         n, n_comp = self._n, self._n_comp
         m = self.state_size
         params = net.default_parameters()
         state0 = np.asarray(self.initial_state())
         base_C = jnp.asarray(np.maximum(np.abs(np.asarray(net.default_concentrations())), 1e-3))
         Q = jnp.asarray(self.volume)  # representative positive inflow
-        inputs = {nm: Stream(Q=Q, C=base_C, network=net) for nm in self.input_port_names}
+        inputs = {nm: Stream(Q=Q, C=base_C, model=net) for nm in self.input_port_names}
 
         # AD over diverse states: the (linear) diffusion + convection + aeration
         # couplings are captured exactly; the reaction kinetics are unioned from the
@@ -328,7 +328,7 @@ class IFASUnit(AerationUnit, CouplingAware):
             self.output_port: Stream(
                 Q=Q_total,
                 C=self._bulk(state),
-                network=self.network,
+                model=self.model,
                 T=self._mixed_inlet_T(inputs),
             )
         }
@@ -380,7 +380,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         bulk = y[0]
         convection = (Q_total / self.volume) * (C_in - bulk)
         T_eff = T_in if T_in is not None else self.conditions.get("T")
-        aeration = aeration_transfer(self._av, bulk, T_eff, signals, self.network)
+        aeration = aeration_transfer(self._av, bulk, T_eff, signals, self.model)
         dydt = dydt.at[0].add(convection + aeration)
 
         return dydt.reshape(-1)

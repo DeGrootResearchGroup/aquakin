@@ -160,7 +160,7 @@ class ParamNode(ASTNode):
     """Looks up a rate constant by name from ``params``.
 
     Resolution order: reaction-local (``<reaction>.<name>``) first, then
-    network-level (bare ``<name>``).
+    model-level (bare ``<name>``).
     """
 
     name: str  # local (un-namespaced) name
@@ -185,7 +185,7 @@ class ParamNode(ASTNode):
         raise KeyError(
             f"Parameter '{self.name}' is referenced in a rate expression but "
             f"not declared (neither as a reaction-local parameter on "
-            f"'{ctx.reaction_name}' nor as a network-level parameter). "
+            f"'{ctx.reaction_name}' nor as a model-level parameter). "
             f"Declared parameters: {sorted(ctx.param_index)}"
         )
 

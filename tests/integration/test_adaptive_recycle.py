@@ -14,7 +14,7 @@ theorem tangent.
 
 The synthetic tests drive :meth:`Plant._recycle._adaptive_recycle_refine` directly with a
 controllable-``rho`` map (fast, no plant solve) to pin the generality guarantee
-and the gradient; the BSM2 tests pin it on a real two-network plant.
+and the gradient; the BSM2 tests pin it on a real two-model plant.
 """
 
 import jax
@@ -124,7 +124,7 @@ def test_recycle_tol_construction_validation():
 
 
 # ---------------------------------------------------------------------------
-# Slow (merge-tier) BSM2 tests: the adaptive solve on a real two-network plant
+# Slow (merge-tier) BSM2 tests: the adaptive solve on a real two-model plant
 # reaches the same fixed point as a deep fixed-pass sweep, forward and gradient.
 # ---------------------------------------------------------------------------
 
@@ -132,12 +132,12 @@ def test_recycle_tol_construction_validation():
 def bsm2():
     from aquakin.plant.bsm import bsm2_warm_start, bsm2_constant_influent
     from aquakin.plant.bsm.bsm2 import (
-        build_bsm2, bsm2_asm1_network, bsm2_parameters,
+        build_bsm2, bsm2_asm1_model, bsm2_parameters,
         BSM2_CONSTANT_INFLUENT_T)
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
-    p = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    p = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     p.add_influent("feed", bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
     y0 = bsm2_warm_start(p)
     # Prime the layouts / caches with a tiny solve.

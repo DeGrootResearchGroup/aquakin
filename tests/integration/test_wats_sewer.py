@@ -21,7 +21,7 @@ import aquakin
 
 @pytest.fixture(scope="module")
 def net():
-    return aquakin.load_network("wats_sewer")
+    return aquakin.load_model("wats_sewer")
 
 
 @pytest.fixture

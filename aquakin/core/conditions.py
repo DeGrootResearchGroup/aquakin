@@ -85,9 +85,9 @@ class SpatialConditions:
         """Return a copy with some fields overridden (or added).
 
         The common edit-from-defaults pattern: start from
-        ``network.default_conditions()`` and change only what differs, e.g.::
+        ``model.default_conditions()`` and change only what differs, e.g.::
 
-            conditions = network.default_conditions().with_(T=283.15)   # cold
+            conditions = model.default_conditions().with_(T=283.15)   # cold
 
         Scalar overrides are broadcast to this object's location count (so the
         result keeps the same ``n_locations``); a length-``n_locations`` array
@@ -146,8 +146,8 @@ class OperatingConditions(SpatialConditions):
     It **is** a :class:`SpatialConditions` (one location), so it works unchanged
     in every reactor; for a spatially varying PFR/CFD case use
     :class:`SpatialConditions` (or :meth:`SpatialConditions.uniform`) directly.
-    To start from a network's declared defaults instead, use
-    ``network.default_conditions()`` and :meth:`SpatialConditions.with_` to edit.
+    To start from a model's declared defaults instead, use
+    ``model.default_conditions()`` and :meth:`SpatialConditions.with_` to edit.
 
     Parameters
     ----------

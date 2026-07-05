@@ -22,7 +22,7 @@ import jax.numpy as jnp
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 
 @dataclass
@@ -44,8 +44,8 @@ class PIController:
     Parameters
     ----------
     name : str
-    network : CompiledNetwork
-        Network of the sensed stream (to resolve ``measured_species``).
+    model : CompiledModel
+        Model of the sensed stream (to resolve ``measured_species``).
     measured_species : str
         Species read from the sensed inlet stream (e.g. ``"SO"``).
     setpoint : float
@@ -66,7 +66,7 @@ class PIController:
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     measured_species: str
     setpoint: float
     Kp: float
@@ -80,12 +80,12 @@ class PIController:
     input_port: str = "measured"
 
     def __post_init__(self) -> None:
-        if self.measured_species not in self.network.species_index:
+        if self.measured_species not in self.model.species_index:
             raise ValueError(
                 f"PIController '{self.name}': measured species "
-                f"'{self.measured_species}' not in network."
+                f"'{self.measured_species}' not in model."
             )
-        self._meas_idx = self.network.species_index[self.measured_species]
+        self._meas_idx = self.model.species_index[self.measured_species]
         if self.Ti <= 0.0:
             raise ValueError(f"PIController '{self.name}': Ti must be > 0.")
         if self.use_antiwindup and self.Tt <= 0.0:
@@ -116,23 +116,23 @@ class PIController:
     def _output(self, state: jnp.ndarray, inputs: dict[str, Stream]):
         """Return ``(u, u_sat, e)``: raw output, saturated output, error."""
         stream = inputs[self.input_port]
-        # ``_meas_idx`` was resolved against ``self.network``; it indexes the right
-        # species only if the sensed stream shares that network's species ordering.
-        # The networks are static, so this is a trace-time check (it fires on the
+        # ``_meas_idx`` was resolved against ``self.model``; it indexes the right
+        # species only if the sensed stream shares that model's species ordering.
+        # The models are static, so this is a trace-time check (it fires on the
         # first solve, not every step); the ``is`` short-circuit keeps the common
         # same-instance case free, while two instances of the same model (same
         # species order) are still accepted.
-        sensed_net = stream.network
-        if sensed_net is not self.network and (
-            getattr(sensed_net, "species", None) != self.network.species
+        sensed_net = stream.model
+        if sensed_net is not self.model and (
+            getattr(sensed_net, "species", None) != self.model.species
         ):
             raise ValueError(
-                f"PIController '{self.name}' senses a stream in network "
+                f"PIController '{self.name}' senses a stream in model "
                 f"'{getattr(sensed_net, 'name', '?')}', but its measured_species "
-                f"'{self.measured_species}' index was resolved in network "
-                f"'{self.network.name}' with a different species ordering -- it "
+                f"'{self.measured_species}' index was resolved in model "
+                f"'{self.model.name}' with a different species ordering -- it "
                 f"would read the wrong species. Build the controller with the "
-                f"sensed unit's network."
+                f"sensed unit's model."
             )
         measured = stream.C[self._meas_idx]
         e = self.setpoint - measured

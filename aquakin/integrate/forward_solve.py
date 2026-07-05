@@ -25,7 +25,7 @@ the only remaining per-save penalty. The per-step costs are otherwise the same a
 ``diffrax`` (both build the colored Jacobian once per step, which XLA fuses into
 one batched JVP -- so freezing/reusing it does not help and in fact hurts via
 degraded Newton convergence). The compile is also faster, though the margin is
-**scale-dependent**: large for small/simple networks (where the ``diffrax``
+**scale-dependent**: large for small/simple models (where the ``diffrax``
 implicit scaffolding dominates the trace) and smaller on a big flowsheet (where
 the shared colored-Jacobian + plant-RHS tracing dominates). The trade-off versus
 ``diffrax`` is the loss of differentiability, so a large *differentiable* solve

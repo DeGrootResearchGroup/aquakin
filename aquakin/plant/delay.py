@@ -36,7 +36,7 @@ import jax.numpy as jnp
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 _EPS_Q = 1e-9  # guard the load/flow division
 
@@ -49,8 +49,8 @@ class HydraulicDelayUnit:
     ----------
     name : str
         Unit identifier.
-    network : CompiledNetwork
-        Network of the passed stream.
+    model : CompiledModel
+        Model of the passed stream.
     tau : float
         Lag time constant (days). Smaller is faster (less delay).
     initial_flow : float, optional
@@ -62,13 +62,13 @@ class HydraulicDelayUnit:
         seeds it with the reference flow for exactly this reason.
     initial_concentrations : jnp.ndarray, optional
         Initial held concentrations, shape ``(n_species,)``. Defaults to the
-        network's default concentrations.
+        model's default concentrations.
     input_port, output_port : str, optional
         Port names (default ``"in"`` / ``"out"``).
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     tau: float
     initial_flow: float = 0.0
     initial_concentrations: Optional[jnp.ndarray] = None
@@ -81,7 +81,7 @@ class HydraulicDelayUnit:
 
     @property
     def state_size(self) -> int:
-        return self.network.n_species + 1  # per-species loads + flow
+        return self.model.n_species + 1  # per-species loads + flow
 
     @property
     def input_ports(self) -> list[str]:
@@ -93,7 +93,7 @@ class HydraulicDelayUnit:
 
     def initial_state(self) -> jnp.ndarray:
         C0 = (
-            self.network.default_concentrations()
+            self.model.default_concentrations()
             if self.initial_concentrations is None
             else jnp.asarray(self.initial_concentrations)
         )
@@ -103,7 +103,7 @@ class HydraulicDelayUnit:
     def _flow_and_conc(self, state: jnp.ndarray):
         """Return ``(Q, C)`` from the held loads and flow."""
         Q = state[-1]
-        loads = state[: self.network.n_species]
+        loads = state[: self.model.n_species]
         C = loads / (Q + _EPS_Q)
         return Q, C
 
@@ -117,9 +117,7 @@ class HydraulicDelayUnit:
     ) -> dict[str, Stream]:
         Q, C = self._flow_and_conc(state)
         # Temperature passes straight through (the reference treats T(out)=T(in)).
-        return {
-            self.output_port: Stream(Q=Q, C=C, network=self.network, T=inputs[self.input_port].T)
-        }
+        return {self.output_port: Stream(Q=Q, C=C, model=self.model, T=inputs[self.input_port].T)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """The outlet flow is the held-flow state (the delayed flow), read from
@@ -135,7 +133,7 @@ class HydraulicDelayUnit:
         signals: "dict | None" = None,
     ) -> jnp.ndarray:
         s_in = inputs[self.input_port]
-        loads = state[: self.network.n_species]
+        loads = state[: self.model.n_species]
         Q = state[-1]
         inv_tau = 1.0 / float(self.tau)
         dloads = (s_in.Q * s_in.C - loads) * inv_tau

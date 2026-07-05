@@ -103,12 +103,12 @@ BSM2_AS_TEMPERATURE_K = 288.15  # K (15 °C) -- the BSM2 ASM1 reference temperat
 # 15 °C rates and the benchmark steady state.
 BSM2_CONSTANT_INFLUENT_T = 288.00808  # K (14.85808 °C): benchmark steady-state influent temp
 
-# Largest |T - ref_T| (K) treated as a consistent influent/network pairing. The
+# Largest |T - ref_T| (K) treated as a consistent influent/model pairing. The
 # benchmark inlet sits ~0.14 K below the 15 °C reference; anything beyond ~1 K is
-# almost certainly a mismatched network (e.g. a 14.86 °C inlet on the plain 20 °C
-# ``load_network("asm1")``, ~5 K off), which silently rescales the Arrhenius rate
+# almost certainly a mismatched model (e.g. a 14.86 °C inlet on the plain 20 °C
+# ``load_model("asm1")``, ~5 K off), which silently rescales the Arrhenius rate
 # corrections. The threshold clears the benchmark offset with wide margin while
-# catching a whole-network mismatch.
+# catching a whole-model mismatch.
 BSM2_INFLUENT_REF_T_TOL = 1.0  # K
 
 # Closed-loop dissolved-oxygen / kLa control (reginit_bsm2). A PI controller
@@ -169,19 +169,19 @@ BSM2_ASM1_PARAMETERS = {
 }
 
 
-def bsm2_asm1_network(asm1_network=None):
-    """ASM1 network configured for BSM2: temperature corrections re-referenced
+def bsm2_asm1_model(asm1_model=None):
+    """ASM1 model configured for BSM2: temperature corrections re-referenced
     to 15 °C (the BSM2 ASM1 reference temperature, matching ``bsm2_parameters``).
 
     The shipped ``asm1`` corrections are referenced to 20 °C; this moves ``ref_T``
-    to 288.15 K while keeping the (BSM2) slopes. Use the returned network for
+    to 288.15 K while keeping the (BSM2) slopes. Use the returned model for
     **both** ``build_bsm2`` and the influent (e.g. ``bsm2_constant_influent``)
-    so their network identities match and a temperature-carrying influent drives
+    so their model identities match and a temperature-carrying influent drives
     the AS kinetics from the correct 15 °C base.
     """
     import aquakin
 
-    asm1 = asm1_network if asm1_network is not None else aquakin.load_network("asm1")
+    asm1 = asm1_model if asm1_model is not None else aquakin.load_model("asm1")
     if not getattr(asm1, "temperature_corrections", None):
         return asm1
     return dataclasses.replace(
@@ -193,72 +193,72 @@ def bsm2_asm1_network(asm1_network=None):
     )
 
 
-def bsm2_asm1_parameter_vector(asm1_network):
+def bsm2_asm1_parameter_vector(asm1_model):
     """ASM1 parameter vector with the BSM2 (15 °C) overrides applied."""
-    p = asm1_network.default_parameters()
+    p = asm1_model.default_parameters()
     for name, val in BSM2_ASM1_PARAMETERS.items():
-        if name in asm1_network.parameters:
-            p = p.at[asm1_network.parameters.index(name)].set(val)
+        if name in asm1_model.parameters:
+            p = p.at[asm1_model.parameters.index(name)].set(val)
     return p
 
 
-def bsm2_parameters(asm1_network, adm1_network):
+def bsm2_parameters(asm1_model, adm1_model):
     """Full BSM2 plant parameter vector: BSM2 ASM1 block + default ADM1 block.
 
     Pass to ``plant.solve(params=...)``. The water-line block carries the BSM2
-    ASM1 values (the network defaults are the BSM1/20 °C set); the digester block
+    ASM1 values (the model defaults are the BSM1/20 °C set); the digester block
     uses the ADM1 defaults, which are already the BSM2 values.
     """
     return jnp.concatenate(
         [
-            bsm2_asm1_parameter_vector(asm1_network),
-            adm1_network.default_parameters(),
+            bsm2_asm1_parameter_vector(asm1_model),
+            adm1_model.default_parameters(),
         ]
     )
 
 
-def bsm2_constant_influent(asm1_network, Q: float = BSM2_Q_REF, T: float = None) -> InfluentSeries:
+def bsm2_constant_influent(asm1_model, Q: float = BSM2_Q_REF, T: float = None) -> InfluentSeries:
     """The published BSM2 constant influent as an :class:`InfluentSeries`.
 
     ``T`` defaults to ``None`` (temperature-agnostic): the reactors then fall back
     to their static ``T`` condition. For a benchmark-faithful run pass
     ``T=BSM2_CONSTANT_INFLUENT_T`` (14.858 °C) **together with the 15 °C-referenced
-    network** :func:`bsm2_asm1_network`, so the AS line operates at the BSM2
+    model** :func:`bsm2_asm1_model`, so the AS line operates at the BSM2
     steady-state temperature and the rate corrections are referenced correctly --
     this reproduces the benchmark reactor states to round-off. Omitting ``T`` runs
     the line at the 15 °C reference, which over-predicts nitrification by ~1.4 %.
-    Do **not** pass ``T`` with the plain 20 °C ``load_network("asm1")``: a
-    14.858 °C inlet on a 20 °C-referenced network applies a large spurious
+    Do **not** pass ``T`` with the plain 20 °C ``load_model("asm1")``: a
+    14.858 °C inlet on a 20 °C-referenced model applies a large spurious
     slowdown. Passing a ``T`` more than :data:`BSM2_INFLUENT_REF_T_TOL` K from the
-    network's Arrhenius reference temperature emits a warning naming both values.
+    model's Arrhenius reference temperature emits a warning naming both values.
     """
-    _warn_if_influent_T_inconsistent(asm1_network, T)
-    return asm1_network.influent(BSM2_CONSTANT_INFLUENT, Q=Q, T=T)
+    _warn_if_influent_T_inconsistent(asm1_model, T)
+    return asm1_model.influent(BSM2_CONSTANT_INFLUENT, Q=Q, T=T)
 
 
-def _warn_if_influent_T_inconsistent(network, T):
-    """Warn when an influent ``T`` is far from the network's Arrhenius reference.
+def _warn_if_influent_T_inconsistent(model, T):
+    """Warn when an influent ``T`` is far from the model's Arrhenius reference.
 
-    The influent temperature and the network's ``temperature_corrections``
+    The influent temperature and the model's ``temperature_corrections``
     reference ``ref_T`` are independent knobs that must agree: a ``T`` that
     differs from ``ref_T`` by more than the expected BSM2 inlet offset
     (:data:`BSM2_INFLUENT_REF_T_TOL` K) silently rescales every rate correction
     by ``theta**(T - ref_T)`` -- e.g. a 14.86 °C inlet on the plain 20 °C
-    ``load_network("asm1")`` cuts nitrification by ~40 %. No-ops when ``T`` is
-    ``None`` (temperature-agnostic) or the network carries no corrections.
+    ``load_model("asm1")`` cuts nitrification by ~40 %. No-ops when ``T`` is
+    ``None`` (temperature-agnostic) or the model carries no corrections.
     """
-    if T is None or not getattr(network, "temperature_corrections", None):
+    if T is None or not getattr(model, "temperature_corrections", None):
         return
-    ref_T = float(network.temperature_corrections[0][2])
+    ref_T = float(model.temperature_corrections[0][2])
     if abs(float(T) - ref_T) > BSM2_INFLUENT_REF_T_TOL:
         warnings.warn(
             f"bsm2_constant_influent: influent T={float(T):.5g} K is "
-            f"{abs(float(T) - ref_T):.3g} K from the network's Arrhenius "
+            f"{abs(float(T) - ref_T):.3g} K from the model's Arrhenius "
             f"reference ref_T={ref_T:.5g} K (>{BSM2_INFLUENT_REF_T_TOL:g} K). "
             "This rescales every temperature correction by theta**(T-ref_T) and "
-            "is almost certainly a mismatched network -- pair "
-            "BSM2_CONSTANT_INFLUENT_T with bsm2_asm1_network() (15 °C ref), not "
-            'the plain 20 °C load_network("asm1").',
+            "is almost certainly a mismatched model -- pair "
+            "BSM2_CONSTANT_INFLUENT_T with bsm2_asm1_model() (15 °C ref), not "
+            'the plain 20 °C load_model("asm1").',
             stacklevel=2,
         )
 
@@ -386,8 +386,8 @@ def bsm2_wastage_schedule(
 
 
 def build_bsm2(
-    asm1_network: Optional["object"] = None,
-    adm1_network: Optional["object"] = None,
+    asm1_model: Optional["object"] = None,
+    adm1_model: Optional["object"] = None,
     *,
     Q_ref: float = BSM2_Q_REF,
     conditions: Optional[dict] = None,
@@ -414,18 +414,18 @@ def build_bsm2(
 
     Parameters
     ----------
-    asm1_network : CompiledNetwork, optional
-        ASM1 network for the water line. Defaults to :func:`bsm2_asm1_network`
-        (the BSM2-configured network with temperature corrections referenced to
+    asm1_model : CompiledModel, optional
+        ASM1 model for the water line. Defaults to :func:`bsm2_asm1_model`
+        (the BSM2-configured model with temperature corrections referenced to
         15 degC, matching ``bsm2_parameters`` and the BSM2 influent). Pass the
-        plain ``load_network("asm1")`` to use the 20 degC reference instead.
-    adm1_network : CompiledNetwork, optional
-        ADM1 network for the digester. Defaults to ``load_network("adm1")``.
+        plain ``load_model("asm1")`` to use the 20 degC reference instead.
+    adm1_model : CompiledModel, optional
+        ADM1 model for the digester. Defaults to ``load_model("adm1")``.
     Q_ref : float
         Reference flow used to size the fixed recycle pumps.
     conditions : dict, optional
         Per-tank ASM1 condition values (e.g. ``{"T": ...}``). Defaults to the
-        ASM1 network's declared defaults.
+        ASM1 model's declared defaults.
     carbon : ExternalCarbon or None, optional
         External-carbon dosing to reactor 1 (default :class:`ExternalCarbon`,
         the BSM2 dose). Pass ``None`` to disable dosing.
@@ -502,20 +502,20 @@ def build_bsm2(
     carbon_flow = carbon.flow if carbon is not None else 0.0
     carbon_conc = carbon.conc if carbon is not None else BSM2_CARBON_CONC
 
-    # Default to the BSM2-configured ASM1 network (temperature corrections
+    # Default to the BSM2-configured ASM1 model (temperature corrections
     # referenced to 15 degC, matching bsm2_parameters and the BSM2 influent), not
-    # the plain 20 degC shipped asm1. With the plain network a temperature-carrying
+    # the plain 20 degC shipped asm1. With the plain model a temperature-carrying
     # influent would apply a spurious Arrhenius slowdown relative to the already
-    # 15 degC parameter values; the BSM2 network makes 15 degC the unity point so
+    # 15 degC parameter values; the BSM2 model makes 15 degC the unity point so
     # seasonal kinetics are referenced correctly. A constant-temperature run is
     # unaffected (the correction is unity at the static T either way). Pass an
-    # explicit asm1_network to override (e.g. the plain 20 degC asm1).
-    asm1 = asm1_network if asm1_network is not None else bsm2_asm1_network()
-    adm1 = adm1_network if adm1_network is not None else aquakin.load_network("adm1")
+    # explicit asm1_model to override (e.g. the plain 20 degC asm1).
+    asm1 = asm1_model if asm1_model is not None else bsm2_asm1_model()
+    adm1 = adm1_model if adm1_model is not None else aquakin.load_model("adm1")
 
     # The AS reactors operate at the temperature where their parameters are
     # defined -- the reference temperature of the ASM1 temperature corrections
-    # (288.15 K for the default BSM2-configured network, 293.15 K for the plain
+    # (288.15 K for the default BSM2-configured model, 293.15 K for the plain
     # shipped asm1 if passed explicitly). Setting the static condition there makes
     # the correction unity at steady state, so a constant-temperature run
     # reproduces the (uncorrected) reference exactly; a temperature-carrying
@@ -548,7 +548,7 @@ def build_bsm2(
     seed = Stream(
         Q=jnp.asarray(0.0),
         C=asm1.default_concentrations(),
-        network=asm1,
+        model=asm1,
         T=jnp.asarray(BSM2_AS_TEMPERATURE_K),
     )
 
@@ -564,7 +564,7 @@ def build_bsm2(
         plant.add_unit(
             HydraulicDelayUnit(
                 name="influent_delay",
-                network=asm1,
+                model=asm1,
                 tau=float(delay_tau),
                 initial_flow=Q_ref,
                 initial_concentrations=delay_C,
@@ -579,7 +579,7 @@ def build_bsm2(
         plant.add_unit(
             SplitterUnit(
                 name="bypass_split",
-                network=asm1,
+                model=asm1,
                 threshold=float(bypass_threshold),
                 threshold_port="bypass",
                 remainder_port="to_plant",
@@ -591,17 +591,17 @@ def build_bsm2(
     # and the level-gated overflow bypass); otherwise on one combined port.
     front_reject_ports = ["storage_out", "storage_bypass"] if use_storage else ["reject"]
     plant.add_unit(
-        MixerUnit(name="front_mix", input_port_names=["fresh"] + front_reject_ports, network=asm1)
+        MixerUnit(name="front_mix", input_port_names=["fresh"] + front_reject_ports, model=asm1)
     )
     plant.add_unit(
         PrimaryClarifier(
-            name="primary", network=asm1, volume=BSM2_PRIMARY_VOLUME, f_PS=BSM2_PRIMARY_FPS
+            name="primary", model=asm1, volume=BSM2_PRIMARY_VOLUME, f_PS=BSM2_PRIMARY_FPS
         )
     )
 
     # ----- Activated sludge: mixer + 5 CSTRs + internal recycle. -----
     as_ports = ["primary_eff", "internal_recycle", "ras"]
-    plant.add_unit(MixerUnit(name="as_mix", input_port_names=as_ports, network=asm1))
+    plant.add_unit(MixerUnit(name="as_mix", input_port_names=as_ports, model=asm1))
     if carbon_flow > 0:
         # External carbon (a readily-biodegradable SS source) dosed into reactor 1
         # to support denitrification -- a fixed-flow DosingUnit on the
@@ -653,7 +653,7 @@ def build_bsm2(
         plant.add_unit(
             CSTRUnit(
                 name=tank,
-                network=asm1,
+                model=asm1,
                 volume=BSM2_TANK_VOLUMES[i],
                 input_port_names=["inlet"],
                 conditions=conditions,
@@ -664,7 +664,7 @@ def build_bsm2(
     plant.add_unit(
         SplitterUnit(
             name="tank5_split",
-            network=asm1,
+            model=asm1,
             output_port_flows={"internal_recycle": Qintr},
             remainder_port="to_settler",
         )
@@ -674,7 +674,7 @@ def build_bsm2(
     plant.add_unit(
         TakacsClarifier(
             name="settler",
-            network=asm1,
+            model=asm1,
             area=BSM2_CLARIFIER_AREA,
             height=BSM2_CLARIFIER_HEIGHT,
             underflow_Q=Q_settler_underflow,
@@ -686,7 +686,7 @@ def build_bsm2(
     plant.add_unit(
         SplitterUnit(
             name="underflow_split",
-            network=asm1,
+            model=asm1,
             output_port_flows={"ras": Qr},
             remainder_port="waste",
         )
@@ -695,14 +695,14 @@ def build_bsm2(
     # Final-effluent combiner: clarified effluent + the bypassed raw influent.
     if influent_bypass:
         plant.add_unit(
-            MixerUnit(name="effluent_mix", input_port_names=["treated", "bypass"], network=asm1)
+            MixerUnit(name="effluent_mix", input_port_names=["treated", "bypass"], model=asm1)
         )
 
     # ----- Sludge train: thickener -> digester -> dewatering. -----
     plant.add_unit(
         IdealThickener(
             name="thickener",
-            network=asm1,
+            model=asm1,
             target_tss_percent=BSM2_THICKENER_TSS_PERCENT,
             tss_removal_percent=BSM2_SEPARATOR_REMOVAL,
             nominal_underflow_fraction=0.03,
@@ -711,13 +711,13 @@ def build_bsm2(
     # Combine primary sludge + thickened secondary sludge into the digester feed.
     plant.add_unit(
         MixerUnit(
-            name="sludge_mix", input_port_names=["primary_sludge", "thickener_under"], network=asm1
+            name="sludge_mix", input_port_names=["primary_sludge", "thickener_under"], model=asm1
         )
     )
     plant.add_unit(
         ADM1DigesterUnit(
             name="digester",
-            network=adm1,
+            model=adm1,
             volume=BSM2_DIGESTER_VOLUME,
             conditions={"T": BSM2_DIGESTER_T},
         )
@@ -725,7 +725,7 @@ def build_bsm2(
     plant.add_unit(
         IdealThickener(
             name="dewatering",
-            network=asm1,
+            model=asm1,
             target_tss_percent=BSM2_DEWATERING_TSS_PERCENT,
             tss_removal_percent=BSM2_SEPARATOR_REMOVAL,
             nominal_underflow_fraction=0.02,
@@ -737,7 +737,7 @@ def build_bsm2(
         MixerUnit(
             name="reject_mix",
             input_port_names=["thickener_reject", "dewatering_reject"],
-            network=asm1,
+            model=asm1,
         )
     )
 
@@ -750,7 +750,7 @@ def build_bsm2(
         if reject_control:
             storage = StorageTank(
                 name="reject_storage",
-                network=asm1,
+                model=asm1,
                 volume=storage_volume,
                 level_setpoint=BSM2_STORAGE_LEVEL_SETPOINT_FRAC * storage_volume,
                 level_gain=BSM2_STORAGE_LEVEL_GAIN,
@@ -759,15 +759,15 @@ def build_bsm2(
         else:
             storage = StorageTank(
                 name="reject_storage",
-                network=asm1,
+                model=asm1,
                 volume=storage_volume,
                 output_flow=storage_output_flow,
             )
         plant.add_unit(storage)
 
-    # Cross-network interfaces (ASM1 <-> ADM1).
-    asm2adm = ASM1toADM1(source_network=asm1, target_network=adm1)
-    adm2asm = ADM1toASM1(source_network=adm1, target_network=asm1)
+    # Cross-model interfaces (ASM1 <-> ADM1).
+    asm2adm = ASM1toADM1(source_model=asm1, target_model=adm1)
+    adm2asm = ADM1toASM1(source_model=adm1, target_model=asm1)
 
     # ----- Wiring -----
     # The raw influent enters at the bypass splitter if present, else the front

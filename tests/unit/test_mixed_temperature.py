@@ -20,12 +20,12 @@ from aquakin.plant.streams import Stream, mixed_temperature
 
 
 def _net():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _stream(net, Q, T):
     return Stream(Q=jnp.asarray(float(Q)), C=net.default_concentrations(),
-                  network=net, T=None if T is None else jnp.asarray(float(T)))
+                  model=net, T=None if T is None else jnp.asarray(float(T)))
 
 
 def test_flow_weighted_when_all_inlets_carry_temperature():

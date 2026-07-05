@@ -19,7 +19,7 @@ _INF = {"SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _is_valid_eval_order(plant) -> bool:
@@ -68,13 +68,13 @@ def test_recycle_built_in_reverse_order_solves(asm1):
     topological sort handles the cycle regardless of add order."""
     plant = Plant("rev")
     # Add the downstream splitter first, then the tank, then the upstream mixer.
-    plant.add_unit(SplitterUnit(name="split", network=asm1,
+    plant.add_unit(SplitterUnit(name="split", model=asm1,
                                 output_port_flows={"recycle": 1000.0},
                                 remainder_port="out"))
-    plant.add_unit(CSTRUnit(name="tank", network=asm1, volume=1000.0,
+    plant.add_unit(CSTRUnit(name="tank", model=asm1, volume=1000.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "recycle"],
-                             network=asm1))
+                             model=asm1))
     plant.connect("mix", "tank")
     plant.connect("tank", "split")
     plant.connect("split.recycle", "mix.recycle")   # a cycle (any add order)
@@ -106,9 +106,9 @@ def test_check_ok_on_built_plant(asm1):
 
 def test_check_flags_unfed_input_port(asm1):
     plant = Plant("broken")
-    plant.add_unit(CSTRUnit(name="t1", network=asm1, volume=1000.0,
+    plant.add_unit(CSTRUnit(name="t1", model=asm1, volume=1000.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
-    plant.add_unit(CSTRUnit(name="t2", network=asm1, volume=1000.0,
+    plant.add_unit(CSTRUnit(name="t2", model=asm1, volume=1000.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     plant.connect("t1", "t2")          # t1.inlet is never fed
     chk = plant.check()

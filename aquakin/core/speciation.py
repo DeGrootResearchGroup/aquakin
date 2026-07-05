@@ -1,6 +1,6 @@
-"""Build a state-derived pH field from a network speciation declaration.
+"""Build a state-derived pH field from a model speciation declaration.
 
-A network may declare a ``speciation:`` block that maps state species onto the
+A model may declare a ``speciation:`` block that maps state species onto the
 acid/base totals consumed by :func:`aquakin.core.ph_solver.solve_ph`. This
 module turns that (already-validated, plain-data) declaration into a *derived
 condition function*
@@ -14,7 +14,7 @@ expressions exactly as if it had been supplied externally — except it now
 tracks the instantaneous state and is differentiable through ``solve_ph``.
 
 This module lives in ``core`` and has no Pydantic dependency: it consumes plain
-dicts/floats and the network's ``species_index``.
+dicts/floats and the model's ``species_index``.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import jax.numpy as jnp
 from aquakin.core.ph_solver import solve_ph
 
 # Total acid/base systems understood by the pH solver, in solver-argument terms.
-# Single source of truth: the Pydantic schema (schema/network_spec.py) imports
+# Single source of truth: the Pydantic schema (schema/model_spec.py) imports
 # this so the load-time validator and the runtime builder agree on the valid
 # total keys.
 VALID_TOTAL_KEYS = (
@@ -89,7 +89,7 @@ def build_ph_derived_fn(
         The derived-condition function, the list of field names it produces
         (``[field]``, plus the ionic-strength field when
         ``ionic_strength_field`` is set), and the set of condition fields it
-        reads (so the network can require them).
+        reads (so the model can require them).
     """
     field = config.get("field", "pH")
     temp_field = config["temperature_field"]

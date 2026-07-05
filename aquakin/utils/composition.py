@@ -1,4 +1,4 @@
-"""Per-species composition tables (COD / N / P content) for the shipped networks.
+"""Per-species composition tables (COD / N / P content) for the shipped models.
 
 A *composition table* maps each species to its content of a conserved quantity
 per unit of the species' own measure -- ``{"COD": 1.0}`` for an organic (1 g COD
@@ -9,11 +9,11 @@ conservation check dots against the stoichiometry
 (:meth:`aquakin.plant.Plant.mass_balance`) dots against concentrations.
 
 The tables here are *shipped* so the engineer never hand-authors them: they read
-each network's own composition parameters (``iN_BM`` / ``iN_SF`` / ``iP_*`` /
+each model's own composition parameters (``iN_BM`` / ``iN_SF`` / ``iP_*`` /
 ``N_bac`` ...), so a calibrated N- or P-fraction flows straight through. They are
 pure content *ratios* in the species' native measure; :func:`canonical_content`
 folds in the unit conversion (kg COD -> g COD, kmol N -> g N) so a balance can
-sum inventories across networks of different units (the ASM water line in
+sum inventories across models of different units (the ASM water line in
 g/m³, the ADM digester in kg/m³ and kmol/m³) on one canonical g basis.
 """
 
@@ -26,7 +26,7 @@ import numpy as np
 from aquakin.core.hints import did_you_mean
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 # species name -> {component -> content per unit of the species' own measure}
 Composition = dict[str, dict[str, float]]
@@ -36,11 +36,11 @@ Composition = dict[str, dict[str, float]]
 _ICOD_NO3 = -32.0 / 7.0  # = -4.571428...
 
 
-def _p(net: "CompiledNetwork", name: str, default: float = 0.0, params=None) -> float:
-    """A network parameter value by name, or ``default`` if it has no such
+def _p(net: "CompiledModel", name: str, default: float = 0.0, params=None) -> float:
+    """A model parameter value by name, or ``default`` if it has no such
     parameter (so one table serves a family with different parameter sets).
 
-    ``params`` (a parameter vector) overrides the network defaults -- so a
+    ``params`` (a parameter vector) overrides the model defaults -- so a
     composition tracks the *calibrated / run* fractions (e.g. a BSM2 i_XB) rather
     than the YAML defaults."""
     if name in net.param_index:
@@ -59,9 +59,9 @@ _NITRATE = {"SNO", "SNO3", "SNOX"}  # COD = iCOD_NO3, N = 1
 
 
 def _asm_composition(
-    net: "CompiledNetwork", electron_acceptor_cod: bool = True, params=None
+    net: "CompiledModel", electron_acceptor_cod: bool = True, params=None
 ) -> Composition:
-    """COD / N / P content for an ASM-family network, from its own composition
+    """COD / N / P content for an ASM-family model, from its own composition
     parameters. Mirrors the Gujer-matrix continuity convention: organic COD
     carriers carry ``COD = 1``, oxygen ``COD = -1``, nitrate the NH4-referenced
     electron COD, and N / P from the model's ``i*`` fractions.
@@ -113,7 +113,7 @@ def _asm_composition(
             c = {"COD": -1.0}
         elif sp in _NITRATE and not (sp == "SNO" and "SNO3" in net.species):
             # ``SNO`` means nitrate in the ASM1 family but NITRIC OXIDE in a
-            # two-step network (which names nitrate ``SNO3``); defer the latter
+            # two-step model (which names nitrate ``SNO3``); defer the latter
             # to the dedicated nitric-oxide case below.
             c = {"COD": icod_no3, "N": 1.0}
         elif sp == "SNO2":
@@ -172,7 +172,7 @@ _ADM1_COD = {
 _ADM1_BIOMASS = {"X_su", "X_aa", "X_fa", "X_c4", "X_pro", "X_ac", "X_h2"}
 
 
-def _adm1_composition(net: "CompiledNetwork", params=None) -> Composition:
+def _adm1_composition(net: "CompiledModel", params=None) -> Composition:
     """COD / N content for ADM1 (BSM2 form). N (kmol N / m³ for ``S_IN``, else
     the model's ``N_*`` fractions in kmol N / kg COD) is converted to the
     canonical g basis later; here it is in the species' native measure. ADM1
@@ -214,7 +214,7 @@ _BUILDERS = {
     "adm1": _adm1_composition,
 }
 
-# Conversion of one unit of a network's content *ratio* into canonical grams of
+# Conversion of one unit of a model's content *ratio* into canonical grams of
 # the component -- i.e. the gram value of the ratio's numerator unit. It is a
 # property of the model's content convention, not of the per-species
 # concentration unit: the currency in the species' concentration (g COD, kg COD)
@@ -229,14 +229,14 @@ _ASM_CONTENT_FACTOR = {"COD": 1.0, "N": 1.0, "P": 1.0}
 
 
 def composition_table(
-    network: "CompiledNetwork", *, electron_acceptor_cod: bool = True, params=None
+    model: "CompiledModel", *, electron_acceptor_cod: bool = True, params=None
 ) -> Composition:
-    """The shipped COD / N / P composition table for a network.
+    """The shipped COD / N / P composition table for a model.
 
     Parameters
     ----------
-    network : CompiledNetwork
-        A shipped ASM-family network (``asm1`` / ``asm1_ammonia_limitation`` /
+    model : CompiledModel
+        A shipped ASM-family model (``asm1`` / ``asm1_ammonia_limitation`` /
         ``asm2d`` / ``asm2d_tud`` / ``asm3`` / ``asm3_biop``) or ``adm1``.
     electron_acceptor_cod : bool, optional
         ASM family only. If ``True`` (default) nitrate / N₂ carry their
@@ -261,24 +261,24 @@ def composition_table(
     Raises
     ------
     KeyError
-        If there is no shipped table for ``network.name`` (author one by passing
+        If there is no shipped table for ``model.name`` (author one by passing
         an explicit composition to the :mod:`aquakin.utils.balance` /
         :meth:`Plant.mass_balance` functions).
     """
-    builder = _BUILDERS.get(network.name)
+    builder = _BUILDERS.get(model.name)
     if builder is None:
-        suffix = did_you_mean(network.name, list(_BUILDERS))
+        suffix = did_you_mean(model.name, list(_BUILDERS))
         raise KeyError(
-            f"No shipped composition table for network '{network.name}'. "
+            f"No shipped composition table for model '{model.name}'. "
             f"Tables: {sorted(_BUILDERS)}.{suffix}"
         )
     if builder is _asm_composition:
-        return _asm_composition(network, electron_acceptor_cod, params)
-    return builder(network, params)
+        return _asm_composition(model, electron_acceptor_cod, params)
+    return builder(model, params)
 
 
 def canonical_content(
-    network: "CompiledNetwork",
+    model: "CompiledModel",
     component: str,
     composition: Optional[Composition] = None,
     *,
@@ -291,29 +291,29 @@ def canonical_content(
     grams of ``component`` (COD / N / P) per cubic metre of bulk per unit of the
     species' native concentration. Dotting it with a concentration vector ``C``
     gives that volume's areal content in canonical g/m³, so inventories and
-    fluxes are summable across networks whose species use different units (the
+    fluxes are summable across models whose species use different units (the
     ASM water line in g/m³, the ADM digester in kg/m³ and kmol/m³).
 
     Parameters
     ----------
-    network : CompiledNetwork
+    model : CompiledModel
     component : str
         ``"COD"``, ``"N"`` or ``"P"``.
     composition : dict, optional
         Override the shipped :func:`composition_table` (e.g. a hand-authored
-        table for an unshipped network).
+        table for an unshipped model).
     electron_acceptor_cod : bool, optional
         Passed to :func:`composition_table` when ``composition`` is not given
         (``False`` selects the lab-COD convention; see there).
     """
     comp = (
-        composition_table(network, electron_acceptor_cod=electron_acceptor_cod, params=params)
+        composition_table(model, electron_acceptor_cod=electron_acceptor_cod, params=params)
         if composition is None
         else composition
     )
-    factor = _CONTENT_FACTOR.get(network.name, _ASM_CONTENT_FACTOR).get(component, 1.0)
-    vec = np.zeros(network.n_species)
+    factor = _CONTENT_FACTOR.get(model.name, _ASM_CONTENT_FACTOR).get(component, 1.0)
+    vec = np.zeros(model.n_species)
     for sp, content in comp.items():
-        if sp in network.species_index and component in content:
-            vec[network.species_index[sp]] = content[component] * factor
+        if sp in model.species_index and component in content:
+            vec[model.species_index[sp]] = content[component] * factor
     return vec

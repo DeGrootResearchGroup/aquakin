@@ -24,12 +24,12 @@ from aquakin.plant.plant import Plant
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _do_controller(asm1, signal_name):
     return PIController(
-        name="do_ctrl", network=asm1, measured_species="SO", setpoint=2.0,
+        name="do_ctrl", model=asm1, measured_species="SO", setpoint=2.0,
         Kp=25.0, Ti=0.002, Tt=0.001, offset=120.0, out_min=0.0, out_max=360.0,
         signal_name=signal_name)
 
@@ -66,13 +66,13 @@ class _SignalConsumer:
 
 def test_required_and_published_signal_names(asm1):
     """The declarative hooks the validation reads."""
-    tank = CSTRUnit(name="tank", network=asm1, volume=1000.0,
+    tank = CSTRUnit(name="tank", model=asm1, volume=1000.0,
                     input_port_names=["in"], conditions={"T": 293.15},
                     aeration=Aeration(do_setpoint=2.0, controller="do"))
     assert tank.required_signals == ("_aer_do_kla",)
     assert _do_controller(asm1, "do_signal").signal_names == ("do_signal",)
     # An uncontrolled (open-loop or anoxic) tank requires nothing.
-    plain = CSTRUnit(name="t", network=asm1, volume=1.0, input_port_names=["in"],
+    plain = CSTRUnit(name="t", model=asm1, volume=1.0, input_port_names=["in"],
                      conditions={"T": 293.15}, aeration=Aeration(kla=240.0))
     assert plain.required_signals == ()
 
@@ -81,7 +81,7 @@ def test_closed_loop_aeration_auto_wires_controller(asm1):
     """A closed-loop-aeration tank gets its controller (and sensor tap) created
     by the plant, so the bus validates and the controller is referenceable."""
     p = Plant(name="auto")
-    p.add_unit(CSTRUnit(name="tank", network=asm1, volume=1000.0,
+    p.add_unit(CSTRUnit(name="tank", model=asm1, volume=1000.0,
                         input_port_names=["in"], conditions={"T": 293.15},
                         aeration=Aeration(do_setpoint=2.0, controller="do")))
     p._build_state_layout()                # auto-wires + validates; must not raise
@@ -114,7 +114,7 @@ def test_duplicate_published_signal_name_raises(asm1):
     p = Plant(name="dup")
     p.add_unit(_do_controller(asm1, "do_kla"))         # name 'do_ctrl'
     p.add_unit(PIController(
-        name="do_ctrl2", network=asm1, measured_species="SO", setpoint=2.0,
+        name="do_ctrl2", model=asm1, measured_species="SO", setpoint=2.0,
         Kp=25.0, Ti=0.002, Tt=0.001, offset=120.0, out_min=0.0, out_max=360.0,
         signal_name="do_kla"))                         # same signal name, other unit
     with pytest.raises(ValueError, match="published by both"):

@@ -1,29 +1,29 @@
 """Override a plant parameter by name.
 
-A single network has ``network.parameter_values({"O3_Br_direct.k1": 175.0})``,
-but a ``Plant`` concatenates the parameter vectors of all its kinetic networks
+A single model has ``model.parameter_values({"O3_Br_direct.k1": 175.0})``,
+but a ``Plant`` concatenates the parameter vectors of all its kinetic models
 into one flat vector. ``Plant.parameter_values`` gives that flat vector the same
-friendly by-name API, keyed by ``"<network>.<param>"`` -- so to bump one ASM1
+friendly by-name API, keyed by ``"<model>.<param>"`` -- so to bump one ASM1
 rate in BSM2 (ASM1 water line + ADM1 digester) you don't hunt the block offset
 and index by hand.
 
 This script builds the BSM2 plant, lists a few parameter names, overrides two
-rates from different networks in one call, and -- for code that differentiates
+rates from different models in one call, and -- for code that differentiates
 with respect to a parameter -- shows the companion ``parameter_index``.
 """
 
 import aquakin
-from aquakin.plant.bsm import build_bsm2, bsm2_asm1_network
+from aquakin.plant.bsm import build_bsm2, bsm2_asm1_model
 
 
 def main() -> None:
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     plant = build_bsm2(asm1, adm1)
 
     names = plant.parameter_names()
     print(f"The BSM2 plant has {len(names)} calibratable parameters, addressed "
-          "by '<network>.<param>':")
+          "by '<model>.<param>':")
     print("  ASM1 (water line): ", [n for n in names if n.startswith("asm1.")][:5])
     print("  ADM1 (digester):   ", [n for n in names if n.startswith("adm1.")][:5])
     print()

@@ -31,10 +31,10 @@ def test_operating_conditions_validates_required():
 
 
 def test_operating_conditions_works_in_reactor():
-    network = aquakin.load_network("ozone_bromate")
+    model = aquakin.load_model("ozone_bromate")
     reactor = aquakin.BatchReactor(
-        network, OperatingConditions(pH=7.5, T=293.15, OH_scavenging=5.0e4))
-    C0 = network.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
+        model, OperatingConditions(pH=7.5, T=293.15, OH_scavenging=5.0e4))
+    C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
     sol = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=jnp.array([0.0, 600.0]))
     assert jnp.all(jnp.isfinite(sol.C))
 
@@ -90,7 +90,7 @@ def test_with_adds_new_field():
 
 
 def test_with_on_default_conditions():
-    net = aquakin.load_network("asm1")
+    net = aquakin.load_model("asm1")
     cold = net.default_conditions().with_(T=283.15)
     assert float(cold.fields["T"][0]) == pytest.approx(283.15)
 

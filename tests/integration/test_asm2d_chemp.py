@@ -17,7 +17,7 @@ import aquakin
 
 @pytest.fixture(scope="module")
 def net():
-    return aquakin.load_network("asm2d_chemp")
+    return aquakin.load_model("asm2d_chemp")
 
 
 def test_inherits_asm2d_and_swaps_the_precipitation_model(net):
@@ -97,7 +97,7 @@ def test_ferric_precipitates_phosphate_conserving_P(net):
 def test_bounded_driver_is_differentiable(net):
     """The bounded supersaturation driver R = tanh(SI/(2v)*ln10) is smooth, so
     jax.grad of the precipitation driver w.r.t. the ferric dose is finite (the
-    reason a dynamic solve of this network is differentiable -- the power-law
+    reason a dynamic solve of this model is differentiable -- the power-law
     driver of the ultra-insoluble metal phosphate would not be)."""
     params = net.default_parameters()
     cond = aquakin.OperatingConditions(T=293.15, pH=7.0)

@@ -1,7 +1,7 @@
 """Disinfection unit operations: UV dose-response and chlorine CT / log-removal.
 
 Effluent-permit work needs disinfection sizing and a pathogen log-removal credit.
-The reaction *networks* ``uv_h2o2`` / ``ozone_bromate`` model the oxidation
+The reaction *models* ``uv_h2o2`` / ``ozone_bromate`` model the oxidation
 chemistry, but neither is a disinfection *unit op* that reduces a pathogen
 indicator in the flowsheet. This module adds two, plus the credit physics behind
 them:
@@ -45,7 +45,7 @@ import jax.numpy as jnp
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
-    from aquakin.core.network import CompiledNetwork
+    from aquakin.core.model import CompiledModel
 
 _EPS_Q = 1e-9  # guard 1/Q when the flow is ~zero
 _SECONDS_PER_DAY = 86400.0
@@ -149,7 +149,7 @@ class UVUnit:
     Parameters
     ----------
     name : str
-    network : CompiledNetwork
+    model : CompiledModel
     volume : float
         Reactor volume (m³); the exposure time is ``baffling_factor·V/Q``.
     intensity : float
@@ -171,7 +171,7 @@ class UVUnit:
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     volume: float
     intensity: float
     d10: float
@@ -221,9 +221,7 @@ class UVUnit:
         org_in = s_in.org if s_in.org is not None else self.inlet_density
         org_out = _apply_log_removal(org_in, self.log_inactivation(s_in.Q))
         return {
-            self.output_port: Stream(
-                Q=s_in.Q, C=s_in.C, network=self.network, T=s_in.T, org=org_out
-            )
+            self.output_port: Stream(Q=s_in.Q, C=s_in.C, model=self.model, T=s_in.T, org=org_out)
         }
 
     def flow_outputs(self, input_flows: dict, params, ctx=None) -> dict:
@@ -247,7 +245,7 @@ class ChlorineContactUnit:
     Parameters
     ----------
     name : str
-    network : CompiledNetwork
+    model : CompiledModel
     volume : float
         Contact-tank volume (m³).
     dose : float
@@ -256,7 +254,7 @@ class ChlorineContactUnit:
         CT (residual × T10) that earns one log of inactivation, in the same units
         as ``residual × time`` (from the regulatory CT tables for the organism /
         pH / temperature). **Time-unit trap:** ``T10 = baffling·V/Q`` is in the
-        plant's time unit (days for the BSM networks, whose rate constants are
+        plant's time unit (days for the BSM models, whose rate constants are
         ``1/d``), while the regulatory CT tables are in **mg·min/L**. Supply
         ``ct_per_log`` in the *plant* time unit -- e.g. for a days-based plant
         multiply a mg·min/L table value by ``1/1440`` (min→day) -- or both the CT
@@ -278,7 +276,7 @@ class ChlorineContactUnit:
     """
 
     name: str
-    network: "CompiledNetwork"
+    model: "CompiledModel"
     volume: float
     dose: float
     ct_per_log: float
@@ -329,9 +327,7 @@ class ChlorineContactUnit:
         org_in = s_in.org if s_in.org is not None else self.inlet_density
         org_out = _apply_log_removal(org_in, self.log_removal(residual, s_in.Q))
         return {
-            self.output_port: Stream(
-                Q=s_in.Q, C=s_in.C, network=self.network, T=s_in.T, org=org_out
-            )
+            self.output_port: Stream(Q=s_in.Q, C=s_in.C, model=self.model, T=s_in.T, org=org_out)
         }
 
     def flow_outputs(self, input_flows: dict, params, ctx=None) -> dict:

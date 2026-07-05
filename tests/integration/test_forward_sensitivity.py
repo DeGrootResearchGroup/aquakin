@@ -4,8 +4,8 @@
 with adaptive control over both, so the sensitivity is exact and finite without
 the ``dtmax`` cap that ordinary AD through a stiff solve needs. The fast tests
 here check exactness against a closed-form sensitivity and against ``jax.jacfwd``
-on small networks; the slow ``validation``-marked tests check the headline claim
-on a genuinely stiff network (finite where uncapped AD is non-finite) and that
+on small models; the slow ``validation``-marked tests check the headline claim
+on a genuinely stiff model (finite where uncapped AD is non-finite) and that
 the JVP flows through a state-derived-pH speciation solver.
 """
 
@@ -18,12 +18,12 @@ import aquakin
 
 # This module mixes three tiers (see the per-test markers):
 #   * fast gate     -- cheap correctness/equivalence checks on the toy decay
-#                      and small UV/H2O2 networks (analytic-decay exactness,
+#                      and small UV/H2O2 models (analytic-decay exactness,
 #                      the simultaneous-corrector vs dense-augmented Option-A/B
 #                      equivalence, finiteness/composition, accessors, errors);
 #   * ``slow``      -- the jacfwd-reference comparisons, which compile a second
 #                      reactor plus a reference Jacobian per test (~2-3 s each);
-#   * ``validation``-- the headline stiff-network claims (finite where uncapped
+#   * ``validation``-- the headline stiff-model claims (finite where uncapped
 #                      AD is non-finite; the JVP flowing through a state-derived
 #                      pH solver), tens of seconds each.
 # So a PR that breaks forward-sensitivity correctness fails in the fast gate,
@@ -33,13 +33,13 @@ import aquakin
 # --- Fast exactness / API tests -----------------------------------------
 
 
-def test_analytic_decay_sensitivity_exact(simple_network):
+def test_analytic_decay_sensitivity_exact(simple_model):
     # First-order decay A -> B: A(t) = A0 e^{-kt}, so dA/dk = -t A0 e^{-kt} and
     # dB/dk = +t A0 e^{-kt} in closed form.
     cond = aquakin.SpatialConditions.uniform(T=293.15)
-    reactor = aquakin.BatchReactor(simple_network, cond, rtol=1e-11, atol=1e-13)
+    reactor = aquakin.BatchReactor(simple_model, cond, rtol=1e-11, atol=1e-13)
     C0 = jnp.asarray([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     k = float(p[0])
     t_eval = jnp.linspace(0.0, 20.0, 11)
 
@@ -57,9 +57,9 @@ def test_analytic_decay_sensitivity_exact(simple_network):
 
 @pytest.mark.slow
 def test_matches_jacfwd_multi_param():
-    # On a small non-stiff network the augmented solve must reproduce jax.jacfwd
+    # On a small non-stiff model the augmented solve must reproduce jax.jacfwd
     # for several parameters at once.
-    net = aquakin.load_network("uv_h2o2")
+    net = aquakin.load_model("uv_h2o2")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -81,14 +81,14 @@ def test_matches_jacfwd_multi_param():
     assert float(jnp.max(jnp.abs(S - J))) < 1e-7
 
 
-def test_sensitivity_array_is_finite_and_composes(simple_network):
+def test_sensitivity_array_is_finite_and_composes(simple_model):
     # AD-correctness analogue: the returned S is a real, finite JAX array that
     # composes in further computation (the project requires every solve path to
     # produce finite derivatives).
     cond = aquakin.SpatialConditions.uniform(T=293.15)
-    reactor = aquakin.BatchReactor(simple_network, cond)
+    reactor = aquakin.BatchReactor(simple_model, cond)
     C0 = jnp.asarray([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     _, S = reactor.solve_sensitivity(
         C0, p, (0.0, 10.0), jnp.linspace(0.0, 10.0, 6), sens_params=["A_to_B.k"]
     )
@@ -100,11 +100,11 @@ def test_sensitivity_array_is_finite_and_composes(simple_network):
     assert jnp.all(jnp.isfinite(contracted))
 
 
-def test_int_indices_equivalent_to_names(simple_network):
+def test_int_indices_equivalent_to_names(simple_model):
     cond = aquakin.SpatialConditions.uniform(T=293.15)
-    reactor = aquakin.BatchReactor(simple_network, cond)
+    reactor = aquakin.BatchReactor(simple_model, cond)
     C0 = jnp.asarray([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     t_eval = jnp.linspace(0.0, 10.0, 6)
     _, S_name = reactor.solve_sensitivity(
         C0, p, (0.0, 10.0), t_eval, sens_params=["A_to_B.k"]
@@ -116,19 +116,19 @@ def test_int_indices_equivalent_to_names(simple_network):
 
 
 @pytest.mark.slow
-def test_biofilm_sensitivity_matches_jacfwd(simple_network):
+def test_biofilm_sensitivity_matches_jacfwd(simple_model):
     cond = aquakin.SpatialConditions.uniform(T=293.15)
     kw = dict(
         n_layers=4, thickness=8e-4, area_per_volume=50.0,
         diffusivity=1e-4, boundary_layer=1e-4, rtol=1e-9, atol=1e-11,
     )
-    n = simple_network.n_species
-    C0 = jnp.zeros((5, n)).at[0, simple_network.species_index["A"]].set(1.0)
-    p = simple_network.default_parameters()
+    n = simple_model.n_species
+    C0 = jnp.zeros((5, n)).at[0, simple_model.species_index["A"]].set(1.0)
+    p = simple_model.default_parameters()
     t_eval = jnp.linspace(0.0, 5.0, 6)
 
     ref = aquakin.BiofilmReactor(
-        simple_network, cond,
+        simple_model, cond,
         diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
         **kw,
     )
@@ -138,7 +138,7 @@ def test_biofilm_sensitivity_matches_jacfwd(simple_network):
 
     J = jax.jacfwd(bulkC)(p)[:, :, 0]
 
-    r = aquakin.BiofilmReactor(simple_network, cond, **kw)
+    r = aquakin.BiofilmReactor(simple_model, cond, **kw)
     sol, S = r.solve_sensitivity(
         C0, p, (0.0, 5.0), t_eval, sens_params=["A_to_B.k"]
     )
@@ -148,13 +148,13 @@ def test_biofilm_sensitivity_matches_jacfwd(simple_network):
 
 
 @pytest.mark.slow
-def test_pfr_sensitivity_matches_jacfwd(simple_network):
+def test_pfr_sensitivity_matches_jacfwd(simple_model):
     cond = aquakin.SpatialConditions.uniform(T=293.15)
     C0 = jnp.asarray([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
 
     ref = aquakin.PlugFlowReactor(
-        simple_network, cond, n_points=6, length=10.0, velocity=1.0,
+        simple_model, cond, n_points=6, length=10.0, velocity=1.0,
         rtol=1e-10, atol=1e-12,
     )
     # The PFR uses the default (reverse-mode) adjoint, so the reference Jacobian
@@ -169,7 +169,7 @@ def test_pfr_sensitivity_matches_jacfwd(simple_network):
 
 
 def test_free_function_and_accessors():
-    net = aquakin.load_network("uv_h2o2")
+    net = aquakin.load_model("uv_h2o2")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -190,13 +190,13 @@ def test_free_function_and_accessors():
     assert res.solution.C.shape == (6, net.n_species)
 
 
-def test_shared_factor_matches_dense_single_param(simple_network):
+def test_shared_factor_matches_dense_single_param(simple_model):
     # The simultaneous corrector solves the same Newton system as the dense
     # path, so shared_factor=True must reproduce shared_factor=False exactly.
     cond = aquakin.SpatialConditions.uniform(T=293.15)
-    reactor = aquakin.BatchReactor(simple_network, cond, rtol=1e-11, atol=1e-13)
+    reactor = aquakin.BatchReactor(simple_model, cond, rtol=1e-11, atol=1e-13)
     C0 = jnp.asarray([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     k = float(p[0])
     t_eval = jnp.linspace(0.0, 20.0, 11)
     _, S_dense = reactor.solve_sensitivity(
@@ -214,7 +214,7 @@ def test_shared_factor_matches_dense_single_param(simple_network):
 def test_shared_factor_matches_dense_multi_param():
     # Several parameters: the block-arrow forward substitution must match the
     # dense augmented solve to machine precision.
-    net = aquakin.load_network("uv_h2o2")
+    net = aquakin.load_model("uv_h2o2")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -268,11 +268,11 @@ def test_simultaneous_corrector_solver_matches_dense_lu():
     assert float(jnp.max(jnp.abs(xT - xT_ref))) < 1e-9
 
 
-def test_bad_sens_params_raise(simple_network):
+def test_bad_sens_params_raise(simple_model):
     cond = aquakin.SpatialConditions.uniform(T=293.15)
-    reactor = aquakin.BatchReactor(simple_network, cond)
+    reactor = aquakin.BatchReactor(simple_model, cond)
     C0 = jnp.asarray([1.0, 0.0])
-    p = simple_network.default_parameters()
+    p = simple_model.default_parameters()
     with pytest.raises(KeyError):
         reactor.solve_sensitivity(C0, p, (0.0, 5.0), sens_params=["nope.k"])
     with pytest.raises(ValueError):
@@ -281,17 +281,17 @@ def test_bad_sens_params_raise(simple_network):
         reactor.solve_sensitivity(C0, p, (0.0, 5.0), sens_params=[99])
 
 
-# --- Slow validation tests (stiff network; the headline claim) ----------
+# --- Slow validation tests (stiff model; the headline claim) ----------
 
 
 @pytest.mark.validation
 def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
-    # The canonical stiff sewer-biofilm network. Uncapped forward-mode AD through
+    # The canonical stiff sewer-biofilm model. Uncapped forward-mode AD through
     # the solve is non-finite (the failure the dtmax cap exists to avoid), yet the
     # augmented forward-sensitivity solve -- uncapped -- is finite and matches a
-    # tightly-capped jacfwd. This network also carries a positivity limiter, so
+    # tightly-capped jacfwd. This model also carries a positivity limiter, so
     # the limiter is part of f and the sensitivity sees it.
-    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -346,7 +346,7 @@ def test_shared_factor_biofilm_matches_dense():
     # built for (ndof = n_comp * n_species is large, so sharing the diagonal-block
     # factorization across the sensitivity columns is the point) -- it must
     # reproduce the dense augmented solve to machine precision.
-    net = aquakin.load_network("wats_sewer_khalil_paper_balanced")
+    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
     n = net.n_species
     soluble = jnp.asarray([not s.startswith("X") for s in net.species])
@@ -373,10 +373,10 @@ def test_shared_factor_biofilm_matches_dense():
 
 @pytest.mark.validation
 def test_state_derived_ph_jvp_flows_and_matches():
-    # The WATS sewer network derives pH from the instantaneous state through a
+    # The WATS sewer model derives pH from the instantaneous state through a
     # charge-balance speciation solver. The JVP must flow through that solver, so
     # the augmented sensitivity matches a capped jacfwd with no special-casing.
-    net = aquakin.load_network("wats_sewer")
+    net = aquakin.load_model("wats_sewer")
     assert net.derived_fields == ["pH"]
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()

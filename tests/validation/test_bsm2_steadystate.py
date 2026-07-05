@@ -3,12 +3,12 @@
 Runs ``build_bsm2`` with the published BSM2 constant influent and the BSM2
 (15 °C) ASM1 parameter set, and checks the activated-sludge reactor states and
 the digester against the reference open-loop steady state (``asm1init_bsm2.m``
-``XINIT`` and ``adm1init_bsm2.m`` ``DIGESTERINIT``). The whole multi-network
+``XINIT`` and ``adm1init_bsm2.m`` ``DIGESTERINIT``). The whole multi-model
 plant -- primary clarifier, 5 AS reactors, Takács secondary clarifier, thickener,
 ADM1 digester with the ASM1<->ADM1 interfaces, dewatering, and the reject-water
 recycle -- matches every key activated-sludge state to round-off (<1%) when run
 at the benchmark influent temperature (14.858 °C) with the 15 °C-referenced ASM1
-network, the same agreement the reference ring-test simulators reach.
+model, the same agreement the reference ring-test simulators reach.
 
 References
 ----------
@@ -25,7 +25,7 @@ from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     BSM2_CONSTANT_INFLUENT_T,
     build_bsm2,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
 )
@@ -43,14 +43,14 @@ REF_DIG = {"S_gas_ch4": 1.6535, "S_ac": 0.0893, "X_ac": 0.677, "S_IN": 0.0945}
 
 
 def _solve():
-    # Benchmark-faithful configuration: the 15 °C-referenced ASM1 network with the
+    # Benchmark-faithful configuration: the 15 °C-referenced ASM1 model with the
     # constant influent carrying the BSM2 temperature (14.858 °C), so the AS line
     # operates at the reference steady-state temperature and the rate corrections
     # are referenced correctly. (Running at the bare 15 °C reference instead
     # over-predicts nitrification by ~1.4 %.)
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed",
                        bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
 
@@ -80,7 +80,7 @@ def test_bsm2_activated_sludge_matches_reference():
 @pytest.mark.validation
 def test_bsm2_digester_matches_reference():
     plant, sol = _solve()
-    adm1 = plant.units["digester"].network
+    adm1 = plant.units["digester"].model
     d = plant.states_by_unit(sol.final_state)["digester"]
     for sp, rv in REF_DIG.items():
         mv = float(d[adm1.species_index[sp]])

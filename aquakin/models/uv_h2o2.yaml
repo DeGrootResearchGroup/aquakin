@@ -1,0 +1,99 @@
+model:
+  name: uv_h2o2
+  version: "1.0"
+  description: >
+    UV/H2O2 advanced oxidation process (AOP). At 254 nm, H2O2 photolysis
+    produces hydroxyl radicals which then attack a generic target
+    micropollutant. Background matrix scavenging consumes OH via a lumped
+    pseudo-first-order condition field, OH_scavenging (s^-1). The photolysis
+    rate constant `k_photo` is lumped: rate = k_photo * fluence_rate *
+    [H2O2], where fluence_rate is in user-chosen units and k_photo is the
+    matching effective constant (phi * epsilon * 2.303 * unit conversion).
+  references:
+    - "Glaze, W.H., Kang, J.W. & Chapin, D.H. (1987). Ozone Sci. Eng. 9, 335-352."
+    - "Crittenden, J.C. et al. (2012). MWH Water Treatment: Principles and Design (3rd ed.), Ch. 18."
+    - "Buxton, G.V. et al. (1988). J. Phys. Chem. Ref. Data 17(2), 513-886."
+
+species:
+  - name: H2O2
+    description: "Hydrogen peroxide"
+    units: mol/L
+    default_concentration: 1.0e-4
+  - name: OH
+    description: "Hydroxyl radical (transient, ~1e-12 M)"
+    units: mol/L
+    default_concentration: 0.0
+  - name: target
+    description: "Generic refractory micropollutant"
+    units: mol/L
+    default_concentration: 1.0e-7
+  - name: products
+    description: "Lumped OH-attack products / HO2 sink"
+    units: mol/L
+    default_concentration: 0.0
+
+conditions:
+  - name: fluence_rate
+    description: >
+      Effective 254 nm UV fluence rate at the cell. Units are user-defined;
+      k_photo must match. A value of 1.0 yields a representative
+      half-life of a few minutes at default constants.
+    default: 1.0
+  - name: OH_scavenging
+    description: >
+      Lumped pseudo-first-order OH consumption by background matrix
+      (carbonate + DOC + ...), units s^-1. Same field name as the
+      ozone_bromate model so workflows can compose.
+    default: 5.0e4
+
+reactions:
+  - name: H2O2_photolysis
+    description: "H2O2 + hv -> 2 OH (254 nm UV photolysis)."
+    reference: "Crittenden et al. (2012)"
+    rate: "k_photo * {fluence_rate} * [H2O2]"
+    parameters:
+      k_photo:
+        value: 1.0e-3
+        units: "(fluence_unit s)^-1"
+        bounds: [1.0e-5, 1.0e-1]
+    stoichiometry:
+      H2O2: -1
+      OH: +2
+
+  - name: OH_H2O2
+    description: "OH scavenging by hydrogen peroxide itself."
+    reference: "Buxton et al. (1988)"
+    rate: "k_OH_H2O2 * [OH] * [H2O2]"
+    parameters:
+      k_OH_H2O2:
+        value: 2.7e7
+        units: "M-1 s-1"
+        bounds: [1.0e6, 1.0e8]
+    stoichiometry:
+      OH: -1
+      H2O2: -1
+      products: +1
+
+  - name: OH_target
+    description: "OH oxidation of the target micropollutant."
+    reference: "Buxton et al. (1988)"
+    rate: "k_OH_target * [OH] * [target]"
+    parameters:
+      k_OH_target:
+        value: 5.0e9
+        units: "M-1 s-1"
+        bounds: [1.0e8, 1.0e10]
+    stoichiometry:
+      OH: -1
+      target: -1
+      products: +1
+
+  - name: OH_scavenging
+    description: >
+      Lumped pseudo-first-order OH consumption by background matrix (DOC,
+      carbonate, etc.). Sink only; products not tracked here.
+    reference: "von Gunten (2003)"
+    rate: "{OH_scavenging} * [OH]"
+    parameters: {}
+    stoichiometry:
+      OH: -1

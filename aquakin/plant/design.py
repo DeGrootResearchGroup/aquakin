@@ -16,9 +16,9 @@ age), the hydraulic retention time (HRT) and the food-to-microorganism ratio
   of ``Qw``, this is what lets the engineer iterate ``Qw`` to a target SRT (see
   ``examples/bsm1_target_srt.py``).
 
-The metrics are network-agnostic in mechanism but use the ASM1 TSS / BOD
+The metrics are model-agnostic in mechanism but use the ASM1 TSS / BOD
 aggregates (:mod:`aquakin.plant.metrics`), so they apply to the ASM activated-
-sludge networks.
+sludge models.
 """
 
 from __future__ import annotations
@@ -442,7 +442,7 @@ def sludge_metrics(
     """
     params_full = plant.default_parameters() if params is None else jnp.asarray(params)
     reactors = _reactor_units(plant, reactor_units)
-    network = plant.units[reactors[0]].network
+    model = plant.units[reactors[0]].model
     t = solution.t
 
     # ----- System solids inventory (g): reactors + secondary clarifier. -----
@@ -450,7 +450,7 @@ def sludge_metrics(
     reactor_solids = jnp.zeros_like(t)  # (n_t,) g
     for name in reactors:
         X = solution.unit_state(name)  # (n_t, n_species)
-        reactor_solids = reactor_solids + derived_TSS(X, network) * float(plant.units[name].volume)
+        reactor_solids = reactor_solids + derived_TSS(X, model) * float(plant.units[name].volume)
 
     clarifier_solids = jnp.zeros_like(t)
     for name, unit in plant.units.items():
@@ -474,8 +474,8 @@ def sludge_metrics(
     w_port = _pick_endpoint(plant, waste_port, _WASTE_CANDIDATES, "wastage")
     eff = plant.stream(solution, eff_port, params_full)
     waste = plant.stream(solution, w_port, params_full)
-    eff_solids_rate = eff.Q * derived_TSS(eff.C, network)  # (n_t,) g/d
-    waste_solids_rate = waste.Q * derived_TSS(waste.C, network)
+    eff_solids_rate = eff.Q * derived_TSS(eff.C, model)  # (n_t,) g/d
+    waste_solids_rate = waste.Q * derived_TSS(waste.C, model)
     loss_mean = _time_average(t, eff_solids_rate + waste_solids_rate)  # g/d
 
     SRT = inventory_mean / (loss_mean + 1e-12)  # days
@@ -489,7 +489,7 @@ def sludge_metrics(
     HRT = reactor_volume / (Q_mean + 1e-12)  # days
 
     load_fn = derived_BOD if substrate.upper() == "BOD" else derived_COD
-    bod_load_rate = inf_Q * load_fn(inf_C, network)  # (n_t,) g/d
+    bod_load_rate = inf_Q * load_fn(inf_C, model)  # (n_t,) g/d
     bod_load_mean = _time_average(t, bod_load_rate)  # g/d
     # F:M is the substrate load over the reactor (aeration-basin) solids mass.
     FM = bod_load_mean / (reactor_solids_mean + 1e-12)  # 1/d

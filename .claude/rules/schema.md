@@ -4,18 +4,18 @@ paths:
   - "**/*.yaml"
 ---
 
-# Rules — YAML network schema (`aquakin/schema/`, network `*.yaml`)
+# Rules — YAML model schema (`aquakin/schema/`, model `*.yaml`)
 
-The YAML network format and the Pydantic schema rules. Loaded automatically
-when editing the schema package or any `*.yaml` network file. For the catalog
-of what each shipped network is, see `docs/network_catalog.md`.
+The YAML model format and the Pydantic schema rules. Loaded automatically
+when editing the schema package or any `*.yaml` model file. For the catalog
+of what each shipped model is, see `docs/model_catalog.md`.
 
-## YAML Network Schema
+## YAML Model Schema
 
 ### Top-Level Structure
 
 ```yaml
-network:
+model:
   name: ozone_bromate
   version: "1.0"
   description: "..."
@@ -56,7 +56,7 @@ reactions:
 
 - `default_concentration` is a reference value for the species, not an
   experimental initial condition. Users override it at runtime.
-- `conditions` block declares all fields the network requires. The loader
+- `conditions` block declares all fields the model requires. The loader
   validates that any `SpatialConditions` object passed at runtime provides
   all declared fields. Each condition may carry an optional `units:` string
   (default `""`), advisory metadata used only by `check_units` (e.g. `pH: "-"`).
@@ -82,7 +82,7 @@ reactions:
   literature values; for a proper Bayesian MAP/posterior pair them with
   `loss="nll"` and a measurement `sigma` so the data term is a true negative
   log-likelihood and the prior curvature enters the Laplace covariance.
-  The shipped `asm1` and `adm1` networks **declare literature-grounded priors**
+  The shipped `asm1` and `adm1` models **declare literature-grounded priors**
   on every calibration parameter (the bounded, non-fraction targets), each a
   physical-space Gaussian **centred on the parameter's nominal** with relative
   `std` set to a literature coefficient of variation:
@@ -112,30 +112,30 @@ reactions:
   the rate constant is multiplied by `theta**(T - ref_T)` during rate
   evaluation, where `T` is read from the named condition field (default `"T"`).
   The parameter `value` is the value **at** `ref_T`, so the correction is unity
-  there — a network whose conditions sit at the reference temperature behaves
+  there — a model whose conditions sit at the reference temperature behaves
   exactly as if uncorrected (backward-compatible). `ref_T` is in the condition's
-  units (Kelvin for the ASM/ADM networks); a difference is used, so Kelvin and
+  units (Kelvin for the ASM/ADM models); a difference is used, so Kelvin and
   Celsius give the same `theta`. `theta` is the per-degree factor; from a
   parameter measured `p_hi` at `T_hi` and `p_lo` at `T_lo` it is
   `(p_hi/p_lo)**(1/(T_hi - T_lo))`. The correction is applied to **rate
-  constants only** — it is confined to `CompiledNetwork.rates` (which multiplies
+  constants only** — it is confined to `CompiledModel.rates` (which multiplies
   the corrected param indices by their factor before evaluating the rate
   callables); `compute_stoich` always uses the raw parameters, so stoichiometric
   (yield / composition) coefficients are never temperature-scaled. Stored as
-  `CompiledNetwork.temperature_corrections` (a list of
+  `CompiledModel.temperature_corrections` (a list of
   `(param_idx, ln_theta, ref_T, condition_field)`); AD-clean. `asm1` ships with
   the six BSM temperature-dependent rate constants corrected (`muH`, `muA`,
   `bH`, `bA`, `ka`, `kh`, `ref_T = 293.15 K`, slopes from the standard BSM
   15 °C/10 °C pairs in `asm1_bsm2.c`), so it slows correctly in the cold
   (nitrification — the most temperature-sensitive — drops to ~36% at 10 °C) while
   staying identical to the old behaviour at the default 20 °C.
-- Parameters can live at the network level (a single shared slot used by
+- Parameters can live at the model level (a single shared slot used by
   any reaction that references them by bare name) or inside a reaction's
-  `parameters:` block (namespaced as `<reaction>.<name>`). Network-level
+  `parameters:` block (namespaced as `<reaction>.<name>`). Model-level
   parameters and reaction-local parameters with the same name are
   rejected as shadowing.
 - Stoichiometric coefficients can be **numeric literals** or **string
-  expressions** in network-level / reaction-local parameters. String
+  expressions** in model-level / reaction-local parameters. String
   entries may use only constants, parameters, and arithmetic — no
   species, conditions, named expressions, or domain functions. Evaluated
   once per `solve()` call so yield / N-content / fraction parameters can
@@ -146,19 +146,19 @@ reactions:
   organic (1 g COD per g COD), `{COD: -1.0}` for dissolved oxygen (an electron
   acceptor), `{COD: -2.86, N: 1.0}` for nitrate-N, `{COD: 2.0, S: 1.0}` for
   sulfide. Quantity names are free-form (`COD` / `N` / `P` / `S` / `Fe` / `charge`
-  / …). It is **first-class conservation metadata**: a network carries its own
+  / …). It is **first-class conservation metadata**: a model carries its own
   table instead of one hand-maintained in a test, read back via
-  `network.composition()` and dotted against the stoichiometry by
-  `network.check_conservation()` / `network.check_nitrogen()` (the
+  `model.composition()` and dotted against the stoichiometry by
+  `model.check_conservation()` / `model.check_nitrogen()` (the
   advisory/opt-in conservation analogue of `check_units`; it never runs at load
-  and never raises on a violation — it returns the list). A network that declares
+  and never raises on a violation — it returns the list). A model that declares
   no `composition:` falls back to the shipped role-based table
   (`aquakin.composition_table`, the ASM/ADM families) so the check API is uniform;
-  a network with neither raises a clear error. Values are literal floats (a
+  a model with neither raises a clear error. Values are literal floats (a
   yield-dependent *derived* coefficient stays in the stoichiometry, not here).
   The WATS sewer family (`wats_sewer`, `wats_sewer_extended` and everything the
   `_make_khalil_*` generators splice from them) ships `composition:` per species,
-  so the conservation suite checks each network against its own declared table
+  so the conservation suite checks each model against its own declared table
   (`tests/integration/test_mass_balance.py`); inherited through `extends:` (a
   derived species keeps the base's composition unless it overrides it).
 - A stoichiometric coefficient written **`auto`** (or **`?`**) is left unknown and
@@ -166,13 +166,13 @@ reactions:
   conservation-determined coefficient *cannot be written wrong* — the failure mode
   behind almost every stoichiometry bug here (a hand-typed electron-acceptor
   demand, an elemental-S reduction donor, a product split). The quantities to
-  solve from are the reaction's **`conserved_for: [COD, N, …]`** (or a network-level
+  solve from are the reaction's **`conserved_for: [COD, N, …]`** (or a model-level
   `conserved_for:` default); for each, the stoichiometry-weighted species
   `composition` content must sum to zero, giving one small linear system
   (`core/stoich_resolve.py`, `numpy.linalg.lstsq`) solved before the stoichiometry
   is read. Example: `stoichiometry: {SS: "-1/Y_H", X_BH: 1, SO: auto}` with
   `conserved_for: [COD]` solves the O₂ demand from the COD balance. The compiled
-  network then conserves by construction (`check_conservation` is a tautology on
+  model then conserves by construction (`check_conservation` is a tautology on
   that reaction — the point). Clear errors for an `auto` with no `conserved_for`,
   an under-determined system (an auto species carrying no content in the conserved
   quantities), or inconsistent balances. Two cases (issue #291 Phases 2–3):
@@ -192,15 +192,15 @@ reactions:
     consistency would be parameter-dependent and is rejected.
 
   `auto` requires declared `composition:` (the resolver does not use the role-based
-  fallback). Shipped networks keep their published rounded literals; `auto` is
+  fallback). Shipped models keep their published rounded literals; `auto` is
   opt-in.
-- Optional `expressions:` block at the network level lets you give a name
+- Optional `expressions:` block at the model level lets you give a name
   to an intermediate rate expression and reference it from a reaction's
   `rate:` or from another expression. References are inlined into the
   consuming AST at compile time. Cycles among expressions are rejected.
-- Optional **`network.extends:`** declares a base network to **inherit** instead
+- Optional **`model.extends:`** declares a base model to **inherit** instead
   of copying — a variant that differs by one parameter and a rate is a few lines,
-  and a fix to the base reaches every variant. The base is a shipped network
+  and a fix to the base reaches every variant. The base is a shipped model
   *name* (or a path relative to the extending file if it contains `/` or ends
   `.yaml`); the derived mapping is **merged onto the (recursively resolved) base
   before Pydantic validation** (so the merged whole is schema-checked).
@@ -213,13 +213,13 @@ reactions:
   lists replace). A `remove:` block (`{reactions: [...], parameters: [...],
   species/conditions/expressions: [...]}`) then drops entries; removing a
   not-present name, a cyclic `extends`, an unknown base, or declaring `extends`
-  in both `network:` and top-level all error clearly. New parameters append after
+  in both `model:` and top-level all error clearly. New parameters append after
   the base's, so the flat parameter *vector order* differs from a hand-written
   full copy (the name→value mapping and the compiled stoichiometry/rates are
   identical). A YAML with no `extends` is byte-for-byte unaffected. Shipped users:
   `asm1_ammonia_limitation` (= `asm1` + the `KNH_H` nutrient switch, ~30 lines vs
   a 200-line copy) and the Khalil `*_halforder` sewer variants (the generator
-  [`networks/_make_khalil_variants.py`](aquakin/networks/_make_khalil_variants.py)
+  [`models/_make_khalil_variants.py`](aquakin/models/_make_khalil_variants.py)
   emits the pure-override `halforder` variant as a thin `extends` file; the
   variants whose stoichiometry is *computed from the base* stay full copies).
 - Optional `speciation:` block declares a **state-derived pH** (see below).
@@ -228,9 +228,9 @@ reactions:
   preventing negative states and the stiffness they cause. Reproduces the
   reference WATS S-function scheme
   `R_lim = max(R,0) + min(R,0) * C / max(C, threshold)`. Applied inside
-  `CompiledNetwork.dCdt` to the reaction term only (reactors add transport
+  `CompiledModel.dCdt` to the reaction term only (reactors add transport
   afterwards), so every reactor benefits. Opt-in; off when the block is
-  absent. Stored as `CompiledNetwork.positivity_threshold`.
+  absent. Stored as `CompiledModel.positivity_threshold`.
 - Optional `clip_negative_states: true` (default `false`) clamps the
   concentration vector to `>= 0` *when evaluating the reaction rates* (and any
   state-derived condition such as pH), leaving the raw state for the reactor's
@@ -245,7 +245,7 @@ reactions:
   on the raw state keeps the linear washout self-correcting and the inter-unit
   mass balance exact. Enabled on `asm1` (needed once the BSM1 settler recycles
   concentrated solids into a small reactor). Stored as
-  `CompiledNetwork.clip_negative_states`.
+  `CompiledModel.clip_negative_states`.
 - YAML is loaded with `yaml.safe_load()` throughout. Species names that
   could be misread as non-string types (e.g. `NO`) must be quoted in YAML.
 

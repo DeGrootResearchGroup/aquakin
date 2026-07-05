@@ -7,7 +7,7 @@ single-cell stiff-chemistry sub-problem over every CFD cell using
 
 The intended usage from a C++ ``fvOptions``-style plugin is::
 
-    reactor = aquakin.CFDReactor(network)
+    reactor = aquakin.CFDReactor(model)
     # ... per timestep ...
     C_new = reactor.step(
         C,            # (n_cells, n_species)   float64 NumPy
@@ -19,7 +19,7 @@ The intended usage from a C++ ``fvOptions``-style plugin is::
 The NumPy boundary keeps the pybind11 binding straightforward — the C++
 side hands over contiguous ``double[]`` buffers and receives the same.
 
-Columns of ``C`` follow ``network.species`` order; the C++ side is
+Columns of ``C`` follow ``model.species`` order; the C++ side is
 responsible for assembling that array from its OpenFOAM volScalarFields in
 the right order. The reactor's own
 :attr:`CFDReactor.species_field_order` attribute exposes this contract.
@@ -34,7 +34,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from aquakin.core.network import CompiledNetwork
+from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
     DifferentiationConfig,
     IntegratorConfig,
@@ -54,13 +54,13 @@ class CFDReactor:
 
     Parameters
     ----------
-    network : CompiledNetwork
-        Compiled reaction network.
+    model : CompiledModel
+        Compiled reaction model.
     rtol : float, optional
         Relative tolerance for the per-cell ODE solver.
     atol : float or jnp.ndarray, optional
         Absolute tolerance. Scalar or shape ``(n_species,)``. Defaults to
-        ``None`` -> a per-component noise floor scaled off the network reference
+        ``None`` -> a per-component noise floor scaled off the model reference
         concentrations (see :class:`BatchReactor` for the per-species rationale).
     integrator : IntegratorConfig, optional
         Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
@@ -91,15 +91,15 @@ class CFDReactor:
 
     Attributes
     ----------
-    network : CompiledNetwork
+    model : CompiledModel
     species_field_order : list[str]
         Convenience: the order in which species columns of ``C`` must be
-        supplied. Equal to ``network.species``.
+        supplied. Equal to ``model.species``.
     """
 
     def __init__(
         self,
-        network: CompiledNetwork,
+        model: CompiledModel,
         *,
         rtol: float = 1e-6,
         atol=None,
@@ -109,8 +109,8 @@ class CFDReactor:
     ) -> None:
         if on_nan not in ("raise", "ignore"):
             raise ValueError(f"on_nan must be 'raise' or 'ignore', got {on_nan!r}")
-        init_solver_settings(self, network, rtol=rtol, integrator=integrator, diff=diff)
-        self.atol = resolve_state_atol(network, atol)
+        init_solver_settings(self, model, rtol=rtol, integrator=integrator, diff=diff)
+        self.atol = resolve_state_atol(model, atol)
         self.on_nan = on_nan
         # Cache jit-compiled vmapped step keyed on n_cells.
         self._jit_cache: dict[int, callable] = {}
@@ -118,12 +118,12 @@ class CFDReactor:
     @property
     def species_field_order(self) -> list[str]:
         """Order in which species columns of ``C`` must be supplied."""
-        return list(self.network.species)
+        return list(self.model.species)
 
     @property
     def condition_field_names(self) -> list[str]:
         """Names of condition fields expected in ``conditions`` dict."""
-        return list(self.network.conditions_required)
+        return list(self.model.conditions_required)
 
     def step(
         self,
@@ -150,7 +150,7 @@ class CFDReactor:
             Must be positive.
         params : np.ndarray, optional
             Flat parameter vector, shape ``(n_params,)``. Defaults to
-            ``network.default_parameters()``.
+            ``model.default_parameters()``.
         return_mask : bool, optional
             If ``True``, also return a per-cell boolean mask of finite
             results, so the caller can detect non-finite cells even under
@@ -169,22 +169,22 @@ class CFDReactor:
         if C_np.ndim != 2:
             raise ValueError(f"C must be 2-D (n_cells, n_species); got shape {C_np.shape}")
         n_cells, n_species_in = C_np.shape
-        if n_species_in != self.network.n_species:
+        if n_species_in != self.model.n_species:
             raise ValueError(
-                f"C has {n_species_in} species columns but network has "
-                f"{self.network.n_species} species ({self.network.species})."
+                f"C has {n_species_in} species columns but model has "
+                f"{self.model.n_species} species ({self.model.species})."
             )
         if n_cells < 1:
             raise ValueError(f"C must have at least 1 row; got {n_cells}")
 
-        missing = set(self.network.conditions_required) - set(conditions)
+        missing = set(self.model.conditions_required) - set(conditions)
         if missing:
             raise ValueError(
                 f"conditions is missing required field(s): {sorted(missing)}. "
                 f"Provided: {sorted(conditions)}"
             )
         cond_jax: dict[str, jnp.ndarray] = {}
-        for name in self.network.conditions_required:
+        for name in self.model.conditions_required:
             arr = np.asarray(conditions[name], dtype=np.float64)
             if arr.shape != (n_cells,):
                 raise ValueError(
@@ -197,12 +197,12 @@ class CFDReactor:
             raise ValueError(f"dt must be positive; got {dt_f}")
 
         if params is None:
-            params_jax = self.network.default_parameters()
+            params_jax = self.model.default_parameters()
         else:
             params_np = np.asarray(params, dtype=np.float64)
-            if params_np.shape != (self.network.n_params,):
+            if params_np.shape != (self.model.n_params,):
                 raise ValueError(
-                    f"params has shape {params_np.shape}, expected ({self.network.n_params},)."
+                    f"params has shape {params_np.shape}, expected ({self.model.n_params},)."
                 )
             params_jax = jnp.asarray(params_np)
 
@@ -232,7 +232,7 @@ class CFDReactor:
 
     def _build_step(self):
         """Construct the jit-compiled vmapped per-cell step."""
-        network = self.network
+        model = self.model
         rtol = self.rtol
         atol = self.atol
         adjoint = self.adjoint
@@ -248,7 +248,7 @@ class CFDReactor:
             # loc_idx=0.
             cond_arrays = {name: v[None] for name, v in cond_cell.items()}
             sol = solve_chemistry(
-                network,
+                model,
                 C_cell,
                 params,
                 cond_fn=lambda t: cond_arrays,

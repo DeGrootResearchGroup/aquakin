@@ -64,12 +64,12 @@ import jax.numpy as jnp
 _SCALE_FLOOR = 1e-12
 
 
-def resolve_sens_indices(network, sens_params) -> jnp.ndarray:
+def resolve_sens_indices(model, sens_params) -> jnp.ndarray:
     """Resolve ``sens_params`` (names or indices) to a flat integer index array.
 
     Parameters
     ----------
-    network : CompiledNetwork
+    model : CompiledModel
         Provides ``param_index`` / ``parameters`` for name resolution.
     sens_params : sequence of str or int
         Free-parameter names (namespaced) or integer positions in ``params``.
@@ -84,14 +84,14 @@ def resolve_sens_indices(network, sens_params) -> jnp.ndarray:
     idx: list[int] = []
     for item in sens_params:
         if isinstance(item, str):
-            if item not in network.param_index:
-                raise KeyError(f"Unknown parameter '{item}'. Available: {network.parameters}")
-            idx.append(network.param_index[item])
+            if item not in model.param_index:
+                raise KeyError(f"Unknown parameter '{item}'. Available: {model.parameters}")
+            idx.append(model.param_index[item])
         else:
             i = int(item)
-            if not (0 <= i < network.n_params):
+            if not (0 <= i < model.n_params):
                 raise IndexError(
-                    f"Sensitivity parameter index {i} out of range [0, {network.n_params})."
+                    f"Sensitivity parameter index {i} out of range [0, {model.n_params})."
                 )
             idx.append(i)
     return jnp.asarray(idx, dtype=jnp.int64 if jax.config.x64_enabled else jnp.int32)
@@ -449,20 +449,20 @@ class ForwardSensitivityResult:
         (measurable) sensitivity, aligned with ``solution.C``.
     sens_params : list[str]
         The sensitivity-parameter names (resolved to namespaced names).
-    network : object
-        The compiled network (for the name accessors).
+    model : object
+        The compiled model (for the name accessors).
     """
 
     solution: Any
     S: jnp.ndarray
     sens_params: list[str]
-    network: Any
+    model: Any
 
     def S_named(self, species: str) -> jnp.ndarray:
         """Sensitivity of one species over time, shape ``(n_t, n_sens_params)``."""
-        if species not in self.network.species_index:
-            raise KeyError(f"Unknown species '{species}'. Available: {self.network.species}")
-        return self.S[:, self.network.species_index[species], :]
+        if species not in self.model.species_index:
+            raise KeyError(f"Unknown species '{species}'. Available: {self.model.species}")
+        return self.S[:, self.model.species_index[species], :]
 
     def dC_dparam(self, species: str, param: str) -> jnp.ndarray:
         """Sensitivity of one species w.r.t. one parameter, shape ``(n_t,)``."""
@@ -507,8 +507,8 @@ def forward_sensitivity(
     -------
     ForwardSensitivityResult
     """
-    network = reactor.network
-    free_idx = resolve_sens_indices(network, sens_params)
-    names = [network.parameters[int(i)] for i in free_idx]
+    model = reactor.model
+    free_idx = resolve_sens_indices(model, sens_params)
+    names = [model.parameters[int(i)] for i in free_idx]
     sol, S = reactor.solve_sensitivity(C0, params, sens_params=sens_params, **solve_kwargs)
-    return ForwardSensitivityResult(solution=sol, S=S, sens_params=names, network=network)
+    return ForwardSensitivityResult(solution=sol, S=S, sens_params=names, model=model)

@@ -2,7 +2,7 @@
 
 A flow setpoint -- a recycle or wastage pump flow, a clarifier underflow, a
 primary-sludge fraction -- is consumed in **two** plant code paths: the recycle
-flow-network resolution (:meth:`Plant._resolve_flows` -> ``unit.flow_outputs``)
+flow-model resolution (:meth:`Plant._resolve_flows` -> ``unit.flow_outputs``)
 and the material-stream sweep (:meth:`Plant._sweep_outputs` ->
 ``unit.compute_outputs``). Reading a raw ``float`` in each place duplicates the
 value and risks the two desyncing. :class:`FlowSetpoint` is the single source of
@@ -78,7 +78,7 @@ class FlowParameterized:
         """
         if params_unit is None:
             return jnp.zeros((0,))
-        net = getattr(self, "network", None)
+        net = getattr(self, "model", None)
         n_kinetic = net.n_params if net is not None else 0
         return params_unit[n_kinetic:]
 

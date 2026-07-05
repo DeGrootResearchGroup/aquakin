@@ -15,7 +15,7 @@ import aquakin
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def test_derived_BOD_matches_closed_form(asm1):

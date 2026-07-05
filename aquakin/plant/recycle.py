@@ -9,7 +9,7 @@ RHS evaluation, plus the per-solve caches that let it skip redundant work:
   and solve ``(I - A)x = b`` for the back-edge flows.
 - **Concentrations** (:meth:`_resolve_recycle_concentrations`) -- one forward
   output sweep at fixed flows is an affine map ``c -> M c + d``; probe ``M``/``d``
-  and solve ``(I - M)c = d`` (species-decoupled, grouped by network, with an
+  and solve ``(I - M)c = d`` (species-decoupled, grouped by model, with an
   optional decoupled temperature channel), falling back to an adaptive
   Gauss-Seidel refine (:meth:`_adaptive_recycle_refine`) for a genuinely
   non-affine in-cycle unit.
@@ -81,7 +81,7 @@ class RecycleResolver:
                 else self.plant._recycle_seeds[key]
             )
             q = resolved_flows[key]
-            seeded[key] = Stream(Q=q, C=iv.C, network=iv.network, T=iv.T)
+            seeded[key] = Stream(Q=q, C=iv.C, model=iv.model, T=iv.T)
         return seeded
 
     def _resolve_recycle_concentrations(
@@ -111,9 +111,9 @@ class RecycleResolver:
         map), so one probe per edge yields its whole column across all species,
         and the solve is ``n_species`` independent ``n_edge × n_edge`` systems --
         ``n_recycle_edges + 1`` cheap forward passes total, like the flow probe.
-        Edges of different networks do not couple (the translator that would
+        Edges of different models do not couple (the translator that would
         couple them is broken by the digester state), so the solve is grouped by
-        network. Temperature, when carried, is one more decoupled scalar channel.
+        model. Temperature, when carried, is one more decoupled scalar channel.
 
         Returned as the recycle seed for :meth:`_sweep_outputs`. For the linear
         case (every shipped topology) it **is** the exact fixed point, so the
@@ -200,12 +200,12 @@ class RecycleResolver:
                 forward_full, keys, seed_Q, solved_C, solved_T, resolve_T
             )
             return {
-                k: Stream(Q=solved_Q[k], C=solved_C[k], network=seed_net[k], T=solved_T[k])
+                k: Stream(Q=solved_Q[k], C=solved_C[k], model=seed_net[k], T=solved_T[k])
                 for k in keys
             }
 
         return {
-            k: Stream(Q=resolved_flows[k], C=solved_C[k], network=seed_net[k], T=solved_T[k])
+            k: Stream(Q=resolved_flows[k], C=solved_C[k], model=seed_net[k], T=solved_T[k])
             for k in keys
         }
 
@@ -337,8 +337,8 @@ class RecycleResolver:
         """Shared setup for the recycle affine solve.
 
         Returns ``(seed_net, group_lists, forward, zeroC, zeroT, forward_full)``:
-        the per-edge seed networks, the recycle edges grouped by network (no
-        cross-network coupling), the one-pass ``forward(c, T) -> (C_out, T_out)``
+        the per-edge seed models, the recycle edges grouped by model (no
+        cross-model coupling), the one-pass ``forward(c, T) -> (C_out, T_out)``
         sweep closure (Q held at ``resolved_flows`` -- the affine probe), the zero
         seeds, and ``forward_full(q, c, T) -> (C, T, Q)`` (Q varying -- the
         adaptive solver's true fixed-point map). Used by the live solve and
@@ -353,7 +353,7 @@ class RecycleResolver:
                 if conn.initial_value is not None
                 else self.plant._recycle_seeds[key]
             )
-            seed_net[key] = iv.network
+            seed_net[key] = iv.model
         nsp = {k: seed_net[k].n_species for k in keys}
         # Temperature propagates only when an influent carries it (the mixer
         # T-gate needs every inlet to have T); otherwise the whole plant is
@@ -369,7 +369,7 @@ class RecycleResolver:
 
         def forward(c_by_key, T_by_key):
             seeded = {
-                k: Stream(Q=resolved_flows[k], C=c_by_key[k], network=seed_net[k], T=T_by_key[k])
+                k: Stream(Q=resolved_flows[k], C=c_by_key[k], model=seed_net[k], T=T_by_key[k])
                 for k in keys
             }
             out = self.plant._sweep_outputs(
@@ -386,7 +386,7 @@ class RecycleResolver:
         # the true (Q, C, T) fixed point. Returns (C, T, Q) read back on the edges.
         def forward_full(q_by_key, c_by_key, T_by_key):
             seeded = {
-                k: Stream(Q=q_by_key[k], C=c_by_key[k], network=seed_net[k], T=T_by_key[k])
+                k: Stream(Q=q_by_key[k], C=c_by_key[k], model=seed_net[k], T=T_by_key[k])
                 for k in keys
             }
             out = self.plant._sweep_outputs(

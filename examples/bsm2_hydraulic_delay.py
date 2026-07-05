@@ -19,7 +19,7 @@ from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
     build_bsm2,
     HydraulicDelay,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
 )
@@ -32,12 +32,12 @@ def _pulse_influent(asm1):
     C = bsm2_constant_influent(asm1).C[0]
     t = jnp.array([0.0, 0.50, 0.5001, 0.60, 0.6001, 2.0])
     Q = jnp.array([1.0, 1.0, 2.0, 2.0, 1.0, 1.0]) * BSM2_Q_REF
-    return InfluentSeries(t=t, Q=Q, C=jnp.tile(C, (t.shape[0], 1)), network=asm1)
+    return InfluentSeries(t=t, Q=Q, C=jnp.tile(C, (t.shape[0], 1)), model=asm1)
 
 
 def main() -> None:
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
 
     # A long-ish lag so the delay is visible against the 0.1-day pulse.

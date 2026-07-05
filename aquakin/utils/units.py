@@ -13,10 +13,10 @@ Scope is the **rate-expression layer only**. Stoichiometry consistency is a
 cross-currency (a yield is ``g_COD/g_COD``, ``i_N`` is ``g_N/g_COD``) -- and is
 handled by per-currency conservation in :mod:`aquakin.utils.balance`, not here.
 
-The check is **opt-in and advisory**: :meth:`CompiledNetwork.check_units` never
+The check is **opt-in and advisory**: :meth:`CompiledModel.check_units` never
 fails a load. A unit string that is blank or that this module cannot parse is
 treated as *unknown* and skipped, so the uneven parameter annotations in the
-shipped networks never raise a false alarm. Only an actual inconsistency between
+shipped models never raise a false alarm. Only an actual inconsistency between
 two *known* units is reported.
 
 This is distinct from :mod:`aquakin.core.units`, which only *formats* unit
@@ -395,7 +395,7 @@ class _Ctx:
 
 def _param_dim(ctx: _Ctx, local_name: str) -> Optional[Dimension]:
     """Resolve a (local) parameter name to its declared dimension, trying the
-    reaction-local namespaced key first, then the network-level key."""
+    reaction-local namespaced key first, then the model-level key."""
     for key in (f"{ctx.reaction}.{local_name}", local_name):
         if key in ctx.param_dim:
             return ctx.param_dim[key]
@@ -573,13 +573,13 @@ def check_rate_units(
     return ctx.warnings
 
 
-def check_network_units(network, *, check_root: bool = True) -> list:
-    """Run :func:`check_rate_units` over every reaction in a compiled network.
+def check_model_units(model, *, check_root: bool = True) -> list:
+    """Run :func:`check_rate_units` over every reaction in a compiled model.
 
     Parameters
     ----------
-    network : CompiledNetwork
-        The compiled network to check.
+    model : CompiledModel
+        The compiled model to check.
     check_root : bool, default True
         Whether to also assert each rate resolves to ``currency/volume/time``.
 
@@ -591,12 +591,12 @@ def check_network_units(network, *, check_root: bool = True) -> list:
         *declared, parseable* units (it is not a proof of correctness, since
         unknown units are skipped).
     """
-    species_dim = {name: parse_units(u) for name, u in network.species_units.items()}
-    param_dim = {name: parse_units(u) for name, u in network.parameter_units.items()}
-    condition_dim = {name: parse_units(u) for name, u in network.condition_units.items()}
+    species_dim = {name: parse_units(u) for name, u in model.species_units.items()}
+    param_dim = {name: parse_units(u) for name, u in model.parameter_units.items()}
+    condition_dim = {name: parse_units(u) for name, u in model.condition_units.items()}
     warnings: list = []
     inv_time: dict = {}
-    for name, ast in zip(network.reaction_names, network.rate_asts):
+    for name, ast in zip(model.reaction_names, model.rate_asts):
         warnings.extend(
             check_rate_units(
                 ast,
@@ -617,9 +617,9 @@ def check_network_units(network, *, check_root: bool = True) -> list:
 
     # Cross-reaction time-unit consistency. Every rate constant drives dC/dt
     # against the *same* integration time, so all rates must share one
-    # inverse-time unit. A network mixing, say, 1/d and 1/s rates is malformed --
+    # inverse-time unit. A model mixing, say, 1/d and 1/s rates is malformed --
     # its RHS sums terms on inconsistent time bases -- yet each such rate passes
-    # the per-rate root check on its own. Flag the disagreement once, at network
+    # the per-rate root check on its own. Flag the disagreement once, at model
     # scope, so an author sees it. (Runs whenever the roots are determinable,
     # independent of ``check_root``.)
     distinct = set(inv_time.values())
@@ -629,5 +629,5 @@ def check_network_units(network, *, check_root: bool = True) -> list:
             "dimensionally consistent: "
             + ", ".join(f"{r} -> 1/{u}" for r, u in sorted(inv_time.items()))
         )
-        warnings.append(UnitWarning("(network)", "time unit", detail))
+        warnings.append(UnitWarning("(model)", "time unit", detail))
     return warnings

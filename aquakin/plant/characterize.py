@@ -132,7 +132,7 @@ def fractionate(
     Every argument may be a scalar or a same-shaped array (the array path is how
     a measurement time series is fractionated per row). Returns a mapping of ASM1
     state name -> value (same scalar/array shape), suitable for
-    ``network.influent(...)`` or assembling an :class:`InfluentSeries`. See the
+    ``model.influent(...)`` or assembling an :class:`InfluentSeries`. See the
     module docstring for the scheme.
 
     Parameters
@@ -244,7 +244,7 @@ def _broadcast_like(value, ref):
 
 
 def characterize_influent(
-    network,
+    model,
     *,
     flow,
     total_cod,
@@ -262,12 +262,12 @@ def characterize_influent(
 
     Fractionates the measured aggregates into ASM1 states (see :func:`fractionate`
     and the module docstring) and returns a constant-in-time influent at flow
-    ``flow``. The network must declare the ASM1 states.
+    ``flow``. The model must declare the ASM1 states.
 
     Parameters
     ----------
-    network : CompiledNetwork
-        An ASM1 (or ASM1-state-compatible) network.
+    model : CompiledModel
+        An ASM1 (or ASM1-state-compatible) model.
     flow : float
         Volumetric flow (m3/d).
     total_cod, tkn, ammonia, nox, alkalinity, filtered_cod,
@@ -282,11 +282,11 @@ def characterize_influent(
 
     Examples
     --------
-    >>> net = aquakin.load_network("asm1")
+    >>> net = aquakin.load_model("asm1")
     >>> inf = characterize_influent(net, flow=24000.0, total_cod=420.0,
     ...                             tkn=34.4, ammonia=24.0, alkalinity=330.0)
     """
-    _require_asm1_states(network)
+    _require_asm1_states(model)
     states = fractionate(
         total_cod=total_cod,
         tkn=tkn,
@@ -298,16 +298,14 @@ def characterize_influent(
         soluble_inert_cod=soluble_inert_cod,
         fractions=fractions,
     )
-    return network.influent(
-        {k: float(v) for k, v in states.items()}, Q=float(flow), T=T, base="zero"
-    )
+    return model.influent({k: float(v) for k, v in states.items()}, Q=float(flow), T=T, base="zero")
 
 
-def _require_asm1_states(network) -> None:
-    missing = [s for s in ASM1_STATES if s not in network.species_index]
+def _require_asm1_states(model) -> None:
+    missing = [s for s in ASM1_STATES if s not in model.species_index]
     if missing:
         raise ValueError(
-            f"characterize_influent needs the ASM1 state variables; network "
-            f"'{network.name}' is missing {missing}. The fractionation targets "
+            f"characterize_influent needs the ASM1 state variables; model "
+            f"'{model.name}' is missing {missing}. The fractionation targets "
             f"the ASM1 13-state vector."
         )

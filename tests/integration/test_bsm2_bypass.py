@@ -13,7 +13,7 @@ from aquakin.plant.bsm.bsm2 import (
     BSM2_BYPASS_Q,
     build_bsm2,
     InfluentBypass,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
 )
@@ -27,12 +27,12 @@ from aquakin.plant.streams import Stream
 
 @pytest.fixture(scope="module")
 def asm1():
-    return bsm2_asm1_network()
+    return bsm2_asm1_model()
 
 
 def _threshold_splitter(asm1, limit=60000.0):
     return SplitterUnit(
-        name="bypass", network=asm1, threshold=limit,
+        name="bypass", model=asm1, threshold=limit,
         threshold_port="bypass", remainder_port="to_plant")
 
 
@@ -56,7 +56,7 @@ def test_threshold_split_preserves_concentration(asm1):
     """A passive split preserves concentration on both outlets."""
     split = _threshold_splitter(asm1)
     C = asm1.default_concentrations()
-    s_in = {"in": Stream(Q=jnp.asarray(90000.0), C=C, network=asm1)}
+    s_in = {"in": Stream(Q=jnp.asarray(90000.0), C=C, model=asm1)}
     outs = split.compute_outputs(0.0, jnp.zeros((0,)), s_in, None)
     assert jnp.allclose(outs["bypass"].C, C)
     assert jnp.allclose(outs["to_plant"].C, C)
@@ -66,9 +66,9 @@ def test_threshold_split_preserves_concentration(asm1):
 
 def test_threshold_mode_validation(asm1):
     with pytest.raises(ValueError, match="threshold requires"):
-        SplitterUnit(name="b", network=asm1, threshold=1.0, threshold_port="x")
+        SplitterUnit(name="b", model=asm1, threshold=1.0, threshold_port="x")
     with pytest.raises(ValueError, match="exactly one"):
-        SplitterUnit(name="b", network=asm1, threshold=1.0, threshold_port="x",
+        SplitterUnit(name="b", model=asm1, threshold=1.0, threshold_port="x",
                      remainder_port="y", output_port_ratios={"x": 1.0})
 
 
@@ -76,7 +76,7 @@ def test_threshold_mode_validation(asm1):
 
 @pytest.fixture(scope="module")
 def adm1():
-    return aquakin.load_network("adm1")
+    return aquakin.load_model("adm1")
 
 
 @pytest.fixture(scope="module")
@@ -86,7 +86,7 @@ def bypass_run(asm1, adm1):
     C = bsm2_constant_influent(asm1).C[0]
     Q_in = 1.5 * BSM2_BYPASS_Q  # 90000: half again the bypass limit
     influent = InfluentSeries(t=jnp.array([0.0, 1e4]), Q=jnp.full((2,), Q_in),
-                              C=jnp.tile(C, (2, 1)), network=asm1)
+                              C=jnp.tile(C, (2, 1)), model=asm1)
     plant = build_bsm2(asm1, adm1, bypass=InfluentBypass())
     plant.add_influent("feed", influent)
     sol = plant.solve((0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 11),
@@ -126,8 +126,8 @@ def test_bypass_degrades_effluent(bypass_run):
     plant, sol, params, _ = bypass_run
     eff = plant.stream(sol, plant.effluent_endpoint, params)
     treated = plant.stream(sol, "settler.overflow", params)
-    cod_eff = float(derived_COD(eff.C[-1], plant.units["tank1"].network))
-    cod_treated = float(derived_COD(treated.C[-1], plant.units["tank1"].network))
+    cod_eff = float(derived_COD(eff.C[-1], plant.units["tank1"].model))
+    cod_treated = float(derived_COD(treated.C[-1], plant.units["tank1"].model))
     assert cod_eff > cod_treated
 
 
@@ -138,6 +138,6 @@ def test_evaluate_autodetects_bypass_effluent(bypass_run):
     ev = evaluate_bsm2(plant, sol, params)
     eff = plant.stream(sol, plant.effluent_endpoint, params)
     from aquakin.plant.metrics import effluent_averages
-    expected = effluent_averages(eff.t, eff.C, eff.Q, plant.units["tank1"].network)
+    expected = effluent_averages(eff.t, eff.C, eff.Q, plant.units["tank1"].model)
     assert ev.effluent["COD"] == pytest.approx(expected["COD"], rel=1e-6)
     assert jnp.isfinite(ev.eqi)

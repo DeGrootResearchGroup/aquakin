@@ -40,9 +40,9 @@ REFERENCE_SS = {
 
 
 def _solve_unit():
-    net = aquakin.load_network("adm1")
+    net = aquakin.load_model("adm1")
     si = net.species_index
-    unit = ADM1DigesterUnit(name="digester", network=net, volume=V_LIQ,
+    unit = ADM1DigesterUnit(name="digester", model=net, volume=V_LIQ,
                             conditions={"T": 308.15})
     params = net.default_parameters()
 
@@ -52,7 +52,7 @@ def _solve_unit():
     u = np.zeros(net.n_species)
     for name, val in INFLUENT.items():
         u[si[name]] = val
-    s_in = Stream(Q=jnp.asarray(Q_FEED), C=jnp.asarray(u), network=net)
+    s_in = Stream(Q=jnp.asarray(Q_FEED), C=jnp.asarray(u), model=net)
 
     def rhs(t, C, args):
         return unit.rhs(t, C, {"inlet": s_in}, params)
@@ -89,9 +89,9 @@ def test_digester_unit_reproduces_bsm2_steady_state():
 @pytest.mark.validation
 def test_digester_effluent_flow_equals_feed():
     """The liquid effluent leaves at the feed flow (constant liquid volume)."""
-    net = aquakin.load_network("adm1")
-    unit = ADM1DigesterUnit(name="d", network=net, volume=V_LIQ)
-    s_in = Stream(Q=jnp.asarray(Q_FEED), C=net.default_concentrations(), network=net)
+    net = aquakin.load_model("adm1")
+    unit = ADM1DigesterUnit(name="d", model=net, volume=V_LIQ)
+    s_in = Stream(Q=jnp.asarray(Q_FEED), C=net.default_concentrations(), model=net)
     out = unit.compute_outputs(jnp.asarray(0.0), net.default_concentrations(),
                                {"inlet": s_in}, net.default_parameters())
     assert float(out["effluent"].Q) == pytest.approx(Q_FEED, rel=1e-9)
@@ -101,13 +101,13 @@ def test_digester_effluent_temperature_is_flow_weighted():
     """The effluent temperature is the flow-weighted inlet temperature (a heat
     balance, like every other multi-inlet unit) -- not the first inlet's T, which
     would ignore a second feed at a different temperature."""
-    net = aquakin.load_network("adm1")
+    net = aquakin.load_model("adm1")
     C = net.default_concentrations()
-    unit = ADM1DigesterUnit(name="d", network=net, volume=V_LIQ,
+    unit = ADM1DigesterUnit(name="d", model=net, volume=V_LIQ,
                             input_port_names=["feed", "reject"])
     inputs = {
-        "feed":   Stream(Q=jnp.asarray(100.0), C=C, network=net, T=jnp.asarray(308.15)),
-        "reject": Stream(Q=jnp.asarray(50.0),  C=C, network=net, T=jnp.asarray(290.15)),
+        "feed":   Stream(Q=jnp.asarray(100.0), C=C, model=net, T=jnp.asarray(308.15)),
+        "reject": Stream(Q=jnp.asarray(50.0),  C=C, model=net, T=jnp.asarray(290.15)),
     }
     out = unit.compute_outputs(jnp.asarray(0.0), C, inputs, net.default_parameters())
     expected = (100.0 * 308.15 + 50.0 * 290.15) / 150.0
@@ -116,12 +116,12 @@ def test_digester_effluent_temperature_is_flow_weighted():
     # agnostic: the effluent carries the temperature-bearing feed's T. (This is
     # what lets temperature propagate around a loop seeded with an agnostic
     # zero-flow recycle stream -- see streams.mixed_temperature.)
-    inputs["reject"] = Stream(Q=jnp.asarray(50.0), C=C, network=net, T=None)
+    inputs["reject"] = Stream(Q=jnp.asarray(50.0), C=C, model=net, T=None)
     out_partial = unit.compute_outputs(jnp.asarray(0.0), C, inputs,
                                        net.default_parameters())
     assert float(out_partial["effluent"].T) == pytest.approx(308.15, rel=1e-9)
     # Only when NO inlet carries a temperature is the effluent agnostic.
-    inputs["feed"] = Stream(Q=jnp.asarray(100.0), C=C, network=net, T=None)
+    inputs["feed"] = Stream(Q=jnp.asarray(100.0), C=C, model=net, T=None)
     out_none = unit.compute_outputs(jnp.asarray(0.0), C, inputs,
                                     net.default_parameters())
     assert out_none["effluent"].T is None
@@ -133,18 +133,18 @@ def test_gas_transfer_scales_with_digester_volume():
     proportionally (the old code hard-coded the BSM2 3400/300 ratio). With the
     headspace empty (no back-pressure, no outflow), dS_gas/dt is pure transfer-in
     and scales linearly with the liquid volume."""
-    adm1 = aquakin.load_network("adm1")
+    adm1 = aquakin.load_model("adm1")
     # A liquid state above the Henry equilibrium so transfer is into the
     # headspace; gas states zeroed so p_gas = 0 (no back-pressure / outflow).
     C = adm1.default_concentrations()
     for sp in ("S_gas_h2", "S_gas_ch4", "S_gas_co2"):
         C = C.at[adm1.species_index[sp]].set(0.0)
     C = C.at[adm1.species_index["S_ch4"]].set(0.06)
-    inp = {"inlet": Stream(Q=jnp.asarray(0.0), C=C, network=adm1)}  # no dilution
+    inp = {"inlet": Stream(Q=jnp.asarray(0.0), C=C, model=adm1)}  # no dilution
     gi = adm1.species_index["S_gas_ch4"]
 
     def gas_rate(volume):
-        d = ADM1DigesterUnit(name="d", network=adm1, volume=volume,
+        d = ADM1DigesterUnit(name="d", model=adm1, volume=volume,
                              conditions={"T": 308.15})
         return float(d.rhs(0.0, C, inp, adm1.default_parameters())[gi])
 
@@ -157,7 +157,7 @@ def test_biogas_outflow_clipped_when_subatmospheric():
     """The overpressure outflow k_P*max(0, P_gas - P_atm) holds the valve shut
     (no gas drawn back) if the headspace is transiently below atmospheric, while
     being identical to the un-clipped form at the operating point (P_gas > P_atm)."""
-    adm1 = aquakin.load_network("adm1")
+    adm1 = aquakin.load_model("adm1")
     p = adm1.default_parameters()
     conds = {f: jnp.asarray([v]) for f, v in adm1._condition_defaults.items()}
     ri = adm1.reaction_names.index("gas_outflow_ch4")

@@ -1,0 +1,488 @@
+model:
+  name: adm1
+  version: "0.1"
+  description: >
+    Anaerobic Digestion Model No. 1 (ADM1), the IWA reference model for
+    anaerobic digestion (Batstone et al. 2002), in the BSM2 implementation
+    form (Rosen & Jeppsson 2006). 29 state variables (26 liquid-phase + 3 gas
+    headspace) and 25 processes. Biochemistry (19 processes): disintegration of
+    composite particulates, hydrolysis of carbohydrates / proteins / lipids,
+    uptake of sugars / amino acids / LCFA / valerate / butyrate / propionate /
+    acetate / hydrogen (with pH, hydrogen, free-ammonia and inorganic-nitrogen
+    inhibition), and first-order decay of the seven biomass groups. Gas
+    headspace (6 processes): kLa gas-liquid transfer of H2 / CH4 / CO2 into the
+    headspace pools (S_gas_h2 / S_gas_ch4 / S_gas_co2) and the overpressure-
+    driven gas outflow that produces biogas -- so dissolved H2/CH4/CO2 are
+    stripped and the biogas composition is an output.
+
+    Stoichiometric coefficients on inorganic carbon (S_IC) and nitrogen (S_IN)
+    are written as SYMBOLIC EXPRESSIONS in the carbon/nitrogen content and
+    yield/fraction parameters (the ADM1 elemental balances), so calibrating a
+    yield or composition propagates through the balances automatically.
+
+    pH is STATE-DERIVED through the differentiable charge-balance solver (the
+    ``speciation:`` block): it is solved from the instantaneous acid/base
+    speciation each RHS call over the four VFAs, inorganic carbon and nitrogen,
+    with the strong-ion difference carried by the explicit S_cat / S_an states.
+    The free-ammonia and dissolved-CO2 fractions therefore track the state
+    automatically.
+
+    STATUS -- complete ADM1 in the BSM2 form: liquid phase + gas headspace +
+    state-derived pH with explicit strong-ion (S_cat / S_an) states. Parameter
+    values and initial concentrations are the BSM2 digester defaults (35 C).
+    VALIDATED against the published BSM2 open-loop steady-state digester
+    composition: run as the benchmark CSTR (3400 m3 liquid, 300 m3 headspace,
+    fed at ~178 m3/d, HRT ~19 d) the model reproduces the reference steady
+    state to ~1-3% on the substrates, biomass and biogas, and its
+    charge-balance pH (~7.27) matches the reference electroneutrality relation
+    (see tests/validation/test_adm1_bsm2_steadystate.py). The gas outflow uses
+    the overpressure form ``k_P*max(0, P_gas - P_atm)`` -- the lower ``max(0, .)``
+    clip holds the valve shut rather than drawing gas back in if the headspace
+    ever goes (transiently) sub-atmospheric. At the digester operating point
+    P_gas > P_atm throughout, so the clip is inactive and biogas only leaves.
+  references:
+    - "Batstone, D.J. et al. (2002). Anaerobic Digestion Model No. 1 (ADM1). IWA Sci. Tech. Rep. No. 13."
+    - "Rosen, C. & Jeppsson, U. (2006). Aspects on ADM1 Implementation within the BSM2 Framework. Tech. Report, Lund University."
+
+species:
+  # --- soluble (kg COD/m3 unless noted) ---
+  - {name: S_su,  description: "Monosaccharides",            units: "kgCOD/m3", default_concentration: 0.0124}
+  - {name: S_aa,  description: "Amino acids",                units: "kgCOD/m3", default_concentration: 0.0055}
+  - {name: S_fa,  description: "Long-chain fatty acids",     units: "kgCOD/m3", default_concentration: 0.1074}
+  - {name: S_va,  description: "Total valerate",             units: "kgCOD/m3", default_concentration: 0.0123}
+  - {name: S_bu,  description: "Total butyrate",             units: "kgCOD/m3", default_concentration: 0.0140}
+  - {name: S_pro, description: "Total propionate",           units: "kgCOD/m3", default_concentration: 0.0176}
+  - {name: S_ac,  description: "Total acetate",              units: "kgCOD/m3", default_concentration: 0.0893}
+  - {name: S_h2,  description: "Hydrogen",                   units: "kgCOD/m3", default_concentration: 2.5e-7}
+  - {name: S_ch4, description: "Methane",                    units: "kgCOD/m3", default_concentration: 0.0555}
+  - {name: S_IC,  description: "Inorganic carbon",           units: "kmolC/m3", default_concentration: 0.0951}
+  - {name: S_IN,  description: "Inorganic nitrogen",         units: "kmolN/m3", default_concentration: 0.0945}
+  - {name: S_I,   description: "Soluble inerts",             units: "kgCOD/m3", default_concentration: 0.1309}
+  # --- strong ions (conservative; no reaction terms) ---
+  # S_cat and S_an are the lumped strong cations / anions (Na+, K+, Cl-, ...)
+  # that set the strong-ion difference in the charge balance. They carry no
+  # reaction stoichiometry, so they are conservative in a batch and only change
+  # by transport (dilution / advection) in a CSTR/PFR. The BSM2 digester feed
+  # carries no strong cations and a small chloride anion (0.0052 kmol/m3); the
+  # near-neutral pH (7.27) comes from the ammonium/bicarbonate buffer generated
+  # by protein degradation, not from a strong-ion excess.
+  - {name: S_cat, description: "Strong cations",             units: "kmol/m3",  default_concentration: 0.0}
+  - {name: S_an,  description: "Strong anions",              units: "kmol/m3",  default_concentration: 0.0052}
+  # --- particulate ---
+  - {name: X_c,   description: "Composite particulates",     units: "kgCOD/m3", default_concentration: 0.1079}
+  - {name: X_ch,  description: "Carbohydrates",              units: "kgCOD/m3", default_concentration: 0.0205}
+  - {name: X_pr,  description: "Proteins",                   units: "kgCOD/m3", default_concentration: 0.0842}
+  - {name: X_li,  description: "Lipids",                     units: "kgCOD/m3", default_concentration: 0.0436}
+  - {name: X_su,  description: "Sugar degraders",            units: "kgCOD/m3", default_concentration: 0.3122}
+  - {name: X_aa,  description: "Amino-acid degraders",       units: "kgCOD/m3", default_concentration: 0.9317}
+  - {name: X_fa,  description: "LCFA degraders",             units: "kgCOD/m3", default_concentration: 0.3384}
+  - {name: X_c4,  description: "Valerate/butyrate degraders",units: "kgCOD/m3", default_concentration: 0.3258}
+  - {name: X_pro, description: "Propionate degraders",       units: "kgCOD/m3", default_concentration: 0.1011}
+  - {name: X_ac,  description: "Acetate degraders",          units: "kgCOD/m3", default_concentration: 0.6772}
+  - {name: X_h2,  description: "Hydrogen degraders",         units: "kgCOD/m3", default_concentration: 0.2848}
+  - {name: X_I,   description: "Particulate inerts",         units: "kgCOD/m3", default_concentration: 17.2162}
+  # --- gas headspace ---
+  - {name: S_gas_h2,  description: "Hydrogen in headspace",  units: "kgCOD/m3", default_concentration: 1.1e-5}
+  - {name: S_gas_ch4, description: "Methane in headspace",   units: "kgCOD/m3", default_concentration: 1.6535}
+  - {name: S_gas_co2, description: "Carbon dioxide in headspace", units: "kmolC/m3", default_concentration: 0.0135}
+
+conditions:
+  - name: T
+    description: "Operating temperature (K). Default ADM1 parameters are at 35 C."
+    units: "K"
+    default: 308.15
+
+# --- State-derived pH via the differentiable charge-balance solver.
+#     pH is fixed by the instantaneous acid/base speciation through
+#     electroneutrality, so it is solved from the state each RHS call and
+#     exposed as the {pH} condition. The four ADM1 volatile fatty acids
+#     (acetate/propionate/butyrate/valerate) are monoprotic weak acids; the
+#     inorganic carbon and nitrogen totals are already molar (kmol/m3 = mol/L),
+#     so their molar_mass is 1. The VFAs are stored as COD, converted to molar
+#     by their COD equivalents (64/112/160/208 gCOD/mol). The net strong-ion
+#     charge comes from the explicit S_cat / S_an states (already molar,
+#     molar_mass 1). With pH state-derived, the free-ammonia and dissolved-CO2
+#     fractions (pH_switch terms in the rate expressions) now track the
+#     instantaneous state automatically.
+speciation:
+  field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  n_iter: 40
+  totals:
+    carbonate:  {species: S_IC,  molar_mass: 1.0}     # kmolC/m3 -> mol/L (already molar)
+    ammonia:    {species: S_IN,  molar_mass: 1.0}     # kmolN/m3 -> mol/L (already molar)
+    acetate:    {species: S_ac,  molar_mass: 64.0}    # gCOD/L -> mol/L (acetate, 64 gCOD/mol)
+    propionate: {species: S_pro, molar_mass: 112.0}   # propionate, 112 gCOD/mol
+    butyrate:   {species: S_bu,  molar_mass: 160.0}   # butyrate, 160 gCOD/mol
+    valerate:   {species: S_va,  molar_mass: 208.0}   # valerate, 208 gCOD/mol
+  strong_cations:
+    - {species: S_cat, molar_mass: 1.0, charge: 1}    # kmol/m3 -> eq/L (already molar, +1)
+  strong_anions:
+    - {species: S_an,  molar_mass: 1.0, charge: 1}    # kmol/m3 -> eq/L (already molar, -1)
+
+parameters:
+  # --- hydrolysis / disintegration (1/d) ---
+  k_dis:     {value: 0.5,  units: "1/d",  bounds: [0.1, 2.0],   transform: positive_log, prior: {mean: 0.5, std: 0.25}}
+  # Hydrolysis at the standard 10 1/d. The reference BSM2 init parameter block
+  # lists 0.3, but that is inconsistent with the reference's OWN steady state:
+  # the digester reduces an influent of ~16 gCOD/L protein to ~0.08 gCOD/L
+  # (99.5% conversion) at HRT ~19 d, which first-order hydrolysis reaches only
+  # at k_hyd ~ 10. At 0.3 the model does not reproduce the published steady
+  # state; at 10 it matches it to ~1-3% (see the BSM2 steady-state validation).
+  k_hyd_ch:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log, prior: {mean: 10, std: 5}}
+  k_hyd_pr:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log, prior: {mean: 10, std: 5}}
+  k_hyd_li:  {value: 10.0, units: "1/d",  bounds: [0.1, 30.0],  transform: positive_log, prior: {mean: 10, std: 5}}
+  # --- uptake max rates (1/d) and half-saturations (kgCOD/m3) ---
+  k_m_su:    {value: 30.0, units: "1/d",  bounds: [5.0, 70.0],  transform: positive_log, prior: {mean: 30, std: 15}}
+  K_S_su:    {value: 0.5,  units: "kgCOD/m3", bounds: [0.05, 5.0], transform: positive_log, prior: {mean: 0.5, std: 0.25}}
+  k_m_aa:    {value: 50.0, units: "1/d",  bounds: [10.0, 100.0],transform: positive_log, prior: {mean: 50, std: 25}}
+  K_S_aa:    {value: 0.3,  units: "kgCOD/m3", bounds: [0.03, 3.0], transform: positive_log, prior: {mean: 0.3, std: 0.15}}
+  k_m_fa:    {value: 6.0,  units: "1/d",  bounds: [1.0, 20.0],  transform: positive_log, prior: {mean: 6, std: 3}}
+  K_S_fa:    {value: 0.4,  units: "kgCOD/m3", bounds: [0.04, 4.0], transform: positive_log, prior: {mean: 0.4, std: 0.2}}
+  k_m_c4:    {value: 20.0, units: "1/d",  bounds: [5.0, 50.0],  transform: positive_log, prior: {mean: 20, std: 10}}
+  K_S_c4:    {value: 0.2,  units: "kgCOD/m3", bounds: [0.02, 2.0], transform: positive_log, prior: {mean: 0.2, std: 0.1}}
+  k_m_pro:   {value: 13.0, units: "1/d",  bounds: [3.0, 40.0],  transform: positive_log, prior: {mean: 13, std: 6.5}}
+  K_S_pro:   {value: 0.1,  units: "kgCOD/m3", bounds: [0.01, 1.0], transform: positive_log, prior: {mean: 0.1, std: 0.05}}
+  k_m_ac:    {value: 8.0,  units: "1/d",  bounds: [2.0, 25.0],  transform: positive_log, prior: {mean: 8, std: 4}}
+  K_S_ac:    {value: 0.15, units: "kgCOD/m3", bounds: [0.015, 1.5], transform: positive_log, prior: {mean: 0.15, std: 0.075}}
+  k_m_h2:    {value: 35.0, units: "1/d",  bounds: [10.0, 80.0], transform: positive_log, prior: {mean: 35, std: 17.5}}
+  K_S_h2:    {value: 7.0e-6, units: "kgCOD/m3", bounds: [7.0e-7, 7.0e-5], transform: positive_log, prior: {mean: 7e-06, std: 3.5e-06}}
+  # --- biomass decay (1/d) ---
+  k_dec_su:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_aa:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_fa:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_c4:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_pro: {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_ac:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  k_dec_h2:  {value: 0.02, units: "1/d",  bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}}
+  # --- inhibition ---
+  K_S_IN:    {value: 1.0e-4, units: "kmolN/m3", bounds: [1.0e-5, 1.0e-3], transform: positive_log, prior: {mean: 0.0001, std: 5e-05}}
+  K_I_h2_fa: {value: 5.0e-6, units: "kgCOD/m3", bounds: [5.0e-7, 5.0e-5], transform: positive_log, prior: {mean: 5e-06, std: 2.5e-06}}
+  K_I_h2_c4: {value: 1.0e-5, units: "kgCOD/m3", bounds: [1.0e-6, 1.0e-4], transform: positive_log, prior: {mean: 1e-05, std: 5e-06}}
+  K_I_h2_pro: {value: 3.5e-6, units: "kgCOD/m3", bounds: [3.5e-7, 3.5e-5], transform: positive_log, prior: {mean: 3.5e-06, std: 1.75e-06}}
+  K_I_nh3:   {value: 0.0018, units: "kmolN/m3", bounds: [1.8e-4, 1.8e-2], transform: positive_log, prior: {mean: 0.0018, std: 0.0009}}
+  pH_UL_aa:  {value: 5.5}
+  pH_LL_aa:  {value: 4.0}
+  pH_UL_ac:  {value: 7.0}
+  pH_LL_ac:  {value: 6.0}
+  pH_UL_h2:  {value: 6.0}
+  pH_LL_h2:  {value: 5.0}
+  pKa_IN:    {value: 8.955, units: "-"}   # NH4+/NH3 pKa at 35 C (9.25 at 25 C, van't Hoff dH=51965 J/mol); matches the charge-balance solver's effective ammonia pKa
+  # --- yields (kgCOD biomass / kgCOD substrate) ---
+  Y_su:  {value: 0.10, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.1, std: 0.005}}
+  Y_aa:  {value: 0.08, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.08, std: 0.004}}
+  Y_fa:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
+  Y_c4:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
+  Y_pro: {value: 0.04, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.04, std: 0.002}}
+  Y_ac:  {value: 0.05, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.05, std: 0.0025}}
+  Y_h2:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
+  # --- fractionation ---
+  f_sI_xc:  {value: 0.10}
+  f_xI_xc:  {value: 0.20}
+  f_ch_xc:  {value: 0.20}
+  f_pr_xc:  {value: 0.20}
+  f_li_xc:  {value: 0.30}
+  f_fa_li:  {value: 0.95}
+  f_h2_su:  {value: 0.19}
+  f_bu_su:  {value: 0.13}
+  f_pro_su: {value: 0.27}
+  f_ac_su:  {value: 0.41}
+  f_h2_aa:  {value: 0.06}
+  f_va_aa:  {value: 0.23}
+  f_bu_aa:  {value: 0.26}
+  f_pro_aa: {value: 0.05}
+  f_ac_aa:  {value: 0.40}
+  # --- carbon content (kmolC/kgCOD) ---
+  C_su:  {value: 0.0313}
+  C_aa:  {value: 0.0300}
+  C_fa:  {value: 0.0217}
+  C_va:  {value: 0.0240}
+  C_bu:  {value: 0.0250}
+  C_pro: {value: 0.0268}
+  C_ac:  {value: 0.0313}
+  C_ch4: {value: 0.0156}
+  C_bac: {value: 0.0313}
+  C_ch:  {value: 0.0313}
+  C_pr:  {value: 0.0300}
+  C_li:  {value: 0.0220}
+  C_sI:  {value: 0.0300}
+  C_xI:  {value: 0.0300}
+  C_xc:  {value: 0.02786}
+  # --- nitrogen content (kmolN/kgCOD) ---
+  N_aa:  {value: 0.007}
+  N_bac: {value: 0.00571429}   # 0.08/14
+  N_I:   {value: 0.00428571}   # 0.06/14
+  N_xc:  {value: 0.00268571}   # 0.0376/14
+  # --- gas-liquid transfer / headspace ---
+  # Henry constants T-corrected to 35 C by van't Hoff: K_H = K_H_base *
+  # exp(-dH * (1/T_base - 1/T_op) / R), with R = 8.3145 J/mol/K (= 100*0.083145)
+  # and T_base = 298.15, T_op = 308.15 K.
+  kLa:      {value: 200.0, units: "1/d",   bounds: [50.0, 400.0], transform: positive_log, prior: {mean: 200, std: 100}}
+  K_H_h2:   {value: 7.384654e-4, units: "kmol/m3/bar"}   # 7.8e-4 * exp(-4180 *(1/Tb-1/To)/R)
+  K_H_ch4:  {value: 1.161903e-3, units: "kmol/m3/bar"}   # 1.4e-3 * exp(-14240*(1/Tb-1/To)/R)
+  K_H_co2:  {value: 2.714669e-2, units: "kmol/m3/bar"}   # 3.5e-2 * exp(-19410*(1/Tb-1/To)/R)
+  R_T:      {value: 25.621132, units: "bar*m3/kmol"}     # R * T_op = 0.083145 * 308.15
+  p_h2o:    {value: 0.0556677, units: "bar"}             # 0.0313 * exp(5290*(1/Tb-1/To)), 35 C
+  P_atm:    {value: 1.013, units: "bar"}
+  k_P:      {value: 5.0e4, units: "m3/d/bar"}        # gas outflow resistance
+  V_gas:    {value: 300.0, units: "m3"}              # headspace gas volume
+  # Liquid (digester) volume. Only the gas-transfer stoichiometry uses it, via
+  # the V_liq/V_gas headspace-gain ratio (a unit of liquid lost to transfer
+  # raises the headspace concentration by V_liq/V_gas). The default is the BSM2
+  # geometry; ADM1DigesterUnit overrides it with the unit's actual liquid volume,
+  # so the gas transfer is correct for any digester size, not just 3400 m3.
+  V_liq:    {value: 3400.0, units: "m3"}
+  pKa_co2:  {value: 6.3065, units: "-"}  # H2CO3*/HCO3- pKa1 at 35 C (6.35 at 25 C, van't Hoff dH=7646 J/mol, the BSM2 value); matches the charge-balance solver's effective carbonate pKa1
+
+expressions:
+  # --- inhibition factors ---
+  I_pH_aa:   "pH_inhibit(pH_LL_aa, pH_UL_aa)"
+  I_pH_ac:   "pH_inhibit(pH_LL_ac, pH_UL_ac)"
+  I_pH_h2:   "pH_inhibit(pH_LL_h2, pH_UL_h2)"
+  I_IN_lim:  "[S_IN] / (K_S_IN + [S_IN])"
+  I_h2_fa:   "K_I_h2_fa / (K_I_h2_fa + [S_h2])"
+  I_h2_c4:   "K_I_h2_c4 / (K_I_h2_c4 + [S_h2])"
+  I_h2_pro:  "K_I_h2_pro / (K_I_h2_pro + [S_h2])"
+  # free ammonia from S_IN via the deprotonated fraction (1 - acid fraction)
+  S_nh3:     "[S_IN] * (1 - pH_switch(pKa_IN))"
+  I_nh3:     "K_I_nh3 / (K_I_nh3 + [S_IN] * (1 - pH_switch(pKa_IN)))"
+  # composite inhibition per process group
+  inhib_aa:  "I_pH_aa * I_IN_lim"
+  inhib_fa:  "I_pH_aa * I_IN_lim * I_h2_fa"
+  inhib_c4:  "I_pH_aa * I_IN_lim * I_h2_c4"
+  inhib_pro: "I_pH_aa * I_IN_lim * I_h2_pro"
+  inhib_ac:  "I_pH_ac * I_IN_lim * I_nh3"
+  inhib_h2:  "I_pH_h2 * I_IN_lim"
+  # --- process rates ---
+  rho_dis:    "k_dis * [X_c]"
+  rho_hyd_ch: "k_hyd_ch * [X_ch]"
+  rho_hyd_pr: "k_hyd_pr * [X_pr]"
+  rho_hyd_li: "k_hyd_li * [X_li]"
+  rho_su:  "k_m_su * [S_su] / (K_S_su + [S_su]) * [X_su] * inhib_aa"
+  rho_aa:  "k_m_aa * [S_aa] / (K_S_aa + [S_aa]) * [X_aa] * inhib_aa"
+  rho_fa:  "k_m_fa * [S_fa] / (K_S_fa + [S_fa]) * [X_fa] * inhib_fa"
+  # The S_va/(S_va+S_bu) factors split the shared C4 uptake between valerate and
+  # butyrate by relative abundance; safe_div handles the S_va = S_bu = 0
+  # depletion point (-> 0) without a dimensionless epsilon in the denominator.
+  rho_va:  "k_m_c4 * [S_va] / (K_S_c4 + [S_va]) * [X_c4] * safe_div([S_va], [S_va] + [S_bu]) * inhib_c4"
+  rho_bu:  "k_m_c4 * [S_bu] / (K_S_c4 + [S_bu]) * [X_c4] * safe_div([S_bu], [S_va] + [S_bu]) * inhib_c4"
+  rho_pro: "k_m_pro * [S_pro] / (K_S_pro + [S_pro]) * [X_pro] * inhib_pro"
+  rho_ac:  "k_m_ac * [S_ac] / (K_S_ac + [S_ac]) * [X_ac] * inhib_ac"
+  rho_h2:  "k_m_h2 * [S_h2] / (K_S_h2 + [S_h2]) * [X_h2] * inhib_h2"
+  # --- gas headspace: partial pressures, total pressure, normalised outflow ---
+  # NOTE (dimensional check): the headspace H2/CH4 are carried in COD (kgCOD/m3)
+  # and CO2 in carbon (kmolC/m3), and the /16 and /64 are implicit COD->mole
+  # molar masses written as bare numbers, so the partial-pressure sum P_gas mixes
+  # currencies and `model.check_units()` flags the three gas_outflow reactions
+  # (advisory). This is an inherent unit characteristic of the BSM2 ADM1 gas
+  # phase, not a model error; making it dimensionally homogeneous would require
+  # molar-mass parameters (which would change the parameter vector).
+  p_gas_h2:  "R_T / 16 * [S_gas_h2]"
+  p_gas_ch4: "R_T / 64 * [S_gas_ch4]"
+  p_gas_co2: "R_T * [S_gas_co2]"
+  P_gas:     "R_T / 16 * [S_gas_h2] + R_T / 64 * [S_gas_ch4] + R_T * [S_gas_co2] + p_h2o"
+  # gas outflow per gas-volume (q_gas / V_gas); k_P*(P_gas - P_atm) is the BSM2
+  # gas-flow law, clipped by max(0, .) so a (transient) sub-atmospheric headspace
+  # only stops venting rather than drawing gas back in (it runs above P_atm at
+  # steady state, so the clip is inactive there and the validated state is
+  # unchanged).
+  q_gas_norm: "k_P * max(0, P_gas - P_atm) / V_gas"
+  # dissolved CO2 (un-ionised acid fraction of inorganic carbon) at the local pH
+  S_co2_diss: "[S_IC] * pH_switch(pKa_co2)"
+
+reactions:
+  - name: disintegration
+    description: "Composite particulate -> carbohydrates, proteins, lipids, inerts."
+    rate: "rho_dis"
+    stoichiometry:
+      X_c:  -1.0
+      X_ch: "f_ch_xc"
+      X_pr: "f_pr_xc"
+      X_li: "f_li_xc"
+      S_I:  "f_sI_xc"
+      X_I:  "f_xI_xc"
+      S_IC: "-(C_sI*f_sI_xc + C_ch*f_ch_xc + C_pr*f_pr_xc + C_li*f_li_xc + C_xI*f_xI_xc - C_xc)"
+      # Inorganic-nitrogen release: composite N minus the N carried into the
+      # soluble/particulate inerts AND the protein product (BSM2 adm1_ODE reac11:
+      # N_xc - f_xI_xc*N_I - f_sI_xc*N_I - f_pr_xc*N_aa). The protein term was
+      # dropped in the original transcription.
+      S_IN: "-(N_I*f_sI_xc + N_I*f_xI_xc + N_aa*f_pr_xc - N_xc)"
+
+  - name: hydrolysis_carbohydrates
+    description: "Carbohydrates -> monosaccharides."
+    rate: "rho_hyd_ch"
+    stoichiometry:
+      X_ch: -1.0
+      S_su: 1.0
+      S_IC: "-(C_su - C_ch)"
+
+  - name: hydrolysis_proteins
+    description: "Proteins -> amino acids."
+    rate: "rho_hyd_pr"
+    stoichiometry:
+      X_pr: -1.0
+      S_aa: 1.0
+      S_IC: "-(C_aa - C_pr)"
+
+  - name: hydrolysis_lipids
+    description: "Lipids -> LCFA + monosaccharides."
+    rate: "rho_hyd_li"
+    stoichiometry:
+      X_li: -1.0
+      S_fa: "f_fa_li"
+      S_su: "1 - f_fa_li"
+      S_IC: "-((1 - f_fa_li)*C_su + f_fa_li*C_fa - C_li)"
+
+  - name: uptake_sugars
+    description: "Monosaccharide uptake -> VFAs + H2 + biomass."
+    rate: "rho_su"
+    stoichiometry:
+      S_su:  -1.0
+      S_bu:  "(1 - Y_su) * f_bu_su"
+      S_pro: "(1 - Y_su) * f_pro_su"
+      S_ac:  "(1 - Y_su) * f_ac_su"
+      S_h2:  "(1 - Y_su) * f_h2_su"
+      X_su:  "Y_su"
+      S_IN:  "-Y_su * N_bac"
+      S_IC:  "-(-C_su + (1 - Y_su)*(f_bu_su*C_bu + f_pro_su*C_pro + f_ac_su*C_ac) + Y_su*C_bac)"
+
+  - name: uptake_amino_acids
+    description: "Amino-acid uptake -> VFAs + H2 + biomass."
+    rate: "rho_aa"
+    stoichiometry:
+      S_aa:  -1.0
+      S_va:  "(1 - Y_aa) * f_va_aa"
+      S_bu:  "(1 - Y_aa) * f_bu_aa"
+      S_pro: "(1 - Y_aa) * f_pro_aa"
+      S_ac:  "(1 - Y_aa) * f_ac_aa"
+      S_h2:  "(1 - Y_aa) * f_h2_aa"
+      X_aa:  "Y_aa"
+      S_IN:  "N_aa - Y_aa * N_bac"
+      S_IC:  "-(-C_aa + (1 - Y_aa)*(f_va_aa*C_va + f_bu_aa*C_bu + f_pro_aa*C_pro + f_ac_aa*C_ac) + Y_aa*C_bac)"
+
+  - name: uptake_lcfa
+    description: "LCFA uptake -> acetate + H2 + biomass."
+    rate: "rho_fa"
+    stoichiometry:
+      S_fa: -1.0
+      S_ac: "(1 - Y_fa) * 0.7"
+      S_h2: "(1 - Y_fa) * 0.3"
+      X_fa: "Y_fa"
+      S_IN: "-Y_fa * N_bac"
+      S_IC: "-(-C_fa + (1 - Y_fa)*0.7*C_ac + Y_fa*C_bac)"
+
+  - name: uptake_valerate
+    description: "Valerate uptake -> propionate + acetate + H2 + biomass."
+    rate: "rho_va"
+    stoichiometry:
+      S_va:  -1.0
+      S_pro: "(1 - Y_c4) * 0.54"
+      S_ac:  "(1 - Y_c4) * 0.31"
+      S_h2:  "(1 - Y_c4) * 0.15"
+      X_c4:  "Y_c4"
+      S_IN:  "-Y_c4 * N_bac"
+      S_IC:  "-(-C_va + (1 - Y_c4)*0.54*C_pro + (1 - Y_c4)*0.31*C_ac + Y_c4*C_bac)"
+
+  - name: uptake_butyrate
+    description: "Butyrate uptake -> acetate + H2 + biomass."
+    rate: "rho_bu"
+    stoichiometry:
+      S_bu: -1.0
+      S_ac: "(1 - Y_c4) * 0.8"
+      S_h2: "(1 - Y_c4) * 0.2"
+      X_c4: "Y_c4"
+      S_IN: "-Y_c4 * N_bac"
+      S_IC: "-(-C_bu + (1 - Y_c4)*0.8*C_ac + Y_c4*C_bac)"
+
+  - name: uptake_propionate
+    description: "Propionate uptake -> acetate + H2 + biomass."
+    rate: "rho_pro"
+    stoichiometry:
+      S_pro: -1.0
+      S_ac:  "(1 - Y_pro) * 0.57"
+      S_h2:  "(1 - Y_pro) * 0.43"
+      X_pro: "Y_pro"
+      S_IN:  "-Y_pro * N_bac"
+      S_IC:  "-(-C_pro + (1 - Y_pro)*0.57*C_ac + Y_pro*C_bac)"
+
+  - name: uptake_acetate
+    description: "Acetoclastic methanogenesis."
+    rate: "rho_ac"
+    stoichiometry:
+      S_ac:  -1.0
+      S_ch4: "(1 - Y_ac)"
+      X_ac:  "Y_ac"
+      S_IN:  "-Y_ac * N_bac"
+      S_IC:  "-(-C_ac + (1 - Y_ac)*C_ch4 + Y_ac*C_bac)"
+
+  - name: uptake_hydrogen
+    description: "Hydrogenotrophic methanogenesis."
+    rate: "rho_h2"
+    stoichiometry:
+      S_h2:  -1.0
+      S_ch4: "(1 - Y_h2)"
+      X_h2:  "Y_h2"
+      S_IN:  "-Y_h2 * N_bac"
+      S_IC:  "-((1 - Y_h2)*C_ch4 + Y_h2*C_bac)"
+
+  # Biomass decay -> composite particulate. The biomass N (N_bac) exceeds the
+  # composite N (N_xc); the difference is released to inorganic N (BSM2
+  # adm1_ODE reac11: +(N_bac - N_xc) on every decay). This S_IN term was
+  # dropped in the original transcription.
+  - name: decay_X_su
+    description: "First-order decay of sugar degraders -> composite."
+    rate: "k_dec_su * [X_su]"
+    stoichiometry: {X_su: -1.0, X_c: 1.0, S_IN: "N_bac - N_xc"}
+  - name: decay_X_aa
+    description: "First-order decay of amino-acid degraders -> composite."
+    rate: "k_dec_aa * [X_aa]"
+    stoichiometry: {X_aa: -1.0, X_c: 1.0, S_IN: "N_bac - N_xc"}
+  - name: decay_X_fa
+    description: "First-order decay of LCFA degraders -> composite."
+    rate: "k_dec_fa * [X_fa]"
+    stoichiometry: {X_fa: -1.0, X_c: 1.0, S_IN: "N_bac - N_xc"}
+  - name: decay_X_c4
+    description: "First-order decay of valerate/butyrate degraders -> composite."
+    rate: "k_dec_c4 * [X_c4]"
+    stoichiometry: {X_c4: -1.0, X_c: 1.0, S_IN: "N_bac - N_xc"}
+  - name: decay_X_pro
+    description: "First-order decay of propionate degraders -> composite."
+    rate: "k_dec_pro * [X_pro]"
+    stoichiometry: {X_pro: -1.0, X_c: 1.0, S_IN: "N_bac - N_xc"}
+  - name: decay_X_ac
+    description: "First-order decay of acetate degraders -> composite."
+    rate: "k_dec_ac * [X_ac]"
+    stoichiometry: {X_ac: -1.0, X_c: 1.0, S_IN: "N_bac - N_xc"}
+  - name: decay_X_h2
+    description: "First-order decay of hydrogen degraders -> composite."
+    rate: "k_dec_h2 * [X_h2]"
+    stoichiometry: {X_h2: -1.0, X_c: 1.0, S_IN: "N_bac - N_xc"}
+
+  # --- gas-liquid transfer (kLa) -> liquid loses, headspace gains V_liq/V_gas ---
+  - name: transfer_h2
+    description: "H2 gas-liquid transfer to the headspace."
+    rate: "kLa * ([S_h2] - 16 * K_H_h2 * p_gas_h2)"
+    stoichiometry: {S_h2: -1.0, S_gas_h2: "V_liq / V_gas"}
+  - name: transfer_ch4
+    description: "CH4 gas-liquid transfer to the headspace."
+    rate: "kLa * ([S_ch4] - 64 * K_H_ch4 * p_gas_ch4)"
+    stoichiometry: {S_ch4: -1.0, S_gas_ch4: "V_liq / V_gas"}
+  - name: transfer_co2
+    description: "CO2 gas-liquid transfer (dissolved CO2 fraction of S_IC) to the headspace."
+    rate: "kLa * (S_co2_diss - K_H_co2 * p_gas_co2)"
+    stoichiometry: {S_IC: -1.0, S_gas_co2: "V_liq / V_gas"}
+
+  # --- headspace outflow (advection of biogas out of the digester) ---
+  - name: gas_outflow_h2
+    description: "H2 leaves the headspace with the biogas stream."
+    rate: "q_gas_norm * [S_gas_h2]"
+    stoichiometry: {S_gas_h2: -1.0}
+  - name: gas_outflow_ch4
+    description: "CH4 leaves the headspace with the biogas stream."
+    rate: "q_gas_norm * [S_gas_ch4]"
+    stoichiometry: {S_gas_ch4: -1.0}
+  - name: gas_outflow_co2
+    description: "CO2 leaves the headspace with the biogas stream."
+    rate: "q_gas_norm * [S_gas_co2]"
+    stoichiometry: {S_gas_co2: -1.0}

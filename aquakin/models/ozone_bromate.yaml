@@ -1,0 +1,166 @@
+model:
+  name: ozone_bromate
+  version: "2.0"
+  description: >
+    Bromate (BrO3-) formation during ozonation of bromide-containing waters.
+    Combines the direct molecular pathway (O3 oxidation of Br-/OBr-/BrO2-)
+    with the indirect OH-radical pathway. Hypobromous acid (HOBr) and
+    hypobromite (OBr-) are treated as a single total pool; the OBr- fraction
+    available for ozonation is computed via a pH switch around pKa(HOBr) =
+    8.8. Background matrix OH-scavenging is lumped into a single
+    pseudo-first-order condition field, OH_scavenging (s^-1).
+  references:
+    - "Acero, J.L. & von Gunten, U. (2001). J. AWWA 93(10), 90-100."
+    - "von Gunten, U. & Hoigne, J. (1994). Environ. Sci. Technol. 28(7), 1234-1242."
+    - "Staehelin, J. & Hoigne, J. (1985). Environ. Sci. Technol. 19(12), 1206-1213."
+    - "Buxton, G.V. et al. (1988). J. Phys. Chem. Ref. Data 17(2), 513-886."
+    - "Pinkernell, U. & von Gunten, U. (2001). Environ. Sci. Technol. 35(12), 2525-2531."
+
+species:
+  - name: O3
+    description: "Ozone"
+    units: mol/L
+    default_concentration: 1.0e-4
+  - name: Br-
+    description: "Bromide ion"
+    units: mol/L
+    default_concentration: 1.0e-6
+  - name: HOBr
+    description: "Total HOBr + OBr- pool"
+    units: mol/L
+    default_concentration: 0.0
+  - name: BrO2-
+    description: "Bromite ion"
+    units: mol/L
+    default_concentration: 0.0
+  - name: BrO3-
+    description: "Bromate ion"
+    units: mol/L
+    default_concentration: 0.0
+  - name: OH
+    description: "Hydroxyl radical (transient, ~1e-12 M)"
+    units: mol/L
+    default_concentration: 0.0
+
+conditions:
+  - name: pH
+    description: "Solution pH (-log10[H+])"
+    units: "-"
+    default: 7.5
+  - name: T
+    description: "Temperature (K)"
+    units: "K"
+    default: 293.15
+  - name: OH_scavenging
+    description: >
+      Lumped pseudo-first-order OH consumption by background matrix
+      (carbonate + DOC + ...), units s^-1. 5e4 s^-1 is typical of a
+      moderately scavenging natural water.
+    default: 5.0e4
+
+reactions:
+  # ---------------- Direct (molecular) pathway ----------------
+  - name: O3_Br_direct
+    description: "Direct ozone oxidation of bromide to HOBr."
+    reference: "Acero & von Gunten (2001)"
+    rate: "k1 * [O3] * [Br-]"
+    parameters:
+      k1:
+        value: 160.0
+        units: "M-1 s-1"
+        bounds: [10.0, 1000.0]
+    stoichiometry:
+      O3: -1
+      Br-: -1
+      HOBr: +1
+
+  - name: O3_OBr_oxidation
+    description: >
+      Ozonation of hypobromite to bromite. Only the deprotonated OBr-
+      fraction reacts appreciably; the HOBr/OBr- ratio is set by pH.
+    reference: "von Gunten & Hoigne (1994)"
+    rate: "k2 * [O3] * [HOBr] * (1 - pH_switch(pKa))"
+    parameters:
+      k2:
+        value: 100.0
+        units: "M-1 s-1"
+        bounds: [10.0, 1000.0]
+      pKa:
+        value: 8.8
+        units: "-"
+        bounds: [8.0, 9.5]
+    stoichiometry:
+      O3: -1
+      HOBr: -1
+      BrO2-: +1
+
+  - name: O3_BrO2_oxidation
+    description: "Fast ozonation of bromite to bromate."
+    reference: "von Gunten & Hoigne (1994)"
+    rate: "k3 * [O3] * [BrO2-]"
+    parameters:
+      k3:
+        value: 1.0e5
+        units: "M-1 s-1"
+        bounds: [1.0e4, 1.0e6]
+    stoichiometry:
+      O3: -1
+      BrO2-: -1
+      BrO3-: +1
+
+  # ---------------- Indirect (OH-radical) pathway ----------------
+  - name: O3_decay_OH
+    description: >
+      Hydroxide-catalysed ozone decay producing OH radicals (lumped
+      representation of the Staehelin-Hoigne initiation chain). The effective
+      rate is k_dec * [O3] * [OH-]; [OH-] = 10**(pH - 14) at 25 deg C.
+    reference: "Staehelin & Hoigne (1985)"
+    rate: "k_dec * [O3] * 10 ** ({pH} - 14)"
+    parameters:
+      k_dec:
+        value: 70.0
+        units: "M-1 s-1"
+        bounds: [10.0, 200.0]
+    stoichiometry:
+      O3: -1
+      OH: +1
+
+  - name: OH_Br_oxidation
+    description: "OH-radical oxidation of bromide to HOBr (indirect pathway)."
+    reference: "Buxton et al. (1988)"
+    rate: "k_OH_Br * [OH] * [Br-]"
+    parameters:
+      k_OH_Br:
+        value: 1.1e9
+        units: "M-1 s-1"
+        bounds: [1.0e8, 1.0e10]
+    stoichiometry:
+      OH: -1
+      Br-: -1
+      HOBr: +1
+
+  - name: OH_HOBr_to_bromate
+    description: >
+      OH-driven direct conversion of HOBr/OBr- to bromate (lumped
+      representation of OH + HOBr -> BrO. -> BrO3- chain).
+    reference: "Pinkernell & von Gunten (2001)"
+    rate: "k_OH_HOBr * [OH] * [HOBr]"
+    parameters:
+      k_OH_HOBr:
+        value: 2.0e9
+        units: "M-1 s-1"
+        bounds: [1.0e8, 1.0e10]
+    stoichiometry:
+      OH: -1
+      HOBr: -1
+      BrO3-: +1
+
+  - name: OH_scavenging
+    description: >
+      Lumped pseudo-first-order OH consumption by background matrix (DOC,
+      carbonate, etc.). Sink only; products not tracked.
+    reference: "von Gunten (2003)"
+    rate: "{OH_scavenging} * [OH]"
+    parameters: {}
+    stoichiometry:
+      OH: -1

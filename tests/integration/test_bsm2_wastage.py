@@ -14,7 +14,7 @@ import aquakin
 from aquakin.plant.bsm import (
     bsm2_warm_start,
     build_bsm2,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
     bsm2_wastage_schedule,
@@ -70,12 +70,12 @@ def test_bsm2_wastage_schedule_values():
 
 @pytest.fixture(scope="module")
 def asm1():
-    return bsm2_asm1_network()
+    return bsm2_asm1_model()
 
 
 @pytest.fixture(scope="module")
 def adm1():
-    return aquakin.load_network("adm1")
+    return aquakin.load_model("adm1")
 
 
 @pytest.fixture(scope="module")
@@ -114,8 +114,8 @@ def test_higher_wastage_lowers_biomass(wastage_run):
     """Stepping the wastage up wastes more sludge, so the reactor biomass falls
     relative to the constant-Qw plant (the point of the wastage schedule)."""
     plant, sol, params = wastage_run
-    asm1 = plant.units["tank1"].network
-    adm1 = aquakin.load_network("adm1")
+    asm1 = plant.units["tank1"].model
+    adm1 = aquakin.load_model("adm1")
     # Constant-Qw reference over the same window and warm start.
     ref = build_bsm2(asm1, adm1)
     ref.add_influent("feed", bsm2_constant_influent(asm1))

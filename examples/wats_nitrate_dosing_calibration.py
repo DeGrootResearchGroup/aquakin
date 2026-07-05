@@ -15,7 +15,7 @@ Workflow:
    the stiff WATS kinetics, whose reverse-mode adjoint needs a step cap -- and a
    Gauss-Newton Laplace posterior for parameter uncertainty.
 
-The network carries a state-derived (charge-balance) pH, so no pH condition is
+The model carries a state-derived (charge-balance) pH, so no pH condition is
 supplied. ``DifferentiationConfig(mode="forward")`` asks ``calibrate`` to form
 the Jacobian in forward mode and to build the forward-capable solver adjoint
 internally -- so the script needs no ``diffrax`` import. (A ``dtmax`` cap is still set on the reactor:
@@ -29,7 +29,7 @@ import numpy as np
 import aquakin
 
 
-# Anoxic nitrate-dosing batch initial state (mg/L as the network's COD/N/S units).
+# Anoxic nitrate-dosing batch initial state (mg/L as the model's COD/N/S units).
 BATCH_IC = {
     "X_BH": 30.0,    # heterotrophic biomass
     "S_B": 40.0,     # fermentable substrate
@@ -48,19 +48,19 @@ T_END = 5.0 / 24.0                            # 5-hour batch (days)
 
 def main() -> None:
     rng = np.random.default_rng(0)
-    network = aquakin.load_network("wats_sewer_extended")
-    conditions = network.default_conditions()
+    model = aquakin.load_model("wats_sewer_extended")
+    conditions = model.default_conditions()
     reactor = aquakin.BatchReactor(
-        network, conditions,
+        model, conditions,
         integrator=aquakin.IntegratorConfig(dtmax=1e-3))
 
-    C0 = network.concentrations(BATCH_IC)        # YAML defaults + the dosed batch
+    C0 = model.concentrations(BATCH_IC)        # YAML defaults + the dosed batch
     t_obs = jnp.linspace(0.0, T_END, 13)
 
     # 1-2. Truth simulation + noisy observations.
-    true_params = network.parameter_values(TRUE)  # defaults with the two rates set
+    true_params = model.parameter_values(TRUE)  # defaults with the two rates set
     clean = reactor.solve(C0, params=true_params, t_span=(0.0, T_END), t_eval=t_obs)
-    obs_idx = [network.species_index[s] for s in OBSERVED]
+    obs_idx = [model.species_index[s] for s in OBSERVED]
     clean_obs = np.asarray(clean.C[:, obs_idx])
     sigma = 0.05 * np.maximum(clean_obs.max(axis=0), 1.0)   # 5% per-series noise
     noisy = clean_obs + sigma * rng.standard_normal(clean_obs.shape)

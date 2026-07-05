@@ -19,10 +19,10 @@ from aquakin.plant.bsm import build_bsm1, load_bsm1_influent
 
 
 def main() -> None:
-    network = aquakin.load_network("asm1")
+    model = aquakin.load_model("asm1")
 
-    plant = build_bsm1(network=network)
-    inf = load_bsm1_influent("dry", network)
+    plant = build_bsm1(model=model)
+    inf = load_bsm1_influent("dry", model)
     plant.add_influent("feed", inf, to="inlet_mix.fresh")
 
     print("BSM1 plant:")
@@ -42,17 +42,17 @@ def main() -> None:
     print()
     print("Tank-5 effluent state at simulation end:")
     # final_named reads the last-point values for several species in one call
-    # (no per-species [-1] slice). Units come from the network (carried through
+    # (no per-species [-1] slice). Units come from the model (carried through
     # compile), not a hand-kept name->unit table -- no risk of mislabelling N as COD.
     finals = sol.final_named("tank5", ("SS", "SNH", "SNO", "SO", "XB_H", "XB_A"))
     for sp, val in finals.items():
-        print(f"  {sp:5s} = {val:7.2f}  {network.units_of(sp)}")
+        print(f"  {sp:5s} = {val:7.2f}  {model.units_of(sp)}")
 
     print()
     print("Per-tank XB_H (heterotrophic biomass) at simulation end:")
     for name in ("tank1", "tank2", "tank3", "tank4", "tank5"):
         val = float(sol.C_named(name, "XB_H")[-1])
-        print(f"  {name}: {val:7.1f}  {network.units_of('XB_H')}")
+        print(f"  {name}: {val:7.1f}  {model.units_of('XB_H')}")
 
     # Effluent metrics: reconstruct the effluent stream over the saved states
     # (the plant integrates unit states, not the inter-unit streams). The
@@ -62,13 +62,13 @@ def main() -> None:
     avgs = effluent_averages(eff)
     print()
     print("Time-averaged effluent quality:")
-    # Real species (SNH, SNO) get their units from the network; the lumped
+    # Real species (SNH, SNO) get their units from the model; the lumped
     # aggregate metrics (COD/BOD/TSS/TKN) are not species, so they carry an
     # explicit label.
     aggregate_units = {"COD": "g_COD/m3", "BOD": "g_COD/m3",
                        "TSS": "g_SS/m3", "TKN": "g_N/m3"}
     for key, val in avgs.items():
-        unit = (network.units_of(key) if key in network.species_index
+        unit = (model.units_of(key) if key in model.species_index
                 else aggregate_units[key])
         print(f"  {key:5s} = {val:7.2f}  {unit}")
 

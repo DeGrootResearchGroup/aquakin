@@ -108,7 +108,7 @@ def _discrete_adjoint_solve(
     to land steps exactly on the observation times (so each is a step boundary
     and the adjoint needs no interpolation). The custom VJP is the exact
     discrete adjoint, evaluated by a backward recurrence of bounded transposed
-    solves -- finite for stiff networks at any step size, with no ``dtmax`` cap.
+    solves -- finite for stiff models at any step size, with no ``dtmax`` cap.
 
     Everything here is method-independent; the only per-method piece is
     ``step_adjoint(...) -> (lam_n, dpar)``, the single-step transposed-solve body
@@ -298,7 +298,7 @@ def implicit_euler_adjoint_solve(
     The forward pass is a robust adaptive implicit-Euler diffrax solve. The
     custom VJP is the exact discrete adjoint of that solve, evaluated by a
     backward scan of bounded transposed linear solves -- finite for stiff
-    networks at any step size, with no ``dtmax`` cap. The first-order ``s=1``
+    models at any step size, with no ``dtmax`` cap. The first-order ``s=1``
     special case of :func:`esdirk_adjoint_solve`; both share the
     :func:`_discrete_adjoint_solve` harness.
 
@@ -482,7 +482,7 @@ def esdirk_adjoint_solve(
     combination ``Y_i = y_n + sum_j A[i,j]*k_j`` (the dense-output ``k`` is the
     dt-scaled stage increment) -- no Newton recompute, which
     was the dominant backward cost -- then the per-stage transposed solves
-    accumulate the gradient. Finite for stiff networks with no ``dtmax`` cap.
+    accumulate the gradient. Finite for stiff models with no ``dtmax`` cap.
 
     Trades memory for compute with ``low_memory=True`` (see below): the forward
     then stores only the step states (not the dense-output stage buffer, ~``s``x

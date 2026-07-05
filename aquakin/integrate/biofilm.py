@@ -27,15 +27,15 @@ diffusion--reaction system:
   precipitated FeS) must be left out of ``fixed_mask`` so it reacts -- otherwise
   it becomes a non-depleting source/sink and silently breaks mass balance.
 
-The same :class:`~aquakin.core.network.CompiledNetwork` runs in every
+The same :class:`~aquakin.core.model.CompiledModel` runs in every
 compartment --- the point is that identical chemistry behaves differently once
-depth is resolved. A network intended for this reactor should express its rates
+depth is resolved. A model intended for this reactor should express its rates
 per unit volume with the local biomass as an explicit reactant (so a compartment
 with little biomass carries little rate), rather than lumping the biofilm into an
 area-to-volume multiplier.
 
 The diffusion operator conserves the volume-weighted total exactly. Element
-(COD/S/N) conservation across reactions is exact only when the network's
+(COD/S/N) conservation across reactions is exact only when the model's
 ``positivity_limiter`` is *off*: the limiter throttles a species' net rate near
 zero independently of its reaction partners, so it trades a small (~1e-3)
 mass-balance residual for guaranteed positivity. Per-reaction stoichiometric
@@ -53,7 +53,7 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.conditions import SpatialConditions
-from aquakin.core.network import CompiledNetwork
+from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
     DifferentiationConfig,
     GradientCheckMixin,
@@ -78,7 +78,7 @@ class BiofilmSolution(_HasNamedSpecies):
     C : jnp.ndarray
         **Bulk** concentration trajectory, shape ``(n_t, n_species)``. This is
         the measurable (well-mixed liquid) signal; :meth:`C_named` reads it. It
-        is the raw integrated state (likewise ``profile``): if the network sets
+        is the raw integrated state (likewise ``profile``): if the model sets
         ``clip_negative_states``, entries may be **small transient negatives**,
         because the ``max(C, 0)`` clamp is applied only when evaluating the
         reaction rates, not to the saved state. These are a normal numerical
@@ -91,21 +91,21 @@ class BiofilmSolution(_HasNamedSpecies):
     depth : jnp.ndarray
         Mid-point depth of each biofilm layer from the surface, shape
         ``(n_layers,)`` (metres). Bulk has no depth and is omitted.
-    network : CompiledNetwork
-        The network that produced this solution.
+    model : CompiledModel
+        The model that produced this solution.
     """
 
     t: jnp.ndarray
     C: jnp.ndarray
     profile: jnp.ndarray
     depth: jnp.ndarray
-    network: CompiledNetwork
+    model: CompiledModel
 
     def profile_named(self, species: str) -> jnp.ndarray:
         """Depth profile of one species over time, shape ``(n_t, n_compartments)``."""
-        if species not in self.network.species_index:
-            raise KeyError(f"Unknown species '{species}'. Available: {self.network.species}")
-        return self.profile[:, :, self.network.species_index[species]]
+        if species not in self.model.species_index:
+            raise KeyError(f"Unknown species '{species}'. Available: {self.model.species}")
+        return self.profile[:, :, self.model.species_index[species]]
 
     def to_dataframe(self, *, profile: bool = False, units_in_columns: bool = False):
         """Return the solution as a pandas ``DataFrame``.
@@ -143,8 +143,8 @@ class BiofilmSolution(_HasNamedSpecies):
         # depth aligned to compartments: NaN for the bulk (compartment 0).
         depth_per_comp = np.concatenate([[np.nan], np.asarray(self.depth)])
         depth_col = np.tile(depth_per_comp, n_t)
-        columns = [(sp, flat[:, j]) for j, sp in enumerate(self.network.species)]
-        units = {sp: self.network.units_of(sp) for sp in self.network.species}
+        columns = [(sp, flat[:, j]) for j, sp in enumerate(self.model.species)]
+        units = {sp: self.model.units_of(sp) for sp in self.model.species}
         return build_dataframe(
             index,
             columns,
@@ -210,14 +210,14 @@ def _detachment_transport(C, k_det, detach_mask, dz, area_per_volume, n_species)
     return d
 
 
-def _default_soluble_mask(network: CompiledNetwork) -> jnp.ndarray:
+def _default_soluble_mask(model: CompiledModel) -> jnp.ndarray:
     """Classify species as soluble (diffuses, evolves) vs particulate (fixed).
 
     Heuristic for the WATS/ASM naming convention: soluble names start with
     ``S`` (``S_*``, ``sumS``), particulate names start with ``X``. Callers can
     override with an explicit mask.
     """
-    return jnp.asarray([not s.startswith("X") for s in network.species], dtype=bool)
+    return jnp.asarray([not s.startswith("X") for s in model.species], dtype=bool)
 
 
 class BiofilmReactor(GradientCheckMixin):
@@ -225,8 +225,8 @@ class BiofilmReactor(GradientCheckMixin):
 
     Parameters
     ----------
-    network : CompiledNetwork
-        Compiled reaction network, run in every compartment.
+    model : CompiledModel
+        Compiled reaction model, run in every compartment.
     conditions : SpatialConditions
         Condition fields. The same conditions are used in every compartment
         (location ``loc_idx=0``).
@@ -278,7 +278,7 @@ class BiofilmReactor(GradientCheckMixin):
         reaction names or a boolean ``(n_reactions,)`` mask. The remaining
         reactions (bulk-suspended and bulk-chemical) run in the **bulk** only.
         ``None`` (default) runs every reaction in every compartment, appropriate
-        for a single-phase network. For a WATS-style network the biofilm
+        for a single-phase model. For a WATS-style model the biofilm
         reactions are those carrying the ``A_V`` area factor; bulk reactions
         carry the suspended biomass ``[X_BH]`` or are abiotic. This separation,
         not a zeroed biomass state, is what keeps the two phases from leaking
@@ -289,7 +289,7 @@ class BiofilmReactor(GradientCheckMixin):
         Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
         ``dtmax``, ``max_steps``, an explicit ``solver``); see
         :class:`~aquakin.integrate.batch.BatchReactor`. A stiff per-layer-biomass
-        network with a tight ``dtmax`` can exceed the default ``max_steps``; raise
+        model with a tight ``dtmax`` can exceed the default ``max_steps``; raise
         it if the solve raises a max-steps error.
     diff : DifferentiationConfig, optional
         Autodiff configuration (``mode``, ``method``); see
@@ -305,14 +305,14 @@ class BiofilmReactor(GradientCheckMixin):
 
     Examples
     --------
-    Sulfur biofilm networks carry *reactive* non-diffusing particulates ---
+    Sulfur biofilm models carry *reactive* non-diffusing particulates ---
     elemental sulfur ``X_S0`` and precipitated ``X_FeS`` --- whose inventory
     genuinely drains and fills. The default ``fixed_mask`` would freeze them and
     silently break mass balance (the reactor warns when it would). Build a mask
     that holds **only the inert solids** fixed and lets every reactive pool
     evolve:
 
-    >>> net = aquakin.load_network("wats_sewer_khalil_paper_balanced_biofilm_multispecies")
+    >>> net = aquakin.load_model("wats_sewer_khalil_paper_balanced_biofilm_multispecies")
     >>> inert = {"X_I"}   # the only genuinely inert, non-depleting solid
     >>> fixed_mask = jnp.array([s in inert for s in net.species])
     >>> reactor = aquakin.BiofilmReactor(
@@ -329,7 +329,7 @@ class BiofilmReactor(GradientCheckMixin):
 
     def __init__(
         self,
-        network: CompiledNetwork,
+        model: CompiledModel,
         conditions: SpatialConditions,
         *,
         n_layers: int,
@@ -355,12 +355,12 @@ class BiofilmReactor(GradientCheckMixin):
         integrator: IntegratorConfig = IntegratorConfig(),
         diff: DifferentiationConfig = DifferentiationConfig(),
     ) -> None:
-        conditions.validate_required(network.conditions_required)
+        conditions.validate_required(model.conditions_required)
         if n_layers < 1:
             raise ValueError(f"n_layers must be >= 1; got {n_layers}.")
         if not (thickness > 0 and boundary_layer > 0 and area_per_volume > 0):
             raise ValueError("thickness, boundary_layer and area_per_volume must be positive.")
-        init_solver_settings(self, network, rtol=rtol, integrator=integrator, diff=diff)
+        init_solver_settings(self, model, rtol=rtol, integrator=integrator, diff=diff)
         self.conditions = conditions
         self.n_layers = int(n_layers)
         self.thickness = float(thickness)
@@ -371,9 +371,9 @@ class BiofilmReactor(GradientCheckMixin):
         # apply to this state shape, so the biofilm keeps an explicit scalar.
         self.atol = float(atol)
 
-        n = network.n_species
+        n = model.n_species
         if soluble_mask is None:
-            soluble_mask = _default_soluble_mask(network)
+            soluble_mask = _default_soluble_mask(model)
         self.soluble_mask = jnp.asarray(soluble_mask, dtype=bool)
         if self.soluble_mask.shape != (n,):
             raise ValueError(f"soluble_mask must have shape ({n},); got {self.soluble_mask.shape}")
@@ -403,10 +403,10 @@ class BiofilmReactor(GradientCheckMixin):
         # the default mask freezing those is wrong too, so the broad warning is the
         # right "pass an explicit mask here" signal.
         if fixed_defaulted:
-            stoich = network.compute_stoich(network.default_parameters())
+            stoich = model.compute_stoich(model.default_parameters())
             reactive = jnp.any(stoich != 0.0, axis=0)  # (n_species,)
             frozen_reactive = reactive & self.fixed_mask
-            offenders = [s for s, f in zip(network.species, list(map(bool, frozen_reactive))) if f]
+            offenders = [s for s, f in zip(model.species, list(map(bool, frozen_reactive))) if f]
             if offenders:
                 warnings.warn(
                     "BiofilmReactor is holding reactive particulate(s) "
@@ -415,31 +415,30 @@ class BiofilmReactor(GradientCheckMixin):
                     "source/sinks and can break mass balance (e.g. a frozen "
                     "elemental-sulfur or FeS pool). Pass an explicit fixed_mask "
                     "holding only the genuinely inert solids fixed (e.g. "
-                    "jnp.array([s in {'X_I'} for s in network.species])) and "
+                    "jnp.array([s in {'X_I'} for s in model.species])) and "
                     "letting every reactive particulate evolve.",
                     stacklevel=2,
                 )
 
         # Per-reaction phase mask: which reactions are biofilm processes (run in
         # the layers only) vs bulk/chemical (run in the bulk only). ``None`` ->
-        # every reaction runs in every compartment (a single-phase network).
+        # every reaction runs in every compartment (a single-phase model).
         # Accepts a list of reaction names or a boolean ``(n_reactions,)`` array.
         if biofilm_reactions is None:
             self._biofilm_mask = None
         elif all(isinstance(x, str) for x in biofilm_reactions):
             names = set(biofilm_reactions)
-            unknown = names - set(network.reaction_names)
+            unknown = names - set(model.reaction_names)
             if unknown:
                 raise ValueError(f"Unknown biofilm reaction names: {sorted(unknown)}")
             self._biofilm_mask = jnp.asarray(
-                [rn in names for rn in network.reaction_names], dtype=bool
+                [rn in names for rn in model.reaction_names], dtype=bool
             )
         else:
             bm = jnp.asarray(biofilm_reactions, dtype=bool)
-            if bm.shape != (network.n_reactions,):
+            if bm.shape != (model.n_reactions,):
                 raise ValueError(
-                    f"biofilm_reactions mask must have shape ({network.n_reactions},);"
-                    f" got {bm.shape}"
+                    f"biofilm_reactions mask must have shape ({model.n_reactions},); got {bm.shape}"
                 )
             self._biofilm_mask = bm
 
@@ -521,10 +520,8 @@ class BiofilmReactor(GradientCheckMixin):
     def _check_params(self, params: jnp.ndarray) -> jnp.ndarray:
         """Coerce and shape-check the parameter vector."""
         params = jnp.asarray(params)
-        if params.shape != (self.network.n_params,):
-            raise ValueError(
-                f"params has shape {params.shape}, expected ({self.network.n_params},)"
-            )
+        if params.shape != (self.model.n_params,):
+            raise ValueError(f"params has shape {params.shape}, expected ({self.model.n_params},)")
         return params
 
     def _coerce_y0(self, C0: jnp.ndarray) -> jnp.ndarray:
@@ -534,7 +531,7 @@ class BiofilmReactor(GradientCheckMixin):
         layer --- or the full ``(n_layers+1, n_species)`` bulk-plus-per-layer
         profile.
         """
-        n = self.network.n_species
+        n = self.model.n_species
         n_comp = self.n_layers + 1
         C0 = jnp.asarray(C0)
         if C0.shape == (n,):
@@ -563,34 +560,34 @@ class BiofilmReactor(GradientCheckMixin):
             the bulk and each layer explicitly (row 0 bulk, rows 1.. surface to
             wall). The latter sets the stratified particulate (biomass) profile.
         t_span : tuple of float
-            ``(t_start, t_end)`` integration interval, in the network's time unit
+            ``(t_start, t_end)`` integration interval, in the model's time unit
             unless ``time_unit`` is given. The required second positional argument.
         t_eval : jnp.ndarray, optional
             Times at which to record the solution. If ``None`` only the endpoint.
         params : jnp.ndarray, optional, keyword-only
             Rate constant vector, shape ``(n_params,)``. Defaults to
-            ``network.default_parameters()``. Keyword-only so a positional
+            ``model.default_parameters()``. Keyword-only so a positional
             ``t_span`` can never land in it.
         conditions : SpatialConditions, optional
             Override the reactor conditions for this call.
         time_unit : str, optional
             The time unit ``t_span`` / ``t_eval`` are in (``"s"``/``"min"``/
             ``"h"``/``"d"``); see :meth:`BatchReactor.solve`. Default ``None``
-            uses the network's native unit.
+            uses the model's native unit.
 
         Returns
         -------
         BiofilmSolution
         """
         if params is None:
-            params = self.network.default_parameters()
+            params = self.model.default_parameters()
         params = self._check_params(params)
         y0 = self._coerce_y0(C0)
 
         if t_span is None:
             raise ValueError("t_span=(t_start, t_end) is required.")
         t_span, t_eval, _time_factor = to_native_time(
-            self.network.time_unit, time_unit, t_span, t_eval
+            self.model.time_unit, time_unit, t_span, t_eval
         )
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
@@ -618,9 +615,7 @@ class BiofilmReactor(GradientCheckMixin):
         # ys: (n_t, n_comp, n_species). Bulk is compartment 0.
         if _time_factor != 1.0:
             ts = ts / _time_factor  # native -> requested unit
-        sol = BiofilmSolution(
-            t=ts, C=ys[:, 0, :], profile=ys, depth=self._depth, network=self.network
-        )
+        sol = BiofilmSolution(t=ts, C=ys[:, 0, :], profile=ys, depth=self._depth, model=self.model)
         if time_unit is not None:
             sol._requested_time_unit = time_unit
         return sol
@@ -646,7 +641,7 @@ class BiofilmReactor(GradientCheckMixin):
         without the ``dtmax`` cap that ordinary AD through this stiff
         diffusion--reaction solve needs (see
         :mod:`aquakin.integrate.forward_sensitivity`). This is the canonical use
-        case: the biofilm networks are stiff enough that capping ``dtmax`` for a
+        case: the biofilm models are stiff enough that capping ``dtmax`` for a
         reverse-mode gradient is an ~10x penalty, and this removes it.
 
         Parameters
@@ -681,13 +676,13 @@ class BiofilmReactor(GradientCheckMixin):
 
         params = self._check_params(params)
         y0 = self._coerce_y0(C0)
-        n = self.network.n_species
+        n = self.model.n_species
         n_comp = self.n_layers + 1
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):
             raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
 
-        free_idx = resolve_sens_indices(self.network, sens_params)
+        free_idx = resolve_sens_indices(self.model, sens_params)
         if shared_factor is None:
             shared_factor = free_idx.shape[0] > 1
         active = conditions if conditions is not None else self.conditions
@@ -709,7 +704,7 @@ class BiofilmReactor(GradientCheckMixin):
                 C=profile[:, 0, :],
                 profile=profile,
                 depth=self._depth,
-                network=self.network,
+                model=self.model,
             )
             return sol, S_full[:, 0, :, :]
 
@@ -761,12 +756,12 @@ class BiofilmReactor(GradientCheckMixin):
         parameter vector for the rate evaluation; the stoichiometry is built from
         ``params`` so the whole RHS depends on the parameters through both.
         """
-        network = self.network
+        model = self.model
         fixed_mask = self.fixed_mask
         biofilm_mask = self._biofilm_mask
         D, kL, dz = self._D, self._kL, self._dz
         area_per_volume = self.area_per_volume
-        n_species = network.n_species
+        n_species = model.n_species
         inv_rho, packing = self._inv_rho, self.packing_fraction
         has_cap, has_att = self._has_cap, self._has_att
         k_att, attach_mask = self._k_att, self._attach_mask
@@ -774,7 +769,7 @@ class BiofilmReactor(GradientCheckMixin):
         clamp_bulk = self.clamp_bulk
         has_feed, feed, dilution = self._has_feed, self._feed, self.dilution_rate
 
-        stoich = network.compute_stoich(params)
+        stoich = model.compute_stoich(params)
         # Phase split: zeroing a reaction's stoichiometry row removes its
         # contribution to dCdt (= stoich.T @ rates), so the positivity limiter
         # still sees the correct per-compartment net term. Bulk reactions run only
@@ -800,7 +795,7 @@ class BiofilmReactor(GradientCheckMixin):
                 # space availability: 1 when empty, 0 at the packing limit
                 s = jnp.clip(1.0 - (c @ inv_rho) / packing, 0.0, 1.0)
                 rate_scale = jnp.where(growth_rxn, s, 1.0)
-            return network.dCdt(c, args, condition_arrays, 0, stoich=st, rate_scale=rate_scale)
+            return model.dCdt(c, args, condition_arrays, 0, stoich=st, rate_scale=rate_scale)
 
         def rhs(t, y, args):
             bulk = cell(y[0], stoich_bulk, args)
@@ -942,7 +937,7 @@ class BiofilmReactor(GradientCheckMixin):
 
         params = self._check_params(params)
         y0 = self._coerce_y0(C0)
-        n = self.network.n_species
+        n = self.model.n_species
         n_comp = self.n_layers + 1
         active = conditions if conditions is not None else self.conditions
         condition_arrays = active.fields
@@ -985,5 +980,5 @@ class BiofilmReactor(GradientCheckMixin):
             C=y_star[0][None, :],
             profile=y_star[None, :, :],
             depth=self._depth,
-            network=self.network,
+            model=self.model,
         )

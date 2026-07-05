@@ -137,7 +137,7 @@ def test_compare_scenarios_nonfinite_raises():
 def test_monte_carlo_through_a_reactor_solve():
     # The full path: fn builds params and runs a stiff ASM solve. Uncertain AOB
     # max growth rate -> effluent ammonia distribution.
-    net = aquakin.load_network("asm3_2step")
+    net = aquakin.load_model("asm3_2step")
     r = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(T=293.15))
     C0 = net.concentrations({"SO2": 300.0, "SNH4": 30.0, "XAOB": 80.0,
                              "XNOB": 80.0, "SALK": 0.05})
@@ -213,7 +213,7 @@ def test_optimize_design_through_a_reactor_solve():
     # Size the AOB growth rate to a (feasible) effluent-ammonia permit at minimum
     # rate: minimise muAOB s.t. effluent NH4 <= 6.5 gN/m3. The constraint is
     # active at the optimum (the smallest muAOB that still meets the permit).
-    net = aquakin.load_network("asm3_2step")
+    net = aquakin.load_model("asm3_2step")
     r = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(T=293.15))
     C0 = net.concentrations({"SO2": 300.0, "SNH4": 30.0, "XAOB": 80.0,
                              "XNOB": 80.0, "SALK": 0.05})

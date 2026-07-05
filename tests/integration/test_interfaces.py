@@ -10,7 +10,7 @@ from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
 
 @pytest.fixture
 def nets():
-    return aquakin.load_network("asm1"), aquakin.load_network("adm1")
+    return aquakin.load_model("asm1"), aquakin.load_model("adm1")
 
 
 def _asm_vec(asm1, **over):
@@ -59,7 +59,7 @@ def test_cod_conserved_anaerobic_feed(nets):
     """For an anaerobic feed (SO = SNO = 0) all COD is conserved across the
     interface (no electron-acceptor demand)."""
     asm1, adm1 = nets
-    trans = ASM1toADM1(source_network=asm1, target_network=adm1)
+    trans = ASM1toADM1(source_model=asm1, target_model=adm1)
     C = _asm_vec(asm1, SI=28.0, SS=3.0, XI=95.0, XS=360.0, XB_H=50.0, XB_A=0.1,
                  XP=0.7, SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SO=0.0, SNO=0.0)
     y = trans.translate(C)
@@ -68,7 +68,7 @@ def test_cod_conserved_anaerobic_feed(nets):
 
 def test_nitrogen_conserved(nets):
     asm1, adm1 = nets
-    trans = ASM1toADM1(source_network=asm1, target_network=adm1)
+    trans = ASM1toADM1(source_model=asm1, target_model=adm1)
     C = _asm_vec(asm1, SI=28.0, SS=3.0, XI=95.0, XS=360.0, XB_H=50.0, XB_A=0.1,
                  XP=0.7, SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SO=0.0, SNO=0.0)
     y = trans.translate(C)
@@ -78,7 +78,7 @@ def test_nitrogen_conserved(nets):
 def test_electron_acceptor_demand_removes_cod(nets):
     """With O2/NO3 present, exactly the electron-acceptor COD demand is removed."""
     asm1, adm1 = nets
-    trans = ASM1toADM1(source_network=asm1, target_network=adm1)
+    trans = ASM1toADM1(source_model=asm1, target_model=adm1)
     C = _asm_vec(asm1, SI=28.0, SS=40.0, XI=95.0, XS=360.0, XB_H=200.0, XB_A=10.0,
                  XP=0.7, SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SO=5.0, SNO=8.0)
     demand = 5.0 + _CODEQUIV * 8.0
@@ -90,7 +90,7 @@ def test_electron_acceptor_demand_removes_cod(nets):
 
 def test_outputs_nonnegative_and_finite(nets):
     asm1, adm1 = nets
-    trans = ASM1toADM1(source_network=asm1, target_network=adm1)
+    trans = ASM1toADM1(source_model=asm1, target_model=adm1)
     C = _asm_vec(asm1, SI=28.0, SS=3.0, XI=95.0, XS=360.0, XB_H=50.0, XB_A=0.1,
                  XP=0.7, SNH=35.0, SND=5.0, XND=16.0, SALK=7.0)
     y = trans.translate(C)
@@ -102,7 +102,7 @@ def test_outputs_nonnegative_and_finite(nets):
 
 def test_grad_through_interface(nets):
     asm1, adm1 = nets
-    trans = ASM1toADM1(source_network=asm1, target_network=adm1)
+    trans = ASM1toADM1(source_model=asm1, target_model=adm1)
     C = _asm_vec(asm1, SS=40.0, XS=360.0, XB_H=200.0, SNH=35.0, SND=5.0, XND=16.0,
                  SALK=7.0)
     g = jax.grad(lambda c: jnp.sum(trans.translate(c)))(C)
@@ -115,7 +115,7 @@ def test_excess_acceptor_demand_over_conserves_cod_by_default(nets):
     surplus demand is silently dropped -- COD is over-conserved (the documented
     pathological regime). The default interface does NOT raise."""
     asm1, adm1 = nets
-    trans = ASM1toADM1(source_network=asm1, target_network=adm1)
+    trans = ASM1toADM1(source_model=asm1, target_model=adm1)
     # demand = CODequiv*SNO = 285.7 gCOD, far above the 35 gCOD of degradable pools.
     C = _asm_vec(asm1, SI=28.0, XI=95.0, XP=0.7, SS=10.0, XS=20.0, XB_H=5.0,
                  SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SNO=100.0)
@@ -136,7 +136,7 @@ def test_strict_raises_on_excess_acceptor_demand(nets):
     fully absorbed by the degradable COD, instead of silently over-conserving. A
     normal anoxic feed (demand <= degradable COD) still passes."""
     asm1, adm1 = nets
-    strict = ASM1toADM1(source_network=asm1, target_network=adm1, strict=True)
+    strict = ASM1toADM1(source_model=asm1, target_model=adm1, strict=True)
     # In-regime anoxic feed: the demand is absorbed, so strict does not fire.
     C_ok = _asm_vec(asm1, SI=28.0, SS=40.0, XI=95.0, XS=360.0, XB_H=200.0, XB_A=10.0,
                     SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SO=5.0, SNO=8.0)
@@ -176,7 +176,7 @@ def _asm_n_out(asm1, y):
 
 def test_adm2asm_nitrogen_conserved(nets):
     asm1, adm1 = nets
-    trans = ADM1toASM1(source_network=adm1, target_network=asm1)
+    trans = ADM1toASM1(source_model=adm1, target_model=asm1)
     C = adm1.default_concentrations()  # realistic digester steady state
     y = trans.translate(C)
     assert _asm_n_out(asm1, y) == pytest.approx(_adm_n_full(adm1, C), rel=1e-6)
@@ -185,7 +185,7 @@ def test_adm2asm_nitrogen_conserved(nets):
 def test_adm2asm_cod_conserved_minus_stripped_gas(nets):
     """COD is conserved except for S_h2 + S_ch4, which strip to gas."""
     asm1, adm1 = nets
-    trans = ADM1toASM1(source_network=adm1, target_network=asm1)
+    trans = ADM1toASM1(source_model=adm1, target_model=asm1)
     C = adm1.default_concentrations()
     stripped = float(C[adm1.species_index["S_h2"]]
                      + C[adm1.species_index["S_ch4"]]) * 1000.0
@@ -197,7 +197,7 @@ def test_adm2asm_cod_conserved_minus_stripped_gas(nets):
 
 def test_adm2asm_outputs_finite_and_grad(nets):
     asm1, adm1 = nets
-    trans = ADM1toASM1(source_network=adm1, target_network=asm1)
+    trans = ADM1toASM1(source_model=adm1, target_model=asm1)
     C = adm1.default_concentrations()
     y = trans.translate(C)
     assert jnp.all(jnp.isfinite(y))
@@ -214,7 +214,7 @@ def test_asm2adm_uses_digester_pH(nets):
     """asm2adm evaluates its inorganic-carbon charge balance at the supplied
     digester pH; the fixed pH_adm is only the standalone fallback."""
     asm1, adm1 = nets
-    trans = ASM1toADM1(source_network=asm1, target_network=adm1)  # pH_adm = 7.0
+    trans = ASM1toADM1(source_model=asm1, target_model=adm1)  # pH_adm = 7.0
     C = _asm_vec(asm1, SI=28.0, SS=3.0, XI=95.0, XS=360.0, XB_H=50.0, XB_A=0.1,
                  XP=0.7, SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SO=0.0, SNO=0.0)
     sic = adm1.species_index["S_IC"]
@@ -236,7 +236,7 @@ def test_adm2asm_uses_digester_pH(nets):
     """adm2asm evaluates its alkalinity charge balance at the supplied digester
     pH; conservation is unaffected and the gradient stays finite."""
     asm1, adm1 = nets
-    trans = ADM1toASM1(source_network=adm1, target_network=asm1)
+    trans = ADM1toASM1(source_model=adm1, target_model=asm1)
     C = adm1.default_concentrations()
     salk = asm1.species_index["SALK"]
     assert float(trans.translate(C)[salk]) == pytest.approx(
@@ -256,12 +256,12 @@ def test_plant_feeds_digester_pH_to_interface():
     (~7.3), not the interface's fixed pH_adm of 7.0."""
     from aquakin.plant.bsm import bsm2_warm_start
     from aquakin.plant.bsm.bsm2 import (
-        BSM2_CONSTANT_INFLUENT_T, build_bsm2, bsm2_asm1_network,
+        BSM2_CONSTANT_INFLUENT_T, build_bsm2, bsm2_asm1_model,
         bsm2_constant_influent, bsm2_parameters)
 
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed",
                        bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
     params = bsm2_parameters(asm1, adm1)
@@ -279,7 +279,7 @@ def test_plant_feeds_digester_pH_to_interface():
     inlet = plant._collect_inputs("digester", all_outputs, streams, states, params)
     inlet_C = inlet[plant.units["digester"].input_ports[0]].C
     sludge = all_outputs[("sludge_mix", "out")]
-    iface = ASM1toADM1(source_network=asm1, target_network=adm1)
+    iface = ASM1toADM1(source_model=asm1, target_model=adm1)
     sic_plant = float(inlet_C[di["S_IC"]])
     sic_fb = float(iface.translate(sludge.C, digester_pH=dig_pH)[di["S_IC"]])
     sic_fixed = float(iface.translate(sludge.C)[di["S_IC"]])

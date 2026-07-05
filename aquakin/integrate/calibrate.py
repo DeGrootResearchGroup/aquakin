@@ -60,11 +60,11 @@ _VALID_OPTIMIZERS = ("lbfgsb", "gauss_newton")
 # integrator's adjoint is formed:
 #   "jax_adjoint"    -- JAX/diffrax differentiate the whole solve
 #                       (RecursiveCheckpointAdjoint). Needs a dtmax cap for stiff
-#                       networks (reverse-mode overflows above a step threshold).
+#                       models (reverse-mode overflows above a step threshold).
 #   "stable_adjoint" -- AD for the model, plus an explicit per-step transposed
 #                       solve for the integrator's adjoint
 #                       (aquakin.implicit_euler_adjoint_solve). Cap-free and
-#                       numerically stable for stiff networks.
+#                       numerically stable for stiff models.
 _VALID_GRADIENTS = ("jax_adjoint", "stable_adjoint")
 # Autodiff direction for the residual Jacobian / objective gradient. "auto"
 # preserves the legacy behaviour (forward iff the reactor was built with a
@@ -438,9 +438,9 @@ class CalibrationResult:
                 DeprecationWarning,
                 stacklevel=2,
             )
-        network = reactor.network
+        model = reactor.model
         names = self.parameter_names
-        free_idx = jnp.asarray([network.param_index[n] for n in names])
+        free_idx = jnp.asarray([model.param_index[n] for n in names])
         theta_map = np.array(
             [
                 float(_to_unconstrained(jnp.asarray(self.params_named[n]), t))
@@ -513,7 +513,7 @@ class CalibrationResult:
         hi = np.percentile(curves, percentiles[1], axis=0)
         median = np.percentile(curves, 50.0, axis=0)
         if observed_species is not None:
-            sp_idx = [network.species_index[s] for s in observed_species]
+            sp_idx = [model.species_index[s] for s in observed_species]
             lo, hi, median = lo[:, sp_idx], hi[:, sp_idx], median[:, sp_idx]
         return PredictiveBand(
             t=np.asarray(t_eval),
@@ -583,24 +583,24 @@ def calibrate(
     t_obs : jnp.ndarray or list of jnp.ndarray
         Observation times, shape ``(n_t,)``. ``C0`` is taken at ``t=0``;
         the solver integrates from ``0`` to ``t_obs[-1]``. In multi-batch mode,
-        a list of time grids, one per dataset. In the network's native time unit
+        a list of time grids, one per dataset. In the model's native time unit
         unless ``time_unit`` is given.
     free_params : list[str]
         Namespaced parameter names to calibrate. Others held fixed.
     transforms : dict[str, str], optional
         Per-parameter transform. Keys may be any subset of ``free_params``;
         unspecified entries fall back to the parameter's declared
-        ``transform`` on the network (default ``"none"``).
+        ``transform`` on the model (default ``"none"``).
     initial_params : jnp.ndarray, optional
         Starting parameter vector. Defaults to
-        ``reactor.network.default_parameters()``.
+        ``reactor.model.default_parameters()``.
     observed_species : list[str], optional
         Species names corresponding to columns of ``observations``. If
-        ``None``, every network species is taken to be observed.
+        ``None``, every model species is taken to be observed.
     time_unit : str, optional
         The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
         ``"d"``), matching :meth:`BatchReactor.solve`. Every dataset's ``t_obs``
-        is converted into the network's native (rate-constant) time unit before
+        is converted into the model's native (rate-constant) time unit before
         the solve, so an hour-valued ``t_obs`` carried over from a
         ``solve(time_unit="h")`` run is interpreted correctly rather than as
         native-unit days (the silent 24x time-axis compression this guards
@@ -616,13 +616,13 @@ def calibrate(
     priors : dict[str, tuple[float, float]], optional
         Gaussian priors as ``name -> (mean, std)`` in physical space, added to
         the objective as ``0.5 * sum(((p - mean) / std) ** 2)``. Overrides any
-        prior declared on the network for the same parameter. Only entries whose
+        prior declared on the model for the same parameter. Only entries whose
         name is in ``free_params`` are used.
     use_priors : bool, optional
-        If ``True`` (default), parameters whose network declaration carries a
+        If ``True`` (default), parameters whose model declaration carries a
         ``prior:`` block contribute their Gaussian prior to the objective (for
         the free parameters), in addition to any passed via ``priors``. Set
-        ``False`` to ignore the network-declared priors. Priors regularise
+        ``False`` to ignore the model-declared priors. Priors regularise
         otherwise non-identifiable parameter combinations toward literature
         values; for a proper Bayesian MAP / posterior, combine them with
         ``loss="nll"`` and a measurement ``sigma`` so the data term is a true
@@ -661,11 +661,11 @@ def calibrate(
     laplace_dtmax : float, optional
         Integrator-step cap used only for the Laplace Hessian. The Hessian (a
         Jacobian/gradient through the solve) is more step-sensitive than the fit
-        itself, so for very stiff networks it can need a tighter cap than the fit
+        itself, so for very stiff models it can need a tighter cap than the fit
         reactor uses -- pass the fit reactor at a loose cap (fast) and set
         ``laplace_dtmax`` to a tighter one. ``None`` (default) reuses the fit
         reactor. Requires a ``BatchReactor``-style reactor (it is reconstructed
-        with the new cap from ``network``/``conditions``/``rtol``/``atol``/
+        with the new cap from ``model``/``conditions``/``rtol``/``atol``/
         ``adjoint``).
     free_ic : list[str], optional
         Species whose *initial* concentration is fitted in addition to the rate
@@ -696,7 +696,7 @@ def calibrate(
         the residual *vector* with SciPy ``least_squares`` (trust-region
         reflective) -- a Gauss-Newton method that exploits the least-squares
         structure and is markedly more robust on the multimodal landscapes of
-        stiff reaction-network fits. The residual Jacobian is formed by AD;
+        stiff reaction-model fits. The residual Jacobian is formed by AD;
         the direction is chosen by ``diff.mode``.
     diff : DifferentiationConfig, optional
         How the data-term gradient / residual Jacobian is formed.
@@ -704,7 +704,7 @@ def calibrate(
         ``method`` ({"stable", "through_solve"}) is how the reverse adjoint is
         formed. ``mode="reverse", method="through_solve"`` (the calibrate default)
         differentiates *through* the diffrax solve (``RecursiveCheckpointAdjoint``);
-        for a stiff network this reverse pass goes non-finite above a step-size
+        for a stiff model this reverse pass goes non-finite above a step-size
         threshold, so the reactor must carry a ``dtmax`` cap.
         ``mode="reverse", method="stable"`` replaces the integrator's adjoint with
         an explicit per-step transposed-stage solve
@@ -713,7 +713,7 @@ def calibrate(
         agrees with the capped ``through_solve`` path to the optimiser tolerance).
         ``mode="forward"`` uses ``jacfwd`` and builds a forward-capable reactor
         adjoint internally (forward-mode AD stays finite at any step -- the fix for
-        a stiff network whose reverse adjoint overflows); pair it with
+        a stiff model whose reverse adjoint overflows); pair it with
         ``optimizer="gauss_newton"`` and ``method="through_solve"`` (forward +
         ``method="stable"`` is rejected, the stable adjoint being reverse-only).
         ``check_finite`` (default ``True``) raises a friendly error if the
@@ -728,7 +728,7 @@ def calibrate(
         Number of optimiser starts (default ``1``). With ``n_starts > 1`` the
         calibration is run from several starting points and the lowest-loss
         result is kept --- a deterministic multistart that escapes local minima
-        on the multimodal landscapes typical of stiff reaction-network fits.
+        on the multimodal landscapes typical of stiff reaction-model fits.
         Start 0 is the supplied / default ``initial_params`` (unperturbed); the
         remaining starts perturb the unconstrained start vector by Gaussian noise
         of scale ``jitter``. The Laplace posterior is computed once, at the
@@ -809,10 +809,10 @@ def calibrate(
             f"without one ({type(reactor).__name__})."
         )
 
-    network = reactor.network
+    model = reactor.model
     for name in free_params:
-        if name not in network.param_index:
-            raise KeyError(f"Unknown parameter '{name}'. Available: {network.parameters}")
+        if name not in model.param_index:
+            raise KeyError(f"Unknown parameter '{name}'. Available: {model.parameters}")
 
     # Resolve transforms per free param.
     transforms = dict(transforms or {})
@@ -820,18 +820,18 @@ def calibrate(
     for name in free_params:
         t = transforms.get(name)
         if t is None:
-            t = network.parameter_transforms.get(name, "none")
+            t = model.parameter_transforms.get(name, "none")
         resolved_transforms.append(t)
 
     # Initial params (physical space).
     p0_full = (
-        jnp.asarray(initial_params) if initial_params is not None else network.default_parameters()
+        jnp.asarray(initial_params) if initial_params is not None else model.default_parameters()
     )
-    free_indices = jnp.asarray([network.param_index[n] for n in free_params])
+    free_indices = jnp.asarray([model.param_index[n] for n in free_params])
 
     # Validate initial physical values against their transforms.
     for name, t in zip(free_params, resolved_transforms):
-        v = float(p0_full[network.param_index[name]])
+        v = float(p0_full[model.param_index[name]])
         if t == "positive_log" and v <= 0.0:
             raise ValueError(
                 f"Parameter '{name}' has transform 'positive_log' but initial value {v} <= 0."
@@ -874,10 +874,10 @@ def calibrate(
         sigma_list = [sigma] * n_datasets
 
     if observed_species is None:
-        obs_species_indices = jnp.arange(network.n_species)
-        n_observed = network.n_species
+        obs_species_indices = jnp.arange(model.n_species)
+        n_observed = model.n_species
     else:
-        obs_species_indices = jnp.asarray([network.species_index[s] for s in observed_species])
+        obs_species_indices = jnp.asarray([model.species_index[s] for s in observed_species])
         n_observed = len(observed_species)
 
     # Validate each dataset and build its (C0, t_eval, t_span, loss) tuple.
@@ -895,11 +895,11 @@ def calibrate(
             raise ValueError(f"dataset {ds}: t_obs must be non-negative; got {float(tobs_i[0])}.")
         if tobs_i.shape[0] > 1 and not bool(jnp.all(jnp.diff(tobs_i) > 0)):
             raise ValueError(f"dataset {ds}: t_obs must be strictly ascending.")
-        # Convert this dataset's t_obs into the network's native (rate-constant)
+        # Convert this dataset's t_obs into the model's native (rate-constant)
         # time unit, the same way reactor.solve(time_unit=...) does. Done after
         # the validation so the error messages report the user's own values;
-        # native_time_factor raises if the network has no declared native unit.
-        tobs_i = tobs_i * native_time_factor(network.time_unit, time_unit)
+        # native_time_factor raises if the model has no declared native unit.
+        tobs_i = tobs_i * native_time_factor(model.time_unit, time_unit)
         obs_i = jnp.asarray(obs_i)
         if obs_i.ndim == 1:
             obs_i = obs_i[:, None]
@@ -924,12 +924,12 @@ def calibrate(
             )
         )
 
-    # Resolve Gaussian priors for the free parameters. Network-declared priors
+    # Resolve Gaussian priors for the free parameters. Model-declared priors
     # apply by default (use_priors); the explicit ``priors`` argument overrides
     # per parameter. Build aligned (mean, std, mask) arrays in free-param order.
     active_priors: dict[str, tuple[float, float]] = {}
     if use_priors:
-        net_priors = getattr(network, "parameter_priors", {})
+        net_priors = getattr(model, "parameter_priors", {})
         for name in free_params:
             if name in net_priors:
                 active_priors[name] = net_priors[name]
@@ -952,15 +952,15 @@ def calibrate(
     # parameters stay shared across datasets; the initial pools are per-dataset.
     free_ic_list = list(free_ic or [])
     for s in free_ic_list:
-        if s not in network.species_index:
-            raise KeyError(f"Unknown free_ic species '{s}'. Available: {network.species}")
+        if s not in model.species_index:
+            raise KeyError(f"Unknown free_ic species '{s}'. Available: {model.species}")
     m_ic = len(free_ic_list)
     if m_ic and not (0.0 < ic_bounds[0] < ic_bounds[1]):
         raise ValueError(f"ic_bounds must satisfy 0 < lo < hi; got {ic_bounds}.")
-    ic_species_idx = jnp.asarray([network.species_index[s] for s in free_ic_list], dtype=int)
+    ic_species_idx = jnp.asarray([model.species_index[s] for s in free_ic_list], dtype=int)
     ic_center_blocks = []
     if m_ic:
-        ic_np_idx = [network.species_index[s] for s in free_ic_list]
+        ic_np_idx = [model.species_index[s] for s in free_ic_list]
         for C0_i, *_rest in datasets:
             vals = np.clip(np.asarray(C0_i)[ic_np_idx], ic_bounds[0], ic_bounds[1])
             ic_center_blocks.append(np.log(vals))
@@ -990,13 +990,13 @@ def calibrate(
     # (Kvaerno5, matching the reactor's forward solver) solve whose integrator
     # adjoint is an explicit per-step transposed-stage solve (model derivatives
     # still by autodiff), instead of differentiating the reactor's diffrax solve.
-    # Built from the reactor's network + (single-location) conditions, matching
+    # Built from the reactor's model + (single-location) conditions, matching
     # the reactor's tolerances.
     if gradient == "stable_adjoint":
         from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 
         _da_fields = reactor.conditions.fields
-        _da_rhs = lambda t, y, p: network.dCdt(y, p, _da_fields, 0)
+        _da_rhs = lambda t, y, p: model.dCdt(y, p, _da_fields, 0)
 
     def _predict(p, ic_thetas, C0s, rctr=None):
         """Predicted observed-species trajectory per dataset, applying the
@@ -1106,7 +1106,7 @@ def calibrate(
 
     rate_theta0 = jnp.stack(
         [
-            _to_unconstrained(p0_full[network.param_index[name]], t)
+            _to_unconstrained(p0_full[model.param_index[name]], t)
             for name, t in zip(free_params, resolved_transforms)
         ]
     )
@@ -1301,7 +1301,7 @@ def calibrate(
         if laplace_dtmax is not None and laplace_dtmax != getattr(reactor, "dtmax", None):
             lap_integrator = replace(reactor.integrator, dtmax=laplace_dtmax)
             lap_reactor = type(reactor)(
-                reactor.network,
+                reactor.model,
                 reactor.conditions,
                 rtol=reactor.rtol,
                 atol=reactor.atol,

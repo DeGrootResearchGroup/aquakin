@@ -27,7 +27,7 @@ import pytest
 
 import aquakin
 from aquakin.plant.bsm.bsm2 import (
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
     build_bsm2,
@@ -39,7 +39,7 @@ from aquakin.plant.plant import _TEMPERATURE_KEY
 def _one_cstr_plant(asm1, *, volume, model, T_in_K, Q=1000.0):
     """A minimal single-CSTR plant fed one constant influent (output dangling)."""
     plant = aquakin.Plant("one_cstr")
-    tank = CSTRUnit(name="tank", network=asm1, volume=volume,
+    tank = CSTRUnit(name="tank", model=asm1, volume=volume,
                     input_port_names=["inlet"], conditions={"T": 288.15},
                     aeration=Aeration(kla=0.0))
     plant.add_unit(tank)
@@ -65,13 +65,13 @@ def test_algebraic_default_carries_no_temperature_state():
 # ----- heat-balance tracked set + state growth -----------------------------
 
 def test_heatbalance_tracks_volume_units_except_digester():
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
-    base = build_bsm2(asm1_network=asm1, adm1_network=adm1)
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
+    base = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     base._build_state_layout()
     n_base = base._total_state_size
 
-    hb = build_bsm2(asm1_network=asm1, adm1_network=adm1,
+    hb = build_bsm2(asm1_model=asm1, adm1_model=adm1,
                     temperature_model=aquakin.HeatBalanceTemperature())
     hb._build_state_layout()
     # Every finite-volume liquid unit (5 reactors + primary + settler), NOT the
@@ -87,7 +87,7 @@ def test_heatbalance_tracks_volume_units_except_digester():
 
 def test_heatbalance_derivative_is_first_order_balance():
     """dT/dt for a single tracked CSTR equals (Q/V)(T_in - T)."""
-    asm1 = bsm2_asm1_network()
+    asm1 = bsm2_asm1_model()
     V, Q, T_in = 1500.0, 1000.0, 283.15      # 10 C influent
     plant, tank = _one_cstr_plant(
         asm1, volume=V, model=aquakin.HeatBalanceTemperature(), T_in_K=T_in, Q=Q)
@@ -108,13 +108,13 @@ def test_constant_influent_temperature_is_the_fixed_point():
     """At the influent temperature, every tracked unit's dT/dt is ~0 -- so the
     heat-balance steady temperature is the influent T, reproducing the algebraic
     instantaneous value (the no-regression-at-steady-state guarantee)."""
-    asm1 = bsm2_asm1_network()
-    adm1 = aquakin.load_network("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     T_in = 287.0
     # carbon=None so the only influent is the feed -> a single uniform inlet
     # temperature, whose fixed point is exactly that temperature (the external
     # carbon dose is a second influent at a different T, a tiny separate offset).
-    plant = build_bsm2(asm1_network=asm1, adm1_network=adm1, carbon=None,
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1, carbon=None,
                        temperature_model=aquakin.HeatBalanceTemperature())
     infl = bsm2_constant_influent(asm1)
     infl = dataclasses.replace(infl, T=jnp.full_like(infl.Q, T_in))
@@ -140,7 +140,7 @@ def test_heatbalance_solve_reaches_algebraic_steady_state():
     reactor concentrations then match the algebraic plant. This exercises the grown
     state vector and the appended-block atol through a real integration, which the
     single-RHS fixed-point checks cannot."""
-    asm1 = bsm2_asm1_network()
+    asm1 = bsm2_asm1_model()
     V, Q, T_in = 1500.0, 1000.0, 283.15           # 10 C influent, seed condition 15 C
     span, t_eval = (0.0, 60.0), jnp.array([60.0])
     alg, _ = _one_cstr_plant(asm1, volume=V, model=aquakin.AlgebraicTemperature(),
@@ -167,7 +167,7 @@ def test_heatbalance_solve_reaches_algebraic_steady_state():
 def test_grad_flows_through_temperature_state():
     """jax.grad of a reactor output w.r.t. the influent temperature flows through
     the heat-balance state without NaNs."""
-    asm1 = bsm2_asm1_network()
+    asm1 = bsm2_asm1_model()
     V, Q = 1500.0, 1000.0
     plant, tank = _one_cstr_plant(
         asm1, volume=V, model=aquakin.HeatBalanceTemperature(), T_in_K=283.15, Q=Q)

@@ -11,7 +11,7 @@ import jax.numpy as jnp
 
 import aquakin
 
-net = aquakin.load_network("asm3_2step")
+net = aquakin.load_model("asm3_2step")
 reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(T=293.15))
 C0 = net.concentrations({"SO2": 300.0, "SNH4": 30.0, "XAOB": 80.0,
                          "XNOB": 80.0, "SALK": 0.05})

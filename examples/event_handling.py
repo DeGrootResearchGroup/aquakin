@@ -27,7 +27,7 @@ O3_DOSE = 5e-5                       # mol/L added per re-dose
 
 
 def main() -> None:
-    net = aquakin.load_network("ozone_bromate")
+    net = aquakin.load_model("ozone_bromate")
     cond = aquakin.SpatialConditions.uniform(pH=7.5, T=293.15, OH_scavenging=1.0e5)
     reactor = aquakin.BatchReactor(net, cond)
 

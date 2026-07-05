@@ -35,7 +35,7 @@ class SensitivityResult:
         The scalar output value at the evaluation point.
     doutput_dparams : jnp.ndarray
         Gradient w.r.t. the **full** flat ``params`` vector, shape
-        ``(n_params,)`` --- every network parameter, not a free subset (unlike
+        ``(n_params,)`` --- every model parameter, not a free subset (unlike
         :func:`fit` / :func:`~aquakin.calibrate`, which optimise a chosen
         ``free_params`` list).
     doutput_dconditions : dict[str, jnp.ndarray]
@@ -79,7 +79,7 @@ def sensitivity(
         Initial concentration vector.
     params : jnp.ndarray, optional
         Parameter vector at which to evaluate sensitivity. Defaults to
-        ``reactor.network.default_parameters()``.
+        ``reactor.model.default_parameters()``.
     output_fn : callable
         Maps a solution object to a scalar JAX value, e.g.
         ``lambda sol: sol.C_named("BrO3-")[-1]``.
@@ -116,7 +116,7 @@ def sensitivity(
         reactor = with_adjoint(reactor, forward_adjoint())
     _diff = jax.jacfwd if ad_mode == "forward" else jax.grad
     if params is None:
-        params = reactor.network.default_parameters()
+        params = reactor.model.default_parameters()
     solve_kwargs = dict(solve_kwargs or {})
     if t_span is not None:
         solve_kwargs.setdefault("t_span", t_span)
@@ -158,7 +158,7 @@ def sensitivity(
         output=output_value,
         doutput_dparams=dout_dparams,
         doutput_dconditions=dout_dconditions,
-        parameter_names=list(reactor.network.parameters),
+        parameter_names=list(reactor.model.parameters),
     )
 
 
@@ -233,7 +233,7 @@ def fit(
     t_obs : jnp.ndarray
         Observation times, shape ``(n_t,)``. ``C0`` is taken to be the state
         at ``t = 0``; integration runs from ``0`` to ``t_obs[-1]`` and the
-        solution is sampled at ``t_obs``. In the network's native time unit
+        solution is sampled at ``t_obs``. In the model's native time unit
         unless ``time_unit`` is given.
     free_params : list[str]
         Namespaced parameter names to optimise. Other parameters are held at
@@ -242,15 +242,15 @@ def fit(
         Currently only ``"adjoint"`` is supported, which uses Diffrax's
         recursive-checkpoint adjoint via :func:`jax.grad` and SciPy L-BFGS-B.
     initial_params : jnp.ndarray, optional
-        Starting parameter vector. Defaults to ``reactor.network.default_parameters()``.
+        Starting parameter vector. Defaults to ``reactor.model.default_parameters()``.
     observed_species : list[str], optional
         Species names corresponding to columns of ``observations``. If
         ``None``, ``observations`` is assumed to be over all species in
-        network order.
+        model order.
     time_unit : str, optional
         The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
         ``"d"``), matching :meth:`BatchReactor.solve`. ``t_obs`` is converted
-        into the network's native (rate-constant) time unit before the solve, so
+        into the model's native (rate-constant) time unit before the solve, so
         a user who standardises on e.g. hours can pass the same hour-valued
         ``t_obs`` here as to ``solve``. Default ``None`` interprets ``t_obs`` in
         the native unit. The fitted rate constants are always in native units.
@@ -272,16 +272,16 @@ def fit(
     if not free_params:
         raise ValueError("free_params must be non-empty.")
 
-    network = reactor.network
+    model = reactor.model
     p0_full = (
-        jnp.asarray(initial_params) if initial_params is not None else network.default_parameters()
+        jnp.asarray(initial_params) if initial_params is not None else model.default_parameters()
     )
 
     free_indices = []
     for name in free_params:
-        if name not in network.param_index:
-            raise KeyError(f"Unknown parameter '{name}'. Available: {network.parameters}")
-        free_indices.append(network.param_index[name])
+        if name not in model.param_index:
+            raise KeyError(f"Unknown parameter '{name}'. Available: {model.parameters}")
+        free_indices.append(model.param_index[name])
     free_indices_arr = jnp.asarray(free_indices)
 
     observations = jnp.asarray(observations)
@@ -292,11 +292,11 @@ def fit(
         raise ValueError(f"t_obs must be non-negative; got t_obs[0] = {float(t_obs[0])}.")
     if t_obs.shape[0] > 1 and not bool(jnp.all(jnp.diff(t_obs) > 0)):
         raise ValueError("t_obs must be strictly ascending.")
-    # Convert t_obs into the network's native (rate-constant) time unit, the same
+    # Convert t_obs into the model's native (rate-constant) time unit, the same
     # way reactor.solve(time_unit=...) does, so the data axis and the rate
-    # constants share a unit. native_time_factor raises if the network has no
+    # constants share a unit. native_time_factor raises if the model has no
     # declared native unit to convert to (no silent mismatch at this boundary).
-    t_obs = t_obs * native_time_factor(network.time_unit, time_unit)
+    t_obs = t_obs * native_time_factor(model.time_unit, time_unit)
     if observations.ndim == 1:
         observations = observations[:, None]
     if observations.shape[0] != t_obs.shape[0]:
@@ -305,10 +305,10 @@ def fit(
         )
 
     if observed_species is None:
-        obs_species_indices = jnp.arange(network.n_species)
-        n_observed = network.n_species
+        obs_species_indices = jnp.arange(model.n_species)
+        n_observed = model.n_species
     else:
-        obs_species_indices = jnp.asarray([network.species_index[s] for s in observed_species])
+        obs_species_indices = jnp.asarray([model.species_index[s] for s in observed_species])
         n_observed = len(observed_species)
     if observations.shape[1] != n_observed:
         raise ValueError(
@@ -337,7 +337,7 @@ def fit(
     bounds_list = []
     unbounded = []
     for name in free_params:
-        b = network.parameter_bounds.get(name)
+        b = model.parameter_bounds.get(name)
         if b is None:
             bounds_list.append((-np.inf, np.inf))
             unbounded.append(name)
@@ -624,11 +624,11 @@ def dgsm(
         in the requested ``mode``. For a reactor study, ``fn`` typically maps the
         uncertain inputs into a parameter vector / initial state, calls
         ``reactor.solve`` and reduces the solution to the output(s). If the
-        network is stiff, build the reactor with a suitable ``dtmax`` so the
+        model is stiff, build the reactor with a suitable ``dtmax`` so the
         differentiated solve stays finite. ``dgsm`` does not own the solve (your
         ``fn`` builds the reactor and chooses the ``t_eval``), so it cannot apply
         a ``time_unit`` conversion for you: any ``t_eval`` / ``t_span`` inside
-        ``fn`` must be in the network's **native** time unit, or ``fn`` must pass
+        ``fn`` must be in the model's **native** time unit, or ``fn`` must pass
         ``time_unit=`` to its own ``reactor.solve`` call.
     ranges : array-like, shape (d, 2)
         ``[lower, upper]`` bound for each input; sampling is uniform within.
@@ -687,7 +687,7 @@ def dgsm(
                 f"DGSM needs >= 2 finite samples"
                 f"{f' for output {name!r}' if name else ''}; got {n}/{n_drawn}. "
                 "The output or its gradient is non-finite over the sampled ranges "
-                "-- for a stiff network, cap the integrator step via the "
+                "-- for a stiff model, cap the integrator step via the "
                 "reactor's dtmax."
             )
         nu = np.mean(g2, axis=0)

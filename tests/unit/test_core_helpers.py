@@ -1,7 +1,7 @@
 """Unit tests for the shared core helpers consolidated from scattered copies.
 
 * ``core/temperature.py`` -- the van't Hoff / Arrhenius primitives the pH solver,
-  both precipitation engines and the network rate-constant corrections route
+  both precipitation engines and the model rate-constant corrections route
   through (the formula used to be inlined verbatim at four sites).
 * ``core/hints.py`` -- the ``did_you_mean`` close-match suffix shared by every
   unknown-name error across core / integrate / utils / plant.

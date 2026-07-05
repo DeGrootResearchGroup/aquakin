@@ -2,7 +2,7 @@
 
 Diffrax's diffeqsolve is internally jit-able but is not auto-jitted, so Python
 overhead is paid per RK stage unless the caller wraps the integration in
-`jax.jit`. This script measures the difference on the ozone/bromate network.
+`jax.jit`. This script measures the difference on the ozone/bromate model.
 
 Run:
     .venv/bin/python scripts/benchmark_solve.py
@@ -19,17 +19,17 @@ import aquakin
 
 
 def setup():
-    network = aquakin.load_network("ozone_bromate")
+    model = aquakin.load_model("ozone_bromate")
     conditions = aquakin.SpatialConditions.uniform(
         n_locations=1, pH=7.5, T=293.15, OH_scavenging=5.0e4
     )
-    atol = jnp.full((network.n_species,), 1e-12)
-    atol = atol.at[network.species_index["OH"]].set(1e-20)
-    reactor = aquakin.BatchReactor(network, conditions, atol=atol)
-    C0 = network.default_concentrations()
-    C0 = C0.at[network.species_index["O3"]].set(1.0e-4)
-    C0 = C0.at[network.species_index["Br-"]].set(1.0e-5)
-    params = network.default_parameters()
+    atol = jnp.full((model.n_species,), 1e-12)
+    atol = atol.at[model.species_index["OH"]].set(1e-20)
+    reactor = aquakin.BatchReactor(model, conditions, atol=atol)
+    C0 = model.default_concentrations()
+    C0 = C0.at[model.species_index["O3"]].set(1.0e-4)
+    C0 = C0.at[model.species_index["Br-"]].set(1.0e-5)
+    params = model.default_parameters()
     t_eval = jnp.linspace(0.0, 600.0, 121)
     return reactor, C0, params, t_eval
 

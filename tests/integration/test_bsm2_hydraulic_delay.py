@@ -12,7 +12,7 @@ from aquakin.plant.bsm import (
     bsm2_warm_start,
     build_bsm2,
     HydraulicDelay,
-    bsm2_asm1_network,
+    bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
 )
@@ -23,17 +23,17 @@ from aquakin.plant.units import FlowContext
 
 @pytest.fixture(scope="module")
 def asm1():
-    return bsm2_asm1_network()
+    return bsm2_asm1_model()
 
 
 def _delay(asm1, tau=0.02, Q0=100.0):
-    return HydraulicDelayUnit(name="d", network=asm1, tau=tau, initial_flow=Q0,
+    return HydraulicDelayUnit(name="d", model=asm1, tau=tau, initial_flow=Q0,
                               initial_concentrations=asm1.default_concentrations())
 
 
 def _inlet(asm1, Q):
     return {"in": Stream(Q=jnp.asarray(float(Q)),
-                         C=asm1.default_concentrations(), network=asm1)}
+                         C=asm1.default_concentrations(), model=asm1)}
 
 
 # ----- HydraulicDelayUnit (no plant solve) --------------------------------
@@ -49,7 +49,7 @@ def test_state_size_and_initial_state(asm1):
 
 def test_tau_validation(asm1):
     with pytest.raises(ValueError, match="tau must be"):
-        HydraulicDelayUnit(name="d", network=asm1, tau=0.0)
+        HydraulicDelayUnit(name="d", model=asm1, tau=0.0)
 
 
 def test_outputs_are_load_over_flow(asm1):
@@ -76,7 +76,7 @@ def test_inlet_is_a_fixed_point(asm1):
     Q_in = 250.0
     state = jnp.concatenate([Q_in * C_in, jnp.asarray([Q_in])])
     dstate = d.rhs(0.0, state, {"in": Stream(Q=jnp.asarray(Q_in), C=C_in,
-                                             network=asm1)}, None)
+                                             model=asm1)}, None)
     assert jnp.allclose(dstate, 0.0, atol=1e-9)
 
 
@@ -99,7 +99,7 @@ def test_first_order_lag_response(asm1):
 
 @pytest.fixture(scope="module")
 def adm1():
-    return aquakin.load_network("adm1")
+    return aquakin.load_model("adm1")
 
 
 @pytest.fixture(scope="module")
@@ -141,7 +141,7 @@ def test_grad_through_delay_plant_is_finite(asm1):
     from aquakin.plant import Plant
     plant = Plant("t")
     plant.add_unit(HydraulicDelayUnit(
-        name="d", network=asm1, tau=0.02, initial_flow=100.0,
+        name="d", model=asm1, tau=0.02, initial_flow=100.0,
         initial_concentrations=asm1.default_concentrations()))
     plant.add_influent("feed", asm1.influent({"SS": 60.0}, Q=150.0), to="d.in")
     y0 = plant.initial_state()

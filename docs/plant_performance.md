@@ -40,7 +40,7 @@ one new default:
   ~15–20% faster everywhere at preserved accuracy. Applies to **every** reactor
   and the forward `jax_adjoint` plant path (the shared `_run_diffeqsolve`); a
   user-supplied `solver=` is honoured verbatim (opts out of the loosening). The
-  10× scale is off the *actual* `rtol`/`atol`, so it is correct for any network
+  10× scale is off the *actual* `rtol`/`atol`, so it is correct for any model
   scale (mol/L ozone as well as g/m³ ASM/ADM); validated steady states are
   unchanged within their tolerances.
 - **`Plant.solve(solver=...)`** overrides the integrator (`None` keeps the
@@ -135,7 +135,7 @@ it**: diffrax's `VeryChord` materialises + factorises `I − γ·dt·J` **once p
 step** (reused across stages/iterations), and for the 167-state plant the dense
 materialisation (`jacfwd`, ~33% of a step-attempt) dwarfs the LU factor (~4%,
 `cond ~10³` — well-conditioned, fast). But the plant Jacobian is **5–15%
-nonzero** — dense per-unit kinetic blocks (the network stoichiometry × rate
+nonzero** — dense per-unit kinetic blocks (the model stoichiometry × rate
 dependencies) plus sparse inter-unit flow coupling — so it can be formed by
 **column compression** (Curtis–Powell–Reid 1974): group structurally-orthogonal
 columns (sharing no nonzero row) into *colors*, push one seed per color through a
@@ -208,7 +208,7 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   to a probe, so the *syntactic* dependency is needed) and `inlet` from the
   dilution diagonal; the `TakacsClarifier` derives both by AD over diverse solids
   profiles (`ad_union` — the settling law is a smooth nonlinearity whose branches
-  a sample exercises, unlike Monod saturation); cross-network translators emit
+  a sample exercises, unlike Monod saturation); cross-model translators emit
   their own `coupling_pattern()` (`translator_coupling_pattern`, AD over the
   interface branches); stateless units are empty (the `StatelessUnit` default).
   `Plant._structural_plant_pattern` assembles these — `self` blocks on the
@@ -455,7 +455,7 @@ correct steady state for **both** clarifiers (Takács and Ideal agree: tank-5
 XB_H ≈ 1.7e3, SNH ≈ 0.5, healthy nitrification) in ~10 s. Getting there took
 three fixes, all diagnosed against the official BSM1 reference code:
 - **Decoupled recycle-flow resolution** (`Plant._resolve_flows`): the recycle
-  *flow* network is linear and concentration-independent, but BSM1's loop gain
+  *flow* model is linear and concentration-independent, but BSM1's loop gain
   is ≈0.99 (3× internal + 1× RAS), so the old 3-pass Gauss–Seidel left the
   flows at ~40% of steady → starved underflow → washout. Each unit now exposes a
   `flow_outputs` rule; `Plant` solves the small flow fixed point **exactly**
@@ -522,7 +522,7 @@ is what production simulators use to snap to steady state on any topology.
   sensitivity-screen direction) and **reverse** (`jax.grad`/`jacrev` — the
   calibration-gradient direction) alike. (It was a reverse-only `custom_vjp`;
   the `custom_jvp` is what unblocks forward-mode AD and `dgsm(ad_mode="forward")`
-  through `plant.steady_state`.) `J = ∂F/∂y` is full rank for the shipped networks
+  through `plant.steady_state`.) `J = ∂F/∂y` is full rank for the shipped models
   at their operating point, where the `jnp.linalg.solve` is exact; a rank-deficient
   `J` (a fully dormant species) leaves the IFT sensitivity undefined along that
   null direction (the old `lstsq` returned an arbitrary min-norm cotangent there
@@ -534,7 +534,7 @@ is what production simulators use to snap to steady state on any topology.
   call): it solves the steady state once and reuses a single `∂F/∂y` factorisation
   for every output and parameter. `output_fn` maps the flat plant state to a
   length-`m` output vector (default: the full state, giving `dy*/dθ`). `wrt`
-  selects the parameters to differentiate (flat indices or `"<network>.<param>"`
+  selects the parameters to differentiate (flat indices or `"<model>.<param>"`
   names; default all) — restricting to `k` parameters makes forward mode cost `k`
   solves rather than `n_params`. `mode` selects the AD direction — `"forward"`
   (one solve per parameter, all outputs follow; efficient when outputs outnumber
@@ -611,7 +611,7 @@ is what production simulators use to snap to steady state on any topology.
   is differentiable w.r.t. design variables, not only kinetic parameters, by
   folding them into `θ = (params, design)`. **Influent load** is wired:
   `design={"influent": {port: {"Q": ..., "C": ..., "T": ...}}}` (plain arrays —
-  a `Stream` can't be a θ leaf, it carries the non-JAX `network`) overrides the
+  a `Stream` can't be a θ leaf, it carries the non-JAX `model`) overrides the
   recorded influent at `influent_time` inside `_resolve_streams`/`_resolve_flows`,
   so `jax.grad` of a steady-state output w.r.t. the influent composition/flow
   works (BSM1 `d(effluent NH)/d(influent NH)` matches FD).
@@ -626,7 +626,7 @@ is what production simulators use to snap to steady state on any topology.
   `flow_outputs` and `compute_outputs` already receive as `params_unit`) — making
   it differentiable everywhere (steady-state IFT *and* dynamic solves) with no
   Protocol change. `_build_parameter_layout` **appends** a per-unit flow-setpoint
-  block after the kinetic network blocks (so kinetic indices are unchanged); the
+  block after the kinetic model blocks (so kinetic indices are unchanged); the
   setpoints are addressed by name `"<unit>.<setpoint>"` (e.g.
   `"underflow_split.ras"`, `"clarifier.underflow_Q"`, `"primary.f_PS"`). The
   `FlowParameterized` mixin (on `SplitterUnit`, `IdealClarifier`,
@@ -784,8 +784,8 @@ is what production simulators use to snap to steady state on any topology.
   This flag materializes it by column compression (one Jacobian-vector product
   per color — BSM2 46 colors vs 167 states) instead of dense `jax.jacfwd`,
   reconstructing the same matrix on the sparsity-pattern support: **bit-identical
-  to dense on a single-network plant** (BSM1, the recycle reconstruction is
-  exact) and **identical to PTC tolerance (~1e-7) on a multi-network plant**
+  to dense on a single-model plant** (BSM1, the recycle reconstruction is
+  exact) and **identical to PTC tolerance (~1e-7) on a multi-model plant**
   (BSM2 — the colored `linearize`+vmap materialization orders the recycle
   linear-solve arithmetic differently from dense `jacfwd`, a round-off difference
   well inside the 1e-6 convergence tolerance; same 83 iterations). The injection
@@ -797,7 +797,7 @@ is what production simulators use to snap to steady state on any topology.
   (the probe needs concrete arrays). To stay leak-free it builds the pattern from
   a **cached-recycle-map** forward rhs (the per-call recycle probing in
   `_rhs(recycle_map=None)` leaks a traced intermediate under the pattern-probe
-  `jit` on a multi-network plant); this cached-map rhs (`primal_rhs`) is also used
+  `jit` on a multi-model plant); this cached-map rhs (`primal_rhs`) is also used
   for the **forward iteration** (identical result, faster), while the one-shot
   implicit-function-theorem *gradient* keeps the **map-recomputing** rhs so a
   flow-setpoint parameter retains its `d(map)/d(param)` term (the #366 split).
@@ -844,7 +844,7 @@ per-species noise floor
 `atol_i = atol_factor·max(|operating_i|, |reference_i|, floor_frac·char)`
 (`atol_factor=floor_frac=1e-6`) via `integrate/_common.default_atol` — the
 SUNDIALS "vector atol" / Hairer "atol ∝ typical value" rule. The reactors scale
-off the network's `default_concentrations` (at construction); the plant scales
+off the model's `default_concentrations` (at construction); the plant scales
 off `y0` (at solve time). **`default_atol` `stop_gradient`s its result** — the
 tolerance is a solver noise floor, never a differentiated quantity. This matters
 because the plant scales off `y0`: under a gradient **with respect to `y0`** the
@@ -924,7 +924,7 @@ official files.
 [`plant/a2o.py`](aquakin/plant/a2o.py)).** The first phosphorus-capable
 flowsheet — the BSM plants run the P-free ASM1, so they cannot host bio-P or the
 chemical-P (metal-salt dosing) demonstration. `build_a2o` is the canonical
-**Anaerobic–Anoxic–Oxic** layout on the shipped `asm2d` network: an anaerobic
+**Anaerobic–Anoxic–Oxic** layout on the shipped `asm2d` model: an anaerobic
 selector (where PAOs release phosphate and store fermentation products) → anoxic
 denitrification → aerated nitrification + luxury P uptake → secondary clarifier,
 with the mixed-liquor internal recycle (aerobic→anoxic) and RAS
@@ -940,7 +940,7 @@ negative soluble pools (it relies on the `asm2d` `positivity_limiter`, now
 honoured inside `CSTRUnit`). It is **not** a standardised benchmark — the sizing
 is a representative municipal design, not a published reference set, so it is a
 worked nutrient-removal flowsheet, not a validation target. Building it is what
-surfaced the `asm2d` process-matrix import errors (see the `asm2d` network note);
+surfaced the `asm2d` process-matrix import errors (see the `asm2d` model note);
 the A²O viability test (`tests/integration/test_a2o.py`) is the regression guard
 the COD/N/P continuity suite could not be (each broken coefficient still
 conserves mass). It is the substrate for the chemical-P (ferric/alum dosing)
@@ -952,8 +952,8 @@ full sludge train: a **primary clarifier** ahead of the reactors, and
 downstream a **thickener**, an **ADM1 anaerobic digester** (35 °C, 3400 m³
 liquid + headspace) with the **ASM1↔ADM1 interfaces**, and a **dewatering**
 unit, with the two reject-water streams (thickener overflow + dewatering reject)
-recycled to the plant front. This is a genuinely **two-network** plant (ASM1
-water line + ADM1 digester); the interfaces ride on the cross-network
+recycled to the plant front. This is a genuinely **two-model** plant (ASM1
+water line + ADM1 digester); the interfaces ride on the cross-model
 connections as `StateTranslator`s, so the whole thing still integrates under one
 monolithic Diffrax solve with `jax.grad` flowing end to end. All controlled
 flows (internal recycle `Qintr=3·Q_ref`, RAS `Qr=Q_ref`, wastage `Qw=300`,
@@ -989,7 +989,7 @@ plain optional attributes on every `Plant`, `None` unless a builder sets them.)
 **Quantitatively validated** against the published BSM2 open-loop steady state
 (`tests/validation/test_bsm2_steadystate.py`): run with the published constant
 influent (`bsm2_constant_influent`) and the BSM2 (15 °C) ASM1 parameter set
-(`bsm2_parameters`), the whole multi-network plant — the 5 AS reactors, the
+(`bsm2_parameters`), the whole multi-model plant — the 5 AS reactors, the
 secondary settler, the primary clarifier, both ASM1↔ADM1 interfaces, the
 digester, and all recycle loops including the reject water — reproduces the
 reference reactor states (`asm1init_bsm2` `XINIT`: XB_H ≈ 2245, XB_A ≈ 167,
@@ -1006,15 +1006,15 @@ the AS line operates 0.14 °C below the reference and every rate is slowed ~1.4%
 Omitting this (running the line at the bare 15 °C reference) over-predicts
 nitrification by ~1.4% — the entire otherwise-residual deviation (SNH/SNO drift
 ~1–1.5%). `bsm2_constant_influent` therefore takes a `T=` argument: pass
-`T=BSM2_CONSTANT_INFLUENT_T` **together with `bsm2_asm1_network()`** (the 15 °C-
+`T=BSM2_CONSTANT_INFLUENT_T` **together with `bsm2_asm1_model()`** (the 15 °C-
 referenced corrections) for the faithful match. The default `T=None` keeps the
 historic temperature-agnostic behaviour (reactors fall back to their static 15 °C
-condition); do **not** pass `T` with the plain 20 °C `load_network("asm1")` — a
-14.858 °C inlet on a 20 °C-referenced network applies a large spurious slowdown
+condition); do **not** pass `T` with the plain 20 °C `load_model("asm1")` — a
+14.858 °C inlet on a 20 °C-referenced model applies a large spurious slowdown
 (~40% on nitrification). `bsm2_constant_influent` guards this footgun: a `T`
-more than `BSM2_INFLUENT_REF_T_TOL` (1 K) from the network's Arrhenius `ref_T`
+more than `BSM2_INFLUENT_REF_T_TOL` (1 K) from the model's Arrhenius `ref_T`
 warns, naming both values (the benchmark pairing is 0.14 K, well inside; the
-20 °C-network mismatch is ~5 K, caught). aquakin carries the reactor temperature *algebraically*
+20 °C-model mismatch is ~5 K, caught). aquakin carries the reactor temperature *algebraically*
 (the flow-weighted inlet each RHS, resolved with the recycle solve), not as a
 BSM2-style heat-balance state `dT/dt=(Q/V)(T_in−T)`; the two agree at steady
 state (both give T=T_in) and differ only by the (sub-hour) thermal lag in
@@ -1023,7 +1023,7 @@ reconciliations were needed: the BSM2 ASM1 values are the 15 °C set
 (`muH=4, KS=10, muA=0.5, bH=0.3, KX=0.1, etah=0.8`). (The shipped `asm1` is the
 textbook Gujer matrix with no heterotroph ammonia-limitation term, so — unlike
 earlier versions — no neutralising override is needed; for the BioWin/SUMO
-nutrient switch use the `asm1_ammonia_limitation` network, where that term
+nutrient switch use the `asm1_ammonia_limitation` model, where that term
 suppresses tank-5 growth ~24% and roughly halves XB_H.) ASM1 has no Arrhenius T-dependence
 (the `T` condition is declared but unused), so only the parameter *values*
 matter, not the 15 °C operating temperature.
@@ -1032,7 +1032,7 @@ matter, not the 15 °C operating temperature.
 files (`scripts/generate_bsm2_influent.py` → `aquakin/plant/bsm/data/BSM2_*.csv`,
 loaded by `load_bsm2_influent()`) drive the plant under diurnal + wet-weather
 forcing. The fixed-flow-pump fix carries straight over to BSM2 scale: warm-started
-from steady state, the 167-state two-network plant integrates a 14-day dynamic
+from steady state, the 167-state two-model plant integrates a 14-day dynamic
 run **efficiently** (~140 steps/day, not a step-ceiling blow-up) to a finite,
 healthy trajectory, and a rain event doubling the influent stays bounded because
 the recycle pumps hold throughput at `Q_in + Qintr + Qr`
@@ -1100,16 +1100,16 @@ temperature-carrying inlet is momentarily at zero flow it returns their mean
 rather than dividing by the flow epsilon (which would drive the result toward
 0 K and feed a garbage value into the Arrhenius correction). For BSM2 the AS
 reactors run at 15 °C:
-`bsm2_asm1_network()` re-references the ASM1 temperature corrections from 20 °C
+`bsm2_asm1_model()` re-references the ASM1 temperature corrections from 20 °C
 to 15 °C (keeping the BSM2 slopes), so with `bsm2_parameters` (the 15 °C values)
 the correction is unity at 15 °C — a constant-15 °C run reproduces the validated
 steady state exactly — and a temperature-carrying influent drives it away:
 colder water nitrifies more slowly (higher residual ammonia), warmer faster
 (`tests/integration/test_bsm2_seasonal.py`). `build_bsm2()` now **defaults** its
-ASM1 network to `bsm2_asm1_network()` (the 15 °C reference), so the out-of-the-box
-plant is the BSM2 calibration; pass the plain `load_network("asm1")` explicitly to
+ASM1 model to `bsm2_asm1_model()` (the 15 °C reference), so the out-of-the-box
+plant is the BSM2 calibration; pass the plain `load_model("asm1")` explicitly to
 get the 20 °C reference. When you build the influent yourself, reuse the **same
-network instance** for both `build_bsm2` and the influent so their identities match
+model instance** for both `build_bsm2` and the influent so their identities match
 (a clear error fires otherwise). The
 synthesised BSM2 influent CSVs carry a time-varying temperature column (`T`, in
 °C; a shoulder-season ~12→18 °C ramp + diurnal ripple), which
@@ -1192,7 +1192,7 @@ drives its split; absent, the SUMO default fraction (`InfluentFractions`, the
 Sumo1 tool's municipal values) is used. The reduction **conserves total COD**
 (`Σ COD states = total_cod`) and closes the ASM1 TKN balance. `fractionate` is
 plain arithmetic, so it runs element-wise on scalars **or arrays** — the per-row
-path. `characterize_influent(network, flow=, total_cod=, ...)` wraps it into a
+path. `characterize_influent(model, flow=, total_cod=, ...)` wraps it into a
 constant `InfluentSeries`. `read_influent_csv(..., column_map={role: header})`
 loads an **arbitrary-header** CSV (a lab/SCADA export — no renaming): roles are
 `t`/`Q`/`T`, any ASM species (mapped directly), and the aggregate names; mapped
@@ -1219,13 +1219,13 @@ temperature, and returns `self` for chaining after `build_*`. The per-unit
 mechanic is `CSTRUnit.set_temperature(temperature_K)` (updates `conditions["T"]`
 and its precomputed condition array).
 
-**Clear error on an influent/plant network-instance mismatch.** The seasonal
+**Clear error on an influent/plant model-instance mismatch.** The seasonal
 footgun was using *different instances* of the same ASM1 model for the plant and
-the influent (e.g. calling `bsm2_asm1_network()` twice): their temperature
+the influent (e.g. calling `bsm2_asm1_model()` twice): their temperature
 corrections / parameters then silently disagree. `Plant._default_translator` now
-distinguishes this from a genuine cross-network edge — when the two networks have
+distinguishes this from a genuine cross-model edge — when the two models have
 the same `name` and `species` but are different objects, the error says to *build
-the network once and pass that same object to both* (rather than the old, here
+the model once and pass that same object to both* (rather than the old, here
 misleading, "supply an explicit translator"); a truly different model still gets
 the translator message.
 
@@ -1331,7 +1331,7 @@ this unit's job. Covered by `tests/integration/test_dosing.py`.
 
 **Disinfection unit ops (`UVUnit` / `ChlorineContactUnit`, issue #280,
 [`plant/disinfection.py`](aquakin/plant/disinfection.py)).** The `uv_h2o2` /
-`ozone_bromate` *networks* model the oxidation chemistry, but neither is a
+`ozone_bromate` *models* model the oxidation chemistry, but neither is a
 disinfection *unit op* that reduces a pathogen indicator in the flowsheet. These
 two add that, matching the commercial simulators (GPS-X / SUMO track an indicator
 organism + the disinfectant residual and apply a dose/CT log-removal). Both
@@ -1652,9 +1652,9 @@ published Alex 2008 / Gernaey 2014 values (issue #153).
 `check_conservation` are exported at the top level (`aquakin.…`), not only via the
 deep `aquakin.plant.metrics` path. The effluent kernels and the `derived_*`
 functions accept a **`StreamSeries` directly** — `effluent_quality_index(eff)` /
-`derived_TSS(eff)` (network taken from the stream) — as well as the original
-explicit `(t, C, Q, network)` / `(C, network)` forms; a `StreamSeries` is
-duck-typed (`.t`/`.C`/`.network`), so a plain concentration array is unaffected.
+`derived_TSS(eff)` (model taken from the stream) — as well as the original
+explicit `(t, C, Q, model)` / `(C, model)` forms; a `StreamSeries` is
+duck-typed (`.t`/`.C`/`.model`), so a plain concentration array is unaffected.
 Demonstrated in `examples/bsm2_evaluation.py` (open- vs
 closed-loop table with the full term breakdown) and tested in
 `tests/integration/test_bsm2_evaluation.py` (plant terms finite/positive,
@@ -1691,8 +1691,8 @@ cost-OPEX deliverables, plus a standardized side-by-side KPI table:
   params)` (in [`bsm/evaluation.py`](aquakin/plant/bsm/evaluation.py)) reconstructs
   the stripped N₂O from a solved plant (reusing the control-aware `_kla_history`
   and reading the dissolved `SN2O` per reactor); it returns **0** when the AS
-  network has no `SN2O` state (the standard ASM1 BSM2 plant — only an N₂O-capable
-  network such as `asm3_2step_n2o` gives a non-zero direct term).
+  model has no `SN2O` state (the standard ASM1 BSM2 plant — only an N₂O-capable
+  model such as `asm3_2step_n2o` gives a non-zero direct term).
 - **Operating cost** ([`aquakin/plant/cost.py`](aquakin/plant/cost.py)):
   `operating_cost(*, energy_kwh_per_d, carbon_kg_cod_per_d, sludge_kg_tss_per_d,
   methane_kg_per_d, factors, co2e_per_d)` prices energy / external carbon /

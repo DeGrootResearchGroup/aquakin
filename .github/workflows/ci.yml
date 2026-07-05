@@ -185,7 +185,7 @@ jobs:
   # landing -- revert from there. Normally SKIPPED on pull requests (the fast gate
   # + the rotating smoke shard carry those), but runs on a PR carrying the
   # `full-ci` label -- the opt-in, pay-when-it-matters pre-merge full check for a
-  # high-risk change (touching integrate/, plant/, or networks/*.yaml). It is a
+  # high-risk change (touching integrate/, plant/, or models/*.yaml). It is a
   # visible signal, not a required check, so you read the result and decide.
   # Sharded across parallel runners, like the validation suite below and for the
   # same reason: even at `-n 1` (serial within a shard), a SINGLE long-lived
@@ -323,7 +323,7 @@ jobs:
               - 'aquakin/integrate/**'
               - 'aquakin/core/**'
               - 'aquakin/schema/**'
-              - 'aquakin/networks/**'
+              - 'aquakin/models/**'
               - 'tests/integration/test_plant_stable_adjoint.py'
               - 'tests/integration/test_dynamic_sensitivity.py'
               - 'pyproject.toml'
@@ -453,7 +453,7 @@ jobs:
   # full pre-merge check; see the `slow` job above). A visible signal on the PR,
   # not a required check.
   # Sharded across parallel runners. The validation tests are the heaviest in the
-  # repo (full 167-state two-network BSM2 plant steady states + ADM1 + AD through
+  # repo (full 167-state two-model BSM2 plant steady states + ADM1 + AD through
   # stiff solves), each ~4-5.5 GB resident. They cannot run concurrently within a
   # job (`-n 2` OOM-kills the 16 GB runner), so each shard runs serially (`-n 1`),
   # but a single process accumulating ~14 of them -- XLA compilation cache plus

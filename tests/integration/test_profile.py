@@ -16,7 +16,7 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 def growth_setup():
     """Two-parameter growth model (mu, Y) with informative noisy data, so the
     parameters are well identified -- a clean setting for profile-vs-Laplace."""
-    net = aquakin.load_network_from_file(str(FIXTURES / "dynamic_stoich_network.yaml"))
+    net = aquakin.load_model_from_file(str(FIXTURES / "dynamic_stoich_model.yaml"))
     reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = net.default_concentrations()
     true = net.default_parameters()
@@ -93,14 +93,14 @@ def test_profile_warmstart_matches_independent(growth_setup):
 
 
 @pytest.mark.slow  # heavy: profile_likelihood (many calibrate fits)
-def test_profile_ic_recovers_initial_condition(simple_network):
+def test_profile_ic_recovers_initial_condition(simple_model):
     """Profiling an unmeasured initial A0 (re-optimising the rate at each value)
     locates it at the true value."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     true_k, true_A0 = 0.25, 1.7
-    true_params = simple_network.default_parameters().at[0].set(true_k)
+    true_params = simple_model.default_parameters().at[0].set(true_k)
     t = jnp.linspace(0.5, 12.0, 25)
     sol = reactor.solve(jnp.asarray([true_A0, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t)
     obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
@@ -115,14 +115,14 @@ def test_profile_ic_recovers_initial_condition(simple_network):
 
 
 @pytest.mark.slow  # heavy: profile_likelihood
-def test_profile_open_interval_when_unidentifiable(simple_network):
+def test_profile_open_interval_when_unidentifiable(simple_model):
     """Observing only B over an early window, A0 and k are degenerate (only A0*k
     is constrained). Profiling A0 (re-optimising k) leaves the objective flat, so
     the interval is open on at least one side."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
-    true_params = simple_network.default_parameters().at[0].set(0.25)
+    true_params = simple_model.default_parameters().at[0].set(0.25)
     t = jnp.linspace(0.1, 0.6, 8)   # early: B ~ A0*k*t, only the product is seen
     obs = reactor.solve(jnp.asarray([1.5, 0.0]), params=true_params, t_span=(0.0, 0.6), t_eval=t).C_named("B")
     grid = np.linspace(1.0, 2.2, 13)
@@ -139,9 +139,9 @@ def test_profile_open_interval_when_unidentifiable(simple_network):
 # ---------- validation ----------
 
 
-def test_profile_requires_exactly_one_target(simple_network):
+def test_profile_requires_exactly_one_target(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     args = (reactor, jnp.asarray([1.0, 0.0]), jnp.asarray([0.0, 0.5]),
             jnp.asarray([0.0, 1.0]), ["A_to_B.k"])
@@ -152,10 +152,10 @@ def test_profile_requires_exactly_one_target(simple_network):
                                    profile_ic="A", observed_species=["B"])
 
 
-def test_profile_only_free_param_rejected(simple_network):
+def test_profile_only_free_param_rejected(simple_model):
     """Profiling the single free parameter leaves nothing to re-optimise."""
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     with pytest.raises(ValueError):
         aquakin.profile_likelihood(
@@ -165,9 +165,9 @@ def test_profile_only_free_param_rejected(simple_network):
         )
 
 
-def test_profile_unknown_target_rejected(simple_network):
+def test_profile_unknown_target_rejected(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     base = (reactor, jnp.asarray([1.0, 0.0]), jnp.asarray([0.0, 0.5]),
             jnp.asarray([0.0, 1.0]), ["A_to_B.k"])
@@ -221,7 +221,7 @@ def test_interp_ci_genuinely_open_does_not_warn():
 
 
 @pytest.mark.slow  # heavy: profile_likelihood
-def test_profile_all_failed_returns_unidentified(simple_network, monkeypatch):
+def test_profile_all_failed_returns_unidentified(simple_model, monkeypatch):
     """If every inner fit fails, the profile is all-NaN: return a clean
     'unidentified' result (mle=nan, open CI) rather than raising on nanmin/
     nanargmin of an all-NaN array. Each failure must also surface as a warning
@@ -233,7 +233,7 @@ def test_profile_all_failed_returns_unidentified(simple_network, monkeypatch):
 
     monkeypatch.setattr(profile_mod, "calibrate", _always_fail)
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     grid = np.linspace(0.1, 0.4, 5)
     with pytest.warns(UserWarning, match="inner fit failed.*RuntimeError"):
@@ -249,9 +249,9 @@ def test_profile_all_failed_returns_unidentified(simple_network, monkeypatch):
     assert all(f is None for f in pr.fits)
 
 
-def test_profile_multibatch_rejected(simple_network):
+def test_profile_multibatch_rejected(simple_model):
     reactor = aquakin.BatchReactor(
-        simple_network, aquakin.SpatialConditions.uniform(1, T=293.15)
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
     C0 = jnp.asarray([1.0, 0.0])
     with pytest.raises(NotImplementedError):

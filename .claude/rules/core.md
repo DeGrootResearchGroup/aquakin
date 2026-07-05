@@ -12,7 +12,7 @@ precipitation. Loaded automatically when editing files under `aquakin/core/`.
 ## AST Rate Expression Evaluation
 
 Rate expressions in YAML (e.g. `"k1 * [O3] * [Br-]"`) are parsed into an
-abstract syntax tree (AST) at network load time. The tree is walked once to
+abstract syntax tree (AST) at model load time. The tree is walked once to
 produce a JAX-compatible callable. This callable is used at runtime — the
 tree itself is not walked repeatedly.
 
@@ -95,8 +95,8 @@ deterministic per lane; the interning dedups identical subexpressions (also
 bit-identical, since the scalar path recomputes them to the same bits). So it is
 *not* the issue's masked-`jnp.prod` assembly (which would change the product
 reduction order); the order-preserving batched ops need no revalidation rebasing.
-Built once in `CompiledNetwork.__post_init__` (`_rate_kernel`) and dispatched
-from `CompiledNetwork.rates` after the clip / derived-condition / temperature
+Built once in `CompiledModel.__post_init__` (`_rate_kernel`) and dispatched
+from `CompiledModel.rates` after the clip / derived-condition / temperature
 preprocessing (which is unchanged); a future AST node type with no batched
 kernel raises `UnsupportedNode` and `rates` falls back to the scalar stack, so
 the kernel is a safe, transparent overlay. **Measured:** the rate jaxpr is the
@@ -104,7 +104,7 @@ dominant term in a differentiated stiff-solve compile (60% asm1 → 85% adm1 →
 94% wats_sewer_extended), and the kernel cuts that jaxpr ~2–12x (asm1 2.9x,
 adm1 2.2x, asm2d 10x, wats 5.6x), giving an end-to-end differentiated-compile
 speedup of ~1.15x (asm1) / 1.5x (adm1) / 3.4x (wats) — larger on the bigger
-networks, where the suite hurts most. Runtime is unchanged. Regression-guarded
+models, where the suite hurts most. Runtime is unchanged. Regression-guarded
 (bit-identicality on randomized states, op-count reduction, AD parity, and the
 unsupported-node fallback) in `tests/unit/test_vector_kernel.py`.
 
@@ -143,7 +143,7 @@ free_params=["O3_Br_direct.k1", "O3_OBr_oxidation.k2"]
 ```
 
 The flat `params` vector and its index map (`param_index`) are built once at
-compile time and stored in `CompiledNetwork`.
+compile time and stored in `CompiledModel`.
 
 ---
 
@@ -180,7 +180,7 @@ the README quickstart lead with it.
 **`conditions.with_(**overrides)` — edit from defaults.** Returns a copy with the
 named fields overridden (or added), scalars broadcast to the object's location
 count, the rest carried over, the original untouched. The recommended
-edit-from-defaults pattern is `network.default_conditions().with_(T=283.15)`
+edit-from-defaults pattern is `model.default_conditions().with_(T=283.15)`
 (start from the YAML-declared defaults, change only what differs). It always
 returns the base `SpatialConditions` type.
 
@@ -277,16 +277,16 @@ speciation layer, which holds each strong ion's charge. The whole path stays
 `jit`/`vmap`/`grad`-clean (the IFT pH sensitivity flows through it). Decisive
 correctness check: pure water in an inert salt stays at the neutral pH for any
 `I` (`tests/unit/test_ph_solver.py`). Exposed two ways: the `speciation:` block's
-`activity_model:` field (per-network YAML), and a load-time override
-`load_network("adm1", activity_model="davies")` (and `load_network_from_file(...,
-activity_model=...)`) to run a *shipped* network with activities without editing
+`activity_model:` field (per-model YAML), and a load-time override
+`load_model("adm1", activity_model="davies")` (and `load_model_from_file(...,
+activity_model=...)`) to run a *shipped* model with activities without editing
 its YAML.
 
 ### Derived conditions (the wiring)
 
-`CompiledNetwork` carries an optional `derived_condition_fn(C, params,
+`CompiledModel` carries an optional `derived_condition_fn(C, params,
 condition_arrays, loc_idx) -> {field: scalar}` and a `derived_fields` list.
-`CompiledNetwork.rates()` evaluates it once per RHS call and merges the result
+`CompiledModel.rates()` evaluates it once per RHS call and merges the result
 into `condition_arrays` (broadcast across locations) **before** the rate
 callables run — so existing `{pH}` / `pH_switch(pKa)` machinery sees the
 derived value unchanged, and every reactor (batch/PFR/particle/CFD) gets it
@@ -294,7 +294,7 @@ for free. Derived fields are *produced*, so they are added to the AST's valid
 condition set but are **not** in `conditions_required` (the user never
 supplies them).
 
-### `speciation:` block (`core/speciation.py`, schema in `schema/network_spec.py`)
+### `speciation:` block (`core/speciation.py`, schema in `schema/model_spec.py`)
 
 ```yaml
 speciation:
@@ -370,7 +370,7 @@ as the full declared total (ion-pairing not yet subtracted — a documented
 simplification of the source aqueous model). AD-clean (no data-dependent control
 flow), so it composes inside a Diffrax RHS and `jax.grad` flows through it.
 
-### `precipitation:` block (`core/precipitation.py`, schema in `schema/network_spec.py`)
+### `precipitation:` block (`core/precipitation.py`, schema in `schema/model_spec.py`)
 
 ```yaml
 precipitation:
@@ -412,7 +412,7 @@ rate `k * [solid] * {R_<name>}` and stoichiometry that consumes each ion's
 `hydroxide` ions carry no mass term). This removes the old duplication of
 re-writing the stoichiometry in a separate `reactions:` block (and the risk of it
 drifting from the ion counts — vivianite Fe₃(PO₄)₂ correctly gets `-3`/`-2`). The
-rate constant is namespaced `<name>_precipitation.k`. A network whose only
+rate constant is namespaced `<name>_precipitation.k`. A model whose only
 processes are precipitation may omit `reactions:` entirely; omitting `solid`/
 `rate_constant` falls back to a hand-written reaction referencing `{R_<name>}`.
 
@@ -429,7 +429,7 @@ speciation + water), speciation exposes it as the `I_aq` condition field, and
 precipitation reads it for its Davies/Debye-Hückel coefficients — so the pH and
 the saturation indices use the **same** ionic strength. Without it, precipitation
 falls back to `ionic_strength_offset` + its own mineral ions (which misses the
-bulk electrolyte), the right choice for a standalone fixed-pH network.
+bulk electrolyte), the right choice for a standalone fixed-pH model.
 
 An ion's `fraction` selects how its free
 activity is obtained: an acid/base system key — `carbonate`, `phosphate`,
@@ -444,25 +444,25 @@ what lets metal hydroxides (Fe(OH)₃, Al(OH)₃) and hydroxide-bearing minerals
 `fraction` (or an undeclared `species`) is a load-time error.
 
 **Composition with speciation.** `precipitation:` is wired in a `_compile_precipitation`
-stage in `core/network.py` *after* `_compile_speciation`, so when both blocks
+stage in `core/model.py` *after* `_compile_speciation`, so when both blocks
 are present the precipitation reads the **charge-balance pH** the speciation
 block produces (the two derived functions compose via `_compose_derived`:
 speciation runs, its pH is broadcast into the conditions, then precipitation
 runs and both results merge). The shipped
-[`precipitation_struvite_calcite.yaml`](aquakin/networks/precipitation_struvite_calcite.yaml)
+[`precipitation_struvite_calcite.yaml`](aquakin/models/precipitation_struvite_calcite.yaml)
 is the worked example (digester supernatant, struvite + calcite, fixed
 operating pH); the test suite also exercises the speciation→precipitation
 composition.
 
-**Units.** The worked network uses **mol/m³ (= mmol/L)** for the ions and
+**Units.** The worked model uses **mol/m³ (= mmol/L)** for the ions and
 solids so the precipitation stoichiometry is exact (one mole of mineral consumes
 one mole of each constituent ion), with the per-ion `molar_mass: 1000`
 converting mol/m³ → the mol/L the IAP/Ksp use. `clip_negative_states: true`
 protects the supersaturation term from a transiently-negative ion state.
 
-**Chemical-P removal network + AD limitation at extreme supersaturation.**
-[`precipitation_metal_phosphate.yaml`](aquakin/networks/precipitation_metal_phosphate.yaml)
-is the second worked network: ferric / aluminium dosing precipitates
+**Chemical-P removal model + AD limitation at extreme supersaturation.**
+[`precipitation_metal_phosphate.yaml`](aquakin/models/precipitation_metal_phosphate.yaml)
+is the second worked model: ferric / aluminium dosing precipitates
 orthophosphate as the very insoluble phosphates FePO₄ / AlPO₄ (after the
 plant-wide P/S/Fe extension of Flores-Alsina et al. 2016), while the same dosed
 metal competes to form the hydroxides Fe(OH)₃ / Al(OH)₃ (the `hydroxide`
@@ -477,7 +477,7 @@ sensitivity method survives the initial transient** (reverse adjoint, even with 
 `dtmax` cap; and the cap-free `forward_sensitivity`/`DirectAdjoint` — all return
 non-finite). This is the extreme end of the documented stiff-AD spectrum and is
 intrinsic to the chemistry (lowering `order` 2→1 cuts the Jacobian ~7 decades and
-still fails). So with the **default power-law** kinetics this network is a
+still fails). So with the **default power-law** kinetics this model is a
 forward-simulation demonstration; `precipitation_struvite_calcite` (modest
 `SI ~ 1–3`) remains the differentiable / calibratable power-law example. The
 `hydroxide` *engine* path is itself AD-clean at moderate supersaturation
@@ -490,7 +490,7 @@ The `~1e13` power-law Jacobian is **not** the documented `dtmax`/`stable_adjoint
 overflow (where the per-step operator `I − γ·dt·J` stays well-conditioned): here
 that operator is genuinely **near-singular** (cond `~1e13` even at tiny `dt`), so
 *every* sensitivity path fails — including the hand-written discrete adjoint
-(`stable_adjoint`), which NaNs on the multi-mineral network. The lesson (verified
+(`stable_adjoint`), which NaNs on the multi-mineral model. The lesson (verified
 numerically): you must **reduce the primal stiffness**, not swap the adjoint; the
 true sensitivity is tame (finite differences on the finite forward solve give an
 `O(0.01)` gradient), so the pathology is purely the through-the-transient AD.
@@ -517,7 +517,7 @@ a backprop through the iterations, which is huge and unnecessary), and the
 algebraic Jacobian it inverts is well-conditioned, so the `1e13` stiffness is
 gone. A mineral declares `mode: equilibrium` + a `solid:` species; the engine
 exposes `Xeq_<name>` (the equilibrium phase amount) and
-**`CompiledNetwork.precipitation_equilibrium(C, conditions)`** returns the
+**`CompiledModel.precipitation_equilibrium(C, conditions)`** returns the
 equilibrium-projected state (each equilibrium solid set to `Xeq`, dissolved ions
 rebalanced — mass-conserving). Verified on the metal-phosphate: equilibrium P
 removal reproduces the kinetic `t→∞` limit, mass closes exactly, the pH trend is
@@ -539,15 +539,15 @@ kinetic one).
 thermodynamically-grounded **bounded driver** `R = tanh(SI/(2ν)·ln10) =
 (Ω^{1/ν}−1)/(Ω^{1/ν}+1)` (bounded in `(−1, 1)`, `0` at `SI = 0`, `±1` far from
 saturation). The rate Jacobian is then `~k` (non-stiff), so a reverse gradient
-through the *time integration* of the ultra-insoluble network is finite, and the
+through the *time integration* of the ultra-insoluble model is finite, and the
 steady state (`R = 0` ⇔ `SI = 0`) is the same equilibrium the projection gives —
 verified to agree. The driver is a per-mineral `supersaturation_form: bounded`
 flag (default `power`); the reaction expression `k·X·{R}` is unchanged, so it is a
 drop-in. The trade-off is a slower precipitation *rate* far from saturation (the
 *endpoint* is unchanged); raise `k` to reach equilibrium faster.
-[`precipitation_metal_phosphate_equilibrium.yaml`](aquakin/networks/precipitation_metal_phosphate_equilibrium.yaml)
+[`precipitation_metal_phosphate_equilibrium.yaml`](aquakin/models/precipitation_metal_phosphate_equilibrium.yaml)
 (A) and
-[`precipitation_metal_phosphate_bounded.yaml`](aquakin/networks/precipitation_metal_phosphate_bounded.yaml)
+[`precipitation_metal_phosphate_bounded.yaml`](aquakin/models/precipitation_metal_phosphate_bounded.yaml)
 (B) are the worked examples; `tests/integration/test_precipitation_equilibrium.py`
 covers both plus the solver complementarity and the schema validation.
 

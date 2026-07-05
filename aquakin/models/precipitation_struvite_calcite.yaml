@@ -1,0 +1,74 @@
+model:
+  name: precipitation_struvite_calcite
+  version: "1.0"
+  description: >
+    Mineral precipitation from an anaerobic-digester supernatant: struvite
+    (MgNH4PO4.6H2O) and calcite (CaCO3), after the generalised precipitation
+    framework of Kazadi Mbamba et al. (2015). A demonstration of the
+    ``precipitation:`` block: each mineral declares its constituent ions, the
+    pKsp and the supersaturation order; the engine computes the saturation index
+    SI_<name> and the supersaturation rate factor R_<name> = sign(sigma)*|sigma|^n
+    from the free-ion activities at the (here fixed) operating pH, and exposes
+    them as condition fields. Declaring the precipitate species (solid) and the
+    crystallisation rate_constant auto-derives the precipitation reaction (the
+    engine consumes each ion at its formula count and produces the solid),
+    precipitating the mineral (or dissolving it when undersaturated, sign<0).
+
+    Concentrations are in mol/m3 (= mmol/L) so the precipitation stoichiometry is
+    exact (one mole of mineral consumes one mole of each constituent ion); the
+    block's per-ion molar_mass = 1000 converts mol/m3 to the mol/L the
+    ion-activity product / Ksp use. Free Ca/Mg are taken as the declared total
+    (ion-pairing not yet subtracted -- a documented simplification of the source
+    aqueous model). Activity coefficients use the Davies approximation at the
+    declared background ionic strength. pH is a fixed operating condition here; a
+    ``speciation:`` block can instead supply a charge-balance pH that the
+    precipitation reads (the two compose).
+  references:
+    - "Kazadi Mbamba, C., Batstone, D.J., Flores-Alsina, X. & Tait, S. (2015). A generalised chemical precipitation modelling approach in wastewater treatment applied to calcite. Water Research 68, 342-353."
+    - "Kazadi Mbamba, C., Tait, S., Flores-Alsina, X. & Batstone, D.J. (2015). A systematic study of multiple minerals precipitation modelling in wastewater treatment. Water Research 85, 359-370."
+
+species:
+  - {name: S_Mg,  default_concentration: 5.2,   units: "mol/m3", description: "Total magnesium (Mg2+)"}
+  - {name: S_NH,  default_concentration: 70.0,  units: "mol/m3", description: "Total ammonia nitrogen (NH4+ + NH3)"}
+  - {name: S_PO4, default_concentration: 3.1,   units: "mol/m3", description: "Total inorganic phosphate"}
+  - {name: S_Ca,  default_concentration: 2.7,   units: "mol/m3", description: "Total calcium (Ca2+)"}
+  - {name: S_IC,  default_concentration: 72.0,  units: "mol/m3", description: "Total inorganic carbon (CO2 + HCO3- + CO3 2-)"}
+  - {name: X_struvite, default_concentration: 1.0e-3, units: "mol/m3", description: "Struvite solid (MgNH4PO4.6H2O); small seed enables nucleation"}
+  - {name: X_calcite,  default_concentration: 1.0e-3, units: "mol/m3", description: "Calcite solid (CaCO3); small seed enables nucleation"}
+
+conditions:
+  - {name: T,  default: 308.15, description: "Temperature (K); 35 C digester."}
+  - {name: pH, default: 7.8,    description: "Operating pH (fixed)."}
+
+# Protect the rate's supersaturation term from a transiently-negative ion state.
+clip_negative_states: true
+
+precipitation:
+  pH_field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  activity_model: davies
+  ionic_strength_offset: 0.1          # background electrolyte (mol/L)
+  minerals:
+    - name: struvite
+      pKsp: 13.26                     # MgNH4PO4 (Ohlinger et al. 1998)
+      order: 3
+      # The precipitation reaction is auto-derived from this mineral: declaring
+      # the precipitate species (solid) and the crystallisation rate constant is
+      # enough -- the engine consumes each ion's species at -count and produces
+      # the solid at +1 (Mg2+ + NH4+ + PO4^3- -> MgNH4PO4). Source rate values
+      # ~0.4-12 1/h; here in 1/d, fast enough to saturate within the demo span.
+      solid: X_struvite
+      rate_constant: {value: 100.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
+      ions:
+        - {species: S_Mg,  molar_mass: 1000, count: 1, charge: 2}                       # Mg2+ (free)
+        - {species: S_NH,  molar_mass: 1000, count: 1, charge: 1, fraction: ammonia}    # NH4+ fraction at pH
+        - {species: S_PO4, molar_mass: 1000, count: 1, charge: 3, fraction: phosphate}  # PO4^3- fraction at pH
+    - name: calcite
+      pKsp: 8.48                      # CaCO3 (Plummer & Busenberg 1982)
+      order: 2
+      solid: X_calcite                # Ca2+ + CO3^2- -> CaCO3 (auto-derived reaction)
+      rate_constant: {value: 10.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
+      ions:
+        - {species: S_Ca, molar_mass: 1000, count: 1, charge: 2}                        # Ca2+ (free)
+        - {species: S_IC, molar_mass: 1000, count: 1, charge: 2, fraction: carbonate}   # CO3^2- fraction at pH

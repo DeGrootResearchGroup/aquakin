@@ -20,11 +20,11 @@ from aquakin.plant.streams import Stream
 
 @pytest.fixture(scope="module")
 def asm1():
-    return aquakin.load_network("asm1")
+    return aquakin.load_model("asm1")
 
 
 def _tank(asm1, name, aeration, **kw):
-    return CSTRUnit(name=name, network=asm1, volume=1000.0,
+    return CSTRUnit(name=name, model=asm1, volume=1000.0,
                     input_port_names=["in"], conditions={"T": 293.15},
                     aeration=aeration, **kw)
 
@@ -100,7 +100,7 @@ def test_controlled_rhs_without_signal_bus_raises(asm1):
     tank = p.units["reactor"]
     assert tank.required_signals           # sanity: it really is controlled
     C0 = asm1.default_concentrations()
-    inp = {"in": Stream(Q=jnp.asarray(1000.0), C=C0, network=asm1)}
+    inp = {"in": Stream(Q=jnp.asarray(1000.0), C=C0, model=asm1)}
     with pytest.raises(ValueError, match="control-signal bus"):
         # signals defaults to None -- the misuse this guards against.
         tank.rhs(jnp.asarray(0.0), C0, inp, asm1.default_parameters())
@@ -149,7 +149,7 @@ def _aeration_term(asm1, aeration, T_in, signals=None):
     convection + temperature-dependent chemistry terms cancel exactly)."""
     so = asm1.species_index["SO"]
     C = asm1.default_concentrations()
-    s = Stream(Q=jnp.asarray(100.0), C=C, network=asm1, T=jnp.asarray(float(T_in)))
+    s = Stream(Q=jnp.asarray(100.0), C=C, model=asm1, T=jnp.asarray(float(T_in)))
     p = asm1.default_parameters()
     aer_tank = _tank(asm1, "t", aeration)
     bare = _tank(asm1, "t0", None)
@@ -247,13 +247,13 @@ def test_temperature_correction_falls_back_to_static_T(asm1):
     static T condition (the same source the kinetics fall back to)."""
     so = asm1.species_index["SO"]
     C = asm1.default_concentrations()
-    s = Stream(Q=jnp.asarray(100.0), C=C, network=asm1, T=None)  # no inlet T
+    s = Stream(Q=jnp.asarray(100.0), C=C, model=asm1, T=None)  # no inlet T
     p = asm1.default_parameters()
-    tank = CSTRUnit(name="t", network=asm1, volume=1000.0, input_port_names=["in"],
+    tank = CSTRUnit(name="t", model=asm1, volume=1000.0, input_port_names=["in"],
                     conditions={"T": 303.15},
                     aeration=Aeration(kla=240.0, do_sat=8.0,
                                       temperature_correction=True, ref_T=293.15))
-    bare = CSTRUnit(name="t0", network=asm1, volume=1000.0, input_port_names=["in"],
+    bare = CSTRUnit(name="t0", model=asm1, volume=1000.0, input_port_names=["in"],
                     conditions={"T": 303.15}, aeration=None)
     term = float(tank.rhs(jnp.asarray(0.0), C, {"in": s}, p)[so]
                  - bare.rhs(jnp.asarray(0.0), C, {"in": s}, p)[so])
@@ -295,7 +295,7 @@ def test_build_bsm2_do_temperature_correction_flag():
     base = build_bsm2()
     t3 = base.units["tank3"]
     assert t3._av.temp_correct is False
-    assert float(t3._sat_vec[t3.network.species_index["SO"]]) == 8.0
+    assert float(t3._sat_vec[t3.model.species_index["SO"]]) == 8.0
 
     corr = build_bsm2(do_temperature_correction=True)
     t3c = corr.units["tank3"]
@@ -315,7 +315,7 @@ def test_temperature_corrected_aeration_is_ad_clean(asm1):
                                      temperature_correction=True))
 
     def so_rhs(T):
-        s = Stream(Q=jnp.asarray(100.0), C=C, network=asm1, T=T)
+        s = Stream(Q=jnp.asarray(100.0), C=C, model=asm1, T=T)
         return tank.rhs(jnp.asarray(0.0), C, {"in": s}, p)[so]
 
     g = jax.grad(so_rhs)(jnp.asarray(300.0))
