@@ -24,9 +24,11 @@ contract:
 
 The generic ``_build_objective`` / ``_run_multistart`` / ``_laplace_posterior``
 are then reused unchanged. This version fits **kinetic parameters against one or
-more output streams' channels** (via :class:`PlantObservable`); per-dataset free
-initial conditions, multi-batch joint fits and the reactor ``predictive_band``
-are not yet wired for plants.
+more output streams' channels** (via :class:`PlantObservable`), optionally
+alongside **assembled-state initial conditions** (``free_ic``, naming
+``(unit, species)`` slots -- the plant analogue of the reactor free-IC hook);
+multi-batch joint fits and the reactor ``predictive_band`` are not yet wired for
+plants.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Optional
 
 import jax.numpy as jnp
+import numpy as np
 
 from aquakin.core.hints import did_you_mean
 from aquakin.integrate._common import DifferentiationConfig
@@ -108,6 +111,29 @@ def _normalize_observables(observables, target, observed_channels) -> list[Plant
     return out
 
 
+def _normalize_free_ic(free_ic) -> list[tuple]:
+    """Coerce the free-initial-condition specification to ``(unit, species)``
+    pairs. Accepts ``"unit.species"`` strings and ``(unit, species)`` tuples."""
+    if not free_ic:
+        return []
+    out: list[tuple] = []
+    for spec in free_ic:
+        if isinstance(spec, str):
+            unit, _, species = spec.partition(".")
+            if not species:
+                raise ValueError(
+                    f"free_ic entry {spec!r} must be 'unit.species' or (unit, species)."
+                )
+            out.append((unit, species))
+        elif isinstance(spec, (tuple, list)) and len(spec) == 2:
+            out.append((spec[0], spec[1]))
+        else:
+            raise TypeError(
+                f"free_ic entry must be 'unit.species' or (unit, species); got {spec!r}."
+            )
+    return out
+
+
 # --- Forward-model seam (the plant end of the calibrate contract) ------
 
 
@@ -130,15 +156,18 @@ class _PlantForwardModel:
     integrator: object
     diff: DifferentiationConfig
     time_unit: Optional[str]
+    free_ic_active: bool = False
 
     def solve_trajectory(self, p, C0_k, tspan, tobs):
-        # ``C0_k`` (the reactor species-IC hook) is unused: a plant is warm-started
-        # from its own assembled ``y0``, not a per-species initial vector.
+        # With free initial conditions, ``C0_k`` is the plant's assembled ``y0``
+        # with the fitted-IC slots set by the generic layer; otherwise it is a
+        # placeholder and the plant is warm-started from the fixed ``self.y0``.
+        y0 = C0_k if self.free_ic_active else self.y0
         sol = self.plant.solve(
             tspan,
             t_eval=tobs,
             params=p,
-            y0=self.y0,
+            y0=y0,
             integrator=self.integrator,
             diff=self.diff,
             time_unit=self.time_unit,
@@ -236,11 +265,14 @@ def _resolve_plant_problem(
     priors,
     loss,
     sigma,
+    free_ic,
+    ic_bounds,
+    ic_prior_log_std,
+    y0,
 ) -> tuple[_CalibrationProblem, tuple]:
     """Validate + coerce the plant-calibration arguments into a
-    ``_CalibrationProblem`` (single dataset, no free ICs). Returns the problem and
-    the resolved observables ``((endpoint, channel_index_array), ...)`` for the
-    forward model."""
+    ``_CalibrationProblem`` (single dataset). Returns the problem and the resolved
+    observables ``((endpoint, channel_index_array), ...)`` for the forward model."""
     ns = _PlantParamNamespace(plant)
     for name in free_params:
         if name not in ns.param_index:
@@ -323,12 +355,54 @@ def _resolve_plant_problem(
     tspan = (float(t_span[0]), float(t_span[1]))
     sig_arr = jnp.asarray(sigma) if sigma is not None else None
 
-    # ``C0_base`` is a placeholder: the plant is warm-started from ``y0``, so the
-    # reactor species-IC hook is unused (and ``m_ic == 0`` disables IC fitting).
-    C0_placeholder = jnp.zeros(1)
+    # --- Free initial conditions (optional) ----------------------------
+    # Each free-IC spec names a (unit, species) slot of the plant's assembled
+    # state ``y0`` to fit (in log space, box-bounded). Resolve it to a flat state
+    # index: a concentration unit's sub-state IS its species vector, so the slot
+    # is the unit's state offset plus the species position.
+    free_ic_specs = _normalize_free_ic(free_ic)
+    m_ic = len(free_ic_specs)
+    ic_labels: list[str] = []
+    ic_flat_idx: list[int] = []
+    if m_ic:
+        if not (0.0 < ic_bounds[0] < ic_bounds[1]):
+            raise ValueError(f"ic_bounds must satisfy 0 < lo < hi; got {ic_bounds}.")
+        plant._build_state_layout()
+        for unit, species in free_ic_specs:
+            u = plant._unit_or_raise(unit)
+            if not plant._is_concentration_unit(u):
+                raise KeyError(
+                    f"free_ic unit '{unit}' has no per-species state (only "
+                    f"concentration units -- CSTRs, the digester -- support "
+                    f"free ICs); read it as a stream instead."
+                )
+            if species not in u.model.species_index:
+                suffix = did_you_mean(species, list(u.model.species))
+                raise KeyError(
+                    f"Unknown free_ic species '{species}' in unit '{unit}' "
+                    f"(model '{u.model.name}').{suffix}"
+                )
+            start = plant._state_layout[unit][0]
+            ic_flat_idx.append(start + u.model.species_index[species])
+            ic_labels.append(f"{unit}.{species}")
+
+    # ``C0_base`` carries the assembled ``y0`` the generic layer overrides at the
+    # free-IC slots (a concrete state is required); with no free ICs it is an
+    # unused placeholder and the plant is warm-started from the fixed ``y0``.
+    if m_ic:
+        y0_base = plant.initial_state() if y0 is None else jnp.asarray(y0)
+        ic_species_idx = jnp.asarray(ic_flat_idx, dtype=int)
+        vals = np.clip(np.asarray(y0_base)[ic_flat_idx], ic_bounds[0], ic_bounds[1])
+        ic_center_full = jnp.asarray(np.log(vals))
+        C0_base_arr = y0_base
+    else:
+        ic_species_idx = jnp.asarray([], dtype=int)
+        ic_center_full = jnp.zeros(0)
+        C0_base_arr = jnp.zeros(1)
+
     datasets = [
         (
-            C0_placeholder,
+            C0_base_arr,
             tobs,
             tspan,
             _build_loss(loss, obs, sig_arr),
@@ -360,7 +434,7 @@ def _resolve_plant_problem(
         param_halfwidth=None,
         datasets=datasets,
         dataset_static=[(tobs, tspan, datasets[0][3], datasets[0][4])],
-        C0_base=(C0_placeholder,),
+        C0_base=(C0_base_arr,),
         n_datasets=1,
         obs_species_indices=obs_species_indices,
         n_observed=n_observed,
@@ -369,12 +443,12 @@ def _resolve_plant_problem(
         prior_std=prior_std,
         prior_mask=prior_mask,
         has_priors=bool(active_priors),
-        free_ic=[],
-        m_ic=0,
-        ic_species_idx=jnp.asarray([], dtype=int),
-        ic_center_full=jnp.zeros(0),
-        ic_prior_log_std=None,
-        ic_bounds=(1e-3, 1e4),
+        free_ic=ic_labels,
+        m_ic=m_ic,
+        ic_species_idx=ic_species_idx,
+        ic_center_full=ic_center_full,
+        ic_prior_log_std=ic_prior_log_std,
+        ic_bounds=ic_bounds,
     )
     return problem, resolved_observables
 
@@ -395,6 +469,9 @@ def calibrate_plant(
     y0: Optional[jnp.ndarray] = None,
     params: Optional[jnp.ndarray] = None,
     transforms: Optional[dict] = None,
+    free_ic: Optional[list] = None,
+    ic_bounds: tuple = (1e-3, 1e4),
+    ic_prior_log_std: Optional[float] = None,
     time_unit: Optional[str] = None,
     loss: str = "mse",
     sigma: Optional[jnp.ndarray] = None,
@@ -468,6 +545,19 @@ def calibrate_plant(
         Per-parameter transform override (``"positive_log"`` / ``"logit"`` /
         ``"none"``). Unspecified free params fall back to the parameter's
         model-declared transform.
+    free_ic : list, optional
+        Assembled-state slots to fit alongside the parameters, each a
+        ``"unit.species"`` string or a ``(unit, species)`` pair naming an initial
+        concentration of a concentration unit (a CSTR, the digester). Fit in log
+        space, box-bounded by ``ic_bounds``; the starting value is read from ``y0``
+        (or the plant's default initial state). The fitted state is returned as
+        ``result.C0_fitted[0]`` and the fitted pools as ``result.ic_named[0]``.
+    ic_bounds : (float, float), optional
+        ``(lo, hi)`` box (physical space) for the free-IC values. Default
+        ``(1e-3, 1e4)``.
+    ic_prior_log_std : float, optional
+        If given, a Gaussian prior in log space that pulls each fitted IC toward
+        its starting value with this standard deviation (a soft regulariser).
     time_unit : str, optional
         Unit ``t_obs`` / ``t_span`` are expressed in; passed to ``plant.solve``.
     loss, sigma, priors, use_priors, optimizer, n_starts, jitter,
@@ -490,8 +580,9 @@ def calibrate_plant(
 
     Notes
     -----
-    Fits kinetic parameters against one or more output streams. Per-dataset free
-    initial conditions and multi-batch joint fits are not yet supported.
+    Fits kinetic parameters (and, optionally, assembled-state initial conditions
+    via ``free_ic``) against one or more output streams. Multi-batch joint fits
+    are not yet supported.
     """
     if integrator is None:
         from aquakin.plant.plant import IntegratorConfig
@@ -515,6 +606,10 @@ def calibrate_plant(
         priors=priors,
         loss=loss,
         sigma=sigma,
+        free_ic=free_ic,
+        ic_bounds=ic_bounds,
+        ic_prior_log_std=ic_prior_log_std,
+        y0=y0,
     )
 
     # Label the (fixed, single-solve) problem's gradient path from the plant
@@ -548,12 +643,13 @@ def calibrate_plant(
         integrator=integrator,
         diff=diff,
         time_unit=time_unit,
+        free_ic_active=problem.m_ic > 0,
     )
 
     bundle = _build_objective(problem, fm, cfg)
 
     rate_theta0 = problem.rate_theta0()
-    theta0 = rate_theta0  # no free-IC block in v1
+    theta0 = jnp.concatenate([rate_theta0, problem.ic_center_full]) if problem.m_ic else rate_theta0
     opt_bounds = _optimizer_bounds(problem, rate_theta0)
 
     if cfg.check_finite:
@@ -563,6 +659,7 @@ def calibrate_plant(
 
     theta_opt = jnp.asarray(result.x)
     physical_opt = problem.physical_from_theta(theta_opt[: problem.n_rate])
+    ic_opt = theta_opt[problem.n_rate :]
     full_params = problem.p0_full.at[problem.free_indices].set(physical_opt)
 
     posterior_cov = None
@@ -570,12 +667,24 @@ def calibrate_plant(
     params_named_std = None
     hessian_unconstrained = None
     if cfg.laplace:
+        # Laplace covariance is over the rate parameters; the fitted ICs are held
+        # at their MAP (the same convention as the reactor calibration).
         (
             posterior_cov,
             posterior_std_unconstrained,
             params_named_std,
             hessian_unconstrained,
-        ) = _laplace_posterior(problem, fm, cfg, theta_opt[: problem.n_rate], jnp.zeros(0))
+        ) = _laplace_posterior(problem, fm, cfg, theta_opt[: problem.n_rate], ic_opt)
+
+    # Fitted initial state (when free ICs are active): the base ``y0`` with the
+    # fitted slots set, plus the fitted values by ``"unit.species"`` label.
+    C0_fitted = None
+    ic_named = None
+    if problem.m_ic:
+        ic_vals = np.exp(np.asarray(ic_opt))
+        y0_fitted = problem.C0_base[0].at[problem.ic_species_idx].set(jnp.asarray(ic_vals))
+        C0_fitted = [y0_fitted]
+        ic_named = [{lbl: float(v) for lbl, v in zip(problem.free_ic, ic_vals)}]
 
     reported_loss = float(bundle.value_and_grad(theta_opt)[0])
 
@@ -593,6 +702,6 @@ def calibrate_plant(
         params_named_std=params_named_std,
         hessian_unconstrained=hessian_unconstrained,
         priors_applied=dict(problem.active_priors),
-        C0_fitted=None,
-        ic_named=None,
+        C0_fitted=C0_fitted,
+        ic_named=ic_named,
     )
