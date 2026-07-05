@@ -62,11 +62,17 @@ output/input counts and the adjoint stiffness, so both are exposed.) The
 the default adjoint it hits the `custom_vjp` wall, and even with `DirectAdjoint`
 the second derivatives through the stiff implicit solve are unreliable
 (they disagree with finite differences). Use a first-order Gauss–Newton
-`H = JᵀJ` instead (see `calibrate(laplace_method="gauss_newton")`).
+`H = JᵀJ` instead (see `calibrate(laplace=LaplaceConfig(method="gauss_newton"))`).
 
 ### `calibrate()` internal structure
 
-`calibrate` has a large public surface (~38 args) but a decomposed body
+`calibrate`'s tuning knobs are grouped into three public config dataclasses
+(alongside `DifferentiationConfig`), so the top-level signature stays short:
+`optimizer=OptimizerConfig(...)` (backend + multistart + `param_halfwidth`),
+`laplace=` (a `bool` **or** a `LaplaceConfig(...)`), and
+`free_ic=FreeICConfig(species=..., bounds=..., prior_log_std=...)`. `calibrate`
+unpacks them into the internal `_FitConfig` / `_resolve_problem` scalars; the
+same three configs serve `profile_likelihood`. Below that, the body is decomposed
 ([`integrate/calibrate.py`](aquakin/integrate/calibrate.py)). The argument
 handling is resolved **once** into a `_CalibrationProblem` dataclass (datasets,
 `free_indices`, resolved transforms, priors, free-IC blocks, `p0_full`) by
@@ -297,7 +303,7 @@ lets JAX/diffrax differentiate the whole solve (`RecursiveCheckpointAdjoint`,
 needs the cap for stiff), while `gradient="stable_adjoint"` replaces only the
 integrator's adjoint with the explicit per-step transposed solve (cap-free). The
 stable backend forces a reverse-mode residual Jacobian under
-`optimizer="gauss_newton"` (it is a reverse-only `custom_vjp`), and
+`optimizer=OptimizerConfig(method="gauss_newton")` (it is a reverse-only `custom_vjp`), and
 `stable_adjoint_max_steps` bounds the saved-trajectory buffer the backward scan
 walks (set it to a tight upper bound on the step count). Verified end-to-end: a
 synthetic Khalil calibration reaches the **same optimum** as the capped-Kvaerno5

@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 import aquakin
+from aquakin import LaplaceConfig, OptimizerConfig
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
@@ -25,8 +26,11 @@ def growth_setup():
     rng = np.random.default_rng(1)
     sig = 0.3
     obs = jnp.stack(
-        [jnp.asarray(np.asarray(sol.C_named(s)) + sig * rng.standard_normal(t.shape))
-         for s in ("S", "X")], axis=1
+        [
+            jnp.asarray(np.asarray(sol.C_named(s)) + sig * rng.standard_normal(t.shape))
+            for s in ("S", "X")
+        ],
+        axis=1,
     )
     return net, reactor, C0, t, obs, sig
 
@@ -36,16 +40,31 @@ def test_profile_param_ci_matches_laplace(growth_setup):
     interval (delta=1.92 crossings) matches the Laplace MAP +/- 1.96 sigma."""
     net, reactor, C0, t, obs, sig = growth_setup
     cal = aquakin.calibrate(
-        reactor, C0, observations=obs, t_obs=t, free_params=["mu", "Y"],
-        observed_species=["S", "X"], loss="nll", sigma=jnp.asarray(sig),
-        laplace=True, laplace_method="gauss_newton",
+        reactor,
+        C0,
+        observations=obs,
+        t_obs=t,
+        free_params=["mu", "Y"],
+        observed_species=["S", "X"],
+        loss="nll",
+        sigma=jnp.asarray(sig),
+        laplace=LaplaceConfig(method="gauss_newton"),
     )
     mu_hat = cal.params_named["mu"]
     mu_std = cal.params_named_std["mu"]
     grid = np.linspace(max(0.05, mu_hat - 2.6 * mu_std), mu_hat + 2.6 * mu_std, 21)
     pr = aquakin.profile_likelihood(
-        reactor, C0, obs, t, ["mu", "Y"], grid=grid, profile_param="mu",
-        observed_species=["S", "X"], loss="nll", sigma=jnp.asarray(sig), n_starts=4,
+        reactor,
+        C0,
+        obs,
+        t,
+        ["mu", "Y"],
+        grid=grid,
+        profile_param="mu",
+        observed_species=["S", "X"],
+        loss="nll",
+        sigma=jnp.asarray(sig),
+        optimizer=OptimizerConfig(n_starts=4),
     )
     # Profile minimum == joint MLE.
     assert pr.mle == pytest.approx(mu_hat, rel=2e-2)
@@ -63,8 +82,17 @@ def test_profile_is_a_bowl(growth_setup):
     net, reactor, C0, t, obs, sig = growth_setup
     grid = np.linspace(0.6, 1.4, 17)
     pr = aquakin.profile_likelihood(
-        reactor, C0, obs, t, ["mu", "Y"], grid=grid, profile_param="mu",
-        observed_species=["S", "X"], loss="nll", sigma=jnp.asarray(sig), n_starts=4,
+        reactor,
+        C0,
+        obs,
+        t,
+        ["mu", "Y"],
+        grid=grid,
+        profile_param="mu",
+        observed_species=["S", "X"],
+        loss="nll",
+        sigma=jnp.asarray(sig),
+        optimizer=OptimizerConfig(n_starts=4),
     )
     imin = int(np.nanargmin(pr.delta_loss))
     assert pr.delta_loss[imin] == pytest.approx(0.0, abs=1e-6)
@@ -78,13 +106,18 @@ def test_profile_warmstart_matches_independent(growth_setup):
     net, reactor, C0, t, obs, sig = growth_setup
     grid = np.linspace(0.7, 1.3, 13)
     common = dict(
-        profile_param="mu", observed_species=["S", "X"], loss="nll",
-        sigma=jnp.asarray(sig), n_starts=4,
+        profile_param="mu",
+        observed_species=["S", "X"],
+        loss="nll",
+        sigma=jnp.asarray(sig),
+        optimizer=OptimizerConfig(n_starts=4),
     )
-    warm = aquakin.profile_likelihood(reactor, C0, obs, t, ["mu", "Y"], grid=grid,
-                                      warm_start=True, **common)
-    indep = aquakin.profile_likelihood(reactor, C0, obs, t, ["mu", "Y"], grid=grid,
-                                       warm_start=False, **common)
+    warm = aquakin.profile_likelihood(
+        reactor, C0, obs, t, ["mu", "Y"], grid=grid, warm_start=True, **common
+    )
+    indep = aquakin.profile_likelihood(
+        reactor, C0, obs, t, ["mu", "Y"], grid=grid, warm_start=False, **common
+    )
     assert warm.mle == pytest.approx(indep.mle, rel=2e-2)
     assert np.allclose(warm.delta_loss, indep.delta_loss, atol=0.05, equal_nan=True)
 
@@ -96,19 +129,28 @@ def test_profile_warmstart_matches_independent(growth_setup):
 def test_profile_ic_recovers_initial_condition(simple_model):
     """Profiling an unmeasured initial A0 (re-optimising the rate at each value)
     locates it at the true value."""
-    reactor = aquakin.BatchReactor(
-        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
-    )
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     true_k, true_A0 = 0.25, 1.7
     true_params = simple_model.default_parameters().at[0].set(true_k)
     t = jnp.linspace(0.5, 12.0, 25)
-    sol = reactor.solve(jnp.asarray([true_A0, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t)
+    sol = reactor.solve(
+        jnp.asarray([true_A0, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t
+    )
     obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
     grid = np.linspace(1.3, 2.1, 17)
     pr = aquakin.profile_likelihood(
-        reactor, jnp.asarray([1.0, 0.0]), obs, t, ["A_to_B.k"], grid=grid,
-        profile_ic="A", transforms={"A_to_B.k": "positive_log"},
-        observed_species=["A", "B"], loss="nll", sigma=jnp.asarray(0.02), n_starts=4,
+        reactor,
+        jnp.asarray([1.0, 0.0]),
+        obs,
+        t,
+        ["A_to_B.k"],
+        grid=grid,
+        profile_ic="A",
+        transforms={"A_to_B.k": "positive_log"},
+        observed_species=["A", "B"],
+        loss="nll",
+        sigma=jnp.asarray(0.02),
+        optimizer=OptimizerConfig(n_starts=4),
     )
     assert pr.profiled == "A"
     assert pr.mle == pytest.approx(true_A0, abs=0.06)
@@ -119,17 +161,26 @@ def test_profile_open_interval_when_unidentifiable(simple_model):
     """Observing only B over an early window, A0 and k are degenerate (only A0*k
     is constrained). Profiling A0 (re-optimising k) leaves the objective flat, so
     the interval is open on at least one side."""
-    reactor = aquakin.BatchReactor(
-        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
-    )
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     true_params = simple_model.default_parameters().at[0].set(0.25)
-    t = jnp.linspace(0.1, 0.6, 8)   # early: B ~ A0*k*t, only the product is seen
-    obs = reactor.solve(jnp.asarray([1.5, 0.0]), params=true_params, t_span=(0.0, 0.6), t_eval=t).C_named("B")
+    t = jnp.linspace(0.1, 0.6, 8)  # early: B ~ A0*k*t, only the product is seen
+    obs = reactor.solve(
+        jnp.asarray([1.5, 0.0]), params=true_params, t_span=(0.0, 0.6), t_eval=t
+    ).C_named("B")
     grid = np.linspace(1.0, 2.2, 13)
     pr = aquakin.profile_likelihood(
-        reactor, jnp.asarray([1.5, 0.0]), obs, t, ["A_to_B.k"], grid=grid,
-        profile_ic="A", transforms={"A_to_B.k": "positive_log"},
-        observed_species=["B"], loss="nll", sigma=jnp.asarray(0.01), n_starts=4,
+        reactor,
+        jnp.asarray([1.5, 0.0]),
+        obs,
+        t,
+        ["A_to_B.k"],
+        grid=grid,
+        profile_ic="A",
+        transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"],
+        loss="nll",
+        sigma=jnp.asarray(0.01),
+        optimizer=OptimizerConfig(n_starts=4),
     )
     # Flat profile -> at least one bound is open (None).
     assert pr.ci[0] is None or pr.ci[1] is None
@@ -140,43 +191,55 @@ def test_profile_open_interval_when_unidentifiable(simple_model):
 
 
 def test_profile_requires_exactly_one_target(simple_model):
-    reactor = aquakin.BatchReactor(
-        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
+    args = (
+        reactor,
+        jnp.asarray([1.0, 0.0]),
+        jnp.asarray([0.0, 0.5]),
+        jnp.asarray([0.0, 1.0]),
+        ["A_to_B.k"],
     )
-    args = (reactor, jnp.asarray([1.0, 0.0]), jnp.asarray([0.0, 0.5]),
-            jnp.asarray([0.0, 1.0]), ["A_to_B.k"])
-    with pytest.raises(ValueError):   # neither
+    with pytest.raises(ValueError):  # neither
         aquakin.profile_likelihood(*args, grid=[0.1, 0.2], observed_species=["B"])
-    with pytest.raises(ValueError):   # both
-        aquakin.profile_likelihood(*args, grid=[0.1, 0.2], profile_param="A_to_B.k",
-                                   profile_ic="A", observed_species=["B"])
+    with pytest.raises(ValueError):  # both
+        aquakin.profile_likelihood(
+            *args, grid=[0.1, 0.2], profile_param="A_to_B.k", profile_ic="A", observed_species=["B"]
+        )
 
 
 def test_profile_only_free_param_rejected(simple_model):
     """Profiling the single free parameter leaves nothing to re-optimise."""
-    reactor = aquakin.BatchReactor(
-        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
-    )
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     with pytest.raises(ValueError):
         aquakin.profile_likelihood(
-            reactor, jnp.asarray([1.0, 0.0]), jnp.asarray([0.0, 0.5]),
-            jnp.asarray([0.0, 1.0]), ["A_to_B.k"], grid=[0.1, 0.2, 0.3],
-            profile_param="A_to_B.k", observed_species=["B"],
+            reactor,
+            jnp.asarray([1.0, 0.0]),
+            jnp.asarray([0.0, 0.5]),
+            jnp.asarray([0.0, 1.0]),
+            ["A_to_B.k"],
+            grid=[0.1, 0.2, 0.3],
+            profile_param="A_to_B.k",
+            observed_species=["B"],
         )
 
 
 def test_profile_unknown_target_rejected(simple_model):
-    reactor = aquakin.BatchReactor(
-        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
+    base = (
+        reactor,
+        jnp.asarray([1.0, 0.0]),
+        jnp.asarray([0.0, 0.5]),
+        jnp.asarray([0.0, 1.0]),
+        ["A_to_B.k"],
     )
-    base = (reactor, jnp.asarray([1.0, 0.0]), jnp.asarray([0.0, 0.5]),
-            jnp.asarray([0.0, 1.0]), ["A_to_B.k"])
     with pytest.raises(KeyError):
-        aquakin.profile_likelihood(*base, grid=[0.1, 0.2], profile_param="nope",
-                                   observed_species=["B"])
+        aquakin.profile_likelihood(
+            *base, grid=[0.1, 0.2], profile_param="nope", observed_species=["B"]
+        )
     with pytest.raises(KeyError):
-        aquakin.profile_likelihood(*base, grid=[0.1, 0.2], profile_ic="nope",
-                                   observed_species=["B"])
+        aquakin.profile_likelihood(
+            *base, grid=[0.1, 0.2], profile_ic="nope", observed_species=["B"]
+        )
 
 
 def test_interp_ci_clean_bowl():
@@ -203,8 +266,8 @@ def test_interp_ci_nan_in_crossing_region_warns_and_is_open():
     delta_loss = np.array([4.0, np.nan, 0.0, 1.0, 4.0])  # NaN on the lower side
     with pytest.warns(UserWarning, match="lower confidence bound is indeterminate"):
         lo, hi = _interp_ci(grid, delta_loss, delta=1.92)
-    assert lo is None              # blocked by the NaN
-    assert hi is not None          # upper side is clean
+    assert lo is None  # blocked by the NaN
+    assert hi is not None  # upper side is clean
 
 
 def test_interp_ci_genuinely_open_does_not_warn():
@@ -232,15 +295,19 @@ def test_profile_all_failed_returns_unidentified(simple_model, monkeypatch):
         raise RuntimeError("inner fit blew up")
 
     monkeypatch.setattr(profile_mod, "calibrate", _always_fail)
-    reactor = aquakin.BatchReactor(
-        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
-    )
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     grid = np.linspace(0.1, 0.4, 5)
     with pytest.warns(UserWarning, match="inner fit failed.*RuntimeError"):
         pr = aquakin.profile_likelihood(
-            reactor, jnp.asarray([1.0, 0.0]), jnp.asarray([0.0, 0.5]),
-            jnp.asarray([0.0, 1.0]), ["A_to_B.k"], grid=grid,
-            profile_ic="A", observed_species=["B"], n_starts=2,
+            reactor,
+            jnp.asarray([1.0, 0.0]),
+            jnp.asarray([0.0, 0.5]),
+            jnp.asarray([0.0, 1.0]),
+            ["A_to_B.k"],
+            grid=grid,
+            profile_ic="A",
+            observed_species=["B"],
+            optimizer=OptimizerConfig(n_starts=2),
         )
     assert np.isnan(pr.mle)
     assert pr.ci == (None, None)
@@ -250,15 +317,18 @@ def test_profile_all_failed_returns_unidentified(simple_model, monkeypatch):
 
 
 def test_profile_multibatch_rejected(simple_model):
-    reactor = aquakin.BatchReactor(
-        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
-    )
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = jnp.asarray([1.0, 0.0])
     with pytest.raises(NotImplementedError):
         aquakin.profile_likelihood(
-            reactor, [C0, C0], [jnp.asarray([0.0, 0.5])] * 2,
-            [jnp.asarray([0.0, 1.0])] * 2, ["A_to_B.k"], grid=[0.1, 0.2],
-            profile_ic="A", observed_species=["B"],
+            reactor,
+            [C0, C0],
+            [jnp.asarray([0.0, 0.5])] * 2,
+            [jnp.asarray([0.0, 1.0])] * 2,
+            ["A_to_B.k"],
+            grid=[0.1, 0.2],
+            profile_ic="A",
+            observed_species=["B"],
         )
 
 
@@ -271,11 +341,21 @@ def test_profile_compiled_cache_matches_uncached(growth_setup):
     """
     net, reactor, C0, t, obs, sig = growth_setup
     grid = np.linspace(0.4, 1.6, 3)
-    common = dict(observed_species=["S", "X"], loss="mse", optimizer="gauss_newton")
+    common = dict(
+        observed_species=["S", "X"], loss="mse", optimizer=OptimizerConfig(method="gauss_newton")
+    )
 
     pr = aquakin.profile_likelihood(
-        reactor, C0, obs, t, ["mu", "Y"], grid=grid, profile_param="Y",
-        warm_start=False, polish=False, n_starts=1, **common,
+        reactor,
+        C0,
+        obs,
+        t,
+        ["mu", "Y"],
+        grid=grid,
+        profile_param="Y",
+        warm_start=False,
+        polish=False,
+        **common,
     )
 
     # Uncached reference: one calibrate per grid point, each compiling fresh.
@@ -283,8 +363,14 @@ def test_profile_compiled_cache_matches_uncached(growth_setup):
     for v in grid:
         init_p = net.default_parameters().at[net.param_index["Y"]].set(v)
         c = aquakin.calibrate(
-            reactor, C0, obs, t, ["mu"], initial_params=init_p, n_starts=1,
-            laplace=False, **common,
+            reactor,
+            C0,
+            obs,
+            t,
+            ["mu"],
+            initial_params=init_p,
+            laplace=False,
+            **common,
         )
         ref.append(c.loss)
     # Bit-identical: the cache only reuses the compiled program, not the maths.
@@ -295,10 +381,28 @@ def test_profile_compiled_cache_matches_uncached(growth_setup):
     shared: dict = {}
     p0 = net.default_parameters().at[net.param_index["Y"]].set(0.5)
     p1 = net.default_parameters().at[net.param_index["Y"]].set(1.5)
-    aquakin.calibrate(reactor, C0, obs, t, ["mu"], initial_params=p0, n_starts=1,
-                      laplace=False, _compiled_cache=shared, **common)
+    aquakin.calibrate(
+        reactor,
+        C0,
+        obs,
+        t,
+        ["mu"],
+        initial_params=p0,
+        laplace=False,
+        _compiled_cache=shared,
+        **common,
+    )
     n_after_first = len(shared)
-    aquakin.calibrate(reactor, C0, obs, t, ["mu"], initial_params=p1, n_starts=1,
-                      laplace=False, _compiled_cache=shared, **common)
+    aquakin.calibrate(
+        reactor,
+        C0,
+        obs,
+        t,
+        ["mu"],
+        initial_params=p1,
+        laplace=False,
+        _compiled_cache=shared,
+        **common,
+    )
     assert n_after_first > 0
     assert len(shared) == n_after_first

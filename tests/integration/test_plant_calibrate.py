@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 import aquakin
+from aquakin import FreeICConfig, OptimizerConfig
 from aquakin.plant import CSTRUnit, Plant
 from aquakin.plant.influent import InfluentSeries
 
@@ -106,7 +107,7 @@ def test_plant_calibrate_recovers_synthetic_parameter(decay_plant):
         observed_channels=["B"],
         params=start,
         transforms={PARAM: "positive_log"},
-        max_iter=60,
+        optimizer=OptimizerConfig(max_iter=60),
     )
     assert result.converged
     # Recovery is to a few percent: the synthetic data uses the concrete forward
@@ -136,7 +137,7 @@ def test_plant_calibrate_gradient_is_finite_through_the_plant(decay_plant):
         observed_channels=["B"],
         params=base,
         transforms={PARAM: "positive_log"},
-        max_iter=1,
+        optimizer=OptimizerConfig(max_iter=1),
         check_finite=True,
     )
     assert np.isfinite(result.loss)
@@ -169,7 +170,7 @@ def test_plant_calibrate_multi_stream_recovers(two_tank_plant):
         ],
         params=start,
         transforms={PARAM: "positive_log"},
-        max_iter=60,
+        optimizer=OptimizerConfig(max_iter=60),
     )
     assert result.converged
     assert result.params_named[PARAM] == pytest.approx(true_k, rel=5e-2)
@@ -257,7 +258,7 @@ def test_plant_calibrate_recovers_bsm1_muH():
         params=base.at[gidx].set(true_muH * 0.7),
         y0=y0,
         transforms={"asm1.muH": "positive_log"},
-        max_iter=25,
+        optimizer=OptimizerConfig(max_iter=25),
     )
     assert result.converged
     assert result.params_named["asm1.muH"] == pytest.approx(true_muH, rel=2e-2)
@@ -289,9 +290,9 @@ def test_plant_calibrate_free_ic_recovers(decay_plant):
         params=base,
         y0=plant.initial_state(),  # start from the default (A0 = 1)
         t_span=(0.0, 6.0),
-        free_ic=["tank.A"],
+        free_ic=FreeICConfig(["tank.A"]),
         transforms={PARAM: "positive_log"},
-        max_iter=80,
+        optimizer=OptimizerConfig(max_iter=80),
     )
     assert result.converged
     assert result.params_named[PARAM] == pytest.approx(
@@ -324,7 +325,7 @@ def test_plant_calibrate_free_ic_unknown_species(decay_plant):
             [PARAM],
             target="tank",
             observed_channels=["A"],
-            free_ic=["tank.Z"],
+            free_ic=FreeICConfig(["tank.Z"]),
         )
 
 
@@ -337,8 +338,7 @@ def test_plant_calibrate_free_ic_bad_bounds(decay_plant):
             [PARAM],
             target="tank",
             observed_channels=["A"],
-            free_ic=["tank.A"],
-            ic_bounds=(5.0, 1.0),
+            free_ic=FreeICConfig(["tank.A"], bounds=(5.0, 1.0)),
         )
 
 
@@ -373,7 +373,7 @@ def test_plant_calibrate_multibatch_recovers(decay_plant):
         y0=[y1, y2],
         t_span=[(0.0, 8.0), (0.0, 8.0)],
         transforms={PARAM: "positive_log"},
-        max_iter=60,
+        optimizer=OptimizerConfig(max_iter=60),
     )
     assert result.converged
     assert result.params_named[PARAM] == pytest.approx(true_k, rel=5e-2)
@@ -400,7 +400,7 @@ def test_plant_calibrate_multibatch_rejects_free_ic(decay_plant):
             target="tank",
             observed_channels=["B"],
             y0=[plant.initial_state(), plant.initial_state()],
-            free_ic=["tank.A"],
+            free_ic=FreeICConfig(["tank.A"]),
         )
 
 

@@ -44,14 +44,19 @@ from aquakin.core.hints import did_you_mean
 from aquakin.integrate._common import DifferentiationConfig
 from aquakin.integrate.calibrate import (
     CalibrationResult,
+    FreeICConfig,
+    LaplaceConfig,
+    OptimizerConfig,
     _build_loss,
     _build_objective,
     _build_residual,
     _CalibrationProblem,
     _check_start_gradient,
     _FitConfig,
+    _free_ic_fields,
     _laplace_posterior,
     _optimizer_bounds,
+    _resolve_laplace,
     _run_multistart,
 )
 
@@ -540,28 +545,15 @@ def calibrate_plant(
     y0: Optional[jnp.ndarray] = None,
     params: Optional[jnp.ndarray] = None,
     transforms: Optional[dict] = None,
-    free_ic: Optional[list] = None,
-    ic_bounds: tuple = (1e-3, 1e4),
-    ic_prior_log_std: Optional[float] = None,
+    free_ic: Optional[FreeICConfig] = None,
     time_unit: Optional[str] = None,
     loss: str = "mse",
     sigma: Optional[jnp.ndarray] = None,
     priors: Optional[dict] = None,
     use_priors: bool = True,
-    optimizer: str = "lbfgsb",
-    n_starts: int = 1,
-    jitter: float = 0.5,
-    jitter_schedule: Optional[tuple] = None,
-    seed: int = 0,
-    max_iter: int = 500,
-    tol: float = 1e-6,
+    optimizer: OptimizerConfig = OptimizerConfig(),
+    laplace: "bool | LaplaceConfig" = False,
     check_finite: bool = True,
-    laplace: bool = False,
-    laplace_method: str = "fd",
-    laplace_ridge: float = 1e-6,
-    laplace_eig_keep: float = 1e-2,
-    laplace_fd_step: float = 1e-3,
-    laplace_dtmax: Optional[float] = None,
     integrator=None,
     diff: DifferentiationConfig = DifferentiationConfig(),
 ) -> CalibrationResult:
@@ -623,27 +615,23 @@ def calibrate_plant(
         Per-parameter transform override (``"positive_log"`` / ``"logit"`` /
         ``"none"``). Unspecified free params fall back to the parameter's
         model-declared transform.
-    free_ic : list, optional
-        Assembled-state slots to fit alongside the parameters, each a
-        ``"unit.species"`` string or a ``(unit, species)`` pair naming an initial
-        concentration of a concentration unit (a CSTR, the digester). Fit in log
-        space, box-bounded by ``ic_bounds``; the starting value is read from ``y0``
-        (or the plant's default initial state). The fitted state is returned as
-        ``result.C0_fitted[0]`` and the fitted pools as ``result.ic_named[0]``.
-    ic_bounds : (float, float), optional
-        ``(lo, hi)`` box (physical space) for the free-IC values. Default
-        ``(1e-3, 1e4)``.
-    ic_prior_log_std : float, optional
-        If given, a Gaussian prior in log space that pulls each fitted IC toward
-        its starting value with this standard deviation (a soft regulariser).
+    free_ic : FreeICConfig, optional
+        Assembled-state slots to fit alongside the parameters. ``species`` are
+        ``"unit.species"`` strings (or ``(unit, species)`` pairs) naming an initial
+        concentration of a concentration unit (a CSTR, the digester); they are fit
+        in log space, box-bounded by ``FreeICConfig.bounds``, with an optional
+        log-space prior via ``prior_log_std`` pulling each toward its starting
+        value (read from ``y0`` or the plant's default initial state). The fitted
+        state is returned as ``result.C0_fitted[0]`` and the pools as
+        ``result.ic_named[0]``. Default ``None`` (no free ICs).
     time_unit : str, optional
         Unit ``t_obs`` / ``t_span`` are expressed in; passed to ``plant.solve``.
-    loss, sigma, priors, use_priors, optimizer, n_starts, jitter,
-    jitter_schedule, seed, max_iter, tol, check_finite, laplace,
-    laplace_method, laplace_ridge, laplace_eig_keep, laplace_fd_step,
-    laplace_dtmax :
-        As in :func:`aquakin.calibrate` (the shared machinery). ``laplace``
-        defaults to ``False`` here (a plant Hessian is expensive).
+    loss, sigma, priors, use_priors, optimizer, laplace, check_finite :
+        As in :func:`aquakin.calibrate` (the shared machinery): ``optimizer`` is an
+        :class:`~aquakin.OptimizerConfig` and ``laplace`` a ``bool`` or
+        :class:`~aquakin.LaplaceConfig`. ``laplace`` defaults to ``False`` here (a
+        plant Hessian is expensive). ``OptimizerConfig.param_halfwidth`` is not used
+        by plant fits.
     integrator : IntegratorConfig, optional
         Plant integrator configuration passed to ``plant.solve``.
     diff : DifferentiationConfig, optional
@@ -672,6 +660,10 @@ def calibrate_plant(
     if not free_params:
         raise ValueError("free_params must be non-empty.")
 
+    # Unpack the config objects into the internal scalar knobs.
+    laplace_on, lap = _resolve_laplace(laplace)
+    ic_species, ic_bounds, ic_prior_log_std = _free_ic_fields(free_ic)
+
     observable_specs = _normalize_observables(observables, target, observed_channels)
     problem, resolved_observables, use_c0_as_y0 = _resolve_plant_problem(
         plant,
@@ -686,7 +678,7 @@ def calibrate_plant(
         priors=priors,
         loss=loss,
         sigma=sigma,
-        free_ic=free_ic,
+        free_ic=ic_species,
         ic_bounds=ic_bounds,
         ic_prior_log_std=ic_prior_log_std,
         y0=y0,
@@ -701,19 +693,19 @@ def calibrate_plant(
         check_finite=check_finite,
         stable_adjoint_max_steps=0,
         stable_adjoint_low_memory=False,
-        optimizer=optimizer,
-        max_iter=max_iter,
-        tol=tol,
-        n_starts=n_starts,
-        jitter=jitter,
-        jitter_schedule=jitter_schedule,
-        seed=seed,
-        laplace=laplace,
-        laplace_method=laplace_method,
-        laplace_ridge=laplace_ridge,
-        laplace_eig_keep=laplace_eig_keep,
-        laplace_fd_step=laplace_fd_step,
-        laplace_dtmax=laplace_dtmax,
+        optimizer=optimizer.method,
+        max_iter=optimizer.max_iter,
+        tol=optimizer.tol,
+        n_starts=optimizer.n_starts,
+        jitter=optimizer.jitter,
+        jitter_schedule=optimizer.jitter_schedule,
+        seed=optimizer.seed,
+        laplace=laplace_on,
+        laplace_method=lap.method,
+        laplace_ridge=lap.ridge,
+        laplace_eig_keep=lap.eig_keep,
+        laplace_fd_step=lap.fd_step,
+        laplace_dtmax=lap.dtmax,
         compiled_cache=None,
     )
     fm = _PlantForwardModel(

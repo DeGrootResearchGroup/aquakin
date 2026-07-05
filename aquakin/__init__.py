@@ -36,7 +36,14 @@ from aquakin.core.model import CompiledModel, compile_model
 from aquakin.core.parser import parse_rate_expression
 from aquakin.integrate.batch import BatchReactor, BatchSolution
 from aquakin.integrate.biofilm import BiofilmReactor, BiofilmSolution
-from aquakin.integrate.calibrate import CalibrationResult, PredictiveBand, calibrate
+from aquakin.integrate.calibrate import (
+    CalibrationResult,
+    FreeICConfig,
+    LaplaceConfig,
+    OptimizerConfig,
+    PredictiveBand,
+    calibrate,
+)
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
 from aquakin.integrate.cfd import CFDReactor
 from aquakin.integrate.particle import (
@@ -198,6 +205,9 @@ __all__ = [
     "t10_from_rtd",
     "CalibrationResult",
     "PredictiveBand",
+    "OptimizerConfig",
+    "LaplaceConfig",
+    "FreeICConfig",
     "ProfileResult",
     "CompiledModel",
     "FitResult",

@@ -24,14 +24,18 @@ re-fits any point a better-fitting neighbour can improve.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 import jax.numpy as jnp
 import numpy as np
 
 from aquakin.integrate._common import Reactor
-from aquakin.integrate.calibrate import calibrate
+from aquakin.integrate.calibrate import (
+    FreeICConfig,
+    OptimizerConfig,
+    calibrate,
+)
 
 
 @dataclass
@@ -153,17 +157,8 @@ def profile_likelihood(
     sigma=None,
     priors: Optional[dict[str, tuple[float, float]]] = None,
     use_priors: bool = True,
-    free_ic: Optional[list[str]] = None,
-    ic_bounds: tuple[float, float] = (1e-3, 1e4),
-    ic_prior_log_std: Optional[float] = None,
-    param_halfwidth: Optional[float] = None,
-    optimizer: str = "lbfgsb",
-    n_starts: int = 8,
-    jitter: float = 0.5,
-    jitter_schedule: Optional[tuple] = None,
-    seed: int = 0,
-    max_iter: int = 500,
-    tol: float = 1e-6,
+    free_ic: Optional[FreeICConfig] = None,
+    optimizer: OptimizerConfig = OptimizerConfig(n_starts=8),
 ) -> ProfileResult:
     """Profile-likelihood analysis of one parameter or initial condition.
 
@@ -205,11 +200,15 @@ def profile_likelihood(
         Grid value to start the continuation sweep from. Defaults to the grid
         midpoint. Ignored when ``warm_start=False``.
     initial_params, transforms, observed_species, loss, sigma, priors,
-    use_priors, free_ic, ic_bounds, ic_prior_log_std, param_halfwidth,
-    optimizer, n_starts, jitter, jitter_schedule, seed, max_iter, tol
-        Forwarded to each inner :func:`aquakin.calibrate` call. ``n_starts``
+    use_priors, free_ic, optimizer
+        Forwarded to each inner :func:`aquakin.calibrate` call (``free_ic`` is a
+        :class:`~aquakin.FreeICConfig`, ``optimizer`` an
+        :class:`~aquakin.OptimizerConfig`; the profiled parameter/species is
+        removed from ``free_ic`` for the inner fits). ``optimizer.n_starts``
         applies to the cold anchor (and to every point when
-        ``warm_start=False``); warm-started points use a single start.
+        ``warm_start=False``); warm-started points use a single start. The inner
+        fits force ``laplace=False`` (the profile, not the Laplace posterior, is
+        the identifiability estimate here).
 
     Returns
     -------
@@ -235,7 +234,7 @@ def profile_likelihood(
 
     # Resolve the profiled quantity and strip it from the relevant free set.
     inner_free = list(free_params)
-    inner_free_ic = list(free_ic or [])
+    inner_free_ic = list(free_ic.species) if free_ic is not None else []
     if profile_param is not None:
         if profile_param not in model.param_index:
             raise KeyError(
@@ -264,6 +263,11 @@ def profile_likelihood(
     # transforms, loss) and differ only in the pinned value / warm start, which
     # calibrate threads as runtime arguments -- so they reuse one compiled
     # program instead of recompiling the stiff objective + Jacobian per point.
+    # Rebuild the free-IC config for the inner fits with the profiled species (if
+    # any) removed; carry the caller's bounds / prior across.
+    inner_free_ic_cfg = (
+        replace(free_ic, species=inner_free_ic) if (free_ic is not None and inner_free_ic) else None
+    )
     inner_kw = dict(
         transforms=transforms,
         observed_species=observed_species,
@@ -271,16 +275,7 @@ def profile_likelihood(
         sigma=sigma,
         priors=priors,
         use_priors=use_priors,
-        free_ic=(inner_free_ic or None),
-        ic_bounds=ic_bounds,
-        ic_prior_log_std=ic_prior_log_std,
-        param_halfwidth=param_halfwidth,
-        optimizer=optimizer,
-        jitter=jitter,
-        jitter_schedule=jitter_schedule,
-        seed=seed,
-        max_iter=max_iter,
-        tol=tol,
+        free_ic=inner_free_ic_cfg,
         laplace=False,
         _compiled_cache={},
     )
@@ -301,7 +296,9 @@ def profile_likelihood(
             C0_pt = base_C0
         else:
             C0_pt = base_C0.at[s_idx].set(value)
-        n = n_starts if warm is None else 1
+        # Cold (anchor) points use the full multistart; warm-continued points
+        # start from the neighbour's optimum, so one start suffices.
+        n = optimizer.n_starts if warm is None else 1
         try:
             return calibrate(
                 reactor,
@@ -310,7 +307,7 @@ def profile_likelihood(
                 t_obs,
                 inner_free,
                 initial_params=init_p,
-                n_starts=n,
+                optimizer=replace(optimizer, n_starts=n),
                 **inner_kw,
             )
         except Exception as exc:

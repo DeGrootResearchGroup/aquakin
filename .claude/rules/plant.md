@@ -78,8 +78,9 @@ Key types:
   `_PlantForwardModel` reconstructs each stream and concatenates the observed
   channels, so the observation columns run in observable order), or the single
   `target=`/`observed_channels=` sugar. **Assembled-state initial conditions** can
-  be fit alongside the parameters via `free_ic=["unit.species", ...]` (or
-  `(unit, species)` pairs) — each names a slot of `y0` on a concentration unit
+  be fit alongside the parameters via `free_ic=FreeICConfig(species=["unit.species",
+  ...])` (species also accept `(unit, species)` pairs) — each names a slot of `y0`
+  on a concentration unit
   (CSTR / digester), resolved to a flat-state index (`_state_layout[unit][0] +
   species_index`) and fit in log space through the *same* reactor free-IC machinery
   (`m_ic`/`ic_species_idx`/`ic_center_full` on `_CalibrationProblem`); the fitted
