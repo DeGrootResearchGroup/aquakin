@@ -72,11 +72,16 @@ Key types:
   plant supplies a `_PlantForwardModel` (`plant.solve` + stream reconstruction; the
   cap-free stable adjoint by default, so the reverse gradient is finite) and a
   `_PlantParamNamespace` (adapts `plant.parameter_index` / per-model transforms &
-  priors to the `model` interface the generic layer expects). v1 fits kinetic
-  parameters against one stream's channels; per-dataset free ICs, multi-batch
-  joint fits, and `predictive_band` are reactor-only. Covered by
-  `tests/integration/test_plant_calibrate.py` (synthetic-parameter recovery +
-  the finite-through-the-plant gradient in the fast gate).
+  priors to the `model` interface the generic layer expects). Fits kinetic
+  parameters against **one or more output streams** — `observables=[PlantObservable(
+  stream, channels), ...]` (exported `aquakin.plant.PlantObservable`; the
+  `_PlantForwardModel` reconstructs each stream and concatenates the observed
+  channels, so the observation columns run in observable order), or the single
+  `target=`/`observed_channels=` sugar. Per-dataset free ICs, multi-batch joint
+  fits, and `predictive_band` are reactor-only. Covered by
+  `tests/integration/test_plant_calibrate.py` (single- and multi-stream synthetic
+  recovery, a full **BSM1** muH recovery through the stiff recycled plant, and the
+  finite-through-the-plant gradient in the fast gate).
   **Recycle resolution** — the methods named below (`_resolve_flows`,
   `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
   `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)
