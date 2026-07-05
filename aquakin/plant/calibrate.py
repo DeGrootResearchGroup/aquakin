@@ -24,9 +24,12 @@ contract:
 
 The generic ``_build_objective`` / ``_run_multistart`` / ``_laplace_posterior``
 are then reused unchanged. This version fits **kinetic parameters against one or
-more output streams' channels** (via :class:`PlantObservable`); per-dataset free
-initial conditions, multi-batch joint fits and the reactor ``predictive_band``
-are not yet wired for plants.
+more output streams' channels** (via :class:`PlantObservable`), optionally
+alongside **assembled-state initial conditions** (``free_ic``, naming
+``(unit, species)`` slots -- the plant analogue of the reactor free-IC hook), and
+over a **joint multi-batch fit** (several plant runs from different initial states
+sharing the parameters). The reactor ``predictive_band`` is not yet wired for
+plants.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Optional
 
 import jax.numpy as jnp
+import numpy as np
 
 from aquakin.core.hints import did_you_mean
 from aquakin.integrate._common import DifferentiationConfig
@@ -108,6 +112,29 @@ def _normalize_observables(observables, target, observed_channels) -> list[Plant
     return out
 
 
+def _normalize_free_ic(free_ic) -> list[tuple]:
+    """Coerce the free-initial-condition specification to ``(unit, species)``
+    pairs. Accepts ``"unit.species"`` strings and ``(unit, species)`` tuples."""
+    if not free_ic:
+        return []
+    out: list[tuple] = []
+    for spec in free_ic:
+        if isinstance(spec, str):
+            unit, _, species = spec.partition(".")
+            if not species:
+                raise ValueError(
+                    f"free_ic entry {spec!r} must be 'unit.species' or (unit, species)."
+                )
+            out.append((unit, species))
+        elif isinstance(spec, (tuple, list)) and len(spec) == 2:
+            out.append((spec[0], spec[1]))
+        else:
+            raise TypeError(
+                f"free_ic entry must be 'unit.species' or (unit, species); got {spec!r}."
+            )
+    return out
+
+
 # --- Forward-model seam (the plant end of the calibrate contract) ------
 
 
@@ -130,15 +157,19 @@ class _PlantForwardModel:
     integrator: object
     diff: DifferentiationConfig
     time_unit: Optional[str]
+    use_c0_as_y0: bool = False
 
     def solve_trajectory(self, p, C0_k, tspan, tobs):
-        # ``C0_k`` (the reactor species-IC hook) is unused: a plant is warm-started
-        # from its own assembled ``y0``, not a per-species initial vector.
+        # ``C0_k`` is the plant's assembled ``y0`` for this dataset -- a per-batch
+        # state, or a base state with fitted free-IC slots set by the generic
+        # layer -- when the fit carries one; otherwise it is a placeholder and the
+        # plant is warm-started from the fixed ``self.y0``.
+        y0 = C0_k if self.use_c0_as_y0 else self.y0
         sol = self.plant.solve(
             tspan,
             t_eval=tobs,
             params=p,
-            y0=self.y0,
+            y0=y0,
             integrator=self.integrator,
             diff=self.diff,
             time_unit=self.time_unit,
@@ -236,11 +267,16 @@ def _resolve_plant_problem(
     priors,
     loss,
     sigma,
-) -> tuple[_CalibrationProblem, tuple]:
+    free_ic,
+    ic_bounds,
+    ic_prior_log_std,
+    y0,
+) -> tuple[_CalibrationProblem, tuple, bool]:
     """Validate + coerce the plant-calibration arguments into a
-    ``_CalibrationProblem`` (single dataset, no free ICs). Returns the problem and
-    the resolved observables ``((endpoint, channel_index_array), ...)`` for the
-    forward model."""
+    ``_CalibrationProblem`` (one or several datasets). Returns the problem, the
+    resolved observables ``((endpoint, channel_index_array), ...)`` for the forward
+    model, and ``use_c0_as_y0`` (whether the forward model reads the per-dataset
+    ``C0`` as the plant ``y0``)."""
     ns = _PlantParamNamespace(plant)
     for name in free_params:
         if name not in ns.param_index:
@@ -300,41 +336,150 @@ def _resolve_plant_problem(
                 f"Parameter '{name}' has transform 'logit' but initial value {v} is not in (0, 1)."
             )
 
-    # Single dataset (multi-batch plant fits are a later extension).
-    tobs = jnp.asarray(t_obs)
-    if tobs.ndim != 1 or tobs.shape[0] < 1:
-        raise ValueError(f"t_obs must be a non-empty 1-D array, got shape {tobs.shape}.")
-    if tobs.shape[0] > 1 and not bool(jnp.all(jnp.diff(tobs) > 0)):
-        raise ValueError("t_obs must be strictly ascending.")
-    obs = jnp.asarray(observations)
-    if obs.ndim == 1:
-        obs = obs[:, None]
-    if obs.shape[0] != tobs.shape[0]:
-        raise ValueError(
-            f"observations has {obs.shape[0]} rows but t_obs has {tobs.shape[0]} entries."
+    # --- Datasets: one plant run, or several sharing the parameter vector ---
+    # A multi-batch fit is the plant analogue of the reactor's joint multi-batch:
+    # the batches share the plant, parameters and prior and their data terms are
+    # summed, differing in the per-dataset initial state ``y0`` (and its
+    # observations / window). It is detected as a *list* of observation arrays.
+    def _is_multi(x) -> bool:
+        return (
+            isinstance(x, (list, tuple))
+            and len(x) > 0
+            and isinstance(x[0], (list, tuple, np.ndarray, jnp.ndarray))
         )
-    if obs.shape[1] != n_observed:
-        raise ValueError(
-            f"observations has {obs.shape[1]} columns but {n_observed} channels "
-            f"were specified across the observable(s)."
-        )
-    if t_span is None:
-        t_span = (float(tobs[0]), float(tobs[-1]))
-    tspan = (float(t_span[0]), float(t_span[1]))
-    sig_arr = jnp.asarray(sigma) if sigma is not None else None
 
-    # ``C0_base`` is a placeholder: the plant is warm-started from ``y0``, so the
-    # reactor species-IC hook is unused (and ``m_ic == 0`` disables IC fitting).
-    C0_placeholder = jnp.zeros(1)
-    datasets = [
-        (
-            C0_placeholder,
-            tobs,
-            tspan,
-            _build_loss(loss, obs, sig_arr),
-            _build_residual(loss, obs, sig_arr),
+    multi = _is_multi(observations)
+    obs_list = list(observations) if multi else [observations]
+    tobs_list = list(t_obs) if multi else [t_obs]
+    n_datasets = len(obs_list)
+    if len(tobs_list) != n_datasets:
+        raise ValueError(
+            "In a multi-batch fit, observations and t_obs must be lists of equal "
+            f"length; got {n_datasets} and {len(tobs_list)}."
         )
-    ]
+
+    # --- Free initial conditions (single-batch only for now) -----------
+    # Each free-IC spec names a (unit, species) slot of the plant's assembled
+    # state ``y0`` to fit (in log space, box-bounded). Resolve it to a flat state
+    # index: a concentration unit's sub-state IS its species vector, so the slot
+    # is the unit's state offset plus the species position.
+    free_ic_specs = _normalize_free_ic(free_ic)
+    m_ic = len(free_ic_specs)
+    if multi and m_ic:
+        raise ValueError("free_ic is not yet supported together with a multi-batch plant fit.")
+    ic_labels: list[str] = []
+    ic_flat_idx: list[int] = []
+    if m_ic:
+        if not (0.0 < ic_bounds[0] < ic_bounds[1]):
+            raise ValueError(f"ic_bounds must satisfy 0 < lo < hi; got {ic_bounds}.")
+        plant._build_state_layout()
+        for unit, species in free_ic_specs:
+            u = plant._unit_or_raise(unit)
+            if not plant._is_concentration_unit(u):
+                raise KeyError(
+                    f"free_ic unit '{unit}' has no per-species state (only "
+                    f"concentration units -- CSTRs, the digester -- support "
+                    f"free ICs); read it as a stream instead."
+                )
+            if species not in u.model.species_index:
+                suffix = did_you_mean(species, list(u.model.species))
+                raise KeyError(
+                    f"Unknown free_ic species '{species}' in unit '{unit}' "
+                    f"(model '{u.model.name}').{suffix}"
+                )
+            start = plant._state_layout[unit][0]
+            ic_flat_idx.append(start + u.model.species_index[species])
+            ic_labels.append(f"{unit}.{species}")
+
+    # Per-dataset initial states: a multi-batch fit differs in ``y0``, so it must
+    # pass a list of concrete states, one per dataset; a single fit takes one
+    # ``y0`` (or ``None`` -> the plant default / fixed warm start).
+    if multi:
+        if not isinstance(y0, (list, tuple)) or len(y0) != n_datasets:
+            n_y0 = len(y0) if isinstance(y0, (list, tuple)) else "a single value"
+            raise ValueError(
+                "A multi-batch plant fit needs y0 as a list of initial states, one "
+                f"per dataset; got {n_y0} for {n_datasets} datasets."
+            )
+        y0_list = [jnp.asarray(v) for v in y0]
+    else:
+        y0_list = [y0]
+
+    # Per-dataset spans / sigmas (a single value broadcasts to every dataset).
+    if t_span is not None and multi and isinstance(t_span[0], (list, tuple)):
+        span_list = list(t_span)
+    else:
+        span_list = [t_span] * n_datasets
+    if isinstance(sigma, (list, tuple)):
+        if len(sigma) != n_datasets:
+            raise ValueError(
+                f"sigma list has {len(sigma)} entries but there are {n_datasets} datasets."
+            )
+        sigma_list = list(sigma)
+    else:
+        sigma_list = [sigma] * n_datasets
+
+    # ``C0_base`` carries a real assembled ``y0`` when the fit needs a per-dataset
+    # or fitted state -- a multi-batch fit (each dataset's own ``y0``) or a free-IC
+    # fit (the base ``y0`` whose slots are overridden). A plain single fit leaves
+    # it an unused placeholder and the forward model uses its fixed ``y0``.
+    if m_ic:
+        y0_base = plant.initial_state() if y0 is None else jnp.asarray(y0)
+        ic_species_idx = jnp.asarray(ic_flat_idx, dtype=int)
+        vals = np.clip(np.asarray(y0_base)[ic_flat_idx], ic_bounds[0], ic_bounds[1])
+        ic_center_full = jnp.asarray(np.log(vals))
+    else:
+        ic_species_idx = jnp.asarray([], dtype=int)
+        ic_center_full = jnp.zeros(0)
+
+    datasets = []
+    for ds in range(n_datasets):
+        tobs_i = jnp.asarray(tobs_list[ds])
+        if tobs_i.ndim != 1 or tobs_i.shape[0] < 1:
+            raise ValueError(
+                f"dataset {ds}: t_obs must be a non-empty 1-D array, got shape {tobs_i.shape}."
+            )
+        if tobs_i.shape[0] > 1 and not bool(jnp.all(jnp.diff(tobs_i) > 0)):
+            raise ValueError(f"dataset {ds}: t_obs must be strictly ascending.")
+        obs_i = jnp.asarray(obs_list[ds])
+        if obs_i.ndim == 1:
+            obs_i = obs_i[:, None]
+        if obs_i.shape[0] != tobs_i.shape[0]:
+            raise ValueError(
+                f"dataset {ds}: observations has {obs_i.shape[0]} rows but t_obs "
+                f"has {tobs_i.shape[0]} entries."
+            )
+        if obs_i.shape[1] != n_observed:
+            raise ValueError(
+                f"dataset {ds}: observations has {obs_i.shape[1]} columns but "
+                f"{n_observed} channels were specified across the observable(s)."
+            )
+        span_i = span_list[ds]
+        if span_i is None:
+            span_i = (float(tobs_i[0]), float(tobs_i[-1]))
+        tspan_i = (float(span_i[0]), float(span_i[1]))
+        sig_i = jnp.asarray(sigma_list[ds]) if sigma_list[ds] is not None else None
+        if multi:
+            C0_i = y0_list[ds]
+        elif m_ic:
+            C0_i = y0_base
+        else:
+            C0_i = jnp.zeros(1)
+        datasets.append(
+            (
+                C0_i,
+                tobs_i,
+                tspan_i,
+                _build_loss(loss, obs_i, sig_i),
+                _build_residual(loss, obs_i, sig_i),
+            )
+        )
+
+    C0_base = tuple(d[0] for d in datasets)
+    dataset_static = [(d[1], d[2], d[3], d[4]) for d in datasets]
+    # The forward model reads ``C0`` as the plant ``y0`` when it carries a real
+    # state (multi-batch or free-IC); otherwise it uses its fixed ``y0``.
+    use_c0_as_y0 = multi or bool(m_ic)
 
     # Priors: model-declared (use_priors) then explicit overrides.
     active_priors: dict[str, tuple[float, float]] = {}
@@ -359,9 +504,9 @@ def _resolve_plant_problem(
         p0_full=p0_full,
         param_halfwidth=None,
         datasets=datasets,
-        dataset_static=[(tobs, tspan, datasets[0][3], datasets[0][4])],
-        C0_base=(C0_placeholder,),
-        n_datasets=1,
+        dataset_static=dataset_static,
+        C0_base=C0_base,
+        n_datasets=n_datasets,
         obs_species_indices=obs_species_indices,
         n_observed=n_observed,
         active_priors=active_priors,
@@ -369,14 +514,14 @@ def _resolve_plant_problem(
         prior_std=prior_std,
         prior_mask=prior_mask,
         has_priors=bool(active_priors),
-        free_ic=[],
-        m_ic=0,
-        ic_species_idx=jnp.asarray([], dtype=int),
-        ic_center_full=jnp.zeros(0),
-        ic_prior_log_std=None,
-        ic_bounds=(1e-3, 1e4),
+        free_ic=ic_labels,
+        m_ic=m_ic,
+        ic_species_idx=ic_species_idx,
+        ic_center_full=ic_center_full,
+        ic_prior_log_std=ic_prior_log_std,
+        ic_bounds=ic_bounds,
     )
-    return problem, resolved_observables
+    return problem, resolved_observables, use_c0_as_y0
 
 
 # --- Public entry point ------------------------------------------------
@@ -395,6 +540,9 @@ def calibrate_plant(
     y0: Optional[jnp.ndarray] = None,
     params: Optional[jnp.ndarray] = None,
     transforms: Optional[dict] = None,
+    free_ic: Optional[list] = None,
+    ic_bounds: tuple = (1e-3, 1e4),
+    ic_prior_log_std: Optional[float] = None,
     time_unit: Optional[str] = None,
     loss: str = "mse",
     sigma: Optional[jnp.ndarray] = None,
@@ -430,13 +578,16 @@ def calibrate_plant(
     ----------
     plant : Plant
         The plant to calibrate. It must already have its influent(s) added.
-    observations : array-like
+    observations : array-like or list of array-like
         Observed values, shape ``(n_t,)`` for a single channel or
-        ``(n_t, n_channels)``.
-    t_obs : array-like
+        ``(n_t, n_channels)``. Pass a **list** of such arrays for a joint
+        multi-batch fit: each entry is one run of the plant, the batches share the
+        parameter vector and prior and their data terms are summed. ``t_obs`` and
+        ``y0`` must then be matching lists (one per batch).
+    t_obs : array-like or list of array-like
         Observation times, shape ``(n_t,)``, in the plant's time unit (or
         ``time_unit`` if given). The solve integrates over ``t_span`` and reports
-        at ``t_obs``.
+        at ``t_obs``. A list in multi-batch mode (the batches may differ in ``n_t``).
     free_params : list of str
         Plant parameter names to calibrate (``"<model>.<param>"``). Others fixed.
     target : str, optional
@@ -457,17 +608,34 @@ def calibrate_plant(
         ``observables=[PlantObservable("effluent", ["SNH", "SNO"]),
         PlantObservable("wastage", ["XS"])]`` expects 3 columns. Overrides
         ``target`` / ``observed_channels``.
-    t_span : tuple, optional
-        ``(t0, t1)`` integration window. Defaults to ``(t_obs[0], t_obs[-1])``.
-    y0 : jnp.ndarray, optional
+    t_span : tuple or list of tuple, optional
+        ``(t0, t1)`` integration window. Defaults to ``(t_obs[0], t_obs[-1])``. A
+        list of windows (one per batch) in multi-batch mode; a single window
+        broadcasts to every batch.
+    y0 : jnp.ndarray or list of jnp.ndarray, optional
         Warm-start plant state (e.g. ``bsm2_warm_start(plant)`` or a saved steady
-        state). Strongly recommended for a stiff plant.
+        state). Strongly recommended for a stiff plant. In multi-batch mode this
+        is **required** and must be a list of initial states, one per batch (the
+        batches differ in their initial state).
     params : jnp.ndarray, optional
         Starting parameter vector. Defaults to :meth:`Plant.default_parameters`.
     transforms : dict, optional
         Per-parameter transform override (``"positive_log"`` / ``"logit"`` /
         ``"none"``). Unspecified free params fall back to the parameter's
         model-declared transform.
+    free_ic : list, optional
+        Assembled-state slots to fit alongside the parameters, each a
+        ``"unit.species"`` string or a ``(unit, species)`` pair naming an initial
+        concentration of a concentration unit (a CSTR, the digester). Fit in log
+        space, box-bounded by ``ic_bounds``; the starting value is read from ``y0``
+        (or the plant's default initial state). The fitted state is returned as
+        ``result.C0_fitted[0]`` and the fitted pools as ``result.ic_named[0]``.
+    ic_bounds : (float, float), optional
+        ``(lo, hi)`` box (physical space) for the free-IC values. Default
+        ``(1e-3, 1e4)``.
+    ic_prior_log_std : float, optional
+        If given, a Gaussian prior in log space that pulls each fitted IC toward
+        its starting value with this standard deviation (a soft regulariser).
     time_unit : str, optional
         Unit ``t_obs`` / ``t_span`` are expressed in; passed to ``plant.solve``.
     loss, sigma, priors, use_priors, optimizer, n_starts, jitter,
@@ -490,8 +658,11 @@ def calibrate_plant(
 
     Notes
     -----
-    Fits kinetic parameters against one or more output streams. Per-dataset free
-    initial conditions and multi-batch joint fits are not yet supported.
+    Fits kinetic parameters (and, optionally, assembled-state initial conditions
+    via ``free_ic``) against one or more output streams, over one run of the plant
+    or several joined in a multi-batch fit (pass list-valued ``observations`` /
+    ``t_obs`` / ``y0``). ``free_ic`` and multi-batch are not yet combinable in one
+    call.
     """
     if integrator is None:
         from aquakin.plant.plant import IntegratorConfig
@@ -502,7 +673,7 @@ def calibrate_plant(
         raise ValueError("free_params must be non-empty.")
 
     observable_specs = _normalize_observables(observables, target, observed_channels)
-    problem, resolved_observables = _resolve_plant_problem(
+    problem, resolved_observables, use_c0_as_y0 = _resolve_plant_problem(
         plant,
         observations,
         t_obs,
@@ -515,6 +686,10 @@ def calibrate_plant(
         priors=priors,
         loss=loss,
         sigma=sigma,
+        free_ic=free_ic,
+        ic_bounds=ic_bounds,
+        ic_prior_log_std=ic_prior_log_std,
+        y0=y0,
     )
 
     # Label the (fixed, single-solve) problem's gradient path from the plant
@@ -544,16 +719,19 @@ def calibrate_plant(
     fm = _PlantForwardModel(
         plant=plant,
         observables=resolved_observables,
-        y0=None if y0 is None else jnp.asarray(y0),
+        # The fixed warm-start ``y0`` is only used when ``C0`` is not the state
+        # (a plain single fit); multi-batch / free-IC thread the state via ``C0``.
+        y0=None if (use_c0_as_y0 or y0 is None) else jnp.asarray(y0),
         integrator=integrator,
         diff=diff,
         time_unit=time_unit,
+        use_c0_as_y0=use_c0_as_y0,
     )
 
     bundle = _build_objective(problem, fm, cfg)
 
     rate_theta0 = problem.rate_theta0()
-    theta0 = rate_theta0  # no free-IC block in v1
+    theta0 = jnp.concatenate([rate_theta0, problem.ic_center_full]) if problem.m_ic else rate_theta0
     opt_bounds = _optimizer_bounds(problem, rate_theta0)
 
     if cfg.check_finite:
@@ -563,6 +741,7 @@ def calibrate_plant(
 
     theta_opt = jnp.asarray(result.x)
     physical_opt = problem.physical_from_theta(theta_opt[: problem.n_rate])
+    ic_opt = theta_opt[problem.n_rate :]
     full_params = problem.p0_full.at[problem.free_indices].set(physical_opt)
 
     posterior_cov = None
@@ -570,12 +749,24 @@ def calibrate_plant(
     params_named_std = None
     hessian_unconstrained = None
     if cfg.laplace:
+        # Laplace covariance is over the rate parameters; the fitted ICs are held
+        # at their MAP (the same convention as the reactor calibration).
         (
             posterior_cov,
             posterior_std_unconstrained,
             params_named_std,
             hessian_unconstrained,
-        ) = _laplace_posterior(problem, fm, cfg, theta_opt[: problem.n_rate], jnp.zeros(0))
+        ) = _laplace_posterior(problem, fm, cfg, theta_opt[: problem.n_rate], ic_opt)
+
+    # Fitted initial state (when free ICs are active): the base ``y0`` with the
+    # fitted slots set, plus the fitted values by ``"unit.species"`` label.
+    C0_fitted = None
+    ic_named = None
+    if problem.m_ic:
+        ic_vals = np.exp(np.asarray(ic_opt))
+        y0_fitted = problem.C0_base[0].at[problem.ic_species_idx].set(jnp.asarray(ic_vals))
+        C0_fitted = [y0_fitted]
+        ic_named = [{lbl: float(v) for lbl, v in zip(problem.free_ic, ic_vals)}]
 
     reported_loss = float(bundle.value_and_grad(theta_opt)[0])
 
@@ -593,6 +784,6 @@ def calibrate_plant(
         params_named_std=params_named_std,
         hessian_unconstrained=hessian_unconstrained,
         priors_applied=dict(problem.active_priors),
-        C0_fitted=None,
-        ic_named=None,
+        C0_fitted=C0_fitted,
+        ic_named=ic_named,
     )
