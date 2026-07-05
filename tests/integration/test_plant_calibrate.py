@@ -39,10 +39,44 @@ def _single_cstr_plant(net):
     return plant
 
 
+def _two_cstr_plant(net):
+    """A two-unit chain (tank1 -> tank2) on the same decay model, constant feed.
+
+    Both tanks reference the same model, so the plant has one shared parameter
+    block (``"simple_decay.A_to_B.k"``) and two output streams (``"tank1"`` /
+    ``"tank2"``) -- a small vehicle for a multi-stream fit."""
+    plant = Plant("two_cstr")
+    for name in ("tank1", "tank2"):
+        plant.add_unit(
+            CSTRUnit(
+                name=name,
+                model=net,
+                volume=100.0,
+                input_port_names=["inlet"],
+                conditions={"T": 293.15},
+            )
+        )
+    plant.connect("tank1", "tank2.inlet")
+    influent = InfluentSeries(
+        t=jnp.asarray([0.0, 100.0]),
+        Q=jnp.asarray([10.0, 10.0]),
+        C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]),
+        model=net,
+    )
+    plant.add_influent("feed", influent, to="tank1.inlet")
+    return plant
+
+
 @pytest.fixture
 def decay_plant():
     net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     return net, _single_cstr_plant(net)
+
+
+@pytest.fixture
+def two_tank_plant():
+    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
+    return net, _two_cstr_plant(net)
 
 
 PARAM = "simple_decay.A_to_B.k"
@@ -106,6 +140,127 @@ def test_plant_calibrate_gradient_is_finite_through_the_plant(decay_plant):
         check_finite=True,
     )
     assert np.isfinite(result.loss)
+
+
+@pytest.mark.slow  # a plant solve inside an optimizer loop
+def test_plant_calibrate_multi_stream_recovers(two_tank_plant):
+    """A single shared rate constant recovered from TWO output streams at once
+    (the tank1 and tank2 effluents), fit through `observables=`."""
+    net, plant = two_tank_plant
+    base = plant.default_parameters()
+    gidx = plant.parameter_index(PARAM)
+    true_k = float(base[gidx])
+
+    t_obs = jnp.linspace(1.0, 40.0, 8)
+    truth = base.at[gidx].set(true_k)
+    sol = plant.solve(t_span=(0.0, 40.0), t_eval=t_obs, params=truth)
+    b1 = plant.stream(sol, "tank1", truth).C_named("B")
+    b2 = plant.stream(sol, "tank2", truth).C_named("B")
+    obs = jnp.stack([b1, b2], axis=1)  # (n_t, 2): one column per stream
+
+    start = base.at[gidx].set(true_k * 0.3)
+    result = plant.calibrate(
+        obs,
+        t_obs,
+        [PARAM],
+        observables=[
+            aquakin.plant.PlantObservable("tank1", ["B"]),
+            aquakin.plant.PlantObservable("tank2", ["B"]),
+        ],
+        params=start,
+        transforms={PARAM: "positive_log"},
+        max_iter=60,
+    )
+    assert result.converged
+    assert result.params_named[PARAM] == pytest.approx(true_k, rel=5e-2)
+
+
+def test_plant_observable_normalizer():
+    """The observable spec accepts a PlantObservable, a bare stream name, a dict,
+    and a (stream, channels) pair; a bad entry is rejected."""
+    from aquakin.plant.calibrate import PlantObservable, _normalize_observables
+
+    # Single-target fallback when observables is None.
+    assert _normalize_observables(None, "effluent", ["SNH"]) == [
+        PlantObservable("effluent", ["SNH"])
+    ]
+    # Mixed forms all coerce to PlantObservable.
+    out = _normalize_observables(
+        [
+            PlantObservable("a", ("X",)),
+            "b",
+            {"stream": "c", "channels": ["Y"]},
+            ("d", ["Z"]),
+        ],
+        "unused",
+        None,
+    )
+    assert [o.stream for o in out] == ["a", "b", "c", "d"]
+    assert out[1].channels is None  # bare name -> all channels
+    with pytest.raises(TypeError, match="each observable must be"):
+        _normalize_observables([123], "x", None)
+
+
+def test_plant_calibrate_multi_stream_shape_mismatch(two_tank_plant):
+    """Two observables expect two columns; a 1-column observations array errors
+    (fast, before any solve)."""
+    net, plant = two_tank_plant
+    with pytest.raises(ValueError, match="across the observable"):
+        plant.calibrate(
+            jnp.zeros((3, 1)),
+            jnp.array([1.0, 2.0, 3.0]),
+            [PARAM],
+            observables=[("tank1", ["B"]), ("tank2", ["B"])],
+        )
+
+
+@pytest.mark.slow  # a full BSM1 (multi-unit, recycled, stiff) fit
+def test_plant_calibrate_recovers_bsm1_muH():
+    """The real test: recover a kinetic parameter (heterotroph max growth rate
+    muH) of the full BSM1 plant -- five aerated reactors, a settler, and the
+    internal + RAS recycles -- from its effluent nitrogen, with the reverse
+    gradient flowing through the whole stiff monolithic solve."""
+    from aquakin import load_model
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1, load_bsm1_influent
+    from aquakin.plant.influent import InfluentSeries
+
+    asm1 = load_model("asm1")
+    plant = build_bsm1(asm1)
+    # A constant influent (the dry-weather first sample) gives a clean transient.
+    dry = load_bsm1_influent("dry", asm1)
+    plant.add_influent(
+        "influent",
+        InfluentSeries(
+            t=jnp.asarray([0.0, 200.0]),
+            Q=jnp.asarray([float(dry.Q[0]), float(dry.Q[0])]),
+            C=jnp.tile(dry.C[0], (2, 1)),
+            model=asm1,
+        ),
+    )
+    y0 = bsm1_warm_start(plant)
+    gidx = plant.parameter_index("asm1.muH")
+    base = plant.default_parameters()
+    true_muH = float(base[gidx])
+
+    t_obs = jnp.linspace(0.5, 8.0, 6)
+    truth = base.at[gidx].set(true_muH)
+    sol = plant.solve(t_span=(0.0, 8.0), t_eval=t_obs, params=truth, y0=y0)
+    eff = plant.stream(sol, "effluent", truth)
+    obs = jnp.stack([eff.C_named("SNH"), eff.C_named("SNO")], axis=1)
+
+    result = plant.calibrate(
+        obs,
+        t_obs,
+        ["asm1.muH"],
+        target="effluent",
+        observed_channels=["SNH", "SNO"],
+        params=base.at[gidx].set(true_muH * 0.7),
+        y0=y0,
+        transforms={"asm1.muH": "positive_log"},
+        max_iter=25,
+    )
+    assert result.converged
+    assert result.params_named["asm1.muH"] == pytest.approx(true_muH, rel=2e-2)
 
 
 # ---------- validation (fast, no solve) ----------

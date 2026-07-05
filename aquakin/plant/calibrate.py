@@ -23,9 +23,10 @@ contract:
   priors) to the small interface ``_CalibrationProblem`` expects of a ``model``.
 
 The generic ``_build_objective`` / ``_run_multistart`` / ``_laplace_posterior``
-are then reused unchanged. This first version fits **kinetic parameters against
-one output stream's channels**; per-dataset free initial conditions, multi-batch
-joint fits and the reactor ``predictive_band`` are not yet wired for plants.
+are then reused unchanged. This version fits **kinetic parameters against one or
+more output streams' channels** (via :class:`PlantObservable`); per-dataset free
+initial conditions, multi-batch joint fits and the reactor ``predictive_band``
+are not yet wired for plants.
 """
 
 from __future__ import annotations
@@ -58,6 +59,55 @@ if TYPE_CHECKING:  # pragma: no cover
 # import cycle.
 
 
+# --- Public observable specification -----------------------------------
+
+
+@dataclass(frozen=True)
+class PlantObservable:
+    """One calibration observable: some channels of a plant output stream.
+
+    ``stream`` is a registered stream name (``"effluent"``, ``"ras"``, ...; see
+    :meth:`Plant.list_streams`) or a ``"unit.port"`` / unit name. ``channels`` are
+    the species of that stream's model to compare against data, in order; ``None``
+    observes every stream species. Pass a list of these as ``observables=`` to
+    :meth:`Plant.calibrate` to fit against several streams at once (e.g. the
+    effluent ammonia *and* nitrate); the observation columns then run in the order
+    given, channels within a stream first."""
+
+    stream: str
+    channels: Optional[tuple] = None
+
+
+def _normalize_observables(observables, target, observed_channels) -> list[PlantObservable]:
+    """Coerce the observable specification to a list of :class:`PlantObservable`.
+
+    ``observables`` (when given) wins and accepts a :class:`PlantObservable`, a
+    ``{"stream": ..., "channels": ...}`` dict, a ``(stream, channels)`` tuple, or
+    a bare stream-name string. Otherwise the single-stream ``target`` /
+    ``observed_channels`` form is used."""
+    if observables is None:
+        return [PlantObservable(target, observed_channels)]
+    out: list[PlantObservable] = []
+    for obs in observables:
+        if isinstance(obs, PlantObservable):
+            out.append(obs)
+        elif isinstance(obs, str):
+            out.append(PlantObservable(obs))
+        elif isinstance(obs, dict):
+            out.append(PlantObservable(obs["stream"], obs.get("channels")))
+        elif isinstance(obs, (tuple, list)) and len(obs) == 2:
+            out.append(PlantObservable(obs[0], obs[1]))
+        else:
+            raise TypeError(
+                "each observable must be a PlantObservable, a stream name, a "
+                "{'stream', 'channels'} dict, or a (stream, channels) pair; got "
+                f"{obs!r}."
+            )
+    if not out:
+        raise ValueError("observables must be non-empty.")
+    return out
+
+
 # --- Forward-model seam (the plant end of the calibrate contract) ------
 
 
@@ -65,15 +115,17 @@ if TYPE_CHECKING:  # pragma: no cover
 class _PlantForwardModel:
     """Plant forward solve for calibration.
 
-    ``solve_trajectory`` integrates the plant and reconstructs the target
-    stream's concentrations ``(n_t, n_stream_species)`` -- the generic layer then
-    slices the observed channels. The reverse gradient flows from the stream, back
-    through the reconstructed states, through ``plant.solve``'s discrete adjoint,
-    to the parameters.
+    ``solve_trajectory`` integrates the plant once and reconstructs each
+    observable's stream, slicing its observed channels and concatenating them into
+    the ``(n_t, n_observed)`` matrix the loss compares against data. Owning the
+    extraction here (rather than a single-stream slice in the generic layer) is
+    what lets one fit target several streams at once. The reverse gradient flows
+    from the streams, back through the reconstructed states, through
+    ``plant.solve``'s discrete adjoint, to the parameters.
     """
 
     plant: "Plant"
-    endpoint: str
+    observables: tuple  # ((endpoint, channel_index_array), ...)
     y0: Optional[jnp.ndarray]
     integrator: object
     diff: DifferentiationConfig
@@ -91,7 +143,11 @@ class _PlantForwardModel:
             diff=self.diff,
             time_unit=self.time_unit,
         )
-        return self.plant.stream(sol, self.endpoint, p).C
+        cols = [
+            self.plant.stream(sol, endpoint, p).C[:, ch_idx]
+            for endpoint, ch_idx in self.observables
+        ]
+        return jnp.concatenate(cols, axis=1)  # (n_t, n_observed)
 
     def forward_capable(self) -> bool:
         # Forward-mode AD through the whole plant solve is not wired for the
@@ -172,8 +228,7 @@ def _resolve_plant_problem(
     t_obs,
     free_params,
     *,
-    target,
-    observed_channels,
+    observables,
     t_span,
     params,
     transforms,
@@ -181,10 +236,11 @@ def _resolve_plant_problem(
     priors,
     loss,
     sigma,
-) -> tuple[_CalibrationProblem, str]:
+) -> tuple[_CalibrationProblem, tuple]:
     """Validate + coerce the plant-calibration arguments into a
     ``_CalibrationProblem`` (single dataset, no free ICs). Returns the problem and
-    the resolved stream endpoint."""
+    the resolved observables ``((endpoint, channel_index_array), ...)`` for the
+    forward model."""
     ns = _PlantParamNamespace(plant)
     for name in free_params:
         if name not in ns.param_index:
@@ -194,24 +250,31 @@ def _resolve_plant_problem(
                 f"(plant.parameter_names()).{suffix}"
             )
 
-    endpoint, stream_model = _resolve_endpoint_species(plant, target)
-
-    # Observed channels -> column indices into the reconstructed stream C.
-    if observed_channels is None:
-        obs_species_indices = jnp.arange(stream_model.n_species)
-        n_observed = stream_model.n_species
-    else:
-        for s in observed_channels:
-            if s not in stream_model.species_index:
-                suffix = did_you_mean(s, list(stream_model.species))
-                raise KeyError(
-                    f"Unknown observed channel '{s}' in stream '{target}' "
-                    f"(model '{stream_model.name}').{suffix}"
-                )
-        obs_species_indices = jnp.asarray(
-            [stream_model.species_index[s] for s in observed_channels]
-        )
-        n_observed = len(observed_channels)
+    # Resolve each observable -> (endpoint, channel indices). The observation
+    # columns run in observable order, channels within a stream first; the forward
+    # model reconstructs and concatenates them in the same order.
+    resolved_observables: list[tuple] = []
+    n_observed = 0
+    for observable in observables:
+        endpoint, stream_model = _resolve_endpoint_species(plant, observable.stream)
+        if observable.channels is None:
+            ch_idx = jnp.arange(stream_model.n_species)
+            n_observed += int(stream_model.n_species)
+        else:
+            for s in observable.channels:
+                if s not in stream_model.species_index:
+                    suffix = did_you_mean(s, list(stream_model.species))
+                    raise KeyError(
+                        f"Unknown observed channel '{s}' in stream "
+                        f"'{observable.stream}' (model '{stream_model.name}').{suffix}"
+                    )
+            ch_idx = jnp.asarray([stream_model.species_index[s] for s in observable.channels])
+            n_observed += len(observable.channels)
+        resolved_observables.append((endpoint, ch_idx))
+    resolved_observables = tuple(resolved_observables)
+    # The forward model returns exactly the observed columns, so the generic
+    # per-dataset slice is the identity.
+    obs_species_indices = jnp.arange(n_observed)
 
     # Resolve transforms per free param (explicit override wins over the
     # parameter's model-declared transform, else "none").
@@ -252,7 +315,8 @@ def _resolve_plant_problem(
         )
     if obs.shape[1] != n_observed:
         raise ValueError(
-            f"observations has {obs.shape[1]} columns but {n_observed} channels were specified."
+            f"observations has {obs.shape[1]} columns but {n_observed} channels "
+            f"were specified across the observable(s)."
         )
     if t_span is None:
         t_span = (float(tobs[0]), float(tobs[-1]))
@@ -312,7 +376,7 @@ def _resolve_plant_problem(
         ic_prior_log_std=None,
         ic_bounds=(1e-3, 1e4),
     )
-    return problem, endpoint
+    return problem, resolved_observables
 
 
 # --- Public entry point ------------------------------------------------
@@ -326,6 +390,7 @@ def calibrate_plant(
     *,
     target: str = "effluent",
     observed_channels: Optional[list] = None,
+    observables: Optional[list] = None,
     t_span: Optional[tuple] = None,
     y0: Optional[jnp.ndarray] = None,
     params: Optional[jnp.ndarray] = None,
@@ -375,12 +440,23 @@ def calibrate_plant(
     free_params : list of str
         Plant parameter names to calibrate (``"<model>.<param>"``). Others fixed.
     target : str, optional
-        The output stream to compare against -- a registered stream name
+        The single output stream to compare against -- a registered stream name
         (``"effluent"``, ``"ras"``, ...; see :meth:`Plant.list_streams`) or a
-        ``"unit.port"`` / unit name. Default ``"effluent"``.
+        ``"unit.port"`` / unit name. Default ``"effluent"``. Ignored when
+        ``observables`` is given.
     observed_channels : list of str, optional
-        Species of the target stream's model that ``observations`` columns
-        correspond to. ``None`` observes every stream species.
+        Species of the ``target`` stream's model that ``observations`` columns
+        correspond to. ``None`` observes every stream species. Ignored when
+        ``observables`` is given.
+    observables : list, optional
+        Fit against **several streams at once**. Each entry is a
+        :class:`PlantObservable` (``stream`` + ``channels``), a ``{"stream": ...,
+        "channels": ...}`` dict, a ``(stream, channels)`` pair, or a bare stream
+        name. The ``observations`` columns then run in observable order, channels
+        within a stream first -- e.g.
+        ``observables=[PlantObservable("effluent", ["SNH", "SNO"]),
+        PlantObservable("wastage", ["XS"])]`` expects 3 columns. Overrides
+        ``target`` / ``observed_channels``.
     t_span : tuple, optional
         ``(t0, t1)`` integration window. Defaults to ``(t_obs[0], t_obs[-1])``.
     y0 : jnp.ndarray, optional
@@ -414,8 +490,8 @@ def calibrate_plant(
 
     Notes
     -----
-    This first version fits kinetic parameters against one stream. Per-dataset
-    free initial conditions and multi-batch joint fits are not yet supported.
+    Fits kinetic parameters against one or more output streams. Per-dataset free
+    initial conditions and multi-batch joint fits are not yet supported.
     """
     if integrator is None:
         from aquakin.plant.plant import IntegratorConfig
@@ -425,13 +501,13 @@ def calibrate_plant(
     if not free_params:
         raise ValueError("free_params must be non-empty.")
 
-    problem, endpoint = _resolve_plant_problem(
+    observable_specs = _normalize_observables(observables, target, observed_channels)
+    problem, resolved_observables = _resolve_plant_problem(
         plant,
         observations,
         t_obs,
         free_params,
-        target=target,
-        observed_channels=observed_channels,
+        observables=observable_specs,
         t_span=t_span,
         params=params,
         transforms=transforms,
@@ -467,7 +543,7 @@ def calibrate_plant(
     )
     fm = _PlantForwardModel(
         plant=plant,
-        endpoint=endpoint,
+        observables=resolved_observables,
         y0=None if y0 is None else jnp.asarray(y0),
         integrator=integrator,
         diff=diff,

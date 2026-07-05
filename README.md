@@ -452,9 +452,24 @@ result.params_named            # {"asm1.muH": ..., "asm1.bH": ...}
 ```
 
 The reverse gradient runs through `plant.solve`'s stable adjoint, so it is finite
-for a stiff plant with no `dtmax` to tune. This first version fits kinetic
-parameters against one stream; per-dataset free initial conditions and
-multi-batch joint fits are reactor-only for now.
+for a stiff plant with no `dtmax` to tune. Fit against **several streams at once**
+by passing `observables=` instead of a single `target`:
+
+```python
+from aquakin.plant import PlantObservable
+
+result = plant.calibrate(
+    observations, t_obs, ["asm1.muH", "adm1.k_m_ac"],
+    observables=[
+        PlantObservable("effluent", ["SNH", "SNO"]),   # water-line N
+        PlantObservable("wastage", ["XS"]),            # sludge line
+    ],
+)
+```
+
+The observation columns run in observable order (channels within a stream first).
+This version fits kinetic parameters against one or more streams; per-dataset free
+initial conditions and multi-batch joint fits are reactor-only for now.
 
 ### Choosing the integrator (`integrator=IntegratorConfig(...)`)
 

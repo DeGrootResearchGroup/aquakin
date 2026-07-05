@@ -20,6 +20,7 @@ from aquakin.plant.aeration_system import (
     required_airflow,
 )
 from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
+from aquakin.plant.calibrate import PlantObservable, calibrate_plant
 from aquakin.plant.control import PIController
 from aquakin.plant.cstr import Aeration, CSTRUnit, oxygen_saturation
 from aquakin.plant.disinfection import (
@@ -131,6 +132,8 @@ __all__ = [
     "ADM1toASM1",
     "ASM1toADM1",
     "ActivatedSludgeSizing",
+    "PlantObservable",
+    "calibrate_plant",
     "BSM1Evaluation",
     "BSM2Evaluation",
     "Aeration",
