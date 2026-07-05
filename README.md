@@ -484,8 +484,23 @@ result.ic_named[0]     # {"reactor1.S_S": ..., "reactor1.X_BH": ...}
 result.C0_fitted[0]    # the fitted full initial state
 ```
 
-This version fits kinetic parameters (optionally with initial conditions) against
-one or more streams; multi-batch joint fits are reactor-only for now.
+Run a **joint multi-batch fit** — several plant runs from different initial
+states sharing the parameters — by passing list-valued `observations` / `t_obs` /
+`y0` (one entry per batch); the batches' data terms are summed:
+
+```python
+result = plant.calibrate(
+    [obs_run1, obs_run2],          # per-batch effluent data
+    [t_obs1, t_obs2],
+    ["asm1.muH"],
+    target="effluent", observed_channels=["SNH"],
+    y0=[y0_run1, y0_run2],         # each batch its own initial state
+)
+```
+
+This fits kinetic parameters (optionally with initial conditions, or across
+several batches) against one or more streams. `free_ic` and multi-batch are not
+yet combinable in one call.
 
 ### Choosing the integrator (`integrator=IntegratorConfig(...)`)
 

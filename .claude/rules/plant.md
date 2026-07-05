@@ -84,12 +84,17 @@ Key types:
   species_index`) and fit in log space through the *same* reactor free-IC machinery
   (`m_ic`/`ic_species_idx`/`ic_center_full` on `_CalibrationProblem`); the fitted
   state comes back as `result.C0_fitted[0]` / `result.ic_named[0]`, and the
-  `_PlantForwardModel` uses the IC-overridden `C0` as `y0` when `free_ic_active`.
-  Multi-batch joint fits and `predictive_band` remain reactor-only. Covered by
+  `_PlantForwardModel` uses the per-dataset `C0` as `y0` when `use_c0_as_y0` (free
+  ICs *or* multi-batch). A **joint multi-batch fit** — several plant runs from
+  different initial states sharing the parameters, list-valued `observations` /
+  `t_obs` / `y0`, data terms summed — is the plant analogue of the reactor
+  multi-batch and reuses the generic multi-dataset machinery (n_datasets > 1,
+  per-dataset `C0_base`); `free_ic` + multi-batch are not yet combinable, and
+  `predictive_band` remains reactor-only. Covered by
   `tests/integration/test_plant_calibrate.py` (single- and multi-stream synthetic
-  recovery, a joint rate + initial-condition recovery, a full **BSM1** muH recovery
-  through the stiff recycled plant, and the finite-through-the-plant gradient in
-  the fast gate).
+  recovery, a joint rate + initial-condition recovery, a multi-batch shared-rate
+  recovery, a full **BSM1** muH recovery through the stiff recycled plant, and the
+  finite-through-the-plant gradient in the fast gate).
   **Recycle resolution** — the methods named below (`_resolve_flows`,
   `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
   `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)
