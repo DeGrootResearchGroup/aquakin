@@ -39,58 +39,12 @@ from aquakin.integrate._transforms import (
     to_unconstrained,
 )
 
-
-def _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=None, poincare=None):
-    """Sobol total-index bound from per-sample squared sensitivities, robustly.
-
-    Drops, **per output**, any sample with a non-finite output or sensitivity --
-    the extreme Sobol corners where the perturbed steady state is hard to resolve,
-    exactly as :func:`~aquakin.dgsm` filters its sample -- and, when ``sample_mask``
-    is given, any sample it marks ``False`` (e.g. a near-singular-Jacobian
-    operating point). Then forms ``nu_ij = mean_s (dg_i/dz_j)^2``, ``Var(g_i)``, the
-    Sobol total-index bound ``nu_ij (b_j-a_j)^2 / (pi^2 Var(g_i))`` and its
-    Monte-Carlo standard error. An output that does not vary (zero variance) has an
-    undefined bound -- returned as ``NaN``.
-
-    Parameters
-    ----------
-    grad_sq : ndarray, shape ``(N, m, k)`` ; outputs : ndarray, shape ``(N, m)`` ;
-    rng2 : ndarray, shape ``(k,)`` -- the squared screened ranges ``(b_j-a_j)^2``.
-    sample_mask : ndarray bool, shape ``(N,)``, optional -- samples to keep.
-
-    Returns
-    -------
-    bound, std_error, nu : ndarray, shape ``(m, k)``
-    var : ndarray, shape ``(m,)`` ; n_valid : ndarray int, shape ``(m,)``
-    """
-    import numpy as np
-
-    grad_sq = np.asarray(grad_sq)
-    outputs = np.asarray(outputs)
-    _, m, k = grad_sq.shape
-    valid = np.isfinite(outputs) & np.isfinite(grad_sq).all(axis=2)  # (N, m)
-    if sample_mask is not None:
-        valid = valid & np.asarray(sample_mask)[:, None]
-    nu = np.full((m, k), np.nan)
-    se = np.full((m, k), np.nan)
-    var = np.full(m, np.nan)
-    n_valid = valid.sum(axis=0).astype(int)
-    for i in range(m):
-        v = valid[:, i]
-        if int(v.sum()) < 2:
-            continue
-        g = grad_sq[v, i, :]
-        nu[i] = g.mean(axis=0)
-        se[i] = g.std(axis=0) / np.sqrt(int(v.sum()))
-        var[i] = outputs[v, i].var()
-    # Poincare constant of the input measure: uniform default ``(b_j-a_j)^2/pi^2``;
-    # for a Gaussian-distributed input the bound instead carries ``poincare_j =
-    # std_j^2`` (Sobol & Kucherenko 2010, Sec. 8; Lamboni et al. 2013, Thm 3.1),
-    # passed in directly. ``bound = nu * C_j / Var(g)`` either way.
-    const = np.asarray(poincare)[None, :] if poincare is not None else rng2[None, :] / (np.pi**2)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        scale = np.where((var > 0)[:, None], const / var[:, None], np.nan)
-    return nu * scale, se * scale, nu, var, n_valid
+# The Sobol total-index aggregation kernel is shared with the reactor DGSM
+# (:func:`aquakin.dgsm`); the steady-state and dynamic screens below pass a
+# ``sample_mask`` and, for Gaussian inputs, an explicit ``poincare`` constant.
+# Re-exported here so ``from aquakin.plant.sensitivity import _dgsm_aggregate``
+# keeps working.
+from aquakin.integrate.sensitivity import _dgsm_aggregate
 
 
 def _cond_mask(cond, cond_factor):

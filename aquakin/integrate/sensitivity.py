@@ -522,24 +522,71 @@ def _make_dgsm_value_and_jac(fn, z0, mode):
     return value_and_jac, vector, m_out
 
 
-def _finite_mask(v_col: np.ndarray, j_col: np.ndarray) -> np.ndarray:
-    """Boolean per-sample mask: one output's value AND its Jacobian row finite.
+def _dgsm_aggregate(grad_sq, outputs, rng2, sample_mask=None, poincare=None):
+    """Sobol total-index bound from per-sample squared sensitivities, robustly.
 
-    ``v_col`` is ``(N,)`` (a single output's value over the samples) and
-    ``j_col`` is ``(N, d)`` (that output's partials). Applied **per output** so a
-    sample non-finite in one output does not drop the others.
+    Drops, **per output**, any sample with a non-finite output or sensitivity --
+    the extreme Sobol corners where the output is hard to resolve -- and, when
+    ``sample_mask`` is given, any sample it marks ``False`` (e.g. a
+    near-singular-Jacobian steady-state operating point). Then forms
+    ``nu_ij = mean_s (dg_i/dz_j)^2``, ``Var(g_i)``, the Sobol total-index bound
+    ``nu_ij (b_j-a_j)^2 / (pi^2 Var(g_i))`` and its Monte-Carlo standard error. An
+    output that does not vary (zero variance) has an undefined bound -- returned
+    as ``NaN`` (the public :func:`dgsm` entry point reports it as ``0`` with a
+    warning; the plant screens leave it ``NaN``).
+
+    Shared by :func:`dgsm` (uniform inputs, ``poincare=None`` ->
+    ``(b_j-a_j)^2/pi^2``) and the plant steady-state / dynamic DGSM screens (which
+    pass a ``sample_mask`` and, for Gaussian inputs, an explicit ``poincare``).
+
+    Parameters
+    ----------
+    grad_sq : ndarray, shape ``(N, m, k)`` ; outputs : ndarray, shape ``(N, m)`` ;
+    rng2 : ndarray, shape ``(k,)`` -- the squared screened ranges ``(b_j-a_j)^2``.
+    sample_mask : ndarray bool, shape ``(N,)``, optional -- samples to keep.
+    poincare : ndarray, shape ``(k,)``, optional -- the per-input Poincare constant
+        ``C_j`` (Gaussian inputs); defaults to the uniform ``rng2 / pi^2``.
+
+    Returns
+    -------
+    bound, std_error, nu : ndarray, shape ``(m, k)``
+    var : ndarray, shape ``(m,)`` ; n_valid : ndarray int, shape ``(m,)``
     """
-    n = v_col.shape[0]
-    return np.isfinite(v_col) & np.isfinite(j_col).reshape(n, -1).all(axis=1)
+    grad_sq = np.asarray(grad_sq)
+    outputs = np.asarray(outputs)
+    _, m, k = grad_sq.shape
+    valid = np.isfinite(outputs) & np.isfinite(grad_sq).all(axis=2)  # (N, m)
+    if sample_mask is not None:
+        valid = valid & np.asarray(sample_mask)[:, None]
+    nu = np.full((m, k), np.nan)
+    se = np.full((m, k), np.nan)
+    var = np.full(m, np.nan)
+    n_valid = valid.sum(axis=0).astype(int)
+    for i in range(m):
+        v = valid[:, i]
+        if int(v.sum()) < 2:
+            continue
+        g = grad_sq[v, i, :]
+        nu[i] = g.mean(axis=0)
+        se[i] = g.std(axis=0) / np.sqrt(int(v.sum()))
+        var[i] = outputs[v, i].var()
+    # Poincare constant of the input measure: uniform default ``(b_j-a_j)^2/pi^2``;
+    # for a Gaussian-distributed input the bound instead carries ``poincare_j =
+    # std_j^2`` (Sobol & Kucherenko 2010, Sec. 8; Lamboni et al. 2013, Thm 3.1),
+    # passed in directly. ``bound = nu * C_j / Var(g)`` either way.
+    const = np.asarray(poincare)[None, :] if poincare is not None else rng2[None, :] / (np.pi**2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        scale = np.where((var > 0)[:, None], const / var[:, None], np.nan)
+    return nu * scale, se * scale, nu, var, n_valid
 
 
 def _evaluate_dgsm_samples(value_and_jac, Z, mode, batched):
     """Evaluate the value/Jacobian over every sample; return the full stacked
     arrays (non-finite rows **included**).
 
-    Finiteness is filtered downstream *per output* (see :func:`_finite_mask`), so
-    this returns every drawn row -- a sample whose value/gradient is non-finite in
-    one output must still contribute to the others. ``batched=True`` dispatches
+    Finiteness is filtered downstream *per output* (see :func:`_dgsm_aggregate`),
+    so this returns every drawn row -- a sample whose value/gradient is non-finite
+    in one output must still contribute to the others. ``batched=True`` dispatches
     the whole sample through one :func:`jax.vmap` (a single device->host
     transfer); ``batched=False`` is the per-sample fallback (one host transfer
     each, lower peak memory). Both return identical ``(vals, jacs)`` NumPy arrays:
@@ -678,10 +725,33 @@ def dgsm(
     value_and_jac, vector, m_out = _make_dgsm_value_and_jac(fn, Z[0], mode)
     vals, jacs = _evaluate_dgsm_samples(value_and_jac, Z, mode, batched)
 
-    def _assemble(fv: np.ndarray, g2: np.ndarray, name: Optional[str]) -> DGSMResult:
-        # fv: (n,) finite output values; g2: (n, d) squared partials (already
-        # masked to this output's finite samples, so n is this output's n_valid).
-        n = fv.shape[0]
+    # Reshape to the (N, m, d) / (N, m) layout the shared aggregator expects, and
+    # resolve the output names.
+    if vector:
+        if output_names is None:
+            output_names = [f"output{i}" for i in range(m_out)]
+        elif len(output_names) != m_out:
+            raise ValueError(
+                f"output_names has {len(output_names)} entries but fn returns m={m_out} outputs."
+            )
+        names: list[Optional[str]] = list(output_names)
+        grad_sq = jacs**2  # (N, m, d)
+        out_col = vals  # (N, m)
+    else:
+        names = [None]
+        grad_sq = (jacs**2)[:, None, :]  # (N, 1, d)
+        out_col = vals[:, None]  # (N, 1)
+
+    # Sobol total-index bound per output via the shared aggregator. Uniform inputs
+    # (poincare=None -> (b-a)^2/pi^2); finiteness is filtered PER OUTPUT inside it,
+    # so a sample non-finite in one output is dropped only for that one and each
+    # output's nu_j / n_valid stay unbiased by the others' failures.
+    rng2 = (hi - lo) ** 2
+    bound, bound_se, nu, var, n_valid = _dgsm_aggregate(grad_sq, out_col, rng2)
+
+    results = []
+    for i, name in enumerate(names):
+        n = int(n_valid[i])
         if n < 2:
             raise RuntimeError(
                 f"DGSM needs >= 2 finite samples"
@@ -690,16 +760,15 @@ def dgsm(
                 "-- for a stiff model, cap the integrator step via the "
                 "reactor's dtmax."
             )
-        nu = np.mean(g2, axis=0)
-        var_f = float(np.var(fv))
+        var_f = float(var[i])
         if var_f > 0:
-            scale = (hi - lo) ** 2 / (math.pi**2 * var_f)
+            bnd = np.asarray(bound[i])
+            se = np.asarray(bound_se[i])
         else:
-            # Every sample produced an identical output (e.g. a saturated or
-            # clipped response): the Sobol total-index bound is undefined
-            # (0/0). Return an all-zero bound but warn, so an empty ranking is
-            # not silently read as "no input matters".
-            scale = np.zeros(d)
+            # Every (finite) sample produced an identical output (e.g. a saturated
+            # or clipped response): the Sobol total-index bound is undefined (0/0).
+            # Report an all-zero bound but warn, so an empty ranking is not
+            # silently read as "no input matters".
             warnings.warn(
                 f"DGSM output{f' {name!r}' if name else ''} has zero variance "
                 f"over the sampled ranges; the Sobol total-index bound is "
@@ -707,36 +776,20 @@ def dgsm(
                 f"clipped, or insensitive to every input over these ranges.",
                 stacklevel=2,
             )
-        bound = nu * scale
-        bound_se = (np.std(g2, axis=0) / math.sqrt(n)) * scale
-        return DGSMResult(
-            input_names=list(input_names),
-            dgsm=jnp.asarray(nu),
-            sobol_total_bound=jnp.asarray(bound),
-            std_error=jnp.asarray(bound_se),
-            output_variance=var_f,
-            n_samples=n_drawn,
-            n_valid=n,
-            seed=seed,
-            ranges=jnp.asarray(ranges_np),
-            output_name=name,
+            bnd = np.zeros(d)
+            se = np.zeros(d)
+        results.append(
+            DGSMResult(
+                input_names=list(input_names),
+                dgsm=jnp.asarray(nu[i]),
+                sobol_total_bound=jnp.asarray(bnd),
+                std_error=jnp.asarray(se),
+                output_variance=var_f,
+                n_samples=n_drawn,
+                n_valid=n,
+                seed=seed,
+                ranges=jnp.asarray(ranges_np),
+                output_name=name,
+            )
         )
-
-    if not vector:
-        keep = _finite_mask(vals, jacs)  # vals (N,), jacs (N, d)
-        return _assemble(vals[keep], jacs[keep] ** 2, None)
-
-    if output_names is None:
-        output_names = [f"output{i}" for i in range(m_out)]
-    elif len(output_names) != m_out:
-        raise ValueError(
-            f"output_names has {len(output_names)} entries but fn returns m={m_out} outputs."
-        )
-    # Mask finiteness PER OUTPUT: a sample non-finite in one output (or its
-    # gradient) is dropped only for that output, not jointly for all of them, so
-    # each output's nu_j and n_valid are unbiased by the others' failures.
-    results = []
-    for i in range(m_out):
-        keep_i = _finite_mask(vals[:, i], jacs[:, i, :])  # (N,)
-        results.append(_assemble(vals[keep_i, i], jacs[keep_i, i, :] ** 2, output_names[i]))
-    return results
+    return results if vector else results[0]
