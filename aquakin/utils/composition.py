@@ -19,6 +19,7 @@ g/m³, the ADM digester in kg/m³ and kmol/m³) on one canonical g basis.
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -56,6 +57,29 @@ _NPOOL = {"SNH", "SNH4", "SND", "XND"}  # N = 1
 _PPOOL = {"SPO4", "SPO", "XPP"}  # P = 1
 _OXYGEN = {"SO", "SO2"}  # COD = -1 (electron acceptor)
 _NITRATE = {"SNO", "SNO3", "SNOX"}  # COD = iCOD_NO3, N = 1
+# Recognised carriers of no conserved quantity (alkalinity, TSS/SS, metal
+# hydroxide, the ADM inorganic-carbon / charge / gas-CO2 states): these
+# legitimately map to ``{}``. A species that is neither a role carrier nor in
+# these sets fell through unrecognised -- see ``_warn_unmapped``.
+_ASM_NO_CONTENT = {"SALK", "XSS", "XTSS", "XMeOH", "SHCO"}
+_ADM1_NO_CONTENT = {"S_IC", "S_cat", "S_an", "S_gas_co2"}
+
+
+def _warn_unmapped(net: "CompiledModel", unmapped: list[str]) -> None:
+    """Warn that ``unmapped`` species got no role-based composition content.
+
+    The shipped role-based table assigns an unrecognised species zero
+    COD / N / P, which silently treats it as inert mass -- so a conservation
+    check would validate the stoichiometry against wrong reference data. Flag it
+    loudly instead of inventing content."""
+    warnings.warn(
+        f"Model {net.name!r}: species {sorted(unmapped)} are not recognised by "
+        f"the shipped role-based composition table, so they were assigned no "
+        f"COD/N/P content. A conservation check would then treat them as inert "
+        f"mass and could mask a real imbalance. Declare a `composition:` block "
+        f"for these species (or confirm they carry no conserved quantity).",
+        stacklevel=3,
+    )
 
 
 def _asm_composition(
@@ -91,8 +115,10 @@ def _asm_composition(
     fMeP = P("fMeP_PO4_MW")
 
     comp: Composition = {}
+    unmapped: list[str] = []
     for sp in net.species:
         c: dict[str, float] = {}
+        recognized = True
         if sp in _BIOMASS:
             c = {"COD": 1.0, "N": iN_BM, "P": iP_BM}
         elif sp == "SF":
@@ -135,8 +161,13 @@ def _asm_composition(
             c = {"P": 1.0}
         elif sp == "XMeP":  # precipitated phosphate
             c = {"P": 1.0 / fMeP} if fMeP else {}
-        # SALK / XTSS / XSS / XMeOH / SHCO carry no COD / N / P
+        elif sp not in _ASM_NO_CONTENT:
+            recognized = False
+        if not recognized:
+            unmapped.append(sp)
         comp[sp] = {k: v for k, v in c.items() if v != 0.0}
+    if unmapped:
+        _warn_unmapped(net, unmapped)
     return comp
 
 
@@ -181,22 +212,33 @@ def _adm1_composition(net: "CompiledModel", params=None) -> Composition:
     N_I, N_xc = _p(net, "N_I", params=params), _p(net, "N_xc", params=params)
 
     comp: Composition = {}
+    unmapped: list[str] = []
     for sp in net.species:
         c: dict[str, float] = {}
+        recognized = sp in _ADM1_COD
         if sp in _ADM1_COD:
             c = {"COD": 1.0}
         if sp in _ADM1_BIOMASS:
             c["N"] = N_bac
+            recognized = True
         elif sp in ("S_aa", "X_pr"):
             c["N"] = N_aa
+            recognized = True
         elif sp in ("S_I", "X_I"):
             c["N"] = N_I
+            recognized = True
         elif sp == "X_c":
             c["N"] = N_xc
+            recognized = True
         elif sp == "S_IN":
             c["N"] = 1.0
+            recognized = True
         # S_IC / S_gas_co2 carry carbon only; S_cat / S_an are charge only
+        if not recognized and sp not in _ADM1_NO_CONTENT:
+            unmapped.append(sp)
         comp[sp] = {k: v for k, v in c.items() if v != 0.0}
+    if unmapped:
+        _warn_unmapped(net, unmapped)
     return comp
 
 

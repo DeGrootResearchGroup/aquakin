@@ -17,6 +17,7 @@ through :meth:`composition`, and dots it against the stoichiometry in
 
 import textwrap
 
+import numpy as np
 import pytest
 
 import aquakin
@@ -60,8 +61,7 @@ def test_check_conservation_passes_balanced_flags_broken(tmp_path):
     ok = aquakin.load_model_from_file(_write(tmp_path, _TOY.format(o2=-1.0)))
     assert ok.check_conservation(tol=1e-6) == []
     # A wrong O2 coefficient breaks the COD balance and is flagged.
-    bad = aquakin.load_model_from_file(_write(tmp_path, _TOY.format(o2=-0.5),
-                                                name="bad.yaml"))
+    bad = aquakin.load_model_from_file(_write(tmp_path, _TOY.format(o2=-0.5), name="bad.yaml"))
     viol = bad.check_conservation(tol=1e-6)
     assert [(r, q) for r, q, _ in viol] == [("growth", "COD")]
     assert abs(viol[0][2]) == pytest.approx(0.5, abs=1e-9)
@@ -80,7 +80,7 @@ def test_composition_falls_back_to_shipped_table_for_asm():
     """A model with no YAML composition delegates to the shipped role-based
     table, so check_conservation works uniformly across families."""
     asm1 = aquakin.load_model("asm1")
-    assert asm1.species_composition == {}          # none declared in YAML
+    assert asm1.species_composition == {}  # none declared in YAML
     comp = asm1.composition()
     assert comp, "expected the shipped ASM1 role-based composition table"
     # ASM1 conserves COD through the Gujer matrix (except the single
@@ -89,9 +89,75 @@ def test_composition_falls_back_to_shipped_table_for_asm():
     assert comp["SO"] == {"COD": -1.0}
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "asm1",
+        "asm1_ammonia_limitation",
+        "asm2d",
+        "asm2d_tud",
+        "asm3",
+        "asm3_biop",
+        "asm3_2step",
+        "asm3_2step_n2o",
+        "asm3_2step_anammox",
+        "asm3_2step_comammox",
+        "adm1",
+    ],
+)
+def test_shipped_composition_table_warns_for_no_species(recwarn, name):
+    """Every shipped species is covered by a role (or the known-inert set), so
+    the shipped table must not warn -- the guarantee the unmapped-species warning
+    depends on to stay signal, not noise."""
+    aquakin.load_model(name).composition()
+    unmapped = [w for w in recwarn.list if "not recognised" in str(w.message)]
+    assert not unmapped, [str(w.message) for w in unmapped]
+
+
+class _StubModel:
+    """A minimal ``CompiledModel`` stand-in for driving the role-based builders
+    directly with an arbitrary species list (no parameters, so every ``i*``
+    fraction defaults to 0)."""
+
+    def __init__(self, name, species):
+        self.name = name
+        self.species = species
+        self.param_index: dict = {}
+
+    def default_parameters(self):
+        return np.zeros(0)
+
+
+def test_unmapped_species_warns_instead_of_silent_empty_content():
+    """A species the role sets do not recognise must warn (and be listed), not
+    silently get zero COD/N/P -- which would make a conservation check validate
+    against wrong reference data. Recognised no-content species (SALK) stay
+    silent."""
+    from aquakin.utils.composition import _asm_composition
+
+    model = _StubModel("asm1_variant", ["XB_H", "SNH", "SALK", "XWEIRD", "SNEW_N"])
+    with pytest.warns(UserWarning, match="not recognised"):
+        comp = _asm_composition(model)
+    # The recognised species keep their content; the unknowns get empty content
+    # (the pre-existing behaviour) -- but now loudly, not silently.
+    assert comp["XWEIRD"] == {} and comp["SNEW_N"] == {}
+    assert comp["SALK"] == {}  # a known-inert carrier -- did not trigger the warning
+    assert comp["SNH"] == {"N": 1.0}
+
+
+def test_unmapped_adm1_species_warns():
+    """The ADM1 builder is loud about an unrecognised species too."""
+    from aquakin.utils.composition import _adm1_composition
+
+    model = _StubModel("adm1", ["S_su", "S_IN", "S_cat", "X_NEW"])
+    with pytest.warns(UserWarning, match=r"X_NEW"):
+        comp = _adm1_composition(model)
+    assert comp["X_NEW"] == {}
+    assert comp["S_cat"] == {}  # known charge-only state -- silent
+
+
 def test_composition_rejects_non_finite(tmp_path):
-    body = _TOY.format(o2=-1.0).replace("composition: {COD: -1.0}",
-                                        "composition: {COD: .inf}")
+    body = _TOY.format(o2=-1.0).replace("composition: {COD: -1.0}", "composition: {COD: .inf}")
     with pytest.raises(ValueError, match="must be finite"):
         aquakin.load_model_from_file(_write(tmp_path, body))
 
@@ -99,12 +165,16 @@ def test_composition_rejects_non_finite(tmp_path):
 def test_extends_inherits_base_composition(tmp_path):
     base = _write(tmp_path, _TOY.format(o2=-1.0), name="base.yaml")
     # A derived model that overrides only the rate keeps the base composition.
-    derived = _write(tmp_path, f"""
+    derived = _write(
+        tmp_path,
+        f"""
         model: {{name: toy_child, extends: {base}}}
         reactions:
           - name: growth
             rate: "mu * [S_S]"
-        """, name="child.yaml")
+        """,
+        name="child.yaml",
+    )
     child = aquakin.load_model_from_file(derived)
     assert child.composition()["S_O"] == {"COD": -1.0}
     assert child.check_conservation(tol=1e-6) == []
