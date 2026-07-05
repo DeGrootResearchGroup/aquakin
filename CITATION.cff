@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: aquakin
+abstract: >-
+  A Python library for modelling reactive scalar transport in aqueous
+  environmental systems. Reaction models are declared at runtime in YAML and
+  compiled to JAX-native, automatically-differentiable rate functions integrated
+  with Diffrax.
+type: software
+authors:
+  - given-names: Christopher
+    family-names: DeGroot
+    email: christopher.degroot@uwo.ca
+    affiliation: The University of Western Ontario
+license: MIT
+repository-code: "https://github.com/DeGrootResearchGroup/aquakin"
+url: "https://aquakin.readthedocs.io"
+keywords:
+  - chemistry
+  - kinetics
+  - water treatment
+  - automatic differentiation
+  - jax
+  - diffrax
+# At release, add the released version and date, e.g.:
+#   version: 0.1.0
+#   date-released: "2026-07-05"
+# Future: mint a Zenodo DOI for archival citation and add it here, e.g.:
+#   doi: 10.5281/zenodo.XXXXXXX
