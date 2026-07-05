@@ -77,11 +77,19 @@ Key types:
   stream, channels), ...]` (exported `aquakin.plant.PlantObservable`; the
   `_PlantForwardModel` reconstructs each stream and concatenates the observed
   channels, so the observation columns run in observable order), or the single
-  `target=`/`observed_channels=` sugar. Per-dataset free ICs, multi-batch joint
-  fits, and `predictive_band` are reactor-only. Covered by
+  `target=`/`observed_channels=` sugar. **Assembled-state initial conditions** can
+  be fit alongside the parameters via `free_ic=["unit.species", ...]` (or
+  `(unit, species)` pairs) — each names a slot of `y0` on a concentration unit
+  (CSTR / digester), resolved to a flat-state index (`_state_layout[unit][0] +
+  species_index`) and fit in log space through the *same* reactor free-IC machinery
+  (`m_ic`/`ic_species_idx`/`ic_center_full` on `_CalibrationProblem`); the fitted
+  state comes back as `result.C0_fitted[0]` / `result.ic_named[0]`, and the
+  `_PlantForwardModel` uses the IC-overridden `C0` as `y0` when `free_ic_active`.
+  Multi-batch joint fits and `predictive_band` remain reactor-only. Covered by
   `tests/integration/test_plant_calibrate.py` (single- and multi-stream synthetic
-  recovery, a full **BSM1** muH recovery through the stiff recycled plant, and the
-  finite-through-the-plant gradient in the fast gate).
+  recovery, a joint rate + initial-condition recovery, a full **BSM1** muH recovery
+  through the stiff recycled plant, and the finite-through-the-plant gradient in
+  the fast gate).
   **Recycle resolution** — the methods named below (`_resolve_flows`,
   `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
   `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)

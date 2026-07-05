@@ -468,8 +468,24 @@ result = plant.calibrate(
 ```
 
 The observation columns run in observable order (channels within a stream first).
-This version fits kinetic parameters against one or more streams; per-dataset free
-initial conditions and multi-batch joint fits are reactor-only for now.
+
+Fit **assembled-state initial conditions** alongside the parameters with
+`free_ic` — each entry names a `(unit, species)` slot of the plant's initial
+state `y0` (a concentration unit: a CSTR or the digester), fit in log space:
+
+```python
+result = plant.calibrate(
+    observations, t_obs, ["asm1.muH"],
+    target="effluent", observed_channels=["SNH"],
+    free_ic=["reactor1.S_S", "reactor1.X_BH"],   # fit these initial pools too
+    y0=bsm1_warm_start(plant),
+)
+result.ic_named[0]     # {"reactor1.S_S": ..., "reactor1.X_BH": ...}
+result.C0_fitted[0]    # the fitted full initial state
+```
+
+This version fits kinetic parameters (optionally with initial conditions) against
+one or more streams; multi-batch joint fits are reactor-only for now.
 
 ### Choosing the integrator (`integrator=IntegratorConfig(...)`)
 
