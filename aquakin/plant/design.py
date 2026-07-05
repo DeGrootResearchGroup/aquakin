@@ -324,6 +324,7 @@ class SludgeMetrics:
 # Effluent / wastage endpoint candidates, in preference order (BSM2 first).
 _EFFLUENT_CANDIDATES = ("effluent_mix.out", "settler.overflow", "clarifier.overflow")
 _WASTE_CANDIDATES = ("dewatering.underflow", "underflow_split.waste")
+_VALID_SUBSTRATES = frozenset({"BOD", "COD"})
 
 
 def _available_endpoints(plant) -> set:
@@ -440,6 +441,12 @@ def sludge_metrics(
     >>> m = aquakin.plant.design.sludge_metrics(plant, solution)  # doctest: +SKIP
     >>> print(m.summary())                                        # doctest: +SKIP
     """
+    substrate_key = substrate.upper()
+    if substrate_key not in _VALID_SUBSTRATES:
+        raise ValueError(
+            f"substrate must be one of {sorted(_VALID_SUBSTRATES)}; got {substrate!r}."
+        )
+
     params_full = plant.default_parameters() if params is None else jnp.asarray(params)
     reactors = _reactor_units(plant, reactor_units)
     model = plant.units[reactors[0]].model
@@ -488,7 +495,7 @@ def sludge_metrics(
     Q_mean = _time_average(t, inf_Q)
     HRT = reactor_volume / (Q_mean + 1e-12)  # days
 
-    load_fn = derived_BOD if substrate.upper() == "BOD" else derived_COD
+    load_fn = derived_BOD if substrate_key == "BOD" else derived_COD
     bod_load_rate = inf_Q * load_fn(inf_C, model)  # (n_t,) g/d
     bod_load_mean = _time_average(t, bod_load_rate)  # g/d
     # F:M is the substrate load over the reactor (aeration-basin) solids mass.
