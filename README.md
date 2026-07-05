@@ -430,6 +430,32 @@ solve — across the ASM↔ADM interface and the recycle loops — where differe
 `plant.solve` carries the integration time in the state, so the explicit time
 dependence of a time-varying influent is captured exactly in the gradient.
 
+### Calibrating a plant (`plant.calibrate`)
+
+The cap-free gradient above powers a MAP calibration of plant parameters against
+a measured output stream — the plant analogue of `aquakin.calibrate` (a reactor
+fit). It reuses the same machinery (parameter transforms, priors, multistart, an
+optional Laplace posterior) behind a forward-model seam, so only the forward
+solve differs. Fit by-name plant parameters (`"<model>.<param>"`, see
+`plant.parameter_names()`) so a target stream's channels match observations:
+
+```python
+result = plant.calibrate(
+    observations,               # (n_t, n_channels) measured effluent data
+    t_obs,                      # observation times
+    ["asm1.muH", "asm1.bH"],    # plant parameters to fit
+    target="effluent",          # a registered stream (or "unit.port")
+    observed_channels=["SNH", "SNO"],
+    y0=bsm2_warm_start(plant),  # warm start (recommended for a stiff plant)
+)
+result.params_named            # {"asm1.muH": ..., "asm1.bH": ...}
+```
+
+The reverse gradient runs through `plant.solve`'s stable adjoint, so it is finite
+for a stiff plant with no `dtmax` to tune. This first version fits kinetic
+parameters against one stream; per-dataset free initial conditions and
+multi-batch joint fits are reactor-only for now.
+
 ### Choosing the integrator (`integrator=IntegratorConfig(...)`)
 
 The integrator / step machinery is configured with one value object,

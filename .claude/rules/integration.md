@@ -80,12 +80,16 @@ seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted objec
 — it turns `(params, C0)` into an observed-species trajectory (via the reactor's
 diffrax `solve`, or the cap-free ESDIRK adjoint on `gradient="stable_adjoint"`),
 and exposes `solve_trajectory` + `with_dtmax`. Everything else is generic over
-that contract. Calibration is **reactor-only today** — a `Plant` has a different
-solve contract (flat assembled state, `plant.solve(t_span, …)`, no `.model`/
-`.conditions`), so plant calibration would be a *new* forward-model implementing
-the same two methods, not a change to the generic layer. Behaviour equivalence of
-the decomposition to the old monolith is pinned by the full-fit suite
-(`tests/integration/test_calibrate.py`, `test_profile.py`).
+that contract. A `Plant` has a different solve contract (flat assembled state,
+`plant.solve(t_span, …)`, no `.model`/`.conditions`), so **plant calibration is a
+*new* forward model, not a change to the generic layer**: `plant.calibrate(...)`
+([`plant/calibrate.py`](aquakin/plant/calibrate.py)) supplies a
+`_PlantForwardModel` (`plant.solve` + stream reconstruction) and a
+`_PlantParamNamespace` adapter, and reuses `_build_objective` / `_run_multistart`
+/ `_laplace_posterior` unchanged — the payoff of the seam. Behaviour equivalence
+of the decomposition to the old monolith is pinned by the full-fit suite
+(`tests/integration/test_calibrate.py`, `test_profile.py`); the plant path by
+`test_plant_calibrate.py`.
 
 ### Differentiating stiff models (`dtmax`)
 

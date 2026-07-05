@@ -46,6 +46,7 @@ from aquakin.integrate._common import (
 )
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.integrate.events import Event, solve_with_events
+from aquakin.plant import calibrate as _calibrate
 from aquakin.plant import sensitivity as _sensitivity
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.recycle import RecycleResolver
@@ -4436,3 +4437,8 @@ class Plant:
     solve_sensitivity = _sensitivity.solve_sensitivity
     dynamic_sensitivity = _sensitivity.dynamic_sensitivity
     dynamic_dgsm = _sensitivity.dynamic_dgsm
+
+    # Plant MAP calibration (:mod:`aquakin.plant.calibrate`), bound as a method so
+    # ``plant.calibrate(...)`` reuses the reactor-calibration machinery through the
+    # forward-model seam.
+    calibrate = _calibrate.calibrate_plant

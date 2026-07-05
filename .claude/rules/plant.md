@@ -63,6 +63,20 @@ Key types:
   [`plant/sensitivity.py`](aquakin/plant/sensitivity.py) as free functions taking
   the plant, bound onto `Plant` as methods (the public `plant.steady_state_dgsm(...)`
   API is unchanged); that layer only *consumes* the public solve API.
+  **Calibration** — `plant.calibrate(observations, t_obs, free_params, target=,
+  observed_channels=, y0=, ...)` ([`plant/calibrate.py`](aquakin/plant/calibrate.py),
+  bound as a method) MAP-fits by-name plant parameters (`"<model>.<param>"`)
+  against an output stream. It **reuses the reactor-calibration machinery**
+  (`integrate/calibrate.py`: `_CalibrationProblem`, `_build_objective`,
+  `_run_multistart`, `_laplace_posterior`) through the forward-model seam — the
+  plant supplies a `_PlantForwardModel` (`plant.solve` + stream reconstruction; the
+  cap-free stable adjoint by default, so the reverse gradient is finite) and a
+  `_PlantParamNamespace` (adapts `plant.parameter_index` / per-model transforms &
+  priors to the `model` interface the generic layer expects). v1 fits kinetic
+  parameters against one stream's channels; per-dataset free ICs, multi-batch
+  joint fits, and `predictive_band` are reactor-only. Covered by
+  `tests/integration/test_plant_calibrate.py` (synthetic-parameter recovery +
+  the finite-through-the-plant gradient in the fast gate).
   **Recycle resolution** — the methods named below (`_resolve_flows`,
   `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
   `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)
