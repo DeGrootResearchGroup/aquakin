@@ -78,6 +78,133 @@ _VALID_AD_MODES = ("auto", "reverse", "forward")
 _OptOut = namedtuple("_OptOut", "x fun success message nit")
 
 
+# --- Public configuration objects --------------------------------------
+#
+# The optimiser, Laplace-posterior and free-initial-condition knobs are grouped
+# into dataclasses (like :class:`DifferentiationConfig`) so the ``calibrate`` /
+# ``Plant.calibrate`` / ``profile_likelihood`` signatures stay short and the
+# clusters are opt-in with sensible defaults.
+
+
+@dataclass(frozen=True)
+class OptimizerConfig:
+    """Optimiser and multistart settings for calibration.
+
+    Parameters
+    ----------
+    method : {"lbfgsb", "gauss_newton"}
+        Optimisation backend. ``"lbfgsb"`` (default) is SciPy L-BFGS-B on the
+        scalar loss; ``"gauss_newton"`` is a least-squares solve on the residual.
+    n_starts : int
+        Number of optimiser starts. ``1`` (default) is a single start from the
+        initial parameters; ``>1`` adds jittered restarts and keeps the best.
+    jitter : float
+        Std dev of the Gaussian restart perturbation in unconstrained space
+        (ignored when ``jitter_schedule`` is given).
+    jitter_schedule : tuple of float, optional
+        Explicit per-restart jitter scales; overrides ``jitter`` and fixes the
+        restart sequence for reproducibility.
+    seed : int
+        Seed for the restart perturbations.
+    max_iter : int
+        Maximum optimiser iterations per start.
+    tol : float
+        Optimiser convergence tolerance.
+    param_halfwidth : float, optional
+        If given, box-bound each free rate parameter to ``theta0 +/-
+        param_halfwidth`` in unconstrained space; otherwise the rate parameters
+        are unbounded.
+    """
+
+    method: str = "lbfgsb"
+    n_starts: int = 1
+    jitter: float = 0.5
+    jitter_schedule: Optional[tuple] = None
+    seed: int = 0
+    max_iter: int = 500
+    tol: float = 1e-6
+    param_halfwidth: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class LaplaceConfig:
+    """Laplace-posterior settings.
+
+    Pass an instance to ``laplace=`` to enable the posterior with tuning;
+    ``laplace=True`` uses these defaults and ``laplace=False`` disables it.
+
+    Parameters
+    ----------
+    method : {"fd", "gauss_newton"}
+        How the unconstrained-space Hessian is formed: ``"fd"`` (default)
+        finite-differences the gradient; ``"gauss_newton"`` uses ``J^T J`` with
+        the residual Jacobian by AD (PSD by construction, Fisher for ``nll``).
+    ridge : float
+        Ridge added to the Hessian before inversion.
+    eig_keep : float
+        Relative eigenvalue floor for the eigen-truncated covariance.
+    fd_step : float
+        Relative step for the finite-difference Hessian (``method="fd"``).
+    dtmax : float, optional
+        If given, rebuild the reactor with this ``dtmax`` cap for the Hessian
+        pass only -- a tighter solve for the second-order-sensitive covariance.
+    """
+
+    method: str = "fd"
+    ridge: float = 1e-6
+    eig_keep: float = 1e-2
+    fd_step: float = 1e-3
+    dtmax: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class FreeICConfig:
+    """Free-initial-condition settings for calibration.
+
+    Parameters
+    ----------
+    species : list of str
+        Species whose initial concentration is fitted alongside the parameters.
+        For a plant, ``"unit.species"`` names.
+    bounds : tuple of float
+        ``(lo, hi)`` box bounds on each fitted initial pool, in physical units
+        (the fit runs in log space). Must satisfy ``0 < lo < hi``.
+    prior_log_std : float, optional
+        If given, a Gaussian prior of this log-space std pulls each fitted pool
+        toward its supplied initial value; ``None`` leaves it governed only by
+        the data and ``bounds``.
+    """
+
+    species: list
+    bounds: tuple = (1e-3, 1e4)
+    prior_log_std: Optional[float] = None
+
+
+def _resolve_laplace(laplace) -> tuple[bool, "LaplaceConfig"]:
+    """Normalise the ``laplace=`` argument to ``(enabled, LaplaceConfig)``.
+
+    Accepts ``True`` (enable with defaults), ``False`` (disable), or a
+    :class:`LaplaceConfig` (enable with tuning).
+    """
+    if laplace is True:
+        return True, LaplaceConfig()
+    if laplace is False:
+        return False, LaplaceConfig()
+    if isinstance(laplace, LaplaceConfig):
+        return True, laplace
+    raise TypeError(f"laplace must be a bool or LaplaceConfig; got {type(laplace).__name__}.")
+
+
+def _free_ic_fields(free_ic) -> tuple[Optional[list], tuple, Optional[float]]:
+    """Unpack an optional :class:`FreeICConfig` into ``(species, bounds,
+    prior_log_std)`` for the internal problem resolver."""
+    if free_ic is None:
+        return None, (1e-3, 1e4), None
+    if isinstance(free_ic, FreeICConfig):
+        return free_ic.species, free_ic.bounds, free_ic.prior_log_std
+    raise TypeError(f"free_ic must be a FreeICConfig or None; got {type(free_ic).__name__}.")
+
+
 def _to_unconstrained(value: jnp.ndarray, transform: str) -> jnp.ndarray:
     if transform == "none":
         return value
@@ -416,9 +543,10 @@ class CalibrationResult:
             Seed for the draws (reproducible).
         eig_keep : float, optional
             Deprecated and ignored. The identifiable-subspace truncation is now
-            applied once, at calibrate time, via ``calibrate(laplace_eig_keep=
-            ...)``, so the band and ``params_named_std`` share one regulariser.
-            Passing a value here emits a ``DeprecationWarning``.
+            applied once, at calibrate time, via
+            ``calibrate(laplace=LaplaceConfig(eig_keep=...))``, so the band and
+            ``params_named_std`` share one regulariser. Passing a value here
+            emits a ``DeprecationWarning``.
         observed_species : list[str], optional
             Restrict the returned band to these species. ``None`` returns all.
 
@@ -434,7 +562,7 @@ class CalibrationResult:
             warnings.warn(
                 "predictive_band(eig_keep=...) is deprecated and ignored; the "
                 "identifiable-subspace truncation is set once at calibrate time "
-                "via calibrate(laplace_eig_keep=...).",
+                "via calibrate(laplace=LaplaceConfig(eig_keep=...)).",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -1297,24 +1425,10 @@ def calibrate(
     sigma: Optional[jnp.ndarray] = None,
     priors: Optional[dict[str, tuple[float, float]]] = None,
     use_priors: bool = True,
-    laplace: bool = True,
-    laplace_method: str = "fd",
-    laplace_ridge: float = 1e-6,
-    laplace_eig_keep: float = 1e-2,
-    laplace_fd_step: float = 1e-3,
-    laplace_dtmax: Optional[float] = None,
-    free_ic: Optional[list[str]] = None,
-    ic_bounds: tuple[float, float] = (1e-3, 1e4),
-    ic_prior_log_std: Optional[float] = None,
-    param_halfwidth: Optional[float] = None,
-    optimizer: str = "lbfgsb",
     diff: DifferentiationConfig = DifferentiationConfig(method="through_solve"),
-    n_starts: int = 1,
-    jitter: float = 0.5,
-    jitter_schedule: Optional[tuple] = None,
-    seed: int = 0,
-    max_iter: int = 500,
-    tol: float = 1e-6,
+    optimizer: OptimizerConfig = OptimizerConfig(),
+    laplace: "bool | LaplaceConfig" = True,
+    free_ic: Optional[FreeICConfig] = None,
     _compiled_cache: Optional[dict] = None,
 ) -> CalibrationResult:
     """MAP fit with optional Laplace posterior approximation.
@@ -1381,76 +1495,35 @@ def calibrate(
         ``loss="nll"`` and a measurement ``sigma`` so the data term is a true
         negative log-likelihood (the prior curvature then enters the Laplace
         covariance automatically).
-    laplace : bool, optional
-        If ``True``, compute the Laplace covariance approximation at the
-        MAP. The result is interpretable as a Bayesian posterior only when
-        ``loss="nll"`` with a calibrated ``sigma`` (i.e. the loss IS a
-        proper Gaussian negative log-likelihood); for ``"mse"`` /
-        ``"wmse"`` the covariance is the inverse loss curvature, which has
-        the right shape but not the right absolute scale for posterior
-        inference. See :func:`fit` if you only need point estimates.
-    laplace_method : {"fd", "gauss_newton"}, optional
-        How to form the Laplace Hessian. ``"fd"`` (default) finite-differences
-        the gradient. ``"gauss_newton"`` uses ``H = J^T J`` with ``J`` the
-        residual Jacobian by reverse-mode AD (``jax.jacrev``) -- exact (no FD
-        step), PSD by construction, and for ``loss="nll"`` the Fisher
-        information. It needs only first-order AD through the solve, so it works
-        with the default ``RecursiveCheckpointAdjoint``; the full Hessian does
-        not (see module docstring).
-    laplace_ridge : float
-        Diagonal ridge added to the Hessian for positive-definiteness.
-    laplace_eig_keep : float
-        Relative eigenvalue floor for the identifiable subspace of the Laplace
-        posterior. Directions whose (ridged) Hessian eigenvalue is at or below
-        ``laplace_eig_keep * largest`` are dropped from ``posterior_cov`` --- and
-        therefore from both ``params_named_std`` and the draws in
-        :meth:`CalibrationResult.predictive_band`, so the two regularise
-        identically. A well-identified fit keeps every direction (the covariance
-        then equals ``inv(H + ridge)``); the truncation only matters when the
-        Hessian is near-degenerate. Must be in ``[0, 1)`` (it is a fraction of
-        the largest eigenvalue); a value ``>= 1`` would drop every direction.
-    laplace_fd_step : float
-        Relative finite-difference step for the Hessian rows (``"fd"`` only).
-    laplace_dtmax : float, optional
-        Integrator-step cap used only for the Laplace Hessian. The Hessian (a
-        Jacobian/gradient through the solve) is more step-sensitive than the fit
-        itself, so for very stiff models it can need a tighter cap than the fit
-        reactor uses -- pass the fit reactor at a loose cap (fast) and set
-        ``laplace_dtmax`` to a tighter one. ``None`` (default) reuses the fit
-        reactor. Requires a ``BatchReactor``-style reactor (it is reconstructed
-        with the new cap from ``model``/``conditions``/``rtol``/``atol``/
-        ``adjoint``).
-    free_ic : list[str], optional
-        Species whose *initial* concentration is fitted in addition to the rate
-        parameters. The pools are fitted per dataset (each batch gets its own
-        initial values, in log space, box-bounded by ``ic_bounds``) while the
-        rate parameters remain shared. Useful when an unmeasured initial state
-        (e.g. a biofilm reservoir) is not known. The Laplace posterior is taken
-        over the rate parameters with the fitted pools held at their optimum.
-        The fitted pools are returned on ``CalibrationResult.C0_fitted`` /
-        ``ic_named``.
-    ic_bounds : tuple[float, float], optional
-        ``(lo, hi)`` box bounds (physical concentration) for every free initial
-        pool. Default ``(1e-3, 1e4)``.
-    ic_prior_log_std : float, optional
-        If given, a weak Gaussian prior in log space tethering each fitted pool
-        to its supplied starting value, with this standard deviation. ``None``
-        (default) leaves the pools governed only by the data and ``ic_bounds``.
-    param_halfwidth : float, optional
-        If given, box-bound each free *rate* parameter to ``theta0 +/-
-        param_halfwidth`` in unconstrained (transformed) space --- a symmetric
-        log-space box around the starting value that keeps the optimiser from
-        wandering to extreme values. ``None`` (default) leaves rates unbounded
-        (positivity is still enforced by the transform). Free initial pools are
-        always bounded by ``ic_bounds`` regardless.
-    optimizer : {"lbfgsb", "gauss_newton"}, optional
-        Optimisation backend. ``"lbfgsb"`` (default) minimises the scalar loss
-        with SciPy L-BFGS-B (reverse-mode gradient). ``"gauss_newton"`` minimises
-        the residual *vector* with SciPy ``least_squares`` (trust-region
-        reflective) -- a Gauss-Newton method that exploits the least-squares
-        structure and is markedly more robust on the multimodal landscapes of
-        stiff reaction-model fits. The residual Jacobian is formed by AD;
-        the direction is chosen by ``diff.mode``.
+    optimizer : OptimizerConfig, optional
+        Optimiser backend and multistart settings; see :class:`OptimizerConfig`
+        for the fields (``method`` {"lbfgsb", "gauss_newton"}, ``n_starts``,
+        ``jitter`` / ``jitter_schedule``, ``seed``, ``max_iter``, ``tol``,
+        ``param_halfwidth``). ``"gauss_newton"`` minimises the residual *vector*
+        with SciPy ``least_squares`` (its Jacobian by AD, direction from
+        ``diff.mode``) and is markedly more robust on the multimodal landscapes
+        of stiff reaction-model fits; ``n_starts > 1`` is a deterministic,
+        ``seed``-reproducible multistart that keeps the lowest-loss optimum.
+        Default ``OptimizerConfig()`` (a single L-BFGS-B start).
+    laplace : bool or LaplaceConfig, optional
+        Laplace covariance approximation at the MAP. ``True`` (default) computes
+        it with default settings, ``False`` disables it, and a
+        :class:`LaplaceConfig` computes it with tuning (``method`` {"fd",
+        "gauss_newton"}, ``ridge``, ``eig_keep``, ``fd_step``, ``dtmax``). It is
+        interpretable as a Bayesian posterior only when ``loss="nll"`` with a
+        calibrated ``sigma`` (the loss then IS a proper Gaussian negative
+        log-likelihood); for ``"mse"`` / ``"wmse"`` it is the inverse loss
+        curvature -- the right shape but not the right absolute scale. See
+        :func:`fit` if you only need point estimates.
+    free_ic : FreeICConfig, optional
+        If given, also fit the initial concentration of the named
+        ``species`` (per dataset, in log space, box-bounded by
+        :attr:`FreeICConfig.bounds`, with an optional log-space prior via
+        ``prior_log_std``) while the rate parameters stay shared -- useful when
+        an unmeasured initial state (e.g. a biofilm reservoir) is not known. The
+        fitted pools are returned on ``CalibrationResult.C0_fitted`` /
+        ``ic_named``; the Laplace posterior is taken over the rate parameters
+        with the pools held at their optimum. Default ``None`` (no free ICs).
     diff : DifferentiationConfig, optional
         How the data-term gradient / residual Jacobian is formed.
         ``mode`` ({"reverse", "forward"}) is the autodiff direction;
@@ -1477,30 +1550,6 @@ def calibrate(
         ``adjoint_low_memory`` recomputes each step's stages in the backward pass
         instead of saving the ``~n_stages``x dense-stage buffer -- memory for
         compute, with the gradient unchanged.
-    n_starts : int, optional
-        Number of optimiser starts (default ``1``). With ``n_starts > 1`` the
-        calibration is run from several starting points and the lowest-loss
-        result is kept --- a deterministic multistart that escapes local minima
-        on the multimodal landscapes typical of stiff reaction-model fits.
-        Start 0 is the supplied / default ``initial_params`` (unperturbed); the
-        remaining starts perturb the unconstrained start vector by Gaussian noise
-        of scale ``jitter``. The Laplace posterior is computed once, at the
-        winning optimum. Fully reproducible given ``seed``.
-    jitter : float, optional
-        Standard deviation (in unconstrained / transformed space) of the
-        Gaussian perturbation applied to each multistart start after the first.
-        Ignored when ``n_starts == 1`` or when ``jitter_schedule`` is given.
-    jitter_schedule : tuple of float, optional
-        Cyclic per-start jitter scales. When given, start ``s`` (>= 1) uses scale
-        ``jitter_schedule[(s-1) % len]`` and its own ``RandomState(seed + s)``,
-        instead of the single ``jitter`` scale with one shared stream. A wider
-        schedule explores farther from the start (useful when the global basin is
-        only reached by larger perturbations). Default ``None`` (use ``jitter``).
-    seed : int, optional
-        Seed for the multistart perturbations, so a re-run reproduces the same
-        starts and therefore the same optimum.
-    max_iter, tol : passed through to the optimiser (L-BFGS-B ``maxiter``/``gtol``,
-        or least-squares ``max_nfev``/``xtol``/``ftol``).
 
     Returns
     -------
@@ -1521,10 +1570,12 @@ def calibrate(
         raise ValueError("free_params must be non-empty.")
     if loss not in _VALID_LOSSES:
         raise ValueError(f"loss must be one of {_VALID_LOSSES}; got {loss!r}.")
-    if n_starts < 1:
-        raise ValueError(f"n_starts must be >= 1; got {n_starts}.")
-    if optimizer not in _VALID_OPTIMIZERS:
-        raise ValueError(f"optimizer must be one of {_VALID_OPTIMIZERS}; got {optimizer!r}.")
+    if optimizer.n_starts < 1:
+        raise ValueError(f"optimizer.n_starts must be >= 1; got {optimizer.n_starts}.")
+    if optimizer.method not in _VALID_OPTIMIZERS:
+        raise ValueError(
+            f"optimizer.method must be one of {_VALID_OPTIMIZERS}; got {optimizer.method!r}."
+        )
     if ad_mode == "forward" and gradient == "stable_adjoint":
         raise ValueError(
             "diff=DifferentiationConfig(mode='forward', method='stable') is "
@@ -1543,6 +1594,10 @@ def calibrate(
             f"without one ({type(reactor).__name__})."
         )
 
+    # Unpack the config objects into the internal scalar knobs.
+    laplace_on, lap = _resolve_laplace(laplace)
+    ic_species, ic_bounds, ic_prior_log_std = _free_ic_fields(free_ic)
+
     # Resolve the arguments once into the static problem + the fit config, then
     # build the compiled objective on the reactor forward-model seam.
     problem = _resolve_problem(
@@ -1559,10 +1614,10 @@ def calibrate(
         sigma=sigma,
         priors=priors,
         use_priors=use_priors,
-        free_ic=free_ic,
+        free_ic=ic_species,
         ic_bounds=ic_bounds,
         ic_prior_log_std=ic_prior_log_std,
-        param_halfwidth=param_halfwidth,
+        param_halfwidth=optimizer.param_halfwidth,
     )
     cfg = _FitConfig(
         gradient=gradient,
@@ -1570,19 +1625,19 @@ def calibrate(
         check_finite=diff.check_finite,
         stable_adjoint_max_steps=int(diff.adjoint_max_steps),
         stable_adjoint_low_memory=bool(diff.adjoint_low_memory),
-        optimizer=optimizer,
-        max_iter=max_iter,
-        tol=tol,
-        n_starts=n_starts,
-        jitter=jitter,
-        jitter_schedule=jitter_schedule,
-        seed=seed,
-        laplace=laplace,
-        laplace_method=laplace_method,
-        laplace_ridge=laplace_ridge,
-        laplace_eig_keep=laplace_eig_keep,
-        laplace_fd_step=laplace_fd_step,
-        laplace_dtmax=laplace_dtmax,
+        optimizer=optimizer.method,
+        max_iter=optimizer.max_iter,
+        tol=optimizer.tol,
+        n_starts=optimizer.n_starts,
+        jitter=optimizer.jitter,
+        jitter_schedule=optimizer.jitter_schedule,
+        seed=optimizer.seed,
+        laplace=laplace_on,
+        laplace_method=lap.method,
+        laplace_ridge=lap.ridge,
+        laplace_eig_keep=lap.eig_keep,
+        laplace_fd_step=lap.fd_step,
+        laplace_dtmax=lap.dtmax,
         compiled_cache=_compiled_cache,
     )
     fm = _ReactorForwardModel(
