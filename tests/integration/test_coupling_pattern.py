@@ -268,7 +268,7 @@ def test_plant_structural_pattern_superset_over_trajectory_bsm1():
     rmap = p._recycle._maybe_recycle_map(t0, p._split_state(y0), params)
     rhs_y0 = lambda y: p._rhs(t0, y, params, recycle_map=rmap)
     probe = jacobian_sparsity_pattern(rhs_y0, y0) > 0
-    P = probe | p._structural_plant_pattern(coupling_mask=probe)
+    P = probe | p._colored._structural_plant_pattern(coupling_mask=probe)
 
     # unit block map
     n = y0.shape[0]
@@ -362,7 +362,7 @@ def test_single_unit_plant_no_within_unit_coupling_missing(kind):
     rmap = p._recycle._maybe_recycle_map(t0, p._split_state(y0), params)
     rhs_y0 = lambda y: p._rhs(t0, y, params, recycle_map=rmap)
     probe = jacobian_sparsity_pattern(rhs_y0, y0) > 0
-    P = probe | p._structural_plant_pattern(coupling_mask=probe)
+    P = probe | p._colored._structural_plant_pattern(coupling_mask=probe)
     denseJ = jax.jit(lambda tt, y: jax.jacfwd(lambda z: p._rhs(
         tt, z, params, recycle_map=p._recycle._maybe_recycle_map(
             jnp.asarray(tt), p._split_state(z), params)))(y))
