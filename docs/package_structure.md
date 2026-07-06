@@ -56,11 +56,14 @@ aquakin/
 │   │   ├── particle.py              # Track, ParticleTrackReactor, integrate_ensemble
 │   │   ├── cfd.py                   # CFDReactor (Option C runtime coupling)
 │   │   ├── sensitivity.py           # sensitivity(), fit(), dgsm()
-│   │   ├── experiments.py           # compare_scenarios(), monte_carlo(),
-│   │   │                            #   optimize_design(): scenario comparison +
-│   │   │                            #   Monte-Carlo uncertainty + constrained design
-│   │   │                            #   optimization on the fn(x)->output contract
-│   │   │                            #   (reuses dgsm's Sobol QMC; AD-gradient NLP)
+│   │   ├── _qmc.py                   # shared unit sampler + fn(x)->output eval
+│   │   │                            #   helpers (reuses dgsm's Sobol QMC)
+│   │   ├── monte_carlo.py           # monte_carlo(): uncertainty propagation
+│   │   │                            #   (distribution samplers -> inverse-CDF)
+│   │   ├── scenarios.py             # compare_scenarios() + kpi_comparison():
+│   │   │                            #   scenario / standardized-report KPI tables
+│   │   ├── design.py                # optimize_design() + Constraint: AD-gradient
+│   │   │                            #   constrained design NLP
 │   │   ├── forward_sensitivity.py   # solve_sensitivity / forward_sensitivity:
 │   │   │                            #   augmented [y; S] variational solve giving
 │   │   │                            #   cap-free exact stiff sensitivities

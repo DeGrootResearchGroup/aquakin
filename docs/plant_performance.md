@@ -1706,7 +1706,7 @@ cost-OPEX deliverables, plus a standardized side-by-side KPI table:
   annualised CAPEX and a CO₂e carbon charge → `OperatingCost` (per-day +
   annual).
 - **Standardized KPI comparison** (`kpi_comparison` in
-  [`integrate/experiments.py`](aquakin/integrate/experiments.py)): tabulates
+  [`integrate/scenarios.py`](aquakin/integrate/scenarios.py)): tabulates
   heterogeneous report objects (`BSM2Evaluation`, `CarbonFootprint`,
   `OperatingCost` — anything exposing `.kpis()`, or a plain dict) side by side
   into a `KPIComparison` (union of KPI columns, `.best(kpi, minimize=)`). The
