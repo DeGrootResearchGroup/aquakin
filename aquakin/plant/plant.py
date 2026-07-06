@@ -40,7 +40,6 @@ from aquakin.integrate._common import (
     _run_diffeqsolve,
     concrete_settings_key,
     default_atol,
-    forward_adjoint,
     friendly_solve_errors,
     to_native_time,
 )
@@ -2602,25 +2601,20 @@ class Plant:
         :meth:`dynamic_sensitivity`). Cross-argument combination checks live in
         :meth:`_validate_solve_args`.
         """
-        if diff.mode not in ("reverse", "forward"):
-            raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
-        if diff.method not in ("stable", "through_solve"):
+        diff.validated()
+        if diff.mode == "forward" and diff.method == "stable":
             raise ValueError(
-                f"diff.method must be 'stable' or 'through_solve'; got {diff.method!r}."
+                "diff=DifferentiationConfig(mode='forward', method='stable') is "
+                "the augmented variational solve; call plant.solve_sensitivity "
+                "(or plant.dynamic_sensitivity) for it, not plant.solve."
             )
-        adjoint = None
-        if diff.mode == "reverse":
-            gradient = "auto" if diff.method == "stable" else "jax_adjoint"
-        else:  # forward
-            if diff.method == "stable":
-                raise ValueError(
-                    "diff=DifferentiationConfig(mode='forward', method='stable') is "
-                    "the augmented variational solve; call plant.solve_sensitivity "
-                    "(or plant.dynamic_sensitivity) for it, not plant.solve."
-                )
-            # forward + through_solve: jvp/jacfwd through the diffrax solve.
-            gradient = "jax_adjoint"
-            adjoint = forward_adjoint()
+        # ``method="stable"`` routes through the plant's own ``"auto"`` dispatch
+        # (concrete forward solve -> cached fast path; a differentiated one ->
+        # cap-free discrete adjoint) rather than the canonical "stable_adjoint";
+        # otherwise differentiate through the diffrax solve. The forward-mode
+        # adjoint object (for forward + through_solve) is the config's.
+        gradient = "auto" if diff.method == "stable" else "jax_adjoint"
+        adjoint = diff.reactor_adjoint()
         return gradient, adjoint, int(diff.adjoint_max_steps), bool(diff.adjoint_low_memory)
 
     def _validate_solve_args(

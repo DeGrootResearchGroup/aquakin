@@ -106,15 +106,14 @@ def sensitivity(
     """
     if output_fn is None:
         raise ValueError("output_fn is required (a solution -> scalar callable).")
-    if diff.mode not in ("reverse", "forward"):
-        raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
+    diff.validated()
     ad_mode = diff.mode
     check_finite = diff.check_finite
-    if ad_mode == "forward":
+    if diff.forms_jacfwd():
         # Differentiate forward through the solve; needs a forward-capable
         # adjoint. Build it internally so diffrax never appears in user code.
         reactor = with_adjoint(reactor, forward_adjoint())
-    _diff = jax.jacfwd if ad_mode == "forward" else jax.grad
+    _diff = jax.jacfwd if diff.forms_jacfwd() else jax.grad
     if params is None:
         params = reactor.model.default_parameters()
     solve_kwargs = dict(solve_kwargs or {})
@@ -716,8 +715,7 @@ def dgsm(
     >>> res.ranked()[0][0]
     'a'
     """
-    if diff.mode not in ("reverse", "forward"):
-        raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
+    diff.validated()
     mode = diff.mode
 
     ranges_np, lo, hi, d, input_names = _validate_dgsm_ranges(ranges, input_names)

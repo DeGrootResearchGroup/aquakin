@@ -133,21 +133,60 @@ class DifferentiationConfig:
     adjoint_max_steps: int = 100_000
     adjoint_low_memory: bool = False
 
+    # -- Decoding the (mode, method) vocabulary -----------------------------
+    #
+    # The public (mode, method) meaning is owned here rather than re-decoded in
+    # each entry point (calibrate / sensitivity / dgsm / Plant.solve), so a change
+    # to the config's semantics -- or a new (mode, method) pairing -- lands in one
+    # place instead of being mirrored across every consumer.
 
-def _resolve_reactor_adjoint(diff: "DifferentiationConfig"):
-    """Resolve the diffrax adjoint object a reactor should carry for ``diff``.
+    def validated(self) -> "DifferentiationConfig":
+        """Validate the ``mode`` / ``method`` vocabulary; return ``self``.
 
-    Reactors have no hand-written ("stable") reverse adjoint -- that is plant-only
-    -- so reverse mode always uses ``RecursiveCheckpointAdjoint`` (signalled here
-    by ``None``, the reactor default). ``method`` is meaningful only for reactor
-    *forward* mode: ``through_solve`` -> a forward-capable ``DirectAdjoint``;
-    ``stable`` -> the augmented ``solve_sensitivity`` backend, which is invoked
-    explicitly (not via the reactor ``adjoint``), so the reactor still carries the
-    reverse default here.
-    """
-    if diff.mode == "forward" and diff.method == "through_solve":
-        return forward_adjoint()
-    return None
+        Raises ``ValueError`` for an out-of-range ``mode`` or ``method``. This is
+        the vocabulary check only -- whether a *particular* consumer serves a
+        given valid pairing (e.g. ``Plant.solve`` rejecting the ``forward`` +
+        ``stable`` augmented solve) is that consumer's own guard.
+        """
+        if self.mode not in ("reverse", "forward"):
+            raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {self.mode!r}.")
+        if self.method not in ("stable", "through_solve"):
+            raise ValueError(
+                f"diff.method must be 'stable' or 'through_solve'; got {self.method!r}."
+            )
+        return self
+
+    def forms_jacfwd(self) -> bool:
+        """Whether the AD direction is forward (``jax.jacfwd`` / a variational
+        solve) rather than reverse (``jax.grad`` / a discrete adjoint)."""
+        return self.mode == "forward"
+
+    def gradient_backend(self) -> str:
+        """The reverse-adjoint backend this config selects.
+
+        ``"stable_adjoint"`` for the cap-free hand-written discrete adjoint
+        (``method="stable"``), or ``"jax_adjoint"`` for differentiating *through*
+        the diffrax solve (``method="through_solve"``). This is the canonical
+        ``method`` -> backend meaning the calibration entry points consume; the
+        plant *solve* routes ``method="stable"`` through its own ``"auto"``
+        dispatch instead (see :meth:`Plant._resolve_diff_config`).
+        """
+        return "stable_adjoint" if self.method == "stable" else "jax_adjoint"
+
+    def reactor_adjoint(self):
+        """The diffrax adjoint object a reactor / plant solve should carry.
+
+        Reactors and the plant have no hand-written ("stable") reverse adjoint on
+        the reactor object -- reverse mode always uses the default
+        ``RecursiveCheckpointAdjoint`` (signalled by ``None``). ``method`` matters
+        only for *forward* mode: ``through_solve`` -> a forward-capable
+        ``DirectAdjoint`` (:func:`forward_adjoint`); ``stable`` -> the augmented
+        ``solve_sensitivity`` backend, invoked explicitly (not via this adjoint),
+        so ``None`` is still returned.
+        """
+        if self.mode == "forward" and self.method == "through_solve":
+            return forward_adjoint()
+        return None
 
 
 # --- AD-mode helpers (hide the diffrax adjoint plumbing) ---------------------
@@ -1008,7 +1047,7 @@ def init_solver_settings(reactor, model, *, rtol, integrator, diff):
     reactor.rtol = float(rtol)
     reactor.integrator = integrator
     reactor.diff = diff
-    reactor.adjoint = _resolve_reactor_adjoint(diff)
+    reactor.adjoint = diff.reactor_adjoint()
     reactor.dtmax = integrator.dtmax
     reactor.max_steps = int(integrator.max_steps)
     reactor.order = int(integrator.order)

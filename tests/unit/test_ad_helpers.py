@@ -101,3 +101,51 @@ def test_check_gradient_finite_guards_a_real_gradient(simple_model):
         jax.grad(loss)(simple_model.default_parameters()), what="my gradient"
     )
     assert jnp.all(jnp.isfinite(g))
+
+
+# --- DifferentiationConfig decode (centralized on the config) --------------
+
+def test_diff_config_validated_accepts_and_rejects():
+    """The (mode, method) vocabulary check lives on the config, so every consumer
+    validates identically instead of re-open-coding the same guard."""
+    from aquakin.integrate._common import DifferentiationConfig as DC
+
+    # a valid config returns itself (chainable)
+    cfg = DC(mode="reverse", method="stable")
+    assert cfg.validated() is cfg
+    with pytest.raises(ValueError, match="diff.mode must be"):
+        DC(mode="sideways").validated()
+    with pytest.raises(ValueError, match="diff.method must be"):
+        DC(method="not_a_method").validated()
+
+
+def test_diff_config_gradient_backend_maps_method():
+    """method -> reverse-adjoint backend is owned by the config (the mapping the
+    calibration entry points used to each open-code)."""
+    from aquakin.integrate._common import DifferentiationConfig as DC
+
+    assert DC(method="stable").gradient_backend() == "stable_adjoint"
+    assert DC(method="through_solve").gradient_backend() == "jax_adjoint"
+
+
+def test_diff_config_forms_jacfwd_is_forward_mode():
+    from aquakin.integrate._common import DifferentiationConfig as DC
+
+    assert DC(mode="forward").forms_jacfwd() is True
+    assert DC(mode="reverse").forms_jacfwd() is False
+
+
+def test_diff_config_reactor_adjoint_only_for_forward_through_solve():
+    """Only forward + through_solve carries a forward-capable adjoint object;
+    every other pairing leaves the reactor on its reverse default (None)."""
+    from aquakin.integrate._common import DifferentiationConfig as DC
+
+    assert isinstance(
+        DC(mode="forward", method="through_solve").reactor_adjoint(),
+        diffrax.DirectAdjoint,
+    )
+    assert DC(mode="reverse", method="stable").reactor_adjoint() is None
+    assert DC(mode="reverse", method="through_solve").reactor_adjoint() is None
+    # forward + stable is the augmented variational solve (invoked explicitly),
+    # so the reactor still carries the reverse default here.
+    assert DC(mode="forward", method="stable").reactor_adjoint() is None

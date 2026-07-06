@@ -60,23 +60,6 @@ from aquakin.integrate._transforms import (
 
 _VALID_LOSSES = ("mse", "wmse", "nll")
 _VALID_OPTIMIZERS = ("lbfgsb", "gauss_newton")
-# Gradient backend. Both compute a discrete adjoint and both use JAX autodiff
-# for the model derivatives (d f/d y, d f/d theta); they differ in how the
-# integrator's adjoint is formed:
-#   "jax_adjoint"    -- JAX/diffrax differentiate the whole solve
-#                       (RecursiveCheckpointAdjoint). Needs a dtmax cap for stiff
-#                       models (reverse-mode overflows above a step threshold).
-#   "stable_adjoint" -- AD for the model, plus an explicit per-step transposed
-#                       solve for the integrator's adjoint
-#                       (aquakin.implicit_euler_adjoint_solve). Cap-free and
-#                       numerically stable for stiff models.
-_VALID_GRADIENTS = ("jax_adjoint", "stable_adjoint")
-# Autodiff direction for the residual Jacobian / objective gradient. "auto"
-# preserves the legacy behaviour (forward iff the reactor was built with a
-# DirectAdjoint, else reverse); "forward"/"reverse" force the direction and
-# build the right reactor adjoint internally, so the caller never touches
-# diffrax. "forward" is the finite-through-a-stiff-solve direction.
-_VALID_AD_MODES = ("auto", "reverse", "forward")
 
 # Uniform optimiser output so the multistart loop and downstream code are
 # agnostic to which backend (L-BFGS-B or Gauss-Newton least-squares) ran.
@@ -1541,16 +1524,12 @@ def calibrate(
     -------
     CalibrationResult
     """
-    # Resolve the public DifferentiationConfig into the internal AD selectors:
-    #   diff.mode    -> ad_mode  ("reverse" / "forward")
-    #   diff.method  -> gradient ("stable" -> "stable_adjoint",
-    #                             "through_solve" -> "jax_adjoint")
-    if diff.mode not in ("reverse", "forward"):
-        raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
-    if diff.method not in ("stable", "through_solve"):
-        raise ValueError(f"diff.method must be 'stable' or 'through_solve'; got {diff.method!r}.")
+    # Resolve the public DifferentiationConfig into the internal AD selectors
+    # (the config owns the vocabulary: diff.mode is the AD direction, and
+    # diff.gradient_backend() maps method -> "stable_adjoint" / "jax_adjoint").
+    diff.validated()
     ad_mode = diff.mode
-    gradient = "stable_adjoint" if diff.method == "stable" else "jax_adjoint"
+    gradient = diff.gradient_backend()
 
     if not free_params:
         raise ValueError("free_params must be non-empty.")
