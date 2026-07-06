@@ -305,7 +305,11 @@ push only when the user asks. The convention is:
 
 Before committing or pushing any code change, run the linter locally so the
 required `lint (ruff)` gate stays green — `ruff check aquakin` and `ruff format
-aquakin` (see Post-Change Checklist item 1 for details).
+aquakin` (see Post-Change Checklist item 1 for details). A committed pre-push
+hook (`.githooks/pre-push`) automates this: enable it once per clone with
+`git config core.hooksPath .githooks` and it runs the same `ruff check` +
+`ruff format --check` gate before every push, blocking the push on a failure
+(bypass a one-off with `git push --no-verify`).
 
 > The full CI architecture — pytest-split sharding, the fast PR gate vs the
 > merge-to-main `slow`/`validation`/`heavy` suites, the memory/heavy-runner
@@ -335,6 +339,8 @@ act on the following:
    Ruff is pinned via the `lint` extra (`pip install -e ".[lint]"`); see the
    `[tool.ruff]` config in `pyproject.toml` for the rule set and per-file
    ignores. Not needed for docs/config-only changes that touch no `.py` files.
+   The `.githooks/pre-push` hook enforces this same gate automatically once
+   enabled (`git config core.hooksPath .githooks`) — see Development workflow.
 
 2. **Tests** — Are new tests needed for the changed or added functionality?
    - New node type → unit test in `test_nodes.py`
