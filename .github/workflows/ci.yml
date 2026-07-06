@@ -429,7 +429,22 @@ jobs:
         run: >-
           pytest -m "heavy and not xheavy" -q -n 1
           --splits 11 --group ${{ matrix.group }}
+          --cov=aquakin --cov-report=xml
           --durations=15 --timeout=1200 --timeout-method=thread
+
+      - name: Upload coverage to Codecov
+        # Reclaims coverage of the whole-plant stable-adjoint / dynamic-DGSM code
+        # that only the heavy tier exercises. Coverage's overhead here is Python
+        # line-tracking (MBs), negligible against the multi-GB JAX programs that
+        # bound this tier's memory. Non-failing, so it can never affect any gate.
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: heavy
+          name: heavy-g${{ matrix.group }}
+          fail_ci_if_error: false
 
   # The single oversized test that exceeds 16 GB even isolated -- runs alone on a
   # small larger runner (`aquakin-heavy`, 8-core/32 GB). Same gating as `heavy`.
@@ -472,7 +487,20 @@ jobs:
         # The lone >16 GB test, alone in a fresh process.
         run: >-
           pytest -m xheavy -q -n 1
+          --cov=aquakin --cov-report=xml
           --durations=15 --timeout=1800 --timeout-method=thread
+
+      - name: Upload coverage to Codecov
+        # Same `heavy` flag as the sharded heavy job -- xheavy IS-A heavy, so
+        # Codecov merges them under one flag.
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: heavy
+          name: xheavy
+          fail_ci_if_error: false
 
   # ---- Validation suite (against published data): merge-to-main + opt-in -------
   # Runs on push to main, and on a PR carrying the `full-ci` label (the opt-in

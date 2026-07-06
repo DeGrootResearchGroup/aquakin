@@ -32,6 +32,11 @@ flags:
     carryforward: true
   validation:
     carryforward: true
+  # heavy/xheavy run only on adjoint/plant merges + full-ci PRs, so carryforward
+  # is essential -- otherwise the whole-plant stable-adjoint coverage would drop
+  # out on every build that does not trigger the heavy tier.
+  heavy:
+    carryforward: true
 
 comment:
   layout: "reach, diff, flags, files"
