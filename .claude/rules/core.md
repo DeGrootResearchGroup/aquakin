@@ -58,12 +58,51 @@ are both 0 (`K = X = 0`); for `safe_div` wherever the author's denominator hits
 through the masked branch, so the denominator is guarded too. Identity for any
 nonzero denominator — the only change is exactly at the singularity.
 
-New domain-specific node types are added here as needed. Each node implements:
+New domain-specific node types are added here as needed. An **operator** node
+(everything but the four leaves) subclasses `_OperatorNode` and declares its
+arithmetic **once**, as a single `op(operands)` staticmethod plus a `KIND`
+string:
 
 ```python
-def compile(self, ctx: CompileContext) -> Callable:
-    """Returns a JAX-compatible callable: (C, params, condition_arrays, loc_idx) -> scalar"""
+@dataclass(frozen=True)
+class MonodNode(_OperatorNode):
+    X: ASTNode
+    K: ASTNode
+    KIND = "monod"              # kernel key
+    FUNCTION_NAME = "monod"     # optional: the call spelling in a rate expression
+    # EXTRA_CONDITIONS = ("T",) # optional: condition fields read beyond the AST children
+
+    @staticmethod
+    def op(o):                  # operands = AST children (field order) + EXTRA_CONDITIONS
+        x, k = o
+        return _safe_ratio(x, k + x)
 ```
+
+`_OperatorNode.compile` is generic (evaluates the operands and applies `op`), so
+there is no per-node `compile`. That one `op` is the single source of truth:
+**everything else derives from the node class** —
+
+- the **scalar** rate closure (`_OperatorNode.compile`) calls `op`;
+- the **vectorized kernel** table (`vector_kernel._KERNELS`) is built by walking
+  the node hierarchy and maps each `KIND` to the node's own `op` — so the two
+  paths run the *identical* function (bit-identicality is structural, not two
+  hand-aligned copies), and a node added *without* a `KIND` simply raises
+  `UnsupportedNode` → scalar fallback;
+- the **interner** dispatch (`vector_kernel._Interner.intern`) reads `KIND`,
+  `children()` and `EXTRA_CONDITIONS` off the node type — no per-node branch;
+- the **parser** built-in registry (`parser._FUNCTIONS`) is discovered from each
+  node's `FUNCTION_NAME` (with argument names read off its dataclass fields).
+
+So adding a domain-function node is a *single* edit — define the class — rather
+than coordinated edits across `nodes.py`, `parser._FUNCTIONS`,
+`vector_kernel._KERNELS` and the interner. `PowerNode` keeps one special case: a
+*constant* exponent interns to the `powc` kernel (a kernel-internal variant that
+holds the exponent static so its JVP stays finite at base 0); the `powc` kernel
+is `PowerNode.op` itself, so even it cannot drift.
+
+A **leaf** node (`ConstantNode`, `SpeciesNode`, `ParamNode`, `ConditionNode`)
+carries a literal payload rather than a kernel, so it keeps its own `compile` and
+is handled explicitly in the interner (mapping to a pool leaf-block).
 
 ### Vectorized rate kernel (`core/vector_kernel.py`)
 

@@ -15,6 +15,8 @@ RateCallable = Callable[[jnp.ndarray, jnp.ndarray, dict, jnp.ndarray], jnp.ndarr
 
 GAS_CONSTANT = 8.314462618  # J / (mol K)
 
+_LN10 = float(jnp.log(10.0))
+
 # ADM1 lower-pH Hill inhibition: the Hill exponent is n = _PH_INHIBIT_HILL_SLOPE
 # / (pH_UL - pH_LL), so the inhibition spans ~the [pH_LL, pH_UL] window
 # (Batstone et al. 2002; Rosen & Jeppsson 2006).
@@ -55,7 +57,22 @@ class ASTNode(ABC):
     Each subclass implements :meth:`compile`, which returns a closure with the
     canonical rate-callable signature ``(C, params, condition_arrays, loc_idx)
     -> scalar`` using only JAX operations.
+
+    Operator nodes (everything but the four leaves) additionally declare the
+    single source of truth for their arithmetic: a ``KIND`` string (the kernel
+    key) and an ``op(operands)`` staticmethod evaluated by both the scalar
+    closure here and the batched kernel in :mod:`aquakin.core.vector_kernel`.
+    See :class:`_OperatorNode`.
     """
+
+    # Operator nodes override these; leaves keep the defaults (KIND ``None``
+    # means "not an operator" -- the kernel builder and interner skip it).
+    KIND: ClassVar[str | None] = None
+    #: Condition fields this node reads directly (beyond its AST children),
+    #: appended as trailing operands -- e.g. the ``T`` an Arrhenius term needs
+    #: or the ``pH`` a pH switch reads. Drives both the required-field check and
+    #: :meth:`condition_names`.
+    EXTRA_CONDITIONS: ClassVar[tuple[str, ...]] = ()
 
     @abstractmethod
     def compile(self, ctx: CompileContext) -> RateCallable:
@@ -108,10 +125,14 @@ class ASTNode(ABC):
         return set().union(*(c.param_names() for c in self.children()))
 
     def condition_names(self) -> set[str]:
-        """Condition field names in this subtree (union over :meth:`children`;
-        ``ConditionNode`` adds its own, and the temperature/pH nodes add the
-        field they require)."""
-        return set().union(*(c.condition_names() for c in self.children()))
+        """Condition field names in this subtree (union over :meth:`children`,
+        plus this node's own :attr:`EXTRA_CONDITIONS`; ``ConditionNode`` adds
+        its own field). The temperature/pH nodes get ``T`` / ``pH`` for free
+        via ``EXTRA_CONDITIONS``, so no per-node override is needed."""
+        names = set(self.EXTRA_CONDITIONS)
+        for c in self.children():
+            names |= c.condition_names()
+        return names
 
 
 # --- Leaf nodes ---------------------------------------------------------
@@ -217,73 +238,97 @@ class ConditionNode(ASTNode):
         return {self.field_name}
 
 
-# --- Binary operations --------------------------------------------------
+# --- Operator nodes -----------------------------------------------------
+
+
+class _OperatorNode(ASTNode):
+    """Base for every non-leaf node -- the arithmetic lives in one place.
+
+    A subclass declares ``KIND`` (its kernel key), an ``op(operands)``
+    staticmethod (the elementwise arithmetic), and optionally
+    ``EXTRA_CONDITIONS`` (condition fields it reads beyond its AST children).
+    :meth:`compile` here is generic: it evaluates each operand -- the node's AST
+    children in field order, then its ``EXTRA_CONDITIONS`` -- and applies
+    ``op``. The **same** ``op`` is what :mod:`aquakin.core.vector_kernel`
+    evaluates in batch, so the scalar and vectorized paths are identical by
+    construction (bit-identical arithmetic, not two hand-aligned copies).
+
+    ``op`` takes a single tuple of operand values -- scalars in this scalar
+    closure, arrays in the batched kernel -- and returns the node's value. Every
+    op is written with plain JAX elementwise operations, which are agnostic to
+    that distinction.
+    """
+
+    #: ``op(operands: tuple) -> value``. Operand order is the node's AST-child
+    #: fields followed by its ``EXTRA_CONDITIONS``.
+    op: ClassVar[Callable[[tuple], Any]]
+
+    def compile(self, ctx: CompileContext) -> RateCallable:
+        for field_name in self.EXTRA_CONDITIONS:
+            if field_name not in ctx.condition_fields:
+                raise KeyError(
+                    f"{type(self).__name__} requires a condition field named '{field_name}'."
+                )
+        child_fns = tuple(c.compile(ctx) for c in self.children())
+        extra = self.EXTRA_CONDITIONS
+        op = type(self).op
+
+        def _eval(C, params, condition_arrays, loc_idx):
+            operands = tuple(f(C, params, condition_arrays, loc_idx) for f in child_fns)
+            operands += tuple(condition_arrays[name][loc_idx] for name in extra)
+            return op(operands)
+
+        return _eval
 
 
 @dataclass(frozen=True)
-class _BinaryNode(ASTNode):
-    """Shared implementation for binary arithmetic AST nodes."""
+class _BinaryNode(_OperatorNode):
+    """Shared field layout for binary arithmetic AST nodes."""
 
     left: ASTNode
     right: ASTNode
 
-    # Subclasses override _op with a JAX-compatible scalar op (l, r) -> scalar.
-    _op: ClassVar[Callable[[Any, Any], Any]]
-
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        lf = self.left.compile(ctx)
-        rf = self.right.compile(ctx)
-        op = type(self)._op
-
-        def _eval(C, params, condition_arrays, loc_idx):
-            return op(
-                lf(C, params, condition_arrays, loc_idx),
-                rf(C, params, condition_arrays, loc_idx),
-            )
-
-        return _eval
-
 
 class AddNode(_BinaryNode):
-    _op = staticmethod(lambda l, r: l + r)
+    KIND = "add"
+    op = staticmethod(lambda o: o[0] + o[1])
 
 
 class SubtractNode(_BinaryNode):
-    _op = staticmethod(lambda l, r: l - r)
+    KIND = "sub"
+    op = staticmethod(lambda o: o[0] - o[1])
 
 
 class MultiplyNode(_BinaryNode):
-    _op = staticmethod(lambda l, r: l * r)
+    KIND = "mul"
+    op = staticmethod(lambda o: o[0] * o[1])
 
 
 class DivideNode(_BinaryNode):
-    _op = staticmethod(lambda l, r: l / r)
+    KIND = "div"
+    op = staticmethod(lambda o: o[0] / o[1])
 
 
 class PowerNode(_BinaryNode):
-    _op = staticmethod(lambda l, r: l**r)
+    KIND = "pow"
+    op = staticmethod(lambda o: o[0] ** o[1])
 
 
 @dataclass(frozen=True)
-class NegateNode(ASTNode):
+class NegateNode(_OperatorNode):
     """Unary minus."""
 
     operand: ASTNode
 
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        f = self.operand.compile(ctx)
-
-        def _eval(C, params, condition_arrays, loc_idx):
-            return -f(C, params, condition_arrays, loc_idx)
-
-        return _eval
+    KIND = "neg"
+    op = staticmethod(lambda o: -o[0])
 
 
 # --- Domain-specific function nodes ------------------------------------
 
 
 @dataclass(frozen=True)
-class ArrheniusNode(ASTNode):
+class ArrheniusNode(_OperatorNode):
     """
     Temperature-dependent rate factor: ``A * exp(-Ea / (R * T))``.
 
@@ -293,26 +338,18 @@ class ArrheniusNode(ASTNode):
     A: ASTNode
     Ea: ASTNode
 
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        if "T" not in ctx.condition_fields:
-            raise KeyError("arrhenius(...) requires a condition field named 'T' (Kelvin).")
-        af = self.A.compile(ctx)
-        ef = self.Ea.compile(ctx)
+    KIND = "arrhenius"
+    FUNCTION_NAME = "arrhenius"
+    EXTRA_CONDITIONS = ("T",)
 
-        def _eval(C, params, condition_arrays, loc_idx):
-            T = condition_arrays["T"][loc_idx]
-            return af(C, params, condition_arrays, loc_idx) * jnp.exp(
-                -ef(C, params, condition_arrays, loc_idx) / (GAS_CONSTANT * T)
-            )
-
-        return _eval
-
-    def condition_names(self) -> set[str]:
-        return {"T"} | super().condition_names()
+    @staticmethod
+    def op(o):
+        A, Ea, T = o
+        return A * jnp.exp(-Ea / (GAS_CONSTANT * T))
 
 
 @dataclass(frozen=True)
-class MonodNode(ASTNode):
+class MonodNode(_OperatorNode):
     """Saturation Monod term: ``X / (K + X)``.
 
     Standard in microbial kinetics: substrate-limited growth fraction.
@@ -322,20 +359,17 @@ class MonodNode(ASTNode):
     X: ASTNode
     K: ASTNode
 
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        xf = self.X.compile(ctx)
-        kf = self.K.compile(ctx)
+    KIND = "monod"
+    FUNCTION_NAME = "monod"
 
-        def _eval(C, params, condition_arrays, loc_idx):
-            x = xf(C, params, condition_arrays, loc_idx)
-            k = kf(C, params, condition_arrays, loc_idx)
-            return _safe_ratio(x, k + x)
-
-        return _eval
+    @staticmethod
+    def op(o):
+        x, k = o
+        return _safe_ratio(x, k + x)
 
 
 @dataclass(frozen=True)
-class MonodInhibitionNode(ASTNode):
+class MonodInhibitionNode(_OperatorNode):
     """Inhibition Monod term: ``K / (K + X)``.
 
     Equal to ``1 - monod(X, K)``. Used as an aerobic-off / anoxic-on
@@ -345,20 +379,17 @@ class MonodInhibitionNode(ASTNode):
     X: ASTNode
     K: ASTNode
 
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        xf = self.X.compile(ctx)
-        kf = self.K.compile(ctx)
+    KIND = "monod_inh"
+    FUNCTION_NAME = "monod_inh"
 
-        def _eval(C, params, condition_arrays, loc_idx):
-            x = xf(C, params, condition_arrays, loc_idx)
-            k = kf(C, params, condition_arrays, loc_idx)
-            return _safe_ratio(k, k + x)
-
-        return _eval
+    @staticmethod
+    def op(o):
+        x, k = o
+        return _safe_ratio(k, k + x)
 
 
 @dataclass(frozen=True)
-class MonodRatioNode(ASTNode):
+class MonodRatioNode(_OperatorNode):
     """Surface-ratio Monod term: ``(A/B) / (K + A/B)``.
 
     The kinetic form used in ASM1/2/3 hydrolysis where the rate-limiting
@@ -373,22 +404,17 @@ class MonodRatioNode(ASTNode):
     B: ASTNode
     K: ASTNode
 
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        af = self.A.compile(ctx)
-        bf = self.B.compile(ctx)
-        kf = self.K.compile(ctx)
+    KIND = "monod_ratio"
+    FUNCTION_NAME = "monod_ratio"
 
-        def _eval(C, params, condition_arrays, loc_idx):
-            a = af(C, params, condition_arrays, loc_idx)
-            b = bf(C, params, condition_arrays, loc_idx)
-            k = kf(C, params, condition_arrays, loc_idx)
-            return _safe_ratio(a, k * b + a)
-
-        return _eval
+    @staticmethod
+    def op(o):
+        a, b, k = o
+        return _safe_ratio(a, k * b + a)
 
 
 @dataclass(frozen=True)
-class MonodInhibitionRatioNode(ASTNode):
+class MonodInhibitionRatioNode(_OperatorNode):
     """Inhibition ratio Monod term: ``K / (K + A/B)``.
 
     The inhibition counterpart of :class:`MonodRatioNode`. Appears in
@@ -400,23 +426,18 @@ class MonodInhibitionRatioNode(ASTNode):
     B: ASTNode
     K: ASTNode
 
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        af = self.A.compile(ctx)
-        bf = self.B.compile(ctx)
-        kf = self.K.compile(ctx)
+    KIND = "monod_inh_ratio"
+    FUNCTION_NAME = "monod_inh_ratio"
 
-        def _eval(C, params, condition_arrays, loc_idx):
-            a = af(C, params, condition_arrays, loc_idx)
-            b = bf(C, params, condition_arrays, loc_idx)
-            k = kf(C, params, condition_arrays, loc_idx)
-            kb = k * b
-            return _safe_ratio(kb, kb + a)
-
-        return _eval
+    @staticmethod
+    def op(o):
+        a, b, k = o
+        kb = k * b
+        return _safe_ratio(kb, kb + a)
 
 
 @dataclass(frozen=True)
-class SafeDivideNode(ASTNode):
+class SafeDivideNode(_OperatorNode):
     """Division ``num / denom`` that returns 0 where ``denom == 0``.
 
     The ``safe_div(num, denom)`` rate function. Use it for a ratio whose
@@ -432,21 +453,16 @@ class SafeDivideNode(ASTNode):
     num: ASTNode
     denom: ASTNode
 
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        nf = self.num.compile(ctx)
-        df = self.denom.compile(ctx)
+    KIND = "safediv"
+    FUNCTION_NAME = "safe_div"
 
-        def _eval(C, params, condition_arrays, loc_idx):
-            return _safe_ratio(
-                nf(C, params, condition_arrays, loc_idx),
-                df(C, params, condition_arrays, loc_idx),
-            )
-
-        return _eval
+    @staticmethod
+    def op(o):
+        return _safe_ratio(o[0], o[1])
 
 
 @dataclass(frozen=True)
-class MaxNode(ASTNode):
+class MaxNode(_OperatorNode):
     """Elementwise maximum ``max(a, b)`` -- the ``max(a, b)`` rate function.
 
     Used to one-sidedly clip a quantity, e.g. ``max(0, P_gas - P_atm)`` so an
@@ -458,21 +474,16 @@ class MaxNode(ASTNode):
     a: ASTNode
     b: ASTNode
 
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        af = self.a.compile(ctx)
-        bf = self.b.compile(ctx)
+    KIND = "max"
+    FUNCTION_NAME = "max"
 
-        def _eval(C, params, condition_arrays, loc_idx):
-            return jnp.maximum(
-                af(C, params, condition_arrays, loc_idx),
-                bf(C, params, condition_arrays, loc_idx),
-            )
-
-        return _eval
+    @staticmethod
+    def op(o):
+        return jnp.maximum(o[0], o[1])
 
 
 @dataclass(frozen=True)
-class pHSwitchNode(ASTNode):
+class pHSwitchNode(_OperatorNode):
     """
     Acid/base speciation fraction: ``1 / (1 + 10^(pH - pKa))``.
 
@@ -485,25 +496,18 @@ class pHSwitchNode(ASTNode):
 
     pKa: ASTNode
 
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        if "pH" not in ctx.condition_fields:
-            raise KeyError("pH_switch(...) requires a condition field named 'pH'.")
-        kf = self.pKa.compile(ctx)
-        ln10 = float(jnp.log(10.0))
+    KIND = "phswitch"
+    FUNCTION_NAME = "pH_switch"
+    EXTRA_CONDITIONS = ("pH",)
 
-        def _eval(C, params, condition_arrays, loc_idx):
-            pH = condition_arrays["pH"][loc_idx]
-            pKa = kf(C, params, condition_arrays, loc_idx)
-            return jax.nn.sigmoid(-ln10 * (pH - pKa))
-
-        return _eval
-
-    def condition_names(self) -> set[str]:
-        return {"pH"} | super().condition_names()
+    @staticmethod
+    def op(o):
+        pKa, pH = o
+        return jax.nn.sigmoid(-_LN10 * (pH - pKa))
 
 
 @dataclass(frozen=True)
-class pHInhibitNode(ASTNode):
+class pHInhibitNode(_OperatorNode):
     """
     ADM1 lower-pH (Hill) inhibition factor
 
@@ -520,25 +524,16 @@ class pHInhibitNode(ASTNode):
     pH_LL: ASTNode
     pH_UL: ASTNode
 
-    def compile(self, ctx: CompileContext) -> RateCallable:
-        if "pH" not in ctx.condition_fields:
-            raise KeyError("pH_inhibit(...) requires a condition field named 'pH'.")
-        ll_f = self.pH_LL.compile(ctx)
-        ul_f = self.pH_UL.compile(ctx)
-        ln10 = float(jnp.log(10.0))
+    KIND = "phinhibit"
+    FUNCTION_NAME = "pH_inhibit"
+    EXTRA_CONDITIONS = ("pH",)
 
-        def _eval(C, params, condition_arrays, loc_idx):
-            pH = condition_arrays["pH"][loc_idx]
-            ll = ll_f(C, params, condition_arrays, loc_idx)
-            ul = ul_f(C, params, condition_arrays, loc_idx)
-            # Floor the window width so an equal/inverted (pH_LL, pH_UL) -- which a
-            # calibration can drive into -- gives a finite (steep) factor instead
-            # of a division by zero (NaN); identity for any real window.
-            width = jnp.maximum(ul - ll, _PH_INHIBIT_MIN_WIDTH)
-            n = _PH_INHIBIT_HILL_SLOPE / width
-            return jax.nn.sigmoid(ln10 * n * (pH - 0.5 * (ul + ll)))
-
-        return _eval
-
-    def condition_names(self) -> set[str]:
-        return {"pH"} | super().condition_names()
+    @staticmethod
+    def op(o):
+        ll, ul, pH = o
+        # Floor the window width so an equal/inverted (pH_LL, pH_UL) -- which a
+        # calibration can drive into -- gives a finite (steep) factor instead
+        # of a division by zero (NaN); identity for any real window.
+        width = jnp.maximum(ul - ll, _PH_INHIBIT_MIN_WIDTH)
+        n = _PH_INHIBIT_HILL_SLOPE / width
+        return jax.nn.sigmoid(_LN10 * n * (pH - 0.5 * (ul + ll)))

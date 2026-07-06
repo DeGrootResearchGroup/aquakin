@@ -35,29 +35,12 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.nodes import (
-    _PH_INHIBIT_HILL_SLOPE,
-    _PH_INHIBIT_MIN_WIDTH,
-    GAS_CONSTANT,
-    AddNode,
-    ArrheniusNode,
+    ASTNode,
     ConditionNode,
     ConstantNode,
-    DivideNode,
-    MaxNode,
-    MonodInhibitionNode,
-    MonodInhibitionRatioNode,
-    MonodNode,
-    MonodRatioNode,
-    MultiplyNode,
-    NegateNode,
     ParamNode,
     PowerNode,
-    SafeDivideNode,
     SpeciesNode,
-    SubtractNode,
-    _safe_ratio,
-    pHInhibitNode,
-    pHSwitchNode,
 )
 
 
@@ -69,8 +52,6 @@ class UnsupportedNode(Exception):
     breaking.
     """
 
-
-_LN10 = float(jnp.log(10.0))
 
 # Raw 1-D gather (``out[k] = src[idx[k]]``) via ``lax.gather`` directly, which
 # skips the negative-index normalization (``where(i<0, i+n, i)`` -> lt/add/
@@ -98,30 +79,15 @@ def _gather(src, idx):
 
 # --- batched per-kind kernels ------------------------------------------------
 #
-# Each takes a tuple of operand-value arrays (already gathered from the pool,
-# one array per operand slot, all the same length = the number of instances of
-# this kind at this depth) and returns the array of results. The arithmetic is
-# byte-for-byte the scalar form in ``core/nodes.py``.
-
-
-def _k_add(o):
-    return o[0] + o[1]
-
-
-def _k_sub(o):
-    return o[0] - o[1]
-
-
-def _k_mul(o):
-    return o[0] * o[1]
-
-
-def _k_div(o):
-    return o[0] / o[1]
-
-
-def _k_pow(o):
-    return o[0] ** o[1]
+# Each kernel takes a tuple of operand-value arrays (already gathered from the
+# pool, one array per operand slot, all the same length = the number of
+# instances of this kind at this depth) and returns the array of results. The
+# kernels are the AST nodes' own ``op`` staticmethods -- the *same* functions
+# the scalar per-reaction closures call in ``core/nodes.py`` -- so the two paths
+# are identical by construction rather than by hand-aligned copies. The table is
+# built by walking the node hierarchy, so a node added with a ``KIND`` gets its
+# kernel here automatically (and one added *without* one raises ``UnsupportedNode``
+# at build time, falling back to the scalar path).
 
 
 def _k_powc(o, exp_array):
@@ -134,85 +100,31 @@ def _k_powc(o, exp_array):
     exponent's zero tangent). Keeping the exponent static -- as the scalar
     ``PowerNode`` does with its captured constant -- prunes that term, so the
     derivative matches the scalar path (finite). The per-instance exponents are
-    carried as one static array so different constant powers still batch.
+    carried as one static array so different constant powers still batch. The
+    arithmetic is ``PowerNode.op`` itself, so it cannot drift from the ``pow``
+    path.
     """
-    return o[0] ** exp_array
+    return PowerNode.op((o[0], exp_array))
 
 
-def _k_neg(o):
-    return -o[0]
+def _collect_kernels() -> "dict[str, Callable]":
+    """Map each operator node's ``KIND`` to its batched ``op`` by walking the AST
+    node hierarchy, so the kernel table can never drift from the node set."""
+    kernels: dict[str, Callable] = {}
+    stack = list(ASTNode.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        stack.extend(cls.__subclasses__())
+        kind = cls.__dict__.get("KIND")
+        if kind is not None:
+            kernels[kind] = cls.op
+    return kernels
 
 
-def _k_monod(o):
-    x, k = o
-    return _safe_ratio(x, k + x)
-
-
-def _k_monod_inh(o):
-    x, k = o
-    return _safe_ratio(k, k + x)
-
-
-def _k_monod_ratio(o):
-    a, b, k = o
-    return _safe_ratio(a, k * b + a)
-
-
-def _k_monod_inh_ratio(o):
-    a, b, k = o
-    kb = k * b
-    return _safe_ratio(kb, kb + a)
-
-
-def _k_safediv(o):
-    return _safe_ratio(o[0], o[1])
-
-
-def _k_max(o):
-    return jnp.maximum(o[0], o[1])
-
-
-def _k_phswitch(o):
-    # operands: (pKa, pH)
-    pka, pH = o
-    return jax.nn.sigmoid(-_LN10 * (pH - pka))
-
-
-def _k_phinhibit(o):
-    # operands: (pH_LL, pH_UL, pH)
-    ll, ul, pH = o
-    # Floor the window width identically to the scalar pHInhibitNode so a
-    # degenerate/inverted window gives a finite factor (not NaN); identity for any
-    # real window, so the two paths stay bit-identical.
-    width = jnp.maximum(ul - ll, _PH_INHIBIT_MIN_WIDTH)
-    n = _PH_INHIBIT_HILL_SLOPE / width
-    return jax.nn.sigmoid(_LN10 * n * (pH - 0.5 * (ul + ll)))
-
-
-def _k_arrhenius(o):
-    # operands: (A, Ea, T)
-    A, Ea, T = o
-    return A * jnp.exp(-Ea / (GAS_CONSTANT * T))
-
-
-_KERNELS: dict[str, Callable] = {
-    "add": _k_add,
-    "sub": _k_sub,
-    "mul": _k_mul,
-    "div": _k_div,
-    "pow": _k_pow,
-    "powc": _k_powc,
-    "neg": _k_neg,
-    "monod": _k_monod,
-    "monod_inh": _k_monod_inh,
-    "monod_ratio": _k_monod_ratio,
-    "monod_inh_ratio": _k_monod_inh_ratio,
-    "safediv": _k_safediv,
-    "max": _k_max,
-    "phswitch": _k_phswitch,
-    "phinhibit": _k_phinhibit,
-    "arrhenius": _k_arrhenius,
-}
+_KERNELS: dict[str, Callable] = _collect_kernels()
+# ``powc`` is a kernel-internal variant of ``PowerNode`` (a *constant* exponent
+# kept static for AD finiteness -- see _k_powc); it has no node of its own.
+_KERNELS["powc"] = _k_powc
 
 
 # --- interning compiler ------------------------------------------------------
@@ -265,7 +177,8 @@ class _Interner:
 
     def intern(self, node, reaction_name: str) -> int:
         """Intern ``node`` (and its subtree); return its pool id."""
-        # Leaves -------------------------------------------------------------
+        # Leaves carry a literal payload (an index / field name / constant),
+        # not a kernel; they map to the pool's leaf blocks.
         if isinstance(node, ConstantNode):
             v = float(node.value)
             return self._add(("const", v), "const", (), v)
@@ -280,84 +193,26 @@ class _Interner:
         if isinstance(node, ConditionNode):
             return self._add(("cond", node.field_name), "cond", (), node.field_name)
 
-        # Power: a constant exponent stays static (see _k_powc) so its JVP
-        # matches the scalar PowerNode and stays finite at base 0.
-        if isinstance(node, PowerNode):
+        # Power with a *constant* exponent -> powc: the exponent stays static
+        # (see _k_powc) so its JVP matches the scalar PowerNode and stays finite
+        # at base 0. A non-constant exponent falls through to the generic path
+        # below (kind "pow").
+        if isinstance(node, PowerNode) and isinstance(node.right, ConstantNode):
             base = self.intern(node.left, reaction_name)
-            if isinstance(node.right, ConstantNode):
-                exp = float(node.right.value)
-                key = ("powc", (base,), exp)
-                return self._add(key, "powc", (base,), exp)
-            r = self.intern(node.right, reaction_name)
-            return self._op("pow", (base, r))
+            exp = float(node.right.value)
+            return self._add(("powc", (base,), exp), "powc", (base,), exp)
 
-        # Binary arithmetic --------------------------------------------------
-        binkind = {
-            AddNode: "add",
-            SubtractNode: "sub",
-            MultiplyNode: "mul",
-            DivideNode: "div",
-        }.get(type(node))
-        if binkind is not None:
-            l = self.intern(node.left, reaction_name)
-            r = self.intern(node.right, reaction_name)
-            return self._op(binkind, (l, r))
-        if isinstance(node, NegateNode):
-            return self._op("neg", (self.intern(node.operand, reaction_name),))
-
-        # Domain functions ---------------------------------------------------
-        if isinstance(node, MonodNode):
-            return self._op(
-                "monod", (self.intern(node.X, reaction_name), self.intern(node.K, reaction_name))
-            )
-        if isinstance(node, MonodInhibitionNode):
-            return self._op(
-                "monod_inh",
-                (self.intern(node.X, reaction_name), self.intern(node.K, reaction_name)),
-            )
-        if isinstance(node, MonodRatioNode):
-            return self._op(
-                "monod_ratio",
-                (
-                    self.intern(node.A, reaction_name),
-                    self.intern(node.B, reaction_name),
-                    self.intern(node.K, reaction_name),
-                ),
-            )
-        if isinstance(node, MonodInhibitionRatioNode):
-            return self._op(
-                "monod_inh_ratio",
-                (
-                    self.intern(node.A, reaction_name),
-                    self.intern(node.B, reaction_name),
-                    self.intern(node.K, reaction_name),
-                ),
-            )
-        if isinstance(node, SafeDivideNode):
-            return self._op(
-                "safediv",
-                (self.intern(node.num, reaction_name), self.intern(node.denom, reaction_name)),
-            )
-        if isinstance(node, MaxNode):
-            return self._op(
-                "max", (self.intern(node.a, reaction_name), self.intern(node.b, reaction_name))
-            )
-        # pH / Arrhenius read a condition; intern it as a trailing operand so
-        # the batched kernel reads it from the pool like any other value.
-        if isinstance(node, pHSwitchNode):
-            pka = self.intern(node.pKa, reaction_name)
-            ph = self._add(("cond", "pH"), "cond", (), "pH")
-            return self._op("phswitch", (pka, ph))
-        if isinstance(node, pHInhibitNode):
-            ll = self.intern(node.pH_LL, reaction_name)
-            ul = self.intern(node.pH_UL, reaction_name)
-            ph = self._add(("cond", "pH"), "cond", (), "pH")
-            return self._op("phinhibit", (ll, ul, ph))
-        if isinstance(node, ArrheniusNode):
-            A = self.intern(node.A, reaction_name)
-            Ea = self.intern(node.Ea, reaction_name)
-            T = self._add(("cond", "T"), "cond", (), "T")
-            return self._op("arrhenius", (A, Ea, T))
+        # Every other operator node derives its kernel key and operand order
+        # straight from the node type: operands are its interned AST children
+        # (field order) followed by any condition fields it declares (pH / T),
+        # matching the operand order the node's ``op`` expects. So a new node
+        # type needs no edit here -- ``KIND`` + ``op`` on the class is enough.
+        kind = type(node).KIND
+        if kind is not None:
+            operands = [self.intern(c, reaction_name) for c in node.children()]
+            for field_name in type(node).EXTRA_CONDITIONS:
+                operands.append(self._add(("cond", field_name), "cond", (), field_name))
+            return self._op(kind, tuple(operands))
 
         raise UnsupportedNode(type(node).__name__)
 
