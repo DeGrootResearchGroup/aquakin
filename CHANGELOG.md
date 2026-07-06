@@ -17,6 +17,12 @@ empty [Unreleased] section above it.
 The first public release (0.1.0) is being prepared. Entries below accumulate the
 notable changes it will contain.
 
+### Added
+
+- `CHANGELOG.md` (this file), following the Keep a Changelog format.
+- `CITATION.cff`, so the package can be cited and GitHub shows a "Cite this
+  repository" button.
+
 ### Changed
 
 - Modernized packaging metadata: adopted PEP 639 SPDX license metadata
