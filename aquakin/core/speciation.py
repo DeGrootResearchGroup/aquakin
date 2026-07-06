@@ -170,7 +170,7 @@ def build_ph_derived_fn(
         T = condition_arrays[temp_field][loc_idx]
         T_kelvin = T + 273.15 if temp_units == "celsius" else T
 
-        kwargs = {k: 0.0 for k in (f"tot_{key}" for key in VALID_TOTAL_KEYS)}
+        kwargs = dict.fromkeys((f"tot_{key}" for key in VALID_TOTAL_KEYS), 0.0)
         for solver_kw, idx, mm in total_terms:
             kwargs[solver_kw] = jnp.maximum(C[idx], 0.0) / mm
 

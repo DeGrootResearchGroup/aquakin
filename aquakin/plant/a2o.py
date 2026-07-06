@@ -202,7 +202,7 @@ def a2o_warm_start(plant: Plant) -> "jnp.ndarray":
         raise ValueError("no activated-sludge reactor found in the plant")
     model = plant.units[reactors[0]].model
     ml = model.concentrations(A2O_WARM_REACTOR_COMPOSITION, base="zero")
-    return plant.initial_state(overrides={n: ml for n in reactors})
+    return plant.initial_state(overrides=dict.fromkeys(reactors, ml))
 
 
 def build_a2o(

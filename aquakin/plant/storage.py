@@ -148,8 +148,8 @@ class StorageTank:
         """Return ``(Q_out, Q_bypass, Q_in_stored)`` from the level and inflow."""
         Vmax = float(self.volume)
         Q_req = self._release_request(V)
-        full = V >= self.full_fraction * Vmax
-        empty = V <= self.empty_fraction * Vmax
+        full = self.full_fraction * Vmax <= V
+        empty = self.empty_fraction * Vmax >= V
         filling_full = full & (Q_in > Q_req)
         Q_bypass = jnp.where(filling_full, Q_in, 0.0)
         Q_out = jnp.where(empty | filling_full, 0.0, Q_req)
