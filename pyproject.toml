@@ -134,7 +134,6 @@ ignore = [
     "F821",   # quoted type-only annotations (e.g. "Callable | None") -> #467
     "RUF013", # implicit Optional from `= None` defaults              -> #467
     "E741",   # ambiguous names (l/r lambdas)                          -> #470 / #474
-    "E702",   # multiple statements on one line (semicolons)           -> #462
     "E731",   # lambda assigned to a name                              -> #474
     "B023",   # function uses loop variable (guarded by default-arg)   -> #470
     "B905",   # `zip()` without explicit `strict=`                     -> #474
@@ -142,7 +141,6 @@ ignore = [
     "B008",   # function call in default argument                      -> #474
     "RUF005", # collection-literal concatenation                       -> #474
     "RUF007", # `zip()` instead of `itertools.pairwise`                -> #474
-    "RUF022", # unsorted `__all__`                                     -> #477
     "RUF059", # unused unpacked variable                               -> #474
 ]
 
