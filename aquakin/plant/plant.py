@@ -56,6 +56,7 @@ from aquakin.plant.results import (
     PlantSolution,
     SteadyStateResult,
 )
+from aquakin.plant.solve_cache import SolveCache
 from aquakin.plant.streams import Stream, StreamSeries
 from aquakin.plant.temperature import (
     OPERATING_T_SIGNAL as _OPERATING_T_SIGNAL,
@@ -290,22 +291,24 @@ class Plant:
         # One-time guard for materialising the DO controllers a CSTRUnit's
         # closed-loop Aeration spec requires (see _materialize_aeration).
         self._aeration_materialized: bool = False
-        # Per-instance cache of the jit-compiled forward solve, keyed by call
-        # signature + solver settings. The plant RHS closes over the (static)
-        # unit graph, so once compiled the same solve is reused across repeated
-        # solves of this plant -- e.g. a parameter sweep / Monte Carlo that
-        # builds the plant once and solves it many times, or a warm-started
-        # steady-state-then-dynamic run. Without it every solve rebuilds the RHS
-        # closure and Diffrax recompiles the whole stiff plant (~tens of seconds)
-        # each call. Assumes the plant is not structurally mutated after the
-        # first solve (units/connections fixed), as the reactors assume too.
-        self._jit_cache: dict = {}
-        # Compiled PTC steady-state forward solves, keyed by settings. The eager
-        # ``jax.lax.while_loop`` in ``ptc_forward`` re-traces and recompiles on
-        # every call (~12-17 s for BSM2), so a persisted jitted solver lets a
-        # repeated concrete ``steady_state`` (a sweep / multistart / figure
-        # regen) pay that compile once and reuse it (~40 ms run thereafter).
-        self._steady_jit_cache: dict = {}
+        # Compiled-solve / kernel memoization -- the jitted forward solves, the
+        # PTC steady solves, and the continuation / arclength kernels -- owning
+        # one invalidate() so a condition/topology mutator cannot clear one cache
+        # and forget another (see aquakin.plant.solve_cache). Assumes the plant is
+        # not structurally mutated after the first solve (units/connections
+        # fixed), as the reactors assume too. The ``_jit_cache`` /
+        # ``_steady_jit_cache`` properties below are thin views onto it.
+        self._solve_cache = SolveCache()
+
+    @property
+    def _jit_cache(self) -> dict:
+        """The compiled forward-solve cache (owned by :attr:`_solve_cache`)."""
+        return self._solve_cache.jit
+
+    @property
+    def _steady_jit_cache(self) -> dict:
+        """The compiled PTC steady-solve cache (owned by :attr:`_solve_cache`)."""
+        return self._solve_cache.steady_jit
 
     # ----- assembly --------------------------------------------------------
 
@@ -436,10 +439,10 @@ class Plant:
                     raise ValueError(f"Unit '{name}' does not support set_temperature.")
         for name in targets:
             self.units[name].set_temperature(kelvin)
-        # The compiled solve bakes in the (now-changed) condition values, so it
-        # must be recompiled on the next solve.
-        self._jit_cache.clear()
-        self._steady_jit_cache.clear()
+        # The compiled solves bake in the (now-changed) condition values, so they
+        # must be recompiled on the next solve. The colored-Jacobian pattern is a
+        # structural property of the (unchanged) state layout, so it stays valid.
+        self._solve_cache.invalidate()
         return self
 
     def set_temperature_model(self, model: TemperatureModel) -> "Plant":
@@ -455,13 +458,13 @@ class Plant:
         Returns ``self`` for chaining.
         """
         self.temperature_model = model
-        self._jit_cache.clear()
-        self._steady_jit_cache.clear()
-        # The colored-Jacobian builders cache seed matrices / sparsity patterns
-        # sized for the concrete state. The appended temperature block changes the
-        # state length, so a previously-built builder is stale and would be
-        # dimension-mismatched on the next colored solve -- reset them too (unlike
-        # set_temperature, which leaves the state size and pattern unchanged).
+        # Changing the temperature model changes the flat state length (an
+        # appended temperature block), so both the compiled solves and the
+        # structural colored-Jacobian builders (which cache seed matrices /
+        # patterns sized for the concrete state) are stale -- invalidate both
+        # (unlike set_temperature, which leaves the state size and pattern
+        # unchanged and so keeps the colored builders).
+        self._solve_cache.invalidate()
         self._colored.reset()
         return self
 
@@ -3539,10 +3542,7 @@ class Plant:
             bool(nonneg),
             float(influent_time),
         )
-        cache = getattr(self, "_continuation_kernel_cache", None)
-        if cache is None:
-            cache = {}
-            self._continuation_kernel_cache = cache
+        cache = self._solve_cache.continuation_kernels
         kernels = cache.get(ckey)
         if kernels is None:
             ptc_kw = dict(
@@ -3605,10 +3605,7 @@ class Plant:
         scale = jnp.maximum(jnp.abs(yk), 1e-3)
         ptc_kw = dict(scale_floor=jnp.asarray(scale_floor), tol=tol, nonneg=nonneg)
         ckey = (float(tol), bool(nonneg), float(influent_time))
-        cache = getattr(self, "_arclength_kernel_cache", None)
-        if cache is None:
-            cache = {}
-            self._arclength_kernel_cache = cache
+        cache = self._solve_cache.arclength_kernels
         kernels = cache.get(ckey)
         if kernels is None:
             kernels = make_arclength_kernels(rhs, scale, ptc_kw)

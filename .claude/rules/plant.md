@@ -109,6 +109,19 @@ Key types:
   temperature block). The size-based *decision* to use the colored backward
   (`Plant._COLORED_BACKWARD_MIN_STATES` / `colored_jacobian_decision`) stays on the
   plant's solve routing. The performance rationale is in `docs/plant_performance.md`.
+  **Compiled-solve caches** — the jitted forward + PTC steady solves and the
+  continuation / arclength kernels (all solver-run memoization, keyed by
+  settings, that bake in the reactor conditions) live in a
+  [`SolveCache`](aquakin/plant/solve_cache.py) value object (`plant._solve_cache`,
+  `.jit` / `.steady_jit` / `.continuation_kernels` / `.arclength_kernels`; the
+  `plant._jit_cache` / `_steady_jit_cache` properties are thin views). Every
+  condition/topology mutator calls the single **`plant._solve_cache.invalidate()`**
+  rather than hand-clearing named dicts — so a mutator can't clear one cache and
+  leave another stale (`set_temperature` clears all four; the old code left the
+  continuation/arclength kernels stale). `set_temperature_model` also changes the
+  state length, so it additionally calls `plant._colored.reset()` (the structural
+  colored builders), which `set_temperature` deliberately does not (its pattern
+  stays valid).
   **Recycle resolution** — the methods named below (`_resolve_flows`,
   `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
   `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)

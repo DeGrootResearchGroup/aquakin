@@ -1214,8 +1214,10 @@ drives nitrification down — verified in
 `tests/integration/test_plant_temperature.py`). It targets the activated-sludge
 reactors (`CSTRUnit`s exposing `set_temperature` with a `T` condition) and
 **leaves the heated anaerobic digester untouched** (a fixed-`T` ADM1 unit without
-the method); pass `units=[...]` to target a specific set. It clears the plant's
-compiled-solve cache (`_jit_cache`) so the next solve recompiles at the new
+the method); pass `units=[...]` to target a specific set. It invalidates the
+plant's compiled-solve caches (`plant._solve_cache.invalidate()` — the jitted
+forward + PTC steady solves *and* the continuation / arclength kernels, all of
+which bake in the conditions) so the next solve recompiles at the new
 temperature, and returns `self` for chaining after `build_*`. The per-unit
 mechanic is `CSTRUnit.set_temperature(temperature_K)` (updates `conditions["T"]`
 and its precomputed condition array).

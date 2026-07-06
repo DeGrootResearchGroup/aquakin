@@ -42,6 +42,26 @@ def test_set_temperature_clears_compiled_cache(asm1):
     assert plant._jit_cache == {}
 
 
+def test_set_temperature_invalidates_every_compiled_cache(asm1):
+    """set_temperature changes the reactor conditions the compiled solves bake
+    in, so it must invalidate *all four* solve caches -- not just the forward and
+    steady jits. The continuation / arclength kernels were previously left stale
+    (they were never in set_temperature's clear list), a silent stale-result bug
+    the SolveCache.invalidate() single-point closes."""
+    plant = build_bsm1(asm1)
+    plant.add_influent("feed", asm1.influent({"SS": 60.0}, Q=18446.0))
+    sc = plant._solve_cache
+    for cache in (sc.jit, sc.steady_jit, sc.continuation_kernels, sc.arclength_kernels):
+        cache["sentinel"] = object()  # pretend each was populated by a prior solve
+
+    plant.set_temperature(15.0)
+
+    assert sc.jit == {}
+    assert sc.steady_jit == {}
+    assert sc.continuation_kernels == {}
+    assert sc.arclength_kernels == {}
+
+
 def test_set_temperature_leaves_heated_digester_untouched():
     asm1 = bsm2_asm1_model()
     adm1 = aquakin.load_model("adm1")
