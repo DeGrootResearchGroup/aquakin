@@ -64,7 +64,7 @@ if TYPE_CHECKING:  # pragma: no cover
 # XND settles with XS but is N attached to it, not separate solids, so it
 # carries a zero TSS factor.
 _DEFAULT_TSS_FACTORS = {
-    **{sp: ASM1_TSS_FACTOR for sp in ASM1_TSS_SPECIES},
+    **dict.fromkeys(ASM1_TSS_SPECIES, ASM1_TSS_FACTOR),
     "XND": 0.0,
 }
 

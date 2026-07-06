@@ -270,7 +270,7 @@ class RecycleResolver:
         # The fixed-point variable is (Q, C) per edge, plus T when carried;
         # T=None channels are kept out of the differentiated pytree and threaded
         # through ``forward_full`` separately.
-        none_T = {k: None for k in keys}
+        none_T = dict.fromkeys(keys)
 
         if resolve_T:
 
@@ -424,7 +424,7 @@ class RecycleResolver:
             groups.setdefault(id(seed_net[k]), []).append(k)
         group_lists = list(groups.values())
         zeroC = {k: jnp.zeros((nsp[k],)) for k in keys}
-        zeroT = {k: t_seed for k in keys}
+        zeroT = dict.fromkeys(keys, t_seed)
         return seed_net, group_lists, forward, zeroC, zeroT, forward_full
 
     @staticmethod
