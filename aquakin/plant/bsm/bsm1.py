@@ -21,11 +21,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from aquakin.plant.clarifier import IdealClarifier
+from aquakin.plant._builder_support import (
+    add_secondary_clarifier,
+    reactor_conditions,
+    recycle_pump_flows,
+    register_recycle_streams,
+)
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.mixer import MixerUnit, SetpointSplitter
 from aquakin.plant.plant import Plant
-from aquakin.plant.takacs import TakacsClarifier
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -126,7 +130,7 @@ def build_bsm1(
         model = aquakin.load_model("asm1")
 
     if conditions is None:
-        conditions = {name: model._condition_defaults[name] for name in model.conditions_required}
+        conditions = reactor_conditions(model)
 
     plant = Plant("BSM1")
 
@@ -154,18 +158,15 @@ def build_bsm1(
             )
         )
 
-    # Controlled recycle-pump flows (BSM convention: constant volumetric
-    # setpoints, not fractions of throughput). ``Qa`` internal recycle, ``Qr``
-    # RAS, ``Qw`` wastage -- all fixed regardless of influent, defined off the
-    # design flow ``Q_avg``. The clarifier underflow is ``Qr + Qw`` and the
-    # effluent is the free remainder (``Q_e = Q_f - Q_u``). Modelling these as
-    # fixed *fractions* instead makes the recycle-flow loop gain near-singular
-    # off the design influent, so the plant blows up under dynamic flow (see
-    # the SetpointSplitter docstring).
-    Qa = BSM1_INTERNAL_RECYCLE_RATIO * Q_avg
-    Qr = BSM1_EXTERNAL_RECYCLE_RATIO * Q_avg
-    Qw = wastage_flow
-    Q_underflow = Qr + Qw
+    # Controlled recycle-pump flows (BSM convention: constant volumetric setpoints
+    # off the design flow ``Q_avg``, not fractions of throughput -- see
+    # recycle_pump_flows / the SetpointSplitter docstring).
+    Qa, Qr, Qw, Q_underflow = recycle_pump_flows(
+        internal_ratio=BSM1_INTERNAL_RECYCLE_RATIO,
+        ras_ratio=BSM1_EXTERNAL_RECYCLE_RATIO,
+        Q_design=Q_avg,
+        wastage=wastage_flow,
+    )
 
     # ----- Internal recycle splitter (tank 5 outlet) -----
     # Tank 5 outlet splits into the fixed internal-recycle pump flow Qa and the
@@ -179,50 +180,33 @@ def build_bsm1(
         )
     )
 
-    # ----- Clarifier -----
-    # ``use_takacs`` selects the full Takács 1-D layered secondary clarifier
-    # (the BSM1 reference model); the default ``IdealClarifier`` is a fast,
-    # stateless ~99.8%-capture separator. Both expose the same overflow /
-    # underflow ports, so the rest of the plant graph is identical.
-    if use_takacs:
-        plant.add_unit(
-            TakacsClarifier(
-                name="clarifier",
-                model=model,
-                area=BSM1_CLARIFIER_AREA,
-                height=BSM1_CLARIFIER_HEIGHT,
-                # Fixed underflow pump flow (Qr + Qw); the effluent overflow is
-                # the remainder and tracks the feed.
-                underflow_Q=Q_underflow,
-                # Settled-blanket initialization: the design underflow flow sets
-                # the thickening ratio so the clarifier starts settled rather
-                # than uniform, avoiding the violent startup transient.
-                init_underflow_Q=Q_underflow,
-                # The BSM1 reference settler (settler1dv4, MODELTYPE=0, the COST
-                # benchmark) carries the solubles through the ten layers, so the
-                # clarifier liquid volume damps the dynamic soluble effluent
-                # signal. On by default to reproduce the reference; set False for
-                # the simpler soluble pass-through. Leaves the steady state
-                # unchanged.
-                soluble_holdup=settler_soluble_holdup,
-                # The reference settler1dv4 sets the outlet particulate
-                # composition from the instantaneous feed scaled by the
-                # boundary-layer TSS ratio ("lumped_tss", the default here). The
-                # "per_species" alternative carries per-layer composition memory
-                # the reference lacks, which diverges under dynamic flow (same
-                # steady state); it matches the BSM2 settler1dv5 instead.
-                composition_mode=settler_composition_mode,
-            )
-        )
-    else:
-        plant.add_unit(
-            IdealClarifier(
-                name="clarifier",
-                model=model,
-                underflow_Q=Q_underflow,
-                capture_efficiency=0.998,
-            )
-        )
+    # ----- Clarifier (Takács 1-D settler, or the fast IdealClarifier) -----
+    add_secondary_clarifier(
+        plant,
+        model=model,
+        underflow_Q=Q_underflow,
+        use_takacs=use_takacs,
+        takacs_kwargs=dict(
+            area=BSM1_CLARIFIER_AREA,
+            height=BSM1_CLARIFIER_HEIGHT,
+            # Settled-blanket initialization: the design underflow flow sets the
+            # thickening ratio so the clarifier starts settled rather than uniform,
+            # avoiding the violent startup transient.
+            init_underflow_Q=Q_underflow,
+            # The BSM1 reference settler (settler1dv4, MODELTYPE=0, the COST
+            # benchmark) carries the solubles through the ten layers, so the
+            # clarifier liquid volume damps the dynamic soluble effluent signal. On
+            # by default to reproduce the reference; set False for the simpler
+            # soluble pass-through. Leaves the steady state unchanged.
+            soluble_holdup=settler_soluble_holdup,
+            # The reference settler1dv4 sets the outlet particulate composition from
+            # the instantaneous feed scaled by the boundary-layer TSS ratio
+            # ("lumped_tss", the default here). The "per_species" alternative carries
+            # per-layer composition memory the reference lacks, which diverges under
+            # dynamic flow (same steady state); it matches the BSM2 settler1dv5.
+            composition_mode=settler_composition_mode,
+        ),
+    )
 
     # ----- Underflow splitter (RAS + wastage) -----
     # The clarifier underflow (Qr + Qw) splits into the fixed RAS pump flow Qr
@@ -272,11 +256,12 @@ def build_bsm1(
     plant.effluent_endpoint = "clarifier.overflow"
 
     # Semantic stream shortcuts (plant.stream(sol, "effluent"), plant.list_streams())
-    # so the engineer reads "effluent" / "ras" / "wastage" / "internal_recycle"
-    # rather than the internal "unit.port".
-    plant.register_stream("effluent", "clarifier.overflow")
-    plant.register_stream("internal_recycle", "tank5_split.internal_recycle")
-    plant.register_stream("ras", "underflow_split.ras")
-    plant.register_stream("wastage", "underflow_split.waste")
+    # so the engineer reads by role rather than the internal "unit.port".
+    register_recycle_streams(
+        plant,
+        internal_recycle="tank5_split.internal_recycle",
+        ras="underflow_split.ras",
+        wastage="underflow_split.waste",
+    )
 
     return plant
