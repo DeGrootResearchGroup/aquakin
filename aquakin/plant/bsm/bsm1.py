@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Optional
 
 from aquakin.plant.clarifier import IdealClarifier
 from aquakin.plant.cstr import Aeration, CSTRUnit
-from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.mixer import MixerUnit, SetpointSplitter
 from aquakin.plant.plant import Plant
 from aquakin.plant.takacs import TakacsClarifier
 
@@ -161,7 +161,7 @@ def build_bsm1(
     # effluent is the free remainder (``Q_e = Q_f - Q_u``). Modelling these as
     # fixed *fractions* instead makes the recycle-flow loop gain near-singular
     # off the design influent, so the plant blows up under dynamic flow (see
-    # the SplitterUnit flow-mode docstring).
+    # the SetpointSplitter docstring).
     Qa = BSM1_INTERNAL_RECYCLE_RATIO * Q_avg
     Qr = BSM1_EXTERNAL_RECYCLE_RATIO * Q_avg
     Qw = wastage_flow
@@ -171,7 +171,7 @@ def build_bsm1(
     # Tank 5 outlet splits into the fixed internal-recycle pump flow Qa and the
     # remainder (the clarifier feed, Q_in + Qr).
     plant.add_unit(
-        SplitterUnit(
+        SetpointSplitter(
             name="tank5_split",
             model=model,
             output_port_flows={"internal_recycle": Qa},
@@ -228,7 +228,7 @@ def build_bsm1(
     # The clarifier underflow (Qr + Qw) splits into the fixed RAS pump flow Qr
     # back to tank 1 and the remainder (wastage Qw), which leaves the plant.
     plant.add_unit(
-        SplitterUnit(
+        SetpointSplitter(
             name="underflow_split",
             model=model,
             output_port_flows={"ras": Qr},

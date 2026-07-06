@@ -2,7 +2,7 @@
 
 ``Plant._recycle._resolve_flows`` resolves the recycle flows by treating the flow network
 as an affine map and probing it at two points -- exact only if every unit's
-``flow_outputs`` is affine in the recycle flows. A threshold-mode ``SplitterUnit``
+``flow_outputs`` is affine in the recycle flows. A ``ThresholdSplitter``
 (or a ``StorageTank`` bypass) is piecewise-linear, so a recycle-dependent inlet
 that crosses its kink resolves the recycle flows inaccurately. The plant warns
 when that happens; these tests pin the detection (precise, no false positives).
@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
-from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.mixer import MixerUnit, RatioSplitter, ThresholdSplitter
 from aquakin.plant.plant import Plant
 
 
@@ -29,8 +29,8 @@ def _recycle_plant(net, threshold):
     flow."""
     p = Plant("t")
     p.add_unit(MixerUnit("mix", ["feed_in", "recycle_in"], net))
-    p.add_unit(SplitterUnit("split", net, threshold=threshold,
-                            threshold_port="over", remainder_port="rem"))
+    p.add_unit(ThresholdSplitter("split", net, threshold=threshold,
+                                 threshold_port="over", remainder_port="rem"))
     p.add_influent("feed", net.influent({}, Q=50.0), to="mix.feed_in")
     p.connect("mix.out", "split.in")
     p.connect("split.rem", "mix.recycle_in")        # recycle back-edge
@@ -78,7 +78,7 @@ def test_affine_recycle_plant_is_silent(net):
     """A ratio splitter (affine) in the same recycle topology never warns."""
     p = Plant("affine")
     p.add_unit(MixerUnit("mix", ["feed_in", "recycle_in"], net))
-    p.add_unit(SplitterUnit("split", net, output_port_ratios={"out": 0.7, "rem": 0.3}))
+    p.add_unit(RatioSplitter("split", net, output_port_ratios={"out": 0.7, "rem": 0.3}))
     p.add_influent("feed", net.influent({}, Q=50.0), to="mix.feed_in")
     p.connect("mix.out", "split.in")
     p.connect("split.rem", "mix.recycle_in")

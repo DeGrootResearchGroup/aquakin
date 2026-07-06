@@ -505,7 +505,8 @@ Shipped units: `CSTRUnit` (kinetics + aeration), `IFASUnit` / `MBBRUnit`
 see below), `MBRUnit` (membrane bioreactor: a high-MLSS aerated reactor whose
 membrane retains the solids into a near-solids-free permeate, with fouling/TMP —
 see *Membrane bioreactor* below), `MixerUnit`,
-`SplitterUnit`, `IdealClarifier` (fast, stateless separator),
+`RatioSplitter` / `SetpointSplitter` / `ThresholdSplitter`,
+`IdealClarifier` (fast, stateless separator),
 `PrimaryClarifier` (BSM2 Otterpohl–Freund: a well-mixed holding tank split by
 an HRT-dependent particulate-removal efficiency, fixed underflow `f_PS·Q`),
 `IdealThickener` (BSM2 thickener / dewatering — a stateless ideal `%TSS`

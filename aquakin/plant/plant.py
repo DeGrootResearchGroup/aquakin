@@ -2234,7 +2234,7 @@ class Plant:
             warnings.warn(
                 f"Recycle-flow solve is inconsistent (residual {resid:.3g} on "
                 f"flows of order {scale:.3g}): a unit's flow rule is non-affine "
-                f"in the recycle flows -- typically a threshold-mode SplitterUnit "
+                f"in the recycle flows -- typically a ThresholdSplitter "
                 f"or a StorageTank bypass whose inlet varies with a recycle flow "
                 f"and crosses its kink. Plant._resolve_flows assumes affine flow "
                 f"rules, so the resolved recycle flows (and the steady state they "
@@ -2479,7 +2479,7 @@ class Plant:
         # gets these diagnostics and the cached recycle map.
         #
         # LIMITATION: this probes affinity only at (t0, y0). A unit with a
-        # piecewise-linear flow rule -- a threshold-mode SplitterUnit (influent
+        # piecewise-linear flow rule -- a ThresholdSplitter (influent
         # bypass) or a StorageTank level-gated bypass -- that is on one side of
         # its kink at t0 but crosses it *later* in a dynamic run is NOT caught:
         # _resolve_flows then linearises across the kink at that time with no

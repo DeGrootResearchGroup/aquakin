@@ -10,7 +10,7 @@ from aquakin.plant import Plant, PlantCheck
 from aquakin.plant.bsm import build_bsm1
 from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
 from aquakin.plant.cstr import CSTRUnit
-from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.mixer import MixerUnit, SetpointSplitter
 
 
 _INF = {"SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
@@ -68,9 +68,9 @@ def test_recycle_built_in_reverse_order_solves(asm1):
     topological sort handles the cycle regardless of add order."""
     plant = Plant("rev")
     # Add the downstream splitter first, then the tank, then the upstream mixer.
-    plant.add_unit(SplitterUnit(name="split", model=asm1,
-                                output_port_flows={"recycle": 1000.0},
-                                remainder_port="out"))
+    plant.add_unit(SetpointSplitter(name="split", model=asm1,
+                                    output_port_flows={"recycle": 1000.0},
+                                    remainder_port="out"))
     plant.add_unit(CSTRUnit(name="tank", model=asm1, volume=1000.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "recycle"],
