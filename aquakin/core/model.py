@@ -507,6 +507,18 @@ class CompiledModel:
 
         return SpatialConditions.uniform(n_locations, **self._condition_defaults)
 
+    def condition_defaults(self) -> "dict[str, float]":
+        """The model's declared default condition values as a plain scalar dict.
+
+        The scalar-dict counterpart to :meth:`default_conditions` (which returns a
+        location-broadcast :class:`SpatialConditions`): ``{field: default}`` for
+        each condition the YAML declares a default for. The public accessor for
+        the raw defaults -- e.g. a plant builder seeding a reactor unit's scalar
+        ``conditions=`` from the model's declared operating point. A copy, so the
+        caller cannot mutate the model's stored defaults.
+        """
+        return dict(self._condition_defaults)
+
     def precipitation_equilibrium(
         self,
         C: "jnp.ndarray | None" = None,

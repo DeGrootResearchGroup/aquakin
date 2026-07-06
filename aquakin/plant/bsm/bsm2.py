@@ -45,6 +45,11 @@ from typing import Optional
 
 import jax.numpy as jnp
 
+from aquakin.plant._builder_support import (
+    reactor_conditions,
+    recycle_pump_flows,
+    register_recycle_streams,
+)
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.dosing import DosingUnit, Reagent
@@ -521,13 +526,13 @@ def build_bsm2(
     # reproduces the (uncorrected) reference exactly; a temperature-carrying
     # influent then drives the correction away from it (seasonal kinetics).
     if conditions is None:
-        conditions = {name: asm1._condition_defaults[name] for name in asm1.conditions_required}
+        conditions = reactor_conditions(asm1)
         if "T" in conditions and getattr(asm1, "temperature_corrections", None):
             conditions["T"] = float(asm1.temperature_corrections[0][2])
 
-    Qintr = 3.0 * Q_ref
-    Qr = 1.0 * Q_ref
-    Qw = BSM2_WASTAGE
+    Qintr, Qr, Qw, Q_underflow = recycle_pump_flows(
+        internal_ratio=3.0, ras_ratio=1.0, Q_design=Q_ref, wastage=BSM2_WASTAGE
+    )
     # The secondary-clarifier underflow is RAS + wastage. With a wastage schedule
     # it becomes a time schedule Qr + Qw(t); the underflow_split then sends Qr to
     # RAS and the remainder (the scheduled Qw) to wastage. The IC operating point
@@ -536,7 +541,7 @@ def build_bsm2(
         Q_settler_underflow = wastage_schedule.shifted(Qr)
         Q_settler_underflow_init = Qr + float(wastage_schedule.at(0.0))
     else:
-        Q_settler_underflow = Qr + Qw
+        Q_settler_underflow = Q_underflow  # Qr + Qw
         Q_settler_underflow_init = Q_settler_underflow
 
     plant = Plant("BSM2")
@@ -840,10 +845,12 @@ def build_bsm2(
     # so the engineer reads "effluent" / "ras" / "reject" / "primary_sludge" /
     # "digester_gas" (the last via plant.digester_gas) rather than the internal
     # "unit.port". "effluent" tracks the (option-dependent) effluent_endpoint.
-    plant.register_stream("effluent", plant.effluent_endpoint)
-    plant.register_stream("internal_recycle", "tank5_split.internal_recycle")
-    plant.register_stream("ras", "underflow_split.ras")
-    plant.register_stream("wastage", "underflow_split.waste")
+    register_recycle_streams(
+        plant,
+        internal_recycle="tank5_split.internal_recycle",
+        ras="underflow_split.ras",
+        wastage="underflow_split.waste",
+    )
     plant.register_stream("primary_effluent", "primary.effluent")
     plant.register_stream("primary_sludge", "primary.underflow")
     plant.register_stream("thickener_overflow", "thickener.overflow")

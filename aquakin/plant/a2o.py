@@ -30,12 +30,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
-from aquakin.plant.clarifier import IdealClarifier
+from aquakin.plant._builder_support import (
+    add_secondary_clarifier,
+    reactor_conditions,
+    recycle_pump_flows,
+    register_recycle_streams,
+)
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.mixer import MixerUnit, SetpointSplitter
 from aquakin.plant.plant import Plant
-from aquakin.plant.takacs import TakacsClarifier
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -260,17 +264,19 @@ def build_a2o(
         model = aquakin.load_model("asm2d")
 
     if conditions is None:
-        conditions = {name: model._condition_defaults[name] for name in model.conditions_required}
+        conditions = reactor_conditions(model)
 
     plant = Plant("A2O")
 
     # Controlled recycle-pump flows (constant volumetric setpoints off the design
-    # flow, like the BSM plants — modelling them as fractions of throughput makes
-    # the recycle-flow loop gain near-singular off the design influent).
-    Qa = internal_recycle_ratio * Q_avg  # internal (nitrate) recycle
-    Qr = ras_ratio * Q_avg  # return activated sludge
-    Qw = wastage_flow
-    Q_underflow = Qr + Qw
+    # flow, like the BSM plants -- see recycle_pump_flows / the SetpointSplitter
+    # docstring).
+    Qa, Qr, Qw, Q_underflow = recycle_pump_flows(
+        internal_ratio=internal_recycle_ratio,
+        ras_ratio=ras_ratio,
+        Q_design=Q_avg,
+        wastage=wastage_flow,
+    )
 
     # ----- Front mixer: fresh influent + RAS -> anaerobic selector -----
     plant.add_unit(
@@ -341,29 +347,20 @@ def build_a2o(
         )
     )
 
-    # ----- Secondary clarifier -----
-    if use_takacs:
-        plant.add_unit(
-            TakacsClarifier(
-                name="clarifier",
-                model=model,
-                area=A2O_CLARIFIER_AREA,
-                height=A2O_CLARIFIER_HEIGHT,
-                underflow_Q=Q_underflow,
-                init_underflow_Q=Q_underflow,
-                particulate_species=list(ASM2D_PARTICULATES),
-            )
-        )
-    else:
-        plant.add_unit(
-            IdealClarifier(
-                name="clarifier",
-                model=model,
-                underflow_Q=Q_underflow,
-                capture_efficiency=0.998,
-                particulate_species=list(ASM2D_PARTICULATES),
-            )
-        )
+    # ----- Secondary clarifier (Takács 1-D settler, or the fast IdealClarifier) -----
+    add_secondary_clarifier(
+        plant,
+        model=model,
+        underflow_Q=Q_underflow,
+        use_takacs=use_takacs,
+        takacs_kwargs=dict(
+            area=A2O_CLARIFIER_AREA,
+            height=A2O_CLARIFIER_HEIGHT,
+            init_underflow_Q=Q_underflow,
+            particulate_species=list(ASM2D_PARTICULATES),
+        ),
+        ideal_kwargs=dict(particulate_species=list(ASM2D_PARTICULATES)),
+    )
 
     # ----- Underflow splitter: RAS Qr + wastage Qw -----
     plant.add_unit(
@@ -409,9 +406,11 @@ def build_a2o(
     plant.effluent_endpoint = "clarifier.overflow"
 
     # Semantic stream shortcuts.
-    plant.register_stream("effluent", "clarifier.overflow")
-    plant.register_stream("internal_recycle", "aer_split.internal_recycle")
-    plant.register_stream("ras", "underflow_split.ras")
-    plant.register_stream("wastage", "underflow_split.waste")
+    register_recycle_streams(
+        plant,
+        internal_recycle="aer_split.internal_recycle",
+        ras="underflow_split.ras",
+        wastage="underflow_split.waste",
+    )
 
     return plant
