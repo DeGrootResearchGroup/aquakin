@@ -211,7 +211,8 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   a sample exercises, unlike Monod saturation); cross-model translators emit
   their own `coupling_pattern()` (`translator_coupling_pattern`, AD over the
   interface branches); stateless units are empty (the `StatelessUnit` default).
-  `Plant._structural_plant_pattern` assembles these — `self` blocks on the
+  `ColoredJacobianManager._structural_plant_pattern` (the plant's `plant._colored`
+  collaborator, `aquakin/plant/colored.py`) assembles these — `self` blocks on the
   diagonal, each `inlet` block composed with the feeding stream's translator
   coupling on the off-diagonal — **unioned with the IC probe**, which supplies the
   linear, always-on couplings and the recycle's real block structure (so the
@@ -249,9 +250,9 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   `esdirk_adjoint_solve` (`jacobian_builder=`), which builds each stage Jacobian
   in one JVP per *color* instead of per state. The coloring is derived once,
   concretely, for the **augmented** (`n+1`, time-carrying) primal rhs the discrete
-  adjoint differentiates — `Plant._colored_adjoint_jacobian_builder`, the backward
-  analogue of `_colored_jacobian_solver`, guarded by `colored_jacobian_max_error`
-  with a dense fallback, cached in `_colored_adjoint_builder`. **Its sparsity
+  adjoint differentiates — `ColoredJacobianManager.adjoint_jacobian_builder`, the
+  backward analogue of `jacobian_solver`, guarded by `colored_jacobian_max_error`
+  with a dense fallback, cached in `plant._colored._adjoint_builder`. **Its sparsity
   pattern is the per-component structural pattern (issue #381).** The backward
   feeds `J` directly into `I − dt·γ·Jᵀ` and the transposed solve, so a missed
   coupling does **not** cost steps (as it does for the self-correcting forward
@@ -263,8 +264,8 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   forward path uses), embedded in the augmented `[y; τ]` layout's `df/dy` block
   (the probe supplies the always-on `τ` time-dependence column). A *complete*
   structural superset closes the silent-corruption risk a sampled pattern only
-  reduces. The PTC steady-state builder (`_colored_steady_jacobian_builder`) uses
-  the same structural pattern (it marches in a narrow neighbourhood so the probe
+  reduces. The PTC steady-state builder (`ColoredJacobianManager.steady_jacobian_builder`)
+  uses the same structural pattern (it marches in a narrow neighbourhood so the probe
   usually suffices, but the superset is complete regardless). Validated: the
   colored backward gradient w.r.t. a kinetic param **and** a flow-setpoint param
   (`underflow_split.ras`, where `dM/dθ ≠ 0`) matches the dense-Jacobian gradient,
@@ -791,7 +792,7 @@ is what production simulators use to snap to steady state on any topology.
   well inside the 1e-6 convergence tolerance; same 83 iterations). The injection
   point is `ptc_forward`/`solve_steady_state`'s new `jac_fn=(F, y) -> dF/dy`
   argument; `Plant.steady_state` builds the colored materializer once concretely
-  (`_colored_steady_jacobian_builder`, reusing the `colored_jacobian` module's
+  (`ColoredJacobianManager.steady_jacobian_builder`, reusing the `colored_jacobian` module's
   pattern/coloring) and **guards** it against the dense Jacobian at the warm
   start, **falling back to dense** on a mismatch or under a `jit`/`grad` trace
   (the probe needs concrete arrays). To stay leak-free it builds the pattern from

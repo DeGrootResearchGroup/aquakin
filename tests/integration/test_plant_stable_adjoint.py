@@ -372,7 +372,7 @@ def test_stable_adjoint_colored_jacobian_matches_dense():
     # The colored builder is derived from the plant's default operating point the
     # first time the colored backward runs -- under the grad trace, with no concrete
     # probe solve needed (it touches only concrete plant defaults).
-    builder = plant._colored_adjoint_builder
+    builder = plant._colored._adjoint_builder
     assert builder is not None and builder[2] is True       # guard passed (ok)
     assert builder[1] < plant._total_state_size             # fewer colors than states
     assert np.isfinite(g_colored)
@@ -656,7 +656,7 @@ def test_stable_adjoint_colored_jacobian_flow_setpoint_matches_dense():
     g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
     # The colored builder is derived under the grad trace (from plant defaults), no
     # concrete probe solve needed.
-    builder = plant._colored_adjoint_builder
+    builder = plant._colored._adjoint_builder
     assert builder is not None and builder[2] is True       # guard passed
     assert np.isfinite(g_colored)
     assert g_colored != 0.0                                 # RAS moves M (dM/dtheta != 0)

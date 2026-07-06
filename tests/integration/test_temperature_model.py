@@ -194,14 +194,14 @@ def test_set_temperature_model_clears_colored_builders():
     would hit a dimension-mismatched stale builder."""
     plant = build_bsm2()
     # Simulate previously-built colored builders (and a compiled solve).
-    plant._colored_root_finder = ("stale",)
-    plant._colored_adjoint_builder = ("stale",)
-    plant._colored_steady_builder = ("stale",)
+    plant._colored._root_finder = ("stale",)
+    plant._colored._adjoint_builder = ("stale",)
+    plant._colored._steady_builder = ("stale",)
     plant._jit_cache["k"] = object()
 
     plant.set_temperature_model(aquakin.HeatBalanceTemperature())
 
-    assert plant._colored_root_finder is None
-    assert plant._colored_adjoint_builder is None
-    assert plant._colored_steady_builder is None
+    assert plant._colored._root_finder is None
+    assert plant._colored._adjoint_builder is None
+    assert plant._colored._steady_builder is None
     assert plant._jit_cache == {}

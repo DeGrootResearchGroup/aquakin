@@ -96,6 +96,19 @@ Key types:
   recovery, a joint rate + initial-condition recovery, a multi-batch shared-rate
   recovery, a full **BSM1** muH recovery through the stiff recycled plant, and the
   finite-through-the-plant gradient in the fast gate).
+  **Colored Jacobian** — the graph-coloring / Jacobian-sparsity subsystem
+  (`_structural_plant_pattern` + the forward / adjoint / steady builders and their
+  caches) lives in a [`ColoredJacobianManager`](aquakin/plant/colored.py)
+  collaborator (`plant._colored`), mirroring `RecycleResolver`: it back-references
+  the `Plant` for the state layout, unit couplings and RHS, and exposes
+  `jacobian_solver` (forward implicit solve), `adjoint_jacobian_builder`
+  (`stable_adjoint` backward `df/dy`) and `steady_jacobian_builder` (PTC steady
+  `dF/dy`). All three share one probe→structural-union→build→guard scaffold
+  (`_build_and_guard` / `_colored_from_probe`); each caches its result and
+  `plant._colored.reset()` clears them when the state length changes (a
+  temperature block). The size-based *decision* to use the colored backward
+  (`Plant._COLORED_BACKWARD_MIN_STATES` / `colored_jacobian_decision`) stays on the
+  plant's solve routing. The performance rationale is in `docs/plant_performance.md`.
   **Recycle resolution** — the methods named below (`_resolve_flows`,
   `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
   `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)

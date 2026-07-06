@@ -48,6 +48,7 @@ from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.integrate.events import Event, solve_with_events
 from aquakin.plant import calibrate as _calibrate
 from aquakin.plant import sensitivity as _sensitivity
+from aquakin.plant.colored import ColoredJacobianManager
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.recycle import RecycleResolver
 from aquakin.plant.results import (
@@ -282,25 +283,10 @@ class Plant:
         # Recycle-flow / recycle-concentration resolution, owning its own
         # tri-state map-constant caches (see aquakin.plant.recycle).
         self._recycle = RecycleResolver(self)
-        # Colored-Jacobian root finder (built once, concretely, on the first
-        # colored_jacobian=True solve): (root_finder, n_colors, ok). ``ok`` False
-        # means the setup guard found the colored Jacobian disagreed with the
-        # dense one at the start state, so the solve falls back to the dense path.
-        self._colored_root_finder: Optional[tuple] = None
-        # Colored-Jacobian builder for the stable_adjoint BACKWARD pass (built
-        # once, concretely, on the first colored_jacobian=True stable_adjoint
-        # solve): (builder_or_None, n_colors, ok). Distinct from
-        # _colored_root_finder (the forward root finder, n states) -- this colors
-        # the AUGMENTED (time-carrying, n+1) primal rhs the discrete adjoint
-        # differentiates. ``ok`` False => the guard found a colored/dense mismatch
-        # at the start state, so the backward falls back to dense jacfwd.
-        self._colored_adjoint_builder: Optional[tuple] = None
-        # Colored-Jacobian builder for the PTC STEADY-STATE iteration (built once,
-        # concretely, on the first colored_jacobian=True steady_state call):
-        # (builder_or_None, n_colors, ok). Colors the autonomous steady residual
-        # Jacobian dF/dy. The PTC operating-point neighbourhood is narrow, so the
-        # start-state pattern stays valid throughout (unlike a wide dynamic run).
-        self._colored_steady_builder: Optional[tuple] = None
+        # Colored-Jacobian sparsity subsystem, owning the forward / adjoint /
+        # steady builder caches and the structural coupling pattern (see
+        # aquakin.plant.colored).
+        self._colored = ColoredJacobianManager(self)
         # One-time guard for materialising the DO controllers a CSTRUnit's
         # closed-loop Aeration spec requires (see _materialize_aeration).
         self._aeration_materialized: bool = False
@@ -476,9 +462,7 @@ class Plant:
         # state length, so a previously-built builder is stale and would be
         # dimension-mismatched on the next colored solve -- reset them too (unlike
         # set_temperature, which leaves the state size and pattern unchanged).
-        self._colored_root_finder = None
-        self._colored_adjoint_builder = None
-        self._colored_steady_builder = None
+        self._colored.reset()
         return self
 
     def connect(
@@ -2148,276 +2132,6 @@ class Plant:
         # states), so no stream sweep is needed to reconstruct it.
         return self._compute_signals(jnp.asarray(t), states, params_full)
 
-    def _structural_plant_pattern(self, coupling_mask=None) -> "np.ndarray":
-        """Assemble the plant's structural Jacobian sparsity from each unit's
-        emitted couplings, for the colored pattern (issue #388).
-
-        The numerical probe at the start state captures the plant's **linear,
-        always-on** couplings but drops every **nonlinear** coupling that is
-        saturated at the warm-start operating point and only switches on once a
-        dynamic influent drives the plant off it -- reaction kinetics (Monod / pH
-        switches), the Takacs settling velocity, and the ASM<->ADM interface
-        branches. Those are the stiff couplings, so a stale pattern wrecks the
-        chord-Newton convergence (a ~6x slowdown).
-
-        Each unit emits its own structural sparsity (:class:`CouplingAware`,
-        :meth:`coupling_pattern`): a ``self`` block (d rhs / d own state) and an
-        ``inlet`` block (d rhs / d inlet concentration). This assembler places the
-        ``self`` blocks on the diagonal and composes each ``inlet`` block with the
-        species coupling of the stream feeding it -- identity for a same-model
-        feed, the translator's emitted ``coupling_pattern()`` for an ASM<->ADM
-        feed -- to form the off-diagonal blocks, restricted to the unit pairs the
-        probe shows actually coupled (the recycle's real reach). The result is a
-        structural superset that cannot go stale for any influent. ``coupling_mask``
-        is the probe pattern (used only to restrict off-diagonal placement to real
-        couplings, keeping the coloring tight).
-        """
-        import numpy as np
-
-        from aquakin.plant.translators import translator_coupling_pattern
-
-        N = self._total_state_size
-        P = np.zeros((N, N), dtype=bool)
-
-        # Each unit emits its structural Jacobian sparsity (CouplingAware): a
-        # self block (d rhs / d own state) and an inlet block (d rhs / d inlet
-        # concentration). Reactors derive self from the rate AST (saturated Monod
-        # terms are numerically invisible to a probe), the Takacs settler by AD
-        # over diverse solids profiles, stateless units are empty.
-        cps = {}
-        for name, unit in self.units.items():
-            fn = getattr(unit, "coupling_pattern", None)
-            if fn is not None:
-                cps[name] = (unit, fn())
-
-        # Diagonal: each unit's self_pattern, placed on its own state block.
-        for name, (unit, cp) in cps.items():
-            sp = np.asarray(cp.self_pattern, dtype=bool)
-            if sp.size == 0:
-                continue
-            off, _ = self._state_layout[name]
-            k = sp.shape[0]
-            P[off : off + k, off : off + k] |= sp
-
-        # Off-diagonal: J[A][B] = inlet_pattern_A composed with the species
-        # coupling of the stream feeding A from B. For a same-model feed that
-        # coupling is the identity; for a cross-model feed (ASM<->ADM) it is the
-        # translator's emitted pattern. The source unit B's *output* is linear in
-        # its state (a reactor outputs its state; the settler reads a layer), so B
-        # ranges over the concentration units (output == state) and the only
-        # nonlinear, stale parts are A's inlet response and the translator -- both
-        # captured here. Placement is restricted to the unit pairs the probe shows
-        # actually coupled (the recycle's real reach), keeping the pattern tight.
-        tcache: dict[tuple, np.ndarray] = {}
-
-        def _translator(src_net, tgt_net):
-            key = (id(src_net), id(tgt_net))
-            if key not in tcache:
-                tcache[key] = None
-                for conn in self.connections:
-                    T = getattr(conn, "translator", None)
-                    if T is not None and T.source_model is src_net and T.target_model is tgt_net:
-                        tcache[key] = np.asarray(translator_coupling_pattern(T), dtype=bool)
-                        break
-            return tcache[key]
-
-        conc = {nm: u for nm, u in self.units.items() if self._is_concentration_unit(u)}
-        for aname, (aunit, cp) in cps.items():
-            if cp.inlet_pattern is None:
-                continue
-            ip = np.asarray(cp.inlet_pattern, dtype=bool)  # (a_rows, a_nsp)
-            a_off, _ = self._state_layout[aname]
-            a_rows = ip.shape[0]
-            a_net = getattr(aunit, "model", None)
-            for bname, bunit in conc.items():
-                if bname == aname:
-                    continue
-                b_net = bunit.model
-                b_off, _ = self._state_layout[bname]
-                b_cols = b_net.n_species
-                if (
-                    coupling_mask is not None
-                    and not coupling_mask[a_off : a_off + a_rows, b_off : b_off + b_cols].any()
-                ):
-                    continue  # not really coupled
-                if a_net is b_net:
-                    coupling = np.eye(a_net.n_species, dtype=bool)
-                else:
-                    coupling = _translator(b_net, a_net)  # (a_nsp, b_nsp)
-                    if coupling is None:
-                        continue
-                block = (ip.astype(np.int8) @ coupling.astype(np.int8)) > 0
-                P[a_off : a_off + a_rows, b_off : b_off + b_cols] |= block
-        return P
-
-    def _colored_jacobian_solver(self, solver, t0, y0, params, rtol, atol):
-        """Return ``solver`` reconfigured to use a colored-AD Jacobian root
-        finder, or ``solver`` unchanged when the colored path is unavailable.
-
-        Built **once per plant** (concretely): derive the plant Jacobian sparsity
-        pattern, color it, pack a :class:`ColoredVeryChord`, and **guard** it by
-        comparing the colored and dense Jacobians at the start state -- falling
-        back to the dense path (returning ``solver`` unchanged, with a warning) if
-        they disagree. Reused on later solves. Skipped under tracing if not yet
-        built (the probe/guard need concrete arrays), so a first traced solve
-        falls back to dense. The colored matrix equals the dense one when the
-        pattern is a superset, so the step sequence is unchanged; a pattern miss
-        only costs solver steps, never accuracy.
-        """
-        from aquakin.integrate.colored_jacobian import (
-            build_colored_root_finder,
-            colored_jacobian_guard,
-            jacobian_sparsity_pattern,
-        )
-
-        if self._colored_root_finder is None:
-            if isinstance(params, jax.core.Tracer) or isinstance(y0, jax.core.Tracer):
-                return solver  # can't build under trace; fall back
-            t0a = jnp.asarray(float(t0))
-            states0 = self._split_state(y0)
-            rmap = self._recycle._maybe_recycle_map(t0a, states0, params)
-            fmap = self._recycle._maybe_flow_map(t0a, states0, params)
-
-            def rhs_y(y):
-                return self._rhs(t0a, y, params, recycle_map=rmap, flow_map=fmap)
-
-            atol_arr = jnp.asarray(atol)
-            probe = jacobian_sparsity_pattern(rhs_y, y0) > 0
-            structural = self._structural_plant_pattern(coupling_mask=probe)
-            rf, n_colors = build_colored_root_finder(
-                rhs_y,
-                y0,
-                rtol=10.0 * rtol,
-                atol=10.0 * atol_arr,
-                probe_pattern=probe,
-                extra_pattern=structural,
-            )
-            ok = colored_jacobian_guard(rhs_y, y0, rf, context="colored_jacobian=True")
-            self._colored_root_finder = (rf, n_colors, ok)
-
-        rf, n_colors, ok = self._colored_root_finder
-        if not ok:
-            return solver
-        # Build through the single-source-of-truth helper: it injects the colored
-        # root finder into the user-supplied solver, or into the canonical Kvaerno5
-        # when none is given -- so the colored path constructs no solver of its own.
-        from aquakin.integrate._common import build_implicit_solver
-
-        return build_implicit_solver(rtol, atol, solver=solver, colored_root_finder=rf)
-
-    def _colored_adjoint_jacobian_builder(self, t0, rtol, atol):
-        """Derive (once) the sparsity-colored ``df/dy`` Jacobian builder for the
-        stable_adjoint backward pass, from the plant's **own default operating
-        point**.
-
-        The cap-free reverse-mode backward is dominated (~82% on BSM2) by per-step
-        dense ``df/dy`` Jacobian builds -- one Jacobian-vector product per state.
-        For a large block-sparse plant, coloring the Jacobian computes it in one
-        JVP per *color* (BSM2: ~45 vs 167), cutting that cost while staying exact
-        (the colored matrix equals the dense one when the pattern is a superset).
-
-        The colored pattern is a **structural** property of the plant -- the unit
-        coupling graph plus the recycle block structure -- so it is built from the
-        plant's **default** state/params, NOT the solve's ``y0``/``params``. That
-        decouples it from the solve routing and the AD trace: it builds lazily on
-        first use even under a gradient trace, because it touches only concrete
-        plant defaults (wrapped in ``ensure_compile_time_eval`` so the probe is not
-        staged into the gradient). Whether to *use* the result is a separate,
-        size-based decision (:attr:`_COLORED_BACKWARD_MIN_STATES`), so no build-time
-        benchmark is needed -- which is what removes the old dependency on a
-        concrete ``stable_adjoint`` solve to trigger and time the build.
-
-        Caches ``(builder_or_None, n_colors, ok, n_states, rf)`` on
-        ``_colored_adjoint_builder``: the augmented colored builder, the color
-        count, whether the default-state guard passed, the plant state count (for
-        the size gate), and the ``ColoredVeryChord``.
-
-        Built for the **augmented** (time-carrying, ``n+1``) primal right-hand side
-        the discrete adjoint actually differentiates. Guarded against the dense
-        Jacobian at the default state; a mismatch falls back to dense (with a
-        warning).
-        """
-        import numpy as np
-
-        from aquakin.integrate.colored_jacobian import (
-            build_colored_root_finder,
-            colored_jacobian_guard,
-            jacobian_sparsity_pattern,
-            materialize_colored_jacobian,
-        )
-        from aquakin.integrate.discrete_adjoint import _autonomize
-
-        if self._colored_adjoint_builder is not None:
-            return self._colored_adjoint_builder[0]
-
-        # Build from the plant's OWN default operating point -- a concrete,
-        # always-available representative state -- so the pattern (a structural
-        # property) is independent of the solve's inputs and computable even when
-        # the only caller is a gradient (whose y0/params are tracers).
-        # ``ensure_compile_time_eval`` keeps the concrete probe from being staged
-        # into the enclosing gradient computation.
-        with jax.ensure_compile_time_eval():
-            y0 = self.initial_state()
-            params = self.default_parameters()
-            t0f = float(t0)
-            rmap = self._recycle._maybe_recycle_map(jnp.asarray(t0f), self._split_state(y0), params)
-            fmap = self._recycle._maybe_flow_map(jnp.asarray(t0f), self._split_state(y0), params)
-
-            def primal(t, y, p):
-                return self._rhs(t, y, p, recycle_map=rmap, flow_map=fmap)
-
-            # The discrete adjoint integrates the autonomized [y; tau] state, so
-            # the backward Jacobians -- and hence the coloring -- are of that.
-            rhs_aug, y0_aug = _autonomize(primal, y0, t0f)
-
-            def rhs_aug_y(ya):
-                return rhs_aug(0.0, ya, params)
-
-            # The backward feeds J directly into ``I - dt.gamma.J^T`` and the
-            # transposed solve, so a missed coupling **silently corrupts the
-            # gradient**. So the pattern must be a *complete* structural superset.
-            # Use the per-component structural pattern (each unit's equation-derived
-            # ``coupling_pattern()``, assembled by :meth:`_structural_plant_pattern`)
-            # for the plant ``df/dy`` block, embedded in the augmented ``[y; tau]``
-            # layout's top-left block; the probe at the default state supplies the
-            # recycle block structure (connectivity-based, so any representative
-            # state reveals it -- which is why the default state serves as well as
-            # the real y0).
-            n = int(y0.shape[0])
-            plain_probe = (
-                jacobian_sparsity_pattern(lambda y: primal(jnp.asarray(t0f), y, params), y0) > 0
-            )
-            structural = self._structural_plant_pattern(coupling_mask=plain_probe)
-            aug_extra = np.zeros((n + 1, n + 1), dtype=bool)
-            aug_extra[:n, :n] = plain_probe | structural
-
-            # rtol/atol only set the (unused) chord tolerances on the returned
-            # object; the seed matrix / coloring / pattern is all we use. A scalar
-            # atol avoids augmenting the per-component vector for the probe.
-            atol_s = float(jnp.max(jnp.asarray(atol)))
-            rf, n_colors = build_colored_root_finder(
-                rhs_aug_y, y0_aug, rtol=10.0 * rtol, atol=10.0 * atol_s, extra_pattern=aug_extra
-            )
-            ok = colored_jacobian_guard(
-                rhs_aug_y, y0_aug, rf, context="colored_jacobian (stable_adjoint)"
-            )
-
-        # ``builder`` is applied later in the backward to the real (traced) f/y;
-        # it closes over the concrete ``rf`` (seed/coloring/pattern) built above.
-        def builder(f, y):
-            return materialize_colored_jacobian(rf, f, y)
-
-        # ``rf`` is cached too: it is reused as the *forward* solve's root finder
-        # so the adjoint's forward pass can color its per-step Jacobian as well.
-        self._colored_adjoint_builder = (
-            builder if ok else None,
-            n_colors,
-            ok,
-            n,
-            rf if ok else None,
-        )
-        return self._colored_adjoint_builder[0]
-
     # Backward colored Jacobian is auto-enabled when the plant has at least this
     # many states. The win is set by absolute plant size, not sparsity: a small
     # plant pays more in per-build overhead than it saves (BSM1, 65 states:
@@ -2444,75 +2158,6 @@ class Plant:
             return None
         choice = "colored" if n >= self._COLORED_BACKWARD_MIN_STATES else "dense"
         return (choice, n)
-
-    def _colored_steady_jacobian_builder(self, rhs, y0, theta, *, tol):
-        """Derive (once, concretely) a colored-AD materializer for the PTC steady
-        residual Jacobian ``dF/dy``, or ``None`` to fall back to dense ``jacfwd``.
-
-        The PTC iteration (:func:`aquakin.plant.steady.ptc_forward`) forms the
-        full plant Jacobian ``dF/dy`` -- the same block-sparse object the
-        integrator's implicit-stage and the stable_adjoint backward color -- once
-        per Newton step (~tens of times for BSM2). Coloring builds it in one
-        Jacobian-vector product per *color* (BSM2: ~45 vs 167 columns) instead of
-        ``n``, while reconstructing the identical matrix on the pattern's support.
-
-        Unlike the dynamic solve, this is well suited to coloring: PTC marches to
-        a single operating point in a narrow neighbourhood, so the warm-start
-        probe usually suffices on its own (the dynamic run's wide load excursion
-        is what makes start-state-missed couplings a problem). The builder unions
-        it with the complete per-component structural pattern regardless, matching
-        the forward and stable_adjoint builders. Built and **guarded** against the
-        dense Jacobian at ``y0`` once (falling back to dense with a warning on a
-        mismatch), then cached and reused -- a parameter/design sweep keeps the
-        same structural pattern.
-
-        Returns a builder ``(F, y) -> dF/dy``, or ``None`` (dense) when called
-        under a trace (the probe needs concrete arrays) or when the guard fails.
-        """
-
-        from aquakin.integrate.colored_jacobian import (
-            build_colored_root_finder,
-            colored_jacobian_guard,
-            jacobian_sparsity_pattern,
-            materialize_colored_jacobian,
-        )
-
-        if self._colored_steady_builder is None:
-            if any(
-                isinstance(leaf, jax.core.Tracer) for leaf in jax.tree_util.tree_leaves((theta, y0))
-            ):
-                return None  # can't build under trace; fall back
-
-            def rhs_y(y):
-                return rhs(y, theta)
-
-            tol_s = float(jnp.max(jnp.asarray(tol)))
-            # Use the per-component structural pattern (each unit's equation-derived
-            # coupling_pattern, assembled by _structural_plant_pattern) unioned with
-            # the warm-start probe, matching the forward and stable_adjoint builders.
-            # PTC stays in a narrow neighbourhood so the start-state probe is usually
-            # enough on its own, but the structural superset is complete regardless
-            # of how far the warm start sits from the steady state.
-            plain_probe = jacobian_sparsity_pattern(rhs_y, y0) > 0
-            structural = self._structural_plant_pattern(coupling_mask=plain_probe)
-            rf, n_colors = build_colored_root_finder(
-                rhs_y,
-                y0,
-                rtol=tol_s,
-                atol=tol_s,
-                probe_pattern=plain_probe,
-                extra_pattern=structural,
-            )
-            ok = colored_jacobian_guard(
-                rhs_y, y0, rf, context="colored_jacobian=True (steady_state)"
-            )
-
-            def builder(f, y):
-                return materialize_colored_jacobian(rf, f, y)
-
-            self._colored_steady_builder = (builder if ok else None, n_colors, ok)
-
-        return self._colored_steady_builder[0]
 
     def _sweep_outputs(
         self,
@@ -3155,9 +2800,9 @@ class Plant:
         want_colored = colored_jacobian is True or (
             colored_jacobian == "auto" and n_states >= self._COLORED_BACKWARD_MIN_STATES
         )
-        if want_colored and self._colored_adjoint_builder is None:
-            self._colored_adjoint_jacobian_builder(t0, rtol, atol)
-        cab = self._colored_adjoint_builder
+        if want_colored and self._colored._adjoint_builder is None:
+            self._colored.adjoint_jacobian_builder(t0, rtol, atol)
+        cab = self._colored._adjoint_builder
         use_colored = bool(want_colored and cab is not None and cab[2])  # built + guard ok
         jac_builder = cab[0] if use_colored else None
         # The infrastructure to also color the *forward* solve's per-step
@@ -3296,8 +2941,8 @@ class Plant:
         # Jacobian); build + guard it, and fall back to the diffrax path if the
         # guard fails. Concrete-only (validated above). Its compiled solve is
         # cached per instance like the diffrax path.
-        self._colored_jacobian_solver(None, t0, y0, params, rtol, atol)
-        crf = self._colored_root_finder
+        self._colored.jacobian_solver(None, t0, y0, params, rtol, atol)
+        crf = self._colored._root_finder
         if crf is not None and crf[2]:
             te = t_eval if t_eval is not None else jnp.asarray([float(t1)])
             fkey = (
@@ -3379,9 +3024,9 @@ class Plant:
         # -- making it the all-solves default needs its own full-suite validation
         # (a deliberate follow-up). ``True`` opts into both.
         if colored_jacobian is True:
-            solver = self._colored_jacobian_solver(solver, t0, y0, params, rtol, atol)
+            solver = self._colored.jacobian_solver(solver, t0, y0, params, rtol, atol)
         colored_active = colored_jacobian is True and (
-            self._colored_root_finder is not None and self._colored_root_finder[2]
+            self._colored._root_finder is not None and self._colored._root_finder[2]
         )
 
         settings = concrete_settings_key(rtol, atol, adjoint, dtmax, max_steps)
@@ -3612,7 +3257,7 @@ class Plant:
         """
         from aquakin.integrate.forward_solve import forward_solve
 
-        rf = self._colored_root_finder[0]
+        rf = self._colored._root_finder[0]
         S, col_of, pattern = rf.seed_matrix, rf.color_of, rf.pattern
         t0a = jnp.asarray(float(t0))
 
@@ -4187,7 +3832,7 @@ class Plant:
                     def primal_rhs(y, theta):
                         return self._rhs(t, y, theta, recycle_map=rmap, flow_map=fmap)
 
-                    jac_fn = self._colored_steady_jacobian_builder(primal_rhs, y0, theta, tol=tol)
+                    jac_fn = self._colored.steady_jacobian_builder(primal_rhs, y0, theta, tol=tol)
             if jac_fn is None:
                 primal_rhs = None  # colored unavailable -> dense forward too
 

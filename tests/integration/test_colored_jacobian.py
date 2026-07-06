@@ -222,7 +222,7 @@ def test_plant_colored_solve_matches_default(bsm1):
     s_col = plant.solve(
         **kw, integrator=aquakin.IntegratorConfig(
             max_steps=2_000_000, colored_jacobian=True))
-    assert plant._colored_root_finder[2] is True          # guard passed
+    assert plant._colored._root_finder[2] is True          # guard passed
     a, b = np.asarray(s_def.state), np.asarray(s_col.state)
     assert np.all(np.isfinite(b))
     rel = np.max(np.abs(a - b) / (np.abs(a) + 1e-6))
@@ -238,7 +238,7 @@ def test_plant_colored_gradient_matches_default(bsm1):
                 rtol=1e-4, atol=1e-3,
                 integrator=aquakin.IntegratorConfig(
                     max_steps=1_000_000, colored_jacobian=True))
-    assert plant._colored_root_finder[2] is True
+    assert plant._colored._root_finder[2] is True
 
     def loss(scale, colored):
         s = plant.solve(t_span=(0.0, 3.0), t_eval=jnp.array([3.0]),
@@ -283,7 +283,7 @@ def test_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch):
         s_col = plant.solve(
             **kw, integrator=aquakin.IntegratorConfig(
                 max_steps=2_000_000, colored_jacobian=True))
-    assert plant._colored_root_finder[2] is False         # guard failed
+    assert plant._colored._root_finder[2] is False         # guard failed
     # fallback path == dense default, so trajectories match tightly
     rel = np.max(np.abs(np.asarray(s_def.state) - np.asarray(s_col.state))
                  / (np.abs(np.asarray(s_def.state)) + 1e-6))
@@ -332,7 +332,7 @@ def test_colored_bsm2_matches_default():
     s_col = p.solve(
         **kw, integrator=aquakin.IntegratorConfig(
             max_steps=8_000_000, colored_jacobian=True))
-    assert p._colored_root_finder[2] is True
+    assert p._colored._root_finder[2] is True
     a, b = np.asarray(s_def.state), np.asarray(s_col.state)
     assert np.all(np.isfinite(b))
     rel = np.max(np.abs(a - b) / (np.abs(a) + 1e-3))
@@ -368,7 +368,7 @@ def test_colored_bsm2_soluble_holdup_no_fallback():
     s_col = p.solve(
         **kw, integrator=aquakin.IntegratorConfig(
             max_steps=8_000_000, colored_jacobian=True))
-    assert p._colored_root_finder[2] is True       # guard passed: colored, not dense
+    assert p._colored._root_finder[2] is True       # guard passed: colored, not dense
     a, b = np.asarray(s_def.state), np.asarray(s_col.state)
     assert np.all(np.isfinite(b))
     assert np.max(np.abs(a - b) / (np.abs(a) + 1e-3)) < 2e-2
@@ -393,7 +393,7 @@ def test_colored_ptc_matches_dense_bsm1(bsm1):
     dense = plant.steady_state(params, y0=y0)
     colored = plant.steady_state(params, y0=y0, colored_jacobian=True)
 
-    builder, n_colors, ok = plant._colored_steady_builder
+    builder, n_colors, ok = plant._colored._steady_builder
     assert ok is True and builder is not None          # guard passed
     assert n_colors < y0.shape[0]                       # actually compressed
     a, b = np.asarray(dense.state), np.asarray(colored.state)
@@ -428,7 +428,7 @@ def test_colored_ptc_matches_dense_bsm2():
     dense = p.steady_state(params, y0=y0)
     colored = p.steady_state(params, y0=y0, colored_jacobian=True)
 
-    builder, n_colors, ok = p._colored_steady_builder
+    builder, n_colors, ok = p._colored._steady_builder
     assert ok is True and builder is not None
     assert n_colors < y0.shape[0]                       # ~46 vs 167
     a, b = np.asarray(dense.state), np.asarray(colored.state)
@@ -474,7 +474,7 @@ def test_colored_adjoint_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch
     g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
     with pytest.warns(RuntimeWarning, match="falling back to dense"):
         g_col = float(jax.grad(lambda th: g(th, True))(theta0))
-    builder, _n, ok, _nstates, _rf = plant._colored_adjoint_builder
+    builder, _n, ok, _nstates, _rf = plant._colored._adjoint_builder
     assert ok is False and builder is None              # guard failed -> dense
     assert g_col == pytest.approx(g_dense, rel=1e-8)     # dense fallback -> correct
 
@@ -495,7 +495,7 @@ def test_colored_steady_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch)
     dense = plant.steady_state(params, y0=y0)
     with pytest.warns(RuntimeWarning, match="falling back to dense"):
         colored = plant.steady_state(params, y0=y0, colored_jacobian=True)
-    builder, _n, ok = plant._colored_steady_builder
+    builder, _n, ok = plant._colored._steady_builder
     assert ok is False and builder is None
     a, b = np.asarray(dense.state), np.asarray(colored.state)
     assert np.max(np.abs(a - b) / (np.abs(a) + 1e-9)) < 1e-7

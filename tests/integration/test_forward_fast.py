@@ -227,7 +227,7 @@ def test_forward_fast_matches_diffrax_bsm2():
     ref = p.solve(**kw, integrator=aquakin.IntegratorConfig(
         max_steps=8_000_000, colored_jacobian=True))
     a, b = np.asarray(ff.state), np.asarray(ref.state)
-    assert p._colored_root_finder[2] is True                   # colored guard ok
+    assert p._colored._root_finder[2] is True                   # colored guard ok
     assert np.all(np.isfinite(a))
     assert np.allclose(a[0], b[0])
     rel = np.max(np.abs(a - b) / (np.abs(b) + 1e-3))
