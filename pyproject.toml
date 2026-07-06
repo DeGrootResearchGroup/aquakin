@@ -69,6 +69,10 @@ test = [
     "pytest-xdist>=3",
     "pytest-timeout>=2",
     "pytest-split>=0.8",
+    # pytest-cov powers the per-tier coverage reports uploaded to Codecov; it
+    # cooperates with pytest-xdist (`-n`) and pytest-split (each shard emits a
+    # partial `coverage.xml` that Codecov merges by flag).
+    "pytest-cov>=5",
     "aquakin[dataframe,plot]",
 ]
 
@@ -94,6 +98,18 @@ markers = [
     "xheavy: the ONE heavy test (`test_dynamic_dgsm_matches_dgsm`) that exceeds 16 GB even isolated -- it runs two DGSM engines back-to-back and holds two multi-GB BSM1 `stable_adjoint` adjoint programs live at once. It OOM-crashes the free 16 GB `ubuntu-latest` runner even one-per-process, so it is split off from the free `heavy` job (which runs `heavy and not xheavy`) onto a small larger runner (`aquakin-heavy`, 8-core/32 GB) via the `xheavy` CI job, gated identically (path filter + `full-ci`). `xheavy` IS-A `heavy` (it also carries `heavy`/`slow`), so the slow/validation/smoke jobs still exclude it; `pytest -m heavy` runs it locally.",
 ]
 testpaths = ["tests"]
+
+# Coverage (coverage.py via pytest-cov). Measured per CI tier (fast / slow /
+# validation), each sharded across parallel jobs; `relative_files` makes the
+# per-shard reports use repo-relative paths so Codecov merges them correctly
+# across the different job checkouts. `branch = true` adds branch coverage.
+[tool.coverage.run]
+source = ["aquakin"]
+branch = true
+relative_files = true
+
+[tool.coverage.report]
+show_missing = false
 
 # ---------------------------------------------------------------------------
 # ruff -- linter (and formatter config). The CI `lint` job runs both `ruff check`

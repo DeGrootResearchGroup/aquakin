@@ -151,8 +151,23 @@ jobs:
         run: >-
           pytest -m "not validation and not slow" -q -n auto
           --splits 4 --group ${{ matrix.group }}
+          --cov=aquakin --cov-report=xml
           --durations=15 --timeout=600 --timeout-method=thread
           --max-worker-restart=0
+
+      - name: Upload coverage to Codecov
+        # fail_ci_if_error:false so a Codecov hiccup never reds the required fast
+        # gate; !cancelled() uploads whatever coverage was produced even if a test
+        # failed. Per-tier flag + carryforward (codecov.yml) let a PR -- which runs
+        # only the fast tier -- still show slow/validation coverage from main.
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: fast
+          name: fast-py${{ matrix.python-version }}-g${{ matrix.group }}
+          fail_ci_if_error: false
 
   # ---- Fast-gate aggregator: the single required status check ------------------
   # Sharding renames the per-shard jobs (and their count may change), so make ONE
@@ -253,8 +268,19 @@ jobs:
         run: >-
           pytest -m "slow and not validation and not heavy" -q -n 1
           --splits 8 --group ${{ matrix.group }}
+          --cov=aquakin --cov-report=xml
           --durations=15 --timeout=900 --timeout-method=thread
           --max-worker-restart=0
+
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: slow
+          name: slow-py${{ matrix.python-version }}-g${{ matrix.group }}
+          fail_ci_if_error: false
 
   # ---- Heavy whole-plant stable-adjoint gradient tests -------------------------
   # The `heavy` set is the 12 whole-plant plant-gradient checks (7 BSM2 + 5 BSM1),
@@ -513,7 +539,18 @@ jobs:
         run: >-
           pytest -m "validation and not heavy" -q -n 1
           --splits 4 --group ${{ matrix.group }}
+          --cov=aquakin --cov-report=xml
           --durations=15 --timeout=900 --timeout-method=thread --max-worker-restart=0
+
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: validation
+          name: validation-g${{ matrix.group }}
+          fail_ci_if_error: false
 
   # ---- Pre-merge smoke slice: a rotating shard of the slow suite, on PRs -------
   # The `slow`/`validation` suites run only on push-to-main, so a regression that
