@@ -76,16 +76,13 @@ from aquakin.integrate.sensitivity import (
     sensitivity,
 )
 from aquakin.integrate.events import Event, EventedResult, solve_with_events
-from aquakin.integrate.experiments import (
-    Constraint,
+from aquakin.integrate.design import Constraint, OptimizeResult, optimize_design
+from aquakin.integrate.monte_carlo import MonteCarloResult, monte_carlo
+from aquakin.integrate.scenarios import (
     KPIComparison,
-    MonteCarloResult,
-    OptimizeResult,
     ScenarioComparison,
     compare_scenarios,
     kpi_comparison,
-    monte_carlo,
-    optimize_design,
 )
 from aquakin.plant import (
     ActivatedSludgeSizing,

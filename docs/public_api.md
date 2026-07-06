@@ -293,7 +293,8 @@ outs = aquakin.dgsm(fn_vec, ranges, output_names=[...], ad_mode="forward")
 # because reverse pays the stiff adjoint once per output while forward pushes all
 # d tangents through one solve. For a single scalar output, reverse is cheaper.
 
-# Scenario comparison and Monte-Carlo uncertainty (integrate/experiments.py).
+# Scenario comparison and Monte-Carlo uncertainty (integrate/scenarios.py,
+# integrate/monte_carlo.py; constrained design in integrate/design.py).
 # Same fn(x)->output contract as dgsm: fn maps a named input VECTOR to a scalar
 # or vector output (it builds params/C0 and runs the solve itself). These turn
 # the per-solve primitives into the two engineering deliverables.
