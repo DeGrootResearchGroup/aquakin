@@ -16,6 +16,10 @@ aquakin/
 │   │   │                            #   batch each primitive (bit-identical to the
 │   │   │                            #   scalar stack, smaller jaxpr -> faster compile)
 │   │   ├── model.py               # CompiledModel dataclass + compile()
+│   │   │                            #   (runtime hot path: rates / dCdt / stoich)
+│   │   ├── introspect.py            # model summary / to_latex / unit + conservation
+│   │   │                            #   audits (advisory surface, delegated from
+│   │   │                            #   CompiledModel; lazy utils imports)
 │   │   ├── stoich_resolve.py        # `auto`/`?` coefficient resolver: solve a
 │   │   │                            #   conservation-determined coefficient from the
 │   │   │                            #   composition table + conserved_for (numeric, or

@@ -277,6 +277,23 @@ def test_to_latex_smoke(simple_model):
     assert "mathrm" in latex["A_to_B"]
 
 
+def test_advisory_methods_delegate_to_core_introspect():
+    """The advisory / presentation surface (summary, to_latex, unit / conservation
+    audits, composition) is implemented as ``core.introspect`` free functions;
+    the ``CompiledModel`` methods are thin delegators that must return exactly the
+    free function's result. Pins the SRP split so the runtime dataclass stays the
+    hot path only."""
+    from aquakin.core import introspect
+
+    net = aquakin.load_model("asm1")
+    assert net.summary() == introspect.format_model_summary(net)
+    assert net.to_latex() == introspect.model_to_latex(net)
+    assert net.check_units() == introspect.check_units(net)
+    assert net.composition() == introspect.model_composition(net)
+    assert net.check_conservation() == introspect.check_conservation(net)
+    assert net.check_nitrogen() == introspect.check_nitrogen(net)
+
+
 def test_concentrations_by_name(simple_model):
     """concentrations() starts from the YAML defaults and overrides named
     species, via a dict and/or kwargs, with no .at[].set() needed."""

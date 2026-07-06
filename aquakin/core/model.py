@@ -317,6 +317,8 @@ class CompiledModel:
     def n_params(self) -> int:
         return len(self.parameters)
 
+    # ----- Construction vectors (build C / params / conditions / atol) --------
+
     def default_concentrations(self) -> jnp.ndarray:
         """Return a copy of the default initial-concentration vector.
 
@@ -518,6 +520,8 @@ class CompiledModel:
         caller cannot mutate the model's stored defaults.
         """
         return dict(self._condition_defaults)
+
+    # ----- Runtime hot path (state -> rates -> dCdt; differentiable) ----------
 
     def precipitation_equilibrium(
         self,
@@ -735,6 +739,8 @@ class CompiledModel:
         scale = C / jnp.maximum(C, thr)
         return pos + neg * scale
 
+    # ----- Species / model metadata accessors ---------------------------------
+
     def units_of(self, species: str) -> str:
         """Return the declared concentration units of a species.
 
@@ -818,70 +824,25 @@ class CompiledModel:
             return next(iter(found))
         return None
 
+    # ----- Advisory / introspection surface -----------------------------------
+    #
+    # Presentation (summary / to_latex) and scientific audit (dimensional
+    # consistency, COD/N/P/S conservation, nitrogen balance) delegated to
+    # ``core.introspect`` free functions so this dataclass stays focused on the
+    # differentiable hot path. These thin methods are the public API; the module
+    # keeps the lazy ``utils.*`` import boundary.
+
     def summary(self) -> str:
         """Return a human-readable table summarising the model."""
-        _time_names = {"s": "seconds", "d": "days", "h": "hours", "min": "minutes"}
-        tu = self.time_unit
-        if tu is not None:
-            time_line = f"  Time unit: {tu} (t_span / t_eval are in {_time_names.get(tu, tu)})"
-        else:
-            time_line = "  Time unit: (could not infer from rate-constant units)"
-        lines = [
-            f"Model: {self.name}",
-            f"  Description: {self.description}",
-            time_line,
-            f"  Species ({self.n_species}):",
-        ]
-        name_w = max((len(s) for s in self.species), default=0)
-        unit_w = max((len(self.species_units.get(s, "")) for s in self.species), default=0)
-        for s in self.species:
-            units = self.species_units.get(s, "")
-            desc = self.species_descriptions.get(s, "")
-            line = f"    {s:<{name_w}}  [{units:<{unit_w}}]"
-            if desc:
-                line += f"  {desc}"
-            lines.append(line)
-        lines += [
-            f"  Conditions required: {', '.join(self.conditions_required) or '(none)'}",
-            f"  Reactions ({self.n_reactions}):",
-        ]
-        # Render against the stoichiometry evaluated at the default parameters,
-        # not ``self.stoich_matrix`` (the static base, which holds zeros at every
-        # parameter-dependent cell). Models with symbolic coefficients
-        # (ASM1/ASM2d/ASM3/ADM1 yields, N-content, fractions) would otherwise
-        # have those species silently dropped from the summary.
-        stoich = self.compute_stoich(self._default_parameters)
-        for i, rname in enumerate(self.reaction_names):
-            stoich_terms = []
-            for j, sp in enumerate(self.species):
-                coef = float(stoich[i, j])
-                if coef == 0:
-                    continue
-                sign = "+" if coef > 0 else "-"
-                mag = abs(coef)
-                term = f"{sign} {mag:g} {sp}" if mag != 1 else f"{sign} {sp}"
-                stoich_terms.append(term)
-            lines.append(f"    [{i}] {rname}: " + " ".join(stoich_terms).lstrip("+ "))
-        lines.append(f"  Parameters ({self.n_params}):")
-        for p in self.parameters:
-            bounds = self.parameter_bounds.get(p)
-            bounds_s = f" bounds={bounds}" if bounds is not None else ""
-            val = float(self._default_parameters[self.param_index[p]])
-            lines.append(f"    {p} = {val:g}{bounds_s}")
-        if self.references:
-            lines.append("  References:")
-            for ref in self.references:
-                lines.append(f"    - {ref}")
-        return "\n".join(lines)
+        from aquakin.core import introspect
+
+        return introspect.format_model_summary(self)
 
     def to_latex(self) -> dict[str, str]:
         """Return a mapping ``reaction_name -> LaTeX rate expression``."""
-        from aquakin.utils.latex import to_latex as _to_latex
+        from aquakin.core import introspect
 
-        return {
-            name: _to_latex(ast)
-            for name, ast in zip(self.reaction_names, self.rate_asts, strict=True)
-        }
+        return introspect.model_to_latex(self)
 
     def check_units(self, *, check_root: bool = True) -> list:
         """Check the rate expressions for dimensional ("unit") consistency.
@@ -918,9 +879,9 @@ class CompiledModel:
         >>> for w in net.check_units():
         ...     print(w)
         """
-        from aquakin.utils.units import check_model_units
+        from aquakin.core import introspect
 
-        return check_model_units(self, check_root=check_root)
+        return introspect.check_units(self, check_root=check_root)
 
     def composition(
         self, *, params=None, electron_acceptor_cod: bool = True
@@ -953,16 +914,11 @@ class CompiledModel:
             lab-COD convention; see :func:`aquakin.composition_table`). Ignored
             for declared metadata.
         """
-        if self.species_composition:
-            return {sp: dict(c) for sp, c in self.species_composition.items()}
-        from aquakin.utils.composition import composition_table
+        from aquakin.core import introspect
 
-        try:
-            return composition_table(
-                self, electron_acceptor_cod=electron_acceptor_cod, params=params
-            )
-        except KeyError:
-            return {}
+        return introspect.model_composition(
+            self, params=params, electron_acceptor_cod=electron_acceptor_cod
+        )
 
     def check_conservation(
         self,
@@ -990,20 +946,16 @@ class CompiledModel:
         Raises ``ValueError`` only if no composition table is available (the
         model declares none and there is no shipped fallback).
         """
-        comp = (
-            composition
-            if composition is not None
-            else self.composition(params=params, electron_acceptor_cod=electron_acceptor_cod)
-        )
-        if not comp:
-            raise ValueError(
-                f"model '{self.name}' has no composition metadata to check "
-                f"against: declare a `composition:` per species in the YAML, or "
-                f"pass an explicit composition=..."
-            )
-        from aquakin.utils.balance import check_conservation as _check
+        from aquakin.core import introspect
 
-        return _check(self, comp, tol=tol, params=params, quantities=quantities)
+        return introspect.check_conservation(
+            self,
+            tol=tol,
+            params=params,
+            quantities=quantities,
+            composition=composition,
+            electron_acceptor_cod=electron_acceptor_cod,
+        )
 
     def check_nitrogen(
         self,
@@ -1022,16 +974,11 @@ class CompiledModel:
         for both nitrification (no nitrate consumed) and denitrification. Uses the
         model's :meth:`composition` table unless ``composition`` is passed.
         """
-        comp = composition if composition is not None else self.composition(params=params)
-        if not comp:
-            raise ValueError(
-                f"model '{self.name}' has no composition metadata to check "
-                f"against: declare a `composition:` per species in the YAML, or "
-                f"pass an explicit composition=..."
-            )
-        from aquakin.utils.balance import check_nitrogen as _check
+        from aquakin.core import introspect
 
-        return _check(self, comp, tol=tol, params=params, nitrate=nitrate, n_key=n_key)
+        return introspect.check_nitrogen(
+            self, tol=tol, params=params, composition=composition, nitrate=nitrate, n_key=n_key
+        )
 
 
 # --- compile_model stages --------------------------------------------
