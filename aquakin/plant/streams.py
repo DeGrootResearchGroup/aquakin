@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Mapping
 
 import jax.numpy as jnp
 
-from aquakin.integrate._common import _HasNamedSpecies
+from aquakin.integrate._common import PlottableSolutionMixin, _HasNamedSpecies
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -162,7 +162,7 @@ def _flow_weighted_scalar(carriers) -> "jnp.ndarray":
 
 
 @dataclass(frozen=True)
-class StreamSeries(_HasNamedSpecies):
+class StreamSeries(_HasNamedSpecies, PlottableSolutionMixin):
     """A stream's flow and concentration trajectory over time.
 
     Returned by :meth:`Plant.stream`, which reconstructs a named output stream

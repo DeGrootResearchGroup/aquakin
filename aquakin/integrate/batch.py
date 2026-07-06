@@ -13,8 +13,10 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
     DifferentiationConfig,
+    ExportableSolutionMixin,
     GradientCheckMixin,
     IntegratorConfig,
+    PlottableSolutionMixin,
     _HasNamedSpecies,
     cached_jitted_solver,
     friendly_solve_errors,
@@ -31,7 +33,7 @@ from aquakin.integrate.events import Event, solve_with_events
 
 
 @dataclass
-class BatchSolution(_HasNamedSpecies):
+class BatchSolution(_HasNamedSpecies, PlottableSolutionMixin, ExportableSolutionMixin):
     """
     Solution returned by :meth:`BatchReactor.solve`.
 

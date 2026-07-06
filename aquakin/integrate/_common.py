@@ -570,10 +570,17 @@ def validate_t_eval(t_eval_arr: jnp.ndarray, t0: float, t1: float) -> None:
 
 
 class _HasNamedSpecies:
-    """Mixin: provides ``C_named`` given a ``.C`` array and ``.model``.
+    """Mixin: the pure species-by-name accessor over a ``.C`` array and ``.model``.
 
-    Solution dataclasses inherit from this to share the species-by-name
-    accessor without duplicating the implementation.
+    Solution dataclasses inherit from this to share the species-by-name accessor
+    (``C_named`` / ``C_named_many`` / ``final_named`` / ``final`` / ``units_named``
+    / ``time_unit``) plus the independent-axis description (``_table_index`` /
+    ``_independent_axis_label``) that the presentation mixins build on. The two
+    presentation concerns are **separate mixins** -- :class:`PlottableSolutionMixin`
+    (matplotlib) and :class:`ExportableSolutionMixin` (pandas / CSV) -- composed
+    alongside this one, so a change to the plotting API or the CSV schema (and
+    their optional dependencies) never touches the core numeric accessor every
+    reactor depends on.
     """
 
     C: jnp.ndarray  # set by the dataclass subclass
@@ -647,6 +654,17 @@ class _HasNamedSpecies:
         unit = self.time_unit
         return f"time [{unit}]" if unit else "time"
 
+
+class PlottableSolutionMixin:
+    """Mixin: matplotlib rendering of a solution's species trajectories.
+
+    Composed onto a solution dataclass **alongside** :class:`_HasNamedSpecies`,
+    whose ``C_named`` / ``units_named`` accessors and ``_table_index`` /
+    ``_independent_axis_label`` it reads. Kept separate from the pure accessor so
+    a change to the plotting API does not touch the numeric ``C_named`` every
+    reactor depends on, and so the optional matplotlib dependency stays isolated.
+    """
+
     def plot(self, species=None, *, ax=None, **kwargs):
         """Plot one or more species against the independent axis (time, or axial
         position for a PFR).
@@ -700,6 +718,16 @@ class _HasNamedSpecies:
             ax.set_ylabel("concentration")
             ax.legend()
         return ax
+
+
+class ExportableSolutionMixin:
+    """Mixin: pandas / CSV export of a solution's species trajectories.
+
+    Composed onto a solution dataclass **alongside** :class:`_HasNamedSpecies`,
+    whose ``C`` / ``model`` / ``_table_index`` it reads. Kept separate from the
+    pure accessor so a change to the CSV schema or the optional pandas dependency
+    does not touch the core ``C_named`` accessor.
+    """
 
     def to_dataframe(self, *, units_in_columns: bool = False):
         """Return the solution as a pandas ``DataFrame``.

@@ -56,8 +56,10 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
     DifferentiationConfig,
+    ExportableSolutionMixin,
     GradientCheckMixin,
     IntegratorConfig,
+    PlottableSolutionMixin,
     _HasNamedSpecies,
     _run_diffeqsolve,
     friendly_solve_errors,
@@ -68,7 +70,7 @@ from aquakin.integrate._common import (
 
 
 @dataclass
-class BiofilmSolution(_HasNamedSpecies):
+class BiofilmSolution(_HasNamedSpecies, PlottableSolutionMixin, ExportableSolutionMixin):
     """Solution returned by :meth:`BiofilmReactor.solve`.
 
     Attributes

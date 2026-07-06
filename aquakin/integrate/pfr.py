@@ -13,8 +13,10 @@ from aquakin.core.conditions import SpatialConditions
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
     DifferentiationConfig,
+    ExportableSolutionMixin,
     GradientCheckMixin,
     IntegratorConfig,
+    PlottableSolutionMixin,
     _HasNamedSpecies,
     _interp_fields_to_scalar,
     cached_jitted_solver,
@@ -28,7 +30,7 @@ from aquakin.integrate._common import (
 
 
 @dataclass
-class PFRSolution(_HasNamedSpecies):
+class PFRSolution(_HasNamedSpecies, PlottableSolutionMixin, ExportableSolutionMixin):
     """
     Solution returned by :meth:`PlugFlowReactor.solve`.
 

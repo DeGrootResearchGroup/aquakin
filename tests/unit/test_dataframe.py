@@ -20,6 +20,34 @@ def net(simple_model):
     return simple_model
 
 
+def test_solution_concerns_are_separate_mixins(net):
+    """The accessor, plotting and export concerns live in three distinct mixins;
+    the pure accessor no longer owns ``plot`` / ``to_dataframe`` / ``to_csv``."""
+    from aquakin.integrate._common import (
+        ExportableSolutionMixin,
+        PlottableSolutionMixin,
+        _HasNamedSpecies,
+    )
+
+    # The pure accessor keeps only the numeric / axis surface.
+    assert hasattr(_HasNamedSpecies, "C_named")
+    for presentation in ("plot", "to_dataframe", "to_csv"):
+        assert presentation not in vars(_HasNamedSpecies)
+    assert "plot" in vars(PlottableSolutionMixin)
+    assert {"to_dataframe", "to_csv"} <= set(vars(ExportableSolutionMixin))
+
+    # A reactor solution composes all three; the methods still resolve.
+    sol = BatchSolution(t=jnp.array([0.0]), C=jnp.array([[1.0, 2.0]]), model=net)
+    assert isinstance(sol, _HasNamedSpecies)
+    assert isinstance(sol, PlottableSolutionMixin)
+    assert isinstance(sol, ExportableSolutionMixin)
+    assert callable(sol.plot) and callable(sol.to_dataframe) and callable(sol.C_named)
+
+    # StreamSeries shares the accessor + plotting but supplies its own export.
+    assert issubclass(StreamSeries, PlottableSolutionMixin)
+    assert "to_dataframe" in vars(StreamSeries)
+
+
 def test_batch_to_dataframe_basic(net):
     t = jnp.array([0.0, 1.0, 2.0])
     C = jnp.array([[1.0, 0.0], [0.5, 0.5], [0.25, 0.75]])
