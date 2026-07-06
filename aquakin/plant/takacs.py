@@ -448,6 +448,76 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         layer_volume = self.area * self.height / self.n_layers
         return jnp.sum(tss_per_layer) * layer_volume
 
+    def component_inventory(self, state, content, params):
+        """Canonical-component inventory held in the settler blanket
+        (``{component: grams}``).
+
+        Implements the shared stateful-unit inventory contract consumed by
+        :func:`aquakin.plant.balance.mass_balance`, so the balance never has to
+        know this unit's layered state layout. The blanket is summed over the
+        layers at the per-layer volume (``area × height / n_layers``):
+
+        - In ``per_species`` mode the particulate head block is
+          ``(n_layers, n_part)`` and each species' content is summed directly.
+        - In ``lumped_tss`` mode the head block is one TSS value per layer with
+          no per-species split (the lumped model scales the outlet particulates
+          from the feed), so the stored TSS is distributed over the particulate
+          species by the model-default solids composition to recover the
+          per-component content per unit TSS -- exact for COD (the
+          composition-independent factor ratio), the default solids composition
+          for N/P (a small inventory term).
+
+        With ``soluble_holdup`` the soluble tail block ``(n_layers, n_sol)``
+        adds its own convective-only inventory (the liquid holdup), same layout
+        in both modes.
+
+        Parameters
+        ----------
+        state : array
+            The settler's flat state vector.
+        content : dict of str to ndarray
+            ``{component: (n_species,) canonical content}`` for this model.
+        params : jnp.ndarray
+            This unit's parameter vector (unused; part of the shared contract).
+
+        Returns
+        -------
+        dict of str to float
+            ``{component: grams}`` held in the blanket (plus the soluble holdup
+            when enabled).
+        """
+        import numpy as np
+
+        layer_vol = float(self.area) * float(self.height) / int(self.n_layers)
+        sv = np.asarray(state)
+        pb = int(self._part_block_size)
+        out = {}
+        if self.composition_mode == "lumped_tss":
+            solids_mass = layer_vol * float(np.sum(sv[:pb]))  # total g TSS held
+            defaults = np.asarray(self.model.default_concentrations())
+            frac = np.asarray([float(defaults[i]) for i in self._part_indices])
+            factors = np.asarray(self._part_tss_factors)
+            tss_per_unit = float(np.sum(frac * factors))
+            for comp, vec in content.items():
+                part_content = np.asarray([vec[i] for i in self._part_indices])
+                per_tss = (
+                    float(np.sum(frac * part_content)) / tss_per_unit if tss_per_unit > 0 else 0.0
+                )
+                out[comp] = solids_mass * per_tss
+        else:
+            prof = sv[:pb].reshape(int(self.n_layers), self._n_part)
+            for comp, vec in content.items():
+                part_content = np.asarray([vec[i] for i in self._part_indices])
+                out[comp] = layer_vol * float(np.sum(prof * part_content[None, :]))
+        if self.soluble_holdup:
+            sol = sv[pb:].reshape(int(self.n_layers), self._n_sol)
+            for comp, vec in content.items():
+                sol_content = np.asarray([vec[i] for i in self._soluble_indices])
+                out[comp] = out.get(comp, 0.0) + layer_vol * float(
+                    np.sum(sol * sol_content[None, :])
+                )
+        return out
+
     def _tss(self, layer_C: jnp.ndarray) -> jnp.ndarray:
         """Total settleable solids (g/m³) in a layer from per-species
         particulate concentrations."""

@@ -145,6 +145,68 @@ class ADM1DigesterUnit(CouplingAware):
             return jnp.reshape(self._condition_arrays["pH"], ())
         return fn(state, params, self._condition_arrays, 0)["pH"]
 
+    def _state_volume_vector(self, params: jnp.ndarray):
+        """Per-species holdup volume (m³): the liquid volume for every state,
+        except the three gas-headspace states, which live in the headspace
+        volume ``V_gas``.
+
+        This is the digester's declaration of *where each state lives* — the
+        single source of truth used by both the results-level mass-balance
+        inventory and its reaction-production integral, so neither has to know
+        the ADM1 gas-headspace layout.
+
+        Parameters
+        ----------
+        params : jnp.ndarray
+            This unit's parameter vector (to read ``V_gas``).
+
+        Returns
+        -------
+        numpy.ndarray
+            Per-species volume vector, shape ``(n_species,)``.
+        """
+        import numpy as np
+
+        V = float(self.volume)
+        vol = np.full(self.model.n_species, V)
+        idx = self.model.param_index.get("V_gas")
+        v_gas = float(params[idx]) if idx is not None else V
+        for sp in self.gas_species:
+            j = self.model.species_index.get(sp)
+            if j is not None:
+                vol[j] = v_gas
+        return vol
+
+    def component_inventory(self, state, content, params):
+        """Canonical-component inventory held in the digester (``{component:
+        grams}``).
+
+        Each liquid state is held at the liquid volume and each gas-headspace
+        state at ``V_gas`` (via :meth:`_state_volume_vector`), so the inventory
+        is ``Σ_species (C·volume)·content`` per component. Implements the shared
+        stateful-unit inventory contract consumed by
+        :func:`aquakin.plant.balance.mass_balance`.
+
+        Parameters
+        ----------
+        state : array
+            The digester's flat state vector, shape ``(n_species,)``.
+        content : dict of str to ndarray
+            ``{component: (n_species,) canonical content}`` for this model.
+        params : jnp.ndarray
+            This unit's parameter vector (to read ``V_gas``).
+
+        Returns
+        -------
+        dict of str to float
+            ``{component: grams}`` held in the digester.
+        """
+        import numpy as np
+
+        sv = np.asarray(state)
+        vol_vec = self._state_volume_vector(params)
+        return {comp: float(np.dot(sv * vol_vec, vec)) for comp, vec in content.items()}
+
     def compute_outputs(
         self,
         t: jnp.ndarray,

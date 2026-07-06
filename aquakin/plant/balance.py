@@ -134,15 +134,24 @@ class MassBalance:
 def _unit_inventory(plant, unit_name, state_vec, content_by_model, params):
     """Component inventory held in one unit (a ``{component: grams}`` dict).
 
-    Handles every shipped unit type: a concentration-vector unit (CSTR /
-    primary clarifier / digester) holds ``volume × Σ C·content``; the digester
-    weights its three gas-headspace states by the headspace volume ``V_gas``; a
-    sequencing batch reactor carries ``[C..., V, <settling state>]`` (volume at
-    ``n_species``, the trailing settling state massless); a membrane bioreactor
-    carries ``[C..., R_f]`` at its fixed ``volume`` (the trailing fouling
-    resistance is massless); a storage tank carries its liquid volume as the last
-    state entry; the layered Takács settler sums its particulate blanket over the
-    layers; stateless units hold nothing.
+    Dispatches on the unit's own inventory contract, never on its private state
+    layout:
+
+    - a unit that declares ``component_inventory(state, content, params)`` (the
+      layered Takács settler summing its blanket over layers, the ADM1 digester
+      weighting its three gas-headspace states by ``V_gas``) returns its own
+      inventory;
+    - a unit holding a single well-mixed liquid volume declares that volume via
+      ``liquid_volume(state)`` (StorageTank / MBR / SBR, whose states are
+      ``[C..., one-or-more scalars]``), so the inventory is ``V·Σ C·content``
+      over the concentration head block;
+    - a plain concentration-vector unit at its fixed ``volume`` (CSTR / primary
+      clarifier) holds ``volume·Σ C·content``;
+    - anything else -- a stateless unit, or a non-concentration state such as an
+      attached-growth biofilm -- holds nothing.
+
+    A unit with a novel state representation participates by implementing the
+    ``component_inventory`` contract, not by editing this helper.
     """
     unit = plant.units[unit_name]
     net = getattr(unit, "model", None)
@@ -150,56 +159,11 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_model, params):
         return {}
     content = content_by_model[net.name]  # {component: (n_species,) array}
 
-    # Layered Takács settler: inventory is the blanket summed over layers at the
-    # per-layer volume. In ``per_species`` mode the particulate head block is
-    # (n_layers, n_part) and each species' content is summed directly. In
-    # ``lumped_tss`` mode the head block is one TSS value per layer with no
-    # per-species split (the lumped model scales the outlet particulates from the
-    # feed), so the stored TSS is distributed over the particulate species by the
-    # model-default solids composition to recover the per-component content per
-    # unit TSS -- exact for COD (the composition-independent 1/TSS-factor ratio),
-    # the default solids composition for N/P (a small inventory term). With
-    # soluble_holdup the soluble tail block (n_layers, n_sol) adds its own
-    # convective-only inventory (the liquid holdup), same layout in both modes.
-    if hasattr(unit, "_part_indices") and hasattr(unit, "n_layers"):
-        layer_vol = float(unit.area) * float(unit.height) / int(unit.n_layers)
-        sv = np.asarray(state_vec)
-        pb = int(unit._part_block_size)
-        out = {}
-        if getattr(unit, "composition_mode", "per_species") == "lumped_tss":
-            solids_mass = layer_vol * float(np.sum(sv[:pb]))  # total g TSS held
-            defaults = np.asarray(unit.model.default_concentrations())
-            frac = np.asarray([float(defaults[i]) for i in unit._part_indices])
-            factors = np.asarray(unit._part_tss_factors)
-            tss_per_unit = float(np.sum(frac * factors))
-            for comp, vec in content.items():
-                part_content = np.asarray([vec[i] for i in unit._part_indices])
-                per_tss = (
-                    float(np.sum(frac * part_content)) / tss_per_unit if tss_per_unit > 0 else 0.0
-                )
-                out[comp] = solids_mass * per_tss
-        else:
-            prof = sv[:pb].reshape(int(unit.n_layers), unit._n_part)
-            for comp, vec in content.items():
-                part_content = np.asarray([vec[i] for i in unit._part_indices])
-                out[comp] = layer_vol * float(np.sum(prof * part_content[None, :]))
-        if getattr(unit, "soluble_holdup", False):
-            sol = sv[pb:].reshape(int(unit.n_layers), unit._n_sol)
-            for comp, vec in content.items():
-                sol_content = np.asarray([vec[i] for i in unit._soluble_indices])
-                out[comp] = out.get(comp, 0.0) + layer_vol * float(
-                    np.sum(sol * sol_content[None, :])
-                )
-        return out
+    inventory = getattr(unit, "component_inventory", None)
+    if inventory is not None:
+        return inventory(state_vec, content, plant._params_for_unit(unit_name, params))
 
     sv = np.asarray(state_vec)
-    # Units with a single well-mixed liquid volume (StorageTank, MBR, SBR --
-    # whose states are all [C..., one-or-more scalars]) declare that volume
-    # explicitly via ``liquid_volume(state)``, so the inventory is ``V*C`` with the
-    # concentration head block. This replaces the previous fragile hasattr/state-
-    # size dispatch (whose MBR-before-storage ordering existed only because both
-    # are [C.., scalar]); a future such unit just implements the contract instead
-    # of risking silent misclassification.
     if hasattr(unit, "liquid_volume"):
         V = float(unit.liquid_volume(state_vec))
         C = sv[: net.n_species]
@@ -210,16 +174,7 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_model, params):
     volume = float(getattr(unit, "volume", 0.0))
     if volume <= 0.0:
         return {}
-
-    # Digester: liquid states at V_liq (= unit.volume), the gas headspace at V_gas.
-    vol_vec = np.full(net.n_species, volume)
-    if "S_gas_ch4" in net.species_index:
-        p_unit = plant._params_for_unit(unit_name, params)
-        v_gas = float(p_unit[net.param_index["V_gas"]]) if "V_gas" in net.param_index else volume
-        for sp in ("S_gas_h2", "S_gas_ch4", "S_gas_co2"):
-            if sp in net.species_index:
-                vol_vec[net.species_index[sp]] = v_gas
-    return {comp: float(np.dot(sv * vol_vec, vec)) for comp, vec in content.items()}
+    return {comp: volume * float(np.dot(sv, vec)) for comp, vec in content.items()}
 
 
 def _flux(Q, C, content_vec):
@@ -387,19 +342,14 @@ def mass_balance(
 
 def _reaction_volume(plant, unit_name, params):
     """Per-species volume vector (m³) for a reactive unit's reaction term: the
-    liquid volume for every state, except an ADM1 digester's three gas-headspace
-    states, which live in the headspace volume ``V_gas``."""
+    liquid volume for every state, except a unit that holds some states in a
+    distinct volume (an ADM1 digester's three gas-headspace states, at ``V_gas``),
+    which declares its per-species volumes via ``_state_volume_vector``."""
     unit = plant.units[unit_name]
-    net = unit.model
-    V = float(unit.volume)
-    vol = np.full(net.n_species, V)
-    if "S_gas_ch4" in net.species_index:
-        p_unit = plant._params_for_unit(unit_name, params)
-        v_gas = float(p_unit[net.param_index["V_gas"]]) if "V_gas" in net.param_index else V
-        for sp in ("S_gas_h2", "S_gas_ch4", "S_gas_co2"):
-            if sp in net.species_index:
-                vol[net.species_index[sp]] = v_gas
-    return vol
+    vol_fn = getattr(unit, "_state_volume_vector", None)
+    if vol_fn is not None:
+        return vol_fn(plant._params_for_unit(unit_name, params))
+    return np.full(unit.model.n_species, float(unit.volume))
 
 
 def _reaction_term(plant, unit_name, C, params):
