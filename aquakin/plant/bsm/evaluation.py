@@ -423,7 +423,7 @@ def _feed_temperature_C(plant, solution, params_full, default_C):
     and only a genuinely temperature-carrying run pays the per-step sweep."""
     final = plant.outputs_at(solution.t[-1], solution.state[-1], params_full)
     feed = final.get(("sludge_mix", "out"))
-    if feed is None or feed.T is None:
+    if feed is None or feed.scalars.get("T") is None:
         return float(default_C)
     # T is structurally present (a temperature-carrying influent leaves every
     # stream with a T), so vmap the digester-feed temperature over all saved
@@ -433,7 +433,7 @@ def _feed_temperature_C(plant, solution, params_full, default_C):
     def _feed_T(t_i, state_row):
         states = plant._split_state(state_row)
         outs, _ = plant._resolve_streams(t_i, states, params_full)
-        return outs[("sludge_mix", "out")].T
+        return outs[("sludge_mix", "out")].scalars["T"]
 
     return jax.vmap(_feed_T)(ts, jnp.asarray(solution.state)) - 273.15  # K -> C
 

@@ -1,11 +1,13 @@
 """Disinfection unit ops: UV dose-response and chlorine CT / log-removal (#280).
 
 The UV reactor and the chlorine contact tank pass the process stream through and
-reduce the indicator-organism density carried on the stream (``Stream.org``, else
-a design ``inlet_density``). These checks pin the credit physics against its
+reduce the indicator-organism density carried on the stream (``scalars["org"]``,
+else a design ``inlet_density``). These checks pin the credit physics against its
 closed form, the units' pass-through + log-removal, the indicator transport
 through the flowsheet, and AD-cleanliness.
 """
+
+from dataclasses import replace
 
 import jax
 import jax.numpy as jnp
@@ -25,7 +27,7 @@ from aquakin import (
 )
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.plant import Plant
-from aquakin.plant.streams import Stream, mixed_organism
+from aquakin.plant.streams import Stream, mixed_scalars
 
 
 @pytest.fixture(scope="module")
@@ -70,18 +72,19 @@ def test_t10_from_rtd_uses_percentile():
 def test_stream_org_roundtrip_and_mixing(asm1):
     C = asm1.default_concentrations()
     s = Stream(Q=jnp.asarray(10.0), C=C, model=asm1)
-    assert s.org is None
-    assert float(s.with_org(jnp.asarray(5.0)).org) == 5.0
-    assert s.with_C(C).org is None                            # preserved (was None)
+    assert s.scalars.get("org") is None
+    assert float(replace(s, scalars={**s.scalars, "org": jnp.asarray(5.0)}).scalars["org"]) == 5.0
+    assert s.with_C(C).scalars.get("org") is None             # preserved (was absent)
     # flow-weighted mix of two indicator-carrying inlets
-    a = Stream(Q=jnp.asarray(10.0), C=C, model=asm1, org=jnp.asarray(100.0))
-    b = Stream(Q=jnp.asarray(30.0), C=C, model=asm1, org=jnp.asarray(200.0))
-    org = mixed_organism({"a": a, "b": b}, ["a", "b"])
+    a = Stream(Q=jnp.asarray(10.0), C=C, model=asm1, scalars={"org": jnp.asarray(100.0)})
+    b = Stream(Q=jnp.asarray(30.0), C=C, model=asm1, scalars={"org": jnp.asarray(200.0)})
+    org = mixed_scalars({"a": a, "b": b}, ["a", "b"]).get("org")
     assert float(org) == pytest.approx((10 * 100 + 30 * 200) / 40)
     # an org-agnostic inlet is ignored, not allowed to poison the mix
     n = Stream(Q=jnp.asarray(5.0), C=C, model=asm1)
-    assert float(mixed_organism({"a": a, "n": n}, ["a", "n"])) == pytest.approx(100.0)
-    assert mixed_organism({"n": n}, ["n"]) is None            # fully agnostic -> None
+    assert float(mixed_scalars({"a": a, "n": n}, ["a", "n"])["org"]) == pytest.approx(100.0)
+    # fully agnostic -> the scalar is omitted from the map entirely
+    assert "org" not in mixed_scalars({"n": n}, ["n"])
 
 
 # --- UV unit ----------------------------------------------------------------
@@ -90,20 +93,20 @@ def test_uv_unit_reduces_indicator_and_passes_process_through(asm1):
     uv = UVUnit("uv", asm1, volume=0.1, intensity=3.5, d10=6.0, inlet_density=1e6)
     C = asm1.default_concentrations()
     flow = jnp.asarray(1000.0)
-    s_in = Stream(Q=flow, C=C, model=asm1, T=jnp.asarray(293.0),
-                  org=jnp.asarray(1e6))
+    s_in = Stream(Q=flow, C=C, model=asm1,
+                  scalars={"T": jnp.asarray(293.0), "org": jnp.asarray(1e6)})
     out = uv.compute_outputs(0.0, uv.initial_state(), {"in": s_in},
                              asm1.default_parameters())["out"]
     log = float(uv.log_inactivation(flow))
-    assert float(out.org) == pytest.approx(1e6 * 10 ** (-log), rel=1e-9)
+    assert float(out.scalars["org"]) == pytest.approx(1e6 * 10 ** (-log), rel=1e-9)
     assert bool(jnp.allclose(out.C, C))                       # process stream unchanged
-    assert float(out.Q) == 1000.0 and float(out.T) == 293.0   # Q / T pass through
+    assert float(out.Q) == 1000.0 and float(out.scalars["T"]) == 293.0  # Q / T pass through
     assert uv.state_size == 0
     # falls back to inlet_density when the inlet carries no indicator
     out2 = uv.compute_outputs(0.0, uv.initial_state(),
                               {"in": Stream(Q=flow, C=C, model=asm1)},
                               asm1.default_parameters())["out"]
-    assert float(out2.org) == pytest.approx(1e6 * 10 ** (-log), rel=1e-9)
+    assert float(out2.scalars["org"]) == pytest.approx(1e6 * 10 ** (-log), rel=1e-9)
 
 
 # --- chlorine contact unit --------------------------------------------------

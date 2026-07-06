@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
-from aquakin.plant.streams import Stream, mixed_organism, mixed_temperature
+from aquakin.plant.streams import Stream, mixed_scalars
 from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -68,13 +68,13 @@ class MixerUnit(StatelessUnit):
             Q_total = Q_total + s.Q
             mass_total = mass_total + s.Q * s.C
         C_out = mass_total / (Q_total + _EPS_Q)
-        # Heat balance: the outlet temperature is the flow-weighted inlet
-        # temperature (over the inlets that carry one; a temperature-agnostic or
-        # zero-flow-seed inlet is ignored rather than poisoning the mix).
-        T_out = mixed_temperature(inputs, self.input_port_names)
-        # Indicator organism (disinfection): the same flow-weighted balance.
-        org_out = mixed_organism(inputs, self.input_port_names)
-        return {"out": Stream(Q=Q_total, C=C_out, model=self.model, T=T_out, org=org_out)}
+        # Side-channel scalars: the outlet temperature is the flow-weighted inlet
+        # temperature (a heat balance) and the indicator density the same
+        # flow-weighted mass balance -- both from the one shared combiner, over the
+        # inlets that carry each (an agnostic or zero-flow-seed inlet is ignored
+        # rather than poisoning the mix).
+        scalars_out = mixed_scalars(inputs, self.input_port_names)
+        return {"out": Stream(Q=Q_total, C=C_out, model=self.model, scalars=scalars_out)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output port flows from input port flows (the linear flow rule).
@@ -234,23 +234,26 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
     ) -> dict[str, Stream]:
         s_in = inputs["in"]
         outputs: dict[str, Stream] = {}
-        # A passive splitter preserves the inlet temperature on every outlet.
+        # A passive splitter preserves the inlet's side-channel scalars
+        # (temperature, indicator density, ...) unchanged on every outlet.
         if self._mode == "ratio":
             for port, ratio in self.output_port_ratios.items():
                 outputs[port] = Stream(
                     Q=s_in.Q * jnp.asarray(ratio),
                     C=s_in.C,
                     model=self.model,
-                    T=s_in.T,
+                    scalars=s_in.scalars,
                 )
             return outputs
         if self._mode == "threshold":
             # Inlet flow above the limit is diverted; the rest passes through.
             limit = self._setpoints["threshold"].resolve(self._flow_params(params))
             above = jnp.maximum(s_in.Q - limit, 0.0)
-            outputs[self.threshold_port] = Stream(Q=above, C=s_in.C, model=self.model, T=s_in.T)
+            outputs[self.threshold_port] = Stream(
+                Q=above, C=s_in.C, model=self.model, scalars=s_in.scalars
+            )
             outputs[self.remainder_port] = Stream(
-                Q=jnp.minimum(s_in.Q, limit), C=s_in.C, model=self.model, T=s_in.T
+                Q=jnp.minimum(s_in.Q, limit), C=s_in.C, model=self.model, scalars=s_in.scalars
             )
             return outputs
         # Flow mode: fixed setpoints, remainder takes what is left. When the feed
@@ -270,12 +273,12 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
             total_set = total_set + q
         scale = jnp.minimum(1.0, s_in.Q / jnp.maximum(total_set, 1e-12))
         for port, q in setpts.items():
-            outputs[port] = Stream(Q=q * scale, C=s_in.C, model=self.model, T=s_in.T)
+            outputs[port] = Stream(Q=q * scale, C=s_in.C, model=self.model, scalars=s_in.scalars)
         outputs[self.remainder_port] = Stream(
             Q=jnp.maximum(s_in.Q - total_set, 0.0),
             C=s_in.C,
             model=self.model,
-            T=s_in.T,
+            scalars=s_in.scalars,
         )
         return outputs
 

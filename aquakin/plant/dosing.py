@@ -232,10 +232,10 @@ class DosingUnit:
         q_out = s_in.Q + q_dose
         mass = s_in.Q * s_in.C + q_dose * self.reagent.composition
         c_out = mass / (q_out + _EPS_Q)
-        # The reagent carries no temperature of its own; the dosed stream keeps
-        # the through-stream's temperature (a small ambient dose into a large flow
-        # does not move it appreciably).
-        return {self.output_port: Stream(Q=q_out, C=c_out, model=self.model, T=s_in.T)}
+        # The reagent carries no side-channels of its own; the dosed stream keeps
+        # the through-stream's scalars (temperature, ...): a small ambient dose into
+        # a large flow does not move the temperature appreciably.
+        return {self.output_port: Stream(Q=q_out, C=c_out, model=self.model, scalars=s_in.scalars)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output flow = inflow + dose flow. For a feedback dose the actual flow

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Mapping
 
 import jax.numpy as jnp
 
@@ -33,76 +33,92 @@ class Stream:
         is ``model.species``.
     model : CompiledModel
         The kinetic model whose species ordering applies to ``C``.
-    T : jnp.ndarray, optional
-        Stream temperature (scalar, Kelvin). Carried algebraically through the
-        flowsheet: mixers flow-weight it (a heat balance) and pass-through units
-        propagate it unchanged, so a reactor can read its inlet temperature and
-        feed it to temperature-dependent kinetics. ``None`` (the default) means
-        the stream is temperature-agnostic; reactors then fall back to their
-        static condition, so existing plants are unaffected. ``None``-ness is a
-        static structural property (consistent across RHS calls), so it is
-        jit-safe.
-    org : jnp.ndarray, optional
-        Indicator-organism density (scalar, e.g. CFU/100 mL) for disinfection.
-        Carried algebraically through the flowsheet exactly like ``T``: mixers
-        flow-weight it and pass-through units propagate it unchanged, and a
-        disinfection unit reduces it by the computed log-inactivation. ``None``
-        (the default) means the stream tracks no indicator; a disinfection unit
-        then falls back to its design ``inlet_density``. ``None``-ness is a static
-        structural property, so it is jit-safe.
+    scalars : Mapping[str, jnp.ndarray]
+        Per-stream **side-channel** scalars carried algebraically through the
+        flowsheet alongside ``Q``/``C`` -- a single open-ended map rather than a
+        fixed field per quantity, so a new carried scalar needs no new field, no
+        ``with_*`` copier and no ``mixed_*`` combiner. Multi-inlet units combine
+        them with the one shared :func:`mixed_scalars`; pass-through units forward
+        them unchanged (``scalars=s_in.scalars``). A scalar **absent from the map**
+        means the stream does not carry it (an agnostic feed / a zero-flow recycle
+        seed); its presence is a static structural property (consistent across RHS
+        calls), so callers stay jit-safe. The two used today are:
+
+        * ``"T"`` -- stream temperature (K); reactors read their inlet temperature
+          from it for temperature-dependent kinetics and fall back to their static
+          condition when it is absent.
+        * ``"org"`` -- indicator-organism density (e.g. CFU/100 mL) for
+          disinfection; a disinfection unit reduces it by the computed
+          log-inactivation and falls back to its design ``inlet_density`` when it
+          is absent.
+
+        Read a scalar with ``stream.scalars.get(name)`` (``None`` if not carried);
+        build the map for a leaf stream with :func:`make_scalars`, which drops the
+        agnostic (``None``) entries.
     """
 
     Q: jnp.ndarray
     C: jnp.ndarray
     model: "CompiledModel"
-    T: "jnp.ndarray | None" = None
-    org: "jnp.ndarray | None" = None
+    scalars: "Mapping[str, jnp.ndarray]" = field(default_factory=dict)
 
     def mass_flow(self) -> jnp.ndarray:
         """Per-species mass flow rate ``Q * C``, shape ``(n_species,)``."""
         return self.Q * self.C
 
     def with_C(self, C: jnp.ndarray) -> "Stream":
-        """Return a new stream with the same Q/T/org/model but a new C vector."""
-        return Stream(Q=self.Q, C=C, model=self.model, T=self.T, org=self.org)
+        """Return a new stream with a new ``C`` vector, everything else (including
+        the side-channel ``scalars``) preserved."""
+        return replace(self, C=C)
 
     def with_Q(self, Q: jnp.ndarray) -> "Stream":
-        """Return a new stream with the same C/T/org/model but a new flow rate."""
-        return Stream(Q=Q, C=self.C, model=self.model, T=self.T, org=self.org)
+        """Return a new stream with a new flow rate, everything else (including the
+        side-channel ``scalars``) preserved."""
+        return replace(self, Q=Q)
 
-    def with_T(self, T: "jnp.ndarray | None") -> "Stream":
-        """Return a new stream with the same Q/C/org/model but a new temperature."""
-        return Stream(Q=self.Q, C=self.C, model=self.model, T=T, org=self.org)
 
-    def with_org(self, org: "jnp.ndarray | None") -> "Stream":
-        """Return a new stream with the same Q/C/T/model but a new indicator
-        density."""
-        return Stream(Q=self.Q, C=self.C, model=self.model, T=self.T, org=org)
+def make_scalars(**values) -> dict:
+    """Assemble a :attr:`Stream.scalars` map, dropping the agnostic (``None``) entries.
+
+    A leaf stream (an influent sample, a recycle seed) builds its side-channel map
+    from named quantities that may or may not be present -- e.g.
+    ``make_scalars(T=T_t)`` where ``T_t`` is ``None`` for a temperature-agnostic
+    feed. Absence, not a stored ``None``, is how :func:`mixed_scalars` tells a
+    stream does not carry a scalar, so ``None`` values are omitted rather than
+    stored. Not specific to any scalar name -- pass whichever the stream carries."""
+    return {k: v for k, v in values.items() if v is not None}
 
 
 _EPS_Q = 1e-12  # guard the flow-weighted division when total inflow is ~zero
 
+#: The side-channel scalars combined by default: temperature (a heat balance) and
+#: indicator-organism density (an indicator mass balance).
+_FIRST_CLASS_SCALARS = ("T", "org")
 
-def mixed_temperature(inputs: "dict[str, Stream]", names) -> "jnp.ndarray | None":
-    """Flow-weighted outlet temperature for a unit's inlet streams (a heat balance).
+
+def mixed_scalars(inputs: "dict[str, Stream]", names, keys=_FIRST_CLASS_SCALARS) -> dict:
+    """Flow-weighted outlet value for each side-channel scalar a unit's inlets carry.
 
     The single shared rule every multi-inlet unit (mixer, CSTR, clarifier,
-    digester) uses to combine inlet temperatures, so the convention cannot drift
-    between them.
+    digester) uses to combine inlet side-channel scalars -- temperature ``T`` (a
+    heat balance), indicator density ``org`` (a mass balance), and any future
+    scalar -- so the convention cannot drift between units or between scalars.
 
-    Only the inlets that actually carry a temperature (``Stream.T is not None``)
-    are combined; an inlet with ``T is None`` -- a temperature-agnostic feed, or a
-    zero-flow recycle seed -- is **ignored**, not allowed to poison the result.
-    (A single ``None`` inlet used to force the whole mix to ``None``; for a recycle
-    loop seeded with a temperature-agnostic zero-flow stream that disabled
-    temperature propagation around the entire loop.) Returns ``None`` only when
-    *no* inlet carries a temperature, i.e. a fully temperature-agnostic mix.
+    For each name in ``keys``, only the inlets that actually carry it
+    (``name in stream.scalars``) are combined; an inlet that does not -- a
+    temperature-agnostic feed, or a zero-flow recycle seed -- is **ignored**, not
+    allowed to poison the result. (A single agnostic inlet used to force the whole
+    mix to ``None``; for a recycle loop seeded with an agnostic zero-flow stream
+    that disabled propagation around the entire loop.) A scalar that **no** inlet
+    carries is omitted from the returned map entirely, so ``name in result`` is the
+    same static structural property the old per-scalar ``None`` return was (callers
+    stay jit-safe). The result drops straight into a downstream ``Stream``'s
+    ``scalars=``.
 
     Zero-flow-safe: the weighting divides by the carriers' total flow, but if that
-    is ~zero (every temperature-carrying inlet momentarily at zero flow) it falls
-    back to their plain mean instead of dividing by ~0, which would otherwise
-    collapse the temperature toward 0 K and feed a garbage value to any Arrhenius
-    correction downstream.
+    is ~zero (every carrier momentarily at zero flow) it falls back to their plain
+    mean instead of dividing by ~0, which would otherwise collapse a temperature
+    toward 0 K and feed a garbage value to any Arrhenius correction downstream.
 
     Parameters
     ----------
@@ -110,18 +126,22 @@ def mixed_temperature(inputs: "dict[str, Stream]", names) -> "jnp.ndarray | None
         The unit's inlet streams keyed by input-port name.
     names : iterable of str
         The input-port names to combine (the unit's ``input_port_names``).
+    keys : iterable of str, optional
+        The scalar names to combine (default: the first-class ``T`` and ``org``).
 
     Returns
     -------
-    jnp.ndarray or None
-        The flow-weighted temperature (scalar), or ``None`` if no inlet carries
-        one. ``None``-ness is a static structural property (it depends only on
-        which inlets carry a temperature), so callers stay jit-safe.
+    dict[str, jnp.ndarray]
+        The flow-weighted value of each combined scalar at least one inlet carries.
     """
-    carriers = [(inputs[n].Q, inputs[n].T) for n in names if inputs[n].T is not None]
-    if not carriers:
-        return None
-    return _flow_weighted_scalar(carriers)
+    out = {}
+    for key in keys:
+        carriers = [
+            (inputs[n].Q, inputs[n].scalars[key]) for n in names if key in inputs[n].scalars
+        ]
+        if carriers:
+            out[key] = _flow_weighted_scalar(carriers)
+    return out
 
 
 def _flow_weighted_scalar(carriers) -> "jnp.ndarray":
@@ -130,8 +150,8 @@ def _flow_weighted_scalar(carriers) -> "jnp.ndarray":
     ``carriers`` is a list of ``(Q, value)``. Divides the flow-weighted sum by the
     carriers' total flow, falling back to the plain mean when that total is ~zero
     (every carrier momentarily at zero flow) rather than dividing by ~0. The shared
-    kernel behind :func:`mixed_temperature` (a heat balance) and
-    :func:`mixed_organism` (an indicator mass balance)."""
+    kernel behind :func:`mixed_scalars` -- a heat balance for ``T``, an indicator
+    mass balance for ``org``."""
     Q_total = jnp.zeros(())
     weighted = jnp.zeros(())
     for q, v in carriers:
@@ -139,20 +159,6 @@ def _flow_weighted_scalar(carriers) -> "jnp.ndarray":
         weighted = weighted + q * v
     mean = sum(v for _, v in carriers) / len(carriers)
     return jnp.where(Q_total > _EPS_Q, weighted / (Q_total + _EPS_Q), mean)
-
-
-def mixed_organism(inputs: "dict[str, Stream]", names) -> "jnp.ndarray | None":
-    """Flow-weighted outlet indicator-organism density for a unit's inlet streams.
-
-    The indicator analogue of :func:`mixed_temperature`: a flow-weighted mass
-    balance over the inlets that carry an indicator density (``Stream.org is not
-    None``); an inlet with ``org is None`` is ignored, not allowed to poison the
-    mix. Returns ``None`` only when no inlet carries one (a fully indicator-agnostic
-    mix), which is a static structural property, so callers stay jit-safe."""
-    carriers = [(inputs[n].Q, inputs[n].org) for n in names if inputs[n].org is not None]
-    if not carriers:
-        return None
-    return _flow_weighted_scalar(carriers)
 
 
 @dataclass(frozen=True)

@@ -23,7 +23,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, make_scalars
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -168,7 +168,7 @@ class InfluentSeries:
         # axis) rather than a Python loop of n_species separate interp calls.
         C_t = jax.vmap(lambda col: jnp.interp(t, self.t, col), in_axes=1)(self.C)
         T_t = None if self.T is None else jnp.interp(t, self.t, self.T)
-        return Stream(Q=Q_t, C=C_t, model=self.model, T=T_t)
+        return Stream(Q=Q_t, C=C_t, model=self.model, scalars=make_scalars(T=T_t))
 
 
 def read_influent_csv(

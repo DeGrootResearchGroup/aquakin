@@ -153,8 +153,10 @@ class IdealThickener(StatelessUnit):
         Q_over = jnp.where(can, Q_in * (1.0 - Qu_factor), 0.0)
 
         return {
-            self.underflow_port: Stream(Q=Q_under, C=C_under, model=self.model, T=s_in.T),
-            self.overflow_port: Stream(Q=Q_over, C=C_over, model=self.model, T=s_in.T),
+            self.underflow_port: Stream(
+                Q=Q_under, C=C_under, model=self.model, scalars=s_in.scalars
+            ),
+            self.overflow_port: Stream(Q=Q_over, C=C_over, model=self.model, scalars=s_in.scalars),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:

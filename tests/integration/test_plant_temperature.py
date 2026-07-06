@@ -164,10 +164,10 @@ def test_temperature_propagates_around_auto_seeded_recycle(asm1):
     outs = plant.outputs_at(jnp.asarray(0.0), y0)
     # The mixer's outlet, the reactor's outlet, and the recycled split all carry
     # the influent temperature -- not None, and not collapsed.
-    assert outs[("mix", "out")].T is not None
-    assert float(outs[("mix", "out")].T) == pytest.approx(291.0, abs=1e-6)
-    assert float(outs[("tank", "out")].T) == pytest.approx(291.0, abs=1e-6)
-    assert float(outs[("split", "rec")].T) == pytest.approx(291.0, abs=1e-6)
+    assert outs[("mix", "out")].scalars.get("T") is not None
+    assert float(outs[("mix", "out")].scalars["T"]) == pytest.approx(291.0, abs=1e-6)
+    assert float(outs[("tank", "out")].scalars["T"]) == pytest.approx(291.0, abs=1e-6)
+    assert float(outs[("split", "rec")].scalars["T"]) == pytest.approx(291.0, abs=1e-6)
 
 
 def test_agnostic_influent_keeps_plant_temperature_agnostic(asm1):
@@ -186,8 +186,8 @@ def test_agnostic_influent_keeps_plant_temperature_agnostic(asm1):
     plant.connect("split.rec", "mix.rec")
 
     outs = plant.outputs_at(jnp.asarray(0.0), plant.initial_state())
-    assert outs[("mix", "out")].T is None
-    assert outs[("tank", "out")].T is None
+    assert outs[("mix", "out")].scalars.get("T") is None
+    assert outs[("tank", "out")].scalars.get("T") is None
 
 
 # ----- functional: temperature drives nitrification (slow) ----------------

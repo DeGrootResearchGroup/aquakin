@@ -52,10 +52,10 @@ def test_influent_constant_is_zero_based(asm1):
 def test_influent_carries_temperature(asm1):
     inf = asm1.influent({"SS": 400.0}, Q=2.0, T=288.15)
     s = inf.at(1.0)
-    assert s.T is not None
-    assert float(s.T) == pytest.approx(288.15)
+    assert s.scalars.get("T") is not None
+    assert float(s.scalars["T"]) == pytest.approx(288.15)
     # No T given -> temperature-agnostic.
-    assert asm1.influent(SS=400.0, Q=2.0).at(1.0).T is None
+    assert asm1.influent(SS=400.0, Q=2.0).at(1.0).scalars.get("T") is None
 
 
 def test_influent_series_constant_classmethod(asm1):
@@ -133,7 +133,7 @@ def test_load_bsm2_influent_carries_temperature_kelvin(asm1):
         assert 283.0 < float(inf.T.min()) < float(inf.T.max()) < 293.0
         # at(t) interpolates the temperature onto the returned stream.
         s = inf.at(jnp.asarray(7.0))
-        assert s.T is not None and 285.0 < float(s.T) < 291.0
+        assert s.scalars.get("T") is not None and 285.0 < float(s.scalars["T"]) < 291.0
 
 
 def test_load_bsm1_influent_has_no_temperature(asm1):

@@ -288,8 +288,9 @@ a `UVUnit` (dose = intensity × exposure × UVT-factor → log-linear inactivati
 and a `ChlorineContactUnit` (a chlorine residual that decays first-order; the CT
 credit `residual × T10` → log-removal, with `T10` from a baffling factor or a
 residence-time distribution). Both pass the process stream through and reduce the
-indicator-organism density carried on the stream (`Stream.org`, the disinfection
-analogue of the temperature scalar), so the reconstructed effluent reports it:
+indicator-organism density carried on the stream (the `"org"` entry of a stream's
+`scalars` side-channel map, the disinfection analogue of the temperature scalar),
+so the reconstructed effluent reports it:
 
 ```python
 p.add_unit(aquakin.ChlorineContactUnit("cl", net, volume=500.0, dose=5.0,

@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant.coupling import CouplingAware
-from aquakin.plant.streams import Stream, mixed_temperature
+from aquakin.plant.streams import Stream, mixed_scalars
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -216,13 +216,14 @@ class ADM1DigesterUnit(CouplingAware):
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         # Constant liquid volume: effluent flow equals the total inflow. The
-        # effluent temperature is the flow-weighted inlet temperature (a heat
-        # balance, matching every other multi-inlet unit via the shared helper).
+        # effluent carries the flow-weighted inlet side-channel scalars (the
+        # temperature is a heat balance, matching every other multi-inlet unit via
+        # the one shared combiner).
         Q_total = jnp.zeros(())
         for name in self.input_port_names:
             Q_total = Q_total + inputs[name].Q
-        T_in = mixed_temperature(inputs, self.input_port_names)
-        return {self.output_port: Stream(Q=Q_total, C=state, model=self.model, T=T_in)}
+        scalars_out = mixed_scalars(inputs, self.input_port_names)
+        return {self.output_port: Stream(Q=Q_total, C=state, model=self.model, scalars=scalars_out)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         Q_total = jnp.zeros(())
