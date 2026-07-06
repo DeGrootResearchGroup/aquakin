@@ -17,6 +17,19 @@ empty [Unreleased] section above it.
 The first public release (0.1.0) is being prepared. Entries below accumulate the
 notable changes it will contain.
 
+<!--
+Release note for 0.1.0: do NOT ship these entries verbatim, and do NOT backfill
+pre-release history. A changelog documents changes between releases; there is no
+prior release to diff against, so "Changed"/"Fixed" framing (e.g. the
+network->model rename, the sludge_metrics fix) is meaningless to a first-time
+user — nobody ran the earlier state. At release, collapse this section into a
+curated "Initial release" summary: an Added-oriented, high-level description of
+what the package does. The entries here are the raw material for that summary,
+not the final text. Granular per-change logging (Changed/Fixed/Deprecated/
+Removed) begins with the release after 0.1.0, relative to 0.1.0.
+-->
+
+
 ### Added
 
 - Plant-wide calibration: `plant.calibrate(...)` fits reaction-model parameters
