@@ -177,12 +177,29 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     underflow_port: str = "underflow"
 
     def __post_init__(self) -> None:
+        # Ordered: index resolution (validates species) feeds the geometry
+        # precompute, which reads the resolved indices; the settling-param
+        # unpack is independent and runs last.
+        self._validate()
+        self._resolve_species_indices()
+        self._precompute_geometry()
+        self._unpack_settling_params()
+
+    def _validate(self) -> None:
+        """Validate the configuration that does not depend on resolved indices."""
         if self.composition_mode not in ("per_species", "lumped_tss"):
             raise ValueError(
                 f"TakacsClarifier '{self.name}': composition_mode must be "
                 f"'per_species' or 'lumped_tss'; got {self.composition_mode!r}."
             )
-        # Validate species and resolve indices.
+        if self.feed_layer < 0 or self.feed_layer >= self.n_layers:
+            raise ValueError(f"feed_layer must be in [0, {self.n_layers}); got {self.feed_layer}")
+        validate_controlled_split(
+            f"TakacsClarifier '{self.name}'", self.overflow_Q, self.underflow_Q
+        )
+
+    def _resolve_species_indices(self) -> None:
+        """Resolve particulate / soluble species to model indices and TSS factors."""
         self._part_indices: list[int] = []
         self._part_tss_factors: list[float] = []
         for sp in self.particulate_species:
@@ -192,35 +209,17 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
                 )
             self._part_indices.append(self.model.species_index[sp])
             self._part_tss_factors.append(self.tss_factors.get(sp, 1.0))
-        n_part = len(self._part_indices)
-
-        # Per-layer geometry.
-        if self.feed_layer < 0 or self.feed_layer >= self.n_layers:
-            raise ValueError(f"feed_layer must be in [0, {self.n_layers}); got {self.feed_layer}")
-        validate_controlled_split(
-            f"TakacsClarifier '{self.name}'", self.overflow_Q, self.underflow_Q
-        )
-        # The controlled outflow is a differentiable flow setpoint -- but only
-        # when it is a constant; a *scheduled* setpoint (a PiecewiseConstant with
-        # ``.at(t)``) is left as the schedule (not a single parameter).
-        self._setpoints = {}
-        ctrl_name = "underflow_Q" if self.underflow_Q is not None else "overflow_Q"
-        ctrl_val = getattr(self, ctrl_name)
-        if ctrl_val is not None and not hasattr(ctrl_val, "at"):
-            self._setpoints[ctrl_name] = FlowSetpoint(float(ctrl_val), 0)
+        self._n_part = len(self._part_indices)
         # Soluble = everything not in particulate.
         self._soluble_indices = [
             i for i in range(self.model.n_species) if i not in self._part_indices
         ]
         self._n_sol = len(self._soluble_indices)
 
-        # The state vector is (n_layers, n_part) flattened into 1-D.
-        # Initial state: all zero (clean reactor at start).
-        self._n_part = n_part
-
-        # Precompute the constant index/factor arrays and per-layer geometric
-        # masks ONCE, so the per-RHS-call hot path does not rebuild them with
-        # ``jnp.asarray`` of a Python list / ``astype`` every step.
+    def _precompute_geometry(self) -> None:
+        """Precompute the constant index/factor arrays and per-layer geometric
+        masks ONCE, so the per-RHS-call hot path does not rebuild them with
+        ``jnp.asarray`` of a Python list / ``astype`` every step."""
         self._part_idx_arr = jnp.asarray(self._part_indices)
         self._sol_idx_arr = jnp.asarray(self._soluble_indices)
         self._factors_arr = jnp.asarray(self._part_tss_factors)
@@ -229,8 +228,17 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         self._is_above_feed = (layer_idx > self.feed_layer).astype(jnp.float64)
         self._is_feed = (layer_idx == self.feed_layer).astype(jnp.float64)
 
-        # Stash settling params as a closure to use in rhs without Python
-        # branching per call.
+    def _unpack_settling_params(self) -> None:
+        """Wire the controlled-outflow setpoint and unpack the settling params to
+        scalar attributes read by ``rhs`` without per-call Python branching."""
+        # The controlled outflow is a differentiable flow setpoint -- but only
+        # when it is a constant; a *scheduled* setpoint (a PiecewiseConstant with
+        # ``.at(t)``) is left as the schedule (not a single parameter).
+        self._setpoints = {}
+        ctrl_name = "underflow_Q" if self.underflow_Q is not None else "overflow_Q"
+        ctrl_val = getattr(self, ctrl_name)
+        if ctrl_val is not None and not hasattr(ctrl_val, "at"):
+            self._setpoints[ctrl_name] = FlowSetpoint(float(ctrl_val), 0)
         self._v0 = float(self.settling_params["v0"])
         self._vmax = float(self.settling_params["vmax"])
         self._rh = float(self.settling_params["rh"])

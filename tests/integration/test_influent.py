@@ -6,6 +6,8 @@ import pytest
 import aquakin
 from aquakin.plant.influent import (
     _influent_from_text,
+    _looks_like_header,
+    _tokenize,
     load_bsm1_influent,
     load_bsm2_influent,
     read_influent_csv,
@@ -76,6 +78,31 @@ def test_influent_base_defaults_keeps_reference_values(asm1):
     assert float(s.C[asm1.species_index["XI"]]) == pytest.approx(
         float(asm1.default_concentrations()[asm1.species_index["XI"]])
     )
+
+
+def test_tokenize_matches_the_positional_and_headered_parsers():
+    """The single tokenizer reproduces both call sites: comma-count-aware when a
+    field count is expected, comma-if-present otherwise, explicit delimiter wins."""
+    # No delimiter, count expected: comma-split iff it yields the count.
+    assert _tokenize("1, 2 ,3", None, expected_n=3) == ["1", "2", "3"]
+    assert _tokenize("1 2 3", None, expected_n=3) == ["1", "2", "3"]
+    # Comma count mismatch -> fall back to whitespace.
+    assert _tokenize("1,2 3", None, expected_n=3) == ["1,2", "3"]
+    # No count required: comma-split only when a comma is present (the old
+    # ``_split_row`` contract used by the headered-table parser).
+    assert _tokenize("1, 2, 3", None) == ["1", "2", "3"]
+    assert _tokenize("1 2 3", None) == ["1", "2", "3"]
+    # Explicit delimiter is used verbatim (count ignored).
+    assert _tokenize("a;b;c", ";", expected_n=99) == ["a", "b", "c"]
+
+
+def test_looks_like_header_distinguishes_names_from_numbers():
+    assert _looks_like_header("t, SS, Q") is True
+    assert _looks_like_header("0.0 1.0 2.0") is False
+    # Scientific notation contains a letter but parses numerically -> data.
+    assert _looks_like_header("1e5 2.0 3") is False
+    # Pure symbols, no letters -> not a header.
+    assert _looks_like_header("0, 0, 0") is False
 
 
 def test_influent_from_text_parses_without_a_file(asm1):

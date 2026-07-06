@@ -250,34 +250,15 @@ def _influent_from_text(
     if column_order is None:
         column_order = _BSM1_COLUMN_ORDER
 
-    # Auto-detect delimiter by trying commas first, then whitespace.
     rows = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        # If the first non-comment line is alphabetic and matches the
-        # expected header, skip it.
-        if rows == [] and any(c.isalpha() for c in line):
-            # Could be a header; only accept if all tokens are non-numeric.
-            tokens = line.replace(",", " ").split()
-            try:
-                [float(t) for t in tokens]
-                # All numeric → this is data, not a header.
-            except ValueError:
-                continue  # header line; skip
-        if delimiter == ",":
-            tokens = [tok.strip() for tok in line.split(",") if tok.strip()]
-        elif delimiter is not None:
-            tokens = [tok.strip() for tok in line.split(delimiter) if tok.strip()]
-        else:
-            # Try comma first; if it doesn't give the expected count,
-            # fall back to whitespace.
-            comma_tokens = [tok.strip() for tok in line.split(",") if tok.strip()]
-            if len(comma_tokens) == len(column_order):
-                tokens = comma_tokens
-            else:
-                tokens = line.split()
+        # Skip a leading column-name header (only checked before any data row).
+        if not rows and _looks_like_header(line):
+            continue
+        tokens = _tokenize(line, delimiter, expected_n=len(column_order))
         if len(tokens) != len(column_order):
             raise ValueError(
                 f"Influent row '{raw_line}' has {len(tokens)} fields but "
@@ -321,13 +302,33 @@ def _influent_from_text(
     return InfluentSeries(t=t, Q=Q, C=C, model=model, T=T)
 
 
-def _split_row(line: str, delimiter: str | None) -> list[str]:
-    """Split one line into trimmed tokens (comma if present, else whitespace)."""
+def _tokenize(line: str, delimiter: str | None, expected_n: int | None = None) -> list[str]:
+    """Split one line into trimmed, non-empty tokens.
+
+    With an explicit ``delimiter``, split on it. Otherwise prefer comma-splitting
+    when it yields ``expected_n`` fields (or, when no count is required, whenever
+    the line contains a comma), falling back to whitespace. This is the single
+    tokenizer for both the positional and headered influent parsers.
+    """
     if delimiter is not None:
-        return [tok.strip() for tok in line.split(delimiter) if tok.strip() != ""]
-    if "," in line:
-        return [tok.strip() for tok in line.split(",") if tok.strip() != ""]
-    return line.split()
+        return [tok.strip() for tok in line.split(delimiter) if tok.strip()]
+    comma = [tok.strip() for tok in line.split(",") if tok.strip()]
+    if expected_n is not None:
+        return comma if len(comma) == expected_n else line.split()
+    return comma if "," in line else line.split()
+
+
+def _looks_like_header(line: str) -> bool:
+    """True if a line is a column-name header rather than a numeric data row: it
+    contains a letter and at least one token that does not parse as a number."""
+    if not any(c.isalpha() for c in line):
+        return False
+    tokens = line.replace(",", " ").split()
+    try:
+        [float(tok) for tok in tokens]
+    except ValueError:
+        return True  # a non-numeric token -> header
+    return False  # all numeric (e.g. scientific notation) -> data
 
 
 def _parse_named_table(text: str, delimiter: str | None):
@@ -339,7 +340,7 @@ def _parse_named_table(text: str, delimiter: str | None):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        toks = _split_row(line, delimiter)
+        toks = _tokenize(line, delimiter)
         if header is None:
             header = toks
             continue

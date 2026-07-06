@@ -183,27 +183,19 @@ def _flux(Q, C, content_vec):
     return np.asarray(Q) * (np.asarray(C) @ content_vec)
 
 
-def mass_balance(
-    plant,
-    solution,
-    *,
-    components=("COD", "N", "P"),
-    influent_ports: Optional[list] = None,
-    effluent_ports: Optional[list] = None,
-    params=None,
-) -> MassBalance:
-    """Results-level mass-balance closure for a solved plant. See
-    :meth:`aquakin.plant.Plant.mass_balance`."""
-    import jax.numpy as jnp
+def _content_by_model(plant, comps, params):
+    """Canonical per-species content vectors for every model in the plant.
 
-    params = plant.default_parameters() if params is None else jnp.asarray(params)
-    plant._build_state_layout()
-    plant._build_parameter_layout()
-    t = np.asarray(solution.t)
-    window = (float(t[0]), float(t[-1]))
+    Returns ``{model_name: {component: (n_species,) array}}``, keeping only the
+    components the model actually carries (a model with no P contributes nothing
+    to the P balance).
 
-    # Canonical content vectors per model, keeping only components the model
-    # actually carries (a model with no P contributes nothing to the P balance).
+    Lab-COD convention for reporting: nitrate / N₂ carry no COD, so a reported
+    COD is the organic oxygen demand (an analyst's COD), not a total electron
+    demand. The closure is self-consistent under either convention. Each model's
+    composition fractions are read from the *run* parameters (a unit of that
+    model), so a calibrated / BSM-specific i_XB flows through.
+    """
     models = {}  # name -> CompiledModel
     for u in plant.units.values():
         net = getattr(u, "model", None)
@@ -211,31 +203,22 @@ def mass_balance(
             models[net.name] = net
     for s in plant.influents.values():
         models[s.model.name] = s.model
-    # Lab-COD convention for reporting: nitrate / N₂ carry no COD, so a reported
-    # COD is the organic oxygen demand (an analyst's COD), not a total electron
-    # demand. The closure is self-consistent under either convention. Each
-    # model's composition fractions are read from the *run* parameters (a unit
-    # of that model), so a calibrated / BSM-specific i_XB flows through.
     net_params = {}
     for uname, u in plant.units.items():
         net = getattr(u, "model", None)
         if net is not None and net.name not in net_params:
             net_params[net.name] = plant._params_for_unit(uname, params)
-    content_by_model = {
+    return {
         name: {
             q: canonical_content(net, q, electron_acceptor_cod=False, params=net_params.get(name))
-            for q in components
+            for q in comps
         }
         for name, net in models.items()
     }
-    comps = list(components)
 
-    # --- boundary ports ------------------------------------------------------
-    if effluent_ports is None:
-        effluent_ports = list(plant.check().dangling_outputs)
-    in_names = list(plant.influents) if influent_ports is None else list(influent_ports)
 
-    # --- inflow (influent series) -------------------------------------------
+def _inflow_terms(plant, t, comps, in_names, content_by_model):
+    """Component carried in by every influent series over the window (g)."""
     inflow = dict.fromkeys(comps, 0.0)
     for name in in_names:
         series = plant.influents[name]
@@ -245,11 +228,17 @@ def mass_balance(
         C = np.asarray([np.asarray(series.at(tt).C) for tt in t])
         for q in comps:
             inflow[q] += float(np.trapezoid(_flux(Q, C, cvec[q]), t))
+    return inflow
 
-    # --- inflow (reagent mass injected by dosing units) ---------------------
-    # A DosingUnit adds its reagent's mass to the through-stream from outside the
-    # plant boundary, so it is a component source -- counted as inflow (the
-    # through-stream's own mass already enters via its upstream influent).
+
+def _dosing_inflow(plant, solution, t, comps, content_by_model, params):
+    """Reagent mass injected by dosing units over the window (g).
+
+    A DosingUnit adds its reagent's mass to the through-stream from outside the
+    plant boundary, so it is a component source -- counted as inflow (the
+    through-stream's own mass already enters via its upstream influent).
+    """
+    inflow = dict.fromkeys(comps, 0.0)
     for uname, u in plant.units.items():
         comp_vec = getattr(getattr(u, "reagent", None), "composition", None)
         if comp_vec is None:
@@ -269,8 +258,11 @@ def mass_balance(
         C_dose = np.broadcast_to(comp_vec, (len(t), comp_vec.shape[0]))
         for q in comps:
             inflow[q] += float(np.trapezoid(_flux(Q_dose, C_dose, cvec[q]), t))
+    return inflow
 
-    # --- outflow (terminal material streams) --------------------------------
+
+def _outflow_terms(plant, solution, t, comps, effluent_ports, content_by_model, params):
+    """Component carried out by every terminal (boundary) material stream (g)."""
     outflow = dict.fromkeys(comps, 0.0)
     if effluent_ports:
         from aquakin.plant.bsm.evaluation import _reconstruct
@@ -282,8 +274,11 @@ def mass_balance(
             cvec = content_by_model[plant.units[unit].model.name]
             for q in comps:
                 outflow[q] += float(np.trapezoid(_flux(np.asarray(Q), np.asarray(C), cvec[q]), t))
+    return outflow
 
-    # --- accumulation (inventory change t1 - t0) ----------------------------
+
+def _accumulation_terms(plant, solution, comps, content_by_model, params):
+    """Change in each component's plant inventory, ``inventory(t1) − inventory(t0)`` (g)."""
     accumulation = dict.fromkeys(comps, 0.0)
     layout = plant._state_layout
     for unit_name, (start, size) in layout.items():
@@ -295,16 +290,23 @@ def mass_balance(
         )
         for q in comps:
             accumulation[q] += inv1.get(q, 0.0) - inv0.get(q, 0.0)
+    return accumulation
 
-    # --- gas: O2 in by aeration, everything else out by reaction -------------
-    # By the integrated plant RHS identity, summed over all units the internal
-    # streams cancel, leaving:  ΔInventory = (boundary in − out) + R + aeration,
-    # where R is the reaction-production integral over the reactive units and
-    # aeration is the non-reaction O2 source. So the component leaving as gas is
-    # gas = −(R + aeration): for COD, O2 transferred in (aeration removes COD)
-    # minus R_COD (the reactions' net COD production -- negative, since
-    # denitrification oxidises COD and the digester gas-outflow exports biogas);
-    # for N, −R_N (denitrification N₂; nitrification and the digester conserve N).
+
+def _gas_terms(plant, solution, comps, content_by_model, params):
+    """Component leaving as gas / via an untracked electron acceptor (g).
+
+    By the integrated plant RHS identity, summed over all units the internal
+    streams cancel, leaving:  ΔInventory = (boundary in − out) + R + aeration,
+    where R is the reaction-production integral over the reactive units and
+    aeration is the non-reaction O2 source. So the component leaving as gas is
+    gas = −(R + aeration): for COD, O2 transferred in (aeration removes COD)
+    minus R_COD (the reactions' net COD production -- negative, since
+    denitrification oxidises COD and the digester gas-outflow exports biogas);
+    for N, −R_N (denitrification N₂; nitrification and the digester conserve N).
+
+    Returns ``(gas, gas_detail)``.
+    """
     gas = dict.fromkeys(comps, 0.0)
     gas_detail = {}
 
@@ -319,6 +321,41 @@ def mass_balance(
     biogas = _biogas_cod(plant, solution, params)  # informational only
     if biogas is not None:
         gas_detail["biogas_COD"] = biogas
+    return gas, gas_detail
+
+
+def mass_balance(
+    plant,
+    solution,
+    *,
+    components=("COD", "N", "P"),
+    influent_ports: Optional[list] = None,
+    effluent_ports: Optional[list] = None,
+    params=None,
+) -> MassBalance:
+    """Results-level mass-balance closure for a solved plant. See
+    :meth:`aquakin.plant.Plant.mass_balance`."""
+    import jax.numpy as jnp
+
+    params = plant.default_parameters() if params is None else jnp.asarray(params)
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    t = np.asarray(solution.t)
+    window = (float(t[0]), float(t[-1]))
+    comps = list(components)
+    content_by_model = _content_by_model(plant, comps, params)
+
+    if effluent_ports is None:
+        effluent_ports = list(plant.check().dangling_outputs)
+    in_names = list(plant.influents) if influent_ports is None else list(influent_ports)
+
+    inflow = _inflow_terms(plant, t, comps, in_names, content_by_model)
+    dosing = _dosing_inflow(plant, solution, t, comps, content_by_model, params)
+    for q in comps:
+        inflow[q] += dosing[q]
+    outflow = _outflow_terms(plant, solution, t, comps, effluent_ports, content_by_model, params)
+    accumulation = _accumulation_terms(plant, solution, comps, content_by_model, params)
+    gas, gas_detail = _gas_terms(plant, solution, comps, content_by_model, params)
 
     out = {}
     for q in comps:

@@ -143,6 +143,61 @@ class ASM1toADM1:
         # Target indices for assembling the ADM1 output vector by name.
         self._ti = self.target_model.species_index
 
+    def _remove_electron_acceptor_demand(self, SO, SNO, SS, XS, XBH, XBA, SNH):
+        """Strip the O2 + NO3 electron-acceptor COD demand hierarchically from the
+        degradable pools (SS, then XS, XBH, XBA).
+
+        Returns ``(ut_SS, ut_XS, ut_XBH, ut_XBA, ut_SNH)`` -- the residual pools,
+        with ``ut_SNH`` the influent ammonia augmented by the nitrogen released
+        from the consumed biomass.
+        """
+        demand = SO + self.CODequiv * SNO
+        taken = jnp.minimum(demand, SS)
+        ut_SS = SS - taken
+        demand = demand - taken
+        taken = jnp.minimum(demand, XS)
+        ut_XS = XS - taken
+        demand = demand - taken
+        taken = jnp.minimum(demand, XBH)
+        ut_XBH = XBH - taken
+        n_released = taken * self.fnbac
+        demand = demand - taken
+        taken = jnp.minimum(demand, XBA)
+        ut_XBA = XBA - taken
+        n_released = n_released + taken * self.fnbac
+        demand = demand - taken
+        ut_SNH = SNH + n_released  # N released from consumed biomass
+        if self.strict:
+            # `demand` > 0 here means the electron-acceptor demand outran every
+            # degradable COD pool, so the surplus is about to be dropped (COD
+            # over-conserved). Flag it; AD-/jit-safe, and ut_SNH flows to the
+            # output so the check is not eliminated.
+            ut_SNH = eqx.error_if(
+                ut_SNH,
+                demand > self.strict_tol,
+                "ASM1toADM1(strict=True): electron-acceptor (O2+NO3) COD demand "
+                "exceeds the degradable COD (SS+XS+XB_H+XB_A); the surplus is "
+                "dropped and total COD is over-conserved. This is a non-anoxic / "
+                "nitrate-heavy feed outside the interface's intended regime.",
+            )
+        return ut_SS, ut_XS, ut_XBH, ut_XBA, ut_SNH
+
+    def _inorganic_carbon_charge(self, SNO, SNH, SALK, S_IN, pH):
+        """Inorganic-carbon and strong-ion charge balance at the digester ``pH``.
+
+        The only pH-dependent part of the mapping; everything else is a
+        pH-independent COD/N partition. Returns ``(S_IC, S_cat, S_an)``.
+        """
+        alfa_co2 = -1.0 / (1.0 + 10 ** (self._pK_a_co2 - pH))
+        alfa_IN = (10 ** (self._pK_a_IN - pH)) / (1.0 + 10 ** (self._pK_a_IN - pH))
+        S_IC = (
+            (SNO * self._alfa_NO + SNH * self._alfa_NH + SALK * self._alfa_alk) - (S_IN * alfa_IN)
+        ) / alfa_co2
+        ScatminusSan = S_IN * alfa_IN + S_IC * alfa_co2 + 10 ** (-self._pK_w + pH) - 10 ** (-pH)
+        S_cat = jnp.maximum(ScatminusSan, 0.0)
+        S_an = jnp.maximum(-ScatminusSan, 0.0)
+        return S_IC, S_cat, S_an
+
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         si = self._si
         # ASM1 inputs (gCOD/m3 or gN/m3).
@@ -170,36 +225,9 @@ class ASM1toADM1:
         frlixs, frlibac, frxs_adm = self.frlixs, self.frlibac, self.frxs_adm
 
         # --- 1) Remove COD demand of O2 + NO3, hierarchically SS, XS, XBH, XBA.
-        d = SO + self.CODequiv * SNO
-        take = jnp.minimum(d, SS)
-        ut_SS = SS - take
-        d = d - take
-        take = jnp.minimum(d, XS)
-        ut_XS = XS - take
-        d = d - take
-        take = jnp.minimum(d, XBH)
-        ut_XBH = XBH - take
-        nrel = take * fnbac
-        d = d - take
-        take = jnp.minimum(d, XBA)
-        ut_XBA = XBA - take
-        nrel = nrel + take * fnbac
-        d = d - take
-        ut_SNH = SNH + nrel  # N released from consumed biomass
-        if self.strict:
-            # `d` > 0 here means the electron-acceptor demand outran every
-            # degradable COD pool, so the surplus is about to be dropped (COD
-            # over-conserved). Flag it; AD-/jit-safe, and ut_SNH flows to the
-            # output so the check is not eliminated.
-            ut_SNH = eqx.error_if(
-                ut_SNH,
-                d > self.strict_tol,
-                "ASM1toADM1(strict=True): electron-acceptor (O2+NO3) COD demand "
-                "exceeds the degradable COD (SS+XS+XB_H+XB_A); the surplus is "
-                "dropped and total COD is over-conserved. This is a non-anoxic / "
-                "nitrate-heavy feed outside the interface's intended regime.",
-            )
-
+        ut_SS, ut_XS, ut_XBH, ut_XBA, ut_SNH = self._remove_electron_acceptor_demand(
+            SO, SNO, SS, XS, XBH, XBA, SNH
+        )
         ut_SND = SND
         ut_XND = XND
 
@@ -247,18 +275,18 @@ class ASM1toADM1:
         # --- 6) ASM SI -> ADM SI inert; N drawn from SND, XND, SNH; remainder -> sugar.
         inertS = SI * (fsni / fsni_adm)
         ut_SI = SI - SI * (fsni / fsni_adm)
-        take = jnp.minimum(ut_SI, ut_SND / fsni_adm)
-        inertS = inertS + take
-        ut_SI = ut_SI - take
-        ut_SND = ut_SND - take * fsni_adm
-        take = jnp.minimum(ut_SI, ut_XND / fsni_adm)
-        inertS = inertS + take
-        ut_SI = ut_SI - take
-        ut_XND = ut_XND - take * fsni_adm
-        take = jnp.minimum(ut_SI, ut_SNH / fsni_adm)
-        inertS = inertS + take
-        ut_SI = ut_SI - take
-        ut_SNH = ut_SNH - take * fsni_adm
+        taken = jnp.minimum(ut_SI, ut_SND / fsni_adm)
+        inertS = inertS + taken
+        ut_SI = ut_SI - taken
+        ut_SND = ut_SND - taken * fsni_adm
+        taken = jnp.minimum(ut_SI, ut_XND / fsni_adm)
+        inertS = inertS + taken
+        ut_SI = ut_SI - taken
+        ut_XND = ut_XND - taken * fsni_adm
+        taken = jnp.minimum(ut_SI, ut_SNH / fsni_adm)
+        inertS = inertS + taken
+        ut_SI = ut_SI - taken
+        ut_SNH = ut_SNH - taken * fsni_adm
         ut_SS = ut_SS + ut_SI  # leftover SI COD -> monosaccharides
         ut_SI = jnp.zeros(())
 
@@ -272,21 +300,13 @@ class ASM1toADM1:
         X_li = (xli1 + xli2) / 1000.0
         X_I = (biomass_nobio + inertX) / 1000.0
 
-        # Charge balance for inorganic carbon, evaluated at the digester pH. This
-        # is the ONLY pH-dependent part of the mapping; everything above is a
-        # pH-independent COD/N partition. BSM2 feeds the digester's own
-        # pH into this balance, so ``digester_pH`` (the digester's instantaneous
-        # state-derived pH, supplied by the plant) is used when available; the
-        # fixed ``pH_adm`` is the standalone fallback. (VFA outputs are zero here.)
+        # Charge balance for inorganic carbon, evaluated at the digester pH. BSM2
+        # feeds the digester's own pH into this balance, so ``digester_pH`` (the
+        # digester's instantaneous state-derived pH, supplied by the plant) is
+        # used when available; the fixed ``pH_adm`` is the standalone fallback.
+        # (VFA outputs are zero here.)
         pH = self.pH_adm if digester_pH is None else digester_pH
-        alfa_co2 = -1.0 / (1.0 + 10 ** (self._pK_a_co2 - pH))
-        alfa_IN = (10 ** (self._pK_a_IN - pH)) / (1.0 + 10 ** (self._pK_a_IN - pH))
-        S_IC = (
-            (SNO * self._alfa_NO + SNH * self._alfa_NH + SALK * self._alfa_alk) - (S_IN * alfa_IN)
-        ) / alfa_co2
-        ScatminusSan = S_IN * alfa_IN + S_IC * alfa_co2 + 10 ** (-self._pK_w + pH) - 10 ** (-pH)
-        S_cat = jnp.maximum(ScatminusSan, 0.0)
-        S_an = jnp.maximum(-ScatminusSan, 0.0)
+        S_IC, S_cat, S_an = self._inorganic_carbon_charge(SNO, SNH, SALK, S_IN, pH)
 
         ti = self._ti
         out = jnp.zeros((self.target_model.n_species,))
