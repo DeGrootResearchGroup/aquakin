@@ -267,8 +267,7 @@ class _OperatorNode(ASTNode):
         for field_name in self.EXTRA_CONDITIONS:
             if field_name not in ctx.condition_fields:
                 raise KeyError(
-                    f"{type(self).__name__} requires a condition field named "
-                    f"'{field_name}'."
+                    f"{type(self).__name__} requires a condition field named '{field_name}'."
                 )
         child_fns = tuple(c.compile(ctx) for c in self.children())
         extra = self.EXTRA_CONDITIONS
