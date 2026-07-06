@@ -2404,55 +2404,13 @@ class Plant:
         dtmax = integrator.dtmax
         max_steps = int(integrator.max_steps)
         order = int(integrator.order)
-        # DifferentiationConfig -> the legacy gradient / adjoint routing.
-        # reverse + stable    -> "auto"        (concrete fwd -> cached; diff -> discrete adjoint)
-        # reverse + through   -> "jax_adjoint" (differentiate through the diffrax solve)
-        # forward + through   -> adjoint=forward_adjoint() (jvp/jacfwd through the solve)
-        # forward + stable    -> the augmented [y; S] variational solve (use solve_sensitivity)
-        if diff.mode not in ("reverse", "forward"):
-            raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
-        if diff.method not in ("stable", "through_solve"):
-            raise ValueError(
-                f"diff.method must be 'stable' or 'through_solve'; got {diff.method!r}."
-            )
-        adjoint = None
-        if diff.mode == "reverse":
-            gradient = "auto" if diff.method == "stable" else "jax_adjoint"
-        else:  # forward
-            if diff.method == "stable":
-                raise ValueError(
-                    "diff=DifferentiationConfig(mode='forward', method='stable') is "
-                    "the augmented variational solve; call plant.solve_sensitivity "
-                    "(or plant.dynamic_sensitivity) for it, not plant.solve."
-                )
-            # forward + through_solve: jvp/jacfwd through the diffrax solve.
-            gradient = "jax_adjoint"
-            adjoint = forward_adjoint()
-        adjoint_max_steps = int(diff.adjoint_max_steps)
-        adjoint_low_memory = bool(diff.adjoint_low_memory)
-
-        # The reverse stable method forms its own cap-free discrete adjoint and
-        # controls its own steps, so an explicit dtmax cap alongside it is a usage
-        # error (dtmax is meaningful only when differentiating *through* the diffrax
-        # solve, i.e. method='through_solve'). Catch it here, before the "auto"
-        # routing below would otherwise silently treat dtmax as a request to pin
-        # the jax_adjoint path.
-        if diff.mode == "reverse" and diff.method == "stable" and dtmax is not None:
-            raise ValueError(
-                "diff=DifferentiationConfig(method='stable') forms its own discrete "
-                "adjoint and controls its own steps; do not also pass "
-                "integrator=IntegratorConfig(dtmax=...) (the stable method is "
-                "cap-free). Use method='through_solve' if you need the dtmax cap."
-            )
-
-        if gradient not in ("auto", "jax_adjoint", "stable_adjoint"):
-            raise ValueError(
-                f"gradient must be 'auto', 'jax_adjoint' or 'stable_adjoint'; got {gradient!r}."
-            )
-        if colored_jacobian not in (True, False, "auto"):
-            raise ValueError(
-                f"colored_jacobian must be True, False or 'auto'; got {colored_jacobian!r}."
-            )
+        # DifferentiationConfig -> the internal gradient / adjoint routing. A pure
+        # decode of (mode, method); the cross-argument combination checks (the
+        # single-argument gradient / colored_jacobian validity, the stable-vs-dtmax
+        # conflict, and the events / forward_fast combinations) are folded into
+        # _validate_solve_args below, so solve reads resolve -> validate ->
+        # collect-events -> dispatch.
+        gradient, adjoint, adjoint_max_steps, adjoint_low_memory = self._resolve_diff_config(diff)
         self._build_state_layout()
         self._build_parameter_layout()
         if params is None:
@@ -2618,20 +2576,91 @@ class Plant:
             time_unit=time_unit,
         )
 
+    @staticmethod
+    def _resolve_diff_config(diff):
+        """Decode a public :class:`DifferentiationConfig` into internal routing.
+
+        Pure translation of ``(diff.mode, diff.method)`` into the internal
+        ``(gradient, adjoint, adjoint_max_steps, adjoint_low_memory)`` primitives
+        the solve dispatch operates on:
+
+        * ``reverse`` + ``stable``        -> ``gradient="auto"`` (a concrete forward
+          solve routes to the cached fast path; a differentiated one to the
+          cap-free discrete adjoint)
+        * ``reverse`` + ``through_solve`` -> ``gradient="jax_adjoint"`` (differentiate
+          through the diffrax solve)
+        * ``forward`` + ``through_solve`` -> ``gradient="jax_adjoint"`` with a
+          forward-mode ``adjoint`` (``jvp`` / ``jacfwd`` flow through the solve)
+
+        Raises ``ValueError`` for a malformed config (bad ``mode`` / ``method``) or
+        the ``forward`` + ``stable`` augmented variational solve, which
+        :meth:`solve` does not serve (call :meth:`solve_sensitivity` /
+        :meth:`dynamic_sensitivity`). Cross-argument combination checks live in
+        :meth:`_validate_solve_args`.
+        """
+        if diff.mode not in ("reverse", "forward"):
+            raise ValueError(f"diff.mode must be 'reverse' or 'forward'; got {diff.mode!r}.")
+        if diff.method not in ("stable", "through_solve"):
+            raise ValueError(
+                f"diff.method must be 'stable' or 'through_solve'; got {diff.method!r}."
+            )
+        adjoint = None
+        if diff.mode == "reverse":
+            gradient = "auto" if diff.method == "stable" else "jax_adjoint"
+        else:  # forward
+            if diff.method == "stable":
+                raise ValueError(
+                    "diff=DifferentiationConfig(mode='forward', method='stable') is "
+                    "the augmented variational solve; call plant.solve_sensitivity "
+                    "(or plant.dynamic_sensitivity) for it, not plant.solve."
+                )
+            # forward + through_solve: jvp/jacfwd through the diffrax solve.
+            gradient = "jax_adjoint"
+            adjoint = forward_adjoint()
+        return gradient, adjoint, int(diff.adjoint_max_steps), bool(diff.adjoint_low_memory)
+
     def _validate_solve_args(
         self, *, events, event, integrator, forward_fast, gradient, params, y0
     ):
         """Reject incompatible :meth:`solve` argument combinations up front.
 
-        Raises ``ValueError`` for the combinations the dispatch below cannot
-        honour: ``events=`` with the low-level ``event=`` or with
-        ``integrator.solver`` / ``colored_jacobian=True`` (the segmented
-        located-event solve manages its own integrator), and ``forward_fast``
-        with ``events=`` / ``gradient='stable_adjoint'`` / traced inputs (it is a
+        Raises ``ValueError`` for: an out-of-range ``gradient`` /
+        ``integrator.colored_jacobian``; the reverse-``stable`` gradient (routed as
+        ``gradient='auto'``) paired with an ``integrator.dtmax`` cap, which it
+        cannot honour (it forms its own cap-free discrete adjoint -- ``dtmax`` is
+        meaningful only when differentiating *through* the diffrax solve,
+        ``method='through_solve'``); ``events=`` with the low-level ``event=`` or
+        with ``integrator.solver`` / ``colored_jacobian=True`` (the segmented
+        located-event solve manages its own integrator); and ``forward_fast`` with
+        ``events=`` / ``gradient='stable_adjoint'`` / traced inputs (it is a
         non-differentiable concrete-only path) / a non-default integrator
         ``solver`` / ``order`` / ``factormax`` / ``dtmax`` / ``colored_jacobian``
         (it honours only ``rtol`` / ``atol`` / ``max_steps``).
         """
+        # Single-argument validity + the stable-vs-dtmax cross-check, folded here
+        # from solve() so every combination check lives in one place.
+        if gradient not in ("auto", "jax_adjoint", "stable_adjoint"):
+            raise ValueError(
+                f"gradient must be 'auto', 'jax_adjoint' or 'stable_adjoint'; got {gradient!r}."
+            )
+        if integrator.colored_jacobian not in (True, False, "auto"):
+            raise ValueError(
+                "colored_jacobian must be True, False or 'auto'; got "
+                f"{integrator.colored_jacobian!r}."
+            )
+        # gradient == "auto" is exactly reverse+stable (see _resolve_diff_config):
+        # it forms its own cap-free discrete adjoint and controls its own steps, so
+        # an explicit dtmax cap alongside it is a usage error. Catching it here
+        # keeps the later "auto" routing from silently treating dtmax as a request
+        # to pin the jax_adjoint path.
+        if gradient == "auto" and integrator.dtmax is not None:
+            raise ValueError(
+                "diff=DifferentiationConfig(method='stable') forms its own discrete "
+                "adjoint and controls its own steps; do not also pass "
+                "integrator=IntegratorConfig(dtmax=...) (the stable method is "
+                "cap-free). Use method='through_solve' if you need the dtmax cap."
+            )
+
         if events is not None:
             if event is not None:
                 raise ValueError(
@@ -2735,6 +2764,21 @@ class Plant:
             # (The colored backward Jacobian builder is derived in the
             # stable_adjoint branch below, only when that path is actually taken,
             # so a forward jax_adjoint solve never builds it.)
+
+    def _finalize_solution(self, ts, ys, *, time_factor, time_unit, events_log=None):
+        """Wrap a solved ``(ts, ys)`` pair into a :class:`PlantSolution`.
+
+        Rescales the native solver times back to the caller's requested unit
+        (``time_factor``, native -> requested) and tags the requested unit so the
+        solution reports its times in it. Shared by every solve-dispatch path so the
+        rescale + construction lives in one place rather than being repeated apiece.
+        """
+        if time_factor != 1.0:
+            ts = ts / time_factor  # native -> requested unit
+        sol = PlantSolution(t=ts, state=ys, plant=self, events_log=events_log)
+        if time_unit is not None:
+            sol._requested_time_unit = time_unit
+        return sol
 
     def _solve_stable_adjoint(
         self,
@@ -2912,12 +2956,7 @@ class Plant:
             ys = ys[None, :]
         else:
             ts = jnp.asarray(t_eval)
-        if time_factor != 1.0:
-            ts = ts / time_factor  # native -> requested unit
-        sol = PlantSolution(t=ts, state=ys, plant=self)
-        if time_unit is not None:
-            sol._requested_time_unit = time_unit
-        return sol
+        return self._finalize_solution(ts, ys, time_factor=time_factor, time_unit=time_unit)
 
     def _solve_forward_fast(
         self,
@@ -2962,12 +3001,7 @@ class Plant:
                 self._jit_cache[fkey] = jitted
             with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
                 ts, ys = jitted(y0, params, te)
-            if time_factor != 1.0:
-                ts = ts / time_factor
-            sol = PlantSolution(t=ts, state=ys, plant=self)
-            if time_unit is not None:
-                sol._requested_time_unit = time_unit
-            return sol
+            return self._finalize_solution(ts, ys, time_factor=time_factor, time_unit=time_unit)
         warnings.warn(
             "forward_fast: the colored-Jacobian start-state guard failed; "
             "falling back to the diffrax forward path for this plant.",
@@ -3082,12 +3116,7 @@ class Plant:
                 ts, ys = jitted(y0, params)
             else:
                 ts, ys = jitted(y0, params, t_eval)
-        if time_factor != 1.0:
-            ts = ts / time_factor  # native -> requested unit
-        sol = PlantSolution(t=ts, state=ys, plant=self)
-        if time_unit is not None:
-            sol._requested_time_unit = time_unit
-        return sol
+        return self._finalize_solution(ts, ys, time_factor=time_factor, time_unit=time_unit)
 
     def _solve_with_events(
         self,
@@ -3151,11 +3180,9 @@ class Plant:
                 factormax=factormax,
                 solver=solver,
             )
-        ts = res.ts / time_factor if time_factor != 1.0 else res.ts
-        sol = PlantSolution(t=ts, state=res.ys, plant=self, events_log=res.log)
-        if time_unit is not None:
-            sol._requested_time_unit = time_unit
-        return sol
+        return self._finalize_solution(
+            res.ts, res.ys, time_factor=time_factor, time_unit=time_unit, events_log=res.log
+        )
 
     def _build_jitted_solve(
         self,
@@ -3640,6 +3667,73 @@ class Plant:
             )
         return None
 
+    def _steady_fallback_ladder(
+        self,
+        rhs,
+        params,
+        y0,
+        scale_floor,
+        *,
+        continuation_from,
+        continuation_kwargs,
+        arclength,
+        arclength_kwargs,
+        fallback,
+        fallback_kwargs,
+        dt0,
+        dt_max,
+        growth_cap,
+        max_iter,
+        tol,
+        nonneg,
+        influent_time,
+    ):
+        """Escalation ladder for a non-converged direct PTC steady solve.
+
+        Tries, in order, natural-parameter continuation, pseudo-arclength
+        continuation, then a forward integration to steady state, returning the
+        first that converges (a :class:`SteadyStateResult`) or ``None`` if none is
+        configured or reaches the target (the caller then keeps the non-converged
+        PTC result). Both non-converged :meth:`steady_state` branches -- the cached
+        concrete solve and the traced ``solve_steady_state`` path -- run this one
+        ladder rather than spelling it out apiece.
+        """
+        alt = self._steady_continuation_fallback(
+            rhs,
+            params,
+            y0,
+            scale_floor,
+            continuation_from,
+            continuation_kwargs,
+            dt0=dt0,
+            dt_max=dt_max,
+            growth_cap=growth_cap,
+            max_iter=max_iter,
+            tol=tol,
+            nonneg=nonneg,
+            influent_time=influent_time,
+        )
+        if alt is not None:
+            return alt
+        if arclength:
+            arc = self._steady_arclength_fallback(
+                rhs,
+                params,
+                scale_floor,
+                continuation_from,
+                tol=tol,
+                nonneg=nonneg,
+                influent_time=influent_time,
+                arclength_kwargs=arclength_kwargs,
+            )
+            if arc is not None:
+                return arc
+        if fallback:
+            fb = self.run_to_steady_state(params, y0=y0, **(fallback_kwargs or {}))
+            fb.method = "ptc->forward"
+            return fb
+        return None
+
     def steady_state(
         self,
         params: Optional[jnp.ndarray] = None,
@@ -3881,13 +3975,17 @@ class Plant:
             y_star, residual_a, iters_a, conv_a = jitted(y0, params, jnp.asarray(scale_floor))
             converged = bool(conv_a)
             if not converged:
-                alt = self._steady_continuation_fallback(
+                fb = self._steady_fallback_ladder(
                     rhs,
                     params,
                     y0,
                     scale_floor,
-                    continuation_from,
-                    continuation_kwargs,
+                    continuation_from=continuation_from,
+                    continuation_kwargs=continuation_kwargs,
+                    arclength=arclength,
+                    arclength_kwargs=arclength_kwargs,
+                    fallback=fallback,
+                    fallback_kwargs=fallback_kwargs,
                     dt0=dt0,
                     dt_max=dt_max,
                     growth_cap=growth_cap,
@@ -3896,24 +3994,7 @@ class Plant:
                     nonneg=nonneg,
                     influent_time=influent_time,
                 )
-                if alt is not None:
-                    return alt
-                if arclength:
-                    arc = self._steady_arclength_fallback(
-                        rhs,
-                        params,
-                        scale_floor,
-                        continuation_from,
-                        tol=tol,
-                        nonneg=nonneg,
-                        influent_time=influent_time,
-                        arclength_kwargs=arclength_kwargs,
-                    )
-                    if arc is not None:
-                        return arc
-                if fallback:
-                    fb = self.run_to_steady_state(params, y0=y0, **(fallback_kwargs or {}))
-                    fb.method = "ptc->forward"
+                if fb is not None:
                     return fb
             return SteadyStateResult(
                 state=y_star,
@@ -3957,13 +4038,17 @@ class Plant:
             )
 
         if not converged:
-            alt = self._steady_continuation_fallback(
+            fb = self._steady_fallback_ladder(
                 rhs,
                 params,
                 y0,
                 scale_floor,
-                continuation_from,
-                continuation_kwargs,
+                continuation_from=continuation_from,
+                continuation_kwargs=continuation_kwargs,
+                arclength=arclength,
+                arclength_kwargs=arclength_kwargs,
+                fallback=fallback,
+                fallback_kwargs=fallback_kwargs,
                 dt0=dt0,
                 dt_max=dt_max,
                 growth_cap=growth_cap,
@@ -3972,24 +4057,7 @@ class Plant:
                 nonneg=nonneg,
                 influent_time=influent_time,
             )
-            if alt is not None:
-                return alt
-            if arclength:
-                arc = self._steady_arclength_fallback(
-                    rhs,
-                    params,
-                    scale_floor,
-                    continuation_from,
-                    tol=tol,
-                    nonneg=nonneg,
-                    influent_time=influent_time,
-                    arclength_kwargs=arclength_kwargs,
-                )
-                if arc is not None:
-                    return arc
-            if fallback:
-                fb = self.run_to_steady_state(params, y0=y0, **(fallback_kwargs or {}))
-                fb.method = "ptc->forward"
+            if fb is not None:
                 return fb
 
         return SteadyStateResult(

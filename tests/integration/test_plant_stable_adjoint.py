@@ -61,6 +61,37 @@ def _bsm2_plant():
 
 # --- cheap API guards (no integration) -------------------------------------
 
+def test_resolve_diff_config_maps_every_supported_mode():
+    """The pure ``(mode, method) -> (gradient, adjoint, ...)`` decode extracted
+    from ``solve`` so the dispatch is a plain resolve -> validate -> dispatch."""
+    DC = aquakin.DifferentiationConfig
+    # reverse + stable  -> "auto", no through-solve adjoint.
+    grad, adj, _mx, _lm = Plant._resolve_diff_config(DC(mode="reverse", method="stable"))
+    assert grad == "auto" and adj is None
+    # reverse + through_solve -> jax_adjoint, still no forward adjoint object.
+    grad, adj, _mx, _lm = Plant._resolve_diff_config(DC(mode="reverse", method="through_solve"))
+    assert grad == "jax_adjoint" and adj is None
+    # forward + through_solve -> jax_adjoint WITH a forward-mode adjoint.
+    grad, adj, _mx, _lm = Plant._resolve_diff_config(DC(mode="forward", method="through_solve"))
+    assert grad == "jax_adjoint" and adj is not None
+    # the adjoint_* knobs pass straight through, coerced.
+    _g, _a, mx, lm = Plant._resolve_diff_config(
+        DC(adjoint_max_steps=123, adjoint_low_memory=True)
+    )
+    assert mx == 123 and lm is True
+
+
+def test_resolve_diff_config_rejects_bad_and_unsupported():
+    DC = aquakin.DifferentiationConfig
+    with pytest.raises(ValueError, match="diff.mode must be"):
+        Plant._resolve_diff_config(DC(mode="sideways"))
+    with pytest.raises(ValueError, match="diff.method must be"):
+        Plant._resolve_diff_config(DC(method="not_a_method"))
+    # forward + stable is the augmented variational solve -- solve() does not serve it.
+    with pytest.raises(ValueError, match="augmented variational solve"):
+        Plant._resolve_diff_config(DC(mode="forward", method="stable"))
+
+
 def test_invalid_gradient_raises():
     _asm1, _adm1, plant, y0 = _bsm2_plant()
     with pytest.raises(ValueError, match="method"):

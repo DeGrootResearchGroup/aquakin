@@ -287,6 +287,17 @@ def test_bsm1_steady_state_falls_back_to_forward(bsm1):
     assert bool(ss.converged)
 
 
+def test_bsm1_steady_state_keeps_ptc_result_when_ladder_declines(bsm1):
+    # With no fallback configured (no continuation start, arclength/forward off)
+    # the escalation ladder has nothing to try, so a starved solve returns the
+    # non-converged PTC result verbatim rather than a fallback method -- the
+    # shared _steady_fallback_ladder "return None -> keep PTC" contract.
+    plant, _asm1, y0 = bsm1
+    ss = plant.steady_state(y0=y0, max_iter=1, arclength=False, fallback=False)
+    assert ss.method == "ptc"
+    assert not bool(ss.converged)
+
+
 @pytest.mark.slow
 def test_bsm2_steady_state_matches_forward():
     # BSM2 -- the 167-state plant with the long-SRT anaerobic digester, the stiff
