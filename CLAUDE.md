@@ -308,6 +308,10 @@ The convention is:
 Don't try to `git push` from inside the sandbox; it fails with
 "Permission denied (publickey)" and wastes a turn.
 
+Before committing or pushing any code change, run the linter locally so the
+required `lint (ruff)` gate stays green — `ruff check aquakin` and `ruff format
+aquakin` (see Post-Change Checklist item 1 for details).
+
 > The full CI architecture — pytest-split sharding, the fast PR gate vs the
 > merge-to-main `slow`/`validation`/`heavy` suites, the memory/heavy-runner
 > rationale, and the `full-ci` / `skip-heavy` labels — is in **`docs/ci.md`**.
@@ -323,26 +327,40 @@ Don't try to `git push` from inside the sandbox; it fails with
 After **every code change**, before considering the task complete, review and
 act on the following:
 
-1. **Tests** — Are new tests needed for the changed or added functionality?
+1. **Lint & format** — Run ruff locally before committing and pushing any code
+   change. The CI `lint (ruff)` job runs `ruff check aquakin` **and** `ruff
+   format --check aquakin` on every PR and is a **required merge gate**, so an
+   unformatted file (or a lint error) fails CI — a common way a refactor that
+   only shortens lines trips the format gate. Run both, from the repo root:
+   - `ruff check aquakin` — must report no errors.
+   - `ruff format aquakin` — auto-applies formatting in place (CI runs it with
+     `--check`, which only verifies; running it without `--check` fixes the
+     files). Re-run `ruff format --check aquakin` to confirm it is clean.
+
+   Ruff is pinned via the `lint` extra (`pip install -e ".[lint]"`); see the
+   `[tool.ruff]` config in `pyproject.toml` for the rule set and per-file
+   ignores. Not needed for docs/config-only changes that touch no `.py` files.
+
+2. **Tests** — Are new tests needed for the changed or added functionality?
    - New node type → unit test in `test_nodes.py`
    - New public API function → integration test
    - New built-in model → validation test against literature data
    - Bug fix → regression test
 
-2. **CLAUDE.md** — Does this file need updating?
+3. **CLAUDE.md** — Does this file need updating?
    - New architecture decision made during implementation
    - Public API surface changed
    - New node types added
    - Package structure changed
    - New dependencies added
 
-3. **README.md** — Does the user-facing documentation need updating?
+4. **README.md** — Does the user-facing documentation need updating?
    - New public API functions
    - New built-in models
    - Installation or dependency changes
    - New examples
 
-4. **CHANGELOG.md** — Does this change warrant a changelog entry? Add it under
+5. **CHANGELOG.md** — Does this change warrant a changelog entry? Add it under
    the `[Unreleased]` section, in the appropriate Keep a Changelog category
    (`Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`).
    Entries are curated for users deciding whether to upgrade — write for a human,
