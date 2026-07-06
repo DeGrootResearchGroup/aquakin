@@ -187,6 +187,21 @@ def test_unknown_function_message_lists_all_builtins():
         assert fn in msg
 
 
+def test_function_registry_is_derived_from_the_nodes():
+    """The built-in registry is discovered from the nodes: each entry's key is
+    the node's own ``FUNCTION_NAME`` and its argument names are the node's
+    dataclass fields. So a domain-function node registers its grammar from its
+    own class body -- there is no separate table to keep in sync."""
+    import dataclasses
+
+    from aquakin.core.parser import _FUNCTIONS
+
+    assert _FUNCTIONS  # non-empty
+    for name, (node_cls, arg_names) in _FUNCTIONS.items():
+        assert node_cls.__dict__["FUNCTION_NAME"] == name
+        assert arg_names == tuple(f.name for f in dataclasses.fields(node_cls))
+
+
 def test_pH_inhibit_wrong_arity():
     with pytest.raises(ParseError, match="pH_inhibit.. takes 2"):
         parse_rate_expression("pH_inhibit(a)")

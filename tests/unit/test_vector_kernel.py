@@ -200,6 +200,31 @@ def test_constant_exponent_keeps_derivative_finite():
     assert jnp.allclose(J, Js, rtol=1e-9, atol=1e-12)
 
 
+def test_kernel_table_is_derived_from_the_nodes():
+    """The kernel table is built by walking the node hierarchy, and each kernel
+    IS the node's own ``op`` -- the same function the scalar closure calls. This
+    is what makes bit-identicality structural (one arithmetic per node, not two
+    hand-aligned copies) and "a node added without a matching kernel" impossible:
+    a node's ``KIND`` guarantees its ``op`` is in the table."""
+    from aquakin.core import nodes as N
+    from aquakin.core.vector_kernel import _KERNELS
+
+    kinds = set()
+    stack = list(N.ASTNode.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        stack.extend(cls.__subclasses__())
+        kind = cls.__dict__.get("KIND")
+        if kind is not None:
+            kinds.add(kind)
+            # the vectorized kernel is literally the node's scalar op
+            assert _KERNELS[kind] is cls.op, kind
+    # every node KIND has a kernel; the only extra key is the ``powc`` variant
+    # (a constant-exponent PowerNode kept static for AD finiteness -- no node).
+    assert kinds <= set(_KERNELS)
+    assert set(_KERNELS) - kinds == {"powc"}
+
+
 def test_unsupported_node_falls_back_to_scalar():
     """A model with an AST node type the kernel does not handle leaves
     ``_rate_kernel`` as ``None`` (scalar fallback), rather than raising at load.

@@ -22,48 +22,47 @@ respective domain nodes. Any other identifier with parentheses is rejected.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Iterable
 
 from aquakin.core.nodes import (
     AddNode,
-    ArrheniusNode,
     ASTNode,
     ConditionNode,
     ConstantNode,
     DivideNode,
-    MaxNode,
-    MonodInhibitionNode,
-    MonodInhibitionRatioNode,
-    MonodNode,
-    MonodRatioNode,
     MultiplyNode,
     NegateNode,
     ParamNode,
     PowerNode,
-    SafeDivideNode,
     SpeciesNode,
     SubtractNode,
-    pHInhibitNode,
-    pHSwitchNode,
 )
 
-# Built-in domain functions: name -> (node class, argument names). The arity is
-# ``len(arg_names)``. This single registry drives both ``_make_function_call``
-# and the "unknown function" error message, so neither can go stale when a node
-# type is added (every node constructor takes its arguments positionally, in
-# argument order).
-_FUNCTIONS = {
-    "arrhenius": (ArrheniusNode, ("A", "Ea")),
-    "pH_switch": (pHSwitchNode, ("pKa",)),
-    "pH_inhibit": (pHInhibitNode, ("pH_LL", "pH_UL")),
-    "monod": (MonodNode, ("X", "K")),
-    "monod_inh": (MonodInhibitionNode, ("X", "K")),
-    "monod_ratio": (MonodRatioNode, ("A", "B", "K")),
-    "monod_inh_ratio": (MonodInhibitionRatioNode, ("A", "B", "K")),
-    "safe_div": (SafeDivideNode, ("num", "denom")),
-    "max": (MaxNode, ("a", "b")),
-}
+
+def _build_function_registry() -> dict:
+    """Built-in domain functions: name -> (node class, argument names).
+
+    Discovered by walking the AST node hierarchy for every node that declares a
+    ``FUNCTION_NAME`` -- its call spelling -- with the argument names read
+    straight off the node's dataclass fields (the constructor takes them
+    positionally, in order). So a new domain-function node registers its grammar,
+    kernel and interning all from its own class body, with no edit here. Drives
+    both ``_make_function_call`` (arity + argument-name errors) and the
+    "unknown function" message, so neither can go stale.
+    """
+    registry: dict = {}
+    stack = list(ASTNode.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        stack.extend(cls.__subclasses__())
+        name = cls.__dict__.get("FUNCTION_NAME")
+        if name is not None:
+            registry[name] = (cls, tuple(f.name for f in fields(cls)))
+    return registry
+
+
+_FUNCTIONS = _build_function_registry()
 
 
 class ParseError(ValueError):
