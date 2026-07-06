@@ -166,9 +166,7 @@ class RatioSplitter(_SplitterBase):
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output port flows: each a fixed fraction of the inlet flow (affine)."""
         Q_in = input_flows["in"]
-        return {
-            port: Q_in * jnp.asarray(ratio) for port, ratio in self.output_port_ratios.items()
-        }
+        return {port: Q_in * jnp.asarray(ratio) for port, ratio in self.output_port_ratios.items()}
 
 
 @dataclass
@@ -304,8 +302,7 @@ class ThresholdSplitter(_SplitterBase):
     def __post_init__(self) -> None:
         if self.threshold_port == self.remainder_port:
             raise ValueError(
-                f"ThresholdSplitter '{self.name}': threshold_port and "
-                f"remainder_port must differ."
+                f"ThresholdSplitter '{self.name}': threshold_port and remainder_port must differ."
             )
         self._setpoints = {"threshold": FlowSetpoint(float(self.threshold), 0)}
 
