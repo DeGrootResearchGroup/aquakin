@@ -73,13 +73,13 @@ def test_fixed_dose_mass_balance(asm1):
     """The dosed stream is the flow-weighted mix of the inlet and the reagent."""
     d = DosingUnit("d", Reagent.from_species(asm1, SS=4e5), flow=2.0)
     C_in = asm1.concentrations({"SS": 60.0}, base="zero")
-    s_in = Stream(Q=jnp.asarray(1000.0), C=C_in, model=asm1, T=jnp.asarray(291.0))
+    s_in = Stream(Q=jnp.asarray(1000.0), C=C_in, model=asm1, scalars={"T": jnp.asarray(291.0)})
     out = d.compute_outputs(jnp.asarray(0.0), jnp.zeros((0,)), {"in": s_in},
                             asm1.default_parameters())["out"]
     ss = asm1.species_index["SS"]
     assert float(out.Q) == pytest.approx(1002.0)
     assert float(out.C[ss]) == pytest.approx((1000 * 60 + 2 * 4e5) / 1002)
-    assert float(out.T) == pytest.approx(291.0)              # keeps the line T
+    assert float(out.scalars["T"]) == pytest.approx(291.0)   # keeps the line T
 
 
 def test_fixed_dose_flow_outputs_is_inflow_plus_dose(asm1):

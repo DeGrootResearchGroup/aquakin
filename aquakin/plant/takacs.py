@@ -625,8 +625,12 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         )
 
         return {
-            self.overflow_port: Stream(Q=overflow_Q, C=C_overflow, model=self.model, T=s_in.T),
-            self.underflow_port: Stream(Q=underflow_Q, C=C_underflow, model=self.model, T=s_in.T),
+            self.overflow_port: Stream(
+                Q=overflow_Q, C=C_overflow, model=self.model, scalars=s_in.scalars
+            ),
+            self.underflow_port: Stream(
+                Q=underflow_Q, C=C_underflow, model=self.model, scalars=s_in.scalars
+            ),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:

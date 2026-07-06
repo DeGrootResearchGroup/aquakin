@@ -39,7 +39,7 @@ from aquakin.plant.cstr import (
     AerationUnit,
     aeration_transfer,
 )
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, mixed_scalars
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -329,7 +329,7 @@ class IFASUnit(AerationUnit, CouplingAware):
                 Q=Q_total,
                 C=self._bulk(state),
                 model=self.model,
-                T=self._mixed_inlet_T(inputs),
+                scalars=mixed_scalars(inputs, self.input_port_names),
             )
         }
 

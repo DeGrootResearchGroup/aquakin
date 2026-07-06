@@ -149,7 +149,7 @@ def _aeration_term(asm1, aeration, T_in, signals=None):
     convection + temperature-dependent chemistry terms cancel exactly)."""
     so = asm1.species_index["SO"]
     C = asm1.default_concentrations()
-    s = Stream(Q=jnp.asarray(100.0), C=C, model=asm1, T=jnp.asarray(float(T_in)))
+    s = Stream(Q=jnp.asarray(100.0), C=C, model=asm1, scalars={"T": jnp.asarray(float(T_in))})
     p = asm1.default_parameters()
     aer_tank = _tank(asm1, "t", aeration)
     bare = _tank(asm1, "t0", None)
@@ -247,7 +247,7 @@ def test_temperature_correction_falls_back_to_static_T(asm1):
     static T condition (the same source the kinetics fall back to)."""
     so = asm1.species_index["SO"]
     C = asm1.default_concentrations()
-    s = Stream(Q=jnp.asarray(100.0), C=C, model=asm1, T=None)  # no inlet T
+    s = Stream(Q=jnp.asarray(100.0), C=C, model=asm1)  # no inlet T
     p = asm1.default_parameters()
     tank = CSTRUnit(name="t", model=asm1, volume=1000.0, input_port_names=["in"],
                     conditions={"T": 303.15},
@@ -315,7 +315,7 @@ def test_temperature_corrected_aeration_is_ad_clean(asm1):
                                      temperature_correction=True))
 
     def so_rhs(T):
-        s = Stream(Q=jnp.asarray(100.0), C=C, model=asm1, T=T)
+        s = Stream(Q=jnp.asarray(100.0), C=C, model=asm1, scalars={"T": T})
         return tank.rhs(jnp.asarray(0.0), C, {"in": s}, p)[so]
 
     g = jax.grad(so_rhs)(jnp.asarray(300.0))

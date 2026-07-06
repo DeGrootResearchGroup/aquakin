@@ -31,7 +31,7 @@ import jax.numpy as jnp
 
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.cstr import Aeration, AerationUnit, aeration_transfer
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, mixed_scalars
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -221,10 +221,12 @@ class MBRUnit(AerationUnit, CouplingAware):
         C, _R_f = self._split(state)
         q_in = inputs[self.input_port].Q
         q_perm, q_waste = self._flows(q_in)
-        T_out = self._mixed_inlet_T(inputs)  # carry inlet T on
+        scalars_out = mixed_scalars(inputs, self.input_ports)  # carry inlet scalars on
         return {
-            self.permeate_port: Stream(Q=q_perm, C=self._perm_mult * C, model=self.model, T=T_out),
-            self.waste_port: Stream(Q=q_waste, C=C, model=self.model, T=T_out),
+            self.permeate_port: Stream(
+                Q=q_perm, C=self._perm_mult * C, model=self.model, scalars=scalars_out
+            ),
+            self.waste_port: Stream(Q=q_waste, C=C, model=self.model, scalars=scalars_out),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:

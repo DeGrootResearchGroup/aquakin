@@ -106,25 +106,25 @@ def test_digester_effluent_temperature_is_flow_weighted():
     unit = ADM1DigesterUnit(name="d", model=net, volume=V_LIQ,
                             input_port_names=["feed", "reject"])
     inputs = {
-        "feed":   Stream(Q=jnp.asarray(100.0), C=C, model=net, T=jnp.asarray(308.15)),
-        "reject": Stream(Q=jnp.asarray(50.0),  C=C, model=net, T=jnp.asarray(290.15)),
+        "feed":   Stream(Q=jnp.asarray(100.0), C=C, model=net, scalars={"T": jnp.asarray(308.15)}),
+        "reject": Stream(Q=jnp.asarray(50.0),  C=C, model=net, scalars={"T": jnp.asarray(290.15)}),
     }
     out = unit.compute_outputs(jnp.asarray(0.0), C, inputs, net.default_parameters())
     expected = (100.0 * 308.15 + 50.0 * 290.15) / 150.0
-    assert float(out["effluent"].T) == pytest.approx(expected, rel=1e-9)
+    assert float(out["effluent"].scalars["T"]) == pytest.approx(expected, rel=1e-9)
     # A temperature-agnostic inlet is IGNORED, not allowed to force the whole mix
     # agnostic: the effluent carries the temperature-bearing feed's T. (This is
     # what lets temperature propagate around a loop seeded with an agnostic
-    # zero-flow recycle stream -- see streams.mixed_temperature.)
-    inputs["reject"] = Stream(Q=jnp.asarray(50.0), C=C, model=net, T=None)
+    # zero-flow recycle stream -- see streams.mixed_scalars.)
+    inputs["reject"] = Stream(Q=jnp.asarray(50.0), C=C, model=net)
     out_partial = unit.compute_outputs(jnp.asarray(0.0), C, inputs,
                                        net.default_parameters())
-    assert float(out_partial["effluent"].T) == pytest.approx(308.15, rel=1e-9)
+    assert float(out_partial["effluent"].scalars["T"]) == pytest.approx(308.15, rel=1e-9)
     # Only when NO inlet carries a temperature is the effluent agnostic.
-    inputs["feed"] = Stream(Q=jnp.asarray(100.0), C=C, model=net, T=None)
+    inputs["feed"] = Stream(Q=jnp.asarray(100.0), C=C, model=net)
     out_none = unit.compute_outputs(jnp.asarray(0.0), C, inputs,
                                     net.default_parameters())
-    assert out_none["effluent"].T is None
+    assert out_none["effluent"].scalars.get("T") is None
 
 
 def test_gas_transfer_scales_with_digester_volume():

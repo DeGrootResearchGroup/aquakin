@@ -218,10 +218,13 @@ class UVUnit:
 
     def compute_outputs(self, t, state, inputs, params, signals=None) -> dict:
         s_in = inputs[self.input_port]
-        org_in = s_in.org if s_in.org is not None else self.inlet_density
+        org_carried = s_in.scalars.get("org")
+        org_in = org_carried if org_carried is not None else self.inlet_density
         org_out = _apply_log_removal(org_in, self.log_inactivation(s_in.Q))
         return {
-            self.output_port: Stream(Q=s_in.Q, C=s_in.C, model=self.model, T=s_in.T, org=org_out)
+            self.output_port: Stream(
+                Q=s_in.Q, C=s_in.C, model=self.model, scalars={**s_in.scalars, "org": org_out}
+            )
         }
 
     def flow_outputs(self, input_flows: dict, params, ctx=None) -> dict:
@@ -324,10 +327,13 @@ class ChlorineContactUnit:
     def compute_outputs(self, t, state, inputs, params, signals=None) -> dict:
         s_in = inputs[self.input_port]
         residual = state[0]
-        org_in = s_in.org if s_in.org is not None else self.inlet_density
+        org_carried = s_in.scalars.get("org")
+        org_in = org_carried if org_carried is not None else self.inlet_density
         org_out = _apply_log_removal(org_in, self.log_removal(residual, s_in.Q))
         return {
-            self.output_port: Stream(Q=s_in.Q, C=s_in.C, model=self.model, T=s_in.T, org=org_out)
+            self.output_port: Stream(
+                Q=s_in.Q, C=s_in.C, model=self.model, scalars={**s_in.scalars, "org": org_out}
+            )
         }
 
     def flow_outputs(self, input_flows: dict, params, ctx=None) -> dict:

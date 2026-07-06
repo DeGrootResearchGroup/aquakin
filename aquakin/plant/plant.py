@@ -24,7 +24,7 @@ cycles by ordering downstream units before upstream consumers — see
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Iterable, Optional, Sequence, Union
 
 import diffrax
@@ -57,7 +57,7 @@ from aquakin.plant.results import (
     SteadyStateResult,
 )
 from aquakin.plant.solve_cache import SolveCache
-from aquakin.plant.streams import Stream, StreamSeries
+from aquakin.plant.streams import Stream, StreamSeries, make_scalars
 from aquakin.plant.temperature import (
     OPERATING_T_SIGNAL as _OPERATING_T_SIGNAL,
 )
@@ -1591,7 +1591,10 @@ class Plant:
                 Q = ov.get("Q", base.Q) * ov.get("Q_scale", 1.0)
                 C = ov.get("C", base.C) * ov.get("C_scale", 1.0)
                 streams[(None, port_name)] = Stream(
-                    Q=Q, C=C, model=series.model, T=ov.get("T", base.T)
+                    Q=Q,
+                    C=C,
+                    model=series.model,
+                    scalars=make_scalars(T=ov.get("T", base.scalars.get("T"))),
                 )
             else:
                 streams[(None, port_name)] = series.at(t)
@@ -1771,12 +1774,12 @@ class Plant:
         returns ``None`` and does no extra work."""
         states0 = self._split_state(jnp.asarray(solution.state)[0])
         probe, _ = self._resolve_streams(jnp.asarray(solution.t)[0], states0, params_full)
-        if probe[key].org is None:
+        if probe[key].scalars.get("org") is None:
             return None
 
         def _org_one(t_i, state_row):
             outs, _ = self._resolve_streams(t_i, self._split_state(state_row), params_full)
-            return outs[key].org
+            return outs[key].scalars["org"]
 
         return jax.vmap(_org_one)(jnp.asarray(solution.t), jnp.asarray(solution.state))
 
@@ -2045,10 +2048,11 @@ class Plant:
         have_T = True
         for s in inputs.values():
             Q_total = Q_total + s.Q
-            if getattr(s, "T", None) is None:
+            s_T = s.scalars.get("T")
+            if s_T is None:
                 have_T = False
             else:
-                heat = heat + s.Q * s.T
+                heat = heat + s.Q * s_T
         if not have_T:
             return (Q_total, None)
         return (Q_total, heat / (Q_total + 1e-12))
@@ -2211,7 +2215,7 @@ class Plant:
                 override_T = temp_by_unit.get(name)
                 for port, stream in outputs.items():
                     if override_T is not None:
-                        stream = stream.with_T(override_T)
+                        stream = replace(stream, scalars={**stream.scalars, "T": override_T})
                     all_outputs[(name, port)] = stream
                     streams[(name, port)] = stream
         return all_outputs

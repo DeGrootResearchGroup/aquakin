@@ -170,9 +170,9 @@ class StorageTank:
         Q_out, Q_bypass, _ = self._flow_split(V, s_in.Q)
         return {
             # Released stream carries the (well-mixed) tank concentration.
-            "out": Stream(Q=Q_out, C=C_tank, model=self.model, T=s_in.T),
+            "out": Stream(Q=Q_out, C=C_tank, model=self.model, scalars=s_in.scalars),
             # Bypassed inflow passes straight through at its inlet concentration.
-            "bypass": Stream(Q=Q_bypass, C=s_in.C, model=self.model, T=s_in.T),
+            "bypass": Stream(Q=Q_bypass, C=s_in.C, model=self.model, scalars=s_in.scalars),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:

@@ -549,7 +549,7 @@ def build_bsm2(
         Q=jnp.asarray(0.0),
         C=asm1.default_concentrations(),
         model=asm1,
-        T=jnp.asarray(BSM2_AS_TEMPERATURE_K),
+        scalars={"T": jnp.asarray(BSM2_AS_TEMPERATURE_K)},
     )
 
     # A storage tank is built when either the fixed-release storage or the

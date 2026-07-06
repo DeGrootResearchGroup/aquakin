@@ -171,8 +171,10 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
         C_under = sol_C_under + part_C_under
 
         return {
-            self.overflow_port: Stream(Q=Q_over, C=C_over, model=self.model, T=s_in.T),
-            self.underflow_port: Stream(Q=Q_under, C=C_under, model=self.model, T=s_in.T),
+            self.overflow_port: Stream(Q=Q_over, C=C_over, model=self.model, scalars=s_in.scalars),
+            self.underflow_port: Stream(
+                Q=Q_under, C=C_under, model=self.model, scalars=s_in.scalars
+            ),
         }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:

@@ -1081,16 +1081,18 @@ the plant (`plant.set_temperature_model(...)`, or `build_bsm2(temperature_model=
   fix for that gap.)*
 
 The default-model behaviour: temperature is carried *algebraically* through the
-flowsheet: `Stream` and `InfluentSeries` have an optional `T` (Kelvin); mixers
+flowsheet as one entry in a stream's open-ended `scalars` side-channel map
+(`InfluentSeries` still holds its `T` trajectory as a field; `Stream` stores it
+as `scalars["T"]`, Kelvin, read with `stream.scalars.get("T")`); mixers
 flow-weight it (a heat balance) and every other unit passes it through, so a
 reactor reads its (flow-weighted) inlet temperature and feeds it to the ASM1
-temperature corrections. `T=None` is the default and a static structural
-property — a temperature-agnostic influent leaves every stream `T=None` and the
+temperature corrections. An absent `"T"` is the default and a static structural
+property — a temperature-agnostic influent leaves every stream without one and the
 reactors fall back to their static condition, so existing plants are unchanged.
-The single heat-balance rule every multi-inlet unit (mixer, CSTR, clarifier,
-digester) uses is `streams.mixed_temperature(inputs, names)`: it flow-weights
-only the inlets that carry a temperature and *ignores* a `T=None` inlet rather
-than letting one collapse the whole mix to `None`. This is what lets a
+The single rule every multi-inlet unit (mixer, CSTR, clarifier, digester) uses is
+`streams.mixed_scalars(inputs, names)`: for each scalar it flow-weights only the
+inlets that carry it and *ignores* one that does not rather than letting a single
+absence collapse the whole mix. This is what lets a
 temperature-carrying influent propagate around a recycle loop whose back-edge is
 auto-seeded with a zero-flow, temperature-agnostic stream (the seed contributes
 nothing and is ignored); earlier the `all(inlet.T is not None)` gate meant one
@@ -1340,12 +1342,13 @@ two add that, matching the commercial simulators (GPS-X / SUMO track an indicato
 organism + the disinfectant residual and apply a dose/CT log-removal). Both
 **pass the process (ASM) stream through unchanged** (disinfection does not
 materially change COD/N/P at this fidelity) and reduce an **indicator-organism
-density carried on the stream** — a new optional `Stream.org` scalar, the
-disinfection analogue of the temperature `T` scalar: mixers flow-weight it (the
-shared `streams._flow_weighted_scalar` behind both `mixed_temperature` and the
-new `mixed_organism`) and pass-through units propagate it, and a disinfection unit
-applies `N = N0·10^(−log)`. When the inlet carries no indicator (`org is None`)
-the unit falls back to its design `inlet_density`, so a terminal disinfection
+density carried on the stream** — the `"org"` entry of a stream's `scalars`
+side-channel map, the disinfection analogue of the temperature `"T"` scalar:
+mixers flow-weight it (the shared `streams._flow_weighted_scalar` behind the one
+`mixed_scalars` combiner, which handles every scalar) and pass-through units
+propagate it, and a disinfection unit applies `N = N0·10^(−log)`. When the inlet
+carries no indicator (`"org"` absent from `scalars`) the unit falls back to its
+design `inlet_density`, so a terminal disinfection
 train works without wiring an indicator influent. The reconstructed effluent
 surfaces it: `Plant.stream(...)` returns a `StreamSeries` with an `org` trajectory
 (reconstructed on demand via `Plant._reconstruct_stream_org`; `None` for an
@@ -1441,7 +1444,7 @@ MVP — fixed volume with the permeate following the feed (vs a flux-controlled
 variable-volume membrane) and reversible-fouling TMP (vs explicit backwash/cleaning
 events) — are the natural simple forms; both are extension points. Like the CSTR,
 the MBR carries the **flow-weighted inlet temperature** onto its outlet streams and
-into the Arrhenius kinetics/aeration (via `streams.mixed_temperature`), so a
+into the Arrhenius kinetics/aeration (via `streams.mixed_scalars`), so a
 seasonal influent drives it; and `plant.mass_balance` treats it as a first-class
 reactive aerated unit — its `[C, R_f]` inventory reads the fixed reactor volume (the
 fouling resistance `R_f` is massless), and it exposes the CSTR `_kla_vec`/`_sat_vec`/

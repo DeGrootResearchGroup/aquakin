@@ -32,7 +32,7 @@ import jax
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, make_scalars
 from aquakin.plant.units import FlowContext
 
 if TYPE_CHECKING:
@@ -81,7 +81,7 @@ class RecycleResolver:
                 else self.plant._recycle_seeds[key]
             )
             q = resolved_flows[key]
-            seeded[key] = Stream(Q=q, C=iv.C, model=iv.model, T=iv.T)
+            seeded[key] = Stream(Q=q, C=iv.C, model=iv.model, scalars=dict(iv.scalars))
         return seeded
 
     def _resolve_recycle_concentrations(
@@ -200,12 +200,22 @@ class RecycleResolver:
                 forward_full, keys, seed_Q, solved_C, solved_T, resolve_T
             )
             return {
-                k: Stream(Q=solved_Q[k], C=solved_C[k], model=seed_net[k], T=solved_T[k])
+                k: Stream(
+                    Q=solved_Q[k],
+                    C=solved_C[k],
+                    model=seed_net[k],
+                    scalars=make_scalars(T=solved_T[k]),
+                )
                 for k in keys
             }
 
         return {
-            k: Stream(Q=resolved_flows[k], C=solved_C[k], model=seed_net[k], T=solved_T[k])
+            k: Stream(
+                Q=resolved_flows[k],
+                C=solved_C[k],
+                model=seed_net[k],
+                scalars=make_scalars(T=solved_T[k]),
+            )
             for k in keys
         }
 
@@ -359,7 +369,8 @@ class RecycleResolver:
         # T-gate needs every inlet to have T); otherwise the whole plant is
         # T=None regardless of the nominal recycle-seed T. So resolve a T channel
         # only in that case -- a number around the loop ignites the gate.
-        carries_T = any(getattr(s, "T", None) is not None for s in self.plant.influents.values())
+        # influents are InfluentSeries (their own T trajectory field), not Streams.
+        carries_T = any(s.T is not None for s in self.plant.influents.values())
         t_seed = jnp.zeros(()) if carries_T else None
 
         # The influent streams are independent of the probe trial values, so
@@ -369,13 +380,18 @@ class RecycleResolver:
 
         def forward(c_by_key, T_by_key):
             seeded = {
-                k: Stream(Q=resolved_flows[k], C=c_by_key[k], model=seed_net[k], T=T_by_key[k])
+                k: Stream(
+                    Q=resolved_flows[k],
+                    C=c_by_key[k],
+                    model=seed_net[k],
+                    scalars=make_scalars(T=T_by_key[k]),
+                )
                 for k in keys
             }
             out = self.plant._sweep_outputs(
                 t, states, influent, seeded, params_full, passes=1, signals=signals
             )
-            return ({k: out[k].C for k in keys}, {k: out[k].T for k in keys})
+            return ({k: out[k].C for k in keys}, {k: out[k].scalars.get("T") for k in keys})
 
         # Q-varying one-pass map for the adaptive solver: the recycle back-edge
         # Q is itself a fixed-point variable, because a concentration-dependent
@@ -386,7 +402,12 @@ class RecycleResolver:
         # the true (Q, C, T) fixed point. Returns (C, T, Q) read back on the edges.
         def forward_full(q_by_key, c_by_key, T_by_key):
             seeded = {
-                k: Stream(Q=q_by_key[k], C=c_by_key[k], model=seed_net[k], T=T_by_key[k])
+                k: Stream(
+                    Q=q_by_key[k],
+                    C=c_by_key[k],
+                    model=seed_net[k],
+                    scalars=make_scalars(T=T_by_key[k]),
+                )
                 for k in keys
             }
             out = self.plant._sweep_outputs(
@@ -394,7 +415,7 @@ class RecycleResolver:
             )
             return (
                 {k: out[k].C for k in keys},
-                {k: out[k].T for k in keys},
+                {k: out[k].scalars.get("T") for k in keys},
                 {k: out[k].Q for k in keys},
             )
 

@@ -116,8 +116,12 @@ class HydraulicDelayUnit:
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         Q, C = self._flow_and_conc(state)
-        # Temperature passes straight through (the reference treats T(out)=T(in)).
-        return {self.output_port: Stream(Q=Q, C=C, model=self.model, T=inputs[self.input_port].T)}
+        # Side-channel scalars pass straight through (T(out)=T(in), etc.).
+        return {
+            self.output_port: Stream(
+                Q=Q, C=C, model=self.model, scalars=inputs[self.input_port].scalars
+            )
+        }
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """The outlet flow is the held-flow state (the delayed flow), read from

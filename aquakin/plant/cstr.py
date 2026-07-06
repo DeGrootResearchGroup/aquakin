@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant.coupling import CouplingAware
-from aquakin.plant.streams import Stream, mixed_temperature
+from aquakin.plant.streams import Stream, mixed_scalars
 from aquakin.plant.temperature import OPERATING_T_SIGNAL
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -380,12 +380,12 @@ class AerationUnit:
     def _mixed_inlet_T(self, inputs: dict[str, Stream]):
         """Flow-weighted inlet temperature, or ``None`` if no inlet carries one.
 
-        Uses the canonical :func:`~aquakin.plant.streams.mixed_temperature`,
-        which ignores a temperature-agnostic (``T is None``) inlet rather than
+        Uses the canonical :func:`~aquakin.plant.streams.mixed_scalars`, which
+        ignores a temperature-agnostic (``"T"`` absent) inlet rather than
         collapsing the whole mix to ``None``. The well-mixed reactor is taken to
         be at this temperature (no thermal lag -- the hydraulic retention is
         hours, far shorter than the seasonal temperature variation)."""
-        return mixed_temperature(inputs, self.input_ports)
+        return mixed_scalars(inputs, self.input_ports, keys=("T",)).get("T")
 
 
 @dataclass
@@ -515,7 +515,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
                 Q=Q_total,
                 C=state,
                 model=self.model,
-                T=self._mixed_inlet_T(inputs),
+                scalars=mixed_scalars(inputs, self.input_port_names),
             )
         }
 
