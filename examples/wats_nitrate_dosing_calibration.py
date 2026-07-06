@@ -72,9 +72,9 @@ def main() -> None:
         free_params=FREE, observed_species=OBSERVED,
         transforms={name: "positive_log" for name in FREE},
         loss="nll", sigma=sigma,
-        optimizer="gauss_newton",
+        optimizer=aquakin.OptimizerConfig(method="gauss_newton"),
         diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
-        laplace=True, laplace_method="gauss_newton",
+        laplace=aquakin.LaplaceConfig(method="gauss_newton"),
     )
 
     print()
