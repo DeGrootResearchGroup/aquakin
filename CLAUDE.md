@@ -342,6 +342,17 @@ act on the following:
    - Installation or dependency changes
    - New examples
 
+4. **CHANGELOG.md** — Does this change warrant a changelog entry? Add it under
+   the `[Unreleased]` section, in the appropriate Keep a Changelog category
+   (`Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`).
+   Entries are curated for users deciding whether to upgrade — write for a human,
+   not one line per commit. Document, for example:
+   - New or changed public API, built-in models, or model-file format
+   - Behavioural changes, bug fixes, and deprecations/removals users would notice
+   - Installation or dependency changes
+   Do **not** log changes with no user-visible effect (internal refactors, test-
+   only or CI changes, docs, tracking issues) unless they are otherwise notable.
+
 If the answer to any of the above is yes, make those updates as part of the
 same task before marking it complete.
 
