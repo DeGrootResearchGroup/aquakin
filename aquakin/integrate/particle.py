@@ -20,8 +20,10 @@ import jax.numpy as jnp
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
     DifferentiationConfig,
+    ExportableSolutionMixin,
     GradientCheckMixin,
     IntegratorConfig,
+    PlottableSolutionMixin,
     _HasNamedSpecies,
     _interp_fields_to_scalar,
     cached_jitted_solver,
@@ -75,7 +77,7 @@ class Track:
 
 
 @dataclass
-class TrackSolution(_HasNamedSpecies):
+class TrackSolution(_HasNamedSpecies, PlottableSolutionMixin, ExportableSolutionMixin):
     """Solution returned by :meth:`ParticleTrackReactor.solve`.
 
     ``C`` (shape ``(n_t, n_species)``) is the raw integrated state. If the
