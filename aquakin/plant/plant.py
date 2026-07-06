@@ -2410,9 +2410,7 @@ class Plant:
         # conflict, and the events / forward_fast combinations) are folded into
         # _validate_solve_args below, so solve reads resolve -> validate ->
         # collect-events -> dispatch.
-        gradient, adjoint, adjoint_max_steps, adjoint_low_memory = self._resolve_diff_config(
-            diff
-        )
+        gradient, adjoint, adjoint_max_steps, adjoint_low_memory = self._resolve_diff_config(diff)
         self._build_state_layout()
         self._build_parameter_layout()
         if params is None:
@@ -3003,9 +3001,7 @@ class Plant:
                 self._jit_cache[fkey] = jitted
             with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
                 ts, ys = jitted(y0, params, te)
-            return self._finalize_solution(
-                ts, ys, time_factor=time_factor, time_unit=time_unit
-            )
+            return self._finalize_solution(ts, ys, time_factor=time_factor, time_unit=time_unit)
         warnings.warn(
             "forward_fast: the colored-Jacobian start-state guard failed; "
             "falling back to the diffrax forward path for this plant.",
