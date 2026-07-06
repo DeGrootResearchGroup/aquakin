@@ -685,8 +685,10 @@ def calibrate_plant(
     )
 
     # Label the (fixed, single-solve) problem's gradient path from the plant
-    # DifferentiationConfig so the generic layer's finite-path reasoning is right.
-    gradient = "stable_adjoint" if diff.method == "stable" else "jax_adjoint"
+    # DifferentiationConfig so the generic layer's finite-path reasoning is right
+    # (the config owns the method -> backend decode).
+    diff.validated()
+    gradient = diff.gradient_backend()
     cfg = _FitConfig(
         gradient=gradient,
         ad_mode="reverse",
