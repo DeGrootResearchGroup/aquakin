@@ -23,6 +23,31 @@ def test_operating_conditions_exported_at_top_level():
     assert aquakin.OperatingConditions is OperatingConditions
 
 
+# ----- condition_defaults() scalar accessor -------------------------------
+
+def test_condition_defaults_returns_scalar_dict():
+    """The public scalar-dict counterpart to default_conditions() (the accessor
+    that lets a plant builder seed a reactor's conditions= from the model's
+    declared operating point, without reaching into the private
+    _condition_defaults)."""
+    net = aquakin.load_model("asm1")
+    defaults = net.condition_defaults()
+    assert isinstance(defaults, dict)
+    # matches the SpatialConditions the model builds, field for field
+    conds = net.default_conditions()
+    assert set(defaults) == set(conds.fields)
+    for name, value in defaults.items():
+        assert float(conds.fields[name][0]) == pytest.approx(value)
+
+
+def test_condition_defaults_is_a_copy():
+    """Mutating the returned dict must not corrupt the model's stored defaults."""
+    net = aquakin.load_model("asm1")
+    d = net.condition_defaults()
+    d["T"] = -999.0
+    assert net.condition_defaults() != d  # the model's copy is untouched
+
+
 def test_operating_conditions_validates_required():
     oc = OperatingConditions(pH=7.0)
     oc.validate_required(["pH"])

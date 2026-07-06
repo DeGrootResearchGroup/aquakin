@@ -236,7 +236,7 @@ def mass_balance(
     in_names = list(plant.influents) if influent_ports is None else list(influent_ports)
 
     # --- inflow (influent series) -------------------------------------------
-    inflow = {q: 0.0 for q in comps}
+    inflow = dict.fromkeys(comps, 0.0)
     for name in in_names:
         series = plant.influents[name]
         net = series.model
@@ -271,7 +271,7 @@ def mass_balance(
             inflow[q] += float(np.trapezoid(_flux(Q_dose, C_dose, cvec[q]), t))
 
     # --- outflow (terminal material streams) --------------------------------
-    outflow = {q: 0.0 for q in comps}
+    outflow = dict.fromkeys(comps, 0.0)
     if effluent_ports:
         from aquakin.plant.bsm.evaluation import _reconstruct
 
@@ -284,7 +284,7 @@ def mass_balance(
                 outflow[q] += float(np.trapezoid(_flux(np.asarray(Q), np.asarray(C), cvec[q]), t))
 
     # --- accumulation (inventory change t1 - t0) ----------------------------
-    accumulation = {q: 0.0 for q in comps}
+    accumulation = dict.fromkeys(comps, 0.0)
     layout = plant._state_layout
     for unit_name, (start, size) in layout.items():
         inv0 = _unit_inventory(
@@ -305,7 +305,7 @@ def mass_balance(
     # minus R_COD (the reactions' net COD production -- negative, since
     # denitrification oxidises COD and the digester gas-outflow exports biogas);
     # for N, −R_N (denitrification N₂; nitrification and the digester conserve N).
-    gas = {q: 0.0 for q in comps}
+    gas = dict.fromkeys(comps, 0.0)
     gas_detail = {}
 
     o2_transfer, R = _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
@@ -415,7 +415,7 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
         state_i = solution.state[i]
         sig = plant.signals_at(t[i], state_i, params) if need_signals else {}
         o2 = 0.0
-        R = {q: 0.0 for q in rqs}
+        R = dict.fromkeys(rqs, 0.0)
         for name in reactive:
             unit = plant.units[name]
             start, size = layout[name]

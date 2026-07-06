@@ -89,7 +89,7 @@ def _warm_y0(plant, composition, asm1_model):
     reactors = _as_reactor_names(plant)
     asm1 = asm1_model if asm1_model is not None else plant.units[reactors[0]].model
     warm = asm1.concentrations(composition)
-    return plant.initial_state(overrides={name: warm for name in reactors})
+    return plant.initial_state(overrides=dict.fromkeys(reactors, warm))
 
 
 def bsm2_warm_start(

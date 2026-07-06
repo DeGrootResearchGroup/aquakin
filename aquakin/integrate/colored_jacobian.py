@@ -49,15 +49,15 @@ from diffrax._root_finder._verychord import VeryChord, _NoAux, _VeryChordState
 from lineax.internal import complex_to_real_dtype
 
 __all__ = [
+    "COLORED_JACOBIAN_GUARD_RTOL",
     "ColoredVeryChord",
+    "build_colored_root_finder",
+    "colored_jacobian_guard",
+    "colored_jacobian_max_error",
     "greedy_color",
     "jacobian_sparsity_pattern",
-    "structural_sparsity_pattern",
-    "build_colored_root_finder",
-    "colored_jacobian_max_error",
     "materialize_colored_jacobian",
-    "colored_jacobian_guard",
-    "COLORED_JACOBIAN_GUARD_RTOL",
+    "structural_sparsity_pattern",
 ]
 
 

@@ -109,12 +109,19 @@ target-version = "py310"
 # Start broad on the high-signal families; the `ignore` list below defers the
 # rules that map to dedicated open audit issues so they can be tackled (and the
 # ignore removed) in their own PRs rather than churning this tooling change.
-#   E,W  pycodestyle   F  pyflakes   I  isort
-#   B    flake8-bugbear            RUF  ruff-specific
-# `UP` (pyupgrade) is deliberately NOT selected yet: it flags ~530 typing
-# modernizations (Optional -> X | None, dropping quoted annotations) tracked in
-# issue #467; enable it there so its large auto-fix lands as one reviewable PR.
-select = ["E", "F", "W", "I", "B", "RUF"]
+#   E,W  pycodestyle     F   pyflakes            I    isort
+#   B    flake8-bugbear  RUF ruff-specific       NPY  numpy (incl. NumPy-2.0 API)
+#   PIE  flake8-pie      ICN import-conventions  FA   future-annotations
+# NPY/PIE/ICN/FA were added while the package had ZERO violations of each, so
+# they add no code churn -- they exist to prevent regressions (NPY in particular
+# catches deprecated / NumPy-2.0 numpy API).
+# C420 and SIM300 are enabled as individual rules -- the only cleanly
+# safe-fixable, uncontroversial members of the C4 / SIM families. The rest of
+# those families, plus TC/RET/PERF/PTH/TID/FURB, are evaluated in issue #532
+# (each its own PR); `UP` (pyupgrade) is deliberately NOT selected yet -- it
+# flags ~530 typing modernizations (Optional -> X | None, dropping quoted
+# annotations) tracked in #467, so its large auto-fix lands as one reviewable PR.
+select = ["E", "F", "W", "I", "B", "RUF", "NPY", "PIE", "ICN", "FA", "C420", "SIM300"]
 ignore = [
     # `ruff format` owns line width: it reflows all code to line-length and
     # leaves only un-splittable lines long (string literals, URLs/refs in
@@ -127,7 +134,6 @@ ignore = [
     "F821",   # quoted type-only annotations (e.g. "Callable | None") -> #467
     "RUF013", # implicit Optional from `= None` defaults              -> #467
     "E741",   # ambiguous names (l/r lambdas)                          -> #470 / #474
-    "E702",   # multiple statements on one line (semicolons)           -> #462
     "E731",   # lambda assigned to a name                              -> #474
     "B023",   # function uses loop variable (guarded by default-arg)   -> #470
     "B905",   # `zip()` without explicit `strict=`                     -> #474
@@ -135,7 +141,6 @@ ignore = [
     "B008",   # function call in default argument                      -> #474
     "RUF005", # collection-literal concatenation                       -> #474
     "RUF007", # `zip()` instead of `itertools.pairwise`                -> #474
-    "RUF022", # unsorted `__all__`                                     -> #477
     "RUF059", # unused unpacked variable                               -> #474
 ]
 
