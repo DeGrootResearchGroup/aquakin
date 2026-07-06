@@ -7,11 +7,31 @@ import pytest
 
 import aquakin  # noqa: F401  (enables x64)
 from aquakin.core.ph_solver import (
+    _adaptive_root_log_h,
     charge_balance_residual,
     charge_balance_residual_deriv,
     equilibrium_constants,
     solve_ph,
 )
+
+
+def test_generic_root_finder_is_independent_of_the_chemistry():
+    """The extracted root-finder solves any monotone-decreasing residual in
+    ``u = ln[H+]`` space, not just the charge balance -- the SRP payoff. Give it a
+    residual with a known root and check it converges there via the ``eval_fn``
+    hook alone (no chemistry), forward-mode and vectorised."""
+    # A strictly decreasing residual f(h) = h_root - h with a unique root at
+    # h = h_root; df/dh = -1 so df/du = -h. Root u* = ln(h_root).
+    h_root = jnp.asarray([1e-3, 1e-7, 1e-11])
+
+    def eval_fn(u, _aux):
+        h = jnp.exp(u)
+        return (h_root - h), (-h), None  # (fv, dfdu = f'(h)*h, carry)
+
+    u, aux = _adaptive_root_log_h(
+        eval_fn, jnp.full(3, 1e-7), out_shape=(3,), max_iter=60
+    )
+    np.testing.assert_allclose(np.asarray(jnp.exp(u)), np.asarray(h_root), rtol=1e-9)
 
 
 def test_analytic_derivative_matches_autodiff():
