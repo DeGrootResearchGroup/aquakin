@@ -1,0 +1,38 @@
+# Codecov configuration.
+#
+# Coverage is collected per CI tier and uploaded under a flag: `fast` (every
+# push/PR), `slow` and `validation` (push-to-main and `full-ci` PRs only). The
+# project badge/number is the union of all flags.
+#
+# carryforward: slow/validation do not run on a normal PR, so without this a PR
+# build would report only `fast` coverage and look like a regression. Carrying
+# forward reuses each flag's last known coverage when a build does not upload it,
+# so PRs show the full combined picture.
+#
+# Status checks are informational (never fail CI) -- this adds a badge and a
+# report, not a coverage gate.
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+flag_management:
+  default_rules:
+    carryforward: true
+
+flags:
+  fast:
+    carryforward: true
+  slow:
+    carryforward: true
+  validation:
+    carryforward: true
+
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: false
