@@ -52,7 +52,12 @@ from aquakin.plant.characterize import (
 from aquakin.plant.influent import InfluentSeries, read_influent_csv
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
 from aquakin.plant.mbr import MBRUnit
-from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.mixer import (
+    MixerUnit,
+    RatioSplitter,
+    SetpointSplitter,
+    ThresholdSplitter,
+)
 from aquakin.plant.plant import (
     Connection,
     ParameterLayout,
@@ -195,7 +200,9 @@ __all__ = [
     "SettlingModel",
     "InterfaceSettling",
     "LayeredSettling",
-    "SplitterUnit",
+    "RatioSplitter",
+    "SetpointSplitter",
+    "ThresholdSplitter",
     "StatelessUnit",
     "StateTranslator",
     "StorageTank",

@@ -21,7 +21,7 @@ import pytest
 import aquakin
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.influent import InfluentSeries
-from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.mixer import MixerUnit, RatioSplitter
 from aquakin.plant.plant import Plant
 
 # Every test here builds a plant and compiles at least one solve (`_prime`); run
@@ -44,8 +44,8 @@ def _recycle_plant(asm1, carry_T=False):
     plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
                             conditions={"T": 293.15},
                             aeration=Aeration(kla=120.0, do_sat=8.0)))
-    plant.add_unit(SplitterUnit("split", asm1,
-                                output_port_ratios={"out": 0.7, "rec": 0.3}))
+    plant.add_unit(RatioSplitter("split", asm1,
+                                 output_port_ratios={"out": 0.7, "rec": 0.3}))
     T = 291.0 if carry_T else None
     plant.add_influent("feed", InfluentSeries.constant(
         asm1, SS=120.0, SNH=30.0, XS=80.0, XB_H=40.0, Q=1000.0, T=T),

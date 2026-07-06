@@ -12,7 +12,7 @@ from aquakin.plant.bsm import (
 )
 from aquakin.plant.cstr import CSTRUnit
 from aquakin.plant.influent import InfluentSeries
-from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.mixer import MixerUnit, RatioSplitter
 from aquakin.plant.plant import Plant
 
 
@@ -151,8 +151,8 @@ def test_temperature_propagates_around_auto_seeded_recycle(asm1):
     plant.add_unit(MixerUnit("mix", ["fresh", "rec"], asm1))
     plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
                             conditions={"T": 293.15}))
-    plant.add_unit(SplitterUnit("split", asm1,
-                                output_port_ratios={"out": 0.7, "rec": 0.3}))
+    plant.add_unit(RatioSplitter("split", asm1,
+                                 output_port_ratios={"out": 0.7, "rec": 0.3}))
     plant.add_influent("feed", InfluentSeries.constant(asm1, SS=60.0, Q=1000.0,
                                                        T=291.0), to="mix.fresh")
     plant.connect("mix", "tank")
@@ -177,8 +177,8 @@ def test_agnostic_influent_keeps_plant_temperature_agnostic(asm1):
     plant.add_unit(MixerUnit("mix", ["fresh", "rec"], asm1))
     plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
                             conditions={"T": 293.15}))
-    plant.add_unit(SplitterUnit("split", asm1,
-                                output_port_ratios={"out": 0.7, "rec": 0.3}))
+    plant.add_unit(RatioSplitter("split", asm1,
+                                 output_port_ratios={"out": 0.7, "rec": 0.3}))
     plant.add_influent("feed", InfluentSeries.constant(asm1, SS=60.0, Q=1000.0),
                        to="mix.fresh")            # T=None
     plant.connect("mix", "tank")

@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Optional
 from aquakin.plant.clarifier import IdealClarifier
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.dosing import DosingUnit, Reagent
-from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.mixer import MixerUnit, SetpointSplitter
 from aquakin.plant.plant import Plant
 from aquakin.plant.takacs import TakacsClarifier
 
@@ -333,7 +333,7 @@ def build_a2o(
 
     # ----- Aerobic outlet splitter: internal recycle Qa + clarifier feed -----
     plant.add_unit(
-        SplitterUnit(
+        SetpointSplitter(
             name="aer_split",
             model=model,
             output_port_flows={"internal_recycle": Qa},
@@ -367,7 +367,7 @@ def build_a2o(
 
     # ----- Underflow splitter: RAS Qr + wastage Qw -----
     plant.add_unit(
-        SplitterUnit(
+        SetpointSplitter(
             name="underflow_split",
             model=model,
             output_port_flows={"ras": Qr},

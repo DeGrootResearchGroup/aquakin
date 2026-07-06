@@ -31,7 +31,7 @@ Flowsheet (open-loop, constant-influent steady state)::
 
 All controlled (pumped) flows -- internal recycle ``Qintr``, RAS ``Qr``,
 wastage ``Qw``, primary sludge ``f_PS·Q`` -- are fixed setpoints (see the
-SplitterUnit flow mode / clarifier ``underflow_Q``). The thickener and
+SetpointSplitter / clarifier ``underflow_Q``). The thickener and
 dewatering underflow flows are concentration-dependent but sit on the low-gain
 reject loop. The storage tank / hydraulic delay / bypass and the controllers
 are omitted (open-loop steady state).
@@ -50,7 +50,7 @@ from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
-from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.mixer import MixerUnit, SetpointSplitter, ThresholdSplitter
 from aquakin.plant.plant import Plant
 from aquakin.plant.primary_clarifier import PrimaryClarifier
 from aquakin.plant.separators import IdealThickener
@@ -577,7 +577,7 @@ def build_bsm2(
     # rejoins the clarified effluent downstream of the secondary clarifier.
     if influent_bypass:
         plant.add_unit(
-            SplitterUnit(
+            ThresholdSplitter(
                 name="bypass_split",
                 model=asm1,
                 threshold=float(bypass_threshold),
@@ -662,7 +662,7 @@ def build_bsm2(
         )
 
     plant.add_unit(
-        SplitterUnit(
+        SetpointSplitter(
             name="tank5_split",
             model=asm1,
             output_port_flows={"internal_recycle": Qintr},
@@ -684,7 +684,7 @@ def build_bsm2(
         )
     )
     plant.add_unit(
-        SplitterUnit(
+        SetpointSplitter(
             name="underflow_split",
             model=asm1,
             output_port_flows={"ras": Qr},

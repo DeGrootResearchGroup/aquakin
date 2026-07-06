@@ -4,7 +4,7 @@ import jax.numpy as jnp
 
 import aquakin
 from aquakin.plant.clarifier import IdealClarifier
-from aquakin.plant.mixer import MixerUnit, SplitterUnit
+from aquakin.plant.mixer import MixerUnit, RatioSplitter
 from aquakin.plant.separators import IdealThickener
 from aquakin.plant.units import StatelessUnit, Unit
 
@@ -17,7 +17,7 @@ def test_stateless_units_inherit_the_mixin():
     net = _net()
     units = [
         MixerUnit("mix", ["a", "b"], net),
-        SplitterUnit("split", net, output_port_ratios={"x": 0.5, "y": 0.5}),
+        RatioSplitter("split", net, output_port_ratios={"x": 0.5, "y": 0.5}),
         IdealClarifier(name="clar", model=net, underflow_Q=100.0),
         IdealThickener(name="thick", model=net, target_tss_percent=5.0),
     ]

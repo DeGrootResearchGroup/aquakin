@@ -463,7 +463,7 @@ three fixes, all diagnosed against the official BSM1 reference code:
   (probe the affine map, one `lineax`/`jnp.linalg.solve`), then runs the
   concentration sweep on the fixed flows. This was the keystone. **Affinity is
   checked:** the probe is exact only if every `flow_outputs` is affine in the
-  recycle flows, which a threshold-mode `SplitterUnit` / `StorageTank` bypass is
+  recycle flows, which a `ThresholdSplitter` / `StorageTank` bypass is
   *not* (piecewise-linear, a kink). On the first non-traced `solve` the plant
   re-evaluates the forward pass at the solved recycle flows and `warnings.warn`s
   if it does not reproduce them (`Plant._warn_if_flow_nonaffine`) — the residual
@@ -630,7 +630,7 @@ is what production simulators use to snap to steady state on any topology.
   block after the kinetic model blocks (so kinetic indices are unchanged); the
   setpoints are addressed by name `"<unit>.<setpoint>"` (e.g.
   `"underflow_split.ras"`, `"clarifier.underflow_Q"`, `"primary.f_PS"`). The
-  `FlowParameterized` mixin (on `SplitterUnit`, `IdealClarifier`,
+  `FlowParameterized` mixin (on the flow splitters, `IdealClarifier`,
   `TakacsClarifier`, `PrimaryClarifier`) provides the resolution; a unit used
   standalone (no plant) resolves the default, so it is unchanged. **Backward
   compatible:** a kinetic-only parameter vector (the pre-flow convention, e.g.
@@ -892,7 +892,7 @@ with that adjoint, or take a reverse-mode gradient). `sensitivity`/`dgsm` with
 The dynamic (time-varying-influent) run *used* to hit the step ceiling, which
 was attributed to diurnal-forcing stiffness. The real cause was a **flow-model
 bug**: the recycle streams (internal recycle `Qa`, RAS `Qr`, wastage `Qw`) were
-modelled as fixed-*fraction* `SplitterUnit`s and the clarifier effluent as a
+modelled as fixed-*fraction* `RatioSplitter`s and the clarifier effluent as a
 fixed flow — constants calibrated only at the design influent `Q_avg`. The
 recycle-flow algebra then has a near-singular gain
 (`tank5_throughput = (Q_fresh − 17693)/0.00816`), so a ±10% influent swing whips
@@ -903,8 +903,8 @@ hidden at steady state (sitting exactly at `Q_avg`, where the fractions are
 correct). The BSM1/BSM2 reference (`asm1init_bsm2.m`) settles it: `Qa = 3·Qin0`,
 `Qr = Qin0`, `Qw = 300` are **constant pumped flows** off a fixed reference flow,
 and the settler computes the effluent as the *free remainder*
-(`Q_e = Q_f − (Q_r + Q_w)`). The fix mirrors this: `SplitterUnit` gains a
-fixed-setpoint *flow mode* (`output_port_flows` + `remainder_port`); the
+(`Q_e = Q_f − (Q_r + Q_w)`). The fix mirrors this: a fixed-setpoint splitter
+(`SetpointSplitter`, `output_port_flows` + `remainder_port`); the
 clarifiers gain a fixed `underflow_Q` (= `Qr + Qw`) with the overflow as the
 remainder; `build_bsm1` wires the recycles as constant pumps. Throughput now
 holds ~5× `Q_in` under any influent, and the 14-day dry run integrates in ~5k
@@ -1561,8 +1561,8 @@ front-most, steady state unchanged).
 wet-weather bypass: raw influent flow above `bypass_threshold` (default 60000
 m³/d) is diverted around the whole treatment train (primary, AS, secondary
 clarifier) and rejoined with the clarified effluent — protecting the plant
-hydraulics at the cost of releasing untreated wastewater. Built on a new
-`SplitterUnit` **threshold mode** (`threshold` + `threshold_port` +
+hydraulics at the cost of releasing untreated wastewater. Built on the
+`ThresholdSplitter` (`threshold` + `threshold_port` +
 `remainder_port`): `above = max(Q_in − threshold, 0)` to the threshold port,
 `min(Q_in, threshold)` to the remainder. The split is on the **raw influent**
 flow (an external input), so it stays a constant within the exact recycle-flow

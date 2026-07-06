@@ -1,4 +1,4 @@
-"""Stateless flow-routing units: MixerUnit and SplitterUnit."""
+"""Stateless flow-routing units: MixerUnit and the flow splitters."""
 
 from __future__ import annotations
 
@@ -89,126 +89,26 @@ class MixerUnit(StatelessUnit):
 
 
 @dataclass
-class SplitterUnit(StatelessUnit, FlowParameterized):
-    """Splits one input stream into N output streams.
+class _SplitterBase(StatelessUnit, FlowParameterized):
+    """Shared base for the stateless flow splitters.
 
-    Concentration is preserved across all outputs (passive splitter); only
-    the flow rate is partitioned. Two partition modes, exactly one of which
-    must be supplied:
+    A splitter routes one input stream (port ``"in"``) into several outputs,
+    partitioning **only the flow**: concentration and every side-channel scalar
+    pass through unchanged on each outlet (a passive split). The three concrete
+    splitters differ only in *how* the flow is partitioned -- a fixed fraction
+    (:class:`RatioSplitter`), fixed absolute pump setpoints with a remainder
+    (:class:`SetpointSplitter`), or a threshold diversion
+    (:class:`ThresholdSplitter`) -- so each is a distinct type carrying exactly
+    the fields its rule needs, rather than one unit multiplexing on which of five
+    mutually-exclusive optional fields happened to be supplied. Picking the class
+    *is* picking the mode; the required fields are non-optional, so an incomplete
+    or mixed configuration is a construction error, not a runtime guard.
 
-    - **ratio mode** (``output_port_ratios``): each output gets a fixed
-      *fraction* of the inlet flow. Fractions must sum to 1.
-    - **flow mode** (``output_port_flows`` + ``remainder_port``): the named
-      outputs are *flow-controlled pumps* delivering fixed absolute setpoint
-      flows; ``remainder_port`` takes whatever is left
-      (``Q_in - sum(setpoints)``). This is the correct model for the BSM
-      recycle pumps (internal recycle, RAS, wastage), whose volumetric flows
-      are held constant regardless of influent — see :func:`build_bsm1`. A
-      fixed *fraction* of throughput, by contrast, makes the recycle-flow
-      loop gain near-singular off the design influent and the plant blows up
-      under dynamic flow. If the feed transiently drops *below* the total
-      setpoint the **material** streams (``compute_outputs``) share the available
-      flow proportionally (``q·min(1, Q_in/Σsetpoints)``) with a zero remainder,
-      so the unit never carries more than it receives. The recycle-flow rule
-      (``flow_outputs``) stays the exact *affine* ``Q_in − Σsetpoints`` remainder
-      (which the linear recycle solve requires); the two coincide whenever
-      ``Q_in ≥ Σsetpoints``, true at any steady state.
-
-    - **threshold mode** (``threshold`` + ``threshold_port`` +
-      ``remainder_port``): inlet flow *above* ``threshold`` goes to
-      ``threshold_port`` (``max(Q_in - threshold, 0)``) and the rest
-      (``min(Q_in, threshold)``) to ``remainder_port``. This is the BSM2
-      hydraulic influent bypass (flow above a limit diverted around the
-      treatment). The split is piecewise-linear (a kink at ``threshold``), so
-      the exact recycle-flow solve (:meth:`Plant._resolve_flows`) is only exact
-      when the inlet flow is *independent of the recycle flows* -- e.g. fed
-      directly by an external influent, as in :func:`build_bsm2`.
-
-    Parameters
-    ----------
-    name : str
-        Unit identifier.
-    model : CompiledModel
-    output_port_ratios : dict[str, float], optional
-        Ratio mode: output port name -> fraction of inlet flow (sum to 1).
-    output_port_flows : dict[str, float], optional
-        Flow mode: output port name -> fixed setpoint flow (m³/d). Requires
-        ``remainder_port``.
-    threshold : float, optional
-        Threshold mode: inlet-flow limit (m³/d). Requires ``threshold_port``
-        and ``remainder_port``.
-    threshold_port : str, optional
-        Threshold mode: the output port carrying the above-threshold flow.
-    remainder_port : str, optional
-        Flow / threshold mode: the output port carrying the remaining flow.
+    ``state_size`` / ``initial_state`` / ``rhs`` come from :class:`StatelessUnit`.
     """
 
     name: str
     model: "CompiledModel"
-    output_port_ratios: "dict[str, float] | None" = None
-    output_port_flows: "dict[str, float] | None" = None
-    threshold: "float | None" = None
-    threshold_port: "str | None" = None
-    remainder_port: "str | None" = None
-
-    # state_size / initial_state / rhs come from StatelessUnit.
-
-    @property
-    def _mode(self) -> str:
-        if self.output_port_ratios is not None:
-            return "ratio"
-        if self.output_port_flows is not None:
-            return "flow"
-        return "threshold"
-
-    def __post_init__(self) -> None:
-        n_modes = sum(
-            m is not None for m in (self.output_port_ratios, self.output_port_flows, self.threshold)
-        )
-        if n_modes != 1:
-            raise ValueError(
-                f"SplitterUnit '{self.name}': supply exactly one of "
-                f"output_port_ratios, output_port_flows, or threshold."
-            )
-        if self._mode == "ratio":
-            total = sum(self.output_port_ratios.values())
-            if not (abs(total - 1.0) < 1e-9):
-                raise ValueError(f"SplitterUnit '{self.name}' ratios must sum to 1.0; got {total}")
-        elif self._mode == "flow":
-            if self.remainder_port is None:
-                raise ValueError(
-                    f"SplitterUnit '{self.name}': output_port_flows requires remainder_port."
-                )
-            if self.remainder_port in self.output_port_flows:
-                raise ValueError(
-                    f"SplitterUnit '{self.name}': remainder_port "
-                    f"'{self.remainder_port}' must not also be a setpoint port."
-                )
-        else:  # threshold
-            if self.threshold_port is None or self.remainder_port is None:
-                raise ValueError(
-                    f"SplitterUnit '{self.name}': threshold requires both "
-                    f"threshold_port and remainder_port."
-                )
-            if self.threshold_port == self.remainder_port:
-                raise ValueError(
-                    f"SplitterUnit '{self.name}': threshold_port and remainder_port must differ."
-                )
-        # Wrap the absolute flow setpoints (flow / threshold mode) as
-        # FlowSetpoints so the recycle-flow rule and the material split read one
-        # shared, differentiable value. Ratio mode has no absolute flow setpoint.
-        if self._mode == "flow":
-            self._setpoints = {
-                port: FlowSetpoint(float(q), i)
-                for i, (port, q) in enumerate(self.output_port_flows.items())
-            }
-        elif self._mode == "threshold":
-            self._setpoints = {"threshold": FlowSetpoint(float(self.threshold), 0)}
-        else:
-            self._setpoints = {}
-
-    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
-        return self._setpoints
 
     @property
     def input_ports(self) -> list[str]:
@@ -216,13 +116,38 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
         # single input port is always "in".
         return ["in"]
 
+    def _outlet(self, Q: jnp.ndarray, s_in: Stream) -> Stream:
+        """One passive-split outlet: the partitioned flow ``Q`` carrying the
+        inlet's concentration and side-channel ``scalars`` (temperature, indicator
+        density, ...) unchanged."""
+        return Stream(Q=Q, C=s_in.C, model=self.model, scalars=s_in.scalars)
+
+
+@dataclass
+class RatioSplitter(_SplitterBase):
+    """Splits the inlet flow into fixed *fractions*: each output gets
+    ``ratio * Q_in``, the fractions summing to 1. A passive split -- concentration
+    and side-channel scalars are preserved on every outlet.
+
+    Parameters
+    ----------
+    name : str
+        Unit identifier.
+    model : CompiledModel
+    output_port_ratios : dict[str, float]
+        Output port name -> fraction of inlet flow. Must sum to 1.
+    """
+
+    output_port_ratios: "dict[str, float]"
+
+    def __post_init__(self) -> None:
+        total = sum(self.output_port_ratios.values())
+        if not (abs(total - 1.0) < 1e-9):
+            raise ValueError(f"RatioSplitter '{self.name}' ratios must sum to 1.0; got {total}")
+
     @property
     def output_ports(self) -> list[str]:
-        if self._mode == "ratio":
-            return list(self.output_port_ratios.keys())
-        if self._mode == "flow":
-            return list(self.output_port_flows.keys()) + [self.remainder_port]
-        return [self.threshold_port, self.remainder_port]
+        return list(self.output_port_ratios.keys())
 
     def compute_outputs(
         self,
@@ -233,74 +158,187 @@ class SplitterUnit(StatelessUnit, FlowParameterized):
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
         s_in = inputs["in"]
-        outputs: dict[str, Stream] = {}
-        # A passive splitter preserves the inlet's side-channel scalars
-        # (temperature, indicator density, ...) unchanged on every outlet.
-        if self._mode == "ratio":
-            for port, ratio in self.output_port_ratios.items():
-                outputs[port] = Stream(
-                    Q=s_in.Q * jnp.asarray(ratio),
-                    C=s_in.C,
-                    model=self.model,
-                    scalars=s_in.scalars,
-                )
-            return outputs
-        if self._mode == "threshold":
-            # Inlet flow above the limit is diverted; the rest passes through.
-            limit = self._setpoints["threshold"].resolve(self._flow_params(params))
-            above = jnp.maximum(s_in.Q - limit, 0.0)
-            outputs[self.threshold_port] = Stream(
-                Q=above, C=s_in.C, model=self.model, scalars=s_in.scalars
+        return {
+            port: self._outlet(s_in.Q * jnp.asarray(ratio), s_in)
+            for port, ratio in self.output_port_ratios.items()
+        }
+
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
+        """Output port flows: each a fixed fraction of the inlet flow (affine)."""
+        Q_in = input_flows["in"]
+        return {
+            port: Q_in * jnp.asarray(ratio) for port, ratio in self.output_port_ratios.items()
+        }
+
+
+@dataclass
+class SetpointSplitter(_SplitterBase):
+    """Splits the inlet flow into fixed absolute *setpoint* flows plus a remainder.
+
+    The named outputs are *flow-controlled pumps* delivering fixed absolute
+    setpoint flows (m³/d); ``remainder_port`` takes whatever is left
+    (``Q_in - sum(setpoints)``). This is the correct model for the BSM recycle
+    pumps (internal recycle, RAS, wastage), whose volumetric flows are held
+    constant regardless of influent -- see :func:`build_bsm1`. A fixed *fraction*
+    of throughput (:class:`RatioSplitter`), by contrast, makes the recycle-flow
+    loop gain near-singular off the design influent and the plant blows up under
+    dynamic flow.
+
+    If the feed transiently drops *below* the total setpoint the **material**
+    streams (:meth:`compute_outputs`) share the available flow proportionally
+    (``q·min(1, Q_in/Σsetpoints)``) with a zero remainder, so the unit never
+    carries more than it receives. The recycle-flow rule (:meth:`flow_outputs`)
+    stays the exact *affine* ``Q_in − Σsetpoints`` remainder (which the linear
+    recycle solve requires); the two coincide whenever ``Q_in ≥ Σsetpoints``, true
+    at any steady state. The setpoints are :class:`FlowSetpoint` s, so a plant is
+    differentiable w.r.t. them (SRT / recycle-ratio design sweeps).
+
+    Parameters
+    ----------
+    name : str
+        Unit identifier.
+    model : CompiledModel
+    output_port_flows : dict[str, float]
+        Output port name -> fixed setpoint flow (m³/d).
+    remainder_port : str
+        The output port carrying the remaining flow. Must not also be a setpoint
+        port.
+    """
+
+    output_port_flows: "dict[str, float]"
+    remainder_port: str
+
+    def __post_init__(self) -> None:
+        if self.remainder_port in self.output_port_flows:
+            raise ValueError(
+                f"SetpointSplitter '{self.name}': remainder_port "
+                f"'{self.remainder_port}' must not also be a setpoint port."
             )
-            outputs[self.remainder_port] = Stream(
-                Q=jnp.minimum(s_in.Q, limit), C=s_in.C, model=self.model, scalars=s_in.scalars
-            )
-            return outputs
-        # Flow mode: fixed setpoints, remainder takes what is left. When the feed
-        # is below the total setpoint the setpoint ports share the available flow
-        # proportionally (a flow-limited pump set), so the MATERIAL streams never
-        # carry more than the unit receives -- it conserves mass -- and the
-        # remainder is then zero. Identity when Q_in >= total setpoint (scale ==
-        # 1), so steady-state behaviour is unchanged; the scale-down only bites in
-        # a transient starve. (flow_outputs below stays the exact AFFINE rule the
-        # recycle-flow solve requires -- it must, or the (I-A)x=b probe breaks --
-        # and the two agree wherever the unit is not starved, i.e. at any steady
-        # state.)
+        # Wrap the absolute setpoints as FlowSetpoints (a fixed order) so the
+        # recycle-flow rule and the material split read one shared, differentiable
+        # value.
+        self._setpoints = {
+            port: FlowSetpoint(float(q), i)
+            for i, (port, q) in enumerate(self.output_port_flows.items())
+        }
+
+    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+        return self._setpoints
+
+    @property
+    def output_ports(self) -> list[str]:
+        return list(self.output_port_flows.keys()) + [self.remainder_port]
+
+    def compute_outputs(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+        signals: "dict | None" = None,
+    ) -> dict[str, Stream]:
+        # Fixed setpoints, remainder takes what is left. When the feed is below the
+        # total setpoint the setpoint ports share the available flow proportionally
+        # (a flow-limited pump set), so the MATERIAL streams never carry more than
+        # the unit receives -- it conserves mass -- and the remainder is then zero.
+        # Identity when Q_in >= total setpoint (scale == 1), so steady-state
+        # behaviour is unchanged; the scale-down only bites in a transient starve.
+        # (flow_outputs stays the exact AFFINE rule the recycle-flow solve requires
+        # -- it must, or the (I-A)x=b probe breaks -- and the two agree wherever the
+        # unit is not starved, i.e. at any steady state.)
+        s_in = inputs["in"]
         fp = self._flow_params(params)
         setpts = {port: sp.resolve(fp) for port, sp in self._setpoints.items()}
         total_set = jnp.zeros(())
         for q in setpts.values():
             total_set = total_set + q
         scale = jnp.minimum(1.0, s_in.Q / jnp.maximum(total_set, 1e-12))
-        for port, q in setpts.items():
-            outputs[port] = Stream(Q=q * scale, C=s_in.C, model=self.model, scalars=s_in.scalars)
-        outputs[self.remainder_port] = Stream(
-            Q=jnp.maximum(s_in.Q - total_set, 0.0),
-            C=s_in.C,
-            model=self.model,
-            scalars=s_in.scalars,
-        )
+        outputs = {port: self._outlet(q * scale, s_in) for port, q in setpts.items()}
+        outputs[self.remainder_port] = self._outlet(jnp.maximum(s_in.Q - total_set, 0.0), s_in)
         return outputs
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
-        """Output port flows from the inlet flow (the AFFINE flow rule the
-        recycle-flow solve requires). The flow-mode remainder is the exact
-        ``Q_in - sum(setpoints)`` and stays affine in ``Q_in`` (it may go negative
-        in a transient starve, which is harmless for the linear flow solve); the
-        conserving scale-down lives in :meth:`compute_outputs` (the material
-        sweep), and the two agree wherever the unit is not starved."""
+        """Output port flows: the fixed setpoints plus the exact AFFINE remainder
+        ``Q_in - sum(setpoints)`` (which the linear recycle solve requires). The
+        remainder may go negative in a transient starve, harmless for the linear
+        flow solve; the conserving scale-down lives in :meth:`compute_outputs`, and
+        the two agree wherever the unit is not starved."""
         Q_in = input_flows["in"]
-        if self._mode == "ratio":
-            return {
-                port: Q_in * jnp.asarray(ratio) for port, ratio in self.output_port_ratios.items()
-            }
-        if self._mode == "threshold":
-            limit = self._setpoints["threshold"].resolve(self._flow_params(params))
-            return {
-                self.threshold_port: jnp.maximum(Q_in - limit, 0.0),
-                self.remainder_port: jnp.minimum(Q_in, limit),
-            }
         fp = self._flow_params(params)
         out = {port: sp.resolve(fp) for port, sp in self._setpoints.items()}
         out[self.remainder_port] = Q_in - sum(out.values())
         return out
+
+
+@dataclass
+class ThresholdSplitter(_SplitterBase):
+    """Diverts inlet flow *above* a threshold, passing the rest through.
+
+    Inlet flow above ``threshold`` goes to ``threshold_port``
+    (``max(Q_in - threshold, 0)``) and the rest (``min(Q_in, threshold)``) to
+    ``remainder_port``. This is the BSM2 hydraulic influent bypass (flow above a
+    limit diverted around the treatment). The split is piecewise-linear (a kink at
+    ``threshold``), so the exact recycle-flow solve (:meth:`Plant._resolve_flows`)
+    is only exact when the inlet flow is *independent of the recycle flows* -- e.g.
+    fed directly by an external influent, as in :func:`build_bsm2`. The threshold
+    is a :class:`FlowSetpoint`, so a plant is differentiable w.r.t. it.
+
+    Parameters
+    ----------
+    name : str
+        Unit identifier.
+    model : CompiledModel
+    threshold : float
+        Inlet-flow limit (m³/d).
+    threshold_port : str
+        The output port carrying the above-threshold flow.
+    remainder_port : str
+        The output port carrying the remaining (below-threshold) flow. Must differ
+        from ``threshold_port``.
+    """
+
+    threshold: float
+    threshold_port: str
+    remainder_port: str
+
+    def __post_init__(self) -> None:
+        if self.threshold_port == self.remainder_port:
+            raise ValueError(
+                f"ThresholdSplitter '{self.name}': threshold_port and "
+                f"remainder_port must differ."
+            )
+        self._setpoints = {"threshold": FlowSetpoint(float(self.threshold), 0)}
+
+    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+        return self._setpoints
+
+    @property
+    def output_ports(self) -> list[str]:
+        return [self.threshold_port, self.remainder_port]
+
+    def _limit(self, params) -> jnp.ndarray:
+        return self._setpoints["threshold"].resolve(self._flow_params(params))
+
+    def compute_outputs(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+        signals: "dict | None" = None,
+    ) -> dict[str, Stream]:
+        s_in = inputs["in"]
+        limit = self._limit(params)
+        return {
+            self.threshold_port: self._outlet(jnp.maximum(s_in.Q - limit, 0.0), s_in),
+            self.remainder_port: self._outlet(jnp.minimum(s_in.Q, limit), s_in),
+        }
+
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
+        """Output port flows: the above/below-threshold split (piecewise-linear)."""
+        Q_in = input_flows["in"]
+        limit = self._limit(params)
+        return {
+            self.threshold_port: jnp.maximum(Q_in - limit, 0.0),
+            self.remainder_port: jnp.minimum(Q_in, limit),
+        }

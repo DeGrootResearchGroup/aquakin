@@ -1,6 +1,6 @@
 """BSM2 hydraulic influent-bypass tests.
 
-Two layers: the ``SplitterUnit`` threshold mode (fast, no plant solve) and the
+Two layers: the ``ThresholdSplitter`` (fast, no plant solve) and the
 wired ``build_bsm2(bypass=InfluentBypass())`` plant (one module-scoped solve at a
 high influent flow, since the suite runs near the CI runner's limit).
 """
@@ -19,11 +19,11 @@ from aquakin.plant.bsm.bsm2 import (
 )
 from aquakin.plant.bsm import evaluate_bsm2
 from aquakin.plant.influent import InfluentSeries
-from aquakin.plant.mixer import SplitterUnit
+from aquakin.plant.mixer import RatioSplitter, SetpointSplitter, ThresholdSplitter
 from aquakin.plant.streams import Stream
 
 
-# ----- SplitterUnit threshold mode (no plant solve) -----------------------
+# ----- ThresholdSplitter (no plant solve) ---------------------------------
 
 @pytest.fixture(scope="module")
 def asm1():
@@ -31,7 +31,7 @@ def asm1():
 
 
 def _threshold_splitter(asm1, limit=60000.0):
-    return SplitterUnit(
+    return ThresholdSplitter(
         name="bypass", model=asm1, threshold=limit,
         threshold_port="bypass", remainder_port="to_plant")
 
@@ -64,12 +64,24 @@ def test_threshold_split_preserves_concentration(asm1):
     assert float(outs["bypass"].Q + outs["to_plant"].Q) == pytest.approx(90000.0)
 
 
-def test_threshold_mode_validation(asm1):
-    with pytest.raises(ValueError, match="threshold requires"):
-        SplitterUnit(name="b", model=asm1, threshold=1.0, threshold_port="x")
-    with pytest.raises(ValueError, match="exactly one"):
-        SplitterUnit(name="b", model=asm1, threshold=1.0, threshold_port="x",
-                     remainder_port="y", output_port_ratios={"x": 1.0})
+def test_splitter_validation(asm1):
+    # Each splitter type carries only the fields its rule needs, so an omitted
+    # required field is a construction TypeError -- not a runtime "supply exactly
+    # one" guard, and a mode can no longer be mixed (the wrong kwarg would be an
+    # unexpected argument).
+    with pytest.raises(TypeError):
+        ThresholdSplitter(name="b", model=asm1, threshold=1.0, threshold_port="x")  # no remainder
+    # threshold_port and remainder_port must differ
+    with pytest.raises(ValueError, match="must differ"):
+        ThresholdSplitter(name="b", model=asm1, threshold=1.0,
+                          threshold_port="x", remainder_port="x")
+    # ratio fractions must sum to 1
+    with pytest.raises(ValueError, match="must sum to 1"):
+        RatioSplitter(name="r", model=asm1, output_port_ratios={"a": 0.5, "b": 0.4})
+    # a setpoint splitter's remainder must not also be a setpoint port
+    with pytest.raises(ValueError, match="must not also be a setpoint port"):
+        SetpointSplitter(name="s", model=asm1,
+                         output_port_flows={"a": 1.0}, remainder_port="a")
 
 
 # ----- Wired BSM2 plant with bypass ---------------------------------------

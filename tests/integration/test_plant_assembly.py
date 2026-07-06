@@ -18,7 +18,8 @@ from aquakin.plant import (
     IdentityTranslator,
     MixerUnit,
     Plant,
-    SplitterUnit,
+    RatioSplitter,
+    SetpointSplitter,
     Stream,
 )
 from aquakin.plant.influent import InfluentSeries
@@ -149,8 +150,8 @@ def test_splitter_flow_mode_conserves_under_low_feed(simple_net):
     creating flow). flow_outputs stays the exact AFFINE rule the recycle solve
     needs (an unclamped remainder), and the two agree wherever the unit is not
     starved."""
-    sp = SplitterUnit(name="s", model=simple_net,
-                      output_port_flows={"a": 100.0, "b": 100.0}, remainder_port="r")
+    sp = SetpointSplitter(name="s", model=simple_net,
+                          output_port_flows={"a": 100.0, "b": 100.0}, remainder_port="r")
     C = simple_net.default_concentrations()
     p = simple_net.default_parameters()
 
@@ -190,7 +191,7 @@ def test_splitter_flow_ratios(simple_net):
         )
     )
     plant.add_unit(
-        SplitterUnit(
+        RatioSplitter(
             name="split",
             output_port_ratios={"a": 0.6, "b": 0.4},
             model=simple_net,
@@ -249,7 +250,7 @@ def test_recycle_with_initial_value(simple_net):
         )
     )
     plant.add_unit(
-        SplitterUnit(
+        RatioSplitter(
             name="split",
             output_port_ratios={"out_product": 0.5, "out_recycle": 0.5},
             model=simple_net,
@@ -293,7 +294,7 @@ def test_connection_index_groups_inputs_and_recycle_keys(simple_net):
         )
     )
     plant.add_unit(
-        SplitterUnit(
+        RatioSplitter(
             name="split",
             output_port_ratios={"out_product": 0.5, "out_recycle": 0.5},
             model=simple_net,
@@ -417,7 +418,7 @@ def test_unit_ports_are_lists(simple_net):
     from aquakin.plant.units import Unit
 
     mixer = MixerUnit(name="m", input_port_names=["a", "b"], model=simple_net)
-    splitter = SplitterUnit(
+    splitter = RatioSplitter(
         name="s", output_port_ratios={"x": 0.5, "y": 0.5}, model=simple_net)
     cstr = CSTRUnit(name="t", model=simple_net, volume=1.0,
                     input_port_names=["inlet"], conditions={"T": 293.15})
@@ -437,7 +438,7 @@ def test_stateless_units_expose_state_size_as_property(simple_net):
     from aquakin.plant.separators import IdealThickener
 
     mixer = MixerUnit(name="m", input_port_names=["a", "b"], model=simple_net)
-    splitter = SplitterUnit(
+    splitter = RatioSplitter(
         name="s", output_port_ratios={"x": 0.5, "y": 0.5}, model=simple_net)
     clar = IdealClarifier(name="c", model=simple_net, underflow_Q=10.0)
     thick = IdealThickener(name="th", model=simple_net, target_tss_percent=7.0)
@@ -458,7 +459,7 @@ def _recycle_plant(simple_net):
                              model=simple_net))
     plant.add_unit(CSTRUnit(name="tank", model=simple_net, volume=100.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
-    plant.add_unit(SplitterUnit(name="split", model=simple_net,
+    plant.add_unit(RatioSplitter(name="split", model=simple_net,
                                 output_port_ratios={"out": 0.5, "rec": 0.5}))
     return plant
 

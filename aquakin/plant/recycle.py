@@ -820,8 +820,8 @@ class RecycleResolver:
 
         The self-consistency of this assumption is checked once, at ``(t0, y0)``,
         by ``check_affine`` (a warning, never a block). That t0 check does NOT
-        catch a unit with a *piecewise-linear* flow rule (a threshold-mode
-        ``SplitterUnit`` bypass, a level-gated ``StorageTank`` bypass) that is on
+        catch a unit with a *piecewise-linear* flow rule (a
+        ``ThresholdSplitter`` bypass, a level-gated ``StorageTank`` bypass) that is on
         one side of its kink at ``t0`` but crosses it later in a dynamic run: the
         probe then linearises across the kink at that time silently. The resolved
         flows are exact only while every unit stays in the affine regime it
