@@ -96,11 +96,11 @@ markers = [
 testpaths = ["tests"]
 
 # ---------------------------------------------------------------------------
-# ruff -- linter (and formatter config). The CI `lint` job runs `ruff check`
-# over `aquakin/` as a required gate. The 100-column width matches how the
-# package is already written. The formatter is configured here but the
-# repo-wide reflow is NOT yet applied (it would touch most files at once and
-# bury real diffs), so `ruff format --check` is intentionally not gated yet.
+# ruff -- linter (and formatter config). The CI `lint` job runs both `ruff check`
+# and `ruff format --check` over `aquakin/` as a required gate. The 100-column
+# width matches how the package is already written. The repo-wide format has been
+# applied, so keep files formatted: run `ruff format aquakin` before pushing (a
+# `ruff format --check` mismatch fails the lint gate).
 [tool.ruff]
 line-length = 100
 target-version = "py310"
