@@ -38,9 +38,7 @@ def format_model_summary(model: "CompiledModel") -> str:
     """
     tu = model.time_unit
     if tu is not None:
-        time_line = (
-            f"  Time unit: {tu} (t_span / t_eval are in {_TIME_UNIT_NAMES.get(tu, tu)})"
-        )
+        time_line = f"  Time unit: {tu} (t_span / t_eval are in {_TIME_UNIT_NAMES.get(tu, tu)})"
     else:
         time_line = "  Time unit: (could not infer from rate-constant units)"
     lines = [
