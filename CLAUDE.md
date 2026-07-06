@@ -290,23 +290,18 @@ C++ plugin is responsible for populating it from OpenFOAM cell field data.
 
 ## Development workflow
 
-Code review goes through GitHub PRs. The Claude Code sandbox doesn't
-have an SSH key for the repo's `git@github.com:...` remote and `gh`
-isn't installed, so Claude can't push branches or open PRs directly.
-The convention is:
+Code review goes through GitHub PRs. The `gh` CLI is installed and
+authenticated and the GitHub remote is HTTPS, so branches can be pushed and PRs
+opened directly with `git push` / `gh pr create` — no SSH key needed. Commit or
+push only when the user asks. The convention is:
 
-1. Claude commits changes on a sensibly-named local branch (e.g.
-   `fix-<thing>`, `add-<feature>`, `<area>-<change>`) — not on
-   `main`, not on the `claude/<worktree-name>` scratch branch.
-2. The user pushes that branch from their own checkout and opens
-   the PR. From a Claude worktree the branch can be picked up with
-   `git fetch <worktree-path> <branch>:<branch>` and then
-   `git push -u origin <branch>` from the main checkout, or by
-   `cd`-ing into the worktree and pushing if the user's shell has
-   the SSH key.
-
-Don't try to `git push` from inside the sandbox; it fails with
-"Permission denied (publickey)" and wastes a turn.
+1. Commit changes on a sensibly-named branch (e.g. `fix-<thing>`,
+   `add-<feature>`, `<area>-<change>`) — never on `main`, and not on the
+   `claude/<worktree-name>` scratch branch. The main checkout is shared and its
+   branch can switch underfoot, so do branch work in a worktree and commit early.
+2. Push with `git push -u <remote> <branch>` and open the PR with
+   `gh pr create --base main`. Work done in a worktree is already on the branch
+   — just push it.
 
 Before committing or pushing any code change, run the linter locally so the
 required `lint (ruff)` gate stays green — `ruff check aquakin` and `ruff format
