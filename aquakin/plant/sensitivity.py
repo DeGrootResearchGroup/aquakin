@@ -44,7 +44,7 @@ from aquakin.integrate._transforms import (
 # ``sample_mask`` and, for Gaussian inputs, an explicit ``poincare`` constant.
 # Re-exported here so ``from aquakin.plant.sensitivity import _dgsm_aggregate``
 # keeps working.
-from aquakin.integrate.sensitivity import _dgsm_aggregate
+from aquakin.integrate.global_sensitivity import _dgsm_aggregate
 
 
 def _cond_mask(cond, cond_factor):
@@ -651,7 +651,7 @@ def steady_state_dgsm(
     """
     import numpy as np
 
-    from ..integrate.sensitivity import _sobol_sample
+    from ..integrate._qmc import _sobol_sample
 
     base = plant.default_parameters()
     if wrt is None:
@@ -691,7 +691,7 @@ def steady_state_dgsm(
         return jnp.atleast_1d(output_fn(ss)), S, jnp.linalg.cond(J_y)
 
     if input_dist == "normal":
-        from ..integrate.sensitivity import _sobol_normal_sample
+        from ..integrate._qmc import _sobol_normal_sample
 
         if input_transforms is None or len(input_transforms) != k:
             raise ValueError(
@@ -1197,7 +1197,7 @@ def dynamic_dgsm(
     """
     import numpy as np
 
-    from ..integrate.sensitivity import _sobol_sample
+    from ..integrate._qmc import _sobol_sample
 
     params = plant.default_parameters()
     if wrt is None:

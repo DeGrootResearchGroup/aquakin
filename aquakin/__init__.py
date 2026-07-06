@@ -67,14 +67,9 @@ from aquakin.integrate.forward_sensitivity import (
     forward_sensitivity,
 )
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
-from aquakin.integrate.sensitivity import (
-    DGSMResult,
-    FitResult,
-    SensitivityResult,
-    dgsm,
-    fit,
-    sensitivity,
-)
+from aquakin.integrate.sensitivity import SensitivityResult, sensitivity
+from aquakin.integrate.fit import FitResult, fit
+from aquakin.integrate.global_sensitivity import DGSMResult, dgsm
 from aquakin.integrate.events import Event, EventedResult, solve_with_events
 from aquakin.integrate.design import Constraint, OptimizeResult, optimize_design
 from aquakin.integrate.monte_carlo import MonteCarloResult, monte_carlo

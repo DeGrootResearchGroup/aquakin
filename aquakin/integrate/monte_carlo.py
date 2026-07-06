@@ -9,7 +9,7 @@ to a scalar or vector output, building the params / initial state / conditions a
 calling ``reactor.solve`` / ``plant.solve`` itself. The output may be any
 JAX-differentiable quantity -- an effluent concentration, an EQI / OCI metric, a
 removal efficiency. The sampler reuses the scrambled-Sobol quasi-MC sequence from
-:mod:`aquakin.integrate.sensitivity` (via :mod:`aquakin.integrate._qmc`), adds
+:mod:`aquakin.integrate._qmc` (shared with :func:`aquakin.dgsm`), adds
 Latin-hypercube and plain random sampling, and maps the low-discrepancy unit
 points through each input's inverse CDF (uniform / normal / lognormal), so
 non-uniform marginals still get a low-discrepancy design.
