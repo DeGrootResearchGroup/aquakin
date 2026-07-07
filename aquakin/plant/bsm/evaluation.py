@@ -35,6 +35,7 @@ from aquakin.plant.metrics import (
     _EQI_WEIGHTS,
     _composition,
     aeration_energy,
+    bsm2_oci_terms,
     carbon_mass,
     derived_BOD,
     derived_TSS,
@@ -113,6 +114,21 @@ def _render_eval_report(title, eqi, oci, oci_formula, terms, effluent, aerated_t
             note, width=76, initial_indent="  Note: ", subsequent_indent="        "
         )
     return "\n".join(lines)
+
+
+# Display label + unit for each BSM2 OCI term key produced by
+# ``aquakin.plant.metrics.bsm2_oci_terms``. The OCI *weights* live in that
+# single-source function; this map is only presentation for ``report()``.
+_OCI_TERM_LABELS = {
+    "aeration": ("Aeration energy  AE", "kWh/d"),
+    "pumping": ("Pumping energy   PE", "kWh/d"),
+    "mixing": ("Mixing energy    ME", "kWh/d"),
+    "sludge": ("Sludge prod.  (x3)", "kg TSS/d"),
+    "carbon": ("Ext. carbon   (x3)", "kg COD/d"),
+    "methane": ("Methane      (x-6)", "kg CH4/d"),
+    "heating": ("Heating energy HE", "kWh/d"),
+    "net_heating": ("  net heating (>=0)", "kWh/d"),
+}
 
 
 @dataclass
@@ -205,34 +221,25 @@ class BSM2Evaluation:
         caveat -- so the headline numbers are not bare floats to misread against
         published values.
         """
-        heat = max(0.0, self.heating_energy - 7.0 * self.methane_production)
-        ae_label = (
-            "Aeration energy  AE (blower)" if self.air_flow is not None else "Aeration energy  AE"
-        )
-        terms = [
-            (ae_label, self.aeration_energy, "kWh/d", self.aeration_energy),
-        ]
-        if self.air_flow is not None:
-            terms.append(("  air flow", self.air_flow, "m3/d", None))
-        terms += [
-            ("Pumping energy   PE", self.pumping_energy, "kWh/d", self.pumping_energy),
-            ("Mixing energy    ME", self.mixing_energy, "kWh/d", self.mixing_energy),
-            (
-                "Sludge prod.  (x3)",
-                self.sludge_production,
-                "kg TSS/d",
-                3.0 * self.sludge_production,
-            ),
-            ("Ext. carbon   (x3)", self.carbon_mass, "kg COD/d", 3.0 * self.carbon_mass),
-            (
-                "Methane      (x-6)",
-                self.methane_production,
-                "kg CH4/d",
-                -6.0 * self.methane_production,
-            ),
-            ("Heating energy HE", self.heating_energy, "kWh/d", None),
-            ("  net heating (>=0)", heat, "kWh/d", heat),
-        ]
+        # The OCI contributions (and their weights) come from the single-source
+        # `bsm2_oci_terms`; this method only maps each term key to its display
+        # label + unit and inserts the blower air-flow row.
+        terms = []
+        for key, value, contrib in bsm2_oci_terms(
+            self.aeration_energy,
+            self.pumping_energy,
+            self.mixing_energy,
+            self.sludge_production,
+            self.carbon_mass,
+            self.methane_production,
+            self.heating_energy,
+        ):
+            label, unit = _OCI_TERM_LABELS[key]
+            if key == "aeration" and self.air_flow is not None:
+                label = "Aeration energy  AE (blower)"
+            terms.append((label, value, unit, contrib))
+            if key == "aeration" and self.air_flow is not None:
+                terms.append(("  air flow", self.air_flow, "m3/d", None))
         return _render_eval_report(
             "BSM2 performance indices",
             self.eqi,
@@ -438,6 +445,52 @@ def _feed_temperature_C(plant, solution, params_full, default_C):
     return jax.vmap(_feed_T)(ts, jnp.asarray(solution.state)) - 273.15  # K -> C
 
 
+def _bypass_bod_correction(t, eqi_flat, Qt, Ct, Qb, Cb, model, f_P):
+    """Re-weight the effluent BOD for an influent-bypass plant (pure array math).
+
+    BSM2 scores the BOD of *bypassed* (untreated) flow at the raw-sewage 0.65
+    BOD5/BODu coefficient rather than the 0.25 used for treated effluent. Given
+    the treated (``Qt``, ``Ct``) and bypassed (``Qb``, ``Cb``) component streams
+    and the flat-weight EQI, return the corrected ``(eqi, bod_average)``.
+    ``derived_BOD`` is linear, so the flat-weight EQI already carries
+    ``0.25·(base_t·Qt + base_b·Qb)``; this adds the extra ``(0.65 − 0.25)`` weight
+    on the bypass BOD load. No solve -- exercised directly in the fast tests.
+    """
+    base_t = derived_BOD(Ct, model, f_P=f_P) / 0.25  # SS+XS+(1-fP)(XBH+XBA)
+    base_b = derived_BOD(Cb, model, f_P=f_P) / 0.25
+    bod_load = _time_average(t, 0.25 * base_t * Qt) + _time_average(t, 0.65 * base_b * Qb)
+    total_flow = _time_average(t, Qt + Qb)
+    bod_average = float(bod_load / total_flow)
+    eqi = eqi_flat + float(
+        _EQI_WEIGHTS["BOD"] * (0.65 - 0.25) * _time_average(t, base_b * Qb) * 1e-3
+    )
+    return eqi, bod_average
+
+
+def _external_carbon_load(plant, solution, t, params_full, model) -> float:
+    """External-carbon dose (kg COD/d, time-averaged): the dose flow times the
+    reagent's readily-biodegradable (SS) concentration. 0 when the plant has no
+    ``external_carbon`` dosing unit. Fixed dose -> constant flow over the window;
+    feedback dose -> the (gain-scaled) controller signal reconstructed per saved
+    state from the control bus."""
+    carbon_unit = plant.units.get("external_carbon")
+    if carbon_unit is None or not hasattr(carbon_unit, "reagent"):
+        return 0.0
+    ss_idx = model.species_index["SS"]
+    conc = float(carbon_unit.reagent.composition[ss_idx])
+    if carbon_unit.flow is not None:
+        Q_carbon = jnp.full_like(jnp.asarray(t, dtype=float), float(carbon_unit.flow))
+    else:
+        sig = carbon_unit.required_signals[0]
+        Q_carbon = jnp.stack(
+            [
+                plant.signals_at(ti, solution.state[i], params_full)[sig] * carbon_unit.gain
+                for i, ti in enumerate(t)
+            ]
+        )
+    return carbon_mass(t, Q_carbon, conc)
+
+
 def evaluate_bsm2(
     plant,
     solution,
@@ -535,24 +588,14 @@ def evaluate_bsm2(
     # branch is inert without a bypass (the validated no-bypass path is untouched).
     if "effluent_mix" in plant.units:
         # The two source streams feeding the bypass combiner: the treated
-        # secondary-clarifier overflow and the diverted raw influent.
+        # secondary-clarifier overflow and the diverted raw influent. The BOD
+        # re-weighting itself is the pure `_bypass_bod_correction` (fast-tested).
         comp = _reconstruct(plant, solution, params_full, [_EFFLUENT_PORT, "bypass_split.bypass"])
         Qt, Ct = comp[_EFFLUENT_PORT]
         Qb, Cb = comp["bypass_split.bypass"]
         _, _, f_P = _composition(model, params_asm)
-        base_t = derived_BOD(Ct, model, f_P=f_P) / 0.25  # SS+XS+(1-fP)(XBH+XBA)
-        base_b = derived_BOD(Cb, model, f_P=f_P) / 0.25
-        bod_load = _time_average(t, 0.25 * base_t * Qt) + _time_average(t, 0.65 * base_b * Qb)
-        total_flow = _time_average(t, Qt + Qb)
-        averages = {**averages, "BOD": float(bod_load / total_flow)}
-        # The flat-weight EQI scored the bypass BOD at the treated 0.25 coefficient
-        # as well (it ran on the combined effluent); add the extra (0.65 − 0.25)
-        # weight on the bypass BOD load so the scored EQI carries the benchmark
-        # bypass coefficient too. derived_BOD is linear, so the combined-effluent
-        # BOD load already equals 0.25·(base_t·Qt + base_b·Qb).
-        eqi = eqi + float(
-            _EQI_WEIGHTS["BOD"] * (0.65 - 0.25) * _time_average(t, base_b * Qb) * 1e-3
-        )
+        eqi, bod_average = _bypass_bod_correction(t, eqi, Qt, Ct, Qb, Cb, model, f_P)
+        averages = {**averages, "BOD": bod_average}
 
     # ----- Aeration + mixing energy (actual kLa over the run). Both span all AS
     # reactors: anoxic tanks add no aeration (kLa=0) but do need mixing. -----
@@ -591,28 +634,7 @@ def evaluate_bsm2(
     sludge = _time_average(t, tss_mass_flow)
 
     # ----- External-carbon dose (kg COD/d). -----
-    # The external carbon is dosed by the `external_carbon` DosingUnit: the dose
-    # flow times the reagent's readily-biodegradable (SS) concentration.
-    carbon_unit = plant.units.get("external_carbon")
-    if carbon_unit is not None and hasattr(carbon_unit, "reagent"):
-        ss_idx = model.species_index["SS"]
-        conc = float(carbon_unit.reagent.composition[ss_idx])
-        if carbon_unit.flow is not None:
-            # Fixed dose: constant flow over the window.
-            Q_carbon = jnp.full_like(jnp.asarray(t, dtype=float), float(carbon_unit.flow))
-        else:
-            # Feedback dose: the manipulated dose flow is the controller signal
-            # (gain-scaled), reconstructed per saved state from the control bus.
-            sig = carbon_unit.required_signals[0]
-            Q_carbon = jnp.stack(
-                [
-                    plant.signals_at(ti, solution.state[i], params_full)[sig] * carbon_unit.gain
-                    for i, ti in enumerate(t)
-                ]
-            )
-        carbon = carbon_mass(t, Q_carbon, conc)
-    else:
-        carbon = 0.0
+    carbon = _external_carbon_load(plant, solution, t, params_full, model)
 
     # ----- Digester methane credit + sludge-heating energy. -----
     methane = _methane_production(plant, solution, params_full)

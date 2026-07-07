@@ -459,6 +459,38 @@ def heating_energy(
     return float(24.0 * _time_average(heatpower, t))
 
 
+def bsm2_oci_terms(
+    aeration: float,
+    pumping: float,
+    mixing: float,
+    sludge_production: float,
+    carbon: float,
+    methane: float,
+    heating: float,
+) -> list:
+    """Itemized BSM2 OCI contributions -- the single source of the OCI weights.
+
+    Returns a list of ``(key, value, contribution)`` rows, where ``value`` is the
+    raw physical term and ``contribution`` is its signed addition to the OCI
+    (``None`` for the raw ``heating`` term, which enters the index non-linearly
+    through ``net_heating = max(0, heating − 7·methane)``).
+    :func:`operational_cost_index_bsm2` sums the contributions and the BSM2
+    evaluation ``report()`` renders them, so the Gernaey-2014 weights live here
+    only (not duplicated in the report renderer).
+    """
+    net_heating = max(0.0, heating - 7.0 * methane)
+    return [
+        ("aeration", aeration, aeration),
+        ("pumping", pumping, pumping),
+        ("mixing", mixing, mixing),
+        ("sludge", sludge_production, 3.0 * sludge_production),
+        ("carbon", carbon, 3.0 * carbon),
+        ("methane", methane, -6.0 * methane),
+        ("heating", heating, None),
+        ("net_heating", net_heating, net_heating),
+    ]
+
+
 def operational_cost_index_bsm2(
     aeration: float,
     pumping: float,
@@ -475,13 +507,8 @@ def operational_cost_index_bsm2(
 
     Energies in kWh/d; sludge and carbon in kg/d; methane in kg CH₄/d. The
     methane credit and the methane-offset heating term reward biogas recovery.
+    Sums the itemized contributions from :func:`bsm2_oci_terms` (the single
+    source of the weights).
     """
-    return float(
-        aeration
-        + pumping
-        + mixing
-        + 3.0 * sludge_production
-        + 3.0 * carbon
-        - 6.0 * methane
-        + max(0.0, heating - 7.0 * methane)
-    )
+    terms = bsm2_oci_terms(aeration, pumping, mixing, sludge_production, carbon, methane, heating)
+    return float(sum(c for _, _, c in terms if c is not None))
