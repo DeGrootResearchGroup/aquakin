@@ -26,6 +26,7 @@ are bound onto :class:`Plant` as methods (see ``plant.py``), so the public
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
@@ -45,6 +46,21 @@ from aquakin.integrate._transforms import (
 # Re-exported here so ``from aquakin.plant.sensitivity import _dgsm_aggregate``
 # keeps working.
 from aquakin.integrate.global_sensitivity import _dgsm_aggregate
+
+logger = logging.getLogger(__name__)
+
+
+def _log_dgsm_progress(label, progress, done, total, extra=""):
+    """Emit a DGSM sampling-progress record every ``progress`` samples.
+
+    Library progress is routed through :mod:`logging` (not ``print``) so a caller
+    can silence or redirect it: it is a single ``logging.INFO`` record on the
+    ``aquakin.plant.sensitivity`` logger, emitted only when ``progress`` is truthy
+    and ``done`` is a multiple of it (a no-op otherwise). Enable it with, e.g.,
+    ``logging.basicConfig(level=logging.INFO)``.
+    """
+    if progress and done % progress == 0:
+        logger.info("[%s] %d/%d samples%s", label, done, total, extra)
 
 
 def _cond_mask(cond, cond_factor):
@@ -659,7 +675,10 @@ def steady_state_dgsm(
         aligned with ``wrt`` -- the space in which its prior is Gaussian.
         Ignored for ``"uniform"``.
     progress : int, optional
-        If set, print a progress line every ``progress`` samples.
+        If set, emit a ``logging.INFO`` progress record every ``progress``
+        samples (on the ``aquakin.plant.sensitivity`` logger). It is silent
+        unless the caller enables INFO logging, e.g.
+        ``logging.basicConfig(level=logging.INFO)``.
     **steady_kwargs
         Forwarded to :meth:`steady_state` (e.g. ``max_iter``).
 
@@ -760,11 +779,7 @@ def steady_state_dgsm(
         smethods.append(ssr.method)
         sconv.append(bool(ssr.converged))
         sexist.append(ssr.operating_point_exists)  # True / False / None
-        if progress and (i + 1) % progress == 0:
-            print(
-                f"  [steady_state_dgsm] {i + 1}/{n_drawn} samples (last: {ssr.method})",
-                flush=True,
-            )
+        _log_dgsm_progress("steady_state_dgsm", progress, i + 1, n_drawn, f" (last: {ssr.method})")
 
     outputs = np.stack(outs)  # (N, m)
     grad_sq = np.stack(grads) ** 2  # (N, m, k)
@@ -1253,8 +1268,7 @@ def dynamic_dgsm(
         g, S = _per_sample(Z[i])
         outs.append(np.asarray(g))
         grads.append(np.asarray(S))
-        if progress and (i + 1) % progress == 0:
-            print(f"  [dynamic_dgsm] {i + 1}/{n_drawn} samples", flush=True)
+        _log_dgsm_progress("dynamic_dgsm", progress, i + 1, n_drawn)
 
     outputs = np.stack(outs)  # (N, m)
     grad_sq = np.stack(grads) ** 2  # (N, m, k)

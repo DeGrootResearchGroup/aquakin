@@ -31,6 +31,18 @@ if not jax.config.jax_enable_x64:
         )
     jax.config.update("jax_enable_x64", True)
 
+import logging as _logging
+
+# Library logging hygiene: attach a NullHandler to the package's root logger so
+# aquakin never configures logging on the application's behalf (it emits nothing
+# unless the caller opts in) and there is no "No handlers could be found" noise.
+# Progress output -- e.g. the ``progress=`` sampling loops in
+# ``plant.steady_state_dgsm`` / ``dynamic_dgsm`` -- is logged at INFO on child
+# loggers; a caller sees it by enabling INFO, e.g.
+# ``logging.basicConfig(level=logging.INFO)`` or
+# ``logging.getLogger("aquakin").setLevel(logging.INFO)`` with a handler.
+_logging.getLogger("aquakin").addHandler(_logging.NullHandler())
+
 from aquakin.core.conditions import OperatingConditions, SpatialConditions
 from aquakin.core.model import CompiledModel, compile_model
 from aquakin.core.parser import parse_rate_expression

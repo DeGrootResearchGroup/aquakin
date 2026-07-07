@@ -59,6 +59,13 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
   (`license = "MIT"` + `license-files`), single-sourced the package version from
   `aquakin.__version__`, and added `Documentation` and `Changelog` project URLs.
   (#494)
+- Library progress output is now routed through the standard `logging` module
+  instead of `print`, so callers can silence or redirect it. The `progress=`
+  option of `plant.steady_state_dgsm` / `dynamic_dgsm` emits a `logging.INFO`
+  record (on the `aquakin.plant.sensitivity` logger) every N samples rather than
+  writing to stdout — enable it with, e.g., `logging.basicConfig(level=
+  logging.INFO)`. aquakin attaches a `NullHandler` to its package logger and
+  never configures logging on the application's behalf. (#472)
 
 ### Fixed
 
