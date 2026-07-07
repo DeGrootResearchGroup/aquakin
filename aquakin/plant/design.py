@@ -31,12 +31,10 @@ import jax.numpy as jnp
 
 from aquakin.plant._constants import EPS_Q
 from aquakin.plant.metrics import (
-    _time_average as _metrics_time_average,
-)
-from aquakin.plant.metrics import (
     derived_BOD,
     derived_COD,
     derived_TSS,
+    time_average,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -370,15 +368,6 @@ def _reactor_units(plant, explicit):
     return reactors
 
 
-def _time_average(t, values):
-    """Trapezoidal time-average of ``values(t)`` over ``[t0, t1]`` (single source
-    of truth: the shared :func:`aquakin.plant.metrics._time_average` kernel,
-    which also returns the single sample for a one-point steady-state window).
-    Wrapped here only to keep the local ``(t, values)`` argument order and the
-    ``float`` return."""
-    return float(_metrics_time_average(values, t))
-
-
 def _pick_influent(plant, influent_name):
     """Resolve the external influent series for HRT / F:M."""
     influents = plant.influents
@@ -469,8 +458,8 @@ def sludge_metrics(
             clarifier_solids = clarifier_solids + jax.vmap(unit.solids_mass)(states)
 
     system_solids = reactor_solids + clarifier_solids  # (n_t,) g
-    inventory_mean = _time_average(t, system_solids)  # g
-    reactor_solids_mean = _time_average(t, reactor_solids)  # g
+    inventory_mean = float(time_average(system_solids, t))  # g
+    reactor_solids_mean = float(time_average(reactor_solids, t))  # g
 
     # ----- Solids leaving via wastage + effluent (g/d). -----
     eff_port = _pick_endpoint(
@@ -484,7 +473,7 @@ def sludge_metrics(
     waste = plant.stream(solution, w_port, params_full)
     eff_solids_rate = eff.Q * derived_TSS(eff.C, model)  # (n_t,) g/d
     waste_solids_rate = waste.Q * derived_TSS(waste.C, model)
-    loss_mean = _time_average(t, eff_solids_rate + waste_solids_rate)  # g/d
+    loss_mean = float(time_average(eff_solids_rate + waste_solids_rate, t))  # g/d
 
     SRT = inventory_mean / (loss_mean + EPS_Q)  # days
 
@@ -493,12 +482,12 @@ def sludge_metrics(
     inf_streams = [influent.at(ti) for ti in t]
     inf_Q = jnp.asarray([s.Q for s in inf_streams])  # (n_t,)
     inf_C = jnp.stack([s.C for s in inf_streams])  # (n_t, n_species)
-    Q_mean = _time_average(t, inf_Q)
+    Q_mean = float(time_average(inf_Q, t))
     HRT = reactor_volume / (Q_mean + EPS_Q)  # days
 
     load_fn = derived_BOD if substrate_key == "BOD" else derived_COD
     bod_load_rate = inf_Q * load_fn(inf_C, model)  # (n_t,) g/d
-    bod_load_mean = _time_average(t, bod_load_rate)  # g/d
+    bod_load_mean = float(time_average(bod_load_rate, t))  # g/d
     # F:M is the substrate load over the reactor (aeration-basin) solids mass.
     FM = bod_load_mean / (reactor_solids_mean + EPS_Q)  # 1/d
     mlss = reactor_solids_mean / (reactor_volume + EPS_Q)  # g/m3
@@ -510,8 +499,8 @@ def sludge_metrics(
         mlss=mlss,
         reactor_volume=reactor_volume,
         solids_inventory=inventory_mean * 1e-3,  # kg
-        solids_wasted=_time_average(t, waste_solids_rate) * 1e-3,
-        solids_effluent=_time_average(t, eff_solids_rate) * 1e-3,
+        solids_wasted=float(time_average(waste_solids_rate, t)) * 1e-3,
+        solids_effluent=float(time_average(eff_solids_rate, t)) * 1e-3,
         influent_flow=Q_mean,
         influent_bod_load=bod_load_mean * 1e-3,
         reactor_units=reactors,

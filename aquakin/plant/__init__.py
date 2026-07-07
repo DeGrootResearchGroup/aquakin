@@ -106,6 +106,7 @@ from aquakin.plant.metrics import (
     operational_cost_index_bsm2,
     pumping_energy,
     pumping_energy_bsm2,
+    time_average,
 )
 from aquakin.plant.ghg import (
     CarbonFootprint,
@@ -248,6 +249,7 @@ __all__ = [
     "stripped_n2o",
     "t10_from_baffling",
     "t10_from_rtd",
+    "time_average",
     "uv_dose",
     "uv_log_inactivation",
 ]

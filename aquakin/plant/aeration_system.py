@@ -42,7 +42,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 
 from aquakin.plant._constants import HOURS_PER_DAY, MINUTES_PER_DAY, SECONDS_PER_DAY
-from aquakin.plant.metrics import _time_average as _metrics_time_average
+from aquakin.plant.metrics import time_average
 
 # Standard physical constants (SI).
 _RHO_WATER = 1000.0  # kg/m3
@@ -177,14 +177,6 @@ def blower_power_kw(airflow_m3_per_d, system: AerationSystem):
     return watts / 1000.0  # kW
 
 
-def _time_average(values, t):
-    """Trapezoidal mean of ``values`` over ``[t0, t1]`` (single source of truth:
-    the shared :func:`aquakin.plant.metrics._time_average` kernel, which also
-    returns the single sample for a one-point steady-state window). Wrapped here
-    only to keep the local ``(values, t)`` argument order."""
-    return _metrics_time_average(values, t)
-
-
 def blower_airflow_total(t, kla_history, volumes, system: AerationSystem) -> float:
     """Time-averaged total air flow over the window (m³/d), summed across tanks.
 
@@ -193,7 +185,7 @@ def blower_airflow_total(t, kla_history, volumes, system: AerationSystem) -> flo
     kla_history = jnp.asarray(kla_history)
     volumes = jnp.asarray(volumes)
     q = required_airflow(kla_history, volumes[None, :], system)  # (n_t, n_tanks)
-    return float(_time_average(jnp.sum(q, axis=1), t))
+    return float(time_average(jnp.sum(q, axis=1), t))
 
 
 def blower_energy(t, kla_history, volumes, system: AerationSystem) -> float:
@@ -210,7 +202,7 @@ def blower_energy(t, kla_history, volumes, system: AerationSystem) -> float:
     q = required_airflow(kla_history, volumes[None, :], system)  # (n_t, n_tanks) m3/d
     power = blower_power_kw(q, system)  # (n_t, n_tanks) kW
     total_power = jnp.sum(power, axis=1)  # (n_t,) kW
-    return float(_time_average(total_power, t) * HOURS_PER_DAY)
+    return float(time_average(total_power, t) * HOURS_PER_DAY)
 
 
 @dataclass(frozen=True)

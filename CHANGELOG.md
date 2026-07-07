@@ -37,6 +37,11 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
   data through the forward-model seam, reusing the reactor calibration
   machinery. Supports multi-stream observables and joint multi-batch fits.
   (#498, #499, #500, #501)
+- `aquakin.time_average(values, t)` — the trapezoidal time-average of a solution
+  trajectory (with the one-point steady-state convention) is now a single public
+  helper. It replaces four private per-module copies, two of which had an
+  *inverted* `(t, values)` signature; every plant metric / design / aeration /
+  GHG / evaluation path now calls the one `(values, t)` kernel. (#476)
 - `CITATION.cff`, so the package can be cited and GitHub shows a "Cite this
   repository" button. (#494)
 - `CHANGELOG.md` (this file), following the Keep a Changelog format.

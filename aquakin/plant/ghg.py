@@ -33,7 +33,7 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 
-from aquakin.plant.metrics import _time_average
+from aquakin.plant.metrics import time_average
 
 # IPCC AR6 (2021) 100-year global warming potentials (kg CO₂e / kg gas).
 # N₂O and *biogenic* CH₄ (the wastewater case -- carbon of recent biological
@@ -116,7 +116,7 @@ def stripped_n2o(
     volumes = jnp.asarray(volumes)
     # g N/d summed over reactors, then g→kg.
     flux = jnp.sum(kla * s * volumes[None, :], axis=1) * 1e-3  # (n_t,) kg N/d
-    return float(_time_average(flux, t))
+    return float(time_average(flux, t))
 
 
 @dataclass
