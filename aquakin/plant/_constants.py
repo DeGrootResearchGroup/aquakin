@@ -24,6 +24,23 @@ import jax.numpy as jnp
 if TYPE_CHECKING:
     from aquakin.core.model import CompiledModel
 
+# Shared near-zero-denominator guard for the plant units' flow-/mass-weighted
+# concentration divisions -- mass/flow and load/flow mixing, the capture split,
+# a TSS-fraction denominator, and the derived flow/solids/volume ratios. One
+# magnitude everywhere so a near-zero total flow yields a finite (~0)
+# concentration instead of 0/0, rather than each unit picking its own epsilon.
+# This is *only* the numerical divide-by-zero floor; a physically meaningful
+# small-quantity floor (a minimum settler depth, a minimum flow that sets a
+# maximum HRT, a log-domain floor) is a modelling choice, keeps its own value,
+# and is deliberately not folded in here.
+EPS_Q: float = 1e-12
+
+# Time-unit conversion factors, shared by the aeration, disinfection, clarifier
+# and metrics units so each conversion is defined once rather than re-hardcoded.
+SECONDS_PER_DAY: float = 86400.0
+HOURS_PER_DAY: float = 24.0
+MINUTES_PER_DAY: float = 1440.0
+
 # ASM1 particulates that settle in a secondary clarifier (includes XND).
 ASM1_SETTLING_SPECIES: tuple[str, ...] = ("XS", "XI", "XB_H", "XB_A", "XP", "XND")
 

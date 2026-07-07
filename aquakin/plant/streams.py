@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Mapping
 import jax.numpy as jnp
 
 from aquakin.integrate._common import PlottableSolutionMixin, _HasNamedSpecies
+from aquakin.plant._constants import EPS_Q
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -89,8 +90,6 @@ def make_scalars(**values) -> dict:
     return {k: v for k, v in values.items() if v is not None}
 
 
-_EPS_Q = 1e-12  # guard the flow-weighted division when total inflow is ~zero
-
 #: The side-channel scalars combined by default: temperature (a heat balance) and
 #: indicator-organism density (an indicator mass balance).
 _FIRST_CLASS_SCALARS = ("T", "org")
@@ -158,7 +157,7 @@ def _flow_weighted_scalar(carriers) -> "jnp.ndarray":
         Q_total = Q_total + q
         weighted = weighted + q * v
     mean = sum(v for _, v in carriers) / len(carriers)
-    return jnp.where(Q_total > _EPS_Q, weighted / (Q_total + _EPS_Q), mean)
+    return jnp.where(Q_total > EPS_Q, weighted / (Q_total + EPS_Q), mean)
 
 
 def total_flow(flows) -> "jnp.ndarray":
@@ -184,7 +183,7 @@ def mixed_feed(inputs: "dict[str, Stream]", names) -> "tuple[jnp.ndarray, jnp.nd
     ADM1 digester, the primary-clarifier holding tank, the IFAS bulk) uses to form
     the feed its dilution term drives toward. The concentration companion to
     :func:`mixed_scalars` (which combines the side-channel scalars) and
-    :func:`total_flow`. The division is guarded by the shared ``_EPS_Q`` so a
+    :func:`total_flow`. The division is guarded by the shared ``EPS_Q`` so a
     momentarily zero total inflow yields ``0`` rather than ``inf`` -- matching the
     ``/(Q_total + 1e-12)`` guard these units carried inline.
 
@@ -208,7 +207,7 @@ def mixed_feed(inputs: "dict[str, Stream]", names) -> "tuple[jnp.ndarray, jnp.nd
         s = inputs[n]
         Q_total = Q_total + s.Q
         mass = mass + s.Q * s.C
-    return Q_total, mass / (Q_total + _EPS_Q)
+    return Q_total, mass / (Q_total + EPS_Q)
 
 
 def split_by_capture(
@@ -228,7 +227,7 @@ def split_by_capture(
     Returns the two outlet concentration vectors ``(C_under, C_over)``.
 
     The particulate outlet concentrations are the captured / escaped mass divided
-    by the (separately determined) outlet flow, guarded by ``_EPS_Q`` against a
+    by the (separately determined) outlet flow, guarded by ``EPS_Q`` against a
     zero outlet flow. This is the fixed-capture-fraction separation the ideal
     secondary clarifier uses. (The ideal ``%TSS`` thickener is the *same*
     partition with ``capture_frac`` equal to its solids-removal fraction, but it
@@ -239,8 +238,8 @@ def split_by_capture(
     sol_mask = 1.0 - part_mask
     mass_in_p = Q_in * C_in * part_mask
     sol_C = C_in * sol_mask
-    C_under = sol_C + capture_frac * mass_in_p / (Q_under + _EPS_Q)
-    C_over = sol_C + (1.0 - capture_frac) * mass_in_p / (Q_over + _EPS_Q)
+    C_under = sol_C + capture_frac * mass_in_p / (Q_under + EPS_Q)
+    C_over = sol_C + (1.0 - capture_frac) * mass_in_p / (Q_over + EPS_Q)
     return C_under, C_over
 
 

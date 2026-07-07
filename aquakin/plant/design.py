@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Optional
 import jax
 import jax.numpy as jnp
 
+from aquakin.plant._constants import EPS_Q
 from aquakin.plant.metrics import (
     _time_average as _metrics_time_average,
 )
@@ -485,7 +486,7 @@ def sludge_metrics(
     waste_solids_rate = waste.Q * derived_TSS(waste.C, model)
     loss_mean = _time_average(t, eff_solids_rate + waste_solids_rate)  # g/d
 
-    SRT = inventory_mean / (loss_mean + 1e-12)  # days
+    SRT = inventory_mean / (loss_mean + EPS_Q)  # days
 
     # ----- HRT and F:M from the external influent. -----
     influent = _pick_influent(plant, influent_name)
@@ -493,14 +494,14 @@ def sludge_metrics(
     inf_Q = jnp.asarray([s.Q for s in inf_streams])  # (n_t,)
     inf_C = jnp.stack([s.C for s in inf_streams])  # (n_t, n_species)
     Q_mean = _time_average(t, inf_Q)
-    HRT = reactor_volume / (Q_mean + 1e-12)  # days
+    HRT = reactor_volume / (Q_mean + EPS_Q)  # days
 
     load_fn = derived_BOD if substrate_key == "BOD" else derived_COD
     bod_load_rate = inf_Q * load_fn(inf_C, model)  # (n_t,) g/d
     bod_load_mean = _time_average(t, bod_load_rate)  # g/d
     # F:M is the substrate load over the reactor (aeration-basin) solids mass.
-    FM = bod_load_mean / (reactor_solids_mean + 1e-12)  # 1/d
-    mlss = reactor_solids_mean / (reactor_volume + 1e-12)  # g/m3
+    FM = bod_load_mean / (reactor_solids_mean + EPS_Q)  # 1/d
+    mlss = reactor_solids_mean / (reactor_volume + EPS_Q)  # g/m3
 
     return SludgeMetrics(
         SRT=SRT,

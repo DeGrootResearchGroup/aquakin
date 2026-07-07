@@ -33,12 +33,11 @@ from typing import TYPE_CHECKING, Optional
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import EPS_Q
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
-
-_EPS_Q = 1e-9  # guard the load/flow division
 
 
 @dataclass
@@ -104,7 +103,7 @@ class HydraulicDelayUnit:
         """Return ``(Q, C)`` from the held loads and flow."""
         Q = state[-1]
         loads = state[: self.model.n_species]
-        C = loads / (Q + _EPS_Q)
+        C = loads / (Q + EPS_Q)
         return Q, C
 
     def compute_outputs(

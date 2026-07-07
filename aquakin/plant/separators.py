@@ -31,6 +31,7 @@ from aquakin.plant._constants import (
     ASM1_SETTLING_SPECIES,
     ASM1_TSS_FACTOR,
     ASM1_TSS_SPECIES,
+    EPS_Q,
     species_mask,
     tss_concentration,
 )
@@ -139,10 +140,10 @@ class IdealThickener(StatelessUnit):
         # Thickening factor f = target_TSS / TSS_in. f > 1 means the feed can be
         # concentrated to the target; f <= 1 means it is already at/above target,
         # so everything leaves with the underflow (overflow is empty).
-        f = self._target_tss / jnp.maximum(tss_in, 1e-12)
+        f = self._target_tss / jnp.maximum(tss_in, EPS_Q)
         can = f > 1.0
-        Qu_factor = self._removal_frac / jnp.maximum(f, 1e-12)
-        thin_factor = (1.0 - self._removal_frac) / jnp.maximum(1.0 - Qu_factor, 1e-12)
+        Qu_factor = self._removal_frac / jnp.maximum(f, EPS_Q)
+        thin_factor = (1.0 - self._removal_frac) / jnp.maximum(1.0 - Qu_factor, EPS_Q)
 
         # Per-species multipliers for the two outlets. Settled particulates scale
         # by f (underflow) / thin_factor (overflow); solubles pass through (×1)

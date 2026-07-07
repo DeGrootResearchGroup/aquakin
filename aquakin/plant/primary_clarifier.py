@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
-from aquakin.plant._constants import ASM1_SETTLING_SPECIES, species_mask
+from aquakin.plant._constants import ASM1_SETTLING_SPECIES, MINUTES_PER_DAY, species_mask
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
 
@@ -99,8 +99,13 @@ class PrimaryClarifier(FlowParameterized):
 
     def _removal_fraction(self, Q_in: jnp.ndarray) -> jnp.ndarray:
         """Particulate-COD removal fraction n_X in [0, 1] from the HRT."""
+        # The two floors here are deliberate *physical* floors, not the shared
+        # numerical EPS_Q divide-by-zero guard: 1e-3 m3/d caps the HRT at a large
+        # but finite value as the feed vanishes (a zero-flow clarifier does not
+        # retain forever), and 1e-6 min keeps the log argument in domain. Their
+        # magnitudes are modelling choices, so they stay local.
         hrt_days = self.volume / (Q_in + 1e-3)
-        hrt_min = hrt_days * 1440.0
+        hrt_min = hrt_days * MINUTES_PER_DAY
         n_cod = (
             self.f_corr
             * (2.88 * self.f_X - 0.118)
