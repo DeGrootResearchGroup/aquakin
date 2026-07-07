@@ -344,6 +344,16 @@ def test_consistent_time_units_not_flagged(tmp_path):
     assert not [w for w in net.check_units() if w.location == "time unit"]
 
 
+def test_parser_unbalanced_parenthesis_raises():
+    # parse_units() catches the _ParseError and returns None; drive the
+    # underlying product parser directly to exercise the raise itself.
+    from aquakin.utils.units import _lex, _ParseError, _ProductParser
+
+    parser = _ProductParser(_lex("(g"))
+    with pytest.raises(_ParseError, match="unbalanced parenthesis"):
+        parser.parse()
+
+
 def test_parse_units_accepts_display_dot():
     # The display multiplication dot (U+00B7 and U+22C5) parses as '*', so the
     # prettified form round-trips through the parser.

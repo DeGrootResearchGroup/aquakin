@@ -73,6 +73,7 @@ def test_sizing_summary_is_a_string():
     [
         dict(SRT=-1.0, HRT_h=8.0, Q=18446.0),
         dict(SRT=10.0, HRT_h=8.0, Q=-1.0),
+        dict(SRT=10.0, HRT=0.0, Q=18446.0),  # HRT not > 0
         dict(SRT=10.0, Q=18446.0),  # no HRT
         dict(SRT=10.0, HRT=0.3, HRT_h=8.0, Q=18446.0),  # both HRT
         dict(SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="bogus"),
@@ -191,6 +192,21 @@ def test_reactor_units_explicit_known_and_unknown():
     assert _reactor_units(plant, ["tank1", "tank2"]) == ["tank1", "tank2"]
     with pytest.raises(ValueError, match="Unknown reactor unit"):
         _reactor_units(plant, ["ghost"])
+
+
+def test_reactor_units_autodetect_fails_without_as_reactors():
+    """design.py:366 -- auto-detection on a plant with no activated-sludge
+    reactors (only a mixer, which carries no ``aeration`` attribute) errors
+    with a request to pass reactor_units= explicitly."""
+    from aquakin.plant import MixerUnit, Plant
+    from aquakin.plant.design import _reactor_units
+
+    net = aquakin.load_model("asm1")
+    plant = Plant("no_as")
+    plant.add_unit(MixerUnit(name="mix", input_port_names=["a", "b"], model=net))
+    plant._finalize_topology()  # populate _unit_order for the reactor scan
+    with pytest.raises(ValueError, match="Could not auto-detect activated-sludge reactors"):
+        _reactor_units(plant, None)
 
 
 def test_pick_influent_branches():

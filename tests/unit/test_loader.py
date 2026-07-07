@@ -220,9 +220,11 @@ def test_extends_base_not_a_mapping_rejected(tmp_path):
     error, not an opaque downstream failure."""
     (tmp_path / "base.yaml").write_text("- 1\n- 2\n- 3\n")
     derived = tmp_path / "derived.yaml"
-    derived.write_text(textwrap.dedent("""
+    derived.write_text(
+        textwrap.dedent("""
         model: {name: d, extends: base.yaml}
-        """))
+        """)
+    )
     with pytest.raises(ValueError, match="must be a mapping"):
         aquakin.load_model_from_file(derived)
 
@@ -268,37 +270,40 @@ def test_non_finite_composition_value_rejected(tmp_path, bad):
 
 # ----- speciation activity_model override (issue #205) ---------------------
 
+
 def test_load_model_activity_override_shifts_ph_and_keeps_default():
     """load_model(..., activity_model=) overrides the speciation activity
     model on a shipped model; the cached default is untouched."""
     import jax.numpy as jnp
+
     from aquakin import load_model
 
-    base = load_model("adm1")                      # cached default (none)
+    base = load_model("adm1")  # cached default (none)
     dav = load_model("adm1", activity_model="davies")
     assert dav is not base
-    assert load_model("adm1") is base              # default still cached/unchanged
+    assert load_model("adm1") is base  # default still cached/unchanged
 
     C = base.default_concentrations()
     conds = {f: jnp.asarray([v]) for f, v in base._condition_defaults.items()}
 
     def ph(net):
-        return float(net.derived_condition_fn(
-            C, net.default_parameters(), conds, 0)["pH"])
+        return float(net.derived_condition_fn(C, net.default_parameters(), conds, 0)["pH"])
 
     ph_base, ph_dav = ph(base), ph(dav)
     assert ph_base == pytest.approx(7.27, abs=0.05)  # validated BSM2 digester pH
-    assert abs(ph_dav - ph_base) > 0.02              # activity-shifted
+    assert abs(ph_dav - ph_base) > 0.02  # activity-shifted
 
 
 def test_activity_override_requires_speciation_block():
     from aquakin import load_model
+
     with pytest.raises(ValueError, match="speciation"):
-        load_model("asm1", activity_model="davies")   # no pH solver
+        load_model("asm1", activity_model="davies")  # no pH solver
 
 
 def test_activity_override_validates_model_name():
     from aquakin import load_model
+
     with pytest.raises(ValueError, match="activity_model"):
         load_model("adm1", activity_model="bogus")
 
@@ -329,6 +334,7 @@ def test_clear_model_cache_is_exported():
     # Documented public API: must be importable from the top-level package and in
     # __all__ (it was missing despite being referenced in the docs).
     import aquakin
+
     assert "clear_model_cache" in aquakin.__all__
     assert callable(aquakin.clear_model_cache)
     # Cached identity, then cleared.
@@ -336,6 +342,53 @@ def test_clear_model_cache_is_exported():
     assert aquakin.load_model("asm1") is a
     aquakin.clear_model_cache()
     assert aquakin.load_model("asm1") is not a
+
+
+def test_top_level_yaml_not_a_mapping_rejected(tmp_path):
+    """A model file whose top-level YAML is not a mapping (here a list) is
+    rejected with a clear error (loader.py line 85)."""
+    p = tmp_path / "net.yaml"
+    p.write_text("- 1\n- 2\n- 3\n")
+    with pytest.raises(ValueError, match="must be a mapping"):
+        aquakin.load_model_from_file(p)
+
+
+def test_malformed_yaml_rejected(tmp_path):
+    """Unparseable YAML is reported as a parse failure, not an opaque crash
+    (loader.py line 83)."""
+    p = tmp_path / "net.yaml"
+    # A bare unmatched flow-mapping brace is a YAML syntax error.
+    p.write_text("model: {name: bad\nspecies: [\n")
+    with pytest.raises(ValueError, match="Failed to parse YAML"):
+        aquakin.load_model_from_file(p)
+
+
+def test_extends_relative_base_file_not_found_rejected(tmp_path):
+    """A relative ``extends:`` pointing at a missing base file is rejected
+    (loader.py line 34)."""
+    with pytest.raises(FileNotFoundError, match="extends: base file not found"):
+        aquakin.load_model_from_file(
+            _write(
+                tmp_path,
+                """
+                model: {name: d, extends: ./no_such_base.yaml}
+                """,
+            )
+        )
+
+
+def test_extends_base_malformed_yaml_rejected(tmp_path):
+    """A base file with unparseable YAML is reported as a base-parse failure
+    (loader.py line 67)."""
+    (tmp_path / "base.yaml").write_text("model: {name: base\nspecies: [\n")
+    derived = tmp_path / "derived.yaml"
+    derived.write_text(
+        textwrap.dedent("""
+        model: {name: d, extends: base.yaml}
+        """)
+    )
+    with pytest.raises(ValueError, match="failed to parse base"):
+        aquakin.load_model_from_file(derived)
 
 
 def test_asm1_adm1_ship_literature_priors():

@@ -522,3 +522,60 @@ def test_plant_calibrate_rejects_shape_mismatch(decay_plant):
             target="tank",
             observed_channels=["B"],
         )
+
+
+def test_normalize_observables_rejects_empty_list():
+    """calibrate.py:116 -- an explicit empty observables list is rejected."""
+    from aquakin.plant.calibrate import _normalize_observables
+
+    with pytest.raises(ValueError, match="observables must be non-empty"):
+        _normalize_observables([], "unused", None)
+
+
+def test_plant_calibrate_free_ic_rejects_non_concentration_unit(two_tank_plant):
+    """calibrate.py:384 -- a free_ic on a unit without a per-species state (here
+    a mixer) is rejected. Fast: fails at problem setup before any solve."""
+    net, plant = two_tank_plant
+    from aquakin.plant import MixerUnit
+
+    plant.add_unit(MixerUnit(name="mix", input_port_names=["a", "b"], model=net))
+    with pytest.raises(KeyError, match="has no per-species state"):
+        plant.calibrate(
+            jnp.zeros((3, 1)),
+            jnp.array([0.2, 0.4, 0.6]),
+            [PARAM],
+            target="tank1",
+            observed_channels=["B"],
+            free_ic=aquakin.FreeICConfig(["mix.A"]),
+        )
+
+
+def test_plant_calibrate_tobs_must_be_nonempty(decay_plant):
+    """calibrate.py:444 -- an empty t_obs array is rejected."""
+    net, plant = decay_plant
+    with pytest.raises(ValueError, match="t_obs must be a non-empty 1-D array"):
+        plant.calibrate(
+            jnp.zeros((0, 1)),
+            jnp.zeros((0,)),
+            [PARAM],
+            target="tank",
+            observed_channels=["B"],
+        )
+
+
+def test_plant_calibrate_multibatch_sigma_length_mismatch(decay_plant):
+    """calibrate.py:420 -- a per-dataset sigma list whose length disagrees with
+    the number of datasets is rejected."""
+    net, plant = decay_plant
+    obs = [jnp.zeros((3, 1)), jnp.zeros((3, 1))]
+    t = [jnp.array([0.2, 0.4, 0.6]), jnp.array([0.2, 0.4, 0.6])]
+    with pytest.raises(ValueError, match="sigma list has 3 entries but there are 2"):
+        plant.calibrate(
+            obs,
+            t,
+            [PARAM],
+            target="tank",
+            observed_channels=["B"],
+            y0=[plant.initial_state(), plant.initial_state()],
+            sigma=[1.0, 1.0, 1.0],
+        )
