@@ -54,7 +54,7 @@ _SECONDS_PER_DAY = 86400.0
 # --- UV credit physics ------------------------------------------------------
 
 
-def uvt_intensity_factor(uvt, uvt_ref):
+def uvt_intensity_factor(uvt: Optional[jnp.ndarray], uvt_ref: Optional[jnp.ndarray]) -> jnp.ndarray:
     """First-order UV-transmittance correction on the average fluence rate.
 
     The average intensity in a UV reactor falls as the water absorbs more UV. With
@@ -67,7 +67,13 @@ def uvt_intensity_factor(uvt, uvt_ref):
     return jnp.asarray(uvt) / jnp.asarray(uvt_ref)
 
 
-def uv_dose(intensity, exposure_time, *, uvt=None, uvt_ref=None):
+def uv_dose(
+    intensity: jnp.ndarray,
+    exposure_time: jnp.ndarray,
+    *,
+    uvt: Optional[jnp.ndarray] = None,
+    uvt_ref: Optional[jnp.ndarray] = None,
+) -> jnp.ndarray:
     """UV dose (fluence) = average fluence rate × exposure time.
 
     ``intensity`` is the average fluence rate (e.g. mW/cm²) and ``exposure_time``
@@ -76,7 +82,9 @@ def uv_dose(intensity, exposure_time, *, uvt=None, uvt_ref=None):
     return jnp.asarray(intensity) * uvt_intensity_factor(uvt, uvt_ref) * jnp.asarray(exposure_time)
 
 
-def uv_log_inactivation(dose, d10, *, max_log=None):
+def uv_log_inactivation(
+    dose: jnp.ndarray, d10: jnp.ndarray, *, max_log: Optional[jnp.ndarray] = None
+) -> jnp.ndarray:
     """Log-inactivation from a UV dose by a log-linear dose-response.
 
     ``log10(N/N0) = dose / d10`` where ``d10`` is the dose for one log of
@@ -91,7 +99,9 @@ def uv_log_inactivation(dose, d10, *, max_log=None):
 # --- chlorine credit physics ------------------------------------------------
 
 
-def t10_from_baffling(volume, flow, baffling_factor):
+def t10_from_baffling(
+    volume: jnp.ndarray, flow: jnp.ndarray, baffling_factor: jnp.ndarray
+) -> jnp.ndarray:
     """T10 contact time from the baffling factor: ``T10 = baffling·V/Q``.
 
     The baffling factor is the ratio of the T10 (the time below which 10 % of the
@@ -100,7 +110,7 @@ def t10_from_baffling(volume, flow, baffling_factor):
     return baffling_factor * jnp.asarray(volume) / (jnp.asarray(flow) + _EPS_Q)
 
 
-def t10_from_rtd(t, C):
+def t10_from_rtd(t: jnp.ndarray, C: jnp.ndarray) -> jnp.ndarray:
     """T10 contact time from a measured/simulated residence-time distribution.
 
     Reuses :func:`aquakin.utils.rtd.percentile_time` (the 10th percentile -- the
@@ -111,12 +121,14 @@ def t10_from_rtd(t, C):
     return percentile_time(t, C, 0.10)
 
 
-def ct_value(residual, t10):
+def ct_value(residual: jnp.ndarray, t10: jnp.ndarray) -> jnp.ndarray:
     """CT = disinfectant residual × T10 contact time (e.g. mg·min/L)."""
     return jnp.asarray(residual) * jnp.asarray(t10)
 
 
-def ct_log_removal(ct, ct_per_log, *, max_log=None):
+def ct_log_removal(
+    ct: jnp.ndarray, ct_per_log: jnp.ndarray, *, max_log: Optional[jnp.ndarray] = None
+) -> jnp.ndarray:
     """Log-removal from a CT value by a CT-based credit (Chick–Watson form).
 
     ``log = CT / ct_per_log`` where ``ct_per_log`` is the CT that earns one log of

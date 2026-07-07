@@ -64,6 +64,26 @@ class Reagent:
 
         Thin wrapper over :meth:`CompiledModel.concentrations` with
         ``base="zero"`` -- the neat reagent contains only the species you name.
+
+        Parameters
+        ----------
+        model : CompiledModel
+            The model whose species indexing defines the composition vector.
+        overrides : dict[str, float], optional
+            Species name -> concentration, positional-only. Use it for names
+            that are not valid Python identifiers (``"Br-"``, ``"NH4+"``); the
+            keyword form below covers identifier-safe names.
+        label : str, optional
+            Human-readable reagent label (default ``"reagent"``).
+        **species : float
+            Convenience concentration overrides for identifier-safe species
+            names (``SS=4e5``).
+
+        Returns
+        -------
+        Reagent
+            A reagent whose composition contains only the named species (every
+            other species is 0).
         """
         comp = model.concentrations(overrides, base="zero", **species)
         return cls(model=model, composition=comp, label=label)

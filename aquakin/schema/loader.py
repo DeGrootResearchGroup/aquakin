@@ -103,6 +103,11 @@ def _apply_activity_override(spec: ModelSpec, activity_model: str) -> ModelSpec:
     """
     from aquakin.core.ph_solver import _ACTIVITY_MODELS
 
+    # Validate the value here rather than relying on the speciation schema:
+    # ``model_copy(update=...)`` below does NOT re-run Pydantic field validators
+    # (Pydantic v2 assigns the updated fields directly), so an invalid
+    # activity_model would otherwise slip through silently. This check is load-
+    # bearing -- do not remove it as "already validated by the schema".
     if activity_model not in _ACTIVITY_MODELS:
         raise ValueError(
             f"activity_model must be one of {_ACTIVITY_MODELS}; got {activity_model!r}"

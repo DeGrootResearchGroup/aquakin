@@ -577,6 +577,17 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         params: jnp.ndarray,
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
+        """Split the feed into a clarified overflow and a thickened underflow.
+
+        Returns
+        -------
+        dict of str to Stream
+            The two outlet streams keyed by port name: ``overflow_port`` (the
+            clarified top-layer effluent) and ``underflow_port`` (the thickened
+            bottom-layer sludge/RAS). Solubles pass through unchanged (or carry
+            the held top/bottom layers when ``soluble_holdup`` is on);
+            particulates take their respective boundary layers.
+        """
         s_in = inputs[self.input_port]
         # Overflow = top layer (index n_layers - 1). Underflow = bottom (0).
         # Soluble species pass through (same concentration in both outlets).
