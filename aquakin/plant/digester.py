@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant.coupling import CouplingAware
-from aquakin.plant.streams import Stream, mixed_scalars
+from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -219,16 +219,12 @@ class ADM1DigesterUnit(CouplingAware):
         # effluent carries the flow-weighted inlet side-channel scalars (the
         # temperature is a heat balance, matching every other multi-inlet unit via
         # the one shared combiner).
-        Q_total = jnp.zeros(())
-        for name in self.input_port_names:
-            Q_total = Q_total + inputs[name].Q
+        Q_total = total_flow(inputs[name].Q for name in self.input_port_names)
         scalars_out = mixed_scalars(inputs, self.input_port_names)
         return {self.output_port: Stream(Q=Q_total, C=state, model=self.model, scalars=scalars_out)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
-        Q_total = jnp.zeros(())
-        for name in self.input_port_names:
-            Q_total = Q_total + input_flows[name]
+        Q_total = total_flow(input_flows[name] for name in self.input_port_names)
         return {self.output_port: Q_total}
 
     def rhs(
@@ -240,13 +236,7 @@ class ADM1DigesterUnit(CouplingAware):
         signals: "dict | None" = None,
     ) -> jnp.ndarray:
         # Mix inflows (Q-weighted) into one feed composition.
-        Q_total = jnp.zeros(())
-        mass_total = jnp.zeros((self.model.n_species,))
-        for name in self.input_port_names:
-            s = inputs[name]
-            Q_total = Q_total + s.Q
-            mass_total = mass_total + s.Q * s.C
-        C_in = mass_total / (Q_total + 1e-12)
+        Q_total, C_in = mixed_feed(inputs, self.input_port_names)
 
         # Slave the model's V_liq parameter to this unit's liquid volume so the
         # gas-transfer headspace-gain ratio V_liq/V_gas matches the actual

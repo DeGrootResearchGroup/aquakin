@@ -22,13 +22,13 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
-from aquakin.plant._constants import ASM1_SETTLING_SPECIES
+from aquakin.plant._constants import ASM1_SETTLING_SPECIES, species_mask
 from aquakin.plant._flow_split import (
     split_controlled_flows,
     validate_controlled_split,
 )
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
-from aquakin.plant.streams import Stream
+from aquakin.plant.streams import Stream, split_by_capture
 from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -102,16 +102,10 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
         else:
             self._ctrl = "overflow"
             self._setpoints = {"overflow_Q": FlowSetpoint(float(self.overflow_Q), 0)}
-        self._part_indices = [
-            self.model.species_index[s]
-            for s in self.particulate_species
-            if s in self.model.species_index
-        ]
         # Pre-build a (n_species,) mask: 1.0 for particulates, 0.0 for solubles.
-        mask = jnp.zeros((self.model.n_species,))
-        for i in self._part_indices:
-            mask = mask.at[i].set(1.0)
-        self._particulate_mask = mask
+        self._particulate_mask = species_mask(
+            self.model, self.particulate_species, what="particulate species"
+        )
 
     @property
     def input_ports(self) -> list[str]:
@@ -146,29 +140,18 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
         # Mass-conserving (the two outflows sum to Q_in) and inactive at steady
         # state.
         Q_over, Q_under = self._split_flows(Q_in, params, clamp=True)
-        cap = jnp.asarray(self.capture_efficiency)
 
-        # Per-species partitioning. Solubles split with flow ratio.
-        # Particulates: ``cap`` fraction of mass goes to underflow.
-        mass_in = Q_in * s_in.C  # (n_species,) g/d
-        part_mask = self._particulate_mask
-        sol_mask = 1.0 - part_mask
-
-        # Soluble outflow concentrations: same as inlet (pass through).
-        sol_C_under = s_in.C * sol_mask
-        sol_C_over = s_in.C * sol_mask
-
-        # Particulate outflow concentrations: mass partitioned by capture.
-        # mass_under_p = cap * mass_in_p
-        # mass_over_p = (1 - cap) * mass_in_p
-        mass_under_p = cap * mass_in * part_mask
-        mass_over_p = (1.0 - cap) * mass_in * part_mask
-
-        part_C_under = mass_under_p / (Q_under + 1e-12)
-        part_C_over = mass_over_p / (Q_over + 1e-12)
-
-        C_over = sol_C_over + part_C_over
-        C_under = sol_C_under + part_C_under
+        # Particulate mass partitioned by capture: ``capture_efficiency`` of each
+        # particulate's inflowing mass goes to the underflow, the rest to the
+        # overflow; solubles pass through by flow.
+        C_under, C_over = split_by_capture(
+            s_in.C,
+            self._particulate_mask,
+            jnp.asarray(self.capture_efficiency),
+            Q_in,
+            Q_under,
+            Q_over,
+        )
 
         return {
             self.overflow_port: Stream(Q=Q_over, C=C_over, model=self.model, scalars=s_in.scalars),

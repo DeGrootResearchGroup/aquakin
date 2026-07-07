@@ -45,6 +45,7 @@ from aquakin.plant._constants import (
     ASM1_SETTLING_SPECIES,
     ASM1_TSS_FACTOR,
     ASM1_TSS_SPECIES,
+    species_indices,
 )
 from aquakin.plant._flow_split import (
     split_controlled_flows,
@@ -200,15 +201,12 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
 
     def _resolve_species_indices(self) -> None:
         """Resolve particulate / soluble species to model indices and TSS factors."""
-        self._part_indices: list[int] = []
-        self._part_tss_factors: list[float] = []
-        for sp in self.particulate_species:
-            if sp not in self.model.species_index:
-                raise ValueError(
-                    f"TakacsClarifier '{self.name}': particulate species '{sp}' not in model."
-                )
-            self._part_indices.append(self.model.species_index[sp])
-            self._part_tss_factors.append(self.tss_factors.get(sp, 1.0))
+        self._part_indices = species_indices(
+            self.model,
+            self.particulate_species,
+            what=f"TakacsClarifier '{self.name}': particulate species",
+        )
+        self._part_tss_factors = [self.tss_factors.get(sp, 1.0) for sp in self.particulate_species]
         self._n_part = len(self._part_indices)
         # Soluble = everything not in particulate.
         self._soluble_indices = [

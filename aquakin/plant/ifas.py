@@ -39,7 +39,7 @@ from aquakin.plant.cstr import (
     AerationUnit,
     aeration_transfer,
 )
-from aquakin.plant.streams import Stream, mixed_scalars
+from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -321,9 +321,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         params: jnp.ndarray,
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
-        Q_total = jnp.zeros(())
-        for nm in self.input_port_names:
-            Q_total = Q_total + inputs[nm].Q
+        Q_total = total_flow(inputs[nm].Q for nm in self.input_port_names)
         return {
             self.output_port: Stream(
                 Q=Q_total,
@@ -335,9 +333,7 @@ class IFASUnit(AerationUnit, CouplingAware):
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Outflow equals total inflow (constant bulk volume)."""
-        Q_total = jnp.zeros(())
-        for nm in self.input_port_names:
-            Q_total = Q_total + input_flows[nm]
+        Q_total = total_flow(input_flows[nm] for nm in self.input_port_names)
         return {self.output_port: Q_total}
 
     def rhs(
@@ -370,13 +366,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         dydt = jnp.where(layer_fix, 0.0, dydt)
 
         # Bulk convection (plant inflow) + bulk aeration, added to the bulk row.
-        Q_total = jnp.zeros(())
-        mass_total = jnp.zeros((self._n,))
-        for nm in self.input_port_names:
-            s = inputs[nm]
-            Q_total = Q_total + s.Q
-            mass_total = mass_total + s.Q * s.C
-        C_in = mass_total / (Q_total + 1e-12)
+        Q_total, C_in = mixed_feed(inputs, self.input_port_names)
         bulk = y[0]
         convection = (Q_total / self.volume) * (C_in - bulk)
         T_eff = T_in if T_in is not None else self.conditions.get("T")

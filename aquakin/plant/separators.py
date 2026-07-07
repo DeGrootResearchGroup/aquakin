@@ -31,6 +31,8 @@ from aquakin.plant._constants import (
     ASM1_SETTLING_SPECIES,
     ASM1_TSS_FACTOR,
     ASM1_TSS_SPECIES,
+    species_mask,
+    tss_concentration,
 )
 from aquakin.plant.streams import Stream
 from aquakin.plant.units import StatelessUnit
@@ -93,21 +95,13 @@ class IdealThickener(StatelessUnit):
                 f"IdealThickener '{self.name}': target_tss_percent must be "
                 f"positive; got {self.target_tss_percent}"
             )
-        n = self.model.n_species
-        idx = self.model.species_index
         # Mask of separated particulates (1.0 where concentrated/thinned).
-        settle = jnp.zeros((n,))
-        for sp in self.settling_species:
-            if sp in idx:
-                settle = settle.at[idx[sp]].set(1.0)
-        self._settle_mask = settle
-        self._soluble_mask = 1.0 - settle
+        self._settle_mask = species_mask(self.model, self.settling_species, what="settling species")
+        self._soluble_mask = 1.0 - self._settle_mask
         # TSS contribution vector (factor on the tss_species, 0 elsewhere).
-        tss = jnp.zeros((n,))
-        for sp in self.tss_species:
-            if sp in idx:
-                tss = tss.at[idx[sp]].set(self.tss_factor)
-        self._tss_vec = tss
+        self._tss_vec = species_mask(
+            self.model, self.tss_species, weight=self.tss_factor, what="TSS species"
+        )
         self._target_tss = float(self.target_tss_percent) * 1.0e4  # %TSS -> mg/L
         self._removal_frac = float(self.tss_removal_percent) / 100.0
 
@@ -141,7 +135,7 @@ class IdealThickener(StatelessUnit):
         Q_in = s_in.Q
         C = s_in.C
 
-        tss_in = jnp.sum(self._tss_vec * C)
+        tss_in = tss_concentration(C, self._tss_vec)
         # Thickening factor f = target_TSS / TSS_in. f > 1 means the feed can be
         # concentrated to the target; f <= 1 means it is already at/above target,
         # so everything leaves with the underflow (overflow is empty).

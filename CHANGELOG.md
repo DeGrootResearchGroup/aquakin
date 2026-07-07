@@ -69,5 +69,15 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
 - `check_conservation` now warns when a species matches no role-based
   composition rule, instead of silently treating it as having zero COD/N/P
   content. (#493)
+- Separator/clarifier units (`IdealClarifier`, `IdealThickener`,
+  `PrimaryClarifier`, `TakacsClarifier`, and the SBR settling models) now **raise
+  a clear error** when a configured settling / particulate / TSS species is not
+  in the model, instead of the previous *contradictory* behaviour where some
+  units silently dropped it (under-settling / under-counting solids without
+  warning) and others raised a bare `KeyError`. A model that does not define a
+  unit's default (ASM1) settling species must now name its own `settling_species`
+  / `particulate_species` / `tss_species` explicitly. The species-mask
+  construction and the Q-weighted feed / capture-split logic these units
+  duplicated are now shared helpers. (#464)
 
 [Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/commits/main

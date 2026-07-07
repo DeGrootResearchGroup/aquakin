@@ -550,3 +550,20 @@ the pass-through settler does not damp the soluble signal the way BSM2's
 soluble-carrying settler does (the JRN-056 dynamic validation). `build_bsm2(
 settler_soluble_holdup=True)` enables it plant-wide.
 
+**Shared separator/clarifier helpers.** The separator/clarifier family resolves
+its settling / particulate / TSS species lists through the shared
+[`species_mask` / `species_indices`](aquakin/plant/_constants.py) helpers, which
+enforce **one** missing-species policy: a species named in a unit's config but
+not in the model **raises** a clear `ValueError` at construction (it does *not*
+silently drop it — the old, contradictory behaviour that under-settled without
+warning). So a non-ASM1 model must name its own `settling_species` /
+`particulate_species` / `tss_species` rather than rely on the ASM1 defaults. TSS
+from a weight vector is `tss_concentration(C, tss_vec)`; the Q-weighted multi-inlet
+feed is `mixed_feed(inputs, names)` and the total inflow `total_flow(...)` (the
+flow siblings of `mixed_scalars`, in `plant/streams.py`); and the ideal secondary
+clarifier's fixed-capture-fraction partition is `split_by_capture(...)`. The
+`TakacsClarifier` keeps its own per-layer gather (a hot loop) and the
+`PrimaryClarifier` its state-partition CSTR formulation — they share the species
+policy but not the split kernel, whose physics differs. When adding a separating
+unit, reuse these rather than re-deriving a mask/split.
+

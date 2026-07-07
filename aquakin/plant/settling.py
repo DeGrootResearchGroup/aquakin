@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import species_mask
+
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
 
@@ -56,13 +58,9 @@ class SettlingModel(ABC):
         """Resolve the particulate-species mask against ``model`` (called once
         by the SBR at construction). ``particulate_species`` is the list of
         species names that settle."""
-        idx = [model.species_index[s] for s in particulate_species]
-        mask = (
-            jnp.zeros((model.n_species,)).at[jnp.asarray(idx, dtype=int)].set(1.0)
-            if idx
-            else jnp.zeros((model.n_species,))
+        self._particulate_mask = species_mask(
+            model, particulate_species, what="particulate species"
         )
-        self._particulate_mask = mask
         self._n_species = model.n_species
 
     @abstractmethod

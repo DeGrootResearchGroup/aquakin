@@ -161,6 +161,89 @@ def _flow_weighted_scalar(carriers) -> "jnp.ndarray":
     return jnp.where(Q_total > _EPS_Q, weighted / (Q_total + _EPS_Q), mean)
 
 
+def total_flow(flows) -> "jnp.ndarray":
+    """Total flow ``Σ Q`` over an iterable of per-port flows.
+
+    ``flows`` is any iterable of scalar flows -- the callers pass a generator of
+    either inlet-stream flows (``inputs[n].Q``) or the concentration-free flow-map
+    values (``input_flows[n]``), so the one summation rule serves a unit's
+    ``compute_outputs`` and its ``flow_outputs``. The flow sibling of
+    :func:`mixed_scalars` / :func:`mixed_feed`.
+    """
+    total = jnp.zeros(())
+    for q in flows:
+        total = total + q
+    return total
+
+
+def mixed_feed(inputs: "dict[str, Stream]", names) -> "tuple[jnp.ndarray, jnp.ndarray]":
+    """``(Q_total, C_in)`` for a Q-weighted multi-inlet feed.
+
+    The total inflow ``Σ Q`` and the flow-weighted inlet concentration
+    ``Σ(Q·C) / Σ(Q)`` -- the shared rule every well-mixed multi-inlet unit (the
+    ADM1 digester, the primary-clarifier holding tank, the IFAS bulk) uses to form
+    the feed its dilution term drives toward. The concentration companion to
+    :func:`mixed_scalars` (which combines the side-channel scalars) and
+    :func:`total_flow`. The division is guarded by the shared ``_EPS_Q`` so a
+    momentarily zero total inflow yields ``0`` rather than ``inf`` -- matching the
+    ``/(Q_total + 1e-12)`` guard these units carried inline.
+
+    Parameters
+    ----------
+    inputs : dict[str, Stream]
+        The unit's inlet streams keyed by input-port name.
+    names : iterable of str
+        The input-port names to combine (the unit's ``input_port_names``).
+
+    Returns
+    -------
+    Q_total : jnp.ndarray
+        Scalar total inflow.
+    C_in : jnp.ndarray
+        ``(n_species,)`` flow-weighted inlet concentration.
+    """
+    Q_total = jnp.zeros(())
+    mass = jnp.zeros(())
+    for n in names:
+        s = inputs[n]
+        Q_total = Q_total + s.Q
+        mass = mass + s.Q * s.C
+    return Q_total, mass / (Q_total + _EPS_Q)
+
+
+def split_by_capture(
+    C_in: "jnp.ndarray",
+    part_mask: "jnp.ndarray",
+    capture_frac: "jnp.ndarray",
+    Q_in: "jnp.ndarray",
+    Q_under: "jnp.ndarray",
+    Q_over: "jnp.ndarray",
+) -> "tuple[jnp.ndarray, jnp.ndarray]":
+    """Mass-conserving capture partition of a feed into underflow + overflow.
+
+    A fraction ``capture_frac`` of each *particulate* species' inflowing mass
+    (``part_mask == 1``) is captured to the underflow and the rest to the
+    overflow; solubles (``part_mask == 0``) pass through at the inlet
+    concentration into both outlets (the flow split carries their partition).
+    Returns the two outlet concentration vectors ``(C_under, C_over)``.
+
+    The particulate outlet concentrations are the captured / escaped mass divided
+    by the (separately determined) outlet flow, guarded by ``_EPS_Q`` against a
+    zero outlet flow. This is the fixed-capture-fraction separation the ideal
+    secondary clarifier uses. (The ideal ``%TSS`` thickener is the *same*
+    partition with ``capture_frac`` equal to its solids-removal fraction, but it
+    writes it as per-species thickening-factor scales because its outlet *flows*
+    are concentration-dependent; the Otterpohl primary clarifier differs
+    genuinely -- it partitions its well-mixed *state*, not the inflow.)
+    """
+    sol_mask = 1.0 - part_mask
+    mass_in_p = Q_in * C_in * part_mask
+    sol_C = C_in * sol_mask
+    C_under = sol_C + capture_frac * mass_in_p / (Q_under + _EPS_Q)
+    C_over = sol_C + (1.0 - capture_frac) * mass_in_p / (Q_over + _EPS_Q)
+    return C_under, C_over
+
+
 @dataclass(frozen=True)
 class StreamSeries(_HasNamedSpecies, PlottableSolutionMixin):
     """A stream's flow and concentration trajectory over time.
