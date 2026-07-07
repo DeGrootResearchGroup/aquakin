@@ -135,6 +135,123 @@ def test_arclength_record_branch_traces_the_curve():
     assert float(y[0]) == pytest.approx(1.0, abs=1e-3) and p.min() < 0.05  # traced to the nose
 
 
+# --- natural-parameter continuation (fast) -----------------------------------
+
+def test_continuation_solve_reaches_far_root():
+    # Natural-parameter predictor-corrector continuation from a known steady
+    # state to a far parameter set. For the nonlinear dy/dt = p - y**3 the branch
+    # is y*(p) = p**(1/3), so the tangent predictor is only first-order and the PTC
+    # corrector does genuine work at each step. Exercises the internally-built
+    # (predict, correct) kernels (kernels=None branch) end to end.
+    from aquakin.plant.steady import continuation_solve
+
+    def rhs(y, p):
+        return p - y ** 3
+    pk = jnp.array([1.0, 8.0])
+    yk = pk ** (1.0 / 3.0)                        # a known steady state (rhs ~ 0)
+    pt = jnp.array([27.0, 64.0])                  # far target -> y* = [3.0, 4.0]
+    res = continuation_solve(rhs, pk, yk, pt, tol=1e-10)
+    assert bool(res.converged)
+    np.testing.assert_allclose(np.asarray(res.state), [3.0, 4.0], rtol=1e-6)
+    # It took real work along the path and the (inexact) predictor made the
+    # corrector iterate.
+    assert res.continuation_steps > 0
+    assert res.corrector_iterations > 0
+
+
+def test_continuation_solve_reuses_prebuilt_kernels():
+    # make_continuation_kernels builds the jitted (predict, correct) once so a
+    # sweep over several targets reuses one compilation. Pass them via kernels=
+    # (the kernels-provided branch) and check two different targets both land on
+    # their analytic roots with the same kernels.
+    from aquakin.plant.steady import continuation_solve, make_continuation_kernels
+
+    k = jnp.array([2.0, 0.5])
+    def rhs(y, p):
+        return -k * y + p
+    pk = jnp.array([2.0, 0.5])
+    yk = pk / k                                  # = [1.0, 1.0]
+    kernels = make_continuation_kernels(rhs)
+    assert len(kernels) == 2                     # (predict, correct)
+
+    for pt in (jnp.array([8.0, 2.0]), jnp.array([4.0, 4.0])):
+        res = continuation_solve(rhs, pk, yk, pt, kernels=kernels, tol=1e-10)
+        assert bool(res.converged)
+        np.testing.assert_allclose(np.asarray(res.state), np.asarray(pt / k), rtol=1e-6)
+
+
+def test_continuation_solve_reports_incomplete_path():
+    # A one-step budget cannot span s: 0 -> 1 in a single ds0=0.25 move, so the
+    # path stops short and reports non-convergence -- while still having taken and
+    # accepted that one continuation step (the loop-exhaustion return).
+    from aquakin.plant.steady import continuation_solve
+
+    def rhs(y, p):
+        return -y + p                            # y* = p, easy corrector
+    pk, yk = jnp.array([1.0]), jnp.array([1.0])
+    pt = jnp.array([5.0])
+    res = continuation_solve(rhs, pk, yk, pt, ds0=0.25, max_continuation_steps=1)
+    assert not bool(res.converged)
+    assert res.continuation_steps == 1           # one step accepted, then budget spent
+
+
+def test_continuation_solve_shrinks_and_stops_on_corrector_failure():
+    # When every corrector fails (here starved to a single PTC iteration against a
+    # tight tolerance on a nonlinear branch), the adaptive step ds is shrunk on
+    # each failure and the solve stops once ds falls below ds_min -- reporting
+    # non-convergence with no step accepted. Exercises the corrector-failure
+    # branch of the continuation loop.
+    from aquakin.plant.steady import continuation_solve
+
+    def rhs(y, p):
+        return p - y ** 3
+    pk = jnp.array([1.0])
+    yk = pk ** (1.0 / 3.0)
+    pt = jnp.array([27.0])                        # far enough that one PTC step misses
+    res = continuation_solve(rhs, pk, yk, pt, ds0=0.25, ds_min=1e-3,
+                             max_continuation_steps=200, max_iter=1, tol=1e-12)
+    assert not bool(res.converged)
+    assert res.continuation_steps == 0           # no step ever accepted
+
+
+# --- pseudo-arclength continuation: auto-scale and prebuilt kernels (fast) ----
+
+def test_arclength_auto_scale_reaches_root():
+    # With no scale= given, the solver auto-scales by max(|y_known|, 1e-3). On the
+    # saddle-node F = p - y^2 the reachable leg (lambda 1 -> 4) must still track the
+    # branch to y = 2. Covers the scale-None default and the converged property.
+    from aquakin.plant.steady import arclength_continuation_solve
+
+    def rhs(y, p):
+        return jnp.array([p[0] - y[0] ** 2])
+    pk, yk = jnp.array([1.0]), jnp.array([1.0])
+    r = arclength_continuation_solve(rhs, pk, yk, jnp.array([4.0]))   # scale=None
+    assert r.status == "converged"
+    assert bool(r.converged)                     # the converged property
+    np.testing.assert_allclose(np.asarray(r.state), [2.0], atol=1e-4)
+
+
+def test_arclength_reuses_prebuilt_kernels():
+    # make_arclength_kernels builds the jitted (corrector, tangent, init_tangent)
+    # for a fixed scale; pass them via kernels= (the kernels-provided branch) with
+    # the matching scale and confirm the reachable leg still converges to y = 2.
+    from aquakin.plant.steady import arclength_continuation_solve, make_arclength_kernels
+
+    def rhs(y, p):
+        return jnp.array([p[0] - y[0] ** 2])
+    scale = jnp.array([1.0])
+    ptc_kwargs = dict(scale_floor=jnp.array([1.0]))
+    kernels = make_arclength_kernels(rhs, scale, ptc_kwargs)
+    assert len(kernels) == 3                     # (corrector, tangent, init_tangent)
+
+    pk, yk = jnp.array([1.0]), jnp.array([1.0])
+    r = arclength_continuation_solve(rhs, pk, yk, jnp.array([4.0]),
+                                     kernels=kernels, scale=scale,
+                                     ptc_kwargs=ptc_kwargs)
+    assert r.status == "converged"
+    np.testing.assert_allclose(np.asarray(r.state), [2.0], atol=1e-4)
+
+
 # --- full plant: BSM1 / BSM2 (slow) ------------------------------------------
 
 def _bsm1():
