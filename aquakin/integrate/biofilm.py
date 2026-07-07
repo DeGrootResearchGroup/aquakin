@@ -64,6 +64,7 @@ from aquakin.integrate._common import (
     _run_diffeqsolve,
     friendly_solve_errors,
     init_solver_settings,
+    resolve_layered_atol,
     to_native_time,
     validate_t_eval,
 )
@@ -285,8 +286,15 @@ class BiofilmReactor(GradientCheckMixin):
         carry the suspended biomass ``[X_BH]`` or are abiotic. This separation,
         not a zeroed biomass state, is what keeps the two phases from leaking
         into each other.
-    rtol, atol : float
-        Solver tolerances (scalar; applied across the whole layered state).
+    rtol : float
+        Relative solver tolerance, applied across the whole layered state.
+    atol : float or jnp.ndarray, optional
+        Absolute solver tolerance. ``None`` (default) uses the per-component
+        :func:`~aquakin.integrate._common.default_atol` noise floor scaled off the
+        model's reference concentrations, tiled across every compartment (so g/m3
+        ASM/ADM states get a sensible floor instead of a fixed scalar ~9 orders
+        too tight). A scalar broadcasts to the whole state; a ``(n_species,)``
+        array is tiled across the ``n_layers+1`` compartments.
     integrator : IntegratorConfig, optional
         Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
         ``dtmax``, ``max_steps``, an explicit ``solver``); see
@@ -353,7 +361,7 @@ class BiofilmReactor(GradientCheckMixin):
         dilution_rate: float = 0.0,
         biofilm_reactions=None,
         rtol: float = 1e-6,
-        atol: float = 1e-9,
+        atol=None,
         integrator: IntegratorConfig = IntegratorConfig(),
         diff: DifferentiationConfig = DifferentiationConfig(),
     ) -> None:
@@ -368,10 +376,14 @@ class BiofilmReactor(GradientCheckMixin):
         self.thickness = float(thickness)
         self.area_per_volume = float(area_per_volume)
         self.boundary_layer = float(boundary_layer)
-        # Scalar atol over the multi-compartment (n_layers+1, n_species) state --
-        # the per-species default_atol of the single-vector reactors does not
-        # apply to this state shape, so the biofilm keeps an explicit scalar.
-        self.atol = float(atol)
+        # Per-component absolute tolerance over the (n_layers+1, n_species)
+        # compartment state: the per-species default_atol noise floor tiled
+        # across every compartment (atol=None), or the user's scalar/array
+        # resolved to that shape. A full-shape atol array is exactly what
+        # diffrax's error test wants, so the multi-compartment state is no
+        # obstacle -- a single scalar floor was ~9 orders too tight for g/m3
+        # ASM/ADM states.
+        self.atol = resolve_layered_atol(model, atol, self.n_layers + 1)
 
         n = model.n_species
         if soluble_mask is None:
@@ -691,9 +703,10 @@ class BiofilmReactor(GradientCheckMixin):
             shared_factor = free_idx.shape[0] > 1
         active = conditions if conditions is not None else self.conditions
         cond = active.fields
-        ndof = n_comp * n
         k = free_idx.shape[0]
-        atol_y = jnp.full((ndof,), float(self.atol))
+        # self.atol is the per-component floor over the 2-D (n_comp, n_species)
+        # state; the augmented sensitivity solve runs on the flat state.
+        atol_y = self.atol.reshape(-1)
         y0_flat = y0.reshape(-1)
         t_eval_arr = None if t_eval is None else jnp.asarray(t_eval)
         if t_eval_arr is not None:

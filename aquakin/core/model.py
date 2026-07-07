@@ -485,18 +485,32 @@ class CompiledModel:
             "parameter",
         )
 
-    def atol(self, overrides=None, /, default: float = 1e-9, **kwargs) -> jnp.ndarray:
+    def atol(self, overrides=None, /, default=None, **kwargs) -> jnp.ndarray:
         """Per-species absolute-tolerance vector for a reactor's ``atol=``.
 
         ``default`` everywhere, with named species overridden -- the by-name
         replacement for ``jnp.full((n_species,), d).at[species_index[s]].set(v)``
         when a trace species needs a tighter tolerance.
 
+        ``default=None`` (the default) starts from the per-component noise floor
+        :func:`~aquakin.integrate._common.default_atol` scaled off the model's
+        reference concentrations -- the same floor a reactor built with
+        ``atol=None`` uses -- rather than a fixed scalar, which is ~9 orders too
+        tight for g/m3 ASM/ADM states. Pass an explicit scalar ``default=`` for a
+        uniform floor.
+
         Examples
         --------
+        >>> reactor = BatchReactor(net, conds, atol=net.atol({"OH": 1e-20}))
         >>> reactor = BatchReactor(net, conds, atol=net.atol({"OH": 1e-20}, default=1e-12))
         """
-        base = jnp.full((self.n_species,), float(default))
+        from aquakin.integrate._common import default_atol
+
+        base = (
+            default_atol(self.default_concentrations())
+            if default is None
+            else jnp.full((self.n_species,), float(default))
+        )
         return self._override_vector(base, self.species_index, overrides, kwargs, "species")
 
     def default_conditions(self, n_locations: int = 1):

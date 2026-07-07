@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.core.temperature import T_REF_20C
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.streams import Stream, mixed_scalars
 from aquakin.plant.temperature import OPERATING_T_SIGNAL
@@ -201,7 +202,7 @@ class Aeration:
     kla_min: float = 0.0
     kla_max: float = 360.0
     temperature_correction: bool = False
-    ref_T: float = 293.15
+    ref_T: float = T_REF_20C
     alpha: float = 1.0
     beta: float = 1.0
     pressure_factor: float = 1.0
@@ -280,7 +281,7 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
     controlled: dict[str, tuple[str, float]] = {}
     kla_vec = jnp.zeros((model.n_species,))
     sat_vec = jnp.zeros((model.n_species,))
-    ref_T, kla_theta, temp_correct = 293.15, 1.024, False
+    ref_T, kla_theta, temp_correct = T_REF_20C, 1.024, False
     saturation_model = "benson_krause"
     if aeration is not None:
         if aeration.species not in model.species_index:

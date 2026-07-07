@@ -28,6 +28,16 @@ R_GAS = 8.314462618
 # Reference temperature for the tabulated pK / pKsp values (K), i.e. 25 degC.
 T_REF_THERMO = 298.15
 
+# Standard 20 degC reference (K). This is the base the ASM kinetic ``temperature``
+# corrections are referenced to (``ref_T: 293.15`` in the model YAML) and the
+# conventional operating point the standalone Python defaults use: the aeration
+# kLa / DO-saturation temperature correction, the A2O influent builder, and the
+# bare ``solve_ph`` temperature. Defined once so those defaults cannot drift
+# apart -- a plant built without explicit conditions then applies every
+# correction off the same base. (The model YAML carries its own literal, since it
+# is data, not importable Python; ``build_bsm2`` reads it back from the model.)
+T_REF_20C = 293.15
+
 # Natural log of 10 (pK <-> ln K conversions).
 LN10 = jnp.log(10.0)
 

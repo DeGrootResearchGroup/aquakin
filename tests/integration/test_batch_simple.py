@@ -279,3 +279,32 @@ def test_forward_adjoint_enables_forward_mode_through_batch(simple_model):
     g = jax.grad(lambda z: rev.solve(
         C0, params=p.at[0].set(z[0]), t_span=(0.0, 10.0)).C[-1, 1])(jnp.asarray([0.3]))
     assert jnp.all(jnp.isfinite(g))
+
+
+def test_dtmax_native_time_unit_warns_when_time_unit_rescales(simple_model):
+    """dtmax is always in native time, but time_unit rescales t_span/t_eval, so
+    setting both couples them loosely. solve() warns to flag the mismatch."""
+    conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
+    C0 = jnp.asarray([1.0, 0.0])
+    reactor = aquakin.BatchReactor(
+        simple_model, conditions, integrator=aquakin.IntegratorConfig(dtmax=0.1)
+    )
+    # simple_model is in seconds; requesting minutes rescales the times.
+    with pytest.warns(UserWarning, match="dtmax.*native time unit"):
+        reactor.solve(C0, t_span=(0.0, 10.0), time_unit="min")
+
+
+def test_dtmax_no_warning_without_time_unit_or_dtmax(simple_model, recwarn):
+    """No warning when the solve is in native units, or when dtmax is unset."""
+    conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
+    C0 = jnp.asarray([1.0, 0.0])
+
+    # dtmax set, but native units (no time_unit): no coupling, no warning.
+    capped = aquakin.BatchReactor(
+        simple_model, conditions, integrator=aquakin.IntegratorConfig(dtmax=0.1)
+    )
+    capped.solve(C0, t_span=(0.0, 10.0))
+    # non-native time_unit, but no dtmax: nothing to be off, no warning.
+    plain = aquakin.BatchReactor(simple_model, conditions)
+    plain.solve(C0, t_span=(0.0, 10.0), time_unit="min")
+    assert not [w for w in recwarn.list if "dtmax" in str(w.message)]

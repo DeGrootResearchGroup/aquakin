@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
+from aquakin.core.temperature import T_REF_20C
 from aquakin.plant._builder_support import (
     add_secondary_clarifier,
     reactor_conditions,
@@ -123,7 +124,7 @@ def a2o_influent(
     model: "CompiledModel",
     *,
     Q: float = A2O_Q_AVG,
-    T: float = 293.15,
+    T: float = T_REF_20C,
     overrides: Optional[dict[str, float]] = None,
 ) -> "InfluentSeries":
     """A constant municipal ASM2d influent for the A²O plant.
