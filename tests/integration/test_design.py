@@ -15,15 +15,15 @@ from aquakin.plant.bsm import build_bsm1
 from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
 from aquakin.plant.influent import InfluentSeries
 
-
 # ----- Forward sizing (fast, no solve) ------------------------------------
+
 
 def test_volume_from_hrt_and_wastage_from_srt():
     """V = Q*HRT and (mixed-liquor) Qw = V/SRT."""
     s = size_activated_sludge(SRT=10.0, HRT_h=8.0, Q=18446.0)
     assert s.volume == pytest.approx(18446.0 * 8.0 / 24.0)
     assert s.wastage_flow == pytest.approx(s.volume / 10.0)
-    assert s.HRT == pytest.approx(8.0 / 24.0)
+    assert pytest.approx(8.0 / 24.0) == s.HRT
     assert s.tank_volumes == (s.volume,)
 
 
@@ -40,23 +40,25 @@ def test_tank_split_equal_and_fractional():
     assert all(v == pytest.approx(eq.volume / 5) for v in eq.tank_volumes)
 
     frac = size_activated_sludge(
-        SRT=10.0, HRT_h=8.0, Q=18446.0,
-        volume_fractions=[0.1, 0.1, 0.267, 0.267, 0.266])
+        SRT=10.0, HRT_h=8.0, Q=18446.0, volume_fractions=[0.1, 0.1, 0.267, 0.267, 0.266]
+    )
     assert sum(frac.tank_volumes) == pytest.approx(frac.volume)
     assert frac.tank_volumes[0] == pytest.approx(0.1 * frac.volume)
 
 
 def test_underflow_wasting_uses_thickening_ratio():
     ml = size_activated_sludge(SRT=10.0, HRT_h=8.0, Q=18446.0)
-    uf = size_activated_sludge(SRT=10.0, HRT_h=8.0, Q=18446.0,
-                               wastage_from="underflow", thickening_ratio=2.0)
+    uf = size_activated_sludge(
+        SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="underflow", thickening_ratio=2.0
+    )
     # Underflow wasting wastes from a 2x-concentrated stream, so half the flow.
     assert uf.wastage_flow == pytest.approx(ml.wastage_flow / 2.0)
 
 
 def test_recycle_flows_from_ratios():
-    s = size_activated_sludge(SRT=10.0, HRT_h=8.0, Q=18446.0,
-                              internal_recycle_ratio=3.0, ras_ratio=1.0)
+    s = size_activated_sludge(
+        SRT=10.0, HRT_h=8.0, Q=18446.0, internal_recycle_ratio=3.0, ras_ratio=1.0
+    )
     assert s.internal_recycle_flow == pytest.approx(3.0 * 18446.0)
     assert s.ras_flow == pytest.approx(18446.0)
 
@@ -66,17 +68,19 @@ def test_sizing_summary_is_a_string():
     assert "SRT" in s.summary() and "wastage" in s.summary()
 
 
-@pytest.mark.parametrize("kwargs", [
-    dict(SRT=-1.0, HRT_h=8.0, Q=18446.0),
-    dict(SRT=10.0, HRT_h=8.0, Q=-1.0),
-    dict(SRT=10.0, Q=18446.0),                       # no HRT
-    dict(SRT=10.0, HRT=0.3, HRT_h=8.0, Q=18446.0),   # both HRT
-    dict(SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="bogus"),
-    dict(SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="underflow",
-         thickening_ratio=0.0),
-    dict(SRT=10.0, HRT_h=8.0, Q=18446.0, volume_fractions=[0.5, 0.4]),  # !=1
-    dict(SRT=10.0, HRT_h=8.0, Q=18446.0, volume_fractions=[0.5, -0.5, 1.0]),
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(SRT=-1.0, HRT_h=8.0, Q=18446.0),
+        dict(SRT=10.0, HRT_h=8.0, Q=-1.0),
+        dict(SRT=10.0, Q=18446.0),  # no HRT
+        dict(SRT=10.0, HRT=0.3, HRT_h=8.0, Q=18446.0),  # both HRT
+        dict(SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="bogus"),
+        dict(SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="underflow", thickening_ratio=0.0),
+        dict(SRT=10.0, HRT_h=8.0, Q=18446.0, volume_fractions=[0.5, 0.4]),  # !=1
+        dict(SRT=10.0, HRT_h=8.0, Q=18446.0, volume_fractions=[0.5, -0.5, 1.0]),
+    ],
+)
 def test_sizing_validation_errors(kwargs):
     with pytest.raises(ValueError):
         size_activated_sludge(**kwargs)
@@ -84,13 +88,13 @@ def test_sizing_validation_errors(kwargs):
 
 # ----- Takacs clarifier solids inventory (fast, no plant solve) -----------
 
+
 def test_takacs_solids_mass():
     """solids_mass = sum over layers of TSS_layer * layer_volume."""
     from aquakin.plant.takacs import TakacsClarifier
 
     asm1 = aquakin.load_model("asm1")
-    clar = TakacsClarifier(name="c", model=asm1, area=1500.0, height=4.0,
-                           underflow_Q=18831.0)
+    clar = TakacsClarifier(name="c", model=asm1, area=1500.0, height=4.0, underflow_Q=18831.0)
     state = clar.initial_state()
     mass = float(clar.solids_mass(state))
     # Independent recomputation from the layered TSS.
@@ -124,24 +128,123 @@ def test_reactor_autodetection_finds_as_reactors_not_digester():
     assert "digester" not in _reactor_units(bsm2, None)
 
 
+# ----- Sizing result fields / summary branches (fast, no solve) -----------
+
+
+def test_sizing_recycle_flows_none_by_default():
+    """No recycle ratios supplied -> the recycle-flow fields stay None and the
+    wasting defaults hold (the None branch of the recycle ternaries)."""
+    s = size_activated_sludge(SRT=10.0, HRT_h=8.0, Q=1000.0)
+    assert s.internal_recycle_flow is None
+    assert s.ras_flow is None
+    assert s.wastage_from == "mixed_liquor"
+    assert s.thickening_ratio == 1.0
+
+
+def test_sizing_underflow_ratio_stored_and_reported():
+    s = size_activated_sludge(
+        SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="underflow", thickening_ratio=2.0
+    )
+    assert s.thickening_ratio == 2.0
+    assert "from underflow" in s.summary()
+
+
+def test_sizing_summary_includes_recycle_and_tank_lines():
+    """The three conditional summary blocks (tank cascade, internal recycle,
+    RAS) render when the corresponding inputs are supplied."""
+    s = size_activated_sludge(
+        SRT=10.0, HRT_h=8.0, Q=18446.0, n_tanks=5, internal_recycle_ratio=3.0, ras_ratio=1.0
+    )
+    out = s.summary()
+    assert "tank volumes" in out
+    assert "internal recycle" in out
+    assert "RAS flow" in out
+
+
+# ----- Endpoint / reactor / influent resolvers (fast, build-only) ---------
+
+
+def test_pick_endpoint_explicit_valid_invalid_and_autofail():
+    from aquakin.plant.design import (
+        _EFFLUENT_CANDIDATES,
+        _available_endpoints,
+        _pick_endpoint,
+    )
+
+    plant = build_bsm1()
+    available = sorted(_available_endpoints(plant))
+    valid = available[0]
+    # Explicit + present -> returned unchanged.
+    assert _pick_endpoint(plant, valid, _EFFLUENT_CANDIDATES, "effluent") == valid
+    # Explicit + absent -> clear error.
+    with pytest.raises(ValueError, match="is not an output of this plant"):
+        _pick_endpoint(plant, "nope.port", _EFFLUENT_CANDIDATES, "effluent")
+    # No explicit, no candidate present -> auto-detect failure.
+    with pytest.raises(ValueError, match="Could not auto-detect"):
+        _pick_endpoint(plant, None, ("no.such", "also.no"), "effluent")
+
+
+def test_reactor_units_explicit_known_and_unknown():
+    from aquakin.plant.design import _reactor_units
+
+    plant = build_bsm1()
+    assert _reactor_units(plant, ["tank1", "tank2"]) == ["tank1", "tank2"]
+    with pytest.raises(ValueError, match="Unknown reactor unit"):
+        _reactor_units(plant, ["ghost"])
+
+
+def test_pick_influent_branches():
+    """`_pick_influent` reads only `plant.influents`, so exercise its four
+    branches with lightweight stubs (no plant build/solve needed)."""
+    from types import SimpleNamespace
+
+    from aquakin.plant.design import _pick_influent
+
+    a, b, feed = object(), object(), object()
+    # Sole influent -> returned.
+    assert _pick_influent(SimpleNamespace(influents={"only": a}), None) is a
+    # Several, one named "feed" -> the feed.
+    assert _pick_influent(SimpleNamespace(influents={"x": a, "feed": feed}), None) is feed
+    # Several, no "feed" -> must disambiguate.
+    with pytest.raises(ValueError, match="pass influent_name="):
+        _pick_influent(SimpleNamespace(influents={"x": a, "y": b}), None)
+    # Explicit unknown name -> clear error.
+    with pytest.raises(ValueError, match="Unknown influent"):
+        _pick_influent(SimpleNamespace(influents={"x": a}), "ghost")
+
+
 # ----- Achieved metrics from a solved plant (slow: BSM1 plant solves) -----
 
+
 def _influent(model):
-    C0 = model.concentrations({
-        "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
-        "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0,
-    })
-    return InfluentSeries(t=jnp.array([0.0, 300.0]),
-                          Q=jnp.full((2,), BSM1_Q_AVG),
-                          C=jnp.tile(C0, (2, 1)), model=model)
+    C0 = model.concentrations(
+        {
+            "SI": 30.0,
+            "SS": 69.5,
+            "XI": 51.2,
+            "XS": 202.32,
+            "XB_H": 28.17,
+            "SNH": 31.56,
+            "SND": 6.95,
+            "XND": 10.59,
+            "SALK": 7.0,
+        }
+    )
+    return InfluentSeries(
+        t=jnp.array([0.0, 300.0]), Q=jnp.full((2,), BSM1_Q_AVG), C=jnp.tile(C0, (2, 1)), model=model
+    )
 
 
 def _solve(model, influent, Qw=385.0, use_takacs=False):
     plant = build_bsm1(model=model, wastage_flow=Qw, use_takacs=use_takacs)
     plant.add_influent("feed", influent, to="inlet_mix.fresh")
-    sol = plant.solve(t_span=(0.0, 80.0), t_eval=jnp.linspace(70.0, 80.0, 6),
-                      rtol=1e-4, atol=1e-3,
-                      integrator=aquakin.IntegratorConfig(max_steps=300_000))
+    sol = plant.solve(
+        t_span=(0.0, 80.0),
+        t_eval=jnp.linspace(70.0, 80.0, 6),
+        rtol=1e-4,
+        atol=1e-3,
+        integrator=aquakin.IntegratorConfig(max_steps=300_000),
+    )
     return plant, sol
 
 
@@ -168,7 +271,7 @@ def test_sludge_metrics_sensible(ideal_run, asm1):
     assert m.reactor_units == ["tank1", "tank2", "tank3", "tank4", "tank5"]
     # HRT = total reactor volume / influent flow (recycles excluded).
     V = sum(float(plant.units[n].volume) for n in m.reactor_units)
-    assert m.HRT == pytest.approx(V / BSM1_Q_AVG, rel=1e-3)
+    assert pytest.approx(V / BSM1_Q_AVG, rel=1e-3) == m.HRT
     assert "SRT" in m.summary()
 
 
@@ -186,9 +289,9 @@ def test_plant_sludge_age_matches_sludge_metrics(ideal_run):
     plant, sol = ideal_run
     a = plant.sludge_age(sol)
     b = sludge_metrics(plant, sol)
-    assert a.SRT == pytest.approx(b.SRT)
-    assert a.HRT == pytest.approx(b.HRT)
-    assert a.FM == pytest.approx(b.FM)
+    assert pytest.approx(b.SRT) == a.SRT
+    assert pytest.approx(b.HRT) == a.HRT
+    assert pytest.approx(b.FM) == a.FM
 
 
 @pytest.mark.slow
@@ -209,6 +312,5 @@ def test_takacs_clarifier_inventory_raises_srt(ideal_run, asm1):
     _, ideal_sol = ideal_run
     ideal_plant, _ = ideal_run
     srt_ideal = sludge_metrics(ideal_plant, ideal_sol).SRT
-    srt_takacs = sludge_metrics(*_solve(asm1, _influent(asm1), Qw=385.0,
-                                        use_takacs=True)).SRT
+    srt_takacs = sludge_metrics(*_solve(asm1, _influent(asm1), Qw=385.0, use_takacs=True)).SRT
     assert srt_takacs > srt_ideal
