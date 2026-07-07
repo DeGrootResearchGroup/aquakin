@@ -99,9 +99,12 @@ def test_set_temperature_explicit_units(asm1):
 
 def test_set_temperature_rejects_bad_units(asm1):
     plant = build_bsm1(asm1)
-    with pytest.raises(ValueError, match="Unknown unit"):
+    # An unknown unit name is an UnknownUnitError (KeyError family) -- the same
+    # type every other unknown-unit lookup raises; a known unit that cannot take
+    # a temperature is a WiringError (ValueError family).
+    with pytest.raises(aquakin.UnknownUnitError, match="Unknown unit"):
         plant.set_temperature(10.0, units=["nope"])
-    with pytest.raises(ValueError, match="does not support"):
+    with pytest.raises(aquakin.WiringError, match="does not support"):
         plant.set_temperature(10.0, units=["clarifier"])  # a separator, no T
 
 

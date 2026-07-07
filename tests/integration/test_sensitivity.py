@@ -700,6 +700,26 @@ def test_dgsm_unbatched_forward_default_adjoint_errors():
         )
 
 
+@pytest.mark.parametrize("batched", [True, False])
+def test_dgsm_forward_does_not_mask_unrelated_error(batched):
+    """A forward-mode screen only converts JAX's custom_vjp forward-mode
+    rejection into the forward_adjoint() hint. A genuine error inside ``fn``
+    (a bug, a bad shape) must propagate unchanged, not be relabelled as the
+    guidance error -- otherwise the real cause is hidden."""
+
+    def fn(z):
+        raise ValueError("sentinel_boom_xyz")
+
+    with pytest.raises(ValueError, match="sentinel_boom_xyz"):
+        aquakin.dgsm(
+            fn,
+            [(0.1, 0.5)],
+            n_samples=8,
+            diff=aquakin.DifferentiationConfig(mode="forward"),
+            batched=batched,
+        )
+
+
 def test_dgsm_helpers_validate_and_sample():
     """The decomposed helpers behave independently of the dgsm entry point."""
     from aquakin.integrate._qmc import _sobol_sample

@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Optional
 import jax.numpy as jnp
 
 from aquakin.core.hints import did_you_mean
+from aquakin.plant.errors import UnknownUnitError
 
 if TYPE_CHECKING:
     from aquakin.plant.plant import Plant
@@ -128,7 +129,7 @@ class PlantSolution:
         layout = self.plant._state_layout
         if unit_name not in layout:
             suffix = did_you_mean(unit_name, list(layout))
-            raise KeyError(
+            raise UnknownUnitError(
                 f"Unknown unit '{unit_name}'. Units (see plant.list_units()): "
                 f"{list(layout)}.{suffix}"
             )
@@ -297,7 +298,7 @@ class PlantSolution:
         from aquakin.integrate._common import build_dataframe
 
         if unit not in self.plant.units:
-            raise KeyError(f"Unknown unit '{unit}'. Available: {list(self.plant.units)}")
+            raise UnknownUnitError(f"Unknown unit '{unit}'. Available: {list(self.plant.units)}")
         sub = self.unit_state(unit)  # (n_t, unit.state_size)
         unit_obj = self.plant.units[unit]
         if hasattr(unit_obj, "model"):

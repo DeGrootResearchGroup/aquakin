@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from aquakin.integrate._common import DifferentiationConfig
+from aquakin.integrate._common import DifferentiationConfig, is_forward_mode_ad_error
 from aquakin.integrate._qmc import _sobol_sample
 
 
@@ -204,19 +204,19 @@ def _evaluate_dgsm_samples(value_and_jac, Z, mode, batched):
     if batched:
         try:
             vals, jacs = jax.vmap(value_and_jac)(jnp.asarray(Z))
-        except Exception as exc:  # pragma: no cover - guidance path
-            if mode == "forward":
+        except Exception as exc:
+            if mode == "forward" and is_forward_mode_ad_error(exc):
                 raise RuntimeError(_DGSM_FORWARD_HINT) from exc
             raise
         return np.asarray(vals), np.asarray(jacs)
 
     v_list: list[np.ndarray] = []
     j_list: list[np.ndarray] = []
-    for k, z in enumerate(Z):
+    for z in Z:
         try:
             v, J = value_and_jac(jnp.asarray(z))
-        except Exception as exc:  # pragma: no cover - guidance path
-            if mode == "forward" and k == 0:
+        except Exception as exc:
+            if mode == "forward" and is_forward_mode_ad_error(exc):
                 raise RuntimeError(_DGSM_FORWARD_HINT) from exc
             raise
         v_list.append(np.asarray(v))

@@ -483,10 +483,11 @@ def _biogas_cod(plant, solution, params):
     """Digester biogas COD exported over the window (g COD), or ``None`` if the
     plant has no ADM1 digester. CH₄ at 4 g COD/g (H₂ is negligible)."""
     from aquakin.plant.bsm.evaluation import digester_gas
+    from aquakin.plant.errors import NoDigesterError
 
     try:
         gas = digester_gas(plant, solution, params)
-    except ValueError:
+    except NoDigesterError:
         return None
     t = np.asarray(solution.t)
     ch4_g_per_d = np.asarray(gas.ch4) * 1000.0 * _COD_PER_CH4  # kg/d -> g COD/d

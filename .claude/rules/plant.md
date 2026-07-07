@@ -332,6 +332,19 @@ Key types:
     model and requires an explicit `translator=` across models (e.g.
     the BSM2 ASM1↔ADM1 digester edges). The endpoint parsing lives in
     `Plant._parse_endpoint`.
+  - **Exception taxonomy (`plant/errors.py`).** Plant name/wiring errors use a
+    uniform, exported taxonomy so a caller can tell an unknown *name* from an
+    invalid *wiring*: `UnknownUnitError` / `UnknownPortError` (both subclass
+    `KeyError`) for a unit / port that does not exist, `WiringError` (subclasses
+    `ValueError`) for a structurally invalid or unsupported request (an influent
+    used as a `connect` source, a bare endpoint that omits a required port, a
+    unit that does not support `set_temperature`), and `NoDigesterError`
+    (subclasses `ValueError`) for `digester_gas` on a plant with no ADM1
+    digester. Each subclasses the built-in it historically raised, so existing
+    `except KeyError` / `except ValueError` handlers and message-matching tests
+    are unaffected. Use these instead of a bare `KeyError`/`ValueError` when
+    adding a name/wiring guard, and catch `NoDigesterError` (not bare
+    `ValueError`) when detecting the no-digester case.
   - **Arbitrary add order; topological sort.** Units may be `add_unit`-ed in
     **any order**: `Plant._finalize_topology` (run from `_build_state_layout`,
     so at every solve) topologically sorts the feed-forward connection graph

@@ -1095,6 +1095,30 @@ def test_list_species_rejects_non_concentration_units():
             plant.list_species(unit)
 
 
+def test_endpoint_error_taxonomy(simple_net):
+    """Endpoint resolution raises the uniform exception taxonomy: an unknown
+    unit / port is a ``KeyError`` subclass, an invalid wiring is a ``ValueError``
+    subclass, so a caller can tell 'bad name' from 'bad value'."""
+    plant = _single_cstr_plant(simple_net)  # unit 'tank' (input 'inlet'), influent 'feed'
+
+    # Unknown unit -> UnknownUnitError, still catchable as KeyError.
+    with pytest.raises(aquakin.UnknownUnitError) as exc_info:
+        plant._parse_endpoint("ghost", role="source")
+    assert isinstance(exc_info.value, KeyError)
+
+    # Unknown port on a known unit -> UnknownPortError (KeyError family).
+    with pytest.raises(aquakin.UnknownPortError) as exc_info:
+        plant._parse_endpoint("tank.nope", role="destination")
+    assert isinstance(exc_info.value, KeyError)
+
+    # An influent used as a connect source is a wiring error (ValueError family),
+    # not an unknown name -- the name exists, its use is wrong.
+    with pytest.raises(aquakin.WiringError) as exc_info:
+        plant._parse_endpoint("feed", role="source")
+    assert isinstance(exc_info.value, ValueError)
+    assert not isinstance(exc_info.value, KeyError)
+
+
 def test_introspection_unknown_name_hints():
     plant, _asm1, _adm1 = _bsm2_no_solve()
     with pytest.raises(KeyError, match="Did you mean: tank5"):
