@@ -567,3 +567,17 @@ clarifier's fixed-capture-fraction partition is `split_by_capture(...)`. The
 policy but not the split kernel, whose physics differs. When adding a separating
 unit, reuse these rather than re-deriving a mask/split.
 
+**Shared numeric constants (`plant/_constants.py`).** Two families of magic
+number are consolidated there rather than redefined per module: `EPS_Q` (`1e-12`)
+is the one **flow-/mass-weighted division guard** — the small epsilon added to a
+near-zero flow/volume/rate denominator so a starved unit gives a finite (~0)
+concentration instead of `0/0` (streams, mixer, delay, dosing, separators, the
+Takács species-fraction, the design SRT/HRT/F:M ratios, the flow-weighted
+time-average). `SECONDS_PER_DAY` / `HOURS_PER_DAY` / `MINUTES_PER_DAY` are the
+time-unit factors (aeration, disinfection, clarifier, metrics). Use these instead
+of an inline literal. Note the boundary: a *physically meaningful* small-quantity
+floor — a minimum settler depth (`settling.py`), a minimum flow that sets a
+maximum HRT and a `log`-domain floor (`PrimaryClarifier._removal_fraction`), or a
+data-prep floor on a linearisation probe (`ifas`/`takacs`) — is a modelling choice
+with its own magnitude and is deliberately **not** folded into `EPS_Q`.
+

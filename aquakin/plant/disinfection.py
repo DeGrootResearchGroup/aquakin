@@ -42,13 +42,11 @@ from typing import TYPE_CHECKING, Optional
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import EPS_Q, SECONDS_PER_DAY
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
-
-_EPS_Q = 1e-9  # guard 1/Q when the flow is ~zero
-_SECONDS_PER_DAY = 86400.0
 
 
 # --- UV credit physics ------------------------------------------------------
@@ -107,7 +105,7 @@ def t10_from_baffling(
     The baffling factor is the ratio of the T10 (the time below which 10 % of the
     flow exits) to the mean hydraulic residence time ``V/Q`` -- ~0.1 for an
     unbaffled tank, ~0.7 for a well-baffled one, 1.0 for ideal plug flow."""
-    return baffling_factor * jnp.asarray(volume) / (jnp.asarray(flow) + _EPS_Q)
+    return baffling_factor * jnp.asarray(volume) / (jnp.asarray(flow) + EPS_Q)
 
 
 def t10_from_rtd(t: jnp.ndarray, C: jnp.ndarray) -> jnp.ndarray:
@@ -218,8 +216,8 @@ class UVUnit:
     def exposure_seconds(self, flow) -> jnp.ndarray:
         """Exposure time (s): the baffling-scaled residence ``V/Q`` (plant time
         unit, days) converted to seconds."""
-        hrt_days = self.baffling_factor * self.volume / (jnp.asarray(flow) + _EPS_Q)
-        return hrt_days * _SECONDS_PER_DAY
+        hrt_days = self.baffling_factor * self.volume / (jnp.asarray(flow) + EPS_Q)
+        return hrt_days * SECONDS_PER_DAY
 
     def log_inactivation(self, flow) -> jnp.ndarray:
         """The UV log-inactivation at the given throughflow."""

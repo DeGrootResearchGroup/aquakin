@@ -41,13 +41,12 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import HOURS_PER_DAY, MINUTES_PER_DAY, SECONDS_PER_DAY
 from aquakin.plant.metrics import _time_average as _metrics_time_average
 
 # Standard physical constants (SI).
 _RHO_WATER = 1000.0  # kg/m3
 _G = 9.80665  # m/s2
-_SECONDS_PER_DAY = 86400.0
-_HOURS_PER_DAY = 24.0
 
 
 @dataclass(frozen=True)
@@ -170,7 +169,7 @@ def blower_power_kw(airflow_m3_per_d, system: AerationSystem):
     pressures in Pa, returned in kW. Linear in the airflow (the pressure ratio is
     fixed by the submergence), so AD-clean.
     """
-    Q = jnp.asarray(airflow_m3_per_d) / _SECONDS_PER_DAY  # m3/s
+    Q = jnp.asarray(airflow_m3_per_d) / SECONDS_PER_DAY  # m3/s
     p1 = system.p_atm_kpa * 1000.0  # Pa
     p2 = system.discharge_pressure_kpa() * 1000.0  # Pa
     n = (system.gamma - 1.0) / system.gamma
@@ -211,7 +210,7 @@ def blower_energy(t, kla_history, volumes, system: AerationSystem) -> float:
     q = required_airflow(kla_history, volumes[None, :], system)  # (n_t, n_tanks) m3/d
     power = blower_power_kw(q, system)  # (n_t, n_tanks) kW
     total_power = jnp.sum(power, axis=1)  # (n_t,) kW
-    return float(_time_average(total_power, t) * _HOURS_PER_DAY)
+    return float(_time_average(total_power, t) * HOURS_PER_DAY)
 
 
 @dataclass(frozen=True)
@@ -232,7 +231,7 @@ class AerationDesignPoint:
             f"  SOTE                {self.sote * 100:7.2f} %\n"
             f"  SOTR                {self.sotr:10.1f} kg O2/d\n"
             f"  Air flow            {self.airflow:10.1f} m3/d "
-            f"({self.airflow / 1440.0:.2f} m3/min)\n"
+            f"({self.airflow / MINUTES_PER_DAY:.2f} m3/min)\n"
             f"  Discharge pressure  {self.discharge_pressure:10.2f} kPa\n"
             f"  Blower power        {self.power:10.2f} kW"
         )

@@ -17,7 +17,13 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
-from aquakin.plant._constants import ASM1_TSS_FACTOR, ASM1_TSS_SPECIES
+from aquakin.plant._constants import (
+    ASM1_TSS_FACTOR,
+    ASM1_TSS_SPECIES,
+    EPS_Q,
+    HOURS_PER_DAY,
+    SECONDS_PER_DAY,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -235,7 +241,7 @@ def effluent_averages(
         if single_point:
             return float(values[0])
         v_mid = 0.5 * (values[:-1] + values[1:])
-        return float(jnp.sum(v_mid * weight) / (total_w + 1e-12))
+        return float(jnp.sum(v_mid * weight) / (total_w + EPS_Q))
 
     return {
         "TSS": time_avg(derived_TSS(C_traj, model)),
@@ -431,7 +437,7 @@ def mixing_energy(
     frac = _time_average(unaerated, t, axis=0)  # (n_reac,)
     reactor_mix = reactor_unit * jnp.sum(volumes * frac)
     digester_mix = digester_unit * float(digester_volume)
-    return float(24.0 * (reactor_mix + digester_mix))
+    return float(HOURS_PER_DAY * (reactor_mix + digester_mix))
 
 
 def carbon_mass(
@@ -484,9 +490,13 @@ def heating_energy(
         Digester sludge-heating energy in kWh/d, time-averaged over ``t``.
     """
     heatpower = (
-        (float(T_target_C) - jnp.asarray(T_feed_C)) * jnp.asarray(Q_feed) * rho * cp / 86400.0
+        (float(T_target_C) - jnp.asarray(T_feed_C))
+        * jnp.asarray(Q_feed)
+        * rho
+        * cp
+        / SECONDS_PER_DAY
     )  # kW
-    return float(24.0 * _time_average(heatpower, t))
+    return float(HOURS_PER_DAY * _time_average(heatpower, t))
 
 
 def bsm2_oci_terms(

@@ -20,12 +20,11 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import EPS_Q
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
-
-_EPS_Q = 1e-12  # guard the flow-weighted division when the through-flow is ~zero
 
 
 # eq=False: a Reagent holds a jnp array (unhashable by value), so use identity
@@ -251,7 +250,7 @@ class DosingUnit:
         q_dose = self._dose_flow(signals)
         q_out = s_in.Q + q_dose
         mass = s_in.Q * s_in.C + q_dose * self.reagent.composition
-        c_out = mass / (q_out + _EPS_Q)
+        c_out = mass / (q_out + EPS_Q)
         # The reagent carries no side-channels of its own; the dosed stream keeps
         # the through-stream's scalars (temperature, ...): a small ambient dose into
         # a large flow does not move the temperature appreciably.

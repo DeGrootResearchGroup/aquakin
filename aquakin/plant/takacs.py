@@ -45,6 +45,7 @@ from aquakin.plant._constants import (
     ASM1_SETTLING_SPECIES,
     ASM1_TSS_FACTOR,
     ASM1_TSS_SPECIES,
+    EPS_Q,
     species_indices,
 )
 from aquakin.plant._flow_split import (
@@ -771,7 +772,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         below_threshold = tss_below <= self._X_threshold
         flux_tss = jnp.where(is_clarification & below_threshold, f_above, min_flux)
 
-        species_frac_above = layered[1:, :] / (tss_above[:, None] + 1e-12)
+        species_frac_above = layered[1:, :] / (tss_above[:, None] + EPS_Q)
         flux_per_species = flux_tss[:, None] * species_frac_above
         # (n_layers - 1, n_comp) — downward positive, at interface i.
 

@@ -7,15 +7,13 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import EPS_Q
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream, mixed_scalars
 from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
-
-
-_EPS_Q = 1e-12  # guard against 0/0 when all inflows are zero
 
 
 @dataclass
@@ -67,7 +65,7 @@ class MixerUnit(StatelessUnit):
             s = inputs[name]
             Q_total = Q_total + s.Q
             mass_total = mass_total + s.Q * s.C
-        C_out = mass_total / (Q_total + _EPS_Q)
+        C_out = mass_total / (Q_total + EPS_Q)
         # Side-channel scalars: the outlet temperature is the flow-weighted inlet
         # temperature (a heat balance) and the indicator density the same
         # flow-weighted mass balance -- both from the one shared combiner, over the
@@ -250,7 +248,7 @@ class SetpointSplitter(_SplitterBase):
         total_set = jnp.zeros(())
         for q in setpts.values():
             total_set = total_set + q
-        scale = jnp.minimum(1.0, s_in.Q / jnp.maximum(total_set, 1e-12))
+        scale = jnp.minimum(1.0, s_in.Q / jnp.maximum(total_set, EPS_Q))
         outputs = {port: self._outlet(q * scale, s_in) for port, q in setpts.items()}
         outputs[self.remainder_port] = self._outlet(jnp.maximum(s_in.Q - total_set, 0.0), s_in)
         return outputs
