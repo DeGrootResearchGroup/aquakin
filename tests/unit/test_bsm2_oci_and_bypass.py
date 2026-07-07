@@ -73,3 +73,36 @@ def test_bypass_bod_correction_zero_and_positive_bypass():
     )
     assert eqi1 > eqi_flat
     assert bod1 > treated_bod
+
+
+def test_external_carbon_load_no_unit_is_zero():
+    """No `external_carbon` dosing unit -> zero carbon load (the plant is only
+    read for `.units`, so a lightweight stub suffices -- no solve)."""
+    from types import SimpleNamespace
+
+    from aquakin.plant.bsm.evaluation import _external_carbon_load
+
+    model = bsm2_asm1_model()
+    plant = SimpleNamespace(units={})
+    assert _external_carbon_load(plant, None, jnp.array([0.0, 1.0]), None, model) == 0.0
+
+
+def test_external_carbon_load_fixed_dose():
+    """Fixed-flow dose: carbon load = dose flow x reagent SS concentration,
+    time-averaged. Stubbed unit + reagent, no solve."""
+    from types import SimpleNamespace
+
+    from aquakin.plant.bsm.evaluation import _external_carbon_load
+    from aquakin.plant.metrics import carbon_mass
+
+    model = bsm2_asm1_model()
+    ss = model.species_index["SS"]
+    comp = jnp.zeros(model.n_species).at[ss].set(400000.0)  # reagent SS conc (gCOD/m3)
+    unit = SimpleNamespace(reagent=SimpleNamespace(composition=comp), flow=2.0)
+    plant = SimpleNamespace(units={"external_carbon": unit})
+    t = jnp.array([0.0, 1.0])
+
+    carbon = _external_carbon_load(plant, None, t, None, model)
+    expected = float(carbon_mass(t, jnp.full_like(t, 2.0), 400000.0))
+    assert carbon == pytest.approx(expected)
+    assert carbon > 0.0
