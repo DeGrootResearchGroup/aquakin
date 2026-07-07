@@ -11,7 +11,7 @@ calibration-transform space, so sampling and the chain rule are taken there.
 import numpy as np
 import pytest
 
-from aquakin.integrate.sensitivity import _sobol_normal_sample
+from aquakin.integrate._qmc import _sobol_normal_sample
 from aquakin.plant.sensitivity import _dgsm_aggregate, _to_z, _from_z, _dtheta_dz
 
 

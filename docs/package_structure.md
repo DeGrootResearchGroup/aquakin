@@ -59,9 +59,12 @@ aquakin/
 │   │   ├── pfr.py                   # PlugFlowReactor, PFRSolution
 │   │   ├── particle.py              # Track, ParticleTrackReactor, integrate_ensemble
 │   │   ├── cfd.py                   # CFDReactor (Option C runtime coupling)
-│   │   ├── sensitivity.py           # sensitivity(), fit(), dgsm()
-│   │   ├── _qmc.py                   # shared unit sampler + fn(x)->output eval
-│   │   │                            #   helpers (reuses dgsm's Sobol QMC)
+│   │   ├── sensitivity.py           # sensitivity(): local autodiff sensitivity
+│   │   ├── fit.py                    # fit(), FitResult: L-BFGS-B point fitter
+│   │   ├── global_sensitivity.py    # dgsm(), DGSMResult: derivative-based
+│   │   │                            #   global (Sobol total-index) screen
+│   │   ├── _qmc.py                   # shared Sobol samplers + unit sampler +
+│   │   │                            #   fn(x)->output eval helpers (dgsm + DoE)
 │   │   ├── monte_carlo.py           # monte_carlo(): uncertainty propagation
 │   │   │                            #   (distribution samplers -> inverse-CDF)
 │   │   ├── scenarios.py             # compare_scenarios() + kpi_comparison():

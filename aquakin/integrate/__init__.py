@@ -9,8 +9,9 @@ from aquakin.integrate.particle import (
     TrackSolution,
     integrate_ensemble,
 )
+from aquakin.integrate.fit import fit
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
-from aquakin.integrate.sensitivity import SensitivityResult, fit, sensitivity
+from aquakin.integrate.sensitivity import SensitivityResult, sensitivity
 
 __all__ = [
     "BatchReactor",

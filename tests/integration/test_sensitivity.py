@@ -269,9 +269,10 @@ def _capture_bounds(monkeypatch):
     """Patch the scipy minimize used by fit() to record the bounds passed."""
     import importlib
 
-    # The package exposes a `sensitivity` function that shadows the submodule
-    # attribute, so resolve the module object explicitly.
-    S = importlib.import_module("aquakin.integrate.sensitivity")
+    # The package exposes a `fit` function that shadows the submodule attribute,
+    # so resolve the module object explicitly. `minimize` lives in the fitting
+    # module, where fit() calls it.
+    S = importlib.import_module("aquakin.integrate.fit")
     captured = {}
     real = S.minimize
 
@@ -551,11 +552,11 @@ def test_dgsm_routes_through_shared_aggregator():
     """The public entry point's bound equals the shared ``_dgsm_aggregate`` kernel
     applied to the same samples -- pinning that the reactor and plant screens use
     one aggregation implementation."""
-    from aquakin.integrate.sensitivity import (
+    from aquakin.integrate._qmc import _sobol_sample
+    from aquakin.integrate.global_sensitivity import (
         _dgsm_aggregate,
         _evaluate_dgsm_samples,
         _make_dgsm_value_and_jac,
-        _sobol_sample,
         _validate_dgsm_ranges,
     )
 
@@ -701,10 +702,8 @@ def test_dgsm_unbatched_forward_default_adjoint_errors():
 
 def test_dgsm_helpers_validate_and_sample():
     """The decomposed helpers behave independently of the dgsm entry point."""
-    from aquakin.integrate.sensitivity import (
-        _sobol_sample,
-        _validate_dgsm_ranges,
-    )
+    from aquakin.integrate._qmc import _sobol_sample
+    from aquakin.integrate.global_sensitivity import _validate_dgsm_ranges
 
     ranges_np, lo, hi, d, names = _validate_dgsm_ranges([(0.0, 2.0), (-1.0, 1.0)], None)
     assert d == 2 and names == ["z0", "z1"]
