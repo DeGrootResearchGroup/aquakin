@@ -390,6 +390,45 @@ def bsm2_wastage_schedule(
     return PiecewiseConstantSchedule(list(steps), values)
 
 
+def _register_bsm2_streams(plant, *, influent_bypass, use_delay):
+    """Record the canonical entry/exit endpoints and semantic stream shortcuts.
+
+    Pure metadata bookkeeping on an already-wired BSM2 plant, independent of the
+    unit construction: it sets :attr:`Plant.influent_endpoint` /
+    :attr:`Plant.effluent_endpoint` and registers the ``plant.stream(sol, name)``
+    /``plant.list_streams()`` shortcuts so a caller reads ``"effluent"`` / ``"ras"``
+    / ``"reject"`` / ``"primary_sludge"`` rather than the internal ``"unit.port"``.
+
+    The two endpoints are option-dependent: the influent enters the hydraulic
+    delay (front-most) if present, else the bypass splitter if present, else the
+    front mixer; the final effluent is the bypass combiner's outlet when
+    bypassing, else the secondary overflow. ``"effluent"`` tracks the resolved
+    ``effluent_endpoint``. (The digester biogas is a derived output read via
+    ``plant.digester_gas``, so it is not a registered material stream.)
+    """
+    plant.influent_endpoint = (
+        "influent_delay.in"
+        if use_delay
+        else "bypass_split.in"
+        if influent_bypass
+        else "front_mix.fresh"
+    )
+    plant.effluent_endpoint = "effluent_mix.out" if influent_bypass else "settler.overflow"
+
+    register_recycle_streams(
+        plant,
+        internal_recycle="tank5_split.internal_recycle",
+        ras="underflow_split.ras",
+        wastage="underflow_split.waste",
+    )
+    plant.register_stream("primary_effluent", "primary.effluent")
+    plant.register_stream("primary_sludge", "primary.underflow")
+    plant.register_stream("thickener_overflow", "thickener.overflow")
+    plant.register_stream("reject", "reject_mix.out")
+    plant.register_stream("dewatering_reject", "dewatering.overflow")
+    plant.register_stream("disposal_sludge", "dewatering.underflow")
+
+
 def build_bsm2(
     asm1_model: Optional["object"] = None,
     adm1_model: Optional["object"] = None,
@@ -828,35 +867,7 @@ def build_bsm2(
     # dewatering:underflow -> sludge disposal (leaves the plant; not routed).
     # (External carbon is dosed by the `external_carbon` DosingUnit wired above.)
 
-    # Record the canonical entry / exit endpoints so callers never hard-code a
-    # port: the influent enters the hydraulic delay (front-most) if present, else
-    # the bypass splitter if present, else the front mixer; the final effluent is
-    # the bypass combiner's outlet when bypassing, else the secondary overflow.
-    plant.influent_endpoint = (
-        "influent_delay.in"
-        if use_delay
-        else "bypass_split.in"
-        if influent_bypass
-        else "front_mix.fresh"
-    )
-    plant.effluent_endpoint = "effluent_mix.out" if influent_bypass else "settler.overflow"
-
-    # Semantic stream shortcuts (plant.stream(sol, "effluent"), plant.list_streams())
-    # so the engineer reads "effluent" / "ras" / "reject" / "primary_sludge" /
-    # "digester_gas" (the last via plant.digester_gas) rather than the internal
-    # "unit.port". "effluent" tracks the (option-dependent) effluent_endpoint.
-    register_recycle_streams(
-        plant,
-        internal_recycle="tank5_split.internal_recycle",
-        ras="underflow_split.ras",
-        wastage="underflow_split.waste",
-    )
-    plant.register_stream("primary_effluent", "primary.effluent")
-    plant.register_stream("primary_sludge", "primary.underflow")
-    plant.register_stream("thickener_overflow", "thickener.overflow")
-    plant.register_stream("reject", "reject_mix.out")
-    plant.register_stream("dewatering_reject", "dewatering.overflow")
-    plant.register_stream("disposal_sludge", "dewatering.underflow")
+    _register_bsm2_streams(plant, influent_bypass=influent_bypass, use_delay=use_delay)
 
     # Optional dynamic-temperature (heat-balance) model. Default (None) leaves the
     # plant's algebraic instantaneous temperature, so the validated steady state
