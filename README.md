@@ -377,14 +377,14 @@ params = model.default_parameters()
 t_eval = jnp.linspace(0.0, 5.0, 6)
 
 sol, S = reactor.solve_sensitivity(
-    C0, params, t_span=(0.0, 5.0), t_eval=t_eval,
+    C0, t_span=(0.0, 5.0), t_eval=t_eval, params=params,
     sens_params=["H2O2_photolysis.k_photo", "OH_target.k_OH_target"],
 )
 # sol : the usual solution; S : dC/dθ, shape (n_t, n_species, n_sens_params)
 
 # A richer wrapper with by-name accessors:
 res = aquakin.forward_sensitivity(
-    reactor, C0, params, t_span=(0.0, 5.0), t_eval=t_eval,
+    reactor, C0, params=params, t_span=(0.0, 5.0), t_eval=t_eval,
     sens_params=["H2O2_photolysis.k_photo"],
 )
 res.dC_dparam("target", "H2O2_photolysis.k_photo")   # (n_t,)

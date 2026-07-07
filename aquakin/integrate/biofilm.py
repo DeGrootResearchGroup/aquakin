@@ -625,10 +625,10 @@ class BiofilmReactor(GradientCheckMixin):
     def solve_sensitivity(
         self,
         C0: jnp.ndarray,
-        params: jnp.ndarray,
         t_span: tuple[float, float],
         t_eval: Optional[jnp.ndarray] = None,
         *,
+        params: jnp.ndarray,
         sens_params,
         conditions: Optional[SpatialConditions] = None,
         sens_rtol: Optional[float] = None,
@@ -648,9 +648,11 @@ class BiofilmReactor(GradientCheckMixin):
 
         Parameters
         ----------
-        C0, params, t_span, t_eval, conditions
+        C0, t_span, t_eval, conditions
             As for :meth:`solve` (``C0`` may be ``(n_species,)`` or
             ``(n_layers + 1, n_species)``).
+        params : jnp.ndarray
+            Full parameter vector; keyword-only, matching :meth:`solve`.
         sens_params : list of str or int
             Namespaced parameter names (or integer indices into ``params``).
         sens_rtol, sens_atol, param_scale

@@ -477,8 +477,8 @@ class ForwardSensitivityResult:
 def forward_sensitivity(
     reactor,
     C0: jnp.ndarray,
-    params: jnp.ndarray,
     *,
+    params: jnp.ndarray,
     sens_params,
     **solve_kwargs,
 ) -> ForwardSensitivityResult:
@@ -495,7 +495,7 @@ def forward_sensitivity(
     C0 : jnp.ndarray
         Initial state.
     params : jnp.ndarray
-        Full parameter vector.
+        Full parameter vector; keyword-only, matching ``reactor.solve``.
     sens_params : list of str or int
         Sensitivity-parameter names or indices.
     **solve_kwargs
@@ -510,5 +510,5 @@ def forward_sensitivity(
     model = reactor.model
     free_idx = resolve_sens_indices(model, sens_params)
     names = [model.parameters[int(i)] for i in free_idx]
-    sol, S = reactor.solve_sensitivity(C0, params, sens_params=sens_params, **solve_kwargs)
+    sol, S = reactor.solve_sensitivity(C0, params=params, sens_params=sens_params, **solve_kwargs)
     return ForwardSensitivityResult(solution=sol, S=S, sens_params=names, model=model)

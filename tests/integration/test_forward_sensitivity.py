@@ -11,7 +11,6 @@ the JVP flows through a state-derived-pH speciation solver.
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import pytest
 
 import aquakin
@@ -44,7 +43,7 @@ def test_analytic_decay_sensitivity_exact(simple_model):
     t_eval = jnp.linspace(0.0, 20.0, 11)
 
     sol, S = reactor.solve_sensitivity(
-        C0, p, (0.0, 20.0), t_eval, sens_params=["A_to_B.k"]
+        C0, (0.0, 20.0), t_eval, params=p, sens_params=["A_to_B.k"]
     )
     assert S.shape == (11, 2, 1)
     dA = -t_eval * jnp.exp(-k * t_eval)
@@ -76,7 +75,7 @@ def test_matches_jacfwd_multi_param():
     J = jax.jacfwd(Cfn)(p)  # (n_t, n_species, n_params)
 
     r = aquakin.BatchReactor(net, cond)
-    _, S = r.solve_sensitivity(C0, p, (0.0, 5.0), t_eval, sens_params=names)
+    _, S = r.solve_sensitivity(C0, (0.0, 5.0), t_eval, params=p, sens_params=names)
     assert S.shape == J.shape
     assert float(jnp.max(jnp.abs(S - J))) < 1e-7
 
@@ -90,7 +89,7 @@ def test_sensitivity_array_is_finite_and_composes(simple_model):
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_model.default_parameters()
     _, S = reactor.solve_sensitivity(
-        C0, p, (0.0, 10.0), jnp.linspace(0.0, 10.0, 6), sens_params=["A_to_B.k"]
+        C0, (0.0, 10.0), jnp.linspace(0.0, 10.0, 6), params=p, sens_params=["A_to_B.k"]
     )
     assert isinstance(S, jnp.ndarray)
     assert jnp.all(jnp.isfinite(S))
@@ -107,10 +106,10 @@ def test_int_indices_equivalent_to_names(simple_model):
     p = simple_model.default_parameters()
     t_eval = jnp.linspace(0.0, 10.0, 6)
     _, S_name = reactor.solve_sensitivity(
-        C0, p, (0.0, 10.0), t_eval, sens_params=["A_to_B.k"]
+        C0, (0.0, 10.0), t_eval, params=p, sens_params=["A_to_B.k"]
     )
     _, S_idx = reactor.solve_sensitivity(
-        C0, p, (0.0, 10.0), t_eval, sens_params=[0]
+        C0, (0.0, 10.0), t_eval, params=p, sens_params=[0]
     )
     assert jnp.allclose(S_name, S_idx)
 
@@ -140,7 +139,7 @@ def test_biofilm_sensitivity_matches_jacfwd(simple_model):
 
     r = aquakin.BiofilmReactor(simple_model, cond, **kw)
     sol, S = r.solve_sensitivity(
-        C0, p, (0.0, 5.0), t_eval, sens_params=["A_to_B.k"]
+        C0, (0.0, 5.0), t_eval, params=p, sens_params=["A_to_B.k"]
     )
     assert S.shape == (6, n, 1)
     assert sol.profile.shape == (6, 5, n)
@@ -163,7 +162,7 @@ def test_pfr_sensitivity_matches_jacfwd(simple_model):
         return ref.solve(C0, params=pp).C
 
     J = jax.jacrev(Cfn)(p)[:, :, 0]
-    _, S = ref.solve_sensitivity(C0, p, sens_params=["A_to_B.k"])
+    _, S = ref.solve_sensitivity(C0, params=p, sens_params=["A_to_B.k"])
     assert S.shape == (6, 2, 1)
     assert float(jnp.max(jnp.abs(S[:, :, 0] - J))) < 1e-6
 
@@ -178,7 +177,7 @@ def test_free_function_and_accessors():
     t_eval = jnp.linspace(0.0, 5.0, 6)
 
     res = aquakin.forward_sensitivity(
-        reactor, C0, p, sens_params=names, t_span=(0.0, 5.0), t_eval=t_eval
+        reactor, C0, params=p, sens_params=names, t_span=(0.0, 5.0), t_eval=t_eval
     )
     assert res.sens_params == names
     assert res.S.shape == (6, net.n_species, len(names))
@@ -200,10 +199,10 @@ def test_shared_factor_matches_dense_single_param(simple_model):
     k = float(p[0])
     t_eval = jnp.linspace(0.0, 20.0, 11)
     _, S_dense = reactor.solve_sensitivity(
-        C0, p, (0.0, 20.0), t_eval, sens_params=["A_to_B.k"], shared_factor=False
+        C0, (0.0, 20.0), t_eval, params=p, sens_params=["A_to_B.k"], shared_factor=False
     )
     _, S_shared = reactor.solve_sensitivity(
-        C0, p, (0.0, 20.0), t_eval, sens_params=["A_to_B.k"], shared_factor=True
+        C0, (0.0, 20.0), t_eval, params=p, sens_params=["A_to_B.k"], shared_factor=True
     )
     assert float(jnp.max(jnp.abs(S_dense - S_shared))) < 1e-12
     # and still exact against the closed form
@@ -222,10 +221,10 @@ def test_shared_factor_matches_dense_multi_param():
     t_eval = jnp.linspace(0.0, 5.0, 6)
     r = aquakin.BatchReactor(net, cond)
     _, S_dense = r.solve_sensitivity(
-        C0, p, (0.0, 5.0), t_eval, sens_params=names, shared_factor=False
+        C0, (0.0, 5.0), t_eval, params=p, sens_params=names, shared_factor=False
     )
     _, S_shared = r.solve_sensitivity(
-        C0, p, (0.0, 5.0), t_eval, sens_params=names, shared_factor=True
+        C0, (0.0, 5.0), t_eval, params=p, sens_params=names, shared_factor=True
     )
     assert S_dense.shape == S_shared.shape == (6, net.n_species, len(names))
     assert float(jnp.max(jnp.abs(S_dense - S_shared))) < 1e-12
@@ -274,11 +273,11 @@ def test_bad_sens_params_raise(simple_model):
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_model.default_parameters()
     with pytest.raises(KeyError):
-        reactor.solve_sensitivity(C0, p, (0.0, 5.0), sens_params=["nope.k"])
+        reactor.solve_sensitivity(C0, (0.0, 5.0), params=p, sens_params=["nope.k"])
     with pytest.raises(ValueError):
-        reactor.solve_sensitivity(C0, p, (0.0, 5.0), sens_params=[])
+        reactor.solve_sensitivity(C0, (0.0, 5.0), params=p, sens_params=[])
     with pytest.raises(IndexError):
-        reactor.solve_sensitivity(C0, p, (0.0, 5.0), sens_params=[99])
+        reactor.solve_sensitivity(C0, (0.0, 5.0), params=p, sens_params=[99])
 
 
 # --- Slow validation tests (stiff model; the headline claim) ----------
@@ -331,7 +330,7 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
 
     # Augmented forward sensitivity, uncapped -- finite and matching.
     r = aquakin.BatchReactor(net, cond)  # dtmax=None (uncapped)
-    _, S = r.solve_sensitivity(C0, p, (0.0, 0.1), t_eval, sens_params=names)
+    _, S = r.solve_sensitivity(C0, (0.0, 0.1), t_eval, params=p, sens_params=names)
     assert bool(jnp.all(jnp.isfinite(S)))
     # The augmented [y; S] solve and the capped jacfwd are two different methods;
     # on the default fast integrator (Kvaerno3, 3rd order) they agree to ~7e-6 on
@@ -361,10 +360,10 @@ def test_shared_factor_biofilm_matches_dense():
     names = ["mu_h", "q_m", "k_h2"]
     t_eval = jnp.array([0.0, 0.05])
     _, S_dense = r.solve_sensitivity(
-        C0, p, (0.0, 0.05), t_eval, sens_params=names, shared_factor=False
+        C0, (0.0, 0.05), t_eval, params=p, sens_params=names, shared_factor=False
     )
     _, S_shared = r.solve_sensitivity(
-        C0, p, (0.0, 0.05), t_eval, sens_params=names, shared_factor=True
+        C0, (0.0, 0.05), t_eval, params=p, sens_params=names, shared_factor=True
     )
     assert bool(jnp.all(jnp.isfinite(S_shared)))
     assert S_shared.shape == (2, n, 3)
@@ -396,7 +395,7 @@ def test_state_derived_ph_jvp_flows_and_matches():
 
     J = jax.jacfwd(Cfn)(p)[:, :, idx]
     r = aquakin.BatchReactor(net, cond)
-    _, S = r.solve_sensitivity(C0, p, (0.0, 0.1), t_eval, sens_params=[name])
+    _, S = r.solve_sensitivity(C0, (0.0, 0.1), t_eval, params=p, sens_params=[name])
     assert bool(jnp.all(jnp.isfinite(S)))
     # Absolute agreement; scale-robust since some species barely move.
     assert float(jnp.max(jnp.abs(S - J))) < 1e-6

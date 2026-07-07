@@ -179,7 +179,8 @@ Prefer a thin, composable surface that `calibrate()` and `sensitivity()` can cal
 ```python
 # Reactor method (each reactor: Batch / PFR / Biofilm / Particle):
 sol, S = reactor.solve_sensitivity(
-    C0, params, t_span, t_eval=None, *,
+    C0, t_span, t_eval=None, *,
+    params,                 # full parameter vector; keyword-only, matching reactor.solve
     sens_params,            # list[str] | (k,) int indices of free params in `params`
     conditions=None,
     sens_rtol=None, sens_atol=None,   # default to rtol/atol scaled by |param|

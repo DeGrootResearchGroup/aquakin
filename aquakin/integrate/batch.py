@@ -300,10 +300,10 @@ class BatchReactor(GradientCheckMixin):
     def solve_sensitivity(
         self,
         C0: jnp.ndarray,
-        params: jnp.ndarray,
         t_span: tuple[float, float],
         t_eval: Optional[jnp.ndarray] = None,
         *,
+        params: jnp.ndarray,
         sens_params,
         conditions: Optional[SpatialConditions] = None,
         sens_rtol: Optional[float] = None,
@@ -320,8 +320,10 @@ class BatchReactor(GradientCheckMixin):
 
         Parameters
         ----------
-        C0, params, t_span, t_eval, conditions
+        C0, t_span, t_eval, conditions
             As for :meth:`solve`.
+        params : jnp.ndarray
+            Full parameter vector; keyword-only, matching :meth:`solve`.
         sens_params : list of str or int
             Namespaced parameter names (or integer indices into ``params``) to
             differentiate with respect to.

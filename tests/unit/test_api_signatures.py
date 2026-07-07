@@ -65,12 +65,25 @@ def test_reactor_solve_keeps_params_keyword_only(cls):
 @pytest.mark.parametrize("cls", _SENS_REACTORS)
 def test_reactor_solve_sensitivity_contract(cls):
     """solve_sensitivity keeps ``sens_params`` keyword-only and still takes
-    ``C0``/``params``. (``params`` is positional here, unlike ``solve`` -- pin it
-    so any future harmonization is a deliberate, visible change.)"""
+    ``C0``/``params``. ``params`` is now KEYWORD_ONLY too, harmonized with
+    ``solve`` so it can never be filled by a stray positional argument (the same
+    invariant, and the same failure class, as ``solve``)."""
     params = inspect.signature(cls.solve_sensitivity).parameters
     assert "C0" in params and "params" in params
     assert "sens_params" in params, f"{cls.__name__}.solve_sensitivity lost sens_params"
     assert params["sens_params"].kind is inspect.Parameter.KEYWORD_ONLY
+    positional = [
+        n for n, p in params.items()
+        if n != "self"
+        and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    assert positional and positional[0] == "C0", (
+        f"{cls.__name__}.solve_sensitivity must take C0 first positionally; got {positional}"
+    )
+    assert params["params"].kind is inspect.Parameter.KEYWORD_ONLY, (
+        f"{cls.__name__}.solve_sensitivity 'params' must stay KEYWORD_ONLY so it can "
+        "never be filled by a stray positional argument (harmonized with solve)"
+    )
 
 
 def test_plant_solve_contract():
@@ -124,17 +137,22 @@ def test_batch_solve_documented_call_forms_execute(simple_model):
 
 
 def test_batch_solve_sensitivity_executes(simple_model):
-    """solve_sensitivity runs with its documented (C0, params, t_span, t_eval,
-    sens_params=...) form and returns a finite sensitivity of the right shape."""
+    """solve_sensitivity runs with its documented (C0, t_span, t_eval,
+    params=..., sens_params=...) form and returns a finite sensitivity of the
+    right shape."""
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
     r = BatchReactor(simple_model, cond)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_model.default_parameters()
     sol, S = r.solve_sensitivity(
-        C0, p, (0.0, 1.0), jnp.linspace(0.0, 1.0, 3), sens_params=[0],
+        C0, (0.0, 1.0), jnp.linspace(0.0, 1.0, 3), params=p, sens_params=[0],
     )
     assert S.shape == (3, simple_model.n_species, 1)
     assert jnp.all(jnp.isfinite(S))
+    # params is keyword-only: passing it positionally now lands in the t_span
+    # slot and must be rejected (the same guard as solve).
+    with pytest.raises(TypeError):
+        r.solve_sensitivity(C0, p, (0.0, 1.0), sens_params=[0])
 
 
 def test_check_gradient_finite_guards_a_reverse_gradient(simple_model):
