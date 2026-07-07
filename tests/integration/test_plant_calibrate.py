@@ -342,6 +342,68 @@ def test_plant_calibrate_free_ic_bad_bounds(decay_plant):
         )
 
 
+def test_plant_calibrate_tobs_must_be_ascending(decay_plant):
+    net, plant = decay_plant
+    with pytest.raises(ValueError, match="strictly ascending"):
+        plant.calibrate(
+            jnp.zeros((3, 1)),
+            jnp.array([1.0, 0.5, 2.0]),
+            [PARAM],
+            target="tank",
+            observed_channels=["A"],
+        )
+
+
+def test_plant_calibrate_transform_initial_value_guards(decay_plant):
+    net, plant = decay_plant
+    gidx = plant.parameter_index(PARAM)
+    base = plant.default_parameters()
+    # positive_log requires a positive start value.
+    with pytest.raises(ValueError, match="<= 0"):
+        plant.calibrate(
+            jnp.zeros((3, 1)),
+            jnp.array([0.2, 0.4, 0.6]),
+            [PARAM],
+            target="tank",
+            observed_channels=["A"],
+            params=base.at[gidx].set(0.0),
+            transforms={PARAM: "positive_log"},
+        )
+    # logit requires a start in (0, 1).
+    with pytest.raises(ValueError, match=r"not in \(0, 1\)"):
+        plant.calibrate(
+            jnp.zeros((3, 1)),
+            jnp.array([0.2, 0.4, 0.6]),
+            [PARAM],
+            target="tank",
+            observed_channels=["A"],
+            params=base.at[gidx].set(1.5),
+            transforms={PARAM: "logit"},
+        )
+
+
+def test_plant_calibrate_unknown_unit_in_target(decay_plant):
+    net, plant = decay_plant
+    with pytest.raises((KeyError, ValueError), match="Unknown unit"):
+        plant.calibrate(
+            jnp.zeros((3, 1)),
+            jnp.array([0.2, 0.4, 0.6]),
+            [PARAM],
+            target="nope.outlet",
+            observed_channels=["A"],
+        )
+
+
+def test_plant_param_namespace_surface(decay_plant):
+    from aquakin.plant.calibrate import _PlantParamNamespace
+
+    net, plant = decay_plant
+    ns = _PlantParamNamespace(plant)
+    assert ns.parameters == list(plant.parameter_names())
+    assert ns.param_index[PARAM] == plant.parameter_index(PARAM)
+    assert jnp.allclose(ns.default_parameters(), plant.default_parameters())
+
+
 @pytest.mark.slow  # two plant solves per objective evaluation
 def test_plant_calibrate_multibatch_recovers(decay_plant):
     """Joint multi-batch fit: two runs of the same plant from different initial

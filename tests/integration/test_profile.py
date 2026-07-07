@@ -35,6 +35,40 @@ def growth_setup():
     return net, reactor, C0, t, obs, sig
 
 
+# ----- Input validation (fast, raises before any calibrate/solve) ---------
+
+
+def test_profile_empty_grid_rejected(simple_model):
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
+    with pytest.raises(ValueError, match="non-empty 1-D array"):
+        aquakin.profile_likelihood(
+            reactor,
+            jnp.array([1.0, 0.0]),
+            jnp.array([0.0, 0.5]),
+            jnp.array([0.0, 1.0]),
+            ["A_to_B.k"],
+            grid=[],
+            profile_ic="A",
+            observed_species=["B"],
+        )
+
+
+def test_profile_nonpositive_delta_rejected(simple_model):
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
+    with pytest.raises(ValueError, match="delta must be > 0"):
+        aquakin.profile_likelihood(
+            reactor,
+            jnp.array([1.0, 0.0]),
+            jnp.array([0.0, 0.5]),
+            jnp.array([0.0, 1.0]),
+            ["A_to_B.k"],
+            grid=[0.1, 0.2],
+            profile_ic="A",
+            delta=0.0,
+            observed_species=["B"],
+        )
+
+
 def test_profile_param_ci_matches_laplace(growth_setup):
     """On a well-identified, near-Gaussian problem the profile-likelihood 95%
     interval (delta=1.92 crossings) matches the Laplace MAP +/- 1.96 sigma."""
