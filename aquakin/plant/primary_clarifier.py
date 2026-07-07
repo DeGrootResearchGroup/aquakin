@@ -26,9 +26,9 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
-from aquakin.plant._constants import ASM1_SETTLING_SPECIES
+from aquakin.plant._constants import ASM1_SETTLING_SPECIES, species_mask
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
-from aquakin.plant.streams import Stream, mixed_scalars
+from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -74,11 +74,7 @@ class PrimaryClarifier(FlowParameterized):
             raise ValueError(
                 f"PrimaryClarifier '{self.name}': f_PS must be in (0, 1); got {self.f_PS}"
             )
-        mask = jnp.zeros((self.model.n_species,))
-        for sp in self.settling_species:
-            if sp in self.model.species_index:
-                mask = mask.at[self.model.species_index[sp]].set(1.0)
-        self._settle_mask = mask
+        self._settle_mask = species_mask(self.model, self.settling_species, what="settling species")
         # Primary-sludge fraction as a differentiable setpoint, read by both the
         # flow rule and the material split.
         self._setpoints = {"f_PS": FlowSetpoint(float(self.f_PS), 0)}
@@ -121,9 +117,7 @@ class PrimaryClarifier(FlowParameterized):
         params: jnp.ndarray,
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
-        Q_in = jnp.zeros(())
-        for name in self.input_port_names:
-            Q_in = Q_in + inputs[name].Q
+        Q_in = total_flow(inputs[name].Q for name in self.input_port_names)
         # Flow-weighted inlet side-channel scalars (temperature, ...), passed
         # through to both outlets.
         scalars_out = mixed_scalars(inputs, self.input_port_names)
@@ -146,9 +140,7 @@ class PrimaryClarifier(FlowParameterized):
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Exact linear flow rule: underflow = f_PS·Q_in, effluent the rest."""
-        Q_in = jnp.zeros(())
-        for name in self.input_port_names:
-            Q_in = Q_in + input_flows[name]
+        Q_in = total_flow(input_flows[name] for name in self.input_port_names)
         f_PS = self._setpoints["f_PS"].resolve(self._flow_params(params))
         Qu = f_PS * Q_in
         return {self.effluent_port: Q_in - Qu, self.sludge_port: Qu}
@@ -162,11 +154,5 @@ class PrimaryClarifier(FlowParameterized):
         signals: "dict | None" = None,
     ) -> jnp.ndarray:
         # Well-mixed holding tank: convection only (no reaction).
-        Q_total = jnp.zeros(())
-        mass_total = jnp.zeros((self.model.n_species,))
-        for name in self.input_port_names:
-            s = inputs[name]
-            Q_total = Q_total + s.Q
-            mass_total = mass_total + s.Q * s.C
-        C_in = mass_total / (Q_total + 1e-12)
+        Q_total, C_in = mixed_feed(inputs, self.input_port_names)
         return (Q_total / self.volume) * (C_in - state)
