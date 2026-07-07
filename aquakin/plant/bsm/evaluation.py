@@ -31,6 +31,7 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.plant.aeration_system import blower_airflow_total, blower_energy
+from aquakin.plant.errors import NoDigesterError
 from aquakin.plant.metrics import (
     _EQI_WEIGHTS,
     _composition,
@@ -365,7 +366,7 @@ def _digester_unit_name(plant) -> str:
         net = getattr(plant.units[name], "model", None)
         if net is not None and "S_gas_ch4" in net.species_index:
             return name
-    raise ValueError(
+    raise NoDigesterError(
         "This plant has no anaerobic digester (no unit with an ADM1 gas "
         "headspace), so it has no biogas. digester_gas() needs a build_bsm2 "
         "plant with an ADM1DigesterUnit."

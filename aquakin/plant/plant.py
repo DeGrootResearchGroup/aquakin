@@ -48,6 +48,11 @@ from aquakin.integrate.events import Event, solve_with_events
 from aquakin.plant import calibrate as _calibrate
 from aquakin.plant import sensitivity as _sensitivity
 from aquakin.plant.colored import ColoredJacobianManager
+from aquakin.plant.errors import (
+    UnknownPortError,
+    UnknownUnitError,
+    WiringError,
+)
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.recycle import RecycleResolver
 from aquakin.plant.results import (
@@ -418,8 +423,10 @@ class Plant:
 
         Raises
         ------
-        ValueError
-            If a name in ``units`` is unknown or does not support a temperature.
+        UnknownUnitError
+            If a name in ``units`` is not a unit of this plant.
+        WiringError
+            If a named unit does not support a temperature (e.g. a separator).
         """
         kelvin = float(celsius) + 273.15
         if units is None:
@@ -433,9 +440,9 @@ class Plant:
             targets = list(units)
             for name in targets:
                 if name not in self.units:
-                    raise ValueError(f"Unknown unit '{name}'.")
+                    raise UnknownUnitError(f"Unknown unit '{name}'.")
                 if not hasattr(self.units[name], "set_temperature"):
-                    raise ValueError(f"Unit '{name}' does not support set_temperature.")
+                    raise WiringError(f"Unit '{name}' does not support set_temperature.")
         for name in targets:
             self.units[name].set_temperature(kelvin)
         # The compiled solves bake in the (now-changed) condition values, so they
@@ -590,11 +597,11 @@ class Plant:
         unit_name, _, port = spec.partition(".")
         if unit_name not in self.units:
             if unit_name in self.influents:
-                raise ValueError(
+                raise WiringError(
                     f"'{unit_name}' is an influent, not a unit; wire it with "
                     f"add_influent('{unit_name}', series, to=...), not connect()."
                 )
-            raise KeyError(f"Unknown unit '{unit_name}' in endpoint '{spec}'.")
+            raise UnknownUnitError(f"Unknown unit '{unit_name}' in endpoint '{spec}'.")
         ports = (
             self.units[unit_name].output_ports
             if role == "source"
@@ -602,12 +609,12 @@ class Plant:
         )
         if port:
             if port not in ports:
-                raise KeyError(
+                raise UnknownPortError(
                     f"Unit '{unit_name}' has no {role} port '{port}'; available: {list(ports)}."
                 )
             return unit_name, port
         if len(ports) != 1:
-            raise ValueError(
+            raise WiringError(
                 f"Endpoint '{spec}' omits the port, but unit '{unit_name}' has "
                 f"{len(ports)} {role} ports {list(ports)}; name one explicitly "
                 f"as '{unit_name}.<port>'."
@@ -1270,7 +1277,7 @@ class Plant:
         """Return ``self.units[name]`` or a ``KeyError`` with a close-match hint."""
         if name not in self.units:
             suffix = did_you_mean(name, list(self.units))
-            raise KeyError(
+            raise UnknownUnitError(
                 f"Unknown unit '{name}'. Units (see plant.list_units()): "
                 f"{self.list_units()}.{suffix}"
             )
@@ -1453,7 +1460,7 @@ class Plant:
         overrides = overrides or {}
         unknown = set(overrides) - set(self.units)
         if unknown:
-            raise KeyError(
+            raise UnknownUnitError(
                 f"initial_state overrides name unknown units {sorted(unknown)}; "
                 f"valid units are {sorted(self.units)}."
             )

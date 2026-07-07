@@ -40,6 +40,12 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
 - `CITATION.cff`, so the package can be cited and GitHub shows a "Cite this
   repository" button. (#494)
 - `CHANGELOG.md` (this file), following the Keep a Changelog format.
+- A uniform plant exception taxonomy (`aquakin.UnknownUnitError`,
+  `UnknownPortError`, `WiringError`, `NoDigesterError`) so a caller can tell an
+  unknown *name* from an invalid *wiring/usage*. Each subclasses the built-in it
+  historically raised (`UnknownUnitError`/`UnknownPortError` are `KeyError`,
+  `WiringError`/`NoDigesterError` are `ValueError`), so existing `except`
+  clauses keep working. (#466)
 
 ### Changed
 
@@ -74,9 +80,25 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
   writing to stdout — enable it with, e.g., `logging.basicConfig(level=
   logging.INFO)`. aquakin attaches a `NullHandler` to its package logger and
   never configures logging on the application's behalf. (#472)
+- `Plant.set_temperature` now raises `UnknownUnitError` (a `KeyError` subclass)
+  for an unknown unit name, matching every other unknown-unit lookup, instead of
+  `ValueError`; a unit that cannot take a temperature now raises `WiringError`
+  (still a `ValueError`). Code that caught the unknown-unit case as a bare
+  `ValueError` should catch `KeyError`/`UnknownUnitError` (or the message).
+  (#466)
 
 ### Fixed
 
+- A forward-mode `dgsm` screen no longer masks unrelated errors. Previously
+  *any* exception raised while evaluating the samples in forward mode (a bug in
+  the user's `fn`, a bad shape, an OOM) was relabelled as the "use
+  `forward_adjoint()`" guidance error; it now converts only JAX's actual
+  forward-mode-through-`custom_vjp` rejection and lets every other error
+  propagate with its real traceback. (#466)
+- The plant mass balance's biogas term no longer swallows genuine failures: it
+  now catches only `NoDigesterError` (the "no digester → no biogas" case) from
+  `digester_gas`, so a real bug inside `digester_gas` surfaces instead of being
+  silently reported as zero biogas. (#466)
 - `sludge_metrics(substrate=...)` now validates its argument against
   `{"BOD", "COD"}` and raises on an invalid value, instead of silently falling
   back to COD (which could report F:M and the influent BOD load roughly 2× off).

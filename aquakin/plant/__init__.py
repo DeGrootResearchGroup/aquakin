@@ -44,6 +44,12 @@ from aquakin.plant.design import (
     sludge_metrics,
 )
 from aquakin.plant.digester import ADM1DigesterUnit
+from aquakin.plant.errors import (
+    NoDigesterError,
+    UnknownPortError,
+    UnknownUnitError,
+    WiringError,
+)
 from aquakin.plant.characterize import (
     InfluentFractions,
     characterize_influent,
@@ -166,6 +172,7 @@ __all__ = [
     "MBRUnit",
     "MassBalance",
     "MixerUnit",
+    "NoDigesterError",
     "OperatingCost",
     "PIController",
     "PTCResult",
@@ -193,6 +200,9 @@ __all__ = [
     "ThresholdSplitter",
     "UVUnit",
     "Unit",
+    "UnknownPortError",
+    "UnknownUnitError",
+    "WiringError",
     "a2o_influent",
     "a2o_warm_start",
     "aeration_energy",

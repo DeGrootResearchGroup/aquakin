@@ -867,6 +867,21 @@ def _coerce_atol(atol, n_species: int):
     return arr
 
 
+def is_forward_mode_ad_error(exc: BaseException) -> bool:
+    """True if ``exc`` is JAX's rejection of forward-mode autodiff through a
+    ``custom_vjp``.
+
+    The default ``RecursiveCheckpointAdjoint`` registers a ``custom_vjp``, so a
+    ``jax.jvp`` / ``jax.jacfwd`` through the solve fails with *"can't apply
+    forward-mode autodiff (jvp) to a custom_vjp function"*. This is the one
+    specific failure the forward-mode sensitivity / DGSM paths convert into
+    ``forward_adjoint()`` guidance; matching it narrowly keeps unrelated errors
+    (bad shapes, OOM, a bug in the user's ``fn``) from being masked by that hint.
+    """
+    msg = str(exc).lower()
+    return "forward-mode autodiff" in msg and "custom_vjp" in msg
+
+
 @contextlib.contextmanager
 def friendly_solve_errors(max_steps, *, what: str = "solve"):
     """Re-raise two opaque solve-time failures as domain-level errors.
@@ -912,7 +927,7 @@ def friendly_solve_errors(max_steps, *, what: str = "solve"):
                 "magnitudes); or (3) raise max_steps. If none help, the model may be "
                 "genuinely unstable at these parameters/inputs."
             ) from None
-        if "forward-mode autodiff" in msg and "custom_vjp" in msg:
+        if is_forward_mode_ad_error(exc):
             raise RuntimeError(
                 f"Forward-mode autodiff (jax.jacfwd / jax.jvp) cannot flow through "
                 f"the {what}: the default adjoint (RecursiveCheckpointAdjoint) is "
