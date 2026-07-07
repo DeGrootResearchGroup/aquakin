@@ -96,18 +96,24 @@ def _effluent_args(stream_or_t, C, Q, model):
     return stream_or_t, C, Q, model
 
 
-def _time_average(integrand, t, axis: int = 0):
+def time_average(integrand, t, axis: int = 0):
     """Trapezoidal time-average of ``integrand`` over the window ``[t0, t1]``.
 
-    The shared kernel behind every time-averaged index. For a **single saved
-    point** -- exactly what :meth:`Plant.run_to_steady_state` returns (the
-    terminal state only) -- the window has zero width, but the time-average of a
-    constant *is* that constant, so the single sample is returned directly. This
-    yields the meaningful **instantaneous (steady-state) value** for a one-point
-    solution instead of dividing by a zero window (which previously raised
-    ``ZeroDivisionError`` in ``aeration_energy``, or gave a spurious zero in the
-    guarded kernels). The metric kernels here are called eagerly on concrete
-    arrays after a solve, so the ``t.shape[0]`` branch is a static check.
+    The **single** public helper behind every time-averaged index -- the
+    ``design``, ``aeration_system``, ``ghg`` and ``evaluation`` modules all call
+    it directly rather than re-wrapping it. The argument order is always
+    ``(values, t)`` (values first, times second); keep it that way so no module
+    re-introduces an inverted-signature local copy.
+
+    For a **single saved point** -- exactly what :meth:`Plant.run_to_steady_state`
+    returns (the terminal state only) -- the window has zero width, but the
+    time-average of a constant *is* that constant, so the single sample is
+    returned directly. This yields the meaningful **instantaneous (steady-state)
+    value** for a one-point solution instead of dividing by a zero window (which
+    previously raised ``ZeroDivisionError`` in ``aeration_energy``, or gave a
+    spurious zero in the guarded kernels). The metric kernels here are called
+    eagerly on concrete arrays after a solve, so the ``t.shape[0]`` branch is a
+    static check.
 
     Parameters
     ----------
@@ -117,6 +123,13 @@ def _time_average(integrand, t, axis: int = 0):
         Save times, shape ``(n_t,)``.
     axis : int
         The time axis of ``integrand`` (default 0).
+
+    Returns
+    -------
+    jnp.ndarray
+        The time-average, reduced along ``axis`` (a 0-d array for a 1-D
+        ``integrand``). Callers that need a Python ``float`` wrap the result in
+        ``float(...)``, as the scalar metric kernels here do.
     """
     t = jnp.asarray(t)
     integrand = jnp.asarray(integrand)
@@ -285,7 +298,7 @@ def effluent_quality_index(
         + _EQI_WEIGHTS["TKN"] * TKN_t
         + _EQI_WEIGHTS["NO"] * SNO_t
     )
-    return float(_time_average(integrand, t) * 1e-3)
+    return float(time_average(integrand, t) * 1e-3)
 
 
 def aeration_energy(
@@ -314,7 +327,7 @@ def aeration_energy(
     kla_history = jnp.asarray(kla_history)
     volumes = jnp.asarray(volumes)
     integrand = jnp.sum(kla_history * volumes[None, :], axis=1)
-    return float(saturation / (1.8 * 1000.0) * _time_average(integrand, t))
+    return float(saturation / (1.8 * 1000.0) * time_average(integrand, t))
 
 
 def pumping_energy(
@@ -333,7 +346,7 @@ def pumping_energy(
         Pumping energy in kWh/d, time-averaged over ``t``.
     """
     integrand = 0.004 * Q_internal + 0.008 * Q_ras + 0.05 * Q_was
-    return float(_time_average(integrand, t))
+    return float(time_average(integrand, t))
 
 
 def operational_cost_index(
@@ -392,7 +405,7 @@ def pumping_energy_bsm2(
     for key, Q in flows.items():
         if key in factors:
             integrand = integrand + float(factors[key]) * jnp.asarray(Q)
-    return float(_time_average(integrand, t))
+    return float(time_average(integrand, t))
 
 
 def mixing_energy(
@@ -434,7 +447,7 @@ def mixing_energy(
     volumes = jnp.asarray(volumes)
     # Time fraction each reactor is below the aeration threshold.
     unaerated = (kla_history < kla_threshold).astype(jnp.float64)  # (n_t, n_reac)
-    frac = _time_average(unaerated, t, axis=0)  # (n_reac,)
+    frac = time_average(unaerated, t, axis=0)  # (n_reac,)
     reactor_mix = reactor_unit * jnp.sum(volumes * frac)
     digester_mix = digester_unit * float(digester_volume)
     return float(HOURS_PER_DAY * (reactor_mix + digester_mix))
@@ -456,7 +469,7 @@ def carbon_mass(
         External-carbon mass dose in kg COD/d, time-averaged over ``t``.
     """
     integrand = jnp.asarray(Q_carbon) * float(carbon_conc) * 1e-3
-    return float(_time_average(integrand, t))
+    return float(time_average(integrand, t))
 
 
 def heating_energy(
@@ -496,7 +509,7 @@ def heating_energy(
         * cp
         / SECONDS_PER_DAY
     )  # kW
-    return float(HOURS_PER_DAY * _time_average(heatpower, t))
+    return float(HOURS_PER_DAY * time_average(heatpower, t))
 
 
 def bsm2_oci_terms(

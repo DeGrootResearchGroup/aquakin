@@ -165,6 +165,7 @@ from aquakin.plant import (
     stripped_n2o,
     t10_from_baffling,
     t10_from_rtd,
+    time_average,
     uv_dose,
     uv_log_inactivation,
 )
@@ -318,6 +319,7 @@ __all__ = [
     "stripped_n2o",
     "t10_from_baffling",
     "t10_from_rtd",
+    "time_average",
     "uv_dose",
     "uv_log_inactivation",
 ]

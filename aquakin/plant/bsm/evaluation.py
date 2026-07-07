@@ -48,9 +48,7 @@ from aquakin.plant.metrics import (
     operational_cost_index_bsm2,
     pumping_energy,
     pumping_energy_bsm2,
-)
-from aquakin.plant.metrics import (
-    _time_average as _metrics_time_average,
+    time_average,
 )
 
 # Default BSM1 port names (as wired by build_bsm1).
@@ -305,15 +303,6 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
     return jax.vmap(_row)(jnp.asarray(solution.t), jnp.asarray(solution.state))
 
 
-def _time_average(t: jnp.ndarray, values: jnp.ndarray) -> float:
-    """Trapezoidal time-average of ``values(t)`` over ``[t0, t1]`` (single source
-    of truth: the shared :func:`aquakin.plant.metrics._time_average` kernel,
-    which also returns the single sample for a one-point steady-state window).
-    Wrapped here only to keep the local ``(t, values)`` argument order and the
-    ``float`` return."""
-    return float(_metrics_time_average(values, t))
-
-
 def _reconstruct(plant, solution, params_full, endpoints):
     """Reconstruct several output streams from the saved states.
 
@@ -356,7 +345,7 @@ class DigesterGas:
 
     def methane_production(self) -> float:
         """Time-averaged CH₄ production (kg CH₄/d) over the solution window."""
-        return _time_average(self.t, self.ch4)
+        return float(time_average(self.ch4, self.t))
 
 
 def _digester_unit_name(plant) -> str:
@@ -459,11 +448,11 @@ def _bypass_bod_correction(t, eqi_flat, Qt, Ct, Qb, Cb, model, f_P):
     """
     base_t = derived_BOD(Ct, model, f_P=f_P) / 0.25  # SS+XS+(1-fP)(XBH+XBA)
     base_b = derived_BOD(Cb, model, f_P=f_P) / 0.25
-    bod_load = _time_average(t, 0.25 * base_t * Qt) + _time_average(t, 0.65 * base_b * Qb)
-    total_flow = _time_average(t, Qt + Qb)
+    bod_load = time_average(0.25 * base_t * Qt, t) + time_average(0.65 * base_b * Qb, t)
+    total_flow = time_average(Qt + Qb, t)
     bod_average = float(bod_load / total_flow)
     eqi = eqi_flat + float(
-        _EQI_WEIGHTS["BOD"] * (0.65 - 0.25) * _time_average(t, base_b * Qb) * 1e-3
+        _EQI_WEIGHTS["BOD"] * (0.65 - 0.25) * time_average(base_b * Qb, t) * 1e-3
     )
     return eqi, bod_average
 
@@ -632,7 +621,7 @@ def evaluate_bsm2(
     # ----- Sludge production (TSS mass flow leaving to disposal, kg/d). -----
     disp_Q, disp_C = streams[disposal_port]
     tss_mass_flow = derived_TSS(disp_C, model) * disp_Q * 1e-3
-    sludge = _time_average(t, tss_mass_flow)
+    sludge = float(time_average(tss_mass_flow, t))
 
     # ----- External-carbon dose (kg COD/d). -----
     carbon = _external_carbon_load(plant, solution, t, params_full, model)
@@ -856,7 +845,7 @@ def evaluate_bsm1(
     # ----- Sludge production (TSS mass flow leaving via wastage, kg/d). -----
     waste_Q, waste_C = streams[waste_port]
     tss_mass_flow = derived_TSS(waste_C, model) * waste_Q * 1e-3
-    sludge = _time_average(t, tss_mass_flow)
+    sludge = float(time_average(tss_mass_flow, t))
 
     # ----- Mixing energy (mechanical mixing of the unaerated reactors). -----
     # BSM1 has no digester, so the digester mixing volume is zero. The updated
