@@ -69,6 +69,34 @@ def _cond_mask(cond, cond_factor):
     return finite & (cond <= cond_factor * med)
 
 
+def _valid_sample_mask(cond, cond_factor, operating_point_exists):
+    """Keep-mask selecting the samples that enter the steady-state DGSM aggregation.
+
+    The single home of the operating-regime exclusion policy, otherwise re-derived
+    at each call site (``convergence``, ``with_cond_factor``, ``steady_state_dgsm``).
+    Combines the two exclusion criteria:
+
+    - the near-singular-Jacobian drop (:func:`_cond_mask`, gated by ``cond_factor``),
+      and
+    - the **past-fold** operating-regime exclusion: a sample whose
+      ``operating_point_exists`` is ``False`` folds before its parameters, so no
+      operating-branch steady state exists and it is outside the viable regime.
+
+    ``operating_point_exists`` is the raw per-sample list (``True`` / ``False`` /
+    ``None`` per sample) or ``None`` when the result predates that record, in which
+    case only the conditioning filter applies. Returns a boolean ``(N,)`` keep-mask
+    aligned with ``cond``.
+    """
+    import numpy as np
+
+    cond = np.asarray(cond)
+    if operating_point_exists is None:
+        operating_mask = np.ones(len(cond), dtype=bool)
+    else:
+        operating_mask = np.array([e is not False for e in operating_point_exists], dtype=bool)
+    return _cond_mask(cond, cond_factor) & operating_mask
+
+
 def _to_z(theta, kind):
     """Physical parameter -> calibration-transform space (where a prior is normal).
 
@@ -238,14 +266,11 @@ class SteadyStateDGSMResult:
         gs = np.asarray(self.grad_sq)  # (N, m, k)
         ov = np.asarray(self.outputs)  # (N, m)
         cond = np.asarray(self.cond)  # (N,)
-        op = (
-            np.array([e is not False for e in self.operating_point_exists], dtype=bool)
-            if self.operating_point_exists is not None
-            else np.ones(n, dtype=bool)
-        )  # past-fold
+        oe = self.operating_point_exists
         b_list, se_list = [], []
         for k in counts:
-            mask = _cond_mask(cond[:k], self.cond_factor) & op[:k]
+            oe_k = None if oe is None else oe[:k]
+            mask = _valid_sample_mask(cond[:k], self.cond_factor, oe_k)
             bound, se, *_ = _dgsm_aggregate(gs[:k], ov[:k], rng2, sample_mask=mask, poincare=pc)
             b_list.append(bound)
             se_list.append(se)
@@ -264,12 +289,7 @@ class SteadyStateDGSMResult:
         import numpy as np
 
         rng2 = np.asarray((self.ranges[:, 1] - self.ranges[:, 0]) ** 2)
-        op = (
-            np.array([e is not False for e in self.operating_point_exists], dtype=bool)
-            if self.operating_point_exists is not None
-            else np.ones(len(self.cond), dtype=bool)
-        )  # past-fold excl.
-        mask = _cond_mask(np.asarray(self.cond), cond_factor) & op
+        mask = _valid_sample_mask(self.cond, cond_factor, self.operating_point_exists)
         pc = None if self.poincare is None else np.asarray(self.poincare)
         bound, se, nu, var, n_valid = _dgsm_aggregate(
             np.asarray(self.grad_sq), np.asarray(self.outputs), rng2, sample_mask=mask, poincare=pc
@@ -750,17 +770,11 @@ def steady_state_dgsm(
     grad_sq = np.stack(grads) ** 2  # (N, m, k)
     cond = np.asarray(conds)  # (N,)
     residual = np.asarray(resids)  # (N,) final scaled residual
-    # Operating-regime exclusion: a sample whose operating branch folds before
-    # its parameters has NO operating-branch steady state (pseudo-arclength
-    # classified it ``past_fold``); it is outside the viable regime and is
-    # excluded from the screen -- the physical, fold-based criterion replacing
-    # the conditioning heuristic for those samples.
-    operating_mask = np.array([e is not False for e in sexist], dtype=bool)
     rng2 = np.asarray((hi - lo) ** 2)  # (k,)
-    # Drop, per output, any non-finite sample, plus (if cond_factor is set) any
-    # near-singular-Jacobian operating point where the sensitivity blows up,
-    # plus the past-fold (non-operating) samples.
-    sample_mask = _cond_mask(cond, cond_factor) & operating_mask
+    # Keep-mask: drop, per output, any non-finite sample, plus (if cond_factor is
+    # set) any near-singular-Jacobian operating point where the sensitivity blows
+    # up, plus the past-fold (non-operating) samples. See _valid_sample_mask.
+    sample_mask = _valid_sample_mask(cond, cond_factor, sexist)
     bound, std_error, nu, var, n_valid = _dgsm_aggregate(
         grad_sq, outputs, rng2, sample_mask=sample_mask, poincare=poincare_const
     )
