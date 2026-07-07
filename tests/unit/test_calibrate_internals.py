@@ -13,12 +13,21 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+import aquakin
+from aquakin.integrate._common import DifferentiationConfig
 from aquakin.integrate.calibrate import (
+    CalibrationResult,
+    _build_loss,
+    _build_residual,
     _CalibrationProblem,
     _FitConfig,
     _forward_jac,
+    _free_ic_fields,
+    _laplace_covariance,
     _optimizer_bounds,
+    _resolve_laplace,
     _resolve_problem,
+    calibrate,
 )
 
 
@@ -243,3 +252,198 @@ def _cfg(ad_mode, gradient):
 )
 def test_forward_jac_rule(ad_mode, gradient, cap, expected):
     assert _forward_jac(_cfg(ad_mode, gradient), _StubForwardModel(cap)) is expected
+
+
+# ---------- _build_loss / _build_residual: argument validation ----------
+
+
+def test_build_loss_wmse_requires_sigma():
+    obs = jnp.zeros((3, 1))
+    with pytest.raises(ValueError, match="loss='wmse' requires a sigma"):
+        _build_loss("wmse", obs, None)
+
+
+def test_build_loss_nll_requires_sigma():
+    obs = jnp.zeros((3, 1))
+    with pytest.raises(ValueError, match="loss='nll' requires a sigma"):
+        _build_loss("nll", obs, None)
+
+
+def test_build_loss_rejects_unknown_loss():
+    obs = jnp.zeros((3, 1))
+    with pytest.raises(ValueError, match="Unknown loss 'bogus'"):
+        _build_loss("bogus", obs, None)
+
+
+def test_build_residual_wmse_requires_sigma():
+    obs = jnp.zeros((3, 1))
+    with pytest.raises(ValueError, match="loss='wmse' requires a sigma"):
+        _build_residual("wmse", obs, None)
+
+
+def test_build_residual_nll_requires_sigma():
+    obs = jnp.zeros((3, 1))
+    with pytest.raises(ValueError, match="loss='nll' requires a sigma"):
+        _build_residual("nll", obs, None)
+
+
+def test_build_residual_rejects_unknown_loss():
+    obs = jnp.zeros((3, 1))
+    with pytest.raises(ValueError, match="Unknown loss 'bogus'"):
+        _build_residual("bogus", obs, None)
+
+
+# ---------- config normalisers: _resolve_laplace / _free_ic_fields ----------
+
+
+def test_resolve_laplace_rejects_bad_type():
+    with pytest.raises(TypeError, match="laplace must be a bool or LaplaceConfig"):
+        _resolve_laplace("yes")
+
+
+def test_free_ic_fields_rejects_bad_type():
+    with pytest.raises(TypeError, match="free_ic must be a FreeICConfig or None"):
+        _free_ic_fields(["some_species"])
+
+
+# ---------- _laplace_covariance: guards ----------
+
+
+def test_laplace_covariance_rejects_out_of_range_eig_keep():
+    H = np.eye(2)
+    with pytest.raises(ValueError, match=r"eig_keep must be in \[0, 1\)"):
+        _laplace_covariance(H, ridge=1e-6, eig_keep=1.0)
+
+
+def test_laplace_covariance_rejects_non_pd_hessian():
+    # A zero Hessian ridged by 0 has w_max == 0 -> not positive-definite.
+    H = np.zeros((2, 2))
+    with pytest.raises(ValueError, match="not finite / positive-definite"):
+        _laplace_covariance(H, ridge=0.0, eig_keep=1e-2)
+
+
+# ---------- _resolve_problem: further validation ----------
+
+
+def test_resolve_problem_rejects_mismatched_sigma_list(base):
+    m, C0, obs, t_obs, free = base
+    # Multi-dataset with a sigma list of the wrong length.
+    with pytest.raises(ValueError, match="sigma list has 1 entries but there are 2"):
+        _resolve(
+            m,
+            [C0, C0],
+            [obs, obs],
+            [t_obs, t_obs],
+            free,
+            loss="wmse",
+            sigma=[jnp.ones_like(obs)],
+        )
+
+
+def test_resolve_problem_rejects_2d_tobs(base):
+    m, C0, obs, _t, free = base
+    with pytest.raises(ValueError, match="t_obs must be a non-empty 1-D array"):
+        _resolve(m, C0, obs, jnp.zeros((3, 1)), free)
+
+
+def test_resolve_problem_rejects_negative_tobs(base):
+    m, C0, obs, _t, free = base
+    with pytest.raises(ValueError, match="t_obs must be non-negative"):
+        _resolve(m, C0, obs, jnp.array([-1.0, 1.0, 2.0]), free)
+
+
+def test_resolve_problem_rejects_obs_row_mismatch(base):
+    m, C0, _obs, t_obs, free = base
+    # t_obs has 3 entries; give observations with 2 rows.
+    bad_obs = jnp.zeros((2, m.n_species))
+    with pytest.raises(ValueError, match="observations has 2 rows but t_obs"):
+        _resolve(m, C0, bad_obs, t_obs, free)
+
+
+def test_resolve_problem_rejects_obs_col_mismatch(base):
+    m, C0, _obs, t_obs, free = base
+    # Ask for a single observed species but hand over all-species columns.
+    bad_obs = jnp.zeros((3, m.n_species))
+    with pytest.raises(ValueError, match="columns but 1 species were specified"):
+        _resolve(m, C0, bad_obs, t_obs, free, observed_species=[m.species[0]])
+
+
+# ---------- calibrate(): top-level argument guards (no solve) ----------
+
+
+def _batch_reactor(model):
+    conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
+    return aquakin.BatchReactor(model, conditions)
+
+
+def _cal_args(model):
+    C0 = jnp.array([1.0, 0.0])
+    t_obs = jnp.array([0.0, 1.0, 2.0])
+    obs = jnp.zeros((3, model.n_species))
+    return C0, obs, t_obs
+
+
+def test_calibrate_forward_plus_stable_is_rejected(simple_model):
+    reactor = _batch_reactor(simple_model)
+    C0, obs, t_obs = _cal_args(simple_model)
+    with pytest.raises(ValueError, match="incompatible: the stable discrete adjoint"):
+        calibrate(
+            reactor,
+            C0,
+            obs,
+            t_obs,
+            [simple_model.parameters[0]],
+            diff=DifferentiationConfig(mode="forward", method="stable"),
+        )
+
+
+def test_calibrate_stable_adjoint_requires_batch_reactor(simple_model):
+    # A reactor exposing .model but no .conditions is not a batch reactor;
+    # the stable adjoint is implemented only for batch reactors.
+    class _NoConditions:
+        model = simple_model
+
+    C0, obs, t_obs = _cal_args(simple_model)
+    with pytest.raises(ValueError, match="gradient='stable_adjoint' is implemented for batch"):
+        calibrate(
+            _NoConditions(),
+            C0,
+            obs,
+            t_obs,
+            [simple_model.parameters[0]],
+            diff=DifferentiationConfig(mode="reverse", method="stable"),
+        )
+
+
+# ---------- CalibrationResult.predictive_band: degenerate posterior ----------
+
+
+def _minimal_result(model, posterior_cov):
+    name = model.parameters[0]
+    return CalibrationResult(
+        params=model.default_parameters(),
+        params_named={name: float(model.default_parameters()[model.param_index[name]])},
+        loss=0.0,
+        converged=True,
+        message="ok",
+        n_iter=0,
+        parameter_names=[name],
+        transforms=["none"],
+        posterior_cov=posterior_cov,
+    )
+
+
+def test_predictive_band_requires_laplace(simple_model):
+    result = _minimal_result(simple_model, posterior_cov=None)
+    reactor = _batch_reactor(simple_model)
+    with pytest.raises(ValueError, match="predictive_band requires a Laplace posterior"):
+        result.predictive_band(reactor, jnp.array([1.0, 0.0]), jnp.array([0.0, 1.0]))
+
+
+def test_predictive_band_rejects_degenerate_covariance(simple_model):
+    # A zero posterior covariance has no positive-variance directions; the
+    # guard fires before any solve is attempted.
+    result = _minimal_result(simple_model, posterior_cov=np.zeros((1, 1)))
+    reactor = _batch_reactor(simple_model)
+    with pytest.raises(ValueError, match="no positive-variance directions"):
+        result.predictive_band(reactor, jnp.array([1.0, 0.0]), jnp.array([0.0, 1.0]))

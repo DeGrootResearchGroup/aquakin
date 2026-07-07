@@ -181,3 +181,204 @@ def test_load_bsm1_influent_no_tempfile(asm1, profile, monkeypatch):
     series = load_bsm1_influent(profile, asm1)
     assert series.t.shape[0] > 1
     assert series.C.shape[1] == asm1.n_species
+
+
+# --------------------------------------------------------------------------- #
+# InfluentSeries.__post_init__ shape validation
+# --------------------------------------------------------------------------- #
+
+
+def test_influent_series_rejects_2d_t(asm1):
+    """A 2-D ``t`` array is rejected."""
+    from aquakin.plant.influent import InfluentSeries
+
+    t = jnp.zeros((2, 1))
+    Q = jnp.zeros(2)
+    C = jnp.zeros((2, asm1.n_species))
+    with pytest.raises(ValueError, match="t must be 1-D"):
+        InfluentSeries(t=t, Q=Q, C=C, model=asm1)
+
+
+def test_influent_series_rejects_mismatched_Q_shape(asm1):
+    """``Q`` whose shape differs from ``t`` is rejected."""
+    from aquakin.plant.influent import InfluentSeries
+
+    t = jnp.zeros(2)
+    Q = jnp.zeros(3)
+    C = jnp.zeros((2, asm1.n_species))
+    with pytest.raises(ValueError, match=r"Q shape .* does not match t shape"):
+        InfluentSeries(t=t, Q=Q, C=C, model=asm1)
+
+
+def test_influent_series_rejects_wrong_C_rows(asm1):
+    """A ``C`` whose row count differs from ``t`` (or is not 2-D) is rejected."""
+    from aquakin.plant.influent import InfluentSeries
+
+    t = jnp.zeros(2)
+    Q = jnp.zeros(2)
+    C = jnp.zeros((3, asm1.n_species))  # 3 rows vs 2 times
+    with pytest.raises(ValueError, match=r"C shape .* expected \(2, n_species\)"):
+        InfluentSeries(t=t, Q=Q, C=C, model=asm1)
+
+
+def test_influent_series_rejects_wrong_species_columns(asm1):
+    """A ``C`` with the wrong number of species columns is rejected."""
+    from aquakin.plant.influent import InfluentSeries
+
+    t = jnp.zeros(2)
+    Q = jnp.zeros(2)
+    C = jnp.zeros((2, asm1.n_species + 1))  # one column too many
+    with pytest.raises(ValueError, match="species columns but model has"):
+        InfluentSeries(t=t, Q=Q, C=C, model=asm1)
+
+
+def test_influent_series_rejects_mismatched_T_shape(asm1):
+    """A ``T`` whose shape differs from ``t`` is rejected."""
+    from aquakin.plant.influent import InfluentSeries
+
+    t = jnp.zeros(2)
+    Q = jnp.zeros(2)
+    C = jnp.zeros((2, asm1.n_species))
+    T = jnp.zeros(3)
+    with pytest.raises(ValueError, match=r"T shape .* does not match t shape"):
+        InfluentSeries(t=t, Q=Q, C=C, model=asm1, T=T)
+
+
+# --------------------------------------------------------------------------- #
+# _influent_from_text positional-parser validation
+# --------------------------------------------------------------------------- #
+
+
+def test_influent_from_text_rejects_wrong_field_count(asm1):
+    """A data row with the wrong number of fields is rejected."""
+    from aquakin.plant.influent import _BSM1_COLUMN_ORDER
+
+    header = ",".join(_BSM1_COLUMN_ORDER)
+    bad_row = ",".join(["0.0"] * (len(_BSM1_COLUMN_ORDER) - 1))  # one field short
+    text = header + "\n" + bad_row + "\n"
+    with pytest.raises(ValueError, match="fields but"):
+        _influent_from_text(text, asm1)
+
+
+def test_influent_from_text_rejects_non_numeric_field(asm1):
+    """A non-numeric field in a data row is rejected. The first row must parse
+    as data (a non-numeric first row is swallowed as a column-name header), so a
+    good row precedes the bad one."""
+    from aquakin.plant.influent import _BSM1_COLUMN_ORDER
+
+    header = ",".join(_BSM1_COLUMN_ORDER)
+    good = ",".join(["0.0"] * len(_BSM1_COLUMN_ORDER))
+    bad_vals = ["0.0"] * len(_BSM1_COLUMN_ORDER)
+    bad_vals[1] = "not_a_number"
+    text = header + "\n" + good + "\n" + ",".join(bad_vals) + "\n"
+    with pytest.raises(ValueError, match="non-numeric field"):
+        _influent_from_text(text, asm1)
+
+
+def test_influent_from_text_rejects_no_data_rows(asm1):
+    """Text with no data rows (only comments) is rejected."""
+    text = "# just a comment\n# and another\n"
+    with pytest.raises(ValueError, match="contained no data rows"):
+        _influent_from_text(text, asm1, source="<empty>")
+
+
+def test_influent_from_text_requires_Q_column(asm1):
+    """A ``column_order`` without a 'Q' column is rejected."""
+    order = [c for c in ["t", "SS", "SNH"] if c != "Q"]  # no Q
+    header = ",".join(order)
+    text = header + "\n" + ",".join(["0.0"] * len(order)) + "\n"
+    with pytest.raises(ValueError, match="column_order must contain 'Q'"):
+        _influent_from_text(text, asm1, column_order=order)
+
+
+def test_influent_from_text_requires_all_species_columns(asm1):
+    """A ``column_order`` missing a model species column is rejected."""
+    order = ["t", "Q", "SS"]  # missing most ASM1 species
+    header = ",".join(order)
+    text = header + "\n" + ",".join(["0.0"] * len(order)) + "\n"
+    with pytest.raises(ValueError, match="missing species column"):
+        _influent_from_text(text, asm1, column_order=order)
+
+
+# --------------------------------------------------------------------------- #
+# _influent_from_column_map (headered-table) validation
+# --------------------------------------------------------------------------- #
+
+
+def test_column_map_rejects_non_numeric_field(asm1):
+    """A non-numeric data field in a column_map-parsed table is rejected."""
+    text = "time,flow\n0.0,oops\n"
+    column_map = {"t": "time", "Q": "flow"}
+    with pytest.raises(ValueError, match="non-numeric field"):
+        _influent_from_text(text, asm1, column_map=column_map)
+
+
+def test_column_map_requires_header_and_data(asm1):
+    """A column_map table with a header but no data rows is rejected."""
+    text = "time,flow\n"  # header only, no data
+    column_map = {"t": "time", "Q": "flow"}
+    with pytest.raises(ValueError, match="header row and at least one data row"):
+        _influent_from_text(text, asm1, column_map=column_map)
+
+
+def test_column_map_requires_t_and_Q_roles(asm1):
+    """A column_map missing the required 't'/'Q' roles is rejected."""
+    text = "time,flow\n0.0,1.0\n"
+    column_map = {"t": "time"}  # no 'Q' role
+    with pytest.raises(ValueError, match="column_map must map the 'Q' role"):
+        _influent_from_text(text, asm1, column_map=column_map)
+
+
+def test_column_map_rejects_role_missing_from_header(asm1):
+    """A column_map role pointing at a header name not in the file is rejected."""
+    text = "time,flow\n0.0,1.0\n"
+    column_map = {"t": "time", "Q": "missing_col"}
+    with pytest.raises(ValueError, match="is not in the file header"):
+        _influent_from_text(text, asm1, column_map=column_map)
+
+
+# --------------------------------------------------------------------------- #
+# load_bsm1_influent / load_bsm2_influent profile + missing-file validation
+# --------------------------------------------------------------------------- #
+
+
+def test_load_bsm1_influent_rejects_bad_profile(asm1):
+    with pytest.raises(ValueError, match="profile must be 'dry', 'rain', or 'storm'"):
+        load_bsm1_influent("sunny", asm1)
+
+
+def test_load_bsm2_influent_rejects_bad_profile(asm1):
+    with pytest.raises(ValueError, match="profile must be 'dry', 'rain', or 'storm'"):
+        load_bsm2_influent("sunny", asm1)
+
+
+def test_load_bsm1_influent_missing_file(asm1, monkeypatch):
+    """A valid profile whose package-data file is absent raises FileNotFoundError."""
+    import aquakin.plant.influent as influent_mod
+
+    class _FakeResource:
+        def __truediv__(self, other):
+            return self
+
+        def is_file(self):
+            return False
+
+    monkeypatch.setattr(influent_mod, "files", lambda pkg: _FakeResource())
+    with pytest.raises(FileNotFoundError, match="BSM1 influent file"):
+        load_bsm1_influent("dry", asm1)
+
+
+def test_load_bsm2_influent_missing_file(asm1, monkeypatch):
+    """A valid profile whose package-data file is absent raises FileNotFoundError."""
+    import aquakin.plant.influent as influent_mod
+
+    class _FakeResource:
+        def __truediv__(self, other):
+            return self
+
+        def is_file(self):
+            return False
+
+    monkeypatch.setattr(influent_mod, "files", lambda pkg: _FakeResource())
+    with pytest.raises(FileNotFoundError, match="BSM2 influent file"):
+        load_bsm2_influent("dry", asm1)

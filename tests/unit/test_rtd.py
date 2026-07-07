@@ -97,6 +97,22 @@ def test_morrill_index_warns_only_once():
     assert len(truncation) == 1
 
 
+def test_non_1d_inputs_rejected():
+    # _ensure_1d rejects a 2-D t/C array before any analysis runs.
+    t = jnp.zeros((3, 2))
+    C = jnp.zeros((3, 2))
+    with pytest.raises(ValueError, match="must be 1-D"):
+        rtd.E_curve(t, C)
+
+
+def test_non_positive_integral_rejected():
+    # An all-zero tracer response integrates to 0, which E_curve cannot normalise.
+    t = jnp.linspace(0.0, 10.0, 11)
+    C = jnp.zeros_like(t)
+    with pytest.raises(ValueError, match="positive integral"):
+        rtd.E_curve(t, C)
+
+
 def test_percentile_time_full_washout_no_warning():
     """A fully washed-out response (tail at baseline) resolves percentiles with
     no truncation warning."""

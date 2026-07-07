@@ -79,3 +79,43 @@ def test_inconsistent_field_names_rejected_on_write(tmp_path):
 def test_missing_file():
     with pytest.raises(FileNotFoundError):
         read_tracks_csv("/no/such/file.csv")
+
+
+def test_empty_file_rejected(tmp_path):
+    p = tmp_path / "empty.csv"
+    p.write_text("")
+    with pytest.raises(ValueError, match="Empty track file"):
+        read_tracks_csv(p)
+
+
+def test_non_numeric_field_value_rejected(tmp_path):
+    p = tmp_path / "tracks.csv"
+    p.write_text("particle_id,t,pH\n0,0.0,notanumber\n")
+    with pytest.raises(ValueError, match="non-numeric value"):
+        read_tracks_csv(p)
+
+
+def test_non_finite_field_value_rejected(tmp_path):
+    p = tmp_path / "tracks.csv"
+    p.write_text("particle_id,t,pH\n0,0.0,inf\n")
+    with pytest.raises(ValueError, match="non-finite value"):
+        read_tracks_csv(p)
+
+
+def test_duplicate_t_rejected(tmp_path):
+    p = tmp_path / "tracks.csv"
+    p.write_text("particle_id,t,pH\n0,0.0,7.5\n0,0.0,7.6\n")
+    with pytest.raises(ValueError, match="duplicate t values"):
+        read_tracks_csv(p)
+
+
+def test_empty_tracks_mapping_rejected_on_write(tmp_path):
+    with pytest.raises(ValueError, match="empty tracks mapping"):
+        write_tracks_csv(tmp_path / "out.csv", {})
+
+
+def test_bridge_field_shape_mismatch_rejected():
+    from aquakin.transport.openfoam.bridge import OpenFOAMBridge
+
+    with pytest.raises(ValueError, match="expected"):
+        OpenFOAMBridge.from_cell_fields({"pH": jnp.asarray([7.0, 7.5])}, n_cells=3)
