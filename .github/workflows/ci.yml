@@ -51,6 +51,12 @@ concurrency:
 env:
   OMP_NUM_THREADS: "1"
   XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false"
+  # Memory watchdog (tests/mem_watchdog.py): every sharded test job inherits this,
+  # so when a shard's footprint grows past the runner's RAM the run fails LOUDLY --
+  # naming the test that tipped it over -- instead of a silent OOM runner reclaim
+  # (a generic cancellation with no failing test). The heavy/xheavy jobs override
+  # OMP_NUM_THREADS/XLA_FLAGS but inherit this key. See docs/ci.md.
+  AQUAKIN_TEST_MEM_WATCHDOG: "1"
 
 jobs:
   # ---- Lint gate: ruff (fast, always-on) --------------------------------------

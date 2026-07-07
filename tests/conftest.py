@@ -6,7 +6,31 @@ import pytest
 
 import aquakin
 
+from . import mem_watchdog
+
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# Fire the memory watchdog at most once per worker process, so an over-limit
+# shard reports a single clear failure at the crossing point rather than
+# flooding the log with one failure per remaining test.
+_watchdog_fired = False
+
+
+def pytest_runtest_teardown(item, nextitem):
+    """Fail loudly when a shard's free memory hits the floor (see mem_watchdog).
+
+    Runs after every test; a no-op unless ``AQUAKIN_TEST_MEM_WATCHDOG=1`` and
+    the runner is genuinely low on memory. Turns the otherwise-silent OOM
+    runner reclaim into a named failure.
+    """
+    global _watchdog_fired
+    if _watchdog_fired or not mem_watchdog.watchdog_enabled():
+        return
+    available = mem_watchdog.mem_available_mb()
+    floor = mem_watchdog.mem_floor_mb()
+    if mem_watchdog.watchdog_should_fire(available, floor):
+        _watchdog_fired = True
+        pytest.fail(mem_watchdog.watchdog_message(item.nodeid, available, floor), pytrace=False)
 
 
 @pytest.fixture

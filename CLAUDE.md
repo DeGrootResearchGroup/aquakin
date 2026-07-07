@@ -37,7 +37,7 @@ Checklist still governs).
 | `docs/public_api.md` | the full public API reference with worked usage |
 | `docs/package_structure.md` | the annotated package file tree |
 | `docs/plant_performance.md` | the dynamic-solve performance log (the stiffness-bound regime and its levers) |
-| `docs/ci.md` | the CI architecture (sharding, gates, heavy runner, labels) |
+| `docs/ci.md` | the CI architecture (sharding, gates, heavy runner, labels, the OOM memory watchdog) |
 | `docs/model_format.md`, `docs/adding_models.md`, `docs/index.md` | existing reference docs |
 
 ---
