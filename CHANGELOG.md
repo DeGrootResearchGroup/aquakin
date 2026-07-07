@@ -59,6 +59,14 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
   (`license = "MIT"` + `license-files`), single-sourced the package version from
   `aquakin.__version__`, and added `Documentation` and `Changelog` project URLs.
   (#494)
+- Harmonized the forward-sensitivity signatures with `solve`: `params` is now
+  **keyword-only** on `BatchReactor.solve_sensitivity`,
+  `PlugFlowReactor.solve_sensitivity`, `BiofilmReactor.solve_sensitivity`, and the
+  free `aquakin.forward_sensitivity`, matching the keyword-only `params` on every
+  reactor `solve`. A parameter vector passed positionally (e.g.
+  `reactor.solve_sensitivity(C0, params, t_span, ...)`) now raises `TypeError`
+  instead of silently landing in the `t_span` slot; pass it as
+  `params=...`. (#234)
 - Library progress output is now routed through the standard `logging` module
   instead of `print`, so callers can silence or redirect it. The `progress=`
   option of `plant.steady_state_dgsm` / `dynamic_dgsm` emits a `logging.INFO`

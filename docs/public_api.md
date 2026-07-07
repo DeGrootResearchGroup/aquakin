@@ -252,16 +252,18 @@ sens.ranked_params()
 # finite WITHOUT a dtmax cap (the cap-free alternative for stiff models; see
 # "Differentiating stiff models" above). Each reactor exposes solve_sensitivity:
 sol, S = reactor.solve_sensitivity(
-    C0, params, t_span, t_eval,
+    C0, t_span, t_eval,
+    params=params,                   # keyword-only, matching reactor.solve
     sens_params=["mu_h", "q_m"],     # names or int indices of the free params
     sens_rtol=None, sens_atol=None,  # default: rtol_S=rtol, atol_S=atol/|θ_k| (CVODES)
     param_scale=None,                # override the |θ_k| error-control scale
-    shared_factor=False,             # True (CVODES simultaneous corrector) not yet implemented
+    shared_factor=None,              # None auto-selects the CVODES simultaneous
+                                     # corrector for >1 param, dense for one
 )
 # sol : the usual Solution (uncapped primal); S : dC/dθ at the saved times,
 #       shape (n_t, n_species, n_sens_params). For a BiofilmReactor S is the
 #       BULK (measurable) sensitivity, aligned with sol.C.
-res = aquakin.forward_sensitivity(reactor, C0, params, sens_params=[...], t_span=..., t_eval=...)
+res = aquakin.forward_sensitivity(reactor, C0, params=params, sens_params=[...], t_span=..., t_eval=...)
 res.S_named("S_SO4")                 # (n_t, n_sens_params)
 res.dC_dparam("S_SO4", "mu_h")       # (n_t,)
 
