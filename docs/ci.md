@@ -151,6 +151,39 @@ nor concentrating it in a few files makes the whole suite fast.
     only for changes that cannot reach the slow/validation paths (docs, a new
     isolated unit, a fast-gated model add).
 
+**Memory watchdog (all sharded jobs).** Sharding bounds each process to ~1/N but
+does **not prevent** the OOM it mitigates — as heavy whole-plant / adjoint tests
+are added, a shard's accumulated XLA compilation cache + live JAX buffers can
+still grow past the runner's RAM, and the failure is *silent*: the runner is
+OOM-reclaimed mid-suite, surfacing as a generic `"the runner has received a
+shutdown signal" / "the operation was canceled"` cancellation with **no failing
+test** to point at (the class behind #337; it has bitten the fast gate — a new
+`test_sbr` slice OOM-reclaimed the runner at ~93% — and the slow/validation
+sets as they crossed the threshold). The watchdog
+([`tests/mem_watchdog.py`](../tests/mem_watchdog.py) + the
+`pytest_runtest_teardown` hook in [`tests/conftest.py`](../tests/conftest.py))
+turns that into a **named failure**: after every test it reads the system-wide
+`MemAvailable` (Linux `/proc/meminfo`) and, the moment it falls to a floor
+(`AQUAKIN_TEST_MEM_FLOOR_MB`, default 2048 MB), fails the finishing test loudly —
+naming the test, the xdist worker, and the process peak RSS — *before* the OS
+reclaim. It is enabled for **every** test job by the workflow-level
+`AQUAKIN_TEST_MEM_WATCHDOG: "1"` env (the `heavy`/`xheavy` jobs override
+`OMP_NUM_THREADS`/`XLA_FLAGS` but inherit this key), and fires **once per worker**
+so an over-limit shard reports a single clear crossing point, not a per-test
+flood. It reads the **system** `MemAvailable`, not per-process RSS, because the
+OOM condition is aggregate — under `-n auto` one worker can balloon while its
+siblings stay small and it is the *sum* that reclaims the runner — so the one
+signal catches every job (`-n auto` and `-n 1` alike) with no per-job cap tuning.
+It is a **symptom** guard, deliberately not a structural "plant-solve ⇒ must be
+`slow`" rule: the fast gate already runs ~80 legitimate plant solves (state sizes
+up to BSM1-scale 65–167), so no size / call-site rule separates cheap from
+heavy — only actual memory pressure does. When it fires, the fix is to mark the
+shard's heaviest whole-plant / adjoint solve `@pytest.mark.slow` (or `heavy`), or
+raise the shard count. Off by default locally (the env is unset), and inert on
+non-Linux (no `/proc/meminfo` → the reading is `None` → no-op), so a local run is
+never surprised; opt in with `AQUAKIN_TEST_MEM_WATCHDOG=1` to reproduce a CI
+memory failure.
+
 **Branch protection:** the required status check must be the **`fast gate`**
 aggregator job — **not** the per-shard `fast tests (py3.x shard i/4)` jobs (their
 names/count change when the shard count is tuned) and **not** `slow`/`validation`
