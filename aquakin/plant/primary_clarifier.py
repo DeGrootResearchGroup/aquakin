@@ -121,6 +121,16 @@ class PrimaryClarifier(FlowParameterized):
         params: jnp.ndarray,
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
+        """Split the feed into a clarified effluent and a settled sludge stream.
+
+        Returns
+        -------
+        dict of str to Stream
+            The two outlet streams keyed by port name: ``effluent_port`` (the
+            clarified overflow) and ``sludge_port`` (the underflow at flow
+            ``f_PS·Q_in``). Solubles pass through; particulates lose the removal
+            fraction to the sludge.
+        """
         Q_in = jnp.zeros(())
         for name in self.input_port_names:
             Q_in = Q_in + inputs[name].Q

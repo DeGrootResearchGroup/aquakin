@@ -239,9 +239,10 @@ Key types:
     over multi-day runs (the cached `M` is formed once outside the integration
     loop vs per-call inside), within the solver tolerance, and the validated
     steady states are preserved. A one-time concrete guard
-    (`_check_recycle_map_constant`, set per instance) compares each map at two
-    states and **falls back to per-RHS probing** for any topology whose `M` is
-    genuinely state-coupled — so the optimization is safe for arbitrary plants.
+    (`_check_recycle_map_constant`, set per instance) compares each map at three
+    materially-different states and **falls back to per-RHS probing** for any
+    topology whose `M` is genuinely state-coupled — so the optimization is safe
+    for arbitrary plants.
     The cached map is built once from `params` by `_maybe_recycle_map` (the
     shared helper) and reused by **four** paths: the forward `jax_adjoint` solve,
     the located-event segmented solve (`events=`, reused across every segment),
@@ -300,7 +301,7 @@ Key types:
     `M`), threaded into every RHS as `flow_map=` by `_maybe_flow_map`; the flow
     resolution then computes only `b` (one pass) + the cached `(I−A)` solve,
     skipping the `n` column probes. State-invariance is detected once by
-    `_check_flow_map_constant` (compares `A` at two states; falls back to per-RHS
+    `_check_flow_map_constant` (compares `A` at three states; falls back to per-RHS
     probing for a state-coupled split like a level-gated storage bypass), wired
     into the same four paths as `M` (`make_rhs` forward, events, `outputs_at`,
     `_cached_streams`) plus the `forward_fast`, steady-state-PTC, and

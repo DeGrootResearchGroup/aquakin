@@ -159,11 +159,12 @@ automatically: `k1` in reaction `O3_Br_direct` becomes `O3_Br_direct.k1`.
 Carries index maps used during AST compilation:
 
 ```python
-@dataclass
+@dataclass(frozen=True)
 class CompileContext:
     species_index: dict[str, int]
     param_index: dict[str, int]      # namespaced keys -> flat vector indices
-    condition_fields: set[str]       # valid condition field names
+    condition_fields: frozenset[str] # valid condition field names
+    reaction_name: str = ""          # owner reaction, for param namespacing
 ```
 
 ---

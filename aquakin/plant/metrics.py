@@ -299,6 +299,11 @@ def aeration_energy(
     volumes : (n_aerated_tanks,) liquid volume of each aerated tank
     saturation : float
         Dissolved-oxygen saturation concentration (mg/L).
+
+    Returns
+    -------
+    float
+        Aeration energy in kWh/d, time-averaged over ``t``.
     """
     kla_history = jnp.asarray(kla_history)
     volumes = jnp.asarray(volumes)
@@ -315,6 +320,11 @@ def pumping_energy(
     """Pumping energy (kWh/d) per Copp 2002 eq.
 
     PE = (1 / T) × ∫ (0.004 × Q_internal + 0.008 × Q_ras + 0.05 × Q_was) dt
+
+    Returns
+    -------
+    float
+        Pumping energy in kWh/d, time-averaged over ``t``.
     """
     integrand = 0.004 * Q_internal + 0.008 * Q_ras + 0.05 * Q_was
     return float(_time_average(integrand, t))
@@ -365,6 +375,11 @@ def pumping_energy_bsm2(
     trajectory; ``factors`` maps the same keys to per-m³ energy factors (default
     :data:`_BSM2_PUMP_FACTORS`). Keys present in ``flows`` but not ``factors``
     (or vice versa) are ignored.
+
+    Returns
+    -------
+    float
+        Pumping energy in kWh/d, time-averaged over ``t``.
     """
     factors = _BSM2_PUMP_FACTORS if factors is None else factors
     integrand = jnp.zeros_like(jnp.asarray(t))
@@ -403,6 +418,11 @@ def mixing_energy(
     volumes : (n_reactors,) reactor liquid volumes.
     digester_volume : float
         Anaerobic-digester liquid volume.
+
+    Returns
+    -------
+    float
+        Mixing energy in kWh/d.
     """
     kla_history = jnp.asarray(kla_history)
     volumes = jnp.asarray(volumes)
@@ -423,6 +443,11 @@ def carbon_mass(
 
     ``= (1/T) × ∫ Q_carbon(t) × carbon_conc dt × 1e-3`` (the dose flow times the
     source COD concentration, g→kg).
+
+    Returns
+    -------
+    float
+        External-carbon mass dose in kg COD/d, time-averaged over ``t``.
     """
     integrand = jnp.asarray(Q_carbon) * float(carbon_conc) * 1e-3
     return float(_time_average(integrand, t))
@@ -452,6 +477,11 @@ def heating_energy(
     ----------
     Q_feed : (n_t,) digester feed flow (m³/d).
     T_feed_C : (n_t,) or scalar feed temperature (°C).
+
+    Returns
+    -------
+    float
+        Digester sludge-heating energy in kWh/d, time-averaged over ``t``.
     """
     heatpower = (
         (float(T_target_C) - jnp.asarray(T_feed_C)) * jnp.asarray(Q_feed) * rho * cp / 86400.0

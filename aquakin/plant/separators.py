@@ -127,6 +127,16 @@ class IdealThickener(StatelessUnit):
         params: jnp.ndarray,
         signals: "dict | None" = None,
     ) -> dict[str, Stream]:
+        """Thicken the feed to the target underflow TSS in one instantaneous step.
+
+        Returns
+        -------
+        dict of str to Stream
+            The two outlet streams keyed by port name: ``underflow_port`` (the
+            thickened stream at the target TSS) and ``overflow_port`` (the
+            thinned remainder). When the feed is already at/above the target the
+            overflow is empty and the whole feed leaves via the underflow.
+        """
         s_in = inputs[self.input_port]
         Q_in = s_in.Q
         C = s_in.C
