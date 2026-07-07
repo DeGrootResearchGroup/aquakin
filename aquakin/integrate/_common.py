@@ -432,6 +432,30 @@ def atol_cache_key(atol):
     return (tuple(a.shape), tuple(float(x) for x in np.asarray(a).reshape(-1)))
 
 
+def _assemble_settings_key(rtol, atol_key, adjoint, dtmax, max_steps, order, factormax, solver):
+    """Assemble the solver-settings cache-key tuple from an already-materialised
+    ``atol_key`` (from :func:`atol_cache_key`).
+
+    The **single** field-ordering of the settings key, shared by
+    :func:`settings_cache_key` (the plant path, raw ``atol``) and
+    :func:`reactor_settings_key` (the reactor path, memoised ``atol`` key). A new
+    compile-affecting setting is added here **once**, so the two entry points
+    cannot drift out of lockstep -- a drift would be a silent wrong-result cache
+    hit. ``adjoint`` is keyed by identity, ``solver`` by class name; ``None`` for
+    ``order`` / ``factormax`` / ``solver`` keeps the historic key shape.
+    """
+    return (
+        float(rtol),
+        atol_key,
+        None if adjoint is None else id(adjoint),
+        None if dtmax is None else float(dtmax),
+        int(max_steps),
+        None if order is None else int(order),
+        None if factormax is None else float(factormax),
+        None if solver is None else type(solver).__name__,
+    )
+
+
 def settings_cache_key(
     rtol, atol, adjoint, dtmax, max_steps, *, order=None, factormax=None, solver=None
 ):
@@ -444,15 +468,8 @@ def settings_cache_key(
     solve) are keyed in when supplied -- ``solver`` by class name, matching the
     plant path. ``None`` for any of them keeps the historic key shape.
     """
-    return (
-        float(rtol),
-        atol_cache_key(atol),
-        None if adjoint is None else id(adjoint),
-        None if dtmax is None else float(dtmax),
-        int(max_steps),
-        None if order is None else int(order),
-        None if factormax is None else float(factormax),
-        None if solver is None else type(solver).__name__,
+    return _assemble_settings_key(
+        rtol, atol_cache_key(atol), adjoint, dtmax, max_steps, order, factormax, solver
     )
 
 
@@ -502,16 +519,15 @@ def reactor_settings_key(reactor):
         except jax.errors.TracerArrayConversionError:
             return None
         reactor._atol_key = atol_key
-    solver = getattr(reactor, "solver", None)
-    return (
-        float(reactor.rtol),
+    return _assemble_settings_key(
+        reactor.rtol,
         atol_key,
-        None if reactor.adjoint is None else id(reactor.adjoint),
-        None if reactor.dtmax is None else float(reactor.dtmax),
-        int(reactor.max_steps),
-        None if getattr(reactor, "order", None) is None else int(reactor.order),
-        (None if getattr(reactor, "factormax", None) is None else float(reactor.factormax)),
-        None if solver is None else type(solver).__name__,
+        reactor.adjoint,
+        reactor.dtmax,
+        reactor.max_steps,
+        getattr(reactor, "order", None),
+        getattr(reactor, "factormax", None),
+        getattr(reactor, "solver", None),
     )
 
 
