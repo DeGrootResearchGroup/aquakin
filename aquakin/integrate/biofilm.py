@@ -63,6 +63,7 @@ from aquakin.integrate._common import (
     _run_diffeqsolve,
     friendly_solve_errors,
     init_solver_settings,
+    require_increasing_t_span,
     resolve_layered_atol,
     to_native_time,
     validate_t_eval,
@@ -602,9 +603,7 @@ class BiofilmReactor(GradientCheckMixin):
         t_span, t_eval, _time_factor = to_native_time(
             self.model.time_unit, time_unit, t_span, t_eval
         )
-        t0, t1 = float(t_span[0]), float(t_span[1])
-        if not (t1 > t0):
-            raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
+        t0, t1 = require_increasing_t_span(t_span)
         active = conditions if conditions is not None else self.conditions
         condition_arrays = active.fields
 
@@ -693,9 +692,7 @@ class BiofilmReactor(GradientCheckMixin):
         y0 = self._coerce_y0(C0)
         n = self.model.n_species
         n_comp = self.n_layers + 1
-        t0, t1 = float(t_span[0]), float(t_span[1])
-        if not (t1 > t0):
-            raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
+        t0, t1 = require_increasing_t_span(t_span)
 
         free_idx = resolve_sens_indices(self.model, sens_params)
         if shared_factor is None:

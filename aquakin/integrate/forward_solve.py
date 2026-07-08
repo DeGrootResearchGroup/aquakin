@@ -97,6 +97,11 @@ _BE = (_A41 - _A31, _A42 - _A32, _A43 - _G, _G)  # embedded-error weights
 
 _MAXNEWT = 12
 _KAPPA = 1e-1  # simplified-Newton convergence tolerance (Hairer eta test)
+_ETA_RATE_FLOOR = 1e-3  # floor on (1 - rate) so the Hairer convergence-rate
+#                         estimate eta stays finite as the Newton rate -> 1
+_SAVE_TIME_RTOL = 1e-12  # relative slack when testing whether a save time falls
+#                          within the just-accepted step
+_H_STUCK = 1e-13  # step size below which the solve is declared stuck (no progress)
 
 
 def _hermite(y0_, y1_, f0_, f1_, h, theta):
@@ -187,7 +192,7 @@ def forward_solve(
             k = k - dk
             d = wrms(dk, y)
             rate = jnp.where(it >= 1, d / (dprev + 1e-30), rate)
-            eta = rate / jnp.maximum(1.0 - rate, 1e-3)
+            eta = rate / jnp.maximum(1.0 - rate, _ETA_RATE_FLOOR)
             conv = (it >= 1) & (rate < 1.0) & (eta * d < _KAPPA)
             div = ((it >= 1) & (rate >= 1.0)) | (~jnp.isfinite(d))
             return k, d, it + 1, rate, conv, div
@@ -222,7 +227,7 @@ def forward_solve(
     ys0 = jnp.zeros((n_save, n), dtype=y0.dtype)
 
     def _tol(s):
-        return 1e-12 * jnp.maximum(1.0, jnp.abs(s))
+        return _SAVE_TIME_RTOL * jnp.maximum(1.0, jnp.abs(s))
 
     # carry: t, y, h_ctrl (unclipped proposal), save_idx, ys, n_steps,
     #        en_prev (last accepted error, for the PI term), dead
@@ -285,7 +290,7 @@ def forward_solve(
                 return ys_.at[si_].set(ysave), si_ + 1
 
             ys_new, sidx_new = jax.lax.while_loop(rec_cond, rec_body, (ys, sidx))
-            stuck = h_ctrl_new < 1e-13
+            stuck = h_ctrl_new < _H_STUCK
             return (
                 t_new,
                 y_new,

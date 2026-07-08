@@ -23,7 +23,9 @@ from aquakin.integrate._common import (
     friendly_solve_errors,
     init_solver_settings,
     make_chemistry_rhs,
+    prepare_sensitivity,
     reactor_settings_key,
+    require_increasing_t_span,
     resolve_state_atol,
     solve_chemistry,
     to_native_time,
@@ -228,9 +230,7 @@ class BatchReactor(GradientCheckMixin):
                 stacklevel=2,
             )
 
-        t0, t1 = float(t_span[0]), float(t_span[1])
-        if not (t1 > t0):
-            raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
+        t0, t1 = require_increasing_t_span(t_span)
         active_conditions = conditions if conditions is not None else self.conditions
         condition_arrays = active_conditions.fields
 
@@ -359,21 +359,12 @@ class BatchReactor(GradientCheckMixin):
             Sensitivity ``dC/dtheta`` at the saved times, shape
             ``(n_t, n_species, n_sens_params)``.
         """
-        from aquakin.integrate.forward_sensitivity import (
-            resolve_sens_indices,
-            run_forward_sensitivity,
+        from aquakin.integrate.forward_sensitivity import run_forward_sensitivity
+
+        C0, params, free_idx, shared_factor = prepare_sensitivity(
+            self.model, C0, params, sens_params, shared_factor
         )
-
-        C0 = jnp.asarray(C0)
-        params = jnp.asarray(params)
-        validate_C0_params(self.model, C0, params)
-        t0, t1 = float(t_span[0]), float(t_span[1])
-        if not (t1 > t0):
-            raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
-
-        free_idx = resolve_sens_indices(self.model, sens_params)
-        if shared_factor is None:
-            shared_factor = free_idx.shape[0] > 1
+        t0, t1 = require_increasing_t_span(t_span)
         active = conditions if conditions is not None else self.conditions
         cond = active.fields
         model = self.model
