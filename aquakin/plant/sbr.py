@@ -273,7 +273,10 @@ class SBRUnit(CouplingAware):
         self_pat = np.zeros((m, m), dtype=bool)
         for p, start in enumerate(self._phase_starts):
             t_p = jnp.asarray(self.cycle_origin + start + 0.5 * float(self.phases[p].duration))
-            jac = lambda s, _t=t_p: jax.jacfwd(lambda x: self.rhs(_t, x, inlet, params))(s)
+
+            def jac(s, _t=t_p):
+                return jax.jacfwd(lambda x: self.rhs(_t, x, inlet, params))(s)
+
             self_pat |= ad_union(jac, state0)
         self_pat[:n, :n] |= structural_sparsity_pattern(net)  # saturated kinetics
         np.fill_diagonal(self_pat, True)

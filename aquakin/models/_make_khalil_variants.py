@@ -172,7 +172,8 @@ def _halforder_extends_doc(base_name):
 
 
 def build(base_name, variant_keys, standalone_keys=()):
-    base = yaml.safe_load(open(os.path.join(HERE, base_name + ".yaml")))
+    with open(os.path.join(HERE, base_name + ".yaml")) as f:
+        base = yaml.safe_load(f)
     # single-change variants, a combined variant applying all of them, and any
     # standalone variants (emitted on their own, not folded into 'combined')
     for key in list(variant_keys) + ["combined"] + list(standalone_keys):

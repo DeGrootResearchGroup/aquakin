@@ -39,7 +39,7 @@ _EQI_WEIGHTS = {
     "COD": 1.0,
     "BOD": 2.0,
     "TKN": 30.0,  # total Kjeldahl nitrogen
-    "NO": 10.0,  # nitrate-nitrogen
+    "SNO": 10.0,  # nitrate-nitrogen (the SNO species column)
 }
 
 
@@ -296,7 +296,7 @@ def effluent_quality_index(
         + _EQI_WEIGHTS["COD"] * COD_t
         + _EQI_WEIGHTS["BOD"] * BOD_t
         + _EQI_WEIGHTS["TKN"] * TKN_t
-        + _EQI_WEIGHTS["NO"] * SNO_t
+        + _EQI_WEIGHTS["SNO"] * SNO_t
     )
     return float(time_average(integrand, t) * 1e-3)
 

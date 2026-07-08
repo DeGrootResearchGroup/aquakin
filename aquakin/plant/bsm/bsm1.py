@@ -53,8 +53,6 @@ def build_bsm1(
     *,
     Q_avg: float = BSM1_Q_AVG,
     wastage_flow: float = BSM1_WASTAGE_FLOW,
-    closed_loop_do: bool = False,
-    do_setpoint_tank5: float = 2.0,
     conditions: dict[str, float] | None = None,
     use_takacs: bool = False,
     settler_soluble_holdup: bool = True,
@@ -74,12 +72,6 @@ def build_bsm1(
         ``Qr + Qw`` and the wastage is the free remainder after the RAS split.
         Default 385 per Copp 2002; vary it to hit a target solids retention time
         (see ``examples/bsm1_target_srt.py``).
-    closed_loop_do : bool
-        If True, attach a PI controller on tank 5 DO that adjusts kLa₅
-        to maintain ``do_setpoint_tank5``. Open-loop default uses the
-        constant kLa values from Alex 2008 Table 1.7.
-    do_setpoint_tank5 : float
-        DO setpoint when ``closed_loop_do=True``. Ignored otherwise.
     conditions : dict[str, float], optional
         Override the per-tank conditions vector (e.g. set ``T=288.15`` for
         winter). Defaults to model's declared defaults.
@@ -119,11 +111,6 @@ def build_bsm1(
     concentration at zero flow on the first RHS pass. Steady-state
     behaviour is independent of this seed.
     """
-    if closed_loop_do:
-        raise NotImplementedError(
-            "Closed-loop DO control will be added in a follow-up; set closed_loop_do=False for now."
-        )
-
     if model is None:
         import aquakin
 
