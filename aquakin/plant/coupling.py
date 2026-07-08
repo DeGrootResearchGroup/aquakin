@@ -1,4 +1,4 @@
-"""Structural coupling contract for plant units (issue #388).
+"""Structural coupling contract for plant units.
 
 The plant's colored-Jacobian sparsity pattern must include every coupling the
 RHS *can* express, for any influent -- otherwise a stiff coupling that switches

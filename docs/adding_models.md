@@ -2,8 +2,8 @@
 
 Built-in models ship as YAML files under `aquakin/models/`. Adding one:
 
-1. Author the YAML file. See [`model_format.md`](model_format.md) for the
-   schema and [`aquakin/models/ozone_bromate.yaml`](../aquakin/models/ozone_bromate.yaml)
+1. Author the YAML file. See the [Model file format](model_format.md) for the
+   schema and [`aquakin/models/ozone_bromate.yaml`](https://github.com/DeGrootResearchGroup/aquakin/blob/main/aquakin/models/ozone_bromate.yaml)
    for a worked example.
 2. Verify it loads:
    ```python
@@ -15,7 +15,7 @@ Built-in models ship as YAML files under `aquakin/models/`. Adding one:
    (species count, stoichiometry of key reactions).
 4. If experimental trajectories are available, add a validation test under
    `tests/validation/` decorated with `@pytest.mark.validation`.
-5. Update the README to list the new model.
+5. List the new model in the README and the [Model catalog](model_catalog.md).
 
 ## Authoring tips
 

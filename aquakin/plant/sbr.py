@@ -239,7 +239,7 @@ class SBRUnit(CouplingAware):
 
     # ----- structural coupling (issue #388) ------------------------------
     def coupling_pattern(self):
-        """Structural Jacobian sparsity (issue #388), over phases.
+        """Structural Jacobian sparsity, over phases.
 
         State is ``[C (n_species), V, <settling-model state>]``. The within-phase
         RHS is smooth, but the active phase is a constant per phase (it switches at

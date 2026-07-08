@@ -96,4 +96,9 @@ functions integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
   single-sourced version, and a `CITATION.cff` so the package can be cited (and
   GitHub shows a "Cite this repository" button).
 
+- **Documentation.** A Sphinx site on [Read the Docs](https://aquakin.readthedocs.io)
+  with a task-oriented guide (getting started, reactors, plant-wide simulation,
+  sensitivity & calibration), the YAML model-authoring reference, a catalog of
+  every shipped model, and an API reference generated from the public surface.
+
 [Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/commits/main

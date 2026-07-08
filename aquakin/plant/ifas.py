@@ -262,7 +262,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         )
 
     def coupling_pattern(self):
-        """Structural Jacobian sparsity (issue #388).
+        """Structural Jacobian sparsity.
 
         State is the flat ``(n_comp * n_species,)`` profile (bulk row + biofilm
         layers). Two structures feed the ``self`` block: the soluble diffusion

@@ -293,7 +293,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         return [self.overflow_port, self.underflow_port]
 
     def coupling_pattern(self):
-        """Structural Jacobian sparsity (issue #388), AD-derived.
+        """Structural Jacobian sparsity, AD-derived.
 
         The Takacs settling velocity ``v_s(X)`` and the feed flux-split are
         nonlinear, so the settler's couplings switch regime with the solids load

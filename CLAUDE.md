@@ -32,13 +32,23 @@ Checklist still governs).
 
 | Doc | Contents |
 |---|---|
-| `docs/model_catalog.md` | the full per-model catalog (every shipped model, provenance, documented corrections) |
 | `docs/khalil_reproduction_log.md` | the JRN-055 Khalil model-improvement sequence |
-| `docs/public_api.md` | the full public API reference with worked usage |
 | `docs/package_structure.md` | the annotated package file tree |
 | `docs/plant_performance.md` | the dynamic-solve performance log (the stiffness-bound regime and its levers) |
 | `docs/ci.md` | the CI architecture (sharding, gates, heavy runner, labels, the OOM memory watchdog) |
-| `docs/model_format.md`, `docs/adding_models.md`, `docs/index.md` | existing reference docs |
+
+**Published documentation site** (Sphinx/MyST → Read the Docs; built from
+`docs/conf.py`, gated `-W` in CI). These are **user-facing** — keep dev-internal
+detail (bug history, issue numbers, SUMO spreadsheets, test/script paths) out of
+them:
+
+| Page | Contents |
+|---|---|
+| `docs/index.md` | landing page + toctree (Guide / Authoring / Reference) |
+| `docs/getting_started.md`, `docs/reactors.md`, `docs/plants.md`, `docs/sensitivity_and_calibration.md` | the task-oriented user guide |
+| `docs/model_format.md`, `docs/adding_models.md` | YAML model-authoring reference |
+| `docs/model_catalog.md` | user-facing catalog of every shipped model (what it is, provenance, size, how to load) |
+| `docs/public_api.md` | task-grouped map of the public API, linking into the generated `api.md` |
 
 ---
 
@@ -50,9 +60,10 @@ configurable kinetics engine that can be coupled to any flow solver.
 
 Both **chemistry** (ozonation, advanced oxidation, chlorine decay, ...) and
 **biology** (activated sludge models, anaerobic digestion, ...) are in scope.
-> The full per-model catalog (what each shipped model is, its provenance,
-> and the documented corrections) is in **`docs/model_catalog.md`**; the
-> Khalil model-improvement log is in **`docs/khalil_reproduction_log.md`**.
+> The user-facing per-model catalog (what each shipped model is, its provenance,
+> size, and how to load it) is the published **`docs/model_catalog.md`**; the
+> dev-internal model-improvement history (documented corrections) lives in
+> **`docs/khalil_reproduction_log.md`** and the git log, not the published catalog.
 
 ---
 
