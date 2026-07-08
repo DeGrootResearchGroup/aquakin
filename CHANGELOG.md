@@ -32,6 +32,17 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
 
 ### Added
 
+- Unified public export surface. Each domain subpackage now aggregates its
+  *complete* public API into one namespace — `aquakin.utils` gained the
+  conservation / composition / unit-check helpers (`check_conservation`,
+  `check_nitrogen`, `composition_table`, `canonical_content`, `parse_units`,
+  `check_model_units`, `UnitWarning`) alongside `to_latex` and the RTD curves,
+  and `aquakin.integrate` now re-exports the full set of reactors, solutions,
+  sensitivity/adjoint, event, design, Monte-Carlo and scenario entry points
+  (previously only a partial subset was importable as `aquakin.integrate.*`).
+  The flat top-level `aquakin` namespace remains the curated common subset, and
+  `aquakin.check_nitrogen` now joins its peer `aquakin.check_conservation`
+  there. (#477)
 - Named `runtime_checkable` Protocols for the optional plant-unit capability
   hooks (`SignalProducer`, `PHOperating`, `LiquidVolumeUnit`,
   `ComponentInventoryUnit`, `CycleEventSource`, `TemperatureSettable` in
