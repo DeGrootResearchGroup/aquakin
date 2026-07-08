@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence
 
 import diffrax
 import jax
@@ -64,7 +64,7 @@ class BatchSolution(_HasNamedSpecies, PlottableSolutionMixin, ExportableSolution
     t: jnp.ndarray
     C: jnp.ndarray
     model: CompiledModel
-    events_log: Optional[list] = None
+    events_log: list | None = None
 
 
 class BatchReactor(GradientCheckMixin):
@@ -147,13 +147,13 @@ class BatchReactor(GradientCheckMixin):
     def solve(
         self,
         C0: jnp.ndarray,
-        t_span: tuple[float, float] = None,
-        t_eval: Optional[jnp.ndarray] = None,
+        t_span: tuple[float, float],
+        t_eval: jnp.ndarray | None = None,
         *,
-        params: Optional[jnp.ndarray] = None,
-        conditions: Optional[SpatialConditions] = None,
-        time_unit: Optional[str] = None,
-        events: Optional[Sequence[Event]] = None,
+        params: jnp.ndarray | None = None,
+        conditions: SpatialConditions | None = None,
+        time_unit: str | None = None,
+        events: Sequence[Event] | None = None,
     ) -> BatchSolution:
         """
         Integrate the reaction model over a time span.
@@ -314,16 +314,16 @@ class BatchReactor(GradientCheckMixin):
         self,
         C0: jnp.ndarray,
         t_span: tuple[float, float],
-        t_eval: Optional[jnp.ndarray] = None,
+        t_eval: jnp.ndarray | None = None,
         *,
         params: jnp.ndarray,
         sens_params,
-        conditions: Optional[SpatialConditions] = None,
-        sens_rtol: Optional[float] = None,
+        conditions: SpatialConditions | None = None,
+        sens_rtol: float | None = None,
         sens_atol=None,
         param_scale=None,
-        shared_factor: Optional[bool] = None,
-    ) -> tuple["BatchSolution", jnp.ndarray]:
+        shared_factor: bool | None = None,
+    ) -> tuple[BatchSolution, jnp.ndarray]:
         """Solve and return the forward sensitivity ``dC/dtheta`` alongside ``C``.
 
         Integrates the augmented ``[C; S]`` system (state plus sensitivity) with

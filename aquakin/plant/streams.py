@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
@@ -60,19 +61,19 @@ class Stream:
 
     Q: jnp.ndarray
     C: jnp.ndarray
-    model: "CompiledModel"
-    scalars: "Mapping[str, jnp.ndarray]" = field(default_factory=dict)
+    model: CompiledModel
+    scalars: Mapping[str, jnp.ndarray] = field(default_factory=dict)
 
     def mass_flow(self) -> jnp.ndarray:
         """Per-species mass flow rate ``Q * C``, shape ``(n_species,)``."""
         return self.Q * self.C
 
-    def with_C(self, C: jnp.ndarray) -> "Stream":
+    def with_C(self, C: jnp.ndarray) -> Stream:
         """Return a new stream with a new ``C`` vector, everything else (including
         the side-channel ``scalars``) preserved."""
         return replace(self, C=C)
 
-    def with_Q(self, Q: jnp.ndarray) -> "Stream":
+    def with_Q(self, Q: jnp.ndarray) -> Stream:
         """Return a new stream with a new flow rate, everything else (including the
         side-channel ``scalars``) preserved."""
         return replace(self, Q=Q)
@@ -95,7 +96,7 @@ def make_scalars(**values) -> dict:
 _FIRST_CLASS_SCALARS = ("T", "org")
 
 
-def mixed_scalars(inputs: "dict[str, Stream]", names, keys=_FIRST_CLASS_SCALARS) -> dict:
+def mixed_scalars(inputs: dict[str, Stream], names, keys=_FIRST_CLASS_SCALARS) -> dict:
     """Flow-weighted outlet value for each side-channel scalar a unit's inlets carry.
 
     The single shared rule every multi-inlet unit (mixer, CSTR, clarifier,
@@ -143,7 +144,7 @@ def mixed_scalars(inputs: "dict[str, Stream]", names, keys=_FIRST_CLASS_SCALARS)
     return out
 
 
-def _flow_weighted_scalar(carriers) -> "jnp.ndarray":
+def _flow_weighted_scalar(carriers) -> jnp.ndarray:
     """Flow-weighted mean of a per-stream scalar over the streams that carry it.
 
     ``carriers`` is a list of ``(Q, value)``. Divides the flow-weighted sum by the
@@ -160,7 +161,7 @@ def _flow_weighted_scalar(carriers) -> "jnp.ndarray":
     return jnp.where(Q_total > EPS_Q, weighted / (Q_total + EPS_Q), mean)
 
 
-def total_flow(flows) -> "jnp.ndarray":
+def total_flow(flows) -> jnp.ndarray:
     """Total flow ``Σ Q`` over an iterable of per-port flows.
 
     ``flows`` is any iterable of scalar flows -- the callers pass a generator of
@@ -175,7 +176,7 @@ def total_flow(flows) -> "jnp.ndarray":
     return total
 
 
-def mixed_feed(inputs: "dict[str, Stream]", names) -> "tuple[jnp.ndarray, jnp.ndarray]":
+def mixed_feed(inputs: dict[str, Stream], names) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(Q_total, C_in)`` for a Q-weighted multi-inlet feed.
 
     The total inflow ``Σ Q`` and the flow-weighted inlet concentration
@@ -211,13 +212,13 @@ def mixed_feed(inputs: "dict[str, Stream]", names) -> "tuple[jnp.ndarray, jnp.nd
 
 
 def split_by_capture(
-    C_in: "jnp.ndarray",
-    part_mask: "jnp.ndarray",
-    capture_frac: "jnp.ndarray",
-    Q_in: "jnp.ndarray",
-    Q_under: "jnp.ndarray",
-    Q_over: "jnp.ndarray",
-) -> "tuple[jnp.ndarray, jnp.ndarray]":
+    C_in: jnp.ndarray,
+    part_mask: jnp.ndarray,
+    capture_frac: jnp.ndarray,
+    Q_in: jnp.ndarray,
+    Q_under: jnp.ndarray,
+    Q_over: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Mass-conserving capture partition of a feed into underflow + overflow.
 
     A fraction ``capture_frac`` of each *particulate* species' inflowing mass
@@ -271,8 +272,8 @@ class StreamSeries(_HasNamedSpecies, PlottableSolutionMixin):
     t: jnp.ndarray
     Q: jnp.ndarray
     C: jnp.ndarray
-    model: "CompiledModel"
-    org: "jnp.ndarray | None" = None
+    model: CompiledModel
+    org: jnp.ndarray | None = None
 
     # C_named / C_named_many / final_named / .final come from _HasNamedSpecies
     # (shared with the reactor solutions), keyed off .C and .model.

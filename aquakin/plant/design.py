@@ -24,7 +24,7 @@ sludge models.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -85,8 +85,8 @@ class ActivatedSludgeSizing:
     volume: float
     wastage_flow: float
     tank_volumes: tuple = ()
-    internal_recycle_flow: Optional[float] = None
-    ras_flow: Optional[float] = None
+    internal_recycle_flow: float | None = None
+    ras_flow: float | None = None
     wastage_from: str = "mixed_liquor"
     thickening_ratio: float = 1.0
 
@@ -116,14 +116,14 @@ def size_activated_sludge(
     *,
     SRT: float,
     Q: float,
-    HRT: Optional[float] = None,
-    HRT_h: Optional[float] = None,
+    HRT: float | None = None,
+    HRT_h: float | None = None,
     n_tanks: int = 1,
-    volume_fractions: Optional[list] = None,
+    volume_fractions: list | None = None,
     wastage_from: str = "mixed_liquor",
     thickening_ratio: float = 1.0,
-    internal_recycle_ratio: Optional[float] = None,
-    ras_ratio: Optional[float] = None,
+    internal_recycle_ratio: float | None = None,
+    ras_ratio: float | None = None,
 ) -> ActivatedSludgeSizing:
     """Size an activated-sludge basin from SRT / HRT design targets.
 
@@ -385,14 +385,14 @@ def _pick_influent(plant, influent_name):
 
 
 def sludge_metrics(
-    plant: "Plant",
-    solution: "PlantSolution",
-    params: Optional[jnp.ndarray] = None,
+    plant: Plant,
+    solution: PlantSolution,
+    params: jnp.ndarray | None = None,
     *,
-    reactor_units: Optional[list] = None,
-    influent_name: Optional[str] = None,
-    effluent_port: Optional[str] = None,
-    waste_port: Optional[str] = None,
+    reactor_units: list | None = None,
+    influent_name: str | None = None,
+    effluent_port: str | None = None,
+    waste_port: str | None = None,
     substrate: str = "BOD",
 ) -> SludgeMetrics:
     """Achieved SRT / HRT / F:M from a solved activated-sludge plant.

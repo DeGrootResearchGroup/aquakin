@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
-from typing import Any, Callable, ClassVar
+from typing import Any, ClassVar
 
 import jax
 import jax.numpy as jnp
@@ -81,7 +82,7 @@ class ASTNode(ABC):
     def compile(self, ctx: CompileContext) -> RateCallable:
         """Return a JAX-compatible callable for this node."""
 
-    def children(self) -> tuple["ASTNode", ...]:
+    def children(self) -> tuple[ASTNode, ...]:
         """Direct child AST nodes, in field order.
 
         Generic over every concrete node (all are frozen dataclasses): returns
@@ -92,7 +93,7 @@ class ASTNode(ABC):
         """
         return tuple(v for f in fields(self) if isinstance(v := getattr(self, f.name), ASTNode))
 
-    def map_children(self, fn: "Callable[[ASTNode], ASTNode]") -> "ASTNode":
+    def map_children(self, fn: Callable[[ASTNode], ASTNode]) -> ASTNode:
         """Return a copy with each direct child replaced by ``fn(child)``.
 
         Leaf nodes (no AST children) return ``self``. Reconstructs the
@@ -100,7 +101,7 @@ class ASTNode(ABC):
         ``self`` unchanged when no child actually changed (so unaffected
         subtrees keep their identity).
         """
-        replacements: dict[str, "ASTNode"] = {}
+        replacements: dict[str, ASTNode] = {}
         changed = False
         for f in fields(self):
             v = getattr(self, f.name)

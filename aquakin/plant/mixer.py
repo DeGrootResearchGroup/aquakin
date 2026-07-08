@@ -37,7 +37,7 @@ class MixerUnit(StatelessUnit):
 
     name: str
     input_port_names: list[str]
-    model: "CompiledModel"
+    model: CompiledModel
 
     # state_size / initial_state / rhs come from StatelessUnit.
 
@@ -57,7 +57,7 @@ class MixerUnit(StatelessUnit):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         Q_total = jnp.zeros(())
         mass_total = jnp.zeros((self.model.n_species,))
@@ -106,7 +106,7 @@ class _SplitterBase(StatelessUnit, FlowParameterized):
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
 
     @property
     def input_ports(self) -> list[str]:
@@ -136,7 +136,7 @@ class RatioSplitter(_SplitterBase):
         Output port name -> fraction of inlet flow. Must sum to 1.
     """
 
-    output_port_ratios: "dict[str, float]"
+    output_port_ratios: dict[str, float]
 
     def __post_init__(self) -> None:
         total = sum(self.output_port_ratios.values())
@@ -153,7 +153,7 @@ class RatioSplitter(_SplitterBase):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         s_in = inputs["in"]
         return {
@@ -201,7 +201,7 @@ class SetpointSplitter(_SplitterBase):
         port.
     """
 
-    output_port_flows: "dict[str, float]"
+    output_port_flows: dict[str, float]
     remainder_port: str
 
     def __post_init__(self) -> None:
@@ -218,7 +218,7 @@ class SetpointSplitter(_SplitterBase):
             for i, (port, q) in enumerate(self.output_port_flows.items())
         }
 
-    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
         return self._setpoints
 
     @property
@@ -231,7 +231,7 @@ class SetpointSplitter(_SplitterBase):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         # Fixed setpoints, remainder takes what is left. When the feed is below the
         # total setpoint the setpoint ports share the available flow proportionally
@@ -304,7 +304,7 @@ class ThresholdSplitter(_SplitterBase):
             )
         self._setpoints = {"threshold": FlowSetpoint(float(self.threshold), 0)}
 
-    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
         return self._setpoints
 
     @property
@@ -320,7 +320,7 @@ class ThresholdSplitter(_SplitterBase):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         s_in = inputs["in"]
         limit = self._limit(params)

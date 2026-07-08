@@ -19,7 +19,7 @@ Reference design parameters (Copp 2002 / Alex 2008 Table 1.1):
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from aquakin.plant._builder_support import (
     add_secondary_clarifier,
@@ -49,13 +49,13 @@ BSM1_CLARIFIER_HEIGHT = 4.0  # m
 
 
 def build_bsm1(
-    model: Optional["CompiledModel"] = None,
+    model: CompiledModel | None = None,
     *,
     Q_avg: float = BSM1_Q_AVG,
     wastage_flow: float = BSM1_WASTAGE_FLOW,
     closed_loop_do: bool = False,
     do_setpoint_tank5: float = 2.0,
-    conditions: Optional[dict[str, float]] = None,
+    conditions: dict[str, float] | None = None,
     use_takacs: bool = False,
     settler_soluble_holdup: bool = True,
     settler_composition_mode: str = "lumped_tss",

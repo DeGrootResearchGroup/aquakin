@@ -76,12 +76,12 @@ def test_solve_defaults_params_to_model_defaults(simple_model):
 
 
 def test_solve_requires_t_span(simple_model):
-    """Omitting t_span (now that params is optional) is a clear error, not a
-    silent misbinding."""
+    """Omitting t_span is a clear error, not a silent misbinding. It is a
+    required positional argument, so Python itself raises TypeError naming it."""
     reactor = aquakin.BatchReactor(
         simple_model, aquakin.SpatialConditions.uniform(T=293.15)
     )
-    with pytest.raises(ValueError, match="t_span"):
+    with pytest.raises(TypeError, match="t_span"):
         reactor.solve(jnp.asarray([1.0, 0.0]))
 
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from importlib.resources import files
 from pathlib import Path
-from typing import Union
 
 import yaml
 from pydantic import ValidationError
@@ -137,7 +136,7 @@ def clear_model_cache() -> None:
     _MODEL_CACHE.clear()
 
 
-def load_model(name: str, *, activity_model: Union[str, None] = None) -> CompiledModel:
+def load_model(name: str, *, activity_model: str | None = None) -> CompiledModel:
     """
     Load a built-in model shipped with ``aquakin``.
 
@@ -184,9 +183,7 @@ def load_model(name: str, *, activity_model: Union[str, None] = None) -> Compile
     return net
 
 
-def load_model_from_file(
-    path: Union[str, Path], *, activity_model: Union[str, None] = None
-) -> CompiledModel:
+def load_model_from_file(path: str | Path, *, activity_model: str | None = None) -> CompiledModel:
     """
     Load a model from a YAML file on disk.
 

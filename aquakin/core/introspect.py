@@ -31,7 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover
 _TIME_UNIT_NAMES = {"s": "seconds", "d": "days", "h": "hours", "min": "minutes"}
 
 
-def format_model_summary(model: "CompiledModel") -> str:
+def format_model_summary(model: CompiledModel) -> str:
     """Render a human-readable table summarising ``model``.
 
     The body of :meth:`CompiledModel.summary`; see it for the public contract.
@@ -90,7 +90,7 @@ def format_model_summary(model: "CompiledModel") -> str:
     return "\n".join(lines)
 
 
-def model_to_latex(model: "CompiledModel") -> "dict[str, str]":
+def model_to_latex(model: CompiledModel) -> dict[str, str]:
     """``{reaction_name: LaTeX rate expression}`` (body of ``to_latex``)."""
     from aquakin.utils.latex import to_latex as _to_latex
 
@@ -100,7 +100,7 @@ def model_to_latex(model: "CompiledModel") -> "dict[str, str]":
     }
 
 
-def check_units(model: "CompiledModel", *, check_root: bool = True) -> list:
+def check_units(model: CompiledModel, *, check_root: bool = True) -> list:
     """Dimensional-consistency audit of the rate expressions (body of
     ``check_units``)."""
     from aquakin.utils.units import check_model_units
@@ -109,8 +109,8 @@ def check_units(model: "CompiledModel", *, check_root: bool = True) -> list:
 
 
 def model_composition(
-    model: "CompiledModel", *, params=None, electron_acceptor_cod: bool = True
-) -> "dict[str, dict[str, float]]":
+    model: CompiledModel, *, params=None, electron_acceptor_cod: bool = True
+) -> dict[str, dict[str, float]]:
     """Per-species conserved-quantity content table (body of ``composition``).
 
     Declared ``species[].composition`` metadata first, else the shipped
@@ -127,7 +127,7 @@ def model_composition(
 
 
 def check_conservation(
-    model: "CompiledModel",
+    model: CompiledModel,
     *,
     tol: float = 1e-2,
     params=None,
@@ -153,7 +153,7 @@ def check_conservation(
 
 
 def check_nitrogen(
-    model: "CompiledModel",
+    model: CompiledModel,
     *,
     tol: float = 1e-2,
     params=None,

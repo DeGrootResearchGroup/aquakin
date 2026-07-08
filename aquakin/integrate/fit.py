@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Optional
 
 import jax
 import jax.numpy as jnp
@@ -58,9 +57,9 @@ def fit(
     free_params: list[str],
     *,
     method: str = "adjoint",
-    initial_params: Optional[jnp.ndarray] = None,
-    observed_species: Optional[list[str]] = None,
-    time_unit: Optional[str] = None,
+    initial_params: jnp.ndarray | None = None,
+    observed_species: list[str] | None = None,
+    time_unit: str | None = None,
 ) -> FitResult:
     """
     Least-squares fit of selected parameters to time-series observations.

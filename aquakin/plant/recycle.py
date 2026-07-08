@@ -26,7 +26,7 @@ paths.
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -43,24 +43,24 @@ class RecycleResolver:
     """Owns recycle-flow / recycle-concentration resolution and its per-solve
     map-constant caches for one :class:`Plant`. See the module docstring."""
 
-    def __init__(self, plant: "Plant"):
+    def __init__(self, plant: Plant):
         self.plant = plant
         # Tri-state: None until checked, then True/False -- whether the recycle
         # *concentration* map M is state-independent (so it can be precomputed
         # once per solve and reused, skipping the per-RHS per-species probes).
         # Determined by :meth:`_check_recycle_map_constant`.
-        self._recycle_map_constant: Optional[bool] = None
+        self._recycle_map_constant: bool | None = None
         # Same, for the *temperature* map MT. Constant in heat-balance mode (the
         # reactor T-state breaks the loop coupling) and trivially when no T is
         # carried; NOT constant in algebraic mode (T passes through reactors, so
         # MT rides on the concentration-dependent recycle flows) -- then MT is
         # re-probed every RHS (cheap scalar) while M stays cached.
-        self._recycle_T_map_constant: Optional[bool] = None
-        self._flow_map_constant: Optional[bool] = None
+        self._recycle_T_map_constant: bool | None = None
+        self._flow_map_constant: bool | None = None
 
     def _seed_recycle_streams(
         self,
-        resolved_flows: dict[tuple[Optional[str], str], jnp.ndarray],
+        resolved_flows: dict[tuple[str | None, str], jnp.ndarray],
     ) -> dict[tuple[str, str], Stream]:
         """Pre-seed recycle back-edges with their resolved flow + initial conc.
 
@@ -89,9 +89,9 @@ class RecycleResolver:
         t: jnp.ndarray,
         states: dict[str, jnp.ndarray],
         params_full: jnp.ndarray,
-        resolved_flows: dict[tuple[Optional[str], str], jnp.ndarray],
-        signals: Optional[dict] = None,
-        recycle_map: Optional[list] = None,
+        resolved_flows: dict[tuple[str | None, str], jnp.ndarray],
+        signals: dict | None = None,
+        recycle_map: list | None = None,
     ) -> dict[tuple[str, str], Stream]:
         """Pre-solve the recycle back-edge concentrations exactly, as a seed.
 
@@ -559,7 +559,7 @@ class RecycleResolver:
         signals = self.plant._compute_signals(t, states, params_full)
 
         def sweep(passes):
-            streams: dict[tuple[Optional[str], str], Stream] = {}
+            streams: dict[tuple[str | None, str], Stream] = {}
             for port_name, series in self.plant.influents.items():
                 streams[(None, port_name)] = series.at(t)
             resolved_flows = self._resolve_flows(t, params_full, states)
@@ -689,7 +689,7 @@ class RecycleResolver:
         (the cached-``A`` path) so the two cannot drift.
         """
         influent_override = (design or {}).get("influent", {})
-        base: dict[tuple[Optional[str], str], jnp.ndarray] = {}
+        base: dict[tuple[str | None, str], jnp.ndarray] = {}
         for port_name, series in self.plant.influents.items():
             if port_name in influent_override:
                 ov = influent_override[port_name]
@@ -791,12 +791,12 @@ class RecycleResolver:
         self,
         t: jnp.ndarray,
         params_full: jnp.ndarray,
-        states: Optional[dict[str, jnp.ndarray]] = None,
+        states: dict[str, jnp.ndarray] | None = None,
         *,
-        design: Optional[dict] = None,
+        design: dict | None = None,
         check_affine: bool = False,
-        flow_map: Optional[jnp.ndarray] = None,
-    ) -> dict[tuple[Optional[str], str], jnp.ndarray]:
+        flow_map: jnp.ndarray | None = None,
+    ) -> dict[tuple[str | None, str], jnp.ndarray]:
         """Solve the recycle FLOW network exactly (decoupled from concentration).
 
         Every unit exposes a linear ``flow_outputs`` rule (output port flows from

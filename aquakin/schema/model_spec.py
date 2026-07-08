@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -58,7 +57,7 @@ class SpeciesSpec(BaseModel):
     composition: dict[str, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _composition_finite(self) -> "SpeciesSpec":
+    def _composition_finite(self) -> SpeciesSpec:
         for q, v in self.composition.items():
             if not q:
                 raise ValueError(f"species '{self.name}' has an empty composition quantity name")
@@ -98,12 +97,12 @@ class PriorSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     dist: str = "gaussian"
-    mean: Optional[float] = None
-    std: Optional[float] = None
-    range: Optional[tuple[float, float]] = None
+    mean: float | None = None
+    std: float | None = None
+    range: tuple[float, float] | None = None
 
     @model_validator(mode="after")
-    def _validate(self) -> "PriorSpec":
+    def _validate(self) -> PriorSpec:
         if self.dist != "gaussian":
             raise ValueError(f"prior.dist must be 'gaussian', got {self.dist!r}")
         has_mean_std = self.mean is not None and self.std is not None
@@ -149,7 +148,7 @@ class TemperatureCorrectionSpec(BaseModel):
     condition: str = "T"
 
     @model_validator(mode="after")
-    def _theta_positive(self) -> "TemperatureCorrectionSpec":
+    def _theta_positive(self) -> TemperatureCorrectionSpec:
         if self.theta <= 0.0:
             raise ValueError(f"temperature.theta must be > 0; got {self.theta}")
         return self
@@ -162,13 +161,13 @@ class ParameterSpec(BaseModel):
 
     value: float
     units: str = ""
-    bounds: Optional[tuple[float, float]] = None
+    bounds: tuple[float, float] | None = None
     transform: str = "none"
-    prior: Optional[PriorSpec] = None
-    temperature: Optional[TemperatureCorrectionSpec] = None
+    prior: PriorSpec | None = None
+    temperature: TemperatureCorrectionSpec | None = None
 
     @model_validator(mode="after")
-    def _bounds_bracket_value(self) -> "ParameterSpec":
+    def _bounds_bracket_value(self) -> ParameterSpec:
         if self.bounds is not None:
             low, high = self.bounds
             if not (low <= high):
@@ -178,7 +177,7 @@ class ParameterSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _transform_known(self) -> "ParameterSpec":
+    def _transform_known(self) -> ParameterSpec:
         if self.transform not in _VALID_TRANSFORMS:
             raise ValueError(
                 f"transform must be one of {_VALID_TRANSFORMS}, got {self.transform!r}"
@@ -214,14 +213,14 @@ class ReactionSpec(BaseModel):
     # participating coefficients must be numeric literals (their balance is solved
     # numerically at compile time), and every participating species must carry the
     # relevant ``composition:`` content.
-    stoichiometry: dict[str, Union[float, str]] = Field(default_factory=dict)
+    stoichiometry: dict[str, float | str] = Field(default_factory=dict)
     # Conserved quantities (e.g. ``[COD, N, P]``) used to solve any ``auto``
     # coefficient in this reaction. ``None`` (the default) falls back to the
     # model-level ``conserved_for``.
-    conserved_for: Optional[list[str]] = None
+    conserved_for: list[str] | None = None
 
     @model_validator(mode="after")
-    def _stoichiometry_non_empty(self) -> "ReactionSpec":
+    def _stoichiometry_non_empty(self) -> ReactionSpec:
         if not self.stoichiometry:
             raise ValueError(
                 f"Reaction '{self.name}' must declare at least one species in "
@@ -281,18 +280,18 @@ class SpeciationSpec(BaseModel):
     field: str = "pH"
     temperature_field: str = "T"
     temperature_units: str = "celsius"
-    z_cation_eq: Union[float, dict[str, str]] = 0.0
+    z_cation_eq: float | dict[str, str] = 0.0
     n_iter: int = Field(default=40, ge=1)
     activity_model: str = "none"
     # If set, also produce the self-consistent solution ionic strength under this
     # field name, so a precipitation block can share it (see PrecipitationSpec).
-    ionic_strength_field: Optional[str] = None
+    ionic_strength_field: str | None = None
     totals: dict[str, TotalSpec] = Field(default_factory=dict)
     strong_anions: list[StrongIonSpec] = Field(default_factory=list)
     strong_cations: list[StrongIonSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _validate(self) -> "SpeciationSpec":
+    def _validate(self) -> SpeciationSpec:
         if self.temperature_units not in ("celsius", "kelvin"):
             raise ValueError(
                 f"temperature_units must be 'celsius' or 'kelvin', got {self.temperature_units!r}"
@@ -351,11 +350,11 @@ class MineralIonSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    species: Optional[str] = None
+    species: str | None = None
     molar_mass: float = Field(default=1.0, gt=0.0)
     count: int = Field(gt=0)
     charge: float = Field(ge=0.0)
-    fraction: Optional[str] = None
+    fraction: str | None = None
 
 
 class MineralSpec(BaseModel):
@@ -394,11 +393,11 @@ class MineralSpec(BaseModel):
     mode: str = "kinetic"  # "kinetic" (default) or "equilibrium"
     supersaturation_form: str = "power"  # kinetic mode: "power" or "bounded"
     ions: list[MineralIonSpec] = Field(min_length=1)
-    solid: Optional[str] = None  # precipitate species
-    rate_constant: Optional[ParameterSpec] = None  # crystallisation rate coefficient
+    solid: str | None = None  # precipitate species
+    rate_constant: ParameterSpec | None = None  # crystallisation rate coefficient
 
     @model_validator(mode="after")
-    def _validate_mode(self) -> "MineralSpec":
+    def _validate_mode(self) -> MineralSpec:
         if self.mode not in ("kinetic", "equilibrium"):
             raise ValueError(
                 f"mineral '{self.name}' mode must be 'kinetic' or 'equilibrium'; got {self.mode!r}."
@@ -462,11 +461,11 @@ class PrecipitationSpec(BaseModel):
     # condition field (e.g. a speciation block's ``ionic_strength_field``)
     # instead of ``ionic_strength_offset`` + the mineral ions -- so the pH and
     # the saturation indices use the same ionic strength.
-    ionic_strength_field: Optional[str] = None
+    ionic_strength_field: str | None = None
     minerals: list[MineralSpec] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def _validate(self) -> "PrecipitationSpec":
+    def _validate(self) -> PrecipitationSpec:
         if self.temperature_units not in ("celsius", "kelvin"):
             raise ValueError(
                 f"temperature_units must be 'celsius' or 'kelvin', got {self.temperature_units!r}"
@@ -499,7 +498,7 @@ class PrecipitationSpec(BaseModel):
 
 
 def _synthesize_precipitation_reactions(
-    precipitation: "PrecipitationSpec", species_set: set
+    precipitation: PrecipitationSpec, species_set: set
 ) -> list[ReactionSpec]:
     """Build the precipitation reactions implied by the mineral definitions.
 
@@ -544,7 +543,7 @@ def _synthesize_precipitation_reactions(
     return out
 
 
-def _units_measure(units: str) -> "Optional[str]":
+def _units_measure(units: str) -> str | None:
     """Classify a species' unit string as ``"molar"`` (an amount, e.g. mol/L,
     kmol/m3) or ``"mass"`` (a mass, e.g. g/m3, kgCOD/m3), or ``None`` when it is
     blank / unparseable / neither (skipped, as ``check_units`` skips unknowns).
@@ -583,10 +582,10 @@ _MIN_MASS_MOLAR_MASS = 1.0
 
 
 def _audit_speciation_molar_mass(
-    species: "list[SpeciesSpec]",
-    speciation: "Optional[SpeciationSpec]",
-    precipitation: "Optional[PrecipitationSpec]",
-) -> "list[str]":
+    species: list[SpeciesSpec],
+    speciation: SpeciationSpec | None,
+    precipitation: PrecipitationSpec | None,
+) -> list[str]:
     """Advisory messages where a speciation/precipitation ``molar_mass`` is
     dimensionally inconsistent with the referenced species' declared ``units``.
 
@@ -600,7 +599,7 @@ def _audit_speciation_molar_mass(
     units_of = {s.name: s.units for s in species}
     messages: list[str] = []
 
-    def _check(label: str, sp_name: "Optional[str]", molar_mass: float) -> None:
+    def _check(label: str, sp_name: str | None, molar_mass: float) -> None:
         if sp_name is None:
             return
         measure = _units_measure(units_of.get(sp_name, ""))
@@ -656,9 +655,9 @@ class ModelSpec(BaseModel):
     # own ``conserved_for``. Empty (the default) means a reaction using ``auto``
     # must declare its own list.
     conserved_for: list[str] = Field(default_factory=list)
-    speciation: Optional[SpeciationSpec] = None
-    precipitation: Optional[PrecipitationSpec] = None
-    positivity_limiter: Optional[PositivityLimiterSpec] = None
+    speciation: SpeciationSpec | None = None
+    precipitation: PrecipitationSpec | None = None
+    positivity_limiter: PositivityLimiterSpec | None = None
     # Clamp concentrations to >= 0 when evaluating reaction rates (and any
     # state-derived condition). Protects the nonlinear kinetics from a
     # transiently-negative state; the raw state still drives transport and
@@ -671,7 +670,7 @@ class ModelSpec(BaseModel):
     reactions: list[ReactionSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _check_consistency(self) -> "ModelSpec":
+    def _check_consistency(self) -> ModelSpec:
         species_names = [s.name for s in self.species]
         if len(set(species_names)) != len(species_names):
             raise ValueError(f"Duplicate species names: {species_names}")

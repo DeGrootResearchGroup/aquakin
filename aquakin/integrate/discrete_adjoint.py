@@ -58,7 +58,7 @@ calibration case), not just a final-state loss.
 from __future__ import annotations
 
 import warnings
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import diffrax
 import jax
@@ -284,14 +284,14 @@ def implicit_euler_adjoint_solve(
     y0: jnp.ndarray,
     params: jnp.ndarray,
     t_span: tuple[float, float],
-    t_eval: Optional[jnp.ndarray] = None,
+    t_eval: jnp.ndarray | None = None,
     *,
     rtol: float = _DEFAULT_RTOL,
     atol: float = _DEFAULT_ATOL,
     dt0: float = _DEFAULT_DT0,
     max_steps: int = _DEFAULT_MAX_STEPS,
     time_dependent: bool = False,
-    primal_rhs: Optional[Callable] = None,
+    primal_rhs: Callable | None = None,
 ) -> jnp.ndarray:
     """Integrate over ``t_span`` with a cap-free discrete-adjoint reverse-mode rule.
 
@@ -456,19 +456,19 @@ def esdirk_adjoint_solve(
     y0: jnp.ndarray,
     params: jnp.ndarray,
     t_span: tuple[float, float],
-    t_eval: Optional[jnp.ndarray] = None,
+    t_eval: jnp.ndarray | None = None,
     *,
-    solver: Optional[diffrax.AbstractSolver] = None,
+    solver: diffrax.AbstractSolver | None = None,
     order: int = 5,
     rtol: float = _DEFAULT_RTOL,
     atol: float = _DEFAULT_ATOL,
     dt0: float = _DEFAULT_DT0,
     max_steps: int = _DEFAULT_MAX_STEPS,
     time_dependent: bool = False,
-    primal_rhs: Optional[Callable] = None,
-    jacobian_builder: Optional[Callable] = None,
-    forward_root_finder: Optional[object] = None,
-    factormax: Optional[float] = None,
+    primal_rhs: Callable | None = None,
+    jacobian_builder: Callable | None = None,
+    forward_root_finder: object | None = None,
+    factormax: float | None = None,
     low_memory: bool = False,
     newton_iters: int = _DEFAULT_NEWTON_ITERS,
 ) -> jnp.ndarray:

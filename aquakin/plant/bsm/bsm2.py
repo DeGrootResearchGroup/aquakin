@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
-from typing import Optional
 
 import jax.numpy as jnp
 
@@ -222,7 +221,9 @@ def bsm2_parameters(asm1_model, adm1_model):
     )
 
 
-def bsm2_constant_influent(asm1_model, Q: float = BSM2_Q_REF, T: float = None) -> InfluentSeries:
+def bsm2_constant_influent(
+    asm1_model, Q: float = BSM2_Q_REF, T: float | None = None
+) -> InfluentSeries:
     """The published BSM2 constant influent as an :class:`InfluentSeries`.
 
     ``T`` defaults to ``None`` (temperature-agnostic): the reactors then fall back
@@ -430,19 +431,19 @@ def _register_bsm2_streams(plant, *, influent_bypass, use_delay):
 
 
 def build_bsm2(
-    asm1_model: Optional["object"] = None,
-    adm1_model: Optional["object"] = None,
+    asm1_model: object | None = None,
+    adm1_model: object | None = None,
     *,
     Q_ref: float = BSM2_Q_REF,
-    conditions: Optional[dict] = None,
-    carbon: Optional["ExternalCarbon"] = _DEFAULT_CARBON,
+    conditions: dict | None = None,
+    carbon: ExternalCarbon | None = _DEFAULT_CARBON,
     do_control: bool = False,
-    reject: Optional["RejectStorage"] = None,
-    bypass: Optional["InfluentBypass"] = None,
-    hydraulic_delay: Optional["HydraulicDelay"] = None,
-    wastage_schedule: Optional["object"] = None,
+    reject: RejectStorage | None = None,
+    bypass: InfluentBypass | None = None,
+    hydraulic_delay: HydraulicDelay | None = None,
+    wastage_schedule: object | None = None,
     do_temperature_correction: bool = False,
-    temperature_model: Optional["object"] = None,
+    temperature_model: object | None = None,
     settler_composition_mode: str = "per_species",
     settler_soluble_holdup: bool = False,
 ) -> Plant:

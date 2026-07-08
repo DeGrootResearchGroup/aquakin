@@ -43,7 +43,7 @@ _EQI_WEIGHTS = {
 }
 
 
-def _species_idx(model: "CompiledModel", names) -> jnp.ndarray:
+def _species_idx(model: CompiledModel, names) -> jnp.ndarray:
     """Index array for the named species that exist in the model."""
     return jnp.asarray([model.species_index[s] for s in names if s in model.species_index])
 
@@ -144,7 +144,7 @@ def time_average(integrand, t, axis: int = 0):
 # ``(n_t, n_species)`` -> vector, so no rank branch is needed.
 
 
-def derived_TSS(C, model: "CompiledModel" = None) -> jnp.ndarray:
+def derived_TSS(C, model: CompiledModel | None = None) -> jnp.ndarray:
     """Total suspended solids from ASM1 particulate species.
 
     ``TSS = 0.75 × (XS + XI + XB_H + XB_A + XP)``. Scalar for 1-D ``C``, a
@@ -155,7 +155,7 @@ def derived_TSS(C, model: "CompiledModel" = None) -> jnp.ndarray:
     return _TSS_FACTOR * jnp.sum(C[..., _species_idx(model, _TSS_SPECIES)], axis=-1)
 
 
-def derived_COD(C, model: "CompiledModel" = None) -> jnp.ndarray:
+def derived_COD(C, model: CompiledModel | None = None) -> jnp.ndarray:
     """Total COD = SI + SS + XI + XS + XB_H + XB_A + XP.
 
     ``C`` may be a concentration array (with ``model``) or a ``StreamSeries``.
@@ -165,7 +165,7 @@ def derived_COD(C, model: "CompiledModel" = None) -> jnp.ndarray:
     return jnp.sum(C[..., _species_idx(model, species)], axis=-1)
 
 
-def derived_BOD(C, model: "CompiledModel" = None, *, f_P: float = None) -> jnp.ndarray:
+def derived_BOD(C, model: CompiledModel | None = None, *, f_P: float | None = None) -> jnp.ndarray:
     """BOD₅ proxy = 0.25 × (SS + XS + (1 - f_P) × (XB_H + XB_A)), Copp 2002.
 
     ``f_P`` defaults to the model's declared inert-fraction (the standard ASM1
@@ -182,7 +182,7 @@ def derived_BOD(C, model: "CompiledModel" = None, *, f_P: float = None) -> jnp.n
 
 
 def derived_TKN(
-    C, model: "CompiledModel" = None, *, i_XB: float = None, i_XP: float = None
+    C, model: CompiledModel | None = None, *, i_XB: float | None = None, i_XP: float | None = None
 ) -> jnp.ndarray:
     """Total Kjeldahl Nitrogen = S_NH + S_ND + X_ND + i_XB × (XB_H + XB_A)
     + i_XP × (XP + XI).
@@ -211,7 +211,7 @@ def effluent_averages(
     stream_or_t,
     C_traj=None,
     Q_traj=None,
-    model: "CompiledModel" = None,
+    model: CompiledModel | None = None,
     *,
     params=None,
 ) -> dict[str, float]:
@@ -270,7 +270,7 @@ def effluent_quality_index(
     stream_or_t,
     C_traj=None,
     Q_traj=None,
-    model: "CompiledModel" = None,
+    model: CompiledModel | None = None,
     *,
     params=None,
 ) -> float:
@@ -383,8 +383,8 @@ _BSM2_PUMP_FACTORS = {
 
 def pumping_energy_bsm2(
     t: jnp.ndarray,
-    flows: "dict[str, jnp.ndarray]",
-    factors: "dict[str, float]" = None,
+    flows: dict[str, jnp.ndarray],
+    factors: dict[str, float] | None = None,
 ) -> float:
     """Pumping energy (kWh/d) for the full BSM2 pump set.
 

@@ -21,7 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
 
 
-def reactor_conditions(model: "CompiledModel") -> "dict[str, float]":
+def reactor_conditions(model: CompiledModel) -> dict[str, float]:
     """The scalar ``conditions=`` dict for the activated-sludge reactors.
 
     Each condition the model requires, set to the model's declared default via the
@@ -50,13 +50,13 @@ def recycle_pump_flows(*, internal_ratio, ras_ratio, Q_design, wastage):
 
 
 def add_secondary_clarifier(
-    plant: "Plant",
+    plant: Plant,
     *,
-    model: "CompiledModel",
+    model: CompiledModel,
     underflow_Q,
     use_takacs: bool,
     takacs_kwargs: dict,
-    ideal_kwargs: "dict | None" = None,
+    ideal_kwargs: dict | None = None,
 ) -> None:
     """Add the ``"clarifier"`` unit, selecting the settler model.
 
@@ -81,7 +81,7 @@ def add_secondary_clarifier(
 
 
 def register_recycle_streams(
-    plant: "Plant", *, internal_recycle: str, ras: str, wastage: str, effluent: "str | None" = None
+    plant: Plant, *, internal_recycle: str, ras: str, wastage: str, effluent: str | None = None
 ) -> None:
     """Register the canonical semantic stream names shared by the BSM / A2O builders.
 

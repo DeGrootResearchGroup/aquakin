@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import diffrax
 import jax
@@ -139,8 +138,8 @@ class PlugFlowReactor(GradientCheckMixin):
         self,
         C0: jnp.ndarray,
         *,
-        params: Optional[jnp.ndarray] = None,
-        conditions: Optional[SpatialConditions] = None,
+        params: jnp.ndarray | None = None,
+        conditions: SpatialConditions | None = None,
     ) -> PFRSolution:
         """
         Integrate the steady-state PFR.
@@ -204,12 +203,12 @@ class PlugFlowReactor(GradientCheckMixin):
         *,
         params: jnp.ndarray,
         sens_params,
-        conditions: Optional[SpatialConditions] = None,
-        sens_rtol: Optional[float] = None,
+        conditions: SpatialConditions | None = None,
+        sens_rtol: float | None = None,
         sens_atol=None,
         param_scale=None,
-        shared_factor: Optional[bool] = None,
-    ) -> tuple["PFRSolution", jnp.ndarray]:
+        shared_factor: bool | None = None,
+    ) -> tuple[PFRSolution, jnp.ndarray]:
         """Solve and return the forward sensitivity ``dC/dtheta`` along the axis.
 
         Integrates the augmented ``[C; S]`` system over the reactor length with

@@ -38,7 +38,6 @@ temperature condition, exact when the influent temperature is constant.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 import numpy as np
 
@@ -331,8 +330,8 @@ def mass_balance(
     solution,
     *,
     components=("COD", "N", "P"),
-    influent_ports: Optional[list] = None,
-    effluent_ports: Optional[list] = None,
+    influent_ports: list | None = None,
+    effluent_ports: list | None = None,
     params=None,
 ) -> MassBalance:
     """Results-level mass-balance closure for a solved plant. See

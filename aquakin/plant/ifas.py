@@ -27,7 +27,7 @@ attachment / detachment / a density cap) is available on the underlying
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
@@ -133,7 +133,7 @@ class IFASUnit(AerationUnit, CouplingAware):
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     volume: float
     input_port_names: list[str]
     specific_surface_area: float
@@ -144,11 +144,11 @@ class IFASUnit(AerationUnit, CouplingAware):
     boundary_layer: float = 1e-4
     boundary_diffusivity: object = None
     conditions: dict = field(default_factory=dict)
-    aeration: "Aeration | None" = None
-    soluble_mask: Optional[jnp.ndarray] = None
-    biofilm_fixed_mask: Optional[jnp.ndarray] = None
+    aeration: Aeration | None = None
+    soluble_mask: jnp.ndarray | None = None
+    biofilm_fixed_mask: jnp.ndarray | None = None
     biofilm_reactions: object = None
-    biofilm_initial: Optional[jnp.ndarray] = None
+    biofilm_initial: jnp.ndarray | None = None
     output_port: str = "out"
 
     def __post_init__(self) -> None:
@@ -319,7 +319,7 @@ class IFASUnit(AerationUnit, CouplingAware):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         Q_total = total_flow(inputs[nm].Q for nm in self.input_port_names)
         return {

@@ -27,8 +27,8 @@ are bound onto :class:`Plant` as methods (see ``plant.py``), so the public
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -208,22 +208,22 @@ class SteadyStateDGSMResult:
     outputs: jnp.ndarray
     n_valid: jnp.ndarray
     cond: jnp.ndarray
-    cond_factor: Optional[float] = None
+    cond_factor: float | None = None
     # Per-sample final scaled steady-state residual ``max_i |F_i|/max(|y_i|,floor)``
     # (shape ``(N,)``). A sample whose solve did not converge carries a large
     # residual; it can be excluded as an invalid operating point, more directly
     # than by a conditioning or output-magnitude test. ``None`` on results built
     # before this was recorded. A sample solved by the forward backstop carries
     # ``NaN`` here (the forward solve reports no PTC scaled residual).
-    residual: Optional[jnp.ndarray] = None
+    residual: jnp.ndarray | None = None
     # Per-sample solver method from the layered solve -- ``"ptc"`` (direct),
     # ``"continuation"`` (deformed from the nominal), or ``"ptc->forward"`` (forward
     # backstop, the near-bifurcation samples a fast algebraic solve cannot tighten).
     # A Python list of length ``N``; the coverage tally is ``Counter(solve_method)``.
     # ``None`` on results built before this was recorded.
-    solve_method: Optional[list] = None
+    solve_method: list | None = None
     # Per-sample convergence flag (shape ``(N,)`` bool) from the layered solve.
-    converged: Optional[jnp.ndarray] = None
+    converged: jnp.ndarray | None = None
     # Per-sample operating-point existence (length ``N`` list of ``True`` /
     # ``False`` / ``None``): ``False`` marks a ``past_fold`` sample (the operating
     # branch folds before its parameters, so no operating-branch steady state
@@ -231,14 +231,14 @@ class SteadyStateDGSMResult:
     # screen (``sobol_total_bound``) as outside the viable operating regime -- the
     # physical, fold-based exclusion criterion. ``None`` on results built before
     # this was recorded.
-    operating_point_exists: Optional[list] = None
+    operating_point_exists: list | None = None
     # Per-parameter Poincare constant of the input measure, shape ``(k,)``. When
     # set (Gaussian/prior input sampling, ``input_dist="normal"``) the bound is
     # ``nu_ij * poincare_j / Var(g_i)`` with ``poincare_j = sigma_zj^2`` the
     # transform-space prior variance; ``None`` is the uniform default, where the
     # bound uses ``(b_j-a_j)^2/pi^2`` from ``ranges``. Consumed by ``convergence``
     # and ``with_cond_factor`` so they re-aggregate on the correct constant.
-    poincare: Optional[jnp.ndarray] = None
+    poincare: jnp.ndarray | None = None
 
     def ranked(self, output=0):
         """``[(input_name, bound)]`` for one output, sorted by decreasing bound.
@@ -429,13 +429,13 @@ class DynamicDGSMResult:
 
 def steady_state_sensitivity(
     plant,
-    params: Optional[jnp.ndarray] = None,
-    y0: Optional[jnp.ndarray] = None,
+    params: jnp.ndarray | None = None,
+    y0: jnp.ndarray | None = None,
     *,
-    state: Optional[jnp.ndarray] = None,
-    output_fn: Optional[Callable] = None,
-    wrt: Optional[Sequence] = None,
-    operating: Optional[Sequence] = None,
+    state: jnp.ndarray | None = None,
+    output_fn: Callable | None = None,
+    wrt: Sequence | None = None,
+    operating: Sequence | None = None,
     mode: str = "auto",
     elasticity: bool = False,
     return_jacobian: bool = False,
@@ -595,19 +595,19 @@ def steady_state_dgsm(
     ranges,
     *,
     output_fn: Callable,
-    output_names: Optional[Sequence] = None,
-    wrt: Optional[Sequence] = None,
-    y0: Optional[jnp.ndarray] = None,
+    output_names: Sequence | None = None,
+    wrt: Sequence | None = None,
+    y0: jnp.ndarray | None = None,
     n_samples: int = 256,
     seed: int = 0,
     mode: str = "auto",
-    cond_factor: Optional[float] = None,
+    cond_factor: float | None = None,
     input_dist: str = "uniform",
-    input_transforms: Optional[Sequence[str]] = None,
+    input_transforms: Sequence[str] | None = None,
     continuation: bool = True,
-    progress: Optional[int] = None,
+    progress: int | None = None,
     **steady_kwargs,
-) -> "SteadyStateDGSMResult":
+) -> SteadyStateDGSMResult:
     """Derivative-based global sensitivity (DGSM) of the plant steady state.
 
     Samples the screened parameters over their ranges (scrambled-Sobol QMC),
@@ -1088,15 +1088,15 @@ def _dynamic_value_jac(
 
 def dynamic_sensitivity(
     plant,
-    params: Optional[jnp.ndarray] = None,
+    params: jnp.ndarray | None = None,
     *,
     output_fn: Callable,
     t_span: tuple,
-    t_eval: Optional[jnp.ndarray] = None,
-    wrt: Optional[Sequence] = None,
-    operating: Optional[Sequence] = None,
+    t_eval: jnp.ndarray | None = None,
+    wrt: Sequence | None = None,
+    operating: Sequence | None = None,
     mode: str = "reverse",
-    y0: Optional[jnp.ndarray] = None,
+    y0: jnp.ndarray | None = None,
     elasticity: bool = False,
     **solve_kwargs,
 ) -> jnp.ndarray:
@@ -1197,16 +1197,16 @@ def dynamic_dgsm(
     *,
     output_fn: Callable,
     t_span: tuple,
-    t_eval: Optional[jnp.ndarray] = None,
-    wrt: Optional[Sequence] = None,
+    t_eval: jnp.ndarray | None = None,
+    wrt: Sequence | None = None,
     mode: str = "reverse",
-    y0: Optional[jnp.ndarray] = None,
+    y0: jnp.ndarray | None = None,
     n_samples: int = 256,
     seed: int = 0,
-    output_names: Optional[Sequence] = None,
-    progress: Optional[int] = None,
+    output_names: Sequence | None = None,
+    progress: int | None = None,
     **solve_kwargs,
-) -> "DynamicDGSMResult":
+) -> DynamicDGSMResult:
     """Derivative-based global sensitivity (DGSM) of a transient plant output.
 
     The dynamic counterpart of :meth:`steady_state_dgsm`: scrambled-Sobol QMC

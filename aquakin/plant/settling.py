@@ -52,9 +52,9 @@ class SettlingModel(ABC):
     """
 
     #: set by ``bind`` -- the (n_species,) 0/1 mask of particulate species.
-    _particulate_mask: "jnp.ndarray | None" = None
+    _particulate_mask: jnp.ndarray | None = None
 
-    def bind(self, model: "CompiledModel", particulate_species) -> None:
+    def bind(self, model: CompiledModel, particulate_species) -> None:
         """Resolve the particulate-species mask against ``model`` (called once
         by the SBR at construction). ``particulate_species`` is the list of
         species names that settle."""
@@ -130,7 +130,7 @@ class InterfaceSettling(SettlingModel):
     v_settle: float
     area: float
     remix_rate: float = 1.0e3
-    _particulate_mask: "jnp.ndarray | None" = field(default=None, repr=False)
+    _particulate_mask: jnp.ndarray | None = field(default=None, repr=False)
 
     def extra_state_size(self) -> int:
         return 1
@@ -187,7 +187,7 @@ class LayeredSettling(SettlingModel):
     v_settle: float = 100.0
     area: float = 1.0
     remix_rate: float = 1.0e3
-    _particulate_mask: "jnp.ndarray | None" = field(default=None, repr=False)
+    _particulate_mask: jnp.ndarray | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if self.n_layers < 2:

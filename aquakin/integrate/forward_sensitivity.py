@@ -50,8 +50,9 @@ References
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 
 import diffrax
 import jax
@@ -105,17 +106,17 @@ def augmented_forward_sensitivity(
     *,
     t0: float,
     t1: float,
-    t_eval: Optional[jnp.ndarray],
+    t_eval: jnp.ndarray | None,
     rtol: float,
     atol_y: jnp.ndarray,
-    sens_rtol: Optional[float] = None,
+    sens_rtol: float | None = None,
     sens_atol=None,
     param_scale=None,
-    dtmax: Optional[float] = None,
+    dtmax: float | None = None,
     max_steps: int = 1_000_000,
     shared_factor: bool = False,
     order: int = 5,
-    factormax: Optional[float] = None,
+    factormax: float | None = None,
 ):
     """Integrate ``z = [y; S]`` with adaptive control over both blocks.
 

@@ -45,8 +45,8 @@ neither possible (a ``while_loop``) nor necessary, since at the root
 from __future__ import annotations
 
 import functools
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 import jax
 import jax.numpy as jnp
@@ -102,7 +102,7 @@ def ptc_forward(
     scale_floor: float = 1.0,
     nonneg: bool = True,
     divergence_factor: float = 1000.0,
-    jac_fn: Optional[Callable] = None,
+    jac_fn: Callable | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Run the PTC iteration to a steady state of ``rhs(y, params) = 0``.
 
@@ -281,8 +281,8 @@ def solve_steady_state(
     params: jnp.ndarray,
     y0: jnp.ndarray,
     *,
-    jac_fn: Optional[Callable] = None,
-    primal_rhs: Optional[Callable] = None,
+    jac_fn: Callable | None = None,
+    primal_rhs: Callable | None = None,
     **ptc_kwargs,
 ) -> PTCResult:
     """PTC steady-state solve with implicit-function-theorem parameter gradients.
@@ -529,7 +529,7 @@ class ArclengthResult:
     s_max: float
     continuation_steps: int
     corrector_iterations: int
-    branch: Optional[tuple] = None
+    branch: tuple | None = None
     """When ``record_branch=True``, the traced branch as ``(s, ys)``: ``s`` shape
     ``(n_pts,)`` is the continuation parameter (``params_known + s*dtheta``) and
     ``ys`` shape ``(n_pts, n_state)`` the corresponding states, in trace order.

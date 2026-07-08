@@ -59,7 +59,7 @@ class PrimaryClarifier(FlowParameterized):
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     volume: float
     input_port_names: list[str] = field(default_factory=lambda: ["inlet"])
     f_corr: float = 0.65
@@ -79,7 +79,7 @@ class PrimaryClarifier(FlowParameterized):
         # flow rule and the material split.
         self._setpoints = {"f_PS": FlowSetpoint(float(self.f_PS), 0)}
 
-    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
         return self._setpoints
 
     @property
@@ -120,7 +120,7 @@ class PrimaryClarifier(FlowParameterized):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         """Split the feed into a clarified effluent and a settled sludge stream.
 
@@ -166,7 +166,7 @@ class PrimaryClarifier(FlowParameterized):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         # Well-mixed holding tank: convection only (no reaction).
         Q_total, C_in = mixed_feed(inputs, self.input_port_names)

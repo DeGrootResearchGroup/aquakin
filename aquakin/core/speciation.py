@@ -19,7 +19,7 @@ dicts/floats and the model's ``species_index``.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import jax.numpy as jnp
 

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import contextlib
 import copy
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Mapping, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import diffrax
 import equinox as eqx
@@ -68,11 +69,11 @@ class IntegratorConfig:
     """
 
     order: int = 3
-    factormax: Optional[float] = 3.0
-    colored_jacobian: "bool | str" = "auto"
-    dtmax: Optional[float] = None
+    factormax: float | None = 3.0
+    colored_jacobian: bool | str = "auto"
+    dtmax: float | None = None
     max_steps: int = 100_000
-    solver: "Optional[diffrax.AbstractSolver]" = None
+    solver: diffrax.AbstractSolver | None = None
 
 
 @dataclass(frozen=True)
@@ -140,7 +141,7 @@ class DifferentiationConfig:
     # to the config's semantics -- or a new (mode, method) pairing -- lands in one
     # place instead of being mirrored across every consumer.
 
-    def validated(self) -> "DifferentiationConfig":
+    def validated(self) -> DifferentiationConfig:
         """Validate the ``mode`` / ``method`` vocabulary; return ``self``.
 
         Raises ``ValueError`` for an out-of-range ``mode`` or ``method``. This is
@@ -192,7 +193,7 @@ class DifferentiationConfig:
 # --- AD-mode helpers (hide the diffrax adjoint plumbing) ---------------------
 
 
-def forward_adjoint() -> "diffrax.AbstractAdjoint":
+def forward_adjoint() -> diffrax.AbstractAdjoint:
     """Return the diffrax adjoint that supports forward-mode autodiff.
 
     A thin, dependency-free alias for ``diffrax.DirectAdjoint()`` so a user
@@ -609,7 +610,7 @@ class _HasNamedSpecies:
             raise KeyError(f"Unknown species '{species}'. Available: {self.model.species}.{suffix}")
         return self.C[:, self.model.species_index[species]]
 
-    def C_named_many(self, species) -> "dict[str, jnp.ndarray]":
+    def C_named_many(self, species) -> dict[str, jnp.ndarray]:
         """Trajectories of several species by name, as ``{name: array}``.
 
         The multi-species companion to :meth:`C_named` -- read a handful of
@@ -619,7 +620,7 @@ class _HasNamedSpecies:
         """
         return {sp: self.C_named(sp) for sp in species}
 
-    def final_named(self, species=None) -> "dict[str, float]":
+    def final_named(self, species=None) -> dict[str, float]:
         """Values at the **last** recorded point, as ``{name: float}``.
 
         The reporting shortcut for a steady-state / end-of-run value: instead of
@@ -633,7 +634,7 @@ class _HasNamedSpecies:
         return {sp: float(self.C_named(sp)[-1]) for sp in names}
 
     @property
-    def final(self) -> "dict[str, float]":
+    def final(self) -> dict[str, float]:
         """Every species' value at the last recorded point (``{name: float}``).
 
         The no-argument attribute form of :meth:`final_named` -- ``sol.final``."""
@@ -649,7 +650,7 @@ class _HasNamedSpecies:
         return self.model.units_of(species)
 
     @property
-    def time_unit(self) -> "str | None":
+    def time_unit(self) -> str | None:
         """The time unit of ``self.t`` (``"s"``, ``"d"``, ... or ``None``).
 
         Defaults to the model's native unit (:attr:`CompiledModel.time_unit`),
@@ -659,7 +660,7 @@ class _HasNamedSpecies:
         override = getattr(self, "_requested_time_unit", None)
         return override if override is not None else self.model.time_unit
 
-    def _table_index(self) -> "tuple[str, jnp.ndarray]":
+    def _table_index(self) -> tuple[str, jnp.ndarray]:
         """Return ``(name, array)`` for the dataframe index. Time by default;
         space-indexed solutions (PFR) override this."""
         return "t", self.t
@@ -821,13 +822,13 @@ class Reactor(Protocol):
 
     model: CompiledModel
     rtol: float
-    atol: "float | jnp.ndarray"
-    adjoint: "diffrax.AbstractAdjoint | None"
-    dtmax: "float | None"
+    atol: float | jnp.ndarray
+    adjoint: diffrax.AbstractAdjoint | None
+    dtmax: float | None
     max_steps: int
     order: int
-    factormax: "float | None"
-    solver: "diffrax.AbstractSolver | None"
+    factormax: float | None
+    solver: diffrax.AbstractSolver | None
 
     def solve(self, C0, params=None, *args, **kwargs):  # pragma: no cover
         ...
@@ -844,7 +845,7 @@ class ConditionedReactor(Reactor, Protocol):
     ``ConditionedReactor``.
     """
 
-    conditions: "SpatialConditions"
+    conditions: SpatialConditions
 
 
 def _coerce_atol(atol, n_species: int):
@@ -1272,9 +1273,9 @@ def _run_diffeqsolve(
     adjoint: diffrax.AbstractAdjoint | None = None,
     max_steps: int = 100_000,
     dtmax: float | None = None,
-    event: "diffrax.Event | None" = None,
-    progress_meter: "diffrax.AbstractProgressMeter | None" = None,
-    solver: "diffrax.AbstractSolver | None" = None,
+    event: diffrax.Event | None = None,
+    progress_meter: diffrax.AbstractProgressMeter | None = None,
+    solver: diffrax.AbstractSolver | None = None,
     factormax: float | None = None,
     order: int = 5,
 ):
@@ -1399,7 +1400,7 @@ def solve_chemistry(
     rate_scale=None,
     order: int = 5,
     factormax: float | None = None,
-    solver: "diffrax.AbstractSolver | None" = None,
+    solver: diffrax.AbstractSolver | None = None,
 ):
     """The canonical chemistry sub-solve shared by every reactor.
 

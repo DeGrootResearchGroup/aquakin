@@ -78,8 +78,8 @@ class ASM1toADM1:
         Operating temperature (K) of the digester/interface (default 308.15).
     """
 
-    source_model: "CompiledModel"
-    target_model: "CompiledModel"
+    source_model: CompiledModel
+    target_model: CompiledModel
     pH_adm: float = 7.0
     T_op: float = 308.15
     # The inorganic-carbon charge balance is evaluated at the digester pH. When
@@ -346,8 +346,8 @@ class ADM1toASM1:
         Digester pH and operating temperature for the charge balance.
     """
 
-    source_model: "CompiledModel"
-    target_model: "CompiledModel"
+    source_model: CompiledModel
+    target_model: CompiledModel
     pH_adm: float = 7.0
     T_op: float = 308.15
     # The alkalinity (SALK) charge balance is evaluated at the digester pH. The

@@ -24,8 +24,9 @@ a fouling resistance that grows with the permeate flux and partially relaxes, an
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
@@ -86,9 +87,9 @@ class MBRUnit(AerationUnit, CouplingAware):
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     volume: float
-    aeration: Optional[Aeration] = None
+    aeration: Aeration | None = None
     waste_flow: float = 0.0
     rejection: float = 0.999
     particulate_species: Sequence[str] = ()
@@ -98,7 +99,7 @@ class MBRUnit(AerationUnit, CouplingAware):
     membrane_resistance: float = 1.0
     tmp_viscosity: float = 1.0
     conditions: dict = field(default_factory=dict)
-    initial_concentrations: Optional[jnp.ndarray] = None
+    initial_concentrations: jnp.ndarray | None = None
     initial_fouling: float = 0.0
     input_port: str = "feed"
     permeate_port: str = "permeate"
@@ -216,7 +217,7 @@ class MBRUnit(AerationUnit, CouplingAware):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         C, _R_f = self._split(state)
         q_in = inputs[self.input_port].Q
@@ -239,7 +240,7 @@ class MBRUnit(AerationUnit, CouplingAware):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         C, R_f = self._split(state)
         s_in = inputs[self.input_port]

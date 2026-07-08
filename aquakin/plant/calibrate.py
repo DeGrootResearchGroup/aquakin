@@ -35,7 +35,7 @@ plants.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 import numpy as np
@@ -84,7 +84,7 @@ class PlantObservable:
     given, channels within a stream first."""
 
     stream: str
-    channels: Optional[tuple] = None
+    channels: tuple | None = None
 
 
 def _normalize_observables(observables, target, observed_channels) -> list[PlantObservable]:
@@ -156,12 +156,12 @@ class _PlantForwardModel:
     ``plant.solve``'s discrete adjoint, to the parameters.
     """
 
-    plant: "Plant"
+    plant: Plant
     observables: tuple  # ((endpoint, channel_index_array), ...)
-    y0: Optional[jnp.ndarray]
+    y0: jnp.ndarray | None
     integrator: object
     diff: DifferentiationConfig
-    time_unit: Optional[str]
+    time_unit: str | None
     use_c0_as_y0: bool = False
 
     def solve_trajectory(self, p, C0_k, tspan, tobs):
@@ -190,7 +190,7 @@ class _PlantForwardModel:
         # Gauss-Newton Jacobian yet; the reverse stable adjoint is the finite path.
         return False
 
-    def with_dtmax(self, dtmax) -> "_PlantForwardModel":
+    def with_dtmax(self, dtmax) -> _PlantForwardModel:
         """A clone whose integrator caps the step at ``dtmax`` (the tighter solve
         the Laplace Hessian may want). ``None`` reuses ``self``."""
         if dtmax is None or dtmax == getattr(self.integrator, "dtmax", None):
@@ -208,7 +208,7 @@ class _PlantParamNamespace:
     the per-model transforms / priors so a rate constant is fit in log space and a
     model-declared prior flows through, exactly as for a reactor's model)."""
 
-    plant: "Plant"
+    plant: Plant
 
     def __post_init__(self):
         self.param_index = {
@@ -238,7 +238,7 @@ class _PlantParamNamespace:
 # --- Problem resolution ------------------------------------------------
 
 
-def _resolve_endpoint_species(plant: "Plant", target: str):
+def _resolve_endpoint_species(plant: Plant, target: str):
     """Resolve a stream ``target`` (semantic name or ``"unit.port"``) to
     ``(endpoint, stream_model)`` -- the string ``plant.stream`` accepts and the
     model whose species label the reconstructed concentration columns."""
@@ -259,7 +259,7 @@ def _resolve_endpoint_species(plant: "Plant", target: str):
 
 
 def _resolve_plant_problem(
-    plant: "Plant",
+    plant: Plant,
     observations,
     t_obs,
     free_params,
@@ -533,26 +533,26 @@ def _resolve_plant_problem(
 
 
 def calibrate_plant(
-    plant: "Plant",
+    plant: Plant,
     observations,
     t_obs,
     free_params: list,
     *,
     target: str = "effluent",
-    observed_channels: Optional[list] = None,
-    observables: Optional[list] = None,
-    t_span: Optional[tuple] = None,
-    y0: Optional[jnp.ndarray] = None,
-    params: Optional[jnp.ndarray] = None,
-    transforms: Optional[dict] = None,
-    free_ic: Optional[FreeICConfig] = None,
-    time_unit: Optional[str] = None,
+    observed_channels: list | None = None,
+    observables: list | None = None,
+    t_span: tuple | None = None,
+    y0: jnp.ndarray | None = None,
+    params: jnp.ndarray | None = None,
+    transforms: dict | None = None,
+    free_ic: FreeICConfig | None = None,
+    time_unit: str | None = None,
     loss: str = "mse",
-    sigma: Optional[jnp.ndarray] = None,
-    priors: Optional[dict] = None,
+    sigma: jnp.ndarray | None = None,
+    priors: dict | None = None,
     use_priors: bool = True,
     optimizer: OptimizerConfig = OptimizerConfig(),
-    laplace: "bool | LaplaceConfig" = False,
+    laplace: bool | LaplaceConfig = False,
     check_finite: bool = True,
     integrator=None,
     diff: DifferentiationConfig = DifferentiationConfig(),

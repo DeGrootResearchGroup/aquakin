@@ -66,7 +66,7 @@ class FlowParameterized:
     slice of ``params_unit`` via :meth:`_flow_params`.
     """
 
-    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
         """Ordered ``name -> FlowSetpoint`` for this unit (override per unit)."""
         return {}
 

@@ -10,8 +10,9 @@ derivative-based global (DGSM) screen in
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -60,12 +61,12 @@ class SensitivityResult:
 def sensitivity(
     reactor: ConditionedReactor,
     C0: jnp.ndarray,
-    params: Optional[jnp.ndarray] = None,
-    output_fn: Optional[Callable[[Any], jnp.ndarray]] = None,
+    params: jnp.ndarray | None = None,
+    output_fn: Callable[[Any], jnp.ndarray] | None = None,
     *,
-    t_span: Optional[tuple[float, float]] = None,
-    t_eval: Optional[jnp.ndarray] = None,
-    solve_kwargs: Optional[dict] = None,
+    t_span: tuple[float, float] | None = None,
+    t_eval: jnp.ndarray | None = None,
+    solve_kwargs: dict | None = None,
     diff: DifferentiationConfig = DifferentiationConfig(),
 ) -> SensitivityResult:
     """

@@ -139,10 +139,10 @@ target-version = "py310"
 # C420 and SIM300 are enabled as individual rules -- the only cleanly
 # safe-fixable, uncontroversial members of the C4 / SIM families. The rest of
 # those families, plus TC/RET/PERF/PTH/TID/FURB, are evaluated in issue #532
-# (each its own PR); `UP` (pyupgrade) is deliberately NOT selected yet -- it
-# flags ~530 typing modernizations (Optional -> X | None, dropping quoted
-# annotations) tracked in #467, so its large auto-fix lands as one reviewable PR.
-select = ["E", "F", "W", "I", "B", "RUF", "NPY", "PIE", "ICN", "FA", "C420", "SIM300"]
+# (each its own PR). `UP` (pyupgrade) modernizes the typing surface (Optional ->
+# X | None, dropping quoted annotations now that every module has `from __future__
+# import annotations`); its large one-time auto-fix landed as its own PR (#467).
+select = ["E", "F", "W", "I", "B", "RUF", "NPY", "PIE", "ICN", "FA", "UP", "C420", "SIM300"]
 ignore = [
     # `ruff format` owns line width: it reflows all code to line-length and
     # leaves only un-splittable lines long (string literals, URLs/refs in
@@ -152,8 +152,6 @@ ignore = [
     "RUF002",
     "RUF003",
     # --- deferred to dedicated audit issues (remove the ignore in that PR) ---
-    "F821",   # quoted type-only annotations (e.g. "Callable | None") -> #467
-    "RUF013", # implicit Optional from `= None` defaults              -> #467
     "E741",   # ambiguous names (l/r lambdas)                          -> #470 / #474
     "E731",   # lambda assigned to a name                              -> #474
     "B023",   # function uses loop variable (guarded by default-arg)   -> #470

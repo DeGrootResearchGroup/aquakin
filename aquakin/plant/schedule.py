@@ -10,8 +10,8 @@ solve.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 import jax.numpy as jnp
 
@@ -53,7 +53,7 @@ class PiecewiseConstantSchedule:
         if self._t_breaks.shape[0] and bool(jnp.any(jnp.diff(self._t_breaks) <= 0)):
             raise ValueError("PiecewiseConstantSchedule: t_breaks must be strictly increasing.")
 
-    def shifted(self, delta: float) -> "PiecewiseConstantSchedule":
+    def shifted(self, delta: float) -> PiecewiseConstantSchedule:
         """A copy with every held value offset by ``delta`` (same step times)."""
         return PiecewiseConstantSchedule(self._t_breaks, self._values + float(delta))
 

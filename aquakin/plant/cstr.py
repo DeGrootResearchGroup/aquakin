@@ -418,11 +418,11 @@ class CSTRUnit(AerationUnit, CouplingAware):
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     volume: float
     input_port_names: list[str]
     conditions: dict[str, float] = field(default_factory=dict)
-    aeration: "Aeration | None" = None
+    aeration: Aeration | None = None
     output_port: str = "out"
 
     def __post_init__(self) -> None:
@@ -504,7 +504,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         # Total inflow Q. The outflow equals the total inflow (constant
         # volume assumption; no accumulation of water).

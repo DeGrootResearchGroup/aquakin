@@ -69,6 +69,12 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
 
 ### Changed
 
+- `t_span` is now a **required positional argument** of `BatchReactor.solve` and
+  `BiofilmReactor.solve` (its docstring already documented it as required). It
+  previously defaulted to `None` and raised `ValueError` when omitted; omitting
+  it now raises `TypeError` naming the argument (so a type checker / IDE flags
+  the missing call argument too). Passing `t_span=None` explicitly still raises
+  the same curated `ValueError`. (#467)
 - The OpenFOAM Option-C coupling seam is now the free function
   `aquakin.transport.openfoam.from_cell_fields(cell_fields, n_cells)`, replacing
   the stateless `OpenFOAMBridge` namespace class (whose only member was a

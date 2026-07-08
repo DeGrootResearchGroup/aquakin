@@ -66,7 +66,7 @@ class PIController:
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     measured_species: str
     setpoint: float
     Kp: float
@@ -156,7 +156,7 @@ class PIController:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict:
         return {}  # no material outputs
 
@@ -169,7 +169,7 @@ class PIController:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         u, u_sat, e = self._output(state, inputs)
         dxi = (self.Kp / self.Ti) * e

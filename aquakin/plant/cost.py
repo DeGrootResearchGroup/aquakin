@@ -16,7 +16,6 @@ already computed by ``evaluate_bsm2``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 # Days per year for annualising CAPEX and reporting annual OPEX.
 _DAYS_PER_YEAR = 365.0
@@ -145,8 +144,8 @@ def operating_cost(
     carbon_kg_cod_per_d: float = 0.0,
     sludge_kg_tss_per_d: float = 0.0,
     methane_kg_per_d: float = 0.0,
-    factors: Optional[CostFactors] = None,
-    co2e_per_d: Optional[float] = None,
+    factors: CostFactors | None = None,
+    co2e_per_d: float | None = None,
 ) -> OperatingCost:
     """Monetise a plant's operating cost from its physical flows.
 

@@ -50,7 +50,7 @@ ASM1_TSS_SPECIES: tuple[str, ...] = ("XS", "XI", "XB_H", "XB_A", "XP")
 ASM1_TSS_FACTOR: float = 0.75
 
 
-def species_indices(model: "CompiledModel", names, *, what: str = "species") -> list[int]:
+def species_indices(model: CompiledModel, names, *, what: str = "species") -> list[int]:
     """Resolve species ``names`` to their model indices, raising on any missing.
 
     The **single, decided** missing-species policy for the separator/clarifier
@@ -90,7 +90,7 @@ def species_indices(model: "CompiledModel", names, *, what: str = "species") -> 
 
 
 def species_mask(
-    model: "CompiledModel", names, *, weight: float = 1.0, what: str = "species"
+    model: CompiledModel, names, *, weight: float = 1.0, what: str = "species"
 ) -> jnp.ndarray:
     """An ``(n_species,)`` array that is ``weight`` at each named species, 0 else.
 

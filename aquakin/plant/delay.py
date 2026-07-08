@@ -29,7 +29,7 @@ real hydraulic residence time) and to complete the BSM2 element set.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
@@ -67,10 +67,10 @@ class HydraulicDelayUnit:
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     tau: float
     initial_flow: float = 0.0
-    initial_concentrations: Optional[jnp.ndarray] = None
+    initial_concentrations: jnp.ndarray | None = None
     input_port: str = "in"
     output_port: str = "out"
 
@@ -112,7 +112,7 @@ class HydraulicDelayUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         Q, C = self._flow_and_conc(state)
         # Side-channel scalars pass straight through (T(out)=T(in), etc.).
@@ -133,7 +133,7 @@ class HydraulicDelayUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         s_in = inputs[self.input_port]
         loads = state[: self.model.n_species]

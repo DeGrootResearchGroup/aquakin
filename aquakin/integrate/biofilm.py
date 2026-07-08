@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Optional
 
 import diffrax
 import jax
@@ -348,14 +347,14 @@ class BiofilmReactor(GradientCheckMixin):
         diffusivity,
         boundary_layer: float,
         boundary_diffusivity=None,
-        soluble_mask: Optional[jnp.ndarray] = None,
-        fixed_mask: Optional[jnp.ndarray] = None,
+        soluble_mask: jnp.ndarray | None = None,
+        fixed_mask: jnp.ndarray | None = None,
         max_density=None,
         packing_fraction: float = 0.8,
         k_att: float = 0.0,
-        attach_mask: Optional[jnp.ndarray] = None,
+        attach_mask: jnp.ndarray | None = None,
         k_det: float = 0.0,
-        detach_mask: Optional[jnp.ndarray] = None,
+        detach_mask: jnp.ndarray | None = None,
         clamp_bulk: bool = False,
         feed=None,
         dilution_rate: float = 0.0,
@@ -557,12 +556,12 @@ class BiofilmReactor(GradientCheckMixin):
     def solve(
         self,
         C0: jnp.ndarray,
-        t_span: tuple[float, float] = None,
-        t_eval: Optional[jnp.ndarray] = None,
+        t_span: tuple[float, float],
+        t_eval: jnp.ndarray | None = None,
         *,
-        params: Optional[jnp.ndarray] = None,
-        conditions: Optional[SpatialConditions] = None,
-        time_unit: Optional[str] = None,
+        params: jnp.ndarray | None = None,
+        conditions: SpatialConditions | None = None,
+        time_unit: str | None = None,
     ) -> BiofilmSolution:
         """Integrate the layered biofilm over a time span.
 
@@ -638,16 +637,16 @@ class BiofilmReactor(GradientCheckMixin):
         self,
         C0: jnp.ndarray,
         t_span: tuple[float, float],
-        t_eval: Optional[jnp.ndarray] = None,
+        t_eval: jnp.ndarray | None = None,
         *,
         params: jnp.ndarray,
         sens_params,
-        conditions: Optional[SpatialConditions] = None,
-        sens_rtol: Optional[float] = None,
+        conditions: SpatialConditions | None = None,
+        sens_rtol: float | None = None,
         sens_atol=None,
         param_scale=None,
-        shared_factor: Optional[bool] = None,
-    ) -> tuple["BiofilmSolution", jnp.ndarray]:
+        shared_factor: bool | None = None,
+    ) -> tuple[BiofilmSolution, jnp.ndarray]:
         """Solve and return the forward sensitivity of the **bulk** ``dC/dtheta``.
 
         Integrates the augmented ``[y; S]`` system over the full layered state
@@ -897,7 +896,7 @@ class BiofilmReactor(GradientCheckMixin):
         C0: jnp.ndarray,
         params: jnp.ndarray,
         *,
-        conditions: Optional[SpatialConditions] = None,
+        conditions: SpatialConditions | None = None,
         warmup: float = 20.0,
         rtol: float = 1e-6,
         atol: float = 1e-8,

@@ -23,8 +23,9 @@ concentration the settling model reports. Both are zero in every other phase.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
@@ -75,7 +76,7 @@ class SBRPhase:
     decant: bool = False
     kla: float = 0.0
     settle: bool = False
-    mixed: Optional[bool] = None
+    mixed: bool | None = None
 
 
 @dataclass
@@ -117,7 +118,7 @@ class SBRUnit(CouplingAware):
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     phases: Sequence[SBRPhase]
     full_volume: float
     feed_flow: float
@@ -128,7 +129,7 @@ class SBRUnit(CouplingAware):
     conditions: dict = field(default_factory=dict)
     do_sat: float = 8.0
     oxygen_species: str = "SO"
-    initial_concentrations: Optional[jnp.ndarray] = None
+    initial_concentrations: jnp.ndarray | None = None
     cycle_origin: float = 0.0
     input_port: str = "feed"
     output_port: str = "effluent"
@@ -290,7 +291,7 @@ class SBRUnit(CouplingAware):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         C, V, extra = self._split(state)
         idx = self._phase_index(t)
@@ -311,7 +312,7 @@ class SBRUnit(CouplingAware):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         C, V, extra = self._split(state)
         idx = self._phase_index(t)

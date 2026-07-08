@@ -111,7 +111,7 @@ def _topo_sort_expressions(
 
 
 if TYPE_CHECKING:  # pragma: no cover
-    pass
+    from collections.abc import Callable
 
 
 @dataclass
@@ -207,28 +207,28 @@ class CompiledModel:
     # current parameter vector. ``stoich_matrix`` holds zeros at these
     # (row, col) cells; ``compute_stoich(params)`` scatters the dynamic
     # values onto the static base.
-    stoich_dynamic: list[tuple[int, int, "Callable"]] = field(default_factory=list)
-    _stoich_dynamic_rows: "jnp.ndarray | None" = None
-    _stoich_dynamic_cols: "jnp.ndarray | None" = None
+    stoich_dynamic: list[tuple[int, int, Callable]] = field(default_factory=list)
+    _stoich_dynamic_rows: jnp.ndarray | None = None
+    _stoich_dynamic_cols: jnp.ndarray | None = None
     # Optional state-derived condition fields (e.g. a charge-balance pH).
     # ``derived_condition_fn(C, params, condition_arrays, loc_idx)`` returns a
     # mapping of extra condition-field name -> scalar, computed from the
     # instantaneous state. These are merged into ``condition_arrays`` before
     # the rate callables run, so ordinary ``{pH}`` / ``pH_switch`` expressions
     # see the derived value. ``derived_fields`` lists the names it produces.
-    derived_condition_fn: "Callable | None" = None
+    derived_condition_fn: Callable | None = None
     derived_fields: list[str] = field(default_factory=list)
     # Optional projection onto the precipitation equilibrium, present when a
     # ``precipitation:`` block declares any ``mode: equilibrium`` minerals.
     # ``precipitation_equilibrium_fn(C, condition_arrays, loc_idx) -> C_eq``
     # snaps a composition onto the algebraic mineral equilibrium (see
     # :meth:`CompiledModel.precipitation_equilibrium`).
-    precipitation_equilibrium_fn: "Callable | None" = None
+    precipitation_equilibrium_fn: Callable | None = None
     # Optional positivity limiter on the net reaction term. When set, each
     # species' net reaction rate is throttled as its concentration approaches
     # zero, so consumption cannot drive a state negative. Applied to the
     # reaction term only (transport is added by the reactor afterwards).
-    positivity_threshold: "float | None" = None
+    positivity_threshold: float | None = None
     # Optional clamp of the concentration vector to >= 0 when evaluating the
     # reaction rates (and any state-derived condition such as pH). This protects
     # the nonlinear kinetics (Monod / ratio terms) from evaluating at a
@@ -269,7 +269,7 @@ class CompiledModel:
     # of stiff solves and especially their reverse-mode adjoint). Built once in
     # __post_init__; ``None`` falls back to the scalar path (an unsupported AST
     # node type, or a model with no reactions).
-    _rate_kernel: "Any | None" = field(default=None, init=False, repr=False)
+    _rate_kernel: Any | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         grouped: dict[str, tuple[list, list, list]] = {}
@@ -523,7 +523,7 @@ class CompiledModel:
 
         return SpatialConditions.uniform(n_locations, **self._condition_defaults)
 
-    def condition_defaults(self) -> "dict[str, float]":
+    def condition_defaults(self) -> dict[str, float]:
         """The model's declared default condition values as a plain scalar dict.
 
         The scalar-dict counterpart to :meth:`default_conditions` (which returns a
@@ -539,7 +539,7 @@ class CompiledModel:
 
     def precipitation_equilibrium(
         self,
-        C: "jnp.ndarray | None" = None,
+        C: jnp.ndarray | None = None,
         conditions=None,
         *,
         loc_idx: int = 0,
@@ -697,8 +697,8 @@ class CompiledModel:
         condition_arrays: dict[str, jnp.ndarray],
         loc_idx,
         *,
-        stoich: "jnp.ndarray | None" = None,
-        rate_scale: "jnp.ndarray | None" = None,
+        stoich: jnp.ndarray | None = None,
+        rate_scale: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
         """Return the fully post-processed chemistry RHS for one location.
 
@@ -1342,7 +1342,7 @@ def _compile_reaction(rxn, species_index, param_index, condition_fields, express
     return static_coeffs, dynamic_entries, ast.compile(ctx), ast
 
 
-def compile_model(spec: "Any") -> CompiledModel:
+def compile_model(spec: Any) -> CompiledModel:
     """
     Build a :class:`CompiledModel` from a validated :class:`ModelSpec`.
 
