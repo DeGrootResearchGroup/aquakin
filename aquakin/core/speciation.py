@@ -23,6 +23,7 @@ from typing import Callable
 
 import jax.numpy as jnp
 
+from aquakin.core.hints import did_you_mean
 from aquakin.core.ph_solver import solve_ph
 
 # Total acid/base systems understood by the pH solver, in solver-argument terms.
@@ -109,8 +110,8 @@ def build_ph_derived_fn(
     def _species_idx(name: str) -> int:
         if name not in species_index:
             raise KeyError(
-                f"speciation references undeclared species {name!r}. "
-                f"Declared: {sorted(species_index)}"
+                f"speciation references undeclared species {name!r}."
+                f"{did_you_mean(name, species_index)}"
             )
         return species_index[name]
 

@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.core.context import CompileContext
+from aquakin.core.hints import did_you_mean
 
 RateCallable = Callable[[jnp.ndarray, jnp.ndarray, dict, jnp.ndarray], jnp.ndarray]
 
@@ -163,7 +164,7 @@ class SpeciesNode(ASTNode):
         if self.name not in ctx.species_index:
             raise KeyError(
                 f"Species '{self.name}' is referenced in a rate expression but "
-                f"not declared. Declared species: {sorted(ctx.species_index)}"
+                f"not declared.{did_you_mean(self.name, ctx.species_index)}"
             )
         idx = ctx.species_index[self.name]
 
@@ -206,8 +207,8 @@ class ParamNode(ASTNode):
         raise KeyError(
             f"Parameter '{self.name}' is referenced in a rate expression but "
             f"not declared (neither as a reaction-local parameter on "
-            f"'{ctx.reaction_name}' nor as a model-level parameter). "
-            f"Declared parameters: {sorted(ctx.param_index)}"
+            f"'{ctx.reaction_name}' nor as a model-level parameter)."
+            f"{did_you_mean(self.name, ctx.param_index)}"
         )
 
     def param_names(self) -> set[str]:
@@ -224,8 +225,8 @@ class ConditionNode(ASTNode):
         if self.field_name not in ctx.condition_fields:
             raise KeyError(
                 f"Condition field '{self.field_name}' is referenced in a rate "
-                f"expression but not declared. Declared conditions: "
-                f"{sorted(ctx.condition_fields)}"
+                f"expression but not declared."
+                f"{did_you_mean(self.field_name, ctx.condition_fields)}"
             )
         name = self.field_name
 
