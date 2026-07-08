@@ -61,6 +61,19 @@ plot = ["matplotlib>=3.5"]
 # the gate red without a deliberate bump. Capped to the 0.15 series for the same
 # reason; raise the cap intentionally.
 lint = ["ruff>=0.15,<0.16"]
+# `docs` pins the Sphinx documentation toolchain (Read the Docs build + the CI
+# docs job). Floors are the known-good minimums; kept in one place so the RTD
+# build and CI resolve the same set. `myst-parser` lets the docs stay Markdown;
+# `pydata-sphinx-theme` is the theme; autodoc/napoleon/autosummary/intersphinx/
+# doctest are built into Sphinx (no separate package). The docs build imports
+# aquakin for autodoc, so the package itself (and its deps) install alongside.
+docs = [
+    "sphinx>=8.0",
+    "myst-parser>=4.0",
+    "linkify-it-py>=2.0",  # MyST `linkify` extension (bare URLs -> links)
+    "pydata-sphinx-theme>=0.16",
+    "sphinx-copybutton>=0.5",
+]
 # `test` pulls in the `dataframe` + `plot` extras by self-reference so their
 # pandas/matplotlib pins live in one place (the fast gate exercises the optional
 # exporters/plotting helpers).
