@@ -90,15 +90,6 @@ napoleon_google_docstring = False
 # ("duplicate object description").
 napoleon_use_ivar = True
 
-# The docs build is a strict `-W` gate for the failures that matter (a page
-# missing from the nav, a broken internal cross-reference, an autodoc import
-# failure, a failing doctest). It does NOT gate on `docutils`-level RST nitpicks
-# inside autodoc'd NumPy docstrings (multi-line ``inline literals``, field-list
-# spacing) -- cleaning those across the codebase is a separate docstring-polish
-# pass, tracked as a follow-up; suppressing them here keeps the infrastructure
-# gate meaningful without editing a dozen unrelated source docstrings.
-suppress_warnings = ["docutils"]
-
 # -- intersphinx --------------------------------------------------------------
 
 intersphinx_mapping = {

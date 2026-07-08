@@ -270,8 +270,7 @@ def characterize_influent(
         An ASM1 (or ASM1-state-compatible) model.
     flow : float
         Volumetric flow (m3/d).
-    total_cod, tkn, ammonia, nox, alkalinity, filtered_cod,
-    flocculated_filtered_cod, soluble_inert_cod, fractions :
+    total_cod, tkn, ammonia, nox, alkalinity, filtered_cod, flocculated_filtered_cod, soluble_inert_cod, fractions :
         Passed to :func:`fractionate`.
     T : float, optional
         Influent temperature (Kelvin), carried onto the series.

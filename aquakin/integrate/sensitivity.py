@@ -101,7 +101,7 @@ def sensitivity(
         is non-finite can be differentiated without a ``dtmax`` cap and without the
         caller touching ``diffrax``. ``check_finite`` (default ``True``) raises a
         friendly ``RuntimeError`` if the computed sensitivities are non-finite,
-        instead of returning silent ``NaN``s.
+        instead of returning silent ``NaN`` values.
 
     Returns
     -------

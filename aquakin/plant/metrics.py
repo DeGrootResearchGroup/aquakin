@@ -276,8 +276,7 @@ def effluent_quality_index(
 ) -> float:
     """EQI per Copp 2002 / Alex 2008.
 
-    ``EQI = (1 / T) × ∫ Q × (B_TSS×TSS + B_COD×COD + B_BOD×BOD
-                              + B_TKN×TKN + B_NO×SNO) dt × 1e-3``
+    ``EQI = (1 / T) × ∫ Q × (B_TSS×TSS + B_COD×COD + B_BOD×BOD + B_TKN×TKN + B_NO×SNO) dt × 1e-3``
 
     Units: kg pollutant / day, averaged over the simulation window. Accepts either
     a :class:`~aquakin.plant.streams.StreamSeries` -- ``effluent_quality_index(eff)``
@@ -555,8 +554,7 @@ def operational_cost_index_bsm2(
 ) -> float:
     """Full BSM2 OCI (Gernaey et al. 2014):
 
-    ``OCI = AE + PE + ME + 3·sludge + 3·carbon − 6·methane
-            + max(0, heating − 7·methane)``
+    ``OCI = AE + PE + ME + 3·sludge + 3·carbon − 6·methane + max(0, heating − 7·methane)``
 
     Energies in kWh/d; sludge and carbon in kg/d; methane in kg CH₄/d. The
     methane credit and the methane-offset heating term reward biogas recovery.
