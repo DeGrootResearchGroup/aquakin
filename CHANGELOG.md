@@ -19,6 +19,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-08
+
 The first public release of `aquakin`: a Python library for modelling reactive
 scalar transport in aqueous environmental systems. Reaction models are declared
 at runtime in YAML and compiled to JAX-native, automatically-differentiable rate
@@ -101,4 +103,5 @@ functions integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
   sensitivity & calibration), the YAML model-authoring reference, a catalog of
   every shipped model, and an API reference generated from the public surface.
 
-[Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/commits/main
+[Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/DeGrootResearchGroup/aquakin/releases/tag/v0.1.0

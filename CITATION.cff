@@ -13,6 +13,8 @@ authors:
     email: christopher.degroot@uwo.ca
     affiliation: The University of Western Ontario
 license: MIT
+version: 0.1.0
+date-released: "2026-07-08"
 repository-code: "https://github.com/DeGrootResearchGroup/aquakin"
 url: "https://aquakin.readthedocs.io"
 keywords:
@@ -22,8 +24,5 @@ keywords:
   - automatic differentiation
   - jax
   - diffrax
-# At release, add the released version and date, e.g.:
-#   version: 0.1.0
-#   date-released: "2026-07-05"
 # Future: mint a Zenodo DOI for archival citation and add it here, e.g.:
 #   doi: 10.5281/zenodo.XXXXXXX
