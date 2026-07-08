@@ -175,19 +175,21 @@ from aquakin.schema.loader import (
     load_model_from_file,
 )
 from aquakin.schema.model_spec import SpeciationUnitsWarning
-from aquakin.utils.balance import check_conservation
-from aquakin.utils.composition import (
-    canonical_content,
-    composition_table,
-)
-from aquakin.utils.units import (
+
+# The utility helpers are aggregated by aquakin.utils (the single utility
+# surface); the top-level namespace re-exports the curated model-analysis subset
+# from there rather than reaching into utils.balance / .composition / .units.
+from aquakin.utils import (
     UnitWarning,
+    canonical_content,
+    check_conservation,
     check_model_units,
+    check_nitrogen,
+    composition_table,
     parse_units,
 )
 
 __all__ = [
-    "ActivatedSludgeSizing",
     "ActivatedSludgeSizing",
     "Aeration",
     "AerationDesignPoint",
@@ -269,6 +271,7 @@ __all__ = [
     "check_conservation",
     "check_finite_gradient",
     "check_model_units",
+    "check_nitrogen",
     "clear_model_cache",
     "co2e_from_energy",
     "compare_scenarios",

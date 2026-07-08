@@ -17,6 +17,7 @@ They are deliberately cheap (the 2-species toy model), so they belong in the
 fast gate where signature drift must be caught.
 """
 
+import importlib
 import inspect
 
 import jax
@@ -167,3 +168,67 @@ def test_check_gradient_finite_guards_a_reverse_gradient(simple_model):
 
     g = r.check_gradient_finite(jax.grad(loss)(simple_model.default_parameters()))
     assert jnp.all(jnp.isfinite(g))
+
+
+# ---------------------------------------------------------------------------
+# Public export-surface contract (issue #477)
+#
+# The package exposes a two-tier public API: the flat ``aquakin`` namespace is a
+# *curated* set of the common entry points, and each domain subpackage
+# (``aquakin.plant`` / ``aquakin.integrate`` / ``aquakin.utils``) is the
+# *complete* surface for its domain. These tests pin that contract so the two
+# tiers cannot silently drift apart (the incident that motivated them: a
+# duplicate ``__all__`` entry, and ``aquakin.integrate`` exporting one reactor
+# but not its siblings).
+# ---------------------------------------------------------------------------
+
+_SUBPACKAGES = ("aquakin.integrate", "aquakin.plant", "aquakin.utils")
+
+
+def _all_names(module_name):
+    mod = importlib.import_module(module_name)
+    return mod, list(getattr(mod, "__all__", []))
+
+
+@pytest.mark.parametrize("module_name", ("aquakin",) + _SUBPACKAGES)
+def test_all_is_unique(module_name):
+    """No ``__all__`` lists a name twice (the duplicate-entry footgun)."""
+    _, names = _all_names(module_name)
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    assert not dupes, f"{module_name}.__all__ has duplicate entries: {dupes}"
+
+
+@pytest.mark.parametrize("module_name", ("aquakin",) + _SUBPACKAGES)
+def test_all_entries_resolve(module_name):
+    """Every advertised name is actually importable from that module."""
+    mod, names = _all_names(module_name)
+    missing = [n for n in names if not hasattr(mod, n)]
+    assert not missing, f"{module_name}.__all__ names not present on the module: {missing}"
+
+
+@pytest.mark.parametrize("subpackage", _SUBPACKAGES)
+def test_top_level_exports_are_mirrored_by_their_subpackage(subpackage):
+    """Every top-level export that *originates* in a domain subpackage is also
+    listed in that subpackage's own ``__all__``.
+
+    This is the completeness invariant: the flat namespace may carry only a
+    subset, but a subpackage must never omit a name the top level re-exports
+    from it (which is exactly how ``integrate`` came to export ``CFDReactor``
+    but not ``BiofilmReactor``). The reverse is deliberately *not* required --
+    a subpackage may expose more than the curated top level (e.g.
+    ``aquakin.utils.to_latex`` or ``aquakin.plant.DosingUnit``).
+    """
+    sub, sub_all = _all_names(subpackage)
+    sub_all = set(sub_all)
+    prefix = subpackage + "."
+    missing = []
+    for name in aquakin.__all__:
+        obj = getattr(aquakin, name)
+        origin = getattr(obj, "__module__", "")
+        if origin == subpackage or origin.startswith(prefix):
+            if name not in sub_all:
+                missing.append(name)
+    assert not missing, (
+        f"{subpackage}.__all__ is missing names the top level re-exports from "
+        f"it: {sorted(missing)}"
+    )
