@@ -96,12 +96,18 @@ class PlantSolution:
     events_log : list of (float, str), optional
         When the solve used ``events=``, the fired events in order as
         ``(time, name)``. ``None`` for a plain solve.
+    _requested_time_unit : str, optional
+        The unit :attr:`t` was rescaled into when :meth:`Plant.solve` was called
+        with an explicit ``time_unit=``, or ``None`` for the plant's native unit.
+        Backs the :attr:`time_unit` property; a declared field (rather than an
+        attribute set after construction) so it participates in ``repr``/``eq``.
     """
 
     t: jnp.ndarray
     state: jnp.ndarray
     plant: "Plant"
     events_log: Optional[list] = None
+    _requested_time_unit: Optional[str] = None
 
     @property
     def time_unit(self) -> Optional[str]:
@@ -110,7 +116,7 @@ class PlantSolution:
         The plant's native unit (:attr:`Plant.time_unit`), or the ``time_unit=``
         passed to :meth:`Plant.solve` when the times were reported in that unit.
         """
-        override = getattr(self, "_requested_time_unit", None)
+        override = self._requested_time_unit
         return override if override is not None else self.plant.time_unit
 
     @property

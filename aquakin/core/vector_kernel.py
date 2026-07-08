@@ -33,6 +33,7 @@ from typing import Callable
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from aquakin.core.nodes import (
     ASTNode,
@@ -238,16 +239,16 @@ class VectorizedRates:
     # Leaf blocks (static numpy index arrays into C / params; constant values;
     # condition field names). Each forms one contiguous block of the pool, in
     # this order: species, params, constants, conditions.
-    species_src: "any"
-    param_src: "any"
+    species_src: np.ndarray
+    param_src: np.ndarray
     const_vals: jnp.ndarray
-    cond_fields: tuple
+    cond_fields: tuple[str, ...]
     # Op steps in append (ascending-depth) order: (kernel, operand_pos_arrays,
     # aux), where each operand_pos array indexes into the pool prefix existing
     # when the step runs, and ``aux`` is a static per-instance array (the
     # constant exponents for a ``powc`` step) or ``None``.
-    steps: list
-    root_pos: jnp.ndarray
+    steps: list[tuple]
+    root_pos: np.ndarray
     n_reactions: int
 
     def __call__(self, C, params, condition_arrays, loc_idx):
@@ -288,8 +289,6 @@ def build_vectorized_rates(
     root_ids = [
         interner.intern(ast, name) for ast, name in zip(rate_asts, reaction_names, strict=True)
     ]
-
-    import numpy as np
 
     n_ids = len(interner.kinds)
     kinds = interner.kinds

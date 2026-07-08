@@ -278,7 +278,7 @@ def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model, ionic_
 def build_precipitation_equilibrium_derived_fn(
     config: dict,
     species_index: dict[str, int],
-) -> tuple[Callable, list[str], set[str]] | None:
+) -> tuple[Callable, list[str], set[str], Callable] | None:
     """Compile the equilibrium-mode minerals of a ``precipitation:`` block.
 
     Parameters
@@ -293,12 +293,15 @@ def build_precipitation_equilibrium_derived_fn(
 
     Returns
     -------
-    (derived_fn, produced_fields, required_fields) or None
+    (derived_fn, produced_fields, required_fields, project_fn) or None
         ``None`` when the block has no equilibrium-mode minerals. Otherwise
         ``derived_fn(C, params, condition_arrays, loc_idx) -> dict`` produces
         ``Xeq_<name>`` (the equilibrium phase amount, in state units) for each
         equilibrium mineral; ``produced_fields`` lists them; ``required_fields``
-        are the conditions it reads (pH, T).
+        are the conditions it reads (pH, T); ``project_fn(C, condition_arrays,
+        loc_idx)`` snaps a composition onto the precipitation equilibrium
+        (each equilibrium solid set to its equilibrium amount, dissolved ions
+        rebalanced, mass-conserving).
     """
     built = _build_equilibrium_system(config["minerals"], species_index)
     if built is None:

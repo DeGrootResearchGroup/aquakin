@@ -2780,10 +2780,13 @@ class Plant:
         """
         if time_factor != 1.0:
             ts = ts / time_factor  # native -> requested unit
-        sol = PlantSolution(t=ts, state=ys, plant=self, events_log=events_log)
-        if time_unit is not None:
-            sol._requested_time_unit = time_unit
-        return sol
+        return PlantSolution(
+            t=ts,
+            state=ys,
+            plant=self,
+            events_log=events_log,
+            _requested_time_unit=time_unit,
+        )
 
     def _solve_stable_adjoint(
         self,
