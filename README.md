@@ -3,6 +3,8 @@
 [![CI](https://github.com/DeGrootResearchGroup/aquakin/actions/workflows/ci.yml/badge.svg)](https://github.com/DeGrootResearchGroup/aquakin/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/DeGrootResearchGroup/aquakin/branch/main/graph/badge.svg)](https://codecov.io/gh/DeGrootResearchGroup/aquakin)
 [![Docs](https://readthedocs.org/projects/aquakin/badge/?version=latest)](https://aquakin.readthedocs.io/en/latest/)
+[![PyPI](https://img.shields.io/pypi/v/aquakin.svg)](https://pypi.org/project/aquakin/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21268514.svg)](https://doi.org/10.5281/zenodo.21268514)
 
 `aquakin` is a Python library for modelling reactive scalar transport in
 aqueous environmental systems. Reaction models are declared at runtime in

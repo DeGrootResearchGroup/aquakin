@@ -15,6 +15,7 @@ authors:
 license: MIT
 version: 0.1.0
 date-released: "2026-07-08"
+doi: 10.5281/zenodo.21268514
 repository-code: "https://github.com/DeGrootResearchGroup/aquakin"
 url: "https://aquakin.readthedocs.io"
 keywords:
@@ -24,5 +25,3 @@ keywords:
   - automatic differentiation
   - jax
   - diffrax
-# Future: mint a Zenodo DOI for archival citation and add it here, e.g.:
-#   doi: 10.5281/zenodo.XXXXXXX
