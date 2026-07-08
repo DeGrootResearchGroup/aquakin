@@ -161,7 +161,7 @@ class SignalProducer(Protocol):
         self,
         t: jnp.ndarray,
         state: jnp.ndarray,
-        inputs: dict[str, "Stream"],
+        inputs: dict[str, Stream],
         params: jnp.ndarray,
     ) -> dict[str, jnp.ndarray]: ...
 
