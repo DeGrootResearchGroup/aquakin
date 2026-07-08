@@ -65,6 +65,17 @@ reactions:
   feed result labelling and the opt-in `check_units` dimensional check; they are
   not otherwise used at runtime. `check_units` treats a blank/unparseable unit
   as unknown (skipped).
+- Species units are **also** cross-checked against each `speciation:` /
+  `precipitation:` `molar_mass` at load time (`_audit_speciation_molar_mass` in
+  `schema/model_spec.py`). `molar_mass` converts the species state value to mol/L
+  (`mol/L = state / molar_mass`), so it must be a pure unit-conversion factor (a
+  power of ten) for an already-molar species and a molecular weight (never a
+  clean power of ten, always > 1) for a mass species. A value on the wrong side
+  of that split emits an advisory `aquakin.SpeciationUnitsWarning` (a warning,
+  not an error — it catches a silent pH / saturation-index shift from a hand-edit
+  that changes a species' `units` without updating `molar_mass`). It is
+  calibrated to zero false positives on every shipped model; a blank/unparseable
+  or non-mass/non-molar unit is skipped.
 - `reference` on reactions is optional but strongly encouraged — it makes
   the YAML file a self-documenting scientific artifact.
 - `bounds` on parameters are optional, used by `fit()` as box constraints.
