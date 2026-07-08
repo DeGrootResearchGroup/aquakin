@@ -46,9 +46,17 @@ Key types:
   — the plant never branches its call on a per-unit capability flag. The
   control-signal bus is threaded into every `rhs` as `signals` (an uncontrolled
   unit ignores it), and `flow_outputs` always receives a `FlowContext` carrying
-  the unit's own state and the time (a fixed-split unit ignores it). The one
-  optional, duck-typed hook is `signal_outputs(...)`, implemented only by units
-  that *produce* control signals (e.g. `PIController`). A **stateless** unit
+  the unit's own state and the time (a fixed-split unit ignores it). Beyond the
+  core contract a unit may implement one or more **optional capability hooks**,
+  each with a named `runtime_checkable` Protocol in `plant/units.py` so the plant
+  detects it with `isinstance` (not a stringly-typed `hasattr`): `SignalProducer`
+  (`signal_outputs`, e.g. `PIController`), `PHOperating` (`operating_pH`),
+  `LiquidVolumeUnit` (`liquid_volume`), `ComponentInventoryUnit`
+  (`component_inventory`), `CycleEventSource` (`cycle_events`, the SBR), and
+  `TemperatureSettable` (`set_temperature`); the `Unit` docstring enumerates them.
+  (A few hooks read as *values with a default* — `signal_names` /
+  `required_signals` / `flow_param_defaults`, and the translator's
+  `needs_src_pH` / `needs_dest_pH` — stay plain look-ups.) A **stateless** unit
   (`state_size == 0`: mixers, splitters, ideal separators) inherits the
   `StatelessUnit` mixin (`plant/units.py`), which supplies the three trivial
   state members (`state_size → 0`, empty `initial_state`, no-op `rhs`), so it

@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from aquakin.plant.units import ComponentInventoryUnit, LiquidVolumeUnit
 from aquakin.utils.composition import canonical_content
 
 # CH4 / H2 oxygen demand (g COD per g gas): CH4 + 2 O2 -> CO2 + 2 H2O = 64/16.
@@ -158,12 +159,13 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_model, params):
         return {}
     content = content_by_model[net.name]  # {component: (n_species,) array}
 
-    inventory = getattr(unit, "component_inventory", None)
-    if inventory is not None:
-        return inventory(state_vec, content, plant._params_for_unit(unit_name, params))
+    if isinstance(unit, ComponentInventoryUnit):
+        return unit.component_inventory(
+            state_vec, content, plant._params_for_unit(unit_name, params)
+        )
 
     sv = np.asarray(state_vec)
-    if hasattr(unit, "liquid_volume"):
+    if isinstance(unit, LiquidVolumeUnit):
         V = float(unit.liquid_volume(state_vec))
         C = sv[: net.n_species]
         return {comp: V * float(np.dot(C, vec)) for comp, vec in content.items()}

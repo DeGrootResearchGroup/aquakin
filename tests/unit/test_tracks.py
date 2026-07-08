@@ -115,7 +115,15 @@ def test_empty_tracks_mapping_rejected_on_write(tmp_path):
 
 
 def test_bridge_field_shape_mismatch_rejected():
-    from aquakin.transport.openfoam.bridge import OpenFOAMBridge
+    from aquakin.transport.openfoam.bridge import from_cell_fields
 
     with pytest.raises(ValueError, match="expected"):
-        OpenFOAMBridge.from_cell_fields({"pH": jnp.asarray([7.0, 7.5])}, n_cells=3)
+        from_cell_fields({"pH": jnp.asarray([7.0, 7.5])}, n_cells=3)
+
+
+def test_bridge_builds_spatial_conditions():
+    from aquakin.transport.openfoam.bridge import from_cell_fields
+
+    cond = from_cell_fields({"pH": jnp.asarray([7.0, 7.5, 8.0])}, n_cells=3)
+    assert cond.n_locations == 3
+    assert jnp.allclose(cond.fields["pH"], jnp.asarray([7.0, 7.5, 8.0]))
