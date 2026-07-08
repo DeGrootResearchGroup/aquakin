@@ -1,4 +1,4 @@
-"""Colored-Jacobian sparsity management for :class:`Plant` (issue #388).
+"""Colored-Jacobian sparsity management for :class:`Plant`.
 
 A plant flowsheet has a large, block-sparse Jacobian: each unit couples to its
 own state and to the inlet concentrations of the streams feeding it, and the

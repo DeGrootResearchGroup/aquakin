@@ -114,7 +114,7 @@ class ADM1DigesterUnit(CouplingAware):
         return self.model.default_concentrations()
 
     def coupling_pattern(self):
-        """Structural Jacobian sparsity (issue #388).
+        """Structural Jacobian sparsity.
 
         ``self`` is the ADM1 kinetics + gas-transfer + state-derived-pH coupling
         from the rate AST. ``inlet`` is the dilution, which couples each *liquid*

@@ -478,7 +478,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
         return self.model.default_concentrations()
 
     def coupling_pattern(self):
-        """Structural Jacobian sparsity (issue #388).
+        """Structural Jacobian sparsity.
 
         ``self`` is the reaction kinetics' coupling from the rate AST (a saturated
         Monod term is numerically invisible at any single state, so the syntactic

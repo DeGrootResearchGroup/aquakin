@@ -172,7 +172,7 @@ class MBRUnit(AerationUnit, CouplingAware):
         return jnp.asarray(self.volume)
 
     def coupling_pattern(self):
-        """Structural Jacobian sparsity (issue #388).
+        """Structural Jacobian sparsity.
 
         State is ``[C (n_species), R_f]``. ``self``: the reaction kinetics'
         structural pattern on the species block (a saturated Monod term is

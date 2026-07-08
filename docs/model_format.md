@@ -145,29 +145,30 @@ model-level parameters with symbolic stoichiometry. Calibrating `Y_H`
 adjusts every coefficient that depends on it across aerobic and anoxic
 heterotrophic growth in one step.
 
-## Rate expression grammar
+## Built-in functions
 
-- **Built-in functions:**
-  - `arrhenius(A, Ea)` — `A * exp(-Ea / (R * T))`. Requires a condition field
-    named `T` (Kelvin).
-  - `pH_switch(pKa)` — `1 / (1 + 10^(pH - pKa))`, the protonated fraction.
-    Requires a condition field named `pH`.
-  - `monod(X, K)` — `X / (K + X)`. Saturation Monod term; the standard
-    substrate-limitation form in microbial kinetics.
-  - `monod_inh(X, K)` — `K / (K + X)`. Inhibition Monod; equal to
-    `1 - monod(X, K)`. Used as an aerobic/anoxic switch in ASM-family models.
-  - `monod_ratio(A, B, K)` — `(A/B) / (K + A/B)`, written numerically as
-    `A / (K*B + A)`. The substrate-to-biomass ratio form used in ASM
-    hydrolysis kinetics.
-  - `monod_inh_ratio(A, B, K)` — `K / (K + A/B)`. The inhibition counterpart
-    of `monod_ratio`. Appears in bio-P models as a gate on the
-    storage-to-biomass ratio.
-  - `safe_div(num, denom)` — `num / denom`, but returns `0` (with a finite
-    gradient) where `denom == 0` instead of `inf`/`NaN`. Use it for a ratio
-    whose denominator can legitimately reach exactly zero — e.g. a
-    substrate-competition fraction `safe_div([A], [A] + [B])` where both
-    substrates can deplete to 0 — so the rate takes its physical limit `0`
-    there, without padding the denominator with a small dimensionless constant.
+The following functions may be called in any rate expression:
+
+- `arrhenius(A, Ea)` — `A * exp(-Ea / (R * T))`. Requires a condition field
+  named `T` (Kelvin).
+- `pH_switch(pKa)` — `1 / (1 + 10^(pH - pKa))`, the protonated fraction.
+  Requires a condition field named `pH`.
+- `monod(X, K)` — `X / (K + X)`. Saturation Monod term; the standard
+  substrate-limitation form in microbial kinetics.
+- `monod_inh(X, K)` — `K / (K + X)`. Inhibition Monod; equal to
+  `1 - monod(X, K)`. Used as an aerobic/anoxic switch in ASM-family models.
+- `monod_ratio(A, B, K)` — `(A/B) / (K + A/B)`, written numerically as
+  `A / (K*B + A)`. The substrate-to-biomass ratio form used in ASM
+  hydrolysis kinetics.
+- `monod_inh_ratio(A, B, K)` — `K / (K + A/B)`. The inhibition counterpart
+  of `monod_ratio`. Appears in bio-P models as a gate on the
+  storage-to-biomass ratio.
+- `safe_div(num, denom)` — `num / denom`, but returns `0` (with a finite
+  gradient) where `denom == 0` instead of `inf`/`NaN`. Use it for a ratio
+  whose denominator can legitimately reach exactly zero — e.g. a
+  substrate-competition fraction `safe_div([A], [A] + [B])` where both
+  substrates can deplete to 0 — so the rate takes its physical limit `0`
+  there, without padding the denominator with a small dimensionless constant.
 
 Examples mixing all three reference forms:
 

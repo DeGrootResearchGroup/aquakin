@@ -248,7 +248,7 @@ class StatelessUnit(CouplingAware):
         return jnp.zeros((0,))
 
     def coupling_pattern(self):
-        """No state -> no structural Jacobian contribution (issue #388)."""
+        """No state -> no structural Jacobian contribution."""
         import numpy as np
 
         from aquakin.plant.coupling import CouplingPattern
