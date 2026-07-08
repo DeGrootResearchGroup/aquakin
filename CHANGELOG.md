@@ -10,173 +10,90 @@ Add entries under [Unreleased] as changes are made, grouped by:
 Added / Changed / Deprecated / Removed / Fixed / Security (omit empty groups).
 At release, rename [Unreleased] to the version with its date and open a fresh
 empty [Unreleased] section above it.
+
+0.1.0 is the first release, so its notes are a curated, Added-oriented summary of
+what the package does rather than a diff against a prior version (there is none).
+Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
+0.1.0) begins with the next release.
 -->
 
 ## [Unreleased]
 
-The first public release (0.1.0) is being prepared. Entries below accumulate the
-notable changes it will contain.
-
-<!--
-Release note for 0.1.0: do NOT ship these entries verbatim, and do NOT backfill
-pre-release history. A changelog documents changes between releases; there is no
-prior release to diff against, so "Changed"/"Fixed" framing (e.g. the
-network->model rename, the sludge_metrics fix) is meaningless to a first-time
-user — nobody ran the earlier state. At release, collapse this section into a
-curated "Initial release" summary: an Added-oriented, high-level description of
-what the package does. The entries here are the raw material for that summary,
-not the final text. Granular per-change logging (Changed/Fixed/Deprecated/
-Removed) begins with the release after 0.1.0, relative to 0.1.0.
--->
-
+The first public release of `aquakin`: a Python library for modelling reactive
+scalar transport in aqueous environmental systems. Reaction models are declared
+at runtime in YAML and compiled to JAX-native, automatically-differentiable rate
+functions integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
 
 ### Added
 
-- Unified public export surface. Each domain subpackage now aggregates its
-  *complete* public API into one namespace — `aquakin.utils` gained the
-  conservation / composition / unit-check helpers (`check_conservation`,
-  `check_nitrogen`, `composition_table`, `canonical_content`, `parse_units`,
-  `check_model_units`, `UnitWarning`) alongside `to_latex` and the RTD curves,
-  and `aquakin.integrate` now re-exports the full set of reactors, solutions,
-  sensitivity/adjoint, event, design, Monte-Carlo and scenario entry points
-  (previously only a partial subset was importable as `aquakin.integrate.*`).
-  The flat top-level `aquakin` namespace remains the curated common subset, and
-  `aquakin.check_nitrogen` now joins its peer `aquakin.check_conservation`
-  there. (#477)
-- Named `runtime_checkable` Protocols for the optional plant-unit capability
-  hooks (`SignalProducer`, `PHOperating`, `LiquidVolumeUnit`,
-  `ComponentInventoryUnit`, `CycleEventSource`, `TemperatureSettable` in
-  `aquakin.plant.units`), so a custom unit's optional contract is explicit and
-  importable and the plant detects a capability with `isinstance` rather than a
-  stringly-typed `hasattr`. The `Unit` docstring now enumerates them. (#468)
-- Load-time advisory that cross-checks each `speciation:` / `precipitation:`
-  `molar_mass` against the referenced species' declared `units`. Since
-  `molar_mass` converts the species state value to mol/L, an already-molar
-  species needs only a power-of-ten unit factor while a mass species needs a
-  molecular weight; a value on the wrong side of that split emits a new
-  `aquakin.SpeciationUnitsWarning`, catching a hand-edit that would silently
-  shift the computed pH / saturation index. Calibrated to zero false positives
-  on the shipped models; filter it with `warnings.filterwarnings("ignore",
-  category=aquakin.SpeciationUnitsWarning)`. (#562)
-- Plant-wide calibration: `plant.calibrate(...)` fits reaction-model parameters
-  (and, optionally, assembled-state initial conditions) against measured stream
-  data through the forward-model seam, reusing the reactor calibration
-  machinery. Supports multi-stream observables and joint multi-batch fits.
-  (#498, #499, #500, #501)
-- `aquakin.time_average(values, t)` — the trapezoidal time-average of a solution
-  trajectory (with the one-point steady-state convention) is now a single public
-  helper. It replaces four private per-module copies, two of which had an
-  *inverted* `(t, values)` signature; every plant metric / design / aeration /
-  GHG / evaluation path now calls the one `(values, t)` kernel. (#476)
-- `CITATION.cff`, so the package can be cited and GitHub shows a "Cite this
-  repository" button. (#494)
-- `CHANGELOG.md` (this file), following the Keep a Changelog format.
-- A uniform plant exception taxonomy (`aquakin.UnknownUnitError`,
-  `UnknownPortError`, `WiringError`, `NoDigesterError`) so a caller can tell an
-  unknown *name* from an invalid *wiring/usage*. Each subclasses the built-in it
-  historically raised (`UnknownUnitError`/`UnknownPortError` are `KeyError`,
-  `WiringError`/`NoDigesterError` are `ValueError`), so existing `except`
-  clauses keep working. (#466)
+- **Runtime kinetics engine.** Reaction models are authored in YAML and compiled
+  to JAX rate functions — no recompilation to change a model. Rate expressions
+  are parsed and evaluated through a custom AST (no `eval()`), so they are safe,
+  introspectable, and fully differentiable. Every solve is differentiable
+  end-to-end via JAX, and stiff systems are integrated with Diffrax implicit
+  solvers (`Kvaerno5` by default). `import aquakin` enables JAX 64-bit mode,
+  which the stiff solves require (a documented, one-time-warned side effect).
 
-### Changed
+- **Reactors.** Batch (0-D well-mixed), plug-flow (1-D steady state),
+  `BiofilmReactor` (1-D diffusion–reaction over biofilm depth for
+  penetration-controlled processes), a Lagrangian particle-track reactor for
+  offline OpenFOAM coupling, and a CFD-field reactor. Every reactor shares one
+  `solve()` / `solve_sensitivity()` contract.
 
-- `t_span` is now a **required positional argument** of `BatchReactor.solve` and
-  `BiofilmReactor.solve` (its docstring already documented it as required). It
-  previously defaulted to `None` and raised `ValueError` when omitted; omitting
-  it now raises `TypeError` naming the argument (so a type checker / IDE flags
-  the missing call argument too). Passing `t_span=None` explicitly still raises
-  the same curated `ValueError`. (#467)
-- The OpenFOAM Option-C coupling seam is now the free function
-  `aquakin.transport.openfoam.from_cell_fields(cell_fields, n_cells)`, replacing
-  the stateless `OpenFOAMBridge` namespace class (whose only member was a
-  classmethod). Update `OpenFOAMBridge.from_cell_fields(...)` calls to
-  `from_cell_fields(...)`. (#468)
-- `BiofilmReactor` now defaults `atol=None` to the per-component
-  `default_atol` noise floor (tiled across its layers), matching every other
-  reactor, instead of a fixed `1e-9` scalar that is ~9 orders too tight for
-  g/m³ ASM/ADM states (a slow or step-budget-exhausting solve). `IFASUnit` /
-  `MBBRUnit`, which build a `BiofilmReactor` internally, inherit the fix. Pass an
-  explicit scalar or array `atol=` to override. (#450)
-- `CompiledModel.atol()` (the by-name per-species tolerance builder) now defaults
-  to the per-component `default_atol` floor rather than a uniform `1e-9`; pass
-  `default=` for a uniform scalar floor. (#450)
-- `BatchReactor.solve(time_unit=...)` now warns when a `dtmax` cap is set and a
-  non-native `time_unit` is used, since `dtmax` stays in the model's native time
-  unit while `time_unit` rescales `t_span`/`t_eval` (the cap would otherwise be
-  off by the unit ratio). (#450)
-- **Renamed "reaction network" to "reaction model" throughout** (a hard rename
-  with no back-compatibility aliases, done while pre-release). Public API:
-  `CompiledNetwork` → `CompiledModel`, `compile_network` → `compile_model`,
-  `NetworkSpec` → `ModelSpec`, `NetworkMeta` → `ModelMeta`,
-  `load_network[_from_file]` → `load_model[_from_file]`, `clear_network_cache` →
-  `clear_model_cache`, `check_network_units` → `check_model_units`. In YAML model
-  files the top-level key `network:` is now `model:`, and the `aquakin.networks`
-  package is now `aquakin.models`. (#491)
-- Grouped the many tuning arguments of `calibrate`, `profile_likelihood`, and
-  `plant.calibrate` into config dataclasses — `OptimizerConfig`, `LaplaceConfig`,
-  and `FreeICConfig` (alongside the existing `DifferentiationConfig`) — so each
-  signature keeps only its primary arguments. (#504)
-- Modernized packaging metadata: adopted PEP 639 SPDX license metadata
-  (`license = "MIT"` + `license-files`), single-sourced the package version from
-  `aquakin.__version__`, and added `Documentation` and `Changelog` project URLs.
-  (#494)
-- Harmonized the forward-sensitivity signatures with `solve`: `params` is now
-  **keyword-only** on `BatchReactor.solve_sensitivity`,
-  `PlugFlowReactor.solve_sensitivity`, `BiofilmReactor.solve_sensitivity`, and the
-  free `aquakin.forward_sensitivity`, matching the keyword-only `params` on every
-  reactor `solve`. A parameter vector passed positionally (e.g.
-  `reactor.solve_sensitivity(C0, params, t_span, ...)`) now raises `TypeError`
-  instead of silently landing in the `t_span` slot; pass it as
-  `params=...`. (#234)
-- Library progress output is now routed through the standard `logging` module
-  instead of `print`, so callers can silence or redirect it. The `progress=`
-  option of `plant.steady_state_dgsm` / `dynamic_dgsm` emits a `logging.INFO`
-  record (on the `aquakin.plant.sensitivity` logger) every N samples rather than
-  writing to stdout — enable it with, e.g., `logging.basicConfig(level=
-  logging.INFO)`. aquakin attaches a `NullHandler` to its package logger and
-  never configures logging on the application's behalf. (#472)
-- `Plant.set_temperature` now raises `UnknownUnitError` (a `KeyError` subclass)
-  for an unknown unit name, matching every other unknown-unit lookup, instead of
-  `ValueError`; a unit that cannot take a temperature now raises `WiringError`
-  (still a `ValueError`). Code that caught the unknown-unit case as a bare
-  `ValueError` should catch `KeyError`/`UnknownUnitError` (or the message).
-  (#466)
+- **Plant-wide flowsheets (`aquakin.plant`).** Compose reactors with clarifiers,
+  mixers/splitters, thickeners, chemical dosing, an ADM1 digester (with gas
+  headspace), SBR, MBR, and IFAS/MBBR units into a full plant integrated under
+  one monolithic, differentiable solve. Includes the IWA benchmark builders
+  BSM1, BSM2, and an A²O plant; exact, gain-independent recycle resolution;
+  run-to-steady-state plus a fast pseudo-transient-continuation algebraic
+  steady-state solver (~10× faster than settling); per-unit temperature dynamics;
+  PI control; dynamic influents; and results-level mass-balance closure.
 
-### Fixed
+- **Located events.** Time events and state root-crossings with exact state
+  resets / mode switches (on/off pumps, SBR phase transitions, dosing on/off,
+  level limits); time-scheduled events keep `jax.grad` finite through the solve.
 
-- Load-time errors for a rate or stoichiometry expression, a named
-  `expressions:` entry, or a `speciation:` / `precipitation:` block that
-  references an **undeclared species, parameter, or condition** now append a
-  `Did you mean: …?` close-match hint (via the shared `hints.did_you_mean`,
-  already used elsewhere) instead of dumping the full sorted list of valid names —
-  the graduate-student authoring ergonomics the rest of the API already had,
-  applied consistently across the core-compile and Pydantic-schema layers. (#470)
-- A forward-mode `dgsm` screen no longer masks unrelated errors. Previously
-  *any* exception raised while evaluating the samples in forward mode (a bug in
-  the user's `fn`, a bad shape, an OOM) was relabelled as the "use
-  `forward_adjoint()`" guidance error; it now converts only JAX's actual
-  forward-mode-through-`custom_vjp` rejection and lets every other error
-  propagate with its real traceback. (#466)
-- The plant mass balance's biogas term no longer swallows genuine failures: it
-  now catches only `NoDigesterError` (the "no digester → no biogas" case) from
-  `digester_gas`, so a real bug inside `digester_gas` surfaces instead of being
-  silently reported as zero biogas. (#466)
-- `sludge_metrics(substrate=...)` now validates its argument against
-  `{"BOD", "COD"}` and raises on an invalid value, instead of silently falling
-  back to COD (which could report F:M and the influent BOD load roughly 2× off).
-  (#492)
-- `check_conservation` now warns when a species matches no role-based
-  composition rule, instead of silently treating it as having zero COD/N/P
-  content. (#493)
-- Separator/clarifier units (`IdealClarifier`, `IdealThickener`,
-  `PrimaryClarifier`, `TakacsClarifier`, and the SBR settling models) now **raise
-  a clear error** when a configured settling / particulate / TSS species is not
-  in the model, instead of the previous *contradictory* behaviour where some
-  units silently dropped it (under-settling / under-counting solids without
-  warning) and others raised a bare `KeyError`. A model that does not define a
-  unit's default (ASM1) settling species must now name its own `settling_species`
-  / `particulate_species` / `tss_species` explicitly. The species-mask
-  construction and the Q-weighted feed / capture-split logic these units
-  duplicated are now shared helpers. (#464)
+- **Acid–base chemistry and mineral precipitation.** A charge-balance,
+  state-derived pH, and saturation-index-driven mineral precipitation /
+  dissolution (struvite + calcite, and iron/aluminium chemical phosphorus
+  removal). Two opt-in differentiable formulations handle the stiff, very
+  insoluble limit: an algebraic-equilibrium mode solving `IAP = Ksp` directly and
+  a bounded-driver kinetic form for differentiable dynamics.
+
+- **Sensitivity and uncertainty quantification.** Cap-free forward sensitivity
+  and reverse-mode discrete adjoints through stiff plant solves; derivative-based
+  global sensitivity (DGSM) screening; Monte-Carlo propagation; profile
+  likelihood; and standardized scenario-comparison KPI tables.
+
+- **Calibration.** MAP calibration of reactor and plant parameters against
+  measured data through a shared forward-model seam, with a Laplace posterior,
+  multi-stream observables, joint multi-batch fits, free initial-condition
+  fitting, and predictive bands.
+
+- **Design, evaluation, and reporting.** BSM effluent-quality (EQI) and
+  operational-cost (OCI) indices; aeration/blower and activated-sludge sizing;
+  monetised OPEX/CAPEX cost; greenhouse-gas (N₂O / CO₂e) footprinting; and
+  influent characterization / SUMO-style fractionation, including per-row
+  ingestion of arbitrary lab/SCADA CSVs.
+
+- **Shipped model catalog.** Chemistry — ozonation / bromate formation (after
+  Acero & von Gunten 2001) and UV/H₂O₂. Biology — the ASM activated-sludge family
+  (ASM1; a two-step nitrification/denitrification variant with explicit nitrite;
+  a two-pathway AOB nitrous-oxide model; anammox / deammonification; and a
+  comammox complete-nitrifier variant), ADM1 anaerobic digestion in its BSM2 form
+  with gas headspace, and the WATS sewer-process models (`wats_sewer_extended`
+  and the paper-faithful `wats_sewer_khalil_paper` with structural variants for
+  model-structure studies).
+
+- **Utilities and introspection.** Conservation, nitrogen, and dimensional-unit
+  consistency checks; LaTeX rendering of rate expressions; residence-time-
+  distribution analytics; and by-name access to species, parameters, states, and
+  streams. The public API is two-tier: a curated flat `aquakin.*` namespace of
+  common entry points, plus complete per-domain surfaces in `aquakin.plant`,
+  `aquakin.integrate`, and `aquakin.utils`.
+
+- **Packaging and citation.** MIT-licensed with PEP 639 SPDX metadata, a
+  single-sourced version, and a `CITATION.cff` so the package can be cited (and
+  GitHub shows a "Cite this repository" button).
 
 [Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/commits/main
