@@ -560,7 +560,7 @@ class CalibrationResult:
                 "Laplace posterior is degenerate."
             )
         std_k = np.sqrt(s[pos])
-        rng = np.random.RandomState(seed)
+        rng = np.random.default_rng(seed)
         draws = (
             theta_map[None, :]
             + (rng.standard_normal((n_draw, int(pos.sum()))) * std_k[None, :]) @ Q[:, pos].T
@@ -1080,12 +1080,12 @@ def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bound
         theta0_np = np.asarray(theta0)
         # Default: a single Gaussian stream of scale ``jitter`` seeded once.
         # ``jitter_schedule`` (a tuple of scales): start s uses scale
-        # schedule[(s-1) % len] with its own RandomState (seed + s).
-        seq_rng = None if cfg.jitter_schedule else np.random.RandomState(cfg.seed)
+        # schedule[(s-1) % len] with its own generator (seed + s).
+        seq_rng = None if cfg.jitter_schedule else np.random.default_rng(cfg.seed)
         for s in range(1, cfg.n_starts):
             if cfg.jitter_schedule:
                 jit = cfg.jitter_schedule[(s - 1) % len(cfg.jitter_schedule)]
-                noise = np.random.RandomState(cfg.seed + s).normal(0.0, jit, size=theta0_np.shape)
+                noise = np.random.default_rng(cfg.seed + s).normal(0.0, jit, size=theta0_np.shape)
             else:
                 noise = seq_rng.normal(0.0, cfg.jitter, size=theta0_np.shape)
             perturbed = theta0_np + noise

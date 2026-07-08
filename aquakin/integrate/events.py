@@ -40,6 +40,11 @@ import optimistix as optx
 
 from aquakin.integrate._common import _run_diffeqsolve, friendly_solve_errors
 
+# Relative tolerance (scaled by the span) for deciding a save time coincides with
+# a segment boundary, so it is assigned to the segment ending there (its
+# pre-reset value) rather than duplicated across the reset.
+_BOUNDARY_ASSIGN_RTOL = 1e-9
+
 
 @dataclass
 class Event:
@@ -301,7 +306,7 @@ def _drive(
                 None if ev.direction == 0 else bool(ev.direction == 1) for ev in root_events
             ],
         )
-    tol = 1e-9 * max(1.0, abs(t1 - t0))  # boundary-assignment tolerance
+    tol = _BOUNDARY_ASSIGN_RTOL * max(1.0, abs(t1 - t0))
 
     log = []
     out_y = []

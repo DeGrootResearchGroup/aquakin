@@ -21,6 +21,7 @@ from aquakin.integrate._common import (
     cached_jitted_solver,
     friendly_solve_errors,
     init_solver_settings,
+    prepare_sensitivity,
     reactor_settings_key,
     resolve_state_atol,
     solve_chemistry,
@@ -239,25 +240,17 @@ class PlugFlowReactor(GradientCheckMixin):
             Sensitivity ``dC/dtheta`` at the axial output points, shape
             ``(n_points, n_species, n_sens_params)``.
         """
-        from aquakin.integrate._common import _interp_fields_to_scalar
-        from aquakin.integrate.forward_sensitivity import (
-            resolve_sens_indices,
-            run_forward_sensitivity,
-        )
+        from aquakin.integrate.forward_sensitivity import run_forward_sensitivity
 
-        C0 = jnp.asarray(C0)
-        params = jnp.asarray(params)
-        validate_C0_params(self.model, C0, params)
+        C0, params, free_idx, shared_factor = prepare_sensitivity(
+            self.model, C0, params, sens_params, shared_factor
+        )
         active = conditions if conditions is not None else self.conditions
         if active.n_locations != self.conditions.n_locations:
             raise ValueError(
                 f"conditions override must have n_locations="
                 f"{self.conditions.n_locations}, got {active.n_locations}."
             )
-
-        free_idx = resolve_sens_indices(self.model, sens_params)
-        if shared_factor is None:
-            shared_factor = free_idx.shape[0] > 1
         fields = active.fields
         model = self.model
         velocity = self.velocity

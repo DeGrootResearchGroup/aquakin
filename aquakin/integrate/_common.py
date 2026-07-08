@@ -586,6 +586,74 @@ def validate_t_eval(t_eval_arr: jnp.ndarray, t0: float, t1: float) -> None:
         raise ValueError("t_eval must be strictly ascending.")
 
 
+def require_increasing_t_span(t_span) -> tuple[float, float]:
+    """Coerce a ``(t_start, t_end)`` pair to floats and require ``t_end > t_start``.
+
+    The single home for the interval check every temporal ``solve`` /
+    ``solve_sensitivity`` runs before integrating (a zero- or negative-width
+    span makes the solver take no step / step backwards).
+
+    Parameters
+    ----------
+    t_span : tuple of float
+        ``(t_start, t_end)`` integration interval.
+
+    Returns
+    -------
+    tuple of float
+        ``(t0, t1)`` as Python floats.
+
+    Raises
+    ------
+    ValueError
+        If ``t_end`` does not strictly exceed ``t_start``.
+    """
+    t0, t1 = float(t_span[0]), float(t_span[1])
+    if not (t1 > t0):
+        raise ValueError(f"t_span end must exceed start; got ({t0}, {t1}).")
+    return t0, t1
+
+
+def prepare_sensitivity(model, C0, params, sens_params, shared_factor):
+    """Shared preamble for the flat-state reactors' ``solve_sensitivity``.
+
+    ``BatchReactor`` and ``PlugFlowReactor`` open their forward-sensitivity solve
+    with the same four steps: coerce ``C0`` / ``params`` to arrays and validate
+    their shapes against the model, resolve the ``sens_params`` names/indices to
+    a flat index array, and auto-select the ``shared_factor`` linear-solve
+    strategy when the caller left it ``None`` (the CVODES simultaneous corrector
+    pays off only for more than one sensitivity parameter). (``BiofilmReactor``
+    coerces its *layered* ``(n_comp, n_species)`` state differently and so keeps
+    its own preamble.)
+
+    Parameters
+    ----------
+    model : CompiledModel
+        The reactor's model, for the shape validation and index resolution.
+    C0, params : jnp.ndarray
+        Initial state and full parameter vector (coerced here).
+    sens_params : list of str or int
+        Namespaced parameter names, or integer indices into ``params``.
+    shared_factor : bool or None
+        The caller's ``shared_factor``; ``None`` auto-selects.
+
+    Returns
+    -------
+    tuple
+        ``(C0, params, free_idx, shared_factor)`` -- the coerced arrays, the
+        resolved ``(n_sens,)`` index array, and the resolved boolean.
+    """
+    from aquakin.integrate.forward_sensitivity import resolve_sens_indices
+
+    C0 = jnp.asarray(C0)
+    params = jnp.asarray(params)
+    validate_C0_params(model, C0, params)
+    free_idx = resolve_sens_indices(model, sens_params)
+    if shared_factor is None:
+        shared_factor = free_idx.shape[0] > 1
+    return C0, params, free_idx, shared_factor
+
+
 class _HasNamedSpecies:
     """Mixin: the pure species-by-name accessor over a ``.C`` array and ``.model``.
 
