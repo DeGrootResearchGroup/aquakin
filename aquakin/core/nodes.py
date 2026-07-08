@@ -12,7 +12,9 @@ import jax.numpy as jnp
 from aquakin.core.context import CompileContext
 from aquakin.core.hints import did_you_mean
 
-RateCallable = Callable[[jnp.ndarray, jnp.ndarray, dict, jnp.ndarray], jnp.ndarray]
+RateCallable = Callable[
+    [jnp.ndarray, jnp.ndarray, dict[str, jnp.ndarray], int | jnp.ndarray], jnp.ndarray
+]
 
 GAS_CONSTANT = 8.314462618  # J / (mol K)
 
