@@ -67,7 +67,13 @@ from aquakin.plant.temperature import (
 )
 from aquakin.plant.temperature import AlgebraicTemperature, TemperatureModel
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
-from aquakin.plant.units import Unit
+from aquakin.plant.units import (
+    CycleEventSource,
+    PHOperating,
+    SignalProducer,
+    TemperatureSettable,
+    Unit,
+)
 
 # Reserved key under which :meth:`Plant._split_state` exposes the appended
 # temperature-state block in the per-unit state map (not a real unit, so it is
@@ -433,7 +439,7 @@ class Plant:
             targets = [
                 n
                 for n, u in self.units.items()
-                if hasattr(u, "set_temperature")
+                if isinstance(u, TemperatureSettable)
                 and "T" in getattr(u.model, "conditions_required", ())
             ]
         else:
@@ -441,7 +447,7 @@ class Plant:
             for name in targets:
                 if name not in self.units:
                     raise UnknownUnitError(f"Unknown unit '{name}'.")
-                if not hasattr(self.units[name], "set_temperature"):
+                if not isinstance(self.units[name], TemperatureSettable):
                     raise WiringError(f"Unit '{name}' does not support set_temperature.")
         for name in targets:
             self.units[name].set_temperature(kelvin)
@@ -2089,7 +2095,7 @@ class Plant:
         signals: dict = {}
         for name in self._unit_order:
             unit = self.units[name]
-            if not hasattr(unit, "signal_outputs"):
+            if not isinstance(unit, SignalProducer):
                 continue
             # Reconstruct each sensed source's stream from its state (a reactor's
             # output concentration is its state), so no swept stream is needed.
@@ -2302,10 +2308,10 @@ class Plant:
         Returns ``None`` (interface uses its fixed fallback) if the unit exposes
         no ``operating_pH`` -- so the feedback is opt-in per unit.
         """
-        op = getattr(self.units[unit_name], "operating_pH", None)
-        if op is None:
+        unit = self.units[unit_name]
+        if not isinstance(unit, PHOperating):
             return None
-        return op(states[unit_name], self._params_for_unit(unit_name, params_full))
+        return unit.operating_pH(states[unit_name], self._params_for_unit(unit_name, params_full))
 
     # ----- solve -----------------------------------------------------------
 
@@ -2458,9 +2464,8 @@ class Plant:
         # hand-listing them. cycle_events takes the native-time span.
         unit_events: list[Event] = []
         for unit in self.units.values():
-            collect = getattr(unit, "cycle_events", None)
-            if collect is not None:
-                unit_events.extend(collect(t0, t1))
+            if isinstance(unit, CycleEventSource):
+                unit_events.extend(unit.cycle_events(t0, t1))
         if unit_events:
             events = (list(events) + unit_events) if events is not None else unit_events
 

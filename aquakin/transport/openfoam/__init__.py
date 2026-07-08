@@ -9,7 +9,7 @@ plugin lives in a separate repository.
 """
 
 from aquakin.integrate.cfd import CFDReactor
-from aquakin.transport.openfoam.bridge import OpenFOAMBridge
+from aquakin.transport.openfoam.bridge import from_cell_fields
 from aquakin.transport.openfoam.tracks import read_tracks_csv, write_tracks_csv
 
-__all__ = ["CFDReactor", "OpenFOAMBridge", "read_tracks_csv", "write_tracks_csv"]
+__all__ = ["CFDReactor", "from_cell_fields", "read_tracks_csv", "write_tracks_csv"]

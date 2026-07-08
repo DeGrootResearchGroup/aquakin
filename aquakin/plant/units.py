@@ -77,14 +77,29 @@ class Unit(Protocol):
     ``compute_outputs``, ``rhs`` and ``flow_outputs`` must be AD-clean (no
     Python branching on traced values, no concretisation of ``t`` / ``state``).
 
-    Optional producer hook (duck-typed; only some units implement it):
+    Optional capability hooks (a unit opts in by implementing the method; the
+    plant detects it with ``isinstance``). Each has a named
+    ``runtime_checkable`` Protocol below so the contract is explicit:
 
-    - ``signal_outputs(t, state, inputs, params) -> dict[str, jnp.ndarray]``:
-      a unit that *produces* control signals (e.g. a PI controller) returns a
-      mapping of signal name to scalar. The plant evaluates these each RHS call,
-      gathers them into a shared signal bus, and threads that bus into every
-      unit's :meth:`rhs` as ``signals``. A unit that produces no signals simply
-      does not define this method.
+    - :class:`SignalProducer` (``signal_outputs``) -- produces control signals for
+      the shared signal bus (e.g. a PI controller).
+    - :class:`PHOperating` (``operating_pH``) -- exposes its state-derived pH to a
+      pH-coupled interface translator.
+    - :class:`LiquidVolumeUnit` (``liquid_volume``) -- a state-dependent liquid
+      volume, read by the results-level mass balance.
+    - :class:`ComponentInventoryUnit` (``component_inventory``) -- owns its
+      COD/N/P inventory for a non-concentration-vector state layout.
+    - :class:`CycleEventSource` (``cycle_events``) -- schedules located phase
+      events (an SBR's fill/react/settle/decant boundaries).
+    - :class:`TemperatureSettable` (``set_temperature``) -- its operating
+      temperature can be set by :meth:`Plant.set_temperature`.
+
+    A few further optional hooks are read as *values with a default* rather than
+    checked for presence, so they stay plain attribute look-ups (not Protocols):
+    ``signal_names`` / ``required_signals`` (the signals a unit publishes /
+    consumes), ``flow_param_defaults`` (a flow-parameterized unit's setpoint
+    defaults), and, on a :class:`StateTranslator`, ``needs_src_pH`` /
+    ``needs_dest_pH`` (a pH-feedback interface).
 
     See :mod:`aquakin.plant.control` and ``Plant._rhs``.
     """
@@ -120,6 +135,82 @@ class Unit(Protocol):
         params: jnp.ndarray,
         ctx: FlowContext,
     ) -> dict[str, jnp.ndarray]: ...
+
+
+# --- Optional unit-capability protocols --------------------------------------
+#
+# Beyond the core Unit contract above, a unit may implement one or more of these
+# OPTIONAL hooks. Each is a ``runtime_checkable`` Protocol so the plant detects
+# the capability with ``isinstance(unit, SignalProducer)`` rather than
+# ``hasattr(unit, "signal_outputs")`` -- giving the contract a name and a unit
+# author (or reader) an importable, documented handle on it. A unit opts in
+# simply by implementing the method (structural typing -- no base class, no
+# registration). Note: these check method *presence* only, like ``hasattr`` --
+# their value is the explicit, discoverable contract, not a signature guarantee.
+
+
+@runtime_checkable
+class SignalProducer(Protocol):
+    """A unit that *produces* control signals for the shared signal bus (a PI
+    controller). ``signal_outputs`` returns a ``{signal name: scalar}`` map the
+    plant gathers into the bus each RHS call and threads into every unit's
+    :meth:`Unit.rhs`. (A producer also lists the names it publishes via a
+    ``signal_names`` property so consumers can be wired before the solve.)"""
+
+    def signal_outputs(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, "Stream"],
+        params: jnp.ndarray,
+    ) -> dict[str, jnp.ndarray]: ...
+
+
+@runtime_checkable
+class PHOperating(Protocol):
+    """A unit exposing its state-derived operating pH, so a pH-coupled interface
+    translator (the ASM->ADM digester feed) can read the pH the unit is at."""
+
+    def operating_pH(self, state: jnp.ndarray, params: jnp.ndarray) -> jnp.ndarray: ...
+
+
+@runtime_checkable
+class LiquidVolumeUnit(Protocol):
+    """A unit whose liquid volume depends on its state (a variable-volume storage
+    tank / MBR / SBR). The results-level mass balance weights ``C`` by this
+    volume to get the unit's component inventory."""
+
+    def liquid_volume(self, state: jnp.ndarray) -> jnp.ndarray: ...
+
+
+@runtime_checkable
+class ComponentInventoryUnit(Protocol):
+    """A unit that owns its component (COD/N/P) inventory, for a state layout that
+    is not a plain concentration vector (the layered Takacs settler, the ADM1
+    digester with its gas headspace). Takes precedence over the generic
+    ``volume * C`` inventory in the mass balance."""
+
+    def component_inventory(
+        self, state: jnp.ndarray, content: dict, params: jnp.ndarray
+    ) -> dict: ...
+
+
+@runtime_checkable
+class CycleEventSource(Protocol):
+    """A unit that schedules located phase-transition events over a time span (an
+    SBR's fill / react / settle / decant boundaries); the plant merges them into
+    the integrator's event set so it lands exactly on every phase switch."""
+
+    def cycle_events(self, t0: float, t1: float) -> list: ...
+
+
+@runtime_checkable
+class TemperatureSettable(Protocol):
+    """A unit whose operating temperature can be set (the reactors), so
+    :meth:`Plant.set_temperature` can update every temperature-bearing unit in
+    one call (a heated fixed-``T`` unit like the digester does not implement it)."""
+
+    def set_temperature(self, temperature_K: float) -> None: ...
 
 
 class StatelessUnit(CouplingAware):
