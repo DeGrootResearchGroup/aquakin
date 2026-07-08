@@ -8,9 +8,23 @@ and Pydantic is not used again on the hot path.
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class SpeciationUnitsWarning(UserWarning):
+    """Advisory: a ``speciation:`` / ``precipitation:`` ``molar_mass`` looks
+    dimensionally inconsistent with the referenced species' declared ``units``.
+
+    Emitted (as a warning, not an error) at model load. The relationship between
+    a block's ``molar_mass`` (which converts the species' state value to mol/L
+    via ``mol/L = state / molar_mass``) and the species' declared units lives
+    only in a YAML comment, so a hand-edit that breaks it silently shifts the
+    computed pH / saturation index. Filter it with
+    ``warnings.filterwarnings("ignore", category=aquakin.SpeciationUnitsWarning)``.
+    """
 
 
 class ModelMeta(BaseModel):
@@ -530,6 +544,103 @@ def _synthesize_precipitation_reactions(
     return out
 
 
+def _units_measure(units: str) -> "Optional[str]":
+    """Classify a species' unit string as ``"molar"`` (an amount, e.g. mol/L,
+    kmol/m3) or ``"mass"`` (a mass, e.g. g/m3, kgCOD/m3), or ``None`` when it is
+    blank / unparseable / neither (skipped, as ``check_units`` skips unknowns).
+    """
+    if not units:
+        return None
+    from aquakin.utils.units import parse_units
+
+    dim = parse_units(units)
+    if dim is None:
+        return None
+    numerator = {tok for tok, exp in dim.tokens if exp > 0}
+    if numerator & {"mol", "kmol"}:
+        return "molar"
+    if numerator & {"g", "kg"}:
+        return "mass"
+    return None
+
+
+def _is_power_of_ten(x: float) -> bool:
+    """True if ``x`` is (within float tolerance) an integer power of ten -- a
+    pure unit-conversion factor (1, 1000, 0.001, ...) rather than a molecular
+    weight."""
+    if x <= 0.0:
+        return False
+    lg = math.log10(x)
+    return abs(round(lg) - lg) < 1e-9
+
+
+# A mass-based state value must be divided by a molecular weight to reach mol/L,
+# and the lightest element (H) is ~1 g/mol; every shipped mass entry is >= 12.
+# A molar_mass below this on a mass species means no molecular weight was
+# applied -- the conversion is wrong. Kept well under the lightest real MW so the
+# check never fires on a legitimate model.
+_MIN_MASS_MOLAR_MASS = 1.0
+
+
+def _audit_speciation_molar_mass(
+    species: "list[SpeciesSpec]",
+    speciation: "Optional[SpeciationSpec]",
+    precipitation: "Optional[PrecipitationSpec]",
+) -> "list[str]":
+    """Advisory messages where a speciation/precipitation ``molar_mass`` is
+    dimensionally inconsistent with the referenced species' declared ``units``.
+
+    ``molar_mass`` converts the species state value to mol/L (``mol/L = state /
+    molar_mass``), so for an already-molar species it is a pure unit-conversion
+    factor (a power of ten) and for a mass species it is a molecular weight
+    (never a clean power of ten, always well above 1). A value on the wrong side
+    of that split is flagged. Entries whose species is absent (a ``proton`` /
+    ``hydroxide`` pH-special) or whose units are blank / unparseable are skipped.
+    """
+    units_of = {s.name: s.units for s in species}
+    messages: list[str] = []
+
+    def _check(label: str, sp_name: "Optional[str]", molar_mass: float) -> None:
+        if sp_name is None:
+            return
+        measure = _units_measure(units_of.get(sp_name, ""))
+        if measure is None:
+            return
+        units = units_of.get(sp_name, "")
+        if measure == "molar" and not _is_power_of_ten(molar_mass):
+            messages.append(
+                f"{label} maps species '{sp_name}' (units '{units}', already an "
+                f"amount) with molar_mass={molar_mass:g}, which looks like a "
+                f"molecular weight. An already-molar state needs only a unit "
+                f"conversion factor (a power of ten: 1 for kmol/m3, 1000 for "
+                f"mol/m3). Check molar_mass matches the species units."
+            )
+        elif measure == "mass" and molar_mass <= _MIN_MASS_MOLAR_MASS:
+            messages.append(
+                f"{label} maps species '{sp_name}' (units '{units}', a mass) with "
+                f"molar_mass={molar_mass:g}, which is below any molecular weight. "
+                f"A mass state must be divided by a molecular weight to reach "
+                f"mol/L. Check molar_mass matches the species units."
+            )
+
+    if speciation is not None:
+        for key, total in speciation.totals.items():
+            _check(f"speciation.totals['{key}']", total.species, total.molar_mass)
+        for ion in speciation.strong_anions:
+            _check("speciation.strong_anions", ion.species, ion.molar_mass)
+        for ion in speciation.strong_cations:
+            _check("speciation.strong_cations", ion.species, ion.molar_mass)
+    if precipitation is not None:
+        for mineral in precipitation.minerals:
+            for ion in mineral.ions:
+                _check(
+                    f"precipitation mineral '{mineral.name}' ion",
+                    ion.species,
+                    ion.molar_mass,
+                )
+    return messages
+
+
 class ModelSpec(BaseModel):
     """Top-level YAML model file schema."""
 
@@ -627,4 +738,11 @@ class ModelSpec(BaseModel):
                     f"Reaction '{rxn.name}' declares local parameter(s) "
                     f"{sorted(shadowed_expr)} that collide with named expression(s)."
                 )
+
+        # Advisory (warning, not error): flag a speciation/precipitation
+        # molar_mass that looks dimensionally inconsistent with the referenced
+        # species' declared units -- a silent pH / saturation-index shift a
+        # hand-edit could introduce.
+        for msg in _audit_speciation_molar_mass(self.species, self.speciation, self.precipitation):
+            warnings.warn(msg, SpeciationUnitsWarning, stacklevel=2)
         return self
