@@ -174,6 +174,7 @@ from aquakin.schema.loader import (
     load_model,
     load_model_from_file,
 )
+from aquakin.schema.model_spec import SpeciationUnitsWarning
 from aquakin.utils.balance import check_conservation
 from aquakin.utils.composition import (
     canonical_content,
@@ -243,6 +244,7 @@ __all__ = [
     "SetpointSplitter",
     "SludgeMetrics",
     "SpatialConditions",
+    "SpeciationUnitsWarning",
     "StateTranslator",
     "Stream",
     "TemperatureModel",

@@ -32,6 +32,15 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
 
 ### Added
 
+- Load-time advisory that cross-checks each `speciation:` / `precipitation:`
+  `molar_mass` against the referenced species' declared `units`. Since
+  `molar_mass` converts the species state value to mol/L, an already-molar
+  species needs only a power-of-ten unit factor while a mass species needs a
+  molecular weight; a value on the wrong side of that split emits a new
+  `aquakin.SpeciationUnitsWarning`, catching a hand-edit that would silently
+  shift the computed pH / saturation index. Calibrated to zero false positives
+  on the shipped models; filter it with `warnings.filterwarnings("ignore",
+  category=aquakin.SpeciationUnitsWarning)`. (#562)
 - Plant-wide calibration: `plant.calibrate(...)` fits reaction-model parameters
   (and, optionally, assembled-state initial conditions) against measured stream
   data through the forward-model seam, reusing the reactor calibration
