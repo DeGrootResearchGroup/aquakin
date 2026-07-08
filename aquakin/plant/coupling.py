@@ -50,7 +50,7 @@ class CouplingPattern:
     """
 
     self_pattern: np.ndarray
-    inlet_pattern: "np.ndarray | None" = None
+    inlet_pattern: np.ndarray | None = None
 
 
 class CouplingAware(ABC):

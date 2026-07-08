@@ -32,7 +32,7 @@ plant passes into :meth:`flow_outputs` when resolving the flow network.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
@@ -93,17 +93,17 @@ class StorageTank:
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     volume: float
     output_flow: float = 0.0
-    level_setpoint: Optional[float] = None
+    level_setpoint: float | None = None
     level_gain: float = 0.0
     output_flow_bias: float = 0.0
     output_flow_max: float = float("inf")
     initial_fraction: float = 0.5
     full_fraction: float = 0.9
     empty_fraction: float = 0.1
-    initial_concentrations: Optional[jnp.ndarray] = None
+    initial_concentrations: jnp.ndarray | None = None
     input_port: str = "in"
 
     @property
@@ -162,7 +162,7 @@ class StorageTank:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         s_in = inputs[self.input_port]
         C_tank = state[: self.model.n_species]
@@ -191,7 +191,7 @@ class StorageTank:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         s_in = inputs[self.input_port]
         C_tank = state[: self.model.n_species]

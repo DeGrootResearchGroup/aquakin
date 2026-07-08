@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 import jax.numpy as jnp
 
@@ -51,7 +51,7 @@ class SpatialConditions:
         return int(next(iter(self.fields.values())).shape[0])
 
     @classmethod
-    def uniform(cls, n_locations: int = 1, **kwargs: float) -> "SpatialConditions":
+    def uniform(cls, n_locations: int = 1, **kwargs: float) -> SpatialConditions:
         """
         Build a spatially homogeneous ``SpatialConditions`` object.
 
@@ -81,7 +81,7 @@ class SpatialConditions:
         }
         return cls(fields=fields)
 
-    def with_(self, **kwargs: float) -> "SpatialConditions":
+    def with_(self, **kwargs: float) -> SpatialConditions:
         """Return a copy with some fields overridden (or added).
 
         The common edit-from-defaults pattern: start from

@@ -38,7 +38,7 @@ saturation indices share one ionic strength).
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import jax.numpy as jnp
 

@@ -28,8 +28,8 @@ the whole model, so the kernel is a safe, transparent overlay.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import jax
 import jax.numpy as jnp
@@ -108,7 +108,7 @@ def _k_powc(o, exp_array):
     return PowerNode.op((o[0], exp_array))
 
 
-def _collect_kernels() -> "dict[str, Callable]":
+def _collect_kernels() -> dict[str, Callable]:
     """Map each operator node's ``KIND`` to its batched ``op`` by walking the AST
     node hierarchy, so the kernel table can never drift from the node set."""
     kernels: dict[str, Callable] = {}

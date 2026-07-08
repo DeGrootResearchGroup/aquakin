@@ -22,7 +22,7 @@ can serve a family of related models.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -34,7 +34,7 @@ Composition = dict[str, dict[str, float]]
 
 
 def _composition_matrix(
-    model: "CompiledModel", composition: Composition
+    model: CompiledModel, composition: Composition
 ) -> tuple[list[str], np.ndarray]:
     """(n_quantities, n_species) content matrix and the quantity-name list."""
     quantities = sorted({q for c in composition.values() for q in c})
@@ -48,9 +48,9 @@ def _composition_matrix(
 
 
 def conservation_residuals(
-    model: "CompiledModel",
+    model: CompiledModel,
     composition: Composition,
-    params: Optional[Any] = None,
+    params: Any | None = None,
 ) -> tuple[list[str], list[str], np.ndarray]:
     """Per-reaction conservation residual for every quantity in ``composition``.
 
@@ -80,10 +80,10 @@ def conservation_residuals(
 
 
 def nitrogen_residuals(
-    model: "CompiledModel",
+    model: CompiledModel,
     composition: Composition,
     *,
-    params: Optional[Any] = None,
+    params: Any | None = None,
     nitrate: str = "S_NO",
     n_key: str = "N",
 ) -> tuple[list[str], np.ndarray]:
@@ -117,7 +117,7 @@ def nitrogen_residuals(
 
 
 def check_nitrogen(
-    model: "CompiledModel",
+    model: CompiledModel,
     composition: Composition,
     *,
     tol: float = 1e-2,
@@ -129,12 +129,12 @@ def check_nitrogen(
 
 
 def check_conservation(
-    model: "CompiledModel",
+    model: CompiledModel,
     composition: Composition,
     *,
     tol: float = 1e-2,
-    params: Optional[Any] = None,
-    quantities: Optional[list[str]] = None,
+    params: Any | None = None,
+    quantities: list[str] | None = None,
 ) -> list[tuple[str, str, float]]:
     """Return the list of conservation violations ``(reaction, quantity, residual)``.
 

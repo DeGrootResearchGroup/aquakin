@@ -17,7 +17,7 @@ They are re-exported from ``aquakin.plant.plant`` for backward compatibility, so
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
@@ -105,12 +105,12 @@ class PlantSolution:
 
     t: jnp.ndarray
     state: jnp.ndarray
-    plant: "Plant"
-    events_log: Optional[list] = None
-    _requested_time_unit: Optional[str] = None
+    plant: Plant
+    events_log: list | None = None
+    _requested_time_unit: str | None = None
 
     @property
-    def time_unit(self) -> Optional[str]:
+    def time_unit(self) -> str | None:
         """The time unit of :attr:`t` (``"s"``, ``"d"``, ... or ``None``).
 
         The plant's native unit (:attr:`Plant.time_unit`), or the ``time_unit=``
@@ -147,7 +147,7 @@ class PlantSolution:
         (a convenience alias for ``plant.list_ports()``)."""
         return self.plant.list_ports()
 
-    def stream(self, endpoint: str, params: Optional[jnp.ndarray] = None):
+    def stream(self, endpoint: str, params: jnp.ndarray | None = None):
         """Reconstruct one output stream's trajectory -- ``sol.stream("effluent")``.
 
         A convenience for ``plant.stream(sol, endpoint, params)`` (the plant is
@@ -190,7 +190,7 @@ class PlantSolution:
         idx = unit.model.species_index[species]
         return self.unit_state(unit_name)[:, idx]
 
-    def C_named_many(self, unit_name: str, species) -> "dict[str, jnp.ndarray]":
+    def C_named_many(self, unit_name: str, species) -> dict[str, jnp.ndarray]:
         """Trajectories of several species in one unit, as ``{name: array}``.
 
         The multi-species companion to :meth:`C_named` -- read a handful of a
@@ -200,7 +200,7 @@ class PlantSolution:
         """
         return {sp: self.C_named(unit_name, sp) for sp in species}
 
-    def final_named(self, unit_name: str, species=None) -> "dict[str, float]":
+    def final_named(self, unit_name: str, species=None) -> dict[str, float]:
         """Values at the **last** save time for one unit, as ``{name: float}``.
 
         The reporting shortcut for a steady-state value: instead of
@@ -369,11 +369,11 @@ class SteadyStateResult:
 
     state: jnp.ndarray
     converged: bool
-    time: Optional[float] = None
-    solution: Optional["PlantSolution"] = None
+    time: float | None = None
+    solution: PlantSolution | None = None
     method: str = "forward"
-    iterations: Optional[int] = None
-    residual: Optional[float] = None
+    iterations: int | None = None
+    residual: float | None = None
     # Whether an *operating-branch* steady state exists at these parameters.
     # ``True`` for a converged solve; ``False`` when pseudo-arclength continuation
     # found the operating branch folds before the target (a saddle-node
@@ -381,4 +381,4 @@ class SteadyStateResult:
     # washout, so only a different branch exists). ``None`` when not determined
     # (the arclength layer was not invoked). A screen should *exclude* a sample
     # whose operating point does not exist (``method == "past_fold"``).
-    operating_point_exists: Optional[bool] = None
+    operating_point_exists: bool | None = None

@@ -18,8 +18,8 @@ non-uniform marginals still get a low-discrepancy design.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence, Union
 
 import numpy as np
 
@@ -158,10 +158,10 @@ class MonteCarloResult:
 
 def monte_carlo(
     fn: Callable,
-    distributions: Union[dict, Sequence],
+    distributions: dict | Sequence,
     *,
-    input_names: Optional[Sequence[str]] = None,
-    output_names: Optional[Sequence[str]] = None,
+    input_names: Sequence[str] | None = None,
+    output_names: Sequence[str] | None = None,
     n_samples: int = 128,
     sampler: str = "sobol",
     seed: int = 0,

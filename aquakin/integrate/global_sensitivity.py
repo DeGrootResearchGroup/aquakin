@@ -14,8 +14,9 @@ with the plant steady-state / dynamic screens in
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -70,7 +71,7 @@ class DGSMResult:
     n_valid: int
     seed: int
     ranges: jnp.ndarray
-    output_name: Optional[str] = None
+    output_name: str | None = None
 
     def ranked(self) -> list[tuple[str, float]]:
         """Return ``(name, sobol_total_bound)`` pairs sorted by decreasing bound."""
@@ -228,8 +229,8 @@ def dgsm(
     fn: Callable[[jnp.ndarray], jnp.ndarray],
     ranges: Any,
     *,
-    input_names: Optional[list[str]] = None,
-    output_names: Optional[list[str]] = None,
+    input_names: list[str] | None = None,
+    output_names: list[str] | None = None,
     n_samples: int = 64,
     seed: int = 0,
     diff: DifferentiationConfig = DifferentiationConfig(),
@@ -342,7 +343,7 @@ def dgsm(
             raise ValueError(
                 f"output_names has {len(output_names)} entries but fn returns m={m_out} outputs."
             )
-        names: list[Optional[str]] = list(output_names)
+        names: list[str | None] = list(output_names)
         grad_sq = jacs**2  # (N, m, d)
         out_col = vals  # (N, m)
     else:

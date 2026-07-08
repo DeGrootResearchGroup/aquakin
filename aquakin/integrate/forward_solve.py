@@ -74,7 +74,7 @@ the dominant cost; the per-step Jacobian factorization is only ~8% (so block /
 sparse factorization is not worth it at this scale -- it loses to XLA's dense LU).
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp

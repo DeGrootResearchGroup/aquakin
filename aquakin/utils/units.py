@@ -28,7 +28,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 from aquakin.core.nodes import (
     AddNode,
@@ -69,7 +69,7 @@ class Dimension:
 
     tokens: frozenset  # frozenset of (token, Fraction) pairs with nonzero exp
 
-    def __init__(self, mapping: Optional[dict] = None):
+    def __init__(self, mapping: dict | None = None):
         cleaned = {k: Fraction(v) for k, v in (mapping or {}).items() if Fraction(v) != 0}
         object.__setattr__(self, "tokens", frozenset(cleaned.items()))
 
@@ -80,19 +80,19 @@ class Dimension:
     def is_dimensionless(self) -> bool:
         return not self.tokens
 
-    def __mul__(self, other: "Dimension") -> "Dimension":
+    def __mul__(self, other: Dimension) -> Dimension:
         d = self.as_dict()
         for k, v in other.tokens:
             d[k] = d.get(k, Fraction(0)) + v
         return Dimension(d)
 
-    def __truediv__(self, other: "Dimension") -> "Dimension":
+    def __truediv__(self, other: Dimension) -> Dimension:
         d = self.as_dict()
         for k, v in other.tokens:
             d[k] = d.get(k, Fraction(0)) - v
         return Dimension(d)
 
-    def __pow__(self, exponent) -> "Dimension":
+    def __pow__(self, exponent) -> Dimension:
         e = Fraction(exponent)
         return Dimension({k: v * e for k, v in self.tokens})
 
@@ -151,7 +151,7 @@ _WORD_RE = re.compile(r"[A-Za-z0-9_^.+\-]+")
 _NUMBER_RE = re.compile(r"^[+-]?\d+(\.\d+)?$")
 
 
-def _match_longest(word: str, pos: int, options) -> Optional[str]:
+def _match_longest(word: str, pos: int, options) -> str | None:
     for opt in options:
         if word.startswith(opt, pos):
             return opt
@@ -175,7 +175,7 @@ def _read_exponent(word: str, pos: int):
     return Fraction(1), pos
 
 
-def _tokenize_word(word: str) -> Optional[Dimension]:
+def _tokenize_word(word: str) -> Dimension | None:
     """Turn one space/operator-free unit word into a :class:`Dimension`.
 
     Handles the regular dialects: ``g_COD``, ``gCOD``, ``g_O2``, ``m3``, ``mol``,
@@ -230,7 +230,7 @@ def _normalise_molarity(dim: Dimension) -> Dimension:
     return out * Dimension({"mol": m, "L": -m})
 
 
-def parse_units(text: str) -> Optional[Dimension]:
+def parse_units(text: str) -> Dimension | None:
     """Parse a unit string into a :class:`Dimension`, or ``None`` if unknown.
 
     Parameters
@@ -264,7 +264,7 @@ def parse_units(text: str) -> Optional[Dimension]:
     return _normalise_molarity(dim)
 
 
-def _parse_product(s: str) -> Optional[Dimension]:
+def _parse_product(s: str) -> Dimension | None:
     """Parse a product/quotient of unit words with ``*`` ``/`` and parentheses.
 
     ``*`` and juxtaposition multiply; ``/`` divides; both associate left to
@@ -393,7 +393,7 @@ class _Ctx:
         self.warnings.append(UnitWarning(self.reaction, location, detail))
 
 
-def _param_dim(ctx: _Ctx, local_name: str) -> Optional[Dimension]:
+def _param_dim(ctx: _Ctx, local_name: str) -> Dimension | None:
     """Resolve a (local) parameter name to its declared dimension, trying the
     reaction-local namespaced key first, then the model-level key."""
     for key in (f"{ctx.reaction}.{local_name}", local_name):
@@ -402,7 +402,7 @@ def _param_dim(ctx: _Ctx, local_name: str) -> Optional[Dimension]:
     return None
 
 
-def _infer(node: ASTNode, ctx: _Ctx) -> Optional[Dimension]:
+def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
     """Infer the dimension of a rate sub-expression, accumulating warnings.
 
     Returns ``None`` when a leaf's units are unknown (undeclared / unparseable),
@@ -510,7 +510,7 @@ _VOLUME_LITRE = "L"
 _LENGTH_TOKEN = "m"
 
 
-def _root_issue(dim: Dimension) -> Optional[str]:
+def _root_issue(dim: Dimension) -> str | None:
     """Return a message if ``dim`` is not a ``currency / volume / time`` rate.
 
     A well-formed reaction rate is a concentration per time: ``g_X/m3/d`` (mass

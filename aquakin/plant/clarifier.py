@@ -76,9 +76,9 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
     """
 
     name: str
-    model: "CompiledModel"
-    overflow_Q: "float | None" = None
-    underflow_Q: "float | None" = None
+    model: CompiledModel
+    overflow_Q: float | None = None
+    underflow_Q: float | None = None
     capture_efficiency: float = 0.998
     particulate_species: list[str] = field(default_factory=lambda: list(ASM1_SETTLING_SPECIES))
     input_port: str = "inlet"
@@ -115,7 +115,7 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
 
-    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
         return self._setpoints
 
     def _split_flows(self, Q_in: jnp.ndarray, params: jnp.ndarray, clamp: bool):
@@ -130,7 +130,7 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         s_in = inputs[self.input_port]
         Q_in = s_in.Q

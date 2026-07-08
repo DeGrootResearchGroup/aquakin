@@ -32,8 +32,8 @@ class StateTranslator(Protocol):
         in.
     """
 
-    source_model: "CompiledModel"
-    target_model: "CompiledModel"
+    source_model: CompiledModel
+    target_model: CompiledModel
 
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         """Map ``C_source`` to the target model's species ordering.
@@ -99,7 +99,7 @@ class IdentityTranslator:
     normally need to instantiate it directly.
     """
 
-    def __init__(self, model: "CompiledModel") -> None:
+    def __init__(self, model: CompiledModel) -> None:
         self.source_model = model
         self.target_model = model
 

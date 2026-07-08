@@ -22,8 +22,8 @@ respective domain nodes. Any other identifier with parentheses is rejected.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, fields
-from typing import Iterable
 
 from aquakin.core.nodes import (
     AddNode,

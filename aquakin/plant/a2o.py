@@ -28,7 +28,7 @@ worked nutrient-removal flowsheet rather than a validation target.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from aquakin.core.temperature import T_REF_20C
 from aquakin.plant._builder_support import (
@@ -43,6 +43,8 @@ from aquakin.plant.mixer import MixerUnit, SetpointSplitter
 from aquakin.plant.plant import Plant
 
 if TYPE_CHECKING:  # pragma: no cover
+    import jax.numpy as jnp
+
     from aquakin.core.model import CompiledModel
     from aquakin.plant.influent import InfluentSeries
 
@@ -121,12 +123,12 @@ class FerricDose:
 
 
 def a2o_influent(
-    model: "CompiledModel",
+    model: CompiledModel,
     *,
     Q: float = A2O_Q_AVG,
     T: float = T_REF_20C,
-    overrides: Optional[dict[str, float]] = None,
-) -> "InfluentSeries":
+    overrides: dict[str, float] | None = None,
+) -> InfluentSeries:
     """A constant municipal ASM2d influent for the A²O plant.
 
     Parameters
@@ -180,7 +182,7 @@ A2O_WARM_REACTOR_COMPOSITION = {
 }
 
 
-def a2o_warm_start(plant: Plant) -> "jnp.ndarray":
+def a2o_warm_start(plant: Plant) -> jnp.ndarray:
     """A warm-start state vector for an :func:`build_a2o` plant.
 
     Seeds every activated-sludge reactor (the anaerobic/anoxic/aerobic CSTRs)
@@ -211,14 +213,14 @@ def a2o_warm_start(plant: Plant) -> "jnp.ndarray":
 
 
 def build_a2o(
-    model: Optional["CompiledModel"] = None,
+    model: CompiledModel | None = None,
     *,
     Q_avg: float = A2O_Q_AVG,
     wastage_flow: float = A2O_WASTAGE_FLOW,
     internal_recycle_ratio: float = A2O_INTERNAL_RECYCLE_RATIO,
     ras_ratio: float = A2O_RAS_RATIO,
-    ferric: Optional[FerricDose] = None,
-    conditions: Optional[dict[str, float]] = None,
+    ferric: FerricDose | None = None,
+    conditions: dict[str, float] | None = None,
     use_takacs: bool = False,
 ) -> Plant:
     """Assemble an A²O biological-nutrient-removal plant on ASM2d.

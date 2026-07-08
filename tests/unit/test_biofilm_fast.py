@@ -93,7 +93,10 @@ def test_solve_rejects_bad_params_shape(net, cond):
 
 def test_solve_requires_t_span(net, cond):
     r = _tiny(net, cond)
-    with pytest.raises(ValueError, match="t_span"):
+    # t_span is a required positional argument, so Python raises TypeError
+    # naming it when it is omitted (an explicit t_span=None still raises the
+    # curated ValueError -- see test_integrate_raises).
+    with pytest.raises(TypeError, match="t_span"):
         r.solve(jnp.array([1.0, 0.0]))
 
 

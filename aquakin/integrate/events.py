@@ -30,8 +30,8 @@ both :meth:`BatchReactor.solve` and :meth:`Plant.solve` expose it via an
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Sequence
 
 import diffrax
 import jax.numpy as jnp
@@ -74,12 +74,12 @@ class Event:
         Label for the event log (defaults to ``event{i}``).
     """
 
-    cond_fn: Optional[Callable] = None
-    at_times: Optional[Sequence[float]] = None
+    cond_fn: Callable | None = None
+    at_times: Sequence[float] | None = None
     direction: int = 0
-    apply: Optional[Callable] = None
+    apply: Callable | None = None
     terminal: bool = False
-    name: Optional[str] = None
+    name: str | None = None
 
     def __post_init__(self):
         has_cond = self.cond_fn is not None
@@ -176,15 +176,15 @@ def solve_with_events(
     *,
     t0: float,
     t1: float,
-    t_eval: Optional[jnp.ndarray],
+    t_eval: jnp.ndarray | None,
     events: Sequence[Event],
     rtol: float,
     atol,
     max_steps: int = 100_000,
-    dtmax: Optional[float] = None,
-    adjoint: Optional[diffrax.AbstractAdjoint] = None,
+    dtmax: float | None = None,
+    adjoint: diffrax.AbstractAdjoint | None = None,
     order: int = 5,
-    factormax: Optional[float] = None,
+    factormax: float | None = None,
     solver=None,
     root_rtol: float = 1e-6,
     root_atol: float = 1e-9,

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import textwrap
 from dataclasses import dataclass, field
-from typing import Optional
 
 import jax
 import jax.numpy as jnp
@@ -484,9 +483,9 @@ def _external_carbon_load(plant, solution, t, params_full, model) -> float:
 def evaluate_bsm2(
     plant,
     solution,
-    params: Optional[jnp.ndarray] = None,
+    params: jnp.ndarray | None = None,
     *,
-    effluent_port: Optional[str] = None,
+    effluent_port: str | None = None,
     disposal_port: str = _DISPOSAL_PORT,
     internal_recycle_port: str = _INTERNAL_RECYCLE_PORT,
     ras_port: str = _RAS_PORT,
@@ -757,7 +756,7 @@ class BSM1Evaluation:
 def evaluate_bsm1(
     plant,
     solution,
-    params: Optional[jnp.ndarray] = None,
+    params: jnp.ndarray | None = None,
     *,
     effluent_port: str = _BSM1_EFFLUENT_PORT,
     internal_recycle_port: str = _BSM1_INTERNAL_RECYCLE_PORT,
@@ -876,7 +875,7 @@ _N2O_SPECIES = "SN2O"
 def direct_n2o_emission(
     plant,
     solution,
-    params: Optional[jnp.ndarray] = None,
+    params: jnp.ndarray | None = None,
     *,
     n2o_species: str = _N2O_SPECIES,
     kla_ratio: float = 1.0,

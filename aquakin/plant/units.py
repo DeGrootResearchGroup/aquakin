@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import jax.numpy as jnp
 
@@ -34,8 +34,8 @@ class FlowContext:
         The current time.
     """
 
-    state: Optional[jnp.ndarray] = None
-    t: Optional[jnp.ndarray] = None
+    state: jnp.ndarray | None = None
+    t: jnp.ndarray | None = None
 
 
 @runtime_checkable
@@ -100,18 +100,18 @@ class Unit(Protocol):
         self,
         t: jnp.ndarray,
         state: jnp.ndarray,
-        inputs: dict[str, "Stream"],
+        inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: Optional[dict] = None,
-    ) -> dict[str, "Stream"]: ...
+        signals: dict | None = None,
+    ) -> dict[str, Stream]: ...
 
     def rhs(
         self,
         t: jnp.ndarray,
         state: jnp.ndarray,
-        inputs: dict[str, "Stream"],
+        inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: Optional[dict] = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray: ...
 
     def flow_outputs(
@@ -149,9 +149,9 @@ class StatelessUnit(CouplingAware):
         self,
         t: jnp.ndarray,
         state: jnp.ndarray,
-        inputs: dict[str, "Stream"],
+        inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: Optional[dict] = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         # No state -> no derivative.
         return jnp.zeros((0,))

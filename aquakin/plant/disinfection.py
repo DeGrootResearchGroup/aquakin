@@ -38,7 +38,7 @@ mW/cm², dose in mJ/cm²); the chlorine T10/CT stay in the plant time unit.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
@@ -52,7 +52,7 @@ if TYPE_CHECKING:  # pragma: no cover
 # --- UV credit physics ------------------------------------------------------
 
 
-def uvt_intensity_factor(uvt: Optional[jnp.ndarray], uvt_ref: Optional[jnp.ndarray]) -> jnp.ndarray:
+def uvt_intensity_factor(uvt: jnp.ndarray | None, uvt_ref: jnp.ndarray | None) -> jnp.ndarray:
     """First-order UV-transmittance correction on the average fluence rate.
 
     The average intensity in a UV reactor falls as the water absorbs more UV. With
@@ -69,8 +69,8 @@ def uv_dose(
     intensity: jnp.ndarray,
     exposure_time: jnp.ndarray,
     *,
-    uvt: Optional[jnp.ndarray] = None,
-    uvt_ref: Optional[jnp.ndarray] = None,
+    uvt: jnp.ndarray | None = None,
+    uvt_ref: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """UV dose (fluence) = average fluence rate × exposure time.
 
@@ -81,7 +81,7 @@ def uv_dose(
 
 
 def uv_log_inactivation(
-    dose: jnp.ndarray, d10: jnp.ndarray, *, max_log: Optional[jnp.ndarray] = None
+    dose: jnp.ndarray, d10: jnp.ndarray, *, max_log: jnp.ndarray | None = None
 ) -> jnp.ndarray:
     """Log-inactivation from a UV dose by a log-linear dose-response.
 
@@ -125,7 +125,7 @@ def ct_value(residual: jnp.ndarray, t10: jnp.ndarray) -> jnp.ndarray:
 
 
 def ct_log_removal(
-    ct: jnp.ndarray, ct_per_log: jnp.ndarray, *, max_log: Optional[jnp.ndarray] = None
+    ct: jnp.ndarray, ct_per_log: jnp.ndarray, *, max_log: jnp.ndarray | None = None
 ) -> jnp.ndarray:
     """Log-removal from a CT value by a CT-based credit (Chick–Watson form).
 
@@ -181,13 +181,13 @@ class UVUnit:
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     volume: float
     intensity: float
     d10: float
-    uvt: Optional[float] = None
-    uvt_ref: Optional[float] = None
-    max_log: Optional[float] = None
+    uvt: float | None = None
+    uvt_ref: float | None = None
+    max_log: float | None = None
     baffling_factor: float = 1.0
     inlet_density: float = 0.0
     input_port: str = "in"
@@ -289,13 +289,13 @@ class ChlorineContactUnit:
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     volume: float
     dose: float
     ct_per_log: float
     decay_rate: float = 0.0
     baffling_factor: float = 0.5
-    max_log: Optional[float] = None
+    max_log: float | None = None
     inlet_density: float = 0.0
     initial_residual: float = 0.0
     dechlorinate: bool = False

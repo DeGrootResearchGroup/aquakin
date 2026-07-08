@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, replace
-from typing import Optional
 
 import jax.numpy as jnp
 import numpy as np
@@ -74,7 +73,7 @@ class ProfileResult:
     loss: np.ndarray
     delta_loss: np.ndarray
     mle: float
-    ci: tuple[Optional[float], Optional[float]]
+    ci: tuple[float | None, float | None]
     fits: list
     delta: float
 
@@ -142,22 +141,22 @@ def profile_likelihood(
     free_params: list[str],
     *,
     grid,
-    profile_param: Optional[str] = None,
-    profile_ic: Optional[str] = None,
+    profile_param: str | None = None,
+    profile_ic: str | None = None,
     delta: float = 1.92,
     warm_start: bool = True,
     polish: bool = True,
     polish_passes: int = 2,
     polish_tol: float = 0.05,
-    anchor: Optional[float] = None,
-    transforms: Optional[dict[str, str]] = None,
-    initial_params: Optional[jnp.ndarray] = None,
-    observed_species: Optional[list[str]] = None,
+    anchor: float | None = None,
+    transforms: dict[str, str] | None = None,
+    initial_params: jnp.ndarray | None = None,
+    observed_species: list[str] | None = None,
     loss: str = "nll",
     sigma=None,
-    priors: Optional[dict[str, tuple[float, float]]] = None,
+    priors: dict[str, tuple[float, float]] | None = None,
     use_priors: bool = True,
-    free_ic: Optional[FreeICConfig] = None,
+    free_ic: FreeICConfig | None = None,
     optimizer: OptimizerConfig = OptimizerConfig(n_starts=8),
 ) -> ProfileResult:
     """Profile-likelihood analysis of one parameter or initial condition.

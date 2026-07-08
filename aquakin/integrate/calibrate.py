@@ -34,7 +34,6 @@ from __future__ import annotations
 import warnings
 from collections import namedtuple
 from dataclasses import dataclass, field, replace
-from typing import Optional
 
 import diffrax
 import jax
@@ -107,11 +106,11 @@ class OptimizerConfig:
     method: str = "lbfgsb"
     n_starts: int = 1
     jitter: float = 0.5
-    jitter_schedule: Optional[tuple] = None
+    jitter_schedule: tuple | None = None
     seed: int = 0
     max_iter: int = 500
     tol: float = 1e-6
-    param_halfwidth: Optional[float] = None
+    param_halfwidth: float | None = None
 
 
 @dataclass(frozen=True)
@@ -142,7 +141,7 @@ class LaplaceConfig:
     ridge: float = 1e-6
     eig_keep: float = 1e-2
     fd_step: float = 1e-3
-    dtmax: Optional[float] = None
+    dtmax: float | None = None
 
 
 @dataclass(frozen=True)
@@ -165,10 +164,10 @@ class FreeICConfig:
 
     species: list
     bounds: tuple = (1e-3, 1e4)
-    prior_log_std: Optional[float] = None
+    prior_log_std: float | None = None
 
 
-def _resolve_laplace(laplace) -> tuple[bool, "LaplaceConfig"]:
+def _resolve_laplace(laplace) -> tuple[bool, LaplaceConfig]:
     """Normalise the ``laplace=`` argument to ``(enabled, LaplaceConfig)``.
 
     Accepts ``True`` (enable with defaults), ``False`` (disable), or a
@@ -183,7 +182,7 @@ def _resolve_laplace(laplace) -> tuple[bool, "LaplaceConfig"]:
     raise TypeError(f"laplace must be a bool or LaplaceConfig; got {type(laplace).__name__}.")
 
 
-def _free_ic_fields(free_ic) -> tuple[Optional[list], tuple, Optional[float]]:
+def _free_ic_fields(free_ic) -> tuple[list | None, tuple, float | None]:
     """Unpack an optional :class:`FreeICConfig` into ``(species, bounds,
     prior_log_std)`` for the internal problem resolver."""
     if free_ic is None:
@@ -212,7 +211,7 @@ def _jacobian_physical_wrt_theta(theta: jnp.ndarray, transform: str) -> jnp.ndar
 def _build_loss(
     loss_type: str,
     observations: jnp.ndarray,
-    sigma: Optional[jnp.ndarray],
+    sigma: jnp.ndarray | None,
 ):
     """Return ``loss(pred) -> scalar``.
 
@@ -248,7 +247,7 @@ def _build_loss(
 def _build_residual(
     loss_type: str,
     observations: jnp.ndarray,
-    sigma: Optional[jnp.ndarray],
+    sigma: jnp.ndarray | None,
 ):
     """Return ``residual(pred) -> 1-D array`` whose half-sum-of-squares equals
     the (theta-dependent part of the) scalar loss from :func:`_build_loss`.
@@ -394,7 +393,7 @@ class PredictiveBand:
     hi: np.ndarray
     percentiles: tuple[float, float]
     n_valid: int
-    species: Optional[list[str]] = None
+    species: list[str] | None = None
 
 
 @dataclass
@@ -458,13 +457,13 @@ class CalibrationResult:
     n_iter: int
     parameter_names: list[str]
     transforms: list[str]
-    posterior_cov: Optional[jnp.ndarray] = None
-    posterior_std_unconstrained: Optional[jnp.ndarray] = None
-    params_named_std: Optional[dict[str, float]] = field(default=None)
-    hessian_unconstrained: Optional[jnp.ndarray] = None
+    posterior_cov: jnp.ndarray | None = None
+    posterior_std_unconstrained: jnp.ndarray | None = None
+    params_named_std: dict[str, float] | None = field(default=None)
+    hessian_unconstrained: jnp.ndarray | None = None
     priors_applied: dict[str, tuple[float, float]] = field(default_factory=dict)
-    C0_fitted: Optional[list] = None
-    ic_named: Optional[list] = None
+    C0_fitted: list | None = None
+    ic_named: list | None = None
 
     def predictive_band(
         self,
@@ -475,8 +474,8 @@ class CalibrationResult:
         n_draw: int = 200,
         percentiles: tuple[float, float] = (2.5, 97.5),
         seed: int = 0,
-        eig_keep: Optional[float] = None,
-        observed_species: Optional[list[str]] = None,
+        eig_keep: float | None = None,
+        observed_species: list[str] | None = None,
     ) -> PredictiveBand:
         """Posterior-predictive band by propagating Laplace draws through a solve.
 
@@ -683,7 +682,7 @@ class _ReactorForwardModel:
         """Whether the reactor's adjoint supports forward-mode AD (jacfwd)."""
         return isinstance(getattr(self.reactor, "adjoint", None), diffrax.DirectAdjoint)
 
-    def with_dtmax(self, dtmax) -> "_ReactorForwardModel":
+    def with_dtmax(self, dtmax) -> _ReactorForwardModel:
         """A clone whose reactor caps the integrator step at ``dtmax`` -- the
         (possibly tighter) reactor the Laplace Hessian is formed on. The
         ``stable_adjoint`` backend needs no cap, so it reuses ``self`` unchanged.
@@ -725,7 +724,7 @@ class _CalibrationProblem:
     transforms: list  # resolved transform per free param, same order
     n_rate: int
     p0_full: jnp.ndarray
-    param_halfwidth: Optional[float]
+    param_halfwidth: float | None
     # Datasets (one or several batches sharing the parameter vector).
     datasets: list  # full (C0, tobs, tspan, loss_fn, resid_fn) tuples
     dataset_static: list  # (tobs, tspan, loss_fn, resid_fn) per dataset
@@ -744,7 +743,7 @@ class _CalibrationProblem:
     m_ic: int
     ic_species_idx: jnp.ndarray
     ic_center_full: jnp.ndarray
-    ic_prior_log_std: Optional[float]
+    ic_prior_log_std: float | None
     ic_bounds: tuple
 
     def physical_from_theta(self, rate_thetas: jnp.ndarray) -> jnp.ndarray:
@@ -818,15 +817,15 @@ class _FitConfig:
     tol: float
     n_starts: int
     jitter: float
-    jitter_schedule: Optional[tuple]
+    jitter_schedule: tuple | None
     seed: int
     laplace: bool
     laplace_method: str
     laplace_ridge: float
     laplace_eig_keep: float
     laplace_fd_step: float
-    laplace_dtmax: Optional[float]
-    compiled_cache: Optional[dict]
+    laplace_dtmax: float | None
+    compiled_cache: dict | None
 
 
 def _forward_jac(cfg: _FitConfig, fm: _ReactorForwardModel) -> bool:
@@ -1386,19 +1385,19 @@ def calibrate(
     t_obs: jnp.ndarray,
     free_params: list[str],
     *,
-    transforms: Optional[dict[str, str]] = None,
-    initial_params: Optional[jnp.ndarray] = None,
-    observed_species: Optional[list[str]] = None,
-    time_unit: Optional[str] = None,
+    transforms: dict[str, str] | None = None,
+    initial_params: jnp.ndarray | None = None,
+    observed_species: list[str] | None = None,
+    time_unit: str | None = None,
     loss: str = "mse",
-    sigma: Optional[jnp.ndarray] = None,
-    priors: Optional[dict[str, tuple[float, float]]] = None,
+    sigma: jnp.ndarray | None = None,
+    priors: dict[str, tuple[float, float]] | None = None,
     use_priors: bool = True,
     diff: DifferentiationConfig = DifferentiationConfig(method="through_solve"),
     optimizer: OptimizerConfig = OptimizerConfig(),
-    laplace: "bool | LaplaceConfig" = True,
-    free_ic: Optional[FreeICConfig] = None,
-    _compiled_cache: Optional[dict] = None,
+    laplace: bool | LaplaceConfig = True,
+    free_ic: FreeICConfig | None = None,
+    _compiled_cache: dict | None = None,
 ) -> CalibrationResult:
     """MAP fit with optional Laplace posterior approximation.
 

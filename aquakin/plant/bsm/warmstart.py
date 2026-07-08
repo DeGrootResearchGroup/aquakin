@@ -24,7 +24,7 @@ so the precise values only affect how fast the plant settles, not where.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
@@ -72,7 +72,7 @@ BSM1_WARM_REACTOR_COMPOSITION = {
 }
 
 
-def _as_reactor_names(plant: "Plant") -> list:
+def _as_reactor_names(plant: Plant) -> list:
     """The activated-sludge reactor CSTRs (volume + aeration), in plant order.
     The digester and other volumed units have no ``aeration`` field."""
     reactors = plant.activated_sludge_reactors(require_volume=True)
@@ -93,8 +93,8 @@ def _warm_y0(plant, composition, asm1_model):
 
 
 def bsm2_warm_start(
-    plant: "Plant",
-    asm1_model: Optional["CompiledModel"] = None,
+    plant: Plant,
+    asm1_model: CompiledModel | None = None,
 ) -> jnp.ndarray:
     """A warm-start initial state ``y0`` for a BSM2 plant.
 
@@ -129,8 +129,8 @@ def bsm2_warm_start(
 
 
 def bsm1_warm_start(
-    plant: "Plant",
-    asm1_model: Optional["CompiledModel"] = None,
+    plant: Plant,
+    asm1_model: CompiledModel | None = None,
 ) -> jnp.ndarray:
     """A warm-start initial state ``y0`` for a BSM1 plant.
 

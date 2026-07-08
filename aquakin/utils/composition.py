@@ -20,7 +20,7 @@ g/m³, the ADM digester in kg/m³ and kmol/m³) on one canonical g basis.
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -37,7 +37,7 @@ Composition = dict[str, dict[str, float]]
 _ICOD_NO3 = -32.0 / 7.0  # = -4.571428...
 
 
-def _p(net: "CompiledModel", name: str, default: float = 0.0, params=None) -> float:
+def _p(net: CompiledModel, name: str, default: float = 0.0, params=None) -> float:
     """A model parameter value by name, or ``default`` if it has no such
     parameter (so one table serves a family with different parameter sets).
 
@@ -65,7 +65,7 @@ _ASM_NO_CONTENT = {"SALK", "XSS", "XTSS", "XMeOH", "SHCO"}
 _ADM1_NO_CONTENT = {"S_IC", "S_cat", "S_an", "S_gas_co2"}
 
 
-def _warn_unmapped(net: "CompiledModel", unmapped: list[str]) -> None:
+def _warn_unmapped(net: CompiledModel, unmapped: list[str]) -> None:
     """Warn that ``unmapped`` species got no role-based composition content.
 
     The shipped role-based table assigns an unrecognised species zero
@@ -83,7 +83,7 @@ def _warn_unmapped(net: "CompiledModel", unmapped: list[str]) -> None:
 
 
 def _asm_composition(
-    net: "CompiledModel", electron_acceptor_cod: bool = True, params=None
+    net: CompiledModel, electron_acceptor_cod: bool = True, params=None
 ) -> Composition:
     """COD / N / P content for an ASM-family model, from its own composition
     parameters. Mirrors the Gujer-matrix continuity convention: organic COD
@@ -203,7 +203,7 @@ _ADM1_COD = {
 _ADM1_BIOMASS = {"X_su", "X_aa", "X_fa", "X_c4", "X_pro", "X_ac", "X_h2"}
 
 
-def _adm1_composition(net: "CompiledModel", params=None) -> Composition:
+def _adm1_composition(net: CompiledModel, params=None) -> Composition:
     """COD / N content for ADM1 (BSM2 form). N (kmol N / m³ for ``S_IN``, else
     the model's ``N_*`` fractions in kmol N / kg COD) is converted to the
     canonical g basis later; here it is in the species' native measure. ADM1
@@ -271,7 +271,7 @@ _ASM_CONTENT_FACTOR = {"COD": 1.0, "N": 1.0, "P": 1.0}
 
 
 def composition_table(
-    model: "CompiledModel", *, electron_acceptor_cod: bool = True, params=None
+    model: CompiledModel, *, electron_acceptor_cod: bool = True, params=None
 ) -> Composition:
     """The shipped COD / N / P composition table for a model.
 
@@ -320,9 +320,9 @@ def composition_table(
 
 
 def canonical_content(
-    model: "CompiledModel",
+    model: CompiledModel,
     component: str,
-    composition: Optional[Composition] = None,
+    composition: Composition | None = None,
     *,
     electron_acceptor_cod: bool = True,
     params=None,

@@ -72,7 +72,7 @@ class IdealThickener(StatelessUnit):
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     target_tss_percent: float
     tss_removal_percent: float = 98.0
     settling_species: tuple[str, ...] = ASM1_SETTLING_SPECIES
@@ -120,7 +120,7 @@ class IdealThickener(StatelessUnit):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         """Thicken the feed to the target underflow TSS in one instantaneous step.
 

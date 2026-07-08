@@ -39,10 +39,11 @@ this manager only builds the machinery when asked.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 if TYPE_CHECKING:
     from aquakin.plant.plant import Plant
@@ -53,26 +54,26 @@ class ColoredJacobianManager:
     forward / adjoint / steady builder caches) for one :class:`Plant`. See the
     module docstring."""
 
-    def __init__(self, plant: "Plant"):
+    def __init__(self, plant: Plant):
         self.plant = plant
         # Colored-Jacobian root finder (built once, concretely, on the first
         # colored_jacobian=True solve): (root_finder, n_colors, ok). ``ok`` False
         # means the setup guard found the colored Jacobian disagreed with the
         # dense one at the start state, so the solve falls back to the dense path.
-        self._root_finder: Optional[tuple] = None
+        self._root_finder: tuple | None = None
         # Colored-Jacobian builder for the stable_adjoint BACKWARD pass (built
         # once, concretely): (builder_or_None, n_colors, ok, n_states, rf).
         # Distinct from _root_finder (the forward root finder) -- this colors the
         # AUGMENTED (time-carrying, n+1) primal rhs the discrete adjoint
         # differentiates. ``ok`` False => the guard found a colored/dense mismatch
         # at the start state, so the backward falls back to dense jacfwd.
-        self._adjoint_builder: Optional[tuple] = None
+        self._adjoint_builder: tuple | None = None
         # Colored-Jacobian builder for the PTC STEADY-STATE iteration (built once,
         # concretely): (builder_or_None, n_colors, ok). Colors the autonomous
         # steady residual Jacobian dF/dy. The PTC operating-point neighbourhood is
         # narrow, so the start-state pattern stays valid throughout (unlike a wide
         # dynamic run).
-        self._steady_builder: Optional[tuple] = None
+        self._steady_builder: tuple | None = None
 
     def reset(self) -> None:
         """Drop the three builder caches.
@@ -89,7 +90,7 @@ class ColoredJacobianManager:
 
     # --- structural sparsity -------------------------------------------------
 
-    def _structural_plant_pattern(self, coupling_mask=None) -> "np.ndarray":
+    def _structural_plant_pattern(self, coupling_mask=None) -> np.ndarray:
         """Assemble the plant's structural Jacobian sparsity from each unit's
         emitted couplings, for the colored pattern (issue #388).
 
@@ -113,7 +114,6 @@ class ColoredJacobianManager:
         is the probe pattern (used only to restrict off-diagonal placement to real
         couplings, keeping the coloring tight).
         """
-        import numpy as np
 
         from aquakin.plant.translators import translator_coupling_pattern
 
@@ -323,8 +323,6 @@ class ColoredJacobianManager:
         Jacobian at the default state; a mismatch falls back to dense (with a
         warning).
         """
-        import numpy as np
-
         from aquakin.integrate.colored_jacobian import (
             jacobian_sparsity_pattern,
             materialize_colored_jacobian,

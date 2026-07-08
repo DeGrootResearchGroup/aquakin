@@ -53,12 +53,12 @@ class Reagent:
         A human-readable name for the reagent (used in unit names / messages).
     """
 
-    model: "CompiledModel"
+    model: CompiledModel
     composition: jnp.ndarray
     label: str = "reagent"
 
     @classmethod
-    def from_species(cls, model, overrides=None, /, *, label="reagent", **species) -> "Reagent":
+    def from_species(cls, model, overrides=None, /, *, label="reagent", **species) -> Reagent:
         """Build a reagent from named species concentrations (everything else 0).
 
         Thin wrapper over :meth:`CompiledModel.concentrations` with
@@ -190,7 +190,7 @@ class DosingUnit:
 
     # ----- identity / protocol -------------------------------------------
     @property
-    def model(self) -> "CompiledModel":
+    def model(self) -> CompiledModel:
         return self.reagent.model
 
     @property
@@ -224,7 +224,7 @@ class DosingUnit:
         return jnp.zeros((0,))
 
     # ----- behaviour ------------------------------------------------------
-    def _dose_flow(self, signals: "dict | None") -> jnp.ndarray:
+    def _dose_flow(self, signals: dict | None) -> jnp.ndarray:
         """The dose flow this step: the fixed setpoint, or the controller's
         (gain-scaled) signal for a feedback dose."""
         if self.flow is not None:
@@ -244,7 +244,7 @@ class DosingUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         s_in = inputs[self.input_port]
         q_dose = self._dose_flow(signals)
@@ -273,6 +273,6 @@ class DosingUnit:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         return jnp.zeros((0,))  # stateless

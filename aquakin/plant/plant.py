@@ -24,8 +24,8 @@ cycles by ordering downstream units before upstream consumers — see
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Iterable, Optional, Sequence, Union
 
 import diffrax
 import jax
@@ -82,12 +82,12 @@ class Connection:
     influent named by ``from_port``; otherwise ``from_port`` is one of
     ``from_unit.output_ports``."""
 
-    from_unit: Optional[str]
+    from_unit: str | None
     from_port: str
     to_unit: str
     to_port: str
     translator: StateTranslator
-    initial_value: Optional[Stream] = None  # used to seed recycle edges on the first pass
+    initial_value: Stream | None = None  # used to seed recycle edges on the first pass
 
 
 @dataclass
@@ -201,7 +201,7 @@ class Plant:
         name: str,
         *,
         recycle_passes: int = 3,
-        recycle_tol: Optional[float] = 1e-8,
+        recycle_tol: float | None = 1e-8,
         recycle_max_passes: int = 100,
     ) -> None:
         self.name = name
@@ -244,8 +244,8 @@ class Plant:
         # right ones here, so ``plant.add_influent(series)`` and the metric
         # evaluators read them instead of a guessable literal. ``None`` on a plant
         # whose builder did not set them.
-        self.influent_endpoint: Optional[str] = None
-        self.effluent_endpoint: Optional[str] = None
+        self.influent_endpoint: str | None = None
+        self.effluent_endpoint: str | None = None
         # Semantic stream shortcuts: engineering names (``"effluent"``, ``"ras"``,
         # ``"internal_recycle"``, ``"primary_sludge"``, ``"reject"`` ...) -> the
         # internal ``"unit.port"`` they resolve to, registered by the builder
@@ -274,7 +274,7 @@ class Plant:
         self._model_param_index: dict[str, int] = {}
         # Static connection adjacency, rebuilt by _build_state_layout():
         self._inputs_by_unit: dict[str, list[Connection]] = {}
-        self._recycle_keys: list[tuple[Optional[str], str]] = []
+        self._recycle_keys: list[tuple[str | None, str]] = []
         # The recycle (back-edge) connections and, for any auto-detected one with
         # no explicit ``initial_value``, a zero-flow seed stream. Set by
         # _finalize_topology().
@@ -339,9 +339,9 @@ class Plant:
         self,
         name: str,
         series: InfluentSeries,
-        to: Optional[str] = None,
+        to: str | None = None,
         *,
-        translator: Optional[StateTranslator] = None,
+        translator: StateTranslator | None = None,
     ) -> None:
         """Register an external time-varying influent stream, optionally wiring it.
 
@@ -391,7 +391,7 @@ class Plant:
                 )
             )
 
-    def set_temperature(self, celsius: float, *, units: Optional[Iterable[str]] = None) -> "Plant":
+    def set_temperature(self, celsius: float, *, units: Iterable[str] | None = None) -> Plant:
         """Set the operating temperature of the reactors, in **degrees Celsius**.
 
         One knob for "run the plant at this temperature": converts to Kelvin and
@@ -451,7 +451,7 @@ class Plant:
         self._solve_cache.invalidate()
         return self
 
-    def set_temperature_model(self, model: TemperatureModel) -> "Plant":
+    def set_temperature_model(self, model: TemperatureModel) -> Plant:
         """Select how reactor temperature is handled (see :mod:`aquakin.plant.temperature`).
 
         Pass :class:`~aquakin.plant.temperature.HeatBalanceTemperature` to give
@@ -479,8 +479,8 @@ class Plant:
         source: str,
         dest: str,
         *,
-        translator: Optional[StateTranslator] = None,
-        initial_value: Optional[Stream] = None,
+        translator: StateTranslator | None = None,
+        initial_value: Stream | None = None,
     ) -> None:
         """Wire a stream from one unit's output to another unit's input.
 
@@ -754,7 +754,7 @@ class Plant:
         from aquakin.plant.control import PIController
         from aquakin.plant.cstr import _aeration_signal_name
 
-        groups: dict[str, list[tuple[str, "Unit", object]]] = {}
+        groups: dict[str, list[tuple[str, Unit, object]]] = {}
         for name in list(self._insertion_order):
             aer = getattr(self.units[name], "aeration", None)
             if aer is None or not aer.is_closed_loop:
@@ -854,7 +854,7 @@ class Plant:
         from aquakin.plant.control import PIController
         from aquakin.plant.dosing import DosingUnit, dose_signal_name
 
-        groups: dict[str, list[tuple[str, "DosingUnit"]]] = {}
+        groups: dict[str, list[tuple[str, DosingUnit]]] = {}
         for name in list(self._insertion_order):
             unit = self.units[name]
             if isinstance(unit, DosingUnit) and unit.is_closed_loop:
@@ -1066,7 +1066,7 @@ class Plant:
         return seen
 
     @property
-    def time_unit(self) -> Optional[str]:
+    def time_unit(self) -> str | None:
         """The plant's native integration time unit, or ``None``.
 
         ``t_span`` / ``t_eval`` passed to :meth:`solve` are in this unit (unless
@@ -1219,7 +1219,7 @@ class Plant:
             )
         return index[name]
 
-    def parameter_values(self, overrides: Optional[dict] = None, /) -> jnp.ndarray:
+    def parameter_values(self, overrides: dict | None = None, /) -> jnp.ndarray:
         """Plant parameter vector: the defaults with named entries overridden.
 
         The plant analogue of ``CompiledModel.parameter_values``. Keys are
@@ -1273,7 +1273,7 @@ class Plant:
 
     # ----- introspection: discover unit / port / species names ---------------
 
-    def _unit_or_raise(self, name: str) -> "Unit":
+    def _unit_or_raise(self, name: str) -> Unit:
         """Return ``self.units[name]`` or a ``KeyError`` with a close-match hint."""
         if name not in self.units:
             suffix = did_you_mean(name, list(self.units))
@@ -1294,7 +1294,7 @@ class Plant:
         """
         return list(self._insertion_order)
 
-    def list_ports(self, unit: Optional[str] = None, *, role: str = "output") -> list[str]:
+    def list_ports(self, unit: str | None = None, *, role: str = "output") -> list[str]:
         """The ``"unit.port"`` endpoint strings, for discovering stream args.
 
         ``role="output"`` (default) returns every unit-*output* endpoint -- the
@@ -1426,7 +1426,7 @@ class Plant:
             )
         return jnp.concatenate([kinetic, flow])
 
-    def initial_state(self, overrides: Optional[dict[str, jnp.ndarray]] = None) -> jnp.ndarray:
+    def initial_state(self, overrides: dict[str, jnp.ndarray] | None = None) -> jnp.ndarray:
         """Concatenated initial state from each unit's ``initial_state()``.
 
         Parameters
@@ -1550,12 +1550,12 @@ class Plant:
         t: jnp.ndarray,
         states: dict[str, jnp.ndarray],
         params_full: jnp.ndarray,
-        signals: Optional[dict] = None,
-        design: Optional[dict] = None,
-        recycle_map: Optional[list] = None,
-        flow_map: Optional[jnp.ndarray] = None,
+        signals: dict | None = None,
+        design: dict | None = None,
+        recycle_map: list | None = None,
+        flow_map: jnp.ndarray | None = None,
     ) -> tuple[
-        dict[tuple[Optional[str], str], Stream],
+        dict[tuple[str | None, str], Stream],
         dict[tuple[str, str], Stream],
     ]:
         """Resolve every unit's output streams at one instant.
@@ -1582,7 +1582,7 @@ class Plant:
         if signals is None:
             signals = self._compute_signals(t, states, params_full)
         influent_override = (design or {}).get("influent", {})
-        streams: dict[tuple[Optional[str], str], Stream] = {}
+        streams: dict[tuple[str | None, str], Stream] = {}
         for port_name, series in self.influents.items():
             if port_name in influent_override:
                 ov = influent_override[port_name]
@@ -1622,7 +1622,7 @@ class Plant:
         self,
         t: jnp.ndarray,
         state_full: jnp.ndarray,
-        params: Optional[jnp.ndarray] = None,
+        params: jnp.ndarray | None = None,
     ) -> dict[tuple[str, str], Stream]:
         """Reconstruct every unit's output streams at one ``(t, state)``.
 
@@ -1657,7 +1657,7 @@ class Plant:
         )
         return all_outputs
 
-    def _cached_streams(self, solution: "PlantSolution", params_full):
+    def _cached_streams(self, solution: PlantSolution, params_full):
         """Reconstruct **every** unit-output stream over a whole solution, once.
 
         The plant integrates unit *states*, not the inter-unit streams, so each
@@ -1714,9 +1714,9 @@ class Plant:
 
     def stream(
         self,
-        solution: "PlantSolution",
+        solution: PlantSolution,
         endpoint: str,
-        params: Optional[jnp.ndarray] = None,
+        params: jnp.ndarray | None = None,
     ) -> StreamSeries:
         """Reconstruct a named output stream's trajectory from a solution.
 
@@ -1789,7 +1789,7 @@ class Plant:
 
         return jax.vmap(_org_one)(jnp.asarray(solution.t), jnp.asarray(solution.state))
 
-    def register_stream(self, name: str, endpoint: str) -> "Plant":
+    def register_stream(self, name: str, endpoint: str) -> Plant:
         """Register a **semantic name** for an output ``"unit.port"`` endpoint.
 
         After this, ``plant.stream(sol, name)`` reads that port -- so an engineer
@@ -1812,7 +1812,7 @@ class Plant:
         return dict(self.named_streams)
 
     def effluent_stream(
-        self, solution: "PlantSolution", params: Optional[jnp.ndarray] = None
+        self, solution: PlantSolution, params: jnp.ndarray | None = None
     ) -> StreamSeries:
         """The plant's final effluent stream (a shortcut for the most-read one).
 
@@ -1828,7 +1828,7 @@ class Plant:
             )
         return self.stream(solution, self.effluent_endpoint, params)
 
-    def digester_gas(self, solution: "PlantSolution", params: Optional[jnp.ndarray] = None):
+    def digester_gas(self, solution: PlantSolution, params: jnp.ndarray | None = None):
         """The anaerobic digester's biogas trajectory.
 
         A :class:`~aquakin.plant.bsm.evaluation.DigesterGas` with the biogas flow
@@ -1843,12 +1843,12 @@ class Plant:
 
     def mass_balance(
         self,
-        solution: "PlantSolution",
+        solution: PlantSolution,
         *,
         components=("COD", "N", "P"),
-        influent_ports: Optional[list] = None,
-        effluent_ports: Optional[list] = None,
-        params: Optional[jnp.ndarray] = None,
+        influent_ports: list | None = None,
+        effluent_ports: list | None = None,
+        params: jnp.ndarray | None = None,
     ):
         """Results-level mass-balance closure of this plant over a solved window.
 
@@ -1903,7 +1903,7 @@ class Plant:
             params=params,
         )
 
-    def sludge_age(self, solution: "PlantSolution", params: Optional[jnp.ndarray] = None, **kwargs):
+    def sludge_age(self, solution: PlantSolution, params: jnp.ndarray | None = None, **kwargs):
         """Achieved SRT / HRT / F:M of this activated-sludge plant.
 
         Convenience wrapper for :func:`aquakin.plant.design.sludge_metrics` --
@@ -1936,7 +1936,7 @@ class Plant:
     def derivative(
         self,
         state: jnp.ndarray,
-        params: Optional[jnp.ndarray] = None,
+        params: jnp.ndarray | None = None,
         *,
         t: float = 0.0,
     ) -> jnp.ndarray:
@@ -1976,9 +1976,9 @@ class Plant:
         t: jnp.ndarray,
         state_full: jnp.ndarray,
         params_full: jnp.ndarray,
-        design: Optional[dict] = None,
-        recycle_map: Optional[list] = None,
-        flow_map: Optional[jnp.ndarray] = None,
+        design: dict | None = None,
+        recycle_map: list | None = None,
+        flow_map: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
         # Step 1: split state by unit.
         states = self._split_state(state_full)
@@ -2114,7 +2114,7 @@ class Plant:
         self,
         t: jnp.ndarray,
         state_full: jnp.ndarray,
-        params: Optional[jnp.ndarray] = None,
+        params: jnp.ndarray | None = None,
     ) -> dict:
         """Reconstruct the control-signal bus at one ``(t, state)``.
 
@@ -2176,11 +2176,11 @@ class Plant:
         self,
         t: jnp.ndarray,
         states: dict[str, jnp.ndarray],
-        streams: dict[tuple[Optional[str], str], Stream],
+        streams: dict[tuple[str | None, str], Stream],
         seeded: dict[tuple[str, str], Stream],
         params_full: jnp.ndarray,
-        passes: Optional[int] = None,
-        signals: Optional[dict] = None,
+        passes: int | None = None,
+        signals: dict | None = None,
     ) -> dict[tuple[str, str], Stream]:
         """Resolve unit outputs with the fixed-pass Gauss-Seidel recycle sweep.
 
@@ -2253,9 +2253,9 @@ class Plant:
         self,
         unit_name: str,
         all_outputs: dict[tuple[str, str], Stream],
-        streams: dict[tuple[Optional[str], str], Stream],
-        states: Optional[dict[str, jnp.ndarray]] = None,
-        params_full: Optional[jnp.ndarray] = None,
+        streams: dict[tuple[str | None, str], Stream],
+        states: dict[str, jnp.ndarray] | None = None,
+        params_full: jnp.ndarray | None = None,
     ) -> dict[str, Stream]:
         """Find the input stream for each port of ``unit_name``.
 
@@ -2312,18 +2312,18 @@ class Plant:
     def solve(
         self,
         t_span: tuple[float, float],
-        t_eval: Union[jnp.ndarray, None] = None,
-        params: Optional[jnp.ndarray] = None,
+        t_eval: jnp.ndarray | None = None,
+        params: jnp.ndarray | None = None,
         *,
         rtol: float = 1e-6,
-        atol: Union[float, jnp.ndarray, None] = None,
-        y0: Optional[jnp.ndarray] = None,
+        atol: float | jnp.ndarray | None = None,
+        y0: jnp.ndarray | None = None,
         integrator: IntegratorConfig = IntegratorConfig(),
         diff: DifferentiationConfig = DifferentiationConfig(),
-        time_unit: Optional[str] = None,
-        event: Optional[diffrax.Event] = None,
-        events: Optional[Sequence["Event"]] = None,
-        progress_meter: Optional["diffrax.AbstractProgressMeter"] = None,
+        time_unit: str | None = None,
+        event: diffrax.Event | None = None,
+        events: Sequence[Event] | None = None,
+        progress_meter: diffrax.AbstractProgressMeter | None = None,
         forward_fast: bool = False,
     ) -> PlantSolution:
         """Integrate the plant over ``t_span``.
@@ -3445,17 +3445,17 @@ class Plant:
 
     def run_to_steady_state(
         self,
-        params: Optional[jnp.ndarray] = None,
-        y0: Optional[jnp.ndarray] = None,
+        params: jnp.ndarray | None = None,
+        y0: jnp.ndarray | None = None,
         *,
         max_time: float = 1000.0,
         ss_rtol: float = 1e-3,
         ss_atol: float = 1e-3,
         rtol: float = 1e-6,
-        atol: Union[float, jnp.ndarray, None] = None,
+        atol: float | jnp.ndarray | None = None,
         atol_factor: float = 1e-6,
         max_steps: int = 500_000,
-    ) -> "SteadyStateResult":
+    ) -> SteadyStateResult:
         """Integrate forward until the plant settles to steady state.
 
         A single continuous adaptive solve that **terminates itself** the instant
@@ -3744,8 +3744,8 @@ class Plant:
 
     def steady_state(
         self,
-        params: Optional[jnp.ndarray] = None,
-        y0: Optional[jnp.ndarray] = None,
+        params: jnp.ndarray | None = None,
+        y0: jnp.ndarray | None = None,
         *,
         influent_time: float = 0.0,
         dt0: float = 1e-2,
@@ -3753,17 +3753,17 @@ class Plant:
         growth_cap: float = 10.0,
         max_iter: int = 400,
         tol: float = 1e-6,
-        scale_floor: Optional[float] = None,
+        scale_floor: float | None = None,
         nonneg: bool = True,
-        design: Optional[dict] = None,
+        design: dict | None = None,
         colored_jacobian: bool = False,
         fallback: bool = True,
-        fallback_kwargs: Optional[dict] = None,
-        continuation_from: Optional[tuple] = None,
-        continuation_kwargs: Optional[dict] = None,
+        fallback_kwargs: dict | None = None,
+        continuation_from: tuple | None = None,
+        continuation_kwargs: dict | None = None,
         arclength: bool = True,
-        arclength_kwargs: Optional[dict] = None,
-    ) -> "SteadyStateResult":
+        arclength_kwargs: dict | None = None,
+    ) -> SteadyStateResult:
         """Solve the plant steady state algebraically by pseudo-transient continuation.
 
         Finds the root of the plant right-hand side ``F(y) = dy/dt = 0`` directly,

@@ -27,7 +27,7 @@ the right order. The reactor's own
 
 from __future__ import annotations
 
-from typing import Mapping, Optional
+from collections.abc import Mapping
 
 import diffrax
 import jax
@@ -130,7 +130,7 @@ class CFDReactor:
         C: np.ndarray,
         conditions: Mapping[str, np.ndarray],
         dt: float,
-        params: Optional[np.ndarray] = None,
+        params: np.ndarray | None = None,
         *,
         return_mask: bool = False,
     ) -> np.ndarray:

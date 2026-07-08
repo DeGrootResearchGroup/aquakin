@@ -34,7 +34,7 @@ root-finder) is built once per plant and reused.
 """
 
 import warnings
-from typing import Callable
+from collections.abc import Callable
 
 import equinox as eqx
 import jax

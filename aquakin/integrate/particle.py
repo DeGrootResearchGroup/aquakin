@@ -10,8 +10,8 @@ term.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping, Optional
 
 import diffrax
 import jax
@@ -145,7 +145,7 @@ class ParticleTrackReactor(GradientCheckMixin):
             raise ValueError(f"n_save must be >= 2, got {self.n_save}")
         self.atol = resolve_state_atol(model, atol)
 
-    def solve(self, C0: jnp.ndarray, *, params: Optional[jnp.ndarray] = None) -> TrackSolution:
+    def solve(self, C0: jnp.ndarray, *, params: jnp.ndarray | None = None) -> TrackSolution:
         """
         Integrate the model along the track.
 

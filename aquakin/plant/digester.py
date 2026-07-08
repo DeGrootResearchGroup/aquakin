@@ -56,7 +56,7 @@ class ADM1DigesterUnit(CouplingAware):
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     volume: float
     input_port_names: list[str] = field(default_factory=lambda: ["inlet"])
     conditions: dict[str, float] = field(default_factory=dict)
@@ -213,7 +213,7 @@ class ADM1DigesterUnit(CouplingAware):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         # Constant liquid volume: effluent flow equals the total inflow. The
         # effluent carries the flow-weighted inlet side-channel scalars (the
@@ -233,7 +233,7 @@ class ADM1DigesterUnit(CouplingAware):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         # Mix inflows (Q-weighted) into one feed composition.
         Q_total, C_in = mixed_feed(inputs, self.input_port_names)

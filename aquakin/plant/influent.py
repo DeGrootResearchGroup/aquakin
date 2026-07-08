@@ -17,7 +17,7 @@ import dataclasses
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -94,8 +94,8 @@ class InfluentSeries:
     t: jnp.ndarray
     Q: jnp.ndarray
     C: jnp.ndarray
-    model: "CompiledModel"
-    T: "jnp.ndarray | None" = None
+    model: CompiledModel
+    T: jnp.ndarray | None = None
 
     def __post_init__(self) -> None:
         if self.t.ndim != 1:
@@ -114,7 +114,7 @@ class InfluentSeries:
     @classmethod
     def constant(
         cls, model, overrides=None, /, *, Q, base: str = "zero", T=None, **species
-    ) -> "InfluentSeries":
+    ) -> InfluentSeries:
         """Build a constant-in-time influent from a feed composition.
 
         The composition is built with ``model.concentrations(overrides,
@@ -172,8 +172,8 @@ class InfluentSeries:
 
 
 def read_influent_csv(
-    path: Union[str, Path],
-    model: "CompiledModel",
+    path: str | Path,
+    model: CompiledModel,
     *,
     column_order: list[str] | None = None,
     column_map: dict | None = None,
@@ -231,7 +231,7 @@ def read_influent_csv(
 
 def _influent_from_text(
     text: str,
-    model: "CompiledModel",
+    model: CompiledModel,
     *,
     column_order: list[str] | None = None,
     column_map: dict | None = None,
@@ -418,7 +418,7 @@ def _influent_from_column_map(
     )
 
 
-def load_bsm1_influent(profile: str, model: "CompiledModel") -> InfluentSeries:
+def load_bsm1_influent(profile: str, model: CompiledModel) -> InfluentSeries:
     """Load one of the synthesised BSM1 influent files.
 
     Parameters
@@ -458,7 +458,7 @@ def load_bsm1_influent(profile: str, model: "CompiledModel") -> InfluentSeries:
     )
 
 
-def load_bsm2_influent(profile: str, model: "CompiledModel") -> InfluentSeries:
+def load_bsm2_influent(profile: str, model: CompiledModel) -> InfluentSeries:
     """Load one of the BSM2 influent files.
 
     Parameters

@@ -23,14 +23,14 @@ from __future__ import annotations
 
 import csv
 import math
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping, Union
 
 import jax.numpy as jnp
 
 from aquakin.integrate.particle import Track
 
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 _REQUIRED_COLUMNS = ("particle_id", "t")
 

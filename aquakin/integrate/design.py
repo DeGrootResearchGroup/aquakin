@@ -12,8 +12,8 @@ starts from the shared :mod:`aquakin.integrate._qmc` unit sampler.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -36,9 +36,9 @@ class Constraint:
     """
 
     fn: Callable
-    upper: Optional[float] = None
-    lower: Optional[float] = None
-    name: Optional[str] = None
+    upper: float | None = None
+    lower: float | None = None
+    name: str | None = None
 
     def __post_init__(self):
         if self.upper is None and self.lower is None:
@@ -115,9 +115,9 @@ def optimize_design(
     objective: Callable,
     bounds: Sequence,
     *,
-    input_names: Optional[Sequence[str]] = None,
+    input_names: Sequence[str] | None = None,
     constraints: Sequence[Constraint] = (),
-    x0: Optional[Sequence[float]] = None,
+    x0: Sequence[float] | None = None,
     maximize: bool = False,
     method: str = "SLSQP",
     n_starts: int = 1,

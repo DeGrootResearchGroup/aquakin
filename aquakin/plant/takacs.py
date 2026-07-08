@@ -153,11 +153,11 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     """
 
     name: str
-    model: "CompiledModel"
+    model: CompiledModel
     area: float
     height: float
-    overflow_Q: "float | None" = None
-    underflow_Q: "float | None" = None
+    overflow_Q: float | None = None
+    underflow_Q: float | None = None
     n_layers: int = 10
     feed_layer: int = 5
     # Initial-condition operating point for a settled-blanket start (state-point
@@ -167,8 +167,8 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     # violent startup transient (the blanket forming from scratch through the
     # flux kinks). ``init_feed_tss`` is the expected feed TSS (MLSS); if None it
     # is taken from the model's default particulate concentrations.
-    init_underflow_Q: "float | None" = None
-    init_feed_tss: "float | None" = None
+    init_underflow_Q: float | None = None
+    init_feed_tss: float | None = None
     particulate_species: list[str] = field(default_factory=lambda: list(ASM1_SETTLING_SPECIES))
     settling_params: dict[str, float] = field(default_factory=lambda: dict(_BSM1_TAKACS_DEFAULTS))
     tss_factors: dict[str, float] = field(default_factory=lambda: dict(_DEFAULT_TSS_FACTORS))
@@ -546,7 +546,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         v_takacs = self._v0 * (jnp.exp(-self._rh * excess) - jnp.exp(-self._rp * excess))
         return jnp.clip(v_takacs, 0.0, self._vmax)
 
-    def _flow_setpoints(self) -> "dict[str, FlowSetpoint]":
+    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
         return self._setpoints
 
     def _resolve_setpoint(self, q, t, params, name):
@@ -576,7 +576,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> dict[str, Stream]:
         """Split the feed into a clarified overflow and a thickened underflow.
 
@@ -669,7 +669,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
-        signals: "dict | None" = None,
+        signals: dict | None = None,
     ) -> jnp.ndarray:
         s_in = inputs[self.input_port]
         Q_in = s_in.Q
@@ -729,7 +729,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         layered: jnp.ndarray,
         X_min: jnp.ndarray,
         h_layer: float,
-        factors: "jnp.ndarray | None" = None,
+        factors: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
         """Net Takács (1991) settling flux per layer, shape ``(n_layers, n_comp)``.
 

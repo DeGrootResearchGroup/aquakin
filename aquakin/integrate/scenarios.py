@@ -14,8 +14,8 @@ Two closely related tabulation workflows:
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence
 
 import numpy as np
 
@@ -78,8 +78,8 @@ def compare_scenarios(
     scenarios: dict,
     *,
     input_names: Sequence[str],
-    baseline: Optional[Sequence[float]] = None,
-    output_names: Optional[Sequence[str]] = None,
+    baseline: Sequence[float] | None = None,
+    output_names: Sequence[str] | None = None,
     batched: bool = True,
 ) -> ScenarioComparison:
     """Run ``fn`` under several named scenarios and tabulate the outputs.
