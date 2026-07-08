@@ -198,8 +198,7 @@ def profile_likelihood(
     anchor : float, optional
         Grid value to start the continuation sweep from. Defaults to the grid
         midpoint. Ignored when ``warm_start=False``.
-    initial_params, transforms, observed_species, loss, sigma, priors,
-    use_priors, free_ic, optimizer
+    initial_params, transforms, observed_species, loss, sigma, priors, use_priors, free_ic, optimizer
         Forwarded to each inner :func:`aquakin.calibrate` call (``free_ic`` is a
         :class:`~aquakin.FreeICConfig`, ``optimizer`` an
         :class:`~aquakin.OptimizerConfig`; the profiled parameter/species is

@@ -1516,7 +1516,7 @@ def calibrate(
         backward scan walks this whole saved-trajectory buffer, so set it to a
         tight upper bound on the step count (ignored for ``through_solve``).
         ``adjoint_low_memory`` recomputes each step's stages in the backward pass
-        instead of saving the ``~n_stages``x dense-stage buffer -- memory for
+        instead of saving the ``~n_stages`` × dense-stage buffer -- memory for
         compute, with the gradient unchanged.
 
     Returns

@@ -146,12 +146,11 @@ class Aeration:
         Closed-loop PI tuning and output bounds. Defaults are the BSM2 DO loop:
         Kp=25, Ti=0.002 d, Tt=0.001 d, offset 120, bounds [0, 360] d^-1.
 
-    Oxygen-transfer corrections (all **off / identity by default**, so a default
-    ``Aeration`` is bit-faithful to the IWA benchmark constant-saturation,
-    constant-kLa definition):
-
     temperature_correction : bool
-        When ``True``, temperature-correct the oxygen driving force using the
+        First of the oxygen-transfer corrections -- all **off / identity by
+        default**, so a default ``Aeration`` is bit-faithful to the IWA benchmark
+        constant-saturation, constant-kLa definition. When ``True``,
+        temperature-correct the oxygen driving force using the
         tank's operating temperature (the flow-weighted inlet ``T`` the kinetics
         already use, falling back to the static ``T`` condition). The saturation
         is scaled by the clean-water ratio ``C_s(T)/C_s(ref_T)``

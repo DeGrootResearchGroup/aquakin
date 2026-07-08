@@ -109,7 +109,7 @@ class DifferentiationConfig:
           via a forward-capable adjoint (``DirectAdjoint`` / ``ForwardMode``).
     check_finite : bool
         Raise a friendly error if a freshly computed gradient/Jacobian is
-        non-finite, instead of returning silent ``NaN``s.
+        non-finite, instead of returning silent ``NaN`` values.
     adjoint_max_steps : int
         Buffer length for the discrete-adjoint backward scan (the old
         ``stable_adjoint_max_steps``); set it to a tight upper bound on the
@@ -118,7 +118,7 @@ class DifferentiationConfig:
         Low-memory mode for the ``method="stable"`` discrete adjoint. ``False``
         (default) saves each forward step's dense-output stage increments, so the
         backward reconstructs the stages cheaply -- but the saved buffer is
-        ``~n_stages``x the trajectory. ``True`` stores only the step states and
+        ``~n_stages`` × the trajectory. ``True`` stores only the step states and
         **recomputes** each step's stages in the backward pass (a per-step Newton
         scan), so the dense buffer is never allocated -- trading compute for
         memory when that buffer is the binding constraint on a long, large-state
