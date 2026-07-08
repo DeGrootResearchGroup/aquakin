@@ -591,6 +591,35 @@ def make_arclength_kernels(rhs, scale, ptc_kwargs=None):
     return corrector, tangent, init_tangent
 
 
+class _BranchRecorder:
+    """Optional ``(s, y)`` trace of an arclength continuation branch.
+
+    When disabled every method is a cheap no-op and :meth:`result` is ``None``.
+    When enabled it accumulates the accepted ``(s, y)`` points (seeded with the
+    known start) so a full saddle-node S-curve -- including the unstable arm past
+    a fold -- can be returned, while the solve's ``status`` / ``s_max`` still
+    report the fold. Isolated from the continuation hot loop so the loop body
+    reads as the continuation algorithm rather than the recording bookkeeping.
+    """
+
+    def __init__(self, enabled, y_known):
+        self.enabled = bool(enabled)
+        self._s = [0.0] if self.enabled else None
+        self._y = [jnp.asarray(y_known)] if self.enabled else None
+
+    def record(self, s, y):
+        """Append an accepted continuation point (a no-op when disabled)."""
+        if self.enabled:
+            self._s.append(float(s))
+            self._y.append(y)
+
+    def result(self):
+        """The traced branch as ``(s, ys)`` arrays, or ``None`` when disabled."""
+        if not self.enabled:
+            return None
+        return (jnp.asarray(self._s), jnp.stack([jnp.asarray(v) for v in self._y]))
+
+
 def arclength_continuation_solve(
     rhs,
     params_known,
@@ -648,11 +677,7 @@ def arclength_continuation_solve(
     ncorr = [0]
     s_max = 0.0
     last_rF = jnp.asarray(jnp.inf)
-    # Optional branch recording: keep the traced (s, y) path. When on, the trace
-    # is not stopped at the fold -- it continues onto the unstable arm so a full
-    # S-curve is captured -- while status/s_max still report the saddle-node.
-    _branch_s = [0.0] if record_branch else None
-    _branch_y = [jnp.asarray(y_known)] if record_branch else None
+    recorder = _BranchRecorder(record_branch, y_known)
     fold_hit = [False, 0.0]  # (fold detected, fold s_max)
 
     def _correct(z0, s0, uz, us, tzc, tsc, ds):
@@ -667,11 +692,32 @@ def arclength_continuation_solve(
                 return zc, sc, rF, A, True
         return zc, sc, rF, A, False
 
+    def _land_on_target(z, s, tz, ts, dsig, s_new, zc, rF, s_max):
+        """Secant/bisection on the arclength step once the branch has crossed
+        ``s = 1``, to land the reported operating point exactly on the target
+        rather than one arclength step past it (the augmented corrector stays
+        well-conditioned, unlike a natural-parameter solve). Returns
+        ``(z_land, r_land, status, s_max)`` for the caller to package."""
+        d_lo, s_lo, d_hi, s_hi = 0.0, s, dsig, s_new
+        zp, rp = zc, rF
+        for _ in range(12):
+            dt = d_lo + (d_hi - d_lo) * (1.0 - s_lo) / max(s_hi - s_lo, 1e-12)
+            zp0 = z + dt * tz
+            if nonneg:
+                zp0 = jnp.maximum(zp0, 0.0)
+            zp, sp, rp, _, cc = _correct(zp0, s + dt * ts, z, s, tz, ts, dt)
+            spf = float(sp)
+            if cc and abs(spf - 1.0) < s_tol:
+                return zp, rp, "converged", 1.0
+            if spf < 1.0:
+                d_lo, s_lo = dt, spf
+            else:
+                d_hi, s_hi = dt, spf
+        status = "converged" if float(rp) < tol else "failed"
+        return zp, rp, status, max(s_max, 1.0)
+
     def _result(state, res, status, smax, step):
         y_star = jax.lax.stop_gradient(state)
-        branch = None
-        if record_branch:
-            branch = (jnp.asarray(_branch_s), jnp.stack([jnp.asarray(v) for v in _branch_y]))
         return ArclengthResult(
             _ift_state(rhs, y_star, params_target),
             res,
@@ -679,7 +725,7 @@ def arclength_continuation_solve(
             float(smax),
             step,
             ncorr[0],
-            branch,
+            recorder.result(),
         )
 
     for step in range(int(max_steps)):
@@ -696,33 +742,15 @@ def arclength_continuation_solve(
                 return _result(scale * z, last_rF, st, sm, step)
             continue
         s_new = float(sc)
-        # Reachable: the branch crosses s=1 while still advancing forward -- secant
-        # on the arclength step to land exactly on the target (the augmented
-        # corrector stays well-conditioned, unlike a natural-parameter solve).
+        # Reachable: the branch crosses s=1 while still advancing forward -- land
+        # exactly on the target (see _land_on_target).
         if (not fold_hit[0]) and (s < 1.0 <= s_new) and ts_prev > 0.0:
-            d_lo, s_lo, d_hi, s_hi = 0.0, s, dsig, s_new
-            zp, rp = zc, rF
-            for _ in range(12):
-                dt = d_lo + (d_hi - d_lo) * (1.0 - s_lo) / max(s_hi - s_lo, 1e-12)
-                zp0 = z + dt * tz
-                if nonneg:
-                    zp0 = jnp.maximum(zp0, 0.0)
-                zp, sp, rp, _, cc = _correct(zp0, s + dt * ts, z, s, tz, ts, dt)
-                spf = float(sp)
-                if cc and abs(spf - 1.0) < s_tol:
-                    return _result(scale * zp, rp, "converged", 1.0, step)
-                if spf < 1.0:
-                    d_lo, s_lo = dt, spf
-                else:
-                    d_hi, s_hi = dt, spf
-            status = "converged" if float(rp) < tol else "failed"
-            return _result(scale * zp, rp, status, max(s_max, 1.0), step)
+            zp, rp, status, smax = _land_on_target(z, s, tz, ts, dsig, s_new, zc, rF, s_max)
+            return _result(scale * zp, rp, status, smax, step)
         z, s = zc, sc
         last_rF = rF
         s_max = max(s_max, s)
-        if record_branch:
-            _branch_s.append(float(s))
-            _branch_y.append(scale * z)
+        recorder.record(s, scale * z)
         tz, ts = tangent(A, tz, ts)
         # Fold: the s-velocity actually REVERSED (the branch reached its nose and
         # turned back) while short of the target -- a saddle-node bifurcation, so no
