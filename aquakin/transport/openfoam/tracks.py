@@ -105,14 +105,17 @@ def read_tracks_csv(path: PathLike) -> dict[int, Track]:
 
     tracks: dict[int, Track] = {}
     for pid, samples in grouped.items():
-        ts = jnp.asarray([s[0] for s in samples])
-        diffs = jnp.diff(ts)
-        if bool(jnp.any(diffs == 0)):
-            raise ValueError(f"Track file {p}: particle_id {pid} has duplicate t values.")
-        if not bool(jnp.all(diffs > 0)):
-            raise ValueError(
-                f"Track file {p}: particle_id {pid} samples are not strictly ascending in t."
-            )
+        # Validate strict ascent on the plain Python floats (a load-time check,
+        # not a hot path) before building the JAX arrays.
+        t_list = [s[0] for s in samples]
+        for prev, cur in zip(t_list, t_list[1:]):
+            if cur == prev:
+                raise ValueError(f"Track file {p}: particle_id {pid} has duplicate t values.")
+            if cur < prev:
+                raise ValueError(
+                    f"Track file {p}: particle_id {pid} samples are not strictly ascending in t."
+                )
+        ts = jnp.asarray(t_list)
         fields = {
             name: jnp.asarray([s[1][col_index] for s in samples])
             for col_index, (_, name) in enumerate(field_cols)
@@ -131,16 +134,14 @@ def write_tracks_csv(path: PathLike, tracks: Mapping[int, Track]) -> None:
     """
     if not tracks:
         raise ValueError("Cannot write an empty tracks mapping.")
-    field_order: list[str] | None = None
+    # The field column order is the first track's names; every track must match.
+    field_order = sorted(next(iter(tracks.values())).fields)
     for track in tracks.values():
         names = sorted(track.fields)
-        if field_order is None:
-            field_order = names
-        elif names != field_order:
+        if names != field_order:
             raise ValueError(
                 f"All tracks must share the same field names; got {names} vs {field_order}"
             )
-    assert field_order is not None
 
     p = Path(path)
     with p.open("w", newline="") as f:

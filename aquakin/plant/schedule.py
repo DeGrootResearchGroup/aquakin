@@ -11,12 +11,12 @@ solve.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import jax.numpy as jnp
 
 
-@dataclass
+@dataclass(frozen=True)
 class PiecewiseConstantSchedule:
     """A setpoint that holds constant between scheduled step times.
 
@@ -42,9 +42,15 @@ class PiecewiseConstantSchedule:
     t_breaks: Sequence[float]
     values: Sequence[float]
 
+    # Converted JAX arrays for the AD-safe ``at`` gather, derived from the public
+    # sequences at construction. Declared (not stashed) so the value object stays
+    # frozen and the shadow fields are part of the dataclass contract.
+    _t_breaks: jnp.ndarray = field(init=False, repr=False, compare=False)
+    _values: jnp.ndarray = field(init=False, repr=False, compare=False)
+
     def __post_init__(self) -> None:
-        self._t_breaks = jnp.asarray(self.t_breaks, dtype=float)
-        self._values = jnp.asarray(self.values, dtype=float)
+        object.__setattr__(self, "_t_breaks", jnp.asarray(self.t_breaks, dtype=float))
+        object.__setattr__(self, "_values", jnp.asarray(self.values, dtype=float))
         if self._values.shape[0] != self._t_breaks.shape[0] + 1:
             raise ValueError(
                 "PiecewiseConstantSchedule: len(values) must be len(t_breaks)+1; "

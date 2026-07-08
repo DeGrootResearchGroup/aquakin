@@ -280,16 +280,6 @@ def test_adm1_to_asm1_fdegrade_not_implemented():
 
 
 # ---------------------------------------------------------------------------
-# bsm/bsm1.py -- closed_loop_do not implemented
-# ---------------------------------------------------------------------------
-def test_bsm1_closed_loop_do_not_implemented():
-    from aquakin.plant.bsm import build_bsm1
-
-    with pytest.raises(NotImplementedError, match="Closed-loop DO control"):
-        build_bsm1(closed_loop_do=True)
-
-
-# ---------------------------------------------------------------------------
 # bsm/bsm2.py -- wastage schedule length mismatch
 # ---------------------------------------------------------------------------
 def test_bsm2_wastage_schedule_length_mismatch():

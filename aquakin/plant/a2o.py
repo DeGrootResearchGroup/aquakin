@@ -200,11 +200,7 @@ def a2o_warm_start(plant: Plant) -> jnp.ndarray:
     jnp.ndarray
         Flat initial-state vector for ``plant.solve(y0=...)``.
     """
-    reactors = [
-        n
-        for n in plant.list_units()
-        if n.startswith(("anaer", "anox", "aer")) and "mix" not in n and "split" not in n
-    ]
+    reactors = plant.activated_sludge_reactors()
     if not reactors:  # pragma: no cover - a build_a2o plant always has reactors
         raise ValueError("no activated-sludge reactor found in the plant")
     model = plant.units[reactors[0]].model

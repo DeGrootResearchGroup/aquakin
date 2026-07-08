@@ -21,7 +21,7 @@ from dataclasses import dataclass
 _DAYS_PER_YEAR = 365.0
 
 
-@dataclass
+@dataclass(frozen=True)
 class CostFactors:
     """Unit prices for monetising a plant's operating cost.
 
@@ -59,7 +59,7 @@ class CostFactors:
     capex_annual: float = 0.0
 
 
-@dataclass
+@dataclass(frozen=True)
 class OperatingCost:
     """A plant's monetised cost as a per-day breakdown.
 

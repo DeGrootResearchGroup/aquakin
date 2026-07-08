@@ -51,11 +51,19 @@ _N2O_PER_N = 44.0 / 28.0
 DEFAULT_GRID_FACTOR = 0.4
 
 
+# The three scalar CO₂e converters below are **post-solve, eager-only** reporting
+# helpers: they take concrete per-day mass/energy flows already reduced from a
+# solution and coerce with ``float(...)``, so they are not differentiable and not
+# meant for the traced hot path (unlike the ``jnp``-based ``stripped_n2o`` history
+# integral). Feed them the eager flows from an evaluation; do not call them under
+# ``jax.jit`` / ``jax.grad``.
+
+
 def co2e_from_energy(energy_kwh_per_d: float, grid_factor: float) -> float:
     """Indirect CO₂e from electricity use (kg CO₂e/d).
 
     ``= energy × grid_factor``, the energy draw (kWh/d) times the grid carbon
-    intensity (kg CO₂e/kWh).
+    intensity (kg CO₂e/kWh). Post-solve, eager-only (see the note above).
     """
     return float(energy_kwh_per_d) * float(grid_factor)
 
