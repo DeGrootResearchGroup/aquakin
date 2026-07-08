@@ -7,6 +7,7 @@ and Pydantic is not used again on the hot path.
 
 from __future__ import annotations
 
+import math
 from typing import Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -44,8 +45,6 @@ class SpeciesSpec(BaseModel):
 
     @model_validator(mode="after")
     def _composition_finite(self) -> "SpeciesSpec":
-        import math
-
         for q, v in self.composition.items():
             if not q:
                 raise ValueError(f"species '{self.name}' has an empty composition quantity name")
@@ -250,6 +249,7 @@ class StrongIonSpec(BaseModel):
 # Single source of truth lives in core/speciation.py (the runtime consumer);
 # import it here so the schema validator and the runtime builder can never
 # disagree on the valid acid/base total keys.
+from aquakin.core.hints import did_you_mean
 from aquakin.core.speciation import VALID_TOTAL_KEYS as _VALID_TOTAL_KEYS
 
 
@@ -503,13 +503,19 @@ def _synthesize_precipitation_reactions(
         if m.solid is None or m.mode == "equilibrium":
             continue
         if m.solid not in species_set:
-            raise ValueError(f"mineral '{m.name}' solid '{m.solid}' is not a declared species.")
+            raise ValueError(
+                f"mineral '{m.name}' solid '{m.solid}' is not a declared species."
+                f"{did_you_mean(m.solid, species_set)}"
+            )
         stoich: dict[str, float] = {}
         for ion in m.ions:
             if ion.species is None:
                 continue
             if ion.species not in species_set:
-                raise ValueError(f"mineral '{m.name}' ion species '{ion.species}' is not declared.")
+                raise ValueError(
+                    f"mineral '{m.name}' ion species '{ion.species}' is not declared."
+                    f"{did_you_mean(ion.species, species_set)}"
+                )
             stoich[ion.species] = stoich.get(ion.species, 0.0) - float(ion.count)
         stoich[m.solid] = stoich.get(m.solid, 0.0) + 1.0
         out.append(
@@ -592,7 +598,7 @@ class ModelSpec(BaseModel):
                 if sp not in species_set:
                     raise ValueError(
                         f"Reaction '{rxn.name}' stoichiometry references undeclared "
-                        f"species '{sp}'. Declared: {sorted(species_set)}"
+                        f"species '{sp}'.{did_you_mean(sp, species_set)}"
                     )
 
         # Bare-identifier namespace collisions. Within a rate expression the

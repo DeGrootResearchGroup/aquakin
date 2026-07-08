@@ -107,6 +107,13 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
 
 ### Fixed
 
+- Load-time errors for a rate or stoichiometry expression, a named
+  `expressions:` entry, or a `speciation:` / `precipitation:` block that
+  references an **undeclared species, parameter, or condition** now append a
+  `Did you mean: …?` close-match hint (via the shared `hints.did_you_mean`,
+  already used elsewhere) instead of dumping the full sorted list of valid names —
+  the graduate-student authoring ergonomics the rest of the API already had,
+  applied consistently across the core-compile and Pydantic-schema layers. (#470)
 - A forward-mode `dgsm` screen no longer masks unrelated errors. Previously
   *any* exception raised while evaluating the samples in forward mode (a bug in
   the user's `fn`, a bad shape, an OOM) was relabelled as the "use

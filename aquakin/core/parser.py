@@ -236,9 +236,9 @@ class _Parser:
             self._eat("LBRACK")
             name_tok = self._peek()
             if name_tok.kind != "IDENT":
-                # Allow species names that include things like '-' or digits-after-letters?
-                # Species names are constrained to identifiers; charge suffixes like 'Br-' or
-                # 'BrO3-' need special handling.
+                # A species name must START with an identifier token; its charge
+                # suffixes ('Br-', 'BrO3-', 'Ca2+') are read by _read_species_name
+                # below. A '[' followed by a non-identifier is malformed.
                 raise ParseError(
                     f"Expected species name after '[' at position {tok.pos}, "
                     f"got {name_tok.kind} {name_tok.value!r}"

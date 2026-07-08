@@ -659,23 +659,16 @@ class CompiledModel:
     ) -> dict[str, jnp.ndarray]:
         """Merge state-derived condition fields into ``condition_arrays``.
 
-        Each derived scalar is broadcast across all spatial locations so that
-        the existing ``condition_arrays[name][loc_idx]`` indexing used by
+        Each derived scalar is broadcast across all spatial locations (via the
+        shared :func:`_merge_derived`) so that the existing
+        ``condition_arrays[name][loc_idx]`` indexing used by
         :class:`~aquakin.core.nodes.ConditionNode` returns it unchanged. The
         derived value is computed from the local state ``C`` (the state at
         ``loc_idx``), so the entry read at ``loc_idx`` is the correct one;
         other indices are never consulted within this call.
         """
         derived = self.derived_condition_fn(C, params, condition_arrays, loc_idx)
-        if condition_arrays:
-            template = next(iter(condition_arrays.values()))
-            shape = jnp.shape(template)
-        else:
-            shape = (1,)
-        merged = dict(condition_arrays)
-        for name, value in derived.items():
-            merged[name] = jnp.broadcast_to(jnp.asarray(value), shape)
-        return merged
+        return _merge_derived(condition_arrays, derived)
 
     def compute_stoich(self, params: jnp.ndarray) -> jnp.ndarray:
         """Evaluate the stoichiometry matrix at the given parameter vector.
@@ -1034,6 +1027,49 @@ def _compile_speciation(spec, species_index, declared_conditions):
     return derived_condition_fn, derived_fields, condition_fields
 
 
+# Shared empty state / condition placeholders for a dynamic stoichiometric
+# coefficient's ``(params,)``-only callable: the coefficient reads only ``params``
+# (no species, conditions or location), so it is evaluated with these dummies.
+# Module-level constants rather than rebuilt each loop iteration.
+_EMPTY_C = jnp.zeros(0)
+_EMPTY_COND: dict[str, jnp.ndarray] = {}
+
+
+def _params_only_callable(inner):
+    """Adapt a full rate callable to a ``(params,)``-only callable.
+
+    A dynamic stoichiometric coefficient is compiled as an ordinary rate AST but
+    reads only ``params``; this wraps it to be called with just the parameter
+    vector, supplying the shared empty state/conditions. A module-level factory
+    (rather than a closure defined in the compile loop) so the captured ``inner``
+    binds per call — no late-binding-over-loop-variable trap and no default-arg
+    trick to work around one.
+    """
+
+    def _params_only(p):
+        return inner(_EMPTY_C, p, _EMPTY_COND, 0)
+
+    return _params_only
+
+
+def _merge_derived(conditions: dict, produced: dict) -> dict:
+    """Return ``conditions`` augmented with each ``produced`` derived scalar,
+    broadcast across the spatial-location axis (the originals untouched).
+
+    A derived field is a per-location scalar computed from the local state; it is
+    broadcast to the conditions' shape so the existing
+    ``condition_arrays[name][loc_idx]`` indexing (used by
+    :class:`~aquakin.core.nodes.ConditionNode`) returns it unchanged. The one
+    place this broadcast-merge lives, shared by :meth:`CompiledModel._augment_conditions`
+    and :func:`_compose_derived`.
+    """
+    shape = jnp.shape(next(iter(conditions.values()))) if conditions else (1,)
+    merged = dict(conditions)
+    for name, value in produced.items():
+        merged[name] = jnp.broadcast_to(jnp.asarray(value), shape)
+    return merged
+
+
 def _compose_derived(first, second):
     """Compose two derived-condition functions: run ``first``, inject its outputs
     into the condition arrays, then run ``second`` on the augmented conditions;
@@ -1043,10 +1079,7 @@ def _compose_derived(first, second):
 
     def composed(C, params, conditions, loc_idx):
         out1 = first(C, params, conditions, loc_idx)
-        shape = jnp.shape(next(iter(conditions.values()))) if conditions else (1,)
-        merged = dict(conditions)
-        for k, v in out1.items():
-            merged[k] = jnp.broadcast_to(jnp.asarray(v), shape)
+        merged = _merge_derived(conditions, out1)
         out2 = second(C, params, merged, loc_idx)
         return {**out1, **out2}
 
@@ -1212,11 +1245,15 @@ def _validate_expression_refs(expression_asts, species_index, condition_fields):
     for name, ast in expression_asts.items():
         for sp in sorted(_collect_species_refs(ast)):
             if sp not in species_index:
-                raise KeyError(f"Named expression '{name}' references undeclared species '{sp}'.")
+                raise KeyError(
+                    f"Named expression '{name}' references undeclared species '{sp}'."
+                    f"{did_you_mean(sp, species_index)}"
+                )
         for cond in sorted(ast.condition_names()):
             if cond not in condition_fields:
                 raise ValueError(
                     f"Named expression '{name}' references unknown condition field '{cond}'."
+                    f"{did_you_mean(cond, condition_fields)}"
                 )
 
 
@@ -1243,7 +1280,8 @@ def _compile_reaction(rxn, species_index, param_index, condition_fields, express
     for sp_name, coef in rxn.stoichiometry.items():
         if sp_name not in species_index:
             raise KeyError(
-                f"Reaction '{rxn.name}' references undeclared species '{sp_name}' in stoichiometry."
+                f"Reaction '{rxn.name}' references undeclared species '{sp_name}' "
+                f"in stoichiometry.{did_you_mean(sp_name, species_index)}"
             )
         j = species_index[sp_name]
         if isinstance(coef, (int, float)):
@@ -1263,6 +1301,7 @@ def _compile_reaction(rxn, species_index, param_index, condition_fields, express
                 f"Stoichiometric coefficient '{rxn.name}'/{sp_name!r} "
                 f"references identifier '{bad[0]}' which is not a "
                 f"reaction-local nor model-level parameter."
+                f"{did_you_mean(bad[0], param_index)}"
             )
         stoich_ctx = CompileContext(
             species_index={},  # species not allowed
@@ -1271,33 +1310,28 @@ def _compile_reaction(rxn, species_index, param_index, condition_fields, express
             reaction_name=rxn.name,
         )
         inner = raw_stoich_ast.compile(stoich_ctx)
-        # Wrap to a (params,)-only callable; pass dummy C/cond/loc.
-        _empty_C = jnp.zeros(0)
-        _empty_cond: dict[str, jnp.ndarray] = {}
-
-        def _params_only(p, _f=inner):
-            return _f(_empty_C, p, _empty_cond, 0)
-
-        dynamic_entries.append((j, _params_only))
+        dynamic_entries.append((j, _params_only_callable(inner)))
 
     # Rate expression: inline named-expression references, then validate refs.
     ast = _substitute(parse_rate_expression(rxn.rate), expression_asts)
     for sp in ast.species():
         if sp not in species_index:
             raise KeyError(
-                f"Reaction '{rxn.name}' rate expression references undeclared species '{sp}'."
+                f"Reaction '{rxn.name}' rate expression references undeclared "
+                f"species '{sp}'.{did_you_mean(sp, species_index)}"
             )
     for cf in ast.condition_names():
         if cf not in condition_fields:
             raise KeyError(
-                f"Reaction '{rxn.name}' rate expression references undeclared condition '{cf}'."
+                f"Reaction '{rxn.name}' rate expression references undeclared "
+                f"condition '{cf}'.{did_you_mean(cf, condition_fields)}"
             )
     bad = _unresolved_params(ast, rxn.name, param_index)
     if bad:
         raise KeyError(
             f"Reaction '{rxn.name}' rate expression references identifier "
             f"'{bad[0]}' which is not a reaction-local parameter, a model-level "
-            f"parameter, or a named expression."
+            f"parameter, or a named expression.{did_you_mean(bad[0], param_index)}"
         )
     ctx = CompileContext(
         species_index=species_index,

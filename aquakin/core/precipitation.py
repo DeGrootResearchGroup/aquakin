@@ -42,6 +42,7 @@ from typing import Callable
 
 import jax.numpy as jnp
 
+from aquakin.core.hints import did_you_mean
 from aquakin.core.ph_solver import (
     _log10_gamma,
     debye_huckel_A,
@@ -156,8 +157,8 @@ def build_precipitation_derived_fn(
                     )
                 if sp not in species_index:
                     raise KeyError(
-                        f"mineral {name!r} references undeclared species {sp!r}; "
-                        f"declared: {sorted(species_index)}"
+                        f"mineral {name!r} references undeclared species {sp!r}."
+                        f"{did_you_mean(sp, species_index)}"
                     )
             idx = species_index[sp] if sp is not None else -1
             ions.append(

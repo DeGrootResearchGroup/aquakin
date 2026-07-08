@@ -269,6 +269,7 @@ def _ionic_strength_total(h, K, I_strong, *, totals):
 
 def charge_balance_residual(
     h,
+    K,
     *,
     tot_carbonate=0.0,
     tot_acetate=0.0,
@@ -280,7 +281,6 @@ def charge_balance_residual(
     tot_sulfide=0.0,
     strong_anion_eq=0.0,
     z_cation_eq=0.0,
-    K,
 ):
     """Electroneutrality residual ``f([H+])`` (eq/L).
 
@@ -354,6 +354,7 @@ def charge_balance_residual(
 
 def charge_balance_residual_deriv(
     h,
+    K,
     *,
     tot_carbonate=0.0,
     tot_acetate=0.0,
@@ -363,7 +364,6 @@ def charge_balance_residual_deriv(
     tot_ammonia=0.0,
     tot_phosphate=0.0,
     tot_sulfide=0.0,
-    K,
 ):
     """Analytic derivative ``df/dh`` of :func:`charge_balance_residual`.
 

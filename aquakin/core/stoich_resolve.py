@@ -158,6 +158,10 @@ def resolve_auto_coefficients(reactions, species_composition: dict, model_conser
 
         def coeff_str(sp: str) -> str:
             c = stoich[sp]
+            # repr (not str) for the numeric case: the emitted expression string is
+            # re-parsed downstream, so use the round-trippable full-precision float
+            # literal rather than a possibly-truncated str. (Same reason the ``w``
+            # weights below are formatted with ``!r``.)
             return repr(float(c)) if isinstance(c, (int, float)) else str(c)
 
         for a, sp in enumerate(auto_species):

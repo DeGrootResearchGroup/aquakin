@@ -124,6 +124,66 @@ reactions:
         )
 
 
+# --- "Did you mean?" close-match hinting (hints.did_you_mean consistency) -----
+
+_TWO_SPECIES = (
+    "species:\n"
+    "  - {name: Alpha, units: mol/L, default_concentration: 1.0}\n"
+    "  - {name: Beta, units: mol/L, default_concentration: 1.0}\n"
+)
+
+
+def test_rate_expression_species_typo_hints_close_match():
+    # A near-miss species name in a rate expression gets a close-match suggestion
+    # (the grad-student authoring ergonomics), not a full sorted dump.
+    with pytest.raises(KeyError, match=r"Did you mean: Alpha\?"):
+        _load_yaml(
+            "model: {name: b, description: d}\n"
+            + _TWO_SPECIES
+            + """conditions: []
+reactions:
+  - name: R
+    rate: "k * [Alphaa]"
+    parameters: {k: {value: 0.1}}
+    stoichiometry: {Alpha: -1}
+"""
+        )
+
+
+def test_rate_expression_condition_typo_hints_close_match():
+    with pytest.raises(KeyError, match=r"Did you mean: Temp\?"):
+        _load_yaml(
+            "model: {name: b, description: d}\n"
+            + _SPECIES_A
+            + """conditions:
+  - {name: Temp, default: 293.15}
+reactions:
+  - name: R
+    rate: "k * [A] * {Tempp}"
+    parameters: {k: {value: 0.1}}
+    stoichiometry: {A: -1}
+"""
+        )
+
+
+def test_stoichiometry_species_typo_hints_close_match():
+    # Stoichiometry keys are validated in the Pydantic schema layer (raised as a
+    # ValueError by the loader), not the core compile pass -- the hint is routed
+    # there too, so the ergonomics are consistent across both layers.
+    with pytest.raises(ValueError, match=r"Did you mean: Alpha\?"):
+        _load_yaml(
+            "model: {name: b, description: d}\n"
+            + _TWO_SPECIES
+            + """conditions: []
+reactions:
+  - name: R
+    rate: "k * [Alpha]"
+    parameters: {k: {value: 0.1}}
+    stoichiometry: {Alphaa: -1}
+"""
+        )
+
+
 def test_named_expression_undeclared_species_raises():
     # An expression no reaction consumes is still validated at compile time.
     with pytest.raises(KeyError, match=r"Named expression 'unused'.*undeclared species 'Zzz'"):
