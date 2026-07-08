@@ -12,6 +12,11 @@ wheels/
 *.egg-info/
 .eggs/
 
+# Sphinx documentation build output + generated API pages
+docs/_build/
+docs/generated/
+docs/api.md
+
 # Virtual environments
 .venv/
 venv/

@@ -31,6 +31,19 @@ nor concentrating it in a few files makes the whole suite fast.
   x64 before any submodule import that builds JAX state). It skips the bare
   `labeled` event and the
   schedule / dispatch refresh, exactly like the fast gate.
+- The **`docs`** job (job name **`docs (sphinx)`**, 3.12) runs on **every PR and
+  every push**: it installs the `docs` extra (`pip install -e ".[docs]"`, so
+  autodoc can import the package) and builds the Sphinx site with
+  `sphinx-build -b html -W --keep-going` — any warning (a page missing from the
+  nav, a broken internal cross-reference, an autodoc import failure, a malformed
+  directive) fails the job — then runs the `doctest` builder over the intentional
+  `.. testcode::` / `.. doctest::` examples. This mirrors the Read the Docs build
+  (`.readthedocs.yaml`, `fail_on_warning: true`), so a docs break is caught on the
+  PR rather than as a silent red RTD build. `docutils`-level RST nitpicks inside
+  autodoc'd NumPy docstrings are suppressed in `docs/conf.py` (a separate
+  docstring-polish effort); the API reference itself is generated from
+  `aquakin.__all__` at build time. It skips the bare `labeled` event and the
+  schedule / dispatch refresh, like the lint gate.
 - The **`test`** job (`pytest -m "not validation and not slow"`, Python
   3.11/3.12) runs on **every PR and every push** — unit + fast integration. It is
   the merge gate, and is **`pytest-split`-sharded** (`--splits 4 --group i`, `-n

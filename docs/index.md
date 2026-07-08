@@ -1,13 +1,39 @@
-# aquakin documentation
+# aquakin
 
 `aquakin` models reactive scalar transport in aqueous environmental systems.
 Reaction models are declared at runtime in YAML, parsed into an AST, and
-compiled to JAX-native rate functions integrated by Diffrax.
+compiled to JAX-native, automatically-differentiable rate functions integrated
+by [Diffrax](https://github.com/patrick-kidger/diffrax).
 
-## Contents
+```{toctree}
+:maxdepth: 2
+:caption: Guide
 
-- [Model file format](model_format.md) — schema for YAML model files.
-- [Adding models](adding_models.md) — how to ship a new built-in model.
+model_format
+adding_models
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: Reference
+
+model_catalog
+public_api
+api
+```
+
+## Installation
+
+```bash
+pip install aquakin
+```
+
+```{note}
+`import aquakin` enables JAX 64-bit (x64) mode process-wide — the stiff implicit
+ODE solves require double precision. This is global JAX state: other JAX code in
+the same process will use float64 afterward. aquakin emits a one-time warning if
+it overrides an explicit float32 preference, so the side effect is never silent.
+```
 
 ## Quickstart
 
@@ -20,7 +46,7 @@ conditions = aquakin.OperatingConditions(pH=7.5, T=293.15)   # 0-D batch case
 reactor = aquakin.BatchReactor(model, conditions)
 sol = reactor.solve(
     model.default_concentrations(),
-    model.default_parameters(),
+    params=model.default_parameters(),
     t_span=(0.0, 600.0),
     t_eval=jnp.linspace(0.0, 600.0, 121),
 )
