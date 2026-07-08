@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -214,6 +215,18 @@ class BatchReactor(GradientCheckMixin):
         t_span, t_eval, _time_factor = to_native_time(
             self.model.time_unit, time_unit, t_span, t_eval
         )
+        # ``time_unit`` rescales t_span/t_eval into native time, but ``dtmax`` is
+        # always native (it caps the integrator's own step). A user who set both
+        # in the requested unit would get a cap off by the unit ratio, so warn
+        # that dtmax stays native and must be scaled by hand.
+        if _time_factor != 1.0 and self.dtmax is not None:
+            warnings.warn(
+                f"dtmax={self.dtmax} is in the model's native time unit "
+                f"('{self.model.time_unit}'), but solve(time_unit='{time_unit}') "
+                f"rescales t_span/t_eval; dtmax is NOT rescaled. Express dtmax in "
+                f"native units (multiply your intended cap by {_time_factor:g}).",
+                stacklevel=2,
+            )
 
         t0, t1 = float(t_span[0]), float(t_span[1])
         if not (t1 > t0):

@@ -861,14 +861,16 @@ tolerance does not depend on the parameters.) When **every** magnitude is zero (
 `scale_like` with no reference) the relative floor `floor_frac·char` would
 itself be 0, so `char` falls back to unit scale — keeping every `atol_i`
 strictly positive rather than 0 (the very invariant this floor upholds). This
-fallback is identity for any input with a nonzero magnitude (the common path). `BiofilmReactor` is the exception — its multi-
-compartment `(n_layers+1, n_species)` state does not match the per-species
-vector, so it keeps an explicit scalar `atol` (default `1e-9`). This replaces
-the old fixed `atol=1e-9`, which was ~9 orders too tight for g/m³ ASM/ADM states
-and forced the integrator step ceiling — so a warm-started BSM2 now solves with
-**nothing passed** (no `atol=1e-3, max_steps=500_000` magic). An explicit scalar
-or `(n_species,)` array still overrides it verbatim (e.g. the ozone `OH→1e-20`
-per-species atol), so existing calls are unchanged. Verified to reproduce every validated steady
+fallback is identity for any input with a nonzero magnitude (the common path). `BiofilmReactor` extends
+the same floor to its multi-compartment `(n_layers+1, n_species)` state via
+`resolve_layered_atol`, which **tiles** the per-species `default_atol` across the
+compartments (a full-shape `atol` array is exactly what diffrax's error test
+wants). This replaces the old fixed `atol=1e-9`, which was ~9 orders too tight
+for g/m³ ASM/ADM states and forced the integrator step ceiling — so a
+warm-started BSM2 now solves with **nothing passed** (no `atol=1e-3,
+max_steps=500_000` magic). An explicit scalar or `(n_species,)` array still
+overrides it (scalar broadcast, per-species tiled), so existing calls are
+unchanged. Verified to reproduce every validated steady
 state (691 non-validation + 23 validation tests). Any solve that hits the
 integrator step budget -- `Plant.solve` **and every reactor**
 (`BatchReactor`/`PlugFlowReactor`/`BiofilmReactor`/`ParticleTrackReactor`) --

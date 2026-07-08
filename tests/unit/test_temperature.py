@@ -121,3 +121,27 @@ def test_asm1_nitrification_slows_in_the_cold():
     r20 = float(net.rates(C, p, {"T": jnp.array([293.15])}, 0)[i])
     r10 = float(net.rates(C, p, {"T": jnp.array([283.15])}, 0)[i])
     assert r10 / r20 == pytest.approx((0.3 / 0.5) ** 2, rel=1e-4)  # 0.36
+
+
+# --- shared 20 degC reference constant (no bare-literal drift) ----------------
+
+
+def test_t_ref_20c_value():
+    from aquakin.core.temperature import T_REF_20C
+
+    assert T_REF_20C == 293.15
+
+
+def test_python_defaults_reference_the_shared_constant():
+    """The standalone Python 20 degC defaults all read the single T_REF_20C
+    constant, so a change to the reference cannot drift between them."""
+    from aquakin.core.temperature import T_REF_20C
+    from aquakin.plant.cstr import Aeration
+
+    # aeration kLa / DO-saturation temperature-correction reference
+    assert Aeration(kla=100.0).ref_T == T_REF_20C
+
+    # A2O influent builder default operating temperature
+    net = aquakin.load_model("asm2d")
+    series = aquakin.plant.a2o_influent(net)
+    assert float(series.T[0]) == pytest.approx(T_REF_20C)

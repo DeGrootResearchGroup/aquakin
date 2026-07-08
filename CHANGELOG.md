@@ -54,6 +54,19 @@ Removed) begins with the release after 0.1.0, relative to 0.1.0.
 
 ### Changed
 
+- `BiofilmReactor` now defaults `atol=None` to the per-component
+  `default_atol` noise floor (tiled across its layers), matching every other
+  reactor, instead of a fixed `1e-9` scalar that is ~9 orders too tight for
+  g/m³ ASM/ADM states (a slow or step-budget-exhausting solve). `IFASUnit` /
+  `MBBRUnit`, which build a `BiofilmReactor` internally, inherit the fix. Pass an
+  explicit scalar or array `atol=` to override. (#450)
+- `CompiledModel.atol()` (the by-name per-species tolerance builder) now defaults
+  to the per-component `default_atol` floor rather than a uniform `1e-9`; pass
+  `default=` for a uniform scalar floor. (#450)
+- `BatchReactor.solve(time_unit=...)` now warns when a `dtmax` cap is set and a
+  non-native `time_unit` is used, since `dtmax` stays in the model's native time
+  unit while `time_unit` rescales `t_span`/`t_eval` (the cap would otherwise be
+  off by the unit ratio). (#450)
 - **Renamed "reaction network" to "reaction model" throughout** (a hard rename
   with no back-compatibility aliases, done while pre-release). Public API:
   `CompiledNetwork` → `CompiledModel`, `compile_network` → `compile_model`,

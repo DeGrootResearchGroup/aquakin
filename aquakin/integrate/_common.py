@@ -1081,12 +1081,48 @@ def resolve_state_atol(model, atol):
     or ``(n_species,)`` array is validated and returned verbatim. Shared by every
     reactor with a single-concentration-vector state (Batch / PFR / Particle /
     CFD); the layered :class:`~aquakin.BiofilmReactor`, whose state spans several
-    compartments, sets its own scalar ``atol`` instead.
+    compartments, uses :func:`resolve_layered_atol` (the same per-component floor,
+    tiled across compartments) instead.
     """
     return (
         default_atol(model.default_concentrations())
         if atol is None
         else _coerce_atol(atol, model.n_species)
+    )
+
+
+def resolve_layered_atol(model, atol, n_compartments):
+    """Resolve the ``atol`` for a reactor whose state stacks ``n_compartments``
+    copies of the model's ``(n_species,)`` concentration vector (the layered
+    :class:`~aquakin.BiofilmReactor`: a bulk plus per-depth-layer states).
+
+    ``atol=None`` -> the per-component :func:`default_atol` noise floor tiled
+    across every compartment, so each (layer, species) slot gets the same
+    per-species floor a single-vector reactor would use -- not a fixed scalar
+    that is ~9 orders too tight for g/m3 ASM/ADM states. A scalar broadcasts to
+    the whole state; a ``(n_species,)`` array is tiled across the compartments; a
+    ``(n_compartments, n_species)`` or flat ``(n_compartments*n_species,)`` array
+    is accepted verbatim. Returns the ``(n_compartments, n_species)`` array
+    matching the reactor's 2-D compartment state (the sensitivity path flattens
+    it for the augmented solve).
+    """
+    n = model.n_species
+    nc = int(n_compartments)
+    if atol is None:
+        per_species = default_atol(model.default_concentrations())  # (n,)
+        return jnp.tile(per_species, (nc, 1))
+    arr = jnp.asarray(atol, dtype=float)
+    if arr.ndim == 0:
+        return jnp.full((nc, n), float(arr))
+    if arr.shape == (n,):
+        return jnp.tile(arr, (nc, 1))
+    if arr.shape == (nc, n):
+        return arr
+    if arr.shape == (nc * n,):
+        return arr.reshape(nc, n)
+    raise ValueError(
+        f"atol must be a scalar, a ({n},) per-species array, or a "
+        f"({nc}, {n}) / ({nc * n},) full-state array; got shape {tuple(arr.shape)}."
     )
 
 
@@ -1099,7 +1135,8 @@ def init_solver_settings(reactor, model, *, rtol, integrator, diff):
     the differentiation config), ``dtmax``, ``max_steps``, ``order``,
     ``factormax`` and ``solver``. ``atol`` is **not** set here because its
     resolution depends on the reactor's state shape (see
-    :func:`resolve_state_atol` for the single-vector case); the caller sets
+    :func:`resolve_state_atol` for the single-vector case and
+    :func:`resolve_layered_atol` for the layered biofilm); the caller sets
     ``reactor.atol`` itself.
     """
     reactor.model = model

@@ -75,6 +75,7 @@ from aquakin.core.temperature import (
     LN10 as _LN10,
 )
 from aquakin.core.temperature import (
+    T_REF_20C,
     van_t_hoff_factor,
 )
 
@@ -617,7 +618,7 @@ def solve_ph(
     tot_sulfide=0.0,
     strong_anion_eq=0.0,
     z_cation_eq=0.0,
-    T_kelvin=293.15,
+    T_kelvin=T_REF_20C,
     n_iter: int = 40,
     h_init: float = 1e-7,
     activity_model: str = "none",
