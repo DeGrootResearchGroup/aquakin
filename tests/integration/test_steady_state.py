@@ -252,6 +252,26 @@ def test_arclength_reuses_prebuilt_kernels():
     np.testing.assert_allclose(np.asarray(r.state), [2.0], atol=1e-4)
 
 
+def test_branch_recorder_enabled_and_disabled():
+    """The branch-recording bookkeeping factored out of the arclength loop: when
+    disabled every method is a no-op and result() is None; when enabled it seeds
+    with the known start and accumulates (s, y) points into (s, ys) arrays."""
+    from aquakin.plant.steady import _BranchRecorder
+
+    off = _BranchRecorder(False, jnp.array([1.0, 2.0]))
+    off.record(0.5, jnp.array([9.0, 9.0]))       # no-op
+    assert off.result() is None
+
+    on = _BranchRecorder(True, jnp.array([1.0, 2.0]))
+    on.record(0.5, jnp.array([1.5, 2.5]))
+    on.record(1.0, jnp.array([2.0, 3.0]))
+    s, ys = on.result()
+    np.testing.assert_allclose(np.asarray(s), [0.0, 0.5, 1.0])   # seeded with s=0
+    assert ys.shape == (3, 2)
+    np.testing.assert_allclose(np.asarray(ys[0]), [1.0, 2.0])    # the known start
+    np.testing.assert_allclose(np.asarray(ys[-1]), [2.0, 3.0])
+
+
 # --- full plant: BSM1 / BSM2 (slow) ------------------------------------------
 
 def _bsm1():
