@@ -85,6 +85,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Point-estimate fit | `fit` → `FitResult` |
 | MAP fit + Laplace posterior | `calibrate` → `CalibrationResult` (→ `predictive_band` → `PredictiveBand`) |
 | Profile-likelihood identifiability | `profile_likelihood` → `ProfileResult` |
+| Fisher information of a design (before running it) | `fisher_information` with `Experiment` → `FisherInformation` |
 | Configure the fit | `LaplaceConfig`, `OptimizerConfig`, `FreeICConfig` |
 
 ## Uncertainty propagation and design

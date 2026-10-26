@@ -57,6 +57,7 @@ from aquakin.integrate.calibrate import (
     calibrate,
 )
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
+from aquakin.integrate.fisher import Experiment, FisherInformation, fisher_information
 from aquakin.integrate.cfd import CFDReactor
 from aquakin.integrate.particle import (
     ParticleTrackReactor,
@@ -214,6 +215,8 @@ __all__ = [
     "DifferentiationConfig",
     "Event",
     "EventedResult",
+    "Experiment",
+    "FisherInformation",
     "FitResult",
     "ForwardSensitivityResult",
     "FreeICConfig",
@@ -291,6 +294,7 @@ __all__ = [
     "esdirk_adjoint_solve",
     "evaluate_bsm1",
     "evaluate_bsm2",
+    "fisher_information",
     "fit",
     "forward_adjoint",
     "forward_sensitivity",

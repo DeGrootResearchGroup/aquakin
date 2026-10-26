@@ -163,6 +163,39 @@ result.ic_named_std       # pool std devs in physical units, per dataset
 Strong correlation between a rate and a pool in `joint_cov` is a sign that the
 experiment cannot separate them.
 
+### Fisher information of a design
+
+`aquakin.fisher_information` evaluates the Fisher information of a set of
+experiments at assumed parameter values, with no data. Use it to check, before
+running an experiment, whether it can estimate the parameters you care about,
+and to compare candidate designs:
+
+```python
+design = [
+    aquakin.Experiment(C0_low, t_obs=jnp.linspace(1, 60, 20), sigma=0.02,
+                       observed_species=["O3"]),
+    aquakin.Experiment(C0_high, t_obs=jnp.linspace(1, 30, 20), sigma=0.02,
+                       observed_species=["O3"], reactor=reactor_ph8),
+]
+fim = aquakin.fisher_information(
+    reactor, design, free_params,
+    params=assumed_params,
+    free_ic=aquakin.FreeICConfig(["IOD"]),   # also estimate a pool per experiment
+)
+fim.names        # rates, then "ic[e].<species>" per experiment
+fim.matrix       # in the coordinates calibrate fits in (log for positive_log, pools)
+fim.physical()   # with respect to the physical values
+fim.std()        # Cramér-Rao lower bound on each standard deviation
+```
+
+The information of independent experiments adds, so an experiment that sharpens
+a poorly determined parameter shows up as a large drop in its `std()`. A
+singular matrix (`fim.std()` raises) means some combination of the quantities
+cannot be determined from the design at all. Each experiment may carry its own
+`reactor` to represent different operating conditions. At a calibration's
+optimum, with `loss="nll"`, the matrix equals the Gauss-Newton Laplace Hessian
+(`joint_hessian` with `include_ic=True`).
+
 ### Identifiability: profile likelihood
 
 The Laplace covariance is a local, quadratic approximation. For an exact
