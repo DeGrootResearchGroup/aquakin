@@ -948,6 +948,135 @@ def test_free_ic_laplace_is_over_rates_only(simple_model):
     assert "A_to_B.k" in result.params_named_std
 
 
+# ---------- joint rate + initial-pool Laplace posterior ----------
+
+_DECAY_K, _DECAY_A0, _DECAY_SIGMA = 0.25, 1.5, 0.01
+
+
+def _decay_fit(simple_model, laplace, *, free_ic=True, n_datasets=1, ic_prior_log_std=None):
+    """Fit k and A0 of A -> B to noise-free observations of A alone."""
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
+    true_params = simple_model.default_parameters().at[0].set(_DECAY_K)
+    t_obs = jnp.linspace(0.5, 12.0, 25)
+    sol = reactor.solve(
+        jnp.asarray([_DECAY_A0, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t_obs
+    )
+    obs = sol.C_named("A")
+    C0 = jnp.asarray([1.0, 0.0])
+    return aquakin.calibrate(
+        reactor,
+        [C0] * n_datasets if n_datasets > 1 else C0,
+        observations=[obs] * n_datasets if n_datasets > 1 else obs,
+        t_obs=[t_obs] * n_datasets if n_datasets > 1 else t_obs,
+        free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"},
+        observed_species=["A"],
+        loss="nll",
+        sigma=jnp.asarray(_DECAY_SIGMA),
+        laplace=laplace,
+        free_ic=(
+            FreeICConfig(["A"], bounds=(0.1, 10.0), prior_log_std=ic_prior_log_std)
+            if free_ic
+            else None
+        ),
+        optimizer=OptimizerConfig(method="gauss_newton"),
+    ), t_obs
+
+
+def _decay_fisher(t_obs):
+    """Closed-form Fisher information of A(t) = A0 exp(-k t) in (log k, log A0):
+    dA/dlog k = -k t A and dA/dlog A0 = A."""
+    t = np.asarray(t_obs)
+    a = _DECAY_A0 * np.exp(-_DECAY_K * t)
+    S = np.stack([-_DECAY_K * t * a, a], axis=1)
+    return S.T @ S / _DECAY_SIGMA**2
+
+
+_EXACT_LAPLACE = dict(ridge=1e-12, eig_keep=0.0)
+
+
+def test_joint_ic_gauss_newton_hessian_matches_closed_form_fisher(simple_model):
+    """The joint Gauss-Newton Hessian over (log k, log A0) is the closed-form
+    Fisher information, and its inverse is the joint covariance."""
+    result, t_obs = _decay_fit(
+        simple_model, LaplaceConfig(method="gauss_newton", include_ic=True, **_EXACT_LAPLACE)
+    )
+    F = _decay_fisher(t_obs)
+    assert result.joint_names == ["A_to_B.k", "ic[0].A"]
+    np.testing.assert_allclose(np.asarray(result.joint_hessian), F, rtol=1e-4)
+    np.testing.assert_allclose(np.asarray(result.joint_cov), np.linalg.inv(F), rtol=1e-4)
+
+
+def test_joint_ic_rate_std_is_marginal_over_pools(simple_model):
+    """With include_ic the rate std is the marginal sqrt(inv(F)[0, 0]), wider
+    than the default rate-only std sqrt(1 / F[0, 0]) conditional on A0."""
+    lap = dict(method="gauss_newton", **_EXACT_LAPLACE)
+    joint, t_obs = _decay_fit(simple_model, LaplaceConfig(include_ic=True, **lap))
+    rate_only, _ = _decay_fit(simple_model, LaplaceConfig(**lap))
+    F = _decay_fisher(t_obs)
+    std_joint = float(joint.posterior_std_unconstrained[0])
+    std_rate_only = float(rate_only.posterior_std_unconstrained[0])
+    assert std_joint == pytest.approx(np.sqrt(np.linalg.inv(F)[0, 0]), rel=1e-4)
+    assert std_rate_only == pytest.approx(np.sqrt(1.0 / F[0, 0]), rel=1e-4)
+    assert std_joint > std_rate_only
+    # The rate-rate Hessian block means the same thing in both modes.
+    np.testing.assert_allclose(
+        np.asarray(joint.hessian_unconstrained),
+        np.asarray(rate_only.hessian_unconstrained),
+        rtol=1e-6,
+    )
+    # Pool std in physical units: A0 * std(log A0).
+    assert joint.ic_named_std[0]["A"] == pytest.approx(
+        _DECAY_A0 * np.sqrt(np.linalg.inv(F)[1, 1]), rel=1e-3
+    )
+    assert joint.params_named_std["A_to_B.k"] == pytest.approx(_DECAY_K * std_joint, rel=1e-3)
+
+
+def test_joint_ic_fd_hessian_matches_gauss_newton(simple_model):
+    """At a zero-residual fit the FD loss Hessian equals J^T J."""
+    fd, t_obs = _decay_fit(simple_model, LaplaceConfig(method="fd", include_ic=True))
+    np.testing.assert_allclose(np.asarray(fd.joint_hessian), _decay_fisher(t_obs), rtol=1e-3)
+
+
+def test_joint_ic_includes_ic_prior(simple_model):
+    """A log-space pool prior adds 1 / prior_log_std^2 to the pool diagonal."""
+    s = 0.5
+    result, t_obs = _decay_fit(
+        simple_model,
+        LaplaceConfig(method="gauss_newton", include_ic=True, **_EXACT_LAPLACE),
+        ic_prior_log_std=s,
+    )
+    expected = _decay_fisher(t_obs) + np.diag([0.0, 1.0 / s**2])
+    np.testing.assert_allclose(np.asarray(result.joint_hessian), expected, rtol=1e-4)
+
+
+def test_joint_ic_multi_dataset_layout(simple_model):
+    """Two datasets: one shared rate plus one pool per dataset."""
+    result, _ = _decay_fit(
+        simple_model,
+        LaplaceConfig(method="gauss_newton", include_ic=True),
+        n_datasets=2,
+    )
+    assert result.joint_names == ["A_to_B.k", "ic[0].A", "ic[1].A"]
+    assert np.asarray(result.joint_cov).shape == (3, 3)
+    assert np.asarray(result.posterior_cov).shape == (1, 1)
+    assert [list(d) for d in result.ic_named_std] == [["A"], ["A"]]
+
+
+def test_joint_fields_absent_by_default_and_without_free_ic(simple_model):
+    """The default stays rate-only, and include_ic is a no-op without free_ic."""
+    default, _ = _decay_fit(simple_model, LaplaceConfig(method="gauss_newton"))
+    no_ic, _ = _decay_fit(
+        simple_model, LaplaceConfig(method="gauss_newton", include_ic=True), free_ic=False
+    )
+    for r in (default, no_ic):
+        assert r.joint_cov is None
+        assert r.joint_hessian is None
+        assert r.joint_names is None
+        assert r.ic_named_std is None
+        assert np.asarray(r.posterior_cov).shape == (1, 1)
+
+
 def test_free_ic_unknown_species_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
     with pytest.raises(KeyError):

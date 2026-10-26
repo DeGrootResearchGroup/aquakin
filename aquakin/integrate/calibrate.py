@@ -135,6 +135,15 @@ class LaplaceConfig:
     dtmax : float, optional
         If given, rebuild the reactor with this ``dtmax`` cap for the Hessian
         pass only -- a tighter solve for the second-order-sensitive covariance.
+    include_ic : bool
+        If ``True`` and initial pools are fitted (``free_ic``), form the
+        Hessian over the rate parameters *and* the fitted pools jointly. The
+        joint covariance is returned as ``CalibrationResult.joint_cov`` and the
+        rate ``posterior_cov`` / ``params_named_std`` become its rate block, the
+        marginal over the pools. This accounts for rate-pool correlation (e.g.
+        ``k`` against ``[X]0`` when only their product is seen in the data),
+        which the default ``False`` -- pools held fixed at their MAP -- ignores,
+        understating the rate uncertainty. Ignored when no pools are fitted.
     """
 
     method: str = "fd"
@@ -142,6 +151,7 @@ class LaplaceConfig:
     eig_keep: float = 1e-2
     fd_step: float = 1e-3
     dtmax: float | None = None
+    include_ic: bool = False
 
 
 @dataclass(frozen=True)
@@ -428,15 +438,21 @@ class CalibrationResult:
     transforms : list[str]
         Transform used for each free parameter, in the same order.
     posterior_cov : jnp.ndarray, optional
-        ``(d, d)`` covariance matrix in *unconstrained* space (Laplace).
-        ``None`` if ``laplace=False`` was passed.
+        ``(d, d)`` covariance matrix of the rate parameters in *unconstrained*
+        space (Laplace). With ``LaplaceConfig(include_ic=True)`` it is the rate
+        block of ``joint_cov`` (marginal over the fitted pools); otherwise it is
+        conditional on the pools held at their MAP. ``None`` if
+        ``laplace=False`` was passed.
     posterior_std_unconstrained : jnp.ndarray, optional
         Marginal std devs in unconstrained space.
     params_named_std : dict[str, float], optional
         Marginal std devs propagated back to physical space via the
         delta method (``|dp/dtheta| * std_unconstrained``).
     hessian_unconstrained : jnp.ndarray, optional
-        Raw FD Hessian of the loss at the MAP, unconstrained-space.
+        Rate-rate block of the loss Hessian at the MAP, unconstrained space:
+        finite-difference for ``LaplaceConfig(method="fd")``, Gauss-Newton
+        ``J^T J`` (the Fisher information for ``loss="nll"``) for
+        ``method="gauss_newton"``.
     priors_applied : dict[str, tuple[float, float]], optional
         Gaussian priors (physical-space ``(mean, std)``) that were added to the
         objective, by free-parameter name. Empty if no priors were active.
@@ -447,6 +463,20 @@ class CalibrationResult:
     ic_named : list[dict[str, float]], optional
         When ``free_ic`` is used, the fitted free initial pools per dataset, by
         species name. ``None`` if no initial conditions were fit.
+    joint_cov : jnp.ndarray, optional
+        With ``LaplaceConfig(include_ic=True)`` and fitted pools, the joint
+        covariance of the rate parameters and the fitted pools in unconstrained
+        space (pools in log space), ordered as ``joint_names``. ``None``
+        otherwise.
+    joint_hessian : jnp.ndarray, optional
+        The joint Hessian ``joint_cov`` was built from, same ordering.
+    joint_names : list[str], optional
+        Row/column names of ``joint_cov``: the rate names, then
+        ``"ic[k].<species>"`` for each dataset ``k``'s fitted pools.
+    ic_named_std : list[dict[str, float]], optional
+        Marginal std devs of the fitted pools in physical units, per dataset
+        and by species (same layout as ``ic_named``). Only with
+        ``include_ic=True``.
     """
 
     params: jnp.ndarray
@@ -464,6 +494,10 @@ class CalibrationResult:
     priors_applied: dict[str, tuple[float, float]] = field(default_factory=dict)
     C0_fitted: list | None = None
     ic_named: list | None = None
+    joint_cov: jnp.ndarray | None = None
+    joint_hessian: jnp.ndarray | None = None
+    joint_names: list[str] | None = None
+    ic_named_std: list | None = None
 
     def predictive_band(
         self,
@@ -826,6 +860,7 @@ class _FitConfig:
     laplace_fd_step: float
     laplace_dtmax: float | None
     compiled_cache: dict | None
+    laplace_include_ic: bool = False
 
 
 def _forward_jac(cfg: _FitConfig, fm: _ReactorForwardModel) -> bool:
@@ -1097,64 +1132,111 @@ def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bound
     return result
 
 
+class _LaplaceOut(
+    namedtuple(
+        "_LaplaceOut",
+        [
+            "posterior_cov",
+            "posterior_std_unconstrained",
+            "params_named_std",
+            "hessian_unconstrained",
+            "joint_cov",
+            "joint_hessian",
+            "joint_names",
+            "ic_named_std",
+        ],
+    )
+):
+    """What :func:`_laplace_posterior` returns. The ``joint_*`` / ``ic_named_std``
+    fields are ``None`` unless the joint rate + initial-pool posterior was
+    requested (``LaplaceConfig(include_ic=True)`` with fitted pools)."""
+
+
+def _joint_names(problem: _CalibrationProblem) -> list[str]:
+    """Row/column names of the joint rate + initial-pool Hessian: the rate
+    names, then ``"ic[k].<species>"`` for each dataset ``k``'s fitted pools."""
+    ic_names = [f"ic[{k}].{s}" for k in range(problem.n_datasets) for s in problem.free_ic]
+    return list(problem.free_params) + ic_names
+
+
 def _laplace_posterior(
     problem: _CalibrationProblem,
     fm: _ReactorForwardModel,
     cfg: _FitConfig,
     rate_theta_opt,
     ic_opt,
-):
-    """Laplace covariance over the rate parameters (pools held at the MAP).
+) -> _LaplaceOut:
+    """Laplace covariance at the MAP.
 
-    Returns ``(posterior_cov, posterior_std_unconstrained, params_named_std,
-    hessian_unconstrained)``. The Hessian is more step-sensitive than the fit, so
-    it can use a tighter integrator cap (``laplace_dtmax``) via the forward
-    model's ``with_dtmax``."""
+    By default the Hessian is over the rate parameters only, with the fitted
+    initial pools held at their MAP. With ``cfg.laplace_include_ic`` (and fitted
+    pools) it is over the rates *and* the log-space pools jointly; the rate
+    covariance is then the rate block of the joint covariance, i.e. the marginal
+    over the pools. ``hessian_unconstrained`` is always the rate-rate block of
+    the Hessian, so it means the same thing in both modes. The Hessian is more
+    step-sensitive than the fit, so it can use a tighter integrator cap
+    (``laplace_dtmax``) via the forward model's ``with_dtmax``."""
     d = problem.n_rate
+    joint = bool(cfg.laplace_include_ic and problem.m_ic)
     fm_lap = fm.with_dtmax(cfg.laplace_dtmax)
+    theta_at = jnp.concatenate([rate_theta_opt, ic_opt]) if joint else rate_theta_opt
+
+    def _split(theta):
+        # Joint mode differentiates the pools too; otherwise they stay at the MAP.
+        return (theta[:d], theta[d:]) if joint else (theta, ic_opt)
+
     if cfg.laplace_method == "gauss_newton":
         # Gauss-Newton / Fisher Hessian H = J^T J, with J the Jacobian of the
         # scaled residuals. Only FIRST-order AD through the solve; for
         # loss='nll' this is the exact Fisher information (PSD by construction).
-        # Rate-only residual (pools fixed at the MAP), ic-prior block omitted.
-        def _residual_vec(rate_thetas):
+        # The ic-prior residual depends on the pools only, so it enters the
+        # joint Hessian and is omitted (zero Jacobian) in the rate-only one.
+        def _residual_vec(theta):
+            rate_thetas, ic_thetas = _split(theta)
             return _residual_parts(
                 problem,
                 fm_lap,
                 rate_thetas,
-                ic_opt,
+                ic_thetas,
                 problem.p0_full,
                 problem.C0_base,
                 problem.ic_center_full,
-                include_ic_prior=False,
+                include_ic_prior=joint,
             )
 
         use_fwd = _forward_jac(cfg, fm_lap)
-        J = (jax.jacfwd if use_fwd else jax.jacrev)(_residual_vec)(rate_theta_opt)
+        J = (jax.jacfwd if use_fwd else jax.jacrev)(_residual_vec)(theta_at)
         H = J.T @ J
     elif cfg.laplace_method == "fd":
-        # FD Hessian of the loss over the rates (pools fixed at MAP).
-        def _objective_rate(rate_thetas):
+        # FD Hessian of the loss (pools fixed at the MAP unless joint).
+        def _objective(theta):
+            rate_thetas, ic_thetas = _split(theta)
             physical = problem.physical_from_theta(rate_thetas)
             p = problem.p0_full.at[problem.free_indices].set(physical)
             total = 0.0
             for (_t, _ts, loss_fn_i, _r), pred in zip(
-                problem.dataset_static, _predict(problem, fm_lap, p, ic_opt, problem.C0_base)
+                problem.dataset_static,
+                _predict(problem, fm_lap, p, ic_thetas, problem.C0_base),
             ):
                 total = total + loss_fn_i(pred)
             if problem.has_priors:
                 total = total + 0.5 * jnp.sum(
                     problem.prior_mask * ((physical - problem.prior_mean) / problem.prior_std) ** 2
                 )
+            if joint and problem.ic_prior_log_std:
+                total = total + 0.5 * jnp.sum(
+                    ((ic_thetas - problem.ic_center_full) / problem.ic_prior_log_std) ** 2
+                )
             return total
 
-        grad_fn = jax.jit(jax.grad(_objective_rate))
+        grad_fn = jax.jit(jax.grad(_objective))
+        n_theta = theta_at.shape[0]
         H_rows = []
-        for i in range(d):
-            step = max(abs(float(rate_theta_opt[i])), 1.0) * cfg.laplace_fd_step
-            e_i = jnp.zeros(d).at[i].set(step)
-            g_plus = grad_fn(rate_theta_opt + e_i)
-            g_minus = grad_fn(rate_theta_opt - e_i)
+        for i in range(n_theta):
+            step = max(abs(float(theta_at[i])), 1.0) * cfg.laplace_fd_step
+            e_i = jnp.zeros(n_theta).at[i].set(step)
+            g_plus = grad_fn(theta_at + e_i)
+            g_minus = grad_fn(theta_at - e_i)
             H_rows.append((g_plus - g_minus) / (2.0 * step))
         H = jnp.stack(H_rows)
     else:
@@ -1164,16 +1246,36 @@ def _laplace_posterior(
     H = 0.5 * (H + H.T)  # symmetrise away asymmetry / FD noise
 
     cov_np, _, _ = _laplace_covariance(np.asarray(H), cfg.laplace_ridge, cfg.laplace_eig_keep)
-    posterior_cov = jnp.asarray(cov_np)
-    posterior_std_unconstrained = jnp.sqrt(jnp.diag(posterior_cov))
+    cov = jnp.asarray(cov_np)
+    std_unconstrained = jnp.sqrt(jnp.diag(cov))
 
     # Delta-method projection to physical space.
     jac = jnp.stack(
         [_jacobian_physical_wrt_theta(rate_theta_opt[i], problem.transforms[i]) for i in range(d)]
     )
-    std_physical = jnp.abs(jac) * posterior_std_unconstrained
+    std_physical = jnp.abs(jac) * std_unconstrained[:d]
     params_named_std = {name: float(std_physical[i]) for i, name in enumerate(problem.free_params)}
-    return posterior_cov, posterior_std_unconstrained, params_named_std, H
+
+    if not joint:
+        return _LaplaceOut(cov, std_unconstrained, params_named_std, H, None, None, None, None)
+
+    # Pools are fitted as log(value), so d(value)/d(theta) = value.
+    ic_std = np.exp(np.asarray(ic_opt)) * np.asarray(std_unconstrained[d:])
+    m = problem.m_ic
+    ic_named_std = [
+        {s: float(v) for s, v in zip(problem.free_ic, ic_std[k * m : (k + 1) * m])}
+        for k in range(problem.n_datasets)
+    ]
+    return _LaplaceOut(
+        posterior_cov=cov[:d, :d],
+        posterior_std_unconstrained=std_unconstrained[:d],
+        params_named_std=params_named_std,
+        hessian_unconstrained=H[:d, :d],
+        joint_cov=cov,
+        joint_hessian=H,
+        joint_names=_joint_names(problem),
+        ic_named_std=ic_named_std,
+    )
 
 
 def _resolve_problem(
@@ -1603,6 +1705,7 @@ def calibrate(
         laplace_fd_step=lap.fd_step,
         laplace_dtmax=lap.dtmax,
         compiled_cache=_compiled_cache,
+        laplace_include_ic=lap.include_ic,
     )
     fm = _ReactorForwardModel(
         reactor, gradient, cfg.stable_adjoint_max_steps, cfg.stable_adjoint_low_memory
@@ -1636,18 +1739,14 @@ def calibrate(
             C0_fitted.append(C0_i.at[problem.ic_species_idx].set(jnp.asarray(vals)))
             ic_named.append({s: float(v) for s, v in zip(problem.free_ic, vals)})
 
-    # --- Laplace posterior (over the rate parameters; pools held at MAP) ---
-    posterior_cov = None
-    posterior_std_unconstrained = None
-    params_named_std = None
-    hessian_unconstrained = None
-    if cfg.laplace:
-        (
-            posterior_cov,
-            posterior_std_unconstrained,
-            params_named_std,
-            hessian_unconstrained,
-        ) = _laplace_posterior(problem, fm, cfg, rate_theta_opt, ic_opt)
+    # --- Laplace posterior ---
+    # Rate-only by default (pools held at the MAP); joint rate + pool with
+    # LaplaceConfig(include_ic=True).
+    laplace_out = (
+        _laplace_posterior(problem, fm, cfg, rate_theta_opt, ic_opt)
+        if cfg.laplace
+        else _LaplaceOut(*[None] * len(_LaplaceOut._fields))
+    )
 
     # Report the loss as the full scalar objective at the optimum, identical
     # across optimizers (the Gauss-Newton path's ``r.cost`` drops the nll
@@ -1663,10 +1762,7 @@ def calibrate(
         n_iter=int(result.nit),
         parameter_names=list(problem.free_params),
         transforms=list(problem.transforms),
-        posterior_cov=posterior_cov,
-        posterior_std_unconstrained=posterior_std_unconstrained,
-        params_named_std=params_named_std,
-        hessian_unconstrained=hessian_unconstrained,
+        **laplace_out._asdict(),
         priors_applied=dict(problem.active_priors),
         C0_fitted=C0_fitted,
         ic_named=ic_named,
