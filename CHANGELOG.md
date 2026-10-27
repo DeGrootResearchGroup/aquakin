@@ -19,6 +19,17 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ## [Unreleased]
 
+### Added
+
+- `LaplaceConfig(include_ic=True)` gives a joint Laplace posterior over the rate
+  parameters and the initial pools fitted with `free_ic`, for both
+  `aquakin.calibrate` and `Plant.calibrate`. The joint covariance and Hessian
+  (the Fisher information with `loss="nll"` and `method="gauss_newton"`) are
+  returned as `CalibrationResult.joint_cov` / `joint_hessian` / `joint_names`,
+  and the pool standard deviations as `ic_named_std`. The rate standard
+  deviations then account for rate-pool correlation instead of treating the
+  pools as known. The default (`include_ic=False`) is unchanged.
+
 ## [0.1.0] - 2026-07-08
 
 The first public release of `aquakin`: a Python library for modelling reactive

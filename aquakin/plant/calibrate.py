@@ -55,6 +55,7 @@ from aquakin.integrate.calibrate import (
     _FitConfig,
     _free_ic_fields,
     _laplace_posterior,
+    _LaplaceOut,
     _optimizer_bounds,
     _resolve_laplace,
     _run_multistart,
@@ -709,6 +710,7 @@ def calibrate_plant(
         laplace_fd_step=lap.fd_step,
         laplace_dtmax=lap.dtmax,
         compiled_cache=None,
+        laplace_include_ic=lap.include_ic,
     )
     fm = _PlantForwardModel(
         plant=plant,
@@ -738,19 +740,13 @@ def calibrate_plant(
     ic_opt = theta_opt[problem.n_rate :]
     full_params = problem.p0_full.at[problem.free_indices].set(physical_opt)
 
-    posterior_cov = None
-    posterior_std_unconstrained = None
-    params_named_std = None
-    hessian_unconstrained = None
-    if cfg.laplace:
-        # Laplace covariance is over the rate parameters; the fitted ICs are held
-        # at their MAP (the same convention as the reactor calibration).
-        (
-            posterior_cov,
-            posterior_std_unconstrained,
-            params_named_std,
-            hessian_unconstrained,
-        ) = _laplace_posterior(problem, fm, cfg, theta_opt[: problem.n_rate], ic_opt)
+    # Rate-only by default (pools held at the MAP); joint rate + pool with
+    # LaplaceConfig(include_ic=True).
+    laplace_out = (
+        _laplace_posterior(problem, fm, cfg, theta_opt[: problem.n_rate], ic_opt)
+        if cfg.laplace
+        else _LaplaceOut(*[None] * len(_LaplaceOut._fields))
+    )
 
     # Fitted initial state (when free ICs are active): the base ``y0`` with the
     # fitted slots set, plus the fitted values by ``"unit.species"`` label.
@@ -773,10 +769,7 @@ def calibrate_plant(
         n_iter=int(result.nit),
         parameter_names=list(problem.free_params),
         transforms=list(problem.transforms),
-        posterior_cov=posterior_cov,
-        posterior_std_unconstrained=posterior_std_unconstrained,
-        params_named_std=params_named_std,
-        hessian_unconstrained=hessian_unconstrained,
+        **laplace_out._asdict(),
         priors_applied=dict(problem.active_priors),
         C0_fitted=C0_fitted,
         ic_named=ic_named,

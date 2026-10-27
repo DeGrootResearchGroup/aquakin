@@ -138,6 +138,31 @@ band = result.predictive_band(reactor, C0, t_eval, n_draw=200,
 band.median, band.lo, band.hi        # (n_t, n_species) envelopes
 ```
 
+### Uncertainty when initial pools are fitted
+
+By default the Laplace covariance covers the rate parameters only, with any
+fitted initial pools held at their best-fit values. When a rate constant and a
+pool trade off against each other (for example `k` and `[X]0` when only their
+product shapes the data), that understates the rate uncertainty. Ask for the
+joint covariance instead:
+
+```python
+result = aquakin.calibrate(
+    reactor, C0, observations, t_obs, free_params,
+    loss="nll", sigma=sigma,
+    free_ic=aquakin.FreeICConfig(["X"]),
+    laplace=aquakin.LaplaceConfig(method="gauss_newton", include_ic=True),
+)
+result.joint_names        # ["<rate names>", "ic[0].X", ...]
+result.joint_cov          # rates + log-space pools, unconstrained space
+result.joint_hessian      # with loss="nll" and gauss_newton: the Fisher information
+result.params_named_std   # rate std devs, now marginal over the pools
+result.ic_named_std       # pool std devs in physical units, per dataset
+```
+
+Strong correlation between a rate and a pool in `joint_cov` is a sign that the
+experiment cannot separate them.
+
 ### Identifiability: profile likelihood
 
 The Laplace covariance is a local, quadratic approximation. For an exact
