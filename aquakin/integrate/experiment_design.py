@@ -140,6 +140,22 @@ def _draws(setup, param_draws):
     return draws
 
 
+def _structure_key(ex: Experiment) -> tuple:
+    """What fixes the shape of an experiment's compiled evaluation: everything
+    except its sampling-time values and initial state."""
+    sigma = np.asarray(ex.sigma, dtype=float)
+    obs = tuple(ex.observed_species) if ex.observed_species is not None else None
+    return (
+        id(ex.reactor),
+        obs,
+        id(getattr(ex, "observation_fn", None)),
+        int(np.asarray(ex.t_obs).shape[0]),
+        ex.time_unit,
+        sigma.shape,
+        sigma.tobytes(),
+    )
+
+
 @dataclass(frozen=True)
 class CandidateScore:
     """One candidate's score from :func:`rank_experiments`.
@@ -224,13 +240,48 @@ def rank_experiments(
         draws = _draws(setup, param_draws)
         return float(_mean_criterion(setup, draws, setup.tobs, setup.C0, criterion, sub, nui))
 
+    # Candidates that differ only in sampling times and initial state share one
+    # compiled evaluator, with those passed as arguments; compiling per
+    # candidate would cost a nested-derivative solve compilation each.
+    n_base = len(base)
+    checked = [_FisherSetup(reactor, base + [c], free_params, **common) for c in candidates]
+    groups: dict = {}
+    for i, c in enumerate(candidates):
+        groups.setdefault(_structure_key(c), []).append(i)
+    values = [0.0] * len(candidates)
+    for idxs in groups.values():
+        t_end = max(checked[i].t_end[-1] for i in idxs)
+        setup = _FisherSetup(
+            reactor,
+            base + [candidates[idxs[0]]],
+            free_params,
+            t_end=[None] * n_base + [t_end],
+            **common,
+        )
+        sub, nui = _subset_indices(setup.names, subset)
+        draws = _draws(setup, param_draws)
+        evaluate = jax.jit(
+            lambda tobs, C0, setup=setup, sub=sub, nui=nui, draws=draws: _mean_criterion(
+                setup,
+                draws,
+                setup.tobs[:n_base] + [tobs],
+                setup.C0[:n_base] + [C0],
+                criterion,
+                sub,
+                nui,
+            )
+        )
+        for i in idxs:
+            values[i] = float(evaluate(checked[i].tobs[-1], checked[i].C0[-1]))
+
     sign = 1.0 if _LARGER_IS_BETTER[criterion] else -1.0
     base_value = _score(base) if base else None
-    scores = []
-    for i, cand in enumerate(candidates):
-        value = _score(base + [cand])
-        gain = None if base_value is None else sign * (value - base_value)
-        scores.append(CandidateScore(index=i, value=value, improvement=gain))
+    scores = [
+        CandidateScore(
+            index=i, value=v, improvement=None if base_value is None else sign * (v - base_value)
+        )
+        for i, v in enumerate(values)
+    ]
     return sorted(scores, key=lambda c: -sign * c.value)
 
 
