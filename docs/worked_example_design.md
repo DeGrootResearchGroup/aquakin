@@ -162,17 +162,10 @@ than the bound suggests.
 
 ### Combining measurements and experiments
 
-Because the measurement errors are independent (Σ is diagonal), F can be
-written as a sum with one term per measurement. With sᵢ the i-th row of S,
-the sensitivities of measurement *i* to all the unknowns,
-
-$$
-F = \sum_i \frac{1}{\sigma_i^2}\, s_i s_i^\top .
-$$
-
-Each measurement adds its own contribution. A second experiment is just more
-measurements, so the information of a combined design is the sum of the
-information of its experiments:
+Because the measurement errors are independent (Σ is diagonal), each
+measurement contributes its own term to F, and the terms add. A second
+experiment is just more measurements, so the information of a combined design
+is the sum of the information of its experiments:
 
 $$
 F_{\text{1 and 2}} = F_{1} + F_{2} .
@@ -184,9 +177,10 @@ are used below:
 
 - Repeating a measurement n times multiplies its contribution by n, so the
   standard deviations it controls shrink by √n.
-- Each term adds information only along the direction of its sᵢ. Measurements
-  whose sensitivities all point the same way add up along that one direction
-  and leave the others unchanged, however many there are.
+- A measurement adds information only along the direction of its
+  sensitivities (its row of S). Measurements whose sensitivities all point the
+  same way add up along that one direction and leave the others unchanged,
+  however many there are.
 
 The sum assumes the errors of different measurements are independent; errors
 that are correlated, for example through a shared calibration, add less. When
