@@ -48,6 +48,11 @@ from aquakin.integrate.particle import (
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
 from aquakin.integrate.fisher import Experiment, FisherInformation, fisher_information
+from aquakin.integrate.identifiability import (
+    EigenDirection,
+    IdentifiabilityResult,
+    identifiability,
+)
 from aquakin.integrate.scenarios import (
     KPIComparison,
     ScenarioComparison,
@@ -66,6 +71,7 @@ __all__ = [
     "Constraint",
     "DGSMResult",
     "DifferentiationConfig",
+    "EigenDirection",
     "Event",
     "EventedResult",
     "Experiment",
@@ -73,6 +79,7 @@ __all__ = [
     "FitResult",
     "ForwardSensitivityResult",
     "FreeICConfig",
+    "IdentifiabilityResult",
     "IntegratorConfig",
     "KPIComparison",
     "LaplaceConfig",
@@ -97,6 +104,7 @@ __all__ = [
     "fit",
     "forward_adjoint",
     "forward_sensitivity",
+    "identifiability",
     "implicit_euler_adjoint_solve",
     "integrate_ensemble",
     "kpi_comparison",

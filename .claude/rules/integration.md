@@ -94,7 +94,11 @@ and each `Experiment` may carry its own reactor and observed species, which the
 shared-observed-species problem cannot express. It uses the same coordinates
 (rate transforms, log pools, `ic[e].<species>` names) and forward-mode AD
 through `reactor.solve`, and a test pins it to the joint Gauss-Newton Hessian at
-the MAP — keep the two in step if either changes. All are unit-tested directly in
+the MAP — keep the two in step if either changes. `identifiability`
+([`integrate/identifiability.py`](aquakin/integrate/identifiability.py)) is pure
+NumPy on the matrix (no solves); it reads `joint_hessian` / `joint_names` from a
+`CalibrationResult` when present, else the rate `hessian_unconstrained`, and its
+default `eig_keep` matches `LaplaceConfig` so flagged = dropped directions. All are unit-tested directly in
 `tests/unit/test_calibrate_internals.py` (no fit/solve). **The forward-solve is a
 seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
 — it turns `(params, C0)` into an observed-species trajectory (via the reactor's

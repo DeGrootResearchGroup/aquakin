@@ -58,6 +58,11 @@ from aquakin.integrate.calibrate import (
 )
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
 from aquakin.integrate.fisher import Experiment, FisherInformation, fisher_information
+from aquakin.integrate.identifiability import (
+    EigenDirection,
+    IdentifiabilityResult,
+    identifiability,
+)
 from aquakin.integrate.cfd import CFDReactor
 from aquakin.integrate.particle import (
     ParticleTrackReactor,
@@ -213,6 +218,7 @@ __all__ = [
     "CostFactors",
     "DGSMResult",
     "DifferentiationConfig",
+    "EigenDirection",
     "Event",
     "EventedResult",
     "Experiment",
@@ -221,6 +227,7 @@ __all__ = [
     "ForwardSensitivityResult",
     "FreeICConfig",
     "HeatBalanceTemperature",
+    "IdentifiabilityResult",
     "IdentityTranslator",
     "InfluentFractions",
     "InfluentSeries",
@@ -300,6 +307,7 @@ __all__ = [
     "forward_sensitivity",
     "fractionate",
     "heating_energy",
+    "identifiability",
     "implicit_euler_adjoint_solve",
     "integrate_ensemble",
     "kpi_comparison",

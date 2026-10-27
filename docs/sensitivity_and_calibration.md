@@ -196,6 +196,39 @@ cannot be determined from the design at all. Each experiment may carry its own
 optimum, with `loss="nll"`, the matrix equals the Gauss-Newton Laplace Hessian
 (`joint_hessian` with `include_ic=True`).
 
+### Identifiability report
+
+`aquakin.identifiability` analyses a Fisher information matrix and reports
+which parameter combinations the design can and cannot determine. It accepts
+the output of `fisher_information`, a `CalibrationResult` fitted with
+`laplace=` (use `loss="nll"` and `method="gauss_newton"` so its Hessian is the
+Fisher information), or a bare matrix with `names=`:
+
+```python
+rep = aquakin.identifiability(fim)
+for d in rep.unidentifiable:          # directions the data barely constrain
+    print(d.relative_eigenvalue, d.loadings)
+rep.correlation                       # correlation matrix, ordered as rep.names
+rep.relative_std                      # Cramér-Rao relative standard errors
+rep.collinearity_index(["r1.k", "ic[0].X"])
+rep.largest_identifiable_subset(threshold=15.0)
+```
+
+Each eigen-direction carries its eigenvector loadings by name. In the log
+coordinates used for positive parameters and initial pools, equal and opposite
+loadings on a rate constant and a pool (for example `+0.71` on `k` and `-0.71`
+on `ic[0].X`) mean the data see only their product `k [X]0`. Such a pair should
+be lumped into one parameter or separated by a new experiment. A direction is
+flagged when its eigenvalue is below `eig_keep` (default `1e-2`) times the
+largest, the same rule the Laplace posterior uses to drop directions.
+
+The collinearity index of a subset is `1 / sqrt(λ_min)` of the information
+normalised to unit diagonal. It is 1 when the subset's sensitivities are
+orthogonal and grows without bound as they become linearly dependent,
+regardless of how sensitive the output is to each parameter.
+`identifiable_subsets` lists every subset below a threshold (default 15),
+largest first.
+
 ### Identifiability: profile likelihood
 
 The Laplace covariance is a local, quadratic approximation. For an exact
