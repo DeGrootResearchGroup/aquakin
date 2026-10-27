@@ -1,5 +1,7 @@
 """Tests for MAP calibration + Laplace posterior."""
 
+import sys
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -539,6 +541,99 @@ def test_multistart_invalid_n_starts_rejected(setup):
             laplace=False,
             optimizer=OptimizerConfig(n_starts=0),
         )
+
+
+# ---------- forward-solve failures during the fit ----------
+
+
+def _failing_forward_model(monkeypatch, fails):
+    """Swap calibrate's reactor forward model for one whose compiled solve
+    raises (through ``equinox.error_if``, as a diverging stiff linear solve
+    does) whenever ``fails(k)`` is true for the rate ``k = p[0]``."""
+    import equinox as eqx
+
+    cal_mod = sys.modules["aquakin.integrate.calibrate"]
+
+    class _Failing(cal_mod._ReactorForwardModel):
+        def solve_trajectory(self, p, C0_k, tspan, tobs):
+            C = super().solve_trajectory(p, C0_k, tspan, tobs)
+            return eqx.error_if(
+                C, fails(p[0]), "A linear solver returned non-finite (NaN or inf) output."
+            )
+
+    monkeypatch.setattr(cal_mod, "_ReactorForwardModel", _Failing)
+
+
+def _fail_fit_kwargs(setup, optimizer):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    return dict(
+        observations=obs_clean,
+        t_obs=t_obs,
+        free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"],
+        loss="mse",
+        laplace=False,
+        initial_params=reactor.model.default_parameters().at[0].set(0.5),
+        optimizer=optimizer,
+    )
+
+
+@pytest.mark.parametrize("method", ["gauss_newton", "lbfgsb"])
+def test_multistart_skips_start_whose_solve_fails(setup, monkeypatch, method):
+    """A jittered restart whose forward solve fails is skipped (with a warning)
+    and the fit keeps the good start instead of aborting."""
+    reactor, C0, _t, _obs, true_k = setup
+    # Start 0 (k=0.5) and start 1 (k~0.9) descend to the truth below k=3;
+    # start 2's jitter (+6.1 in log space) lands far above it and fails.
+    _failing_forward_model(monkeypatch, lambda k: k > 3.0)
+    opt = OptimizerConfig(method=method, n_starts=3, jitter_schedule=(3.0,), seed=1)
+    with pytest.warns(RuntimeWarning, match=r"failed in 1 of 3 optimiser starts \(start index 2"):
+        result = aquakin.calibrate(reactor, C0, **_fail_fit_kwargs(setup, opt))
+    assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
+
+
+def test_all_starts_failing_raises_actionable_error(setup, monkeypatch):
+    """When the solve fails in every start, calibrate raises a RuntimeError
+    with the remedies, chained to the underlying solve error."""
+    reactor, C0, *_ = setup
+    # Both starts (k=0.5 and k~0.7) are fine at their start point but fail once
+    # the optimiser descends below k=0.4 toward the truth (0.25).
+    _failing_forward_model(monkeypatch, lambda k: k < 0.4)
+    opt = OptimizerConfig(method="gauss_newton", n_starts=2, jitter_schedule=(1.0,), seed=0)
+    with pytest.raises(RuntimeError, match="param_halfwidth") as info:
+        aquakin.calibrate(reactor, C0, **_fail_fit_kwargs(setup, opt))
+    assert "all 2 optimiser starts" in str(info.value)
+    assert info.value.__cause__ is not None
+
+
+def test_solve_failure_at_start_guess_raises_actionable_error(setup, monkeypatch):
+    """A solve that already fails at the starting guess is reported as such by
+    the pre-fit gradient check, not as a raw XLA callback traceback."""
+    reactor, C0, *_ = setup
+    _failing_forward_model(monkeypatch, lambda k: k < 0.6)
+    # L-BFGS-B's probe evaluates the loss value, which carries the fake's check
+    # (a Jacobian-only probe would let XLA prune the primal-side check).
+    opt = OptimizerConfig(method="lbfgsb")
+    with pytest.raises(RuntimeError, match="at the starting guess") as info:
+        aquakin.calibrate(reactor, C0, **_fail_fit_kwargs(setup, opt))
+    assert info.value.__cause__ is not None
+
+
+def test_programming_error_in_solve_is_not_swallowed(setup, monkeypatch):
+    """Only solve failures are treated as a failed start; any other exception
+    from the forward model propagates unchanged."""
+    cal_mod = sys.modules["aquakin.integrate.calibrate"]
+
+    class _Broken(cal_mod._ReactorForwardModel):
+        def solve_trajectory(self, p, C0_k, tspan, tobs):
+            raise TypeError("bug in the forward model")
+
+    monkeypatch.setattr(cal_mod, "_ReactorForwardModel", _Broken)
+    reactor, C0, *_ = setup
+    opt = OptimizerConfig(n_starts=2)
+    with pytest.raises(TypeError, match="bug in the forward model"):
+        aquakin.calibrate(reactor, C0, **_fail_fit_kwargs(setup, opt))
 
 
 # ---------- posterior-predictive band ----------
