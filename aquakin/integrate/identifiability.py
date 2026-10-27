@@ -33,7 +33,8 @@ from aquakin.integrate._transforms import dphysical_dunconstrained
 # zero (a structurally non-identifiable direction), so the parameters loading on
 # them get an infinite standard error rather than a round-off-sized finite one.
 _NULL_RTOL = 1e-10
-# Loadings smaller than this on a null direction are round-off, not involvement.
+# Loadings below this fraction of a direction's largest are ignored when fixing
+# the eigenvector's sign convention.
 _LOADING_TOL = 1e-6
 # Largest parameter count for the exhaustive subset search without a size cap.
 _MAX_EXHAUSTIVE = 20
@@ -89,7 +90,8 @@ class IdentifiabilityResult:
     std : dict[str, float] or None
         Cramer-Rao lower bound on each standard deviation in physical units,
         infinite for a quantity involved in an exactly non-identifiable
-        direction. ``None`` when no physical values were supplied.
+        direction (see ``null_loading_tol``). ``None`` when no physical values
+        were supplied.
     relative_std : dict[str, float] or None
         ``std`` divided by each quantity's magnitude.
     eig_keep : float
@@ -232,6 +234,7 @@ def identifiability(
     values: dict[str, float] | None = None,
     transforms: list[str] | None = None,
     eig_keep: float = 1e-2,
+    null_loading_tol: float = 1e-2,
 ) -> IdentifiabilityResult:
     """Practical-identifiability report from a Fisher information matrix.
 
@@ -256,6 +259,15 @@ def identifiability(
         Relative eigenvalue floor below which a direction is flagged as not
         identifiable. The default matches :class:`LaplaceConfig`, so the flagged
         directions are the ones the Laplace posterior drops.
+    null_loading_tol : float
+        Smallest loading on an exactly non-identifiable direction (eigenvalue at
+        or below 1e-10 of the largest) that counts as involvement. Such a
+        direction's eigenvector is only determined to about the accuracy of the
+        sensitivities, so a quantity the design does determine can show a tiny
+        spurious loading on it. Quantities with larger loadings get an infinite
+        standard deviation; the others keep the finite one from the remaining
+        directions. The default 1e-2 ignores loadings carrying less than 0.01 %
+        of the direction's weight.
 
     Returns
     -------
@@ -274,6 +286,8 @@ def identifiability(
     nm = list(nm)
     if F.ndim != 2 or F.shape[0] != F.shape[1] or F.shape[0] != len(nm):
         raise ValueError(f"matrix shape {F.shape} does not match {len(nm)} names.")
+    if not (0.0 < null_loading_tol < 1.0):
+        raise ValueError(f"null_loading_tol must be in (0, 1); got {null_loading_tol}.")
     if not (0.0 <= eig_keep < 1.0):
         raise ValueError(f"eig_keep must be in [0, 1); got {eig_keep}.")
     F = 0.5 * (F + F.T)
@@ -297,16 +311,25 @@ def identifiability(
             )
         )
 
-    cov_reg = np.linalg.inv(F + _NULL_RTOL * w_max * np.eye(len(nm)))
+    # Exactly non-identifiable directions, with their round-off loadings
+    # (below null_loading_tol) cleared so they do not drag in quantities the
+    # design does determine.
+    null = w <= _NULL_RTOL * w_max
+    V_null = np.where(np.abs(V[:, null]) > null_loading_tol, V[:, null], 0.0)
+    involved = (V_null != 0.0).any(axis=1)
+
+    # Correlation of (F + delta I)^{-1}, built from the eigen-decomposition with
+    # the cleaned null directions, so an exactly non-identifiable pair reads as
+    # +/-1 and an uninvolved quantity is not correlated with it by round-off.
+    delta = _NULL_RTOL * w_max
+    cov_reg = (V[:, ~null] / (w[~null] + delta)) @ V[:, ~null].T + (V_null / delta) @ V_null.T
     sd_reg = np.sqrt(np.diag(cov_reg))
     correlation = cov_reg / np.outer(sd_reg, sd_reg)
 
     std = relative_std = None
     if vals is not None:
         tr = list(tr) if tr is not None else ["none"] * len(nm)
-        null = w <= _NULL_RTOL * w_max
         var = (V[:, ~null] ** 2) @ (1.0 / w[~null])
-        involved = (np.abs(V[:, null]) > _LOADING_TOL).any(axis=1)
         sd = np.where(involved, np.inf, np.sqrt(var))
         dphys = np.asarray(
             [float(dphysical_dunconstrained(vals[n], t, xp=np)) for n, t in zip(nm, tr)]
