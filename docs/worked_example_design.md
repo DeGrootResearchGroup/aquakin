@@ -68,9 +68,8 @@ created, here by a small factory that takes the model and ε:
 :end-before: "# [end observation]"
 ```
 
-The setup code loads the model, defines the unknowns and the measurements, and
-adds two helpers that build a run (an `aquakin.Experiment`) from its sampling
-times:
+The setup code loads the model and defines the true composition, the unknowns
+and the measurements:
 
 ```{literalinclude} ../examples/ozone_demand_design.py
 :language: python
@@ -331,8 +330,14 @@ The fit starts a factor of 2–3 away from the true rate constants and still
 recovers every unknown within its uncertainty of the true value. The relative
 standard deviations match those predicted for the designed run in step 3.
 
-Two settings in the call matter:
+Three settings in the call matter:
 
+- **`param_halfwidth=np.log(100.0)`** keeps each rate constant within a
+  factor of 100 of its starting guess (the bound is on the log scale). Without
+  it, an early optimiser step can jump by many orders of magnitude, into a
+  region where the stiff solve fails. Bounds a factor of 100 either side of a
+  reasonable guess rarely constrain the answer but make the fit much more
+  reliable.
 - **`include_ic=True`** makes the uncertainty cover the initial pools as well
   as the rate constants. The rate uncertainties then allow for the trade-off
   between each rate and its pool. Without it, the pools would be treated as

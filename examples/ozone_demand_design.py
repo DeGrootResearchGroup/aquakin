@@ -81,21 +81,7 @@ def run_example():
     sigma_uv = 0.001  # 1/cm
     eps = 2.0e-4  # 1/cm per umol/L
     ozone_and_uv = make_ozone_and_uv(model, eps)
-
-    def ozone_run(t_obs, C0=C0):
-        """A run that measures ozone only, at the times t_obs (s)."""
-        return aquakin.Experiment(
-            C0, jnp.asarray(t_obs, dtype=float), sigma=sigma_o3, observed_species=["O3"]
-        )
-
-    def ozone_uv_run(t_obs, C0=C0):
-        """A run that measures ozone and UV254 at the times t_obs (s)."""
-        return aquakin.Experiment(
-            C0,
-            jnp.asarray(t_obs, dtype=float),
-            sigma=jnp.asarray([sigma_o3, sigma_uv]),
-            observation_fn=ozone_and_uv,
-        )
+    sigma_both = jnp.asarray([sigma_o3, sigma_uv])  # one per output of ozone_and_uv
 
     def percent(x):
         """A relative standard deviation as text; inf means not identifiable."""
@@ -107,7 +93,11 @@ def run_example():
 
     print("== Step 1 ==")
     # [step1]
-    base = ozone_run(jnp.linspace(60.0, 600.0, 5))
+    # A run is the initial state, the sampling times (s), the measurement
+    # standard deviation, and what is measured.
+    base = aquakin.Experiment(
+        C0, jnp.linspace(60.0, 600.0, 5), sigma=sigma_o3, observed_species=["O3"]
+    )
     fim = aquakin.fisher_information(
         reactor, base, free_params, params=true_params, free_ic=free_ic
     )
@@ -131,11 +121,17 @@ def run_example():
     early = np.linspace(2.0, 20.0, 5)  # s
     late = np.linspace(700.0, 1800.0, 5)  # s
     designs = {
-        "base": ozone_run(t_base),
-        "+ late samples": ozone_run(np.r_[t_base, late]),
-        "+ early samples": ozone_run(np.r_[early, t_base]),
-        "+ UV254": ozone_uv_run(t_base),
-        "+ early samples + UV254": ozone_uv_run(np.r_[early, t_base]),
+        "base": aquakin.Experiment(C0, t_base, sigma=sigma_o3, observed_species=["O3"]),
+        "+ late samples": aquakin.Experiment(
+            C0, np.r_[t_base, late], sigma=sigma_o3, observed_species=["O3"]
+        ),
+        "+ early samples": aquakin.Experiment(
+            C0, np.r_[early, t_base], sigma=sigma_o3, observed_species=["O3"]
+        ),
+        "+ UV254": aquakin.Experiment(C0, t_base, sigma=sigma_both, observation_fn=ozone_and_uv),
+        "+ early samples + UV254": aquakin.Experiment(
+            C0, np.r_[early, t_base], sigma=sigma_both, observation_fn=ozone_and_uv
+        ),
     }
 
     print(f"{'design':24s}" + "".join(f"{n:>10s}" for n in rep.names))
@@ -151,7 +147,10 @@ def run_example():
 
     print("== Step 3 ==")
     # [step3]
-    start = ozone_uv_run(np.linspace(5.0, 900.0, 8))  # 8 evenly spaced samples
+    # Start from 8 evenly spaced samples of ozone and UV254.
+    start = aquakin.Experiment(
+        C0, jnp.linspace(5.0, 900.0, 8), sigma=sigma_both, observation_fn=ozone_and_uv
+    )
     opt = aquakin.optimize_experiment(
         reactor,
         start,
@@ -192,7 +191,7 @@ def run_example():
     )
     clean = np.asarray(jnp.stack([ozone_and_uv(c, true_params) for c in sol.C]))
     rng = np.random.default_rng(0)
-    data = clean + rng.standard_normal(clean.shape) * np.array([sigma_o3, sigma_uv])
+    data = clean + rng.standard_normal(clean.shape) * np.asarray(sigma_both)
     # [end step4-data]
 
     # [step4-fit]
@@ -212,10 +211,14 @@ def run_example():
         initial_params=guess,
         observation_fn=ozone_and_uv,
         loss="nll",
-        sigma=jnp.asarray([sigma_o3, sigma_uv]),
+        sigma=sigma_both,
         free_ic=free_ic,
         laplace=aquakin.LaplaceConfig(method="gauss_newton", include_ic=True, eig_keep=1e-10),
-        optimizer=aquakin.OptimizerConfig(method="gauss_newton", n_starts=4),
+        # Keep each rate constant within a factor of 100 of its starting
+        # guess, so the optimiser cannot step into regions where the solve fails.
+        optimizer=aquakin.OptimizerConfig(
+            method="gauss_newton", n_starts=4, param_halfwidth=np.log(100.0)
+        ),
     )
     truth = {"fast.k1": 0.01, "slow.k2": 2.0e-6, "D": 15.0, "M": 1000.0}
     print(f"converged: {result.converged}")
@@ -242,9 +245,9 @@ def run_example():
         initial_params=result.params,
         observation_fn=ozone_and_uv,
         loss="nll",
-        sigma=jnp.asarray([sigma_o3, sigma_uv]),
+        sigma=sigma_both,
         free_ic=free_ic,
-        optimizer=aquakin.OptimizerConfig(method="gauss_newton"),
+        optimizer=aquakin.OptimizerConfig(method="gauss_newton", param_halfwidth=np.log(100.0)),
     )
     lo, hi = profile.ci
     sd = result.params_named_std["slow.k2"]
@@ -261,7 +264,7 @@ def run_example():
     draws = result.posterior_draws(model, n_draw=10, seed=1)  # (10, n_params)
     robust = aquakin.optimize_experiment(
         reactor,
-        ozone_uv_run(np.linspace(5.0, 900.0, 8)),
+        start,  # the same 8 evenly spaced samples as in step 3
         free_params,
         param_draws=draws,
         free_ic=free_ic,
