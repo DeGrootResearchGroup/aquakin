@@ -1255,3 +1255,37 @@ def test_logit_initial_out_of_range_rejected(simple_model):
             initial_params=init_bad,
             observed_species=["B"],
         )
+
+
+# ---------- posterior draws ----------
+
+
+def test_posterior_draws_match_laplace_posterior(simple_model):
+    """Draws are full parameter vectors: the free parameter is distributed as the
+    Laplace posterior in its unconstrained (log) space, the rest are fixed."""
+    result, _ = _decay_fit(simple_model, LaplaceConfig(method="gauss_newton"), free_ic=False)
+    draws = result.posterior_draws(simple_model, n_draw=4000, seed=1)
+    assert draws.shape == (4000, simple_model.n_params)
+    i = simple_model.param_index["A_to_B.k"]
+    others = np.delete(np.arange(simple_model.n_params), i)
+    fixed = np.broadcast_to(np.asarray(result.params)[others], (4000, others.size))
+    np.testing.assert_array_equal(draws[:, others], fixed)
+    logk = np.log(draws[:, i])
+    assert logk.mean() == pytest.approx(np.log(result.params_named["A_to_B.k"]), abs=1e-3)
+    assert logk.std() == pytest.approx(float(result.posterior_std_unconstrained[0]), rel=0.05)
+    np.testing.assert_array_equal(draws, result.posterior_draws(simple_model, 4000, seed=1))
+
+
+def test_posterior_draws_require_laplace(simple_model):
+    result, _ = _decay_fit(simple_model, False, free_ic=False)
+    with pytest.raises(ValueError, match="laplace=True"):
+        result.posterior_draws(simple_model)
+
+
+def test_posterior_draws_reject_degenerate_covariance(simple_model):
+    import dataclasses
+
+    result, _ = _decay_fit(simple_model, LaplaceConfig(method="gauss_newton"), free_ic=False)
+    degenerate = dataclasses.replace(result, posterior_cov=jnp.zeros((1, 1)))
+    with pytest.raises(ValueError, match="no positive-variance"):
+        degenerate.posterior_draws(simple_model)

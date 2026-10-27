@@ -115,7 +115,7 @@ result = aquakin.calibrate(
     free_params=["O3_Br_direct.k1", "O3_decay.k2"],
     loss="nll", sigma=sigma,          # measurement noise -> a proper posterior
     laplace=True,                     # add a Laplace posterior approximation
-    n_starts=24, seed=0,              # multistart escapes local minima
+    optimizer=aquakin.OptimizerConfig(n_starts=24, seed=0),  # multistart
 )
 result.params_named       # MAP estimate, in physical space, by name
 result.params_named_std   # marginal standard deviations
@@ -125,7 +125,24 @@ result.converged
 `observations` is shape `(n_t,)` for one species or `(n_t, n_observed)` for
 several; `t_obs` is in the model's native time unit unless you pass `time_unit=`.
 Pass **lists** of `C0`/`observations`/`t_obs` for a joint multi-batch fit, and
-`free_ic=[...]` to fit unmeasured initial pools alongside the rate constants.
+`free_ic=aquakin.FreeICConfig([...])` to fit unmeasured initial pools alongside
+the rate constants.
+
+When a measurement is not a single species but a function of several (a UV
+absorbance from several organic pools, a probe-compound ratio), pass
+`observation_fn` instead of `observed_species`. It maps one time point's
+concentration vector and the parameter vector to the measured outputs, and must
+be written with `jax.numpy` so it can be differentiated:
+
+```python
+uv254 = lambda C, p: 0.02 * C[i_OMf] + 0.05 * C[i_OMs]
+result = aquakin.calibrate(reactor, C0, uv_data, t_obs, free_params,
+                           observation_fn=uv254, loss="nll", sigma=0.005)
+```
+
+The columns of `observations` follow the function's outputs, and `sigma` may
+give one value per output. `profile_likelihood` and `aquakin.Experiment` accept
+`observation_fn` the same way.
 
 ### Uncertainty: posterior-predictive bands
 
@@ -229,6 +246,23 @@ regardless of how sensitive the output is to each parameter.
 `identifiable_subsets` lists every subset below a threshold (default 15),
 largest first.
 
+### Identifiability: profile likelihood
+
+The Laplace covariance is a local, quadratic approximation. For an exact
+identifiability analysis — which distinguishes a well-constrained parameter from
+one the data cannot pin — use `aquakin.profile_likelihood`. It fixes one quantity
+on a grid, re-optimises everything else at each point, and reports the confidence
+interval where the profile rises by the likelihood-ratio threshold:
+
+```python
+prof = aquakin.profile_likelihood(
+    reactor, C0, observations, t_obs, free_params,
+    grid=grid, profile_param="k_s0_anox_f",
+    loss="nll", sigma=sigma, warm_start=True)
+prof.mle    # grid value at the profile minimum
+prof.ci     # (lo, hi); None on a side means the parameter is unidentified there
+```
+
 ### Designing experiments
 
 Once you can compute the information of a design, you can choose the design
@@ -274,23 +308,13 @@ apart.
 The optimal design depends on the parameter values you assume, which are
 uncertain before the experiment. To make the design robust to that, pass
 `param_draws`, an array of parameter vectors drawn from a prior or a previous
-calibration's posterior, and the criterion is averaged over them.
-
-### Identifiability: profile likelihood
-
-The Laplace covariance is a local, quadratic approximation. For an exact
-identifiability analysis — which distinguishes a well-constrained parameter from
-one the data cannot pin — use `aquakin.profile_likelihood`. It fixes one quantity
-on a grid, re-optimises everything else at each point, and reports the confidence
-interval where the profile rises by the likelihood-ratio threshold:
+calibration's posterior, and the criterion is averaged over them. A calibration
+fitted with `laplace=` provides posterior draws directly:
 
 ```python
-prof = aquakin.profile_likelihood(
-    reactor, C0, observations, t_obs, free_params,
-    grid=grid, profile_param="k_s0_anox_f",
-    loss="nll", sigma=sigma, warm_start=True)
-prof.mle    # grid value at the profile minimum
-prof.ci     # (lo, hi); None on a side means the parameter is unidentified there
+draws = result.posterior_draws(reactor.model, n_draw=50, seed=0)  # (50, n_params)
+res = aquakin.optimize_experiment(reactor, experiment, free_params,
+                                  param_draws=draws, time_bounds=(0.5, 60.0))
 ```
 
 ## Calibrating a plant

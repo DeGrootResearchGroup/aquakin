@@ -499,6 +499,77 @@ class CalibrationResult:
     joint_names: list[str] | None = None
     ic_named_std: list | None = None
 
+    def posterior_draws(self, model, n_draw: int = 200, *, seed: int = 0) -> np.ndarray:
+        """Full parameter vectors drawn from the Laplace posterior.
+
+        Draws the free rate parameters from ``N(MAP, posterior_cov)`` in
+        unconstrained space, maps each draw to physical values, and sets it into
+        the fitted parameter vector ``params``; fixed parameters keep their
+        values. The eigen-truncated, non-identifiable directions of
+        ``posterior_cov`` carry no variance. Initial pools are not drawn. The
+        rows can be passed as ``param_draws`` to the experiment-design
+        functions, and :meth:`predictive_band` propagates the same draws.
+
+        Parameters
+        ----------
+        model : CompiledModel
+            The calibrated model (``reactor.model``), to place the free
+            parameters in the full vector.
+        n_draw : int
+            Number of draws.
+        seed : int
+            Seed for the draws (reproducible).
+
+        Returns
+        -------
+        np.ndarray
+            Shape ``(n_draw, n_params)``.
+
+        Raises
+        ------
+        ValueError
+            If there is no Laplace posterior, or it has no positive-variance
+            direction.
+        """
+        if self.posterior_cov is None:
+            raise ValueError(
+                "posterior_draws requires a Laplace posterior; call calibrate(..., laplace=True)."
+            )
+        names = self.parameter_names
+        free_idx = np.asarray([model.param_index[n] for n in names])
+        theta_map = np.array(
+            [
+                float(_to_unconstrained(jnp.asarray(self.params_named[n]), t))
+                for n, t in zip(names, self.transforms)
+            ]
+        )
+
+        # Draw from N(theta_map, posterior_cov). posterior_cov is the
+        # eigen-truncated covariance that also backs params_named_std, so the
+        # draws and the marginal std devs regularise identically. Eigen-decompose
+        # to sample; the truncated (non-identifiable) directions carry zero
+        # variance and so add no spread (a tiny relative floor drops them and any
+        # round-off negatives).
+        cov = np.asarray(self.posterior_cov, dtype=float)
+        cov = 0.5 * (cov + cov.T)
+        s, Q = np.linalg.eigh(cov)
+        pos = s > 1e-12 * max(float(s.max()), 0.0)
+        if not np.any(pos):
+            raise ValueError(
+                "Posterior covariance has no positive-variance directions; the "
+                "Laplace posterior is degenerate."
+            )
+        std_k = np.sqrt(s[pos])
+        rng = np.random.default_rng(seed)
+        thetas = (
+            theta_map[None, :]
+            + (rng.standard_normal((n_draw, int(pos.sum()))) * std_k[None, :]) @ Q[:, pos].T
+        )
+        out = np.tile(np.asarray(self.params, dtype=float), (n_draw, 1))
+        for i, t in enumerate(self.transforms):
+            out[:, free_idx[i]] = np.asarray(_from_unconstrained(jnp.asarray(thetas[:, i]), t))
+        return out
+
     def predictive_band(
         self,
         reactor: Reactor,
@@ -513,9 +584,8 @@ class CalibrationResult:
     ) -> PredictiveBand:
         """Posterior-predictive band by propagating Laplace draws through a solve.
 
-        Samples the calibrated parameters from the Laplace posterior
-        ``N(MAP, posterior_cov)``, inverse-transforms each draw to physical
-        space, sets it into the fitted parameter vector, integrates ``reactor``
+        Samples the calibrated parameters from the Laplace posterior with
+        :meth:`posterior_draws`, integrates ``reactor``
         from ``C0`` over ``t_eval``, and returns the pointwise percentile
         envelope across draws. The draws are taken from ``self.posterior_cov``
         --- the same eigen-truncated covariance behind ``params_named_std`` ---
@@ -569,52 +639,14 @@ class CalibrationResult:
                 stacklevel=2,
             )
         model = reactor.model
-        names = self.parameter_names
-        free_idx = jnp.asarray([model.param_index[n] for n in names])
-        theta_map = np.array(
-            [
-                float(_to_unconstrained(jnp.asarray(self.params_named[n]), t))
-                for n, t in zip(names, self.transforms)
-            ]
-        )
-
-        # Draw from N(theta_map, posterior_cov). posterior_cov is the
-        # eigen-truncated covariance that also backs params_named_std, so the
-        # band and the marginal std devs regularise identically. Eigen-decompose
-        # to sample; the truncated (non-identifiable) directions carry zero
-        # variance and so add no spread (a tiny relative floor drops them and any
-        # round-off negatives).
-        cov = np.asarray(self.posterior_cov, dtype=float)
-        cov = 0.5 * (cov + cov.T)
-        s, Q = np.linalg.eigh(cov)
-        pos = s > 1e-12 * max(float(s.max()), 0.0)
-        if not np.any(pos):
-            raise ValueError(
-                "Posterior covariance has no positive-variance directions; the "
-                "Laplace posterior is degenerate."
-            )
-        std_k = np.sqrt(s[pos])
-        rng = np.random.default_rng(seed)
-        draws = (
-            theta_map[None, :]
-            + (rng.standard_normal((n_draw, int(pos.sum()))) * std_k[None, :]) @ Q[:, pos].T
-        )
-
-        base = self.params
+        draws = self.posterior_draws(model, n_draw, seed=seed)
         C0_j = jnp.asarray(C0)
         t_eval_j = jnp.asarray(t_eval)
         t_end = float(np.asarray(t_eval)[-1])
-        transforms = self.transforms
         curves = []
         first_error = None
-        for theta in draws:
-            physical = jnp.stack(
-                [
-                    _from_unconstrained(jnp.asarray(theta[i]), transforms[i])
-                    for i in range(len(names))
-                ]
-            )
-            p = base.at[free_idx].set(physical)
+        for p in draws:
+            p = jnp.asarray(p)
             try:
                 cc = np.asarray(
                     reactor.solve(C0_j, params=p, t_span=(0.0, t_end), t_eval=t_eval_j).C
@@ -779,6 +811,9 @@ class _CalibrationProblem:
     ic_center_full: jnp.ndarray
     ic_prior_log_std: float | None
     ic_bounds: tuple
+    # Optional observation function (C, params) -> y; replaces the species
+    # columns ``obs_species_indices`` when set.
+    observation_fn: object = None
 
     def physical_from_theta(self, rate_thetas: jnp.ndarray) -> jnp.ndarray:
         """Free rate parameters in physical space from their unconstrained
@@ -813,6 +848,7 @@ class _CalibrationProblem:
             gradient,
             self.n_observed,
             tuple(int(ds[0].shape[0]) for ds in self.dataset_static),
+            self.observation_fn,
         )
 
 
@@ -831,8 +867,29 @@ def _predict(problem: _CalibrationProblem, fm: _ReactorForwardModel, p, ic_theta
                 jnp.exp(ic_thetas[k * problem.m_ic : (k + 1) * problem.m_ic])
             )
         ys = fm.solve_trajectory(p, C0_k, tspan_i, tobs_i)
-        preds.append(ys[:, problem.obs_species_indices])
+        preds.append(observe(ys, p, problem.obs_species_indices, problem.observation_fn))
     return preds
+
+
+def observe(ys, p, species_idx, observation_fn=None):
+    """Observed outputs of a ``(n_t, n_species)`` trajectory: the
+    ``species_idx`` columns, or ``observation_fn(C, p)`` applied at each time."""
+    if observation_fn is None:
+        return ys[:, species_idx]
+    return jax.vmap(lambda c: jnp.atleast_1d(observation_fn(c, p)))(ys)
+
+
+def observation_size(observation_fn, C0, p) -> int:
+    """Number of outputs of ``observation_fn``, checked to be a 1-D vector
+    (or a scalar) on the model's state and parameter vectors."""
+    if not callable(observation_fn):
+        raise TypeError("observation_fn must be a callable (C, params) -> y.")
+    y = jnp.asarray(observation_fn(jnp.asarray(C0, dtype=float), jnp.asarray(p)))
+    if y.ndim > 1:
+        raise ValueError(
+            f"observation_fn must return a scalar or 1-D vector per time point; got shape {y.shape}."
+        )
+    return int(y.size)
 
 
 @dataclass
@@ -1297,6 +1354,7 @@ def _resolve_problem(
     ic_bounds,
     ic_prior_log_std,
     param_halfwidth,
+    observation_fn=None,
 ) -> _CalibrationProblem:
     """Validate and coerce the ``calibrate`` arguments into a
     :class:`_CalibrationProblem`. Everything here is done once, up front; the
@@ -1359,12 +1417,20 @@ def _resolve_problem(
     else:
         sigma_list = [sigma] * n_datasets
 
-    if observed_species is None:
+    if observation_fn is not None:
+        if observed_species is not None:
+            raise ValueError("Pass observed_species or observation_fn, not both.")
+        obs_species_indices = jnp.arange(model.n_species)
+        n_observed = observation_size(observation_fn, C0_list[0], p0_full)
+        what = "outputs were returned by observation_fn"
+    elif observed_species is None:
         obs_species_indices = jnp.arange(model.n_species)
         n_observed = model.n_species
+        what = "species were specified"
     else:
         obs_species_indices = jnp.asarray([model.species_index[s] for s in observed_species])
         n_observed = len(observed_species)
+        what = "species were specified"
 
     # Validate each dataset and build its (C0, t_eval, t_span, loss) tuple.
     datasets = []
@@ -1394,8 +1460,7 @@ def _resolve_problem(
             )
         if obs_i.shape[1] != n_observed:
             raise ValueError(
-                f"dataset {ds}: observations has {obs_i.shape[1]} columns but "
-                f"{n_observed} species were specified."
+                f"dataset {ds}: observations has {obs_i.shape[1]} columns but {n_observed} {what}."
             )
         sig_arr = jnp.asarray(sig_i) if sig_i is not None else None
         datasets.append(
@@ -1474,6 +1539,7 @@ def _resolve_problem(
         ic_center_full=ic_center_full,
         ic_prior_log_std=ic_prior_log_std,
         ic_bounds=ic_bounds,
+        observation_fn=observation_fn,
     )
 
 
@@ -1490,6 +1556,7 @@ def calibrate(
     transforms: dict[str, str] | None = None,
     initial_params: jnp.ndarray | None = None,
     observed_species: list[str] | None = None,
+    observation_fn=None,
     time_unit: str | None = None,
     loss: str = "mse",
     sigma: jnp.ndarray | None = None,
@@ -1534,6 +1601,13 @@ def calibrate(
     observed_species : list[str], optional
         Species names corresponding to columns of ``observations``. If
         ``None``, every model species is taken to be observed.
+    observation_fn : callable, optional
+        A measurement that is a function of several states, used in place of
+        ``observed_species``: ``observation_fn(C, params) -> y`` maps one time
+        point's concentration vector ``(n_species,)`` and the full parameter
+        vector to the observed outputs, a scalar or ``(n_outputs,)``. It must be
+        written with ``jax.numpy`` so it can be differentiated. The columns of
+        ``observations`` (and a per-output ``sigma``) follow its outputs.
     time_unit : str, optional
         The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
         ``"d"``), matching :meth:`BatchReactor.solve`. Every dataset's ``t_obs``
@@ -1684,6 +1758,7 @@ def calibrate(
         ic_bounds=ic_bounds,
         ic_prior_log_std=ic_prior_log_std,
         param_halfwidth=optimizer.param_halfwidth,
+        observation_fn=observation_fn,
     )
     cfg = _FitConfig(
         gradient=gradient,
