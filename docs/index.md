@@ -21,6 +21,7 @@ getting_started
 reactors
 plants
 sensitivity_and_calibration
+worked_example_design
 ```
 
 ```{toctree}
