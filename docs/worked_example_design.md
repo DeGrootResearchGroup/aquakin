@@ -10,8 +10,7 @@ Before fitting a kinetic model to data, it is worth asking two questions:
 
 This page answers both for a small ozone-demand model, step by step, from a
 first design that cannot estimate anything to a calibrated model whose
-uncertainties are checked against the truth. It explains the ideas behind each
-step, so no previous experience with these methods is assumed.
+uncertainties are checked against the truth.
 
 All the code on this page comes from the script
 [`examples/ozone_demand_design.py`](https://github.com/DeGrootResearchGroup/aquakin/blob/main/examples/ozone_demand_design.py),
@@ -42,20 +41,36 @@ Two quantities can be measured:
 
 - **Dissolved ozone**, with a standard deviation of 1 µmol/L.
 - **UV254**, the UV absorbance at 254 nm per centimetre of path length.
-  Absorbance (not transmittance) is proportional to concentration, so the
-  example takes A₂₅₄ = ε[M] with a known specific absorbance
-  ε = 2×10⁻⁴ cm⁻¹ per µmol/L, and a standard deviation of 0.001 cm⁻¹.
+  Absorbance is proportional to concentration, so the example takes
+  A₂₅₄ = ε[M] with a known specific absorbance ε = 2×10⁻⁴ cm⁻¹ per µmol/L,
+  and a standard deviation of 0.001 cm⁻¹.
 
 The data on this page are synthetic, generated from the true values above, so
-every result can be checked against the truth. The setup code loads the model,
-defines the unknowns and the measurements, and adds two helpers that build a
-run (an `aquakin.Experiment`) from its sampling times:
+every result can be checked against the truth.
+
+The script starts with its imports:
 
 ```{literalinclude} ../examples/ozone_demand_design.py
 :language: python
 :start-after: "# [imports]"
 :end-before: "# [end imports]"
 ```
+
+UV254 is not a single species, so it is passed to aquakin as an *observation
+function*: a function that maps the concentration vector at one time, and the
+parameter vector, to the measured values. aquakin always calls it with those
+two arguments, `f(C, p)`. Anything else it needs is bound in when it is
+created, here by a small factory that takes the model and ε:
+
+```{literalinclude} ../examples/ozone_demand_design.py
+:language: python
+:start-after: "# [observation]"
+:end-before: "# [end observation]"
+```
+
+The setup code loads the model, defines the unknowns and the measurements, and
+adds two helpers that build a run (an `aquakin.Experiment`) from its sampling
+times:
 
 ```{literalinclude} ../examples/ozone_demand_design.py
 :language: python
@@ -64,11 +79,9 @@ run (an `aquakin.Experiment`) from its sampling times:
 :dedent: 4
 ```
 
-UV254 is not a single species, so it is passed as an *observation function*:
-`ozone_and_uv` maps the concentration vector at one time to the two measured
-values. Rate constants declared with `transform: positive_log` in the model
-file, and the initial pools, are analysed on a log scale; why that matters is
-explained below.
+Rate constants declared with `transform: positive_log` in the model file, and
+the initial pools, are analysed on a log scale; why that matters is explained
+below.
 
 ## Background: how much can an experiment tell us?
 

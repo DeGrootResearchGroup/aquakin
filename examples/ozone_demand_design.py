@@ -36,6 +36,27 @@ import aquakin
 # [end imports]
 
 
+# [observation]
+def make_ozone_and_uv(model, eps):
+    """Build the observation function for ozone and UV254.
+
+    aquakin calls an observation function as ``f(C, p)``: the concentration
+    vector at one time and the parameter vector. Everything else it needs
+    (where ozone and M sit in ``C``, and the specific absorbance ``eps``) is
+    bound here, so the returned function has no hidden inputs.
+    """
+    i_o3, i_m = model.species_index["O3"], model.species_index["M"]
+
+    def ozone_and_uv(C, p):
+        """Dissolved ozone (umol/L) and UV254 absorbance (1/cm) at one time."""
+        return jnp.stack([C[i_o3], eps * C[i_m]])
+
+    return ozone_and_uv
+
+
+# [end observation]
+
+
 def run_example():
     """Run every step, printing the results. Returns the objects the figures
     and the test need."""
@@ -59,11 +80,7 @@ def run_example():
     sigma_o3 = 1.0  # umol/L
     sigma_uv = 0.001  # 1/cm
     eps = 2.0e-4  # 1/cm per umol/L
-    i_o3, i_m = model.species_index["O3"], model.species_index["M"]
-
-    def ozone_and_uv(C, p):
-        """What is measured at one time: ozone and UV254."""
-        return jnp.stack([C[i_o3], eps * C[i_m]])
+    ozone_and_uv = make_ozone_and_uv(model, eps)
 
     def ozone_run(t_obs, C0=C0):
         """A run that measures ozone only, at the times t_obs (s)."""
@@ -150,7 +167,7 @@ def run_example():
     print(f"converged: {opt.success}")
     print(f"D-criterion: {opt.initial_value:.2f} -> {opt.value:.2f}")
     print(f"sampling times (s): {np.round(np.asarray(designed.t_obs), 1).tolist()}")
-    print(f"ozone dose: {float(designed.C0[i_o3]):.0f} umol/L")
+    print(f"ozone dose: {float(designed.C0[model.species_index['O3']]):.0f} umol/L")
 
     rel_start = aquakin.identifiability(
         aquakin.fisher_information(reactor, start, free_params, params=true_params, free_ic=free_ic)
@@ -254,7 +271,7 @@ def run_example():
     )
     second = robust.experiments[0]
     print(f"sampling times (s): {np.round(np.asarray(second.t_obs), 1).tolist()}")
-    print(f"ozone dose: {float(second.C0[i_o3]):.0f} umol/L")
+    print(f"ozone dose: {float(second.C0[model.species_index['O3']]):.0f} umol/L")
     # [end step5]
     print("== End ==")
 
