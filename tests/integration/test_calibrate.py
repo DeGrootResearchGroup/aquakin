@@ -953,7 +953,16 @@ def test_free_ic_laplace_is_over_rates_only(simple_model):
 _DECAY_K, _DECAY_A0, _DECAY_SIGMA = 0.25, 1.5, 0.01
 
 
-def _decay_fit(simple_model, laplace, *, free_ic=True, n_datasets=1, ic_prior_log_std=None):
+def _decay_fit(
+    simple_model,
+    laplace,
+    *,
+    free_ic=True,
+    n_datasets=1,
+    ic_prior_log_std=None,
+    priors=None,
+    a0_start=1.0,
+):
     """Fit k and A0 of A -> B to noise-free observations of A alone."""
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     true_params = simple_model.default_parameters().at[0].set(_DECAY_K)
@@ -962,7 +971,7 @@ def _decay_fit(simple_model, laplace, *, free_ic=True, n_datasets=1, ic_prior_lo
         jnp.asarray([_DECAY_A0, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t_obs
     )
     obs = sol.C_named("A")
-    C0 = jnp.asarray([1.0, 0.0])
+    C0 = jnp.asarray([a0_start, 0.0])
     return aquakin.calibrate(
         reactor,
         [C0] * n_datasets if n_datasets > 1 else C0,
@@ -973,6 +982,7 @@ def _decay_fit(simple_model, laplace, *, free_ic=True, n_datasets=1, ic_prior_lo
         observed_species=["A"],
         loss="nll",
         sigma=jnp.asarray(_DECAY_SIGMA),
+        priors=priors,
         laplace=laplace,
         free_ic=(
             FreeICConfig(["A"], bounds=(0.1, 10.0), prior_log_std=ic_prior_log_std)
@@ -1036,6 +1046,23 @@ def test_joint_ic_fd_hessian_matches_gauss_newton(simple_model):
     """At a zero-residual fit the FD loss Hessian equals J^T J."""
     fd, t_obs = _decay_fit(simple_model, LaplaceConfig(method="fd", include_ic=True))
     np.testing.assert_allclose(np.asarray(fd.joint_hessian), _decay_fisher(t_obs), rtol=1e-3)
+
+
+def test_joint_ic_fd_hessian_includes_rate_and_ic_priors(simple_model):
+    """The FD joint Hessian adds the rate-prior and pool-prior precisions. Both
+    priors are centred on the truth so the MAP stays zero-residual and FD equals
+    Gauss-Newton exactly."""
+    s_k, s_ic = 0.1, 0.5
+    fd, t_obs = _decay_fit(
+        simple_model,
+        LaplaceConfig(method="fd", include_ic=True),
+        ic_prior_log_std=s_ic,
+        priors={"A_to_B.k": (_DECAY_K, s_k)},
+        a0_start=_DECAY_A0,
+    )
+    # The rate prior is Gaussian in physical k, so in log k it adds (k / s_k)^2.
+    expected = _decay_fisher(t_obs) + np.diag([(_DECAY_K / s_k) ** 2, 1.0 / s_ic**2])
+    np.testing.assert_allclose(np.asarray(fd.joint_hessian), expected, rtol=1e-3)
 
 
 def test_joint_ic_includes_ic_prior(simple_model):
