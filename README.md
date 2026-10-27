@@ -58,8 +58,9 @@ Future models include UV/TiO₂ and chlorine decay.
   [Advanced: differentiation & sensitivity](#advanced-differentiation--sensitivity)).
 - Calibration and identifiability: MAP fits with a Laplace posterior
   (`calibrate`), profile likelihood (`profile_likelihood`), and the Fisher
-  information of a planned experiment design (`fisher_information`) for
-  checking what an experiment can estimate before running it.
+  information of a planned experiment design (`fisher_information`) with an
+  identifiability report (`identifiability`) for checking what an experiment
+  can estimate before running it.
 
 ## Installation
 

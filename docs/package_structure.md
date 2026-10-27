@@ -94,6 +94,10 @@ aquakin/
 │   │   ├── events.py                # Event + solve_with_events: located events
 │   │   │                            #   (time / state root-crossing) + AD-safe state
 │   │   │                            #   resets / mode switches, via a segmented solve
+│   │   ├── fisher.py                # fisher_information(), Experiment: Fisher
+│   │   │                            #   information of a design at assumed parameters
+│   │   ├── identifiability.py       # identifiability(): eigen-directions, correlation,
+│   │   │                            #   collinearity index, Cramer-Rao std from a Fisher matrix
 │   │   └── profile.py               # profile_likelihood(): parameter / initial-condition
 │   │                                #   profile-likelihood identifiability analysis
 │   │
@@ -233,7 +237,8 @@ aquakin/
 │   │   ├── test_adm1_bsm2_steadystate.py # ADM1 vs published BSM2 AD steady state
 │   │   └── test_takacs_vs_bsm1_reference.py # Takács settler vs published BSM1 settler derivative
 │   └── fixtures/
-│       └── simple_model.yaml      # minimal 2-species toy model for unit tests
+│       ├── simple_model.yaml      # minimal 2-species toy model for unit tests
+│       └── catalysed_decay.yaml   # A -> B on a constant catalyst: only k*[X]0 identifiable
 │
 ├── examples/
 │   ├── batch_bromate.py

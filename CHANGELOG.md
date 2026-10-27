@@ -38,6 +38,13 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   physical-space form, and the Cramér-Rao standard deviations. It uses the same
   coordinates as `calibrate`, so at a fit's optimum it equals the Gauss-Newton
   Laplace Hessian.
+- `aquakin.identifiability` turns a Fisher information matrix (from
+  `fisher_information`, a `CalibrationResult`, or a bare matrix) into an
+  identifiability report: eigen-directions with named loadings, flagging the
+  ones the Laplace posterior drops; the correlation matrix; Cramér-Rao
+  standard deviations and relative standard errors (infinite for a quantity
+  that is not identifiable at all); and the collinearity index of any
+  parameter subset, with a search for the largest identifiable subset.
 
 ## [0.1.0] - 2026-07-08
 
