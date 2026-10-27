@@ -201,10 +201,47 @@ means a combination the data hardly constrain; a zero eigenvalue means a
 combination the design cannot determine at all. The entries of an eigenvector,
 its **loadings**, name the unknowns involved.
 
-One pattern is worth recognising. In log coordinates, an eigenvector with equal
-and opposite loadings on two unknowns, (+0.71, −0.71), is the direction
-log a − log b. If its eigenvalue is near zero, the data determine only the *product* a·b, because raising a and lowering b by the same factor leaves every
-prediction unchanged.
+### Reading a direction: products and ratios
+
+One pattern comes up often enough to be worth working through. Suppose two
+unknowns a and b, analysed as log a and log b, and an eigenvector with loadings
+(+0.71, −0.71) on them. The value 0.71 is 1/√2, so the vector has unit length
+and gives equal weight to the two unknowns.
+
+Moving the parameters a distance t along this eigenvector changes them by
+
+$$
+\log a \to \log a + \frac{t}{\sqrt 2}, \qquad
+\log b \to \log b - \frac{t}{\sqrt 2} .
+$$
+
+So a is multiplied by a factor $e^{t/\sqrt 2}$ and b is divided by the same
+factor.
+The ratio a/b changes, but the product a·b stays exactly the same, because
+log(a·b) = log a + log b does not change.
+
+A zero eigenvalue means the predictions do not change along that direction,
+so every point on it fits the measurements equally well. If moving along
+the direction changes a/b but not a·b, the data cannot tell different values
+of a/b apart. They determine only the product a·b. The perpendicular
+direction, with loadings (+0.71, +0.71), is the one that changes the product,
+and its eigenvalue measures how well the product is known.
+
+The same reasoning covers the other cases:
+
+- Loadings of the **same sign**, (+0.71, +0.71), on a zero-eigenvalue direction
+  leave a/b unchanged, so only the ratio a/b is determined.
+- **Unequal** loadings point to a power-law combination. A zero-eigenvalue
+  direction with loadings $(v_a, v_b)$ leaves $a^{v_b}\, b^{-v_a}$ unchanged,
+  so that combination is what the data determine.
+- A direction loaded on **one unknown** alone, (1.00, 0), means that unknown
+  has no effect on the predictions at all.
+
+Step 1 below shows the first and last cases. There k₂ and [M]₀ load equally
+and oppositely, so only k₂[M]₀ is determined, and k₁ has a direction of its
+own.
+
+### Flagging what cannot be determined
 
 `aquakin.identifiability` reports the eigen-directions, flags those with an
 eigenvalue below a fraction `eig_keep` (default 1 %) of the largest, and gives
