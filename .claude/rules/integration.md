@@ -98,7 +98,11 @@ the MAP — keep the two in step if either changes. `identifiability`
 ([`integrate/identifiability.py`](aquakin/integrate/identifiability.py)) is pure
 NumPy on the matrix (no solves); it reads `joint_hessian` / `joint_names` from a
 `CalibrationResult` when present, else the rate `hessian_unconstrained`, and its
-default `eig_keep` matches `LaplaceConfig` so flagged = dropped directions.
+default `eig_keep` matches `LaplaceConfig` so flagged = dropped directions. A quantity counts as
+"involved" in an exactly-null direction (rel. eigenvalue ≤ 1e-10) only if its
+loading there exceeds `null_loading_tol` (default 1e-2): a null eigenvector is
+only accurate to the sensitivities' round-off, and a 1e-6 cut marked
+well-determined pools infinite.
 `fisher.py`'s `_FisherSetup` holds the static part (validation, reactors,
 observed columns, noise, priors) and exposes `jacobian` / `information` as pure
 JAX functions of `(p, tobs_list, C0_list)`; pools are linearised at each
