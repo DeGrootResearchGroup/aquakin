@@ -45,6 +45,16 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   standard deviations and relative standard errors (infinite for a quantity
   that is not identifiable at all); and the collinearity index of any
   parameter subset, with a search for the largest identifiable subset.
+- Optimal experiment design on the Fisher information:
+  - `aquakin.design_criterion` scores a design by D (log det), A (trace of the
+    inverse), E (smallest eigenvalue) or modified-E (condition number),
+    optionally for a subset of parameters with the rest as nuisance.
+  - `aquakin.rank_experiments` ranks candidate experiments by the
+    information they add to a base design.
+  - `aquakin.optimize_experiment` optimises sampling times and initial
+    concentrations by gradient, with time bounds and a minimum sample spacing.
+  - Each can average the criterion over parameter draws (`param_draws`) for a
+    design that is robust to uncertainty in the assumed parameters.
 
 ## [0.1.0] - 2026-07-08
 

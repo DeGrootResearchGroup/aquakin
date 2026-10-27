@@ -214,92 +214,17 @@ def fisher_information(
     ...                                  free_ic=aquakin.FreeICConfig(["IOD"]))
     >>> fim.std()       # Cramer-Rao lower bounds, physical units
     """
-    model = reactor.model
-    exps = [experiments] if isinstance(experiments, Experiment) else list(experiments)
-    if not exps:
-        raise ValueError("experiments must contain at least one Experiment.")
-    for name in free_params:
-        if name not in model.param_index:
-            raise KeyError(f"Unknown parameter '{name}'. Available: {model.parameters}")
-    rate_transforms = _resolve_transforms(model, free_params, transforms)
-    p0 = jnp.asarray(params) if params is not None else model.default_parameters()
-    free_idx = jnp.asarray([model.param_index[n] for n in free_params], dtype=int)
-    rate_phys = [float(p0[model.param_index[n]]) for n in free_params]
-    rate_theta = [to_unconstrained(v, t) for v, t in zip(rate_phys, rate_transforms)]
-
-    ic_species = list(free_ic.species) if free_ic is not None else []
-    for s in ic_species:
-        if s not in model.species_index:
-            raise KeyError(f"Unknown free_ic species '{s}'. Available: {model.species}")
-    m = len(ic_species)
-    ic_idx = jnp.asarray([model.species_index[s] for s in ic_species], dtype=int)
-
-    # Resolve each experiment once: its forward-capable reactor, native-unit
-    # sampling times, observed columns and per-observation noise.
-    resolved = []
-    ic_phys = []
-    for e, ex in enumerate(exps):
-        rctr = ex.reactor if ex.reactor is not None else reactor
-        if list(rctr.model.parameters) != list(model.parameters):
-            raise ValueError(f"experiment {e}: its reactor uses a different model.")
-        C0 = jnp.asarray(ex.C0, dtype=float)
-        if C0.shape != (model.n_species,):
-            raise ValueError(
-                f"experiment {e}: C0 has shape {C0.shape}, expected ({model.n_species},)."
-            )
-        tobs = jnp.asarray(ex.t_obs, dtype=float)
-        if tobs.ndim != 1 or tobs.shape[0] < 1:
-            raise ValueError(f"experiment {e}: t_obs must be a non-empty 1-D array.")
-        if float(tobs[0]) < 0.0 or not bool(jnp.all(jnp.diff(tobs) > 0)):
-            raise ValueError(f"experiment {e}: t_obs must be non-negative and strictly ascending.")
-        tobs = tobs * native_time_factor(model.time_unit, ex.time_unit)
-        obs = ex.observed_species if ex.observed_species is not None else list(model.species)
-        for s in obs:
-            if s not in model.species_index:
-                raise KeyError(f"experiment {e}: unknown observed species '{s}'.")
-        obs_idx = jnp.asarray([model.species_index[s] for s in obs], dtype=int)
-        sigma = jnp.broadcast_to(jnp.asarray(ex.sigma, dtype=float), (tobs.shape[0], len(obs)))
-        if m:
-            pools = np.asarray(C0)[np.asarray(ic_idx)]
-            if np.any(pools <= 0.0):
-                raise ValueError(
-                    f"experiment {e}: estimated initial pools {ic_species} must be "
-                    f"positive in C0; got {pools.tolist()}."
-                )
-            ic_phys.extend(pools.tolist())
-        resolved.append((with_adjoint(rctr, forward_adjoint()), C0, tobs, obs_idx, sigma))
-
-    # Prior rows (only their Jacobian matters, so the means drop out).
-    active_priors: dict[str, tuple[float, float]] = {}
-    if use_priors:
-        declared = getattr(model, "parameter_priors", {})
-        active_priors = {n: declared[n] for n in free_params if n in declared}
-        for n, ms in (priors or {}).items():
-            if n in free_params:
-                active_priors[n] = (float(ms[0]), float(ms[1]))
-    prior_mask = jnp.asarray([1.0 if n in active_priors else 0.0 for n in free_params])
-    prior_std = jnp.asarray([active_priors.get(n, (0.0, 1.0))[1] for n in free_params])
-    ic_prior = free_ic.prior_log_std if (use_priors and free_ic is not None and m) else None
-
-    d = len(free_params)
-
-    def _residuals(theta):
-        physical = jnp.stack([from_unconstrained(theta[i], rate_transforms[i]) for i in range(d)])
-        p = p0.at[free_idx].set(physical)
-        parts = []
-        for e, (rctr, C0, tobs, obs_idx, sigma) in enumerate(resolved):
-            if m:
-                C0 = C0.at[ic_idx].set(jnp.exp(theta[d + e * m : d + (e + 1) * m]))
-            C = rctr.solve(C0, params=p, t_span=(0.0, float(tobs[-1])), t_eval=tobs).C
-            parts.append((C[:, obs_idx] / sigma).reshape(-1))
-        if active_priors:
-            parts.append(prior_mask * physical / prior_std)
-        if ic_prior:
-            parts.append(theta[d:] / ic_prior)
-        return jnp.concatenate(parts)
-
-    theta = jnp.asarray(rate_theta + [float(np.log(v)) for v in ic_phys])
-    J = jax.jacfwd(_residuals)(theta)
+    setup = _FisherSetup(
+        reactor,
+        experiments,
+        free_params,
+        params=params,
+        transforms=transforms,
+        free_ic=free_ic,
+        priors=priors,
+        use_priors=use_priors,
+    )
+    J = setup.jacobian(setup.p0, setup.tobs, setup.C0)
     check_finite_gradient(
         J,
         what="the Fisher-information sensitivity",
@@ -307,13 +232,165 @@ def fisher_information(
     )
     J = np.asarray(J)
     F = J.T @ J
-
-    ic_names = [f"ic[{e}].{s}" for e in range(len(exps)) for s in ic_species]
-    names = list(free_params) + ic_names
     return FisherInformation(
         matrix=0.5 * (F + F.T),
-        names=names,
-        transforms=rate_transforms + ["positive_log"] * len(ic_names),
-        values=dict(zip(names, rate_phys + ic_phys)),
+        names=setup.names,
+        transforms=setup.transforms,
+        values=setup.values(setup.p0, setup.C0),
         jacobian=J,
     )
+
+
+class _FisherSetup:
+    """The resolved, static part of a Fisher-information evaluation.
+
+    Validates the arguments once and keeps everything that does not change
+    when the design does (reactors, observed columns, noise, transforms,
+    priors). :meth:`jacobian` is then a pure JAX function of the full parameter
+    vector, the per-experiment sampling times and the per-experiment initial
+    states, so it can be differentiated with respect to the design or mapped
+    over parameter draws. ``t_end`` (a value, or a list with one entry or
+    ``None`` per experiment) overrides each experiment's integration end
+    (default: its last sampling time), so sampling times can move under
+    tracing while the solve interval stays fixed.
+    """
+
+    def __init__(
+        self,
+        reactor,
+        experiments,
+        free_params,
+        *,
+        params=None,
+        transforms=None,
+        free_ic=None,
+        priors=None,
+        use_priors=False,
+        t_end=None,
+    ):
+        model = reactor.model
+        exps = [experiments] if isinstance(experiments, Experiment) else list(experiments)
+        if not exps:
+            raise ValueError("experiments must contain at least one Experiment.")
+        for name in free_params:
+            if name not in model.param_index:
+                raise KeyError(f"Unknown parameter '{name}'. Available: {model.parameters}")
+        self.model = model
+        self.free_params = list(free_params)
+        self.rate_transforms = _resolve_transforms(model, free_params, transforms)
+        self.p0 = jnp.asarray(params) if params is not None else model.default_parameters()
+        self.free_idx = jnp.asarray([model.param_index[n] for n in free_params], dtype=int)
+
+        self.ic_species = list(free_ic.species) if free_ic is not None else []
+        for s in self.ic_species:
+            if s not in model.species_index:
+                raise KeyError(f"Unknown free_ic species '{s}'. Available: {model.species}")
+        self.ic_idx = jnp.asarray([model.species_index[s] for s in self.ic_species], dtype=int)
+        if not self.free_params and not self.ic_species:
+            raise ValueError("Nothing to estimate: give free_params and/or free_ic.")
+
+        # Resolve each experiment once: its forward-capable reactor, native-unit
+        # sampling times, observed columns and per-observation noise.
+        self.reactors, self.obs_idx, self.sigma, self.tobs, self.C0, self.t_end = (
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        for e, ex in enumerate(exps):
+            rctr = ex.reactor if ex.reactor is not None else reactor
+            if list(rctr.model.parameters) != list(model.parameters):
+                raise ValueError(f"experiment {e}: its reactor uses a different model.")
+            C0 = jnp.asarray(ex.C0, dtype=float)
+            if C0.shape != (model.n_species,):
+                raise ValueError(
+                    f"experiment {e}: C0 has shape {C0.shape}, expected ({model.n_species},)."
+                )
+            tobs = jnp.asarray(ex.t_obs, dtype=float)
+            if tobs.ndim != 1 or tobs.shape[0] < 1:
+                raise ValueError(f"experiment {e}: t_obs must be a non-empty 1-D array.")
+            if float(tobs[0]) < 0.0 or not bool(jnp.all(jnp.diff(tobs) > 0)):
+                raise ValueError(
+                    f"experiment {e}: t_obs must be non-negative and strictly ascending."
+                )
+            tobs = tobs * native_time_factor(model.time_unit, ex.time_unit)
+            obs = ex.observed_species if ex.observed_species is not None else list(model.species)
+            for s in obs:
+                if s not in model.species_index:
+                    raise KeyError(f"experiment {e}: unknown observed species '{s}'.")
+            if self.ic_species:
+                pools = np.asarray(C0)[np.asarray(self.ic_idx)]
+                if np.any(pools <= 0.0):
+                    raise ValueError(
+                        f"experiment {e}: estimated initial pools {self.ic_species} must be "
+                        f"positive in C0; got {pools.tolist()}."
+                    )
+            self.reactors.append(with_adjoint(rctr, forward_adjoint()))
+            self.obs_idx.append(jnp.asarray([model.species_index[s] for s in obs], dtype=int))
+            self.sigma.append(
+                jnp.broadcast_to(jnp.asarray(ex.sigma, dtype=float), (tobs.shape[0], len(obs)))
+            )
+            self.tobs.append(tobs)
+            self.C0.append(C0)
+            end = t_end[e] if isinstance(t_end, (list, tuple)) else t_end
+            self.t_end.append(float(tobs[-1]) if end is None else float(end))
+
+        # Prior rows (only their Jacobian matters, so the means drop out).
+        active: dict[str, tuple[float, float]] = {}
+        if use_priors:
+            declared = getattr(model, "parameter_priors", {})
+            active = {n: declared[n] for n in free_params if n in declared}
+            for n, ms in (priors or {}).items():
+                if n in free_params:
+                    active[n] = (float(ms[0]), float(ms[1]))
+        self.has_rate_prior = bool(active)
+        self.prior_mask = jnp.asarray([1.0 if n in active else 0.0 for n in free_params])
+        self.prior_std = jnp.asarray([active.get(n, (0.0, 1.0))[1] for n in free_params])
+        m = len(self.ic_species)
+        self.ic_prior = (
+            free_ic.prior_log_std if (use_priors and free_ic is not None and m) else None
+        )
+
+        ic_names = [f"ic[{e}].{s}" for e in range(len(exps)) for s in self.ic_species]
+        self.names = self.free_params + ic_names
+        self.transforms = self.rate_transforms + ["positive_log"] * len(ic_names)
+
+    def values(self, p, C0s) -> dict[str, float]:
+        """Physical values of the estimated quantities at ``(p, C0s)``."""
+        rate = [float(p[self.model.param_index[n]]) for n in self.free_params]
+        pools = [float(C0[i]) for C0 in C0s for i in np.asarray(self.ic_idx)]
+        return dict(zip(self.names, rate + pools))
+
+    def jacobian(self, p, tobs_list, C0_list):
+        """Noise-scaled sensitivity ``Sigma^{-1/2} S`` at parameters ``p`` for
+        sampling times ``tobs_list`` and initial states ``C0_list`` (one per
+        experiment), in unconstrained coordinates. Pure JAX."""
+        d, m = len(self.free_params), len(self.ic_species)
+        trs = self.rate_transforms
+
+        def _residuals(theta):
+            physical = jnp.stack([from_unconstrained(theta[i], trs[i]) for i in range(d)])
+            pp = p.at[self.free_idx].set(physical)
+            parts = []
+            for e, (rctr, C0, tobs) in enumerate(zip(self.reactors, C0_list, tobs_list)):
+                if m:
+                    C0 = C0.at[self.ic_idx].set(jnp.exp(theta[d + e * m : d + (e + 1) * m]))
+                C = rctr.solve(C0, params=pp, t_span=(0.0, self.t_end[e]), t_eval=tobs).C
+                parts.append((C[:, self.obs_idx[e]] / self.sigma[e]).reshape(-1))
+            if self.has_rate_prior:
+                parts.append(self.prior_mask * physical / self.prior_std)
+            if self.ic_prior:
+                parts.append(theta[d:] / self.ic_prior)
+            return jnp.concatenate(parts)
+
+        rate_theta = [jnp.atleast_1d(to_unconstrained(p[i], t)) for i, t in zip(self.free_idx, trs)]
+        pool_theta = [jnp.log(C0[self.ic_idx]) for C0 in C0_list] if m else []
+        theta = jnp.concatenate(rate_theta + pool_theta)
+        return jax.jacfwd(_residuals)(theta)
+
+    def information(self, p, tobs_list, C0_list):
+        """Fisher information ``J^T J`` at ``(p, tobs_list, C0_list)``. Pure JAX."""
+        J = self.jacobian(p, tobs_list, C0_list)
+        return J.T @ J

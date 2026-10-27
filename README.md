@@ -60,7 +60,8 @@ Future models include UV/TiO₂ and chlorine decay.
   (`calibrate`), profile likelihood (`profile_likelihood`), and the Fisher
   information of a planned experiment design (`fisher_information`) with an
   identifiability report (`identifiability`) for checking what an experiment
-  can estimate before running it.
+  can estimate before running it, and optimal experiment design
+  (`rank_experiments`, `optimize_experiment`).
 
 ## Installation
 

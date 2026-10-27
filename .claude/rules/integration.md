@@ -98,7 +98,14 @@ the MAP — keep the two in step if either changes. `identifiability`
 ([`integrate/identifiability.py`](aquakin/integrate/identifiability.py)) is pure
 NumPy on the matrix (no solves); it reads `joint_hessian` / `joint_names` from a
 `CalibrationResult` when present, else the rate `hessian_unconstrained`, and its
-default `eig_keep` matches `LaplaceConfig` so flagged = dropped directions. All are unit-tested directly in
+default `eig_keep` matches `LaplaceConfig` so flagged = dropped directions.
+`fisher.py`'s `_FisherSetup` holds the static part (validation, reactors,
+observed columns, noise, priors) and exposes `jacobian` / `information` as pure
+JAX functions of `(p, tobs_list, C0_list)`; pools are linearised at each
+`C0`. `experiment_design.py` builds on it: `optimize_experiment` passes a fixed
+`t_end` per optimised experiment so sampling times can be traced, jits
+`(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector, and runs
+SLSQP with linear spacing constraints; `param_draws` are `vmap`ped. All are unit-tested directly in
 `tests/unit/test_calibrate_internals.py` (no fit/solve). **The forward-solve is a
 seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
 — it turns `(params, C0)` into an observed-species trajectory (via the reactor's

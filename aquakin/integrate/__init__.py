@@ -47,6 +47,13 @@ from aquakin.integrate.particle import (
 )
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
+from aquakin.integrate.experiment_design import (
+    CandidateScore,
+    ExperimentDesignResult,
+    design_criterion,
+    optimize_experiment,
+    rank_experiments,
+)
 from aquakin.integrate.fisher import Experiment, FisherInformation, fisher_information
 from aquakin.integrate.identifiability import (
     EigenDirection,
@@ -68,6 +75,7 @@ __all__ = [
     "BiofilmSolution",
     "CFDReactor",
     "CalibrationResult",
+    "CandidateScore",
     "Constraint",
     "DGSMResult",
     "DifferentiationConfig",
@@ -75,6 +83,7 @@ __all__ = [
     "Event",
     "EventedResult",
     "Experiment",
+    "ExperimentDesignResult",
     "FisherInformation",
     "FitResult",
     "ForwardSensitivityResult",
@@ -98,6 +107,7 @@ __all__ = [
     "calibrate",
     "check_finite_gradient",
     "compare_scenarios",
+    "design_criterion",
     "dgsm",
     "esdirk_adjoint_solve",
     "fisher_information",
@@ -110,7 +120,9 @@ __all__ = [
     "kpi_comparison",
     "monte_carlo",
     "optimize_design",
+    "optimize_experiment",
     "profile_likelihood",
+    "rank_experiments",
     "sensitivity",
     "solve_with_events",
 ]
