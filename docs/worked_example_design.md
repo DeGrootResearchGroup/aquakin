@@ -102,8 +102,10 @@ exactly by automatic differentiation through the ODE solve.
 The unknowns are analysed as θ = log p, the logarithms of the physical values
 p. A sensitivity to log p is the change in y for a given *relative* change in
 p, which lets a rate constant of 10⁻⁶ and a pool of 1000 be compared directly.
-A standard deviation in log p is, for small values, a relative standard
-deviation: 0.05 in log k₂ means about 5 % in k₂.
+A standard deviation in log p is approximately a relative standard deviation
+of p, as long as it is small (below about 0.1–0.2): 0.05 in log k₂ means about
+±5 % in k₂. For larger values the uncertainty in p becomes lopsided: 0.5 in
+log p means +65 % / −39 %.
 
 ### The Fisher information
 
