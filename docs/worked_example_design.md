@@ -117,10 +117,10 @@ $$
 F = S^\top \Sigma^{-1} S .
 $$
 
-It weights each sensitivity by how precise the measurement is, and it adds:
-the information of two measurements, or two experiments, is the sum of their
-information. Its inverse sets a lower bound on how well any fit to such data
-can determine the unknowns (the Cramér-Rao bound):
+It weights each sensitivity by how precise its measurement is: a precise
+measurement (small σᵢ) contributes more. The inverse of F sets a lower bound on
+how well any fit to such data can determine the unknowns (the Cramér-Rao
+bound):
 
 $$
 \operatorname{Cov}(\hat\theta) \succeq F^{-1}.
@@ -130,6 +130,40 @@ So the square roots of the diagonal of F⁻¹ are the smallest standard
 deviations the design allows, before any data are collected. The Fisher
 information only needs the model, assumed parameter values and the design;
 `aquakin.fisher_information` computes it.
+
+### Combining measurements and experiments
+
+Because the measurement errors are independent (Σ is diagonal), F can be
+written as a sum with one term per measurement. With sᵢ the i-th row of S,
+the sensitivities of measurement *i* to all the unknowns,
+
+$$
+F = \sum_i \frac{1}{\sigma_i^2}\, s_i s_i^\top .
+$$
+
+Each measurement adds its own contribution. A second experiment is just more
+measurements, so the information of a combined design is the sum of the
+information of its experiments:
+
+$$
+F_{\text{1 and 2}} = F_{1} + F_{2} .
+$$
+
+This is what makes design possible: the value of a new experiment can be
+judged by what it adds to the information already in hand. Two consequences
+are used below:
+
+- Repeating a measurement n times multiplies its contribution by n, so the
+  standard deviations it controls shrink by √n.
+- Each term adds information only along the direction of its sᵢ. Measurements
+  whose sensitivities all point the same way add up along that one direction
+  and leave the others unchanged, however many there are.
+
+The sum assumes the errors of different measurements are independent; errors
+that are correlated, for example through a shared calibration, add less. When
+each experiment has its own initial pools, those pools are separate unknowns
+that appear only in their own experiment's terms, while the shared rate
+constants collect information from every experiment.
 
 ### Eigen-directions and identifiability
 
@@ -215,8 +249,10 @@ The table shows the relative standard deviation of each unknown
 :end-before: "== Step 3 =="
 ```
 
-- **More late samples do not help.** Every ozone sample after D is gone sees
-  only the product k₂[M]₀, however many there are.
+- **More late samples do not help.** Every ozone sample after D is gone is
+  sensitive only to the product k₂[M]₀, so their sensitivities all point the
+  same way and add nothing along the undetermined direction, however many
+  there are.
 - **Early samples** (2–20 s) catch D being consumed, which determines k₁ and
   [D]₀. k₂ and [M]₀ become identifiable only in principle, through the small
   consumption of M, and with huge uncertainties.
