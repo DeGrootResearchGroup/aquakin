@@ -19,6 +19,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ## [Unreleased]
 
+## [0.1.1] - unreleased
+
 ### Added
 
 - `LaplaceConfig(include_ic=True)` gives a joint Laplace posterior over the rate
@@ -41,7 +43,7 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 - `aquakin.identifiability` turns a Fisher information matrix (from
   `fisher_information`, a `CalibrationResult`, or a bare matrix) into an
   identifiability report: eigen-directions with named loadings, flagging the
-  ones the Laplace posterior drops; the correlation matrix; Cramér-Rao
+  weakly identified ones; the correlation matrix; Cramér-Rao
   standard deviations and relative standard errors (infinite for a quantity
   that is not identifiable at all); and the collinearity index of any
   parameter subset, with a search for the largest identifiable subset.
@@ -66,8 +68,26 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `param_draws` for robust experiment design. `predictive_band` uses the same
   draws.
 
+### Deprecated
+
+- `LaplaceConfig(eig_keep=...)` is deprecated and ignored (see Fixed). Passing
+  it emits a `DeprecationWarning`. To flag weakly identified directions, use
+  `aquakin.identifiability(..., eig_keep=...)`.
+
 ### Fixed
 
+- The Laplace standard deviations from `aquakin.calibrate` and
+  `Plant.calibrate` (`params_named_std`, `posterior_cov`, `ic_named_std`) no
+  longer understate the uncertainty of weakly identified parameters. The
+  covariance used to drop every Hessian direction with an eigenvalue below
+  `1e-2` of the largest and give it zero variance, so a parameter on such a
+  direction could be reported as known to a fraction of a percent when its true
+  spread was around ten percent. The covariance is now the full inverse of the
+  Hessian. A parameter on an exactly null direction (one the data do not
+  constrain at all) is reported with an infinite standard deviation and a
+  `RuntimeWarning`, as `aquakin.identifiability` reports it. Posterior draws
+  and `predictive_band` use the same covariance, so they are wider for weakly
+  identified fits.
 - `aquakin.calibrate` and `Plant.calibrate` no longer abort when the forward
   solve fails part-way through a fit (for example a stiff linear solve going
   non-finite). With `OptimizerConfig(n_starts>1)`, a start whose solve fails is
@@ -161,5 +181,6 @@ functions integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
   sensitivity & calibration), the YAML model-authoring reference, a catalog of
   every shipped model, and an API reference generated from the public surface.
 
-[Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/DeGrootResearchGroup/aquakin/releases/tag/v0.1.0
