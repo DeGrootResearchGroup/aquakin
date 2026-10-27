@@ -5,7 +5,7 @@ Before fitting a kinetic model to data, it is worth asking two questions:
 1. **Can the data determine the parameters at all?** A model can fit a data set
    well while some of its parameters are almost arbitrary, because changing
    one can be compensated by changing another.
-2. **Which experiment would determine them best?** Sampling times, doses and
+2. **Which experiment would determine them best?** Sampling times, doses, and
    the choice of what to measure all change how much a run can tell us.
 
 This page answers both for a small ozone-demand model, step by step, from a
@@ -68,7 +68,7 @@ created, here by a small factory that takes the model and ε:
 :end-before: "# [end observation]"
 ```
 
-The setup code loads the model and defines the true composition, the unknowns
+The setup code loads the model and defines the true composition, the unknowns,
 and the measurements:
 
 ```{literalinclude} ../examples/ozone_demand_design.py
@@ -140,13 +140,13 @@ Cov − F⁻¹ is positive semidefinite. In practice:
   1/√λₖ standard deviations of the eigen-directions below come from.
 
 The bound is a floor. No fitting method can beat it; only a more informative
-experiment can, through better measurements, better timing or less noise. A
+experiment can, through better measurements, better timing, or less noise. A
 good fit, such as maximum likelihood (the `nll` loss used in step 4), comes
 close to it when the noise is small and the model is nearly linear over the
 range of uncertainty. With sparse or very noisy data, the real uncertainties
 can be larger than the bound.
 
-Because F needs only the model, assumed parameter values and the design, the
+Because F needs only the model, assumed parameter values, and the design, the
 bound can be computed before any data are collected;
 `aquakin.fisher_information` computes F. The calculation can also be turned
 around to ask how precise the measurements must be. The noise enters F as
@@ -246,7 +246,7 @@ loadings say which:
   (about 3 % over 30 minutes), so ozone decays at the apparent first-order rate
   k₂[M]₀. Doubling k₂ and halving [M]₀ gives the same ozone curve.
 
-Fitting this data set would return *some* values of k₁, k₂ and [M]₀, and the
+Fitting this data set would return *some* values of k₁, k₂, and [M]₀, and the
 fit could look good, but those values would mean nothing. The Fisher
 information shows this before any experiment is run.
 
