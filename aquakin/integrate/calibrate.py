@@ -1039,10 +1039,20 @@ def _check_start_gradient(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0):
     """Evaluate the gradient / Jacobian once at the start point and fail loudly
     (with the remedy) if it is non-finite -- a stiff reverse-mode adjoint
     overflowing -- rather than letting the optimizer wander on NaNs."""
-    if cfg.optimizer == "gauss_newton":
-        probe = bundle.jac_j(jnp.asarray(theta0))
-    else:
-        _v0, probe = bundle.value_and_grad(jnp.asarray(theta0))
+    try:
+        if cfg.optimizer == "gauss_newton":
+            probe = bundle.jac_j(jnp.asarray(theta0))
+        else:
+            _v0, probe = bundle.value_and_grad(jnp.asarray(theta0))
+    except Exception as exc:
+        if not _is_solve_failure(exc):
+            raise
+        raise RuntimeError(
+            "Calibration failed: the forward solve failed at the starting guess, "
+            "before the optimiser took a step. Check the initial parameters and "
+            "initial state, or start from a better guess. The solve error is the "
+            "direct cause above."
+        ) from exc
     # Forward-mode only enters through the Gauss-Newton Jacobian; L-BFGS-B always
     # uses a reverse scalar gradient, so its cap-free fix is gradient='stable_adjoint'.
     on_finite_path = cfg.gradient == "stable_adjoint" or (
@@ -1071,9 +1081,38 @@ def _check_start_gradient(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0):
     check_finite_gradient(probe, what="calibration gradient", remedy=remedy)
 
 
+_SOLVE_FAILURE_HINT = (
+    "This usually means the optimiser stepped into a stiff or infeasible region "
+    "of parameter space. Bound the rate constants with "
+    "OptimizerConfig(param_halfwidth=...) (e.g. np.log(100) for two decades "
+    "either side of the start), start from a better initial guess, or tighten "
+    "the free_ic bounds."
+)
+
+
+def _is_solve_failure(exc: BaseException) -> bool:
+    """Whether ``exc`` is a runtime failure of the forward solve (as opposed to
+    a programming error).
+
+    A solve that goes bad inside compiled code (a non-finite linear solve, a
+    step-count overrun) is reported through ``equinox.error_if``, which raises
+    from a host callback. It reaches Python either as equinox's own runtime
+    error or, under a plain ``jax.jit``, wrapped in a JAX runtime error (or a
+    ``ValueError`` on older JAX) whose message carries the callback failure.
+    """
+    if type(exc).__name__ in ("EquinoxRuntimeError", "_EquinoxRuntimeError"):
+        return True
+    return isinstance(exc, (RuntimeError, ValueError)) and "Callback error" in str(exc)
+
+
 def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bounds) -> _OptOut:
     """Run the optimiser from the start point, then from ``n_starts - 1``
-    deterministic jittered restarts, keeping the lowest finite loss."""
+    deterministic jittered restarts, keeping the lowest finite loss.
+
+    A start whose forward solve fails part-way (see :func:`_is_solve_failure`)
+    is skipped with a ``RuntimeWarning``; if every start fails, a
+    ``RuntimeError`` with remedies is raised, chained to the first failure.
+    """
     bounds, lb, ub, ls_bounds, _has = opt_bounds
 
     def _np_loss_and_grad(x_np):
@@ -1110,7 +1149,18 @@ def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bound
         n_iter_ls = int(r.njev) if r.njev is not None else int(r.nfev)
         return _OptOut(np.asarray(r.x), float(r.cost), bool(r.success), str(r.message), n_iter_ls)
 
-    result = _run_from(theta0)
+    failures = []  # (start index, exception) of starts whose solve failed
+
+    def _try_from(s, x_start):
+        try:
+            return _run_from(x_start)
+        except Exception as exc:
+            if not _is_solve_failure(exc):
+                raise
+            failures.append((s, exc))
+            return None
+
+    result = _try_from(0, theta0)
     if cfg.n_starts > 1:
         theta0_np = np.asarray(theta0)
         # Default: a single Gaussian stream of scale ``jitter`` seeded once.
@@ -1126,9 +1176,27 @@ def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bound
             perturbed = theta0_np + noise
             if bounds is not None:
                 perturbed = np.clip(perturbed, lb, ub)
-            cand = _run_from(perturbed)
-            if np.isfinite(cand.fun) and cand.fun < result.fun:
+            cand = _try_from(s, perturbed)
+            if cand is None:
+                continue
+            if result is None or (np.isfinite(cand.fun) and cand.fun < result.fun):
                 result = cand
+    if result is None:
+        what = "the optimiser run" if cfg.n_starts == 1 else f"all {cfg.n_starts} optimiser starts"
+        raise RuntimeError(
+            f"Calibration failed: the forward solve failed in {what}, at a parameter "
+            f"point the optimiser reached. {_SOLVE_FAILURE_HINT} The first solve "
+            "error is the direct cause above."
+        ) from failures[0][1]
+    if failures:
+        idx = ", ".join(str(s) for s, _exc in failures)
+        warnings.warn(
+            f"calibrate: the forward solve failed in {len(failures)} of {cfg.n_starts} "
+            f"optimiser starts (start index {idx}; 0 is the unperturbed start); "
+            f"they were skipped and the best remaining start was kept. {_SOLVE_FAILURE_HINT}",
+            RuntimeWarning,
+            stacklevel=3,
+        )
     return result
 
 

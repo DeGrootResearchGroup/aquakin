@@ -46,6 +46,17 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   that is not identifiable at all); and the collinearity index of any
   parameter subset, with a search for the largest identifiable subset.
 
+### Fixed
+
+- `aquakin.calibrate` and `Plant.calibrate` no longer abort when the forward
+  solve fails part-way through a fit (for example a stiff linear solve going
+  non-finite). With `OptimizerConfig(n_starts>1)`, a start whose solve fails is
+  skipped with a `RuntimeWarning` and the best remaining start is kept. If every
+  start fails, or the solve already fails at the starting guess, you now get a
+  `RuntimeError` that says what happened and how to fix it (bound the rates with
+  `OptimizerConfig(param_halfwidth=...)`, use a better starting guess, or tighten
+  the `free_ic` bounds). This replaces the raw XLA callback traceback.
+
 ## [0.1.0] - 2026-07-08
 
 The first public release of `aquakin`: a Python library for modelling reactive

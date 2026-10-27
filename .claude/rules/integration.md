@@ -113,7 +113,18 @@ that contract. A `Plant` has a different solve contract (flat assembled state,
 / `_laplace_posterior` unchanged — the payoff of the seam. Behaviour equivalence
 of the decomposition to the old monolith is pinned by the full-fit suite
 (`tests/integration/test_calibrate.py`, `test_profile.py`); the plant path by
-`test_plant_calibrate.py`.
+`test_plant_calibrate.py`. **Solve failures
+mid-fit:** `_run_multistart` treats a start whose forward solve raises at runtime
+as a failed start. `_is_solve_failure` recognises these: equinox's runtime error,
+or a JAX runtime / `ValueError` carrying the host-callback failure that
+`equinox.error_if` raises from compiled code. Such a start is skipped with one
+`RuntimeWarning` and the best remaining start is kept. If no start survives, a
+`RuntimeError` with the `param_halfwidth` / initial-guess / `free_ic`-bounds
+remedies is raised, chained to the first failure. Any other exception still
+propagates unchanged. `_check_start_gradient` turns a solve failure at the
+starting guess into a similar error. Both reach `Plant.calibrate` through the
+shared functions. Tested in `test_calibrate.py` (a fake forward
+model that raises through `equinox.error_if` past a rate threshold).
 
 ### Differentiating stiff models (`dtmax`)
 
