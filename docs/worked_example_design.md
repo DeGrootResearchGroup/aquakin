@@ -118,18 +118,47 @@ F = S^\top \Sigma^{-1} S .
 $$
 
 It weights each sensitivity by how precise its measurement is: a precise
-measurement (small σᵢ) contributes more. The inverse of F sets a lower bound on
-how well any fit to such data can determine the unknowns (the Cramér-Rao
-bound):
+measurement (small σᵢ) contributes more.
+
+### The Cramér-Rao bound
+
+The Fisher information turns the precision of the measurements into the best
+precision the parameters can have. For a given design (what is measured, when,
+and with what noise σᵢ), no unbiased estimate of the unknowns from that data
+can have a smaller covariance than the inverse of F:
 
 $$
 \operatorname{Cov}(\hat\theta) \succeq F^{-1}.
 $$
 
-So the square roots of the diagonal of F⁻¹ are the smallest standard
-deviations the design allows, before any data are collected. The Fisher
-information only needs the model, assumed parameter values and the design;
-`aquakin.fisher_information` computes it.
+This is the **Cramér-Rao bound**. The symbol ⪰ means that the difference
+Cov − F⁻¹ is positive semidefinite. In practice:
+
+- The standard deviation of unknown *j* is at least $\sqrt{(F^{-1})_{jj}}$,
+  the square root of the matching diagonal entry of F⁻¹.
+- The same holds for any combination of the unknowns. This is where the
+  1/√λₖ standard deviations of the eigen-directions below come from.
+
+The bound is a floor. No fitting method can beat it; only a more informative
+experiment can, through better measurements, better timing or less noise. A
+good fit, such as maximum likelihood (the `nll` loss used in step 4), comes
+close to it when the noise is small and the model is nearly linear over the
+range of uncertainty. With sparse or very noisy data, the real uncertainties
+can be larger than the bound.
+
+Because F needs only the model, assumed parameter values and the design, the
+bound can be computed before any data are collected;
+`aquakin.fisher_information` computes F. The calculation can also be turned
+around to ask how precise the measurements must be. The noise enters F as
+1/σᵢ², so if every σᵢ is multiplied by a factor c, every bound on a parameter's
+standard deviation is multiplied by c too. If a design gives k₂ to ±5 % but
+±2 % is needed, the measurements must be about 2.5 times more precise, or the
+design about 2.5² ≈ 6 times more informative.
+
+The bound holds only if the model and the noise levels are right, and it is
+computed at the assumed parameter values. A wrong model, an underestimated σ,
+or parameter values far from the truth all make the real uncertainty larger
+than the bound suggests.
 
 ### Combining measurements and experiments
 
