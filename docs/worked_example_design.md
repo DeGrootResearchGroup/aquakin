@@ -78,7 +78,7 @@ and the measurements:
 ```
 
 Rate constants declared with `transform: positive_log` in the model file, and
-the initial pools, are analysed on a log scale; why that matters is explained
+the initial pools, are analyzed on a log scale; why that matters is explained
 below.
 
 ## Background: how much can an experiment tell us?
@@ -98,7 +98,7 @@ A large entry means that measurement *i* changes a lot when unknown *j*
 changes, so the measurement carries information about it. aquakin computes S
 exactly by automatic differentiation through the ODE solve.
 
-The unknowns are analysed as θ = log p, the logarithms of the physical values
+The unknowns are analyzed as θ = log p, the logarithms of the physical values
 p. A sensitivity to log p is the change in y for a given *relative* change in
 p, which lets a rate constant of 10⁻⁶ and a pool of 1000 be compared directly.
 A standard deviation in log p is approximately a relative standard deviation
@@ -204,7 +204,7 @@ its **loadings**, name the unknowns involved.
 ### Reading a direction: products and ratios
 
 One pattern comes up often enough to be worth working through. Suppose two
-unknowns a and b, analysed as log a and log b, and an eigenvector with loadings
+unknowns a and b, analyzed as log a and log b, and an eigenvector with loadings
 (+0.71, −0.71) on them. The value 0.71 is 1/√2, so the vector has unit length
 and gives equal weight to the two unknowns.
 
@@ -319,13 +319,13 @@ The general lesson is that more data of the same kind rarely fixes a
 structural problem. A different measurement, or samples in a different time
 window, does.
 
-## Step 3: optimise the sampling times and dose
+## Step 3: optimize the sampling times and dose
 
 ### Design criteria
 
 Once every unknown is identifiable, the design can be improved further by
 moving the samples and changing the dose. To compare designs we need a single
-number that summarises F. The common choices are:
+number that summarizes F. The common choices are:
 
 | Criterion | Value | Better | Meaning |
 |---|---|---|---|
@@ -337,9 +337,9 @@ number that summarises F. The common choices are:
 D-optimality is the usual default, because it shrinks the uncertainty of all unknowns
 together, and it does not depend on the units of the parameters.
 
-`aquakin.optimize_experiment` maximises the criterion over the design. It
+`aquakin.optimize_experiment` maximizes the criterion over the design. It
 differentiates the criterion with respect to the sampling times and the
-initial concentrations, and moves them with a gradient-based optimiser, within
+initial concentrations, and moves them with a gradient-based optimizer, within
 bounds and keeping consecutive samples at least `min_spacing` apart. The
 number of samples stays fixed. Here the run measures ozone and UV254 at eight
 times, starting from evenly spaced samples between 5 and 900 s:
@@ -427,7 +427,7 @@ Three settings in the call matter:
 
 - **`param_halfwidth=np.log(100.0)`** keeps each rate constant within a
   factor of 100 of its starting guess (the bound is on the log scale). Without
-  it, an early optimiser step can jump by many orders of magnitude, into a
+  it, an early optimizer step can jump by many orders of magnitude, into a
   region where the stiff solve fails. Bounds a factor of 100 either side of a
   reasonable guess rarely constrain the answer but make the fit much more
   reliable.
@@ -481,7 +481,7 @@ local approximation is not.
 
 ## Step 5: design the next run
 
-The design in step 3 was optimised for the true parameter values, which are
+The design in step 3 was optimized for the true parameter values, which are
 never known in practice. A design depends on the values it is computed for. The best sampling times for a fast reaction differ from those for a slow one. A
 practical sequence is to run a first experiment, fit it, and design the next
 run for the values the data now support.
@@ -489,7 +489,7 @@ run for the values the data now support.
 Since those values are still uncertain, the second design should work well
 across their plausible range, not just at the best estimate. Passing
 `param_draws`, a set of parameter vectors drawn from the calibration's
-posterior, makes `optimize_experiment` maximise the criterion averaged over
+posterior, makes `optimize_experiment` maximize the criterion averaged over
 the draws. This is called robust, or pseudo-Bayesian, design.
 
 ```{literalinclude} ../examples/ozone_demand_design.py

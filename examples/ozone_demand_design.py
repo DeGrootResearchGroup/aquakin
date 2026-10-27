@@ -11,8 +11,8 @@ prints:
 1. Diagnose a simple design (five ozone samples) with the Fisher information
    and an identifiability report.
 2. Compare ways of improving the run.
-3. Optimise the sampling times and the ozone dose.
-4. Calibrate on synthetic data from the optimised design and check the result
+3. Optimize the sampling times and the ozone dose.
+4. Calibrate on synthetic data from the optimized design and check the result
    against the true values, including a profile likelihood.
 5. Redesign for a second run, averaging over the calibration's posterior.
 
@@ -215,7 +215,7 @@ def run_example():
         free_ic=free_ic,
         laplace=aquakin.LaplaceConfig(method="gauss_newton", include_ic=True, eig_keep=1e-10),
         # Keep each rate constant within a factor of 100 of its starting
-        # guess, so the optimiser cannot step into regions where the solve fails.
+        # guess, so the optimizer cannot step into regions where the solve fails.
         optimizer=aquakin.OptimizerConfig(
             method="gauss_newton", n_starts=4, param_halfwidth=np.log(100.0)
         ),
