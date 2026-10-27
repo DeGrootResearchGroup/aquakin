@@ -56,8 +56,7 @@ The script starts with its imports:
 :end-before: "# [end imports]"
 ```
 
-UV254 is not a single species, so it is passed to aquakin as an *observation
-function*: a function that maps the concentration vector at one time, and the
+UV254 is not a single species, so it is passed to aquakin as an *observation function*, a function that maps the concentration vector at one time, and the
 parameter vector, to the measured values. aquakin always calls it with those
 two arguments, `f(C, p)`. Anything else it needs is bound in when it is
 created, here by a small factory that takes the model and ε:
@@ -117,8 +116,7 @@ $$
 F = S^\top \Sigma^{-1} S .
 $$
 
-It weights each sensitivity by how precise its measurement is: a precise
-measurement (small σᵢ) contributes more.
+It weights each sensitivity by how precise its measurement is. A precise measurement (small σᵢ) contributes more.
 
 ### The Cramér-Rao bound
 
@@ -171,7 +169,7 @@ $$
 F_{\text{1 and 2}} = F_{1} + F_{2} .
 $$
 
-This is what makes design possible: the value of a new experiment can be
+This is what makes design possible. The value of a new experiment can be
 judged by what it adds to the information already in hand. Two consequences
 are used below:
 
@@ -197,23 +195,21 @@ $$
 F = \sum_k \lambda_k\, v_k v_k^\top .
 $$
 
-Each eigenvector is a direction in parameter space: a combination of the
-unknowns. The data determine the combination vₖᵀθ with a standard deviation of
+Each eigenvector is a direction in parameter space, a combination of the unknowns. The data determine the combination vₖᵀθ with a standard deviation of
 1/√λₖ. A large eigenvalue means a well-determined combination; a small one
 means a combination the data hardly constrain; a zero eigenvalue means a
 combination the design cannot determine at all. The entries of an eigenvector,
 its **loadings**, name the unknowns involved.
 
-A useful pattern to recognise: in log coordinates, an eigenvector with equal
+One pattern is worth recognising. In log coordinates, an eigenvector with equal
 and opposite loadings on two unknowns, (+0.71, −0.71), is the direction
-log a − log b. If its eigenvalue is near zero, the data determine only the
-*product* a·b: raising a and lowering b by the same factor leaves every
+log a − log b. If its eigenvalue is near zero, the data determine only the *product* a·b, because raising a and lowering b by the same factor leaves every
 prediction unchanged.
 
 `aquakin.identifiability` reports the eigen-directions, flags those with an
 eigenvalue below a fraction `eig_keep` (default 1 %) of the largest, and gives
 the Cramér-Rao standard deviations. A parameter involved in a zero-eigenvalue
-direction has an infinite standard deviation: it is **not identifiable** from
+direction has an infinite standard deviation. It is **not identifiable** from
 that design.
 
 ## Step 1: diagnose a simple design
@@ -301,7 +297,7 @@ number that summarises F. The common choices are:
 | E | min λₖ | larger | The information along the worst-determined direction. |
 | modified E | max λₖ / min λₖ | smaller | How unevenly the directions are determined. |
 
-D-optimality is the usual default: it shrinks the uncertainty of all unknowns
+D-optimality is the usual default, because it shrinks the uncertainty of all unknowns
 together, and it does not depend on the units of the parameters.
 
 `aquakin.optimize_experiment` maximises the criterion over the design. It
@@ -336,8 +332,7 @@ The designed run roughly halves the uncertainty of k₁ and [D]₀ and reduces
 that of k₂ by a factor of five. Two features of the result are typical of
 D-optimal designs:
 
-- **Samples cluster.** Rather than spreading out, the samples sit where the
-  measurements are most sensitive to the unknowns: the early cluster resolves
+- **Samples cluster.** Rather than spreading out, the samples sit where the measurements are most sensitive to the unknowns. The early cluster resolves
   the fast demand, and the cluster near 520 s is where ozone is most sensitive
   to k₂. Only the minimum spacing keeps them apart. Because the design trusts
   the model completely, in practice it is wise to add a few samples between the
@@ -362,7 +357,7 @@ unknown.
 ### Fitting and the Laplace approximation
 
 With Gaussian noise of known standard deviation, the natural fitting objective
-is the negative log-likelihood (`loss="nll"`): half the sum of the squared,
+is the negative log-likelihood (`loss="nll"`), which is half the sum of the squared,
 noise-scaled residuals, plus a constant. Its minimum is the best fit.
 
 Near the minimum the objective is close to a quadratic bowl, and its curvature
@@ -450,8 +445,7 @@ local approximation is not.
 ## Step 5: design the next run
 
 The design in step 3 was optimised for the true parameter values, which are
-never known in practice. A design depends on the values it is computed for: the
-best sampling times for a fast reaction differ from those for a slow one. A
+never known in practice. A design depends on the values it is computed for. The best sampling times for a fast reaction differ from those for a slow one. A
 practical sequence is to run a first experiment, fit it, and design the next
 run for the values the data now support.
 
@@ -484,8 +478,7 @@ designed around the wrong values.
 - Compute the Fisher information of a planned design before running it.
   `identifiability` names the parameter combinations it cannot determine;
   equal and opposite loadings in log coordinates point to a product.
-- More samples of the same quantity rarely fix a structural problem: here no
-  number of ozone samples separates k₂ from [M]₀. A different measurement, or
+- More samples of the same quantity rarely fix a structural problem. Here no number of ozone samples separates k₂ from [M]₀. A different measurement, or
   samples in a different time window, does.
 - Use `rank_experiments` to compare discrete options and `optimize_experiment`
   for sampling times and doses. D-optimal designs cluster samples, so add a few
