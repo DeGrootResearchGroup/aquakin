@@ -201,3 +201,31 @@ def test_input_validation(reactor, params):
         aquakin.fisher_information(reactor, _design(t_obs=jnp.asarray([2.0, 1.0])), ["A_to_B.k"])
     with pytest.raises(ValueError, match="at least one"):
         aquakin.fisher_information(reactor, [], ["A_to_B.k"])
+    with pytest.raises(KeyError, match="Unknown free_ic species"):
+        aquakin.fisher_information(reactor, _design(), ["A_to_B.k"], free_ic=FreeICConfig(["Z"]))
+    with pytest.raises(ValueError, match="C0 has shape"):
+        aquakin.fisher_information(
+            reactor, Experiment(jnp.asarray([1.0]), T_OBS, sigma=SIGMA), ["A_to_B.k"]
+        )
+    with pytest.raises(ValueError, match="non-empty 1-D"):
+        aquakin.fisher_information(reactor, _design(t_obs=jnp.zeros((0,))), ["A_to_B.k"])
+    other = aquakin.BatchReactor(
+        aquakin.load_model("uv_h2o2"), aquakin.load_model("uv_h2o2").default_conditions()
+    )
+    with pytest.raises(ValueError, match="different model"):
+        aquakin.fisher_information(reactor, _design(reactor=other), ["A_to_B.k"])
+
+
+def test_priors_on_fixed_parameters_are_ignored(reactor, params):
+    """A prior on a parameter that is not estimated contributes nothing."""
+    kw = dict(params=params, transforms={"A_to_B.k": "positive_log"})
+    data = aquakin.fisher_information(reactor, _design(), ["A_to_B.k"], **kw)
+    with_prior = aquakin.fisher_information(
+        reactor,
+        _design(),
+        ["A_to_B.k"],
+        priors={"not_free.k": (1.0, 0.1)},
+        use_priors=True,
+        **kw,
+    )
+    np.testing.assert_allclose(with_prior.matrix, data.matrix, rtol=1e-12)
