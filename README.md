@@ -56,6 +56,10 @@ Future models include UV/TiO₂ and chlorine decay.
 - Full automatic differentiation everywhere, including cap-free forward
   sensitivity and reverse-mode gradients through stiff plant solves (see
   [Advanced: differentiation & sensitivity](#advanced-differentiation--sensitivity)).
+- Calibration and identifiability: MAP fits with a Laplace posterior
+  (`calibrate`), profile likelihood (`profile_likelihood`), and the Fisher
+  information of a planned experiment design (`fisher_information`) for
+  checking what an experiment can estimate before running it.
 
 ## Installation
 

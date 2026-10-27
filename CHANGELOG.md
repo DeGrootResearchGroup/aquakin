@@ -29,6 +29,15 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   and the pool standard deviations as `ic_named_std`. The rate standard
   deviations then account for rate-pool correlation instead of treating the
   pools as known. The default (`include_ic=False`) is unchanged.
+- `aquakin.fisher_information` computes the Fisher information of a planned
+  set of batch experiments (`aquakin.Experiment`: initial state, sampling
+  times, observed species, noise level, optionally its own reactor) at assumed
+  parameter values, for the rate parameters and optionally the initial pools.
+  No data are needed, so designs can be compared before they are run. The
+  returned `FisherInformation` gives the matrix with named rows, its
+  physical-space form, and the Cramér-Rao standard deviations. It uses the same
+  coordinates as `calibrate`, so at a fit's optimum it equals the Gauss-Newton
+  Laplace Hessian.
 
 ## [0.1.0] - 2026-07-08
 
