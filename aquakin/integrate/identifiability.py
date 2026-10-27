@@ -53,8 +53,10 @@ class EigenDirection:
         ``relative_eigenvalue > eig_keep`` -- the same rule by which the Laplace
         posterior in :func:`aquakin.calibrate` keeps or drops a direction.
     loadings : dict[str, float]
-        Eigenvector components by name, largest magnitude first, with the sign
-        fixed so the largest is positive.
+        Eigenvector components by name, largest magnitude first. The sign is
+        fixed so the first name (in ``names`` order) with a non-negligible
+        loading is positive, which stays deterministic when loadings tie in
+        magnitude (as they do for an exact product such as ``k [X]0``).
     """
 
     eigenvalue: float
@@ -282,7 +284,9 @@ def identifiability(
 
     directions = []
     for k in range(len(w)):
-        v = V[:, k] * np.sign(V[np.argmax(np.abs(V[:, k])), k])
+        a = np.abs(V[:, k])
+        lead = int(np.argmax(a > _LOADING_TOL * a.max()))
+        v = V[:, k] * np.sign(V[lead, k])
         order = np.argsort(-np.abs(v))
         directions.append(
             EigenDirection(

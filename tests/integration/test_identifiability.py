@@ -57,6 +57,11 @@ def test_structural_product_is_flagged(catalysed_fim):
     assert null.loadings["ic[0].A"] == pytest.approx(0.0, abs=1e-6)
     assert list(null.loadings)[2] == "ic[0].A"  # ordered by magnitude
 
+    # The sign convention is deterministic under the exact +/- tie: the first
+    # name with a non-negligible loading is positive, even if V's sign flips.
+    flipped = aquakin.identifiability(catalysed_fim.matrix[::-1, ::-1], names=rep.names[::-1])
+    assert flipped.unidentifiable[0].loadings["ic[0].X"] == pytest.approx(s, abs=1e-6)
+
     i, j = rep.names.index("A_to_B.k"), rep.names.index("ic[0].X")
     assert rep.correlation[i, j] == pytest.approx(-1.0, abs=1e-6)
     np.testing.assert_allclose(np.diag(rep.correlation), 1.0)
