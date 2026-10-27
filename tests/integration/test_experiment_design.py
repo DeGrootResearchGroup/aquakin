@@ -7,6 +7,9 @@ only ``k`` estimated, one sample at time ``t`` carries information
 ``t = 1 / mean(k)``.
 """
 
+import gc
+
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -15,6 +18,16 @@ import aquakin
 from aquakin import Experiment, FreeICConfig
 
 K, A0, SIGMA = 0.25, 1.5, 0.01
+
+
+@pytest.fixture(autouse=True)
+def _release_compiled_programs():
+    """Each design evaluation compiles a fresh forward-over-forward solve, and
+    JAX keeps every compiled program for the life of the process. Free them
+    after each test so a CI worker's memory does not grow test by test."""
+    yield
+    jax.clear_caches()
+    gc.collect()
 
 
 @pytest.fixture
