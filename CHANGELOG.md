@@ -61,6 +61,10 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   that is a weighted sum of organic pools, in place of `observed_species`.
   `observation_fn(C, params)` returns a scalar or a vector per time point, and
   `sigma` may give one value per output.
+- `CalibrationResult.posterior_draws(model, n_draw, seed=)` returns full
+  parameter vectors drawn from the Laplace posterior, for example as
+  `param_draws` for robust experiment design. `predictive_band` uses the same
+  draws.
 
 ## [0.1.0] - 2026-07-08
 

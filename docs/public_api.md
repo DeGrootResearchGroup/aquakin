@@ -83,7 +83,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | To… | Use |
 |---|---|
 | Point-estimate fit | `fit` → `FitResult` |
-| MAP fit + Laplace posterior | `calibrate` → `CalibrationResult` (→ `predictive_band` → `PredictiveBand`) |
+| MAP fit + Laplace posterior | `calibrate` → `CalibrationResult` (→ `predictive_band` → `PredictiveBand`; `posterior_draws` for parameter samples) |
 | Profile-likelihood identifiability | `profile_likelihood` → `ProfileResult` |
 | Fisher information of a design (before running it) | `fisher_information` with `Experiment` → `FisherInformation` |
 | Identifiability report from a Fisher matrix | `identifiability` → `IdentifiabilityResult` (`EigenDirection`) |

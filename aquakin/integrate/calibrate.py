@@ -499,6 +499,77 @@ class CalibrationResult:
     joint_names: list[str] | None = None
     ic_named_std: list | None = None
 
+    def posterior_draws(self, model, n_draw: int = 200, *, seed: int = 0) -> np.ndarray:
+        """Full parameter vectors drawn from the Laplace posterior.
+
+        Draws the free rate parameters from ``N(MAP, posterior_cov)`` in
+        unconstrained space, maps each draw to physical values, and sets it into
+        the fitted parameter vector ``params``; fixed parameters keep their
+        values. The eigen-truncated, non-identifiable directions of
+        ``posterior_cov`` carry no variance. Initial pools are not drawn. The
+        rows can be passed as ``param_draws`` to the experiment-design
+        functions, and :meth:`predictive_band` propagates the same draws.
+
+        Parameters
+        ----------
+        model : CompiledModel
+            The calibrated model (``reactor.model``), to place the free
+            parameters in the full vector.
+        n_draw : int
+            Number of draws.
+        seed : int
+            Seed for the draws (reproducible).
+
+        Returns
+        -------
+        np.ndarray
+            Shape ``(n_draw, n_params)``.
+
+        Raises
+        ------
+        ValueError
+            If there is no Laplace posterior, or it has no positive-variance
+            direction.
+        """
+        if self.posterior_cov is None:
+            raise ValueError(
+                "posterior_draws requires a Laplace posterior; call calibrate(..., laplace=True)."
+            )
+        names = self.parameter_names
+        free_idx = np.asarray([model.param_index[n] for n in names])
+        theta_map = np.array(
+            [
+                float(_to_unconstrained(jnp.asarray(self.params_named[n]), t))
+                for n, t in zip(names, self.transforms)
+            ]
+        )
+
+        # Draw from N(theta_map, posterior_cov). posterior_cov is the
+        # eigen-truncated covariance that also backs params_named_std, so the
+        # draws and the marginal std devs regularise identically. Eigen-decompose
+        # to sample; the truncated (non-identifiable) directions carry zero
+        # variance and so add no spread (a tiny relative floor drops them and any
+        # round-off negatives).
+        cov = np.asarray(self.posterior_cov, dtype=float)
+        cov = 0.5 * (cov + cov.T)
+        s, Q = np.linalg.eigh(cov)
+        pos = s > 1e-12 * max(float(s.max()), 0.0)
+        if not np.any(pos):
+            raise ValueError(
+                "Posterior covariance has no positive-variance directions; the "
+                "Laplace posterior is degenerate."
+            )
+        std_k = np.sqrt(s[pos])
+        rng = np.random.default_rng(seed)
+        thetas = (
+            theta_map[None, :]
+            + (rng.standard_normal((n_draw, int(pos.sum()))) * std_k[None, :]) @ Q[:, pos].T
+        )
+        out = np.tile(np.asarray(self.params, dtype=float), (n_draw, 1))
+        for i, t in enumerate(self.transforms):
+            out[:, free_idx[i]] = np.asarray(_from_unconstrained(jnp.asarray(thetas[:, i]), t))
+        return out
+
     def predictive_band(
         self,
         reactor: Reactor,
@@ -513,9 +584,8 @@ class CalibrationResult:
     ) -> PredictiveBand:
         """Posterior-predictive band by propagating Laplace draws through a solve.
 
-        Samples the calibrated parameters from the Laplace posterior
-        ``N(MAP, posterior_cov)``, inverse-transforms each draw to physical
-        space, sets it into the fitted parameter vector, integrates ``reactor``
+        Samples the calibrated parameters from the Laplace posterior with
+        :meth:`posterior_draws`, integrates ``reactor``
         from ``C0`` over ``t_eval``, and returns the pointwise percentile
         envelope across draws. The draws are taken from ``self.posterior_cov``
         --- the same eigen-truncated covariance behind ``params_named_std`` ---
@@ -569,52 +639,14 @@ class CalibrationResult:
                 stacklevel=2,
             )
         model = reactor.model
-        names = self.parameter_names
-        free_idx = jnp.asarray([model.param_index[n] for n in names])
-        theta_map = np.array(
-            [
-                float(_to_unconstrained(jnp.asarray(self.params_named[n]), t))
-                for n, t in zip(names, self.transforms)
-            ]
-        )
-
-        # Draw from N(theta_map, posterior_cov). posterior_cov is the
-        # eigen-truncated covariance that also backs params_named_std, so the
-        # band and the marginal std devs regularise identically. Eigen-decompose
-        # to sample; the truncated (non-identifiable) directions carry zero
-        # variance and so add no spread (a tiny relative floor drops them and any
-        # round-off negatives).
-        cov = np.asarray(self.posterior_cov, dtype=float)
-        cov = 0.5 * (cov + cov.T)
-        s, Q = np.linalg.eigh(cov)
-        pos = s > 1e-12 * max(float(s.max()), 0.0)
-        if not np.any(pos):
-            raise ValueError(
-                "Posterior covariance has no positive-variance directions; the "
-                "Laplace posterior is degenerate."
-            )
-        std_k = np.sqrt(s[pos])
-        rng = np.random.default_rng(seed)
-        draws = (
-            theta_map[None, :]
-            + (rng.standard_normal((n_draw, int(pos.sum()))) * std_k[None, :]) @ Q[:, pos].T
-        )
-
-        base = self.params
+        draws = self.posterior_draws(model, n_draw, seed=seed)
         C0_j = jnp.asarray(C0)
         t_eval_j = jnp.asarray(t_eval)
         t_end = float(np.asarray(t_eval)[-1])
-        transforms = self.transforms
         curves = []
         first_error = None
-        for theta in draws:
-            physical = jnp.stack(
-                [
-                    _from_unconstrained(jnp.asarray(theta[i]), transforms[i])
-                    for i in range(len(names))
-                ]
-            )
-            p = base.at[free_idx].set(physical)
+        for p in draws:
+            p = jnp.asarray(p)
             try:
                 cc = np.asarray(
                     reactor.solve(C0_j, params=p, t_span=(0.0, t_end), t_eval=t_eval_j).C

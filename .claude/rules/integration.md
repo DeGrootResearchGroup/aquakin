@@ -110,7 +110,9 @@ SLSQP with linear spacing constraints; `param_draws` are `vmap`ped.
 `observe(ys, p, species_idx, fn)` helper in `calibrate.py`, used by both
 `_predict` and `_FisherSetup.jacobian`; it is a defaulted field on
 `_CalibrationProblem` (and part of `struct_key`), so plant calibration, which
-builds its own problem, is unaffected. All are unit-tested directly in
+builds its own problem, is unaffected. `CalibrationResult.posterior_draws(model, ...)`
+is the single Laplace sampler; `predictive_band` propagates its rows, so the two
+cannot drift. All are unit-tested directly in
 `tests/unit/test_calibrate_internals.py` (no fit/solve). **The forward-solve is a
 seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
 — it turns `(params, C0)` into an observed-species trajectory (via the reactor's
