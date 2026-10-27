@@ -229,6 +229,53 @@ regardless of how sensitive the output is to each parameter.
 `identifiable_subsets` lists every subset below a threshold (default 15),
 largest first.
 
+### Designing experiments
+
+Once you can compute the information of a design, you can choose the design
+that gives the most. A design is scored by a criterion of its Fisher
+information `F`:
+
+| Criterion | Value | Better |
+|---|---|---|
+| `"D"` | `log det F` | larger |
+| `"A"` | `trace(F⁻¹)`, the summed variance bound | smaller |
+| `"E"` | smallest eigenvalue of `F` | larger |
+| `"modified_E"` | condition number of `F` | smaller |
+
+D is the usual default: it shrinks the joint confidence region and does not
+depend on the units of the parameters. Pass `subset=[...]` to score only the
+information about some quantities, treating the others (for example nuisance
+initial pools) as unknown.
+
+```python
+aquakin.design_criterion(fim, "D", subset=["r1.k1"])
+
+# Choose the most useful next experiment from a list of candidates.
+ranked = aquakin.rank_experiments(reactor, candidates, free_params,
+                                  base=experiments_already_run)
+ranked[0].index, ranked[0].improvement
+
+# Or optimise the sampling times and initial concentrations directly.
+res = aquakin.optimize_experiment(
+    reactor,
+    aquakin.Experiment(C0, t_obs=jnp.linspace(1, 30, 6), sigma=0.02,
+                       observed_species=["O3"]),
+    free_params,
+    time_bounds=(0.5, 60.0), min_spacing=2.0,   # in the experiment's time unit
+    initial_bounds={"O3": (0.5, 5.0)},          # dose range to search
+)
+res.experiments[0].t_obs, res.experiments[0].C0
+```
+
+`optimize_experiment` keeps the number of samples fixed and moves them within
+the bounds by gradient, keeping consecutive samples at least `min_spacing`
+apart.
+
+The optimal design depends on the parameter values you assume, which are
+uncertain before the experiment. To make the design robust to that, pass
+`param_draws`, an array of parameter vectors drawn from a prior or a previous
+calibration's posterior, and the criterion is averaged over them.
+
 ### Identifiability: profile likelihood
 
 The Laplace covariance is a local, quadratic approximation. For an exact

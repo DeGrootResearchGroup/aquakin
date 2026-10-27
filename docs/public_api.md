@@ -87,6 +87,9 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Profile-likelihood identifiability | `profile_likelihood` → `ProfileResult` |
 | Fisher information of a design (before running it) | `fisher_information` with `Experiment` → `FisherInformation` |
 | Identifiability report from a Fisher matrix | `identifiability` → `IdentifiabilityResult` (`EigenDirection`) |
+| Score a design (D / A / E / modified-E) | `design_criterion` |
+| Choose between candidate experiments | `rank_experiments` → `CandidateScore` |
+| Optimise sampling times and initial concentrations | `optimize_experiment` → `ExperimentDesignResult` |
 | Configure the fit | `LaplaceConfig`, `OptimizerConfig`, `FreeICConfig` |
 
 ## Uncertainty propagation and design

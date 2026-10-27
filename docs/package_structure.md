@@ -94,6 +94,8 @@ aquakin/
 │   │   ├── events.py                # Event + solve_with_events: located events
 │   │   │                            #   (time / state root-crossing) + AD-safe state
 │   │   │                            #   resets / mode switches, via a segmented solve
+│   │   ├── experiment_design.py     # design_criterion(), rank_experiments(),
+│   │   │                            #   optimize_experiment(): D/A/E/modified-E design
 │   │   ├── fisher.py                # fisher_information(), Experiment: Fisher
 │   │   │                            #   information of a design at assumed parameters
 │   │   ├── identifiability.py       # identifiability(): eigen-directions, correlation,
