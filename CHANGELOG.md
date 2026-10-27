@@ -55,6 +55,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
     concentrations by gradient, with time bounds and a minimum sample spacing.
   - Each can average the criterion over parameter draws (`param_draws`) for a
     design that is robust to uncertainty in the assumed parameters.
+- `observation_fn` lets `calibrate`, `profile_likelihood` and `Experiment`
+  (for `fisher_information` and experiment design) use a measurement that is a
+  function of several states and the parameters, such as a UV absorbance
+  that is a weighted sum of organic pools, in place of `observed_species`.
+  `observation_fn(C, params)` returns a scalar or a vector per time point, and
+  `sigma` may give one value per output.
 
 ## [0.1.0] - 2026-07-08
 

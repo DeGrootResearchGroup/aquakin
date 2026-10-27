@@ -22,6 +22,7 @@ when there are many more observations than parameters.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import jax
@@ -40,7 +41,7 @@ from aquakin.integrate._transforms import (
     from_unconstrained,
     to_unconstrained,
 )
-from aquakin.integrate.calibrate import FreeICConfig
+from aquakin.integrate.calibrate import FreeICConfig, observation_size, observe
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,12 @@ class Experiment:
         species ``(n_observed,)``, or one per observation ``(n_t, n_observed)``.
     observed_species : list of str, optional
         Species that are measured. ``None`` (default) measures every species.
+    observation_fn : callable, optional
+        A measurement that is a function of several states, in place of
+        ``observed_species``: ``observation_fn(C, params) -> y`` maps one time
+        point's concentrations and the full parameter vector to a scalar or
+        ``(n_outputs,)`` vector, written with ``jax.numpy``. ``sigma`` then has
+        one entry per output.
     reactor : Reactor, optional
         A reactor to solve this experiment with in place of the one passed to
         :func:`fisher_information` -- for an experiment run at different
@@ -74,6 +81,7 @@ class Experiment:
     sigma: float | jnp.ndarray
     observed_species: list[str] | None = None
     reactor: Reactor | None = None
+    observation_fn: Callable | None = None
     time_unit: str | None = None
 
 
@@ -291,14 +299,8 @@ class _FisherSetup:
 
         # Resolve each experiment once: its forward-capable reactor, native-unit
         # sampling times, observed columns and per-observation noise.
-        self.reactors, self.obs_idx, self.sigma, self.tobs, self.C0, self.t_end = (
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-        )
+        self.reactors, self.obs_idx, self.obs_fn, self.sigma = [], [], [], []
+        self.tobs, self.C0, self.t_end = [], [], []
         for e, ex in enumerate(exps):
             rctr = ex.reactor if ex.reactor is not None else reactor
             if list(rctr.model.parameters) != list(model.parameters):
@@ -316,10 +318,21 @@ class _FisherSetup:
                     f"experiment {e}: t_obs must be non-negative and strictly ascending."
                 )
             tobs = tobs * native_time_factor(model.time_unit, ex.time_unit)
-            obs = ex.observed_species if ex.observed_species is not None else list(model.species)
-            for s in obs:
-                if s not in model.species_index:
-                    raise KeyError(f"experiment {e}: unknown observed species '{s}'.")
+            if ex.observation_fn is not None:
+                if ex.observed_species is not None:
+                    raise ValueError(
+                        f"experiment {e}: pass observed_species or observation_fn, not both."
+                    )
+                obs = []
+                n_out = observation_size(ex.observation_fn, C0, self.p0)
+            else:
+                obs = (
+                    ex.observed_species if ex.observed_species is not None else list(model.species)
+                )
+                for s in obs:
+                    if s not in model.species_index:
+                        raise KeyError(f"experiment {e}: unknown observed species '{s}'.")
+                n_out = len(obs)
             if self.ic_species:
                 pools = np.asarray(C0)[np.asarray(self.ic_idx)]
                 if np.any(pools <= 0.0):
@@ -329,8 +342,9 @@ class _FisherSetup:
                     )
             self.reactors.append(with_adjoint(rctr, forward_adjoint()))
             self.obs_idx.append(jnp.asarray([model.species_index[s] for s in obs], dtype=int))
+            self.obs_fn.append(ex.observation_fn)
             self.sigma.append(
-                jnp.broadcast_to(jnp.asarray(ex.sigma, dtype=float), (tobs.shape[0], len(obs)))
+                jnp.broadcast_to(jnp.asarray(ex.sigma, dtype=float), (tobs.shape[0], n_out))
             )
             self.tobs.append(tobs)
             self.C0.append(C0)
@@ -378,7 +392,8 @@ class _FisherSetup:
                 if m:
                     C0 = C0.at[self.ic_idx].set(jnp.exp(theta[d + e * m : d + (e + 1) * m]))
                 C = rctr.solve(C0, params=pp, t_span=(0.0, self.t_end[e]), t_eval=tobs).C
-                parts.append((C[:, self.obs_idx[e]] / self.sigma[e]).reshape(-1))
+                y = observe(C, pp, self.obs_idx[e], self.obs_fn[e])
+                parts.append((y / self.sigma[e]).reshape(-1))
             if self.has_rate_prior:
                 parts.append(self.prior_mask * physical / self.prior_std)
             if self.ic_prior:

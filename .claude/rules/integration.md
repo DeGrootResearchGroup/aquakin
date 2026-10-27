@@ -105,7 +105,12 @@ JAX functions of `(p, tobs_list, C0_list)`; pools are linearised at each
 `C0`. `experiment_design.py` builds on it: `optimize_experiment` passes a fixed
 `t_end` per optimised experiment so sampling times can be traced, jits
 `(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector, and runs
-SLSQP with linear spacing constraints; `param_draws` are `vmap`ped. All are unit-tested directly in
+SLSQP with linear spacing constraints; `param_draws` are `vmap`ped.
+`observation_fn` (calibrate / profile / `Experiment`) goes through the shared
+`observe(ys, p, species_idx, fn)` helper in `calibrate.py`, used by both
+`_predict` and `_FisherSetup.jacobian`; it is a defaulted field on
+`_CalibrationProblem` (and part of `struct_key`), so plant calibration, which
+builds its own problem, is unaffected. All are unit-tested directly in
 `tests/unit/test_calibrate_internals.py` (no fit/solve). **The forward-solve is a
 seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
 — it turns `(params, C0)` into an observed-species trajectory (via the reactor's

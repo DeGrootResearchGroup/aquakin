@@ -124,6 +124,22 @@ result.converged
 
 `observations` is shape `(n_t,)` for one species or `(n_t, n_observed)` for
 several; `t_obs` is in the model's native time unit unless you pass `time_unit=`.
+
+When a measurement is not a single species but a function of several (a UV
+absorbance from several organic pools, a probe-compound ratio), pass
+`observation_fn` instead of `observed_species`. It maps one time point's
+concentration vector and the parameter vector to the measured outputs, and must
+be written with `jax.numpy` so it can be differentiated:
+
+```python
+uv254 = lambda C, p: 0.02 * C[i_OMf] + 0.05 * C[i_OMs]
+result = aquakin.calibrate(reactor, C0, uv_data, t_obs, free_params,
+                           observation_fn=uv254, loss="nll", sigma=0.005)
+```
+
+The columns of `observations` follow the function's outputs, and `sigma` may
+give one value per output. `profile_likelihood` and `aquakin.Experiment` accept
+`observation_fn` the same way.
 Pass **lists** of `C0`/`observations`/`t_obs` for a joint multi-batch fit, and
 `free_ic=[...]` to fit unmeasured initial pools alongside the rate constants.
 

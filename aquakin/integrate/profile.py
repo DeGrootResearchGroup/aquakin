@@ -152,6 +152,7 @@ def profile_likelihood(
     transforms: dict[str, str] | None = None,
     initial_params: jnp.ndarray | None = None,
     observed_species: list[str] | None = None,
+    observation_fn=None,
     loss: str = "nll",
     sigma=None,
     priors: dict[str, tuple[float, float]] | None = None,
@@ -198,7 +199,7 @@ def profile_likelihood(
     anchor : float, optional
         Grid value to start the continuation sweep from. Defaults to the grid
         midpoint. Ignored when ``warm_start=False``.
-    initial_params, transforms, observed_species, loss, sigma, priors, use_priors, free_ic, optimizer
+    initial_params, transforms, observed_species, observation_fn, loss, sigma, priors, use_priors, free_ic, optimizer
         Forwarded to each inner :func:`aquakin.calibrate` call (``free_ic`` is a
         :class:`~aquakin.FreeICConfig`, ``optimizer`` an
         :class:`~aquakin.OptimizerConfig`; the profiled parameter/species is
@@ -269,6 +270,7 @@ def profile_likelihood(
     inner_kw = dict(
         transforms=transforms,
         observed_species=observed_species,
+        observation_fn=observation_fn,
         loss=loss,
         sigma=sigma,
         priors=priors,

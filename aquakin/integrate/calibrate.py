@@ -779,6 +779,9 @@ class _CalibrationProblem:
     ic_center_full: jnp.ndarray
     ic_prior_log_std: float | None
     ic_bounds: tuple
+    # Optional observation function (C, params) -> y; replaces the species
+    # columns ``obs_species_indices`` when set.
+    observation_fn: object = None
 
     def physical_from_theta(self, rate_thetas: jnp.ndarray) -> jnp.ndarray:
         """Free rate parameters in physical space from their unconstrained
@@ -813,6 +816,7 @@ class _CalibrationProblem:
             gradient,
             self.n_observed,
             tuple(int(ds[0].shape[0]) for ds in self.dataset_static),
+            self.observation_fn,
         )
 
 
@@ -831,8 +835,29 @@ def _predict(problem: _CalibrationProblem, fm: _ReactorForwardModel, p, ic_theta
                 jnp.exp(ic_thetas[k * problem.m_ic : (k + 1) * problem.m_ic])
             )
         ys = fm.solve_trajectory(p, C0_k, tspan_i, tobs_i)
-        preds.append(ys[:, problem.obs_species_indices])
+        preds.append(observe(ys, p, problem.obs_species_indices, problem.observation_fn))
     return preds
+
+
+def observe(ys, p, species_idx, observation_fn=None):
+    """Observed outputs of a ``(n_t, n_species)`` trajectory: the
+    ``species_idx`` columns, or ``observation_fn(C, p)`` applied at each time."""
+    if observation_fn is None:
+        return ys[:, species_idx]
+    return jax.vmap(lambda c: jnp.atleast_1d(observation_fn(c, p)))(ys)
+
+
+def observation_size(observation_fn, C0, p) -> int:
+    """Number of outputs of ``observation_fn``, checked to be a 1-D vector
+    (or a scalar) on the model's state and parameter vectors."""
+    if not callable(observation_fn):
+        raise TypeError("observation_fn must be a callable (C, params) -> y.")
+    y = jnp.asarray(observation_fn(jnp.asarray(C0, dtype=float), jnp.asarray(p)))
+    if y.ndim > 1:
+        raise ValueError(
+            f"observation_fn must return a scalar or 1-D vector per time point; got shape {y.shape}."
+        )
+    return int(y.size)
 
 
 @dataclass
@@ -1297,6 +1322,7 @@ def _resolve_problem(
     ic_bounds,
     ic_prior_log_std,
     param_halfwidth,
+    observation_fn=None,
 ) -> _CalibrationProblem:
     """Validate and coerce the ``calibrate`` arguments into a
     :class:`_CalibrationProblem`. Everything here is done once, up front; the
@@ -1359,12 +1385,20 @@ def _resolve_problem(
     else:
         sigma_list = [sigma] * n_datasets
 
-    if observed_species is None:
+    if observation_fn is not None:
+        if observed_species is not None:
+            raise ValueError("Pass observed_species or observation_fn, not both.")
+        obs_species_indices = jnp.arange(model.n_species)
+        n_observed = observation_size(observation_fn, C0_list[0], p0_full)
+        what = "outputs were returned by observation_fn"
+    elif observed_species is None:
         obs_species_indices = jnp.arange(model.n_species)
         n_observed = model.n_species
+        what = "species were specified"
     else:
         obs_species_indices = jnp.asarray([model.species_index[s] for s in observed_species])
         n_observed = len(observed_species)
+        what = "species were specified"
 
     # Validate each dataset and build its (C0, t_eval, t_span, loss) tuple.
     datasets = []
@@ -1394,8 +1428,7 @@ def _resolve_problem(
             )
         if obs_i.shape[1] != n_observed:
             raise ValueError(
-                f"dataset {ds}: observations has {obs_i.shape[1]} columns but "
-                f"{n_observed} species were specified."
+                f"dataset {ds}: observations has {obs_i.shape[1]} columns but {n_observed} {what}."
             )
         sig_arr = jnp.asarray(sig_i) if sig_i is not None else None
         datasets.append(
@@ -1474,6 +1507,7 @@ def _resolve_problem(
         ic_center_full=ic_center_full,
         ic_prior_log_std=ic_prior_log_std,
         ic_bounds=ic_bounds,
+        observation_fn=observation_fn,
     )
 
 
@@ -1490,6 +1524,7 @@ def calibrate(
     transforms: dict[str, str] | None = None,
     initial_params: jnp.ndarray | None = None,
     observed_species: list[str] | None = None,
+    observation_fn=None,
     time_unit: str | None = None,
     loss: str = "mse",
     sigma: jnp.ndarray | None = None,
@@ -1534,6 +1569,13 @@ def calibrate(
     observed_species : list[str], optional
         Species names corresponding to columns of ``observations``. If
         ``None``, every model species is taken to be observed.
+    observation_fn : callable, optional
+        A measurement that is a function of several states, used in place of
+        ``observed_species``: ``observation_fn(C, params) -> y`` maps one time
+        point's concentration vector ``(n_species,)`` and the full parameter
+        vector to the observed outputs, a scalar or ``(n_outputs,)``. It must be
+        written with ``jax.numpy`` so it can be differentiated. The columns of
+        ``observations`` (and a per-output ``sigma``) follow its outputs.
     time_unit : str, optional
         The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
         ``"d"``), matching :meth:`BatchReactor.solve`. Every dataset's ``t_obs``
@@ -1684,6 +1726,7 @@ def calibrate(
         ic_bounds=ic_bounds,
         ic_prior_log_std=ic_prior_log_std,
         param_halfwidth=optimizer.param_halfwidth,
+        observation_fn=observation_fn,
     )
     cfg = _FitConfig(
         gradient=gradient,
