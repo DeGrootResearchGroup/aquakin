@@ -9,16 +9,22 @@ Directions flagged as not identifiable (two largest loadings):
   relative eigenvalue  7.8e-07: slow.k2 -0.71, ic[0].M +0.70
 Relative standard deviations:
   fast.k1       inf
-  slow.k2       inf
-  ic[0].D       inf
-  ic[0].M       inf
+  slow.k2     2142%
+  ic[0].D       13%
+  ic[0].M     2112%
 == Step 2 ==
 design                     fast.k1   slow.k2   ic[0].D   ic[0].M
-base                           inf       inf       inf       inf
-+ late samples                 inf       inf       inf       inf
+base                           inf     2142%       13%     2112%
++ late samples                 inf      963%       11%      945%
 + early samples                21%     1545%      4.6%     1526%
-+ UV254                        inf      6.6%       inf       inf
++ UV254                        inf      6.6%      7.9%     0.25%
 + early samples + UV254        20%        5%      3.7%     0.16%
+Ranked by the D-criterion:
+  + early samples + UV254  D =   29.33
+  + early samples          D =   10.92
+  + UV254                  D =   -6.71
+  + late samples           D =  -21.22
+  base                     D =    -inf
 == Step 3 ==
 converged: True
 D-criterion: 26.67 -> 31.32

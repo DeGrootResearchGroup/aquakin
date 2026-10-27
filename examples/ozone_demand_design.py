@@ -143,6 +143,16 @@ def run_example():
         rel = aquakin.identifiability(fim).relative_std
         comparison[label] = rel
         print(f"{label:24s}" + "".join(f"{percent(rel[n]):>10s}" for n in rep.names))
+
+    # The same designs ranked by the D-criterion (log det F, larger is better;
+    # -inf means the information matrix is singular).
+    ranked = aquakin.rank_experiments(
+        reactor, list(designs.values()), free_params, params=true_params, free_ic=free_ic
+    )
+    labels = list(designs)
+    print("Ranked by the D-criterion:")
+    for c in ranked:
+        print(f"  {labels[c.index]:24s} D = {c.value:7.2f}")
     # [end step2]
 
     print("== Step 3 ==")

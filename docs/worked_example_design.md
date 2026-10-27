@@ -34,8 +34,10 @@ The model file is
 [`examples/ozone_demand.yaml`](https://github.com/DeGrootResearchGroup/aquakin/blob/main/examples/ozone_demand.yaml).
 Concentrations are in µmol/L and time in seconds. The ozone dose is chosen by
 the experimenter (50 µmol/L to start with). There are four unknowns: the two
-rate constants and the two initial pools, [D]₀ = 15 µmol/L and
-[M]₀ = 1000 µmol/L.
+rate constants and the initial concentrations of D and M, [D]₀ = 15 µmol/L and
+[M]₀ = 1000 µmol/L. These initial concentrations are not measured directly, so
+they are estimated along with the rate constants. The page calls them the
+initial *pools*.
 
 Two quantities can be measured:
 
@@ -56,7 +58,8 @@ The script starts with its imports:
 :end-before: "# [end imports]"
 ```
 
-UV254 is not a single species, so it is passed to aquakin as an *observation function*, a function that maps the concentration vector at one time, and the
+UV254 is not a single species, so it is passed to aquakin as an *observation
+function*, a function that maps the concentration vector at one time, and the
 parameter vector, to the measured values. aquakin always calls it with those
 two arguments, `f(C, p)`. Anything else it needs is bound in when it is
 created, here by a small factory that takes the model and ε:
@@ -78,8 +81,7 @@ and the measurements:
 ```
 
 Rate constants declared with `transform: positive_log` in the model file, and
-the initial pools, are analyzed on a log scale; why that matters is explained
-below.
+the initial pools, are analyzed on a log scale. The next section explains why.
 
 ## Background: how much can an experiment tell us?
 
@@ -98,13 +100,13 @@ A large entry means that measurement *i* changes a lot when unknown *j*
 changes, so the measurement carries information about it. aquakin computes S
 exactly by automatic differentiation through the ODE solve.
 
-The unknowns are analyzed as θ = log p, the logarithms of the physical values
-p. A sensitivity to log p is the change in y for a given *relative* change in
-p, which lets a rate constant of 10⁻⁶ and a pool of 1000 be compared directly.
-A standard deviation in log p is approximately a relative standard deviation
-of p, as long as it is small (below about 0.1–0.2): 0.05 in log k₂ means about
-±5 % in k₂. For larger values the uncertainty in p becomes lopsided: 0.5 in
-log p means +65 % / −39 %.
+The unknowns are analyzed as θ = log p, the natural logarithms of the physical
+values p. A sensitivity to log p is the change in y for a given *relative*
+change in p, which lets a rate constant of 10⁻⁶ and a pool of 1000 be compared
+directly. A standard deviation in log p is approximately a relative standard
+deviation of p, as long as it is small (below about 0.1–0.2). For example, 0.05
+in log k₂ means about ±5 % in k₂. For larger values the uncertainty in p
+becomes lopsided. A standard deviation of 0.5 in log p means +65 % / −39 %.
 
 ### The Fisher information
 
@@ -116,28 +118,32 @@ $$
 F = S^\top \Sigma^{-1} S .
 $$
 
-It weights each sensitivity by how precise its measurement is. A precise measurement (small σᵢ) contributes more.
+It weights each sensitivity by how precise its measurement is. A precise
+measurement (small σᵢ) contributes more.
 
 ### The Cramér-Rao bound
 
 The Fisher information turns the precision of the measurements into the best
 precision the parameters can have. For a given design (what is measured, when,
 and with what noise σᵢ), no unbiased estimate of the unknowns from that data
-can have a smaller covariance than the inverse of F:
+can have a smaller covariance than the inverse of F. (An estimate is unbiased
+if, averaged over many repeats of the experiment, it would equal the true
+value.)
 
 $$
 \operatorname{Cov}(\hat\theta) \succeq F^{-1}.
 $$
 
-This is the **Cramér-Rao bound**. The symbol ⪰ means that the difference
-Cov − F⁻¹ is positive semidefinite. In practice:
+This is the **Cramér-Rao bound**. The symbol ⪰ compares two matrices. It means
+the left side is at least as large as the right side for every combination of
+the unknowns, in the following sense:
 
 - The standard deviation of unknown *j* is at least $\sqrt{(F^{-1})_{jj}}$,
   the square root of the matching diagonal entry of F⁻¹.
 - The same holds for any combination of the unknowns. This is where the
   1/√λₖ standard deviations of the eigen-directions below come from.
 
-The bound is a floor. No fitting method can beat it; only a more informative
+The bound is a floor. No fitting method can beat it. Only a more informative
 experiment can, through better measurements, better timing, or less noise. A
 good fit, such as maximum likelihood (the `nll` loss used in step 4), comes
 close to it when the noise is small and the model is nearly linear over the
@@ -145,12 +151,12 @@ range of uncertainty. With sparse or very noisy data, the real uncertainties
 can be larger than the bound.
 
 Because F needs only the model, assumed parameter values, and the design, the
-bound can be computed before any data are collected;
+bound can be computed before any data are collected.
 `aquakin.fisher_information` computes F. The calculation can also be turned
 around to ask how precise the measurements must be. The noise enters F as
 1/σᵢ², so if every σᵢ is multiplied by a factor c, every bound on a parameter's
-standard deviation is multiplied by c too. If a design gives k₂ to ±5 % but
-±2 % is needed, the measurements must be about 2.5 times more precise, or the
+standard deviation is multiplied by c too. If a design gives k₂ to ±5 % but ±2
+% is needed, the measurements must be about 2.5 times more precise, or the
 design about 2.5² ≈ 6 times more informative.
 
 The bound holds only if the model and the noise levels are right, and it is
@@ -180,7 +186,7 @@ are used below:
   same way add up along that one direction and leave the others unchanged,
   however many there are.
 
-The sum assumes the errors of different measurements are independent; errors
+The sum assumes the errors of different measurements are independent. Errors
 that are correlated, for example through a shared calibration, add less. When
 each experiment has its own initial pools, those pools are separate unknowns
 that appear only in their own experiment's terms, while the shared rate
@@ -195,9 +201,10 @@ $$
 F = \sum_k \lambda_k\, v_k v_k^\top .
 $$
 
-Each eigenvector is a direction in parameter space, a combination of the unknowns. The data determine the combination vₖᵀθ with a standard deviation of
-1/√λₖ. A large eigenvalue means a well-determined combination; a small one
-means a combination the data hardly constrain; a zero eigenvalue means a
+Each eigenvector is a direction in parameter space, a combination of the
+unknowns. The data determine the combination vₖᵀθ with a standard deviation of
+1/√λₖ. A large eigenvalue means a well-determined combination. A small one
+means a combination the data hardly constrain. A zero eigenvalue means a
 combination the design cannot determine at all. The entries of an eigenvector,
 its **loadings**, name the unknowns involved.
 
@@ -237,17 +244,30 @@ The same reasoning covers the other cases:
 - A direction loaded on **one unknown** alone, (1.00, 0), means that unknown
   has no effect on the predictions at all.
 
-Step 1 below shows the first and last cases. There k₂ and [M]₀ load equally
-and oppositely, so only k₂[M]₀ is determined, and k₁ has a direction of its
-own.
+Step 1 below shows the first and last cases. There k₂ and [M]₀ load equally and
+oppositely, so the data determine little more than k₂[M]₀, and k₁ has a
+direction of its own.
 
-### Flagging what cannot be determined
+### Structural and practical identifiability
 
-`aquakin.identifiability` reports the eigen-directions, flags those with an
-eigenvalue below a fraction `eig_keep` (default 1 %) of the largest, and gives
-the Cramér-Rao standard deviations. A parameter involved in a zero-eigenvalue
-direction has an infinite standard deviation. It is **not identifiable** from
-that design.
+Two different situations give a small eigenvalue, and it helps to tell them
+apart.
+
+- **Structurally non-identifiable.** The eigenvalue is exactly zero (to
+  round-off). The predictions do not depend on that combination at all, so no
+  amount of the same kind of data can determine it. A parameter involved in
+  such a direction has an infinite standard deviation.
+- **Practically non-identifiable.** The eigenvalue is small but not zero. The
+  combination does affect the predictions, but so weakly that its standard
+  deviation is enormous. More or better data of the same kind would determine
+  it eventually, but often not within a realistic experiment.
+
+`aquakin.identifiability` reports the eigen-directions and gives the
+Cramér-Rao standard deviations. It flags as not identifiable every direction
+whose eigenvalue is below a fraction `eig_keep` (default 1 %) of the largest,
+which covers both situations. The standard deviations show which one applies.
+An infinite standard deviation means a structural problem, and a very large
+finite one a practical problem.
 
 ## Step 1: diagnose a simple design
 
@@ -267,20 +287,25 @@ between 60 and 600 s. Its Fisher information and identifiability report are:
 :end-before: "== Step 2 =="
 ```
 
-Two of the four eigenvalues are effectively zero, so two combinations of the
-unknowns cannot be determined, and every standard deviation is infinite. The
-loadings say which:
+Two of the four eigenvalues are far below the others, so two combinations of
+the unknowns are flagged. The loadings say which, and the standard deviations
+show that they are different kinds of problem:
 
-- **k₁ on its own.** D is used up within about 20 s, before the first sample.
-  The samples show how much ozone D removed, which is [D]₀, but not how fast it
-  did so.
-- **log k₂ − log [M]₀.** The loadings are equal and opposite, so only the
-  product k₂[M]₀ is determined. M is in such excess that it is barely consumed
-  (about 3 % over 30 minutes), so ozone decays at the apparent first-order rate
-  k₂[M]₀. Doubling k₂ and halving [M]₀ gives the same ozone curve.
+- **k₁ on its own (structural).** Its eigenvalue is zero to round-off, and
+  its standard deviation is infinite. D is used up within about 20 s, before
+  the first sample. The samples show how much ozone D removed, which is [D]₀,
+  but not how fast it did so.
+- **log k₂ − log [M]₀ (practical).** The loadings are equal and opposite, so
+  the data determine mainly the product k₂[M]₀. M is in such excess that it is
+  barely consumed (about 3 % over 30 minutes), so ozone decays at almost the
+  apparent first-order rate k₂[M]₀. Doubling k₂ and halving [M]₀ gives nearly
+  the same ozone curve. The small consumption of M separates them in
+  principle, which is why the eigenvalue is not exactly zero, but only to a
+  relative standard deviation of about 2000 %.
 
 Fitting this data set would return *some* values of k₁, k₂, and [M]₀, and the
-fit could look good, but those values would mean nothing. The Fisher
+fit could look good, but those values would mean almost nothing. Only [D]₀ is
+reasonably determined. The Fisher
 information shows this before any experiment is run.
 
 ## Step 2: compare ways to improve the run
@@ -305,19 +330,26 @@ The table shows the relative standard deviation of each unknown
 :end-before: "== Step 3 =="
 ```
 
-- **More late samples do not help.** Every ozone sample after D is gone is
-  sensitive only to the product k₂[M]₀, so their sensitivities all point the
-  same way and add nothing along the undetermined direction, however many
-  there are.
+- **More late samples help very little.** Every ozone sample after D is gone
+  is sensitive almost only to the product k₂[M]₀, so their sensitivities nearly
+  all point the same way. Five more of them, extending the run to 30 minutes,
+  let a little more M be consumed. That halves the uncertainty of k₂ and [M]₀,
+  but it is still far above 100 %, and k₁ stays undetermined.
 - **Early samples** (2–20 s) catch D being consumed, which determines k₁ and
-  [D]₀. k₂ and [M]₀ become identifiable only in principle, through the small
-  consumption of M, and with huge uncertainties.
-- **UV254** measures M directly, so it determines k₂ but leaves k₁ unknown.
+  improves [D]₀. They barely help k₂ and [M]₀.
+- **UV254** measures M directly, so it determines [M]₀ and then k₂, but leaves
+  k₁ unknown.
 - **Both together** make all four unknowns identifiable.
 
-The general lesson is that more data of the same kind rarely fixes a
-structural problem. A different measurement, or samples in a different time
-window, does.
+The last lines rank the same designs with `aquakin.rank_experiments`, which
+scores each one by the D-criterion introduced in step 3 (larger is better, and
+−∞ means some combination is structurally undetermined). It puts early samples
+plus UV254 first and the base design last, and it is the quicker tool when
+there are many candidates.
+
+The general lesson is that more data of the same kind rarely fixes an
+identifiability problem. A different measurement, or samples in a different
+time window, does.
 
 ## Step 3: optimize the sampling times and dose
 
@@ -334,8 +366,9 @@ number that summarizes F. The common choices are:
 | E | min λₖ | larger | The information along the worst-determined direction. |
 | modified E | max λₖ / min λₖ | smaller | How unevenly the directions are determined. |
 
-D-optimality is the usual default, because it shrinks the uncertainty of all unknowns
-together, and it does not depend on the units of the parameters.
+Choosing the design that maximizes D is called **D-optimal design**. It is the
+usual default, because it shrinks the uncertainty of all unknowns together, and
+it does not depend on the units of the parameters.
 
 `aquakin.optimize_experiment` maximizes the criterion over the design. It
 differentiates the criterion with respect to the sampling times and the
@@ -369,7 +402,8 @@ The designed run roughly halves the uncertainty of k₁ and [D]₀ and reduces
 that of k₂ by a factor of five. Two features of the result are typical of
 D-optimal designs:
 
-- **Samples cluster.** Rather than spreading out, the samples sit where the measurements are most sensitive to the unknowns. The early cluster resolves
+- **Samples cluster.** Rather than spreading out, the samples sit where the
+  measurements are most sensitive to the unknowns. The early cluster resolves
   the fast demand, and the cluster near 520 s is where ozone is most sensitive
   to k₂. Only the minimum spacing keeps them apart. Because the design trusts
   the model completely, in practice it is wise to add a few samples between the
@@ -394,17 +428,19 @@ unknown.
 ### Fitting and the Laplace approximation
 
 With Gaussian noise of known standard deviation, the natural fitting objective
-is the negative log-likelihood (`loss="nll"`), which is half the sum of the squared,
-noise-scaled residuals, plus a constant. Its minimum is the best fit.
+is the negative log-likelihood (`loss="nll"`), which is half the sum of the
+squared, noise-scaled residuals, plus a constant. Its minimum is the best fit.
 
-Near the minimum the objective is close to a quadratic bowl, and its curvature
-(the Hessian) measures how sharply the fit gets worse when the unknowns move.
-The **Laplace approximation** treats the uncertainty of the estimates as a
-Gaussian whose covariance is the inverse of that curvature. With
-`method="gauss_newton"`, the curvature is computed as SᵀΣ⁻¹S at the fitted
-values, which is exactly the Fisher information. So the uncertainty reported
-after the fit can be compared directly with the prediction made before the
-experiment.
+Near the minimum the objective is close to a quadratic bowl. Its curvature, the
+matrix of second derivatives (the Hessian), measures how sharply the fit gets
+worse when the unknowns move. The **Laplace approximation** treats the
+uncertainty of the estimates as a Gaussian whose covariance is the inverse of
+that curvature. That Gaussian is the **posterior**, the distribution of the
+unknowns given the data. With `method="gauss_newton"`, the curvature is
+approximated using first derivatives only, as SᵀΣ⁻¹S at the fitted values (the
+Gauss–Newton approximation, which drops the terms that involve the residuals).
+That is exactly the Fisher information. So the uncertainty reported after the
+fit can be compared directly with the prediction made before the experiment.
 
 ```{literalinclude} ../examples/ozone_demand_design.py
 :language: python
@@ -425,12 +461,13 @@ standard deviations match those predicted for the designed run in step 3.
 
 Three settings in the call matter:
 
-- **`param_halfwidth=np.log(100.0)`** keeps each rate constant within a
-  factor of 100 of its starting guess (the bound is on the log scale). Without
-  it, an early optimizer step can jump by many orders of magnitude, into a
-  region where the stiff solve fails. Bounds a factor of 100 either side of a
-  reasonable guess rarely constrain the answer but make the fit much more
-  reliable.
+- **`param_halfwidth=np.log(100.0)`** keeps each rate constant within a factor
+  of 100 of its starting guess (the bound is on the log scale). Without it, an
+  early optimizer step can jump by many orders of magnitude. The model is
+  *stiff*, because it combines a very fast reaction (D) with a very slow one
+  (M), and an extreme value of k₁ makes it so stiff that the solve fails.
+  Bounds a factor of 100 either side of a reasonable guess rarely constrain the
+  answer but make the fit much more reliable.
 - **`include_ic=True`** makes the uncertainty cover the initial pools as well
   as the rate constants. The rate uncertainties then allow for the trade-off
   between each rate and its pool. Without it, the pools would be treated as
@@ -438,7 +475,7 @@ Three settings in the call matter:
 - **`eig_keep=1e-10`.** By default the Laplace step drops directions with less
   than 1 % of the largest eigenvalue, treating them as not identifiable. Here
   every unknown is identifiable, but the information spans about four orders of
-  magnitude: [M]₀ is fixed precisely by UV254, while k₁ rests on three early
+  magnitude. [M]₀ is fixed precisely by UV254, while k₁ rests on three early
   samples. With the default, the k₁ direction would be dropped and its standard
   deviation reported as far too small. Check the spread of the eigenvalues with
   `aquakin.identifiability` before relying on a reported uncertainty.
@@ -449,9 +486,14 @@ The Laplace approximation assumes the objective is quadratic near its minimum.
 A **profile likelihood** checks this without that assumption. It fixes one
 unknown at a series of values and, at each, refits all the others. The result
 is the best objective attainable at each fixed value. The 95 % confidence
-interval is the range where the profile rises less than 1.92 above its minimum
-(half the 95 % point of a χ² distribution with one degree of freedom, because
-the objective is half a sum of squares).
+interval is the range where the profile rises less than 1.92 above its minimum.
+
+The 1.92 comes from the likelihood-ratio test. When one unknown is fixed at
+its true value and the others are refitted, twice the rise in the negative
+log-likelihood follows a χ² distribution with one degree of freedom. The 95 %
+point of that distribution is 3.84. The objective here is the negative
+log-likelihood itself, half a sum of squares, so the threshold on the profile
+is half of 3.84, which is 1.92.
 
 ```{literalinclude} ../examples/ozone_demand_design.py
 :language: python
@@ -482,7 +524,8 @@ local approximation is not.
 ## Step 5: design the next run
 
 The design in step 3 was optimized for the true parameter values, which are
-never known in practice. A design depends on the values it is computed for. The best sampling times for a fast reaction differ from those for a slow one. A
+never known in practice. A design depends on the values it is computed for. The
+best sampling times for a fast reaction differ from those for a slow one. A
 practical sequence is to run a first experiment, fit it, and design the next
 run for the values the data now support.
 
@@ -513,9 +556,10 @@ designed around the wrong values.
 ## Summary
 
 - Compute the Fisher information of a planned design before running it.
-  `identifiability` names the parameter combinations it cannot determine;
-  equal and opposite loadings in log coordinates point to a product.
-- More samples of the same quantity rarely fix a structural problem. Here no number of ozone samples separates k₂ from [M]₀. A different measurement, or
+  `identifiability` names the parameter combinations it cannot determine. Equal
+  and opposite loadings in log coordinates point to a product.
+- More samples of the same quantity rarely fix a structural problem. Here no
+  number of ozone samples separates k₂ from [M]₀. A different measurement, or
   samples in a different time window, does.
 - Use `rank_experiments` to compare discrete options and `optimize_experiment`
   for sampling times and doses. D-optimal designs cluster samples, so add a few

@@ -25,19 +25,26 @@ def test_ozone_demand_worked_example(tmp_path):
 
     out = ex.main(output_dir=tmp_path)
 
-    # Step 1: k1 alone, and the k2/[M]0 product, are flagged; nothing is identifiable.
+    # Step 1: k1 alone (structurally) and the k2/[M]0 product (practically) are
+    # flagged. k1 cannot be determined at all; k2 and [M]0 only to > 1000 %.
     rep = out["step1"]
     assert len(rep.unidentifiable) == 2
+    assert rep.unidentifiable[0].relative_eigenvalue < 1e-10
     loads = rep.unidentifiable[1].loadings
     assert abs(loads["slow.k2"]) == pytest.approx(abs(loads["ic[0].M"]), abs=0.05)
     assert np.sign(loads["slow.k2"]) != np.sign(loads["ic[0].M"])
-    assert not any(np.isfinite(v) for v in rep.relative_std.values())
+    rel = rep.relative_std
+    assert not np.isfinite(rel["fast.k1"])
+    assert rel["slow.k2"] > 10 and rel["ic[0].M"] > 10
+    assert rel["ic[0].D"] < 1
 
-    # Step 2: late samples do not help; early samples + UV254 make all identifiable.
+    # Step 2: late samples help k2 only a little; UV254 determines k2 and [M]0
+    # but not k1; early samples + UV254 determine everything.
     rows = out["step2"]
-    assert not np.isfinite(rows["+ late samples"]["slow.k2"])
+    assert rows["+ late samples"]["slow.k2"] > 5
     assert not np.isfinite(rows["+ UV254"]["fast.k1"])
-    assert all(np.isfinite(v) for v in rows["+ early samples + UV254"].values())
+    assert rows["+ UV254"]["ic[0].M"] < 0.01
+    assert all(v < 1 for v in rows["+ early samples + UV254"].values())
 
     # Step 3: the design improves, clusters early, and uses the full dose.
     opt = out["step3"]
