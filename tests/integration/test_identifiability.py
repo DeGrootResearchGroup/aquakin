@@ -192,3 +192,26 @@ def test_input_validation():
     with pytest.raises(ValueError, match="max_size"):
         big.collinearity_table()
     assert len(big.collinearity_table(max_size=2)) == 21 * 20 // 2
+
+
+def test_round_off_loading_on_null_direction_is_ignored():
+    """A zero-eigenvalue direction that is a alone plus a round-off-sized
+    loading on b leaves b determined: finite std and no spurious correlation."""
+    eps = 3e-3
+    v0 = np.array([1.0, eps, 0.0]) / np.hypot(1.0, eps)
+    v1 = np.array([-eps, 1.0, 0.0]) / np.hypot(1.0, eps)
+    v2 = np.array([0.0, 0.0, 1.0])
+    V = np.stack([v0, v1, v2], axis=1)
+    F = V @ np.diag([0.0, 1.0, 4.0]) @ V.T
+    values = {"a": 1.0, "b": 1.0, "c": 1.0}
+    rep = aquakin.identifiability(F, names=["a", "b", "c"], values=values)
+    assert rep.std["a"] == np.inf
+    assert rep.std["b"] == pytest.approx(1.0, rel=1e-4)
+    assert rep.std["c"] == pytest.approx(0.5)
+    assert abs(rep.correlation[0, 1]) < 1e-3
+
+    # A tolerance below the spurious loading counts b as involved.
+    strict = aquakin.identifiability(F, names=["a", "b", "c"], values=values, null_loading_tol=1e-4)
+    assert strict.std["b"] == np.inf
+    with pytest.raises(ValueError, match="null_loading_tol"):
+        aquakin.identifiability(F, names=["a", "b", "c"], null_loading_tol=0.0)
