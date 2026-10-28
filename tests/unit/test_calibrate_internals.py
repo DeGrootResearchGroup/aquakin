@@ -28,8 +28,10 @@ from aquakin.integrate.calibrate import (
     _free_ic_fields,
     _is_solve_failure,
     _laplace_covariance,
+    _laplace_posterior,
     _ObjectiveBundle,
     _optimizer_bounds,
+    _ReactorForwardModel,
     _resolve_laplace,
     _resolve_problem,
     _run_multistart,
@@ -651,3 +653,29 @@ def test_check_start_gradient_propagates_non_solve_errors():
     bundle = _quadratic_bundle(lambda x: TypeError("bug"))
     with pytest.raises(TypeError, match="bug"):
         _check_start_gradient(_ms_cfg(1), bundle, _THETA0)
+
+
+# ---------- _laplace_posterior: at-bound mask ----------
+
+
+def test_laplace_posterior_at_bound_mask(simple_model):
+    """No mask (Plant.calibrate's call) and an all-False mask give the same
+    posterior; masking the only rate holds it fixed: nan std, zero covariance."""
+    m = simple_model
+    reactor = _batch_reactor(m)
+    C0 = jnp.array([1.0, 0.0])
+    t_obs = jnp.array([1.0, 2.0, 4.0])
+    obs = reactor.solve(C0, params=m.default_parameters(), t_span=(0.0, 4.0), t_eval=t_obs).C
+    prob = _resolve(m, C0, obs, t_obs, [m.parameters[0]], use_model_bounds=False)
+    cfg = dataclasses.replace(_cfg("auto", "jax_adjoint"), laplace=True)
+    fm = _ReactorForwardModel(reactor, "jax_adjoint", 1, False)
+    theta = prob.rate_theta0()
+    no_mask = _laplace_posterior(prob, fm, cfg, theta, jnp.zeros(0))
+    all_free = _laplace_posterior(
+        prob, fm, cfg, theta, jnp.zeros(0), at_bound_mask=np.array([False])
+    )
+    assert np.isfinite(no_mask.posterior_std_unconstrained[0])
+    np.testing.assert_array_equal(no_mask.posterior_cov, all_free.posterior_cov)
+    held = _laplace_posterior(prob, fm, cfg, theta, jnp.zeros(0), at_bound_mask=np.array([True]))
+    assert np.isnan(held.posterior_std_unconstrained[0])
+    assert np.all(np.asarray(held.posterior_cov) == 0.0)

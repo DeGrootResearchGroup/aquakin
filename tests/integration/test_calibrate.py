@@ -726,6 +726,7 @@ def test_interior_fit_has_no_at_bound(setup):
     assert np.isfinite(r.params_named_std["A_to_B.k"])
 
 
+@pytest.mark.slow  # its own two-parameter model: a fresh fit + Laplace compile
 def test_at_bound_other_parameters_are_conditional(tmp_path):
     """With k1 on its bound and k2 interior, k2's std is the conditional one,
     1/sqrt(H_22), not the full-inverse marginal that treats k1 as free; draws
