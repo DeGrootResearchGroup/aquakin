@@ -98,10 +98,29 @@ class OptimizerConfig:
         Maximum optimiser iterations per start.
     tol : float
         Optimiser convergence tolerance.
+    bounds : dict[str, tuple[float | None, float | None]], optional
+        Absolute bounds on free rate parameters in physical units, as
+        ``{name: (lo, hi)}`` (``None`` on a side leaves it open). An entry
+        replaces the parameter's model-declared ``bounds:`` for this fit.
+        Entries for parameters that are not in ``free_params`` are ignored, so
+        one mapping can be reused across fits (for example a
+        :func:`~aquakin.profile_likelihood` sweep). Like the declared bounds,
+        each is mapped into the unconstrained space the optimiser works in
+        (``log`` for ``positive_log``, ``logit`` for ``logit``), so a bound at
+        or beyond the edge of the transform's domain (``lo <= 0`` for
+        ``positive_log``; ``lo <= 0`` or ``hi >= 1`` for ``logit``) is open.
+    use_model_bounds : bool
+        If ``True`` (default), each free rate parameter is kept inside the
+        ``bounds:`` declared on it in the model, as :func:`aquakin.fit` does.
+        The bounds are absolute: every multistart start searches the same
+        region. Set ``False`` to ignore the declared bounds (the behaviour
+        before 0.1.1); explicit ``bounds`` still apply.
     param_halfwidth : float, optional
-        If given, box-bound each free rate parameter to ``theta0 +/-
-        param_halfwidth`` in unconstrained space; otherwise the rate parameters
-        are unbounded.
+        If given, also box-bound each free rate parameter to ``theta0 +/-
+        param_halfwidth`` in unconstrained space around the starting value
+        (``initial_params``, moved inside the absolute bounds if needed). The
+        box is intersected with the absolute bounds above. ``None`` (default)
+        adds no such box.
     """
 
     method: str = "lbfgsb"
@@ -112,6 +131,8 @@ class OptimizerConfig:
     max_iter: int = 500
     tol: float = 1e-6
     param_halfwidth: float | None = None
+    bounds: dict | None = None
+    use_model_bounds: bool = True
 
 
 @dataclass(frozen=True)
@@ -808,6 +829,9 @@ class _CalibrationProblem:
     # Optional observation function (C, params) -> y; replaces the species
     # columns ``obs_species_indices`` when set.
     observation_fn: object = None
+    # Absolute bounds on the rate block in unconstrained space, as ``(lb, ub)``
+    # arrays of length ``n_rate`` (+/-inf where open), or ``None`` for none.
+    rate_bounds: tuple | None = None
 
     def physical_from_theta(self, rate_thetas: jnp.ndarray) -> jnp.ndarray:
         """Free rate parameters in physical space from their unconstrained
@@ -1057,24 +1081,33 @@ def _build_objective(
 
 
 def _optimizer_bounds(problem: _CalibrationProblem, rate_theta0):
-    """Box bounds in unconstrained space. Rate dims are bounded to
-    ``theta0 +/- param_halfwidth`` when given (else unbounded); free-IC dims are
-    always log-bounded by ``ic_bounds``. Returns
-    ``(bounds, lb, ub, ls_bounds, has_bounds)`` -- ``bounds`` the L-BFGS-B list
-    (``None`` if unbounded), ``ls_bounds`` the least-squares ``(lb, ub)`` pair."""
+    """Box bounds in unconstrained space.
+
+    Rate dims carry the absolute bounds ``problem.rate_bounds`` (model-declared
+    and/or explicit, already mapped through each transform), intersected with
+    ``theta0 +/- param_halfwidth`` when that is given; the halfwidth box is
+    centred on the start moved inside the absolute bounds, so the intersection
+    is never empty. Free-IC dims are always log-bounded by ``ic_bounds``.
+    Returns ``(bounds, lb, ub, ls_bounds, has_bounds)`` -- ``bounds`` the
+    L-BFGS-B list (``None`` if unbounded), ``ls_bounds`` the least-squares
+    ``(lb, ub)`` pair."""
     rate_th0 = np.asarray(rate_theta0, dtype=float)
-    if problem.param_halfwidth is not None:
-        rate_lb = list(rate_th0 - problem.param_halfwidth)
-        rate_ub = list(rate_th0 + problem.param_halfwidth)
+    if problem.rate_bounds is not None:
+        rate_lb = np.asarray(problem.rate_bounds[0], dtype=float)
+        rate_ub = np.asarray(problem.rate_bounds[1], dtype=float)
     else:
-        rate_lb = [-np.inf] * problem.n_rate
-        rate_ub = [np.inf] * problem.n_rate
+        rate_lb = np.full(problem.n_rate, -np.inf)
+        rate_ub = np.full(problem.n_rate, np.inf)
+    if problem.param_halfwidth is not None:
+        centre = np.clip(rate_th0, rate_lb, rate_ub)
+        rate_lb = np.maximum(rate_lb, centre - problem.param_halfwidth)
+        rate_ub = np.minimum(rate_ub, centre + problem.param_halfwidth)
     n_ic = problem.m_ic * problem.n_datasets
     ic_lb = [float(np.log(problem.ic_bounds[0]))] * n_ic
     ic_ub = [float(np.log(problem.ic_bounds[1]))] * n_ic
-    lb = np.array(rate_lb + ic_lb)
-    ub = np.array(rate_ub + ic_ub)
-    has_bounds = (problem.param_halfwidth is not None) or problem.m_ic
+    lb = np.array(list(rate_lb) + ic_lb)
+    ub = np.array(list(rate_ub) + ic_ub)
+    has_bounds = bool(np.isfinite(rate_lb).any() or np.isfinite(rate_ub).any() or problem.m_ic)
     if has_bounds:
         bounds = [
             (None if not np.isfinite(lo) else float(lo), None if not np.isfinite(hi) else float(hi))
@@ -1083,6 +1116,25 @@ def _optimizer_bounds(problem: _CalibrationProblem, rate_theta0):
     else:
         bounds = None
     return bounds, lb, ub, (lb, ub), has_bounds
+
+
+def _clip_start(problem: _CalibrationProblem, theta0, opt_bounds):
+    """Move the start inside the optimiser bounds, warning (by name) for any
+    free rate parameter whose starting value lay outside its bounds."""
+    _bounds, lb, ub, _ls, has_bounds = opt_bounds
+    if not has_bounds:
+        return theta0
+    th = np.asarray(theta0, dtype=float)
+    clipped = np.clip(th, lb, ub)
+    outside = [problem.free_params[i] for i in range(problem.n_rate) if clipped[i] != th[i]]
+    if outside:
+        warnings.warn(
+            f"calibrate: the starting value of {outside} lies outside its bounds; "
+            "the optimiser starts from the nearest bound instead.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    return jnp.asarray(clipped)
 
 
 def _check_start_gradient(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0):
@@ -1134,6 +1186,7 @@ def _check_start_gradient(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0):
 _SOLVE_FAILURE_HINT = (
     "This usually means the optimiser stepped into a stiff or infeasible region "
     "of parameter space. Bound the rate constants with "
+    "OptimizerConfig(bounds={name: (lo, hi)}) or "
     "OptimizerConfig(param_halfwidth=...) (e.g. np.log(100) for two decades "
     "either side of the start), start from a better initial guess, or tighten "
     "the free_ic bounds."
@@ -1425,6 +1478,8 @@ def _resolve_problem(
     ic_prior_log_std,
     param_halfwidth,
     observation_fn=None,
+    bounds=None,
+    use_model_bounds=True,
 ) -> _CalibrationProblem:
     """Validate and coerce the ``calibrate`` arguments into a
     :class:`_CalibrationProblem`. Everything here is done once, up front; the
@@ -1578,6 +1633,10 @@ def _resolve_problem(
             ic_center_blocks.append(np.log(vals))
     ic_center_full = jnp.asarray(np.concatenate(ic_center_blocks)) if m_ic else jnp.zeros(0)
 
+    rate_bounds = _resolve_rate_bounds(
+        model, free_params, resolved_transforms, bounds, use_model_bounds
+    )
+
     C0_base = tuple(C0_i for (C0_i, *_rest) in datasets)
     dataset_static = [
         (tobs_i, tspan_i, loss_fn_i, resid_fn_i)
@@ -1610,7 +1669,60 @@ def _resolve_problem(
         ic_prior_log_std=ic_prior_log_std,
         ic_bounds=ic_bounds,
         observation_fn=observation_fn,
+        rate_bounds=rate_bounds,
     )
+
+
+def _bound_to_unconstrained(value, transform: str, side: str) -> float:
+    """One physical bound mapped into unconstrained space. A side that is open
+    (``None``) or at / beyond the edge of the transform's domain maps to
+    ``-inf`` (lower) or ``+inf`` (upper)."""
+    open_value = -np.inf if side == "lower" else np.inf
+    if value is None:
+        return open_value
+    v = float(value)
+    if not np.isfinite(v):
+        return open_value
+    if transform == "positive_log" and v <= 0.0:
+        return open_value
+    if transform == "logit" and not (0.0 < v < 1.0):
+        return open_value
+    return float(to_unconstrained(v, transform, xp=np))
+
+
+def _resolve_rate_bounds(model, free_params, transforms, bounds, use_model_bounds):
+    """Absolute bounds on the free rate parameters in unconstrained space.
+
+    Each parameter takes its explicit ``bounds`` entry if there is one, else its
+    model-declared ``bounds:`` (when ``use_model_bounds``), else none. Returns
+    ``(lb, ub)`` arrays (+/-inf where open) or ``None`` if no side is bounded.
+    """
+    explicit = dict(bounds or {})
+    for name in explicit:
+        if name not in model.param_index:
+            raise KeyError(f"Unknown parameter '{name}' in bounds. Available: {model.parameters}")
+    declared = getattr(model, "parameter_bounds", {}) if use_model_bounds else {}
+    lb, ub = [], []
+    for name, t in zip(free_params, transforms):
+        b = explicit.get(name, declared.get(name))
+        if b is None:
+            lb.append(-np.inf)
+            ub.append(np.inf)
+            continue
+        if len(b) != 2:
+            raise ValueError(f"bounds for '{name}' must be a (lo, hi) pair; got {b!r}.")
+        lo, hi = b
+        if lo is not None and hi is not None and not float(lo) < float(hi):
+            raise ValueError(
+                f"bounds for '{name}' must satisfy lo < hi; got {(lo, hi)}. To hold "
+                "a parameter fixed, leave it out of free_params."
+            )
+        lb.append(_bound_to_unconstrained(lo, t, "lower"))
+        ub.append(_bound_to_unconstrained(hi, t, "upper"))
+    lb, ub = np.asarray(lb, dtype=float), np.asarray(ub, dtype=float)
+    if not (np.isfinite(lb).any() or np.isfinite(ub).any()):
+        return None
+    return lb, ub
 
 
 # --- Main entry point --------------------------------------------------
@@ -1713,7 +1825,13 @@ def calibrate(
         Optimiser backend and multistart settings; see :class:`OptimizerConfig`
         for the fields (``method`` {"lbfgsb", "gauss_newton"}, ``n_starts``,
         ``jitter`` / ``jitter_schedule``, ``seed``, ``max_iter``, ``tol``,
-        ``param_halfwidth``). ``"gauss_newton"`` minimises the residual *vector*
+        ``bounds``, ``use_model_bounds``, ``param_halfwidth``). The free rate
+        parameters stay inside their model-declared ``bounds:`` by default,
+        mapped into the unconstrained space the optimiser works in; pass
+        ``bounds={name: (lo, hi)}`` to set or override absolute bounds, and
+        ``param_halfwidth`` for an extra box around the start. A starting value
+        outside the bounds is moved to the nearest bound with a
+        ``RuntimeWarning``. ``"gauss_newton"`` minimises the residual *vector*
         with SciPy ``least_squares`` (its Jacobian by AD, direction from
         ``diff.mode``) and is markedly more robust on the multimodal landscapes
         of stiff reaction-model fits; ``n_starts > 1`` is a deterministic,
@@ -1829,6 +1947,8 @@ def calibrate(
         ic_prior_log_std=ic_prior_log_std,
         param_halfwidth=optimizer.param_halfwidth,
         observation_fn=observation_fn,
+        bounds=optimizer.bounds,
+        use_model_bounds=optimizer.use_model_bounds,
     )
     cfg = _FitConfig(
         gradient=gradient,
@@ -1860,6 +1980,7 @@ def calibrate(
     rate_theta0 = problem.rate_theta0()
     theta0 = jnp.concatenate([rate_theta0, problem.ic_center_full]) if problem.m_ic else rate_theta0
     opt_bounds = _optimizer_bounds(problem, rate_theta0)
+    theta0 = _clip_start(problem, theta0, opt_bounds)
 
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)

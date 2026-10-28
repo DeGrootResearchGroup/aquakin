@@ -23,6 +23,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `OptimizerConfig(bounds={name: (lo, hi)})` gives `aquakin.calibrate` (and
+  `profile_likelihood`) absolute bounds on the free rate parameters in physical
+  units, with `None` for an open side. An entry replaces the parameter's
+  model-declared bound. `param_halfwidth` still works and is now an extra box
+  around the start, intersected with the absolute bounds.
+
 - `LaplaceConfig(include_ic=True)` gives a joint Laplace posterior over the rate
   parameters and the initial pools fitted with `free_ic`, for both
   `aquakin.calibrate` and `Plant.calibrate`. The joint covariance and Hessian
@@ -70,6 +76,17 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   parameter vectors drawn from the Laplace posterior, for example as
   `param_draws` for robust experiment design. `predictive_band` uses the same
   draws.
+
+### Changed
+
+- **`aquakin.calibrate` now enforces the `bounds:` declared on model
+  parameters.** They are mapped into the space the optimiser works in (log for
+  `positive_log`, logit for `logit`), as `aquakin.fit` already did, and are the
+  same for every multistart start. Before, `calibrate` ignored them, so a fit
+  could leave the declared range. A fit whose optimum lies outside a declared
+  bound now stops on the bound, and a starting value outside it is moved to the
+  nearest bound with a `RuntimeWarning`. To get the old behaviour, pass
+  `OptimizerConfig(use_model_bounds=False)`. `Plant.calibrate` is unchanged.
 
 ### Deprecated
 
