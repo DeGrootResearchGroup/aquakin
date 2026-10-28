@@ -158,8 +158,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `RuntimeError` that says what happened and how to fix it (bound the rates with
   `OptimizerConfig(param_halfwidth=...)`, use a better starting guess, or tighten
   the `free_ic` bounds). This replaces the raw XLA callback traceback.
-- `BatchReactor.solve(..., time_unit=..., events=...)` now fires time events at
-  the right time. `Event.at_times` was read in the model's native unit while
+- `BatchReactor.solve` and `Plant.solve` with both `time_unit=` and `events=`
+  now fire time events at the right time. `Event.at_times` was read in the model's native unit while
   `t_span` was converted, so with `time_unit="min"` on a model in seconds an
   event meant for 1 minute fired at 1 second. Event times, the `t` passed to
   `cond_fn` and `apply`, and the `events_log` times are now all in the solve's

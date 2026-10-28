@@ -303,6 +303,40 @@ def test_unnamed_event_not_mutated():
     assert ev.name is None
 
 
+def _single_cstr_plant(net):
+    """A one-CSTR plant on the decay model (native time unit: seconds)."""
+    from aquakin.plant import CSTRUnit, Plant
+    from aquakin.plant.influent import InfluentSeries
+
+    plant = Plant("single_cstr")
+    plant.add_unit(CSTRUnit(name="tank", model=net, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    influent = InfluentSeries(t=jnp.asarray([0.0, 1000.0]),
+                              Q=jnp.asarray([10.0, 10.0]),
+                              C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=net)
+    plant.add_influent("feed", influent, to="tank.inlet")
+    return plant
+
+
+def test_plant_time_unit_converts_event_times(decay):
+    """``Plant.solve(time_unit=..., events=...)`` reads ``at_times`` in the
+    requested unit and reports the event log in it."""
+    plant = _single_cstr_plant(decay)
+
+    def ev(at):
+        return Event(at_times=[at], apply=lambda t, y, a: y.at[0].set(5.0),
+                     name="dose")
+
+    native = plant.solve(t_span=(0.0, 120.0), t_eval=jnp.array([90.0, 120.0]),
+                         events=[ev(60.0)])
+    minutes = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([1.5, 2.0]),
+                          time_unit="min", events=[ev(1.0)])
+    np.testing.assert_allclose(np.asarray(minutes.state),
+                               np.asarray(native.state), rtol=1e-6, atol=1e-9)
+    assert native.events_log == [(60.0, "dose")]
+    assert minutes.events_log == [(pytest.approx(1.0), "dose")]
+
+
 # --- Plant integration (slow: a real BSM1 solve) -----------------------------
 
 @pytest.mark.slow
