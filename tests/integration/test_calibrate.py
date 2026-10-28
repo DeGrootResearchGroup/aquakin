@@ -673,6 +673,7 @@ reactions:
 """
 
 
+@pytest.mark.slow  # two optimisers x (fit + Laplace + identifiability) compiles
 def test_at_bound_is_flagged_and_std_is_nan(bounded_setup):
     """A fit pinned to its declared upper bound reports the flag, warns, and
     gives no finite Laplace std (which would be the curvature of a constrained
@@ -770,6 +771,7 @@ def test_at_bound_other_parameters_are_conditional(tmp_path):
     assert rep.std["r2.k2"] == pytest.approx(r.params_named["r2.k2"] / np.sqrt(H[1, 1]), rel=1e-5)
 
 
+@pytest.mark.slow  # its own free-IC joint Laplace compile
 def test_free_ic_pool_on_its_bound_is_flagged(setup):
     """A fitted initial pool pinned by its FreeICConfig bounds is flagged as
     "ic[0].<species>", and its joint std is nan."""
