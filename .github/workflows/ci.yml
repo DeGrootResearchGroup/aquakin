@@ -158,10 +158,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Python 3.10 is install-compatible (requires-python >= 3.10) but excluded
-        # from CI: its heavier jaxlib build ran close to the hosted runner's
-        # resource/time limits and was intermittently killed, while 3.11/3.12
-        # stayed green and the suite passed locally on 3.10.
+        # The supported range starts at 3.11 (requires-python >= 3.11): the pinned
+        # jax/jaxlib 0.10 and diffrax 0.7 stack requires it.
         python-version: ["3.11", "3.12"]
         group: [1, 2, 3, 4]
     steps:

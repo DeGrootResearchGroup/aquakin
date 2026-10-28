@@ -71,6 +71,13 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `param_draws` for robust experiment design. `predictive_band` uses the same
   draws.
 
+### Changed
+
+- `aquakin` now requires Python 3.11 or later (`requires-python = ">=3.11"`).
+  Its dependency floors (jax/jaxlib 0.10, diffrax 0.7, optimistix 0.1) already
+  require 3.11, so 0.1.0's `>=3.10` claimed support that could not be
+  installed. The package metadata now lists Python 3.11 and 3.12.
+
 ### Deprecated
 
 - `LaplaceConfig(eig_keep=...)` is deprecated and ignored (see Fixed). Passing

@@ -209,11 +209,11 @@ checks that never report.) The **`lint (ruff)`** job has a stable name and can b
 added as a second required check once the lint debt tracked in the audit issues is
 burned down enough to keep it reliably green.
 
-A green fast gate is the merge gate. Python 3.10 stays
-install-compatible (`requires-python >= 3.10`) but is **not** CI-tested:
-its heavier jaxlib 0.6.2 build ran close to the hosted runner's
-resource/time limits and the job was intermittently killed mid-run, while
-3.11/3.12 stayed green and the suite passed locally on 3.10. When adding a runtime
+A green fast gate is the merge gate. The package requires Python 3.11 or later
+(`requires-python >= 3.11`), because the dependency floors (jax/jaxlib 0.10,
+diffrax 0.7, optimistix 0.1) require it; CI tests 3.11 and 3.12. (Python 3.10
+was dropped: it had been install-only and untested, and the current JAX stack
+no longer installs on it.) When adding a runtime
 dependency, add it to `pyproject.toml` `dependencies` so the CI install
 (`pip install -e ".[test]" -c constraints.txt`) picks it up — the `_make_*`
 model generators' `ruamel` need is intentionally *not* a runtime dep (they are
