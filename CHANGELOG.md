@@ -23,6 +23,15 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `aquakin.calibrate(loss="nll", sigma="estimate")` estimates an unknown
+  noise level: the concentrated likelihood, with the noise std of each observed
+  output set to its RMS residual. One fit now gives a likelihood-scaled Laplace
+  standard deviation and profile, where it used to take an `mse` fit and an
+  `nll` refit with `sigma` set by hand. The estimate is returned as
+  `CalibrationResult.sigma_estimate`, and `profile_likelihood` accepts
+  `sigma="estimate"` too. Both optimizers support it. `Plant.calibrate` does
+  not yet, and raises a clear error. The estimate covers every dataset
+  together, so it cannot be an entry of a per-dataset `sigma` list.
 - `FreeICConfig(bounds={species: (lo, hi)})` sets bounds per fitted initial
   pool, for pools of very different size; one `(lo, hi)` pair still applies to
   every pool. A pool that ends on its own bound is listed in

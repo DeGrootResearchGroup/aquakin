@@ -183,6 +183,33 @@ The columns of `observations` follow the function's outputs, and `sigma` may
 give one value per output. `profile_likelihood` and `aquakin.Experiment` accept
 `observation_fn` the same way.
 
+### Unknown noise level
+
+A Laplace standard deviation or a profile-likelihood interval needs
+`loss="nll"` with the measurement noise `sigma`. When the noise level is not
+known, as with most real data, let `calibrate` estimate it:
+
+```python
+result = aquakin.calibrate(reactor, C0, observations, t_obs, free_params,
+                           loss="nll", sigma="estimate")
+result.sigma_estimate     # estimated noise std of each observed output
+result.params_named_std   # Laplace std at the estimated noise level
+```
+
+This is the concentrated likelihood: the noise std of each output is replaced
+by its best estimate, the RMS residual `sqrt(SSE_j / N_j)` (pooled over the
+datasets of a multi-batch fit), and the objective becomes the `"nll"` loss at
+that estimate, `sum_j (N_j / 2) log(SSE_j / N_j) + N / 2`. It is one fit, in
+place of fitting with `"mse"` and refitting with `sigma` set to the residual
+RMS.
+
+The profile-likelihood threshold reads the same way in both cases: a 95 %
+interval is where the profile rises by 1.92 (`0.5 * chi2_{1, 0.95}`). With
+`sigma` known, the profile is the `"nll"` loss itself. With
+`sigma="estimate"` and one output, the rise is `(N / 2) log(SSE / SSE_min)`,
+so the interval is where the sum of squares grows by a factor
+`exp(2 * 1.92 / N)`.
+
 ### Uncertainty: posterior-predictive bands
 
 With `laplace=True`, sample the posterior and propagate it through a solve to get
