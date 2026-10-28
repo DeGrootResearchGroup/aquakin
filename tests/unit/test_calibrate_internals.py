@@ -36,6 +36,7 @@ from aquakin.integrate.calibrate import (
     _joint_names,
     _laplace_covariance,
     _laplace_posterior,
+    _missing_mask,
     _ObjectiveBundle,
     _optimizer_bounds,
     _per_species_ic_bounds,
@@ -1149,3 +1150,38 @@ def test_sigma_estimate_rejects_an_output_never_observed(base):
     obs = jnp.array([[0.9, jnp.nan], [0.5, jnp.nan], [0.2, jnp.nan]])
     with pytest.raises(ValueError, match=r"output\(s\) \[1\] are missing"):
         _resolve(m, C0, obs, t_obs, free, loss="nll", sigma="estimate")
+
+
+# ---------- missing (NaN) observations: masked losses and guards ----------
+
+_OBS_GAP = jnp.array([[1.0, 2.0], [jnp.nan, 4.0]])
+_PRED_GAP = jnp.array([[1.5, 2.0], [99.0, 3.0]])
+
+
+def test_missing_mask_ignores_non_float_observations():
+    assert _missing_mask(np.array([[1, 2], [3, 4]])) is None
+
+
+@pytest.mark.parametrize("build", [_build_loss, _build_residual])
+@pytest.mark.parametrize(
+    "loss, sigma, match",
+    [
+        ("wmse", None, "requires a sigma"),
+        ("nll", None, "requires a sigma"),
+        ("bogus", 1.0, "Unknown loss"),
+    ],
+)
+def test_masked_builders_validate_arguments(build, loss, sigma, match):
+    with pytest.raises(ValueError, match=match):
+        build(loss, _OBS_GAP, sigma)
+
+
+def test_masked_wmse_loss_and_residual_average_over_observed_entries():
+    """wmse with a NaN averages over the three observed entries, and the
+    residual's half-sum-of-squares equals that loss."""
+    sigma = jnp.array([0.5, 1.0])
+    loss = float(_build_loss("wmse", _OBS_GAP, sigma)(_PRED_GAP))
+    assert loss == pytest.approx(((0.5 / 0.5) ** 2 + 0.0 + 1.0**2) / 3.0)
+    r = np.asarray(_build_residual("wmse", _OBS_GAP, sigma)(_PRED_GAP))
+    assert r[2] == 0.0
+    assert 0.5 * np.sum(r**2) == pytest.approx(loss)

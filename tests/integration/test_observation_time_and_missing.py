@@ -12,7 +12,7 @@ import pytest
 
 import aquakin
 from aquakin import Experiment, LaplaceConfig, OptimizerConfig
-from aquakin.integrate.calibrate import observation_takes_time
+from aquakin.integrate.calibrate import observation_takes_time, observe
 from aquakin.integrate.experiment_design import _structure_key
 
 K, A0, SIGMA, DRIFT = 0.25, 1.5, 0.01, 0.05
@@ -61,6 +61,26 @@ def test_signature_detection():
     assert observation_takes_time(lambda t, C, p, scale=2.0: scale * C[0])
     with pytest.raises(TypeError, match=r"\(t, C, params\)"):
         observation_takes_time(lambda C: C[0])
+    with pytest.raises(TypeError, match="must be a callable"):
+        observation_takes_time(3.0)
+
+    class _Opaque:
+        """A callable whose signature cannot be inspected."""
+
+        def __call__(self, C, p):
+            return C[0]
+
+        @property
+        def __signature__(self):
+            raise ValueError("no signature")
+
+    assert not observation_takes_time(_Opaque())
+
+
+def test_time_aware_observe_needs_sample_times():
+    ys = jnp.ones((3, 2))
+    with pytest.raises(ValueError, match="needs the sample times"):
+        observe(ys, None, jnp.arange(2), lambda t, C, p: C[0])
 
 
 def test_time_dependent_observation_matches_per_entry_sigma(reactor, truth):
