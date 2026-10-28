@@ -183,32 +183,86 @@ def test_problem_struct_key_is_shape_sensitive(base):
 # ---------- _optimizer_bounds ----------
 
 
-def test_optimizer_bounds_unbounded_by_default(base):
+def test_optimizer_bounds_unbounded_without_model_bounds(base):
     m, C0, obs, t_obs, free = base
-    prob = _resolve(m, C0, obs, t_obs, free)
+    prob = _resolve(m, C0, obs, t_obs, free, use_model_bounds=False)
     bounds, lb, ub, ls_bounds, has = _optimizer_bounds(prob, prob.rate_theta0())
     assert bounds is None and not has
     assert not np.isfinite(lb[0]) and not np.isfinite(ub[0])
 
 
-def test_optimizer_bounds_param_halfwidth_boxes_the_rates(base):
+def test_optimizer_bounds_use_declared_bounds_by_default(base):
+    """The fixture declares k in [1e-3, 10]; with the model's positive_log
+    transform the optimiser box is [log 1e-3, log 10]."""
     m, C0, obs, t_obs, free = base
-    prob = _resolve(m, C0, obs, t_obs, free, param_halfwidth=1.5)
-    theta0 = np.asarray(prob.rate_theta0(), dtype=float)
+    prob = _resolve(m, C0, obs, t_obs, free, transforms={free[0]: "positive_log"})
     bounds, lb, ub, _ls, has = _optimizer_bounds(prob, prob.rate_theta0())
     assert has and bounds is not None
-    assert lb[0] == pytest.approx(theta0[0] - 1.5)
-    assert ub[0] == pytest.approx(theta0[0] + 1.5)
+    assert lb[0] == pytest.approx(np.log(1e-3))
+    assert ub[0] == pytest.approx(np.log(10.0))
 
 
-def test_optimizer_bounds_free_ic_log_bounded(base):
+def test_optimizer_bounds_explicit_override_and_open_side(base):
     m, C0, obs, t_obs, free = base
-    prob = _resolve(m, C0, obs, t_obs, free, free_ic=[m.species[0]], ic_bounds=(1e-2, 10.0))
-    bounds, lb, ub, _ls, has = _optimizer_bounds(prob, prob.rate_theta0())
-    assert has
-    # One rate dim (unbounded) + one free-IC dim (log-bounded by ic_bounds).
-    assert lb[-1] == pytest.approx(np.log(1e-2))
-    assert ub[-1] == pytest.approx(np.log(10.0))
+    tr = {free[0]: "positive_log"}
+    prob = _resolve(m, C0, obs, t_obs, free, transforms=tr, bounds={free[0]: (0.05, None)})
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(0.05))
+    assert ub[0] == np.inf
+    # lo <= 0 is the edge of positive_log's domain: open, not log(0).
+    prob = _resolve(m, C0, obs, t_obs, free, transforms=tr, bounds={free[0]: (0.0, 2.0)})
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == -np.inf and ub[0] == pytest.approx(np.log(2.0))
+
+
+def test_optimizer_bounds_logit_and_identity_mapping(base):
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m, C0, obs, t_obs, free, transforms={free[0]: "logit"}, bounds={free[0]: (0.05, 0.5)}
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(0.05 / 0.95))
+    assert ub[0] == pytest.approx(0.0)
+    prob = _resolve(
+        m, C0, obs, t_obs, free, transforms={free[0]: "none"}, bounds={free[0]: (0.05, 0.5)}
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert (lb[0], ub[0]) == (pytest.approx(0.05), pytest.approx(0.5))
+
+
+def test_optimizer_bounds_halfwidth_intersects_absolute_bounds(base):
+    """The halfwidth box is intersected with the absolute bounds: the start
+    k=0.1 with halfwidth log(1000) would reach 100, but the declared upper
+    bound 10 wins; the lower side is the halfwidth's 1e-4 -> declared 1e-3."""
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m,
+        C0,
+        obs,
+        t_obs,
+        free,
+        transforms={free[0]: "positive_log"},
+        param_halfwidth=float(np.log(1000.0)),
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(1e-3))
+    assert ub[0] == pytest.approx(np.log(10.0))
+    prob = _resolve(
+        m, C0, obs, t_obs, free, transforms={free[0]: "positive_log"}, param_halfwidth=0.5
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(0.1) - 0.5)
+    assert ub[0] == pytest.approx(np.log(0.1) + 0.5)
+
+
+def test_resolve_problem_rejects_bad_bounds(base):
+    m, C0, obs, t_obs, free = base
+    with pytest.raises(KeyError, match="Unknown parameter 'nope'"):
+        _resolve(m, C0, obs, t_obs, free, bounds={"nope": (0.0, 1.0)})
+    with pytest.raises(ValueError, match="lo < hi"):
+        _resolve(m, C0, obs, t_obs, free, bounds={free[0]: (1.0, 1.0)})
+    with pytest.raises(ValueError, match=r"\(lo, hi\) pair"):
+        _resolve(m, C0, obs, t_obs, free, bounds={free[0]: (1.0,)})
 
 
 # ---------- _forward_jac ----------

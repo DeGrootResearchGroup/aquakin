@@ -509,6 +509,128 @@ def test_param_halfwidth_bounds_the_rate(setup):
     assert unbounded.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
 
 
+# ---------- absolute / model-declared bounds ----------
+
+_BOUNDED_DECAY_YAML = """
+model:
+  name: bounded_decay
+  version: "1.0"
+  description: "A -> B with a declared upper bound below the true rate."
+  references: []
+species:
+  - name: A
+    units: mol/L
+    default_concentration: 1.0
+  - name: B
+    units: mol/L
+    default_concentration: 0.0
+reactions:
+  - name: A_to_B
+    rate: "k * [A]"
+    parameters:
+      k:
+        value: 0.1
+        units: "s-1"
+        bounds: [1.0e-3, 0.2]
+        transform: positive_log
+    stoichiometry:
+      A: -1
+      B: +1
+"""
+
+
+@pytest.fixture
+def bounded_setup(tmp_path):
+    """Data generated with k = 0.25, fitted by a model that declares k <= 0.2."""
+    path = tmp_path / "bounded_decay.yaml"
+    path.write_text(_BOUNDED_DECAY_YAML)
+    model = aquakin.load_model_from_file(path)
+    reactor = aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1))
+    C0 = jnp.asarray([1.0, 0.0])
+    t_obs = jnp.linspace(0.5, 10.0, 20)
+    truth = model.default_parameters().at[0].set(0.25)
+    obs = reactor.solve(C0, params=truth, t_span=(0.0, 10.0), t_eval=t_obs).C_named("B")
+    common = dict(
+        observations=obs,
+        t_obs=t_obs,
+        free_params=["A_to_B.k"],
+        observed_species=["B"],
+        loss="mse",
+        laplace=False,
+    )
+    return reactor, C0, common
+
+
+@pytest.mark.parametrize("method", ["lbfgsb", "gauss_newton"])
+def test_declared_bound_stops_the_fit(bounded_setup, method):
+    """The optimum (k = 0.25) lies beyond the declared upper bound 0.2, so the
+    fit stops on the bound, from every start of a multistart and from separate
+    calls with different starting values: the bound is absolute and does not
+    move with the start."""
+    reactor, C0, common = bounded_setup
+    model = reactor.model
+    multi = aquakin.calibrate(
+        reactor,
+        C0,
+        optimizer=OptimizerConfig(method=method, n_starts=5, jitter=1.0, seed=0),
+        **common,
+    )
+    assert multi.params_named["A_to_B.k"] == pytest.approx(0.2, rel=1e-6)
+    for k_start in (0.01, 0.05, 0.19):
+        r = aquakin.calibrate(
+            reactor,
+            C0,
+            initial_params=model.default_parameters().at[0].set(k_start),
+            optimizer=OptimizerConfig(method=method),
+            **common,
+        )
+        assert r.params_named["A_to_B.k"] == pytest.approx(0.2, rel=1e-6)
+
+
+def test_use_model_bounds_false_restores_unbounded_fit(bounded_setup):
+    reactor, C0, common = bounded_setup
+    r = aquakin.calibrate(reactor, C0, optimizer=OptimizerConfig(use_model_bounds=False), **common)
+    assert r.params_named["A_to_B.k"] == pytest.approx(0.25, rel=1e-3)
+
+
+def test_explicit_bounds_override_declared_bounds(bounded_setup):
+    """An explicit bound replaces the declared one: a tighter upper bound stops
+    the fit there, and an open upper side lets it reach the true value."""
+    reactor, C0, common = bounded_setup
+    tight = aquakin.calibrate(
+        reactor, C0, optimizer=OptimizerConfig(bounds={"A_to_B.k": (0.01, 0.15)}), **common
+    )
+    assert tight.params_named["A_to_B.k"] == pytest.approx(0.15, rel=1e-6)
+    loose = aquakin.calibrate(
+        reactor, C0, optimizer=OptimizerConfig(bounds={"A_to_B.k": (0.01, None)}), **common
+    )
+    assert loose.params_named["A_to_B.k"] == pytest.approx(0.25, rel=1e-3)
+
+
+def test_halfwidth_is_intersected_with_declared_bounds(bounded_setup):
+    """A wide halfwidth box does not loosen the declared bound."""
+    reactor, C0, common = bounded_setup
+    r = aquakin.calibrate(
+        reactor, C0, optimizer=OptimizerConfig(param_halfwidth=float(np.log(100.0))), **common
+    )
+    assert r.params_named["A_to_B.k"] == pytest.approx(0.2, rel=1e-6)
+
+
+def test_start_outside_bounds_is_moved_inside_with_warning(bounded_setup):
+    reactor, C0, common = bounded_setup
+    p0 = reactor.model.default_parameters().at[0].set(5.0)
+    for method in ("lbfgsb", "gauss_newton"):
+        with pytest.warns(RuntimeWarning, match=r"starting value of \['A_to_B.k'\]"):
+            r = aquakin.calibrate(
+                reactor,
+                C0,
+                initial_params=p0,
+                optimizer=OptimizerConfig(method=method),
+                **common,
+            )
+        assert r.params_named["A_to_B.k"] == pytest.approx(0.2, rel=1e-6)
+
+
 def test_jitter_schedule_reproducible(setup):
     """Cyclic jitter_schedule with a fixed seed is reproducible."""
     reactor, C0, t_obs, obs_clean, _ = setup

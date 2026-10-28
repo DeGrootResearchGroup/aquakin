@@ -68,7 +68,12 @@ the second derivatives through the stiff implicit solve are unreliable
 
 `calibrate`'s tuning knobs are grouped into three public config dataclasses
 (alongside `DifferentiationConfig`), so the top-level signature stays short:
-`optimizer=OptimizerConfig(...)` (backend + multistart + `param_halfwidth`),
+`optimizer=OptimizerConfig(...)` (backend + multistart + rate bounds: the
+model-declared `bounds:` by default (`use_model_bounds=True`), explicit absolute
+`bounds={name: (lo, hi)}`, and the optional `param_halfwidth` box around the
+start, intersected with them; `_resolve_rate_bounds` maps them through each
+transform into `_CalibrationProblem.rate_bounds`, and `_optimizer_bounds` does
+the intersection),
 `laplace=` (a `bool` **or** a `LaplaceConfig(...)`), and
 `free_ic=FreeICConfig(species=..., bounds=..., prior_log_std=...)`. `calibrate`
 unpacks them into the internal `_FitConfig` / `_resolve_problem` scalars; the
