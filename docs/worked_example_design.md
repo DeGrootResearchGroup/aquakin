@@ -8,9 +8,9 @@ Before fitting a kinetic model to data, it is worth asking two questions:
 2. **Which experiment would determine them best?** Sampling times, doses, and
    the choice of what to measure all change how much a run can tell us.
 
-This page answers both for a small ozone-demand model, step by step, from a
-first design that cannot estimate anything to a calibrated model whose
-uncertainties are checked against the truth.
+This page answers both for a small ozone-demand model, step by step. It starts
+from a first design that can determine only one of the four unknowns and ends
+with a calibrated model whose uncertainties are checked against the truth.
 
 All the code on this page comes from the script
 [`examples/ozone_demand_design.py`](https://github.com/DeGrootResearchGroup/aquakin/blob/main/examples/ozone_demand_design.py),
@@ -244,8 +244,14 @@ The same reasoning covers the other cases:
 - A direction loaded on **one unknown** alone, (1.00, 0), means that unknown
   has no effect on the predictions at all.
 
-Step 1 below shows the first and last cases. There k₂ and [M]₀ load equally and
-oppositely, so the data determine little more than k₂[M]₀, and k₁ has a
+The same reading applies when the eigenvalue is small rather than zero. The
+combination that changes along the direction is then poorly determined instead
+of not determined at all, and the perpendicular combination is still the
+well-determined one.
+
+Step 1 below shows two of these patterns. There k₂ and [M]₀ load equally and
+oppositely on a direction with a small eigenvalue, so the data determine the
+product k₂[M]₀ well and the ratio k₂/[M]₀ poorly. k₁ has a zero-eigenvalue
 direction of its own.
 
 ### Structural and practical identifiability
@@ -269,6 +275,25 @@ which covers both situations. The standard deviations show which one applies.
 An infinite standard deviation means a structural problem, and a very large
 finite one a practical problem.
 
+### Scoring a design
+
+To compare designs, or to optimize one, we need a single number that summarizes
+F. The common choices are:
+
+| Criterion | Value | Better | Meaning |
+|---|---|---|---|
+| D | log det F = Σ log λₖ | larger | The volume of the joint confidence region scales as (det F)^(−1/2). |
+| A | trace F⁻¹ = Σ 1/λₖ | smaller | The sum of the variance bounds. |
+| E | min λₖ | larger | The information along the worst-determined direction. |
+| modified E | max λₖ / min λₖ | smaller | How unevenly the directions are determined. |
+
+Choosing the design that maximizes D is called **D-optimal design**. It is the
+usual default, because it shrinks the uncertainty of all unknowns together, and
+it does not depend on the units of the parameters.
+
+A design that leaves some combination structurally undetermined has a zero
+eigenvalue. Its D-criterion is then −∞, the worst possible score.
+
 ## Step 1: diagnose a simple design
 
 A natural first experiment doses 50 µmol/L of ozone and measures it five times
@@ -287,9 +312,11 @@ between 60 and 600 s. Its Fisher information and identifiability report are:
 :end-before: "== Step 2 =="
 ```
 
-Two of the four eigenvalues are far below the others, so two combinations of
-the unknowns are flagged. The loadings say which, and the standard deviations
-show that they are different kinds of problem:
+In the output, `ic[0].D` and `ic[0].M` are the initial pools [D]₀ and [M]₀ of
+experiment 0, the only experiment here. Two of the four eigenvalues are far
+below the others, so two combinations of the unknowns are flagged. The loadings
+say which, and the standard deviations show that they are different kinds of
+problem:
 
 - **k₁ on its own (structural).** Its eigenvalue is zero to round-off, and
   its standard deviation is infinite. D is used up within about 20 s, before
@@ -303,10 +330,10 @@ show that they are different kinds of problem:
   principle, which is why the eigenvalue is not exactly zero, but only to a
   relative standard deviation of about 2000 %.
 
-Fitting this data set would return *some* values of k₁, k₂, and [M]₀, and the
-fit could look good, but those values would mean almost nothing. Only [D]₀ is
-reasonably determined. The Fisher
-information shows this before any experiment is run.
+Fitting data from this design would return *some* values of k₁, k₂, and [M]₀,
+and the fit could look good, but those values would mean almost nothing. Only
+[D]₀ is reasonably determined. The Fisher information shows this before any
+experiment is run.
 
 ## Step 2: compare ways to improve the run
 
@@ -337,15 +364,18 @@ The table shows the relative standard deviation of each unknown
   but it is still far above 100 %, and k₁ stays undetermined.
 - **Early samples** (2–20 s) catch D being consumed, which determines k₁ and
   improves [D]₀. They barely help k₂ and [M]₀.
-- **UV254** measures M directly, so it determines [M]₀ and then k₂, but leaves
-  k₁ unknown.
+- **UV254** measures M directly. Its sensitivities point along [M]₀, a
+  direction the ozone samples hardly reach, so it determines [M]₀ and, through
+  the product k₂[M]₀, also k₂. It leaves k₁ unknown.
 - **Both together** make all four unknowns identifiable.
 
 The last lines rank the same designs with `aquakin.rank_experiments`, which
-scores each one by the D-criterion introduced in step 3 (larger is better, and
-−∞ means some combination is structurally undetermined). It puts early samples
-plus UV254 first and the base design last, and it is the quicker tool when
-there are many candidates.
+scores each one by the D-criterion (see "Scoring a design" above, larger is
+better). This is the quicker tool when there are many candidates. Early samples
+plus UV254 come first. The three designs that leave k₁ structurally
+undetermined all score −∞, however well they determine the other unknowns. The
+D-criterion cannot order such designs among themselves, so compare them by
+their standard deviations instead.
 
 The general lesson is that more data of the same kind rarely fixes an
 identifiability problem. A different measurement, or samples in a different
@@ -353,24 +383,9 @@ time window, does.
 
 ## Step 3: optimize the sampling times and dose
 
-### Design criteria
-
 Once every unknown is identifiable, the design can be improved further by
-moving the samples and changing the dose. To compare designs we need a single
-number that summarizes F. The common choices are:
-
-| Criterion | Value | Better | Meaning |
-|---|---|---|---|
-| D | log det F = Σ log λₖ | larger | The volume of the joint confidence region scales as (det F)^(−1/2). |
-| A | trace F⁻¹ = Σ 1/λₖ | smaller | The sum of the variance bounds. |
-| E | min λₖ | larger | The information along the worst-determined direction. |
-| modified E | max λₖ / min λₖ | smaller | How unevenly the directions are determined. |
-
-Choosing the design that maximizes D is called **D-optimal design**. It is the
-usual default, because it shrinks the uncertainty of all unknowns together, and
-it does not depend on the units of the parameters.
-
-`aquakin.optimize_experiment` maximizes the criterion over the design. It
+moving the samples and changing the dose. `aquakin.optimize_experiment`
+maximizes a criterion from the table above (D by default) over the design. It
 differentiates the criterion with respect to the sampling times and the
 initial concentrations, and moves them with a gradient-based optimizer, within
 bounds and keeping consecutive samples at least `min_spacing` apart. The
@@ -398,8 +413,10 @@ True ozone and UV254 curves at the starting dose (solid) and the designed dose
 bottom) and of the designed run (red, top).
 ```
 
-The designed run roughly halves the uncertainty of k₁ and [D]₀ and reduces
-that of k₂ by a factor of five. Two features of the result are typical of
+The D-criterion rises by 4.65. So det F grows by a factor of $e^{4.65} \approx 100$,
+and the volume of the joint confidence region shrinks by a factor of
+$e^{4.65/2} \approx 10$. The designed run roughly halves the uncertainty of k₁ and
+[D]₀ and reduces that of k₂ by a factor of five. Two features of the result are typical of
 D-optimal designs:
 
 - **Samples cluster.** Rather than spreading out, the samples sit where the
@@ -459,7 +476,7 @@ The fit starts a factor of 2–3 away from the true rate constants and still
 recovers every unknown within its uncertainty of the true value. The relative
 standard deviations match those predicted for the designed run in step 3.
 
-Two settings in the call matter:
+Three settings in the call matter:
 
 - **`param_halfwidth=np.log(100.0)`** keeps each rate constant within a factor
   of 100 of its starting guess (the bound is on the log scale). Without it, an
@@ -468,6 +485,9 @@ Two settings in the call matter:
   (M), and an extreme value of k₁ makes it so stiff that the solve fails.
   Bounds a factor of 100 either side of a reasonable guess rarely constrain the
   answer but make the fit much more reliable.
+- **`n_starts=4`** runs the fit from the initial guess and from three randomly
+  perturbed copies of it, and keeps the best. This guards against stopping in a
+  local minimum. A start whose solve fails is skipped.
 - **`include_ic=True`** makes the uncertainty cover the initial pools as well
   as the rate constants. The rate uncertainties then allow for the trade-off
   between each rate and its pool. Without it, the pools would be treated as
@@ -526,7 +546,8 @@ Since those values are still uncertain, the second design should work well
 across their plausible range, not just at the best estimate. Passing
 `param_draws`, a set of parameter vectors drawn from the calibration's
 posterior, makes `optimize_experiment` maximize the criterion averaged over
-the draws. This is called robust, or pseudo-Bayesian, design.
+the draws. This is called robust, or pseudo-Bayesian, design. The script uses
+ten draws and the default D-criterion.
 
 ```{literalinclude} ../examples/ozone_demand_design.py
 :language: python
@@ -551,14 +572,14 @@ designed around the wrong values.
 - Compute the Fisher information of a planned design before running it.
   `identifiability` names the parameter combinations it cannot determine. Equal
   and opposite loadings in log coordinates point to a product.
-- More samples of the same quantity rarely fix a structural problem. Here no
-  number of ozone samples separates k₂ from [M]₀. A different measurement, or
-  samples in a different time window, does.
+- More samples of the same quantity rarely fix an identifiability problem.
+  Here 30 minutes of ozone samples still leave k₂ and [M]₀ uncertain by about
+  1000 %, and k₁ undetermined. A different measurement, or samples in a
+  different time window, does.
 - Use `rank_experiments` to compare discrete options and `optimize_experiment`
   for sampling times and doses. D-optimal designs cluster samples, so add a few
   in between to check the model.
 - After calibrating, compare the estimated uncertainties with the design-stage
-  predictions, check the eigenvalue spread before trusting a Laplace
-  uncertainty, and confirm key parameters with a profile likelihood.
+  predictions, and confirm key parameters with a profile likelihood.
 - Design the next experiment from the fitted values, averaged over their
   uncertainty.

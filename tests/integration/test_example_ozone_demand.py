@@ -45,6 +45,9 @@ def test_ozone_demand_worked_example(tmp_path):
     assert not np.isfinite(rows["+ UV254"]["fast.k1"])
     assert rows["+ UV254"]["ic[0].M"] < 0.01
     assert all(v < 1 for v in rows["+ early samples + UV254"].values())
+    # The D-criterion is -inf exactly for the designs that leave k1 undetermined.
+    for label, value in out["ranking"].items():
+        assert np.isfinite(value) == np.isfinite(rows[label]["fast.k1"])
 
     # Step 3: the design improves, clusters early, and uses the full dose.
     opt = out["step3"]

@@ -150,9 +150,10 @@ def run_example():
         reactor, list(designs.values()), free_params, params=true_params, free_ic=free_ic
     )
     labels = list(designs)
+    ranking = {labels[c.index]: c.value for c in ranked}
     print("Ranked by the D-criterion:")
-    for c in ranked:
-        print(f"  {labels[c.index]:24s} D = {c.value:7.2f}")
+    for label, value in ranking.items():
+        print(f"  {label:24s} D = {value:7.2f}")
     # [end step2]
 
     print("== Step 3 ==")
@@ -238,7 +239,7 @@ def run_example():
         print(f"{n:10s}{est:12.4g}{sd:12.2g}{percent(sd / est):>10s}{truth[n]:12.4g}")
     for s in ["D", "M"]:
         est, sd = result.ic_named[0][s], result.ic_named_std[0][s]
-        name = f"[{s}]0"
+        name = f"ic[0].{s}"
         print(f"{name:10s}{est:12.4g}{sd:12.2g}{percent(sd / est):>10s}{truth[s]:12.4g}")
     # [end step4-fit]
 
@@ -296,6 +297,7 @@ def run_example():
         "base": base,
         "step1": rep,
         "step2": comparison,
+        "ranking": ranking,
         "step3": opt,
         "rel_designed": rel_designed,
         "step4": result,

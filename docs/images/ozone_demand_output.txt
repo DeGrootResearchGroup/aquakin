@@ -22,9 +22,9 @@ base                           inf     2142%       13%     2112%
 Ranked by the D-criterion:
   + early samples + UV254  D =   29.33
   + early samples          D =   10.92
-  + UV254                  D =   -6.71
-  + late samples           D =  -21.22
   base                     D =    -inf
+  + late samples           D =    -inf
+  + UV254                  D =    -inf
 == Step 3 ==
 converged: True
 D-criterion: 26.67 -> 31.32
@@ -40,8 +40,8 @@ converged: True
               estimate     std dev  relative        true
 fast.k1       0.009944      0.0023       23%        0.01
 slow.k2      2.033e-06     2.2e-08      1.1%       2e-06
-[D]0             14.86        0.72      4.8%          15
-[M]0              1000         1.8     0.18%        1000
+ic[0].D          14.86        0.72      4.8%          15
+ic[0].M           1000         1.8     0.18%        1000
 Profile likelihood:
 profile-likelihood 95% interval for k2: 1.992e-06 to 2.076e-06
 Laplace 95% interval for k2:            1.991e-06 to 2.076e-06
