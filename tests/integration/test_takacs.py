@@ -538,7 +538,8 @@ def test_build_bsm1_takacs_defaults_to_reference_settler(asm1):
     settler settler1dv4 (MODELTYPE=0): the solubles are held through the layers
     and the particulate phase is lumped TSS with the feed-scaled outlet
     composition. These are dynamic-only properties (the steady state is
-    invariant to them); ``per_species`` matches the BSM2 settler1dv5 instead."""
+    invariant to them). The BSM2 settler1dv5_bsm2 is lumped TSS as well;
+    ``per_species`` has no reference counterpart."""
     from aquakin.plant.bsm import build_bsm1
 
     cl = build_bsm1(model=asm1, use_takacs=True).units["clarifier"]

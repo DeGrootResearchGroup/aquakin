@@ -88,7 +88,7 @@ def build_bsm1(
         volume damps the dynamic soluble effluent signal. Default True, matching
         the ten-layer soluble model of the BSM1 reference settler
         ``settler1dv4`` (MODELTYPE=0, the COST benchmark); the BSM2 settler
-        ``settler1dv5`` carries the solubles the same way. Set False for the
+        ``settler1dv5_bsm2`` carries the solubles the same way. Set False for the
         simpler soluble pass-through. Ignored when ``use_takacs=False``. Leaves
         the steady state unchanged. Independent of
         ``settler_composition_mode``.
@@ -98,8 +98,8 @@ def build_bsm1(
         layer and scales the outlet particulate composition from the
         instantaneous feed, reproducing the BSM1 reference ``settler1dv4``.
         ``"per_species"`` carries each particulate per layer (per-layer
-        composition memory), matching the BSM2 reference ``settler1dv5``; it
-        agrees with ``"lumped_tss"`` at steady state but diverges under dynamic
+        composition memory), which neither the BSM1 nor the BSM2 reference
+        settler has (``settler1dv5_bsm2`` is also lumped TSS); it agrees with ``"lumped_tss"`` at steady state but diverges under dynamic
         flow. Ignored when ``use_takacs=False``.
 
     Returns
@@ -193,7 +193,8 @@ def build_bsm1(
             # the instantaneous feed scaled by the boundary-layer TSS ratio
             # ("lumped_tss", the default here). The "per_species" alternative carries
             # per-layer composition memory the reference lacks, which diverges under
-            # dynamic flow (same steady state); it matches the BSM2 settler1dv5.
+            # dynamic flow (same steady state). The BSM2 settler1dv5_bsm2 is also
+            # lumped TSS.
             composition_mode=settler_composition_mode,
         ),
     )

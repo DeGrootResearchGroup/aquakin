@@ -127,13 +127,15 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
           species per layer, shape ``(n_layers, n_part)``. Each layer keeps its
           own evolving composition, and the outlet particulates are read straight
           from the relevant boundary layer. This carries per-layer composition
-          memory, as the BSM2 reference settler ``settler1dv5`` does.
+          memory, which neither IWA reference settler has (``settler1dv4``
+          for BSM1 and ``settler1dv5_bsm2`` for BSM2 both use the lumped form
+          below).
         - ``"lumped_tss"``: the state carries a single total-suspended-solids
           value per layer, shape ``(n_layers,)``. The settling/convection
           dynamics act on that one TSS variable, and each outlet stream's
           particulate composition is the *instantaneous feed* composition scaled
-          by the boundary-layer-to-feed TSS ratio, as in the BSM1 reference
-          settler ``settler1dv4``. The two modes agree at steady state but
+          by the boundary-layer-to-feed TSS ratio, as in the BSM1 and BSM2
+          reference settlers ``settler1dv4`` and ``settler1dv5_bsm2``. The two modes agree at steady state but
           diverge under dynamic flow, because the lumped form has no per-layer
           composition memory.
     soluble_holdup : bool
@@ -147,10 +149,9 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         ``composition_mode``. A non-reacting soluble reaches a uniform = feed
         concentration at steady state, so this leaves every steady state
         unchanged and only adds the dynamic hydraulic smoothing. This is the
-        ten-layer soluble model of the BSM1 reference settler ``settler1dv4``
-        (its default ``MODELTYPE`` 0), which the BSM2 ``settler1dv5`` keeps; it
-        is independent of the per-layer particulate composition memory that
-        distinguishes ``settler1dv5`` (``composition_mode="per_species"``).
+        ten-layer soluble model of the BSM1 and BSM2 reference settlers
+        (``settler1dv4`` / ``settler1dv5_bsm2`` with their default
+        ``MODELTYPE`` 0), and it is independent of ``composition_mode``.
     input_port : str
     overflow_port : str
     underflow_port : str

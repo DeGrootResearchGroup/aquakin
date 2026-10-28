@@ -559,11 +559,15 @@ each soluble a per-layer well-mixed state advected by the bulk flow (convection
 only, no settling), so the clarifier's liquid volume (~`area·height`) damps the
 soluble effluent signal — the ten-layer soluble model of the BSM1 reference
 `settler1dv4` (`MODELTYPE=0`, verified against its source: each soluble is
-advected layer to layer, no settling), which the BSM2 `settler1dv5` keeps
-(`SNH_1..SNH_10` etc. per layer). It is **independent** of the per-layer
-particulate composition memory that distinguishes `settler1dv5`
-(`composition_mode="per_species"`; `settler1dv4` is `"lumped_tss"`, the outlet
-composition feed-scaled by the boundary-layer TSS ratio). The soluble holdup is a tail block of shape
+advected layer to layer, no settling), which the BSM2 `settler1dv5_bsm2` has
+too (`SNH_1..SNH_10` etc. per layer, also `MODELTYPE=0`). It is **independent**
+of `composition_mode`. **Both reference settlers are `"lumped_tss"`**: 10 TSS
+states, outlet particulates = feed composition × `gamma = x_boundary/TSS_feed`
+(checked in both `settler1dv4.c` and `settler1dv5_bsm2.c`, R2019b; the latter
+has 120 states = 10 TSS + 10×10 solubles + 10 temperature). `"per_species"`
+(per-layer composition memory) has no reference counterpart, although it is
+`build_bsm2`'s default. Earlier docs said `per_species` "matches settler1dv5"; it
+does not. The soluble holdup is a tail block of shape
 `(n_layers, n_soluble)` appended to the state (so the particulate layout /
 `state_size` are unchanged when off), orthogonal to `composition_mode`. **It
 leaves every steady state unchanged** — a non-reacting soluble's only transport

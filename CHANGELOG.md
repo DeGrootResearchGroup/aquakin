@@ -87,8 +87,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `evaluate_bsm2` uses the same EQI weights with the full BSM2 OCI. The numbers
   are unchanged. The `TakacsClarifier` / `build_bsm1` / `build_bsm2` docstrings
   now agree on the settler attribution: the soluble holdup is the ten-layer
-  soluble model of `settler1dv4` (BSM1, kept in BSM2's `settler1dv5`), and
-  `composition_mode="per_species"` is the `settler1dv5` composition memory.
+  soluble model of the reference settlers (`settler1dv4` for BSM1,
+  `settler1dv5_bsm2` for BSM2), and both reference settlers are
+  `composition_mode="lumped_tss"`. The earlier statement that `"per_species"`
+  matches the BSM2 settler was wrong: neither reference has per-layer
+  composition memory.
 - The Laplace standard deviations from `aquakin.calibrate` and
   `Plant.calibrate` (`params_named_std`, `posterior_cov`, `ic_named_std`) no
   longer understate the uncertainty of weakly identified parameters. The
