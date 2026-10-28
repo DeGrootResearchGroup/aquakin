@@ -459,7 +459,7 @@ The fit starts a factor of 2–3 away from the true rate constants and still
 recovers every unknown within its uncertainty of the true value. The relative
 standard deviations match those predicted for the designed run in step 3.
 
-Three settings in the call matter:
+Two settings in the call matter:
 
 - **`param_halfwidth=np.log(100.0)`** keeps each rate constant within a factor
   of 100 of its starting guess (the bound is on the log scale). Without it, an
@@ -472,13 +472,6 @@ Three settings in the call matter:
   as the rate constants. The rate uncertainties then allow for the trade-off
   between each rate and its pool. Without it, the pools would be treated as
   known and the rate uncertainties would be too small.
-- **`eig_keep=1e-10`.** By default the Laplace step drops directions with less
-  than 1 % of the largest eigenvalue, treating them as not identifiable. Here
-  every unknown is identifiable, but the information spans about four orders of
-  magnitude. [M]₀ is fixed precisely by UV254, while k₁ rests on three early
-  samples. With the default, the k₁ direction would be dropped and its standard
-  deviation reported as far too small. Check the spread of the eigenvalues with
-  `aquakin.identifiability` before relying on a reported uncertainty.
 
 ### Checking with a profile likelihood
 

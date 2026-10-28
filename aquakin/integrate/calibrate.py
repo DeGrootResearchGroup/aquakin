@@ -54,6 +54,7 @@ from aquakin.integrate._transforms import (
     from_unconstrained,
     to_unconstrained,
 )
+from aquakin.integrate.identifiability import _NULL_LOADING_TOL, _NULL_RTOL
 
 # --- Parameter transforms ----------------------------------------------
 
@@ -128,8 +129,14 @@ class LaplaceConfig:
         the residual Jacobian by AD (PSD by construction, Fisher for ``nll``).
     ridge : float
         Ridge added to the Hessian before inversion.
-    eig_keep : float
-        Relative eigenvalue floor for the eigen-truncated covariance.
+    eig_keep : float, optional
+        Deprecated and ignored. The covariance is now the full inverse of the
+        Hessian, so a weakly identified direction keeps its (large) variance
+        instead of being dropped with zero variance, which understated
+        ``params_named_std``. A parameter that the data do not identify at all
+        (an exactly null Hessian direction) gets an infinite std and a
+        ``RuntimeWarning``. Use :func:`aquakin.identifiability` to flag weakly
+        identified directions. Passing a value emits a ``DeprecationWarning``.
     fd_step : float
         Relative step for the finite-difference Hessian (``method="fd"``).
     dtmax : float, optional
@@ -148,10 +155,21 @@ class LaplaceConfig:
 
     method: str = "fd"
     ridge: float = 1e-6
-    eig_keep: float = 1e-2
+    eig_keep: float | None = None
     fd_step: float = 1e-3
     dtmax: float | None = None
     include_ic: bool = False
+
+    def __post_init__(self):
+        if self.eig_keep is not None:
+            warnings.warn(
+                "LaplaceConfig(eig_keep=...) is deprecated and ignored; the Laplace "
+                "covariance is the full inverse of the Hessian, with an infinite "
+                "std for a parameter on an exactly null direction. Use "
+                "aquakin.identifiability(..., eig_keep=...) to flag weak directions.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
 
 
 @dataclass(frozen=True)
@@ -299,77 +317,58 @@ def _build_residual(
 # --- Laplace covariance -----------------------------------------------
 
 
-def _laplace_covariance(H, ridge: float, eig_keep: float):
-    """Eigen-truncated Laplace covariance from an unconstrained-space Hessian.
+def _laplace_covariance(H, ridge: float):
+    """Laplace covariance and marginal std devs from an unconstrained-space Hessian.
 
-    Symmetrise ``H``, add the ``ridge`` regulariser, eigen-decompose, and
-    **drop** the near-null directions (ridged eigenvalue at or below
-    ``eig_keep * largest_eigenvalue``) -- the non-identifiable parameter
-    combinations the data do not constrain. The covariance is built from the
-    surviving directions only, so it describes the identifiable subspace.
+    Symmetrise ``H``, eigen-decompose it, and invert it in full: every
+    direction with information keeps its variance ``1 / (w_k + ridge)``, however
+    weakly identified. Only an exactly null direction (eigenvalue at or below
+    ``_NULL_RTOL`` (1e-10) times the largest, which includes a negative-curvature
+    direction of a finite-difference Hessian) cannot be inverted. It is left out
+    of ``cov``, and every parameter that loads on it gets an infinite std, so a
+    non-identifiable parameter is reported as such rather than as perfectly
+    known. This is the convention of :func:`aquakin.identifiability`.
 
-    The threshold is **purely relative** to the largest eigenvalue, so the
-    best-identified direction is always kept regardless of the Hessian's
-    absolute scale. (An earlier absolute floor wrongly discarded every
-    direction of a uniformly small-scale but well-structured Hessian -- e.g.
-    a trace-species observable in molar units, where ``JᵀJ`` is ~1e-2 yet
-    spans several orders of magnitude.)
+    The null test is relative to the largest eigenvalue, so it does not depend
+    on the Hessian's absolute scale (an observable on a tiny scale, such as a
+    trace species in molar units, gives a small but well-structured ``JᵀJ``).
 
-    This is the single regulariser shared by ``calibrate``'s
-    ``posterior_cov`` / ``params_named_std`` and
-    :meth:`CalibrationResult.predictive_band`, so the reported marginal std
-    devs and the predictive draws can never disagree about which directions
-    are identified (the inconsistency the two used to have).
+    This one covariance backs ``calibrate``'s ``posterior_cov`` /
+    ``params_named_std`` and :meth:`CalibrationResult.posterior_draws`, so the
+    reported std devs and the posterior draws agree.
 
     Parameters
     ----------
     H : array-like, shape (d, d)
         The (Gauss-Newton or finite-difference) Hessian of the loss.
     ridge : float
-        Tikhonov regulariser added to the diagonal before inversion.
-    eig_keep : float
-        Relative eigenvalue floor for the identifiable subspace.
+        Tikhonov regulariser added to each eigenvalue before inversion.
 
     Returns
     -------
     cov : np.ndarray, shape (d, d)
-        The eigen-truncated covariance ``sum_k (1/w_k) v_k v_k^T`` over the
-        kept directions (rank = number of kept directions).
-    kept_eigvals : np.ndarray, shape (m,)
-        The kept (ridged) eigenvalues ``w_k``.
-    kept_eigvecs : np.ndarray, shape (d, m)
-        The corresponding eigenvectors (columns).
+        ``sum_k v_k v_k^T / (w_k + ridge)`` over the non-null directions; this
+        is ``inv(H + ridge I)`` when no direction is null.
+    std : np.ndarray, shape (d,)
+        ``sqrt(diag(cov))``, set to ``inf`` for each parameter that loads on a
+        null direction.
     """
-    # The threshold is a *fraction* of the largest eigenvalue, so it only keeps
-    # the best-identified direction when eig_keep < 1 (then w_max > thr). At
-    # eig_keep >= 1 every direction would be dropped, leaving an all-zero
-    # covariance -- reject it with a clear message rather than returning that
-    # silently.
-    if not (0.0 <= eig_keep < 1.0):
-        raise ValueError(
-            f"eig_keep must be in [0, 1) (it is the relative eigenvalue floor, "
-            f"a fraction of the largest eigenvalue); got {eig_keep}. A value "
-            f">= 1 would drop every direction and give a degenerate covariance."
-        )
     H = np.asarray(H, dtype=float)
     H = 0.5 * (H + H.T)
-    w, V = np.linalg.eigh(H + ridge * np.eye(H.shape[0]))
+    w, V = np.linalg.eigh(H)
     w_max = float(w.max())
     if not np.isfinite(w_max) or w_max <= 0.0:
         raise ValueError(
-            "Laplace Hessian is not finite / positive-definite after ridging; "
-            "cannot form a posterior covariance (check the fit converged and "
-            "the model output is finite)."
+            "Laplace Hessian is not finite / positive-definite; cannot form a "
+            "posterior covariance (check the fit converged and the model output "
+            "is finite)."
         )
-    # Relative eigen-truncation: keep directions whose ridged eigenvalue exceeds
-    # eig_keep * the largest. With eig_keep < 1 (enforced above) and w_max > 0,
-    # the best-identified direction is always kept and `keep` is never empty.
-    thr = eig_keep * w_max
-    keep = w > thr
-    wk = w[keep]
-    Vk = V[:, keep]
-    cov = (Vk / wk) @ Vk.T
-    return cov, wk, Vk
+    null = w <= _NULL_RTOL * w_max
+    Vk = V[:, ~null]
+    cov = (Vk / (w[~null] + ridge)) @ Vk.T
+    std = np.sqrt(np.diag(cov))
+    involved = (np.abs(V[:, null]) > _NULL_LOADING_TOL).any(axis=1)
+    return cov, np.where(involved, np.inf, std)
 
 
 # --- Result dataclasses ------------------------------------------------
@@ -505,8 +504,9 @@ class CalibrationResult:
         Draws the free rate parameters from ``N(MAP, posterior_cov)`` in
         unconstrained space, maps each draw to physical values, and sets it into
         the fitted parameter vector ``params``; fixed parameters keep their
-        values. The eigen-truncated, non-identifiable directions of
-        ``posterior_cov`` carry no variance. Initial pools are not drawn. The
+        values. An exactly null (non-identifiable) direction of the Hessian is
+        not in ``posterior_cov`` and is not sampled; such parameters have an
+        infinite ``params_named_std``. Initial pools are not drawn. The
         rows can be passed as ``param_draws`` to the experiment-design
         functions, and :meth:`predictive_band` propagates the same draws.
 
@@ -544,12 +544,10 @@ class CalibrationResult:
             ]
         )
 
-        # Draw from N(theta_map, posterior_cov). posterior_cov is the
-        # eigen-truncated covariance that also backs params_named_std, so the
-        # draws and the marginal std devs regularise identically. Eigen-decompose
-        # to sample; the truncated (non-identifiable) directions carry zero
-        # variance and so add no spread (a tiny relative floor drops them and any
-        # round-off negatives).
+        # Draw from N(theta_map, posterior_cov), the covariance that also backs
+        # params_named_std. Eigen-decompose to sample; an exactly null Hessian
+        # direction has zero variance in posterior_cov and is not sampled (a
+        # tiny relative floor drops it and any round-off negatives).
         cov = np.asarray(self.posterior_cov, dtype=float)
         cov = 0.5 * (cov + cov.T)
         s, Q = np.linalg.eigh(cov)
@@ -587,12 +585,10 @@ class CalibrationResult:
         Samples the calibrated parameters from the Laplace posterior with
         :meth:`posterior_draws`, integrates ``reactor``
         from ``C0`` over ``t_eval``, and returns the pointwise percentile
-        envelope across draws. The draws are taken from ``self.posterior_cov``
-        --- the same eigen-truncated covariance behind ``params_named_std`` ---
-        so the band and the reported marginal std devs regularise identically.
-        The non-identifiable directions were already dropped (at calibrate time,
-        via ``laplace_eig_keep``), so they carry zero variance and the draws
-        stay finite.
+        envelope across draws. The draws are taken from ``self.posterior_cov``,
+        the covariance behind ``params_named_std``. A parameter on an exactly
+        null Hessian direction (infinite std) is not sampled, so the draws stay
+        finite.
 
         Requires that the calibration was run with ``laplace=True`` (so a Hessian
         is available). The supplied ``C0`` may differ from the calibration
@@ -614,11 +610,9 @@ class CalibrationResult:
         seed : int
             Seed for the draws (reproducible).
         eig_keep : float, optional
-            Deprecated and ignored. The identifiable-subspace truncation is now
-            applied once, at calibrate time, via
-            ``calibrate(laplace=LaplaceConfig(eig_keep=...))``, so the band and
-            ``params_named_std`` share one regulariser. Passing a value here
-            emits a ``DeprecationWarning``.
+            Deprecated and ignored. The band uses ``self.posterior_cov``, the
+            covariance behind ``params_named_std``. Passing a value here emits
+            a ``DeprecationWarning``.
         observed_species : list[str], optional
             Restrict the returned band to these species. ``None`` returns all.
 
@@ -632,9 +626,8 @@ class CalibrationResult:
             )
         if eig_keep is not None:
             warnings.warn(
-                "predictive_band(eig_keep=...) is deprecated and ignored; the "
-                "identifiable-subspace truncation is set once at calibrate time "
-                "via calibrate(laplace=LaplaceConfig(eig_keep=...)).",
+                "predictive_band(eig_keep=...) is deprecated and ignored; the band "
+                "is drawn from the calibration's posterior_cov.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -668,7 +661,8 @@ class CalibrationResult:
             raise RuntimeError(
                 "All posterior draws produced a non-finite trajectory (no "
                 "exception raised) -- the Laplace draws may leave the feasible "
-                "region; check the fit or tighten laplace_eig_keep."
+                "region; check the fit and params_named_std for poorly identified "
+                "parameters."
             )
         curves = np.array(curves)
         lo = np.percentile(curves, percentiles[0], axis=0)
@@ -913,7 +907,6 @@ class _FitConfig:
     laplace: bool
     laplace_method: str
     laplace_ridge: float
-    laplace_eig_keep: float
     laplace_fd_step: float
     laplace_dtmax: float | None
     compiled_cache: dict | None
@@ -1096,10 +1089,20 @@ def _check_start_gradient(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0):
     """Evaluate the gradient / Jacobian once at the start point and fail loudly
     (with the remedy) if it is non-finite -- a stiff reverse-mode adjoint
     overflowing -- rather than letting the optimizer wander on NaNs."""
-    if cfg.optimizer == "gauss_newton":
-        probe = bundle.jac_j(jnp.asarray(theta0))
-    else:
-        _v0, probe = bundle.value_and_grad(jnp.asarray(theta0))
+    try:
+        if cfg.optimizer == "gauss_newton":
+            probe = bundle.jac_j(jnp.asarray(theta0))
+        else:
+            _v0, probe = bundle.value_and_grad(jnp.asarray(theta0))
+    except Exception as exc:
+        if not _is_solve_failure(exc):
+            raise
+        raise RuntimeError(
+            "Calibration failed: the forward solve failed at the starting guess, "
+            "before the optimiser took a step. Check the initial parameters and "
+            "initial state, or start from a better guess. The solve error is the "
+            "direct cause above."
+        ) from exc
     # Forward-mode only enters through the Gauss-Newton Jacobian; L-BFGS-B always
     # uses a reverse scalar gradient, so its cap-free fix is gradient='stable_adjoint'.
     on_finite_path = cfg.gradient == "stable_adjoint" or (
@@ -1128,9 +1131,38 @@ def _check_start_gradient(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0):
     check_finite_gradient(probe, what="calibration gradient", remedy=remedy)
 
 
+_SOLVE_FAILURE_HINT = (
+    "This usually means the optimiser stepped into a stiff or infeasible region "
+    "of parameter space. Bound the rate constants with "
+    "OptimizerConfig(param_halfwidth=...) (e.g. np.log(100) for two decades "
+    "either side of the start), start from a better initial guess, or tighten "
+    "the free_ic bounds."
+)
+
+
+def _is_solve_failure(exc: BaseException) -> bool:
+    """Whether ``exc`` is a runtime failure of the forward solve (as opposed to
+    a programming error).
+
+    A solve that goes bad inside compiled code (a non-finite linear solve, a
+    step-count overrun) is reported through ``equinox.error_if``, which raises
+    from a host callback. It reaches Python either as equinox's own runtime
+    error or, under a plain ``jax.jit``, wrapped in a JAX runtime error (or a
+    ``ValueError`` on older JAX) whose message carries the callback failure.
+    """
+    if type(exc).__name__ in ("EquinoxRuntimeError", "_EquinoxRuntimeError"):
+        return True
+    return isinstance(exc, (RuntimeError, ValueError)) and "Callback error" in str(exc)
+
+
 def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bounds) -> _OptOut:
     """Run the optimiser from the start point, then from ``n_starts - 1``
-    deterministic jittered restarts, keeping the lowest finite loss."""
+    deterministic jittered restarts, keeping the lowest finite loss.
+
+    A start whose forward solve fails part-way (see :func:`_is_solve_failure`)
+    is skipped with a ``RuntimeWarning``; if every start fails, a
+    ``RuntimeError`` with remedies is raised, chained to the first failure.
+    """
     bounds, lb, ub, ls_bounds, _has = opt_bounds
 
     def _np_loss_and_grad(x_np):
@@ -1167,7 +1199,18 @@ def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bound
         n_iter_ls = int(r.njev) if r.njev is not None else int(r.nfev)
         return _OptOut(np.asarray(r.x), float(r.cost), bool(r.success), str(r.message), n_iter_ls)
 
-    result = _run_from(theta0)
+    failures = []  # (start index, exception) of starts whose solve failed
+
+    def _try_from(s, x_start):
+        try:
+            return _run_from(x_start)
+        except Exception as exc:
+            if not _is_solve_failure(exc):
+                raise
+            failures.append((s, exc))
+            return None
+
+    result = _try_from(0, theta0)
     if cfg.n_starts > 1:
         theta0_np = np.asarray(theta0)
         # Default: a single Gaussian stream of scale ``jitter`` seeded once.
@@ -1183,9 +1226,27 @@ def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bound
             perturbed = theta0_np + noise
             if bounds is not None:
                 perturbed = np.clip(perturbed, lb, ub)
-            cand = _run_from(perturbed)
-            if np.isfinite(cand.fun) and cand.fun < result.fun:
+            cand = _try_from(s, perturbed)
+            if cand is None:
+                continue
+            if result is None or (np.isfinite(cand.fun) and cand.fun < result.fun):
                 result = cand
+    if result is None:
+        what = "the optimiser run" if cfg.n_starts == 1 else f"all {cfg.n_starts} optimiser starts"
+        raise RuntimeError(
+            f"Calibration failed: the forward solve failed in {what}, at a parameter "
+            f"point the optimiser reached. {_SOLVE_FAILURE_HINT} The first solve "
+            "error is the direct cause above."
+        ) from failures[0][1]
+    if failures:
+        idx = ", ".join(str(s) for s, _exc in failures)
+        warnings.warn(
+            f"calibrate: the forward solve failed in {len(failures)} of {cfg.n_starts} "
+            f"optimiser starts (start index {idx}; 0 is the unperturbed start); "
+            f"they were skipped and the best remaining start was kept. {_SOLVE_FAILURE_HINT}",
+            RuntimeWarning,
+            stacklevel=3,
+        )
     return result
 
 
@@ -1302,9 +1363,18 @@ def _laplace_posterior(
         )
     H = 0.5 * (H + H.T)  # symmetrise away asymmetry / FD noise
 
-    cov_np, _, _ = _laplace_covariance(np.asarray(H), cfg.laplace_ridge, cfg.laplace_eig_keep)
+    cov_np, std_np = _laplace_covariance(np.asarray(H), cfg.laplace_ridge)
+    names = _joint_names(problem) if joint else list(problem.free_params)
+    unidentified = [n for n, sd in zip(names, std_np) if not np.isfinite(sd)]
+    if unidentified:
+        warnings.warn(
+            "The Laplace Hessian has an exactly null direction, so the data do "
+            f"not identify {unidentified}; their standard deviation is inf.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
     cov = jnp.asarray(cov_np)
-    std_unconstrained = jnp.sqrt(jnp.diag(cov))
+    std_unconstrained = jnp.asarray(std_np)
 
     # Delta-method projection to physical space.
     jac = jnp.stack(
@@ -1653,7 +1723,7 @@ def calibrate(
         Laplace covariance approximation at the MAP. ``True`` (default) computes
         it with default settings, ``False`` disables it, and a
         :class:`LaplaceConfig` computes it with tuning (``method`` {"fd",
-        "gauss_newton"}, ``ridge``, ``eig_keep``, ``fd_step``, ``dtmax``). It is
+        "gauss_newton"}, ``ridge``, ``fd_step``, ``dtmax``). It is
         interpretable as a Bayesian posterior only when ``loss="nll"`` with a
         calibrated ``sigma`` (the loss then IS a proper Gaussian negative
         log-likelihood); for ``"mse"`` / ``"wmse"`` it is the inverse loss
@@ -1776,7 +1846,6 @@ def calibrate(
         laplace=laplace_on,
         laplace_method=lap.method,
         laplace_ridge=lap.ridge,
-        laplace_eig_keep=lap.eig_keep,
         laplace_fd_step=lap.fd_step,
         laplace_dtmax=lap.dtmax,
         compiled_cache=_compiled_cache,

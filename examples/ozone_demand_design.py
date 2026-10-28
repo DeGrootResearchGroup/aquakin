@@ -223,7 +223,7 @@ def run_example():
         loss="nll",
         sigma=sigma_both,
         free_ic=free_ic,
-        laplace=aquakin.LaplaceConfig(method="gauss_newton", include_ic=True, eig_keep=1e-10),
+        laplace=aquakin.LaplaceConfig(method="gauss_newton", include_ic=True),
         # Keep each rate constant within a factor of 100 of its starting
         # guess, so the optimizer cannot step into regions where the solve fails.
         optimizer=aquakin.OptimizerConfig(

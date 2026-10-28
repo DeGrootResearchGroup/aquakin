@@ -237,7 +237,10 @@ loadings on a rate constant and a pool (for example `+0.71` on `k` and `-0.71`
 on `ic[0].X`) mean the data see only their product `k [X]0`. Such a pair should
 be lumped into one parameter or separated by a new experiment. A direction is
 flagged when its eigenvalue is below `eig_keep` (default `1e-2`) times the
-largest, the same rule the Laplace posterior uses to drop directions.
+largest. Flagging is a diagnostic only. The standard deviations here, like
+`params_named_std` from `calibrate`, come from the full inverse of the
+information, so a weakly identified quantity has a large standard deviation,
+and a quantity on an exactly null direction has an infinite one.
 
 The collinearity index of a subset is `1 / sqrt(λ_min)` of the information
 normalised to unit diagonal. It is 1 when the subset's sensitivities are

@@ -98,7 +98,14 @@ the MAP — keep the two in step if either changes. `identifiability`
 ([`integrate/identifiability.py`](aquakin/integrate/identifiability.py)) is pure
 NumPy on the matrix (no solves); it reads `joint_hessian` / `joint_names` from a
 `CalibrationResult` when present, else the rate `hessian_unconstrained`, and its
-default `eig_keep` matches `LaplaceConfig` so flagged = dropped directions. A quantity counts as
+`eig_keep` only *flags* weak directions. `calibrate`'s Laplace covariance
+(`_laplace_covariance`) is the full inverse of the Hessian and shares
+identifiability's null convention (`_NULL_RTOL`, `_NULL_LOADING_TOL`, imported
+from `identifiability.py`): an exactly null direction is left out of
+`posterior_cov` and its involved parameters get an infinite std plus a
+`RuntimeWarning`. (`LaplaceConfig.eig_keep` once dropped every direction below
+1e-2 of the largest with zero variance, understating weakly identified stds by
+up to ~100×; it is now deprecated and ignored.) A quantity counts as
 "involved" in an exactly-null direction (rel. eigenvalue ≤ 1e-10) only if its
 loading there exceeds `null_loading_tol` (default 1e-2): a null eigenvector is
 only accurate to the sensitivities' round-off, and a 1e-6 cut marked
@@ -131,7 +138,18 @@ that contract. A `Plant` has a different solve contract (flat assembled state,
 / `_laplace_posterior` unchanged — the payoff of the seam. Behaviour equivalence
 of the decomposition to the old monolith is pinned by the full-fit suite
 (`tests/integration/test_calibrate.py`, `test_profile.py`); the plant path by
-`test_plant_calibrate.py`.
+`test_plant_calibrate.py`. **Solve failures
+mid-fit:** `_run_multistart` treats a start whose forward solve raises at runtime
+as a failed start. `_is_solve_failure` recognises these: equinox's runtime error,
+or a JAX runtime / `ValueError` carrying the host-callback failure that
+`equinox.error_if` raises from compiled code. Such a start is skipped with one
+`RuntimeWarning` and the best remaining start is kept. If no start survives, a
+`RuntimeError` with the `param_halfwidth` / initial-guess / `free_ic`-bounds
+remedies is raised, chained to the first failure. Any other exception still
+propagates unchanged. `_check_start_gradient` turns a solve failure at the
+starting guess into a similar error. Both reach `Plant.calibrate` through the
+shared functions. Tested in `test_calibrate.py` (a fake forward
+model that raises through `equinox.error_if` past a rate threshold).
 
 ### Differentiating stiff models (`dtmax`)
 

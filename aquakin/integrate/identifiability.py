@@ -33,6 +33,9 @@ from aquakin.integrate._transforms import dphysical_dunconstrained
 # zero (a structurally non-identifiable direction), so the parameters loading on
 # them get an infinite standard error rather than a round-off-sized finite one.
 _NULL_RTOL = 1e-10
+# Default smallest loading on a null direction that counts as involvement (see
+# ``null_loading_tol``); calibrate's Laplace covariance uses the same value.
+_NULL_LOADING_TOL = 1e-2
 # Loadings below this fraction of a direction's largest are ignored when fixing
 # the eigenvector's sign convention.
 _LOADING_TOL = 1e-6
@@ -51,8 +54,9 @@ class EigenDirection:
     relative_eigenvalue : float
         ``eigenvalue`` divided by the largest eigenvalue.
     identifiable : bool
-        ``relative_eigenvalue > eig_keep`` -- the same rule by which the Laplace
-        posterior in :func:`aquakin.calibrate` keeps or drops a direction.
+        ``relative_eigenvalue > eig_keep``. A direction flagged here is weakly
+        identified; the Laplace posterior in :func:`aquakin.calibrate` still
+        carries its (large) variance.
     loadings : dict[str, float]
         Eigenvector components by name, largest magnitude first. The sign is
         fixed so the first name (in ``names`` order) with a non-negligible
@@ -234,7 +238,7 @@ def identifiability(
     values: dict[str, float] | None = None,
     transforms: list[str] | None = None,
     eig_keep: float = 1e-2,
-    null_loading_tol: float = 1e-2,
+    null_loading_tol: float = _NULL_LOADING_TOL,
 ) -> IdentifiabilityResult:
     """Practical-identifiability report from a Fisher information matrix.
 
@@ -257,8 +261,9 @@ def identifiability(
         matrix coordinates to physical values.
     eig_keep : float
         Relative eigenvalue floor below which a direction is flagged as not
-        identifiable. The default matches :class:`LaplaceConfig`, so the flagged
-        directions are the ones the Laplace posterior drops.
+        identifiable. Flagging does not change ``std``, which is the full
+        Cramer-Rao bound (infinite only on an exactly null direction), the same
+        as ``params_named_std`` from :func:`aquakin.calibrate`.
     null_loading_tol : float
         Smallest loading on an exactly non-identifiable direction (eigenvalue at
         or below 1e-10 of the largest) that counts as involvement. Such a

@@ -9,6 +9,8 @@ monolith is covered by the full-fit tests in
 ``tests/integration/test_calibrate.py``; here we pin the units.
 """
 
+import dataclasses
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -20,13 +22,17 @@ from aquakin.integrate.calibrate import (
     _build_loss,
     _build_residual,
     _CalibrationProblem,
+    _check_start_gradient,
     _FitConfig,
     _forward_jac,
     _free_ic_fields,
+    _is_solve_failure,
     _laplace_covariance,
+    _ObjectiveBundle,
     _optimizer_bounds,
     _resolve_laplace,
     _resolve_problem,
+    _run_multistart,
     calibrate,
 )
 
@@ -233,7 +239,6 @@ def _cfg(ad_mode, gradient):
         laplace=False,
         laplace_method="fd",
         laplace_ridge=1e-6,
-        laplace_eig_keep=1e-2,
         laplace_fd_step=1e-3,
         laplace_dtmax=None,
         compiled_cache=None,
@@ -309,17 +314,11 @@ def test_free_ic_fields_rejects_bad_type():
 # ---------- _laplace_covariance: guards ----------
 
 
-def test_laplace_covariance_rejects_out_of_range_eig_keep():
-    H = np.eye(2)
-    with pytest.raises(ValueError, match=r"eig_keep must be in \[0, 1\)"):
-        _laplace_covariance(H, ridge=1e-6, eig_keep=1.0)
-
-
 def test_laplace_covariance_rejects_non_pd_hessian():
-    # A zero Hessian ridged by 0 has w_max == 0 -> not positive-definite.
+    # A zero Hessian has no positive eigenvalue -> not positive-definite.
     H = np.zeros((2, 2))
     with pytest.raises(ValueError, match="not finite / positive-definite"):
-        _laplace_covariance(H, ridge=0.0, eig_keep=1e-2)
+        _laplace_covariance(H, ridge=1e-6)
 
 
 # ---------- _resolve_problem: further validation ----------
@@ -447,3 +446,97 @@ def test_predictive_band_rejects_degenerate_covariance(simple_model):
     reactor = _batch_reactor(simple_model)
     with pytest.raises(ValueError, match="no positive-variance directions"):
         result.predictive_band(reactor, jnp.array([1.0, 0.0]), jnp.array([0.0, 1.0]))
+
+
+# ---------- solve failures: _is_solve_failure / _run_multistart ----------
+
+
+class EquinoxRuntimeError(RuntimeError):
+    """Stand-in carrying the class name of equinox's runtime error."""
+
+
+_CALLBACK_MSG = "INTERNAL: CpuCallback error calling callback: non-finite output"
+
+
+@pytest.mark.parametrize(
+    "exc,expected",
+    [
+        (EquinoxRuntimeError("linear solve failed"), True),
+        (RuntimeError(_CALLBACK_MSG), True),
+        (ValueError(_CALLBACK_MSG), True),
+        (ValueError("bad shape"), False),
+        (RuntimeError("something else"), False),
+        (TypeError(_CALLBACK_MSG), False),
+    ],
+)
+def test_is_solve_failure(exc, expected):
+    assert _is_solve_failure(exc) is expected
+
+
+def _quadratic_bundle(fails):
+    """L-BFGS-B bundle for the loss ``sum(x**2)`` whose evaluation raises
+    ``fails(x)`` (an exception, or ``None`` to succeed)."""
+
+    def value_and_grad(x):
+        exc = fails(np.asarray(x))
+        if exc is not None:
+            raise exc
+        return jnp.sum(x**2), 2.0 * x
+
+    return _ObjectiveBundle(value_and_grad, None, None, False)
+
+
+def _ms_cfg(n_starts, optimizer="lbfgsb"):
+    return dataclasses.replace(
+        _cfg("auto", "jax_adjoint"),
+        optimizer=optimizer,
+        max_iter=50,
+        n_starts=n_starts,
+        jitter_schedule=(1.0,),
+    )
+
+
+_NO_BOUNDS = (None, None, None, (-np.inf, np.inf), False)
+_THETA0 = jnp.asarray([2.0])
+
+
+def test_run_multistart_uses_jittered_start_when_first_fails():
+    """A failing unperturbed start is skipped and a surviving jittered start is
+    returned, with a warning naming start 0."""
+    calls = []
+
+    def fails(x):
+        calls.append(x.copy())
+        return RuntimeError(_CALLBACK_MSG) if len(calls) == 1 else None
+
+    with pytest.warns(RuntimeWarning, match=r"start index 0;"):
+        out = _run_multistart(_ms_cfg(2), _quadratic_bundle(fails), _THETA0, _NO_BOUNDS)
+    assert out.fun == pytest.approx(0.0, abs=1e-10)
+
+
+def test_run_multistart_single_start_failure_raises():
+    """With ``n_starts=1`` a failed run raises the actionable error, chained."""
+    bundle = _quadratic_bundle(lambda x: ValueError(_CALLBACK_MSG))
+    with pytest.raises(RuntimeError, match="in the optimiser run") as info:
+        _run_multistart(_ms_cfg(1), bundle, _THETA0, _NO_BOUNDS)
+    assert "param_halfwidth" in str(info.value)
+    assert isinstance(info.value.__cause__, ValueError)
+
+
+def test_run_multistart_propagates_non_solve_errors():
+    """An exception that is not a solve failure is not treated as a failed start."""
+    bundle = _quadratic_bundle(lambda x: TypeError("bug"))
+    with pytest.raises(TypeError, match="bug"):
+        _run_multistart(_ms_cfg(3), bundle, _THETA0, _NO_BOUNDS)
+
+
+def test_check_start_gradient_wraps_solve_failure():
+    bundle = _quadratic_bundle(lambda x: RuntimeError(_CALLBACK_MSG))
+    with pytest.raises(RuntimeError, match="at the starting guess"):
+        _check_start_gradient(_ms_cfg(1), bundle, _THETA0)
+
+
+def test_check_start_gradient_propagates_non_solve_errors():
+    bundle = _quadratic_bundle(lambda x: TypeError("bug"))
+    with pytest.raises(TypeError, match="bug"):
+        _check_start_gradient(_ms_cfg(1), bundle, _THETA0)
