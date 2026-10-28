@@ -69,9 +69,15 @@ the second derivatives through the stiff implicit solve are unreliable
 `calibrate`'s tuning knobs are grouped into three public config dataclasses
 (alongside `DifferentiationConfig`), so the top-level signature stays short:
 `optimizer=OptimizerConfig(...)` (backend + multistart, either jittered
-`n_starts` or an explicit `starts=[...]` list resolved by `_resolve_starts` and
-run by `_run_multistart(..., starts=)` through the one compiled objective +
-`param_halfwidth`),
+`n_starts` or an explicit `starts=[...]` list resolved by `_resolve_starts`,
+each start moved inside the bounds by `_clip_start`, and run by
+`_run_multistart(..., starts=)` through the one compiled objective; plus rate
+bounds: the model-declared `bounds:` by default (`use_model_bounds=True`),
+explicit absolute `bounds={name: (lo, hi)}`, and the optional `param_halfwidth`
+box around `initial_params`, intersected with them; `_resolve_rate_bounds` maps
+them through each transform into `_CalibrationProblem.rate_bounds`, and
+`_optimizer_bounds` does the intersection. The bounds reach only SciPy, not the
+compiled objective, so they are not in `struct_key`),
 `laplace=` (a `bool` **or** a `LaplaceConfig(...)`), and
 `free_ic=FreeICConfig(species=..., bounds=..., prior_log_std=...)`. `calibrate`
 unpacks them into the internal `_FitConfig` / `_resolve_problem` scalars; the

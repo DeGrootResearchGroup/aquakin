@@ -134,6 +134,33 @@ result = aquakin.calibrate(reactor, C0, observations, t_obs, free_params,
                            optimizer=aquakin.OptimizerConfig(starts=starts))
 ```
 
+`calibrate` keeps each free parameter inside the `bounds:` declared on it in
+the model, as `fit` does. The optimiser works in each parameter's transformed
+space, so a declared bound on a `positive_log` parameter becomes a bound on its
+logarithm, and every multistart start searches the same region. Pass explicit
+absolute bounds, which replace the declared ones, or an extra box around the
+starting value:
+
+```python
+optimizer = aquakin.OptimizerConfig(
+    bounds={"hetero.muH": (0.2, 10.0), "hetero.KS": (1.0, None)},  # None: open side
+    param_halfwidth=np.log(100.0),    # optional: within 100x of the start as well
+)
+```
+
+`OptimizerConfig(use_model_bounds=False)` ignores the declared bounds. A
+starting value outside the bounds, including each entry of a `starts` list, is
+moved to the nearest bound, with a warning.
+
+A parameter that ends on a bound is listed in `result.at_bound` (for example
+`{"hetero.muH": "lower"}`), with a warning. The Laplace approximation is not
+valid on an active bound, so its `params_named_std` is `nan`, it has zero
+variance in `posterior_cov` (posterior draws keep it on the bound), and the
+other parameters' standard deviations are conditional on it staying there.
+`aquakin.identifiability(result)` carries the same flag. A profile likelihood
+gives the one-sided interval for such a parameter. Fitted initial pools on
+their `FreeICConfig` bounds are flagged the same way, as `"ic[k].<species>"`.
+
 `observations` is shape `(n_t,)` for one species or `(n_t, n_observed)` for
 several; `t_obs` is in the model's native time unit unless you pass `time_unit=`.
 Pass **lists** of `C0`/`observations`/`t_obs` for a joint multi-batch fit, and
