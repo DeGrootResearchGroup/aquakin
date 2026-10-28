@@ -144,6 +144,30 @@ The columns of `observations` follow the function's outputs, and `sigma` may
 give one value per output. `profile_likelihood` and `aquakin.Experiment` accept
 `observation_fn` the same way.
 
+A function of three arguments, `observation_fn(t, C, p)`, also receives the
+sample time, in the unit of `t_obs`. Use it for a measurement whose mapping
+changes with time, such as a drifting sensor:
+
+```python
+drifting = lambda t, C, p: C[i_B] * (1.0 + 0.05 * t)
+```
+
+A missing observation is a `NaN` in `observations`. It is left out of the fit,
+so outputs sampled at different times can share one `t_obs` grid. For example,
+a total measured only at the start is a second output that is `NaN` except at
+`t = 0`:
+
+```python
+obs = np.stack([b_series, np.where(t_obs == 0.0, total0, np.nan)], axis=1)
+fn = lambda C, p: jnp.stack([C[i_B], C[i_A] + C[i_B]])
+result = aquakin.calibrate(reactor, C0, obs, t_obs, free_params,
+                           observation_fn=fn, loss="nll", sigma=0.01)
+```
+
+With `"mse"` or `"wmse"` the mean is over the observed entries. For a planned
+experiment, `aquakin.Experiment(mask=...)` (`True` where an output is measured)
+marks the same thing for `fisher_information` and experiment design.
+
 ### Uncertainty: posterior-predictive bands
 
 With `laplace=True`, sample the posterior and propagate it through a solve to get

@@ -31,6 +31,7 @@ available two ways (``laplace_method``):
 
 from __future__ import annotations
 
+import inspect
 import warnings
 from collections import namedtuple
 from dataclasses import dataclass, field, replace
@@ -243,8 +244,13 @@ def _build_loss(
 ):
     """Return ``loss(pred) -> scalar``.
 
-    ``pred`` and ``observations`` have shape ``(n_t, n_observed)``.
+    ``pred`` and ``observations`` have shape ``(n_t, n_observed)``. ``NaN``
+    entries of ``observations`` are missing: they are masked out of the loss
+    (``mse`` / ``wmse`` average over the observed entries only).
     """
+    missing = _missing_mask(observations)
+    if missing is not None:
+        return _build_masked_loss(loss_type, observations, sigma, missing)
     if loss_type == "mse":
 
         def _loss(pred):
@@ -287,6 +293,9 @@ def _build_residual(
     unreliable. For ``nll`` this ``H`` is exactly the Fisher information.
     """
     obs = observations
+    missing = _missing_mask(observations)
+    if missing is not None:
+        return _build_masked_residual(loss_type, observations, sigma, missing)
     if loss_type == "mse":
         scale = jnp.sqrt(2.0 / obs.size)
 
@@ -312,6 +321,54 @@ def _build_residual(
 
         return _resid
     raise ValueError(f"Unknown loss {loss_type!r}; choose one of {_VALID_LOSSES}.")
+
+
+def _missing_mask(observations):
+    """Boolean ``NaN`` mask of ``observations`` (missing entries), or ``None``
+    when every entry is present (the unmasked loss is then used unchanged)."""
+    obs = np.asarray(observations)
+    if not np.issubdtype(obs.dtype, np.floating):
+        return None
+    nan = np.isnan(obs)
+    return jnp.asarray(nan) if nan.any() else None
+
+
+def _masked_parts(loss_type, observations, sigma, missing):
+    """``(obs_filled, keep, sig, n_kept)`` for a loss with missing entries:
+    the observations with ``NaN`` replaced by 0 (so no ``NaN`` enters the
+    gradient), the 0/1 keep weights, ``sigma`` broadcast to the data shape, and
+    the number of observed entries."""
+    if loss_type in ("wmse", "nll") and sigma is None:
+        raise ValueError(f"loss={loss_type!r} requires a sigma argument.")
+    if loss_type not in _VALID_LOSSES:
+        raise ValueError(f"Unknown loss {loss_type!r}; choose one of {_VALID_LOSSES}.")
+    keep = jnp.where(missing, 0.0, 1.0)
+    obs_filled = jnp.where(missing, 0.0, observations)
+    sig = None if sigma is None else jnp.broadcast_to(sigma, observations.shape)
+    return obs_filled, keep, sig, float(np.sum(~np.asarray(missing)))
+
+
+def _build_masked_loss(loss_type, observations, sigma, missing):
+    """:func:`_build_loss` with the ``NaN`` (missing) entries left out."""
+    obs, keep, sig, n_kept = _masked_parts(loss_type, observations, sigma, missing)
+    if loss_type == "mse":
+        return lambda pred: jnp.sum(keep * (pred - obs) ** 2) / n_kept
+    if loss_type == "wmse":
+        return lambda pred: jnp.sum(keep * ((pred - obs) / sig) ** 2) / n_kept
+    return lambda pred: jnp.sum(keep * (jnp.log(sig) + (pred - obs) ** 2 / (2.0 * sig**2)))
+
+
+def _build_masked_residual(loss_type, observations, sigma, missing):
+    """:func:`_build_residual` with zero residuals at the missing entries (so
+    they add nothing to the Gauss-Newton / Fisher Hessian)."""
+    obs, keep, sig, n_kept = _masked_parts(loss_type, observations, sigma, missing)
+    if loss_type == "mse":
+        scale = jnp.sqrt(2.0 / n_kept)
+        return lambda pred: (scale * keep * (pred - obs)).reshape(-1)
+    if loss_type == "wmse":
+        scale = jnp.sqrt(2.0 / n_kept)
+        return lambda pred: (scale * keep * (pred - obs) / sig).reshape(-1)
+    return lambda pred: (keep * (pred - obs) / sig).reshape(-1)
 
 
 # --- Laplace covariance -----------------------------------------------
@@ -805,9 +862,12 @@ class _CalibrationProblem:
     ic_center_full: jnp.ndarray
     ic_prior_log_std: float | None
     ic_bounds: tuple
-    # Optional observation function (C, params) -> y; replaces the species
-    # columns ``obs_species_indices`` when set.
+    # Optional observation function (C, params) -> y, or (t, C, params) -> y;
+    # replaces the species columns ``obs_species_indices`` when set.
     observation_fn: object = None
+    # Factor from ``t_obs``'s unit to the model's native one: a time-aware
+    # ``observation_fn`` receives the sample time in ``t_obs``'s unit.
+    obs_time_factor: float = 1.0
 
     def physical_from_theta(self, rate_thetas: jnp.ndarray) -> jnp.ndarray:
         """Free rate parameters in physical space from their unconstrained
@@ -843,6 +903,7 @@ class _CalibrationProblem:
             self.n_observed,
             tuple(int(ds[0].shape[0]) for ds in self.dataset_static),
             self.observation_fn,
+            self.obs_time_factor,
         )
 
 
@@ -861,24 +922,80 @@ def _predict(problem: _CalibrationProblem, fm: _ReactorForwardModel, p, ic_theta
                 jnp.exp(ic_thetas[k * problem.m_ic : (k + 1) * problem.m_ic])
             )
         ys = fm.solve_trajectory(p, C0_k, tspan_i, tobs_i)
-        preds.append(observe(ys, p, problem.obs_species_indices, problem.observation_fn))
+        preds.append(
+            observe(
+                ys,
+                p,
+                problem.obs_species_indices,
+                problem.observation_fn,
+                t=tobs_i / problem.obs_time_factor,
+            )
+        )
     return preds
 
 
-def observe(ys, p, species_idx, observation_fn=None):
+def observation_takes_time(observation_fn) -> bool:
+    """Whether ``observation_fn`` has the time-aware signature
+    ``(t, C, params)`` (three required positional arguments) rather than
+    ``(C, params)`` (two).
+
+    Raises
+    ------
+    TypeError
+        If it takes neither two nor three required positional arguments.
+    """
+    if not callable(observation_fn):
+        raise TypeError(
+            "observation_fn must be a callable (C, params) -> y or (t, C, params) -> y."
+        )
+    try:
+        sig = inspect.signature(observation_fn)
+    except (TypeError, ValueError):
+        return False  # no introspectable signature: the (C, params) form
+    params = list(sig.parameters.values())
+    if any(q.kind is inspect.Parameter.VAR_POSITIONAL for q in params):
+        return False
+    n_req = sum(
+        1
+        for q in params
+        if q.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        and q.default is inspect.Parameter.empty
+    )
+    if n_req == 3:
+        return True
+    if n_req == 2:
+        return False
+    raise TypeError(
+        "observation_fn must take (C, params) or (t, C, params) as required "
+        f"positional arguments; got a signature {sig}."
+    )
+
+
+def observe(ys, p, species_idx, observation_fn=None, t=None):
     """Observed outputs of a ``(n_t, n_species)`` trajectory: the
-    ``species_idx`` columns, or ``observation_fn(C, p)`` applied at each time."""
+    ``species_idx`` columns, or ``observation_fn`` applied at each time --
+    ``observation_fn(C, p)``, or ``observation_fn(t, C, p)`` with the sample
+    times ``t`` ``(n_t,)`` for a time-aware function."""
     if observation_fn is None:
         return ys[:, species_idx]
+    if observation_takes_time(observation_fn):
+        if t is None:
+            raise ValueError("A time-aware observation_fn(t, C, params) needs the sample times.")
+        return jax.vmap(lambda tt, c: jnp.atleast_1d(observation_fn(tt, c, p)))(
+            jnp.asarray(t, dtype=float), ys
+        )
     return jax.vmap(lambda c: jnp.atleast_1d(observation_fn(c, p)))(ys)
 
 
-def observation_size(observation_fn, C0, p) -> int:
+def observation_size(observation_fn, C0, p, t0: float = 0.0) -> int:
     """Number of outputs of ``observation_fn``, checked to be a 1-D vector
-    (or a scalar) on the model's state and parameter vectors."""
-    if not callable(observation_fn):
-        raise TypeError("observation_fn must be a callable (C, params) -> y.")
-    y = jnp.asarray(observation_fn(jnp.asarray(C0, dtype=float), jnp.asarray(p)))
+    (or a scalar) on the model's state and parameter vectors (and the time
+    ``t0`` for a time-aware function)."""
+    C0 = jnp.asarray(C0, dtype=float)
+    if observation_takes_time(observation_fn):
+        y = jnp.asarray(observation_fn(jnp.asarray(float(t0)), C0, jnp.asarray(p)))
+    else:
+        y = jnp.asarray(observation_fn(C0, jnp.asarray(p)))
     if y.ndim > 1:
         raise ValueError(
             f"observation_fn must return a scalar or 1-D vector per time point; got shape {y.shape}."
@@ -1491,7 +1608,9 @@ def _resolve_problem(
         if observed_species is not None:
             raise ValueError("Pass observed_species or observation_fn, not both.")
         obs_species_indices = jnp.arange(model.n_species)
-        n_observed = observation_size(observation_fn, C0_list[0], p0_full)
+        n_observed = observation_size(
+            observation_fn, C0_list[0], p0_full, t0=float(np.asarray(tobs_list[0]).reshape(-1)[0])
+        )
         what = "outputs were returned by observation_fn"
     elif observed_species is None:
         obs_species_indices = jnp.arange(model.n_species)
@@ -1523,6 +1642,13 @@ def _resolve_problem(
         obs_i = jnp.asarray(obs_i)
         if obs_i.ndim == 1:
             obs_i = obs_i[:, None]
+        obs_np = np.asarray(obs_i, dtype=float)
+        if np.isinf(obs_np).any():
+            raise ValueError(
+                f"dataset {ds}: observations contain inf; mark a missing value with NaN."
+            )
+        if np.isnan(obs_np).all():
+            raise ValueError(f"dataset {ds}: every observation is missing (NaN).")
         if obs_i.shape[0] != tobs_i.shape[0]:
             raise ValueError(
                 f"dataset {ds}: observations has {obs_i.shape[0]} rows but t_obs "
@@ -1610,6 +1736,7 @@ def _resolve_problem(
         ic_prior_log_std=ic_prior_log_std,
         ic_bounds=ic_bounds,
         observation_fn=observation_fn,
+        obs_time_factor=float(native_time_factor(model.time_unit, time_unit)),
     )
 
 
@@ -1653,7 +1780,11 @@ def calibrate(
     observations : jnp.ndarray or list of jnp.ndarray
         Observed values, shape ``(n_t,)`` for a single species or
         ``(n_t, n_observed)``. In multi-batch mode, a list of such arrays (one
-        per dataset; the datasets may have different ``n_t``).
+        per dataset; the datasets may have different ``n_t``). A ``NaN`` entry
+        is a missing observation: it is left out of the loss and the Laplace
+        Hessian, so outputs measured at different times can share one
+        ``t_obs`` grid (``"mse"`` / ``"wmse"`` then average over the observed
+        entries only).
     t_obs : jnp.ndarray or list of jnp.ndarray
         Observation times, shape ``(n_t,)``. ``C0`` is taken at ``t=0``;
         the solver integrates from ``0`` to ``t_obs[-1]``. In multi-batch mode,
@@ -1677,7 +1808,11 @@ def calibrate(
         point's concentration vector ``(n_species,)`` and the full parameter
         vector to the observed outputs, a scalar or ``(n_outputs,)``. It must be
         written with ``jax.numpy`` so it can be differentiated. The columns of
-        ``observations`` (and a per-output ``sigma``) follow its outputs.
+        ``observations`` (and a per-output ``sigma``) follow its outputs. A
+        function with three required positional arguments,
+        ``observation_fn(t, C, params)``, also receives the sample time ``t``
+        (a scalar, in the unit of ``t_obs``), for a measurement whose mapping
+        changes with time, such as a sensor drift or a time-varying dilution.
     time_unit : str, optional
         The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
         ``"d"``), matching :meth:`BatchReactor.solve`. Every dataset's ``t_obs``

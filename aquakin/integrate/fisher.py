@@ -67,13 +67,22 @@ class Experiment:
         ``observed_species``: ``observation_fn(C, params) -> y`` maps one time
         point's concentrations and the full parameter vector to a scalar or
         ``(n_outputs,)`` vector, written with ``jax.numpy``. ``sigma`` then has
-        one entry per output.
+        one entry per output. A function of ``(t, C, params)`` also receives
+        the sample time, in the unit of ``t_obs``, as in
+        :func:`aquakin.calibrate`.
     reactor : Reactor, optional
         A reactor to solve this experiment with in place of the one passed to
         :func:`fisher_information` -- for an experiment run at different
         conditions (pH, temperature, ...). It must use the same model.
     time_unit : str, optional
         Unit of ``t_obs``; ``None`` means the model's native time unit.
+    mask : array-like of bool, optional
+        Which observations are taken: ``True`` where an output is measured at a
+        sampling time, ``False`` where it is not. Shape ``(n_t, n_observed)``,
+        or anything that broadcasts to it (``(n_observed,)`` per output). An
+        unmeasured entry carries no information, the counterpart of a ``NaN``
+        observation in :func:`aquakin.calibrate`. ``None`` (default) measures
+        every output at every time.
     """
 
     C0: jnp.ndarray
@@ -83,6 +92,7 @@ class Experiment:
     reactor: Reactor | None = None
     observation_fn: Callable | None = None
     time_unit: str | None = None
+    mask: jnp.ndarray | None = None
 
 
 @dataclass
@@ -300,6 +310,7 @@ class _FisherSetup:
         # Resolve each experiment once: its forward-capable reactor, native-unit
         # sampling times, observed columns and per-observation noise.
         self.reactors, self.obs_idx, self.obs_fn, self.sigma = [], [], [], []
+        self.time_factor = []
         self.tobs, self.C0, self.t_end = [], [], []
         for e, ex in enumerate(exps):
             rctr = ex.reactor if ex.reactor is not None else reactor
@@ -317,14 +328,16 @@ class _FisherSetup:
                 raise ValueError(
                     f"experiment {e}: t_obs must be non-negative and strictly ascending."
                 )
-            tobs = tobs * native_time_factor(model.time_unit, ex.time_unit)
+            factor = float(native_time_factor(model.time_unit, ex.time_unit))
+            t0 = float(tobs[0])
+            tobs = tobs * factor
             if ex.observation_fn is not None:
                 if ex.observed_species is not None:
                     raise ValueError(
                         f"experiment {e}: pass observed_species or observation_fn, not both."
                     )
                 obs = []
-                n_out = observation_size(ex.observation_fn, C0, self.p0)
+                n_out = observation_size(ex.observation_fn, C0, self.p0, t0=t0)
             else:
                 obs = (
                     ex.observed_species if ex.observed_species is not None else list(model.species)
@@ -343,9 +356,22 @@ class _FisherSetup:
             self.reactors.append(with_adjoint(rctr, forward_adjoint()))
             self.obs_idx.append(jnp.asarray([model.species_index[s] for s in obs], dtype=int))
             self.obs_fn.append(ex.observation_fn)
-            self.sigma.append(
-                jnp.broadcast_to(jnp.asarray(ex.sigma, dtype=float), (tobs.shape[0], n_out))
-            )
+            sig = jnp.broadcast_to(jnp.asarray(ex.sigma, dtype=float), (tobs.shape[0], n_out))
+            mask = getattr(ex, "mask", None)
+            if mask is not None:
+                try:
+                    keep = np.broadcast_to(np.asarray(mask, dtype=bool), (tobs.shape[0], n_out))
+                except ValueError as err:
+                    raise ValueError(
+                        f"experiment {e}: mask of shape {np.shape(mask)} does not broadcast "
+                        f"to the observations' ({tobs.shape[0]}, {n_out})."
+                    ) from err
+                if not keep.any():
+                    raise ValueError(f"experiment {e}: mask leaves no observation.")
+                # An unmeasured entry has infinite noise: zero information.
+                sig = jnp.where(jnp.asarray(keep), sig, jnp.inf)
+            self.sigma.append(sig)
+            self.time_factor.append(factor)
             self.tobs.append(tobs)
             self.C0.append(C0)
             end = t_end[e] if isinstance(t_end, (list, tuple)) else t_end
@@ -392,7 +418,7 @@ class _FisherSetup:
                 if m:
                     C0 = C0.at[self.ic_idx].set(jnp.exp(theta[d + e * m : d + (e + 1) * m]))
                 C = rctr.solve(C0, params=pp, t_span=(0.0, self.t_end[e]), t_eval=tobs).C
-                y = observe(C, pp, self.obs_idx[e], self.obs_fn[e])
+                y = observe(C, pp, self.obs_idx[e], self.obs_fn[e], t=tobs / self.time_factor[e])
                 parts.append((y / self.sigma[e]).reshape(-1))
             if self.has_rate_prior:
                 parts.append(self.prior_mask * physical / self.prior_std)

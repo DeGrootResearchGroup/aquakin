@@ -152,6 +152,8 @@ def _structure_key(ex: Experiment) -> tuple:
     except its sampling-time values and initial state."""
     sigma = np.asarray(ex.sigma, dtype=float)
     obs = tuple(ex.observed_species) if ex.observed_species is not None else None
+    mask = getattr(ex, "mask", None)
+    mask = None if mask is None else np.asarray(mask, dtype=bool)
     return (
         id(ex.reactor),
         obs,
@@ -160,6 +162,7 @@ def _structure_key(ex: Experiment) -> tuple:
         ex.time_unit,
         sigma.shape,
         sigma.tobytes(),
+        None if mask is None else (mask.shape, mask.tobytes()),
     )
 
 
