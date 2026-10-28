@@ -158,6 +158,15 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `RuntimeError` that says what happened and how to fix it (bound the rates with
   `OptimizerConfig(param_halfwidth=...)`, use a better starting guess, or tighten
   the `free_ic` bounds). This replaces the raw XLA callback traceback.
+- The four heterotroph growth processes in `asm2d` (and `asm2d_chemp`, which
+  extends it) and `asm2d_tud` all used the rate for aerobic growth on SF. Growth
+  on SA now has its own SA saturation term, and anoxic growth on SF and SA now
+  has the oxygen inhibition, nitrate saturation and anoxic reduction factor of
+  the published model. New parameters: `KA_H` (4 g COD/m3) and `etaNO3_H` (0.8)
+  in `asm2d`, and `etaNO_H` (0.8) in `asm2d_tud`, which shares `Kac` with the
+  PAOs. Results from these models change, including the A2O plant
+  (`build_a2o`): denitrification by heterotrophs is now limited by nitrate and
+  inhibited by oxygen, and acetate uptake no longer depends on `KF`.
 - Shipped rate expressions no longer return NaN when a substrate-competition
   ratio has a zero denominator. In `asm1` (and `asm1_ammonia_limitation`) the
   hydrolysis rate, in `asm2d`, `asm2d_chemp` and `asm2d_tud` the

@@ -4,9 +4,12 @@ Cross-checks each shipped ASM model, term-by-term and value-by-value, against
 the SUMO ``Process code/Model base/Museum/*.xlsm`` source it was generated from:
 
 1. **Parameter values** -- every aquakin parameter vs the SUMO Parameters sheet.
-2. **Rate-term constants** -- for each process, the half-saturation constant of
-   each Monod saturation/inhibition term (catches the per-group constant
-   ``collapse`` -- e.g. a nitrifier term inheriting the heterotroph value).
+2. **Rate terms** -- for each process, the set of Monod saturation/inhibition
+   terms and of reduction factors (``eta``) must match (catches processes that
+   share one rate expression, e.g. growth on SA using the SF terms, or anoxic
+   growth without its nitrate switch), and each term's half-saturation constant
+   must match (catches the per-group constant ``collapse`` -- e.g. a nitrifier
+   term inheriting the heterotroph value).
 3. **Stoichiometry structure** -- the set of species participating in each
    process (catches dropped species and biomass swaps).
 4. **Stoichiometric coefficients** -- every numeric coefficient, evaluated from
@@ -117,7 +120,11 @@ def _parse_sumo_monod(rate, species):
     return out
 
 
-def _aquakin_monod(rate_expr, exprs):
+def _sumo_etas(rate):
+    return {_norm(f.strip()) for f in rate.split("*") if f.strip().startswith("η")}
+
+
+def _expand(rate_expr, exprs):
     texts, seen = [rate_expr], set()
     i = 0
     while i < len(texts):
@@ -126,8 +133,17 @@ def _aquakin_monod(rate_expr, exprs):
                 seen.add(tok)
                 texts.append(exprs[tok])
         i += 1
+    return texts
+
+
+def _aquakin_etas(rate_expr, exprs):
+    return {_norm(tok) for t in _expand(rate_expr, exprs)
+            for tok in re.findall(r"\beta\w*", t)}
+
+
+def _aquakin_monod(rate_expr, exprs):
     out = []
-    for t in texts:
+    for t in _expand(rate_expr, exprs):
         for m in re.finditer(r"monod(_inh)?\(\s*\[(\w+)\]\s*,\s*(\w+)\s*\)", t):
             out.append(("inh" if m.group(1) else "sat", m.group(2), _norm(m.group(3))))
     return out
@@ -166,11 +182,20 @@ def verify(base_dir):
             if pkey not in rn:
                 continue
             ri = rn[pkey]
-            # 2. rate-term constants
+            # 2. rate terms: the same Monod terms and reduction factors, with
+            #    the same constants
             if pkey in aqproc:
                 sd = {(ft, sp): c for ft, sp, c in _parse_sumo_monod(srate, species)}
                 ad = {(ft, sp): c for ft, sp, c in
                       _aquakin_monod(aqproc[pkey][1], exprs)}
+                for ft, sp in sorted(sd.keys() - ad.keys()):
+                    issues.append(f"[{snm}] {ft}({sp}) term in SUMO, missing in aquakin")
+                for ft, sp in sorted(ad.keys() - sd.keys()):
+                    issues.append(f"[{snm}] {ft}({sp}) term in aquakin, not in SUMO")
+                se, ae = _sumo_etas(srate), _aquakin_etas(aqproc[pkey][1], exprs)
+                for e in sorted(se ^ ae):
+                    side = "SUMO" if e in se else "aquakin"
+                    issues.append(f"[{snm}] reduction factor {e} only in {side}")
                 for key in sd & ad.keys():
                     sv, av = spar.get(sd[key]), aqpar.get(ad[key])
                     if sv is not None and av is not None and \
