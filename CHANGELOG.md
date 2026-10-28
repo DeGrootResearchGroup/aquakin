@@ -23,6 +23,19 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `FreeICConfig(bounds={species: (lo, hi)})` sets bounds per fitted initial
+  pool, for pools of very different size; one `(lo, hi)` pair still applies to
+  every pool.
+- `FreeICConfig(fixed_total=True)` holds the sum of the fitted pools at its
+  value in each dataset's `C0` and fits only the split, for example a known
+  total COD divided between two substrate pools. The split is fitted on the
+  simplex, so the pools stay positive and sum to the total exactly. The fitted
+  fractions are returned as `CalibrationResult.ic_fractions` and, with
+  `LaplaceConfig(include_ic=True)`, their standard deviations as
+  `ic_fractions_std`. `fisher_information` and `identifiability` use the same
+  parameterisation. Neither option is supported by `Plant.calibrate` yet,
+  which raises a clear error.
+
 - `LaplaceConfig(include_ic=True)` gives a joint Laplace posterior over the rate
   parameters and the initial pools fitted with `free_ic`, for both
   `aquakin.calibrate` and `Plant.calibrate`. The joint covariance and Hessian

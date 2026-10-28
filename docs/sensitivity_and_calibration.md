@@ -180,6 +180,34 @@ result.ic_named_std       # pool std devs in physical units, per dataset
 Strong correlation between a rate and a pool in `joint_cov` is a sign that the
 experiment cannot separate them.
 
+Pools of very different size can take their own bounds,
+`FreeICConfig(["SS", "XS"], bounds={"SS": (1, 300), "XS": (1, 500)})`; a
+species left out keeps the default `(1e-3, 1e4)`.
+
+When the total of some pools is known and only its split is uncertain (a
+measured total COD divided between readily and slowly biodegradable
+substrate, say), hold the total fixed. Put the total into `C0`, with any split
+as the starting guess, and fit only the split:
+
+```python
+C0 = C0.at[i_SS].set(0.5 * cod).at[i_XS].set(0.5 * cod)   # sum = the known total
+result = aquakin.calibrate(
+    reactor, C0, observations, t_obs, free_params,
+    loss="nll", sigma=sigma,
+    free_ic=aquakin.FreeICConfig(["SS", "XS"], fixed_total=True),
+    laplace=aquakin.LaplaceConfig(method="gauss_newton", include_ic=True),
+)
+result.ic_named           # [{"SS": ..., "XS": ...}], summing to the total
+result.ic_fractions       # [{"SS": f, "XS": 1 - f}]
+result.ic_fractions_std   # std devs of the fractions
+```
+
+The split is fitted through the log-ratios `log(c_j / c_0)` of the pools to the
+first listed one, which keep every pool positive and the sum exact; these are
+the `"ic[k].XS:SS"` rows of `joint_cov`. `fisher_information` takes the same
+`FreeICConfig`. Per-species bounds and `fixed_total` are not yet available in
+`Plant.calibrate`.
+
 ### Fisher information of a design
 
 `aquakin.fisher_information` evaluates the Fisher information of a set of
