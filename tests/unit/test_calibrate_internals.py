@@ -230,6 +230,63 @@ def test_optimizer_bounds_logit_and_identity_mapping(base):
     assert (lb[0], ub[0]) == (pytest.approx(0.05), pytest.approx(0.5))
 
 
+def test_optimizer_bounds_non_finite_side_is_open(base):
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m,
+        C0,
+        obs,
+        t_obs,
+        free,
+        transforms={free[0]: "positive_log"},
+        bounds={free[0]: (0.05, np.inf)},
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(0.05))
+    assert ub[0] == np.inf
+
+
+def test_optimizer_bounds_logit_domain_edges_are_open(base):
+    """[0, 1] is the whole of logit's domain, so both sides are open and the
+    explicit entry leaves the rate unbounded (it also replaces the declared
+    [1e-3, 10])."""
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m, C0, obs, t_obs, free, transforms={free[0]: "logit"}, bounds={free[0]: (0.0, 1.0)}
+    )
+    assert prob.rate_bounds is None
+    bounds, lb, ub, _ls, has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert bounds is None and not has
+    assert lb[0] == -np.inf and ub[0] == np.inf
+    # One side inside the domain: only the other is open.
+    prob = _resolve(
+        m, C0, obs, t_obs, free, transforms={free[0]: "logit"}, bounds={free[0]: (0.2, 1.5)}
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(0.2 / 0.8))
+    assert ub[0] == np.inf
+
+
+def test_optimizer_bounds_free_ic_log_bounded(base):
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m,
+        C0,
+        obs,
+        t_obs,
+        free,
+        free_ic=[m.species[0]],
+        ic_bounds=(1e-2, 10.0),
+        use_model_bounds=False,
+    )
+    bounds, lb, ub, _ls, has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert has
+    # One rate dim (unbounded) + one free-IC dim (log-bounded by ic_bounds).
+    assert lb[0] == -np.inf and ub[0] == np.inf
+    assert lb[-1] == pytest.approx(np.log(1e-2))
+    assert ub[-1] == pytest.approx(np.log(10.0))
+
+
 def test_optimizer_bounds_halfwidth_intersects_absolute_bounds(base):
     """The halfwidth box is intersected with the absolute bounds: the start
     k=0.1 with halfwidth log(1000) would reach 100, but the declared upper
