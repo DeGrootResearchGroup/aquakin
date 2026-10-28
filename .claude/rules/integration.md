@@ -84,9 +84,12 @@ compiled objective, so they are not in `struct_key`),
 into per-pool arrays in `_CalibrationProblem.ic_bounds`; `fixed_total` fits
 `m_ic - 1` log-ratio coordinates per dataset, `problem.m_ic_theta`, mapped to
 pools by `problem.ic_pools` / `_simplex_pools` with the total read from the
-runtime `C0`, and `_FisherSetup` mirrors it; the plant path calls
-`_free_ic_fields` without `extended=True`, so it rejects both until it is
-taught them). `calibrate`
+runtime `C0`, and `_FisherSetup` mirrors it; `_optimizer_bounds` gives the
+per-pool log bounds to the IC dims, or leaves them open for a split, so
+`_at_bound_sides` flags a pool on its own bound and never a log-ratio; the
+plant path calls `_free_ic_fields` without `extended=True`, so it rejects both
+until it is taught them; `profile_likelihood` drops the profiled species from a
+bounds dict and refuses to profile a pool of a split). `calibrate`
 unpacks them into the internal `_FitConfig` / `_resolve_problem` scalars; the
 same three configs serve `profile_likelihood`. Below that, the body is decomposed
 ([`integrate/calibrate.py`](aquakin/integrate/calibrate.py)). The argument

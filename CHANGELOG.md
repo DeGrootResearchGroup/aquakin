@@ -25,7 +25,9 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 - `FreeICConfig(bounds={species: (lo, hi)})` sets bounds per fitted initial
   pool, for pools of very different size; one `(lo, hi)` pair still applies to
-  every pool.
+  every pool. A pool that ends on its own bound is listed in
+  `CalibrationResult.at_bound`. `profile_likelihood` drops the profiled
+  species from the dict for its inner fits.
 - `FreeICConfig(fixed_total=True)` holds the sum of the fitted pools at its
   value in each dataset's `C0` and fits only the split, for example a known
   total COD divided between two substrate pools. The split is fitted on the
@@ -33,8 +35,10 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   fractions are returned as `CalibrationResult.ic_fractions` and, with
   `LaplaceConfig(include_ic=True)`, their standard deviations as
   `ic_fractions_std`. `fisher_information` and `identifiability` use the same
-  parameterisation. Neither option is supported by `Plant.calibrate` yet,
-  which raises a clear error.
+  parameterisation. The split's coordinates are unbounded, so they never
+  appear in `at_bound`. Neither option is supported by `Plant.calibrate` yet,
+  which raises a clear error, and `profile_likelihood` cannot profile a pool
+  of a fixed-total split.
 - `OptimizerConfig(starts=[...])` runs `aquakin.calibrate` from an explicit list
   of starts, such as a grid, and keeps the best fit. Each start is a full
   parameter vector or a `{name: value}` dict over the free parameters. All

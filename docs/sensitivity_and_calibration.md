@@ -221,7 +221,9 @@ experiment cannot separate them.
 
 Pools of very different size can take their own bounds,
 `FreeICConfig(["SS", "XS"], bounds={"SS": (1, 300), "XS": (1, 500)})`; a
-species left out keeps the default `(1e-3, 1e4)`.
+species left out keeps the default `(1e-3, 1e4)`. A pool that ends on its own
+bound is listed in `result.at_bound` as `"ic[k].<species>"`, with a `nan`
+standard deviation.
 
 When the total of some pools is known and only its split is uncertain (a
 measured total COD divided between readily and slowly biodegradable
@@ -244,8 +246,10 @@ result.ic_fractions_std   # std devs of the fractions
 The split is fitted through the log-ratios `log(c_j / c_0)` of the pools to the
 first listed one, which keep every pool positive and the sum exact; these are
 the `"ic[k].XS:SS"` rows of `joint_cov`. `fisher_information` takes the same
-`FreeICConfig`. Per-species bounds and `fixed_total` are not yet available in
-`Plant.calibrate`.
+`FreeICConfig`. The log-ratios are unbounded, so a split never appears in
+`result.at_bound`. Per-species bounds and `fixed_total` are not yet available in
+`Plant.calibrate`, and `profile_likelihood` cannot profile a pool of a
+fixed-total split.
 
 ### Fisher information of a design
 

@@ -308,7 +308,9 @@ def _per_species_ic_bounds(species, bounds) -> tuple[np.ndarray, np.ndarray]:
         pairs = [bounds] * len(species)
     lo, hi = [], []
     for s, pair in zip(species, pairs):
-        if len(pair) != 2 or not (0.0 < float(pair[0]) < float(pair[1])):
+        if np.ndim(pair) != 1 or len(pair) != 2:
+            raise ValueError(f"ic_bounds must be a (lo, hi) pair; got {pair!r} for '{s}'.")
+        if not (0.0 < float(pair[0]) < float(pair[1])):
             raise ValueError(f"ic_bounds must satisfy 0 < lo < hi; got {pair} for '{s}'.")
         lo.append(float(pair[0]))
         hi.append(float(pair[1]))
