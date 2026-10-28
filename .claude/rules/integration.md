@@ -98,7 +98,14 @@ the MAP — keep the two in step if either changes. `identifiability`
 ([`integrate/identifiability.py`](aquakin/integrate/identifiability.py)) is pure
 NumPy on the matrix (no solves); it reads `joint_hessian` / `joint_names` from a
 `CalibrationResult` when present, else the rate `hessian_unconstrained`, and its
-default `eig_keep` matches `LaplaceConfig` so flagged = dropped directions. A quantity counts as
+`eig_keep` only *flags* weak directions. `calibrate`'s Laplace covariance
+(`_laplace_covariance`) is the full inverse of the Hessian and shares
+identifiability's null convention (`_NULL_RTOL`, `_NULL_LOADING_TOL`, imported
+from `identifiability.py`): an exactly null direction is left out of
+`posterior_cov` and its involved parameters get an infinite std plus a
+`RuntimeWarning`. (`LaplaceConfig.eig_keep` once dropped every direction below
+1e-2 of the largest with zero variance, understating weakly identified stds by
+up to ~100×; it is now deprecated and ignored.) A quantity counts as
 "involved" in an exactly-null direction (rel. eigenvalue ≤ 1e-10) only if its
 loading there exceeds `null_loading_tol` (default 1e-2): a null eigenvector is
 only accurate to the sensitivities' round-off, and a 1e-6 cut marked

@@ -706,7 +706,6 @@ def calibrate_plant(
         laplace=laplace_on,
         laplace_method=lap.method,
         laplace_ridge=lap.ridge,
-        laplace_eig_keep=lap.eig_keep,
         laplace_fd_step=lap.fd_step,
         laplace_dtmax=lap.dtmax,
         compiled_cache=None,

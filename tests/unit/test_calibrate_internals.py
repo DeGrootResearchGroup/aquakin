@@ -239,7 +239,6 @@ def _cfg(ad_mode, gradient):
         laplace=False,
         laplace_method="fd",
         laplace_ridge=1e-6,
-        laplace_eig_keep=1e-2,
         laplace_fd_step=1e-3,
         laplace_dtmax=None,
         compiled_cache=None,
@@ -315,17 +314,11 @@ def test_free_ic_fields_rejects_bad_type():
 # ---------- _laplace_covariance: guards ----------
 
 
-def test_laplace_covariance_rejects_out_of_range_eig_keep():
-    H = np.eye(2)
-    with pytest.raises(ValueError, match=r"eig_keep must be in \[0, 1\)"):
-        _laplace_covariance(H, ridge=1e-6, eig_keep=1.0)
-
-
 def test_laplace_covariance_rejects_non_pd_hessian():
-    # A zero Hessian ridged by 0 has w_max == 0 -> not positive-definite.
+    # A zero Hessian has no positive eigenvalue -> not positive-definite.
     H = np.zeros((2, 2))
     with pytest.raises(ValueError, match="not finite / positive-definite"):
-        _laplace_covariance(H, ridge=0.0, eig_keep=1e-2)
+        _laplace_covariance(H, ridge=1e-6)
 
 
 # ---------- _resolve_problem: further validation ----------

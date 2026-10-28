@@ -711,66 +711,143 @@ def test_predictive_band_eig_keep_is_deprecated(setup):
 # ---------- Laplace covariance regularisation (#7) ----------
 
 
-def test_laplace_covariance_truncates_null_direction():
-    """A Hessian with one near-null eigen-direction yields a rank-deficient
-    covariance: the unidentifiable direction is dropped, and the kept variance
-    is 1/eigenvalue along the strong direction."""
+_ROT2 = np.array([[1.0, 1.0], [1.0, -1.0]]) / np.sqrt(2.0)  # orthonormal
+
+
+def test_laplace_covariance_null_direction_gives_inf_std():
+    """An exactly null eigen-direction cannot be inverted: it is left out of the
+    covariance and every parameter loading on it gets an infinite std, rather
+    than the zero variance a truncated pseudo-inverse would report."""
     from aquakin.integrate.calibrate import _laplace_covariance
 
-    V = np.array([[1.0, 1.0], [1.0, -1.0]]) / np.sqrt(2.0)  # orthonormal
-    H = V @ np.diag([100.0, 1e-9]) @ V.T
-    cov, wk, Vk = _laplace_covariance(H, ridge=1e-6, eig_keep=1e-2)
-    assert wk.shape == (1,)  # the null direction dropped
-    assert wk[0] == pytest.approx(100.0, rel=1e-3)
+    H = _ROT2 @ np.diag([100.0, 0.0]) @ _ROT2.T
+    cov, std = _laplace_covariance(H, ridge=1e-6)
+    assert np.all(np.isinf(std))  # both parameters load on the null direction
+    assert np.all(np.isfinite(cov))
     s = np.linalg.eigvalsh(0.5 * (cov + cov.T))
-    assert int(np.sum(s > 1e-9)) == 1  # rank-1 covariance
-    assert float(np.max(s)) == pytest.approx(1.0 / 100.0, rel=1e-3)
+    assert int(np.sum(s > 1e-9)) == 1  # only the identified direction
+    assert float(np.max(s)) == pytest.approx(1.0 / 100.0, rel=1e-6)
 
 
-def test_laplace_covariance_keeps_all_when_well_conditioned():
-    """A well-conditioned Hessian keeps every direction; the covariance then
-    equals inv(H + ridge) (no truncation)."""
+def test_laplace_covariance_null_direction_only_flags_involved_parameters():
+    """A parameter with no loading on the null direction keeps its finite std."""
+    from aquakin.integrate.calibrate import _laplace_covariance
+
+    H = np.diag([0.0, 4.0])
+    _, std = _laplace_covariance(H, ridge=0.0)
+    assert std[0] == np.inf
+    assert std[1] == pytest.approx(0.5)
+
+
+def test_laplace_covariance_is_full_inverse_when_well_conditioned():
+    """A well-conditioned Hessian gives inv(H + ridge)."""
     from aquakin.integrate.calibrate import _laplace_covariance
 
     H = np.diag([10.0, 20.0])
-    cov, wk, _ = _laplace_covariance(H, ridge=1e-6, eig_keep=1e-2)
-    assert wk.shape == (2,)
-    assert np.allclose(cov, np.linalg.inv(H + 1e-6 * np.eye(2)), atol=1e-9)
+    cov, std = _laplace_covariance(H, ridge=1e-6)
+    assert np.allclose(cov, np.linalg.inv(H + 1e-6 * np.eye(2)), atol=1e-12)
+    assert np.allclose(std, np.sqrt(np.diag(cov)))
+
+
+def test_laplace_covariance_keeps_weak_direction_variance():
+    """Regression: a weakly identified direction (eigenvalue 1e-4 of the
+    largest) keeps its variance. The covariance used to drop every direction
+    below 1e-2 of the largest, giving it zero variance and understating the
+    std of the parameters on it by orders of magnitude."""
+    from aquakin.integrate.calibrate import _laplace_covariance
+
+    rng = np.random.default_rng(0)
+    Q, _ = np.linalg.qr(rng.standard_normal((3, 3)))
+    H = Q @ np.diag([1.0, 3e-2, 1e-4]) @ Q.T
+    full_std = np.sqrt(np.diag(np.linalg.inv(H)))
+    cov, std = _laplace_covariance(H, ridge=0.0)
+    assert np.allclose(cov, np.linalg.inv(H), rtol=1e-10)
+    assert np.allclose(std, full_std, rtol=1e-10)
+    assert np.all(std >= full_std * (1.0 - 1e-12))  # never understated
+    # The old truncated pseudo-inverse understated every std here.
+    w, V = np.linalg.eigh(H)
+    keep = w > 1e-2 * w.max()
+    trunc_std = np.sqrt(np.diag((V[:, keep] / w[keep]) @ V[:, keep].T))
+    assert np.all(trunc_std < 0.2 * full_std)
 
 
 def test_laplace_covariance_relative_to_largest_for_small_scale_hessian():
-    """A uniformly small-scale Hessian (largest eigenvalue << 1) but with clear
-    structure must keep its identifiable direction(s). The truncation is RELATIVE
-    to the largest eigenvalue, not an absolute floor.
-
-    Regression for the bug where an observable on a tiny scale (e.g. a trace
-    species in molar units, JᵀJ ~1e-2 with eigenvalues spanning orders of
-    magnitude) was reported fully degenerate because the threshold was floored at
-    an absolute ``eig_keep * 1`` -- discarding every direction.
-    """
+    """A uniformly small-scale Hessian (largest eigenvalue << 1) is inverted in
+    full: the null test is RELATIVE to the largest eigenvalue, not an absolute
+    floor, so a trace-species observable (JᵀJ ~1e-2) is not reported
+    degenerate."""
     from aquakin.integrate.calibrate import _laplace_covariance
 
-    V = np.array([[1.0, 1.0], [1.0, -1.0]]) / np.sqrt(2.0)  # orthonormal
-    # Largest eigenvalue 9.1e-3 (< 1); a near-null direction at the ridge level.
-    H = V @ np.diag([9.1e-3, 1e-9]) @ V.T
-    cov, wk, Vk = _laplace_covariance(H, ridge=1e-6, eig_keep=1e-2)
-    assert wk.shape == (1,)  # strong direction kept...
-    assert wk[0] == pytest.approx(9.1e-3, rel=1e-3)  # ...at its true eigenvalue
-    s = np.linalg.eigvalsh(0.5 * (cov + cov.T))
-    assert int(np.sum(s > 1e-12)) == 1  # rank-1 covariance
-    assert float(np.max(s)) == pytest.approx(1.0 / 9.1e-3, rel=1e-3)
+    H = _ROT2 @ np.diag([9.1e-3, 1e-7]) @ _ROT2.T
+    cov, std = _laplace_covariance(H, ridge=0.0)
+    assert np.allclose(cov, np.linalg.inv(H), rtol=1e-8)
+    assert np.all(np.isfinite(std))
 
 
-@pytest.mark.parametrize("eig_keep", [1.0, 1.5, -0.1])
-def test_laplace_covariance_rejects_out_of_range_eig_keep(eig_keep):
-    """eig_keep is a fraction of the largest eigenvalue, so it must be in [0, 1).
-    A value >= 1 would drop every direction and (silently) return an all-zero
-    covariance -- it must raise a clear error instead."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+def test_laplace_config_eig_keep_is_deprecated():
+    with pytest.warns(DeprecationWarning, match="eig_keep"):
+        LaplaceConfig(eig_keep=1e-2)
 
-    H = np.diag([10.0, 20.0])
-    with pytest.raises(ValueError, match=r"eig_keep must be in \[0, 1\)"):
-        _laplace_covariance(H, ridge=1e-6, eig_keep=eig_keep)
+
+def test_calibrate_joint_std_matches_full_inverse(simple_model):
+    """End-to-end: the reported std is the full-inverse std of the Hessian."""
+    result, _ = _decay_fit(
+        simple_model, LaplaceConfig(method="gauss_newton", include_ic=True, ridge=0.0)
+    )
+    full_std = np.sqrt(np.diag(np.linalg.inv(np.asarray(result.joint_hessian))))
+    assert np.allclose(np.asarray(result.posterior_std_unconstrained), full_std[:1], rtol=1e-8)
+
+
+_PRODUCT_RATE_YAML = """
+model:
+  name: product_rate_decay
+  version: "1.0"
+  description: "A -> B with rate k1 * k2 * [A]: only the product is identifiable."
+  references: []
+species:
+  - {name: A, units: mol/L, default_concentration: 1.0}
+  - {name: B, units: mol/L, default_concentration: 0.0}
+conditions:
+  - {name: T, default: 293.15}
+reactions:
+  - name: r
+    rate: "k1 * k2 * [A]"
+    parameters:
+      k1: {value: 0.5, units: "s-1", bounds: [1.0e-3, 10.0]}
+      k2: {value: 0.4, units: "-", bounds: [1.0e-3, 10.0]}
+    stoichiometry: {A: -1, B: +1}
+"""
+
+
+def test_calibrate_unidentified_parameters_get_inf_std(tmp_path):
+    """Only k1*k2 is seen in the data, so the Gauss-Newton Hessian in log space
+    has an exactly null direction. Both parameters are reported with an
+    infinite std and a warning, not with the zero variance a truncated
+    covariance gives; the posterior draws stay finite."""
+    path = tmp_path / "product_rate.yaml"
+    path.write_text(_PRODUCT_RATE_YAML)
+    model = aquakin.load_model_from_file(path)
+    reactor = aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1, T=293.15))
+    t_obs = jnp.linspace(0.5, 10.0, 20)
+    C0 = jnp.asarray([1.0, 0.0])
+    obs = reactor.solve(C0, params=model.default_parameters(), t_span=(0.0, 10.0), t_eval=t_obs)
+    with pytest.warns(RuntimeWarning, match="not identify"):
+        result = aquakin.calibrate(
+            reactor,
+            C0,
+            observations=obs.C_named("A"),
+            t_obs=t_obs,
+            free_params=["r.k1", "r.k2"],
+            transforms={"r.k1": "positive_log", "r.k2": "positive_log"},
+            observed_species=["A"],
+            loss="nll",
+            sigma=jnp.asarray(0.01),
+            laplace=LaplaceConfig(method="gauss_newton"),
+        )
+    assert result.params_named_std["r.k1"] == np.inf
+    assert result.params_named_std["r.k2"] == np.inf
+    draws = result.posterior_draws(model, n_draw=5)
+    assert np.all(np.isfinite(draws))
 
 
 def test_calibrate_nll_small_scale_observable_gives_finite_posterior(setup):
@@ -1097,7 +1174,7 @@ def _decay_fisher(t_obs):
     return S.T @ S / _DECAY_SIGMA**2
 
 
-_EXACT_LAPLACE = dict(ridge=1e-12, eig_keep=0.0)
+_EXACT_LAPLACE = dict(ridge=1e-12)
 
 
 def test_joint_ic_gauss_newton_hessian_matches_closed_form_fisher(simple_model):
