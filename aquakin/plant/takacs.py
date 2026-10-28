@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
+import numpy as np
 
 from aquakin.plant._constants import (
     ASM1_SETTLING_SPECIES,
@@ -334,22 +335,38 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         return CouplingPattern(self_pattern=self_pat, inlet_pattern=inlet_pat)
 
     def initial_state(self) -> jnp.ndarray:
+        """Initial settler state: the particulate head block, then (when
+        ``soluble_holdup``) the per-layer soluble block.
+
+        The seed is built in NumPy from the model's concrete default
+        concentrations and the unit's configuration, so it is a constant even
+        when called inside ``jax.jit`` / ``jax.grad`` (for example by
+        :meth:`Plant.solve` forming its default ``atol``). No traced value is
+        involved, so there is nothing to concretize.
+        """
         part_state = self._particulate_initial_state()
         if not self.soluble_holdup:
-            return part_state
+            return jnp.asarray(part_state)
         # Seed every layer at the model's default soluble concentrations; a
         # non-reacting soluble relaxes to the feed concentration anyway, so the
         # seed only affects the initial transient.
-        defaults = self.model.default_concentrations()
-        sol_defaults = jnp.asarray([float(defaults[i]) for i in self._soluble_indices])
-        sol_block = jnp.tile(sol_defaults, self.n_layers)  # (n_layers * n_sol,)
-        return jnp.concatenate([part_state, sol_block])
+        sol_defaults = self._default_concentrations_np()[self._soluble_indices]
+        sol_block = np.tile(sol_defaults, self.n_layers)  # (n_layers * n_sol,)
+        return jnp.asarray(np.concatenate([part_state, sol_block]))
 
-    def _particulate_initial_state(self) -> jnp.ndarray:
+    def _default_concentrations_np(self) -> np.ndarray:
+        """The model's default concentrations as a concrete float64 NumPy array.
+
+        ``CompiledModel.default_concentrations`` holds a concrete array, so the
+        conversion never meets a tracer, even inside a ``jit`` trace.
+        """
+        return np.asarray(self.model.default_concentrations(), dtype=np.float64)
+
+    def _particulate_initial_state(self) -> np.ndarray:
         """The particulate head block of the initial state (layout per
-        ``composition_mode``); unchanged by ``soluble_holdup``."""
-        defaults = self.model.default_concentrations()
-        part_defaults = jnp.asarray([float(defaults[i]) for i in self._part_indices])
+        ``composition_mode``); unchanged by ``soluble_holdup``. A NumPy array."""
+        part_defaults = self._default_concentrations_np()[self._part_indices]
+        factors = np.asarray(self._part_tss_factors, dtype=np.float64)
 
         if self.init_underflow_Q is None:
             # Backward-compatible uniform seed: every layer at the inlet's
@@ -357,9 +374,9 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             if self.composition_mode == "lumped_tss":
                 # The single per-layer TSS is the default composition summed to
                 # total solids, identical in every layer.
-                tss = float(jnp.sum(part_defaults * self._factors_arr))
-                return jnp.full((self.n_layers,), tss)
-            return jnp.tile(part_defaults, self.n_layers)
+                tss = float(np.sum(part_defaults * factors))
+                return np.full((self.n_layers,), tss)
+            return np.tile(part_defaults, self.n_layers)
 
         tss = self._initial_blanket_tss(part_defaults)
         if self.composition_mode == "lumped_tss":
@@ -367,39 +384,40 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
 
         # Apportion each layer's TSS across particulate species by the feed
         # composition: C_k = d_k * (TSS_layer / X_f), so sum_k C_k * f_k = TSS.
-        X_f = float(jnp.sum(part_defaults * self._factors_arr))
+        X_f = float(np.sum(part_defaults * factors))
         scale = tss / X_f  # (n_layers,)
         state = scale[:, None] * part_defaults[None, :]  # (n_layers, n_part)
         return state.reshape(-1)
 
-    def _initial_blanket_tss(self, part_defaults: jnp.ndarray) -> jnp.ndarray:
+    def _initial_blanket_tss(self, part_defaults: np.ndarray) -> np.ndarray:
         """Per-layer TSS (g/m³) for a settled-blanket start, shape ``(n_layers,)``.
 
         Builds a state-point-analysis profile -- clarification (above-feed)
         layers near the non-settleable floor, a thickened bottom blanket -- from
         the model's default particulate concentrations and the blanket
         operating point. Layer 0 is the bottom (underflow); ``n_layers - 1`` is
-        the top (effluent). Shared by both composition modes.
+        the top (effluent). Shared by both composition modes. Computed in NumPy
+        from concrete configuration, so it is safe to call inside a trace.
 
         Parameters
         ----------
-        part_defaults : jnp.ndarray
+        part_defaults : np.ndarray
             Per-species default particulate concentrations, shape ``(n_part,)``.
 
         Returns
         -------
-        jnp.ndarray
+        np.ndarray
             Per-layer total-suspended-solids profile, shape ``(n_layers,)``.
         """
         # --- State-point-analysis settled blanket ----------------------
         # Feed TSS (MLSS) the blanket is built for. The clarifier feed at
         # startup is the reactors' initial mixed-liquor, so default to the TSS
         # implied by the model's particulate defaults.
-        factors = self._factors_arr
+        factors = np.asarray(self._part_tss_factors, dtype=np.float64)
         X_f = (
             float(self.init_feed_tss)
             if self.init_feed_tss is not None
-            else float(jnp.sum(part_defaults * factors))
+            else float(np.sum(part_defaults * factors))
         )
         # Thickening ratio Q_feed / Q_underflow. For a well-functioning
         # clarifier (clean effluent) a solids balance puts the underflow at
@@ -417,10 +435,10 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         # Per-layer TSS, layer 0 = bottom (underflow) ... n-1 = top (effluent).
         # Below feed and the feed layer carry the mixed-liquor TSS; the very
         # bottom layer carries the thickened blanket; clarification layers are
-        # clear. (Matches the reference settled profile's flat-then-spike shape.)
-        layer_idx = jnp.arange(self.n_layers)
-        tss = jnp.where(layer_idx > self.feed_layer, X_clar, X_f)
-        tss = tss.at[0].set(X_u)
+        # clear (a flat-then-spike settled profile).
+        layer_idx = np.arange(self.n_layers)
+        tss = np.where(layer_idx > self.feed_layer, X_clar, X_f).astype(np.float64)
+        tss[0] = X_u
         return tss
 
     def _layered(self, state: jnp.ndarray) -> jnp.ndarray:

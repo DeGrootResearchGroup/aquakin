@@ -79,6 +79,17 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `Plant.solve` can now be wrapped in `jax.jit` (alone or around `jax.grad`)
+  on a plant with a `TakacsClarifier` settler, including the
+  validated BSM1 configuration `build_bsm1(use_takacs=True,
+  settler_soluble_holdup=True, settler_composition_mode="lumped_tss")`.
+  Under `jit` the solve's default `atol` was formed inside the trace: building
+  the settler's initial state for it converted JAX values to Python floats, and
+  the colored-Jacobian setup of the differentiable solve then read the traced
+  `atol` as a number. Both raised a `ConcretizationTypeError`. The settler seed
+  is now built from concrete values, and the default `atol` is computed outside
+  the trace unless `y0` itself is traced. Eager results are unchanged. Passing
+  an explicit `atol` is no longer needed as a workaround.
 - The Laplace standard deviations from `aquakin.calibrate` and
   `Plant.calibrate` (`params_named_std`, `posterior_cov`, `ic_named_std`) no
   longer understate the uncertainty of weakly identified parameters. The

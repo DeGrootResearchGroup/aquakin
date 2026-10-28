@@ -589,9 +589,10 @@ is what production simulators use to snap to steady state on any topology.
   `jax.linearize` of the output map over the saved trajectory (no extra solve).
   `output_fn` maps the `PlantSolution` to a length-`m` output vector. The reverse
   solve is differentiated directly (no enclosing jit — the primal must run with
-  concrete params, since some plant setup, e.g. a unit `initial_state`,
-  concretizes; an outer jit makes the BSM2 dynamic plant fail with a
-  `ConcretizationTypeError`); the solve's own compiled-solve cache still reuses the
+  concrete params, since some plant setup concretized; an outer jit made the
+  BSM2 dynamic plant fail with a `ConcretizationTypeError`. #594 fixed
+  the Takács `initial_state` part of that (the settler seed is NumPy-built) and
+  made the default `atol` eager for a concrete `y0`); the solve's own compiled-solve cache still reuses the
   integrator compile. **Forward is the memory-light direction over a long horizon**
   — `solve_sensitivity` carries the parameter tangents in lockstep with the state,
   so memory is independent of the integration length, whereas reverse stores the

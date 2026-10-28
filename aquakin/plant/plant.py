@@ -1487,6 +1487,37 @@ class Plant:
             pieces.append(self.temperature_model.initial_state(self))
         return jnp.concatenate(pieces)
 
+    def _concrete_initial_state(self) -> jnp.ndarray:
+        """The default :meth:`initial_state`, evaluated eagerly even inside a trace.
+
+        The default initial state is a constant of the plant's configuration (it
+        reads no solve input), so it is evaluated under
+        ``jax.ensure_compile_time_eval``. Inside ``jax.jit`` / ``jax.grad`` the
+        result is then a concrete array rather than staged operations, with the
+        same values as an eager call. Used for a solve's default ``y0`` and as
+        the magnitude reference of its default ``atol``.
+        """
+        with jax.ensure_compile_time_eval():
+            return self.initial_state()
+
+    def _default_solve_atol(self, y0: jnp.ndarray, *, atol_factor: float = 1e-6) -> jnp.ndarray:
+        """The default per-component ``atol`` of a solve started at ``y0``.
+
+        :func:`default_atol` scaled off ``y0`` and the default initial state. It
+        is computed eagerly (``jax.ensure_compile_time_eval``) whenever ``y0`` is
+        concrete, which includes a solve under ``jax.jit`` / ``jax.grad`` with
+        respect to the parameters only. The tolerance is then a concrete array,
+        as it is in an eager solve, and code that needs it as a Python scalar
+        (the colored-Jacobian setup) works under the trace. When ``y0`` itself
+        is traced the tolerance is formed in the trace (it is
+        ``stop_gradient``-ed either way).
+        """
+        reference = self._concrete_initial_state()
+        if isinstance(y0, jax.core.Tracer):
+            return default_atol(y0, reference, atol_factor=atol_factor)
+        with jax.ensure_compile_time_eval():
+            return default_atol(y0, reference, atol_factor=atol_factor)
+
     def states_by_unit(self, state_full: jnp.ndarray) -> dict[str, jnp.ndarray]:
         """Split a flat plant vector into a ``{unit_name: sub-vector}`` map.
 
@@ -2437,7 +2468,7 @@ class Plant:
         # (e.g. a previously-computed steady state -- the standard way to start a
         # dynamic-influent run, avoiding the stiff clean-start transient).
         if y0 is None:
-            y0 = self.initial_state()
+            y0 = self._concrete_initial_state()
         else:
             y0 = jnp.asarray(y0)
             if y0.shape != (self._total_state_size,):
@@ -2446,7 +2477,7 @@ class Plant:
         # magnitudes (the warm start y0 and the per-unit defaults), so a g/m³
         # plant solves without the old fixed 1e-9 forcing the step ceiling.
         if atol is None:
-            atol_eff = default_atol(y0, self.initial_state())
+            atol_eff = self._default_solve_atol(y0)
         else:
             atol_eff = _coerce_atol(atol, self._total_state_size)
         # Convert t_span / t_eval from a caller-supplied time_unit into the
@@ -3515,9 +3546,9 @@ class Plant:
         >>> snh = plant.states_by_unit(ss.state)["tank5"][asm1.species_index["SNH"]]
         """
         self._build_state_layout()
-        y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
+        y0 = self._concrete_initial_state() if y0 is None else jnp.asarray(y0)
         if atol is None:
-            atol = default_atol(y0, self.initial_state(), atol_factor=atol_factor)
+            atol = self._default_solve_atol(y0, atol_factor=atol_factor)
         event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
         sol = self.solve(
             t_span=(0.0, float(max_time)),

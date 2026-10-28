@@ -379,6 +379,11 @@ class ColoredJacobianManager:
             # rtol/atol only set the (unused) chord tolerances on the returned
             # object; the seed matrix / coloring / pattern is all we use. A scalar
             # atol avoids augmenting the per-component vector for the probe.
+            # A tolerance traced with the solve's y0 (jit/grad w.r.t. y0) has no
+            # concrete value; take the default-state floor instead, which only
+            # affects these unused chord tolerances.
+            if isinstance(atol, jax.core.Tracer):
+                atol = plant._default_solve_atol(y0)
             atol_s = float(jnp.max(jnp.asarray(atol)))
             rf, n_colors, ok = self._build_and_guard(
                 rhs_aug_y,

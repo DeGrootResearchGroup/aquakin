@@ -46,7 +46,16 @@ Key types:
   — the plant never branches its call on a per-unit capability flag. The
   control-signal bus is threaded into every `rhs` as `signals` (an uncontrolled
   unit ignores it), and `flow_outputs` always receives a `FlowContext` carrying
-  the unit's own state and the time (a fixed-split unit ignores it). Beyond the
+  the unit's own state and the time (a fixed-split unit ignores it).
+  **`initial_state()` must be trace-safe**: it is a constant of the unit's
+  configuration, but `Plant.solve` / `run_to_steady_state` call it inside the
+  caller's `jit`/`grad` trace (for `y0=None`), so never `float()` a `jnp` result
+  there — build the seed in NumPy from concrete config (as `TakacsClarifier`
+  does). The default `atol` goes through `Plant._default_solve_atol`, which
+  evaluates it eagerly (`ensure_compile_time_eval`) whenever `y0` is concrete,
+  so a solve jitted over `params` gets a concrete tolerance (the colored
+  stable-adjoint setup reads it as a Python scalar).
+  `tests/integration/test_takacs_trace.py` guards it (issue #594). Beyond the
   core contract a unit may implement one or more **optional capability hooks**,
   each with a named `runtime_checkable` Protocol in `plant/units.py` so the plant
   detects it with `isinstance` (not a stringly-typed `hasattr`): `SignalProducer`
