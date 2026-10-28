@@ -215,3 +215,21 @@ def test_round_off_loading_on_null_direction_is_ignored():
     assert strict.std["b"] == np.inf
     with pytest.raises(ValueError, match="null_loading_tol"):
         aquakin.identifiability(F, names=["a", "b", "c"], null_loading_tol=0.0)
+
+
+def test_at_bound_names_get_nan_std_and_others_are_conditional():
+    """A quantity flagged at_bound gets a nan std; the others are the
+    Cramer-Rao std with it held fixed (1/sqrt(F_aa) here), not the marginal."""
+    F = np.array([[4.0, 1.5], [1.5, 1.0]])
+    vals = {"a": 1.0, "b": 2.0}
+    free = aquakin.identifiability(F, names=["a", "b"], values=vals)
+    held = aquakin.identifiability(F, names=["a", "b"], values=vals, at_bound={"b": "lower"})
+    assert held.at_bound == {"b": "lower"}
+    assert np.isnan(held.std["b"]) and np.isnan(held.relative_std["b"])
+    assert held.std["a"] == pytest.approx(1.0 / np.sqrt(4.0))
+    assert free.std["a"] == pytest.approx(np.sqrt(np.linalg.inv(F)[0, 0]))
+    assert free.at_bound == {}
+    # The eigen-analysis still covers the whole matrix.
+    np.testing.assert_allclose(held.eigenvalues, free.eigenvalues)
+    with pytest.raises(ValueError, match="at_bound name"):
+        aquakin.identifiability(F, names=["a", "b"], values=vals, at_bound={"c": "upper"})

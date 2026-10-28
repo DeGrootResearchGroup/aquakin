@@ -497,6 +497,18 @@ class CalibrationResult:
         Marginal std devs of the fitted pools in physical units, per dataset
         and by species (same layout as ``ic_named``). Only with
         ``include_ic=True``.
+    at_bound : dict[str, str]
+        The fitted quantities that ended on an optimiser bound, mapped to
+        ``"lower"`` or ``"upper"``: free rate parameters by name and fitted
+        initial pools as ``"ic[k].<species>"``. Empty when nothing is on a
+        bound. The bound is an active constraint there, so the local curvature
+        does not describe their uncertainty: their ``params_named_std`` /
+        ``ic_named_std`` and ``posterior_std_unconstrained`` entries are
+        ``nan``, they have zero variance in ``posterior_cov`` / ``joint_cov``
+        (posterior draws keep them on the bound), and the other parameters'
+        covariance is conditional on them staying on the bound. A
+        ``RuntimeWarning`` names them. Use :func:`aquakin.profile_likelihood`
+        for a one-sided interval, or revisit the bound.
     """
 
     params: jnp.ndarray
@@ -518,6 +530,7 @@ class CalibrationResult:
     joint_hessian: jnp.ndarray | None = None
     joint_names: list[str] | None = None
     ic_named_std: list | None = None
+    at_bound: dict[str, str] = field(default_factory=dict)
 
     def posterior_draws(self, model, n_draw: int = 200, *, seed: int = 0) -> np.ndarray:
         """Full parameter vectors drawn from the Laplace posterior.
@@ -527,7 +540,9 @@ class CalibrationResult:
         the fitted parameter vector ``params``; fixed parameters keep their
         values. An exactly null (non-identifiable) direction of the Hessian is
         not in ``posterior_cov`` and is not sampled; such parameters have an
-        infinite ``params_named_std``. Initial pools are not drawn. The
+        infinite ``params_named_std``. A parameter that ended on an optimiser
+        bound (``at_bound``) has zero variance and stays on the bound in every
+        draw. Initial pools are not drawn. The
         rows can be passed as ``param_draws`` to the experiment-design
         functions, and :meth:`predictive_band` propagates the same draws.
 
@@ -1330,12 +1345,44 @@ def _joint_names(problem: _CalibrationProblem) -> list[str]:
     return list(problem.free_params) + ic_names
 
 
+# A fitted coordinate within this distance of a finite optimiser bound (in
+# unconstrained space, scaled by ``max(1, |bound|)``) counts as on the bound.
+# L-BFGS-B ends exactly on an active bound; the trust-region least-squares
+# solver stays strictly inside and typically ends within ~1e-8 of it.
+_AT_BOUND_TOL = 1e-5
+
+
+def _at_bound_sides(theta_opt, opt_bounds) -> np.ndarray:
+    """Per coordinate of ``theta_opt``: ``"lower"`` / ``"upper"`` if it ended on
+    that finite optimiser bound, else ``""``."""
+    _bounds, lb, ub, _ls, has_bounds = opt_bounds
+    th = np.asarray(theta_opt, dtype=float)
+    sides = np.full(th.shape, "", dtype=object)
+    if not has_bounds:
+        return sides
+    lb = np.asarray(lb, dtype=float)
+    ub = np.asarray(ub, dtype=float)
+    with np.errstate(invalid="ignore"):
+        on_lo = np.isfinite(lb) & (np.abs(th - lb) <= _AT_BOUND_TOL * np.maximum(1.0, np.abs(lb)))
+        on_hi = np.isfinite(ub) & (np.abs(ub - th) <= _AT_BOUND_TOL * np.maximum(1.0, np.abs(ub)))
+    sides[on_lo] = "lower"
+    sides[on_hi & ~on_lo] = "upper"
+    return sides
+
+
+def _at_bound_named(problem: _CalibrationProblem, sides) -> dict[str, str]:
+    """``{name: side}`` for the coordinates on a bound, named as
+    :func:`_joint_names` names them."""
+    return {n: str(sd) for n, sd in zip(_joint_names(problem), sides) if sd}
+
+
 def _laplace_posterior(
     problem: _CalibrationProblem,
     fm: _ReactorForwardModel,
     cfg: _FitConfig,
     rate_theta_opt,
     ic_opt,
+    at_bound_mask=None,
 ) -> _LaplaceOut:
     """Laplace covariance at the MAP.
 
@@ -1346,7 +1393,13 @@ def _laplace_posterior(
     over the pools. ``hessian_unconstrained`` is always the rate-rate block of
     the Hessian, so it means the same thing in both modes. The Hessian is more
     step-sensitive than the fit, so it can use a tighter integrator cap
-    (``laplace_dtmax``) via the forward model's ``with_dtmax``."""
+    (``laplace_dtmax``) via the forward model's ``with_dtmax``.
+
+    ``at_bound_mask`` (a boolean per fitted coordinate, rates then pools) marks
+    coordinates that ended on an active optimiser bound. They are held fixed:
+    the covariance is the inverse of the Hessian over the remaining
+    coordinates, embedded with zero rows / columns for the fixed ones, whose
+    std is reported as ``nan``."""
     d = problem.n_rate
     joint = bool(cfg.laplace_include_ic and problem.m_ic)
     fm_lap = fm.with_dtmax(cfg.laplace_dtmax)
@@ -1416,9 +1469,20 @@ def _laplace_posterior(
         )
     H = 0.5 * (H + H.T)  # symmetrise away asymmetry / FD noise
 
-    cov_np, std_np = _laplace_covariance(np.asarray(H), cfg.laplace_ridge)
+    n_h = int(H.shape[0])
+    fixed = np.zeros(n_h, dtype=bool)
+    if at_bound_mask is not None:
+        fixed = np.asarray(at_bound_mask, dtype=bool)[:n_h]
+    H_np = np.asarray(H)
+    cov_np = np.zeros((n_h, n_h))
+    std_np = np.full(n_h, np.nan)
+    if not fixed.all():
+        keep = ~fixed
+        cov_k, std_k = _laplace_covariance(H_np[np.ix_(keep, keep)], cfg.laplace_ridge)
+        cov_np[np.ix_(keep, keep)] = cov_k
+        std_np[keep] = std_k
     names = _joint_names(problem) if joint else list(problem.free_params)
-    unidentified = [n for n, sd in zip(names, std_np) if not np.isfinite(sd)]
+    unidentified = [n for n, sd, fx in zip(names, std_np, fixed) if not fx and not np.isfinite(sd)]
     if unidentified:
         warnings.warn(
             "The Laplace Hessian has an exactly null direction, so the data do "
@@ -2004,11 +2068,28 @@ def calibrate(
             C0_fitted.append(C0_i.at[problem.ic_species_idx].set(jnp.asarray(vals)))
             ic_named.append({s: float(v) for s, v in zip(problem.free_ic, vals)})
 
+    # --- Quantities that ended on an active bound ---
+    sides = _at_bound_sides(theta_opt, opt_bounds)
+    at_bound = _at_bound_named(problem, sides)
+    if at_bound:
+        what = (
+            "their Laplace standard deviation is reported as nan and they are held "
+            "on the bound in the posterior"
+            if cfg.laplace
+            else "a local (Laplace) uncertainty is not valid for them"
+        )
+        warnings.warn(
+            f"calibrate: {at_bound} ended on an optimiser bound, so {what}. Check "
+            "the bound, or use profile_likelihood for a one-sided interval.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
     # --- Laplace posterior ---
     # Rate-only by default (pools held at the MAP); joint rate + pool with
     # LaplaceConfig(include_ic=True).
     laplace_out = (
-        _laplace_posterior(problem, fm, cfg, rate_theta_opt, ic_opt)
+        _laplace_posterior(problem, fm, cfg, rate_theta_opt, ic_opt, at_bound_mask=sides != "")
         if cfg.laplace
         else _LaplaceOut(*[None] * len(_LaplaceOut._fields))
     )
@@ -2031,4 +2112,5 @@ def calibrate(
         priors_applied=dict(problem.active_priors),
         C0_fitted=C0_fitted,
         ic_named=ic_named,
+        at_bound=at_bound,
     )
