@@ -122,6 +122,18 @@ result.params_named_std   # marginal standard deviations
 result.converged
 ```
 
+`OptimizerConfig(n_starts=...)` adds jittered restarts around one start. To run
+a fixed set of starts instead, such as a grid, pass them as `starts`, each a
+full parameter vector or a `{name: value}` dict over the free parameters (the
+others start from `initial_params`). Every start runs through one compiled
+objective and the best fit is kept:
+
+```python
+starts = [{"r1.k1": k1, "r2.k2": k2} for k1 in (0.01, 0.1, 1.0) for k2 in (0.1, 1.0)]
+result = aquakin.calibrate(reactor, C0, observations, t_obs, free_params,
+                           optimizer=aquakin.OptimizerConfig(starts=starts))
+```
+
 `calibrate` keeps each free parameter inside the `bounds:` declared on it in
 the model, as `fit` does. The optimiser works in each parameter's transformed
 space, so a declared bound on a `positive_log` parameter becomes a bound on its
@@ -137,7 +149,8 @@ optimizer = aquakin.OptimizerConfig(
 ```
 
 `OptimizerConfig(use_model_bounds=False)` ignores the declared bounds. A
-starting value outside the bounds is moved to the nearest bound, with a warning.
+starting value outside the bounds, including each entry of a `starts` list, is
+moved to the nearest bound, with a warning.
 
 A parameter that ends on a bound is listed in `result.at_bound` (for example
 `{"hetero.muH": "lower"}`), with a warning. The Laplace approximation is not

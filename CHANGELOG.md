@@ -23,6 +23,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `OptimizerConfig(starts=[...])` runs `aquakin.calibrate` from an explicit list
+  of starts, such as a grid, and keeps the best fit. Each start is a full
+  parameter vector or a `{name: value}` dict over the free parameters. All
+  starts run through one compiled objective, so a grid of starts no longer
+  needs one `calibrate` call (and one compilation) per start.
+  `profile_likelihood` uses the list for its cold fits.
 - `OptimizerConfig(bounds={name: (lo, hi)})` gives `aquakin.calibrate` (and
   `profile_likelihood`) absolute bounds on the free rate parameters in physical
   units, with `None` for an open side. An entry replaces the parameter's
@@ -106,6 +112,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- A compiled-objective cache shared between `aquakin.calibrate` calls could
+  reuse the objective built for different observations, loss or `sigma`, and
+  return the first fit's optimum. The cache key now includes them (and the free
+  set, transforms and priors). Only `profile_likelihood` shares the cache, and
+  its fits all use the same data, so no released result was affected.
 - `Plant.solve` and `Plant.run_to_steady_state` can now be traced by
   `jax.jit` / `jax.grad` on a plant with a `TakacsClarifier`, including the
   validated `build_bsm1(use_takacs=True)` settler. Tracing used to raise a

@@ -509,6 +509,283 @@ def test_param_halfwidth_bounds_the_rate(setup):
     assert unbounded.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
 
 
+# ---------- explicit start list / compiled-objective cache ----------
+
+
+def _decay_kw(obs_clean, t_obs, **extra):
+    return dict(
+        observations=obs_clean,
+        t_obs=t_obs,
+        free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"],
+        loss="mse",
+        laplace=False,
+        **extra,
+    )
+
+
+@pytest.mark.parametrize("method", ["lbfgsb", "gauss_newton"])
+def test_start_list_matches_best_of_separate_calls(setup, method):
+    """A start list keeps the best optimum, the same as running each start in
+    its own calibrate call and taking the lowest loss. Starts may be full
+    vectors or dicts."""
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    p0 = reactor.model.default_parameters()
+    ks = [0.01, 0.8, 3.0]
+    separate = [
+        aquakin.calibrate(
+            reactor,
+            C0,
+            initial_params=p0.at[0].set(k),
+            **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(method=method)),
+        )
+        for k in ks
+    ]
+    best = min(separate, key=lambda r: r.loss)
+    starts = [p0.at[0].set(ks[0]), {"A_to_B.k": ks[1]}, {"A_to_B.k": ks[2]}]
+    listed = aquakin.calibrate(
+        reactor,
+        C0,
+        **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(method=method, starts=starts)),
+    )
+    assert listed.loss == pytest.approx(best.loss, rel=1e-6, abs=1e-14)
+    assert listed.params_named["A_to_B.k"] == pytest.approx(best.params_named["A_to_B.k"], rel=1e-5)
+    assert listed.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
+def test_start_list_compiles_once(setup):
+    """Every start of a list runs through one compiled objective: the number of
+    times the model output is traced does not grow with the number of starts."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    i_b = reactor.model.species_index["B"]
+    traces = []
+
+    def obs_b(C, p):
+        traces.append(1)  # runs on tracing (and once for the size check), not per call
+        return C[i_b]
+
+    def n_traces(starts):
+        traces.clear()
+        aquakin.calibrate(
+            reactor,
+            C0,
+            observations=obs_clean,
+            t_obs=t_obs,
+            free_params=["A_to_B.k"],
+            observation_fn=obs_b,
+            laplace=False,
+            optimizer=OptimizerConfig(starts=starts),
+        )
+        return len(traces)
+
+    one = n_traces([{"A_to_B.k": 0.05}])
+    many = n_traces([{"A_to_B.k": k} for k in (0.01, 0.05, 0.3, 1.0, 4.0)])
+    assert many == one
+
+
+def test_compiled_cache_shared_across_datasets_does_not_mis_hit(setup):
+    """A _compiled_cache shared by fits on different data rebuilds the
+    objective instead of reusing the one compiled for the first data (which
+    used to return the first data's optimum). Fits that differ only in the
+    starting parameters still share the compiled program."""
+    reactor, C0, t_obs, _obs, _ = setup
+    model = reactor.model
+
+    def data(k):
+        sol = reactor.solve(
+            C0, params=model.default_parameters().at[0].set(k), t_span=(0.0, 10.0), t_eval=t_obs
+        )
+        return sol.C_named("B")
+
+    cache = {}
+    kw = dict(t_obs=t_obs, free_params=["A_to_B.k"], observed_species=["B"], laplace=False)
+    a = aquakin.calibrate(reactor, C0, data(0.25), _compiled_cache=cache, **kw)
+    n_programs = len(cache)
+    b = aquakin.calibrate(reactor, C0, data(0.5), _compiled_cache=cache, **kw)
+    assert a.params_named["A_to_B.k"] == pytest.approx(0.25, rel=1e-3)
+    assert b.params_named["A_to_B.k"] == pytest.approx(0.5, rel=1e-3)
+    assert len(cache) == 2 * n_programs
+    # Different loss / sigma on the same data is a different program too.
+    aquakin.calibrate(reactor, C0, data(0.5), loss="nll", sigma=0.01, _compiled_cache=cache, **kw)
+    assert len(cache) == 3 * n_programs
+    # Same data, new start: a cache hit.
+    aquakin.calibrate(
+        reactor,
+        C0,
+        data(0.5),
+        initial_params=model.default_parameters().at[0].set(0.3),
+        _compiled_cache=cache,
+        **kw,
+    )
+    assert len(cache) == 3 * n_programs
+
+
+def test_start_list_validation(setup):
+    reactor, C0, t_obs, obs_clean, _ = setup
+    bad = [
+        (OptimizerConfig(starts=[{"A_to_B.k": 0.2}], n_starts=3), "not both"),
+        (OptimizerConfig(starts=[]), "at least one start"),
+        (OptimizerConfig(starts=[jnp.asarray([0.2, 0.3, 0.4])]), "full parameter vector"),
+        (OptimizerConfig(starts=[{"A_to_B.k": -1.0}]), "outside the domain"),
+        (OptimizerConfig(starts=jnp.asarray([0.2])), "not a single vector"),
+    ]
+    for opt, msg in bad:
+        with pytest.raises(ValueError, match=msg):
+            aquakin.calibrate(reactor, C0, **_decay_kw(obs_clean, t_obs, optimizer=opt))
+
+
+def test_start_list_validation_edge_cases(setup):
+    """Malformed lists fail before any solve, naming the offending entry."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    n = reactor.model.default_parameters().shape[0]
+    ok = {"A_to_B.k": 0.2}
+    bad = [
+        ((), "at least one start"),
+        (np.full(n, 0.2), "not a single vector"),
+        ([ok, jnp.full(n + 1, 0.2)], r"starts\[1\] has shape"),
+        ([ok, jnp.full((n, 1), 0.2)], r"starts\[1\] has shape"),
+        ([ok, jnp.zeros(0)], r"starts\[1\] has shape"),
+        ([ok, {"A_to_B.k": 0.0}], r"starts\[1\].*outside the domain"),
+        ([ok, {"nope.k": 0.2}], r"starts\[1\]: 'nope.k' is not a free parameter"),
+    ]
+    for starts, msg in bad:
+        with pytest.raises(ValueError, match=msg):
+            aquakin.calibrate(
+                reactor,
+                C0,
+                **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(starts=starts)),
+            )
+    with pytest.raises(ValueError, match="not both"):
+        aquakin.calibrate(
+            reactor,
+            C0,
+            **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(starts=[ok], n_starts=2)),
+        )
+
+
+def test_single_start_list_matches_initial_params(setup):
+    """A one-entry list is the same fit as passing that start as
+    initial_params, whether it is given as a dict, a full vector, a tuple or a
+    2-D array of vectors."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    p = reactor.model.default_parameters().at[0].set(0.8)
+    ref = aquakin.calibrate(reactor, C0, initial_params=p, **_decay_kw(obs_clean, t_obs))
+    for starts in ([{"A_to_B.k": 0.8}], (p,), np.asarray(p)[None, :]):
+        r = aquakin.calibrate(
+            reactor, C0, **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(starts=starts))
+        )
+        assert r.loss == pytest.approx(ref.loss, rel=1e-12, abs=1e-18)
+        assert r.params_named["A_to_B.k"] == pytest.approx(ref.params_named["A_to_B.k"], rel=1e-12)
+
+
+def test_start_list_reproducible_order_and_duplicates(setup):
+    """The same list gives the same fit on every call; reordering the list or
+    repeating a start does not change which optimum is kept."""
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    starts = [{"A_to_B.k": k} for k in (0.01, 0.8, 3.0)]
+
+    def fit(s):
+        return aquakin.calibrate(
+            reactor, C0, **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(starts=s))
+        )
+
+    a, b = fit(starts), fit(starts)
+    assert a.loss == b.loss
+    assert a.params_named == b.params_named
+    rev = fit(starts[::-1])
+    dup = fit(starts + starts[:1] + starts[:1])
+    for r in (rev, dup):
+        assert r.loss == pytest.approx(a.loss, rel=1e-6, abs=1e-14)
+        assert r.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+    # Repeating the only start runs it again and changes nothing.
+    one = fit(starts[:1])
+    assert fit(starts[:1] * 3).params_named == one.params_named
+
+
+@pytest.mark.parametrize("method", ["lbfgsb", "gauss_newton"])
+def test_start_list_outside_bounds_moved_inside(setup, method):
+    """A start outside the declared bounds (k in [1e-3, 10]) is moved to the
+    nearest bound with the same warning initial_params gets, once per such
+    start, and the fit still recovers the truth."""
+    import warnings as _w
+
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    starts = [{"A_to_B.k": 50.0}, {"A_to_B.k": 0.3}, {"A_to_B.k": 1e-5}]
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        r = aquakin.calibrate(
+            reactor,
+            C0,
+            **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(method=method, starts=starts)),
+        )
+    moved = [w for w in caught if "starting value of ['A_to_B.k']" in str(w.message)]
+    assert len(moved) == 2
+    assert all(issubclass(w.category, RuntimeWarning) for w in moved)
+    assert r.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
+def test_start_list_with_free_ic(setup):
+    """With fitted initial pools, every start pairs its rates with the pools'
+    start from C0, and the best start recovers both."""
+    reactor, C0, t_obs, obs_clean, true_k = setup  # data from A0 = 1.0
+    r = aquakin.calibrate(
+        reactor,
+        C0.at[0].set(0.6),
+        **_decay_kw(
+            obs_clean,
+            t_obs,
+            free_ic=FreeICConfig(["A"]),
+            optimizer=OptimizerConfig(
+                method="gauss_newton", starts=[{"A_to_B.k": 0.02}, {"A_to_B.k": 0.4}]
+            ),
+        ),
+    )
+    assert r.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+    assert r.ic_named[0]["A"] == pytest.approx(1.0, rel=1e-3)
+
+
+def test_compiled_cache_rebuilds_on_every_baked_in_change(setup):
+    """A shared cache compiles a fresh program for each change the objective
+    bakes in (same-shape t_obs values, sigma, transform, observed species) and
+    gives the same answer as a fit with its own cache; a repeat of identical
+    inputs, rebuilt from fresh arrays, compiles nothing."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    base = dict(
+        observations=obs_clean,
+        t_obs=t_obs,
+        free_params=["A_to_B.k"],
+        observed_species=["B"],
+        loss="nll",
+        sigma=0.01,
+        laplace=False,
+    )
+    cache = {}
+    aquakin.calibrate(reactor, C0, _compiled_cache=cache, **base)
+    n_programs = len(cache)
+    assert n_programs > 0
+
+    repeat = {**base, "observations": jnp.array(np.asarray(obs_clean)), "t_obs": np.array(t_obs)}
+    aquakin.calibrate(reactor, C0, _compiled_cache=cache, **repeat)
+    assert len(cache) == n_programs
+
+    variants = [
+        {"t_obs": t_obs + 0.1},
+        {"sigma": 0.02},
+        {"transforms": {"A_to_B.k": "positive_log"}},
+        {"observed_species": ["A"], "observations": 1.0 - obs_clean},
+    ]
+    for i, change in enumerate(variants, start=2):
+        kw = {**base, **change}
+        shared = aquakin.calibrate(reactor, C0, _compiled_cache=cache, **kw)
+        assert len(cache) == i * n_programs, change
+        own = aquakin.calibrate(reactor, C0, **kw)
+        assert shared.loss == pytest.approx(own.loss, rel=1e-10), change
+        assert shared.params_named["A_to_B.k"] == pytest.approx(
+            own.params_named["A_to_B.k"], rel=1e-10
+        ), change
+
+
 # ---------- absolute / model-declared bounds ----------
 
 _BOUNDED_DECAY_YAML = """
