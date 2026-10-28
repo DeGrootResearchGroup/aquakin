@@ -88,6 +88,22 @@ def _scaled_resnorm(F: jnp.ndarray, y: jnp.ndarray, floor: float) -> jnp.ndarray
     return jnp.max(jnp.abs(F) / jnp.maximum(jnp.abs(y), floor))
 
 
+def _scaled_residual_event(tol: float, scale_floor):
+    """A ``diffrax.Event`` condition: stop once the scaled residual is at most ``tol``.
+
+    The residual is :func:`_scaled_resnorm` of the vector field at the current
+    state, the quantity :func:`ptc_forward` converges on, so a forward solve
+    stopped by this event meets the same test as the algebraic solve.
+    """
+
+    def cond_fn(t, y, args, *, terms, solver, **kwargs):
+        del kwargs
+        F = solver.func(terms, t, y, args)
+        return _scaled_resnorm(F, y, scale_floor) <= tol
+
+    return cond_fn
+
+
 def ptc_forward(
     rhs: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray],
     params: jnp.ndarray,

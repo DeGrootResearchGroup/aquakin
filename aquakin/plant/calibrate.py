@@ -660,6 +660,13 @@ def calibrate_plant(
 
     if not free_params:
         raise ValueError("free_params must be non-empty.")
+    if isinstance(sigma, str) or (
+        isinstance(sigma, (list, tuple)) and any(isinstance(s, str) for s in sigma)
+    ):
+        raise NotImplementedError(
+            'Plant.calibrate does not support sigma="estimate" yet; pass a known '
+            "noise level, or fit with aquakin.calibrate."
+        )
 
     # Unpack the config objects into the internal scalar knobs.
     laplace_on, lap = _resolve_laplace(laplace)

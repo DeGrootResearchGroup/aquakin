@@ -41,7 +41,13 @@ from aquakin.integrate._transforms import (
     from_unconstrained,
     to_unconstrained,
 )
-from aquakin.integrate.calibrate import FreeICConfig, observation_size, observe
+from aquakin.integrate.calibrate import (
+    FreeICConfig,
+    _ic_coordinate_names,
+    _simplex_pools,
+    observation_size,
+    observe,
+)
 
 
 @dataclass(frozen=True)
@@ -107,10 +113,12 @@ class FisherInformation:
         as ``names``.
     names : list[str]
         Row / column names: the rate parameters, then ``"ic[e].<species>"`` for
-        experiment ``e``'s estimated initial pools.
+        experiment ``e``'s estimated initial pools (or, with
+        ``FreeICConfig(fixed_total=True)``, ``"ic[e].<c_j>:<c_0>"`` for the
+        log-ratio coordinates of the split).
     transforms : list[str]
         Transform of each row: the rate parameters' transforms, then
-        ``"positive_log"`` for every pool.
+        ``"positive_log"`` for every pool (or pool ratio).
     values : dict[str, float]
         The physical values the information was evaluated at, by name.
     jacobian : np.ndarray
@@ -201,8 +209,12 @@ def fisher_information(
         declared transform is used.
     free_ic : FreeICConfig, optional
         Initial pools to estimate alongside the rates, one set per experiment,
-        evaluated at the values in each experiment's ``C0``. Only
-        ``free_ic.species`` (and, with ``use_priors``, ``prior_log_std``) is used.
+        evaluated at the values in each experiment's ``C0``. ``free_ic.species``,
+        ``fixed_total`` and (with ``use_priors``) ``prior_log_std`` are used;
+        ``bounds`` play no part in the information. With ``fixed_total=True``
+        the pools' sum is held at its value in ``C0`` and the information is for
+        the ``m - 1`` log-ratio coordinates of their split, as
+        :func:`aquakin.calibrate` fits it.
     priors : dict, optional
         Gaussian priors ``{name: (mean, std)}`` on rate parameters, in physical
         space. Used only with ``use_priors=True``.
@@ -300,6 +312,10 @@ class _FisherSetup:
         self.free_idx = jnp.asarray([model.param_index[n] for n in free_params], dtype=int)
 
         self.ic_species = list(free_ic.species) if free_ic is not None else []
+        self.ic_fixed_total = bool(free_ic is not None and free_ic.fixed_total and self.ic_species)
+        # Fitted coordinates per experiment: the log pools, or the m - 1
+        # log-ratio coordinates of a fixed-total split.
+        self.m_theta = len(self.ic_species) - (1 if self.ic_fixed_total else 0)
         for s in self.ic_species:
             if s not in model.species_index:
                 raise KeyError(f"Unknown free_ic species '{s}'. Available: {model.species}")
@@ -393,21 +409,33 @@ class _FisherSetup:
             free_ic.prior_log_std if (use_priors and free_ic is not None and m) else None
         )
 
-        ic_names = [f"ic[{e}].{s}" for e in range(len(exps)) for s in self.ic_species]
+        ic_names = _ic_coordinate_names(self.ic_species, len(exps), self.ic_fixed_total)
         self.names = self.free_params + ic_names
         self.transforms = self.rate_transforms + ["positive_log"] * len(ic_names)
 
     def values(self, p, C0s) -> dict[str, float]:
-        """Physical values of the estimated quantities at ``(p, C0s)``."""
+        """Physical values of the estimated quantities at ``(p, C0s)`` (pool
+        ratios ``c_j / c_0`` for a fixed-total split)."""
         rate = [float(p[self.model.param_index[n]]) for n in self.free_params]
-        pools = [float(C0[i]) for C0 in C0s for i in np.asarray(self.ic_idx)]
+        idx = np.asarray(self.ic_idx)
+        if self.ic_fixed_total:
+            pools = [float(C0[i] / C0[idx[0]]) for C0 in C0s for i in idx[1:]]
+        else:
+            pools = [float(C0[i]) for C0 in C0s for i in idx]
         return dict(zip(self.names, rate + pools))
+
+    def _pool_theta(self, C0):
+        """One experiment's pool coordinates at its ``C0``."""
+        pools = C0[self.ic_idx]
+        if self.ic_fixed_total:
+            return jnp.log(pools[1:]) - jnp.log(pools[0])
+        return jnp.log(pools)
 
     def jacobian(self, p, tobs_list, C0_list):
         """Noise-scaled sensitivity ``Sigma^{-1/2} S`` at parameters ``p`` for
         sampling times ``tobs_list`` and initial states ``C0_list`` (one per
         experiment), in unconstrained coordinates. Pure JAX."""
-        d, m = len(self.free_params), len(self.ic_species)
+        d, m = len(self.free_params), self.m_theta
         trs = self.rate_transforms
 
         def _residuals(theta):
@@ -415,8 +443,13 @@ class _FisherSetup:
             pp = p.at[self.free_idx].set(physical)
             parts = []
             for e, (rctr, C0, tobs) in enumerate(zip(self.reactors, C0_list, tobs_list)):
-                if m:
-                    C0 = C0.at[self.ic_idx].set(jnp.exp(theta[d + e * m : d + (e + 1) * m]))
+                if self.ic_species:
+                    th_e = theta[d + e * m : d + (e + 1) * m]
+                    if self.ic_fixed_total:
+                        pools = _simplex_pools(th_e, jnp.sum(C0[self.ic_idx]))
+                    else:
+                        pools = jnp.exp(th_e)
+                    C0 = C0.at[self.ic_idx].set(pools)
                 C = rctr.solve(C0, params=pp, t_span=(0.0, self.t_end[e]), t_eval=tobs).C
                 y = observe(C, pp, self.obs_idx[e], self.obs_fn[e], t=tobs / self.time_factor[e])
                 parts.append((y / self.sigma[e]).reshape(-1))
@@ -427,7 +460,7 @@ class _FisherSetup:
             return jnp.concatenate(parts)
 
         rate_theta = [jnp.atleast_1d(to_unconstrained(p[i], t)) for i, t in zip(self.free_idx, trs)]
-        pool_theta = [jnp.log(C0[self.ic_idx]) for C0 in C0_list] if m else []
+        pool_theta = [self._pool_theta(C0) for C0 in C0_list] if m else []
         theta = jnp.concatenate(rate_theta + pool_theta)
         return jax.jacfwd(_residuals)(theta)
 
