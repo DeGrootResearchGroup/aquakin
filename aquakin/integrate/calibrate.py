@@ -1613,21 +1613,31 @@ def _ic_theta_from_pools(problem: _CalibrationProblem, C0s) -> jnp.ndarray:
     return jnp.asarray(np.concatenate(blocks))
 
 
-# A fitted coordinate counts as on a finite optimiser bound when its distance to
-# it (in unconstrained space) is at most ``_AT_BOUND_RTOL * max(|bound|, |theta|)``
-# plus a tiny absolute floor, ``_AT_BOUND_ATOL`` times the box width (or times 1
-# when the other side is open). The tolerance follows the coordinate's own
-# magnitude, so a small untransformed parameter well inside its box (k = 5e-6
-# in (1e-6, 1), say) is not mistaken for one on the bound. L-BFGS-B ends exactly
-# on an active bound; the trust-region least-squares solver stays strictly
-# inside, within round-off of the bound, or within the floor of a bound at zero.
+# A fitted coordinate within a tolerance of a finite optimiser bound (in
+# unconstrained space) counts as on the bound. The tolerance depends on the
+# coordinate's transform:
+#
+# - ``positive_log`` / ``logit`` (and the log-space initial pools): an absolute
+#   ``_AT_BOUND_RTOL`` in the unconstrained coordinate, which is already a
+#   relative tolerance on the physical value. It does not shrink when the bound
+#   maps to zero (a physical bound of 1 under ``positive_log``, or 0.5 under
+#   ``logit``).
+# - ``none`` (the coordinate is the physical value): ``_AT_BOUND_RTOL *
+#   max(|bound|, |theta|)`` plus a tiny floor, ``_AT_BOUND_ATOL`` times the box
+#   width (or times 1 when the other side is open). It follows the parameter's
+#   own size, so a small parameter well inside its box (k = 5e-6 in (1e-6, 1),
+#   say) is not mistaken for one on the bound.
+#
+# L-BFGS-B ends exactly on an active bound; the trust-region least-squares
+# solver stays strictly inside, within round-off of the bound.
 _AT_BOUND_RTOL = 1e-5
 _AT_BOUND_ATOL = 1e-12
 
 
-def _at_bound_sides(theta_opt, opt_bounds) -> np.ndarray:
+def _at_bound_sides(theta_opt, opt_bounds, transforms=None) -> np.ndarray:
     """Per coordinate of ``theta_opt``: ``"lower"`` / ``"upper"`` if it ended on
-    that finite optimiser bound, else ``""``."""
+    that finite optimiser bound, else ``""``. ``transforms`` names each
+    coordinate's transform; ``None`` treats every coordinate as ``"none"``."""
     _bounds, lb, ub, _ls, has_bounds = opt_bounds
     th = np.asarray(theta_opt, dtype=float)
     sides = np.full(th.shape, "", dtype=object)
@@ -1635,15 +1645,22 @@ def _at_bound_sides(theta_opt, opt_bounds) -> np.ndarray:
         return sides
     lb = np.asarray(lb, dtype=float)
     ub = np.asarray(ub, dtype=float)
+    physical = (
+        np.ones(th.shape, dtype=bool)
+        if transforms is None
+        else np.asarray([t == "none" for t in transforms], dtype=bool)
+    )
     both = np.isfinite(lb) & np.isfinite(ub)
     with np.errstate(invalid="ignore"):
         atol = _AT_BOUND_ATOL * np.where(both, ub - lb, 1.0)
-        on_lo = np.isfinite(lb) & (
-            np.abs(th - lb) <= _AT_BOUND_RTOL * np.maximum(np.abs(lb), np.abs(th)) + atol
+        tol_lo = np.where(
+            physical, _AT_BOUND_RTOL * np.maximum(np.abs(lb), np.abs(th)) + atol, _AT_BOUND_RTOL
         )
-        on_hi = np.isfinite(ub) & (
-            np.abs(ub - th) <= _AT_BOUND_RTOL * np.maximum(np.abs(ub), np.abs(th)) + atol
+        tol_hi = np.where(
+            physical, _AT_BOUND_RTOL * np.maximum(np.abs(ub), np.abs(th)) + atol, _AT_BOUND_RTOL
         )
+        on_lo = np.isfinite(lb) & (np.abs(th - lb) <= tol_lo)
+        on_hi = np.isfinite(ub) & (np.abs(ub - th) <= tol_hi)
     sides[on_lo] = "lower"
     sides[on_hi & ~on_lo] = "upper"
     return sides
@@ -2428,7 +2445,10 @@ def calibrate(
             ]
 
     # --- Quantities that ended on an active bound ---
-    sides = _at_bound_sides(theta_opt, opt_bounds)
+    coord_transforms = list(problem.transforms) + ["positive_log"] * (
+        theta_opt.shape[0] - problem.n_rate
+    )
+    sides = _at_bound_sides(theta_opt, opt_bounds, coord_transforms)
     at_bound = _at_bound_named(problem, sides)
     if at_bound:
         what = (

@@ -1036,24 +1036,32 @@ def test_resolve_problem_rejects_duplicate_free_ic(base):
 
 
 @pytest.mark.parametrize(
-    "theta, lb, ub, expected",
+    "theta, lb, ub, transform, expected",
     [
-        # Small values well inside the box are interior, not "near" the bound.
-        (5e-6, 1e-6, 1.0, ""),
-        (1.1e-9, 1e-9, 1.0, ""),
+        # Untransformed: small values well inside the box are interior.
+        (5e-6, 1e-6, 1.0, "none", ""),
+        (1.1e-9, 1e-9, 1.0, "none", ""),
         # Exactly on, or within round-off of, a small bound.
-        (1e-6, 1e-6, 1.0, "lower"),
-        (1.0000000000014743e-09, 1e-9, 1.0, "lower"),
-        (0.0009999999999999864, 1e-6, 1e-3, "upper"),
+        (1e-6, 1e-6, 1.0, "none", "lower"),
+        (1.0000000000014743e-09, 1e-9, 1.0, "none", "lower"),
+        (0.0009999999999999864, 1e-6, 1e-3, "none", "upper"),
         # A bound at zero: the trust-region solver ends a hair inside it.
-        (7.6e-24, 0.0, 1.0, "lower"),
-        (7.6e-24, 0.0, np.inf, "lower"),
-        (1e-8, 0.0, 1.0, ""),
-        # Log-space coordinates of order one.
-        (np.log(10.0), np.log(1e-3), np.log(10.0), "upper"),
-        (np.log(9.9), np.log(1e-3), np.log(10.0), ""),
+        (7.6e-24, 0.0, 1.0, "none", "lower"),
+        (7.6e-24, 0.0, np.inf, "none", "lower"),
+        (1e-8, 0.0, 1.0, "none", ""),
+        # Log-space coordinates: an absolute tolerance in theta, which does not
+        # collapse when the physical bound is 1 (theta bound 0).
+        (np.log(10.0), np.log(1e-3), np.log(10.0), "positive_log", "upper"),
+        (np.log(9.9), np.log(1e-3), np.log(10.0), "positive_log", ""),
+        (-1e-8, np.log(1e-3), 0.0, "positive_log", "upper"),
+        (np.log(1.0000001) - 1e-8, np.log(1e-3), np.log(1.0000001), "positive_log", "upper"),
+        (1e-8, 0.0, np.log(10.0), "positive_log", "lower"),
+        (-1e-3, np.log(1e-3), 0.0, "positive_log", ""),
+        # Logit: a physical bound of 0.5 is theta 0.
+        (-1e-8, -2.0, 0.0, "logit", "upper"),
+        (-1e-3, -2.0, 0.0, "logit", ""),
     ],
 )
-def test_at_bound_tolerance_is_scale_aware(theta, lb, ub, expected):
+def test_at_bound_tolerance_is_scale_aware(theta, lb, ub, transform, expected):
     opt_bounds = (None, np.array([lb]), np.array([ub]), None, True)
-    assert _at_bound_sides(np.array([theta]), opt_bounds)[0] == expected
+    assert _at_bound_sides(np.array([theta]), opt_bounds, [transform])[0] == expected
