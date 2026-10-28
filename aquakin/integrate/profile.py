@@ -180,7 +180,8 @@ def profile_likelihood(
     profile_param : str, optional
         Name of a rate parameter to profile.
     profile_ic : str, optional
-        Name of a species whose initial concentration to profile.
+        Name of a species whose initial concentration to profile. It cannot
+        be a pool of a ``FreeICConfig(fixed_total=True)`` split.
     delta : float, optional
         Likelihood-ratio threshold for the confidence interval. Default ``1.92``
         = ``0.5 * chi2_{1, 0.95}`` (the one-degree-of-freedom 95% level). Use
@@ -204,8 +205,10 @@ def profile_likelihood(
         :class:`~aquakin.FreeICConfig`, ``optimizer`` an
         :class:`~aquakin.OptimizerConfig`; the profiled parameter/species is
         removed from ``free_ic`` for the inner fits). ``optimizer.n_starts``
-        applies to the cold anchor (and to every point when
-        ``warm_start=False``); warm-started points use a single start. The inner
+        (or an explicit ``optimizer.starts`` list, with the profiled parameter
+        dropped from dict starts) applies to the cold anchor (and to every
+        point when ``warm_start=False``); warm-started points use a single
+        start. The inner
         fits force ``laplace=False`` (the profile, not the Laplace posterior, is
         the identifiability estimate here).
 
@@ -224,6 +227,16 @@ def profile_likelihood(
         raise ValueError("grid must be a non-empty 1-D array.")
     if delta <= 0:
         raise ValueError(f"delta must be > 0; got {delta}.")
+    # Checked here, not left to the inner fits: an invalid start list would
+    # fail every grid point and come back as a profile of gaps.
+    if optimizer.starts is not None:
+        if optimizer.n_starts > 1:
+            raise ValueError(
+                "Pass optimizer.starts (an explicit start list) or optimizer.n_starts > 1 "
+                "(jittered restarts), not both."
+            )
+        if len(optimizer.starts) == 0:
+            raise ValueError("optimizer.starts must contain at least one start.")
 
     model = reactor.model
     C0 = jnp.asarray(C0)
@@ -245,6 +258,12 @@ def profile_likelihood(
     else:
         if profile_ic not in model.species_index:
             raise KeyError(f"Unknown profile_ic '{profile_ic}'. Available: {model.species}")
+        if free_ic is not None and free_ic.fixed_total and profile_ic in free_ic.species:
+            raise NotImplementedError(
+                "profile_ic cannot profile a pool of a FreeICConfig(fixed_total=True) "
+                "split: pinning one pool would change the total the others share. "
+                "Profile a rate parameter, or fit the pools with fixed_total=False."
+            )
         inner_free_ic = [s for s in inner_free_ic if s != profile_ic]
         s_idx = model.species_index[profile_ic]
         profiled = profile_ic
@@ -264,9 +283,13 @@ def profile_likelihood(
     # program instead of recompiling the stiff objective + Jacobian per point.
     # Rebuild the free-IC config for the inner fits with the profiled species (if
     # any) removed; carry the caller's bounds / prior across.
-    inner_free_ic_cfg = (
-        replace(free_ic, species=inner_free_ic) if (free_ic is not None and inner_free_ic) else None
-    )
+    # A per-species bounds dict drops the profiled species with it.
+    inner_free_ic_cfg = None
+    if free_ic is not None and inner_free_ic:
+        inner_bounds = free_ic.bounds
+        if isinstance(inner_bounds, dict):
+            inner_bounds = {s: b for s, b in inner_bounds.items() if s in inner_free_ic}
+        inner_free_ic_cfg = replace(free_ic, species=inner_free_ic, bounds=inner_bounds)
     inner_kw = dict(
         transforms=transforms,
         observed_species=observed_species,
@@ -279,6 +302,16 @@ def profile_likelihood(
         laplace=False,
         _compiled_cache={},
     )
+
+    # An explicit start list seeds the cold fits. The profiled parameter is
+    # pinned, so drop it from dict starts (a vector start's entry for it is not
+    # read: only the free entries are).
+    cold_starts = None
+    if optimizer.starts is not None:
+        cold_starts = [
+            {k: v for k, v in st.items() if k != profile_param} if isinstance(st, dict) else st
+            for st in optimizer.starts
+        ]
 
     def _start_state(warm):
         """initial_params and C0 to seed an inner fit (warm or cold)."""
@@ -296,9 +329,11 @@ def profile_likelihood(
             C0_pt = base_C0
         else:
             C0_pt = base_C0.at[s_idx].set(value)
-        # Cold (anchor) points use the full multistart; warm-continued points
-        # start from the neighbour's optimum, so one start suffices.
+        # Cold (anchor) points use the full multistart (or the explicit start
+        # list); warm-continued points start from the neighbour's optimum, so
+        # one start suffices.
         n = optimizer.n_starts if warm is None else 1
+        starts = cold_starts if warm is None else None
         try:
             return calibrate(
                 reactor,
@@ -307,7 +342,7 @@ def profile_likelihood(
                 t_obs,
                 inner_free,
                 initial_params=init_p,
-                optimizer=replace(optimizer, n_starts=n),
+                optimizer=replace(optimizer, n_starts=n, starts=starts),
                 **inner_kw,
             )
         except Exception as exc:
