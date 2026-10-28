@@ -3460,6 +3460,9 @@ class Plant:
         atol: float | jnp.ndarray | None = None,
         atol_factor: float = 1e-6,
         max_steps: int = 500_000,
+        criterion: str = "norm",
+        tol: float = 1e-6,
+        scale_floor: float | jnp.ndarray | None = None,
     ) -> SteadyStateResult:
         """Integrate forward until the plant settles to steady state.
 
@@ -3470,6 +3473,23 @@ class Plant:
         dies" criterion. There is no fixed horizon to guess and no chunked
         re-integration: ``max_time`` is only a safety cap, reached only if the
         plant has *not* settled (then ``converged`` is ``False``).
+
+        Two stopping criteria are available (``criterion``):
+
+        - ``"norm"`` (default): the norm test above, with ``ss_rtol`` /
+          ``ss_atol``.
+        - ``"scaled_residual"``: stop once the per-state scaled residual
+          ``max_i |F_i| / max(|y_i|, scale_floor_i)`` is at most ``tol``, where
+          ``F = dy/dt``. This is the criterion :meth:`steady_state` converges
+          on, with the same default ``scale_floor``, so a forward and an
+          algebraic steady state can be held to the same tolerance. The norm
+          test is dominated by the largest states and can stop while small
+          states (dissolved gases, intermediates) still change quickly relative
+          to their size.
+
+        Either way the result reports the returned state's scaled residual in
+        ``residual`` (computed with ``scale_floor``), so the two methods can be
+        compared on one measure.
 
         The absolute tolerance for the underlying solve defaults to a
         per-component noise floor scaled off the operating magnitudes
@@ -3500,12 +3520,30 @@ class Plant:
             Scale factor for the auto per-component ``atol``.
         max_steps : int
             Maximum integrator steps.
+        criterion : {"norm", "scaled_residual"}
+            Stopping test (see above). Default ``"norm"``.
+        tol : float
+            Tolerance on the scaled residual for ``criterion="scaled_residual"``
+            (the :meth:`steady_state` default, ``1e-6``). Ignored for
+            ``"norm"``.
+        scale_floor : float or array, optional
+            Floor on ``|y|`` in the scaled residual, as in :meth:`steady_state`.
+            Default ``None`` uses the per-state ``max(|y0|, 1e-6)``. Used for the
+            stopping test with ``criterion="scaled_residual"`` and, with either
+            criterion, for the reported ``residual``.
 
         Returns
         -------
         SteadyStateResult
-            ``state`` (the operating point), ``converged``, ``time``, and the
-            underlying ``solution``.
+            ``state`` (the operating point), ``converged``, ``time``, the
+            underlying ``solution``, and ``residual`` (the scaled residual of
+            ``state``). With ``criterion="scaled_residual"``, ``converged`` means
+            ``residual <= tol``.
+
+        Raises
+        ------
+        ValueError
+            If ``criterion`` is not ``"norm"`` or ``"scaled_residual"``.
 
         Examples
         --------
@@ -3513,12 +3551,27 @@ class Plant:
         >>> ss.converged
         True
         >>> snh = plant.states_by_unit(ss.state)["tank5"][asm1.species_index["SNH"]]
+
+        Stop on the same criterion and tolerance as :meth:`steady_state`:
+
+        >>> fwd = plant.run_to_steady_state(params, y0=warm, criterion="scaled_residual",
+        ...                                 tol=1e-8, scale_floor=1e-6)
+        >>> fwd.residual <= 1e-8
+        True
         """
+        from aquakin.plant.steady import _scaled_residual_event, _scaled_resnorm
+
+        if criterion not in ("norm", "scaled_residual"):
+            raise ValueError(f"criterion must be 'norm' or 'scaled_residual'; got {criterion!r}.")
         self._build_state_layout()
         y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
         if atol is None:
             atol = default_atol(y0, self.initial_state(), atol_factor=atol_factor)
-        event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
+        floor = self._steady_scale_floor(y0, scale_floor)
+        if criterion == "norm":
+            event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
+        else:
+            event = diffrax.Event(_scaled_residual_event(tol, floor))
         sol = self.solve(
             t_span=(0.0, float(max_time)),
             params=params,
@@ -3529,14 +3582,34 @@ class Plant:
             integrator=IntegratorConfig(max_steps=max_steps),
         )
         t_final = float(sol.t[-1])
-        converged = bool(t_final < float(max_time))
+        state = sol.state[-1]
+        residual = float(_scaled_resnorm(self.derivative(state, params, t=t_final), state, floor))
+        if criterion == "norm":
+            converged = bool(t_final < float(max_time))
+        else:
+            converged = bool(residual <= tol)
         return SteadyStateResult(
-            state=sol.state[-1],
+            state=state,
             converged=converged,
             time=t_final,
             solution=sol,
             method="forward",
+            residual=residual,
         )
+
+    @staticmethod
+    def _steady_scale_floor(y0: jnp.ndarray, scale_floor):
+        """The ``|y|`` floor of the scaled steady-state residual.
+
+        ``scale_floor`` when given (scalar or per-state array), else the per-state
+        ``max(|y0|, 1e-6)``: each state scaled by its own warm-start magnitude,
+        with a small absolute floor for near-zero states. Shared by
+        :meth:`steady_state` and :meth:`run_to_steady_state` so the two use the
+        same criterion.
+        """
+        if scale_floor is None:
+            return jnp.maximum(jnp.abs(y0), 1e-6)
+        return scale_floor
 
     def _steady_continuation_fallback(
         self,
@@ -3889,8 +3962,7 @@ class Plant:
         # neutral on BSM1, same root. The small 1e-6 absolute floor anchors
         # near-zero states (a pure-|y| relative scale destabilises the iteration).
         # An explicit ``scale_floor`` (scalar or per-state array) is honoured.
-        if scale_floor is None:
-            scale_floor = jnp.maximum(jnp.abs(y0), 1e-6)
+        scale_floor = self._steady_scale_floor(y0, scale_floor)
 
         # When design variables are supplied, the differentiated quantity is the
         # pytree ``theta = (params, design)`` -- the implicit-function-theorem

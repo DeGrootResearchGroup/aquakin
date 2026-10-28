@@ -53,6 +53,19 @@ ss = plant.steady_state()
 print("converged:", ss.converged, "in", int(ss.iterations), "iterations")
 ```
 
+Both methods report `ss.residual`, the scaled residual
+`max_i |dy_i/dt| / max(|y_i|, scale_floor)` of the state they return. By
+default `run_to_steady_state()` stops on a looser norm test, which large states
+dominate. To hold a forward run to the same criterion and tolerance as
+`steady_state()`, for example to cross-check the algebraic root, pass
+`criterion="scaled_residual"`:
+
+```python
+fwd = plant.run_to_steady_state(criterion="scaled_residual", tol=1e-8, scale_floor=1e-6)
+root = plant.steady_state(tol=1e-8, scale_floor=1e-6)
+print(fwd.residual, root.residual)   # both <= 1e-8
+```
+
 ## Dynamic runs and performance indices
 
 For a dynamic simulation, drive a fresh plant with a time-varying influent,

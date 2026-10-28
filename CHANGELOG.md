@@ -71,6 +71,22 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `param_draws` for robust experiment design. `predictive_band` uses the same
   draws.
 
+- `Plant.run_to_steady_state(criterion="scaled_residual", tol=..., scale_floor=...)`
+  stops the forward run on the scaled residual
+  `max_i |F_i| / max(|y_i|, scale_floor)` that `Plant.steady_state` converges
+  on, with the same default floor (`max(|y0|, 1e-6)` per state), so a forward
+  and an algebraic steady state can be held to one tolerance. The default
+  `criterion="norm"` keeps the previous stopping test. The norm test can stop
+  far from steady state on a plant whose states span many magnitudes: on the
+  BSM2 digester started from its published steady state it stops after
+  0.03 d at a scaled residual of 0.07.
+
+### Changed
+
+- `SteadyStateResult.residual` is now also set for `Plant.run_to_steady_state`
+  (and the `"ptc->forward"` fallback of `Plant.steady_state`): the scaled
+  residual of the returned state. It used to be `None` for forward results.
+
 ### Deprecated
 
 - `LaplaceConfig(eig_keep=...)` is deprecated and ignored (see Fixed). Passing
