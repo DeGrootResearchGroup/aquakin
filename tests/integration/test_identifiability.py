@@ -233,3 +233,26 @@ def test_at_bound_names_get_nan_std_and_others_are_conditional():
     np.testing.assert_allclose(held.eigenvalues, free.eigenvalues)
     with pytest.raises(ValueError, match="at_bound name"):
         aquakin.identifiability(F, names=["a", "b"], values=vals, at_bound={"c": "upper"})
+
+
+def test_at_bound_held_fixed_with_uninformative_rest():
+    """Holding the at-bound quantity fixed can leave the others with no
+    information (an all-zero block) or with an exactly null direction of their
+    own: those get an infinite std, the others a finite one, and the fixed one
+    stays nan."""
+    vals = {"a": 1.0, "b": 2.0, "c": 3.0}
+    # Only "a" is informed; with "a" held, the {b, c} block is all zero.
+    F = np.diag([4.0, 0.0, 0.0])
+    rep = aquakin.identifiability(F, names=["a", "b", "c"], values=vals, at_bound={"a": "upper"})
+    assert np.isnan(rep.std["a"])
+    assert rep.std["b"] == np.inf and rep.std["c"] == np.inf
+    # With "c" held, "a" is informed and "b" lies on a null direction.
+    rep = aquakin.identifiability(F, names=["a", "b", "c"], values=vals, at_bound={"c": "lower"})
+    assert np.isnan(rep.std["c"])
+    assert rep.std["a"] == pytest.approx(0.5)
+    assert rep.std["b"] == np.inf
+    # Everything held: all nan.
+    rep = aquakin.identifiability(
+        F, names=["a", "b", "c"], values=vals, at_bound=dict.fromkeys(vals, "lower")
+    )
+    assert all(np.isnan(rep.std[n]) for n in vals)
