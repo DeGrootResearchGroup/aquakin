@@ -557,8 +557,13 @@ held in the settler — they pass straight through (overflow = underflow = feed,
 no holdup), the common simplification. The opt-in **`soluble_holdup=True`** makes
 each soluble a per-layer well-mixed state advected by the bulk flow (convection
 only, no settling), so the clarifier's liquid volume (~`area·height`) damps the
-soluble effluent signal — the BSM2 `settler1dv5` behaviour, which carries
-`SNH_1..SNH_10` etc. per layer. The soluble holdup is a tail block of shape
+soluble effluent signal — the ten-layer soluble model of the BSM1 reference
+`settler1dv4` (`MODELTYPE=0`, verified against its source: each soluble is
+advected layer to layer, no settling), which the BSM2 `settler1dv5` keeps
+(`SNH_1..SNH_10` etc. per layer). It is **independent** of the per-layer
+particulate composition memory that distinguishes `settler1dv5`
+(`composition_mode="per_species"`; `settler1dv4` is `"lumped_tss"`, the outlet
+composition feed-scaled by the boundary-layer TSS ratio). The soluble holdup is a tail block of shape
 `(n_layers, n_soluble)` appended to the state (so the particulate layout /
 `state_size` are unchanged when off), orthogonal to `composition_mode`. **It
 leaves every steady state unchanged** — a non-reacting soluble's only transport

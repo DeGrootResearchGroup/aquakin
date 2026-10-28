@@ -512,11 +512,15 @@ def build_bsm2(
     settler_composition_mode : str, optional
         Particulate state form of the secondary clarifier
         (:class:`~aquakin.plant.takacs.TakacsClarifier`); ``"per_species"``
-        (default) or ``"lumped_tss"``.
+        (default, the per-layer composition memory of the BSM2 reference settler
+        ``settler1dv5``) or ``"lumped_tss"`` (the feed-scaled composition of the
+        BSM1 ``settler1dv4``).
     settler_soluble_holdup : bool, optional
         If True, the secondary clarifier carries the soluble species in its
         layers (advected by the bulk flow, no settling), so its liquid volume
-        damps the soluble effluent signal -- the BSM2 ``settler1dv5`` behaviour.
+        damps the soluble effluent signal. This is the ten-layer soluble model
+        of the BSM1 reference settler ``settler1dv4``, which the BSM2
+        ``settler1dv5`` keeps; it is independent of ``settler_composition_mode``.
         Default False (solubles pass straight through, no holdup). Leaves every
         steady state unchanged (a non-reacting soluble relaxes to the feed
         concentration), so it only matters under a dynamic influent, where it

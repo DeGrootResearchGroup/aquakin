@@ -86,9 +86,12 @@ def build_bsm1(
         When ``use_takacs=True``, carry the soluble species through the ten
         settler layers as well-mixed convective states, so the clarifier liquid
         volume damps the dynamic soluble effluent signal. Default True, matching
-        the BSM1 reference settler ``settler1dv4`` (MODELTYPE=0, the COST
-        benchmark). Set False for the simpler soluble pass-through. Ignored when
-        ``use_takacs=False``. Leaves the steady state unchanged.
+        the ten-layer soluble model of the BSM1 reference settler
+        ``settler1dv4`` (MODELTYPE=0, the COST benchmark); the BSM2 settler
+        ``settler1dv5`` carries the solubles the same way. Set False for the
+        simpler soluble pass-through. Ignored when ``use_takacs=False``. Leaves
+        the steady state unchanged. Independent of
+        ``settler_composition_mode``.
     settler_composition_mode : {"lumped_tss", "per_species"}
         When ``use_takacs=True``, how the settler tracks the particulate phase.
         ``"lumped_tss"`` (default) carries one total-suspended-solids value per

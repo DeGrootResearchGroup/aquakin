@@ -79,6 +79,16 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- The BSM docstrings now say which benchmark convention the indices follow.
+  `evaluate_bsm1` / `BSM1Evaluation` give the **updated** BSM1 EQI and OCI
+  (Alex et al. 2008: EQI nitrogen weights 30 / 10, AE = S_sat·V·kLa / 1800,
+  per-stream pumping factors), not the original Copp (2002) ones (weights
+  20 / 20, a quadratic kLa correlation, one pumping factor), and
+  `evaluate_bsm2` uses the same EQI weights with the full BSM2 OCI. The numbers
+  are unchanged. The `TakacsClarifier` / `build_bsm1` / `build_bsm2` docstrings
+  now agree on the settler attribution: the soluble holdup is the ten-layer
+  soluble model of `settler1dv4` (BSM1, kept in BSM2's `settler1dv5`), and
+  `composition_mode="per_species"` is the `settler1dv5` composition memory.
 - The Laplace standard deviations from `aquakin.calibrate` and
   `Plant.calibrate` (`params_named_std`, `posterior_cov`, `ic_named_std`) no
   longer understate the uncertainty of weakly identified parameters. The

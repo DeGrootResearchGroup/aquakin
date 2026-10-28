@@ -71,6 +71,17 @@ print(f"EQI = {ev.eqi:.0f} kg/d   OCI = {ev.oci:.0f}")
 reports the physical flows (aeration energy, pumping, sludge and methane
 production) that feed the reporting layer below.
 
+```{note}
+The benchmark literature gives two versions of the BSM1 indices. `evaluate_bsm1`
+follows the **updated** evaluation (Alex et al. 2008): EQI weights 2 (TSS),
+1 (COD), 2 (BOD₅), 30 (TKN) and 10 (nitrate), and OCI = AE + PE + ME +
+5·sludge, with AE = S_sat·V·kLa / 1800 and per-stream pumping factors. The
+original evaluation (Copp 2002) weights TKN and nitrate at 20 each and uses
+different aeration and pumping formulas, so compare against the
+updated-convention reference values. `evaluate_bsm2` uses the same EQI weights
+and the full BSM2 OCI (Gernaey et al. 2014).
+```
+
 ## Reporting: GHG, cost, and scenarios
 
 On top of the EQI/OCI evaluation, `aquakin` reports a **greenhouse-gas
