@@ -27,6 +27,7 @@ from aquakin.integrate.calibrate import (
     _build_residual,
     _CalibrationProblem,
     _check_start_gradient,
+    _data_term,
     _FitConfig,
     _forward_jac,
     _free_ic_fields,
@@ -1110,3 +1111,41 @@ def test_resolve_problem_accepts_numeric_sigma_list(base):
     prob = _resolve(m, [C0, C0], [obs, obs], [t_obs, t_obs], free, loss="nll", sigma=[0.1, 0.2])
     assert prob.n_datasets == 2
     assert not prob.sigma_estimate
+
+
+# ---------- missing (NaN) observations with sigma="estimate" ----------
+
+
+def _obs_with_gap(base):
+    """Two observed outputs on three times; output 1 is missing at t = 1."""
+    m, C0, _obs, t_obs, free = base
+    obs = jnp.array([[0.9, 0.1], [0.5, jnp.nan], [0.2, 0.8]])
+    return m, C0, obs, t_obs, free
+
+
+def test_sigma_estimate_counts_only_observed_entries(base):
+    """N_j is the number of observed entries of output j, pooled over the
+    datasets, and the NaN entries add nothing to the sum of squares or the raw
+    residual."""
+    m, C0, obs, t_obs, free = _obs_with_gap(base)
+    prob = _resolve(m, [C0, C0], [obs, obs], [t_obs, t_obs], free, loss="nll", sigma="estimate")
+    np.testing.assert_array_equal(prob.n_obs_per_output, [6.0, 4.0])
+
+    pred = jnp.array([[1.0, 0.0], [0.4, 123.0], [0.2, 1.0]])
+    _t, _ts, sse_fn, resid_fn = prob.dataset_static[0]
+    np.testing.assert_allclose(sse_fn(pred), [0.01 + 0.01, 0.01 + 0.04])
+    r = np.asarray(resid_fn(pred))
+    assert r[1, 1] == 0.0 and np.all(np.isfinite(r))
+
+    # The concentrated objective is finite and equals sum_j (N_j/2) log(SSE_j/N_j) + N/2.
+    sse = np.array([0.04, 0.10])
+    n = np.array([6.0, 4.0])
+    expected = 0.5 * np.sum(n * np.log(sse / n)) + 0.5 * np.sum(n)
+    assert float(_data_term(prob, (pred, pred))) == pytest.approx(expected, rel=1e-12)
+
+
+def test_sigma_estimate_rejects_an_output_never_observed(base):
+    m, C0, _obs, t_obs, free = base
+    obs = jnp.array([[0.9, jnp.nan], [0.5, jnp.nan], [0.2, jnp.nan]])
+    with pytest.raises(ValueError, match=r"output\(s\) \[1\] are missing"):
+        _resolve(m, C0, obs, t_obs, free, loss="nll", sigma="estimate")
