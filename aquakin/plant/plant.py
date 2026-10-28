@@ -3831,21 +3831,21 @@ class Plant:
         y0 = jnp.asarray(y0)
         if atol is None:
             atol = self._default_atol(y0, atol_factor=atol_factor)
-        term = diffrax.ODETerm(lambda _t, y, th: rhs(y, th))
         event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
         with friendly_solve_errors(max_steps, what="plant steady-state fallback"):
-            sol = diffrax.diffeqsolve(
-                term,
-                diffrax.Kvaerno5(),
+            # The shared forward-solve wrapper builds the canonical implicit
+            # solver and step controller.
+            sol = _run_diffeqsolve(
+                lambda _t, y, th: rhs(y, th),
                 t0=0.0,
                 t1=float(max_time),
-                dt0=None,
                 y0=y0,
                 args=theta,
-                stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),
                 saveat=diffrax.SaveAt(t1=True),
-                event=event,
+                rtol=rtol,
+                atol=atol,
                 max_steps=max_steps,
+                event=event,
             )
         t_final = float(sol.ts[-1])
         return SteadyStateResult(
