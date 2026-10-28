@@ -1432,6 +1432,30 @@ class Plant:
             )
         return jnp.concatenate([kinetic, flow])
 
+    def _default_atol(self, y0: jnp.ndarray, atol_factor: float = 1e-6) -> jnp.ndarray:
+        """The default per-component ``atol``, scaled off ``y0`` and the unit defaults.
+
+        Shared by :meth:`solve` and :meth:`run_to_steady_state`. It is evaluated
+        under ``jax.ensure_compile_time_eval`` so that, inside a ``jax.jit`` /
+        ``jax.grad`` trace, a concrete ``y0`` gives a concrete tolerance (the same
+        value as the eager call) rather than one staged into the trace; a traced
+        ``y0`` still gives a traced tolerance.
+
+        Parameters
+        ----------
+        y0 : jnp.ndarray
+            Flat initial state, shape ``(total_state_size,)``.
+        atol_factor : float
+            Fraction of each component's typical magnitude used as its floor.
+
+        Returns
+        -------
+        jnp.ndarray
+            Per-component absolute tolerance, shape ``(total_state_size,)``.
+        """
+        with jax.ensure_compile_time_eval():
+            return default_atol(y0, self.initial_state(), atol_factor=atol_factor)
+
     def initial_state(self, overrides: dict[str, jnp.ndarray] | None = None) -> jnp.ndarray:
         """Concatenated initial state from each unit's ``initial_state()``.
 
@@ -2446,7 +2470,7 @@ class Plant:
         # magnitudes (the warm start y0 and the per-unit defaults), so a g/m³
         # plant solves without the old fixed 1e-9 forcing the step ceiling.
         if atol is None:
-            atol_eff = default_atol(y0, self.initial_state())
+            atol_eff = self._default_atol(y0)
         else:
             atol_eff = _coerce_atol(atol, self._total_state_size)
         # Convert t_span / t_eval from a caller-supplied time_unit into the
@@ -3517,7 +3541,7 @@ class Plant:
         self._build_state_layout()
         y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
         if atol is None:
-            atol = default_atol(y0, self.initial_state(), atol_factor=atol_factor)
+            atol = self._default_atol(y0, atol_factor=atol_factor)
         event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
         sol = self.solve(
             t_span=(0.0, float(max_time)),
