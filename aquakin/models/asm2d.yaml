@@ -130,7 +130,9 @@ expressions:
   Monod_KO2_HYD: "monod_inh([SO2], KO2_HYD)"
   Monod_SNO3: "monod([SNO3], KNO3_HYD)"
   Monod_KNO3_HYD: "monod_inh([SNO3], KNO3_HYD)"
-  Monod_expr: "muH * monod([SO2], KO2_H) * monod([SF], KF) * [SF] / ([SA] + [SF])"
+  # Substrate-competition fraction SF/(SA + SF): safe_div gives 0 (not NaN)
+  # when SA and SF are both 0.
+  Monod_expr: "safe_div(muH * monod([SO2], KO2_H) * monod([SF], KF) * [SF], [SA] + [SF])"
   Monod_SNH4: "monod([SNH4], KNH4_H)"
   Monod_SPO4: "monod([SPO4], KP_H)"
   Monod_SALK: "monod([SALK], KALK_H)"
@@ -336,7 +338,7 @@ reactions:
 
   - name: Lysis_of_XPP
     description: "Lysis of XPP"
-    rate: "bPP * Monod_SALK * [XPP] / [XPAO] * [XPAO]"
+    rate: "safe_div(bPP * Monod_SALK * [XPP], [XPAO]) * [XPAO]"
     stoichiometry:
       SPO4: 1.0
       SALK: "iCharge_SPO4 - iCharge_XPAO_PP"
@@ -345,7 +347,7 @@ reactions:
 
   - name: Lysis_of_XPHA
     description: "Lysis of XPHA"
-    rate: "bPHA * Monod_SALK * [XPHA] / [XPAO] * [XPAO]"
+    rate: "safe_div(bPHA * Monod_SALK * [XPHA], [XPAO]) * [XPAO]"
     stoichiometry:
       SA: 1.0
       SALK: "iCharge_SVFA"

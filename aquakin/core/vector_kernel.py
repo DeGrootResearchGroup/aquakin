@@ -252,16 +252,20 @@ class VectorizedRates:
     n_reactions: int
 
     def __call__(self, C, params, condition_arrays, loc_idx):
+        # Evaluate in floating point even for an integer state: casting the
+        # constants and conditions to an integer ``C.dtype`` would truncate them
+        # (pH 7.5 -> 7, an exponent 0.5 -> 0). A float ``C`` keeps its precision.
+        dtype = jnp.result_type(C, float)
         blocks = []
         if self.species_src.size:
-            blocks.append(_gather(C, self.species_src))
+            blocks.append(_gather(C, self.species_src).astype(dtype))
         if self.param_src.size:
             blocks.append(_gather(params, self.param_src))
         if self.const_vals.size:
-            blocks.append(self.const_vals.astype(C.dtype))
+            blocks.append(self.const_vals.astype(dtype))
         if self.cond_fields:
             blocks.append(
-                jnp.stack([condition_arrays[f][loc_idx] for f in self.cond_fields]).astype(C.dtype)
+                jnp.stack([condition_arrays[f][loc_idx] for f in self.cond_fields]).astype(dtype)
             )
         P = jnp.concatenate(blocks) if len(blocks) > 1 else blocks[0]
         for kernel, operand_arrays, aux in self.steps:

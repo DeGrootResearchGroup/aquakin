@@ -30,7 +30,8 @@ through ordinary stoichiometry.
 NOTE: free Ca/Mg are taken as the full declared total (ion-pairing with
 carbonate/phosphate is not yet subtracted -- a documented simplification of the
 source aqueous model); the ionic strength for the activity coefficients is the
-declared ``ionic_strength_offset`` plus the mineral ions' contribution, unless an
+declared ``ionic_strength_offset`` plus the mineral ions' contribution (each
+distinct dissolved ion counted once, however many minerals share it), unless an
 ``ionic_strength_field`` is given (then it is read from that condition -- e.g.
 the ionic strength a ``speciation:`` block solved the pH at, so the pH and the
 saturation indices share one ionic strength).
@@ -82,6 +83,84 @@ _PH_SPECIALS = ("proton", "hydroxide")
 # (the species total taken as the free ion). Single source of truth shared with
 # the Pydantic schema.
 VALID_PRECIP_FRACTIONS = tuple(_FRACTIONS) + _PH_SPECIALS
+
+
+def ionic_strength_ions(minerals_cfg, species_index: dict[str, int]) -> list[tuple]:
+    """Collect the distinct dissolved ions of a ``precipitation:`` block.
+
+    The ionic strength sums each dissolved ion once, but one species often
+    appears in several minerals (iron and phosphate in both strengite and
+    vivianite, for example). The ions are therefore de-duplicated on
+    ``(species, fraction)`` across every mineral of the block (kinetic and
+    equilibrium alike), keeping the first declaration's molar mass and charge.
+    The pH specials (``proton`` / ``hydroxide``) carry no species total and are
+    skipped.
+
+    Parameters
+    ----------
+    minerals_cfg : list of dict
+        The block's ``minerals`` declarations.
+    species_index : dict[str, int]
+        Map from species name to its index in the state vector.
+
+    Returns
+    -------
+    list of tuple
+        One ``(idx, molar_mass, z2, fraction)`` entry per distinct ion, with
+        ``z2`` the squared charge.
+    """
+    seen: dict[tuple, tuple] = {}
+    for m in minerals_cfg:
+        for ion in m["ions"]:
+            frac = ion.get("fraction")
+            sp = ion.get("species")
+            if frac in _PH_SPECIALS or sp is None or sp not in species_index:
+                continue
+            idx = species_index[sp]
+            key = (idx, frac)
+            if key not in seen:
+                seen[key] = (
+                    idx,
+                    float(ion.get("molar_mass", 1.0)),
+                    float(ion["charge"]) ** 2,
+                    frac,
+                )
+    return list(seen.values())
+
+
+def mineral_ionic_strength(C, h, K, ions, I_offset):
+    """Ionic strength of the background electrolyte plus the mineral ions.
+
+    ``I = I_offset + 1/2 * sum_i z_i^2 * c_i`` over the distinct ions from
+    :func:`ionic_strength_ions`, with ``c_i`` the free-ion concentration (mol/L):
+    the species total (clipped at 0) divided by its molar mass, times its
+    acid/base free-ion fraction at ``h`` where one is declared.
+
+    Parameters
+    ----------
+    C : jnp.ndarray
+        State vector, shape (n_species,).
+    h : scalar
+        Hydrogen-ion activity ``10^-pH``.
+    K : dict
+        Dissociation constants from
+        :func:`aquakin.core.ph_solver.equilibrium_constants`.
+    ions : list of tuple
+        The distinct ions from :func:`ionic_strength_ions`.
+    I_offset : float
+        Background ionic strength (mol/L).
+
+    Returns
+    -------
+    scalar
+        The ionic strength (mol/L).
+    """
+    I = I_offset
+    for idx, mm, z2, frac in ions:
+        tot = jnp.maximum(C[idx], 0.0) / mm
+        free = tot * (_FRACTIONS[frac](h, K) if frac in _FRACTIONS else 1.0)
+        I = I + 0.5 * z2 * free
+    return I
 
 
 def build_precipitation_derived_fn(
@@ -173,6 +252,8 @@ def build_precipitation_derived_fn(
         minerals.append((name, Ksp_ref, dH_sp, order, nu, ions, form))
         produced += [f"SI_{name}", f"R_{name}"]
 
+    ic_ions = ionic_strength_ions(config["minerals"], species_index)
+
     def derived(C, params, condition_arrays, loc_idx) -> dict:
         T = condition_arrays[temp_field][loc_idx]
         T_kelvin = T + 273.15 if temp_units == "celsius" else T
@@ -188,15 +269,9 @@ def build_precipitation_derived_fn(
                 # Share the ionic strength the pH solver converged at.
                 I = condition_arrays[ic_field][loc_idx]
             else:
-                # Self-contained: background electrolyte + the mineral ions.
-                I = I_offset
-                for _, _Ksp_ref, _dH, _order, _nu, ions, _form in minerals:
-                    for idx, mm, count, z2, frac in ions:
-                        if idx < 0:
-                            continue
-                        tot = jnp.maximum(C[idx], 0.0) / mm
-                        free = tot * (_FRACTIONS[frac](h, K) if frac in _FRACTIONS else 1.0)
-                        I = I + 0.5 * z2 * free
+                # Self-contained: background electrolyte + each distinct
+                # mineral ion counted once.
+                I = mineral_ionic_strength(C, h, K, ic_ions, I_offset)
             sqrt_I = jnp.sqrt(jnp.maximum(I, 0.0))
 
         def gamma(z2):

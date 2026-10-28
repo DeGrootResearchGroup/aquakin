@@ -654,35 +654,35 @@ reactions:
     S_SO4: i_s_xb - i_s_sb
 - name: maint_aer_SB_substrate
   description: Aerobic energy maintenance on S_B (substrate-oxidation path).
-  rate: q_m * [S_B] / ([S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_sub
+  rate: safe_div(q_m * [S_B], [S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_sub
   stoichiometry:
     S_B: -1
     S_O: -1
     S_CO2: 0.375
 - name: maint_aer_SB_biomass
   description: Aerobic energy maintenance on S_B (endogenous-biomass path).
-  rate: q_m * [S_B] / ([S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_bio
+  rate: safe_div(q_m * [S_B], [S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_bio
   stoichiometry:
     X_BH: -1
     S_O: -1
     S_CO2: 0.375
 - name: maint_aer_VFA_substrate
   description: Aerobic energy maintenance on VFA (substrate-oxidation path).
-  rate: q_m * [S_VFA] / ([S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_sub
+  rate: safe_div(q_m * [S_VFA], [S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_sub
   stoichiometry:
     S_VFA: -1
     S_O: -1
     S_CO2: 0.375
 - name: maint_aer_VFA_biomass
   description: Aerobic energy maintenance on VFA (endogenous-biomass path).
-  rate: q_m * [S_VFA] / ([S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_bio
+  rate: safe_div(q_m * [S_VFA], [S_B] + [S_VFA]) * monod([S_O], k_o) * [X_BH] * theta_w * em_frac_bio
   stoichiometry:
     X_BH: -1
     S_O: -1
     S_CO2: 0.375
 - name: maint_anox_SB_substrate
   description: Anoxic energy maintenance on S_B (substrate-oxidation path).
-  rate: q_m * [S_B] / ([S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w
+  rate: safe_div(q_m * [S_B], [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w
     * em_frac_sub
   stoichiometry:
     S_B: -1
@@ -690,7 +690,7 @@ reactions:
     S_CO2: 0.375
 - name: maint_anox_SB_biomass
   description: Anoxic energy maintenance on S_B (endogenous-biomass path).
-  rate: q_m * [S_B] / ([S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w
+  rate: safe_div(q_m * [S_B], [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w
     * em_frac_bio
   stoichiometry:
     X_BH: -1
@@ -698,7 +698,7 @@ reactions:
     S_CO2: 0.375
 - name: maint_anox_VFA_substrate
   description: Anoxic energy maintenance on VFA (substrate-oxidation path).
-  rate: q_m * [S_VFA] / ([S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w
+  rate: safe_div(q_m * [S_VFA], [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w
     * em_frac_sub
   stoichiometry:
     S_VFA: -1
@@ -706,7 +706,7 @@ reactions:
     S_CO2: 0.375
 - name: maint_anox_VFA_biomass
   description: Anoxic energy maintenance on VFA (endogenous-biomass path).
-  rate: q_m * [S_VFA] / ([S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w
+  rate: safe_div(q_m * [S_VFA], [S_B] + [S_VFA]) * monod_inh([S_O], k_o) * monod([S_NO], k_no) * [X_BH] * theta_w
     * em_frac_bio
   stoichiometry:
     X_BH: -1

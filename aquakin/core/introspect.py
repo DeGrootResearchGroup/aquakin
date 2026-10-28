@@ -158,7 +158,7 @@ def check_nitrogen(
     tol: float = 1e-2,
     params=None,
     composition=None,
-    nitrate: str = "S_NO",
+    nitrate: str | None = None,
     n_key: str = "N",
 ) -> list:
     """Nitrogen-balance violations above ``tol`` (body of ``check_nitrogen``)."""

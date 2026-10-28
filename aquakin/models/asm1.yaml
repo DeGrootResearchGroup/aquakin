@@ -96,7 +96,8 @@ parameters:
   f_P:    {value: 0.08,  units: "-",            bounds: [0.02, 0.20],  transform: logit, prior: {mean: 0.08, std: 0.004}}
 
 # Named process rates. Each is a closed-form expression in the species and
-# model-level parameters above. Reactions reference these by name.
+# model-level parameters above. Reactions reference these by name. The hydrolysis
+# ratio uses safe_div so the rate is 0 (not 0/0 = NaN) when XS and XB_H are both 0.
 expressions:
   rho_hetero_aerobic:  "muH * [SS] / (KS + [SS]) * [SO] / (KOH + [SO]) * [XB_H]"
   rho_hetero_anoxic:   "muH * [SS] / (KS + [SS]) * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]) * etag * [XB_H]"
@@ -104,8 +105,8 @@ expressions:
   rho_hetero_decay:    "bH * [XB_H]"
   rho_auto_decay:      "bA * [XB_A]"
   rho_ammonification:  "ka * [SND] * [XB_H]"
-  rho_hydrolysis:      "kh * [XS] * [XB_H] / (KX * [XB_H] + [XS]) * ([SO] / (KOH + [SO]) + etah * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]))"
-  rho_hydrolysis_n:    "kh * [XND] * [XB_H] / (KX * [XB_H] + [XS]) * ([SO] / (KOH + [SO]) + etah * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]))"
+  rho_hydrolysis:      "safe_div(kh * [XS] * [XB_H], KX * [XB_H] + [XS]) * ([SO] / (KOH + [SO]) + etah * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]))"
+  rho_hydrolysis_n:    "safe_div(kh * [XND] * [XB_H], KX * [XB_H] + [XS]) * ([SO] / (KOH + [SO]) + etah * KOH / (KOH + [SO]) * [SNO] / (KNO + [SNO]))"
 
 reactions:
   - name: aerobic_growth_heterotrophs

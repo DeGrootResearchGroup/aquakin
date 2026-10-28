@@ -469,7 +469,17 @@ speciation + water), speciation exposes it as the `I_aq` condition field, and
 precipitation reads it for its Davies/Debye-Hückel coefficients — so the pH and
 the saturation indices use the **same** ionic strength. Without it, precipitation
 falls back to `ionic_strength_offset` + its own mineral ions (which misses the
-bulk electrolyte), the right choice for a standalone fixed-pH model.
+bulk electrolyte), the right choice for a standalone fixed-pH model. The mineral
+ions are de-duplicated on `(species, fraction)` across every mineral of the
+block (`ionic_strength_ions`), so an ion shared by several minerals counts once.
+Both modes build `I` the same way: kinetic minerals from the current state
+(`mineral_ionic_strength`), equilibrium minerals from the *equilibrium*
+dissolved ions inside the Newton residual (self-consistent; a pre-precipitation
+`I` can flip a near-threshold phase), and both read `ionic_strength_field` when
+set. `speciation:` exports the real `I` even with `activity_model: none` (it is
+evaluated at the root but does not feed back into the ideal pH). When the pH
+comes from `speciation:`, `CompiledModel.precipitation_equilibrium()` runs the
+speciation step first (`_project_after_speciation`).
 
 An ion's `fraction` selects how its free
 activity is obtained: an acid/base system key — `carbonate`, `phosphate`,

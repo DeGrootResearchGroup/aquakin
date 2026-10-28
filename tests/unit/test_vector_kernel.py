@@ -241,3 +241,17 @@ def test_unsupported_node_falls_back_to_scalar():
         build_vectorized_rates(
             [_UnknownNode()], ["r"], net.species_index, net.param_index
         )
+
+
+def test_integer_state_does_not_truncate_constants_or_conditions():
+    """An integer state vector must not cast the kernel's constants and
+    conditions to int (pH 7.5 -> 7, an exponent 0.5 -> 0): the kernel evaluates
+    in floating point and matches the float-state result."""
+    net = aquakin.load_model("ozone_bromate")
+    p = net.default_parameters()
+    ca = net.default_conditions().fields
+    Ci = jnp.ones(len(net.species), dtype=int)
+    r_int = net.rates(Ci, p, ca, 0)
+    r_float = net.rates(Ci.astype(float), p, ca, 0)
+    assert jnp.issubdtype(r_int.dtype, jnp.floating)
+    assert jnp.array_equal(r_int, r_float)

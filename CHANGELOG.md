@@ -158,6 +158,48 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `RuntimeError` that says what happened and how to fix it (bound the rates with
   `OptimizerConfig(param_halfwidth=...)`, use a better starting guess, or tighten
   the `free_ic` bounds). This replaces the raw XLA callback traceback.
+- Shipped rate expressions no longer return NaN when a substrate-competition
+  ratio has a zero denominator. In `asm1` (and `asm1_ammonia_limitation`) the
+  hydrolysis rate, in `asm2d`, `asm2d_chemp` and `asm2d_tud` the
+  `SF / (SA + SF)` growth fraction and the `asm2d` poly-P / PHA lysis, and in
+  the `wats_sewer` family the `S_B / (S_B + S_VFA)` maintenance split were
+  `0 / 0` when both species were zero (or clipped from tiny negative values),
+  which made every `dC/dt` touching those reactions NaN and could stop a solve.
+  These ratios now use `safe_div` and go to 0 there. Values are bit-for-bit
+  unchanged wherever the denominator is non-zero.
+- Kinetic mineral precipitation counted an ion once per mineral that uses it
+  when building the ionic strength, so a shared ion (iron, phosphate or
+  aluminium in `precipitation_metal_phosphate`, for example) inflated the
+  ionic strength and shifted every saturation index. Each dissolved ion now
+  counts once.
+- Equilibrium-mode precipitation (`mode: equilibrium`) now reads
+  `ionic_strength_field` when one is set, as the kinetic minerals do, and
+  otherwise adds the dissolved mineral ions to `ionic_strength_offset`
+  (evaluated at the equilibrium composition). It used to apply the fixed
+  offset alone. Results of `precipitation_metal_phosphate_equilibrium` change
+  slightly.
+- A `speciation:` block with `activity_model: none` and an
+  `ionic_strength_field` now exports the solution's real ionic strength. It
+  used to export 0, which a downstream precipitation block would then use for
+  its activity coefficients. The computed pH is unchanged.
+- `CompiledModel.precipitation_equilibrium()` no longer raises `KeyError: 'pH'`
+  when the pH comes from a `speciation:` block; the speciation step now runs
+  before the projection.
+- `aquakin.utils.rtd.percentile_time` and `morrill_index` gave wrong values
+  for a tracer response with a dead time: the early percentiles were
+  interpolated back across the leading zero stretch (a plug-flow pulse at
+  t = 5 gave a Morrill index near 1.8 instead of 1). They now interpolate from
+  the last sample before the tracer arrives.
+- Rate evaluation with an integer concentration vector no longer truncates
+  the model's constants and condition values to integers (pH 7.5 became 7, an
+  exponent 0.5 became 0). Rates are now computed in floating point.
+- `check_nitrogen` now detects the nitrate species (`S_NO`, `SNO`, `SNO3`,
+  `SNOX`, ...) instead of assuming `S_NO`, which reported false nitrogen
+  violations for the ASM models. Naming a species the model does not declare
+  with `nitrate=` now raises a `ValueError`.
+- `to_latex` no longer drops needed parentheses: `a - (b + c)`,
+  `a - (b - c)` and `-(a + b)` used to render as `a - b + c`, `a - b - c` and
+  `-a + b`.
 
 ## [0.1.0] - 2026-07-08
 

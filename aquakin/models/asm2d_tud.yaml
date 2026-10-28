@@ -118,7 +118,7 @@ expressions:
   Monod_KO_HYD: "monod_inh([SO], KO_HYD)"
   Monod_SNO: "monod([SNO], KNO_HYD)"
   Monod_KNO_HYD: "monod_inh([SNO], KNO_HYD)"
-  Monod_expr: "muH * monod([SO], KO_H) * monod([SF], KF) * [SF] / ([SF] + [SA])"
+  Monod_expr: "safe_div(muH * monod([SO], KO_H) * monod([SF], KF) * [SF], [SF] + [SA])"
   Monod_SNH: "monod([SNH], KN_H)"
   Monod_SPO: "monod([SPO], KP_H)"
   Monod_SHCO: "monod([SHCO], KHCO_H)"

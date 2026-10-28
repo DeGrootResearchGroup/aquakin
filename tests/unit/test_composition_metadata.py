@@ -178,3 +178,25 @@ def test_extends_inherits_base_composition(tmp_path):
     child = aquakin.load_model_from_file(derived)
     assert child.composition()["S_O"] == {"COD": -1.0}
     assert child.check_conservation(tol=1e-6) == []
+
+
+@pytest.mark.parametrize(("name", "nitrate"), [("asm1", "SNO"), ("asm2d", "SNO3"), ("asm3", "SNOX")])
+def test_check_nitrogen_auto_detects_nitrate_species(name, nitrate):
+    """The default nitrate species is detected from the model, so ASM models
+    (which name it SNO / SNO3 / SNOX) get the denitrification N2 credit without
+    passing nitrate= explicitly."""
+    from aquakin.utils.balance import resolve_nitrate_species
+
+    net = aquakin.load_model(name)
+    assert resolve_nitrate_species(net, None) == nitrate
+    assert net.check_nitrogen() == net.check_nitrogen(nitrate=nitrate)
+
+
+def test_check_nitrogen_asm1_default_has_no_false_violations():
+    assert aquakin.load_model("asm1").check_nitrogen() == []
+
+
+def test_check_nitrogen_unknown_nitrate_species_raises():
+    net = aquakin.load_model("asm1")
+    with pytest.raises(ValueError, match="not a species"):
+        net.check_nitrogen(nitrate="S_NO")

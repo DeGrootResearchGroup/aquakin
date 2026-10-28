@@ -74,11 +74,11 @@ def to_latex(node: ASTNode) -> str:
             return "T"
         return rf"\mathit{{{_escape_latex(node.field_name)}}}"
     if isinstance(node, NegateNode):
-        return f"-{to_latex(node.operand)}"
+        return f"-{_maybe_paren_signed(node.operand)}"
     if isinstance(node, AddNode):
         return f"{to_latex(node.left)} + {to_latex(node.right)}"
     if isinstance(node, SubtractNode):
-        return f"{to_latex(node.left)} - {to_latex(node.right)}"
+        return f"{to_latex(node.left)} - {_maybe_paren_signed(node.right)}"
     if isinstance(node, MultiplyNode):
         return rf"{_maybe_paren_addsub(node.left)} \cdot {_maybe_paren_addsub(node.right)}"
     if isinstance(node, DivideNode):
@@ -123,6 +123,24 @@ def _maybe_paren_addsub(node: ASTNode) -> str:
     """Wrap +/- subtrees in parentheses so multiplication renders correctly."""
     rendered = to_latex(node)
     if isinstance(node, (AddNode, SubtractNode)):
+        return _paren(rendered)
+    return rendered
+
+
+def _maybe_paren_signed(node: ASTNode) -> str:
+    """Wrap an operand that follows a minus sign when the sign would otherwise
+    distribute wrongly.
+
+    The right operand of a subtraction and the operand of a negation bind
+    tighter than ``+`` / ``-``, so a sum or difference there must be
+    parenthesized: ``a - (b + c)`` would otherwise render as ``a - b + c`` and
+    ``-(a + b)`` as ``-a + b``. A nested negation or a negative constant is
+    wrapped too, so no double minus sign appears.
+    """
+    rendered = to_latex(node)
+    if isinstance(node, (AddNode, SubtractNode, NegateNode)) or (
+        isinstance(node, ConstantNode) and node.value < 0
+    ):
         return _paren(rendered)
     return rendered
 

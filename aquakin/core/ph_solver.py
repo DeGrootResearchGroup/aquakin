@@ -679,14 +679,15 @@ def solve_ph(
         The pH-independent strong-ion contribution to ionic strength,
         ``1/2 sum c_i z_i^2`` over the strong anions/cations (and the lumped fixed
         cation charge, taken monovalent). Supplied by the caller because only it
-        knows each strong ion's charge. Used only when ``activity_model`` is not
-        ``"none"``.
+        knows each strong ion's charge. Used for the activity coefficients when
+        ``activity_model`` is not ``"none"``, and for the reported ionic strength
+        when ``return_ionic_strength`` is True.
 
     return_ionic_strength : bool, optional
         If True, return ``(pH, I)`` where ``I`` is the self-consistent solution
         ionic strength at the converged speciation (strong ions + weak-acid
-        speciation + water). For ``activity_model="none"`` no ``I`` is computed,
-        so the supplied ``ionic_strength_strong`` is returned instead. Lets a
+        speciation + water). For ``activity_model="none"`` it does not affect
+        the pH, but it is still evaluated at the converged ``[H+]``. Lets a
         downstream activity calculation (e.g. mineral precipitation) share the
         exact ionic strength the pH was solved at.
 
@@ -771,10 +772,12 @@ def solve_ph(
         h = jax.lax.custom_root(residual, h0, solve_root, tangent_solve)
         pH = -jnp.log(h) / _LN10
         if return_ionic_strength:
-            # No activity model -> no self-consistent solution ionic strength is
-            # computed; report the strong-ion contribution the caller supplied
-            # (the best available; 0 by default).
-            return pH, jnp.broadcast_to(jnp.asarray(ionic_strength_strong, dtype=float), out_shape)
+            # The ionic strength does not feed back into the ideal solve, but
+            # report the real one at the root (strong ions + weak-acid
+            # speciation + water) so a downstream activity calculation sees the
+            # solution's actual ionic strength.
+            I_strong = jnp.broadcast_to(jnp.asarray(ionic_strength_strong, dtype=float), out_shape)
+            return pH, _ionic_strength_total(h, K, I_strong, totals=totals)
         return pH
 
     # Activity-corrected path (opt-in, not on the ADM1/BSM2 hot path). The

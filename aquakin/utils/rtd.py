@@ -149,9 +149,17 @@ def percentile_time(t, C, q: float, *, _warn_truncated: bool = True) -> jnp.ndar
     if _warn_truncated:
         _warn_if_truncated(C, stacklevel=3)
     F = F_curve(t, C)
-    # Drop runs where F is flat (E=0): keep the first occurrence of each
-    # plateau so interp sees a strictly-increasing-by-points domain.
-    keep = jnp.concatenate([jnp.asarray([True]), jnp.diff(F) > 0])
+    # Drop runs where F is flat (E=0) so interp sees a strictly increasing
+    # domain. Keep every point F rises *to* (the first point of each later
+    # plateau, so the time F first reaches a level is kept), and of the leading
+    # flat stretch keep its *last* point, the moment just before the tracer
+    # arrives. Keeping t = 0 there instead would interpolate across the whole
+    # dead time and pull every early percentile toward the start of the record.
+    rises = jnp.diff(F) > 0
+    rises_to = jnp.concatenate([jnp.asarray([False]), rises])
+    rises_from = jnp.concatenate([rises, jnp.asarray([False])])
+    keep = rises_to | ((F[0] == F) & rises_from)
+    keep = keep.at[0].set(keep[0] | ~jnp.any(rises))  # flat F: keep one point
     return jnp.interp(jnp.asarray(q), F[keep], t[keep])
 
 
