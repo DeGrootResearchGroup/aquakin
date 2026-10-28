@@ -216,18 +216,39 @@ class FreeICConfig:
     species : list of str
         Species whose initial concentration is fitted alongside the parameters.
         For a plant, ``"unit.species"`` names.
-    bounds : tuple of float
-        ``(lo, hi)`` box bounds on each fitted initial pool, in physical units
-        (the fit runs in log space). Must satisfy ``0 < lo < hi``.
+    bounds : tuple of float, or dict
+        Box bounds on the fitted initial pools, in physical units (the fit runs
+        in log space). Either one ``(lo, hi)`` pair shared by every pool, or a
+        ``{species: (lo, hi)}`` dict for pools of very different size; a
+        species the dict leaves out gets the default ``(1e-3, 1e4)``. Each
+        pair must satisfy ``0 < lo < hi``. Per-species bounds are not yet
+        supported by :meth:`Plant.calibrate`. Not used with ``fixed_total``.
     prior_log_std : float, optional
         If given, a Gaussian prior of this log-space std pulls each fitted pool
         toward its supplied initial value; ``None`` leaves it governed only by
-        the data and ``bounds``.
+        the data and ``bounds``. With ``fixed_total`` it acts on the log-ratio
+        coordinates of the split instead (see below).
+    fixed_total : bool
+        If ``True``, hold the sum of the fitted pools at its value in each
+        dataset's ``C0`` and fit only how it is split between them: for a
+        known total COD ``S_S0 + X_S0``, say, put the total into ``C0`` with
+        any split as the starting guess. The split is fitted on the simplex,
+        through the ``m - 1`` log-ratio coordinates
+        ``z_j = log(c_j / c_0)`` (``c_0`` is the first listed species), so the
+        pools stay positive and sum to the total exactly. The fitted split is
+        returned as ``CalibrationResult.ic_fractions`` and, with
+        ``LaplaceConfig(include_ic=True)``, its standard deviation as
+        ``ic_fractions_std``. In ``joint_names`` / ``joint_cov`` and in
+        :func:`aquakin.fisher_information` the coordinates are named
+        ``"ic[k].<c_j>:<c_0>"`` (the ratio ``c_j / c_0``, in log space).
+        Every listed pool must be positive in ``C0``. Default ``False``. Not
+        yet supported by :meth:`Plant.calibrate`.
     """
 
     species: list
-    bounds: tuple = (1e-3, 1e4)
+    bounds: tuple | dict = (1e-3, 1e4)
     prior_log_std: float | None = None
+    fixed_total: bool = False
 
 
 def _resolve_laplace(laplace) -> tuple[bool, LaplaceConfig]:
@@ -245,14 +266,70 @@ def _resolve_laplace(laplace) -> tuple[bool, LaplaceConfig]:
     raise TypeError(f"laplace must be a bool or LaplaceConfig; got {type(laplace).__name__}.")
 
 
-def _free_ic_fields(free_ic) -> tuple[list | None, tuple, float | None]:
+_DEFAULT_IC_BOUNDS = (1e-3, 1e4)
+
+
+def _free_ic_fields(
+    free_ic, *, extended: bool = False
+) -> tuple[list | None, tuple | dict, float | None]:
     """Unpack an optional :class:`FreeICConfig` into ``(species, bounds,
-    prior_log_std)`` for the internal problem resolver."""
+    prior_log_std)`` for the internal problem resolver.
+
+    ``extended`` marks a caller that handles per-species ``bounds`` (a dict) and
+    ``fixed_total``; other callers (the plant path) get a clear error for them
+    rather than a failure deep in their own bounds handling."""
     if free_ic is None:
-        return None, (1e-3, 1e4), None
+        return None, _DEFAULT_IC_BOUNDS, None
     if isinstance(free_ic, FreeICConfig):
+        if not extended and (isinstance(free_ic.bounds, dict) or free_ic.fixed_total):
+            raise NotImplementedError(
+                "Per-species FreeICConfig bounds and fixed_total are supported by "
+                "aquakin.calibrate and fisher_information, not yet here; pass one "
+                "(lo, hi) bounds pair and fixed_total=False."
+            )
         return free_ic.species, free_ic.bounds, free_ic.prior_log_std
     raise TypeError(f"free_ic must be a FreeICConfig or None; got {type(free_ic).__name__}.")
+
+
+def _per_species_ic_bounds(species, bounds) -> tuple[np.ndarray, np.ndarray]:
+    """``(lo, hi)`` arrays, one entry per fitted pool, from a shared ``(lo, hi)``
+    pair or a ``{species: (lo, hi)}`` dict (missing species get the default).
+    Each pair must satisfy ``0 < lo < hi``."""
+    species = list(species)
+    if isinstance(bounds, dict):
+        unknown = [s for s in bounds if s not in species]
+        if unknown:
+            raise KeyError(
+                f"FreeICConfig.bounds names species that are not fitted: {unknown}; "
+                f"fitted species are {species}."
+            )
+        pairs = [bounds.get(s, _DEFAULT_IC_BOUNDS) for s in species]
+    else:
+        pairs = [bounds] * len(species)
+    lo, hi = [], []
+    for s, pair in zip(species, pairs):
+        if np.ndim(pair) != 1 or len(pair) != 2:
+            raise ValueError(f"ic_bounds must be a (lo, hi) pair; got {pair!r} for '{s}'.")
+        if not (0.0 < float(pair[0]) < float(pair[1])):
+            raise ValueError(f"ic_bounds must satisfy 0 < lo < hi; got {pair} for '{s}'.")
+        lo.append(float(pair[0]))
+        hi.append(float(pair[1]))
+    return np.asarray(lo), np.asarray(hi)
+
+
+def _simplex_pools(z, total):
+    """Pools ``total * softmax([0, z])``: positive, summing to ``total``, from the
+    ``m - 1`` log-ratio coordinates ``z_j = log(c_j / c_0)``."""
+    logits = jnp.concatenate([jnp.zeros(1, dtype=jnp.result_type(z, float)), z])
+    return total * jax.nn.softmax(logits)
+
+
+def _simplex_fraction_cov(z, cov_z) -> np.ndarray:
+    """Delta-method covariance of the fractions ``softmax([0, z])`` from the
+    covariance of the log-ratio coordinates ``z``."""
+    f = np.asarray(jax.nn.softmax(jnp.concatenate([jnp.zeros(1), jnp.asarray(z)])))
+    J = (np.diag(f) - np.outer(f, f))[:, 1:]  # d f / d z
+    return J @ np.asarray(cov_z) @ J.T
 
 
 def _to_unconstrained(value: jnp.ndarray, transform: str) -> jnp.ndarray:
@@ -511,6 +588,14 @@ class CalibrationResult:
         Marginal std devs of the fitted pools in physical units, per dataset
         and by species (same layout as ``ic_named``). Only with
         ``include_ic=True``.
+    ic_fractions : list[dict[str, float]], optional
+        With ``FreeICConfig(fixed_total=True)``, the fitted split of each
+        dataset's total, as fractions summing to 1, by species. ``None``
+        otherwise.
+    ic_fractions_std : list[dict[str, float]], optional
+        Std devs of ``ic_fractions`` (delta method from the joint covariance of
+        the log-ratio coordinates). Only with ``fixed_total`` and
+        ``include_ic=True``.
     at_bound : dict[str, str]
         The fitted quantities that ended on an optimiser bound, mapped to
         ``"lower"`` or ``"upper"``: free rate parameters by name and fitted
@@ -544,6 +629,8 @@ class CalibrationResult:
     joint_hessian: jnp.ndarray | None = None
     joint_names: list[str] | None = None
     ic_named_std: list | None = None
+    ic_fractions: list | None = None
+    ic_fractions_std: list | None = None
     at_bound: dict[str, str] = field(default_factory=dict)
 
     def posterior_draws(self, model, n_draw: int = 200, *, seed: int = 0) -> np.ndarray:
@@ -867,6 +954,25 @@ class _CalibrationProblem:
     # Only the optimiser sees them (not the compiled objective), so they are
     # not part of :meth:`struct_key`.
     rate_bounds: tuple | None = None
+    # FreeICConfig(fixed_total=True): the pools of each dataset sum to their
+    # total in its C0, fitted as m_ic - 1 log-ratio coordinates per dataset.
+    ic_fixed_total: bool = False
+
+    @property
+    def m_ic_theta(self) -> int:
+        """Number of fitted initial-pool coordinates per dataset."""
+        if not self.m_ic:
+            return 0
+        return self.m_ic - 1 if self.ic_fixed_total else self.m_ic
+
+    def ic_pools(self, ic_thetas_k, C0_k):
+        """One dataset's fitted pool values from its coordinates: ``exp`` of the
+        log-space pools, or (``ic_fixed_total``) the split of the total of the
+        pools in ``C0_k`` given by the log-ratio coordinates."""
+        if self.ic_fixed_total:
+            total = jnp.sum(C0_k[self.ic_species_idx])
+            return _simplex_pools(ic_thetas_k, total)
+        return jnp.exp(ic_thetas_k)
 
     def physical_from_theta(self, rate_thetas: jnp.ndarray) -> jnp.ndarray:
         """Free rate parameters in physical space from their unconstrained
@@ -906,6 +1012,7 @@ class _CalibrationProblem:
         return (
             self.n_rate,
             self.m_ic,
+            self.ic_fixed_total,
             len(self.dataset_static),
             gradient,
             self.n_observed,
@@ -947,8 +1054,9 @@ def _predict(problem: _CalibrationProblem, fm: _ReactorForwardModel, p, ic_theta
     ):
         C0_k = C0_i
         if problem.m_ic:
+            mt = problem.m_ic_theta
             C0_k = C0_i.at[problem.ic_species_idx].set(
-                jnp.exp(ic_thetas[k * problem.m_ic : (k + 1) * problem.m_ic])
+                problem.ic_pools(ic_thetas[k * mt : (k + 1) * mt], C0_i)
             )
         ys = fm.solve_trajectory(p, C0_k, tspan_i, tobs_i)
         preds.append(observe(ys, p, problem.obs_species_indices, problem.observation_fn))
@@ -1153,7 +1261,8 @@ def _optimizer_bounds(problem: _CalibrationProblem, rate_theta0):
     and/or explicit, already mapped through each transform), intersected with
     ``theta0 +/- param_halfwidth`` when that is given; the halfwidth box is
     centred on the start moved inside the absolute bounds, so the intersection
-    is never empty. Free-IC dims are always log-bounded by ``ic_bounds``.
+    is never empty. Free-IC dims are log-bounded by ``ic_bounds`` (one pair, or
+    one per pool), and unbounded for a ``fixed_total`` split.
     Returns ``(bounds, lb, ub, ls_bounds, has_bounds)`` -- ``bounds`` the
     L-BFGS-B list (``None`` if unbounded), ``ls_bounds`` the least-squares
     ``(lb, ub)`` pair."""
@@ -1168,12 +1277,21 @@ def _optimizer_bounds(problem: _CalibrationProblem, rate_theta0):
         centre = np.clip(rate_th0, rate_lb, rate_ub)
         rate_lb = np.maximum(rate_lb, centre - problem.param_halfwidth)
         rate_ub = np.minimum(rate_ub, centre + problem.param_halfwidth)
-    n_ic = problem.m_ic * problem.n_datasets
-    ic_lb = [float(np.log(problem.ic_bounds[0]))] * n_ic
-    ic_ub = [float(np.log(problem.ic_bounds[1]))] * n_ic
-    lb = np.array(list(rate_lb) + ic_lb)
-    ub = np.array(list(rate_ub) + ic_ub)
-    has_bounds = bool(np.isfinite(rate_lb).any() or np.isfinite(rate_ub).any() or problem.m_ic)
+    if problem.ic_fixed_total:
+        # The log-ratio coordinates of a split are unbounded (softmax keeps every
+        # pool positive and the total fixed).
+        n_ic = problem.m_ic_theta * problem.n_datasets
+        ic_lb = np.full(n_ic, -np.inf)
+        ic_ub = np.full(n_ic, np.inf)
+    else:
+        # ``ic_bounds`` is one (lo, hi) pair or per-pool (lo, hi) arrays.
+        lo = np.broadcast_to(np.asarray(problem.ic_bounds[0], dtype=float), (problem.m_ic,))
+        hi = np.broadcast_to(np.asarray(problem.ic_bounds[1], dtype=float), (problem.m_ic,))
+        ic_lb = np.tile(np.log(lo), problem.n_datasets)
+        ic_ub = np.tile(np.log(hi), problem.n_datasets)
+    lb = np.concatenate([rate_lb, ic_lb])
+    ub = np.concatenate([rate_ub, ic_ub])
+    has_bounds = bool(np.isfinite(lb).any() or np.isfinite(ub).any())
     if has_bounds:
         bounds = [
             (None if not np.isfinite(lo) else float(lo), None if not np.isfinite(hi) else float(hi))
@@ -1453,7 +1571,9 @@ class _LaplaceOut(
             "joint_hessian",
             "joint_names",
             "ic_named_std",
+            "ic_fractions_std",
         ],
+        defaults=(None,),
     )
 ):
     """What :func:`_laplace_posterior` returns. The ``joint_*`` / ``ic_named_std``
@@ -1463,9 +1583,19 @@ class _LaplaceOut(
 
 def _joint_names(problem: _CalibrationProblem) -> list[str]:
     """Row/column names of the joint rate + initial-pool Hessian: the rate
-    names, then ``"ic[k].<species>"`` for each dataset ``k``'s fitted pools."""
-    ic_names = [f"ic[{k}].{s}" for k in range(problem.n_datasets) for s in problem.free_ic]
-    return list(problem.free_params) + ic_names
+    names, then ``"ic[k].<species>"`` for each dataset ``k``'s fitted pools, or
+    ``"ic[k].<c_j>:<c_0>"`` for the log-ratio coordinates of a fixed-total
+    split."""
+    return list(problem.free_params) + _ic_coordinate_names(
+        problem.free_ic, problem.n_datasets, problem.ic_fixed_total
+    )
+
+
+def _ic_coordinate_names(species, n_datasets: int, fixed_total: bool) -> list[str]:
+    """Names of the fitted initial-pool coordinates, dataset by dataset."""
+    species = list(species)
+    per = [f"{s}:{species[0]}" for s in species[1:]] if fixed_total else species
+    return [f"ic[{k}].{c}" for k in range(n_datasets) for c in per]
 
 
 # A fitted coordinate within this distance of a finite optimiser bound (in
@@ -1624,15 +1754,34 @@ def _laplace_posterior(
     params_named_std = {name: float(std_physical[i]) for i, name in enumerate(problem.free_params)}
 
     if not joint:
-        return _LaplaceOut(cov, std_unconstrained, params_named_std, H, None, None, None, None)
+        return _LaplaceOut(
+            cov, std_unconstrained, params_named_std, H, None, None, None, None, None
+        )
 
-    # Pools are fitted as log(value), so d(value)/d(theta) = value.
-    ic_std = np.exp(np.asarray(ic_opt)) * np.asarray(std_unconstrained[d:])
     m = problem.m_ic
-    ic_named_std = [
-        {s: float(v) for s, v in zip(problem.free_ic, ic_std[k * m : (k + 1) * m])}
-        for k in range(problem.n_datasets)
-    ]
+    ic_fractions_std = None
+    if problem.ic_fixed_total:
+        # Delta method from the log-ratio block of each dataset to the fractions
+        # (and pools = total * fractions).
+        mt = problem.m_ic_theta
+        cov_np_full = np.asarray(cov)
+        ic_named_std, ic_fractions_std = [], []
+        for k in range(problem.n_datasets):
+            sl = slice(d + k * mt, d + (k + 1) * mt)
+            z_k = np.asarray(ic_opt)[k * mt : (k + 1) * mt]
+            sd_f = np.sqrt(np.diag(_simplex_fraction_cov(z_k, cov_np_full[sl, sl])))
+            total = float(
+                np.sum(np.asarray(problem.C0_base[k])[np.asarray(problem.ic_species_idx)])
+            )
+            ic_fractions_std.append({s: float(v) for s, v in zip(problem.free_ic, sd_f)})
+            ic_named_std.append({s: float(total * v) for s, v in zip(problem.free_ic, sd_f)})
+    else:
+        # Pools are fitted as log(value), so d(value)/d(theta) = value.
+        ic_std = np.exp(np.asarray(ic_opt)) * np.asarray(std_unconstrained[d:])
+        ic_named_std = [
+            {s: float(v) for s, v in zip(problem.free_ic, ic_std[k * m : (k + 1) * m])}
+            for k in range(problem.n_datasets)
+        ]
     return _LaplaceOut(
         posterior_cov=cov[:d, :d],
         posterior_std_unconstrained=std_unconstrained[:d],
@@ -1642,6 +1791,7 @@ def _laplace_posterior(
         joint_hessian=H,
         joint_names=_joint_names(problem),
         ic_named_std=ic_named_std,
+        ic_fractions_std=ic_fractions_std,
     )
 
 
@@ -1665,6 +1815,7 @@ def _resolve_problem(
     ic_prior_log_std,
     param_halfwidth,
     observation_fn=None,
+    ic_fixed_total=False,
     bounds=None,
     use_model_bounds=True,
 ) -> _CalibrationProblem:
@@ -1810,16 +1961,36 @@ def _resolve_problem(
     for s in free_ic_list:
         if s not in model.species_index:
             raise KeyError(f"Unknown free_ic species '{s}'. Available: {model.species}")
+    if len(set(free_ic_list)) != len(free_ic_list):
+        raise ValueError(f"free_ic species must be distinct; got {free_ic_list}.")
     m_ic = len(free_ic_list)
-    if m_ic and not (0.0 < ic_bounds[0] < ic_bounds[1]):
-        raise ValueError(f"ic_bounds must satisfy 0 < lo < hi; got {ic_bounds}.")
+    ic_fixed_total = bool(ic_fixed_total and m_ic)
+    if ic_fixed_total:
+        if isinstance(ic_bounds, dict) or tuple(ic_bounds) != _DEFAULT_IC_BOUNDS:
+            raise ValueError(
+                "FreeICConfig(fixed_total=True) fits the split of a fixed total on the "
+                "simplex, so it takes no bounds; leave bounds at its default."
+            )
+        ic_lo = ic_hi = None
+    elif m_ic:
+        ic_lo, ic_hi = _per_species_ic_bounds(free_ic_list, ic_bounds)
+        ic_bounds = (ic_lo, ic_hi)
     ic_species_idx = jnp.asarray([model.species_index[s] for s in free_ic_list], dtype=int)
     ic_center_blocks = []
     if m_ic:
         ic_np_idx = [model.species_index[s] for s in free_ic_list]
-        for C0_i, *_rest in datasets:
-            vals = np.clip(np.asarray(C0_i)[ic_np_idx], ic_bounds[0], ic_bounds[1])
-            ic_center_blocks.append(np.log(vals))
+        for ds, (C0_i, *_rest) in enumerate(datasets):
+            pools = np.asarray(C0_i, dtype=float)[ic_np_idx]
+            if ic_fixed_total:
+                if np.any(pools <= 0.0):
+                    raise ValueError(
+                        f"dataset {ds}: with FreeICConfig(fixed_total=True) every pool in "
+                        f"{free_ic_list} must be positive in C0 (their sum is the fixed "
+                        f"total, their split the starting guess); got {pools.tolist()}."
+                    )
+                ic_center_blocks.append(np.log(pools[1:]) - np.log(pools[0]))
+            else:
+                ic_center_blocks.append(np.log(np.clip(pools, ic_lo, ic_hi)))
     ic_center_full = jnp.asarray(np.concatenate(ic_center_blocks)) if m_ic else jnp.zeros(0)
 
     rate_bounds = _resolve_rate_bounds(
@@ -1858,6 +2029,7 @@ def _resolve_problem(
         ic_prior_log_std=ic_prior_log_std,
         ic_bounds=ic_bounds,
         observation_fn=observation_fn,
+        ic_fixed_total=ic_fixed_total,
         data_key=(loss, _array_digest(*digest_parts)),
         rate_bounds=rate_bounds,
     )
@@ -2044,9 +2216,11 @@ def calibrate(
     free_ic : FreeICConfig, optional
         If given, also fit the initial concentration of the named
         ``species`` (per dataset, in log space, box-bounded by
-        :attr:`FreeICConfig.bounds`, with an optional log-space prior via
-        ``prior_log_std``) while the rate parameters stay shared -- useful when
-        an unmeasured initial state (e.g. a biofilm reservoir) is not known. The
+        :attr:`FreeICConfig.bounds` -- one pair, or per species -- with an
+        optional log-space prior via ``prior_log_std``) while the rate
+        parameters stay shared -- useful when an unmeasured initial state (e.g.
+        a biofilm reservoir) is not known. With ``fixed_total=True`` the pools'
+        sum is held at its value in ``C0`` and only their split is fitted. The
         fitted pools are returned on ``CalibrationResult.C0_fitted`` /
         ``ic_named``; the Laplace posterior is taken over the rate parameters
         with the pools held at their optimum. Default ``None`` (no free ICs).
@@ -2123,7 +2297,7 @@ def calibrate(
 
     # Unpack the config objects into the internal scalar knobs.
     laplace_on, lap = _resolve_laplace(laplace)
-    ic_species, ic_bounds, ic_prior_log_std = _free_ic_fields(free_ic)
+    ic_species, ic_bounds, ic_prior_log_std = _free_ic_fields(free_ic, extended=True)
 
     # Resolve the arguments once into the static problem + the fit config, then
     # build the compiled objective on the reactor forward-model seam.
@@ -2146,6 +2320,7 @@ def calibrate(
         ic_prior_log_std=ic_prior_log_std,
         param_halfwidth=optimizer.param_halfwidth,
         observation_fn=observation_fn,
+        ic_fixed_total=bool(free_ic is not None and free_ic.fixed_total),
         bounds=optimizer.bounds,
         use_model_bounds=optimizer.use_model_bounds,
     )
@@ -2207,13 +2382,19 @@ def calibrate(
     # Fitted per-dataset initial states (when free_ic is active).
     C0_fitted = None
     ic_named = None
+    ic_fractions = None
     if problem.m_ic:
         C0_fitted = []
         ic_named = []
+        mt = problem.m_ic_theta
         for k, (C0_i, *_rest) in enumerate(problem.datasets):
-            vals = np.exp(np.asarray(ic_opt)[k * problem.m_ic : (k + 1) * problem.m_ic])
+            vals = np.asarray(problem.ic_pools(ic_opt[k * mt : (k + 1) * mt], C0_i))
             C0_fitted.append(C0_i.at[problem.ic_species_idx].set(jnp.asarray(vals)))
             ic_named.append({s: float(v) for s, v in zip(problem.free_ic, vals)})
+        if problem.ic_fixed_total:
+            ic_fractions = [
+                {s: v / sum(pools.values()) for s, v in pools.items()} for pools in ic_named
+            ]
 
     # --- Quantities that ended on an active bound ---
     sides = _at_bound_sides(theta_opt, opt_bounds)
@@ -2259,5 +2440,6 @@ def calibrate(
         priors_applied=dict(problem.active_priors),
         C0_fitted=C0_fitted,
         ic_named=ic_named,
+        ic_fractions=ic_fractions,
         at_bound=at_bound,
     )

@@ -225,6 +225,8 @@ def _source_fields(source, names, values, transforms):
             vals = dict(source.params_named)
             for k, pools in enumerate(source.ic_named or []):
                 vals.update({f"ic[{k}].{s}": v for s, v in pools.items()})
+                # A fixed-total split is fitted as pool ratios "ic[k].<c_j>:<c_0>".
+                vals.update({f"ic[{k}].{a}:{b}": pools[a] / pools[b] for a in pools for b in pools})
             tr = list(source.transforms) + ["positive_log"] * (len(nm) - len(source.transforms))
             return F, nm, vals, tr, {n: sd for n, sd in at_bound.items() if n in nm}
         if source.hessian_unconstrained is None:

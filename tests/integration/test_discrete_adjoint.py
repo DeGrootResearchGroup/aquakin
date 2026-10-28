@@ -579,6 +579,9 @@ def test_low_memory_matches_saved_stage_gradient(simple_model, solver):
     assert jnp.allclose(g_low, g_saved, rtol=1e-7, atol=1e-9)
 
 
+# Slow: a ~100 s stiff reverse-mode adjoint whose compile cache pushed its
+# fast-gate shard past the CI memory floor.
+@pytest.mark.slow
 def test_low_memory_matches_saved_stage_stiff():
     # The recompute must also match on a stiff model: the per-stage Newton
     # converges through the same well-conditioned I - dt*gamma*J the forward
