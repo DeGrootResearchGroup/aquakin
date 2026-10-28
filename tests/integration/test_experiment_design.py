@@ -77,6 +77,23 @@ def test_design_criterion_values():
     assert crit(S, "E") == pytest.approx(0.0, abs=1e-12)
 
 
+def test_round_off_eigenvalue_counts_as_singular():
+    # A null direction computed in floating point has an eigenvalue of
+    # round-off size and either sign. Both signs must score as singular, as
+    # identifiability reports them, rather than a finite D for the positive one.
+    crit = aquakin.design_criterion
+    for tiny in (1e-17, -1e-17):
+        F = np.diag([1.0, tiny])
+        assert crit(F, "D") == -np.inf
+        assert crit(F, "A") == np.inf
+        assert crit(F, "modified_E") == np.inf
+        assert crit(F, "E") == 0.0
+    # A small but genuine eigenvalue is still scored normally.
+    F = np.diag([1.0, 1e-8])
+    assert crit(F, "D") == pytest.approx(np.log(1e-8))
+    assert crit(F, "E") == pytest.approx(1e-8)
+
+
 def test_design_criterion_from_fisher_information(reactor, params):
     fim = aquakin.fisher_information(
         reactor, _exp([2.0, 6.0]), ["A_to_B.k"], params=params, free_ic=FreeICConfig(["A"])

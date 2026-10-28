@@ -50,7 +50,10 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 - Optimal experiment design on the Fisher information:
   - `aquakin.design_criterion` scores a design by D (log det), A (trace of the
     inverse), E (smallest eigenvalue) or modified-E (condition number),
-    optionally for a subset of parameters with the rest as nuisance.
+    optionally for a subset of parameters with the rest as nuisance. A design
+    that cannot determine some combination of the parameters (an eigenvalue at
+    most 1e-10 of the largest, the rule `identifiability` uses) gets the worst
+    score.
   - `aquakin.rank_experiments` ranks candidate experiments by the
     information they add to a base design.
   - `aquakin.optimize_experiment` optimises sampling times and initial
