@@ -158,6 +158,29 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `RuntimeError` that says what happened and how to fix it (bound the rates with
   `OptimizerConfig(param_halfwidth=...)`, use a better starting guess, or tighten
   the `free_ic` bounds). This replaces the raw XLA callback traceback.
+- After `Plant.solve(..., time_unit=...)` in a unit other than the plant's own
+  (days for the ASM/BSM plants), streams rebuilt with `plant.stream`, the BSM
+  evaluation indices, `sludge_metrics` / `plant.sludge_age` and
+  `plant.mass_balance` sampled the influent and control signals at the wrong
+  times, and the mass balance integrated per-day flows over hours (so it did
+  not close). They now use the solve's native times; the new
+  `PlantSolution.t_native` gives them. `solution.t`, stream `t` and the
+  balance `window` stay in the requested unit, flows stay per native time unit,
+  and the balance terms are grams whatever the unit.
+- `Plant.steady_state(design=...)` no longer drops the design overrides when
+  pseudo-transient continuation does not converge. The forward fallback used
+  to integrate the recorded influent and report `converged=True` for the wrong
+  operating point; it now integrates the design right-hand side. The
+  continuation and arclength fallbacks, which work in the parameter vector
+  alone, are skipped when `design` is given instead of failing.
+- `sludge_metrics` and `plant.sludge_age` report a larger, correct SRT on
+  BSM2 (about 20.9 d at the constant-influent steady state, up from about
+  17.5 d). The wastage was read from the dewatering cake, which also carries
+  primary and digested solids; it is now the activated-sludge wastage
+  `underflow_split.waste`. The effluent loss now prefers the secondary-clarifier
+  overflow over a bypass-combined final effluent, whose bypass solids never
+  entered the activated-sludge system. BSM1 and A²O results are unchanged.
+  Pass `waste_port=` / `effluent_port=` to choose other streams.
 
 ## [0.1.0] - 2026-07-08
 

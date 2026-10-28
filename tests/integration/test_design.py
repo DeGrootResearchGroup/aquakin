@@ -129,6 +129,29 @@ def test_reactor_autodetection_finds_as_reactors_not_digester():
     assert "digester" not in _reactor_units(bsm2, None)
 
 
+def test_srt_ports_resolve_to_activated_sludge_losses():
+    """The SRT solids losses are the secondary-clarifier overflow and the
+    clarifier-underflow wastage, not the BSM2 dewatering cake (which also holds
+    primary and digested solids, understating the SRT) nor a bypass-combined
+    final effluent (whose bypass solids never entered the AS system)."""
+    from aquakin.plant import build_a2o
+    from aquakin.plant.bsm import build_bsm2
+    from aquakin.plant.bsm.bsm2 import InfluentBypass
+    from aquakin.plant.design import _srt_ports
+
+    assert _srt_ports(build_bsm1()) == ("clarifier.overflow", "underflow_split.waste")
+    assert _srt_ports(build_a2o()) == ("clarifier.overflow", "underflow_split.waste")
+    assert _srt_ports(build_bsm2()) == ("settler.overflow", "underflow_split.waste")
+    bypassed = build_bsm2(bypass=InfluentBypass())
+    assert bypassed.effluent_endpoint == "effluent_mix.out"
+    assert _srt_ports(bypassed) == ("settler.overflow", "underflow_split.waste")
+    # Explicit ports still win.
+    assert _srt_ports(bypassed, "effluent_mix.out", "dewatering.underflow") == (
+        "effluent_mix.out",
+        "dewatering.underflow",
+    )
+
+
 # ----- Sizing result fields / summary branches (fast, no solve) -----------
 
 
@@ -330,3 +353,27 @@ def test_takacs_clarifier_inventory_raises_srt(ideal_run, asm1):
     srt_ideal = sludge_metrics(ideal_plant, ideal_sol).SRT
     srt_takacs = sludge_metrics(*_solve(asm1, _influent(asm1), Qw=385.0, use_takacs=True)).SRT
     assert srt_takacs > srt_ideal
+
+
+@pytest.mark.slow
+def test_bsm2_srt_counts_activated_sludge_wastage_not_dewatering_cake():
+    """On BSM2 the default SRT uses the AS wastage, not the dewatering cake
+    (primary + digested solids), which understated the sludge age by ~16%."""
+    from aquakin.plant.bsm import build_bsm2, bsm2_warm_start
+    from aquakin.plant.bsm.bsm2 import bsm2_constant_influent, bsm2_parameters
+    from aquakin.plant.results import PlantSolution
+
+    asm1 = aquakin.load_model("asm1")
+    adm1 = aquakin.load_model("adm1")
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
+    plant.add_influent("feed", bsm2_constant_influent(asm1))
+    params = bsm2_parameters(asm1, adm1)
+    ss = plant.steady_state(params, y0=bsm2_warm_start(plant))
+    assert bool(ss.converged)
+    sol = PlantSolution(t=jnp.asarray([0.0, 1.0]), state=jnp.stack([ss.state, ss.state]),
+                        plant=plant)
+    m = sludge_metrics(plant, sol, params)
+    explicit = sludge_metrics(plant, sol, params, effluent_port="settler.overflow",
+                              waste_port="underflow_split.waste")
+    assert m.SRT == pytest.approx(explicit.SRT)
+    assert m.SRT == pytest.approx(20.9, abs=0.3)

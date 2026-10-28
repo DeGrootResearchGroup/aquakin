@@ -120,6 +120,24 @@ class PlantSolution:
         return override if override is not None else self.plant.time_unit
 
     @property
+    def t_native(self) -> jnp.ndarray:
+        """The save times in the plant's native time unit, shape ``(n_t,)``.
+
+        Equal to :attr:`t` unless :meth:`Plant.solve` was called with a
+        ``time_unit=`` override, in which case :attr:`t` is reported in that unit
+        while this gives the times the solver actually used. Influent series,
+        control signals and stream flows (``m³`` per native time unit) are all
+        defined against native time, so anything that samples the influent or
+        integrates a flow over the window must use these times.
+        """
+        from aquakin.integrate._common import native_time_factor
+
+        factor = native_time_factor(self.plant.time_unit, self._requested_time_unit)
+        if factor == 1.0:
+            return self.t
+        return jnp.asarray(self.t) * factor
+
+    @property
     def final_state(self) -> jnp.ndarray:
         """The full plant state at the last save time, shape ``(total_state_size,)``.
 

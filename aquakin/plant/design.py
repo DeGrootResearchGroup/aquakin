@@ -320,9 +320,14 @@ class SludgeMetrics:
         )
 
 
-# Effluent / wastage endpoint candidates, in preference order (BSM2 first).
-_EFFLUENT_CANDIDATES = ("effluent_mix.out", "settler.overflow", "clarifier.overflow")
-_WASTE_CANDIDATES = ("dewatering.underflow", "underflow_split.waste")
+# Effluent / wastage endpoint candidates for the SRT, in preference order. The
+# solids loss that sets the sludge age is what leaves the activated-sludge
+# system: the secondary-clarifier overflow (not a combined effluent that also
+# carries untreated bypass flow) and the wastage split off the clarifier
+# underflow (not a dewatering cake, which also holds primary and digested
+# solids that never were part of the activated-sludge inventory).
+_EFFLUENT_CANDIDATES = ("settler.overflow", "clarifier.overflow", "effluent_mix.out")
+_WASTE_CANDIDATES = ("underflow_split.waste", "dewatering.underflow")
 _VALID_SUBSTRATES = frozenset({"BOD", "COD"})
 
 
@@ -349,6 +354,27 @@ def _pick_endpoint(plant, explicit, candidates, role):
         f"Could not auto-detect the {role} port; pass it explicitly. "
         f"Tried {candidates}; available: {sorted(available)}"
     )
+
+
+def _srt_ports(plant, effluent_port=None, waste_port=None):
+    """Resolve the ``(effluent, wastage)`` endpoints whose solids set the SRT.
+
+    Explicit ports are validated and returned. Otherwise the secondary-clarifier
+    overflow is preferred, then the builder-recorded final effluent
+    (:attr:`Plant.effluent_endpoint`), then a bypass mixer outlet: on a plant
+    with an influent bypass the recorded final effluent is that mixer, whose
+    untreated bypass solids are not an activated-sludge loss. The wastage is
+    the clarifier-underflow split ahead of a dewatering cake.
+    """
+    recorded = getattr(plant, "effluent_endpoint", None)
+    eff_candidates = (
+        _EFFLUENT_CANDIDATES[:-1]
+        + (() if recorded is None else (recorded,))
+        + _EFFLUENT_CANDIDATES[-1:]
+    )
+    eff_port = _pick_endpoint(plant, effluent_port, eff_candidates, "effluent")
+    w_port = _pick_endpoint(plant, waste_port, _WASTE_CANDIDATES, "wastage")
+    return eff_port, w_port
 
 
 def _reactor_units(plant, explicit):
@@ -416,8 +442,12 @@ def sludge_metrics(
         Which external influent is the main feed (for HRT / F:M). Defaults to
         the sole influent, or the one named ``"feed"``.
     effluent_port, waste_port : str, optional
-        ``"unit.port"`` of the final effluent and the wastage stream. Auto-
-        detected for BSM1/BSM2 when omitted.
+        ``"unit.port"`` of the activated-sludge effluent and wastage streams
+        that carry solids out of the system. Auto-detected when omitted: the
+        secondary-clarifier overflow (``settler.overflow`` /
+        ``clarifier.overflow``, ahead of a bypass-combined final effluent) and
+        the clarifier-underflow wastage ``underflow_split.waste`` (ahead of a
+        BSM2 dewatering cake, which also holds primary and digested solids).
     substrate : str, optional
         Substrate measure for the F:M load -- ``"BOD"`` (default) or ``"COD"``.
 
@@ -462,13 +492,7 @@ def sludge_metrics(
     reactor_solids_mean = float(time_average(reactor_solids, t))  # g
 
     # ----- Solids leaving via wastage + effluent (g/d). -----
-    eff_port = _pick_endpoint(
-        plant,
-        effluent_port or getattr(plant, "effluent_endpoint", None),
-        _EFFLUENT_CANDIDATES,
-        "effluent",
-    )
-    w_port = _pick_endpoint(plant, waste_port, _WASTE_CANDIDATES, "wastage")
+    eff_port, w_port = _srt_ports(plant, effluent_port, waste_port)
     eff = plant.stream(solution, eff_port, params_full)
     waste = plant.stream(solution, w_port, params_full)
     eff_solids_rate = eff.Q * derived_TSS(eff.C, model)  # (n_t,) g/d
@@ -479,7 +503,9 @@ def sludge_metrics(
 
     # ----- HRT and F:M from the external influent. -----
     influent = _pick_influent(plant, influent_name)
-    inf_streams = [influent.at(ti) for ti in t]
+    # The influent is defined against native time (``solution.t`` may be in a
+    # ``time_unit=`` override); the averages below are unit-independent.
+    inf_streams = [influent.at(ti) for ti in solution.t_native]
     inf_Q = jnp.asarray([s.Q for s in inf_streams])  # (n_t,)
     inf_C = jnp.stack([s.C for s in inf_streams])  # (n_t, n_species)
     Q_mean = float(time_average(inf_Q, t))
