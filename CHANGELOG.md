@@ -76,6 +76,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `Plant.solve` and `Plant.run_to_steady_state` can now be traced by
+  `jax.jit` / `jax.grad` on a plant with a `TakacsClarifier`, including the
+  validated `build_bsm1(use_takacs=True)` settler. Tracing used to raise a
+  `ConcretizationTypeError` while forming the default `atol`, so it had to be
+  passed explicitly; the default is now the same value traced or not.
 - The Laplace standard deviations from `aquakin.calibrate` and
   `Plant.calibrate` (`params_named_std`, `posterior_cov`, `ic_named_std`) no
   longer understate the uncertainty of weakly identified parameters. The
