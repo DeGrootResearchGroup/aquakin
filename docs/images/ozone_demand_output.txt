@@ -1,0 +1,51 @@
+== Step 1 ==
+Eigenvalues relative to the largest:
+   -6.9e-17  identifiable: False
+    7.8e-07  identifiable: False
+    8.8e-02  identifiable: True
+    1.0e+00  identifiable: True
+Directions flagged as not identifiable (two largest loadings):
+  relative eigenvalue -6.9e-17: fast.k1 +1.00, ic[0].D +0.00
+  relative eigenvalue  7.8e-07: slow.k2 -0.71, ic[0].M +0.70
+Relative standard deviations:
+  fast.k1       inf
+  slow.k2     2142%
+  ic[0].D       13%
+  ic[0].M     2112%
+== Step 2 ==
+design                     fast.k1   slow.k2   ic[0].D   ic[0].M
+base                           inf     2142%       13%     2112%
++ late samples                 inf      963%       11%      945%
++ early samples                21%     1545%      4.6%     1526%
++ UV254                        inf      6.6%      7.9%     0.25%
++ early samples + UV254        20%        5%      3.7%     0.16%
+Ranked by the D-criterion:
+  + early samples + UV254  D =   29.33
+  + early samples          D =   10.92
+  base                     D =    -inf
+  + late samples           D =    -inf
+  + UV254                  D =    -inf
+== Step 3 ==
+converged: True
+D-criterion: 26.67 -> 31.32
+sampling times (s): [1.0, 6.0, 11.0, 517.0, 522.0, 527.0, 532.0, 537.0]
+ozone dose: 150 umol/L
+               start  designed
+fast.k1          43%       23%
+slow.k2         5.9%      1.1%
+ic[0].D         9.6%      4.8%
+ic[0].M        0.22%     0.18%
+== Step 4 ==
+converged: True
+              estimate     std dev  relative        true
+fast.k1       0.009944      0.0023       23%        0.01
+slow.k2      2.033e-06     2.2e-08      1.1%       2e-06
+ic[0].D          14.86        0.72      4.8%          15
+ic[0].M           1000         1.8     0.18%        1000
+Profile likelihood:
+profile-likelihood 95% interval for k2: 1.992e-06 to 2.076e-06
+Laplace 95% interval for k2:            1.991e-06 to 2.076e-06
+== Step 5 ==
+sampling times (s): [1.0, 6.1, 11.1, 508.5, 513.5, 518.5, 523.5, 528.5]
+ozone dose: 150 umol/L
+== End ==

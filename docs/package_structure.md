@@ -253,6 +253,8 @@ aquakin/
 │   ├── bsm2_seasonal_temperature.py   # BSM2 cold->warm nitrification effect
 │   ├── dgsm_sensitivity_screen.py     # DGSM global sensitivity, forward==reverse
 │   ├── wats_nitrate_dosing_calibration.py  # synthetic sewer rate recovery (calibrate + Laplace)
+│   ├── ozone_demand_design.py  # worked example: identifiability + experiment design (docs page)
+│   ├── ozone_demand.yaml       # its two-reaction ozone-demand model
 │   ├── bsm2_ghg_cost_report.py     # GHG (N2O/CO2e) + cost reporting + scenario KPI table
 │   ├── event_handling.py           # located events: scheduled re-dosing + terminal cut-off
 │   └── adjoint_speed_benchmark.py  # stable_adjoint vs capped jax_adjoint timing

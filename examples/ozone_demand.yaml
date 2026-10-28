@@ -1,0 +1,51 @@
+model:
+  name: ozone_demand
+  version: "1.0"
+  description: >
+    Ozone decay in a water sample with a fast, capacity-limited demand D and a
+    slow reaction with organic matter M. Used by the worked example on
+    identifiability and experiment design. Concentrations in umol/L, time in s.
+  references: []
+
+species:
+  - name: O3
+    description: "Dissolved ozone"
+    units: umol/L
+    default_concentration: 50.0
+  - name: D
+    description: "Fast ozone demand (consumed within seconds)"
+    units: umol/L
+    default_concentration: 15.0
+  - name: M
+    description: "Organic matter reacting slowly with ozone"
+    units: umol/L
+    default_concentration: 1000.0
+
+conditions:
+  - name: T
+    description: "Temperature (K), unused in the rates."
+    default: 293.15
+
+reactions:
+  - name: fast
+    description: "Instantaneous ozone demand."
+    rate: "k1 * [O3] * [D]"
+    parameters:
+      k1:
+        value: 0.01
+        units: "L umol-1 s-1"
+        transform: positive_log
+    stoichiometry:
+      O3: -1
+      D: -1
+  - name: slow
+    description: "Slow reaction of ozone with organic matter."
+    rate: "k2 * [O3] * [M]"
+    parameters:
+      k2:
+        value: 2.0e-6
+        units: "L umol-1 s-1"
+        transform: positive_log
+    stoichiometry:
+      O3: -1
+      M: -1

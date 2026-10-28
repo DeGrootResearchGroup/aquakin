@@ -268,6 +268,9 @@ prof.ci     # (lo, hi); None on a side means the parameter is unidentified there
 
 ### Designing experiments
 
+For a complete study using these tools, see
+[Worked example: designing an experiment](worked_example_design.md).
+
 Once you can compute the information of a design, you can choose the design
 that gives the most. A design is scored by a criterion of its Fisher
 information `F`:

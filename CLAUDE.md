@@ -234,6 +234,18 @@ reader cannot see. Genuine scientific provenance belongs in a model YAML's
 comments.
 
 
+## Spelling Convention
+
+Write Canadian English in all prose: documentation pages, comments, docstrings,
+error messages, and commit and PR text. Use **-ize** and **-yze** endings
+(*optimize*, *optimizer*, *summarize*, *recognize*, *analyze*), with
+Canadian/British forms elsewhere (*colour*, *behaviour*, *centre*, *metre*,
+*litre*, *modelling*). Do not change identifiers, file names, or quoted text to
+match. The public API already uses -ize (`optimize_experiment`,
+`optimize_design`). Existing -ise spellings in older files are converted as
+they are edited.
+
+
 ## Docstring Convention
 
 All functions, classes, and methods use **NumPy docstring format**:

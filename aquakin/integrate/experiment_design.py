@@ -33,6 +33,7 @@ from scipy.optimize import minimize
 
 from aquakin.integrate._common import Reactor, native_time_factor
 from aquakin.integrate.fisher import Experiment, FisherInformation, _FisherSetup
+from aquakin.integrate.identifiability import _NULL_RTOL
 
 CRITERIA = ("D", "A", "E", "modified_E")
 _LARGER_IS_BETTER = {"D": True, "A": False, "E": True, "modified_E": False}
@@ -57,7 +58,10 @@ def _subset_indices(names, subset):
 
 def _criterion(F, criterion, sub=None, nui=None):
     """Natural criterion value of ``F`` (on the ``sub`` block, with ``nui`` as
-    nuisance). A singular matrix gives the worst value (``-inf`` / ``+inf``)."""
+    nuisance). A singular matrix gives the worst value (``-inf`` / ``+inf``, and
+    0 for E). Singular uses the same rule as :func:`aquakin.identifiability`:
+    the smallest eigenvalue is at most ``_NULL_RTOL`` of the largest, so a
+    round-off eigenvalue of either sign counts as zero."""
     F = 0.5 * (F + F.T)
     if sub is not None:
         Fss = F[jnp.ix_(sub, sub)]
@@ -66,14 +70,14 @@ def _criterion(F, criterion, sub=None, nui=None):
             Fss = Fss - Fsn @ jnp.linalg.solve(F[jnp.ix_(nui, nui)], Fsn.T)
         F = 0.5 * (Fss + Fss.T)
     w = jnp.linalg.eigvalsh(F)
-    ok = w[0] > 0.0
+    ok = w[0] > _NULL_RTOL * w[-1]
     safe = jnp.where(ok, w, 1.0)
     if criterion == "D":
         return jnp.where(ok, jnp.sum(jnp.log(safe)), -jnp.inf)
     if criterion == "A":
         return jnp.where(ok, jnp.sum(1.0 / safe), jnp.inf)
     if criterion == "E":
-        return w[0]
+        return jnp.where(ok, w[0], 0.0)
     return jnp.where(ok, safe[-1] / safe[0], jnp.inf)
 
 
@@ -105,8 +109,11 @@ def design_criterion(
     Returns
     -------
     float
-        The criterion value. A singular matrix gives ``-inf`` for D and ``+inf``
-        for A and modified-E.
+        The criterion value. A singular matrix gives ``-inf`` for D, ``+inf``
+        for A and modified-E, and 0 for E. A matrix counts as singular when its
+        smallest eigenvalue is at most 1e-10 of its largest, the rule
+        :func:`aquakin.identifiability` uses for an exactly non-identifiable
+        direction, so round-off eigenvalues of either sign are treated as zero.
     """
     _check_criterion(criterion)
     if isinstance(fim, FisherInformation):
