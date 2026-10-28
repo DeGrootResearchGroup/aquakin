@@ -185,7 +185,10 @@ def profile_likelihood(
         Likelihood-ratio threshold for the confidence interval. Default ``1.92``
         = ``0.5 * chi2_{1, 0.95}`` (the one-degree-of-freedom 95% level). Use
         with ``loss="nll"`` and a calibrated ``sigma`` so the objective is a
-        proper negative log-likelihood and the threshold is meaningful.
+        proper negative log-likelihood and the threshold is meaningful. With
+        an unknown noise level pass ``sigma="estimate"`` (the concentrated
+        likelihood, see :func:`aquakin.calibrate`): the same threshold applies,
+        and with one output the profile rise is ``(N / 2) log(SSE / SSE_min)``.
     warm_start : bool, optional
         If ``True`` (default), run a cold multistart only at the ``anchor`` grid
         point and warm-start each subsequent point from its neighbour's fit, so

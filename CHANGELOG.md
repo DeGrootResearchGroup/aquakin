@@ -23,6 +23,15 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `aquakin.calibrate(loss="nll", sigma="estimate")` estimates an unknown
+  noise level: the concentrated likelihood, with the noise std of each observed
+  output set to its RMS residual. One fit now gives a likelihood-scaled Laplace
+  standard deviation and profile, where it used to take an `mse` fit and an
+  `nll` refit with `sigma` set by hand. The estimate is returned as
+  `CalibrationResult.sigma_estimate`, and `profile_likelihood` accepts
+  `sigma="estimate"` too. Both optimisers support it. `Plant.calibrate` does
+  not yet.
+
 - `LaplaceConfig(include_ic=True)` gives a joint Laplace posterior over the rate
   parameters and the initial pools fitted with `free_ic`, for both
   `aquakin.calibrate` and `Plant.calibrate`. The joint covariance and Hessian
