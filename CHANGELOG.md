@@ -30,7 +30,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `nll` refit with `sigma` set by hand. The estimate is returned as
   `CalibrationResult.sigma_estimate`, and `profile_likelihood` accepts
   `sigma="estimate"` too. Both optimizers support it. `Plant.calibrate` does
-  not yet.
+  not yet, and raises a clear error. The estimate covers every dataset
+  together, so it cannot be an entry of a per-dataset `sigma` list.
 - `FreeICConfig(bounds={species: (lo, hi)})` sets bounds per fitted initial
   pool, for pools of very different size; one `(lo, hi)` pair still applies to
   every pool. A pool that ends on its own bound is listed in

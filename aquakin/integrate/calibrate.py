@@ -2021,6 +2021,13 @@ def _resolve_problem(
             raise ValueError(
                 f"sigma list has {len(sigma_list)} entries but there are {n_datasets} datasets."
             )
+        if any(isinstance(s, str) for s in sigma_list):
+            # The concentrated likelihood pools the residuals of every dataset,
+            # so it cannot be switched on for some datasets only.
+            raise ValueError(
+                'sigma="estimate" applies to every dataset; pass it as sigma="estimate", '
+                "not as an entry of a per-dataset sigma list."
+            )
     else:
         sigma_list = [sigma] * n_datasets
 
@@ -2343,7 +2350,9 @@ def calibrate(
         observations), which leaves the objective
         ``sum_j (N_j / 2) log(SSE_j / N_j) + N / 2`` -- the ``"nll"`` loss at the
         estimated noise. The estimate is returned as
-        ``CalibrationResult.sigma_estimate``. The Gauss-Newton Laplace
+        ``CalibrationResult.sigma_estimate``. It covers every dataset, so
+        pass it as ``sigma="estimate"``, not inside a per-dataset list. The
+        Gauss-Newton Laplace
         covariance is the Fisher information with the estimate plugged in (the
         usual ``sigma^2 (J^T J)^{-1}``); the finite-difference one is the
         curvature of the concentrated objective. For a profile likelihood of

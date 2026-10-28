@@ -10,6 +10,7 @@ monolith is covered by the full-fit tests in
 """
 
 import dataclasses
+import sys
 
 import jax.numpy as jnp
 import numpy as np
@@ -210,6 +211,11 @@ def _key_variants(m, C0, obs, t_obs, free):
         "loss": _resolve(m, C0, obs1, t_obs, free, observed_species=sp, loss="wmse", sigma=0.1),
         "sigma value": _resolve(
             m, C0, obs1, t_obs, free, observed_species=sp, loss="nll", sigma=0.2
+        ),
+        # The concentrated likelihood compiles a different objective and
+        # residual from any fixed sigma.
+        "sigma estimate": _resolve(
+            m, C0, obs1, t_obs, free, observed_species=sp, loss="nll", sigma="estimate"
         ),
         "sigma per point": _resolve(
             m,
@@ -1033,3 +1039,74 @@ def test_resolve_problem_rejects_duplicate_free_ic(base):
     m, C0, obs, t_obs, free = base
     with pytest.raises(ValueError, match="distinct"):
         _resolve(m, C0, obs, t_obs, free, free_ic=["A", "A"])
+
+
+# ---------- sigma="estimate" (concentrated likelihood): guards ----------
+
+
+@pytest.mark.parametrize("build", [_build_loss, _build_residual])
+def test_build_sigma_estimate_requires_nll(build):
+    with pytest.raises(ValueError, match='sigma="estimate" requires loss="nll"'):
+        build("mse", jnp.zeros((3, 1)), "estimate")
+
+
+def test_resolve_problem_rejects_unknown_sigma_string(base):
+    m, C0, obs, t_obs, free = base
+    with pytest.raises(ValueError, match='sigma must be an array, None or "estimate"'):
+        _resolve(m, C0, obs, t_obs, free, loss="nll", sigma="bogus")
+
+
+def test_resolve_problem_rejects_estimate_in_sigma_list(base):
+    """The concentrated likelihood pools every dataset's residuals, so it cannot
+    be asked for per dataset."""
+    m, C0, obs, t_obs, free = base
+    with pytest.raises(ValueError, match="applies to every dataset"):
+        _resolve(m, [C0, C0], [obs, obs], [t_obs, t_obs], free, loss="nll", sigma=["estimate", 0.1])
+
+
+def test_laplace_posterior_sigma_estimate_needs_noise_estimate(base):
+    """The plug-in Gauss-Newton Laplace of the concentrated likelihood needs the
+    noise estimate at the MAP; it is an error to omit it."""
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(m, C0, obs, t_obs, free, loss="nll", sigma="estimate")
+    cfg = dataclasses.replace(_cfg("auto", "jax_adjoint"), laplace_method="gauss_newton")
+    fm = _ReactorForwardModel(_batch_reactor(m), "jax_adjoint", 1, False)
+    with pytest.raises(ValueError, match="needs the noise estimate"):
+        _laplace_posterior(prob, fm, cfg, prob.rate_theta0(), jnp.zeros(0))
+
+
+def test_run_multistart_reports_unconverged_noise_reestimation(monkeypatch):
+    """Gauss-Newton under the concentrated likelihood alternates a least-squares
+    solve with re-estimating sigma; if sigma has not settled within the
+    iteration cap the run is reported as not converged."""
+    monkeypatch.setattr(sys.modules[_run_multistart.__module__], "_IRLS_MAX_ITER", 3)
+    box = [np.ones(1)]
+    calls = [0]
+
+    def sigma_hat_of(x):
+        calls[0] += 1  # a noise estimate that never settles
+        return np.asarray([float(calls[0])])
+
+    def set_sigma_hat(v):
+        box[0] = np.asarray(v)
+
+    bundle = _ObjectiveBundle(
+        lambda x: (jnp.sum((x - 1.0) ** 2), 2.0 * (x - 1.0)),
+        lambda x: (x - 1.0) / box[0],
+        lambda x: jnp.eye(1) / box[0],
+        False,
+        sigma_hat_of,
+        set_sigma_hat,
+    )
+    cfg = dataclasses.replace(_ms_cfg(1, optimizer="gauss_newton"), max_iter=20)
+    out = _run_multistart(cfg, bundle, _THETA0, _NO_BOUNDS)
+    assert not out.success
+    assert out.message == "noise re-estimation did not converge"
+    assert out.x[0] == pytest.approx(1.0)
+
+
+def test_resolve_problem_accepts_numeric_sigma_list(base):
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(m, [C0, C0], [obs, obs], [t_obs, t_obs], free, loss="nll", sigma=[0.1, 0.2])
+    assert prob.n_datasets == 2
+    assert not prob.sigma_estimate
