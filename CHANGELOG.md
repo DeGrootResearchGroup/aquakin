@@ -34,7 +34,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   is reported as `nan` rather than a finite value from the curvature at a
   constrained point, they have zero variance in `posterior_cov` (posterior
   draws keep them on the bound), and the other parameters' covariance is
-  conditional on them. `aquakin.identifiability(result)` carries the same flag
+  conditional on them, so their standard deviations can be smaller than
+  before, when the bound parameter was treated as free to move either way. `aquakin.identifiability(result)` carries the same flag
   (`IdentifiabilityResult.at_bound`, also accepted as `at_bound=` for a bare
   matrix) and the same `nan` standard deviations.
 
