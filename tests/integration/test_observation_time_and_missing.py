@@ -12,8 +12,9 @@ import pytest
 
 import aquakin
 from aquakin import Experiment, LaplaceConfig, OptimizerConfig
-from aquakin.integrate.calibrate import observation_takes_time, observe
+from aquakin.integrate.calibrate import observation_size, observation_takes_time, observe
 from aquakin.integrate.experiment_design import _structure_key
+from aquakin.integrate.fisher import _FisherSetup
 
 K, A0, SIGMA, DRIFT = 0.25, 1.5, 0.01, 0.05
 T_OBS = jnp.linspace(0.0, 12.0, 25)
@@ -78,12 +79,38 @@ def test_signature_detection():
     assert not observation_takes_time(lambda *args: args[0][0])  # *args: the (C, params) form
 
 
+def test_time_aware_observe_passes_the_sample_time():
+    """observe / observation_size hand a time-aware function each sample time
+    (no solve: a stand-in trajectory)."""
+    ys = jnp.asarray([[1.0, 2.0], [3.0, 4.0]])
+    fn = lambda t, C, p: C[1] * (1.0 + t)
+    y = observe(ys, None, jnp.arange(2), fn, t=jnp.asarray([0.0, 2.0]))
+    np.testing.assert_allclose(np.asarray(y), [[2.0], [12.0]])
+    assert observation_size(lambda t, C, p: jnp.stack([C[0], t]), ys[0], jnp.ones(1)) == 2
+
+
+def test_fisher_setup_mask_gives_unmeasured_entries_infinite_sigma(reactor):
+    """Experiment(mask=...) sets an infinite sigma (zero information) on the
+    unmeasured entries and validates the mask, all before any solve."""
+    mask = np.ones((T_OBS.shape[0], 2), dtype=bool)
+    mask[::2, 1] = False
+    setup = _FisherSetup(reactor, [Experiment(C0, T_OBS, sigma=SIGMA, mask=mask)], FREE)
+    sig = np.asarray(setup.sigma[0])
+    assert np.all(np.isinf(sig[~mask]))
+    np.testing.assert_array_equal(sig[mask], SIGMA)
+    with pytest.raises(ValueError, match="does not broadcast"):
+        _FisherSetup(reactor, [Experiment(C0, T_OBS, sigma=SIGMA, mask=np.ones(3, bool))], FREE)
+    with pytest.raises(ValueError, match="no observation"):
+        _FisherSetup(reactor, [Experiment(C0, T_OBS, sigma=SIGMA, mask=False)], FREE)
+
+
 def test_time_aware_observe_needs_sample_times():
     ys = jnp.ones((3, 2))
     with pytest.raises(ValueError, match="needs the sample times"):
         observe(ys, None, jnp.arange(2), lambda t, C, p: C[0])
 
 
+@pytest.mark.slow  # full fits / Fisher solves; cheap fast-tier coverage in tests/unit
 def test_time_dependent_observation_matches_per_entry_sigma(reactor, truth):
     """A drifting sensor y = B (1 + a t) through a time-aware observation_fn
     equals observing B on the de-drifted data y / (1 + a t) with the per-entry
@@ -100,6 +127,7 @@ def test_time_dependent_observation_matches_per_entry_sigma(reactor, truth):
     _same_fit(timed, ref)
 
 
+@pytest.mark.slow  # full fits / Fisher solves; cheap fast-tier coverage in tests/unit
 def test_time_is_in_the_unit_of_t_obs(reactor, truth):
     """With t_obs in minutes on a seconds model, the time-aware function sees
     minutes: a drift of DRIFT per minute fitted on minute times equals a drift
@@ -129,6 +157,7 @@ def test_time_is_in_the_unit_of_t_obs(reactor, truth):
     _same_fit(per_min, per_s)
 
 
+@pytest.mark.slow  # full fits / Fisher solves; cheap fast-tier coverage in tests/unit
 def test_nan_masked_observations_match_per_entry_sigma(reactor, truth):
     """An output measured only at t = 0 (an initial total A + B), the other
     entries NaN, gives the same fit as the huge-sigma trick it replaces, and
@@ -152,6 +181,7 @@ def test_nan_masked_observations_match_per_entry_sigma(reactor, truth):
     assert trick.loss - masked.loss == pytest.approx(n_dummy * np.log(big), rel=1e-9)
 
 
+@pytest.mark.slow  # full fits / Fisher solves; cheap fast-tier coverage in tests/unit
 def test_nan_masked_mse_averages_over_observed_entries(reactor, truth):
     """For mse a missing entry drops out of the mean; with all of one output's
     entries missing the fit equals observing the other output alone."""
@@ -173,6 +203,7 @@ def test_missing_observation_validation(reactor, truth):
         aquakin.calibrate(reactor, C0, jnp.full(truth.shape, jnp.nan), T_OBS, FREE, laplace=False)
 
 
+@pytest.mark.slow  # full fits / Fisher solves; cheap fast-tier coverage in tests/unit
 def test_fisher_mask_matches_per_entry_sigma(reactor, simple_model):
     """Experiment(mask=...) equals the same design with huge sigma on the
     unmeasured entries, and the time-aware observation_fn equals the

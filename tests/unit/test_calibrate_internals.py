@@ -1185,3 +1185,21 @@ def test_masked_wmse_loss_and_residual_average_over_observed_entries():
     r = np.asarray(_build_residual("wmse", _OBS_GAP, sigma)(_PRED_GAP))
     assert r[2] == 0.0
     assert 0.5 * np.sum(r**2) == pytest.approx(loss)
+
+
+@pytest.mark.parametrize("loss", ["mse", "nll"])
+def test_masked_loss_and_residual_skip_missing_entries(loss):
+    """mse averages over the three observed entries and nll sums them; the
+    residual is zero at the missing entry and its half-sum-of-squares equals
+    the theta-dependent part of the loss."""
+    sigma = jnp.array([0.5, 1.0]) if loss == "nll" else None
+    value = float(_build_loss(loss, _OBS_GAP, sigma)(_PRED_GAP))
+    r = np.asarray(_build_residual(loss, _OBS_GAP, sigma)(_PRED_GAP))
+    assert r[2] == 0.0
+    if loss == "mse":
+        assert value == pytest.approx((0.5**2 + 0.0 + 1.0**2) / 3.0)
+        assert 0.5 * np.sum(r**2) == pytest.approx(value)
+    else:
+        log_norm = 2.0 * np.log(1.0) + np.log(0.5)  # the three observed entries
+        assert value == pytest.approx(log_norm + 0.5 * ((0.5 / 0.5) ** 2 + 0.0 + 1.0**2))
+        assert 0.5 * np.sum(r**2) == pytest.approx(value - log_norm)
