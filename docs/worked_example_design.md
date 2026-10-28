@@ -530,7 +530,11 @@ is the Laplace 95 % interval and the vertical line is the true value.
 ```
 
 The profile is close to a parabola, and the two intervals agree and contain the
-true value, so the Laplace uncertainty can be trusted here. A profile that is
+true value, so the Laplace uncertainty can be trusted here. The minimum is not
+at the true value because the fit sees one noisy data set. Its estimate,
+2.033×10⁻⁶, is 1.5 standard deviations from the truth, an ordinary miss. A
+different draw of the noise would move the minimum but leave the width of the
+profile almost unchanged. A profile that is
 flat on one side, or much wider than the Laplace interval, would show that the
 local approximation is not.
 
