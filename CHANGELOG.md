@@ -23,6 +23,13 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `OptimizerConfig(starts=[...])` runs `aquakin.calibrate` from an explicit list
+  of starts, such as a grid, and keeps the best fit. Each start is a full
+  parameter vector or a `{name: value}` dict over the free parameters. All
+  starts run through one compiled objective, so a grid of starts no longer
+  needs one `calibrate` call (and one compilation) per start.
+  `profile_likelihood` uses the list for its cold fits.
+
 - `LaplaceConfig(include_ic=True)` gives a joint Laplace posterior over the rate
   parameters and the initial pools fitted with `free_ic`, for both
   `aquakin.calibrate` and `Plant.calibrate`. The joint covariance and Hessian
@@ -78,6 +85,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `aquakin.identifiability(..., eig_keep=...)`.
 
 ### Fixed
+
+- A compiled-objective cache shared between `aquakin.calibrate` calls could
+  reuse the objective built for different observations, loss or `sigma`, and
+  return the first fit's optimum. The cache key now includes them (and the free
+  set, transforms and priors). Only `profile_likelihood` shares the cache, and
+  its fits all use the same data, so no released result was affected.
 
 - The Laplace standard deviations from `aquakin.calibrate` and
   `Plant.calibrate` (`params_named_std`, `posterior_cov`, `ic_named_std`) no

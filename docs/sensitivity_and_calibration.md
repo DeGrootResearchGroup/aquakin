@@ -122,6 +122,18 @@ result.params_named_std   # marginal standard deviations
 result.converged
 ```
 
+`OptimizerConfig(n_starts=...)` adds jittered restarts around one start. To run
+a fixed set of starts instead, such as a grid, pass them as `starts`, each a
+full parameter vector or a `{name: value}` dict over the free parameters (the
+others start from `initial_params`). Every start runs through one compiled
+objective and the best fit is kept:
+
+```python
+starts = [{"r1.k1": k1, "r2.k2": k2} for k1 in (0.01, 0.1, 1.0) for k2 in (0.1, 1.0)]
+result = aquakin.calibrate(reactor, C0, observations, t_obs, free_params,
+                           optimizer=aquakin.OptimizerConfig(starts=starts))
+```
+
 `observations` is shape `(n_t,)` for one species or `(n_t, n_observed)` for
 several; `t_obs` is in the model's native time unit unless you pass `time_unit=`.
 Pass **lists** of `C0`/`observations`/`t_obs` for a joint multi-batch fit, and

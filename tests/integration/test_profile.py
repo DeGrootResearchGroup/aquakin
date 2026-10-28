@@ -440,3 +440,29 @@ def test_profile_compiled_cache_matches_uncached(growth_setup):
     )
     assert n_after_first > 0
     assert len(shared) == n_after_first
+
+
+def test_profile_accepts_start_list_with_profiled_parameter(growth_setup):
+    """An explicit start list seeds the cold fits; a dict start that names the
+    profiled parameter has it dropped (it is pinned), instead of failing every
+    inner fit."""
+    net, reactor, C0, t, obs, sig = growth_setup
+    starts = [{"mu": 0.8, "Y": 0.4}, {"mu": 1.2, "Y": 0.6}]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)  # an inner-fit failure warns
+        pr = aquakin.profile_likelihood(
+            reactor,
+            C0,
+            obs,
+            t,
+            ["mu", "Y"],
+            grid=np.linspace(0.8, 1.2, 3),
+            profile_param="mu",
+            observed_species=["S", "X"],
+            loss="nll",
+            sigma=jnp.asarray(sig),
+            optimizer=OptimizerConfig(method="gauss_newton", starts=starts),
+            polish=False,
+        )
+    assert all(f is not None for f in pr.fits)
+    assert np.all(np.isfinite(pr.loss))

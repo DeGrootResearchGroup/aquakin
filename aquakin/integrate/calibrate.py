@@ -31,6 +31,7 @@ available two ways (``laplace_method``):
 
 from __future__ import annotations
 
+import hashlib
 import warnings
 from collections import namedtuple
 from dataclasses import dataclass, field, replace
@@ -86,6 +87,16 @@ class OptimizerConfig:
     n_starts : int
         Number of optimiser starts. ``1`` (default) is a single start from the
         initial parameters; ``>1`` adds jittered restarts and keeps the best.
+    starts : sequence, optional
+        An explicit list of optimiser starts, in physical units, in place of
+        the single start from ``initial_params``. Each entry is either a full
+        parameter vector (``(n_params,)``; only the free entries are read) or a
+        ``{name: value}`` dict over free parameters, overlaid on
+        ``initial_params`` (parameters a dict leaves out start from there).
+        Every start is run and the lowest-loss optimum is kept. All starts go
+        through the one compiled objective, so a grid of starts costs one
+        compilation, not one per start. Fitted initial pools start from ``C0``
+        for every start. Cannot be combined with ``n_starts > 1``.
     jitter : float
         Std dev of the Gaussian restart perturbation in unconstrained space
         (ignored when ``jitter_schedule`` is given).
@@ -106,6 +117,7 @@ class OptimizerConfig:
 
     method: str = "lbfgsb"
     n_starts: int = 1
+    starts: tuple | list | None = None
     jitter: float = 0.5
     jitter_schedule: tuple | None = None
     seed: int = 0
@@ -808,6 +820,10 @@ class _CalibrationProblem:
     # Optional observation function (C, params) -> y; replaces the species
     # columns ``obs_species_indices`` when set.
     observation_fn: object = None
+    # Fingerprint of what the per-dataset loss / residual closures bake in (the
+    # loss type, observations, sigma and observation times), so a shared
+    # ``_compiled_cache`` cannot reuse an objective built for other data.
+    data_key: tuple = ()
 
     def physical_from_theta(self, rate_thetas: jnp.ndarray) -> jnp.ndarray:
         """Free rate parameters in physical space from their unconstrained
@@ -832,9 +848,18 @@ class _CalibrationProblem:
         return (self.p0_full, self.C0_base, self.ic_center_full)
 
     def struct_key(self, gradient: str) -> tuple:
-        """Structural cache key: everything that changes the compiled program's
-        shape. A ``_compiled_cache`` shared across differently-shaped fits keys
-        on this so it rebuilds rather than mis-hitting."""
+        """Cache key for the compiled objective: everything the compiled program
+        bakes in as a constant. The per-call data threaded in as *arguments*
+        (``p0_full``, the initial states, the ic-prior centre; see :attr:`data`)
+        are left out, so a ``profile_likelihood`` sweep, which changes only
+        those, reuses one program. Everything else is in the key: the shapes,
+        the gradient path, the free set and transforms, the observed columns /
+        ``observation_fn``, the priors, the free-IC set, and a fingerprint of
+        the loss type, observations, ``sigma`` and observation times
+        (``data_key``). A ``_compiled_cache`` shared across fits on different
+        data therefore rebuilds instead of silently reusing the wrong
+        objective. The forward model (reactor) is not in the key: a cache must
+        not be shared across different reactors."""
         return (
             self.n_rate,
             self.m_ic,
@@ -843,7 +868,29 @@ class _CalibrationProblem:
             self.n_observed,
             tuple(int(ds[0].shape[0]) for ds in self.dataset_static),
             self.observation_fn,
+            tuple(self.free_params),
+            tuple(self.transforms),
+            _array_digest(self.free_indices, self.obs_species_indices, self.ic_species_idx),
+            _array_digest(self.prior_mean, self.prior_std, self.prior_mask)
+            if self.has_priors
+            else None,
+            self.ic_prior_log_std,
+            self.data_key,
         )
+
+
+def _array_digest(*arrays) -> str:
+    """A short content hash of some arrays (``None`` entries allowed), for the
+    compiled-objective cache key."""
+    h = hashlib.sha1()
+    for a in arrays:
+        if a is None:
+            h.update(b"None|")
+            continue
+        arr = np.ascontiguousarray(np.asarray(a))
+        h.update(f"{arr.dtype}{arr.shape}|".encode())
+        h.update(arr.tobytes())
+    return h.hexdigest()
 
 
 def _predict(problem: _CalibrationProblem, fm: _ReactorForwardModel, p, ic_thetas, C0s):
@@ -1155,9 +1202,65 @@ def _is_solve_failure(exc: BaseException) -> bool:
     return isinstance(exc, (RuntimeError, ValueError)) and "Callback error" in str(exc)
 
 
-def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bounds) -> _OptOut:
+def _resolve_starts(problem: _CalibrationProblem, starts) -> list:
+    """The explicit ``OptimizerConfig.starts`` as unconstrained rate-theta
+    vectors. Each entry is a full physical parameter vector (only the free
+    entries are read) or a ``{name: value}`` dict over free parameters overlaid
+    on ``p0_full``."""
+    if isinstance(starts, (np.ndarray, jnp.ndarray)) and np.ndim(starts) == 1:
+        raise ValueError(
+            "optimizer.starts must be a list of starts (vectors or dicts), not a "
+            "single vector; pass initial_params for one start."
+        )
+    starts = list(starts)
+    if not starts:
+        raise ValueError("optimizer.starts must contain at least one start.")
+    model = problem.model
+    n_params = int(problem.p0_full.shape[0])
+    out = []
+    for s_i, start in enumerate(starts):
+        if isinstance(start, dict):
+            p = problem.p0_full
+            for name, value in start.items():
+                if name not in problem.free_params:
+                    raise ValueError(
+                        f"optimizer.starts[{s_i}]: '{name}' is not a free parameter; "
+                        f"a start sets free parameters only ({problem.free_params})."
+                    )
+                p = p.at[model.param_index[name]].set(float(value))
+        else:
+            p = jnp.asarray(start, dtype=float)
+            if p.shape != (n_params,):
+                raise ValueError(
+                    f"optimizer.starts[{s_i}] has shape {p.shape}; a vector start must "
+                    f"be a full parameter vector of shape ({n_params},), or pass a "
+                    "{name: value} dict."
+                )
+        for name, t in zip(problem.free_params, problem.transforms):
+            v = float(p[model.param_index[name]])
+            if (t == "positive_log" and v <= 0.0) or (t == "logit" and not 0.0 < v < 1.0):
+                raise ValueError(
+                    f"optimizer.starts[{s_i}]: '{name}' = {v} is outside the domain "
+                    f"of its transform {t!r}."
+                )
+        out.append(
+            jnp.stack(
+                [
+                    _to_unconstrained(p[model.param_index[name]], t)
+                    for name, t in zip(problem.free_params, problem.transforms)
+                ]
+            )
+        )
+    return out
+
+
+def _run_multistart(
+    cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bounds, starts=None
+) -> _OptOut:
     """Run the optimiser from the start point, then from ``n_starts - 1``
-    deterministic jittered restarts, keeping the lowest finite loss.
+    deterministic jittered restarts, keeping the lowest finite loss. With an
+    explicit ``starts`` list (full unconstrained theta vectors), run from each
+    of those instead (``theta0`` is then unused).
 
     A start whose forward solve fails part-way (see :func:`_is_solve_failure`)
     is skipped with a ``RuntimeWarning``; if every start fails, a
@@ -1210,8 +1313,23 @@ def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bound
             failures.append((s, exc))
             return None
 
-    result = _try_from(0, theta0)
-    if cfg.n_starts > 1:
+    def _better(cand, best):
+        return best is None or (np.isfinite(cand.fun) and cand.fun < best.fun)
+
+    if starts is not None:
+        result = None
+        for s, x_start in enumerate(starts):
+            x_np = np.asarray(x_start, dtype=float)
+            if bounds is not None:
+                x_np = np.clip(x_np, lb, ub)
+            cand = _try_from(s, x_np)
+            if cand is not None and _better(cand, result):
+                result = cand
+        n_run = len(starts)
+    else:
+        result = _try_from(0, theta0)
+        n_run = cfg.n_starts
+    if starts is None and cfg.n_starts > 1:
         theta0_np = np.asarray(theta0)
         # Default: a single Gaussian stream of scale ``jitter`` seeded once.
         # ``jitter_schedule`` (a tuple of scales): start s uses scale
@@ -1229,10 +1347,10 @@ def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bound
             cand = _try_from(s, perturbed)
             if cand is None:
                 continue
-            if result is None or (np.isfinite(cand.fun) and cand.fun < result.fun):
+            if _better(cand, result):
                 result = cand
     if result is None:
-        what = "the optimiser run" if cfg.n_starts == 1 else f"all {cfg.n_starts} optimiser starts"
+        what = "the optimiser run" if n_run == 1 else f"all {n_run} optimiser starts"
         raise RuntimeError(
             f"Calibration failed: the forward solve failed in {what}, at a parameter "
             f"point the optimiser reached. {_SOLVE_FAILURE_HINT} The first solve "
@@ -1240,9 +1358,10 @@ def _run_multistart(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bound
         ) from failures[0][1]
     if failures:
         idx = ", ".join(str(s) for s, _exc in failures)
+        which = "indexing optimizer.starts" if starts is not None else "0 is the unperturbed start"
         warnings.warn(
-            f"calibrate: the forward solve failed in {len(failures)} of {cfg.n_starts} "
-            f"optimiser starts (start index {idx}; 0 is the unperturbed start); "
+            f"calibrate: the forward solve failed in {len(failures)} of {n_run} "
+            f"optimiser starts (start index {idx}; {which}); "
             f"they were skipped and the best remaining start was kept. {_SOLVE_FAILURE_HINT}",
             RuntimeWarning,
             stacklevel=3,
@@ -1504,6 +1623,7 @@ def _resolve_problem(
 
     # Validate each dataset and build its (C0, t_eval, t_span, loss) tuple.
     datasets = []
+    digest_parts = []
     for ds, (C0_i, obs_i, tobs_i, sig_i) in enumerate(
         zip(C0_list, obs_list, tobs_list, sigma_list)
     ):
@@ -1533,6 +1653,7 @@ def _resolve_problem(
                 f"dataset {ds}: observations has {obs_i.shape[1]} columns but {n_observed} {what}."
             )
         sig_arr = jnp.asarray(sig_i) if sig_i is not None else None
+        digest_parts += [obs_i, sig_arr, tobs_i]
         datasets.append(
             (
                 C0_i,
@@ -1610,6 +1731,7 @@ def _resolve_problem(
         ic_prior_log_std=ic_prior_log_std,
         ic_bounds=ic_bounds,
         observation_fn=observation_fn,
+        data_key=(loss, _array_digest(*digest_parts)),
     )
 
 
@@ -1712,8 +1834,11 @@ def calibrate(
     optimizer : OptimizerConfig, optional
         Optimiser backend and multistart settings; see :class:`OptimizerConfig`
         for the fields (``method`` {"lbfgsb", "gauss_newton"}, ``n_starts``,
-        ``jitter`` / ``jitter_schedule``, ``seed``, ``max_iter``, ``tol``,
-        ``param_halfwidth``). ``"gauss_newton"`` minimises the residual *vector*
+        ``starts``, ``jitter`` / ``jitter_schedule``, ``seed``, ``max_iter``,
+        ``tol``, ``param_halfwidth``). ``starts=[...]`` runs an explicit list of
+        starts (a grid, say) through one compiled objective and keeps the best;
+        the ``param_halfwidth`` box, if any, stays centred on
+        ``initial_params`` for every start. ``"gauss_newton"`` minimises the residual *vector*
         with SciPy ``least_squares`` (its Jacobian by AD, direction from
         ``diff.mode``) and is markedly more robust on the multimodal landscapes
         of stiff reaction-model fits; ``n_starts > 1`` is a deterministic,
@@ -1782,6 +1907,11 @@ def calibrate(
         raise ValueError(f"loss must be one of {_VALID_LOSSES}; got {loss!r}.")
     if optimizer.n_starts < 1:
         raise ValueError(f"optimizer.n_starts must be >= 1; got {optimizer.n_starts}.")
+    if optimizer.starts is not None and optimizer.n_starts > 1:
+        raise ValueError(
+            "Pass optimizer.starts (an explicit start list) or optimizer.n_starts > 1 "
+            "(jittered restarts), not both."
+        )
     if optimizer.method not in _VALID_OPTIMIZERS:
         raise ValueError(
             f"optimizer.method must be one of {_VALID_OPTIMIZERS}; got {optimizer.method!r}."
@@ -1860,11 +1990,18 @@ def calibrate(
     rate_theta0 = problem.rate_theta0()
     theta0 = jnp.concatenate([rate_theta0, problem.ic_center_full]) if problem.m_ic else rate_theta0
     opt_bounds = _optimizer_bounds(problem, rate_theta0)
+    starts = None
+    if optimizer.starts is not None:
+        starts = [
+            jnp.concatenate([th, problem.ic_center_full]) if problem.m_ic else th
+            for th in _resolve_starts(problem, optimizer.starts)
+        ]
+        theta0 = starts[0]
 
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)
 
-    result = _run_multistart(cfg, bundle, theta0, opt_bounds)
+    result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts)
 
     theta_opt = jnp.asarray(result.x)
     rate_theta_opt = theta_opt[: problem.n_rate]

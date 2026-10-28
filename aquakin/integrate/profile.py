@@ -204,8 +204,10 @@ def profile_likelihood(
         :class:`~aquakin.FreeICConfig`, ``optimizer`` an
         :class:`~aquakin.OptimizerConfig`; the profiled parameter/species is
         removed from ``free_ic`` for the inner fits). ``optimizer.n_starts``
-        applies to the cold anchor (and to every point when
-        ``warm_start=False``); warm-started points use a single start. The inner
+        (or an explicit ``optimizer.starts`` list, with the profiled parameter
+        dropped from dict starts) applies to the cold anchor (and to every
+        point when ``warm_start=False``); warm-started points use a single
+        start. The inner
         fits force ``laplace=False`` (the profile, not the Laplace posterior, is
         the identifiability estimate here).
 
@@ -280,6 +282,16 @@ def profile_likelihood(
         _compiled_cache={},
     )
 
+    # An explicit start list seeds the cold fits. The profiled parameter is
+    # pinned, so drop it from dict starts (a vector start's entry for it is not
+    # read: only the free entries are).
+    cold_starts = None
+    if optimizer.starts is not None:
+        cold_starts = [
+            {k: v for k, v in st.items() if k != profile_param} if isinstance(st, dict) else st
+            for st in optimizer.starts
+        ]
+
     def _start_state(warm):
         """initial_params and C0 to seed an inner fit (warm or cold)."""
         if warm is not None:
@@ -296,9 +308,11 @@ def profile_likelihood(
             C0_pt = base_C0
         else:
             C0_pt = base_C0.at[s_idx].set(value)
-        # Cold (anchor) points use the full multistart; warm-continued points
-        # start from the neighbour's optimum, so one start suffices.
+        # Cold (anchor) points use the full multistart (or the explicit start
+        # list); warm-continued points start from the neighbour's optimum, so
+        # one start suffices.
         n = optimizer.n_starts if warm is None else 1
+        starts = cold_starts if warm is None else None
         try:
             return calibrate(
                 reactor,
@@ -307,7 +321,7 @@ def profile_likelihood(
                 t_obs,
                 inner_free,
                 initial_params=init_p,
-                optimizer=replace(optimizer, n_starts=n),
+                optimizer=replace(optimizer, n_starts=n, starts=starts),
                 **inner_kw,
             )
         except Exception as exc:
