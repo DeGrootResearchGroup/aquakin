@@ -158,6 +158,21 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `RuntimeError` that says what happened and how to fix it (bound the rates with
   `OptimizerConfig(param_halfwidth=...)`, use a better starting guess, or tighten
   the `free_ic` bounds). This replaces the raw XLA callback traceback.
+- `CalibrationResult.at_bound` no longer flags a small parameter that sits well
+  inside its bounds. The test for "on the bound" used an absolute tolerance of
+  about `1e-5`, so an untransformed parameter of order `1e-5` or smaller (for
+  example `k = 5e-6` with bounds `(1e-6, 1)`) was reported on its lower bound,
+  with a `nan` Laplace standard deviation and a spurious warning. The tolerance
+  now scales with the parameter's own size.
+- A warm-started `profile_likelihood` with `free_ic` now keeps the measured
+  `C0` as the centre of the free-pool prior (`FreeICConfig(prior_log_std=...)`)
+  at every grid point. Each warm-started fit used to re-centre the prior on its
+  neighbour's fitted pools, which made the profile loss too low away from the
+  anchor point and disagree with `warm_start=False`. The neighbour's fitted
+  pools are now used only as the optimiser's starting point.
+- `aquakin.fisher_information` (and `rank_experiments`, `optimize_experiment`
+  and `identifiability` built on it) no longer raises a `ValueError` when only
+  initial pools are estimated, that is `free_params=[]` with `free_ic`.
 
 ## [0.1.0] - 2026-07-08
 

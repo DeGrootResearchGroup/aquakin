@@ -413,7 +413,12 @@ class _FisherSetup:
         trs = self.rate_transforms
 
         def _residuals(theta):
-            physical = jnp.stack([from_unconstrained(theta[i], trs[i]) for i in range(d)])
+            # No rate parameters (only initial pools estimated): an empty block.
+            physical = (
+                jnp.stack([from_unconstrained(theta[i], trs[i]) for i in range(d)])
+                if d
+                else theta[:0]
+            )
             pp = p.at[self.free_idx].set(physical)
             parts = []
             for e, (rctr, C0, tobs) in enumerate(zip(self.reactors, C0_list, tobs_list)):

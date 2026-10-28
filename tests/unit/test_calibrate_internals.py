@@ -1033,3 +1033,27 @@ def test_resolve_problem_rejects_duplicate_free_ic(base):
     m, C0, obs, t_obs, free = base
     with pytest.raises(ValueError, match="distinct"):
         _resolve(m, C0, obs, t_obs, free, free_ic=["A", "A"])
+
+
+@pytest.mark.parametrize(
+    "theta, lb, ub, expected",
+    [
+        # Small values well inside the box are interior, not "near" the bound.
+        (5e-6, 1e-6, 1.0, ""),
+        (1.1e-9, 1e-9, 1.0, ""),
+        # Exactly on, or within round-off of, a small bound.
+        (1e-6, 1e-6, 1.0, "lower"),
+        (1.0000000000014743e-09, 1e-9, 1.0, "lower"),
+        (0.0009999999999999864, 1e-6, 1e-3, "upper"),
+        # A bound at zero: the trust-region solver ends a hair inside it.
+        (7.6e-24, 0.0, 1.0, "lower"),
+        (7.6e-24, 0.0, np.inf, "lower"),
+        (1e-8, 0.0, 1.0, ""),
+        # Log-space coordinates of order one.
+        (np.log(10.0), np.log(1e-3), np.log(10.0), "upper"),
+        (np.log(9.9), np.log(1e-3), np.log(10.0), ""),
+    ],
+)
+def test_at_bound_tolerance_is_scale_aware(theta, lb, ub, expected):
+    opt_bounds = (None, np.array([lb]), np.array([ub]), None, True)
+    assert _at_bound_sides(np.array([theta]), opt_bounds)[0] == expected

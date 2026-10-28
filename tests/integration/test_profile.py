@@ -525,3 +525,28 @@ def test_profile_vector_start_list_is_reproducible(growth_setup):
     assert np.all(np.isfinite(a.loss))
     np.testing.assert_array_equal(a.loss, b.loss)
     np.testing.assert_allclose(a.loss, d.loss, rtol=1e-8)
+
+
+def test_profile_warm_start_keeps_free_ic_prior_centre(simple_model):
+    """A warm-started point starts its free pools from the neighbour's fit but
+    keeps the measured C0 as the prior centre, so its loss matches an
+    independent (cold) fit at the same grid value."""
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
+    t = jnp.linspace(0.5, 10.0, 20)
+    params = simple_model.default_parameters().at[0].set(0.25)
+    obs = reactor.solve(jnp.asarray([1.3, 0.0]), params=params, t_span=(0.0, 10.0), t_eval=t)
+    kw = dict(
+        grid=np.array([0.001, 0.002, 0.004]),
+        profile_ic="B",
+        observed_species=["B"],
+        loss="nll",
+        sigma=0.01,
+        # A tight prior on A0, centred on the measured (wrong) value 1.0.
+        free_ic=aquakin.FreeICConfig(["A"], prior_log_std=0.05),
+        optimizer=OptimizerConfig(n_starts=1),
+        polish=False,
+    )
+    args = (reactor, jnp.asarray([1.0, 0.0]), obs.C_named("B"), t, ["A_to_B.k"])
+    warm = aquakin.profile_likelihood(*args, warm_start=True, anchor=0.004, **kw)
+    cold = aquakin.profile_likelihood(*args, warm_start=False, **kw)
+    np.testing.assert_allclose(warm.loss, cold.loss, rtol=1e-6)

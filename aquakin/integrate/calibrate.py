@@ -1598,11 +1598,31 @@ def _ic_coordinate_names(species, n_datasets: int, fixed_total: bool) -> list[st
     return [f"ic[{k}].{c}" for k in range(n_datasets) for c in per]
 
 
-# A fitted coordinate within this distance of a finite optimiser bound (in
-# unconstrained space, scaled by ``max(1, |bound|)``) counts as on the bound.
-# L-BFGS-B ends exactly on an active bound; the trust-region least-squares
-# solver stays strictly inside and typically ends within ~1e-8 of it.
-_AT_BOUND_TOL = 1e-5
+def _ic_theta_from_pools(problem: _CalibrationProblem, C0s) -> jnp.ndarray:
+    """Unconstrained free-IC coordinates of the pools in ``C0s`` (one initial
+    state per dataset), laid out as ``problem.ic_center_full`` is."""
+    idx = np.asarray(problem.ic_species_idx)
+    blocks = []
+    for C0_i in C0s:
+        pools = np.asarray(C0_i, dtype=float)[idx]
+        if problem.ic_fixed_total:
+            blocks.append(np.log(pools[1:]) - np.log(pools[0]))
+        else:
+            lo, hi = problem.ic_bounds
+            blocks.append(np.log(np.clip(pools, lo, hi)))
+    return jnp.asarray(np.concatenate(blocks))
+
+
+# A fitted coordinate counts as on a finite optimiser bound when its distance to
+# it (in unconstrained space) is at most ``_AT_BOUND_RTOL * max(|bound|, |theta|)``
+# plus a tiny absolute floor, ``_AT_BOUND_ATOL`` times the box width (or times 1
+# when the other side is open). The tolerance follows the coordinate's own
+# magnitude, so a small untransformed parameter well inside its box (k = 5e-6
+# in (1e-6, 1), say) is not mistaken for one on the bound. L-BFGS-B ends exactly
+# on an active bound; the trust-region least-squares solver stays strictly
+# inside, within round-off of the bound, or within the floor of a bound at zero.
+_AT_BOUND_RTOL = 1e-5
+_AT_BOUND_ATOL = 1e-12
 
 
 def _at_bound_sides(theta_opt, opt_bounds) -> np.ndarray:
@@ -1615,9 +1635,15 @@ def _at_bound_sides(theta_opt, opt_bounds) -> np.ndarray:
         return sides
     lb = np.asarray(lb, dtype=float)
     ub = np.asarray(ub, dtype=float)
+    both = np.isfinite(lb) & np.isfinite(ub)
     with np.errstate(invalid="ignore"):
-        on_lo = np.isfinite(lb) & (np.abs(th - lb) <= _AT_BOUND_TOL * np.maximum(1.0, np.abs(lb)))
-        on_hi = np.isfinite(ub) & (np.abs(ub - th) <= _AT_BOUND_TOL * np.maximum(1.0, np.abs(ub)))
+        atol = _AT_BOUND_ATOL * np.where(both, ub - lb, 1.0)
+        on_lo = np.isfinite(lb) & (
+            np.abs(th - lb) <= _AT_BOUND_RTOL * np.maximum(np.abs(lb), np.abs(th)) + atol
+        )
+        on_hi = np.isfinite(ub) & (
+            np.abs(ub - th) <= _AT_BOUND_RTOL * np.maximum(np.abs(ub), np.abs(th)) + atol
+        )
     sides[on_lo] = "lower"
     sides[on_hi & ~on_lo] = "upper"
     return sides
@@ -2111,6 +2137,7 @@ def calibrate(
     laplace: bool | LaplaceConfig = True,
     free_ic: FreeICConfig | None = None,
     _compiled_cache: dict | None = None,
+    _ic_start: list | None = None,
 ) -> CalibrationResult:
     """MAP fit with optional Laplace posterior approximation.
 
@@ -2352,14 +2379,18 @@ def calibrate(
 
     # --- Run the optimiser in unconstrained space ----------------------
     rate_theta0 = problem.rate_theta0()
-    theta0 = jnp.concatenate([rate_theta0, problem.ic_center_full]) if problem.m_ic else rate_theta0
+    # The pools start at C0 (the prior centre) unless a separate start is given.
+    ic_theta0 = problem.ic_center_full
+    if _ic_start is not None and problem.m_ic:
+        ic_theta0 = _ic_theta_from_pools(problem, _ic_start)
+    theta0 = jnp.concatenate([rate_theta0, ic_theta0]) if problem.m_ic else rate_theta0
     opt_bounds = _optimizer_bounds(problem, rate_theta0)
     starts = None
     if optimizer.starts is not None:
         starts = [
             _clip_start(
                 problem,
-                jnp.concatenate([th, problem.ic_center_full]) if problem.m_ic else th,
+                jnp.concatenate([th, ic_theta0]) if problem.m_ic else th,
                 opt_bounds,
             )
             for th in _resolve_starts(problem, optimizer.starts)
