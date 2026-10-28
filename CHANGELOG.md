@@ -28,6 +28,16 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   units, with `None` for an open side. An entry replaces the parameter's
   model-declared bound. `param_halfwidth` still works and is now an extra box
   around the start, intersected with the absolute bounds.
+- `CalibrationResult.at_bound` lists the fitted parameters (and initial pools,
+  as `"ic[k].<species>"`) that ended on an optimiser bound, as `"lower"` or
+  `"upper"`, and `calibrate` warns about them. Their Laplace standard deviation
+  is reported as `nan` rather than a finite value from the curvature at a
+  constrained point, they have zero variance in `posterior_cov` (posterior
+  draws keep them on the bound), and the other parameters' covariance is
+  conditional on them, so their standard deviations can be smaller than
+  before, when the bound parameter was treated as free to move either way. `aquakin.identifiability(result)` carries the same flag
+  (`IdentifiabilityResult.at_bound`, also accepted as `at_bound=` for a bare
+  matrix) and the same `nan` standard deviations.
 
 - `LaplaceConfig(include_ic=True)` gives a joint Laplace posterior over the rate
   parameters and the initial pools fitted with `free_ic`, for both

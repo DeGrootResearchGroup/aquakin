@@ -631,6 +631,169 @@ def test_start_outside_bounds_is_moved_inside_with_warning(bounded_setup):
         assert r.params_named["A_to_B.k"] == pytest.approx(0.2, rel=1e-6)
 
 
+# ---------- parameters that end on an active bound ----------
+
+_TWO_STEP_BOUNDED_YAML = """
+model:
+  name: two_step_bounded
+  version: "1.0"
+  description: "A -> B -> C; k1 declared <= 0.2, below the rate in the data."
+  references: []
+species:
+  - name: A
+    units: mol/L
+    default_concentration: 1.0
+  - name: B
+    units: mol/L
+    default_concentration: 0.0
+  - name: C
+    units: mol/L
+    default_concentration: 0.0
+reactions:
+  - name: r1
+    rate: "k1 * [A]"
+    parameters:
+      k1:
+        value: 0.1
+        bounds: [1.0e-3, 0.2]
+        transform: positive_log
+    stoichiometry:
+      A: -1
+      B: +1
+  - name: r2
+    rate: "k2 * [B]"
+    parameters:
+      k2:
+        value: 0.1
+        bounds: [1.0e-3, 10.0]
+        transform: positive_log
+    stoichiometry:
+      B: -1
+      C: +1
+"""
+
+
+@pytest.mark.slow  # two optimisers x (fit + Laplace + identifiability) compiles
+def test_at_bound_is_flagged_and_std_is_nan(bounded_setup):
+    """A fit pinned to its declared upper bound reports the flag, warns, and
+    gives no finite Laplace std (which would be the curvature of a constrained
+    point); posterior draws keep the parameter on the bound."""
+    reactor, C0, common = bounded_setup
+    common = {**common, "loss": "nll", "sigma": 0.01}
+    for method in ("lbfgsb", "gauss_newton"):
+        with pytest.warns(RuntimeWarning, match="ended on an optimiser bound"):
+            r = aquakin.calibrate(
+                reactor,
+                C0,
+                optimizer=OptimizerConfig(method=method),
+                **{**common, "laplace": LaplaceConfig(method="gauss_newton")},
+            )
+        assert r.at_bound == {"A_to_B.k": "upper"}
+        assert np.isnan(r.params_named_std["A_to_B.k"])
+        assert np.isnan(np.asarray(r.posterior_std_unconstrained)).all()
+        assert np.all(np.asarray(r.posterior_cov) == 0.0)
+        # The curvature itself is still reported.
+        assert float(np.asarray(r.hessian_unconstrained)[0, 0]) > 0.0
+        rep = aquakin.identifiability(r)
+        assert rep.at_bound == {"A_to_B.k": "upper"}
+        assert np.isnan(rep.std["A_to_B.k"])
+
+
+def test_at_bound_without_laplace_still_flags(bounded_setup):
+    reactor, C0, common = bounded_setup
+    with pytest.warns(RuntimeWarning, match="not valid for them"):
+        r = aquakin.calibrate(reactor, C0, **common)
+    assert r.at_bound == {"A_to_B.k": "upper"}
+    assert r.params_named_std is None
+
+
+def test_interior_fit_has_no_at_bound(setup):
+    import warnings as _w
+
+    reactor, C0, t_obs, obs_clean, _ = setup
+    with _w.catch_warnings():
+        _w.simplefilter("error", RuntimeWarning)
+        r = aquakin.calibrate(
+            reactor,
+            C0,
+            observations=obs_clean,
+            t_obs=t_obs,
+            free_params=["A_to_B.k"],
+            observed_species=["B"],
+            loss="nll",
+            sigma=0.01,
+        )
+    assert r.at_bound == {}
+    assert np.isfinite(r.params_named_std["A_to_B.k"])
+
+
+@pytest.mark.slow  # its own two-parameter model: a fresh fit + Laplace compile
+def test_at_bound_other_parameters_are_conditional(tmp_path):
+    """With k1 on its bound and k2 interior, k2's std is the conditional one,
+    1/sqrt(H_22), not the full-inverse marginal that treats k1 as free; draws
+    hold k1 on the bound. identifiability(result) reports the same std."""
+    path = tmp_path / "two_step.yaml"
+    path.write_text(_TWO_STEP_BOUNDED_YAML)
+    model = aquakin.load_model_from_file(path)
+    reactor = aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1))
+    C0 = jnp.asarray([1.0, 0.0, 0.0])
+    t_obs = jnp.linspace(0.5, 15.0, 25)
+    truth = model.default_parameters().at[model.param_index["r1.k1"]].set(0.3)
+    truth = truth.at[model.param_index["r2.k2"]].set(0.15)
+    sol = reactor.solve(C0, params=truth, t_span=(0.0, 15.0), t_eval=t_obs)
+    obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
+    with pytest.warns(RuntimeWarning, match="ended on an optimiser bound"):
+        r = aquakin.calibrate(
+            reactor,
+            C0,
+            obs,
+            t_obs,
+            ["r1.k1", "r2.k2"],
+            observed_species=["A", "B"],
+            loss="nll",
+            sigma=0.01,
+            optimizer=OptimizerConfig(method="gauss_newton"),
+            laplace=LaplaceConfig(method="gauss_newton"),
+        )
+    assert r.at_bound == {"r1.k1": "upper"}
+    assert r.params_named["r1.k1"] == pytest.approx(0.2, rel=1e-6)
+    assert np.isnan(r.params_named_std["r1.k1"])
+    H = np.asarray(r.hessian_unconstrained)
+    ridge = LaplaceConfig().ridge
+    sd_u = 1.0 / np.sqrt(H[1, 1] + ridge)
+    assert float(r.posterior_std_unconstrained[1]) == pytest.approx(sd_u, rel=1e-9)
+    assert r.params_named_std["r2.k2"] == pytest.approx(r.params_named["r2.k2"] * sd_u, rel=1e-9)
+    draws = r.posterior_draws(model, n_draw=20)
+    assert np.allclose(draws[:, model.param_index["r1.k1"]], r.params_named["r1.k1"])
+    assert np.std(draws[:, model.param_index["r2.k2"]]) > 0.0
+    rep = aquakin.identifiability(r)
+    assert np.isnan(rep.std["r1.k1"])
+    assert rep.std["r2.k2"] == pytest.approx(r.params_named["r2.k2"] / np.sqrt(H[1, 1]), rel=1e-5)
+
+
+@pytest.mark.slow  # its own free-IC joint Laplace compile
+def test_free_ic_pool_on_its_bound_is_flagged(setup):
+    """A fitted initial pool pinned by its FreeICConfig bounds is flagged as
+    "ic[0].<species>", and its joint std is nan."""
+    reactor, C0, t_obs, obs_clean, _ = setup  # data from A0 = 1.0
+    with pytest.warns(RuntimeWarning, match="ended on an optimiser bound"):
+        r = aquakin.calibrate(
+            reactor,
+            C0.at[0].set(0.5),
+            observations=obs_clean,
+            t_obs=t_obs,
+            free_params=["A_to_B.k"],
+            observed_species=["B"],
+            loss="nll",
+            sigma=0.01,
+            free_ic=FreeICConfig(["A"], bounds=(0.1, 0.6)),
+            laplace=LaplaceConfig(method="gauss_newton", include_ic=True),
+        )
+    assert r.at_bound == {"ic[0].A": "upper"}
+    assert np.isnan(r.ic_named_std[0]["A"])
+    assert np.isfinite(r.params_named_std["A_to_B.k"])
+
+
 def test_jitter_schedule_reproducible(setup):
     """Cyclic jitter_schedule with a fixed seed is reproducible."""
     reactor, C0, t_obs, obs_clean, _ = setup
