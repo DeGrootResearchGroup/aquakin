@@ -226,6 +226,16 @@ def profile_likelihood(
         raise ValueError("grid must be a non-empty 1-D array.")
     if delta <= 0:
         raise ValueError(f"delta must be > 0; got {delta}.")
+    # Checked here, not left to the inner fits: an invalid start list would
+    # fail every grid point and come back as a profile of gaps.
+    if optimizer.starts is not None:
+        if optimizer.n_starts > 1:
+            raise ValueError(
+                "Pass optimizer.starts (an explicit start list) or optimizer.n_starts > 1 "
+                "(jittered restarts), not both."
+            )
+        if len(optimizer.starts) == 0:
+            raise ValueError("optimizer.starts must contain at least one start.")
 
     model = reactor.model
     C0 = jnp.asarray(C0)

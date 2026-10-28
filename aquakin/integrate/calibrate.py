@@ -96,7 +96,9 @@ class OptimizerConfig:
         Every start is run and the lowest-loss optimum is kept. All starts go
         through the one compiled objective, so a grid of starts costs one
         compilation, not one per start. Fitted initial pools start from ``C0``
-        for every start. Cannot be combined with ``n_starts > 1``.
+        for every start. A start outside ``bounds`` is moved to the nearest
+        bound with a ``RuntimeWarning``, as ``initial_params`` is. Cannot be
+        combined with ``n_starts > 1``.
     jitter : float
         Std dev of the Gaussian restart perturbation in unconstrained space
         (ignored when ``jitter_schedule`` is given).

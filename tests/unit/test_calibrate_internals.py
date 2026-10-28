@@ -182,6 +182,114 @@ def test_problem_struct_key_is_shape_sensitive(base):
     assert prob2.struct_key("jax_adjoint") != k
 
 
+def _key_variants(m, C0, obs, t_obs, free):
+    """Problems that differ from the base in one thing the compiled objective
+    bakes in, by name. Each must key differently from the base and from every
+    other variant."""
+    name = free[0]
+    sp = [m.species[1]]
+    obs1 = obs[:, 1:]
+    nll = dict(loss="nll", sigma=0.1)
+    return {
+        "base": _resolve(m, C0, obs1, t_obs, free, observed_species=sp),
+        "observations": _resolve(m, C0, obs1 + 0.5, t_obs, free, observed_species=sp),
+        "one observation": _resolve(
+            m, C0, obs1.at[1, 0].add(1e-9), t_obs, free, observed_species=sp
+        ),
+        "t_obs values": _resolve(m, C0, obs1, t_obs + 0.25, free, observed_species=sp),
+        "sigma": _resolve(m, C0, obs1, t_obs, free, observed_species=sp, **nll),
+        # Same sigma, different loss type.
+        "loss": _resolve(m, C0, obs1, t_obs, free, observed_species=sp, loss="wmse", sigma=0.1),
+        "sigma value": _resolve(
+            m, C0, obs1, t_obs, free, observed_species=sp, loss="nll", sigma=0.2
+        ),
+        "sigma per point": _resolve(
+            m,
+            C0,
+            obs1,
+            t_obs,
+            free,
+            observed_species=sp,
+            loss="nll",
+            sigma=jnp.array([[0.1], [0.2], [0.1]]),
+        ),
+        "transform": _resolve(
+            m, C0, obs1, t_obs, free, observed_species=sp, transforms={name: "positive_log"}
+        ),
+        "observed species": _resolve(m, C0, obs1, t_obs, free, observed_species=[m.species[0]]),
+        "observation_fn": _resolve(m, C0, obs1, t_obs, free, observation_fn=lambda C, p: C[1]),
+        "prior": _resolve(
+            m,
+            C0,
+            obs1,
+            t_obs,
+            free,
+            observed_species=sp,
+            priors={name: (0.1, 0.05)},
+        ),
+        "prior std": _resolve(
+            m,
+            C0,
+            obs1,
+            t_obs,
+            free,
+            observed_species=sp,
+            priors={name: (0.1, 0.06)},
+        ),
+        "free initial pool": _resolve(
+            m, C0, obs1, t_obs, free, observed_species=sp, free_ic=[m.species[0]]
+        ),
+    }
+
+
+def test_struct_key_changes_with_everything_the_objective_bakes_in(base):
+    """Every variant keys differently from the base and from every other
+    variant, so a shared compiled-objective cache cannot hand one of them a
+    program compiled for another."""
+    variants = _key_variants(*base)
+    keys = {label: prob.struct_key("jax_adjoint") for label, prob in variants.items()}
+    for label, k in keys.items():
+        hash(k)  # usable as a dict key
+        if label != "base":
+            assert k != keys["base"], label
+    assert len(set(keys.values())) == len(keys)
+
+
+def test_struct_key_equal_for_equal_inputs(base):
+    """Equal content keys equally, even through fresh array objects and other
+    container types, so a repeat fit reuses the compiled program."""
+    m, C0, obs, t_obs, free = base
+    a = _resolve(m, C0, obs, t_obs, free, loss="nll", sigma=0.1)
+    b = _resolve(
+        m,
+        jnp.array(np.asarray(C0)),
+        np.array(obs).copy(),
+        list(np.asarray(t_obs)),
+        list(free),
+        loss="nll",
+        sigma=jnp.asarray(0.1),
+    )
+    assert a.struct_key("jax_adjoint") == b.struct_key("jax_adjoint")
+
+
+def test_struct_key_ignores_runtime_arguments(base):
+    """The initial parameters, the initial state and the rate bounds are not
+    baked into the compiled program (the first two are runtime arguments, the
+    bounds go only to SciPy), so changing them keeps the key: a
+    profile_likelihood sweep reuses one program."""
+    m, C0, obs, t_obs, free = base
+    k = _resolve(m, C0, obs, t_obs, free).struct_key("jax_adjoint")
+    moved = [
+        _resolve(m, C0, obs, t_obs, free, initial_params=m.default_parameters().at[0].set(3.0)),
+        _resolve(m, C0.at[0].set(0.4), obs, t_obs, free),
+        _resolve(m, C0, obs, t_obs, free, bounds={free[0]: (0.05, 0.5)}),
+        _resolve(m, C0, obs, t_obs, free, use_model_bounds=False),
+        _resolve(m, C0, obs, t_obs, free, param_halfwidth=1.0),
+    ]
+    for prob in moved:
+        assert prob.struct_key("jax_adjoint") == k
+
+
 # ---------- _optimizer_bounds ----------
 
 
