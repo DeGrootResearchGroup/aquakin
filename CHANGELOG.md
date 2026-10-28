@@ -158,6 +158,28 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `RuntimeError` that says what happened and how to fix it (bound the rates with
   `OptimizerConfig(param_halfwidth=...)`, use a better starting guess, or tighten
   the `free_ic` bounds). This replaces the raw XLA callback traceback.
+- `BatchReactor.solve(..., time_unit=..., events=...)` now fires time events at
+  the right time. `Event.at_times` was read in the model's native unit while
+  `t_span` was converted, so with `time_unit="min"` on a model in seconds an
+  event meant for 1 minute fired at 1 second. Event times, the `t` passed to
+  `cond_fn` and `apply`, and the `events_log` times are now all in the solve's
+  `time_unit`. Your `Event` objects are no longer modified by a solve.
+- An evented solve with `t_eval=None` that is stopped by a terminal event now
+  reports the time it stopped, not `t_span[1]`.
+- A time event at exactly the start of the solve is now applied to the initial
+  state and logged; it used to be dropped silently. An event at exactly the end
+  of the solve now reports its pre-reset state whether `t_eval` is `None` or
+  includes the end time (previously the two disagreed).
+- The fast forward integrator (`Plant.solve(forward_fast=True)`) now raises an
+  error when it runs out of steps or its step size collapses. It used to return
+  zeros for the unreached output times. It also now honours
+  `IntegratorConfig(max_steps=...)`, which it previously ignored.
+- `BiofilmReactor` no longer reuses a solve compiled with a different adjoint.
+  Forward-mode `aquakin.sensitivity` on a biofilm reactor that had already been
+  solved could fail, because the copy it makes shared the compiled solve. Copies
+  made for sensitivity, calibration and experimental design now start with
+  their own compile caches, and the biofilm cache is keyed on the solver
+  settings.
 
 ## [0.1.0] - 2026-07-08
 

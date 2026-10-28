@@ -212,6 +212,97 @@ def test_batch_reactor_grad_through_event(reactor, decay):
     assert g == pytest.approx(np.exp(-0.2), abs=1e-4)
 
 
+def test_batch_time_unit_converts_event_times(reactor, decay):
+    """``at_times`` is in the solve's ``time_unit``, and so is the event log."""
+    # Model native unit is seconds (k = 0.1 1/s). Reset A to 1 at t = 1 min.
+    ev = Event(at_times=[1.0], apply=lambda t, y, a: y.at[0].set(1.0), name="dose")
+    sol = reactor.solve(_A0(decay), (0.0, 2.0), jnp.array([0.5, 1.0, 1.5, 2.0]),
+                        time_unit="min", events=[ev])
+    A = np.asarray(sol.C[:, 0])
+    np.testing.assert_allclose(A, [np.exp(-3.0), np.exp(-6.0), np.exp(-3.0),
+                                   np.exp(-6.0)], rtol=1e-3)
+    np.testing.assert_allclose(np.asarray(sol.t), [0.5, 1.0, 1.5, 2.0])
+    assert sol.events_log == [(pytest.approx(1.0), "dose")]
+    assert sol.time_unit == "min"
+    # The caller's Event is not modified by the unit conversion.
+    assert ev.at_times == [1.0]
+
+
+def test_batch_time_unit_state_event_sees_requested_time(reactor, decay):
+    """``cond_fn`` receives ``t`` in the solve's ``time_unit``."""
+    # Fires at t = 0.5 min (30 s), long before A crosses anything.
+    ev = Event(cond_fn=lambda t, y, a: t - 0.5, direction=1, terminal=True)
+    sol = reactor.solve(_A0(decay), (0.0, 2.0), time_unit="min", events=[ev])
+    assert float(sol.t[-1]) == pytest.approx(0.5, abs=1e-6)
+    assert sol.events_log[0][0] == pytest.approx(0.5, abs=1e-6)
+    assert float(sol.C[-1, 0]) == pytest.approx(np.exp(-3.0), rel=1e-4)
+
+
+def test_grad_through_time_event_with_time_unit(reactor, decay):
+    """AD through a time event stays finite and correct with ``time_unit``."""
+
+    def loss(scale):
+        ev = Event(at_times=[0.5], apply=lambda t, y, a: y.at[0].add(scale))
+        sol = reactor.solve(_A0(decay), (0.0, 1.0), jnp.array([1.0]),
+                            time_unit="min", events=[ev])
+        return sol.C[-1, 0]
+
+    # A dose of ``scale`` at 0.5 min (30 s) decays for the remaining 30 s:
+    # A(1 min) = e^{-6} + scale * e^{-3}; d/dscale = e^{-3}.
+    g = float(jax.grad(loss)(0.5))
+    assert np.isfinite(g)
+    assert g == pytest.approx(np.exp(-3.0), rel=1e-3)
+
+
+def test_terminal_event_without_t_eval_reports_stop_time(reactor, decay):
+    """With ``t_eval=None`` a terminal event reports where the solve stopped."""
+    ev = Event(cond_fn=lambda t, y, a: y[0] - 0.5, terminal=True, name="half")
+    sol = reactor.solve(_A0(decay), (0.0, 100.0), events=[ev])
+    t_half = np.log(2.0) / 0.1
+    assert float(sol.t[-1]) == pytest.approx(t_half, abs=1e-5)
+    assert float(sol.C[-1, 0]) == pytest.approx(0.5, abs=1e-6)
+
+
+def test_time_event_at_t0_is_applied_and_logged():
+    teval = jnp.array([0.0, 1.0])
+    ev = Event(at_times=[0.0], apply=lambda t, y, a: y + 10.0, name="start")
+    res = solve_with_events(_const_rhs(1.0), jnp.array([0.0]), 1.0,
+                            t0=0.0, t1=1.0, t_eval=teval, events=[ev],
+                            rtol=1e-9, atol=1e-11)
+    # t_eval at t0 is the pre-reset initial state; the reset then acts.
+    np.testing.assert_allclose(np.asarray(res.ys[:, 0]), [0.0, 11.0], atol=1e-6)
+    assert res.log == [(0.0, "start")]
+    res = solve_with_events(_const_rhs(1.0), jnp.array([0.0]), 1.0,
+                            t0=0.0, t1=1.0, t_eval=None, events=[ev],
+                            rtol=1e-9, atol=1e-11)
+    assert float(res.ys[-1, 0]) == pytest.approx(11.0, abs=1e-6)
+    assert res.log == [(0.0, "start")]
+
+
+def test_time_event_at_t1_same_with_and_without_t_eval():
+    """An event at exactly ``t1`` fires and is logged, and both output paths
+    report the pre-reset value there."""
+    ev = Event(at_times=[1.0], apply=lambda t, y, a: y + 10.0, name="end")
+    kw = dict(t0=0.0, t1=1.0, events=[ev], rtol=1e-9, atol=1e-11)
+    a = solve_with_events(_const_rhs(1.0), jnp.array([0.0]), 1.0,
+                          t_eval=None, **kw)
+    b = solve_with_events(_const_rhs(1.0), jnp.array([0.0]), 1.0,
+                          t_eval=jnp.array([1.0]), **kw)
+    assert float(a.ts[-1]) == float(b.ts[-1]) == 1.0
+    assert float(a.ys[-1, 0]) == pytest.approx(1.0, abs=1e-6)
+    assert float(b.ys[-1, 0]) == pytest.approx(1.0, abs=1e-6)
+    assert a.log == b.log == [(1.0, "end")]
+
+
+def test_unnamed_event_not_mutated():
+    ev = Event(at_times=[0.5])
+    res = solve_with_events(_const_rhs(1.0), jnp.array([0.0]), 1.0,
+                            t0=0.0, t1=1.0, t_eval=None, events=[ev],
+                            rtol=1e-9, atol=1e-11)
+    assert res.log == [(0.5, "event0")]
+    assert ev.name is None
+
+
 # --- Plant integration (slow: a real BSM1 solve) -----------------------------
 
 @pytest.mark.slow

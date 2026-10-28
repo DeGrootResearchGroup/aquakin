@@ -30,6 +30,7 @@ both :meth:`BatchReactor.solve` and :meth:`Plant.solve` expose it via an
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -53,7 +54,8 @@ class Event:
     Exactly one trigger must be given:
 
     * ``at_times`` -- a sequence of times (in the solve's time unit) at which the
-      event fires. AD-safe: the segment boundaries are static.
+      event fires. AD-safe: the segment boundaries are static. A time equal to
+      the start of the solve fires on the initial state, before integration.
     * ``cond_fn`` -- a scalar function ``cond_fn(t, y, args)`` whose zero crossing
       (in ``direction``) is the event. Located by a root find; forward-simulation
       only (the firing count is data-dependent).
@@ -63,7 +65,10 @@ class Event:
     cond_fn : callable, optional
         Root-crossing condition ``cond_fn(t, y, args) -> scalar``. ``y`` is the
         full state vector (the reactor concentration vector, or the flat plant
-        state); ``args`` is the solve's parameter argument.
+        state); ``args`` is the solve's parameter argument. ``t`` is in the same
+        time unit as ``at_times``: the solve's time unit (for
+        :meth:`BatchReactor.solve` with ``time_unit=``, that unit; otherwise the
+        model's native unit). The same holds for the ``t`` passed to ``apply``.
     at_times : sequence of float, optional
         Times at which a time event fires.
     direction : int, optional
@@ -114,10 +119,14 @@ class EventedResult:
     Attributes
     ----------
     ts : jnp.ndarray
-        Output times, shape ``(n_t,)`` -- the requested ``t_eval`` grid (or the
-        final time when ``t_eval`` is None).
+        Output times, shape ``(n_t,)`` -- the requested ``t_eval`` grid, or, when
+        ``t_eval`` is None, the time the solve ended (``t1``, or the firing time
+        of a terminal event that stopped it early).
     ys : jnp.ndarray
-        States at ``ts``, shape ``(n_t, n_state)``.
+        States at ``ts``, shape ``(n_t, n_state)``. A reported time that
+        coincides with an event firing carries the **pre-reset** (left-limit)
+        state, whether it comes from ``t_eval`` or is the final time reported
+        when ``t_eval`` is None.
     log : list[tuple[float, str]]
         The fired events, in order, as ``(time, name)`` -- the audit trail of
         switch times.
@@ -234,9 +243,11 @@ def solve_with_events(
     events = list(events)
     if not events:
         raise ValueError("solve_with_events needs at least one Event.")
-    for i, ev in enumerate(events):
-        if ev.name is None:
-            ev.name = f"event{i}"
+    # Label unnamed events on copies so the caller's Event objects are untouched.
+    events = [
+        ev if ev.name is not None else dataclasses.replace(ev, name=f"event{i}")
+        for i, ev in enumerate(events)
+    ]
 
     t0 = float(t0)
     t1 = float(t1)
@@ -292,10 +303,17 @@ def _drive(
     emitted with its **pre-reset** (left-limit) value -- it belongs to the
     segment ending at the event -- so both paths agree on the boundary value and
     the reset defines the next segment's initial condition. A small time
-    tolerance makes that assignment robust to the root finder's float error.
+    tolerance makes that assignment robust to the root finder's float error. The
+    final state reported when ``t_eval`` is None follows the same convention (an
+    event at exactly ``t1``, or a terminal event, is applied and logged, but the
+    reported state is its pre-reset value), so ``t_eval=None`` and
+    ``t_eval=[t_end]`` agree. A time event at exactly ``t0`` is applied to the
+    initial state before the first segment (a ``t_eval`` point at ``t0`` still
+    reports the pre-reset initial state).
     """
     root_events = [ev for ev in events if not ev.is_time_event]
-    time_times = sorted({t for ev in events for t in (ev.at_times or []) if t0 < t < t1})
+    tol = _BOUNDARY_ASSIGN_RTOL * max(1.0, abs(t1 - t0))
+    time_times = sorted({t for ev in events for t in (ev.at_times or []) if t0 + tol < t < t1})
     diffrax_event = None
     if has_root:
         root = optx.Newton(rtol=root_rtol, atol=root_atol)
@@ -306,7 +324,6 @@ def _drive(
                 None if ev.direction == 0 else bool(ev.direction == 1) for ev in root_events
             ],
         )
-    tol = _BOUNDARY_ASSIGN_RTOL * max(1.0, abs(t1 - t0))
 
     log = []
     out_y = []
@@ -318,6 +335,17 @@ def _drive(
     while idx < n_eval and t_eval_np[idx] <= t0 + tol:
         out_y.append(y)
         idx += 1
+    # The reported final time/state when t_eval is None: the end of the last
+    # segment, before any reset applied there (the pre-reset convention).
+    t_report, y_report = t0, y
+
+    # Time events at exactly t0 act on the initial state before integration.
+    firing = [ev for ev in events if ev.at_times and any(abs(t - t0) <= tol for t in ev.at_times)]
+    y, terminal = _apply_resets(firing, t0, y, args)
+    for ev in firing:
+        log.append((t0, ev.name))
+    if terminal:
+        return _assemble(out_y, t_eval_np, y, t_report, y_report, log)
 
     n_iter = max_segments if has_root else len(time_times) + 1
     for _ in range(n_iter):
@@ -337,6 +365,7 @@ def _drive(
             fired_root = False
             t_end = seg_t1
         y_end = sol.ys[-1]
+        t_report, y_report = t_end, y_end
 
         # Emit t_eval points in (seg_t0, t_end] (pre-reset). A point coinciding
         # with the segment end uses the exact endpoint state ``y_end`` rather than
@@ -374,7 +403,46 @@ def _drive(
                 f"apply reset moves the state off the threshold)."
             )
 
-    return _assemble(out_y, t_eval_np, y, t1, log)
+    return _assemble(out_y, t_eval_np, y, t_report, y_report, log)
+
+
+def events_to_native_time(events: Sequence[Event], time_factor: float) -> list[Event]:
+    """Convert events from a solve's requested time unit to the native unit.
+
+    Returns copies (the caller's :class:`Event` objects are not modified) whose
+    ``at_times`` are scaled into native time, and whose ``cond_fn`` / ``apply``
+    are wrapped so they still receive ``t`` in the requested unit.
+
+    Parameters
+    ----------
+    events : sequence of Event
+        Events expressed in the requested time unit.
+    time_factor : float
+        Native time units per requested time unit (``t_native = t * factor``),
+        as returned by :func:`aquakin.integrate._common.to_native_time`.
+
+    Returns
+    -------
+    list of Event
+        The converted copies (the input list itself when ``time_factor == 1``).
+    """
+    if time_factor == 1.0:
+        return list(events)
+
+    def rescale(fn):
+        if fn is None:
+            return None
+        return lambda t, y, args: fn(t / time_factor, y, args)
+
+    return [
+        dataclasses.replace(
+            ev,
+            at_times=None if ev.at_times is None else [t * time_factor for t in ev.at_times],
+            cond_fn=rescale(ev.cond_fn),
+            apply=rescale(ev.apply),
+        )
+        for ev in events
+    ]
 
 
 def _wrap_cond(ev: Event):
@@ -383,16 +451,19 @@ def _wrap_cond(ev: Event):
     return lambda t, y, args, **kwargs: fn(t, y, args)
 
 
-def _assemble(out_y, t_eval_np, y_final, t1, log):
+def _assemble(out_y, t_eval_np, y_final, t_end, y_end, log):
     """Build the final EventedResult on the requested ``t_eval`` grid.
 
     ``out_y`` holds the states emitted on ``t_eval`` so far (in grid order). A
     terminal event that stopped the solve early leaves the unreached ``t_eval``
-    points unfilled: pad them with the final post-event state (the solve holds
-    there after terminating), so ``ys`` always matches the ``t_eval`` shape.
+    points unfilled: pad them with the final post-event state ``y_final`` (the
+    solve holds there after terminating), so ``ys`` always matches the
+    ``t_eval`` shape. With ``t_eval`` None the result is the single point
+    ``(t_end, y_end)``: the time the solve actually stopped and its pre-reset
+    state there.
     """
     if t_eval_np is None:
-        return EventedResult(ts=jnp.asarray([t1]), ys=y_final[None, :], log=log)
+        return EventedResult(ts=jnp.asarray([t_end]), ys=y_end[None, :], log=log)
     while len(out_y) < t_eval_np.shape[0]:
         out_y.append(y_final)
     return EventedResult(ts=jnp.asarray(t_eval_np), ys=jnp.stack(out_y, axis=0), log=log)

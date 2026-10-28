@@ -3034,7 +3034,9 @@ class Plant:
             )
             jitted = self._jit_cache.get(fkey)
             if jitted is None:
-                jitted = self._build_jitted_forward_fast(t0, t1, rtol=rtol, atol=atol)
+                jitted = self._build_jitted_forward_fast(
+                    t0, t1, rtol=rtol, atol=atol, max_steps=max_steps
+                )
                 self._jit_cache[fkey] = jitted
             with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
                 ts, ys = jitted(y0, params, te)
@@ -3309,7 +3311,7 @@ class Plant:
 
         return _solve
 
-    def _build_jitted_forward_fast(self, t0, t1, *, rtol, atol):
+    def _build_jitted_forward_fast(self, t0, t1, *, rtol, atol, max_steps):
         """Build the lean non-AD forward solve for one signature.
 
         Wraps :func:`~aquakin.integrate.forward_solve.forward_solve` -- a plain
@@ -3342,7 +3344,16 @@ class Plant:
                 return JS[:, col_of] * pattern
 
             ys = forward_solve(
-                rhs, jac, y0, params, float(t0), float(t1), t_eval, rtol=rtol, atol=atol
+                rhs,
+                jac,
+                y0,
+                params,
+                float(t0),
+                float(t1),
+                t_eval,
+                rtol=rtol,
+                atol=atol,
+                max_steps=max_steps,
             )
             return t_eval, ys
 

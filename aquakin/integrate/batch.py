@@ -32,7 +32,7 @@ from aquakin.integrate._common import (
     validate_C0_params,
     validate_t_eval,
 )
-from aquakin.integrate.events import Event, solve_with_events
+from aquakin.integrate.events import Event, events_to_native_time, solve_with_events
 
 
 @dataclass
@@ -202,6 +202,9 @@ class BatchReactor(GradientCheckMixin):
             returned ``solution.events_log`` records them. Time-only events keep
             ``jax.grad`` finite (static segment boundaries); a state event makes
             the solve a forward simulation (the firing count is data-dependent).
+            Event times (``at_times``, the ``t`` passed to ``cond_fn`` /
+            ``apply``, and the ``events_log`` times) are in the same unit as
+            ``t_span``: ``time_unit`` when given, else the model's native unit.
             See :func:`aquakin.solve_with_events`.
 
         Returns
@@ -235,9 +238,12 @@ class BatchReactor(GradientCheckMixin):
         condition_arrays = active_conditions.fields
 
         if events is not None:
-            return self._solve_with_events(
+            sol = self._solve_with_events(
                 C0, params, condition_arrays, t0, t1, t_eval, events, _time_factor
             )
+            if time_unit is not None:
+                sol._requested_time_unit = time_unit
+            return sol
 
         if t_eval is None:
             t_eval_arr = None
@@ -285,6 +291,9 @@ class BatchReactor(GradientCheckMixin):
         segment is a plain differentiable sub-solve.
         """
         rhs = make_chemistry_rhs(self.model, params, cond_fn=lambda t: condition_arrays)
+        # t0/t1/t_eval are already native; the events are still in the requested
+        # unit, so convert copies of them (the caller's Events are not mutated).
+        events = events_to_native_time(events, time_factor)
 
         t_eval_arr = None if t_eval is None else jnp.asarray(t_eval)
         if t_eval_arr is not None:
@@ -307,8 +316,12 @@ class BatchReactor(GradientCheckMixin):
                 factormax=self.factormax,
                 solver=self.solver,
             )
-        ts = res.ts / time_factor if time_factor != 1.0 else res.ts
-        return BatchSolution(t=ts, C=res.ys, model=self.model, events_log=res.log)
+        ts = res.ts
+        log = res.log
+        if time_factor != 1.0:  # native -> requested unit
+            ts = ts / time_factor
+            log = [(t / time_factor, name) for t, name in log]
+        return BatchSolution(t=ts, C=res.ys, model=self.model, events_log=log)
 
     def solve_sensitivity(
         self,

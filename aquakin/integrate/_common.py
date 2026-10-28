@@ -214,9 +214,17 @@ def with_adjoint(reactor, adjoint):
     reverse-capable variant of the same reactor. Used by ``calibrate`` /
     ``sensitivity`` to build the right adjoint internally from an ``ad_mode``
     string, so ``diffrax`` never appears in user code.
+
+    The clone gets fresh, empty per-instance compile caches (every ``*_cache``
+    dict attribute, e.g. ``_jit_cache`` / ``_sens_jit_cache``). A shallow copy
+    would otherwise share those dicts with the original, so a solve compiled
+    with the old adjoint could be reused by the clone (and vice versa).
     """
     clone = copy.copy(reactor)
     clone.adjoint = adjoint
+    for name, value in list(vars(clone).items()):
+        if name.endswith("_cache") and isinstance(value, dict):
+            setattr(clone, name, {})
     return clone
 
 

@@ -202,3 +202,27 @@ def test_to_dataframe_profile(net, cond):
     assert list(pdf.index.names) == ["t", "compartment"]
     assert "depth" in pdf.columns
     assert len(pdf) == 3 * (r.n_layers + 1)
+
+
+def test_with_adjoint_clone_does_not_reuse_compiled_solve(net, cond):
+    """A ``with_adjoint`` copy must not reuse a solve compiled with the old
+    adjoint: forward-mode sensitivity after a plain solve must work."""
+    out = lambda s: s.C_named("A")[-1]  # noqa: E731
+    fwd = aquakin.DifferentiationConfig(mode="forward", method="through_solve")
+    r = _tiny(net, cond)
+    C0 = net.concentrations({"A": 1.0})
+    r.solve(C0, (0.0, 5.0))  # compiles with the default reverse-mode adjoint
+    res = aquakin.sensitivity(r, C0, output_fn=out, t_span=(0.0, 5.0), diff=fwd)
+    assert np.all(np.isfinite(np.asarray(res.doutput_dparams)))
+
+
+def test_compile_cache_keyed_on_adjoint(net, cond):
+    """Changing a reactor's adjoint must not reuse the solve compiled with the
+    old one (the cache key includes the solver settings)."""
+    r = _tiny(net, cond)
+    C0 = net.concentrations({"A": 1.0})
+    r.solve(C0, (0.0, 5.0))
+    r.adjoint = aquakin.forward_adjoint()
+    params = net.default_parameters()
+    J = jax.jacfwd(lambda p: r.solve(C0, (0.0, 5.0), params=p).C[-1, 0])(params)
+    assert np.all(np.isfinite(np.asarray(J)))
