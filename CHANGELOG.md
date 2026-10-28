@@ -28,7 +28,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   parameter vector or a `{name: value}` dict over the free parameters. All
   starts run through one compiled objective, so a grid of starts no longer
   needs one `calibrate` call (and one compilation) per start.
-  `profile_likelihood` uses the list for its cold fits.
+  `profile_likelihood` uses the list for its cold fits, and `Plant.calibrate`
+  accepts it too.
 - `OptimizerConfig(bounds={name: (lo, hi)})` gives `aquakin.calibrate` (and
   `profile_likelihood`) absolute bounds on the free rate parameters in physical
   units, with `None` for an open side. An entry replaces the parameter's
