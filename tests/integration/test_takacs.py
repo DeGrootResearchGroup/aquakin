@@ -552,3 +552,88 @@ def test_build_bsm1_takacs_defaults_to_reference_settler(asm1):
                      settler_soluble_holdup=False).units["clarifier"]
     assert cl2.composition_mode == "per_species"
     assert cl2.soluble_holdup is False
+
+
+@pytest.mark.parametrize("composition_mode", ["per_species", "lumped_tss"])
+@pytest.mark.parametrize("init_underflow_Q", [None, 18446.0])
+@pytest.mark.parametrize("soluble_holdup", [False, True])
+def test_initial_state_is_concrete_under_tracing(
+    asm1, composition_mode, init_underflow_Q, soluble_holdup
+):
+    """``initial_state`` is built from constants only, so calling it inside a
+    ``jax.jit`` trace (as ``Plant.solve`` does for its default ``atol``) neither
+    raises a ConcretizationTypeError nor changes the seed (issue #594)."""
+    import jax
+
+    clar = TakacsClarifier(name="c", model=asm1, area=1500.0, height=4.0,
+                           underflow_Q=18446.0, init_underflow_Q=init_underflow_Q,
+                           composition_mode=composition_mode,
+                           soluble_holdup=soluble_holdup)
+    eager = clar.initial_state()
+    traced = jax.jit(lambda: clar.initial_state())()
+    assert traced.shape == (clar.state_size,)
+    assert bool(jnp.array_equal(traced, eager))
+
+
+def test_plant_default_atol_is_concrete_under_tracing(asm1):
+    """The default ``atol`` ``Plant.solve`` forms from a concrete ``y0`` stays
+    concrete inside a ``jax.jit`` trace (so tolerance-dependent host setup, like
+    the colored adjoint builder, can read it) and equals the eager value."""
+    import jax
+
+    from aquakin.integrate._common import default_atol
+
+    plant = _clarifier_plant(asm1)
+    plant._build_state_layout()
+    y0 = plant.initial_state()
+    seen = {}
+
+    def f():
+        atol = plant._default_atol(y0)
+        seen["concrete"] = not isinstance(atol, jax.core.Tracer)
+        return atol
+
+    traced = jax.jit(f)()
+    assert seen["concrete"]
+    assert bool(jnp.array_equal(traced, default_atol(y0, plant.initial_state())))
+
+
+@pytest.mark.slow
+def test_bsm1_takacs_solve_is_jittable_and_differentiable(asm1):
+    """``jax.jit`` and ``jax.grad`` of a short ``Plant.solve`` on the reference
+    BSM1 settler (lumped TSS, soluble holdup) with the default ``atol``. The
+    default tolerance formed inside the trace must equal the one formed eagerly
+    and passed explicitly, so the traced value and gradient match that path
+    exactly (issue #594). The first call is a jitted gradient w.r.t. ``y0``, so
+    the colored adjoint builder is built while the default ``atol`` is a tracer."""
+    import jax
+
+    from aquakin.integrate._common import default_atol
+    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start, load_bsm1_influent
+
+    plant = build_bsm1(model=asm1, use_takacs=True)
+    plant.add_influent("feed", load_bsm1_influent("dry", asm1))
+    y0 = bsm1_warm_start(plant)
+    p0 = plant.parameter_values({})
+    atol0 = default_atol(jnp.asarray(y0), plant.initial_state())
+
+    def loss(p, atol=None, y=y0):
+        s = plant.solve((0.0, 0.05), t_eval=jnp.asarray([0.05]), params=p, y0=y,
+                        atol=atol)
+        return jnp.sum(s.final_state ** 2)
+
+    assert plant._colored._adjoint_builder is None
+    g_y0 = jax.jit(jax.grad(lambda y: loss(p0, y=y)))(jnp.asarray(y0))
+    assert plant._colored._adjoint_builder is not None
+    assert bool(jnp.all(jnp.isfinite(g_y0)))
+    assert float(jnp.max(jnp.abs(g_y0))) > 0.0
+
+    v_default = jax.jit(loss)(p0)
+    v_explicit = jax.jit(lambda p: loss(p, atol0))(p0)
+    assert float(v_default) == float(v_explicit)
+
+    g_default = jax.grad(loss)(p0)
+    g_explicit = jax.grad(lambda p: loss(p, atol0))(p0)
+    assert bool(jnp.all(jnp.isfinite(g_default)))
+    assert float(jnp.max(jnp.abs(g_default))) > 0.0
+    assert bool(jnp.array_equal(g_default, g_explicit))
