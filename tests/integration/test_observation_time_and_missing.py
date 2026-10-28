@@ -75,6 +75,7 @@ def test_signature_detection():
             raise ValueError("no signature")
 
     assert not observation_takes_time(_Opaque())
+    assert not observation_takes_time(lambda *args: args[0][0])  # *args: the (C, params) form
 
 
 def test_time_aware_observe_needs_sample_times():
