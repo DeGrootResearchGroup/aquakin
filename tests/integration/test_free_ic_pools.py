@@ -449,3 +449,29 @@ def test_profile_ic_rejects_fixed_total_pool(two_pool):
             sigma=SIGMA,
             free_ic=FreeICConfig(["S", "X"], fixed_total=True),
         )
+
+
+def test_profile_param_warm_start_with_fixed_total_split(two_pool):
+    """Profiling a rate parameter with a fitted fixed-total split: the warm
+    points start from the neighbour's pools (converted to the split coordinate)
+    yet reach the same optimum as independent fits, and every point keeps the
+    measured total."""
+    model, reactor = two_pool
+    obs = _data(reactor, 0.3, 0.7)
+    kw = dict(
+        grid=np.array([0.8, 1.0, 1.25]),
+        profile_param="fast.kS",
+        observed_species=["P"],
+        loss="nll",
+        sigma=SIGMA,
+        free_ic=FreeICConfig(["S", "X"], fixed_total=True),
+        optimizer=OptimizerConfig(method="gauss_newton", n_starts=1),
+        polish=False,
+    )
+    args = (reactor, jnp.asarray([0.5, 0.5, 0.0]), obs, T_OBS, ["fast.kS", "slow.kX"])
+    warm = aquakin.profile_likelihood(*args, warm_start=True, anchor=1.0, **kw)
+    cold = aquakin.profile_likelihood(*args, warm_start=False, **kw)
+    np.testing.assert_allclose(warm.loss, cold.loss, rtol=1e-6)
+    assert int(np.argmin(warm.loss)) == 1
+    for fit in warm.fits:
+        assert fit.ic_named[0]["S"] + fit.ic_named[0]["X"] == pytest.approx(1.0, rel=1e-12)

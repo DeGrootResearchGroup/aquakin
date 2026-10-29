@@ -32,6 +32,7 @@ from aquakin.integrate.calibrate import (
     _FitConfig,
     _forward_jac,
     _free_ic_fields,
+    _ic_theta_from_pools,
     _ic_coordinate_names,
     _is_solve_failure,
     _joint_names,
@@ -1043,6 +1044,65 @@ def test_resolve_problem_rejects_duplicate_free_ic(base):
     m, C0, obs, t_obs, free = base
     with pytest.raises(ValueError, match="distinct"):
         _resolve(m, C0, obs, t_obs, free, free_ic=["A", "A"])
+
+
+@pytest.mark.parametrize(
+    "theta, lb, ub, transform, expected",
+    [
+        # Untransformed: small values well inside the box are interior.
+        (5e-6, 1e-6, 1.0, "none", ""),
+        (1.1e-9, 1e-9, 1.0, "none", ""),
+        # Exactly on, or within round-off of, a small bound.
+        (1e-6, 1e-6, 1.0, "none", "lower"),
+        (1.0000000000014743e-09, 1e-9, 1.0, "none", "lower"),
+        (0.0009999999999999864, 1e-6, 1e-3, "none", "upper"),
+        # A bound at zero: the trust-region solver ends a hair inside it.
+        (7.6e-24, 0.0, 1.0, "none", "lower"),
+        (7.6e-24, 0.0, np.inf, "none", "lower"),
+        (1e-8, 0.0, 1.0, "none", ""),
+        # Log-space coordinates: an absolute tolerance in theta, which does not
+        # collapse when the physical bound is 1 (theta bound 0).
+        (np.log(10.0), np.log(1e-3), np.log(10.0), "positive_log", "upper"),
+        (np.log(9.9), np.log(1e-3), np.log(10.0), "positive_log", ""),
+        (-1e-8, np.log(1e-3), 0.0, "positive_log", "upper"),
+        (np.log(1.0000001) - 1e-8, np.log(1e-3), np.log(1.0000001), "positive_log", "upper"),
+        (1e-8, 0.0, np.log(10.0), "positive_log", "lower"),
+        (-1e-3, np.log(1e-3), 0.0, "positive_log", ""),
+        # Logit: a physical bound of 0.5 is theta 0.
+        (-1e-8, -2.0, 0.0, "logit", "upper"),
+        (-1e-3, -2.0, 0.0, "logit", ""),
+    ],
+)
+def test_at_bound_tolerance_is_scale_aware(theta, lb, ub, transform, expected):
+    opt_bounds = (None, np.array([lb]), np.array([ub]), None, True)
+    assert _at_bound_sides(np.array([theta]), opt_bounds, [transform])[0] == expected
+
+
+@pytest.mark.parametrize("fixed_total", [False, True], ids=["bounded", "fixed_total"])
+def test_ic_theta_from_pools_matches_the_prior_centre(base, fixed_total):
+    """The free-IC coordinates of the measured pools are ``ic_center_full``, so a
+    warm start from fitted pools uses the same layout as the default start:
+    clipped log pools when bounded (B = 0 sits below its lower bound), one
+    log-ratio per dataset under a fixed total."""
+    m, _C0, obs, t_obs, free = base
+    C0a, C0b = jnp.array([0.6, 0.4]), jnp.array([1.0, 3.0 if fixed_total else 0.0])
+    prob = _resolve(
+        m,
+        [C0a, C0b],
+        [obs, obs],
+        [t_obs, t_obs],
+        free,
+        free_ic=["A", "B"],
+        ic_fixed_total=fixed_total,
+        ic_bounds=_DEFAULT_IC_BOUNDS if fixed_total else (1e-3, 1e4),
+    )
+    np.testing.assert_allclose(_ic_theta_from_pools(prob, [C0a, C0b]), prob.ic_center_full)
+    # Other pools give other coordinates; under a fixed total only the split counts.
+    moved = _ic_theta_from_pools(prob, [C0a * 2.0, jnp.array([2.0, 2.0])])
+    if fixed_total:
+        np.testing.assert_allclose(moved, [np.log(0.4 / 0.6), 0.0])
+    else:
+        np.testing.assert_allclose(moved, np.log([1.2, 0.8, 2.0, 2.0]))
 
 
 # ---------- sigma="estimate" (concentrated likelihood): guards ----------
