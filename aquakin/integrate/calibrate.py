@@ -130,7 +130,7 @@ class OptimizerConfig:
         ``bounds:`` declared on it in the model, as :func:`aquakin.fit` does.
         The bounds are absolute: every multistart start searches the same
         region. Set ``False`` to ignore the declared bounds (the behaviour
-        before 0.1.1); explicit ``bounds`` still apply.
+        before 0.2.0); explicit ``bounds`` still apply.
     param_halfwidth : float, optional
         If given, also box-bound each free rate parameter to ``theta0 +/-
         param_halfwidth`` in unconstrained space around the starting value
