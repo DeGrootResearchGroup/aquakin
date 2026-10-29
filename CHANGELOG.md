@@ -190,6 +190,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `Plant.steady_state(design=...)` now warns when it skips a requested
+  `continuation_from` (and arclength) fallback. Those rungs deform the
+  parameter vector alone and cannot carry design overrides, so they were
+  already skipped when the direct solve failed to converge, but silently. The
+  `UserWarning` names the skipped option(s); results are unchanged.
 - The BSM docstrings now say which benchmark convention the indices follow.
   `evaluate_bsm1` / `BSM1Evaluation` give the **updated** BSM1 EQI and OCI
   (Alex et al. 2008: EQI nitrogen weights 30 / 10, AE = S_sat·V·kLa / 1800,
