@@ -190,6 +190,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `Plant.steady_state(design=...)`: the forward fallback now accepts
+  `run_to_steady_state`'s `criterion`, `tol` and `scale_floor` through
+  `fallback_kwargs` (they used to raise `TypeError`) and reports the scaled
+  `residual` of its result (it used to be `None`). It stops on the same test
+  as the fallback without `design`.
 - The BSM docstrings now say which benchmark convention the indices follow.
   `evaluate_bsm1` / `BSM1Evaluation` give the **updated** BSM1 EQI and OCI
   (Alex et al. 2008: EQI nitrogen weights 30 / 10, AE = S_sat·V·kLa / 1800,
