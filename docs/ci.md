@@ -78,6 +78,12 @@ nor concentrating it in a few files makes the whole suite fast.
   the runner's free memory and swap every 30 s (`vmstat`) and prints it at the
   end, so a slow, swapping or killed shard can be told apart.
 
+  Each fast shard uploads its coverage to Codecov under the `fast` flag, and
+  `codecov.yml` sets `after_n_builds: 16` (2 unit + 6 integration shards × 2
+  Python versions) so the PR comment and patch status wait for every shard.
+  **Change that number with the shard counts**, or Codecov reports early again
+  (too low) or never (too high).
+
   The fast-tier durations are recorded by **`refresh-fast-durations`**, which
   runs with the weekly slow/validation refresh (`refresh-durations`, Mondays,
   or a manual `workflow_dispatch`). It uses the same
