@@ -379,17 +379,15 @@ def test_bsm2_srt_counts_activated_sludge_wastage_not_dewatering_cake():
     assert m.SRT == pytest.approx(20.9, abs=0.3)
 
 
-def test_sludge_metrics_and_kla_history_ignore_a_time_unit_override(asm1):
+def test_sludge_metrics_ignores_a_time_unit_override(asm1):
     """``sludge_metrics`` samples the influent at native time, so a solution
     reported in hours gives the same SRT, HRT and F:M as the same solution in
     days. The influent ramps (Q doubles over two days), so sampling it at the
-    hour values would change HRT and F:M. The kLa history likewise reads the
-    control signals at native time. No solve: a two-point solution at the
+    hour values would change HRT and F:M. No solve: a two-point solution at the
     warm-start state."""
     import numpy as np
 
     from aquakin.plant.bsm import bsm1_warm_start
-    from aquakin.plant.bsm.evaluation import _kla_history
     from aquakin.plant.plant import PlantSolution
 
     ramp = InfluentSeries(
@@ -411,8 +409,3 @@ def test_sludge_metrics_and_kla_history_ignore_a_time_unit_override(asm1):
     assert np.isfinite(a.SRT) and a.SRT > 0.0
     for name in ("SRT", "HRT", "FM"):
         assert getattr(b, name) == pytest.approx(getattr(a, name), rel=1e-12), name
-
-    tanks = plant.activated_sludge_reactors(require_volume=True)
-    np.testing.assert_allclose(
-        _kla_history(plant, hours, None, tanks), _kla_history(plant, days, None, tanks)
-    )

@@ -546,21 +546,22 @@ def test_eqi_weights_are_copp_alex_standard(asm1):
 
 
 
-def test_time_unit_override_leaves_digester_metrics_unchanged(asm1, adm1):
-    """The digester-feed temperature and the biogas COD sample the streams at
-    native time and integrate per-native-unit rates, so a solution reported in
-    hours gives the same values as the same solution in days. No solve: a
-    two-point solution at the warm-start state, with a temperature-carrying
+def test_time_unit_override_leaves_bsm2_metrics_unchanged(asm1, adm1):
+    """The DO-controlled kLa history, the digester-feed temperature and the
+    biogas COD read the control signals and streams at native time and
+    integrate per-native-unit rates, so a solution reported in hours gives the
+    same values as the same solution in days. No solve: a two-point solution at
+    the warm-start state of the closed-loop plant, with a temperature-carrying
     influent so the feed temperature is read from the streams."""
     import numpy as np
 
     from aquakin.plant.balance import _biogas_cod
     from aquakin.plant.bsm import bsm2_warm_start
     from aquakin.plant.bsm.bsm2 import BSM2_CONSTANT_INFLUENT_T
-    from aquakin.plant.bsm.evaluation import _feed_temperature_C
+    from aquakin.plant.bsm.evaluation import _feed_temperature_C, _kla_history
     from aquakin.plant.plant import PlantSolution
 
-    plant = build_bsm2(asm1, adm1, do_control=False)
+    plant = build_bsm2(asm1, adm1, do_control=True)
     plant.add_influent("feed", bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
     params = bsm2_parameters(asm1, adm1)
     y0 = bsm2_warm_start(plant)
@@ -570,6 +571,11 @@ def test_time_unit_override_leaves_digester_metrics_unchanged(asm1, adm1):
         t=jnp.asarray([0.0, 24.0]), state=states, plant=plant, _requested_time_unit="h"
     )
     np.testing.assert_allclose(np.asarray(hours.t_native), [0.0, 1.0])
+
+    tanks = plant.activated_sludge_reactors(require_volume=True)
+    kla = _kla_history(plant, days, params, tanks)
+    assert kla.shape == (2, len(tanks)) and np.all(np.isfinite(kla))
+    np.testing.assert_allclose(_kla_history(plant, hours, params, tanks), kla)
 
     # Every stream carries the influent temperature (K), not the 35 °C fallback.
     np.testing.assert_allclose(
