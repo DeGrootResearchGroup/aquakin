@@ -1190,7 +1190,7 @@ def resolve_layered_atol(model, atol, n_compartments):
         return jnp.tile(per_species, (nc, 1))
     arr = jnp.asarray(atol, dtype=float)
     if arr.ndim == 0:
-        return jnp.full((nc, n), float(arr))
+        return jnp.full((nc, n), arr)
     if arr.shape == (n,):
         return jnp.tile(arr, (nc, 1))
     if arr.shape == (nc, n):

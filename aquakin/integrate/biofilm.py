@@ -50,6 +50,7 @@ from dataclasses import dataclass
 import diffrax
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.model import CompiledModel
@@ -214,14 +215,15 @@ def _detachment_transport(C, k_det, detach_mask, dz, area_per_volume, n_species)
     return d
 
 
-def _default_soluble_mask(model: CompiledModel) -> jnp.ndarray:
+def _default_soluble_mask(model: CompiledModel) -> np.ndarray:
     """Classify species as soluble (diffuses, evolves) vs particulate (fixed).
 
     Heuristic for the WATS/ASM naming convention: soluble names start with
     ``S`` (``S_*``, ``sumS``), particulate names start with ``X``. Callers can
-    override with an explicit mask.
+    override with an explicit mask. A NumPy array, so it stays concrete when
+    the reactor is built inside ``jax.jit``.
     """
-    return jnp.asarray([not s.startswith("X") for s in model.species], dtype=bool)
+    return np.asarray([not s.startswith("X") for s in model.species], dtype=bool)
 
 
 class BiofilmReactor(GradientCheckMixin):
@@ -417,11 +419,19 @@ class BiofilmReactor(GradientCheckMixin):
         # cost is also flagging inert solids (X_I) and stored reservoirs, but under
         # the default mask freezing those is wrong too, so the broad warning is the
         # right "pass an explicit mask here" signal.
-        if fixed_defaulted:
-            stoich = model.compute_stoich(model.default_parameters())
-            reactive = jnp.any(stoich != 0.0, axis=0)  # (n_species,)
-            frozen_reactive = reactive & self.fixed_mask
-            offenders = [s for s, f in zip(model.species, list(map(bool, frozen_reactive))) if f]
+        #
+        # The check runs on the concrete default parameters, evaluated eagerly
+        # even when the reactor is built inside ``jax.jit``, so it never needs a
+        # ``bool()`` of a traced value. A ``soluble_mask`` that is itself traced
+        # (computed inside the jitted function) cannot be checked, so it is
+        # skipped.
+        if fixed_defaulted and not isinstance(soluble_mask, jax.core.Tracer):
+            with jax.ensure_compile_time_eval():
+                stoich = model.compute_stoich(model.default_parameters())
+                reactive = np.any(np.asarray(stoich) != 0.0, axis=0)  # (n_species,)
+                # The default mask is ``~soluble_mask``, rebuilt from the input.
+                frozen_reactive = reactive & ~np.asarray(soluble_mask, dtype=bool)
+            offenders = [s for s, f in zip(model.species, frozen_reactive) if f]
             if offenders:
                 warnings.warn(
                     "BiofilmReactor is holding reactive particulate(s) "
