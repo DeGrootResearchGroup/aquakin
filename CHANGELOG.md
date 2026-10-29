@@ -166,7 +166,10 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   counterpart. Steady states are unchanged. Dynamic results change: the
   settler's liquid volume now damps the soluble effluent signal (the effluent
   ammonia peaks and troughs), as in the reference, and the plant state has a
-  different settler layout. To get the old settler, pass
+  different settler layout. `Plant.steady_state` on the default BSM2 can take
+  more iterations with this settler. It may stop at its iteration cap and fall
+  back to forward integration (`method="ptc->forward"`), which still converges
+  but takes longer. To get the old settler, pass
   `build_bsm2(settler_composition_mode="per_species", settler_soluble_holdup=False)`.
 
 ### Deprecated
