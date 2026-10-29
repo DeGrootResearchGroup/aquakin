@@ -12,6 +12,7 @@ monolith is covered by the full-fit tests in
 import dataclasses
 import sys
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -27,6 +28,7 @@ from aquakin.integrate.calibrate import (
     _build_residual,
     _CalibrationProblem,
     _check_start_gradient,
+    _data_term,
     _FitConfig,
     _forward_jac,
     _free_ic_fields,
@@ -35,9 +37,11 @@ from aquakin.integrate.calibrate import (
     _joint_names,
     _laplace_covariance,
     _laplace_posterior,
+    _missing_mask,
     _ObjectiveBundle,
     _optimizer_bounds,
     _per_species_ic_bounds,
+    _predict,
     _ReactorForwardModel,
     _resolve_laplace,
     _resolve_problem,
@@ -1110,3 +1114,188 @@ def test_resolve_problem_accepts_numeric_sigma_list(base):
     prob = _resolve(m, [C0, C0], [obs, obs], [t_obs, t_obs], free, loss="nll", sigma=[0.1, 0.2])
     assert prob.n_datasets == 2
     assert not prob.sigma_estimate
+
+
+# ---------- missing (NaN) observations with sigma="estimate" ----------
+
+
+def _obs_with_gap(base):
+    """Two observed outputs on three times; output 1 is missing at t = 1."""
+    m, C0, _obs, t_obs, free = base
+    obs = jnp.array([[0.9, 0.1], [0.5, jnp.nan], [0.2, 0.8]])
+    return m, C0, obs, t_obs, free
+
+
+def test_sigma_estimate_counts_only_observed_entries(base):
+    """N_j is the number of observed entries of output j, pooled over the
+    datasets, and the NaN entries add nothing to the sum of squares or the raw
+    residual."""
+    m, C0, obs, t_obs, free = _obs_with_gap(base)
+    prob = _resolve(m, [C0, C0], [obs, obs], [t_obs, t_obs], free, loss="nll", sigma="estimate")
+    np.testing.assert_array_equal(prob.n_obs_per_output, [6.0, 4.0])
+
+    pred = jnp.array([[1.0, 0.0], [0.4, 123.0], [0.2, 1.0]])
+    _t, _ts, sse_fn, resid_fn = prob.dataset_static[0]
+    np.testing.assert_allclose(sse_fn(pred), [0.01 + 0.01, 0.01 + 0.04])
+    r = np.asarray(resid_fn(pred))
+    assert r[1, 1] == 0.0 and np.all(np.isfinite(r))
+
+    # The concentrated objective is finite and equals sum_j (N_j/2) log(SSE_j/N_j) + N/2.
+    sse = np.array([0.04, 0.10])
+    n = np.array([6.0, 4.0])
+    expected = 0.5 * np.sum(n * np.log(sse / n)) + 0.5 * np.sum(n)
+    assert float(_data_term(prob, (pred, pred))) == pytest.approx(expected, rel=1e-12)
+
+
+def test_sigma_estimate_rejects_an_output_never_observed(base):
+    m, C0, _obs, t_obs, free = base
+    obs = jnp.array([[0.9, jnp.nan], [0.5, jnp.nan], [0.2, jnp.nan]])
+    with pytest.raises(ValueError, match=r"output\(s\) \[1\] are missing"):
+        _resolve(m, C0, obs, t_obs, free, loss="nll", sigma="estimate")
+
+
+# ---------- missing (NaN) observations: masked losses and guards ----------
+
+_OBS_GAP = jnp.array([[1.0, 2.0], [jnp.nan, 4.0]])
+_PRED_GAP = jnp.array([[1.5, 2.0], [99.0, 3.0]])
+
+
+def test_missing_mask_ignores_non_float_observations():
+    assert _missing_mask(np.array([[1, 2], [3, 4]])) is None
+
+
+@pytest.mark.parametrize("build", [_build_loss, _build_residual])
+@pytest.mark.parametrize(
+    "loss, sigma, match",
+    [
+        ("wmse", None, "requires a sigma"),
+        ("nll", None, "requires a sigma"),
+        ("bogus", 1.0, "Unknown loss"),
+    ],
+)
+def test_masked_builders_validate_arguments(build, loss, sigma, match):
+    with pytest.raises(ValueError, match=match):
+        build(loss, _OBS_GAP, sigma)
+
+
+def test_masked_wmse_loss_and_residual_average_over_observed_entries():
+    """wmse with a NaN averages over the three observed entries, and the
+    residual's half-sum-of-squares equals that loss."""
+    sigma = jnp.array([0.5, 1.0])
+    loss = float(_build_loss("wmse", _OBS_GAP, sigma)(_PRED_GAP))
+    assert loss == pytest.approx(((0.5 / 0.5) ** 2 + 0.0 + 1.0**2) / 3.0)
+    r = np.asarray(_build_residual("wmse", _OBS_GAP, sigma)(_PRED_GAP))
+    assert r[2] == 0.0
+    assert 0.5 * np.sum(r**2) == pytest.approx(loss)
+
+
+@pytest.mark.parametrize("loss", ["mse", "nll"])
+def test_masked_loss_and_residual_skip_missing_entries(loss):
+    """mse averages over the three observed entries and nll sums them; the
+    residual is zero at the missing entry and its half-sum-of-squares equals
+    the theta-dependent part of the loss."""
+    sigma = jnp.array([0.5, 1.0]) if loss == "nll" else None
+    value = float(_build_loss(loss, _OBS_GAP, sigma)(_PRED_GAP))
+    r = np.asarray(_build_residual(loss, _OBS_GAP, sigma)(_PRED_GAP))
+    assert r[2] == 0.0
+    if loss == "mse":
+        assert value == pytest.approx((0.5**2 + 0.0 + 1.0**2) / 3.0)
+        assert 0.5 * np.sum(r**2) == pytest.approx(value)
+    else:
+        log_norm = 2.0 * np.log(1.0) + np.log(0.5)  # the three observed entries
+        assert value == pytest.approx(log_norm + 0.5 * ((0.5 / 0.5) ** 2 + 0.0 + 1.0**2))
+        assert 0.5 * np.sum(r**2) == pytest.approx(value - log_norm)
+
+
+# ---------- missing entries: non-finite sigma / prediction cannot leak ----------
+
+_PRED_BAD = (jnp.nan, jnp.inf, -jnp.inf)
+
+
+@pytest.mark.parametrize("bad_sigma", [jnp.nan, 0.0, jnp.inf])
+@pytest.mark.parametrize("loss", ["wmse", "nll"])
+def test_masked_loss_ignores_a_bad_sigma_at_a_missing_entry(loss, bad_sigma):
+    """A NaN, zero or infinite per-entry sigma where the observation is missing
+    gives the same finite loss and residual as a valid one."""
+    good = jnp.array([[0.5, 1.0], [2.0, 1.0]])
+    bad = good.at[1, 0].set(bad_sigma)
+    for build in (_build_loss, _build_residual):
+        ref = np.asarray(build(loss, _OBS_GAP, good)(_PRED_GAP))
+        got = np.asarray(build(loss, _OBS_GAP, bad)(_PRED_GAP))
+        assert np.all(np.isfinite(got))
+        np.testing.assert_allclose(got, ref, rtol=1e-15)
+
+
+@pytest.mark.parametrize("bad_pred", _PRED_BAD)
+@pytest.mark.parametrize(
+    "loss, sigma", [("mse", None), ("wmse", jnp.array([0.5, 1.0])), ("nll", jnp.array([0.5, 1.0]))]
+)
+def test_masked_loss_ignores_a_non_finite_prediction_at_a_missing_entry(loss, sigma, bad_pred):
+    """A NaN / inf prediction at a missing entry leaves the loss, the residual
+    and their derivatives with respect to the prediction finite and equal to
+    those at a finite prediction there (the derivative at that entry is 0)."""
+    pred_bad = _PRED_GAP.at[1, 0].set(bad_pred)
+    loss_fn = _build_loss(loss, _OBS_GAP, sigma)
+    resid_fn = _build_residual(loss, _OBS_GAP, sigma)
+    assert float(loss_fn(pred_bad)) == float(loss_fn(_PRED_GAP))
+    np.testing.assert_array_equal(resid_fn(pred_bad), resid_fn(_PRED_GAP))
+    g = np.asarray(jax.grad(loss_fn)(pred_bad))
+    J = np.asarray(jax.jacfwd(resid_fn)(pred_bad))
+    Jr = np.asarray(jax.jacrev(resid_fn)(pred_bad))
+    assert np.all(np.isfinite(g)) and g[1, 0] == 0.0
+    np.testing.assert_array_equal(g, jax.grad(loss_fn)(_PRED_GAP))
+    for jac in (J, Jr):
+        assert np.all(np.isfinite(jac)) and np.all(jac[..., 1, 0] == 0.0)
+
+
+@pytest.mark.parametrize("bad_pred", _PRED_BAD)
+def test_sigma_estimate_ignores_a_non_finite_prediction_at_a_missing_entry(bad_pred):
+    """The concentrated likelihood's per-output sums of squares and raw
+    residuals stay finite, with a zero derivative at a missing entry."""
+    pred_bad = _PRED_GAP.at[1, 0].set(bad_pred)
+    sse = _build_loss("nll", _OBS_GAP, "estimate")
+    raw = _build_residual("nll", _OBS_GAP, "estimate")
+    np.testing.assert_array_equal(sse(pred_bad), sse(_PRED_GAP))
+    np.testing.assert_array_equal(raw(pred_bad), raw(_PRED_GAP))
+    g = np.asarray(jax.grad(lambda q: jnp.sum(jnp.log(sse(q))))(pred_bad))
+    assert np.all(np.isfinite(g)) and g[1, 0] == 0.0
+    J = np.asarray(jax.jacfwd(raw)(pred_bad))
+    assert np.all(np.isfinite(J)) and np.all(J[..., 1, 0] == 0.0)
+
+
+def test_sigma_estimate_without_missing_entries_is_the_plain_difference():
+    """With no NaN the concentrated-likelihood residual is pred - obs itself."""
+    obs = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+    np.testing.assert_array_equal(
+        _build_residual("nll", obs, "estimate")(_PRED_GAP), _PRED_GAP - obs
+    )
+    np.testing.assert_array_equal(
+        _build_loss("nll", obs, "estimate")(_PRED_GAP), jnp.sum((_PRED_GAP - obs) ** 2, axis=0)
+    )
+
+
+def test_time_aware_observation_fn_sees_t_obs_exactly(simple_model):
+    """With t_obs in minutes on a seconds model the native times are t_obs * 60,
+    which divided by 60 again need not give t_obs back; the time-aware
+    observation_fn still receives t_obs exactly (no solve: a stand-in forward
+    model). The times as given are also part of the compiled-objective key."""
+    t_user = jnp.asarray([0.33585575305464355, 7.294965609839984])
+    assert np.any(np.asarray(t_user) * 60.0 / 60.0 != np.asarray(t_user))
+    C0 = jnp.array([1.0, 0.0])
+    obs = jnp.zeros((2, 1))
+    fn = lambda t, C, p: t
+    prob = _resolve(simple_model, C0, obs, t_user, ["A_to_B.k"], observation_fn=fn, time_unit="min")
+    np.testing.assert_array_equal(prob.obs_times[0], t_user)
+    np.testing.assert_array_equal(prob.dataset_static[0][0], t_user * 60.0)
+
+    class _Stub:
+        def solve_trajectory(self, p, C0, t_span, t_eval):
+            return jnp.zeros((t_eval.shape[0], simple_model.n_species))
+
+    (pred,) = _predict(prob, _Stub(), prob.p0_full, jnp.zeros(0), prob.C0_base)
+    np.testing.assert_array_equal(pred[:, 0], t_user)
+
+    other = _resolve(
+        simple_model, C0, obs, t_user * 60.0, ["A_to_B.k"], observation_fn=fn, time_unit=None
+    )
+    assert other.struct_key("reverse") != prob.struct_key("reverse")
