@@ -154,6 +154,29 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   require 3.11, so 0.1.0's `>=3.10` claimed support that could not be
   installed. The package metadata now lists Python 3.11 and 3.12.
 
+- **`Plant.steady_state` (PTC) is more robust and usually faster.** On the
+  default BSM2 (reference settler, lumped TSS with soluble holdup) it took about
+  100 iterations, varied erratically with tiny changes to the start, and ran
+  past its 400-iteration cap on Linux before falling back to forward
+  integration. It now converges in about 37 iterations, and the per-species
+  settler configurations in about 25-30 instead of about 50. Three changes in
+  `ptc_forward` (the second and third can be switched off by keyword):
+  - the positivity limit on the step is applied per state instead of as one
+    step length for all states, so a near-zero concentration that the step
+    drives negative (nitrate in an anoxic tank) no longer shrinks every other
+    state's update to nothing;
+  - after a healthy step (full step, residual not rising) the pseudo-time step
+    grows by at least `growth_floor` (default 2; `1.0` is pure SER), and the
+    SER ratio is taken on the mean scaled residual (`ser_norm="mean"`; `"max"`
+    is the old norm). Convergence is still tested on the max-norm;
+  - after `stall_patience` iterations (default 30; `0` disables) without a new
+    best residual, the iteration restarts from the best iterate at a tenth of
+    the pseudo-time step.
+  The operating point is unchanged; only the path to it differs. With the
+  reference settler and a flat `scale_floor=1.0` PTC can still stall near the
+  root (the settler's lower layers sit on a kink of the Takacs flux limiter),
+  in which case `steady_state` falls back to forward integration as before.
+
 - **`aquakin.calibrate` now enforces the `bounds:` declared on model
   parameters.** They are mapped into the space the optimiser works in (log for
   `positive_log`, logit for `logit`), as `aquakin.fit` already did, and are the

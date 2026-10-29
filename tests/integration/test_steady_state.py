@@ -535,19 +535,17 @@ def test_bsm2_steady_state_matches_forward():
     from aquakin.plant.bsm import bsm2_warm_start
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
-    # Pinned to the per-species settler without soluble holdup (build_bsm2's
-    # default before v0.2.0): this checks the PTC solver itself. With the
-    # default reference settler (lumped TSS + holdup) BSM2 PTC is near its
-    # iteration cap and platform-sensitive -- 97 iterations on macOS, past 400
-    # on Linux CI -- and then falls back to forward integration (issue #627).
-    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1,
-                       settler_composition_mode="per_species",
-                       settler_soluble_holdup=False)
+    # The default reference settler (lumped TSS + soluble holdup). Before the
+    # per-state positivity limit, healthy-step dt growth and stall restart (issue
+    # #627) PTC needed ~100 iterations here, erratically, and ran past 400 on
+    # Linux CI; it now takes ~37, so the cap below has a wide margin.
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
     params = bsm2_parameters(asm1, adm1)
     ss = plant.steady_state(params, y0=y0)
     assert ss.method == "ptc" and bool(ss.converged)
+    assert int(ss.iterations) <= 150
     assert float(ss.residual) < 1e-5
     fwd = plant.run_to_steady_state(params, y0=y0, max_time=400.0, max_steps=800_000)
     i = asm1.species_index
@@ -585,6 +583,78 @@ def test_ptc_line_search_bounds_finite_blowup():
     np.testing.assert_allclose(np.asarray(res.state), [1.0], atol=1e-6)
 
 
+def test_ptc_positivity_limit_is_per_state():
+    # A near-zero state driven hard negative must not throttle the rest of the
+    # step (issue #627). Here state 0 sits at 1e-6 with a constant sink, state 1
+    # is one Newton step from its root 2. A common fraction-to-boundary step
+    # length (0.95 * 1e-6 / |dy_0|) would leave state 1 essentially unmoved; the
+    # per-state limit cuts only state 0, to 5% of its value, and state 1 takes
+    # its full step.
+    def rhs(y, p):
+        return jnp.array([-1.0 + 0.0 * y[0], 2.0 - y[1]])
+
+    y, _, k, _ = ptc_forward(rhs, None, jnp.array([1e-6, 1.0]), dt0=1e8, max_iter=1,
+                             scale_floor=1.0)
+    assert int(k) == 1
+    np.testing.assert_allclose(float(y[0]), 0.05e-6, rtol=1e-6)
+    np.testing.assert_allclose(float(y[1]), 2.0, rtol=1e-6)
+
+
+def test_ptc_growth_floor_escapes_slow_plateau():
+    # dy/dt = 1 - y from y=0 with a tiny dt0: every step is a clean full step but
+    # the residual falls only by the fraction dt/(1+dt), so pure SER
+    # (growth_floor=1) grows dt just as slowly and is still far from the root
+    # at the cap. The healthy-step growth floor doubles dt per clean step.
+    def rhs(y, p):
+        return 1.0 - y
+
+    kw = dict(dt0=1e-3, scale_floor=1.0, tol=1e-10)
+    *_, k_ser, conv_ser = ptc_forward(rhs, None, jnp.array([0.0]), growth_floor=1.0, **kw)
+    y, _, k, conv = ptc_forward(rhs, None, jnp.array([0.0]), **kw)
+    assert not bool(conv_ser) and int(k_ser) == 400
+    assert bool(conv) and int(k) < 30
+    np.testing.assert_allclose(float(y[0]), 1.0, atol=1e-8)
+
+
+@pytest.mark.parametrize("ser_norm", ["mean", "max"])
+def test_ptc_ser_norm_choices_converge(ser_norm):
+    def rhs(y, p):
+        return 1.0 - y
+
+    y, _, _, conv = ptc_forward(rhs, None, jnp.array([0.0]), dt0=1e-3, scale_floor=1.0,
+                                tol=1e-10, ser_norm=ser_norm)
+    assert bool(conv)
+    np.testing.assert_allclose(float(y[0]), 1.0, atol=1e-8)
+
+
+def test_ptc_rejects_unknown_ser_norm():
+    with pytest.raises(ValueError, match="ser_norm"):
+        ptc_forward(lambda y, p: -y, None, jnp.array([1.0]), ser_norm="l2")
+
+
+def test_ptc_stall_restart_returns_to_best_iterate():
+    # With the line-search bound off, the first step of the cubic (see
+    # test_ptc_line_search_bounds_finite_blowup) overshoots to y~3e3, a worse
+    # residual. With stall_patience=1 that non-improving step triggers a restart
+    # from the best iterate (the start) at a tenth of dt, and the solve then
+    # converges in fewer iterations than riding out the overshoot.
+    def rhs(y, p):
+        return 1.0 - y ** 3
+
+    kw = dict(dt0=1e6, scale_floor=1.0, nonneg=False, divergence_factor=jnp.inf)
+    held, *_ = ptc_forward(rhs, None, jnp.array([0.01]), max_iter=1, stall_patience=1, **kw)
+    jumped, *_ = ptc_forward(rhs, None, jnp.array([0.01]), max_iter=1, stall_patience=0, **kw)
+    assert float(held[0]) == pytest.approx(0.01)
+    assert float(jumped[0]) > 1e3
+    y, _, k_restart, conv = ptc_forward(rhs, None, jnp.array([0.01]), stall_patience=1,
+                                        tol=1e-10, **kw)
+    *_, k_ride, conv_ride = ptc_forward(rhs, None, jnp.array([0.01]), stall_patience=0,
+                                        tol=1e-10, **kw)
+    assert bool(conv) and bool(conv_ride)
+    assert int(k_restart) < int(k_ride)
+    np.testing.assert_allclose(float(y[0]), 1.0, atol=1e-8)
+
+
 @pytest.mark.slow
 def test_bsm2_steady_state_per_state_scaling_converges_competitively():
     # The default per-state pseudo-time / residual floor (max(|y0|, 1e-6)) gives
@@ -603,11 +673,14 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
     from aquakin.plant.bsm import bsm2_warm_start
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
-    # Pinned to the per-species settler without soluble holdup (build_bsm2's
-    # default before v0.2.0): this checks the PTC solver itself. With the
-    # default reference settler (lumped TSS + holdup) BSM2 PTC is near its
-    # iteration cap and platform-sensitive -- 97 iterations on macOS, past 400
-    # on Linux CI -- and then falls back to forward integration (issue #627).
+    # Pinned to the per-species settler without soluble holdup: this compares the
+    # two scale floors, and needs a plant on which the flat floor converges. With
+    # the default reference settler (lumped TSS + holdup) the flat floor still
+    # stalls near the root on many starts (issue #627): the layers below the feed
+    # all reach the same TSS, which puts the steady state on a kink of the Takacs
+    # min(flux) between equal neighbours, and an unscaled Newton step chatters
+    # across it. The per-state default converges there (see
+    # test_bsm2_steady_state_matches_forward).
     plant = build_bsm2(asm1_model=asm1, adm1_model=adm1,
                        settler_composition_mode="per_species",
                        settler_soluble_holdup=False)

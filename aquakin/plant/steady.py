@@ -16,12 +16,15 @@ regularisation: at small ``dt`` the step is a stable backward-Euler move along
 the physical transient (globally convergent, like time-stepping), and as ``dt``
 grows the term vanishes and the step becomes Newton's method (quadratic terminal
 convergence). The pseudo-timestep is ramped by Switched-Evolution-Relaxation
-(SER), ``dt <- dt * rho_old / rho_new``, where ``rho`` is the scaled residual
-``max_i |F_i| / max(|y_i|, scale_floor)`` (the same quantity as the convergence
-test) and the ratio is clipped to ``[shrink_floor, growth_cap]`` (``dt`` is also
-capped by ``dt_max``), so ``dt`` grows as the residual falls. This is the standard robust method for "forward integration
-converges but Newton stalls" systems and the basis of pseudo-transient
-flowsheet convergence (Pattison & Baldea 2014).
+(SER), ``dt <- dt * rho_old / rho_new``, where ``rho`` is the mean scaled
+residual ``mean_i |F_i| / max(|y_i|, scale_floor)`` and the ratio is clipped to
+``[shrink_floor, growth_cap]`` (``dt`` is also capped by ``dt_max``), so ``dt``
+grows as the residual falls. After a healthy step (a full step whose ``rho`` did
+not rise) ``dt`` grows by at least ``growth_floor``, so a slow residual plateau
+does not hold the ramp back. Convergence is tested on the max-norm
+``max_i |F_i| / max(|y_i|, scale_floor)``. This is the standard robust method
+for "forward integration converges but Newton stalls" systems and the basis of
+pseudo-transient flowsheet convergence (Pattison & Baldea 2014).
 
 A **step-acceptance guard** makes the ramp robust to a far-from-solution
 overshoot: a step whose scaled residual is non-finite or grows past a generous
@@ -30,7 +33,10 @@ backward-Euler limit) rather than accepted. PTC is legitimately non-monotone --
 a healthy step can spike the residual and recover -- so the threshold is generous
 and a converging run never rejects (it is bit-identical to the unguarded
 iteration); only a genuine divergence (which would otherwise run to ``NaN``, e.g.
-from a cold start) is pulled back.
+from a cold start) is pulled back. If a run then goes ``stall_patience``
+iterations without a new best residual it restarts from the best iterate at a
+smaller ``dt``. The step's positivity limit is applied per state, so one
+near-zero concentration cannot shrink the whole step.
 
 ``V = diag(max(|y|, floor))`` (per-state pseudo-time) is essential here: plant
 states span orders of magnitude (dissolved O2 ~ 2, heterotrophs ~ 2000, gas
@@ -120,6 +126,9 @@ def ptc_forward(
     scale_floor: float = 1.0,
     nonneg: bool = True,
     divergence_factor: float = 1000.0,
+    growth_floor: float = 2.0,
+    ser_norm: str = "mean",
+    stall_patience: int = 30,
     jac_fn: Callable | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Run the PTC iteration to a steady state of ``rhs(y, params) = 0``.
@@ -169,6 +178,26 @@ def ptc_forward(
         converging run never rejects (it is bit-identical to no guard) while a
         diverging one is pulled back. Set to ``inf`` to reject only non-finite
         steps.
+    growth_floor : float
+        Minimum per-step growth of ``dt`` after a *healthy* step: a full step
+        (no backtrack) whose SER residual did not rise by more than 5%. SER alone
+        grows ``dt`` only as fast as the residual falls, so on a slow plateau (a
+        settler sludge blanket filling) it crawls for hundreds of iterations at a
+        tiny ``dt`` although every step is clean. ``1.0`` disables it (pure SER).
+    ser_norm : {"mean", "max"}
+        The residual norm the SER ratio is taken on. ``"mean"`` (default) uses the
+        mean of ``|F_i| / max(|y_i|, scale_floor)``; ``"max"`` uses the scaled
+        max-norm (the convergence measure). The max-norm jumps between states as
+        the worst component changes, so a ratio of successive max-norms is a noisy
+        progress signal; the mean reflects the whole state. Convergence is always
+        tested on the max-norm. Static.
+    stall_patience : int
+        If neither the max-norm nor the SER residual has reached a new best for
+        this many iterations, restart from the best iterate with ``dt`` cut to a tenth of
+        its value there (each further restart cuts again). This recovers a run
+        that a permissive non-monotone step (see ``divergence_factor``) has
+        thrown out of the basin, rather than letting it wander to ``max_iter``.
+        ``0`` disables it.
     jac_fn : callable, optional
         Custom Jacobian materializer ``(F, y) -> dF/dy``, used in place of the
         default dense ``jax.jacfwd(F)`` at each iteration. The PTC step
@@ -193,15 +222,25 @@ def ptc_forward(
 
     jac = jax.jacfwd(F) if jac_fn is None else (lambda y: jac_fn(F, y))
 
+    if ser_norm not in ("mean", "max"):
+        raise ValueError(f"ser_norm must be 'mean' or 'max'; got {ser_norm!r}.")
+
+    def _ser_resnorm(Fv, yv):
+        if ser_norm == "max":
+            return _scaled_resnorm(Fv, yv, scale_floor)
+        return jnp.mean(jnp.abs(Fv) / jnp.maximum(jnp.abs(yv), scale_floor))
+
     # Globalization of the PTC step. A bare backward-Euler step at a large
     # pseudo-time can overshoot -- through zero into the post-solve clip, or far
     # past the trajectory -- and, with no control on the residual, wander or
     # compound to a non-physical value that never recovers within ``max_iter``.
-    # Two safeguards prevent this:
-    #  (1) a positivity-preserving step length (fraction-to-boundary): the step is
-    #      capped so a currently-positive state is not overshot through zero, where
-    #      the post-solve clip would otherwise distort the step the residual test
-    #      sees and seed a divergence; and
+    # Three safeguards prevent this:
+    #  (1) a per-state positivity limit (fraction-to-boundary): each component that
+    #      would cross zero has its own update cut to ``ftb_tau`` of its distance to
+    #      zero. It is per state, not a common step length: a common length is set
+    #      by the single state nearest zero, and a near-zero state that the Newton
+    #      step drives negative (nitrate in an anoxic tank) then shrinks the whole
+    #      step ~20x per iteration until it stalls the solve (issue #627);
     #  (2) a backtracking line search that shrinks the step until its residual is
     #      within ``divergence_factor`` of the BEST residual seen so far. Gating
     #      against the best (not the current) residual is what forbids the runaway:
@@ -215,15 +254,20 @@ def ptc_forward(
     #      arclength (:func:`continuation_solve`, :func:`arclength_continuation_solve`)
     #      -- recover the out-of-basin / near-fold cases far faster than the
     #      time-integration backstop, so the right design is a wide-basin PTC that
-    #      converges most cases quickly and hands the rest to those fallbacks.
+    #      converges most cases quickly and hands the rest to those fallbacks; and
+    #  (3) a stall restart: a permissive step can still leave the basin, so after
+    #      ``stall_patience`` iterations without a new best residual the iterate is
+    #      reset to the best one with a smaller ``dt``.
     # On a step that cannot be brought within the bound, the iterate is held and dt
     # hard-shrunk for a stabler retry.
     ftb_tau = 0.95  # fraction-to-boundary safety factor (item 1)
     ls_beta = 0.5  # backtracking step factor (item 2)
     ls_max = 20  # max backtracks (alpha shrinks to ~1e-6)
+    healthy_rise = 1.05  # a full step whose SER residual rose <= 5% is healthy
+    stall_shrink = 0.1  # dt multiplier on a stall restart (item 3)
 
     def step(carry):
-        y, dt, r, r_best, k = carry
+        y, dt, r, rs, r_best, y_best, rs_best, dt_best, rs_low, since, k = carry
         Fy = F(y)
         J = jac(y)
         s = jnp.maximum(jnp.abs(y), scale_floor)
@@ -231,39 +275,36 @@ def ptc_forward(
         A = eye * (s / dt)[:, None] - J
         dy = jnp.linalg.solve(A, Fy)
 
-        # (1) Positivity-preserving max step length: the largest alpha keeping each
-        # currently-positive state nonnegative, with a safety factor; 1 when the
-        # step does not drive any positive state down (or ``nonneg`` is off).
+        # (1) Per-state positivity limit: a currently-positive state may fall by at
+        # most ``ftb_tau`` of its value; other components keep their full update.
         if nonneg:
-            ratio = jnp.where((dy < 0.0) & (y > 0.0), y / -dy, jnp.inf)
-            alpha0 = jnp.minimum(1.0, ftb_tau * jnp.min(ratio))
-        else:
-            alpha0 = jnp.asarray(1.0)
+            dy = jnp.where((dy < 0.0) & (y > 0.0), jnp.maximum(dy, -ftb_tau * y), dy)
 
         def _trial(alpha):
             yt = y + alpha * dy
             if nonneg:
                 yt = jnp.maximum(yt, 0.0)  # clip any residual roundoff negatives
-            return yt, _scaled_resnorm(F(yt), yt, scale_floor)
+            Ft = F(yt)
+            return yt, _scaled_resnorm(Ft, yt, scale_floor), _ser_resnorm(Ft, yt)
 
         # (2) Backtrack while the step overshoots beyond divergence_factor x the
-        # best residual so far (non-monotone bound). A converging step accepts
-        # ``alpha0`` with no backtrack.
+        # best residual so far (non-monotone bound). A converging step accepts the
+        # full step with no backtrack.
         bound = divergence_factor * r_best
-        yt0, rt0 = _trial(alpha0)
+        yt0, rt0, rst0 = _trial(jnp.asarray(1.0))
 
         def _ls_cond(c):
-            _, _, rt, j = c
+            _, _, rt, _, j = c
             return (~(jnp.isfinite(rt) & (rt <= bound))) & (j < ls_max)
 
         def _ls_body(c):
-            alpha, _, _, j = c
+            alpha, _, _, _, j = c
             a = alpha * ls_beta
-            yt, rt = _trial(a)
-            return (a, yt, rt, j + 1)
+            yt, rt, rst = _trial(a)
+            return (a, yt, rt, rst, j + 1)
 
-        _, y_trial, r_trial, _ = jax.lax.while_loop(
-            _ls_cond, _ls_body, (alpha0, yt0, rt0, jnp.asarray(0))
+        _, y_trial, r_trial, rs_trial, n_back = jax.lax.while_loop(
+            _ls_cond, _ls_body, (jnp.asarray(1.0), yt0, rt0, rst0, jnp.asarray(0))
         )
 
         # Accept a step within the bound; otherwise hold the iterate and hard-shrink
@@ -272,24 +313,61 @@ def ptc_forward(
         accept = jnp.isfinite(r_trial) & (r_trial <= bound)
         y_new = jnp.where(accept, y_trial, y)
         r_new = jnp.where(accept, r_trial, r)
-        r_best_new = jnp.minimum(r_best, r_new)
+        rs_new = jnp.where(accept, rs_trial, rs)
         # Accept: Switched-Evolution-Relaxation grows dt inversely to the residual
-        # ratio (capped above, floored below). Reject: hard-shrink dt toward the
-        # stable limit (floored so it cannot underflow to zero).
-        ser = jnp.clip(r / jnp.maximum(r_trial, 1e-30), shrink_floor, growth_cap)
+        # ratio (capped above, floored below), and at least by ``growth_floor`` after
+        # a healthy step. Reject: hard-shrink dt toward the stable limit (floored so
+        # it cannot underflow to zero).
+        ser = jnp.clip(rs / jnp.maximum(rs_trial, 1e-30), shrink_floor, growth_cap)
+        healthy = (n_back == 0) & (rs_trial <= healthy_rise * rs)
+        ser = jnp.where(healthy, jnp.maximum(ser, growth_floor), ser)
         dt_new = jnp.where(
             accept, jnp.minimum(dt_max, dt * ser), jnp.maximum(dt * reject_shrink, dt_min)
         )
-        return (y_new, dt_new, r_new, r_best_new, k + 1)
+
+        # (3) Track the best iterate; restart from it after a stall. Progress is a
+        # new best on either norm: the max-norm can sit on one slow state for many
+        # iterations while the mean (what SER steers by) is still falling, and a
+        # restart there would throw that progress away.
+        improved = r_new < r_best
+        progress = improved | (rs_new < rs_low)
+        rs_low = jnp.minimum(rs_low, rs_new)
+        r_best = jnp.where(improved, r_new, r_best)
+        y_best = jnp.where(improved, y_new, y_best)
+        rs_best = jnp.where(improved, rs_new, rs_best)
+        dt_best = jnp.where(improved, dt_new, dt_best)
+        since = jnp.where(progress, 0, since + 1)
+        restart = (stall_patience > 0) & (since >= stall_patience)
+        dt_best = jnp.where(restart, jnp.maximum(dt_best * stall_shrink, dt_min), dt_best)
+        y_new = jnp.where(restart, y_best, y_new)
+        r_new = jnp.where(restart, r_best, r_new)
+        rs_new = jnp.where(restart, rs_best, rs_new)
+        dt_new = jnp.where(restart, dt_best, dt_new)
+        since = jnp.where(restart, 0, since)
+        return (
+            y_new,
+            dt_new,
+            r_new,
+            rs_new,
+            r_best,
+            y_best,
+            rs_best,
+            dt_best,
+            rs_low,
+            since,
+            k + 1,
+        )
 
     def cond(carry):
-        _, _, r, _, k = carry
+        r, k = carry[2], carry[-1]
         return (r > tol) & (k < max_iter)
 
-    r0 = _scaled_resnorm(F(y0), y0, scale_floor)
-    y_star, _, r_star, _, k_star = jax.lax.while_loop(
-        cond, step, (y0, jnp.asarray(dt0), r0, r0, jnp.asarray(0))
-    )
+    F0 = F(y0)
+    r0 = _scaled_resnorm(F0, y0, scale_floor)
+    rs0 = _ser_resnorm(F0, y0)
+    dt0 = jnp.asarray(dt0)
+    init = (y0, dt0, r0, rs0, r0, y0, rs0, dt0, rs0, jnp.asarray(0), jnp.asarray(0))
+    y_star, _, r_star, *_, k_star = jax.lax.while_loop(cond, step, init)
     converged = r_star <= tol
     return y_star, r_star, k_star, converged
 
