@@ -12,16 +12,11 @@
 # Status checks are informational (never fail CI) -- this adds a badge and a
 # report, not a coverage gate.
 #
-# after_n_builds: the fast tier uploads once per shard (`unit` 2 shards +
-# `integration` 6 shards, x 2 Python versions = 16 uploads, see
-# .github/workflows/ci.yml). Without a count Codecov posts its PR comment and
-# patch status after the first few uploads, so an early report shows the
-# changed lines that only a still-running shard covers as missing. Keep this in
-# step with the fast tier's shard counts: too high and the comment never posts,
-# too low and it posts early again.
-codecov:
-  notify:
-    after_n_builds: 16
+# The fast tier uploads once per run, from the `fast-coverage` job after every
+# fast shard has finished (.github/workflows/ci.yml), so the PR comment and
+# patch status are built from the whole fast tier. Per-shard uploads made
+# Codecov report after the first few, and `after_n_builds` did not prevent it
+# (the carried-forward sessions count toward it).
 
 coverage:
   status:
@@ -52,4 +47,3 @@ flags:
 comment:
   layout: "reach, diff, flags, files"
   require_changes: false
-  after_n_builds: 16  # see the note at the top
