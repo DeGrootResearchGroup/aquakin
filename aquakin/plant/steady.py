@@ -16,8 +16,10 @@ regularisation: at small ``dt`` the step is a stable backward-Euler move along
 the physical transient (globally convergent, like time-stepping), and as ``dt``
 grows the term vanishes and the step becomes Newton's method (quadratic terminal
 convergence). The pseudo-timestep is ramped by Switched-Evolution-Relaxation
-(SER), ``dt <- dt * ||F_old|| / ||F_new||`` capped from above, so it grows as the
-residual falls. This is the standard robust method for "forward integration
+(SER), ``dt <- dt * rho_old / rho_new``, where ``rho`` is the scaled residual
+``max_i |F_i| / max(|y_i|, scale_floor)`` (the same quantity as the convergence
+test) and the ratio is clipped to ``[shrink_floor, growth_cap]`` (``dt`` is also
+capped by ``dt_max``), so ``dt`` grows as the residual falls. This is the standard robust method for "forward integration
 converges but Newton stalls" systems and the basis of pseudo-transient
 flowsheet convergence (Pattison & Baldea 2014).
 
