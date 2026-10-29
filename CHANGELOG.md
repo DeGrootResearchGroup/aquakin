@@ -190,6 +190,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `Plant.steady_state(design=...)`: the forward fallback now accepts
+  `run_to_steady_state`'s `criterion`, `tol` and `scale_floor` through
+  `fallback_kwargs` (they used to raise `TypeError`) and reports the scaled
+  `residual` of its result (it used to be `None`). It stops on the same test
+  as the fallback without `design`.
 - `Plant.steady_state(design=...)` now warns when it skips a requested
   `continuation_from` (and arclength) fallback. Those rungs deform the
   parameter vector alone and cannot carry design overrides, so they were

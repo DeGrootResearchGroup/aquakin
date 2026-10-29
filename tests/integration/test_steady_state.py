@@ -466,6 +466,36 @@ def test_steady_state_forward_fallback_honours_design(extra):
     np.testing.assert_allclose(np.asarray(ss.state), [2.5, 2.5], rtol=1e-4)
 
 
+@pytest.mark.parametrize("criterion", ["norm", "scaled_residual"])
+def test_steady_state_design_forward_fallback_takes_criterion(criterion):
+    # The design-override forward rung takes run_to_steady_state's criterion /
+    # tol / scale_floor and returns the scaled residual (issue #628). With the
+    # design feed equal to the recorded one it matches the plain fallback.
+    plant, _ = _design_cstr()
+    same = {"influent": {"feed": {"Q": jnp.asarray(10.0), "C": jnp.asarray([1.0, 0.0])}}}
+    kw = {"criterion": criterion, "tol": 1e-9, "scale_floor": 1e-6,
+          "ss_rtol": 1e-10, "ss_atol": 1e-10}
+    common = dict(max_iter=1, tol=1e-12, arclength=False, fallback_kwargs=kw)
+    ss_d = plant.steady_state(design=same, **common)
+    ss_p = plant.steady_state(**common)
+    for ss in (ss_d, ss_p):
+        assert ss.method == "ptc->forward"
+        assert bool(ss.converged)
+        assert ss.residual is not None and np.isfinite(ss.residual)
+    if criterion == "scaled_residual":
+        assert ss_d.residual <= 1e-9
+    np.testing.assert_allclose(np.asarray(ss_d.state), np.asarray(ss_p.state), rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(ss_d.state), [0.5, 0.5], rtol=1e-6)
+    assert ss_d.residual == pytest.approx(ss_p.residual, rel=1e-3, abs=1e-9)
+
+
+def test_steady_state_design_forward_fallback_rejects_bad_criterion():
+    plant, design = _design_cstr()
+    with pytest.raises(ValueError, match="criterion"):
+        plant.steady_state(design=design, max_iter=1, tol=1e-12, arclength=False,
+                           fallback_kwargs={"criterion": "bogus"})
+
+
 @pytest.mark.parametrize("arclength, named", [
     (True, "continuation_from and arclength"),
     (False, "continuation_from fallback"),

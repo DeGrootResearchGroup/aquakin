@@ -3606,19 +3606,18 @@ class Plant:
         >>> fwd.residual <= 1e-8
         True
         """
-        from aquakin.plant.steady import _scaled_residual_event, _scaled_resnorm
-
-        if criterion not in ("norm", "scaled_residual"):
-            raise ValueError(f"criterion must be 'norm' or 'scaled_residual'; got {criterion!r}.")
         self._build_state_layout()
         y0 = self.initial_state() if y0 is None else jnp.asarray(y0)
         if atol is None:
             atol = self._default_atol(y0, atol_factor=atol_factor)
-        floor = self._steady_scale_floor(y0, scale_floor)
-        if criterion == "norm":
-            event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
-        else:
-            event = diffrax.Event(_scaled_residual_event(tol, floor))
+        event, floor = self._steady_forward_event(
+            y0,
+            criterion=criterion,
+            ss_rtol=ss_rtol,
+            ss_atol=ss_atol,
+            tol=tol,
+            scale_floor=scale_floor,
+        )
         sol = self.solve(
             t_span=(0.0, float(max_time)),
             params=params,
@@ -3630,7 +3629,51 @@ class Plant:
         )
         t_final = float(sol.t[-1])
         state = sol.state[-1]
-        residual = float(_scaled_resnorm(self.derivative(state, params, t=t_final), state, floor))
+        return self._steady_forward_result(
+            state,
+            self.derivative(state, params, t=t_final),
+            t_final,
+            max_time=max_time,
+            criterion=criterion,
+            tol=tol,
+            floor=floor,
+            solution=sol,
+        )
+
+    def _steady_forward_event(self, y0, *, criterion, ss_rtol, ss_atol, tol, scale_floor):
+        """The stopping event and ``|y|`` floor of a forward steady-state solve.
+
+        Shared by :meth:`run_to_steady_state` and :meth:`_steady_forward_design`
+        so both stop on the same test. ``criterion="norm"`` is diffrax's
+        steady-state event (``ss_rtol`` / ``ss_atol``); ``"scaled_residual"``
+        stops once the scaled residual with floor ``scale_floor`` is at most
+        ``tol``. Returns ``(event, floor)``.
+        """
+        from aquakin.plant.steady import _scaled_residual_event
+
+        if criterion not in ("norm", "scaled_residual"):
+            raise ValueError(f"criterion must be 'norm' or 'scaled_residual'; got {criterion!r}.")
+        floor = self._steady_scale_floor(y0, scale_floor)
+        if criterion == "norm":
+            event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
+        else:
+            event = diffrax.Event(_scaled_residual_event(tol, floor))
+        return event, floor
+
+    @staticmethod
+    def _steady_forward_result(
+        state, F, t_final, *, max_time, criterion, tol, floor, solution=None
+    ) -> SteadyStateResult:
+        """Package a forward steady-state solve, with its scaled ``residual``.
+
+        ``F`` is the vector field at the final ``state``. With
+        ``criterion="norm"``, ``converged`` means the event fired before
+        ``max_time``; with ``"scaled_residual"``, that the residual is at most
+        ``tol``.
+        """
+        from aquakin.plant.steady import _scaled_resnorm
+
+        residual = float(_scaled_resnorm(F, state, floor))
         if criterion == "norm":
             converged = bool(t_final < float(max_time))
         else:
@@ -3639,7 +3682,7 @@ class Plant:
             state=state,
             converged=converged,
             time=t_final,
-            solution=sol,
+            solution=solution,
             method="forward",
             residual=residual,
         )
@@ -3905,6 +3948,9 @@ class Plant:
         atol: float | jnp.ndarray | None = None,
         atol_factor: float = 1e-6,
         max_steps: int = 500_000,
+        criterion: str = "norm",
+        tol: float = 1e-6,
+        scale_floor: float | jnp.ndarray | None = None,
     ) -> SteadyStateResult:
         """Forward-integration steady state of a design-override ``rhs``.
 
@@ -3912,9 +3958,10 @@ class Plant:
         are given. :meth:`run_to_steady_state` integrates the recorded influent,
         so it cannot see the overrides; this integrates the same autonomous
         ``rhs(y, theta)`` whose root PTC was seeking (influent frozen at
-        ``influent_time`` with the overrides applied) until diffrax's
-        steady-state event fires. Takes the keyword arguments of
-        :meth:`run_to_steady_state` with the same meaning.
+        ``influent_time`` with the overrides applied) until the stopping event
+        fires. Takes every keyword argument of :meth:`run_to_steady_state`
+        except ``params`` (carried in ``theta``) and ``y0`` (positional here),
+        with the same meaning, stopping test and ``residual``.
 
         Parameters
         ----------
@@ -3924,19 +3971,30 @@ class Plant:
             ``(params, design)``.
         y0 : jnp.ndarray
             Initial state.
-        max_time, ss_rtol, ss_atol, rtol, atol, atol_factor, max_steps
+        max_time, ss_rtol, ss_atol, rtol, atol, atol_factor, max_steps, criterion, tol, scale_floor
             As for :meth:`run_to_steady_state`.
 
         Returns
         -------
         SteadyStateResult
-            ``converged`` is ``True`` only when the steady-state event fired
-            before ``max_time``.
+            As for :meth:`run_to_steady_state`, without the ``solution``.
+
+        Raises
+        ------
+        ValueError
+            If ``criterion`` is not ``"norm"`` or ``"scaled_residual"``.
         """
         y0 = jnp.asarray(y0)
         if atol is None:
             atol = self._default_atol(y0, atol_factor=atol_factor)
-        event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
+        event, floor = self._steady_forward_event(
+            y0,
+            criterion=criterion,
+            ss_rtol=ss_rtol,
+            ss_atol=ss_atol,
+            tol=tol,
+            scale_floor=scale_floor,
+        )
         with friendly_solve_errors(max_steps, what="plant steady-state fallback"):
             # The shared forward-solve wrapper builds the canonical implicit
             # solver and step controller.
@@ -3953,11 +4011,15 @@ class Plant:
                 event=event,
             )
         t_final = float(sol.ts[-1])
-        return SteadyStateResult(
-            state=sol.ys[-1],
-            converged=bool(t_final < float(max_time)),
-            time=t_final,
-            method="forward",
+        state = sol.ys[-1]
+        return self._steady_forward_result(
+            state,
+            rhs(state, theta),
+            t_final,
+            max_time=max_time,
+            criterion=criterion,
+            tol=tol,
+            floor=floor,
         )
 
     def steady_state(
