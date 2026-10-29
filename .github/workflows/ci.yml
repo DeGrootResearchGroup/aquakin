@@ -229,19 +229,17 @@ jobs:
           free -m
           cat "$RUNNER_TEMP/vmstat.log" || true
 
-      - name: Upload coverage to Codecov
-        # fail_ci_if_error:false so a Codecov hiccup never reds the required fast
-        # gate; !cancelled() uploads whatever coverage was produced even if a test
-        # failed. Per-tier flag + carryforward (codecov.yml) let a PR -- which runs
-        # only the fast tier -- still show slow/validation coverage from main.
+      - name: Keep this shard's coverage for the fast-coverage upload
+        # Not uploaded to Codecov from here: `fast-coverage` uploads every fast
+        # shard's report at once (see there). !cancelled() keeps whatever
+        # coverage was produced even if a test failed.
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@v5
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.xml
-          flags: fast
-          name: fast-unit-py${{ matrix.python-version }}-g${{ matrix.group }}
-          fail_ci_if_error: false
+          name: coverage-fast-unit-py${{ matrix.python-version }}-g${{ matrix.group }}
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 3
 
   integration:
     name: integration tests (py${{ matrix.python-version }} shard ${{ matrix.group }}/6)
@@ -294,15 +292,64 @@ jobs:
           free -m
           cat "$RUNNER_TEMP/vmstat.log" || true
 
-      - name: Upload coverage to Codecov
+      - name: Keep this shard's coverage for the fast-coverage upload
         # See the same step in `unit`.
         if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-fast-integration-py${{ matrix.python-version }}-g${{ matrix.group }}
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 3
+
+  # ---- Fast-tier coverage: ONE Codecov upload after every fast shard -----------
+  # Each fast shard keeps its coverage.xml as an artifact and this job uploads
+  # them all to Codecov in a single call, once the unit and integration matrices
+  # have finished. Codecov builds its PR comment and patch status from the
+  # uploads it has when it processes one, so per-shard uploads made it report
+  # after the first few shards: lines only a still-running shard covers showed as
+  # missing (63.6 % patch coverage on a PR that was fully covered). Codecov's
+  # `after_n_builds` did not hold it back, because the carried-forward
+  # slow/validation/heavy sessions count toward it. One upload per run has no
+  # count to keep in step with the shard numbers.
+  #
+  # fail_ci_if_error:false so a Codecov hiccup never reds a run; the job is not a
+  # required check. Per-tier flag + carryforward (codecov.yml) let a PR -- which
+  # runs only the fast tier -- still show slow/validation coverage from main.
+  fast-coverage:
+    name: fast-tier coverage upload
+    needs: [unit, integration]
+    if: >-
+      always() && github.event_name != 'schedule'
+      && github.event_name != 'workflow_dispatch'
+      && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download every fast shard's coverage
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-fast-*
+          path: _coverage
+
+      - name: List the reports
+        id: reports
+        run: |
+          files="$(find _coverage -name coverage.xml | sort | paste -sd, -)"
+          echo "found: $files"
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Codecov
+        if: steps.reports.outputs.files != ''
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.xml
+          files: ${{ steps.reports.outputs.files }}
+          disable_search: true
           flags: fast
-          name: fast-integration-py${{ matrix.python-version }}-g${{ matrix.group }}
+          name: fast
           fail_ci_if_error: false
 
   # ---- Fast-gate aggregator: the single required status check ------------------

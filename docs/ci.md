@@ -78,6 +78,14 @@ nor concentrating it in a few files makes the whole suite fast.
   the runner's free memory and swap every 30 s (`vmstat`) and prints it at the
   end, so a slow, swapping or killed shard can be told apart.
 
+  Coverage goes to Codecov **once per run**: each fast shard keeps its
+  `coverage.xml` as an artifact, and the **`fast-coverage`** job (after both
+  matrices, under the `fast` flag) uploads them all in one call. With one upload
+  per shard, Codecov posted its PR comment and patch status after the first few
+  shards and showed the lines a still-running shard covers as missing.
+  `after_n_builds` in `codecov.yml` did not help, because the carried-forward
+  slow/validation/heavy sessions count toward it.
+
   The fast-tier durations are recorded by **`refresh-fast-durations`**, which
   runs with the weekly slow/validation refresh (`refresh-durations`, Mondays,
   or a manual `workflow_dispatch`). It uses the same
