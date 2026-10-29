@@ -123,6 +123,26 @@ def test_equilibrium_adds_mineral_ions_to_background():
     assert x_off - x_own > 1e-6 * x_off
 
 
+def test_equilibrium_counts_kinetic_only_ions_at_the_current_state():
+    # With AlPO4 kinetic, S_Al is not conserved by the equilibrium solve, but it
+    # still adds to the ionic strength, at its current concentration: more
+    # dissolved Al3+ -> smaller activity coefficients -> less FePO4.
+    net = aquakin.load_model(_EQ)
+    si = net.species_index
+    pc = _precip_block(_EQ)
+    minerals = [
+        {**m, "mode": "kinetic"} if m["name"] == "AlPO4" else m
+        for m in pc["minerals"]
+        if m["name"] != "AlOH3"
+    ]
+    fn, _, _, _ = build_precipitation_equilibrium_derived_fn({**pc, "minerals": minerals}, si)
+    C = net.default_concentrations()
+    no_al = float(fn(C.at[si["S_Al"]].set(0.0), None, _eq_conditions(), 0)["Xeq_FePO4"])
+    al = float(fn(C.at[si["S_Al"]].set(20.0), None, _eq_conditions(), 0)["Xeq_FePO4"])
+    assert np.isfinite(no_al) and np.isfinite(al)
+    assert al < no_al
+
+
 # --- precipitation_equilibrium() with a speciation-derived pH ------------------
 
 _SPEC_EQ_YAML = """
