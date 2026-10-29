@@ -27,8 +27,8 @@ _ASM_MODELS = ["asm2d", "asm2d_tud", "asm3", "asm3_biop", "adm1"]
 # the gas headspace, state-derived pH, and explicit strong-ion (S_cat/S_an)
 # states. Update a tuple here when a model's shape changes on purpose.
 _EXPECTED_SHAPES = {
-    "asm2d": (19, 21, 69),
-    "asm2d_tud": (18, 22, 77),
+    "asm2d": (19, 21, 71),
+    "asm2d_tud": (18, 22, 78),
     "asm3": (13, 12, 41),
     "asm3_biop": (17, 23, 69),
     "adm1": (29, 25, 89),

@@ -145,3 +145,26 @@ def test_unknown_node_raises():
 
     with pytest.raises(TypeError):
         to_latex(_Bogus())
+
+
+def test_subtract_parenthesises_sum_or_difference_on_the_right():
+    a, b, c = ParamNode("a"), ParamNode("b"), ParamNode("c")
+    assert to_latex(SubtractNode(a, AddNode(b, c))) == r"a - \left(b + c\right)"
+    assert to_latex(SubtractNode(a, SubtractNode(b, c))) == r"a - \left(b - c\right)"
+    # A left-hand sum needs no parentheses; nor does a product on the right.
+    assert to_latex(SubtractNode(AddNode(a, b), c)) == "a + b - c"
+    assert to_latex(SubtractNode(a, MultiplyNode(b, c))) == r"a - b \cdot c"
+
+
+def test_negate_parenthesises_sum_or_difference():
+    a, b = ParamNode("a"), ParamNode("b")
+    assert to_latex(NegateNode(AddNode(a, b))) == r"-\left(a + b\right)"
+    assert to_latex(NegateNode(SubtractNode(a, b))) == r"-\left(a - b\right)"
+    assert to_latex(NegateNode(NegateNode(a))) == r"-\left(-a\right)"
+    assert to_latex(NegateNode(MultiplyNode(a, b))) == r"-a \cdot b"
+
+
+def test_subtract_parenthesises_negative_right_operand():
+    a = ParamNode("a")
+    assert to_latex(SubtractNode(a, ConstantNode(-2.0))) == r"a - \left(-2\right)"
+    assert to_latex(SubtractNode(a, NegateNode(a))) == r"a - \left(-a\right)"

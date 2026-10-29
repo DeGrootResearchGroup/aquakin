@@ -65,6 +65,14 @@ ASM_REFERENCE = {
             # import had dropped it, capping stored poly-P far too low.
             ("Aerobic_storage_of_XPP", ["KMAX"], []),
             ("Anoxic_storage_of_XPP", ["KMAX"], []),
+            # The four heterotroph growth processes each have their own rate
+            # (the import gave all four the aerobic-growth-on-SF rate): growth
+            # on SA uses K_A, and anoxic growth carries eta_NO3 and the nitrate
+            # saturation term.
+            ("Aerobic_growth_on_SF", ["KF", "KO2_H"], ["KA_H", "etaNO3_H", "KNO3_H"]),
+            ("Aerobic_growth_on_SA", ["KA_H", "KO2_H"], ["KF", "KA_PAO", "etaNO3_H", "KNO3_H"]),
+            ("Anoxic_growth_on_SF", ["KF", "etaNO3_H", "KNO3_H", "KO2_H"], ["KA_H"]),
+            ("Anoxic_growth_on_SA", ["KA_H", "etaNO3_H", "KNO3_H", "KO2_H"], ["KF", "KA_PAO"]),
         ],
         "structure": [
             # Heterotroph lysis decrements XH (not XAUT -- the swapped bug).
@@ -109,6 +117,11 @@ ASM_REFERENCE = {
              ["KN_H", "KO_HYD"]),
             ("Aerobic_storage_of_XPP", ["fPP_max"], []),
             ("Anoxic_storage_of_XPP", ["fPP_max"], []),
+            # Heterotroph growth: one rate per substrate and electron acceptor.
+            ("Aerobic_growth_of_XH_on_SF", ["KF", "KO_H"], ["Kac", "etaNO_H", "KNO_H"]),
+            ("Aerobic_growth_of_XH_on_SA", ["Kac", "KO_H"], ["KF", "etaNO_H", "KNO_H"]),
+            ("Anoxic_growth_of_XH_on_SF", ["KF", "etaNO_H", "KNO_H", "KO_H"], ["Kac"]),
+            ("Anoxic_growth_of_XH_on_SA", ["Kac", "etaNO_H", "KNO_H", "KO_H"], ["KF"]),
         ],
         "structure": [
             ("Lysis_1", {"XH": "-", "XA": "0"}),
@@ -209,3 +222,36 @@ def test_structural_participation_matches_published(name):
                 assert coeff < 0.0, f"{name}.{process}: {species} should be consumed (<0), got {coeff}"
             else:  # "0" -- species must not participate
                 assert coeff == 0.0, f"{name}.{process}: {species} should not participate, got {coeff}"
+
+
+# Heterotroph growth processes and their oxygen / nitrate species, per model.
+_HETEROTROPH_GROWTH = {
+    "asm2d": (("Aerobic_growth_on_SF", "Aerobic_growth_on_SA"),
+              ("Anoxic_growth_on_SF", "Anoxic_growth_on_SA"), "SO2", "SNO3"),
+    "asm2d_tud": (("Aerobic_growth_of_XH_on_SF", "Aerobic_growth_of_XH_on_SA"),
+                  ("Anoxic_growth_of_XH_on_SF", "Anoxic_growth_of_XH_on_SA"), "SO", "SNO"),
+}
+
+
+@pytest.mark.parametrize("name", list(_HETEROTROPH_GROWTH))
+def test_heterotroph_growth_switches_on_electron_acceptor(name):
+    """Aerobic heterotroph growth stops without oxygen, anoxic growth stops
+    without nitrate and is inhibited by oxygen, and growth on each substrate
+    stops when that substrate is absent."""
+    aerobic, anoxic, o2, no3 = _HETEROTROPH_GROWTH[name]
+    net = aquakin.load_model(name)
+    params = net.default_parameters()
+    cond = net.default_conditions().fields
+
+    def rate(process, **over):
+        return _reaction_rate(net, process, params, net.concentrations(over), cond)
+
+    for process in aerobic:
+        assert rate(process, **{o2: 0.0}) == 0.0
+        assert rate(process, **{no3: 0.0}) > 0.0
+    for process in anoxic:
+        assert rate(process, **{no3: 0.0}) == 0.0
+        assert rate(process, **{o2: 0.0}) > rate(process, **{o2: 2.0}) > 0.0
+    for on_sf, on_sa in (aerobic, anoxic):
+        assert rate(on_sf, SF=0.0) == 0.0 and rate(on_sf, SA=0.0) > 0.0
+        assert rate(on_sa, SA=0.0) == 0.0 and rate(on_sa, SF=0.0) > 0.0

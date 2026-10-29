@@ -56,7 +56,11 @@ from aquakin.core.ph_solver import (
     debye_huckel_A,
     equilibrium_constants,
 )
-from aquakin.core.precipitation import _FRACTIONS
+from aquakin.core.precipitation import (
+    _FRACTIONS,
+    ionic_strength_ions,
+    mineral_ionic_strength,
+)
 from aquakin.core.temperature import van_t_hoff_factor
 
 _LN10 = jnp.log(10.0)
@@ -185,7 +189,9 @@ def _make_si_fn(mineral_ions, log_ksp_ref, dH_sp):
     return si
 
 
-def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model, ionic_strength_offset):
+def solve_equilibrium_amounts(
+    totals, h, T_kelvin, *, si_fn, Cmat, model, ionic_strength, ionic_strength_ions=()
+):
     """Solve the coupled mineral equilibrium for the phase amounts.
 
     Parameters
@@ -204,8 +210,18 @@ def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model, ionic_
         Conserved-ion count of each mineral.
     model : str
         Activity model (``"none"`` / ``"davies"`` / ``"debye_huckel"``).
-    ionic_strength_offset : float
-        Background ionic strength (mol/L) for the activity coefficients.
+    ionic_strength : scalar
+        The part of the ionic strength (mol/L) that does not depend on the
+        solve: the background electrolyte plus any ion that is not a conserved
+        ion here (or the whole ionic strength when it is read from a condition
+        field).
+    ionic_strength_ions : sequence of tuple, optional
+        Conserved ions ``(pos, molar_mass, z2, fraction)`` whose contribution
+        ``1/2 * z^2 * c`` is added at the *solution*: ``c`` is the ion's
+        equilibrium dissolved total (``10**u[pos]`` in state units, divided by
+        ``molar_mass``) times its free-ion fraction. The ionic strength, and so
+        the activity coefficients, are thereby self-consistent with the
+        equilibrium composition rather than the pre-precipitation one.
 
     Returns
     -------
@@ -219,23 +235,25 @@ def solve_equilibrium_amounts(totals, h, T_kelvin, *, si_fn, Cmat, model, ionic_
     # van't Hoff factor for the Ksp(T) correction inside si_fn (unity at T_ref).
     vant_hoff = van_t_hoff_factor(T_kelvin)
     use_activity = model != "none"
-    if use_activity:
+
+    def gamma_at(u):
+        """Activity-coefficient function ``z2 -> gamma`` at the free ions ``u``."""
+        if not use_activity:
+            return lambda z2: 1.0
         A = debye_huckel_A(T_kelvin)
-        I = jnp.maximum(jnp.asarray(ionic_strength_offset, dtype=float), 0.0)
+        I = jnp.asarray(ionic_strength, dtype=float)
+        for pos, mm, z2_ion, frac in ionic_strength_ions:
+            tot = jnp.power(10.0, u[pos]) / mm  # mol/L
+            I = I + 0.5 * z2_ion * tot * (_FRACTIONS[frac](h, K) if frac in _FRACTIONS else 1.0)
+        I = jnp.maximum(I, 0.0)
         sqrt_I = jnp.sqrt(I)
-
-        def gamma(z2):
-            return jnp.power(10.0, _log10_gamma(z2, sqrt_I, I, A, model))
-    else:
-
-        def gamma(z2):
-            return 1.0
+        return lambda z2: jnp.power(10.0, _log10_gamma(z2, sqrt_I, I, A, model))
 
     def residual(w, eps):
         u = w[:N]
         X = w[N:]
         mass = jnp.power(10.0, u) + X @ Cmat - totals  # (N,) feasibility
-        si = si_fn(u, h, K, gamma, vant_hoff)  # (M,)
+        si = si_fn(u, h, K, gamma_at(u), vant_hoff)  # (M,)
         # Smoothed Fischer-Burmeister: phi(X, -SI) = 0  <=>  X>=0, SI<=0, X*SI=0.
         fb = X + (-si) - jnp.sqrt(X * X + si * si + eps * eps)
         return jnp.concatenate([mass, fb])
@@ -298,7 +316,8 @@ def build_precipitation_equilibrium_derived_fn(
         ``derived_fn(C, params, condition_arrays, loc_idx) -> dict`` produces
         ``Xeq_<name>`` (the equilibrium phase amount, in state units) for each
         equilibrium mineral; ``produced_fields`` lists them; ``required_fields``
-        are the conditions it reads (pH, T); ``project_fn(C, condition_arrays,
+        are the conditions it reads (pH, T, and ``ionic_strength_field`` when
+        set with an activity model); ``project_fn(C, condition_arrays,
         loc_idx)`` snaps a composition onto the precipitation equilibrium
         (each equilibrium solid set to its equilibrium amount, dissolved ions
         rebalanced, mass-conserving).
@@ -323,6 +342,21 @@ def build_precipitation_equilibrium_derived_fn(
     temp_units = config.get("temperature_units", "celsius")
     model = config.get("activity_model", "none")
     I_offset = float(config.get("ionic_strength_offset", 0.0))
+    # Ionic strength for the activity coefficients, built as the kinetic path
+    # does: read from ``ionic_strength_field`` when one is set (e.g. the ionic
+    # strength a speciation block solved the pH at), otherwise the background
+    # ``ionic_strength_offset`` plus each distinct mineral ion, counted once.
+    # The conserved ions of the equilibrium solve contribute at the equilibrium
+    # composition (``ic_solved``); any other mineral ion (one only a kinetic
+    # mineral uses) contributes at the current state (``ic_state``).
+    ic_field = config.get("ionic_strength_field")
+    ic_solved: list[tuple] = []
+    ic_state: list[tuple] = []
+    for idx, mm, z2, frac in ionic_strength_ions(config["minerals"], species_index):
+        if idx in ion_states:
+            ic_solved.append((ion_states.index(idx), mm, z2, frac))
+        else:
+            ic_state.append((idx, mm, z2, frac))
     si_fn = _make_si_fn(mineral_ions, log_ksp_ref, dH_sp)
 
     def _solve(C, condition_arrays, loc_idx):
@@ -337,8 +371,22 @@ def build_precipitation_equilibrium_derived_fn(
         dissolved = jnp.maximum(C[ion_states_arr], 0.0)  # (N,)
         solids = jnp.maximum(C[solid_idx], 0.0)  # (M,)
         totals = dissolved + solids @ Cmat  # (N,)
+        if model == "none":
+            I, I_ions = 0.0, ()  # unused: no activity correction
+        elif ic_field is not None:
+            I, I_ions = condition_arrays[ic_field][loc_idx], ()
+        else:
+            K = equilibrium_constants(T_kelvin)
+            I, I_ions = mineral_ionic_strength(C, h, K, ic_state, I_offset), ic_solved
         Xeq = solve_equilibrium_amounts(
-            totals, h, T_kelvin, si_fn=si_fn, Cmat=Cmat, model=model, ionic_strength_offset=I_offset
+            totals,
+            h,
+            T_kelvin,
+            si_fn=si_fn,
+            Cmat=Cmat,
+            model=model,
+            ionic_strength=I,
+            ionic_strength_ions=I_ions,
         )
         return Xeq, totals
 
@@ -358,4 +406,6 @@ def build_precipitation_equilibrium_derived_fn(
         return out
 
     required = {pH_field, temp_field}
+    if ic_field is not None and model != "none":
+        required.add(ic_field)
     return derived, produced, required, project

@@ -71,6 +71,7 @@ parameters:
   YSA_NO: {value: 0.71, transform: positive_log, bounds: [0.0070999999999999995, 71.0], units: "g_COD/g_COD"}
   bA: {value: 0.15, transform: positive_log, bounds: [0.0015, 15.0], units: "1/d"}
   bH: {value: 0.4, transform: positive_log, bounds: [0.004, 40.0], units: "1/d"}
+  etaNO_H: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "-"}
   etaNO_HYD: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "-"}
   etaNO_PAO: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "-"}
   etafe: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "-"}
@@ -118,7 +119,15 @@ expressions:
   Monod_KO_HYD: "monod_inh([SO], KO_HYD)"
   Monod_SNO: "monod([SNO], KNO_HYD)"
   Monod_KNO_HYD: "monod_inh([SNO], KNO_HYD)"
-  Monod_expr: "muH * monod([SO], KO_H) * monod([SF], KF) * [SF] / ([SF] + [SA])"
+  # Heterotroph growth: an aerobic or anoxic (reduced by etaNO_H, inhibited by
+  # oxygen) electron-acceptor term times a substrate term for SF or SA. The two
+  # substrates compete through the fractions SF/(SF + SA) and SA/(SF + SA);
+  # safe_div gives 0 (not NaN) when SF and SA are both 0. SA uptake shares the
+  # half-saturation constant Kac with the PAOs.
+  Growth_H_aerobic: "muH * monod([SO], KO_H)"
+  Growth_H_anoxic: "muH * etaNO_H * monod_inh([SO], KO_H) * monod([SNO], KNO_H)"
+  Growth_H_on_SF: "safe_div(monod([SF], KF) * [SF], [SF] + [SA])"
+  Growth_H_on_SA: "safe_div(monod([SA], Kac) * [SA], [SF] + [SA])"
   Monod_SNH: "monod([SNH], KN_H)"
   Monod_SPO: "monod([SPO], KP_H)"
   Monod_SHCO: "monod([SHCO], KHCO_H)"
@@ -181,7 +190,7 @@ reactions:
 
   - name: Aerobic_growth_of_XH_on_SF
     description: "Aerobic growth of XH on SF"
-    rate: "Monod_expr * Monod_SNH * Monod_SPO * Monod_SHCO * [XH]"
+    rate: "Growth_H_aerobic * Growth_H_on_SF * Monod_SNH * Monod_SPO * Monod_SHCO * [XH]"
     stoichiometry:
       SO: "(-1) * (1 - YH) / YH"
       SF: "(-1) / YH"
@@ -193,7 +202,7 @@ reactions:
 
   - name: Aerobic_growth_of_XH_on_SA
     description: "Aerobic growth of XH on SA"
-    rate: "Monod_expr * Monod_SNH * Monod_SPO * Monod_SHCO * [XH]"
+    rate: "Growth_H_aerobic * Growth_H_on_SA * Monod_SNH * Monod_SPO * Monod_SHCO * [XH]"
     stoichiometry:
       SO: "(-1) * (1 - YH) / YH"
       SA: "(-1) / YH"
@@ -205,7 +214,7 @@ reactions:
 
   - name: Anoxic_growth_of_XH_on_SF
     description: "Anoxic growth of XH on SF"
-    rate: "Monod_expr * Monod_SNH * Monod_SPO * Monod_SHCO * [XH]"
+    rate: "Growth_H_anoxic * Growth_H_on_SF * Monod_SNH * Monod_SPO * Monod_SHCO * [XH]"
     stoichiometry:
       SF: "(-1) / YH"
       SNH: "iN_SF / YH - iN_BM"
@@ -218,7 +227,7 @@ reactions:
 
   - name: Anoxic_growth_of_XH_on_SA
     description: "Anoxic growth of XH on SA"
-    rate: "Monod_expr * Monod_SNH * Monod_SPO * Monod_SHCO * [XH]"
+    rate: "Growth_H_anoxic * Growth_H_on_SA * Monod_SNH * Monod_SPO * Monod_SHCO * [XH]"
     stoichiometry:
       SA: "(-1) / YH"
       SNH: "(-1) * iN_BM"

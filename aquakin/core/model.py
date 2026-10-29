@@ -970,7 +970,7 @@ class CompiledModel:
         tol: float = 1e-2,
         params=None,
         composition=None,
-        nitrate: str = "S_NO",
+        nitrate: str | None = None,
         n_key: str = "N",
     ) -> list:
         """Nitrogen-balance violations ``(reaction, residual)`` above ``tol``.
@@ -980,6 +980,9 @@ class CompiledModel:
         its tracked-species N content plus the gassed-off nitrate is zero. Exact
         for both nitrification (no nitrate consumed) and denitrification. Uses the
         model's :meth:`composition` table unless ``composition`` is passed.
+        ``nitrate`` names the nitrate species; the default None auto-detects it
+        from the common names (``S_NO``, ``SNO``, ``SNO3``, ``SNOX``, ...), and an
+        explicit name the model does not declare raises ``ValueError``.
         """
         from aquakin.core import introspect
 
@@ -1086,6 +1089,23 @@ def _compose_derived(first, second):
     return composed
 
 
+def _project_after_speciation(speciation_fn, project):
+    """Run the speciation step before an equilibrium projection.
+
+    When the pH (and the ionic strength) come from a ``speciation:`` block they
+    are not declared conditions, so a projection called with the plain
+    conditions would not find them. This wraps ``project(C, conditions,
+    loc_idx)`` to first merge the speciation outputs computed from ``C`` into
+    the conditions, as the rate evaluation does.
+    """
+
+    def projected(C, conditions, loc_idx):
+        merged = _merge_derived(conditions, speciation_fn(C, None, conditions, loc_idx))
+        return project(C, merged, loc_idx)
+
+    return projected
+
+
 def _compile_precipitation(spec, species_index, condition_fields, derived_fields, speciation_fn):
     """Wire an optional ``precipitation:`` block (SI-driven mineral precipitation).
 
@@ -1140,6 +1160,8 @@ def _compile_precipitation(spec, species_index, condition_fields, derived_fields
     if eq is not None:
         eq_fn, eq_produced, eq_required, equilibrium_project = eq
         _add(eq_fn, eq_produced, eq_required, "equilibrium")
+        if speciation_fn is not None:
+            equilibrium_project = _project_after_speciation(speciation_fn, equilibrium_project)
 
     return fn, new_fields, cond, equilibrium_project
 

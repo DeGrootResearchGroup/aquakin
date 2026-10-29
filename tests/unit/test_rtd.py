@@ -127,3 +127,22 @@ def test_percentile_time_full_washout_no_warning():
         assert float(rtd.percentile_time(t, C, q=1.0)) == pytest.approx(
             float(t[-1]), rel=1e-6
         )
+
+
+def test_percentile_time_with_dead_time():
+    """A discrete impulse arriving after a dead time is plug flow: t10 and t90
+    sit at the arrival, not interpolated back across the leading F = 0 stretch."""
+    t = np.linspace(0.0, 10.0, 101)
+    C = np.zeros_like(t)
+    C[50] = 1.0  # impulse at t = 5
+    # F jumps 0 -> 0.5 -> 1 over t = 4.9, 5.0, 5.1 (trapezoidal integral).
+    assert float(rtd.percentile_time(t, C, 0.1)) == pytest.approx(4.92, abs=1e-9)
+    assert float(rtd.percentile_time(t, C, 0.9)) == pytest.approx(5.08, abs=1e-9)
+    assert float(rtd.morrill_index(t, C)) == pytest.approx(5.08 / 4.92, rel=1e-9)
+
+
+def test_percentile_time_dead_time_gaussian():
+    """A narrow pulse after a long dead time: t10 is near tau - 1.28 sigma."""
+    t = jnp.linspace(0.0, 10.0, 101)
+    C = jnp.exp(-0.5 * ((t - 5.0) / 0.2) ** 2)
+    assert float(rtd.percentile_time(t, C, 0.1)) == pytest.approx(5.0 - 1.2816 * 0.2, abs=0.03)

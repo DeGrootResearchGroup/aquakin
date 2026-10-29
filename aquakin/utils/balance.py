@@ -79,12 +79,53 @@ def conservation_residuals(
     return list(model.reaction_names), quantities, residuals
 
 
+# Nitrate species names used by the shipped models, tried in order when the
+# caller does not name the nitrate species explicitly.
+NITRATE_SPECIES_NAMES = ("S_NO", "SNO", "S_NO3", "SNO3", "S_NOX", "SNOX")
+
+
+def resolve_nitrate_species(model: CompiledModel, nitrate: str | None) -> str | None:
+    """Return the nitrate species name to credit as denitrified N2 gas.
+
+    Parameters
+    ----------
+    model : CompiledModel
+        The model whose species are searched.
+    nitrate : str or None
+        An explicit species name, or None to auto-detect the first of
+        :data:`NITRATE_SPECIES_NAMES` the model declares.
+
+    Returns
+    -------
+    str or None
+        The nitrate species name, or None when auto-detection finds no nitrate
+        species (the model has no denitrification to credit).
+
+    Raises
+    ------
+    ValueError
+        If ``nitrate`` is given but is not a species of ``model``.
+    """
+    sidx = model.species_index
+    if nitrate is None:
+        return next((name for name in NITRATE_SPECIES_NAMES if name in sidx), None)
+    if nitrate not in sidx:
+        from aquakin.core.hints import did_you_mean
+
+        raise ValueError(
+            f"nitrate species {nitrate!r} is not a species of model "
+            f"{model.name!r}.{did_you_mean(nitrate, sidx)} Pass nitrate=None to "
+            f"auto-detect it."
+        )
+    return nitrate
+
+
 def nitrogen_residuals(
     model: CompiledModel,
     composition: Composition,
     *,
     params: Any | None = None,
-    nitrate: str = "S_NO",
+    nitrate: str | None = None,
     n_key: str = "N",
 ) -> tuple[list[str], np.ndarray]:
     """Per-reaction nitrogen residual, accounting for denitrification N2 gas.
@@ -101,6 +142,11 @@ def nitrogen_residuals(
     residual must itself be zero, verifying NH3 -> NO3) and denitrification (the
     consumed nitrate is added back as the N2 that left).
 
+    ``nitrate`` names the nitrate species; the default None auto-detects it
+    from the common names (``S_NO``, ``SNO``, ``SNO3``, ...; see
+    :func:`resolve_nitrate_species`). An explicit name the model does not
+    declare raises ``ValueError``.
+
     Returns ``(reaction_names, residuals)``.
     """
     p = model.default_parameters() if params is None else params
@@ -111,7 +157,8 @@ def nitrogen_residuals(
         if sp in sidx:
             n_content[sidx[sp]] = content.get(n_key, 0.0)
     residual = stoich @ n_content
-    if nitrate in sidx:
+    nitrate = resolve_nitrate_species(model, nitrate)
+    if nitrate is not None:
         residual = residual + np.maximum(0.0, -stoich[:, sidx[nitrate]])
     return list(model.reaction_names), residual
 

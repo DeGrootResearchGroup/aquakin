@@ -936,9 +936,15 @@ phosphorus in one plant. `a2o_influent(net)` is a matching constant municipal
 (VFA-bearing) influent and `a2o_warm_start(plant)` seeds the AS reactors with an
 established EBPR mixed liquor (a large PAO population + stored poly-P), so a solve
 starts from healthy bio-P sludge rather than the slow, seed-sensitive cold-start
-PAO establishment. The default config reaches a feasible steady state with
-**complete biological P removal** (effluent SPO4 ≈ 0) and ~80% N removal (full
-nitrification of the influent ammonia + denitrification), with no recirculating
+PAO establishment. The default config reaches a feasible steady state with full
+nitrification (effluent SNH4 ≈ 0.1 g N/m³), partial denitrification (effluent
+SNO3 ≈ 10 g N/m³ from 25 g N/m³ influent ammonia) and **partial biological P
+removal** (effluent SPO4 ≈ 5 g P/m³ from 8; clear anaerobic release and aerobic
+uptake). The RAS returns nitrate to the anaerobic zone, where denitrifying
+heterotrophs take part of the VFA the PAOs would store, the classic A²O
+limitation. (Before the `asm2d` heterotroph growth rates were corrected, anoxic
+growth had no nitrate term, so nitrate never reached the selector and the plant
+showed complete P removal.) There are no recirculating
 negative soluble pools (it relies on the `asm2d` `positivity_limiter`, now
 honoured inside `CSTRUnit`). It is **not** a standardised benchmark — the sizing
 is a representative municipal design, not a published reference set, so it is a
