@@ -435,6 +435,48 @@ def test_bsm1_steady_state_keeps_ptc_result_when_ladder_declines(bsm1):
     assert not bool(ss.converged)
 
 
+def _design_cstr():
+    """A single CSTR (A -> B, k = 0.1, V/Q = 10) fed 1 g/m3 of A, plus a design
+    override that raises the feed to 5 g/m3 (steady state A = B = 2.5)."""
+    from aquakin.plant import CSTRUnit, Plant
+    from aquakin.plant.influent import InfluentSeries
+
+    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
+    inf = InfluentSeries(t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
+                         C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=net)
+    plant = Plant("one")
+    plant.add_unit(CSTRUnit(name="tank", model=net, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_influent("feed", inf, to="tank.inlet")
+    design = {"influent": {"feed": {"Q": jnp.asarray(10.0), "C": jnp.asarray([5.0, 0.0])}}}
+    return plant, design
+
+
+@pytest.mark.parametrize("extra", [{}, {"atol": 1e-10}], ids=["default_atol", "atol"])
+def test_steady_state_forward_fallback_honours_design(extra):
+    # A starved PTC falls back to forward integration; that fallback must
+    # integrate the design-override feed, not the recorded influent (which
+    # would give A = B = 0.5 and still report converged). An explicit solver
+    # ``atol`` reaches the design rung too.
+    plant, design = _design_cstr()
+    ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, arclength=False,
+                            fallback_kwargs={"ss_rtol": 1e-8, "ss_atol": 1e-8, **extra})
+    assert ss.method == "ptc->forward"
+    assert bool(ss.converged)
+    np.testing.assert_allclose(np.asarray(ss.state), [2.5, 2.5], rtol=1e-4)
+
+
+def test_steady_state_design_skips_parameter_continuation():
+    # The continuation rungs deform in params alone; with a design override
+    # they are skipped (rather than crashing on the (params, design) pytree).
+    plant, design = _design_cstr()
+    p = plant.default_parameters()
+    ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, fallback=False,
+                            continuation_from=(p, jnp.asarray([0.5, 0.5])))
+    assert ss.method == "ptc"
+    assert not bool(ss.converged)
+
+
 @pytest.mark.slow
 def test_bsm2_steady_state_matches_forward():
     # BSM2 -- the 167-state plant with the long-SRT anaerobic digester, the stiff

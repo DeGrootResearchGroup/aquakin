@@ -309,7 +309,7 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
                 vals.append(jnp.asarray(float(unit._kla_vec[unit.model.species_index["SO"]])))
         return jnp.stack(vals)
 
-    return jax.vmap(_row)(jnp.asarray(solution.t), jnp.asarray(solution.state))
+    return jax.vmap(_row)(jnp.asarray(solution.t_native), jnp.asarray(solution.state))
 
 
 def _reconstruct(plant, solution, params_full, endpoints):
@@ -427,14 +427,14 @@ def _feed_temperature_C(plant, solution, params_full, default_C):
     a ``T`` -- so a ``None`` at the final state means ``None`` throughout: the
     common (default BSM2) case returns the scalar default after one reconstruction
     and only a genuinely temperature-carrying run pays the per-step sweep."""
-    final = plant.outputs_at(solution.t[-1], solution.state[-1], params_full)
+    final = plant.outputs_at(solution.t_native[-1], solution.state[-1], params_full)
     feed = final.get(("sludge_mix", "out"))
     if feed is None or feed.scalars.get("T") is None:
         return float(default_C)
     # T is structurally present (a temperature-carrying influent leaves every
     # stream with a T), so vmap the digester-feed temperature over all saved
     # times in one vectorised sweep rather than a per-step Python loop.
-    ts = jnp.asarray(solution.t)
+    ts = jnp.asarray(solution.t_native)
 
     def _feed_T(t_i, state_row):
         states = plant._split_state(state_row)
@@ -484,7 +484,7 @@ def _external_carbon_load(plant, solution, t, params_full, model) -> float:
         Q_carbon = jnp.stack(
             [
                 plant.signals_at(ti, solution.state[i], params_full)[sig] * carbon_unit.gain
-                for i, ti in enumerate(t)
+                for i, ti in enumerate(solution.t_native)
             ]
         )
     return carbon_mass(t, Q_carbon, conc)

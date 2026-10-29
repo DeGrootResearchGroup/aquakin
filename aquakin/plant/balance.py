@@ -98,7 +98,7 @@ class MassBalance:
     """
 
     components: dict[str, ComponentBalance]
-    window: tuple[float, float]
+    window: tuple[float, float]  # (t0, t1) in the solution's time unit
     influent_ports: list[str] = field(default_factory=list)
     effluent_ports: list[str] = field(default_factory=list)
     gas_detail: dict[str, float] = field(default_factory=dict)
@@ -341,8 +341,13 @@ def mass_balance(
     params = plant.default_parameters() if params is None else jnp.asarray(params)
     plant._build_state_layout()
     plant._build_parameter_layout()
-    t = np.asarray(solution.t)
-    window = (float(t[0]), float(t[-1]))
+    # The window is reported in the solution's own unit (``solution.t``), but the
+    # flux integrals run over native time: every flow is per native time unit
+    # (e.g. m3/d for an ASM plant) and the influent / control signals are
+    # sampled at native times, so the integrated grams are independent of any
+    # ``solve(time_unit=...)`` override.
+    window = (float(solution.t[0]), float(solution.t[-1]))
+    t = np.asarray(solution.t_native)
     comps = list(components)
     content_by_model = _content_by_model(plant, comps, params)
 
@@ -421,7 +426,7 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
     """
     import jax.numpy as jnp
 
-    t = np.asarray(solution.t)
+    t = np.asarray(solution.t_native)  # native: the rates are per native time unit
     layout = plant._state_layout
 
     reactive = [
@@ -490,6 +495,6 @@ def _biogas_cod(plant, solution, params):
         gas = digester_gas(plant, solution, params)
     except NoDigesterError:
         return None
-    t = np.asarray(solution.t)
+    t = np.asarray(solution.t_native)  # ch4 is per native time unit (kg/d)
     ch4_g_per_d = np.asarray(gas.ch4) * 1000.0 * _COD_PER_CH4  # kg/d -> g COD/d
     return float(np.trapezoid(ch4_g_per_d, t))

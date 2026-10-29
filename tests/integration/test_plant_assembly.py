@@ -95,6 +95,36 @@ def test_plant_time_unit_and_conversion(simple_net):
     assert jnp.allclose(sol_s.state, sol_min.state, rtol=1e-6, atol=1e-8)
 
 
+def test_streams_sample_influent_at_native_time_with_time_unit(simple_net):
+    """A rebuilt stream after solve(time_unit=...) samples the influent at the
+    native times, not at the rescaled ``solution.t`` values."""
+    plant = Plant("ramp")
+    plant.add_unit(
+        CSTRUnit(
+            name="tank",
+            model=simple_net,
+            volume=100.0,
+            input_port_names=["inlet"],
+            conditions={"T": 293.15},
+        )
+    )
+    # Q ramps 10 -> 110 m3/s over 0..100 s (the fixture's native unit).
+    ramp = InfluentSeries(
+        t=jnp.asarray([0.0, 100.0]),
+        Q=jnp.asarray([10.0, 110.0]),
+        C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]),
+        model=simple_net,
+    )
+    plant.add_influent("feed", ramp, to="tank.inlet")
+    sol = plant.solve(t_span=(0.0, 1.0), t_eval=jnp.asarray([0.0, 0.5, 1.0]), time_unit="min")
+    assert jnp.allclose(sol.t, jnp.asarray([0.0, 0.5, 1.0]))
+    assert jnp.allclose(sol.t_native, jnp.asarray([0.0, 30.0, 60.0]))
+    out = plant.stream(sol, "tank.out")
+    # 0, 30 and 60 s along the ramp.
+    assert jnp.allclose(out.Q, jnp.asarray([10.0, 40.0, 70.0]))
+    assert jnp.allclose(out.t, sol.t)
+
+
 def test_two_cstrs_in_series(simple_net):
     """Tank-in-series mass balance: with the same volume per tank and
     first-order decay, A drops by factor 1/(1+k*tau) per tank at steady
