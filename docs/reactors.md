@@ -157,7 +157,10 @@ event has a trigger and an optional state reset:
   forward-simulation only.
 
 Set `terminal=True` to stop the solve when the event fires, and `apply=...` to
-reset the state:
+reset the state. Event times (`at_times`, the `t` passed to `cond_fn` and
+`apply`, and the times in `events_log`) use the same unit as `t_span`, so they
+follow `time_unit=` when you pass it. An output time that coincides with an
+event reports the state just before the reset.
 
 ```python
 i_ss  = model.species_index["SS"]

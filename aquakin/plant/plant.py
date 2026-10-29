@@ -44,7 +44,7 @@ from aquakin.integrate._common import (
     to_native_time,
 )
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
-from aquakin.integrate.events import Event, solve_with_events
+from aquakin.integrate.events import Event, events_to_native_time, solve_with_events
 from aquakin.plant import calibrate as _calibrate
 from aquakin.plant import sensitivity as _sensitivity
 from aquakin.plant.colored import ColoredJacobianManager
@@ -2420,6 +2420,8 @@ class Plant:
             Located plant-wide discontinuities (on/off pumps, SBR phase switches,
             dosing on/off, tank-level limits). The monolithic solve is split into
             segments at the firings and ``solution.events_log`` records them.
+            Event times (``at_times``, the ``t`` passed to ``cond_fn`` /
+            ``apply``, and the log times) use the same unit as ``t_span``.
             Time-only events keep ``jax.grad`` finite; a state event makes the run
             a forward simulation. Mutually exclusive with ``event=`` and with
             ``diff=DifferentiationConfig(method='stable')`` reverse differentiation.
@@ -2488,7 +2490,11 @@ class Plant:
         # Auto-collect located phase-transition events that units declare (an
         # SBRUnit's cycle boundaries), merged with any user-supplied events, so
         # the integrator lands exactly on every phase switch without the caller
-        # hand-listing them. cycle_events takes the native-time span.
+        # hand-listing them. cycle_events takes the native-time span. The user's
+        # events are in the requested time unit, so convert copies of them to
+        # native first (the unit events are already native).
+        if events is not None:
+            events = events_to_native_time(events, _time_factor)
         unit_events: list[Event] = []
         for unit in self.units.values():
             if isinstance(unit, CycleEventSource):
@@ -3037,7 +3043,9 @@ class Plant:
             )
             jitted = self._jit_cache.get(fkey)
             if jitted is None:
-                jitted = self._build_jitted_forward_fast(t0, t1, rtol=rtol, atol=atol)
+                jitted = self._build_jitted_forward_fast(
+                    t0, t1, rtol=rtol, atol=atol, max_steps=max_steps
+                )
                 self._jit_cache[fkey] = jitted
             with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
                 ts, ys = jitted(y0, params, te)
@@ -3220,8 +3228,11 @@ class Plant:
                 factormax=factormax,
                 solver=solver,
             )
+        log = res.log
+        if time_factor != 1.0:  # native -> requested unit
+            log = [(t / time_factor, name) for t, name in log]
         return self._finalize_solution(
-            res.ts, res.ys, time_factor=time_factor, time_unit=time_unit, events_log=res.log
+            res.ts, res.ys, time_factor=time_factor, time_unit=time_unit, events_log=log
         )
 
     def _build_jitted_solve(
@@ -3312,7 +3323,7 @@ class Plant:
 
         return _solve
 
-    def _build_jitted_forward_fast(self, t0, t1, *, rtol, atol):
+    def _build_jitted_forward_fast(self, t0, t1, *, rtol, atol, max_steps):
         """Build the lean non-AD forward solve for one signature.
 
         Wraps :func:`~aquakin.integrate.forward_solve.forward_solve` -- a plain
@@ -3345,7 +3356,16 @@ class Plant:
                 return JS[:, col_of] * pattern
 
             ys = forward_solve(
-                rhs, jac, y0, params, float(t0), float(t1), t_eval, rtol=rtol, atol=atol
+                rhs,
+                jac,
+                y0,
+                params,
+                float(t0),
+                float(t1),
+                t_eval,
+                rtol=rtol,
+                atol=atol,
+                max_steps=max_steps,
             )
             return t_eval, ys
 

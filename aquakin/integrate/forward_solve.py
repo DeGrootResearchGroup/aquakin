@@ -76,6 +76,7 @@ sparse factorization is not worth it at this scale -- it loses to XLA's dense LU
 
 from collections.abc import Callable
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jsla
@@ -161,10 +162,23 @@ def forward_solve(
     rtol, atol : float or array
         Error tolerances (WRMS norm ``atol + rtol*|y|``).
 
+    max_steps : int
+        Step budget (accepted plus rejected steps).
+
     Returns
     -------
     ys : jnp.ndarray
         Solution at ``t_eval``, shape ``(len(t_eval), n)``.
+
+    Raises
+    ------
+    equinox.EquinoxRuntimeError
+        If the solve stops before reaching the last save time, either because it
+        used up ``max_steps`` (the message contains "maximum number of solver
+        steps", so :func:`~aquakin.integrate._common.friendly_solve_errors`
+        re-raises it with remedies) or because the step size collapsed (the
+        Newton iteration kept failing or the state became non-finite). The check
+        runs inside the compiled solve, so it also works under ``jax.jit``.
     """
     n = y0.shape[0]
     eye = jnp.eye(n)
@@ -316,4 +330,22 @@ def forward_solve(
         jnp.array(False),
     )
     t, y, h, sidx, ys, nstep, en_prev, dead = jax.lax.while_loop(cond, body, init)
+    # A loop that exits before filling every save row (step budget used up, or
+    # the step size collapsed) must not hand back the zero-initialized rows as if
+    # they were a solution: mark them NaN and raise.
+    incomplete = sidx < n_save
+    ys = jnp.where((jnp.arange(n_save) < sidx)[:, None], ys, jnp.nan)
+    ys = eqx.error_if(
+        ys,
+        incomplete & (nstep >= max_steps),
+        f"forward_solve: the maximum number of solver steps was reached "
+        f"(max_steps={max_steps}) before the last save time.",
+    )
+    ys = eqx.error_if(
+        ys,
+        incomplete,
+        "forward_solve: the solve stalled before the last save time (the step "
+        "size collapsed because the Newton iteration kept failing or the state "
+        "became non-finite).",
+    )
     return ys
