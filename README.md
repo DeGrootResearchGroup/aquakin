@@ -281,7 +281,7 @@ reactor temperature lags and damps the influent. Select it with
 `build_bsm2(temperature_model=aquakin.HeatBalanceTemperature())`.
 
 Aeration energy can be scored from **blower/diffuser physics** instead of the
-Copp-2002 correlation. An `AerationSystem` (diffuser submergence, SOTE, fouling,
+benchmark formula (`S_sat·V·kLa / 1800`, the updated BSM1 / BSM2 definition). An `AerationSystem` (diffuser submergence, SOTE, fouling,
 blower efficiency) turns the `kLa` a solve produced into the required air flow
 (via the standard oxygen transfer rate `kLa·C_s·V` and the diffuser SOTE) and the
 adiabatic blower power against the submergence head — keeping the `kLa` kinetic

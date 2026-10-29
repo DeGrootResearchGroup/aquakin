@@ -41,7 +41,13 @@ from aquakin.integrate._transforms import (
     from_unconstrained,
     to_unconstrained,
 )
-from aquakin.integrate.calibrate import FreeICConfig, observation_size, observe
+from aquakin.integrate.calibrate import (
+    FreeICConfig,
+    _ic_coordinate_names,
+    _simplex_pools,
+    observation_size,
+    observe,
+)
 
 
 @dataclass(frozen=True)
@@ -67,13 +73,23 @@ class Experiment:
         ``observed_species``: ``observation_fn(C, params) -> y`` maps one time
         point's concentrations and the full parameter vector to a scalar or
         ``(n_outputs,)`` vector, written with ``jax.numpy``. ``sigma`` then has
-        one entry per output.
+        one entry per output. A function that requires three positional
+        arguments, ``observation_fn(t, C, params)``, also receives the sample
+        time, the entry of ``t_obs`` exactly as given (in its unit), as in
+        :func:`aquakin.calibrate`.
     reactor : Reactor, optional
         A reactor to solve this experiment with in place of the one passed to
         :func:`fisher_information` -- for an experiment run at different
         conditions (pH, temperature, ...). It must use the same model.
     time_unit : str, optional
         Unit of ``t_obs``; ``None`` means the model's native time unit.
+    mask : array-like of bool, optional
+        Which observations are taken: ``True`` where an output is measured at a
+        sampling time, ``False`` where it is not. Shape ``(n_t, n_observed)``,
+        or anything that broadcasts to it (``(n_observed,)`` per output). An
+        unmeasured entry carries no information, the counterpart of a ``NaN``
+        observation in :func:`aquakin.calibrate`. ``None`` (default) measures
+        every output at every time.
     """
 
     C0: jnp.ndarray
@@ -83,6 +99,7 @@ class Experiment:
     reactor: Reactor | None = None
     observation_fn: Callable | None = None
     time_unit: str | None = None
+    mask: jnp.ndarray | None = None
 
 
 @dataclass
@@ -97,10 +114,12 @@ class FisherInformation:
         as ``names``.
     names : list[str]
         Row / column names: the rate parameters, then ``"ic[e].<species>"`` for
-        experiment ``e``'s estimated initial pools.
+        experiment ``e``'s estimated initial pools (or, with
+        ``FreeICConfig(fixed_total=True)``, ``"ic[e].<c_j>:<c_0>"`` for the
+        log-ratio coordinates of the split).
     transforms : list[str]
         Transform of each row: the rate parameters' transforms, then
-        ``"positive_log"`` for every pool.
+        ``"positive_log"`` for every pool (or pool ratio).
     values : dict[str, float]
         The physical values the information was evaluated at, by name.
     jacobian : np.ndarray
@@ -191,8 +210,12 @@ def fisher_information(
         declared transform is used.
     free_ic : FreeICConfig, optional
         Initial pools to estimate alongside the rates, one set per experiment,
-        evaluated at the values in each experiment's ``C0``. Only
-        ``free_ic.species`` (and, with ``use_priors``, ``prior_log_std``) is used.
+        evaluated at the values in each experiment's ``C0``. ``free_ic.species``,
+        ``fixed_total`` and (with ``use_priors``) ``prior_log_std`` are used;
+        ``bounds`` play no part in the information. With ``fixed_total=True``
+        the pools' sum is held at its value in ``C0`` and the information is for
+        the ``m - 1`` log-ratio coordinates of their split, as
+        :func:`aquakin.calibrate` fits it.
     priors : dict, optional
         Gaussian priors ``{name: (mean, std)}`` on rate parameters, in physical
         space. Used only with ``use_priors=True``.
@@ -290,6 +313,10 @@ class _FisherSetup:
         self.free_idx = jnp.asarray([model.param_index[n] for n in free_params], dtype=int)
 
         self.ic_species = list(free_ic.species) if free_ic is not None else []
+        self.ic_fixed_total = bool(free_ic is not None and free_ic.fixed_total and self.ic_species)
+        # Fitted coordinates per experiment: the log pools, or the m - 1
+        # log-ratio coordinates of a fixed-total split.
+        self.m_theta = len(self.ic_species) - (1 if self.ic_fixed_total else 0)
         for s in self.ic_species:
             if s not in model.species_index:
                 raise KeyError(f"Unknown free_ic species '{s}'. Available: {model.species}")
@@ -297,9 +324,13 @@ class _FisherSetup:
         if not self.free_params and not self.ic_species:
             raise ValueError("Nothing to estimate: give free_params and/or free_ic.")
 
-        # Resolve each experiment once: its forward-capable reactor, native-unit
-        # sampling times, observed columns and per-observation noise.
+        # Resolve each experiment once: its forward-capable reactor, sampling
+        # times, observed columns and per-observation noise. The sampling times
+        # are kept in the experiment's own unit (a time-aware observation_fn
+        # receives them exactly) and converted to the model's native unit by
+        # ``time_factor`` at the solve.
         self.reactors, self.obs_idx, self.obs_fn, self.sigma = [], [], [], []
+        self.time_factor, self.keep, self.sigma_div = [], [], []
         self.tobs, self.C0, self.t_end = [], [], []
         for e, ex in enumerate(exps):
             rctr = ex.reactor if ex.reactor is not None else reactor
@@ -317,14 +348,15 @@ class _FisherSetup:
                 raise ValueError(
                     f"experiment {e}: t_obs must be non-negative and strictly ascending."
                 )
-            tobs = tobs * native_time_factor(model.time_unit, ex.time_unit)
+            factor = float(native_time_factor(model.time_unit, ex.time_unit))
+            t0 = float(tobs[0])
             if ex.observation_fn is not None:
                 if ex.observed_species is not None:
                     raise ValueError(
                         f"experiment {e}: pass observed_species or observation_fn, not both."
                     )
                 obs = []
-                n_out = observation_size(ex.observation_fn, C0, self.p0)
+                n_out = observation_size(ex.observation_fn, C0, self.p0, t0=t0)
             else:
                 obs = (
                     ex.observed_species if ex.observed_species is not None else list(model.species)
@@ -343,13 +375,34 @@ class _FisherSetup:
             self.reactors.append(with_adjoint(rctr, forward_adjoint()))
             self.obs_idx.append(jnp.asarray([model.species_index[s] for s in obs], dtype=int))
             self.obs_fn.append(ex.observation_fn)
-            self.sigma.append(
-                jnp.broadcast_to(jnp.asarray(ex.sigma, dtype=float), (tobs.shape[0], n_out))
-            )
+            sig = jnp.broadcast_to(jnp.asarray(ex.sigma, dtype=float), (tobs.shape[0], n_out))
+            mask = getattr(ex, "mask", None)
+            if mask is not None:
+                try:
+                    keep = np.broadcast_to(np.asarray(mask, dtype=bool), (tobs.shape[0], n_out))
+                except ValueError as err:
+                    raise ValueError(
+                        f"experiment {e}: mask of shape {np.shape(mask)} does not broadcast "
+                        f"to the observations' ({tobs.shape[0]}, {n_out})."
+                    ) from err
+                if not keep.any():
+                    raise ValueError(f"experiment {e}: mask leaves no observation.")
+                keep = jnp.asarray(keep)
+                # An unmeasured entry has infinite noise: zero information. The
+                # residual divides by 1 there instead and is masked to exactly
+                # 0, so a non-finite prediction at that entry cannot leak in.
+                self.keep.append(keep)
+                self.sigma_div.append(jnp.where(keep, sig, 1.0))
+                sig = jnp.where(keep, sig, jnp.inf)
+            else:
+                self.keep.append(None)
+                self.sigma_div.append(sig)
+            self.sigma.append(sig)
+            self.time_factor.append(factor)
             self.tobs.append(tobs)
             self.C0.append(C0)
             end = t_end[e] if isinstance(t_end, (list, tuple)) else t_end
-            self.t_end.append(float(tobs[-1]) if end is None else float(end))
+            self.t_end.append(float(tobs[-1] * factor) if end is None else float(end))
 
         # Prior rows (only their Jacobian matters, so the means drop out).
         active: dict[str, tuple[float, float]] = {}
@@ -367,21 +420,35 @@ class _FisherSetup:
             free_ic.prior_log_std if (use_priors and free_ic is not None and m) else None
         )
 
-        ic_names = [f"ic[{e}].{s}" for e in range(len(exps)) for s in self.ic_species]
+        ic_names = _ic_coordinate_names(self.ic_species, len(exps), self.ic_fixed_total)
         self.names = self.free_params + ic_names
         self.transforms = self.rate_transforms + ["positive_log"] * len(ic_names)
 
     def values(self, p, C0s) -> dict[str, float]:
-        """Physical values of the estimated quantities at ``(p, C0s)``."""
+        """Physical values of the estimated quantities at ``(p, C0s)`` (pool
+        ratios ``c_j / c_0`` for a fixed-total split)."""
         rate = [float(p[self.model.param_index[n]]) for n in self.free_params]
-        pools = [float(C0[i]) for C0 in C0s for i in np.asarray(self.ic_idx)]
+        idx = np.asarray(self.ic_idx)
+        if self.ic_fixed_total:
+            pools = [float(C0[i] / C0[idx[0]]) for C0 in C0s for i in idx[1:]]
+        else:
+            pools = [float(C0[i]) for C0 in C0s for i in idx]
         return dict(zip(self.names, rate + pools))
+
+    def _pool_theta(self, C0):
+        """One experiment's pool coordinates at its ``C0``."""
+        pools = C0[self.ic_idx]
+        if self.ic_fixed_total:
+            return jnp.log(pools[1:]) - jnp.log(pools[0])
+        return jnp.log(pools)
 
     def jacobian(self, p, tobs_list, C0_list):
         """Noise-scaled sensitivity ``Sigma^{-1/2} S`` at parameters ``p`` for
-        sampling times ``tobs_list`` and initial states ``C0_list`` (one per
-        experiment), in unconstrained coordinates. Pure JAX."""
-        d, m = len(self.free_params), len(self.ic_species)
+        sampling times ``tobs_list`` (each in its experiment's ``time_unit``)
+        and initial states ``C0_list`` (one per experiment), in unconstrained
+        coordinates. An unmeasured (masked) entry gives an exactly zero row,
+        even where the prediction is not finite. Pure JAX."""
+        d, m = len(self.free_params), self.m_theta
         trs = self.rate_transforms
 
         def _residuals(theta):
@@ -389,11 +456,22 @@ class _FisherSetup:
             pp = p.at[self.free_idx].set(physical)
             parts = []
             for e, (rctr, C0, tobs) in enumerate(zip(self.reactors, C0_list, tobs_list)):
-                if m:
-                    C0 = C0.at[self.ic_idx].set(jnp.exp(theta[d + e * m : d + (e + 1) * m]))
-                C = rctr.solve(C0, params=pp, t_span=(0.0, self.t_end[e]), t_eval=tobs).C
-                y = observe(C, pp, self.obs_idx[e], self.obs_fn[e])
-                parts.append((y / self.sigma[e]).reshape(-1))
+                if self.ic_species:
+                    th_e = theta[d + e * m : d + (e + 1) * m]
+                    if self.ic_fixed_total:
+                        pools = _simplex_pools(th_e, jnp.sum(C0[self.ic_idx]))
+                    else:
+                        pools = jnp.exp(th_e)
+                    C0 = C0.at[self.ic_idx].set(pools)
+                t_native = tobs * self.time_factor[e]
+                C = rctr.solve(C0, params=pp, t_span=(0.0, self.t_end[e]), t_eval=t_native).C
+                y = observe(C, pp, self.obs_idx[e], self.obs_fn[e], t=tobs)
+                keep = self.keep[e]
+                if keep is not None:
+                    # Forward-mode AD: the select drops the tangent of the
+                    # unselected branch, so a non-finite one there cannot leak.
+                    y = jnp.where(keep, y, 0.0)
+                parts.append((y / self.sigma_div[e]).reshape(-1))
             if self.has_rate_prior:
                 parts.append(self.prior_mask * physical / self.prior_std)
             if self.ic_prior:
@@ -401,7 +479,7 @@ class _FisherSetup:
             return jnp.concatenate(parts)
 
         rate_theta = [jnp.atleast_1d(to_unconstrained(p[i], t)) for i, t in zip(self.free_idx, trs)]
-        pool_theta = [jnp.log(C0[self.ic_idx]) for C0 in C0_list] if m else []
+        pool_theta = [self._pool_theta(C0) for C0 in C0_list] if m else []
         theta = jnp.concatenate(rate_theta + pool_theta)
         return jax.jacfwd(_residuals)(theta)
 

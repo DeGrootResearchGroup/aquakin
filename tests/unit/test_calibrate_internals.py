@@ -10,7 +10,9 @@ monolith is covered by the full-fit tests in
 """
 
 import dataclasses
+import sys
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -18,21 +20,34 @@ import pytest
 import aquakin
 from aquakin.integrate._common import DifferentiationConfig
 from aquakin.integrate.calibrate import (
+    _DEFAULT_IC_BOUNDS,
     CalibrationResult,
+    _at_bound_named,
+    _at_bound_sides,
     _build_loss,
     _build_residual,
     _CalibrationProblem,
     _check_start_gradient,
+    _data_term,
     _FitConfig,
     _forward_jac,
     _free_ic_fields,
+    _ic_coordinate_names,
     _is_solve_failure,
+    _joint_names,
     _laplace_covariance,
+    _laplace_posterior,
+    _missing_mask,
     _ObjectiveBundle,
     _optimizer_bounds,
+    _per_species_ic_bounds,
+    _predict,
+    _ReactorForwardModel,
     _resolve_laplace,
     _resolve_problem,
     _run_multistart,
+    _simplex_fraction_cov,
+    _simplex_pools,
     calibrate,
 )
 
@@ -180,35 +195,259 @@ def test_problem_struct_key_is_shape_sensitive(base):
     assert prob2.struct_key("jax_adjoint") != k
 
 
+def _key_variants(m, C0, obs, t_obs, free):
+    """Problems that differ from the base in one thing the compiled objective
+    bakes in, by name. Each must key differently from the base and from every
+    other variant."""
+    name = free[0]
+    sp = [m.species[1]]
+    obs1 = obs[:, 1:]
+    nll = dict(loss="nll", sigma=0.1)
+    return {
+        "base": _resolve(m, C0, obs1, t_obs, free, observed_species=sp),
+        "observations": _resolve(m, C0, obs1 + 0.5, t_obs, free, observed_species=sp),
+        "one observation": _resolve(
+            m, C0, obs1.at[1, 0].add(1e-9), t_obs, free, observed_species=sp
+        ),
+        "t_obs values": _resolve(m, C0, obs1, t_obs + 0.25, free, observed_species=sp),
+        "sigma": _resolve(m, C0, obs1, t_obs, free, observed_species=sp, **nll),
+        # Same sigma, different loss type.
+        "loss": _resolve(m, C0, obs1, t_obs, free, observed_species=sp, loss="wmse", sigma=0.1),
+        "sigma value": _resolve(
+            m, C0, obs1, t_obs, free, observed_species=sp, loss="nll", sigma=0.2
+        ),
+        # The concentrated likelihood compiles a different objective and
+        # residual from any fixed sigma.
+        "sigma estimate": _resolve(
+            m, C0, obs1, t_obs, free, observed_species=sp, loss="nll", sigma="estimate"
+        ),
+        "sigma per point": _resolve(
+            m,
+            C0,
+            obs1,
+            t_obs,
+            free,
+            observed_species=sp,
+            loss="nll",
+            sigma=jnp.array([[0.1], [0.2], [0.1]]),
+        ),
+        "transform": _resolve(
+            m, C0, obs1, t_obs, free, observed_species=sp, transforms={name: "positive_log"}
+        ),
+        "observed species": _resolve(m, C0, obs1, t_obs, free, observed_species=[m.species[0]]),
+        "observation_fn": _resolve(m, C0, obs1, t_obs, free, observation_fn=lambda C, p: C[1]),
+        "prior": _resolve(
+            m,
+            C0,
+            obs1,
+            t_obs,
+            free,
+            observed_species=sp,
+            priors={name: (0.1, 0.05)},
+        ),
+        "prior std": _resolve(
+            m,
+            C0,
+            obs1,
+            t_obs,
+            free,
+            observed_species=sp,
+            priors={name: (0.1, 0.06)},
+        ),
+        "free initial pool": _resolve(
+            m, C0, obs1, t_obs, free, observed_species=sp, free_ic=[m.species[0]]
+        ),
+    }
+
+
+def test_struct_key_changes_with_everything_the_objective_bakes_in(base):
+    """Every variant keys differently from the base and from every other
+    variant, so a shared compiled-objective cache cannot hand one of them a
+    program compiled for another."""
+    variants = _key_variants(*base)
+    keys = {label: prob.struct_key("jax_adjoint") for label, prob in variants.items()}
+    for label, k in keys.items():
+        hash(k)  # usable as a dict key
+        if label != "base":
+            assert k != keys["base"], label
+    assert len(set(keys.values())) == len(keys)
+
+
+def test_struct_key_equal_for_equal_inputs(base):
+    """Equal content keys equally, even through fresh array objects and other
+    container types, so a repeat fit reuses the compiled program."""
+    m, C0, obs, t_obs, free = base
+    a = _resolve(m, C0, obs, t_obs, free, loss="nll", sigma=0.1)
+    b = _resolve(
+        m,
+        jnp.array(np.asarray(C0)),
+        np.array(obs).copy(),
+        list(np.asarray(t_obs)),
+        list(free),
+        loss="nll",
+        sigma=jnp.asarray(0.1),
+    )
+    assert a.struct_key("jax_adjoint") == b.struct_key("jax_adjoint")
+
+
+def test_struct_key_ignores_runtime_arguments(base):
+    """The initial parameters, the initial state and the rate bounds are not
+    baked into the compiled program (the first two are runtime arguments, the
+    bounds go only to SciPy), so changing them keeps the key: a
+    profile_likelihood sweep reuses one program."""
+    m, C0, obs, t_obs, free = base
+    k = _resolve(m, C0, obs, t_obs, free).struct_key("jax_adjoint")
+    moved = [
+        _resolve(m, C0, obs, t_obs, free, initial_params=m.default_parameters().at[0].set(3.0)),
+        _resolve(m, C0.at[0].set(0.4), obs, t_obs, free),
+        _resolve(m, C0, obs, t_obs, free, bounds={free[0]: (0.05, 0.5)}),
+        _resolve(m, C0, obs, t_obs, free, use_model_bounds=False),
+        _resolve(m, C0, obs, t_obs, free, param_halfwidth=1.0),
+    ]
+    for prob in moved:
+        assert prob.struct_key("jax_adjoint") == k
+
+
 # ---------- _optimizer_bounds ----------
 
 
-def test_optimizer_bounds_unbounded_by_default(base):
+def test_optimizer_bounds_unbounded_without_model_bounds(base):
     m, C0, obs, t_obs, free = base
-    prob = _resolve(m, C0, obs, t_obs, free)
+    prob = _resolve(m, C0, obs, t_obs, free, use_model_bounds=False)
     bounds, lb, ub, ls_bounds, has = _optimizer_bounds(prob, prob.rate_theta0())
     assert bounds is None and not has
     assert not np.isfinite(lb[0]) and not np.isfinite(ub[0])
 
 
-def test_optimizer_bounds_param_halfwidth_boxes_the_rates(base):
+def test_optimizer_bounds_use_declared_bounds_by_default(base):
+    """The fixture declares k in [1e-3, 10]; with the model's positive_log
+    transform the optimiser box is [log 1e-3, log 10]."""
     m, C0, obs, t_obs, free = base
-    prob = _resolve(m, C0, obs, t_obs, free, param_halfwidth=1.5)
-    theta0 = np.asarray(prob.rate_theta0(), dtype=float)
+    prob = _resolve(m, C0, obs, t_obs, free, transforms={free[0]: "positive_log"})
     bounds, lb, ub, _ls, has = _optimizer_bounds(prob, prob.rate_theta0())
     assert has and bounds is not None
-    assert lb[0] == pytest.approx(theta0[0] - 1.5)
-    assert ub[0] == pytest.approx(theta0[0] + 1.5)
+    assert lb[0] == pytest.approx(np.log(1e-3))
+    assert ub[0] == pytest.approx(np.log(10.0))
+
+
+def test_optimizer_bounds_explicit_override_and_open_side(base):
+    m, C0, obs, t_obs, free = base
+    tr = {free[0]: "positive_log"}
+    prob = _resolve(m, C0, obs, t_obs, free, transforms=tr, bounds={free[0]: (0.05, None)})
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(0.05))
+    assert ub[0] == np.inf
+    # lo <= 0 is the edge of positive_log's domain: open, not log(0).
+    prob = _resolve(m, C0, obs, t_obs, free, transforms=tr, bounds={free[0]: (0.0, 2.0)})
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == -np.inf and ub[0] == pytest.approx(np.log(2.0))
+
+
+def test_optimizer_bounds_logit_and_identity_mapping(base):
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m, C0, obs, t_obs, free, transforms={free[0]: "logit"}, bounds={free[0]: (0.05, 0.5)}
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(0.05 / 0.95))
+    assert ub[0] == pytest.approx(0.0)
+    prob = _resolve(
+        m, C0, obs, t_obs, free, transforms={free[0]: "none"}, bounds={free[0]: (0.05, 0.5)}
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert (lb[0], ub[0]) == (pytest.approx(0.05), pytest.approx(0.5))
+
+
+def test_optimizer_bounds_non_finite_side_is_open(base):
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m,
+        C0,
+        obs,
+        t_obs,
+        free,
+        transforms={free[0]: "positive_log"},
+        bounds={free[0]: (0.05, np.inf)},
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(0.05))
+    assert ub[0] == np.inf
+
+
+def test_optimizer_bounds_logit_domain_edges_are_open(base):
+    """[0, 1] is the whole of logit's domain, so both sides are open and the
+    explicit entry leaves the rate unbounded (it also replaces the declared
+    [1e-3, 10])."""
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m, C0, obs, t_obs, free, transforms={free[0]: "logit"}, bounds={free[0]: (0.0, 1.0)}
+    )
+    assert prob.rate_bounds is None
+    bounds, lb, ub, _ls, has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert bounds is None and not has
+    assert lb[0] == -np.inf and ub[0] == np.inf
+    # One side inside the domain: only the other is open.
+    prob = _resolve(
+        m, C0, obs, t_obs, free, transforms={free[0]: "logit"}, bounds={free[0]: (0.2, 1.5)}
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(0.2 / 0.8))
+    assert ub[0] == np.inf
 
 
 def test_optimizer_bounds_free_ic_log_bounded(base):
     m, C0, obs, t_obs, free = base
-    prob = _resolve(m, C0, obs, t_obs, free, free_ic=[m.species[0]], ic_bounds=(1e-2, 10.0))
+    prob = _resolve(
+        m,
+        C0,
+        obs,
+        t_obs,
+        free,
+        free_ic=[m.species[0]],
+        ic_bounds=(1e-2, 10.0),
+        use_model_bounds=False,
+    )
     bounds, lb, ub, _ls, has = _optimizer_bounds(prob, prob.rate_theta0())
     assert has
     # One rate dim (unbounded) + one free-IC dim (log-bounded by ic_bounds).
+    assert lb[0] == -np.inf and ub[0] == np.inf
     assert lb[-1] == pytest.approx(np.log(1e-2))
     assert ub[-1] == pytest.approx(np.log(10.0))
+
+
+def test_optimizer_bounds_halfwidth_intersects_absolute_bounds(base):
+    """The halfwidth box is intersected with the absolute bounds: the start
+    k=0.1 with halfwidth log(1000) would reach 100, but the declared upper
+    bound 10 wins; the lower side is the halfwidth's 1e-4 -> declared 1e-3."""
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m,
+        C0,
+        obs,
+        t_obs,
+        free,
+        transforms={free[0]: "positive_log"},
+        param_halfwidth=float(np.log(1000.0)),
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(1e-3))
+    assert ub[0] == pytest.approx(np.log(10.0))
+    prob = _resolve(
+        m, C0, obs, t_obs, free, transforms={free[0]: "positive_log"}, param_halfwidth=0.5
+    )
+    _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert lb[0] == pytest.approx(np.log(0.1) - 0.5)
+    assert ub[0] == pytest.approx(np.log(0.1) + 0.5)
+
+
+def test_resolve_problem_rejects_bad_bounds(base):
+    m, C0, obs, t_obs, free = base
+    with pytest.raises(KeyError, match="Unknown parameter 'nope'"):
+        _resolve(m, C0, obs, t_obs, free, bounds={"nope": (0.0, 1.0)})
+    with pytest.raises(ValueError, match="lo < hi"):
+        _resolve(m, C0, obs, t_obs, free, bounds={free[0]: (1.0, 1.0)})
+    with pytest.raises(ValueError, match=r"\(lo, hi\) pair"):
+        _resolve(m, C0, obs, t_obs, free, bounds={free[0]: (1.0,)})
 
 
 # ---------- _forward_jac ----------
@@ -540,3 +779,523 @@ def test_check_start_gradient_propagates_non_solve_errors():
     bundle = _quadratic_bundle(lambda x: TypeError("bug"))
     with pytest.raises(TypeError, match="bug"):
         _check_start_gradient(_ms_cfg(1), bundle, _THETA0)
+
+
+# ---------- _laplace_posterior: at-bound mask ----------
+
+
+def test_laplace_posterior_at_bound_mask(simple_model):
+    """No mask (Plant.calibrate's call) and an all-False mask give the same
+    posterior; masking the only rate holds it fixed: nan std, zero covariance."""
+    m = simple_model
+    reactor = _batch_reactor(m)
+    C0 = jnp.array([1.0, 0.0])
+    t_obs = jnp.array([1.0, 2.0, 4.0])
+    obs = reactor.solve(C0, params=m.default_parameters(), t_span=(0.0, 4.0), t_eval=t_obs).C
+    prob = _resolve(m, C0, obs, t_obs, [m.parameters[0]], use_model_bounds=False)
+    cfg = dataclasses.replace(_cfg("auto", "jax_adjoint"), laplace=True)
+    fm = _ReactorForwardModel(reactor, "jax_adjoint", 1, False)
+    theta = prob.rate_theta0()
+    no_mask = _laplace_posterior(prob, fm, cfg, theta, jnp.zeros(0))
+    all_free = _laplace_posterior(
+        prob, fm, cfg, theta, jnp.zeros(0), at_bound_mask=np.array([False])
+    )
+    assert np.isfinite(no_mask.posterior_std_unconstrained[0])
+    np.testing.assert_array_equal(no_mask.posterior_cov, all_free.posterior_cov)
+    held = _laplace_posterior(prob, fm, cfg, theta, jnp.zeros(0), at_bound_mask=np.array([True]))
+    assert np.isnan(held.posterior_std_unconstrained[0])
+    assert np.all(np.asarray(held.posterior_cov) == 0.0)
+
+
+# ---------- FreeICConfig: per-species bounds and the fixed-total split ----------
+
+
+def test_per_species_ic_bounds_forms():
+    """A shared pair applies to every pool; a dict sets named pools and leaves
+    the rest at the default."""
+    lo, hi = _per_species_ic_bounds(["S", "X"], (0.1, 2.0))
+    np.testing.assert_array_equal(lo, [0.1, 0.1])
+    np.testing.assert_array_equal(hi, [2.0, 2.0])
+    lo, hi = _per_species_ic_bounds(["S", "X"], {"X": (5.0, 50.0)})
+    np.testing.assert_array_equal(lo, [_DEFAULT_IC_BOUNDS[0], 5.0])
+    np.testing.assert_array_equal(hi, [_DEFAULT_IC_BOUNDS[1], 50.0])
+
+
+@pytest.mark.parametrize(
+    "bounds, exc, match",
+    [
+        ({"Q": (1.0, 2.0)}, KeyError, "not fitted"),
+        ({"S": (2.0, 1.0)}, ValueError, "0 < lo < hi"),
+        ({"S": (0.0, 1.0)}, ValueError, "0 < lo < hi"),
+        ({"S": (-1.0, 1.0)}, ValueError, "0 < lo < hi"),
+        ({"S": (1.0, 1.0)}, ValueError, "0 < lo < hi"),
+        ({"S": (float("nan"), 1.0)}, ValueError, "0 < lo < hi"),
+        ({"S": 5.0}, ValueError, r"\(lo, hi\) pair"),
+        ({"S": (1.0, 2.0, 3.0)}, ValueError, r"\(lo, hi\) pair"),
+        ((1.0,), ValueError, r"\(lo, hi\) pair"),
+    ],
+)
+def test_per_species_ic_bounds_rejects_malformed(bounds, exc, match):
+    with pytest.raises(exc, match=match):
+        _per_species_ic_bounds(["S", "X"], bounds)
+
+
+def test_resolve_problem_per_species_ic_bounds(base):
+    """Per-species bounds become per-pool arrays; each pool's start is clipped
+    into its own box (A starts at 1.0 above its cap 0.5, B at 0.0 below its
+    floor 0.2), and the optimiser box is the log of those arrays, tiled over
+    datasets."""
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m,
+        [C0, C0],
+        [obs, obs],
+        [t_obs, t_obs],
+        free,
+        free_ic=["A", "B"],
+        ic_bounds={"A": (0.01, 0.5), "B": (0.2, 3.0)},
+        use_model_bounds=False,
+    )
+    np.testing.assert_array_equal(prob.ic_bounds[0], [0.01, 0.2])
+    np.testing.assert_array_equal(prob.ic_bounds[1], [0.5, 3.0])
+    np.testing.assert_allclose(prob.ic_center_full, np.log([0.5, 0.2, 0.5, 0.2]))
+    _b, lb, ub, _ls, has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert has
+    np.testing.assert_allclose(lb[1:], np.log([0.01, 0.2, 0.01, 0.2]))
+    np.testing.assert_allclose(ub[1:], np.log([0.5, 3.0, 0.5, 3.0]))
+
+
+def test_at_bound_names_a_pool_on_its_own_bound(base):
+    """A pool sitting on its own per-species bound is flagged by name; the
+    other pool, inside a different box at the same value, is not."""
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(
+        m,
+        C0,
+        obs,
+        t_obs,
+        free,
+        free_ic=["A", "B"],
+        ic_bounds={"A": (0.01, 0.5), "B": (0.01, 3.0)},
+        use_model_bounds=False,
+    )
+    opt_bounds = _optimizer_bounds(prob, prob.rate_theta0())
+    theta = np.concatenate([np.asarray(prob.rate_theta0()), np.log([0.5, 0.5])])
+    sides = _at_bound_sides(theta, opt_bounds)
+    assert _at_bound_named(prob, sides) == {"ic[0].A": "upper"}
+    theta[2] = np.log(0.01)
+    assert _at_bound_named(prob, _at_bound_sides(theta, opt_bounds)) == {
+        "ic[0].A": "upper",
+        "ic[0].B": "lower",
+    }
+
+
+def test_resolve_problem_fixed_total(base):
+    """The split is centred on the log-ratios of the C0 pools; its coordinates
+    are unbounded, so with no rate bounds nothing is bounded and nothing can
+    be flagged, and the pools always sum to each dataset's total."""
+    m, _C0, obs, t_obs, free = base
+    C0a, C0b = jnp.array([0.6, 0.4]), jnp.array([1.0, 3.0])
+    prob = _resolve(
+        m,
+        [C0a, C0b],
+        [obs, obs],
+        [t_obs, t_obs],
+        free,
+        free_ic=["A", "B"],
+        ic_fixed_total=True,
+        use_model_bounds=False,
+    )
+    assert prob.ic_fixed_total and prob.m_ic == 2 and prob.m_ic_theta == 1
+    np.testing.assert_allclose(prob.ic_center_full, [np.log(0.4 / 0.6), np.log(3.0)])
+    bounds, lb, ub, _ls, has = _optimizer_bounds(prob, prob.rate_theta0())
+    assert not has and bounds is None
+    assert np.all(np.isinf(lb)) and np.all(np.isinf(ub))
+    theta = np.concatenate([np.asarray(prob.rate_theta0()), [50.0, -50.0]])
+    assert _at_bound_named(prob, _at_bound_sides(theta, (bounds, lb, ub, _ls, has))) == {}
+    assert _joint_names(prob) == [free[0], "ic[0].B:A", "ic[1].B:A"]
+    # The start reproduces the C0 pools; each dataset keeps its own total.
+    for k, C0_k in enumerate((C0a, C0b)):
+        z = prob.ic_center_full[k : k + 1]
+        np.testing.assert_allclose(prob.ic_pools(z, C0_k), C0_k, rtol=1e-12)
+        pools = prob.ic_pools(jnp.array([7.3]), C0_k)
+        assert float(jnp.sum(pools)) == pytest.approx(float(jnp.sum(C0_k)), rel=1e-12)
+
+
+def test_fixed_total_with_rate_bounds_keeps_split_open(base):
+    """Rate bounds stay finite (and flaggable) next to the unbounded split."""
+    m, _C0, obs, t_obs, free = base
+    prob = _resolve(
+        m,
+        jnp.array([0.6, 0.4]),
+        obs,
+        t_obs,
+        free,
+        free_ic=["A", "B"],
+        ic_fixed_total=True,
+        transforms={free[0]: "positive_log"},
+    )
+    opt_bounds = _optimizer_bounds(prob, prob.rate_theta0())
+    _b, lb, ub, _ls, has = opt_bounds
+    assert has
+    assert lb[0] == pytest.approx(np.log(1e-3)) and ub[0] == pytest.approx(np.log(10.0))
+    assert lb[1] == -np.inf and ub[1] == np.inf
+    sides = _at_bound_sides(np.array([np.log(10.0), 0.0]), opt_bounds)
+    assert _at_bound_named(prob, sides) == {free[0]: "upper"}
+
+
+def test_resolve_problem_fixed_total_validation(base):
+    m, _C0, obs, t_obs, free = base
+    with pytest.raises(ValueError, match="takes no bounds"):
+        _resolve(
+            m,
+            jnp.array([0.6, 0.4]),
+            obs,
+            t_obs,
+            free,
+            free_ic=["A", "B"],
+            ic_fixed_total=True,
+            ic_bounds={"A": (0.1, 1.0)},
+        )
+    with pytest.raises(ValueError, match=r"dataset 0.*must be positive in C0"):
+        _resolve(
+            m, jnp.array([1.0, 0.0]), obs, t_obs, free, free_ic=["A", "B"], ic_fixed_total=True
+        )
+    # fixed_total without free pools is a no-op.
+    prob = _resolve(m, jnp.array([1.0, 0.0]), obs, t_obs, free, ic_fixed_total=True)
+    assert not prob.ic_fixed_total and prob.m_ic_theta == 0
+
+
+def test_fixed_total_single_pool_is_held_at_its_total(base):
+    """One pool in a fixed total has no split to fit: no coordinates, and the
+    pool is its C0 value."""
+    m, _C0, obs, t_obs, free = base
+    C0 = jnp.array([0.7, 0.0])
+    prob = _resolve(m, C0, obs, t_obs, free, free_ic=["A"], ic_fixed_total=True)
+    assert prob.m_ic == 1 and prob.m_ic_theta == 0
+    assert prob.ic_center_full.shape == (0,)
+    np.testing.assert_allclose(prob.ic_pools(jnp.zeros(0), C0), [0.7])
+    assert _joint_names(prob) == [free[0]]
+
+
+def test_ic_pools_without_fixed_total_is_exp(base):
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(m, C0, obs, t_obs, free, free_ic=["A", "B"])
+    assert prob.m_ic_theta == 2
+    np.testing.assert_allclose(prob.ic_pools(jnp.log(jnp.array([2.0, 3.0])), C0), [2.0, 3.0])
+    assert _joint_names(prob) == [free[0], "ic[0].A", "ic[0].B"]
+
+
+def test_simplex_pools_extremes_stay_positive_and_conserve_total():
+    """Large log-ratios saturate without overflow: the pools stay finite,
+    non-negative and sum to the total."""
+    for z in ([0.0, 0.0], [800.0, -800.0], [-800.0, -800.0], [1e-12, 40.0]):
+        pools = np.asarray(_simplex_pools(jnp.asarray(z), 4.0))
+        assert np.all(np.isfinite(pools)) and np.all(pools >= 0.0)
+        assert pools.sum() == pytest.approx(4.0, rel=1e-12)
+    np.testing.assert_allclose(_simplex_pools(jnp.zeros(2), 3.0), [1.0, 1.0, 1.0])
+    np.testing.assert_allclose(_simplex_pools(jnp.zeros(0), 3.0), [3.0])
+
+
+def test_simplex_fraction_cov_is_delta_method():
+    """The fraction covariance is J cov_z J^T with J the softmax Jacobian: it
+    matches a finite-difference J, and since the fractions sum to 1 every
+    row sums to 0."""
+    z = np.array([0.4, -1.1])
+    cov_z = np.array([[0.04, 0.01], [0.01, 0.09]])
+    cov_f = _simplex_fraction_cov(z, cov_z)
+
+    def frac(zz):
+        return np.asarray(_simplex_pools(jnp.asarray(zz), 1.0))
+
+    h = 1e-6
+    J = np.stack([(frac(z + h * e) - frac(z - h * e)) / (2 * h) for e in np.eye(2)], axis=1)
+    np.testing.assert_allclose(cov_f, J @ cov_z @ J.T, rtol=1e-6, atol=1e-14)
+    np.testing.assert_allclose(cov_f.sum(axis=1), 0.0, atol=1e-15)
+    # One pool: no coordinates, zero variance.
+    np.testing.assert_array_equal(_simplex_fraction_cov(np.zeros(0), np.zeros((0, 0))), [[0.0]])
+
+
+def test_ic_coordinate_names():
+    assert _ic_coordinate_names(["S", "X", "P"], 2, False) == [
+        "ic[0].S",
+        "ic[0].X",
+        "ic[0].P",
+        "ic[1].S",
+        "ic[1].X",
+        "ic[1].P",
+    ]
+    assert _ic_coordinate_names(["S", "X", "P"], 2, True) == [
+        "ic[0].X:S",
+        "ic[0].P:S",
+        "ic[1].X:S",
+        "ic[1].P:S",
+    ]
+
+
+def test_free_ic_fields_extended_passes_extensions_through():
+    cfg = aquakin.FreeICConfig(["S", "X"], bounds={"S": (1.0, 2.0)}, fixed_total=False)
+    species, bounds, prior = _free_ic_fields(cfg, extended=True)
+    assert species == ["S", "X"] and bounds == {"S": (1.0, 2.0)} and prior is None
+
+
+def test_resolve_problem_rejects_duplicate_free_ic(base):
+    m, C0, obs, t_obs, free = base
+    with pytest.raises(ValueError, match="distinct"):
+        _resolve(m, C0, obs, t_obs, free, free_ic=["A", "A"])
+
+
+# ---------- sigma="estimate" (concentrated likelihood): guards ----------
+
+
+@pytest.mark.parametrize("build", [_build_loss, _build_residual])
+def test_build_sigma_estimate_requires_nll(build):
+    with pytest.raises(ValueError, match='sigma="estimate" requires loss="nll"'):
+        build("mse", jnp.zeros((3, 1)), "estimate")
+
+
+def test_resolve_problem_rejects_unknown_sigma_string(base):
+    m, C0, obs, t_obs, free = base
+    with pytest.raises(ValueError, match='sigma must be an array, None or "estimate"'):
+        _resolve(m, C0, obs, t_obs, free, loss="nll", sigma="bogus")
+
+
+def test_resolve_problem_rejects_estimate_in_sigma_list(base):
+    """The concentrated likelihood pools every dataset's residuals, so it cannot
+    be asked for per dataset."""
+    m, C0, obs, t_obs, free = base
+    with pytest.raises(ValueError, match="applies to every dataset"):
+        _resolve(m, [C0, C0], [obs, obs], [t_obs, t_obs], free, loss="nll", sigma=["estimate", 0.1])
+
+
+def test_laplace_posterior_sigma_estimate_needs_noise_estimate(base):
+    """The plug-in Gauss-Newton Laplace of the concentrated likelihood needs the
+    noise estimate at the MAP; it is an error to omit it."""
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(m, C0, obs, t_obs, free, loss="nll", sigma="estimate")
+    cfg = dataclasses.replace(_cfg("auto", "jax_adjoint"), laplace_method="gauss_newton")
+    fm = _ReactorForwardModel(_batch_reactor(m), "jax_adjoint", 1, False)
+    with pytest.raises(ValueError, match="needs the noise estimate"):
+        _laplace_posterior(prob, fm, cfg, prob.rate_theta0(), jnp.zeros(0))
+
+
+def test_run_multistart_reports_unconverged_noise_reestimation(monkeypatch):
+    """Gauss-Newton under the concentrated likelihood alternates a least-squares
+    solve with re-estimating sigma; if sigma has not settled within the
+    iteration cap the run is reported as not converged."""
+    monkeypatch.setattr(sys.modules[_run_multistart.__module__], "_IRLS_MAX_ITER", 3)
+    box = [np.ones(1)]
+    calls = [0]
+
+    def sigma_hat_of(x):
+        calls[0] += 1  # a noise estimate that never settles
+        return np.asarray([float(calls[0])])
+
+    def set_sigma_hat(v):
+        box[0] = np.asarray(v)
+
+    bundle = _ObjectiveBundle(
+        lambda x: (jnp.sum((x - 1.0) ** 2), 2.0 * (x - 1.0)),
+        lambda x: (x - 1.0) / box[0],
+        lambda x: jnp.eye(1) / box[0],
+        False,
+        sigma_hat_of,
+        set_sigma_hat,
+    )
+    cfg = dataclasses.replace(_ms_cfg(1, optimizer="gauss_newton"), max_iter=20)
+    out = _run_multistart(cfg, bundle, _THETA0, _NO_BOUNDS)
+    assert not out.success
+    assert out.message == "noise re-estimation did not converge"
+    assert out.x[0] == pytest.approx(1.0)
+
+
+def test_resolve_problem_accepts_numeric_sigma_list(base):
+    m, C0, obs, t_obs, free = base
+    prob = _resolve(m, [C0, C0], [obs, obs], [t_obs, t_obs], free, loss="nll", sigma=[0.1, 0.2])
+    assert prob.n_datasets == 2
+    assert not prob.sigma_estimate
+
+
+# ---------- missing (NaN) observations with sigma="estimate" ----------
+
+
+def _obs_with_gap(base):
+    """Two observed outputs on three times; output 1 is missing at t = 1."""
+    m, C0, _obs, t_obs, free = base
+    obs = jnp.array([[0.9, 0.1], [0.5, jnp.nan], [0.2, 0.8]])
+    return m, C0, obs, t_obs, free
+
+
+def test_sigma_estimate_counts_only_observed_entries(base):
+    """N_j is the number of observed entries of output j, pooled over the
+    datasets, and the NaN entries add nothing to the sum of squares or the raw
+    residual."""
+    m, C0, obs, t_obs, free = _obs_with_gap(base)
+    prob = _resolve(m, [C0, C0], [obs, obs], [t_obs, t_obs], free, loss="nll", sigma="estimate")
+    np.testing.assert_array_equal(prob.n_obs_per_output, [6.0, 4.0])
+
+    pred = jnp.array([[1.0, 0.0], [0.4, 123.0], [0.2, 1.0]])
+    _t, _ts, sse_fn, resid_fn = prob.dataset_static[0]
+    np.testing.assert_allclose(sse_fn(pred), [0.01 + 0.01, 0.01 + 0.04])
+    r = np.asarray(resid_fn(pred))
+    assert r[1, 1] == 0.0 and np.all(np.isfinite(r))
+
+    # The concentrated objective is finite and equals sum_j (N_j/2) log(SSE_j/N_j) + N/2.
+    sse = np.array([0.04, 0.10])
+    n = np.array([6.0, 4.0])
+    expected = 0.5 * np.sum(n * np.log(sse / n)) + 0.5 * np.sum(n)
+    assert float(_data_term(prob, (pred, pred))) == pytest.approx(expected, rel=1e-12)
+
+
+def test_sigma_estimate_rejects_an_output_never_observed(base):
+    m, C0, _obs, t_obs, free = base
+    obs = jnp.array([[0.9, jnp.nan], [0.5, jnp.nan], [0.2, jnp.nan]])
+    with pytest.raises(ValueError, match=r"output\(s\) \[1\] are missing"):
+        _resolve(m, C0, obs, t_obs, free, loss="nll", sigma="estimate")
+
+
+# ---------- missing (NaN) observations: masked losses and guards ----------
+
+_OBS_GAP = jnp.array([[1.0, 2.0], [jnp.nan, 4.0]])
+_PRED_GAP = jnp.array([[1.5, 2.0], [99.0, 3.0]])
+
+
+def test_missing_mask_ignores_non_float_observations():
+    assert _missing_mask(np.array([[1, 2], [3, 4]])) is None
+
+
+@pytest.mark.parametrize("build", [_build_loss, _build_residual])
+@pytest.mark.parametrize(
+    "loss, sigma, match",
+    [
+        ("wmse", None, "requires a sigma"),
+        ("nll", None, "requires a sigma"),
+        ("bogus", 1.0, "Unknown loss"),
+    ],
+)
+def test_masked_builders_validate_arguments(build, loss, sigma, match):
+    with pytest.raises(ValueError, match=match):
+        build(loss, _OBS_GAP, sigma)
+
+
+def test_masked_wmse_loss_and_residual_average_over_observed_entries():
+    """wmse with a NaN averages over the three observed entries, and the
+    residual's half-sum-of-squares equals that loss."""
+    sigma = jnp.array([0.5, 1.0])
+    loss = float(_build_loss("wmse", _OBS_GAP, sigma)(_PRED_GAP))
+    assert loss == pytest.approx(((0.5 / 0.5) ** 2 + 0.0 + 1.0**2) / 3.0)
+    r = np.asarray(_build_residual("wmse", _OBS_GAP, sigma)(_PRED_GAP))
+    assert r[2] == 0.0
+    assert 0.5 * np.sum(r**2) == pytest.approx(loss)
+
+
+@pytest.mark.parametrize("loss", ["mse", "nll"])
+def test_masked_loss_and_residual_skip_missing_entries(loss):
+    """mse averages over the three observed entries and nll sums them; the
+    residual is zero at the missing entry and its half-sum-of-squares equals
+    the theta-dependent part of the loss."""
+    sigma = jnp.array([0.5, 1.0]) if loss == "nll" else None
+    value = float(_build_loss(loss, _OBS_GAP, sigma)(_PRED_GAP))
+    r = np.asarray(_build_residual(loss, _OBS_GAP, sigma)(_PRED_GAP))
+    assert r[2] == 0.0
+    if loss == "mse":
+        assert value == pytest.approx((0.5**2 + 0.0 + 1.0**2) / 3.0)
+        assert 0.5 * np.sum(r**2) == pytest.approx(value)
+    else:
+        log_norm = 2.0 * np.log(1.0) + np.log(0.5)  # the three observed entries
+        assert value == pytest.approx(log_norm + 0.5 * ((0.5 / 0.5) ** 2 + 0.0 + 1.0**2))
+        assert 0.5 * np.sum(r**2) == pytest.approx(value - log_norm)
+
+
+# ---------- missing entries: non-finite sigma / prediction cannot leak ----------
+
+_PRED_BAD = (jnp.nan, jnp.inf, -jnp.inf)
+
+
+@pytest.mark.parametrize("bad_sigma", [jnp.nan, 0.0, jnp.inf])
+@pytest.mark.parametrize("loss", ["wmse", "nll"])
+def test_masked_loss_ignores_a_bad_sigma_at_a_missing_entry(loss, bad_sigma):
+    """A NaN, zero or infinite per-entry sigma where the observation is missing
+    gives the same finite loss and residual as a valid one."""
+    good = jnp.array([[0.5, 1.0], [2.0, 1.0]])
+    bad = good.at[1, 0].set(bad_sigma)
+    for build in (_build_loss, _build_residual):
+        ref = np.asarray(build(loss, _OBS_GAP, good)(_PRED_GAP))
+        got = np.asarray(build(loss, _OBS_GAP, bad)(_PRED_GAP))
+        assert np.all(np.isfinite(got))
+        np.testing.assert_allclose(got, ref, rtol=1e-15)
+
+
+@pytest.mark.parametrize("bad_pred", _PRED_BAD)
+@pytest.mark.parametrize(
+    "loss, sigma", [("mse", None), ("wmse", jnp.array([0.5, 1.0])), ("nll", jnp.array([0.5, 1.0]))]
+)
+def test_masked_loss_ignores_a_non_finite_prediction_at_a_missing_entry(loss, sigma, bad_pred):
+    """A NaN / inf prediction at a missing entry leaves the loss, the residual
+    and their derivatives with respect to the prediction finite and equal to
+    those at a finite prediction there (the derivative at that entry is 0)."""
+    pred_bad = _PRED_GAP.at[1, 0].set(bad_pred)
+    loss_fn = _build_loss(loss, _OBS_GAP, sigma)
+    resid_fn = _build_residual(loss, _OBS_GAP, sigma)
+    assert float(loss_fn(pred_bad)) == float(loss_fn(_PRED_GAP))
+    np.testing.assert_array_equal(resid_fn(pred_bad), resid_fn(_PRED_GAP))
+    g = np.asarray(jax.grad(loss_fn)(pred_bad))
+    J = np.asarray(jax.jacfwd(resid_fn)(pred_bad))
+    Jr = np.asarray(jax.jacrev(resid_fn)(pred_bad))
+    assert np.all(np.isfinite(g)) and g[1, 0] == 0.0
+    np.testing.assert_array_equal(g, jax.grad(loss_fn)(_PRED_GAP))
+    for jac in (J, Jr):
+        assert np.all(np.isfinite(jac)) and np.all(jac[..., 1, 0] == 0.0)
+
+
+@pytest.mark.parametrize("bad_pred", _PRED_BAD)
+def test_sigma_estimate_ignores_a_non_finite_prediction_at_a_missing_entry(bad_pred):
+    """The concentrated likelihood's per-output sums of squares and raw
+    residuals stay finite, with a zero derivative at a missing entry."""
+    pred_bad = _PRED_GAP.at[1, 0].set(bad_pred)
+    sse = _build_loss("nll", _OBS_GAP, "estimate")
+    raw = _build_residual("nll", _OBS_GAP, "estimate")
+    np.testing.assert_array_equal(sse(pred_bad), sse(_PRED_GAP))
+    np.testing.assert_array_equal(raw(pred_bad), raw(_PRED_GAP))
+    g = np.asarray(jax.grad(lambda q: jnp.sum(jnp.log(sse(q))))(pred_bad))
+    assert np.all(np.isfinite(g)) and g[1, 0] == 0.0
+    J = np.asarray(jax.jacfwd(raw)(pred_bad))
+    assert np.all(np.isfinite(J)) and np.all(J[..., 1, 0] == 0.0)
+
+
+def test_sigma_estimate_without_missing_entries_is_the_plain_difference():
+    """With no NaN the concentrated-likelihood residual is pred - obs itself."""
+    obs = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+    np.testing.assert_array_equal(
+        _build_residual("nll", obs, "estimate")(_PRED_GAP), _PRED_GAP - obs
+    )
+    np.testing.assert_array_equal(
+        _build_loss("nll", obs, "estimate")(_PRED_GAP), jnp.sum((_PRED_GAP - obs) ** 2, axis=0)
+    )
+
+
+def test_time_aware_observation_fn_sees_t_obs_exactly(simple_model):
+    """With t_obs in minutes on a seconds model the native times are t_obs * 60,
+    which divided by 60 again need not give t_obs back; the time-aware
+    observation_fn still receives t_obs exactly (no solve: a stand-in forward
+    model). The times as given are also part of the compiled-objective key."""
+    t_user = jnp.asarray([0.33585575305464355, 7.294965609839984])
+    assert np.any(np.asarray(t_user) * 60.0 / 60.0 != np.asarray(t_user))
+    C0 = jnp.array([1.0, 0.0])
+    obs = jnp.zeros((2, 1))
+    fn = lambda t, C, p: t
+    prob = _resolve(simple_model, C0, obs, t_user, ["A_to_B.k"], observation_fn=fn, time_unit="min")
+    np.testing.assert_array_equal(prob.obs_times[0], t_user)
+    np.testing.assert_array_equal(prob.dataset_static[0][0], t_user * 60.0)
+
+    class _Stub:
+        def solve_trajectory(self, p, C0, t_span, t_eval):
+            return jnp.zeros((t_eval.shape[0], simple_model.n_species))
+
+    (pred,) = _predict(prob, _Stub(), prob.p0_full, jnp.zeros(0), prob.C0_base)
+    np.testing.assert_array_equal(pred[:, 0], t_user)
+
+    other = _resolve(
+        simple_model, C0, obs, t_user * 60.0, ["A_to_B.k"], observation_fn=fn, time_unit=None
+    )
+    assert other.struct_key("reverse") != prob.struct_key("reverse")

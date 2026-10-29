@@ -512,6 +512,15 @@ def test_plant_calibrate_rejects_empty_free_params(decay_plant):
         plant.calibrate(jnp.zeros(3), jnp.array([1.0, 2.0, 3.0]), [], target="tank")
 
 
+@pytest.mark.parametrize("sigma", ["estimate", ["estimate"]])
+def test_plant_calibrate_rejects_sigma_estimate(decay_plant, sigma):
+    net, plant = decay_plant
+    with pytest.raises(NotImplementedError, match='sigma="estimate" yet'):
+        plant.calibrate(
+            jnp.zeros(3), jnp.array([1.0, 2.0, 3.0]), [PARAM], target="tank", sigma=sigma
+        )
+
+
 def test_plant_calibrate_rejects_shape_mismatch(decay_plant):
     net, plant = decay_plant
     with pytest.raises(ValueError, match="rows but t_obs"):
