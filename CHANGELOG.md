@@ -19,7 +19,7 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ## [Unreleased]
 
-## [0.1.1] - unreleased
+## [0.2.0] - unreleased
 
 ### Added
 
@@ -429,6 +429,6 @@ functions integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
   sensitivity & calibration), the YAML model-authoring reference, a catalog of
   every shipped model, and an API reference generated from the public surface.
 
-[Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.0...v0.1.1
+[Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DeGrootResearchGroup/aquakin/releases/tag/v0.1.0
