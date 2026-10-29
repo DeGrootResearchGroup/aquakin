@@ -262,11 +262,9 @@ def test_free_ic_config_validation(two_pool):
             free_ic=FreeICConfig(["S", "X"], fixed_total=True),
             **kw,
         )
-    # The plant path does not handle the extensions yet and says so.
-    with pytest.raises(NotImplementedError, match="fixed_total"):
-        _free_ic_fields(FreeICConfig(["S", "X"], fixed_total=True))
-    with pytest.raises(NotImplementedError, match="Per-species"):
-        _free_ic_fields(FreeICConfig(["S"], bounds={"S": (1.0, 2.0)}))
+    # The extensions reach every caller (the plant path included) unchanged.
+    assert _free_ic_fields(FreeICConfig(["S", "X"], fixed_total=True))[0] == ["S", "X"]
+    assert _free_ic_fields(FreeICConfig(["S"], bounds={"S": (1.0, 2.0)}))[1] == {"S": (1.0, 2.0)}
 
 
 def test_per_species_bound_start_outside_and_laplace(two_pool):

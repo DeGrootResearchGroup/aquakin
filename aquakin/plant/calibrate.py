@@ -23,7 +23,10 @@ contract:
   priors) to the small interface ``_CalibrationProblem`` expects of a ``model``.
 
 The generic ``_build_objective`` / ``_run_multistart`` / ``_laplace_posterior``
-are then reused unchanged. This version fits **kinetic parameters against one or
+are then reused unchanged, as are the shared pieces of the argument handling (the
+rate bounds, the free-IC bounds and ``fixed_total`` split, the ``sigma`` checks
+and the concentrated likelihood) and the result assembly (``_fit_result``: the
+fitted pools, ``at_bound`` and the Laplace posterior). This version fits **kinetic parameters against one or
 more output streams' channels** (via :class:`PlantObservable`), optionally
 alongside **assembled-state initial conditions** (``free_ic``, naming
 ``(unit, species)`` slots -- the plant analogue of the reactor free-IC hook), and
@@ -51,16 +54,21 @@ from aquakin.integrate.calibrate import (
     _build_objective,
     _build_residual,
     _CalibrationProblem,
+    _check_sigma_arg,
     _check_start_gradient,
-    _clip_start,
+    _coerce_sigma,
+    _fit_result,
     _FitConfig,
     _free_ic_fields,
-    _laplace_posterior,
-    _LaplaceOut,
-    _optimizer_bounds,
+    _initial_point,
+    _is_sigma_estimate,
+    _n_obs_per_output,
+    _observed_counts,
+    _resolve_ic_coords,
     _resolve_laplace,
-    _resolve_starts,
+    _resolve_rate_bounds,
     _run_multistart,
+    _sigma_per_dataset,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -217,11 +225,12 @@ class _PlantParamNamespace:
         self.param_index = {
             name: self.plant.parameter_index(name) for name in self.plant.parameter_names()
         }
-        # Pull each parameter's declared transform / prior from its owning model.
-        # A plant parameter is addressed ``"<model>.<param>"``; the per-model
-        # tables are keyed by the model's own (namespaced) ``<param>``.
+        # Pull each parameter's declared transform / prior / bounds from its
+        # owning model. A plant parameter is addressed ``"<model>.<param>"``; the
+        # per-model tables are keyed by the model's own (namespaced) ``<param>``.
         self.parameter_transforms: dict[str, str] = {}
         self.parameter_priors: dict[str, tuple[float, float]] = {}
+        self.parameter_bounds: dict[str, tuple[float, float]] = {}
         for net in self.plant._ordered_models():
             for pname in net.param_index:
                 key = f"{net.name}.{pname}"
@@ -229,6 +238,8 @@ class _PlantParamNamespace:
                     self.parameter_transforms[key] = net.parameter_transforms[pname]
                 if pname in net.parameter_priors:
                     self.parameter_priors[key] = net.parameter_priors[pname]
+                if pname in net.parameter_bounds:
+                    self.parameter_bounds[key] = net.parameter_bounds[pname]
 
     @property
     def parameters(self) -> list[str]:
@@ -279,6 +290,10 @@ def _resolve_plant_problem(
     ic_bounds,
     ic_prior_log_std,
     y0,
+    ic_fixed_total=False,
+    param_halfwidth=None,
+    bounds=None,
+    use_model_bounds=True,
 ) -> tuple[_CalibrationProblem, tuple, bool]:
     """Validate + coerce the plant-calibration arguments into a
     ``_CalibrationProblem`` (one or several datasets). Returns the problem, the
@@ -378,8 +393,6 @@ def _resolve_plant_problem(
     ic_labels: list[str] = []
     ic_flat_idx: list[int] = []
     if m_ic:
-        if not (0.0 < ic_bounds[0] < ic_bounds[1]):
-            raise ValueError(f"ic_bounds must satisfy 0 < lo < hi; got {ic_bounds}.")
         plant._build_state_layout()
         for unit, species in free_ic_specs:
             u = plant._unit_or_raise(unit)
@@ -418,29 +431,35 @@ def _resolve_plant_problem(
         span_list = list(t_span)
     else:
         span_list = [t_span] * n_datasets
-    if isinstance(sigma, (list, tuple)):
-        if len(sigma) != n_datasets:
-            raise ValueError(
-                f"sigma list has {len(sigma)} entries but there are {n_datasets} datasets."
-            )
-        sigma_list = list(sigma)
-    else:
-        sigma_list = [sigma] * n_datasets
+    sigma_list = _sigma_per_dataset(sigma, n_datasets)
 
+    # The free-IC bounds / start / ``fixed_total`` split share the reactor
+    # setup; a ``{label: (lo, hi)}`` bounds dict may name a pool either way.
+    if isinstance(ic_bounds, dict):
+        ic_bounds = {
+            f"{unit}.{species}": pair
+            for (unit, species), pair in zip(
+                _normalize_free_ic(list(ic_bounds)), ic_bounds.values()
+            )
+        }
     # ``C0_base`` carries a real assembled ``y0`` when the fit needs a per-dataset
     # or fitted state -- a multi-batch fit (each dataset's own ``y0``) or a free-IC
     # fit (the base ``y0`` whose slots are overridden). A plain single fit leaves
     # it an unused placeholder and the forward model uses its fixed ``y0``.
+    y0_base = None
     if m_ic:
         y0_base = plant.initial_state() if y0 is None else jnp.asarray(y0)
-        ic_species_idx = jnp.asarray(ic_flat_idx, dtype=int)
-        vals = np.clip(np.asarray(y0_base)[ic_flat_idx], ic_bounds[0], ic_bounds[1])
-        ic_center_full = jnp.asarray(np.log(vals))
-    else:
-        ic_species_idx = jnp.asarray([], dtype=int)
-        ic_center_full = jnp.zeros(0)
+    # The pools' starting values (and, for a split, their total) come from it.
+    ic_species_idx = jnp.asarray(ic_flat_idx, dtype=int)
+    ic_bounds, ic_center_full, ic_fixed_total = _resolve_ic_coords(
+        ic_labels,
+        ic_bounds,
+        ic_fixed_total,
+        [np.asarray(y0_base, dtype=float)[ic_flat_idx]] if m_ic else [],
+    )
 
     datasets = []
+    n_seen_per_output = np.zeros(n_observed, dtype=int)  # observed (non-NaN) entries
     for ds in range(n_datasets):
         tobs_i = jnp.asarray(tobs_list[ds])
         if tobs_i.ndim != 1 or tobs_i.shape[0] < 1:
@@ -452,6 +471,7 @@ def _resolve_plant_problem(
         obs_i = jnp.asarray(obs_list[ds])
         if obs_i.ndim == 1:
             obs_i = obs_i[:, None]
+        seen_i = _observed_counts(ds, obs_i)
         if obs_i.shape[0] != tobs_i.shape[0]:
             raise ValueError(
                 f"dataset {ds}: observations has {obs_i.shape[0]} rows but t_obs "
@@ -462,11 +482,12 @@ def _resolve_plant_problem(
                 f"dataset {ds}: observations has {obs_i.shape[1]} columns but "
                 f"{n_observed} channels were specified across the observable(s)."
             )
+        n_seen_per_output += seen_i
         span_i = span_list[ds]
         if span_i is None:
             span_i = (float(tobs_i[0]), float(tobs_i[-1]))
         tspan_i = (float(span_i[0]), float(span_i[1]))
-        sig_i = jnp.asarray(sigma_list[ds]) if sigma_list[ds] is not None else None
+        sig_i = _coerce_sigma(sigma_list[ds])
         if multi:
             C0_i = y0_list[ds]
         elif m_ic:
@@ -503,6 +524,10 @@ def _resolve_plant_problem(
     prior_std = jnp.asarray([active_priors.get(n, (0.0, 1.0))[1] for n in free_params])
     prior_mask = jnp.asarray([1.0 if n in active_priors else 0.0 for n in free_params])
 
+    sigma_estimate = _is_sigma_estimate(sigma)
+    # Each output's noise is estimated from its observed (non-NaN) entries.
+    n_obs_per_output = _n_obs_per_output(sigma_estimate, n_seen_per_output)
+
     problem = _CalibrationProblem(
         model=ns,
         free_params=list(free_params),
@@ -510,7 +535,7 @@ def _resolve_plant_problem(
         transforms=resolved_transforms,
         n_rate=len(free_params),
         p0_full=p0_full,
-        param_halfwidth=None,
+        param_halfwidth=param_halfwidth,
         datasets=datasets,
         dataset_static=dataset_static,
         C0_base=C0_base,
@@ -528,6 +553,12 @@ def _resolve_plant_problem(
         ic_center_full=ic_center_full,
         ic_prior_log_std=ic_prior_log_std,
         ic_bounds=ic_bounds,
+        sigma_estimate=sigma_estimate,
+        n_obs_per_output=n_obs_per_output,
+        ic_fixed_total=ic_fixed_total,
+        rate_bounds=_resolve_rate_bounds(
+            ns, free_params, resolved_transforms, bounds, use_model_bounds
+        ),
     )
     return problem, resolved_observables, use_c0_as_y0
 
@@ -622,11 +653,15 @@ def calibrate_plant(
         Assembled-state slots to fit alongside the parameters. ``species`` are
         ``"unit.species"`` strings (or ``(unit, species)`` pairs) naming an initial
         concentration of a concentration unit (a CSTR, the digester); they are fit
-        in log space, box-bounded by ``FreeICConfig.bounds``, with an optional
-        log-space prior via ``prior_log_std`` pulling each toward its starting
-        value (read from ``y0`` or the plant's default initial state). The fitted
-        state is returned as ``result.C0_fitted[0]`` and the pools as
-        ``result.ic_named[0]``. Default ``None`` (no free ICs).
+        in log space, box-bounded by ``FreeICConfig.bounds`` (one ``(lo, hi)``
+        pair, or a dict keyed by ``"unit.species"`` or ``(unit, species)``), with
+        an optional log-space prior via ``prior_log_std`` pulling each toward its
+        starting value (read from ``y0`` or the plant's default initial state).
+        With ``fixed_total=True`` their sum is held at its value in that state
+        and only the split is fitted, as for :func:`aquakin.calibrate`. The fitted
+        state is returned as ``result.C0_fitted[0]``, the pools as
+        ``result.ic_named[0]`` (and a split as ``result.ic_fractions[0]``).
+        Default ``None`` (no free ICs).
     time_unit : str, optional
         Unit ``t_obs`` / ``t_span`` are expressed in; passed to ``plant.solve``.
     loss, sigma, priors, use_priors, optimizer, laplace, check_finite :
@@ -635,8 +670,14 @@ def calibrate_plant(
         :class:`~aquakin.LaplaceConfig`. ``laplace`` defaults to ``False`` here (a
         plant Hessian is expensive). ``OptimizerConfig.starts`` runs an explicit
         list of starts through the one compiled objective, as for a reactor; a
-        dict start names plant parameters (``"<model>.<param>"``).
-        ``OptimizerConfig.param_halfwidth`` is not used by plant fits.
+        dict start names plant parameters (``"<model>.<param>"``), as do the keys
+        of ``OptimizerConfig.bounds``. The free parameters stay inside the
+        ``bounds:`` their models declare (unless ``use_model_bounds=False``), and
+        ``param_halfwidth`` adds a box around the start. A quantity that ends on a
+        bound is listed in ``result.at_bound`` and gets a ``nan`` Laplace standard
+        deviation. With ``loss="nll"``, ``sigma="estimate"`` estimates the noise
+        level of each observed channel (``result.sigma_estimate``); it covers every
+        batch, so pass it as ``sigma="estimate"``, not inside a per-batch list.
     integrator : IntegratorConfig, optional
         Plant integrator configuration passed to ``plant.solve``.
     diff : DifferentiationConfig, optional
@@ -664,13 +705,7 @@ def calibrate_plant(
 
     if not free_params:
         raise ValueError("free_params must be non-empty.")
-    if isinstance(sigma, str) or (
-        isinstance(sigma, (list, tuple)) and any(isinstance(s, str) for s in sigma)
-    ):
-        raise NotImplementedError(
-            'Plant.calibrate does not support sigma="estimate" yet; pass a known '
-            "noise level, or fit with aquakin.calibrate."
-        )
+    _check_sigma_arg(sigma, loss)
     if optimizer.n_starts < 1:
         raise ValueError(f"optimizer.n_starts must be >= 1; got {optimizer.n_starts}.")
     if optimizer.starts is not None and optimizer.n_starts > 1:
@@ -701,6 +736,10 @@ def calibrate_plant(
         ic_bounds=ic_bounds,
         ic_prior_log_std=ic_prior_log_std,
         y0=y0,
+        ic_fixed_total=bool(free_ic is not None and free_ic.fixed_total),
+        param_halfwidth=optimizer.param_halfwidth,
+        bounds=optimizer.bounds,
+        use_model_bounds=optimizer.use_model_bounds,
     )
 
     # Label the (fixed, single-solve) problem's gradient path from the plant
@@ -743,62 +782,10 @@ def calibrate_plant(
 
     bundle = _build_objective(problem, fm, cfg)
 
-    rate_theta0 = problem.rate_theta0()
-    theta0 = jnp.concatenate([rate_theta0, problem.ic_center_full]) if problem.m_ic else rate_theta0
-    opt_bounds = _optimizer_bounds(problem, rate_theta0)
-    starts = None
-    if optimizer.starts is not None:
-        starts = [
-            _clip_start(
-                problem,
-                jnp.concatenate([th, problem.ic_center_full]) if problem.m_ic else th,
-                opt_bounds,
-            )
-            for th in _resolve_starts(problem, optimizer.starts)
-        ]
-        theta0 = starts[0]
+    theta0, opt_bounds, starts = _initial_point(problem, optimizer.starts, problem.ic_center_full)
 
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)
 
     result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts)
-
-    theta_opt = jnp.asarray(result.x)
-    physical_opt = problem.physical_from_theta(theta_opt[: problem.n_rate])
-    ic_opt = theta_opt[problem.n_rate :]
-    full_params = problem.p0_full.at[problem.free_indices].set(physical_opt)
-
-    # Rate-only by default (pools held at the MAP); joint rate + pool with
-    # LaplaceConfig(include_ic=True).
-    laplace_out = (
-        _laplace_posterior(problem, fm, cfg, theta_opt[: problem.n_rate], ic_opt)
-        if cfg.laplace
-        else _LaplaceOut(*[None] * len(_LaplaceOut._fields))
-    )
-
-    # Fitted initial state (when free ICs are active): the base ``y0`` with the
-    # fitted slots set, plus the fitted values by ``"unit.species"`` label.
-    C0_fitted = None
-    ic_named = None
-    if problem.m_ic:
-        ic_vals = np.exp(np.asarray(ic_opt))
-        y0_fitted = problem.C0_base[0].at[problem.ic_species_idx].set(jnp.asarray(ic_vals))
-        C0_fitted = [y0_fitted]
-        ic_named = [{lbl: float(v) for lbl, v in zip(problem.free_ic, ic_vals)}]
-
-    reported_loss = float(bundle.value_and_grad(theta_opt)[0])
-
-    return CalibrationResult(
-        params=full_params,
-        params_named={name: float(physical_opt[i]) for i, name in enumerate(problem.free_params)},
-        loss=reported_loss,
-        converged=bool(result.success),
-        message=str(result.message),
-        n_iter=int(result.nit),
-        parameter_names=list(problem.free_params),
-        transforms=list(problem.transforms),
-        **laplace_out._asdict(),
-        priors_applied=dict(problem.active_priors),
-        C0_fitted=C0_fitted,
-        ic_named=ic_named,
-    )
+    return _fit_result(problem, fm, cfg, bundle, result, opt_bounds)

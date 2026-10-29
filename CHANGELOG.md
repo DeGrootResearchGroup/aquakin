@@ -36,7 +36,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   per-entry `sigma`. With `sigma="estimate"`, each output's noise level is
   estimated from its observed entries only. A missing entry adds nothing to
   the loss even where its `sigma` or the prediction there is not finite.
-  `Experiment(mask=...)` marks which outputs are measured at
+  `Plant.calibrate` does the same, and both now reject an `inf` observation
+  and a dataset with every entry missing. `Experiment(mask=...)` marks which outputs are measured at
   which times for `fisher_information` and the experiment-design functions.
 - `aquakin.calibrate(loss="nll", sigma="estimate")` estimates an unknown
   noise level: the concentrated likelihood, with the noise std of each observed
@@ -44,9 +45,10 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   standard deviation and profile, where it used to take an `mse` fit and an
   `nll` refit with `sigma` set by hand. The estimate is returned as
   `CalibrationResult.sigma_estimate`, and `profile_likelihood` accepts
-  `sigma="estimate"` too. Both optimizers support it. `Plant.calibrate` does
-  not yet, and raises a clear error. The estimate covers every dataset
-  together, so it cannot be an entry of a per-dataset `sigma` list.
+  `sigma="estimate"` too. Both optimizers support it, and so does
+  `Plant.calibrate`, with one estimate per observed stream channel. The
+  estimate covers every dataset together, so it cannot be an entry of a
+  per-dataset `sigma` list.
 - `FreeICConfig(bounds={species: (lo, hi)})` sets bounds per fitted initial
   pool, for pools of very different size; one `(lo, hi)` pair still applies to
   every pool. A pool that ends on its own bound is listed in
@@ -60,9 +62,9 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `LaplaceConfig(include_ic=True)`, their standard deviations as
   `ic_fractions_std`. `fisher_information` and `identifiability` use the same
   parameterisation. The split's coordinates are unbounded, so they never
-  appear in `at_bound`. Neither option is supported by `Plant.calibrate` yet,
-  which raises a clear error, and `profile_likelihood` cannot profile a pool
-  of a fixed-total split.
+  appear in `at_bound`. `Plant.calibrate` supports both options for its
+  `"unit.species"` initial pools (a bounds dict is keyed by those names), and
+  `profile_likelihood` cannot profile a pool of a fixed-total split.
 - `OptimizerConfig(starts=[...])` runs `aquakin.calibrate` from an explicit list
   of starts, such as a grid, and keeps the best fit. Each start is a full
   parameter vector or a `{name: value}` dict over the free parameters. All
@@ -70,14 +72,15 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   needs one `calibrate` call (and one compilation) per start.
   `profile_likelihood` uses the list for its cold fits, and `Plant.calibrate`
   accepts it too.
-- `OptimizerConfig(bounds={name: (lo, hi)})` gives `aquakin.calibrate` (and
-  `profile_likelihood`) absolute bounds on the free rate parameters in physical
+- `OptimizerConfig(bounds={name: (lo, hi)})` gives `aquakin.calibrate`,
+  `profile_likelihood` and `Plant.calibrate` (keyed by `"<model>.<param>"`)
+  absolute bounds on the free rate parameters in physical
   units, with `None` for an open side. An entry replaces the parameter's
   model-declared bound. `param_halfwidth` still works and is now an extra box
   around the start, intersected with the absolute bounds.
 - `CalibrationResult.at_bound` lists the fitted parameters (and initial pools,
   as `"ic[k].<species>"`) that ended on an optimiser bound, as `"lower"` or
-  `"upper"`, and `calibrate` warns about them. Their Laplace standard deviation
+  `"upper"`, and `calibrate` and `Plant.calibrate` warn about them. Their Laplace standard deviation
   is reported as `nan` rather than a finite value from the curvature at a
   constrained point, they have zero variance in `posterior_cov` (posterior
   draws keep them on the bound), and the other parameters' covariance is
@@ -158,7 +161,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   could leave the declared range. A fit whose optimum lies outside a declared
   bound now stops on the bound, and a starting value outside it is moved to the
   nearest bound with a `RuntimeWarning`. To get the old behaviour, pass
-  `OptimizerConfig(use_model_bounds=False)`. `Plant.calibrate` is unchanged.
+  `OptimizerConfig(use_model_bounds=False)`. `Plant.calibrate` enforces them
+  the same way, and also honours `param_halfwidth`, which it used to ignore.
 
 - `SteadyStateResult.residual` is now also set for `Plant.run_to_steady_state`
   (and the `"ptc->forward"` fallback of `Plant.steady_state`): the scaled
