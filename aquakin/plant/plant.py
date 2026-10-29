@@ -3834,11 +3834,23 @@ class Plant:
 
         With ``design`` overrides, ``rhs`` takes ``theta = (params, design)``. The
         continuation rungs deform in the parameter vector alone, so they are
-        skipped, and the forward rung integrates that same design ``rhs`` (see
-        :meth:`_steady_forward_design`) so the overrides are honoured rather than
-        silently replaced by the recorded influent.
+        skipped (with a ``UserWarning`` when ``continuation_from`` was given, so an
+        explicit request is not dropped silently), and the forward rung integrates
+        that same design ``rhs`` (see :meth:`_steady_forward_design`) so the
+        overrides are honoured rather than silently replaced by the recorded
+        influent.
         """
         if design is not None:
+            if continuation_from is not None:
+                skipped = "continuation_from and arclength" if arclength else "continuation_from"
+                warnings.warn(
+                    f"steady_state(design=...): the PTC solve did not converge and the "
+                    f"requested {skipped} fallback is not supported with design "
+                    "overrides, so it was skipped. Fold the design into the plant (or "
+                    "solve without design=) to continue from a known steady state.",
+                    UserWarning,
+                    stacklevel=3,
+                )
             if not fallback:
                 return None
             fb = self._steady_forward_design(rhs, (params, design), y0, **(fallback_kwargs or {}))
@@ -4058,9 +4070,27 @@ class Plant:
             ``method="ptc->forward"``). With ``design`` overrides the forward
             fallback integrates the design right-hand side (influent frozen at
             ``influent_time`` with the overrides applied) instead, and the
-            ``continuation_from`` / arclength rungs are skipped.
+            ``continuation_from`` / arclength rungs are skipped: they deform the
+            parameter vector alone and cannot carry the design overrides. A
+            ``UserWarning`` names the skipped rung(s) when ``continuation_from`` was
+            given and the direct solve did not converge.
         fallback_kwargs : dict, optional
             Extra keyword arguments for the forward fallback.
+        continuation_from : tuple, optional
+            A known steady state ``(params_known, y_known)``. If PTC does not
+            converge (eager use only), deform from it to ``params`` by
+            natural-parameter continuation (``method="continuation"``) and then,
+            if ``arclength``, pseudo-arclength continuation, before the forward
+            fallback. Not supported with ``design`` overrides (see ``fallback``).
+        continuation_kwargs : dict, optional
+            Extra keyword arguments for the continuation rung.
+        arclength : bool
+            Try the pseudo-arclength rung after continuation. It needs
+            ``continuation_from``, and can return ``method="past_fold"`` with
+            ``operating_point_exists=False`` when the branch folds before the
+            target. Default ``True``.
+        arclength_kwargs : dict, optional
+            Extra keyword arguments for the arclength rung.
 
         Returns
         -------
