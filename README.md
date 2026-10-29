@@ -65,6 +65,8 @@ Future models include UV/TiO₂ and chlorine decay.
 
 ## Installation
 
+Requires Python 3.11 or later.
+
 ```bash
 pip install -e ".[test]"
 ```
