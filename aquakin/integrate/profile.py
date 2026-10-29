@@ -180,12 +180,16 @@ def profile_likelihood(
     profile_param : str, optional
         Name of a rate parameter to profile.
     profile_ic : str, optional
-        Name of a species whose initial concentration to profile.
+        Name of a species whose initial concentration to profile. It cannot
+        be a pool of a ``FreeICConfig(fixed_total=True)`` split.
     delta : float, optional
         Likelihood-ratio threshold for the confidence interval. Default ``1.92``
         = ``0.5 * chi2_{1, 0.95}`` (the one-degree-of-freedom 95% level). Use
         with ``loss="nll"`` and a calibrated ``sigma`` so the objective is a
-        proper negative log-likelihood and the threshold is meaningful.
+        proper negative log-likelihood and the threshold is meaningful. With
+        an unknown noise level pass ``sigma="estimate"`` (the concentrated
+        likelihood, see :func:`aquakin.calibrate`): the same threshold applies,
+        and with one output the profile rise is ``(N / 2) log(SSE / SSE_min)``.
     warm_start : bool, optional
         If ``True`` (default), run a cold multistart only at the ``anchor`` grid
         point and warm-start each subsequent point from its neighbour's fit, so
@@ -257,6 +261,12 @@ def profile_likelihood(
     else:
         if profile_ic not in model.species_index:
             raise KeyError(f"Unknown profile_ic '{profile_ic}'. Available: {model.species}")
+        if free_ic is not None and free_ic.fixed_total and profile_ic in free_ic.species:
+            raise NotImplementedError(
+                "profile_ic cannot profile a pool of a FreeICConfig(fixed_total=True) "
+                "split: pinning one pool would change the total the others share. "
+                "Profile a rate parameter, or fit the pools with fixed_total=False."
+            )
         inner_free_ic = [s for s in inner_free_ic if s != profile_ic]
         s_idx = model.species_index[profile_ic]
         profiled = profile_ic
@@ -276,9 +286,13 @@ def profile_likelihood(
     # program instead of recompiling the stiff objective + Jacobian per point.
     # Rebuild the free-IC config for the inner fits with the profiled species (if
     # any) removed; carry the caller's bounds / prior across.
-    inner_free_ic_cfg = (
-        replace(free_ic, species=inner_free_ic) if (free_ic is not None and inner_free_ic) else None
-    )
+    # A per-species bounds dict drops the profiled species with it.
+    inner_free_ic_cfg = None
+    if free_ic is not None and inner_free_ic:
+        inner_bounds = free_ic.bounds
+        if isinstance(inner_bounds, dict):
+            inner_bounds = {s: b for s, b in inner_bounds.items() if s in inner_free_ic}
+        inner_free_ic_cfg = replace(free_ic, species=inner_free_ic, bounds=inner_bounds)
     inner_kw = dict(
         transforms=transforms,
         observed_species=observed_species,

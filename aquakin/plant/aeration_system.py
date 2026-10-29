@@ -1,7 +1,7 @@
 """Diffuser / blower aeration-design physics layered on the kLa abstraction.
 
 The kinetic model aerates a tank through a per-species mass-transfer coefficient
-``kLa`` (see :class:`~aquakin.plant.cstr.Aeration`), and the Copp-2002 benchmark
+``kLa`` (see :class:`~aquakin.plant.cstr.Aeration`), and the BSM benchmark
 scores aeration *energy* with a fixed correlation ``AE ∝ Σ V_i·kLa_i``. Real
 aeration sizing and energy benchmarking need the blower/diffuser physics behind
 that ``kLa``: how much **air** must be blown to produce it, and the **power** to

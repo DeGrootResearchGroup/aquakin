@@ -79,7 +79,17 @@ them through each transform into `_CalibrationProblem.rate_bounds`, and
 `_optimizer_bounds` does the intersection. The bounds reach only SciPy, not the
 compiled objective, so they are not in `struct_key`),
 `laplace=` (a `bool` **or** a `LaplaceConfig(...)`), and
-`free_ic=FreeICConfig(species=..., bounds=..., prior_log_std=...)`. `calibrate`
+`free_ic=FreeICConfig(species=..., bounds=..., prior_log_std=..., fixed_total=...)`
+(`bounds` one pair or a per-species dict, normalised by `_per_species_ic_bounds`
+into per-pool arrays in `_CalibrationProblem.ic_bounds`; `fixed_total` fits
+`m_ic - 1` log-ratio coordinates per dataset, `problem.m_ic_theta`, mapped to
+pools by `problem.ic_pools` / `_simplex_pools` with the total read from the
+runtime `C0`, and `_FisherSetup` mirrors it; `_optimizer_bounds` gives the
+per-pool log bounds to the IC dims, or leaves them open for a split, so
+`_at_bound_sides` flags a pool on its own bound and never a log-ratio; the
+plant path calls `_free_ic_fields` without `extended=True`, so it rejects both
+until it is taught them; `profile_likelihood` drops the profiled species from a
+bounds dict and refuses to profile a pool of a split). `calibrate`
 unpacks them into the internal `_FitConfig` / `_resolve_problem` scalars; the
 same three configs serve `profile_likelihood`. Below that, the body is decomposed
 ([`integrate/calibrate.py`](aquakin/integrate/calibrate.py)). The argument
@@ -132,8 +142,14 @@ JAX functions of `(p, tobs_list, C0_list)`; pools are linearised at each
 `(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector, and runs
 SLSQP with linear spacing constraints; `param_draws` are `vmap`ped.
 `observation_fn` (calibrate / profile / `Experiment`) goes through the shared
-`observe(ys, p, species_idx, fn)` helper in `calibrate.py`, used by both
-`_predict` and `_FisherSetup.jacobian`; it is a defaulted field on
+`observe(ys, p, species_idx, fn, t=)` helper in `calibrate.py`, used by both
+`_predict` and `_FisherSetup.jacobian`; a three-argument `fn(t, C, p)`
+(`observation_takes_time`, by signature) gets the sample times in `t_obs`'s
+unit (native times divided by `_CalibrationProblem.obs_time_factor` /
+`_FisherSetup.time_factor`). `NaN` observations are masked in `_build_loss` /
+`_build_residual` (`_build_masked_*`, only when a `NaN` is present, so the
+unmasked path is unchanged); `Experiment(mask=)` sets the unmeasured entries'
+sigma to `inf` in `_FisherSetup` and is part of the design `_structure_key`; it is a defaulted field on
 `_CalibrationProblem` (and part of `struct_key`), so plant calibration, which
 builds its own problem, is unaffected. `CalibrationResult.posterior_draws(model, ...)`
 is the single Laplace sampler; `predictive_band` propagates its rows, so the two
