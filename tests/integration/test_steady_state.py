@@ -452,13 +452,15 @@ def _design_cstr():
     return plant, design
 
 
-def test_steady_state_forward_fallback_honours_design():
+@pytest.mark.parametrize("extra", [{}, {"atol": 1e-10}], ids=["default_atol", "atol"])
+def test_steady_state_forward_fallback_honours_design(extra):
     # A starved PTC falls back to forward integration; that fallback must
     # integrate the design-override feed, not the recorded influent (which
-    # would give A = B = 0.5 and still report converged).
+    # would give A = B = 0.5 and still report converged). An explicit solver
+    # ``atol`` reaches the design rung too.
     plant, design = _design_cstr()
     ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, arclength=False,
-                            fallback_kwargs={"ss_rtol": 1e-8, "ss_atol": 1e-8})
+                            fallback_kwargs={"ss_rtol": 1e-8, "ss_atol": 1e-8, **extra})
     assert ss.method == "ptc->forward"
     assert bool(ss.converged)
     np.testing.assert_allclose(np.asarray(ss.state), [2.5, 2.5], rtol=1e-4)

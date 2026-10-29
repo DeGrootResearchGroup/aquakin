@@ -543,3 +543,39 @@ def test_eqi_weights_are_copp_alex_standard(asm1):
     expected = 1.0e4 * (2.0 * tss + 1.0 * cod + 2.0 * bod + 30.0 * tkn + 10.0 * sno) / 1000.0
     got = effluent_quality_index(t, Ctraj, Q, asm1)
     assert got == pytest.approx(expected, rel=1e-9)
+
+
+
+def test_time_unit_override_leaves_digester_metrics_unchanged(asm1, adm1):
+    """The digester-feed temperature and the biogas COD sample the streams at
+    native time and integrate per-native-unit rates, so a solution reported in
+    hours gives the same values as the same solution in days. No solve: a
+    two-point solution at the warm-start state, with a temperature-carrying
+    influent so the feed temperature is read from the streams."""
+    import numpy as np
+
+    from aquakin.plant.balance import _biogas_cod
+    from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.bsm.bsm2 import BSM2_CONSTANT_INFLUENT_T
+    from aquakin.plant.bsm.evaluation import _feed_temperature_C
+    from aquakin.plant.plant import PlantSolution
+
+    plant = build_bsm2(asm1, adm1, do_control=False)
+    plant.add_influent("feed", bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
+    params = bsm2_parameters(asm1, adm1)
+    y0 = bsm2_warm_start(plant)
+    states = jnp.stack([y0, y0])
+    days = PlantSolution(t=jnp.asarray([0.0, 1.0]), state=states, plant=plant)
+    hours = PlantSolution(
+        t=jnp.asarray([0.0, 24.0]), state=states, plant=plant, _requested_time_unit="h"
+    )
+    np.testing.assert_allclose(np.asarray(hours.t_native), [0.0, 1.0])
+
+    # Every stream carries the influent temperature (K), not the 35 °C fallback.
+    np.testing.assert_allclose(
+        _feed_temperature_C(plant, hours, params, 35.0), BSM2_CONSTANT_INFLUENT_T - 273.15
+    )
+
+    cod_days = _biogas_cod(plant, days, params)
+    assert cod_days > 0.0
+    assert _biogas_cod(plant, hours, params) == pytest.approx(cod_days, rel=1e-12)
