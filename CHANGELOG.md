@@ -158,6 +158,20 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   (and the `"ptc->forward"` fallback of `Plant.steady_state`): the scaled
   residual of the returned state. It used to be `None` for forward results.
 
+- **`build_bsm2` now builds the reference BSM2 settler by default:**
+  `settler_composition_mode="lumped_tss"` (one TSS state per layer) with
+  `settler_soluble_holdup=True` (the solubles carried through the ten layers),
+  as in `settler1dv5_bsm2` and as `build_bsm1` already does. The default used
+  to be `"per_species"` without holdup, a settler with no reference
+  counterpart. Steady states are unchanged. Dynamic results change: the
+  settler's liquid volume now damps the soluble effluent signal (the effluent
+  ammonia peaks and troughs), as in the reference, and the plant state has a
+  different settler layout. `Plant.steady_state` on the default BSM2 can take
+  more iterations with this settler. It may stop at its iteration cap and fall
+  back to forward integration (`method="ptc->forward"`), which still converges
+  but takes longer. To get the old settler, pass
+  `build_bsm2(settler_composition_mode="per_species", settler_soluble_holdup=False)`.
+
 ### Deprecated
 
 - `LaplaceConfig(eig_keep=...)` is deprecated and ignored (see Fixed). Passing
@@ -166,6 +180,19 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- The BSM docstrings now say which benchmark convention the indices follow.
+  `evaluate_bsm1` / `BSM1Evaluation` give the **updated** BSM1 EQI and OCI
+  (Alex et al. 2008: EQI nitrogen weights 30 / 10, AE = S_sat·V·kLa / 1800,
+  per-stream pumping factors), not the original Copp (2002) ones (weights
+  20 / 20, a quadratic kLa correlation, one pumping factor), and
+  `evaluate_bsm2` uses the same EQI weights with the full BSM2 OCI. The numbers
+  are unchanged. The `TakacsClarifier` / `build_bsm1` / `build_bsm2` docstrings
+  now agree on the settler attribution: the soluble holdup is the ten-layer
+  soluble model of the reference settlers (`settler1dv4` for BSM1,
+  `settler1dv5_bsm2` for BSM2), and both reference settlers are
+  `composition_mode="lumped_tss"`. The earlier statement that `"per_species"`
+  matches the BSM2 settler was wrong: neither reference has per-layer
+  composition memory.
 - A compiled-objective cache shared between `aquakin.calibrate` calls could
   reuse the objective built for different observations, loss or `sigma`, and
   return the first fit's optimum. The cache key now includes them (and the free

@@ -445,7 +445,14 @@ def test_bsm2_steady_state_matches_forward():
     from aquakin.plant.bsm import bsm2_warm_start
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
-    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
+    # Pinned to the per-species settler without soluble holdup (build_bsm2's
+    # default before v0.1.1): this checks the PTC solver itself. With the
+    # default reference settler (lumped TSS + holdup) BSM2 PTC is near its
+    # iteration cap and platform-sensitive -- 97 iterations on macOS, past 400
+    # on Linux CI -- and then falls back to forward integration (issue #627).
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1,
+                       settler_composition_mode="per_species",
+                       settler_soluble_holdup=False)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
     params = bsm2_parameters(asm1, adm1)
@@ -506,7 +513,14 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
     from aquakin.plant.bsm import bsm2_warm_start
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
-    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
+    # Pinned to the per-species settler without soluble holdup (build_bsm2's
+    # default before v0.1.1): this checks the PTC solver itself. With the
+    # default reference settler (lumped TSS + holdup) BSM2 PTC is near its
+    # iteration cap and platform-sensitive -- 97 iterations on macOS, past 400
+    # on Linux CI -- and then falls back to forward integration (issue #627).
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1,
+                       settler_composition_mode="per_species",
+                       settler_soluble_holdup=False)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
     params = bsm2_parameters(asm1, adm1)
