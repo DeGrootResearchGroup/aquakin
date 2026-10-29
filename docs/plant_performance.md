@@ -727,6 +727,33 @@ is what production simulators use to snap to steady state on any topology.
   `::test_ptc_step_guard_rejects_finite_blowup` (a large *finite* residual blow-up
   is rejected with the default `divergence_factor` but accepted with `inf`,
   checking the acceptance logic directly).
+- **Reference-settler robustness (issue #627).** With BSM2's reference settler
+  (lumped TSS + soluble holdup) PTC needed ~100 iterations, erratically, and ran
+  past its 400 cap on Linux. Instrumenting the iteration showed three failure
+  modes, each fixed in `ptc_forward`:
+  - *Positivity lock-up.* The fraction-to-boundary cap was one step length for
+    all states. A near-zero nitrate state that the Newton step drives negative
+    set it to `0.95·y/|dy|`, which fell ~20× per iteration to ~1e-100: the step
+    vanished, was "accepted" with an unchanged residual, and SER froze `dt`. The
+    limit is now **per state** (`dy_i >= -0.95·y_i`).
+  - *SER plateau.* While the settler blanket fills, every step is a clean full
+    step but the residual falls ~2% per step, and SER grows `dt` by the same
+    ratio, so it crawls for ~150 iterations. A **healthy step** (no backtrack,
+    SER residual not up >5%) now grows `dt` by at least `growth_floor=2`, and
+    SER is taken on the **mean** scaled residual (`ser_norm="mean"`) instead of
+    the max-norm, which jumps between states and is a noisy progress signal.
+  - *Lost basin.* Near the root a near-Newton step can spike the residual
+    ~250×; the permissive `divergence_factor` accepts it and the run wanders.
+    After `stall_patience=30` iterations with no new best (on either norm) the
+    iteration **restarts from the best iterate** at `dt/10`.
+  Measured on 8 starts (warm start, then ×(1 + 1e-3·noise)), converged runs /
+  iterations, before → after: default BSM2 5/8 (54–157) → 8/8 (36–37); all four
+  BSM2 settler configurations × {per-state, flat} floor 42/64 → 62/64; BSM1
+  per-state floor 86–120 → 49. The remaining failures are the reference settler
+  with a flat `scale_floor=1.0` (BSM2 6/8, BSM1 5/6): the layers below the feed
+  all reach the same TSS, which puts the root on a kink of the Takács
+  `min(flux)` between equal neighbours, and the flat-floor Newton step chatters
+  across it. `steady_state` then falls back to forward integration.
 - **Per-state pseudo-time / residual scaling (the iteration-count lever).** PTC's
   step damping `V` and convergence criterion both use `max(|y|, scale_floor)`. A
   flat scalar floor (the old default `1.0`) **over-damps the small-magnitude
