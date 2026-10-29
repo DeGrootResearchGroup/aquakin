@@ -14,6 +14,13 @@ that is each aerated tank's fixed ``kla``; under closed-loop DO control
 recovered per saved state via :meth:`Plant.signals_at`. So evaluating an
 open- and a closed-loop run side by side quantifies what the control buys.
 
+**Conventions.** Both evaluators use the EQI weights of the updated BSM1
+evaluation (Alex et al. 2008), which BSM2 also uses: ``B_TSS = 2``,
+``B_COD = 1``, ``B_BOD = 2``, ``B_TKN = 30``, ``B_NO = 10``. The original BSM1
+evaluation (Copp 2002) weights TKN and nitrate at 20 each. :func:`evaluate_bsm1`
+reports the updated BSM1 OCI and :func:`evaluate_bsm2` the BSM2 OCI. See
+:mod:`aquakin.plant.metrics` for the references.
+
 OCI is the **full BSM2 index** (Gernaey et al. 2014): aeration + pumping (over
 the whole pump set) + mixing energy + 3·sludge production + 3·external carbon −
 6·methane production + max(0, heating − 7·methane). The methane credit and the
@@ -141,7 +148,10 @@ class BSM2Evaluation:
     Attributes
     ----------
     eqi : float
-        Effluent Quality Index (kg pollutant / day), lower is better.
+        Effluent Quality Index (kg pollutant / day), lower is better, with the
+        BSM2 weights (``B_TSS = 2``, ``B_COD = 1``, ``B_BOD = 2``,
+        ``B_TKN = 30``, ``B_NO = 10``; Gernaey et al. 2014). A bypassed
+        influent is scored with its own BOD₅ factor (0.65 instead of 0.25).
     oci : float
         Full BSM2 Operational Cost Index (Gernaey et al. 2014):
         ``AE + PE + ME + 3·sludge + 3·carbon − 6·methane + max(0, HE − 7·methane)``.
@@ -496,6 +506,11 @@ def evaluate_bsm2(
 ) -> BSM2Evaluation:
     """Compute the BSM2 performance indices from a solved plant.
 
+    The EQI uses the BSM2 weights (``B_TSS = 2``, ``B_COD = 1``, ``B_BOD = 2``,
+    ``B_TKN = 30``, ``B_NO = 10``), the same as the updated BSM1 evaluation, and
+    the OCI is the full BSM2 index (Gernaey et al. 2014); see
+    :class:`BSM2Evaluation`.
+
     Parameters
     ----------
     plant : Plant
@@ -593,7 +608,7 @@ def evaluate_bsm2(
     volumes = jnp.asarray([float(plant.units[n].volume) for n in reactors])
     # When a diffuser/blower design is given, AE is the mechanistic blower energy
     # (SOTE / depth / blower curve) and the total air flow is reported; otherwise
-    # the Copp-2002 aeration-energy correlation (the validated benchmark default).
+    # the benchmark aeration-energy formula (the validated default).
     if aeration_system is not None:
         AE = blower_energy(t, kla_hist, volumes, aeration_system)
         air_flow = blower_airflow_total(t, kla_hist, volumes, aeration_system)
@@ -660,11 +675,20 @@ class BSM1Evaluation:
     Attributes
     ----------
     eqi : float
-        Effluent Quality Index (kg pollutant / day), lower is better.
+        Effluent Quality Index (kg pollutant / day), lower is better, in the
+        **updated** BSM1 convention (Alex et al. 2008): weights ``B_TSS = 2``,
+        ``B_COD = 1``, ``B_BOD = 2``, ``B_TKN = 30``, ``B_NO = 10``. The original
+        BSM1 convention (Copp 2002) weights TKN and nitrate at 20 each and gives
+        a different value for the same effluent, so compare against the
+        updated-convention reference values.
     oci : float
-        BSM1 Operational Cost Index: ``AE + PE + ME + 5·sludge`` (the updated
-        benchmark convention, which adds mixing energy to the original Copp 2002
-        ``AE + PE + 5·sludge``).
+        BSM1 Operational Cost Index in the **updated** convention (Alex et al.
+        2008): ``AE + PE + ME + 5·sludge``, with AE ``= S_sat·V·kLa / 1800`` and
+        PE from the per-stream factors 0.004 / 0.008 / 0.05 kWh/m³ (internal
+        recycle / RAS / wastage). The original-convention OCI uses an empirical
+        quadratic in kLa for AE and 0.04 kWh/m³ for every pumped flow. The
+        external-carbon term ``3·carbon`` is zero for the open-loop BSM1 and is
+        not included.
     aeration_energy : float
         Aeration energy AE (kWh/d).
     pumping_energy : float
@@ -695,10 +719,12 @@ class BSM1Evaluation:
     aerated_tanks: list = field(default_factory=list)
     air_flow: float | None = None
     oci_note: str = (
-        "BSM1 OCI (updated benchmark): AE + PE + ME + 5*sludge, where ME is the "
-        "mechanical-mixing energy of the unaerated reactors (the original Copp "
-        "2002 index omits it). Sludge production is the wastage TSS mass flow "
-        "(plant TSS-inventory change neglected -- ~0 at steady state)."
+        "Updated BSM1 EQI and OCI (Alex et al. 2008): OCI = AE + PE + ME + "
+        "5*sludge, where ME is the mechanical-mixing energy of the unaerated "
+        "reactors. The original BSM1 indices (Copp 2002) differ in the EQI "
+        "nitrogen weights and the AE and PE formulas. Sludge production is the "
+        "wastage TSS mass flow (plant TSS-inventory change neglected -- ~0 at "
+        "steady state)."
     )
 
     def total_energy(self) -> float:
@@ -766,6 +792,14 @@ def evaluate_bsm1(
     aeration_system=None,
 ) -> BSM1Evaluation:
     """Compute the BSM1 performance indices from a solved plant.
+
+    The indices follow the **updated** BSM1 evaluation (Alex et al. 2008): EQI
+    weights ``B_TSS = 2``, ``B_COD = 1``, ``B_BOD = 2``, ``B_TKN = 30``,
+    ``B_NO = 10``, and ``OCI = AE + PE + ME + 5·sludge`` with
+    ``AE = S_sat·V·kLa / 1800`` and per-stream pumping factors. The original
+    BSM1 evaluation (Copp 2002) uses ``B_TKN = B_NO = 20``, a quadratic kLa
+    correlation for AE and a single 0.04 kWh/m³ pumping factor, so its EQI and
+    OCI are not comparable with these. See :class:`BSM1Evaluation`.
 
     Parameters
     ----------
@@ -847,8 +881,7 @@ def evaluate_bsm1(
     sludge = float(time_average(tss_mass_flow, t))
 
     # ----- Mixing energy (mechanical mixing of the unaerated reactors). -----
-    # BSM1 has no digester, so the digester mixing volume is zero. The updated
-    # benchmark OCI includes this term; the original Copp (2002) index omits it.
+    # BSM1 has no digester, so the digester mixing volume is zero.
     ME = mixing_energy(t, kla_hist, volumes, 0.0)
 
     oci = operational_cost_index(AE, PE, sludge, mixing=ME)

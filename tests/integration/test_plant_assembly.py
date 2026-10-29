@@ -805,6 +805,41 @@ def test_run_to_steady_state_reports_non_convergence(simple_net):
     assert ss.time == pytest.approx(0.1)
 
 
+def test_run_to_steady_state_scaled_residual_criterion(simple_net):
+    """criterion="scaled_residual" stops on the steady_state test
+    max_i |F_i| / max(|y_i|, scale_floor) <= tol, reports that residual, and so
+    lands on the analytic operating point to the tolerance rather than to the
+    loose norm test's ~1e-2."""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    ss = plant.run_to_steady_state(
+        max_time=1000.0, criterion="scaled_residual", tol=1e-9, scale_floor=1e-6
+    )
+    assert ss.converged and ss.time < 1000.0
+    assert ss.residual <= 1e-9
+    # The reported residual is the scaled residual of the returned state.
+    F = plant.derivative(ss.state, t=ss.time)
+    expected = float(jnp.max(jnp.abs(F) / jnp.maximum(jnp.abs(ss.state), 1e-6)))
+    assert ss.residual == pytest.approx(expected, rel=1e-12)
+    tank = plant.states_by_unit(ss.state)["tank"]
+    # |dA/dt| / A <= 1e-9 with relaxation rate 0.2/s bounds |A - 0.5| by ~2.5e-9.
+    assert float(tank[simple_net.species_index["A"]]) == pytest.approx(0.5, abs=1e-8)
+    assert float(tank[simple_net.species_index["B"]]) == pytest.approx(0.5, abs=1e-8)
+
+
+def test_run_to_steady_state_reports_residual_and_validates_criterion(simple_net):
+    """The default norm criterion also reports the scaled residual of the state
+    it returns (so the two methods are comparable on one measure); an unknown
+    criterion is rejected."""
+    plant = _fed_cstr_plant(simple_net, Q=10.0, C=(1.0, 0.0))
+    ss = plant.run_to_steady_state(max_time=1000.0)
+    assert ss.residual is not None and ss.residual > 0.0
+    # Not converged under a scaled tolerance it was never asked to meet.
+    capped = plant.run_to_steady_state(max_time=0.1, criterion="scaled_residual")
+    assert not capped.converged and capped.residual > 1e-6
+    with pytest.raises(ValueError, match="criterion"):
+        plant.run_to_steady_state(criterion="max_norm")
+
+
 def test_solve_step_ceiling_gives_friendly_error(simple_net):
     """Hitting the integrator step budget re-raises with a domain-level remedy
     (warm-start / tolerances / max_steps), not a raw Diffrax/Equinox traceback."""

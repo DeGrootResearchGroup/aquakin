@@ -183,6 +183,57 @@ The columns of `observations` follow the function's outputs, and `sigma` may
 give one value per output. `profile_likelihood` and `aquakin.Experiment` accept
 `observation_fn` the same way.
 
+A function of three arguments, `observation_fn(t, C, p)`, also receives the
+sample time, in the unit of `t_obs`. Use it for a measurement whose mapping
+changes with time, such as a drifting sensor:
+
+```python
+drifting = lambda t, C, p: C[i_B] * (1.0 + 0.05 * t)
+```
+
+A missing observation is a `NaN` in `observations`. It is left out of the fit,
+so outputs sampled at different times can share one `t_obs` grid. For example,
+a total measured only at the start is a second output that is `NaN` except at
+`t = 0`:
+
+```python
+obs = np.stack([b_series, np.where(t_obs == 0.0, total0, np.nan)], axis=1)
+fn = lambda C, p: jnp.stack([C[i_B], C[i_A] + C[i_B]])
+result = aquakin.calibrate(reactor, C0, obs, t_obs, free_params,
+                           observation_fn=fn, loss="nll", sigma=0.01)
+```
+
+With `"mse"` or `"wmse"` the mean is over the observed entries. For a planned
+experiment, `aquakin.Experiment(mask=...)` (`True` where an output is measured)
+marks the same thing for `fisher_information` and experiment design.
+
+### Unknown noise level
+
+A Laplace standard deviation or a profile-likelihood interval needs
+`loss="nll"` with the measurement noise `sigma`. When the noise level is not
+known, as with most real data, let `calibrate` estimate it:
+
+```python
+result = aquakin.calibrate(reactor, C0, observations, t_obs, free_params,
+                           loss="nll", sigma="estimate")
+result.sigma_estimate     # estimated noise std of each observed output
+result.params_named_std   # Laplace std at the estimated noise level
+```
+
+This is the concentrated likelihood: the noise std of each output is replaced
+by its best estimate, the RMS residual `sqrt(SSE_j / N_j)` over its observed
+entries (pooled over the datasets of a multi-batch fit; a `NaN` is not counted), and the objective becomes the `"nll"` loss at
+that estimate, `sum_j (N_j / 2) log(SSE_j / N_j) + N / 2`. It is one fit, in
+place of fitting with `"mse"` and refitting with `sigma` set to the residual
+RMS.
+
+The profile-likelihood threshold reads the same way in both cases: a 95 %
+interval is where the profile rises by 1.92 (`0.5 * chi2_{1, 0.95}`). With
+`sigma` known, the profile is the `"nll"` loss itself. With
+`sigma="estimate"` and one output, the rise is `(N / 2) log(SSE / SSE_min)`,
+so the interval is where the sum of squares grows by a factor
+`exp(2 * 1.92 / N)`.
+
 ### Uncertainty: posterior-predictive bands
 
 With `laplace=True`, sample the posterior and propagate it through a solve to get
@@ -218,6 +269,38 @@ result.ic_named_std       # pool std devs in physical units, per dataset
 
 Strong correlation between a rate and a pool in `joint_cov` is a sign that the
 experiment cannot separate them.
+
+Pools of very different size can take their own bounds,
+`FreeICConfig(["SS", "XS"], bounds={"SS": (1, 300), "XS": (1, 500)})`; a
+species left out keeps the default `(1e-3, 1e4)`. A pool that ends on its own
+bound is listed in `result.at_bound` as `"ic[k].<species>"`, with a `nan`
+standard deviation.
+
+When the total of some pools is known and only its split is uncertain (a
+measured total COD divided between readily and slowly biodegradable
+substrate, say), hold the total fixed. Put the total into `C0`, with any split
+as the starting guess, and fit only the split:
+
+```python
+C0 = C0.at[i_SS].set(0.5 * cod).at[i_XS].set(0.5 * cod)   # sum = the known total
+result = aquakin.calibrate(
+    reactor, C0, observations, t_obs, free_params,
+    loss="nll", sigma=sigma,
+    free_ic=aquakin.FreeICConfig(["SS", "XS"], fixed_total=True),
+    laplace=aquakin.LaplaceConfig(method="gauss_newton", include_ic=True),
+)
+result.ic_named           # [{"SS": ..., "XS": ...}], summing to the total
+result.ic_fractions       # [{"SS": f, "XS": 1 - f}]
+result.ic_fractions_std   # std devs of the fractions
+```
+
+The split is fitted through the log-ratios `log(c_j / c_0)` of the pools to the
+first listed one, which keep every pool positive and the sum exact; these are
+the `"ic[k].XS:SS"` rows of `joint_cov`. `fisher_information` takes the same
+`FreeICConfig`. The log-ratios are unbounded, so a split never appears in
+`result.at_bound`. Per-species bounds and `fixed_total` are not yet available in
+`Plant.calibrate`, and `profile_likelihood` cannot profile a pool of a
+fixed-total split.
 
 ### Fisher information of a design
 

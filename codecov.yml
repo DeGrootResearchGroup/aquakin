@@ -11,6 +11,12 @@
 #
 # Status checks are informational (never fail CI) -- this adds a badge and a
 # report, not a coverage gate.
+#
+# The fast tier uploads once per run, from the `fast-coverage` job after every
+# fast shard has finished (.github/workflows/ci.yml), so the PR comment and
+# patch status are built from the whole fast tier. Per-shard uploads made
+# Codecov report after the first few, and `after_n_builds` did not prevent it
+# (the carried-forward sessions count toward it).
 
 coverage:
   status:
