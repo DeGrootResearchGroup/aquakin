@@ -106,6 +106,28 @@ def test_mass_balance_closes_on_aerated_cstr():
     assert "closed" in mb.summary()
 
 
+def test_mass_balance_closes_with_time_unit_override():
+    """solve(time_unit=...) reports t in hours, but the flows are per day: the
+    balance still closes and its gram totals match the native-unit solve."""
+    net = aquakin.load_model("asm1")
+    plant = _aerated_cstr_plant(net)
+    ss = plant.run_to_steady_state(max_time=200.0)
+    assert ss.converged
+    # Perturb the start so the accumulation term is non-trivial.
+    y0 = ss.state * 1.2
+    sol_d = plant.solve(t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 25), y0=y0)
+    sol_h = plant.solve(t_span=(0.0, 24.0), t_eval=jnp.linspace(0.0, 24.0, 25), y0=y0,
+                        time_unit="h")
+    mb_d = plant.mass_balance(sol_d, components=("COD", "N"))
+    mb_h = plant.mass_balance(sol_h, components=("COD", "N"))
+    assert mb_h.window == pytest.approx((0.0, 24.0))
+    assert mb_h.closed(rtol=1e-2)
+    for q in ("COD", "N"):
+        assert mb_h[q].inflow == pytest.approx(mb_d[q].inflow, rel=1e-6)
+        assert mb_h[q].outflow == pytest.approx(mb_d[q].outflow, rel=1e-5)
+        assert mb_h[q].gas == pytest.approx(mb_d[q].gas, rel=1e-5)
+
+
 def test_stateful_units_own_their_component_inventory():
     """The #505 inversion: a unit whose state layout is non-trivial (the layered
     Takács settler, the ADM1 digester with its gas headspace) declares its own

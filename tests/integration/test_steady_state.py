@@ -435,6 +435,48 @@ def test_bsm1_steady_state_keeps_ptc_result_when_ladder_declines(bsm1):
     assert not bool(ss.converged)
 
 
+def _design_cstr():
+    """A single CSTR (A -> B, k = 0.1, V/Q = 10) fed 1 g/m3 of A, plus a design
+    override that raises the feed to 5 g/m3 (steady state A = B = 2.5)."""
+    from aquakin.plant import CSTRUnit, Plant
+    from aquakin.plant.influent import InfluentSeries
+
+    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
+    inf = InfluentSeries(t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
+                         C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=net)
+    plant = Plant("one")
+    plant.add_unit(CSTRUnit(name="tank", model=net, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_influent("feed", inf, to="tank.inlet")
+    design = {"influent": {"feed": {"Q": jnp.asarray(10.0), "C": jnp.asarray([5.0, 0.0])}}}
+    return plant, design
+
+
+@pytest.mark.parametrize("extra", [{}, {"atol": 1e-10}], ids=["default_atol", "atol"])
+def test_steady_state_forward_fallback_honours_design(extra):
+    # A starved PTC falls back to forward integration; that fallback must
+    # integrate the design-override feed, not the recorded influent (which
+    # would give A = B = 0.5 and still report converged). An explicit solver
+    # ``atol`` reaches the design rung too.
+    plant, design = _design_cstr()
+    ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, arclength=False,
+                            fallback_kwargs={"ss_rtol": 1e-8, "ss_atol": 1e-8, **extra})
+    assert ss.method == "ptc->forward"
+    assert bool(ss.converged)
+    np.testing.assert_allclose(np.asarray(ss.state), [2.5, 2.5], rtol=1e-4)
+
+
+def test_steady_state_design_skips_parameter_continuation():
+    # The continuation rungs deform in params alone; with a design override
+    # they are skipped (rather than crashing on the (params, design) pytree).
+    plant, design = _design_cstr()
+    p = plant.default_parameters()
+    ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, fallback=False,
+                            continuation_from=(p, jnp.asarray([0.5, 0.5])))
+    assert ss.method == "ptc"
+    assert not bool(ss.converged)
+
+
 @pytest.mark.slow
 def test_bsm2_steady_state_matches_forward():
     # BSM2 -- the 167-state plant with the long-SRT anaerobic digester, the stiff
@@ -445,7 +487,14 @@ def test_bsm2_steady_state_matches_forward():
     from aquakin.plant.bsm import bsm2_warm_start
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
-    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
+    # Pinned to the per-species settler without soluble holdup (build_bsm2's
+    # default before v0.1.1): this checks the PTC solver itself. With the
+    # default reference settler (lumped TSS + holdup) BSM2 PTC is near its
+    # iteration cap and platform-sensitive -- 97 iterations on macOS, past 400
+    # on Linux CI -- and then falls back to forward integration (issue #627).
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1,
+                       settler_composition_mode="per_species",
+                       settler_soluble_holdup=False)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
     params = bsm2_parameters(asm1, adm1)
@@ -506,7 +555,14 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
     from aquakin.plant.bsm import bsm2_warm_start
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
-    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
+    # Pinned to the per-species settler without soluble holdup (build_bsm2's
+    # default before v0.1.1): this checks the PTC solver itself. With the
+    # default reference settler (lumped TSS + holdup) BSM2 PTC is near its
+    # iteration cap and platform-sensitive -- 97 iterations on macOS, past 400
+    # on Linux CI -- and then falls back to forward integration (issue #627).
+    plant = build_bsm2(asm1_model=asm1, adm1_model=adm1,
+                       settler_composition_mode="per_species",
+                       settler_soluble_holdup=False)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
     params = bsm2_parameters(asm1, adm1)
@@ -731,3 +787,56 @@ def test_dgsm_cond_filter_and_with_cond_factor():
     assert int(res2.n_valid[0]) == N - 1
     np.testing.assert_allclose(np.asarray(res2.sobol_total_bound),
                                np.asarray(b_filt), rtol=1e-12)
+
+
+@pytest.mark.slow
+def test_bsm2_digester_forward_scaled_residual_matches_ptc():
+    """On the BSM2 anaerobic digester (ADM1, 3400 m3, 35 C, the published feed),
+    run_to_steady_state(criterion="scaled_residual") meets the PTC tolerance on
+    the PTC criterion and lands on the PTC root. The default norm test, started
+    from the published steady state, stops almost at once with a scaled residual
+    many orders above it, which is what made the two look inconsistent."""
+    from aquakin.plant import InfluentSeries, Plant
+    from aquakin.plant.digester import ADM1DigesterUnit
+
+    # The published BSM2 digester feed and steady state (Gernaey et al. 2014).
+    q_feed, v_liq = 178.4674, 3400.0
+    feed = {
+        "S_aa": 0.04388, "S_IC": 0.0079326, "S_IN": 0.0019721, "S_I": 0.028067,
+        "X_ch": 3.7236, "X_pr": 15.9235, "X_li": 8.047, "X_I": 17.0106,
+        "S_an": 0.0052101,
+    }
+    ref_ss = {
+        "S_su": 0.012394, "S_aa": 0.0055432, "S_fa": 0.10741, "S_va": 0.012333,
+        "S_bu": 0.014003, "S_pro": 0.017584, "S_ac": 0.089315, "S_ch4": 0.05549,
+        "S_IC": 0.095149, "S_IN": 0.094468, "S_I": 0.13087, "X_c": 0.10792,
+        "X_ch": 0.020517, "X_pr": 0.08422, "X_li": 0.043629, "X_su": 0.31222,
+        "X_aa": 0.93167, "X_fa": 0.33839, "X_c4": 0.33577, "X_pro": 0.10112,
+        "X_ac": 0.67724, "X_h2": 0.28484, "X_I": 17.2162, "S_gas_ch4": 1.6535,
+        "S_gas_co2": 0.01354,
+    }
+    adm1 = aquakin.load_model("adm1")
+    si = adm1.species_index
+    plant = Plant("digester")
+    plant.add_unit(ADM1DigesterUnit(name="digester", model=adm1, volume=v_liq,
+                                    conditions={"T": 308.15}, input_port_names=["feed"]))
+    plant.add_influent("feed", InfluentSeries.constant(adm1, Q=q_feed, **feed),
+                       to="digester.feed")
+    C0 = np.asarray(adm1.default_concentrations()).copy()
+    for k, v in ref_ss.items():
+        C0[si[k]] = v
+    y0 = plant.initial_state(overrides={"digester": jnp.asarray(C0)})
+
+    tol, floor = 1e-8, 1e-6
+    ptc = plant.steady_state(y0=y0, tol=tol, scale_floor=floor)
+    assert ptc.method == "ptc" and ptc.converged and ptc.residual <= tol
+
+    fwd = plant.run_to_steady_state(y0=y0, criterion="scaled_residual", tol=tol,
+                                    scale_floor=floor)
+    assert fwd.converged and fwd.residual <= tol
+    a, b = np.asarray(ptc.state), np.asarray(fwd.state)
+    big = np.abs(a) > 1e-3
+    assert np.max(np.abs(b[big] - a[big]) / np.abs(a[big])) < 1e-6
+
+    norm = plant.run_to_steady_state(y0=y0, scale_floor=floor)
+    assert norm.converged and norm.residual > 1e3 * tol  # the gap the option closes

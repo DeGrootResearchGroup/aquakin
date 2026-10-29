@@ -550,3 +550,41 @@ def test_profile_warm_start_keeps_free_ic_prior_centre(simple_model):
     warm = aquakin.profile_likelihood(*args, warm_start=True, anchor=0.004, **kw)
     cold = aquakin.profile_likelihood(*args, warm_start=False, **kw)
     np.testing.assert_allclose(warm.loss, cold.loss, rtol=1e-6)
+
+
+@pytest.mark.parametrize("with_starts", [False, True], ids=["one_start", "start_list"])
+def test_profile_ic_with_and_without_start_list(simple_model, with_starts):
+    """An initial-condition profile finds the truth from the default start or
+    from a start list of dict and full-vector starts seeding the cold fit
+    (fast-gate coverage of both paths; the growth-model tests above run only in
+    the slow suite). Dict starts keep all their entries, since only a profiled
+    *parameter* is dropped from them."""
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
+    C0 = jnp.array([1.0, 0.0])
+    t = jnp.linspace(0.5, 10.0, 10)
+    truth = simple_model.default_parameters().at[0].set(0.25)
+    obs = reactor.solve(C0, params=truth, t_span=(0.0, 10.0), t_eval=t).C_named("B")
+    vec = simple_model.default_parameters().at[0].set(0.05)
+    opt = OptimizerConfig(starts=[{"A_to_B.k": 2.0}, vec]) if with_starts else OptimizerConfig()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)  # an inner-fit failure warns
+        pr = aquakin.profile_likelihood(
+            reactor,
+            C0,
+            obs,
+            t,
+            ["A_to_B.k"],
+            grid=[0.9, 1.0, 1.1],
+            profile_ic="A",
+            observed_species=["B"],
+            loss="nll",
+            sigma=0.01,
+            optimizer=opt,
+            polish=False,
+        )
+    assert all(f is not None for f in pr.fits)
+    assert np.all(np.isfinite(pr.loss))
+    # The profile bottoms out at the true initial A with the true rate.
+    i_min = int(np.argmin(pr.loss))
+    assert pr.grid[i_min] == pytest.approx(1.0)
+    assert pr.fits[i_min].params_named["A_to_B.k"] == pytest.approx(0.25, rel=1e-3)

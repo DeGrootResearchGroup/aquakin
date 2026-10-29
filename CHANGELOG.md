@@ -23,6 +23,30 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `observation_fn` may take the sample time, `observation_fn(t, C, params)`,
+  in `calibrate`, `profile_likelihood` and `Experiment`. A function that
+  requires exactly three positional arguments is the time-aware form; one
+  that can be called with two (such as `f(C, params=None)`) keeps the
+  `(C, params)` form. `t` is the entry of `t_obs` exactly as given, in its
+  unit. This covers a sensor drift, a time-varying dilution, or a quantity
+  measured only at some times.
+- Missing observations: a `NaN` entry in `calibrate`'s `observations` is left
+  out of the loss and the Laplace Hessian (`mse` and `wmse` average over the
+  observed entries), so sparse or staggered measurements no longer need a huge
+  per-entry `sigma`. With `sigma="estimate"`, each output's noise level is
+  estimated from its observed entries only. A missing entry adds nothing to
+  the loss even where its `sigma` or the prediction there is not finite.
+  `Experiment(mask=...)` marks which outputs are measured at
+  which times for `fisher_information` and the experiment-design functions.
+- `aquakin.calibrate(loss="nll", sigma="estimate")` estimates an unknown
+  noise level: the concentrated likelihood, with the noise std of each observed
+  output set to its RMS residual. One fit now gives a likelihood-scaled Laplace
+  standard deviation and profile, where it used to take an `mse` fit and an
+  `nll` refit with `sigma` set by hand. The estimate is returned as
+  `CalibrationResult.sigma_estimate`, and `profile_likelihood` accepts
+  `sigma="estimate"` too. Both optimizers support it. `Plant.calibrate` does
+  not yet, and raises a clear error. The estimate covers every dataset
+  together, so it cannot be an entry of a per-dataset `sigma` list.
 - `FreeICConfig(bounds={species: (lo, hi)})` sets bounds per fitted initial
   pool, for pools of very different size; one `(lo, hi)` pair still applies to
   every pool. A pool that ends on its own bound is listed in
@@ -44,7 +68,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   parameter vector or a `{name: value}` dict over the free parameters. All
   starts run through one compiled objective, so a grid of starts no longer
   needs one `calibrate` call (and one compilation) per start.
-  `profile_likelihood` uses the list for its cold fits.
+  `profile_likelihood` uses the list for its cold fits, and `Plant.calibrate`
+  accepts it too.
 - `OptimizerConfig(bounds={name: (lo, hi)})` gives `aquakin.calibrate` (and
   `profile_likelihood`) absolute bounds on the free rate parameters in physical
   units, with `None` for an open side. An entry replaces the parameter's
@@ -109,7 +134,22 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `param_draws` for robust experiment design. `predictive_band` uses the same
   draws.
 
+- `Plant.run_to_steady_state(criterion="scaled_residual", tol=..., scale_floor=...)`
+  stops the forward run on the scaled residual
+  `max_i |F_i| / max(|y_i|, scale_floor)` that `Plant.steady_state` converges
+  on, with the same default floor (`max(|y0|, 1e-6)` per state), so a forward
+  and an algebraic steady state can be held to one tolerance. The default
+  `criterion="norm"` keeps the previous stopping test. The norm test can stop
+  far from steady state on a plant whose states span many magnitudes: on the
+  BSM2 digester started from its published steady state it stops after
+  0.03 d at a scaled residual of 0.07.
+
 ### Changed
+
+- `aquakin` now requires Python 3.11 or later (`requires-python = ">=3.11"`).
+  Its dependency floors (jax/jaxlib 0.10, diffrax 0.7, optimistix 0.1) already
+  require 3.11, so 0.1.0's `>=3.10` claimed support that could not be
+  installed. The package metadata now lists Python 3.11 and 3.12.
 
 - **`aquakin.calibrate` now enforces the `bounds:` declared on model
   parameters.** They are mapped into the space the optimiser works in (log for
@@ -120,6 +160,24 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   nearest bound with a `RuntimeWarning`. To get the old behaviour, pass
   `OptimizerConfig(use_model_bounds=False)`. `Plant.calibrate` is unchanged.
 
+- `SteadyStateResult.residual` is now also set for `Plant.run_to_steady_state`
+  (and the `"ptc->forward"` fallback of `Plant.steady_state`): the scaled
+  residual of the returned state. It used to be `None` for forward results.
+
+- **`build_bsm2` now builds the reference BSM2 settler by default:**
+  `settler_composition_mode="lumped_tss"` (one TSS state per layer) with
+  `settler_soluble_holdup=True` (the solubles carried through the ten layers),
+  as in `settler1dv5_bsm2` and as `build_bsm1` already does. The default used
+  to be `"per_species"` without holdup, a settler with no reference
+  counterpart. Steady states are unchanged. Dynamic results change: the
+  settler's liquid volume now damps the soluble effluent signal (the effluent
+  ammonia peaks and troughs), as in the reference, and the plant state has a
+  different settler layout. `Plant.steady_state` on the default BSM2 can take
+  more iterations with this settler. It may stop at its iteration cap and fall
+  back to forward integration (`method="ptc->forward"`), which still converges
+  but takes longer. To get the old settler, pass
+  `build_bsm2(settler_composition_mode="per_species", settler_soluble_holdup=False)`.
+
 ### Deprecated
 
 - `LaplaceConfig(eig_keep=...)` is deprecated and ignored (see Fixed). Passing
@@ -128,6 +186,19 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- The BSM docstrings now say which benchmark convention the indices follow.
+  `evaluate_bsm1` / `BSM1Evaluation` give the **updated** BSM1 EQI and OCI
+  (Alex et al. 2008: EQI nitrogen weights 30 / 10, AE = S_sat·V·kLa / 1800,
+  per-stream pumping factors), not the original Copp (2002) ones (weights
+  20 / 20, a quadratic kLa correlation, one pumping factor), and
+  `evaluate_bsm2` uses the same EQI weights with the full BSM2 OCI. The numbers
+  are unchanged. The `TakacsClarifier` / `build_bsm1` / `build_bsm2` docstrings
+  now agree on the settler attribution: the soluble holdup is the ten-layer
+  soluble model of the reference settlers (`settler1dv4` for BSM1,
+  `settler1dv5_bsm2` for BSM2), and both reference settlers are
+  `composition_mode="lumped_tss"`. The earlier statement that `"per_species"`
+  matches the BSM2 settler was wrong: neither reference has per-layer
+  composition memory.
 - A compiled-objective cache shared between `aquakin.calibrate` calls could
   reuse the objective built for different observations, loss or `sigma`, and
   return the first fit's optimum. The cache key now includes them (and the free
@@ -173,6 +244,29 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 - `aquakin.fisher_information` (and `rank_experiments`, `optimize_experiment`
   and `identifiability` built on it) no longer raises a `ValueError` when only
   initial pools are estimated, that is `free_params=[]` with `free_ic`.
+- After `Plant.solve(..., time_unit=...)` in a unit other than the plant's own
+  (days for the ASM/BSM plants), streams rebuilt with `plant.stream`, the BSM
+  evaluation indices, `sludge_metrics` / `plant.sludge_age` and
+  `plant.mass_balance` sampled the influent and control signals at the wrong
+  times, and the mass balance integrated per-day flows over hours (so it did
+  not close). They now use the solve's native times; the new
+  `PlantSolution.t_native` gives them. `solution.t`, stream `t` and the
+  balance `window` stay in the requested unit, flows stay per native time unit,
+  and the balance terms are grams whatever the unit.
+- `Plant.steady_state(design=...)` no longer drops the design overrides when
+  pseudo-transient continuation does not converge. The forward fallback used
+  to integrate the recorded influent and report `converged=True` for the wrong
+  operating point; it now integrates the design right-hand side. The
+  continuation and arclength fallbacks, which work in the parameter vector
+  alone, are skipped when `design` is given instead of failing.
+- `sludge_metrics` and `plant.sludge_age` report a larger, correct SRT on
+  BSM2 (about 20.9 d at the constant-influent steady state, up from about
+  17.5 d). The wastage was read from the dewatering cake, which also carries
+  primary and digested solids; it is now the activated-sludge wastage
+  `underflow_split.waste`. The effluent loss now prefers the secondary-clarifier
+  overflow over a bypass-combined final effluent, whose bypass solids never
+  entered the activated-sludge system. BSM1 and A²O results are unchanged.
+  Pass `waste_port=` / `effluent_port=` to choose other streams.
 
 ## [0.1.0] - 2026-07-08
 

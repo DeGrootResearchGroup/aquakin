@@ -52,12 +52,14 @@ from aquakin.integrate.calibrate import (
     _build_residual,
     _CalibrationProblem,
     _check_start_gradient,
+    _clip_start,
     _FitConfig,
     _free_ic_fields,
     _laplace_posterior,
     _LaplaceOut,
     _optimizer_bounds,
     _resolve_laplace,
+    _resolve_starts,
     _run_multistart,
 )
 
@@ -631,8 +633,10 @@ def calibrate_plant(
         As in :func:`aquakin.calibrate` (the shared machinery): ``optimizer`` is an
         :class:`~aquakin.OptimizerConfig` and ``laplace`` a ``bool`` or
         :class:`~aquakin.LaplaceConfig`. ``laplace`` defaults to ``False`` here (a
-        plant Hessian is expensive). ``OptimizerConfig.param_halfwidth`` is not used
-        by plant fits.
+        plant Hessian is expensive). ``OptimizerConfig.starts`` runs an explicit
+        list of starts through the one compiled objective, as for a reactor; a
+        dict start names plant parameters (``"<model>.<param>"``).
+        ``OptimizerConfig.param_halfwidth`` is not used by plant fits.
     integrator : IntegratorConfig, optional
         Plant integrator configuration passed to ``plant.solve``.
     diff : DifferentiationConfig, optional
@@ -660,6 +664,20 @@ def calibrate_plant(
 
     if not free_params:
         raise ValueError("free_params must be non-empty.")
+    if isinstance(sigma, str) or (
+        isinstance(sigma, (list, tuple)) and any(isinstance(s, str) for s in sigma)
+    ):
+        raise NotImplementedError(
+            'Plant.calibrate does not support sigma="estimate" yet; pass a known '
+            "noise level, or fit with aquakin.calibrate."
+        )
+    if optimizer.n_starts < 1:
+        raise ValueError(f"optimizer.n_starts must be >= 1; got {optimizer.n_starts}.")
+    if optimizer.starts is not None and optimizer.n_starts > 1:
+        raise ValueError(
+            "Pass optimizer.starts (an explicit start list) or optimizer.n_starts > 1 "
+            "(jittered restarts), not both."
+        )
 
     # Unpack the config objects into the internal scalar knobs.
     laplace_on, lap = _resolve_laplace(laplace)
@@ -728,11 +746,22 @@ def calibrate_plant(
     rate_theta0 = problem.rate_theta0()
     theta0 = jnp.concatenate([rate_theta0, problem.ic_center_full]) if problem.m_ic else rate_theta0
     opt_bounds = _optimizer_bounds(problem, rate_theta0)
+    starts = None
+    if optimizer.starts is not None:
+        starts = [
+            _clip_start(
+                problem,
+                jnp.concatenate([th, problem.ic_center_full]) if problem.m_ic else th,
+                opt_bounds,
+            )
+            for th in _resolve_starts(problem, optimizer.starts)
+        ]
+        theta0 = starts[0]
 
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)
 
-    result = _run_multistart(cfg, bundle, theta0, opt_bounds)
+    result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts)
 
     theta_opt = jnp.asarray(result.x)
     physical_opt = problem.physical_from_theta(theta_opt[: problem.n_rate])

@@ -152,6 +152,8 @@ def _structure_key(ex: Experiment) -> tuple:
     except its sampling-time values and initial state."""
     sigma = np.asarray(ex.sigma, dtype=float)
     obs = tuple(ex.observed_species) if ex.observed_species is not None else None
+    mask = getattr(ex, "mask", None)
+    mask = None if mask is None else np.asarray(mask, dtype=bool)
     return (
         id(ex.reactor),
         obs,
@@ -160,6 +162,7 @@ def _structure_key(ex: Experiment) -> tuple:
         ex.time_unit,
         sigma.shape,
         sigma.tobytes(),
+        None if mask is None else (mask.shape, mask.tobytes()),
     )
 
 
@@ -481,7 +484,7 @@ def optimize_experiment(
         tobs, C0s = list(setup.tobs), list(setup.C0)
         if optimize_times:
             for e, sl in enumerate(time_slices):
-                tobs[n_base + e] = (lo + x[sl] * span) * factor
+                tobs[n_base + e] = lo + x[sl] * span
         for k, ((e, s), (clo, chi)) in enumerate(conc_vars):
             i = n_base + e
             j = len(x) - len(conc_vars) + k
@@ -530,7 +533,7 @@ def optimize_experiment(
     x = np.clip(res.x, 0.0, 1.0)
     tobs, C0s = _design(jnp.asarray(x))
     out = [
-        replace(ex, t_obs=np.asarray(tobs[n_base + e]) / factor, C0=np.asarray(C0s[n_base + e]))
+        replace(ex, t_obs=np.asarray(tobs[n_base + e]), C0=np.asarray(C0s[n_base + e]))
         for e, ex in enumerate(exps)
     ]
     return ExperimentDesignResult(
