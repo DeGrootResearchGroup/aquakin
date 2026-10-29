@@ -20,7 +20,7 @@ copyright = "2026, Christopher DeGroot"
 try:
     release = _dist_version("aquakin")
 except Exception:  # pragma: no cover - source checkout without an install
-    release = "0.1.0"
+    release = "0.2.0"
 version = ".".join(release.split(".")[:2])
 
 # -- General configuration ----------------------------------------------------
