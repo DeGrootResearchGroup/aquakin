@@ -588,3 +588,102 @@ def test_plant_calibrate_multibatch_sigma_length_mismatch(decay_plant):
             y0=[plant.initial_state(), plant.initial_state()],
             sigma=[1.0, 1.0, 1.0],
         )
+
+
+def _decay_stream(plant, params, t_obs):
+    sol = plant.solve(t_span=(0.0, float(t_obs[-1])), t_eval=t_obs, params=params)
+    return plant.stream(sol, "tank", params).C_named("B")
+
+
+@pytest.mark.slow  # a plant solve inside an optimizer loop, from several starts
+def test_plant_calibrate_start_list_matches_best_of_separate_calls(decay_plant):
+    """An explicit start list reaches the plant fit: it keeps the same optimum
+    as running each start in its own plant.calibrate call and taking the lowest
+    loss, with dict and full-vector starts mixed. The iteration cap leaves the
+    two starts at different points, so the list must pick the better one."""
+    net, plant = decay_plant
+    base = plant.default_parameters()
+    gidx = plant.parameter_index(PARAM)
+    true_k = float(base[gidx])
+    t_obs = jnp.linspace(1.0, 40.0, 8)
+    obs_B = _decay_stream(plant, base, t_obs)
+    kw = dict(
+        target="tank",
+        observed_channels=["B"],
+        transforms={PARAM: "positive_log"},
+        check_finite=False,
+    )
+    far = base.at[gidx].set(true_k * 0.05)
+    near = base.at[gidx].set(true_k * 1.2)
+    separate = [
+        plant.calibrate(
+            obs_B, t_obs, [PARAM], params=p, optimizer=OptimizerConfig(max_iter=2), **kw
+        )
+        for p in (far, near)
+    ]
+    assert separate[0].loss != pytest.approx(separate[1].loss, rel=1e-3)
+    best = min(separate, key=lambda r: r.loss)
+    listed = plant.calibrate(
+        obs_B,
+        t_obs,
+        [PARAM],
+        optimizer=OptimizerConfig(max_iter=2, starts=[far, {PARAM: true_k * 1.2}]),
+        **kw,
+    )
+    assert listed.loss == pytest.approx(best.loss, rel=1e-8)
+    assert listed.params_named[PARAM] == pytest.approx(best.params_named[PARAM], rel=1e-8)
+
+
+def test_plant_calibrate_start_list_validation(decay_plant):
+    """Malformed plant start lists fail before the optimiser runs."""
+    net, plant = decay_plant
+    t_obs = jnp.linspace(1.0, 20.0, 5)
+    obs = jnp.zeros(5)
+    kw = dict(target="tank", observed_channels=["B"], check_finite=False)
+    n = plant.default_parameters().shape[0]
+    bad = [
+        (OptimizerConfig(starts=[{PARAM: 0.1}], n_starts=2), "not both"),
+        (OptimizerConfig(n_starts=0), "n_starts must be >= 1"),
+        (OptimizerConfig(starts=[]), "at least one start"),
+        (OptimizerConfig(starts=[{"simple_decay.nope": 0.1}]), "not a free parameter"),
+        (OptimizerConfig(starts=[jnp.full(n + 1, 0.1)]), "full parameter vector"),
+    ]
+    for opt, msg in bad:
+        with pytest.raises(ValueError, match=msg):
+            plant.calibrate(obs, t_obs, [PARAM], optimizer=opt, **kw)
+
+
+def test_plant_calibrate_start_list_reaches_the_optimiser(decay_plant, monkeypatch):
+    """A valid start list is resolved (dict and full-vector starts, by plant
+    parameter name) and handed to the multistart runner, the first entry being
+    the starting point. The runner is stubbed out, so no plant solve runs (the
+    slow test above checks the fit itself)."""
+    import aquakin.plant.calibrate as plant_cal
+
+    net, plant = decay_plant
+    base = plant.default_parameters()
+    gidx = plant.parameter_index(PARAM)
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _capture(cfg, bundle, theta0, opt_bounds, starts=None):
+        seen.update(theta0=np.asarray(theta0), starts=[np.asarray(s) for s in starts])
+        raise _Stop
+
+    monkeypatch.setattr(plant_cal, "_run_multistart", _capture)
+    with pytest.raises(_Stop):
+        plant.calibrate(
+            jnp.zeros(5),
+            jnp.linspace(1.0, 20.0, 5),
+            [PARAM],
+            target="tank",
+            observed_channels=["B"],
+            transforms={PARAM: "positive_log"},
+            check_finite=False,
+            optimizer=OptimizerConfig(starts=[base.at[gidx].set(0.02), {PARAM: 0.5}]),
+        )
+    # Unconstrained (log) coordinates of the two starts, in list order.
+    np.testing.assert_allclose([s[0] for s in seen["starts"]], np.log([0.02, 0.5]))
+    np.testing.assert_array_equal(seen["theta0"], seen["starts"][0])
