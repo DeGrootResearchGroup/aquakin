@@ -8,7 +8,29 @@ The headline numbers BSM1 reports are:
 - **OCI** (Operational Cost Index) — aeration energy + pumping energy +
   sludge production + mixing energy.
 
-Both are defined in Copp 2002 / Alex 2008 with specific weighting factors.
+The kernels implement the **updated** BSM1 evaluation (Alex et al. 2008), which
+BSM2 (Gernaey et al. 2014) also uses. The original BSM1 evaluation (Copp 2002)
+differs in three places: the EQI nitrogen weights (``B_TKN = 20``, ``B_NO = 20``
+rather than 30 and 10), the aeration energy (an empirical quadratic in kLa rather
+than ``S_sat·V·kLa / 1800``), and the pumping energy (one factor of 0.04 kWh/m³
+for every pumped flow rather than 0.004 / 0.008 / 0.05 for the internal recycle,
+RAS and wastage). The TSS, COD, BOD₅ and TKN definitions are the same in both.
+Compare results against the reference values of the updated evaluation.
+
+References
+----------
+Copp, J.B. (ed.) (2002). *The COST Simulation Benchmark: Description and
+Simulator Manual*. Office for Official Publications of the European
+Communities, Luxembourg.
+
+Alex, J., Benedetti, L., Copp, J., Gernaey, K.V., Jeppsson, U., Nopens, I.,
+Pons, M.-N., Rieger, L., Rosen, C., Steyer, J.-P., Vanrolleghem, P. &
+Winkler, S. (2008). *Benchmark Simulation Model no. 1 (BSM1)*. Technical
+report, IWA Task Group on Benchmarking of Control Strategies for WWTPs.
+
+Gernaey, K.V., Jeppsson, U., Vanrolleghem, P.A. & Copp, J.B. (eds.) (2014).
+*Benchmarking of Control Strategies for Wastewater Treatment Plants*. IWA
+Scientific and Technical Report No. 23. IWA Publishing, London.
 """
 
 from __future__ import annotations
@@ -33,7 +55,9 @@ if TYPE_CHECKING:  # pragma: no cover
 _TSS_FACTOR = ASM1_TSS_FACTOR
 _TSS_SPECIES = ASM1_TSS_SPECIES
 
-# EQI weighting factors (g pollutant / m³)⁻¹ from Copp 2002 / Alex 2008.
+# EQI weighting factors (g pollutant / m³)⁻¹ of the updated BSM1 evaluation
+# (Alex et al. 2008), also used by BSM2. The original BSM1 evaluation (Copp 2002)
+# weights TKN and nitrate at 20 each instead of 30 and 10.
 _EQI_WEIGHTS = {
     "TSS": 2.0,
     "COD": 1.0,
@@ -274,9 +298,14 @@ def effluent_quality_index(
     *,
     params=None,
 ) -> float:
-    """EQI per Copp 2002 / Alex 2008.
+    """EQI with the updated BSM1 / BSM2 weights (Alex et al. 2008).
 
     ``EQI = (1 / T) × ∫ Q × (B_TSS×TSS + B_COD×COD + B_BOD×BOD + B_TKN×TKN + B_NO×SNO) dt × 1e-3``
+
+    with ``B_TSS = 2``, ``B_COD = 1``, ``B_BOD = 2``, ``B_TKN = 30`` and
+    ``B_NO = 10``. These are the weights of the updated BSM1 evaluation, also
+    used by BSM2. The original BSM1 evaluation (Copp 2002) uses ``B_TKN = 20``
+    and ``B_NO = 20``, so its EQI differs from this one for the same effluent.
 
     Units: kg pollutant / day, averaged over the simulation window. Accepts either
     a :class:`~aquakin.plant.streams.StreamSeries` -- ``effluent_quality_index(eff)``
@@ -306,9 +335,13 @@ def aeration_energy(
     volumes: jnp.ndarray,
     saturation: float = 8.0,
 ) -> float:
-    """Aeration energy (kWh/d) per Copp 2002 eq.
+    """Aeration energy (kWh/d) of the updated BSM1 / BSM2 evaluation.
 
     AE = (S_sat / (T × 1.8 × 1000)) × ∫ Σ_i V_i × kLa_i(t) dt
+
+    This is the aeration energy of the updated BSM1 evaluation (Alex et al.
+    2008), also used by BSM2. The original BSM1 evaluation (Copp 2002) used an
+    empirical quadratic in kLa instead.
 
     Parameters
     ----------
@@ -335,9 +368,13 @@ def pumping_energy(
     Q_ras: jnp.ndarray,
     Q_was: jnp.ndarray,
 ) -> float:
-    """Pumping energy (kWh/d) per Copp 2002 eq.
+    """Pumping energy (kWh/d) of the updated BSM1 evaluation.
 
     PE = (1 / T) × ∫ (0.004 × Q_internal + 0.008 × Q_ras + 0.05 × Q_was) dt
+
+    The per-stream factors (kWh/m³) are those of the updated BSM1 evaluation
+    (Alex et al. 2008), taken from BSM2. The original BSM1 evaluation (Copp
+    2002) used 0.04 kWh/m³ for every pumped flow.
 
     Returns
     -------
@@ -358,10 +395,13 @@ def operational_cost_index(
 
     OCI = aeration + pumping + mixing + 5 × sludge_production
 
-    The original Copp (2002) index omits the mixing term (``mixing=0``); the
-    updated open-loop benchmark adds the mechanical-mixing energy of the
-    unaerated reactors, so the two conventions differ only by that term.
-    Sludge_production is the time-averaged TSS mass flow leaving via
+    The updated BSM1 index (Alex et al. 2008) with the mechanical-mixing energy
+    of the unaerated reactors. Its full form also adds ``3 × external carbon``,
+    which is zero for the open-loop BSM1 (no carbon dosing) and is not taken
+    here. The original-evaluation OCI has the same structure but computes the
+    aeration and pumping energies differently (see :func:`aeration_energy`,
+    :func:`pumping_energy`), so pass those terms in the convention you want.
+    ``sludge_production`` is the time-averaged TSS mass flow leaving via
     wastage + the change in plant TSS inventory.
     """
     return float(aeration + pumping + mixing + 5.0 * sludge_production)

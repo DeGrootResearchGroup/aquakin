@@ -186,7 +186,10 @@ def profile_likelihood(
         Likelihood-ratio threshold for the confidence interval. Default ``1.92``
         = ``0.5 * chi2_{1, 0.95}`` (the one-degree-of-freedom 95% level). Use
         with ``loss="nll"`` and a calibrated ``sigma`` so the objective is a
-        proper negative log-likelihood and the threshold is meaningful.
+        proper negative log-likelihood and the threshold is meaningful. With
+        an unknown noise level pass ``sigma="estimate"`` (the concentrated
+        likelihood, see :func:`aquakin.calibrate`): the same threshold applies,
+        and with one output the profile rise is ``(N / 2) log(SSE / SSE_min)``.
     warm_start : bool, optional
         If ``True`` (default), run a cold multistart only at the ``anchor`` grid
         point and warm-start each subsequent point from its neighbour's fit, so
@@ -314,21 +317,21 @@ def profile_likelihood(
         ]
 
     def _start_state(warm):
-        """initial_params and C0 to seed an inner fit (warm or cold)."""
+        """initial_params and the free-pool start to seed an inner fit (warm or
+        cold). A warm start moves only the optimiser's starting point: every
+        inner fit keeps the measured ``C0``, which centres the free-pool prior
+        and fixes any non-fitted pool."""
         if warm is not None:
-            init_p = warm.params
-            base_C0 = warm.C0_fitted[0] if warm.C0_fitted is not None else C0
-        else:
-            init_p, base_C0 = base_params, C0
-        return init_p, base_C0
+            return warm.params, warm.C0_fitted
+        return base_params, None
 
     def _fit_point(value, warm):
-        init_p, base_C0 = _start_state(warm)
+        init_p, ic_start = _start_state(warm)
         if profile_param is not None:
             init_p = init_p.at[p_idx].set(value)
-            C0_pt = base_C0
+            C0_pt = C0
         else:
-            C0_pt = base_C0.at[s_idx].set(value)
+            C0_pt = C0.at[s_idx].set(value)
         # Cold (anchor) points use the full multistart (or the explicit start
         # list); warm-continued points start from the neighbour's optimum, so
         # one start suffices.
@@ -343,6 +346,7 @@ def profile_likelihood(
                 inner_free,
                 initial_params=init_p,
                 optimizer=replace(optimizer, n_starts=n, starts=starts),
+                _ic_start=ic_start,
                 **inner_kw,
             )
         except Exception as exc:
