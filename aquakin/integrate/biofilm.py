@@ -63,6 +63,7 @@ from aquakin.integrate._common import (
     _run_diffeqsolve,
     friendly_solve_errors,
     init_solver_settings,
+    reactor_settings_key,
     require_increasing_t_span,
     resolve_layered_atol,
     to_native_time,
@@ -608,16 +609,25 @@ class BiofilmReactor(GradientCheckMixin):
         condition_arrays = active.fields
 
         if t_eval is None:
-            t_eval_arr, cache_key = None, (t0, t1, None)
+            t_eval_arr, sig = None, (t0, t1, None)
         else:
             t_eval_arr = jnp.asarray(t_eval)
             validate_t_eval(t_eval_arr, t0, t1)
-            cache_key = (t0, t1, tuple(t_eval_arr.shape))
+            sig = (t0, t1, tuple(t_eval_arr.shape))
 
-        jitted = self._jit_cache.get(cache_key)
-        if jitted is None:
+        # Key the compiled solve on the solver settings too (adjoint, tolerances,
+        # dtmax, max_steps, ...), which the build bakes into the closure. A traced
+        # call (solve inside an outer jit/grad) yields a None settings key and
+        # bypasses the cache.
+        settings = reactor_settings_key(self)
+        if settings is None:
             jitted = self._build_jitted_solve(t0, t1, t_eval_arr is not None)
-            self._jit_cache[cache_key] = jitted
+        else:
+            cache_key = (sig, settings)
+            jitted = self._jit_cache.get(cache_key)
+            if jitted is None:
+                jitted = self._build_jitted_solve(t0, t1, t_eval_arr is not None)
+                self._jit_cache[cache_key] = jitted
 
         with friendly_solve_errors(self.max_steps, what="biofilm reactor solve"):
             if t_eval_arr is None:

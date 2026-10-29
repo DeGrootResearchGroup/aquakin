@@ -44,21 +44,66 @@ nor concentrating it in a few files makes the whole suite fast.
   docstring-polish effort); the API reference itself is generated from
   `aquakin.__all__` at build time. It skips the bare `labeled` event and the
   schedule / dispatch refresh, like the lint gate.
-- The **`test`** job (`pytest -m "not validation and not slow"`, Python
-  3.11/3.12) runs on **every PR and every push** — unit + fast integration. It is
-  the merge gate, and is **`pytest-split`-sharded** (`--splits 4 --group i`, `-n
-  auto` within each shard) for the *same* reason the slow/validation suites are:
-  the fast suite grew to ~1300 tests and a single long-lived run accumulated XLA
-  cache + live JAX buffers until an xdist worker was OOM-killed (a worker *crash*
-  on a random lightweight test) and/or it hit the time ceiling — intermittent red
-  on the required gate with no real regression. Four fresh shards × 2 Python
-  versions bound each shard's footprint to ~1/4 (no OOM) and run in parallel (well
-  under the ceiling). The sharded per-version jobs are **not** the required check —
-  the **`fast-gate`** aggregator (job name **`fast gate`**) is: it `needs:` the
-  shard matrix and is green iff every shard succeeded (or was skipped — a bare
-  `labeled` event skips the gate, which must not block). It is a *stable* required-
-  check name that survives shard-count changes, so **branch protection requires
-  `fast gate`**, not the per-shard `fast tests (...)` jobs.
+- The fast tier (`$FAST_MARKERS` = `not validation and not slow`, Python
+  3.11/3.12) runs on **every PR and every push** and is the merge gate. It is
+  two `pytest-split`-sharded jobs, each shard a fresh process pool of **two**
+  xdist workers (`-n 2`), **sharded for memory, not speed**:
+  - **`unit`**: `tests/unit`, `--splits 2`, balanced by the unit durations
+    recorded in `.test_durations` (a test added since the last refresh gets
+    their average). Unit tests compile little, so wall time is what to balance.
+  - **`integration`**: `tests/integration`, `--splits 6`, **even by count on
+    purpose**. The run step points `--durations-path` at a file that does not
+    exist, so the count split holds whatever `.test_durations` records. A
+    worker's memory follows the number of solves it compiles, not their wall
+    time, and a duration split could pile many quick solves into one shard.
+
+  Why: every JAX test process keeps the XLA compilation cache and live buffers
+  of each solve it compiles until it exits, so a worker that has run a few
+  hundred fast integration tests peaks at 3–4 GB. The fast tier used to be one
+  `tests/` selection in 4 shards of `-n auto` (4 workers each) on the 4-core /
+  16 GB runner, up to ~15 GB a shard. Since no fast test had a recorded
+  duration, the split was by count across unit and integration together, which
+  had two effects:
+  - The shards were badly unbalanced: the integration-heavy shards took 13–18
+    min and the unit-heavy ones about 3.
+  - Any PR that added tests, even cheap ones, moved every later shard boundary,
+    so a heavy module (e.g. `test_steady_state.py`) could slide into an already
+    full shard and trip the memory watchdog (below) with no assertion failing.
+    This happened on several PRs in a row.
+
+  With two workers each integration worker runs ~1/12 of the set (was ~1/8),
+  and a shard holds two workers (was four), so a shard peaks near half its old
+  footprint. The same layout and its measurements come from the group's
+  aquaflux repository, which hit the same failure first. Each shard also logs
+  the runner's free memory and swap every 30 s (`vmstat`) and prints it at the
+  end, so a slow, swapping or killed shard can be told apart.
+
+  Coverage goes to Codecov **once per run**: each fast shard keeps its
+  `coverage.xml` as an artifact, and the **`fast-coverage`** job (after both
+  matrices, under the `fast` flag) uploads them all in one call. With one upload
+  per shard, Codecov posted its PR comment and patch status after the first few
+  shards and showed the lines a still-running shard covers as missing.
+  `after_n_builds` in `codecov.yml` did not help, because the carried-forward
+  slow/validation/heavy sessions count toward it.
+
+  The fast-tier durations are recorded by **`refresh-fast-durations`**, which
+  runs with the weekly slow/validation refresh (`refresh-durations`, Mondays,
+  or a manual `workflow_dispatch`). It uses the same
+  selection and `-n 2` as the fast jobs, and its results are merged into the
+  same `.test_durations` by `commit-durations`. A PR labelled
+  **`refresh-durations`** also runs it, on the `labeled` action only. That is
+  the bootstrap path for a branch that changes the workflow, because
+  `workflow_dispatch` only runs the default branch's workflow: download the
+  artifacts with `gh run download` and commit the merged file to the PR by
+  hand.
+
+  The per-shard jobs are **not** the required check. The **`fast-gate`**
+  aggregator (job name **`fast gate`**) is: it `needs:` both matrices and is
+  green iff every shard succeeded (or was skipped, since a bare `labeled` event
+  skips the gate, which must not block). It is a *stable* required-check name
+  that survives shard-count changes, so **branch protection requires
+  `fast gate`**, not the per-shard `unit tests (...)` / `integration tests (...)`
+  jobs.
 - The **`slow`** job (`pytest -m "slow and not validation and not heavy"`,
   3.11/3.12) and **`validation`** job (`pytest -m "validation and not heavy"`,
   3.12) run **only on push to `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
@@ -192,13 +237,15 @@ It is a **symptom** guard, deliberately not a structural "plant-solve ⇒ must b
 up to BSM1-scale 65–167), so no size / call-site rule separates cheap from
 heavy — only actual memory pressure does. When it fires, the fix is to mark the
 shard's heaviest whole-plant / adjoint solve `@pytest.mark.slow` (or `heavy`), or
-raise the shard count. Off by default locally (the env is unset), and inert on
-non-Linux (no `/proc/meminfo` → the reading is `None` → no-op), so a local run is
-never surprised; opt in with `AQUAKIN_TEST_MEM_WATCHDOG=1` to reproduce a CI
+raise the shard count. For the fast tier, first check the shard's `vmstat` log
+and whether a moved count boundary put two heavy modules together. Off by
+default locally (the env is unset), and inert on non-Linux (no
+`/proc/meminfo` → the reading is `None` → no-op), so a local run is never
+surprised; opt in with `AQUAKIN_TEST_MEM_WATCHDOG=1` to reproduce a CI
 memory failure.
 
 **Branch protection:** the required status check must be the **`fast gate`**
-aggregator job — **not** the per-shard `fast tests (py3.x shard i/4)` jobs (their
+aggregator job — **not** the per-shard `unit tests (...)` / `integration tests (...)` jobs (their
 names/count change when the shard count is tuned) and **not** `slow`/`validation`
 (which do not run on PRs and would otherwise block every PR forever). The
 `fast gate` job is green only when every fast shard passes, so requiring it gives
@@ -209,11 +256,11 @@ checks that never report.) The **`lint (ruff)`** job has a stable name and can b
 added as a second required check once the lint debt tracked in the audit issues is
 burned down enough to keep it reliably green.
 
-A green fast gate is the merge gate. Python 3.10 stays
-install-compatible (`requires-python >= 3.10`) but is **not** CI-tested:
-its heavier jaxlib 0.6.2 build ran close to the hosted runner's
-resource/time limits and the job was intermittently killed mid-run, while
-3.11/3.12 stayed green and the suite passed locally on 3.10. When adding a runtime
+A green fast gate is the merge gate. The package requires Python 3.11 or later
+(`requires-python >= 3.11`), because the dependency floors (jax/jaxlib 0.10,
+diffrax 0.7, optimistix 0.1) require it; CI tests 3.11 and 3.12. (Python 3.10
+was dropped: it had been install-only and untested, and the current JAX stack
+no longer installs on it.) When adding a runtime
 dependency, add it to `pyproject.toml` `dependencies` so the CI install
 (`pip install -e ".[test]" -c constraints.txt`) picks it up — the `_make_*`
 model generators' `ruamel` need is intentionally *not* a runtime dep (they are

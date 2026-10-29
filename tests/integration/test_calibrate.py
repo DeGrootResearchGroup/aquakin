@@ -703,6 +703,29 @@ def test_start_list_reproducible_order_and_duplicates(setup):
     assert fit(starts[:1] * 3).params_named == one.params_named
 
 
+def test_start_list_without_bounds(setup):
+    """With the declared bounds switched off the optimiser is unbounded, and a
+    start list still runs every start as given (a start far outside the old
+    bounds is not moved) and keeps the best."""
+    import warnings as _w
+
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    with _w.catch_warnings():
+        _w.simplefilter("error", RuntimeWarning)  # nothing is moved or at a bound
+        r = aquakin.calibrate(
+            reactor,
+            C0,
+            **_decay_kw(
+                obs_clean,
+                t_obs,
+                optimizer=OptimizerConfig(
+                    use_model_bounds=False, starts=[{"A_to_B.k": 50.0}, {"A_to_B.k": 0.1}]
+                ),
+            ),
+        )
+    assert r.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
 @pytest.mark.parametrize("method", ["lbfgsb", "gauss_newton"])
 def test_start_list_outside_bounds_moved_inside(setup, method):
     """A start outside the declared bounds (k in [1e-3, 10]) is moved to the
@@ -1001,6 +1024,35 @@ def test_interior_fit_has_no_at_bound(setup):
             sigma=0.01,
         )
     assert r.at_bound == {}
+    assert np.isfinite(r.params_named_std["A_to_B.k"])
+
+
+def test_small_interior_parameter_is_not_at_bound(setup):
+    """An untransformed parameter much smaller than 1 but well inside its box
+    (k = 5e-6 in (1e-6, 1)) is not flagged as on the lower bound."""
+    import warnings as _w
+
+    reactor, C0, _t, _obs, _ = setup
+    t_obs = jnp.linspace(50.0, 1000.0, 20)
+    params = reactor.model.default_parameters().at[0].set(5e-6)
+    obs = reactor.solve(C0, params=params, t_span=(0.0, 1000.0), t_eval=t_obs).C_named("B")
+    with _w.catch_warnings():
+        _w.simplefilter("error", RuntimeWarning)
+        r = aquakin.calibrate(
+            reactor,
+            C0,
+            observations=obs,
+            t_obs=t_obs,
+            free_params=["A_to_B.k"],
+            transforms={"A_to_B.k": "none"},
+            initial_params=params.at[0].set(7.5e-6),
+            observed_species=["B"],
+            loss="nll",
+            sigma=1e-4,
+            optimizer=OptimizerConfig(bounds={"A_to_B.k": (1e-6, 1.0)}),
+        )
+    assert r.at_bound == {}
+    assert r.params_named["A_to_B.k"] == pytest.approx(5e-6, rel=1e-4)
     assert np.isfinite(r.params_named_std["A_to_B.k"])
 
 

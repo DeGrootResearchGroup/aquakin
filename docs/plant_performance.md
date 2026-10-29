@@ -990,8 +990,10 @@ ports (the bypass relocates the entry to `bypass_split.in` and the effluent to
 `influent_delay.in`) — so `build_bsm2`/`build_bsm1` record the canonical ports on
 the generic **`Plant.influent_endpoint`** / **`Plant.effluent_endpoint`**
 attributes. `plant.add_influent("feed", series)` defaults its `to=` to
-`plant.influent_endpoint`, and `evaluate_bsm2` / `sludge_metrics` default their
-effluent port to `plant.effluent_endpoint`, so feature flags can no longer
+`plant.influent_endpoint`, and `evaluate_bsm2` defaults its effluent port to
+`plant.effluent_endpoint` (`sludge_metrics` prefers the secondary-clarifier
+overflow for the SRT, since a bypass-combined effluent carries solids that never
+entered the activated-sludge system), so feature flags can no longer
 silently mis-wire the influent or score the wrong effluent. (The endpoints are
 plain optional attributes on every `Plant`, `None` unless a builder sets them.)
 

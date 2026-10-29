@@ -506,8 +506,9 @@ def test_digester_gas_requires_adm1_digester():
 
 
 def test_eqi_weights_are_copp_alex_standard(asm1):
-    """EQI uses the Copp 2002 / Alex 2008 weights (TSS 2, COD 1, BOD 2,
-    TKN 30, NO 10). Guards against a regression in the nitrogen weighting,
+    """EQI uses the updated BSM1 / BSM2 weights (Alex et al. 2008: TSS 2, COD 1,
+    BOD 2, TKN 30, NO 10), not the original BSM1 ones (Copp 2002: TKN 20,
+    NO 20). Guards against a regression in the nitrogen weighting,
     which otherwise leaves the effluent concentrations correct while the
     aggregate index is wrong."""
     from aquakin.plant.metrics import (
@@ -542,3 +543,45 @@ def test_eqi_weights_are_copp_alex_standard(asm1):
     expected = 1.0e4 * (2.0 * tss + 1.0 * cod + 2.0 * bod + 30.0 * tkn + 10.0 * sno) / 1000.0
     got = effluent_quality_index(t, Ctraj, Q, asm1)
     assert got == pytest.approx(expected, rel=1e-9)
+
+
+
+def test_time_unit_override_leaves_bsm2_metrics_unchanged(asm1, adm1):
+    """The DO-controlled kLa history, the digester-feed temperature and the
+    biogas COD read the control signals and streams at native time and
+    integrate per-native-unit rates, so a solution reported in hours gives the
+    same values as the same solution in days. No solve: a two-point solution at
+    the warm-start state of the closed-loop plant, with a temperature-carrying
+    influent so the feed temperature is read from the streams."""
+    import numpy as np
+
+    from aquakin.plant.balance import _biogas_cod
+    from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.bsm.bsm2 import BSM2_CONSTANT_INFLUENT_T
+    from aquakin.plant.bsm.evaluation import _feed_temperature_C, _kla_history
+    from aquakin.plant.plant import PlantSolution
+
+    plant = build_bsm2(asm1, adm1, do_control=True)
+    plant.add_influent("feed", bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
+    params = bsm2_parameters(asm1, adm1)
+    y0 = bsm2_warm_start(plant)
+    states = jnp.stack([y0, y0])
+    days = PlantSolution(t=jnp.asarray([0.0, 1.0]), state=states, plant=plant)
+    hours = PlantSolution(
+        t=jnp.asarray([0.0, 24.0]), state=states, plant=plant, _requested_time_unit="h"
+    )
+    np.testing.assert_allclose(np.asarray(hours.t_native), [0.0, 1.0])
+
+    tanks = plant.activated_sludge_reactors(require_volume=True)
+    kla = _kla_history(plant, days, params, tanks)
+    assert kla.shape == (2, len(tanks)) and np.all(np.isfinite(kla))
+    np.testing.assert_allclose(_kla_history(plant, hours, params, tanks), kla)
+
+    # Every stream carries the influent temperature (K), not the 35 °C fallback.
+    np.testing.assert_allclose(
+        _feed_temperature_C(plant, hours, params, 35.0), BSM2_CONSTANT_INFLUENT_T - 273.15
+    )
+
+    cod_days = _biogas_cod(plant, days, params)
+    assert cod_days > 0.0
+    assert _biogas_cod(plant, hours, params) == pytest.approx(cod_days, rel=1e-12)

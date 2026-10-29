@@ -229,3 +229,24 @@ def test_priors_on_fixed_parameters_are_ignored(reactor, params):
         **kw,
     )
     np.testing.assert_allclose(with_prior.matrix, data.matrix, rtol=1e-12)
+
+
+def test_initial_pools_only(reactor, params):
+    """With no rate parameters (free_params=[]) and only the initial pool
+    estimated, the information is the pool block of the closed form, and the
+    downstream identifiability and design tools accept it."""
+    fim = aquakin.fisher_information(
+        reactor, _design(), [], params=params, free_ic=FreeICConfig(["A"])
+    )
+    assert fim.names == ["ic[0].A"]
+    np.testing.assert_allclose(fim.matrix, _closed_form(T_OBS)[1:, 1:], rtol=1e-5)
+    rep = aquakin.identifiability(fim)
+    assert np.isfinite(rep.std["ic[0].A"])
+    ranked = aquakin.rank_experiments(
+        reactor,
+        [_design(), _design(t_obs=T_OBS[:5])],
+        [],
+        params=params,
+        free_ic=FreeICConfig(["A"]),
+    )
+    assert ranked[0].index == 0

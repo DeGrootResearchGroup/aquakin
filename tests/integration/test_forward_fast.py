@@ -97,6 +97,41 @@ def test_order_is_three():
     assert e_tight < e_loose                                   # converges with tol
 
 
+def test_step_budget_exhaustion_raises():
+    """Running out of steps must raise, not return zero-filled rows."""
+    def rhs(t, y, args):
+        return -args[0] * y
+
+    def jac(t, y, args):
+        return -args[0] * jnp.eye(1)
+
+    te = jnp.linspace(0.0, 10.0, 5)
+    with pytest.raises(Exception, match="maximum number of solver steps"):
+        forward_solve(rhs, jac, jnp.array([1.0]), jnp.array([0.3]), 0.0, 10.0, te,
+                      rtol=1e-6, atol=1e-9, max_steps=3)
+    # The step-budget message is recognized by friendly_solve_errors.
+    from aquakin.integrate._common import friendly_solve_errors
+    with pytest.raises(RuntimeError, match="step budget"):
+        with friendly_solve_errors(3, what="test solve"):
+            forward_solve(rhs, jac, jnp.array([1.0]), jnp.array([0.3]), 0.0, 10.0,
+                          te, rtol=1e-6, atol=1e-9, max_steps=3)
+
+
+def test_stalled_solve_raises():
+    """A solution that blows up (y' = y^2 from y0 = 1, singular at t = 1) stalls
+    the step size; the solve must raise rather than return zeros."""
+    def rhs(t, y, args):
+        return y**2
+
+    def jac(t, y, args):
+        return 2.0 * y * jnp.eye(1)
+
+    te = jnp.linspace(0.0, 2.0, 5)
+    with pytest.raises(Exception, match="stalled|maximum number"):
+        forward_solve(rhs, jac, jnp.array([1.0]), None, 0.0, 2.0, te,
+                      rtol=1e-6, atol=1e-9, max_steps=100_000)
+
+
 # --------------------------------------------------------------------------
 # Plant guards (fast: reject before any solve).
 # --------------------------------------------------------------------------
@@ -181,6 +216,16 @@ def test_forward_fast_accepts_honored_knobs(bsm1):
                       integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
     assert sol.state.shape[0] == te.shape[0]
     assert np.all(np.isfinite(np.asarray(sol.state)))
+
+
+def test_forward_fast_honours_max_steps(bsm1):
+    """The plant's ``max_steps`` reaches the forward_fast integrator."""
+    plant, y0 = bsm1()
+    params = plant.default_parameters()
+    with pytest.raises(RuntimeError, match="step budget"):
+        plant.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]), params=params,
+                    y0=y0, forward_fast=True,
+                    integrator=aquakin.IntegratorConfig(max_steps=3))
 
 
 # --------------------------------------------------------------------------

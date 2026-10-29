@@ -142,8 +142,14 @@ JAX functions of `(p, tobs_list, C0_list)`; pools are linearised at each
 `(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector, and runs
 SLSQP with linear spacing constraints; `param_draws` are `vmap`ped.
 `observation_fn` (calibrate / profile / `Experiment`) goes through the shared
-`observe(ys, p, species_idx, fn)` helper in `calibrate.py`, used by both
-`_predict` and `_FisherSetup.jacobian`; it is a defaulted field on
+`observe(ys, p, species_idx, fn, t=)` helper in `calibrate.py`, used by both
+`_predict` and `_FisherSetup.jacobian`; a three-argument `fn(t, C, p)`
+(`observation_takes_time`, by signature) gets the sample times in `t_obs`'s
+unit (native times divided by `_CalibrationProblem.obs_time_factor` /
+`_FisherSetup.time_factor`). `NaN` observations are masked in `_build_loss` /
+`_build_residual` (`_build_masked_*`, only when a `NaN` is present, so the
+unmasked path is unchanged); `Experiment(mask=)` sets the unmeasured entries'
+sigma to `inf` in `_FisherSetup` and is part of the design `_structure_key`; it is a defaulted field on
 `_CalibrationProblem` (and part of `struct_key`), so plant calibration, which
 builds its own problem, is unaffected. `CalibrationResult.posterior_draws(model, ...)`
 is the single Laplace sampler; `predictive_band` propagates its rows, so the two
@@ -511,6 +517,16 @@ solve into segments at the firings; the boundary convention is that a `t_eval`
 point coinciding with a firing reports its **pre-reset** value (it belongs to
 the segment ending at the event), so the reset defines the next segment's
 initial condition.
+The same holds for the single final point returned when `t_eval` is `None`
+(an event at exactly `t1`, or a terminal event, is applied and logged, but the
+reported state is pre-reset, and its time is where the solve actually stopped),
+so `t_eval=None` and `t_eval=[t_end]` agree. A time event at exactly `t0` is
+applied to `y0` before the first segment and logged. With
+`time_unit=` (`BatchReactor.solve` and `Plant.solve`), events are in the
+requested unit: `events_to_native_time` converts copies (`at_times` scaled,
+`cond_fn`/`apply` wrapped to receive the requested-unit `t`) and the log is
+scaled back. In the plant only the user's events are converted; the SBR unit
+cycle events are built natively and merged after the conversion.
 
 Two paths, one driver (`_drive`), chosen by whether any state event is present:
 - **Time events only** — the segment boundaries are static Python constants and
