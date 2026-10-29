@@ -190,6 +190,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `BiofilmReactor` can be built inside `jax.jit`. With the default
+  `fixed_mask` its reactive-particulate check called `bool()` on a traced
+  value and raised `TracerBoolConversionError`, and a traced scalar `atol`
+  raised `ConcretizationTypeError`. The check now runs on concrete values (it
+  is skipped when `soluble_mask` itself is traced), and a scalar `atol` may be
+  traced.
 - `sludge_metrics` (SRT) now takes the solids losses from the plant's recorded
   final effluent (`plant.effluent_endpoint`) and registered `"wastage"`
   stream, and matches unit names (`settler`, `clarifier`, ...) only when those

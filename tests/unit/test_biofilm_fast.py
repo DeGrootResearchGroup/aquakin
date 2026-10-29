@@ -11,6 +11,7 @@ paths (`solve_sensitivity`, `steady_state`) stay in the slow suite.
 
 import copy
 import pathlib
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -245,3 +246,46 @@ def test_traced_atol_bypasses_the_compile_cache(net, cond):
     assert r._jit_cache == {}
     np.testing.assert_allclose(traced, r.solve(C0, (0.0, 5.0)).C_named("A")[-1], rtol=1e-8)
     assert len(r._jit_cache) == 1
+
+
+def test_construct_and_solve_inside_jit(net, cond):
+    """The reactor can be built and solved inside ``jax.jit`` with the default
+    ``fixed_mask`` and a traced scalar ``atol`` (issue #631), matching the
+    eager result."""
+    C0 = net.concentrations({"A": 1.0})
+    ki = net.param_index["A_to_B.k"]
+
+    def final_A(k, atol=None):
+        p = net.default_parameters().at[ki].set(k)
+        return _tiny(net, cond, atol=atol).solve(C0, (0.0, 5.0), params=p).C_named("A")[-1]
+
+    eager = final_A(0.1)
+    np.testing.assert_allclose(jax.jit(final_A)(0.1), eager, rtol=1e-8)
+    np.testing.assert_allclose(
+        jax.jit(final_A)(0.1, 1e-10), final_A(0.1, 1e-10), rtol=1e-8
+    )
+
+
+def test_default_fixed_mask_check_inside_jit(net, cond):
+    # The reactive-particulate check runs on concrete values, so it still warns
+    # when the reactor is built under jax.jit from a concrete mask. A mask
+    # computed inside the jitted function is traced and the check is skipped.
+    C0 = net.concentrations({"A": 1.0})
+    mask = np.array([True, False])
+
+    def build(x):
+        _tiny(net, cond, soluble_mask=mask)
+        return x
+
+    with pytest.warns(UserWarning, match="reactive particulate"):
+        jax.jit(build)(1.0)
+
+    def solve_traced_mask(x):
+        traced = jnp.array([True, False]) & (x > 0.0)
+        r = _tiny(net, cond, soluble_mask=traced)
+        return r.solve(C0, (0.0, 1.0)).C_named("A")[-1]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        out = jax.jit(solve_traced_mask)(1.0)
+    assert np.isfinite(float(out))
