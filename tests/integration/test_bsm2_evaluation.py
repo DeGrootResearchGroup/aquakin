@@ -506,8 +506,9 @@ def test_digester_gas_requires_adm1_digester():
 
 
 def test_eqi_weights_are_copp_alex_standard(asm1):
-    """EQI uses the Copp 2002 / Alex 2008 weights (TSS 2, COD 1, BOD 2,
-    TKN 30, NO 10). Guards against a regression in the nitrogen weighting,
+    """EQI uses the updated BSM1 / BSM2 weights (Alex et al. 2008: TSS 2, COD 1,
+    BOD 2, TKN 30, NO 10), not the original BSM1 ones (Copp 2002: TKN 20,
+    NO 20). Guards against a regression in the nitrogen weighting,
     which otherwise leaves the effluent concentrations correct while the
     aggregate index is wrong."""
     from aquakin.plant.metrics import (

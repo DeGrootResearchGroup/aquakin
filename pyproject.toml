@@ -12,7 +12,8 @@ name = "aquakin"
 dynamic = ["version"]
 description = "Reactive scalar transport kinetics for aqueous environmental systems"
 readme = "README.md"
-requires-python = ">=3.10"
+# jax/jaxlib 0.10 and diffrax 0.7 (the dependency floors below) require 3.11.
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Christopher DeGroot", email = "christopher.degroot@uwo.ca" }]
@@ -24,6 +25,9 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 dependencies = [
@@ -137,7 +141,7 @@ show_missing = false
 # `ruff format --check` mismatch fails the lint gate).
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 # Start broad on the high-signal families; the `ignore` list below defers the

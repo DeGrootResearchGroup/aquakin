@@ -444,8 +444,8 @@ def build_bsm2(
     wastage_schedule: object | None = None,
     do_temperature_correction: bool = False,
     temperature_model: object | None = None,
-    settler_composition_mode: str = "per_species",
-    settler_soluble_holdup: bool = False,
+    settler_composition_mode: str = "lumped_tss",
+    settler_soluble_holdup: bool = True,
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
@@ -511,16 +511,25 @@ def build_bsm2(
         kinetics already track temperature.
     settler_composition_mode : str, optional
         Particulate state form of the secondary clarifier
-        (:class:`~aquakin.plant.takacs.TakacsClarifier`); ``"per_species"``
-        (default) or ``"lumped_tss"``.
+        (:class:`~aquakin.plant.takacs.TakacsClarifier`); ``"lumped_tss"``
+        (default; one TSS state per layer with the feed-scaled outlet
+        composition) or ``"per_species"`` (per-layer composition memory). The
+        default is the form of the BSM2 reference settler ``settler1dv5_bsm2``,
+        as of the BSM1 ``settler1dv4``; ``"per_species"`` has no reference
+        counterpart. The two modes agree at steady state and differ only under
+        dynamic flow.
     settler_soluble_holdup : bool, optional
         If True, the secondary clarifier carries the soluble species in its
         layers (advected by the bulk flow, no settling), so its liquid volume
-        damps the soluble effluent signal -- the BSM2 ``settler1dv5`` behaviour.
-        Default False (solubles pass straight through, no holdup). Leaves every
-        steady state unchanged (a non-reacting soluble relaxes to the feed
-        concentration), so it only matters under a dynamic influent, where it
-        smooths the effluent ammonia peaks/troughs toward the reference.
+        damps the soluble effluent signal. This is the ten-layer soluble model
+        of the BSM2 reference settler ``settler1dv5_bsm2`` (MODELTYPE 0, as in
+        the BSM1 ``settler1dv4``); it is independent of
+        ``settler_composition_mode``.
+        Default True, as in the reference settler; set False for the simpler
+        soluble pass-through (no holdup). Leaves every steady state unchanged
+        (a non-reacting soluble relaxes to the feed concentration), so it only
+        matters under a dynamic influent, where it smooths the effluent ammonia
+        peaks and troughs toward the reference.
 
     Returns
     -------

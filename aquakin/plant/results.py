@@ -381,8 +381,11 @@ class SteadyStateResult:
     iterations : int or None
         PTC iteration count (``None`` for the forward method).
     residual : float or None
-        The final scaled steady-state residual ``max_i |dy_i/dt| /
-        max(|y_i|, scale_floor)`` for the algebraic solve (``None`` for forward).
+        The scaled steady-state residual ``max_i |dy_i/dt| /
+        max(|y_i|, scale_floor)`` of ``state``: the final PTC residual for the
+        algebraic solve, and the residual of the returned state for the forward
+        solve (with the ``scale_floor`` given to :meth:`Plant.run_to_steady_state`,
+        default ``max(|y0|, 1e-6)``).
     """
 
     state: jnp.ndarray

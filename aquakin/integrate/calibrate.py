@@ -8,7 +8,9 @@ This is the richer companion to :func:`aquakin.fit`. Differences from
   unconstrained space — more robust convergence than box constraints.
 - Loss is configurable: ``"mse"`` (default), ``"wmse"`` (weighted MSE),
   ``"nll"`` (Gaussian negative log-likelihood). The last two accept a
-  per-observation ``sigma``.
+  per-observation ``sigma``; ``"nll"`` also accepts ``sigma="estimate"``, the
+  concentrated likelihood with the noise level of each output estimated from
+  the residuals.
 - Optional Laplace covariance — a Gaussian approximation of the posterior
   around the MAP, from a Hessian of the loss in unconstrained space.
   Marginal standard deviations are then propagated back to physical space
@@ -32,6 +34,7 @@ available two ways (``laplace_method``):
 from __future__ import annotations
 
 import hashlib
+import inspect
 import warnings
 from collections import namedtuple
 from dataclasses import dataclass, field, replace
@@ -348,6 +351,15 @@ def _jacobian_physical_wrt_theta(theta: jnp.ndarray, transform: str) -> jnp.ndar
 # --- Loss factory ------------------------------------------------------
 
 
+# Floor on a per-output sum of squared residuals in the concentrated likelihood,
+# so an exact fit (SSE = 0, synthetic noise-free data) gives a finite objective.
+_SSE_FLOOR = 1e-300
+# Outer iterations of the Gauss-Newton noise re-estimation (``sigma="estimate"``);
+# each is a warm-started least-squares solve, and the noise level typically
+# settles in a handful.
+_IRLS_MAX_ITER = 50
+
+
 def _build_loss(
     loss_type: str,
     observations: jnp.ndarray,
@@ -355,8 +367,26 @@ def _build_loss(
 ):
     """Return ``loss(pred) -> scalar``.
 
-    ``pred`` and ``observations`` have shape ``(n_t, n_observed)``.
+    ``pred`` and ``observations`` have shape ``(n_t, n_observed)``. ``NaN``
+    entries of ``observations`` are missing: they are masked out of the loss
+    (``mse`` / ``wmse`` average over the observed entries only). For the
+    concentrated likelihood (``loss_type="nll"`` with ``sigma="estimate"``) it
+    returns the per-output sum of squared residuals over the observed entries,
+    shape ``(n_observed,)``, which :func:`_data_term` sums over the datasets
+    before taking the log.
     """
+    missing = _missing_mask(observations)
+    if _is_sigma_estimate(sigma):
+        if loss_type != "nll":
+            raise ValueError('sigma="estimate" requires loss="nll".')
+        _obs, gap = _fill_missing(observations, missing)
+
+        def _sse(pred):
+            return jnp.sum(gap(pred) ** 2, axis=0)
+
+        return _sse
+    if missing is not None:
+        return _build_masked_loss(loss_type, observations, sigma, missing)
     if loss_type == "mse":
 
         def _loss(pred):
@@ -399,6 +429,16 @@ def _build_residual(
     unreliable. For ``nll`` this ``H`` is exactly the Fisher information.
     """
     obs = observations
+    missing = _missing_mask(observations)
+    if _is_sigma_estimate(sigma):
+        if loss_type != "nll":
+            raise ValueError('sigma="estimate" requires loss="nll".')
+        # Raw (n_t, n_observed) residuals, zero at missing entries: the caller
+        # divides each column by the current noise estimate.
+        _obs, gap = _fill_missing(observations, missing)
+        return gap
+    if missing is not None:
+        return _build_masked_residual(loss_type, observations, sigma, missing)
     if loss_type == "mse":
         scale = jnp.sqrt(2.0 / obs.size)
 
@@ -424,6 +464,119 @@ def _build_residual(
 
         return _resid
     raise ValueError(f"Unknown loss {loss_type!r}; choose one of {_VALID_LOSSES}.")
+
+
+def _missing_mask(observations):
+    """Boolean ``NaN`` mask of ``observations`` (missing entries), or ``None``
+    when every entry is present (the unmasked loss is then used unchanged)."""
+    obs = np.asarray(observations)
+    if not np.issubdtype(obs.dtype, np.floating):
+        return None
+    nan = np.isnan(obs)
+    return jnp.asarray(nan) if nan.any() else None
+
+
+def _fill_missing(observations, missing):
+    """``(obs_filled, gap)``: the observations with missing entries set to 0,
+    and ``gap(pred)``, the difference ``pred - observations`` with exact zeros
+    at the missing entries.
+
+    A missing entry must add nothing to the loss *or* to its gradient, even
+    when the prediction there is ``NaN`` or ``inf`` (an ``observation_fn`` such
+    as ``log(C)`` evaluated where ``C = 0``). Multiplying by a 0/1 weight does
+    not achieve that (``0 * NaN`` is ``NaN``), and neither does masking the
+    output alone, since the derivative of the unselected branch of
+    ``jnp.where`` still enters the gradient as ``0 * NaN``. So the prediction
+    itself is replaced by the filled observation at a missing entry before the
+    difference is formed: neither branch is then non-finite, and the
+    derivative with respect to ``pred`` there is exactly 0. With no missing
+    entries, the observations are returned unchanged and ``gap`` is the plain
+    difference.
+    """
+    if missing is None:
+        return observations, lambda pred: pred - observations
+    obs_filled = jnp.where(missing, 0.0, observations)
+
+    def _gap(pred):
+        safe = jnp.where(missing, obs_filled, pred)
+        return jnp.where(missing, 0.0, safe - obs_filled)
+
+    return obs_filled, _gap
+
+
+def _masked_parts(loss_type, observations, sigma, missing):
+    """``(gap, sig, n_kept)`` for a loss with missing entries: the masked
+    difference of :func:`_fill_missing`, ``sigma`` broadcast to the data shape
+    with 1 at the missing entries (so a ``NaN``, zero or infinite noise level
+    given for an entry that was not measured cannot reach the loss), and the
+    number of observed entries."""
+    if loss_type in ("wmse", "nll") and sigma is None:
+        raise ValueError(f"loss={loss_type!r} requires a sigma argument.")
+    if loss_type not in _VALID_LOSSES:
+        raise ValueError(f"Unknown loss {loss_type!r}; choose one of {_VALID_LOSSES}.")
+    _obs, gap = _fill_missing(observations, missing)
+    sig = None
+    if sigma is not None:
+        sig = jnp.where(missing, 1.0, jnp.broadcast_to(sigma, observations.shape))
+    return gap, sig, float(np.sum(~np.asarray(missing)))
+
+
+def _build_masked_loss(loss_type, observations, sigma, missing):
+    """:func:`_build_loss` with the ``NaN`` (missing) entries left out: each
+    contributes exactly 0 to the value and to the gradient."""
+    gap, sig, n_kept = _masked_parts(loss_type, observations, sigma, missing)
+    if loss_type == "mse":
+        return lambda pred: jnp.sum(gap(pred) ** 2) / n_kept
+    if loss_type == "wmse":
+        return lambda pred: jnp.sum((gap(pred) / sig) ** 2) / n_kept
+    # sig is 1 at a missing entry, so its log-normalizer term is 0 there.
+    return lambda pred: jnp.sum(jnp.log(sig) + gap(pred) ** 2 / (2.0 * sig**2))
+
+
+def _build_masked_residual(loss_type, observations, sigma, missing):
+    """:func:`_build_residual` with zero residuals at the missing entries (so
+    they add nothing to the Gauss-Newton / Fisher Hessian)."""
+    gap, sig, n_kept = _masked_parts(loss_type, observations, sigma, missing)
+    if loss_type == "mse":
+        scale = jnp.sqrt(2.0 / n_kept)
+        return lambda pred: (scale * gap(pred)).reshape(-1)
+    if loss_type == "wmse":
+        scale = jnp.sqrt(2.0 / n_kept)
+        return lambda pred: (scale * gap(pred) / sig).reshape(-1)
+    return lambda pred: (gap(pred) / sig).reshape(-1)
+
+
+def _is_sigma_estimate(sigma) -> bool:
+    """Whether ``sigma`` asks for the concentrated likelihood."""
+    return isinstance(sigma, str) and sigma == "estimate"
+
+
+def _data_term(problem, preds):
+    """The summed data term of the objective over the datasets.
+
+    With a known (or no) ``sigma`` it is the sum of the per-dataset losses. For
+    the concentrated likelihood (``sigma="estimate"``) the per-output sums of
+    squares are pooled over the datasets and the noise level of output ``j`` is
+    profiled out at its maximum-likelihood value ``sigma_j^2 = SSE_j / N_j``,
+    which leaves ``sum_j (N_j / 2) log(SSE_j / N_j) + N / 2``: the ``"nll"``
+    loss evaluated at the estimated noise.
+    """
+    if not problem.sigma_estimate:
+        total = 0.0
+        for (_t, _ts, loss_fn_i, _r), pred in zip(problem.dataset_static, preds):
+            total = total + loss_fn_i(pred)
+        return total
+    sse = _pooled_sse(problem, preds)
+    n = problem.n_obs_per_output
+    return 0.5 * jnp.sum(n * jnp.log(sse / n)) + 0.5 * jnp.sum(n)
+
+
+def _pooled_sse(problem, preds):
+    """Per-output sum of squared residuals over all datasets (floored)."""
+    sse = 0.0
+    for (_t, _ts, sse_fn_i, _r), pred in zip(problem.dataset_static, preds):
+        sse = sse + sse_fn_i(pred)
+    return jnp.maximum(sse, _SSE_FLOOR)
 
 
 # --- Laplace covariance -----------------------------------------------
@@ -608,6 +761,11 @@ class CalibrationResult:
         covariance is conditional on them staying on the bound. A
         ``RuntimeWarning`` names them. Use :func:`aquakin.profile_likelihood`
         for a one-sided interval, or revisit the bound.
+    sigma_estimate : np.ndarray, optional
+        With ``loss="nll", sigma="estimate"``, the estimated noise standard
+        deviation of each observed output, ``sqrt(SSE_j / N_j)`` at the MAP
+        (pooled over the datasets), shape ``(n_observed,)``. ``None``
+        otherwise.
     """
 
     params: jnp.ndarray
@@ -632,6 +790,7 @@ class CalibrationResult:
     ic_fractions: list | None = None
     ic_fractions_std: list | None = None
     at_bound: dict[str, str] = field(default_factory=dict)
+    sigma_estimate: np.ndarray | None = None
 
     def posterior_draws(self, model, n_draw: int = 200, *, seed: int = 0) -> np.ndarray:
         """Full parameter vectors drawn from the Laplace posterior.
@@ -942,11 +1101,22 @@ class _CalibrationProblem:
     ic_center_full: jnp.ndarray
     ic_prior_log_std: float | None
     ic_bounds: tuple
-    # Optional observation function (C, params) -> y; replaces the species
-    # columns ``obs_species_indices`` when set.
+    # Optional observation function (C, params) -> y, or (t, C, params) -> y;
+    # replaces the species columns ``obs_species_indices`` when set.
     observation_fn: object = None
+    # Per-dataset observation times exactly as given, in ``t_obs``'s unit
+    # (``dataset_static`` holds them converted to the model's native unit): a
+    # time-aware ``observation_fn`` receives these, so ``t == t_obs[i]`` holds
+    # exactly whatever the unit conversion. Empty when not applicable.
+    obs_times: tuple = ()
+    # Concentrated likelihood (loss="nll", sigma="estimate"): the per-dataset
+    # loss returns per-output sums of squares, the residual raw residuals, and
+    # ``n_obs_per_output`` holds the observation count of each output.
+    sigma_estimate: bool = False
+    n_obs_per_output: object = None
     # Fingerprint of what the per-dataset loss / residual closures bake in (the
-    # loss type, observations, sigma and observation times), so a shared
+    # loss type, observations, sigma and observation times in both the native
+    # unit and ``t_obs``'s unit), so a shared
     # ``_compiled_cache`` cannot reuse an objective built for other data.
     data_key: tuple = ()
     # Absolute bounds on the rate block in unconstrained space, as ``(lb, ub)``
@@ -1018,6 +1188,7 @@ class _CalibrationProblem:
             self.n_observed,
             tuple(int(ds[0].shape[0]) for ds in self.dataset_static),
             self.observation_fn,
+            self.sigma_estimate,
             tuple(self.free_params),
             tuple(self.transforms),
             _array_digest(self.free_indices, self.obs_species_indices, self.ic_species_idx),
@@ -1059,24 +1230,87 @@ def _predict(problem: _CalibrationProblem, fm: _ReactorForwardModel, p, ic_theta
                 problem.ic_pools(ic_thetas[k * mt : (k + 1) * mt], C0_i)
             )
         ys = fm.solve_trajectory(p, C0_k, tspan_i, tobs_i)
-        preds.append(observe(ys, p, problem.obs_species_indices, problem.observation_fn))
+        t_user = problem.obs_times[k] if problem.obs_times else None
+        preds.append(observe(ys, p, problem.obs_species_indices, problem.observation_fn, t=t_user))
     return preds
 
 
-def observe(ys, p, species_idx, observation_fn=None):
+def observation_takes_time(observation_fn) -> bool:
+    """Whether ``observation_fn`` has the time-aware signature
+    ``(t, C, params)`` rather than ``(C, params)``.
+
+    The rule, on the positional parameters of the signature (those that can be
+    filled by position), is:
+
+    - exactly three of them *required* (no default): the time-aware form
+      ``observation_fn(t, C, params)``. A time-aware function must therefore
+      require all of ``t``, ``C`` and ``params``; further parameters may have
+      defaults.
+    - at most two required and at least two in all: the ``(C, params)`` form,
+      called as ``observation_fn(C, params)`` (so ``f(C, p=None)`` and
+      ``f(C, p, scale=2.0)`` are this form).
+    - a ``*args`` parameter, or a signature that cannot be inspected: the
+      ``(C, params)`` form.
+
+    Raises
+    ------
+    TypeError
+        If ``observation_fn`` is not callable, or its signature fits neither
+        form (fewer than two positional parameters, or more than three
+        required).
+    """
+    if not callable(observation_fn):
+        raise TypeError(
+            "observation_fn must be a callable (C, params) -> y or (t, C, params) -> y."
+        )
+    try:
+        sig = inspect.signature(observation_fn)
+    except (TypeError, ValueError):
+        return False  # no introspectable signature: the (C, params) form
+    params = list(sig.parameters.values())
+    if any(q.kind is inspect.Parameter.VAR_POSITIONAL for q in params):
+        return False
+    positional = [
+        q
+        for q in params
+        if q.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    n_req = sum(1 for q in positional if q.default is inspect.Parameter.empty)
+    if n_req == 3:
+        return True
+    if n_req <= 2 and len(positional) >= 2:
+        return False
+    raise TypeError(
+        "observation_fn must take (C, params), or require (t, C, params), as "
+        f"positional arguments; got a signature {sig}."
+    )
+
+
+def observe(ys, p, species_idx, observation_fn=None, t=None):
     """Observed outputs of a ``(n_t, n_species)`` trajectory: the
-    ``species_idx`` columns, or ``observation_fn(C, p)`` applied at each time."""
+    ``species_idx`` columns, or ``observation_fn`` applied at each time --
+    ``observation_fn(C, p)``, or ``observation_fn(t, C, p)`` with the sample
+    times ``t`` ``(n_t,)`` for a time-aware function."""
     if observation_fn is None:
         return ys[:, species_idx]
+    if observation_takes_time(observation_fn):
+        if t is None:
+            raise ValueError("A time-aware observation_fn(t, C, params) needs the sample times.")
+        return jax.vmap(lambda tt, c: jnp.atleast_1d(observation_fn(tt, c, p)))(
+            jnp.asarray(t, dtype=float), ys
+        )
     return jax.vmap(lambda c: jnp.atleast_1d(observation_fn(c, p)))(ys)
 
 
-def observation_size(observation_fn, C0, p) -> int:
+def observation_size(observation_fn, C0, p, t0: float = 0.0) -> int:
     """Number of outputs of ``observation_fn``, checked to be a 1-D vector
-    (or a scalar) on the model's state and parameter vectors."""
-    if not callable(observation_fn):
-        raise TypeError("observation_fn must be a callable (C, params) -> y.")
-    y = jnp.asarray(observation_fn(jnp.asarray(C0, dtype=float), jnp.asarray(p)))
+    (or a scalar) on the model's state and parameter vectors (and the time
+    ``t0`` for a time-aware function)."""
+    C0 = jnp.asarray(C0, dtype=float)
+    if observation_takes_time(observation_fn):
+        y = jnp.asarray(observation_fn(jnp.asarray(float(t0)), C0, jnp.asarray(p)))
+    else:
+        y = jnp.asarray(observation_fn(C0, jnp.asarray(p)))
     if y.ndim > 1:
         raise ValueError(
             f"observation_fn must return a scalar or 1-D vector per time point; got shape {y.shape}."
@@ -1134,9 +1368,13 @@ def _residual_parts(
     ic_center,
     *,
     include_ic_prior: bool,
+    sigma_hat=None,
 ):
     """The stacked residual vector whose ``0.5*||.||^2`` is the objective's
-    theta-dependent part. Shared by the Gauss-Newton fit (full theta,
+    theta-dependent part. For the concentrated likelihood
+    (``problem.sigma_estimate``) the raw residuals are divided by
+    ``sigma_hat`` (the current noise estimate per output), giving the
+    ``"nll"`` residual at that noise level. Shared by the Gauss-Newton fit (full theta,
     ``include_ic_prior=True``) and the Gauss-Newton Laplace Hessian (rate thetas
     only, pools fixed at the MAP, ``include_ic_prior=False`` -- the ic-prior block
     has zero Jacobian w.r.t. the rates). One source of truth keeps the two in
@@ -1147,7 +1385,10 @@ def _residual_parts(
     for (_t, _ts, _loss_i, resid_fn_i), pred in zip(
         problem.dataset_static, _predict(problem, fm, p, ic_thetas, C0s)
     ):
-        parts.append(resid_fn_i(pred))
+        r = resid_fn_i(pred)
+        if problem.sigma_estimate:
+            r = (r / sigma_hat).reshape(-1)
+        parts.append(r)
     if problem.has_priors:
         parts.append(problem.prior_mask * (physical - problem.prior_mean) / problem.prior_std)
     if include_ic_prior and problem.m_ic and problem.ic_prior_log_std:
@@ -1165,6 +1406,11 @@ class _ObjectiveBundle:
     res_j: object
     jac_j: object
     use_forward_jac: bool
+    # Concentrated likelihood only: ``sigma_hat_of(theta)`` is the noise
+    # estimate per output at ``theta``, and ``set_sigma_hat`` sets the noise
+    # level the Gauss-Newton residual / Jacobian are scaled by.
+    sigma_hat_of: object = None
+    set_sigma_hat: object = None
 
 
 def _build_objective(
@@ -1193,11 +1439,7 @@ def _build_objective(
         physical = problem.physical_from_theta(rate_thetas)
         p = p0_full_arg.at[problem.free_indices].set(physical)
         # Sum the data terms over every dataset (the batches share ``p``).
-        data_term = 0.0
-        for (_t, _ts, loss_fn_i, _r), pred in zip(
-            problem.dataset_static, _predict(problem, fm, p, ic_thetas, C0s)
-        ):
-            data_term = data_term + loss_fn_i(pred)
+        data_term = _data_term(problem, _predict(problem, fm, p, ic_thetas, C0s))
         if problem.has_priors:
             data_term = data_term + 0.5 * jnp.sum(
                 problem.prior_mask * ((physical - problem.prior_mean) / problem.prior_std) ** 2
@@ -1219,11 +1461,32 @@ def _build_objective(
     res_j = None
     jac_j = None
     use_forward = False
+    sigma_hat_of = set_sigma_hat = None
+    # The noise level the Gauss-Newton residual is scaled by under the
+    # concentrated likelihood: a runtime argument, so re-estimating it does not
+    # recompile. Unused (ones) otherwise.
+    sigma_box = [jnp.ones(problem.n_observed)]
+    if problem.sigma_estimate:
+
+        def _sigma_hat(theta, p0_full_arg, C0s, ic_center):
+            physical = problem.physical_from_theta(theta[: problem.n_rate])
+            p = p0_full_arg.at[problem.free_indices].set(physical)
+            preds = _predict(problem, fm, p, theta[problem.n_rate :], C0s)
+            return jnp.sqrt(_pooled_sse(problem, preds) / problem.n_obs_per_output)
+
+        _sig_core = _cached_jit(("sigma_hat",) + struct_key, lambda: jax.jit(_sigma_hat))
+
+        def sigma_hat_of(theta):
+            return _sig_core(jnp.asarray(theta), *data)
+
+        def set_sigma_hat(value):
+            sigma_box[0] = jnp.asarray(value)
+
     if cfg.optimizer == "gauss_newton":
         # Minimise the residual vector (0.5||r||^2 == the scalar objective) with
         # trust-region least-squares. The residual Jacobian is by forward-mode AD
         # if the reactor is forward-capable (DirectAdjoint), else reverse-mode.
-        def _full_residual(theta, p0_full_arg, C0s, ic_center):
+        def _full_residual(theta, p0_full_arg, C0s, ic_center, sigma_hat):
             return _residual_parts(
                 problem,
                 fm,
@@ -1233,6 +1496,7 @@ def _build_objective(
                 C0s,
                 ic_center,
                 include_ic_prior=True,
+                sigma_hat=sigma_hat,
             )
 
         # The stable adjoint is a reverse-only custom_vjp, so its residual
@@ -1243,15 +1507,17 @@ def _build_objective(
         _jac_core = _cached_jit(("gn_jac", use_forward) + struct_key, lambda: jax.jit(_jac))
 
         def _res_call(theta):
-            return _res_core(theta, *data)
+            return _res_core(theta, *data, sigma_box[0])
 
         def _jac_call(theta):
-            return _jac_core(theta, *data)
+            return _jac_core(theta, *data, sigma_box[0])
 
         res_j = _res_call
         jac_j = _jac_call
 
-    return _ObjectiveBundle(obj_value_and_grad, res_j, jac_j, use_forward)
+    return _ObjectiveBundle(
+        obj_value_and_grad, res_j, jac_j, use_forward, sigma_hat_of, set_sigma_hat
+    )
 
 
 def _optimizer_bounds(problem: _CalibrationProblem, rate_theta0):
@@ -1476,21 +1742,49 @@ def _run_multistart(
             return _OptOut(
                 np.asarray(r.x), float(r.fun), bool(r.success), str(r.message), int(r.nit)
             )
-        r = least_squares(
-            lambda x: np.asarray(bundle.res_j(jnp.asarray(x)), dtype=float),
-            np.asarray(x_start),
-            jac=lambda x: np.asarray(bundle.jac_j(jnp.asarray(x)), dtype=float),
-            method="trf",
-            bounds=ls_bounds,
-            max_nfev=cfg.max_iter,
-            xtol=cfg.tol,
-            ftol=cfg.tol,
-        )
-        # ``n_iter`` reports optimiser ITERATIONS, consistent with L-BFGS-B's
-        # ``nit``. scipy.least_squares exposes no iteration count, so use the
-        # Jacobian-evaluation count ``njev`` (~one per trust-region iteration).
-        n_iter_ls = int(r.njev) if r.njev is not None else int(r.nfev)
-        return _OptOut(np.asarray(r.x), float(r.cost), bool(r.success), str(r.message), n_iter_ls)
+
+        def _lsq(x0):
+            r = least_squares(
+                lambda x: np.asarray(bundle.res_j(jnp.asarray(x)), dtype=float),
+                np.asarray(x0),
+                jac=lambda x: np.asarray(bundle.jac_j(jnp.asarray(x)), dtype=float),
+                method="trf",
+                bounds=ls_bounds,
+                max_nfev=cfg.max_iter,
+                xtol=cfg.tol,
+                ftol=cfg.tol,
+            )
+            # ``n_iter`` reports optimiser ITERATIONS, consistent with L-BFGS-B's
+            # ``nit``. scipy.least_squares exposes no iteration count, so use the
+            # Jacobian-evaluation count ``njev`` (~one per trust-region iteration).
+            return r, int(r.njev) if r.njev is not None else int(r.nfev)
+
+        if bundle.sigma_hat_of is None:
+            r, n_iter_ls = _lsq(x_start)
+            return _OptOut(
+                np.asarray(r.x), float(r.cost), bool(r.success), str(r.message), n_iter_ls
+            )
+        # Concentrated likelihood: alternate a least-squares solve at a fixed
+        # noise level with re-estimating it from the residuals. At the fixed
+        # point the weighted-least-squares gradient equals the gradient of the
+        # concentrated objective, so this is a stationary point of it.
+        x = np.asarray(x_start, dtype=float)
+        sig = np.asarray(bundle.sigma_hat_of(x))
+        n_iter_total, converged = 0, False
+        for _ in range(_IRLS_MAX_ITER):
+            bundle.set_sigma_hat(sig)
+            r, n_it = _lsq(x)
+            n_iter_total += n_it
+            x = np.asarray(r.x)
+            sig_new = np.asarray(bundle.sigma_hat_of(x))
+            converged = bool(np.max(np.abs(sig_new / sig - 1.0)) <= max(cfg.tol, 1e-12))
+            sig = sig_new
+            if converged:
+                break
+        bundle.set_sigma_hat(sig)
+        message = str(r.message) if converged else "noise re-estimation did not converge"
+        fun = float(bundle.value_and_grad(jnp.asarray(x))[0])
+        return _OptOut(x, fun, bool(r.success) and converged, message, n_iter_total)
 
     failures = []  # (start index, exception) of starts whose solve failed
 
@@ -1635,9 +1929,16 @@ def _laplace_posterior(
     cfg: _FitConfig,
     rate_theta_opt,
     ic_opt,
+    sigma_hat_at_map=None,
     at_bound_mask=None,
 ) -> _LaplaceOut:
     """Laplace covariance at the MAP.
+
+    For the concentrated likelihood (``loss="nll", sigma="estimate"``) the
+    Gauss-Newton Hessian is the Fisher information with the noise estimate
+    ``sigma_hat_at_map`` plugged in, ``sum_j J_j^T J_j / sigma_j^2``; the FD
+    Hessian is that of the concentrated objective itself, which also carries
+    the (asymptotically small) curvature from estimating the noise.
 
     By default the Hessian is over the rate parameters only, with the fitted
     initial pools held at their MAP. With ``cfg.laplace_include_ic`` (and fitted
@@ -1668,6 +1969,10 @@ def _laplace_posterior(
         # loss='nll' this is the exact Fisher information (PSD by construction).
         # The ic-prior residual depends on the pools only, so it enters the
         # joint Hessian and is omitted (zero Jacobian) in the rate-only one.
+        sigma_hat = sigma_hat_at_map
+        if problem.sigma_estimate and sigma_hat is None:
+            raise ValueError("The concentrated-likelihood Laplace needs the noise estimate.")
+
         def _residual_vec(theta):
             rate_thetas, ic_thetas = _split(theta)
             return _residual_parts(
@@ -1679,6 +1984,7 @@ def _laplace_posterior(
                 problem.C0_base,
                 problem.ic_center_full,
                 include_ic_prior=joint,
+                sigma_hat=sigma_hat,
             )
 
         use_fwd = _forward_jac(cfg, fm_lap)
@@ -1690,12 +1996,7 @@ def _laplace_posterior(
             rate_thetas, ic_thetas = _split(theta)
             physical = problem.physical_from_theta(rate_thetas)
             p = problem.p0_full.at[problem.free_indices].set(physical)
-            total = 0.0
-            for (_t, _ts, loss_fn_i, _r), pred in zip(
-                problem.dataset_static,
-                _predict(problem, fm_lap, p, ic_thetas, problem.C0_base),
-            ):
-                total = total + loss_fn_i(pred)
+            total = _data_term(problem, _predict(problem, fm_lap, p, ic_thetas, problem.C0_base))
             if problem.has_priors:
                 total = total + 0.5 * jnp.sum(
                     problem.prior_mask * ((physical - problem.prior_mean) / problem.prior_std) ** 2
@@ -1877,6 +2178,13 @@ def _resolve_problem(
             raise ValueError(
                 f"sigma list has {len(sigma_list)} entries but there are {n_datasets} datasets."
             )
+        if any(isinstance(s, str) for s in sigma_list):
+            # The concentrated likelihood pools the residuals of every dataset,
+            # so it cannot be switched on for some datasets only.
+            raise ValueError(
+                'sigma="estimate" applies to every dataset; pass it as sigma="estimate", '
+                "not as an entry of a per-dataset sigma list."
+            )
     else:
         sigma_list = [sigma] * n_datasets
 
@@ -1884,7 +2192,9 @@ def _resolve_problem(
         if observed_species is not None:
             raise ValueError("Pass observed_species or observation_fn, not both.")
         obs_species_indices = jnp.arange(model.n_species)
-        n_observed = observation_size(observation_fn, C0_list[0], p0_full)
+        n_observed = observation_size(
+            observation_fn, C0_list[0], p0_full, t0=float(np.asarray(tobs_list[0]).reshape(-1)[0])
+        )
         what = "outputs were returned by observation_fn"
     elif observed_species is None:
         obs_species_indices = jnp.arange(model.n_species)
@@ -1897,7 +2207,9 @@ def _resolve_problem(
 
     # Validate each dataset and build its (C0, t_eval, t_span, loss) tuple.
     datasets = []
+    tobs_user = []
     digest_parts = []
+    n_seen_per_output = np.zeros(n_observed, dtype=int)  # observed (non-NaN) entries
     for ds, (C0_i, obs_i, tobs_i, sig_i) in enumerate(
         zip(C0_list, obs_list, tobs_list, sigma_list)
     ):
@@ -1912,11 +2224,21 @@ def _resolve_problem(
         if tobs_i.shape[0] > 1 and not bool(jnp.all(jnp.diff(tobs_i) > 0)):
             raise ValueError(f"dataset {ds}: t_obs must be strictly ascending.")
         # Convert this dataset's t_obs into the model's native (rate-constant)
-        # time unit, the same way reactor.solve(time_unit=...) does.
+        # time unit, the same way reactor.solve(time_unit=...) does. The times
+        # as given are kept for a time-aware observation_fn: dividing the
+        # native times by the factor again need not return them exactly.
+        tobs_user.append(tobs_i)
         tobs_i = tobs_i * native_time_factor(model.time_unit, time_unit)
         obs_i = jnp.asarray(obs_i)
         if obs_i.ndim == 1:
             obs_i = obs_i[:, None]
+        obs_np = np.asarray(obs_i, dtype=float)
+        if np.isinf(obs_np).any():
+            raise ValueError(
+                f"dataset {ds}: observations contain inf; mark a missing value with NaN."
+            )
+        if np.isnan(obs_np).all():
+            raise ValueError(f"dataset {ds}: every observation is missing (NaN).")
         if obs_i.shape[0] != tobs_i.shape[0]:
             raise ValueError(
                 f"dataset {ds}: observations has {obs_i.shape[0]} rows but t_obs "
@@ -1926,8 +2248,14 @@ def _resolve_problem(
             raise ValueError(
                 f"dataset {ds}: observations has {obs_i.shape[1]} columns but {n_observed} {what}."
             )
-        sig_arr = jnp.asarray(sig_i) if sig_i is not None else None
-        digest_parts += [obs_i, sig_arr, tobs_i]
+        n_seen_per_output += np.sum(~np.isnan(obs_np), axis=0)
+        if _is_sigma_estimate(sig_i):
+            sig_arr = "estimate"
+        elif isinstance(sig_i, str):
+            raise ValueError(f'sigma must be an array, None or "estimate"; got {sig_i!r}.')
+        else:
+            sig_arr = jnp.asarray(sig_i) if sig_i is not None else None
+        digest_parts += [obs_i, sig_arr, tobs_i, tobs_user[-1]]
         datasets.append(
             (
                 C0_i,
@@ -1993,6 +2321,17 @@ def _resolve_problem(
                 ic_center_blocks.append(np.log(np.clip(pools, ic_lo, ic_hi)))
     ic_center_full = jnp.asarray(np.concatenate(ic_center_blocks)) if m_ic else jnp.zeros(0)
 
+    sigma_estimate = _is_sigma_estimate(sigma)
+    n_obs_per_output = None
+    if sigma_estimate:
+        # Each output's noise is estimated from its observed (non-NaN) entries.
+        unseen = np.flatnonzero(n_seen_per_output == 0)
+        if unseen.size:
+            raise ValueError(
+                f'sigma="estimate" needs at least one observation of every output; '
+                f"output(s) {unseen.tolist()} are missing (NaN) in every dataset."
+            )
+        n_obs_per_output = jnp.asarray(n_seen_per_output, dtype=float)
     rate_bounds = _resolve_rate_bounds(
         model, free_params, resolved_transforms, bounds, use_model_bounds
     )
@@ -2029,10 +2368,22 @@ def _resolve_problem(
         ic_prior_log_std=ic_prior_log_std,
         ic_bounds=ic_bounds,
         observation_fn=observation_fn,
+        obs_times=tuple(tobs_user),
+        sigma_estimate=sigma_estimate,
+        n_obs_per_output=n_obs_per_output,
         ic_fixed_total=ic_fixed_total,
         data_key=(loss, _array_digest(*digest_parts)),
         rate_bounds=rate_bounds,
     )
+
+
+def _noise_estimate(problem: _CalibrationProblem, fm, theta):
+    """``sqrt(SSE_j / N_j)`` per output at ``theta`` (concentrated likelihood)."""
+    theta = jnp.asarray(theta)
+    physical = problem.physical_from_theta(theta[: problem.n_rate])
+    p = problem.p0_full.at[problem.free_indices].set(physical)
+    preds = _predict(problem, fm, p, theta[problem.n_rate :], problem.C0_base)
+    return jnp.sqrt(_pooled_sse(problem, preds) / problem.n_obs_per_output)
 
 
 def _bound_to_unconstrained(value, transform: str, side: str) -> float:
@@ -2127,7 +2478,11 @@ def calibrate(
     observations : jnp.ndarray or list of jnp.ndarray
         Observed values, shape ``(n_t,)`` for a single species or
         ``(n_t, n_observed)``. In multi-batch mode, a list of such arrays (one
-        per dataset; the datasets may have different ``n_t``).
+        per dataset; the datasets may have different ``n_t``). A ``NaN`` entry
+        is a missing observation: it is left out of the loss and the Laplace
+        Hessian, so outputs measured at different times can share one
+        ``t_obs`` grid (``"mse"`` / ``"wmse"`` then average over the observed
+        entries only).
     t_obs : jnp.ndarray or list of jnp.ndarray
         Observation times, shape ``(n_t,)``. ``C0`` is taken at ``t=0``;
         the solver integrates from ``0`` to ``t_obs[-1]``. In multi-batch mode,
@@ -2151,7 +2506,15 @@ def calibrate(
         point's concentration vector ``(n_species,)`` and the full parameter
         vector to the observed outputs, a scalar or ``(n_outputs,)``. It must be
         written with ``jax.numpy`` so it can be differentiated. The columns of
-        ``observations`` (and a per-output ``sigma``) follow its outputs.
+        ``observations`` (and a per-output ``sigma``) follow its outputs. A
+        function with three required positional arguments,
+        ``observation_fn(t, C, params)``, also receives the sample time ``t``
+        (a scalar, in the unit of ``t_obs``), for a measurement whose mapping
+        changes with time, such as a sensor drift or a time-varying dilution.
+        ``t`` is the entry of ``t_obs`` itself, exactly as given. A function
+        with exactly three required positional arguments is the time-aware
+        form; one that can be called with two (``f(C, params=None)`` or
+        ``f(C, params, scale=1.0)``, say) is the ``(C, params)`` form.
     time_unit : str, optional
         The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
         ``"d"``), matching :meth:`BatchReactor.solve`. Every dataset's ``t_obs``
@@ -2163,11 +2526,31 @@ def calibrate(
         fitted rate constants are always in native units.
     loss : {"mse", "wmse", "nll"}, optional
         Loss function.
-    sigma : jnp.ndarray, optional
+    sigma : jnp.ndarray or "estimate", optional
         Per-observation standard deviation for ``"wmse"`` / ``"nll"``.
         Scalar, ``(n_observed,)``, or ``(n_t, n_observed)``. In multi-batch
         mode, either a single value/array shared across datasets or a list with
         one entry per dataset.
+
+        With ``loss="nll"``, ``sigma="estimate"`` estimates an unknown noise
+        level instead: the concentrated (profile) likelihood. The noise std of
+        each observed output is profiled out at its maximum-likelihood value
+        ``sigma_j^2 = SSE_j / N_j`` (``SSE_j`` the sum of squared residuals of
+        output ``j``, pooled over the datasets, ``N_j`` its number of observed,
+        non-``NaN`` entries), which leaves the objective
+        ``sum_j (N_j / 2) log(SSE_j / N_j) + N / 2`` -- the ``"nll"`` loss at the
+        estimated noise. The estimate is returned as
+        ``CalibrationResult.sigma_estimate``. It covers every dataset, so
+        pass it as ``sigma="estimate"``, not inside a per-dataset list. The
+        Gauss-Newton Laplace
+        covariance is the Fisher information with the estimate plugged in (the
+        usual ``sigma^2 (J^T J)^{-1}``); the finite-difference one is the
+        curvature of the concentrated objective. For a profile likelihood of
+        the concentrated objective the likelihood-ratio threshold is unchanged
+        (1.92 for 95 %); with one output the profile rise is
+        ``(N / 2) log(SSE / SSE_min)``. With ``optimizer="gauss_newton"`` the
+        fit alternates least-squares solves at a fixed noise level with
+        re-estimating it, to a stationary point of the concentrated objective.
     priors : dict[str, tuple[float, float]], optional
         Gaussian priors as ``name -> (mean, std)`` in physical space, added to
         the objective as ``0.5 * sum(((p - mean) / std) ** 2)``. Overrides any
@@ -2266,6 +2649,14 @@ def calibrate(
         raise ValueError("free_params must be non-empty.")
     if loss not in _VALID_LOSSES:
         raise ValueError(f"loss must be one of {_VALID_LOSSES}; got {loss!r}.")
+    if isinstance(sigma, str):
+        if not _is_sigma_estimate(sigma):
+            raise ValueError(f'sigma must be an array, None or "estimate"; got {sigma!r}.')
+        if loss != "nll":
+            raise ValueError(
+                'sigma="estimate" (the concentrated likelihood) requires loss="nll"; '
+                f"got loss={loss!r}."
+            )
     if optimizer.n_starts < 1:
         raise ValueError(f"optimizer.n_starts must be >= 1; got {optimizer.n_starts}.")
     if optimizer.starts is not None and optimizer.n_starts > 1:
@@ -2413,11 +2804,24 @@ def calibrate(
             stacklevel=2,
         )
 
+    # Concentrated likelihood: the noise level of each output at the MAP.
+    sigma_hat = None
+    if problem.sigma_estimate:
+        sigma_hat = np.asarray(_noise_estimate(problem, fm, theta_opt))
+
     # --- Laplace posterior ---
     # Rate-only by default (pools held at the MAP); joint rate + pool with
     # LaplaceConfig(include_ic=True).
     laplace_out = (
-        _laplace_posterior(problem, fm, cfg, rate_theta_opt, ic_opt, at_bound_mask=sides != "")
+        _laplace_posterior(
+            problem,
+            fm,
+            cfg,
+            rate_theta_opt,
+            ic_opt,
+            sigma_hat_at_map=sigma_hat,
+            at_bound_mask=sides != "",
+        )
         if cfg.laplace
         else _LaplaceOut(*[None] * len(_LaplaceOut._fields))
     )
@@ -2440,6 +2844,7 @@ def calibrate(
         priors_applied=dict(problem.active_priors),
         C0_fitted=C0_fitted,
         ic_named=ic_named,
+        sigma_estimate=sigma_hat,
         ic_fractions=ic_fractions,
         at_bound=at_bound,
     )
