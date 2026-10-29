@@ -651,3 +651,39 @@ def test_plant_calibrate_start_list_validation(decay_plant):
     for opt, msg in bad:
         with pytest.raises(ValueError, match=msg):
             plant.calibrate(obs, t_obs, [PARAM], optimizer=opt, **kw)
+
+
+def test_plant_calibrate_start_list_reaches_the_optimiser(decay_plant, monkeypatch):
+    """A valid start list is resolved (dict and full-vector starts, by plant
+    parameter name) and handed to the multistart runner, the first entry being
+    the starting point. The runner is stubbed out, so no plant solve runs (the
+    slow test above checks the fit itself)."""
+    import aquakin.plant.calibrate as plant_cal
+
+    net, plant = decay_plant
+    base = plant.default_parameters()
+    gidx = plant.parameter_index(PARAM)
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _capture(cfg, bundle, theta0, opt_bounds, starts=None):
+        seen.update(theta0=np.asarray(theta0), starts=[np.asarray(s) for s in starts])
+        raise _Stop
+
+    monkeypatch.setattr(plant_cal, "_run_multistart", _capture)
+    with pytest.raises(_Stop):
+        plant.calibrate(
+            jnp.zeros(5),
+            jnp.linspace(1.0, 20.0, 5),
+            [PARAM],
+            target="tank",
+            observed_channels=["B"],
+            transforms={PARAM: "positive_log"},
+            check_finite=False,
+            optimizer=OptimizerConfig(starts=[base.at[gidx].set(0.02), {PARAM: 0.5}]),
+        )
+    # Unconstrained (log) coordinates of the two starts, in list order.
+    np.testing.assert_allclose([s[0] for s in seen["starts"]], np.log([0.02, 0.5]))
+    np.testing.assert_array_equal(seen["theta0"], seen["starts"][0])
