@@ -19,7 +19,7 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ## [Unreleased]
 
-## [0.1.1] - unreleased
+## [0.2.0] - unreleased
 
 ### Added
 
@@ -195,6 +195,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `fallback_kwargs` (they used to raise `TypeError`) and reports the scaled
   `residual` of its result (it used to be `None`). It stops on the same test
   as the fallback without `design`.
+- `Plant.steady_state(design=...)` now warns when it skips a requested
+  `continuation_from` (and arclength) fallback. Those rungs deform the
+  parameter vector alone and cannot carry design overrides, so they were
+  already skipped when the direct solve failed to converge, but silently. The
+  `UserWarning` names the skipped option(s); results are unchanged.
 - The BSM docstrings now say which benchmark convention the indices follow.
   `evaluate_bsm1` / `BSM1Evaluation` give the **updated** BSM1 EQI and OCI
   (Alex et al. 2008: EQI nitrogen weights 30 / 10, AE = S_sat·V·kLa / 1800,
@@ -434,6 +439,6 @@ functions integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
   sensitivity & calibration), the YAML model-authoring reference, a catalog of
   every shipped model, and an API reference generated from the public surface.
 
-[Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.0...v0.1.1
+[Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DeGrootResearchGroup/aquakin/releases/tag/v0.1.0

@@ -575,7 +575,7 @@ has 120 states = 10 TSS + 10×10 solubles + 10 temperature). `"per_species"`
 (per-layer composition memory) has no reference counterpart. `build_bsm2` and
 `build_bsm1` both default to the reference (`"lumped_tss"` with
 `soluble_holdup=True`); `build_bsm2` defaulted to `"per_species"` without holdup
-before v0.1.1. Earlier docs said `per_species` "matches settler1dv5"; it
+before v0.2.0. Earlier docs said `per_species` "matches settler1dv5"; it
 does not. The soluble holdup is a tail block of shape
 `(n_layers, n_soluble)` appended to the state (so the particulate layout /
 `state_size` are unchanged when off), orthogonal to `composition_mode`. **It

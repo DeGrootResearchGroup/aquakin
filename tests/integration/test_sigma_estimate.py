@@ -182,3 +182,88 @@ def test_profile_likelihood_on_concentrated_objective(noisy):
     lo, hi = prof.ci
     assert lo is not None and hi is not None
     assert lo < 1.0 < hi
+
+
+# --- NaN-masked observations with sigma="estimate" (#615) ---
+
+
+def _masked(obs_ab):
+    """Two outputs with different missing entries: A loses every third
+    sample, B its first 50 and every seventh."""
+    obs = np.array(obs_ab)
+    idx = np.arange(obs.shape[0])
+    obs[idx % 3 == 0, 0] = np.nan
+    obs[(idx < 50) | (idx % 7 == 0), 1] = np.nan
+    return jnp.asarray(obs)
+
+
+def _observed_sse(reactor, C0, obs, k):
+    """Per-output sum of squares over the observed entries, and their count."""
+    p = reactor.model.default_parameters().at[0].set(k)
+    sol = reactor.solve(C0, params=p, t_span=(0.0, 10.0), t_eval=T_OBS)
+    pred = np.stack([np.asarray(sol.C_named("A")), np.asarray(sol.C_named("B"))], axis=1)
+    resid = pred - np.asarray(obs)
+    seen = ~np.isnan(resid)
+    return np.where(seen, resid, 0.0).sum(axis=0) * 0 + np.sum(
+        np.where(seen, resid, 0.0) ** 2, axis=0
+    ), seen.sum(axis=0)
+
+
+@pytest.mark.parametrize("method", ["lbfgsb", "gauss_newton"])
+def test_sigma_estimate_with_masked_observations_counts_observed_entries(noisy, method):
+    """With a different NaN mask per output, each noise estimate is
+    sqrt(SSE_j / N_j) over the observed entries of output j only, and the
+    reported loss is the nll at those estimates."""
+    reactor, C0, _, obs_ab = noisy
+    obs = _masked(obs_ab)
+    est = aquakin.calibrate(
+        reactor,
+        C0,
+        obs,
+        T_OBS,
+        observed_species=["A", "B"],
+        loss="nll",
+        sigma="estimate",
+        optimizer=OptimizerConfig(method=method),
+        laplace=False,
+        **_KW,
+    )
+    sse, n = _observed_sse(reactor, C0, obs, est.params_named["A_to_B.k"])
+    assert n.tolist() != [obs.shape[0]] * 2 and n[0] != n[1]
+    np.testing.assert_allclose(est.sigma_estimate, np.sqrt(sse / n), rtol=1e-5)
+    assert est.sigma_estimate[0] == pytest.approx(SIGMA_A, rel=0.2)
+    assert est.sigma_estimate[1] == pytest.approx(SIGMA_B, rel=0.2)
+    expected = float(np.sum(n * np.log(est.sigma_estimate)) + 0.5 * np.sum(n))
+    assert est.loss == pytest.approx(expected, rel=1e-6)
+
+
+def test_profile_likelihood_with_masked_observations_uses_observed_counts(noisy):
+    """The profile of the concentrated nll on masked data rises by
+    sum_j (N_j / 2) log(SSE_j / SSE_j,min), with N_j the observed entries of
+    output j, read against the usual 1.92 threshold."""
+    reactor, C0, _, obs_ab = noisy
+    obs = _masked(obs_ab)
+    prof = aquakin.profile_likelihood(
+        reactor,
+        C0,
+        obs,
+        T_OBS,
+        ["A_to_B.k"],
+        grid=np.linspace(0.97, 1.03, 7),
+        profile_ic="A",
+        observed_species=["A", "B"],
+        loss="nll",
+        sigma="estimate",
+        optimizer=OptimizerConfig(n_starts=1),
+        polish=False,
+    )
+    n = np.sum(~np.isnan(np.asarray(obs)), axis=0)
+    i_min = int(np.nanargmin(prof.loss))
+    sse_min = n * np.asarray(prof.fits[i_min].sigma_estimate) ** 2
+    for f, dl in zip(prof.fits, prof.delta_loss):
+        sse = n * np.asarray(f.sigma_estimate) ** 2
+        assert dl == pytest.approx(float(np.sum(0.5 * n * np.log(sse / sse_min))), abs=1e-6)
+    assert prof.delta == pytest.approx(1.92)
+    lo, hi = prof.ci
+    assert lo is not None and hi is not None
+    assert lo < 1.0 < hi

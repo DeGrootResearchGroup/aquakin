@@ -496,15 +496,33 @@ def test_steady_state_design_forward_fallback_rejects_bad_criterion():
                            fallback_kwargs={"criterion": "bogus"})
 
 
-def test_steady_state_design_skips_parameter_continuation():
+@pytest.mark.parametrize("arclength, named", [
+    (True, "continuation_from and arclength"),
+    (False, "continuation_from fallback"),
+], ids=["arclength", "no_arclength"])
+def test_steady_state_design_skips_parameter_continuation(arclength, named):
     # The continuation rungs deform in params alone; with a design override
-    # they are skipped (rather than crashing on the (params, design) pytree).
+    # they are skipped (rather than crashing on the (params, design) pytree),
+    # and the explicit request is reported rather than dropped silently.
     plant, design = _design_cstr()
     p = plant.default_parameters()
-    ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, fallback=False,
-                            continuation_from=(p, jnp.asarray([0.5, 0.5])))
+    with pytest.warns(UserWarning, match=named):
+        ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, fallback=False,
+                                continuation_from=(p, jnp.asarray([0.5, 0.5])),
+                                arclength=arclength)
     assert ss.method == "ptc"
     assert not bool(ss.converged)
+
+
+def test_steady_state_design_no_skip_warning_without_continuation():
+    # A caller who did not ask for continuation is not warned, even with the
+    # default arclength=True (that rung needs continuation_from anyway).
+    import warnings
+    plant, design = _design_cstr()
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=r"steady_state\(design=")
+        ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, fallback=False)
+    assert ss.method == "ptc"
 
 
 @pytest.mark.slow
@@ -518,7 +536,7 @@ def test_bsm2_steady_state_matches_forward():
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
     # Pinned to the per-species settler without soluble holdup (build_bsm2's
-    # default before v0.1.1): this checks the PTC solver itself. With the
+    # default before v0.2.0): this checks the PTC solver itself. With the
     # default reference settler (lumped TSS + holdup) BSM2 PTC is near its
     # iteration cap and platform-sensitive -- 97 iterations on macOS, past 400
     # on Linux CI -- and then falls back to forward integration (issue #627).
@@ -586,7 +604,7 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
     # Pinned to the per-species settler without soluble holdup (build_bsm2's
-    # default before v0.1.1): this checks the PTC solver itself. With the
+    # default before v0.2.0): this checks the PTC solver itself. With the
     # default reference settler (lumped TSS + holdup) BSM2 PTC is near its
     # iteration cap and platform-sensitive -- 97 iterations on macOS, past 400
     # on Linux CI -- and then falls back to forward integration (issue #627).
