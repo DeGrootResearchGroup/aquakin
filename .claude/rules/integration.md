@@ -87,10 +87,20 @@ pools by `problem.ic_pools` / `_simplex_pools` with the total read from the
 runtime `C0`, and `_FisherSetup` mirrors it; `_optimizer_bounds` gives the
 per-pool log bounds to the IC dims, or leaves them open for a split, so
 `_at_bound_sides` flags a pool on its own bound and never a log-ratio; the
-plant path calls `_free_ic_fields` without `extended=True`, so it rejects both
-until it is taught them; `profile_likelihood` drops the profiled species from a
+coordinate setup is `_resolve_ic_coords`, shared with the plant resolver, so
+`Plant.calibrate` supports both; `profile_likelihood` drops the profiled species from a
 bounds dict and refuses to profile a pool of a split). `calibrate`
-unpacks them into the internal `_FitConfig` / `_resolve_problem` scalars; the
+unpacks them into the internal `_FitConfig` / `_resolve_problem` scalars. The
+argument checks and result assembly that do not depend on the forward model are
+shared helpers that `Plant.calibrate` calls too: `_check_sigma_arg` /
+`_sigma_per_dataset` / `_coerce_sigma` / `_observed_counts` /
+`_n_obs_per_output` (the `sigma` and missing-data checks, and the concentrated
+likelihood's per-output counts), `_resolve_rate_bounds` (fed by
+`_PlantParamNamespace.parameter_bounds` for a plant), `_initial_point` (bounds,
+start clipping, the explicit start list) and `_fit_result` (fitted pools,
+`at_bound` + warning, `sigma_estimate`, the Laplace posterior with
+`at_bound_mask`, the `CalibrationResult`). Change them, not a copy, so the two
+entry points cannot drift. The
 same three configs serve `profile_likelihood`. Below that, the body is decomposed
 ([`integrate/calibrate.py`](aquakin/integrate/calibrate.py)). The argument
 handling is resolved **once** into a `_CalibrationProblem` dataclass (datasets,

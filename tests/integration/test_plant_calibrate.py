@@ -512,12 +512,27 @@ def test_plant_calibrate_rejects_empty_free_params(decay_plant):
         plant.calibrate(jnp.zeros(3), jnp.array([1.0, 2.0, 3.0]), [], target="tank")
 
 
-@pytest.mark.parametrize("sigma", ["estimate", ["estimate"]])
-def test_plant_calibrate_rejects_sigma_estimate(decay_plant, sigma):
+@pytest.mark.parametrize(
+    "sigma, loss, match",
+    [
+        ("estimate", "mse", 'requires loss="nll"'),
+        ("bogus", "nll", 'sigma must be an array, None or "estimate"'),
+        (["estimate"], "nll", "applies to every dataset"),
+    ],
+)
+def test_plant_calibrate_sigma_estimate_validation(decay_plant, sigma, loss, match):
+    """sigma="estimate" goes through the same checks as aquakin.calibrate: it
+    needs loss="nll" and cannot be an entry of a per-dataset sigma list."""
     net, plant = decay_plant
-    with pytest.raises(NotImplementedError, match='sigma="estimate" yet'):
+    with pytest.raises(ValueError, match=match):
         plant.calibrate(
-            jnp.zeros(3), jnp.array([1.0, 2.0, 3.0]), [PARAM], target="tank", sigma=sigma
+            jnp.zeros(3),
+            jnp.array([1.0, 2.0, 3.0]),
+            [PARAM],
+            target="tank",
+            observed_channels=["B"],
+            loss=loss,
+            sigma=sigma,
         )
 
 
@@ -687,3 +702,276 @@ def test_plant_calibrate_start_list_reaches_the_optimiser(decay_plant, monkeypat
     # Unconstrained (log) coordinates of the two starts, in list order.
     np.testing.assert_allclose([s[0] for s in seen["starts"]], np.log([0.02, 0.5]))
     np.testing.assert_array_equal(seen["theta0"], seen["starts"][0])
+
+
+# --- Shared bounds / at_bound / free-IC / sigma="estimate" wiring (#614) ---
+#
+# These pin what Plant.calibrate hands to the shared machinery without running a
+# fit: the objective builder or the multistart runner is stubbed to record its
+# arguments and stop. The slow tests below run the real fits.
+
+
+class _Stop(Exception):
+    pass
+
+
+def _capture_problem(monkeypatch, **kw):
+    """Run plant.calibrate up to the objective build and return the resolved
+    ``_CalibrationProblem`` (no plant solve runs)."""
+    import aquakin.plant.calibrate as plant_cal
+
+    seen = {}
+
+    def _stub(problem, fm, cfg):
+        seen["problem"] = problem
+        raise _Stop
+
+    # A scoped stub, so the two capture helpers can be used in one test.
+    with monkeypatch.context() as m, pytest.raises(_Stop):
+        m.setattr(plant_cal, "_build_objective", _stub)
+        kw.pop("plant").calibrate(**kw)
+    return seen["problem"]
+
+
+def _capture_start(monkeypatch, **kw):
+    """Run plant.calibrate up to the multistart runner and return its
+    ``(theta0, opt_bounds, starts)`` (the objective is built, not evaluated)."""
+    import aquakin.plant.calibrate as plant_cal
+
+    seen = {}
+
+    def _stub(cfg, bundle, theta0, opt_bounds, starts=None):
+        seen.update(theta0=np.asarray(theta0), opt_bounds=opt_bounds, starts=starts)
+        raise _Stop
+
+    # A scoped stub, so the two capture helpers can be used in one test.
+    with monkeypatch.context() as m, pytest.raises(_Stop):
+        m.setattr(plant_cal, "_run_multistart", _stub)
+        kw.pop("plant").calibrate(check_finite=False, **kw)
+    return seen
+
+
+def _fit_args(plant, **kw):
+    out = dict(
+        plant=plant,
+        observations=jnp.ones((3, 1)),
+        t_obs=jnp.array([1.0, 2.0, 3.0]),
+        free_params=[PARAM],
+        target="tank",
+        observed_channels=["B"],
+        transforms={PARAM: "positive_log"},
+    )
+    out.update(kw)
+    return out
+
+
+def test_plant_param_namespace_reads_model_bounds(decay_plant, monkeypatch):
+    """The model-declared bounds of each plant parameter are exposed by name;
+    a parameter its model leaves unbounded has no entry."""
+    from aquakin.plant.calibrate import _PlantParamNamespace
+
+    net, plant = decay_plant
+    ns = _PlantParamNamespace(plant)
+    assert ns.parameter_bounds[PARAM] == tuple(net.parameter_bounds["A_to_B.k"])
+    monkeypatch.delitem(net.parameter_bounds, "A_to_B.k")
+    assert PARAM not in _PlantParamNamespace(plant).parameter_bounds
+
+
+def test_plant_calibrate_applies_model_and_explicit_bounds(decay_plant, monkeypatch):
+    """The plant fit honours the model-declared bounds by default,
+    OptimizerConfig(bounds=) overrides them, use_model_bounds=False drops them,
+    and param_halfwidth intersects a box around the start."""
+    net, plant = decay_plant
+    lo, hi = net.parameter_bounds["A_to_B.k"]
+
+    def _rate_box(opt):
+        _b, lb, ub, _ls, _has = _capture_start(monkeypatch, **_fit_args(plant, optimizer=opt))[
+            "opt_bounds"
+        ]
+        return lb[0], ub[0]
+
+    np.testing.assert_allclose(_rate_box(OptimizerConfig()), np.log([lo, hi]))
+    np.testing.assert_allclose(
+        _rate_box(OptimizerConfig(bounds={PARAM: (0.05, 0.5)})), np.log([0.05, 0.5])
+    )
+    assert _rate_box(OptimizerConfig(use_model_bounds=False)) == (-np.inf, np.inf)
+    k0 = float(plant.default_parameters()[plant.parameter_index(PARAM)])
+    np.testing.assert_allclose(
+        _rate_box(OptimizerConfig(use_model_bounds=False, param_halfwidth=0.5)),
+        [np.log(k0) - 0.5, np.log(k0) + 0.5],
+    )
+    with pytest.raises(KeyError, match=r"Unknown parameter 'simple_decay\.nope' in bounds"):
+        _rate_box(OptimizerConfig(bounds={"simple_decay.nope": (0.1, 1.0)}))
+
+
+def test_plant_calibrate_start_outside_bounds_is_moved_inside(decay_plant, monkeypatch):
+    """A starting value outside the bounds is moved to the nearest bound, with
+    the same warning aquakin.calibrate gives."""
+    net, plant = decay_plant
+    with pytest.warns(RuntimeWarning, match="lies outside its bounds"):
+        seen = _capture_start(
+            monkeypatch,
+            **_fit_args(plant, optimizer=OptimizerConfig(bounds={PARAM: (0.2, 0.5)})),
+        )
+    assert seen["theta0"][0] == pytest.approx(np.log(0.2))
+
+
+def test_plant_calibrate_free_ic_per_species_bounds(decay_plant, monkeypatch):
+    """Per-species free-IC bounds reach the optimiser, keyed by 'unit.species'
+    or (unit, species); a pool the dict leaves out keeps the default."""
+    net, plant = decay_plant
+    y0 = plant.initial_state()
+    seen = _capture_start(
+        monkeypatch,
+        **_fit_args(
+            plant,
+            y0=y0,
+            free_ic=FreeICConfig(["tank.A", "tank.B"], bounds={("tank", "A"): (0.5, 2.0)}),
+        ),
+    )
+    _b, lb, ub, _ls, _has = seen["opt_bounds"]
+    np.testing.assert_allclose(lb[1:], np.log([0.5, 1e-3]))
+    np.testing.assert_allclose(ub[1:], np.log([2.0, 1e4]))
+    with pytest.raises(KeyError, match="names species that are not fitted"):
+        _capture_problem(
+            monkeypatch,
+            **_fit_args(plant, free_ic=FreeICConfig(["tank.A"], bounds={"tank.B": (1.0, 2.0)})),
+        )
+    with pytest.raises(ValueError, match="must be distinct"):
+        _capture_problem(monkeypatch, **_fit_args(plant, free_ic=FreeICConfig(["tank.A"] * 2)))
+
+
+def test_plant_calibrate_free_ic_fixed_total(decay_plant, monkeypatch):
+    """FreeICConfig(fixed_total=True) fits the split of the pools' total in y0:
+    one open log-ratio coordinate for two pools, started at their ratio."""
+    net, plant = decay_plant
+    plant._build_state_layout()
+    start = plant._state_layout["tank"][0]
+    y0 = plant.initial_state().at[start : start + 2].set(jnp.asarray([3.0, 1.0]))
+    kw = _fit_args(plant, y0=y0, free_ic=FreeICConfig(["tank.A", "tank.B"], fixed_total=True))
+    problem = _capture_problem(monkeypatch, **kw)
+    assert problem.ic_fixed_total and problem.m_ic_theta == 1
+    np.testing.assert_allclose(problem.ic_center_full, [np.log(1.0 / 3.0)])
+    _b, lb, ub, _ls, _has = _capture_start(monkeypatch, **kw)["opt_bounds"]
+    assert lb[1] == -np.inf and ub[1] == np.inf
+    with pytest.raises(ValueError, match="must be positive in C0"):
+        _capture_problem(
+            monkeypatch,
+            **_fit_args(
+                plant,
+                y0=y0.at[start + 1].set(0.0),
+                free_ic=FreeICConfig(["tank.A", "tank.B"], fixed_total=True),
+            ),
+        )
+    with pytest.raises(ValueError, match="takes no bounds"):
+        _capture_problem(
+            monkeypatch,
+            **_fit_args(
+                plant,
+                y0=y0,
+                free_ic=FreeICConfig(["tank.A", "tank.B"], bounds=(1.0, 2.0), fixed_total=True),
+            ),
+        )
+
+
+def test_plant_calibrate_sigma_estimate_problem(decay_plant, monkeypatch):
+    """sigma="estimate" switches on the concentrated likelihood, counting each
+    observed channel's non-missing entries (a NaN observation is masked)."""
+    net, plant = decay_plant
+    obs = jnp.asarray([[1.0, 0.1], [jnp.nan, 0.2], [0.5, jnp.nan], [0.4, 0.3]])
+    problem = _capture_problem(
+        monkeypatch,
+        **_fit_args(
+            plant,
+            observations=obs,
+            t_obs=jnp.array([1.0, 2.0, 3.0, 4.0]),
+            observed_channels=["A", "B"],
+            loss="nll",
+            sigma="estimate",
+        ),
+    )
+    assert problem.sigma_estimate
+    np.testing.assert_array_equal(problem.n_obs_per_output, [3.0, 3.0])
+    with pytest.raises(ValueError, match="needs at least one observation of every output"):
+        _capture_problem(
+            monkeypatch,
+            **_fit_args(
+                plant,
+                observations=obs.at[:, 1].set(jnp.nan),
+                t_obs=jnp.array([1.0, 2.0, 3.0, 4.0]),
+                observed_channels=["A", "B"],
+                loss="nll",
+                sigma="estimate",
+            ),
+        )
+
+
+def test_plant_calibrate_rejects_inf_and_all_missing_observations(decay_plant):
+    net, plant = decay_plant
+    kw = dict(target="tank", observed_channels=["B"])
+    t = jnp.array([1.0, 2.0, 3.0])
+    with pytest.raises(ValueError, match="contain inf"):
+        plant.calibrate(jnp.array([1.0, jnp.inf, 0.0]), t, [PARAM], **kw)
+    with pytest.raises(ValueError, match="every observation is missing"):
+        plant.calibrate(jnp.full(3, jnp.nan), t, [PARAM], **kw)
+
+
+@pytest.mark.slow  # a plant fit with a Laplace posterior
+def test_plant_calibrate_at_bound_and_sigma_estimate_fit(decay_plant):
+    """A plant fit pushed onto a bound reports it in at_bound and gives that
+    parameter a nan Laplace std (not a curvature std); the concentrated
+    likelihood returns a noise estimate per observed channel."""
+    net, plant = decay_plant
+    base = plant.default_parameters()
+    k = float(base[plant.parameter_index(PARAM)])
+    t_obs = jnp.linspace(1.0, 20.0, 6)
+    sol = plant.solve(t_span=(0.0, 20.0), t_eval=t_obs, params=base)
+    obs = plant.stream(sol, "tank", base).C[:, :2]
+    obs = obs + 0.01 * np.random.default_rng(0).standard_normal(obs.shape)
+    with pytest.warns(RuntimeWarning, match="ended on an optimiser bound"):
+        result = plant.calibrate(
+            obs,
+            t_obs,
+            [PARAM],
+            target="tank",
+            observed_channels=["A", "B"],
+            params=base.at[plant.parameter_index(PARAM)].set(2.0 * k),
+            transforms={PARAM: "positive_log"},
+            loss="nll",
+            sigma="estimate",
+            optimizer=OptimizerConfig(max_iter=20, bounds={PARAM: (1.5 * k, 10.0 * k)}),
+            laplace=True,
+        )
+    assert result.at_bound == {PARAM: "lower"}
+    assert result.params_named[PARAM] == pytest.approx(1.5 * k)
+    assert np.isnan(result.params_named_std[PARAM])
+    assert result.sigma_estimate.shape == (2,)
+    assert np.all(np.isfinite(result.sigma_estimate)) and np.all(result.sigma_estimate > 0)
+
+
+@pytest.mark.slow  # a plant solve inside an optimizer loop
+def test_plant_calibrate_free_ic_fixed_total_recovers_split(decay_plant):
+    """Recover how a known total of A + B is split at t=0 from the early
+    transient, with the total held fixed."""
+    net, plant = decay_plant
+    plant._build_state_layout()
+    start = plant._state_layout["tank"][0]
+    true_y0 = plant.initial_state().at[start : start + 2].set(jnp.asarray([3.0, 1.0]))
+    t_obs = jnp.linspace(0.2, 6.0, 8)
+    sol = plant.solve(t_span=(0.0, 6.0), t_eval=t_obs, y0=true_y0)
+    obs = plant.stream(sol, "tank", None).C[:, :2]
+    guess_y0 = true_y0.at[start : start + 2].set(jnp.asarray([2.0, 2.0]))
+    result = plant.calibrate(
+        obs,
+        t_obs,
+        [PARAM],
+        target="tank",
+        observed_channels=["A", "B"],
+        y0=guess_y0,
+        t_span=(0.0, 6.0),
+        free_ic=FreeICConfig(["tank.A", "tank.B"], fixed_total=True),
+        transforms={PARAM: "positive_log"},
+        optimizer=OptimizerConfig(max_iter=80),
+    )
+    assert result.ic_fractions[0]["tank.A"] == pytest.approx(0.75, rel=2e-2)
+    assert sum(result.ic_named[0].values()) == pytest.approx(4.0, rel=1e-10)

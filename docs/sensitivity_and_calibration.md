@@ -298,9 +298,8 @@ The split is fitted through the log-ratios `log(c_j / c_0)` of the pools to the
 first listed one, which keep every pool positive and the sum exact; these are
 the `"ic[k].XS:SS"` rows of `joint_cov`. `fisher_information` takes the same
 `FreeICConfig`. The log-ratios are unbounded, so a split never appears in
-`result.at_bound`. Per-species bounds and `fixed_total` are not yet available in
-`Plant.calibrate`, and `profile_likelihood` cannot profile a pool of a
-fixed-total split.
+`result.at_bound`. `profile_likelihood` cannot profile a pool of a fixed-total
+split.
 
 ### Fisher information of a design
 
@@ -467,6 +466,15 @@ result.params_named
 Fit against several streams at once with `observables=[PlantObservable(...), ...]`,
 fit assembled-state initial conditions with `free_ic=FreeICConfig([...])`, and run
 a joint multi-batch fit by passing list-valued `observations`/`t_obs`/`y0`.
+
+Everything above about bounds, initial pools and noise applies to a plant fit
+too. The free parameters stay inside the `bounds:` their models declare, and
+`OptimizerConfig(bounds=...)` keys are plant parameter names such as
+`"asm1.muH"`. A fit that ends on a bound lists it in `result.at_bound`, with a
+`nan` Laplace standard deviation. The fitted initial pools are named
+`"unit.species"` (also the keys of a per-pool `FreeICConfig(bounds={...})`), and
+`fixed_total=True` fits their split of the total in `y0`. With `loss="nll"`,
+`sigma="estimate"` estimates the noise level of each observed channel.
 
 ## Uncertainty propagation and design
 

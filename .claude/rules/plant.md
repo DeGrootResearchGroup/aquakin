@@ -99,10 +99,17 @@ Key types:
   `t_obs` / `y0`, data terms summed — is the plant analogue of the reactor
   multi-batch and reuses the generic multi-dataset machinery (n_datasets > 1,
   per-dataset `C0_base`); `free_ic` + multi-batch are not yet combinable, and
-  `predictive_band` remains reactor-only. Covered by
+  `predictive_band` remains reactor-only. The rate bounds (model-declared via
+  `_PlantParamNamespace.parameter_bounds`, `OptimizerConfig(bounds=,
+  param_halfwidth=)`), per-pool free-IC bounds and `fixed_total`, `sigma=
+  "estimate"` and `at_bound` all go through the same shared helpers as
+  `aquakin.calibrate` (`_resolve_rate_bounds`, `_resolve_ic_coords`,
+  `_initial_point`, `_fit_result`, ...), so they behave identically. Covered by
   `tests/integration/test_plant_calibrate.py` (single- and multi-stream synthetic
   recovery, a joint rate + initial-condition recovery, a multi-batch shared-rate
-  recovery, a full **BSM1** muH recovery through the stiff recycled plant, and the
+  recovery, a full **BSM1** muH recovery through the stiff recycled plant, an
+  `at_bound` + `sigma="estimate"` fit and a `fixed_total` split recovery (slow),
+  stubbed-runner checks of the bounds / free-IC / sigma wiring, and the
   finite-through-the-plant gradient in the fast gate).
   **Colored Jacobian** — the graph-coloring / Jacobian-sparsity subsystem
   (`_structural_plant_pattern` + the forward / adjoint / steady builders and their

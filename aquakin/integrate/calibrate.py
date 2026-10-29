@@ -224,8 +224,8 @@ class FreeICConfig:
         in log space). Either one ``(lo, hi)`` pair shared by every pool, or a
         ``{species: (lo, hi)}`` dict for pools of very different size; a
         species the dict leaves out gets the default ``(1e-3, 1e4)``. Each
-        pair must satisfy ``0 < lo < hi``. Per-species bounds are not yet
-        supported by :meth:`Plant.calibrate`. Not used with ``fixed_total``.
+        pair must satisfy ``0 < lo < hi``. For a plant the dict keys are
+        ``"unit.species"`` names. Not used with ``fixed_total``.
     prior_log_std : float, optional
         If given, a Gaussian prior of this log-space std pulls each fitted pool
         toward its supplied initial value; ``None`` leaves it governed only by
@@ -244,8 +244,8 @@ class FreeICConfig:
         ``ic_fractions_std``. In ``joint_names`` / ``joint_cov`` and in
         :func:`aquakin.fisher_information` the coordinates are named
         ``"ic[k].<c_j>:<c_0>"`` (the ratio ``c_j / c_0``, in log space).
-        Every listed pool must be positive in ``C0``. Default ``False``. Not
-        yet supported by :meth:`Plant.calibrate`.
+        Every listed pool must be positive in ``C0`` (for a plant, in ``y0``).
+        Default ``False``.
     """
 
     species: list
@@ -272,24 +272,12 @@ def _resolve_laplace(laplace) -> tuple[bool, LaplaceConfig]:
 _DEFAULT_IC_BOUNDS = (1e-3, 1e4)
 
 
-def _free_ic_fields(
-    free_ic, *, extended: bool = False
-) -> tuple[list | None, tuple | dict, float | None]:
+def _free_ic_fields(free_ic) -> tuple[list | None, tuple | dict, float | None]:
     """Unpack an optional :class:`FreeICConfig` into ``(species, bounds,
-    prior_log_std)`` for the internal problem resolver.
-
-    ``extended`` marks a caller that handles per-species ``bounds`` (a dict) and
-    ``fixed_total``; other callers (the plant path) get a clear error for them
-    rather than a failure deep in their own bounds handling."""
+    prior_log_std)`` for the internal problem resolver."""
     if free_ic is None:
         return None, _DEFAULT_IC_BOUNDS, None
     if isinstance(free_ic, FreeICConfig):
-        if not extended and (isinstance(free_ic.bounds, dict) or free_ic.fixed_total):
-            raise NotImplementedError(
-                "Per-species FreeICConfig bounds and fixed_total are supported by "
-                "aquakin.calibrate and fisher_information, not yet here; pass one "
-                "(lo, hi) bounds pair and fixed_total=False."
-            )
         return free_ic.species, free_ic.bounds, free_ic.prior_log_std
     raise TypeError(f"free_ic must be a FreeICConfig or None; got {type(free_ic).__name__}.")
 
@@ -318,6 +306,47 @@ def _per_species_ic_bounds(species, bounds) -> tuple[np.ndarray, np.ndarray]:
         lo.append(float(pair[0]))
         hi.append(float(pair[1]))
     return np.asarray(lo), np.asarray(hi)
+
+
+def _resolve_ic_coords(species, ic_bounds, fixed_total, pools_per_dataset):
+    """The free-IC coordinate setup shared by the reactor and plant resolvers.
+
+    ``species`` names the fitted pools and ``pools_per_dataset`` holds their
+    starting values in each dataset's initial state. Returns ``(ic_bounds,
+    ic_center_full, fixed_total)``: the per-pool ``(lo, hi)`` arrays (the
+    bounds as given when nothing is fitted or for a split, which uses none),
+    the unconstrained start of every pool coordinate (log pools, or the
+    log-ratios of a ``fixed_total`` split, which is what the ic prior pulls
+    toward), and ``fixed_total`` switched off when nothing is fitted."""
+    species = list(species)
+    if len(set(species)) != len(species):
+        raise ValueError(f"free_ic species must be distinct; got {species}.")
+    m_ic = len(species)
+    fixed_total = bool(fixed_total and m_ic)
+    if not m_ic:
+        return ic_bounds, jnp.zeros(0), False
+    if fixed_total:
+        if isinstance(ic_bounds, dict) or tuple(ic_bounds) != _DEFAULT_IC_BOUNDS:
+            raise ValueError(
+                "FreeICConfig(fixed_total=True) fits the split of a fixed total on the "
+                "simplex, so it takes no bounds; leave bounds at its default."
+            )
+    else:
+        ic_bounds = _per_species_ic_bounds(species, ic_bounds)
+    blocks = []
+    for ds, pools in enumerate(pools_per_dataset):
+        pools = np.asarray(pools, dtype=float)
+        if fixed_total:
+            if np.any(pools <= 0.0):
+                raise ValueError(
+                    f"dataset {ds}: with FreeICConfig(fixed_total=True) every pool in "
+                    f"{species} must be positive in C0 (their sum is the fixed "
+                    f"total, their split the starting guess); got {pools.tolist()}."
+                )
+            blocks.append(np.log(pools[1:]) - np.log(pools[0]))
+        else:
+            blocks.append(np.log(np.clip(pools, ic_bounds[0], ic_bounds[1])))
+    return ic_bounds, jnp.asarray(np.concatenate(blocks)), fixed_total
 
 
 def _simplex_pools(z, total):
@@ -549,6 +578,75 @@ def _build_masked_residual(loss_type, observations, sigma, missing):
 def _is_sigma_estimate(sigma) -> bool:
     """Whether ``sigma`` asks for the concentrated likelihood."""
     return isinstance(sigma, str) and sigma == "estimate"
+
+
+def _check_sigma_arg(sigma, loss) -> None:
+    """Validate a string ``sigma``: only ``"estimate"``, and only with
+    ``loss="nll"`` (the concentrated likelihood)."""
+    if isinstance(sigma, str):
+        if not _is_sigma_estimate(sigma):
+            raise ValueError(f'sigma must be an array, None or "estimate"; got {sigma!r}.')
+        if loss != "nll":
+            raise ValueError(
+                'sigma="estimate" (the concentrated likelihood) requires loss="nll"; '
+                f"got loss={loss!r}."
+            )
+
+
+def _sigma_per_dataset(sigma, n_datasets: int) -> list:
+    """One ``sigma`` entry per dataset: a list is checked against the dataset
+    count, anything else is broadcast."""
+    if not isinstance(sigma, (list, tuple)):
+        return [sigma] * n_datasets
+    sigma_list = list(sigma)
+    if len(sigma_list) != n_datasets:
+        raise ValueError(
+            f"sigma list has {len(sigma_list)} entries but there are {n_datasets} datasets."
+        )
+    if any(isinstance(s, str) for s in sigma_list):
+        # The concentrated likelihood pools the residuals of every dataset,
+        # so it cannot be switched on for some datasets only.
+        raise ValueError(
+            'sigma="estimate" applies to every dataset; pass it as sigma="estimate", '
+            "not as an entry of a per-dataset sigma list."
+        )
+    return sigma_list
+
+
+def _coerce_sigma(sig_i):
+    """One dataset's ``sigma`` as the loss builders take it: ``"estimate"``,
+    an array, or ``None``."""
+    if _is_sigma_estimate(sig_i):
+        return "estimate"
+    if isinstance(sig_i, str):
+        raise ValueError(f'sigma must be an array, None or "estimate"; got {sig_i!r}.')
+    return jnp.asarray(sig_i) if sig_i is not None else None
+
+
+def _observed_counts(ds: int, obs_i) -> np.ndarray:
+    """Observed (non-NaN) entries per output of one dataset's observations,
+    shape ``(n_t, n_out)``. An ``inf`` or an all-missing dataset is rejected."""
+    obs_np = np.asarray(obs_i, dtype=float)
+    if np.isinf(obs_np).any():
+        raise ValueError(f"dataset {ds}: observations contain inf; mark a missing value with NaN.")
+    if np.isnan(obs_np).all():
+        raise ValueError(f"dataset {ds}: every observation is missing (NaN).")
+    return np.sum(~np.isnan(obs_np), axis=0)
+
+
+def _n_obs_per_output(sigma_estimate: bool, n_seen_per_output):
+    """The observation count of each output for the concentrated likelihood
+    (``None`` when the noise is not estimated). Every output needs at least
+    one observation to estimate its noise."""
+    if not sigma_estimate:
+        return None
+    unseen = np.flatnonzero(np.asarray(n_seen_per_output) == 0)
+    if unseen.size:
+        raise ValueError(
+            f'sigma="estimate" needs at least one observation of every output; '
+            f"output(s) {unseen.tolist()} are missing (NaN) in every dataset."
+        )
+    return jnp.asarray(n_seen_per_output, dtype=float)
 
 
 def _data_term(problem, preds):
@@ -1582,7 +1680,7 @@ def _clip_start(problem: _CalibrationProblem, theta0, opt_bounds):
             f"calibrate: the starting value of {outside} lies outside its bounds; "
             "the optimiser starts from the nearest bound instead.",
             RuntimeWarning,
-            stacklevel=3,
+            stacklevel=4,  # past _initial_point and the calibrate entry point
         )
     return jnp.asarray(clipped)
 
@@ -2215,21 +2313,7 @@ def _resolve_problem(
             "In multi-dataset mode, C0, observations and t_obs must be lists of "
             f"equal length; got {n_datasets}, {len(obs_list)}, {len(tobs_list)}."
         )
-    if isinstance(sigma, (list, tuple)):
-        sigma_list = list(sigma)
-        if len(sigma_list) != n_datasets:
-            raise ValueError(
-                f"sigma list has {len(sigma_list)} entries but there are {n_datasets} datasets."
-            )
-        if any(isinstance(s, str) for s in sigma_list):
-            # The concentrated likelihood pools the residuals of every dataset,
-            # so it cannot be switched on for some datasets only.
-            raise ValueError(
-                'sigma="estimate" applies to every dataset; pass it as sigma="estimate", '
-                "not as an entry of a per-dataset sigma list."
-            )
-    else:
-        sigma_list = [sigma] * n_datasets
+    sigma_list = _sigma_per_dataset(sigma, n_datasets)
 
     if observation_fn is not None:
         if observed_species is not None:
@@ -2275,13 +2359,7 @@ def _resolve_problem(
         obs_i = jnp.asarray(obs_i)
         if obs_i.ndim == 1:
             obs_i = obs_i[:, None]
-        obs_np = np.asarray(obs_i, dtype=float)
-        if np.isinf(obs_np).any():
-            raise ValueError(
-                f"dataset {ds}: observations contain inf; mark a missing value with NaN."
-            )
-        if np.isnan(obs_np).all():
-            raise ValueError(f"dataset {ds}: every observation is missing (NaN).")
+        seen_i = _observed_counts(ds, obs_i)
         if obs_i.shape[0] != tobs_i.shape[0]:
             raise ValueError(
                 f"dataset {ds}: observations has {obs_i.shape[0]} rows but t_obs "
@@ -2291,13 +2369,8 @@ def _resolve_problem(
             raise ValueError(
                 f"dataset {ds}: observations has {obs_i.shape[1]} columns but {n_observed} {what}."
             )
-        n_seen_per_output += np.sum(~np.isnan(obs_np), axis=0)
-        if _is_sigma_estimate(sig_i):
-            sig_arr = "estimate"
-        elif isinstance(sig_i, str):
-            raise ValueError(f'sigma must be an array, None or "estimate"; got {sig_i!r}.')
-        else:
-            sig_arr = jnp.asarray(sig_i) if sig_i is not None else None
+        n_seen_per_output += seen_i
+        sig_arr = _coerce_sigma(sig_i)
         digest_parts += [obs_i, sig_arr, tobs_i, tobs_user[-1]]
         datasets.append(
             (
@@ -2332,49 +2405,19 @@ def _resolve_problem(
     for s in free_ic_list:
         if s not in model.species_index:
             raise KeyError(f"Unknown free_ic species '{s}'. Available: {model.species}")
-    if len(set(free_ic_list)) != len(free_ic_list):
-        raise ValueError(f"free_ic species must be distinct; got {free_ic_list}.")
     m_ic = len(free_ic_list)
-    ic_fixed_total = bool(ic_fixed_total and m_ic)
-    if ic_fixed_total:
-        if isinstance(ic_bounds, dict) or tuple(ic_bounds) != _DEFAULT_IC_BOUNDS:
-            raise ValueError(
-                "FreeICConfig(fixed_total=True) fits the split of a fixed total on the "
-                "simplex, so it takes no bounds; leave bounds at its default."
-            )
-        ic_lo = ic_hi = None
-    elif m_ic:
-        ic_lo, ic_hi = _per_species_ic_bounds(free_ic_list, ic_bounds)
-        ic_bounds = (ic_lo, ic_hi)
-    ic_species_idx = jnp.asarray([model.species_index[s] for s in free_ic_list], dtype=int)
-    ic_center_blocks = []
-    if m_ic:
-        ic_np_idx = [model.species_index[s] for s in free_ic_list]
-        for ds, (C0_i, *_rest) in enumerate(datasets):
-            pools = np.asarray(C0_i, dtype=float)[ic_np_idx]
-            if ic_fixed_total:
-                if np.any(pools <= 0.0):
-                    raise ValueError(
-                        f"dataset {ds}: with FreeICConfig(fixed_total=True) every pool in "
-                        f"{free_ic_list} must be positive in C0 (their sum is the fixed "
-                        f"total, their split the starting guess); got {pools.tolist()}."
-                    )
-                ic_center_blocks.append(np.log(pools[1:]) - np.log(pools[0]))
-            else:
-                ic_center_blocks.append(np.log(np.clip(pools, ic_lo, ic_hi)))
-    ic_center_full = jnp.asarray(np.concatenate(ic_center_blocks)) if m_ic else jnp.zeros(0)
+    ic_np_idx = [model.species_index[s] for s in free_ic_list]
+    ic_species_idx = jnp.asarray(ic_np_idx, dtype=int)
+    ic_bounds, ic_center_full, ic_fixed_total = _resolve_ic_coords(
+        free_ic_list,
+        ic_bounds,
+        ic_fixed_total,
+        [np.asarray(C0_i, dtype=float)[ic_np_idx] for (C0_i, *_rest) in datasets],
+    )
 
     sigma_estimate = _is_sigma_estimate(sigma)
-    n_obs_per_output = None
-    if sigma_estimate:
-        # Each output's noise is estimated from its observed (non-NaN) entries.
-        unseen = np.flatnonzero(n_seen_per_output == 0)
-        if unseen.size:
-            raise ValueError(
-                f'sigma="estimate" needs at least one observation of every output; '
-                f"output(s) {unseen.tolist()} are missing (NaN) in every dataset."
-            )
-        n_obs_per_output = jnp.asarray(n_seen_per_output, dtype=float)
+    # Each output's noise is estimated from its observed (non-NaN) entries.
+    n_obs_per_output = _n_obs_per_output(sigma_estimate, n_seen_per_output)
     rate_bounds = _resolve_rate_bounds(
         model, free_params, resolved_transforms, bounds, use_model_bounds
     )
@@ -2693,14 +2736,7 @@ def calibrate(
         raise ValueError("free_params must be non-empty.")
     if loss not in _VALID_LOSSES:
         raise ValueError(f"loss must be one of {_VALID_LOSSES}; got {loss!r}.")
-    if isinstance(sigma, str):
-        if not _is_sigma_estimate(sigma):
-            raise ValueError(f'sigma must be an array, None or "estimate"; got {sigma!r}.')
-        if loss != "nll":
-            raise ValueError(
-                'sigma="estimate" (the concentrated likelihood) requires loss="nll"; '
-                f"got loss={loss!r}."
-            )
+    _check_sigma_arg(sigma, loss)
     if optimizer.n_starts < 1:
         raise ValueError(f"optimizer.n_starts must be >= 1; got {optimizer.n_starts}.")
     if optimizer.starts is not None and optimizer.n_starts > 1:
@@ -2732,7 +2768,7 @@ def calibrate(
 
     # Unpack the config objects into the internal scalar knobs.
     laplace_on, lap = _resolve_laplace(laplace)
-    ic_species, ic_bounds, ic_prior_log_std = _free_ic_fields(free_ic, extended=True)
+    ic_species, ic_bounds, ic_prior_log_std = _free_ic_fields(free_ic)
 
     # Resolve the arguments once into the static problem + the fit config, then
     # build the compiled objective on the reactor forward-model seam.
@@ -2786,32 +2822,48 @@ def calibrate(
     bundle = _build_objective(problem, fm, cfg)
 
     # --- Run the optimiser in unconstrained space ----------------------
-    rate_theta0 = problem.rate_theta0()
     # The pools start at C0 (the prior centre) unless a separate start is given.
     ic_theta0 = problem.ic_center_full
     if _ic_start is not None and problem.m_ic:
         ic_theta0 = _ic_theta_from_pools(problem, _ic_start)
-    theta0 = jnp.concatenate([rate_theta0, ic_theta0]) if problem.m_ic else rate_theta0
-    opt_bounds = _optimizer_bounds(problem, rate_theta0)
-    starts = None
-    if optimizer.starts is not None:
-        starts = [
-            _clip_start(
-                problem,
-                jnp.concatenate([th, ic_theta0]) if problem.m_ic else th,
-                opt_bounds,
-            )
-            for th in _resolve_starts(problem, optimizer.starts)
-        ]
-        theta0 = starts[0]
-    else:
-        theta0 = _clip_start(problem, theta0, opt_bounds)
+    theta0, opt_bounds, starts = _initial_point(problem, optimizer.starts, ic_theta0)
 
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)
 
     result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts)
+    return _fit_result(problem, fm, cfg, bundle, result, opt_bounds)
 
+
+def _initial_point(problem: _CalibrationProblem, starts, ic_theta0):
+    """The optimiser's starting point, bounds and explicit start list.
+
+    Returns ``(theta0, opt_bounds, starts)``. ``theta0`` is the rate start
+    (from ``p0_full``) followed by ``ic_theta0``, moved inside the bounds; with
+    an explicit ``OptimizerConfig.starts`` list, ``starts`` holds each entry
+    (moved inside the bounds the same way) and ``theta0`` is its first one.
+    Shared by :func:`calibrate` and :meth:`Plant.calibrate`."""
+    rate_theta0 = problem.rate_theta0()
+    opt_bounds = _optimizer_bounds(problem, rate_theta0)
+    if starts is None:
+        theta0 = jnp.concatenate([rate_theta0, ic_theta0]) if problem.m_ic else rate_theta0
+        return _clip_start(problem, theta0, opt_bounds), opt_bounds, None
+    start_thetas = [
+        _clip_start(
+            problem,
+            jnp.concatenate([th, ic_theta0]) if problem.m_ic else th,
+            opt_bounds,
+        )
+        for th in _resolve_starts(problem, starts)
+    ]
+    return start_thetas[0], opt_bounds, start_thetas
+
+
+def _fit_result(problem: _CalibrationProblem, fm, cfg: _FitConfig, bundle, result, opt_bounds):
+    """Assemble the :class:`CalibrationResult` of a finished fit: the fitted
+    parameters and initial pools, the quantities that ended on a bound, the
+    noise estimate of the concentrated likelihood, and the Laplace posterior.
+    Shared by :func:`calibrate` and :meth:`Plant.calibrate`."""
     theta_opt = jnp.asarray(result.x)
     rate_theta_opt = theta_opt[: problem.n_rate]
     ic_opt = theta_opt[problem.n_rate :]
@@ -2848,11 +2900,12 @@ def calibrate(
             if cfg.laplace
             else "a local (Laplace) uncertainty is not valid for them"
         )
+        # stacklevel 3: past this helper and the calibrate entry point.
         warnings.warn(
             f"calibrate: {at_bound} ended on an optimiser bound, so {what}. Check "
             "the bound, or use profile_likelihood for a one-sided interval.",
             RuntimeWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
 
     # Concentrated likelihood: the noise level of each output at the MAP.

@@ -1034,9 +1034,9 @@ def test_ic_coordinate_names():
     ]
 
 
-def test_free_ic_fields_extended_passes_extensions_through():
+def test_free_ic_fields_passes_extensions_through():
     cfg = aquakin.FreeICConfig(["S", "X"], bounds={"S": (1.0, 2.0)}, fixed_total=False)
-    species, bounds, prior = _free_ic_fields(cfg, extended=True)
+    species, bounds, prior = _free_ic_fields(cfg)
     assert species == ["S", "X"] and bounds == {"S": (1.0, 2.0)} and prior is None
 
 
