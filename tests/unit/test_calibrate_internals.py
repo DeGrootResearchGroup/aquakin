@@ -32,6 +32,7 @@ from aquakin.integrate.calibrate import (
     _FitConfig,
     _forward_jac,
     _free_ic_fields,
+    _ic_theta_from_pools,
     _ic_coordinate_names,
     _is_solve_failure,
     _joint_names,
@@ -1075,6 +1076,33 @@ def test_resolve_problem_rejects_duplicate_free_ic(base):
 def test_at_bound_tolerance_is_scale_aware(theta, lb, ub, transform, expected):
     opt_bounds = (None, np.array([lb]), np.array([ub]), None, True)
     assert _at_bound_sides(np.array([theta]), opt_bounds, [transform])[0] == expected
+
+
+@pytest.mark.parametrize("fixed_total", [False, True], ids=["bounded", "fixed_total"])
+def test_ic_theta_from_pools_matches_the_prior_centre(base, fixed_total):
+    """The free-IC coordinates of the measured pools are ``ic_center_full``, so a
+    warm start from fitted pools uses the same layout as the default start:
+    clipped log pools when bounded (B = 0 sits below its lower bound), one
+    log-ratio per dataset under a fixed total."""
+    m, _C0, obs, t_obs, free = base
+    C0a, C0b = jnp.array([0.6, 0.4]), jnp.array([1.0, 3.0 if fixed_total else 0.0])
+    prob = _resolve(
+        m,
+        [C0a, C0b],
+        [obs, obs],
+        [t_obs, t_obs],
+        free,
+        free_ic=["A", "B"],
+        ic_fixed_total=fixed_total,
+        ic_bounds=_DEFAULT_IC_BOUNDS if fixed_total else (1e-3, 1e4),
+    )
+    np.testing.assert_allclose(_ic_theta_from_pools(prob, [C0a, C0b]), prob.ic_center_full)
+    # Other pools give other coordinates; under a fixed total only the split counts.
+    moved = _ic_theta_from_pools(prob, [C0a * 2.0, jnp.array([2.0, 2.0])])
+    if fixed_total:
+        np.testing.assert_allclose(moved, [np.log(0.4 / 0.6), 0.0])
+    else:
+        np.testing.assert_allclose(moved, np.log([1.2, 0.8, 2.0, 2.0]))
 
 
 # ---------- sigma="estimate" (concentrated likelihood): guards ----------
