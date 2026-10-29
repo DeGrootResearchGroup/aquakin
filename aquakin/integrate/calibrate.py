@@ -379,10 +379,10 @@ def _build_loss(
     if _is_sigma_estimate(sigma):
         if loss_type != "nll":
             raise ValueError('sigma="estimate" requires loss="nll".')
-        obs, keep = _fill_missing(observations, missing)
+        _obs, gap = _fill_missing(observations, missing)
 
         def _sse(pred):
-            return jnp.sum(keep * (pred - obs) ** 2, axis=0)
+            return jnp.sum(gap(pred) ** 2, axis=0)
 
         return _sse
     if missing is not None:
@@ -433,14 +433,10 @@ def _build_residual(
     if _is_sigma_estimate(sigma):
         if loss_type != "nll":
             raise ValueError('sigma="estimate" requires loss="nll".')
-        obs_filled, keep = _fill_missing(observations, missing)
-
         # Raw (n_t, n_observed) residuals, zero at missing entries: the caller
         # divides each column by the current noise estimate.
-        def _raw(pred):
-            return keep * (pred - obs_filled)
-
-        return _raw
+        _obs, gap = _fill_missing(observations, missing)
+        return gap
     if missing is not None:
         return _build_masked_residual(loss_type, observations, sigma, missing)
     if loss_type == "mse":
@@ -481,49 +477,73 @@ def _missing_mask(observations):
 
 
 def _fill_missing(observations, missing):
-    """``(obs_filled, keep)``: the observations with missing entries set to 0
-    (so no ``NaN`` enters the gradient) and the 0/1 keep weights; with no
-    missing entries, the observations unchanged and a weight of 1."""
+    """``(obs_filled, gap)``: the observations with missing entries set to 0,
+    and ``gap(pred)``, the difference ``pred - observations`` with exact zeros
+    at the missing entries.
+
+    A missing entry must add nothing to the loss *or* to its gradient, even
+    when the prediction there is ``NaN`` or ``inf`` (an ``observation_fn`` such
+    as ``log(C)`` evaluated where ``C = 0``). Multiplying by a 0/1 weight does
+    not achieve that (``0 * NaN`` is ``NaN``), and neither does masking the
+    output alone, since the derivative of the unselected branch of
+    ``jnp.where`` still enters the gradient as ``0 * NaN``. So the prediction
+    itself is replaced by the filled observation at a missing entry before the
+    difference is formed: neither branch is then non-finite, and the
+    derivative with respect to ``pred`` there is exactly 0. With no missing
+    entries, the observations are returned unchanged and ``gap`` is the plain
+    difference.
+    """
     if missing is None:
-        return observations, 1.0
-    return jnp.where(missing, 0.0, observations), jnp.where(missing, 0.0, 1.0)
+        return observations, lambda pred: pred - observations
+    obs_filled = jnp.where(missing, 0.0, observations)
+
+    def _gap(pred):
+        safe = jnp.where(missing, obs_filled, pred)
+        return jnp.where(missing, 0.0, safe - obs_filled)
+
+    return obs_filled, _gap
 
 
 def _masked_parts(loss_type, observations, sigma, missing):
-    """``(obs_filled, keep, sig, n_kept)`` for a loss with missing entries:
-    the observations with ``NaN`` replaced by 0 (so no ``NaN`` enters the
-    gradient), the 0/1 keep weights, ``sigma`` broadcast to the data shape, and
-    the number of observed entries."""
+    """``(gap, sig, n_kept)`` for a loss with missing entries: the masked
+    difference of :func:`_fill_missing`, ``sigma`` broadcast to the data shape
+    with 1 at the missing entries (so a ``NaN``, zero or infinite noise level
+    given for an entry that was not measured cannot reach the loss), and the
+    number of observed entries."""
     if loss_type in ("wmse", "nll") and sigma is None:
         raise ValueError(f"loss={loss_type!r} requires a sigma argument.")
     if loss_type not in _VALID_LOSSES:
         raise ValueError(f"Unknown loss {loss_type!r}; choose one of {_VALID_LOSSES}.")
-    obs_filled, keep = _fill_missing(observations, missing)
-    sig = None if sigma is None else jnp.broadcast_to(sigma, observations.shape)
-    return obs_filled, keep, sig, float(np.sum(~np.asarray(missing)))
+    _obs, gap = _fill_missing(observations, missing)
+    sig = None
+    if sigma is not None:
+        sig = jnp.where(missing, 1.0, jnp.broadcast_to(sigma, observations.shape))
+    return gap, sig, float(np.sum(~np.asarray(missing)))
 
 
 def _build_masked_loss(loss_type, observations, sigma, missing):
-    """:func:`_build_loss` with the ``NaN`` (missing) entries left out."""
-    obs, keep, sig, n_kept = _masked_parts(loss_type, observations, sigma, missing)
+    """:func:`_build_loss` with the ``NaN`` (missing) entries left out: each
+    contributes exactly 0 to the value and to the gradient."""
+    gap, sig, n_kept = _masked_parts(loss_type, observations, sigma, missing)
     if loss_type == "mse":
-        return lambda pred: jnp.sum(keep * (pred - obs) ** 2) / n_kept
+        return lambda pred: jnp.sum(gap(pred) ** 2) / n_kept
     if loss_type == "wmse":
-        return lambda pred: jnp.sum(keep * ((pred - obs) / sig) ** 2) / n_kept
-    return lambda pred: jnp.sum(keep * (jnp.log(sig) + (pred - obs) ** 2 / (2.0 * sig**2)))
+        return lambda pred: jnp.sum((gap(pred) / sig) ** 2) / n_kept
+    # sig is 1 at a missing entry, so its log-normalizer term is 0 there.
+    return lambda pred: jnp.sum(jnp.log(sig) + gap(pred) ** 2 / (2.0 * sig**2))
 
 
 def _build_masked_residual(loss_type, observations, sigma, missing):
     """:func:`_build_residual` with zero residuals at the missing entries (so
     they add nothing to the Gauss-Newton / Fisher Hessian)."""
-    obs, keep, sig, n_kept = _masked_parts(loss_type, observations, sigma, missing)
+    gap, sig, n_kept = _masked_parts(loss_type, observations, sigma, missing)
     if loss_type == "mse":
         scale = jnp.sqrt(2.0 / n_kept)
-        return lambda pred: (scale * keep * (pred - obs)).reshape(-1)
+        return lambda pred: (scale * gap(pred)).reshape(-1)
     if loss_type == "wmse":
         scale = jnp.sqrt(2.0 / n_kept)
-        return lambda pred: (scale * keep * (pred - obs) / sig).reshape(-1)
-    return lambda pred: (keep * (pred - obs) / sig).reshape(-1)
+        return lambda pred: (scale * gap(pred) / sig).reshape(-1)
+    return lambda pred: (gap(pred) / sig).reshape(-1)
 
 
 def _is_sigma_estimate(sigma) -> bool:
@@ -1084,16 +1104,19 @@ class _CalibrationProblem:
     # Optional observation function (C, params) -> y, or (t, C, params) -> y;
     # replaces the species columns ``obs_species_indices`` when set.
     observation_fn: object = None
-    # Factor from ``t_obs``'s unit to the model's native one: a time-aware
-    # ``observation_fn`` receives the sample time in ``t_obs``'s unit.
-    obs_time_factor: float = 1.0
+    # Per-dataset observation times exactly as given, in ``t_obs``'s unit
+    # (``dataset_static`` holds them converted to the model's native unit): a
+    # time-aware ``observation_fn`` receives these, so ``t == t_obs[i]`` holds
+    # exactly whatever the unit conversion. Empty when not applicable.
+    obs_times: tuple = ()
     # Concentrated likelihood (loss="nll", sigma="estimate"): the per-dataset
     # loss returns per-output sums of squares, the residual raw residuals, and
     # ``n_obs_per_output`` holds the observation count of each output.
     sigma_estimate: bool = False
     n_obs_per_output: object = None
     # Fingerprint of what the per-dataset loss / residual closures bake in (the
-    # loss type, observations, sigma and observation times), so a shared
+    # loss type, observations, sigma and observation times in both the native
+    # unit and ``t_obs``'s unit), so a shared
     # ``_compiled_cache`` cannot reuse an objective built for other data.
     data_key: tuple = ()
     # Absolute bounds on the rate block in unconstrained space, as ``(lb, ub)``
@@ -1165,7 +1188,6 @@ class _CalibrationProblem:
             self.n_observed,
             tuple(int(ds[0].shape[0]) for ds in self.dataset_static),
             self.observation_fn,
-            self.obs_time_factor,
             self.sigma_estimate,
             tuple(self.free_params),
             tuple(self.transforms),
@@ -1208,27 +1230,34 @@ def _predict(problem: _CalibrationProblem, fm: _ReactorForwardModel, p, ic_theta
                 problem.ic_pools(ic_thetas[k * mt : (k + 1) * mt], C0_i)
             )
         ys = fm.solve_trajectory(p, C0_k, tspan_i, tobs_i)
-        preds.append(
-            observe(
-                ys,
-                p,
-                problem.obs_species_indices,
-                problem.observation_fn,
-                t=tobs_i / problem.obs_time_factor,
-            )
-        )
+        t_user = problem.obs_times[k] if problem.obs_times else None
+        preds.append(observe(ys, p, problem.obs_species_indices, problem.observation_fn, t=t_user))
     return preds
 
 
 def observation_takes_time(observation_fn) -> bool:
     """Whether ``observation_fn`` has the time-aware signature
-    ``(t, C, params)`` (three required positional arguments) rather than
-    ``(C, params)`` (two).
+    ``(t, C, params)`` rather than ``(C, params)``.
+
+    The rule, on the positional parameters of the signature (those that can be
+    filled by position), is:
+
+    - exactly three of them *required* (no default): the time-aware form
+      ``observation_fn(t, C, params)``. A time-aware function must therefore
+      require all of ``t``, ``C`` and ``params``; further parameters may have
+      defaults.
+    - at most two required and at least two in all: the ``(C, params)`` form,
+      called as ``observation_fn(C, params)`` (so ``f(C, p=None)`` and
+      ``f(C, p, scale=2.0)`` are this form).
+    - a ``*args`` parameter, or a signature that cannot be inspected: the
+      ``(C, params)`` form.
 
     Raises
     ------
     TypeError
-        If it takes neither two nor three required positional arguments.
+        If ``observation_fn`` is not callable, or its signature fits neither
+        form (fewer than two positional parameters, or more than three
+        required).
     """
     if not callable(observation_fn):
         raise TypeError(
@@ -1241,18 +1270,18 @@ def observation_takes_time(observation_fn) -> bool:
     params = list(sig.parameters.values())
     if any(q.kind is inspect.Parameter.VAR_POSITIONAL for q in params):
         return False
-    n_req = sum(
-        1
+    positional = [
+        q
         for q in params
         if q.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-        and q.default is inspect.Parameter.empty
-    )
+    ]
+    n_req = sum(1 for q in positional if q.default is inspect.Parameter.empty)
     if n_req == 3:
         return True
-    if n_req == 2:
+    if n_req <= 2 and len(positional) >= 2:
         return False
     raise TypeError(
-        "observation_fn must take (C, params) or (t, C, params) as required "
+        "observation_fn must take (C, params), or require (t, C, params), as "
         f"positional arguments; got a signature {sig}."
     )
 
@@ -2178,6 +2207,7 @@ def _resolve_problem(
 
     # Validate each dataset and build its (C0, t_eval, t_span, loss) tuple.
     datasets = []
+    tobs_user = []
     digest_parts = []
     n_seen_per_output = np.zeros(n_observed, dtype=int)  # observed (non-NaN) entries
     for ds, (C0_i, obs_i, tobs_i, sig_i) in enumerate(
@@ -2194,7 +2224,10 @@ def _resolve_problem(
         if tobs_i.shape[0] > 1 and not bool(jnp.all(jnp.diff(tobs_i) > 0)):
             raise ValueError(f"dataset {ds}: t_obs must be strictly ascending.")
         # Convert this dataset's t_obs into the model's native (rate-constant)
-        # time unit, the same way reactor.solve(time_unit=...) does.
+        # time unit, the same way reactor.solve(time_unit=...) does. The times
+        # as given are kept for a time-aware observation_fn: dividing the
+        # native times by the factor again need not return them exactly.
+        tobs_user.append(tobs_i)
         tobs_i = tobs_i * native_time_factor(model.time_unit, time_unit)
         obs_i = jnp.asarray(obs_i)
         if obs_i.ndim == 1:
@@ -2222,7 +2255,7 @@ def _resolve_problem(
             raise ValueError(f'sigma must be an array, None or "estimate"; got {sig_i!r}.')
         else:
             sig_arr = jnp.asarray(sig_i) if sig_i is not None else None
-        digest_parts += [obs_i, sig_arr, tobs_i]
+        digest_parts += [obs_i, sig_arr, tobs_i, tobs_user[-1]]
         datasets.append(
             (
                 C0_i,
@@ -2335,7 +2368,7 @@ def _resolve_problem(
         ic_prior_log_std=ic_prior_log_std,
         ic_bounds=ic_bounds,
         observation_fn=observation_fn,
-        obs_time_factor=float(native_time_factor(model.time_unit, time_unit)),
+        obs_times=tuple(tobs_user),
         sigma_estimate=sigma_estimate,
         n_obs_per_output=n_obs_per_output,
         ic_fixed_total=ic_fixed_total,
@@ -2478,6 +2511,10 @@ def calibrate(
         ``observation_fn(t, C, params)``, also receives the sample time ``t``
         (a scalar, in the unit of ``t_obs``), for a measurement whose mapping
         changes with time, such as a sensor drift or a time-varying dilution.
+        ``t`` is the entry of ``t_obs`` itself, exactly as given. A function
+        with exactly three required positional arguments is the time-aware
+        form; one that can be called with two (``f(C, params=None)`` or
+        ``f(C, params, scale=1.0)``, say) is the ``(C, params)`` form.
     time_unit : str, optional
         The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
         ``"d"``), matching :meth:`BatchReactor.solve`. Every dataset's ``t_obs``

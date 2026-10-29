@@ -57,11 +57,22 @@ def _same_fit(a, b):
 
 
 def test_signature_detection():
+    """Three required positional arguments: (t, C, params); callable with two:
+    (C, params), as before time-aware functions existed."""
+
+    def f(C, p=None):
+        return C[0]
+
     assert not observation_takes_time(lambda C, p: C[0])
+    assert not observation_takes_time(f)
+    assert not observation_takes_time(lambda C, p, scale=2.0: scale * C[0])
     assert observation_takes_time(lambda t, C, p: C[0])
     assert observation_takes_time(lambda t, C, p, scale=2.0: scale * C[0])
+    assert observation_takes_time(lambda t, C, p, s=1.0: s * C[0])
     with pytest.raises(TypeError, match=r"\(t, C, params\)"):
         observation_takes_time(lambda C: C[0])
+    with pytest.raises(TypeError, match=r"\(t, C, params\)"):
+        observation_takes_time(lambda a, b, c, d: a)
     with pytest.raises(TypeError, match="must be a callable"):
         observation_takes_time(3.0)
 
@@ -102,6 +113,50 @@ def test_fisher_setup_mask_gives_unmeasured_entries_infinite_sigma(reactor):
         _FisherSetup(reactor, [Experiment(C0, T_OBS, sigma=SIGMA, mask=np.ones(3, bool))], FREE)
     with pytest.raises(ValueError, match="no observation"):
         _FisherSetup(reactor, [Experiment(C0, T_OBS, sigma=SIGMA, mask=False)], FREE)
+
+
+class _StubReactor:
+    """Stands in for a reactor in a :class:`_FisherSetup` (no solve): every
+    sampled state is ``[k * t, 0]`` with ``k`` the first parameter."""
+
+    def solve(self, C0, params, t_span, t_eval):
+        A = params[0] * jnp.asarray(t_eval)
+        return type("Sol", (), {"C": jnp.stack([A, jnp.zeros_like(A)], axis=1)})()
+
+
+def test_fisher_time_aware_fn_sees_t_obs_exactly(reactor):
+    """With a unit conversion whose round trip is inexact (x * 60 / 60 != x),
+    a time-aware observation_fn still receives the entries of t_obs exactly:
+    the indicator t == t_obs[i] is 1 at every sample, so every Jacobian row is
+    the same nonzero value."""
+    t_user = jnp.asarray([0.33585575305464355, 7.294965609839984])
+    assert np.any(np.asarray(t_user) * 60.0 / 60.0 != np.asarray(t_user))
+    hit = lambda t, C, p: C[0] / t * jnp.any(t == t_user)
+    ex = Experiment(C0, t_user, sigma=SIGMA, observation_fn=hit, time_unit="min")
+    setup = _FisherSetup(
+        reactor, [ex], FREE, params=reactor.model.default_parameters().at[0].set(K)
+    )
+    np.testing.assert_array_equal(setup.tobs[0], t_user)
+    setup.reactors = [_StubReactor()]
+    J = np.asarray(setup.jacobian(setup.p0, setup.tobs, setup.C0))
+    assert np.all(J != 0.0) and np.all(J[0] == J)
+
+
+def test_fisher_mask_drops_a_non_finite_prediction(reactor):
+    """A prediction that is -inf (log 0) at a masked entry, with a NaN tangent,
+    adds an exact zero row to the Jacobian; the other rows are unchanged."""
+    t = jnp.asarray([0.0, 1.0, 2.0])
+    mask = np.array([False, True, True])
+    ex = Experiment(
+        C0, t, sigma=SIGMA, observation_fn=lambda C, p: jnp.log(C[0]), mask=mask[:, None]
+    )
+    setup = _FisherSetup(
+        reactor, [ex], FREE, params=reactor.model.default_parameters().at[0].set(K)
+    )
+    setup.reactors = [_StubReactor()]
+    J = np.asarray(setup.jacobian(setup.p0, setup.tobs, setup.C0))
+    assert np.all(np.isfinite(J))
+    assert J[0, 0] == 0.0 and J[1, 0] != 0.0 and J[1, 0] == J[2, 0]
 
 
 def test_time_aware_observe_needs_sample_times():

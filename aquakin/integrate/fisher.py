@@ -73,8 +73,9 @@ class Experiment:
         ``observed_species``: ``observation_fn(C, params) -> y`` maps one time
         point's concentrations and the full parameter vector to a scalar or
         ``(n_outputs,)`` vector, written with ``jax.numpy``. ``sigma`` then has
-        one entry per output. A function of ``(t, C, params)`` also receives
-        the sample time, in the unit of ``t_obs``, as in
+        one entry per output. A function that requires three positional
+        arguments, ``observation_fn(t, C, params)``, also receives the sample
+        time, the entry of ``t_obs`` exactly as given (in its unit), as in
         :func:`aquakin.calibrate`.
     reactor : Reactor, optional
         A reactor to solve this experiment with in place of the one passed to
@@ -323,10 +324,13 @@ class _FisherSetup:
         if not self.free_params and not self.ic_species:
             raise ValueError("Nothing to estimate: give free_params and/or free_ic.")
 
-        # Resolve each experiment once: its forward-capable reactor, native-unit
-        # sampling times, observed columns and per-observation noise.
+        # Resolve each experiment once: its forward-capable reactor, sampling
+        # times, observed columns and per-observation noise. The sampling times
+        # are kept in the experiment's own unit (a time-aware observation_fn
+        # receives them exactly) and converted to the model's native unit by
+        # ``time_factor`` at the solve.
         self.reactors, self.obs_idx, self.obs_fn, self.sigma = [], [], [], []
-        self.time_factor = []
+        self.time_factor, self.keep, self.sigma_div = [], [], []
         self.tobs, self.C0, self.t_end = [], [], []
         for e, ex in enumerate(exps):
             rctr = ex.reactor if ex.reactor is not None else reactor
@@ -346,7 +350,6 @@ class _FisherSetup:
                 )
             factor = float(native_time_factor(model.time_unit, ex.time_unit))
             t0 = float(tobs[0])
-            tobs = tobs * factor
             if ex.observation_fn is not None:
                 if ex.observed_species is not None:
                     raise ValueError(
@@ -384,14 +387,22 @@ class _FisherSetup:
                     ) from err
                 if not keep.any():
                     raise ValueError(f"experiment {e}: mask leaves no observation.")
-                # An unmeasured entry has infinite noise: zero information.
-                sig = jnp.where(jnp.asarray(keep), sig, jnp.inf)
+                keep = jnp.asarray(keep)
+                # An unmeasured entry has infinite noise: zero information. The
+                # residual divides by 1 there instead and is masked to exactly
+                # 0, so a non-finite prediction at that entry cannot leak in.
+                self.keep.append(keep)
+                self.sigma_div.append(jnp.where(keep, sig, 1.0))
+                sig = jnp.where(keep, sig, jnp.inf)
+            else:
+                self.keep.append(None)
+                self.sigma_div.append(sig)
             self.sigma.append(sig)
             self.time_factor.append(factor)
             self.tobs.append(tobs)
             self.C0.append(C0)
             end = t_end[e] if isinstance(t_end, (list, tuple)) else t_end
-            self.t_end.append(float(tobs[-1]) if end is None else float(end))
+            self.t_end.append(float(tobs[-1] * factor) if end is None else float(end))
 
         # Prior rows (only their Jacobian matters, so the means drop out).
         active: dict[str, tuple[float, float]] = {}
@@ -433,8 +444,10 @@ class _FisherSetup:
 
     def jacobian(self, p, tobs_list, C0_list):
         """Noise-scaled sensitivity ``Sigma^{-1/2} S`` at parameters ``p`` for
-        sampling times ``tobs_list`` and initial states ``C0_list`` (one per
-        experiment), in unconstrained coordinates. Pure JAX."""
+        sampling times ``tobs_list`` (each in its experiment's ``time_unit``)
+        and initial states ``C0_list`` (one per experiment), in unconstrained
+        coordinates. An unmeasured (masked) entry gives an exactly zero row,
+        even where the prediction is not finite. Pure JAX."""
         d, m = len(self.free_params), self.m_theta
         trs = self.rate_transforms
 
@@ -450,9 +463,15 @@ class _FisherSetup:
                     else:
                         pools = jnp.exp(th_e)
                     C0 = C0.at[self.ic_idx].set(pools)
-                C = rctr.solve(C0, params=pp, t_span=(0.0, self.t_end[e]), t_eval=tobs).C
-                y = observe(C, pp, self.obs_idx[e], self.obs_fn[e], t=tobs / self.time_factor[e])
-                parts.append((y / self.sigma[e]).reshape(-1))
+                t_native = tobs * self.time_factor[e]
+                C = rctr.solve(C0, params=pp, t_span=(0.0, self.t_end[e]), t_eval=t_native).C
+                y = observe(C, pp, self.obs_idx[e], self.obs_fn[e], t=tobs)
+                keep = self.keep[e]
+                if keep is not None:
+                    # Forward-mode AD: the select drops the tangent of the
+                    # unselected branch, so a non-finite one there cannot leak.
+                    y = jnp.where(keep, y, 0.0)
+                parts.append((y / self.sigma_div[e]).reshape(-1))
             if self.has_rate_prior:
                 parts.append(self.prior_mask * physical / self.prior_std)
             if self.ic_prior:

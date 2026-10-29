@@ -23,16 +23,20 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
-- `observation_fn` may take the sample time, `observation_fn(t, C, params)`
-  (detected from its three required positional arguments), in `calibrate`,
-  `profile_likelihood` and `Experiment`. `t` is in the unit of `t_obs`. This
-  covers a sensor drift, a time-varying dilution, or a quantity measured only
-  at some times.
+- `observation_fn` may take the sample time, `observation_fn(t, C, params)`,
+  in `calibrate`, `profile_likelihood` and `Experiment`. A function that
+  requires exactly three positional arguments is the time-aware form; one
+  that can be called with two (such as `f(C, params=None)`) keeps the
+  `(C, params)` form. `t` is the entry of `t_obs` exactly as given, in its
+  unit. This covers a sensor drift, a time-varying dilution, or a quantity
+  measured only at some times.
 - Missing observations: a `NaN` entry in `calibrate`'s `observations` is left
   out of the loss and the Laplace Hessian (`mse` and `wmse` average over the
   observed entries), so sparse or staggered measurements no longer need a huge
   per-entry `sigma`. With `sigma="estimate"`, each output's noise level is
-  estimated from its observed entries only. `Experiment(mask=...)` marks which outputs are measured at
+  estimated from its observed entries only. A missing entry adds nothing to
+  the loss even where its `sigma` or the prediction there is not finite.
+  `Experiment(mask=...)` marks which outputs are measured at
   which times for `fisher_information` and the experiment-design functions.
 - `aquakin.calibrate(loss="nll", sigma="estimate")` estimates an unknown
   noise level: the concentrated likelihood, with the noise std of each observed

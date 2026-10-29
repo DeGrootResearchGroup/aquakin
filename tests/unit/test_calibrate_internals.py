@@ -12,6 +12,7 @@ monolith is covered by the full-fit tests in
 import dataclasses
 import sys
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -40,6 +41,7 @@ from aquakin.integrate.calibrate import (
     _ObjectiveBundle,
     _optimizer_bounds,
     _per_species_ic_bounds,
+    _predict,
     _ReactorForwardModel,
     _resolve_laplace,
     _resolve_problem,
@@ -1203,3 +1205,97 @@ def test_masked_loss_and_residual_skip_missing_entries(loss):
         log_norm = 2.0 * np.log(1.0) + np.log(0.5)  # the three observed entries
         assert value == pytest.approx(log_norm + 0.5 * ((0.5 / 0.5) ** 2 + 0.0 + 1.0**2))
         assert 0.5 * np.sum(r**2) == pytest.approx(value - log_norm)
+
+
+# ---------- missing entries: non-finite sigma / prediction cannot leak ----------
+
+_PRED_BAD = (jnp.nan, jnp.inf, -jnp.inf)
+
+
+@pytest.mark.parametrize("bad_sigma", [jnp.nan, 0.0, jnp.inf])
+@pytest.mark.parametrize("loss", ["wmse", "nll"])
+def test_masked_loss_ignores_a_bad_sigma_at_a_missing_entry(loss, bad_sigma):
+    """A NaN, zero or infinite per-entry sigma where the observation is missing
+    gives the same finite loss and residual as a valid one."""
+    good = jnp.array([[0.5, 1.0], [2.0, 1.0]])
+    bad = good.at[1, 0].set(bad_sigma)
+    for build in (_build_loss, _build_residual):
+        ref = np.asarray(build(loss, _OBS_GAP, good)(_PRED_GAP))
+        got = np.asarray(build(loss, _OBS_GAP, bad)(_PRED_GAP))
+        assert np.all(np.isfinite(got))
+        np.testing.assert_allclose(got, ref, rtol=1e-15)
+
+
+@pytest.mark.parametrize("bad_pred", _PRED_BAD)
+@pytest.mark.parametrize(
+    "loss, sigma", [("mse", None), ("wmse", jnp.array([0.5, 1.0])), ("nll", jnp.array([0.5, 1.0]))]
+)
+def test_masked_loss_ignores_a_non_finite_prediction_at_a_missing_entry(loss, sigma, bad_pred):
+    """A NaN / inf prediction at a missing entry leaves the loss, the residual
+    and their derivatives with respect to the prediction finite and equal to
+    those at a finite prediction there (the derivative at that entry is 0)."""
+    pred_bad = _PRED_GAP.at[1, 0].set(bad_pred)
+    loss_fn = _build_loss(loss, _OBS_GAP, sigma)
+    resid_fn = _build_residual(loss, _OBS_GAP, sigma)
+    assert float(loss_fn(pred_bad)) == float(loss_fn(_PRED_GAP))
+    np.testing.assert_array_equal(resid_fn(pred_bad), resid_fn(_PRED_GAP))
+    g = np.asarray(jax.grad(loss_fn)(pred_bad))
+    J = np.asarray(jax.jacfwd(resid_fn)(pred_bad))
+    Jr = np.asarray(jax.jacrev(resid_fn)(pred_bad))
+    assert np.all(np.isfinite(g)) and g[1, 0] == 0.0
+    np.testing.assert_array_equal(g, jax.grad(loss_fn)(_PRED_GAP))
+    for jac in (J, Jr):
+        assert np.all(np.isfinite(jac)) and np.all(jac[..., 1, 0] == 0.0)
+
+
+@pytest.mark.parametrize("bad_pred", _PRED_BAD)
+def test_sigma_estimate_ignores_a_non_finite_prediction_at_a_missing_entry(bad_pred):
+    """The concentrated likelihood's per-output sums of squares and raw
+    residuals stay finite, with a zero derivative at a missing entry."""
+    pred_bad = _PRED_GAP.at[1, 0].set(bad_pred)
+    sse = _build_loss("nll", _OBS_GAP, "estimate")
+    raw = _build_residual("nll", _OBS_GAP, "estimate")
+    np.testing.assert_array_equal(sse(pred_bad), sse(_PRED_GAP))
+    np.testing.assert_array_equal(raw(pred_bad), raw(_PRED_GAP))
+    g = np.asarray(jax.grad(lambda q: jnp.sum(jnp.log(sse(q))))(pred_bad))
+    assert np.all(np.isfinite(g)) and g[1, 0] == 0.0
+    J = np.asarray(jax.jacfwd(raw)(pred_bad))
+    assert np.all(np.isfinite(J)) and np.all(J[..., 1, 0] == 0.0)
+
+
+def test_sigma_estimate_without_missing_entries_is_the_plain_difference():
+    """With no NaN the concentrated-likelihood residual is pred - obs itself."""
+    obs = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+    np.testing.assert_array_equal(
+        _build_residual("nll", obs, "estimate")(_PRED_GAP), _PRED_GAP - obs
+    )
+    np.testing.assert_array_equal(
+        _build_loss("nll", obs, "estimate")(_PRED_GAP), jnp.sum((_PRED_GAP - obs) ** 2, axis=0)
+    )
+
+
+def test_time_aware_observation_fn_sees_t_obs_exactly(simple_model):
+    """With t_obs in minutes on a seconds model the native times are t_obs * 60,
+    which divided by 60 again need not give t_obs back; the time-aware
+    observation_fn still receives t_obs exactly (no solve: a stand-in forward
+    model). The times as given are also part of the compiled-objective key."""
+    t_user = jnp.asarray([0.33585575305464355, 7.294965609839984])
+    assert np.any(np.asarray(t_user) * 60.0 / 60.0 != np.asarray(t_user))
+    C0 = jnp.array([1.0, 0.0])
+    obs = jnp.zeros((2, 1))
+    fn = lambda t, C, p: t
+    prob = _resolve(simple_model, C0, obs, t_user, ["A_to_B.k"], observation_fn=fn, time_unit="min")
+    np.testing.assert_array_equal(prob.obs_times[0], t_user)
+    np.testing.assert_array_equal(prob.dataset_static[0][0], t_user * 60.0)
+
+    class _Stub:
+        def solve_trajectory(self, p, C0, t_span, t_eval):
+            return jnp.zeros((t_eval.shape[0], simple_model.n_species))
+
+    (pred,) = _predict(prob, _Stub(), prob.p0_full, jnp.zeros(0), prob.C0_base)
+    np.testing.assert_array_equal(pred[:, 0], t_user)
+
+    other = _resolve(
+        simple_model, C0, obs, t_user * 60.0, ["A_to_B.k"], observation_fn=fn, time_unit=None
+    )
+    assert other.struct_key("reverse") != prob.struct_key("reverse")
