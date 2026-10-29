@@ -440,3 +440,88 @@ def test_profile_compiled_cache_matches_uncached(growth_setup):
     )
     assert n_after_first > 0
     assert len(shared) == n_after_first
+
+
+def test_profile_accepts_start_list_with_profiled_parameter(growth_setup):
+    """An explicit start list seeds the cold fits; a dict start that names the
+    profiled parameter has it dropped (it is pinned), instead of failing every
+    inner fit."""
+    net, reactor, C0, t, obs, sig = growth_setup
+    starts = [{"mu": 0.8, "Y": 0.4}, {"mu": 1.2, "Y": 0.6}]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)  # an inner-fit failure warns
+        pr = aquakin.profile_likelihood(
+            reactor,
+            C0,
+            obs,
+            t,
+            ["mu", "Y"],
+            grid=np.linspace(0.8, 1.2, 3),
+            profile_param="mu",
+            observed_species=["S", "X"],
+            loss="nll",
+            sigma=jnp.asarray(sig),
+            optimizer=OptimizerConfig(method="gauss_newton", starts=starts),
+            polish=False,
+        )
+    assert all(f is not None for f in pr.fits)
+    assert np.all(np.isfinite(pr.loss))
+
+
+@pytest.mark.parametrize(
+    "opt, msg",
+    [
+        (OptimizerConfig(starts=[{"A_to_B.k": 0.2}], n_starts=3), "not both"),
+        (OptimizerConfig(starts=[]), "at least one start"),
+    ],
+)
+def test_profile_rejects_bad_start_list_up_front(simple_model, opt, msg):
+    """An invalid start list raises before any grid point is fitted, instead
+    of failing every inner fit and returning a profile of gaps."""
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
+    with pytest.raises(ValueError, match=msg):
+        aquakin.profile_likelihood(
+            reactor,
+            jnp.array([1.0, 0.0]),
+            jnp.array([0.0, 0.5]),
+            jnp.array([0.0, 1.0]),
+            ["A_to_B.k"],
+            grid=[0.1, 0.2],
+            profile_ic="A",
+            observed_species=["B"],
+            optimizer=opt,
+        )
+
+
+def test_profile_vector_start_list_is_reproducible(growth_setup):
+    """Full-vector starts seed the cold fits with their profiled entry ignored
+    (the grid value is pinned), so they give the same profile as the matching
+    dict starts, and a repeat run gives an identical profile."""
+    net, reactor, C0, t, obs, sig = growth_setup
+    p = net.default_parameters()
+    i_mu, i_y = net.param_index["mu"], net.param_index["Y"]
+    vec = [p.at[i_mu].set(50.0).at[i_y].set(y) for y in (0.4, 0.6)]
+    dicts = [{"Y": y} for y in (0.4, 0.6)]
+
+    def run(starts):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)  # an inner-fit failure warns
+            return aquakin.profile_likelihood(
+                reactor,
+                C0,
+                obs,
+                t,
+                ["mu", "Y"],
+                grid=np.linspace(0.9, 1.1, 3),
+                profile_param="mu",
+                observed_species=["S", "X"],
+                loss="nll",
+                sigma=jnp.asarray(sig),
+                optimizer=OptimizerConfig(method="gauss_newton", starts=starts),
+                polish=False,
+            )
+
+    a, b, d = run(vec), run(vec), run(dicts)
+    assert np.all(np.isfinite(a.loss))
+    np.testing.assert_array_equal(a.loss, b.loss)
+    np.testing.assert_allclose(a.loss, d.loss, rtol=1e-8)

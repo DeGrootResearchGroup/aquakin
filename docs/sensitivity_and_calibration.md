@@ -122,6 +122,45 @@ result.params_named_std   # marginal standard deviations
 result.converged
 ```
 
+`OptimizerConfig(n_starts=...)` adds jittered restarts around one start. To run
+a fixed set of starts instead, such as a grid, pass them as `starts`, each a
+full parameter vector or a `{name: value}` dict over the free parameters (the
+others start from `initial_params`). Every start runs through one compiled
+objective and the best fit is kept:
+
+```python
+starts = [{"r1.k1": k1, "r2.k2": k2} for k1 in (0.01, 0.1, 1.0) for k2 in (0.1, 1.0)]
+result = aquakin.calibrate(reactor, C0, observations, t_obs, free_params,
+                           optimizer=aquakin.OptimizerConfig(starts=starts))
+```
+
+`calibrate` keeps each free parameter inside the `bounds:` declared on it in
+the model, as `fit` does. The optimiser works in each parameter's transformed
+space, so a declared bound on a `positive_log` parameter becomes a bound on its
+logarithm, and every multistart start searches the same region. Pass explicit
+absolute bounds, which replace the declared ones, or an extra box around the
+starting value:
+
+```python
+optimizer = aquakin.OptimizerConfig(
+    bounds={"hetero.muH": (0.2, 10.0), "hetero.KS": (1.0, None)},  # None: open side
+    param_halfwidth=np.log(100.0),    # optional: within 100x of the start as well
+)
+```
+
+`OptimizerConfig(use_model_bounds=False)` ignores the declared bounds. A
+starting value outside the bounds, including each entry of a `starts` list, is
+moved to the nearest bound, with a warning.
+
+A parameter that ends on a bound is listed in `result.at_bound` (for example
+`{"hetero.muH": "lower"}`), with a warning. The Laplace approximation is not
+valid on an active bound, so its `params_named_std` is `nan`, it has zero
+variance in `posterior_cov` (posterior draws keep it on the bound), and the
+other parameters' standard deviations are conditional on it staying there.
+`aquakin.identifiability(result)` carries the same flag. A profile likelihood
+gives the one-sided interval for such a parameter. Fitted initial pools on
+their `FreeICConfig` bounds are flagged the same way, as `"ic[k].<species>"`.
+
 `observations` is shape `(n_t,)` for one species or `(n_t, n_observed)` for
 several; `t_obs` is in the model's native time unit unless you pass `time_unit=`.
 Pass **lists** of `C0`/`observations`/`t_obs` for a joint multi-batch fit, and
@@ -143,6 +182,33 @@ result = aquakin.calibrate(reactor, C0, uv_data, t_obs, free_params,
 The columns of `observations` follow the function's outputs, and `sigma` may
 give one value per output. `profile_likelihood` and `aquakin.Experiment` accept
 `observation_fn` the same way.
+
+### Unknown noise level
+
+A Laplace standard deviation or a profile-likelihood interval needs
+`loss="nll"` with the measurement noise `sigma`. When the noise level is not
+known, as with most real data, let `calibrate` estimate it:
+
+```python
+result = aquakin.calibrate(reactor, C0, observations, t_obs, free_params,
+                           loss="nll", sigma="estimate")
+result.sigma_estimate     # estimated noise std of each observed output
+result.params_named_std   # Laplace std at the estimated noise level
+```
+
+This is the concentrated likelihood: the noise std of each output is replaced
+by its best estimate, the RMS residual `sqrt(SSE_j / N_j)` (pooled over the
+datasets of a multi-batch fit), and the objective becomes the `"nll"` loss at
+that estimate, `sum_j (N_j / 2) log(SSE_j / N_j) + N / 2`. It is one fit, in
+place of fitting with `"mse"` and refitting with `sigma` set to the residual
+RMS.
+
+The profile-likelihood threshold reads the same way in both cases: a 95 %
+interval is where the profile rises by 1.92 (`0.5 * chi2_{1, 0.95}`). With
+`sigma` known, the profile is the `"nll"` loss itself. With
+`sigma="estimate"` and one output, the rise is `(N / 2) log(SSE / SSE_min)`,
+so the interval is where the sum of squares grows by a factor
+`exp(2 * 1.92 / N)`.
 
 ### Uncertainty: posterior-predictive bands
 
@@ -179,6 +245,38 @@ result.ic_named_std       # pool std devs in physical units, per dataset
 
 Strong correlation between a rate and a pool in `joint_cov` is a sign that the
 experiment cannot separate them.
+
+Pools of very different size can take their own bounds,
+`FreeICConfig(["SS", "XS"], bounds={"SS": (1, 300), "XS": (1, 500)})`; a
+species left out keeps the default `(1e-3, 1e4)`. A pool that ends on its own
+bound is listed in `result.at_bound` as `"ic[k].<species>"`, with a `nan`
+standard deviation.
+
+When the total of some pools is known and only its split is uncertain (a
+measured total COD divided between readily and slowly biodegradable
+substrate, say), hold the total fixed. Put the total into `C0`, with any split
+as the starting guess, and fit only the split:
+
+```python
+C0 = C0.at[i_SS].set(0.5 * cod).at[i_XS].set(0.5 * cod)   # sum = the known total
+result = aquakin.calibrate(
+    reactor, C0, observations, t_obs, free_params,
+    loss="nll", sigma=sigma,
+    free_ic=aquakin.FreeICConfig(["SS", "XS"], fixed_total=True),
+    laplace=aquakin.LaplaceConfig(method="gauss_newton", include_ic=True),
+)
+result.ic_named           # [{"SS": ..., "XS": ...}], summing to the total
+result.ic_fractions       # [{"SS": f, "XS": 1 - f}]
+result.ic_fractions_std   # std devs of the fractions
+```
+
+The split is fitted through the log-ratios `log(c_j / c_0)` of the pools to the
+first listed one, which keep every pool positive and the sum exact; these are
+the `"ic[k].XS:SS"` rows of `joint_cov`. `fisher_information` takes the same
+`FreeICConfig`. The log-ratios are unbounded, so a split never appears in
+`result.at_bound`. Per-species bounds and `fixed_total` are not yet available in
+`Plant.calibrate`, and `profile_likelihood` cannot profile a pool of a
+fixed-total split.
 
 ### Fisher information of a design
 

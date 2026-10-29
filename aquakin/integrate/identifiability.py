@@ -22,7 +22,7 @@ identifiability study reports:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import combinations
 
 import numpy as np
@@ -100,6 +100,13 @@ class IdentifiabilityResult:
         ``std`` divided by each quantity's magnitude.
     eig_keep : float
         The relative eigenvalue floor used to flag directions.
+    at_bound : dict[str, str]
+        Quantities that ended on an optimiser bound in the calibration analysed
+        (``CalibrationResult.at_bound``), mapped to ``"lower"`` / ``"upper"``.
+        Their ``std`` / ``relative_std`` are ``nan`` and the others' are
+        conditional on them staying on the bound, as for ``params_named_std``.
+        Empty for a :class:`~aquakin.FisherInformation` or a bare matrix unless
+        ``at_bound`` is passed.
     """
 
     names: list[str]
@@ -111,6 +118,7 @@ class IdentifiabilityResult:
     std: dict[str, float] | None
     relative_std: dict[str, float] | None
     eig_keep: float
+    at_bound: dict[str, str] = field(default_factory=dict)
 
     @property
     def unidentifiable(self) -> list[EigenDirection]:
@@ -203,32 +211,37 @@ class IdentifiabilityResult:
 
 
 def _source_fields(source, names, values, transforms):
-    """``(F, names, values, transforms)`` from a FisherInformation, a
+    """``(F, names, values, transforms, at_bound)`` from a FisherInformation, a
     CalibrationResult, or a bare matrix."""
     from aquakin.integrate.calibrate import CalibrationResult
     from aquakin.integrate.fisher import FisherInformation
 
     if isinstance(source, FisherInformation):
-        return source.matrix, source.names, source.values, source.transforms
+        return source.matrix, source.names, source.values, source.transforms, {}
     if isinstance(source, CalibrationResult):
+        at_bound = dict(getattr(source, "at_bound", None) or {})
         if source.joint_hessian is not None:
             F, nm = source.joint_hessian, source.joint_names
             vals = dict(source.params_named)
             for k, pools in enumerate(source.ic_named or []):
                 vals.update({f"ic[{k}].{s}": v for s, v in pools.items()})
+                # A fixed-total split is fitted as pool ratios "ic[k].<c_j>:<c_0>".
+                vals.update({f"ic[{k}].{a}:{b}": pools[a] / pools[b] for a in pools for b in pools})
             tr = list(source.transforms) + ["positive_log"] * (len(nm) - len(source.transforms))
-            return F, nm, vals, tr
+            return F, nm, vals, tr, {n: sd for n, sd in at_bound.items() if n in nm}
         if source.hessian_unconstrained is None:
             raise ValueError("The CalibrationResult has no Hessian; calibrate with laplace=True.")
+        nm = source.parameter_names
         return (
             source.hessian_unconstrained,
-            source.parameter_names,
+            nm,
             source.params_named,
             source.transforms,
+            {n: sd for n, sd in at_bound.items() if n in nm},
         )
     if names is None:
         raise ValueError("Pass names= when analysing a bare matrix.")
-    return source, names, values, transforms
+    return source, names, values, transforms, {}
 
 
 def identifiability(
@@ -239,6 +252,7 @@ def identifiability(
     transforms: list[str] | None = None,
     eig_keep: float = 1e-2,
     null_loading_tol: float = _NULL_LOADING_TOL,
+    at_bound: dict[str, str] | None = None,
 ) -> IdentifiabilityResult:
     """Practical-identifiability report from a Fisher information matrix.
 
@@ -273,6 +287,13 @@ def identifiability(
         standard deviation; the others keep the finite one from the remaining
         directions. The default 1e-2 ignores loadings carrying less than 0.01 %
         of the direction's weight.
+    at_bound : dict, optional
+        Names that ended on an optimiser bound, mapped to ``"lower"`` /
+        ``"upper"``. Taken from ``CalibrationResult.at_bound`` when ``source``
+        is a calibration result (and added to it when given too). These get a
+        ``nan`` std and are held fixed when the others' std is formed, so
+        ``std`` agrees with ``params_named_std``. The eigen-directions,
+        correlations and collinearity indices still use the whole matrix.
 
     Returns
     -------
@@ -286,9 +307,13 @@ def identifiability(
     >>> rep.unidentifiable[0].loadings     # e.g. {"r1.k": 0.71, "ic[0].X": -0.71}
     >>> rep.largest_identifiable_subset()
     """
-    F, nm, vals, tr = _source_fields(source, names, values, transforms)
+    F, nm, vals, tr, src_at_bound = _source_fields(source, names, values, transforms)
     F = np.asarray(F, dtype=float)
     nm = list(nm)
+    at_bound = {**src_at_bound, **dict(at_bound or {})}
+    for n in at_bound:
+        if n not in nm:
+            raise ValueError(f"at_bound name {n!r} is not one of {nm}.")
     if F.ndim != 2 or F.shape[0] != F.shape[1] or F.shape[0] != len(nm):
         raise ValueError(f"matrix shape {F.shape} does not match {len(nm)} names.")
     if not (0.0 < null_loading_tol < 1.0):
@@ -334,8 +359,12 @@ def identifiability(
     std = relative_std = None
     if vals is not None:
         tr = list(tr) if tr is not None else ["none"] * len(nm)
-        var = (V[:, ~null] ** 2) @ (1.0 / w[~null])
-        sd = np.where(involved, np.inf, np.sqrt(var))
+        fixed = np.asarray([n in at_bound for n in nm], dtype=bool)
+        if fixed.any():
+            sd = _std_holding_fixed(F, fixed, null_loading_tol)
+        else:
+            var = (V[:, ~null] ** 2) @ (1.0 / w[~null])
+            sd = np.where(involved, np.inf, np.sqrt(var))
         dphys = np.asarray(
             [float(dphysical_dunconstrained(vals[n], t, xp=np)) for n, t in zip(nm, tr)]
         )
@@ -353,4 +382,26 @@ def identifiability(
         std=std,
         relative_std=relative_std,
         eig_keep=eig_keep,
+        at_bound=at_bound,
     )
+
+
+def _std_holding_fixed(F, fixed, null_loading_tol) -> np.ndarray:
+    """Cramer-Rao std with the ``fixed`` quantities held at their values: the
+    full-inverse std of the information over the others (infinite on an
+    exactly null direction of that block), and ``nan`` for the fixed ones."""
+    sd = np.full(F.shape[0], np.nan)
+    keep = ~fixed
+    if not keep.any():
+        return sd
+    Fk = F[np.ix_(keep, keep)]
+    w, V = np.linalg.eigh(Fk)
+    w_max = float(w[-1])
+    if not np.isfinite(w_max) or w_max <= 0.0:
+        sd[keep] = np.inf
+        return sd
+    null = w <= _NULL_RTOL * w_max
+    involved = (np.abs(V[:, null]) > null_loading_tol).any(axis=1)
+    var = (V[:, ~null] ** 2) @ (1.0 / w[~null])
+    sd[keep] = np.where(involved, np.inf, np.sqrt(var))
+    return sd

@@ -23,6 +23,53 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `aquakin.calibrate(loss="nll", sigma="estimate")` estimates an unknown
+  noise level: the concentrated likelihood, with the noise std of each observed
+  output set to its RMS residual. One fit now gives a likelihood-scaled Laplace
+  standard deviation and profile, where it used to take an `mse` fit and an
+  `nll` refit with `sigma` set by hand. The estimate is returned as
+  `CalibrationResult.sigma_estimate`, and `profile_likelihood` accepts
+  `sigma="estimate"` too. Both optimizers support it. `Plant.calibrate` does
+  not yet, and raises a clear error. The estimate covers every dataset
+  together, so it cannot be an entry of a per-dataset `sigma` list.
+- `FreeICConfig(bounds={species: (lo, hi)})` sets bounds per fitted initial
+  pool, for pools of very different size; one `(lo, hi)` pair still applies to
+  every pool. A pool that ends on its own bound is listed in
+  `CalibrationResult.at_bound`. `profile_likelihood` drops the profiled
+  species from the dict for its inner fits.
+- `FreeICConfig(fixed_total=True)` holds the sum of the fitted pools at its
+  value in each dataset's `C0` and fits only the split, for example a known
+  total COD divided between two substrate pools. The split is fitted on the
+  simplex, so the pools stay positive and sum to the total exactly. The fitted
+  fractions are returned as `CalibrationResult.ic_fractions` and, with
+  `LaplaceConfig(include_ic=True)`, their standard deviations as
+  `ic_fractions_std`. `fisher_information` and `identifiability` use the same
+  parameterisation. The split's coordinates are unbounded, so they never
+  appear in `at_bound`. Neither option is supported by `Plant.calibrate` yet,
+  which raises a clear error, and `profile_likelihood` cannot profile a pool
+  of a fixed-total split.
+- `OptimizerConfig(starts=[...])` runs `aquakin.calibrate` from an explicit list
+  of starts, such as a grid, and keeps the best fit. Each start is a full
+  parameter vector or a `{name: value}` dict over the free parameters. All
+  starts run through one compiled objective, so a grid of starts no longer
+  needs one `calibrate` call (and one compilation) per start.
+  `profile_likelihood` uses the list for its cold fits.
+- `OptimizerConfig(bounds={name: (lo, hi)})` gives `aquakin.calibrate` (and
+  `profile_likelihood`) absolute bounds on the free rate parameters in physical
+  units, with `None` for an open side. An entry replaces the parameter's
+  model-declared bound. `param_halfwidth` still works and is now an extra box
+  around the start, intersected with the absolute bounds.
+- `CalibrationResult.at_bound` lists the fitted parameters (and initial pools,
+  as `"ic[k].<species>"`) that ended on an optimiser bound, as `"lower"` or
+  `"upper"`, and `calibrate` warns about them. Their Laplace standard deviation
+  is reported as `nan` rather than a finite value from the curvature at a
+  constrained point, they have zero variance in `posterior_cov` (posterior
+  draws keep them on the bound), and the other parameters' covariance is
+  conditional on them, so their standard deviations can be smaller than
+  before, when the bound parameter was treated as free to move either way. `aquakin.identifiability(result)` carries the same flag
+  (`IdentifiabilityResult.at_bound`, also accepted as `at_bound=` for a bare
+  matrix) and the same `nan` standard deviations.
+
 - `LaplaceConfig(include_ic=True)` gives a joint Laplace posterior over the rate
   parameters and the initial pools fitted with `free_ic`, for both
   `aquakin.calibrate` and `Plant.calibrate`. The joint covariance and Hessian
@@ -71,6 +118,31 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `param_draws` for robust experiment design. `predictive_band` uses the same
   draws.
 
+- `Plant.run_to_steady_state(criterion="scaled_residual", tol=..., scale_floor=...)`
+  stops the forward run on the scaled residual
+  `max_i |F_i| / max(|y_i|, scale_floor)` that `Plant.steady_state` converges
+  on, with the same default floor (`max(|y0|, 1e-6)` per state), so a forward
+  and an algebraic steady state can be held to one tolerance. The default
+  `criterion="norm"` keeps the previous stopping test. The norm test can stop
+  far from steady state on a plant whose states span many magnitudes: on the
+  BSM2 digester started from its published steady state it stops after
+  0.03 d at a scaled residual of 0.07.
+
+### Changed
+
+- **`aquakin.calibrate` now enforces the `bounds:` declared on model
+  parameters.** They are mapped into the space the optimiser works in (log for
+  `positive_log`, logit for `logit`), as `aquakin.fit` already did, and are the
+  same for every multistart start. Before, `calibrate` ignored them, so a fit
+  could leave the declared range. A fit whose optimum lies outside a declared
+  bound now stops on the bound, and a starting value outside it is moved to the
+  nearest bound with a `RuntimeWarning`. To get the old behaviour, pass
+  `OptimizerConfig(use_model_bounds=False)`. `Plant.calibrate` is unchanged.
+
+- `SteadyStateResult.residual` is now also set for `Plant.run_to_steady_state`
+  (and the `"ptc->forward"` fallback of `Plant.steady_state`): the scaled
+  residual of the returned state. It used to be `None` for forward results.
+
 ### Deprecated
 
 - `LaplaceConfig(eig_keep=...)` is deprecated and ignored (see Fixed). Passing
@@ -92,6 +164,16 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `composition_mode="lumped_tss"`. The earlier statement that `"per_species"`
   matches the BSM2 settler was wrong: neither reference has per-layer
   composition memory.
+- A compiled-objective cache shared between `aquakin.calibrate` calls could
+  reuse the objective built for different observations, loss or `sigma`, and
+  return the first fit's optimum. The cache key now includes them (and the free
+  set, transforms and priors). Only `profile_likelihood` shares the cache, and
+  its fits all use the same data, so no released result was affected.
+- `Plant.solve` and `Plant.run_to_steady_state` can now be traced by
+  `jax.jit` / `jax.grad` on a plant with a `TakacsClarifier`, including the
+  validated `build_bsm1(use_takacs=True)` settler. Tracing used to raise a
+  `ConcretizationTypeError` while forming the default `atol`, so it had to be
+  passed explicitly; the default is now the same value traced or not.
 - The Laplace standard deviations from `aquakin.calibrate` and
   `Plant.calibrate` (`params_named_std`, `posterior_cov`, `ic_named_std`) no
   longer understate the uncertainty of weakly identified parameters. The

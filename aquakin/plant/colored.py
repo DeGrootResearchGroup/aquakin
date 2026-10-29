@@ -45,6 +45,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from aquakin.integrate._common import default_atol
+
 if TYPE_CHECKING:
     from aquakin.plant.plant import Plant
 
@@ -378,8 +380,11 @@ class ColoredJacobianManager:
 
             # rtol/atol only set the (unused) chord tolerances on the returned
             # object; the seed matrix / coloring / pattern is all we use. A scalar
-            # atol avoids augmenting the per-component vector for the probe.
-            atol_s = float(jnp.max(jnp.asarray(atol)))
+            # atol avoids augmenting the per-component vector for the probe. A
+            # traced atol (derived from a traced y0 under a gradient) has no
+            # concrete value, so fall back to the default operating point's.
+            atol_ref = default_atol(y0, y0) if isinstance(atol, jax.core.Tracer) else atol
+            atol_s = float(jnp.max(jnp.asarray(atol_ref)))
             rf, n_colors, ok = self._build_and_guard(
                 rhs_aug_y,
                 y0_aug,
