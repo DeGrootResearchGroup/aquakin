@@ -552,8 +552,8 @@ underflow, and tight solids mass balance (verified to machine precision
 against an independent port of the reference BSM1 settler derivative in
 `tests/validation/test_takacs_vs_bsm1_reference.py`). `build_bsm1(use_takacs=
 True)` selects it in the full plant (both clarifiers expose the same ports),
-and `Plant.solve` takes `max_steps`. By default the **soluble** species are not
-held in the settler — they pass straight through (overflow = underflow = feed,
+and `Plant.solve` takes `max_steps`. By default a bare `TakacsClarifier` does not
+hold the **soluble** species in the settler — they pass straight through (overflow = underflow = feed,
 no holdup), the common simplification. The opt-in **`soluble_holdup=True`** makes
 each soluble a per-layer well-mixed state advected by the bulk flow (convection
 only, no settling), so the clarifier's liquid volume (~`area·height`) damps the
@@ -565,8 +565,10 @@ of `composition_mode`. **Both reference settlers are `"lumped_tss"`**: 10 TSS
 states, outlet particulates = feed composition × `gamma = x_boundary/TSS_feed`
 (checked in both `settler1dv4.c` and `settler1dv5_bsm2.c`, R2019b; the latter
 has 120 states = 10 TSS + 10×10 solubles + 10 temperature). `"per_species"`
-(per-layer composition memory) has no reference counterpart, although it is
-`build_bsm2`'s default. Earlier docs said `per_species` "matches settler1dv5"; it
+(per-layer composition memory) has no reference counterpart. `build_bsm2` and
+`build_bsm1` both default to the reference (`"lumped_tss"` with
+`soluble_holdup=True`); `build_bsm2` defaulted to `"per_species"` without holdup
+before v0.1.1. Earlier docs said `per_species` "matches settler1dv5"; it
 does not. The soluble holdup is a tail block of shape
 `(n_layers, n_soluble)` appended to the state (so the particulate layout /
 `state_size` are unchanged when off), orthogonal to `composition_mode`. **It
@@ -577,8 +579,8 @@ matters under a dynamic influent, where it smooths the effluent ammonia
 peaks/troughs. This is the structural cause of aquakin's wider dynamic-BSM2
 effluent-NH4 distribution vs the reference: the reactors agree to corr 0.99 but
 the pass-through settler does not damp the soluble signal the way BSM2's
-soluble-carrying settler does (the JRN-056 dynamic validation). `build_bsm2(
-settler_soluble_holdup=True)` enables it plant-wide.
+soluble-carrying settler does (the JRN-056 dynamic validation). `build_bsm2`
+enables it by default (`settler_soluble_holdup=False` turns it off).
 
 **Shared separator/clarifier helpers.** The separator/clarifier family resolves
 its settling / particulate / TSS species lists through the shared

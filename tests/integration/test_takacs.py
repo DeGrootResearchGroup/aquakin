@@ -555,6 +555,23 @@ def test_build_bsm1_takacs_defaults_to_reference_settler(asm1):
     assert cl2.soluble_holdup is False
 
 
+def test_build_bsm2_defaults_to_reference_settler(asm1):
+    """build_bsm2 builds the BSM2 reference secondary settler settler1dv5_bsm2
+    by default: lumped TSS with the solubles held through the ten layers. The
+    old per_species, pass-through settler stays available."""
+    from aquakin.plant.bsm import build_bsm2
+
+    cl = build_bsm2().units["settler"]
+    assert isinstance(cl, TakacsClarifier)
+    assert cl.composition_mode == "lumped_tss"
+    assert cl.soluble_holdup is True
+
+    cl2 = build_bsm2(settler_composition_mode="per_species",
+                     settler_soluble_holdup=False).units["settler"]
+    assert cl2.composition_mode == "per_species"
+    assert cl2.soluble_holdup is False
+
+
 @pytest.mark.parametrize("composition_mode", ["per_species", "lumped_tss"])
 @pytest.mark.parametrize("init_underflow_Q", [None, 18446.0])
 @pytest.mark.parametrize("soluble_holdup", [False, True])

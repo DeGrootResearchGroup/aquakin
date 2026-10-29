@@ -143,6 +143,17 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   (and the `"ptc->forward"` fallback of `Plant.steady_state`): the scaled
   residual of the returned state. It used to be `None` for forward results.
 
+- **`build_bsm2` now builds the reference BSM2 settler by default:**
+  `settler_composition_mode="lumped_tss"` (one TSS state per layer) with
+  `settler_soluble_holdup=True` (the solubles carried through the ten layers),
+  as in `settler1dv5_bsm2` and as `build_bsm1` already does. The default used
+  to be `"per_species"` without holdup, a settler with no reference
+  counterpart. Steady states are unchanged. Dynamic results change: the
+  settler's liquid volume now damps the soluble effluent signal (the effluent
+  ammonia peaks and troughs), as in the reference, and the plant state has a
+  different settler layout. To get the old settler, pass
+  `build_bsm2(settler_composition_mode="per_species", settler_soluble_holdup=False)`.
+
 ### Deprecated
 
 - `LaplaceConfig(eig_keep=...)` is deprecated and ignored (see Fixed). Passing
