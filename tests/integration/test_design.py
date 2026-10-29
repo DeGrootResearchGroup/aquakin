@@ -152,6 +152,27 @@ def test_srt_ports_resolve_to_activated_sludge_losses():
     )
 
 
+def test_srt_ports_prefer_recorded_endpoints_over_unit_names():
+    """A custom plant whose *primary* clarifier is named ``settler``: the SRT
+    losses are its recorded final effluent and registered wastage, not the
+    primary overflow that the name fallback would pick (issue #630)."""
+    from aquakin.plant import Plant
+    from aquakin.plant.clarifier import IdealClarifier
+    from aquakin.plant.design import _srt_ports
+
+    asm1 = aquakin.load_model("asm1")
+    plant = Plant("custom")
+    plant.add_unit(IdealClarifier(name="settler", model=asm1, underflow_Q=100.0))
+    plant.add_unit(IdealClarifier(name="final", model=asm1, underflow_Q=100.0))
+    # Without a record the name fallback still applies.
+    assert _srt_ports(plant, waste_port="final.underflow")[0] == "settler.overflow"
+    with pytest.raises(ValueError, match="wastage"):
+        _srt_ports(plant)
+    plant.effluent_endpoint = "final.overflow"
+    plant.register_stream("wastage", "final.underflow")
+    assert _srt_ports(plant) == ("final.overflow", "final.underflow")
+
+
 # ----- Sizing result fields / summary branches (fast, no solve) -----------
 
 

@@ -190,6 +190,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `sludge_metrics` (SRT) now takes the solids losses from the plant's recorded
+  final effluent (`plant.effluent_endpoint`) and registered `"wastage"`
+  stream, and matches unit names (`settler`, `clarifier`, ...) only when those
+  are missing. A custom plant whose primary clarifier was named `settler`
+  used to get its SRT from the primary overflow. The BSM1, BSM2 and A2O
+  results are unchanged.
 - `Plant.steady_state(design=...)`: the forward fallback now accepts
   `run_to_steady_state`'s `criterion`, `tol` and `scale_floor` through
   `fallback_kwargs` (they used to raise `TypeError`) and reports the scaled
