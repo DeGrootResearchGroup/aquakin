@@ -36,6 +36,7 @@ from aquakin.plant.metrics import (
     derived_TSS,
     time_average,
 )
+from aquakin.plant.mixer import MixerUnit
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant, PlantSolution
@@ -359,21 +360,28 @@ def _pick_endpoint(plant, explicit, candidates, role):
 def _srt_ports(plant, effluent_port=None, waste_port=None):
     """Resolve the ``(effluent, wastage)`` endpoints whose solids set the SRT.
 
-    Explicit ports are validated and returned. Otherwise the secondary-clarifier
-    overflow is preferred, then the builder-recorded final effluent
-    (:attr:`Plant.effluent_endpoint`), then a bypass mixer outlet: on a plant
-    with an influent bypass the recorded final effluent is that mixer, whose
-    untreated bypass solids are not an activated-sludge loss. The wastage is
-    the clarifier-underflow split ahead of a dewatering cake.
+    Explicit ports are validated and returned. Otherwise the plant's own record
+    comes first: the builder-recorded final effluent
+    (:attr:`Plant.effluent_endpoint`) and the registered ``"wastage"`` stream.
+    Unit-name matching (a ``settler`` / ``clarifier`` overflow, a clarifier
+    underflow split, a dewatering cake) is only the fallback, so a custom plant
+    whose primary clarifier happens to be named ``settler`` still resolves to
+    its recorded effluent. A recorded effluent that is a mixer outlet is a
+    combined final effluent (an influent bypass rejoining the clarified
+    stream), whose untreated bypass solids are not an activated-sludge loss, so
+    it is tried after the secondary-clarifier names.
     """
     recorded = getattr(plant, "effluent_endpoint", None)
-    eff_candidates = (
-        _EFFLUENT_CANDIDATES[:-1]
-        + (() if recorded is None else (recorded,))
-        + _EFFLUENT_CANDIDATES[-1:]
-    )
+    if recorded is None:
+        eff_candidates = _EFFLUENT_CANDIDATES
+    elif isinstance(plant.units.get(recorded.split(".", 1)[0]), MixerUnit):
+        eff_candidates = _EFFLUENT_CANDIDATES[:-1] + (recorded,) + _EFFLUENT_CANDIDATES[-1:]
+    else:
+        eff_candidates = (recorded,) + _EFFLUENT_CANDIDATES
+    named_waste = getattr(plant, "named_streams", {}).get("wastage")
+    w_candidates = _WASTE_CANDIDATES if named_waste is None else (named_waste,) + _WASTE_CANDIDATES
     eff_port = _pick_endpoint(plant, effluent_port, eff_candidates, "effluent")
-    w_port = _pick_endpoint(plant, waste_port, _WASTE_CANDIDATES, "wastage")
+    w_port = _pick_endpoint(plant, waste_port, w_candidates, "wastage")
     return eff_port, w_port
 
 
