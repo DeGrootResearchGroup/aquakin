@@ -9,6 +9,7 @@ AD-through-solve check, the well-mixed limit, and the result accessors
 paths (`solve_sensitivity`, `steady_state`) stay in the slow suite.
 """
 
+import copy
 import pathlib
 
 import jax
@@ -226,3 +227,21 @@ def test_compile_cache_keyed_on_adjoint(net, cond):
     params = net.default_parameters()
     J = jax.jacfwd(lambda p: r.solve(C0, (0.0, 5.0), params=p).C[-1, 0])(params)
     assert np.all(np.isfinite(np.asarray(J)))
+
+
+def test_traced_atol_bypasses_the_compile_cache(net, cond):
+    """A solve whose ``atol`` is traced (here inside ``jax.jit``) has no
+    concrete settings key, so its compiled solve is built fresh and not stored
+    in the (shared) cache; it still gives the concrete reactor's result."""
+    r = _tiny(net, cond)
+    C0 = net.concentrations({"A": 1.0})
+
+    def final_A(atol):
+        rr = copy.copy(r)  # shares r._jit_cache
+        rr.atol = atol
+        return rr.solve(C0, (0.0, 5.0)).C_named("A")[-1]
+
+    traced = jax.jit(final_A)(r.atol)
+    assert r._jit_cache == {}
+    np.testing.assert_allclose(traced, r.solve(C0, (0.0, 5.0)).C_named("A")[-1], rtol=1e-8)
+    assert len(r._jit_cache) == 1

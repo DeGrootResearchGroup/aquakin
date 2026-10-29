@@ -294,6 +294,21 @@ def test_time_event_at_t1_same_with_and_without_t_eval():
     assert a.log == b.log == [(1.0, "end")]
 
 
+
+def test_terminal_time_event_at_t0_stops_before_integrating():
+    """A terminal time event at exactly ``t0`` resets the initial state and
+    ends the solve there: ``t_eval`` points after it hold the reset state, and
+    ``t_eval=None`` reports ``t0`` with the pre-reset state."""
+    ev = Event(at_times=[0.0], apply=lambda t, y, a: y + 10.0, terminal=True, name="stop")
+    kw = dict(t0=0.0, t1=1.0, events=[ev], rtol=1e-9, atol=1e-11)
+    a = solve_with_events(_const_rhs(1.0), jnp.array([0.0]), 1.0,
+                          t_eval=jnp.array([0.0, 0.5, 1.0]), **kw)
+    np.testing.assert_array_equal(np.asarray(a.ys[:, 0]), [0.0, 10.0, 10.0])
+    assert a.log == [(0.0, "stop")]
+    b = solve_with_events(_const_rhs(1.0), jnp.array([0.0]), 1.0, t_eval=None, **kw)
+    assert float(b.ts[-1]) == 0.0 and float(b.ys[-1, 0]) == 0.0
+    assert b.log == [(0.0, "stop")]
+
 def test_unnamed_event_not_mutated():
     ev = Event(at_times=[0.5])
     res = solve_with_events(_const_rhs(1.0), jnp.array([0.0]), 1.0,
