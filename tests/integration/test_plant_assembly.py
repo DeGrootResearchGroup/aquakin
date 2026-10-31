@@ -1148,6 +1148,28 @@ def test_list_units_ports_species():
     # species of the concentration-vector units
     assert plant.list_species("tank5") == list(asm1.species)
     assert plant.list_species("digester") == list(adm1.species)
+    # The primary's state is [C..., filtered flow]; its head is still read by species.
+    assert plant.list_species("primary") == list(asm1.species)
+
+
+def test_concentration_units_are_those_whose_state_leads_with_concentrations():
+    """A unit is species-indexable when its state is the concentration vector or
+    a well-mixed tank's [C..., scalars]; not when it has no model, or a model but
+    a state of another shape (stateless, or the layered settler)."""
+    from types import SimpleNamespace
+
+    from aquakin.plant import Plant, StorageTank
+
+    plant, asm1, _adm1 = _bsm2_no_solve()
+    is_conc = Plant._is_concentration_unit
+    assert is_conc(plant.units["tank1"])        # state == C
+    assert is_conc(plant.units["primary"])      # state == [C, Q_f]
+    assert is_conc(StorageTank(name="store", model=asm1, volume=160.0))  # [C, V]
+    assert not is_conc(plant.units["front_mix"])  # stateless
+    assert not is_conc(plant.units["settler"])    # layered, not [C, ...]
+    # A unit with no model at all (a controller-like unit) is never indexable,
+    # whatever its state size.
+    assert not is_conc(SimpleNamespace(state_size=asm1.n_species))
 
 
 def test_list_species_rejects_non_concentration_units():

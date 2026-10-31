@@ -111,7 +111,9 @@ def _filtered(asm1, Q_f):
 def test_filter_adds_one_trailing_state(asm1):
     """With t_m > 0 the state is [C..., Q_f], seeded with initial_flow; t_m = 0
     keeps the bare concentration vector."""
-    assert PrimaryClarifier(name="pc", model=asm1, volume=900.0).state_size == asm1.n_species
+    plain = PrimaryClarifier(name="pc", model=asm1, volume=900.0)
+    assert plain.state_size == asm1.n_species
+    assert jnp.array_equal(plain.initial_state(), asm1.default_concentrations())
     unit = _filtered(asm1, 21000.0)
     assert unit.state_size == asm1.n_species + 1
     y0 = unit.initial_state()
