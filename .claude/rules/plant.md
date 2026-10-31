@@ -421,10 +421,11 @@ Key types:
     concentration-vector unit's species (the valid `C_named` / `to_dataframe`
     columns). All three work **before** solving (plant structure) and raise a
     `KeyError` with a `difflib` "did you mean?" hint for an unknown name.
-    `list_species` / `C_named` are restricted to units whose *state is a
-    concentration vector* (`state_size == model.n_species`: the CSTRs, the
-    primary clarifier holding tank, the digester) via `Plant._is_concentration_unit`
-    — a stateless mixer/splitter/ideal-clarifier or the **layered Takács settler**
+    `list_species` / `C_named` are restricted to units whose *state leads with a
+    concentration vector* via `Plant._is_concentration_unit`: `state_size ==
+    model.n_species` (the CSTRs, the digester), or a `LiquidVolumeUnit` whose state
+    is `[C…, scalar(s)]` (the filtered primary clarifier, storage, MBR, SBR — so
+    free ICs and the colored pattern's source columns cover them too) — a stateless mixer/splitter/ideal-clarifier or the **layered Takács settler**
     (which carries a model but a non-species state) is rejected with a clear
     "read it as a stream with `plant.stream(...)`" message rather than an
     `IndexError`. `PlantSolution.available_streams()` is a convenience alias for
@@ -509,8 +510,9 @@ Key types:
     also reuses for the reaction integral). A unit holding a single well-mixed
     liquid volume (`StorageTank` / `MBRUnit` / `SBRUnit`, whose states are
     `[C…, scalar(s)]`) instead declares that volume through **`liquid_volume(state)`**,
-    so its inventory is `V·C`; a plain concentration-vector unit (`CSTRUnit` /
-    `PrimaryClarifier`) falls through to the generic `volume·C`. This completes the
+    so its inventory is `V·C` (`PrimaryClarifier` too, returning its fixed `volume`,
+    since its filter state trails the concentrations); a plain concentration-vector
+    unit (`CSTRUnit`) falls through to the generic `volume·C`. This completes the
     inversion `liquid_volume` started — the balance no longer reaches into
     `_part_block_size` / `_n_part` / `param_index["V_gas"]` etc., and a unit with a
     new state representation participates by implementing `component_inventory`
@@ -537,7 +539,14 @@ see *Membrane bioreactor* below), `MixerUnit`,
 `RatioSplitter` / `SetpointSplitter` / `ThresholdSplitter`,
 `IdealClarifier` (fast, stateless separator),
 `PrimaryClarifier` (BSM2 Otterpohl–Freund: a well-mixed holding tank split by
-an HRT-dependent particulate-removal efficiency, fixed underflow `f_PS·Q`),
+an HRT-dependent particulate-removal efficiency, fixed underflow `f_PS·Q`; with
+`t_m > 0` the HRT reads a first-order filtered inflow, one trailing state seeded
+at `initial_flow`, while the flow split stays on the instantaneous inflow —
+`build_bsm2` sets the reference `t_m = 0.125 d`, `initial_flow = Q_ref`; the
+class default `t_m = 0` keeps no filter, because a standalone unit has no
+design inflow to seed it with. On the 609-day BSM2 dynamic influent the missing
+filter alone put average effluent S_NH 2.8% above the MATLAB reference, 0.1%
+with it — #646),
 `IdealThickener` (BSM2 thickener / dewatering — a stateless ideal `%TSS`
 separator, concentration-dependent underflow flow), `ADM1DigesterUnit`
 (continuously-fed ADM1 CSTR with gas headspace, dilution masked to the liquid

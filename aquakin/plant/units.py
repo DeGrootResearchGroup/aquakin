@@ -85,8 +85,9 @@ class Unit(Protocol):
       the shared signal bus (e.g. a PI controller).
     - :class:`PHOperating` (``operating_pH``) -- exposes its state-derived pH to a
       pH-coupled interface translator.
-    - :class:`LiquidVolumeUnit` (``liquid_volume``) -- a state-dependent liquid
-      volume, read by the results-level mass balance.
+    - :class:`LiquidVolumeUnit` (``liquid_volume``) -- a single well-mixed liquid
+      volume whose state leads with its concentration vector, read by the
+      results-level mass balance and the per-species readers.
     - :class:`ComponentInventoryUnit` (``component_inventory``) -- owns its
       COD/N/P inventory for a non-concentration-vector state layout.
     - :class:`CycleEventSource` (``cycle_events``) -- schedules located phase
@@ -176,9 +177,11 @@ class PHOperating(Protocol):
 
 @runtime_checkable
 class LiquidVolumeUnit(Protocol):
-    """A unit whose liquid volume depends on its state (a variable-volume storage
-    tank / MBR / SBR). The results-level mass balance weights ``C`` by this
-    volume to get the unit's component inventory."""
+    """A unit holding a single well-mixed liquid volume, with state
+    ``[C..., one-or-more scalars]``: a variable-volume storage tank / MBR / SBR,
+    or the primary clarifier with its filtered-flow state. The results-level
+    mass balance weights ``C`` by this volume to get the unit's component
+    inventory, and the plant reads the concentration head by species."""
 
     def liquid_volume(self, state: jnp.ndarray) -> jnp.ndarray: ...
 

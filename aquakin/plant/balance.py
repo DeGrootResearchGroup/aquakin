@@ -142,11 +142,11 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_model, params):
       weighting its three gas-headspace states by ``V_gas``) returns its own
       inventory;
     - a unit holding a single well-mixed liquid volume declares that volume via
-      ``liquid_volume(state)`` (StorageTank / MBR / SBR, whose states are
-      ``[C..., one-or-more scalars]``), so the inventory is ``V·Σ C·content``
-      over the concentration head block;
-    - a plain concentration-vector unit at its fixed ``volume`` (CSTR / primary
-      clarifier) holds ``volume·Σ C·content``;
+      ``liquid_volume(state)`` (StorageTank / MBR / SBR / the primary clarifier,
+      whose states are ``[C..., one-or-more scalars]``), so the inventory is
+      ``V·Σ C·content`` over the concentration head block;
+    - a plain concentration-vector unit at its fixed ``volume`` (CSTR) holds
+      ``volume·Σ C·content``;
     - anything else -- a stateless unit, or a non-concentration state such as an
       attached-growth biofilm -- holds nothing.
 

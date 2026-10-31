@@ -384,8 +384,8 @@ def _resolve_plant_problem(
     # --- Free initial conditions (single-batch only for now) -----------
     # Each free-IC spec names a (unit, species) slot of the plant's assembled
     # state ``y0`` to fit (in log space, box-bounded). Resolve it to a flat state
-    # index: a concentration unit's sub-state IS its species vector, so the slot
-    # is the unit's state offset plus the species position.
+    # index: a concentration unit's sub-state leads with its species vector, so
+    # the slot is the unit's state offset plus the species position.
     free_ic_specs = _normalize_free_ic(free_ic)
     m_ic = len(free_ic_specs)
     if multi and m_ic:
@@ -399,7 +399,8 @@ def _resolve_plant_problem(
             if not plant._is_concentration_unit(u):
                 raise KeyError(
                     f"free_ic unit '{unit}' has no per-species state (only "
-                    f"concentration units -- CSTRs, the digester -- support "
+                    f"concentration units -- CSTRs, the digester, tanks whose state "
+                    f"leads with concentrations -- support "
                     f"free ICs); read it as a stream instead."
                 )
             if species not in u.model.species_index:

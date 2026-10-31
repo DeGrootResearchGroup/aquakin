@@ -69,6 +69,7 @@ from aquakin.plant.temperature import AlgebraicTemperature, TemperatureModel
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
 from aquakin.plant.units import (
     CycleEventSource,
+    LiquidVolumeUnit,
     PHOperating,
     SignalProducer,
     TemperatureSettable,
@@ -1341,10 +1342,21 @@ class Plant:
 
     @staticmethod
     def _is_concentration_unit(unit) -> bool:
-        """Whether a unit's state *is* its model's concentration vector (so it
-        can be indexed by species: a CSTR or the digester, not a stateless
-        mixer/splitter/ideal-clarifier nor the layered Takacs settler)."""
-        return hasattr(unit, "model") and getattr(unit, "state_size", 0) == unit.model.n_species
+        """Whether a unit's state leads with its model's concentration vector (so
+        it can be indexed by species).
+
+        True for a state that *is* the concentration vector (a CSTR, the
+        digester) and for a well-mixed liquid volume declaring
+        ``liquid_volume`` (:class:`LiquidVolumeUnit`), whose state is
+        ``[C..., one-or-more scalars]`` (the filtered primary clarifier, a
+        storage tank, an MBR, an SBR). False for a stateless
+        mixer/splitter/ideal-clarifier and for the layered Takacs settler.
+        """
+        if not hasattr(unit, "model"):
+            return False
+        if isinstance(unit, LiquidVolumeUnit):
+            return True
+        return getattr(unit, "state_size", 0) == unit.model.n_species
 
     def list_species(self, unit: str) -> list[str]:
         """The species names of a concentration-vector unit's model.

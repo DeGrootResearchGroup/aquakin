@@ -18,10 +18,10 @@ precision, confirming the removal law, the effluent/sludge split, and the
 settleable-species set are reproduced exactly.
 
 The benchmark additionally low-pass-filters the flow that drives the HRT (a 3 h
-lag) before the removal law; aquakin uses the instantaneous inflow. The two are
-identical at constant flow (the smoothing is identity at steady state); under a
-flow transient they differ, which this test documents but does not treat as an
-error.
+lag, ``t_m = 0.125 d``) before the removal law, while the flow split stays on the
+instantaneous inflow. A ``PrimaryClarifier`` with ``t_m > 0`` carries that
+filtered flow as a trailing state; the second test checks it reproduces the
+reference when the filtered flow and the inflow differ, as under a transient.
 
 References
 ----------
@@ -38,7 +38,7 @@ from aquakin.plant.primary_clarifier import PrimaryClarifier
 from aquakin.plant.streams import Stream
 
 # BSM2 primary-clarifier parameters.
-_F_CORR, _F_X, _F_PS, _VOL = 0.65, 0.85, 0.007, 900.0
+_F_CORR, _F_X, _F_PS, _VOL, _T_M = 0.65, 0.85, 0.007, 900.0, 0.125
 # Settleable (particulate) ASM1 species removed by the primary clarifier.
 _PARTICULATE = ("XI", "XS", "XB_H", "XB_A", "XP", "XND")
 # Representative well-mixed tank composition (g m^-3).
@@ -103,11 +103,19 @@ def test_primclar_matches_reference_at_matched_flow(setup):
 
 
 @pytest.mark.validation
-def test_primclar_smoothing_is_identity_at_steady_flow(setup):
-    """The flow-smoothing difference vanishes when inflow == smoothed flow."""
-    asm1, clar, state = setup
+def test_filtered_primclar_matches_reference_off_steady_flow(setup):
+    """With the flow filter, the HRT reads the smoothed flow and the split the
+    instantaneous one, exactly as the reference, when the two flows differ."""
+    asm1, _, state = setup
+    Q_smooth = 20648.0
+    clar = PrimaryClarifier(name="p", model=asm1, volume=_VOL, f_PS=_F_PS,
+                            t_m=_T_M, initial_flow=Q_smooth)
     x = np.asarray(state)
-    Q = 20648.0
-    b_eff, _, _, _ = _reference_outputs(asm1, x, Q, Q)   # smoothed == instantaneous
-    a_eff, _, _, _ = _aquakin_outputs(clar, asm1, state, Q)
-    assert np.allclose(a_eff, b_eff, rtol=1e-12, atol=1e-12)
+    filtered_state = jnp.concatenate([state, jnp.asarray([Q_smooth])])
+    for Q in (10000.0, 45000.0):
+        b_eff, b_sl, b_Qe, b_Qu = _reference_outputs(asm1, x, Q, Q_smooth)
+        a_eff, a_sl, a_Qe, a_Qu = _aquakin_outputs(clar, asm1, filtered_state, Q)
+        assert a_Qe == pytest.approx(b_Qe, rel=1e-12)
+        assert a_Qu == pytest.approx(b_Qu, rel=1e-12)
+        assert np.allclose(a_eff, b_eff, rtol=1e-12, atol=1e-12), f"Q={Q}: effluent"
+        assert np.allclose(a_sl, b_sl, rtol=1e-12, atol=1e-12), f"Q={Q}: sludge"
