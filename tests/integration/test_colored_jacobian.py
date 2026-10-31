@@ -572,10 +572,14 @@ def test_bsm2_adjoint_pattern_covers_dense_jacobian():
     y_ws = np.asarray(bsm2_warm_start(plant))
     rng = np.random.default_rng(1)
     states = [y_ws] + [y_ws * 10.0 ** rng.uniform(-0.5, 0.5, n) for _ in range(3)]
-    for t in (0.0, 5.0):
-        rhs = lambda y, t=t: plant._rhs(jnp.asarray(t), y, params)
-        count, worst = cj.pattern_coverage_misses(rhs, states, P)
-        assert count == 0, f"t={t}: {count} missed entries (largest {worst:.1e} of its row)"
+    # Evaluated as the builder does, under ``ensure_compile_time_eval``: the plant
+    # memoises its per-unit parameter slices for a concrete ``params``, and a slice
+    # taken inside a jitted rhs would otherwise be a tracer kept past its trace.
+    with jax.ensure_compile_time_eval():
+        for t in (0.0, 5.0):
+            rhs = lambda y, t=t: plant._rhs(jnp.asarray(t), y, params)
+            count, worst = cj.pattern_coverage_misses(rhs, states, P)
+            assert count == 0, f"t={t}: {count} missed ({worst:.1e} of its row)"
 
 
 @pytest.mark.slow
