@@ -181,8 +181,9 @@ class PlantSolution:
     def C_named(self, unit_name: str, species: str) -> jnp.ndarray:
         """Return a single species' trajectory in a single unit.
 
-        Only valid for units whose state is a concentration vector in the unit's
-        model (CSTRs and other kinetic units). See ``plant.list_units()`` /
+        Only valid for units whose state leads with a concentration vector in
+        the unit's model (CSTRs, the digester, and well-mixed tanks such as the
+        primary clarifier, storage, MBR and SBR). See ``plant.list_units()`` /
         ``plant.list_species(unit)`` for the valid names.
         """
         unit = self.plant._unit_or_raise(unit_name)

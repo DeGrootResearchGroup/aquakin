@@ -121,3 +121,36 @@ def test_bsm2_flow_balance(plant):
     dewater_disposal = float(fl[("dewatering", "underflow")])
     assert (BSM2_Q_REF + BSM2_CARBON_FLOW) == pytest.approx(
         effluent + dewater_disposal, rel=1e-3)
+
+
+def test_bsm2_primary_filters_its_hrt_flow(plant, asm1):
+    """build_bsm2 gives the primary the reference HRT inflow filter: one trailing
+    filtered-flow state seeded at Q_ref. The concentration head is still read by
+    species and by the mass balance, and the trailing flow carries no mass.
+
+    Cheap (no solve), so it stays on the fast gate."""
+    import numpy as np
+
+    from aquakin import canonical_content
+    from aquakin.plant.balance import _unit_inventory
+    from aquakin.plant.bsm.bsm2 import BSM2_PRIMARY_T_M, BSM2_PRIMARY_VOLUME
+
+    primary = plant.units["primary"]
+    n = asm1.n_species
+    assert primary.t_m == BSM2_PRIMARY_T_M
+    assert primary.state_size == n + 1
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    y0 = plant.states_by_unit(plant.initial_state())["primary"]
+    assert float(y0[n]) == BSM2_Q_REF
+    assert plant.list_species("primary") == list(asm1.species)
+
+    params = plant.default_parameters()
+    content = {q: canonical_content(asm1, q, electron_acceptor_cod=False, params=params)
+               for q in ("COD", "N")}
+    C = asm1.concentrations({"XS": 300.0, "SNH": 30.0})
+    inv = _unit_inventory(plant, "primary", jnp.concatenate([C, jnp.asarray([5000.0])]),
+                          {asm1.name: content}, params)
+    for q in ("COD", "N"):
+        expected = BSM2_PRIMARY_VOLUME * float(np.dot(np.asarray(C), np.asarray(content[q])))
+        assert inv[q] == pytest.approx(expected, rel=1e-12)

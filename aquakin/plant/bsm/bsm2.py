@@ -88,6 +88,7 @@ BSM2_BYPASS_Q = 60000.0  # influent flow above this bypasses treatment
 BSM2_HYDRAULIC_DELAY_TAU = 0.02  # d, influent hydraulic-lag time constant (~30 min)
 BSM2_PRIMARY_VOLUME = 900.0  # m³
 BSM2_PRIMARY_FPS = 0.007
+BSM2_PRIMARY_T_M = 0.125  # d, time constant of the primary's HRT inflow filter
 BSM2_CLARIFIER_AREA = 1500.0  # m²
 BSM2_CLARIFIER_HEIGHT = 4.0  # m
 BSM2_DIGESTER_VOLUME = 3400.0  # m³ liquid
@@ -649,7 +650,12 @@ def build_bsm2(
     )
     plant.add_unit(
         PrimaryClarifier(
-            name="primary", model=asm1, volume=BSM2_PRIMARY_VOLUME, f_PS=BSM2_PRIMARY_FPS
+            name="primary",
+            model=asm1,
+            volume=BSM2_PRIMARY_VOLUME,
+            f_PS=BSM2_PRIMARY_FPS,
+            t_m=BSM2_PRIMARY_T_M,
+            initial_flow=Q_ref,
         )
     )
 

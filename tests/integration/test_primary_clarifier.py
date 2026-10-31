@@ -97,3 +97,109 @@ def test_grad_through_primary_clarifier(asm1):
 
     g = jax.grad(loss)(state)
     assert jnp.all(jnp.isfinite(g))
+
+
+# --- the first-order inflow filter on the HRT (t_m > 0) ----------------------
+
+_T_M = 0.125
+
+
+def _filtered(asm1, Q_f):
+    return PrimaryClarifier(name="pc", model=asm1, volume=900.0, t_m=_T_M, initial_flow=Q_f)
+
+
+def test_filter_adds_one_trailing_state(asm1):
+    """With t_m > 0 the state is [C..., Q_f], seeded with initial_flow; t_m = 0
+    keeps the bare concentration vector."""
+    assert PrimaryClarifier(name="pc", model=asm1, volume=900.0).state_size == asm1.n_species
+    unit = _filtered(asm1, 21000.0)
+    assert unit.state_size == asm1.n_species + 1
+    y0 = unit.initial_state()
+    assert y0.shape == (asm1.n_species + 1,)
+    assert float(y0[-1]) == 21000.0
+    assert jnp.array_equal(y0[:-1], asm1.default_concentrations())
+
+
+def test_filter_is_identity_at_steady_state(asm1):
+    """With Q_f equal to the inflow, the filtered unit's outlets equal the
+    unfiltered unit's and its whole rhs is zero at the inlet composition."""
+    Q_in = 21000.0
+    C = _state(asm1, {"XI": 95.0, "XS": 360.0, "XB_H": 50.0, "SS": 59.0, "SNH": 35.0})
+    plain = _outputs(PrimaryClarifier(name="pc", model=asm1, volume=900.0), asm1, Q_in, C)
+    unit = _filtered(asm1, Q_in)
+    s_in = Stream(Q=jnp.asarray(Q_in), C=C, model=asm1)
+    state = jnp.concatenate([C, jnp.asarray([Q_in])])
+    out = unit.compute_outputs(jnp.asarray(0.0), state, {"inlet": s_in}, jnp.zeros((0,)))
+    for port in ("effluent", "underflow"):
+        assert float(out[port].Q) == pytest.approx(float(plain[port].Q), rel=1e-12)
+        assert jnp.allclose(out[port].C, plain[port].C, rtol=1e-12, atol=0.0)
+    d = unit.rhs(jnp.asarray(0.0), state, {"inlet": s_in}, jnp.zeros((0,)))
+    assert jnp.allclose(d, 0.0, atol=1e-9)
+
+
+def test_removal_reads_the_filtered_flow_and_the_split_the_inflow(asm1):
+    """Off steady state the removal fraction follows Q_f, while the underflow is
+    still f_PS times the instantaneous inflow (the exact recycle-flow rule)."""
+    Q_f, Q_in = 21000.0, 42000.0
+    unit = _filtered(asm1, Q_f)
+    C = _state(asm1, {"XI": 100.0})
+    s_in = Stream(Q=jnp.asarray(Q_in), C=C, model=asm1)
+    state = jnp.concatenate([C, jnp.asarray([Q_f])])
+    out = unit.compute_outputs(jnp.asarray(0.0), state, {"inlet": s_in}, jnp.zeros((0,)))
+    i = asm1.species_index["XI"]
+    n_x_filtered = float(unit._removal_fraction(jnp.asarray(Q_f)))
+    assert n_x_filtered != pytest.approx(float(unit._removal_fraction(jnp.asarray(Q_in))))
+    assert float(out["effluent"].C[i]) == pytest.approx(100.0 * (1 - n_x_filtered), rel=1e-12)
+    assert float(out["underflow"].Q) == pytest.approx(0.007 * Q_in, rel=1e-12)
+    fo = unit.flow_outputs({"inlet": jnp.asarray(Q_in)}, jnp.zeros((0,)))
+    assert float(fo["underflow"]) == pytest.approx(float(out["underflow"].Q), rel=1e-12)
+
+
+def test_inflow_step_relaxes_the_filtered_flow_with_time_constant_t_m(asm1):
+    """After an inflow step Q0 -> Q1, Q_f(t) = Q1 + (Q0 - Q1)·exp(-t/t_m), and the
+    removal fraction follows that relaxing flow, not the stepped one."""
+    import diffrax
+
+    Q0, Q1 = 21000.0, 42000.0
+    unit = _filtered(asm1, Q0)
+    C = _state(asm1, {"XI": 100.0, "XS": 300.0})
+    s_in = Stream(Q=jnp.asarray(Q1), C=C, model=asm1)
+    y0 = jnp.concatenate([C, jnp.asarray([Q0])])
+
+    def f(t, y, args):
+        return unit.rhs(t, y, {"inlet": s_in}, jnp.zeros((0,)))
+
+    ts = jnp.asarray([0.5 * _T_M, _T_M, 3.0 * _T_M])
+    sol = diffrax.diffeqsolve(
+        diffrax.ODETerm(f), diffrax.Kvaerno5(), 0.0, float(ts[-1]), 1e-4, y0,
+        saveat=diffrax.SaveAt(ts=ts),
+        stepsize_controller=diffrax.PIDController(rtol=1e-10, atol=1e-8),
+    )
+    expected = Q1 + (Q0 - Q1) * jnp.exp(-ts / _T_M)
+    assert jnp.allclose(sol.ys[:, -1], expected, rtol=1e-7)
+    # One time constant in: removal is set by Q_f(t_m), between the two flows.
+    y_tm = sol.ys[1]
+    out = unit.compute_outputs(jnp.asarray(_T_M), y_tm, {"inlet": s_in}, jnp.zeros((0,)))
+    i = asm1.species_index["XI"]
+    n_x = float(unit._removal_fraction(expected[1]))
+    assert float(out["effluent"].C[i]) == pytest.approx(float(y_tm[i]) * (1 - n_x), rel=1e-6)
+
+
+def test_grad_through_the_filtered_flow(asm1):
+    """The effluent particulates depend on Q_f through the HRT: a larger filtered
+    flow is a shorter HRT, less removal, more particulates in the effluent."""
+    unit = _filtered(asm1, 21000.0)
+    C = _state(asm1, {"XI": 100.0})
+    s_in = Stream(Q=jnp.asarray(21000.0), C=C, model=asm1)
+    i = asm1.species_index["XI"]
+
+    def eff_xi(Q_f):
+        state = jnp.concatenate([C, jnp.reshape(Q_f, (1,))])
+        out = unit.compute_outputs(jnp.asarray(0.0), state, {"inlet": s_in}, jnp.zeros((0,)))
+        return out["effluent"].C[i]
+
+    g = float(jax.grad(eff_xi)(jnp.asarray(21000.0)))
+    h = 1.0
+    fd = float(eff_xi(jnp.asarray(21000.0 + h)) - eff_xi(jnp.asarray(21000.0 - h))) / (2 * h)
+    assert g > 0.0
+    assert g == pytest.approx(fd, rel=1e-5)
