@@ -51,6 +51,30 @@ if TYPE_CHECKING:
     from aquakin.plant.plant import Plant
 
 
+def _output_state_pattern(plant, unit, cp) -> np.ndarray:
+    """Which of ``unit``'s state entries its outlet concentrations read.
+
+    A boolean ``(n_species, state_size)`` block: entry ``(i, j)`` is true when the
+    outlet concentration of species ``i`` (on any port) can depend on state entry
+    ``j``. Taken from the unit's :class:`~aquakin.plant.coupling.CouplingPattern`
+    ``output_pattern`` when it declares one. Otherwise: the identity for a unit
+    whose state is its concentration vector; the identity on the concentration
+    head plus every trailing scalar (a volume, a filtered flow) for a unit whose
+    state leads with its concentrations; and every state entry for any other
+    layout -- a dense block is a safe superset.
+    """
+    n = unit.model.n_species
+    m = int(unit.state_size)
+    out = getattr(cp, "output_pattern", None) if cp is not None else None
+    if out is not None:
+        return np.asarray(out, dtype=bool)
+    if m == n:
+        return np.eye(n, dtype=bool)
+    if plant._is_concentration_unit(unit):
+        return np.concatenate([np.eye(n, dtype=bool), np.ones((n, m - n), dtype=bool)], axis=1)
+    return np.ones((n, m), dtype=bool)
+
+
 class ColoredJacobianManager:
     """Owns the colored-Jacobian sparsity subsystem (structural pattern + the
     forward / adjoint / steady builder caches) for one :class:`Plant`. See the
@@ -144,14 +168,18 @@ class ColoredJacobianManager:
             P[off : off + k, off : off + k] |= sp
 
         # Off-diagonal: J[A][B] = inlet_pattern_A composed with the species
-        # coupling of the stream feeding A from B. For a same-model feed that
-        # coupling is the identity; for a cross-model feed (ASM<->ADM) it is the
-        # translator's emitted pattern. The source unit B's *output* is linear in
-        # its state (a reactor outputs its state; the settler reads a layer), so B
-        # ranges over the concentration units (output == state) and the only
-        # nonlinear, stale parts are A's inlet response and the translator -- both
-        # captured here. Placement is restricted to the unit pairs the probe shows
-        # actually coupled (the recycle's real reach), keeping the pattern tight.
+        # coupling of the stream feeding A from B, composed with B's output
+        # pattern (which of B's states its outlet concentrations read). For a
+        # same-model feed the species coupling is the identity; for a cross-model
+        # feed (ASM<->ADM) it is the translator's emitted pattern. B ranges over
+        # every stateful unit that emits a stream -- a reactor (outlet == state),
+        # a tank with trailing scalars, the layered settler (outlet == a layer) --
+        # so no source's columns are left to the probe alone. Placement is
+        # restricted to the unit pairs the probe shows actually coupled (the
+        # recycle's real reach), keeping the pattern tight. Couplings that run
+        # through the plant's flows rather than a concentration path (a
+        # TSS-dependent thickener flow changing every downstream dilution) are not
+        # modelled here; the probe supplies them.
         tcache: dict[tuple, np.ndarray] = {}
 
         def _translator(src_net, tgt_net):
@@ -165,7 +193,13 @@ class ColoredJacobianManager:
                         break
             return tcache[key]
 
-        conc = {nm: u for nm, u in plant.units.items() if plant._is_concentration_unit(u)}
+        sources = {
+            nm: (u, _output_state_pattern(plant, u, cps.get(nm, (None, None))[1]))
+            for nm, u in plant.units.items()
+            if getattr(u, "model", None) is not None
+            and getattr(u, "state_size", 0) > 0
+            and list(getattr(u, "output_ports", []))
+        }
         for aname, (aunit, cp) in cps.items():
             if cp.inlet_pattern is None:
                 continue
@@ -173,12 +207,11 @@ class ColoredJacobianManager:
             a_off, _ = plant._state_layout[aname]
             a_rows = ip.shape[0]
             a_net = getattr(aunit, "model", None)
-            for bname, bunit in conc.items():
+            for bname, (bunit, out_pat) in sources.items():
                 if bname == aname:
                     continue
                 b_net = bunit.model
-                b_off, _ = plant._state_layout[bname]
-                b_cols = b_net.n_species
+                b_off, b_cols = plant._state_layout[bname]
                 if (
                     coupling_mask is not None
                     and not coupling_mask[a_off : a_off + a_rows, b_off : b_off + b_cols].any()
@@ -190,7 +223,8 @@ class ColoredJacobianManager:
                     coupling = _translator(b_net, a_net)  # (a_nsp, b_nsp)
                     if coupling is None:
                         continue
-                block = (ip.astype(np.int8) @ coupling.astype(np.int8)) > 0
+                species_block = (ip.astype(np.int8) @ coupling.astype(np.int8)) > 0
+                block = (species_block.astype(np.int8) @ out_pat.astype(np.int8)) > 0
                 P[a_off : a_off + a_rows, b_off : b_off + b_cols] |= block
         return P
 
@@ -293,7 +327,13 @@ class ColoredJacobianManager:
 
     # --- stable_adjoint backward pass ---------------------------------------
 
-    def adjoint_jacobian_builder(self, t0, rtol, atol):
+    # Perturbed states the stable-adjoint pattern is checked at, besides the
+    # default state and (when concrete) the solve's own start state: each
+    # component scaled by 10**U[-spread, spread], from a fixed seed.
+    _ADJOINT_GUARD_N_PERTURBED = 3
+    _ADJOINT_GUARD_SPREAD = 0.5
+
+    def adjoint_jacobian_builder(self, t0, rtol, atol, y0=None):
         """Derive (once) the sparsity-colored ``df/dy`` Jacobian builder for the
         stable_adjoint backward pass, from the plant's **own default operating
         point**.
@@ -321,19 +361,26 @@ class ColoredJacobianManager:
         size gate), and the ``ColoredVeryChord``.
 
         Built for the **augmented** (time-carrying, ``n+1``) primal right-hand side
-        the discrete adjoint actually differentiates. Guarded against the dense
-        Jacobian at the default state; a mismatch falls back to dense (with a
-        warning).
+        the discrete adjoint actually differentiates. A missed coupling corrupts
+        the gradient rather than slowing the solve, so the guard **fails closed**:
+        besides the colored/dense comparison at the default state, the pattern
+        must cover every dense-Jacobian entry above a per-row threshold
+        (:func:`~aquakin.integrate.colored_jacobian.pattern_coverage_misses`) at
+        the default state, a few perturbed copies of it and -- when ``y0`` is a
+        concrete start state -- the solve's own operating point, which is also
+        probed. Any miss falls back to the dense backward (with a warning).
         """
         from aquakin.integrate.colored_jacobian import (
             jacobian_sparsity_pattern,
             materialize_colored_jacobian,
+            pattern_coverage_misses,
         )
         from aquakin.integrate.discrete_adjoint import _autonomize
 
         plant = self.plant
         if self._adjoint_builder is not None:
             return self._adjoint_builder[0]
+        y_solve = None if y0 is None or isinstance(y0, jax.core.Tracer) else np.asarray(y0)
 
         # Build from the plant's OWN default operating point -- a concrete,
         # always-available representative state -- so the pattern (a structural
@@ -371,9 +418,13 @@ class ColoredJacobianManager:
             # state reveals it -- which is why the default state serves as well as
             # the real y0).
             n = int(y0.shape[0])
-            plain_probe = (
-                jacobian_sparsity_pattern(lambda y: primal(jnp.asarray(t0f), y, params), y0) > 0
-            )
+
+            def primal_y(y):
+                return primal(jnp.asarray(t0f), y, params)
+
+            plain_probe = jacobian_sparsity_pattern(primal_y, y0) > 0
+            if y_solve is not None:
+                plain_probe |= jacobian_sparsity_pattern(primal_y, jnp.asarray(y_solve)) > 0
             structural = self._structural_plant_pattern(coupling_mask=plain_probe)
             aug_extra = np.zeros((n + 1, n + 1), dtype=bool)
             aug_extra[:n, :n] = plain_probe | structural
@@ -394,6 +445,10 @@ class ColoredJacobianManager:
                 extra_pattern=aug_extra,
                 context="colored_jacobian (stable_adjoint)",
             )
+            if ok:
+                ok = self._adjoint_pattern_covers(
+                    rhs_aug_y, np.asarray(y0_aug), y_solve, rf.pattern, pattern_coverage_misses
+                )
 
         # ``builder`` is applied later in the backward to the real (traced) f/y;
         # it closes over the concrete ``rf`` (seed/coloring/pattern) built above.
@@ -410,6 +465,39 @@ class ColoredJacobianManager:
             rf if ok else None,
         )
         return self._adjoint_builder[0]
+
+    def _adjoint_pattern_covers(self, rhs_aug_y, y0_aug, y_solve, pattern, misses_fn) -> bool:
+        """Whether the stable-adjoint pattern covers the dense Jacobian at the
+        default state, its perturbed copies and the concrete solve start state.
+
+        Warns and returns ``False`` on any miss, so the caller falls back to the
+        dense backward.
+        """
+        import warnings
+
+        tau = y0_aug[-1:]
+        rng = np.random.default_rng(0)
+        states = [y0_aug]
+        for _ in range(self._ADJOINT_GUARD_N_PERTURBED):
+            scale = 10.0 ** rng.uniform(
+                -self._ADJOINT_GUARD_SPREAD, self._ADJOINT_GUARD_SPREAD, y0_aug.size - 1
+            )
+            states.append(np.concatenate([y0_aug[:-1] * scale, tau]))
+        if y_solve is not None:
+            states.append(np.concatenate([y_solve, tau]))
+        count, worst = misses_fn(rhs_aug_y, states, pattern)
+        if count:
+            warnings.warn(
+                f"colored_jacobian (stable_adjoint): the sparsity pattern misses "
+                f"{count} Jacobian entries (largest {worst:.2e} of its row) at the "
+                f"default or start state; using the dense backward Jacobian. This "
+                f"indicates the structural pattern missed a coupling -- please "
+                f"report it.",
+                RuntimeWarning,
+                stacklevel=4,
+            )
+            return False
+        return True
 
     # --- PTC steady-state solve ---------------------------------------------
 

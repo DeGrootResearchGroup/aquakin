@@ -67,6 +67,16 @@ __all__ = [
 # the dense path. One definition shared by every guard site.
 COLORED_JACOBIAN_GUARD_RTOL = 1e-8
 
+# A dense-Jacobian entry outside the colored pattern counts as a miss when it
+# exceeds this fraction of the largest entry in its own row. Per row, because a
+# plant Jacobian spans many decades between units (a digester rate entry ~1e6
+# beside a settler-to-digester transport entry ~1e-5), so a threshold scaled to
+# the whole matrix hides real couplings of the small rows.
+COLORED_PATTERN_ROW_RTOL = 1e-8
+# Entries below this fraction of the whole matrix's largest entry are round-off,
+# whatever their row, so an all-tiny row cannot fail the check on noise alone.
+COLORED_PATTERN_ABS_FLOOR = 1e-14
+
 
 def materialize_colored_jacobian(root_finder, f, y):
     """Materialize ``df/dy`` at ``y`` by column compression.
@@ -165,7 +175,13 @@ def jacobian_sparsity_pattern(
       **own** magnitude keeps such a state in its physical regime so its column
       is captured.
 
-    The pattern therefore unions, at ``rel_tol`` relative threshold: the
+    An entry counts as nonzero when it exceeds ``rel_tol`` times the largest
+    entry of its own row: the rows of a plant Jacobian span many decades, so a
+    threshold scaled to the whole matrix would drop the couplings of every
+    small-scale row (a settler-to-digester transport entry ~1e-5 beside a digester
+    kinetic entry ~1e6).
+
+    The pattern therefore unions, at that relative threshold: the
     Jacobian at ``y0`` (the actual operating regime, which makes the start-state
     guard pass by construction), ``n_probe`` own-scale multiplicative-jitter
     probes, and ``n_probe`` lifted multiplicative-jitter probes. The full
@@ -188,7 +204,8 @@ def jacobian_sparsity_pattern(
     seed : int, optional
         RNG seed for reproducibility (default 0).
     rel_tol : float, optional
-        Relative magnitude threshold for counting an entry nonzero.
+        Magnitude threshold for counting an entry nonzero, relative to the
+        largest entry of its row.
 
     Returns
     -------
@@ -212,7 +229,8 @@ def jacobian_sparsity_pattern(
     def _accumulate(ys):
         J = np.asarray(fj(jnp.asarray(ys)))
         nonlocal P
-        P |= np.abs(J) > rel_tol * (np.abs(J).max() + 1e-300)
+        A = np.abs(J)
+        P |= rel_tol * (A.max(axis=1, keepdims=True) + 1e-300) < A
 
     # The actual operating regime at y0 (zeros lifted to the tiny own floor so
     # the rates are evaluated at a strictly-positive state near y0). This makes
@@ -442,6 +460,54 @@ def colored_jacobian_max_error(
     Jd = jax.jacfwd(rhs)(y)
     Jc = materialize_colored_jacobian(root_finder, rhs, y)
     return float(jnp.max(jnp.abs(Jd - Jc)))
+
+
+def pattern_coverage_misses(
+    rhs: Callable,
+    states,
+    pattern,
+    *,
+    row_rtol: float = COLORED_PATTERN_ROW_RTOL,
+    abs_floor: float = COLORED_PATTERN_ABS_FLOOR,
+) -> tuple[int, float]:
+    """Count dense-Jacobian nonzeros that fall outside a sparsity pattern.
+
+    A colored Jacobian reconstructs the dense one exactly only where the pattern
+    is a superset of the real nonzeros; an entry outside it is silently dropped
+    or folded into another entry of the same color. This evaluates the dense
+    ``d rhs / dy`` at each of ``states`` and counts the entries outside
+    ``pattern`` that exceed ``row_rtol`` times their row's largest entry (and
+    ``abs_floor`` times the matrix's largest entry, so round-off is not counted).
+
+    Parameters
+    ----------
+    rhs : Callable
+        ``y -> f(y)``.
+    states : iterable of jnp.ndarray
+        States to check at, each shape ``(n,)``.
+    pattern : array-like
+        Boolean ``(n, n)`` sparsity pattern.
+    row_rtol, abs_floor : float, optional
+        The per-row and whole-matrix relative thresholds.
+
+    Returns
+    -------
+    (int, float)
+        The number of missed entries over all states, and the largest missed
+        entry relative to its row's largest entry (0 when none is missed).
+    """
+    P = np.asarray(pattern) > 0
+    fj = jax.jit(jax.jacfwd(rhs))
+    count, worst = 0, 0.0
+    for y in states:
+        A = np.abs(np.asarray(fj(jnp.asarray(y))))
+        rowmax = A.max(axis=1, keepdims=True)
+        thresh = np.maximum(row_rtol * rowmax, abs_floor * A.max())
+        miss = (~P) & (thresh < A)
+        if miss.any():
+            count += int(miss.sum())
+            worst = max(worst, float(np.max((A / (rowmax + 1e-300))[miss])))
+    return count, worst
 
 
 def colored_jacobian_guard(

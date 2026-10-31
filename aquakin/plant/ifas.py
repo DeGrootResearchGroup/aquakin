@@ -308,7 +308,11 @@ class IFASUnit(AerationUnit, CouplingAware):
 
         inlet_pat = np.zeros((m, n), dtype=bool)
         inlet_pat[:n, :] = np.eye(n, dtype=bool)  # inflow dilutes the bulk row
-        return CouplingPattern(self_pattern=self_pat, inlet_pattern=inlet_pat)
+        output_pat = np.zeros((n, m), dtype=bool)
+        output_pat[:, :n] = np.eye(n, dtype=bool)  # the effluent is the bulk row
+        return CouplingPattern(
+            self_pattern=self_pat, inlet_pattern=inlet_pat, output_pattern=output_pat
+        )
 
     def _bulk(self, state: jnp.ndarray) -> jnp.ndarray:
         return state.reshape(self._n_comp, self._n)[0]

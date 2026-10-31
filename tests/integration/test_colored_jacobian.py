@@ -88,6 +88,46 @@ def test_pattern_captures_small_natural_scale_column():
     assert colored_jacobian_max_error(rhs, y0, rf) < 1e-8 * jscale
 
 
+def _two_scale_rhs():
+    """Row 0 is a large-scale block; row 1 is small-scale throughout and couples
+    to column 0; row 2 holds only a round-off-sized link to column 0."""
+    BIG = 1.0e6
+
+    def rhs(y):
+        a, b, c = y
+        return jnp.array([-BIG * a, 1e-6 * a - 1e-6 * b, 1e-30 * a - 1e-30 * c])
+
+    return rhs
+
+
+def test_pattern_threshold_is_relative_to_each_row():
+    """A coupling that is large within its own row but tiny beside the largest
+    entry of the whole Jacobian must be kept -- a plant's settler-to-digester
+    transport entries sit ~1e-11 below its digester kinetics. A threshold scaled
+    to the whole matrix drops it, and the colored Jacobian then loses it."""
+    P = jacobian_sparsity_pattern(_two_scale_rhs(), jnp.ones(3), n_probe=4, seed=0)
+    assert P[1, 0], "small-row coupling dropped by a whole-matrix threshold"
+
+
+def test_pattern_coverage_misses_counts_entries_outside_the_pattern():
+    """The coverage check counts a dense entry the pattern lacks, scored against
+    its own row, and ignores an entry at round-off scale against the matrix."""
+    rhs = _two_scale_rhs()
+    states = [jnp.ones(3), 2.0 * jnp.ones(3)]
+    full = np.ones((3, 3), dtype=bool)
+    assert cj.pattern_coverage_misses(rhs, states, full) == (0, 0.0)
+
+    lacks = full.copy()
+    lacks[1, 0] = False                                  # the real small-row link
+    count, worst = cj.pattern_coverage_misses(rhs, states, lacks)
+    assert count == 2                                    # once per state
+    assert worst == pytest.approx(1.0)                   # as large as its row
+
+    noise = full.copy()
+    noise[2, 0] = False                                  # only a 1e-30 link
+    assert cj.pattern_coverage_misses(rhs, states, noise) == (0, 0.0)
+
+
 def test_colored_reconstruction_is_exact_synthetic():
     rhs, _ = _synthetic_rhs(n=12)
     rf, n_colors = build_colored_root_finder(
@@ -439,6 +479,107 @@ def test_colored_ptc_matches_dense_bsm2():
     # agree to PTC tolerance (~1e-7) rather than bit-for-bit (cf. the
     # single-model BSM1, which is exact).
     assert np.max(np.abs(a - b) / (np.abs(a) + 1e-9)) < 1e-5
+
+
+def test_output_state_pattern_defaults_by_state_layout():
+    """With no declared output pattern, a unit's outlet is taken to read: its
+    whole state when that is the concentration vector (the identity); the head
+    identity plus every trailing scalar when the state leads with the
+    concentrations; and every entry for any other layout. A declared pattern wins."""
+    from types import SimpleNamespace
+
+    from aquakin.plant.colored import _output_state_pattern
+    from aquakin.plant.coupling import CouplingPattern
+    from aquakin.plant.plant import Plant
+
+    model = SimpleNamespace(n_species=3)
+
+    class Tank(SimpleNamespace):
+        def liquid_volume(self, state):
+            return 1.0
+
+    eye = np.eye(3, dtype=bool)
+    reactor = SimpleNamespace(model=model, state_size=3)
+    assert np.array_equal(_output_state_pattern(Plant, reactor, None), eye)
+    tank = Tank(model=model, state_size=5)
+    expect = np.concatenate([eye, np.ones((3, 2), dtype=bool)], axis=1)
+    assert np.array_equal(_output_state_pattern(Plant, tank, None), expect)
+    layered = SimpleNamespace(model=model, state_size=7)
+    assert _output_state_pattern(Plant, layered, None).all()
+    declared = np.zeros((3, 7), dtype=bool)
+    declared[:, -3:] = eye
+    cp = CouplingPattern(self_pattern=np.eye(7, dtype=bool), output_pattern=declared)
+    assert np.array_equal(_output_state_pattern(Plant, layered, cp), declared)
+
+
+def test_adjoint_pattern_check_fails_closed():
+    """Any miss reported at the guard states warns and refuses the colored
+    backward; no miss accepts it. The states checked are the default, the
+    perturbed copies and (when given) the solve's start state, each carrying the
+    default time entry."""
+    from aquakin.plant.colored import ColoredJacobianManager
+
+    mgr = ColoredJacobianManager(plant=None)
+    y0_aug = np.array([1.0, 2.0, 0.0, 5.0])               # last entry: time
+    y_solve = np.array([3.0, 4.0, 1.0])
+    seen = []
+
+    def no_miss(rhs, states, pattern):
+        seen.extend(states)
+        return 0, 0.0
+
+    assert mgr._adjoint_pattern_covers(None, y0_aug, y_solve, None, no_miss) is True
+    assert len(seen) == 2 + ColoredJacobianManager._ADJOINT_GUARD_N_PERTURBED
+    assert np.array_equal(seen[-1], [3.0, 4.0, 1.0, 5.0])
+    assert all(s[-1] == 5.0 and s[2] == 0.0 for s in seen[:-1])
+
+    with pytest.warns(RuntimeWarning, match="misses 2 Jacobian entries"):
+        ok = mgr._adjoint_pattern_covers(None, y0_aug, None, None, lambda *a: (2, 0.3))
+    assert ok is False
+
+
+@pytest.mark.slow
+def test_bsm2_adjoint_pattern_covers_dense_jacobian():
+    """Regression: on BSM2 (reference settler, heat-balance temperatures,
+    influent bypass -- the configuration that exposed it) the stable-adjoint
+    pattern missed the settler's couplings to the digester and the reactors and
+    the plant-level loops through the TSS-dependent sludge-train flows, so the
+    colored backward silently dropped them. It must now cover the dense Jacobian
+    at the warm start and at perturbed states, at two times of the influent."""
+    from aquakin.plant import HeatBalanceTemperature
+    from aquakin.plant.bsm import (
+        InfluentBypass,
+        bsm2_asm1_model,
+        bsm2_warm_start,
+        build_bsm2,
+        load_bsm2_influent,
+    )
+
+    asm1 = bsm2_asm1_model()
+    plant = build_bsm2(asm1, aquakin.load_model("adm1"), do_temperature_correction=True,
+                       bypass=InfluentBypass(60000.0),
+                       temperature_model=HeatBalanceTemperature())
+    plant.add_influent("feed", load_bsm2_influent("dry", asm1))
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    plant._colored.adjoint_jacobian_builder(0.0, 1e-4, 1e-3)
+    builder, n_colors, ok, n, rf = plant._colored._adjoint_builder
+    assert ok is True and builder is not None
+    assert n_colors < n / 2                                 # still well colored
+
+    params = plant.default_parameters()
+    P = np.asarray(rf.pattern)[:n, :n] > 0
+    y_ws = np.asarray(bsm2_warm_start(plant))
+    rng = np.random.default_rng(1)
+    states = [y_ws] + [y_ws * 10.0 ** rng.uniform(-0.5, 0.5, n) for _ in range(3)]
+    # Evaluated as the builder does, under ``ensure_compile_time_eval``: the plant
+    # memoises its per-unit parameter slices for a concrete ``params``, and a slice
+    # taken inside a jitted rhs would otherwise be a tracer kept past its trace.
+    with jax.ensure_compile_time_eval():
+        for t in (0.0, 5.0):
+            rhs = lambda y, t=t: plant._rhs(jnp.asarray(t), y, params)
+            count, worst = cj.pattern_coverage_misses(rhs, states, P)
+            assert count == 0, f"t={t}: {count} missed ({worst:.1e} of its row)"
 
 
 @pytest.mark.slow

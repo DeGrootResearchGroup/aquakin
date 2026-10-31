@@ -124,6 +124,16 @@ Key types:
   temperature block). The size-based *decision* to use the colored backward
   (`Plant._COLORED_BACKWARD_MIN_STATES` / `colored_jacobian_decision`) stays on the
   plant's solve routing. The performance rationale is in `docs/plant_performance.md`.
+  The structural assembly places a source block for **every** stateful unit that
+  emits a stream, composed with that unit's `CouplingPattern.output_pattern` (which
+  state entries its outlets read: Takács by AD, IFAS the bulk row; undeclared →
+  identity / head + trailing scalars / dense by layout, `_output_state_pattern`).
+  It does **not** model flow-path couplings (TSS-dependent thickener/dewatering
+  flows, the interface pH feedback); those come from the probe, whose threshold is
+  **per row**. Because a miss corrupts gradients there, the `stable_adjoint` builder
+  fails closed: `pattern_coverage_misses` must find no uncovered entry at the
+  default state, three perturbed copies and the concrete solve `y0`, or it falls
+  back to dense (#647).
   **Compiled-solve caches** — the jitted forward + PTC steady solves and the
   continuation / arclength kernels (all solver-run memoization, keyed by
   settings, that bake in the reactor conditions) live in a

@@ -166,6 +166,91 @@ def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd():
     assert g_stable == pytest.approx(fd, rel=1e-3)
 
 
+def test_stable_adjoint_colored_checks_the_solve_start_state(monkeypatch):
+    """The colored backward's coverage check runs at the solve's own concrete
+    start state, which the plant hands to the builder, as well as at the
+    default and perturbed states; it passes there, the colored backward is used,
+    and the gradient equals the dense-backward gradient."""
+    from aquakin.integrate import colored_jacobian as cj
+
+    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
+    plant = _single_cstr_plant(net)
+    base = net.default_parameters()
+    gidx = plant.parameter_index("simple_decay.A_to_B.k")
+    theta0 = float(base[gidx])
+    y0 = jnp.asarray([0.7, 0.2])                 # not the plant's default state
+    T = 10.0
+
+    checked = []
+    real = cj.pattern_coverage_misses
+
+    def recording(rhs, states, pattern, **kw):
+        checked.extend(np.asarray(s) for s in states)
+        return real(rhs, states, pattern, **kw)
+
+    monkeypatch.setattr(cj, "pattern_coverage_misses", recording)
+
+    def g(theta, colored):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          integrator=aquakin.IntegratorConfig(colored_jacobian=colored))
+        return sol.C_named("tank", "B")[-1]
+
+    g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
+    builder, _n_colors, ok, _n, _rf = plant._colored._adjoint_builder
+    assert ok is True and builder is not None
+    assert any(np.allclose(s[:-1], np.asarray(y0)) for s in checked)
+    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
+    assert g_colored != 0.0
+    assert g_colored == pytest.approx(g_dense, rel=1e-8)
+
+
+def test_colored_adjoint_builder_without_a_start_state_checks_default_states(monkeypatch):
+    """Built with no concrete start state (as under a trace), the builder checks
+    only the default state and its perturbed copies, and still accepts a
+    covering pattern."""
+    from aquakin.integrate import colored_jacobian as cj
+    from aquakin.plant.colored import ColoredJacobianManager
+
+    plant = _single_cstr_plant(aquakin.load_model_from_file("tests/fixtures/simple_model.yaml"))
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    seen = []
+    real = cj.pattern_coverage_misses
+    monkeypatch.setattr(cj, "pattern_coverage_misses",
+                        lambda rhs, states, pattern, **kw: (seen.extend(states),
+                                                            real(rhs, states, pattern))[1])
+    plant._colored.adjoint_jacobian_builder(0.0, 1e-4, 1e-3)
+    assert plant._colored._adjoint_builder[2] is True
+    assert len(seen) == 1 + ColoredJacobianManager._ADJOINT_GUARD_N_PERTURBED
+
+
+def test_colored_adjoint_builder_skips_the_coverage_check_after_a_failed_guard(monkeypatch):
+    """When the colored/dense comparison already rejects the pattern, the builder
+    falls back to dense without running the coverage check."""
+    from aquakin.integrate import colored_jacobian as cj
+    from aquakin.plant.colored import ColoredJacobianManager
+
+    plant = _single_cstr_plant(aquakin.load_model_from_file("tests/fixtures/simple_model.yaml"))
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    real_build = ColoredJacobianManager._build_and_guard
+
+    def failing(self, *a, **kw):
+        rf, n_colors, _ok = real_build(self, *a, **kw)
+        return rf, n_colors, False
+
+    def must_not_run(*a, **kw):
+        raise AssertionError("coverage check ran after the guard had failed")
+
+    monkeypatch.setattr(ColoredJacobianManager, "_build_and_guard", failing)
+    monkeypatch.setattr(cj, "pattern_coverage_misses", must_not_run)
+    plant._colored.adjoint_jacobian_builder(0.0, 1e-4, 1e-3, y0=jnp.asarray([0.7, 0.2]))
+    builder, _n, ok, _ns, rf = plant._colored._adjoint_builder
+    assert ok is False and builder is None and rf is None
+
+
 def test_stable_adjoint_low_memory_matches_saved_stage_gradient():
     """``DifferentiationConfig(adjoint_low_memory=True)`` recomputes the backward
     stages instead of saving the dense-stage buffer; the plant gradient must equal
@@ -778,3 +863,44 @@ def test_forward_paths_agree_no_config_drift():
     # the lean forward_fast machinery do not change the realized trajectory.
     assert np.allclose(jax_fwd, fast, rtol=1e-3, atol=1e-3)
     assert np.allclose(jax_fwd, stable_fwd, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.validation
+@pytest.mark.heavy
+def test_stable_adjoint_colored_cross_domain_gradient_matches_dense_bsm2():
+    """Regression: on the dynamic BSM2 the default colored backward Jacobian
+    dropped the settler's couplings to the sludge train, so a gradient that runs
+    from the activated sludge into the digester (an ASM1 rate on digester
+    methane) came out wrong by up to ~2x while staying finite. The colored
+    backward must be the one used ("auto", past the size gate) and must give the
+    dense-backward gradient."""
+    from aquakin.plant import HeatBalanceTemperature
+    from aquakin.plant.bsm import InfluentBypass, bsm2_asm1_model, load_bsm2_influent
+
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
+    plant = build_bsm2(asm1, adm1, do_temperature_correction=True,
+                       bypass=InfluentBypass(60000.0),
+                       temperature_model=HeatBalanceTemperature())
+    plant.add_influent("feed", load_bsm2_influent("dry", asm1))
+    y0 = bsm2_warm_start(plant)
+    base = bsm2_parameters(asm1, adm1)
+    gidx = plant.parameter_index("asm1.muA")
+    theta0 = float(base[gidx])
+    T = 2.0
+
+    def g(theta, colored):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
+                          rtol=1e-4, atol=1e-3,
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          integrator=aquakin.IntegratorConfig(
+                              max_steps=20_000, colored_jacobian=colored))
+        return sol.C_named("digester", "S_gas_ch4")[-1]
+
+    g_colored = float(jax.grad(lambda th: g(th, "auto"))(theta0))
+    builder, _n_colors, ok, _n, _rf = plant._colored._adjoint_builder
+    assert ok is True and builder is not None       # the colored backward ran
+    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
+    assert g_dense != 0.0
+    assert g_colored == pytest.approx(g_dense, rel=1e-6)

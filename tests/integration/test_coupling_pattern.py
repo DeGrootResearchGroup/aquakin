@@ -83,6 +83,42 @@ def test_settler_coupling_pattern_is_superset_of_dense_jacobian():
         assert not (active & ~cp.self_pattern).any()      # superset
 
 
+def test_settler_output_pattern_covers_outlets_and_skips_interior_layers():
+    """The settler declares which layer states its outlets read: a superset of
+    d(outlet C)/d(state) at diverse profiles, yet not the whole state -- the
+    interior layers feed neither outlet, so a downstream unit's coupling to the
+    settler stays a few columns wide instead of all of them."""
+    from aquakin.plant.streams import Stream
+    from aquakin.plant.takacs import TakacsClarifier
+
+    net = aquakin.load_model("asm1")
+    s = TakacsClarifier(name="s", model=net, area=1500.0, height=4.0,
+                        underflow_Q=1.8e4, soluble_holdup=True)
+    out = s.coupling_pattern().output_pattern
+    assert out.shape == (net.n_species, s.state_size)
+
+    base_C = np.maximum(np.abs(np.asarray(net.default_concentrations())), 1e-3)
+    inlet = {s.input_port: Stream(Q=jnp.asarray(2.0e4), C=jnp.asarray(base_C), model=net)}
+
+    def outlets(z):
+        o = s.compute_outputs(jnp.asarray(0.0), z, inlet, None)
+        return jnp.concatenate([o[s.overflow_port].C, o[s.underflow_port].C])
+
+    fj = jax.jit(jax.jacfwd(outlets))
+    rng = np.random.default_rng(2)
+    base = np.maximum(np.abs(np.asarray(s.initial_state())), 1e-3)
+    read = np.zeros(s.state_size, dtype=bool)
+    for _ in range(8):
+        J = np.asarray(fj(jnp.asarray(base * 10.0 ** rng.uniform(-2, 2, size=base.shape))))
+        active = np.abs(J) > 0.0
+        both = np.concatenate([out, out])
+        assert not (active & ~both).any()                  # superset
+        read |= active.any(axis=0)
+    unread = ~out.any(axis=0)
+    assert unread.sum() > s.state_size // 2               # interior layers are not read
+    assert not (read & unread).any()
+
+
 # --------------------------------------------------------------------------
 # The reactive non-BSM units (MBR / SBR / IFAS): contract + superset (#390-392).
 # --------------------------------------------------------------------------
@@ -187,6 +223,10 @@ def test_ifas_coupling_pattern(asm1_net):
     kin = structural_sparsity_pattern(net)
     assert (cp.self_pattern[:n, :n] & kin == kin).all()       # bulk: full kinetics
     _inlet_is_species_dilution(cp, n)
+    # The effluent is the bulk row: the biofilm layers feed no outlet.
+    expected_out = np.zeros((n, m), dtype=bool)
+    expected_out[:, :n] = np.eye(n, dtype=bool)
+    assert np.array_equal(cp.output_pattern, expected_out)
 
     base_C = jnp.asarray(np.maximum(np.abs(np.asarray(
         net.default_concentrations())), 1e-3))
@@ -293,6 +333,25 @@ def test_plant_structural_pattern_superset_over_trajectory_bsm1():
         mi, mj = np.nonzero(miss)
         missing_within += int((unit_of[mi] == unit_of[mj]).sum())
     assert missing_within == 0          # no stale within-unit coupling
+
+
+def test_plant_structural_pattern_places_settler_columns():
+    """A unit fed (through the return sludge) by the layered settler gets a
+    structural block on the settler's outlet-layer columns -- not left to the
+    probe -- and none on the interior layers no outlet reads."""
+    from aquakin.plant.bsm import build_bsm1
+
+    asm1 = aquakin.load_model("asm1")
+    p = build_bsm1(model=asm1, use_takacs=True)
+    p._build_state_layout()
+    settler = next(nm for nm, u in p.units.items() if type(u).__name__ == "TakacsClarifier")
+    P = p._colored._structural_plant_pattern(coupling_mask=None)
+    s_off, s_size = p._state_layout[settler]
+    t_off, t_size = p._state_layout["tank1"]
+    block = P[t_off:t_off + t_size, s_off:s_off + s_size]
+    out = p.units[settler].coupling_pattern().output_pattern
+    assert block.any()                                     # settler columns placed
+    assert not block[:, ~out.any(axis=0)].any()            # only the outlet layers
 
 
 def _build_single_unit_plant(kind):
