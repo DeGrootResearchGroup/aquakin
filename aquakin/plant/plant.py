@@ -2906,7 +2906,7 @@ class Plant:
             colored_jacobian == "auto" and n_states >= self._COLORED_BACKWARD_MIN_STATES
         )
         if want_colored and self._colored._adjoint_builder is None:
-            self._colored.adjoint_jacobian_builder(t0, rtol, atol)
+            self._colored.adjoint_jacobian_builder(t0, rtol, atol, y0=y0)
         cab = self._colored._adjoint_builder
         use_colored = bool(want_colored and cab is not None and cab[2])  # built + guard ok
         jac_builder = cab[0] if use_colored else None

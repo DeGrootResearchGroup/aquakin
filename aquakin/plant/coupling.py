@@ -19,7 +19,8 @@ This module defines the contract (:class:`CouplingAware`, :class:`CouplingPatter
 and a helper (:func:`ad_union`) for the AD-derived case. The plant assembles the
 per-unit patterns into the full plant pattern (diagonal blocks from each unit's
 ``self_pattern``; off-diagonal blocks from each unit's ``inlet_pattern`` composed
-with the translator couplings along the stream path that feeds it).
+with the translator couplings along the stream path that feeds it and with the
+source unit's ``output_pattern``).
 """
 
 from __future__ import annotations
@@ -47,10 +48,20 @@ class CouplingPattern:
         no off-diagonal coupling). The plant composes this with the translator
         coupling(s) on the stream path feeding the unit to form the off-diagonal
         blocks.
+    output_pattern : np.ndarray or None
+        ``(n_species, state_size)`` boolean -- which of the unit's state entries
+        its outlet concentrations (on any port) depend on: the columns a
+        downstream unit's inlet couples to. ``None`` lets the plant infer it from
+        the state layout -- the identity when the state is the concentration
+        vector, the head identity plus the trailing scalars when the state leads
+        with it, and every entry otherwise. A unit whose outlet reads only part of
+        a larger state (the settler's top and bottom layers) declares it, which
+        keeps the colored pattern tight.
     """
 
     self_pattern: np.ndarray
     inlet_pattern: np.ndarray | None = None
+    output_pattern: np.ndarray | None = None
 
 
 class CouplingAware(ABC):

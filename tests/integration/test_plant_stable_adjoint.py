@@ -778,3 +778,44 @@ def test_forward_paths_agree_no_config_drift():
     # the lean forward_fast machinery do not change the realized trajectory.
     assert np.allclose(jax_fwd, fast, rtol=1e-3, atol=1e-3)
     assert np.allclose(jax_fwd, stable_fwd, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.validation
+@pytest.mark.heavy
+def test_stable_adjoint_colored_cross_domain_gradient_matches_dense_bsm2():
+    """Regression: on the dynamic BSM2 the default colored backward Jacobian
+    dropped the settler's couplings to the sludge train, so a gradient that runs
+    from the activated sludge into the digester (an ASM1 rate on digester
+    methane) came out wrong by up to ~2x while staying finite. The colored
+    backward must be the one used ("auto", past the size gate) and must give the
+    dense-backward gradient."""
+    from aquakin.plant import HeatBalanceTemperature
+    from aquakin.plant.bsm import InfluentBypass, bsm2_asm1_model, load_bsm2_influent
+
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
+    plant = build_bsm2(asm1, adm1, do_temperature_correction=True,
+                       bypass=InfluentBypass(60000.0),
+                       temperature_model=HeatBalanceTemperature())
+    plant.add_influent("feed", load_bsm2_influent("dry", asm1))
+    y0 = bsm2_warm_start(plant)
+    base = bsm2_parameters(asm1, adm1)
+    gidx = plant.parameter_index("asm1.muA")
+    theta0 = float(base[gidx])
+    T = 2.0
+
+    def g(theta, colored):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
+                          rtol=1e-4, atol=1e-3,
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          integrator=aquakin.IntegratorConfig(
+                              max_steps=20_000, colored_jacobian=colored))
+        return sol.C_named("digester", "S_gas_ch4")[-1]
+
+    g_colored = float(jax.grad(lambda th: g(th, "auto"))(theta0))
+    builder, _n_colors, ok, _n, _rf = plant._colored._adjoint_builder
+    assert ok is True and builder is not None       # the colored backward ran
+    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
+    assert g_dense != 0.0
+    assert g_colored == pytest.approx(g_dense, rel=1e-6)

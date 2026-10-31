@@ -172,7 +172,11 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   fixed a real fall-back: the BSM2 settler `soluble_holdup` states settle the
   digester to its operating point, surfacing the steep `S_h2` column that the
   lifted-only probe dropped — the colored path then fell back to dense; it now
-  stays colored, ~2.6× over dense, matching to round-off.)*
+  stays colored, ~2.6× over dense, matching to round-off.)* An entry counts as
+  nonzero against the largest entry of **its own row**, not of the whole matrix
+  (#647): BSM2's rows span ~11 decades (a digester kinetic entry ~1e6 beside a
+  settler-to-digester transport entry ~1e-5), and a whole-matrix threshold dropped
+  every coupling of the small rows.
 - **Correctness model:** a pattern *miss* does **not** corrupt the result — the
   chord still converges to the stage residual's root — it only degrades
   convergence (costs steps, not accuracy). The pattern is therefore conservative,
@@ -262,9 +266,26 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   So the builder unions the IC probe with **`_structural_plant_pattern`** (each
   unit's equation-derived `coupling_pattern()` — the same complete assembly the
   forward path uses), embedded in the augmented `[y; τ]` layout's `df/dy` block
-  (the probe supplies the always-on `τ` time-dependence column). A *complete*
-  structural superset closes the silent-corruption risk a sampled pattern only
-  reduces. The PTC steady-state builder (`ColoredJacobianManager.steady_jacobian_builder`)
+  (the probe supplies the always-on `τ` time-dependence column). **The structural
+  pattern is not complete on its own (#647):** it misses couplings that run through
+  the plant's *flows* rather than a concentration path — the thickener and
+  dewatering flows depend on the solids they receive, so the reject and sludge
+  flows, and with them every downstream dilution term, depend on the settler and
+  digester solids. Those, and the digester-pH feedback into the ASM→ADM interface,
+  come only from the probe. Until #647 the probe's whole-matrix threshold dropped
+  them and the structural assembly placed no block on the settler's columns (it
+  composed only from concentration-vector sources), so the default colored
+  backward gave BSM2 cross-domain gradients (`asm1.muA → digester.S_gas_ch4`) up to
+  2.3× wrong while the start-state guard, scaled to the whole matrix, passed. The
+  fixes: the per-row probe threshold; source blocks from every stateful unit via
+  each unit's `output_pattern` (the settler's outlet layers by AD, the IFAS bulk
+  row, a tank's head plus trailing scalars, else every state entry); and a
+  **fail-closed** coverage check (`pattern_coverage_misses`, per row) at the
+  default state, three perturbed copies of it and the solve's own concrete start
+  state, which falls back to the dense backward on any miss. On the #647 BSM2
+  configuration (reference settler, `HeatBalanceTemperature`, temperature-corrected
+  aeration, `InfluentBypass(60000)`; 195 states) the backward pattern grew from 55
+  to 67 colors and misses nothing at the warm start or perturbed states (t = 0, 5 d). The PTC steady-state builder (`ColoredJacobianManager.steady_jacobian_builder`)
   uses the same structural pattern (it marches in a narrow neighbourhood so the probe
   usually suffices, but the superset is complete regardless). Validated: the
   colored backward gradient w.r.t. a kinetic param **and** a flow-setpoint param

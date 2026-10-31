@@ -310,7 +310,8 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         such states (:func:`aquakin.plant.coupling.ad_union`) gives a structural
         superset. ``params=None`` resolves the default flow setpoints, so this is
         a standalone derivation. ``self`` = d(rhs)/d(layer state); ``inlet`` =
-        d(rhs)/d(feed concentration).
+        d(rhs)/d(feed concentration); ``output`` = d(outlet concentrations)/d(layer
+        state), on both ports.
         """
         import jax
         import jax.numpy as jnp
@@ -337,7 +338,15 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             c
         )
         inlet_pat = ad_union(inlet_jac, base_C)
-        return CouplingPattern(self_pattern=self_pat, inlet_pattern=inlet_pat)
+
+        def outlet_C(x):
+            out = self.compute_outputs(t0, x, inlet0, None)
+            return out[self.overflow_port].C + out[self.underflow_port].C
+
+        output_pat = ad_union(lambda s: jax.jacfwd(outlet_C)(s), state0)
+        return CouplingPattern(
+            self_pattern=self_pat, inlet_pattern=inlet_pat, output_pattern=output_pat
+        )
 
     def initial_state(self) -> jnp.ndarray:
         part_state = self._particulate_initial_state()
