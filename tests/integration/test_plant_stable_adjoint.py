@@ -206,6 +206,51 @@ def test_stable_adjoint_colored_checks_the_solve_start_state(monkeypatch):
     assert g_colored == pytest.approx(g_dense, rel=1e-8)
 
 
+def test_colored_adjoint_builder_without_a_start_state_checks_default_states(monkeypatch):
+    """Built with no concrete start state (as under a trace), the builder checks
+    only the default state and its perturbed copies, and still accepts a
+    covering pattern."""
+    from aquakin.integrate import colored_jacobian as cj
+    from aquakin.plant.colored import ColoredJacobianManager
+
+    plant = _single_cstr_plant(aquakin.load_model_from_file("tests/fixtures/simple_model.yaml"))
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    seen = []
+    real = cj.pattern_coverage_misses
+    monkeypatch.setattr(cj, "pattern_coverage_misses",
+                        lambda rhs, states, pattern, **kw: (seen.extend(states),
+                                                            real(rhs, states, pattern))[1])
+    plant._colored.adjoint_jacobian_builder(0.0, 1e-4, 1e-3)
+    assert plant._colored._adjoint_builder[2] is True
+    assert len(seen) == 1 + ColoredJacobianManager._ADJOINT_GUARD_N_PERTURBED
+
+
+def test_colored_adjoint_builder_skips_the_coverage_check_after_a_failed_guard(monkeypatch):
+    """When the colored/dense comparison already rejects the pattern, the builder
+    falls back to dense without running the coverage check."""
+    from aquakin.integrate import colored_jacobian as cj
+    from aquakin.plant.colored import ColoredJacobianManager
+
+    plant = _single_cstr_plant(aquakin.load_model_from_file("tests/fixtures/simple_model.yaml"))
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    real_build = ColoredJacobianManager._build_and_guard
+
+    def failing(self, *a, **kw):
+        rf, n_colors, _ok = real_build(self, *a, **kw)
+        return rf, n_colors, False
+
+    def must_not_run(*a, **kw):
+        raise AssertionError("coverage check ran after the guard had failed")
+
+    monkeypatch.setattr(ColoredJacobianManager, "_build_and_guard", failing)
+    monkeypatch.setattr(cj, "pattern_coverage_misses", must_not_run)
+    plant._colored.adjoint_jacobian_builder(0.0, 1e-4, 1e-3, y0=jnp.asarray([0.7, 0.2]))
+    builder, _n, ok, _ns, rf = plant._colored._adjoint_builder
+    assert ok is False and builder is None and rf is None
+
+
 def test_stable_adjoint_low_memory_matches_saved_stage_gradient():
     """``DifferentiationConfig(adjoint_low_memory=True)`` recomputes the backward
     stages instead of saving the dense-stage buffer; the plant gradient must equal
