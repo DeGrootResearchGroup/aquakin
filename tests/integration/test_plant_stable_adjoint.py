@@ -166,6 +166,46 @@ def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd():
     assert g_stable == pytest.approx(fd, rel=1e-3)
 
 
+def test_stable_adjoint_colored_checks_the_solve_start_state(monkeypatch):
+    """The colored backward's coverage check runs at the solve's own concrete
+    start state, which the plant hands to the builder, as well as at the
+    default and perturbed states; it passes there, the colored backward is used,
+    and the gradient equals the dense-backward gradient."""
+    from aquakin.integrate import colored_jacobian as cj
+
+    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
+    plant = _single_cstr_plant(net)
+    base = net.default_parameters()
+    gidx = plant.parameter_index("simple_decay.A_to_B.k")
+    theta0 = float(base[gidx])
+    y0 = jnp.asarray([0.7, 0.2])                 # not the plant's default state
+    T = 10.0
+
+    checked = []
+    real = cj.pattern_coverage_misses
+
+    def recording(rhs, states, pattern, **kw):
+        checked.extend(np.asarray(s) for s in states)
+        return real(rhs, states, pattern, **kw)
+
+    monkeypatch.setattr(cj, "pattern_coverage_misses", recording)
+
+    def g(theta, colored):
+        p = base.at[gidx].set(theta)
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          integrator=aquakin.IntegratorConfig(colored_jacobian=colored))
+        return sol.C_named("tank", "B")[-1]
+
+    g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
+    builder, _n_colors, ok, _n, _rf = plant._colored._adjoint_builder
+    assert ok is True and builder is not None
+    assert any(np.allclose(s[:-1], np.asarray(y0)) for s in checked)
+    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
+    assert g_colored != 0.0
+    assert g_colored == pytest.approx(g_dense, rel=1e-8)
+
+
 def test_stable_adjoint_low_memory_matches_saved_stage_gradient():
     """``DifferentiationConfig(adjoint_low_memory=True)`` recomputes the backward
     stages instead of saving the dense-stage buffer; the plant gradient must equal
