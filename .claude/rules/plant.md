@@ -134,6 +134,9 @@ Key types:
   fails closed: `pattern_coverage_misses` must find no uncovered entry at the
   default state, three perturbed copies and the concrete solve `y0`, or it falls
   back to dense (#647).
+  **Parameter-slice cache** — `_params_for_unit` retains only concrete slices.
+  A concrete parameter vector closed over by `jax.jit` can still produce traced
+  slices; those must not be stored on the plant or reused by another trace.
   **Compiled-solve caches** — the jitted forward + PTC steady solves and the
   continuation / arclength kernels (all solver-run memoization, keyed by
   settings, that bake in the reactor conditions) live in a

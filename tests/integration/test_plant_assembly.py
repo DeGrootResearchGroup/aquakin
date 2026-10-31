@@ -940,6 +940,31 @@ def test_plant_solve_gradient_leaks_no_tracer(simple_net, gradient, wrt):
         assert not any(isinstance(v, jax.core.Tracer) for v in cache[1].values())
 
 
+def test_bsm1_rhs_traces_do_not_cache_slices_of_closed_over_parameters():
+    """Concrete inputs can still produce traced slices inside a jitted RHS."""
+    from aquakin.plant.bsm import build_bsm1, load_bsm1_influent
+
+    model = aquakin.load_model("asm1")
+    plant = build_bsm1(model)
+    plant.add_influent("influent", load_bsm1_influent("dry", model))
+    plant._build_state_layout()
+    plant._build_parameter_layout()
+    params = plant.default_parameters()
+    state = plant.initial_state()
+
+    first = jax.jit(lambda y: plant._rhs(jnp.asarray(0.0), y, params))(state)
+    second = jax.jit(lambda y: plant._rhs(jnp.asarray(0.5), y, params))(state)
+    assert bool(jnp.all(jnp.isfinite(first)))
+    assert bool(jnp.all(jnp.isfinite(second)))
+    assert plant.__dict__.get("_params_unit_cache") is None
+
+    eager = plant._rhs(jnp.asarray(0.5), state, params)
+    assert bool(jnp.allclose(second, eager, rtol=1e-10, atol=1e-10))
+    cache = plant._params_unit_cache
+    assert not any(isinstance(value, jax.core.Tracer) for value in cache[1].values())
+    assert plant._params_for_unit("tank1", params) is cache[1]["tank1"]
+
+
 # ----- By-name plant parameter overrides (#134) ----------------------------
 
 

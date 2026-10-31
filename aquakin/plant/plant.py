@@ -1410,6 +1410,9 @@ class Plant:
         cache = self.__dict__.get("_params_unit_cache")
         if cache is None or cache[0] is not params_full:
             built = {name: self._slice_unit_params(name, params_full) for name in self._unit_order}
+            # Slicing a concrete array closed over by jit still produces tracers.
+            if any(isinstance(value, jax.core.Tracer) for value in built.values()):
+                return built[unit_name]
             cache = (params_full, built)
             self._params_unit_cache = cache
         return cache[1][unit_name]

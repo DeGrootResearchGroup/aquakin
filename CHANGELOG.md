@@ -40,6 +40,9 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- Reusing a plant from separate jitted functions with the same closed-over
+  parameter vector no longer leaks cached parameter slices between traces.
+
 - Stable-adjoint gradients (`DifferentiationConfig(method="stable")`) on large
   plants such as BSM2 could be wrong while staying finite. The colored backward
   Jacobian, on by default from 100 states, missed couplings: those from the
