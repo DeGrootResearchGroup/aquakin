@@ -207,6 +207,114 @@ krylov:always 3.1e-4, krylov:0.1 1.0e-3 — all within the solver tolerance band
   rejection has paid the full sensitivity solve. The remaining lever is step-size
   control, not the stage solve.
 
+## Where the error-test rejections come from (2026-11-01)
+
+`scripts/probe_step_rejections.py` records every attempt (`t`, `h`, error norm,
+Newton rate, convergence, and the state's own error norm, so a rejection splits into
+state- and sensitivity-driven). *Configuration:* the window above, 0.25 d,
+`rtol=1e-4`, `atol=1e-3`, Anderson depth 2 (the default), controller defaults
+(`maxfac=2`, `safety=0.9`, `pi_beta=0.08`).
+
+| | `k=0` | `k=16` |
+|---|---|---|
+| attempted / nonconverged / error-rejected | 292 / 40 / 44 | 572 / 26 / 153 |
+| rejections driven by the state / by `S` | 44 / 0 | 24 / 129 |
+| rejected steps straddling an influent sample time (random placement) | 20% (15%) | 4% (6%) |
+| rejections right after a grown accepted step | 38 of 44 | 99 of 153 |
+| …of which that accepted step itself followed a failure | 54% | 66% |
+| growth into the rejection: median (at the 2× cap) | 1.25 (15%) | 1.74 (44%) |
+| error jump `en/(en_prev·(h/h_prev)³)` into a rejection: median (p75) | 2.3 (3.5) | 6.6 (73) |
+| the same jump between two accepted steps: median (p25–p75) | 0.6 (0.3–1.4) | 0.7 (0.4–1.0) |
+
+- **Not influent breakpoints.** Rejected steps straddle a 15-minute sample time no
+  more often than random placement predicts, so clipping steps to the sample times
+  (diffrax `jump_ts`) would not help. Rejected steps' Newton rates are ~0: the stage
+  solve is not involved.
+- **`k=0`: controller overshoot on a noisy estimate.** The `O(h³)` model predicts the
+  next error only within a factor ~4 (the accepted→accepted IQR), and over half the
+  rejections close a reject → accept → grow → reject cycle.
+- **`k=16`: the sensitivity error estimate jumps.** 129 of 153 rejections are driven
+  by `S`; the accepted step before one has a small error (median 0.11), the
+  controller grows it (44% at the cap), and the estimate then jumps far past the
+  `h³` prediction (44% above 10×). Consistent with — not shown to be — the
+  sensitivity right-hand side `J(y)S + f_θ` jumping where `f` has a kink in `y`
+  (`max`/`min` clips, the Takács settler's thresholds — where the drift probe put the
+  Newton failures): the state crosses a kink smoothly, its sensitivity does not.
+
+### Variants (2026-11-01)
+
+Settings, all off by default (`profile_plant_sensitivity.py --variants` names):
+**`hold`** — no growth on the attempt accepted right after a failed one
+(`StepControl.hold_after_failure`; Hairer's rule after a rejection); **`value`** —
+the stage convergence test on the stage-value increment `γh·Δk` rather than the
+slope increment `Δk` (`_STAGE_TEST_IN_VALUE_UNITS`, `_stage_weight`); **`noerrcon`**
+— the sensitivity left out of the error test (`_SENSITIVITY_IN_ERROR_TEST = False`,
+CVODES `errconS = false`, which is CVODES's own default; `S` still converges in
+every stage solve). Errors are against a tight solve
+(`profile_plant_sensitivity.py --reference-rtol 1e-8`: the default lean loop at
+`rtol=1e-8`, `atol=1e-7`), which agrees with diffrax Kvaerno5 at the same
+tolerances to `2.4e-5`: `err_y` per state component relative to its peak (floored
+at `atol`), `err_S` per sensitivity column relative to its peak, the largest over
+the save times. *Configuration:* the 1-day window above, `rtol=1e-4`, `atol=1e-3`,
+Anderson depth 2, controller defaults otherwise. Best of the cached calls of an
+interleaved process (`k=0`: one process, 5 calls; `k=16`: three processes of three
+plants — four `k=16` plants exhaust memory — 4 calls each), with the `default` call
+of the same process in brackets (the third process had none). Errors: max over
+components / columns, median in brackets (`err_S` median over the 16 columns).
+
+| variant | `k` | best cached call (default) | attempted / nonconv / err-rejected | `err_y` max (median) | `err_S` max (median) |
+|---|---|---|---|---|---|
+| default | 0 | 4.1 s | 1199 / 163 / 196 | 2.2e-3 (8.4e-6) | — |
+| hold | 0 | 4.0 s (4.1) | 1136 / 117 / 139 | 1.4e-3 (6.8e-6) | — |
+| value | 0 | 3.5 s (4.1) | 1160 / 125 / 183 | 1.4e-3 (1.7e-5) | — |
+| hold + value | 0 | 3.3 s (4.1) | 1110 / 93 / 137 | 1.8e-3 (1.4e-5) | — |
+| default | 16 | 18.9 s / 18.5 s | 2135 / 107 / 572 | 4.8e-4 (1.0e-5) | 3.4e-4 (6.0e-5) |
+| hold | 16 | 17.6 s (18.9) | 1992 / 78 / 431 | 1.6e-3 (6.6e-6) | 2.1e-4 (1.4e-4) |
+| value | 16 | 18.2 s (18.5) | 2023 / 80 / 552 | 2.6e-3 (1.3e-5) | 2.6e-4 (6.8e-5) |
+| hold + value | 16 | 16.7 s (18.5) | 1891 / 58 / 406 | 3.1e-3 (1.1e-5) | 2.3e-4 (1.4e-4) |
+| noerrcon | 16 | 8.9 s (18.9); 9.6 s | 1199 / 151 / 213 | 2.0e-3 (3.6e-6) | 8.5e-4 (5.0e-4) |
+| hold + noerrcon | 16 | 9.1 s | 1141 / 118 / 138 | 1.4e-3 (5.9e-6) | 8.9e-4 (5.4e-4) |
+| hold + value + noerrcon | 16 | 9.9 s | 1128 / 82 / 149 | 5.9e-3 (9.0e-6) | 2.4e-3 (1.5e-3) |
+
+- **`err_y` max is one settler state** (`TakacsClarifier` local states 3 and 5 of 80,
+  peak ~440) in every row, and moves several-fold with the step sequence alone
+  (`hold`, which only shrinks steps, triples it at `k=16`); the median is the
+  steadier accuracy figure.
+- **`hold`**: fewer attempts at both `k` (−5% / −7%), −7% right-hand-side
+  evaluations at `k=0`, accuracy unchanged.
+- **`value`**: −19% right-hand-side evaluations and the fastest `k=0` call, little at
+  `k=16` (the `k`-column products dominate); the median state error rises 1.3–2×
+  (a ~2000× looser stage test at these steps, at `_KAPPA = 0.1`).
+- **`noerrcon`**: at `k=16` the steps are the state's (1199 attempts — the `k=0`
+  count), so the solve takes about half the time; the price is `S` accuracy, 2.5×
+  worse at the max and 8× at the median column (`5e-4` of the column peak).
+  **Combined with `value`** the sensitivity stage test is loosened too and nothing
+  else bounds `S`: its median column error is 25× the default's — do not combine
+  them without a tighter test on the sensitivity block.
+- **The earlier "vs simultaneous" accuracy figures are disagreements**, not errors:
+  both solves sit at `rtol=1e-4`, and the true global error of the lean loop at
+  `k=0` is ~1.4–2.2e-3 of a component's peak (~20× `rtol`, accumulated over ~1000
+  steps). No variant moves it outside that band.
+- **Deterministic cost at `k=0`** (`probe_step_rejections.py --days 1 --k 0
+  --settings …`, which totals the stage iterations; right-hand-side evaluations ≈
+  attempts + stage iterations, plus one Jacobian and one LU per attempt):
+
+  | variant | stage iterations (per stage solve) | RHS evaluations |
+  |---|---|---|
+  | default | 9496 (2.64) | 10695 |
+  | hold | 8781 (2.58) | 9917 (−7%) |
+  | value | 7458 (2.14) | 8618 (−19%) |
+  | hold + value | 7131 (2.14) | 8241 (−23%) |
+
+  The wall-time ranking agrees. The test needs two iterations at least (a rate
+  estimate), so `value` leaves stages near that floor; Hairer's codes accept after
+  one by reusing the previous step's rate — untried here.
+- **The stage test has been in slope units since the lean loop was written**
+  (`d = wrms(dk, y)` on `main` before #654): it compares `Δk` (state per day) with
+  the state's tolerance, so at `h ~ 1e-3 d` it is ~2000× stricter than Hairer's
+  `η‖γhΔk‖ ≤ κ`, and it would change with the time unit. `_KAPPA = 0.1` was tuned in
+  those units on the 609-day run.
+
 ## Timing on this container (2026-11-01)
 
 Cached-call wall times are **bimodal, ~2×**, across processes *and* within one: the

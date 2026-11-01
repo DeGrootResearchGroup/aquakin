@@ -23,16 +23,24 @@ and, for each error-test rejection that follows an accepted step:
   jump near ``1`` is the controller overshooting, and one with a large jump is
   the error estimate itself changing (a kink in the right-hand side crossed).
 
+It also wraps ``forward_solve._stage_solve`` to total the stage iterations of
+the state and the sensitivity -- one right-hand-side evaluation (state) or one
+``k``-column Jacobian-vector product (sensitivity) each -- the deterministic
+cost of a solve, beside its step counts. ``--settings`` takes a lean-loop spec
+of ``_lean_settings.py`` (default: the shipped settings).
+
 Usage (the steady state is cached next to ``--out``)::
 
     python scripts/probe_step_rejections.py --days 0.25 --k 0
     python scripts/probe_step_rejections.py --days 0.25 --k 16
+    python scripts/probe_step_rejections.py --days 1 --k 0 --settings hold,value
 """
 
 from __future__ import annotations
 
 import argparse
 import collections
+import functools
 import time
 from pathlib import Path
 
@@ -40,6 +48,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from _bsm2_window import ATOL, RTOL, bsm2_window
+from _lean_settings import LeanSettings
 
 import aquakin.integrate.forward_solve as forward_solve
 
@@ -52,12 +61,18 @@ class AttemptRecorder:
     def __init__(self):
         self.attempts = []
         self.state_errors = []
+        self.stage_iterations = collections.Counter()
+        self.stage_solves = collections.Counter()
 
     def on_attempt(self, t, h, en, rate, conv):
         self.attempts.append((float(t), float(h), float(en), float(rate), bool(conv)))
 
     def on_state_error(self, en_y):
         self.state_errors.append(float(en_y))
+
+    def on_stage_solve(self, block, iterations):
+        self.stage_iterations[block] += int(iterations)
+        self.stage_solves[block] += 1
 
     def table(self):
         if len(self.state_errors) != len(self.attempts):
@@ -75,6 +90,7 @@ class AttemptRecorder:
 
 def install(recorder):
     integrate, wrms = forward_solve._integrate, forward_solve._wrms
+    stage_solve = forward_solve._stage_solve
 
     def recorded_integrate(attempt, z0, t0, t1, t_eval, control):
         def recorded_attempt(t, z, h):
@@ -89,8 +105,15 @@ def install(recorder):
         jax.debug.callback(recorder.on_state_error, en, ordered=True)
         return en
 
+    def recorded_stage_solve(residual, guess, lu, scale):
+        out = stage_solve(residual, guess, lu, scale)
+        block = "sensitivity" if guess.ndim == 2 else "state"
+        jax.debug.callback(functools.partial(recorder.on_stage_solve, block), out[3])
+        return out
+
     forward_solve._integrate = recorded_integrate
     forward_solve._wrms = recorded_wrms
+    forward_solve._stage_solve = recorded_stage_solve
 
 
 def outcomes(rec):
@@ -168,11 +191,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--days", type=float, default=0.25)
     ap.add_argument("--k", type=int, default=0)
-    ap.add_argument("--anderson-depth", type=int, default=None)
+    ap.add_argument("--settings", default="default", help="a _lean_settings.py spec")
     ap.add_argument("--out", type=Path, default=Path("probe_step_rejections.npz"))
     args = ap.parse_args()
-    if args.anderson_depth is not None:
-        forward_solve._ANDERSON_DEPTH = args.anderson_depth
+    LeanSettings.parse(args.settings).apply()
 
     plant, params, y_ss, asm_params = bsm2_window(args.out.with_name("bsm2_open_loop_ss.npy"))
     recorder = AttemptRecorder()
@@ -190,11 +212,17 @@ def main():
         return_stats=True,
     )
     print(
-        f"days={args.days} k={args.k} anderson_depth={forward_solve._ANDERSON_DEPTH} "
+        f"days={args.days} k={args.k} settings={args.settings} "
         f"solve {time.perf_counter() - start:.0f}s "
         f"attempted/accepted/nonconverged/error-rejected {[int(v) for v in stats]}",
         flush=True,
     )
+    jax.effects_barrier()
+    for block, solves in sorted(recorder.stage_solves.items()):
+        its = recorder.stage_iterations[block]
+        print(
+            f"{block} stage iterations: {its} over {solves} stage solves ({its / solves:.2f} each)"
+        )
     rec = recorder.table()
     np.savez(args.out, **rec)
     breakpoints = np.unique(np.concatenate([np.asarray(inf.t) for inf in plant.influents.values()]))

@@ -310,8 +310,19 @@ built by the one `_build_sensitivity_solve`:
   freed step growth becomes error-test rejections. Stages whose plain iteration
   diverges at once are out of its reach. Newton-Krylov (GMRES) stage updates were
   measured and **deleted** — more failures removed, but slower than Anderson at
-  both `k` (the note). The scripts: `profile_plant_sensitivity.py --variants`,
-  `probe_newton_drift.py`.
+  both `k` (the note). **Three step-control settings are built, off by default,
+  awaiting the project owner's decision** (measured in the note, "Where the
+  error-test rejections come from"): `StepControl.hold_after_failure` (no growth
+  on the attempt accepted right after a failure); `_STAGE_TEST_IN_VALUE_UNITS`
+  (the stage test on `γh·Δk` via `_stage_weight` — the shipped test reads the
+  slope increment `Δk` against the state tolerance, so it is `1/(γh)` stricter
+  and changes with the time unit, and `_KAPPA` was tuned in those units);
+  `_SENSITIVITY_IN_ERROR_TEST = False` (CVODES `errconS = false`: the steps are
+  the state's, `S` still converged per stage). The rejections are not influent
+  breakpoints; at `k=16` most are driven by the sensitivity error estimate
+  jumping. The scripts: `profile_plant_sensitivity.py --variants` (with
+  `--reference-rtol` for errors against a tight solve), `probe_newton_drift.py`,
+  `probe_step_rejections.py`.
 - **`corrector="simultaneous"`** — the diffrax augmented solve
   (`augmented_forward_sensitivity`, `order=3`, decoupled Newton through
   `build_implicit_solver` / `build_step_controller`, the block-arrow

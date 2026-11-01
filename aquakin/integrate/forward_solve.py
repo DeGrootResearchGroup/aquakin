@@ -96,6 +96,15 @@ stalls at the iteration cap, while the accelerated one removes those directions
 in about as many iterations, at no extra derivative evaluations. The ``_KAPPA``
 and controller tunings above predate it.
 
+Three settings are off by default: ``_STAGE_TEST_IN_VALUE_UNITS`` makes the
+stage convergence test read the stage-value increment ``h*G*dk`` rather than the
+slope increment ``dk`` (see :func:`_stage_weight`; the slope test's strictness
+scales with ``1/(h*G)``, so ``_KAPPA`` above was tuned in units that change with
+the step size and the time unit); ``_SENSITIVITY_IN_ERROR_TEST = False`` leaves
+the sensitivity out of the error test of :func:`staggered_sensitivity_solve`;
+and ``StepControl.hold_after_failure`` stops the step growing on the attempt
+accepted right after a failed one.
+
 References
 ----------
 - Kvaerno, A. (2004). Singly diagonally implicit Runge-Kutta methods with an
@@ -151,6 +160,14 @@ _H_STUCK = 1e-13  # step size below which the solve is declared stuck (no progre
 _NONCONVERGED_SHRINK = 0.25  # step factor after a non-converged Newton iteration
 _ANDERSON_DEPTH = 2  # Anderson acceleration depth of the stage iteration (0 = off)
 _ANDERSON_REG = 1e-10  # relative Tikhonov term on the Anderson least squares
+# Whether the stage convergence test reads the stage-value increment h*G*dk (the
+# Hairer-Wanner and CVODES test, independent of the time unit) rather than the
+# slope increment dk. See _stage_weight.
+_STAGE_TEST_IN_VALUE_UNITS = False
+# Whether the sensitivity's error enters the error test (CVODES ``errconS``).
+# Off, the steps are chosen on the state's error alone and the sensitivity is
+# still converged in every stage solve.
+_SENSITIVITY_IN_ERROR_TEST = True
 
 
 @dataclass(frozen=True)
@@ -180,6 +197,11 @@ class StepControl:
         Largest step size. ``None`` leaves the step uncapped.
     max_steps : int
         Step budget, counting accepted and rejected steps.
+    hold_after_failure : bool
+        Do not grow the step on an attempt accepted right after a failed one (the
+        rule Hairer & Wanner's codes apply after a rejection). It breaks the
+        reject -> accept -> grow -> reject cycle the controller falls into when
+        the error estimate jumps between steps.
     """
 
     h0: float = 1e-3
@@ -190,10 +212,12 @@ class StepControl:
     pi_beta: float = 0.08
     dtmax: float | None = None
     max_steps: int = 100_000_000
+    hold_after_failure: bool = False
 
-    def factor(self, en, en_prev, rate, conv):
+    def factor(self, en, en_prev, rate, conv, after_failure):
         """Step-size factor after an attempt with error norm ``en``, previous
-        accepted error norm ``en_prev`` and Newton contraction rate ``rate``.
+        accepted error norm ``en_prev`` and Newton contraction rate ``rate``;
+        ``after_failure`` says whether the attempt before it failed.
 
         The error controller is an I-term ``en^(-1/3)`` with the Soderlind PI
         memory term ``(en_prev/en)^pi_beta`` -- the proportional part that damps
@@ -202,13 +226,16 @@ class StepControl:
         growth limiter ``theta_target / rate``, which caps growth by the
         simplified-Newton contraction rate so a step is not grown into nonlinear
         divergence. A non-converged attempt (``conv`` false) shrinks the step
-        hard.
+        hard. With ``hold_after_failure``, an attempt accepted right after a
+        failed one does not grow the step.
         """
         ens = jnp.maximum(en, 1e-30)
         f_pi = (en_prev / ens) ** self.pi_beta
         f_err = self.safety * jnp.where(en > 0, ens ** (-1.0 / 3.0) * f_pi, self.maxfac)
         f_conv = jnp.where(rate > 1e-3, self.theta_target / rate, self.maxfac)
         fac = jnp.clip(jnp.minimum(f_err, f_conv), self.minfac, self.maxfac)
+        if self.hold_after_failure:
+            fac = jnp.where(after_failure & (en <= 1.0), jnp.minimum(fac, 1.0), fac)
         return jnp.where(conv, fac, _NONCONVERGED_SHRINK)
 
 
@@ -394,6 +421,19 @@ def _stage_solve(residual, guess, lu, scale):
     return x, rate, conv, it
 
 
+def _stage_weight(scale, h):
+    """The norm scale of a stage iteration on the slope ``k``.
+
+    ``scale`` is the error-test scale of the stage *value* (``atol + rtol*|y|``).
+    A slope increment ``dk`` moves the stage value by ``h*G*dk``, so with
+    ``_STAGE_TEST_IN_VALUE_UNITS`` the test reads ``dk`` against
+    ``scale / (h*G)`` -- the stage-value test of Hairer & Wanner and CVODES, the
+    same at any time unit. Otherwise it reads ``dk`` against ``scale`` itself,
+    which is ``1 / (h*G)`` times stricter and changes with the time unit.
+    """
+    return scale / (h * _G) if _STAGE_TEST_IN_VALUE_UNITS else scale
+
+
 def _stages(k1, solve_stage):
     """Run Kvaerno3's implicit stages 2-4 after the explicit first stage ``k1``.
 
@@ -438,7 +478,9 @@ def _state_stages(rhs, args, t, y, h, lu, scale):
     def solve_stage(i, acc, guess):
         t_i = t + _C[i] * h
         base = y + h * acc
-        return _stage_solve(lambda k: k - rhs(t_i, base + h * _G * k, args), guess, lu, scale)
+        return _stage_solve(
+            lambda k: k - rhs(t_i, base + h * _G * k, args), guess, lu, _stage_weight(scale, h)
+        )
 
     ks, rate, conv = _stages(k1, solve_stage)
     Ys = [y] + [y + h * (_weighted(_A_ROWS[i], ks) + _G * ks[i]) for i in range(1, 4)]
@@ -500,7 +542,9 @@ def _staggered_attempt(rhs, jac, theta, tangents, rtol, atol, sens_rtol, sens_at
                 # was factored, and in a few when it does not.
                 F = tangent_map(t + _C[i] * h, Ys[i])
                 base = S + h * acc
-                return _stage_solve(lambda K: K - F(base + h * _G * K), guess, lu, scale_S)
+                return _stage_solve(
+                    lambda K: K - F(base + h * _G * K), guess, lu, _stage_weight(scale_S, h)
+                )
 
             KS, rate_S, conv_S = _stages(tangent_map(t, y)(S), solve_stage)
             S1, err_S = _advance(S, KS, h)
@@ -516,7 +560,7 @@ def _staggered_attempt(rhs, jac, theta, tangents, rtol, atol, sens_rtol, sens_at
         )
         return _Attempt(
             (y1, S1),
-            jnp.maximum(en_y, en_S),
+            jnp.maximum(en_y, en_S) if _SENSITIVITY_IN_ERROR_TEST else en_y,
             jnp.maximum(rate_y, rate_S),
             conv_y & conv_S,
             (ks[0], KS1),
@@ -550,19 +594,19 @@ def _integrate(attempt, z0, t0, t1, t_eval, control: StepControl):
         return _SAVE_TIME_RTOL * jnp.maximum(1.0, jnp.abs(s))
 
     # carry: t, z, h_ctrl (unclipped proposal), save_idx, zs, en_prev (last
-    #        accepted error, for the PI term), dead, stats
+    #        accepted error, for the PI term), failed (the last attempt failed), dead, stats
     def cond(c):
-        t, z, h_ctrl, sidx, zs, en_prev, dead, stats = c
+        t, z, h_ctrl, sidx, zs, en_prev, failed, dead, stats = c
         return (sidx < n_save) & (~dead) & (stats.attempted < max_steps)
 
     def body(c):
-        t, z, h_ctrl, sidx, zs, en_prev, dead, stats = c
+        t, z, h_ctrl, sidx, zs, en_prev, failed, dead, stats = c
         next_save = t_eval[sidx]
 
         def record_only():
             # already at this save time (e.g. t_eval[0] == t0): record, advance,
             # do not take a (zero-width) step.
-            return (t, z, h_ctrl, sidx + 1, record(zs, sidx, z), en_prev, dead, stats)
+            return (t, z, h_ctrl, sidx + 1, record(zs, sidx, z), en_prev, failed, dead, stats)
 
         def do_step():
             # Take the NATURAL adaptive step, clipped only to the final time t1
@@ -574,7 +618,8 @@ def _integrate(attempt, z0, t0, t1, t_eval, control: StepControl):
             h = jnp.minimum(h_ctrl, t1 - t)
             a = attempt(t, z, h)
             accept = a.conv & (a.en <= 1.0)
-            h_ctrl_new = cap(h_ctrl * control.factor(a.en, en_prev, a.rate, a.conv))
+            fac = control.factor(a.en, en_prev, a.rate, a.conv, failed)
+            h_ctrl_new = cap(h_ctrl * fac)
             t_new = jnp.where(accept, t + h, t)
             z_new = jax.tree.map(lambda new, old: jnp.where(accept, new, old), a.z, z)
             # The PI memory is updated only on accept.
@@ -616,6 +661,7 @@ def _integrate(attempt, z0, t0, t1, t_eval, control: StepControl):
                 sidx_new,
                 zs_new,
                 en_prev_new,
+                ~accept,
                 dead | stuck,
                 stats_new,
             )
@@ -632,9 +678,10 @@ def _integrate(attempt, z0, t0, t1, t_eval, control: StepControl):
         zs0,
         jnp.array(1.0),
         jnp.array(False),
+        jnp.array(False),
         SolveStats(zero, zero, zero, zero),
     )
-    t, z, h, sidx, zs, en_prev, dead, stats = jax.lax.while_loop(cond, body, init)
+    t, z, h, sidx, zs, en_prev, failed, dead, stats = jax.lax.while_loop(cond, body, init)
     # A loop that exits before filling every save row (step budget used up, or
     # the step size collapsed) must not hand back the zero-initialized rows as if
     # they were a solution: mark them NaN and raise.
@@ -761,8 +808,10 @@ def staggered_sensitivity_solve(
     The error test bounds both blocks, with the CVODES norm: the step is
     accepted when the state's WRMS error and every sensitivity column's WRMS
     error are below one. The state's error test runs first; a step rejected on
-    the state alone is rejected before any sensitivity work is spent on it. The
-    step controller is the one :func:`forward_solve` uses, including the
+    the state alone is rejected before any sensitivity work is spent on it. With
+    ``_SENSITIVITY_IN_ERROR_TEST`` off (CVODES's ``errconS = false``) only the
+    state's error enters the test, so the steps are the state solve's and the
+    sensitivity is the converged sensitivity of those steps. The step controller is the one :func:`forward_solve` uses, including the
     convergence-aware growth limiter, whose contraction rate covers the state
     and sensitivity iterations.
 

@@ -28,8 +28,8 @@ linearized Newton step.
 
 Usage (the steady state is cached next to ``--out``)::
 
-    python scripts/probe_newton_drift.py --days 0.25 --anderson-depth 0  # plain
-    python scripts/probe_newton_drift.py --days 0.25  # the default Anderson depth
+    python scripts/probe_newton_drift.py --days 0.25 --settings plain  # no Anderson
+    python scripts/probe_newton_drift.py --days 0.25  # the shipped settings
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ import jax.scipy.linalg as jsla
 import numpy as np
 import scipy.sparse.linalg as spla
 from _bsm2_window import ATOL, RTOL, bsm2_window
+from _lean_settings import LeanSettings
 
 import aquakin.integrate.forward_solve as forward_solve
 
@@ -171,11 +172,10 @@ def report(records, state_units):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--days", type=float, default=0.25)
-    ap.add_argument("--anderson-depth", type=int, default=None)
+    ap.add_argument("--settings", default="default", help="a _lean_settings.py spec")
     ap.add_argument("--out", type=Path, default=Path("probe_newton_drift.txt"))
     args = ap.parse_args()
-    if args.anderson_depth is not None:
-        forward_solve._ANDERSON_DEPTH = args.anderson_depth
+    LeanSettings.parse(args.settings).apply()
 
     plant, params, y_ss, _ = bsm2_window(args.out.with_name("bsm2_open_loop_ss.npy"))
     recorder = StageRecorder()
@@ -193,7 +193,7 @@ def main():
         return_stats=True,
     )
     print(
-        f"days={args.days} anderson_depth={forward_solve._ANDERSON_DEPTH} "
+        f"days={args.days} settings={args.settings} "
         f"solve {time.perf_counter() - start:.0f}s (probe included) "
         f"attempted/accepted/nonconverged/error-rejected {[int(v) for v in stats]}",
         flush=True,

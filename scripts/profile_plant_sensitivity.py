@@ -16,15 +16,20 @@ wrapping ``diffrax.Kvaerno3.step`` / ``PIDController.adapt_step_size`` with a
 ``jax.debug.callback`` (result codes 7/8 are the root finder's max-steps /
 divergence failures; every other rejection is an error-test failure).
 
-``--variants`` (staggered corrector only) compares settings of the lean loop's
-stage iteration (``forward_solve._stage_solve``): ``plain`` or ``anderson:DEPTH``
-(``_ANDERSON_DEPTH``; the default is 2). These are module settings read when a
-solve is compiled, so each variant gets its own plant, compiled once, and the
-cached calls of all variants are **interleaved** (A, B, A, B, ...): wall times on
-a shared machine drift between calls (by up to 2x here), and interleaving puts
-every variant under the same drift. Compare the fastest call of each.
+``--variants`` (staggered corrector only) compares settings of the lean loop,
+each a spec of ``_lean_settings.py`` (e.g. ``default``, ``plain``,
+``anderson:2``, ``hold,value``, ``noerrcon``). They are read when a solve is compiled,
+so each variant gets its own plant, compiled once, and the cached calls of all
+variants are **interleaved** (A, B, A, B, ...): wall times on a shared machine
+drift between calls (by up to 2x here), and interleaving puts every variant under
+the same drift. Compare the fastest call of each.
 
 The state ``ys`` and sensitivity ``S`` of each run are saved next to ``--out``.
+With ``--reference-rtol`` each first call also reports its error against a
+tight-tolerance solve under the default settings (computed once per ``k`` and
+cached next to ``--out``): ``err_y`` per state component relative to its peak
+(floored at ``atol``), ``err_S`` per sensitivity column relative to its peak,
+the largest over the save times.
 
 Usage::
 
@@ -32,6 +37,8 @@ Usage::
     python scripts/profile_plant_sensitivity.py --corrector simultaneous --k 0 16
     python scripts/profile_plant_sensitivity.py --days 1 --k 0 16 --calls 6 \
         --variants plain anderson:2
+    python scripts/profile_plant_sensitivity.py --days 1 --k 0 --calls 6 \
+        --variants anderson:2 anderson:2,hold anderson:2,safety:0.8
 """
 
 from __future__ import annotations
@@ -44,8 +51,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from _bsm2_window import ATOL, RTOL, bsm2_window
-
-import aquakin.integrate.forward_solve as forward_solve
+from _lean_settings import LeanSettings
 
 _NONLINEAR_FAILURE_CODES = (7, 8)  # diffrax RESULTS: nonlinear max steps / divergence
 
@@ -87,24 +93,19 @@ class _DiffraxStepCounter:
 
 
 class _Variant:
-    """One setting of the stage iteration, with a plant compiled under it."""
+    """One lean-loop settings spec (``_lean_settings.py``), with a plant compiled
+    under it."""
 
     def __init__(self, spec, cache):
-        kind, _, value = spec.partition(":")
-        if kind == "plain":
-            self.depth = 0
-        elif kind == "anderson":
-            self.depth = int(value)
-        else:
-            raise ValueError(f"unknown variant {spec!r}")
-        self.tag = spec.replace(":", "")
+        self.settings = LeanSettings.parse(spec)
+        self.tag = self.settings.tag
         self.plant, self.params, self.y_ss, self.asm_params = bsm2_window(cache)
 
     def configure(self):
-        forward_solve._ANDERSON_DEPTH = self.depth
+        self.settings.apply()
 
 
-def _solve(plant, params, y_ss, wrt, args, t_eval):
+def _solve(plant, params, y_ss, wrt, args, t_eval, *, rtol=RTOL, atol=ATOL, max_steps=200_000):
     start = time.perf_counter()
     out = plant.solve_sensitivity(
         params,
@@ -112,15 +113,65 @@ def _solve(plant, params, y_ss, wrt, args, t_eval):
         t_span=(0.0, args.days),
         t_eval=t_eval,
         y0=y_ss,
-        rtol=RTOL,
-        atol=ATOL,
+        rtol=rtol,
+        atol=atol,
         factormax=args.factormax,
-        max_steps=200_000,
+        max_steps=max_steps,
         corrector=args.corrector,
         return_stats=True,
     )
     jax.block_until_ready(out[2])
     return out, time.perf_counter() - start
+
+
+def _reference(k, args, cache, t_eval):
+    """A tight-tolerance solve under the default settings (cached on disk).
+
+    The lean loop at ``rtol = --reference-rtol`` with ``atol`` scaled by the
+    same factor, so each variant's error against it is its own error, not the
+    disagreement of two solves at the measured tolerance.
+    """
+    path = args.out.with_name(f"reference_k{k}_days{args.days}_rtol{args.reference_rtol:g}.npz")
+    if path.exists():
+        ref = np.load(path)
+        return ref["y"], ref["S"]
+    variant = _Variant("default", cache)
+    variant.configure()
+    factor = args.reference_rtol / RTOL
+    out, wall = _solve(
+        variant.plant,
+        variant.params,
+        variant.y_ss,
+        variant.asm_params[:k],
+        args,
+        t_eval,
+        rtol=args.reference_rtol,
+        atol=ATOL * factor,
+        max_steps=2_000_000,
+    )
+    print(
+        f"reference k={k} rtol={args.reference_rtol:g} wall={wall:.0f}s "
+        f"steps={[int(v) for v in out[3]]}",
+        flush=True,
+    )
+    np.savez(path, y=np.asarray(out[1]), S=np.asarray(out[2]))
+    variant.plant._solve_cache.invalidate()
+    jax.clear_caches()
+    return np.asarray(out[1]), np.asarray(out[2])
+
+
+def _errors(out, ref):
+    """Largest error over the save times: per state component relative to its
+    peak (floored at ``ATOL``), per sensitivity column relative to its peak."""
+    y, S = np.asarray(out[1]), np.asarray(out[2])
+    y_ref, S_ref = ref
+    peak_y = np.maximum(np.max(np.abs(y_ref), axis=0), ATOL)
+    err_y = float(np.max(np.max(np.abs(y - y_ref), axis=0) / peak_y))
+    if S.shape[-1] == 0:
+        return err_y, float("nan")
+    peak_S = np.maximum(np.max(np.abs(S_ref), axis=(0, 1)), 1e-300)
+    err_S = float(np.max(np.max(np.abs(S - S_ref), axis=(0, 1)) / peak_S))
+    return err_y, err_S
 
 
 def main():
@@ -131,6 +182,12 @@ def main():
     ap.add_argument("--factormax", type=float, default=None)
     ap.add_argument("--calls", type=int, default=2, help="calls per k (the first compiles)")
     ap.add_argument("--variants", nargs="+", default=None, help="stage-iteration settings")
+    ap.add_argument(
+        "--reference-rtol",
+        type=float,
+        default=None,
+        help="also report each variant's error against a solve at this rtol",
+    )
     ap.add_argument("--out", type=Path, default=Path("profile_plant_sensitivity.txt"))
     args = ap.parse_args()
     if args.variants and args.corrector != "staggered":
@@ -151,6 +208,7 @@ def main():
 
     with args.out.open("a") as log:
         for k in args.k:
+            ref = _reference(k, args, cache, t_eval) if args.reference_rtol else None
             for call in range(1, args.calls + 1):
                 for tag, plant, params, y_ss, asm_params, configure in runs:
                     configure()  # read only when this plant first compiles (call 1)
@@ -170,6 +228,9 @@ def main():
                         f"nonconverged={nonconverged} error_rejected={error_rejected} "
                         f"finite={bool(np.all(np.isfinite(np.asarray(out[2]))))}"
                     )
+                    if ref is not None and call == 1:
+                        err_y, err_S = _errors(out, ref)
+                        line += f" err_y={err_y:.2e} err_S={err_S:.2e}"
                     print(line, flush=True)
                     log.write(line + "\n")
                     log.flush()

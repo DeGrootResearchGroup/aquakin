@@ -161,33 +161,52 @@ def test_jacobian_only_steers_the_iterations(robertson_reference):
     assert _column_relative_error(np.asarray(res.S), robertson_reference) < 1e-6
 
 
+_DECAY_A, _DECAY_T = 2.0, jnp.array([0.0, 1.0, 2.0])
+
+
+def _decay_sensitivity(sens_rtol, sens_atol, free_idx=(0,)):
+    """``y' = -a y`` at a loose state tolerance, with the sensitivity to ``a``
+    (``free_idx=(0,)``) or none (``()``) at the given sensitivity tolerance."""
+    return staggered_sensitivity_solve(
+        _linear_source,
+        _dense_jac(_linear_source),
+        jnp.array([1.0]),
+        jnp.array([_DECAY_A, 0.0]),
+        jnp.asarray(free_idx, dtype=int),
+        0.0,
+        2.0,
+        _DECAY_T,
+        rtol=1e-3,
+        atol=1e-3,
+        sens_rtol=sens_rtol,
+        sens_atol=sens_atol,
+    )
+
+
 def test_sensitivity_error_is_controlled():
     """The step controller bounds the sensitivity error, not only the state's:
     at a loose state tolerance and a tight sensitivity tolerance, S is still
     accurate, and tightening the sensitivity tolerance alone costs steps."""
-    a, b, y0 = 2.0, 0.0, 1.0
-    t_eval = jnp.array([0.0, 1.0, 2.0])
-
-    def solve(sens_rtol, sens_atol):
-        return staggered_sensitivity_solve(
-            _linear_source,
-            _dense_jac(_linear_source),
-            jnp.array([y0]),
-            jnp.array([a, b]),
-            jnp.array([0]),
-            0.0,
-            2.0,
-            t_eval,
-            rtol=1e-3,
-            atol=1e-3,
-            sens_rtol=sens_rtol,
-            sens_atol=sens_atol,
-        )
-
-    tight, loose = solve(1e-9, 1e-12), solve(1e-3, 1e-3)
-    _, dy_da, _ = _linear_source_closed_form(a, b, y0, np.asarray(t_eval))
+    tight, loose = _decay_sensitivity(1e-9, 1e-12), _decay_sensitivity(1e-3, 1e-3)
+    _, dy_da, _ = _linear_source_closed_form(_DECAY_A, 0.0, 1.0, np.asarray(_DECAY_T))
     assert np.max(np.abs(np.asarray(tight.S[:, 0, 0]) - dy_da)) < 1e-7
     assert int(tight.stats.accepted) > 3 * int(loose.stats.accepted)
+
+
+def test_sensitivity_left_out_of_the_error_test_keeps_the_state_steps(monkeypatch):
+    """With the sensitivity out of the error test (CVODES ``errconS = false``)
+    the steps are the state's alone: a tight sensitivity tolerance takes exactly
+    the steps and state of the solve with no sensitivity (with it in the test,
+    the same tolerance costs over three times the steps -- the test above), and S
+    is still the converged sensitivity of those steps."""
+    import aquakin.integrate.forward_solve as fs
+
+    monkeypatch.setattr(fs, "_SENSITIVITY_IN_ERROR_TEST", False)
+    with_S, state = _decay_sensitivity(1e-9, 1e-12), _decay_sensitivity(1e-9, 1e-12, ())
+    assert [int(v) for v in with_S.stats] == [int(v) for v in state.stats]
+    assert np.array_equal(np.asarray(with_S.ys), np.asarray(state.ys))
+    _, dy_da, _ = _linear_source_closed_form(_DECAY_A, 0.0, 1.0, np.asarray(_DECAY_T))
+    assert np.max(np.abs(np.asarray(with_S.S[:, 0, 0]) - dy_da)) < 1e-2
 
 
 def test_no_sensitivity_parameters_is_the_state_solve():
@@ -266,15 +285,20 @@ def test_step_factor_caps_growth_by_the_newton_contraction_rate():
     (and shrinks when ``rate > theta_target``); a slowly varying, tiny error with
     a fast-converging Newton grows by ``maxfac``; a non-converged attempt shrinks
     hard."""
-    c = StepControl(theta_target=0.3, maxfac=2.0)
     tiny = jnp.asarray(1e-8)
-    assert float(c.factor(tiny, tiny, jnp.asarray(0.6), jnp.asarray(True))) == pytest.approx(0.5)
-    assert float(c.factor(tiny, tiny, jnp.asarray(0.2), jnp.asarray(True))) == pytest.approx(1.5)
-    assert float(c.factor(tiny, tiny, jnp.asarray(1e-4), jnp.asarray(True))) == pytest.approx(2.0)
-    assert float(c.factor(tiny, tiny, jnp.asarray(0.01), jnp.asarray(False))) == pytest.approx(0.25)
+
+    def grow(control, rate, conv=True):
+        return float(
+            control.factor(tiny, tiny, jnp.asarray(rate), jnp.asarray(conv), jnp.asarray(False))
+        )
+
+    c = StepControl(theta_target=0.3, maxfac=2.0)
+    assert grow(c, 0.6) == pytest.approx(0.5)
+    assert grow(c, 0.2) == pytest.approx(1.5)
+    assert grow(c, 1e-4) == pytest.approx(2.0)
+    assert grow(c, 0.01, conv=False) == pytest.approx(0.25)
     # Without the limiter the same attempt would have grown by maxfac.
-    free = StepControl(theta_target=1e9, maxfac=2.0)
-    assert float(free.factor(tiny, tiny, jnp.asarray(0.6), jnp.asarray(True))) == pytest.approx(2.0)
+    assert grow(StepControl(theta_target=1e9, maxfac=2.0), 0.6) == pytest.approx(2.0)
 
 
 def _forced_decay_closed_form(a, t):
@@ -340,6 +364,86 @@ def test_dtmax_caps_the_step():
         control=StepControl(dtmax=0.01),
     )
     assert int(res.stats.accepted) >= 200
+
+
+def _accepted_step_sizes(hold):
+    """Accepted step sizes of the adaptive loop on a scripted attempt whose error
+    rises as ``(h / 0.1)**6`` -- faster than the controller's ``h**3`` model --
+    from a first step of 0.2: it is rejected, the shrunk retry is accepted with a
+    small error, and the controller would then grow by its ``maxfac`` cap."""
+    import aquakin.integrate.forward_solve as fs
+
+    def attempt(t, z, h):
+        n = z[0].astype(int)
+        zero = jnp.zeros_like(z)
+        z1 = z.at[n + 1].set(h).at[0].add(1.0)
+        return fs._Attempt(z1, (h / 0.1) ** 6, jnp.asarray(0.0), jnp.asarray(True), zero, zero)
+
+    control = StepControl(h0=0.2, pi_beta=0.0, maxfac=2.0, hold_after_failure=hold)
+    zs, stats = fs._integrate(attempt, jnp.zeros(64), 0.0, 0.5, jnp.array([0.0, 0.5]), control)
+    assert int(stats.error_rejected) >= 1
+    return np.asarray(zs[-1, 1 : 1 + int(zs[-1, 0])])
+
+
+def test_hold_after_failure_stops_growth_right_after_a_rejection():
+    """``hold_after_failure``: the step accepted right after the rejection does
+    not grow the next one (without it, the next step doubles); the step after
+    that, following an accepted step, grows as usual."""
+    free, held = _accepted_step_sizes(False), _accepted_step_sizes(True)
+    assert free[0] == held[0]
+    assert free[1] == pytest.approx(2.0 * free[0])
+    assert held[1] == pytest.approx(held[0])
+    assert held[2] == pytest.approx(2.0 * held[1])
+
+
+def _robertson_stage_iterations(monkeypatch, value_units, time_scale):
+    """Total state stage iterations of the Robertson solve with time measured in
+    units ``time_scale`` times smaller (every rate divided by it). A power of two
+    scales every product in the step exactly, so a test that does not depend on
+    the time unit gives the same iterations bit for bit."""
+    import aquakin.integrate.forward_solve as fs
+
+    monkeypatch.setattr(fs, "_STAGE_TEST_IN_VALUE_UNITS", value_units)
+    total = []
+    stage_solve = fs._stage_solve
+
+    def counted(residual, guess, lu, scale):
+        out = stage_solve(residual, guess, lu, scale)
+        jax.debug.callback(lambda it: total.append(int(it)), out[3])
+        return out
+
+    monkeypatch.setattr(fs, "_stage_solve", counted)
+
+    def rhs(t, y, k):
+        return _robertson(t / time_scale, y, k) / time_scale
+
+    ys = forward_solve(
+        rhs,
+        _dense_jac(rhs),
+        _ROB_Y0,
+        _ROB_K,
+        0.0,
+        40.0 * time_scale,
+        _ROB_T * time_scale,
+        rtol=1e-6,
+        atol=1e-10,
+        control=StepControl(h0=1e-3 * time_scale),
+    )
+    jax.effects_barrier()
+    return sum(total), np.asarray(ys)
+
+
+def test_stage_test_in_value_units_does_not_depend_on_the_time_unit(monkeypatch):
+    """The stage convergence test on the stage-value increment ``h*G*dk`` reads
+    the same in any time unit: the Robertson solve in units 1024 times smaller
+    takes the same stage iterations and gives the same solution. The test on the
+    slope increment ``dk`` reads slopes 1024 times smaller there against the same
+    state tolerance -- 1024 times looser -- so it iterates less."""
+    value = [_robertson_stage_iterations(monkeypatch, True, s) for s in (1.0, 1024.0)]
+    slope = [_robertson_stage_iterations(monkeypatch, False, s) for s in (1.0, 1024.0)]
+    assert value[0][0] == value[1][0]
+    np.testing.assert_allclose(value[0][1], value[1][1], rtol=1e-12, atol=1e-15)
+    assert slope[1][0] < slope[0][0]
 
 
 # --------------------------------------------------------------------------
