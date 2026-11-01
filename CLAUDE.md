@@ -11,6 +11,8 @@ relevant rather than every session:
   auto-load when you read or edit files matching their glob.
 - **On-demand docs** under `docs/*.md` are reference / investigation logs; read
   them when a task needs the detail.
+- **Claude-facing notes** under `.claude/notes/*.md` are dated investigation logs
+  (measurements, probes, A/B results) kept out of `docs/`; they never auto-load.
 
 When you change a subsystem, the matching rule below is the authoritative
 guidance for it — keep it updated as part of the change (this file's Post-Change
@@ -36,6 +38,13 @@ Checklist still governs).
 | `docs/package_structure.md` | the annotated package file tree |
 | `docs/plant_performance.md` | the dynamic-solve performance log (the stiffness-bound regime and its levers) |
 | `docs/ci.md` | the CI architecture (sharding, gates, heavy runner, labels, the OOM memory watchdog) |
+
+**Claude-facing notes (`.claude/notes/`, never auto-load — dated investigation logs, read when a
+task needs the detail):**
+
+| Note | Contents |
+|---|---|
+| `.claude/notes/plant-sensitivity-log.md` | `Plant.solve_sensitivity` corrector measurements (#654), the lean loop's stage-Newton drift diagnostic and its Anderson acceleration |
 
 **Published documentation site** (Sphinx/MyST → Read the Docs; built from
 `docs/conf.py`, gated `-W` in CI). These are **user-facing** — keep dev-internal

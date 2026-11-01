@@ -293,18 +293,30 @@ built by the one `_build_sensitivity_solve`:
   `params`/`y0` required (a tracer raises `TypeError` naming
   `corrector="simultaneous"`). Default `atol_S` shared with the augmented path
   (`forward_sensitivity.sensitivity_atol`, CVODES `atol_y/|θ_j|`). Measured on a
-  synthesised-influent BSM2 day (`docs/plant_performance.md`, "Plant forward
-  sensitivity", configuration there): 44 s vs 313 s cached at `k=16`, but the
-  per-attempt cost is **not flat in `k`** (~7× from `k=0` to `k=16`; the `k`-column
-  Jacobian-vector products, ~10 per accepted step), and ~20% of attempts still
-  fail Newton (a stale step-start `J`, not growth into divergence — dense `J`
-  gives the same).
+  synthesised-influent BSM2 day (`.claude/notes/plant-sensitivity-log.md`, which
+  carries the configuration and the container's ~2× timing noise): several times
+  faster than the simultaneous corrector at `k=16`, but the per-attempt cost is
+  **not flat in `k`** (~2.7× from `k=0` to `k=16`: the `k`-column Jacobian-vector
+  products, ~10 per accepted step), and ~20% of attempts still fail Newton — the
+  step-start `J` is wrong in one or two directions at those stages (mostly the
+  Takács settler), not grown into divergence; a dense `J` fails the same.
+  **Anderson acceleration of the stage iteration** (`forward_solve._ANDERSON_DEPTH`,
+  shared with `forward_fast`; **default 0 = off**, bit-identical to the plain loop):
+  the factored `M` preconditions a Type II Anderson mix, row by row for the
+  sensitivity block. Its contraction/divergence tests read the plain step
+  `−M⁻¹R(x)` at each iterate (the preconditioned residual) — the accelerated
+  updates are non-monotone, and testing them stopped converging solves as
+  "diverged". At depth 2 on the BSM2 day: Newton failures −50% (`k=0`) / −67%
+  (`k=16`), `k=0` 27% faster, `k=16` ~5% (the freed step growth becomes error-test
+  rejections); the remaining failures are stages whose plain iteration diverges
+  at once. The scripts: `profile_plant_sensitivity.py --variants`,
+  `probe_newton_drift.py`.
 - **`corrector="simultaneous"`** — the diffrax augmented solve
   (`augmented_forward_sensitivity`, `order=3`, decoupled Newton through
   `build_implicit_solver` / `build_step_controller`, the block-arrow
   `SimultaneousCorrector` for `k > 1`). Kept because it is **differentiable** and
   an independent check of the staggered result; much slower (see
-  `docs/plant_performance.md`, "Plant forward sensitivity").
+  `.claude/notes/plant-sensitivity-log.md`).
 
 **Compiled once per structure.** The jitted solve lives in `plant._jit_cache`
 (the `SolveCache.jit` dict, so `invalidate()` drops it), keyed by

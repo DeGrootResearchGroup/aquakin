@@ -28,7 +28,7 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   so each sensitivity parameter adds only Jacobian-vector products to a step.
   Its step controller limits step growth by the Newton contraction rate, so
   fewer steps are wasted on Newton divergence. On a one-day BSM2 window with 16
-  parameters, a cached solve took 44 s instead of 313 s.
+  parameters, a cached solve ran several times faster.
   `"simultaneous"` is the previous diffrax augmented solve, which stays
   differentiable. The two agree to the solver tolerance.
 - `Plant.solve_sensitivity(return_stats=True)` also returns the step counts of
