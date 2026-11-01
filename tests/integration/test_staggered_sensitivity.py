@@ -214,13 +214,22 @@ def test_no_sensitivity_parameters_is_the_state_solve():
     assert np.array_equal(np.asarray(res.ys), np.asarray(ys))
 
 
-@pytest.mark.parametrize("rows", [None, 3])
-def test_anderson_acceleration_removes_a_few_slow_directions(monkeypatch, rows):
-    """The stage iteration on a linear residual ``A x - b`` whose factored matrix
-    is wrong in two directions: the plain iteration contracts slowly along them,
-    while the Anderson-accelerated one removes them in a few iterations. Both
-    must land on the exact solution; the accelerated one in fewer iterations.
-    ``rows`` exercises the row-by-row (sensitivity block) path."""
+# Stage-iteration settings: (Anderson depth, Newton-Krylov switch rate).
+_PLAIN = (0, None)
+_ACCELERATED = {
+    "anderson": (2, None),
+    "krylov_always": (0, -1.0),
+    "krylov_adaptive": (0, 0.1),
+}
+
+
+def _linear_stage(monkeypatch, contraction, rows, setting):
+    """Run the stage iteration on a linear residual ``A x - b`` whose factored
+    matrix ``M`` satisfies ``I - M^{-1} A = T``, ``T`` scaling two directions by
+    ``contraction`` and exact elsewhere -- ``M`` is wrong in exactly two
+    directions. Returns the iterate, convergence flag and iteration count, and
+    the exact solution. ``rows`` exercises the row-by-row (sensitivity block)
+    path."""
     from jax.scipy.linalg import lu_factor
 
     import aquakin.integrate.forward_solve as fs
@@ -228,32 +237,52 @@ def test_anderson_acceleration_removes_a_few_slow_directions(monkeypatch, rows):
     n = 20
     rng = np.random.default_rng(1)
     A = np.eye(n) + np.diag(rng.uniform(0.0, 5.0, n))
-    # Factor M with I - M^{-1} A = T, T contracting by 0.7 and 0.85 along two
-    # directions and exact elsewhere: M is wrong in exactly two directions.
     U = np.linalg.qr(rng.standard_normal((n, 2)))[0]
-    T = U @ np.diag([0.7, 0.85]) @ U.T
+    T = U @ np.diag(contraction) @ U.T
     M = A @ np.linalg.inv(np.eye(n) - T)
     shape = (n,) if rows is None else (rows, n)
     b = rng.standard_normal(shape)
-    exact = np.linalg.solve(A, b.T).T
-    scale = jnp.full(shape, 1e-8)  # tight: KAPPA * 1e-8 absolute accuracy
+    monkeypatch.setattr(fs, "_ANDERSON_DEPTH", setting[0])
+    monkeypatch.setattr(fs, "_KRYLOV_SWITCH_RATE", setting[1])
+    x, rate, conv, iterations = fs._stage_solve(
+        lambda x: (jnp.asarray(A) @ x.T).T - jnp.asarray(b),
+        jnp.zeros(shape),
+        lu_factor(jnp.asarray(M)),
+        jnp.full(shape, 1e-8),  # tight: KAPPA * 1e-8 absolute accuracy
+    )
+    return np.asarray(x), bool(conv), int(iterations), np.linalg.solve(A, b.T).T
 
-    def run(depth):
-        monkeypatch.setattr(fs, "_ANDERSON_DEPTH", depth)
-        x, rate, conv, iterations = fs._chord(
-            lambda x: (jnp.asarray(A) @ x.T).T - jnp.asarray(b),
-            jnp.zeros(shape),
-            lu_factor(jnp.asarray(M)),
-            scale,
-        )
-        return np.asarray(x), bool(conv), int(iterations)
 
-    plain = run(0)
-    accelerated = run(2)
-    assert accelerated[1]
-    assert np.max(np.abs(accelerated[0] - exact)) < 1e-8
-    assert accelerated[2] < plain[2]  # plain hits the cap or needs many more
-    assert accelerated[2] <= 6
+@pytest.mark.parametrize("rows", [None, 3])
+@pytest.mark.parametrize("method", sorted(_ACCELERATED))
+def test_accelerated_stage_iteration_removes_a_few_slow_directions(monkeypatch, method, rows):
+    """With the factored matrix wrong in two directions that contract by 0.7
+    and 0.85, the plain iteration stalls at the iteration cap, while Anderson
+    acceleration and Newton-Krylov (GMRES preconditioned by the factorization)
+    both reach the exact solution in a few iterations."""
+    *_, plain_iterations, _ = _linear_stage(monkeypatch, [0.7, 0.85], rows, _PLAIN)
+    x, conv, iterations, exact = _linear_stage(
+        monkeypatch, [0.7, 0.85], rows, _ACCELERATED[method]
+    )
+    assert conv
+    assert np.max(np.abs(x - exact)) < 1e-8
+    assert iterations < plain_iterations  # the plain iteration hits the cap
+    assert iterations <= 6
+
+
+@pytest.mark.parametrize("rows", [None, 3])
+def test_newton_krylov_rescues_a_diverging_stage(monkeypatch, rows):
+    """When the factored matrix is wrong enough that the plain iteration
+    diverges (contractions 1.5 and 2.5), Anderson acceleration cannot help --
+    the divergence test stops it before it has any history -- but Newton-Krylov
+    solves the exact Newton step, and its adaptive form switches to it instead
+    of declaring divergence."""
+    for setting in (_PLAIN, _ACCELERATED["anderson"]):
+        assert not _linear_stage(monkeypatch, [1.5, 2.5], rows, setting)[1]
+    for method in ("krylov_always", "krylov_adaptive"):
+        x, conv, _, exact = _linear_stage(monkeypatch, [1.5, 2.5], rows, _ACCELERATED[method])
+        assert conv
+        assert np.max(np.abs(x - exact)) < 1e-8
 
 
 def test_step_factor_caps_growth_by_the_newton_contraction_rate():

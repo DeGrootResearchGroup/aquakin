@@ -84,7 +84,7 @@ What this shows, and what it does not:
 Each implicit Kvaerno3 stage iterates with `M = LU(I − γhJ_n)`, `J_n` at the step
 start. Near the root the plain iteration's error obeys `e_{m+1} = T e_m`,
 `T = I − M⁻¹A(x)`, `A = I − γhJ(Y)`. `scripts/probe_newton_drift.py` wraps
-`forward_solve._chord` and forms `T` at every state stage's final iterate in the
+`forward_solve._stage_solve` and forms `T` at every state stage's final iterate in the
 solver's WRMS weighting. *Configuration:* the window above, 0.25 d, `k=0` (the
 `forward_fast` loop), `rtol=1e-4`, `atol=1e-3`, Anderson off; 368 attempted, 74
 non-converged, 19 error-test rejected. "Slow directions" = singular values of `T`
@@ -110,7 +110,7 @@ right-hand sides); GMRES is preconditioned by `M`.
 
 ## Anderson acceleration of the stage iteration (2026-11-01)
 
-`forward_solve._chord` takes an Anderson depth (`_ANDERSON_DEPTH`, Type II, Walker &
+`forward_solve._stage_solve` takes an Anderson depth (`_ANDERSON_DEPTH`, Type II, Walker &
 Ni 2011, row by row for the sensitivity block, least squares in the WRMS weighting
 with a `1e-10·trace` Tikhonov term), the factored `M` as the preconditioner. **The
 contraction / divergence tests read the plain step `f = −M⁻¹R(x)` at each iterate
@@ -122,8 +122,8 @@ coincide, and the solve is bit-identical to the pre-Anderson loop. **Default 0
 (off)** pending a decision.
 
 Interleaved A/B (`profile_plant_sensitivity.py --days 1 --k 0 16 --calls 6
---variants 0 2`, one plant per depth, cached calls alternated; best of 5), the 1-day
-window above:
+--variants plain anderson:2`, one plant per variant, cached calls alternated; best
+of 5), the 1-day window above:
 
 | depth | k | best cached call | attempted | Newton-nonconverged | error-test rejected |
 |---|---|---|---|---|---|
@@ -151,6 +151,55 @@ window above:
   plain first-iteration rate instead of the accelerated one: `k=0` 3.3 s,
   `k=16` 16.8 s, 1212 / 139 / 144 and 2129 / 99 / 519, `S` `6.9e-4` — no gain;
   deleted.
+
+## Newton-Krylov (GMRES) updates of the stage iteration (2026-11-01)
+
+`_stage_solve` (was `_chord`) can instead solve each correction as the exact Newton
+step `A(x) dx = −R(x)` by GMRES (`_gmres`): left-preconditioned by the factored `M`
+(so the first Krylov vector is the plain step `f`), inner products weighted like the
+error norm, modified Gram-Schmidt, the rows of a sensitivity block in lockstep, early
+exit at a `1e-2` relative residual or 6 iterations, the least squares by regularized
+normal equations. `_KRYLOV_SWITCH_RATE`: `None` off (default); negative = every
+update ("always"); `r` = plain steps until the contraction rate first exceeds `r`
+("adaptive"). Divergence is judged on Newton-Krylov updates only, so in adaptive
+mode a plain step that does not contract switches instead of failing. Exclusive with
+Anderson.
+
+Synthetic (`test_staggered_sensitivity.py`, `M` wrong in two directions): at
+contractions 0.7/0.85 the plain iteration hits the 12 cap, Anderson takes 5,
+Krylov-always 2, Krylov-adaptive 3–4; at 1.5/2.5 (the plain iteration diverges)
+plain and Anderson fail, both Krylov forms converge (2 / 3).
+
+BSM2 1-day window (configuration above). `k=0`: one 4-way interleaved run
+(`--variants plain anderson:2 krylov:always krylov:0.1`). `k=16`: each Krylov form
+paired with plain in its own process — four whole-plant `k=16` programs in one
+process exhausted memory (LLVM "Cannot allocate memory" with ~4.5 GB nominally
+free), so the harness now drops each `k`'s programs before the next and the `k=16`
+Anderson row is the earlier `plain anderson:2` pair. Best of 5 cached calls; "vs" is
+the plain call in the same process:
+
+| variant | `k=0` best | `k=0` attempted / nonconv / err | `k=16` best (vs plain) | `k=16` attempted / nonconv / err | `S` vs simultaneous |
+|---|---|---|---|---|---|
+| plain | 5.1 s | 1545 / 325 / 71 | 18.0 s | 2176 / 327 / 238 | 3.5e-4 |
+| anderson:2 | **3.4 s** | 1199 / 163 / 196 | **16.1 s** (17.0) | 2135 / 107 / 572 | 5.1e-4 |
+| krylov:always | 5.5 s | 1087 / 64 / 294 | 25.6 s (18.2) | 2119 / 26 / 682 | 7.0e-4 |
+| krylov:0.1 | 4.3 s | 1134 / 113 / 237 | 19.7 s (18.0) | 2145 / 77 / 603 | 7.9e-4 |
+
+`k=0` state vs the simultaneous solve: plain 5.8e-4, anderson:2 2.9e-4,
+krylov:always 3.1e-4, krylov:0.1 1.0e-3 — all within the solver tolerance band.
+
+- **Newton-Krylov removes the most Newton failures** (−80% / −92% at `k=0` / `k=16`
+  for "always"), including the diverged class Anderson cannot reach.
+- **It is not the fastest.** Each Newton-Krylov correction pays a linearization at
+  the iterate plus GMRES products — `k`-wide on the sensitivity block — so "always"
+  is +8% (`k=0`) and +41% (`k=16`) against plain; "adaptive" spends it only on slow
+  stages, −16% / +9%. Anderson, at no extra derivative evaluations, is fastest at
+  both `k`.
+- **Every acceleration turns Newton failures into error-test rejections**
+  (`k=16`: 238 → 572 / 603 / 682): once the stage solve stops failing, the step
+  controller grows steps until the error test rejects them, and at `k=16` each such
+  rejection has paid the full sensitivity solve. The remaining lever is step-size
+  control, not the stage solve.
 
 ## Timing on this container (2026-11-01)
 

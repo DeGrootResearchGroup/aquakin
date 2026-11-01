@@ -88,12 +88,13 @@ benchmark agreement. The RHS evaluation (recycle + kinetics), at ~12 per step, i
 the dominant cost; the per-step Jacobian factorization is only ~8% (so block /
 sparse factorization is not worth it at this scale -- it loses to XLA's dense LU).
 
-The stage iteration can be Anderson-accelerated with the step's factorization as
-the preconditioner (``_ANDERSON_DEPTH``, off by default; see :func:`_chord`). It
-targets stages where the Jacobian factored at the step start has gone wrong in a
-few directions by the stage value -- the plain iteration then contracts slowly or
-stalls at the iteration cap, while the accelerated one removes those directions in
-about as many iterations.
+The stage iteration can be accelerated with the step's factorization as the
+preconditioner -- by Anderson mixing (``_ANDERSON_DEPTH``) or by Newton-Krylov
+updates solved with GMRES (``_KRYLOV_SWITCH_RATE``), both off by default; see
+:func:`_stage_solve`. They target stages where the Jacobian factored at the step
+start has gone wrong in a few directions by the stage value -- the plain
+iteration then contracts slowly, stalls at the iteration cap or diverges, while
+the accelerated one removes those directions in about as many iterations.
 
 References
 ----------
@@ -150,6 +151,13 @@ _H_STUCK = 1e-13  # step size below which the solve is declared stuck (no progre
 _NONCONVERGED_SHRINK = 0.25  # step factor after a non-converged Newton iteration
 _ANDERSON_DEPTH = 0  # Anderson acceleration depth of the stage iteration (0 = off)
 _ANDERSON_REG = 1e-10  # relative Tikhonov term on the Anderson least squares
+# Newton-Krylov updates of the stage iteration: None = off; a negative value =
+# every update; a rate r in [0, 1) = from the first iteration whose contraction
+# rate exceeds r on (the earlier updates are plain steps).
+_KRYLOV_SWITCH_RATE = None
+_KRYLOV_TOL = 1e-2  # GMRES relative residual target of one Newton-Krylov update
+_KRYLOV_MAX_ITER = 6  # GMRES iterations per Newton-Krylov update
+_GMRES_REG = 1e-14  # relative Tikhonov term on the GMRES least squares
 
 
 @dataclass(frozen=True)
@@ -313,28 +321,105 @@ def _anderson_correction(f, dF, dX, valid, weight):
     return gamma @ (dX + dF)
 
 
-def _chord(residual, guess, lu, scale):
-    """Simplified Newton for ``residual(x) = 0`` with the frozen factorization
+def _gmres(apply_B, b, weight, tol, max_iter):
+    """GMRES for ``B x = b``, the rows of ``b`` solved in lockstep.
+
+    Each row ``b[r]`` (shape ``(n,)``) is its own system with the same
+    row-wise operator: ``apply_B`` maps a ``(rows, n)`` block to ``B`` applied to
+    every row. Inner products are weighted by ``weight`` (so the residual is
+    minimized in the solver's error norm), the Krylov basis is built by modified
+    Gram-Schmidt, and the iteration stops once every row's residual is below
+    ``tol`` times its right-hand side, or after ``max_iter`` iterations. The
+    starting guess is zero, so the first iterate is ``b`` scaled.
+
+    Returns
+    -------
+    x : jnp.ndarray
+        The minimal-residual iterate, shape ``(rows, n)``.
+    iterations : jax.Array
+        The number of GMRES iterations taken.
+    """
+    rows, n = b.shape
+    m = max_iter
+
+    def wdot(u, v):
+        return jnp.sum((weight * u) * (weight * v), axis=-1)
+
+    beta = jnp.sqrt(wdot(b, b))
+    V = jnp.zeros((m + 1, rows, n), b.dtype).at[0].set(b / jnp.where(beta > 0, beta, 1.0)[:, None])
+    H = jnp.zeros((rows, m + 1, m), b.dtype)
+    e1 = jnp.zeros((m + 1,), b.dtype).at[0].set(1.0)
+
+    def least_squares(H, j):
+        # min_y ||beta e1 - H y|| over the first j columns (the basis is
+        # orthonormal in the weighted inner product, so this is the residual).
+        cols = jnp.arange(m) < j
+        Hc = H * cols
+        G = jnp.einsum("rkm,rkl->rml", Hc, Hc)
+        lam = _GMRES_REG * jnp.trace(G, axis1=1, axis2=2) + 1e-300
+        G = G * jnp.outer(cols, cols) + jnp.where(cols, lam[:, None], 1.0)[:, :, None] * jnp.eye(m)
+        y = jnp.linalg.solve(G, (beta[:, None] * Hc[:, 0, :])[..., None])[..., 0] * cols
+        res = beta[:, None] * e1 - jnp.einsum("rkm,rm->rk", Hc, y)
+        return y, jnp.sqrt(jnp.sum(res**2, axis=-1))
+
+    def cond(c):
+        _, _, j, res = c
+        return (j < m) & jnp.any(res > tol * beta)
+
+    def body(c):
+        V, H, j, _ = c
+
+        def project(i, wh):
+            w, H = wh
+            h = jnp.where(i <= j, wdot(w, V[i]), 0.0)
+            return w - h[:, None] * V[i], H.at[:, i, j].set(h)
+
+        w, H = jax.lax.fori_loop(0, m, project, (apply_B(V[j]), H))
+        h_next = jnp.sqrt(wdot(w, w))
+        H = H.at[:, j + 1, j].set(h_next)
+        V = V.at[j + 1].set(w / jnp.where(h_next > 0, h_next, 1.0)[:, None])
+        return V, H, j + 1, least_squares(H, j + 1)[1]
+
+    V, H, j, _ = jax.lax.while_loop(cond, body, (V, H, 0, beta))
+    y, _ = least_squares(H, j)
+    return jnp.einsum("rm,mrn->rn", y, V[:m]), j
+
+
+def _stage_solve(residual, guess, lu, scale):
+    """Solve a stage equation ``residual(x) = 0`` with the step's factorization
     ``lu = LU(I - h*G*J)`` (the residual's Jacobian up to the error in ``J``).
 
     ``x`` is one stage derivative ``(n,)`` or a ``(k, n)`` block of them, one per
     row; each row is solved with the same factorization. ``scale`` (the shape of
     ``x``, or broadcastable to it) weights the norm: the WRMS norm of a row, the
-    largest over rows for a block. Hairer-Wanner (ODEs II, IV.8) contraction
-    test: converge when ``eta*||f|| < KAPPA``; diverge when the rate is ``>= 1``
-    or the step is not finite.
+    largest over rows for a block. Each iteration forms the plain step
+    ``f = -LU^{-1} residual(x)`` -- the preconditioned residual -- and the
+    Hairer-Wanner (ODEs II, IV.8) contraction test reads it: converge when
+    ``eta*||f|| < KAPPA``; diverge when the rate is ``>= 1`` or ``f`` is not
+    finite. The update applied is one of:
 
-    With ``_ANDERSON_DEPTH > 0`` each update is Anderson-accelerated (Walker &
-    Ni 2011), row by row, over the last ``_ANDERSON_DEPTH`` steps: the plain
-    chord step ``f = -LU^{-1} residual(x)`` is corrected by the least-squares
-    combination of earlier steps that best cancels it. When the factored ``J``
-    is wrong in only a few directions -- the stage value has moved across a
-    switch in the right-hand side since the step start -- the plain iteration
-    contracts slowly along them, while the accelerated one removes them in about
-    as many iterations as there are such directions. The contraction test (and
-    the step controller's rate) reads the plain step ``f`` at each iterate -- the
-    preconditioned residual -- rather than the applied update, because the
-    accelerated updates are not monotone; without acceleration the two coincide.
+    - **the plain step** ``f`` (the simplified Newton, or chord, iteration);
+    - **Anderson-accelerated** (``_ANDERSON_DEPTH > 0``; Walker & Ni 2011, Type
+      II, row by row): ``f`` corrected by the least-squares combination of the
+      last ``_ANDERSON_DEPTH`` steps that best cancels it;
+    - **Newton-Krylov** (``_KRYLOV_SWITCH_RATE`` not ``None``): the exact Newton
+      step ``A(x) dx = -residual(x)``, ``A`` the residual's Jacobian at the
+      iterate (Jacobian-vector products of one linearization), solved by GMRES
+      (:func:`_gmres`) with the factorization as left preconditioner -- so its
+      first Krylov vector is ``f`` itself, and it converges in one GMRES
+      iteration when the factored ``J`` is still right. A negative switch rate
+      makes every update a Newton-Krylov one; a rate ``r`` in ``[0, 1)`` keeps
+      plain steps until the contraction rate first exceeds ``r``. A plain step
+      that does not contract then switches instead of diverging; divergence is
+      judged on Newton-Krylov updates.
+
+    Both accelerations target stages where the factored ``J`` has gone wrong in
+    a few directions by the stage value -- the stage value has moved across a
+    switch in the right-hand side since the step start: the plain iteration
+    contracts slowly along them, while either acceleration removes them in about
+    as many iterations as there are such directions. The tests read ``f``
+    rather than the applied update because the accelerated updates are not
+    monotone; for plain steps the two coincide.
 
     Returns
     -------
@@ -348,9 +433,15 @@ def _chord(residual, guess, lu, scale):
         The number of iterations taken.
     """
     depth = _ANDERSON_DEPTH
+    switch_rate = _KRYLOV_SWITCH_RATE
+    if depth and switch_rate is not None:
+        raise ValueError("Anderson acceleration and Newton-Krylov updates are exclusive.")
     rows = guess.reshape((-1, guess.shape[-1]))
     weight = 1.0 / jnp.broadcast_to(scale, guess.shape).reshape(rows.shape)
     history = jnp.zeros((rows.shape[0], max(depth, 1), rows.shape[1]), guess.dtype)
+
+    def precondition(r):
+        return -jsla.lu_solve(lu, r.T).T
 
     def accelerate(f, x, f_prev, x_prev, dF, dX, it):
         if depth == 0:
@@ -368,26 +459,41 @@ def _chord(residual, guess, lu, scale):
         )
         return f - correction.reshape(f.shape), dF, dX
 
+    def newton_krylov(x, f):
+        _, lin = jax.linearize(residual, x)
+
+        def apply_B(V):  # LU^{-1} A(x), row by row
+            return -precondition(lin(V.reshape(x.shape))).reshape(rows.shape)
+
+        dx, _ = _gmres(apply_B, f.reshape(rows.shape), weight, _KRYLOV_TOL, _KRYLOV_MAX_ITER)
+        return dx.reshape(x.shape)
+
     def cond(c):
         conv, div, it = c[-2], c[-1], c[5]
         return (~conv) & (~div) & (it < _MAXNEWT)
 
     def body(c):
-        x, f_prev, x_prev, dF, dX, it, dprev, rate, conv, div = c
-        f = -jsla.lu_solve(lu, residual(x).T).T
-        # The tests read the plain step at the iterate (the preconditioned
-        # residual), which the accelerated iteration drives down near-
-        # monotonically; its applied updates are not monotone.
+        x, f_prev, x_prev, dF, dX, it, dprev, rate, krylov, conv, div = c
+        f = precondition(residual(x))
         d = _wrms_max_row(f, scale)
-        dx, dF, dX = accelerate(f, x, f_prev, x_prev, dF, dX, it)
         rate = jnp.where(it >= 1, d / (dprev + 1e-30), rate)
         eta = rate / jnp.maximum(1.0 - rate, _ETA_RATE_FLOOR)
         conv = (it >= 1) & (rate < 1.0) & (eta * d < _KAPPA)
-        div = ((it >= 1) & (rate >= 1.0)) | (~jnp.isfinite(d))
-        return x + dx, f, x, dF, dX, it + 1, d, rate, conv, div
+        if switch_rate is None:
+            div = ((it >= 1) & (rate >= 1.0)) | (~jnp.isfinite(d))
+            dx, dF, dX = accelerate(f, x, f_prev, x_prev, dF, dX, it)
+            return x + dx, f, x, dF, dX, it + 1, d, rate, krylov, conv, div
+        # ``krylov``: the update that led to this iterate was Newton-Krylov.
+        div = ((it >= 1) & (rate >= 1.0) & krylov) | (~jnp.isfinite(d))
+        if switch_rate < 0:
+            use = jnp.asarray(True)
+        else:
+            use = krylov | ((it >= 1) & (rate > switch_rate))
+        dx = jax.lax.cond(use & ~conv & ~div, lambda: newton_krylov(x, f), lambda: f)
+        return x + dx, f, x, dF, dX, it + 1, d, rate, use, conv, div
 
-    init = (guess, guess, guess, history, history, 0, jnp.inf, 0.5, False, False)
-    x, _, _, _, _, it, _, rate, conv, _ = jax.lax.while_loop(cond, body, init)
+    init = (guess, guess, guess, history, history, 0, jnp.inf, 0.5, False, False, False)
+    x, _, _, _, _, it, _, rate, _, conv, _ = jax.lax.while_loop(cond, body, init)
     return x, rate, conv, it
 
 
@@ -435,7 +541,7 @@ def _state_stages(rhs, args, t, y, h, lu, scale):
     def solve_stage(i, acc, guess):
         t_i = t + _C[i] * h
         base = y + h * acc
-        return _chord(lambda k: k - rhs(t_i, base + h * _G * k, args), guess, lu, scale)
+        return _stage_solve(lambda k: k - rhs(t_i, base + h * _G * k, args), guess, lu, scale)
 
     ks, rate, conv = _stages(k1, solve_stage)
     Ys = [y] + [y + h * (_weighted(_A_ROWS[i], ks) + _G * ks[i]) for i in range(1, 4)]
@@ -497,7 +603,7 @@ def _staggered_attempt(rhs, jac, theta, tangents, rtol, atol, sens_rtol, sens_at
                 # was factored, and in a few when it does not.
                 F = tangent_map(t + _C[i] * h, Ys[i])
                 base = S + h * acc
-                return _chord(lambda K: K - F(base + h * _G * K), guess, lu, scale_S)
+                return _stage_solve(lambda K: K - F(base + h * _G * K), guess, lu, scale_S)
 
             KS, rate_S, conv_S = _stages(tangent_map(t, y)(S), solve_stage)
             S1, err_S = _advance(S, KS, h)

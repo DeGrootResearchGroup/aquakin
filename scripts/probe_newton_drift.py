@@ -30,6 +30,7 @@ Usage (the steady state is cached next to ``--out``)::
 
     python scripts/probe_newton_drift.py --days 0.25
     python scripts/probe_newton_drift.py --days 0.25 --anderson-depth 2
+    python scripts/probe_newton_drift.py --days 0.25 --krylov 0.1
 """
 
 from __future__ import annotations
@@ -121,7 +122,7 @@ class StageRecorder:
 
 def install(recorder):
     """Wrap the lean loop's stage solver so every state stage is recorded."""
-    solve_stage = forward_solve._chord
+    solve_stage = forward_solve._stage_solve
 
     def probed(residual, guess, lu, scale):
         x, rate, conv, iterations = solve_stage(residual, guess, lu, scale)
@@ -131,7 +132,7 @@ def install(recorder):
             jax.debug.callback(recorder, iterations, conv, T, jnp.broadcast_to(scale, x.shape))
         return x, rate, conv, iterations
 
-    forward_solve._chord = probed
+    forward_solve._stage_solve = probed
 
 
 def _summary(values):
@@ -172,10 +173,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--days", type=float, default=0.25)
     ap.add_argument("--anderson-depth", type=int, default=None)
+    ap.add_argument(
+        "--krylov", default=None, help="Newton-Krylov updates: 'always' or a switch rate"
+    )
     ap.add_argument("--out", type=Path, default=Path("probe_newton_drift.txt"))
     args = ap.parse_args()
     if args.anderson_depth is not None:
         forward_solve._ANDERSON_DEPTH = args.anderson_depth
+    if args.krylov is not None:
+        forward_solve._KRYLOV_SWITCH_RATE = -1.0 if args.krylov == "always" else float(args.krylov)
 
     plant, params, y_ss, _ = bsm2_window(args.out.with_name("bsm2_open_loop_ss.npy"))
     recorder = StageRecorder()
@@ -194,6 +200,7 @@ def main():
     )
     print(
         f"days={args.days} anderson_depth={forward_solve._ANDERSON_DEPTH} "
+        f"krylov_switch_rate={forward_solve._KRYLOV_SWITCH_RATE} "
         f"solve {time.perf_counter() - start:.0f}s (probe included) "
         f"attempted/accepted/nonconverged/error-rejected {[int(v) for v in stats]}",
         flush=True,

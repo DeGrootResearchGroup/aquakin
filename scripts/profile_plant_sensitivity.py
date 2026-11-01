@@ -16,10 +16,12 @@ wrapping ``diffrax.Kvaerno3.step`` / ``PIDController.adapt_step_size`` with a
 ``jax.debug.callback`` (result codes 7/8 are the root finder's max-steps /
 divergence failures; every other rejection is an error-test failure).
 
-``--variants`` (staggered corrector only) compares Anderson acceleration depths
-of the lean loop's stage iteration (``forward_solve._ANDERSON_DEPTH``, 0 = off).
-The depth is a module setting read when a solve is compiled, so each variant
-gets its own plant, compiled once, and the
+``--variants`` (staggered corrector only) compares settings of the lean loop's
+stage iteration (``forward_solve._stage_solve``): ``plain``; ``anderson:DEPTH``
+(``_ANDERSON_DEPTH``); ``krylov:always`` or ``krylov:RATE``
+(``_KRYLOV_SWITCH_RATE``: Newton-Krylov on every update, or once the contraction
+rate exceeds ``RATE``). These are module settings read when a solve is
+compiled, so each variant gets its own plant, compiled once, and the
 cached calls of all variants are **interleaved** (A, B, A, B, ...): wall times on
 a shared machine drift between calls (by up to 2x here), and interleaving puts
 every variant under the same drift. Compare the fastest call of each.
@@ -30,7 +32,8 @@ Usage::
 
     python scripts/profile_plant_sensitivity.py --corrector staggered --k 0 1 16
     python scripts/profile_plant_sensitivity.py --corrector simultaneous --k 0 16
-    python scripts/profile_plant_sensitivity.py --days 1 --k 0 16 --calls 6 --variants 0 2
+    python scripts/profile_plant_sensitivity.py --days 1 --k 0 16 --calls 6 \
+        --variants plain anderson:2 krylov:always krylov:0.1
 """
 
 from __future__ import annotations
@@ -86,15 +89,25 @@ class _DiffraxStepCounter:
 
 
 class _Variant:
-    """One Anderson depth of the stage iteration, with a plant compiled under it."""
+    """One setting of the stage iteration, with a plant compiled under it."""
 
-    def __init__(self, depth, cache):
-        self.depth = depth
-        self.tag = f"anderson{depth}"
+    def __init__(self, spec, cache):
+        kind, _, value = spec.partition(":")
+        if kind == "plain":
+            self.depth, self.switch_rate = 0, None
+        elif kind == "anderson":
+            self.depth, self.switch_rate = int(value), None
+        elif kind == "krylov":
+            self.depth = 0
+            self.switch_rate = -1.0 if value == "always" else float(value)
+        else:
+            raise ValueError(f"unknown variant {spec!r}")
+        self.tag = spec.replace(":", "")
         self.plant, self.params, self.y_ss, self.asm_params = bsm2_window(cache)
 
     def configure(self):
         forward_solve._ANDERSON_DEPTH = self.depth
+        forward_solve._KRYLOV_SWITCH_RATE = self.switch_rate
 
 
 def _solve(plant, params, y_ss, wrt, args, t_eval):
@@ -123,14 +136,14 @@ def main():
     ap.add_argument("--days", type=float, default=5.0)
     ap.add_argument("--factormax", type=float, default=None)
     ap.add_argument("--calls", type=int, default=2, help="calls per k (the first compiles)")
-    ap.add_argument("--variants", type=int, nargs="+", default=None, help="Anderson depths")
+    ap.add_argument("--variants", nargs="+", default=None, help="stage-iteration settings")
     ap.add_argument("--out", type=Path, default=Path("profile_plant_sensitivity.txt"))
     args = ap.parse_args()
     if args.variants and args.corrector != "staggered":
         ap.error("--variants applies to the staggered corrector only")
 
     cache = args.out.with_name("bsm2_open_loop_ss.npy")
-    variants = [_Variant(depth, cache) for depth in args.variants] if args.variants else None
+    variants = [_Variant(spec, cache) for spec in args.variants] if args.variants else None
     if variants is None:
         plant, params, y_ss, asm_params = bsm2_window(cache)
         runs = [(args.corrector, plant, params, y_ss, asm_params, lambda: None)]
@@ -169,6 +182,11 @@ def main():
                     if call == 1:
                         np.save(args.out.with_name(f"{tag}_k{k}_S.npy"), np.asarray(out[2]))
                         np.save(args.out.with_name(f"{tag}_k{k}_y.npy"), np.asarray(out[1]))
+            # Several whole-plant programs per k are live at once; drop them before
+            # compiling the next k, or the process runs out of memory.
+            for _, plant, *_ in runs:
+                plant._solve_cache.invalidate()
+            jax.clear_caches()
 
 
 if __name__ == "__main__":

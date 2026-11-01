@@ -273,7 +273,7 @@ built by the one `_build_sensitivity_solve`:
 - **`corrector="staggered"` (default, #654)** —
   `integrate/forward_solve.py::staggered_sensitivity_solve` on the lean
   `lax.while_loop` Kvaerno3 loop it shares with `forward_fast` (one `_integrate`
-  driver over a pytree state, one `_chord` simplified Newton, one `StepControl`).
+  driver over a pytree state, one `_stage_solve` stage iteration, one `StepControl`).
   Per implicit stage: converge the state (chord on `LU(I − γhJ)`, `J` the
   **colored** Jacobian from `ColoredJacobianManager.forward_root_finder`, dense
   `jacfwd` if its guard fails — `J` only steers, so a pattern miss costs
@@ -300,17 +300,20 @@ built by the one `_build_sensitivity_solve`:
   products, ~10 per accepted step), and ~20% of attempts still fail Newton — the
   step-start `J` is wrong in one or two directions at those stages (mostly the
   Takács settler), not grown into divergence; a dense `J` fails the same.
-  **Anderson acceleration of the stage iteration** (`forward_solve._ANDERSON_DEPTH`,
-  shared with `forward_fast`; **default 0 = off**, bit-identical to the plain loop):
-  the factored `M` preconditions a Type II Anderson mix, row by row for the
-  sensitivity block. Its contraction/divergence tests read the plain step
-  `−M⁻¹R(x)` at each iterate (the preconditioned residual) — the accelerated
-  updates are non-monotone, and testing them stopped converging solves as
-  "diverged". At depth 2 on the BSM2 day: Newton failures −50% (`k=0`) / −67%
-  (`k=16`), `k=0` 27% faster, `k=16` ~5% (the freed step growth becomes error-test
-  rejections); the remaining failures are stages whose plain iteration diverges
-  at once. The scripts: `profile_plant_sensitivity.py --variants`,
-  `probe_newton_drift.py`.
+  **Accelerating the stage iteration** (`forward_solve._stage_solve`, shared with
+  `forward_fast`; **both off by default**, bit-identical to the plain loop): the
+  factored `M` preconditions either an Anderson mix (`_ANDERSON_DEPTH`, Type II, row
+  by row for the sensitivity block) or Newton-Krylov updates (`_KRYLOV_SWITCH_RATE`:
+  the exact Newton step at the iterate by `_gmres`, every update or from the first
+  slow one). The contraction/divergence tests read the plain step `−M⁻¹R(x)` (the
+  preconditioned residual) — accelerated updates are non-monotone, and testing them
+  stopped converging solves as "diverged"; Newton-Krylov judges divergence on its
+  own updates, so its adaptive form switches on a non-contracting plain step. On the
+  BSM2 day: Anderson depth 2 is fastest (`k=0` ~−30%, `k=16` −5%); Newton-Krylov
+  removes the most Newton failures, including the stages Anderson cannot reach, but
+  pays a linearization + GMRES per correction (adaptive −16% / +9%, always +8% /
+  +41%); every variant turns Newton failures into error-test rejections. The
+  scripts: `profile_plant_sensitivity.py --variants`, `probe_newton_drift.py`.
 - **`corrector="simultaneous"`** — the diffrax augmented solve
   (`augmented_forward_sensitivity`, `order=3`, decoupled Newton through
   `build_implicit_solver` / `build_step_controller`, the block-arrow
