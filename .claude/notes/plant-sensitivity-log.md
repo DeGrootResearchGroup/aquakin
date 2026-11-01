@@ -431,6 +431,24 @@ lean-loop solve at `rtol=1e-8`, `atol=1e-7` ("test metric" is the test's
   tolerances, before today's changes too** (7de1fbe: 5.4e-3 vs 9.9e-4). Not
   investigated: the two differ in the error norm's scale (`rtol·|y_n|` vs diffrax's
   `rtol·max(|y_n|, |y_{n+1}|)`), the controller, and the stage solve.
+- **It barely reaches the outputs.** The layer is TSS layer 3 of 10 counting from
+  the bottom (feed at 5), the blanket front at ~450 g/m³ (t = 8 d: 6763, 2231, 430,
+  449, 433, 475, 88, 35, 21, 14 from the bottom). Rebuilding the effluent, wastage
+  and RAS streams (`plant.stream` on a `PlantSolution` of each saved trajectory)
+  against the tight solve, 8 species (SNH, SNO, SS, XS, XB_H, XB_A, SND, XND):
+
+  | solve | effluent worst, rel. to peak | wastage / RAS worst | effluent 8-day-mean error, particulates (SNH) |
+  |---|---|---|---|
+  | diffrax | 9.2e-5 | 6.0e-5 | 1.5e-5 (9.8e-5) |
+  | lean loop at 7de1fbe | 2.3e-4 | 1.3e-4 | 1.7e-5 (1.0e-4) |
+  | shipped (`_KAPPA = 0.01`, first correction) | 2.1e-3 (XB_H: 0.021 of 9.9 g/m³) | 2.6e-4 | 2.0e-4 (6.8e-5) |
+  | `_KAPPA = 0.1`, two corrections | 1.8e-4 | 6.1e-5 | — |
+
+  The shipped loop's effluent particulates are ~10× worse than the old loop's on
+  this run but still 0.02% on the mean; the nutrients match diffrax. The effluent
+  figure is non-monotone in κ (one run, step-sequence noise), so it does not
+  identify a cause. Not checked: whether the settler error stays bounded over a
+  long (e.g. 609-day) run.
 - **The shipped configuration on the 1-day window** (`_KAPPA = 0.01`, first
   correction accepted, hold rule, stage-value test, Anderson 2;
   `probe_step_rejections.py --days 1`): `k=0` 1140 / 100 / 156
