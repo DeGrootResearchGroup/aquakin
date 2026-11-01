@@ -225,21 +225,7 @@ def profile_likelihood(
         raise NotImplementedError(
             "profile_likelihood supports a single batch; C0 must be one vector."
         )
-    grid = np.asarray(grid, dtype=float)
-    if grid.ndim != 1 or grid.size == 0:
-        raise ValueError("grid must be a non-empty 1-D array.")
-    if delta <= 0:
-        raise ValueError(f"delta must be > 0; got {delta}.")
-    # Checked here, not left to the inner fits: an invalid start list would
-    # fail every grid point and come back as a profile of gaps.
-    if optimizer.starts is not None:
-        if optimizer.n_starts > 1:
-            raise ValueError(
-                "Pass optimizer.starts (an explicit start list) or optimizer.n_starts > 1 "
-                "(jittered restarts), not both."
-            )
-        if len(optimizer.starts) == 0:
-            raise ValueError("optimizer.starts must contain at least one start.")
+    grid = _check_profile_args(grid, delta, optimizer)
 
     model = reactor.model
     C0 = jnp.asarray(C0)
@@ -306,82 +292,137 @@ def profile_likelihood(
         _compiled_cache={},
     )
 
-    # An explicit start list seeds the cold fits. The profiled parameter is
-    # pinned, so drop it from dict starts (a vector start's entry for it is not
-    # read: only the free entries are).
-    cold_starts = None
-    if optimizer.starts is not None:
-        cold_starts = [
-            {k: v for k, v in st.items() if k != profile_param} if isinstance(st, dict) else st
-            for st in optimizer.starts
-        ]
-
-    def _start_state(warm):
-        """initial_params and the free-pool start to seed an inner fit (warm or
-        cold). A warm start moves only the optimiser's starting point: every
-        inner fit keeps the measured ``C0``, which centres the free-pool prior
-        and fixes any non-fitted pool."""
-        if warm is not None:
-            return warm.params, warm.C0_fitted
-        return base_params, None
+    cold_starts = _cold_starts(optimizer, profile_param)
 
     def _fit_point(value, warm):
-        init_p, ic_start = _start_state(warm)
+        # A warm start moves only the optimiser's starting point: every inner
+        # fit keeps the measured ``C0``, which centres the free-pool prior and
+        # fixes any non-fitted pool.
+        init_p = base_params if warm is None else warm.params
+        ic_start = None if warm is None else warm.C0_fitted
         if profile_param is not None:
             init_p = init_p.at[p_idx].set(value)
             C0_pt = C0
         else:
             C0_pt = C0.at[s_idx].set(value)
-        # Cold (anchor) points use the full multistart (or the explicit start
-        # list); warm-continued points start from the neighbour's optimum, so
-        # one start suffices.
-        n = optimizer.n_starts if warm is None else 1
-        starts = cold_starts if warm is None else None
-        try:
-            return calibrate(
-                reactor,
-                C0_pt,
-                observations,
-                t_obs,
-                inner_free,
-                initial_params=init_p,
-                optimizer=replace(optimizer, n_starts=n, starts=starts),
-                _ic_start=ic_start,
-                **inner_kw,
+        return calibrate(
+            reactor,
+            C0_pt,
+            observations,
+            t_obs,
+            inner_free,
+            initial_params=init_p,
+            optimizer=_point_optimizer(optimizer, warm, cold_starts),
+            _ic_start=ic_start,
+            **inner_kw,
+        )
+
+    fits = _profile_sweep(
+        grid,
+        _guarded(_fit_point, profiled),
+        warm_start=warm_start,
+        anchor=anchor,
+        polish=polish,
+        polish_passes=polish_passes,
+        polish_tol=polish_tol,
+    )
+    return _profile_result(profiled, grid, fits, delta)
+
+
+# --- The sweep shared by the reactor and plant profiles -----------------
+
+
+def _check_profile_args(grid, delta, optimizer) -> np.ndarray:
+    """Validate the arguments every profile shares; return ``grid`` as a 1-D
+    float array. An invalid start list is caught here, not left to the inner
+    fits, where it would fail every grid point and come back as a profile of
+    gaps."""
+    grid = np.asarray(grid, dtype=float)
+    if grid.ndim != 1 or grid.size == 0:
+        raise ValueError("grid must be a non-empty 1-D array.")
+    if delta <= 0:
+        raise ValueError(f"delta must be > 0; got {delta}.")
+    if optimizer.starts is not None:
+        if optimizer.n_starts > 1:
+            raise ValueError(
+                "Pass optimizer.starts (an explicit start list) or optimizer.n_starts > 1 "
+                "(jittered restarts), not both."
             )
+        if len(optimizer.starts) == 0:
+            raise ValueError("optimizer.starts must contain at least one start.")
+    return grid
+
+
+def _cold_starts(optimizer: OptimizerConfig, profile_param: str | None):
+    """The explicit start list that seeds the cold fits, or ``None``. The
+    profiled parameter is pinned, so it is dropped from dict starts (a vector
+    start's entry for it is not read: only the free entries are)."""
+    if optimizer.starts is None:
+        return None
+    return [
+        {k: v for k, v in st.items() if k != profile_param} if isinstance(st, dict) else st
+        for st in optimizer.starts
+    ]
+
+
+def _point_optimizer(optimizer: OptimizerConfig, warm, cold_starts) -> OptimizerConfig:
+    """The optimiser for one grid point. A cold (anchor) point uses the full
+    multistart or the explicit start list; a warm-continued point starts from
+    its neighbour's optimum, so one start suffices."""
+    if warm is None:
+        return replace(optimizer, starts=cold_starts)
+    return replace(optimizer, n_starts=1, starts=None)
+
+
+def _guarded(fit_point, profiled: str):
+    """Wrap ``fit_point(value, warm)`` so a failed inner fit is a gap (``None``).
+
+    The failure is surfaced as a warning: a real bug (bad parameter or species
+    name, shape mismatch) fails identically at every grid point and would
+    otherwise masquerade as a string of legitimate solver failures. The
+    exception type makes that visible."""
+
+    def _fit(value, warm):
+        try:
+            return fit_point(value, warm)
         except Exception as exc:
-            # Record this point as a gap (NaN) but surface the failure: a real
-            # bug (bad parameter/species name, shape mismatch) fails identically
-            # at every grid point and would otherwise masquerade as a string of
-            # legitimate solver failures. The exception type makes that visible.
             warnings.warn(
                 f"profile inner fit failed at {profiled}={float(value):g} "
                 f"({type(exc).__name__}: {exc}); recorded as a gap. A failure "
                 f"at every grid point usually indicates a configuration error, "
                 f"not a numerical limit.",
-                stacklevel=2,
+                stacklevel=3,
             )
             return None
 
+    return _fit
+
+
+def _profile_sweep(grid, fit_point, *, warm_start, anchor, polish, polish_passes, polish_tol):
+    """Fit every grid point; return the fits (``None`` for a gap).
+
+    ``fit_point(value, warm)`` fits one point, warm-started from the fit
+    ``warm`` (``None`` for a cold fit) and returns an object with ``.loss``, or
+    ``None`` on failure. With ``warm_start`` a cold fit runs only at the anchor
+    and each further point continues from its neighbour (up, then down);
+    otherwise every point is fitted cold. ``polish`` then re-fits, for up to
+    ``polish_passes`` passes, any point a neighbour beats by more than
+    ``polish_tol``, warm-started from that neighbour."""
     n = len(grid)
     fits: list = [None] * n
 
     if warm_start:
         a_idx = n // 2 if anchor is None else int(np.argmin(np.abs(grid - float(anchor))))
-        fits[a_idx] = _fit_point(grid[a_idx], None)
-        last_good = fits[a_idx]
-        for i in range(a_idx + 1, n):  # sweep up
-            fits[i] = _fit_point(grid[i], last_good)
-            if fits[i] is not None:
-                last_good = fits[i]
-        last_good = fits[a_idx]
-        for i in range(a_idx - 1, -1, -1):  # sweep down
-            fits[i] = _fit_point(grid[i], last_good)
-            if fits[i] is not None:
-                last_good = fits[i]
+        fits[a_idx] = fit_point(grid[a_idx], None)
+        for step in (1, -1):  # sweep up, then down, from the anchor
+            last_good = fits[a_idx]
+            for i in range(a_idx + step, n if step == 1 else -1, step):
+                fits[i] = fit_point(grid[i], last_good)
+                if fits[i] is not None:
+                    last_good = fits[i]
     else:
         for i in range(n):
-            fits[i] = _fit_point(grid[i], None)
+            fits[i] = fit_point(grid[i], None)
 
     if polish:
         for _ in range(polish_passes):
@@ -393,14 +434,18 @@ def profile_likelihood(
                         continue
                     cur_loss = np.inf if cur is None else cur.loss
                     if fits[j].loss < cur_loss - polish_tol:
-                        cand = _fit_point(grid[i], fits[j])
+                        cand = fit_point(grid[i], fits[j])
                         if cand is not None and cand.loss < cur_loss - 1e-9:
                             fits[i] = cand
                             cur = cand
                             improved = True
             if not improved:
                 break
+    return fits
 
+
+def _profile_result(profiled: str, grid: np.ndarray, fits: list, delta: float) -> ProfileResult:
+    """Assemble the :class:`ProfileResult` from the per-point fits."""
     loss = np.array([f.loss if f is not None else np.nan for f in fits])
     if not np.any(np.isfinite(loss)):
         # Every inner fit failed: there is no profile minimum to anchor on, so
