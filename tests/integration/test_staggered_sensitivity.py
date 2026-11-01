@@ -164,7 +164,7 @@ def test_jacobian_only_steers_the_iterations(robertson_reference):
 _DECAY_A, _DECAY_T = 2.0, jnp.array([0.0, 1.0, 2.0])
 
 
-def _decay_sensitivity(sens_rtol, sens_atol, free_idx=(0,)):
+def _decay_sensitivity(sens_rtol, sens_atol, free_idx=(0,), sens_error_control=True):
     """``y' = -a y`` at a loose state tolerance, with the sensitivity to ``a``
     (``free_idx=(0,)``) or none (``()``) at the given sensitivity tolerance."""
     return staggered_sensitivity_solve(
@@ -180,6 +180,7 @@ def _decay_sensitivity(sens_rtol, sens_atol, free_idx=(0,)):
         atol=1e-3,
         sens_rtol=sens_rtol,
         sens_atol=sens_atol,
+        sens_error_control=sens_error_control,
     )
 
 
@@ -193,16 +194,14 @@ def test_sensitivity_error_is_controlled():
     assert int(tight.stats.accepted) > 3 * int(loose.stats.accepted)
 
 
-def test_sensitivity_left_out_of_the_error_test_keeps_the_state_steps(monkeypatch):
-    """With the sensitivity out of the error test (CVODES ``errconS = false``)
-    the steps are the state's alone: a tight sensitivity tolerance takes exactly
-    the steps and state of the solve with no sensitivity (with it in the test,
-    the same tolerance costs over three times the steps -- the test above), and S
-    is still the converged sensitivity of those steps."""
-    import aquakin.integrate.forward_solve as fs
-
-    monkeypatch.setattr(fs, "_SENSITIVITY_IN_ERROR_TEST", False)
-    with_S, state = _decay_sensitivity(1e-9, 1e-12), _decay_sensitivity(1e-9, 1e-12, ())
+def test_sensitivity_left_out_of_the_error_test_keeps_the_state_steps():
+    """With ``sens_error_control=False`` (CVODES ``errconS = false``) the steps
+    are the state's alone: a tight sensitivity tolerance takes exactly the steps
+    and state of the solve with no sensitivity (with it in the test, the same
+    tolerance costs over three times the steps -- the test above), and S is
+    still the converged sensitivity of those steps."""
+    with_S = _decay_sensitivity(1e-9, 1e-12, sens_error_control=False)
+    state = _decay_sensitivity(1e-9, 1e-12, ())
     assert [int(v) for v in with_S.stats] == [int(v) for v in state.stats]
     assert np.array_equal(np.asarray(with_S.ys), np.asarray(state.ys))
     _, dy_da, _ = _linear_source_closed_form(_DECAY_A, 0.0, 1.0, np.asarray(_DECAY_T))
@@ -347,6 +346,51 @@ def test_limiter_prevents_newton_divergence(monkeypatch):
         assert np.max(np.abs(np.asarray(res.S[:, 0, 0]) - np.asarray(dy_da))) < 1e-8
 
 
+def test_a_solve_started_at_its_steady_state_takes_long_steps():
+    """Started at its steady state, a stage's starting guess is already
+    converged and every correction after the first is round-off, so the ratio
+    of two of them is no contraction rate. Accepting the first correction on its
+    size keeps that noise from declaring divergence or holding the step down:
+    a stiff system (rates 1 to 1000) held at its steady state for 1000 time
+    units takes a few dozen steps. Read as rates, the round-off ratios cost it
+    thousands. The right-hand side vanishes at ``ystar`` only to round-off --
+    its constant is summed in another order than ``A @ y`` -- as a plant's
+    does at a computed steady state."""
+    A = jnp.array(
+        [
+            [-1.0, 0.3, 0.0, 0.1],
+            [0.2, -10.0, 1.0, 0.0],
+            [0.0, 3.0, -100.0, 5.0],
+            [0.5, 0.0, 40.0, -1000.0],
+        ]
+    )
+    ystar = jnp.array([1.0 / 3.0, 2.0 / 7.0, 5.0 / 11.0, 3.0 / 13.0])
+    c = -jnp.array(
+        [sum(float(A[i, j]) * float(ystar[j]) for j in reversed(range(4))) for i in range(4)]
+    )
+    assert float(jnp.max(jnp.abs(A @ ystar + c))) > 0.0  # round-off, not zero
+
+    def rhs(t, y, th):
+        return th[0] * (A @ y + c)
+
+    res = staggered_sensitivity_solve(
+        rhs,
+        _dense_jac(rhs),
+        ystar,
+        jnp.array([1.0]),
+        jnp.array([0]),
+        0.0,
+        1000.0,
+        jnp.array([0.0, 1000.0]),
+        rtol=1e-6,
+        atol=1e-9,
+    )
+    _assert_stats_consistent(res.stats)
+    assert int(res.stats.attempted) < 100
+    assert int(res.stats.nonconverged) == 0
+    np.testing.assert_allclose(np.asarray(res.ys[-1]), np.asarray(ystar), rtol=1e-9)
+
+
 def test_dtmax_caps_the_step():
     """``dtmax`` bounds every step: a decay that would take a handful of steps
     takes at least ``span / dtmax`` of them."""
@@ -366,11 +410,13 @@ def test_dtmax_caps_the_step():
     assert int(res.stats.accepted) >= 200
 
 
-def _accepted_step_sizes(hold):
-    """Accepted step sizes of the adaptive loop on a scripted attempt whose error
-    rises as ``(h / 0.1)**6`` -- faster than the controller's ``h**3`` model --
-    from a first step of 0.2: it is rejected, the shrunk retry is accepted with a
-    small error, and the controller would then grow by its ``maxfac`` cap."""
+def test_no_step_growth_right_after_a_rejection():
+    """The adaptive loop on a scripted attempt whose error rises as
+    ``(h / 0.1)**6`` -- faster than the controller's ``h**3`` model -- from a
+    first step of 0.2: it is rejected, and the shrunk retry is accepted with an
+    error small enough for the controller's ``maxfac`` growth. That step,
+    accepted right after the rejection, does not grow the next one; the next
+    one, accepted after an accepted step with the same error, doubles."""
     import aquakin.integrate.forward_solve as fs
 
     def attempt(t, z, h):
@@ -379,31 +425,22 @@ def _accepted_step_sizes(hold):
         z1 = z.at[n + 1].set(h).at[0].add(1.0)
         return fs._Attempt(z1, (h / 0.1) ** 6, jnp.asarray(0.0), jnp.asarray(True), zero, zero)
 
-    control = StepControl(h0=0.2, pi_beta=0.0, maxfac=2.0, hold_after_failure=hold)
+    control = StepControl(h0=0.2, pi_beta=0.0, maxfac=2.0)
     zs, stats = fs._integrate(attempt, jnp.zeros(64), 0.0, 0.5, jnp.array([0.0, 0.5]), control)
     assert int(stats.error_rejected) >= 1
-    return np.asarray(zs[-1, 1 : 1 + int(zs[-1, 0])])
+    accepted = np.asarray(zs[-1, 1 : 1 + int(zs[-1, 0])])
+    assert accepted[0] == pytest.approx(0.2 * 0.9 * 64.0 ** (-1 / 3))  # the shrunk retry
+    assert accepted[1] == pytest.approx(accepted[0])
+    assert accepted[2] == pytest.approx(2.0 * accepted[1])
 
 
-def test_hold_after_failure_stops_growth_right_after_a_rejection():
-    """``hold_after_failure``: the step accepted right after the rejection does
-    not grow the next one (without it, the next step doubles); the step after
-    that, following an accepted step, grows as usual."""
-    free, held = _accepted_step_sizes(False), _accepted_step_sizes(True)
-    assert free[0] == held[0]
-    assert free[1] == pytest.approx(2.0 * free[0])
-    assert held[1] == pytest.approx(held[0])
-    assert held[2] == pytest.approx(2.0 * held[1])
-
-
-def _robertson_stage_iterations(monkeypatch, value_units, time_scale):
+def _robertson_stage_iterations(monkeypatch, time_scale):
     """Total state stage iterations of the Robertson solve with time measured in
     units ``time_scale`` times smaller (every rate divided by it). A power of two
     scales every product in the step exactly, so a test that does not depend on
     the time unit gives the same iterations bit for bit."""
     import aquakin.integrate.forward_solve as fs
 
-    monkeypatch.setattr(fs, "_STAGE_TEST_IN_VALUE_UNITS", value_units)
     total = []
     stage_solve = fs._stage_solve
 
@@ -433,17 +470,15 @@ def _robertson_stage_iterations(monkeypatch, value_units, time_scale):
     return sum(total), np.asarray(ys)
 
 
-def test_stage_test_in_value_units_does_not_depend_on_the_time_unit(monkeypatch):
-    """The stage convergence test on the stage-value increment ``h*G*dk`` reads
-    the same in any time unit: the Robertson solve in units 1024 times smaller
-    takes the same stage iterations and gives the same solution. The test on the
-    slope increment ``dk`` reads slopes 1024 times smaller there against the same
-    state tolerance -- 1024 times looser -- so it iterates less."""
-    value = [_robertson_stage_iterations(monkeypatch, True, s) for s in (1.0, 1024.0)]
-    slope = [_robertson_stage_iterations(monkeypatch, False, s) for s in (1.0, 1024.0)]
-    assert value[0][0] == value[1][0]
-    np.testing.assert_allclose(value[0][1], value[1][1], rtol=1e-12, atol=1e-15)
-    assert slope[1][0] < slope[0][0]
+def test_stage_test_does_not_depend_on_the_time_unit(monkeypatch):
+    """The stage convergence test reads the stage-value increment ``h*G*dk``, so
+    it is the same in any time unit: the Robertson solve in units 1024 times
+    smaller takes the same stage iterations and gives the same solution. (A test
+    on the slope increment ``dk`` against the state tolerance would be 1024 times
+    looser there, and iterate less.)"""
+    days, scaled = (_robertson_stage_iterations(monkeypatch, s) for s in (1.0, 1024.0))
+    assert days[0] == scaled[0]
+    np.testing.assert_allclose(days[1], scaled[1], rtol=1e-12, atol=1e-15)
 
 
 # --------------------------------------------------------------------------
@@ -574,6 +609,35 @@ def test_plant_sensitivity_rejects_unknown_corrector(cstr_plant):
             t_span=(0.0, 1.0),
             y0=_Y0,
             corrector="dense",
+        )
+
+
+def test_plant_sensitivity_error_control_option(cstr_plant):
+    """``sens_error_control=False`` reaches the staggered solve: with a tight
+    sensitivity tolerance it takes the steps of the solve with no sensitivity,
+    while the default (the same tolerance, called first, so a compile cache that
+    ignored the option would hand back its program) takes more. The simultaneous
+    corrector refuses it."""
+    base = cstr_plant.default_parameters()
+    kw = dict(t_span=(0.0, 5.0), y0=_Y0, rtol=1e-4, atol=1e-6, return_stats=True)
+    wrt = ["simple_decay.A_to_B.k"]
+
+    def steps(wrt, **extra):
+        *_, stats = cstr_plant.solve_sensitivity(base, wrt, sens_rtol=1e-10, **kw, **extra)
+        return [int(v) for v in stats]
+
+    controlled = steps(wrt)
+    uncontrolled = steps(wrt, sens_error_control=False)
+    assert uncontrolled == steps([])
+    assert controlled[1] > uncontrolled[1]
+    with pytest.raises(ValueError, match="sens_error_control=False is supported"):
+        cstr_plant.solve_sensitivity(
+            base,
+            wrt,
+            t_span=(0.0, 1.0),
+            y0=_Y0,
+            corrector="simultaneous",
+            sens_error_control=False,
         )
 
 

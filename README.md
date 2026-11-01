@@ -421,7 +421,11 @@ derivatives are formed, so each parameter adds only Jacobian-vector products to
 a step, and its step controller also caps step growth by the Newton contraction
 rate. On a BSM2 window with 16 parameters it runs several times faster than the
 previous solve. `corrector="simultaneous"` keeps the differentiable diffrax
-augmented solve. The compiled solve is cached on the plant, so repeated calls
+augmented solve. By default the step controller bounds the error of `S` as well
+as the state's; `sens_error_control=False` chooses the steps on the state alone
+(the CVODES `errconS = false` option) — about half the time on a 16-parameter
+BSM2 day, with the error of `S` no longer controlled — for a screening run or an
+otherwise very long one. The compiled solve is cached on the plant, so repeated calls
 (a DGSM screen, a parameter sweep) compile once. It is exact for kinetic
 parameters and backs the forward mode of `plant.dynamic_sensitivity`.
 

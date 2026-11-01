@@ -286,9 +286,14 @@ built by the one `_build_sensitivity_solve`:
   state error test runs first; a step rejected on the state skips the sensitivity
   work (`lax.cond`). Error norm: **CVODES** — `max(WRMS_y, max_j WRMS_{S_j})` (the
   augmented diffrax path's single RMS over `n(1+k)` components lets the `S` block
-  dilute the state's error as `k` grows). Step control: the PI controller plus
+  dilute the state's error as `k` grows); `sens_error_control=False` (CVODES
+  `errconS = false`, staggered only, `ValueError` on the simultaneous corrector,
+  in the compile-cache key, passed through forward-mode `dynamic_sensitivity` /
+  `dynamic_dgsm`) drops `S` from it. Step control: the PI controller plus
   the **contraction-rate growth limiter** (`StepControl.factor`; the rate is the
-  max over state and sensitivity iterations); `factormax` maps to
+  max over state and sensitivity iterations) and **no growth on an attempt
+  accepted right after a failed one** (Hairer's rule; `factor`'s
+  `after_failure`, carried by `_integrate`); `factormax` maps to
   `StepControl.maxfac` (default 2, vs diffrax's 10). **Forward-only**: concrete
   `params`/`y0` required (a tracer raises `TypeError` naming
   `corrector="simultaneous"`). Default `atol_S` shared with the augmented path
@@ -297,9 +302,11 @@ built by the one `_build_sensitivity_solve`:
   carries the configuration and the container's ~2× timing noise): several times
   faster than the simultaneous corrector at `k=16`, but the per-attempt cost is
   **not flat in `k`** (~2.7× from `k=0` to `k=16`: the `k`-column Jacobian-vector
-  products, ~10 per accepted step), and ~20% of attempts still fail Newton — the
-  step-start `J` is wrong in one or two directions at those stages (mostly the
-  Takács settler), not grown into divergence; a dense `J` fails the same.
+  products, ~10 per accepted step). Before Anderson acceleration ~20% of attempts
+  failed Newton — the step-start `J` is wrong in one or two directions at those
+  stages (mostly the Takács settler), not grown into divergence; a dense `J` fails
+  the same. With the current defaults (Anderson, the stage-value test, the hold
+  rule) it is ~9% at `k=0` and ~3% at `k=16` on that day.
   **The stage iteration is Anderson-accelerated** (`forward_solve._stage_solve`,
   shared with `forward_fast`; `_ANDERSON_DEPTH = 2` by default, `0` = the plain
   chord iteration): the factored `M` preconditions a Type II Anderson mix, row by
@@ -310,19 +317,32 @@ built by the one `_build_sensitivity_solve`:
   freed step growth becomes error-test rejections. Stages whose plain iteration
   diverges at once are out of its reach. Newton-Krylov (GMRES) stage updates were
   measured and **deleted** — more failures removed, but slower than Anderson at
-  both `k` (the note). **Three step-control settings are built, off by default,
-  awaiting the project owner's decision** (measured in the note, "Where the
-  error-test rejections come from"): `StepControl.hold_after_failure` (no growth
-  on the attempt accepted right after a failure); `_STAGE_TEST_IN_VALUE_UNITS`
-  (the stage test on `γh·Δk` via `_stage_weight` — the shipped test reads the
-  slope increment `Δk` against the state tolerance, so it is `1/(γh)` stricter
-  and changes with the time unit, and `_KAPPA` was tuned in those units);
-  `_SENSITIVITY_IN_ERROR_TEST = False` (CVODES `errconS = false`: the steps are
-  the state's, `S` still converged per stage). The rejections are not influent
-  breakpoints; at `k=16` most are driven by the sensitivity error estimate
-  jumping. The scripts: `profile_plant_sensitivity.py --variants` (with
-  `--reference-rtol` for errors against a tight solve), `probe_newton_drift.py`,
-  `probe_step_rejections.py`.
+  both `k` (the note). **The stage test reads the stage-value increment
+  `γh·Δk`** (`_stage_weight`: the same in any time unit) at **`_KAPPA = 0.01`**;
+  until 2026-11-01 it read the slope increment `Δk` against the state tolerance —
+  `1/(γh)` (~2000× at BSM2 steps) stricter and unit-dependent — at `_KAPPA = 0.1`
+  tuned in those units. The stage error accumulates on a slowly varying settler
+  layer over long runs, so κ is set by an 8-day BSM2 check (worst-layer error
+  3.3e-2 of its peak at 0.1, 4.9e-3 at 0.01, the old loop's 5.4e-3), not by a 1-day
+  window, which cannot resolve it. **A stage accepts its first correction on its
+  size** (`η = 1`, reporting rate 0): without it a solve started at a steady state
+  stalled — the corrections after an already-converged guess are round-off, and
+  their ratio read as divergence and fed the growth limiter (BSM1, constant
+  influent, 40 days of operating sensitivity from the steady state: over 200 000
+  steps, 357 with it; pinned by
+  `test_a_solve_started_at_its_steady_state_takes_long_steps`); it rarely fires
+  elsewhere. Net, against the 7de1fbe defaults on the BSM2 day: `k=0` 8677 vs
+  10695 right-hand-side evaluations (−19%), `k=16` 1967 vs 2135 attempts (−8%).
+  `sens_error_control=False` at `k=16` (shipped configuration): 1156 attempts,
+  9.3 s against 16.7 s, `S` error 4.1e-4 of a column peak (controlled 2.5e-4);
+  not bounded — across earlier settings it ranged 2.8e-4 to 2.4e-3. The lean loop is ~5× less accurate than diffrax on the worst
+  settler layer at equal tolerances, before these changes too (not investigated;
+  the note, "`_KAPPA` over 8 days"). Error-test
+  rejections are not influent breakpoints; at `k=16` most are driven by the
+  sensitivity error estimate jumping (the note, "Where the error-test rejections
+  come from"). The scripts (lean-loop settings specs in `_lean_settings.py`):
+  `profile_plant_sensitivity.py --variants` (`--reference-rtol` for errors
+  against a tight solve), `probe_newton_drift.py`, `probe_step_rejections.py`.
 - **`corrector="simultaneous"`** — the diffrax augmented solve
   (`augmented_forward_sensitivity`, `order=3`, decoupled Newton through
   `build_implicit_solver` / `build_step_controller`, the block-arrow

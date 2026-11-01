@@ -175,7 +175,10 @@ def main():
     ap.add_argument("--settings", default="default", help="a _lean_settings.py spec")
     ap.add_argument("--out", type=Path, default=Path("probe_newton_drift.txt"))
     args = ap.parse_args()
-    LeanSettings.parse(args.settings).apply()
+    settings = LeanSettings.parse(args.settings)
+    if settings.solve_kwargs:
+        ap.error("the drift probe runs the state solve (k=0); noerrcon does not apply")
+    settings.apply()
 
     plant, params, y_ss, _ = bsm2_window(args.out.with_name("bsm2_open_loop_ss.npy"))
     recorder = StageRecorder()

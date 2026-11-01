@@ -839,6 +839,7 @@ def solve_sensitivity(
     rtol: float = 1e-6,
     atol=None,
     sens_rtol=None,
+    sens_error_control: bool = True,
     factormax=None,
     dtmax=None,
     max_steps: int = 1_000_000,
@@ -884,7 +885,8 @@ def solve_sensitivity(
 
     The compiled solve is cached on the plant, keyed by the static structure
     (the correctors, the ``wrt`` indices, the ``operating`` specs, the
-    ``t_eval`` shape, ``factormax``, ``dtmax``, ``max_steps``); the parameter
+    ``t_eval`` shape, ``factormax``, ``dtmax``, ``max_steps``,
+    ``sens_error_control``); the parameter
     values, ``y0``, the ``t_span`` endpoints, the ``t_eval`` values and the
     tolerances are runtime arguments, so repeated calls compile once.
 
@@ -919,6 +921,16 @@ def solve_sensitivity(
         floor).
     sens_rtol : float, optional
         Relative tolerance on ``S`` (defaults to ``rtol``).
+    sens_error_control : bool
+        Whether the error of ``S`` enters the step controller's error test
+        (default). ``False`` chooses the steps on the state's error alone (the
+        CVODES ``errconS = false`` option; staggered corrector only): ``S`` is
+        still converged in every implicit stage, to ``sens_rtol``, but its
+        truncation error is no longer bounded. When the sensitivity forces
+        smaller steps than the state -- as on a dynamic BSM2 with many
+        parameters -- this takes about the state solve's steps, with the error
+        of ``S`` uncontrolled: suited to a screening run or an otherwise very
+        long one.
     factormax : float, optional
         Largest per-step growth factor of the step size. ``None`` keeps each
         corrector's own default (2 for the staggered controller, 10 for the
@@ -959,6 +971,11 @@ def solve_sensitivity(
 
     if corrector not in _CORRECTORS:
         raise ValueError(f"corrector must be one of {_CORRECTORS}; got {corrector!r}.")
+    if not sens_error_control and corrector != "staggered":
+        raise ValueError(
+            "sens_error_control=False is supported by corrector='staggered' only; "
+            "the simultaneous corrector's error norm always includes S."
+        )
     plant._build_state_layout()
     plant._build_parameter_layout()
     params_full = plant._coerce_params(jnp.asarray(params))
@@ -1023,6 +1040,7 @@ def solve_sensitivity(
         factormax,
         dtmax,
         max_steps,
+        sens_error_control,
     )
     jitted = plant._jit_cache.get(key)
     if jitted is None:
@@ -1036,6 +1054,7 @@ def solve_sensitivity(
             factormax=factormax,
             dtmax=dtmax,
             max_steps=max_steps,
+            sens_error_control=sens_error_control,
         )
         plant._jit_cache[key] = jitted
     with friendly_solve_errors(max_steps, what="plant sensitivity solve"):
@@ -1055,7 +1074,17 @@ def solve_sensitivity(
 
 
 def _build_sensitivity_solve(
-    plant, corrector, free_aug, op_meta, n_params, root_finder, *, factormax, dtmax, max_steps
+    plant,
+    corrector,
+    free_aug,
+    op_meta,
+    n_params,
+    root_finder,
+    *,
+    factormax,
+    dtmax,
+    max_steps,
+    sens_error_control,
 ):
     """Build the jit-compiled sensitivity solve for one static structure.
 
@@ -1110,6 +1139,7 @@ def _build_sensitivity_solve(
                 rtol=rtol,
                 atol=atol,
                 sens_rtol=sens_rtol,
+                sens_error_control=sens_error_control,
                 control=control,
             )
             return res.ys, res.S, res.stats
@@ -1191,6 +1221,7 @@ def _dynamic_value_jac(
             "rtol",
             "atol",
             "sens_rtol",
+            "sens_error_control",
             "corrector",
         }
         if extra:
@@ -1198,7 +1229,7 @@ def _dynamic_value_jac(
                 f"forward-mode dynamic sensitivity runs the solve through "
                 f"solve_sensitivity, which does not accept {sorted(extra)}; "
                 f"it accepts max_steps / dtmax / factormax / rtol / atol / "
-                f"sens_rtol / corrector."
+                f"sens_rtol / sens_error_control / corrector."
             )
         full = params.at[wrt_j].set(theta)
         ts, ys, S_state = plant.solve_sensitivity(
@@ -1301,7 +1332,8 @@ def dynamic_sensitivity(
         variational solve (:meth:`solve_sensitivity`) -- finite and memory-light
         over long horizons. In forward mode ``**solve_kwargs`` are forwarded to
         :meth:`solve_sensitivity` (``max_steps``, ``dtmax``, ``factormax``,
-        ``rtol``, ``atol``, ``sens_rtol``, ``corrector``), not to :meth:`solve`.
+        ``rtol``, ``atol``, ``sens_rtol``, ``sens_error_control``, ``corrector``),
+        not to :meth:`solve`.
     y0 : jnp.ndarray, optional
         Initial plant state (e.g. a warm-start steady state).
     elasticity : bool

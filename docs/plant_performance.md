@@ -351,8 +351,9 @@ bare ODE loop — an explicit-solver solve of the same plant RHS traces in ~2 s 
 plant solve — one that never needs `jax.grad`/`calibrate`/`sensitivity` of the
 result — can skip all of it: `forward_solve` is a plain `lax.while_loop` running
 the Kvaerno3 ESDIRK stages with an Anderson-accelerated simplified Newton
-(Hairer–Wanner contraction test) + a direct dense `lu_factor`/`lu_solve`, an
-embedded-error PI controller, and
+(Hairer–Wanner contraction test on the change in each stage value) + a direct
+dense `lu_factor`/`lu_solve`, an embedded-error PI controller that does not grow
+the step right after a rejection, and
 a **convergence-aware step-growth limiter** (the Newton contraction rate caps the
 step growth). Output at `t_eval` is the cubic-Hermite dense output within each
 step (#386), so the run time is flat in the number of save points. The controller

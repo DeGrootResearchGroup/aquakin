@@ -74,36 +74,34 @@ I-controller suffers; ``pi_beta=0`` recovers the pure I-controller) -- and a
 contraction rate caps the step growth, so a step is rarely grown into
 nonlinear-divergence, the chord's failure mode; diffrax's ``PIDController`` has
 no such term, and cannot have one: diffrax hands its controller only the error
-estimate, never the Newton contraction rate). The default ``maxfac=2.0`` /
-``pi_beta=0.08`` were tuned on the full 609-day BSM2 dynamic run, where they cut
-the step count ~20% versus the earlier ``maxfac=5`` pure-I controller (fewer
-error-test rejections).
+estimate, never the Newton contraction rate). An attempt accepted right after a
+failed one does not grow the step (Hairer & Wanner's rule after a rejection),
+which breaks the reject -> accept -> grow -> reject cycle of an error estimate
+that jumps between steps. The default ``maxfac=2.0`` / ``pi_beta=0.08`` were
+tuned on the full 609-day BSM2 dynamic run, where they cut the step count ~20%
+versus the earlier ``maxfac=5`` pure-I controller (fewer error-test rejections).
 
-The simplified-Newton inner tolerance ``_KAPPA = 1e-1`` was likewise tuned on that
-run: loosening it from ``1e-2`` cut the Newton iterations per stage ~3.7 -> ~3.3
-(and the step count fell slightly too, so it is a pure win, not a rejection
-trade-off), ~10% faster, while the solution stays within ``rtol`` -- the
-final-state difference from the ``diffrax`` solve is ~2.5e-4, far inside the
-benchmark agreement. The RHS evaluation (recycle + kinetics), at ~12 per step, is
-the dominant cost; the per-step Jacobian factorization is only ~8% (so block /
-sparse factorization is not worth it at this scale -- it loses to XLA's dense LU).
+Each implicit stage is solved by simplified Newton iteration on its slope ``k``,
+stopped by the Hairer-Wanner test ``eta*||h*G*dk|| < _KAPPA`` in the error-test
+norm: on the stage-value increment ``h*G*dk``, so the test is the same in any
+time unit (see :func:`_stage_weight`). A first correction small enough is
+accepted without a rate estimate, as CVODES and Hairer & Wanner's codes do (see
+:func:`_stage_solve`). ``_KAPPA = 0.01`` is the value Hairer & Wanner's SDIRK
+code takes at ``rtol = 1e-4``. The stage iteration's error accumulates over a
+long run on a slowly varying component: on an 8-day dynamic BSM2 run, the error
+of the worst settler layer fell from ~3% of its peak at 0.1 to ~0.5% at 0.01,
+for ~5% more right-hand-side evaluations than at 0.03. The RHS evaluation
+(recycle + kinetics), at ~12 per step, is the dominant cost; the per-step
+Jacobian factorization is only ~8% (so block / sparse factorization is not worth
+it at this scale -- it loses to XLA's dense LU).
 
 The stage iteration is Anderson-accelerated with the step's factorization as the
 preconditioner (``_ANDERSON_DEPTH = 2``; see :func:`_stage_solve`). It targets
 stages where the Jacobian factored at the step start has gone wrong in a few
 directions by the stage value -- the plain iteration then contracts slowly or
 stalls at the iteration cap, while the accelerated one removes those directions
-in about as many iterations, at no extra derivative evaluations. The ``_KAPPA``
-and controller tunings above predate it.
-
-Three settings are off by default: ``_STAGE_TEST_IN_VALUE_UNITS`` makes the
-stage convergence test read the stage-value increment ``h*G*dk`` rather than the
-slope increment ``dk`` (see :func:`_stage_weight`; the slope test's strictness
-scales with ``1/(h*G)``, so ``_KAPPA`` above was tuned in units that change with
-the step size and the time unit); ``_SENSITIVITY_IN_ERROR_TEST = False`` leaves
-the sensitivity out of the error test of :func:`staggered_sensitivity_solve`;
-and ``StepControl.hold_after_failure`` stops the step growing on the attempt
-accepted right after a failed one.
+in about as many iterations, at no extra derivative evaluations. The
+``maxfac`` / ``pi_beta`` tunings above predate it.
 
 References
 ----------
@@ -151,7 +149,7 @@ _GUESS_ROWS = ((), (1.0,), (_AL31, _AL32), (_AL41, _AL42, _AL43))
 _C = (0.0, _C2, _C3, _C4)
 
 _MAXNEWT = 12
-_KAPPA = 1e-1  # simplified-Newton convergence tolerance (Hairer eta test)
+_KAPPA = 1e-2  # simplified-Newton tolerance on the stage value (Hairer eta test)
 _ETA_RATE_FLOOR = 1e-3  # floor on (1 - rate) so the Hairer convergence-rate
 #                         estimate eta stays finite as the Newton rate -> 1
 _SAVE_TIME_RTOL = 1e-12  # relative slack when testing whether a save time falls
@@ -160,14 +158,6 @@ _H_STUCK = 1e-13  # step size below which the solve is declared stuck (no progre
 _NONCONVERGED_SHRINK = 0.25  # step factor after a non-converged Newton iteration
 _ANDERSON_DEPTH = 2  # Anderson acceleration depth of the stage iteration (0 = off)
 _ANDERSON_REG = 1e-10  # relative Tikhonov term on the Anderson least squares
-# Whether the stage convergence test reads the stage-value increment h*G*dk (the
-# Hairer-Wanner and CVODES test, independent of the time unit) rather than the
-# slope increment dk. See _stage_weight.
-_STAGE_TEST_IN_VALUE_UNITS = False
-# Whether the sensitivity's error enters the error test (CVODES ``errconS``).
-# Off, the steps are chosen on the state's error alone and the sensitivity is
-# still converged in every stage solve.
-_SENSITIVITY_IN_ERROR_TEST = True
 
 
 @dataclass(frozen=True)
@@ -197,11 +187,6 @@ class StepControl:
         Largest step size. ``None`` leaves the step uncapped.
     max_steps : int
         Step budget, counting accepted and rejected steps.
-    hold_after_failure : bool
-        Do not grow the step on an attempt accepted right after a failed one (the
-        rule Hairer & Wanner's codes apply after a rejection). It breaks the
-        reject -> accept -> grow -> reject cycle the controller falls into when
-        the error estimate jumps between steps.
     """
 
     h0: float = 1e-3
@@ -212,7 +197,6 @@ class StepControl:
     pi_beta: float = 0.08
     dtmax: float | None = None
     max_steps: int = 100_000_000
-    hold_after_failure: bool = False
 
     def factor(self, en, en_prev, rate, conv, after_failure):
         """Step-size factor after an attempt with error norm ``en``, previous
@@ -226,16 +210,17 @@ class StepControl:
         growth limiter ``theta_target / rate``, which caps growth by the
         simplified-Newton contraction rate so a step is not grown into nonlinear
         divergence. A non-converged attempt (``conv`` false) shrinks the step
-        hard. With ``hold_after_failure``, an attempt accepted right after a
-        failed one does not grow the step.
+        hard. An attempt accepted right after a failed one does not grow the
+        step (the rule Hairer & Wanner's codes apply after a rejection): it
+        breaks the reject -> accept -> grow -> reject cycle the controller falls
+        into when the error estimate jumps between steps.
         """
         ens = jnp.maximum(en, 1e-30)
         f_pi = (en_prev / ens) ** self.pi_beta
         f_err = self.safety * jnp.where(en > 0, ens ** (-1.0 / 3.0) * f_pi, self.maxfac)
         f_conv = jnp.where(rate > 1e-3, self.theta_target / rate, self.maxfac)
         fac = jnp.clip(jnp.minimum(f_err, f_conv), self.minfac, self.maxfac)
-        if self.hold_after_failure:
-            fac = jnp.where(after_failure & (en <= 1.0), jnp.minimum(fac, 1.0), fac)
+        fac = jnp.where(after_failure & (en <= 1.0), jnp.minimum(fac, 1.0), fac)
         return jnp.where(conv, fac, _NONCONVERGED_SHRINK)
 
 
@@ -348,11 +333,18 @@ def _stage_solve(residual, guess, lu, scale):
     ``x`` is one stage derivative ``(n,)`` or a ``(k, n)`` block of them, one per
     row; each row is solved with the same factorization. ``scale`` (the shape of
     ``x``, or broadcastable to it) weights the norm: the WRMS norm of a row, the
-    largest over rows for a block. Each iteration forms the plain step
+    largest over rows for a block (the steps pass :func:`_stage_weight`, so the
+    test reads the stage-value increment). Each iteration forms the plain step
     ``f = -LU^{-1} residual(x)`` -- the preconditioned residual -- and the
     Hairer-Wanner (ODEs II, IV.8) contraction test reads it: converge when
-    ``eta*||f|| < KAPPA``; diverge when the rate is ``>= 1`` or ``f`` is not
-    finite.
+    ``eta*||f|| < KAPPA``, with ``eta = rate / (1 - rate)`` from the second
+    correction on and ``eta = 1`` on the first, which has no rate estimate yet
+    (CVODES and Hairer & Wanner's codes also accept a first correction that is
+    small enough); diverge when the rate is ``>= 1`` or ``f`` is not finite.
+    Accepting the first correction matters near a steady state, where the
+    starting guess is already converged: the corrections after it are at
+    round-off, and their ratio -- a meaningless rate, often ``>= 1`` -- would
+    otherwise declare divergence and hold the step size down.
 
     With ``_ANDERSON_DEPTH > 0`` the update applied is ``f`` Anderson-accelerated
     (Walker & Ni 2011, Type II, row by row): corrected by the least-squares
@@ -371,7 +363,8 @@ def _stage_solve(residual, guess, lu, scale):
     x : jnp.ndarray
         The last iterate.
     rate : jax.Array
-        The last contraction-rate estimate.
+        The last contraction-rate estimate (``0`` when the first correction
+        was accepted).
     conv : jax.Array
         Whether the iteration converged.
     iterations : jax.Array
@@ -409,14 +402,17 @@ def _stage_solve(residual, guess, lu, scale):
         x, f_prev, x_prev, dF, dX, it, dprev, rate, conv, div = c
         f = precondition(residual(x))
         d = _wrms_max_row(f, scale)
-        rate = jnp.where(it >= 1, d / (dprev + 1e-30), rate)
-        eta = rate / jnp.maximum(1.0 - rate, _ETA_RATE_FLOOR)
-        conv = (it >= 1) & (rate < 1.0) & (eta * d < _KAPPA)
+        # The first correction has no rate estimate: it is accepted on its own
+        # size (eta = 1) and reports no rate, so the step-growth limiter is not
+        # fed the ratio of two round-off-level corrections.
+        rate = jnp.where(it >= 1, d / (dprev + 1e-30), 0.0)
+        eta = jnp.where(it >= 1, rate / jnp.maximum(1.0 - rate, _ETA_RATE_FLOOR), 1.0)
+        conv = (rate < 1.0) & (eta * d < _KAPPA)
         div = ((it >= 1) & (rate >= 1.0)) | (~jnp.isfinite(d))
         dx, dF, dX = accelerate(f, x, f_prev, x_prev, dF, dX, it)
         return x + dx, f, x, dF, dX, it + 1, d, rate, conv, div
 
-    init = (guess, guess, guess, history, history, 0, jnp.inf, 0.5, False, False)
+    init = (guess, guess, guess, history, history, 0, jnp.inf, 0.0, False, False)
     x, _, _, _, _, it, _, rate, conv, _ = jax.lax.while_loop(cond, body, init)
     return x, rate, conv, it
 
@@ -425,13 +421,13 @@ def _stage_weight(scale, h):
     """The norm scale of a stage iteration on the slope ``k``.
 
     ``scale`` is the error-test scale of the stage *value* (``atol + rtol*|y|``).
-    A slope increment ``dk`` moves the stage value by ``h*G*dk``, so with
-    ``_STAGE_TEST_IN_VALUE_UNITS`` the test reads ``dk`` against
-    ``scale / (h*G)`` -- the stage-value test of Hairer & Wanner and CVODES, the
-    same at any time unit. Otherwise it reads ``dk`` against ``scale`` itself,
-    which is ``1 / (h*G)`` times stricter and changes with the time unit.
+    A slope increment ``dk`` moves the stage value by ``h*G*dk``, so the test
+    reads ``dk`` against ``scale / (h*G)``: the stage-value test of Hairer &
+    Wanner and CVODES, the same in any time unit. (Reading ``dk`` against
+    ``scale`` itself would be ``1 / (h*G)`` times stricter and would change with
+    the time unit.)
     """
-    return scale / (h * _G) if _STAGE_TEST_IN_VALUE_UNITS else scale
+    return scale / (h * _G)
 
 
 def _stages(k1, solve_stage):
@@ -509,12 +505,16 @@ def _state_attempt(rhs, jac, args, rtol, atol):
     return attempt
 
 
-def _staggered_attempt(rhs, jac, theta, tangents, rtol, atol, sens_rtol, sens_atol):
+def _staggered_attempt(
+    rhs, jac, theta, tangents, rtol, atol, sens_rtol, sens_atol, sens_error_control
+):
     """Step attempt for the state plus its sensitivity, staggered corrector.
 
     The state stages converge first. Only if they converged and the state passes
     its error test are the sensitivity stages solved; otherwise the attempt is
     rejected on the state alone, without spending the sensitivity work on it.
+    With ``sens_error_control`` the sensitivity's error enters the attempt's
+    error norm; without it only the state's does.
     """
 
     def tangent_map(t_i, Y):
@@ -560,7 +560,7 @@ def _staggered_attempt(rhs, jac, theta, tangents, rtol, atol, sens_rtol, sens_at
         )
         return _Attempt(
             (y1, S1),
-            jnp.maximum(en_y, en_S) if _SENSITIVITY_IN_ERROR_TEST else en_y,
+            jnp.maximum(en_y, en_S) if sens_error_control else en_y,
             jnp.maximum(rate_y, rate_S),
             conv_y & conv_S,
             (ks[0], KS1),
@@ -783,6 +783,7 @@ def staggered_sensitivity_solve(
     sens_rtol=None,
     sens_atol=None,
     param_scale=None,
+    sens_error_control: bool = True,
     control: StepControl = StepControl(),
 ) -> SensitivitySolve:
     """Integrate ``y`` and its forward sensitivity ``S = dy/dtheta`` (staggered).
@@ -809,9 +810,10 @@ def staggered_sensitivity_solve(
     accepted when the state's WRMS error and every sensitivity column's WRMS
     error are below one. The state's error test runs first; a step rejected on
     the state alone is rejected before any sensitivity work is spent on it. With
-    ``_SENSITIVITY_IN_ERROR_TEST`` off (CVODES's ``errconS = false``) only the
-    state's error enters the test, so the steps are the state solve's and the
-    sensitivity is the converged sensitivity of those steps. The step controller is the one :func:`forward_solve` uses, including the
+    ``sens_error_control=False`` (CVODES's ``errconS = false``) only the state's
+    error enters the test, so the steps are the state solve's and the
+    sensitivity is the converged sensitivity of those steps. The step
+    controller is the one :func:`forward_solve` uses, including the
     convergence-aware growth limiter, whose contraction rate covers the state
     and sensitivity iterations.
 
@@ -842,7 +844,14 @@ def staggered_sensitivity_solve(
     sens_atol, param_scale : optional
         Absolute tolerance on ``S``; see
         :func:`~aquakin.integrate.forward_sensitivity.sensitivity_atol`
-        (default ``atol / |theta_j|`` per column).
+        (default ``atol / |theta_j|`` per column). Without
+        ``sens_error_control`` they still set the convergence test of every
+        sensitivity stage.
+    sens_error_control : bool
+        Whether the sensitivity's error enters the error test (default). If
+        ``False`` the steps are chosen on the state's error alone -- fewer steps
+        when the sensitivity would otherwise force smaller ones, at the cost of
+        an uncontrolled sensitivity error.
     control : StepControl, optional
         Step-size controller settings and step budget.
 
@@ -879,6 +888,7 @@ def staggered_sensitivity_solve(
         atol,
         rtol if sens_rtol is None else sens_rtol,
         atol_S,
+        sens_error_control,
     )
     S0 = jnp.zeros((k, n), y0.dtype)  # row j = sensitivity column j
     (ys, Ss), stats = _integrate(attempt, (y0, S0), t0, t1, t_eval, control)

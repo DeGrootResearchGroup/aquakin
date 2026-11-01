@@ -1,5 +1,12 @@
 # Investigation log — plant forward sensitivity and the lean loop's stage Newton
 
+> **Sections measured before 2026-11-01's "`_KAPPA` in the stage-value test" ran
+> the stage convergence test on the slope increment at `_KAPPA = 0.1`, without the
+> no-growth-after-a-failure rule** (and, before "Anderson acceleration", without
+> Anderson); **sections before "A stall near a steady state" required two
+> corrections per stage.** Their step counts and timings are of those solvers,
+> not the shipped one.
+>
 > **Lives in `.claude/notes/`, outside the auto-loaded `.claude/rules/` tree, so it
 > never auto-loads.** It holds the dated measurements behind the
 > `Plant.solve_sensitivity` bullet of `.claude/rules/integration.md` (issue #654) and
@@ -7,8 +14,10 @@
 > file carries the current, load-bearing status; numbers here carry the
 > configuration they were measured under — check it against the source before
 > quoting one as current. Harnesses: `scripts/profile_plant_sensitivity.py`
-> (timings and step counts), `scripts/probe_newton_drift.py` (the drift probe), both
-> on the window of `scripts/_bsm2_window.py`.
+> (timings, step counts, errors against a tight solve), `scripts/probe_newton_drift.py`
+> (the drift probe), `scripts/probe_step_rejections.py` (step attempts and stage
+> iterations), all on the window of `scripts/_bsm2_window.py`, with lean-loop
+> settings specs from `scripts/_lean_settings.py`.
 
 ## Staggered vs simultaneous corrector on a BSM2 window (2026-10-31, #654)
 
@@ -243,14 +252,17 @@ state- and sensitivity-driven). *Configuration:* the window above, 0.25 d,
 
 ### Variants (2026-11-01)
 
-Settings, all off by default (`profile_plant_sensitivity.py --variants` names):
-**`hold`** — no growth on the attempt accepted right after a failed one
-(`StepControl.hold_after_failure`; Hairer's rule after a rejection); **`value`** —
-the stage convergence test on the stage-value increment `γh·Δk` rather than the
-slope increment `Δk` (`_STAGE_TEST_IN_VALUE_UNITS`, `_stage_weight`); **`noerrcon`**
-— the sensitivity left out of the error test (`_SENSITIVITY_IN_ERROR_TEST = False`,
-CVODES `errconS = false`, which is CVODES's own default; `S` still converges in
-every stage solve). Errors are against a tight solve
+The three variants, measured as off-by-default switches: **`hold`** — no growth
+on the attempt accepted right after a failed one (Hairer's rule after a
+rejection); **`value`** — the stage convergence test on the stage-value increment
+`γh·Δk` rather than the slope increment `Δk`; **`noerrcon`** — the sensitivity left
+out of the error test (CVODES `errconS = false`, which is CVODES's own default; `S`
+still converges in every stage solve). **Decided 2026-11-01 (project owner):**
+`hold` and `value` are now unconditional (the switches are gone; `value` with
+`_KAPPA` re-tuned to 0.03, below), and `noerrcon` is
+`solve_sensitivity(sens_error_control=False)`, default `True` — kept for screening
+or otherwise very long runs. The rows below were taken with the switches, at
+`_KAPPA = 0.1`. Errors are against a tight solve
 (`profile_plant_sensitivity.py --reference-rtol 1e-8`: the default lean loop at
 `rtol=1e-8`, `atol=1e-7`), which agrees with diffrax Kvaerno5 at the same
 tolerances to `2.4e-5`: `err_y` per state component relative to its peak (floored
@@ -309,11 +321,127 @@ components / columns, median in brackets (`err_S` median over the 16 columns).
   The wall-time ranking agrees. The test needs two iterations at least (a rate
   estimate), so `value` leaves stages near that floor; Hairer's codes accept after
   one by reusing the previous step's rate — untried here.
-- **The stage test has been in slope units since the lean loop was written**
-  (`d = wrms(dk, y)` on `main` before #654): it compares `Δk` (state per day) with
-  the state's tolerance, so at `h ~ 1e-3 d` it is ~2000× stricter than Hairer's
-  `η‖γhΔk‖ ≤ κ`, and it would change with the time unit. `_KAPPA = 0.1` was tuned in
+- **The stage test was in slope units from when the lean loop was written until
+  2026-11-01** (`d = wrms(dk, y)`): it compared `Δk` (state per day) with the
+  state's tolerance, so at `h ~ 1e-3 d` it was ~2000× stricter than Hairer's
+  `η‖γhΔk‖ ≤ κ`, and changed with the time unit. `_KAPPA = 0.1` had been tuned in
   those units on the 609-day run.
+
+### `_KAPPA` in the stage-value test (2026-11-01)
+
+*Configuration:* as above, with `hold` and `value` in force (the shipped code
+after the decision), `_KAPPA` set per variant (`--variants kappa:0.1 kappa:0.03
+kappa:0.01`; `k=0` and `k=16` each one interleaved process; the `k=16` "default"
+is the slope-unit, no-hold solve of the table above, from another process).
+Right-hand-side evaluations from `probe_step_rejections.py --days 1 --k 0
+--settings kappa:…`.
+
+| `_KAPPA` | `k` | best cached call | attempted / nonconv / err-rejected | RHS evaluations | `err_y` max (median) | `err_S` max (median) |
+|---|---|---|---|---|---|---|
+| (old default) | 0 | 4.1 s | 1199 / 163 / 196 | 10695 | 2.2e-3 (8.4e-6) | — |
+| 0.1 | 0 | 3.3 s | 1110 / 93 / 137 | 8241 | 1.8e-3 (1.4e-5) | — |
+| 0.03 | 0 | 3.4 s | 1095 / 98 / 125 | 8283 | 2.9e-3 (7.4e-6) | — |
+| 0.01 | 0 | 3.4 s | 1109 / 101 / 136 | 8650 | 2.0e-3 (1.1e-5) | — |
+| (old default) | 16 | 18.5–18.9 s | 2135 / 107 / 572 | — | 4.8e-4 (1.0e-5) | 3.4e-4 (6.0e-5) |
+| 0.1 | 16 | 16.4 s | 1891 / 58 / 406 | — | 3.1e-3 (1.1e-5) | 2.3e-4 (1.4e-4) |
+| 0.03 | 16 | 17.1 s | 2000 / 63 / 429 | — | 2.0e-3 (1.1e-5) | 3.9e-4 (3.0e-4) |
+| 0.01 | 16 | 16.3 s | 1984 / 70 / 433 | — | 1.9e-3 (9.8e-6) | 2.4e-4 (1.7e-4) |
+
+- **On this 1-day window** neither cost nor accuracy is resolved between 0.01 and
+  0.1 (the differences are non-monotone in κ — step-sequence noise); 0.03 costs
+  +0.5% evaluations over 0.1, 0.01 +5%. 0.03 was chosen on this table, then
+  **0.01 shipped** after the 8-day check below showed the stage iteration's error
+  accumulating on one settler layer.
+- **`sens_error_control=False`** (same configuration, `k=16`, one interleaved
+  process of the three κ, 3 cached calls each):
+
+  | `_KAPPA` | best cached call | attempted / nonconv / err-rejected | `err_y` max (median) | `err_S` max (median) |
+  |---|---|---|---|---|
+  | 0.1 | 8.8 s | 1128 / 82 / 149 | 5.9e-3 (9.0e-6) | 2.4e-3 (1.5e-3) |
+  | 0.03 | 9.3 s | 1164 / 108 / 138 | 2.7e-3 (6.2e-6) | 2.8e-4 (1.8e-4) |
+  | 0.01 | 9.6 s | 1141 / 104 / 139 | 1.6e-3 (6.8e-6) | 7.3e-4 (4.3e-4) |
+
+  About half the controlled solve's time (17.1 s at 0.03). Its `S` error is not
+  bounded by anything but the stage test, so it swings with the step sequence:
+  at the shipped 0.03 it is no worse than the controlled solve's on this window,
+  at 0.1 eight times worse.
+- **The `err_S` medians above the old default's** appear with `hold` alone too
+  (previous table), which does not touch the stage test: a step-sequence effect, at
+  ~1–3× `rtol`.
+
+## A stall near a steady state (2026-11-01)
+
+`test_sensitivity_interface_parity.py::test_steady_and_dynamic_operating_sensitivity_agree`
+(slow; BSM1, constant influent, `dynamic_sensitivity(mode="forward")` — so the
+staggered `solve_sensitivity` — over 40 d from the steady state, `wrt` one kinetic
+and one operating parameter, `rtol=1e-6`, `max_steps=200_000`) **exhausted its step
+budget since the staggered corrector became the default** (also at 7de1fbe, before
+the stage-value test and the hold rule; the slow tier had not run it on this
+branch). Probe (`probe_step_rejections.py`'s recorder, first 3000 attempts): it
+reached `t = 0.1 d` at `h ~ 3e-5 d` with error norms ~1e-5 — the error test was
+not the limit — while 460 attempts failed Newton at rate ~1.8 with error norms
+~1e-12, and accepted ones fed rates up to 0.7 to the growth limiter. The guesses
+were already converged, so every correction after the first was round-off and
+their ratio no rate: it read as divergence and held the step down. Reverting the
+stage test to slope units changed nothing (every decision was on the rate).
+
+**Fix:** accept a stage's first correction on its size (`η = 1`, the CVODES and
+Hairer & Wanner practice; report rate 0, as there is no estimate). The BSM1 case
+then completes in 357 attempts. On the BSM2 day (configuration of the `_KAPPA`
+table, `_KAPPA = 0.03`, interleaved `default` vs the fix):
+
+| | `k` | best cached call | attempted / nonconv / err-rejected | RHS evaluations (stage iterations / solve) | `err_y` max (median) | `err_S` max (median) |
+|---|---|---|---|---|---|---|
+| two corrections | 0 | 3.1 s | 1095 / 98 / 125 | 8283 (2.19) | 2.9e-3 (7.4e-6) | — |
+| first accepted | 0 | 3.5 s | 1132 / 102 / 150 | 8224 (2.09) | 2.5e-3 (1.7e-5) | — |
+| two corrections | 16 | 16.3 s | 2000 / 63 / 429 | — | 2.0e-3 (1.1e-5) | 3.9e-4 (3.0e-4) |
+| first accepted | 16 | 14.6 s | 1916 / 63 / 414 | — | 2.0e-3 (6.2e-6) | 2.9e-4 (2.3e-4) |
+
+Neutral: in stage-value units a first correction from the predictor is usually
+above `_KAPPA`, so it fires mostly where the corrections are negligible. (The
+untried lever recorded earlier — accept after one correction *using a remembered
+rate* — is a different, stronger change; this one assumes `η = 1`.)
+
+### `_KAPPA` over 8 days (2026-11-01)
+
+The same validation pass found `test_forward_fast.py::test_forward_fast_matches_diffrax_bsm2`
+(slow; BSM2 with temperature correction and the influent bypass, dry influent,
+8 d from the warm start, `rtol=1e-4`, `atol=1e-3`) failing at 2.06e-2 against its
+1.5e-2 bound at `_KAPPA = 0.03`: the max is one settler layer (`TakacsClarifier`
+state 3), the median over components 6e-5. Errors of each 8-day solve against a
+lean-loop solve at `rtol=1e-8`, `atol=1e-7` ("test metric" is the test's
+`max |a − b| / (|b| + 1e-3)` with `b` the tight solve; "per peak" as above):
+
+| solve | test metric | worst component, per peak | median |
+|---|---|---|---|
+| diffrax (the test's reference: Kvaerno3, colored Jacobian) | 1.5e-3 | 9.9e-4 (settler 3) | 2.0e-5 |
+| lean loop at 7de1fbe (slope test, `_KAPPA = 0.1`, no hold) | 7.3e-3 | 5.4e-3 (settler 3) | 3.8e-5 |
+| stage-value test + hold, `_KAPPA = 0.1` | 5.1e-2 | 3.3e-2 (settler 5) | 2.9e-5 |
+| … `_KAPPA = 0.03` | 2.2e-2 | 1.5e-2 (settler 3) | 3.4e-5 |
+| … `_KAPPA = 0.03` + first correction accepted | 1.1e-2 | 7.3e-3 (settler 3) | 3.7e-5 |
+| … `_KAPPA = 0.01` + first correction accepted | 7.6e-3 | 4.9e-3 (settler 2) | 4.8e-5 |
+| … `_KAPPA = 0.003` + first correction accepted | 5.5e-3 | 3.8e-3 (settler 3) | 3.5e-5 |
+
+- **The stage iteration's error accumulates on a slowly varying settler layer**:
+  the worst component's error falls with `_KAPPA`, while the median does not move.
+  A 1-day window is too short to show it. **0.01 shipped**: it restores the old
+  lean loop's accuracy there, at ~5% more right-hand-side evaluations than 0.03,
+  and is Hairer & Wanner's SDIRK value at `rtol = 1e-4`.
+- **The lean loop is ~5× less accurate than diffrax on that layer at the same
+  tolerances, before today's changes too** (7de1fbe: 5.4e-3 vs 9.9e-4). Not
+  investigated: the two differ in the error norm's scale (`rtol·|y_n|` vs diffrax's
+  `rtol·max(|y_n|, |y_{n+1}|)`), the controller, and the stage solve.
+- **The shipped configuration on the 1-day window** (`_KAPPA = 0.01`, first
+  correction accepted, hold rule, stage-value test, Anderson 2;
+  `probe_step_rejections.py --days 1`): `k=0` 1140 / 100 / 156
+  (attempted / nonconv / err-rejected), 7537 state stage iterations (2.20 per
+  solve), 8677 right-hand-side evaluations against 10695 at 7de1fbe (−19%); `k=16`
+  1967 / 67 / 430 against 2135 / 107 / 572, 11301 state and 11296 sensitivity
+  stage iterations (1.92 and 2.08 per solve).
+- **`sens_error_control=False` in the shipped configuration** (`k=16`, interleaved
+  with the default, best of 4 cached calls): 1156 / 114 / 129, 9.3 s against
+  16.7 s; `err_y` 1.9e-3 (median 1.4e-5), `err_S` 4.1e-4 (median 2.2e-4) against
+  the default's 2.0e-3 (5.8e-6) and 2.5e-4 (1.9e-4).
 
 ## Timing on this container (2026-11-01)
 

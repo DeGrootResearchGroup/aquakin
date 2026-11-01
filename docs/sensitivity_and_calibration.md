@@ -83,7 +83,11 @@ res.dC_dparam("target", "H2O2_photolysis.k_photo")   # (n_t,)
 version uses a staggered corrector by default: each step converges the plant
 state first, then solves the sensitivity, which is linear, with the same
 factorization. Each parameter adds only Jacobian-vector products to a step,
-and repeated calls reuse one compiled solve.
+and repeated calls reuse one compiled solve. Its step controller bounds the
+error of the sensitivity as well as the state's; for a screening run, or one that
+would otherwise be very long, `sens_error_control=False` chooses the steps on the
+state alone, which is faster when the sensitivity would force smaller steps, at
+the cost of leaving the sensitivity's error uncontrolled.
 `corrector="simultaneous"` selects the differentiable augmented solve instead. For a
 scalar-loss gradient over many parameters (the calibration case) reverse mode is
 cheaper; `Plant.solve` uses a cap-free stable discrete adjoint automatically, so

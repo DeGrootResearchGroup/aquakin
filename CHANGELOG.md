@@ -34,6 +34,15 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 - `Plant.solve_sensitivity(return_stats=True)` also returns the step counts of
   the staggered solve: attempted, accepted, Newton-nonconverged and
   error-test-rejected steps.
+- `Plant.solve_sensitivity(sens_error_control=False)` chooses the steps on the
+  state's error alone, leaving the sensitivity out of the error test (the CVODES
+  `errconS = false` option; staggered corrector only). The sensitivity is still
+  converged in every step but its error is no longer bounded; where the
+  sensitivity forces smaller steps than the state it is much faster (about half
+  the time on a dynamic BSM2 window with 16 parameters), for screening runs or
+  otherwise very long ones. `dynamic_sensitivity`
+  and `dynamic_dgsm` pass it through in forward mode. The default (`True`) is
+  unchanged.
 
 ### Changed
 
@@ -43,6 +52,16 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   the preconditioner. Their results change within the solver tolerance. On a
   dynamic BSM2 window, half as many steps failed Newton convergence and a
   forward solve ran about 30% faster.
+- The lean forward integrator and the staggered `Plant.solve_sensitivity` no
+  longer grow the step right after a rejected step, and the Newton iteration of
+  each implicit stage now stops on the change in the stage value rather than in
+  its slope, so its tolerance no longer depends on the time unit or the step
+  size; a stage whose first correction is already small enough is accepted
+  without a second. On a dynamic BSM2 window a forward solve used about a fifth
+  fewer right-hand-side evaluations, with the same accuracy against a
+  tight-tolerance solve, and a staggered `solve_sensitivity` started at a steady
+  state no longer stalls at tiny steps. Results change within the solver
+  tolerance.
 - `Plant.solve_sensitivity` now caches its compiled solve on the plant. Repeated
   calls with new parameter values, initial state, time span, save times (of the
   same length) or tolerances reuse it instead of recompiling, which helps

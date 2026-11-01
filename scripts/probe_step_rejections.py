@@ -33,7 +33,7 @@ Usage (the steady state is cached next to ``--out``)::
 
     python scripts/probe_step_rejections.py --days 0.25 --k 0
     python scripts/probe_step_rejections.py --days 0.25 --k 16
-    python scripts/probe_step_rejections.py --days 1 --k 0 --settings hold,value
+    python scripts/probe_step_rejections.py --days 1 --k 0 --settings kappa:0.03
 """
 
 from __future__ import annotations
@@ -194,7 +194,8 @@ def main():
     ap.add_argument("--settings", default="default", help="a _lean_settings.py spec")
     ap.add_argument("--out", type=Path, default=Path("probe_step_rejections.npz"))
     args = ap.parse_args()
-    LeanSettings.parse(args.settings).apply()
+    settings = LeanSettings.parse(args.settings)
+    settings.apply()
 
     plant, params, y_ss, asm_params = bsm2_window(args.out.with_name("bsm2_open_loop_ss.npy"))
     recorder = AttemptRecorder()
@@ -210,6 +211,7 @@ def main():
         atol=ATOL,
         max_steps=200_000,
         return_stats=True,
+        **settings.solve_kwargs,
     )
     print(
         f"days={args.days} k={args.k} settings={args.settings} "

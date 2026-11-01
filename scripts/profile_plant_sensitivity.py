@@ -18,7 +18,7 @@ divergence failures; every other rejection is an error-test failure).
 
 ``--variants`` (staggered corrector only) compares settings of the lean loop,
 each a spec of ``_lean_settings.py`` (e.g. ``default``, ``plain``,
-``anderson:2``, ``hold,value``, ``noerrcon``). They are read when a solve is compiled,
+``anderson:2``, ``kappa:0.03,noerrcon``). They are read when a solve is compiled,
 so each variant gets its own plant, compiled once, and the cached calls of all
 variants are **interleaved** (A, B, A, B, ...): wall times on a shared machine
 drift between calls (by up to 2x here), and interleaving puts every variant under
@@ -38,7 +38,7 @@ Usage::
     python scripts/profile_plant_sensitivity.py --days 1 --k 0 16 --calls 6 \
         --variants plain anderson:2
     python scripts/profile_plant_sensitivity.py --days 1 --k 0 --calls 6 \
-        --variants anderson:2 anderson:2,hold anderson:2,safety:0.8
+        --variants default kappa:0.03 safety:0.8
 """
 
 from __future__ import annotations
@@ -102,10 +102,14 @@ class _Variant:
         self.plant, self.params, self.y_ss, self.asm_params = bsm2_window(cache)
 
     def configure(self):
+        """Apply the module settings; return the ``solve_sensitivity`` keywords."""
         self.settings.apply()
+        return self.settings.solve_kwargs
 
 
-def _solve(plant, params, y_ss, wrt, args, t_eval, *, rtol=RTOL, atol=ATOL, max_steps=200_000):
+def _solve(
+    plant, params, y_ss, wrt, args, t_eval, *, rtol=RTOL, atol=ATOL, max_steps=200_000, **extra
+):
     start = time.perf_counter()
     out = plant.solve_sensitivity(
         params,
@@ -119,6 +123,7 @@ def _solve(plant, params, y_ss, wrt, args, t_eval, *, rtol=RTOL, atol=ATOL, max_
         max_steps=max_steps,
         corrector=args.corrector,
         return_stats=True,
+        **extra,
     )
     jax.block_until_ready(out[2])
     return out, time.perf_counter() - start
@@ -197,7 +202,7 @@ def main():
     variants = [_Variant(spec, cache) for spec in args.variants] if args.variants else None
     if variants is None:
         plant, params, y_ss, asm_params = bsm2_window(cache)
-        runs = [(args.corrector, plant, params, y_ss, asm_params, lambda: None)]
+        runs = [(args.corrector, plant, params, y_ss, asm_params, dict)]
     else:
         runs = [
             (f"{args.corrector}_{v.tag}", v.plant, v.params, v.y_ss, v.asm_params, v.configure)
@@ -211,10 +216,12 @@ def main():
             ref = _reference(k, args, cache, t_eval) if args.reference_rtol else None
             for call in range(1, args.calls + 1):
                 for tag, plant, params, y_ss, asm_params, configure in runs:
-                    configure()  # read only when this plant first compiles (call 1)
+                    # The module settings are read only when this plant first
+                    # compiles (call 1); the keywords go to every call.
+                    extra = configure()
                     if counter is not None:
                         counter.reset()
-                    out, wall = _solve(plant, params, y_ss, asm_params[:k], args, t_eval)
+                    out, wall = _solve(plant, params, y_ss, asm_params[:k], args, t_eval, **extra)
                     if counter is not None:
                         attempted, nonconverged, error_rejected = counter.counts()
                     else:
