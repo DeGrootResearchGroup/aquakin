@@ -88,6 +88,13 @@ benchmark agreement. The RHS evaluation (recycle + kinetics), at ~12 per step, i
 the dominant cost; the per-step Jacobian factorization is only ~8% (so block /
 sparse factorization is not worth it at this scale -- it loses to XLA's dense LU).
 
+The stage iteration can be Anderson-accelerated with the step's factorization as
+the preconditioner (``_ANDERSON_DEPTH``, off by default; see :func:`_chord`). It
+targets stages where the Jacobian factored at the step start has gone wrong in a
+few directions by the stage value -- the plain iteration then contracts slowly or
+stalls at the iteration cap, while the accelerated one removes those directions in
+about as many iterations.
+
 References
 ----------
 - Kvaerno, A. (2004). Singly diagonally implicit Runge-Kutta methods with an
@@ -141,6 +148,8 @@ _SAVE_TIME_RTOL = 1e-12  # relative slack when testing whether a save time falls
 #                          within the just-accepted step
 _H_STUCK = 1e-13  # step size below which the solve is declared stuck (no progress)
 _NONCONVERGED_SHRINK = 0.25  # step factor after a non-converged Newton iteration
+_ANDERSON_DEPTH = 0  # Anderson acceleration depth of the stage iteration (0 = off)
+_ANDERSON_REG = 1e-10  # relative Tikhonov term on the Anderson least squares
 
 
 @dataclass(frozen=True)
@@ -286,14 +295,46 @@ def _weighted(weights, ks):
     return sum(w * k for w, k in zip(weights, ks))
 
 
-def _chord(residual, guess, lu, norm):
+def _anderson_correction(f, dF, dX, valid, weight):
+    """The Anderson (Type II) correction for one row of the stage iteration.
+
+    With ``f`` the plain chord step at the current iterate and ``dF`` / ``dX``
+    the last differences of steps and iterates (one per row of the history,
+    ``valid`` marking the filled ones), returns ``(dX + dF) @ gamma`` with
+    ``gamma`` the least-squares fit of ``f`` by ``dF`` in the weighted norm
+    (Walker & Ni 2011). The accelerated step is ``f`` minus this.
+    """
+    A = dF * weight  # (m, n)
+    G = A @ A.T
+    rhs = A @ (f * weight)
+    lam = _ANDERSON_REG * jnp.trace(G) + 1e-300
+    G = G * jnp.outer(valid, valid) + jnp.diag(jnp.where(valid, lam, 1.0))
+    gamma = jnp.linalg.solve(G, jnp.where(valid, rhs, 0.0))
+    return gamma @ (dX + dF)
+
+
+def _chord(residual, guess, lu, scale):
     """Simplified Newton for ``residual(x) = 0`` with the frozen factorization
     ``lu = LU(I - h*G*J)`` (the residual's Jacobian up to the error in ``J``).
 
     ``x`` is one stage derivative ``(n,)`` or a ``(k, n)`` block of them, one per
-    row; each row is solved with the same factorization. Hairer-Wanner (ODEs II,
-    IV.8) contraction test: converge when ``eta*||dx|| < KAPPA``; diverge when the
-    rate is ``>= 1`` or the update is not finite.
+    row; each row is solved with the same factorization. ``scale`` (the shape of
+    ``x``, or broadcastable to it) weights the norm: the WRMS norm of a row, the
+    largest over rows for a block. Hairer-Wanner (ODEs II, IV.8) contraction
+    test: converge when ``eta*||f|| < KAPPA``; diverge when the rate is ``>= 1``
+    or the step is not finite.
+
+    With ``_ANDERSON_DEPTH > 0`` each update is Anderson-accelerated (Walker &
+    Ni 2011), row by row, over the last ``_ANDERSON_DEPTH`` steps: the plain
+    chord step ``f = -LU^{-1} residual(x)`` is corrected by the least-squares
+    combination of earlier steps that best cancels it. When the factored ``J``
+    is wrong in only a few directions -- the stage value has moved across a
+    switch in the right-hand side since the step start -- the plain iteration
+    contracts slowly along them, while the accelerated one removes them in about
+    as many iterations as there are such directions. The contraction test (and
+    the step controller's rate) reads the plain step ``f`` at each iterate -- the
+    preconditioned residual -- rather than the applied update, because the
+    accelerated updates are not monotone; without acceleration the two coincide.
 
     Returns
     -------
@@ -303,31 +344,57 @@ def _chord(residual, guess, lu, norm):
         The last contraction-rate estimate.
     conv : jax.Array
         Whether the iteration converged.
+    iterations : jax.Array
+        The number of iterations taken.
     """
+    depth = _ANDERSON_DEPTH
+    rows = guess.reshape((-1, guess.shape[-1]))
+    weight = 1.0 / jnp.broadcast_to(scale, guess.shape).reshape(rows.shape)
+    history = jnp.zeros((rows.shape[0], max(depth, 1), rows.shape[1]), guess.dtype)
+
+    def accelerate(f, x, f_prev, x_prev, dF, dX, it):
+        if depth == 0:
+            return f, dF, dX
+        fresh = it >= 1
+
+        def push(buf, new):
+            pushed = jnp.concatenate([new.reshape(rows.shape)[:, None], buf[:, :-1]], axis=1)
+            return jnp.where(fresh, pushed, buf)
+
+        dF, dX = push(dF, f - f_prev), push(dX, x - x_prev)
+        valid = jnp.arange(depth) < jnp.minimum(it, depth)
+        correction = jax.vmap(_anderson_correction, in_axes=(0, 0, 0, None, 0))(
+            f.reshape(rows.shape), dF, dX, valid, weight
+        )
+        return f - correction.reshape(f.shape), dF, dX
 
     def cond(c):
-        x, dprev, it, rate, conv, div = c
+        conv, div, it = c[-2], c[-1], c[5]
         return (~conv) & (~div) & (it < _MAXNEWT)
 
     def body(c):
-        x, dprev, it, rate, conv, div = c
-        dx = jsla.lu_solve(lu, residual(x).T).T
-        x = x - dx
-        d = norm(dx)
+        x, f_prev, x_prev, dF, dX, it, dprev, rate, conv, div = c
+        f = -jsla.lu_solve(lu, residual(x).T).T
+        # The tests read the plain step at the iterate (the preconditioned
+        # residual), which the accelerated iteration drives down near-
+        # monotonically; its applied updates are not monotone.
+        d = _wrms_max_row(f, scale)
+        dx, dF, dX = accelerate(f, x, f_prev, x_prev, dF, dX, it)
         rate = jnp.where(it >= 1, d / (dprev + 1e-30), rate)
         eta = rate / jnp.maximum(1.0 - rate, _ETA_RATE_FLOOR)
         conv = (it >= 1) & (rate < 1.0) & (eta * d < _KAPPA)
         div = ((it >= 1) & (rate >= 1.0)) | (~jnp.isfinite(d))
-        return x, d, it + 1, rate, conv, div
+        return x + dx, f, x, dF, dX, it + 1, d, rate, conv, div
 
-    x, _, _, rate, conv, _ = jax.lax.while_loop(cond, body, (guess, jnp.inf, 0, 0.5, False, False))
-    return x, rate, conv
+    init = (guess, guess, guess, history, history, 0, jnp.inf, 0.5, False, False)
+    x, _, _, _, _, it, _, rate, conv, _ = jax.lax.while_loop(cond, body, init)
+    return x, rate, conv, it
 
 
 def _stages(k1, solve_stage):
     """Run Kvaerno3's implicit stages 2-4 after the explicit first stage ``k1``.
 
-    ``solve_stage(i, acc, guess) -> (k_i, rate, conv)`` solves implicit stage
+    ``solve_stage(i, acc, guess) -> (k_i, rate, conv, iterations)`` solves implicit stage
     ``i`` given ``acc = sum_{j<i} a_ij k_j`` and the starting guess of its Newton
     iteration. Used for the state and the sensitivity stages alike.
 
@@ -343,7 +410,7 @@ def _stages(k1, solve_stage):
     ks = [k1]
     rates, convs = [], []
     for i in range(1, 4):
-        k, rate, conv = solve_stage(i, _weighted(_A_ROWS[i], ks), _weighted(_GUESS_ROWS[i], ks))
+        k, rate, conv, _ = solve_stage(i, _weighted(_A_ROWS[i], ks), _weighted(_GUESS_ROWS[i], ks))
         ks.append(k)
         rates.append(rate)
         convs.append(conv)
@@ -356,7 +423,7 @@ def _advance(z, ks, h):
     return z + h * _weighted(_B, ks), h * _weighted(_BE, ks)
 
 
-def _state_stages(rhs, args, t, y, h, lu, norm):
+def _state_stages(rhs, args, t, y, h, lu, scale):
     """The state stage derivatives of one Kvaerno3 step from ``(t, y)``.
 
     Returns the four stage derivatives, the four stage values ``Y_i`` (``Y_0 =
@@ -368,7 +435,7 @@ def _state_stages(rhs, args, t, y, h, lu, norm):
     def solve_stage(i, acc, guess):
         t_i = t + _C[i] * h
         base = y + h * acc
-        return _chord(lambda k: k - rhs(t_i, base + h * _G * k, args), guess, lu, norm)
+        return _chord(lambda k: k - rhs(t_i, base + h * _G * k, args), guess, lu, scale)
 
     ks, rate, conv = _stages(k1, solve_stage)
     Ys = [y] + [y + h * (_weighted(_A_ROWS[i], ks) + _G * ks[i]) for i in range(1, 4)]
@@ -387,16 +454,12 @@ def _state_attempt(rhs, jac, args, rtol, atol):
     def attempt(t, y, h):
         lu = _factor(jac, t, y, args, h)
         scale = atol + rtol * jnp.abs(y)
-
-        def norm(v):
-            return _wrms(v, scale)
-
-        ks, _, rate, conv = _state_stages(rhs, args, t, y, h, lu, norm)
+        ks, _, rate, conv = _state_stages(rhs, args, t, y, h, lu, scale)
         y1, err = _advance(y, ks, h)
         conv = conv & jnp.all(jnp.isfinite(y1))
         # k1 (slope at t) and k4 (slope at t+h, the stiffly-accurate endpoint
         # stage) feed the cubic-Hermite dense output.
-        return _Attempt(y1, norm(err), rate, conv, ks[0], ks[3])
+        return _Attempt(y1, _wrms(err, scale), rate, conv, ks[0], ks[3])
 
     return attempt
 
@@ -419,20 +482,13 @@ def _staggered_attempt(rhs, jac, theta, tangents, rtol, atol, sens_rtol, sens_at
         y, S = z
         lu = _factor(jac, t, y, theta, h)
         scale_y = atol + rtol * jnp.abs(y)
-
-        def norm_y(v):
-            return _wrms(v, scale_y)
-
-        ks, Ys, rate_y, conv_y = _state_stages(rhs, theta, t, y, h, lu, norm_y)
+        ks, Ys, rate_y, conv_y = _state_stages(rhs, theta, t, y, h, lu, scale_y)
         y1, err_y = _advance(y, ks, h)
         conv_y = conv_y & jnp.all(jnp.isfinite(y1))
-        en_y = norm_y(err_y)
+        en_y = _wrms(err_y, scale_y)
 
         def sensitivity(_):
             scale_S = sens_atol + sens_rtol * jnp.abs(S)
-
-            def norm_S(v):
-                return _wrms_max_row(v, scale_S)
 
             def solve_stage(i, acc, guess):
                 # The sensitivity stage is linear in K: K = J(Y_i)(base + h*G*K)
@@ -441,12 +497,12 @@ def _staggered_attempt(rhs, jac, theta, tangents, rtol, atol, sens_rtol, sens_at
                 # was factored, and in a few when it does not.
                 F = tangent_map(t + _C[i] * h, Ys[i])
                 base = S + h * acc
-                return _chord(lambda K: K - F(base + h * _G * K), guess, lu, norm_S)
+                return _chord(lambda K: K - F(base + h * _G * K), guess, lu, scale_S)
 
             KS, rate_S, conv_S = _stages(tangent_map(t, y)(S), solve_stage)
             S1, err_S = _advance(S, KS, h)
             conv_S = conv_S & jnp.all(jnp.isfinite(S1))
-            return S1, norm_S(err_S), rate_S, conv_S, KS[0], KS[3]
+            return S1, _wrms_max_row(err_S, scale_S), rate_S, conv_S, KS[0], KS[3]
 
         def skipped(_):
             zeros = jnp.zeros_like(S)
