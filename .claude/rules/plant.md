@@ -131,8 +131,10 @@ Key types:
   sets on one shared sensitivity solve). Covered by
   `tests/integration/test_plant_identifiability.py` (closed-form CSTR
   information in both modes, the hand-built `solve_sensitivity` Jacobian on the
-  CSTR and on BSM1 (slow), forward = reverse, the Laplace-Hessian equality, and
-  identified / flat profiles (slow)).
+  CSTR and on BSM1 (slow), forward = reverse, the Laplace-Hessian equality,
+  identified / flat profiles (slow), and the profile's per-point wiring into
+  `calibrate_plant` with it stubbed) plus `tests/unit/test_identifiability_helpers.py`
+  (the shared sweep / polish / noise helpers on stub fits).
   **Colored Jacobian** — the graph-coloring / Jacobian-sparsity subsystem
   (`_structural_plant_pattern` + the forward / adjoint / steady builders and their
   caches) lives in a [`ColoredJacobianManager`](aquakin/plant/colored.py)

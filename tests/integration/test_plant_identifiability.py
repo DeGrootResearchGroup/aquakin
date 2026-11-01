@@ -8,6 +8,8 @@ information it carries about ``k1`` can be checked exactly. ``k3`` moves only
 ``D`` and ``E``, which are never observed: the data cannot see it.
 """
 
+from types import SimpleNamespace
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -89,6 +91,11 @@ def net(tmp_path_factory):
     path = tmp_path_factory.mktemp("chain") / "chain.yaml"
     path.write_text(_MODEL)
     return aquakin.load_model_from_file(path)
+
+
+@pytest.fixture(scope="module")
+def decay_net():
+    return aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
 
 
 @pytest.fixture(scope="module")
@@ -262,6 +269,66 @@ def test_fisher_input_validation(plant):
         plant_fisher_information(plant, obs, T_OBS, [K1], sigma=0.0)
     with pytest.raises(ValueError, match="mask leaves no observation"):
         plant_fisher_information(plant, obs, T_OBS, [K1], sigma=SIGMA, mask=False)
+    with pytest.raises(ValueError, match="free_params must be non-empty"):
+        plant_fisher_information(plant, obs, T_OBS, [], sigma=SIGMA)
+    with pytest.raises(ValueError, match="sigma_floor must be >= 0"):
+        plant_fisher_information(
+            plant, obs, T_OBS, [K1], sigma=SIGMA, relative_sigma=True, sigma_floor=-1.0
+        )
+    with pytest.raises(ValueError, match="run 0: t_obs must be a non-empty 1-D array"):
+        plant_fisher_information(plant, obs, jnp.ones((2, 2)), [K1], sigma=SIGMA)
+    zero = plant.default_parameters().at[plant.parameter_index(K1)].set(0.0)
+    with pytest.raises(ValueError, match="'chain.r1.k1' has transform 'positive_log'"):
+        plant_fisher_information(plant, obs, T_OBS, [K1], sigma=SIGMA, params=zero)
+    with pytest.raises(ValueError, match="'chain.r1.k1' has transform 'logit'"):
+        plant_fisher_information(
+            plant, obs, T_OBS, [K1], sigma=SIGMA, params=zero, transforms={K1: "logit"}
+        )
+
+
+def test_reverse_mode_solves_with_the_given_integrator(plant):
+    """``integrator`` reaches the reverse-mode plant solve: a step budget too
+    small for the run fails it."""
+    with pytest.raises(RuntimeError, match="step budget \\(max_steps=2\\)"):
+        plant_fisher_information(
+            plant,
+            [("tank", ["A"])],
+            T_OBS,
+            [K1],
+            sigma=SIGMA,
+            mode="reverse",
+            integrator=aquakin.IntegratorConfig(max_steps=2),
+        )
+
+
+def test_runs_must_share_the_parameter_names(net, plant, decay_net):
+    """A per-run plant built on another model has other parameters: rejected
+    before any solve, naming the run."""
+    other = Plant("decay_tank")
+    other.add_unit(
+        CSTRUnit(
+            name="tank",
+            model=decay_net,
+            volume=V,
+            input_port_names=["inlet"],
+            conditions={"T": 293.15},
+        )
+    )
+    with pytest.raises(ValueError, match="run 1: its plant has different parameters"):
+        plant_fisher_information(
+            [plant, other], [("tank", ["A"])], [T_OBS, T_OBS], [K1], sigma=SIGMA
+        )
+
+
+def test_whole_stream_observable_is_every_channel(plant):
+    """An observable with no channels observes every species of the stream,
+    in model order -- the same information as naming them all."""
+    kw = dict(sigma=SIGMA, t_span=(0.0, 20.0))
+    whole = plant_fisher_information(plant, ["tank"], T_OBS, [K1, K3], **kw)
+    named = plant_fisher_information(plant, [("tank", ["A", "B", "D", "E"])], T_OBS, [K1, K3], **kw)
+    np.testing.assert_allclose(whole.jacobian, named.jacobian, rtol=1e-12)
+    # D and E see k3, so the whole stream identifies it where A and B alone cannot.
+    assert whole.matrix[1, 1] > 0.0
 
 
 # --- Profile likelihood ------------------------------------------------------
@@ -312,6 +379,86 @@ def test_profile_of_unobserved_parameter_is_flat(plant):
     assert prof.ci == (None, None)
     assert np.nanmax(prof.delta_loss) < 1e-6
     assert all(f is not None for f in prof.fits)
+
+
+def test_profile_wires_each_grid_point_into_plant_calibrate(plant, monkeypatch):
+    """With Plant.calibrate stubbed, the sweep pins the profiled value at its
+    slot, drops it from the free set, warm-starts from the neighbour (one start,
+    the neighbour's parameters and fitted state), shares one compiled-objective
+    cache, forces laplace=False and forwards the remaining keywords."""
+    import aquakin.plant.identifiability as ident
+
+    idx = plant.parameter_index(K1)
+    idx2 = plant.parameter_index(K2)
+    calls = []
+
+    def fake_calibrate(plant_, observations, t_obs, free, **kw):
+        k1 = float(kw["params"][idx])
+        calls.append(dict(kw, free=free, k1=k1))
+        return SimpleNamespace(
+            loss=100.0 * (k1 - 0.3) ** 2,
+            params=kw["params"].at[idx2].add(1.0),  # mark the fit's re-fitted k2
+            C0_fitted=[jnp.full(4, k1)],
+        )
+
+    monkeypatch.setattr(ident, "calibrate_plant", fake_calibrate)
+    grid = [0.1, 0.2, 0.3, 0.4, 0.5]
+    prof = plant_profile_likelihood(
+        plant,
+        jnp.zeros((T_OBS.shape[0], 1)),
+        T_OBS,
+        [K1, K2],
+        grid=grid,
+        profile_param=K1,
+        free_ic=aquakin.FreeICConfig(["tank.A"]),
+        optimizer=OptimizerConfig(n_starts=3),
+        observables=[("tank", ["A"])],
+        t_span=(0.0, 20.0),
+        polish=False,
+    )
+    assert [c["k1"] for c in calls] == pytest.approx([0.3, 0.4, 0.5, 0.2, 0.1])
+    assert all(c["free"] == [K2] and c["laplace"] is False for c in calls)
+    assert all(c["observables"] == [("tank", ["A"])] and c["t_span"] == (0.0, 20.0) for c in calls)
+    assert len({id(c["_compiled_cache"]) for c in calls}) == 1
+    cold, warm = calls[0], calls[1]
+    assert cold["optimizer"].n_starts == 3 and cold["_ic_start"] is None
+    assert warm["optimizer"].n_starts == 1
+    # Warm from the anchor's fit: its re-fitted k2 (marked +1) and its state.
+    assert float(warm["params"][idx2]) == pytest.approx(float(cold["params"][idx2]) + 1.0)
+    assert float(warm["_ic_start"][0][0]) == pytest.approx(0.3)
+    # The profile is the stub's parabola: minimum at 0.3, delta = 100 dk^2.
+    assert prof.mle == 0.3 and prof.profiled == K1
+    np.testing.assert_allclose(prof.delta_loss, [4.0, 1.0, 0.0, 1.0, 4.0])
+    lo, hi = prof.ci
+    assert lo == pytest.approx(0.2 - 0.1 * (1.92 - 1.0) / 3.0)
+    assert hi == pytest.approx(0.4 + 0.1 * (1.92 - 1.0) / 3.0)
+
+
+def test_profile_without_free_ic_passes_no_pool_start(plant, monkeypatch):
+    """Without free_ic a warm point passes no ``_ic_start`` (the fit has no
+    pools to seed), and the default parameters seed the cold fit."""
+    import aquakin.plant.identifiability as ident
+
+    calls = []
+
+    def fake_calibrate(plant_, observations, t_obs, free, **kw):
+        calls.append(kw)
+        return SimpleNamespace(loss=0.0, params=kw["params"], C0_fitted=[jnp.zeros(4)])
+
+    monkeypatch.setattr(ident, "calibrate_plant", fake_calibrate)
+    plant_profile_likelihood(
+        plant,
+        jnp.zeros((T_OBS.shape[0], 1)),
+        T_OBS,
+        [K1, K2],
+        grid=[0.1, 0.2],
+        profile_param=K1,
+        observables=[("tank", ["A"])],
+        polish=False,
+    )
+    assert all(c["_ic_start"] is None for c in calls)
+    default_k2 = float(plant.default_parameters()[plant.parameter_index(K2)])
+    assert float(calls[0]["params"][plant.parameter_index(K2)]) == default_k2
 
 
 def test_profile_input_validation(plant):
