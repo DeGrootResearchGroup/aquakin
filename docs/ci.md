@@ -136,10 +136,10 @@ nor concentrating it in a few files makes the whole suite fast.
   OOM-killing the runner regardless of shard count (a single such test runs fine
   alone — the failure is cumulative). So those tests carry the **`heavy`** marker
   and are excluded from every slow / validation / smoke / durations job (`... and
-  not heavy`). The 12 plant-gradient checks (7 BSM2 + 5 BSM1) run in **two**
+  not heavy`). The 13 plant-gradient checks (8 BSM2 + 5 BSM1) run in **two**
   dedicated jobs, both **one-test-per-process** (`-n 1`):
-  - **`heavy`** — the **11** that fit a stock 16 GB `ubuntu-latest` runner when
-    isolated, sharded `--splits 11 -n 1` across the **free** runner. A single test
+  - **`heavy`** — the **12** that fit a stock 16 GB `ubuntu-latest` runner when
+    isolated, sharded `--splits 12 -n 1` across the **free** runner. A single test
     fits 16 GB; one-per-process prevents the cumulative accumulation, so they cost
     nothing (public-repo standard-runner minutes are free). The **`heavy`** marker
     means "needs an isolated fresh process," which a BSM1 plant-gradient test earns
@@ -150,7 +150,7 @@ nor concentrating it in a few files makes the whole suite fast.
     multi-GB BSM1 `stable_adjoint` adjoint programs live at once, which OOM-crashed
     the free 16 GB runner even one-per-process. More sharding cannot shrink a single
     test's peak, so it runs alone on a small **larger runner** (`aquakin-heavy`,
-    8-core/32 GB) via the `xheavy` job. 11 free + 1 tiny paid is the cost-minimal
+    8-core/32 GB) via the `xheavy` job. 12 free + 1 tiny paid is the cost-minimal
     split: the paid job is one ~20-min test, only on adjoint/plant merges. *(It is
     known to fit the old 16-core/64 GB tier; 32 GB is the expected fit for its
     two-engine peak — bump the runner a tier if it OOMs at 32 GB.)*
@@ -158,7 +158,11 @@ nor concentrating it in a few files makes the whole suite fast.
   This replaced a paid 16-core/64 GB `aquakin-heavy` runner that ran on **every**
   push to main (the entire CI cost); now only one test bills, and only on
   adjoint/plant-relevant merges. Keep `--splits` (heavy job) ≥ the
-  `heavy and not xheavy` count so it stays one-per-shard.
+  `heavy and not xheavy` count so it stays one-per-shard: with fewer shards than
+  tests, pytest-split pairs tests and leaves the trailing shards empty, and an
+  empty shard exits 5 and fails the run (it happened when #651 added a 12th heavy
+  test to 11 shards). `tests/unit/test_ci_heavy_shards.py` checks this in the fast
+  gate, so a new heavy test must come with a new shard.
 - The **`heavy`** (`pytest -m "heavy and not xheavy" -n 1`) and **`xheavy`**
   (`pytest -m xheavy -n 1`) jobs are gated identically by **`heavy-gate`**, with two
   triggers: **push to `main`** when the path filter sees a change under
