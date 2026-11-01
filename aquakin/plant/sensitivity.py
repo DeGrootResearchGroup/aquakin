@@ -858,8 +858,9 @@ def solve_sensitivity(
 
     - ``"staggered"`` (default): the lean forward-only integrator
       (:func:`~aquakin.integrate.forward_solve.staggered_sensitivity_solve`).
-      Each stage converges the state by simplified Newton on ``I - gamma.dt.J``
-      (``J`` colored, since it only steers the iteration), then solves the
+      Each stage converges the state by an Anderson-accelerated simplified
+      Newton iteration on ``I - gamma.dt.J`` (``J`` colored, since it only steers
+      the iteration), then solves the
       sensitivity stage -- linear in ``S`` -- with the same factorization and an
       exact Jacobian-vector product per parameter. No second derivatives, so
       each parameter adds only Jacobian-vector products to a step, and its step

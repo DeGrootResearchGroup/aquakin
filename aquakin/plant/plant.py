@@ -3339,8 +3339,9 @@ class Plant:
         """Build the lean non-AD forward solve for one signature.
 
         Wraps :func:`~aquakin.integrate.forward_solve.forward_solve` -- a plain
-        ``lax.while_loop`` adaptive ESDIRK with simplified Newton + colored
-        Jacobian + direct ``lu_factor``/``lu_solve``, no diffrax adjoint /
+        ``lax.while_loop`` adaptive ESDIRK with an Anderson-accelerated
+        simplified Newton + colored Jacobian + direct ``lu_factor``/``lu_solve``,
+        no diffrax adjoint /
         optimistix / lineax. The per-step Jacobian is still colored forward-mode
         AD (the same exact matrix the differentiable path uses), but the solve is
         NOT differentiable. ``y0``/``params``/``t_eval`` are runtime arguments so

@@ -17,11 +17,9 @@ wrapping ``diffrax.Kvaerno3.step`` / ``PIDController.adapt_step_size`` with a
 divergence failures; every other rejection is an error-test failure).
 
 ``--variants`` (staggered corrector only) compares settings of the lean loop's
-stage iteration (``forward_solve._stage_solve``): ``plain``; ``anderson:DEPTH``
-(``_ANDERSON_DEPTH``); ``krylov:always`` or ``krylov:RATE``
-(``_KRYLOV_SWITCH_RATE``: Newton-Krylov on every update, or once the contraction
-rate exceeds ``RATE``). These are module settings read when a solve is
-compiled, so each variant gets its own plant, compiled once, and the
+stage iteration (``forward_solve._stage_solve``): ``plain`` or ``anderson:DEPTH``
+(``_ANDERSON_DEPTH``; the default is 2). These are module settings read when a
+solve is compiled, so each variant gets its own plant, compiled once, and the
 cached calls of all variants are **interleaved** (A, B, A, B, ...): wall times on
 a shared machine drift between calls (by up to 2x here), and interleaving puts
 every variant under the same drift. Compare the fastest call of each.
@@ -33,7 +31,7 @@ Usage::
     python scripts/profile_plant_sensitivity.py --corrector staggered --k 0 1 16
     python scripts/profile_plant_sensitivity.py --corrector simultaneous --k 0 16
     python scripts/profile_plant_sensitivity.py --days 1 --k 0 16 --calls 6 \
-        --variants plain anderson:2 krylov:always krylov:0.1
+        --variants plain anderson:2
 """
 
 from __future__ import annotations
@@ -94,12 +92,9 @@ class _Variant:
     def __init__(self, spec, cache):
         kind, _, value = spec.partition(":")
         if kind == "plain":
-            self.depth, self.switch_rate = 0, None
-        elif kind == "anderson":
-            self.depth, self.switch_rate = int(value), None
-        elif kind == "krylov":
             self.depth = 0
-            self.switch_rate = -1.0 if value == "always" else float(value)
+        elif kind == "anderson":
+            self.depth = int(value)
         else:
             raise ValueError(f"unknown variant {spec!r}")
         self.tag = spec.replace(":", "")
@@ -107,7 +102,6 @@ class _Variant:
 
     def configure(self):
         forward_solve._ANDERSON_DEPTH = self.depth
-        forward_solve._KRYLOV_SWITCH_RATE = self.switch_rate
 
 
 def _solve(plant, params, y_ss, wrt, args, t_eval):

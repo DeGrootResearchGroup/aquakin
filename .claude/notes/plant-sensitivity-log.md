@@ -118,8 +118,8 @@ contraction / divergence tests read the plain step `f = −M⁻¹R(x)` at each i
 the applied update, which is non-monotone under acceleration, and stopped a
 0.7/0.85-contraction two-direction synthetic after 3 iterations as "diverged"; on
 the residual it converges in 5 (plain iteration: the 12 cap). With depth 0 the two
-coincide, and the solve is bit-identical to the pre-Anderson loop. **Default 0
-(off)** pending a decision.
+coincide, and the solve is bit-identical to the pre-Anderson loop. **Default 2 since
+2026-11-01** (the project owner's decision after the comparison below).
 
 Interleaved A/B (`profile_plant_sensitivity.py --days 1 --k 0 16 --calls 6
 --variants plain anderson:2`, one plant per variant, cached calls alternated; best
@@ -152,7 +152,13 @@ of 5), the 1-day window above:
   `k=16` 16.8 s, 1212 / 139 / 144 and 2129 / 99 / 519, `S` `6.9e-4` — no gain;
   deleted.
 
-## Newton-Krylov (GMRES) updates of the stage iteration (2026-11-01)
+## Newton-Krylov (GMRES) updates of the stage iteration (2026-11-01, deleted)
+
+**Closed direction — measured, then deleted** in favour of Anderson; the design
+below is enough to rebuild it (it lived in `forward_solve._gmres` on the #654
+branch). Revisit only for a case where stages whose plain iteration diverges
+outright dominate the step count — the one class Anderson cannot reach.
+
 
 `_stage_solve` (was `_chord`) can instead solve each correction as the exact Newton
 step `A(x) dx = −R(x)` by GMRES (`_gmres`): left-preconditioned by the factored `M`

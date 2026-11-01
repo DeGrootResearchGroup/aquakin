@@ -595,7 +595,8 @@ The three settings:
 If a solve never needs gradients (`jax.grad` / `calibrate` / `sensitivity` of the
 result), `forward_fast=True` runs a lean integrator that skips the diffrax
 adjoint / optimistix / lineax machinery entirely — a plain `lax.while_loop`
-adaptive ESDIRK with a simplified Newton and the colored Jacobian:
+adaptive ESDIRK with an Anderson-accelerated simplified Newton and the colored
+Jacobian:
 
 ```python
 sol = plant.solve(t_span=(0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
