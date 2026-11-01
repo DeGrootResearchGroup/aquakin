@@ -353,10 +353,10 @@ result — can skip all of it: `forward_solve` is a plain `lax.while_loop` runni
 the Kvaerno3 ESDIRK stages with a simplified Newton (Hairer–Wanner contraction
 test) + a direct dense `lu_factor`/`lu_solve`, an embedded-error PI controller, and
 a **convergence-aware step-growth limiter** (the Newton contraction rate caps the
-step growth, so it rarely grows into nonlinear-divergence). Output at `t_eval` is
-*exact* — the step is clipped to land on each save time (no dense-output
-interpolation; for a dense `t_eval` this adds ~clip-per-save-interval steps, the
-one cost vs diffrax's interpolation — a future dense-output refinement).
+step growth). Output at `t_eval` is the cubic-Hermite dense output within each
+step (#386), so the run time is flat in the number of save points. The controller
+settings are one `StepControl` value, shared with the staggered sensitivity solve
+(below).
 - **The per-step Jacobian `J = df/dy` is STILL colored forward-mode AD** (the same
   exact matrix the differentiable path forms, so the step behaviour matches). What
   is dropped is only the *adjoint over the whole solve*: the result is **not**
@@ -381,9 +381,9 @@ one cost vs diffrax's interpolation — a future dense-output refinement).
   runs (the 7-min full-BSM2 compile). **Run is ~1.3–1.9× faster** on the
   validated 244-state JRN-056 dynamic BSM2 (real 609-day influent, `HeatBalance` +
   `settler_soluble_holdup`): a 60-day window is 1.91× and the full 609-day run
-  1.26× — the run gain narrows over a long run because the `t_eval` step-clipping
-  adds a boundary per save point (8737 over days 245–609) where diffrax interpolates
-  (a future dense-output refinement would recover it). Same accuracy (a valid
+  1.26× — measured before the dense output, when step-clipping added a boundary per
+  save point (8737 over days 245–609); the dense output removed that cost (the
+  module docstring has the re-measured 609-day ratio). Same accuracy (a valid
   solution to the same `rtol` — it differs from the diffrax trajectory only by the
   step-sequence variation between two valid adaptive solves, ~2e-2 on the dynamic
   BSM2). Covered by
@@ -438,6 +438,73 @@ integrator (a Gustafsson-predictive controller, or an exponential/QSS-reduced
 non-stiff formulation) is the only thing that would cut it further, and is a
 large effort not currently justified by the already-shipped ~42%. See issue #361
 for the full experiment log.
+
+**Plant forward sensitivity (`solve_sensitivity`) — the staggered corrector
+(issue #654).** The diffrax augmented `[y; S]` solve (now `corrector="simultaneous"`)
+had four costs: it recompiled on every call; its block-arrow root finder probes the
+augmented operator on all `n` state tangents, each a second-order JVP of `f`, so the
+per-step cost grows with `k`; it has no contraction-rate growth limiter; and many of
+its rejected steps are Newton failures (code 7/8), not error-test failures. The
+default is now the **staggered corrector** on the lean Kvaerno3 loop
+(`staggered_sensitivity_solve`, the `forward_fast` loop): converge the state stage,
+then solve the linear sensitivity stage with the same factor and one linearization
+of `f` per stage. Both correctors are cached per plant. Rules:
+`.claude/rules/integration.md` (`Plant.solve_sensitivity`). Harness:
+[`scripts/profile_plant_sensitivity.py`](scripts/profile_plant_sensitivity.py).
+
+*Configuration of every number below:* `build_bsm2` defaults (BSM2-configured ASM1 +
+ADM1, 188 states, colored Jacobian 66 colors), started from the constant-influent
+steady state (150 d from `bsm2_warm_start`, `rtol=1e-5`, `atol=1e-3`), driven by the
+**synthesised** dry-weather influent (`load_bsm2_influent("dry")` — 15-min samples
+with ±20% flow noise, far rougher than the IWA 609-day file, so step counts are much
+higher than on the JRN-056 case of the issue), `rtol=1e-4`, `atol=1e-3`, the `k`
+sensitivity parameters the first `k` `asm1.*` names, daily `t_eval`, default
+`factormax` (2 staggered, 10 diffrax), 4-core container, 2026-10-31.
+
+1-day window, each run alone on the machine; "cached" is a second call (before this
+change every call cost the first-call time, since the plant recompiled):
+
+| corrector | k | first call | cached call | attempted | Newton-nonconverged | error-test rejected |
+|---|---|---|---|---|---|---|
+| simultaneous | 0 | 236 s | 26 s | 2094 | 632 (30%) | 383 |
+| simultaneous | 1 | 408 s | 115 s | 2099 | 741 (35%) | 267 |
+| simultaneous | 16 | 630 s | 313 s | 2802 | 855 (31%) | 658 |
+| staggered | 0 | 158 s | 4.5 s | 1545 | 325 (21%) | 71 |
+| staggered | 1 | 128 s | 8.2 s | 1563 | 333 (21%) | 68 |
+| staggered | 16 | 155 s | 44 s | 2176 | 327 (15%) | 238 |
+
+5-day window (step counts only; these runs shared the machine, so their times are
+void): pre-change code `k=0` 10620 attempted / 3181 nonconverged / 1946 error-test;
+staggered `k=0` 7606 / 1582 / 316, `k=1` 7610 / 1591 / 304, `k=16` 9556 / 1665 / 772.
+The two correctors agree on the 1-day window to `3.5e-4` of each sensitivity
+column's largest entry and `~1e-3` in the state (two valid adaptive solves at
+`rtol=1e-4`).
+
+What this shows, and what it does not:
+- **Compile once**: a cached call drops the ~150–500 s compile entirely.
+- **Per attempt** (cached run / attempts): simultaneous 12 / 55 / 112 ms at
+  `k = 0 / 1 / 16`, staggered 2.9 / 5.2 / 20 ms. The staggered cost is far lower but
+  **not flat in `k`**: it grows ~7× from `k=0` to `k=16` (simultaneous ~9×). The
+  `k`-proportional work is the ~10 Jacobian-vector products of `k` columns per
+  accepted step (one per sensitivity-stage iteration; 3.2 iterations per stage on
+  average, 78% at the minimum of 2, measured on 0.25 d at `k=16`); a 16-column
+  application costs ~1.6 RHS evaluations.
+- **Newton failures fall but do not vanish** (30% → 21% at `k=0`). On this influent
+  the lean loop's failures are not step growth into divergence: a diagnostic on
+  0.5 d found the stage solves either converge in 2 iterations or contract slowly
+  (260 hit the 12-iteration cap, ~140 reached rate ≥ 1), and a **dense** Jacobian
+  gave the same 20%, so the colored pattern is not the cause — the step-start
+  Jacobian goes stale within the step (consistent with non-smooth switches in the
+  plant RHS). The growth limiter cannot remove that. This run does not separate how
+  much of the 30% → 21% is the limiter and how much is `maxfac=2` versus diffrax's
+  10 and the Hairer convergence test versus optimistix's.
+- Untried levers for the remaining `k`-proportional cost: accept a sensitivity stage
+  after one correction using a remembered contraction rate (CVODES keeps one for its
+  sensitivity iteration; it risks leaving a slow sensitivity mode unconverged), and
+  refactor `I − γhJ` at a stage whose state iteration contracted slowly.
+- The convergence-aware limiter is **only** on the lean loop. The diffrax paths
+  cannot take it: diffrax hands its step controller only the error estimate (a
+  failed root find sets it to `inf`), never the Newton contraction rate.
 
 **IFAS / MBBR unit ([`plant/ifas.py`](aquakin/plant/ifas.py)).** `IFASUnit`
 (alias `MBBRUnit`) places carrier-media biofilm in the flowsheet by **wiring the

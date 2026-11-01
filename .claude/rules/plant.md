@@ -116,7 +116,10 @@ Key types:
   caches) lives in a [`ColoredJacobianManager`](aquakin/plant/colored.py)
   collaborator (`plant._colored`), mirroring `RecycleResolver`: it back-references
   the `Plant` for the state layout, unit couplings and RHS, and exposes
-  `jacobian_solver` (forward implicit solve), `adjoint_jacobian_builder`
+  `forward_root_finder` (the guarded forward colored root finder, or `None`;
+  `forward_fast` and the staggered `solve_sensitivity` materialize their per-step
+  `J` from it via `colored_jacobian.state_jacobian`) / `jacobian_solver` (a diffrax
+  solver configured with it), `adjoint_jacobian_builder`
   (`stable_adjoint` backward `df/dy`) and `steady_jacobian_builder` (PTC steady
   `dF/dy`). All three share one probe→structural-union→build→guard scaffold
   (`_build_and_guard` / `_colored_from_probe`); each caches its result and
@@ -134,7 +137,8 @@ Key types:
   fails closed: `pattern_coverage_misses` must find no uncovered entry at the
   default state, three perturbed copies and the concrete solve `y0`, or it falls
   back to dense (#647).
-  **Compiled-solve caches** — the jitted forward + PTC steady solves and the
+  **Compiled-solve caches** — the jitted forward + PTC steady solves (the
+  `solve_sensitivity` solves sit in `.jit` under a `"solve_sensitivity"` key) and the
   continuation / arclength kernels (all solver-run memoization, keyed by
   settings, that bake in the reactor conditions) live in a
   [`SolveCache`](aquakin/plant/solve_cache.py) value object (`plant._solve_cache`,

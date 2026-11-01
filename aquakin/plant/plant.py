@@ -3041,9 +3041,8 @@ class Plant:
         # Jacobian); build + guard it, and fall back to the diffrax path if the
         # guard fails. Concrete-only (validated above). Its compiled solve is
         # cached per instance like the diffrax path.
-        self._colored.jacobian_solver(None, t0, y0, params, rtol, atol)
-        crf = self._colored._root_finder
-        if crf is not None and crf[2]:
+        rf = self._colored.forward_root_finder(t0, y0, params, rtol, atol)
+        if rf is not None:
             te = t_eval if t_eval is not None else jnp.asarray([float(t1)])
             fkey = (
                 "forward_fast",
@@ -3056,7 +3055,7 @@ class Plant:
             jitted = self._jit_cache.get(fkey)
             if jitted is None:
                 jitted = self._build_jitted_forward_fast(
-                    t0, t1, rtol=rtol, atol=atol, max_steps=max_steps
+                    rf, t0, t1, rtol=rtol, atol=atol, max_steps=max_steps
                 )
                 self._jit_cache[fkey] = jitted
             with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
@@ -3122,8 +3121,9 @@ class Plant:
         # (a deliberate follow-up). ``True`` opts into both.
         if colored_jacobian is True:
             solver = self._colored.jacobian_solver(solver, t0, y0, params, rtol, atol)
-        colored_active = colored_jacobian is True and (
-            self._colored._root_finder is not None and self._colored._root_finder[2]
+        colored_active = (
+            colored_jacobian is True
+            and self._colored.forward_root_finder(t0, y0, params, rtol, atol) is not None
         )
 
         settings = concrete_settings_key(rtol, atol, adjoint, dtmax, max_steps)
@@ -3335,7 +3335,7 @@ class Plant:
 
         return _solve
 
-    def _build_jitted_forward_fast(self, t0, t1, *, rtol, atol, max_steps):
+    def _build_jitted_forward_fast(self, root_finder, t0, t1, *, rtol, atol, max_steps):
         """Build the lean non-AD forward solve for one signature.
 
         Wraps :func:`~aquakin.integrate.forward_solve.forward_solve` -- a plain
@@ -3344,14 +3344,14 @@ class Plant:
         optimistix / lineax. The per-step Jacobian is still colored forward-mode
         AD (the same exact matrix the differentiable path uses), but the solve is
         NOT differentiable. ``y0``/``params``/``t_eval`` are runtime arguments so
-        one compile serves a parameter sweep; the colored pattern (built+guarded
-        before this is called) is baked into the closure. The recycle map is
-        precomputed once per solve from ``params`` (the cached-M path).
+        one compile serves a parameter sweep; the colored pattern of
+        ``root_finder`` (built+guarded before this is called) is baked into the
+        closure. The recycle map is precomputed once per solve from ``params``
+        (the cached-M path).
         """
-        from aquakin.integrate.forward_solve import forward_solve
+        from aquakin.integrate.colored_jacobian import state_jacobian
+        from aquakin.integrate.forward_solve import StepControl, forward_solve
 
-        rf = self._colored._root_finder[0]
-        S, col_of, pattern = rf.seed_matrix, rf.color_of, rf.pattern
         t0a = jnp.asarray(float(t0))
 
         @jax.jit
@@ -3362,14 +3362,9 @@ class Plant:
             def rhs(t, y, args):
                 return self._rhs(t, y, args, recycle_map=rmap, flow_map=fmap)
 
-            def jac(t, y, args):
-                _, lin = jax.linearize(lambda yy: rhs(t, yy, args), y)
-                JS = jax.vmap(lin, in_axes=1, out_axes=1)(S)
-                return JS[:, col_of] * pattern
-
             ys = forward_solve(
                 rhs,
-                jac,
+                state_jacobian(rhs, root_finder),
                 y0,
                 params,
                 float(t0),
@@ -3377,7 +3372,7 @@ class Plant:
                 t_eval,
                 rtol=rtol,
                 atol=atol,
-                max_steps=max_steps,
+                control=StepControl(max_steps=max_steps),
             )
             return t_eval, ys
 

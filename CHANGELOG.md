@@ -19,7 +19,33 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ## [Unreleased]
 
+### Added
+
+- `Plant.solve_sensitivity(corrector=...)` chooses how each implicit stage of
+  the `[y; S]` sensitivity solve is solved. The new default, `"staggered"`,
+  converges the plant state first and then solves the sensitivity, which is
+  linear in `S`, with the same factorization. It forms no second derivatives,
+  so each sensitivity parameter adds only Jacobian-vector products to a step.
+  Its step controller limits step growth by the Newton contraction rate, so
+  fewer steps are wasted on Newton divergence. On a one-day BSM2 window with 16
+  parameters, a cached solve took 44 s instead of 313 s.
+  `"simultaneous"` is the previous diffrax augmented solve, which stays
+  differentiable. The two agree to the solver tolerance.
+- `Plant.solve_sensitivity(return_stats=True)` also returns the step counts of
+  the staggered solve: attempted, accepted, Newton-nonconverged and
+  error-test-rejected steps.
+
 ### Changed
+
+- `Plant.solve_sensitivity` now caches its compiled solve on the plant. Repeated
+  calls with new parameter values, initial state, time span, save times (of the
+  same length) or tolerances reuse it instead of recompiling, which helps
+  `dynamic_dgsm` samples, chained windows and parameter sweeps.
+- `Plant.solve_sensitivity` now uses the staggered corrector by default (see
+  above). Its results agree with the previous solve to the solver tolerance. It
+  is forward-only: it needs concrete `params` and `y0`, and differentiating
+  through it raises an error that points to `corrector="simultaneous"`.
+  `factormax=None` now means the staggered controller's own growth cap of 2.
 
 - `PrimaryClarifier` can compute its retention time from a first-order filtered
   inflow, as the BSM2 reference does: pass `t_m` (the filter time constant, in

@@ -79,7 +79,12 @@ res.dC_dparam("target", "H2O2_photolysis.k_photo")   # (n_t,)
 ```
 
 `solve_sensitivity` is available on `BatchReactor`, `PlugFlowReactor`, and
-`BiofilmReactor`, and the plant exposes `Plant.solve_sensitivity(...)`. For a
+`BiofilmReactor`, and the plant exposes `Plant.solve_sensitivity(...)`. The plant
+version uses a staggered corrector by default: each step converges the plant
+state first, then solves the sensitivity, which is linear, with the same
+factorization. Each parameter adds only Jacobian-vector products to a step,
+and repeated calls reuse one compiled solve.
+`corrector="simultaneous"` selects the differentiable augmented solve instead. For a
 scalar-loss gradient over many parameters (the calibration case) reverse mode is
 cheaper; `Plant.solve` uses a cap-free stable discrete adjoint automatically, so
 `jax.grad` through a stiff plant is finite by default with nothing to tune.
