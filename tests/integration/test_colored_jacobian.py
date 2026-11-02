@@ -7,7 +7,10 @@ identical to the dense one when the sparsity pattern is a superset of the real
 nonzeros. These tests pin (1) the coloring/reconstruction math, (2) that the
 positive-state probe yields a superset pattern, (3) that the colored solve
 reproduces the default trajectory and gradient to tolerance with no step
-explosion, and (4) that the setup guard catches a bad pattern and falls back.
+explosion, and (4) that the setup guard catches a bad pattern and every forward
+solve falls back -- ``forward_fast`` to diffrax, the colored solve and the
+staggered sensitivity corrector to the dense Jacobian -- as a first solve under
+tracing does.
 """
 
 import jax
@@ -24,6 +27,7 @@ from aquakin.integrate.colored_jacobian import (
     greedy_color,
     jacobian_sparsity_pattern,
 )
+from aquakin.plant.colored import ColoredJacobianManager
 
 
 # --------------------------------------------------------------------------
@@ -154,6 +158,44 @@ def test_materialize_colored_jacobian_equals_jacfwd_on_support():
         # Equal where the pattern is present; the pattern is a superset of the
         # true nonzeros, so this is the whole Jacobian here.
         assert float(jnp.max(jnp.abs(Jc - Jd))) < 1e-10
+
+
+def test_state_jacobian_dense_and_colored():
+    """``state_jacobian`` -- the per-step Jacobian of the lean forward
+    integrators -- is the dense Jacobian without a root finder and the colored
+    one with it, of ``rhs(t, y, args)`` with ``t`` and ``args`` threaded through.
+    Both match a central finite difference on a superset pattern, and the colored
+    one is masked by its root finder's pattern."""
+    rhs_y, truth = _synthetic_rhs(n=12)
+    n = truth.shape[0]
+
+    def rhs(t, y, scale):
+        return scale * rhs_y(y) + t * y
+
+    t, scale = 0.5, 2.0
+    y = jnp.asarray(np.random.default_rng(7).standard_normal(n))
+    step = 1e-6
+    fd = np.stack(
+        [(rhs(t, y + step * e, scale) - rhs(t, y - step * e, scale)) / (2 * step)
+         for e in np.eye(n)],
+        axis=1,
+    )
+
+    dense = cj.state_jacobian(rhs)(t, y, scale)
+    np.testing.assert_allclose(dense, fd, atol=1e-8)
+
+    rf, _ = build_colored_root_finder(rhs_y, jnp.ones(n), rtol=1e-3, atol=1e-3, n_probe=16)
+    colored = cj.state_jacobian(rhs, rf)(t, y, scale)
+    np.testing.assert_allclose(colored, fd, atol=1e-8)
+
+    # A root finder whose pattern is the diagonal alone: the colored Jacobian
+    # keeps nothing off it, where the dense one has the real couplings.
+    off = ~np.eye(n, dtype=bool)
+    assert np.count_nonzero(np.asarray(dense)[off]) == np.count_nonzero(truth[off])
+    diagonal, _ = build_colored_root_finder(
+        rhs_y, jnp.ones(n), rtol=1e-3, atol=1e-3, probe_pattern=np.eye(n, dtype=bool))
+    masked = np.asarray(cj.state_jacobian(rhs, diagonal)(t, y, scale))
+    assert np.all(masked[off] == 0.0)
 
 
 def test_colored_jacobian_guard_passes_and_warns():
@@ -342,6 +384,103 @@ def test_colored_rejected_with_events(bsm1):
         plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]), params=params,
                     y0=y0, events=ev,
                     integrator=aquakin.IntegratorConfig(colored_jacobian=True))
+
+
+# --------------------------------------------------------------------------
+# A one-tank plant (fast) -- the forward solves when the colored path is
+# unavailable: a pattern the start-state guard rejects, or a first solve under
+# tracing.
+# --------------------------------------------------------------------------
+
+_TANK_SOLVE = dict(
+    t_span=(0.0, 10.0),
+    t_eval=jnp.linspace(0.0, 10.0, 6),
+    y0=jnp.array([0.2, 0.0]),
+    rtol=1e-8,
+    atol=1e-10,
+)
+
+
+def _reject_the_pattern(monkeypatch):
+    """Cut the plant's probed and structural sparsity patterns to the diagonal:
+    the colored Jacobian then misses the tank's A -> B coupling, and the
+    start-state guard rejects it."""
+    monkeypatch.setattr(
+        cj, "jacobian_sparsity_pattern",
+        lambda rhs, y0, **kw: np.eye(jnp.asarray(y0).shape[0], dtype=bool))
+    monkeypatch.setattr(
+        ColoredJacobianManager, "_structural_plant_pattern",
+        lambda self, coupling_mask=None: np.zeros_like(coupling_mask, dtype=bool))
+
+
+def test_forward_fast_falls_back_to_diffrax_on_a_rejected_pattern(cstr_plant, monkeypatch):
+    """``forward_fast`` needs the colored Jacobian; when the guard rejects the
+    pattern it warns and returns the diffrax solve itself."""
+    _reject_the_pattern(monkeypatch)
+    params = cstr_plant.default_parameters()
+    with pytest.warns(RuntimeWarning, match="falling back to the diffrax forward path"):
+        fast = cstr_plant.solve(**_TANK_SOLVE, params=params, forward_fast=True)
+    assert cstr_plant._colored._root_finder[2] is False
+    diffrax_solve = cstr_plant.solve(**_TANK_SOLVE, params=params)
+    np.testing.assert_array_equal(np.asarray(fast.state), np.asarray(diffrax_solve.state))
+
+
+def test_colored_solve_keeps_the_dense_solver_on_a_rejected_pattern(cstr_plant, monkeypatch):
+    """``colored_jacobian=True`` with a rejected pattern solves with the solver
+    it was given: the dense solve's trajectory."""
+    _reject_the_pattern(monkeypatch)
+    params = cstr_plant.default_parameters()
+    with pytest.warns(RuntimeWarning, match="falling back to dense"):
+        colored = cstr_plant.solve(
+            **_TANK_SOLVE, params=params,
+            integrator=aquakin.IntegratorConfig(colored_jacobian=True))
+    dense = cstr_plant.solve(**_TANK_SOLVE, params=params)
+    np.testing.assert_array_equal(np.asarray(colored.state), np.asarray(dense.state))
+
+
+def test_staggered_sensitivity_uses_the_dense_jacobian_on_a_rejected_pattern(
+    make_cstr_plant, monkeypatch
+):
+    """The staggered corrector steers its iterations with the colored Jacobian
+    when the guard accepts the pattern and with the dense one when it rejects it.
+    On this plant the two matrices are equal, so the sensitivities are too; the
+    rejected (diagonal) Jacobian would move them by ~1e-10."""
+
+    def sensitivity(plant):
+        _, _, S = plant.solve_sensitivity(
+            plant.default_parameters(), ["simple_decay.A_to_B.k"],
+            corrector="staggered", **_TANK_SOLVE)
+        return np.asarray(S)
+
+    accepted = make_cstr_plant()
+    colored = sensitivity(accepted)
+    assert accepted._colored._root_finder[2] is True
+
+    _reject_the_pattern(monkeypatch)
+    rejected = make_cstr_plant()
+    with pytest.warns(RuntimeWarning, match="falling back to dense"):
+        dense = sensitivity(rejected)
+    assert rejected._colored._root_finder[2] is False
+    np.testing.assert_allclose(dense, colored, rtol=0.0, atol=1e-13)
+
+
+def test_a_first_colored_solve_under_tracing_runs_dense(cstr_plant):
+    """The colored pattern is probed from concrete arrays, so a first
+    ``colored_jacobian=True`` solve differentiated through the diffrax solve
+    leaves it unbuilt and solves dense: the dense solve's gradient."""
+    params = cstr_plant.default_parameters()
+
+    def final_A(scale, colored):
+        sol = cstr_plant.solve(
+            **_TANK_SOLVE, params=params * scale,
+            diff=aquakin.DifferentiationConfig(method="through_solve"),
+            integrator=aquakin.IntegratorConfig(colored_jacobian=colored))
+        return sol.state[-1, 0]
+
+    g_colored = jax.grad(final_A)(1.0, True)
+    assert cstr_plant._colored._root_finder is None
+    g_dense = jax.grad(final_A)(1.0, False)
+    assert float(g_colored) == float(g_dense) != 0.0
 
 
 # --------------------------------------------------------------------------
@@ -540,7 +679,7 @@ def test_adjoint_pattern_check_fails_closed():
 
 @pytest.mark.slow
 def test_bsm2_adjoint_pattern_covers_dense_jacobian():
-    """Regression: on BSM2 (reference settler, heat-balance temperatures,
+    """Regression: on BSM2 (the default lumped-TSS settler, heat-balance temperatures,
     influent bypass -- the configuration that exposed it) the stable-adjoint
     pattern missed the settler's couplings to the digester and the reactors and
     the plant-level loops through the TSS-dependent sludge-train flows, so the

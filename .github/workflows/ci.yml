@@ -469,11 +469,12 @@ jobs:
           fail_ci_if_error: false
 
   # ---- Heavy whole-plant stable-adjoint gradient tests -------------------------
-  # The `heavy` set is the 13 whole-plant plant-gradient checks (8 BSM2 + 5 BSM1),
-  # each of which compiles a multi-GB whole-plant adjoint program. They are excluded
+  # The `heavy` set is the 15 whole-plant checks (9 BSM2 + 6 BSM1): the
+  # plant-gradient checks, each of which compiles a multi-GB whole-plant adjoint
+  # program, and the plant forward-sensitivity checks. They are excluded
   # from the slow / validation / smoke jobs (`... and not heavy`) and run in two
   # dedicated jobs, both ONE PER FRESH PROCESS (`-n 1`):
-  #   * `heavy` (below) -- the 12 that fit a stock 16 GB `ubuntu-latest` runner when
+  #   * `heavy` (below) -- the 14 that fit a stock 16 GB `ubuntu-latest` runner when
   #     isolated, sharded one-test-per-process across the FREE runner. A single test
   #     fits 16 GB, but a shard's worth accumulates (freed XLA caches are not
   #     returned to the OS) and exhausts it, so the per-process isolation is what
@@ -485,7 +486,7 @@ jobs:
   #     that exceeds 16 GB EVEN isolated (it holds two BSM1 `stable_adjoint` adjoint
   #     programs live at once), so the free runner cannot hold it and more sharding
   #     cannot shrink a single test's peak. It runs alone on a small larger runner
-  #     (`aquakin-heavy`, 8-core/32 GB). 12 free + 1 tiny paid is the cost-minimal
+  #     (`aquakin-heavy`, 8-core/32 GB). 14 free + 1 tiny paid is the cost-minimal
   #     split (the paid job runs only on adjoint/plant merges, ~one 20-min test).
   # Both jobs are gated identically by `heavy-gate` (path filter + `full-ci`).
   # Public-repo standard-runner minutes are free, so only the one oversized test
@@ -566,7 +567,7 @@ jobs:
           fi
 
   heavy:
-    name: heavy stable-adjoint tests (shard ${{ matrix.group }}/12)
+    name: heavy stable-adjoint tests (shard ${{ matrix.group }}/14)
     needs: heavy-gate
     if: >-
       needs.heavy-gate.outputs.run == 'true'
@@ -575,13 +576,13 @@ jobs:
               && contains(github.event.pull_request.labels.*.name, 'full-ci')))
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # ONE `heavy and not xheavy` test per fresh process (`--splits 12`, `-n 1`) --
-    # the 12 plant-gradient checks that fit a stock 16 GB `ubuntu-latest` runner
+    # ONE `heavy and not xheavy` test per fresh process (`--splits 14`, `-n 1`) --
+    # the 14 whole-plant checks that fit a stock 16 GB `ubuntu-latest` runner
     # alone. Each compiles a multi-GB plant-adjoint program that fits 16 GB ALONE
     # but accumulates across a process (freed XLA caches are not returned to the OS,
-    # so RSS climbs test-by-test); twelve fresh shards keep each process to ~one
+    # so RSS climbs test-by-test); fourteen fresh shards keep each process to ~one
     # test, so the free runner suffices (public-repo Actions minutes are free). The
-    # 13th test (`xheavy`) exceeds 16 GB even isolated and runs in the `xheavy` job.
+    # 15th test (`xheavy`) exceeds 16 GB even isolated and runs in the `xheavy` job.
     # The heavy tests are not in `.test_durations`, so pytest-split partitions them
     # evenly by count (~1/shard). Keep `--splits` >= the (heavy and not xheavy)
     # count so it stays one-per-shard: with fewer shards than tests, pytest-split's
@@ -592,7 +593,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        group: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     # Override the top-level single-thread pin: with `-n 1` there is no xdist
     # oversubscription, so let JAX / BLAS use the runner's cores.
     env:
@@ -618,7 +619,7 @@ jobs:
         # covers the multi-GB plant-adjoint compile.
         run: >-
           pytest -m "heavy and not xheavy" -q -n 1
-          --splits 12 --group ${{ matrix.group }}
+          --splits 14 --group ${{ matrix.group }}
           --cov=aquakin --cov-report=xml
           --durations=15 --timeout=1200 --timeout-method=thread
 

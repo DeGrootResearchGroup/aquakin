@@ -205,9 +205,9 @@ def test_mass_balance_closes_on_bsm1_steady_state():
 
 @pytest.mark.slow
 def test_mass_balance_closes_on_bsm1_takacs_lumped_settler():
-    """The BSM1 plant with the Takács reference settler closes COD and N at
+    """The BSM1 plant with the layered Takács settler closes COD and N at
     steady state. ``build_bsm1(use_takacs=True)`` defaults to the reference
-    ``settler1dv4`` config (``composition_mode="lumped_tss"``, soluble holdup),
+    ``settler1dv4``'s form (``composition_mode="lumped_tss"``, soluble holdup),
     whose head block is one TSS value per layer rather than per species -- the
     regression guard for the lumped-settler branch of the settler's
     ``component_inventory`` (which would otherwise fail to reshape the TSS head

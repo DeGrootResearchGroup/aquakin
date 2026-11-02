@@ -350,13 +350,15 @@ bare ODE loop — an explicit-solver solve of the same plant RHS traces in ~2 s 
 ~30 s for the diffrax implicit solve; the RHS itself is ~0.2 s). A **forward-only**
 plant solve — one that never needs `jax.grad`/`calibrate`/`sensitivity` of the
 result — can skip all of it: `forward_solve` is a plain `lax.while_loop` running
-the Kvaerno3 ESDIRK stages with a simplified Newton (Hairer–Wanner contraction
-test) + a direct dense `lu_factor`/`lu_solve`, an embedded-error PI controller, and
+the Kvaerno3 ESDIRK stages with an Anderson-accelerated simplified Newton
+(Hairer–Wanner contraction test on the change in each stage value) + a direct
+dense `lu_factor`/`lu_solve`, an embedded-error PI controller that does not grow
+the step right after a rejection, and
 a **convergence-aware step-growth limiter** (the Newton contraction rate caps the
-step growth, so it rarely grows into nonlinear-divergence). Output at `t_eval` is
-*exact* — the step is clipped to land on each save time (no dense-output
-interpolation; for a dense `t_eval` this adds ~clip-per-save-interval steps, the
-one cost vs diffrax's interpolation — a future dense-output refinement).
+step growth). Output at `t_eval` is the cubic-Hermite dense output within each
+step (#386), so the run time is flat in the number of save points. The controller
+settings are one `StepControl` value, shared with the staggered sensitivity solve
+(below).
 - **The per-step Jacobian `J = df/dy` is STILL colored forward-mode AD** (the same
   exact matrix the differentiable path forms, so the step behaviour matches). What
   is dropped is only the *adjoint over the whole solve*: the result is **not**
@@ -381,9 +383,9 @@ one cost vs diffrax's interpolation — a future dense-output refinement).
   runs (the 7-min full-BSM2 compile). **Run is ~1.3–1.9× faster** on the
   validated 244-state JRN-056 dynamic BSM2 (real 609-day influent, `HeatBalance` +
   `settler_soluble_holdup`): a 60-day window is 1.91× and the full 609-day run
-  1.26× — the run gain narrows over a long run because the `t_eval` step-clipping
-  adds a boundary per save point (8737 over days 245–609) where diffrax interpolates
-  (a future dense-output refinement would recover it). Same accuracy (a valid
+  1.26× — measured before the dense output, when step-clipping added a boundary per
+  save point (8737 over days 245–609); the dense output removed that cost (the
+  module docstring has the re-measured 609-day ratio). Same accuracy (a valid
   solution to the same `rtol` — it differs from the diffrax trajectory only by the
   step-sequence variation between two valid adaptive solves, ~2e-2 on the dynamic
   BSM2). Covered by

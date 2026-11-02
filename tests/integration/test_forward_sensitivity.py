@@ -11,6 +11,7 @@ the JVP flows through a state-derived-pH speciation solver.
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
@@ -187,6 +188,36 @@ def test_free_function_and_accessors():
     assert jnp.allclose(res.dC_dparam(sp, names[0]), res.S[:, 0, 0])
     # solution is the usual trajectory
     assert res.solution.C.shape == (6, net.n_species)
+
+
+def test_sensitivity_atol_defaults_and_overrides():
+    """``sensitivity_atol`` -- the tolerance on ``S`` that both correctors use:
+    by default ``atol_y / |theta_j|`` (floored, so a zero parameter does not give
+    an infinite tolerance); ``param_scale`` replaces ``|theta_j|``; ``sens_atol``
+    replaces the whole default, ``param_scale`` included."""
+    from aquakin.integrate.forward_sensitivity import _SCALE_FLOOR, sensitivity_atol
+
+    atol_y = jnp.array([1e-6, 1e-3])
+    theta = jnp.array([2.0, -0.5, 0.0])
+
+    def rows(per_param):  # (k,) -> (k, ndof): row j is atol_y / per_param[j]
+        return np.asarray(atol_y)[None, :] / np.asarray(per_param, dtype=float)[:, None]
+
+    np.testing.assert_allclose(sensitivity_atol(atol_y, theta), rows([2.0, 0.5, _SCALE_FLOOR]))
+    np.testing.assert_allclose(
+        sensitivity_atol(atol_y, theta, param_scale=4.0), rows([4.0, 4.0, 4.0])
+    )
+    np.testing.assert_allclose(
+        sensitivity_atol(atol_y, theta, param_scale=[1.0, 10.0, 100.0]),
+        rows([1.0, 10.0, 100.0]),
+    )
+    np.testing.assert_allclose(
+        sensitivity_atol(atol_y, theta, sens_atol=1e-9, param_scale=4.0), np.full((3, 2), 1e-9)
+    )
+    np.testing.assert_allclose(
+        sensitivity_atol(atol_y, theta, sens_atol=[1e-9, 1e-8, 1e-7]),
+        np.repeat([[1e-9], [1e-8], [1e-7]], 2, axis=1),
+    )
 
 
 def test_shared_factor_matches_dense_single_param(simple_model):
