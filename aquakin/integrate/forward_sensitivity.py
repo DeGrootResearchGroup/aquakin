@@ -98,6 +98,48 @@ def resolve_sens_indices(model, sens_params) -> jnp.ndarray:
     return jnp.asarray(idx, dtype=jnp.int64 if jax.config.x64_enabled else jnp.int32)
 
 
+def sensitivity_atol(atol_y, theta, *, sens_atol=None, param_scale=None) -> jnp.ndarray:
+    """Absolute error-control tolerance on the sensitivity ``S = dy/dtheta``.
+
+    The CVODES default ``atol_S[j] = atol_y / scale_j`` with ``scale_j =
+    |theta_j|``: after scaling by the parameter magnitude, ``S`` is controlled to
+    the same relative accuracy as ``y``. Shared by the augmented (simultaneous
+    corrector) and the staggered sensitivity solves, so the two control the same
+    error.
+
+    Parameters
+    ----------
+    atol_y : jnp.ndarray
+        Absolute tolerance on the state, shape ``(ndof,)``.
+    theta : jnp.ndarray
+        Values of the ``k`` sensitivity parameters, shape ``(k,)``.
+    sens_atol : float or array, optional
+        A scalar or ``(k,)`` absolute tolerance on ``S`` that replaces the
+        default.
+    param_scale : array, optional
+        Per-parameter scale ``scale_j``, shape ``(k,)`` (or a scalar). Defaults
+        to ``|theta_j|`` floored at a tiny value, so a parameter passing through
+        zero does not make the tolerance infinite. Ignored when ``sens_atol`` is
+        given.
+
+    Returns
+    -------
+    jnp.ndarray
+        ``atol_S``, shape ``(k, ndof)``; row ``j`` is the tolerance on the
+        sensitivity column of parameter ``j``.
+    """
+    atol_y = jnp.asarray(atol_y, dtype=float)
+    k = int(theta.shape[0])
+    if sens_atol is not None:
+        per_param = jnp.broadcast_to(jnp.asarray(sens_atol, dtype=float), (k,))
+        return per_param[:, None] * jnp.ones((1, atol_y.shape[0]))
+    if param_scale is None:
+        scale = jnp.maximum(jnp.abs(theta), _SCALE_FLOOR)
+    else:
+        scale = jnp.broadcast_to(jnp.asarray(param_scale, dtype=float), (k,))
+    return atol_y[None, :] / scale[:, None]
+
+
 def augmented_forward_sensitivity(
     f_flat: Callable[[float, jnp.ndarray, jnp.ndarray], jnp.ndarray],
     y0_flat: jnp.ndarray,
@@ -208,23 +250,16 @@ def augmented_forward_sensitivity(
 
     # --- Error-control tolerances over the augmented state ----------------
     atol_y = jnp.broadcast_to(jnp.asarray(atol_y, dtype=float), (ndof,))
-    theta = params[free_idx]
-    if param_scale is None:
-        scale = jnp.maximum(jnp.abs(theta), _SCALE_FLOOR)
-    else:
-        scale = jnp.broadcast_to(jnp.asarray(param_scale, dtype=float), (k,))
-
-    # atol_S (k, ndof), row j = atol_y / scale_j -- column-major to match z.
-    if sens_atol is None:
-        atol_S = atol_y[None, :] / scale[:, None]  # (k, ndof)
-    else:
-        atol_S = jnp.broadcast_to(jnp.asarray(sens_atol, dtype=float), (k,))[:, None] * jnp.ones(
-            (1, ndof)
-        )
-    sens_rtol_v = rtol if sens_rtol is None else float(sens_rtol)
+    # atol_S (k, ndof), row j for parameter j -- column-major to match z.
+    atol_S = sensitivity_atol(
+        atol_y, params[free_idx], sens_atol=sens_atol, param_scale=param_scale
+    )
+    sens_rtol_v = rtol if sens_rtol is None else sens_rtol
 
     atol_aug = jnp.concatenate([atol_y, atol_S.reshape(-1)])
-    rtol_aug = jnp.concatenate([jnp.full((ndof,), float(rtol)), jnp.full((ndof * k,), sens_rtol_v)])
+    rtol_aug = jnp.concatenate(
+        [jnp.full((ndof,), rtol, dtype=float), jnp.full((ndof * k,), sens_rtol_v, dtype=float)]
+    )
 
     sc = None
     if shared_factor:
@@ -246,8 +281,8 @@ def augmented_forward_sensitivity(
     sol = diffrax.diffeqsolve(
         diffrax.ODETerm(aug_rhs),
         solver,
-        t0=float(t0),
-        t1=float(t1),
+        t0=jnp.asarray(t0, dtype=float),
+        t1=jnp.asarray(t1, dtype=float),
         dt0=None,
         y0=z0,
         args=params,

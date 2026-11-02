@@ -10,12 +10,24 @@ overhead. A **forward-only** plant solve -- one that never needs
 it: a plain ``lax.while_loop`` running the Kvaerno3 stages with a simplified
 Newton iteration and a direct dense ``lu_factor`` / ``lu_solve``.
 
+Two solves share that loop:
+
+- :func:`forward_solve` integrates the state ``y`` alone.
+- :func:`staggered_sensitivity_solve` integrates the state together with its
+  forward sensitivity ``S = dy/dtheta`` by the **staggered corrector** (Caracotsios
+  & Stewart 1985; the CVODES staggered option, Hindmarsh et al. 2005): each
+  implicit stage first converges the state, then solves the sensitivity stage --
+  which is *linear* in ``S`` -- with the same factorization of
+  ``I - h*gamma*J``. See that function for the details.
+
 The per-step Jacobian ``J = df/dy`` is **still computed by autodiff** (forward-mode
 ``jax.linearize``, materialised by the colored-AD column compression -- the same
-exact Jacobian the differentiable path uses, so the step behaviour matches). What
-is dropped is only the *adjoint over the whole solve*: the result is **not**
-differentiable w.r.t. parameters / initial conditions. So this is an opt-in fast
-lane for non-AD solves; any differentiated solve must use the ``diffrax`` path.
+exact Jacobian the differentiable path uses, so the step behaviour matches). It
+only steers the simplified Newton iterations: every residual is evaluated exactly,
+so an approximate ``J`` costs iterations, never accuracy. What is dropped is only
+the *adjoint over the whole solve*: the result is **not** differentiable w.r.t.
+parameters / initial conditions. So this is an opt-in fast lane for non-AD solves;
+any differentiated solve must use the ``diffrax`` path.
 
 The run is faster than the colored ``diffrax`` forward path -- measured ~0.86x
 (compile+run) and ~0.88x (run-only) on the full 609-day BSM2 dynamic solve at the
@@ -53,28 +65,65 @@ hand. Because it constructs no diffrax solver *object*, the single-source guard 
 no allowlist entry there).
 
 The method is the L-stable A-stable 3rd-order Kvaerno3 ESDIRK with its embedded
-2nd-order error estimate (Kvaerno 2004) and an adaptive step controller with two
-parts: an error controller -- the I-term ``en^(-1/3)`` with a Soderlind PI memory
-term ``(en_prev/en)^pi_beta`` (the proportional part damps the overshoot-then-
-reject oscillation a bare I-controller suffers; ``pi_beta=0`` recovers the pure
-I-controller) -- and a **Gustafsson-style convergence-aware growth limiter** (the
-simplified-Newton contraction rate caps the step growth, so a step is rarely grown
-into nonlinear-divergence, the chord's failure mode; diffrax's ``PIDController``
-has no such term). The default ``maxfac=2.0`` / ``pi_beta=0.08`` were tuned on the
-full 609-day BSM2 dynamic run, where they cut the step count ~20% versus the
-earlier ``maxfac=5`` pure-I controller (fewer error-test rejections).
+2nd-order error estimate (Kvaerno 2004) and an adaptive step controller
+(:class:`StepControl`) with two parts: an error controller -- the I-term
+``en^(-1/3)`` with a Soderlind PI memory term ``(en_prev/en)^pi_beta`` (the
+proportional part damps the overshoot-then-reject oscillation a bare
+I-controller suffers; ``pi_beta=0`` recovers the pure I-controller) -- and a
+**Gustafsson-style convergence-aware growth limiter** (the simplified-Newton
+contraction rate caps the step growth, so a step is rarely grown into
+nonlinear-divergence, the chord's failure mode; diffrax's ``PIDController`` has
+no such term, and cannot have one: diffrax hands its controller only the error
+estimate, never the Newton contraction rate). An attempt accepted right after a
+failed one does not grow the step (Hairer & Wanner's rule after a rejection),
+which breaks the reject -> accept -> grow -> reject cycle of an error estimate
+that jumps between steps. The default ``maxfac=2.0`` / ``pi_beta=0.08`` were
+tuned on the full 609-day BSM2 dynamic run, where they cut the step count ~20%
+versus the earlier ``maxfac=5`` pure-I controller (fewer error-test rejections).
 
-The simplified-Newton inner tolerance ``_KAPPA = 1e-1`` was likewise tuned on that
-run: loosening it from ``1e-2`` cut the Newton iterations per stage ~3.7 -> ~3.3
-(and the step count fell slightly too, so it is a pure win, not a rejection
-trade-off), ~10% faster, while the solution stays within ``rtol`` -- the
-final-state difference from the ``diffrax`` solve is ~2.5e-4, far inside the
-benchmark agreement. The RHS evaluation (recycle + kinetics), at ~12 per step, is
-the dominant cost; the per-step Jacobian factorization is only ~8% (so block /
-sparse factorization is not worth it at this scale -- it loses to XLA's dense LU).
+Each implicit stage is solved by simplified Newton iteration on its slope ``k``,
+stopped by the Hairer-Wanner test ``eta*||h*G*dk|| < _KAPPA`` in the error-test
+norm: on the stage-value increment ``h*G*dk``, so the test is the same in any
+time unit (see :func:`_stage_weight`). A first correction small enough is
+accepted without a rate estimate, as CVODES and Hairer & Wanner's codes do (see
+:func:`_stage_solve`). ``_KAPPA = 0.01`` is the value Hairer & Wanner's SDIRK
+code takes at ``rtol = 1e-4``. Where the right-hand side switches branch
+often -- the Takacs settler's minimum-flux rule in a sludge blanket whose layers
+carry nearly equal fluxes -- the stage iteration's error shifts the timing of the
+fast transients the switching produces: on an 8-day dynamic BSM2 run the error
+of the worst settler layer fell from ~3% of its peak at 0.1 to ~0.5% at 0.01,
+for ~5% more right-hand-side evaluations than at 0.03. The RHS evaluation
+(recycle + kinetics), at ~12 per step, is the dominant cost; the per-step
+Jacobian factorization is only ~8% (so block / sparse factorization is not worth
+it at this scale -- it loses to XLA's dense LU).
+
+The stage iteration is Anderson-accelerated with the step's factorization as the
+preconditioner (``_ANDERSON_DEPTH = 2``; see :func:`_stage_solve`). It targets
+stages where the Jacobian factored at the step start has gone wrong in a few
+directions by the stage value -- the plain iteration then contracts slowly or
+stalls at the iteration cap, while the accelerated one removes those directions
+in about as many iterations, at no extra derivative evaluations. The
+``maxfac`` / ``pi_beta`` tunings above predate it.
+
+References
+----------
+- Kvaerno, A. (2004). Singly diagonally implicit Runge-Kutta methods with an
+  explicit first stage. BIT 44, 489-502.
+- Hairer, E. & Wanner, G. (1996). Solving Ordinary Differential Equations II,
+  2nd ed., Section IV.8 (simplified Newton convergence test).
+- Gustafsson, K. (1994). Control-theoretic techniques for stepsize selection in
+  implicit Runge-Kutta methods. ACM TOMS 20(4), 496-517.
+- Caracotsios, M. & Stewart, W.E. (1985). Sensitivity analysis of initial value
+  problems with mixed ODEs and algebraic equations. Comput. Chem. Eng. 9(4),
+  359-365. (The staggered direct sensitivity method.)
+- Hindmarsh, A.C. et al. (2005). SUNDIALS: Suite of Nonlinear and
+  Differential/Algebraic Equation Solvers. ACM TOMS 31(3), 363-396. (CVODES
+  staggered corrector and its sensitivity error norm.)
 """
 
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, NamedTuple
 
 import equinox as eqx
 import jax
@@ -95,14 +144,138 @@ _AL41, _AL42, _AL43 = _A31, _A32, _G  # stage-4 predictor
 _C2, _C3, _C4 = 2 * _G, 1.0, 1.0  # stage times
 _B = (_A41, _A42, _A43, _G)  # solution weights (stiffly accurate)
 _BE = (_A41 - _A31, _A42 - _A32, _A43 - _G, _G)  # embedded-error weights
+# Row i holds the explicit part a_ij (j < i) of stage i, and the weights of the
+# starting guess for its Newton iteration; stage 0 is the explicit first stage.
+_A_ROWS = ((), (_A21,), (_A31, _A32), (_A41, _A42, _A43))
+_GUESS_ROWS = ((), (1.0,), (_AL31, _AL32), (_AL41, _AL42, _AL43))
+_C = (0.0, _C2, _C3, _C4)
 
 _MAXNEWT = 12
-_KAPPA = 1e-1  # simplified-Newton convergence tolerance (Hairer eta test)
+_KAPPA = 1e-2  # simplified-Newton tolerance on the stage value (Hairer eta test)
 _ETA_RATE_FLOOR = 1e-3  # floor on (1 - rate) so the Hairer convergence-rate
 #                         estimate eta stays finite as the Newton rate -> 1
 _SAVE_TIME_RTOL = 1e-12  # relative slack when testing whether a save time falls
 #                          within the just-accepted step
 _H_STUCK = 1e-13  # step size below which the solve is declared stuck (no progress)
+_NONCONVERGED_SHRINK = 0.25  # step factor after a non-converged Newton iteration
+_ANDERSON_DEPTH = 2  # Anderson acceleration depth of the stage iteration (0 = off)
+_ANDERSON_REG = 1e-10  # relative Tikhonov term on the Anderson least squares
+
+
+@dataclass(frozen=True)
+class StepControl:
+    """Step-size control and step budget of the lean ESDIRK loop.
+
+    One value shared by :func:`forward_solve` and
+    :func:`staggered_sensitivity_solve`, so the two solves cannot drift in how
+    they choose their steps.
+
+    Parameters
+    ----------
+    h0 : float
+        Initial step size.
+    theta_target : float
+        Target simplified-Newton contraction rate. The convergence-aware limiter
+        caps the growth factor at ``theta_target / rate``, so a step whose Newton
+        iteration contracted slowly is not grown into divergence.
+    safety : float
+        Safety factor on the error-controller proposal.
+    minfac, maxfac : float
+        Bounds on the per-step growth factor.
+    pi_beta : float
+        Exponent of the Soderlind PI memory term ``(en_prev / en)**pi_beta``;
+        ``0`` gives the pure I-controller.
+    dtmax : float, optional
+        Largest step size. ``None`` leaves the step uncapped.
+    max_steps : int
+        Step budget, counting accepted and rejected steps.
+    """
+
+    h0: float = 1e-3
+    theta_target: float = 0.3
+    safety: float = 0.9
+    minfac: float = 0.2
+    maxfac: float = 2.0
+    pi_beta: float = 0.08
+    dtmax: float | None = None
+    max_steps: int = 100_000_000
+
+    def factor(self, en, en_prev, rate, conv, after_failure):
+        """Step-size factor after an attempt with error norm ``en``, previous
+        accepted error norm ``en_prev`` and Newton contraction rate ``rate``;
+        ``after_failure`` says whether the attempt before it failed.
+
+        The error controller is an I-term ``en^(-1/3)`` with the Soderlind PI
+        memory term ``(en_prev/en)^pi_beta`` -- the proportional part that damps
+        the controller's overshoot-then-reject oscillation a bare I-controller
+        suffers. It is combined with the Gustafsson-style convergence-rate
+        growth limiter ``theta_target / rate``, which caps growth by the
+        simplified-Newton contraction rate so a step is not grown into nonlinear
+        divergence. A non-converged attempt (``conv`` false) shrinks the step
+        hard. An attempt accepted right after a failed one does not grow the
+        step (the rule Hairer & Wanner's codes apply after a rejection): it
+        breaks the reject -> accept -> grow -> reject cycle the controller falls
+        into when the error estimate jumps between steps.
+        """
+        ens = jnp.maximum(en, 1e-30)
+        f_pi = (en_prev / ens) ** self.pi_beta
+        f_err = self.safety * jnp.where(en > 0, ens ** (-1.0 / 3.0) * f_pi, self.maxfac)
+        f_conv = jnp.where(rate > 1e-3, self.theta_target / rate, self.maxfac)
+        fac = jnp.clip(jnp.minimum(f_err, f_conv), self.minfac, self.maxfac)
+        fac = jnp.where(after_failure & (en <= 1.0), jnp.minimum(fac, 1.0), fac)
+        return jnp.where(conv, fac, _NONCONVERGED_SHRINK)
+
+
+class SolveStats(NamedTuple):
+    """Step counts of a lean ESDIRK solve (each a 0-d integer array).
+
+    Attributes
+    ----------
+    attempted : jax.Array
+        Steps attempted (accepted plus rejected).
+    accepted : jax.Array
+        Steps accepted.
+    nonconverged : jax.Array
+        Attempts rejected because a simplified Newton iteration did not converge
+        (or the candidate state was not finite).
+    error_rejected : jax.Array
+        Attempts whose Newton iterations converged but which failed the error
+        test.
+    """
+
+    attempted: jax.Array
+    accepted: jax.Array
+    nonconverged: jax.Array
+    error_rejected: jax.Array
+
+
+class SensitivitySolve(NamedTuple):
+    """Result of :func:`staggered_sensitivity_solve`.
+
+    Attributes
+    ----------
+    ys : jnp.ndarray
+        State at the save times, shape ``(n_t, n)``.
+    S : jnp.ndarray
+        Sensitivity ``dy/dtheta`` at the save times, shape ``(n_t, n, k)``.
+    stats : SolveStats
+        Step counts of the solve.
+    """
+
+    ys: jnp.ndarray
+    S: jnp.ndarray
+    stats: SolveStats
+
+
+class _Attempt(NamedTuple):
+    """One attempted step from ``t`` to ``t + h``."""
+
+    z: Any  # candidate solution at t + h (an array or a tuple of arrays)
+    en: jax.Array  # error norm; the step is accepted when en <= 1
+    rate: jax.Array  # largest simplified-Newton contraction rate in the step
+    conv: jax.Array  # every Newton iteration converged and the candidate is finite
+    f0: Any  # slope at t (dense output), same structure as z
+    f1: Any  # slope at t + h (dense output)
 
 
 def _hermite(y0_, y1_, f0_, f1_, h, theta):
@@ -121,24 +294,435 @@ def _hermite(y0_, y1_, f0_, f1_, h, theta):
     return h00 * y0_ + h10 * h * f0_ + h01 * y1_ + h11 * h * f1_
 
 
+def _wrms(v, scale):
+    """Weighted root-mean-square norm ``sqrt(mean((v / scale)**2))``."""
+    return jnp.sqrt(jnp.mean((v / scale) ** 2))
+
+
+def _wrms_max_row(v, scale):
+    """Largest per-row weighted RMS norm of a ``(k, n)`` block -- the CVODES
+    sensitivity norm, so no single parameter's column is averaged away."""
+    return jnp.max(jnp.sqrt(jnp.mean((v / scale) ** 2, axis=-1)), initial=0.0)
+
+
+def _weighted(weights, ks):
+    """``sum_j weights[j] * ks[j]`` over the leading stages."""
+    return sum(w * k for w, k in zip(weights, ks))
+
+
+def _anderson_correction(f, dF, dX, valid, weight):
+    """The Anderson (Type II) correction for one row of the stage iteration.
+
+    With ``f`` the plain chord step at the current iterate and ``dF`` / ``dX``
+    the last differences of steps and iterates (one per row of the history,
+    ``valid`` marking the filled ones), returns ``(dX + dF) @ gamma`` with
+    ``gamma`` the least-squares fit of ``f`` by ``dF`` in the weighted norm
+    (Walker & Ni 2011). The accelerated step is ``f`` minus this.
+    """
+    A = dF * weight  # (m, n)
+    G = A @ A.T
+    rhs = A @ (f * weight)
+    lam = _ANDERSON_REG * jnp.trace(G) + 1e-300
+    G = G * jnp.outer(valid, valid) + jnp.diag(jnp.where(valid, lam, 1.0))
+    gamma = jnp.linalg.solve(G, jnp.where(valid, rhs, 0.0))
+    return gamma @ (dX + dF)
+
+
+def _stage_solve(residual, guess, lu, scale):
+    """Solve a stage equation ``residual(x) = 0`` with the step's factorization
+    ``lu = LU(I - h*G*J)`` (the residual's Jacobian up to the error in ``J``).
+
+    ``x`` is one stage derivative ``(n,)`` or a ``(k, n)`` block of them, one per
+    row; each row is solved with the same factorization. ``scale`` (the shape of
+    ``x``, or broadcastable to it) weights the norm: the WRMS norm of a row, the
+    largest over rows for a block (the steps pass :func:`_stage_weight`, so the
+    test reads the stage-value increment). Each iteration forms the plain step
+    ``f = -LU^{-1} residual(x)`` -- the preconditioned residual -- and the
+    Hairer-Wanner (ODEs II, IV.8) contraction test reads it: converge when
+    ``eta*||f|| < KAPPA``, with ``eta = rate / (1 - rate)`` from the second
+    correction on and ``eta = 1`` on the first, which has no rate estimate yet
+    (CVODES and Hairer & Wanner's codes also accept a first correction that is
+    small enough); diverge when the rate is ``>= 1`` or ``f`` is not finite.
+    Accepting the first correction matters near a steady state, where the
+    starting guess is already converged: the corrections after it are at
+    round-off, and their ratio -- a meaningless rate, often ``>= 1`` -- would
+    otherwise declare divergence and hold the step size down.
+
+    With ``_ANDERSON_DEPTH > 0`` the update applied is ``f`` Anderson-accelerated
+    (Walker & Ni 2011, Type II, row by row): corrected by the least-squares
+    combination of the last ``_ANDERSON_DEPTH`` steps that best cancels it, in the
+    norm's weighting. It targets stages where the factored ``J`` has gone wrong
+    in a few directions by the stage value -- the stage value has moved across a
+    switch in the right-hand side since the step start: the plain iteration
+    contracts slowly along them, while the accelerated one removes them in about
+    as many iterations as there are such directions. The tests read ``f`` rather
+    than the applied update because the accelerated updates are not monotone;
+    with ``_ANDERSON_DEPTH = 0`` (the plain simplified Newton, or chord,
+    iteration) the two coincide.
+
+    Returns
+    -------
+    x : jnp.ndarray
+        The last iterate.
+    rate : jax.Array
+        The last contraction-rate estimate (``0`` when the first correction
+        was accepted).
+    conv : jax.Array
+        Whether the iteration converged.
+    iterations : jax.Array
+        The number of iterations taken.
+    """
+    depth = _ANDERSON_DEPTH
+    rows = guess.reshape((-1, guess.shape[-1]))
+    weight = 1.0 / jnp.broadcast_to(scale, guess.shape).reshape(rows.shape)
+    history = jnp.zeros((rows.shape[0], max(depth, 1), rows.shape[1]), guess.dtype)
+
+    def precondition(r):
+        return -jsla.lu_solve(lu, r.T).T
+
+    def accelerate(f, x, f_prev, x_prev, dF, dX, it):
+        if depth == 0:
+            return f, dF, dX
+        fresh = it >= 1
+
+        def push(buf, new):
+            pushed = jnp.concatenate([new.reshape(rows.shape)[:, None], buf[:, :-1]], axis=1)
+            return jnp.where(fresh, pushed, buf)
+
+        dF, dX = push(dF, f - f_prev), push(dX, x - x_prev)
+        valid = jnp.arange(depth) < jnp.minimum(it, depth)
+        correction = jax.vmap(_anderson_correction, in_axes=(0, 0, 0, None, 0))(
+            f.reshape(rows.shape), dF, dX, valid, weight
+        )
+        return f - correction.reshape(f.shape), dF, dX
+
+    def cond(c):
+        conv, div, it = c[-2], c[-1], c[5]
+        return (~conv) & (~div) & (it < _MAXNEWT)
+
+    def body(c):
+        x, f_prev, x_prev, dF, dX, it, dprev, rate, conv, div = c
+        f = precondition(residual(x))
+        d = _wrms_max_row(f, scale)
+        # The first correction has no rate estimate: it is accepted on its own
+        # size (eta = 1) and reports no rate, so the step-growth limiter is not
+        # fed the ratio of two round-off-level corrections.
+        rate = jnp.where(it >= 1, d / (dprev + 1e-30), 0.0)
+        eta = jnp.where(it >= 1, rate / jnp.maximum(1.0 - rate, _ETA_RATE_FLOOR), 1.0)
+        conv = (rate < 1.0) & (eta * d < _KAPPA)
+        div = ((it >= 1) & (rate >= 1.0)) | (~jnp.isfinite(d))
+        dx, dF, dX = accelerate(f, x, f_prev, x_prev, dF, dX, it)
+        return x + dx, f, x, dF, dX, it + 1, d, rate, conv, div
+
+    init = (guess, guess, guess, history, history, 0, jnp.inf, 0.0, False, False)
+    x, _, _, _, _, it, _, rate, conv, _ = jax.lax.while_loop(cond, body, init)
+    return x, rate, conv, it
+
+
+def _stage_weight(scale, h):
+    """The norm scale of a stage iteration on the slope ``k``.
+
+    ``scale`` is the error-test scale of the stage *value* (``atol + rtol*|y|``).
+    A slope increment ``dk`` moves the stage value by ``h*G*dk``, so the test
+    reads ``dk`` against ``scale / (h*G)``: the stage-value test of Hairer &
+    Wanner and CVODES, the same in any time unit. (Reading ``dk`` against
+    ``scale`` itself would be ``1 / (h*G)`` times stricter and would change with
+    the time unit.)
+    """
+    return scale / (h * _G)
+
+
+def _stages(k1, solve_stage):
+    """Run Kvaerno3's implicit stages 2-4 after the explicit first stage ``k1``.
+
+    ``solve_stage(i, acc, guess) -> (k_i, rate, conv, iterations)`` solves implicit stage
+    ``i`` given ``acc = sum_{j<i} a_ij k_j`` and the starting guess of its Newton
+    iteration. Used for the state and the sensitivity stages alike.
+
+    Returns
+    -------
+    ks : list of jnp.ndarray
+        The four stage derivatives.
+    rate : jax.Array
+        The largest contraction rate over the implicit stages.
+    conv : jax.Array
+        Whether every implicit stage converged.
+    """
+    ks = [k1]
+    rates, convs = [], []
+    for i in range(1, 4):
+        k, rate, conv, _ = solve_stage(i, _weighted(_A_ROWS[i], ks), _weighted(_GUESS_ROWS[i], ks))
+        ks.append(k)
+        rates.append(rate)
+        convs.append(conv)
+    rate = jnp.maximum(jnp.maximum(rates[0], rates[1]), rates[2])
+    return ks, rate, convs[0] & convs[1] & convs[2]
+
+
+def _advance(z, ks, h):
+    """The step's solution ``z + h*sum(b_i k_i)`` and its embedded error estimate."""
+    return z + h * _weighted(_B, ks), h * _weighted(_BE, ks)
+
+
+def _state_stages(rhs, args, t, y, h, lu, scale):
+    """The state stage derivatives of one Kvaerno3 step from ``(t, y)``.
+
+    Returns the four stage derivatives, the four stage values ``Y_i`` (``Y_0 =
+    y``; the stiffly-accurate ``Y_3`` is the step's solution), the largest
+    contraction rate, and whether every stage converged.
+    """
+    k1 = rhs(t, y, args)
+
+    def solve_stage(i, acc, guess):
+        t_i = t + _C[i] * h
+        base = y + h * acc
+        return _stage_solve(
+            lambda k: k - rhs(t_i, base + h * _G * k, args), guess, lu, _stage_weight(scale, h)
+        )
+
+    ks, rate, conv = _stages(k1, solve_stage)
+    Ys = [y] + [y + h * (_weighted(_A_ROWS[i], ks) + _G * ks[i]) for i in range(1, 4)]
+    return ks, Ys, rate, conv
+
+
+def _factor(jac, t, y, args, h):
+    """``LU(I - h*G*J)`` with ``J = jac(t, y, args)``, the step's Newton operator."""
+    J = jac(t, y, args)
+    return jsla.lu_factor(jnp.eye(J.shape[0], dtype=J.dtype) - h * _G * J)
+
+
+def _state_attempt(rhs, jac, args, rtol, atol):
+    """Step attempt for the state alone (:func:`forward_solve`)."""
+
+    def attempt(t, y, h):
+        lu = _factor(jac, t, y, args, h)
+        scale = atol + rtol * jnp.abs(y)
+        ks, _, rate, conv = _state_stages(rhs, args, t, y, h, lu, scale)
+        y1, err = _advance(y, ks, h)
+        conv = conv & jnp.all(jnp.isfinite(y1))
+        # k1 (slope at t) and k4 (slope at t+h, the stiffly-accurate endpoint
+        # stage) feed the cubic-Hermite dense output.
+        return _Attempt(y1, _wrms(err, scale), rate, conv, ks[0], ks[3])
+
+    return attempt
+
+
+def _staggered_attempt(
+    rhs, jac, theta, tangents, rtol, atol, sens_rtol, sens_atol, sens_error_control
+):
+    """Step attempt for the state plus its sensitivity, staggered corrector.
+
+    The state stages converge first. Only if they converged and the state passes
+    its error test are the sensitivity stages solved; otherwise the attempt is
+    rejected on the state alone, without spending the sensitivity work on it.
+    With ``sens_error_control`` the sensitivity's error enters the attempt's
+    error norm; without it only the state's does.
+    """
+
+    def tangent_map(t_i, Y):
+        # Linearize f once at the stage value; each sensitivity column is the
+        # same linear map applied to (S_j, e_j): J(Y) S_j + f_theta(Y)_j.
+        _, lin = jax.linearize(lambda yy, pp: rhs(t_i, yy, pp), Y, theta)
+        return lambda V: jax.vmap(lin)(V, tangents)
+
+    def attempt(t, z, h):
+        y, S = z
+        lu = _factor(jac, t, y, theta, h)
+        scale_y = atol + rtol * jnp.abs(y)
+        ks, Ys, rate_y, conv_y = _state_stages(rhs, theta, t, y, h, lu, scale_y)
+        y1, err_y = _advance(y, ks, h)
+        conv_y = conv_y & jnp.all(jnp.isfinite(y1))
+        en_y = _wrms(err_y, scale_y)
+
+        def sensitivity(_):
+            scale_S = sens_atol + sens_rtol * jnp.abs(S)
+
+            def solve_stage(i, acc, guess):
+                # The sensitivity stage is linear in K: K = J(Y_i)(base + h*G*K)
+                # + f_theta(Y_i). The chord iteration reuses the state's factor;
+                # it converges in one correction when J(Y_i) equals the J that
+                # was factored, and in a few when it does not.
+                F = tangent_map(t + _C[i] * h, Ys[i])
+                base = S + h * acc
+                return _stage_solve(
+                    lambda K: K - F(base + h * _G * K), guess, lu, _stage_weight(scale_S, h)
+                )
+
+            KS, rate_S, conv_S = _stages(tangent_map(t, y)(S), solve_stage)
+            S1, err_S = _advance(S, KS, h)
+            conv_S = conv_S & jnp.all(jnp.isfinite(S1))
+            return S1, _wrms_max_row(err_S, scale_S), rate_S, conv_S, KS[0], KS[3]
+
+        def skipped(_):
+            zeros = jnp.zeros_like(S)
+            return S, jnp.zeros_like(en_y), jnp.zeros_like(rate_y), jnp.asarray(True), zeros, zeros
+
+        S1, en_S, rate_S, conv_S, KS1, KS4 = jax.lax.cond(
+            conv_y & (en_y <= 1.0), sensitivity, skipped, None
+        )
+        return _Attempt(
+            (y1, S1),
+            jnp.maximum(en_y, en_S) if sens_error_control else en_y,
+            jnp.maximum(rate_y, rate_S),
+            conv_y & conv_S,
+            (ks[0], KS1),
+            (ks[3], KS4),
+        )
+
+    return attempt
+
+
+def _integrate(attempt, z0, t0, t1, t_eval, control: StepControl):
+    """The adaptive loop: step-size control, dense output and save recording.
+
+    ``attempt(t, z, h) -> _Attempt`` takes one step; ``z`` is an array or a tuple
+    of arrays, each recorded at the save times. Returns the saved values (each
+    leaf with a leading ``len(t_eval)`` axis) and the :class:`SolveStats`.
+    """
+    t0 = jnp.asarray(t0, dtype=float)
+    t1 = jnp.asarray(t1, dtype=float)
+    t_eval = jnp.asarray(t_eval)
+    n_save = t_eval.shape[0]
+    zs0 = jax.tree.map(lambda a: jnp.zeros((n_save,) + a.shape, a.dtype), z0)
+    max_steps = control.max_steps
+
+    def cap(h):
+        return h if control.dtmax is None else jnp.minimum(h, control.dtmax)
+
+    def record(zs, i, z):
+        return jax.tree.map(lambda buf, a: buf.at[i].set(a), zs, z)
+
+    def _tol(s):
+        return _SAVE_TIME_RTOL * jnp.maximum(1.0, jnp.abs(s))
+
+    # carry: t, z, h_ctrl (unclipped proposal), save_idx, zs, en_prev (last
+    #        accepted error, for the PI term), failed (the last attempt failed), dead, stats
+    def cond(c):
+        t, z, h_ctrl, sidx, zs, en_prev, failed, dead, stats = c
+        return (sidx < n_save) & (~dead) & (stats.attempted < max_steps)
+
+    def body(c):
+        t, z, h_ctrl, sidx, zs, en_prev, failed, dead, stats = c
+        next_save = t_eval[sidx]
+
+        def record_only():
+            # already at this save time (e.g. t_eval[0] == t0): record, advance,
+            # do not take a (zero-width) step.
+            return (t, z, h_ctrl, sidx + 1, record(zs, sidx, z), en_prev, failed, dead, stats)
+
+        def do_step():
+            # Take the NATURAL adaptive step, clipped only to the final time t1
+            # (not to each save). Save points that fall inside the step are
+            # recovered by the cubic-Hermite continuous extension below, so the
+            # controller keeps its natural step rhythm instead of being forced to
+            # plant an extra boundary on every t_eval point (the step-clipping
+            # cost at a dense save grid -- issue #386).
+            h = jnp.minimum(h_ctrl, t1 - t)
+            a = attempt(t, z, h)
+            accept = a.conv & (a.en <= 1.0)
+            fac = control.factor(a.en, en_prev, a.rate, a.conv, failed)
+            h_ctrl_new = cap(h_ctrl * fac)
+            t_new = jnp.where(accept, t + h, t)
+            z_new = jax.tree.map(lambda new, old: jnp.where(accept, new, old), a.z, z)
+            # The PI memory is updated only on accept.
+            en_prev_new = jnp.where(accept, jnp.maximum(a.en, 1e-30), en_prev)
+
+            # Dense output: on an accepted step, record EVERY save time in
+            # (t, t_new] by interpolating within the step (a step may span several
+            # saves at a sparse grid, or none at a dense one).
+            def rec_cond(rc):
+                zs_, si_ = rc
+                in_range = si_ < n_save
+                tsi = t_eval[jnp.minimum(si_, n_save - 1)]
+                return accept & in_range & (tsi <= t_new + _tol(t_new))
+
+            def rec_body(rc):
+                zs_, si_ = rc
+                theta = (t_eval[si_] - t) / h
+                zsave = jax.tree.map(
+                    lambda a0, a1, s0, s1: _hermite(a0, a1, s0, s1, h, theta),
+                    z,
+                    z_new,
+                    a.f0,
+                    a.f1,
+                )
+                return record(zs_, si_, zsave), si_ + 1
+
+            zs_new, sidx_new = jax.lax.while_loop(rec_cond, rec_body, (zs, sidx))
+            stuck = h_ctrl_new < _H_STUCK
+            stats_new = SolveStats(
+                stats.attempted + 1,
+                stats.accepted + accept.astype(int),
+                stats.nonconverged + (~a.conv).astype(int),
+                stats.error_rejected + (a.conv & (a.en > 1.0)).astype(int),
+            )
+            return (
+                t_new,
+                z_new,
+                h_ctrl_new,
+                sidx_new,
+                zs_new,
+                en_prev_new,
+                ~accept,
+                dead | stuck,
+                stats_new,
+            )
+
+        already = (next_save - t) <= _tol(next_save)
+        return jax.lax.cond(already, record_only, do_step)
+
+    zero = jnp.array(0)
+    init = (
+        t0,
+        z0,
+        cap(jnp.asarray(float(control.h0))),
+        zero,
+        zs0,
+        jnp.array(1.0),
+        jnp.array(False),
+        jnp.array(False),
+        SolveStats(zero, zero, zero, zero),
+    )
+    t, z, h, sidx, zs, en_prev, failed, dead, stats = jax.lax.while_loop(cond, body, init)
+    # A loop that exits before filling every save row (step budget used up, or
+    # the step size collapsed) must not hand back the zero-initialized rows as if
+    # they were a solution: mark them NaN and raise.
+    incomplete = sidx < n_save
+    filled = jnp.arange(n_save) < sidx
+
+    def mark(buf):
+        mask = filled.reshape((n_save,) + (1,) * (buf.ndim - 1))
+        return jnp.where(mask, buf, jnp.nan)
+
+    zs = jax.tree.map(mark, zs)
+    zs = eqx.error_if(
+        zs,
+        incomplete & (stats.attempted >= max_steps),
+        f"forward_solve: the maximum number of solver steps was reached "
+        f"(max_steps={max_steps}) before the last save time.",
+    )
+    zs = eqx.error_if(
+        zs,
+        incomplete,
+        "forward_solve: the solve stalled before the last save time (the step "
+        "size collapsed because the Newton iteration kept failing or the state "
+        "became non-finite).",
+    )
+    return zs, stats
+
+
 def forward_solve(
     rhs: Callable,
     jac: Callable,
     y0: jnp.ndarray,
     args,
-    t0: float,
-    t1: float,
+    t0,
+    t1,
     t_eval: jnp.ndarray,
     *,
-    rtol: float,
+    rtol,
     atol,
-    h0: float = 1e-3,
-    theta_target: float = 0.3,
-    safety: float = 0.9,
-    minfac: float = 0.2,
-    maxfac: float = 2.0,
-    pi_beta: float = 0.08,
-    max_steps: int = 100_000_000,
+    control: StepControl = StepControl(),
 ):
     """Integrate ``dy/dt = rhs(t, y, args)`` from ``t0`` to ``t1``, forward only.
 
@@ -148,22 +732,22 @@ def forward_solve(
         ``rhs(t, y, args) -> dy/dt``.
     jac : Callable
         ``jac(t, y, args) -> J`` the dense ``(n, n)`` Jacobian ``df/dy`` (formed
-        by colored forward AD by the caller).
+        by colored forward AD by the caller). It only steers the simplified
+        Newton iteration, so an approximation costs iterations, not accuracy.
     y0 : jnp.ndarray
         Initial state ``(n,)``.
     args :
         Threaded to ``rhs`` / ``jac`` (the parameter vector) -- a runtime
         argument, so one compile serves a parameter sweep.
-    t0, t1 : float
-        Integration interval.
+    t0, t1 : float or jax.Array
+        Integration interval (may be traced).
     t_eval : jnp.ndarray
         Strictly increasing save times in ``[t0, t1]``; the solution is returned
-        at exactly these times (steps are clipped to land on them).
+        at exactly these times (by dense output within each step).
     rtol, atol : float or array
         Error tolerances (WRMS norm ``atol + rtol*|y|``).
-
-    max_steps : int
-        Step budget (accepted plus rejected steps).
+    control : StepControl, optional
+        Step-size controller settings and step budget.
 
     Returns
     -------
@@ -174,178 +758,140 @@ def forward_solve(
     ------
     equinox.EquinoxRuntimeError
         If the solve stops before reaching the last save time, either because it
-        used up ``max_steps`` (the message contains "maximum number of solver
-        steps", so :func:`~aquakin.integrate._common.friendly_solve_errors`
-        re-raises it with remedies) or because the step size collapsed (the
-        Newton iteration kept failing or the state became non-finite). The check
-        runs inside the compiled solve, so it also works under ``jax.jit``.
+        used up ``control.max_steps`` (the message contains "maximum number of
+        solver steps", so
+        :func:`~aquakin.integrate._common.friendly_solve_errors` re-raises it
+        with remedies) or because the step size collapsed (the Newton iteration
+        kept failing or the state became non-finite). The check runs inside the
+        compiled solve, so it also works under ``jax.jit``.
     """
-    n = y0.shape[0]
-    eye = jnp.eye(n)
     atol = jnp.asarray(atol)
-    t_eval = jnp.asarray(t_eval)
-    n_save = t_eval.shape[0]
-
-    def wrms(v, y):
-        scale = atol + rtol * jnp.abs(y)
-        return jnp.sqrt(jnp.mean((v / scale) ** 2))
-
-    def stage(t_s, base, k_init, lu, h, y):
-        """Simplified Newton for ``k = rhs(t_s, base + h*G*k, args)`` with frozen
-        operator ``lu = LU(I - h*G*J)``. Hairer-Wanner (ODEs II, IV.8) contraction
-        test: converge when ``eta*||dk|| < KAPPA``; diverge when rate >= 1."""
-
-        def cond(c):
-            k, dprev, it, rate, conv, div = c
-            return (~conv) & (~div) & (it < _MAXNEWT)
-
-        def body(c):
-            k, dprev, it, rate, conv, div = c
-            g = k - rhs(t_s, base + h * _G * k, args)
-            dk = jsla.lu_solve(lu, g)
-            k = k - dk
-            d = wrms(dk, y)
-            rate = jnp.where(it >= 1, d / (dprev + 1e-30), rate)
-            eta = rate / jnp.maximum(1.0 - rate, _ETA_RATE_FLOOR)
-            conv = (it >= 1) & (rate < 1.0) & (eta * d < _KAPPA)
-            div = ((it >= 1) & (rate >= 1.0)) | (~jnp.isfinite(d))
-            return k, d, it + 1, rate, conv, div
-
-        k, _, _, rate, conv, _ = jax.lax.while_loop(
-            cond, body, (k_init, jnp.inf, 0, 0.5, False, False)
-        )
-        return k, rate, conv
-
-    def one_step(t, y, h, lu):
-        k1 = rhs(t, y, args)
-        k2, r2, c2 = stage(t + _C2 * h, y + h * _A21 * k1, k1, lu, h, y)
-        k3, r3, c3 = stage(
-            t + _C3 * h, y + h * (_A31 * k1 + _A32 * k2), _AL31 * k1 + _AL32 * k2, lu, h, y
-        )
-        k4, r4, c4 = stage(
-            t + _C4 * h,
-            y + h * (_A41 * k1 + _A42 * k2 + _A43 * k3),
-            _AL41 * k1 + _AL42 * k2 + _AL43 * k3,
-            lu,
-            h,
-            y,
-        )
-        y1 = y + h * (_B[0] * k1 + _B[1] * k2 + _B[2] * k3 + _B[3] * k4)
-        err = h * (_BE[0] * k1 + _BE[1] * k2 + _BE[2] * k3 + _BE[3] * k4)
-        rate = jnp.maximum(jnp.maximum(r2, r3), r4)
-        conv = c2 & c3 & c4 & jnp.all(jnp.isfinite(y1))
-        # k1 (slope at t) and k4 (slope at t+h, the stiffly-accurate endpoint
-        # stage) feed the cubic-Hermite dense output.
-        return y1, wrms(err, y), rate, conv, k1, k4
-
-    ys0 = jnp.zeros((n_save, n), dtype=y0.dtype)
-
-    def _tol(s):
-        return _SAVE_TIME_RTOL * jnp.maximum(1.0, jnp.abs(s))
-
-    # carry: t, y, h_ctrl (unclipped proposal), save_idx, ys, n_steps,
-    #        en_prev (last accepted error, for the PI term), dead
-    def cond(c):
-        t, y, h_ctrl, sidx, ys, nstep, en_prev, dead = c
-        return (sidx < n_save) & (~dead) & (nstep < max_steps)
-
-    def body(c):
-        t, y, h_ctrl, sidx, ys, nstep, en_prev, dead = c
-        next_save = t_eval[sidx]
-
-        def record_only():
-            # already at this save time (e.g. t_eval[0] == t0): record, advance,
-            # do not take a (zero-width) step.
-            return (t, y, h_ctrl, sidx + 1, ys.at[sidx].set(y), nstep, en_prev, dead)
-
-        def do_step():
-            # Take the NATURAL adaptive step, clipped only to the final time t1
-            # (not to each save). Save points that fall inside the step are
-            # recovered by the cubic-Hermite continuous extension below, so the
-            # controller keeps its natural step rhythm instead of being forced to
-            # plant an extra boundary on every t_eval point (the step-clipping
-            # cost at a dense save grid -- issue #386).
-            h = jnp.minimum(h_ctrl, t1 - t)
-            J = jac(t, y, args)
-            lu = jsla.lu_factor(eye - h * _G * J)
-            y1, en, rate, conv, k1, k4 = one_step(t, y, h, lu)
-            accept = conv & (en <= 1.0)
-            # Error controller: an I-term en^(-1/3) with an optional Soderlind PI
-            # memory term (en_prev/en)^pi_beta -- the proportional part that damps
-            # the controller's overshoot-then-reject oscillation a bare I-controller
-            # suffers (pi_beta=0 recovers the pure I-controller). Combined with the
-            # Gustafsson-style convergence-rate growth limiter f_conv below, which
-            # caps growth by the simplified-Newton contraction rate so a step is not
-            # grown into nonlinear divergence.
-            ens = jnp.maximum(en, 1e-30)
-            f_pi = (en_prev / ens) ** pi_beta
-            f_err = safety * jnp.where(en > 0, ens ** (-1.0 / 3.0) * f_pi, maxfac)
-            f_conv = jnp.where(rate > 1e-3, theta_target / rate, maxfac)
-            fac = jnp.clip(jnp.minimum(f_err, f_conv), minfac, maxfac)
-            fac = jnp.where(conv, fac, 0.25)  # nonconvergence -> shrink hard
-            h_ctrl_new = h_ctrl * fac
-            t_new = jnp.where(accept, t + h, t)
-            y_new = jnp.where(accept, y1, y)
-            en_prev_new = jnp.where(accept, ens, en_prev)  # update only on accept
-
-            # Dense output: on an accepted step, record EVERY save time in
-            # (t, t_new] by interpolating within the step (a step may span several
-            # saves at a sparse grid, or none at a dense one). f0=k1, f1=k4.
-            def rec_cond(rc):
-                ys_, si_ = rc
-                in_range = si_ < n_save
-                tsi = t_eval[jnp.minimum(si_, n_save - 1)]
-                return accept & in_range & (tsi <= t_new + _tol(t_new))
-
-            def rec_body(rc):
-                ys_, si_ = rc
-                theta = (t_eval[si_] - t) / h
-                ysave = _hermite(y, y_new, k1, k4, h, theta)
-                return ys_.at[si_].set(ysave), si_ + 1
-
-            ys_new, sidx_new = jax.lax.while_loop(rec_cond, rec_body, (ys, sidx))
-            stuck = h_ctrl_new < _H_STUCK
-            return (
-                t_new,
-                y_new,
-                h_ctrl_new,
-                sidx_new,
-                ys_new,
-                nstep + 1,
-                en_prev_new,
-                dead | stuck,
-            )
-
-        already = (next_save - t) <= _tol(next_save)
-        return jax.lax.cond(already, record_only, do_step)
-
-    init = (
-        jnp.asarray(float(t0)),
-        y0,
-        jnp.asarray(float(h0)),
-        jnp.array(0),
-        ys0,
-        jnp.array(0),
-        jnp.array(1.0),
-        jnp.array(False),
-    )
-    t, y, h, sidx, ys, nstep, en_prev, dead = jax.lax.while_loop(cond, body, init)
-    # A loop that exits before filling every save row (step budget used up, or
-    # the step size collapsed) must not hand back the zero-initialized rows as if
-    # they were a solution: mark them NaN and raise.
-    incomplete = sidx < n_save
-    ys = jnp.where((jnp.arange(n_save) < sidx)[:, None], ys, jnp.nan)
-    ys = eqx.error_if(
-        ys,
-        incomplete & (nstep >= max_steps),
-        f"forward_solve: the maximum number of solver steps was reached "
-        f"(max_steps={max_steps}) before the last save time.",
-    )
-    ys = eqx.error_if(
-        ys,
-        incomplete,
-        "forward_solve: the solve stalled before the last save time (the step "
-        "size collapsed because the Newton iteration kept failing or the state "
-        "became non-finite).",
-    )
+    ys, _ = _integrate(_state_attempt(rhs, jac, args, rtol, atol), y0, t0, t1, t_eval, control)
     return ys
+
+
+def staggered_sensitivity_solve(
+    rhs: Callable,
+    jac: Callable,
+    y0: jnp.ndarray,
+    theta: jnp.ndarray,
+    free_idx: jnp.ndarray,
+    t0,
+    t1,
+    t_eval: jnp.ndarray,
+    *,
+    rtol,
+    atol,
+    sens_rtol=None,
+    sens_atol=None,
+    param_scale=None,
+    sens_error_control: bool = True,
+    control: StepControl = StepControl(),
+) -> SensitivitySolve:
+    """Integrate ``y`` and its forward sensitivity ``S = dy/dtheta`` (staggered).
+
+    ``S`` obeys the variational equation ``dS/dt = J(t, y) S + f_theta(t, y)``.
+    Applying the Kvaerno3 ESDIRK to the augmented system ``[y; S]`` gives, for
+    each implicit stage ``i`` with state stage value ``Y_i``, a sensitivity stage
+    that is *linear* in its stage derivative ``K``::
+
+        K = J(Y_i) (S_n + h * sum_{j<i} a_ij K_j + h*gamma*K) + f_theta(Y_i)
+
+    The **staggered corrector** solves the state stage first (simplified Newton
+    with ``LU(I - h*gamma*J)``, ``J`` at the step start), then this linear stage
+    with the **same** factorization, column by column. The residual is evaluated
+    exactly -- one linearization of ``f`` at ``(Y_i, theta)`` per stage, pushed
+    along the ``k`` parameter columns -- so the result is the augmented-system
+    stage to the Newton tolerance, while ``J`` only steers the iterations. No
+    second derivatives of ``f`` are formed, so the per-step cost grows with
+    ``k`` only through the ``k`` Jacobian-vector products per iteration, never
+    through a factorization of the ``n(1+k)`` augmented operator or a probe of
+    its coupling blocks.
+
+    The error test bounds both blocks, with the CVODES norm: the step is
+    accepted when the state's WRMS error and every sensitivity column's WRMS
+    error are below one. The state's error test runs first; a step rejected on
+    the state alone is rejected before any sensitivity work is spent on it. With
+    ``sens_error_control=False`` (CVODES's ``errconS = false``) only the state's
+    error enters the test, so the steps are the state solve's and the
+    sensitivity is the converged sensitivity of those steps. The step
+    controller is the one :func:`forward_solve` uses, including the
+    convergence-aware growth limiter, whose contraction rate covers the state
+    and sensitivity iterations.
+
+    Parameters
+    ----------
+    rhs : Callable
+        ``rhs(t, y, theta) -> dy/dt``, depending on ``theta`` wherever the
+        parameters enter (so its Jacobian-vector product carries the full
+        sensitivity).
+    jac : Callable
+        ``jac(t, y, theta) -> J`` the ``(n, n)`` Jacobian ``df/dy`` (or an
+        approximation; it only steers the iterations).
+    y0 : jnp.ndarray
+        Initial state ``(n,)``. The initial sensitivity is zero.
+    theta : jnp.ndarray
+        Parameter vector, shape ``(n_params,)``.
+    free_idx : jnp.ndarray
+        Integer indices (shape ``(k,)``) of the sensitivity parameters in
+        ``theta``.
+    t0, t1 : float or jax.Array
+        Integration interval (may be traced).
+    t_eval : jnp.ndarray
+        Strictly increasing save times in ``[t0, t1]``.
+    rtol, atol : float or array
+        State tolerances (WRMS norm ``atol + rtol*|y|``).
+    sens_rtol : float, optional
+        Relative tolerance on ``S``; defaults to ``rtol``.
+    sens_atol, param_scale : optional
+        Absolute tolerance on ``S``; see
+        :func:`~aquakin.integrate.forward_sensitivity.sensitivity_atol`
+        (default ``atol / |theta_j|`` per column). Without
+        ``sens_error_control`` they still set the convergence test of every
+        sensitivity stage.
+    sens_error_control : bool
+        Whether the sensitivity's error enters the error test (default). If
+        ``False`` the steps are chosen on the state's error alone -- fewer steps
+        when the sensitivity would otherwise force smaller ones, at the cost of
+        an uncontrolled sensitivity error.
+    control : StepControl, optional
+        Step-size controller settings and step budget.
+
+    Returns
+    -------
+    SensitivitySolve
+        ``ys`` ``(n_t, n)``, ``S`` ``(n_t, n, k)`` and the step counts.
+
+    Raises
+    ------
+    equinox.EquinoxRuntimeError
+        As :func:`forward_solve`.
+    """
+    from aquakin.integrate.forward_sensitivity import sensitivity_atol
+
+    n = int(y0.shape[0])
+    k = int(free_idx.shape[0])
+    theta = jnp.asarray(theta)
+    atol = jnp.broadcast_to(jnp.asarray(atol, dtype=float), (n,))
+    if k == 0:
+        ys, stats = _integrate(
+            _state_attempt(rhs, jac, theta, rtol, atol), y0, t0, t1, t_eval, control
+        )
+        return SensitivitySolve(ys, jnp.zeros(ys.shape + (0,), ys.dtype), stats)
+    # Unit parameter tangents: row j selects free parameter free_idx[j].
+    tangents = jnp.zeros((k, theta.shape[0]), theta.dtype).at[jnp.arange(k), free_idx].set(1.0)
+    atol_S = sensitivity_atol(atol, theta[free_idx], sens_atol=sens_atol, param_scale=param_scale)
+    attempt = _staggered_attempt(
+        rhs,
+        jac,
+        theta,
+        tangents,
+        rtol,
+        atol,
+        rtol if sens_rtol is None else sens_rtol,
+        atol_S,
+        sens_error_control,
+    )
+    S0 = jnp.zeros((k, n), y0.dtype)  # row j = sensitivity column j
+    (ys, Ss), stats = _integrate(attempt, (y0, S0), t0, t1, t_eval, control)
+    return SensitivitySolve(ys, jnp.swapaxes(Ss, 1, 2), stats)

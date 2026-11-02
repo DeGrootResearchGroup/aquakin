@@ -7,7 +7,9 @@ the two adjacent layers' potential fluxes, except free settling out of a dilute
 clarification layer), and up/down bulk convection about the feed layer.
 
 This test re-implements that published settler derivative independently (TSS
-basis) and checks that aquakin's per-species ``TakacsClarifier.rhs`` — which
+basis) and checks that aquakin's per-species ``TakacsClarifier.rhs`` with
+``interface_flux="takacs"`` (the reference rule; the default is the Godunov
+flux, a deliberate departure) — which
 tracks particulate COD species per layer and derives TSS from them — reproduces
 it to machine precision at representative blanket profiles. It is the settler
 analogue of the ADM1 / BSM2 steady-state validation: a check against the
@@ -88,6 +90,7 @@ def _aquakin_dtss(tss_top2bot, feed_tss):
     clar = TakacsClarifier(
         name="c", model=net, area=_AREA, height=_HEIGHT,
         overflow_Q=_Q_FEED - _Q_UNDER,   # underflow_Q = Q_in - overflow = Q_under
+        interface_flux="takacs",         # the reference settler's rule
     )
     F = clar.tss_factors["XS"]
     xs_pos = clar.particulate_species.index("XS")

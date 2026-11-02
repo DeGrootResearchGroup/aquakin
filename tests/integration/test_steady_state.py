@@ -535,10 +535,11 @@ def test_bsm2_steady_state_matches_forward():
     from aquakin.plant.bsm import bsm2_warm_start
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
-    # The default reference settler (lumped TSS + soluble holdup). Before the
-    # per-state positivity limit, healthy-step dt growth and stall restart (issue
-    # #627) PTC needed ~100 iterations here, erratically, and ran past 400 on
-    # Linux CI; it now takes ~37, so the cap below has a wide margin.
+    # The default settler (lumped TSS + soluble holdup). With the Takács
+    # interface flux, before the per-state positivity limit, healthy-step dt
+    # growth and stall restart (issue #627) PTC needed ~100 iterations here,
+    # erratically, and ran past 400 on Linux CI; it then took ~37, so the cap
+    # below has a wide margin.
     plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     y0 = bsm2_warm_start(plant)
@@ -675,7 +676,7 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
     adm1 = aquakin.load_model("adm1")
     # Pinned to the per-species settler without soluble holdup: this compares the
     # two scale floors, and needs a plant on which the flat floor converges. With
-    # the default reference settler (lumped TSS + holdup) the flat floor still
+    # the lumped-TSS + holdup settler and the Takács interface flux the flat floor
     # stalls near the root on many starts (issue #627): the layers below the feed
     # all reach the same TSS, which puts the steady state on a kink of the Takacs
     # min(flux) between equal neighbours, and an unscaled Newton step chatters

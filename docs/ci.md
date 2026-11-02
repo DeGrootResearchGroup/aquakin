@@ -136,10 +136,11 @@ nor concentrating it in a few files makes the whole suite fast.
   OOM-killing the runner regardless of shard count (a single such test runs fine
   alone — the failure is cumulative). So those tests carry the **`heavy`** marker
   and are excluded from every slow / validation / smoke / durations job (`... and
-  not heavy`). The 13 plant-gradient checks (8 BSM2 + 5 BSM1) run in **two**
+  not heavy`). The 15 whole-plant checks (9 BSM2 + 6 BSM1: the plant-gradient
+  checks and the plant forward-sensitivity checks) run in **two**
   dedicated jobs, both **one-test-per-process** (`-n 1`):
-  - **`heavy`** — the **12** that fit a stock 16 GB `ubuntu-latest` runner when
-    isolated, sharded `--splits 12 -n 1` across the **free** runner. A single test
+  - **`heavy`** — the **14** that fit a stock 16 GB `ubuntu-latest` runner when
+    isolated, sharded `--splits 14 -n 1` across the **free** runner. A single test
     fits 16 GB; one-per-process prevents the cumulative accumulation, so they cost
     nothing (public-repo standard-runner minutes are free). The **`heavy`** marker
     means "needs an isolated fresh process," which a BSM1 plant-gradient test earns
@@ -150,7 +151,7 @@ nor concentrating it in a few files makes the whole suite fast.
     multi-GB BSM1 `stable_adjoint` adjoint programs live at once, which OOM-crashed
     the free 16 GB runner even one-per-process. More sharding cannot shrink a single
     test's peak, so it runs alone on a small **larger runner** (`aquakin-heavy`,
-    8-core/32 GB) via the `xheavy` job. 12 free + 1 tiny paid is the cost-minimal
+    8-core/32 GB) via the `xheavy` job. 14 free + 1 tiny paid is the cost-minimal
     split: the paid job is one ~20-min test, only on adjoint/plant merges. *(It is
     known to fit the old 16-core/64 GB tier; 32 GB is the expected fit for its
     two-engine peak — bump the runner a tier if it OOMs at 32 GB.)*

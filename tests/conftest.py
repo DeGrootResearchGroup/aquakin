@@ -39,6 +39,50 @@ def simple_model():
     return aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
 
 
+@pytest.fixture
+def make_cstr_plant(simple_model):
+    """Build a one-tank plant: a CSTR (V = 100) on the A -> B decay model, fed
+    Q = 10 of A = 1 through the influent port ``feed``. Each call returns a new
+    plant, with its own caches.
+
+    Small enough to compile and solve in seconds, with a closed-form solution
+    (``dA/dt = 0.1 (1 - A) - k A``) and a two-state Jacobian whose only
+    off-diagonal entry is the A -> B coupling ``k``.
+    """
+    import jax.numpy as jnp
+
+    from aquakin.plant import CSTRUnit, Plant
+    from aquakin.plant.influent import InfluentSeries
+
+    def make():
+        plant = Plant("single_cstr")
+        plant.add_unit(
+            CSTRUnit(
+                name="tank",
+                model=simple_model,
+                volume=100.0,
+                input_port_names=["inlet"],
+                conditions={"T": 293.15},
+            )
+        )
+        influent = InfluentSeries(
+            t=jnp.asarray([0.0, 100.0]),
+            Q=jnp.asarray([10.0, 10.0]),
+            C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]),
+            model=simple_model,
+        )
+        plant.add_influent("feed", influent, to="tank.inlet")
+        return plant
+
+    return make
+
+
+@pytest.fixture
+def cstr_plant(make_cstr_plant):
+    """One plant from :func:`make_cstr_plant`."""
+    return make_cstr_plant()
+
+
 # --- Tiering: defer full-plant integration tests to the merge-only `slow` job --
 #
 # Compiling a stiff solve dominates the test cost; building + integrating the

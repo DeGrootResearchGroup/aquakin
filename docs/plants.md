@@ -40,6 +40,23 @@ print("effluent SNH:", round(float(eff.C_named("SNH")[-1]), 2), "g N / m³")
 thickener, an ADM1 digester with the ASM1↔ADM1 interfaces, dewatering, and the
 reject-water recycle — the same way.
 
+### The secondary clarifier and the benchmark
+
+The BSM plants' layered secondary clarifier (`TakacsClarifier`) follows the
+benchmark settlers in everything but one choice: how solids settle from one layer
+into the next. The benchmark uses the Takács rule, which takes the smaller of the
+two layers' settling fluxes. aquakin uses by default the Godunov flux of the
+settling conservation law (Bürger, Diehl & Nopens 2011). The two agree wherever no
+layer is denser than the one below it. Where neighbouring layers in the sludge
+blanket sit at nearly equal concentration, as under a dynamic BSM2 influent, the
+Takács rule switches between their fluxes each time their order flips, which makes
+the blanket pulse and forces the integrator into small steps; the Godunov flux has
+no such switch. On BSM2 the steady state is the same, the effluent's mean
+concentrations under the dynamic influent differ by under 0.1%, and a dynamic solve
+is several times cheaper. To reproduce the benchmark settler exactly, pass
+`settler_interface_flux="takacs"` to `build_bsm1` / `build_bsm2` (or
+`interface_flux="takacs"` to `TakacsClarifier`).
+
 ## Steady state, faster
 
 `run_to_steady_state()` integrates forward until the plant settles. For design

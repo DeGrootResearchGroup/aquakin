@@ -15,6 +15,16 @@ Reference design parameters (Copp 2002 / Alex 2008 Table 1.1):
 - Recycle ratios at average dry weather: Q_a / Q_in = 3; Q_r / Q_in = 1;
   Q_w = 385 m³/d.
 - Clarifier: A = 1500 m², H = 4 m, 10 layers, feed at layer 5.
+
+**One deliberate departure from the benchmark:** with ``use_takacs=True``, the
+secondary clarifier settles solids between its layers with the Godunov flux of the
+settling conservation law rather than the benchmark settler's Takács minimum-flux
+rule (see :class:`~aquakin.plant.takacs.TakacsClarifier` ``interface_flux``). The
+two agree wherever no layer is denser than the one below it; on BSM2 they give the
+same steady state and differ under the dynamic influent by under 0.1% in the
+effluent's mean concentrations, while the default makes dynamic solves several times
+cheaper. ``settler_interface_flux="takacs"`` reproduces the benchmark settler
+exactly.
 """
 
 from __future__ import annotations
@@ -57,6 +67,7 @@ def build_bsm1(
     use_takacs: bool = False,
     settler_soluble_holdup: bool = True,
     settler_composition_mode: str = "lumped_tss",
+    settler_interface_flux: str = "godunov",
 ) -> Plant:
     """Assemble the canonical BSM1 plant.
 
@@ -101,6 +112,17 @@ def build_bsm1(
         composition memory), which neither the BSM1 nor the BSM2 reference
         settler has (``settler1dv5_bsm2`` is also lumped TSS); it agrees with ``"lumped_tss"`` at steady state but diverges under dynamic
         flow. Ignored when ``use_takacs=False``.
+    settler_interface_flux : {"takacs", "godunov"}
+        When ``use_takacs=True``, the settling flux between adjacent settler
+        layers (:class:`~aquakin.plant.takacs.TakacsClarifier`
+        ``interface_flux``):
+        ``"godunov"`` (default), the Godunov flux of the settling conservation
+        law, or ``"takacs"``, the minimum-flux rule of the benchmark settler
+        ``settler1dv4``, which differs from it only where the upper of two
+        layers is the denser one. The default is a deliberate departure from
+        the benchmark (see the module docstring); pass ``"takacs"`` to
+        reproduce the benchmark settler exactly. Ignored when
+        ``use_takacs=False``.
 
     Returns
     -------
@@ -196,6 +218,7 @@ def build_bsm1(
             # dynamic flow (same steady state). The BSM2 settler1dv5_bsm2 is also
             # lumped TSS.
             composition_mode=settler_composition_mode,
+            interface_flux=settler_interface_flux,
         ),
     )
 

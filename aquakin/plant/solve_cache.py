@@ -38,11 +38,12 @@ class SolveCache:
     :meth:`invalidate`. See the module docstring."""
 
     def __init__(self):
-        # Jitted forward solves, keyed by call signature + solver settings. The
-        # plant RHS closes over the (static) unit graph, so once compiled the same
-        # solve is reused across repeated solves -- without it every solve rebuilds
-        # the RHS closure and Diffrax recompiles the whole stiff plant (~tens of
-        # seconds) each call.
+        # Jitted forward solves (and the ``solve_sensitivity`` [y; S] solves,
+        # under a "solve_sensitivity" key), keyed by call signature + solver
+        # settings. The plant RHS closes over the (static) unit graph, so once
+        # compiled the same solve is reused across repeated solves -- without it
+        # every solve rebuilds the RHS closure and Diffrax recompiles the whole
+        # stiff plant (~tens of seconds) each call.
         self.jit: dict = {}
         # Compiled PTC steady-state forward solves, keyed by settings. The eager
         # ``jax.lax.while_loop`` in ``ptc_forward`` re-traces and recompiles on
