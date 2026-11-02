@@ -17,7 +17,9 @@
 > (timings, step counts, errors against a tight solve), `scripts/probe_newton_drift.py`
 > (the drift probe), `scripts/probe_step_rejections.py` (step attempts and stage
 > iterations), all on the window of `scripts/_bsm2_window.py`, with lean-loop
-> settings specs from `scripts/_lean_settings.py`.
+> settings specs from `scripts/_lean_settings.py`; and
+> `scripts/probe_settler_accuracy.py` (lean loop vs diffrax on the 8-day BSM2 case
+> of `test_forward_fast_matches_diffrax_bsm2`).
 
 ## Staggered vs simultaneous corrector on a BSM2 window (2026-10-31, #654)
 
@@ -305,8 +307,9 @@ components / columns, median in brackets (`err_S` median over the 16 columns).
   them without a tighter test on the sensitivity block.
 - **The earlier "vs simultaneous" accuracy figures are disagreements**, not errors:
   both solves sit at `rtol=1e-4`, and the true global error of the lean loop at
-  `k=0` is ~1.4–2.2e-3 of a component's peak (~20× `rtol`, accumulated over ~1000
-  steps). No variant moves it outside that band.
+  `k=0` is ~1.4–2.2e-3 of a component's peak at its worst component (~20× `rtol`;
+  a settler blanket layer — "Why the lean loop trails diffrax on the settler
+  blanket"). No variant moves it outside that band.
 - **Deterministic cost at `k=0`** (`probe_step_rejections.py --days 1 --k 0
   --settings …`, which totals the stage iterations; right-hand-side evaluations ≈
   attempts + stage iterations, plus one Jacobian and one LU per attempt):
@@ -351,7 +354,7 @@ Right-hand-side evaluations from `probe_step_rejections.py --days 1 --k 0
   0.1 (the differences are non-monotone in κ — step-sequence noise); 0.03 costs
   +0.5% evaluations over 0.1, 0.01 +5%. 0.03 was chosen on this table, then
   **0.01 shipped** after the 8-day check below showed the stage iteration's error
-  accumulating on one settler layer.
+  on the settler's blanket layers.
 - **`sens_error_control=False`** (same configuration, `k=16`, one interleaved
   process of the three κ, 3 cached calls each):
 
@@ -368,6 +371,47 @@ Right-hand-side evaluations from `probe_step_rejections.py --days 1 --k 0
 - **The `err_S` medians above the old default's** appear with `hold` alone too
   (previous table), which does not touch the stage test: a step-sequence effect, at
   ~1–3× `rtol`.
+
+## Why the lean loop trails diffrax on the settler blanket (2026-11-02)
+
+`scripts/probe_settler_accuracy.py` (the case of `test_forward_fast_matches_diffrax_bsm2`:
+BSM2 with temperature correction and the influent bypass, dry influent, 8 d from
+`bsm2_warm_start`, saves every 0.01 d, `atol = 1e-3·rtol/1e-4`; the shipped lean
+loop — `_KAPPA = 0.01`, first correction accepted, hold rule, Anderson 2; diffrax
+Kvaerno3 with the colored root finder). Errors against the lean loop at
+`rtol = 1e-8` (98306 attempts), relative to each component's peak, the largest over
+the 801 saves:
+
+| run | attempts | accepted | rejected: root find / error test | median accepted `h` (d) | worst (median) | settler layers 2 / 3 / 4 |
+|---|---|---|---|---|---|---|
+| lean, `rtol = 1e-4` | 8901 | 6955 | 0 / 1946 | 8.6e-4 | 5.6e-2 (7.5e-5) | 1.7e-2 / 5.6e-2 / 3.0e-2 |
+| lean, stages to `_KAPPA = 1e-7` | 8968 | 6949 | 0 / 2019 | 8.8e-4 | 1.0e-2 (4.7e-5) | 1.7e-3 / 7.3e-3 / 1.0e-2 |
+| lean, `rtol = 1e-5` | 14496 | 11496 | 0 / 3000 | 5.7e-4 | 5.9e-3 (7.7e-6) | 9.7e-4 / 5.4e-3 / 3.2e-3 |
+| diffrax, `rtol = 1e-4` | 17249 | 10392 | 6852 / 5 | 4.6e-4 | 4.3e-3 (3.2e-5) | 9.2e-4 / 4.3e-3 / 2.6e-3 |
+
+- **The blanket layers carry fast pulses.** Below the feed the Takács flux is the
+  smaller of two adjacent layers' fluxes; layers 2–5 sit at nearly equal flux
+  (median gap 0.5–1.7%), so along the reference the minimum switches branch 434,
+  407 and 454 times in 800 save intervals at interfaces 2|3, 3|4, 4|5, and the
+  layers swing ±10–15% within 0.01 d (layer 3: 365, 422, 395, 386, 379, 417 g/m³ at
+  t = 3.85–3.90). The right-hand side is continuous but kinked almost every step.
+- **The lean loop's error is the timing of those pulses**, not an accumulation:
+  above 1% of the peak at 15 of 801 saves (worst 5.6% at t = 3.87, a pulse arriving
+  early), small between. Saves every 0.5 d sample it at ~0.5%.
+- **Its stage iteration drives it**: stages solved to `_KAPPA = 1e-7` cut the
+  worst to 1.0e-2 and leave no save above 1%. The error-test scale is not it: with
+  diffrax's `rtol·max(|y_n|, |y_{n+1}|)` the 0.5-d-save error was 7.2e-3 against
+  4.8e-3 (a study run of the same case, not kept).
+- **Diffrax over-resolves as a side effect of root-find failures**: 6852 of its 6857
+  rejections are failed root finds (its error estimate is infinite), only 5 are
+  error-test rejections; its accepted steps are half the lean loop's (p10 6e-5 d
+  against 4e-4 d), and its step distribution is the same at `rtol = 1e-5` (17544
+  attempts). The lean loop's growth limiter and Anderson acceleration leave it no
+  root-find failures, so it takes the error test's steps; at `rtol = 1e-5` it reaches
+  diffrax-at-1e-4 on these layers with fewer attempts and a 4× smaller median.
+- The outputs barely see the pulses (the effluent / wastage table under "`_KAPPA`
+  over 8 days"). Smoothing the minimum would remove them, but would change the
+  Takács model the BSM2 validations use.
 
 ## A stall near a steady state (2026-11-01)
 
@@ -422,9 +466,10 @@ lean-loop solve at `rtol=1e-8`, `atol=1e-7` ("test metric" is the test's
 | … `_KAPPA = 0.01` + first correction accepted | 7.6e-3 | 4.9e-3 (settler 2) | 4.8e-5 |
 | … `_KAPPA = 0.003` + first correction accepted | 5.5e-3 | 3.8e-3 (settler 3) | 3.5e-5 |
 
-- **The stage iteration's error accumulates on a slowly varying settler layer**:
-  the worst component's error falls with `_KAPPA`, while the median does not move.
-  A 1-day window is too short to show it. **0.01 shipped**: it restores the old
+- **The worst component's error falls with `_KAPPA`, while the median does not
+  move.** (What the error is — the timing of fast pulses in the blanket layers, not
+  an accumulation — is in "Why the lean loop trails diffrax on the settler
+  blanket" below.) **0.01 shipped**: it restores the old
   lean loop's accuracy there, at ~5% more right-hand-side evaluations than 0.03,
   and is Hairer & Wanner's SDIRK value at `rtol = 1e-4`.
 - **The lean loop is ~5× less accurate than diffrax on that layer at the same

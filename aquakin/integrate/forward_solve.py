@@ -87,8 +87,10 @@ norm: on the stage-value increment ``h*G*dk``, so the test is the same in any
 time unit (see :func:`_stage_weight`). A first correction small enough is
 accepted without a rate estimate, as CVODES and Hairer & Wanner's codes do (see
 :func:`_stage_solve`). ``_KAPPA = 0.01`` is the value Hairer & Wanner's SDIRK
-code takes at ``rtol = 1e-4``. The stage iteration's error accumulates over a
-long run on a slowly varying component: on an 8-day dynamic BSM2 run, the error
+code takes at ``rtol = 1e-4``. Where the right-hand side switches branch
+often -- the Takacs settler's minimum-flux rule in a sludge blanket whose layers
+carry nearly equal fluxes -- the stage iteration's error shifts the timing of the
+fast transients the switching produces: on an 8-day dynamic BSM2 run the error
 of the worst settler layer fell from ~3% of its peak at 0.1 to ~0.5% at 0.01,
 for ~5% more right-hand-side evaluations than at 0.03. The RHS evaluation
 (recycle + kinetics), at ~12 per step, is the dominant cost; the per-step

@@ -321,10 +321,11 @@ built by the one `_build_sensitivity_solve`:
   `γh·Δk`** (`_stage_weight`: the same in any time unit) at **`_KAPPA = 0.01`**;
   until 2026-11-01 it read the slope increment `Δk` against the state tolerance —
   `1/(γh)` (~2000× at BSM2 steps) stricter and unit-dependent — at `_KAPPA = 0.1`
-  tuned in those units. The stage error accumulates on a slowly varying settler
-  layer over long runs, so κ is set by an 8-day BSM2 check (worst-layer error
-  3.3e-2 of its peak at 0.1, 4.9e-3 at 0.01, the old loop's 5.4e-3), not by a 1-day
-  window, which cannot resolve it. **A stage accepts its first correction on its
+  tuned in those units. κ is set by an 8-day BSM2 check (worst-layer error 3.3e-2
+  of its peak at 0.1, 4.9e-3 at 0.01, the old loop's 5.4e-3 at 0.5-d saves), not by
+  a 1-day window: the stage error shows on the Takács blanket layers, whose
+  min-flux rule switches branch every few steps and makes fast pulses whose
+  timing the stage error shifts. **A stage accepts its first correction on its
   size** (`η = 1`, reporting rate 0): without it a solve started at a steady state
   stalled — the corrections after an already-converged guess are round-off, and
   their ratio read as divergence and fed the growth limiter (BSM1, constant
@@ -335,9 +336,15 @@ built by the one `_build_sensitivity_solve`:
   10695 right-hand-side evaluations (−19%), `k=16` 1967 vs 2135 attempts (−8%).
   `sens_error_control=False` at `k=16` (shipped configuration): 1156 attempts,
   9.3 s against 16.7 s, `S` error 4.1e-4 of a column peak (controlled 2.5e-4);
-  not bounded — across earlier settings it ranged 2.8e-4 to 2.4e-3. The lean loop is ~5× less accurate than diffrax on the worst
-  settler layer at equal tolerances, before these changes too (not investigated;
-  the note, "`_KAPPA` over 8 days"). Error-test
+  not bounded — across earlier settings it ranged 2.8e-4 to 2.4e-3. **On those
+  blanket layers the lean loop trails diffrax at equal `rtol`** (pulse-timing
+  errors up to 5.6% of a layer's peak at 1e-4, diffrax 0.4%) **because diffrax takes
+  twice the steps**: 6852 of its 6857 rejections are failed root finds on the same
+  switching, which set its step size whatever its `rtol`; the lean loop (no
+  root-find failures) takes the error test's steps, and at `rtol = 1e-5` matches
+  diffrax-at-1e-4 there with fewer attempts. The outputs do not see the pulses (the
+  note, "Why the lean loop trails diffrax on the settler blanket";
+  `scripts/probe_settler_accuracy.py`). Error-test
   rejections are not influent breakpoints; at `k=16` most are driven by the
   sensitivity error estimate jumping (the note, "Where the error-test rejections
   come from"). The scripts (lean-loop settings specs in `_lean_settings.py`):
