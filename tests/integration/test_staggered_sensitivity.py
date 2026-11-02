@@ -17,15 +17,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import aquakin
 from aquakin.integrate.forward_sensitivity import augmented_forward_sensitivity
 from aquakin.integrate.forward_solve import (
     StepControl,
     forward_solve,
     staggered_sensitivity_solve,
 )
-from aquakin.plant import CSTRUnit, Plant
-from aquakin.plant.influent import InfluentSeries
 
 
 def _dense_jac(rhs):
@@ -490,30 +487,6 @@ _OPERATING = [
     {"kind": "influent_flow", "port": "feed"},
 ]
 _Y0 = jnp.array([0.2, 0.0])
-
-
-@pytest.fixture
-def cstr_plant():
-    """A CSTR (V = 100) on the A -> B decay model fed Q = 10 of A = 1."""
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    plant = Plant("single_cstr")
-    plant.add_unit(
-        CSTRUnit(
-            name="tank",
-            model=net,
-            volume=100.0,
-            input_port_names=["inlet"],
-            conditions={"T": 293.15},
-        )
-    )
-    influent = InfluentSeries(
-        t=jnp.asarray([0.0, 100.0]),
-        Q=jnp.asarray([10.0, 10.0]),
-        C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]),
-        model=net,
-    )
-    plant.add_influent("feed", influent, to="tank.inlet")
-    return plant
 
 
 def _cstr_A(theta, t):
