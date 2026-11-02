@@ -64,7 +64,12 @@ from aquakin.integrate.experiment_design import (
     optimize_experiment,
     rank_experiments,
 )
-from aquakin.integrate.fisher import Experiment, FisherInformation, fisher_information
+from aquakin.integrate.fisher import (
+    Experiment,
+    FisherInformation,
+    fisher_information,
+    fisher_information_from_fn,
+)
 from aquakin.integrate.identifiability import (
     EigenDirection,
     IdentifiabilityResult,
@@ -312,6 +317,7 @@ __all__ = [
     "evaluate_bsm1",
     "evaluate_bsm2",
     "fisher_information",
+    "fisher_information_from_fn",
     "fit",
     "forward_adjoint",
     "forward_sensitivity",

@@ -22,7 +22,7 @@ when there are many more observations than parameters.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass, field
 
 import jax
@@ -346,6 +346,170 @@ def fisher_information(
         values=setup.values(setup.p0, setup.C0),
         jacobian=J,
     )
+
+
+NOISE_MODELS = ("gaussian", "lognormal")
+
+
+def fisher_information_from_fn(
+    fn: Callable,
+    theta,
+    *,
+    names: list[str] | None = None,
+    sigma=1.0,
+    noise: str = "gaussian",
+    transforms: list[str] | dict[str, str] | None = None,
+    groups=None,
+    mode: str = "auto",
+) -> FisherInformation | tuple[FisherInformation, dict[Hashable, FisherInformation]]:
+    """Fisher information of an arbitrary JAX observation function.
+
+    The design-side counterpart of :func:`fisher_information` for a forward
+    model that is not an aquakin reactor: any function ``fn(theta) -> y``
+    written in ``jax.numpy``. With independent Gaussian noise on the
+    observations,
+
+        F = J^T Sigma^{-1} J,
+
+    where ``J`` is the Jacobian of the observations with respect to the
+    estimated quantities, computed by AD.
+
+    Parameters
+    ----------
+    fn : callable
+        ``fn(theta) -> y``: maps a ``(p,)`` vector of physical parameter values
+        to the predicted observations, an array of any shape. It must be
+        differentiable with JAX.
+    theta : array-like
+        ``(p,)`` physical parameter values the information is evaluated at.
+    names : list of str, optional
+        Name of each parameter. Defaults to ``"theta[0]"``, ``"theta[1]"``, ...
+    sigma : float or array-like
+        Noise standard deviation, broadcasting to the shape of ``y``. With
+        ``noise="lognormal"`` it is in natural-log units. ``inf`` at an entry
+        gives it no information.
+    noise : {"gaussian", "lognormal"}
+        ``"gaussian"`` observes ``y`` with additive noise; ``"lognormal"``
+        observes ``log y`` with additive noise, so ``sigma`` is (about) the
+        relative error. Every ``y`` must then be positive.
+    transforms : list of str or dict, optional
+        Transform of each parameter (``"positive_log"``, ``"logit"``,
+        ``"none"``), as a list in ``theta`` order or a dict by name; missing
+        names get ``"none"``. The information is with respect to the
+        unconstrained coordinates, as for :func:`fisher_information`.
+    groups : array-like, optional
+        A label per observation, of the shape of ``y`` or of a leading part of
+        it (one label per row block). Each group is one candidate measurement,
+        and its information ``F_c`` is returned alongside the total; the groups'
+        information sums to the total.
+    mode : {"auto", "forward", "reverse"}
+        AD mode for the Jacobian. ``"auto"`` uses forward mode when there are at
+        least as many observations as parameters, reverse mode otherwise.
+
+    Returns
+    -------
+    FisherInformation
+        The total information, with ``jacobian`` the noise-scaled ``J``
+        (``(n_obs, p)``, rows in the flattened order of ``y``) and ``values``
+        the physical ``theta``.
+    dict
+        Only with ``groups``: each label's own ``FisherInformation`` (its rows
+        of the Jacobian), in order of first appearance.
+
+    Raises
+    ------
+    ValueError
+        If a shape does not match, ``sigma`` is not positive, a name or
+        transform is unknown, a ``"lognormal"`` prediction is not positive, or
+        the Jacobian is non-finite.
+
+    Examples
+    --------
+    >>> def fn(theta):
+    ...     k, a0 = theta
+    ...     return a0 * jnp.exp(-k * t_obs)
+    >>> fim = aquakin.fisher_information_from_fn(
+    ...     fn, jnp.array([0.25, 1.5]), names=["k", "A0"], sigma=0.01,
+    ...     transforms=["positive_log", "positive_log"])
+    >>> aquakin.identifiability(fim)
+    """
+    if noise not in NOISE_MODELS:
+        raise ValueError(f"Unknown noise {noise!r}; choose one of {NOISE_MODELS}.")
+    if mode not in ("auto", "forward", "reverse"):
+        raise ValueError(f"Unknown mode {mode!r}; choose 'auto', 'forward' or 'reverse'.")
+    theta = jnp.asarray(theta, dtype=float)
+    if theta.ndim != 1 or theta.shape[0] == 0:
+        raise ValueError(f"theta must be a non-empty 1-D vector; got shape {theta.shape}.")
+    p = theta.shape[0]
+    names = [f"theta[{i}]" for i in range(p)] if names is None else list(names)
+    if len(names) != p or len(set(names)) != p:
+        raise ValueError(f"names must be {p} distinct strings, one per parameter.")
+    if transforms is None:
+        tr = ["none"] * p
+    elif isinstance(transforms, dict):
+        for n in transforms:
+            if n not in names:
+                raise KeyError(f"Unknown transform name '{n}'. Available: {names}")
+        tr = [transforms.get(n) or "none" for n in names]
+    else:
+        tr = list(transforms)
+        if len(tr) != p:
+            raise ValueError(f"transforms has {len(tr)} entries; theta has {p}.")
+    u0 = jnp.stack([to_unconstrained(theta[i], tr[i]) for i in range(p)])
+    if not np.all(np.isfinite(np.asarray(u0))):
+        raise ValueError("theta lies outside the domain of its transforms.")
+
+    def observed(u):
+        phys = jnp.stack([from_unconstrained(u[i], tr[i]) for i in range(p)])
+        y = jnp.asarray(fn(phys), dtype=float)
+        return (jnp.log(y) if noise == "lognormal" else y).ravel()
+
+    y_shape = jax.eval_shape(fn, theta).shape
+    n_obs = int(np.prod(y_shape, dtype=int))
+    if n_obs == 0:
+        raise ValueError("fn returned no observations.")
+    try:
+        sig = np.broadcast_to(np.asarray(sigma, dtype=float), y_shape).ravel()
+    except ValueError as err:
+        raise ValueError(
+            f"sigma of shape {np.shape(sigma)} does not broadcast to the observations' {y_shape}."
+        ) from err
+    if np.any(~(sig > 0.0)):
+        raise ValueError("sigma must be positive (inf for an unmeasured entry).")
+    if noise == "lognormal":
+        y0 = np.asarray(fn(theta))
+        if not np.all(y0 > 0.0):
+            raise ValueError("noise='lognormal' needs every prediction of fn to be positive.")
+
+    forward = mode == "forward" or (mode == "auto" and n_obs >= p)
+    J = (jax.jacfwd if forward else jax.jacrev)(observed)(u0)
+    J = np.asarray(J) / sig[:, None]
+    check_finite_gradient(
+        J,
+        what="observation-function Jacobian",
+        remedy="check that fn is finite and differentiable at theta",
+    )
+    values = {n: float(v) for n, v in zip(names, np.asarray(theta))}
+
+    def info(rows):
+        F = rows.T @ rows
+        return FisherInformation(
+            matrix=0.5 * (F + F.T), names=names, transforms=tr, values=values, jacobian=rows
+        )
+
+    total = info(J)
+    if groups is None:
+        return total
+    labels = np.asarray(groups)
+    if labels.shape != tuple(y_shape[: labels.ndim]):
+        raise ValueError(
+            f"groups of shape {labels.shape} must match the observations' {y_shape} "
+            "or a leading part of it."
+        )
+    labels = labels.reshape(labels.shape + (1,) * (len(y_shape) - labels.ndim))
+    labels = np.broadcast_to(labels, y_shape).ravel()
+    order = dict.fromkeys(labels.tolist())
+    return total, {g: info(J[labels == g]) for g in order}
 
 
 class _FisherSetup:
