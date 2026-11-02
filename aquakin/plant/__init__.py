@@ -21,6 +21,7 @@ from aquakin.plant.aeration_system import (
 )
 from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
 from aquakin.plant.calibrate import PlantObservable, calibrate_plant
+from aquakin.plant.identifiability import plant_fisher_information, plant_profile_likelihood
 from aquakin.plant.control import PIController
 from aquakin.plant.cstr import Aeration, CSTRUnit, oxygen_saturation
 from aquakin.plant.disinfection import (
@@ -238,6 +239,8 @@ __all__ = [
     "operational_cost_index",
     "operational_cost_index_bsm2",
     "oxygen_saturation",
+    "plant_fisher_information",
+    "plant_profile_likelihood",
     "ptc_forward",
     "pumping_energy",
     "pumping_energy_bsm2",

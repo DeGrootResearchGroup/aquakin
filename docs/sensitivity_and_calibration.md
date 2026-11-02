@@ -476,6 +476,59 @@ too. The free parameters stay inside the `bounds:` their models declare, and
 `fixed_total=True` fits their split of the total in `y0`. With `loss="nll"`,
 `sigma="estimate"` estimates the noise level of each observed channel.
 
+### Identifiability of plant parameters
+
+`aquakin.plant.plant_fisher_information` and
+`aquakin.plant.plant_profile_likelihood` are the plant versions of
+`fisher_information` and `profile_likelihood`. They name the measured channels
+the way `Plant.calibrate` does, and work in its coordinates, so their results
+feed `aquakin.identifiability` and `aquakin.design_criterion` directly.
+
+```python
+from aquakin.plant import plant_fisher_information, plant_profile_likelihood
+
+fim = plant_fisher_information(
+    plant,
+    [("effluent", ["SNH", "SNO"]), ("digester", ["S_IN", "S_gas_ch4"])],
+    t_obs,
+    ["asm1.muA", "asm1.KNH_A", "adm1.k_m_ac"],
+    sigma=[0.2, 0.5, 0.01, 0.005],   # one per channel, in observable order
+    y0=bsm2_warm_start(plant),
+)
+rep = aquakin.identifiability(fim)
+fim.std()                            # Cramér-Rao standard deviations
+```
+
+A unit name reads that unit's outlet, so a reactor's or the digester's state
+can be measured directly, as above. `sigma` is absolute by default. With
+`relative_sigma=True` it is a fraction of the predicted signal, with
+`sigma_floor` as a lower bound. `mask=` leaves out samples that are not taken.
+A list of `t_obs` arrays describes several runs whose information adds. `y0`,
+`t_span`, `sigma`, `mask` and the plant itself can then be lists too, one per
+run, for runs at different initial states or influents.
+
+The sensitivity comes from `Plant.solve_sensitivity` by default
+(`mode="forward"`). That solve's memory does not grow with the number of
+observations, so it suits long horizons. `mode="reverse"` differentiates
+`plant.solve` with the stable adjoint, one pullback per observation, which
+suits a few observations of many parameters. At a `Plant.calibrate` result with
+`loss="nll"`, no priors and `LaplaceConfig(method="gauss_newton")`, the
+reverse-mode matrix equals the fit's `hessian_unconstrained`.
+
+`plant_profile_likelihood` re-fits the other parameters with `Plant.calibrate`
+at each grid value of the profiled one, with the same warm-started sweep and
+polish pass as `profile_likelihood`. Every grid point reuses one compiled
+objective. Other keywords go to `Plant.calibrate`:
+
+```python
+prof = plant_profile_likelihood(
+    plant, observations, t_obs, ["asm1.muA", "asm1.KNH_A"],
+    grid=np.linspace(0.4, 1.2, 9), profile_param="asm1.muA",
+    observables=[("effluent", ["SNH"])], sigma=jnp.asarray([0.2]),
+    y0=bsm2_warm_start(plant))
+prof.ci
+```
+
 ## Uncertainty propagation and design
 
 Three higher-level tools share the same `fn(inputs) -> output` contract as `dgsm`:

@@ -111,6 +111,30 @@ Key types:
   `at_bound` + `sigma="estimate"` fit and a `fixed_total` split recovery (slow),
   stubbed-runner checks of the bounds / free-IC / sigma wiring, and the
   finite-through-the-plant gradient in the fast gate).
+  **Identifiability** — `plant_fisher_information` / `plant_profile_likelihood`
+  ([`plant/identifiability.py`](aquakin/plant/identifiability.py), exported from
+  `aquakin.plant`) are the plant versions of the reactor tools. Observables are
+  resolved by `plant/calibrate.py`'s `_resolve_observable_columns` (shared with
+  `_resolve_plant_problem`), free names by `_check_free_params`. The Fisher
+  forward mode takes `S` from `Plant.solve_sensitivity` and maps it through the
+  stream reconstruction (`outputs_at`, vmapped) with one `jax.linearize`, so it
+  includes the reconstruction's direct `dg/dθ`; the reverse mode is `jacrev` of
+  `_PlantForwardModel.solve_trajectory` — the solve `Plant.calibrate`
+  differentiates, which is why it equals the Gauss-Newton Laplace Hessian at a
+  `loss="nll"` fit (pinned to 1e-8). Multi-run designs follow the calibrate
+  multi-batch convention (list-valued `t_obs` selects it); `plant` may also be a
+  list, one per run, for runs at different influents. The profile wraps
+  `calibrate_plant` per grid point through the private `_compiled_cache` /
+  `_ic_start` hooks (now on `calibrate_plant` as on `calibrate`); for that the
+  plant problem's `data_key` fingerprints the loss, sigma, observations and
+  times. Not built: the optional plant `rank_experiments` (score candidate sensor
+  sets on one shared sensitivity solve). Covered by
+  `tests/integration/test_plant_identifiability.py` (closed-form CSTR
+  information in both modes, the hand-built `solve_sensitivity` Jacobian on the
+  CSTR and on BSM1 (slow), forward = reverse, the Laplace-Hessian equality,
+  identified / flat profiles (slow), and the profile's per-point wiring into
+  `calibrate_plant` with it stubbed) plus `tests/unit/test_identifiability_helpers.py`
+  (the shared sweep / polish / noise helpers on stub fits).
   **Colored Jacobian** — the graph-coloring / Jacobian-sparsity subsystem
   (`_structural_plant_pattern` + the forward / adjoint / steady builders and their
   caches) lives in a [`ColoredJacobianManager`](aquakin/plant/colored.py)
