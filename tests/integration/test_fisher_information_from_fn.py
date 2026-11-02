@@ -192,6 +192,8 @@ def test_input_validation():
         aquakin.fisher_information_from_fn(
             _decay, jnp.array([-K, A0]), transforms=["positive_log", "none"]
         )
+    with pytest.raises(ValueError, match="no observations"):
+        aquakin.fisher_information_from_fn(lambda th: th[:0], theta)
     with pytest.raises(ValueError, match="groups"):
         aquakin.fisher_information_from_fn(_decay, theta, groups=np.zeros(3))
     with pytest.raises(RuntimeError, match="non-finite"):
