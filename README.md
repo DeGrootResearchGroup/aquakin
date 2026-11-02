@@ -61,7 +61,8 @@ Future models include UV/TiO₂ and chlorine decay.
   information of a planned experiment design (`fisher_information`) with an
   identifiability report (`identifiability`) for checking what an experiment
   can estimate before running it, and optimal experiment design
-  (`rank_experiments`, `optimize_experiment`).
+  (`rank_experiments`, `optimize_experiment`). Plants have their own versions
+  (`plant_fisher_information`, `plant_profile_likelihood` in `aquakin.plant`).
 
 ## Installation
 

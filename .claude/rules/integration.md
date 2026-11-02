@@ -147,7 +147,13 @@ well-determined pools infinite.
 `fisher.py`'s `_FisherSetup` holds the static part (validation, reactors,
 observed columns, noise, priors) and exposes `jacobian` / `information` as pure
 JAX functions of `(p, tobs_list, C0_list)`; pools are linearised at each
-`C0`. `experiment_design.py` builds on it: `optimize_experiment` passes a fixed
+`C0`. The sigma/mask resolution (`_observation_noise`), the active
+priors (`_active_priors`) and `_resolve_transforms` are free helpers that
+`plant/identifiability.py`'s `plant_fisher_information` shares, so the reactor
+and plant matrices cannot drift. Likewise `profile.py`'s sweep is factored into
+`_check_profile_args` / `_cold_starts` / `_point_optimizer` / `_guarded` /
+`_profile_sweep` / `_profile_result`, which `plant_profile_likelihood` reuses
+with `Plant.calibrate` as the inner fit; change them, not a copy. `experiment_design.py` builds on it: `optimize_experiment` passes a fixed
 `t_end` per optimised experiment so sampling times can be traced, jits
 `(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector, and runs
 SLSQP with linear spacing constraints; `param_draws` are `vmap`ped.

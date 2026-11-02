@@ -975,3 +975,18 @@ def test_plant_calibrate_free_ic_fixed_total_recovers_split(decay_plant):
     )
     assert result.ic_fractions[0]["tank.A"] == pytest.approx(0.75, rel=2e-2)
     assert sum(result.ic_named[0].values()) == pytest.approx(4.0, rel=1e-10)
+
+
+def test_plant_calibrate_ic_start_seeds_the_pool_coordinates(decay_plant, monkeypatch):
+    """``_ic_start`` (a profile sweep's warm start) moves the free pools'
+    starting coordinates to the given state, leaving their prior centre at
+    ``y0``; without it they start at ``y0``."""
+    net, plant = decay_plant
+    y0 = plant.initial_state()  # tank A = 1.0
+    warm = y0.at[0].set(0.25)
+    kw = dict(free_ic=FreeICConfig(["tank.A"], bounds=(1e-3, 10.0)), y0=y0)
+    cold = _capture_start(monkeypatch, **_fit_args(plant, **kw))
+    seeded = _capture_start(monkeypatch, **_fit_args(plant, _ic_start=[warm], **kw))
+    assert cold["theta0"][-1] == pytest.approx(np.log(1.0))
+    assert seeded["theta0"][-1] == pytest.approx(np.log(0.25))
+    assert seeded["theta0"][0] == pytest.approx(cold["theta0"][0])

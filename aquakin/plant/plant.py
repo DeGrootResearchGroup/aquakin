@@ -1388,28 +1388,36 @@ class Plant:
         concentration probe, the output sweep, the signal bus and the dstate
         loop each re-request every unit's slice), always with the *same*
         ``params_full`` object and producing the *same* slice. So the per-unit
-        slices are built once per distinct ``params_full`` and memoised: within
-        a single (traced) RHS evaluation ``params_full`` is one object, so the
-        map is built once and every later request is a dict lookup. Keyed by
+        concrete slices are built once per distinct ``params_full`` and memoised:
+        the map is built once and every later request is a dict lookup. Keyed by
         object identity (``is``), with a strong reference held, so an identity
         can never be reused for a different array while the map is live.
         """
         # The memo must never be stored on the long-lived ``self`` when
-        # ``params_full`` is a JAX tracer: diffrax reuses a tracer's object
-        # identity across its ``eqx.filter_eval_shape`` sub-trace and the real
+        # ``params_full`` or its slices are JAX tracers: diffrax reuses a tracer's
+        # object identity across its ``eqx.filter_eval_shape`` sub-trace and the real
         # trace, so a slice built in the sub-trace could be served in the outer
         # trace (a stale tracer), and the cached ``(params_full, built)`` tuple
         # outlives the trace -- ``jax.checking_leaks`` flags it as a leaked
         # tracer, the canonical UnexpectedTracerError antipattern. So only a
-        # CONCRETE ``params_full`` is memoised on ``self`` (the eager forward
-        # solve, the results-level stream reconstruction); under a trace the
+        # CONCRETE ``params_full`` and slices are memoised on ``self`` (the eager
+        # forward solve, the results-level stream reconstruction); under a trace the
         # slices are static-index slices that XLA constant-folds and CSE-dedupes
         # anyway, so recomputing them costs nothing and nothing is cached.
         if isinstance(params_full, jax.core.Tracer):
             return self._slice_unit_params(unit_name, params_full)
         cache = self.__dict__.get("_params_unit_cache")
         if cache is None or cache[0] is not params_full:
-            built = {name: self._slice_unit_params(name, params_full) for name in self._unit_order}
+            # Slicing a concrete array closed over by jit still produces tracers.
+            unit_params = self._slice_unit_params(unit_name, params_full)
+            if isinstance(unit_params, jax.core.Tracer):
+                return unit_params
+            built = {
+                name: unit_params
+                if name == unit_name
+                else self._slice_unit_params(name, params_full)
+                for name in self._unit_order
+            }
             cache = (params_full, built)
             self._params_unit_cache = cache
         return cache[1][unit_name]

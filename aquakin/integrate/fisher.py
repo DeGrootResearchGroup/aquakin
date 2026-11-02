@@ -171,6 +171,82 @@ class FisherInformation:
         return {n: s / abs(self.values[n]) for n, s in self.std().items()}
 
 
+def _observation_noise(label, sigma, mask, n_t: int, n_out: int):
+    """Per-observation noise of one experiment or plant run.
+
+    Parameters
+    ----------
+    label : str
+        Prefix for error messages (``"experiment 0"``, ``"run 1"``).
+    sigma : float or array-like
+        Standard deviation: a scalar, one value per output ``(n_out,)``, or one
+        per observation ``(n_t, n_out)``.
+    mask : array-like of bool or None
+        ``True`` where an output is measured; anything broadcasting to
+        ``(n_t, n_out)``. ``None`` measures everything.
+    n_t, n_out : int
+        Number of sampling times and of outputs.
+
+    Returns
+    -------
+    sigma : jnp.ndarray
+        ``(n_t, n_out)`` noise, ``inf`` at an unmeasured entry (zero
+        information).
+    keep : jnp.ndarray or None
+        ``(n_t, n_out)`` boolean mask, or ``None`` without a mask.
+    sigma_div : jnp.ndarray
+        ``(n_t, n_out)`` divisor for the scaled residual: ``sigma``, with ``1``
+        at an unmeasured entry. The residual is masked to exactly ``0`` there,
+        so a non-finite prediction at that entry cannot leak in.
+
+    Raises
+    ------
+    ValueError
+        If ``sigma`` or ``mask`` does not broadcast, the mask leaves nothing, or
+        a measured entry has a non-positive ``sigma``.
+    """
+    try:
+        sig = jnp.broadcast_to(jnp.asarray(sigma, dtype=float), (n_t, n_out))
+    except ValueError as err:
+        raise ValueError(
+            f"{label}: sigma of shape {np.shape(sigma)} does not broadcast to the "
+            f"observations' ({n_t}, {n_out})."
+        ) from err
+    if mask is None:
+        keep = None
+        measured = np.ones((n_t, n_out), dtype=bool)
+    else:
+        try:
+            measured = np.broadcast_to(np.asarray(mask, dtype=bool), (n_t, n_out))
+        except ValueError as err:
+            raise ValueError(
+                f"{label}: mask of shape {np.shape(mask)} does not broadcast "
+                f"to the observations' ({n_t}, {n_out})."
+            ) from err
+        if not measured.any():
+            raise ValueError(f"{label}: mask leaves no observation.")
+        keep = jnp.asarray(measured)
+    if not isinstance(sig, jax.core.Tracer) and np.any(np.asarray(sig)[measured] <= 0.0):
+        raise ValueError(f"{label}: sigma must be positive at every measured entry.")
+    if keep is None:
+        return sig, None, sig
+    return jnp.where(keep, sig, jnp.inf), keep, jnp.where(keep, sig, 1.0)
+
+
+def _active_priors(model, free_params, priors, use_priors) -> dict[str, tuple[float, float]]:
+    """The Gaussian priors ``{name: (mean, std)}`` that enter the information:
+    none without ``use_priors``, else the model-declared priors of the free
+    parameters overridden by the explicit ``priors``."""
+    if not use_priors:
+        return {}
+    declared = getattr(model, "parameter_priors", {})
+    active = {n: declared[n] for n in free_params if n in declared}
+    for n, ms in (priors or {}).items():
+        if n in free_params:
+            active[n] = (float(ms[0]), float(ms[1]))
+    return active
+
+
 def _resolve_transforms(model, free_params, transforms) -> list[str]:
     """Each free parameter's transform: the explicit override, else the
     model-declared one, else ``"none"``."""
@@ -375,28 +451,11 @@ class _FisherSetup:
             self.reactors.append(with_adjoint(rctr, forward_adjoint()))
             self.obs_idx.append(jnp.asarray([model.species_index[s] for s in obs], dtype=int))
             self.obs_fn.append(ex.observation_fn)
-            sig = jnp.broadcast_to(jnp.asarray(ex.sigma, dtype=float), (tobs.shape[0], n_out))
-            mask = getattr(ex, "mask", None)
-            if mask is not None:
-                try:
-                    keep = np.broadcast_to(np.asarray(mask, dtype=bool), (tobs.shape[0], n_out))
-                except ValueError as err:
-                    raise ValueError(
-                        f"experiment {e}: mask of shape {np.shape(mask)} does not broadcast "
-                        f"to the observations' ({tobs.shape[0]}, {n_out})."
-                    ) from err
-                if not keep.any():
-                    raise ValueError(f"experiment {e}: mask leaves no observation.")
-                keep = jnp.asarray(keep)
-                # An unmeasured entry has infinite noise: zero information. The
-                # residual divides by 1 there instead and is masked to exactly
-                # 0, so a non-finite prediction at that entry cannot leak in.
-                self.keep.append(keep)
-                self.sigma_div.append(jnp.where(keep, sig, 1.0))
-                sig = jnp.where(keep, sig, jnp.inf)
-            else:
-                self.keep.append(None)
-                self.sigma_div.append(sig)
+            sig, keep, sigma_div = _observation_noise(
+                f"experiment {e}", ex.sigma, getattr(ex, "mask", None), tobs.shape[0], n_out
+            )
+            self.keep.append(keep)
+            self.sigma_div.append(sigma_div)
             self.sigma.append(sig)
             self.time_factor.append(factor)
             self.tobs.append(tobs)
@@ -405,13 +464,7 @@ class _FisherSetup:
             self.t_end.append(float(tobs[-1] * factor) if end is None else float(end))
 
         # Prior rows (only their Jacobian matters, so the means drop out).
-        active: dict[str, tuple[float, float]] = {}
-        if use_priors:
-            declared = getattr(model, "parameter_priors", {})
-            active = {n: declared[n] for n in free_params if n in declared}
-            for n, ms in (priors or {}).items():
-                if n in free_params:
-                    active[n] = (float(ms[0]), float(ms[1]))
+        active = _active_priors(model, free_params, priors, use_priors)
         self.has_rate_prior = bool(active)
         self.prior_mask = jnp.asarray([1.0 if n in active else 0.0 for n in free_params])
         self.prior_std = jnp.asarray([active.get(n, (0.0, 1.0))[1] for n in free_params])

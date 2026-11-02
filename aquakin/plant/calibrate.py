@@ -50,6 +50,7 @@ from aquakin.integrate.calibrate import (
     FreeICConfig,
     LaplaceConfig,
     OptimizerConfig,
+    _array_digest,
     _build_loss,
     _build_objective,
     _build_residual,
@@ -60,6 +61,7 @@ from aquakin.integrate.calibrate import (
     _fit_result,
     _FitConfig,
     _free_ic_fields,
+    _ic_theta_from_pools,
     _initial_point,
     _is_sigma_estimate,
     _n_obs_per_output,
@@ -70,6 +72,7 @@ from aquakin.integrate.calibrate import (
     _run_multistart,
     _sigma_per_dataset,
 )
+from aquakin.integrate.fisher import _resolve_transforms
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
@@ -272,6 +275,45 @@ def _resolve_endpoint_species(plant: Plant, target: str):
     return endpoint, plant.units[unit].model
 
 
+def _check_free_params(ns: _PlantParamNamespace, free_params) -> None:
+    """Raise a hinted ``KeyError`` for a free parameter the plant does not have."""
+    for name in free_params:
+        if name not in ns.param_index:
+            suffix = did_you_mean(name, list(ns.param_index))
+            raise KeyError(
+                f"Unknown plant parameter '{name}'. Keys are '<model>.<param>' "
+                f"(plant.parameter_names()).{suffix}"
+            )
+
+
+def _resolve_observable_columns(plant: Plant, observables) -> tuple[tuple, int]:
+    """Resolve each :class:`PlantObservable` to ``(endpoint, channel_indices)``.
+
+    Returns the resolved tuple and the total number of observed columns. The
+    columns run in observable order, channels within a stream first; the
+    consumers (the calibration forward model, the plant Fisher information)
+    reconstruct and concatenate the streams in the same order."""
+    resolved: list[tuple] = []
+    n_observed = 0
+    for observable in observables:
+        endpoint, stream_model = _resolve_endpoint_species(plant, observable.stream)
+        if observable.channels is None:
+            ch_idx = jnp.arange(stream_model.n_species)
+            n_observed += int(stream_model.n_species)
+        else:
+            for s in observable.channels:
+                if s not in stream_model.species_index:
+                    suffix = did_you_mean(s, list(stream_model.species))
+                    raise KeyError(
+                        f"Unknown observed channel '{s}' in stream "
+                        f"'{observable.stream}' (model '{stream_model.name}').{suffix}"
+                    )
+            ch_idx = jnp.asarray([stream_model.species_index[s] for s in observable.channels])
+            n_observed += len(observable.channels)
+        resolved.append((endpoint, ch_idx))
+    return tuple(resolved), n_observed
+
+
 def _resolve_plant_problem(
     plant: Plant,
     observations,
@@ -301,49 +343,15 @@ def _resolve_plant_problem(
     model, and ``use_c0_as_y0`` (whether the forward model reads the per-dataset
     ``C0`` as the plant ``y0``)."""
     ns = _PlantParamNamespace(plant)
-    for name in free_params:
-        if name not in ns.param_index:
-            suffix = did_you_mean(name, list(ns.param_index))
-            raise KeyError(
-                f"Unknown plant parameter '{name}'. Keys are '<model>.<param>' "
-                f"(plant.parameter_names()).{suffix}"
-            )
-
-    # Resolve each observable -> (endpoint, channel indices). The observation
-    # columns run in observable order, channels within a stream first; the forward
-    # model reconstructs and concatenates them in the same order.
-    resolved_observables: list[tuple] = []
-    n_observed = 0
-    for observable in observables:
-        endpoint, stream_model = _resolve_endpoint_species(plant, observable.stream)
-        if observable.channels is None:
-            ch_idx = jnp.arange(stream_model.n_species)
-            n_observed += int(stream_model.n_species)
-        else:
-            for s in observable.channels:
-                if s not in stream_model.species_index:
-                    suffix = did_you_mean(s, list(stream_model.species))
-                    raise KeyError(
-                        f"Unknown observed channel '{s}' in stream "
-                        f"'{observable.stream}' (model '{stream_model.name}').{suffix}"
-                    )
-            ch_idx = jnp.asarray([stream_model.species_index[s] for s in observable.channels])
-            n_observed += len(observable.channels)
-        resolved_observables.append((endpoint, ch_idx))
-    resolved_observables = tuple(resolved_observables)
+    _check_free_params(ns, free_params)
+    resolved_observables, n_observed = _resolve_observable_columns(plant, observables)
     # The forward model returns exactly the observed columns, so the generic
     # per-dataset slice is the identity.
     obs_species_indices = jnp.arange(n_observed)
 
     # Resolve transforms per free param (explicit override wins over the
     # parameter's model-declared transform, else "none").
-    transforms = dict(transforms or {})
-    resolved_transforms: list[str] = []
-    for name in free_params:
-        t = transforms.get(name)
-        if t is None:
-            t = ns.parameter_transforms.get(name, "none")
-        resolved_transforms.append(t)
+    resolved_transforms = _resolve_transforms(ns, free_params, transforms)
 
     p0_full = jnp.asarray(params) if params is not None else plant.default_parameters()
     free_indices = jnp.asarray([ns.param_index[n] for n in free_params])
@@ -460,6 +468,7 @@ def _resolve_plant_problem(
     )
 
     datasets = []
+    digest_parts: list = []  # what the loss / residual closures bake in
     n_seen_per_output = np.zeros(n_observed, dtype=int)  # observed (non-NaN) entries
     for ds in range(n_datasets):
         tobs_i = jnp.asarray(tobs_list[ds])
@@ -489,6 +498,7 @@ def _resolve_plant_problem(
             span_i = (float(tobs_i[0]), float(tobs_i[-1]))
         tspan_i = (float(span_i[0]), float(span_i[1]))
         sig_i = _coerce_sigma(sigma_list[ds])
+        digest_parts += [obs_i, sig_i, tobs_i]
         if multi:
             C0_i = y0_list[ds]
         elif m_ic:
@@ -557,6 +567,9 @@ def _resolve_plant_problem(
         sigma_estimate=sigma_estimate,
         n_obs_per_output=n_obs_per_output,
         ic_fixed_total=ic_fixed_total,
+        # A ``_compiled_cache`` shared across fits (a profile sweep) must not
+        # reuse an objective built for other data.
+        data_key=(loss, sigma_estimate, _array_digest(*digest_parts)),
         rate_bounds=_resolve_rate_bounds(
             ns, free_params, resolved_transforms, bounds, use_model_bounds
         ),
@@ -591,6 +604,8 @@ def calibrate_plant(
     check_finite: bool = True,
     integrator=None,
     diff: DifferentiationConfig = DifferentiationConfig(),
+    _compiled_cache: dict | None = None,
+    _ic_start: list | None = None,
 ) -> CalibrationResult:
     """MAP-calibrate a plant's parameters against an output stream.
 
@@ -766,7 +781,7 @@ def calibrate_plant(
         laplace_ridge=lap.ridge,
         laplace_fd_step=lap.fd_step,
         laplace_dtmax=lap.dtmax,
-        compiled_cache=None,
+        compiled_cache=_compiled_cache,
         laplace_include_ic=lap.include_ic,
     )
     fm = _PlantForwardModel(
@@ -783,7 +798,12 @@ def calibrate_plant(
 
     bundle = _build_objective(problem, fm, cfg)
 
-    theta0, opt_bounds, starts = _initial_point(problem, optimizer.starts, problem.ic_center_full)
+    # The pools start at their values in ``y0`` unless a separate start is given
+    # (a profile sweep warm-starts them from a neighbouring fit).
+    ic_theta0 = problem.ic_center_full
+    if _ic_start is not None and problem.m_ic:
+        ic_theta0 = _ic_theta_from_pools(problem, _ic_start)
+    theta0, opt_bounds, starts = _initial_point(problem, optimizer.starts, ic_theta0)
 
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)
