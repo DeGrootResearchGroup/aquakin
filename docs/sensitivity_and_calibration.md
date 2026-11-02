@@ -334,6 +334,41 @@ cannot be determined from the design at all. Each experiment may carry its own
 optimum, with `loss="nll"`, the matrix equals the Gauss-Newton Laplace Hessian
 (`joint_hessian` with `include_ic=True`).
 
+### Fisher information of any forward model
+
+`aquakin.fisher_information_from_fn` gives the Fisher information of a forward
+model that is not an aquakin reactor: any function `fn(theta) -> y` written in
+`jax.numpy`, such as a transport operator or a reactor wrapped in your own
+code. The Jacobian of the observations comes from AD, in forward mode when
+there are more observations than parameters and reverse mode otherwise, and
+the result is a `FisherInformation`, so `identifiability`, `design_criterion`
+and `std()` work on it unchanged:
+
+```python
+def fn(theta):
+    k, a0 = theta
+    return a0 * jnp.exp(-k * t_obs)
+
+fim = aquakin.fisher_information_from_fn(
+    fn, jnp.array([0.25, 1.5]),
+    names=["k", "A0"],
+    sigma=0.05, noise="lognormal",           # observe log y; sigma ~ relative error
+    transforms=["positive_log", "positive_log"],
+)
+```
+
+`sigma` broadcasts to the shape of `y`, and `inf` marks an entry as unmeasured.
+With `groups=`, a label per observation (or per row block), the information of
+each group is returned too. Each group is one candidate measurement, for
+example one sampling site, and the groups' information sums to the total:
+
+```python
+total, per_site = aquakin.fisher_information_from_fn(
+    fn_sites, theta, names=names, sigma=0.1, groups=["inlet", "zone A", "zone B"],
+)
+per_site["zone A"].matrix     # what sampling zone A alone contributes
+```
+
 ### Identifiability report
 
 `aquakin.identifiability` analyses a Fisher information matrix and reports

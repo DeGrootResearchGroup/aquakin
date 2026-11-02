@@ -86,6 +86,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | MAP fit + Laplace posterior | `calibrate` → `CalibrationResult` (→ `predictive_band` → `PredictiveBand`; `posterior_draws` for parameter samples) |
 | Profile-likelihood identifiability | `profile_likelihood` → `ProfileResult` |
 | Fisher information of a design (before running it) | `fisher_information` with `Experiment` → `FisherInformation` |
+| Fisher information of any JAX observation function, optionally split by candidate measurement | `fisher_information_from_fn` → `FisherInformation` |
 | Fisher information and profile likelihood of plant parameters | `aquakin.plant.plant_fisher_information` → `FisherInformation`, `aquakin.plant.plant_profile_likelihood` → `ProfileResult` |
 | Choose plant sensors by the information they add | `aquakin.plant.plant_rank_sensor_sets` with `SensorSet` → `CandidateScore` |
 | Identifiability report from a Fisher matrix | `identifiability` → `IdentifiabilityResult` (`EigenDirection`) |
