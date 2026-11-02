@@ -47,6 +47,7 @@ from aquakin.integrate.particle import (
 )
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
+from aquakin.integrate.candidate_design import CandidateDesign, design_from_candidates
 from aquakin.integrate.experiment_design import (
     CandidateScore,
     ExperimentDesignResult,
@@ -80,6 +81,7 @@ __all__ = [
     "BiofilmSolution",
     "CFDReactor",
     "CalibrationResult",
+    "CandidateDesign",
     "CandidateScore",
     "Constraint",
     "DGSMResult",
@@ -113,6 +115,7 @@ __all__ = [
     "check_finite_gradient",
     "compare_scenarios",
     "design_criterion",
+    "design_from_candidates",
     "dgsm",
     "esdirk_adjoint_solve",
     "fisher_information",

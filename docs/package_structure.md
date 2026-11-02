@@ -91,13 +91,17 @@ aquakin/
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands
+│   │   ├── candidate_design.py      # design_from_candidates(): budgeted choice from a
+│   │   │                            #   pool of per-candidate Fisher matrices (relaxed,
+│   │   │                            #   greedy, exchange, exhaustive)
 │   │   ├── events.py                # Event + solve_with_events: located events
 │   │   │                            #   (time / state root-crossing) + AD-safe state
 │   │   │                            #   resets / mode switches, via a segmented solve
 │   │   ├── experiment_design.py     # design_criterion(), rank_experiments(),
 │   │   │                            #   optimize_experiment(): D/A/E/modified-E design
 │   │   ├── fisher.py                # fisher_information(), Experiment: Fisher
-│   │   │                            #   information of a design at assumed parameters
+│   │   │                            #   information of a design at assumed parameters;
+│   │   │                            #   fisher_information_from_fn() for any JAX function
 │   │   ├── identifiability.py       # identifiability(): eigen-directions, correlation,
 │   │   │                            #   collinearity index, Cramer-Rao std from a Fisher matrix
 │   │   └── profile.py               # profile_likelihood(): parameter / initial-condition

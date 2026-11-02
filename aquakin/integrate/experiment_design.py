@@ -56,12 +56,14 @@ def _subset_indices(names, subset):
     )
 
 
-def _criterion(F, criterion, sub=None, nui=None):
+def _criterion(F, criterion, sub=None, nui=None, rtol=_NULL_RTOL):
     """Natural criterion value of ``F`` (on the ``sub`` block, with ``nui`` as
     nuisance). A singular matrix gives the worst value (``-inf`` / ``+inf``, and
     0 for E). Singular uses the same rule as :func:`aquakin.identifiability`:
-    the smallest eigenvalue is at most ``_NULL_RTOL`` of the largest, so a
-    round-off eigenvalue of either sign counts as zero."""
+    the smallest eigenvalue is at most ``rtol`` (default ``_NULL_RTOL``) of the
+    largest, so a round-off eigenvalue of either sign counts as zero. A
+    ridge-regularized matrix, whose eigenvalues are bounded away from zero by
+    construction, is scored with ``rtol=0``."""
     F = 0.5 * (F + F.T)
     if sub is not None:
         Fss = F[jnp.ix_(sub, sub)]
@@ -70,7 +72,7 @@ def _criterion(F, criterion, sub=None, nui=None):
             Fss = Fss - Fsn @ jnp.linalg.solve(F[jnp.ix_(nui, nui)], Fsn.T)
         F = 0.5 * (Fss + Fss.T)
     w = jnp.linalg.eigvalsh(F)
-    ok = w[0] > _NULL_RTOL * w[-1]
+    ok = w[0] > rtol * w[-1]
     safe = jnp.where(ok, w, 1.0)
     if criterion == "D":
         return jnp.where(ok, jnp.sum(jnp.log(safe)), -jnp.inf)
