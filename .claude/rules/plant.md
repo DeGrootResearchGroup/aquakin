@@ -127,13 +127,23 @@ Key types:
   `calibrate_plant` per grid point through the private `_compiled_cache` /
   `_ic_start` hooks (now on `calibrate_plant` as on `calibrate`); for that the
   plant problem's `data_key` fingerprints the loss, sigma, observations and
-  times. Not built: the optional plant `rank_experiments` (score candidate sensor
-  sets on one shared sensitivity solve). Covered by
+  times. `plant_rank_sensor_sets` (with `SensorSet`) is the plant
+  `rank_experiments`: `_union_columns` resolves every candidate's streams to one
+  union, observed whole (all species), keyed by the parsed `(unit, port)` so two
+  spellings share columns; one `_PlantDesign.sensitivity` call per run per
+  parameter draw then serves every candidate by column selection. It reuses
+  `experiment_design.py`'s `_criterion` / `_subset_indices` /
+  `_LARGER_IS_BETTER` / `CandidateScore`. `_PlantDesign` (runs, free parameters,
+  transforms, priors, the forward/reverse dispatch) and `_scaled_rows` (noise,
+  mask, relative sigma, transform chain) are shared with
+  `plant_fisher_information`, so a candidate's score is exactly the criterion
+  of its own `plant_fisher_information`. Covered by
   `tests/integration/test_plant_identifiability.py` (closed-form CSTR
   information in both modes, the hand-built `solve_sensitivity` Jacobian on the
   CSTR and on BSM1 (slow), forward = reverse, the Laplace-Hessian equality,
-  identified / flat profiles (slow), and the profile's per-point wiring into
-  `calibrate_plant` with it stubbed) plus `tests/unit/test_identifiability_helpers.py`
+  identified / flat profiles (slow), the profile's per-point wiring into
+  `calibrate_plant` with it stubbed, and each ranking score equal to its own
+  set's `plant_fisher_information` criterion from one counted solve) plus `tests/unit/test_identifiability_helpers.py`
   (the shared sweep / polish / noise helpers on stub fits).
   **Colored Jacobian** — the graph-coloring / Jacobian-sparsity subsystem
   (`_structural_plant_pattern` + the forward / adjoint / steady builders and their
