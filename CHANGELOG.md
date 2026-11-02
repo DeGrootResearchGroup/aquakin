@@ -21,6 +21,39 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `Plant.solve_sensitivity(corrector=...)` chooses how each implicit stage of
+  the `[y; S]` sensitivity solve is solved. The new default, `"staggered"`,
+  converges the plant state first and then solves the sensitivity, which is
+  linear in `S`, with the same factorization. It forms no second derivatives,
+  so each sensitivity parameter adds only Jacobian-vector products to a step.
+  Its step controller limits step growth by the Newton contraction rate, so
+  fewer steps are wasted on Newton divergence. On a one-day BSM2 window with 16
+  parameters, a cached solve ran several times faster.
+  `"simultaneous"` is the previous diffrax augmented solve, which stays
+  differentiable. The two agree to the solver tolerance.
+- `Plant.solve_sensitivity(return_stats=True)` also returns the step counts of
+  the staggered solve: attempted, accepted, Newton-nonconverged and
+  error-test-rejected steps.
+- `Plant.solve_sensitivity(sens_error_control=False)` chooses the steps on the
+  state's error alone, leaving the sensitivity out of the error test (the CVODES
+  `errconS = false` option; staggered corrector only). The sensitivity is still
+  converged in every step but its error is no longer bounded; where the
+  sensitivity forces smaller steps than the state it is much faster (about half
+  the time on a dynamic BSM2 window with 16 parameters), for screening runs or
+  otherwise very long ones. `dynamic_sensitivity`
+  and `dynamic_dgsm` pass it through in forward mode. The default (`True`) is
+  unchanged.
+- `TakacsClarifier(interface_flux="godunov")` (and `settler_interface_flux=` on
+  `build_bsm1` / `build_bsm2`) settles solids between layers with the Godunov
+  flux of the settling conservation law (Bürger, Diehl & Nopens 2011) instead of
+  the Takács minimum-flux rule. The two differ only where an upper layer is
+  denser than the one below it. The Takács rule then switches between the two
+  layers' fluxes whenever their order flips, which made the sludge blanket pulse
+  and forced small steps. On a dynamic BSM2 run the forward solve took about a
+  third of the steps and wall time, and the default diffrax solve about a fifth
+  of the steps. The BSM2 steady state is unchanged, and dynamic effluent
+  concentrations differ by under 0.1% on average. The default stays `"takacs"`,
+  the rule of the BSM reference settlers.
 - `aquakin.plant.plant_fisher_information` gives the Fisher information of a
   plant design, the plant version of `fisher_information`. Measured channels
   are named as for `Plant.calibrate`, including a unit's state such as
@@ -37,6 +70,32 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   objective.
 
 ### Changed
+
+- The lean forward integrator (`Plant.solve(forward_fast=True)`) and the
+  staggered `Plant.solve_sensitivity` now Anderson-accelerate the Newton
+  iteration of each implicit stage, using the step's Jacobian factorization as
+  the preconditioner. Their results change within the solver tolerance. On a
+  dynamic BSM2 window, half as many steps failed Newton convergence and a
+  forward solve ran about 30% faster.
+- The lean forward integrator and the staggered `Plant.solve_sensitivity` no
+  longer grow the step right after a rejected step, and the Newton iteration of
+  each implicit stage now stops on the change in the stage value rather than in
+  its slope, so its tolerance no longer depends on the time unit or the step
+  size; a stage whose first correction is already small enough is accepted
+  without a second. On a dynamic BSM2 window a forward solve used about a fifth
+  fewer right-hand-side evaluations, with the same accuracy against a
+  tight-tolerance solve, and a staggered `solve_sensitivity` started at a steady
+  state no longer stalls at tiny steps. Results change within the solver
+  tolerance.
+- `Plant.solve_sensitivity` now caches its compiled solve on the plant. Repeated
+  calls with new parameter values, initial state, time span, save times (of the
+  same length) or tolerances reuse it instead of recompiling, which helps
+  `dynamic_dgsm` samples, chained windows and parameter sweeps.
+- `Plant.solve_sensitivity` now uses the staggered corrector by default (see
+  above). Its results agree with the previous solve to the solver tolerance. It
+  is forward-only: it needs concrete `params` and `y0`, and differentiating
+  through it raises an error that points to `corrector="simultaneous"`.
+  `factormax=None` now means the staggered controller's own growth cap of 2.
 
 - `PrimaryClarifier` can compute its retention time from a first-order filtered
   inflow, as the BSM2 reference does: pass `t_m` (the filter time constant, in

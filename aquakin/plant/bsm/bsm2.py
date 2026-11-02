@@ -447,6 +447,7 @@ def build_bsm2(
     temperature_model: object | None = None,
     settler_composition_mode: str = "lumped_tss",
     settler_soluble_holdup: bool = True,
+    settler_interface_flux: str = "takacs",
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
@@ -531,6 +532,13 @@ def build_bsm2(
         (a non-reacting soluble relaxes to the feed concentration), so it only
         matters under a dynamic influent, where it smooths the effluent ammonia
         peaks and troughs toward the reference.
+    settler_interface_flux : {"takacs", "godunov"}
+        The settling flux between adjacent settler layers
+        (:class:`~aquakin.plant.takacs.TakacsClarifier` ``interface_flux``):
+        ``"takacs"`` (default), the minimum-flux rule of the reference
+        settler, or ``"godunov"``, the Godunov flux of the settling
+        conservation law, which differs from it only where the upper of two
+        layers is the denser one.
 
     Returns
     -------
@@ -741,6 +749,7 @@ def build_bsm2(
             init_underflow_Q=Q_settler_underflow_init,
             composition_mode=settler_composition_mode,
             soluble_holdup=settler_soluble_holdup,
+            interface_flux=settler_interface_flux,
         )
     )
     plant.add_unit(

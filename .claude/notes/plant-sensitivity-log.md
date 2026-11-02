@@ -1,0 +1,553 @@
+# Investigation log — plant forward sensitivity and the lean loop's stage Newton
+
+> **Sections measured before 2026-11-01's "`_KAPPA` in the stage-value test" ran
+> the stage convergence test on the slope increment at `_KAPPA = 0.1`, without the
+> no-growth-after-a-failure rule** (and, before "Anderson acceleration", without
+> Anderson); **sections before "A stall near a steady state" required two
+> corrections per stage.** Their step counts and timings are of those solvers,
+> not the shipped one.
+>
+> **Lives in `.claude/notes/`, outside the auto-loaded `.claude/rules/` tree, so it
+> never auto-loads.** It holds the dated measurements behind the
+> `Plant.solve_sensitivity` bullet of `.claude/rules/integration.md` (issue #654) and
+> the stage-Newton investigation of `aquakin/integrate/forward_solve.py`. The rules
+> file carries the current, load-bearing status; numbers here carry the
+> configuration they were measured under — check it against the source before
+> quoting one as current. Harnesses: `scripts/profile_plant_sensitivity.py`
+> (timings, step counts, errors against a tight solve), `scripts/probe_newton_drift.py`
+> (the drift probe), `scripts/probe_step_rejections.py` (step attempts and stage
+> iterations), all on the window of `scripts/_bsm2_window.py`, with lean-loop
+> settings specs from `scripts/_lean_settings.py`; and
+> `scripts/probe_settler_accuracy.py` (lean loop vs diffrax on the 8-day BSM2 case
+> of `test_forward_fast_matches_diffrax_bsm2`).
+
+## Staggered vs simultaneous corrector on a BSM2 window (2026-10-31, #654)
+
+The diffrax augmented `[y; S]` solve (now `corrector="simultaneous"`) had four
+costs: it recompiled on every call; its block-arrow root finder probes the augmented
+operator on all `n` state tangents, each a second-order JVP of `f`, so the per-step
+cost grows with `k`; it has no contraction-rate growth limiter; and many of its
+rejected steps are Newton failures (code 7/8), not error-test failures. The default
+became the **staggered corrector** on the lean Kvaerno3 loop
+(`staggered_sensitivity_solve`, the `forward_fast` loop).
+
+*Configuration of every number in this section:* `build_bsm2` defaults (BSM2-configured ASM1 +
+ADM1, 188 states, colored Jacobian 66 colors), started from the constant-influent
+steady state (150 d from `bsm2_warm_start`, `rtol=1e-5`, `atol=1e-3`), driven by the
+**synthesised** dry-weather influent (`load_bsm2_influent("dry")` — 15-min samples
+with ±20% flow noise, far rougher than the IWA 609-day file, so step counts are much
+higher than on the JRN-056 case of the issue), `rtol=1e-4`, `atol=1e-3`, the `k`
+sensitivity parameters the first `k` `asm1.*` names, daily `t_eval`, default
+`factormax` (2 staggered, 10 diffrax), 4-core container, 2026-10-31.
+
+1-day window, each run alone on the machine; "cached" is a second call (before this
+change every call cost the first-call time, since the plant recompiled). **Each time
+is one sample, and wall times on this container are bimodal (a ~2× slow mode, also
+within one process — see "Timing on this container" below)**, so a single sample
+may be in either mode; the step counts are deterministic. Interleaved best-of-5 on
+2026-11-01 put the staggered cached call at 4.5 s (`k=0`) and 17.0 s (`k=16`) — the
+44 s below was a slow-mode sample:
+
+| corrector | k | first call | cached call | attempted | Newton-nonconverged | error-test rejected |
+|---|---|---|---|---|---|---|
+| simultaneous | 0 | 236 s | 26 s | 2094 | 632 (30%) | 383 |
+| simultaneous | 1 | 408 s | 115 s | 2099 | 741 (35%) | 267 |
+| simultaneous | 16 | 630 s | 313 s | 2802 | 855 (31%) | 658 |
+| staggered | 0 | 158 s | 4.5 s | 1545 | 325 (21%) | 71 |
+| staggered | 1 | 128 s | 8.2 s | 1563 | 333 (21%) | 68 |
+| staggered | 16 | 155 s | 44 s | 2176 | 327 (15%) | 238 |
+
+5-day window (step counts only; these runs shared the machine, so their times are
+void): pre-change code `k=0` 10620 attempted / 3181 nonconverged / 1946 error-test;
+staggered `k=0` 7606 / 1582 / 316, `k=1` 7610 / 1591 / 304, `k=16` 9556 / 1665 / 772.
+The two correctors agree on the 1-day window to `3.5e-4` of each sensitivity
+column's largest entry and `~1e-3` in the state (two valid adaptive solves at
+`rtol=1e-4`).
+
+What this shows, and what it does not:
+- **Compile once**: a cached call drops the ~150–500 s compile entirely.
+- **Per attempt** (staggered, interleaved best-of-5 cached call / attempts): 2.9 ms
+  at `k=0`, 7.8 ms at `k=16` — **~2.7× from `k=0` to `k=16`, not flat**. The
+  `k`-proportional work is the ~10 Jacobian-vector products of `k` columns per
+  accepted step (one per sensitivity-stage iteration; 3.2 iterations per stage on
+  average, 78% at the minimum of 2, measured on 0.25 d at `k=16`); a 16-column
+  application costs ~1.6 RHS evaluations (a top-level microbenchmark; it predicts
+  ~2.3×). The simultaneous per-attempt figures (12 / 55 / 112 ms at `k = 0 / 1 / 16`)
+  are single samples of unknown mode, so only "several times slower" is safe.
+- **Newton failures fall but do not vanish** (30% → 21% at `k=0`). On this influent
+  they are not step growth into divergence: the step-start Jacobian is wrong in one
+  or two directions at the failing stages ("Stage-Newton drift" below), and forcing
+  a **dense** Jacobian (`forward_root_finder` returning `None`) gave the same ~20% on
+  0.5 d, so the colored pattern is not the cause. The growth limiter cannot remove
+  that. This run does not separate how much of the 30% → 21% is the limiter and how
+  much is `maxfac=2` versus diffrax's 10 and the Hairer convergence test versus
+  optimistix's.
+- Untried lever for the `k`-proportional cost: accept a sensitivity stage after one
+  correction using a remembered contraction rate (CVODES keeps one for its
+  sensitivity iteration; the state's rate is measured along a different error
+  direction, so it risks leaving a slow sensitivity mode unconverged).
+- The convergence-aware limiter is **only** on the lean loop. The diffrax paths
+  cannot take it: diffrax hands its step controller only the error estimate (a
+  failed root find sets it to `inf`), never the Newton contraction rate.
+
+## Stage-Newton drift on the BSM2 window (2026-11-01)
+
+Each implicit Kvaerno3 stage iterates with `M = LU(I − γhJ_n)`, `J_n` at the step
+start. Near the root the plain iteration's error obeys `e_{m+1} = T e_m`,
+`T = I − M⁻¹A(x)`, `A = I − γhJ(Y)`. `scripts/probe_newton_drift.py` wraps
+`forward_solve._stage_solve` and forms `T` at every state stage's final iterate in the
+solver's WRMS weighting. *Configuration:* the window above, 0.25 d, `k=0` (the
+`forward_fast` loop), `rtol=1e-4`, `atol=1e-3`, Anderson off; 368 attempted, 74
+non-converged, 19 error-test rejected. "Slow directions" = singular values of `T`
+above 0.1; iterations are for a 1e-3 error reduction (largest over three random
+right-hand sides); GMRES is preconditioned by `M`.
+
+| stage outcome | stage solves | slow directions (median / max) | ρ(T) median | plain iterations (median / p90) | GMRES iterations (median / max) |
+|---|---|---|---|---|---|
+| converged in 2 | 749 | 0 / 2 | 0.0007 | 1 / 2 | 1 / 3 |
+| converged slowly | 171 | 1 / 2 | 0.28 | 4 / 7 | 2 / 3 |
+| hit the 12-iteration cap | 125 | 1 / 4 | 0.68 | 12 / 46 | 2 / 5 |
+| diverged | 59 | 1 / 4 | 1.46 | >100 | 3 / 6 |
+
+- The drift is **low-rank**: the failing stages are slow along one direction (p90 1–3).
+- It sits in the **Takács settler** (the dominant singular directions' largest
+  components: settler 669 of 750 in the capped class, then tank 5 and the digester);
+  plausibly a layer-flux threshold switching on within the step — not confirmed.
+- For a failed stage the final iterate is not the root, so `T` there is the
+  linearization where the iteration stopped; the GMRES count is for one linearized
+  Newton step.
+- The probe is checked on a linear system whose factored matrix is wrong in exactly
+  two directions: it reports 2 slow directions, 7 plain and 3 GMRES iterations.
+
+## Anderson acceleration of the stage iteration (2026-11-01)
+
+`forward_solve._stage_solve` takes an Anderson depth (`_ANDERSON_DEPTH`, Type II, Walker &
+Ni 2011, row by row for the sensitivity block, least squares in the WRMS weighting
+with a `1e-10·trace` Tikhonov term), the factored `M` as the preconditioner. **The
+contraction / divergence tests read the plain step `f = −M⁻¹R(x)` at each iterate
+(the preconditioned residual), not the applied update**: the first version tested
+the applied update, which is non-monotone under acceleration, and stopped a
+0.7/0.85-contraction two-direction synthetic after 3 iterations as "diverged"; on
+the residual it converges in 5 (plain iteration: the 12 cap). With depth 0 the two
+coincide, and the solve is bit-identical to the pre-Anderson loop. **Default 2 since
+2026-11-01** (the project owner's decision after the comparison below).
+
+Interleaved A/B (`profile_plant_sensitivity.py --days 1 --k 0 16 --calls 6
+--variants plain anderson:2`, one plant per variant, cached calls alternated; best
+of 5), the 1-day window above:
+
+| depth | k | best cached call | attempted | Newton-nonconverged | error-test rejected |
+|---|---|---|---|---|---|
+| 0 | 0 | 4.5 s | 1545 | 325 | 71 |
+| 2 | 0 | 3.3 s (−27%) | 1199 | 163 | 196 |
+| 0 | 16 | 17.0 s | 2176 | 327 | 238 |
+| 2 | 16 | 16.1 s (−5%) | 2135 | 107 | 572 |
+
+- **Newton failures halve (`k=0`) or fall by two-thirds (`k=16`)**, as the drift
+  probe predicted. At depth 2 (probe, 0.25 d): the iteration-cap class 125 → 1, slow
+  stages converge in a median 4 iterations (was 6); attempts 368 → 292,
+  non-converged 74 → 40, error-test 19 → 44.
+- **What remains is the diverged class** (59 → 78 stages, ρ(T) median 1.3): the
+  plain iteration's first residual grows, so the divergence test stops before
+  Anderson has any history (GMRES would need a median 3). Untried: give Anderson
+  `depth` iterations before judging divergence.
+- **`k=16` gains little** because the freed step growth turns into error-test
+  rejections (238 → 572), and at `k=16` each of those has already paid the full
+  sensitivity solve, while a Newton failure rejects before it.
+- **Accuracy:** against the independent simultaneous solve, `S` (`k=16`) is
+  `5.1e-4` of each column's peak at depth 2 (`3.5e-4` at depth 0); the `k=0` state
+  `2.9e-4` (`5.8e-4` at depth 0).
+- **Dead ends (measured, do not re-try):** depth 3 ≈ depth 2 (`k=0` 1179 / 161 /
+  182, `k=16` 2118 / 107 / 566, single samples). Feeding the step-size limiter the
+  plain first-iteration rate instead of the accelerated one: `k=0` 3.3 s,
+  `k=16` 16.8 s, 1212 / 139 / 144 and 2129 / 99 / 519, `S` `6.9e-4` — no gain;
+  deleted.
+
+## Newton-Krylov (GMRES) updates of the stage iteration (2026-11-01, deleted)
+
+**Closed direction — measured, then deleted** in favour of Anderson; the design
+below is enough to rebuild it (it lived in `forward_solve._gmres` on the #654
+branch). Revisit only for a case where stages whose plain iteration diverges
+outright dominate the step count — the one class Anderson cannot reach.
+
+
+`_stage_solve` (was `_chord`) can instead solve each correction as the exact Newton
+step `A(x) dx = −R(x)` by GMRES (`_gmres`): left-preconditioned by the factored `M`
+(so the first Krylov vector is the plain step `f`), inner products weighted like the
+error norm, modified Gram-Schmidt, the rows of a sensitivity block in lockstep, early
+exit at a `1e-2` relative residual or 6 iterations, the least squares by regularized
+normal equations. `_KRYLOV_SWITCH_RATE`: `None` off (default); negative = every
+update ("always"); `r` = plain steps until the contraction rate first exceeds `r`
+("adaptive"). Divergence is judged on Newton-Krylov updates only, so in adaptive
+mode a plain step that does not contract switches instead of failing. Exclusive with
+Anderson.
+
+Synthetic (`test_staggered_sensitivity.py`, `M` wrong in two directions): at
+contractions 0.7/0.85 the plain iteration hits the 12 cap, Anderson takes 5,
+Krylov-always 2, Krylov-adaptive 3–4; at 1.5/2.5 (the plain iteration diverges)
+plain and Anderson fail, both Krylov forms converge (2 / 3).
+
+BSM2 1-day window (configuration above). `k=0`: one 4-way interleaved run
+(`--variants plain anderson:2 krylov:always krylov:0.1`). `k=16`: each Krylov form
+paired with plain in its own process — four whole-plant `k=16` programs in one
+process exhausted memory (LLVM "Cannot allocate memory" with ~4.5 GB nominally
+free), so the harness now drops each `k`'s programs before the next and the `k=16`
+Anderson row is the earlier `plain anderson:2` pair. Best of 5 cached calls; "vs" is
+the plain call in the same process:
+
+| variant | `k=0` best | `k=0` attempted / nonconv / err | `k=16` best (vs plain) | `k=16` attempted / nonconv / err | `S` vs simultaneous |
+|---|---|---|---|---|---|
+| plain | 5.1 s | 1545 / 325 / 71 | 18.0 s | 2176 / 327 / 238 | 3.5e-4 |
+| anderson:2 | **3.4 s** | 1199 / 163 / 196 | **16.1 s** (17.0) | 2135 / 107 / 572 | 5.1e-4 |
+| krylov:always | 5.5 s | 1087 / 64 / 294 | 25.6 s (18.2) | 2119 / 26 / 682 | 7.0e-4 |
+| krylov:0.1 | 4.3 s | 1134 / 113 / 237 | 19.7 s (18.0) | 2145 / 77 / 603 | 7.9e-4 |
+
+`k=0` state vs the simultaneous solve: plain 5.8e-4, anderson:2 2.9e-4,
+krylov:always 3.1e-4, krylov:0.1 1.0e-3 — all within the solver tolerance band.
+
+- **Newton-Krylov removes the most Newton failures** (−80% / −92% at `k=0` / `k=16`
+  for "always"), including the diverged class Anderson cannot reach.
+- **It is not the fastest.** Each Newton-Krylov correction pays a linearization at
+  the iterate plus GMRES products — `k`-wide on the sensitivity block — so "always"
+  is +8% (`k=0`) and +41% (`k=16`) against plain; "adaptive" spends it only on slow
+  stages, −16% / +9%. Anderson, at no extra derivative evaluations, is fastest at
+  both `k`.
+- **Every acceleration turns Newton failures into error-test rejections**
+  (`k=16`: 238 → 572 / 603 / 682): once the stage solve stops failing, the step
+  controller grows steps until the error test rejects them, and at `k=16` each such
+  rejection has paid the full sensitivity solve. The remaining lever is step-size
+  control, not the stage solve.
+
+## Where the error-test rejections come from (2026-11-01)
+
+`scripts/probe_step_rejections.py` records every attempt (`t`, `h`, error norm,
+Newton rate, convergence, and the state's own error norm, so a rejection splits into
+state- and sensitivity-driven). *Configuration:* the window above, 0.25 d,
+`rtol=1e-4`, `atol=1e-3`, Anderson depth 2 (the default), controller defaults
+(`maxfac=2`, `safety=0.9`, `pi_beta=0.08`).
+
+| | `k=0` | `k=16` |
+|---|---|---|
+| attempted / nonconverged / error-rejected | 292 / 40 / 44 | 572 / 26 / 153 |
+| rejections driven by the state / by `S` | 44 / 0 | 24 / 129 |
+| rejected steps straddling an influent sample time (random placement) | 20% (15%) | 4% (6%) |
+| rejections right after a grown accepted step | 38 of 44 | 99 of 153 |
+| …of which that accepted step itself followed a failure | 54% | 66% |
+| growth into the rejection: median (at the 2× cap) | 1.25 (15%) | 1.74 (44%) |
+| error jump `en/(en_prev·(h/h_prev)³)` into a rejection: median (p75) | 2.3 (3.5) | 6.6 (73) |
+| the same jump between two accepted steps: median (p25–p75) | 0.6 (0.3–1.4) | 0.7 (0.4–1.0) |
+
+- **Not influent breakpoints.** Rejected steps straddle a 15-minute sample time no
+  more often than random placement predicts, so clipping steps to the sample times
+  (diffrax `jump_ts`) would not help. Rejected steps' Newton rates are ~0: the stage
+  solve is not involved.
+- **`k=0`: controller overshoot on a noisy estimate.** The `O(h³)` model predicts the
+  next error only within a factor ~4 (the accepted→accepted IQR), and over half the
+  rejections close a reject → accept → grow → reject cycle.
+- **`k=16`: the sensitivity error estimate jumps.** 129 of 153 rejections are driven
+  by `S`; the accepted step before one has a small error (median 0.11), the
+  controller grows it (44% at the cap), and the estimate then jumps far past the
+  `h³` prediction (44% above 10×). Consistent with — not shown to be — the
+  sensitivity right-hand side `J(y)S + f_θ` jumping where `f` has a kink in `y`
+  (`max`/`min` clips, the Takács settler's thresholds — where the drift probe put the
+  Newton failures): the state crosses a kink smoothly, its sensitivity does not.
+
+### Variants (2026-11-01)
+
+The three variants, measured as off-by-default switches: **`hold`** — no growth
+on the attempt accepted right after a failed one (Hairer's rule after a
+rejection); **`value`** — the stage convergence test on the stage-value increment
+`γh·Δk` rather than the slope increment `Δk`; **`noerrcon`** — the sensitivity left
+out of the error test (CVODES `errconS = false`, which is CVODES's own default; `S`
+still converges in every stage solve). **Decided 2026-11-01 (project owner):**
+`hold` and `value` are now unconditional (the switches are gone; `value` with
+`_KAPPA` re-tuned to 0.03, below), and `noerrcon` is
+`solve_sensitivity(sens_error_control=False)`, default `True` — kept for screening
+or otherwise very long runs. The rows below were taken with the switches, at
+`_KAPPA = 0.1`. Errors are against a tight solve
+(`profile_plant_sensitivity.py --reference-rtol 1e-8`: the default lean loop at
+`rtol=1e-8`, `atol=1e-7`), which agrees with diffrax Kvaerno5 at the same
+tolerances to `2.4e-5`: `err_y` per state component relative to its peak (floored
+at `atol`), `err_S` per sensitivity column relative to its peak, the largest over
+the save times. *Configuration:* the 1-day window above, `rtol=1e-4`, `atol=1e-3`,
+Anderson depth 2, controller defaults otherwise. Best of the cached calls of an
+interleaved process (`k=0`: one process, 5 calls; `k=16`: three processes of three
+plants — four `k=16` plants exhaust memory — 4 calls each), with the `default` call
+of the same process in brackets (the third process had none). Errors: max over
+components / columns, median in brackets (`err_S` median over the 16 columns).
+
+| variant | `k` | best cached call (default) | attempted / nonconv / err-rejected | `err_y` max (median) | `err_S` max (median) |
+|---|---|---|---|---|---|
+| default | 0 | 4.1 s | 1199 / 163 / 196 | 2.2e-3 (8.4e-6) | — |
+| hold | 0 | 4.0 s (4.1) | 1136 / 117 / 139 | 1.4e-3 (6.8e-6) | — |
+| value | 0 | 3.5 s (4.1) | 1160 / 125 / 183 | 1.4e-3 (1.7e-5) | — |
+| hold + value | 0 | 3.3 s (4.1) | 1110 / 93 / 137 | 1.8e-3 (1.4e-5) | — |
+| default | 16 | 18.9 s / 18.5 s | 2135 / 107 / 572 | 4.8e-4 (1.0e-5) | 3.4e-4 (6.0e-5) |
+| hold | 16 | 17.6 s (18.9) | 1992 / 78 / 431 | 1.6e-3 (6.6e-6) | 2.1e-4 (1.4e-4) |
+| value | 16 | 18.2 s (18.5) | 2023 / 80 / 552 | 2.6e-3 (1.3e-5) | 2.6e-4 (6.8e-5) |
+| hold + value | 16 | 16.7 s (18.5) | 1891 / 58 / 406 | 3.1e-3 (1.1e-5) | 2.3e-4 (1.4e-4) |
+| noerrcon | 16 | 8.9 s (18.9); 9.6 s | 1199 / 151 / 213 | 2.0e-3 (3.6e-6) | 8.5e-4 (5.0e-4) |
+| hold + noerrcon | 16 | 9.1 s | 1141 / 118 / 138 | 1.4e-3 (5.9e-6) | 8.9e-4 (5.4e-4) |
+| hold + value + noerrcon | 16 | 9.9 s | 1128 / 82 / 149 | 5.9e-3 (9.0e-6) | 2.4e-3 (1.5e-3) |
+
+- **`err_y` max is one settler state** (`TakacsClarifier` local states 3 and 5 of 80,
+  peak ~440) in every row, and moves several-fold with the step sequence alone
+  (`hold`, which only shrinks steps, triples it at `k=16`); the median is the
+  steadier accuracy figure.
+- **`hold`**: fewer attempts at both `k` (−5% / −7%), −7% right-hand-side
+  evaluations at `k=0`, accuracy unchanged.
+- **`value`**: −19% right-hand-side evaluations and the fastest `k=0` call, little at
+  `k=16` (the `k`-column products dominate); the median state error rises 1.3–2×
+  (a ~2000× looser stage test at these steps, at `_KAPPA = 0.1`).
+- **`noerrcon`**: at `k=16` the steps are the state's (1199 attempts — the `k=0`
+  count), so the solve takes about half the time; the price is `S` accuracy, 2.5×
+  worse at the max and 8× at the median column (`5e-4` of the column peak).
+  **Combined with `value`** the sensitivity stage test is loosened too and nothing
+  else bounds `S`: its median column error is 25× the default's — do not combine
+  them without a tighter test on the sensitivity block.
+- **The earlier "vs simultaneous" accuracy figures are disagreements**, not errors:
+  both solves sit at `rtol=1e-4`, and the true global error of the lean loop at
+  `k=0` is ~1.4–2.2e-3 of a component's peak at its worst component (~20× `rtol`;
+  a settler blanket layer — "Why the lean loop trails diffrax on the settler
+  blanket"). No variant moves it outside that band.
+- **Deterministic cost at `k=0`** (`probe_step_rejections.py --days 1 --k 0
+  --settings …`, which totals the stage iterations; right-hand-side evaluations ≈
+  attempts + stage iterations, plus one Jacobian and one LU per attempt):
+
+  | variant | stage iterations (per stage solve) | RHS evaluations |
+  |---|---|---|
+  | default | 9496 (2.64) | 10695 |
+  | hold | 8781 (2.58) | 9917 (−7%) |
+  | value | 7458 (2.14) | 8618 (−19%) |
+  | hold + value | 7131 (2.14) | 8241 (−23%) |
+
+  The wall-time ranking agrees. The test needs two iterations at least (a rate
+  estimate), so `value` leaves stages near that floor; Hairer's codes accept after
+  one by reusing the previous step's rate — untried here.
+- **The stage test was in slope units from when the lean loop was written until
+  2026-11-01** (`d = wrms(dk, y)`): it compared `Δk` (state per day) with the
+  state's tolerance, so at `h ~ 1e-3 d` it was ~2000× stricter than Hairer's
+  `η‖γhΔk‖ ≤ κ`, and changed with the time unit. `_KAPPA = 0.1` had been tuned in
+  those units on the 609-day run.
+
+### `_KAPPA` in the stage-value test (2026-11-01)
+
+*Configuration:* as above, with `hold` and `value` in force (the shipped code
+after the decision), `_KAPPA` set per variant (`--variants kappa:0.1 kappa:0.03
+kappa:0.01`; `k=0` and `k=16` each one interleaved process; the `k=16` "default"
+is the slope-unit, no-hold solve of the table above, from another process).
+Right-hand-side evaluations from `probe_step_rejections.py --days 1 --k 0
+--settings kappa:…`.
+
+| `_KAPPA` | `k` | best cached call | attempted / nonconv / err-rejected | RHS evaluations | `err_y` max (median) | `err_S` max (median) |
+|---|---|---|---|---|---|---|
+| (old default) | 0 | 4.1 s | 1199 / 163 / 196 | 10695 | 2.2e-3 (8.4e-6) | — |
+| 0.1 | 0 | 3.3 s | 1110 / 93 / 137 | 8241 | 1.8e-3 (1.4e-5) | — |
+| 0.03 | 0 | 3.4 s | 1095 / 98 / 125 | 8283 | 2.9e-3 (7.4e-6) | — |
+| 0.01 | 0 | 3.4 s | 1109 / 101 / 136 | 8650 | 2.0e-3 (1.1e-5) | — |
+| (old default) | 16 | 18.5–18.9 s | 2135 / 107 / 572 | — | 4.8e-4 (1.0e-5) | 3.4e-4 (6.0e-5) |
+| 0.1 | 16 | 16.4 s | 1891 / 58 / 406 | — | 3.1e-3 (1.1e-5) | 2.3e-4 (1.4e-4) |
+| 0.03 | 16 | 17.1 s | 2000 / 63 / 429 | — | 2.0e-3 (1.1e-5) | 3.9e-4 (3.0e-4) |
+| 0.01 | 16 | 16.3 s | 1984 / 70 / 433 | — | 1.9e-3 (9.8e-6) | 2.4e-4 (1.7e-4) |
+
+- **On this 1-day window** neither cost nor accuracy is resolved between 0.01 and
+  0.1 (the differences are non-monotone in κ — step-sequence noise); 0.03 costs
+  +0.5% evaluations over 0.1, 0.01 +5%. 0.03 was chosen on this table, then
+  **0.01 shipped** after the 8-day check below showed the stage iteration's error
+  on the settler's blanket layers.
+- **`sens_error_control=False`** (same configuration, `k=16`, one interleaved
+  process of the three κ, 3 cached calls each):
+
+  | `_KAPPA` | best cached call | attempted / nonconv / err-rejected | `err_y` max (median) | `err_S` max (median) |
+  |---|---|---|---|---|
+  | 0.1 | 8.8 s | 1128 / 82 / 149 | 5.9e-3 (9.0e-6) | 2.4e-3 (1.5e-3) |
+  | 0.03 | 9.3 s | 1164 / 108 / 138 | 2.7e-3 (6.2e-6) | 2.8e-4 (1.8e-4) |
+  | 0.01 | 9.6 s | 1141 / 104 / 139 | 1.6e-3 (6.8e-6) | 7.3e-4 (4.3e-4) |
+
+  About half the controlled solve's time (17.1 s at 0.03). Its `S` error is not
+  bounded by anything but the stage test, so it swings with the step sequence:
+  at the shipped 0.03 it is no worse than the controlled solve's on this window,
+  at 0.1 eight times worse.
+- **The `err_S` medians above the old default's** appear with `hold` alone too
+  (previous table), which does not touch the stage test: a step-sequence effect, at
+  ~1–3× `rtol`.
+
+## Why the lean loop trails diffrax on the settler blanket (2026-11-02)
+
+`scripts/probe_settler_accuracy.py` (the case of `test_forward_fast_matches_diffrax_bsm2`:
+BSM2 with temperature correction and the influent bypass, dry influent, 8 d from
+`bsm2_warm_start`, saves every 0.01 d, `atol = 1e-3·rtol/1e-4`; the shipped lean
+loop — `_KAPPA = 0.01`, first correction accepted, hold rule, Anderson 2; diffrax
+Kvaerno3 with the colored root finder). Errors against the lean loop at
+`rtol = 1e-8` (98306 attempts), relative to each component's peak, the largest over
+the 801 saves:
+
+| run | attempts | accepted | rejected: root find / error test | median accepted `h` (d) | worst (median) | settler layers 2 / 3 / 4 |
+|---|---|---|---|---|---|---|
+| lean, `rtol = 1e-4` | 8901 | 6955 | 0 / 1946 | 8.6e-4 | 5.6e-2 (7.5e-5) | 1.7e-2 / 5.6e-2 / 3.0e-2 |
+| lean, stages to `_KAPPA = 1e-7` | 8968 | 6949 | 0 / 2019 | 8.8e-4 | 1.0e-2 (4.7e-5) | 1.7e-3 / 7.3e-3 / 1.0e-2 |
+| lean, `rtol = 1e-5` | 14496 | 11496 | 0 / 3000 | 5.7e-4 | 5.9e-3 (7.7e-6) | 9.7e-4 / 5.4e-3 / 3.2e-3 |
+| diffrax, `rtol = 1e-4` | 17249 | 10392 | 6852 / 5 | 4.6e-4 | 4.3e-3 (3.2e-5) | 9.2e-4 / 4.3e-3 / 2.6e-3 |
+
+- **The blanket layers carry fast pulses.** Below the feed the Takács flux is the
+  smaller of two adjacent layers' fluxes; layers 2–5 sit at nearly equal flux
+  (median gap 0.5–1.7%), so along the reference the minimum switches branch 434,
+  407 and 454 times in 800 save intervals at interfaces 2|3, 3|4, 4|5, and the
+  layers swing ±10–15% within 0.01 d (layer 3: 365, 422, 395, 386, 379, 417 g/m³ at
+  t = 3.85–3.90). The right-hand side is continuous but kinked almost every step.
+- **The lean loop's error is the timing of those pulses**, not an accumulation:
+  above 1% of the peak at 15 of 801 saves (worst 5.6% at t = 3.87, a pulse arriving
+  early), small between. Saves every 0.5 d sample it at ~0.5%.
+- **Its stage iteration drives it**: stages solved to `_KAPPA = 1e-7` cut the
+  worst to 1.0e-2 and leave no save above 1%. The error-test scale is not it: with
+  diffrax's `rtol·max(|y_n|, |y_{n+1}|)` the 0.5-d-save error was 7.2e-3 against
+  4.8e-3 (a study run of the same case, not kept).
+- **Diffrax over-resolves as a side effect of root-find failures**: 6852 of its 6857
+  rejections are failed root finds (its error estimate is infinite), only 5 are
+  error-test rejections; its accepted steps are half the lean loop's (p10 6e-5 d
+  against 4e-4 d), and its step distribution is the same at `rtol = 1e-5` (17544
+  attempts). The lean loop's growth limiter and Anderson acceleration leave it no
+  root-find failures, so it takes the error test's steps; at `rtol = 1e-5` it reaches
+  diffrax-at-1e-4 on these layers with fewer attempts and a 4× smaller median.
+- The outputs barely see the pulses (the effluent / wastage table under "`_KAPPA`
+  over 8 days"). The opt-in Godunov settler flux removes the switching (next
+  section).
+
+## The consistent (Godunov) settler flux (2026-11-02)
+
+Why the Takács rule switches there: layers 2–5 (430–475 g/m³) sit on the *rising*
+branch of `F(X) = v_s(X)·X` (peak at X̂ ≈ 1848 g/m³ for the BSM parameters,
+`X_min = 8.42`; `F' ≈ 310` there). With settling downward the Godunov flux on a
+rising branch is the upper layer's flux whatever the ordering; the Takács minimum
+equals it when the upper layer is the more dilute and holds it back to the lower
+layer's flux when it is the denser. Near-equal neighbours swap order constantly, so
+the rule switches, and holding a denser upper layer back makes it denser still —
+the pulses. `TakacsClarifier(interface_flux="godunov")` is the Godunov flux at
+every interface (`_interface_flux`, `_flux_peak`).
+
+`scripts/probe_settler_accuracy.py --interface-flux godunov` (configuration of the
+previous section; Godunov reference: the lean loop at `rtol = 1e-8`):
+
+| run | attempts | accepted | rejected: root find / error test | median accepted `h` (d) | worst (median) | settler layers 2 / 3 / 4 |
+|---|---|---|---|---|---|---|
+| lean, `rtol = 1e-4` | 3177 | 2341 | 0 / 836 | 3.1e-3 | 1.4e-3 (1.2e-4) | 6.2e-4 / 8.1e-4 / 8.0e-4 |
+| lean, `rtol = 1e-5` | 7047 | 5690 | 0 / 1357 | 1.3e-3 | 1.2e-4 (1.1e-5) | 5.4e-5 / 4.9e-5 / 6.3e-5 |
+| diffrax, `rtol = 1e-4` | 3653 | 2380 | 1273 / 0 | 2.5e-3 | 3.5e-3 (9.2e-5) | 1.4e-3 / 1.7e-3 / 1.9e-3 |
+
+- **Against Takács** (the previous table): lean attempts 8901 → 3177, its worst
+  error 5.6e-2 → 1.4e-3; diffrax attempts 17249 → 3653 and root-find failures
+  6852 → 1273. The lean loop now beats diffrax at equal `rtol` on both. Cached
+  wall time of the 8-day forward solve (17 saves, interleaved, best of 3): 27.6 s
+  Takács, 9.6 s Godunov.
+- **The blanket**: layers 2–5 still swap order ~450 times in 800 save intervals
+  (now 432–439 g/m³ at t = 8 d), but the flux no longer switches; their change
+  between consecutive saves drops from p99 17% to 4.3% (median 1.7% → 1.1%).
+- **The model moves little**: against Takács at `rtol = 1e-8`, effluent at most
+  4.3e-3 of a species' peak at the worst save (XB_A), 8-day means within 6.8e-4;
+  wastage / RAS 2.3e-3 / 1.6e-4. The BSM2 constant-influent steady state (the
+  validation case, 150 d, `rtol = 1e-5`) is identical to 5e-7: layers 2–5 sit at
+  exactly 423.2 g/m³ there, where the two rules agree; AS reactors 0.05% from the
+  published values under both.
+- Opt-in: the BSM reference settlers use the Takács rule.
+
+## A stall near a steady state (2026-11-01)
+
+`test_sensitivity_interface_parity.py::test_steady_and_dynamic_operating_sensitivity_agree`
+(slow; BSM1, constant influent, `dynamic_sensitivity(mode="forward")` — so the
+staggered `solve_sensitivity` — over 40 d from the steady state, `wrt` one kinetic
+and one operating parameter, `rtol=1e-6`, `max_steps=200_000`) **exhausted its step
+budget since the staggered corrector became the default** (also at 7de1fbe, before
+the stage-value test and the hold rule; the slow tier had not run it on this
+branch). Probe (`probe_step_rejections.py`'s recorder, first 3000 attempts): it
+reached `t = 0.1 d` at `h ~ 3e-5 d` with error norms ~1e-5 — the error test was
+not the limit — while 460 attempts failed Newton at rate ~1.8 with error norms
+~1e-12, and accepted ones fed rates up to 0.7 to the growth limiter. The guesses
+were already converged, so every correction after the first was round-off and
+their ratio no rate: it read as divergence and held the step down. Reverting the
+stage test to slope units changed nothing (every decision was on the rate).
+
+**Fix:** accept a stage's first correction on its size (`η = 1`, the CVODES and
+Hairer & Wanner practice; report rate 0, as there is no estimate). The BSM1 case
+then completes in 357 attempts. On the BSM2 day (configuration of the `_KAPPA`
+table, `_KAPPA = 0.03`, interleaved `default` vs the fix):
+
+| | `k` | best cached call | attempted / nonconv / err-rejected | RHS evaluations (stage iterations / solve) | `err_y` max (median) | `err_S` max (median) |
+|---|---|---|---|---|---|---|
+| two corrections | 0 | 3.1 s | 1095 / 98 / 125 | 8283 (2.19) | 2.9e-3 (7.4e-6) | — |
+| first accepted | 0 | 3.5 s | 1132 / 102 / 150 | 8224 (2.09) | 2.5e-3 (1.7e-5) | — |
+| two corrections | 16 | 16.3 s | 2000 / 63 / 429 | — | 2.0e-3 (1.1e-5) | 3.9e-4 (3.0e-4) |
+| first accepted | 16 | 14.6 s | 1916 / 63 / 414 | — | 2.0e-3 (6.2e-6) | 2.9e-4 (2.3e-4) |
+
+Neutral: in stage-value units a first correction from the predictor is usually
+above `_KAPPA`, so it fires mostly where the corrections are negligible. (The
+untried lever recorded earlier — accept after one correction *using a remembered
+rate* — is a different, stronger change; this one assumes `η = 1`.)
+
+### `_KAPPA` over 8 days (2026-11-01)
+
+The same validation pass found `test_forward_fast.py::test_forward_fast_matches_diffrax_bsm2`
+(slow; BSM2 with temperature correction and the influent bypass, dry influent,
+8 d from the warm start, `rtol=1e-4`, `atol=1e-3`) failing at 2.06e-2 against its
+1.5e-2 bound at `_KAPPA = 0.03`: the max is one settler layer (`TakacsClarifier`
+state 3), the median over components 6e-5. Errors of each 8-day solve against a
+lean-loop solve at `rtol=1e-8`, `atol=1e-7` ("test metric" is the test's
+`max |a − b| / (|b| + 1e-3)` with `b` the tight solve; "per peak" as above):
+
+| solve | test metric | worst component, per peak | median |
+|---|---|---|---|
+| diffrax (the test's reference: Kvaerno3, colored Jacobian) | 1.5e-3 | 9.9e-4 (settler 3) | 2.0e-5 |
+| lean loop at 7de1fbe (slope test, `_KAPPA = 0.1`, no hold) | 7.3e-3 | 5.4e-3 (settler 3) | 3.8e-5 |
+| stage-value test + hold, `_KAPPA = 0.1` | 5.1e-2 | 3.3e-2 (settler 5) | 2.9e-5 |
+| … `_KAPPA = 0.03` | 2.2e-2 | 1.5e-2 (settler 3) | 3.4e-5 |
+| … `_KAPPA = 0.03` + first correction accepted | 1.1e-2 | 7.3e-3 (settler 3) | 3.7e-5 |
+| … `_KAPPA = 0.01` + first correction accepted | 7.6e-3 | 4.9e-3 (settler 2) | 4.8e-5 |
+| … `_KAPPA = 0.003` + first correction accepted | 5.5e-3 | 3.8e-3 (settler 3) | 3.5e-5 |
+
+- **The worst component's error falls with `_KAPPA`, while the median does not
+  move.** (What the error is — the timing of fast pulses in the blanket layers, not
+  an accumulation — is in "Why the lean loop trails diffrax on the settler
+  blanket" below.) **0.01 shipped**: it restores the old
+  lean loop's accuracy there, at ~5% more right-hand-side evaluations than 0.03,
+  and is Hairer & Wanner's SDIRK value at `rtol = 1e-4`.
+- **The lean loop is ~5× less accurate than diffrax on that layer at the same
+  tolerances, before today's changes too** (7de1fbe: 5.4e-3 vs 9.9e-4). Not
+  investigated: the two differ in the error norm's scale (`rtol·|y_n|` vs diffrax's
+  `rtol·max(|y_n|, |y_{n+1}|)`), the controller, and the stage solve.
+- **It barely reaches the outputs.** The layer is TSS layer 3 of 10 counting from
+  the bottom (feed at 5), the blanket front at ~450 g/m³ (t = 8 d: 6763, 2231, 430,
+  449, 433, 475, 88, 35, 21, 14 from the bottom). Rebuilding the effluent, wastage
+  and RAS streams (`plant.stream` on a `PlantSolution` of each saved trajectory)
+  against the tight solve, 8 species (SNH, SNO, SS, XS, XB_H, XB_A, SND, XND):
+
+  | solve | effluent worst, rel. to peak | wastage / RAS worst | effluent 8-day-mean error, particulates (SNH) |
+  |---|---|---|---|
+  | diffrax | 9.2e-5 | 6.0e-5 | 1.5e-5 (9.8e-5) |
+  | lean loop at 7de1fbe | 2.3e-4 | 1.3e-4 | 1.7e-5 (1.0e-4) |
+  | shipped (`_KAPPA = 0.01`, first correction) | 2.1e-3 (XB_H: 0.021 of 9.9 g/m³) | 2.6e-4 | 2.0e-4 (6.8e-5) |
+  | `_KAPPA = 0.1`, two corrections | 1.8e-4 | 6.1e-5 | — |
+
+  The shipped loop's effluent particulates are ~10× worse than the old loop's on
+  this run but still 0.02% on the mean; the nutrients match diffrax. The effluent
+  figure is non-monotone in κ (one run, step-sequence noise), so it does not
+  identify a cause. Not checked: whether the settler error stays bounded over a
+  long (e.g. 609-day) run.
+- **The shipped configuration on the 1-day window** (`_KAPPA = 0.01`, first
+  correction accepted, hold rule, stage-value test, Anderson 2;
+  `probe_step_rejections.py --days 1`): `k=0` 1140 / 100 / 156
+  (attempted / nonconv / err-rejected), 7537 state stage iterations (2.20 per
+  solve), 8677 right-hand-side evaluations against 10695 at 7de1fbe (−19%); `k=16`
+  1967 / 67 / 430 against 2135 / 107 / 572, 11301 state and 11296 sensitivity
+  stage iterations (1.92 and 2.08 per solve).
+- **`sens_error_control=False` in the shipped configuration** (`k=16`, interleaved
+  with the default, best of 4 cached calls): 1156 / 114 / 129, 9.3 s against
+  16.7 s; `err_y` 1.9e-3 (median 1.4e-5), `err_S` 4.1e-4 (median 2.2e-4) against
+  the default's 2.0e-3 (5.8e-6) and 2.5e-4 (1.9e-4).
+
+## Timing on this container (2026-11-01)
+
+Cached-call wall times are **bimodal, ~2×**, across processes *and* within one: the
+same depth-0 `k=0` solve took 4.5 s in one process and 10.0 s in three consecutive
+calls of another; within one process `k=16` calls ran 17.0, 17.9, 17.2, 38.4, 17.2 s.
+CPU steal was 0–2% (`vmstat`). So: compare variants **interleaved in one process**
+(`profile_plant_sensitivity.py --variants`) and report the best call; step counts are
+deterministic and need no repetition.

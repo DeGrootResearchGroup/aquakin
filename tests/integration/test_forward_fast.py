@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 import aquakin
-from aquakin.integrate.forward_solve import forward_solve
+from aquakin.integrate.forward_solve import StepControl, forward_solve
 
 
 # --------------------------------------------------------------------------
@@ -108,13 +108,13 @@ def test_step_budget_exhaustion_raises():
     te = jnp.linspace(0.0, 10.0, 5)
     with pytest.raises(Exception, match="maximum number of solver steps"):
         forward_solve(rhs, jac, jnp.array([1.0]), jnp.array([0.3]), 0.0, 10.0, te,
-                      rtol=1e-6, atol=1e-9, max_steps=3)
+                      rtol=1e-6, atol=1e-9, control=StepControl(max_steps=3))
     # The step-budget message is recognized by friendly_solve_errors.
     from aquakin.integrate._common import friendly_solve_errors
     with pytest.raises(RuntimeError, match="step budget"):
         with friendly_solve_errors(3, what="test solve"):
             forward_solve(rhs, jac, jnp.array([1.0]), jnp.array([0.3]), 0.0, 10.0,
-                          te, rtol=1e-6, atol=1e-9, max_steps=3)
+                          te, rtol=1e-6, atol=1e-9, control=StepControl(max_steps=3))
 
 
 def test_stalled_solve_raises():
@@ -129,7 +129,8 @@ def test_stalled_solve_raises():
     te = jnp.linspace(0.0, 2.0, 5)
     with pytest.raises(Exception, match="stalled|maximum number"):
         forward_solve(rhs, jac, jnp.array([1.0]), None, 0.0, 2.0, te,
-                      rtol=1e-6, atol=1e-9, max_steps=100_000)
+                      rtol=1e-6, atol=1e-9,
+                      control=StepControl(max_steps=100_000))
 
 
 # --------------------------------------------------------------------------

@@ -412,12 +412,23 @@ dense augmented solve on large stiff systems (e.g. the layered biofilm) and
 gives bit-identical results.
 
 The **plant** has it too: `Plant.solve_sensitivity(params, wrt, t_span=, t_eval=,
-y0=)` runs the same augmented `[y; S]` solve on the plant's enhanced solver
-config (Kvaerno3 + decoupled Newton + cached recycle map + the simultaneous
-corrector), so a forward-mode sensitivity of a stiff dynamic plant stays **finite
-over long horizons** where `jacfwd` through `plant.solve` goes non-finite. It is
-exact for kinetic parameters and backs the forward mode of
-`plant.dynamic_sensitivity`.
+y0=)` integrates the same `[y; S]` system with the cached recycle map, so a
+forward-mode sensitivity of a stiff dynamic plant stays **finite over long
+horizons** where `jacfwd` through `plant.solve` goes non-finite. By default it
+uses a CVODES-style *staggered corrector* (`corrector="staggered"`) on a lean
+forward-only Kvaerno3 loop: each step converges the state first, then solves the
+sensitivity stages (linear in `S`) with the same factorization. No second
+derivatives are formed, so each parameter adds only Jacobian-vector products to
+a step, and its step controller also caps step growth by the Newton contraction
+rate. On a BSM2 window with 16 parameters it runs several times faster than the
+previous solve. `corrector="simultaneous"` keeps the differentiable diffrax
+augmented solve. By default the step controller bounds the error of `S` as well
+as the state's; `sens_error_control=False` chooses the steps on the state alone
+(the CVODES `errconS = false` option) — about half the time on a 16-parameter
+BSM2 day, with the error of `S` no longer controlled — for a screening run or an
+otherwise very long one. The compiled solve is cached on the plant, so repeated calls
+(a DGSM screen, a parameter sweep) compile once. It is exact for kinetic
+parameters and backs the forward mode of `plant.dynamic_sensitivity`.
 
 ### Cap-free reverse-mode gradients (stable adjoint)
 
@@ -589,7 +600,8 @@ The three settings:
 If a solve never needs gradients (`jax.grad` / `calibrate` / `sensitivity` of the
 result), `forward_fast=True` runs a lean integrator that skips the diffrax
 adjoint / optimistix / lineax machinery entirely — a plain `lax.while_loop`
-adaptive ESDIRK with a simplified Newton and the colored Jacobian:
+adaptive ESDIRK with an Anderson-accelerated simplified Newton and the colored
+Jacobian:
 
 ```python
 sol = plant.solve(t_span=(0.0, 609.0), t_eval=t_eval, params=params, y0=y0,

@@ -14,7 +14,8 @@ equals the dense one when the pattern is a superset.
 - :meth:`_structural_plant_pattern` -- assemble the plant's structural Jacobian
   sparsity from each unit's emitted couplings (the complete superset a numeric
   probe alone would miss for a saturated warm start).
-- :meth:`jacobian_solver` -- the forward implicit-solve colored root finder.
+- :meth:`forward_root_finder` / :meth:`jacobian_solver` -- the forward
+  implicit-solve colored root finder, and a diffrax solver configured with it.
 - :meth:`adjoint_jacobian_builder` -- the ``stable_adjoint`` backward ``df/dy``
   colored builder.
 - :meth:`steady_jacobian_builder` -- the PTC steady residual ``dF/dy`` colored
@@ -280,24 +281,30 @@ class ColoredJacobianManager:
 
     # --- forward implicit solve ---------------------------------------------
 
-    def jacobian_solver(self, solver, t0, y0, params, rtol, atol):
-        """Return ``solver`` reconfigured to use a colored-AD Jacobian root
-        finder, or ``solver`` unchanged when the colored path is unavailable.
+    def forward_root_finder(self, t0, y0, params, rtol, atol):
+        """The guarded colored root finder for the forward implicit solve, or
+        ``None`` when the colored path is unavailable.
 
         Built **once per plant** (concretely): derive the plant Jacobian sparsity
         pattern, color it, pack a :class:`ColoredVeryChord`, and **guard** it by
-        comparing the colored and dense Jacobians at the start state -- falling
-        back to the dense path (returning ``solver`` unchanged, with a warning) if
-        they disagree. Reused on later solves. Skipped under tracing if not yet
-        built (the probe/guard need concrete arrays), so a first traced solve
-        falls back to dense. The colored matrix equals the dense one when the
-        pattern is a superset, so the step sequence is unchanged; a pattern miss
-        only costs solver steps, never accuracy.
+        comparing the colored and dense Jacobians at the start state -- returning
+        ``None`` (with a warning) if they disagree. Reused on later solves.
+        Skipped under tracing if not yet built (the probe/guard need concrete
+        arrays), so a first traced solve gets ``None``. The colored matrix equals
+        the dense one when the pattern is a superset; a pattern miss only costs
+        solver steps, never accuracy.
+
+        Returns
+        -------
+        ColoredVeryChord or None
+            Its ``seed_matrix`` / ``color_of`` / ``pattern`` materialize the
+            per-step Jacobian
+            (:func:`~aquakin.integrate.colored_jacobian.state_jacobian`).
         """
         plant = self.plant
         if self._root_finder is None:
             if isinstance(params, jax.core.Tracer) or isinstance(y0, jax.core.Tracer):
-                return solver  # can't build under trace; fall back
+                return None  # can't build under trace
             t0a = jnp.asarray(float(t0))
             states0 = plant._split_state(y0)
             rmap = plant._recycle._maybe_recycle_map(t0a, states0, params)
@@ -316,7 +323,14 @@ class ColoredJacobianManager:
             )
 
         rf, n_colors, ok = self._root_finder
-        if not ok:
+        return rf if ok else None
+
+    def jacobian_solver(self, solver, t0, y0, params, rtol, atol):
+        """Return ``solver`` reconfigured to use the colored-AD Jacobian root
+        finder of :meth:`forward_root_finder`, or ``solver`` unchanged when the
+        colored path is unavailable (the dense path)."""
+        rf = self.forward_root_finder(t0, y0, params, rtol, atol)
+        if rf is None:
             return solver
         # Build through the single-source-of-truth helper: it injects the colored
         # root finder into the user-supplied solver, or into the canonical Kvaerno5

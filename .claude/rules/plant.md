@@ -140,7 +140,10 @@ Key types:
   caches) lives in a [`ColoredJacobianManager`](aquakin/plant/colored.py)
   collaborator (`plant._colored`), mirroring `RecycleResolver`: it back-references
   the `Plant` for the state layout, unit couplings and RHS, and exposes
-  `jacobian_solver` (forward implicit solve), `adjoint_jacobian_builder`
+  `forward_root_finder` (the guarded forward colored root finder, or `None`;
+  `forward_fast` and the staggered `solve_sensitivity` materialize their per-step
+  `J` from it via `colored_jacobian.state_jacobian`) / `jacobian_solver` (a diffrax
+  solver configured with it), `adjoint_jacobian_builder`
   (`stable_adjoint` backward `df/dy`) and `steady_jacobian_builder` (PTC steady
   `dF/dy`). All three share one probe→structural-union→build→guard scaffold
   (`_build_and_guard` / `_colored_from_probe`); each caches its result and
@@ -161,7 +164,8 @@ Key types:
   **Parameter-slice cache** — `_params_for_unit` retains only concrete slices.
   A concrete parameter vector closed over by `jax.jit` can still produce traced
   slices; those must not be stored on the plant or reused by another trace.
-  **Compiled-solve caches** — the jitted forward + PTC steady solves and the
+  **Compiled-solve caches** — the jitted forward + PTC steady solves (the
+  `solve_sensitivity` solves sit in `.jit` under a `"solve_sensitivity"` key) and the
   continuation / arclength kernels (all solver-run memoization, keyed by
   settings, that bake in the reactor conditions) live in a
   [`SolveCache`](aquakin/plant/solve_cache.py) value object (`plant._solve_cache`,
@@ -634,6 +638,22 @@ effluent-NH4 distribution vs the reference: the reactors agree to corr 0.99 but
 the pass-through settler does not damp the soluble signal the way BSM2's
 soluble-carrying settler does (the JRN-056 dynamic validation). `build_bsm2`
 enables it by default (`settler_soluble_holdup=False` turns it off).
+**`interface_flux`** (`"takacs"` default | `"godunov"`; builders
+`settler_interface_flux`, BSM1 and BSM2) picks the settling flux between layers
+(`TakacsClarifier._interface_flux`). `"godunov"` is the Godunov flux of the settling
+conservation law for the unimodal `F(X) = v_s(X)·X` (Bürger, Diehl & Nopens 2011),
+at every interface (no `X_threshold`): equal to the Takács minimum when the upper
+layer is the more dilute, the maximum of `F` between the two concentrations when it
+is the denser (`F` at its peak, located by `_flux_peak`'s ternary search, when they
+straddle it). In BSM2's blanket, layers 2–5 sit within ~1% of each other on the
+rising branch of `F` and swap order hundreds of times a day; the Takács rule
+switches flux at every swap (kinks, pulses ±10–15%, solver failures), the Godunov
+flux is the upper layer's either way. Measured (`scripts/probe_settler_accuracy.py`,
+8-day dynamic BSM2, `rtol = 1e-4`, 2026-11-02): lean-loop attempts 8901 → 3177,
+cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic effluent
+means within 0.07% of Takács, the constant-influent steady state identical (layers
+2–5 equal there, where the rules agree). Opt-in because the BSM reference
+settlers use the Takács rule.
 
 **Shared separator/clarifier helpers.** The separator/clarifier family resolves
 its settling / particulate / TSS species lists through the shared

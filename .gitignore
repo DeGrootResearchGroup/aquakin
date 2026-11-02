@@ -50,8 +50,10 @@ coverage.xml
 Thumbs.db
 
 # Project-local settings (worktrees, local settings) -- but track the
-# path-scoped guidance rules, which must ship with the repo to load.
+# path-scoped guidance rules, which must ship with the repo to load, and the
+# Claude-facing investigation notes they point to.
 .claude/*
 !.claude/rules/
+!.claude/notes/
 reference/
 figures/

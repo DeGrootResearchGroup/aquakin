@@ -112,6 +112,39 @@ def materialize_colored_jacobian(root_finder, f, y):
     return JS[:, root_finder.color_of] * root_finder.pattern  # (n, n)
 
 
+def state_jacobian(rhs, root_finder=None):
+    """The state Jacobian ``jac(t, y, args) -> df/dy`` of ``rhs(t, y, args)``.
+
+    Colored (:func:`materialize_colored_jacobian`) when ``root_finder`` is
+    given, a dense ``jax.jacfwd`` otherwise. This is the per-step Jacobian the
+    lean forward integrators
+    (:mod:`aquakin.integrate.forward_solve`) factor to steer their simplified
+    Newton iterations.
+
+    Parameters
+    ----------
+    rhs : Callable
+        ``rhs(t, y, args) -> dy/dt``.
+    root_finder : ColoredVeryChord, optional
+        Carries the color seeds and sparsity pattern; ``None`` for dense.
+
+    Returns
+    -------
+    Callable
+        ``jac(t, y, args)`` returning the ``(n, n)`` Jacobian.
+    """
+
+    def jac(t, y, args):
+        def f(yy):
+            return rhs(t, yy, args)
+
+        if root_finder is None:
+            return jax.jacfwd(f)(y)
+        return materialize_colored_jacobian(root_finder, f, y)
+
+    return jac
+
+
 def greedy_color(pattern: np.ndarray) -> np.ndarray:
     """Greedy CPR (forward) column coloring of a Jacobian sparsity pattern.
 

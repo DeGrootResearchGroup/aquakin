@@ -260,42 +260,121 @@ throttle, so no special-casing). Implemented in
 [`integrate/forward_sensitivity.py`](aquakin/integrate/forward_sensitivity.py)
 on `BatchReactor`, `PlugFlowReactor` and `BiofilmReactor`.
 
-**`Plant.solve_sensitivity` — the stable forward mode on the plant (the one that
-was missing).** The reactors carried the cap-free augmented `[y; S]` solve, but
-the *plant* was never wired to it, so a forward sensitivity of a stiff dynamic
-plant fell back to `jacfwd` through `plant.solve` — finite per step, but
-**non-finite over a long horizon**. That long-horizon failure is **numerical,
-not a genuine tangent divergence**: the true sensitivity stays bounded (verified
-by watching `‖S‖` *oscillate* with the diurnal load over 17 days — 45→196 — not
-grow exponentially), and the break is the reactor-era
-`augmented_forward_sensitivity` building a **stock `Kvaerno5`** that lacks the
-plant's solver robustness. It was the one implicit mode never brought into the
-`build_implicit_solver` / `build_step_controller` consolidation (the forward
-`jax_adjoint`, `forward_fast` and `stable_adjoint` paths all build from those
-helpers; the forward-*sensitivity* solve built its own). `Plant.solve_sensitivity(params, wrt, *, t_span, t_eval=, y0=, factormax=, dtmax=)`
-closes the gap: it integrates the same augmented `[y; S]` system but routes the
-solver through those shared helpers, so the `[y; S]` solve inherits the plant's
-**decoupled Newton**, **`factormax`** cap, **`Kvaerno3`** base solver and
-**cached recycle/flow maps** (its `f_flat` reuses the once-per-solve map instead
-of re-resolving the recycle each call), while keeping the block-arrow
-`SimultaneousCorrector` for the per-stage linear algebra. That config is exactly
-what the stock solver lacked: the 20-day BSM2 forward sensitivity that the stock
-augmented solve **and** `jacfwd` both blow up on is **finite** under
-`solve_sensitivity`; it matches the dense `Kvaerno5` augmented solve to 5 digits
-at 10 days, matches `jacfwd` to ~3e-7 on BSM1, and runs faster than the stock
-dense/corrector (the Kvaerno3 + decoupled Newton + cached map all pay off).
-Returns `(ts, ys, S)` with `S` the state sensitivity `dy/dθ`, shape
-`(n_t, ndof, k)`. The cached map is built from the concrete `params` and closed
-over, so the augmented linearisation drops `∂M/∂θ` — **exact for kinetic
-parameters** (`M` depends only on the flow setpoints); a flow-setpoint
-sensitivity needs the per-call map (not yet wired). The block-arrow corrector is
-**specific to the `[y; S]` arrow** (each sensitivity column couples only to `y`,
-sharing the one diagonal block `D = I − γ·dt·J`) and does **not** transfer to the
-single-state forward/adjoint solves (whose per-step lever is the colored
-Jacobian) or the steady-state IFT (which already factors `∂F/∂y` once and reuses
-it across parameters). `build_implicit_solver` gained a `linear_solver=` slot to
-inject the corrector into the decoupled root finder. Validated in
-`tests/integration/test_dynamic_sensitivity.py::test_solve_sensitivity_matches_jacfwd`.
+**`Plant.solve_sensitivity` — the stable forward mode on the plant.** A forward
+sensitivity of a stiff dynamic plant by `jacfwd` through `plant.solve` is finite
+per step but **non-finite over a long horizon**. That failure is **numerical, not
+a genuine tangent divergence**: the true sensitivity stays bounded (`‖S‖`
+*oscillates* with the diurnal load over 17 days — 45→196 — rather than growing),
+and a stock-`Kvaerno5` augmented solve blows up on the 20-day BSM2 window too.
+`Plant.solve_sensitivity(params, wrt, *, operating=, t_span, t_eval=, y0=, rtol=,
+atol=, sens_rtol=, factormax=, dtmax=, max_steps=, corrector=, return_stats=)`
+integrates `[y; S]` with the controller bounding `S`, on the plant's **cached
+recycle/flow maps** (built once per solve inside the compiled function, from the
+runtime `params`, and closed over — so the linearisation w.r.t. the sensitivity
+parameters drops `∂M/∂θ`: **exact for kinetic parameters**, `M` depending only on
+the flow setpoints; a flow-setpoint sensitivity needs the per-call map, not
+wired). Returns `(ts, ys, S)`, `S` shape `(n_t, ndof, k)` (plus a `SolveStats` for
+`return_stats=True`). Two correctors (`_CORRECTORS` in `plant/sensitivity.py`),
+built by the one `_build_sensitivity_solve`:
+- **`corrector="staggered"` (default, #654)** —
+  `integrate/forward_solve.py::staggered_sensitivity_solve` on the lean
+  `lax.while_loop` Kvaerno3 loop it shares with `forward_fast` (one `_integrate`
+  driver over a pytree state, one `_stage_solve` stage iteration, one `StepControl`).
+  Per implicit stage: converge the state (chord on `LU(I − γhJ)`, `J` the
+  **colored** Jacobian from `ColoredJacobianManager.forward_root_finder`, dense
+  `jacfwd` if its guard fails — `J` only steers, so a pattern miss costs
+  iterations, never accuracy), then solve the sensitivity stage, **linear in
+  `K`**: `K = J(Y_i)(S + h Σa_ij K_j + γhK) + f_θ(Y_i)`, by the same chord on the
+  same factor, its residual one `jax.linearize` of `f` at `(Y_i, θ)` pushed along
+  the `k` columns (`vmap`). It is the augmented-system stage to Newton tolerance,
+  with **no second derivatives** (the simultaneous corrector's `n·k`
+  second-order probes per Jacobian are gone) and no `n(1+k)` factorization. The
+  state error test runs first; a step rejected on the state skips the sensitivity
+  work (`lax.cond`). Error norm: **CVODES** — `max(WRMS_y, max_j WRMS_{S_j})` (the
+  augmented diffrax path's single RMS over `n(1+k)` components lets the `S` block
+  dilute the state's error as `k` grows); `sens_error_control=False` (CVODES
+  `errconS = false`, staggered only, `ValueError` on the simultaneous corrector,
+  in the compile-cache key, passed through forward-mode `dynamic_sensitivity` /
+  `dynamic_dgsm`) drops `S` from it. Step control: the PI controller plus
+  the **contraction-rate growth limiter** (`StepControl.factor`; the rate is the
+  max over state and sensitivity iterations) and **no growth on an attempt
+  accepted right after a failed one** (Hairer's rule; `factor`'s
+  `after_failure`, carried by `_integrate`); `factormax` maps to
+  `StepControl.maxfac` (default 2, vs diffrax's 10). **Forward-only**: concrete
+  `params`/`y0` required (a tracer raises `TypeError` naming
+  `corrector="simultaneous"`). Default `atol_S` shared with the augmented path
+  (`forward_sensitivity.sensitivity_atol`, CVODES `atol_y/|θ_j|`). Measured on a
+  synthesised-influent BSM2 day (`.claude/notes/plant-sensitivity-log.md`, which
+  carries the configuration and the container's ~2× timing noise): several times
+  faster than the simultaneous corrector at `k=16`, but the per-attempt cost is
+  **not flat in `k`** (~2.7× from `k=0` to `k=16`: the `k`-column Jacobian-vector
+  products, ~10 per accepted step). Before Anderson acceleration ~20% of attempts
+  failed Newton — the step-start `J` is wrong in one or two directions at those
+  stages (mostly the Takács settler), not grown into divergence; a dense `J` fails
+  the same. With the current defaults (Anderson, the stage-value test, the hold
+  rule) it is ~9% at `k=0` and ~3% at `k=16` on that day.
+  **The stage iteration is Anderson-accelerated** (`forward_solve._stage_solve`,
+  shared with `forward_fast`; `_ANDERSON_DEPTH = 2` by default, `0` = the plain
+  chord iteration): the factored `M` preconditions a Type II Anderson mix, row by
+  row for the sensitivity block. The contraction/divergence tests read the plain
+  step `−M⁻¹R(x)` (the preconditioned residual) — accelerated updates are
+  non-monotone, and testing them stopped converging solves as "diverged". On the
+  BSM2 day: `k=0` ~30% faster, `k=16` ~5%; Newton failures −50% / −67%, but the
+  freed step growth becomes error-test rejections. Stages whose plain iteration
+  diverges at once are out of its reach. Newton-Krylov (GMRES) stage updates were
+  measured and **deleted** — more failures removed, but slower than Anderson at
+  both `k` (the note). **The stage test reads the stage-value increment
+  `γh·Δk`** (`_stage_weight`: the same in any time unit) at **`_KAPPA = 0.01`**;
+  until 2026-11-01 it read the slope increment `Δk` against the state tolerance —
+  `1/(γh)` (~2000× at BSM2 steps) stricter and unit-dependent — at `_KAPPA = 0.1`
+  tuned in those units. κ is set by an 8-day BSM2 check (worst-layer error 3.3e-2
+  of its peak at 0.1, 4.9e-3 at 0.01, the old loop's 5.4e-3 at 0.5-d saves), not by
+  a 1-day window: the stage error shows on the Takács blanket layers, whose
+  min-flux rule switches branch every few steps and makes fast pulses whose
+  timing the stage error shifts. **A stage accepts its first correction on its
+  size** (`η = 1`, reporting rate 0): without it a solve started at a steady state
+  stalled — the corrections after an already-converged guess are round-off, and
+  their ratio read as divergence and fed the growth limiter (BSM1, constant
+  influent, 40 days of operating sensitivity from the steady state: over 200 000
+  steps, 357 with it; pinned by
+  `test_a_solve_started_at_its_steady_state_takes_long_steps`); it rarely fires
+  elsewhere. Net, against the 7de1fbe defaults on the BSM2 day: `k=0` 8677 vs
+  10695 right-hand-side evaluations (−19%), `k=16` 1967 vs 2135 attempts (−8%).
+  `sens_error_control=False` at `k=16` (shipped configuration): 1156 attempts,
+  9.3 s against 16.7 s, `S` error 4.1e-4 of a column peak (controlled 2.5e-4);
+  not bounded — across earlier settings it ranged 2.8e-4 to 2.4e-3. **On those
+  blanket layers the lean loop trails diffrax at equal `rtol`** (pulse-timing
+  errors up to 5.6% of a layer's peak at 1e-4, diffrax 0.4%) **because diffrax takes
+  twice the steps**: 6852 of its 6857 rejections are failed root finds on the same
+  switching, which set its step size whatever its `rtol`; the lean loop (no
+  root-find failures) takes the error test's steps, and at `rtol = 1e-5` matches
+  diffrax-at-1e-4 there with fewer attempts. The outputs do not see the pulses (the
+  note, "Why the lean loop trails diffrax on the settler blanket";
+  `scripts/probe_settler_accuracy.py`). The opt-in Godunov settler flux
+  (`TakacsClarifier(interface_flux="godunov")`, plant rules) removes the switching:
+  lean attempts 8901 → 3177, diffrax 17249 → 3653 on that case. Error-test
+  rejections are not influent breakpoints; at `k=16` most are driven by the
+  sensitivity error estimate jumping (the note, "Where the error-test rejections
+  come from"). The scripts (lean-loop settings specs in `_lean_settings.py`):
+  `profile_plant_sensitivity.py --variants` (`--reference-rtol` for errors
+  against a tight solve), `probe_newton_drift.py`, `probe_step_rejections.py`.
+- **`corrector="simultaneous"`** — the diffrax augmented solve
+  (`augmented_forward_sensitivity`, `order=3`, decoupled Newton through
+  `build_implicit_solver` / `build_step_controller`, the block-arrow
+  `SimultaneousCorrector` for `k > 1`). Kept because it is **differentiable** and
+  an independent check of the staggered result; much slower (see
+  `.claude/notes/plant-sensitivity-log.md`).
+
+**Compiled once per structure.** The jitted solve lives in `plant._jit_cache`
+(the `SolveCache.jit` dict, so `invalidate()` drops it), keyed by
+`("solve_sensitivity", corrector, wrt+operating indices, op_meta, t_eval shape,
+colored?, recycle/flow-map-constant flags, factormax, dtmax, max_steps)`; the
+parameter values, `y0`, `t_span` endpoints, `t_eval` values and `rtol`/`atol`/
+`sens_rtol` are runtime arguments. Validated: staggered vs closed form on a
+one-CSTR plant (kinetic + both operating kinds, both correctors) and the
+no-retrace check in `tests/integration/test_staggered_sensitivity.py`; vs
+`jacfwd` and vs the simultaneous corrector on BSM1 and a BSM2 window in
+`tests/integration/test_dynamic_sensitivity.py` (`heavy`).
 **Operating-parameter sensitivity (`operating=`).** Beyond the kinetic `wrt`
 parameters, `solve_sensitivity(operating=[...])` differentiates the dynamic output
 w.r.t. **operating conditions** — a differentiable multiplicative scale (nominal
@@ -357,10 +436,11 @@ option; whether it also beats capped `jacfwd` depends on the span.**
 The known cost of the non-invasive design (a custom *solver*, not a custom
 diffrax RK stage): the solver only sees the augmented operator, so materialising
 `D` and the off-diagonal coupling blocks `L_j` costs `n` probes of the augmented
-`M.mv` (`n·(1+p)` f-JVPs per step) — the `L_j` blocks that an ideal CVODES with
-direct access to `f` would not form. A zero-redundancy variant (a custom operator
-carrying `f`, needing a `Kvaerno5` stage subclass) is the documented future
-optimisation. `calibrate` does not yet expose a
+`M.mv` — each a JVP of the augmented RHS, i.e. second-order in `f` — the `L_j`
+blocks that an ideal CVODES with direct access to `f` would not form. The plant
+avoids it with the staggered corrector on the lean loop (above); the reactors
+(Kvaerno5, diffrax) still pay it — a Kvaerno5 lean loop would be needed to move
+them. `calibrate` does not yet expose a
 `jacobian="forward_sensitivity"` hook, so the `dtmax` cap is still required for
 the reverse-mode `calibrate` gradient until that lands.
 
@@ -607,7 +687,9 @@ compiled solve to avoid it:
   depends on the entire unit-config + connection graph, and a structural key
   complete enough to never false-hit would be fragile — a miss there would
   silently return a solve compiled for a *different* plant. Per-instance keying
-  cannot false-hit.) The event path (`run_to_steady_state`) is not cached
+  cannot false-hit.) `Plant.solve_sensitivity` is cached the same way (keyed
+  by its static structure, everything else a runtime argument — see its bullet
+  above). The event path (`run_to_steady_state`) is not cached
   (run-once). The `gradient="stable_adjoint"` path **is** cached for repeat
   *forward* solves (a parameter sweep), keyed the same way but tagged
   `"stable_adjoint"` so it never collides with the forward path, with `t_eval`

@@ -24,6 +24,13 @@ flux exchange:
   layers at or below the feed; up for layers above) with the settling
   flux from the layer above and to the layer below.
 
+  The settling flux across an interface is, by default, the Takács rule: the
+  smaller of the two adjacent layers' fluxes ``v_s(X) * X`` (above the feed,
+  the upper layer's flux while the lower layer is dilute). The opt-in
+  ``interface_flux="godunov"`` uses instead the Godunov flux of the settling
+  conservation law (Bürger, Diehl & Nopens 2011), which differs from the
+  Takács rule only where the upper layer is the denser one.
+
 The clarifier exposes ``overflow`` and ``underflow`` output ports. The
 overflow flow rate is set as a property of the unit; the underflow takes
 the remainder.
@@ -32,6 +39,10 @@ References
 ----------
 Takács, I., Patry, G.G., & Nolasco, D. (1991). A dynamic model of the
 clarification-thickening process. Water Research, 25(10), 1263-1271.
+
+Bürger, R., Diehl, S., & Nopens, I. (2011). A consistent modelling methodology
+for secondary settling tanks in wastewater treatment. Water Research, 45(6),
+2247-2260.
 """
 
 from __future__ import annotations
@@ -39,6 +50,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -70,6 +82,11 @@ _DEFAULT_TSS_FACTORS = {
     **dict.fromkeys(ASM1_TSS_SPECIES, ASM1_TSS_FACTOR),
     "XND": 0.0,
 }
+
+# Ternary-search steps locating the settling-flux peak (``_flux_peak``): each
+# keeps two thirds of the bracket, so 90 steps shrink the BSM bracket
+# (20 / rh ~ 3.5e4 g/m³) to ~5e-12 g/m³.
+_FLUX_PEAK_STEPS = 90
 
 # Standard BSM1 Takács parameter set (Alex et al. 2008, Table 1.7).
 _BSM1_TAKACS_DEFAULTS = dict(
@@ -153,6 +170,23 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         ten-layer soluble model of the BSM1 and BSM2 reference settlers
         (``settler1dv4`` / ``settler1dv5_bsm2`` with their default
         ``MODELTYPE`` 0), and it is independent of ``composition_mode``.
+    interface_flux : {"takacs", "godunov"}
+        The settling flux across each interface between adjacent layers.
+
+        - ``"takacs"`` (default): the smaller of the two layers' fluxes
+          ``v_s(X) * X``; above the feed, the upper layer's flux while the
+          lower layer is below ``X_threshold``. This is the rule of the BSM1
+          and BSM2 reference settlers.
+        - ``"godunov"``: the Godunov flux of the settling conservation law
+          for the unimodal flux ``v_s(X) * X`` (Bürger, Diehl & Nopens
+          2011), at every interface. It equals the Takács minimum when the
+          upper layer is the more dilute one, and differs where it is the
+          denser one: there the Takács rule holds the upper layer back to the
+          lower layer's flux, while the Godunov flux is the largest flux
+          between the two concentrations. On the rising branch of the flux
+          curve the Godunov flux is therefore the upper layer's flux whatever
+          the ordering, so neighbouring layers at nearly equal concentration
+          no longer switch the rule between them. ``X_threshold`` is not used.
     input_port : str
     overflow_port : str
     underflow_port : str
@@ -180,6 +214,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     tss_factors: dict[str, float] = field(default_factory=lambda: dict(_DEFAULT_TSS_FACTORS))
     composition_mode: str = "per_species"
     soluble_holdup: bool = False
+    interface_flux: str = "takacs"
     input_port: str = "inlet"
     overflow_port: str = "overflow"
     underflow_port: str = "underflow"
@@ -199,6 +234,11 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             raise ValueError(
                 f"TakacsClarifier '{self.name}': composition_mode must be "
                 f"'per_species' or 'lumped_tss'; got {self.composition_mode!r}."
+            )
+        if self.interface_flux not in ("takacs", "godunov"):
+            raise ValueError(
+                f"TakacsClarifier '{self.name}': interface_flux must be "
+                f"'takacs' or 'godunov'; got {self.interface_flux!r}."
             )
         if self.feed_layer < 0 or self.feed_layer >= self.n_layers:
             raise ValueError(f"feed_layer must be in [0, {self.n_layers}); got {self.feed_layer}")
@@ -550,6 +590,65 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         particulate concentrations."""
         return jnp.sum(layer_C * self._factors_arr)
 
+    def _interface_flux(self, tss_above, tss_below, f_above, f_below, X_min):
+        """Downward TSS flux across each interface, shape ``(n_layers - 1,)``.
+
+        Interface ``i`` lies between layer ``i`` (below) and ``i + 1`` (above);
+        ``tss_*`` are the two layers' TSS and ``f_*`` their fluxes
+        ``v_s(X) * X``.
+
+        - ``"takacs"``: the *limiting* (minimum) of the two fluxes -- except in
+          the clarification zone (interfaces above the feed) while the
+          receiving layer is dilute (``<= X_threshold``), where the upper layer
+          settles freely (this keeps the effluent clean). Below the feed the
+          minimum applies everywhere, so a dense blanket limits its own loading.
+        - ``"godunov"``: the Godunov flux of ``X_t + F(X)_z = 0`` with ``z``
+          pointing down, for the unimodal ``F(X) = v_s(X) * X``. With the upper
+          layer the upstream state: if it is the more dilute, the minimum of
+          ``F`` between the two concentrations (the Takács minimum, as ``F`` is
+          unimodal); if it is the denser, the maximum of ``F`` between them --
+          ``F`` at its peak when the two straddle it, else the larger of the two
+          fluxes.
+        """
+        if self.interface_flux == "takacs":
+            interface_idx = jnp.arange(self.n_layers - 1)
+            is_clarification = interface_idx >= self.feed_layer  # static bool
+            below_threshold = tss_below <= self._X_threshold
+            return jnp.where(
+                is_clarification & below_threshold, f_above, jnp.minimum(f_above, f_below)
+            )
+        x_peak, f_peak = self._flux_peak(X_min)
+        straddles = (tss_below < x_peak) & (x_peak < tss_above)
+        expansion = jnp.where(straddles, f_peak, jnp.maximum(f_above, f_below))
+        return jnp.where(tss_above <= tss_below, jnp.minimum(f_above, f_below), expansion)
+
+    def _flux_peak(self, X_min):
+        """Location and value of the maximum of ``F(X) = v_s(X) * X``.
+
+        ``F`` is unimodal (rising while the velocity grows or is capped at
+        ``vmax``, falling once hindered settling dominates), so a fixed number
+        of ternary-search steps over ``[X_min, X_min + 20 / rh]`` brackets the
+        peak to round-off. The peak value is ``F`` at the (gradient-stopped)
+        location: at an interior maximum ``F'`` vanishes, so its derivative with
+        respect to ``X_min`` and the parameters is exact without
+        differentiating the search.
+        """
+        X_min = jnp.asarray(X_min)
+
+        def flux(X):
+            return self._settling_velocity(X, X_min) * X
+
+        def narrow(_, bounds):
+            lo, hi = bounds
+            m1 = lo + (hi - lo) / 3.0
+            m2 = hi - (hi - lo) / 3.0
+            left = flux(m1) < flux(m2)
+            return jnp.where(left, m1, lo), jnp.where(left, hi, m2)
+
+        lo, hi = jax.lax.fori_loop(0, _FLUX_PEAK_STEPS, narrow, (X_min, X_min + 20.0 / self._rh))
+        x_peak = jax.lax.stop_gradient(0.5 * (lo + hi))
+        return x_peak, flux(x_peak)
+
     def _settling_velocity(self, X: jnp.ndarray, X_min: jnp.ndarray) -> jnp.ndarray:
         """Takács double-exponential settling velocity.
 
@@ -751,16 +850,11 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         h_layer: float,
         factors: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
-        """Net Takács (1991) settling flux per layer, shape ``(n_layers, n_comp)``.
+        """Net settling flux per layer, shape ``(n_layers, n_comp)``.
 
-        Solids settle down the column at the bulk velocity ``v_s(TSS)``. At
-        each interface the downward flux is the *limiting* (minimum) of the two
-        adjacent layers' potential fluxes ``v_s(X)*X`` -- EXCEPT in the
-        clarification zone (interfaces above the feed) while the receiving
-        layer is dilute (``<= X_threshold``), where the upper layer settles
-        freely instead of being held up by the min-flux rule (this is what
-        keeps the effluent clean). Below the feed the min-flux rule applies
-        everywhere, so a dense sludge blanket self-limits its own loading.
+        Solids settle down the column at the bulk velocity ``v_s(TSS)``; the
+        TSS flux across each interface is :meth:`_interface_flux` of the two
+        adjacent layers (the Takács rule, or the Godunov flux).
 
         The interface TSS flux is apportioned to columns by the upper (source)
         layer's composition: all particulates in a layer settle at the same
@@ -786,11 +880,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         f_above = self._settling_velocity(tss_above, X_min) * tss_above
         f_below = self._settling_velocity(tss_below, X_min) * tss_below
 
-        min_flux = jnp.minimum(f_above, f_below)
-        interface_idx = jnp.arange(self.n_layers - 1)
-        is_clarification = interface_idx >= self.feed_layer  # static bool
-        below_threshold = tss_below <= self._X_threshold
-        flux_tss = jnp.where(is_clarification & below_threshold, f_above, min_flux)
+        flux_tss = self._interface_flux(tss_above, tss_below, f_above, f_below, X_min)
 
         species_frac_above = layered[1:, :] / (tss_above[:, None] + EPS_Q)
         flux_per_species = flux_tss[:, None] * species_frac_above

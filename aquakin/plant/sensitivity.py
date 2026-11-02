@@ -822,6 +822,11 @@ def steady_state_dgsm(
     )
 
 
+# The two per-stage implicit solves of the augmented ``[y; S]`` system (see
+# :func:`solve_sensitivity`).
+_CORRECTORS = ("staggered", "simultaneous")
+
+
 def solve_sensitivity(
     plant,
     params,
@@ -834,26 +839,56 @@ def solve_sensitivity(
     rtol: float = 1e-6,
     atol=None,
     sens_rtol=None,
+    sens_error_control: bool = True,
     factormax=None,
     dtmax=None,
     max_steps: int = 1_000_000,
+    corrector: str = "staggered",
+    return_stats: bool = False,
 ):
     """Stable forward (variational) sensitivity ``dy/dtheta`` of the plant.
 
-    Integrates the augmented system ``z = [y; S]`` (the state plus its
-    sensitivity ``S = dy/dtheta``) with the step controller's error norm
-    bounding ``S`` directly, so the sensitivity stays finite over long
-    horizons where ``jacfwd`` through the stiff plant solve goes non-finite.
-    This is the plant counterpart of the reactors' ``solve_sensitivity`` --
-    the forward-mode sensitivity tool the dynamic plant lacked.
+    Integrates the state ``y`` together with its sensitivity ``S = dy/dtheta``,
+    which obeys the variational equation ``dS/dt = J S + f_theta``, with the step
+    controller's error norm bounding ``S`` directly, so the sensitivity stays
+    finite over long horizons where ``jacfwd`` through the stiff plant solve goes
+    non-finite. This is the plant counterpart of the reactors'
+    ``solve_sensitivity`` -- the forward-mode sensitivity tool the dynamic plant
+    lacked. Both correctors use the plant's cached recycle / flow maps and a
+    Kvaerno3 ESDIRK; they differ in how each implicit stage is solved:
 
-    The augmented ``[y; S]`` solve uses the SAME enhanced solver config the
-    plant's forward / discrete-adjoint solves use -- a decoupled Newton root
-    finder, the ``factormax`` step-growth cap, and the cached recycle / flow
-    maps -- with a lean ``Kvaerno3`` base solver and the block-arrow
-    :class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`
-    for the per-stage linear algebra (factor the shared diagonal block
-    ``D = I - gamma.dt.J`` once, reuse it across every sensitivity column).
+    - ``"staggered"`` (default): the lean forward-only integrator
+      (:func:`~aquakin.integrate.forward_solve.staggered_sensitivity_solve`).
+      Each stage converges the state by an Anderson-accelerated simplified
+      Newton iteration on ``I - gamma.dt.J`` (``J`` colored, since it only steers
+      the iteration), then solves the
+      sensitivity stage -- linear in ``S`` -- with the same factorization and an
+      exact Jacobian-vector product per parameter. No second derivatives, so
+      each parameter adds only Jacobian-vector products to a step, and its step
+      controller caps the step growth by the Newton contraction rate. The result
+      is not differentiable (it is a ``lax.while_loop``), and ``params`` /
+      ``y0`` must be concrete.
+    - ``"simultaneous"``: the ``diffrax`` augmented ``[y; S]`` solve with the
+      decoupled Newton root finder and, for more than one parameter, the
+      block-arrow :class:`~aquakin.integrate._simultaneous_corrector.SimultaneousCorrector`
+      (factor ``D = I - gamma.dt.J`` once per step, reuse it across the columns).
+      Its root finder differentiates the augmented right-hand side, which costs
+      about ``n * k`` second-order Jacobian-vector products per Jacobian, and it
+      has no convergence-aware step limiter, so it is much slower; it remains
+      for its differentiability and as an independent check of the staggered
+      result.
+
+    The two agree to the solver tolerance. Their error norms differ in one
+    respect: the staggered corrector bounds the state and every sensitivity
+    column separately (the CVODES norm), while the simultaneous corrector bounds
+    one RMS norm over the whole augmented vector.
+
+    The compiled solve is cached on the plant, keyed by the static structure
+    (the correctors, the ``wrt`` indices, the ``operating`` specs, the
+    ``t_eval`` shape, ``factormax``, ``dtmax``, ``max_steps``,
+    ``sens_error_control``); the parameter
+    values, ``y0``, the ``t_span`` endpoints, the ``t_eval`` values and the
+    tolerances are runtime arguments, so repeated calls compile once.
 
     Parameters
     ----------
@@ -886,10 +921,31 @@ def solve_sensitivity(
         floor).
     sens_rtol : float, optional
         Relative tolerance on ``S`` (defaults to ``rtol``).
-    factormax, dtmax : float, optional
-        Step-growth cap and maximum step, passed to the augmented solve.
+    sens_error_control : bool
+        Whether the error of ``S`` enters the step controller's error test
+        (default). ``False`` chooses the steps on the state's error alone (the
+        CVODES ``errconS = false`` option; staggered corrector only): ``S`` is
+        still converged in every implicit stage, to ``sens_rtol``, but its
+        truncation error is no longer bounded. When the sensitivity forces
+        smaller steps than the state -- as on a dynamic BSM2 with many
+        parameters -- this takes about the state solve's steps, with the error
+        of ``S`` uncontrolled: suited to a screening run or an otherwise very
+        long one.
+    factormax : float, optional
+        Largest per-step growth factor of the step size. ``None`` keeps each
+        corrector's own default (2 for the staggered controller, 10 for the
+        ``diffrax`` controller).
+    dtmax : float, optional
+        Maximum step size.
     max_steps : int
-        Step budget for the augmented solve.
+        Step budget (accepted plus rejected steps).
+    corrector : {"staggered", "simultaneous"}
+        The per-stage implicit solve, see above.
+    return_stats : bool
+        If ``True``, also return the step counts: a
+        :class:`~aquakin.integrate.forward_solve.SolveStats` (attempted /
+        accepted / non-converged / error-rejected steps) for the staggered
+        corrector, ``None`` for the simultaneous one.
 
     Returns
     -------
@@ -900,7 +956,9 @@ def solve_sensitivity(
         :meth:`states_by_unit`).
     S : jnp.ndarray
         Sensitivity ``dy/dtheta``, shape ``(n_t, ndof, k)`` for the ``k``
-        ``wrt`` parameters.
+        ``wrt`` + ``operating`` parameters.
+    stats : SolveStats or None
+        Only when ``return_stats=True``.
 
     Notes
     -----
@@ -909,35 +967,40 @@ def solve_sensitivity(
     to this ``[y; S]`` solve and does not apply to the single-state forward /
     adjoint solves, whose per-step lever is the colored Jacobian.
     """
-    from aquakin.integrate._common import default_atol
-    from aquakin.integrate.forward_sensitivity import (
-        augmented_forward_sensitivity,
-    )
+    from aquakin.integrate._common import default_atol, friendly_solve_errors
 
+    if corrector not in _CORRECTORS:
+        raise ValueError(f"corrector must be one of {_CORRECTORS}; got {corrector!r}.")
+    if not sens_error_control and corrector != "staggered":
+        raise ValueError(
+            "sens_error_control=False is supported by corrector='staggered' only; "
+            "the simultaneous corrector's error norm always includes S."
+        )
     plant._build_state_layout()
     plant._build_parameter_layout()
     params_full = plant._coerce_params(jnp.asarray(params))
     y0 = plant.initial_state() if y0 is None else jnp.asarray(y0)
-    free_idx = jnp.asarray(
-        [plant.parameter_index(w) if isinstance(w, str) else int(w) for w in wrt], dtype=int
-    )  # int even when wrt is empty (operating-only)
+    if corrector == "staggered" and (
+        isinstance(params_full, jax.core.Tracer) or isinstance(y0, jax.core.Tracer)
+    ):
+        raise TypeError(
+            "solve_sensitivity(corrector='staggered') needs concrete params / y0: "
+            "it is a forward-only integrator and cannot be traced or "
+            "differentiated. Use corrector='simultaneous' for a differentiable "
+            "sensitivity."
+        )
+    free_idx = tuple(plant.parameter_index(w) if isinstance(w, str) else int(w) for w in wrt)
     t0, t1 = float(t_span[0]), float(t_span[1])
     t0a = jnp.asarray(t0)
 
     # Cached recycle / flow maps (state-invariant for fixed-pump plants): run
-    # the same one-time concrete check plant.solve does, then reuse the maps
-    # per RHS so the augmented solve's f_flat does not re-resolve the recycle
-    # every call. The maps are built from the concrete ``params_full`` and
-    # closed over, so the augmented linearisation w.r.t. the wrt parameters
-    # drops ``dM/dtheta`` -- exact for kinetic parameters (M depends only on
-    # the flow setpoints).
+    # the same one-time concrete check plant.solve does; the compiled solve then
+    # builds the maps once per solve and reuses them per RHS, so the
+    # sensitivity right-hand side does not re-resolve the recycle every call.
     if plant._recycle._recycle_map_constant is None:
         plant._recycle._check_recycle_map_constant(t0a, y0, params_full)
     if plant._recycle._flow_map_constant is None:
         plant._recycle._check_flow_map_constant(t0a, y0, params_full)
-    states0 = plant._split_state(y0)
-    rmap = plant._recycle._maybe_recycle_map(t0a, states0, params_full)
-    fmap = plant._recycle._maybe_flow_map(t0a, states0, params_full)
 
     # Operating-parameter sensitivity: alongside the kinetic ``wrt`` params,
     # differentiate w.r.t. multiplicative scales on the influent (a
@@ -949,38 +1012,162 @@ def solve_sensitivity(
     # ``_parse_operating`` / ``_operating_design`` (see above), so the steady
     # and dynamic stacks accept an identical operating-input description.
     n_params = int(params_full.shape[0])
-    op_meta = plant._parse_operating(operating)
+    op_meta = tuple(plant._parse_operating(operating))
     n_op = len(op_meta)
+    theta_aug = jnp.concatenate([params_full, jnp.ones(n_op)]) if n_op else params_full
+    free_aug = free_idx + tuple(n_params + i for i in range(n_op))
 
-    if n_op:
-        theta_aug = jnp.concatenate([params_full, jnp.ones(n_op)])
-        free_aug = jnp.concatenate([free_idx, n_params + jnp.arange(n_op)])
-    else:
-        theta_aug, free_aug = params_full, free_idx
-
-    def f_flat(t, y, theta):
-        design = plant._operating_design(op_meta, theta[n_params:]) if n_op else None
-        return plant._rhs(t, y, theta[:n_params], recycle_map=rmap, flow_map=fmap, design=design)
-
-    atol_arr = default_atol(y0) if atol is None else jnp.asarray(atol)
-    te = None if t_eval is None else jnp.asarray(t_eval)
-    return augmented_forward_sensitivity(
-        f_flat,
-        y0,
-        theta_aug,
-        free_aug,
-        t0=t0,
-        t1=t1,
-        t_eval=te,
-        rtol=rtol,
-        atol_y=atol_arr,
-        sens_rtol=sens_rtol,
-        dtmax=dtmax,
-        max_steps=max_steps,
-        shared_factor=int(free_aug.shape[0]) > 1,
-        order=3,
-        factormax=factormax,
+    atol_arr = default_atol(y0) if atol is None else jnp.asarray(atol, dtype=float)
+    atol_arr = jnp.broadcast_to(atol_arr, y0.shape)
+    te = jnp.asarray([t1]) if t_eval is None else jnp.asarray(t_eval)
+    # The Jacobian of the staggered corrector only steers its Newton iterations,
+    # so the colored one is used whenever its start-state guard passes (dense
+    # otherwise -- slower, never less accurate).
+    root_finder = (
+        plant._colored.forward_root_finder(t0, y0, params_full, rtol, atol_arr)
+        if corrector == "staggered"
+        else None
     )
+    key = (
+        "solve_sensitivity",
+        corrector,
+        free_aug,
+        op_meta,
+        tuple(te.shape),
+        root_finder is not None,
+        plant._recycle._recycle_map_constant,
+        plant._recycle._flow_map_constant,
+        factormax,
+        dtmax,
+        max_steps,
+        sens_error_control,
+    )
+    jitted = plant._jit_cache.get(key)
+    if jitted is None:
+        jitted = _build_sensitivity_solve(
+            plant,
+            corrector,
+            free_aug,
+            op_meta,
+            n_params,
+            root_finder,
+            factormax=factormax,
+            dtmax=dtmax,
+            max_steps=max_steps,
+            sens_error_control=sens_error_control,
+        )
+        plant._jit_cache[key] = jitted
+    with friendly_solve_errors(max_steps, what="plant sensitivity solve"):
+        ys, S, stats = jitted(
+            y0,
+            theta_aug,
+            t0a,
+            jnp.asarray(t1),
+            te,
+            jnp.asarray(rtol, dtype=float),
+            atol_arr,
+            jnp.asarray(rtol if sens_rtol is None else sens_rtol, dtype=float),
+        )
+    if return_stats:
+        return te, ys, S, stats
+    return te, ys, S
+
+
+def _build_sensitivity_solve(
+    plant,
+    corrector,
+    free_aug,
+    op_meta,
+    n_params,
+    root_finder,
+    *,
+    factormax,
+    dtmax,
+    max_steps,
+    sens_error_control,
+):
+    """Build the jit-compiled sensitivity solve for one static structure.
+
+    The returned function takes ``(y0, theta, t0, t1, t_eval, rtol, atol,
+    sens_rtol)`` -- all runtime arguments -- and returns ``(ys, S, stats)``, with
+    ``S`` shape ``(n_t, ndof, k)`` and ``stats`` ``None`` for the simultaneous
+    corrector. ``theta`` is the plant parameter vector followed by the
+    ``op_meta`` operating scales; ``free_aug`` indexes the sensitivity
+    parameters in it.
+    """
+    from aquakin.integrate.colored_jacobian import state_jacobian
+    from aquakin.integrate.forward_sensitivity import augmented_forward_sensitivity
+    from aquakin.integrate.forward_solve import StepControl, staggered_sensitivity_solve
+
+    free_arr = jnp.asarray(free_aug, dtype=int)
+
+    def make_rhs(y0, theta, t0):
+        # The recycle / flow maps are built once per solve from the runtime
+        # parameters and closed over, so the sensitivity linearization w.r.t. the
+        # wrt parameters drops ``dM/dtheta`` -- exact for kinetic parameters (M
+        # depends only on the flow setpoints).
+        states0 = plant._split_state(y0)
+        p = theta[:n_params]
+        rmap = plant._recycle._maybe_recycle_map(t0, states0, p)
+        fmap = plant._recycle._maybe_flow_map(t0, states0, p)
+
+        def rhs(t, y, th):
+            design = plant._operating_design(op_meta, th[n_params:]) if op_meta else None
+            return plant._rhs(t, y, th[:n_params], recycle_map=rmap, flow_map=fmap, design=design)
+
+        return rhs
+
+    if corrector == "staggered":
+        control = StepControl(
+            dtmax=dtmax,
+            max_steps=max_steps,
+            **({} if factormax is None else {"maxfac": factormax}),
+        )
+
+        @jax.jit
+        def _solve(y0, theta, t0, t1, t_eval, rtol, atol, sens_rtol):
+            rhs = make_rhs(y0, theta, t0)
+            res = staggered_sensitivity_solve(
+                rhs,
+                state_jacobian(rhs, root_finder),
+                y0,
+                theta,
+                free_arr,
+                t0,
+                t1,
+                t_eval,
+                rtol=rtol,
+                atol=atol,
+                sens_rtol=sens_rtol,
+                sens_error_control=sens_error_control,
+                control=control,
+            )
+            return res.ys, res.S, res.stats
+
+        return _solve
+
+    @jax.jit
+    def _solve(y0, theta, t0, t1, t_eval, rtol, atol, sens_rtol):
+        _, ys, S = augmented_forward_sensitivity(
+            make_rhs(y0, theta, t0),
+            y0,
+            theta,
+            free_arr,
+            t0=t0,
+            t1=t1,
+            t_eval=t_eval,
+            rtol=rtol,
+            atol_y=atol,
+            sens_rtol=sens_rtol,
+            dtmax=dtmax,
+            max_steps=max_steps,
+            shared_factor=len(free_aug) > 1,
+            order=3,
+            factormax=factormax,
+        )
+        return ys, S, None
+
+    return _solve
 
 
 def _dynamic_adjoint_kwargs(mode):
@@ -1034,13 +1221,15 @@ def _dynamic_value_jac(
             "rtol",
             "atol",
             "sens_rtol",
+            "sens_error_control",
+            "corrector",
         }
         if extra:
             raise TypeError(
                 f"forward-mode dynamic sensitivity runs the solve through "
                 f"solve_sensitivity, which does not accept {sorted(extra)}; "
                 f"it accepts max_steps / dtmax / factormax / rtol / atol / "
-                f"sens_rtol."
+                f"sens_rtol / sens_error_control / corrector."
             )
         full = params.at[wrt_j].set(theta)
         ts, ys, S_state = plant.solve_sensitivity(
@@ -1143,7 +1332,8 @@ def dynamic_sensitivity(
         variational solve (:meth:`solve_sensitivity`) -- finite and memory-light
         over long horizons. In forward mode ``**solve_kwargs`` are forwarded to
         :meth:`solve_sensitivity` (``max_steps``, ``dtmax``, ``factormax``,
-        ``rtol``, ``atol``, ``sens_rtol``), not to :meth:`solve`.
+        ``rtol``, ``atol``, ``sens_rtol``, ``sens_error_control``, ``corrector``),
+        not to :meth:`solve`.
     y0 : jnp.ndarray, optional
         Initial plant state (e.g. a warm-start steady state).
     elasticity : bool

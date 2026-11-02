@@ -84,12 +84,12 @@ def test_dynamic_sensitivity_modes_match_grad():
 @pytest.mark.slow
 @pytest.mark.heavy
 def test_solve_sensitivity_matches_jacfwd():
-    """Plant.solve_sensitivity -- the stable forward [y; S] variational solve, on
-    the plant's enhanced solver config (Kvaerno3 + decoupled Newton + cached
-    recycle map) with the block-arrow SimultaneousCorrector -- is finite and
-    matches forward-mode jacfwd through the solve where both are finite. (The
-    augmented controller's error norm bounds S, so the same solve stays finite
-    over long horizons where jacfwd through the stiff plant goes non-finite.)"""
+    """Plant.solve_sensitivity -- the stable forward [y; S] variational solve
+    (default staggered corrector: Kvaerno3 on the lean loop, colored Jacobian,
+    cached recycle map) -- is finite and matches forward-mode jacfwd through the
+    solve where both are finite. (The controller's error norm bounds S, so the
+    same solve stays finite over long horizons where jacfwd through the stiff
+    plant goes non-finite.)"""
     p, asm1, y0 = _bsm1()
     base = p.default_parameters()
     wrt = ["asm1.muA", "asm1.muH"]
@@ -118,6 +118,73 @@ def test_solve_sensitivity_matches_jacfwd():
 
     S_jf = np.asarray(jax.jacfwd(out)(base[jnp.asarray(idx)]))
     assert np.allclose(S_aug, S_jf, rtol=1e-4, atol=1e-10)
+
+
+def _assert_correctors_agree(plant, params, wrt, *, rtol_S, rtol_y=1e-4, **kw):
+    """The staggered and simultaneous correctors give the same trajectory and
+    sensitivity, each sensitivity column compared relative to its largest entry."""
+    _, ys_st, S_st = plant.solve_sensitivity(params, wrt, **kw)
+    _, ys_si, S_si = plant.solve_sensitivity(params, wrt, corrector="simultaneous", **kw)
+    S_st, S_si = np.asarray(S_st), np.asarray(S_si)
+    assert np.all(np.isfinite(S_st)) and np.all(np.isfinite(S_si))
+    scale = np.abs(S_si).max(axis=(0, 1), keepdims=True)
+    assert np.max(np.abs(S_st - S_si) / scale) < rtol_S
+    assert np.allclose(np.asarray(ys_st), np.asarray(ys_si), rtol=rtol_y, atol=1e-3)
+
+
+@pytest.mark.slow
+@pytest.mark.heavy
+def test_solve_sensitivity_correctors_agree_bsm1():
+    """On BSM1 over two days the staggered corrector (default) gives the
+    simultaneous corrector's sensitivity to the solver tolerance -- the two
+    solve the same augmented stages, one by the block-arrow Newton on the whole
+    [y; S] system, the other state-first then sensitivity with the same
+    factor."""
+    p, asm1, y0 = _bsm1()
+    _assert_correctors_agree(
+        p,
+        p.default_parameters(),
+        ["asm1.muA", "asm1.muH", "asm1.bH", "asm1.KS"],
+        rtol_S=1e-4,
+        t_span=(0.0, 2.0),
+        t_eval=jnp.linspace(0.0, 2.0, 5),
+        y0=y0,
+        rtol=1e-6,
+        max_steps=_MAX_STEPS,
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.heavy
+def test_solve_sensitivity_correctors_agree_bsm2_window():
+    """The same agreement on a short window of the two-model BSM2 plant under
+    the dynamic (dry-weather) influent, across the ASM1 water line and the ADM1
+    digester: one water-line and one digester parameter. Both correctors bound
+    an RMS error norm, so one component may move several times ``rtol``: the
+    largest differences (measured 8e-4 of a sensitivity column's peak, 1.3e-4 of
+    a state, at ``rtol=1e-5``) sit in the Takacs settler's blanket layers, whose
+    threshold flux switches make them the most step-sequence sensitive. A wrong
+    sensitivity stage gives errors of order one."""
+    from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.bsm.bsm2 import bsm2_asm1_model, bsm2_parameters, build_bsm2
+    from aquakin.plant.influent import load_bsm2_influent
+
+    asm1, adm1 = bsm2_asm1_model(), aquakin.load_model("adm1")
+    p = build_bsm2(asm1_model=asm1, adm1_model=adm1)
+    p.add_influent("feed", load_bsm2_influent("dry", asm1))
+    _assert_correctors_agree(
+        p,
+        bsm2_parameters(asm1, adm1),
+        ["asm1.muA", "adm1.k_m_ac"],
+        rtol_S=3e-3,
+        rtol_y=5e-4,
+        t_span=(0.0, 0.5),
+        t_eval=jnp.linspace(0.0, 0.5, 3),
+        y0=bsm2_warm_start(p),
+        rtol=1e-5,
+        atol=1e-3,
+        max_steps=_MAX_STEPS,
+    )
 
 
 @pytest.mark.slow

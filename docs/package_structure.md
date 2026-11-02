@@ -87,7 +87,9 @@ aquakin/
 │   │   ├── forward_solve.py         # forward_solve: lean non-AD adaptive ESDIRK
 │   │   │                            #   (lax.while_loop, no diffrax adjoint/optimistix/
 │   │   │                            #   lineax); Plant.solve(forward_fast=True) -- ~3x
-│   │   │                            #   faster compile, ~1.3-1.9x run, forward-only
+│   │   │                            #   faster compile, ~1.3-1.9x run, forward-only;
+│   │   │                            #   staggered_sensitivity_solve on the same loop:
+│   │   │                            #   Plant.solve_sensitivity's default corrector
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands
