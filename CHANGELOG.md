@@ -54,6 +54,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   of the steps. The BSM2 steady state is unchanged, and dynamic effluent
   concentrations differ by under 0.1% on average. The default stays `"takacs"`,
   the rule of the BSM reference settlers.
+- `aquakin.plant.plant_rank_sensor_sets` ranks candidate sensor sets on a plant
+  by a design criterion of the Fisher information each adds to the sensors
+  already in place. It is the plant version of `rank_experiments`. A candidate
+  is a `SensorSet`: its observables, with an absolute or relative `sigma` and
+  an optional `mask`. Every candidate is scored from one shared sensitivity
+  solve, and `param_draws=` averages the criterion over uncertain parameters.
 - `aquakin.plant.plant_fisher_information` gives the Fisher information of a
   plant design, the plant version of `fisher_information`. Measured channels
   are named as for `Plant.calibrate`, including a unit's state such as

@@ -21,8 +21,10 @@ from aquakin.plant import (
     CSTRUnit,
     Plant,
     PlantObservable,
+    SensorSet,
     plant_fisher_information,
     plant_profile_likelihood,
+    plant_rank_sensor_sets,
 )
 from aquakin.plant.influent import InfluentSeries
 
@@ -515,3 +517,209 @@ def test_bsm1_forward_matches_jacobian_built_from_solve_sensitivity():
     J = (np.asarray(S)[:, rows, :] * theta / np.asarray(sigma)[None, :, None]).reshape(-1, 3)
     assert np.all(np.isfinite(J)) and np.all(np.abs(J).max(axis=0) > 0.0)
     np.testing.assert_allclose(fim.matrix, J.T @ J, rtol=1e-8)
+
+
+# --- Ranking sensor sets -----------------------------------------------------
+
+
+def _count_sensitivity_solves(monkeypatch, plant):
+    """Wrap ``plant.solve_sensitivity`` to count its calls."""
+    calls = []
+    original = plant.solve_sensitivity
+
+    def counted(*args, **kw):
+        calls.append(1)
+        return original(*args, **kw)
+
+    monkeypatch.setattr(plant, "solve_sensitivity", counted)
+    return calls
+
+
+def _criterion_of(plant, observables, sigma, free, criterion="D", **kw):
+    """The criterion of one sensor set's information, the independent way."""
+    fim = plant_fisher_information(plant, observables, T_OBS, free, sigma=sigma, **kw)
+    return aquakin.design_criterion(fim, criterion)
+
+
+def test_rank_scores_each_set_from_one_shared_solve(plant, monkeypatch):
+    """Three candidates are scored from ONE sensitivity solve, and each score
+    is the criterion of that set's own plant_fisher_information -- including
+    the base's information and a set that names the port two ways."""
+    calls = _count_sensitivity_solves(monkeypatch, plant)
+    free = [K1, K2]
+    base_obs, base_sigma = [("tank", ["A", "B"])], 0.05
+    cands = [
+        SensorSet([("tank", ["B"])], sigma=0.01),
+        SensorSet([("tank.out", ["E", "B"])], sigma=[0.05, 0.03]),
+        SensorSet([("tank", ["D"])], sigma=0.01),  # sees only k3: adds nothing
+    ]
+    ranked = plant_rank_sensor_sets(
+        plant,
+        cands,
+        T_OBS,
+        free,
+        base=SensorSet(base_obs, sigma=base_sigma),
+        t_span=(0.0, 20.0),
+    )
+    assert len(calls) == 1
+    kw = dict(t_span=(0.0, 20.0))
+    with_base = [
+        ([("tank", ["B"])], [0.01]),
+        ([("tank", ["E", "B"])], [0.05, 0.03]),
+        ([("tank", ["D"])], [0.01]),
+    ]
+    expected = [
+        _criterion_of(plant, base_obs + obs, [base_sigma] * 2 + sig, free, **kw)
+        for obs, sig in with_base
+    ]
+    base_value = _criterion_of(plant, base_obs, base_sigma, free, **kw)
+    by_index = {c.index: c for c in ranked}
+    for i, v in enumerate(expected):
+        assert by_index[i].value == pytest.approx(v, rel=1e-9)
+        assert by_index[i].improvement == pytest.approx(v - base_value, rel=1e-6, abs=1e-9)
+    # B (sigma 0.01) beats B (sigma 0.03) beats D, which adds nothing.
+    assert [c.index for c in ranked] == [0, 1, 2]
+    assert by_index[0].improvement > by_index[1].improvement > 0.0
+    assert by_index[2].improvement == pytest.approx(0.0, abs=1e-9)
+
+
+def test_rank_without_base_and_with_a_smaller_is_better_criterion(plant):
+    """Without a base there is no improvement; "A" ranks the smallest summed
+    variance first. Alone, a set seeing only A cannot separate k2: singular,
+    so it ranks last with an infinite A."""
+    cands = [
+        SensorSet([("tank", ["A"])], sigma=0.01),
+        SensorSet([("tank", ["A", "B"])], sigma=0.01),
+    ]
+    ranked = plant_rank_sensor_sets(
+        plant, cands, T_OBS, [K1, K2], criterion="A", t_span=(0.0, 20.0)
+    )
+    assert [c.index for c in ranked] == [1, 0]
+    assert ranked[1].value == np.inf and all(c.improvement is None for c in ranked)
+    expected = _criterion_of(plant, [("tank", ["A", "B"])], 0.01, [K1, K2], "A", t_span=(0.0, 20.0))
+    assert ranked[0].value == pytest.approx(expected, rel=1e-9)
+
+
+def test_rank_averages_over_parameter_draws(plant, monkeypatch):
+    """With param_draws the score is the mean of the per-draw criteria, one
+    sensitivity solve per draw (shared by every candidate)."""
+    calls = _count_sensitivity_solves(monkeypatch, plant)
+    base = plant.default_parameters()
+    idx = plant.parameter_index(K1)
+    draws = jnp.stack([base.at[idx].set(0.1), base.at[idx].set(0.4)])
+    cands = [SensorSet([("tank", ["A", "B"])], sigma=0.01), SensorSet(["tank"], sigma=0.01)]
+    ranked = plant_rank_sensor_sets(
+        plant, cands, T_OBS, [K1, K2], param_draws=draws, t_span=(0.0, 20.0)
+    )
+    assert len(calls) == 2
+    expected = np.mean(
+        [
+            _criterion_of(
+                plant, [("tank", ["A", "B"])], 0.01, [K1, K2], params=d, t_span=(0.0, 20.0)
+            )
+            for d in draws
+        ]
+    )
+    assert {c.index: c.value for c in ranked}[0] == pytest.approx(expected, rel=1e-9)
+
+
+def test_rank_relative_sigma_mask_subset_and_runs(net, plant):
+    """A set's relative sigma, mask and the subset criterion reach the score
+    exactly as plant_fisher_information applies them, over a two-run design
+    with one plant per run."""
+    other = _plant(net, a_in=2.0)
+    t2 = jnp.linspace(1.0, 10.0, 5)
+    mask = np.ones((T_OBS.shape[0], 1), dtype=bool)
+    mask[::2] = False
+    ss = SensorSet([("tank", ["B"])], sigma=0.1, relative_sigma=True, sigma_floor=1e-3)
+    masked = SensorSet([("tank", ["A"])], sigma=0.01, mask=mask)
+    runs = dict(t_span=[(0.0, 20.0), (0.0, 10.0)])
+    ranked = plant_rank_sensor_sets(
+        [plant, other], [ss], [T_OBS, t2], [K1, K2], subset=[K1], **runs
+    )
+    fim = plant_fisher_information(
+        [plant, other],
+        [("tank", ["B"])],
+        [T_OBS, t2],
+        [K1, K2],
+        sigma=0.1,
+        relative_sigma=True,
+        sigma_floor=1e-3,
+        **runs,
+    )
+    assert ranked[0].value == pytest.approx(
+        aquakin.design_criterion(fim, "D", subset=[K1]), rel=1e-9
+    )
+    # A mask that does not suit the second run's sampling times is rejected.
+    with pytest.raises(ValueError, match="sensor set 0, run 1: mask of shape"):
+        plant_rank_sensor_sets([plant, other], [masked], [T_OBS, t2], [K1, K2], **runs)
+
+
+def test_rank_forward_and_reverse_agree(plant):
+    cands = [SensorSet([("tank", ["A"])], sigma=0.01), SensorSet([("tank", ["B"])], sigma=0.01)]
+    kw = dict(t_span=(0.0, 20.0), base=SensorSet([("tank", ["B"])], sigma=0.05))
+    fwd = plant_rank_sensor_sets(plant, cands, T_OBS, [K1, K2], mode="forward", **kw)
+    rev = plant_rank_sensor_sets(plant, cands, T_OBS, [K1, K2], mode="reverse", **kw)
+    assert [c.index for c in fwd] == [c.index for c in rev]
+    for f, r in zip(fwd, rev):
+        assert f.value == pytest.approx(r.value, rel=1e-3)
+
+
+def test_rank_maps_each_set_to_its_own_stream(net):
+    """On a two-tank chain, sets reading different streams (and one reading
+    both, in reverse order) each score as their own plant_fisher_information:
+    every stream's channels sit at the right offset in the shared solve."""
+    chain = Plant("two_tanks")
+    for name in ("tank1", "tank2"):
+        chain.add_unit(
+            CSTRUnit(
+                name=name,
+                model=net,
+                volume=V,
+                input_port_names=["inlet"],
+                conditions={"T": 293.15},
+            )
+        )
+    chain.connect("tank1", "tank2.inlet")
+    feed = jnp.asarray([1.0, 0.0, 1.0, 0.0])
+    chain.add_influent(
+        "feed",
+        InfluentSeries(
+            t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([Q, Q]), C=jnp.stack([feed, feed]), model=net
+        ),
+        to="tank1.inlet",
+    )
+    obs_sets = [
+        [("tank1", ["A", "B"])],
+        [("tank2", ["B", "A"])],
+        [("tank2", ["D"]), ("tank1", ["B"]), ("tank2", ["A"])],
+    ]
+    free = [K1, K2]
+    sigmas = [[0.01, 0.02], [0.01, 0.02], [0.01, 0.02, 0.03]]
+    cands = [SensorSet(o, sigma=sig) for o, sig in zip(obs_sets, sigmas)]
+    kw = dict(t_span=(0.0, 20.0))
+    ranked = plant_rank_sensor_sets(chain, cands, T_OBS, free, **kw)
+    by_index = {c.index: c.value for c in ranked}
+    for i, (o, c) in enumerate(zip(obs_sets, cands)):
+        fim = plant_fisher_information(chain, o, T_OBS, free, sigma=c.sigma, **kw)
+        assert np.isfinite(by_index[i])
+        assert by_index[i] == pytest.approx(aquakin.design_criterion(fim, "D"), rel=1e-9)
+    # The two tanks carry different information, so a column mix-up would show.
+    assert abs(by_index[0] - by_index[1]) > 1e-3
+
+
+def test_rank_input_validation(plant):
+    ok = [SensorSet([("tank", ["A"])], sigma=0.01)]
+    with pytest.raises(ValueError, match="at least one SensorSet"):
+        plant_rank_sensor_sets(plant, [], T_OBS, [K1])
+    with pytest.raises(ValueError, match="Unknown criterion"):
+        plant_rank_sensor_sets(plant, ok, T_OBS, [K1], criterion="Z")
+    with pytest.raises(KeyError, match="Unknown subset name"):
+        plant_rank_sensor_sets(plant, ok, T_OBS, [K1], subset=[K3])
+    with pytest.raises(ValueError, match="param_draws has 2 columns"):
+        plant_rank_sensor_sets(plant, ok, T_OBS, [K1], param_draws=jnp.ones((1, 2)))
+    with pytest.raises(ValueError, match="sigma_floor must be >= 0"):
+        bad = SensorSet([("tank", ["A"])], sigma=0.01, relative_sigma=True, sigma_floor=-1.0)
+        plant_rank_sensor_sets(plant, [bad], T_OBS, [K1])
+    with pytest.raises(KeyError, match="Unknown observed channel"):
+        plant_rank_sensor_sets(plant, [SensorSet([("tank", ["Z"])], sigma=1.0)], T_OBS, [K1])

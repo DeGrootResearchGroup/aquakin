@@ -1,4 +1,4 @@
-"""Identifiability of plant parameters: Fisher information and profile likelihood.
+"""Identifiability of plant parameters: Fisher information, sensor choice, profiles.
 
 The plant analogues of :func:`aquakin.fisher_information` and
 :func:`aquakin.profile_likelihood`. Both read a plant's outputs the way
@@ -28,6 +28,10 @@ The sensitivity comes from one of two solves:
   solve :meth:`Plant.calibrate` differentiates), one pullback per observation
   row. It suits a design with few observations and many parameters.
 
+:func:`plant_rank_sensor_sets` chooses what to measure: it scores candidate
+:class:`SensorSet` s by a design criterion of their information (plus a base set
+already in place), from one sensitivity solve shared by every candidate.
+
 :func:`plant_profile_likelihood` fixes one parameter at each value on a grid,
 re-fits the others with :meth:`Plant.calibrate`, and reads the likelihood-ratio
 interval off the profile -- the same warm-started continuation, polish pass and
@@ -36,6 +40,7 @@ interval interpolation as the reactor profile.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import jax
@@ -46,6 +51,13 @@ from aquakin.core.hints import did_you_mean
 from aquakin.integrate._common import DifferentiationConfig, check_finite_gradient, to_native_time
 from aquakin.integrate._transforms import dphysical_dunconstrained
 from aquakin.integrate.calibrate import FreeICConfig, OptimizerConfig, _sigma_per_dataset
+from aquakin.integrate.experiment_design import (
+    _LARGER_IS_BETTER,
+    CandidateScore,
+    _check_criterion,
+    _criterion,
+    _subset_indices,
+)
 from aquakin.integrate.fisher import (
     FisherInformation,
     _active_priors,
@@ -297,104 +309,72 @@ def plant_fisher_information(
     >>> aquakin.identifiability(fim.matrix, names=fim.names,
     ...                         values=fim.values, transforms=fim.transforms)
     """
-    if mode not in _MODES:
-        raise ValueError(f"mode must be one of {_MODES}; got {mode!r}.")
-    if not free_params:
-        raise ValueError("free_params must be non-empty.")
-    if relative_sigma and sigma_floor < 0.0:
-        raise ValueError(f"sigma_floor must be >= 0; got {sigma_floor}.")
-    if integrator is None:
-        from aquakin.plant.plant import IntegratorConfig
-
-        integrator = IntegratorConfig()
-
-    multi = _is_run_list(t_obs)
-    tobs_list = list(t_obs) if multi else [t_obs]
-    n_runs = len(tobs_list)
-    if isinstance(plant, (list, tuple)):
-        plants = list(plant)
-        if len(plants) != n_runs:
-            raise ValueError(f"plant has {len(plants)} entries but there are {n_runs} runs.")
-    else:
-        plants = [plant] * n_runs
-    sigma_list = _sigma_per_dataset(sigma, n_runs) if multi else [sigma]
-    mask_list = _per_run(mask, n_runs, "mask") if multi else [mask]
-    y0_list = _per_run(y0, n_runs, "y0") if multi else [y0]
-    span_list = _per_run_span(t_span, n_runs)
-
-    ns = _PlantParamNamespace(plants[0])
-    _check_free_params(ns, free_params)
-    names = list(ns.param_index)
-    for r, pl in enumerate(plants[1:], start=1):
-        if list(pl.parameter_names()) != names:
-            raise ValueError(f"run {r}: its plant has different parameters from run 0's.")
-    rate_transforms = _resolve_transforms(ns, free_params, transforms)
-    p = jnp.asarray(params) if params is not None else plants[0].default_parameters()
-    free_idx = jnp.asarray([ns.param_index[n] for n in free_params], dtype=int)
-    for name, tr, value in zip(free_params, rate_transforms, np.asarray(p)[np.asarray(free_idx)]):
-        if tr == "positive_log" and value <= 0.0:
-            raise ValueError(f"Parameter '{name}' has transform 'positive_log' but value {value}.")
-        if tr == "logit" and not 0.0 < value < 1.0:
-            raise ValueError(f"Parameter '{name}' has transform 'logit' but value {value}.")
-    # d physical / d unconstrained, per free parameter (the chain to the fitted
-    # coordinates).
-    dphys = np.asarray(
-        [
-            float(dphysical_dunconstrained(float(p[i]), tr, xp=np))
-            for i, tr in zip(np.asarray(free_idx), rate_transforms)
-        ]
+    design = _PlantDesign(
+        plant,
+        t_obs,
+        free_params,
+        t_span=t_span,
+        y0=y0,
+        params=params,
+        transforms=transforms,
+        priors=priors,
+        use_priors=use_priors,
+        mode=mode,
+        time_unit=time_unit,
+        integrator=integrator,
+        diff=diff,
+        sensitivity_options=sensitivity_options,
     )
-
+    _check_sigma_floor(relative_sigma, sigma_floor)
+    n_runs = design.n_runs
+    sigma_list = _sigma_per_dataset(sigma, n_runs) if design.multi else [sigma]
+    mask_list = _per_run(mask, n_runs, "mask") if design.multi else [mask]
     observable_specs = _normalize_observables(observables, None, None)
-    options = dict(sensitivity_options or {})
+
+    p = design.p0
+    dphys = design.dphysical(p)
     blocks = []
     for r in range(n_runs):
-        pl = plants[r]
-        resolved_observables, n_observed = _resolve_observable_columns(pl, observable_specs)
-        tobs = jnp.asarray(tobs_list[r], dtype=float)
-        if tobs.ndim != 1 or tobs.shape[0] < 1:
-            raise ValueError(f"run {r}: t_obs must be a non-empty 1-D array.")
-        if not bool(jnp.all(jnp.diff(tobs) > 0)):
-            raise ValueError(f"run {r}: t_obs must be strictly ascending.")
-        span = span_list[r]
-        if span is None:
-            span = (float(tobs[0]), float(tobs[-1]))
-        run = {
-            "t_obs": tobs,
-            "t_span": (float(span[0]), float(span[1])),
-            "y0": None if y0_list[r] is None else jnp.asarray(y0_list[r]),
-            "time_unit": time_unit,
-        }
-        if mode == "forward":
-            y_obs, dy = _forward_sensitivity(
-                pl, run, resolved_observables, p, free_idx, list(free_params), options
-            )
-        else:
-            y_obs, dy = _reverse_sensitivity(
-                pl, run, resolved_observables, p, free_idx, integrator, diff
-            )
-        n_t = int(tobs.shape[0])
-        if relative_sigma:
-            sig_r = jnp.maximum(
-                jnp.broadcast_to(jnp.asarray(sigma_list[r], dtype=float), (n_t, n_observed))
-                * jnp.abs(y_obs),
+        resolved, _ = _resolve_observable_columns(design.plants[r], observable_specs)
+        y_obs, dy = design.sensitivity(r, resolved, p)
+        blocks.append(
+            _scaled_rows(
+                y_obs,
+                dy,
+                dphys,
+                sigma_list[r],
+                mask_list[r],
+                relative_sigma,
                 sigma_floor,
+                label=f"run {r}",
             )
-        else:
-            sig_r = sigma_list[r]
-        _, keep, sigma_div = _observation_noise(f"run {r}", sig_r, mask_list[r], n_t, n_observed)
-        scaled = dy * dphys / sigma_div[..., None]
-        if keep is not None:
-            scaled = jnp.where(keep[..., None], scaled, 0.0)
-        blocks.append(scaled.reshape(-1, len(free_params)))
-
-    active = _active_priors(ns, free_params, priors, use_priors)
-    if active:
-        std = np.asarray([active.get(n, (0.0, 1.0))[1] for n in free_params])
-        on = np.asarray([n in active for n in free_params], dtype=float)
-        blocks.append(jnp.asarray(np.diag(on * dphys / std)))
+        )
+    prior = design.prior_rows(dphys)
+    if prior is not None:
+        blocks.append(prior)
 
     J = jnp.concatenate(blocks)
+    _check_finite_sensitivity(J)
+    J = np.asarray(J)
+    F = J.T @ J
+    return FisherInformation(
+        matrix=0.5 * (F + F.T),
+        names=list(free_params),
+        transforms=design.rate_transforms,
+        values=design.values(p),
+        jacobian=J,
+    )
+
+
+# --- The design shared by the Fisher information and sensor-set ranking ---
+
+
+def _check_sigma_floor(relative_sigma: bool, sigma_floor: float) -> None:
+    if relative_sigma and sigma_floor < 0.0:
+        raise ValueError(f"sigma_floor must be >= 0; got {sigma_floor}.")
+
+
+def _check_finite_sensitivity(J) -> None:
     check_finite_gradient(
         J,
         what="the plant Fisher-information sensitivity",
@@ -403,16 +383,404 @@ def plant_fisher_information(
             "variational solve through sensitivity_options"
         ),
     )
-    J = np.asarray(J)
-    F = J.T @ J
-    values = {n: float(p[i]) for n, i in zip(free_params, np.asarray(free_idx))}
-    return FisherInformation(
-        matrix=0.5 * (F + F.T),
-        names=list(free_params),
-        transforms=rate_transforms,
-        values=values,
-        jacobian=J,
+
+
+class _PlantDesign:
+    """The resolved runs and parameter setup of a plant design.
+
+    Validates the runs (plants, sampling times, windows, initial states), the
+    free parameters and their transforms once, and exposes what every
+    information evaluation needs: :meth:`sensitivity` (one run's observed
+    channels and their sensitivity to the physical free parameters, from the
+    forward or reverse solve), :meth:`dphysical` (the chain to the
+    unconstrained coordinates at a parameter vector) and :meth:`prior_rows`.
+    Shared by :func:`plant_fisher_information` and
+    :func:`plant_rank_sensor_sets`, so the two build the same matrix."""
+
+    def __init__(
+        self,
+        plant,
+        t_obs,
+        free_params,
+        *,
+        t_span,
+        y0,
+        params,
+        transforms,
+        priors,
+        use_priors,
+        mode,
+        time_unit,
+        integrator,
+        diff,
+        sensitivity_options,
+    ):
+        if mode not in _MODES:
+            raise ValueError(f"mode must be one of {_MODES}; got {mode!r}.")
+        if not free_params:
+            raise ValueError("free_params must be non-empty.")
+        if integrator is None:
+            from aquakin.plant.plant import IntegratorConfig
+
+            integrator = IntegratorConfig()
+        self.mode = mode
+        self.integrator = integrator
+        self.diff = diff
+        self.options = dict(sensitivity_options or {})
+
+        self.multi = _is_run_list(t_obs)
+        tobs_list = list(t_obs) if self.multi else [t_obs]
+        self.n_runs = len(tobs_list)
+        if isinstance(plant, (list, tuple)):
+            self.plants = list(plant)
+            if len(self.plants) != self.n_runs:
+                raise ValueError(
+                    f"plant has {len(self.plants)} entries but there are {self.n_runs} runs."
+                )
+        else:
+            self.plants = [plant] * self.n_runs
+        y0_list = _per_run(y0, self.n_runs, "y0") if self.multi else [y0]
+        span_list = _per_run_span(t_span, self.n_runs)
+
+        self.ns = _PlantParamNamespace(self.plants[0])
+        _check_free_params(self.ns, free_params)
+        names = list(self.ns.param_index)
+        for r, pl in enumerate(self.plants[1:], start=1):
+            if list(pl.parameter_names()) != names:
+                raise ValueError(f"run {r}: its plant has different parameters from run 0's.")
+        self.free_params = list(free_params)
+        self.rate_transforms = _resolve_transforms(self.ns, free_params, transforms)
+        self.free_idx = jnp.asarray([self.ns.param_index[n] for n in free_params], dtype=int)
+        self.p0 = jnp.asarray(params) if params is not None else self.plants[0].default_parameters()
+        self.active_priors = _active_priors(self.ns, free_params, priors, use_priors)
+
+        self.runs = []
+        for r in range(self.n_runs):
+            tobs = jnp.asarray(tobs_list[r], dtype=float)
+            if tobs.ndim != 1 or tobs.shape[0] < 1:
+                raise ValueError(f"run {r}: t_obs must be a non-empty 1-D array.")
+            if not bool(jnp.all(jnp.diff(tobs) > 0)):
+                raise ValueError(f"run {r}: t_obs must be strictly ascending.")
+            span = span_list[r]
+            if span is None:
+                span = (float(tobs[0]), float(tobs[-1]))
+            self.runs.append(
+                {
+                    "t_obs": tobs,
+                    "t_span": (float(span[0]), float(span[1])),
+                    "y0": None if y0_list[r] is None else jnp.asarray(y0_list[r]),
+                    "time_unit": time_unit,
+                }
+            )
+
+    def dphysical(self, p) -> np.ndarray:
+        """``d physical / d unconstrained`` per free parameter at ``p``, after
+        checking each value lies in its transform's domain."""
+        values = np.asarray(p)[np.asarray(self.free_idx)]
+        for name, tr, value in zip(self.free_params, self.rate_transforms, values):
+            if tr == "positive_log" and value <= 0.0:
+                raise ValueError(
+                    f"Parameter '{name}' has transform 'positive_log' but value {value}."
+                )
+            if tr == "logit" and not 0.0 < value < 1.0:
+                raise ValueError(f"Parameter '{name}' has transform 'logit' but value {value}.")
+        return np.asarray(
+            [
+                float(dphysical_dunconstrained(float(v), tr, xp=np))
+                for v, tr in zip(values, self.rate_transforms)
+            ]
+        )
+
+    def values(self, p) -> dict[str, float]:
+        """The free parameters' physical values at ``p``, by name."""
+        return {n: float(p[i]) for n, i in zip(self.free_params, np.asarray(self.free_idx))}
+
+    def sensitivity(self, r: int, resolved_observables, p):
+        """Run ``r``'s observed channels and their sensitivity to the physical
+        free parameters at ``p``, shapes ``(n_t, n_obs)`` and
+        ``(n_t, n_obs, k)``."""
+        if self.mode == "forward":
+            return _forward_sensitivity(
+                self.plants[r],
+                self.runs[r],
+                resolved_observables,
+                p,
+                self.free_idx,
+                self.free_params,
+                self.options,
+            )
+        return _reverse_sensitivity(
+            self.plants[r],
+            self.runs[r],
+            resolved_observables,
+            p,
+            self.free_idx,
+            self.integrator,
+            self.diff,
+        )
+
+    def prior_rows(self, dphys):
+        """The prior's rows of the scaled Jacobian, ``diag(dphys / std)`` on the
+        parameters with a prior, or ``None`` without priors."""
+        if not self.active_priors:
+            return None
+        std = np.asarray([self.active_priors.get(n, (0.0, 1.0))[1] for n in self.free_params])
+        on = np.asarray([n in self.active_priors for n in self.free_params], dtype=float)
+        return jnp.asarray(np.diag(on * dphys / std))
+
+
+def _scaled_rows(y_obs, dy, dphys, sigma, mask, relative_sigma, sigma_floor, *, label):
+    """Noise-scaled Jacobian rows of one run, ``(n_t * n_obs, k)``, time-major.
+
+    ``dy`` (``(n_t, n_obs, k)``, per physical parameter) is chained to the
+    unconstrained coordinates by ``dphys`` and divided by the noise. A relative
+    ``sigma`` is ``max(sigma * |y_obs|, sigma_floor)``, evaluated at the
+    assumed parameters; an unmeasured (masked) entry gives an exactly zero
+    row."""
+    n_t, n_obs = int(y_obs.shape[0]), int(y_obs.shape[1])
+    if relative_sigma:
+        sigma = jnp.maximum(
+            jnp.broadcast_to(jnp.asarray(sigma, dtype=float), (n_t, n_obs)) * jnp.abs(y_obs),
+            sigma_floor,
+        )
+    _, keep, sigma_div = _observation_noise(label, sigma, mask, n_t, n_obs)
+    scaled = dy * dphys / sigma_div[..., None]
+    if keep is not None:
+        scaled = jnp.where(keep[..., None], scaled, 0.0)
+    return scaled.reshape(-1, dy.shape[-1])
+
+
+# --- Ranking candidate sensor sets ------------------------------------------
+
+
+@dataclass(frozen=True)
+class SensorSet:
+    """A candidate set of measurements on a plant, with their noise.
+
+    Parameters
+    ----------
+    observables : list
+        The measured channels, in the forms :meth:`Plant.calibrate` accepts (a
+        :class:`PlantObservable`, a ``(stream_or_unit, channels)`` pair, a
+        ``{"stream": ..., "channels": ...}`` dict, or a bare stream name).
+    sigma : float or array-like
+        Measurement standard deviation: a scalar, one value per channel
+        (``(n_observed,)``, in observable order), or one per observation
+        ``(n_t, n_observed)``.
+    mask : array-like of bool, optional
+        Which observations are taken, broadcasting to ``(n_t, n_observed)``;
+        ``None`` measures everything.
+    relative_sigma : bool, optional
+        Read ``sigma`` as relative to the signal, as in
+        :func:`plant_fisher_information`.
+    sigma_floor : float, optional
+        Lower bound on a relative standard deviation.
+    name : str, optional
+        A label carried for the caller's convenience.
+
+    Notes
+    -----
+    In a multi-run design ``sigma`` and ``mask`` apply to every run, so a
+    per-observation array must suit each run's sampling times.
+    """
+
+    observables: list
+    sigma: float | jnp.ndarray
+    mask: jnp.ndarray | None = None
+    relative_sigma: bool = False
+    sigma_floor: float = 0.0
+    name: str | None = None
+
+
+def _union_columns(plant: Plant, sensor_sets):
+    """Every stream any of ``sensor_sets`` reads, observed whole, plus where
+    each set's channels sit in it.
+
+    Returns ``(union_observables, columns)``: the ``(endpoint, all-channel
+    index)`` pairs to observe once, and per sensor set the column indices of
+    its channels in that union, in the set's observable order. Two spellings
+    of one port (a registered name and its ``"unit.port"``) share columns."""
+    offsets: dict = {}
+    union: list = []
+    width = 0
+    columns = []
+    for ss in sensor_sets:
+        specs = _normalize_observables(ss.observables, None, None)
+        resolved, _ = _resolve_observable_columns(plant, specs)
+        cols = []
+        for endpoint, ch_idx in resolved:
+            key = plant._parse_endpoint(endpoint, role="source")
+            if key not in offsets:
+                n_species = plant.units[key[0]].model.n_species
+                offsets[key] = width
+                union.append((endpoint, jnp.arange(n_species)))
+                width += n_species
+            cols.append(offsets[key] + np.asarray(ch_idx))
+        columns.append(np.concatenate(cols))
+    return tuple(union), columns
+
+
+def plant_rank_sensor_sets(
+    plant,
+    candidates: list[SensorSet],
+    t_obs,
+    free_params: list[str],
+    *,
+    base: SensorSet | None = None,
+    criterion: str = "D",
+    subset: list[str] | None = None,
+    params: jnp.ndarray | None = None,
+    param_draws: jnp.ndarray | None = None,
+    t_span=None,
+    y0=None,
+    transforms: dict[str, str] | None = None,
+    priors: dict[str, tuple[float, float]] | None = None,
+    use_priors: bool = False,
+    mode: str = "forward",
+    time_unit: str | None = None,
+    integrator=None,
+    diff: DifferentiationConfig = DifferentiationConfig(),
+    sensitivity_options: dict | None = None,
+) -> list[CandidateScore]:
+    """Rank candidate sensor sets by the information they give about a plant.
+
+    The plant version of :func:`aquakin.rank_experiments`, for choosing what to
+    measure. Each candidate is scored as ``criterion(F)``, with ``F`` the
+    Fisher information of the base set plus the candidate (their noise is
+    independent, so the information adds), plus the prior with
+    ``use_priors``. The sensitivity is solved **once** per parameter vector:
+    every stream any candidate reads is observed whole, and each candidate then
+    costs only a column selection and a small matrix product.
+
+    Parameters
+    ----------
+    plant : Plant or list of Plant
+        As for :func:`plant_fisher_information`.
+    candidates : list of SensorSet
+        The sensor sets to choose between.
+    t_obs : array-like or list of array-like
+        Sampling times, shared by every sensor set; a list describes a
+        multi-run design, as for :func:`plant_fisher_information`.
+    free_params : list of str
+        Plant parameters to estimate (``"<model>.<param>"``).
+    base : SensorSet, optional
+        Sensors already in place. With a base, each score also reports its
+        improvement over the base alone.
+    criterion : {"D", "A", "E", "modified_E"}
+        See :func:`aquakin.design_criterion`.
+    subset : list of str, optional
+        Parameters to score, treating the others as nuisance, as for
+        :func:`aquakin.design_criterion`.
+    params : jnp.ndarray, optional
+        Parameter vector to evaluate at (default: the plant defaults).
+    param_draws : jnp.ndarray, optional
+        ``(n_draw, n_params)`` parameter vectors, e.g. from a prior or a
+        calibration posterior. The criterion is averaged over them (robust
+        design), one sensitivity solve per draw; ``params`` is then ignored.
+    t_span, y0, transforms, priors, use_priors, mode, time_unit, integrator, diff, sensitivity_options
+        As for :func:`plant_fisher_information`.
+
+    Returns
+    -------
+    list of CandidateScore
+        Best first. ``index`` is the candidate's position in ``candidates``.
+
+    Raises
+    ------
+    KeyError
+        If a parameter, stream, channel or subset name is unknown.
+    ValueError
+        If ``candidates`` is empty, ``criterion`` is unknown, a noise level is
+        not positive, or ``param_draws`` has the wrong width.
+
+    Examples
+    --------
+    >>> sets = [SensorSet([("effluent", ["SNH"])], sigma=0.2),
+    ...         SensorSet([("effluent", ["SNO"])], sigma=0.5),
+    ...         SensorSet([("tank3", ["SO"])], sigma=0.1)]
+    >>> ranked = plant_rank_sensor_sets(plant, sets, t_obs,
+    ...                                 ["asm1.muA", "asm1.KNH_A"], base=online)
+    >>> ranked[0].index, ranked[0].improvement
+    """
+    _check_criterion(criterion)
+    candidates = list(candidates)
+    if not candidates:
+        raise ValueError("candidates must contain at least one SensorSet.")
+    design = _PlantDesign(
+        plant,
+        t_obs,
+        free_params,
+        t_span=t_span,
+        y0=y0,
+        params=params,
+        transforms=transforms,
+        priors=priors,
+        use_priors=use_priors,
+        mode=mode,
+        time_unit=time_unit,
+        integrator=integrator,
+        diff=diff,
+        sensitivity_options=sensitivity_options,
     )
+    sets = candidates + ([base] if base is not None else [])
+    for ss in sets:
+        _check_sigma_floor(ss.relative_sigma, ss.sigma_floor)
+    sub, nui = _subset_indices(design.free_params, subset)
+    if param_draws is None:
+        draws = design.p0[None, :]
+    else:
+        draws = jnp.atleast_2d(jnp.asarray(param_draws, dtype=float))
+        if draws.shape[1] != design.p0.shape[0]:
+            raise ValueError(
+                f"param_draws has {draws.shape[1]} columns; the plant has "
+                f"{design.p0.shape[0]} parameters."
+            )
+    unions = [_union_columns(pl, sets) for pl in design.plants]
+
+    k = len(design.free_params)
+    values = np.zeros((len(draws), len(candidates)))
+    base_values = np.zeros(len(draws))
+    for d, p in enumerate(draws):
+        dphys = design.dphysical(p)
+        # Each set's information summed over the runs, from one solve per run.
+        info = [np.zeros((k, k)) for _ in sets]
+        for r in range(design.n_runs):
+            union, columns = unions[r]
+            y_all, dy_all = design.sensitivity(r, union, p)
+            for i, (ss, cols) in enumerate(zip(sets, columns)):
+                J = _scaled_rows(
+                    y_all[:, cols],
+                    dy_all[:, cols, :],
+                    dphys,
+                    ss.sigma,
+                    ss.mask,
+                    ss.relative_sigma,
+                    ss.sigma_floor,
+                    label=f"sensor set {i}, run {r}",
+                )
+                _check_finite_sensitivity(J)
+                J = np.asarray(J)
+                info[i] += J.T @ J
+        prior = design.prior_rows(dphys)
+        F0 = np.zeros((k, k)) if prior is None else np.asarray(prior.T @ prior)
+        if base is not None:
+            F0 = F0 + info[-1]
+            base_values[d] = float(_criterion(jnp.asarray(F0), criterion, sub, nui))
+        for i in range(len(candidates)):
+            values[d, i] = float(_criterion(jnp.asarray(F0 + info[i]), criterion, sub, nui))
+
+    mean = values.mean(axis=0)
+    base_value = float(base_values.mean()) if base is not None else None
+    sign = 1.0 if _LARGER_IS_BETTER[criterion] else -1.0
+    scores = [
+        CandidateScore(
+            index=i,
+            value=float(v),
+            improvement=None if base_value is None else sign * (float(v) - base_value),
+        )
+        for i, v in enumerate(mean)
+    ]
+    return sorted(scores, key=lambda c: -sign * c.value)
 
 
 # --- Profile likelihood --------------------------------------------------
@@ -551,4 +919,9 @@ def plant_profile_likelihood(
     return _profile_result(profile_param, grid, fits, delta)
 
 
-__all__ = ["plant_fisher_information", "plant_profile_likelihood"]
+__all__ = [
+    "SensorSet",
+    "plant_fisher_information",
+    "plant_profile_likelihood",
+    "plant_rank_sensor_sets",
+]
