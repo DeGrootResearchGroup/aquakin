@@ -57,6 +57,7 @@ from aquakin.integrate.calibrate import (
     calibrate,
 )
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
+from aquakin.integrate.candidate_design import CandidateDesign, design_from_candidates
 from aquakin.integrate.experiment_design import (
     CandidateScore,
     ExperimentDesignResult,
@@ -64,7 +65,12 @@ from aquakin.integrate.experiment_design import (
     optimize_experiment,
     rank_experiments,
 )
-from aquakin.integrate.fisher import Experiment, FisherInformation, fisher_information
+from aquakin.integrate.fisher import (
+    Experiment,
+    FisherInformation,
+    fisher_information,
+    fisher_information_from_fn,
+)
 from aquakin.integrate.identifiability import (
     EigenDirection,
     IdentifiabilityResult,
@@ -217,6 +223,7 @@ __all__ = [
     "CFDReactor",
     "CSTRUnit",
     "CalibrationResult",
+    "CandidateDesign",
     "CandidateScore",
     "CarbonFootprint",
     "ChlorineContactUnit",
@@ -303,6 +310,7 @@ __all__ = [
     "derived_TKN",
     "derived_TSS",
     "design_criterion",
+    "design_from_candidates",
     "design_summary",
     "dgsm",
     "direct_n2o_emission",
@@ -312,6 +320,7 @@ __all__ = [
     "evaluate_bsm1",
     "evaluate_bsm2",
     "fisher_information",
+    "fisher_information_from_fn",
     "fit",
     "forward_adjoint",
     "forward_sensitivity",

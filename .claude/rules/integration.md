@@ -157,6 +157,17 @@ with `Plant.calibrate` as the inner fit; change them, not a copy. `experiment_de
 `t_end` per optimised experiment so sampling times can be traced, jits
 `(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector, and runs
 SLSQP with linear spacing constraints; `param_draws` are `vmap`ped.
+`fisher_information_from_fn` (in `fisher.py`) is the matrix-only path for a
+forward model that is not a reactor: AD Jacobian of `fn(theta)`, the same
+transforms and `FisherInformation` result, and `groups=` returning
+per-candidate matrices. `candidate_design.py`'s `design_from_candidates` takes
+such a pool and scores designs with `experiment_design.py`'s `_criterion` (its
+`rtol=0` mode for the ridge-regularized selection used when the base is
+singular) and `_subset_indices`, so its values agree with `design_criterion`.
+Its relaxed solver is projected gradient in NumPy with an analytic gradient
+(D, Ds, A only) and reports the Frank-Wolfe gap; `auto` enumerates the
+feasible designs when there are at most `exhaustive_limit`, since exchange
+alone stops at local optima on about one random small pool in ten.
 `observation_fn` (calibrate / profile / `Experiment`) goes through the shared
 `observe(ys, p, species_idx, fn, t=)` helper in `calibrate.py`, used by both
 `_predict` and `_FisherSetup.jacobian`; a three-argument `fn(t, C, p)`

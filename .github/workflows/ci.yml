@@ -1037,12 +1037,20 @@ jobs:
           fi
 
           # Commit ONLY .test_durations onto the branch via the Contents API.
+          # The request body is built in a file and sent with --input: the
+          # base64 content exceeds the kernel's 128 KiB single-argument limit,
+          # so it cannot be passed on the command line with -f.
           file_sha="$(gh api "repos/$repo/contents/.test_durations?ref=$branch" --jq .sha)"
+          base64 -w0 .test_durations > "$RUNNER_TEMP/durations.b64"
+          jq -n \
+            --rawfile content "$RUNNER_TEMP/durations.b64" \
+            --arg message "ci: refresh .test_durations" \
+            --arg branch "$branch" \
+            --arg sha "$file_sha" \
+            '{message: $message, content: $content, branch: $branch, sha: $sha}' \
+            > "$RUNNER_TEMP/durations_body.json"
           gh api -X PUT "repos/$repo/contents/.test_durations" \
-            -f message="ci: refresh .test_durations" \
-            -f content="$(base64 -w0 .test_durations)" \
-            -f branch="$branch" \
-            -f sha="$file_sha" >/dev/null
+            --input "$RUNNER_TEMP/durations_body.json" >/dev/null
           echo "Updated $branch with the refreshed durations."
 
           # Open the PR if one isn't already open. Non-fatal if the repo setting

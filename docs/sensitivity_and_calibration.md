@@ -343,6 +343,41 @@ cannot be determined from the design at all. Each experiment may carry its own
 optimum, with `loss="nll"`, the matrix equals the Gauss-Newton Laplace Hessian
 (`joint_hessian` with `include_ic=True`).
 
+### Fisher information of any forward model
+
+`aquakin.fisher_information_from_fn` gives the Fisher information of a forward
+model that is not an aquakin reactor: any function `fn(theta) -> y` written in
+`jax.numpy`, such as a transport operator or a reactor wrapped in your own
+code. The Jacobian of the observations comes from AD, in forward mode when
+there are more observations than parameters and reverse mode otherwise, and
+the result is a `FisherInformation`, so `identifiability`, `design_criterion`
+and `std()` work on it unchanged:
+
+```python
+def fn(theta):
+    k, a0 = theta
+    return a0 * jnp.exp(-k * t_obs)
+
+fim = aquakin.fisher_information_from_fn(
+    fn, jnp.array([0.25, 1.5]),
+    names=["k", "A0"],
+    sigma=0.05, noise="lognormal",           # observe log y; sigma ~ relative error
+    transforms=["positive_log", "positive_log"],
+)
+```
+
+`sigma` broadcasts to the shape of `y`, and `inf` marks an entry as unmeasured.
+With `groups=`, a label per observation (or per row block), the information of
+each group is returned too. Each group is one candidate measurement, for
+example one sampling site, and the groups' information sums to the total:
+
+```python
+total, per_site = aquakin.fisher_information_from_fn(
+    fn_sites, theta, names=names, sigma=0.1, groups=["inlet", "zone A", "zone B"],
+)
+per_site["zone A"].matrix     # what sampling zone A alone contributes
+```
+
 ### Identifiability report
 
 `aquakin.identifiability` analyses a Fisher information matrix and reports
@@ -452,6 +487,107 @@ draws = result.posterior_draws(reactor.model, n_draw=50, seed=0)  # (50, n_param
 res = aquakin.optimize_experiment(reactor, experiment, free_params,
                                   param_draws=draws, time_bounds=(0.5, 60.0))
 ```
+
+### Choosing measurements from a candidate pool
+
+`rank_experiments` scores one candidate at a time. When you can afford several
+measurements from a fixed list (sampling sites, sampling times, species to
+analyse, experiments to run), `aquakin.design_from_candidates` chooses the best
+set under a budget. Each candidate carries its own Fisher information `F_c`,
+and the information of a design that takes candidate `c` `n_c` times is
+`base + sum_c n_c F_c`.
+
+The per-candidate information comes most easily from
+`fisher_information_from_fn` with `groups=`. Here each candidate is one
+(time, species) sample of an ASM1 batch test, 40 in all, and we can afford six:
+
+```python
+model = aquakin.load_model("asm1")
+reactor = aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1, T=293.15))
+C0 = model.default_concentrations().at[model.species_index["SO"]].set(8.0)
+names = ["muH", "KS", "muA", "KNH_A"]
+idx = jnp.array([model.param_index[n] for n in names])
+p0 = model.default_parameters()
+t_obs = jnp.linspace(0.004, 0.04, 10)                     # days
+observed = ["SS", "SO", "SNH", "SNO"]
+cols = jnp.array([model.species_index[s] for s in observed])
+
+def fn(theta):
+    sol = reactor.solve(C0, params=p0.at[idx].set(theta), t_span=(0.0, 0.04), t_eval=t_obs)
+    return sol.C[:, cols]                                  # (10 times, 4 species)
+
+labels = [[f"{s} @ {24 * float(t):.1f} h" for s in observed] for t in t_obs]
+_, samples = aquakin.fisher_information_from_fn(
+    fn, p0[idx], names=names, sigma=jnp.array([2.0, 0.2, 0.5, 0.5]),
+    transforms=["positive_log"] * 4, groups=labels, mode="reverse",
+)
+design = aquakin.design_from_candidates(samples, budget=6)
+design.selected      # the six samples to take
+design.efficiency    # against the bound from the relaxed problem
+```
+
+The candidates can also be a stack of `(p, p)` matrices or a list of
+`FisherInformation` objects. The main options are:
+
+- `budget=` is the number of candidates to take or, with `costs=` (one per
+  candidate), the total cost.
+- `required=[...]` lists candidates that must be in the design.
+- `max_repeats=` allows replicates (default 1; `None` for no cap).
+- `base=` is information already in hand, such as a prior or experiments
+  already run.
+- `criterion=` and `subset=` work as for `design_criterion`. D on a subset
+  (Ds-optimality) chooses for some parameters while treating the rest as
+  nuisance.
+
+`method=` selects the search:
+
+| Method | What it does |
+|---|---|
+| `"relaxed"` | Solves the continuous problem (real weights that spend the budget), then rounds it. D and A only. |
+| `"greedy"` | Adds the best affordable candidate one at a time. |
+| `"exchange"` | Improves the greedy design by single swaps until none helps. |
+| `"auto"` (default) | Scores every design when there are few enough (`exhaustive_limit`), otherwise runs the rounded relaxed and greedy designs through exchange and keeps the better. |
+
+For D and A the relaxed problem is concave, so its optimum is a bound that no
+integer design can beat. The result reports it as `bound` and reports the
+chosen design's `efficiency` against it. For D with no base, no required
+candidates and no binding cap, `equivalence` gives the check from the
+Kiefer-Wolfowitz equivalence theorem: at the relaxed optimum the largest
+standardized variance equals the number of scored parameters. `gains` shows how
+much one more of each candidate would add, which is useful when the budget
+grows.
+
+The forward model does not have to be an aquakin reactor. In this toy source
+localization problem, three sources on a line spread a tracer to 41 candidate
+sensor nodes, and we choose four sensors to estimate the third source's
+strength, treating the other two as nuisance. Node 0 is always sampled:
+
+```python
+nodes = jnp.linspace(0.0, 10.0, 41)
+sources = jnp.array([2.0, 5.0, 8.0])
+
+def conc(q):
+    return jnp.exp(-jnp.abs(nodes[:, None] - sources[None, :]) / 1.5) @ q
+
+_, sensors = aquakin.fisher_information_from_fn(
+    conc, jnp.array([1.0, 2.0, 0.5]), names=["q1", "q2", "q3"], sigma=0.1,
+    groups=[f"node {i}" for i in range(41)],
+)
+design = aquakin.design_from_candidates(
+    sensors, budget=4, subset=["q3"], required=["node 0"],
+)
+```
+
+While a design has fewer informative candidates than parameters, its
+information is singular and every D value is the worst possible. Greedy and
+exchange then cannot compare candidates, so without a positive-definite `base`
+they select on the information plus a tiny ridge, and report the criterion
+without it (`regularized` is then `True`). The (1 - 1/e) guarantee of greedy
+selection for D holds with a positive-definite base and equal costs. If the
+whole pool cannot determine the parameters, the function raises an error and
+asks for a `base` or a `subset`. For a robust design, pass a stack with an
+axis of parameter draws and name it with `param_draws_axis=`. The criterion is
+then averaged over the draws.
 
 ## Calibrating a plant
 
