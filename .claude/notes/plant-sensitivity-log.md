@@ -410,8 +410,45 @@ the 801 saves:
   root-find failures, so it takes the error test's steps; at `rtol = 1e-5` it reaches
   diffrax-at-1e-4 on these layers with fewer attempts and a 4× smaller median.
 - The outputs barely see the pulses (the effluent / wastage table under "`_KAPPA`
-  over 8 days"). Smoothing the minimum would remove them, but would change the
-  Takács model the BSM2 validations use.
+  over 8 days"). The opt-in Godunov settler flux removes the switching (next
+  section).
+
+## The consistent (Godunov) settler flux (2026-11-02)
+
+Why the Takács rule switches there: layers 2–5 (430–475 g/m³) sit on the *rising*
+branch of `F(X) = v_s(X)·X` (peak at X̂ ≈ 1848 g/m³ for the BSM parameters,
+`X_min = 8.42`; `F' ≈ 310` there). With settling downward the Godunov flux on a
+rising branch is the upper layer's flux whatever the ordering; the Takács minimum
+equals it when the upper layer is the more dilute and holds it back to the lower
+layer's flux when it is the denser. Near-equal neighbours swap order constantly, so
+the rule switches, and holding a denser upper layer back makes it denser still —
+the pulses. `TakacsClarifier(interface_flux="godunov")` is the Godunov flux at
+every interface (`_interface_flux`, `_flux_peak`).
+
+`scripts/probe_settler_accuracy.py --interface-flux godunov` (configuration of the
+previous section; Godunov reference: the lean loop at `rtol = 1e-8`):
+
+| run | attempts | accepted | rejected: root find / error test | median accepted `h` (d) | worst (median) | settler layers 2 / 3 / 4 |
+|---|---|---|---|---|---|---|
+| lean, `rtol = 1e-4` | 3177 | 2341 | 0 / 836 | 3.1e-3 | 1.4e-3 (1.2e-4) | 6.2e-4 / 8.1e-4 / 8.0e-4 |
+| lean, `rtol = 1e-5` | 7047 | 5690 | 0 / 1357 | 1.3e-3 | 1.2e-4 (1.1e-5) | 5.4e-5 / 4.9e-5 / 6.3e-5 |
+| diffrax, `rtol = 1e-4` | 3653 | 2380 | 1273 / 0 | 2.5e-3 | 3.5e-3 (9.2e-5) | 1.4e-3 / 1.7e-3 / 1.9e-3 |
+
+- **Against Takács** (the previous table): lean attempts 8901 → 3177, its worst
+  error 5.6e-2 → 1.4e-3; diffrax attempts 17249 → 3653 and root-find failures
+  6852 → 1273. The lean loop now beats diffrax at equal `rtol` on both. Cached
+  wall time of the 8-day forward solve (17 saves, interleaved, best of 3): 27.6 s
+  Takács, 9.6 s Godunov.
+- **The blanket**: layers 2–5 still swap order ~450 times in 800 save intervals
+  (now 432–439 g/m³ at t = 8 d), but the flux no longer switches; their change
+  between consecutive saves drops from p99 17% to 4.3% (median 1.7% → 1.1%).
+- **The model moves little**: against Takács at `rtol = 1e-8`, effluent at most
+  4.3e-3 of a species' peak at the worst save (XB_A), 8-day means within 6.8e-4;
+  wastage / RAS 2.3e-3 / 1.6e-4. The BSM2 constant-influent steady state (the
+  validation case, 150 d, `rtol = 1e-5`) is identical to 5e-7: layers 2–5 sit at
+  exactly 423.2 g/m³ there, where the two rules agree; AS reactors 0.05% from the
+  published values under both.
+- Opt-in: the BSM reference settlers use the Takács rule.
 
 ## A stall near a steady state (2026-11-01)
 

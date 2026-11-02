@@ -350,7 +350,9 @@ built by the one `_build_sensitivity_solve`:
   root-find failures) takes the error test's steps, and at `rtol = 1e-5` matches
   diffrax-at-1e-4 there with fewer attempts. The outputs do not see the pulses (the
   note, "Why the lean loop trails diffrax on the settler blanket";
-  `scripts/probe_settler_accuracy.py`). Error-test
+  `scripts/probe_settler_accuracy.py`). The opt-in Godunov settler flux
+  (`TakacsClarifier(interface_flux="godunov")`, plant rules) removes the switching:
+  lean attempts 8901 → 3177, diffrax 17249 → 3653 on that case. Error-test
   rejections are not influent breakpoints; at `k=16` most are driven by the
   sensitivity error estimate jumping (the note, "Where the error-test rejections
   come from"). The scripts (lean-loop settings specs in `_lean_settings.py`):

@@ -1,6 +1,7 @@
 """Tests for the Takács 1-D secondary clarifier."""
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
@@ -214,6 +215,97 @@ def test_shared_asm1_constants_are_single_source(asm1):
     assert metrics._TSS_FACTOR == ASM1_TSS_FACTOR
 
 
+# --------------------------------------------------------------------------
+# The interface flux: the Takács minimum, or the Godunov flux.
+# --------------------------------------------------------------------------
+
+_X_MIN = 8.42  # a BSM2 non-settleable floor (g/m³)
+
+
+def _lumped(asm1, interface_flux):
+    return TakacsClarifier(name="c", model=asm1, area=1500.0, height=4.0,
+                           overflow_Q=18061.0, composition_mode="lumped_tss",
+                           interface_flux=interface_flux)
+
+
+def _interface_fluxes(clar, above, below):
+    """``_interface_flux`` at interfaces 0..len(above)-1 (all below the feed),
+    with ``F(X) = v_s(X) * X`` for each layer."""
+    n = clar.n_layers - 1
+    pad = n - len(above)
+    a = jnp.asarray(list(above) + [100.0] * pad)
+    b = jnp.asarray(list(below) + [100.0] * pad)
+    x_min = jnp.asarray(_X_MIN)
+    fa = clar._settling_velocity(a, x_min) * a
+    fb = clar._settling_velocity(b, x_min) * b
+    return np.asarray(clar._interface_flux(a, b, fa, fb, x_min))[: len(above)]
+
+
+def _F(clar, X):
+    X = jnp.asarray(X, dtype=float)
+    return float(clar._settling_velocity(X, jnp.asarray(_X_MIN)) * X)
+
+
+def test_flux_peak_is_the_maximum_of_the_settling_flux(asm1):
+    """``_flux_peak`` finds the maximum of ``F(X) = v_s(X) * X``: no point of a
+    fine grid exceeds it, and it sits within the grid spacing of the grid's
+    best point (for the BSM parameters, ~1850 g/m³, past the ``vmax`` cap)."""
+    clar = _lumped(asm1, "godunov")
+    x_peak, f_peak = clar._flux_peak(jnp.asarray(_X_MIN))
+    grid = np.linspace(_X_MIN, 20000.0, 400001)
+    F = np.asarray(clar._settling_velocity(jnp.asarray(grid), jnp.asarray(_X_MIN))) * grid
+    assert float(f_peak) >= F.max() * (1.0 - 1e-12)
+    assert float(x_peak) == pytest.approx(grid[np.argmax(F)], abs=0.1)
+    assert 1500.0 < float(x_peak) < 2500.0
+
+
+def test_godunov_flux_equals_the_takacs_minimum_unless_the_upper_layer_is_denser(asm1):
+    """Below the feed, with the upper layer the more dilute, both rules give the
+    smaller flux. With it the denser they differ: on the rising branch of ``F``
+    (layers below its peak) the Godunov flux is the upper layer's -- the flux
+    whatever the ordering, so near-equal layers do not switch it -- where the
+    Takács minimum holds the upper layer back to the lower one's; straddling
+    the peak it is ``F`` at the peak; past it, the larger of the two."""
+    takacs, godunov = _lumped(asm1, "takacs"), _lumped(asm1, "godunov")
+    _, f_peak = godunov._flux_peak(jnp.asarray(_X_MIN))
+    pairs = [  # (upper, lower)
+        (430.0, 475.0),    # upper dilute, rising branch
+        (475.0, 430.0),    # upper denser, rising branch
+        (2500.0, 1000.0),  # upper denser, straddling the peak
+        (6000.0, 3000.0),  # upper denser, falling branch
+    ]
+    t = _interface_fluxes(takacs, *zip(*pairs))
+    g = _interface_fluxes(godunov, *zip(*pairs))
+    F = {x: _F(godunov, x) for pair in pairs for x in pair}
+    assert t[0] == pytest.approx(F[430.0]) and g[0] == pytest.approx(F[430.0])
+    assert t[1] == pytest.approx(F[430.0])
+    assert g[1] == pytest.approx(F[475.0])
+    assert t[2] == pytest.approx(min(F[2500.0], F[1000.0]))
+    assert g[2] == pytest.approx(float(f_peak))
+    assert float(f_peak) > max(F[2500.0], F[1000.0])
+    assert t[3] == pytest.approx(F[6000.0])
+    assert g[3] == pytest.approx(F[3000.0])
+
+
+def test_godunov_settling_conserves_solids(asm1):
+    """The settling divergence only moves solids between layers: summed over the
+    column it vanishes (no flux through the top or the bottom), for an
+    arbitrary, partly inverted profile."""
+    clar = _lumped(asm1, "godunov")
+    tss = jnp.asarray([6800.0, 2200.0, 430.0, 450.0, 433.0, 475.0, 90.0, 35.0, 21.0, 14.0])
+    div = clar._settling_divergence(tss[:, None], jnp.asarray(_X_MIN), 0.4,
+                                    factors=jnp.ones((1,)))
+    assert float(jnp.sum(div)) == pytest.approx(0.0, abs=1e-9 * float(jnp.max(jnp.abs(div))))
+    assert float(jnp.max(jnp.abs(div))) > 0.0
+
+
+def test_interface_flux_validation(asm1):
+    """An unrecognised interface_flux is rejected at construction."""
+    with pytest.raises(ValueError, match="interface_flux"):
+        TakacsClarifier(name="c", model=asm1, area=1.0, height=4.0,
+                        overflow_Q=1.0, interface_flux="bogus")
+
+
 def test_composition_mode_validation(asm1):
     """An unrecognised composition_mode is rejected at construction."""
     with pytest.raises(ValueError, match="composition_mode"):
@@ -362,9 +454,11 @@ def test_lumped_tss_grad_through_rhs(asm1):
     assert bool(jnp.all(jnp.isfinite(g)))
 
 
-def test_lumped_tss_plant_solve(asm1):
+@pytest.mark.parametrize("interface_flux", ["takacs", "godunov"])
+def test_lumped_tss_plant_solve(asm1, interface_flux):
     """A lumped_tss clarifier integrates in a plant to a finite, clarifying
-    steady-ish state (clarified effluent, thickened underflow)."""
+    steady-ish state (clarified effluent, thickened underflow), with either
+    interface flux."""
     from aquakin.plant.metrics import derived_TSS
     from aquakin.plant.streams import Stream
 
@@ -373,7 +467,8 @@ def test_lumped_tss_plant_solve(asm1):
     Q_in, overflow = 36892.0, 18061.0
     plant = Plant("clar_lumped")
     clar = TakacsClarifier(name="clar", model=asm1, area=1500.0, height=4.0,
-                           overflow_Q=overflow, composition_mode="lumped_tss")
+                           overflow_Q=overflow, composition_mode="lumped_tss",
+                           interface_flux=interface_flux)
     plant.add_unit(clar)
     plant.add_influent("feed", InfluentSeries(
         t=jnp.asarray([0.0, 50.0]), Q=jnp.full((2,), Q_in),
@@ -546,6 +641,9 @@ def test_build_bsm1_takacs_defaults_to_reference_settler(asm1):
     assert isinstance(cl, TakacsClarifier)
     assert cl.composition_mode == "lumped_tss"
     assert cl.soluble_holdup is True
+    assert cl.interface_flux == "takacs"
+    godunov = build_bsm1(model=asm1, use_takacs=True, settler_interface_flux="godunov")
+    assert godunov.units["clarifier"].interface_flux == "godunov"
 
     # The settings remain overridable for the BSM2-style settler.
     cl2 = build_bsm1(model=asm1, use_takacs=True,
@@ -565,6 +663,8 @@ def test_build_bsm2_defaults_to_reference_settler(asm1):
     assert isinstance(cl, TakacsClarifier)
     assert cl.composition_mode == "lumped_tss"
     assert cl.soluble_holdup is True
+    assert cl.interface_flux == "takacs"
+    assert build_bsm2(settler_interface_flux="godunov").units["settler"].interface_flux == "godunov"
 
     cl2 = build_bsm2(settler_composition_mode="per_species",
                      settler_soluble_holdup=False).units["settler"]

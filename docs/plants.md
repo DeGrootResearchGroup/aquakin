@@ -148,6 +148,10 @@ Units are wired to each other with `plant.connect("aerobic.out", "clarifier.in")
 The plant library also provides secondary clarifiers, an ADM1 digester,
 sequencing-batch and membrane-bioreactor units, IFAS/MBBR units, disinfection
 (UV and chlorine contact), dosing, aeration-system physics, and temperature
-models. See the [API reference](api.md) for the full unit catalog, and
+models. The layered secondary clarifier (`TakacsClarifier`) uses the Takács
+settling-flux rule of the benchmark settlers by default; `interface_flux="godunov"`
+(`settler_interface_flux="godunov"` on `build_bsm1` / `build_bsm2`) uses a
+consistent settling flux instead, which keeps the same steady state and makes
+dynamic runs considerably cheaper to integrate. See the [API reference](api.md) for the full unit catalog, and
 `Plant.calibrate` in [Sensitivity & calibration](sensitivity_and_calibration.md#calibrating-a-plant)
 for fitting plant parameters to measured streams.

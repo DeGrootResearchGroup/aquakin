@@ -57,6 +57,7 @@ def build_bsm1(
     use_takacs: bool = False,
     settler_soluble_holdup: bool = True,
     settler_composition_mode: str = "lumped_tss",
+    settler_interface_flux: str = "takacs",
 ) -> Plant:
     """Assemble the canonical BSM1 plant.
 
@@ -101,6 +102,15 @@ def build_bsm1(
         composition memory), which neither the BSM1 nor the BSM2 reference
         settler has (``settler1dv5_bsm2`` is also lumped TSS); it agrees with ``"lumped_tss"`` at steady state but diverges under dynamic
         flow. Ignored when ``use_takacs=False``.
+    settler_interface_flux : {"takacs", "godunov"}
+        When ``use_takacs=True``, the settling flux between adjacent settler
+        layers (:class:`~aquakin.plant.takacs.TakacsClarifier`
+        ``interface_flux``):
+        ``"takacs"`` (default), the minimum-flux rule of the reference
+        settler, or ``"godunov"``, the Godunov flux of the settling
+        conservation law, which differs from it only where the upper of two
+        layers is the denser one.
+        Ignored when ``use_takacs=False``.
 
     Returns
     -------
@@ -196,6 +206,7 @@ def build_bsm1(
             # dynamic flow (same steady state). The BSM2 settler1dv5_bsm2 is also
             # lumped TSS.
             composition_mode=settler_composition_mode,
+            interface_flux=settler_interface_flux,
         ),
     )
 

@@ -43,6 +43,17 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   otherwise very long ones. `dynamic_sensitivity`
   and `dynamic_dgsm` pass it through in forward mode. The default (`True`) is
   unchanged.
+- `TakacsClarifier(interface_flux="godunov")` (and `settler_interface_flux=` on
+  `build_bsm1` / `build_bsm2`) settles solids between layers with the Godunov
+  flux of the settling conservation law (Bürger, Diehl & Nopens 2011) instead of
+  the Takács minimum-flux rule. The two differ only where an upper layer is
+  denser than the one below it. The Takács rule then switches between the two
+  layers' fluxes whenever their order flips, which made the sludge blanket pulse
+  and forced small steps. On a dynamic BSM2 run the forward solve took about a
+  third of the steps and wall time, and the default diffrax solve about a fifth
+  of the steps. The BSM2 steady state is unchanged, and dynamic effluent
+  concentrations differ by under 0.1% on average. The default stays `"takacs"`,
+  the rule of the BSM reference settlers.
 - `aquakin.plant.plant_fisher_information` gives the Fisher information of a
   plant design, the plant version of `fisher_information`. Measured channels
   are named as for `Plant.calibrate`, including a unit's state such as
