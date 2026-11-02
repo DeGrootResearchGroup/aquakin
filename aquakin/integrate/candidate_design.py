@@ -306,6 +306,9 @@ def design_from_candidates(
     def add_utilities(n):
         return np.asarray(select(design_matrix(n)[None] + F_add))
 
+    def determined(n):
+        return bool(np.isfinite(strict(design_matrix(n, B0)[None])[0]))
+
     ctx = _Context(n_c, cost, budget, lower, upper, criterion)
     designs = []
     relaxed = None
@@ -329,7 +332,7 @@ def design_from_candidates(
         )
         designs = [("exhaustive", every[int(np.argmax(u_all))])]
     elif method in ("auto", "greedy", "exchange"):
-        greedy = _greedy(lower.copy(), ctx, utility, add_utilities)
+        greedy = _greedy(lower.copy(), ctx, utility, add_utilities, determined)
         if method == "greedy":
             designs.append(("greedy", greedy))
         else:
@@ -369,7 +372,7 @@ def design_from_candidates(
         result.bound = sign * (f_rel + gap)
         if criterion == "D":
             result.efficiency = float(np.exp(min(0.0, (value - result.bound) / q)))
-        elif value > 0.0:
+        else:
             result.efficiency = float(min(1.0, result.bound / value))
         caps_bind = np.any(w > upper - 1e-9)
         if criterion == "D" and base is None and not lower.any() and not caps_bind:
@@ -473,10 +476,12 @@ class _Context:
         return (n < self.upper) & (self.cost <= slack * (1 + 1e-12) + 1e-12)
 
 
-def _greedy(n, ctx, utility, add_utilities):
+def _greedy(n, ctx, utility, add_utilities, determined=lambda n: True):
     """Forward selection from ``n``: add the best affordable candidate (by gain
     per unit cost) until none is affordable, or, for a criterion that can get
-    worse with more information, none improves. Ties go to the lower index."""
+    worse with more information, none improves once the design ``determined``
+    the scored parameters (a singular design always takes the best candidate).
+    Ties go to the lower index."""
     n = n.astype(float).copy()
     while True:
         ok = ctx.can_add(n)
@@ -488,7 +493,7 @@ def _greedy(n, ctx, utility, add_utilities):
         j = int(np.argmax(gain))
         if not np.isfinite(gain[j]):
             return n
-        if ctx.criterion not in _MONOTONE and not gain[j] > 0.0:
+        if ctx.criterion not in _MONOTONE and not gain[j] > 0.0 and determined(n):
             return n
         n[j] += 1
 

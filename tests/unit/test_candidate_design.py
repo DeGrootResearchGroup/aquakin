@@ -261,3 +261,160 @@ def test_pool_from_fisher_information_from_fn_groups():
     assert "t0" in r.selected
     with pytest.raises(KeyError):
         design_from_candidates(per_time, budget=3, required=["t9"])
+
+
+def test_pool_and_option_validation():
+    F = _poly(1)
+    info = [
+        aquakin.FisherInformation(
+            matrix=m,
+            names=["a", "b"],
+            transforms=["none"] * 2,
+            values={},
+            jacobian=np.zeros((0, 2)),
+        )
+        for m in F
+    ]
+    # A list of FisherInformation is a pool labelled by index.
+    r = design_from_candidates(info, budget=2)
+    assert r.labels == list(range(len(X)))
+    assert r.selected == [0, 20]
+    with pytest.raises(ValueError, match="Unknown method"):
+        design_from_candidates(F, budget=2, method="random")
+    with pytest.raises(ValueError, match="FisherInformation objects"):
+        design_from_candidates({"a": F[0]}, budget=1)
+    with pytest.raises(ValueError, match="FisherInformation objects"):
+        design_from_candidates({}, budget=1)
+    renamed = info[:2] + [
+        aquakin.FisherInformation(
+            matrix=F[2],
+            names=["a", "c"],
+            transforms=["none"] * 2,
+            values={},
+            jacobian=np.zeros((0, 2)),
+        )
+    ]
+    with pytest.raises(ValueError, match="same names"):
+        design_from_candidates(renamed, budget=2)
+    with pytest.raises(ValueError, match="disagrees"):
+        design_from_candidates(info, budget=2, names=["x", "y"])
+    with pytest.raises(ValueError, match="only to an array"):
+        design_from_candidates(info, budget=2, param_draws_axis=0)
+    with pytest.raises(ValueError, match="param_draws_axis="):
+        design_from_candidates(np.stack([F, F]), budget=2)
+    with pytest.raises(ValueError, match="4-D"):
+        design_from_candidates(F, budget=2, param_draws_axis=0)
+    with pytest.raises(ValueError, match="4-D"):
+        design_from_candidates(np.stack([F, F]), budget=2, param_draws_axis=2)
+    with pytest.raises(ValueError, match="square"):
+        design_from_candidates(np.zeros((3, 2, 3)), budget=2)
+    with pytest.raises(ValueError, match="names has"):
+        design_from_candidates(F, budget=2, names=["a"])
+    with pytest.raises(ValueError, match="base must be"):
+        design_from_candidates(F, budget=2, base=np.eye(3))
+    # A FisherInformation base, and a per-draw base.
+    r = design_from_candidates(info, budget=2, base=info[10])
+    assert r.regularized  # one rank-one sample is still singular
+    assert np.isfinite(r.value)
+    r = design_from_candidates(
+        np.stack([F, F]), budget=2, base=np.stack([np.eye(2), 2 * np.eye(2)]), param_draws_axis=0
+    )
+    assert np.isfinite(r.value)
+
+
+def test_relaxed_a_criterion_on_a_subset_and_iteration_cap():
+    """A on a subset gives a lower bound on the trace; a solver stopped after
+    one iteration still returns a feasible relaxed design and an honest gap."""
+    F = _poly(2)
+    names = ["a", "b", "c"]
+    r = design_from_candidates(F, budget=3, names=names, subset=["b"], criterion="A")
+    assert r.bound <= r.value + 1e-9
+    assert 0.0 < r.efficiency <= 1.0
+    assert r.equivalence is None
+    capped = design_from_candidates(F, budget=3, method="relaxed", max_iter=1)
+    assert capped.relaxed_weights.sum() == pytest.approx(3.0)
+    assert capped.gap > 1e-6
+    full = design_from_candidates(F, budget=3, method="relaxed")
+    assert full.gap < capped.gap
+
+
+def test_modified_e_greedy_stops_and_exchange_adds():
+    """modified-E can get worse with more information, so once the design is
+    non-singular greedy stops when nothing improves it. Before that it always
+    adds, even though the ridge-only start already has condition number 1."""
+    F = np.stack([np.diag([1.0, 1.0]), np.diag([4.0, 0.0]), np.diag([0.0, 0.5])])
+    g = design_from_candidates(F, budget=3, criterion="modified_E", method="greedy")
+    assert g.counts.tolist() == [1, 0, 0]
+    assert g.value == pytest.approx(1.0)
+    ex = design_from_candidates(F, budget=3, criterion="modified_E", method="exchange")
+    assert ex.value <= g.value
+
+
+def test_exchange_skips_removals_with_nothing_to_swap_in():
+    """When every other candidate is at its cap, dropping one leaves nothing
+    to add in its place, and exchange keeps the design."""
+    F = np.stack([np.diag([1.0, 0.0]), np.diag([0.0, 1.0])])
+    r = design_from_candidates(F, budget=2, method="exchange", base=0.1 * np.eye(2))
+    assert r.counts.tolist() == [1, 1]
+
+
+def test_internal_singular_and_projection_edges():
+    """Edge cases of the relaxed solver's internals that a well-posed pool
+    reaches only in a line search."""
+    from aquakin.integrate.candidate_design import (
+        _Context,
+        _exchange,
+        _greedy,
+        _project,
+        _solve_relaxed,
+        _value_and_grad,
+    )
+
+    F = _poly(2)[None]
+    zero = np.zeros((1, 3, 3))
+    w = np.zeros(len(X))
+    w[0] = 1.0  # a single rank-one sample: singular
+    for crit, sub, nui in [
+        ("D", None, None),
+        ("D", np.array([0]), np.array([1, 2])),
+        ("A", None, None),
+    ]:
+        f, g = _value_and_grad(w, F, zero, crit, sub, nui)
+        assert f == -np.inf and g is None
+    # An invertible but indefinite matrix (as a line search might reach).
+    w[[10, 20]] = 1.0
+    neg = zero.copy()
+    neg[0, 0, 0] = -10.0
+    assert _value_and_grad(w, F, neg, "D", None, None)[1] is None
+    assert _value_and_grad(w, F, neg, "A", None, None)[1] is None
+    neg_nn = zero.copy()
+    neg_nn[0, 1, 1] = -10.0
+    assert _value_and_grad(w, F, neg_nn, "D", np.array([0]), np.array([1, 2]))[1] is None
+    nan = np.full((1, 3, 3), np.nan)
+    with np.errstate(invalid="ignore"):
+        assert _value_and_grad(w, F, nan, "D", None, None)[1] is None
+
+    # Projection onto an uncapped budget from far below it.
+    cost = np.ones(4)
+    p = _project(np.array([-50.0, -60.0, -70.0, -80.0]), cost, 2.0, np.zeros(4), np.full(4, np.inf))
+    assert p @ cost == pytest.approx(2.0) and np.all(p >= 0.0)
+
+    lower, upper = np.zeros(len(X)), np.ones(len(X))
+    with pytest.raises(ValueError, match="relaxed design is singular"):
+        _solve_relaxed(
+            np.zeros_like(F), zero, np.ones(len(X)), 2.0, lower, upper, "D", None, None, 1e-9, 10
+        )
+
+    ctx = _Context(3, np.ones(3), 2.0, np.zeros(3), np.ones(3), "D")
+    # Greedy stops when no addition has a finite value.
+    n = _greedy(np.zeros(3), ctx, lambda n: 0.0, lambda n: np.full(3, -np.inf))
+    assert n.tolist() == [0.0, 0.0, 0.0]
+    # Exchange stops at its pass limit even while it is still improving.
+    n = _exchange(
+        np.zeros(3),
+        ctx,
+        lambda n: float(n.sum()),
+        lambda n: n.sum() + 1.0 + np.zeros(3),
+        max_passes=1,
+    )
+    assert n.sum() == 1.0
