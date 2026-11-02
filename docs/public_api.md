@@ -92,6 +92,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Identifiability report from a Fisher matrix | `identifiability` → `IdentifiabilityResult` (`EigenDirection`) |
 | Score a design (D / A / E / modified-E) | `design_criterion` |
 | Choose between candidate experiments | `rank_experiments` → `CandidateScore` |
+| Choose the best set of measurements from a candidate pool under a budget | `design_from_candidates` → `CandidateDesign` |
 | Optimise sampling times and initial concentrations | `optimize_experiment` → `ExperimentDesignResult` |
 | Configure the fit | `LaplaceConfig`, `OptimizerConfig`, `FreeICConfig` |
 
