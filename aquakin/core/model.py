@@ -257,10 +257,22 @@ class CompiledModel:
     # temperature behaves exactly as if uncorrected.
     temperature_corrections: list = field(default_factory=list)
 
+    # Rate constants whose ``theta`` is itself a model parameter:
+    # ``{corrected_param_idx: theta_param_idx}``. For these the ``ln_theta`` in
+    # ``temperature_corrections`` is only the default (``log`` of the theta
+    # parameter's default value); at evaluation ``ln_theta`` is read as
+    # ``log(params[theta_param_idx])``, so theta is calibratable and
+    # differentiable. Several corrected parameters may share one theta.
+    temperature_theta_params: dict = field(default_factory=dict)
+
     # Precomputed, vectorised form of ``temperature_corrections``, grouped by
     # condition field: a list of ``(condition_field, idx_array, ln_theta_array,
-    # ref_T_array)``. Built once in :meth:`__post_init__` so :meth:`_apply_temperature`
-    # applies one scatter-multiply per condition field, not one per correction.
+    # ref_T_array, theta_pos, theta_idx)``. ``theta_pos`` (positions within the
+    # group) and ``theta_idx`` (theta parameter indices) select the entries whose
+    # ``ln_theta`` is read from the parameter vector; both are ``None`` when the
+    # group has none. Built once in :meth:`__post_init__` so
+    # :meth:`_apply_temperature` applies one scatter-multiply per condition
+    # field, not one per correction.
     _temp_groups: list = field(default_factory=list, init=False, repr=False)
 
     # Vectorized rate kernel: evaluates all reaction rates in batched ops with
@@ -272,15 +284,25 @@ class CompiledModel:
     _rate_kernel: Any | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        grouped: dict[str, tuple[list, list, list]] = {}
+        grouped: dict[str, tuple[list, list, list, list, list]] = {}
         for idx, ln_theta, ref_T, cond in self.temperature_corrections:
-            idxs, ln_thetas, ref_Ts = grouped.setdefault(cond, ([], [], []))
+            idxs, ln_thetas, ref_Ts, pos, t_idx = grouped.setdefault(cond, ([], [], [], [], []))
+            if idx in self.temperature_theta_params:
+                pos.append(len(idxs))
+                t_idx.append(self.temperature_theta_params[idx])
             idxs.append(idx)
             ln_thetas.append(ln_theta)
             ref_Ts.append(ref_T)
         self._temp_groups = [
-            (cond, jnp.asarray(idxs), jnp.asarray(ln_thetas), jnp.asarray(ref_Ts))
-            for cond, (idxs, ln_thetas, ref_Ts) in grouped.items()
+            (
+                cond,
+                jnp.asarray(idxs),
+                jnp.asarray(ln_thetas),
+                jnp.asarray(ref_Ts),
+                jnp.asarray(pos) if pos else None,
+                jnp.asarray(t_idx) if t_idx else None,
+            )
+            for cond, (idxs, ln_thetas, ref_Ts, pos, t_idx) in grouped.items()
         ]
         self._build_rate_kernel()
 
@@ -640,8 +662,14 @@ class CompiledModel:
         stoichiometry parameters are untouched. Corrections are grouped by
         condition field (see ``_temp_groups``) and applied as one vectorised
         scatter-multiply per field rather than one scatter per correction.
+        A parameter-valued theta is read from the incoming (uncorrected)
+        ``params``; a theta parameter is never itself corrected, so the order of
+        the groups does not matter.
         """
-        for cond, idxs, ln_thetas, ref_Ts in self._temp_groups:
+        raw = params
+        for cond, idxs, ln_thetas, ref_Ts, theta_pos, theta_idx in self._temp_groups:
+            if theta_idx is not None:
+                ln_thetas = ln_thetas.at[theta_pos].set(jnp.log(raw[theta_idx]))
             T = condition_arrays[cond][loc_idx]
             factors = arrhenius_factor(T, ref_Ts, ln_thetas)
             # ``idxs`` are distinct (a parameter carries at most one temperature
@@ -1172,7 +1200,9 @@ def _build_param_index(spec):
     deterministic).
 
     Returns ``(parameters, param_index, defaults, bounds, transforms, priors,
-    units, temperature_corrections)``.
+    units, temperature_corrections, temperature_theta_params)``. The last maps
+    the index of each rate constant whose ``theta`` names a model parameter to
+    that parameter's index (see :func:`_resolve_theta_params`).
     """
     parameters: list[str] = []
     param_index: dict[str, int] = {}
@@ -1182,8 +1212,10 @@ def _build_param_index(spec):
     priors: dict[str, tuple[float, float]] = {}
     units: dict[str, str] = {}
     temperature: list = []
+    # (corrected key, owning reaction or "", theta parameter name, tc spec)
+    theta_refs: list[tuple[str, str, str, Any]] = []
 
-    def record(key: str, pspec) -> None:
+    def record(key: str, pspec, reaction: str = "") -> None:
         idx = len(parameters)
         param_index[key] = idx
         parameters.append(key)
@@ -1196,15 +1228,100 @@ def _build_param_index(spec):
         if prior is not None:
             priors[key] = prior.resolved()
         tc = getattr(pspec, "temperature", None)
-        if tc is not None:
+        if tc is None:
+            return
+        if isinstance(tc.theta, str):
+            # Resolved once every parameter is indexed; the ln_theta slot is
+            # filled from the theta parameter's default value there.
+            theta_refs.append((key, reaction, tc.theta.strip(), tc))
+            temperature.append((idx, None, float(tc.ref_T), tc.condition))
+        else:
             temperature.append((idx, math.log(float(tc.theta)), float(tc.ref_T), tc.condition))
 
     for local_name, pspec in getattr(spec, "parameters", {}).items():
         record(local_name, pspec)
     for rxn in spec.reactions:
         for local_name, pspec in rxn.parameters.items():
-            record(f"{rxn.name}.{local_name}", pspec)
-    return (parameters, param_index, defaults, bounds, transforms, priors, units, temperature)
+            record(f"{rxn.name}.{local_name}", pspec, rxn.name)
+    theta_params = _resolve_theta_params(
+        theta_refs, temperature, param_index, defaults, bounds, units
+    )
+    return (
+        parameters,
+        param_index,
+        defaults,
+        bounds,
+        transforms,
+        priors,
+        units,
+        temperature,
+        theta_params,
+    )
+
+
+# Default box for a theta parameter declared without ``bounds``: a rate that
+# rises with temperature by at most 30 % per degree.
+_DEFAULT_THETA_BOUNDS = (1.0, 1.3)
+
+
+def _resolve_theta_params(theta_refs, temperature, param_index, defaults, bounds, units):
+    """Resolve parameter-valued ``temperature.theta`` references.
+
+    Each reference is looked up as ``<reaction>.<name>`` first (for a
+    reaction-local rate constant), then as a model-level ``<name>``. The theta
+    parameter must exist, have a positive value (and a positive lower bound, if
+    bounded), and must not carry a temperature correction itself. A theta
+    parameter without ``bounds`` gets :data:`_DEFAULT_THETA_BOUNDS` when its value
+    lies inside them. The placeholder ``ln_theta`` of each referencing entry in
+    ``temperature`` is replaced, in place, by the log of the theta default.
+
+    Returns
+    -------
+    dict[int, int]
+        ``{corrected_param_idx: theta_param_idx}``.
+    """
+    if not theta_refs:
+        return {}
+    corrected = {entry[0] for entry in temperature}
+    out: dict[int, int] = {}
+    for key, reaction, name, _tc in theta_refs:
+        candidates = ([f"{reaction}.{name}"] if reaction else []) + [name]
+        theta_key = next((c for c in candidates if c in param_index), None)
+        if theta_key is None:
+            hint = did_you_mean(name, list(param_index))
+            raise ValueError(
+                f"Parameter {key!r}: temperature.theta refers to parameter {name!r}, "
+                f"which is not declared.{hint}"
+            )
+        t_idx = param_index[theta_key]
+        if t_idx in corrected:
+            raise ValueError(
+                f"Parameter {key!r}: temperature.theta parameter {theta_key!r} "
+                "carries a temperature correction itself; a theta parameter cannot "
+                "be temperature-corrected."
+            )
+        value = defaults[t_idx]
+        if not value > 0.0:
+            raise ValueError(
+                f"Parameter {key!r}: temperature.theta parameter {theta_key!r} must be "
+                f"> 0; got {value}."
+            )
+        if theta_key in bounds:
+            if not bounds[theta_key][0] > 0.0:
+                raise ValueError(
+                    f"Parameter {key!r}: temperature.theta parameter {theta_key!r} must "
+                    f"have a positive lower bound; got bounds={bounds[theta_key]}."
+                )
+        elif _DEFAULT_THETA_BOUNDS[0] <= value <= _DEFAULT_THETA_BOUNDS[1]:
+            bounds[theta_key] = _DEFAULT_THETA_BOUNDS
+        if not units.get(theta_key):
+            units[theta_key] = "-"
+        idx = param_index[key]
+        out[idx] = t_idx
+        for i, entry in enumerate(temperature):
+            if entry[0] == idx:
+                temperature[i] = (idx, math.log(value), entry[2], entry[3])
+    return out
 
 
 def _resolve_expressions(spec) -> dict[str, ASTNode]:
@@ -1404,6 +1521,7 @@ def compile_model(spec: Any) -> CompiledModel:
         parameter_priors,
         parameter_units,
         temperature_corrections,
+        temperature_theta_params,
     ) = _build_param_index(spec)
 
     # Stage 3: parse + topo-sort + inline the named expressions, and validate the
@@ -1511,4 +1629,5 @@ def compile_model(spec: Any) -> CompiledModel:
         positivity_threshold=positivity_threshold,
         clip_negative_states=bool(getattr(spec, "clip_negative_states", False)),
         temperature_corrections=temperature_corrections,
+        temperature_theta_params=temperature_theta_params,
     )
