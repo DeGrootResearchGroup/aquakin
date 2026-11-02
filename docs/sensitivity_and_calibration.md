@@ -515,6 +515,29 @@ suits a few observations of many parameters. At a `Plant.calibrate` result with
 `loss="nll"`, no priors and `LaplaceConfig(method="gauss_newton")`, the
 reverse-mode matrix equals the fit's `hessian_unconstrained`.
 
+To choose what to measure, `aquakin.plant.plant_rank_sensor_sets` scores
+candidate `SensorSet`s (observables plus their noise) by a design criterion of
+the information each adds to the sensors already in place (`base=`). One
+sensitivity solve is shared by every candidate, so each extra candidate costs
+only linear algebra. It returns the same `CandidateScore` list as
+`rank_experiments`, best first, and takes `criterion=`, `subset=` and
+`param_draws=` as that does:
+
+```python
+from aquakin.plant import SensorSet, plant_rank_sensor_sets
+
+online = SensorSet([("effluent", ["SNH"])], sigma=0.2)
+candidates = [
+    SensorSet([("effluent", ["SNO"])], sigma=0.5),
+    SensorSet([("tank3", ["SO"])], sigma=0.1),
+    SensorSet([("digester", ["S_IN"])], sigma=0.05, relative_sigma=True),
+]
+ranked = plant_rank_sensor_sets(plant, candidates, t_obs,
+                                ["asm1.muA", "asm1.KNH_A"], base=online,
+                                y0=bsm2_warm_start(plant))
+ranked[0].index, ranked[0].improvement
+```
+
 `plant_profile_likelihood` re-fits the other parameters with `Plant.calibrate`
 at each grid value of the profiled one, with the same warm-started sweep and
 polish pass as `profile_likelihood`. Every grid point reuses one compiled

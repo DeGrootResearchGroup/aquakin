@@ -21,7 +21,12 @@ from aquakin.plant.aeration_system import (
 )
 from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
 from aquakin.plant.calibrate import PlantObservable, calibrate_plant
-from aquakin.plant.identifiability import plant_fisher_information, plant_profile_likelihood
+from aquakin.plant.identifiability import (
+    SensorSet,
+    plant_fisher_information,
+    plant_profile_likelihood,
+    plant_rank_sensor_sets,
+)
 from aquakin.plant.control import PIController
 from aquakin.plant.cstr import Aeration, CSTRUnit, oxygen_saturation
 from aquakin.plant.disinfection import (
@@ -189,6 +194,7 @@ __all__ = [
     "Reagent",
     "SBRPhase",
     "SBRUnit",
+    "SensorSet",
     "SetpointSplitter",
     "SettlingModel",
     "SludgeMetrics",
@@ -241,6 +247,7 @@ __all__ = [
     "oxygen_saturation",
     "plant_fisher_information",
     "plant_profile_likelihood",
+    "plant_rank_sensor_sets",
     "ptc_forward",
     "pumping_energy",
     "pumping_energy_bsm2",
