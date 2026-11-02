@@ -5,7 +5,11 @@
 > no-growth-after-a-failure rule** (and, before "Anderson acceleration", without
 > Anderson); **sections before "A stall near a steady state" required two
 > corrections per stage.** Their step counts and timings are of those solvers,
-> not the shipped one.
+> not the shipped one. **Every measurement before "The consistent (Godunov)
+> settler flux" used the Takács settler rule**; the harnesses build BSM2 with the
+> shipped settler (Godunov since 2026-11-02), so reproducing one of those numbers
+> needs `build_bsm2(..., settler_interface_flux="takacs")` (in
+> `scripts/_bsm2_window.py`, or `probe_settler_accuracy.py --interface-flux takacs`).
 >
 > **Lives in `.claude/notes/`, outside the auto-loaded `.claude/rules/` tree, so it
 > never auto-loads.** It holds the dated measurements behind the
@@ -410,8 +414,8 @@ the 801 saves:
   root-find failures, so it takes the error test's steps; at `rtol = 1e-5` it reaches
   diffrax-at-1e-4 on these layers with fewer attempts and a 4× smaller median.
 - The outputs barely see the pulses (the effluent / wastage table under "`_KAPPA`
-  over 8 days"). The opt-in Godunov settler flux removes the switching (next
-  section).
+  over 8 days"). The Godunov settler flux (the default since 2026-11-02) removes
+  the switching (next section).
 
 ## The consistent (Godunov) settler flux (2026-11-02)
 
@@ -448,7 +452,10 @@ previous section; Godunov reference: the lean loop at `rtol = 1e-8`):
   validation case, 150 d, `rtol = 1e-5`) is identical to 5e-7: layers 2–5 sit at
   exactly 423.2 g/m³ there, where the two rules agree; AS reactors 0.05% from the
   published values under both.
-- Opt-in: the BSM reference settlers use the Takács rule.
+- **Default since 2026-11-02** (project owner's decision, on the agreement above),
+  as a documented departure from the BSM reference settlers; `interface_flux=
+  "takacs"` reproduces them. Every measurement in this file before this section,
+  and the Takács rows here, ran with the Takács rule.
 
 ## A stall near a steady state (2026-11-01)
 

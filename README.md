@@ -271,7 +271,12 @@ print(f"EQI = {ev.eqi:.0f} kg/d   OCI = {ev.oci:.0f}")
 `build_bsm2(...)` assembles the full BSM2 sludge train (primary clarifier,
 thickener, ADM1 digester with the ASM1↔ADM1 interfaces, dewatering, reject
 recycle) the same way; see `examples/` and `CLAUDE.md` for the BSM2 steady state,
-dynamic/seasonal runs, DO control, and the SRT/HRT/F:M design helpers.
+dynamic/seasonal runs, DO control, and the SRT/HRT/F:M design helpers. One
+deliberate departure from the benchmark: the secondary clarifier settles solids
+between layers with the Godunov flux of the settling conservation law rather than
+the benchmark's Takács minimum-flux rule. The BSM2 steady state is the same and the
+dynamic effluent means differ by under 0.1%, while dynamic solves are several times
+cheaper; `settler_interface_flux="takacs"` reproduces the benchmark settler.
 
 Reactor temperature is a selectable `TemperatureModel`: the default
 `AlgebraicTemperature` takes each reactor's temperature to be its instantaneous

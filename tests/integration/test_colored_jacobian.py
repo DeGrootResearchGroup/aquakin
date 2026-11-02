@@ -540,7 +540,7 @@ def test_adjoint_pattern_check_fails_closed():
 
 @pytest.mark.slow
 def test_bsm2_adjoint_pattern_covers_dense_jacobian():
-    """Regression: on BSM2 (reference settler, heat-balance temperatures,
+    """Regression: on BSM2 (the default lumped-TSS settler, heat-balance temperatures,
     influent bypass -- the configuration that exposed it) the stable-adjoint
     pattern missed the settler's couplings to the digester and the reactors and
     the plant-level loops through the TSS-dependent sludge-train flows, so the

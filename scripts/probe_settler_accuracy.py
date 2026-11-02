@@ -3,8 +3,8 @@
 The case of ``test_forward_fast.py::test_forward_fast_matches_diffrax_bsm2``:
 BSM2 with temperature correction and the influent bypass, the synthesised dry
 influent, 8 days from ``bsm2_warm_start``, saved every 0.01 d. Every command takes
-``--interface-flux takacs|godunov`` (the settler's ``interface_flux``; default
-``takacs``), and runs and references are kept per flux. Three commands:
+``--interface-flux godunov|takacs`` (the settler's ``interface_flux``; default the
+shipped ``godunov``), and runs and references are kept per flux. Three commands:
 
 - ``run --solver lean|diffrax [--rtol R] [--exact-stages]`` solves it and records
   every step attempt: its start, size, whether it was accepted, and (diffrax) whether
@@ -28,8 +28,8 @@ Usage (each command one process, one at a time -- each holds a whole-plant progr
     python scripts/probe_settler_accuracy.py run --solver lean --out DIR
     python scripts/probe_settler_accuracy.py run --solver diffrax --out DIR
     python scripts/probe_settler_accuracy.py reference --out DIR
-    python scripts/probe_settler_accuracy.py run --solver lean --interface-flux godunov --out DIR
-    python scripts/probe_settler_accuracy.py reference --interface-flux godunov --out DIR
+    python scripts/probe_settler_accuracy.py run --solver lean --interface-flux takacs --out DIR
+    python scripts/probe_settler_accuracy.py reference --interface-flux takacs --out DIR
     python scripts/probe_settler_accuracy.py report --out DIR
 """
 
@@ -57,7 +57,7 @@ from aquakin.plant.influent import load_bsm2_influent
 from aquakin.plant.plant import PlantSolution
 
 T_END, N_SAVES = 8.0, 801
-FLUXES = ("takacs", "godunov")
+FLUXES = ("godunov", "takacs")
 STREAMS = ("effluent", "wastage", "ras")
 SPECIES = ("SNH", "SNO", "SS", "XS", "XB_H", "XB_A", "SND", "XND")
 
@@ -226,7 +226,7 @@ def main():
     ap.add_argument("--solver", choices=("lean", "diffrax"), default="lean")
     ap.add_argument("--rtol", type=float, default=None)
     ap.add_argument("--exact-stages", action="store_true")
-    ap.add_argument("--interface-flux", choices=FLUXES, default="takacs")
+    ap.add_argument("--interface-flux", choices=FLUXES, default="godunov")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)

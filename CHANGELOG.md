@@ -43,17 +43,6 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   otherwise very long ones. `dynamic_sensitivity`
   and `dynamic_dgsm` pass it through in forward mode. The default (`True`) is
   unchanged.
-- `TakacsClarifier(interface_flux="godunov")` (and `settler_interface_flux=` on
-  `build_bsm1` / `build_bsm2`) settles solids between layers with the Godunov
-  flux of the settling conservation law (Bürger, Diehl & Nopens 2011) instead of
-  the Takács minimum-flux rule. The two differ only where an upper layer is
-  denser than the one below it. The Takács rule then switches between the two
-  layers' fluxes whenever their order flips, which made the sludge blanket pulse
-  and forced small steps. On a dynamic BSM2 run the forward solve took about a
-  third of the steps and wall time, and the default diffrax solve about a fifth
-  of the steps. The BSM2 steady state is unchanged, and dynamic effluent
-  concentrations differ by under 0.1% on average. The default stays `"takacs"`,
-  the rule of the BSM reference settlers.
 - `aquakin.plant.plant_rank_sensor_sets` ranks candidate sensor sets on a plant
   by a design criterion of the Fisher information each adds to the sensors
   already in place. It is the plant version of `rank_experiments`. A candidate
@@ -77,6 +66,19 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Changed
 
+- The layered secondary clarifier (`TakacsClarifier`, and the settler of
+  `build_bsm1(use_takacs=True)` / `build_bsm2`) now settles solids between its
+  layers with the Godunov flux of the settling conservation law (Bürger, Diehl &
+  Nopens 2011) instead of the Takács minimum-flux rule of the BSM benchmark
+  settlers. This is a deliberate departure from the benchmark. The two rules
+  differ only where an upper layer is denser than the one below it; there the
+  Takács rule switches between the two layers' fluxes whenever their order
+  flips, which made the sludge blanket pulse and forced small steps. The BSM2
+  steady state is unchanged, and on the dynamic BSM2 influent the effluent's
+  mean concentrations differ by under 0.1%, while a forward solve took about a
+  third of the steps and wall time and the default diffrax solve about a fifth
+  of the steps. `interface_flux="takacs"` (`settler_interface_flux="takacs"` on
+  the builders) reproduces the benchmark settler exactly.
 - The lean forward integrator (`Plant.solve(forward_fast=True)`) and the
   staggered `Plant.solve_sensitivity` now Anderson-accelerate the Newton
   iteration of each implicit stage, using the step's Jacobian factorization as

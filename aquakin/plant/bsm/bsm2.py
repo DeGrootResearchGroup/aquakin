@@ -35,6 +35,15 @@ SetpointSplitter / clarifier ``underflow_Q``). The thickener and
 dewatering underflow flows are concentration-dependent but sit on the low-gain
 reject loop. The storage tank / hydraulic delay / bypass and the controllers
 are omitted (open-loop steady state).
+
+**One deliberate departure from the benchmark:** the secondary clarifier settles
+solids between its layers with the Godunov flux of the settling conservation law
+rather than the benchmark settler's Takács minimum-flux rule (see
+:class:`~aquakin.plant.takacs.TakacsClarifier` ``interface_flux``). The two give the
+same steady state and differ under a dynamic influent by under 0.1% in the
+effluent's mean concentrations, while the default makes dynamic solves several
+times cheaper. ``settler_interface_flux="takacs"`` reproduces the benchmark settler
+exactly.
 """
 
 from __future__ import annotations
@@ -447,7 +456,7 @@ def build_bsm2(
     temperature_model: object | None = None,
     settler_composition_mode: str = "lumped_tss",
     settler_soluble_holdup: bool = True,
-    settler_interface_flux: str = "takacs",
+    settler_interface_flux: str = "godunov",
 ) -> Plant:
     """Assemble the BSM2 plant (open-loop by default; closed DO/kLa loop optional).
 
@@ -532,13 +541,15 @@ def build_bsm2(
         (a non-reacting soluble relaxes to the feed concentration), so it only
         matters under a dynamic influent, where it smooths the effluent ammonia
         peaks and troughs toward the reference.
-    settler_interface_flux : {"takacs", "godunov"}
+    settler_interface_flux : {"godunov", "takacs"}
         The settling flux between adjacent settler layers
         (:class:`~aquakin.plant.takacs.TakacsClarifier` ``interface_flux``):
-        ``"takacs"`` (default), the minimum-flux rule of the reference
-        settler, or ``"godunov"``, the Godunov flux of the settling
-        conservation law, which differs from it only where the upper of two
-        layers is the denser one.
+        ``"godunov"`` (default), the Godunov flux of the settling conservation
+        law, or ``"takacs"``, the minimum-flux rule of the benchmark settler
+        ``settler1dv5_bsm2``, which differs from it only where the upper of two
+        layers is the denser one. The default is a deliberate departure from
+        the benchmark (see the module docstring); pass ``"takacs"`` to
+        reproduce the benchmark settler exactly.
 
     Returns
     -------

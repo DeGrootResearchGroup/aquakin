@@ -629,21 +629,22 @@ def test_controlled_split_helper():
 
 
 def test_build_bsm1_takacs_defaults_to_reference_settler(asm1):
-    """build_bsm1(use_takacs=True) reproduces the BSM1 reference secondary
-    settler settler1dv4 (MODELTYPE=0): the solubles are held through the layers
-    and the particulate phase is lumped TSS with the feed-scaled outlet
-    composition. These are dynamic-only properties (the steady state is
-    invariant to them). The BSM2 settler1dv5_bsm2 is lumped TSS as well;
-    ``per_species`` has no reference counterpart."""
+    """build_bsm1(use_takacs=True) follows the BSM1 reference secondary settler
+    settler1dv4 (MODELTYPE=0): the solubles are held through the layers and the
+    particulate phase is lumped TSS with the feed-scaled outlet composition.
+    These are dynamic-only properties (the steady state is invariant to them).
+    The BSM2 settler1dv5_bsm2 is lumped TSS as well; ``per_species`` has no
+    reference counterpart. The one deliberate departure is the interface flux:
+    Godunov by default, the reference Takács rule on request."""
     from aquakin.plant.bsm import build_bsm1
 
     cl = build_bsm1(model=asm1, use_takacs=True).units["clarifier"]
     assert isinstance(cl, TakacsClarifier)
     assert cl.composition_mode == "lumped_tss"
     assert cl.soluble_holdup is True
-    assert cl.interface_flux == "takacs"
-    godunov = build_bsm1(model=asm1, use_takacs=True, settler_interface_flux="godunov")
-    assert godunov.units["clarifier"].interface_flux == "godunov"
+    assert cl.interface_flux == "godunov"  # the deliberate departure from settler1dv4
+    takacs = build_bsm1(model=asm1, use_takacs=True, settler_interface_flux="takacs")
+    assert takacs.units["clarifier"].interface_flux == "takacs"
 
     # The settings remain overridable for the BSM2-style settler.
     cl2 = build_bsm1(model=asm1, use_takacs=True,
@@ -654,17 +655,18 @@ def test_build_bsm1_takacs_defaults_to_reference_settler(asm1):
 
 
 def test_build_bsm2_defaults_to_reference_settler(asm1):
-    """build_bsm2 builds the BSM2 reference secondary settler settler1dv5_bsm2
-    by default: lumped TSS with the solubles held through the ten layers. The
-    old per_species, pass-through settler stays available."""
+    """build_bsm2 follows the BSM2 reference secondary settler settler1dv5_bsm2
+    by default -- lumped TSS with the solubles held through the ten layers --
+    except for the interface flux: Godunov by default, the reference Takács rule
+    on request. The old per_species, pass-through settler stays available."""
     from aquakin.plant.bsm import build_bsm2
 
     cl = build_bsm2().units["settler"]
     assert isinstance(cl, TakacsClarifier)
     assert cl.composition_mode == "lumped_tss"
     assert cl.soluble_holdup is True
-    assert cl.interface_flux == "takacs"
-    assert build_bsm2(settler_interface_flux="godunov").units["settler"].interface_flux == "godunov"
+    assert cl.interface_flux == "godunov"  # the deliberate departure from settler1dv5_bsm2
+    assert build_bsm2(settler_interface_flux="takacs").units["settler"].interface_flux == "takacs"
 
     cl2 = build_bsm2(settler_composition_mode="per_species",
                      settler_soluble_holdup=False).units["settler"]
