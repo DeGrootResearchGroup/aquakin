@@ -9,7 +9,9 @@ in BSM1 is a CSTR. The mass-balance equation for species i is::
 
 Per-species ``kLa`` and ``C_sat`` make it trivial to model both anoxic
 tanks (kLa=0 everywhere) and aerobic tanks (kLa_DO > 0) with the same
-unit class.
+unit class. Dissolved gases stripped by the same air (N2O, NO, ...) are
+further species with ``kLa_gas = ratio * kLa_O2`` and a saturation of ~0
+(see ``Aeration(stripped=...)``).
 """
 
 from __future__ import annotations
@@ -185,6 +187,19 @@ class Aeration:
         :func:`oxygen_saturation_bsm2`). Use ``"bsm2"`` to match the benchmark's
         oxygen driving force exactly; the two differ by ~0.5 % in shape. Only used
         when ``temperature_correction`` is on.
+    stripped : dict, optional
+        Dissolved gases stripped by the same aeration, alongside oxygen. Maps a
+        species name to its mass-transfer ratio ``kLa_gas / kLa_O2`` (a float,
+        saturation 0) or to a ``(ratio, saturation)`` pair. Each gas gets the
+        term ``ratio * kLa_O2 * (sat - C)`` in the tank's mass balance, so it
+        leaves the liquid inside the solve rather than through the effluent.
+        ``kLa_O2`` is the tank's actual oxygen transfer coefficient: the
+        open-loop ``kla`` (with ``alpha`` and, when enabled, the temperature
+        factor), or under closed loop the controller signal times ``gain``. By
+        penetration theory the ratio is the square root of the diffusivity
+        ratio, close to 1 for N2O and NO (``{"SN2O": 1.0, "SNO": 1.0}``). The
+        gas saturation is not temperature-corrected. Default ``None`` (only
+        oxygen is transferred).
     """
 
     kla: float | None = None
@@ -207,8 +222,12 @@ class Aeration:
     pressure_factor: float = 1.0
     kla_theta: float = 1.024
     saturation_model: str = "benson_krause"
+    stripped: dict | tuple | None = None
 
     def __post_init__(self) -> None:
+        # Normalize ``stripped`` to a hashable tuple of (species, ratio, sat)
+        # triples (the dataclass is frozen and hashable).
+        object.__setattr__(self, "stripped", _normalize_stripped(self.stripped, self.species))
         n_modes = (self.kla is not None) + (self.do_setpoint is not None)
         if n_modes != 1:
             raise ValueError(
@@ -243,6 +262,40 @@ class Aeration:
         return _aeration_signal_name(self.controller_id(unit_name))
 
 
+def _normalize_stripped(stripped, aerated_species: str) -> tuple:
+    """``Aeration.stripped`` as a tuple of ``(species, ratio, saturation)``.
+
+    Accepts ``None``, a ``{species: ratio}`` / ``{species: (ratio, sat)}``
+    mapping, or an already-normalized tuple of triples.
+    """
+    if stripped is None:
+        return ()
+    if isinstance(stripped, dict):
+        items = []
+        for sp, val in stripped.items():
+            ratio, sat = val if isinstance(val, (tuple, list)) else (val, 0.0)
+            items.append((sp, ratio, sat))
+    else:
+        items = list(stripped)
+    out = []
+    for sp, ratio, sat in items:
+        sp, ratio, sat = str(sp), float(ratio), float(sat)
+        if sp == aerated_species:
+            raise ValueError(
+                f"Aeration stripped gas '{sp}' is the aerated species itself; list only "
+                "the other dissolved gases."
+            )
+        if ratio < 0.0:
+            raise ValueError(f"Aeration stripped ratio for '{sp}' must be >= 0, got {ratio}.")
+        if sat < 0.0:
+            raise ValueError(f"Aeration stripped saturation for '{sp}' must be >= 0, got {sat}.")
+        out.append((sp, ratio, sat))
+    names = [sp for sp, _r, _s in out]
+    if len(set(names)) != len(names):
+        raise ValueError(f"Aeration stripped gases repeat a species: {names}.")
+    return tuple(out)
+
+
 def _aeration_signal_name(controller_id: str) -> str:
     return f"_aer_{controller_id}_kla"
 
@@ -266,6 +319,12 @@ class AerationVectors:
     kla_theta: float
     temp_correct: bool
     saturation_model: str = "benson_krause"
+    # Co-stripped gases: species -> kLa_gas / kLa_O2. A closed-loop gas also
+    # appears in ``controlled`` with gain * ratio.
+    stripped: dict = field(default_factory=dict)
+    # 1 at the aerated (oxygen) species, 0 elsewhere: the C_s(T)/C_s(ref)
+    # temperature ratio applies to the oxygen saturation only.
+    o2_mask: jnp.ndarray | None = None
 
 
 def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
@@ -278,8 +337,10 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
     / off, so a plain ``Aeration(kla=...)`` or ``aeration=None`` is unchanged.
     """
     controlled: dict[str, tuple[str, float]] = {}
+    stripped: dict[str, float] = {}
     kla_vec = jnp.zeros((model.n_species,))
     sat_vec = jnp.zeros((model.n_species,))
+    o2_mask = None
     ref_T, kla_theta, temp_correct = T_REF_20C, 1.024, False
     saturation_model = "benson_krause"
     if aeration is not None:
@@ -291,16 +352,37 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
         sat_vec = sat_vec.at[idx].set(
             float(aeration.do_sat) * float(aeration.beta) * float(aeration.pressure_factor)
         )
+        o2_mask = jnp.zeros((model.n_species,)).at[idx].set(1.0)
         if aeration.is_closed_loop:
             controlled[aeration.species] = (aeration.signal_name(unit_name), aeration.gain)
         else:
             kla_vec = kla_vec.at[idx].set(float(aeration.kla) * float(aeration.alpha))
+        # Co-stripped gases ride on the oxygen kLa: ratio * (open-loop kla, or
+        # the controller signal * gain).
+        for sp, ratio, sat in aeration.stripped:
+            if sp not in model.species_index:
+                raise ValueError(f"'{unit_name}' aeration stripped gas '{sp}' is not in the model.")
+            g = model.species_index[sp]
+            stripped[sp] = ratio
+            sat_vec = sat_vec.at[g].set(sat)
+            if aeration.is_closed_loop:
+                controlled[sp] = (aeration.signal_name(unit_name), aeration.gain * ratio)
+            else:
+                kla_vec = kla_vec.at[g].set(float(aeration.kla) * float(aeration.alpha) * ratio)
         ref_T = float(aeration.ref_T)
         kla_theta = float(aeration.kla_theta)
         temp_correct = bool(aeration.temperature_correction)
         saturation_model = aeration.saturation_model
     return AerationVectors(
-        kla_vec, sat_vec, controlled, ref_T, kla_theta, temp_correct, saturation_model
+        kla_vec,
+        sat_vec,
+        controlled,
+        ref_T,
+        kla_theta,
+        temp_correct,
+        saturation_model,
+        stripped=stripped,
+        o2_mask=o2_mask,
     )
 
 
@@ -318,7 +400,11 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, model):
     if av.temp_correct and T_eff is not None:
         c_s = _SATURATION_MODELS[av.saturation_model]
         sat_ratio = c_s(T_eff) / c_s(av.ref_T)
-        sat_vec = sat_vec * sat_ratio
+        if av.o2_mask is not None and av.stripped:
+            # Correct the oxygen saturation only, not a co-stripped gas's.
+            sat_vec = sat_vec * (1.0 + av.o2_mask * (sat_ratio - 1.0))
+        else:
+            sat_vec = sat_vec * sat_ratio
         kla_vec = kla_vec * av.kla_theta ** (T_eff - av.ref_T)
     if av.controlled:
         if signals is None:
@@ -326,7 +412,7 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, model):
                 "Closed-loop aeration needs the control-signal bus, but rhs() "
                 "was called without one (signals=None). A controlled reactor must "
                 "be solved inside its plant, which supplies the signals "
-                f"{sorted(sig for sig, _gain in av.controlled.values())}; there is "
+                f"{sorted({sig for sig, _gain in av.controlled.values()})}; there is "
                 "no open-loop kLa to fall back on, so running it this way would "
                 "silently leave it unaerated."
             )
@@ -360,7 +446,9 @@ class AerationUnit:
         closed-loop aeration signal, if any). The plant validates these are
         published -- by the controller it auto-wires from the ``Aeration`` spec --
         before solving."""
-        return tuple(signal_name for signal_name, _gain in self._av.controlled.values())
+        # A co-stripped gas under closed loop reads the same signal as oxygen,
+        # so de-duplicate (order kept).
+        return tuple(dict.fromkeys(sig for sig, _gain in self._av.controlled.values()))
 
     # Readers onto the canonical ``self._av`` store, for the aeration-energy /
     # O2-balance code (plant.bsm.evaluation, plant.balance) and tests that
