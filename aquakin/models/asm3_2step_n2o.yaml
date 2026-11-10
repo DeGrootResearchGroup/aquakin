@@ -19,7 +19,9 @@ model:
     heterotrophs and the endogenous-respiration processes are inherited unchanged.
 
     New dissolved states (all g_N/m3, electrically neutral): SNH2OH, SNO, SN2O.
-    Free nitrous acid is the acid fraction of nitrite, ``[SNO2] * pH_switch(pKa)``
+    Free nitrous acid is the acid fraction of nitrite, ``[SNO2] * pH_switch(pKa)``,
+    and free ammonia (the AMO substrate) is the base fraction of ammonium,
+    ``[SNH4] * (1 - pH_switch(pKa_NH4))`` with a temperature-dependent pKa, both
     at the operating pH (a fixed condition, as in the source study). The ND
     pathway carries the source study's Haldane-type dissolved-oxygen term
     (production rises as DO falls, to a maximum, then falls toward zero DO).
@@ -36,7 +38,7 @@ model:
     - "Kaelin, D. et al. (2009). Extension of ASM3 for two-step nitrification and denitrification. Water Research 43(6), 1680-1692."
 
 conditions:
-  - {name: pH, default: 7.5, description: "Operating pH (fixed), used for the free-nitrous-acid fraction of nitrite."}
+  - {name: pH, default: 7.5, description: "Operating pH (fixed), used for the free-ammonia fraction of ammonium and the free-nitrous-acid fraction of nitrite."}
 
 species:
   - {name: SNH2OH, default_concentration: 0.0, units: "g_N/m3", description: "Hydroxylamine (NH2OH-N), AOB intermediate"}
@@ -77,14 +79,19 @@ expressions:
   # Free nitrous acid = the protonated (acid) fraction of nitrite at the
   # operating pH. pH_switch(pKa) = 1 / (1 + 10^(pH - pKa)).
   S_HNO2: "[SNO2] * pH_switch(pKa_HNO2)"
+  # Free ammonia = the unprotonated (base) fraction of total ammonium, the AMO
+  # substrate. The NH4+ <-> NH3 + H+ pKa is 6344 / T (as log10, T in K).
+  pKa_NH4: "6344.0 / ({T} * 2.302585092994046)"
+  S_NH3: "[SNH4] * (1 - pH_switch(pKa_NH4))"
   # Haldane-type DO dependence of the ND-pathway N2O production (Pocquet 2016):
-  # rises as DO drops to a maximum, then falls toward zero DO.
-  f_DO_ND: "[SO2] / (K_O2_AOB_ND + (1 - 2 * (KI_O2_AOB / K_O2_AOB_ND) ** 0.5) * [SO2] + [SO2] * [SO2] / KI_O2_AOB)"
+  # rises as DO drops to a maximum, then falls toward zero DO. The maximum is
+  # exactly 1, at [SO2] = sqrt(K_O2_AOB_ND * KI_O2_AOB).
+  f_DO_ND: "[SO2] / (K_O2_AOB_ND + (1 - 2 * (K_O2_AOB_ND / KI_O2_AOB) ** 0.5) * [SO2] + [SO2] * [SO2] / KI_O2_AOB)"
 
 reactions:
   - name: AOB_NH3_oxidation_to_NH2OH
-    description: "AMO: ammonia oxidation to hydroxylamine (NH4 -> NH2OH), O2 consumed."
-    rate: "q_AOB_AMO * monod([SO2], K_O2_AOB_1) * monod([SNH4], K_NH3_AOB) * [XAOB]"
+    description: "AMO: ammonia oxidation to hydroxylamine (NH4 -> NH2OH), O2 consumed; Monod in free ammonia."
+    rate: "q_AOB_AMO * monod([SO2], K_O2_AOB_1) * monod(S_NH3, K_NH3_AOB) * [XAOB]"
     stoichiometry:
       SNH4: -1.0
       SNH2OH: 1.0
