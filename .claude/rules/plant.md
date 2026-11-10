@@ -546,7 +546,9 @@ Key types:
     `aquakin.ComponentBalance` / `aquakin.mass_balance`) with, per component (COD
     / N / P), the **inflow** (influents), **outflow** (terminal/dangling material
     streams — effluent, wasted sludge, disposal cake), **gas** (O₂ transferred in
-    by aeration, the digester biogas, denitrification N₂ — computed from the
+    by aeration, the digester biogas, denitrification N₂, and any gas co-stripped
+    by `Aeration(stripped=...)` (`gas_detail["stripped_<q>"]`, the stripped
+    species' transfer dotted with their content) — computed from the
     aeration term and a reaction-production integral over the reactive units, with
     the digester deliberately excluded from the N gas term since it has no N gas
     phase) and **accumulation** (ΔInventory across every unit — reactor / clarifier
@@ -668,6 +670,42 @@ flux is the upper layer's either way. Measured (`scripts/probe_settler_accuracy.
 cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic effluent
 means within 0.07% of Takács, the constant-influent steady state identical (layers
 2–5 equal there, where the rules agree).
+
+**Co-stripped gases (`Aeration(stripped=...)`).** An aerated tank strips other
+dissolved gases (N₂O, NO, ...) alongside oxygen inside the solve:
+`stripped={"SN2O": ratio}` or `{sp: (ratio, sat)}`, normalized in
+`Aeration.__post_init__` to a hashable tuple of `(species, ratio, sat)` triples.
+`build_aeration_vectors` folds each gas into the same per-species vectors as
+oxygen: open loop `kla_vec[gas] = kla·alpha·ratio`, closed loop an extra
+`controlled[gas] = (same signal, gain·ratio)` entry, `sat_vec[gas] = sat` (no
+beta/pressure fold). So `aeration_transfer` needs no gas branch, and CSTR, IFAS
+and MBR all get it. The open-loop theta factor scales the gas kLa too, but the
+`C_s(T)` saturation ratio is applied to the oxygen entry only (`o2_mask`; the
+no-gas path keeps the historic whole-vector multiply, bit-identical).
+`required_signals` de-duplicates, since the gas and oxygen read one signal.
+**Consumers of `_controlled_kla` / `_kla_vec` must not assume only `SO` is
+there**: the balance's O₂ term reads the aerated species' entry only, and
+`direct_n2o_emission` (`kla_ratio=None` default) takes each reactor's in-solve
+ratio and saturation from `unit._av.stripped`, so the post-solve emission equals
+the in-solve flux whenever the aeration temperature correction is off (its
+`_kla_history` reconstruction ignores that correction). Without in-solve
+stripping the function remains a post-solve estimate at ratio 1. The
+`plant.mass_balance` content table falls back on a model's declared species
+`composition:` when there is no shipped table. Note a closed-loop plant whose
+only effluent is a sensed tank: the DO sensor tap consumes `tank.out`, so it is
+not a dangling output and must be passed as `effluent_ports`. Covered by
+`tests/unit/test_aeration_stripping.py` (spec, vectors, transfer in both modes,
+temperature, a toy-model one-tank steady state, mass balance and emission in both
+modes, gradient) and `tests/integration/test_bsm1_asmn_n2o.py`.
+
+**BSM1 with non-ASM1 models.** `build_bsm1(model, aeration=, settling_species=,
+tss_species=)`: the clarifier solids come from `_constants.solids_species(model)`
+(the ASM1 constants unchanged when the model has every ASM1 settling species, so
+ASM1 stays bit-identical; otherwise X-prefixed species settle and those with COD
+content in `model.composition()` are TSS, at `ASM1_TSS_FACTOR`, the rest weight
+0). `aeration={"tank3": Aeration(...), ...}` replaces named tanks' aeration
+(`None` = unaerated). The BSM1 metrics (`derived_TSS`, `evaluate_bsm1`'s EQI)
+still use the ASM1 species and do not yet support such models.
 
 **Shared separator/clarifier helpers.** The separator/clarifier family resolves
 its settling / particulate / TSS species lists through the shared

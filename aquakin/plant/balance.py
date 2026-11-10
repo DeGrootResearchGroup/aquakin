@@ -209,13 +209,22 @@ def _content_by_model(plant, comps, params):
         net = getattr(u, "model", None)
         if net is not None and net.name not in net_params:
             net_params[net.name] = plant._params_for_unit(uname, params)
-    return {
-        name: {
-            q: canonical_content(net, q, electron_acceptor_cod=False, params=net_params.get(name))
-            for q in comps
-        }
-        for name, net in models.items()
-    }
+
+    def _content(net, q):
+        try:
+            return canonical_content(
+                net, q, electron_acceptor_cod=False, params=net_params.get(net.name)
+            )
+        except KeyError:
+            # No shipped table: use the model's own declared species
+            # composition (a balance closes under any linear content table, as
+            # long as inventory, flows, reactions and gas share it).
+            declared = net.composition()
+            if not declared:
+                raise
+            return canonical_content(net, q, composition=declared)
+
+    return {name: {q: _content(net, q) for q in comps} for name, net in models.items()}
 
 
 def _inflow_terms(plant, t, comps, in_names, content_by_model):
@@ -311,7 +320,9 @@ def _gas_terms(plant, solution, comps, content_by_model, params):
     gas = dict.fromkeys(comps, 0.0)
     gas_detail = {}
 
-    o2_transfer, R = _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
+    o2_transfer, R, stripped = _reaction_and_aeration_gas(
+        plant, solution, params, content_by_model, comps
+    )
     if "COD" in comps:
         gas["COD"] += o2_transfer - R.get("COD", 0.0)
         gas_detail["aeration_O2"] = o2_transfer
@@ -319,6 +330,12 @@ def _gas_terms(plant, solution, comps, content_by_model, params):
     if "N" in comps:
         gas["N"] += -R.get("N", 0.0)
         gas_detail["denitrification_N2"] = -R.get("N", 0.0)
+    # Gases co-stripped by aeration (Aeration(stripped=...)): the transfer is
+    # into the liquid, so the gas leaving is its negative.
+    for q, val in stripped.items():
+        if val != 0.0:
+            gas[q] += -val
+            gas_detail[f"stripped_{q}"] = -val
     biogas = _biogas_cod(plant, solution, params)  # informational only
     if biogas is not None:
         gas_detail["biogas_COD"] = biogas
@@ -453,12 +470,13 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
         n: (set(rqs) if hasattr(plant.units[n], "aeration") else {q for q in rqs if q != "N"})
         for n in reactive
     }
-    o2_rows, R_rows = [], {q: [] for q in rqs}
+    o2_rows, R_rows, strip_rows = [], {q: [] for q in rqs}, {q: [] for q in rqs}
     for i in range(t.shape[0]):
         state_i = solution.state[i]
         sig = plant.signals_at(t[i], state_i, params) if need_signals else {}
         o2 = 0.0
         R = dict.fromkeys(rqs, 0.0)
+        S = dict.fromkeys(rqs, 0.0)
         for name in reactive:
             unit = plant.units[name]
             start, size = layout[name]
@@ -470,19 +488,36 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
             react = _reaction_term(plant, name, C, params)
             for q in gas_comps[name]:
                 R[q] += float(jnp.dot(react, content[name][q]))
-            if name in aerated:  # aeration O2 source (only SO)
+            if name in aerated:
                 kla = unit._kla_vec
-                ctrl = unit._controlled_kla.get("SO")
-                if ctrl is not None and sig:
-                    kla = kla.at[unit.model.species_index["SO"]].set(sig[ctrl[0]] * ctrl[1])
-                o2 += float(jnp.sum(kla * (unit._sat_vec - C)) * float(unit.volume))
+                for sp, (sig_name, gain) in unit._controlled_kla.items():
+                    if sig:
+                        kla = kla.at[unit.model.species_index[sp]].set(sig[sig_name] * gain)
+                transfer = kla * (unit._sat_vec - C)  # per species, per volume
+                # Aeration O2 source (the aerated oxygen species only).
+                o2_idx = unit.model.species_index.get(
+                    unit.aeration.species if unit.aeration is not None else "SO"
+                )
+                if o2_idx is not None:
+                    o2 += float(transfer[o2_idx] * float(unit.volume))
+                # Co-stripped gases (N2O, NO, ...) leaving to the air: their
+                # component content is a gas loss (transfer is negative).
+                stripped = unit._av.stripped
+                if stripped:
+                    gmask = jnp.zeros_like(transfer)
+                    for sp in stripped:
+                        gmask = gmask.at[unit.model.species_index[sp]].set(1.0)
+                    for q in rqs:
+                        S[q] += float(jnp.dot(transfer * gmask, content[name][q]))
         o2_rows.append(o2)
         for q in rqs:
             R_rows[q].append(R[q])
+            strip_rows[q].append(S[q])
 
     o2_transfer = float(np.trapezoid(np.asarray(o2_rows), t))
     R = {q: float(np.trapezoid(np.asarray(R_rows[q]), t)) for q in rqs}
-    return o2_transfer, R
+    stripped = {q: float(np.trapezoid(np.asarray(strip_rows[q]), t)) for q in rqs}
+    return o2_transfer, R, stripped
 
 
 def _biogas_cod(plant, solution, params):

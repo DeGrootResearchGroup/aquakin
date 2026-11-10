@@ -1,0 +1,42 @@
+model:
+  name: stripped_gas_toy
+  version: "1.0"
+  description: >
+    Minimal aerated-tank model for testing gases co-stripped with oxygen:
+    oxygen consumed with a substrate, and dissolved N2O reduced to N2.
+    COD and N are conserved by both reactions.
+  references: []
+
+species:
+  - {name: SS,   units: "g_COD/m3", default_concentration: 50.0, composition: {COD: 1.0}}
+  - {name: SO,   units: "g_O2/m3",  default_concentration: 2.0,  composition: {COD: -1.0}}
+  - {name: SN2O, units: "g_N/m3",   default_concentration: 0.5,  composition: {COD: -2.2857142857142856, N: 1.0}}
+  - {name: SN2,  units: "g_N/m3",   default_concentration: 0.0,  composition: {COD: -1.7142857142857142, N: 1.0}}
+
+conditions:
+  - name: T
+    description: "Temperature (K), unused in the rates."
+    default: 293.15
+
+reactions:
+  - name: respiration
+    description: "Oxygen consumed with substrate (one g COD per g O2)."
+    rate: "k_o * [SS] / (5.0 + [SS]) * [SO] / (0.2 + [SO])"
+    parameters:
+      k_o:
+        value: 400.0
+        units: "g/m3/d"
+    stoichiometry:
+      SS: -1
+      SO: -1
+  - name: n2o_reduction
+    description: "First-order N2O reduction to N2 (0.571 g COD per g N released as acceptor)."
+    rate: "k_n * [SN2O]"
+    parameters:
+      k_n:
+        value: 2.0
+        units: "1/d"
+    stoichiometry:
+      SN2O: -1
+      SN2: +1
+      SS: -0.5714285714285714

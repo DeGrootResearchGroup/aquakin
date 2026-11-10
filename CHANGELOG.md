@@ -21,6 +21,21 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `Aeration(stripped={"SN2O": 1.0, "SNO": 1.0})` strips dissolved gases other
+  than oxygen in an aerated tank, inside the solve. Each gas transfers at
+  `ratio × kLa_O2 × (sat − C)`, with the saturation 0 by default, and follows the
+  controller's kLa under DO control. It works in CSTR, IFAS/MBBR, and MBR tanks.
+  `direct_n2o_emission` then reports the N₂O the solve removed, using each
+  tank's own ratio, and `plant.mass_balance` counts the stripped gases in its gas
+  term. `stripped_n2o` accepts a per-reactor ratio and saturation.
+- `build_bsm1` runs activated-sludge models other than ASM1, such as an N₂O model
+  that splits the autotrophs into AOB and NOB. The clarifier's settling and TSS
+  species are derived from the model (new `settling_species=` / `tss_species=`
+  arguments override them), and the new `aeration=` argument replaces the
+  aeration of named tanks, for example with DO control and gas stripping.
+- `plant.mass_balance` falls back on a model's own declared species
+  `composition:` when there is no shipped composition table for it.
+
 - `Plant.solve_sensitivity(corrector=...)` chooses how each implicit stage of
   the `[y; S]` sensitivity solve is solved. The new default, `"staggered"`,
   converges the plant state first and then solves the sensitivity, which is

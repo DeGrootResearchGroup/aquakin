@@ -7,9 +7,10 @@ warming potentials (GWPs):
 * **Direct N₂O** -- nitrous oxide stripped from the aerated reactors. N₂O is a
   potent greenhouse gas (GWP ~273) and the dominant *direct* footprint of an
   activated-sludge plant. It is produced by the nitrifier pathways resolved in
-  the N₂O kinetic models (a tracked dissolved ``SN2O`` state); the stripping
-  to atmosphere is a reactor concern, computed here from the dissolved
-  concentration and the aeration intensity (:func:`stripped_n2o`).
+  the N₂O kinetic models (a tracked dissolved ``SN2O`` state). Stripping to the
+  atmosphere happens inside the solve when the aerated tanks list the gas in
+  ``Aeration(stripped={"SN2O": ratio})``; :func:`stripped_n2o` integrates the
+  same flux from the dissolved concentration and the aeration intensity.
 * **Energy CO₂e** -- the indirect footprint of the electricity the plant draws
   (aeration + pumping + mixing), via a grid carbon-intensity factor.
 * **Methane** -- a *credit* when the digester biogas offsets fossil energy, and
@@ -88,8 +89,8 @@ def stripped_n2o(
     s_n2o_history: jnp.ndarray,
     volumes: jnp.ndarray,
     *,
-    kla_ratio: float = 1.0,
-    s_n2o_sat: float = 0.0,
+    kla_ratio=1.0,
+    s_n2o_sat=0.0,
 ) -> float:
     """Time-averaged N₂O stripped from the aerated reactors (kg N₂O-N/d).
 
@@ -101,7 +102,9 @@ def stripped_n2o(
     coefficient is taken as the oxygen ``kLa`` scaled by ``kla_ratio`` (the
     diffusivity ratio D_{N2O}/D_{O2} ≈ 1), so an *unaerated* tank (``kLa = 0``)
     strips nothing -- only the aerated tanks emit. The atmospheric saturation
-    ``S*_{N2O}`` is ~0.
+    ``S*_{N2O}`` is ~0. With the same ratio and saturation as the tanks'
+    ``Aeration(stripped=...)`` this is exactly the flux removed inside the solve
+    (when the aeration temperature correction is off).
 
     Parameters
     ----------
@@ -109,9 +112,10 @@ def stripped_n2o(
     kla_o2_history : (n_t, n_reactors) oxygen ``kLa`` per reactor (1/d).
     s_n2o_history : (n_t, n_reactors) dissolved N₂O-N concentration (g N/m³).
     volumes : (n_reactors,) reactor liquid volumes (m³).
-    kla_ratio : float
-        N₂O-to-O₂ mass-transfer-coefficient ratio (default 1.0).
-    s_n2o_sat : float
+    kla_ratio : float or (n_reactors,) array
+        N₂O-to-O₂ mass-transfer-coefficient ratio (default 1.0), one value or
+        one per reactor.
+    s_n2o_sat : float or (n_reactors,) array
         Atmospheric N₂O saturation concentration (g N/m³, default 0).
 
     Returns
@@ -119,8 +123,8 @@ def stripped_n2o(
     float
         Stripped N₂O-N mass flow (kg N/d), time-averaged.
     """
-    kla = jnp.asarray(kla_o2_history) * float(kla_ratio)
-    s = jnp.asarray(s_n2o_history) - float(s_n2o_sat)
+    kla = jnp.asarray(kla_o2_history) * jnp.asarray(kla_ratio, dtype=float)
+    s = jnp.asarray(s_n2o_history) - jnp.asarray(s_n2o_sat, dtype=float)
     volumes = jnp.asarray(volumes)
     # g N/d summed over reactors, then g→kg.
     flux = jnp.sum(kla * s * volumes[None, :], axis=1) * 1e-3  # (n_t,) kg N/d

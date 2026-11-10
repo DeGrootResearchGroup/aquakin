@@ -37,6 +37,7 @@ from aquakin.plant._builder_support import (
     recycle_pump_flows,
     register_recycle_streams,
 )
+from aquakin.plant._constants import ASM1_TSS_FACTOR, solids_species
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.mixer import MixerUnit, SetpointSplitter
 from aquakin.plant.plant import Plant
@@ -68,13 +69,19 @@ def build_bsm1(
     settler_soluble_holdup: bool = True,
     settler_composition_mode: str = "lumped_tss",
     settler_interface_flux: str = "godunov",
+    aeration: dict | None = None,
+    settling_species: tuple[str, ...] | list[str] | None = None,
+    tss_species: tuple[str, ...] | list[str] | None = None,
 ) -> Plant:
     """Assemble the canonical BSM1 plant.
 
     Parameters
     ----------
     model : CompiledModel, optional
-        ASM1 model. Defaults to ``aquakin.load_model("asm1")``.
+        Activated-sludge model. Defaults to ``aquakin.load_model("asm1")``. Any
+        model that keeps the ASM1 species names for the shared components (so
+        the BSM1 influent maps by name) works, e.g. ``asmn_n2o``; the clarifier's
+        solids then come from ``settling_species`` / ``tss_species``.
     Q_avg : float
         Average dry-weather inlet flow. Used to size the recycle streams
         (internal recycle and RAS). Default 18446 m³/d per Copp 2002.
@@ -123,6 +130,18 @@ def build_bsm1(
         the benchmark (see the module docstring); pass ``"takacs"`` to
         reproduce the benchmark settler exactly. Ignored when
         ``use_takacs=False``.
+    aeration : dict, optional
+        Per-tank :class:`~aquakin.plant.cstr.Aeration` overrides, keyed by tank
+        name (``"tank1"`` .. ``"tank5"``); a value of ``None`` makes the tank
+        unaerated. Tanks not listed keep the reference open-loop kLa. Use it for
+        DO control (``Aeration(do_setpoint=2.0)``) or to strip dissolved gases
+        alongside oxygen (``Aeration(kla=240, stripped={"SN2O": 1.0})``).
+    settling_species, tss_species : sequence of str, optional
+        The particulates that settle in the clarifier, and those counted as total
+        suspended solids (the Takács settler's settling solids, at the COD-to-TSS
+        factor 0.75). ``None`` (default) derives them from the model: the ASM1
+        sets for ASM1, otherwise every ``X``-prefixed species settles and those
+        carrying COD are TSS.
 
     Returns
     -------
@@ -144,6 +163,17 @@ def build_bsm1(
     if conditions is None:
         conditions = reactor_conditions(model)
 
+    # Clarifier solids: the ASM1 sets for ASM1, else derived from the model.
+    derived_settling, derived_tss = solids_species(model)
+    settling = tuple(settling_species) if settling_species is not None else derived_settling
+    tss = tuple(tss_species) if tss_species is not None else derived_tss
+    unknown_tanks = set(aeration or {}) - {f"tank{i + 1}" for i in range(5)}
+    if unknown_tanks:
+        raise ValueError(
+            f"build_bsm1 aeration= keys {sorted(unknown_tanks)} are not BSM1 tanks "
+            "(tank1 .. tank5)."
+        )
+
     plant = Plant("BSM1")
 
     # ----- Influent mixer -----
@@ -158,15 +188,21 @@ def build_bsm1(
 
     # ----- 5 CSTR tanks -----
     for i in range(5):
-        aeration = Aeration(kla=BSM1_KLA[i], do_sat=BSM1_DO_SATURATION) if BSM1_KLA[i] > 0 else None
+        name = f"tank{i + 1}"
+        if aeration is not None and name in aeration:
+            tank_aeration = aeration[name]
+        elif BSM1_KLA[i] > 0:
+            tank_aeration = Aeration(kla=BSM1_KLA[i], do_sat=BSM1_DO_SATURATION)
+        else:
+            tank_aeration = None
         plant.add_unit(
             CSTRUnit(
-                name=f"tank{i + 1}",
+                name=name,
                 model=model,
                 volume=BSM1_TANK_VOLUMES[i],
                 input_port_names=["inlet"],
                 conditions=conditions,
-                aeration=aeration,
+                aeration=tank_aeration,
             )
         )
 
@@ -219,7 +255,12 @@ def build_bsm1(
             # lumped TSS.
             composition_mode=settler_composition_mode,
             interface_flux=settler_interface_flux,
+            particulate_species=list(settling),
+            # Settling solids that are not TSS (XND, the N carried on XS) settle
+            # with zero TSS weight.
+            tss_factors={sp: (ASM1_TSS_FACTOR if sp in tss else 0.0) for sp in settling},
         ),
+        ideal_kwargs=dict(particulate_species=list(settling)),
     )
 
     # ----- Underflow splitter (RAS + wastage) -----
