@@ -73,6 +73,7 @@ from aquakin.integrate.calibrate import (
     _sigma_per_dataset,
 )
 from aquakin.integrate.fisher import _resolve_transforms
+from aquakin.plant.measures import measure_columns
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
@@ -91,14 +92,21 @@ class PlantObservable:
 
     ``stream`` is a registered stream name (``"effluent"``, ``"ras"``, ...; see
     :meth:`Plant.list_streams`) or a ``"unit.port"`` / unit name. ``channels`` are
-    the species of that stream's model to compare against data, in order; ``None``
-    observes every stream species. Pass a list of these as ``observables=`` to
-    :meth:`Plant.calibrate` to fit against several streams at once (e.g. the
-    effluent ammonia *and* nitrate); the observation columns then run in the order
-    given, channels within a stream first."""
+    what is measured on that stream, in order: species of the stream's model,
+    the measurements ``"Q"`` (flow), ``"COD"``, ``"TN"``, ``"TP"`` and ``"TSS"``,
+    or a :class:`~aquakin.plant.measures.Measure` (any weighted sum of species and
+    flow); see :mod:`aquakin.plant.measures`. ``None`` observes every stream
+    species. Pass a list of these as ``observables=`` to :meth:`Plant.calibrate`
+    to fit against several streams at once (e.g. the effluent ammonia *and* total
+    nitrogen); the observation columns then run in the order given, channels
+    within a stream first."""
 
     stream: str
     channels: tuple | None = None
+
+    def __post_init__(self):
+        if self.channels is not None and not isinstance(self.channels, tuple):
+            object.__setattr__(self, "channels", tuple(self.channels))
 
 
 def _normalize_observables(observables, target, observed_channels) -> list[PlantObservable]:
@@ -193,10 +201,10 @@ class _PlantForwardModel:
             diff=self.diff,
             time_unit=self.time_unit,
         )
-        cols = [
-            self.plant.stream(sol, endpoint, p).C[:, ch_idx]
-            for endpoint, ch_idx in self.observables
-        ]
+        cols = []
+        for endpoint, W, q in self.observables:
+            stream = self.plant.stream(sol, endpoint, p)
+            cols.append(measured(stream.C, stream.Q, W, q))
         return jnp.concatenate(cols, axis=1)  # (n_t, n_observed)
 
     def forward_capable(self) -> bool:
@@ -287,31 +295,33 @@ def _check_free_params(ns: _PlantParamNamespace, free_params) -> None:
 
 
 def _resolve_observable_columns(plant: Plant, observables) -> tuple[tuple, int]:
-    """Resolve each :class:`PlantObservable` to ``(endpoint, channel_indices)``.
+    """Resolve each :class:`PlantObservable` to ``(endpoint, W, q)``.
 
-    Returns the resolved tuple and the total number of observed columns. The
-    columns run in observable order, channels within a stream first; the
-    consumers (the calibration forward model, the plant Fisher information)
-    reconstruct and concatenate the streams in the same order."""
+    ``W`` (``(n_species, n_channels)``) and ``q`` (``(n_channels,)``) are the
+    linear map from the stream to its measured channels
+    (:func:`aquakin.plant.measures.measure_columns`): a stream with
+    concentrations ``C`` and flow ``Q`` reads ``C @ W + Q * q``. Returns the
+    resolved tuple and the total number of observed columns. The columns run in
+    observable order, channels within a stream first; the consumers (the
+    calibration forward model, the plant Fisher information, the sensor
+    ranking) reconstruct and concatenate the streams in the same order."""
     resolved: list[tuple] = []
     n_observed = 0
     for observable in observables:
         endpoint, stream_model = _resolve_endpoint_species(plant, observable.stream)
-        if observable.channels is None:
-            ch_idx = jnp.arange(stream_model.n_species)
-            n_observed += int(stream_model.n_species)
-        else:
-            for s in observable.channels:
-                if s not in stream_model.species_index:
-                    suffix = did_you_mean(s, list(stream_model.species))
-                    raise KeyError(
-                        f"Unknown observed channel '{s}' in stream "
-                        f"'{observable.stream}' (model '{stream_model.name}').{suffix}"
-                    )
-            ch_idx = jnp.asarray([stream_model.species_index[s] for s in observable.channels])
-            n_observed += len(observable.channels)
-        resolved.append((endpoint, ch_idx))
+        try:
+            W, q = measure_columns(stream_model, observable.channels)
+        except KeyError as exc:
+            message = exc.args[0] if exc.args else str(exc)
+            raise KeyError(f"{message} (stream '{observable.stream}')") from None
+        n_observed += W.shape[1]
+        resolved.append((endpoint, jnp.asarray(W), jnp.asarray(q)))
     return tuple(resolved), n_observed
+
+
+def measured(C, Q, W, q):
+    """The measured channels of a stream: ``C @ W + Q * q`` (any leading axes)."""
+    return C @ W + jnp.asarray(Q)[..., None] * q
 
 
 def _resolve_plant_problem(

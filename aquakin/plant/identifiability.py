@@ -80,6 +80,7 @@ from aquakin.plant.calibrate import (
     _PlantParamNamespace,
     _resolve_observable_columns,
     calibrate_plant,
+    measured,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -123,12 +124,15 @@ def _observed_channels(plant: Plant, resolved_observables, ts_native, states, p)
     the plant's outputs reconstructed from ``states`` (``(n_t, ndof)``) at the
     native times ``ts_native`` and parameters ``p``, in observable order.
     Differentiable in ``states`` and ``p``."""
-    keys = [plant._parse_endpoint(endpoint, role="source") for endpoint, _ in resolved_observables]
+    keys = [plant._parse_endpoint(endpoint, role="source") for endpoint, *_ in resolved_observables]
 
     def _at(t, y):
         outputs = plant.outputs_at(t, y, p)
         return jnp.concatenate(
-            [outputs[key].C[ch] for key, (_, ch) in zip(keys, resolved_observables)]
+            [
+                measured(outputs[key].C, outputs[key].Q, W, q)
+                for key, (_, W, q) in zip(keys, resolved_observables)
+            ]
         )
 
     return jax.vmap(_at)(ts_native, states)
@@ -593,31 +597,44 @@ class SensorSet:
 
 
 def _union_columns(plant: Plant, sensor_sets):
-    """Every stream any of ``sensor_sets`` reads, observed whole, plus where
-    each set's channels sit in it.
+    """Every stream any of ``sensor_sets`` reads, observed whole, plus how each
+    set's channels follow from it.
 
-    Returns ``(union_observables, columns)``: the ``(endpoint, all-channel
-    index)`` pairs to observe once, and per sensor set the column indices of
-    its channels in that union, in the set's observable order. Two spellings
-    of one port (a registered name and its ``"unit.port"``) share columns."""
+    Returns ``(union_observables, maps)``: the ``(endpoint, W, q)`` triples to
+    observe once (every species of the stream, then its flow), and per sensor
+    set a matrix ``M`` (``(union width, n_set_channels)``) such that the set's
+    channels are ``union_values @ M``; the measurements are linear, so the same
+    ``M`` maps the sensitivities. Two spellings of one port (a registered name
+    and its ``"unit.port"``) share columns."""
     offsets: dict = {}
     union: list = []
     width = 0
-    columns = []
+    rows = []
     for ss in sensor_sets:
         specs = _normalize_observables(ss.observables, None, None)
         resolved, _ = _resolve_observable_columns(plant, specs)
-        cols = []
-        for endpoint, ch_idx in resolved:
+        pieces = []
+        for endpoint, W, q in resolved:
             key = plant._parse_endpoint(endpoint, role="source")
             if key not in offsets:
-                n_species = plant.units[key[0]].model.n_species
+                n = plant.units[key[0]].model.n_species
                 offsets[key] = width
-                union.append((endpoint, jnp.arange(n_species)))
-                width += n_species
-            cols.append(offsets[key] + np.asarray(ch_idx))
-        columns.append(np.concatenate(cols))
-    return tuple(union), columns
+                whole = np.concatenate([np.eye(n), np.zeros((n, 1))], axis=1)
+                flow = np.concatenate([np.zeros(n), [1.0]])
+                union.append((endpoint, jnp.asarray(whole), jnp.asarray(flow)))
+                width += n + 1
+            pieces.append((offsets[key], np.vstack([np.asarray(W), np.asarray(q)[None, :]])))
+        rows.append(pieces)
+    maps = []
+    for pieces in rows:
+        k = sum(block.shape[1] for _, block in pieces)
+        M = np.zeros((width, k))
+        col = 0
+        for offset, block in pieces:
+            M[offset : offset + block.shape[0], col : col + block.shape[1]] = block
+            col += block.shape[1]
+        maps.append(M)
+    return tuple(union), maps
 
 
 def plant_rank_sensor_sets(
@@ -745,12 +762,12 @@ def plant_rank_sensor_sets(
         # Each set's information summed over the runs, from one solve per run.
         info = [np.zeros((k, k)) for _ in sets]
         for r in range(design.n_runs):
-            union, columns = unions[r]
+            union, maps = unions[r]
             y_all, dy_all = design.sensitivity(r, union, p)
-            for i, (ss, cols) in enumerate(zip(sets, columns)):
+            for i, (ss, M) in enumerate(zip(sets, maps)):
                 J = _scaled_rows(
-                    y_all[:, cols],
-                    dy_all[:, cols, :],
+                    y_all @ M,
+                    jnp.einsum("tok,os->tsk", dy_all, M),
                     dphys,
                     ss.sigma,
                     ss.mask,

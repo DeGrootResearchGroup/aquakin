@@ -21,6 +21,8 @@ from aquakin.plant.aeration_system import (
 )
 from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
 from aquakin.plant.calibrate import PlantObservable, calibrate_plant
+from aquakin.plant.measures import Measure
+from aquakin.plant.spec import SpecError, SpecWarning
 from aquakin.plant.identifiability import (
     SensorSet,
     plant_fisher_information,
@@ -178,6 +180,7 @@ __all__ = [
     "MBBRUnit",
     "MBRUnit",
     "MassBalance",
+    "Measure",
     "MixerUnit",
     "NoDigesterError",
     "OperatingCost",
@@ -198,6 +201,8 @@ __all__ = [
     "SetpointSplitter",
     "SettlingModel",
     "SludgeMetrics",
+    "SpecError",
+    "SpecWarning",
     "StateTranslator",
     "StatelessUnit",
     "SteadyStateResult",

@@ -307,7 +307,7 @@ def composition_table(
         an explicit composition to the :mod:`aquakin.utils.balance` /
         :meth:`Plant.mass_balance` functions).
     """
-    builder = _BUILDERS.get(model.name)
+    builder = _BUILDERS.get(model.name) or _inherited_builder(model)
     if builder is None:
         suffix = did_you_mean(model.name, list(_BUILDERS))
         raise KeyError(
@@ -317,6 +317,43 @@ def composition_table(
     if builder is _asm_composition:
         return _asm_composition(model, electron_acceptor_cod, params)
     return builder(model, params)
+
+
+def _inherited_builder(model: CompiledModel):
+    """The table builder of the shipped model ``model`` extends, if it has the same species.
+
+    A model read from a file that ``extends:`` a shipped model (directly or
+    through other files) with the same species list -- a parameter variant such
+    as a 15 degC ASM1 -- uses its base's composition, evaluated with its own
+    parameters. ``load_model_from_file`` records the file on the model.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    from aquakin.schema.loader import load_model
+
+    source = getattr(model, "_aquakin_source", None)
+    seen = 0
+    while source is not None and source[0] == "file" and seen < 16:
+        seen += 1
+        path = Path(source[1])
+        try:
+            data = yaml.safe_load(path.read_text())
+        except OSError:
+            return None
+        meta = data.get("model", {}) if isinstance(data, dict) else {}
+        base = meta.get("extends", data.get("extends") if isinstance(data, dict) else None)
+        if not isinstance(base, str):
+            return None
+        if "/" in base or base.endswith(".yaml"):
+            source = ("file", str((path.parent / base).resolve()))
+            continue
+        builder = _BUILDERS.get(base)
+        if builder is not None and list(load_model(base).species) == list(model.species):
+            return builder
+        return None
+    return None
 
 
 def canonical_content(
