@@ -140,6 +140,21 @@ reactions:
   15 °C/10 °C pairs in `asm1_bsm2.c`), so it slows correctly in the cold
   (nitrification — the most temperature-sensitive — drops to ~36% at 10 °C) while
   staying identical to the old behaviour at the default 20 °C.
+  `theta` may also be a **parameter name** (`temperature: {theta: theta_A, ...}`,
+  issue #662): resolved at compile time by `_resolve_theta_params` in
+  `core/model.py` (reaction-local `<rxn>.<name>` first, then model-level), which
+  validates it exists, is positive (with a positive lower bound if bounded) and
+  is not itself temperature-corrected, and defaults its bounds to `[1.0, 1.3]`
+  (when the value lies inside) and units to `"-"`. The mapping is stored as
+  `CompiledModel.temperature_theta_params = {corrected_idx: theta_idx}`; the
+  `ln_theta` slot of the 4-tuple holds `log` of the theta default, so every
+  consumer that reads/rewrites the tuples (`bsm2_asm1_model`'s ref_T shift,
+  `_warn_if_influent_T_inconsistent`) is unchanged. `_temp_groups` entries carry
+  `(theta_pos, theta_idx)` (both `None` for an all-numeric group, keeping the
+  float path identical), and `_apply_temperature` gathers `log(params[theta_idx])`
+  into those positions before the unique-index scatter-multiply, so theta is
+  calibratable, differentiable and visible to Fisher/identifiability/DGSM.
+  Several rate constants may share one theta (e.g. `muA`/`bA`).
 - Parameters can live at the model level (a single shared slot used by
   any reaction that references them by bare name) or inside a reaction's
   `parameters:` block (namespaced as `<reaction>.<name>`). Model-level
