@@ -70,6 +70,27 @@ def test_stripped_spec_validation(stripped, match):
         Aeration(kla=KLA, stripped=stripped)
 
 
+def test_stripped_spec_accepts_normalized_triples():
+    triples = (("SN2O", 1.0, 0.0), ("SNO", 0.8, 0.01))
+    assert Aeration(kla=KLA, stripped=triples).stripped == triples
+    # Normalizing is idempotent, so a spec can be rebuilt from another's field.
+    a = Aeration(kla=KLA, stripped={"SN2O": 1.0})
+    assert Aeration(kla=KLA, stripped=a.stripped) == a
+
+
+@pytest.mark.parametrize(
+    "stripped, match",
+    [
+        ((("SN2O", 1.0),), "triples"),  # a pair, not a triple
+        (("SN2O",), "triples"),  # a bare name
+        ((("SN2O", 1.0, 0.0), ("SN2O", 0.5, 0.0)), "repeat"),
+    ],
+)
+def test_stripped_triples_validation(stripped, match):
+    with pytest.raises(ValueError, match=match):
+        Aeration(kla=KLA, stripped=stripped)
+
+
 def test_unknown_stripped_species_raises(toy):
     with pytest.raises(ValueError, match="stripped gas 'SNO'"):
         _tank(toy, Aeration(kla=KLA, stripped={"SNO": 1.0}))
@@ -104,9 +125,7 @@ def test_closed_loop_gas_reads_signal_times_gain_times_ratio(toy):
 
 
 def test_temperature_correction_scales_gas_kla_not_gas_saturation(toy):
-    aer = Aeration(
-        kla=KLA, temperature_correction=True, stripped={"SN2O": (RATIO, 0.3)}
-    )
+    aer = Aeration(kla=KLA, temperature_correction=True, stripped={"SN2O": (RATIO, 0.3)})
     tank = _tank(toy, aer)
     i_o, i_g = toy.species_index["SO"], toy.species_index["SN2O"]
     C = jnp.zeros(toy.n_species)
@@ -213,3 +232,35 @@ def test_gradient_through_stripping_solve_is_finite(toy):
     g = jax.grad(final_n2o)(p0)
     assert bool(jnp.all(jnp.isfinite(g)))
     assert float(g[idx]) < 0.0  # faster reduction, less dissolved N2O
+
+
+_NO_COMPOSITION = """
+model: {name: no_composition_toy, version: "1.0", description: "test", references: []}
+species:
+  - {name: SS, units: "g_COD/m3", default_concentration: 1.0}
+  - {name: SO, units: "g_O2/m3",  default_concentration: 1.0}
+conditions: [{name: T, default: 293.15}]
+reactions:
+  - name: respiration
+    rate: "k * [SS]"
+    parameters: {k: {value: 1.0}}
+    stoichiometry: {SS: -1, SO: -1}
+"""
+
+
+def test_mass_balance_without_any_composition_raises(tmp_path):
+    # No shipped table and no declared species composition: the balance has no
+    # content to dot with, so the shipped-table KeyError propagates.
+    path = tmp_path / "no_composition.yaml"
+    path.write_text(_NO_COMPOSITION)
+    model = aquakin.load_model_from_file(path)
+    plant = Plant("bare")
+    plant.add_unit(_tank(model, Aeration(kla=KLA)))
+    C_in = model.concentrations({"SS": 10.0, "SO": 0.0})
+    influent = InfluentSeries(
+        t=jnp.asarray([0.0, 100.0]), Q=jnp.full((2,), Q), C=jnp.tile(C_in, (2, 1)), model=model
+    )
+    plant.add_influent("feed", influent, to="tank.in")
+    sol = _solve(plant, t_end=0.1, n=3)
+    with pytest.raises(KeyError):
+        plant.mass_balance(sol, components=("COD",), effluent_ports=["tank.out"])

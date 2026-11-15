@@ -141,7 +141,8 @@ def build_bsm1(
         suspended solids (the Takács settler's settling solids, at the COD-to-TSS
         factor 0.75). ``None`` (default) derives them from the model: the ASM1
         sets for ASM1, otherwise every ``X``-prefixed species settles and those
-        carrying COD are TSS.
+        carrying COD are TSS. ``tss_species`` must be a subset of the settling
+        species.
 
     Returns
     -------
@@ -167,6 +168,12 @@ def build_bsm1(
     derived_settling, derived_tss = solids_species(model)
     settling = tuple(settling_species) if settling_species is not None else derived_settling
     tss = tuple(tss_species) if tss_species is not None else derived_tss
+    not_settling = set(tss) - set(settling)
+    if not_settling:
+        raise ValueError(
+            f"build_bsm1 tss_species {sorted(not_settling)} are not settling species; "
+            "every TSS species must also be in settling_species."
+        )
     unknown_tanks = set(aeration or {}) - {f"tank{i + 1}" for i in range(5)}
     if unknown_tanks:
         raise ValueError(

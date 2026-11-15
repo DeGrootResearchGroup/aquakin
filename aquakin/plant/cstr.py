@@ -278,7 +278,13 @@ def _normalize_stripped(stripped, aerated_species: str) -> tuple:
     else:
         items = list(stripped)
     out = []
-    for sp, ratio, sat in items:
+    for item in items:
+        if not isinstance(item, (tuple, list)) or len(item) != 3:
+            raise ValueError(
+                "Aeration stripped must be a {species: ratio} or {species: (ratio, sat)} "
+                f"mapping, or a tuple of (species, ratio, sat) triples; got entry {item!r}."
+            )
+        sp, ratio, sat = item
         sp, ratio, sat = str(sp), float(ratio), float(sat)
         if sp == aerated_species:
             raise ValueError(

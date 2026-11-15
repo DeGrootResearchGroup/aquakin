@@ -53,11 +53,12 @@ ASM1_TSS_FACTOR: float = 0.75
 def solids_species(model: CompiledModel) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The ``(settling_species, tss_species)`` of an activated-sludge model.
 
-    A model holding every ASM1 settling species gets the ASM1 sets unchanged
-    (:data:`ASM1_SETTLING_SPECIES`, :data:`ASM1_TSS_SPECIES`). Any other model
-    (an ASM1 variant that splits the autotrophs into AOB and NOB, say) is read by
-    the ASM naming convention: every species whose name starts with ``X`` is a
-    particulate and settles, and the particulates carrying COD are the TSS
+    A model whose particulates (``X``-prefixed species) are exactly the ASM1
+    settling species gets the ASM1 sets unchanged (:data:`ASM1_SETTLING_SPECIES`,
+    :data:`ASM1_TSS_SPECIES`). Any other model (an ASM1 variant that splits the
+    autotrophs into AOB and NOB, or one that adds a particulate to ASM1) is read
+    by the ASM naming convention: every species whose name starts with ``X`` is
+    a particulate and settles, and the particulates carrying COD are the TSS
     species. COD content comes from the model's composition table; without one,
     every particulate except ``XND`` (nitrogen carried on ``XS``) counts as TSS.
 
@@ -77,19 +78,16 @@ def solids_species(model: CompiledModel) -> tuple[tuple[str, ...], tuple[str, ..
     ValueError
         If the model has no species starting with ``X``.
     """
-    idx = model.species_index
-    if all(s in idx for s in ASM1_SETTLING_SPECIES):
-        return ASM1_SETTLING_SPECIES, ASM1_TSS_SPECIES
     settling = tuple(s for s in model.species if s.startswith("X"))
+    if set(settling) == set(ASM1_SETTLING_SPECIES):
+        return ASM1_SETTLING_SPECIES, ASM1_TSS_SPECIES
     if not settling:
         raise ValueError(
             f"model '{model.name}' has no particulate (X-prefixed) species; pass the "
             "settling and TSS species explicitly."
         )
-    try:
-        comp = model.composition()
-    except Exception:  # pragma: no cover - a composition-less model
-        comp = {}
+    # Declared species composition, else the shipped table, else {}.
+    comp = model.composition()
     if comp:
         tss = tuple(s for s in settling if comp.get(s, {}).get("COD", 0.0) > 0.0)
     else:

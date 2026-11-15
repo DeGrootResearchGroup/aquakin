@@ -700,11 +700,14 @@ modes, gradient) and `tests/integration/test_bsm1_asmn_n2o.py`.
 
 **BSM1 with non-ASM1 models.** `build_bsm1(model, aeration=, settling_species=,
 tss_species=)`: the clarifier solids come from `_constants.solids_species(model)`
-(the ASM1 constants unchanged when the model has every ASM1 settling species, so
-ASM1 stays bit-identical; otherwise X-prefixed species settle and those with COD
+(the ASM1 constants unchanged when the model's X-prefixed species are exactly
+the ASM1 settling species, so ASM1 stays bit-identical; a model that adds a
+particulate to ASM1 is derived, so the extra solid settles; otherwise X-prefixed
+species settle and those with COD
 content in `model.composition()` are TSS, at `ASM1_TSS_FACTOR`, the rest weight
 0). `aeration={"tank3": Aeration(...), ...}` replaces named tanks' aeration
-(`None` = unaerated). The BSM1 metrics (`derived_TSS`, `evaluate_bsm1`'s EQI)
+(`None` = unaerated); `tss_species` must be a subset of the settling species
+(else `ValueError`). Covered by `tests/unit/test_bsm1_model_solids.py`. The BSM1 metrics (`derived_TSS`, `evaluate_bsm1`'s EQI)
 still use the ASM1 species and do not yet support such models.
 
 **Shared separator/clarifier helpers.** The separator/clarifier family resolves

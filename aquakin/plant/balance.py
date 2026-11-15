@@ -488,27 +488,20 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
             react = _reaction_term(plant, name, C, params)
             for q in gas_comps[name]:
                 R[q] += float(jnp.dot(react, content[name][q]))
-            if name in aerated:
+            if name in aerated and unit.aeration is not None:
+                sp_idx = unit.model.species_index
                 kla = unit._kla_vec
                 for sp, (sig_name, gain) in unit._controlled_kla.items():
-                    if sig:
-                        kla = kla.at[unit.model.species_index[sp]].set(sig[sig_name] * gain)
+                    kla = kla.at[sp_idx[sp]].set(sig[sig_name] * gain)
                 transfer = kla * (unit._sat_vec - C)  # per species, per volume
                 # Aeration O2 source (the aerated oxygen species only).
-                o2_idx = unit.model.species_index.get(
-                    unit.aeration.species if unit.aeration is not None else "SO"
-                )
-                if o2_idx is not None:
-                    o2 += float(transfer[o2_idx] * float(unit.volume))
+                o2 += float(transfer[sp_idx[unit.aeration.species]] * float(unit.volume))
                 # Co-stripped gases (N2O, NO, ...) leaving to the air: their
                 # component content is a gas loss (transfer is negative).
-                stripped = unit._av.stripped
-                if stripped:
-                    gmask = jnp.zeros_like(transfer)
-                    for sp in stripped:
-                        gmask = gmask.at[unit.model.species_index[sp]].set(1.0)
+                if unit._av.stripped:
+                    g = jnp.asarray([sp_idx[sp] for sp in unit._av.stripped])
                     for q in rqs:
-                        S[q] += float(jnp.dot(transfer * gmask, content[name][q]))
+                        S[q] += float(jnp.dot(transfer[g], content[name][q][g]))
         o2_rows.append(o2)
         for q in rqs:
             R_rows[q].append(R[q])
