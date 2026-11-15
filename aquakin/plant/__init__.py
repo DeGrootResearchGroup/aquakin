@@ -63,7 +63,12 @@ from aquakin.plant.characterize import (
     characterize_influent,
     fractionate,
 )
-from aquakin.plant.influent import InfluentSeries, read_influent_csv
+from aquakin.plant.influent import (
+    InfluentSeries,
+    read_influent_csv,
+    read_influent_table,
+    write_influent_table,
+)
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
 from aquakin.plant.mbr import MBRUnit
 from aquakin.plant.mixer import (
@@ -257,6 +262,7 @@ __all__ = [
     "pumping_energy",
     "pumping_energy_bsm2",
     "read_influent_csv",
+    "read_influent_table",
     "required_airflow",
     "size_activated_sludge",
     "sludge_metrics",
@@ -267,4 +273,5 @@ __all__ = [
     "time_average",
     "uv_dose",
     "uv_log_inactivation",
+    "write_influent_table",
 ]

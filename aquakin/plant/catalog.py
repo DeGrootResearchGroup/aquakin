@@ -404,18 +404,28 @@ def _kind(kind, label, category, cls, *, fixed=(), exactly_one_of=(), defaults=N
 
 
 def _influent_kind() -> UnitKind:
-    """The influent: a constant feed, built with :meth:`InfluentSeries.constant`."""
+    """The influent: a constant feed, or a time series read from a table file."""
     return UnitKind(
         kind="influent",
         label="Influent",
         category="boundary",
-        summary="A constant plant inflow, wired to one unit input with Plant.add_influent.",
+        summary=(
+            "A plant inflow, wired to one unit input with Plant.add_influent: constant "
+            "(Q, T, composition) or a time series read from a table file (series)."
+        ),
         python_class="aquakin.plant.influent.InfluentSeries.constant",
         settings=(
             Setting(
                 "model", "model", True, help="Kinetic model whose species the feed is written in."
             ),
-            Setting("Q", "number", True, help="Volumetric flow rate."),
+            Setting(
+                "Q",
+                "number",
+                False,
+                None,
+                optional=True,
+                help="Volumetric flow rate (constant feed).",
+            ),
             Setting(
                 "T",
                 "number",
@@ -431,8 +441,29 @@ def _influent_kind() -> UnitKind:
                 {},
                 help="Feed concentration of each species; species not listed are absent.",
             ),
+            Setting(
+                "series",
+                "string",
+                False,
+                None,
+                optional=True,
+                help=(
+                    "A time-varying feed: the path of an influent table (columns t, Q, "
+                    "optionally T, and species; see read_influent_table), relative to the "
+                    "spec file. Given instead of Q, T and composition."
+                ),
+            ),
+            Setting(
+                "series_sha256",
+                "string",
+                False,
+                None,
+                optional=True,
+                help="Fingerprint of the series file when the spec was written.",
+            ),
         ),
         ports=(PortRule("output", "fixed", names=("out",)),),
+        exactly_one_of=(("Q", "series"),),
     )
 
 
@@ -806,7 +837,7 @@ def _arguments(kind: UnitKind, settings: dict, models: dict | None = None) -> di
     return args
 
 
-def build_unit(kind: str, name: str, settings: dict, *, models: dict | None = None):
+def build_unit(kind: str, name: str, settings: dict, *, models: dict | None = None, base_dir=None):
     """Build a unit (or, for ``"influent"``, an influent series) from plain settings.
 
     Parameters
@@ -820,6 +851,8 @@ def build_unit(kind: str, name: str, settings: dict, *, models: dict | None = No
     models : dict, optional
         ``{name: CompiledModel}`` to use for model names instead of loading the
         shipped model of that name.
+    base_dir : str or pathlib.Path, optional
+        The directory an influent ``series`` path is relative to.
 
     Returns
     -------
@@ -837,12 +870,25 @@ def build_unit(kind: str, name: str, settings: dict, *, models: dict | None = No
     k = unit_kind(kind)
     args = _arguments(k, settings, models)
     if k.kind == "influent":
-        from aquakin.plant.influent import InfluentSeries
-
-        return InfluentSeries.constant(
-            args["model"], Q=args["Q"], T=args.get("T"), **args.get("composition", {})
-        )
+        return _influent(args, base_dir)
     return _class_of(k)(name=name, **args)
+
+
+def _influent(args: dict, base_dir):
+    from pathlib import Path
+
+    from aquakin.plant.influent import InfluentSeries, read_influent_table
+
+    if args.get("series") is not None:
+        if args.get("T") is not None or args.get("composition"):
+            raise ValueError("an influent 'series' gives Q, T and composition; set none of them")
+        path = Path(args["series"])
+        if not path.is_absolute() and base_dir is not None:
+            path = Path(base_dir) / path
+        return read_influent_table(path, args["model"])
+    return InfluentSeries.constant(
+        args["model"], Q=args["Q"], T=args.get("T"), **args.get("composition", {})
+    )
 
 
 def _model_name(model) -> str:
@@ -949,7 +995,9 @@ def unit_settings(unit, *, full=False, model_ref=None) -> tuple[str, dict]:
     return k.kind, out
 
 
-def check_unit(kind: str, name: str, settings: dict, model_files: dict | None = None) -> dict:
+def check_unit(
+    kind: str, name: str, settings: dict, model_files: dict | None = None, base_dir=None
+) -> dict:
     """Build a unit from front-end settings and report what happened.
 
     Parameters
@@ -962,6 +1010,8 @@ def check_unit(kind: str, name: str, settings: dict, model_files: dict | None = 
         Setting values as the front end holds them (plain data).
     model_files : dict, optional
         ``{model name: YAML path}`` for project models the settings may name.
+    base_dir : str or pathlib.Path, optional
+        The directory an influent ``series`` path is relative to.
 
     Returns
     -------
@@ -972,7 +1022,7 @@ def check_unit(kind: str, name: str, settings: dict, model_files: dict | None = 
     """
     try:
         models = {n: load_model_file(p) for n, p in (model_files or {}).items()}
-        unit = build_unit(kind, name, settings, models=models)
+        unit = build_unit(kind, name, settings, models=models, base_dir=base_dir)
         if kind == "influent":
             return {"ok": True, "inputs": [], "outputs": ["out"]}
         return {"ok": True, "inputs": list(unit.input_ports), "outputs": list(unit.output_ports)}

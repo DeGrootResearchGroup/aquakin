@@ -217,7 +217,9 @@ def test_what_a_spec_cannot_express_is_refused_by_name():
         build_bsm2().to_spec()
     p = build_bsm1()
     p.add_influent("feed", load_bsm1_influent("dry", _asm1()), to=p.influent_endpoint)
-    with pytest.raises(SpecError, match="influent 'feed' varies in time"):
+    with pytest.raises(
+        SpecError, match=r"influent 'feed' varies in time; write the spec to a file"
+    ):
         p.to_spec()
     p = Plant("delay")
     p.add_unit(
@@ -305,3 +307,53 @@ def test_a_modified_model_is_refused_and_a_model_file_is_found_by_itself(tmp_pat
     spec = p.to_spec(tmp_path / "flowsheet.yaml")  # no models= needed: the file is recorded
     assert spec["models"]["asm1_bsm2"]["source"].endswith("models/asm1_bsm2.yaml")
     assert Plant.from_spec(tmp_path / "flowsheet.yaml").to_spec() == Plant.from_spec(spec).to_spec()
+
+
+def _dynamic_bsm1():
+    p = build_bsm1()
+    p.add_influent("feed", load_bsm1_influent("dry", _asm1()), to=p.influent_endpoint)
+    return p
+
+
+def test_a_time_varying_influent_is_written_as_a_table_beside_the_spec(tmp_path):
+    p = _dynamic_bsm1()
+    spec = p.to_spec(tmp_path / "flowsheet.yaml")
+    feed = spec["units"]["feed"]
+    assert (
+        feed["series"] == "data/feed.csv" and feed["Q"] is None and len(feed["series_sha256"]) == 64
+    )
+    assert (tmp_path / "data" / "feed.csv").read_text().startswith("t,Q,SI,SS,")
+    q = Plant.from_spec(tmp_path / "flowsheet.yaml")
+    a, b = p.influents["feed"], q.influents["feed"]
+    for x, y in ((a.t, b.t), (a.Q, b.Q), (a.C, b.C)):
+        np.testing.assert_array_equal(np.asarray(x), np.asarray(y))
+    y0 = p.initial_state()
+    for t in (0.0, 0.37):
+        np.testing.assert_array_equal(
+            np.asarray(q.derivative(y0, t=t)), np.asarray(p.derivative(y0, t=t))
+        )
+    # Written again, the plant refers to the same table rather than copying it.
+    assert q.to_spec(tmp_path / "flowsheet.yaml") == spec
+
+
+def test_a_changed_influent_table_warns(tmp_path):
+    _dynamic_bsm1().to_spec(tmp_path / "flowsheet.yaml")
+    table = tmp_path / "data" / "feed.csv"
+    lines = table.read_text().splitlines()
+    lines[1] = lines[1].replace(lines[1].split(",")[1], "1.0", 1)
+    table.write_text("\n".join(lines) + "\n")
+    with pytest.warns(SpecWarning, match="influent 'feed'.*has changed"):
+        Plant.from_spec(tmp_path / "flowsheet.yaml")
+
+
+def test_an_influent_table_reads_back_exactly(tmp_path):
+    from aquakin.plant import read_influent_table, write_influent_table
+
+    series = InfluentSeries.constant(_asm1(), Q=0.1 + 0.2, T=288.15, SS=1 / 3)
+    path = write_influent_table(series, tmp_path / "inf.csv")
+    back = read_influent_table(path, _asm1())
+    for x, y in ((series.t, back.t), (series.Q, back.Q), (series.C, back.C), (series.T, back.T)):
+        np.testing.assert_array_equal(np.asarray(x), np.asarray(y))
+    (tmp_path / "bad.csv").write_text("t,Q,XX\n0,1,2\n1,1,2\n")
+    with pytest.raises(ValueError, match=r"column\(s\) \['XX'\] are not species"):
+        read_influent_table(tmp_path / "bad.csv", _asm1())

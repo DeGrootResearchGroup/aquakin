@@ -96,6 +96,7 @@ class Editor:
                 name=uid,
                 settings=u.settings,
                 model_files=self.doc.model_files(),
+                base_dir=str(self.doc.base_dir) if self.doc.base_dir else None,
             )
             error = None if out["ok"] else out["error"]
             if out["ok"] and (out["inputs"], out["outputs"]) != self.doc.ports(uid):

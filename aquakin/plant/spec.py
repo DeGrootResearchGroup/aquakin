@@ -41,14 +41,16 @@ an unknown key or a mistyped value is an error naming where it is. YAML is read
 with YAML 1.2 rules for booleans and numbers (``1e-5`` is a number, ``yes`` and
 ``on`` are strings).
 
-A unit of kind ``influent`` is a constant feed: its single connection becomes
-:meth:`Plant.add_influent`. Units the plant derives itself (the PI controllers
+A unit of kind ``influent`` is a feed, constant or a table file (``series``);
+its single connection becomes :meth:`Plant.add_influent`. Units the plant derives itself (the PI controllers
 a closed-loop :class:`Aeration` or a feedback :class:`DosingUnit` requires) are
 not written; they are derived again. What a spec cannot express yet is refused
 by :meth:`Plant.to_spec` with a :class:`SpecError` naming it rather than
-dropped: a time-varying influent, a model that is neither shipped nor given as
-a file, a heat-balance temperature model, and settings only Python can give
-(arrays of initial concentrations, SBR phases, settling models).
+dropped: a model that is neither shipped nor given as a file, a heat-balance
+temperature model, and settings only Python can give (arrays of initial
+concentrations, SBR phases, settling models). A time-varying influent is kept
+as a table file beside the spec (``series:``, see
+:func:`~aquakin.plant.influent.read_influent_table`), with its fingerprint.
 """
 
 from __future__ import annotations
@@ -424,10 +426,11 @@ def plant_from_spec(cls, spec, *, base_dir=None):
         settings = dict(entry.model_extra or {})
         _check_model_names(settings, models, where)
         try:
-            built = build_unit(entry.kind, uid, settings, models=models)
+            built = build_unit(entry.kind, uid, settings, models=models, base_dir=base_dir)
         except Exception as exc:
             raise SpecError(f"{where}: {type(exc).__name__}: {exc}") from None
         if entry.kind == "influent":
+            _check_series_fingerprint(uid, built, settings.get("series_sha256"), doc)
             influents[uid] = built
         else:
             plant.add_unit(built)
@@ -536,23 +539,67 @@ class _ModelRefs:
         return path.resolve().as_posix()
 
 
-def _influent_spec(name, series, refs) -> dict:
+def _file_digest(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _check_series_fingerprint(name, series, recorded, doc) -> None:
+    source = getattr(series, "_aquakin_source", None)
+    if recorded is None or source is None:
+        return
+    if _file_digest(Path(source[1])) != recorded:
+        warnings.warn(
+            f"influent '{name}' ({source[1]}) has changed since this spec was written "
+            f"(aquakin {doc.aquakin or 'unknown'}); the plant is built with the current file",
+            SpecWarning,
+            stacklevel=4,
+        )
+
+
+def _influent_spec(name, series, refs, base_dir: Path | None) -> dict:
+    """An influent as a unit entry: constant, or a series in a table file.
+
+    A time-varying series read from a table inside the spec's directory is
+    referred to; any other is written as a table to ``data/<name>.csv`` beside
+    the spec, so the spec and its data travel together.
+    """
     import numpy as np
+
+    from aquakin.plant.influent import write_influent_table
 
     Q, C = np.asarray(series.Q), np.asarray(series.C)
     T = None if series.T is None else np.asarray(series.T)
     constant = np.all(Q[0] == Q) and np.all(C[0] == C) and (T is None or np.all(T[0] == T))
-    if not constant:
-        raise SpecError(
-            f"influent '{name}' varies in time; a spec holds constant influents only for now"
-        )
     species = series.model.species
-    return {
-        "kind": "influent",
-        "model": refs(series.model),
-        "Q": float(Q[0]),
-        "T": None if T is None else float(T[0]),
-        "composition": {sp: float(v) for sp, v in zip(species, C[0], strict=True) if v != 0.0},
+    out = {"kind": "influent", "model": refs(series.model)}
+    if constant:
+        return out | {
+            "Q": float(Q[0]),
+            "T": None if T is None else float(T[0]),
+            "composition": {sp: float(v) for sp, v in zip(species, C[0], strict=True) if v != 0.0},
+            "series": None,
+            "series_sha256": None,
+        }
+    if base_dir is None:
+        raise SpecError(
+            f"influent '{name}' varies in time; write the spec to a file "
+            f"(Plant.to_spec(path)) so its series can be written beside it"
+        )
+    source = getattr(series, "_aquakin_source", None)
+    path = Path(source[1]) if source is not None else None
+    try:
+        relative = path.resolve().relative_to(base_dir.resolve()) if path else None
+    except ValueError:
+        relative = None
+    if relative is None:
+        relative = Path("data") / f"{name}.csv"
+        path = write_influent_table(series, base_dir / relative)
+    return out | {
+        "Q": None,
+        "T": None,
+        "composition": {},
+        "series": relative.as_posix(),
+        "series_sha256": _file_digest(path),
     }
 
 
@@ -637,7 +684,7 @@ def plant_to_spec(plant, path=None, *, models=None) -> dict:
 
     units: dict[str, dict] = {}
     for name, series in plant.influents.items():
-        units[name] = _influent_spec(name, series, refs)
+        units[name] = _influent_spec(name, series, refs, base_dir)
     for name in plant._insertion_order:
         if name in derived:
             continue

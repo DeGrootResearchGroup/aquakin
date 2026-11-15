@@ -10,8 +10,8 @@ per line on standard input, one reply per line on standard output::
 Commands: ``ping``, ``catalog``, ``models`` (the shipped kinetic models),
 ``model`` (``name``, optional ``path`` of a model file: one model's species
 and conditions), ``check_unit`` (``kind``, ``name``, ``settings``, optional
-``model_files``: build a unit and report its real ports or the constructor's
-error) and ``check_spec`` (``spec``, optional ``base_dir`` for model file
+``model_files`` and ``base_dir``: build a unit and report its real ports or
+the constructor's error) and ``check_spec`` (``spec``, optional ``base_dir`` for model file
 paths: build the whole plant from a flowsheet spec and report
 ``Plant.check``). A failed request is answered
 ``{"id": ..., "ok": false, "error": message}`` and the worker keeps serving.
@@ -38,7 +38,11 @@ def _handlers():
         "model": lambda req: cat.model_info(req["name"], req.get("path")),
         "check_spec": lambda req: check_spec(req["spec"], base_dir=req.get("base_dir")),
         "check_unit": lambda req: cat.check_unit(
-            req["kind"], req.get("name", "unit"), req.get("settings", {}), req.get("model_files")
+            req["kind"],
+            req.get("name", "unit"),
+            req.get("settings", {}),
+            req.get("model_files"),
+            req.get("base_dir"),
         ),
     }
 
