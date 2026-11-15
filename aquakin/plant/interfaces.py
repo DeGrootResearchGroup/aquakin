@@ -108,8 +108,9 @@ def _unit_scales(model, working_units: dict, side: str, owner: str):
     guessing would scale the stream silently.
     """
     scale = np.ones(model.n_species)
-    for species, working in working_units.items():
-        if species not in model.species_index:
+    for i, species in enumerate(model.species):
+        working = working_units.get(species)
+        if working is None:  # not read or written by the interface
             continue
         declared = model.species_units.get(species, "")
         try:
@@ -126,7 +127,7 @@ def _unit_scales(model, working_units: dict, side: str, owner: str):
                 f"'{model.name}' declares for species '{species}', so the interface "
                 f"cannot convert it to '{working}'. Declare a parseable unit."
             )
-        scale[model.species_index[species]] = factor
+        scale[i] = factor
     if np.all(scale == 1.0):
         return None
     return jnp.asarray(scale)

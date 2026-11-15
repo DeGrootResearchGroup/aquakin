@@ -106,6 +106,7 @@ def test_models_on_different_time_units_is_an_error(asm1, ozone):
     # check() carries it too, and raise_on_error raises the typed error.
     chk = plant.check()
     assert not chk.ok and chk.unit_errors
+    assert "units (error): [plant]" in chk.summary()
     with pytest.raises(UnitsError):
         plant.check(raise_on_error=True)
     # Solving is refused outright: no result from a mixed clock is meaningful.
@@ -156,6 +157,36 @@ def _adm1_in_grams(adm1):
         for sp, u in adm1.species_units.items()
     }
     return _with_units(adm1, **regrams)
+
+
+def _asm1_in_kilograms(asm1):
+    """ASM1 declared on a kg/m3 and kmol/m3 basis instead of g/m3 and mol/m3."""
+    rekilos = {
+        sp: (u.replace("g_", "kg_") if u.startswith("g_") else u.replace("mol", "kmol"))
+        for sp, u in asm1.species_units.items()
+    }
+    return _with_units(asm1, **rekilos)
+
+
+def test_translators_convert_the_asm1_side_too(asm1, adm1):
+    asm1_kg = _asm1_in_kilograms(asm1)
+    to_adm = ASM1toADM1(asm1_kg, adm1)
+    C_g = asm1.default_concentrations()
+    C_kg = C_g / to_adm._source_scale        # the same state, in kilograms
+    assert jnp.allclose(
+        to_adm.translate(C_kg, digester_pH=7.0),
+        ASM1toADM1(asm1, adm1).translate(C_g, digester_pH=7.0),
+        rtol=1e-12,
+        atol=0.0,
+    )
+    to_asm = ADM1toASM1(adm1, asm1_kg)
+    C_adm = adm1.default_concentrations()
+    assert jnp.allclose(
+        to_asm.translate(C_adm, digester_pH=7.0),
+        ADM1toASM1(adm1, asm1).translate(C_adm, digester_pH=7.0) / 1000.0,
+        rtol=1e-12,
+        atol=1e-15,
+    )
 
 
 def test_translators_on_shipped_models_need_no_scaling(asm1, adm1):
@@ -255,6 +286,8 @@ def test_influent_declared_units_that_disagree(asm1, units, fragment):
 def test_influent_units_reject_unknown_keys(asm1):
     with pytest.raises(ValueError, match="not 't', 'Q', 'T' or a species"):
         asm1.influent({"SS": 60.0}, Q=1.0, units={"flow": "m3/d"})
+    with pytest.raises(ValueError, match="must be strings"):
+        asm1.influent({"SS": 60.0}, Q=1.0, units={"Q": 24})
 
 
 def test_read_influent_csv_declares_units(tmp_path, asm1):
@@ -297,3 +330,33 @@ reactions:
     assert report.ok
     assert any("model 'broken'" in str(w) for w in report.warnings)
     assert plant.check_units(include_models=False).warnings == []
+    # check() lists the warnings without failing on them.
+    chk = plant.check()
+    assert chk.ok
+    assert "units (warning): [model 'broken']" in chk.summary()
+
+
+def test_model_without_a_time_unit_is_a_warning(tmp_path):
+    # No rate constant declares units, so the time unit cannot be inferred and
+    # the plant cannot confirm its clock; that is reported, not raised.
+    path = tmp_path / "no_units.yaml"
+    path.write_text(
+        """
+model:
+  name: no_units
+  description: "rate constants without units"
+species:
+  - {name: A, units: g_COD/m3, default_concentration: 1.0}
+conditions: []
+reactions:
+  - name: R
+    rate: "k * [A]"
+    parameters: {k: {value: 0.1}}
+    stoichiometry: {A: -1}
+"""
+    )
+    net = aquakin.load_model_from_file(str(path))
+    assert net.time_unit is None
+    report = _single_tank(net, net.influent(Q=1.0)).check_units()
+    assert report.ok and report.time_unit is None
+    assert any("time unit cannot be inferred" in w.detail for w in report.warnings)
