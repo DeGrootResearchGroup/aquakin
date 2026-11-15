@@ -307,7 +307,8 @@ def composition_table(
         an explicit composition to the :mod:`aquakin.utils.balance` /
         :meth:`Plant.mass_balance` functions).
     """
-    builder = _BUILDERS.get(model.name) or _inherited_builder(model)
+    base = composition_base(model)
+    builder = _BUILDERS.get(base) if base is not None else None
     if builder is None:
         suffix = did_you_mean(model.name, list(_BUILDERS))
         raise KeyError(
@@ -319,13 +320,23 @@ def composition_table(
     return builder(model, params)
 
 
-def _inherited_builder(model: CompiledModel):
-    """The table builder of the shipped model ``model`` extends, if it has the same species.
+def composition_base(model: CompiledModel) -> str | None:
+    """The shipped model whose composition table and units ``model`` uses, or ``None``.
 
-    A model read from a file that ``extends:`` a shipped model (directly or
-    through other files) with the same species list -- a parameter variant such
-    as a 15 degC ASM1 -- uses its base's composition, evaluated with its own
-    parameters. ``load_model_from_file`` records the file on the model.
+    A shipped model with a table is its own base. A model read from a file that
+    ``extends:`` a shipped model (directly or through other files) with the same
+    species list -- a parameter variant such as a 15 degC ASM1 -- has that
+    model as its base: it uses the base's composition table (evaluated with its
+    own parameters) and the base's content units (ADM1 states kg COD and kmol
+    N). ``load_model_from_file`` records the file on the model.
+
+    Parameters
+    ----------
+    model : CompiledModel
+
+    Returns
+    -------
+    str or None
     """
     from pathlib import Path
 
@@ -333,10 +344,12 @@ def _inherited_builder(model: CompiledModel):
 
     from aquakin.schema.loader import load_model
 
-    source = getattr(model, "_aquakin_source", None)
-    seen = 0
-    while source is not None and source[0] == "file" and seen < 16:
-        seen += 1
+    if model.name in _BUILDERS:
+        return model.name
+    source = tuple(getattr(model, "_aquakin_source", ()) or ())
+    for _ in range(16):
+        if source[:1] != ("file",):
+            return None
         path = Path(source[1])
         try:
             data = yaml.safe_load(path.read_text())
@@ -349,9 +362,8 @@ def _inherited_builder(model: CompiledModel):
         if "/" in base or base.endswith(".yaml"):
             source = ("file", str((path.parent / base).resolve()))
             continue
-        builder = _BUILDERS.get(base)
-        if builder is not None and list(load_model(base).species) == list(model.species):
-            return builder
+        if base in _BUILDERS and list(load_model(base).species) == list(model.species):
+            return base
         return None
     return None
 
@@ -390,7 +402,9 @@ def canonical_content(
         if composition is None
         else composition
     )
-    factor = _CONTENT_FACTOR.get(model.name, _ASM_CONTENT_FACTOR).get(component, 1.0)
+    factor = _CONTENT_FACTOR.get(composition_base(model) or model.name, _ASM_CONTENT_FACTOR).get(
+        component, 1.0
+    )
     vec = np.zeros(model.n_species)
     for sp, content in comp.items():
         if sp in model.species_index and component in content:

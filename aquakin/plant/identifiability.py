@@ -75,6 +75,7 @@ from aquakin.integrate.profile import (
 )
 from aquakin.plant.calibrate import (
     _check_free_params,
+    _Measurement,
     _normalize_observables,
     _PlantForwardModel,
     _PlantParamNamespace,
@@ -130,8 +131,8 @@ def _observed_channels(plant: Plant, resolved_observables, ts_native, states, p)
         outputs = plant.outputs_at(t, y, p)
         return jnp.concatenate(
             [
-                measured(outputs[key].C, outputs[key].Q, W, q)
-                for key, (_, W, q) in zip(keys, resolved_observables)
+                measured(outputs[key].C, outputs[key].Q, outputs[key].scalars.get("T"), m, p)
+                for key, (_, m) in zip(keys, resolved_observables)
             ]
         )
 
@@ -600,41 +601,101 @@ def _union_columns(plant: Plant, sensor_sets):
     """Every stream any of ``sensor_sets`` reads, observed whole, plus how each
     set's channels follow from it.
 
-    Returns ``(union_observables, maps)``: the ``(endpoint, W, q)`` triples to
-    observe once (every species of the stream, then its flow), and per sensor
-    set a matrix ``M`` (``(union width, n_set_channels)``) such that the set's
-    channels are ``union_values @ M``; the measurements are linear, so the same
-    ``M`` maps the sensitivities. Two spellings of one port (a registered name
-    and its ``"unit.port"``) share columns."""
-    offsets: dict = {}
-    union: list = []
-    width = 0
-    rows = []
+    Returns ``(union_observables, maps)``. The union observes each stream once:
+    every species, then its flow, then its temperature when some set measures
+    it. Per sensor set, a map is ``(M, idx, theta0, dM)``: the set's channels
+    are ``union_values @ M(p)`` with ``M(p) = M + Σ_i (p[idx_i] - theta0_i)
+    dM[i]`` (the weights of composition channels follow their parameters). The
+    measurements are linear in the stream, so the same ``M(p)`` maps the
+    sensitivities, and a free composition parameter adds ``union_values @ dM``.
+    Two spellings of one port (a registered name and its ``"unit.port"``) share
+    columns."""
+    sets = []
+    temperature: set = set()
     for ss in sensor_sets:
         specs = _normalize_observables(ss.observables, None, None)
         resolved, _ = _resolve_observable_columns(plant, specs)
         pieces = []
-        for endpoint, W, q in resolved:
+        for endpoint, m in resolved:
             key = plant._parse_endpoint(endpoint, role="source")
-            if key not in offsets:
-                n = plant.units[key[0]].model.n_species
-                offsets[key] = width
-                whole = np.concatenate([np.eye(n), np.zeros((n, 1))], axis=1)
-                flow = np.concatenate([np.zeros(n), [1.0]])
-                union.append((endpoint, jnp.asarray(whole), jnp.asarray(flow)))
-                width += n + 1
-            pieces.append((offsets[key], np.vstack([np.asarray(W), np.asarray(q)[None, :]])))
-        rows.append(pieces)
+            if m.uses_temperature:
+                temperature.add(key)
+            pieces.append((key, endpoint, m))
+        sets.append(pieces)
+
+    offsets: dict = {}
+    union: list = []
+    width = 0
+    for pieces in sets:
+        for key, endpoint, m in pieces:
+            if key in offsets:
+                continue
+            n = plant.units[key[0]].model.n_species
+            extra = 2 if key in temperature else 1
+            whole = np.concatenate([np.eye(n), np.zeros((n, extra))], axis=1)
+            flow = np.zeros(n + extra)
+            flow[n] = 1.0
+            temp = np.zeros(n + extra)
+            if extra == 2:
+                temp[n + 1] = 1.0
+            offsets[key] = width
+            union.append(
+                (
+                    endpoint,
+                    _Measurement(
+                        stream=m.stream,
+                        W=jnp.asarray(whole),
+                        q=jnp.asarray(flow),
+                        t=jnp.asarray(temp),
+                        idx=np.zeros(0, int),
+                        theta0=jnp.zeros(0),
+                        dW=jnp.zeros((0, n, n + extra)),
+                        uses_temperature=extra == 2,
+                    ),
+                )
+            )
+            width += n + extra
+
     maps = []
-    for pieces in rows:
-        k = sum(block.shape[1] for _, block in pieces)
+    for pieces in sets:
+        k = sum(m.width for _, _, m in pieces)
+        names = sorted({int(i) for _, _, m in pieces for i in m.idx})
+        where = {i: j for j, i in enumerate(names)}
         M = np.zeros((width, k))
+        dM = np.zeros((len(names), width, k))
+        theta0 = np.zeros(len(names))
         col = 0
-        for offset, block in pieces:
-            M[offset : offset + block.shape[0], col : col + block.shape[1]] = block
-            col += block.shape[1]
-        maps.append(M)
+        for key, _, m in pieces:
+            offset, n, w = offsets[key], m.W.shape[0], m.width
+            M[offset : offset + n, col : col + w] = np.asarray(m.W)
+            M[offset + n, col : col + w] = np.asarray(m.q)
+            if m.uses_temperature:
+                M[offset + n + 1, col : col + w] = np.asarray(m.t)
+            for i, flat in enumerate(m.idx):
+                j = where[int(flat)]
+                dM[j, offset : offset + n, col : col + w] = np.asarray(m.dW[i])
+                theta0[j] = float(m.theta0[i])
+            col += w
+        maps.append((M, np.asarray(names, int), theta0, dM))
     return tuple(union), maps
+
+
+def _set_channels(y_all, dy_all, set_map, p, free_idx):
+    """A sensor set's channels and their sensitivities from the union's.
+
+    ``y_all`` is ``(n_t, width)`` and ``dy_all`` ``(n_t, width, k)``; the map is
+    one of :func:`_union_columns`'. A free parameter that the set's weights
+    depend on adds ``y_all @ dM`` to its sensitivity column."""
+    M, idx, theta0, dM = set_map
+    p = np.asarray(p)
+    Mp = M + np.tensordot(p[idx] - theta0, dM, axes=1) if idx.size else M
+    y = y_all @ Mp
+    dy = jnp.einsum("tok,os->tsk", dy_all, Mp)
+    free = [int(i) for i in np.asarray(free_idx)]
+    for j, flat in enumerate(idx):
+        if int(flat) in free:
+            dy = dy.at[:, :, free.index(int(flat))].add(y_all @ dM[j])
+    return y, dy
 
 
 def plant_rank_sensor_sets(
@@ -764,10 +825,11 @@ def plant_rank_sensor_sets(
         for r in range(design.n_runs):
             union, maps = unions[r]
             y_all, dy_all = design.sensitivity(r, union, p)
-            for i, (ss, M) in enumerate(zip(sets, maps)):
+            for i, (ss, set_map) in enumerate(zip(sets, maps)):
+                y_set, dy_set = _set_channels(y_all, dy_all, set_map, p, design.free_idx)
                 J = _scaled_rows(
-                    y_all @ M,
-                    jnp.einsum("tok,os->tsk", dy_all, M),
+                    y_set,
+                    dy_set,
                     dphys,
                     ss.sigma,
                     ss.mask,

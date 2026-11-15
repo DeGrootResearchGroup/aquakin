@@ -116,17 +116,30 @@ Key types:
   `aquakin.plant`) are the plant versions of the reactor tools. Observables are
   resolved by `plant/calibrate.py`'s `_resolve_observable_columns` (shared with
   `_resolve_plant_problem`), free names by `_check_free_params`. **Measured
-  channels** (`plant/measures.py`): a channel is a species, a keyword (`Q`,
-  `COD`, `TN`, `TP`, `TSS`) or a `Measure`; each observable resolves to
-  `(endpoint, W, q)` and reads `measured(C, Q, W, q) = C @ W + Q * q`, so every
-  consumer (the forward model, `_observed_channels`, the ranking) is linear in the
-  stream. Measured COD clips the composition table's negative (electron
-  acceptor) entries to 0; TSS is a model's `XTSS`/`XSS` species or the ASM1
-  `0.75 × ASM1_TSS_SPECIES`; a model with neither raises. A species named like a
-  keyword raises (use a `Measure`). `composition_table` follows a file model's
-  `extends:` chain (`_inherited_builder`, via `_aquakin_source`) to a shipped
-  table when the species match. Unknown-channel errors keep the historic
-  "Unknown observed channel" wording. The Fisher
+  channels** (`plant/measures.py`): a channel is a species, a keyword (`Q`, `T`,
+  `COD`, `TKN`, `NOx`, `TN`, `TP`, `TSS`) or a `Measure`. `measure_map(model,
+  channels)` gives a `MeasureMap` (`W`, `q`, `t`, and the composition parameters
+  the weights depend on with `theta0`/`dW`: a central-difference probe, exact for
+  the affine content fractions, linearized otherwise, e.g. ASM2d's
+  `fMeP_PO4_MW`). `_resolve_observable_columns` turns it into `(endpoint,
+  _Measurement)` with the parameters addressed in the plant flat vector, and
+  every consumer reads `measured(C, Q, T, measurement, p) = C @ W(p) + Q q + T t`
+  (`W(p)` follows the run's parameters, so a free `i_XB` is seen through TN's
+  weights as well as the state). Temperature comes from the stream's `T` scalar
+  (`StreamSeries.T`, filled by `_stream_sweep` in the same pass as `(Q, C)`); a
+  `T` channel on a stream with none raises `ValueError`. The ranking's
+  `_union_columns` observes each stream whole (species, flow, temperature when
+  any set reads it) with per-set maps `(M, idx, theta0, dM)`; `_set_channels`
+  adds `y_all @ dM` for a free composition parameter. Classification:
+  COD clips negative (electron acceptor) entries and drops `S_h2`/`S_ch4`;
+  `SN2`, `SN2O` and `SNO` when `SNO3` exists (nitric oxide) are in no nitrogen
+  channel; `S_gas_*` is in nothing. TSS is a model's `XTSS`/`XSS` species or
+  the ASM1 `0.75 × ASM1_TSS_SPECIES`; a model with neither raises. A species
+  named like a keyword raises (use a `Measure`). `composition_table` follows a
+  file model's `extends:` chain (`composition_base`, via `_aquakin_source`) to a
+  shipped table when the species match, including its unit factors (ADM1's
+  kg-based contents). Unknown-channel errors keep the historic "Unknown observed
+  channel" wording. The Fisher
   forward mode takes `S` from `Plant.solve_sensitivity` and maps it through the
   stream reconstruction (`outputs_at`, vmapped) with one `jax.linearize`, so it
   includes the reconstruction's direct `dg/dθ`; the reverse mode is `jacrev` of

@@ -1765,7 +1765,7 @@ class Plant:
         )
         return all_outputs
 
-    def _cached_streams(self, solution: PlantSolution, params_full):
+    def _stream_sweep(self, solution: PlantSolution, params_full):
         """Reconstruct **every** unit-output stream over a whole solution, once.
 
         The plant integrates unit *states*, not the inter-unit streams, so each
@@ -1775,7 +1775,9 @@ class Plant:
         so a sequence of ``plant.stream(sol, ...)`` calls (effluent, RAS,
         wastage, ...) costs one reconstruction, not one per stream.
 
-        Returns ``{(unit, port): (Q (n_t,), C (n_t, n_species))}``. Under tracing
+        Returns ``({(unit, port): (Q (n_t,), C (n_t, n_species))},
+        {(unit, port): T (n_t,)})``, the second holding only the streams that
+        carry a temperature. Under tracing
         (a differentiated/jitted solve) the parameter vector cannot be
         materialised into a cache key, so the pass runs uncached.
         """
@@ -1816,12 +1818,27 @@ class Plant:
             outs, _ = self._resolve_streams(
                 t_i, states, params_full, recycle_map=recycle_map, flow_map=flow_map
             )
-            return {k: (s.Q, s.C) for k, s in outs.items()}
+            return {
+                k: (s.Q, s.C, None if s.scalars.get("T") is None else jnp.asarray(s.scalars["T"]))
+                for k, s in outs.items()
+            }
 
-        result = jax.vmap(_one)(ts, states_flat)
+        swept = jax.vmap(_one)(ts, states_flat)
+        result = {k: (Q, C) for k, (Q, C, _) in swept.items()}
+        temperatures = {k: T for k, (_, _, T) in swept.items() if T is not None}
         if concrete:
-            cache[key] = result
-        return result
+            cache[key] = (result, temperatures)
+        return result, temperatures
+
+    def _cached_streams(self, solution: PlantSolution, params_full):
+        """Every output stream's ``(Q, C)`` trajectory (see :meth:`_stream_sweep`)."""
+        return self._stream_sweep(solution, params_full)[0]
+
+    def _cached_stream_temperatures(self, solution: PlantSolution, params_full) -> dict:
+        """The temperature trajectory ``(n_t,)`` of every output stream that
+        carries one, from the same single pass (and cache) as
+        :meth:`_cached_streams`; a stream with no temperature is absent."""
+        return self._stream_sweep(solution, params_full)[1]
 
     def stream(
         self,
@@ -1858,8 +1875,9 @@ class Plant:
         Returns
         -------
         StreamSeries
-            ``t``, ``Q``, ``C`` (shape ``(n_t, n_species)``) and ``model``,
-            with a ``C_named(species)`` accessor.
+            ``t``, ``Q``, ``C`` (shape ``(n_t, n_species)``), ``model`` and the
+            temperature ``T`` (``None`` for a stream that carries none), with a
+            ``C_named(species)`` accessor.
         """
         resolved = self.named_streams.get(endpoint)
         if resolved is None and "." not in endpoint and endpoint not in self.units:
@@ -1876,8 +1894,9 @@ class Plant:
         unit, port = self._parse_endpoint(endpoint, role="source")
         params_full = self.default_parameters() if params is None else self._coerce_params(params)
         Q, C = self._cached_streams(solution, params_full)[(unit, port)]
+        T = self._cached_stream_temperatures(solution, params_full).get((unit, port))
         org = self._reconstruct_stream_org(solution, (unit, port), params_full)
-        return StreamSeries(t=solution.t, Q=Q, C=C, model=self.units[unit].model, org=org)
+        return StreamSeries(t=solution.t, Q=Q, C=C, model=self.units[unit].model, org=org, T=T)
 
     def _reconstruct_stream_org(self, solution, key, params_full):
         """Reconstruct an output stream's indicator-organism trajectory, or

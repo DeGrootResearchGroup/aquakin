@@ -729,7 +729,7 @@ def test_stream_reconstruction_is_cached_on_the_solution(simple_net):
     eff = plant.stream(sol, "tank")
     cache = sol.__dict__["_stream_cache"]
     assert len(cache) == 1  # one params key
-    cached_map = next(iter(cache.values()))
+    cached_map, _ = next(iter(cache.values()))
     assert ("tank", "out") in cached_map  # all ports reconstructed
 
     # A second call (same params) does not rebuild -- still one key.

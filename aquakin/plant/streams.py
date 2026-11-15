@@ -267,6 +267,9 @@ class StreamSeries(_HasNamedSpecies, PlottableSolutionMixin):
     org : jnp.ndarray, optional
         Indicator-organism density trajectory, shape ``(n_t,)``, when the stream
         carries one (e.g. downstream of a disinfection unit); ``None`` otherwise.
+    T : jnp.ndarray, optional
+        Temperature trajectory, shape ``(n_t,)``, when the stream carries one
+        (it descends from an influent with a temperature); ``None`` otherwise.
     """
 
     t: jnp.ndarray
@@ -274,6 +277,7 @@ class StreamSeries(_HasNamedSpecies, PlottableSolutionMixin):
     C: jnp.ndarray
     model: CompiledModel
     org: jnp.ndarray | None = None
+    T: jnp.ndarray | None = None
 
     # C_named / C_named_many / final_named / .final come from _HasNamedSpecies
     # (shared with the reactor solutions), keyed off .C and .model.
