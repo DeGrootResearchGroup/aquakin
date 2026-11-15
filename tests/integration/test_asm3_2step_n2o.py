@@ -5,7 +5,8 @@ Checks that the AOB nitritation step is replaced by the electron-pathway
 metabolism (NH4 -> NH2OH -> NO -> NO2) with N2O production, and that the model
 reproduces Pocquet's headline trends: N2O rises with nitrite (free nitrous acid
 stimulates the ND pathway) and peaks at intermediate dissolved oxygen (the
-Haldane DO term). COD/N/charge closure is covered by test_asm_continuity.py.
+Haldane DO term, maximum 1 at sqrt(K * KI)), and that AMO is Monod in free
+ammonia. COD/N/charge closure is covered by test_asm_continuity.py.
 """
 import jax
 import jax.numpy as jnp
@@ -60,15 +61,71 @@ def test_n2o_rises_with_nitrite(net):
     assert low < mid < high
 
 
-def test_n2o_peaks_at_intermediate_do(net):
-    # The ND-pathway Haldane DO term: N2O production rises as DO falls to a
-    # maximum, then decreases toward zero DO -- so intermediate DO yields more
-    # N2O than either a high or a very low DO.
-    high_do = _final_n2o(net, DO=300.0, no2=20.0)[-1]
-    mid_do = _final_n2o(net, DO=50.0, no2=20.0)[-1]
-    low_do = _final_n2o(net, DO=8.0, no2=20.0)[-1]
-    assert mid_do > high_do
-    assert mid_do > low_do
+def _rate(net, name, conc, pH=7.5, T=293.15):
+    """One reaction rate at a single state (no integration)."""
+    cond = aquakin.SpatialConditions.uniform(T=T, pH=pH)
+    C = net.concentrations(conc)
+    r = net.rates(C, net.default_parameters(), cond.fields, 0)
+    return float(r[net.reaction_names.index(name)])
+
+
+def _param(net, name):
+    return float(net.default_parameters()[net.param_index[name]])
+
+
+_ND = "AOB_N2O_production_ND_pathway"
+_AMO = "AOB_NH3_oxidation_to_NH2OH"
+
+
+def _f_do_nd(net, DO):
+    # Recover the ND-pathway DO factor from the rate by dividing out the
+    # hydroxylamine, free-nitrous-acid and biomass factors.
+    conc = {"SO2": DO, "SNH4": 30.0, "SNO2": 20.0, "SNH2OH": 1.0, "XAOB": 100.0}
+    pH, pKa = 7.5, _param(net, "pKa_HNO2")
+    fna = 20.0 / (1.0 + 10.0 ** (pH - pKa))
+    K_fna = _param(net, "K_HNO2_AOB")
+    K_oh = _param(net, "K_NH2OH_AOB")
+    pre = (_param(net, "q_AOB_N2O_ND") * 1.0 / (1.0 + K_oh) * fna / (fna + K_fna)
+           * 100.0)
+    return _rate(net, _ND, conc, pH=pH) / pre
+
+
+def test_nd_do_term_peaks_at_one(net):
+    # Pocquet (2016) Table 3: the Haldane-type ND DO factor reaches exactly 1 at
+    # DO = sqrt(K_O2_AOB_ND * KI_O2_AOB), and is smaller on either side.
+    do_star = np.sqrt(_param(net, "K_O2_AOB_ND") * _param(net, "KI_O2_AOB"))
+    f_star = _f_do_nd(net, do_star)
+    np.testing.assert_allclose(f_star, 1.0, rtol=1e-10)
+    for DO in (0.05, 0.3, 1.0, 2.0, 8.0):
+        assert _f_do_nd(net, DO) < f_star
+
+
+def test_nd_n2o_peaks_at_intermediate_do(net):
+    # N2O production via ND rises as DO falls to the peak, then decreases
+    # toward zero DO.
+    high = _f_do_nd(net, 5.0)
+    mid = _f_do_nd(net, 0.6)
+    low = _f_do_nd(net, 0.02)
+    assert mid > high
+    assert mid > low
+
+
+def test_amo_is_monod_in_free_ammonia(net):
+    # AMO uses free ammonia (NH3), not total ammonium: at fixed total SNH4 a
+    # higher pH raises NH3 and the AMO rate, and the rate matches the
+    # free-ammonia Monod term with pKa = 6344 / T.
+    conc = {"SO2": 8.0, "SNH4": 5.0, "XAOB": 100.0}
+    T = 293.15
+    r_low = _rate(net, _AMO, conc, pH=7.0, T=T)
+    r_high = _rate(net, _AMO, conc, pH=8.0, T=T)
+    assert r_high > 2.0 * r_low
+    pKa = 6344.0 / (T * np.log(10.0))
+    for pH, r in ((7.0, r_low), (8.0, r_high)):
+        s_nh3 = 5.0 / (1.0 + 10.0 ** (pKa - pH))
+        K = _param(net, "K_NH3_AOB")
+        expected = (_param(net, "q_AOB_AMO") * 8.0 / (8.0 + _param(net, "K_O2_AOB_1"))
+                    * s_nh3 / (s_nh3 + K) * 100.0)
+        np.testing.assert_allclose(r, expected, rtol=1e-10)
 
 
 def test_free_nitrous_acid_depends_on_pH(net):
