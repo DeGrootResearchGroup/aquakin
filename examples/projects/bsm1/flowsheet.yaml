@@ -25,6 +25,8 @@ units:
       SND: 6.95
       XND: 10.59
       SALK: 7.0
+    series: null
+    series_sha256: null
   inlet_mix:
     kind: mixer
     input_port_names:

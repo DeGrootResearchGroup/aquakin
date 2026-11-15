@@ -77,6 +77,7 @@ __all__ = [
     "load_spec_file",
     "plant_from_spec",
     "plant_to_spec",
+    "spec_fingerprint",
 ]
 
 #: The spec format version this module writes and reads.
@@ -765,3 +766,84 @@ def check_spec(spec, *, base_dir=None) -> dict:
         "dangling": list(result.dangling_outputs),
         "recycles": list(result.recycles),
     }
+
+
+def spec_fingerprint(spec, *, base_dir=None) -> str:
+    """A fingerprint of the plant a spec builds, for telling when a result is stale.
+
+    The sha256 of the spec's content that determines a simulation: options,
+    every unit's kind and settings, the connections, named streams and
+    endpoints, and each model and influent table by the fingerprint of its
+    content. Layout, labels, the plant's name and where files sit are left out,
+    so moving a model file or relabelling a unit keeps the fingerprint, and
+    changing a setting, a connection, a model or an influent table changes it.
+    The aquakin version is left out too: record it beside the fingerprint.
+
+    Parameters
+    ----------
+    spec : dict or str or pathlib.Path
+        The spec, or the path of a file holding it.
+    base_dir : str or pathlib.Path, optional
+        The directory relative file paths are read from when ``spec`` is a
+        mapping whose models or tables carry no fingerprint (a file's own
+        directory otherwise).
+
+    Returns
+    -------
+    str
+        A 64-character hex digest.
+    """
+    if isinstance(spec, (str, Path)):
+        base_dir = Path(spec).parent if base_dir is None else Path(base_dir)
+        spec = load_spec_file(spec)
+    elif base_dir is not None:
+        base_dir = Path(base_dir)
+    doc = _validate(spec)
+
+    def located(source: str) -> Path:
+        path = Path(source)
+        if not path.is_absolute():
+            if base_dir is None:
+                raise SpecError(f"cannot read {source!r} without base_dir=")
+            path = base_dir / path
+        return path
+
+    models = {}
+    for name, ref in doc.models.items():
+        if ref.sha256 is not None:
+            models[name] = ref.sha256
+        elif ref.source == "shipped":
+            models[name] = _shipped_fingerprint(name)
+        else:
+            models[name] = _file_fingerprint(located(ref.source))
+    from aquakin.plant.catalog import unit_kind
+
+    units = {}
+    for uid, entry in doc.units.items():
+        # A setting left out takes its default, so a minimal spec and the same
+        # spec written in full fingerprint alike.
+        try:
+            defaults = unit_kind(entry.kind).defaults()
+        except KeyError as exc:
+            raise SpecError(f"units.{uid}: {exc.args[0]}") from None
+        settings = {**defaults, **(entry.model_extra or {})}
+        if settings.get("series") is not None:
+            digest = settings.get("series_sha256") or _file_digest(located(settings["series"]))
+            settings = {**settings, "series": None, "series_sha256": digest}
+        units[uid] = {"kind": entry.kind, **settings}
+    connections = [
+        c if isinstance(c, str) else c.model_dump(by_alias=True, exclude_none=True)
+        for c in doc.connections
+    ]
+    content = {
+        "format": SPEC_FORMAT,
+        "options": doc.options.model_dump(),
+        "models": models,
+        "units": units,
+        "connections": connections,
+        "streams": doc.streams,
+        "influent_endpoint": doc.influent_endpoint,
+        "effluent_endpoint": doc.effluent_endpoint,
+    }
+    canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()

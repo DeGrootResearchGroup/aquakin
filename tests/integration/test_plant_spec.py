@@ -357,3 +357,42 @@ def test_an_influent_table_reads_back_exactly(tmp_path):
     (tmp_path / "bad.csv").write_text("t,Q,XX\n0,1,2\n1,1,2\n")
     with pytest.raises(ValueError, match=r"column\(s\) \['XX'\] are not species"):
         read_influent_table(tmp_path / "bad.csv", _asm1())
+
+
+def test_the_fingerprint_follows_what_the_plant_is_not_how_it_is_drawn(tmp_path):
+    from aquakin.plant.spec import spec_fingerprint
+
+    shutil.copytree(BSM2_PROJECT, tmp_path / "bsm2")
+    path = tmp_path / "bsm2" / "flowsheet.yaml"
+    base = spec_fingerprint(path)
+    spec = load_spec_file(path)
+    same = dict(spec, name="renamed", layout={"tank1": [0, 0]})
+    same["units"] = {**spec["units"], "tank1": {**spec["units"]["tank1"], "label": "Zone 1"}}
+    assert spec_fingerprint(same, base_dir=path.parent) == base
+    # A model file moved elsewhere with the same content keeps it too.
+    moved = tmp_path / "elsewhere" / "asm1_bsm2.yaml"
+    moved.parent.mkdir()
+    shutil.copy(tmp_path / "bsm2" / "models" / "asm1_bsm2.yaml", moved)
+    relocated = dict(spec, models={**spec["models"], "asm1_bsm2": {"source": str(moved)}})
+    assert spec_fingerprint(relocated) == base
+    # Changing what is simulated changes it.
+    tank = {**spec["units"]["tank1"], "volume": 1600.0}
+    assert (
+        spec_fingerprint(dict(spec, units={**spec["units"], "tank1": tank}), base_dir=path.parent)
+        != base
+    )
+    assert (
+        spec_fingerprint(dict(spec, connections=spec["connections"][:-1]), base_dir=path.parent)
+        != base
+    )
+    model = tmp_path / "bsm2" / "models" / "asm1_bsm2.yaml"
+    model.write_text(model.read_text().replace("muH: {value: 4.0", "muH: {value: 4.5"))
+    unpinned = dict(
+        spec, models={**spec["models"], "asm1_bsm2": {"source": "models/asm1_bsm2.yaml"}}
+    )
+    assert spec_fingerprint(unpinned, base_dir=path.parent) != base
+    # A plant written again from its rebuilt self has the same fingerprint.
+    rebuilt = Plant.from_spec(BSM2_PROJECT / "flowsheet.yaml").to_spec(tmp_path / "again.yaml")
+    assert spec_fingerprint(rebuilt, base_dir=tmp_path) == spec_fingerprint(
+        BSM2_PROJECT / "flowsheet.yaml"
+    )

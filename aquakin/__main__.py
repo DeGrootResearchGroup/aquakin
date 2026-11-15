@@ -13,7 +13,8 @@ and conditions), ``check_unit`` (``kind``, ``name``, ``settings``, optional
 ``model_files`` and ``base_dir``: build a unit and report its real ports or
 the constructor's error) and ``check_spec`` (``spec``, optional ``base_dir`` for model file
 paths: build the whole plant from a flowsheet spec and report
-``Plant.check``). A failed request is answered
+``Plant.check``) and ``fingerprint`` (``spec``, optional ``base_dir``: the
+spec's :func:`~aquakin.plant.spec.spec_fingerprint`). A failed request is answered
 ``{"id": ..., "ok": false, "error": message}`` and the worker keeps serving.
 Standard output carries replies only; anything else goes to standard error.
 """
@@ -29,7 +30,7 @@ import sys
 def _handlers():
     from aquakin import __version__
     from aquakin.plant import catalog as cat
-    from aquakin.plant.spec import check_spec
+    from aquakin.plant.spec import check_spec, spec_fingerprint
 
     return {
         "ping": lambda req: {"version": __version__},
@@ -37,6 +38,7 @@ def _handlers():
         "models": lambda req: cat.shipped_models(),
         "model": lambda req: cat.model_info(req["name"], req.get("path")),
         "check_spec": lambda req: check_spec(req["spec"], base_dir=req.get("base_dir")),
+        "fingerprint": lambda req: spec_fingerprint(req["spec"], base_dir=req.get("base_dir")),
         "check_unit": lambda req: cat.check_unit(
             req["kind"],
             req.get("name", "unit"),

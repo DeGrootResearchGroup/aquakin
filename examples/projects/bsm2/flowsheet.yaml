@@ -28,6 +28,8 @@ units:
       SND: 5.6516
       XND: 16.1298
       SALK: 7.0
+    series: null
+    series_sha256: null
   front_mix:
     kind: mixer
     input_port_names:
