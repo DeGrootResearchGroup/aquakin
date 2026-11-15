@@ -493,16 +493,13 @@ def plant_from_spec(cls, spec, *, base_dir=None):
 class _ModelRefs:
     """Names each model object of a plant and records how it is sourced.
 
-    A model is written as shipped when it is the very object
-    ``load_model(name)`` returns, and as a file when its name is one of the
-    given model files (a plant read by ``from_spec`` remembers its own).
-    Anything else is refused, since naming it would build a different plant.
+    A model is written as a file when its name is one of the given model files
+    or it was read from one (``load_model_from_file`` records the path), and as
+    shipped when ``load_model`` loaded it by name. Anything else (a modified
+    copy) is refused, since naming it would build a different plant.
     """
 
     def __init__(self, model_files: dict, base_dir: Path | None):
-        from aquakin.schema.loader import load_model
-
-        self._load_model = load_model
         self._files = {name: Path(p) for name, p in model_files.items()}
         self._base_dir = base_dir
         self.used: dict[str, dict] = {}
@@ -511,20 +508,22 @@ class _ModelRefs:
         name = model.name
         if name in self.used:
             return name
-        try:
-            shipped = self._load_model(name)
-        except Exception:
-            shipped = None
+        source = getattr(model, "_aquakin_source", None)
         if name in self._files:
             path = self._files[name]
+        elif source is not None and source[0] == "file":
+            path = Path(source[1])
+        else:
+            path = None
+        if path is not None:
             self.used[name] = {"source": self._relative(path), "sha256": _file_fingerprint(path)}
-        elif shipped is model:
+        elif source == ("shipped", name):
             self.used[name] = {"source": "shipped", "sha256": _shipped_fingerprint(name)}
         else:
             raise SpecError(
                 f"model '{name}' is neither a shipped model as aquakin.load_model('{name}') "
-                f"returns it nor a model file; pass "
-                f"Plant.to_spec(models={{'{name}': 'path/to/{name}.yaml'}})"
+                f"returns it nor read from a model file (a modified copy, say); write it as a "
+                f"model file and pass Plant.to_spec(models={{'{name}': 'path/to/{name}.yaml'}})"
             )
         return name
 

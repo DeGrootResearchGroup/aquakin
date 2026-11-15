@@ -846,17 +846,16 @@ def build_unit(kind: str, name: str, settings: dict, *, models: dict | None = No
 
 
 def _model_name(model) -> str:
-    """The shipped name of ``model``, which must be that model as loaded by name."""
-    from aquakin.schema.loader import load_model
+    """The shipped name of ``model``, which must be a shipped model as loaded by name.
 
-    try:
-        shipped = load_model(model.name)
-    except Exception:
-        shipped = None
-    if shipped is not model:
+    Recognised by the provenance ``load_model`` records on the model, so a
+    modified copy (``dataclasses.replace``) or a model from a file is refused
+    rather than written under a shipped name it does not match.
+    """
+    if getattr(model, "_aquakin_source", None) != ("shipped", model.name):
         raise ValueError(
             f"model '{model.name}' is not a shipped model as aquakin.load_model('{model.name}') "
-            f"returns it (a model from a file, or with overrides), so it cannot be named in a spec"
+            f"returns it (a model from a file, or modified), so it cannot be named in a spec"
         )
     return model.name
 

@@ -691,24 +691,38 @@ only (stdout is redirected to stderr while a handler runs), and a failed request
 gets `{"ok": false, "error": ...}` without stopping the worker.
 
 **Flowsheet spec (`plant/spec.py`, `Plant.to_spec` / `Plant.from_spec`).** A
-plant as plain data, built on the catalogue: units are `{kind, ...non-default
-settings}` read back by `catalog.unit_settings` (unit attributes must mirror the
-constructor arguments for this to work), connections `"unit.port -> unit.port"`
-or `{from, to, translator: {kind, ...}, seed: {Q, T, concentrations}}`. A seed
-is written in the **destination** unit's model (it stands for the stream
-arriving after any translator). A `kind: influent` unit is a constant
-`InfluentSeries`, wired with `add_influent`. Controllers derived from a
-closed-loop `Aeration` / feedback `DosingUnit` are recorded in
-`plant._derived_units` by `_materialize_aeration` / `_materialize_dosing` and
-left out (with their measurement taps), since they are derived again. A model
-must be the very object `load_model(name)` returns (`catalog._model_name`), so a
-modified model such as `bsm2_asm1_model()` is refused rather than silently
-renamed; that is why BSM2 cannot be written yet. Every refusal is a `SpecError`
-naming the unit / connection. `check_spec(spec)` builds the plant and returns
-`Plant.check` (the `aquakin serve` `check_spec` command). Pinned by
+plant as a file (format 2), built on the catalogue. Units are keyed by their
+stable name (the plant's unit name; `Plant.labels` holds optional display text)
+and written with **every** setting (`catalog.unit_settings(full=True)`; unit
+attributes must mirror the constructor arguments for this to work) plus the
+aquakin version, so a later change of default cannot change a saved plant.
+Connections are `"unit.port -> unit.port"` or `{from, to, translator: {kind,
+...}, seed: {Q, T, concentrations}}`; a seed is written in the **destination**
+unit's model (it stands for the stream arriving after any translator). A `kind:
+influent` unit is a constant `InfluentSeries`, wired with `add_influent`. Every
+model is listed under `models:` as `shipped` or a YAML file path relative to the
+spec, with a sha256 of its content (`extends` resolved; a mismatch on read is a
+`SpecWarning`). A model is recognised by the provenance `load_model` /
+`load_model_from_file` record on it (`_aquakin_source`, a plain attribute, so a
+`dataclasses.replace` copy such as `bsm2_asm1_model()` does not carry it and is
+refused rather than written under the shipped name); this survives
+`clear_model_cache`. Reading validates the document with Pydantic and each
+unit's settings strictly with `catalog.validate_settings` (unknown keys with a
+did-you-mean, exact types), and reads YAML with YAML 1.2 scalars
+(`_Yaml12Loader`). Controllers derived from a closed-loop `Aeration` / feedback
+`DosingUnit` are recorded in `plant._derived_units` by `_materialize_aeration` /
+`_materialize_dosing` and left out (with their measurement taps), since they are
+derived again. Every refusal is a `SpecError` naming the unit / connection.
+`check_spec(spec, base_dir=)` builds the plant and returns `Plant.check` (the
+`aquakin serve` `check_spec` command). `Plant.add_unit` / `add_influent` refuse
+names with `.`, `->` or whitespace and a unit named after one of the plant's
+models (`_check_unit_name`; such a name made `parameter_index("asm1.muH")` return
+a flow setpoint), and `_plant_param_index` raises on any duplicate key. Pinned by
 `tests/integration/test_plant_spec.py`: BSM1 (ideal and Takács) and a two-model
 plant (translators, temperature seed, reagent, influent T) rebuild with an
-identical spec, initial state and bit-identical RHS.
+identical spec, initial state and bit-identical RHS, and the
+`examples/projects/bsm2` project (its 15 °C ASM1 a model file extending `asm1`)
+rebuilds `build_bsm2`'s plant run with the BSM2 parameters bit-identically.
 
 **Shared separator/clarifier helpers.** The separator/clarifier family resolves
 its settling / particulate / TSS species lists through the shared

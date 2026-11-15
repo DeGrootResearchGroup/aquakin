@@ -32,8 +32,17 @@ from aquakin.plant.bsm.bsm2 import BSM2_ASM1_PARAMETERS, BSM2_CONSTANT_INFLUENT_
 from aquakin.plant.spec import SpecError, SpecWarning, load_spec_file
 from aquakin.plant.streams import Stream
 
-ASM1 = aquakin.load_model("asm1")
-ADM1 = aquakin.load_model("adm1")
+
+def _asm1():
+    # Loaded per use, not held at module level: other tests clear the model
+    # cache, after which a held model is a different object from a fresh load.
+    return aquakin.load_model("asm1")
+
+
+def _adm1():
+    return aquakin.load_model("adm1")
+
+
 BSM2_PROJECT = Path(__file__).parents[2] / "examples" / "projects" / "bsm2"
 FEED = dict(
     SI=30.0, SS=69.5, XI=51.2, XS=202.32, XB_H=28.17, SNH=31.56, SND=6.95, XND=10.59, SALK=7.0
@@ -43,7 +52,7 @@ FEED = dict(
 def _bsm1(**kw):
     plant = build_bsm1(**kw)
     plant.add_influent(
-        "feed", InfluentSeries.constant(ASM1, Q=18446.0, **FEED), to=plant.influent_endpoint
+        "feed", InfluentSeries.constant(_asm1(), Q=18446.0, **FEED), to=plant.influent_endpoint
     )
     return plant
 
@@ -52,32 +61,35 @@ def _two_model_plant():
     """A small ASM1 line with a dosed reagent, an ADM1 digester behind two
     translators, and a temperature-carrying seed on the reject recycle."""
     p = Plant("two-model")
-    p.add_unit(MixerUnit("mix", ["fresh", "reject"], ASM1))
+    p.add_unit(MixerUnit("mix", ["fresh", "reject"], _asm1()))
     p.add_unit(
-        DosingUnit("carbon", Reagent.from_species(ASM1, SS=400000.0, label="carbon"), flow=2.0)
+        DosingUnit("carbon", Reagent.from_species(_asm1(), SS=400000.0, label="carbon"), flow=2.0)
     )
     p.add_unit(
         CSTRUnit(
-            "tank", ASM1, 1000.0, ["in"], conditions={"T": 293.15}, aeration=Aeration(kla=120.0)
+            "tank", _asm1(), 1000.0, ["in"], conditions={"T": 293.15}, aeration=Aeration(kla=120.0)
         )
     )
-    p.add_unit(RatioSplitter("split", ASM1, {"to_digester": 0.02, "effluent": 0.98}))
-    p.add_unit(ADM1DigesterUnit("digester", ADM1, 3400.0, conditions={"T": 308.15}))
+    p.add_unit(RatioSplitter("split", _asm1(), {"to_digester": 0.02, "effluent": 0.98}))
+    p.add_unit(ADM1DigesterUnit("digester", _adm1(), 3400.0, conditions={"T": 308.15}))
     p.add_influent(
-        "feed", InfluentSeries.constant(ASM1, Q=18446.0, T=288.15, **FEED), to="mix.fresh"
+        "feed", InfluentSeries.constant(_asm1(), Q=18446.0, T=288.15, **FEED), to="mix.fresh"
     )
     p.connect("mix", "carbon.in")
     p.connect("carbon.out", "tank")
     p.connect("tank", "split")
-    p.connect("split.to_digester", "digester", translator=ASM1toADM1(ASM1, ADM1))
+    p.connect("split.to_digester", "digester", translator=ASM1toADM1(_asm1(), _adm1()))
     seed = Stream(
         Q=np.float64(0.0),
-        C=ASM1.default_concentrations(),
-        model=ASM1,
+        C=_asm1().default_concentrations(),
+        model=_asm1(),
         scalars={"T": np.float64(308.15)},
     )
     p.connect(
-        "digester", "mix.reject", translator=ADM1toASM1(ADM1, ASM1, pH_adm=7.2), initial_value=seed
+        "digester",
+        "mix.reject",
+        translator=ADM1toASM1(_adm1(), _asm1(), pH_adm=7.2),
+        initial_value=seed,
     )
     p.register_stream("effluent", "split.effluent")
     return p
@@ -152,8 +164,10 @@ def test_labels_are_display_text_beside_stable_names():
 def test_derived_controllers_are_not_written():
     p = Plant("closed-loop")
     aeration = Aeration(do_setpoint=2.0)
-    p.add_unit(CSTRUnit("tank", ASM1, 1333.0, ["in"], conditions={"T": 293.15}, aeration=aeration))
-    p.add_influent("feed", InfluentSeries.constant(ASM1, Q=18446.0, **FEED), to="tank.in")
+    p.add_unit(
+        CSTRUnit("tank", _asm1(), 1333.0, ["in"], conditions={"T": 293.15}, aeration=aeration)
+    )
+    p.add_influent("feed", InfluentSeries.constant(_asm1(), Q=18446.0, **FEED), to="tank.in")
     y = p.initial_state()  # building the layout derives the DO controller
     assert p._derived_units == {"tank_aeration"}
     spec = p.to_spec()
@@ -202,12 +216,14 @@ def test_what_a_spec_cannot_express_is_refused_by_name():
     with pytest.raises(SpecError, match="model 'asm1' is neither a shipped model"):
         build_bsm2().to_spec()
     p = build_bsm1()
-    p.add_influent("feed", load_bsm1_influent("dry", ASM1), to=p.influent_endpoint)
+    p.add_influent("feed", load_bsm1_influent("dry", _asm1()), to=p.influent_endpoint)
     with pytest.raises(SpecError, match="influent 'feed' varies in time"):
         p.to_spec()
     p = Plant("delay")
     p.add_unit(
-        HydraulicDelayUnit("d", ASM1, 0.1, initial_concentrations=ASM1.default_concentrations())
+        HydraulicDelayUnit(
+            "d", _asm1(), 0.1, initial_concentrations=_asm1().default_concentrations()
+        )
     )
     with pytest.raises(SpecError, match="'initial_concentrations'"):
         p.to_spec()
@@ -264,11 +280,28 @@ def test_unit_names_the_plant_cannot_address_are_refused():
     from aquakin.plant import SetpointSplitter, WiringError
 
     for unit in (
-        SetpointSplitter("asm1", ASM1, {"muH": 1.0}, "rest"),  # would shadow asm1.muH
-        CSTRUnit("tank.1", ASM1, 1.0, ["in"], conditions={"T": 293.15}),
-        CSTRUnit("tank", ASM1, 1.0, ["in put"], conditions={"T": 293.15}),
+        SetpointSplitter("asm1", _asm1(), {"muH": 1.0}, "rest"),  # would shadow asm1.muH
+        CSTRUnit("tank.1", _asm1(), 1.0, ["in"], conditions={"T": 293.15}),
+        CSTRUnit("tank", _asm1(), 1.0, ["in put"], conditions={"T": 293.15}),
     ):
         with pytest.raises(WiringError):
             Plant("x").add_unit(unit)
     with pytest.raises(WiringError):
-        Plant("x").add_influent("feed.1", InfluentSeries.constant(ASM1, Q=1.0))
+        Plant("x").add_influent("feed.1", InfluentSeries.constant(_asm1(), Q=1.0))
+
+
+def test_a_plant_built_before_the_model_cache_was_cleared_can_still_be_written():
+    p = _bsm1()
+    aquakin.clear_model_cache()
+    _assert_same_plant(p, Plant.from_spec(p.to_spec()))
+
+
+def test_a_modified_model_is_refused_and_a_model_file_is_found_by_itself(tmp_path):
+    with pytest.raises(SpecError, match="neither a shipped model"):
+        p = build_bsm2(asm1_model=bsm2_asm1_model())  # dataclasses.replace of ASM1
+        p.to_spec()
+    m15 = aquakin.load_model_from_file(BSM2_PROJECT / "models" / "asm1_bsm2.yaml")
+    p = build_bsm2(asm1_model=m15)
+    spec = p.to_spec(tmp_path / "flowsheet.yaml")  # no models= needed: the file is recorded
+    assert spec["models"]["asm1_bsm2"]["source"].endswith("models/asm1_bsm2.yaml")
+    assert Plant.from_spec(tmp_path / "flowsheet.yaml").to_spec() == Plant.from_spec(spec).to_spec()

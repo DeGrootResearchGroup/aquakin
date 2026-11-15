@@ -179,6 +179,10 @@ def load_model(name: str, *, activity_model: str | None = None) -> CompiledModel
         spec = _apply_activity_override(spec, activity_model)
         return compile_model(spec)
     net = compile_model(spec)
+    # Where the model came from, for writing it into a flowsheet spec. A plain
+    # attribute rather than a field, so a modified copy (dataclasses.replace)
+    # does not carry it and is not mistaken for the shipped model.
+    net._aquakin_source = ("shipped", name)
     _MODEL_CACHE[name] = net
     return net
 
@@ -205,4 +209,7 @@ def load_model_from_file(path: str | Path, *, activity_model: str | None = None)
     spec = _yaml_to_spec(text, str(p), base_dir=p.parent)
     if activity_model is not None:
         spec = _apply_activity_override(spec, activity_model)
-    return compile_model(spec)
+        return compile_model(spec)
+    net = compile_model(spec)
+    net._aquakin_source = ("file", str(p.resolve()))  # see load_model
+    return net
