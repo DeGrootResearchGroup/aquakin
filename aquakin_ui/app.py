@@ -85,40 +85,57 @@ class Editor:
                 self._model_info[key] = None
         return self._model_info[key]
 
-    def _check_unit(self, uid: str) -> str | None:
+    def _unit_check(self, uid: str):
+        """``(key, request)`` for checking unit ``uid``, read from the document now;
+        ``request`` is ``None`` when the latest check of the same input stands."""
         u = self.doc.units[uid]
         key = json.dumps([u.kind, u.settings, self.doc.model_files()], sort_keys=True)
         if self._unit_checks.get(uid, (None,))[0] == key:
-            return self._unit_checks[uid][1]
+            return key, None
+        request = dict(
+            kind=u.kind,
+            name=uid,
+            settings=json.loads(json.dumps(u.settings)),
+            model_files=self.doc.model_files(),
+            base_dir=str(self.doc.base_dir) if self.doc.base_dir else None,
+        )
+        return key, (request, self.doc.ports(uid))
+
+    def _ask_unit(self, request, ports) -> str | None:
+        """Run one unit check in the worker (safe off the page's thread: it
+        reads only its arguments)."""
         try:
-            out = self.worker.request(
-                "check_unit",
-                kind=u.kind,
-                name=uid,
-                settings=u.settings,
-                model_files=self.doc.model_files(),
-                base_dir=str(self.doc.base_dir) if self.doc.base_dir else None,
-            )
-            error = None if out["ok"] else out["error"]
-            if out["ok"] and (out["inputs"], out["outputs"]) != self.doc.ports(uid):
-                error = (
-                    f"aquakin built ports {out['inputs']} -> {out['outputs']}, not the drawn ones"
-                )
+            out = self.worker.request("check_unit", **request)
         except WorkerError as exc:
-            error = str(exc)
-        self._unit_checks[uid] = (key, error)
-        return error
+            return str(exc)
+        if not out["ok"]:
+            return out["error"]
+        if (out["inputs"], out["outputs"]) != ports:
+            return f"aquakin built ports {out['inputs']} -> {out['outputs']}, not the drawn ones"
+        return None
+
+    def _check_unit(self, uid: str) -> str | None:
+        key, pending = self._unit_check(uid)
+        if pending is not None:
+            self._unit_checks[uid] = (key, self._ask_unit(*pending))
+        return self._unit_checks[uid][1]
+
+    def _plant_request(self):
+        """``(key, spec, base_dir)`` for checking the whole plant, read now."""
+        spec = self.doc.to_spec(layout=False)
+        base = str(self.doc.base_dir) if self.doc.base_dir else None
+        return json.dumps([spec, base], sort_keys=True), spec, base
+
+    def _ask_plant(self, spec, base) -> dict:
+        try:
+            return self.worker.request("check_spec", spec=spec, base_dir=base)
+        except WorkerError as exc:
+            return {"ok": False, "error": str(exc)}
 
     def _check_plant(self) -> dict | None:
-        spec = self.doc.to_spec(layout=False)
-        key = json.dumps(spec, sort_keys=True)
+        key, spec, base = self._plant_request()
         if self._plant_check[0] != key:
-            base = str(self.doc.base_dir) if self.doc.base_dir else None
-            try:
-                result = self.worker.request("check_spec", spec=spec, base_dir=base)
-            except WorkerError as exc:
-                result = {"ok": False, "error": str(exc)}
-            self._plant_check = (key, result)
+            self._plant_check = (key, self._ask_plant(spec, base))
         return self._plant_check[1]
 
     def unit_errors(self) -> dict[str, str]:
@@ -139,11 +156,21 @@ class Editor:
     async def _run_checks(self) -> None:
         await asyncio.sleep(CHECK_DELAY)
         loop = asyncio.get_running_loop()
+        # The document is read here, on the page's thread; only the worker's
+        # answers are awaited in the executor, so an edit made meanwhile cannot
+        # be half-read. An edit also cancels this task and schedules a new one.
         for uid in list(self.doc.units):
-            if uid in self.doc.units:
-                await loop.run_in_executor(None, self._check_unit, uid)
+            if uid not in self.doc.units:
+                continue
+            key, pending = self._unit_check(uid)
+            if pending is not None:
+                error = await loop.run_in_executor(None, self._ask_unit, *pending)
+                self._unit_checks[uid] = (key, error)
         if not self.unit_errors():
-            await loop.run_in_executor(None, self._check_plant)
+            key, spec, base = self._plant_request()
+            if self._plant_check[0] != key:
+                result = await loop.run_in_executor(None, self._ask_plant, spec, base)
+                self._plant_check = (key, result)
         with self.state:
             self.state.checking = False
             self.state.checked = True
@@ -340,10 +367,10 @@ class Editor:
     # -- files --------------------------------------------------------------
 
     def open(self, path=None, *, quiet: bool = False) -> None:
-        path = Path(path or self.state.spec_path)
+        path = Path(path or self.state.spec_path).resolve()
         try:
-            data = yaml.safe_load(path.read_text())
-            self.doc = Flowsheet.from_spec(self.catalog, data, base_dir=path.parent.resolve())
+            data = self.worker.request("read_spec", path=str(path))
+            self.doc = Flowsheet.from_spec(self.catalog, data, base_dir=path.parent)
         except Exception as exc:
             self.say(f"could not open {path}: {type(exc).__name__}: {exc}")
             return
@@ -357,12 +384,22 @@ class Editor:
             self.say(f"opened {path}", error=False)
 
     def save(self) -> None:
-        path = Path(self.state.spec_path)
+        """Save through aquakin's own spec writer: settings filled in, the aquakin
+        version and file hashes recorded, outside model and influent files copied
+        into the project, and the file replaced atomically."""
+        path = Path(self.state.spec_path).resolve()
+        base = str(self.doc.base_dir) if self.doc.base_dir else str(path.parent)
         try:
-            path.write_text(yaml.safe_dump(self.doc.to_spec(), sort_keys=False, allow_unicode=True))
-        except OSError as exc:
-            self.say(f"could not save {path}: {exc}")
+            written = self.worker.request(
+                "write_spec", spec=self.doc.to_spec(), path=str(path), base_dir=base
+            )
+            # Copied files are now referenced inside the project.
+            self.doc = Flowsheet.from_spec(self.catalog, written, base_dir=path.parent)
+        except Exception as exc:
+            self.say(f"could not save {path}: {type(exc).__name__}: {exc}")
             return
+        self._plant_check = (None, None)
+        self.publish()
         self.say(f"saved {path}", error=False)
 
     # -- the page -----------------------------------------------------------

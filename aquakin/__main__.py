@@ -11,10 +11,14 @@ Commands: ``ping``, ``catalog``, ``models`` (the shipped kinetic models),
 ``model`` (``name``, optional ``path`` of a model file: one model's species
 and conditions), ``check_unit`` (``kind``, ``name``, ``settings``, optional
 ``model_files`` and ``base_dir``: build a unit and report its real ports or
-the constructor's error) and ``check_spec`` (``spec``, optional ``base_dir`` for model file
-paths: build the whole plant from a flowsheet spec and report
-``Plant.check``) and ``fingerprint`` (``spec``, optional ``base_dir``: the
-spec's :func:`~aquakin.plant.spec.spec_fingerprint`). A failed request is answered
+the constructor's error), ``check_spec`` (``spec``, optional ``base_dir`` for
+model file paths: build the whole plant from a flowsheet spec and report
+``Plant.check``), ``fingerprint`` (``spec``, optional ``base_dir``: the spec's
+:func:`~aquakin.plant.spec.spec_fingerprint`), ``read_spec`` (``path``: a spec
+file read as YAML 1.2, see :func:`~aquakin.plant.spec.load_spec_file`) and
+``write_spec`` (``spec``, ``path``, optional ``base_dir``: write it with
+:func:`~aquakin.plant.spec.write_spec`, returning what was written).
+A failed request is answered
 ``{"id": ..., "ok": false, "error": message}`` and the worker keeps serving.
 Standard output carries replies only; anything else goes to standard error.
 """
@@ -31,7 +35,7 @@ import sys
 def _handlers():
     from aquakin import __version__
     from aquakin.plant import catalog as cat
-    from aquakin.plant.spec import check_spec, spec_fingerprint
+    from aquakin.plant.spec import check_spec, load_spec_file, spec_fingerprint, write_spec
 
     return {
         "ping": lambda req: {"version": __version__},
@@ -39,6 +43,10 @@ def _handlers():
         "models": lambda req: cat.shipped_models(),
         "model": lambda req: cat.model_info(req["name"], req.get("path")),
         "check_spec": lambda req: check_spec(req["spec"], base_dir=req.get("base_dir")),
+        "read_spec": lambda req: load_spec_file(req["path"]),
+        "write_spec": lambda req: write_spec(
+            req["spec"], req["path"], base_dir=req.get("base_dir")
+        ),
         "fingerprint": lambda req: spec_fingerprint(req["spec"], base_dir=req.get("base_dir")),
         "check_unit": lambda req: cat.check_unit(
             req["kind"],

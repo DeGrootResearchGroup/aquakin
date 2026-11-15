@@ -64,3 +64,34 @@ def test_removing_a_connected_port_asks_first(editor):
     editor.confirm_apply()
     assert not editor.state.confirm_open and len(editor.doc.connections) == len(before) - 1
     assert editor.doc.ports("inlet_mix")[0] == ["fresh", "ras"]
+
+
+def test_save_writes_through_aquakin_and_open_reads_it_back(tmp_path):
+    """Save goes through aquakin's spec writer (an outside model file is copied
+    into the project, the aquakin version recorded) and Open reads YAML 1.2."""
+    import shutil
+
+    project = tmp_path / "bsm2"
+    shutil.copytree(PROJECTS / "bsm2", project)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (project / "models" / "asm1_bsm2.yaml").rename(outside / "asm1_bsm2.yaml")
+    spec = (project / "flowsheet.yaml").read_text()
+    (project / "flowsheet.yaml").write_text(
+        spec.replace("models/asm1_bsm2.yaml", str(outside / "asm1_bsm2.yaml"))
+    )
+    server = get_server(name="aquakin-ui-save-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        n_units = len(ed.doc.units)
+        ed.save()
+        assert (project / "models" / "asm1_bsm2.yaml").read_text() == (
+            outside / "asm1_bsm2.yaml"
+        ).read_text()
+        text = (project / "flowsheet.yaml").read_text()
+        assert "models/asm1_bsm2.yaml" in text and "aquakin:" in text
+        assert str(outside) not in text
+        ed.open(project / "flowsheet.yaml")
+        assert len(ed.doc.units) == n_units
+    finally:
+        ed.worker.stop()

@@ -738,16 +738,9 @@ def validate_settings(kind: UnitKind, settings: dict) -> None:
             _check_map(name, value, _is_number, "a name")
             ok = True
         elif t == "aeration":
-            fields = {f.name for f in dataclasses.fields(Aeration)}
-            if not isinstance(value, dict):
-                ok = False
-            else:
-                for k in value:
-                    if k not in fields:
-                        raise ValueError(
-                            f"'{name}.{k}' is not an Aeration setting.{did_you_mean(str(k), sorted(fields))}"
-                        )
-                ok = True
+            ok = isinstance(value, dict)
+            if ok:
+                _check_aeration(name, value)
         elif t == "reagent":
             ok = (
                 isinstance(value, dict)
@@ -762,6 +755,32 @@ def validate_settings(kind: UnitKind, settings: dict) -> None:
             raise ValueError(f"'{name}' ({s.python_type}) can only be set from Python for now")
         if not ok:
             raise ValueError(f"'{name}' must be {SETTING_TYPES[t].split(' (')[0]}, got {value!r}")
+
+
+def _check_aeration(name: str, value: dict) -> None:
+    """Check an aeration mapping's keys and value types against :class:`Aeration`."""
+    from aquakin.core.hints import did_you_mean
+
+    fields = {f.name: str(f.type) for f in dataclasses.fields(Aeration)}
+    for k, v in value.items():
+        if k not in fields:
+            hint = did_you_mean(str(k), sorted(fields))
+            raise ValueError(f"'{name}.{k}' is not an Aeration setting.{hint}")
+        annotation = fields[k]
+        if v is None:
+            if "None" not in annotation:
+                raise ValueError(f"'{name}.{k}' cannot be empty")
+            continue
+        if "bool" in annotation:
+            ok, what = isinstance(v, bool), "true or false"
+        elif "float" in annotation or "int" in annotation:
+            ok, what = _is_number(v), "a number"
+        elif "str" in annotation:
+            ok, what = isinstance(v, str), "text"
+        else:  # pragma: no cover - every Aeration field is one of the above
+            ok, what = True, ""
+        if not ok:
+            raise ValueError(f"'{name}.{k}' must be {what}, got {v!r}")
 
 
 def _arguments(kind: UnitKind, settings: dict, models: dict | None = None) -> dict:

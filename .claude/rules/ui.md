@@ -26,7 +26,7 @@ import aquakin (to build expected values).
 
 | module | holds | notes |
 |---|---|---|
-| `worker.py` | `AquakinWorker`, `WorkerError` | one process, requests serialized by a lock, replies read on a daemon thread; a fresh worker's first reply gets `START_TIMEOUT` extra (importing JAX); reply ids checked; stderr to a log file quoted in errors |
+| `worker.py` | `AquakinWorker`, `WorkerError` | one process, requests serialized by a lock, replies read on a daemon thread; a fresh worker's first reply gets `START_TIMEOUT` extra (importing JAX); reply ids checked; stderr to a per-worker log file (`mkstemp`, removed on `stop`) quoted in errors |
 | `catalog.py` | `Catalog` | the worker's catalogue reply; `ports_for` reads the catalogue's port rules (no round trip) |
 | `document.py` | `Flowsheet`, `Unit`, `edge_id` | **pure**: units keyed by stable id (the plant's unit name), labels as display text; `from_spec`/`to_spec` (format 2), `connect` (refuses with a reason), `dropped_by` (previews the connections new settings would remove) and `apply`, `remove` (also drops streams/endpoints naming the unit), `port_status`, `back_edges` (aquakin's recycles when known, else a DFS), `lanes`, `auto_layout` (wraps into bands of 7 ranks) |
 | `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. Lists no setting or type of its own |
@@ -57,7 +57,16 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
 - **aquakin's checks run in the background** (`Editor.schedule_checks`, after
   `CHECK_DELAY` of quiet, worker calls in an executor), each unit and the plant
   cached by its spec, so the canvas never waits; `checking` shows meanwhile and
-  "None" is claimed only after a check finished. A move only republishes.
+  "None" is claimed only after a check finished. A move only republishes. The
+  document is read on the loop thread (`_unit_check`, `_plant_request`
+  snapshot each request); only the worker call (`_ask_unit`, `_ask_plant`) runs
+  in the executor, so an edit made during a check cannot be half-read.
+- **Open and Save go through aquakin** (`read_spec` and `write_spec` worker
+  commands): Open reads YAML 1.2 like `Plant.from_spec`; Save is
+  `aquakin.plant.spec.write_spec` (settings filled in, version and hashes
+  recorded, outside model and table files copied into `models/` and `data/`,
+  atomic replace), and the document is reloaded from what was written. Never
+  write the spec file from `aquakin_ui` directly.
 - Icons are sent once (`icons` prop, injected into nodes); the spec text only
   while the Spec tab is open.
 - **Removing a wired port asks first:** `Editor.apply_properties` previews with

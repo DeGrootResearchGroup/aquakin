@@ -61,7 +61,9 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 - `aquakin-ui` (`pip install "aquakin[ui]"`): a browser flowsheet editor. Drag
   units from a palette, wire their ports, edit settings in a form generated from
   each unit's own documentation, see aquakin's errors for each unit and for the
-  whole plant, and open or save flowsheet specs.
+  whole plant, and open or save flowsheet specs (saved by the same writer as
+  `Plant.to_spec`, so a model or influent file from elsewhere is copied into
+  the project).
 - A unit catalogue for front ends, `aquakin.plant.catalog`. It describes each
   plant unit type as plain JSON-compatible data: its settings, with types,
   defaults and the help text from the unit's docstring; how its ports follow

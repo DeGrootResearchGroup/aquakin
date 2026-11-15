@@ -10,8 +10,10 @@ standard error goes to a log file, whose last lines are quoted when it fails.
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -53,7 +55,7 @@ class AquakinWorker:
         self._lock = threading.Lock()
         self._ids = itertools.count(1)
         self._fresh = False
-        self.log_path = Path(tempfile.gettempdir()) / "aquakin-ui-worker.log"
+        self.log_path = None
 
     def _start(self):
         flags = {}
@@ -61,7 +63,11 @@ class AquakinWorker:
             flags["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             flags["start_new_session"] = True  # out of reach of the terminal's Ctrl-C
-        log = open(self.log_path, "w")
+        # One log per worker, so two editors never share (or truncate) a log.
+        fd, name = tempfile.mkstemp(prefix="aquakin-ui-worker-", suffix=".log")
+        self._remove_log()
+        self.log_path = Path(name)
+        log = os.fdopen(fd, "w")
         self._proc = subprocess.Popen(
             self.command,
             stdin=subprocess.PIPE,
@@ -83,7 +89,14 @@ class AquakinWorker:
 
         threading.Thread(target=read, daemon=True).start()
 
+    def _remove_log(self):
+        if self.log_path is not None:
+            with contextlib.suppress(OSError):
+                self.log_path.unlink()
+
     def _log_tail(self, n: int = 5) -> str:
+        if self.log_path is None:
+            return ""
         try:
             lines = self.log_path.read_text().strip().splitlines()[-n:]
         except OSError:
@@ -99,6 +112,8 @@ class AquakinWorker:
             except Exception:
                 self._proc.kill()
             self._proc = None
+        self._remove_log()
+        self.log_path = None
 
     def request(self, command: str, **fields):
         """Send one request and return its result.

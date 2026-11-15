@@ -35,3 +35,16 @@ def test_a_worker_that_dies_is_reported_with_its_error_output():
     w = AquakinWorker(command=[sys.executable, "-c", "import sys; sys.stderr.write('boom\\n')"])
     with pytest.raises(WorkerError, match=r"exited(?s:.*)boom"):
         w.request("ping")
+
+
+def test_each_worker_has_its_own_log_removed_when_it_stops():
+    a, b = AquakinWorker(), AquakinWorker()
+    try:
+        a.request("ping")
+        b.request("ping")
+        assert a.log_path != b.log_path and a.log_path.exists() and b.log_path.exists()
+        path = a.log_path
+    finally:
+        a.stop()
+        b.stop()
+    assert not path.exists()
