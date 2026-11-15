@@ -57,6 +57,47 @@ is several times cheaper. To reproduce the benchmark settler exactly, pass
 `settler_interface_flux="takacs"` to `build_bsm1` / `build_bsm2` (or
 `interface_flux="takacs"` to `TakacsClarifier`).
 
+### Other activated-sludge models and N₂O
+
+`build_bsm1` runs any activated-sludge model that keeps the ASM1 names for the
+components it shares with ASM1, so the BSM1 influent maps onto it by name. The
+clarifier settles every species whose name starts with `X` and counts those
+carrying COD as suspended solids. Pass `settling_species=` and `tss_species=` to
+choose them yourself. The `aeration=` argument replaces the aeration of named
+tanks, for example to put them under dissolved-oxygen control.
+
+Aeration also strips dissolved gases other than oxygen. List them in
+`Aeration(stripped=...)` with the ratio of their transfer coefficient to the
+oxygen one. Each gas then leaves the liquid at `ratio × kLa_O2 × (sat − C)`
+inside the solve, with the saturation 0 unless you give a `(ratio, saturation)`
+pair. Under DO control the gas follows the controller's kLa. For N₂O and NO the
+ratio is close to 1.
+
+```python
+from aquakin.plant import Aeration
+from aquakin.plant.bsm import build_bsm1, direct_n2o_emission
+
+model = aquakin.load_model("asmn_n2o")
+gases = {"SN2O": 1.0, "SNO": 1.0}
+plant = build_bsm1(
+    model,
+    aeration={f"tank{i}": Aeration(do_setpoint=2.0, stripped=gases) for i in (3, 4, 5)},
+)
+plant.add_influent("feed", model.influent(
+    {"SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
+     "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0}, Q=18446.0))
+sol = plant.solve(t_span=(0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 41))
+
+print(direct_n2o_emission(plant, sol), "kg N2O-N / d")
+print(plant.mass_balance(sol).summary())
+```
+
+`direct_n2o_emission` uses each tank's own stripping ratio, so it reports the
+N₂O the solve removed, and `plant.mass_balance` counts the stripped gases in its
+gas term. Because the stripping is part of the plant equations, `jax.grad` and
+the sensitivity tools see how N₂O emission depends on the kinetic parameters and
+the DO setpoint.
+
 ## Steady state, faster
 
 `run_to_steady_state()` integrates forward until the plant settles. For design
@@ -120,7 +161,7 @@ tabulates scenarios side by side:
 
 ```python
 ev  = aquakin.evaluate_bsm2(plant, sol, params)
-n2o = aquakin.direct_n2o_emission(plant, sol)      # 0 unless the model resolves N2O
+n2o = aquakin.direct_n2o_emission(plant, sol)      # 0 unless the model resolves N2O (see above)
 
 fp = aquakin.carbon_footprint(                     # kg CO2e/d, with a breakdown
     ev.total_energy(), grid_factor=0.4, n2o_emission=n2o,
