@@ -218,14 +218,21 @@ def test_serve_answers_requests_and_survives_bad_ones():
 
 
 def test_serve_checks_a_whole_spec():
+    models = {"asm1": {"source": "shipped"}}
     spec = {
+        "format": 2,
+        "models": models,
         "units": {
             "feed": {"kind": "influent", "model": "asm1", "Q": 100.0},
             "tank": {"kind": "cstr", "model": "asm1", "volume": 10.0, "conditions": T},
         },
         "connections": ["feed.out -> tank.in"],
     }
-    broken = {"units": {"tank": {"kind": "cstr", "model": "asm1", "volume": 10.0}}}
+    broken = {
+        "format": 2,
+        "models": models,
+        "units": {"tank": {"kind": "cstr", "model": "asm1", "volume": 10.0}},
+    }
     requests = "\n".join(
         json.dumps({"id": i, "command": "check_spec", "spec": s})
         for i, s in enumerate((spec, broken))
@@ -235,3 +242,18 @@ def test_serve_checks_a_whole_spec():
     good, bad = (json.loads(line)["result"] for line in out.getvalue().splitlines())
     assert good == {"ok": True, "unfed": [], "dangling": ["tank.out"], "recycles": []}
     assert not bad["ok"] and bad["error"].startswith("units.tank:")
+
+
+def test_a_reply_that_is_not_json_does_not_end_the_worker(monkeypatch):
+    import aquakin.__main__ as cli
+
+    handlers = cli._handlers()
+    monkeypatch.setattr(cli, "_handlers", lambda: {**handlers, "nan": lambda req: float("nan")})
+    out = io.StringIO()
+    serve(io.StringIO('{"id": 1, "command": "nan"}\n{"id": 2, "command": "ping"}\n'), out)
+    first, second = (json.loads(line) for line in out.getvalue().splitlines())
+    assert (
+        first == {"id": 1, "ok": False, "error": first["error"]}
+        and "not valid JSON" in first["error"]
+    )
+    assert second["ok"] and second["id"] == 2

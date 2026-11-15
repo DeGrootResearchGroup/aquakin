@@ -63,6 +63,7 @@ __all__ = [
     "unit_kind",
     "unit_kinds",
     "unit_settings",
+    "validate_settings",
 ]
 
 #: The categories a unit kind belongs to, in palette order.
@@ -270,6 +271,8 @@ def _plain(value) -> Any:
     if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, float):
+        if math.isnan(value):
+            return None
         return value if math.isfinite(value) else ("inf" if value > 0 else "-inf")
     if isinstance(value, (list, tuple)) and all(isinstance(v, (str, int, float)) for v in value):
         return [_plain(v) for v in value]
@@ -573,13 +576,41 @@ def shipped_models() -> list[dict]:
     return out
 
 
-def model_info(name: str) -> dict:
+_FILE_MODELS: dict = {}
+
+
+def load_model_file(path) -> Any:
+    """A model read from a YAML file, cached until the file changes.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The model file.
+
+    Returns
+    -------
+    CompiledModel
+    """
+    from pathlib import Path
+
+    from aquakin.schema.loader import load_model_from_file
+
+    p = Path(path).resolve()
+    key = (str(p), p.stat().st_mtime_ns)
+    if key not in _FILE_MODELS:
+        _FILE_MODELS[key] = load_model_from_file(p)
+    return _FILE_MODELS[key]
+
+
+def model_info(name: str, path=None) -> dict:
     """What a front end needs about one model: its species and conditions.
 
     Parameters
     ----------
     name : str
         A shipped model's name.
+    path : str or pathlib.Path, optional
+        Read the model from this YAML file instead (a project model).
 
     Returns
     -------
@@ -589,7 +620,7 @@ def model_info(name: str) -> dict:
     """
     from aquakin.schema.loader import load_model
 
-    m = load_model(name)
+    m = load_model_file(path) if path is not None else load_model(name)
     defaults = m.condition_defaults()
     conditions = []
     for c in m.conditions_required:
@@ -626,9 +657,102 @@ def _number(value):
     return value
 
 
-def _arguments(kind: UnitKind, settings: dict) -> dict:
-    """Constructor arguments from front-end settings (missing ones defaulted)."""
-    from aquakin.schema.loader import load_model
+def _is_number(v) -> bool:
+    if isinstance(v, str):
+        return v.strip().lower() in ("inf", "+inf", "-inf")
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _check_map(name, value, check, what):
+    if not isinstance(value, dict):
+        raise ValueError(f"'{name}' must be a mapping, got {type(value).__name__}")
+    for k, v in value.items():
+        if not isinstance(k, str):
+            raise ValueError(f"'{name}' key {k!r} must be a string ({what})")
+        if not check(v):
+            raise ValueError(f"'{name}.{k}' must be a number, got {v!r}")
+
+
+def validate_settings(kind: UnitKind, settings: dict) -> None:
+    """Check plain settings strictly against ``kind`` before anything is built.
+
+    Every key must be one of the kind's settings (a misspelling would otherwise
+    be ignored and its unit built without it), and every value must have its
+    setting's type exactly: a boolean is ``true``/``false`` (not the string
+    ``"false"``), an integer is not ``10.7``, map keys are strings.
+
+    Raises
+    ------
+    ValueError
+        Naming the first offending setting.
+    """
+    from aquakin.core.hints import did_you_mean
+
+    if not isinstance(settings, dict):
+        raise ValueError(f"settings must be a mapping, got {type(settings).__name__}")
+    known = {s.name: s for s in kind.settings}
+    for name, value in settings.items():
+        if name not in known:
+            hint = did_you_mean(str(name), list(known))
+            raise ValueError(f"'{name}' is not a setting of {kind.kind}.{hint}")
+        s = known[name]
+        if value is None:
+            if s.required:
+                raise ValueError(f"'{name}' is required")
+            continue
+        t = s.type
+        if t in ("number",):
+            ok = _is_number(value)
+        elif t == "integer":
+            ok = isinstance(value, int) and not isinstance(value, bool)
+        elif t == "boolean":
+            ok = isinstance(value, bool)
+        elif t in ("string", "model", "species", "port_name"):
+            ok = isinstance(value, str)
+        elif t in ("port_names", "species_list"):
+            ok = isinstance(value, list) and all(isinstance(v, str) for v in value)
+        elif t in ("port_map", "number_map", "conditions", "species_values"):
+            _check_map(name, value, _is_number, "a name")
+            ok = True
+        elif t == "aeration":
+            fields = {f.name for f in dataclasses.fields(Aeration)}
+            if not isinstance(value, dict):
+                ok = False
+            else:
+                for k in value:
+                    if k not in fields:
+                        raise ValueError(
+                            f"'{name}.{k}' is not an Aeration setting.{did_you_mean(str(k), sorted(fields))}"
+                        )
+                ok = True
+        elif t == "reagent":
+            ok = (
+                isinstance(value, dict)
+                and set(value) <= {"model", "label", "composition"}
+                and isinstance(value.get("model"), str)
+            )
+            if ok:
+                _check_map(
+                    f"{name}.composition", value.get("composition", {}), _is_number, "a species"
+                )
+        else:  # unsupported
+            raise ValueError(f"'{name}' ({s.python_type}) can only be set from Python for now")
+        if not ok:
+            raise ValueError(f"'{name}' must be {SETTING_TYPES[t].split(' (')[0]}, got {value!r}")
+
+
+def _arguments(kind: UnitKind, settings: dict, models: dict | None = None) -> dict:
+    """Constructor arguments from front-end settings (missing ones defaulted).
+
+    ``models`` maps model names to model objects to use instead of loading the
+    shipped model of that name (a spec's project models).
+    """
+    from aquakin.schema.loader import load_model as _load_shipped
+
+    def load_model(name):
+        return models[name] if models and name in models else _load_shipped(name)
+
+    validate_settings(kind, settings)
 
     given = {k: v for k, v in settings.items() if v is not None}
     groups = {n for g in kind.exactly_one_of for n in g}
@@ -682,7 +806,7 @@ def _arguments(kind: UnitKind, settings: dict) -> dict:
     return args
 
 
-def build_unit(kind: str, name: str, settings: dict):
+def build_unit(kind: str, name: str, settings: dict, *, models: dict | None = None):
     """Build a unit (or, for ``"influent"``, an influent series) from plain settings.
 
     Parameters
@@ -693,6 +817,9 @@ def build_unit(kind: str, name: str, settings: dict):
         The unit's name.
     settings : dict
         Setting values as plain data; missing settings take their defaults.
+    models : dict, optional
+        ``{name: CompiledModel}`` to use for model names instead of loading the
+        shipped model of that name.
 
     Returns
     -------
@@ -708,7 +835,7 @@ def build_unit(kind: str, name: str, settings: dict):
         own constructor errors propagate unchanged.
     """
     k = unit_kind(kind)
-    args = _arguments(k, settings)
+    args = _arguments(k, settings, models)
     if k.kind == "influent":
         from aquakin.plant.influent import InfluentSeries
 
@@ -742,23 +869,29 @@ def _species_values(model, C, *, keep_zero=False) -> dict:
     }
 
 
-def _setting_value(s: Setting, value):
-    """A unit attribute as the plain data of setting ``s``; ``ValueError`` if it has none."""
+def _setting_value(s: Setting, value, *, model_ref=None, full=False):
+    """A unit attribute as the plain data of setting ``s``; ``ValueError`` if it has none.
+
+    ``model_ref`` maps a model object to the name a spec refers to it by
+    (default: its shipped name). With ``full``, an aeration is written with
+    every field rather than only those that differ from the defaults.
+    """
+    model_ref = model_ref or _model_name
     if value is None:
         return None
     if s.type == "model":
-        return _model_name(value)
+        return model_ref(value)
     if s.type == "aeration":
         out = {}
         for f in dataclasses.fields(value):
             v = _plain(getattr(value, f.name))
-            if f.default is not dataclasses.MISSING and v == _plain(f.default):
+            if not full and f.default is not dataclasses.MISSING and v == _plain(f.default):
                 continue
             out[f.name] = v
         return out
     if s.type == "reagent":
         return {
-            "model": _model_name(value.model),
+            "model": model_ref(value.model),
             "label": value.label,
             "composition": _species_values(value.model, value.composition),
         }
@@ -775,10 +908,21 @@ def _kind_of(unit) -> UnitKind:
     raise ValueError(f"no unit kind for {type(unit).__name__}")
 
 
-def unit_settings(unit) -> tuple[str, dict]:
+def unit_settings(unit, *, full=False, model_ref=None) -> tuple[str, dict]:
     """The kind and the plain settings that rebuild ``unit`` with :func:`build_unit`.
 
-    Settings at their default are left out; required settings are always given.
+    Parameters
+    ----------
+    unit : Unit
+        A built unit.
+    full : bool, optional
+        Write every setting, defaults included, so the result does not depend
+        on the defaults of the aquakin that reads it. By default, settings at
+        their default are left out. Settings only Python can give are left out
+        either way when they are at their default.
+    model_ref : callable, optional
+        Maps a model object to the name to write for it (default: its shipped
+        name, refusing a model not loaded by name).
 
     Raises
     ------
@@ -791,19 +935,22 @@ def unit_settings(unit) -> tuple[str, dict]:
     out: dict[str, Any] = {}
     for s in k.settings:
         value = getattr(unit, s.name)
+        if s.type == "unsupported":
+            plain = _plain(value)
+            if value is None or (plain is not None and plain == s.default):
+                continue
+            raise ValueError(f"unit '{unit.name}': '{s.name}' ({s.python_type}) has no plain form")
         try:
-            plain = _setting_value(s, value)
+            plain = _setting_value(s, value, model_ref=model_ref, full=full)
         except ValueError as exc:
             raise ValueError(f"unit '{unit.name}': {exc}") from None
-        if not s.required and plain == s.default:
+        if not full and not s.required and plain == s.default:
             continue
-        if plain is None and value is not None:
-            raise ValueError(f"unit '{unit.name}': '{s.name}' has no plain form")
         out[s.name] = plain
     return k.kind, out
 
 
-def check_unit(kind: str, name: str, settings: dict) -> dict:
+def check_unit(kind: str, name: str, settings: dict, model_files: dict | None = None) -> dict:
     """Build a unit from front-end settings and report what happened.
 
     Parameters
@@ -814,6 +961,8 @@ def check_unit(kind: str, name: str, settings: dict) -> dict:
         The unit's name.
     settings : dict
         Setting values as the front end holds them (plain data).
+    model_files : dict, optional
+        ``{model name: YAML path}`` for project models the settings may name.
 
     Returns
     -------
@@ -823,7 +972,8 @@ def check_unit(kind: str, name: str, settings: dict) -> dict:
         reason it could not be built.
     """
     try:
-        unit = build_unit(kind, name, settings)
+        models = {n: load_model_file(p) for n, p in (model_files or {}).items()}
+        unit = build_unit(kind, name, settings, models=models)
         if kind == "influent":
             return {"ok": True, "inputs": [], "outputs": ["out"]}
         return {"ok": True, "inputs": list(unit.input_ports), "outputs": list(unit.output_ports)}

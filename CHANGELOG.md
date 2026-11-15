@@ -21,18 +21,30 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
-- `Plant.to_spec()` and `Plant.from_spec(spec)`: a plant as plain JSON/YAML data
-  and back. Units are written with the unit catalogue's kinds and settings
-  (defaults left out), connections as `"unit.port -> unit.port"` (or with a
-  state translator or recycle seed), together with constant influents, named
-  streams, the influent/effluent endpoints and non-default recycle options.
-  `to_spec(path)` also writes the file and `from_spec` reads a `.yaml`/`.json`
-  path. A rebuilt BSM1 has a bit-identical right-hand side. What a spec cannot
-  express yet (a time-varying influent, a model not loaded by name such as the
-  BSM2 15 °C ASM1, a heat-balance temperature model, array-valued settings) is
-  refused with a `SpecError` naming it rather than dropped. Controllers that a
-  closed-loop `Aeration` or feedback `DosingUnit` derives are not written; they
-  are derived again.
+- `Plant.to_spec()` and `Plant.from_spec(spec)`: a plant as a JSON/YAML file and
+  back. A spec (format 2) writes every setting, defaults included, with the
+  aquakin version that wrote it, so a later change of default cannot change a
+  saved plant. It lists each unit by its stable name with an optional display
+  `label` (`Plant.labels`), the connections as `"unit.port -> unit.port"` (or
+  with a state translator or recycle seed), constant influents, named streams,
+  endpoints and recycle options, and every model under `models:`, either shipped
+  or a model YAML file next to the spec, each with a content fingerprint; reading
+  a spec whose model has changed since warns (`SpecWarning`). Specs are validated
+  strictly: an unknown or misspelled setting, a value of the wrong type or a
+  model that is not listed is an error naming where it is, and YAML is read with
+  YAML 1.2 rules (`1e-5` is a number, `on` is text). A rebuilt BSM1 has a
+  bit-identical right-hand side. What a spec cannot express yet (a time-varying
+  influent, a heat-balance temperature model, array-valued settings) raises a
+  `SpecError` naming it. Controllers derived from a closed-loop `Aeration` or
+  feedback `DosingUnit` are not written; they are derived again.
+- Example projects in `examples/projects/`: BSM1, and BSM2 with its 15 °C ASM1 as
+  a model file that extends the shipped ASM1. The BSM2 project rebuilds the plant
+  `build_bsm2` makes, run with the BSM2 parameter set, to a bit-identical
+  right-hand side.
+- `aquakin-ui` (`pip install "aquakin[ui]"`): a browser flowsheet editor. Drag
+  units from a palette, wire their ports, edit settings in a form generated from
+  each unit's own documentation, see aquakin's errors for each unit and for the
+  whole plant, and open or save flowsheet specs.
 - A unit catalogue for front ends, `aquakin.plant.catalog`. It describes each
   plant unit type as plain JSON-compatible data: its settings, with types,
   defaults and the help text from the unit's docstring; how its ports follow
@@ -103,6 +115,7 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   for `profile_likelihood`, and every grid point reuses one compiled
   objective.
 
+
 ### Changed
 
 - The layered secondary clarifier (`TakacsClarifier`, and the settler of
@@ -163,6 +176,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- A unit can no longer be named after one of its plant's models (for example a
+  splitter named `asm1`), which made `plant.parameter_index("asm1.muH")` return
+  the splitter's flow setpoint instead of the kinetic rate. Unit, port and
+  influent names containing `.`, `->` or whitespace are refused too, since
+  endpoints are written `unit.port`. Both raise `WiringError`.
 - Reusing a plant from separate jitted functions with the same closed-over
   parameter vector no longer leaks cached parameter slices between traces.
 - Stable-adjoint gradients (`DifferentiationConfig(method="stable")`) on large

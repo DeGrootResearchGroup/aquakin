@@ -1,0 +1,218 @@
+format: 2
+aquakin: 0.2.0
+name: BSM1
+options:
+  recycle_passes: 3
+  recycle_tol: 1.0e-08
+  recycle_max_passes: 100
+models:
+  asm1:
+    source: shipped
+    sha256: 686d05d7fd58051a9696b084e599999c4b2384ee35411188b9d42e3dd9711f40
+units:
+  influent:
+    kind: influent
+    model: asm1
+    Q: 18446.0
+    T: null
+    composition:
+      SI: 30.0
+      SS: 69.5
+      XI: 51.2
+      XS: 202.32
+      XB_H: 28.17
+      SNH: 31.56
+      SND: 6.95
+      XND: 10.59
+      SALK: 7.0
+  inlet_mix:
+    kind: mixer
+    input_port_names:
+    - fresh
+    - internal_recycle
+    - ras
+    model: asm1
+  tank1:
+    kind: cstr
+    label: Anoxic zone 1
+    model: asm1
+    volume: 1000.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 293.15
+    aeration: null
+    output_port: out
+  tank2:
+    kind: cstr
+    label: Anoxic zone 2
+    model: asm1
+    volume: 1000.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 293.15
+    aeration: null
+    output_port: out
+  tank3:
+    kind: cstr
+    label: Aerobic zone 1
+    model: asm1
+    volume: 1333.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 293.15
+    aeration:
+      kla: 240.0
+      do_setpoint: null
+      do_sat: 8.0
+      species: SO
+      controller: null
+      sensor: null
+      gain: 1.0
+      Kp: 25.0
+      Ti: 0.002
+      Tt: 0.001
+      kla_offset: 120.0
+      kla_min: 0.0
+      kla_max: 360.0
+      temperature_correction: false
+      ref_T: 293.15
+      alpha: 1.0
+      beta: 1.0
+      pressure_factor: 1.0
+      kla_theta: 1.024
+      saturation_model: benson_krause
+    output_port: out
+  tank4:
+    kind: cstr
+    label: Aerobic zone 2
+    model: asm1
+    volume: 1333.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 293.15
+    aeration:
+      kla: 240.0
+      do_setpoint: null
+      do_sat: 8.0
+      species: SO
+      controller: null
+      sensor: null
+      gain: 1.0
+      Kp: 25.0
+      Ti: 0.002
+      Tt: 0.001
+      kla_offset: 120.0
+      kla_min: 0.0
+      kla_max: 360.0
+      temperature_correction: false
+      ref_T: 293.15
+      alpha: 1.0
+      beta: 1.0
+      pressure_factor: 1.0
+      kla_theta: 1.024
+      saturation_model: benson_krause
+    output_port: out
+  tank5:
+    kind: cstr
+    label: Aerobic zone 3
+    model: asm1
+    volume: 1333.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 293.15
+    aeration:
+      kla: 84.0
+      do_setpoint: null
+      do_sat: 8.0
+      species: SO
+      controller: null
+      sensor: null
+      gain: 1.0
+      Kp: 25.0
+      Ti: 0.002
+      Tt: 0.001
+      kla_offset: 120.0
+      kla_min: 0.0
+      kla_max: 360.0
+      temperature_correction: false
+      ref_T: 293.15
+      alpha: 1.0
+      beta: 1.0
+      pressure_factor: 1.0
+      kla_theta: 1.024
+      saturation_model: benson_krause
+    output_port: out
+  tank5_split:
+    kind: setpoint_splitter
+    model: asm1
+    output_port_flows:
+      internal_recycle: 55338.0
+    remainder_port: to_clarifier
+  clarifier:
+    kind: clarifier
+    model: asm1
+    area: 1500.0
+    height: 4.0
+    overflow_Q: null
+    underflow_Q: 18831.0
+    n_layers: 10
+    feed_layer: 5
+    init_underflow_Q: 18831.0
+    init_feed_tss: null
+    particulate_species:
+    - XS
+    - XI
+    - XB_H
+    - XB_A
+    - XP
+    - XND
+    settling_params:
+      v0: 474.0
+      vmax: 250.0
+      rh: 0.000576
+      rp: 0.00286
+      fns: 0.00228
+      X_threshold: 3000.0
+    tss_factors:
+      XS: 0.75
+      XI: 0.75
+      XB_H: 0.75
+      XB_A: 0.75
+      XP: 0.75
+      XND: 0.0
+    composition_mode: lumped_tss
+    soluble_holdup: true
+    interface_flux: godunov
+    input_port: inlet
+    overflow_port: overflow
+    underflow_port: underflow
+  underflow_split:
+    kind: setpoint_splitter
+    model: asm1
+    output_port_flows:
+      ras: 18446.0
+    remainder_port: waste
+connections:
+- inlet_mix.out -> tank1.inlet
+- tank1.out -> tank2.inlet
+- tank2.out -> tank3.inlet
+- tank3.out -> tank4.inlet
+- tank4.out -> tank5.inlet
+- tank5.out -> tank5_split.in
+- tank5_split.to_clarifier -> clarifier.inlet
+- clarifier.underflow -> underflow_split.in
+- tank5_split.internal_recycle -> inlet_mix.internal_recycle
+- underflow_split.ras -> inlet_mix.ras
+- influent.out -> inlet_mix.fresh
+streams:
+  effluent: clarifier.overflow
+  internal_recycle: tank5_split.internal_recycle
+  ras: underflow_split.ras
+  wastage: underflow_split.waste
+influent_endpoint: inlet_mix.fresh
+effluent_endpoint: clarifier.overflow

@@ -1,0 +1,219 @@
+"""The unit form: rows generated from a kind's catalogue settings, and back.
+
+Pure functions, with no page in them. :func:`rows_for` turns one unit into the
+rows the Unit panel shows (one per setting; a model's conditions and an
+aeration's mode and value expand into several), and :func:`read_rows` turns the
+edited rows back into the unit's label and settings. No setting, type or choice
+is listed here: every row follows from the catalogue.
+"""
+
+from __future__ import annotations
+
+from aquakin_ui.document import Flowsheet
+
+AERATION_MODES = ("none", "kla", "do_setpoint")
+_READ_ONLY = ("unsupported", "reagent")
+
+
+def _text(value) -> str:
+    """A setting value as the text a field shows."""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        return ", ".join(
+            f"{k}: {v:g}"
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+            else f"{k}: {v}"
+            for k, v in value.items()
+        )
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def _placeholder(s: dict) -> str:
+    if s["required"]:
+        return "required"
+    if s["default"] in (None, {}, []):
+        return "not set"
+    return f"{_text(s['default'])} (default)"
+
+
+def _row(key, label, widget="text", value="", **extra) -> dict:
+    return {
+        "key": key,
+        "label": label,
+        "widget": widget,
+        "value": value,
+        "items": [],
+        "hint": "",
+        "placeholder": "",
+    } | extra
+
+
+def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
+    """The form rows of one unit.
+
+    Parameters
+    ----------
+    doc : Flowsheet
+        The flowsheet.
+    uid : str
+        The unit's identifier.
+    model_info : callable
+        ``model_info(name)`` returns the worker's description of a model
+        (species, conditions), or ``None`` when it cannot be read.
+
+    Returns
+    -------
+    list of dict
+        One row per field: ``key``, ``label``, ``widget`` (``text``,
+        ``select``, ``multi``, ``readonly``), ``value``, ``items``, ``hint``,
+        ``placeholder``.
+    """
+    u = doc.units[uid]
+    model = u.settings.get("model")
+    info = model_info(model) if model else None
+    species = [s["name"] for s in info["species"]] if info else []
+    rows = [
+        _row("id", "identifier", "readonly", uid, hint="The unit's stable name in aquakin."),
+        _row("label", "label", value=u.label or "", hint="Free display text.", placeholder=uid),
+    ]
+    for s in doc.catalog.settings(u.kind):
+        key, value, t = s["name"], u.settings.get(s["name"]), s["type"]
+        label = key + (" *" if s["required"] else "")
+        common = {"hint": s["help"], "placeholder": _placeholder(s)}
+        if t == "model":
+            rows.append(_row(key, label, "select", value or "", items=doc.model_names(), **common))
+        elif t == "conditions":
+            for c in info["conditions"] if info else []:
+                v = (value or {}).get(c["name"])
+                default = c["default"]
+                rows.append(
+                    _row(
+                        f"conditions.{c['name']}",
+                        f"condition {c['name']}",
+                        value=_text(v),
+                        hint=s["help"],
+                        placeholder=f"{default:g} (model default)"
+                        if default is not None
+                        else "required",
+                    )
+                )
+        elif t == "aeration":
+            mode = next(
+                (m for m in AERATION_MODES[1:] if value and value.get(m) is not None), "none"
+            )
+            rows.append(
+                _row(
+                    "aeration.mode",
+                    "aeration",
+                    "select",
+                    mode,
+                    items=list(AERATION_MODES),
+                    hint=s["help"],
+                )
+            )
+            if mode != "none":
+                rows.append(_row("aeration.value", mode, value=_text(value[mode]), hint=s["help"]))
+        elif t == "species" and species:
+            rows.append(_row(key, label, "select", value or "", items=species, **common))
+        elif t == "species_list" and species:
+            rows.append(_row(key, label, "multi", list(value or []), items=species, **common))
+        elif t == "boolean":
+            text = "" if value is None else str(value).lower()
+            rows.append(_row(key, label, "select", text, items=["true", "false"], **common))
+        elif t == "reagent":
+            shown = (
+                f"{value['label']}: {_text(value.get('composition', {}))}"
+                if value
+                else "set in the spec file"
+            )
+            rows.append(_row(key, label, "readonly", "", hint=s["help"], placeholder=shown))
+        elif t == "unsupported":
+            rows.append(
+                _row(
+                    key,
+                    label,
+                    "readonly",
+                    "",
+                    hint=s["help"],
+                    placeholder=f"set from Python ({s['python_type']})",
+                )
+            )
+        else:
+            rows.append(_row(key, label, value=_text(value), **common))
+    return rows
+
+
+def _number(text: str):
+    return text if text.lower() in ("inf", "-inf") else float(text)
+
+
+def _parse(s: dict, text):
+    """A field's text back to plain data, by setting type (empty means unset)."""
+    t = s["type"]
+    text = text.strip() if isinstance(text, str) else text
+    if text in ("", None, []):
+        return None
+    if t == "number":
+        return _number(text)
+    if t == "integer":
+        return int(text)
+    if t == "boolean":
+        return text == "true"
+    if t in ("port_names", "species_list"):
+        if isinstance(text, list):
+            return list(text)
+        return [p.strip() for p in text.split(",") if p.strip()]
+    if t in ("port_map", "species_values", "number_map"):
+        pairs = [p.split(":", 1) for p in text.split(",") if p.strip()]
+        return {k.strip(): _number(v.strip()) for k, v in pairs}
+    return text
+
+
+def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, dict]:
+    """The label and settings the edited ``rows`` give one unit.
+
+    Settings shown read-only, and the aeration fields the form does not show
+    (controller gains, saturation, ...), keep the values the unit had.
+
+    Raises
+    ------
+    ValueError
+        If a field's text cannot be read as its setting's type.
+    """
+    u = doc.units[uid]
+    values = {r["key"]: r["value"] for r in rows}
+    settings: dict = {}
+    for s in doc.catalog.settings(u.kind):
+        name, t = s["name"], s["type"]
+        if t == "conditions":
+            conds = {
+                k.split(".", 1)[1]: float(v)
+                for k, v in values.items()
+                if k.startswith("conditions.") and str(v).strip()
+            }
+            if conds:
+                settings[name] = conds
+        elif t == "aeration":
+            mode = values.get("aeration.mode", "none")
+            old = u.settings.get(name) or {}
+            if mode != "none":
+                raw = str(values.get("aeration.value", "")).strip()
+                value = float(raw) if raw else (old.get(mode) or 0.0)
+                kept = {k: v for k, v in old.items() if k not in AERATION_MODES[1:]}
+                settings[name] = {**kept, mode: value}
+            else:
+                settings[name] = None
+        elif t in _READ_ONLY:
+            if name in u.settings:
+                settings[name] = u.settings[name]
+        elif name in values:
+            v = _parse(s, values[name])
+            if v is not None:
+                settings[name] = v
+    label = str(values.get("label", "")).strip() or None
+    return label, settings

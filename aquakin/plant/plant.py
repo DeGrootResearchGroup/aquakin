@@ -261,6 +261,10 @@ class Plant:
         # reads the right port without the user knowing it is
         # ``"tank5_split.internal_recycle"``; :meth:`list_streams` lists them.
         self.named_streams: dict[str, str] = {}
+        # Display labels by unit name (free text, e.g. "Aerobic zone 1"). The
+        # unit name stays the stable identifier every parameter, stream and
+        # result is keyed by; a label only changes how a front end shows it.
+        self.labels: dict[str, str] = {}
         # How reactor temperature is handled (see aquakin.plant.temperature). The
         # default carries no state and reproduces the historic instantaneous
         # flow-weighted behaviour exactly; a HeatBalanceTemperature gives each
@@ -340,12 +344,47 @@ class Plant:
         """
         if unit.name in self.units:
             raise ValueError(f"Unit '{unit.name}' already added")
+        self._check_unit_name(unit)
         self.units[unit.name] = unit
         self._insertion_order.append(unit.name)
         # Seed the evaluation order with the insertion order so it is non-empty
         # before the first solve (helpers that just enumerate units read it);
         # _finalize_topology() reorders it into a valid topological order.
         self._unit_order.append(unit.name)
+
+    def _check_unit_name(self, unit) -> None:
+        """Refuse a unit name or port name the plant's addressing cannot read.
+
+        Endpoints are ``"unit.port"`` and parameters ``"<model>.<param>"`` /
+        ``"<unit>.<setpoint>"``, so a dot (or whitespace, or ``->``) in a name
+        makes an endpoint ambiguous, and a unit named like one of the plant's
+        models would share its parameter keys (``"asm1.muH"`` could then name a
+        splitter's flow setpoint instead of the kinetic rate).
+        """
+        names = [("unit", unit.name)]
+        names += [("port", p) for p in [*unit.input_ports, *unit.output_ports]]
+        for what, name in names:
+            if not name or "." in name or "->" in name or any(ch.isspace() for ch in name):
+                raise WiringError(
+                    f"{what} name {name!r} of unit '{unit.name}' must be non-empty and contain "
+                    f"no '.', '->' or whitespace (endpoints are written 'unit.port')"
+                )
+        models = {
+            u.model.name
+            for u in [*self.units.values(), unit]
+            if getattr(u, "model", None) is not None
+        }
+        if unit.name in models:
+            raise WiringError(
+                f"unit name '{unit.name}' is the name of a model in this plant; parameter "
+                f"names '<model>.<param>' and '<unit>.<setpoint>' would collide. Rename the unit."
+            )
+        model = getattr(unit, "model", None)
+        if model is not None and model.name in self.units:
+            raise WiringError(
+                f"unit '{unit.name}' uses model '{model.name}', which is also a unit name in this "
+                f"plant; parameter names would collide. Rename that unit."
+            )
 
     def add_influent(
         self,
@@ -378,6 +417,10 @@ class Plant:
             Translator for the influent -> unit connection. Defaults to identity
             when the influent and destination share a model.
         """
+        if not name or "." in name or "->" in name or any(ch.isspace() for ch in name):
+            raise WiringError(
+                f"influent name {name!r} must be non-empty and contain no '.', '->' or whitespace"
+            )
         if name in self.influents:
             raise ValueError(f"Influent '{name}' already added")
         self.influents[name] = series
@@ -1196,7 +1239,13 @@ class Plant:
         for name, (fstart, _) in self._parameter_layout.unit_flow_blocks.items():
             local_names = self.units[name].flow_param_local_names()
             for j, local_name in enumerate(local_names):
-                index[f"{name}.{local_name}"] = fstart + j
+                key = f"{name}.{local_name}"
+                if key in index:
+                    raise WiringError(
+                        f"plant parameter name '{key}' is both a model parameter and a flow "
+                        f"setpoint; rename unit '{name}' so it differs from every model name"
+                    )
+                index[key] = fstart + j
         return index
 
     def parameter_names(self) -> list[str]:

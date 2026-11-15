@@ -232,6 +232,17 @@ aquakin/
 │       │                            #   from core/units.py, which only formats units
 │       └── rtd.py                   # RTD analysis (E-curve, Morrill index)
 │
+├── aquakin_ui/                         # browser flowsheet editor `aquakin-ui` (`ui` extra)
+│   ├── app.py                          # the page (Editor)
+│   ├── document.py                     # the flowsheet document (pure)
+│   ├── forms.py                        # unit form from the catalogue (pure)
+│   ├── catalog.py / icons.py           # catalogue reply, port rules; icons + colours
+│   ├── worker.py                       # client of the `aquakin serve` worker
+│   ├── widget/                         # Vue Flow trame widget + built bundle (serve/)
+│   └── icons/                          # line icons per unit kind
+│
+├── ui-widget/                          # Vue source of the canvas widget (npm run build)
+│
 ├── tests/
 │   ├── unit/
 │   │   ├── test_parser.py
@@ -250,6 +261,7 @@ aquakin/
 │       └── catalysed_decay.yaml   # A -> B on a constant catalyst: only k*[X]0 identifiable
 │
 ├── examples/
+│   ├── projects/                    # flowsheet projects: bsm1/, bsm2/ (with its 15 °C ASM1 model file)
 │   ├── batch_bromate.py
 │   ├── lagrangian_demo.py
 │   ├── sensitivity_demo.py

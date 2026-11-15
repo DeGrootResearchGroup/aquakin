@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [vue()],
   define: { "process.env.NODE_ENV": JSON.stringify(process.env.AK_DEV ? "development" : "production") },
   build: {
-    outDir: "../trame_flowsheet/serve",
+    outDir: "../aquakin_ui/widget/serve",
     emptyOutDir: true,
     lib: {
       entry: "src/index.js",

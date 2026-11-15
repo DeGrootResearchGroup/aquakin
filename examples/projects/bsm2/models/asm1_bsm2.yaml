@@ -1,0 +1,35 @@
+# ASM1 as the BSM2 benchmark uses it: the IWA BSM2 parameter set, with the
+# Arrhenius temperature corrections referenced to 15 degC (the BSM2 ASM1
+# reference temperature) instead of the 20 degC of the shipped model. Each
+# value below is the value at that reference.
+model:
+  name: asm1_bsm2
+  extends: asm1
+  version: "1.0"
+  description: >
+    ASM1 with the BSM2 benchmark parameter set and its temperature corrections
+    referenced to 15 degC (288.15 K).
+  references:
+    - "Jeppsson, U. et al. (2007). Benchmark simulation model no 2: general protocol and exploratory case studies. Water Sci. Technol., 56(8), 67-78."
+    - "Nopens, I. et al. (2010). Benchmark Simulation Model No 2: finalisation of plant layout and default control strategy. Water Sci. Technol., 62(9), 1967-1974."
+
+parameters:
+  muH: {value: 4.0, temperature: {ref_T: 288.15}}
+  KS: {value: 10.0}
+  KOH: {value: 0.2}
+  KNO: {value: 0.5}
+  etag: {value: 0.8}
+  muA: {value: 0.5, temperature: {ref_T: 288.15}}
+  KNH_A: {value: 1.0}
+  KOA: {value: 0.4}
+  bH: {value: 0.3, temperature: {ref_T: 288.15}}
+  bA: {value: 0.05, temperature: {ref_T: 288.15}}
+  ka: {value: 0.05, temperature: {ref_T: 288.15}}
+  kh: {value: 3.0, temperature: {ref_T: 288.15}}
+  KX: {value: 0.1}
+  etah: {value: 0.8}
+  Y_H: {value: 0.67}
+  Y_A: {value: 0.24}
+  i_XB: {value: 0.08}
+  i_XP: {value: 0.06}
+  f_P: {value: 0.08}

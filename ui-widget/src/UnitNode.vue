@@ -2,10 +2,13 @@
 // One plant unit: a header naming it and one row per port. Every port is a
 // Vue Flow handle whose id is the port name, so a connection reads directly as
 // aquakin's "unit.port" -> "unit.port".
+import { inject, computed } from "vue";
 import { Handle, Position, useVueFlow } from "@vue-flow/core";
 
 const props = defineProps({ id: String, data: Object, selected: Boolean });
 const { getEdges } = useVueFlow();
+const icons = inject("akIcons", computed(() => ({})));
+const iconSvg = computed(() => icons.value[props.data.icon] || "");
 
 // Instant feedback while a wire is drawn (an input is fed once, an output
 // feeds one unit). It sits on the handles so it judges only wires being drawn,
@@ -26,7 +29,7 @@ const isDangling = (port) => (props.data.dangling || []).includes(port);
 <template>
   <div class="ak-unit" :class="{ 'ak-selected': selected, 'ak-has-error': !!data.error }" :style="{ '--ak-accent': data.colour || '#5b8def' }">
     <div class="ak-head">
-      <span v-if="data.icon" class="ak-icon" v-html="data.icon" />
+      <span v-if="iconSvg" class="ak-icon" v-html="iconSvg" />
       <div class="ak-titles">
         <span class="ak-name">{{ data.label || id }}</span>
         <span class="ak-kind">{{ data.kindLabel }}</span>

@@ -50,6 +50,7 @@ dependencies = [
 
 [project.scripts]
 aquakin = "aquakin.__main__:main"
+aquakin-ui = "aquakin_ui.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/DeGrootResearchGroup/aquakin"
@@ -68,6 +69,12 @@ plot = ["matplotlib>=3.5"]
 # the gate red without a deliberate bump. Capped to the 0.15 series for the same
 # reason; raise the cap intentionally.
 lint = ["ruff>=0.15,<0.16"]
+# `ui` is the browser flowsheet editor, `aquakin-ui` (the `aquakin_ui` package):
+# trame serves the page and Vuetify draws it; the canvas is one Vue Flow widget
+# shipped pre-built in the package, so it needs no JavaScript toolchain. The
+# interface never imports aquakin or JAX (it asks an `aquakin serve` worker).
+# trame-client pins the Vue the widget is built against (Vue 3.5).
+ui = ["trame>=3.6", "trame-vuetify>=2.7", "trame-client>=3.6"]
 # `docs` pins the Sphinx documentation toolchain (Read the Docs build + the CI
 # docs job). Floors are the known-good minimums; kept in one place so the RTD
 # build and CI resolve the same set. `myst-parser` lets the docs stay Markdown;
@@ -93,7 +100,7 @@ test = [
     # cooperates with pytest-xdist (`-n`) and pytest-split (each shard emits a
     # partial `coverage.xml` that Codecov merges by flag).
     "pytest-cov>=5",
-    "aquakin[dataframe,plot]",
+    "aquakin[dataframe,plot,ui]",
 ]
 
 # Version is read statically from the ``__version__`` string literal in
@@ -109,6 +116,8 @@ include = ["aquakin*"]
 [tool.setuptools.package-data]
 "aquakin.models" = ["*.yaml"]
 "aquakin.plant.bsm.data" = ["*.csv"]
+"aquakin_ui" = ["icons/*.svg"]
+"aquakin_ui.widget" = ["serve/*"]
 
 [tool.pytest.ini_options]
 markers = [

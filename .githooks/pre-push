@@ -3,8 +3,8 @@
 # Pre-push hook: run the same ruff gate CI enforces, so a formatting or lint
 # slip is caught locally instead of turning the required `lint (ruff)` job red
 # on the PR. Mirrors the CI `lint` job exactly:
-#     ruff check aquakin
-#     ruff format --check aquakin
+#     ruff check aquakin aquakin_ui
+#     ruff format --check aquakin aquakin_ui
 #
 # Enable it once per clone (git does not install repo hooks automatically):
 #     git config core.hooksPath .githooks
@@ -25,14 +25,14 @@ fi
 fail=0
 
 echo "pre-push: ruff check aquakin" >&2
-if ! ruff check aquakin; then
-  echo "pre-push: 'ruff check aquakin' reported errors (see above)." >&2
+if ! ruff check aquakin aquakin_ui; then
+  echo "pre-push: 'ruff check aquakin aquakin_ui' reported errors (see above)." >&2
   fail=1
 fi
 
 echo "pre-push: ruff format --check aquakin" >&2
-if ! ruff format --check aquakin; then
-  echo "pre-push: files are not formatted -- run 'ruff format aquakin', commit, and re-push." >&2
+if ! ruff format --check aquakin aquakin_ui; then
+  echo "pre-push: files are not formatted -- run 'ruff format aquakin aquakin_ui', commit, and re-push." >&2
   fail=1
 fi
 

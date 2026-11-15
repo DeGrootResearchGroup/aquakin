@@ -356,18 +356,36 @@ input uncertainty and size designs to a permit at minimum cost. See
 
 ### Saving a plant as a file (`to_spec` / `from_spec`)
 
-A plant can be written as plain data and rebuilt from it:
+A plant can be written as a file and rebuilt from it:
 
 ```python
 plant.to_spec("bsm1.yaml")                  # or spec = plant.to_spec()
 same = aquakin.Plant.from_spec("bsm1.yaml")  # same units, wiring and streams
 ```
 
-The file lists each unit's kind and non-default settings, the connections as
-`unit.port -> unit.port`, constant influents, named streams and endpoints. It is
-the format a flowsheet editor saves. Anything a spec cannot express yet (a
-time-varying influent, a model that was not loaded by name) raises a `SpecError`
-that names it.
+The file lists every unit by its stable name (with an optional display `label`)
+and all of its settings, defaults included, together with the aquakin version
+that wrote it; the connections as `unit.port -> unit.port`; constant influents,
+named streams and endpoints; and the models the units use, each shipped or a
+model YAML file beside the spec, with a fingerprint that warns when the model
+has changed since. `examples/projects/bsm2/` is BSM2 as such a project: its
+15 °C ASM1 is a short model file that `extends:` the shipped ASM1. A misspelled
+setting or a value of the wrong type is an error naming where it is, and
+anything a spec cannot express yet (a time-varying influent) raises a
+`SpecError` that names it.
+
+### The flowsheet editor (`aquakin-ui`)
+
+```bash
+pip install "aquakin[ui]"
+aquakin-ui examples/projects/bsm2/flowsheet.yaml
+```
+
+opens a flowsheet editor in your browser, served on this machine only: drag
+units from a palette, wire their ports, edit each unit in a form generated from
+its own documentation, and see aquakin's errors for each unit and for the whole
+plant as you edit. **Open** and **Save** read and write the spec files above.
+The editor never imports aquakin itself; it asks an `aquakin serve` worker.
 
 ### The unit catalogue and the `aquakin` command
 

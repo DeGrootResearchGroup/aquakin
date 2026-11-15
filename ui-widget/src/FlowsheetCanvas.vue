@@ -3,7 +3,7 @@
 // `nodes` and `edges` it is given and reports *finished* edits as events
 // (connect, move, remove, dropped, select). Dragging, panning, zooming and
 // drawing a wire happen here in the browser, so they never wait on the server.
-import { ref, watch, markRaw, onMounted, onBeforeUnmount } from "vue";
+import { ref, watch, markRaw, onMounted, onBeforeUnmount, provide, computed } from "vue";
 import { VueFlow, useVueFlow, MarkerType } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
 import { Controls } from "@vue-flow/controls";
@@ -17,7 +17,10 @@ const props = defineProps({
   dragType: { type: String, default: "application/x-aquakin-unit" },
   // Changing this frames the whole flowsheet again (e.g. after opening a file).
   fitKey: { type: Number, default: 0 },
+  // SVG markup by icon name, sent once; a node names its icon in data.icon.
+  icons: { type: Object, default: () => ({}) },
 });
+provide("akIcons", computed(() => props.icons));
 const emit = defineEmits(["connect", "move", "remove", "dropped", "select"]);
 
 const flowId = "aquakin-flowsheet-" + Math.random().toString(36).slice(2);
