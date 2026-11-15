@@ -94,6 +94,9 @@ class Unit(Protocol):
       events (an SBR's fill/react/settle/decant boundaries).
     - :class:`TemperatureSettable` (``set_temperature``) -- its operating
       temperature can be set by :meth:`Plant.set_temperature`.
+    - :class:`AssumedUnits` (``assumed_units``) -- declares the units its
+      internal constants assume (a time unit, or a species' concentration
+      basis), checked by :meth:`Plant.check_units`.
 
     A few further optional hooks are read as *values with a default* rather than
     checked for presence, so they stay plain attribute look-ups (not Protocols):
@@ -257,3 +260,21 @@ class StatelessUnit(CouplingAware):
         from aquakin.plant.coupling import CouplingPattern
 
         return CouplingPattern(self_pattern=np.zeros((0, 0), dtype=bool), inlet_pattern=None)
+
+
+@runtime_checkable
+class AssumedUnits(Protocol):
+    """A unit whose internal constants fix the units of some of its inputs, so
+    :meth:`Plant.check_units` can confirm the plant supplies them.
+
+    ``assumed_units`` returns ``{quantity: unit string}``. The quantity is
+    ``"time"`` (the time unit the unit's built-in conversions assume -- e.g. a UV
+    reactor that turns ``V/Q`` into seconds with ``86400 s/d``) or a species name
+    (the concentration basis a built-in constant assumes -- e.g. a settler whose
+    settling parameters are in ``g/m3`` of solids). A species unit with no
+    chemical currency (``"g/m3"``) constrains the mass and volume scale only.
+    Only *fixed* assumptions belong here: a parameter the user supplies in any
+    consistent unit (a volume, a flow setpoint, a ``kLa``) is not listed.
+    """
+
+    def assumed_units(self) -> dict[str, str]: ...

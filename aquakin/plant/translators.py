@@ -46,6 +46,21 @@ class StateTranslator(Protocol):
         ...
 
 
+@runtime_checkable
+class TranslatorAssumedUnits(Protocol):
+    """A translator whose arithmetic assumes particular species units on either
+    side (e.g. a ``/ 1000`` that converts ``g/m3`` to ``kg/m3``), so
+    :meth:`Plant.check_units` can confirm the connected models declare them.
+
+    Each method returns ``{species name: unit string}`` for the species the
+    translator reads from its source / writes to its target.
+    """
+
+    def assumed_source_units(self) -> dict[str, str]: ...
+
+    def assumed_target_units(self) -> dict[str, str]: ...
+
+
 def translator_coupling_pattern(translator, n_states: int = 96, seed: int = 0):
     """Structural coupling of a translator: which target species each source
     species can influence, as a boolean ``(n_target, n_source)`` matrix.

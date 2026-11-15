@@ -58,6 +58,8 @@ def test_dimension_hashable_and_str():
     ("m³", {"m": 3}),                                    # display superscripts
     ("M⁻¹ s⁻¹", {"mol": -1, "L": 1, "s": -1}),
     ("bar*m3/kmol", {"bar": 1, "m": 3, "kmol": -1}),     # ADM1 gas-law constant
+    ("mg/L", {"mg": 1, "L": -1}),                        # milli-prefixes are symbols,
+    ("mmol/L", {"mmol": 1, "L": -1}),                    # not metre x gram / mole
     ("kmol/m3/bar", {"kmol": 1, "m": -3, "bar": -1}),    # Henry constant
 ])
 def test_parse_known_dialects(text, expected):
@@ -161,6 +163,26 @@ def test_safe_div_divides_units():
     assert any(w.location == "rate root" for w in ws)
 
 
+@pytest.mark.parametrize("expr", [
+    "k * (0.1 / (0.1 + [X])) * [Z]",
+    "k * [Z] * (0.1 / ([X] + 0.1))",
+    "k * (0.1 / (0.1 + [X] + [Z])) * [Z]",
+])
+def test_literal_half_saturation_is_dimensionless(expr):
+    # c / (c + X) is an inhibition switch whose half-saturation constant is an
+    # inline literal: the literal carries X's units, so the term is
+    # dimensionless and the rate stays a concentration per time. (The pattern
+    # is matched as its own subexpression -- a named expression or parentheses
+    # -- since ``k * c / (c + X)`` parses as ``(k * c) / (c + X)``.)
+    assert _check(expr) == []
+
+
+def test_literal_numerator_without_matching_term_still_divides():
+    # A different literal in the numerator is not the K / (K + X) pattern, so
+    # the ratio keeps its 1 / [X] units and the root check still sees them.
+    assert any(w.location == "rate root" for w in _check("k * (0.2 / (0.1 + [X])) * [Z]"))
+
+
 def test_regularizer_constant_not_flagged():
     # a bare numeric guard added to a concentration is intentional, not a bug
     assert _check("k * [X] / ([X] + [Z] + 1.0e-6)", check_root=False) == []
@@ -192,16 +214,44 @@ def test_units_metadata_carried_through():
     assert net.parameter_units  # ASM1 declares parameter units
 
 
-@pytest.mark.parametrize("name", [
-    "asm1", "asm2d", "asm3", "asm3_biop", "ozone_bromate", "uv_h2o2",
-    "wats_sewer",
-])
+def _shipped_model_names():
+    from importlib.resources import files
+
+    return sorted(
+        f.name[: -len(".yaml")]
+        for f in files("aquakin.models").iterdir()
+        if f.name.endswith(".yaml")
+    )
+
+
+@pytest.mark.parametrize("name", _shipped_model_names())
 def test_shipped_models_are_unit_clean(name):
-    # the correctly-annotated shipped models raise no warning (the check is
-    # advisory, so this is the no-false-positive guard, not a proof of math).
-    # The SUMO-derived asm2d/asm3/asm3_biop carry real units (issue #199), so
-    # they are now actually checked, not skipped, and come out clean.
-    assert aquakin.load_model(name).check_units() == []
+    # Every shipped model is unit-clean: no finding outside the reactions it
+    # explicitly acknowledges (``units_acknowledged:``, each with a written
+    # reason). A new or edited model that trips the check must either fix its
+    # units or acknowledge the reaction deliberately. The check is advisory, so
+    # this is the no-false-positive guard, not a proof of the math.
+    net = aquakin.load_model(name)
+    assert net.check_units() == []
+    # Every acknowledgement carries a reason and names a real reaction.
+    for reaction, reason in net.units_acknowledged.items():
+        assert reaction in net.reaction_names
+        assert reason.strip()
+    # The plant unit audit relies on each model declaring its time unit.
+    assert net.time_unit is not None
+
+
+def test_acknowledged_reactions_are_pinned():
+    # Acknowledging a reaction hides its findings, so the set is pinned here:
+    # adding one is a deliberate, reviewed change.
+    acknowledged = {
+        name: set(aquakin.load_model(name).units_acknowledged)
+        for name in _shipped_model_names()
+    }
+    assert {k: v for k, v in acknowledged.items() if v} == {
+        "adm1": {"gas_outflow_h2", "gas_outflow_ch4", "gas_outflow_co2"},
+        "asm2d_tud": {"Anoxic_storage_of_XPP", "Aerobic_storage_of_XPP"},
+    }
 
 
 def test_sumo_models_have_real_units():
@@ -220,40 +270,56 @@ def test_sumo_models_have_real_units():
         assert all(parse_units(net.units_of(s)) is not None for s in net.species)
 
 
-def test_asm2d_tud_warnings_confined_to_pp_storage():
+def test_asm2d_tud_findings_confined_to_pp_storage():
     # ASM2d-TUD is unit-clean except its two biomass-normalised PP-storage rates
     # (qPP * XPAO**2 / XPP * ...), whose root is irreducibly cross-currency
-    # (COD^2/P) -- a property of that model's rate form, which the root check
-    # correctly surfaces. Guards that nothing else regresses.
-    ws = aquakin.load_model("asm2d_tud").check_units()
+    # (COD^2/P) -- a property of that model's rate form. They are acknowledged in
+    # the YAML, so they appear only with include_acknowledged=True. Guards that
+    # nothing else regresses.
+    net = aquakin.load_model("asm2d_tud")
+    ws = net.check_units(include_acknowledged=True)
     storage = {"Anoxic_storage_of_XPP", "Aerobic_storage_of_XPP"}
     assert ws, "expected the PP-storage root finding to be surfaced"
     assert {w.reaction for w in ws} <= storage
+    assert set(net.units_acknowledged) == storage
+    assert net.check_units() == []
 
 
-def test_adm1_warnings_confined_to_gas_headspace():
-    # ADM1's dissolved/biological reactions are clean; the only warnings are on
+def test_adm1_findings_confined_to_gas_headspace():
+    # ADM1's dissolved/biological reactions are clean; the only findings are on
     # the gas-headspace pressure sum, which mixes COD-carried H2/CH4 with
     # carbon-carried CO2 (a documented BSM2 gas-phase unit characteristic, not a
-    # model error). Guards that the check does not leak into the biology.
-    ws = aquakin.load_model("adm1").check_units()
+    # model error), acknowledged in the YAML. Guards that the check does not leak
+    # into the biology.
+    net = aquakin.load_model("adm1")
+    ws = net.check_units(include_acknowledged=True)
     gas = {"gas_outflow_h2", "gas_outflow_ch4", "gas_outflow_co2"}
     assert ws, "expected the gas-headspace finding to be surfaced"
     assert {w.reaction for w in ws} <= gas
+    assert net.check_units() == []
+
+
+def test_adm1_parameters_all_declare_units():
+    from aquakin.utils.units import parse_units
+
+    net = aquakin.load_model("adm1")
+    assert all(parse_units(u) is not None for u in net.parameter_units.values())
 
 
 def test_check_model_units_free_function_matches_method():
     # The exported free function aquakin.check_model_units(net) is the
     # implementation the CompiledModel.check_units() method delegates to, so
-    # the two must return the same findings -- including under check_root=False.
-    net = aquakin.load_model("adm1")          # has nonzero (gas-headspace) findings
-    via_fn = aquakin.check_model_units(net)
-    via_method = net.check_units()
+    # the two must return the same findings -- including under check_root=False
+    # and include_acknowledged=True.
+    net = aquakin.load_model("adm1")          # has acknowledged gas findings
+    via_fn = aquakin.check_model_units(net, include_acknowledged=True)
+    via_method = net.check_units(include_acknowledged=True)
     assert via_fn == via_method
     assert via_fn, "adm1 should surface the gas-headspace findings"
+    assert aquakin.check_model_units(net) == net.check_units() == []
     # the check_root toggle threads through identically
-    assert (aquakin.check_model_units(net, check_root=False)
-            == net.check_units(check_root=False))
+    assert (aquakin.check_model_units(net, check_root=False, include_acknowledged=True)
+            == net.check_units(check_root=False, include_acknowledged=True))
     # a clean model gives an empty list through the free function too
     assert aquakin.check_model_units(aquakin.load_model("asm1")) == []
 
@@ -319,6 +385,35 @@ reactions:
     parameters: {k2: {value: 0.1, units: "1/s"}}
     stoichiometry: {B: -1, A: +1}
 """
+
+
+def test_units_acknowledged_hides_findings_by_default(tmp_path):
+    p = tmp_path / "ack.yaml"
+    text = _broken_yaml("k * ([A] + [B])").replace(
+        '    rate: "k * ([A] + [B])"',
+        '    rate: "k * ([A] + [B])"\n    units_acknowledged: "deliberate, for the test"',
+    )
+    p.write_text(text)
+    net = aquakin.load_model_from_file(str(p))
+    assert net.units_acknowledged == {"R": "deliberate, for the test"}
+    assert net.check_units() == []
+    assert any("operands" in w.location for w in net.check_units(include_acknowledged=True))
+
+
+@pytest.mark.parametrize("a, b, expected", [
+    ("mg/L", "g_COD/m3", True),       # same scale; currency unstated on one side
+    ("g_COD/m3", "g_COD/m3", True),
+    ("kgCOD/m3", "g_COD/m3", False),  # factor 1000
+    ("g_N/m3", "g_COD/m3", False),    # both state a currency, and they differ
+    ("mmol/L", "mol/m3", True),
+    ("m3/h", "m3/d", False),
+    ("1/s", "1/d", False),
+    ("d", "d", True),
+    ("degC", "K", None),              # unparseable -> unknown
+    ("", "K", None),
+])
+def test_units_match(a, b, expected):
+    assert aquakin.units_match(a, b) is expected
 
 
 def test_mixed_time_units_flagged(tmp_path):

@@ -134,6 +134,12 @@ class PrimaryClarifier(FlowParameterized):
     def output_ports(self) -> list[str]:
         return [self.effluent_port, self.sludge_port]
 
+    def assumed_units(self) -> dict[str, str]:
+        """Units fixed by this unit's internals: the removal correlation converts
+        the HRT ``V/Q`` to minutes with ``1440 min/d``, so the plant time unit
+        must be days (see :class:`~aquakin.plant.units.AssumedUnits`)."""
+        return {"time": "d"}
+
     def initial_state(self) -> jnp.ndarray:
         C0 = self.model.default_concentrations()
         if not self._filtered:

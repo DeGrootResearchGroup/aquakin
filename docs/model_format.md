@@ -43,6 +43,8 @@ reactions:              # list of reactions
     reference: <str>            # optional but encouraged
     rate: "<expression>"        # may be inline OR a reference to an
                                 # entry in `expressions:`
+    units_acknowledged: <str>   # optional: why the rate's units are
+                                # knowingly unconventional (see below)
     parameters:                 # optional reaction-local parameters
       <local_name>:
         value: <float>
@@ -205,6 +207,35 @@ rate: "k_photo * {fluence_rate} * [H2O2]"            # photolysis
 rate: "k * [O3] * 10 ** ({pH} - 14)"                  # OH- catalysed
 rate: "{OH_scavenging} * [OH]"                        # lumped sink
 ```
+
+## Checking units
+
+The `units:` strings on species, parameters and conditions are not used to
+convert anything, but `model.check_units()` reads them to check every rate
+expression for dimensional consistency. It is currency-aware: `g_COD/m3` and
+`g_N/m3` are different units, so it catches a Monod term comparing two
+currencies, a sum of unlike terms, a dropped concentration factor, or rate
+constants written on different time units. A blank or unparseable unit is
+skipped, so declaring units on every parameter is what makes the check useful.
+
+A literal half-saturation constant written inline, as in
+`0.1 / (0.1 + [S_NO])`, is read as an inhibition term (dimensionless) when it
+is its own subexpression, for example a named expression.
+
+Some published formulations are knowingly unconventional in their units, for
+example a molar mass written as a bare number. Give such a reaction a written
+reason:
+
+```yaml
+  - name: gas_outflow_h2
+    rate: "q_gas_norm * [S_gas_h2]"
+    units_acknowledged: "Partial pressures use the bare-number molar masses of the source."
+    stoichiometry: {S_gas_h2: -1.0}
+```
+
+`check_units()` then leaves that reaction's findings out of its result;
+`check_units(include_acknowledged=True)` still shows them, and
+`model.units_acknowledged` lists the reasons.
 
 ## Notes
 

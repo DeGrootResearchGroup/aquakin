@@ -353,6 +353,14 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
 
+    def assumed_units(self) -> dict[str, str]:
+        """Units fixed by this unit's internals: the settling velocities are in
+        ``m/d`` (so the plant time unit must be days) and the settling-function
+        concentrations (``rh``, ``rp``, ``X_threshold``) are in ``g/m3`` of
+        solids, so every settling particulate must be on a ``g/m3`` basis (see
+        :class:`~aquakin.plant.units.AssumedUnits`)."""
+        return {"time": "d", **dict.fromkeys(self.particulate_species, "g/m3")}
+
     def coupling_pattern(self):
         """Structural Jacobian sparsity, AD-derived.
 

@@ -572,9 +572,9 @@ def _units_measure(units: str) -> str | None:
     if dim is None:
         return None
     numerator = {tok for tok, exp in dim.tokens if exp > 0}
-    if numerator & {"mol", "kmol"}:
+    if numerator & {"mol", "kmol", "mmol"}:
         return "molar"
-    if numerator & {"g", "kg"}:
+    if numerator & {"g", "kg", "mg"}:
         return "mass"
     return None
 

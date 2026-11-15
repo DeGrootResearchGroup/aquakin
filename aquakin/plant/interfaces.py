@@ -62,6 +62,28 @@ _N_aa = 0.007
 _N_bac = 0.08 / 14.0
 
 
+# Species units the two BSM2 interfaces are written against: the ASM1 water line
+# in g/m3 (alkalinity in mol/m3) and the ADM1 digester in kg/m3 and kmol/m3. The
+# translators' fixed 1000 and 1/14000 factors are only right for these units.
+_ASM1_UNITS = {
+    **dict.fromkeys(("SI", "SS", "XI", "XS", "XB_H", "XB_A", "XP"), "g_COD/m3"),
+    "SO": "g_O2/m3",
+    **dict.fromkeys(("SNO", "SNH", "SND", "XND"), "g_N/m3"),
+    "SALK": "mol/m3",
+}
+_ADM1_COD_SPECIES = (
+    "S_su S_aa S_fa S_va S_bu S_pro S_ac S_h2 S_ch4 S_I "
+    "X_c X_ch X_pr X_li X_su X_aa X_fa X_c4 X_pro X_ac X_h2 X_I"
+).split()
+_ADM1_UNITS = {
+    **dict.fromkeys(_ADM1_COD_SPECIES, "kgCOD/m3"),
+    "S_IC": "kmolC/m3",
+    "S_IN": "kmolN/m3",
+    "S_cat": "kmol/m3",
+    "S_an": "kmol/m3",
+}
+
+
 @dataclass
 class ASM1toADM1:
     """ASM1 -> ADM1 interface (``asm2adm``).
@@ -197,6 +219,14 @@ class ASM1toADM1:
         S_cat = jnp.maximum(ScatminusSan, 0.0)
         S_an = jnp.maximum(-ScatminusSan, 0.0)
         return S_IC, S_cat, S_an
+
+    def assumed_source_units(self) -> dict[str, str]:
+        """ASM1 species units this translator's factors assume (g/m3 basis)."""
+        return dict(_ASM1_UNITS)
+
+    def assumed_target_units(self) -> dict[str, str]:
+        """ADM1 species units this translator's factors assume (kg, kmol/m3)."""
+        return dict(_ADM1_UNITS)
 
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         si = self._si
@@ -390,6 +420,14 @@ class ADM1toASM1:
         # translate at the digester's instantaneous pH, so they do not live here.
         self._alfa_NH = 1.0 / 14000.0
         self._alfa_alk = -0.001
+
+    def assumed_source_units(self) -> dict[str, str]:
+        """ADM1 species units this translator's factors assume (kg, kmol/m3)."""
+        return dict(_ADM1_UNITS)
+
+    def assumed_target_units(self) -> dict[str, str]:
+        """ASM1 species units this translator's factors assume (g/m3 basis)."""
+        return dict(_ASM1_UNITS)
 
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
         si = self._si

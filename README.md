@@ -157,6 +157,12 @@ model.summary()                    # tabulates every species with its units
 for w in model.check_units():      # -> list of (reaction, location, detail)
     print(w)
 
+# The plant-level counterpart: every model on one time unit, translators and
+# unit operations fed the units their built-in factors assume, and influent
+# data in the units it declares. A plant whose models disagree on the time unit
+# refuses to solve (UnitsError).
+print(plant.check_units().summary())
+
 # Conservation (mass / electron balance) check. The companion to check_units:
 # each species declares its content of the conserved quantities in the YAML
 # (`composition: {COD: 1.0}` for an organic, `{COD: -1.0}` for oxygen, `{COD:

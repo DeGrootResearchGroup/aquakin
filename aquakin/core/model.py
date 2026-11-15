@@ -455,7 +455,9 @@ class CompiledModel:
             "species",
         )
 
-    def influent(self, overrides=None, /, *, Q: float, base: str = "zero", T=None, **kwargs):
+    def influent(
+        self, overrides=None, /, *, Q: float, base: str = "zero", T=None, units=None, **kwargs
+    ):
         """Build a constant-in-time influent stream from a feed composition.
 
         Convenience for the common "constant feed of known composition" case:
@@ -475,6 +477,10 @@ class CompiledModel:
         T : float, optional
             Constant feed temperature (Kelvin). ``None`` (default) leaves the
             influent temperature-agnostic.
+        units : dict[str, str], optional
+            The units the feed is given in, keyed by ``"t"``, ``"Q"``, ``"T"`` or
+            a species name. Nothing is converted; :meth:`Plant.check_units`
+            checks the declaration against the plant and this model.
         **kwargs : float
             Convenience overrides for identifier-safe species names.
 
@@ -490,7 +496,7 @@ class CompiledModel:
         """
         from aquakin.plant.influent import InfluentSeries
 
-        return InfluentSeries.constant(self, overrides, Q=Q, base=base, T=T, **kwargs)
+        return InfluentSeries.constant(self, overrides, Q=Q, base=base, T=T, units=units, **kwargs)
 
     def parameter_values(self, overrides=None, /, **kwargs) -> jnp.ndarray:
         """Parameter vector: defaults with named (namespaced) parameters set.

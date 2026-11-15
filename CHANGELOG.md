@@ -86,8 +86,40 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `ProfileResult` with the likelihood-ratio interval. The sweep is the same as
   for `profile_likelihood`, and every grid point reuses one compiled
   objective.
+- `Plant.check_units()` checks a plant's units before you solve it and
+  returns a `PlantUnitsReport`. It confirms that every kinetic model uses the
+  same time unit; that unit operations with built-in conversions get the units
+  they assume (the UV reactor and primary clarifier need days; the Takács
+  settler and thickener need solids in g/m3); that the ASM1↔ADM1 translators'
+  g/m3↔kg/m3 factors match the models they connect; and that influent data
+  match the plant and the model. Comparisons account for scale, so `mg/L`
+  matches `g/m3` but `kg/m3` does not. `plant.check()` includes the report.
+- Influents can declare the units their data are in with `units=` on
+  `InfluentSeries`, `model.influent(...)`, `InfluentSeries.constant` and
+  `read_influent_csv`, e.g. `{"Q": "m3/h", "SS": "mg/L"}`. Nothing is
+  converted; `Plant.check_units` checks the declaration. The BSM influent
+  loaders declare their units.
+- A reaction can declare `units_acknowledged: "<reason>"` for a rate whose
+  units are knowingly unconventional. `check_units()` then leaves its findings
+  out; `check_units(include_acknowledged=True)` still shows them.
+- `aquakin.units_match(a, b)` compares two unit strings with scale included.
+
 
 ### Changed
+
+- `Plant.solve` (and every other solve) raises `UnitsError` when the plant's
+  kinetic models use different time units, for example an ozonation model in
+  seconds next to ASM1 in days. Such a plant was integrated against one clock
+  and gave wrong results without a warning.
+- `Plant.connect` raises `WiringError` when an explicit `translator=` was
+  built for models whose species lists differ from the ones it connects.
+- `model.check_units()` reads an inline half-saturation constant written as
+  `c / (c + X)` as a dimensionless inhibition term, so the WATS sewer models
+  no longer report false findings. `mg` and `mmol` are now parsed as units
+  rather than as a metre times a gram or mole.
+- Every shipped model now passes `check_units()`: all ADM1 parameters declare
+  units, and the reactions with knowingly unconventional units (the ADM1
+  gas-outflow terms and the ASM2d-TUD poly-P storage terms) are acknowledged.
 
 - The layered secondary clarifier (`TakacsClarifier`, and the settler of
   `build_bsm1(use_takacs=True)` / `build_bsm2`) now settles solids between its
@@ -146,6 +178,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `MBRUnit` and `SBRUnit`.
 
 ### Fixed
+
+- The rate constants of `wats_sewer_khalil_paper_balanced_biofilm_biomass`
+  that multiply the local biomass now declare biomass-specific units
+  (g/gCOD/d) instead of the areal units (g/m2/d) they carried over from the
+  lumped model. Values are unchanged.
 
 - `asm3_2step_n2o` now follows Pocquet et al. (2016) in two places, which
   changes its N₂O and ammonia-oxidation rates. The ND-pathway dissolved-oxygen

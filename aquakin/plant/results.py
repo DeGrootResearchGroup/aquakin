@@ -45,16 +45,26 @@ class PlantCheck:
     recycles : list[str]
         ``"unit.port"`` recycle (back-edge) source ports the topological sort
         detected, for visibility into how the graph was cut.
+    unit_issues : list[PlantUnitIssue]
+        The findings of :meth:`Plant.check_units`. Its ``"error"`` entries
+        (:attr:`unit_errors`) are errors here too; its warnings are advisory.
     """
 
     unfed_ports: list = field(default_factory=list)
     dangling_outputs: list = field(default_factory=list)
     recycles: list = field(default_factory=list)
+    unit_issues: list = field(default_factory=list)
+
+    @property
+    def unit_errors(self) -> list:
+        """The ``"error"`` findings of the unit audit."""
+        return [i for i in self.unit_issues if i.severity == "error"]
 
     @property
     def ok(self) -> bool:
-        """True when no input port is unfed (a dangling output is not an error)."""
-        return not self.unfed_ports
+        """True when no input port is unfed and the unit audit found no error
+        (a dangling output or a unit warning is not an error)."""
+        return not self.unfed_ports and not self.unit_errors
 
     def summary(self) -> str:
         """A short human-readable report."""
@@ -65,6 +75,11 @@ class PlantCheck:
             lines.append(f"  unconsumed outputs (info): {self.dangling_outputs}")
         if self.recycles:
             lines.append(f"  recycle edges: {self.recycles}")
+        for issue in self.unit_errors:
+            lines.append(f"  units (error): [{issue.where}] {issue.detail}")
+        for issue in self.unit_issues:
+            if issue.severity != "error":
+                lines.append(f"  units ({issue.severity}): [{issue.where}] {issue.detail}")
         return "\n".join(lines)
 
 

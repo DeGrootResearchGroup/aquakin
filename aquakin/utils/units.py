@@ -123,7 +123,24 @@ DIMENSIONLESS = Dimension()
 # = m^3, ``s-1`` = s^-1, or a caret exponent ``^0.5``). Longest first so the
 # scan prefers ``mol`` over ``m`` and ``min`` over ``m``. ``M`` is molarity and
 # is normalised to ``mol/L`` after parsing.
-_UNIT_SYMBOLS = ["kmol", "mol", "min", "kg", "bar", "Pa", "g", "m", "L", "d", "s", "h", "M", "K"]
+_UNIT_SYMBOLS = [
+    "kmol",
+    "mmol",
+    "mol",
+    "min",
+    "kg",
+    "mg",
+    "bar",
+    "Pa",
+    "g",
+    "m",
+    "L",
+    "d",
+    "s",
+    "h",
+    "M",
+    "K",
+]
 # Chemical "currency" tokens. ``O2`` carries the meaning of oxygen-as-O2;
 # ``TSS`` is suspended-solids mass (a distinct currency in the ASM2d/ASM3
 # models). These are the distinct base dimensions the check exists to keep
@@ -357,6 +374,91 @@ class _ProductParser:
         return word
 
 
+# --- scale-aware comparison ---------------------------------------------------
+
+# Each scaled symbol -> (base symbol, base exponent, factor), so that one unit of
+# the symbol equals ``factor * base**exponent``. Unlisted symbols (``g``, ``mol``,
+# ``m``, ``s``, ``Pa``, ``K``) are already base symbols.
+_TO_BASE = {
+    "kg": ("g", 1, 1.0e3),
+    "mg": ("g", 1, 1.0e-3),
+    "kmol": ("mol", 1, 1.0e3),
+    "mmol": ("mol", 1, 1.0e-3),
+    "L": ("m", 3, 1.0e-3),
+    "d": ("s", 1, 86400.0),
+    "h": ("s", 1, 3600.0),
+    "min": ("s", 1, 60.0),
+    "bar": ("Pa", 1, 1.0e5),
+}
+
+
+def to_base_units(dim: Dimension) -> tuple[Dimension, float]:
+    """Express ``dim`` in base symbols, returning ``(base_dimension, factor)``.
+
+    One unit of ``dim`` equals ``factor`` units of ``base_dimension``: for
+    example ``kg/m3`` is ``(g/m3, 1000)`` and ``mg/L`` is ``(g/m3, 1)``.
+    Chemical currency tokens (``COD``, ``N``, ...) carry no scale and pass
+    through unchanged.
+    """
+    out: dict = {}
+    factor = 1.0
+    for tok, exp in dim.tokens:
+        base, base_exp, f = _TO_BASE.get(tok, (tok, 1, 1.0))
+        out[base] = out.get(base, Fraction(0)) + exp * base_exp
+        factor *= f ** float(exp)
+    return Dimension(out), factor
+
+
+def _drop_currency(dim: Dimension) -> Dimension:
+    return Dimension({k: v for k, v in dim.tokens if k not in _CURRENCY_TOKENS})
+
+
+def _has_currency(dim: Dimension) -> bool:
+    return any(k in _CURRENCY_TOKENS for k, _ in dim.tokens)
+
+
+def units_match(a: str, b: str, *, rtol: float = 1e-9) -> bool | None:
+    """Whether two unit strings denote the same unit, scale included.
+
+    Unlike the rate-expression check (which compares symbols exactly), this
+    converts both sides to base symbols first, so ``mg/L`` matches ``g/m3`` and
+    ``m3/d`` matches ``m3/d`` but ``kgCOD/m3`` does not match ``g_COD/m3`` (a
+    factor of 1000) and ``1/s`` does not match ``1/d``. Chemical currencies are
+    compared only when **both** strings name one, so a bare ``g/m3`` or
+    ``mg/L`` matches ``g_COD/m3`` (the currency is simply unstated).
+
+    Parameters
+    ----------
+    a, b : str
+        Unit strings in any dialect :func:`parse_units` accepts.
+    rtol : float, optional
+        Relative tolerance on the scale factor.
+
+    Returns
+    -------
+    bool or None
+        ``True``/``False``, or ``None`` when either string is blank or cannot be
+        parsed (unknown, so not comparable).
+
+    Examples
+    --------
+    >>> units_match("mg/L", "g_COD/m3")
+    True
+    >>> units_match("kgCOD/m3", "g_COD/m3")
+    False
+    """
+    da, db = parse_units(a), parse_units(b)
+    if da is None or db is None:
+        return None
+    if not (_has_currency(da) and _has_currency(db)):
+        da, db = _drop_currency(da), _drop_currency(db)
+    base_a, fa = to_base_units(da)
+    base_b, fb = to_base_units(db)
+    if base_a != base_b:
+        return False
+    return abs(fa - fb) <= rtol * max(abs(fa), abs(fb))
+
+
 # --- unit propagation through a rate AST + the check ------------------------
 
 
@@ -532,7 +634,7 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
 
 # Tokens recognised in the canonical "concentration per time" root form.
 _TIME_TOKENS = {"d", "s", "h", "min"}
-_MASS_TOKENS = {"g", "kg", "mol", "kmol"}
+_MASS_TOKENS = {"g", "kg", "mg", "mol", "kmol", "mmol"}
 _VOLUME_LITRE = "L"
 _LENGTH_TOKEN = "m"
 
