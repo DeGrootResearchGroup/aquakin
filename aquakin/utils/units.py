@@ -402,6 +402,27 @@ def _param_dim(ctx: _Ctx, local_name: str) -> Dimension | None:
     return None
 
 
+def _additive_terms(node: ASTNode):
+    """Yield the terms of a (possibly nested) ``a + b + ...`` sum."""
+    if isinstance(node, AddNode):
+        yield from _additive_terms(node.left)
+        yield from _additive_terms(node.right)
+    else:
+        yield node
+
+
+def _is_literal_half_saturation(node: DivideNode) -> bool:
+    """True for ``c / (c + X + ...)`` with the same numeric literal ``c`` as the
+    numerator and as one term of the additive denominator -- a Monod inhibition
+    term ``K / (K + X)`` whose constant ``K`` is written inline."""
+    if not isinstance(node.left, ConstantNode) or not isinstance(node.right, AddNode):
+        return False
+    return any(
+        isinstance(t, ConstantNode) and t.value == node.left.value
+        for t in _additive_terms(node.right)
+    )
+
+
 def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
     """Infer the dimension of a rate sub-expression, accumulating warnings.
 
@@ -455,8 +476,14 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
         ro = _infer(node.right, ctx)
         return None if lo is None or ro is None else lo * ro
     if isinstance(node, DivideNode):
-        lo = _infer(node.left, ctx)
         ro = _infer(node.right, ctx)
+        if _is_literal_half_saturation(node):
+            # ``c / (c + X)``: an inhibition switch with its half-saturation
+            # constant written as a bare literal. The literal carries the
+            # summand's units (it is added to ``X``), so the ratio is
+            # dimensionless rather than ``1 / [X]``.
+            return None if ro is None else DIMENSIONLESS
+        lo = _infer(node.left, ctx)
         return None if lo is None or ro is None else lo / ro
     if isinstance(node, SafeDivideNode):
         # safe_div(num, denom) is num/denom dimensionally (the zero-guard only
@@ -573,7 +600,9 @@ def check_rate_units(
     return ctx.warnings
 
 
-def check_model_units(model, *, check_root: bool = True) -> list:
+def check_model_units(
+    model, *, check_root: bool = True, include_acknowledged: bool = False
+) -> list:
     """Run :func:`check_rate_units` over every reaction in a compiled model.
 
     Parameters
@@ -582,6 +611,12 @@ def check_model_units(model, *, check_root: bool = True) -> list:
         The compiled model to check.
     check_root : bool, default True
         Whether to also assert each rate resolves to ``currency/volume/time``.
+    include_acknowledged : bool, default False
+        Also return the findings of reactions whose YAML declares
+        ``units_acknowledged:`` (a written reason the reaction's units are
+        knowingly unconventional, e.g. a molar mass written as a bare number).
+        By default they are left out, so the result lists only what still needs
+        attention; the reasons are in ``model.units_acknowledged``.
 
     Returns
     -------
@@ -630,4 +665,7 @@ def check_model_units(model, *, check_root: bool = True) -> list:
             + ", ".join(f"{r} -> 1/{u}" for r, u in sorted(inv_time.items()))
         )
         warnings.append(UnitWarning("(model)", "time unit", detail))
+    if not include_acknowledged:
+        acknowledged = getattr(model, "units_acknowledged", None) or {}
+        warnings = [w for w in warnings if w.reaction not in acknowledged]
     return warnings

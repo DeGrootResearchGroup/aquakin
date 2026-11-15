@@ -109,12 +109,16 @@ def model_to_latex(model: CompiledModel) -> dict[str, str]:
     }
 
 
-def check_units(model: CompiledModel, *, check_root: bool = True) -> list:
+def check_units(
+    model: CompiledModel, *, check_root: bool = True, include_acknowledged: bool = False
+) -> list:
     """Dimensional-consistency audit of the rate expressions (body of
     ``check_units``)."""
     from aquakin.utils.units import check_model_units
 
-    return check_model_units(model, check_root=check_root)
+    return check_model_units(
+        model, check_root=check_root, include_acknowledged=include_acknowledged
+    )
 
 
 def model_composition(

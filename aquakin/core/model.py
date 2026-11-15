@@ -196,6 +196,10 @@ class CompiledModel:
     # is kept as ``""`` and treated as "unknown" (skipped) by the check.
     parameter_units: dict[str, str] = field(default_factory=dict)
     condition_units: dict[str, str] = field(default_factory=dict)
+    # Reaction name -> written reason its rate units are knowingly
+    # unconventional (the YAML ``units_acknowledged:`` field); ``check_units``
+    # leaves those reactions' findings out unless asked for them.
+    units_acknowledged: dict[str, str] = field(default_factory=dict)
     parameter_bounds: dict[str, tuple[float, float]] = field(default_factory=dict)
     parameter_transforms: dict[str, str] = field(default_factory=dict)
     # Gaussian priors per namespaced parameter name, as ``(mean, std)`` in
@@ -879,7 +883,7 @@ class CompiledModel:
 
         return introspect.model_to_latex(self)
 
-    def check_units(self, *, check_root: bool = True) -> list:
+    def check_units(self, *, check_root: bool = True, include_acknowledged: bool = False) -> list:
         """Check the rate expressions for dimensional ("unit") consistency.
 
         A currency-aware dimensional analysis of every ``rate:`` expression: it
@@ -901,6 +905,10 @@ class CompiledModel:
             Also assert each rate resolves to ``currency / volume / time`` (e.g.
             ``g_COD/m3/d`` or ``mol/L/s``). Set ``False`` to run only the local
             operand- and Monod-consistency rules.
+        include_acknowledged : bool, default False
+            Also return the findings of reactions whose YAML declares a
+            ``units_acknowledged:`` reason (listed in
+            :attr:`units_acknowledged`). By default they are left out.
 
         Returns
         -------
@@ -916,7 +924,9 @@ class CompiledModel:
         """
         from aquakin.core import introspect
 
-        return introspect.check_units(self, check_root=check_root)
+        return introspect.check_units(
+            self, check_root=check_root, include_acknowledged=include_acknowledged
+        )
 
     def composition(
         self, *, params=None, electron_acceptor_cod: bool = True
@@ -1617,6 +1627,9 @@ def compile_model(spec: Any) -> CompiledModel:
         species_composition=species_composition,
         parameter_units=parameter_units,
         condition_units=condition_units,
+        units_acknowledged={
+            r.name: r.units_acknowledged for r in spec.reactions if r.units_acknowledged
+        },
         parameter_bounds=parameter_bounds,
         parameter_transforms=parameter_transforms,
         parameter_priors=parameter_priors,
