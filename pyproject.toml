@@ -48,6 +48,9 @@ dependencies = [
     "scipy>=1.10",
 ]
 
+[project.scripts]
+aquakin = "aquakin.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/DeGrootResearchGroup/aquakin"
 Documentation = "https://aquakin.readthedocs.io"

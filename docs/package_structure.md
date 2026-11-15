@@ -8,6 +8,7 @@ aquakin/
 │
 ├── aquakin/
 │   ├── __init__.py                  # public API + jax x64 config
+│   ├── __main__.py                  # `aquakin` command: `catalog`, `serve` (JSON lines)
 │   │
 │   ├── core/
 │   │   ├── nodes.py                 # ASTNode base class + all node types

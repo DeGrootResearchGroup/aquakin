@@ -56,6 +56,10 @@ function selectOnly(evt, nodes, edges) {
 const onEdgeClick = ({ event, edge }) => selectOnly(event, [], [edge]);
 const onNodeClick = ({ event, node }) => selectOnly(event, [node], []);
 
+let lastSelection = "[[],[]]";
+const selectionKey = () =>
+  JSON.stringify([getSelectedNodes.value.map((n) => n.id), getSelectedEdges.value.map((e) => e.id)]);
+
 function syncNodes(list) {
   const want = new Set(list.map((n) => n.id));
   const stale = getNodes.value.filter((n) => !want.has(n.id)).map((n) => n.id);
@@ -63,13 +67,15 @@ function syncNodes(list) {
   const fresh = [];
   for (const n of list) {
     const cur = findNode(n.id);
-    if (!cur) fresh.push({ type: "unit", ...n, data: { ...n.data } });
+    if (!cur) fresh.push({ type: "unit", ...n, data: { ...n.data }, selected: !!n.selected });
     else {
       cur.data = { ...n.data };
+      cur.selected = !!n.selected;
       if (!cur.dragging) cur.position = { ...n.position };
     }
   }
   if (fresh.length) addNodes(fresh);
+  lastSelection = selectionKey();
 }
 
 function syncEdges(list) {
@@ -84,6 +90,7 @@ function syncEdges(list) {
     else Object.assign(cur, { type: view.type, data: view.data, label: view.label, animated: view.animated, class: view.class });
   }
   if (fresh.length) addEdges(fresh);
+  lastSelection = selectionKey();
 }
 
 // Nodes first: an edge to a new node needs the node in the store.
@@ -137,9 +144,19 @@ function onEdgesChange(changes) {
   if (ids.length) emit("remove", { nodes: [], edges: ids });
 }
 
-function onSelection({ nodes, edges }) {
-  emit("select", { nodes: (nodes || []).map((n) => n.id), edges: (edges || []).map((e) => e.id) });
-}
+// Report the selection whenever Vue Flow's own selected lists change (a click,
+// a box selection, a click on the empty pane), once per change. Python marks
+// its selected unit in `nodes`; applying that (or removing a renamed node)
+// resets the reference, so Python's own update is never reported back.
+watch(
+  () => [getSelectedNodes.value.map((n) => n.id), getSelectedEdges.value.map((e) => e.id)],
+  ([nodes, edges]) => {
+    const key = JSON.stringify([nodes, edges]);
+    if (key === lastSelection) return;
+    lastSelection = key;
+    emit("select", { nodes, edges });
+  }
+);
 
 function onDragOver(evt) {
   if (evt.dataTransfer.types.includes(props.dragType)) {
@@ -176,11 +193,10 @@ function onDrop(evt) {
       @node-drag-stop="onDragStop"
       @nodes-change="onNodesChange"
       @edges-change="onEdgesChange"
-      @selection-change="onSelection"
     >
       <Background :gap="20" pattern-color="var(--ak-grid)" />
       <Controls position="bottom-left" />
-      <MiniMap position="bottom-right" :width="160" :height="100" pannable zoomable :node-color="(n) => (n.data && n.data.colour) || '#888'" />
+      <MiniMap position="bottom-right" :width="160" :height="100" mask-color="rgba(127, 127, 127, 0.18)" pannable zoomable :node-color="(n) => (n.data && n.data.colour) || '#888'" />
     </VueFlow>
   </div>
 </template>

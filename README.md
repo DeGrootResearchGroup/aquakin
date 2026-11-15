@@ -354,6 +354,27 @@ primitives `monte_carlo`, `compare_scenarios` and `optimize_design` propagate
 input uncertainty and size designs to a permit at minimum cost. See
 `examples/bsm2_ghg_cost_report.py`.
 
+### The unit catalogue and the `aquakin` command
+
+`aquakin.plant.catalog` describes every plant unit type as plain data: its
+settings (types, defaults and help text, read from the unit's own constructor
+and docstring), how its ports follow from those settings, and which settings
+are mutually exclusive. It is meant for front ends such as a flowsheet editor.
+`check_unit(kind, name, settings)` builds the real unit and returns its ports,
+or the constructor's error message.
+
+The same information is available from the command line, for a front end
+running in another process:
+
+```bash
+aquakin catalog          # the catalogue as JSON
+aquakin serve            # answer JSON-line requests on stdin/stdout
+```
+
+`aquakin serve` reads one request per line (`{"id": 1, "command": "catalog"}`)
+and answers each with one line; the commands are `ping`, `catalog`, `models`,
+`model` and `check_unit`.
+
 ## Advanced: differentiation & sensitivity
 
 Every solve — reactor or whole plant — is differentiable. The machinery below is

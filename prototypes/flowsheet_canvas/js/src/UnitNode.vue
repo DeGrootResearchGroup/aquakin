@@ -19,16 +19,19 @@ function isValidConnection(c) {
   );
 }
 
-function isOpen(port) {
-  return (props.data.open || []).includes(port);
-}
+const isOpen = (port) => (props.data.open || []).includes(port);
+const isDangling = (port) => (props.data.dangling || []).includes(port);
 </script>
 
 <template>
-  <div class="ak-unit" :class="{ 'ak-selected': selected }" :style="{ '--ak-accent': data.colour || '#5b8def' }">
+  <div class="ak-unit" :class="{ 'ak-selected': selected, 'ak-has-error': !!data.error }" :style="{ '--ak-accent': data.colour || '#5b8def' }">
     <div class="ak-head">
-      <span class="ak-name">{{ data.label || id }}</span>
-      <span class="ak-kind">{{ data.kindLabel }}</span>
+      <span v-if="data.icon" class="ak-icon" v-html="data.icon" />
+      <div class="ak-titles">
+        <span class="ak-name">{{ data.label || id }}</span>
+        <span class="ak-kind">{{ data.kindLabel }}</span>
+      </div>
+      <span v-if="data.error" class="ak-error" :title="data.error">!</span>
     </div>
     <div v-if="data.summary" class="ak-summary">{{ data.summary }}</div>
     <div class="ak-ports">
@@ -36,7 +39,7 @@ function isOpen(port) {
         <Handle :id="p" type="target" :position="Position.Left" class="ak-handle" :is-valid-connection="isValidConnection" />
         <span>{{ p }}</span>
       </div>
-      <div v-for="p in data.outputs" :key="'out-' + p" class="ak-port ak-out" :class="{ 'ak-open': isOpen(p) }">
+      <div v-for="p in data.outputs" :key="'out-' + p" class="ak-port ak-out" :class="{ 'ak-open': isOpen(p), 'ak-dangling': isDangling(p) }">
         <span>{{ p }}</span>
         <Handle :id="p" type="source" :position="Position.Right" class="ak-handle" :is-valid-connection="isValidConnection" />
       </div>

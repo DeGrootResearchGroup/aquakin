@@ -21,6 +21,17 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- A unit catalogue for front ends, `aquakin.plant.catalog`. It describes each
+  plant unit type as plain JSON-compatible data: its settings, with types,
+  defaults and the help text from the unit's docstring; how its ports follow
+  from those settings; and which settings must be given one at a time. Settings
+  are read from each unit's constructor, so new arguments appear without
+  editing the catalogue. `check_unit(kind, name, settings)` builds the real unit
+  and reports its ports or the constructor's error.
+- An `aquakin` command. `aquakin catalog` prints the catalogue as JSON, and
+  `aquakin serve` answers JSON-line requests on standard input and output
+  (`catalog`, `models`, `model`, `check_unit`, `ping`), so a separate process
+  such as a flowsheet editor can use aquakin without importing it.
 - `Plant.solve_sensitivity(corrector=...)` chooses how each implicit stage of
   the `[y; S]` sensitivity solve is solved. The new default, `"staggered"`,
   converges the plant state first and then solves the sensitivity, which is

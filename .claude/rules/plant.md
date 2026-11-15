@@ -669,6 +669,27 @@ cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic eff
 means within 0.07% of Takács, the constant-influent steady state identical (layers
 2–5 equal there, where the rules agree).
 
+**Unit catalogue (`plant/catalog.py`, the `aquakin` command).** Front ends
+(the flowsheet editor prototype) learn the unit types from
+`aquakin.plant.catalog`, never by importing unit classes. A kind's *settings* are
+read from the class: constructor signature (types mapped to front-end types
+such as `number`, `port_name`, `aeration`, `unsupported`), dataclass default
+factories, and the docstring's `Parameters` section for help. Only what the
+signature cannot say is declared per kind in `_build_kinds`: label, category,
+port rules beyond the naming convention (`input_port`/`input_port_names` are
+inputs, every other `*_port` and the port-keyed mappings are outputs, in
+constructor order; fixed ports such as the splitters' `in`, the mixer's `out`,
+the storage tank's `out`/`bypass` are `PortRule(form="fixed")`), GUI-friendly
+defaults for required port settings, and `exactly_one_of` groups.
+`check_unit` builds the real unit and is the authority. **When adding a unit
+class or changing a unit's ports**, add or update its kind:
+`tests/unit/test_plant_catalog.py` builds every kind and compares the
+rule-derived ports with the built unit's, and fails if an exported unit class
+has no kind. `aquakin serve` (`aquakin/__main__.py`) is a JSON-lines worker
+(`catalog`, `models`, `model`, `check_unit`, `ping`); stdout carries replies
+only (stdout is redirected to stderr while a handler runs), and a failed request
+gets `{"ok": false, "error": ...}` without stopping the worker.
+
 **Shared separator/clarifier helpers.** The separator/clarifier family resolves
 its settling / particulate / TSS species lists through the shared
 [`species_mask` / `species_indices`](aquakin/plant/_constants.py) helpers, which
