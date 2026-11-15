@@ -102,21 +102,23 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   objective.
 - `Plant.check_units()` checks a plant's units before you solve it and
   returns a `PlantUnitsReport`. It confirms that every kinetic model uses the
-  same time unit; that unit operations with built-in conversions get the units
-  they assume (the UV reactor and primary clarifier need days; the Takács
-  settler and thickener need solids in g/m3); and that influent data match
-  the plant and the model. Comparisons account for scale, so `mg/L`
+  same time unit; that unit operations with built-in constants get the units
+  they assume (the UV reactor and primary clarifier need days; the thickener
+  needs its TSS species in g/m3; the Takács settler, while it uses its default
+  BSM settling parameters, needs days and TSS species in g/m3); and that
+  influent data match the plant and the model. Comparisons account for scale, so `mg/L`
   matches `g/m3` but `kg/m3` does not. `plant.check()` includes the report.
 - Influents can declare the units their data are in with `units=` on
   `InfluentSeries`, `model.influent(...)`, `InfluentSeries.constant` and
   `read_influent_csv`, e.g. `{"Q": "m3/h", "SS": "mg/L"}`. Nothing is
-  converted; `Plant.check_units` checks the declaration. The BSM influent
+  converted; `Plant.check_units` checks the declaration, and a declared unit
+  that cannot be read is rejected. The BSM influent
   loaders declare their units.
 - A reaction can declare `units_acknowledged: "<reason>"` for a rate whose
   units are knowingly unconventional. `check_units()` then leaves its findings
   out; `check_units(include_acknowledged=True)` still shows them.
 - `aquakin.units_match(a, b)` compares two unit strings with scale included,
-  and `aquakin.utils.conversion_factor(a, b)` gives the factor between them.
+  and `aquakin.conversion_factor(a, b)` gives the factor between them.
 
 
 ### Changed
@@ -129,8 +131,16 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   units the connected models declare and convert them into the units their
   equations use, instead of assuming ASM1 in g/m3 and ADM1 in kg/m3 and
   kmol/m3. A model declared on another basis (an ADM1 in g/m3) now translates
-  correctly; a unit that cannot be converted or read raises when the translator
-  is built. Results with the shipped models are unchanged.
+  correctly. A declared unit that cannot be converted to the interface's (for
+  example inorganic N as a mass where moles are expected, or a model left at
+  the schema's default `mol/L` species units) now raises when the translator
+  is built; a unit that cannot be read gives a warning and is taken to be the
+  interface's. `Plant.connect` rejects a translator built for models that
+  declare different units from the models it connects. Results with the
+  shipped models are unchanged.
+- `plant.check()` includes the unit audit: `PlantCheck.ok` is now also false
+  when `Plant.check_units` finds an error, and `check(raise_on_error=True)`
+  raises `UnitsError` for one.
 - `Plant.connect` raises `WiringError` when an explicit `translator=` was
   built for models whose species lists differ from the ones it connects.
 - `model.check_units()` reads an inline half-saturation constant written as

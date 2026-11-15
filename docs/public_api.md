@@ -111,7 +111,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | To… | Use |
 |---|---|
 | Dimensional consistency of rate expressions | `check_model_units`, `parse_units` |
-| Compare two unit strings, scale included | `units_match` |
+| Compare or convert two unit strings, scale included | `units_match`, `conversion_factor` |
 | Mass / electron balance of stoichiometry | `check_conservation`, `check_nitrogen`, `mass_balance` |
 | Composition tables | `composition_table`, `canonical_content` |
 

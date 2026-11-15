@@ -82,6 +82,31 @@ def test_bsm2_with_shipped_influent_audits_clean():
     assert report.warnings == []
 
 
+def test_bsm_influent_loaders_suit_a_subset_model(tmp_path):
+    # A model using only some of the file's columns gets only its own entries.
+    path = tmp_path / "sub.yaml"
+    path.write_text(
+        """
+model:
+  name: sub
+  description: "two ASM1 species"
+species:
+  - {name: SS, units: g_COD/m3, default_concentration: 1.0}
+  - {name: SNH, units: g_N/m3, default_concentration: 1.0}
+conditions: []
+reactions:
+  - name: R
+    rate: "k * [SS]"
+    parameters: {k: {value: 0.1, units: "1/d"}}
+    stoichiometry: {SS: -1}
+"""
+    )
+    sub = aquakin.load_model_from_file(str(path))
+    for loader, extra in ((load_bsm1_influent, set()), (load_bsm2_influent, {"T"})):
+        series = loader("dry", sub)
+        assert set(series.units) == {"t", "Q", "SS", "SNH"} | extra
+
+
 def test_bsm_influent_loaders_declare_units(asm1):
     bsm1 = load_bsm1_influent("dry", asm1)
     assert bsm1.units["t"] == "d" and bsm1.units["Q"] == "m3/d"
@@ -145,6 +170,55 @@ def test_settler_flags_particulates_in_kg_per_m3(asm1):
     errs = _errors(plant, include_models=False)
     assert len(errs) == 1
     assert "unit 'settler'" in errs[0] and "'XS'" in errs[0] and "kgCOD/m3" in errs[0]
+
+
+def _in_hours(model):
+    """A copy of ``model`` whose rate constants are declared per hour."""
+    import re
+
+    per_hour = {
+        k: re.sub(r"(?<![A-Za-z_])d(?![A-Za-z_0-9])", "h", u)
+        for k, u in model.parameter_units.items()
+    }
+    return dataclasses.replace(model, parameter_units=per_hour)
+
+
+def test_settler_with_own_parameters_assumes_nothing(asm1):
+    # Settling parameters the user supplies are in the plant's units, so a
+    # settler in an hourly plant is fine; only the BSM defaults fix m/d.
+    hourly = _in_hours(asm1)
+    assert hourly.time_unit == "h"
+    custom = dict(v0=19.75, vmax=10.4, rh=5.76e-4, rp=2.86e-3, fns=2.28e-3, X_threshold=3000.0)
+    plant = Plant("hourly")
+    plant.add_unit(_cstr("tank", hourly))
+    plant.add_unit(
+        TakacsClarifier(
+            "settler", hourly, area=1500.0, height=4.0, underflow_Q=400.0, settling_params=custom
+        )
+    )
+    plant.connect("tank", "settler")
+    assert plant.units["settler"].assumed_units() == {}
+    assert plant.check_units(include_models=False).ok
+    plant._build_state_layout()  # the solve-time guard lets it through
+
+    defaults = Plant("hourly_defaults")
+    defaults.add_unit(_cstr("tank", hourly))
+    defaults.add_unit(TakacsClarifier("settler", hourly, area=1500.0, height=4.0, underflow_Q=400.0))
+    defaults.connect("tank", "settler")
+    with pytest.raises(UnitsError, match="assume time in 'd'"):
+        defaults._build_state_layout()
+
+
+def test_settler_ignores_species_outside_tss(asm1):
+    # XND carries no TSS weight, so its units do not enter the settling
+    # function and are not constrained.
+    model = _with_units(asm1, XND="kmolN/m3")
+    plant = Plant("settler_xnd")
+    plant.add_unit(_cstr("tank", model))
+    plant.add_unit(TakacsClarifier("settler", model, area=1500.0, height=4.0, underflow_Q=1.0e4))
+    plant.connect("tank", "settler")
+    assert "XND" not in plant.units["settler"].assumed_units()
+    assert plant.check_units(include_models=False).ok
 
 
 # ----- translators -----------------------------------------------------------------
@@ -219,8 +293,16 @@ def test_translator_rejects_a_unit_it_cannot_convert(asm1, adm1):
     # Inorganic N as a mass needs a molar mass, not a unit conversion.
     with pytest.raises(ValueError, match="'S_IN'.*cannot be converted"):
         ASM1toADM1(asm1, _with_units(adm1, S_IN="g_N/m3"))
-    with pytest.raises(ValueError, match="cannot read the units 'furlongs'"):
-        ADM1toASM1(adm1, _with_units(asm1, SNH="furlongs"))
+    # A model left at the schema's default species units (mol/L) claims an
+    # amount of substance where the ASM1 side works in g_COD/m3.
+    with pytest.raises(ValueError, match="cannot be converted"):
+        ASM1toADM1(_with_units(asm1, SS="mol/L"), adm1)
+
+
+def test_translator_warns_and_assumes_working_unit_when_unreadable(asm1, adm1):
+    with pytest.warns(UserWarning, match="cannot read the units 'furlongs'.*assuming 'g_N/m3'"):
+        tr = ADM1toASM1(adm1, _with_units(asm1, SNH="furlongs"))
+    assert tr._target_scale is None
 
 
 def test_translated_plant_in_other_units_audits_clean(asm1, adm1):
@@ -238,6 +320,17 @@ def test_connect_rejects_translator_built_for_other_models(asm1, adm1):
     plant.add_unit(_cstr("b", asm1))
     with pytest.raises(WiringError, match="translator's target model is 'adm1'"):
         plant.connect("a", "b", translator=ASM1toADM1(asm1, adm1))
+
+
+def test_connect_rejects_translator_built_for_models_in_other_units(asm1, adm1):
+    # The translator converts from the units of the models it was built with,
+    # so wiring a kg/m3 translator to a g/m3 digester would feed it values 1000x
+    # too small.
+    plant = Plant("stale_translator")
+    plant.add_unit(_cstr("a", asm1))
+    plant.add_unit(_cstr("d", _adm1_in_grams(adm1)))
+    with pytest.raises(WiringError, match="built for a target model declaring 'S_su'"):
+        plant.connect("a", "d", translator=ASM1toADM1(asm1, adm1))
 
 
 def test_connect_accepts_translator_on_same_species_instance(asm1, adm1):
@@ -273,6 +366,7 @@ def test_influent_declared_units_that_match_are_clean(asm1):
         ({"Q": "m3/h"}, "flow 'Q' in 'm3/h'"),
         ({"t": "h"}, "time 't' in 'h'"),
         ({"T": "degC"}, "Kelvin"),
+        ({"T": "℃"}, "Kelvin"),
         ({"SS": "kgCOD/m3"}, "species 'SS' in 'kgCOD/m3'"),
         ({"SNH": "g_COD/m3"}, "species 'SNH'"),
     ],
@@ -281,6 +375,11 @@ def test_influent_declared_units_that_disagree(asm1, units, fragment):
     feed = asm1.influent({"SS": 60.0}, Q=18446.0, units=units)
     errs = _errors(_single_tank(asm1, feed), include_models=False)
     assert len(errs) == 1 and fragment in errs[0], errs
+
+
+def test_influent_units_reject_unreadable_units(asm1):
+    with pytest.raises(ValueError, match="cannot be read: t='hours'"):
+        asm1.influent({"SS": 60.0}, Q=1.0, units={"t": "hours"})
 
 
 def test_influent_units_reject_unknown_keys(asm1):

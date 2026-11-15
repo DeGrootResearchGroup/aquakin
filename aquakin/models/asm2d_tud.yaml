@@ -310,7 +310,7 @@ reactions:
   - name: Anoxic_storage_of_XPP
     description: "Anoxic storage of XPP"
     rate: "qPP * etaNO_PAO * [XPAO] / [XPP] * Monod_KO_PAO * Monod_SNO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
-    units_acknowledged: "The storage rate scales with 1/f_PP = [XPAO]/[XPP] (gCOD/gP), while qPP is declared in 1/d as in the source parameter set, so the rate does not reduce to a single currency per volume per time."
+    units_acknowledged: "The storage rate scales with 1/f_PP = [XPAO]/[XPP] (gCOD/gP), while qPP is declared in 1/d, so the rate does not reduce to a single currency per volume per time."
     stoichiometry:
       SNH: "iN_BM / YPP_NO"
       SNO: "(-1) * 1 / YPP_NO / iNO3_N2"
@@ -361,7 +361,7 @@ reactions:
   - name: Aerobic_storage_of_XPP
     description: "Aerobic storage of XPP"
     rate: "qPP * [XPAO] / [XPP] * Monod_SO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
-    units_acknowledged: "The storage rate scales with 1/f_PP = [XPAO]/[XPP] (gCOD/gP), while qPP is declared in 1/d as in the source parameter set, so the rate does not reduce to a single currency per volume per time."
+    units_acknowledged: "The storage rate scales with 1/f_PP = [XPAO]/[XPP] (gCOD/gP), while qPP is declared in 1/d, so the rate does not reduce to a single currency per volume per time."
     stoichiometry:
       SO: "(-1) / YPP_O"
       SNH: "iN_BM / YPP_O"

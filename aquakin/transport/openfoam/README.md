@@ -66,24 +66,24 @@ The Python entry point is `aquakin.CFDReactor`. A C++ `fvOptions` plugin
 
 ```python
 reactor = aquakin.CFDReactor(
-    model,  # CompiledModel loaded via aquakin.load_model(...)
+    model,        # CompiledModel loaded via aquakin.load_model(...)
     rtol=1e-6,
-    atol=1e-9,  # scalar or (n_species,) array for per-species tolerance
-    adjoint=None,  # diffrax adjoint strategy; defaults to RecursiveCheckpoint
-    on_nan="raise",  # or "ignore"; raises with offending cell indices
+    atol=1e-9,      # scalar or (n_species,) array for per-species tolerance
+    adjoint=None,   # diffrax adjoint strategy; defaults to RecursiveCheckpoint
+    on_nan="raise", # or "ignore"; raises with offending cell indices
 )
 
 # Once per simulation start (sanity check / fail-fast):
-assert reactor.species_field_order == [...]  # what the C++ side must deliver
-assert reactor.condition_field_names == [...]  # required dict keys
+assert reactor.species_field_order == [...]       # what the C++ side must deliver
+assert reactor.condition_field_names == [...]     # required dict keys
 
 # Once per transport timestep:
 C_new = reactor.step(
-    C,  # (n_cells, n_species) float64 NumPy
-    conditions,  # {name: (n_cells,) float64 NumPy}
-    dt,  # scalar float (seconds)
-    params,  # optional (n_params,) NumPy; defaults to model.default_parameters()
-)  # returns (n_cells, n_species) float64 NumPy
+    C,             # (n_cells, n_species) float64 NumPy
+    conditions,    # {name: (n_cells,) float64 NumPy}
+    dt,            # scalar float (seconds)
+    params,        # optional (n_params,) NumPy; defaults to model.default_parameters()
+)                  # returns (n_cells, n_species) float64 NumPy
 ```
 
 ### What the C++ plugin must do

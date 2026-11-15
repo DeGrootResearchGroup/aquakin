@@ -376,6 +376,12 @@ class _ProductParser:
 
 # --- scale-aware comparison ---------------------------------------------------
 
+#: Spellings of a Celsius temperature unit. They are not parsed (``C`` is the
+#: carbon currency), so code reading a declared temperature unit checks this set.
+CELSIUS_SPELLINGS = frozenset(
+    {"c", "degc", "deg_c", "°c", "℃", "celsius", "degree_celsius", "degrees_celsius"}
+)
+
 # Each scaled symbol -> (base symbol, base exponent, factor), so that one unit of
 # the symbol equals ``factor * base**exponent``. Unlisted symbols (``g``, ``mol``,
 # ``m``, ``s``, ``Pa``, ``K``) are already base symbols.
@@ -392,7 +398,7 @@ _TO_BASE = {
 }
 
 
-def to_base_units(dim: Dimension) -> tuple[Dimension, float]:
+def _to_base_units(dim: Dimension) -> tuple[Dimension, float]:
     """Express ``dim`` in base symbols, returning ``(base_dimension, factor)``.
 
     One unit of ``dim`` equals ``factor`` units of ``base_dimension``: for
@@ -426,7 +432,7 @@ def _comparable(a: str, b: str):
         return None
     if not (_has_currency(da) and _has_currency(db)):
         da, db = _drop_currency(da), _drop_currency(db)
-    return to_base_units(da), to_base_units(db)
+    return _to_base_units(da), _to_base_units(db)
 
 
 def conversion_factor(from_unit: str, to_unit: str) -> float | None:

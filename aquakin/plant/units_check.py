@@ -5,8 +5,9 @@ units **without converting anything**, so a unit mismatch anywhere is silent: a
 model whose rate constants are per second next to one per day, an influent file
 in ``m3/h``, or a settler whose ``g/m3`` settling parameters are fed ``kg/m3``
 solids all produce a plausible-looking but wrong solution. (The ASM1 <-> ADM1
-translators need no check here: they convert the connected models' declared
-units themselves, and refuse units they cannot convert when constructed.)
+translators are not audited here: they convert their models' declared units
+themselves, and ``Plant.connect`` rejects a translator built for models whose
+units differ from the endpoints'.)
 
 :func:`check_plant_units` (bound as :meth:`Plant.check_units`) audits the units
 the plant's parts declare, before any solve:
@@ -36,14 +37,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from aquakin.plant.units import AssumedUnits
-from aquakin.utils.units import units_match
+from aquakin.utils.units import CELSIUS_SPELLINGS, units_match
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
-
-#: Spellings of a Celsius temperature unit, rejected for a declared influent ``T``
-#: (the plant reads stream temperatures in Kelvin).
-_CELSIUS = {"c", "degc", "deg_c", "°c", "celsius", "degree_celsius"}
 
 
 @dataclass(frozen=True)
@@ -218,7 +215,7 @@ def _influent_issues(plant: Plant, plant_time: str | None) -> list:
         expect("t", plant_time, "time 't'")
         expect("Q", None if plant_time is None else f"m3/{plant_time}", "flow 'Q'")
         t_unit = declared.get("T")
-        if t_unit is not None and t_unit.strip().lower() in _CELSIUS:
+        if t_unit is not None and t_unit.strip().lower() in CELSIUS_SPELLINGS:
             issues.append(
                 PlantUnitIssue(
                     "error",

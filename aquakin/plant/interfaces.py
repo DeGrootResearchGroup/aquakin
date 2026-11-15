@@ -46,13 +46,15 @@ Units: the equations are written in fixed *working units* -- ASM1 in g/m3
 models. Each translator reads the species units its two models declare and
 converts into the working units on the way in and back on the way out, so a
 model declared on another basis (an ADM1 in g/m3) translates correctly. A unit
-that cannot be converted (a mass where the interface expects moles) or cannot be
-read raises when the translator is constructed.
+that cannot be converted (a mass where the interface expects moles) raises when
+the translator is constructed; one that cannot be read is taken to be the
+working unit, with a warning.
 """
 
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -103,9 +105,9 @@ def _unit_scales(model, working_units: dict, side: str, owner: str):
     Reads ``model``'s declared species units and converts each species the
     interface uses into its working unit. Returns ``None`` when every factor is
     exactly 1 (the shipped models), so ``translate`` skips the scaling and stays
-    bit-identical. Raises ``ValueError`` when a declared unit cannot be read or
-    measures a different quantity (a mass where the interface expects moles):
-    guessing would scale the stream silently.
+    bit-identical. Raises ``ValueError`` when a declared unit measures a
+    different quantity (a mass where the interface expects moles). A unit that
+    cannot be read is taken to be the working unit, with a warning.
     """
     scale = np.ones(model.n_species)
     for i, species in enumerate(model.species):
@@ -122,11 +124,13 @@ def _unit_scales(model, working_units: dict, side: str, owner: str):
                 f"interface works in: {exc}"
             ) from None
         if factor is None:
-            raise ValueError(
+            warnings.warn(
                 f"{owner}: cannot read the units '{declared}' that {side} model "
-                f"'{model.name}' declares for species '{species}', so the interface "
-                f"cannot convert it to '{working}'. Declare a parseable unit."
+                f"'{model.name}' declares for species '{species}'; assuming "
+                f"'{working}'. Declare a parseable unit to have it converted.",
+                stacklevel=4,
             )
+            continue
         scale[i] = factor
     if np.all(scale == 1.0):
         return None

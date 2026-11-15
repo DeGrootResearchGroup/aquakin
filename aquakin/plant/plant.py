@@ -81,6 +81,7 @@ from aquakin.plant.units_check import (
     check_plant_units,
     time_unit_errors,
 )
+from aquakin.utils.units import units_match
 
 # Reserved key under which :meth:`Plant._split_state` exposes the appended
 # temperature-state block in the per-unit state map (not a real unit, so it is
@@ -555,26 +556,29 @@ class Plant:
         )
 
     def check(self, *, raise_on_error: bool = False) -> PlantCheck:
-        """Validate the wiring before solving: find unfed ports / dangling outputs.
+        """Validate the plant before solving: wiring and declared units.
 
         Every unit input port must be fed by exactly one stream (an influent or
         another unit's output); an **unfed** input port has no source, so the RHS
         sweep cannot resolve it and the solve fails. Output ports consumed by no
         connection are reported too, but as information -- a terminal stream that
         leaves the plant (final effluent, wasted sludge, disposal cake, biogas)
-        is legitimately unconsumed.
+        is legitimately unconsumed. The findings of :meth:`check_units` are
+        included as well: its errors count as errors here, its warnings do not.
 
         Parameters
         ----------
         raise_on_error : bool, optional
-            If True, raise ``ValueError`` when any input port is unfed (the
-            actionable error) instead of only reporting it. Default False.
+            If True, raise ``ValueError`` when any input port is unfed, or
+            :class:`UnitsError` (a ``ValueError``) when the unit audit finds an
+            error, instead of only reporting it. Default False.
 
         Returns
         -------
         PlantCheck
             ``unfed_ports`` (errors), ``dangling_outputs`` (info), ``recycles``
-            (the detected back-edges), with ``.ok`` and ``.summary()``.
+            (the detected back-edges), ``unit_issues`` (the unit audit), with
+            ``.ok`` (no unfed port and no unit error) and ``.summary()``.
         """
         self._finalize_topology()
         fed = {(c.to_unit, c.to_port) for c in self.connections}
@@ -734,9 +738,11 @@ class Plant:
         translator, source_model, target_model, src_label, dst_label
     ) -> None:
         """Reject an explicit translator built for different models than the
-        ones it connects. A translator reads and writes species by index, so a
-        source or target model with a different species list silently scrambles
-        the stream; a different *instance* with the same species is accepted."""
+        ones it connects. A translator reads and writes species by index and
+        converts from the units its models declare, so a source or target model
+        with a different species list, or with a species declared in other
+        units, silently scrambles or rescales the stream. A different *instance*
+        with the same species and units is accepted."""
         for side, declared, actual in (
             ("source", getattr(translator, "source_model", None), source_model),
             ("target", getattr(translator, "target_model", None), target_model),
@@ -751,6 +757,17 @@ class Plant:
                     f"species list. Build the translator with the models it "
                     f"connects."
                 )
+            for species in actual.species:
+                built = declared.species_units.get(species, "")
+                used = actual.species_units.get(species, "")
+                if units_match(built, used) is False:
+                    raise WiringError(
+                        f"Connection {src_label} -> {dst_label}: the translator "
+                        f"was built for a {side} model declaring '{species}' in "
+                        f"'{built}', but the {side} of this connection declares "
+                        f"it in '{used}'. Build the translator with the models it "
+                        f"connects."
+                    )
 
     def _finalize_topology(self) -> None:
         """Compute the RHS evaluation order and the recycle (back-edge) set.

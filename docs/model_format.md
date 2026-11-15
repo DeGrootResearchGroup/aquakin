@@ -229,7 +229,7 @@ reason:
 ```yaml
   - name: gas_outflow_h2
     rate: "q_gas_norm * [S_gas_h2]"
-    units_acknowledged: "Partial pressures use the bare-number molar masses of the source."
+    units_acknowledged: "Partial pressures divide by molar masses written as bare numbers."
     stoichiometry: {S_gas_h2: -1.0}
 ```
 

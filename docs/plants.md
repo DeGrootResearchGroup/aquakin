@@ -222,7 +222,10 @@ It checks that:
   `plant.solve` refuses to run such a plant and raises `UnitsError`;
 - units whose internals fix a unit get it. The UV reactor and the primary
   clarifier convert their residence time from days, so they need a plant in
-  days; the Takács settler and the thickener need their solids in `g/m3`;
+  days; the thickener needs its TSS species in `g/m3`; the Takács settler's
+  default (BSM) settling parameters are in m/d and per `g/m3` of solids, so
+  with those it needs days and TSS species in `g/m3`. Settling parameters you
+  supply are taken to be in your plant's units;
 - an influent's declared units match the plant. Declare them with
   `units=` on `model.influent(...)`, `InfluentSeries` or `read_influent_csv`:
 
@@ -242,12 +245,16 @@ unit that is not declared is not checked. `plant.check()` includes the report,
 and `plant.connect` also rejects a translator built for models other than the
 ones it connects.
 
-The ASM1 ↔ ADM1 translators (`ASM1toADM1`, `ADM1toASM1`) need no check: they
-read the species units the two models declare and convert them into the units
-their equations are written in (`g/m3` for ASM1; `kg/m3` and `kmol/m3` for
-ADM1). An ADM1 variant declared in `g/m3` therefore works unchanged. A unit they
-cannot convert, such as inorganic nitrogen given as a mass where the interface
-expects moles, or a unit they cannot read, raises when the translator is built.
+The ASM1 ↔ ADM1 translators (`ASM1toADM1`, `ADM1toASM1`) convert units
+themselves: they read the species units the two models they are built with
+declare and convert them into the units their equations are written in (`g/m3`
+for ASM1; `kg/m3` and `kmol/m3` for ADM1). An ADM1 variant declared in `g/m3`
+therefore works unchanged. A unit they cannot convert, such as inorganic
+nitrogen given as a mass where the interface expects moles, raises when the
+translator is built; a unit they cannot read gives a warning and is taken to be
+the working unit. Because the conversion follows the models the translator was
+built with, `plant.connect` rejects a translator whose models declare different
+units from the units it connects.
 
 The plant library also provides secondary clarifiers, an ADM1 digester,
 sequencing-batch and membrane-bioreactor units, IFAS/MBBR units, disinfection

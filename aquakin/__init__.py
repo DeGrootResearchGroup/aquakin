@@ -208,6 +208,7 @@ from aquakin.utils import (
     check_model_units,
     check_nitrogen,
     composition_table,
+    conversion_factor,
     parse_units,
     units_match,
 )
@@ -310,6 +311,7 @@ __all__ = [
     "compare_scenarios",
     "compile_model",
     "composition_table",
+    "conversion_factor",
     "ct_log_removal",
     "ct_value",
     "derived_BOD",

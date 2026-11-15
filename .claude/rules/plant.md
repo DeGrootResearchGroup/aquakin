@@ -445,8 +445,9 @@ Key types:
     Checks: every model's `time_unit` agrees; a unit implementing the
     `AssumedUnits` hook (`assumed_units() -> {"time" | species: unit}`) gets
     them — only *fixed* internal assumptions belong there (UV and primary
-    clarifier: days; Takács: days + `g/m3` particulates; thickener: `g/m3` TSS
-    species), never a user-supplied number in any consistent unit; an
+    clarifier: days; thickener: `g/m3` TSS species; Takács only while
+    `settling_params` are the BSM defaults: days + `g/m3` for species with a
+    nonzero TSS factor), never a user-supplied number in any consistent unit; an
     influent's declared `InfluentSeries.units` matches the
     plant time unit, `m3` per time unit for `Q`, Kelvin `T` and the model's
     species units (the BSM loaders declare theirs); each model's own
@@ -469,10 +470,15 @@ Key types:
     `utils.units.conversion_factor` at construction (`x_working = f·x_model`;
     applied on the way in, divided out on the way out). It returns `None` when
     every factor is exactly 1 (every shipped model), so `translate` skips the
-    multiply and stays bit-identical; an unconvertible (mass vs moles, two
-    different currencies) or unreadable unit raises `ValueError` at
-    construction. A new translator should follow the same pattern rather than
-    hard-code a model's scale.
+    multiply and stays bit-identical; an unconvertible unit (mass vs moles, two
+    different currencies) raises `ValueError` at construction, an unreadable
+    one warns and is taken to be the working unit. Because the factors come
+    from the models a translator was *built* with, `connect` also requires
+    those models to declare the same units as the endpoints'
+    (`_check_translator_endpoints`). A new translator should follow the same
+    pattern rather than hard-code a model's scale. Declared influent units must
+    be parseable (`InfluentSeries.__post_init__`; Celsius spellings,
+    `utils.units.CELSIUS_SPELLINGS`, pass so the audit can flag them).
   - **Operating temperature.** `plant.set_temperature(celsius)` sets the static
     `T` condition of every temperature-bearing reactor in one call (°C → K),
     leaving a heated fixed-`T` unit like the digester untouched; clears the

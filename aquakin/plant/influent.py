@@ -24,6 +24,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.plant.streams import Stream, make_scalars
+from aquakin.utils.units import CELSIUS_SPELLINGS, parse_units
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -79,6 +80,14 @@ _BSM1_INFLUENT_UNITS = {
     "SALK": "mol/m3",
 }
 _BSM2_INFLUENT_UNITS = {**_BSM1_INFLUENT_UNITS, "T": "K"}
+
+
+def _declared_for(model: CompiledModel, units: dict) -> dict:
+    """The entries of a file's ``units`` that apply to ``model``: ``t``, ``Q``,
+    ``T`` and the species the model declares (a model may use a subset of the
+    file's columns)."""
+    keep = {"t", "Q", "T", *model.species}
+    return {k: v for k, v in units.items() if k in keep}
 
 
 @dataclass
@@ -140,6 +149,21 @@ class InfluentSeries:
             bad = sorted(k for k, v in self.units.items() if not isinstance(v, str))
             if bad:
                 raise ValueError(f"units values must be strings; got non-strings for {bad}.")
+            # A declared unit must be readable, or it could not be checked. A
+            # Celsius temperature is let through so the plant audit can say to
+            # convert it to Kelvin.
+            unreadable = sorted(
+                k
+                for k, v in self.units.items()
+                if parse_units(v) is None
+                and not (k == "T" and v.strip().lower() in CELSIUS_SPELLINGS)
+            )
+            if unreadable:
+                raise ValueError(
+                    f"units declares {unreadable} in units that cannot be read: "
+                    + ", ".join(f"{k}={self.units[k]!r}" for k in unreadable)
+                    + ". Use e.g. 'd', 'm3/d', 'K', 'g_N/m3' or 'mg/L'."
+                )
 
     @classmethod
     def constant(
@@ -495,7 +519,7 @@ def load_bsm1_influent(profile: str, model: CompiledModel) -> InfluentSeries:
         model,
         source=f"BSM1_{profile}.csv",
     )
-    return dataclasses.replace(series, units=dict(_BSM1_INFLUENT_UNITS))
+    return dataclasses.replace(series, units=_declared_for(model, _BSM1_INFLUENT_UNITS))
 
 
 def load_bsm2_influent(profile: str, model: CompiledModel) -> InfluentSeries:
@@ -537,4 +561,6 @@ def load_bsm2_influent(profile: str, model: CompiledModel) -> InfluentSeries:
         source=f"BSM2_{profile}.csv",
     )
     # The file stores temperature in degC; reactors expect Kelvin.
-    return dataclasses.replace(series, T=series.T + 273.15, units=dict(_BSM2_INFLUENT_UNITS))
+    return dataclasses.replace(
+        series, T=series.T + 273.15, units=_declared_for(model, _BSM2_INFLUENT_UNITS)
+    )
