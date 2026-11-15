@@ -257,3 +257,30 @@ def test_a_reply_that_is_not_json_does_not_end_the_worker(monkeypatch):
         and "not valid JSON" in first["error"]
     )
     assert second["ok"] and second["id"] == 2
+
+
+def test_writes_to_standard_output_while_serving_do_not_reach_the_replies():
+    import subprocess
+    import sys
+
+    code = (
+        "import os, aquakin.__main__ as cli\n"
+        "base = cli._handlers()\n"
+        "def noisy(req):\n"
+        "    os.write(1, b'noise from a compiled extension\\n')\n"
+        "    print('noise from python')\n"
+        "    return 'ok'\n"
+        "cli._handlers = lambda: {**base, 'noisy': noisy}\n"
+        "cli.serve()\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        input='{"id": 1, "command": "noisy"}\n',
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert [json.loads(line) for line in out.stdout.splitlines()] == [
+        {"id": 1, "ok": True, "result": "ok"}
+    ]
+    assert "noise from a compiled extension" in out.stderr and "noise from python" in out.stderr

@@ -64,6 +64,7 @@ class Editor:
         self._unit_checks: dict[str, tuple[str, str | None]] = {}
         self._plant_check: tuple[str | None, dict | None] = (None, None)
         self._check_task = None
+        self._pending_rows = None
         self._init_state(path)
         if path is not None:
             self.open(path, quiet=True)
@@ -292,8 +293,12 @@ class Editor:
         self.state.sel_rows = forms.rows_for(self.doc, uid, self.model_info)
         self.state.focus_help = ""
 
-    def apply_properties(self, rows: list[dict]) -> None:
-        """Read the form (sent whole, so no keystroke waits on the server) into the unit."""
+    def apply_properties(self, rows: list[dict], confirmed: bool = False) -> None:
+        """Read the form (sent whole, so no keystroke waits on the server) into the unit.
+
+        When the new settings remove ports that have connections, nothing
+        changes until the user confirms the removal (``confirmed``).
+        """
         uid = self.state.selected
         if uid not in self.doc.units:
             return
@@ -302,10 +307,29 @@ class Editor:
         except ValueError as exc:
             self.say(f"could not read a value: {exc}")
             return
-        dropped = self.doc.apply(uid, settings, label)
+        dropped = self.doc.dropped_by(uid, settings)
+        if dropped and not confirmed:
+            self._pending_rows = rows
+            self.state.confirm_lines = dropped
+            self.state.confirm_open = True
+            return
+        self.state.confirm_open = False
+        self.doc.apply(uid, settings, label)
         if dropped:
-            self.say("removed connections to ports that no longer exist: " + "; ".join(dropped))
+            self.say("removed " + "; ".join(dropped), error=False)
         self.publish()
+
+    def confirm_apply(self) -> None:
+        """Apply the form the user confirmed, removing the listed connections."""
+        rows, self._pending_rows = self._pending_rows, None
+        if rows is not None:
+            self.apply_properties(rows, confirmed=True)
+
+    def cancel_apply(self) -> None:
+        """Keep the unit as it was; the form shows its settings again."""
+        self._pending_rows = None
+        self.state.confirm_open = False
+        self.refresh_selection()
 
     def reshape_form(self, rows: list[dict], i: int, value) -> None:
         """A choice that changes which rows the form has (aeration mode, model)."""
@@ -358,6 +382,8 @@ class Editor:
         s.fit_key = 0
         s.spec_text = ""
         s.checking = False
+        s.confirm_open = False
+        s.confirm_lines = []
         s.checked = False
         s.icons = SVG
         s.palette = [
@@ -402,6 +428,7 @@ class Editor:
                             style="position: absolute; inset: 0;",
                         )
                     self._side_panel()
+                self._confirm_dialog()
                 v3.VSnackbar(
                     "{{ message }}",
                     v_model=("show_message",),
@@ -501,6 +528,26 @@ class Editor:
                     html.Pre(
                         "{{ spec_text }}",
                         style="font-size: 11px; white-space: pre; overflow-x: auto;",
+                    )
+
+    def _confirm_dialog(self) -> None:
+        with v3.VDialog(v_model=("confirm_open",), max_width=480, persistent=True):
+            with v3.VCard(title="Remove connections?"):
+                with v3.VCardText():
+                    html.Div(
+                        "These settings remove ports that are connected. Applying them "
+                        "removes these connections:",
+                        classes="mb-2",
+                    )
+                    html.Div("{{ c }}", v_for="c in confirm_lines", key="c", classes="text-mono")
+                with v3.VCardActions():
+                    v3.VSpacer()
+                    v3.VBtn("Cancel", click=self.cancel_apply, variant="text")
+                    v3.VBtn(
+                        "Apply and remove",
+                        click=self.confirm_apply,
+                        color="error",
+                        variant="flat",
                     )
 
     def _unit_form(self) -> None:

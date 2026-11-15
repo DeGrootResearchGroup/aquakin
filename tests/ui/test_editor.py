@@ -41,3 +41,26 @@ def test_a_dropped_unit_is_built_by_aquakin_and_its_error_shown(editor):
     assert f"{uid}: ValueError: 'volume' is required" in editor.state.errors
     editor.on_remove({"nodes": [uid], "edges": []})
     assert uid not in editor.doc.units
+
+
+def test_removing_a_connected_port_asks_first(editor):
+    from aquakin_ui import forms
+
+    editor.on_select({"nodes": ["inlet_mix"], "edges": []})
+    rows = forms.rows_for(editor.doc, "inlet_mix", editor.model_info)
+    for r in rows:
+        if r["key"] == "input_port_names":
+            r["value"] = "fresh, ras"
+    before = list(editor.doc.connections)
+    editor.apply_properties(rows)
+    assert editor.state.confirm_open
+    assert editor.state.confirm_lines == [
+        "tank5_split.internal_recycle -> inlet_mix.internal_recycle"
+    ]
+    assert editor.doc.connections == before  # nothing changed yet
+    editor.cancel_apply()
+    assert not editor.state.confirm_open and editor.doc.connections == before
+    editor.apply_properties(rows)
+    editor.confirm_apply()
+    assert not editor.state.confirm_open and len(editor.doc.connections) == len(before) - 1
+    assert editor.doc.ports("inlet_mix")[0] == ["fresh", "ras"]

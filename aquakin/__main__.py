@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import sys
 
 
@@ -77,10 +78,17 @@ def serve(stdin=None, stdout=None) -> None:
     Parameters
     ----------
     stdin, stdout : file, optional
-        The request and reply streams (default the process's own).
+        The request and reply streams (default the process's own). With the
+        process's own standard output, replies go to a private copy of it and
+        file descriptor 1 is pointed at standard error, so nothing else written
+        to standard output (by a compiled extension, say) can corrupt a reply.
     """
     stdin = stdin or sys.stdin
-    stdout = stdout or sys.stdout
+    if stdout is None:
+        sys.stdout.flush()
+        stdout = os.fdopen(os.dup(1), "w", buffering=1)
+        os.dup2(2, 1)
+        sys.stdout = sys.stderr
     handlers = _handlers()
     for line in stdin:
         if not line.strip():

@@ -228,6 +228,15 @@ class Flowsheet:
             if self.meta.get(key) and self.meta[key].split(".")[0] not in self.units:
                 self.meta[key] = None
 
+    def dropped_by(self, uid: str, settings: dict) -> list[str]:
+        """The connections giving ``uid`` these settings would remove (its ports change)."""
+        ins, outs = self.catalog.ports_for(self.units[uid].kind, settings)
+        return [
+            f"{c[0]}.{c[1]} -> {c[2]}.{c[3]}"
+            for c in self.connections
+            if (c[0] == uid and c[1] not in outs) or (c[2] == uid and c[3] not in ins)
+        ]
+
     def apply(self, uid: str, settings: dict, label: str | None) -> list[str]:
         """Replace a unit's settings and label; returns the connections dropped.
 
