@@ -24,5 +24,5 @@ class Flowsheet(AbstractElement):
         super().__init__("aquakin-flowsheet", children, **kwargs)
         if self.server:
             self.server.enable_module(module)
-        self._attr_names += ["nodes", "edges", ("drag_type", "dragType")]
+        self._attr_names += ["nodes", "edges", ("drag_type", "dragType"), ("fit_key", "fitKey")]
         self._event_names += ["connect", "move", "remove", "dropped", "select"]

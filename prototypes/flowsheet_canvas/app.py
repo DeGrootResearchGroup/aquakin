@@ -112,6 +112,12 @@ def ports_for(kind, settings):
 units: dict[str, dict] = {}
 connections: list[tuple[str, str, str, str]] = []
 build_errors: dict[str, str] = {}
+# Connection settings the canvas does not edit (a translator, a recycle seed),
+# kept by edge id so a spec opened and saved again keeps them.
+edge_extras: dict[str, dict] = {}
+# The spec's plant-level entries, kept as opened.
+plant_meta: dict = {"name": "BSM1-like"}
+_plant_check: dict = {"key": None, "result": None}
 
 
 def check(name):
@@ -302,12 +308,124 @@ def icon_for(u):
     return SVG[ICONS[u["kind"]]]
 
 
-def spec():
-    return {
-        "units": {n: {"kind": u["kind"], **u["settings"]} for n, u in units.items()},
-        "connections": [f"{c[0]}.{c[1]} -> {c[2]}.{c[3]}" for c in connections],
-        "layout": {n: [u["position"]["x"], u["position"]["y"]] for n, u in units.items()},
-    }
+def spec(layout=True):
+    """The flowsheet as an aquakin spec (``Plant.from_spec`` reads it as is)."""
+    out = {"format": 1, "name": plant_meta.get("name", "plant")}
+    if plant_meta.get("options"):
+        out["options"] = plant_meta["options"]
+    out["units"] = {n: {"kind": u["kind"], **u["settings"]} for n, u in units.items()}
+    out["connections"] = [
+        {"from": f"{c[0]}.{c[1]}", "to": f"{c[2]}.{c[3]}", **edge_extras[edge_id(c)]}
+        if edge_extras.get(edge_id(c))
+        else f"{c[0]}.{c[1]} -> {c[2]}.{c[3]}"
+        for c in connections
+    ]
+    for key in ("streams", "influent_endpoint", "effluent_endpoint"):
+        if plant_meta.get(key):
+            out[key] = plant_meta[key]
+    if layout:
+        out["layout"] = {n: [u["position"]["x"], u["position"]["y"]] for n, u in units.items()}
+    return out
+
+
+def plant_check():
+    """aquakin's ``Plant.check`` on the whole flowsheet, asked again only when
+    the flowsheet (not its layout) changed."""
+    s = spec(layout=False)
+    key = yaml.safe_dump(s, sort_keys=True)
+    if key != _plant_check["key"]:
+        try:
+            _plant_check["result"] = worker.request("check_spec", spec=s)
+        except WorkerError as exc:
+            _plant_check["result"] = {"ok": False, "error": str(exc)}
+        _plant_check["key"] = key
+    return _plant_check["result"]
+
+
+def _endpoint(text, side):
+    """``(unit, port)`` of ``"unit.port"`` or of a bare unit with one port on ``side``."""
+    unit, _, port = text.partition(".")
+    if not port:
+        ins, outs = ports_for(units[unit]["kind"], units[unit]["settings"])
+        ports = outs if side == "output" else ins
+        if len(ports) != 1:
+            raise ValueError(f"'{unit}' has {len(ports)} {side} ports; name one")
+        port = ports[0]
+    return unit, port
+
+
+def auto_layout():
+    """Left-to-right ranks along the forward (non-recycle) connections."""
+    back = recycle_edges()
+    rank = dict.fromkeys(units, 0)
+    for _ in units:
+        for c in connections:
+            if c not in back:
+                rank[c[2]] = max(rank[c[2]], rank[c[0]] + 1)
+    slots: dict[int, int] = {}
+    for n in units:
+        row = slots.get(rank[n], 0)
+        slots[rank[n]] = row + 1
+        units[n]["position"] = dict(x=rank[n] * 240, y=row * 170)
+
+
+def load_spec(data):
+    """Replace the flowsheet with an aquakin spec (``Plant.to_spec`` output or a saved file)."""
+    units.clear()
+    connections.clear()
+    build_errors.clear()
+    edge_extras.clear()
+    plant_meta.clear()
+    plant_meta.update(
+        {k: v for k, v in data.items() if k not in ("format", "units", "connections", "layout")}
+    )
+    layout = data.get("layout") or {}
+    for name, entry in (data.get("units") or {}).items():
+        x, y = layout.get(name, (0, 0))
+        units[name] = dict(
+            kind=entry["kind"],
+            settings={k: v for k, v in entry.items() if k != "kind"},
+            position=dict(x=x, y=y),
+        )
+    for entry in data.get("connections") or []:
+        if isinstance(entry, str):
+            src, dst, extra = *[p.strip() for p in entry.split("->")], {}
+        else:
+            src, dst = entry["from"], entry["to"]
+            extra = {k: v for k, v in entry.items() if k not in ("from", "to")}
+        c = (*_endpoint(src, "output"), *_endpoint(dst, "input"))
+        connections.append(c)
+        if extra:
+            edge_extras[edge_id(c)] = extra
+    if not layout:
+        auto_layout()
+    for name in units:
+        check(name)
+    state.selected = None
+    state.fit_key += 1
+
+
+@ctrl.add("open_spec")
+def open_spec():
+    try:
+        load_spec(yaml.safe_load(Path(state.spec_path).read_text()))
+    except Exception as exc:
+        say(f"could not open {state.spec_path}: {type(exc).__name__}: {exc}")
+        return
+    publish()
+    say(f"opened {state.spec_path}", error=False)
+
+
+@ctrl.add("save_spec")
+def save_spec():
+    try:
+        Path(state.spec_path).write_text(
+            yaml.safe_dump(spec(), sort_keys=False, allow_unicode=True)
+        )
+    except OSError as exc:
+        say(f"could not save {state.spec_path}: {exc}")
+        return
+    say(f"saved {state.spec_path}", error=False)
 
 
 def publish():
@@ -350,17 +468,25 @@ def publish():
         )
         for c in connections
     ]
-    state.errors = [f"{n}: {e}" for n, e in build_errors.items()] + [
-        f"{n}.{p} is not fed" for n, ps in unfed.items() for p in ps
-    ]
-    state.products = [f"{n}.{p}" for n, ps in dangling.items() for p in ps]
+    errors = [f"{n}: {e}" for n, e in build_errors.items()]
+    errors += [f"{n}.{p} is not fed" for n, ps in unfed.items() for p in ps]
     state.n_recycles = len(back)
+    if not build_errors:
+        # Every unit builds: ask aquakin to build the whole plant and check it.
+        result = plant_check()
+        if not result["ok"]:
+            errors.append(f"plant: {result['error']}")
+        else:
+            state.n_recycles = len(result["recycles"])
+    state.errors = errors
+    state.products = [f"{n}.{p}" for n, ps in dangling.items() for p in ps]
     state.spec_text = yaml.safe_dump(spec(), sort_keys=False, allow_unicode=True)
     refresh_selection()
 
 
-def say(msg):
+def say(msg, error=True):
     state.message = msg
+    state.message_colour = "error" if error else "success"
     state.show_message = True
 
 
@@ -510,6 +636,21 @@ def rows_for(name):
                 _row(key, label, "select", "" if value is None else str(value).lower(), **common)
                 | {"items": ["true", "false"]}
             )
+        elif t == "reagent":
+            rows.append(
+                _row(
+                    key,
+                    label,
+                    "readonly",
+                    "",
+                    hint=s["help"],
+                    placeholder=(
+                        f"{value['label']}: {_text(value.get('composition', {}))}"
+                        if value
+                        else "set in the spec file"
+                    ),
+                )
+            )
         elif t == "unsupported":
             rows.append(
                 _row(
@@ -554,7 +695,7 @@ def _parse(s, text):
         return text == "true"
     if t == "port_names":
         return [p.strip() for p in text.split(",") if p.strip()]
-    if t in ("port_map", "species_values"):
+    if t in ("port_map", "species_values", "number_map"):
         pairs = [p.split(":") for p in text.split(",") if p.strip()]
         return {k.strip(): float(v) for k, v in pairs}
     return text
@@ -589,8 +730,14 @@ def apply_properties(rows=None):
                     raw = values.get("aeration.value", "")
                     old_aer = u["settings"].get("aeration") or {}
                     num = float(raw) if str(raw).strip() else old_aer.get(mode, 0.0)
-                    new_settings["aeration"] = {mode: num}
-            elif t != "unsupported" and s["name"] in values:
+                    # Keep the aeration settings the form does not edit (gains, ...).
+                    kept = {k: v for k, v in old_aer.items() if k not in ("kla", "do_setpoint")}
+                    new_settings["aeration"] = {**kept, mode: num}
+            elif t in ("unsupported", "reagent"):
+                # Shown read-only: keep what the spec gave.
+                if s["name"] in u["settings"]:
+                    new_settings[s["name"]] = u["settings"][s["name"]]
+            elif s["name"] in values:
                 v = _parse(s, values[s["name"]])
                 if v is not None:
                     new_settings[s["name"]] = v
@@ -639,6 +786,9 @@ state.panel = "properties"
 state.dark = False
 state.focus_help = ""
 state.focus_label = ""
+state.spec_path = "flowsheet.yaml"
+state.message_colour = "error"
+state.fit_key = 0
 state.palette = [
     dict(
         category=CATEGORY_LABELS[cat],
@@ -673,6 +823,17 @@ with SinglePageWithDrawerLayout(server, theme=("dark ? 'dark' : 'light'",)) as l
     layout.footer.hide()
     with layout.toolbar:
         v3.VSpacer()
+        v3.VTextField(
+            v_model=("spec_path",),
+            density="compact",
+            variant="outlined",
+            hide_details=True,
+            prepend_inner_icon="mdi-file-outline",
+            style="max-width: 260px;",
+            classes="mr-2",
+        )
+        v3.VBtn("Open", click=ctrl.open_spec, variant="tonal", classes="mr-1 text-none")
+        v3.VBtn("Save", click=ctrl.save_spec, variant="tonal", classes="mr-4 text-none")
         v3.VChip(
             "{{ nodes.length }} units · {{ edges.length }} connections · {{ n_recycles }} recycles",
             size="small",
@@ -712,6 +873,7 @@ with SinglePageWithDrawerLayout(server, theme=("dark ? 'dark' : 'light'",)) as l
                     nodes=("nodes",),
                     edges=("edges",),
                     drag_type=DRAG_TYPE,
+                    fit_key=("fit_key",),
                     connect=(on_connect, "[$event]"),
                     move=(on_move, "[$event]"),
                     remove=(on_remove, "[$event]"),
@@ -844,7 +1006,9 @@ with SinglePageWithDrawerLayout(server, theme=("dark ? 'dark' : 'light'",)) as l
                             "{{ spec_text }}",
                             style="font-size: 11px; white-space: pre; overflow-x: auto;",
                         )
-        v3.VSnackbar("{{ message }}", v_model=("show_message",), timeout=4000, color="error")
+        v3.VSnackbar(
+            "{{ message }}", v_model=("show_message",), timeout=4000, color=("message_colour",)
+        )
 
 if __name__ == "__main__":
     server.start(open_browser=False)

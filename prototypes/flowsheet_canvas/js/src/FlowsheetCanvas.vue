@@ -15,6 +15,8 @@ const props = defineProps({
   nodes: { type: Array, default: () => [] },
   edges: { type: Array, default: () => [] },
   dragType: { type: String, default: "application/x-aquakin-unit" },
+  // Changing this frames the whole flowsheet again (e.g. after opening a file).
+  fitKey: { type: Number, default: 0 },
 });
 const emit = defineEmits(["connect", "move", "remove", "dropped", "select"]);
 
@@ -111,6 +113,13 @@ function onNodesInitialized() {
 function onMoveStart(e) {
   if (e && e.event) autoFit = false;
 }
+watch(
+  () => props.fitKey,
+  () => {
+    autoFit = true;
+    setTimeout(refit, 150); // after the new nodes are measured
+  }
+);
 let observer;
 onMounted(() => {
   observer = new ResizeObserver(() => refit());

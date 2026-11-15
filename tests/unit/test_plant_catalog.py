@@ -215,3 +215,23 @@ def test_serve_answers_requests_and_survives_bad_ones():
     assert [r["id"] for r in replies] == [1, None, 3, 4, 5]
     assert [r["ok"] for r in replies] == [True, False, False, True, False]
     assert replies[3]["result"] == {"ok": True, "inputs": ["in"], "outputs": ["out1", "out2"]}
+
+
+def test_serve_checks_a_whole_spec():
+    spec = {
+        "units": {
+            "feed": {"kind": "influent", "model": "asm1", "Q": 100.0},
+            "tank": {"kind": "cstr", "model": "asm1", "volume": 10.0, "conditions": T},
+        },
+        "connections": ["feed.out -> tank.in"],
+    }
+    broken = {"units": {"tank": {"kind": "cstr", "model": "asm1", "volume": 10.0}}}
+    requests = "\n".join(
+        json.dumps({"id": i, "command": "check_spec", "spec": s})
+        for i, s in enumerate((spec, broken))
+    )
+    out = io.StringIO()
+    serve(io.StringIO(requests + "\n"), out)
+    good, bad = (json.loads(line)["result"] for line in out.getvalue().splitlines())
+    assert good == {"ok": True, "unfed": [], "dangling": ["tank.out"], "recycles": []}
+    assert not bad["ok"] and bad["error"].startswith("units.tank:")

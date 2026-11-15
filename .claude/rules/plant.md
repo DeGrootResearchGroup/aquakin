@@ -686,9 +686,29 @@ class or changing a unit's ports**, add or update its kind:
 `tests/unit/test_plant_catalog.py` builds every kind and compares the
 rule-derived ports with the built unit's, and fails if an exported unit class
 has no kind. `aquakin serve` (`aquakin/__main__.py`) is a JSON-lines worker
-(`catalog`, `models`, `model`, `check_unit`, `ping`); stdout carries replies
+(`catalog`, `models`, `model`, `check_unit`, `check_spec`, `ping`); stdout carries replies
 only (stdout is redirected to stderr while a handler runs), and a failed request
 gets `{"ok": false, "error": ...}` without stopping the worker.
+
+**Flowsheet spec (`plant/spec.py`, `Plant.to_spec` / `Plant.from_spec`).** A
+plant as plain data, built on the catalogue: units are `{kind, ...non-default
+settings}` read back by `catalog.unit_settings` (unit attributes must mirror the
+constructor arguments for this to work), connections `"unit.port -> unit.port"`
+or `{from, to, translator: {kind, ...}, seed: {Q, T, concentrations}}`. A seed
+is written in the **destination** unit's model (it stands for the stream
+arriving after any translator). A `kind: influent` unit is a constant
+`InfluentSeries`, wired with `add_influent`. Controllers derived from a
+closed-loop `Aeration` / feedback `DosingUnit` are recorded in
+`plant._derived_units` by `_materialize_aeration` / `_materialize_dosing` and
+left out (with their measurement taps), since they are derived again. A model
+must be the very object `load_model(name)` returns (`catalog._model_name`), so a
+modified model such as `bsm2_asm1_model()` is refused rather than silently
+renamed; that is why BSM2 cannot be written yet. Every refusal is a `SpecError`
+naming the unit / connection. `check_spec(spec)` builds the plant and returns
+`Plant.check` (the `aquakin serve` `check_spec` command). Pinned by
+`tests/integration/test_plant_spec.py`: BSM1 (ideal and Takács) and a two-model
+plant (translators, temperature seed, reagent, influent T) rebuild with an
+identical spec, initial state and bit-identical RHS.
 
 **Shared separator/clarifier helpers.** The separator/clarifier family resolves
 its settling / particulate / TSS species lists through the shared

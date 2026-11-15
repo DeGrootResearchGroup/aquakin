@@ -354,6 +354,21 @@ primitives `monte_carlo`, `compare_scenarios` and `optimize_design` propagate
 input uncertainty and size designs to a permit at minimum cost. See
 `examples/bsm2_ghg_cost_report.py`.
 
+### Saving a plant as a file (`to_spec` / `from_spec`)
+
+A plant can be written as plain data and rebuilt from it:
+
+```python
+plant.to_spec("bsm1.yaml")                  # or spec = plant.to_spec()
+same = aquakin.Plant.from_spec("bsm1.yaml")  # same units, wiring and streams
+```
+
+The file lists each unit's kind and non-default settings, the connections as
+`unit.port -> unit.port`, constant influents, named streams and endpoints. It is
+the format a flowsheet editor saves. Anything a spec cannot express yet (a
+time-varying influent, a model that was not loaded by name) raises a `SpecError`
+that names it.
+
 ### The unit catalogue and the `aquakin` command
 
 `aquakin.plant.catalog` describes every plant unit type as plain data: its
@@ -373,7 +388,7 @@ aquakin serve            # answer JSON-line requests on stdin/stdout
 
 `aquakin serve` reads one request per line (`{"id": 1, "command": "catalog"}`)
 and answers each with one line; the commands are `ping`, `catalog`, `models`,
-`model` and `check_unit`.
+`model`, `check_unit` and `check_spec`.
 
 ## Advanced: differentiation & sensitivity
 

@@ -55,12 +55,14 @@ __all__ = [
     "PortRule",
     "Setting",
     "UnitKind",
+    "build_unit",
     "catalog",
     "check_unit",
     "model_info",
     "shipped_models",
     "unit_kind",
     "unit_kinds",
+    "unit_settings",
 ]
 
 #: The categories a unit kind belongs to, in palette order.
@@ -81,6 +83,8 @@ SETTING_TYPES = {
     "port_name": "the name of one port",
     "port_names": "a list of port names",
     "port_map": "a mapping of port name to a number (one port per key)",
+    "number_map": "a mapping of name to a number (e.g. settling parameters)",
+    "reagent": "a dosed reagent: ``{model, label, composition}``",
     "unsupported": "a value that can only be given from Python for now",
 }
 
@@ -261,6 +265,8 @@ def _docstring_parts(cls) -> tuple[str, dict[str, str]]:
 
 def _plain(value) -> Any:
     """``value`` as JSON-compatible data, or ``None`` if it has no plain form."""
+    if getattr(value, "shape", None) == () and hasattr(value, "dtype"):
+        value = value.item()  # a NumPy / JAX scalar
     if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, float):
@@ -289,6 +295,10 @@ def _setting_type(name: str, annotation: str) -> tuple[str, bool]:
         return "port_name", optional
     if name in ("output_port_ratios", "output_port_flows"):
         return "port_map", optional
+    if base == "Reagent":
+        return "reagent", optional
+    if re.fullmatch(r"dict\[str, float\]", base):
+        return "number_map", optional
     if "species" in name and base == "str":
         return "species", optional
     if "species" in name and re.fullmatch(r"(Sequence|list|tuple)\[str(, \.\.\.)?\]", base):
@@ -652,8 +662,17 @@ def _arguments(kind: UnitKind, settings: dict) -> dict:
             args[s.name] = Aeration(**value) if value else None
         elif s.type in ("port_names", "species_list"):
             args[s.name] = list(value) if s.type == "port_names" else tuple(value)
-        elif s.type in ("port_map", "conditions", "species_values"):
+        elif s.type in ("port_map", "conditions", "species_values", "number_map"):
             args[s.name] = {k: float(_number(v)) for k, v in value.items()}
+        elif s.type == "reagent":
+            from aquakin.plant.dosing import Reagent
+
+            spec = dict(value)
+            args[s.name] = Reagent.from_species(
+                load_model(spec["model"]),
+                label=spec.get("label", "reagent"),
+                **{k: float(v) for k, v in spec.get("composition", {}).items()},
+            )
         else:
             args[s.name] = value
     for group in kind.exactly_one_of:
@@ -661,6 +680,127 @@ def _arguments(kind: UnitKind, settings: dict) -> dict:
         if len(chosen) != 1:
             raise ValueError(f"give exactly one of {', '.join(group)}")
     return args
+
+
+def build_unit(kind: str, name: str, settings: dict):
+    """Build a unit (or, for ``"influent"``, an influent series) from plain settings.
+
+    Parameters
+    ----------
+    kind : str
+        A unit kind identifier (see :func:`unit_kinds`).
+    name : str
+        The unit's name.
+    settings : dict
+        Setting values as plain data; missing settings take their defaults.
+
+    Returns
+    -------
+    Unit or InfluentSeries
+        The built unit, or the constant influent series for ``"influent"``.
+
+    Raises
+    ------
+    KeyError
+        If ``kind`` is unknown.
+    ValueError
+        If a required setting is missing or only Python can give it; the unit's
+        own constructor errors propagate unchanged.
+    """
+    k = unit_kind(kind)
+    args = _arguments(k, settings)
+    if k.kind == "influent":
+        from aquakin.plant.influent import InfluentSeries
+
+        return InfluentSeries.constant(
+            args["model"], Q=args["Q"], T=args.get("T"), **args.get("composition", {})
+        )
+    return _class_of(k)(name=name, **args)
+
+
+def _model_name(model) -> str:
+    """The shipped name of ``model``, which must be that model as loaded by name."""
+    from aquakin.schema.loader import load_model
+
+    try:
+        shipped = load_model(model.name)
+    except Exception:
+        shipped = None
+    if shipped is not model:
+        raise ValueError(
+            f"model '{model.name}' is not a shipped model as aquakin.load_model('{model.name}') "
+            f"returns it (a model from a file, or with overrides), so it cannot be named in a spec"
+        )
+    return model.name
+
+
+def _species_values(model, C, *, keep_zero=False) -> dict:
+    return {
+        sp: float(v)
+        for sp, v in zip(model.species, [float(x) for x in C], strict=True)
+        if keep_zero or v != 0.0
+    }
+
+
+def _setting_value(s: Setting, value):
+    """A unit attribute as the plain data of setting ``s``; ``ValueError`` if it has none."""
+    if value is None:
+        return None
+    if s.type == "model":
+        return _model_name(value)
+    if s.type == "aeration":
+        out = {}
+        for f in dataclasses.fields(value):
+            v = _plain(getattr(value, f.name))
+            if f.default is not dataclasses.MISSING and v == _plain(f.default):
+                continue
+            out[f.name] = v
+        return out
+    if s.type == "reagent":
+        return {
+            "model": _model_name(value.model),
+            "label": value.label,
+            "composition": _species_values(value.model, value.composition),
+        }
+    plain = _plain(value)
+    if plain is None:
+        raise ValueError(f"'{s.name}' ({s.python_type}) has no plain form")
+    return plain
+
+
+def _kind_of(unit) -> UnitKind:
+    for k in unit_kinds().values():
+        if k.kind != "influent" and isinstance(unit, _class_of(k)) and type(unit) is _class_of(k):
+            return k
+    raise ValueError(f"no unit kind for {type(unit).__name__}")
+
+
+def unit_settings(unit) -> tuple[str, dict]:
+    """The kind and the plain settings that rebuild ``unit`` with :func:`build_unit`.
+
+    Settings at their default are left out; required settings are always given.
+
+    Raises
+    ------
+    ValueError
+        If the unit's class has no kind, or one of its settings differs from
+        the default and has no plain form (such as an array of initial
+        concentrations).
+    """
+    k = _kind_of(unit)
+    out: dict[str, Any] = {}
+    for s in k.settings:
+        value = getattr(unit, s.name)
+        try:
+            plain = _setting_value(s, value)
+        except ValueError as exc:
+            raise ValueError(f"unit '{unit.name}': {exc}") from None
+        if not s.required and plain == s.default:
+            continue
+        if plain is None and value is not None:
+            raise ValueError(f"unit '{unit.name}': '{s.name}' has no plain form")
+        out[s.name] = plain
+    return k.kind, out
 
 
 def check_unit(kind: str, name: str, settings: dict) -> dict:
@@ -683,17 +823,9 @@ def check_unit(kind: str, name: str, settings: dict) -> dict:
         reason it could not be built.
     """
     try:
-        k = unit_kind(kind)
-        args = _arguments(k, settings)
-        if k.kind == "influent":
-            from aquakin.plant.influent import InfluentSeries
-
-            InfluentSeries.constant(
-                args["model"], Q=args["Q"], T=args.get("T"), **args.get("composition", {})
-            )
+        unit = build_unit(kind, name, settings)
+        if kind == "influent":
             return {"ok": True, "inputs": [], "outputs": ["out"]}
-        cls = _class_of(k)
-        unit = cls(name=name, **args)
         return {"ok": True, "inputs": list(unit.input_ports), "outputs": list(unit.output_ports)}
     except Exception as exc:  # the constructor's own message is the answer
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}

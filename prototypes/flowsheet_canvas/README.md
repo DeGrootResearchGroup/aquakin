@@ -15,7 +15,9 @@ aquakin nor JAX.
   timeout works; a dead or stuck worker is restarted on the next request).
 - `app.py`: the editor. Its palette, unit settings, help text, defaults and
   ports all come from aquakin's unit catalogue (`aquakin.plant.catalog`) through
-  the worker. It starts on a BSM1-like layout.
+  the worker. It starts on a BSM1-like layout; **Open** / **Save** read and
+  write aquakin flowsheet specs (`Plant.to_spec()` output opens directly, laid
+  out automatically when the file has no `layout`).
 - `icons/`: original line icons, one per unit kind (see `icons/README.md` and
   `icons/contact_sheet.png`).
 - `screenshots/`: the editor driven by Playwright in headless Chromium.
@@ -40,7 +42,9 @@ python app.py --port 8080
 - Every unit is built by aquakin (`check_unit`) whenever its settings change.
   The Checks tab lists aquakin's own error messages and unfed inputs (errors),
   and the unconnected outputs, which are the plant's product streams, as
-  `Plant.check()` reports them.
+  `Plant.check()` reports them. Once every unit builds, the whole flowsheet is
+  built with `Plant.from_spec` (`check_spec`) and any plant-level error is
+  listed too.
 
 ## Design points the prototype settled
 

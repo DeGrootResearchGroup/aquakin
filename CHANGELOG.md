@@ -21,6 +21,18 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `Plant.to_spec()` and `Plant.from_spec(spec)`: a plant as plain JSON/YAML data
+  and back. Units are written with the unit catalogue's kinds and settings
+  (defaults left out), connections as `"unit.port -> unit.port"` (or with a
+  state translator or recycle seed), together with constant influents, named
+  streams, the influent/effluent endpoints and non-default recycle options.
+  `to_spec(path)` also writes the file and `from_spec` reads a `.yaml`/`.json`
+  path. A rebuilt BSM1 has a bit-identical right-hand side. What a spec cannot
+  express yet (a time-varying influent, a model not loaded by name such as the
+  BSM2 15 °C ASM1, a heat-balance temperature model, array-valued settings) is
+  refused with a `SpecError` naming it rather than dropped. Controllers that a
+  closed-loop `Aeration` or feedback `DosingUnit` derives are not written; they
+  are derived again.
 - A unit catalogue for front ends, `aquakin.plant.catalog`. It describes each
   plant unit type as plain JSON-compatible data: its settings, with types,
   defaults and the help text from the unit's docstring; how its ports follow
@@ -30,7 +42,7 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   and reports its ports or the constructor's error.
 - An `aquakin` command. `aquakin catalog` prints the catalogue as JSON, and
   `aquakin serve` answers JSON-line requests on standard input and output
-  (`catalog`, `models`, `model`, `check_unit`, `ping`), so a separate process
+  (`catalog`, `models`, `model`, `check_unit`, `check_spec`, `ping`), so a separate process
   such as a flowsheet editor can use aquakin without importing it.
 - `Plant.solve_sensitivity(corrector=...)` chooses how each implicit stage of
   the `[y; S]` sensitivity solve is solved. The new default, `"staggered"`,

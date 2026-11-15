@@ -8,9 +8,10 @@ per line on standard input, one reply per line on standard output::
     {"id": 1, "ok": true, "result": {...}}
 
 Commands: ``ping``, ``catalog``, ``models`` (the shipped kinetic models),
-``model`` (``name``: one model's species and conditions) and ``check_unit``
+``model`` (``name``: one model's species and conditions), ``check_unit``
 (``kind``, ``name``, ``settings``: build a unit and report its real ports or
-the constructor's error). A failed request is answered
+the constructor's error) and ``check_spec`` (``spec``: build the whole plant
+from a flowsheet spec and report ``Plant.check``). A failed request is answered
 ``{"id": ..., "ok": false, "error": message}`` and the worker keeps serving.
 Standard output carries replies only; anything else goes to standard error.
 """
@@ -26,12 +27,14 @@ import sys
 def _handlers():
     from aquakin import __version__
     from aquakin.plant import catalog as cat
+    from aquakin.plant.spec import check_spec
 
     return {
         "ping": lambda req: {"version": __version__},
         "catalog": lambda req: cat.catalog(),
         "models": lambda req: cat.shipped_models(),
         "model": lambda req: cat.model_info(req["name"]),
+        "check_spec": lambda req: check_spec(req["spec"]),
         "check_unit": lambda req: cat.check_unit(
             req["kind"], req.get("name", "unit"), req.get("settings", {})
         ),

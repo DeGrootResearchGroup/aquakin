@@ -47,6 +47,7 @@ from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.integrate.events import Event, events_to_native_time, solve_with_events
 from aquakin.plant import calibrate as _calibrate
 from aquakin.plant import sensitivity as _sensitivity
+from aquakin.plant import spec as _spec
 from aquakin.plant.colored import ColoredJacobianManager
 from aquakin.plant.errors import (
     UnknownPortError,
@@ -302,6 +303,10 @@ class Plant:
         # One-time guard for materialising the DO controllers a CSTRUnit's
         # closed-loop Aeration spec requires (see _materialize_aeration).
         self._aeration_materialized: bool = False
+        # Units the plant derived itself (the PI controllers a closed-loop
+        # Aeration or a feedback DosingUnit requires). They follow from other
+        # units' settings, so a flowsheet spec leaves them out.
+        self._derived_units: set[str] = set()
         # Compiled-solve / kernel memoization -- the jitted forward solves, the
         # PTC steady solves, and the continuation / arclength kernels -- owning
         # one invalidate() so a condition/topology mutator cannot clear one cache
@@ -837,6 +842,7 @@ class Plant:
             # multi-output sensor (e.g. an MBR's permeate/waste).
             sensor_port = self.units[sensor].output_ports[0]
             self.connect(f"{sensor}.{sensor_port}", f"{ctrl_name}.measured")
+            self._derived_units.add(ctrl_name)
 
     def _materialize_dosing(self) -> None:
         """Auto-wire a PI controller for every feedback :class:`DosingUnit`.
@@ -926,6 +932,7 @@ class Plant:
                 )
             )
             self.connect(d0.sensor, f"{cid}.measured")
+            self._derived_units.add(cid)
 
     def _build_state_layout(self) -> None:
         """Assign each unit a contiguous slice of the flat state vector.
@@ -4477,3 +4484,8 @@ class Plant:
     # ``plant.calibrate(...)`` reuses the reactor-calibration machinery through the
     # forward-model seam.
     calibrate = _calibrate.calibrate_plant
+
+    # The flowsheet spec (:mod:`aquakin.plant.spec`): a plant as plain data and
+    # back, the file format a flowsheet editor saves.
+    from_spec = classmethod(_spec.plant_from_spec)
+    to_spec = _spec.plant_to_spec
