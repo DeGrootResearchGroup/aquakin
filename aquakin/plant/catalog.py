@@ -453,14 +453,6 @@ def _influent_kind() -> UnitKind:
                     "spec file. Given instead of Q, T and composition."
                 ),
             ),
-            Setting(
-                "series_sha256",
-                "string",
-                False,
-                None,
-                optional=True,
-                help="Fingerprint of the series file when the spec was written.",
-            ),
         ),
         ports=(PortRule("output", "fixed", names=("out",)),),
         exactly_one_of=(("Q", "series"),),
@@ -898,7 +890,7 @@ def _model_name(model) -> str:
     modified copy (``dataclasses.replace``) or a model from a file is refused
     rather than written under a shipped name it does not match.
     """
-    if getattr(model, "_aquakin_source", None) != ("shipped", model.name):
+    if tuple(getattr(model, "_aquakin_source", ()) or ())[:2] != ("shipped", model.name):
         raise ValueError(
             f"model '{model.name}' is not a shipped model as aquakin.load_model('{model.name}') "
             f"returns it (a model from a file, or modified), so it cannot be named in a spec"

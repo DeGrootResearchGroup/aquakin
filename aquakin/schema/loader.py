@@ -75,6 +75,35 @@ def _resolve_inheritance(data: dict, source: str, base_dir, seen: tuple) -> dict
     return merged
 
 
+def model_fingerprint(text: str, source: str, base_dir=None) -> str:
+    """sha256 of a model YAML's content with its ``extends`` chain merged in.
+
+    Two files that resolve to the same model (formatting and comments aside)
+    have the same fingerprint, and a change to a base model reaches every model
+    that extends it.
+
+    Parameters
+    ----------
+    text : str
+        The model YAML.
+    source : str
+        A name for messages.
+    base_dir : str or Path, optional
+        The directory a relative ``extends:`` path is read from.
+
+    Returns
+    -------
+    str
+        A 64-character hex digest.
+    """
+    import hashlib
+    import json
+
+    data = _resolve_inheritance(yaml.safe_load(text), source, base_dir, seen=())
+    canonical = json.dumps(data, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def _yaml_to_spec(text: str, source: str, *, base_dir=None) -> ModelSpec:
     try:
         data = yaml.safe_load(text)
@@ -182,7 +211,7 @@ def load_model(name: str, *, activity_model: str | None = None) -> CompiledModel
     # Where the model came from, for writing it into a flowsheet spec. A plain
     # attribute rather than a field, so a modified copy (dataclasses.replace)
     # does not carry it and is not mistaken for the shipped model.
-    net._aquakin_source = ("shipped", name)
+    net._aquakin_source = ("shipped", name, model_fingerprint(text, name))
     _MODEL_CACHE[name] = net
     return net
 
@@ -211,5 +240,6 @@ def load_model_from_file(path: str | Path, *, activity_model: str | None = None)
         spec = _apply_activity_override(spec, activity_model)
         return compile_model(spec)
     net = compile_model(spec)
-    net._aquakin_source = ("file", str(p.resolve()))  # see load_model
+    # See load_model; the fingerprint is the content this model was built from.
+    net._aquakin_source = ("file", str(p.resolve()), model_fingerprint(text, str(p), p.parent))
     return net

@@ -1,5 +1,5 @@
 format: 2
-aquakin: 0.2.0
+aquakin: 0.2.0+gdb77b73.dirty
 name: BSM2
 options:
   recycle_passes: 3
@@ -12,6 +12,7 @@ models:
   adm1:
     source: shipped
     sha256: 7e2d335ca0618b6df2821480b65d981964628c4064b7045dbe37603b8a54ccad
+files: {}
 units:
   influent:
     kind: influent
@@ -29,7 +30,6 @@ units:
       XND: 16.1298
       SALK: 7.0
     series: null
-    series_sha256: null
   front_mix:
     kind: mixer
     input_port_names:

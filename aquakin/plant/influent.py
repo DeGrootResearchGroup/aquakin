@@ -309,7 +309,11 @@ def read_influent_table(path: str | Path, model: CompiledModel) -> InfluentSerie
         model=model,
         T=jnp.asarray(data[:, pos["T"]]) if "T" in pos else None,
     )
-    series._aquakin_source = ("file", str(p.resolve()))
+    # The file it was read from and the sha256 of the bytes it was built from.
+    import hashlib
+
+    digest = hashlib.sha256(p.read_bytes()).hexdigest()
+    series._aquakin_source = ("file", str(p.resolve()), digest)
     return series
 
 

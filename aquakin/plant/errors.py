@@ -15,6 +15,8 @@ handlers and message-matching tests keep working unchanged:
   (:class:`WiringError`, :class:`NoDigesterError`).
 """
 
+import re
+
 
 class UnknownUnitError(KeyError):
     """A referenced unit name is not present in the plant."""
@@ -35,3 +37,28 @@ class WiringError(ValueError):
 
 class NoDigesterError(ValueError):
     """The plant has no ADM1 anaerobic digester, so it has no biogas."""
+
+
+#: The one naming rule for units, influents, ports, named streams and models: a
+#: letter or underscore, then letters, digits, underscores or hyphens. Endpoints
+#: are written ``"unit.port"`` and parameters ``"<model>.<param>"``, so a name
+#: must not hold a dot, an arrow, whitespace or any character a file format
+#: might read differently.
+NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
+
+def check_name(what: str, name) -> None:
+    """Raise :class:`WiringError` unless ``name`` follows :data:`NAME_PATTERN`.
+
+    Parameters
+    ----------
+    what : str
+        What is named (``"unit"``, ``"port"``, ...), for the message.
+    name : object
+        The name.
+    """
+    if not isinstance(name, str) or not NAME_PATTERN.match(name):
+        raise WiringError(
+            f"{what} name {name!r} must start with a letter or '_' and hold only letters, "
+            f"digits, '_' and '-' (endpoints are written 'unit.port')"
+        )

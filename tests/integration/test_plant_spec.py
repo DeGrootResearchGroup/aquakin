@@ -113,7 +113,7 @@ def test_bsm1_round_trips_exactly(use_takacs):
 
 def test_every_setting_is_written_with_the_aquakin_version():
     spec = _bsm1(use_takacs=True).to_spec()
-    assert spec["format"] == 2 and spec["aquakin"] == aquakin.__version__
+    assert spec["format"] == 2 and spec["aquakin"].startswith(aquakin.__version__)
     clarifier = spec["units"]["clarifier"]
     # Defaults are written too, so a later change of default cannot change the plant.
     assert clarifier["interface_flux"] == "godunov" and clarifier["n_layers"] == 10
@@ -304,9 +304,18 @@ def test_a_modified_model_is_refused_and_a_model_file_is_found_by_itself(tmp_pat
         p.to_spec()
     m15 = aquakin.load_model_from_file(BSM2_PROJECT / "models" / "asm1_bsm2.yaml")
     p = build_bsm2(asm1_model=m15)
-    spec = p.to_spec(tmp_path / "flowsheet.yaml")  # no models= needed: the file is recorded
-    assert spec["models"]["asm1_bsm2"]["source"].endswith("models/asm1_bsm2.yaml")
-    assert Plant.from_spec(tmp_path / "flowsheet.yaml").to_spec() == Plant.from_spec(spec).to_spec()
+    p.add_influent(
+        "influent", bsm2_constant_influent(m15, T=BSM2_CONSTANT_INFLUENT_T), to=p.influent_endpoint
+    )
+    # The model file sits outside the new project, so it is copied in beside it.
+    spec = p.to_spec(tmp_path / "flowsheet.yaml")
+    assert spec["models"]["asm1_bsm2"]["source"] == "models/asm1_bsm2.yaml"
+    assert (tmp_path / "models" / "asm1_bsm2.yaml").read_text() == (
+        BSM2_PROJECT / "models" / "asm1_bsm2.yaml"
+    ).read_text()
+    q = Plant.from_spec(tmp_path / "flowsheet.yaml")
+    y = p.initial_state()
+    np.testing.assert_array_equal(np.asarray(q.derivative(y)), np.asarray(p.derivative(y)))
 
 
 def _dynamic_bsm1():
@@ -319,9 +328,8 @@ def test_a_time_varying_influent_is_written_as_a_table_beside_the_spec(tmp_path)
     p = _dynamic_bsm1()
     spec = p.to_spec(tmp_path / "flowsheet.yaml")
     feed = spec["units"]["feed"]
-    assert (
-        feed["series"] == "data/feed.csv" and feed["Q"] is None and len(feed["series_sha256"]) == 64
-    )
+    assert feed["series"] == "data/feed.csv" and feed["Q"] is None
+    assert len(spec["files"]["data/feed.csv"]) == 64
     assert (tmp_path / "data" / "feed.csv").read_text().startswith("t,Q,SI,SS,")
     q = Plant.from_spec(tmp_path / "flowsheet.yaml")
     a, b = p.influents["feed"], q.influents["feed"]
@@ -342,7 +350,7 @@ def test_a_changed_influent_table_warns(tmp_path):
     lines = table.read_text().splitlines()
     lines[1] = lines[1].replace(lines[1].split(",")[1], "1.0", 1)
     table.write_text("\n".join(lines) + "\n")
-    with pytest.warns(SpecWarning, match="influent 'feed'.*has changed"):
+    with pytest.warns(SpecWarning, match="data/feed.csv has changed"):
         Plant.from_spec(tmp_path / "flowsheet.yaml")
 
 
@@ -396,3 +404,76 @@ def test_the_fingerprint_follows_what_the_plant_is_not_how_it_is_drawn(tmp_path)
     assert spec_fingerprint(rebuilt, base_dir=tmp_path) == spec_fingerprint(
         BSM2_PROJECT / "flowsheet.yaml"
     )
+
+
+def test_the_fingerprint_reads_current_content_not_recorded_hashes(tmp_path):
+    """An edited model changes the fingerprint even though the spec still records the
+    old hash; spec_changes names the edit."""
+    from aquakin.plant.spec import spec_changes, spec_fingerprint, spec_inputs
+
+    shutil.copytree(BSM2_PROJECT, tmp_path / "bsm2")
+    path = tmp_path / "bsm2" / "flowsheet.yaml"
+    before = spec_inputs(path)
+    assert spec_changes(path) == []
+    model = tmp_path / "bsm2" / "models" / "asm1_bsm2.yaml"
+    model.write_text(model.read_text().replace("muH: {value: 4.0", "muH: {value: 4.5"))
+    after = spec_inputs(path)
+    assert after["model:asm1_bsm2"] != before["model:asm1_bsm2"]
+    assert after["flowsheet"] == before["flowsheet"] and after["model:adm1"] == before["model:adm1"]
+    assert spec_fingerprint(path) != spec_fingerprint(BSM2_PROJECT / "flowsheet.yaml")
+    assert spec_changes(path) == ["model 'asm1_bsm2' (models/asm1_bsm2.yaml) has changed"]
+
+
+def test_the_fingerprint_follows_order_but_not_spelling():
+    from aquakin.plant.spec import spec_fingerprint
+
+    spec = _bsm1().to_spec()
+    base = spec_fingerprint(spec)
+    spelled = [c.replace(" -> ", "->") if isinstance(c, str) else c for c in spec["connections"]]
+    as_maps = [
+        {"from": c.split("->")[0].strip(), "to": c.split("->")[1].strip()}
+        if isinstance(c, str)
+        else c
+        for c in spec["connections"]
+    ]
+    bare = [
+        c.replace("tank1.out", "tank1") if isinstance(c, str) else c for c in spec["connections"]
+    ]
+    for connections in (spelled, as_maps, bare):
+        assert spec_fingerprint(dict(spec, connections=connections)) == base
+    reordered = dict(spec, units=dict(reversed(list(spec["units"].items()))))
+    assert spec_fingerprint(reordered) != base
+
+
+def test_a_model_file_edited_after_loading_is_refused(tmp_path):
+    shutil.copytree(BSM2_PROJECT, tmp_path / "bsm2")
+    p = Plant.from_spec(tmp_path / "bsm2" / "flowsheet.yaml")
+    model = tmp_path / "bsm2" / "models" / "asm1_bsm2.yaml"
+    model.write_text(model.read_text().replace("muH: {value: 4.0", "muH: {value: 7.0"))
+    with pytest.raises(SpecError, match="has changed since model 'asm1_bsm2' was loaded"):
+        p.to_spec(tmp_path / "again.yaml")
+
+
+def test_files_from_outside_the_project_are_copied_in_and_never_overwritten(tmp_path):
+    from aquakin.plant import read_influent_table, write_influent_table
+
+    outside = write_influent_table(
+        load_bsm1_influent("dry", _asm1()), tmp_path / "elsewhere" / "dry.csv"
+    )
+    p = build_bsm1()
+    p.add_influent("feed", read_influent_table(outside, _asm1()), to=p.influent_endpoint)
+    project = tmp_path / "project"
+    spec = p.to_spec(project / "flowsheet.yaml")
+    assert spec["units"]["feed"]["series"] == "data/feed.csv"
+    assert (project / "data" / "feed.csv").read_bytes() == outside.read_bytes()
+    assert not any(str(tmp_path / "elsewhere") in str(v) for v in spec["models"].values())
+    # A different table already at data/feed.csv is not overwritten.
+    (project / "data" / "feed.csv").write_text("t,Q\n0,1\n1,1\n")
+    with pytest.raises(SpecError, match="already exists with different content"):
+        p.to_spec(project / "flowsheet.yaml")
+
+
+def test_yaml_1_2_reads_leading_zeros_and_dates_as_written(tmp_path):
+    path = tmp_path / "s.yaml"
+    path.write_text("a: 010\nb: 2026-01-01\nc: 0x1F\nd: on\n")
+    assert load_spec_file(path) == {"a": 10, "b": "2026-01-01", "c": 31, "d": "on"}

@@ -53,6 +53,7 @@ from aquakin.plant.errors import (
     UnknownPortError,
     UnknownUnitError,
     WiringError,
+    check_name,
 )
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.recycle import RecycleResolver
@@ -361,14 +362,16 @@ class Plant:
         models would share its parameter keys (``"asm1.muH"`` could then name a
         splitter's flow setpoint instead of the kinetic rate).
         """
-        names = [("unit", unit.name)]
-        names += [("port", p) for p in [*unit.input_ports, *unit.output_ports]]
-        for what, name in names:
-            if not name or "." in name or "->" in name or any(ch.isspace() for ch in name):
-                raise WiringError(
-                    f"{what} name {name!r} of unit '{unit.name}' must be non-empty and contain "
-                    f"no '.', '->' or whitespace (endpoints are written 'unit.port')"
-                )
+        check_name("unit", unit.name)
+        for port in [*unit.input_ports, *unit.output_ports]:
+            check_name(f"port of unit '{unit.name}': port", port)
+        model = getattr(unit, "model", None)
+        if model is not None:
+            check_name("model", model.name)
+        if unit.name in self.influents:
+            raise WiringError(f"unit name '{unit.name}' is already the name of an influent")
+        if unit.name in self.named_streams:
+            raise WiringError(f"unit name '{unit.name}' is already the name of a stream")
         models = {
             u.model.name
             for u in [*self.units.values(), unit]
@@ -417,10 +420,9 @@ class Plant:
             Translator for the influent -> unit connection. Defaults to identity
             when the influent and destination share a model.
         """
-        if not name or "." in name or "->" in name or any(ch.isspace() for ch in name):
-            raise WiringError(
-                f"influent name {name!r} must be non-empty and contain no '.', '->' or whitespace"
-            )
+        check_name("influent", name)
+        if name in self.units:
+            raise WiringError(f"influent name '{name}' is already the name of a unit")
         if name in self.influents:
             raise ValueError(f"Influent '{name}' already added")
         self.influents[name] = series
@@ -1907,6 +1909,11 @@ class Plant:
         plant's named streams; call this to add your own. Returns ``self`` for
         chaining.
         """
+        check_name("stream", name)
+        if name in self.units:
+            raise WiringError(
+                f"stream name '{name}' is the name of a unit; plant.stream('{name}') would be ambiguous"
+            )
         self.named_streams[name] = endpoint
         return self
 

@@ -9,7 +9,10 @@ A *spec* is a JSON/YAML document that rebuilds a plant::
     models:
       asm1: {source: shipped, sha256: 3f9c...}
       asm1_bsm2: {source: models/asm1_bsm2.yaml, sha256: 8a01...}
+    files:
+      data/feed.csv: 51b2...
     units:
+      feed: {kind: influent, model: asm1, series: data/feed.csv, ...}
       tank1: {kind: cstr, label: Anoxic zone 1, model: asm1, volume: 1000.0, ...}
     connections:
       - inlet_mix.out -> tank1.inlet
@@ -22,35 +25,43 @@ A *spec* is a JSON/YAML document that rebuilds a plant::
 **Identity.** A unit's key is its stable identifier: the plant's unit name,
 used by every connection, parameter (``"<unit>.<setpoint>"``), stream and
 result. ``label`` is free display text (kept in :attr:`Plant.labels`), so
-relabelling a unit changes nothing that refers to it.
+relabelling a unit changes nothing that refers to it. Names follow one rule
+(:data:`aquakin.plant.errors.NAME_PATTERN`).
 
 **Written in full.** Every setting is written, defaults included, together
 with the aquakin version that wrote the file, so a spec means the same plant
 whatever the defaults of the aquakin that reads it.
 
-**Models.** Every model a unit uses is listed under ``models``, keyed by its
-name: either a shipped model (``source: shipped``) or a model YAML file whose
-path is relative to the spec file (it may ``extends:`` a shipped model).
-``sha256`` fingerprints the model's content with its ``extends`` chain
-resolved; reading a spec whose model has changed since it was written warns
-(:class:`SpecWarning`).
+**A project travels whole.** Every model a unit uses is listed under
+``models``: a shipped model, or a model YAML file inside the spec's folder (it
+may ``extends:`` a shipped model). A time-varying influent is a table file
+(``series``, see :func:`~aquakin.plant.influent.read_influent_table`) inside
+the folder too, its sha256 under ``files``. :func:`write_spec` copies a file
+from elsewhere into ``models/`` or ``data/`` beside the spec, so no spec it
+writes points outside its folder. Each model records the fingerprint of the
+content it was built from; reading a spec whose model or table has changed
+since it was written warns (:class:`SpecWarning`).
 
 **Validation.** The document is validated by a Pydantic schema and each unit's
 settings strictly against the unit catalogue (:mod:`aquakin.plant.catalog`):
 an unknown key or a mistyped value is an error naming where it is. YAML is read
-with YAML 1.2 rules for booleans and numbers (``1e-5`` is a number, ``yes`` and
-``on`` are strings).
+with YAML 1.2 rules for scalars (``1e-5`` is a number; ``yes``, ``on`` and dates
+are text).
 
-A unit of kind ``influent`` is a feed, constant or a table file (``series``);
-its single connection becomes :meth:`Plant.add_influent`. Units the plant derives itself (the PI controllers
-a closed-loop :class:`Aeration` or a feedback :class:`DosingUnit` requires) are
-not written; they are derived again. What a spec cannot express yet is refused
-by :meth:`Plant.to_spec` with a :class:`SpecError` naming it rather than
-dropped: a model that is neither shipped nor given as a file, a heat-balance
-temperature model, and settings only Python can give (arrays of initial
-concentrations, SBR phases, settling models). A time-varying influent is kept
-as a table file beside the spec (``series:``, see
-:func:`~aquakin.plant.influent.read_influent_table`), with its fingerprint.
+**Provenance.** :func:`spec_inputs` fingerprints what a spec simulates, one
+entry per input (the flowsheet, each model, each influent table), each hashed
+from its *current* content; :func:`spec_fingerprint` combines them. A result
+records them to tell later whether it is stale, and which input changed.
+
+A unit of kind ``influent`` is a feed, constant or a table file; its single
+connection becomes :meth:`Plant.add_influent`. Units the plant derives itself
+(the PI controllers a closed-loop :class:`Aeration` or a feedback
+:class:`DosingUnit` requires) are not written; they are derived again. What a
+spec cannot express yet is refused by :meth:`Plant.to_spec` with a
+:class:`SpecError` naming it rather than dropped: a model that is neither
+shipped nor read from a file, a heat-balance temperature model, and settings
+only Python can give (arrays of initial concentrations, SBR phases, settling
+models).
 """
 
 from __future__ import annotations
@@ -59,25 +70,34 @@ import dataclasses
 import hashlib
 import inspect
 import json
+import math
+import os
 import re
+import shutil
+import tempfile
 import warnings
-from importlib.resources import files
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from aquakin.plant.errors import NAME_PATTERN
+
 __all__ = [
     "SPEC_FORMAT",
     "TRANSLATORS",
     "SpecError",
     "SpecWarning",
+    "aquakin_version",
     "check_spec",
     "load_spec_file",
     "plant_from_spec",
     "plant_to_spec",
+    "spec_changes",
     "spec_fingerprint",
+    "spec_inputs",
+    "write_spec",
 ]
 
 #: The spec format version this module writes and reads.
@@ -87,7 +107,6 @@ SPEC_FORMAT = 2
 TRANSLATORS = ("asm1_to_adm1", "adm1_to_asm1")
 
 _OPTION_KEYS = ("recycle_passes", "recycle_tol", "recycle_max_passes")
-_IDENTIFIER = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
 
 
 class SpecError(ValueError):
@@ -95,7 +114,7 @@ class SpecError(ValueError):
 
 
 class SpecWarning(UserWarning):
-    """A spec read with a model whose content changed since the spec was written."""
+    """A spec read with a model or table whose content changed since it was written."""
 
 
 def _translators() -> dict:
@@ -104,21 +123,64 @@ def _translators() -> dict:
     return {"asm1_to_adm1": ASM1toADM1, "adm1_to_asm1": ADM1toASM1}
 
 
+def aquakin_version() -> str:
+    """The aquakin version, with the git commit for a development checkout.
+
+    Returns
+    -------
+    str
+        ``"0.2.0"`` for an installed release, ``"0.2.0+g1a2b3c4"`` when aquakin
+        runs from a git checkout (``+dirty`` added when it has local changes).
+    """
+    import subprocess
+
+    from aquakin import __version__
+
+    root = Path(__file__).resolve().parents[2]
+    if not (root / ".git").exists():
+        return __version__
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return __version__
+    return f"{__version__}+g{commit}" + (".dirty" if dirty else "")
+
+
 # ---------------------------------------------------------------------------
-# YAML with YAML 1.2 booleans and numbers
+# YAML with YAML 1.2 scalars
 # ---------------------------------------------------------------------------
 
 
 class _Yaml12Loader(yaml.SafeLoader):
-    """PyYAML's safe loader with YAML 1.2 core-schema booleans, integers and floats.
+    """PyYAML's safe loader with YAML 1.2 core-schema scalars.
 
-    PyYAML follows YAML 1.1, where ``yes``/``no``/``on``/``off`` are booleans and
-    ``1e-5`` (no dot) is a string; in a spec those would silently turn a port
-    named ``on`` into ``True`` or a concentration into text.
+    PyYAML follows YAML 1.1, where ``yes``/``no``/``on``/``off`` are booleans,
+    ``1e-5`` (no dot) is a string, ``010`` is octal and ``2026-01-01`` a date; in
+    a spec those would silently turn a port named ``on`` into ``True`` or a
+    concentration into text. Here booleans are ``true``/``false`` only, integers
+    are decimal (or ``0o``/``0x``), floats include ``1e-5``, and dates stay text.
     """
 
 
-_SCALAR_TAGS = ("tag:yaml.org,2002:bool", "tag:yaml.org,2002:int", "tag:yaml.org,2002:float")
+_SCALAR_TAGS = (
+    "tag:yaml.org,2002:bool",
+    "tag:yaml.org,2002:int",
+    "tag:yaml.org,2002:float",
+    "tag:yaml.org,2002:timestamp",
+)
 _Yaml12Loader.yaml_implicit_resolvers = {
     first: [(tag, regexp) for tag, regexp in resolvers if tag not in _SCALAR_TAGS]
     for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
@@ -139,12 +201,19 @@ _Yaml12Loader.add_implicit_resolver(
     ),
     list("-+0123456789."),
 )
+
+
+def _yaml12_int(loader, node):
+    text = loader.construct_scalar(node)
+    if text.startswith(("0o", "0x")):
+        return int(text, 0)
+    return int(text, 10)  # a leading zero is still decimal, as in YAML 1.2
+
+
 _Yaml12Loader.add_constructor(
     "tag:yaml.org,2002:bool", lambda loader, node: loader.construct_scalar(node).lower() == "true"
 )
-_Yaml12Loader.add_constructor(
-    "tag:yaml.org,2002:int", lambda loader, node: int(loader.construct_scalar(node), 0)
-)
+_Yaml12Loader.add_constructor("tag:yaml.org,2002:int", _yaml12_int)
 
 
 def load_spec_file(path) -> dict:
@@ -220,6 +289,15 @@ class _Connection(BaseModel):
     seed: _Seed | None = None
 
 
+def _check_identifier(what: str, name: str) -> str:
+    if not NAME_PATTERN.match(name):
+        raise ValueError(
+            f"{what} {name!r} must start with a letter or '_' and hold only letters, digits, "
+            f"'_' and '-'"
+        )
+    return name
+
+
 class _Document(BaseModel):
     model_config = _STRICT
     format: Literal[2]
@@ -227,6 +305,7 @@ class _Document(BaseModel):
     name: str = "plant"
     options: _Options = _Options()
     models: dict[str, _ModelRef] = {}
+    files: dict[str, str] = {}
     units: dict[str, _Unit] = {}
     connections: list[str | _Connection] = []
     streams: dict[str, str] = {}
@@ -236,14 +315,17 @@ class _Document(BaseModel):
 
     @field_validator("units")
     @classmethod
-    def _identifiers(cls, units):
+    def _unit_identifiers(cls, units):
         for uid in units:
-            if not _IDENTIFIER.match(uid):
-                raise ValueError(
-                    f"unit identifier {uid!r} may use letters, digits, '_' and '-' only "
-                    f"(it is the name endpoints and parameters are written with)"
-                )
+            _check_identifier("unit identifier", uid)
         return units
+
+    @field_validator("models")
+    @classmethod
+    def _model_names(cls, models):
+        for name in models:
+            _check_identifier("model name", name)
+        return models
 
 
 def _validate(data) -> _Document:
@@ -264,27 +346,53 @@ def _validate(data) -> _Document:
         raise SpecError("invalid spec:\n  " + "\n  ".join(lines)) from None
 
 
+def _parse_connection(entry, where: str) -> _Connection:
+    if isinstance(entry, _Connection):
+        return entry
+    parts = [p.strip() for p in entry.split("->")]
+    if len(parts) != 2 or not all(parts):
+        raise SpecError(f"{where}: write a connection as 'unit.port -> unit.port', got {entry!r}")
+    return _Connection(**{"from": parts[0], "to": parts[1]})
+
+
 # ---------------------------------------------------------------------------
-# Models
+# Content fingerprints
 # ---------------------------------------------------------------------------
 
 
-def _model_fingerprint(text: str, source: str, base_dir) -> str:
-    """sha256 of a model's content with its ``extends`` chain merged in."""
-    from aquakin.schema.loader import _resolve_inheritance
+def _model_fingerprint(path: Path) -> str:
+    from aquakin.schema.loader import model_fingerprint
 
-    data = _resolve_inheritance(yaml.safe_load(text), source, base_dir, seen=())
-    canonical = json.dumps(data, sort_keys=True, default=str, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return model_fingerprint(path.read_text(), str(path), path.parent)
 
 
 def _shipped_fingerprint(name: str) -> str:
-    text = (files("aquakin.models") / f"{name}.yaml").read_text()
-    return _model_fingerprint(text, name, None)
+    from importlib.resources import files
+
+    from aquakin.schema.loader import model_fingerprint
+
+    return model_fingerprint((files("aquakin.models") / f"{name}.yaml").read_text(), name)
 
 
-def _file_fingerprint(path: Path) -> str:
-    return _model_fingerprint(path.read_text(), str(path), path.parent)
+def _file_digest(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _located(source: str, base_dir: Path | None, where: str) -> Path:
+    path = Path(source)
+    if not path.is_absolute():
+        if base_dir is None:
+            raise SpecError(
+                f"{where}: the relative path {source!r} needs the spec to be read from a "
+                f"file, or base_dir="
+            )
+        path = base_dir / path
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Reading
+# ---------------------------------------------------------------------------
 
 
 def _load_models(doc: _Document, base_dir: Path | None) -> tuple[dict, dict]:
@@ -297,18 +405,9 @@ def _load_models(doc: _Document, base_dir: Path | None) -> tuple[dict, dict]:
         try:
             if ref.source == "shipped":
                 model = load_model(name)
-                digest = _shipped_fingerprint(name)
             else:
-                path = Path(ref.source)
-                if not path.is_absolute():
-                    if base_dir is None:
-                        raise SpecError(
-                            f"{where}: the relative model file {ref.source!r} needs the spec to "
-                            f"be read from a file, or base_dir="
-                        )
-                    path = base_dir / path
+                path = _located(ref.source, base_dir, where)
                 model = load_model_from_file(path)
-                digest = _file_fingerprint(path)
                 model_files[name] = path.resolve()
         except SpecError:
             raise
@@ -318,6 +417,7 @@ def _load_models(doc: _Document, base_dir: Path | None) -> tuple[dict, dict]:
             raise SpecError(
                 f"{where}: the model in {ref.source!r} is named '{model.name}', not '{name}'"
             )
+        digest = model._aquakin_source[2]
         if ref.sha256 is not None and ref.sha256 != digest:
             warnings.warn(
                 f"model '{name}' ({ref.source}) has changed since this spec was written "
@@ -329,9 +429,16 @@ def _load_models(doc: _Document, base_dir: Path | None) -> tuple[dict, dict]:
     return models, model_files
 
 
-# ---------------------------------------------------------------------------
-# Reading
-# ---------------------------------------------------------------------------
+def _check_files(doc: _Document, base_dir: Path | None) -> None:
+    for source, recorded in doc.files.items():
+        path = _located(source, base_dir, f"files.{source}")
+        if path.is_file() and _file_digest(path) != recorded:
+            warnings.warn(
+                f"{source} has changed since this spec was written "
+                f"(aquakin {doc.aquakin or 'unknown'}); the plant is built with the current file",
+                SpecWarning,
+                stacklevel=4,
+            )
 
 
 def _unit_of(endpoint: str) -> str:
@@ -348,7 +455,8 @@ def _check_model_names(settings: dict, models: dict, where: str) -> None:
             raise SpecError(f"{where}: model '{name}' is not listed under 'models'")
 
 
-def _build_translator(spec: dict, src_model, dst_model, where: str):
+def _translator_settings(spec: dict, where: str) -> tuple[type, dict]:
+    """The translator class and its settings, every one filled in, checked by type."""
     spec = dict(spec)
     kind = spec.pop("kind", None)
     classes = _translators()
@@ -356,14 +464,26 @@ def _build_translator(spec: dict, src_model, dst_model, where: str):
         raise SpecError(f"{where}: translator kind {kind!r} is not one of {sorted(classes)}")
     cls = classes[kind]
     params = inspect.signature(cls).parameters
+    full = {}
+    for key, p in params.items():
+        if key in ("source_model", "target_model"):
+            continue
+        full[key] = p.default
     for key, value in spec.items():
-        if key not in params or key in ("source_model", "target_model"):
+        if key not in full:
             raise SpecError(f"{where}: '{key}' is not a setting of translator {kind}")
-        expect_bool = isinstance(params[key].default, bool)
+        expect_bool = isinstance(full[key], bool)
         if isinstance(value, bool) != expect_bool or not isinstance(value, (int, float, str)):
             raise SpecError(f"{where}: translator setting '{key}' has the wrong type ({value!r})")
+        full[key] = value
+    return cls, {"kind": kind, **full}
+
+
+def _build_translator(spec: dict, src_model, dst_model, where: str):
+    cls, full = _translator_settings(spec, where)
+    full.pop("kind")
     try:
-        return cls(source_model=src_model, target_model=dst_model, **spec)
+        return cls(source_model=src_model, target_model=dst_model, **full)
     except Exception as exc:
         raise SpecError(f"{where}: translator: {type(exc).__name__}: {exc}") from None
 
@@ -381,6 +501,15 @@ def _build_seed(seed: _Seed, model):
     return Stream(Q=jnp.asarray(seed.Q), C=C, model=model, scalars=scalars)
 
 
+def _resolve(spec, base_dir):
+    if isinstance(spec, (str, Path)):
+        base_dir = Path(spec).parent if base_dir is None else Path(base_dir)
+        spec = load_spec_file(spec)
+    elif base_dir is not None:
+        base_dir = Path(base_dir)
+    return spec, base_dir
+
+
 def plant_from_spec(cls, spec, *, base_dir=None):
     """Build a plant from a spec (a mapping, or a ``.yaml`` / ``.json`` file path).
 
@@ -391,7 +520,7 @@ def plant_from_spec(cls, spec, *, base_dir=None):
     spec : dict or str or pathlib.Path
         The spec, or the path of a file holding it.
     base_dir : str or pathlib.Path, optional
-        The directory model file paths are relative to when ``spec`` is a
+        The directory model and table paths are relative to when ``spec`` is a
         mapping (a file's own directory otherwise).
 
     Returns
@@ -407,17 +536,14 @@ def plant_from_spec(cls, spec, *, base_dir=None):
     Warns
     -----
     SpecWarning
-        If a model's content differs from the fingerprint the spec recorded.
+        If a model or table differs from the fingerprint the spec recorded.
     """
     from aquakin.plant.catalog import build_unit
 
-    if isinstance(spec, (str, Path)):
-        base_dir = Path(spec).parent if base_dir is None else Path(base_dir)
-        spec = load_spec_file(spec)
-    elif base_dir is not None:
-        base_dir = Path(base_dir)
+    spec, base_dir = _resolve(spec, base_dir)
     doc = _validate(spec)
     models, model_files = _load_models(doc, base_dir)
+    _check_files(doc, base_dir)
 
     plant = cls(doc.name, **doc.options.model_dump())
     plant._spec_model_files = model_files
@@ -431,23 +557,19 @@ def plant_from_spec(cls, spec, *, base_dir=None):
         except Exception as exc:
             raise SpecError(f"{where}: {type(exc).__name__}: {exc}") from None
         if entry.kind == "influent":
-            _check_series_fingerprint(uid, built, settings.get("series_sha256"), doc)
             influents[uid] = built
         else:
             plant.add_unit(built)
         if entry.label is not None:
             plant.labels[uid] = entry.label
+    clash = set(influents) & set(plant.units)
+    if clash:
+        raise SpecError(f"units: {sorted(clash)} name both an influent and a unit")
 
     fed = dict.fromkeys(influents, 0)
-    for i, entry in enumerate(doc.connections):
+    for i, raw in enumerate(doc.connections):
         where = f"connections[{i}]"
-        if isinstance(entry, str):
-            parts = [p.strip() for p in entry.split("->")]
-            if len(parts) != 2 or not all(parts):
-                raise SpecError(
-                    f"{where}: write a connection as 'unit.port -> unit.port', got {entry!r}"
-                )
-            entry = _Connection(**{"from": parts[0], "to": parts[1]})
+        entry = _parse_connection(raw, where)
         src, dst = entry.source, entry.to
         src_unit, dst_unit = _unit_of(src), _unit_of(dst)
         try:
@@ -490,83 +612,52 @@ def plant_from_spec(cls, spec, *, base_dir=None):
 
 
 # ---------------------------------------------------------------------------
-# Writing
+# From a plant
 # ---------------------------------------------------------------------------
 
 
 class _ModelRefs:
-    """Names each model object of a plant and records how it is sourced.
+    """Names each model object of a plant and records where it came from.
 
-    A model is written as a file when its name is one of the given model files
-    or it was read from one (``load_model_from_file`` records the path), and as
-    shipped when ``load_model`` loaded it by name. Anything else (a modified
-    copy) is refused, since naming it would build a different plant.
+    A model read from a file (``load_model_from_file`` records the path and the
+    content it was built from) is written as that file, a model ``load_model``
+    loaded as shipped. Anything else (a modified copy) is refused, since naming
+    it would build a different plant; so is a file edited since it was loaded.
     """
 
-    def __init__(self, model_files: dict, base_dir: Path | None):
-        self._files = {name: Path(p) for name, p in model_files.items()}
-        self._base_dir = base_dir
+    def __init__(self, extra_files: dict):
+        self._files = {name: Path(p).resolve() for name, p in (extra_files or {}).items()}
         self.used: dict[str, dict] = {}
 
     def __call__(self, model) -> str:
         name = model.name
         if name in self.used:
             return name
-        source = getattr(model, "_aquakin_source", None)
-        if name in self._files:
-            path = self._files[name]
-        elif source is not None and source[0] == "file":
-            path = Path(source[1])
-        else:
-            path = None
-        if path is not None:
-            self.used[name] = {"source": self._relative(path), "sha256": _file_fingerprint(path)}
-        elif source == ("shipped", name):
-            self.used[name] = {"source": "shipped", "sha256": _shipped_fingerprint(name)}
+        source = tuple(getattr(model, "_aquakin_source", ()) or ())
+        if source[:1] == ("file",) or name in self._files:
+            path = Path(source[1]) if source[:1] == ("file",) else self._files[name]
+            loaded = source[2] if source[:1] == ("file",) else None
+            current = _model_fingerprint(path)
+            if loaded is not None and current != loaded:
+                raise SpecError(
+                    f"model file {path} has changed since model '{name}' was loaded from it; "
+                    f"load it again so the spec describes the plant in memory"
+                )
+            self.used[name] = {"source": str(path), "sha256": current}
+        elif source[:2] == ("shipped", name):
+            self.used[name] = {"source": "shipped", "sha256": source[2]}
         else:
             raise SpecError(
                 f"model '{name}' is neither a shipped model as aquakin.load_model('{name}') "
                 f"returns it nor read from a model file (a modified copy, say); write it as a "
-                f"model file and pass Plant.to_spec(models={{'{name}': 'path/to/{name}.yaml'}})"
+                f"model file and load it with aquakin.load_model_from_file"
             )
         return name
 
-    def _relative(self, path: Path) -> str:
-        if self._base_dir is not None:
-            try:
-                return path.resolve().relative_to(self._base_dir.resolve()).as_posix()
-            except ValueError:
-                pass
-        return path.resolve().as_posix()
 
-
-def _file_digest(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
-def _check_series_fingerprint(name, series, recorded, doc) -> None:
-    source = getattr(series, "_aquakin_source", None)
-    if recorded is None or source is None:
-        return
-    if _file_digest(Path(source[1])) != recorded:
-        warnings.warn(
-            f"influent '{name}' ({source[1]}) has changed since this spec was written "
-            f"(aquakin {doc.aquakin or 'unknown'}); the plant is built with the current file",
-            SpecWarning,
-            stacklevel=4,
-        )
-
-
-def _influent_spec(name, series, refs, base_dir: Path | None) -> dict:
-    """An influent as a unit entry: constant, or a series in a table file.
-
-    A time-varying series read from a table inside the spec's directory is
-    referred to; any other is written as a table to ``data/<name>.csv`` beside
-    the spec, so the spec and its data travel together.
-    """
+def _influent_entry(name, series, refs) -> tuple[dict, dict]:
+    """An influent's unit entry, and ``{absolute table path: sha256}`` for a series."""
     import numpy as np
-
-    from aquakin.plant.influent import write_influent_table
 
     Q, C = np.asarray(series.Q), np.asarray(series.C)
     T = None if series.T is None else np.asarray(series.T)
@@ -574,34 +665,33 @@ def _influent_spec(name, series, refs, base_dir: Path | None) -> dict:
     species = series.model.species
     out = {"kind": "influent", "model": refs(series.model)}
     if constant:
+        composition = {sp: float(v) for sp, v in zip(species, C[0], strict=True) if v != 0.0}
+        values = [float(Q[0]), *composition.values()] + ([] if T is None else [float(T[0])])
+        if not all(math.isfinite(v) for v in values):
+            raise SpecError(f"influent '{name}' holds a value that is not finite")
         return out | {
             "Q": float(Q[0]),
             "T": None if T is None else float(T[0]),
-            "composition": {sp: float(v) for sp, v in zip(species, C[0], strict=True) if v != 0.0},
+            "composition": composition,
             "series": None,
-            "series_sha256": None,
-        }
-    if base_dir is None:
-        raise SpecError(
-            f"influent '{name}' varies in time; write the spec to a file "
-            f"(Plant.to_spec(path)) so its series can be written beside it"
-        )
-    source = getattr(series, "_aquakin_source", None)
-    path = Path(source[1]) if source is not None else None
-    try:
-        relative = path.resolve().relative_to(base_dir.resolve()) if path else None
-    except ValueError:
-        relative = None
-    if relative is None:
-        relative = Path("data") / f"{name}.csv"
-        path = write_influent_table(series, base_dir / relative)
+        }, {}
+    source = tuple(getattr(series, "_aquakin_source", ()) or ())
+    if source[:1] == ("file",):
+        path = Path(source[1])
+        if _file_digest(path) != source[2]:
+            raise SpecError(
+                f"influent table {path} has changed since influent '{name}' was read from it"
+            )
+        files = {str(path): source[2]}
+    else:
+        files = {}  # written by write_spec from the series in memory
+        out["_series_object"] = series
     return out | {
         "Q": None,
         "T": None,
         "composition": {},
-        "series": relative.as_posix(),
-        "series_sha256": _file_digest(path),
-    }
+        "series": str(source[1]) if files else None,
+    }, files
 
 
 def _translator_spec(t, where) -> dict:
@@ -650,25 +740,26 @@ def plant_to_spec(plant, path=None, *, models=None) -> dict:
     plant : Plant
         The plant to write.
     path : str or pathlib.Path, optional
-        Also write the spec to this file (``.json`` as JSON, anything else as
-        YAML). Model file paths are then written relative to its directory.
+        Write the spec to this file with :func:`write_spec`, which copies the
+        models and influent tables it uses into ``models/`` and ``data/`` beside
+        it when they are not already in its folder, and writes paths relative to
+        it. Without a path, model files are named by absolute path, and a
+        time-varying influent read from no file is refused.
     models : dict, optional
-        ``{model name: model YAML path}`` for models that are not shipped, so
-        they can be named in the spec (a plant read by :meth:`from_spec`
-        remembers its own).
+        ``{model name: model YAML path}`` for a model that was not read with
+        ``load_model_from_file`` but is that file's content.
 
     Returns
     -------
     dict
-        The spec (plain data).
+        The spec (plain data), as written when ``path`` is given.
 
     Raises
     ------
     SpecError
         If the plant holds something a spec cannot express yet (the message
-        names it).
+        names it), or a model or table file changed since it was read.
     """
-    from aquakin import __version__
     from aquakin.plant.catalog import unit_settings
     from aquakin.plant.temperature import AlgebraicTemperature
     from aquakin.plant.translators import IdentityTranslator
@@ -678,14 +769,14 @@ def plant_to_spec(plant, path=None, *, models=None) -> dict:
             f"temperature model {type(plant.temperature_model).__name__} cannot be written "
             f"in a spec yet"
         )
-    base_dir = Path(path).parent if path is not None else None
-    model_files = {**getattr(plant, "_spec_model_files", {}), **(models or {})}
-    refs = _ModelRefs(model_files, base_dir)
+    refs = _ModelRefs(models)
     derived = getattr(plant, "_derived_units", set())
+    files: dict[str, str] = {}
 
     units: dict[str, dict] = {}
     for name, series in plant.influents.items():
-        units[name] = _influent_spec(name, series, refs, base_dir)
+        units[name], f = _influent_entry(name, series, refs)
+        files.update(f)
     for name in plant._insertion_order:
         if name in derived:
             continue
@@ -715,10 +806,11 @@ def plant_to_spec(plant, path=None, *, models=None) -> dict:
 
     spec: dict[str, Any] = {
         "format": SPEC_FORMAT,
-        "aquakin": __version__,
+        "aquakin": aquakin_version(),
         "name": plant.name,
         "options": {key: getattr(plant, key) for key in _OPTION_KEYS},
         "models": dict(refs.used),
+        "files": files,
         "units": units,
         "connections": connections,
         "streams": dict(plant.named_streams),
@@ -726,12 +818,332 @@ def plant_to_spec(plant, path=None, *, models=None) -> dict:
         "effluent_endpoint": plant.effluent_endpoint,
     }
     if path is not None:
-        path = Path(path)
-        if path.suffix == ".json":
-            path.write_text(json.dumps(spec, indent=2, allow_nan=False) + "\n")
-        else:
-            path.write_text(yaml.safe_dump(spec, sort_keys=False, allow_unicode=True))
+        return write_spec(spec, path)
+    pending = [u for u, e in units.items() if "_series_object" in e]
+    if pending:
+        raise SpecError(
+            f"influent '{pending[0]}' varies in time; write the spec to a file "
+            f"(Plant.to_spec(path)) so its series can be written beside it"
+        )
     return spec
+
+
+# ---------------------------------------------------------------------------
+# Writing a spec file (shared by Plant.to_spec and the flowsheet editor)
+# ---------------------------------------------------------------------------
+
+
+def _within(path: Path, folder: Path) -> Path | None:
+    try:
+        return path.resolve().relative_to(folder.resolve())
+    except ValueError:
+        return None
+
+
+def _copy_into(src: Path, dest: Path, what: str) -> None:
+    """Copy ``src`` to ``dest`` unless it is already there; refuse to overwrite other content."""
+    if dest.exists():
+        if dest.resolve() == src.resolve() or dest.read_bytes() == src.read_bytes():
+            return
+        raise SpecError(
+            f"{what}: {dest} already exists with different content; move it or rename the "
+            f"{what.split()[0]} so its file can be written"
+        )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+
+
+def _copy_model(src: Path, folder: Path, name: str) -> str:
+    """Bring a model file (and any base files it ``extends:`` by path) into ``models/``."""
+    dest = folder / "models" / f"{name}.yaml"
+    data = yaml.safe_load(src.read_text()) or {}
+    meta = data.get("model", {}) if isinstance(data, dict) else {}
+    base = meta.get("extends", data.get("extends") if isinstance(data, dict) else None)
+    if isinstance(base, str) and ("/" in base or base.endswith(".yaml")):
+        if "/" in base:
+            raise SpecError(
+                f"model '{name}': {src} extends {base!r} by a path with folders; put the base "
+                f"model beside it (extends: name.yaml) so the two can be copied together"
+            )
+        base_src = src.parent / base
+        _copy_into(base_src, folder / "models" / base, f"model '{name}' (base {base})")
+    _copy_into(src, dest, f"model '{name}'")
+    return f"models/{name}.yaml"
+
+
+def write_spec(spec: dict, path, *, base_dir=None) -> dict:
+    """Write a spec file that holds the whole plant, and return what was written.
+
+    The one writer behind :meth:`Plant.to_spec` and the flowsheet editor's
+    Save. It fills every unit's settings in from the catalogue defaults, records
+    the aquakin version and the current sha256 of every model and influent
+    table, copies a model or table from outside the spec's folder into
+    ``models/<name>.yaml`` or ``data/<unit>.csv`` (refusing to overwrite a
+    different file), writes their paths relative to the spec, and replaces the
+    file atomically (written to a temporary file, then renamed).
+
+    Parameters
+    ----------
+    spec : dict
+        The spec to write (its relative paths are relative to ``base_dir``).
+    path : str or pathlib.Path
+        The spec file (``.json`` as JSON, anything else as YAML).
+    base_dir : str or pathlib.Path, optional
+        Where ``spec``'s relative paths point from (the editor's open folder).
+
+    Returns
+    -------
+    dict
+        The spec as written.
+
+    Raises
+    ------
+    SpecError
+        If a unit kind is unknown, or a file to copy would overwrite another.
+    """
+    from aquakin.plant.catalog import unit_kind
+    from aquakin.plant.influent import write_influent_table
+
+    path = Path(path)
+    folder = path.parent if str(path.parent) else Path(".")
+    base = Path(base_dir) if base_dir is not None else folder
+    spec = dict(spec)
+
+    models = {}
+    for name, ref in (spec.get("models") or {}).items():
+        _check_identifier_or_error("model name", name)
+        source = ref.get("source", "shipped")
+        if source == "shipped":
+            models[name] = {"source": "shipped", "sha256": _shipped_fingerprint(name)}
+            continue
+        src = _located(source, base, f"models.{name}")
+        rel = _within(src, folder)
+        relative = rel.as_posix() if rel is not None else _copy_model(src, folder, name)
+        models[name] = {"source": relative, "sha256": _model_fingerprint(folder / relative)}
+
+    files: dict[str, str] = {}
+    units = {}
+    for uid, entry in (spec.get("units") or {}).items():
+        entry = dict(entry)
+        kind = entry.pop("kind")
+        label = entry.pop("label", None)
+        series_obj = entry.pop("_series_object", None)
+        try:
+            defaults = unit_kind(kind).defaults()
+        except KeyError as exc:
+            raise SpecError(f"units.{uid}: {exc.args[0]}") from None
+        settings = {**defaults, **entry}
+        settings.pop("series_sha256", None)  # format-2 drafts kept it as a setting
+        if kind == "influent" and (settings.get("series") is not None or series_obj is not None):
+            dest_rel = Path("data") / f"{uid}.csv"
+            if series_obj is not None:
+                dest = folder / dest_rel
+                if dest.exists():
+                    raise SpecError(
+                        f"units.{uid}: {dest} already exists; move it so the influent's series "
+                        f"can be written"
+                    )
+                write_influent_table(series_obj, dest)
+                relative = dest_rel.as_posix()
+            else:
+                src = _located(settings["series"], base, f"units.{uid}.series")
+                rel = _within(src, folder)
+                if rel is None:
+                    _copy_into(src, folder / dest_rel, f"influent '{uid}'")
+                    rel = dest_rel
+                relative = rel.as_posix()
+            settings["series"] = relative
+            files[relative] = _file_digest(folder / relative)
+        units[uid] = {"kind": kind, **({"label": label} if label else {}), **settings}
+
+    out = {
+        "format": SPEC_FORMAT,
+        "aquakin": aquakin_version(),
+        "name": spec.get("name", "plant"),
+        "options": {
+            "recycle_passes": 3,
+            "recycle_tol": 1e-8,
+            "recycle_max_passes": 100,
+            **(spec.get("options") or {}),
+        },
+        "models": models,
+        "files": files,
+        "units": units,
+        "connections": list(spec.get("connections") or []),
+        "streams": dict(spec.get("streams") or {}),
+        "influent_endpoint": spec.get("influent_endpoint"),
+        "effluent_endpoint": spec.get("effluent_endpoint"),
+    }
+    if spec.get("layout"):
+        out["layout"] = spec["layout"]
+    if path.suffix == ".json":
+        text = json.dumps(out, indent=2, allow_nan=False) + "\n"
+    else:
+        text = yaml.safe_dump(out, sort_keys=False, allow_unicode=True)
+    folder.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return out
+
+
+def _check_identifier_or_error(what: str, name: str) -> None:
+    try:
+        _check_identifier(what, name)
+    except ValueError as exc:
+        raise SpecError(str(exc)) from None
+
+
+# ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
+
+
+def _canonical_endpoint(endpoint: str, ports: dict, side: str) -> str:
+    unit, _, port = endpoint.strip().partition(".")
+    unit, port = unit.strip(), port.strip()
+    if not port:
+        found = ports.get(unit, ([], []))[0 if side == "input" else 1]
+        if len(found) == 1:
+            port = found[0]
+    return f"{unit}.{port}"
+
+
+def spec_inputs(spec, *, base_dir=None) -> dict[str, str]:
+    """Fingerprints of what a spec simulates, one per input, from current content.
+
+    Parameters
+    ----------
+    spec : dict or str or pathlib.Path
+        The spec, or the path of a file holding it.
+    base_dir : str or pathlib.Path, optional
+        Where a mapping's relative paths point from (a file's own folder otherwise).
+
+    Returns
+    -------
+    dict
+        ``{"flowsheet": ..., "model:<name>": ..., "table:<unit>": ...}``: the
+        flowsheet (options, units in order with every setting, connections in a
+        canonical form, streams and endpoints; not layout, labels, the plant's
+        name or where files sit), each model by the fingerprint of its current
+        content, and each influent table by the sha256 of its current bytes.
+        A result records these to tell, later, whether it is stale and which
+        input changed.
+    """
+    from aquakin.plant.catalog import unit_kind
+
+    spec, base_dir = _resolve(spec, base_dir)
+    doc = _validate(spec)
+    inputs: dict[str, str] = {}
+    for name, ref in doc.models.items():
+        if ref.source == "shipped":
+            inputs[f"model:{name}"] = _shipped_fingerprint(name)
+        else:
+            inputs[f"model:{name}"] = _model_fingerprint(_located(ref.source, base_dir, name))
+    units, ports = [], {}
+    for uid, entry in doc.units.items():
+        try:
+            kind = unit_kind(entry.kind)
+        except KeyError as exc:
+            raise SpecError(f"units.{uid}: {exc.args[0]}") from None
+        settings = {**kind.defaults(), **(entry.model_extra or {})}
+        settings.pop("series_sha256", None)
+        ports[uid] = kind.ports_for(settings)
+        if settings.get("series") is not None:
+            table = _located(settings["series"], base_dir, f"units.{uid}.series")
+            inputs[f"table:{uid}"] = _file_digest(table)
+            settings["series"] = "<table>"  # where the table sits does not matter
+        units.append([uid, entry.kind, settings])
+    connections = []
+    for i, raw in enumerate(doc.connections):
+        c = _parse_connection(raw, f"connections[{i}]")
+        connections.append(
+            {
+                "from": _canonical_endpoint(c.source, ports, "output"),
+                "to": _canonical_endpoint(c.to, ports, "input"),
+                "translator": _translator_settings(c.translator, f"connections[{i}]")[1]
+                if c.translator
+                else None,
+                "seed": c.seed.model_dump() if c.seed is not None else None,
+            }
+        )
+    flowsheet = {
+        "format": SPEC_FORMAT,
+        "options": doc.options.model_dump(),
+        "units": units,
+        "connections": connections,
+        "streams": doc.streams,
+        "influent_endpoint": doc.influent_endpoint,
+        "effluent_endpoint": doc.effluent_endpoint,
+    }
+    text = json.dumps(flowsheet, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return {"flowsheet": hashlib.sha256(text.encode()).hexdigest(), **inputs}
+
+
+def spec_fingerprint(spec, *, base_dir=None) -> str:
+    """One fingerprint of the plant a spec builds: :func:`spec_inputs` combined.
+
+    It changes when what is simulated changes (a setting, a connection, unit
+    order, the content of a model or influent table) and not otherwise (layout,
+    labels, the plant's name, how a connection is spelled, where a file sits).
+    The aquakin version is left out: record it beside the fingerprint.
+
+    Parameters
+    ----------
+    spec : dict or str or pathlib.Path
+        The spec, or the path of a file holding it.
+    base_dir : str or pathlib.Path, optional
+        Where a mapping's relative paths point from.
+
+    Returns
+    -------
+    str
+        A 64-character hex digest.
+    """
+    inputs = spec_inputs(spec, base_dir=base_dir)
+    text = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def spec_changes(spec, *, base_dir=None) -> list[str]:
+    """The models and tables whose content differs from what the spec recorded.
+
+    Parameters
+    ----------
+    spec : dict or str or pathlib.Path
+        The spec, or the path of a file holding it.
+    base_dir : str or pathlib.Path, optional
+        Where a mapping's relative paths point from.
+
+    Returns
+    -------
+    list of str
+        One line per changed input (empty when nothing changed).
+    """
+    spec, base_dir = _resolve(spec, base_dir)
+    doc = _validate(spec)
+    changed = []
+    for name, ref in doc.models.items():
+        if ref.sha256 is None:
+            continue
+        if ref.source == "shipped":
+            current = _shipped_fingerprint(name)
+        else:
+            current = _model_fingerprint(_located(ref.source, base_dir, name))
+        if current != ref.sha256:
+            changed.append(f"model '{name}' ({ref.source}) has changed")
+    for source, recorded in doc.files.items():
+        path = _located(source, base_dir, source)
+        if not path.is_file():
+            changed.append(f"{source} is missing")
+        elif _file_digest(path) != recorded:
+            changed.append(f"{source} has changed")
+    return changed
 
 
 def check_spec(spec, *, base_dir=None) -> dict:
@@ -766,84 +1178,3 @@ def check_spec(spec, *, base_dir=None) -> dict:
         "dangling": list(result.dangling_outputs),
         "recycles": list(result.recycles),
     }
-
-
-def spec_fingerprint(spec, *, base_dir=None) -> str:
-    """A fingerprint of the plant a spec builds, for telling when a result is stale.
-
-    The sha256 of the spec's content that determines a simulation: options,
-    every unit's kind and settings, the connections, named streams and
-    endpoints, and each model and influent table by the fingerprint of its
-    content. Layout, labels, the plant's name and where files sit are left out,
-    so moving a model file or relabelling a unit keeps the fingerprint, and
-    changing a setting, a connection, a model or an influent table changes it.
-    The aquakin version is left out too: record it beside the fingerprint.
-
-    Parameters
-    ----------
-    spec : dict or str or pathlib.Path
-        The spec, or the path of a file holding it.
-    base_dir : str or pathlib.Path, optional
-        The directory relative file paths are read from when ``spec`` is a
-        mapping whose models or tables carry no fingerprint (a file's own
-        directory otherwise).
-
-    Returns
-    -------
-    str
-        A 64-character hex digest.
-    """
-    if isinstance(spec, (str, Path)):
-        base_dir = Path(spec).parent if base_dir is None else Path(base_dir)
-        spec = load_spec_file(spec)
-    elif base_dir is not None:
-        base_dir = Path(base_dir)
-    doc = _validate(spec)
-
-    def located(source: str) -> Path:
-        path = Path(source)
-        if not path.is_absolute():
-            if base_dir is None:
-                raise SpecError(f"cannot read {source!r} without base_dir=")
-            path = base_dir / path
-        return path
-
-    models = {}
-    for name, ref in doc.models.items():
-        if ref.sha256 is not None:
-            models[name] = ref.sha256
-        elif ref.source == "shipped":
-            models[name] = _shipped_fingerprint(name)
-        else:
-            models[name] = _file_fingerprint(located(ref.source))
-    from aquakin.plant.catalog import unit_kind
-
-    units = {}
-    for uid, entry in doc.units.items():
-        # A setting left out takes its default, so a minimal spec and the same
-        # spec written in full fingerprint alike.
-        try:
-            defaults = unit_kind(entry.kind).defaults()
-        except KeyError as exc:
-            raise SpecError(f"units.{uid}: {exc.args[0]}") from None
-        settings = {**defaults, **(entry.model_extra or {})}
-        if settings.get("series") is not None:
-            digest = settings.get("series_sha256") or _file_digest(located(settings["series"]))
-            settings = {**settings, "series": None, "series_sha256": digest}
-        units[uid] = {"kind": entry.kind, **settings}
-    connections = [
-        c if isinstance(c, str) else c.model_dump(by_alias=True, exclude_none=True)
-        for c in doc.connections
-    ]
-    content = {
-        "format": SPEC_FORMAT,
-        "options": doc.options.model_dump(),
-        "models": models,
-        "units": units,
-        "connections": connections,
-        "streams": doc.streams,
-        "influent_endpoint": doc.influent_endpoint,
-        "effluent_endpoint": doc.effluent_endpoint,
-    }
-    canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(canonical.encode()).hexdigest()
