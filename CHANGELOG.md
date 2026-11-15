@@ -104,9 +104,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   returns a `PlantUnitsReport`. It confirms that every kinetic model uses the
   same time unit; that unit operations with built-in conversions get the units
   they assume (the UV reactor and primary clarifier need days; the Takács
-  settler and thickener need solids in g/m3); that the ASM1↔ADM1 translators'
-  g/m3↔kg/m3 factors match the models they connect; and that influent data
-  match the plant and the model. Comparisons account for scale, so `mg/L`
+  settler and thickener need solids in g/m3); and that influent data match
+  the plant and the model. Comparisons account for scale, so `mg/L`
   matches `g/m3` but `kg/m3` does not. `plant.check()` includes the report.
 - Influents can declare the units their data are in with `units=` on
   `InfluentSeries`, `model.influent(...)`, `InfluentSeries.constant` and
@@ -116,7 +115,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 - A reaction can declare `units_acknowledged: "<reason>"` for a rate whose
   units are knowingly unconventional. `check_units()` then leaves its findings
   out; `check_units(include_acknowledged=True)` still shows them.
-- `aquakin.units_match(a, b)` compares two unit strings with scale included.
+- `aquakin.units_match(a, b)` compares two unit strings with scale included,
+  and `aquakin.utils.conversion_factor(a, b)` gives the factor between them.
 
 
 ### Changed
@@ -125,6 +125,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   kinetic models use different time units, for example an ozonation model in
   seconds next to ASM1 in days. Such a plant was integrated against one clock
   and gave wrong results without a warning.
+- The ASM1↔ADM1 translators (`ASM1toADM1`, `ADM1toASM1`) read the species
+  units the connected models declare and convert them into the units their
+  equations use, instead of assuming ASM1 in g/m3 and ADM1 in kg/m3 and
+  kmol/m3. A model declared on another basis (an ADM1 in g/m3) now translates
+  correctly; a unit that cannot be converted or read raises when the translator
+  is built. Results with the shipped models are unchanged.
 - `Plant.connect` raises `WiringError` when an explicit `translator=` was
   built for models whose species lists differ from the ones it connects.
 - `model.check_units()` reads an inline half-saturation constant written as

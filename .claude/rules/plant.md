@@ -446,10 +446,8 @@ Key types:
     `AssumedUnits` hook (`assumed_units() -> {"time" | species: unit}`) gets
     them — only *fixed* internal assumptions belong there (UV and primary
     clarifier: days; Takács: days + `g/m3` particulates; thickener: `g/m3` TSS
-    species), never a user-supplied number in any consistent unit; a translator
-    implementing `TranslatorAssumedUnits` (`assumed_source_units` /
-    `assumed_target_units`; the ASM1↔ADM1 interfaces) matches its models'
-    species units; an influent's declared `InfluentSeries.units` matches the
+    species), never a user-supplied number in any consistent unit; an
+    influent's declared `InfluentSeries.units` matches the
     plant time unit, `m3` per time unit for `Q`, Kelvin `T` and the model's
     species units (the BSM loaders declare theirs); each model's own
     `check_units()` is rolled up as warnings. All comparisons go through the
@@ -463,7 +461,18 @@ Key types:
     `source_model` / `target_model` species list differs from the endpoint's
     (`WiringError`; a different instance with the same species is accepted).
     When a new unit's internals hard-code a unit (a `SECONDS_PER_DAY`, a
-    `g/m3` constant), give it `assumed_units`.
+    `g/m3` constant), give it `assumed_units`. **Translators convert instead of
+    being checked:** `ASM1toADM1` / `ADM1toASM1` (`plant/interfaces.py`) keep
+    their equations in fixed *working units* (`_ASM1_UNITS`: g/m3, SALK mol/m3;
+    `_ADM1_UNITS`: kg/m3, kmol/m3) and `_unit_scales` derives per-species
+    factors from the models' declared `species_units` via
+    `utils.units.conversion_factor` at construction (`x_working = f·x_model`;
+    applied on the way in, divided out on the way out). It returns `None` when
+    every factor is exactly 1 (every shipped model), so `translate` skips the
+    multiply and stays bit-identical; an unconvertible (mass vs moles, two
+    different currencies) or unreadable unit raises `ValueError` at
+    construction. A new translator should follow the same pattern rather than
+    hard-code a model's scale.
   - **Operating temperature.** `plant.set_temperature(celsius)` sets the static
     `T` condition of every temperature-bearing reactor in one call (°C → K),
     leaving a heated fixed-`T` unit like the digester untouched; clears the

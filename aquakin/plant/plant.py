@@ -619,9 +619,6 @@ class Plant:
           reactor converting days to seconds);
         - species whose concentration basis a unit's constants fix (e.g. a
           settler's ``g/m3`` settling parameters) against the model's units;
-        - the species units a translator's arithmetic assumes (e.g. the
-          ASM1 -> ADM1 ``g/m3`` -> ``kg/m3`` interface) against the models it
-          connects;
         - an influent's declared ``units`` (:class:`InfluentSeries`) against the
           plant time unit, ``m3`` per time unit for ``Q``, Kelvin for ``T`` and
           the model's species units;

@@ -29,7 +29,13 @@ from aquakin.utils.rtd import (
     percentile_time,
     variance,
 )
-from aquakin.utils.units import UnitWarning, check_model_units, parse_units, units_match
+from aquakin.utils.units import (
+    UnitWarning,
+    check_model_units,
+    conversion_factor,
+    parse_units,
+    units_match,
+)
 
 __all__ = [
     "E_curve",
@@ -40,6 +46,7 @@ __all__ = [
     "check_model_units",
     "check_nitrogen",
     "composition_table",
+    "conversion_factor",
     "mean_residence_time",
     "morrill_index",
     "parse_units",

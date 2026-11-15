@@ -417,6 +417,60 @@ def _has_currency(dim: Dimension) -> bool:
     return any(k in _CURRENCY_TOKENS for k, _ in dim.tokens)
 
 
+def _comparable(a: str, b: str):
+    """Parse two unit strings into ``((base_a, factor_a), (base_b, factor_b))``
+    for comparison, dropping the chemical currencies unless both state one;
+    ``None`` when either string is blank or unparseable."""
+    da, db = parse_units(a), parse_units(b)
+    if da is None or db is None:
+        return None
+    if not (_has_currency(da) and _has_currency(db)):
+        da, db = _drop_currency(da), _drop_currency(db)
+    return to_base_units(da), to_base_units(db)
+
+
+def conversion_factor(from_unit: str, to_unit: str) -> float | None:
+    """Factor ``f`` with ``x_to = f * x_from`` between two units of one quantity.
+
+    Converts through base symbols, so ``kgCOD/m3`` to ``g_COD/m3`` is ``1000``
+    and ``mol/m3`` to ``kmol/m3`` is ``0.001``. Chemical currencies are compared
+    only when both strings name one, as in :func:`units_match`. No molar mass is
+    applied: a mass and an amount of substance are different quantities.
+
+    Parameters
+    ----------
+    from_unit, to_unit : str
+        Unit strings in any dialect :func:`parse_units` accepts.
+
+    Returns
+    -------
+    float or None
+        The factor, or ``None`` when either string is blank or cannot be
+        parsed.
+
+    Raises
+    ------
+    ValueError
+        If the two units measure different quantities (``g/m3`` and
+        ``mol/m3``, or ``g_N/m3`` and ``g_COD/m3``).
+
+    Examples
+    --------
+    >>> conversion_factor("kgCOD/m3", "g_COD/m3")
+    1000.0
+    """
+    pair = _comparable(from_unit, to_unit)
+    if pair is None:
+        return None
+    (base_a, fa), (base_b, fb) = pair
+    if base_a != base_b:
+        raise ValueError(
+            f"cannot convert '{from_unit}' to '{to_unit}': they measure different "
+            f"quantities ({base_a} vs {base_b})."
+        )
+    return fa / fb
+
+
 def units_match(a: str, b: str, *, rtol: float = 1e-9) -> bool | None:
     """Whether two unit strings denote the same unit, scale included.
 
@@ -447,13 +501,10 @@ def units_match(a: str, b: str, *, rtol: float = 1e-9) -> bool | None:
     >>> units_match("kgCOD/m3", "g_COD/m3")
     False
     """
-    da, db = parse_units(a), parse_units(b)
-    if da is None or db is None:
+    pair = _comparable(a, b)
+    if pair is None:
         return None
-    if not (_has_currency(da) and _has_currency(db)):
-        da, db = _drop_currency(da), _drop_currency(db)
-    base_a, fa = to_base_units(da)
-    base_b, fb = to_base_units(db)
+    (base_a, fa), (base_b, fb) = pair
     if base_a != base_b:
         return False
     return abs(fa - fb) <= rtol * max(abs(fa), abs(fb))

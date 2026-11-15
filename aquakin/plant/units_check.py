@@ -3,8 +3,10 @@
 A plant integrates every unit against **one clock** and passes streams between
 units **without converting anything**, so a unit mismatch anywhere is silent: a
 model whose rate constants are per second next to one per day, an influent file
-in ``m3/h``, or a translator whose ``/ 1000`` expects ``g/m3`` but is fed
-``kg/m3`` all produce a plausible-looking but wrong solution.
+in ``m3/h``, or a settler whose ``g/m3`` settling parameters are fed ``kg/m3``
+solids all produce a plausible-looking but wrong solution. (The ASM1 <-> ADM1
+translators need no check here: they convert the connected models' declared
+units themselves, and refuse units they cannot convert when constructed.)
 
 :func:`check_plant_units` (bound as :meth:`Plant.check_units`) audits the units
 the plant's parts declare, before any solve:
@@ -15,9 +17,6 @@ the plant's parts declare, before any solve:
 - **unit operations** -- a species whose concentration basis a unit's constants
   fix (e.g. a settler's ``g/m3`` settling parameters) must be declared in that
   basis by the unit's model;
-- **translators** -- the species units a translator's arithmetic assumes
-  (:class:`~aquakin.plant.translators.TranslatorAssumedUnits`) must match the
-  units of the models it connects;
 - **influents** -- an influent's declared ``units`` (``InfluentSeries.units``)
   must match the plant's time unit, a flow in ``m3`` per that time unit, Kelvin
   temperature, and the model's species units;
@@ -36,7 +35,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from aquakin.plant.translators import TranslatorAssumedUnits
 from aquakin.plant.units import AssumedUnits
 from aquakin.utils.units import units_match
 
@@ -60,7 +58,7 @@ class PlantUnitIssue:
         rate-expression check, or a time unit that cannot be determined).
     where : str
         The part of the plant the finding is about, e.g. ``"model 'asm1'"``,
-        ``"unit 'uv'"``, ``"influent 'feed'"`` or ``"connection a.out -> b.in"``.
+        ``"unit 'uv'"`` or ``"influent 'feed'"``.
     detail : str
         What was declared versus what was expected.
     """
@@ -200,39 +198,6 @@ def _unit_species_issues(plant: Plant) -> list:
     return issues
 
 
-def _connection_label(c) -> str:
-    src = f"influent '{c.from_port}'" if c.from_unit is None else f"{c.from_unit}.{c.from_port}"
-    return f"connection {src} -> {c.to_unit}.{c.to_port}"
-
-
-def _translator_issues(plant: Plant) -> list:
-    issues = []
-    seen = set()
-    for c in plant.connections:
-        tr = c.translator
-        if not isinstance(tr, TranslatorAssumedUnits) or id(tr) in seen:
-            continue
-        seen.add(id(tr))
-        for side, assumed, model in (
-            ("source", tr.assumed_source_units(), tr.source_model),
-            ("target", tr.assumed_target_units(), tr.target_model),
-        ):
-            for species, unit in assumed.items():
-                declared = model.species_units.get(species)
-                if declared is None or units_match(declared, unit) is not False:
-                    continue
-                issues.append(
-                    PlantUnitIssue(
-                        "error",
-                        _connection_label(c),
-                        f"translator {type(tr).__name__} assumes {side} species "
-                        f"'{species}' in '{unit}', but model '{model.name}' declares "
-                        f"it in '{declared}'.",
-                    )
-                )
-    return issues
-
-
 def _influent_issues(plant: Plant, plant_time: str | None) -> list:
     issues = []
     for name, series in plant.influents.items():
@@ -315,7 +280,6 @@ def check_plant_units(plant: Plant, *, include_models: bool = True) -> PlantUnit
     issues = time_unit_errors(plant)
     issues += _model_time_warnings(model_units)
     issues += _unit_species_issues(plant)
-    issues += _translator_issues(plant)
     issues += _influent_issues(plant, plant_time)
     if include_models:
         issues += _model_rate_warnings(plant)

@@ -416,6 +416,28 @@ def test_units_match(a, b, expected):
     assert aquakin.units_match(a, b) is expected
 
 
+@pytest.mark.parametrize("a, b, factor", [
+    ("kgCOD/m3", "g_COD/m3", 1000.0),
+    ("mol/m3", "kmol/m3", 1.0e-3),
+    ("mg/L", "g/m3", 1.0),
+    ("m3/h", "m3/d", 24.0),
+])
+def test_conversion_factor(a, b, factor):
+    from aquakin.utils import conversion_factor
+
+    assert conversion_factor(a, b) == pytest.approx(factor, rel=1e-12)
+
+
+def test_conversion_factor_unknown_and_incompatible():
+    from aquakin.utils import conversion_factor
+
+    assert conversion_factor("furlongs", "m") is None
+    with pytest.raises(ValueError, match="different quantities"):
+        conversion_factor("g_N/m3", "kmolN/m3")   # mass vs amount of substance
+    with pytest.raises(ValueError, match="different quantities"):
+        conversion_factor("g_N/m3", "g_COD/m3")   # two stated currencies
+
+
 def test_mixed_time_units_flagged(tmp_path):
     """Rate constants in different time units make the RHS dimensionally
     inconsistent (terms summed on different time bases); each rate passes its own

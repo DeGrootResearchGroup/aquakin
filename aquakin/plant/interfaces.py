@@ -40,6 +40,14 @@ digester) from the source unit, both wired by ``Plant._collect_inputs`` through
 the ``needs_dest_pH`` / ``needs_src_pH`` flags. The ``pH_adm`` parameter (default
 7.0) is only the fallback for a standalone ``translate`` call with no plant to
 supply the pH.
+
+Units: the equations are written in fixed *working units* -- ASM1 in g/m3
+(alkalinity in mol/m3) and ADM1 in kg/m3 and kmol/m3, the units of the shipped
+models. Each translator reads the species units its two models declare and
+converts into the working units on the way in and back on the way out, so a
+model declared on another basis (an ADM1 in g/m3) translates correctly. A unit
+that cannot be converted (a mass where the interface expects moles) or cannot be
+read raises when the translator is constructed.
 """
 
 from __future__ import annotations
@@ -50,6 +58,9 @@ from typing import TYPE_CHECKING
 
 import equinox as eqx
 import jax.numpy as jnp
+import numpy as np
+
+from aquakin.utils.units import conversion_factor
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -62,9 +73,11 @@ _N_aa = 0.007
 _N_bac = 0.08 / 14.0
 
 
-# Species units the two BSM2 interfaces are written against: the ASM1 water line
-# in g/m3 (alkalinity in mol/m3) and the ADM1 digester in kg/m3 and kmol/m3. The
-# translators' fixed 1000 and 1/14000 factors are only right for these units.
+# Working units of the two interfaces: the units their equations (the 1000 g/kg
+# and 14000 gN/kmolN factors, the charge balances) are written in -- the ASM1
+# water line in g/m3 (alkalinity in mol/m3) and the ADM1 digester in kg/m3 and
+# kmol/m3. Each translator converts the connected models' declared species units
+# into these on the way in, and back on the way out (_unit_scales).
 _ASM1_UNITS = {
     **dict.fromkeys(("SI", "SS", "XI", "XS", "XB_H", "XB_A", "XP"), "g_COD/m3"),
     "SO": "g_O2/m3",
@@ -82,6 +95,41 @@ _ADM1_UNITS = {
     "S_cat": "kmol/m3",
     "S_an": "kmol/m3",
 }
+
+
+def _unit_scales(model, working_units: dict, side: str, owner: str):
+    """Per-species factors ``f`` with ``x_working = f * x_model``.
+
+    Reads ``model``'s declared species units and converts each species the
+    interface uses into its working unit. Returns ``None`` when every factor is
+    exactly 1 (the shipped models), so ``translate`` skips the scaling and stays
+    bit-identical. Raises ``ValueError`` when a declared unit cannot be read or
+    measures a different quantity (a mass where the interface expects moles):
+    guessing would scale the stream silently.
+    """
+    scale = np.ones(model.n_species)
+    for species, working in working_units.items():
+        if species not in model.species_index:
+            continue
+        declared = model.species_units.get(species, "")
+        try:
+            factor = conversion_factor(declared, working)
+        except ValueError as exc:
+            raise ValueError(
+                f"{owner}: {side} model '{model.name}' declares species '{species}' "
+                f"in '{declared}', which cannot be converted to the '{working}' the "
+                f"interface works in: {exc}"
+            ) from None
+        if factor is None:
+            raise ValueError(
+                f"{owner}: cannot read the units '{declared}' that {side} model "
+                f"'{model.name}' declares for species '{species}', so the interface "
+                f"cannot convert it to '{working}'. Declare a parseable unit."
+            )
+        scale[model.species_index[species]] = factor
+    if np.all(scale == 1.0):
+        return None
+    return jnp.asarray(scale)
 
 
 @dataclass
@@ -164,6 +212,9 @@ class ASM1toADM1:
         self._alfa_NO = -1.0 / 14000.0
         # Target indices for assembling the ADM1 output vector by name.
         self._ti = self.target_model.species_index
+        # Factors from the models' declared species units to the working units.
+        self._source_scale = _unit_scales(self.source_model, _ASM1_UNITS, "source", "ASM1toADM1")
+        self._target_scale = _unit_scales(self.target_model, _ADM1_UNITS, "target", "ASM1toADM1")
 
     def _remove_electron_acceptor_demand(self, SO, SNO, SS, XS, XBH, XBA, SNH):
         """Strip the O2 + NO3 electron-acceptor COD demand hierarchically from the
@@ -220,17 +271,11 @@ class ASM1toADM1:
         S_an = jnp.maximum(-ScatminusSan, 0.0)
         return S_IC, S_cat, S_an
 
-    def assumed_source_units(self) -> dict[str, str]:
-        """ASM1 species units this translator's factors assume (g/m3 basis)."""
-        return dict(_ASM1_UNITS)
-
-    def assumed_target_units(self) -> dict[str, str]:
-        """ADM1 species units this translator's factors assume (kg, kmol/m3)."""
-        return dict(_ADM1_UNITS)
-
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
+        if self._source_scale is not None:
+            C_source = C_source * self._source_scale
         si = self._si
-        # ASM1 inputs (gCOD/m3 or gN/m3).
+        # ASM1 inputs in the working units (gCOD/m3 or gN/m3).
         SI = C_source[si["SI"]]
         SS = C_source[si["SS"]]
         XI = C_source[si["XI"]]
@@ -351,6 +396,8 @@ class ASM1toADM1:
         out = out.at[ti["X_I"]].set(X_I)
         out = out.at[ti["S_cat"]].set(S_cat)
         out = out.at[ti["S_an"]].set(S_an)
+        if self._target_scale is not None:
+            out = out / self._target_scale
         return out
 
 
@@ -420,16 +467,13 @@ class ADM1toASM1:
         # translate at the digester's instantaneous pH, so they do not live here.
         self._alfa_NH = 1.0 / 14000.0
         self._alfa_alk = -0.001
-
-    def assumed_source_units(self) -> dict[str, str]:
-        """ADM1 species units this translator's factors assume (kg, kmol/m3)."""
-        return dict(_ADM1_UNITS)
-
-    def assumed_target_units(self) -> dict[str, str]:
-        """ASM1 species units this translator's factors assume (g/m3 basis)."""
-        return dict(_ASM1_UNITS)
+        # Factors from the models' declared species units to the working units.
+        self._source_scale = _unit_scales(self.source_model, _ADM1_UNITS, "source", "ADM1toASM1")
+        self._target_scale = _unit_scales(self.target_model, _ASM1_UNITS, "target", "ADM1toASM1")
 
     def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
+        if self._source_scale is not None:
+            C_source = C_source * self._source_scale
         si = self._si
         g = lambda name: C_source[si[name]]
         S_su, S_aa, S_fa = g("S_su"), g("S_aa"), g("S_fa")
@@ -498,4 +542,6 @@ class ADM1toASM1:
         out = out.at[ti["SND"]].set(SND)
         out = out.at[ti["XND"]].set(XND)
         out = out.at[ti["SALK"]].set(SALK)
+        if self._target_scale is not None:
+            out = out / self._target_scale
         return out

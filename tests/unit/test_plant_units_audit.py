@@ -7,6 +7,7 @@ integrated, so the tests stay in the fast tier.
 
 import dataclasses
 
+import jax.numpy as jnp
 import pytest
 
 import aquakin
@@ -148,25 +149,56 @@ def test_settler_flags_particulates_in_kg_per_m3(asm1):
 # ----- translators -----------------------------------------------------------------
 
 
-def test_translator_flags_target_model_in_other_units(asm1, adm1):
-    adm1_g = _with_units(adm1, S_su="g_COD/m3")
+def _adm1_in_grams(adm1):
+    """ADM1 declared on a g/m3 and mol/m3 basis instead of kg/m3 and kmol/m3."""
+    regrams = {
+        sp: ("g_COD/m3" if "COD" in u else u.replace("kmol", "mol"))
+        for sp, u in adm1.species_units.items()
+    }
+    return _with_units(adm1, **regrams)
+
+
+def test_translators_on_shipped_models_need_no_scaling(asm1, adm1):
+    # Every shipped species unit is already the interface's working unit, so no
+    # scale vector is built and translate runs the exact historic arithmetic.
+    for tr in (ASM1toADM1(asm1, adm1), ADM1toASM1(adm1, asm1)):
+        assert tr._source_scale is None and tr._target_scale is None
+
+
+def test_asm1_to_adm1_converts_to_the_target_models_units(asm1, adm1):
+    adm1_g = _adm1_in_grams(adm1)
+    C = asm1.default_concentrations()
+    kg = ASM1toADM1(asm1, adm1).translate(C, digester_pH=7.0)
+    g = ASM1toADM1(asm1, adm1_g).translate(C, digester_pH=7.0)
+    assert jnp.allclose(g, 1000.0 * kg, rtol=1e-12, atol=0.0)
+    assert float(jnp.max(jnp.abs(kg))) > 0.0
+
+
+def test_adm1_to_asm1_converts_from_the_source_models_units(asm1, adm1):
+    adm1_g = _adm1_in_grams(adm1)
+    tr_g = ADM1toASM1(adm1_g, asm1)
+    C_kg = adm1.default_concentrations()
+    C_g = C_kg / tr_g._source_scale          # the same state, in grams
+    expected = ADM1toASM1(adm1, asm1).translate(C_kg, digester_pH=7.0)
+    got = tr_g.translate(C_g, digester_pH=7.0)
+    assert jnp.allclose(got, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_translator_rejects_a_unit_it_cannot_convert(asm1, adm1):
+    # Inorganic N as a mass needs a molar mass, not a unit conversion.
+    with pytest.raises(ValueError, match="'S_IN'.*cannot be converted"):
+        ASM1toADM1(asm1, _with_units(adm1, S_IN="g_N/m3"))
+    with pytest.raises(ValueError, match="cannot read the units 'furlongs'"):
+        ADM1toASM1(adm1, _with_units(asm1, SNH="furlongs"))
+
+
+def test_translated_plant_in_other_units_audits_clean(asm1, adm1):
+    adm1_g = _adm1_in_grams(adm1)
     plant = Plant("interface")
     plant.add_unit(_cstr("a", asm1))
     plant.add_unit(_cstr("d", adm1_g))
     plant.connect("a", "d", translator=ASM1toADM1(asm1, adm1_g))
-    errs = _errors(plant, include_models=False)
-    assert len(errs) == 1
-    assert "ASM1toADM1" in errs[0] and "'S_su'" in errs[0] and "kgCOD/m3" in errs[0]
-
-
-def test_translator_assumed_units_match_shipped_models(asm1, adm1):
-    for tr in (ASM1toADM1(asm1, adm1), ADM1toASM1(adm1, asm1)):
-        for assumed, model in (
-            (tr.assumed_source_units(), tr.source_model),
-            (tr.assumed_target_units(), tr.target_model),
-        ):
-            for species, unit in assumed.items():
-                assert aquakin.units_match(model.species_units[species], unit), species
+    assert plant.check_units(include_models=False).ok
 
 
 def test_connect_rejects_translator_built_for_other_models(asm1, adm1):
