@@ -27,6 +27,10 @@ parameters:             # optional: model-level (shared) parameters
     units: <str>                # optional
     bounds: [<low>, <high>]     # optional
     transform: <str>            # optional: "none" | "positive_log" | "logit"
+    temperature:                # optional: rate constant * theta**(T - ref_T)
+      theta: <float or name>    # per-degree factor, or a parameter's name
+      ref_T: <float>            # temperature at which `value` applies
+      condition: <str>          # optional: temperature condition (default "T")
 
 expressions:            # optional: named intermediate rate expressions
   <name>: "<formula>"
@@ -61,6 +65,30 @@ Reaction-local `parameters:` blocks remain available for genuinely
 reaction-specific values. A name cannot appear in both a model-level
 `parameters:` block and a reaction-local `parameters:` block — the
 loader rejects shadowing.
+
+## Temperature corrections
+
+A rate constant with a `temperature:` block is multiplied by
+`theta**(T - ref_T)` when the rates are evaluated, so its `value` is the
+value at `ref_T`. `theta` is usually a number. It can also be the name of
+another parameter, which makes the temperature sensitivity something you can
+calibrate and analyse like any other parameter:
+
+```yaml
+parameters:
+  theta_A: {value: 1.07, units: "-", bounds: [1.0, 1.15], prior: {mean: 1.07, std: 0.02}}
+  muA: {value: 0.8, units: "1/d", temperature: {theta: theta_A, ref_T: 293.15}}
+  bA:  {value: 0.05, units: "1/d", temperature: {theta: theta_A, ref_T: 293.15}}
+```
+
+Several rate constants may share one `theta` parameter. A name used in a
+reaction's own `parameters:` block is looked up in that reaction first, then
+among the model-level parameters. The `theta` parameter must be positive and
+cannot carry a temperature correction itself. Without `bounds` it gets
+`[1.0, 1.3]` when its value lies in that range, and without `units` it is
+labelled `"-"`. Its sensitivity is zero at `T = ref_T`, so estimating it needs
+data at a temperature other than `ref_T` (and data at two or more temperatures
+to estimate it together with the rate constant it scales).
 
 ## Named rate expressions
 
