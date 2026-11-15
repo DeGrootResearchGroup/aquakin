@@ -168,3 +168,68 @@ sequencing-batch and membrane-bioreactor units, IFAS/MBBR units, disinfection
 models. See the [API reference](api.md) for the full unit catalog, and
 `Plant.calibrate` in [Sensitivity & calibration](sensitivity_and_calibration.md#calibrating-a-plant)
 for fitting plant parameters to measured streams.
+
+## Saving a plant as a file
+
+A plant can be written as a YAML (or JSON) file and rebuilt from it:
+
+```python
+plant.to_spec("flowsheet.yaml")
+plant = aquakin.Plant.from_spec("flowsheet.yaml")
+```
+
+The file lists every unit by its name, with an optional display `label` and all
+of its settings (defaults included, so the file means the same plant whatever
+the defaults of a later aquakin), the connections as `unit.port -> unit.port`,
+the influents, named streams and recycle options, and the version of aquakin
+that wrote it:
+
+```yaml
+format: 2
+aquakin: 0.2.0
+name: BSM1
+models:
+  asm1: {source: shipped, sha256: ...}
+units:
+  influent: {kind: influent, model: asm1, Q: 18446.0, composition: {SS: 69.5, ...}}
+  tank3: {kind: cstr, label: Aerobic zone 1, model: asm1, volume: 1333.0, ...}
+connections:
+  - tank2.out -> tank3.inlet
+```
+
+Every model a unit uses is listed under `models:`, either a shipped model or a
+model YAML file beside the flowsheet. A model file can `extends:` a shipped
+model, so a variant is a few lines: `examples/projects/bsm2/` holds BSM2 this
+way, with its 15 °C ASM1 parameter set as `models/asm1_bsm2.yaml`. Each model
+carries a fingerprint of its content, and reading a flowsheet whose model has
+changed since it was written warns.
+
+A time-varying influent is kept as a table file beside the flowsheet (columns
+`t`, `Q`, optionally `T`, and species; see `aquakin.plant.read_influent_table`).
+`to_spec(path)` writes it to `data/<influent>.csv` unless it was already read
+from a table inside the flowsheet's folder.
+
+Reading a file checks it strictly: a misspelled setting, a value of the wrong
+type or a model that is not listed is an error that names where it is. Anything
+a file cannot express yet (array-valued settings such as initial
+concentrations, SBR phases) raises a `SpecError` that names it rather than being
+left out.
+
+`aquakin.plant.spec.spec_fingerprint(spec)` gives a fingerprint of the plant a
+file builds: its settings, wiring and the content of its models and influent
+tables, but not its layout, labels or where its files sit. Record it beside a
+result to tell later whether the result still matches the flowsheet.
+
+## The flowsheet editor
+
+```bash
+pip install "aquakin[ui]"
+aquakin-ui examples/projects/bsm2/flowsheet.yaml
+```
+
+opens a flowsheet editor in your browser, served on this machine only. Drag
+units from the palette, wire their ports, and edit each unit in a form generated
+from its own documentation; aquakin builds each unit and then the whole plant as
+you edit and lists any errors. **Open** and **Save** read and write the files
+described above.
+

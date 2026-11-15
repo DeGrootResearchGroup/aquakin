@@ -115,7 +115,18 @@ Key types:
   ([`plant/identifiability.py`](aquakin/plant/identifiability.py), exported from
   `aquakin.plant`) are the plant versions of the reactor tools. Observables are
   resolved by `plant/calibrate.py`'s `_resolve_observable_columns` (shared with
-  `_resolve_plant_problem`), free names by `_check_free_params`. The Fisher
+  `_resolve_plant_problem`), free names by `_check_free_params`. **Measured
+  channels** (`plant/measures.py`): a channel is a species, a keyword (`Q`,
+  `COD`, `TN`, `TP`, `TSS`) or a `Measure`; each observable resolves to
+  `(endpoint, W, q)` and reads `measured(C, Q, W, q) = C @ W + Q * q`, so every
+  consumer (the forward model, `_observed_channels`, the ranking) is linear in the
+  stream. Measured COD clips the composition table's negative (electron
+  acceptor) entries to 0; TSS is a model's `XTSS`/`XSS` species or the ASM1
+  `0.75 × ASM1_TSS_SPECIES`; a model with neither raises. A species named like a
+  keyword raises (use a `Measure`). `composition_table` follows a file model's
+  `extends:` chain (`_inherited_builder`, via `_aquakin_source`) to a shipped
+  table when the species match. Unknown-channel errors keep the historic
+  "Unknown observed channel" wording. The Fisher
   forward mode takes `S` from `Plant.solve_sensitivity` and maps it through the
   stream reconstruction (`outputs_at`, vmapped) with one `jax.linearize`, so it
   includes the reconstruction's direct `dg/dθ`; the reverse mode is `jacrev` of
@@ -129,9 +140,11 @@ Key types:
   plant problem's `data_key` fingerprints the loss, sigma, observations and
   times. `plant_rank_sensor_sets` (with `SensorSet`) is the plant
   `rank_experiments`: `_union_columns` resolves every candidate's streams to one
-  union, observed whole (all species), keyed by the parsed `(unit, port)` so two
-  spellings share columns; one `_PlantDesign.sensitivity` call per run per
-  parameter draw then serves every candidate by column selection. It reuses
+  union, observed whole (all species, then the flow), keyed by the parsed
+  `(unit, port)` so two spellings share columns; one `_PlantDesign.sensitivity`
+  call per run per parameter draw then serves every candidate through its own
+  linear map `M` (`y @ M`, `einsum("tok,os->tsk", dy, M)`), exact because every
+  measured channel is linear in the stream. It reuses
   `experiment_design.py`'s `_criterion` / `_subset_indices` /
   `_LARGER_IS_BETTER` / `CandidateScore`. `_PlantDesign` (runs, free parameters,
   transforms, priors, the forward/reverse dispatch) and `_scaled_rows` (noise,
@@ -686,9 +699,11 @@ class or changing a unit's ports**, add or update its kind:
 `tests/unit/test_plant_catalog.py` builds every kind and compares the
 rule-derived ports with the built unit's, and fails if an exported unit class
 has no kind. `aquakin serve` (`aquakin/__main__.py`) is a JSON-lines worker
-(`catalog`, `models`, `model`, `check_unit`, `check_spec`, `ping`); stdout carries replies
-only (stdout is redirected to stderr while a handler runs), and a failed request
-gets `{"ok": false, "error": ...}` without stopping the worker.
+(`catalog`, `models`, `model`, `check_unit`, `check_spec`, `fingerprint`, `ping`).
+Replies go to a private duplicate of the process's stdout and descriptor 1 is
+pointed at stderr while serving (plus a Python-level redirect per handler), so
+no other output can corrupt a reply; a failed request, or a reply that is not
+strict JSON (NaN), gets `{"ok": false, "error": ...}` without stopping the worker.
 
 **Flowsheet spec (`plant/spec.py`, `Plant.to_spec` / `Plant.from_spec`).** A
 plant as a file (format 2), built on the catalogue. Units are keyed by their
@@ -699,7 +714,15 @@ aquakin version, so a later change of default cannot change a saved plant.
 Connections are `"unit.port -> unit.port"` or `{from, to, translator: {kind,
 ...}, seed: {Q, T, concentrations}}`; a seed is written in the **destination**
 unit's model (it stands for the stream arriving after any translator). A `kind:
-influent` unit is a constant `InfluentSeries`, wired with `add_influent`. Every
+influent` unit is an `InfluentSeries` wired with `add_influent`: constant
+(`Q`/`T`/`composition`) or a `series` table file (`read_influent_table`, which
+records the file on the series; `write_influent_table` round-trips bit for bit)
+with its `series_sha256`. `to_spec(path)` refers to a table inside the spec's
+directory and otherwise writes `data/<name>.csv`; without a path a time-varying
+influent is refused. `spec_fingerprint(spec)` hashes what is simulated (settings
+with catalogue defaults filled in, wiring, streams, endpoints, model and table
+content fingerprints) and leaves out layout, labels, name, file locations and
+the aquakin version; results should record it to detect staleness. Every
 model is listed under `models:` as `shipped` or a YAML file path relative to the
 spec, with a sha256 of its content (`extends` resolved; a mismatch on read is a
 `SpecWarning`). A model is recognised by the provenance `load_model` /

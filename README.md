@@ -369,10 +369,12 @@ that wrote it; the connections as `unit.port -> unit.port`; constant influents,
 named streams and endpoints; and the models the units use, each shipped or a
 model YAML file beside the spec, with a fingerprint that warns when the model
 has changed since. `examples/projects/bsm2/` is BSM2 as such a project: its
-15 °C ASM1 is a short model file that `extends:` the shipped ASM1. A misspelled
+15 °C ASM1 is a short model file that `extends:` the shipped ASM1. A
+time-varying influent is kept as a table file beside the spec. A misspelled
 setting or a value of the wrong type is an error naming where it is, and
-anything a spec cannot express yet (a time-varying influent) raises a
-`SpecError` that names it.
+anything a spec cannot express yet raises a `SpecError` that names it.
+`aquakin.plant.spec.spec_fingerprint(spec)` hashes what the spec simulates, to
+tell when a saved result no longer matches it.
 
 ### The flowsheet editor (`aquakin-ui`)
 

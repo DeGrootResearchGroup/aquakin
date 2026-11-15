@@ -608,6 +608,20 @@ result = plant.calibrate(
 result.params_named
 ```
 
+A channel need not be a species. `"Q"` is the stream's flow; `"COD"`, `"TN"` and
+`"TP"` are its total COD (as measured: dissolved oxygen and nitrate count none),
+nitrogen and phosphorus from the model's composition; `"TSS"` is its suspended
+solids (the model's own TSS species, or 0.75 × the particulate COD for the ASM1
+family); and `aquakin.plant.Measure(name, weights, flow)` is any other weighted
+sum. They work everywhere an observable does: calibration, Fisher information,
+profile likelihood and sensor ranking.
+
+```python
+from aquakin.plant import Measure, PlantObservable, SensorSet
+
+SensorSet([PlantObservable("effluent", ("TN", "TSS", "Q"))], sigma=[1.0, 2.0, 50.0])
+```
+
 Fit against several streams at once with `observables=[PlantObservable(...), ...]`,
 fit assembled-state initial conditions with `free_ic=FreeICConfig([...])`, and run
 a joint multi-batch fit by passing list-valued `observations`/`t_obs`/`y0`.

@@ -28,7 +28,7 @@ import aquakin (to build expected values).
 |---|---|---|
 | `worker.py` | `AquakinWorker`, `WorkerError` | one process, requests serialized by a lock, replies read on a daemon thread; a fresh worker's first reply gets `START_TIMEOUT` extra (importing JAX); reply ids checked; stderr to a log file quoted in errors |
 | `catalog.py` | `Catalog` | the worker's catalogue reply; `ports_for` reads the catalogue's port rules (no round trip) |
-| `document.py` | `Flowsheet`, `Unit`, `edge_id` | **pure**: units keyed by stable id (the plant's unit name), labels as display text; `from_spec`/`to_spec` (format 2), `connect` (refuses with a reason), `apply` (drops and reports connections to vanished ports), `remove` (also drops streams/endpoints naming the unit), `port_status`, `back_edges` (aquakin's recycles when known, else a DFS), `lanes`, `auto_layout` (wraps into bands of 7 ranks) |
+| `document.py` | `Flowsheet`, `Unit`, `edge_id` | **pure**: units keyed by stable id (the plant's unit name), labels as display text; `from_spec`/`to_spec` (format 2), `connect` (refuses with a reason), `dropped_by` (previews the connections new settings would remove) and `apply`, `remove` (also drops streams/endpoints naming the unit), `port_status`, `back_edges` (aquakin's recycles when known, else a DFS), `lanes`, `auto_layout` (wraps into bands of 7 ranks) |
 | `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. Lists no setting or type of its own |
 | `icons.py` | `ICONS`, `COLOURS`, `CATEGORY_LABELS`, `SVG`, `icon_name` | the only per-kind presentation table; an unlisted kind gets the tank icon |
 | `app.py` | `Editor` | the page; turns finished canvas edits into document changes |
@@ -60,6 +60,9 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   "None" is claimed only after a check finished. A move only republishes.
 - Icons are sent once (`icons` prop, injected into nodes); the spec text only
   while the Spec tab is open.
+- **Removing a wired port asks first:** `Editor.apply_properties` previews with
+  `Flowsheet.dropped_by` and, when connections would go, opens a dialog listing
+  them; nothing changes until `confirm_apply` (`cancel_apply` restores the form).
 
 ## The widget build
 

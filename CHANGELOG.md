@@ -33,10 +33,21 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   strictly: an unknown or misspelled setting, a value of the wrong type or a
   model that is not listed is an error naming where it is, and YAML is read with
   YAML 1.2 rules (`1e-5` is a number, `on` is text). A rebuilt BSM1 has a
-  bit-identical right-hand side. What a spec cannot express yet (a time-varying
-  influent, a heat-balance temperature model, array-valued settings) raises a
-  `SpecError` naming it. Controllers derived from a closed-loop `Aeration` or
+  bit-identical right-hand side. What a spec cannot express yet (a heat-balance
+  temperature model, array-valued settings) raises a `SpecError` naming it. Controllers derived from a closed-loop `Aeration` or
   feedback `DosingUnit` are not written; they are derived again.
+- Plant observables can measure more than species: `"Q"` (flow), `"COD"`,
+  `"TN"`, `"TP"`, `"TSS"`, or a `Measure` (any weighted sum of species and flow),
+  in `PlantObservable` / `SensorSet` channels. Calibration, plant Fisher
+  information, profile likelihood and sensor ranking all accept them.
+  `composition_table` also serves a model read from a file that `extends:` a
+  shipped model with the same species, evaluated with its own parameters.
+- `read_influent_table` / `write_influent_table`: an influent as a headed table
+  (`t`, `Q`, optional `T`, species) that reads back exactly. A flowsheet spec
+  keeps a time-varying influent as such a table beside it, with a fingerprint.
+- `spec_fingerprint(spec)`: a hash of the plant a flowsheet file builds
+  (settings, wiring, model and influent content; not layout, labels or file
+  locations), to tell when a saved result no longer matches its flowsheet.
 - Example projects in `examples/projects/`: BSM1, and BSM2 with its 15 °C ASM1 as
   a model file that extends the shipped ASM1. The BSM2 project rebuilds the plant
   `build_bsm2` makes, run with the BSM2 parameter set, to a bit-identical
