@@ -270,15 +270,24 @@ def test_sumo_models_have_real_units():
 
 
 def test_asm2d_tud_storage_constants_carry_specific_units():
-    # The PP-storage and anaerobic-maintenance constants are specific rates
-    # (g P per g COD of PAO per day), and the charge factors are kmol per gram.
-    # With those units every ASM2d-TUD rate checks clean without any
-    # acknowledgement.
-    from aquakin.utils.units import parse_units
+    # The anaerobic-maintenance constant is a specific rate (g P per g COD of
+    # PAO per day). The PP-storage rate is inversely proportional to the stored
+    # fraction f_PP = XPP/XPAO (g P/g COD), so its constant carries
+    # (g P/g COD)^2/d for the rate to be g P/m3/d like its stoichiometry. The
+    # charge factors are kmol per gram. With those units every ASM2d-TUD rate
+    # checks clean without any acknowledgement.
+    from aquakin.utils.units import _Ctx, _infer, parse_units
 
     net = aquakin.load_model("asm2d_tud")
-    for name in ("qPP", "mAN"):
-        assert parse_units(net.parameter_units[name]) == parse_units("g_P/(g_COD*d)")
+    assert parse_units(net.parameter_units["mAN"]) == parse_units("g_P/(g_COD*d)")
+    assert parse_units(net.parameter_units["qPP"]) == parse_units("g_P*g_P/(g_COD*g_COD*d)")
+    dims = [
+        {k: parse_units(v) for k, v in getattr(net, attr).items()}
+        for attr in ("species_units", "parameter_units", "condition_units")
+    ]
+    for name, ast in zip(net.reaction_names, net.rate_asts):
+        if "storage_of_XPP" in name:
+            assert _infer(ast, _Ctx(name, *dims, [])) == parse_units("g_P/m3/d")
     assert parse_units(net.parameter_units["iCharge_SNHx"]) == parse_units("kmol/g_N")
     assert net.units_acknowledged == {}
     assert net.check_units(include_acknowledged=True) == []

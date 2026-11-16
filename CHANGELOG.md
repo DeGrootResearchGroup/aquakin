@@ -209,11 +209,13 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
-- `asm2d_tud` declares the units its parameters actually have: `qPP` and `mAN`
-  in g P/(g COD·d) rather than 1/d, `iTSS_PP` in g TSS/g P, `iNO3_N2` in
-  g COD/g N, and the `iCharge_*` factors in kmol per gram rather than mol per
-  gram. The model now cites Meijer et al. (2001) and Murnleitner et al. (1997).
-  Values are unchanged.
+- `asm2d_tud` declares the units its parameters actually have rather than 1/d
+  or mol: `mAN` in g P/(g COD·d); `qPP` in (g P/g COD)²/d, since the poly-P
+  storage rate is inversely proportional to the stored fraction XPP/XPAO
+  (Murnleitner et al. 1997, which quotes it in g P/(g COD·d) by treating that
+  fraction as a pure ratio); `iTSS_PP` in g TSS/g P; `iNO3_N2` in g COD/g N; and
+  the `iCharge_*` factors in kmol per gram. The model now cites Meijer et al.
+  (2001) and Murnleitner et al. (1997). Values and kinetics are unchanged.
 - The rate constants of `wats_sewer_khalil_paper_balanced_biofilm_biomass`
   that multiply the local biomass now declare biomass-specific units
   (g/gCOD/d) instead of the areal units (g/m2/d) they carried over from the

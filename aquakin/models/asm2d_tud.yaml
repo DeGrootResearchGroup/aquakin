@@ -110,7 +110,7 @@ parameters:
   qAc_NO: {value: 1.2, transform: positive_log, bounds: [0.012, 120.0], units: "1/d"}
   qGLY: {value: 0.93, transform: positive_log, bounds: [0.009300000000000001, 93.0], units: "1/d"}
   qPHA: {value: 5.51, transform: positive_log, bounds: [0.055099999999999996, 551.0], units: "1/d"}
-  qPP: {value: 0.1, transform: positive_log, bounds: [0.001, 10.0], units: "g_P/(g_COD*d)"}
+  qPP: {value: 0.1, transform: positive_log, bounds: [0.001, 10.0], units: "g_P*g_P/(g_COD*g_COD*d)"}
   qfe: {value: 3.0, transform: positive_log, bounds: [0.03, 300.0], units: "1/d"}
   qh: {value: 3.0, transform: positive_log, bounds: [0.03, 300.0], units: "1/d"}
 
@@ -308,11 +308,11 @@ reactions:
       XPHA: -1.0
       XTSS: "iTSS_BM / YPHA_NO - iTSS_PHA"
 
-  # Note on units: with qPP in g_P/(g_COD*d), the [XPAO] / [XPP] (1/f_PP) factor
-  # gives the two XPP-storage rates units of g_COD/m3/d, while their stoichiometry
-  # is written per g P (XPP +1). check_units only inspects rates, so it does not
-  # flag this; Meijer et al. (2001, Table 7) give k_PP in g_P/(g_COD*d) without
-  # printing the rate law, which is in Murnleitner et al. (1997).
+  # PP storage follows Murnleitner et al. (1997, Eq. 19 and Table IV): the rate is
+  # inversely proportional to the stored fraction f_PP = XPP/XPAO, hence the
+  # [XPAO] / [XPP] factor. For the rate to come out in g P/m3/d, matching the
+  # stoichiometry (XPP +1), qPP carries (g_P/g_COD)^2/d. The literature quotes it
+  # in g P/(g COD d), treating f_PP as a pure ratio; the value is the same.
   - name: Anoxic_storage_of_XPP
     description: "Anoxic storage of XPP"
     rate: "qPP * etaNO_PAO * [XPAO] / [XPP] * Monod_KO_PAO * Monod_SNO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
