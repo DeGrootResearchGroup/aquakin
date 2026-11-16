@@ -250,7 +250,6 @@ def test_acknowledged_reactions_are_pinned():
     }
     assert {k: v for k, v in acknowledged.items() if v} == {
         "adm1": {"gas_outflow_h2", "gas_outflow_ch4", "gas_outflow_co2"},
-        "asm2d_tud": {"Anoxic_storage_of_XPP", "Aerobic_storage_of_XPP"},
     }
 
 
@@ -270,19 +269,19 @@ def test_sumo_models_have_real_units():
         assert all(parse_units(net.units_of(s)) is not None for s in net.species)
 
 
-def test_asm2d_tud_findings_confined_to_pp_storage():
-    # ASM2d-TUD is unit-clean except its two biomass-normalised PP-storage rates
-    # (qPP * XPAO**2 / XPP * ...), whose root is irreducibly cross-currency
-    # (COD^2/P) -- a property of that model's rate form. They are acknowledged in
-    # the YAML, so they appear only with include_acknowledged=True. Guards that
-    # nothing else regresses.
+def test_asm2d_tud_storage_constants_carry_specific_units():
+    # The PP-storage and anaerobic-maintenance constants are specific rates
+    # (g P per g COD of PAO per day), and the charge factors are kmol per gram.
+    # With those units every ASM2d-TUD rate checks clean without any
+    # acknowledgement.
+    from aquakin.utils.units import parse_units
+
     net = aquakin.load_model("asm2d_tud")
-    ws = net.check_units(include_acknowledged=True)
-    storage = {"Anoxic_storage_of_XPP", "Aerobic_storage_of_XPP"}
-    assert ws, "expected the PP-storage root finding to be surfaced"
-    assert {w.reaction for w in ws} <= storage
-    assert set(net.units_acknowledged) == storage
-    assert net.check_units() == []
+    for name in ("qPP", "mAN"):
+        assert parse_units(net.parameter_units[name]) == parse_units("g_P/(g_COD*d)")
+    assert parse_units(net.parameter_units["iCharge_SNHx"]) == parse_units("kmol/g_N")
+    assert net.units_acknowledged == {}
+    assert net.check_units(include_acknowledged=True) == []
 
 
 def test_adm1_findings_confined_to_gas_headspace():

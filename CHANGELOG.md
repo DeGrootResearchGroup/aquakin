@@ -148,8 +148,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   no longer report false findings. `mg` and `mmol` are now parsed as units
   rather than as a metre times a gram or mole.
 - Every shipped model now passes `check_units()`: all ADM1 parameters declare
-  units, and the reactions with knowingly unconventional units (the ADM1
-  gas-outflow terms and the ASM2d-TUD poly-P storage terms) are acknowledged.
+  units, and the ADM1 gas-outflow terms, whose units are knowingly
+  unconventional, are acknowledged.
 
 - The layered secondary clarifier (`TakacsClarifier`, and the settler of
   `build_bsm1(use_takacs=True)` / `build_bsm2`) now settles solids between its
@@ -209,6 +209,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `asm2d_tud` declares the units its parameters actually have: `qPP` and `mAN`
+  in g P/(g COD·d) rather than 1/d, `iTSS_PP` in g TSS/g P, `iNO3_N2` in
+  g COD/g N, and the `iCharge_*` factors in kmol per gram rather than mol per
+  gram. The model now cites Meijer et al. (2001) and Murnleitner et al. (1997).
+  Values are unchanged.
 - The rate constants of `wats_sewer_khalil_paper_balanced_biofilm_biomass`
   that multiply the local biomass now declare biomass-specific units
   (g/gCOD/d) instead of the areal units (g/m2/d) they carried over from the

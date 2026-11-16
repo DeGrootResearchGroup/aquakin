@@ -71,8 +71,10 @@ reactions:
   declares `units_acknowledged: "<reason>"`; its findings then leave the
   default result (`check_units(include_acknowledged=True)` shows them) and the
   acknowledged set is pinned in `test_acknowledged_reactions_are_pinned`
-  (today: the three ADM1 `gas_outflow_*` and the two ASM2d-TUD XPP-storage
-  reactions). In a SUMO-derived model put `units_acknowledged:` *before*
+  (today: the three ADM1 `gas_outflow_*` reactions). Before acknowledging,
+  check the parameter units against the model's source: the ASM2d-TUD findings
+  were mislabelled units (`qPP`/`mAN` are g_P/(g_COD·d), the `iCharge_*` factors
+  kmol/g), not a property of the rates. In a SUMO-derived model put `units_acknowledged:` *before*
   `stoichiometry:` — `scripts/verify_sumo_asm.py` reads indented lines after
   `stoichiometry:` as species keys. The checker reads an inline `c / (c + X)`
   (same literal, as its own subexpression) as a dimensionless inhibition term.
