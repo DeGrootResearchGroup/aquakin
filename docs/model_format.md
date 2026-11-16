@@ -218,6 +218,15 @@ currencies, a sum of unlike terms, a dropped concentration factor, or rate
 constants written on different time units. A blank or unparseable unit is
 skipped, so declaring units on every parameter is what makes the check useful.
 
+It also checks each rate against the stoichiometry. A species whose
+coefficient is a fixed `+1` or `-1` changes by exactly the rate, so the rate
+must be in that species' concentration per time: a rate whose stoichiometry
+takes up 1 g P per unit (`SPO4: -1`) must come out in g P/m3/d, which means a
+specific uptake rate in g P/(g COD·d), not 1/d. A reaction is flagged only when
+its rate matches none of its unit-coefficient species; other coefficients
+(yields, conversion factors) legitimately carry mixed units and are not
+checked. `check_units(check_stoichiometry=False)` turns this part off.
+
 A literal half-saturation constant written inline, as in
 `0.1 / (0.1 + [S_NO])`, is read as an inhibition term (dimensionless) when it
 is its own subexpression, for example a named expression.

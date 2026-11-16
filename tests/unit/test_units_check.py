@@ -446,6 +446,57 @@ def test_conversion_factor_unknown_and_incompatible():
         conversion_factor("g_N/m3", "g_COD/m3")   # two stated currencies
 
 
+_STOICH_YAML = """
+model: {{name: stoich_units, description: "unit-coefficient check"}}
+species:
+  - {{name: X, units: g_COD/m3, default_concentration: 1.0}}
+  - {{name: P, units: g_P/m3, default_concentration: 1.0}}
+  - {{name: Q, units: g_P/m3, default_concentration: 1.0}}
+conditions: []
+parameters:
+  k: {{value: 0.1, units: "{k_units}"}}
+  y: {{value: 1.0, units: "g_P/g_P"}}
+reactions:
+  - name: R
+    rate: "k * [X]"
+    stoichiometry: {{P: -1, Q: {q_coef}}}
+"""
+
+
+def _stoich_model(tmp_path, k_units, q_coef="1"):
+    p = tmp_path / "stoich.yaml"
+    p.write_text(_STOICH_YAML.format(k_units=k_units, q_coef=q_coef))
+    return aquakin.load_model_from_file(str(p))
+
+
+def test_rate_must_match_a_unit_coefficient_species(tmp_path):
+    # P and Q change by exactly the rate (coefficients -1, +1), so the rate
+    # must be in g P/m3 per day; with k in 1/d it is in g COD/m3 per day.
+    net = _stoich_model(tmp_path, "1/d")
+    ws = [w for w in net.check_units() if w.location == "stoichiometry"]
+    assert len(ws) == 1 and ws[0].reaction == "R"
+    assert "'P'" in ws[0].detail and "'Q'" in ws[0].detail
+    assert net.check_units(check_stoichiometry=False) == []
+    # The specific-rate unit makes it consistent.
+    assert _stoich_model(tmp_path, "g_P/(g_COD*d)").check_units() == []
+
+
+def test_stoichiometry_check_skips_a_rate_without_a_time_unit(tmp_path):
+    # With k dimensionless the rate has no time unit; the root check reports
+    # that, and the stoichiometry check has nothing to compare, so it is silent.
+    ws = _stoich_model(tmp_path, "-").check_units()
+    assert any(w.location == "rate root" for w in ws)
+    assert not any(w.location == "stoichiometry" for w in ws)
+
+
+def test_stoichiometry_check_ignores_expression_coefficients(tmp_path):
+    # A coefficient written as an expression is not a fixed +/-1, even when it
+    # evaluates to 1, so only P anchors the rate here; P still disagrees.
+    net = _stoich_model(tmp_path, "1/d", q_coef='"y"')
+    (w,) = [w for w in net.check_units() if w.location == "stoichiometry"]
+    assert "'P'" in w.detail and "'Q'" not in w.detail
+
+
 def test_mixed_time_units_flagged(tmp_path):
     """Rate constants in different time units make the RHS dimensionally
     inconsistent (terms summed on different time bases); each rate passes its own

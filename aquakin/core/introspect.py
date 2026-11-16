@@ -110,14 +110,21 @@ def model_to_latex(model: CompiledModel) -> dict[str, str]:
 
 
 def check_units(
-    model: CompiledModel, *, check_root: bool = True, include_acknowledged: bool = False
+    model: CompiledModel,
+    *,
+    check_root: bool = True,
+    check_stoichiometry: bool = True,
+    include_acknowledged: bool = False,
 ) -> list:
     """Dimensional-consistency audit of the rate expressions (body of
     ``check_units``)."""
     from aquakin.utils.units import check_model_units
 
     return check_model_units(
-        model, check_root=check_root, include_acknowledged=include_acknowledged
+        model,
+        check_root=check_root,
+        check_stoichiometry=check_stoichiometry,
+        include_acknowledged=include_acknowledged,
     )
 
 

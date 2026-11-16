@@ -78,6 +78,12 @@ reactions:
   `stoichiometry:` — `scripts/verify_sumo_asm.py` reads indented lines after
   `stoichiometry:` as species keys. The checker reads an inline `c / (c + X)`
   (same literal, as its own subexpression) as a dimensionless inhibition term.
+  It also checks each rate against the species with a fixed `+1`/`-1`
+  stoichiometric coefficient (`check_stoichiometry=True`, `_stoichiometry_issue`
+  in `utils/units.py`): the rate must match at least one of them, since such a
+  species changes by exactly the rate. That is what catches a specific rate
+  (g X/(g biomass·d)) mislabelled `1/d`; label it from the stoichiometry, not
+  from a source table that writes it per unit biomass in its own currency.
 - Species units are **also** cross-checked against each `speciation:` /
   `precipitation:` `molar_mass` at load time (`_audit_speciation_molar_mass` in
   `schema/model_spec.py`). `molar_mass` converts the species state value to mol/L

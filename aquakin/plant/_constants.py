@@ -60,7 +60,9 @@ def solids_species(model: CompiledModel) -> tuple[tuple[str, ...], tuple[str, ..
     by the ASM naming convention: every species whose name starts with ``X`` is
     a particulate and settles, and the particulates carrying COD are the TSS
     species. COD content comes from the model's composition table; without one,
-    every particulate except ``XND`` (nitrogen carried on ``XS``) counts as TSS.
+    from the declared units: a particulate in a COD mass per volume counts as
+    TSS, one in other units (moles, g P, g TSS) does not, and one whose unit
+    cannot be read counts unless it is ``XND`` (nitrogen carried on ``XS``).
 
     Parameters
     ----------
@@ -91,8 +93,30 @@ def solids_species(model: CompiledModel) -> tuple[tuple[str, ...], tuple[str, ..
     if comp:
         tss = tuple(s for s in settling if comp.get(s, {}).get("COD", 0.0) > 0.0)
     else:
-        tss = tuple(s for s in settling if s != "XND")
+        tss = tuple(s for s in settling if _counts_as_cod_solid(s, model.species_units.get(s)))
     return settling, tss
+
+
+def _counts_as_cod_solid(species: str, units: str | None) -> bool:
+    """Whether a particulate without composition data counts towards TSS.
+
+    The TSS factor converts COD to suspended solids, so only a particulate
+    declared as a COD mass per volume (``g_COD/m3``, ``kgCOD/m3``) counts; one
+    declared in other units -- moles of a precipitate, g P of stored
+    polyphosphate, g TSS of a lumped solids state -- does not. A particulate
+    whose unit cannot be read falls back to the naming convention: every one
+    but ``XND`` (the nitrogen carried on ``XS``).
+    """
+    from aquakin.utils.units import _to_base_units, parse_units
+
+    dim = parse_units(units or "")
+    if dim is None:
+        return species != "XND"
+    tokens = dim.as_dict()
+    if tokens.get("COD") != 1:
+        return False
+    base, _ = _to_base_units(dim)
+    return base == _to_base_units(parse_units("g_COD/m3"))[0]
 
 
 def species_indices(model: CompiledModel, names, *, what: str = "species") -> list[int]:
