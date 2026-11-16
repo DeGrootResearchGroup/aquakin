@@ -206,6 +206,12 @@ class UVUnit:
     def output_ports(self) -> list[str]:
         return [self.output_port]
 
+    def assumed_units(self) -> dict[str, str]:
+        """Units fixed by this unit's internals: the exposure time converts the
+        residence ``V/Q`` to seconds with ``86400 s/d``, so the plant time unit
+        must be days (see :class:`~aquakin.plant.units.AssumedUnits`)."""
+        return {"time": "d"}
+
     def initial_state(self) -> jnp.ndarray:
         return jnp.zeros((0,))
 

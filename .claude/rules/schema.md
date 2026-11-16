@@ -64,7 +64,20 @@ reactions:
   conditions (default `""`) are advisory unit strings. Species/parameter units
   feed result labelling and the opt-in `check_units` dimensional check; they are
   not otherwise used at runtime. `check_units` treats a blank/unparseable unit
-  as unknown (skipped).
+  as unknown (skipped). **Every shipped model must pass `check_units()`** (the
+  CI gate `test_shipped_models_are_unit_clean`, which also requires a
+  determinable `time_unit` for the plant audit). A reaction whose units are
+  knowingly unconventional (a bare-number molar mass, a published rate form)
+  declares `units_acknowledged: "<reason>"`; its findings then leave the
+  default result (`check_units(include_acknowledged=True)` shows them) and the
+  acknowledged set is pinned in `test_acknowledged_reactions_are_pinned`
+  (today: the three ADM1 `gas_outflow_*` reactions). Before acknowledging,
+  check the parameter units against the model's source: the ASM2d-TUD findings
+  were mislabelled units (`qPP`/`mAN` are g_P/(g_COD·d), the `iCharge_*` factors
+  kmol/g), not a property of the rates. In a SUMO-derived model put `units_acknowledged:` *before*
+  `stoichiometry:` — `scripts/verify_sumo_asm.py` reads indented lines after
+  `stoichiometry:` as species keys. The checker reads an inline `c / (c + X)`
+  (same literal, as its own subexpression) as a dimensionless inhibition term.
 - Species units are **also** cross-checked against each `speciation:` /
   `precipitation:` `molar_mass` at load time (`_audit_speciation_molar_mass` in
   `schema/model_spec.py`). `molar_mass` converts the species state value to mol/L

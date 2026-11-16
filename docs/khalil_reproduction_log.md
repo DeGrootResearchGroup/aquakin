@@ -180,7 +180,10 @@ advisory units. All four resolve `model.time_unit` to `"d"` and are
 `check_units`-clean **except** the two ASM2d-TUD biomass-normalised PP-storage
 rates (`qPP·XPAO²/XPP·…`), whose root is irreducibly cross-currency (`COD²/P`) —
 a documented property of that model's rate form, surfaced (not fixed) by the root
-check.
+check. *(Superseded in #671: those findings were mislabelled units, not a property
+of the rate. With `qPP` in (g P/g COD)²/d — the 1/f_PP storage rate of Murnleitner
+et al. 1997 — and the other ASM2d-TUD labels corrected to the model's source
+parameter table, all four models are `check_units`-clean.)*
 
 **COD/N/P continuity (Gujer-matrix conservation) on the ASM family** is checked
 by `tests/integration/test_asm_continuity.py` (issue #210): for each of asm1,

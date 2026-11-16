@@ -114,6 +114,13 @@ class IdealThickener(StatelessUnit):
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
 
+    def assumed_units(self) -> dict[str, str]:
+        """Units fixed by this unit's internals: the target underflow solids
+        ``target_tss_percent * 10000`` is in ``g/m3`` (mg/L), so every TSS species
+        must be on a ``g/m3`` basis (see
+        :class:`~aquakin.plant.units.AssumedUnits`)."""
+        return dict.fromkeys(self.tss_species, "g/m3")
+
     def compute_outputs(
         self,
         t: jnp.ndarray,

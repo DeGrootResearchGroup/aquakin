@@ -162,58 +162,58 @@ parameters:
   K_I_h2_c4: {value: 1.0e-5, units: "kgCOD/m3", bounds: [1.0e-6, 1.0e-4], transform: positive_log, prior: {mean: 1e-05, std: 5e-06}}
   K_I_h2_pro: {value: 3.5e-6, units: "kgCOD/m3", bounds: [3.5e-7, 3.5e-5], transform: positive_log, prior: {mean: 3.5e-06, std: 1.75e-06}}
   K_I_nh3:   {value: 0.0018, units: "kmolN/m3", bounds: [1.8e-4, 1.8e-2], transform: positive_log, prior: {mean: 0.0018, std: 0.0009}}
-  pH_UL_aa:  {value: 5.5}
-  pH_LL_aa:  {value: 4.0}
-  pH_UL_ac:  {value: 7.0}
-  pH_LL_ac:  {value: 6.0}
-  pH_UL_h2:  {value: 6.0}
-  pH_LL_h2:  {value: 5.0}
+  pH_UL_aa:  {value: 5.5, units: "-"}
+  pH_LL_aa:  {value: 4.0, units: "-"}
+  pH_UL_ac:  {value: 7.0, units: "-"}
+  pH_LL_ac:  {value: 6.0, units: "-"}
+  pH_UL_h2:  {value: 6.0, units: "-"}
+  pH_LL_h2:  {value: 5.0, units: "-"}
   pKa_IN:    {value: 8.955, units: "-"}   # NH4+/NH3 pKa at 35 C (9.25 at 25 C, van't Hoff dH=51965 J/mol); matches the charge-balance solver's effective ammonia pKa
   # --- yields (kgCOD biomass / kgCOD substrate) ---
-  Y_su:  {value: 0.10, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.1, std: 0.005}}
-  Y_aa:  {value: 0.08, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.08, std: 0.004}}
-  Y_fa:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
-  Y_c4:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
-  Y_pro: {value: 0.04, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.04, std: 0.002}}
-  Y_ac:  {value: 0.05, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.05, std: 0.0025}}
-  Y_h2:  {value: 0.06, bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
+  Y_su:  {value: 0.10, units: "kgCOD/kgCOD", bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.1, std: 0.005}}
+  Y_aa:  {value: 0.08, units: "kgCOD/kgCOD", bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.08, std: 0.004}}
+  Y_fa:  {value: 0.06, units: "kgCOD/kgCOD", bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
+  Y_c4:  {value: 0.06, units: "kgCOD/kgCOD", bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
+  Y_pro: {value: 0.04, units: "kgCOD/kgCOD", bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.04, std: 0.002}}
+  Y_ac:  {value: 0.05, units: "kgCOD/kgCOD", bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.05, std: 0.0025}}
+  Y_h2:  {value: 0.06, units: "kgCOD/kgCOD", bounds: [0.02, 0.2], transform: positive_log, prior: {mean: 0.06, std: 0.003}}
   # --- fractionation ---
-  f_sI_xc:  {value: 0.10}
-  f_xI_xc:  {value: 0.20}
-  f_ch_xc:  {value: 0.20}
-  f_pr_xc:  {value: 0.20}
-  f_li_xc:  {value: 0.30}
-  f_fa_li:  {value: 0.95}
-  f_h2_su:  {value: 0.19}
-  f_bu_su:  {value: 0.13}
-  f_pro_su: {value: 0.27}
-  f_ac_su:  {value: 0.41}
-  f_h2_aa:  {value: 0.06}
-  f_va_aa:  {value: 0.23}
-  f_bu_aa:  {value: 0.26}
-  f_pro_aa: {value: 0.05}
-  f_ac_aa:  {value: 0.40}
+  f_sI_xc:  {value: 0.10, units: "kgCOD/kgCOD"}
+  f_xI_xc:  {value: 0.20, units: "kgCOD/kgCOD"}
+  f_ch_xc:  {value: 0.20, units: "kgCOD/kgCOD"}
+  f_pr_xc:  {value: 0.20, units: "kgCOD/kgCOD"}
+  f_li_xc:  {value: 0.30, units: "kgCOD/kgCOD"}
+  f_fa_li:  {value: 0.95, units: "kgCOD/kgCOD"}
+  f_h2_su:  {value: 0.19, units: "kgCOD/kgCOD"}
+  f_bu_su:  {value: 0.13, units: "kgCOD/kgCOD"}
+  f_pro_su: {value: 0.27, units: "kgCOD/kgCOD"}
+  f_ac_su:  {value: 0.41, units: "kgCOD/kgCOD"}
+  f_h2_aa:  {value: 0.06, units: "kgCOD/kgCOD"}
+  f_va_aa:  {value: 0.23, units: "kgCOD/kgCOD"}
+  f_bu_aa:  {value: 0.26, units: "kgCOD/kgCOD"}
+  f_pro_aa: {value: 0.05, units: "kgCOD/kgCOD"}
+  f_ac_aa:  {value: 0.40, units: "kgCOD/kgCOD"}
   # --- carbon content (kmolC/kgCOD) ---
-  C_su:  {value: 0.0313}
-  C_aa:  {value: 0.0300}
-  C_fa:  {value: 0.0217}
-  C_va:  {value: 0.0240}
-  C_bu:  {value: 0.0250}
-  C_pro: {value: 0.0268}
-  C_ac:  {value: 0.0313}
-  C_ch4: {value: 0.0156}
-  C_bac: {value: 0.0313}
-  C_ch:  {value: 0.0313}
-  C_pr:  {value: 0.0300}
-  C_li:  {value: 0.0220}
-  C_sI:  {value: 0.0300}
-  C_xI:  {value: 0.0300}
-  C_xc:  {value: 0.02786}
+  C_su:  {value: 0.0313, units: "kmolC/kgCOD"}
+  C_aa:  {value: 0.0300, units: "kmolC/kgCOD"}
+  C_fa:  {value: 0.0217, units: "kmolC/kgCOD"}
+  C_va:  {value: 0.0240, units: "kmolC/kgCOD"}
+  C_bu:  {value: 0.0250, units: "kmolC/kgCOD"}
+  C_pro: {value: 0.0268, units: "kmolC/kgCOD"}
+  C_ac:  {value: 0.0313, units: "kmolC/kgCOD"}
+  C_ch4: {value: 0.0156, units: "kmolC/kgCOD"}
+  C_bac: {value: 0.0313, units: "kmolC/kgCOD"}
+  C_ch:  {value: 0.0313, units: "kmolC/kgCOD"}
+  C_pr:  {value: 0.0300, units: "kmolC/kgCOD"}
+  C_li:  {value: 0.0220, units: "kmolC/kgCOD"}
+  C_sI:  {value: 0.0300, units: "kmolC/kgCOD"}
+  C_xI:  {value: 0.0300, units: "kmolC/kgCOD"}
+  C_xc:  {value: 0.02786, units: "kmolC/kgCOD"}
   # --- nitrogen content (kmolN/kgCOD) ---
-  N_aa:  {value: 0.007}
-  N_bac: {value: 0.00571429}   # 0.08/14
-  N_I:   {value: 0.00428571}   # 0.06/14
-  N_xc:  {value: 0.00268571}   # 0.0376/14
+  N_aa:  {value: 0.007, units: "kmolN/kgCOD"}
+  N_bac: {value: 0.00571429, units: "kmolN/kgCOD"}   # 0.08/14
+  N_I:   {value: 0.00428571, units: "kmolN/kgCOD"}   # 0.06/14
+  N_xc:  {value: 0.00268571, units: "kmolN/kgCOD"}   # 0.0376/14
   # --- gas-liquid transfer / headspace ---
   # Henry constants T-corrected to 35 C by van't Hoff: K_H = K_H_base *
   # exp(-dH * (1/T_base - 1/T_op) / R), with R = 8.3145 J/mol/K (= 100*0.083145)
@@ -274,10 +274,12 @@ expressions:
   # NOTE (dimensional check): the headspace H2/CH4 are carried in COD (kgCOD/m3)
   # and CO2 in carbon (kmolC/m3), and the /16 and /64 are implicit COD->mole
   # molar masses written as bare numbers, so the partial-pressure sum P_gas mixes
-  # currencies and `model.check_units()` flags the three gas_outflow reactions
-  # (advisory). This is an inherent unit characteristic of the BSM2 ADM1 gas
+  # currencies. This is an inherent unit characteristic of the BSM2 ADM1 gas
   # phase, not a model error; making it dimensionally homogeneous would require
-  # molar-mass parameters (which would change the parameter vector).
+  # molar-mass parameters (which would change the parameter vector). The three
+  # gas_outflow reactions therefore declare `units_acknowledged:`, which keeps
+  # their findings out of `model.check_units()` (pass include_acknowledged=True
+  # to see them).
   p_gas_h2:  "R_T / 16 * [S_gas_h2]"
   p_gas_ch4: "R_T / 64 * [S_gas_ch4]"
   p_gas_co2: "R_T * [S_gas_co2]"
@@ -478,11 +480,14 @@ reactions:
     description: "H2 leaves the headspace with the biogas stream."
     rate: "q_gas_norm * [S_gas_h2]"
     stoichiometry: {S_gas_h2: -1.0}
+    units_acknowledged: "Headspace partial pressures use the BSM2 convention: H2/CH4 are carried in COD and CO2 in carbon, with the COD-to-mole molar masses (16, 64) written as bare numbers, so P_gas sums terms check_units cannot reconcile."
   - name: gas_outflow_ch4
     description: "CH4 leaves the headspace with the biogas stream."
     rate: "q_gas_norm * [S_gas_ch4]"
     stoichiometry: {S_gas_ch4: -1.0}
+    units_acknowledged: "Headspace partial pressures use the BSM2 convention: H2/CH4 are carried in COD and CO2 in carbon, with the COD-to-mole molar masses (16, 64) written as bare numbers, so P_gas sums terms check_units cannot reconcile."
   - name: gas_outflow_co2
     description: "CO2 leaves the headspace with the biogas stream."
     rate: "q_gas_norm * [S_gas_co2]"
     stoichiometry: {S_gas_co2: -1.0}
+    units_acknowledged: "Headspace partial pressures use the BSM2 convention: H2/CH4 are carried in COD and CO2 in carbon, with the COD-to-mole molar masses (16, 64) written as bare numbers, so P_gas sums terms check_units cannot reconcile."

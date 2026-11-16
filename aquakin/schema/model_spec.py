@@ -229,6 +229,11 @@ class ReactionSpec(BaseModel):
     # coefficient in this reaction. ``None`` (the default) falls back to the
     # model-level ``conserved_for``.
     conserved_for: list[str] | None = None
+    # A written reason this reaction's rate is knowingly dimensionally
+    # unconventional (e.g. a molar mass written as a bare number). A non-empty
+    # value moves the reaction's ``check_units`` findings out of the default
+    # result, keeping them visible with ``include_acknowledged=True``.
+    units_acknowledged: str = ""
 
     @model_validator(mode="after")
     def _stoichiometry_non_empty(self) -> ReactionSpec:
@@ -567,9 +572,9 @@ def _units_measure(units: str) -> str | None:
     if dim is None:
         return None
     numerator = {tok for tok, exp in dim.tokens if exp > 0}
-    if numerator & {"mol", "kmol"}:
+    if numerator & {"mol", "kmol", "mmol"}:
         return "molar"
-    if numerator & {"g", "kg"}:
+    if numerator & {"g", "kg", "mg"}:
         return "mass"
     return None
 

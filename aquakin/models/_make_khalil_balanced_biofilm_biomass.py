@@ -105,6 +105,7 @@ def main():
 
     out = []
     n_drop = n_av = n_hf = 0
+    areal_rate_params = set()
     for rx in net["reactions"]:
         if rx["name"] in DROP:
             n_drop += 1
@@ -116,6 +117,7 @@ def main():
         if "{A_V}" in rate:
             rate = rate.replace("{A_V}", LOCAL_BIOMASS)
             n_av += 1
+            areal_rate_params |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", rate))
         rx = dict(rx)
         rx["rate"] = rate
         rx["name"] = _strip_phase_suffix(rx["name"])
@@ -132,6 +134,19 @@ def main():
     for rx in net["reactions"]:
         for tok in ("{A_V}", "{X_BF}", "bio_hf"):
             assert tok not in rx["rate"], f"{rx['name']} still references {tok}"
+
+    # Swapping the areal lump {A_V} (m2/m3) for the volumetric biomass [X_BH]
+    # (gCOD/m3) changes what the rate constant multiplies, so an areal rate
+    # constant (g/m2/d) becomes a biomass-specific one (g/gCOD/d). Rewrite its
+    # declared units to match, so check_units sees a concentration-per-time rate.
+    n_units = 0
+    for pname in sorted(areal_rate_params):
+        spec = (net.get("parameters") or {}).get(pname)
+        if isinstance(spec, dict) and isinstance(spec.get("units"), str):
+            new_units = re.sub(r"^(\w+)/m2/d$", r"\1/gCOD/d", spec["units"])
+            if new_units != spec["units"]:
+                spec["units"] = new_units
+                n_units += 1
 
     names = [r["name"] for r in net["reactions"]]
     assert len(names) == len(set(names)), "duplicate reaction names after suffix strip"
@@ -167,7 +182,8 @@ def main():
         f"wrote {os.path.basename(OUT)} "
         f"({len(net['reactions'])} reactions, {len(net['species'])} species; "
         f"dropped {n_drop} growth duplicates, converted {n_av} {{A_V}} + "
-        f"{n_hf} bio_hf rates to {LOCAL_BIOMASS}, pruned {n_pruned} dead params)"
+        f"{n_hf} bio_hf rates to {LOCAL_BIOMASS}, pruned {n_pruned} dead params, "
+        f"re-unit {n_units} areal rate constants per gCOD biomass)"
     )
     biomass_rxns = [r["name"] for r in net["reactions"] if "[X_BH]" in r["rate"]]
     print(f"  reactions on [X_BH] ({len(biomass_rxns)}): {biomass_rxns}")

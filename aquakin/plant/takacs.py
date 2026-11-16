@@ -353,6 +353,25 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
 
+    def assumed_units(self) -> dict[str, str]:
+        """Units assumed by the default settling parameters.
+
+        The BSM1 defaults give the settling velocities in ``m/d`` and ``rh``,
+        ``rp`` and ``X_threshold`` per ``g/m3`` of solids, so a clarifier using
+        them needs a plant in days and every species that counts towards TSS on
+        a ``g/m3`` basis. Settling parameters supplied by the user are taken to
+        be in the plant's units, so nothing is assumed then (see
+        :class:`~aquakin.plant.units.AssumedUnits`).
+        """
+        if self.settling_params != _BSM1_TAKACS_DEFAULTS:
+            return {}
+        tss_species = [
+            sp
+            for sp, factor in zip(self.particulate_species, self._part_tss_factors, strict=True)
+            if factor != 0.0
+        ]
+        return {"time": "d", **dict.fromkeys(tss_species, "g/m3")}
+
     def coupling_pattern(self):
         """Structural Jacobian sparsity, AD-derived.
 

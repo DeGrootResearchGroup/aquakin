@@ -438,6 +438,47 @@ Key types:
     legitimately leaves the plant), plus the detected `.recycles`; `.ok` is true
     when nothing is unfed and `.summary()` prints it. `check(raise_on_error=True)`
     raises on an unfed port. Exported as `aquakin.PlantCheck`.
+  - **Unit audit — `plant.check_units()` (`plant/units_check.py`).** Streams
+    cross units unconverted, so a unit mismatch is silent; the audit compares
+    *declared* units on static metadata only (never the jitted solve) and
+    returns a `PlantUnitsReport` (`errors` / `warnings` of `PlantUnitIssue`).
+    Checks: every model's `time_unit` agrees; a unit implementing the
+    `AssumedUnits` hook (`assumed_units() -> {"time" | species: unit}`) gets
+    them — only *fixed* internal assumptions belong there (UV and primary
+    clarifier: days; thickener: `g/m3` TSS species; Takács only while
+    `settling_params` are the BSM defaults: days + `g/m3` for species with a
+    nonzero TSS factor), never a user-supplied number in any consistent unit; an
+    influent's declared `InfluentSeries.units` matches the
+    plant time unit, `m3` per time unit for `Q`, Kelvin `T` and the model's
+    species units (the BSM loaders declare theirs); each model's own
+    `check_units()` is rolled up as warnings. All comparisons go through the
+    scale-aware `aquakin.units_match` (`mg/L` = `g/m3` ≠ `kg/m3`; a currency is
+    compared only when both sides state one). `plant.check()` carries the
+    findings (`PlantCheck.unit_issues` / `.unit_errors`; unit errors make `.ok`
+    false and `raise_on_error` raises `UnitsError`). **Models on different time
+    units are a hard error at solve time**: `_build_state_layout` calls
+    `_guard_time_units` (cached per model/unit set) and raises `UnitsError`.
+    `connect` / `add_influent` also reject an explicit translator whose
+    `source_model` / `target_model` species list differs from the endpoint's
+    (`WiringError`; a different instance with the same species is accepted).
+    When a new unit's internals hard-code a unit (a `SECONDS_PER_DAY`, a
+    `g/m3` constant), give it `assumed_units`. **Translators convert instead of
+    being checked:** `ASM1toADM1` / `ADM1toASM1` (`plant/interfaces.py`) keep
+    their equations in fixed *working units* (`_ASM1_UNITS`: g/m3, SALK mol/m3;
+    `_ADM1_UNITS`: kg/m3, kmol/m3) and `_unit_scales` derives per-species
+    factors from the models' declared `species_units` via
+    `utils.units.conversion_factor` at construction (`x_working = f·x_model`;
+    applied on the way in, divided out on the way out). It returns `None` when
+    every factor is exactly 1 (every shipped model), so `translate` skips the
+    multiply and stays bit-identical; an unconvertible unit (mass vs moles, two
+    different currencies) raises `ValueError` at construction, an unreadable
+    one warns and is taken to be the working unit. Because the factors come
+    from the models a translator was *built* with, `connect` also requires
+    those models to declare the same units as the endpoints'
+    (`_check_translator_endpoints`). A new translator should follow the same
+    pattern rather than hard-code a model's scale. Declared influent units must
+    be parseable (`InfluentSeries.__post_init__`; Celsius spellings,
+    `utils.units.CELSIUS_SPELLINGS`, pass so the audit can flag them).
   - **Operating temperature.** `plant.set_temperature(celsius)` sets the static
     `T` condition of every temperature-bearing reactor in one call (°C → K),
     leaving a heated fixed-`T` unit like the digester untouched; clears the

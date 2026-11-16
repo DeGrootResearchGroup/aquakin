@@ -52,6 +52,7 @@ from aquakin.plant.design import (
 from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.errors import (
     NoDigesterError,
+    UnitsError,
     UnknownPortError,
     UnknownUnitError,
     WiringError,
@@ -96,7 +97,8 @@ from aquakin.plant.temperature import (
     TemperatureModel,
 )
 from aquakin.plant.translators import IdentityTranslator, StateTranslator
-from aquakin.plant.units import FlowContext, StatelessUnit, Unit
+from aquakin.plant.units import AssumedUnits, FlowContext, StatelessUnit, Unit
+from aquakin.plant.units_check import PlantUnitIssue, PlantUnitsReport
 from aquakin.plant.metrics import (
     aeration_energy,
     carbon_mass,
@@ -153,6 +155,7 @@ __all__ = [
     "AerationDesignPoint",
     "AerationSystem",
     "AlgebraicTemperature",
+    "AssumedUnits",
     "BSM1Evaluation",
     "BSM2Evaluation",
     "CSTRUnit",
@@ -189,6 +192,8 @@ __all__ = [
     "PlantCheck",
     "PlantObservable",
     "PlantSolution",
+    "PlantUnitIssue",
+    "PlantUnitsReport",
     "PrimaryClarifier",
     "RatioSplitter",
     "Reagent",
@@ -208,6 +213,7 @@ __all__ = [
     "ThresholdSplitter",
     "UVUnit",
     "Unit",
+    "UnitsError",
     "UnknownPortError",
     "UnknownUnitError",
     "WiringError",

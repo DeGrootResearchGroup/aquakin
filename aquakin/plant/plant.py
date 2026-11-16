@@ -49,6 +49,7 @@ from aquakin.plant import calibrate as _calibrate
 from aquakin.plant import sensitivity as _sensitivity
 from aquakin.plant.colored import ColoredJacobianManager
 from aquakin.plant.errors import (
+    UnitsError,
     UnknownPortError,
     UnknownUnitError,
     WiringError,
@@ -75,6 +76,12 @@ from aquakin.plant.units import (
     TemperatureSettable,
     Unit,
 )
+from aquakin.plant.units_check import (
+    PlantUnitsReport,
+    check_plant_units,
+    time_unit_errors,
+)
+from aquakin.utils.units import units_match
 
 # Reserved key under which :meth:`Plant._split_state` exposes the appended
 # temperature-state block in the per-unit state map (not a real unit, so it is
@@ -282,6 +289,8 @@ class Plant:
         # Static connection adjacency, rebuilt by _build_state_layout():
         self._inputs_by_unit: dict[str, list[Connection]] = {}
         self._recycle_keys: list[tuple[str | None, str]] = []
+        # Model / unit set whose time units last passed _guard_time_units.
+        self._time_units_ok_key: tuple | None = None
         # The recycle (back-edge) connections and, for any auto-detected one with
         # no explicit ``initial_value``, a zero-flow seed stream. Set by
         # _finalize_topology().
@@ -547,26 +556,29 @@ class Plant:
         )
 
     def check(self, *, raise_on_error: bool = False) -> PlantCheck:
-        """Validate the wiring before solving: find unfed ports / dangling outputs.
+        """Validate the plant before solving: wiring and declared units.
 
         Every unit input port must be fed by exactly one stream (an influent or
         another unit's output); an **unfed** input port has no source, so the RHS
         sweep cannot resolve it and the solve fails. Output ports consumed by no
         connection are reported too, but as information -- a terminal stream that
         leaves the plant (final effluent, wasted sludge, disposal cake, biogas)
-        is legitimately unconsumed.
+        is legitimately unconsumed. The findings of :meth:`check_units` are
+        included as well: its errors count as errors here, its warnings do not.
 
         Parameters
         ----------
         raise_on_error : bool, optional
-            If True, raise ``ValueError`` when any input port is unfed (the
-            actionable error) instead of only reporting it. Default False.
+            If True, raise ``ValueError`` when any input port is unfed, or
+            :class:`UnitsError` (a ``ValueError``) when the unit audit finds an
+            error, instead of only reporting it. Default False.
 
         Returns
         -------
         PlantCheck
             ``unfed_ports`` (errors), ``dangling_outputs`` (info), ``recycles``
-            (the detected back-edges), with ``.ok`` and ``.summary()``.
+            (the detected back-edges), ``unit_issues`` (the unit audit), with
+            ``.ok`` (no unfed port and no unit error) and ``.summary()``.
         """
         self._finalize_topology()
         fed = {(c.to_unit, c.to_port) for c in self.connections}
@@ -584,14 +596,62 @@ class Plant:
             unfed_ports=unfed,
             dangling_outputs=dangling,
             recycles=[f"{u}.{p}" for (u, p) in self._recycle_keys],
+            unit_issues=self.check_units().issues,
         )
-        if raise_on_error and not result.ok:
+        if raise_on_error and unfed:
             raise ValueError(
                 f"Plant '{self.name}' has unfed input ports (no stream wired "
                 f"in): {unfed}. Wire them with connect()/add_influent() before "
                 f"solving."
             )
+        if raise_on_error and result.unit_errors:
+            raise UnitsError(
+                f"Plant '{self.name}' has inconsistent units:\n"
+                + "\n".join(f"  {i}" for i in result.unit_errors)
+            )
         return result
+
+    def check_units(self, *, include_models: bool = True) -> PlantUnitsReport:
+        """Audit the plant's declared units for consistency, before solving.
+
+        The plant integrates every unit against one clock and passes streams
+        between units without converting anything, so a unit mismatch is
+        silent. This compares the units the plant's parts *declare*:
+
+        - every kinetic model's time unit (:attr:`CompiledModel.time_unit`),
+          and any time unit a unit operation's internals assume (e.g. a UV
+          reactor converting days to seconds);
+        - species whose concentration basis a unit's constants fix (e.g. a
+          settler's ``g/m3`` settling parameters) against the model's units;
+        - an influent's declared ``units`` (:class:`InfluentSeries`) against the
+          plant time unit, ``m3`` per time unit for ``Q``, Kelvin for ``T`` and
+          the model's species units;
+        - each model's own rate-expression check
+          (:meth:`CompiledModel.check_units`), as warnings.
+
+        Comparisons are scale-aware (``mg/L`` matches ``g/m3``; ``kg/m3`` does
+        not). Blank or unparseable units are skipped. Models on different time
+        units also make :meth:`solve` raise :class:`UnitsError`; everything else
+        here is reported, not raised. :meth:`check` includes this report.
+
+        Parameters
+        ----------
+        include_models : bool, default True
+            Also report each model's rate-expression findings as warnings.
+
+        Returns
+        -------
+        PlantUnitsReport
+            ``errors`` / ``warnings`` lists of :class:`PlantUnitIssue`, ``ok``,
+            the plant ``time_unit`` and a ``summary()``.
+
+        Examples
+        --------
+        >>> plant = build_bsm2()
+        >>> print(plant.check_units().summary())
+        Plant units: OK (time unit: d)
+        """
+        return check_plant_units(self, include_models=include_models)
 
     def _parse_endpoint(self, spec: str, *, role: str) -> tuple[str, str]:
         """Resolve a ``"unit.port"`` / ``"unit"`` endpoint string to ``(unit, port)``.
@@ -638,6 +698,13 @@ class Plant:
         explicit translator is an error.
         """
         if translator is not None:
+            self._check_translator_endpoints(
+                translator,
+                source_model,
+                getattr(self.units[dest_unit], "model", None),
+                src_label,
+                dst_label,
+            )
             return translator
         target_model = self._unit_model(dest_unit)
         if source_model is target_model:
@@ -665,6 +732,42 @@ class Plant:
             f"'{getattr(target_model, 'name', '?')}'); supply an explicit "
             f"translator."
         )
+
+    @staticmethod
+    def _check_translator_endpoints(
+        translator, source_model, target_model, src_label, dst_label
+    ) -> None:
+        """Reject an explicit translator built for different models than the
+        ones it connects. A translator reads and writes species by index and
+        converts from the units its models declare, so a source or target model
+        with a different species list, or with a species declared in other
+        units, silently scrambles or rescales the stream. A different *instance*
+        with the same species and units is accepted."""
+        for side, declared, actual in (
+            ("source", getattr(translator, "source_model", None), source_model),
+            ("target", getattr(translator, "target_model", None), target_model),
+        ):
+            if declared is None or actual is None or declared is actual:
+                continue
+            if list(declared.species) != list(actual.species):
+                raise WiringError(
+                    f"Connection {src_label} -> {dst_label}: the translator's "
+                    f"{side} model is '{declared.name}', but the {side} of this "
+                    f"connection uses model '{actual.name}' with a different "
+                    f"species list. Build the translator with the models it "
+                    f"connects."
+                )
+            for species in actual.species:
+                built = declared.species_units.get(species, "")
+                used = actual.species_units.get(species, "")
+                if units_match(built, used) is False:
+                    raise WiringError(
+                        f"Connection {src_label} -> {dst_label}: the translator "
+                        f"was built for a {side} model declaring '{species}' in "
+                        f"'{built}', but the {side} of this connection declares "
+                        f"it in '{used}'. Build the translator with the models it "
+                        f"connects."
+                    )
 
     def _finalize_topology(self) -> None:
         """Compute the RHS evaluation order and the recycle (back-edge) set.
@@ -940,6 +1043,7 @@ class Plant:
         self._materialize_aeration()
         self._materialize_dosing()
         self._finalize_topology()
+        self._guard_time_units()
         layout: dict[str, tuple[int, int]] = {}
         cursor = 0
         for name in self._unit_order:
@@ -960,6 +1064,29 @@ class Plant:
         self._total_state_size = cursor
         self._build_connection_index()
         self._validate_control_signals()
+
+    def _guard_time_units(self) -> None:
+        """Raise :class:`UnitsError` if the plant's time units disagree.
+
+        Kinetic models on different time units (or a unit operation whose
+        internals assume another one) make every solve meaningless, so this is
+        an error, not a report. The verdict depends only on the models and units
+        present, so it is computed once per such configuration.
+        """
+        key = (
+            tuple(id(net) for net in self._ordered_models()),
+            tuple(self._insertion_order),
+        )
+        if self._time_units_ok_key == key:
+            return
+        errors = time_unit_errors(self)
+        if errors:
+            raise UnitsError(
+                f"Plant '{self.name}' cannot be solved: "
+                + " ".join(i.detail for i in errors)
+                + " See plant.check_units() for the full report."
+            )
+        self._time_units_ok_key = key
 
     def _validate_control_signals(self) -> None:
         """Cross-check the control-signal bus: every published signal name is
