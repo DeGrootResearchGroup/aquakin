@@ -215,7 +215,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   (Murnleitner et al. 1997, which quotes it in g P/(g COD·d) by treating that
   fraction as a pure ratio); `iTSS_PP` in g TSS/g P; `iNO3_N2` in g COD/g N; and
   the `iCharge_*` factors in kmol per gram. The model now cites Meijer et al.
-  (2001) and Murnleitner et al. (1997). Values and kinetics are unchanged.
+  (2001), Murnleitner et al. (1997) and van Veldhuizen et al. (1999). Values and
+  kinetics are unchanged.
 - The rate constants of `wats_sewer_khalil_paper_balanced_biofilm_biomass`
   that multiply the local biomass now declare biomass-specific units
   (g/gCOD/d) instead of the areal units (g/m2/d) they carried over from the

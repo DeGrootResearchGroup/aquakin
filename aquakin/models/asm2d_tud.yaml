@@ -6,6 +6,7 @@ model:
   references:
     - "Meijer, van Loosdrecht & Heijnen (2001). Metabolic modelling of full-scale biological nitrogen and phosphorus removing WWTP's. Water Res. 35(11), 2711-2723. doi:10.1016/S0043-1354(00)00567-4"
     - "Murnleitner, Kuba, van Loosdrecht & Heijnen (1997). An integrated metabolic model for the aerobic and denitrifying biological phosphorus removal. Biotechnol. Bioeng. 54(5), 434-450."
+    - "van Veldhuizen, van Loosdrecht & Heijnen (1999). Modelling biological phosphorus and nitrogen removal in a full scale activated sludge process. Water Res. 33(16), 3459-3468. doi:10.1016/S0043-1354(99)00064-0"
 
 species:
   - {name: SO, default_concentration: 1.0, units: "g_O2/m3", description: "Dissolved oxygen (O2)"}
@@ -308,11 +309,12 @@ reactions:
       XPHA: -1.0
       XTSS: "iTSS_BM / YPHA_NO - iTSS_PHA"
 
-  # PP storage follows Murnleitner et al. (1997, Eq. 19 and Table IV): the rate is
-  # inversely proportional to the stored fraction f_PP = XPP/XPAO, hence the
-  # [XPAO] / [XPP] factor. For the rate to come out in g P/m3/d, matching the
-  # stoichiometry (XPP +1), qPP carries (g_P/g_COD)^2/d. The literature quotes it
-  # in g P/(g COD d), treating f_PP as a pure ratio; the value is the same.
+  # PP storage follows Murnleitner et al. (1997, Eq. 19 and Table IV) and
+  # van Veldhuizen et al. (1999, Table 2): the rate is inversely proportional to
+  # the stored fraction f_PP = XPP/XPAO, hence the [XPAO] / [XPP] factor. For the
+  # rate to come out in g P/m3/d, matching the stoichiometry (XPP +1), qPP
+  # carries (g_P/g_COD)^2/d. The literature quotes it in g P/(g COD d), treating
+  # f_PP as a pure ratio; the value is the same.
   - name: Anoxic_storage_of_XPP
     description: "Anoxic storage of XPP"
     rate: "qPP * etaNO_PAO * [XPAO] / [XPP] * Monod_KO_PAO * Monod_SNO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
