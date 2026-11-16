@@ -407,6 +407,12 @@ def test_influent_converts_amounts_and_times(asm1, tmp_path):
     assert _single_tank(asm1, series).check_units().ok
 
 
+def test_influent_celsius_declaration_without_temperature_data(asm1):
+    # A temperature-agnostic feed may still declare T; it records Kelvin.
+    feed = asm1.influent({"SS": 60.0}, Q=1.0, units={"T": "degC"})
+    assert feed.T is None and feed.units == {"T": "K"}
+
+
 @pytest.mark.parametrize(
     "units, fragment",
     [

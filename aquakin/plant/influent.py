@@ -198,9 +198,9 @@ class InfluentSeries:
                     self.T = self.T + 273.15
                 units["T"] = "K"
             else:
-                factor = self._factor(units, "T", "K")
-                if factor is not None and factor != 1.0 and self.T is not None:
-                    self.T = self.T * factor
+                # Kelvin is the only other temperature unit that parses, so this
+                # validates and records the unit; there is no scale to apply.
+                self._factor(units, "T", "K")
         scale = np.ones(self.model.n_species)
         for species in self.model.species:
             factor = self._factor(units, species, self.model.species_units.get(species, ""))
