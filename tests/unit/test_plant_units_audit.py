@@ -459,3 +459,15 @@ reactions:
     report = _single_tank(net, net.influent(Q=1.0)).check_units()
     assert report.ok and report.time_unit is None
     assert any("time unit cannot be inferred" in w.detail for w in report.warnings)
+
+
+def test_check_raises_for_unfed_ports_before_unit_errors(asm1):
+    # An unfed port is reported first: the wiring error, a plain ValueError,
+    # comes before any unit error.
+    plant = Plant("unfed")
+    plant.add_unit(_cstr("tank", asm1))
+    chk = plant.check()
+    assert chk.unfed_ports == ["tank.inlet"] and not chk.ok
+    with pytest.raises(ValueError, match="unfed input ports") as excinfo:
+        plant.check(raise_on_error=True)
+    assert not isinstance(excinfo.value, UnitsError)
