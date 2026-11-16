@@ -4,7 +4,7 @@ model:
   description: >
     Imported from ASM2D.xlsm
   references:
-    - ""
+    - "Henze, Gujer, Mino, Matsuo, Wentzel, Marais & van Loosdrecht (1999). Activated Sludge Model No. 2d, ASM2d. Water Sci. Technol. 39(1), 165-182. doi:10.1016/S0273-1223(98)00829-4"
 
 species:
   - {name: SO2, default_concentration: 1.0, units: "g_O2/m3", description: "Dissolved oxygen (O2)"}
@@ -80,7 +80,7 @@ parameters:
   YAUT: {value: 0.24, transform: positive_log, bounds: [0.0024, 24.0], units: "g_COD/g_N"}
   YH: {value: 0.625, transform: positive_log, bounds: [0.00625, 62.5], units: "g_COD/g_COD"}
   YPAO: {value: 0.625, transform: positive_log, bounds: [0.00625, 62.5], units: "g_COD/g_COD"}
-  YPHA: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_COD/g_COD"}
+  YPHA: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_COD/g_P"}
   YPO4: {value: 0.4, transform: positive_log, bounds: [0.004, 40.0], units: "g_P/g_COD"}
   bAUT: {value: 0.15, transform: positive_log, bounds: [0.0015, 15.0], units: "1/d"}
   bH: {value: 0.4, transform: positive_log, bounds: [0.004, 40.0], units: "1/d"}
@@ -96,12 +96,12 @@ parameters:
   fSI: {value: 0.0, transform: none, bounds: [0.0, 1e-09], units: "-"}
   fXI: {value: 0.1, transform: positive_log, bounds: [0.001, 10.0], units: "-"}
   iCOD_NO3: {value: -4.571428571428571, transform: none, bounds: [-9.142857142857142, 1e-09], units: "g_COD/g_N"}
-  iCharge_SNHx: {value: 7.14285714285714e-05, transform: positive_log, bounds: [7.142857142857139e-07, 0.007142857142857139], units: "mol/g_N"}
-  iCharge_SNOx: {value: -7.14285714285714e-05, transform: none, bounds: [-0.0001428571428571428, 1e-09], units: "mol/g_N"}
-  iCharge_SPO4: {value: -4.83870967741935e-05, transform: none, bounds: [-9.6774193548387e-05, 1e-09], units: "mol/g_P"}
-  iCharge_SVFA: {value: -1.5625e-05, transform: none, bounds: [-3.125e-05, 1e-09], units: "mol/g_COD"}
-  iCharge_XPAO_PP: {value: -3.2258064516129e-05, transform: none, bounds: [-6.4516129032258e-05, 1e-09], units: "mol/g_P"}
-  iNO3_N2: {value: 2.857142857142857, transform: positive_log, bounds: [0.02857142857142857, 285.7142857142857], units: "-"}
+  iCharge_SNHx: {value: 7.14285714285714e-05, transform: positive_log, bounds: [7.142857142857139e-07, 0.007142857142857139], units: "kmol/g_N"}
+  iCharge_SNOx: {value: -7.14285714285714e-05, transform: none, bounds: [-0.0001428571428571428, 1e-09], units: "kmol/g_N"}
+  iCharge_SPO4: {value: -4.83870967741935e-05, transform: none, bounds: [-9.6774193548387e-05, 1e-09], units: "kmol/g_P"}
+  iCharge_SVFA: {value: -1.5625e-05, transform: none, bounds: [-3.125e-05, 1e-09], units: "kmol/g_COD"}
+  iCharge_XPAO_PP: {value: -3.2258064516129e-05, transform: none, bounds: [-6.4516129032258e-05, 1e-09], units: "kmol/g_P"}
+  iNO3_N2: {value: 2.857142857142857, transform: positive_log, bounds: [0.02857142857142857, 285.7142857142857], units: "g_COD/g_N"}
   iN_BM: {value: 0.07, transform: positive_log, bounds: [0.0007000000000000001, 7.000000000000001], units: "g_N/g_COD"}
   iN_SF: {value: 0.03, transform: positive_log, bounds: [0.0003, 3.0], units: "g_N/g_COD"}
   iN_SI: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "g_N/g_COD"}
@@ -115,15 +115,15 @@ parameters:
   iTSS_BM: {value: 0.9, transform: positive_log, bounds: [0.009000000000000001, 90.0], units: "g_TSS/g_COD"}
   iTSS_XI: {value: 0.75, transform: positive_log, bounds: [0.0075, 75.0], units: "g_TSS/g_COD"}
   iTSS_XPHA: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "g_TSS/g_COD"}
-  iTSS_XPP: {value: 3.23, transform: positive_log, bounds: [0.0323, 323.0], units: "g_TSS/g_COD"}
+  iTSS_XPP: {value: 3.23, transform: positive_log, bounds: [0.0323, 323.0], units: "g_TSS/g_P"}
   iTSS_XS: {value: 0.75, transform: positive_log, bounds: [0.0075, 75.0], units: "g_TSS/g_COD"}
   kPRE: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "m3/(g_TSS*d)"}
-  kRED: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "1/d"}
+  kRED: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "g_P/(g_TSS*d)"}
   muAUT: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "1/d"}
   muH: {value: 6.0, transform: positive_log, bounds: [0.06, 600.0], units: "1/d"}
   muPAO: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "1/d"}
   qPHA: {value: 3.0, transform: positive_log, bounds: [0.03, 300.0], units: "1/d"}
-  qPP: {value: 1.5, transform: positive_log, bounds: [0.015, 150.0], units: "1/d"}
+  qPP: {value: 1.5, transform: positive_log, bounds: [0.015, 150.0], units: "g_P/(g_COD*d)"}
   qfe: {value: 3.0, transform: positive_log, bounds: [0.03, 300.0], units: "1/d"}
 
 expressions:
@@ -397,6 +397,9 @@ reactions:
       XMeOH: "fMeOH_PO4_MW"
       XMeP: "fMeP_PO4_MW"
 
+  # Units: each unit of rate releases 1 g P (SPO4 +1), so the rate is in
+  # g P/m3/d and kRED, which multiplies XMeP in g TSS/m3, carries g P/(g TSS d).
+  # ASM2d quotes kRED as 0.6 1/d; the value is the same.
   - name: Redissolution
     description: "Redissolution of metal phosphate"
     rate: "kRED * [XMeP] * Monod_SALK_PRE"

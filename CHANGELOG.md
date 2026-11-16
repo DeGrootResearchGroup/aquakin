@@ -119,7 +119,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   out; `check_units(include_acknowledged=True)` still shows them.
 - `aquakin.units_match(a, b)` compares two unit strings with scale included,
   and `aquakin.conversion_factor(a, b)` gives the factor between them.
-
+- `model.check_units()` also checks each rate against the species whose
+  stoichiometric coefficient is a fixed +1 or -1: such a species changes by
+  exactly the rate, so the rate must be in its concentration per time. This
+  catches a rate constant declared in the wrong units, such as a specific
+  phosphorus uptake rate written as 1/d where the stoichiometry is per g P.
+  Turn it off with `check_units(check_stoichiometry=False)`.
 
 ### Changed
 
@@ -208,6 +213,22 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `MBRUnit` and `SBRUnit`.
 
 ### Fixed
+
+- `build_bsm1` no longer counts non-COD particulates as suspended solids for a
+  model without a composition table. `solids_species` now reads the declared
+  units: only particulates in a COD mass per volume count towards TSS, so the
+  metal precipitates (mol/m3), stored polyphosphate (g P/m3) and the lumped
+  `XTSS` state of `asm2d_chemp` no longer inflate the settler's solids (#672).
+- Unit labels of several SUMO-derived ASM models now match their stoichiometry
+  and source parameter tables. Values are unchanged:
+  - `asm2d`: `qPP` in g P/(g COD·d), `YPHA` in g COD/g P, `kRED` in
+    g P/(g TSS·d), `iTSS_XPP` in g TSS/g P, `iNO3_N2` in g COD/g N and the
+    `iCharge_*` factors in kmol per gram. These carry over to `asm2d_chemp`.
+  - `asm3_biop`: the same corrections to `qPP`, `YPHA`, `iTSS_XPP`, `iNO3_N2`
+    and `iCharge_*`.
+  - `asm3`: `iNO3_N2` and the `iCharge_*` factors.
+  - `asm3_2step_n2o`: the AOB enzyme rates `q_AOB_AMO`, `q_AOB_HAO`,
+    `q_AOB_N2O_NN` and `q_AOB_N2O_ND` in g N/(g COD·d).
 
 - `asm2d_tud` declares the units its parameters actually have rather than 1/d
   or mol: `mAN` in g P/(g COD·d); `qPP` in (g P/g COD)²/d, since the poly-P

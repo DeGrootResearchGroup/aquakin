@@ -889,7 +889,13 @@ class CompiledModel:
 
         return introspect.model_to_latex(self)
 
-    def check_units(self, *, check_root: bool = True, include_acknowledged: bool = False) -> list:
+    def check_units(
+        self,
+        *,
+        check_root: bool = True,
+        check_stoichiometry: bool = True,
+        include_acknowledged: bool = False,
+    ) -> list:
         """Check the rate expressions for dimensional ("unit") consistency.
 
         A currency-aware dimensional analysis of every ``rate:`` expression: it
@@ -901,9 +907,10 @@ class CompiledModel:
 
         The check is **advisory**: a blank or unparseable unit is treated as
         unknown and skipped, so an empty result is "no inconsistency among the
-        declared, parseable units", not a proof of correctness. Stoichiometry
-        (a conservation question) is out of scope -- use
-        :func:`aquakin.check_conservation` for that.
+        declared, parseable units", not a proof of correctness. Of the
+        stoichiometry, only the species with a ``+1`` or ``-1`` coefficient are
+        checked (against the rate); the balance of the full stoichiometry is a
+        conservation question -- use :func:`aquakin.check_conservation` for that.
 
         Parameters
         ----------
@@ -911,6 +918,11 @@ class CompiledModel:
             Also assert each rate resolves to ``currency / volume / time`` (e.g.
             ``g_COD/m3/d`` or ``mol/L/s``). Set ``False`` to run only the local
             operand- and Monod-consistency rules.
+        check_stoichiometry : bool, default True
+            Also check each rate against the species whose stoichiometric
+            coefficient is a fixed ``+1`` or ``-1``. Such a species changes by
+            exactly the rate, so the rate must be in its concentration per time;
+            a reaction is flagged only when the rate matches none of them.
         include_acknowledged : bool, default False
             Also return the findings of reactions whose YAML declares a
             ``units_acknowledged:`` reason (listed in
@@ -931,7 +943,10 @@ class CompiledModel:
         from aquakin.core import introspect
 
         return introspect.check_units(
-            self, check_root=check_root, include_acknowledged=include_acknowledged
+            self,
+            check_root=check_root,
+            check_stoichiometry=check_stoichiometry,
+            include_acknowledged=include_acknowledged,
         )
 
     def composition(

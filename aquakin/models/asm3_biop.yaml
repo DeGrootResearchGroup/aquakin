@@ -59,7 +59,7 @@ parameters:
   YH_O2: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "g_COD/g_COD"}
   YPAO_NO: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "g_COD/g_COD"}
   YPAO_O2: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "g_COD/g_COD"}
-  YPHA: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_COD/g_COD"}
+  YPHA: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "g_COD/g_P"}
   YPO4: {value: 0.35, transform: positive_log, bounds: [0.0034999999999999996, 35.0], units: "g_P/g_COD"}
   YSTO_NO: {value: 0.7, transform: positive_log, bounds: [0.006999999999999999, 70.0], units: "g_COD/g_COD"}
   YSTO_O2: {value: 0.8, transform: positive_log, bounds: [0.008, 80.0], units: "g_COD/g_COD"}
@@ -79,11 +79,11 @@ parameters:
   fSI: {value: 0.0, transform: none, bounds: [0.0, 1e-09], units: "-"}
   fXI: {value: 0.2, transform: positive_log, bounds: [0.002, 20.0], units: "-"}
   iCOD_NO3: {value: -4.57142857142857, transform: none, bounds: [-9.14285714285714, 1e-09], units: "g_COD/g_N"}
-  iCharge_SNHx: {value: 7.14285714285714e-05, transform: positive_log, bounds: [7.142857142857139e-07, 0.007142857142857139], units: "mol/g_N"}
-  iCharge_SNOx: {value: -7.14285714285714e-05, transform: none, bounds: [-0.0001428571428571428, 1e-09], units: "mol/g_N"}
-  iCharge_SPO4: {value: -4.83870967741935e-05, transform: none, bounds: [-9.6774193548387e-05, 1e-09], units: "mol/g_P"}
-  iCharge_XPAO_PP: {value: -3.2258064516129e-05, transform: none, bounds: [-6.4516129032258e-05, 1e-09], units: "mol/g_P"}
-  iNO3_N2: {value: 2.857142857142857, transform: positive_log, bounds: [0.02857142857142857, 285.7142857142857], units: "-"}
+  iCharge_SNHx: {value: 7.14285714285714e-05, transform: positive_log, bounds: [7.142857142857139e-07, 0.007142857142857139], units: "kmol/g_N"}
+  iCharge_SNOx: {value: -7.14285714285714e-05, transform: none, bounds: [-0.0001428571428571428, 1e-09], units: "kmol/g_N"}
+  iCharge_SPO4: {value: -4.83870967741935e-05, transform: none, bounds: [-9.6774193548387e-05, 1e-09], units: "kmol/g_P"}
+  iCharge_XPAO_PP: {value: -3.2258064516129e-05, transform: none, bounds: [-6.4516129032258e-05, 1e-09], units: "kmol/g_P"}
+  iNO3_N2: {value: 2.857142857142857, transform: positive_log, bounds: [0.02857142857142857, 285.7142857142857], units: "g_COD/g_N"}
   iN_BM: {value: 0.07, transform: positive_log, bounds: [0.0007000000000000001, 7.000000000000001], units: "g_N/g_COD"}
   iN_SI: {value: 0.01, transform: positive_log, bounds: [0.0001, 1.0], units: "g_N/g_COD"}
   iN_SS: {value: 0.03, transform: positive_log, bounds: [0.0003, 3.0], units: "g_N/g_COD"}
@@ -96,7 +96,7 @@ parameters:
   iP_XS: {value: 0.005, transform: positive_log, bounds: [5e-05, 0.5], units: "g_P/g_COD"}
   iTSS_BM: {value: 0.9, transform: positive_log, bounds: [0.009000000000000001, 90.0], units: "g_TSS/g_COD"}
   iTSS_XI: {value: 0.75, transform: positive_log, bounds: [0.0075, 75.0], units: "g_TSS/g_COD"}
-  iTSS_XPP: {value: 3.23, transform: positive_log, bounds: [0.0323, 323.0], units: "g_TSS/g_COD"}
+  iTSS_XPP: {value: 3.23, transform: positive_log, bounds: [0.0323, 323.0], units: "g_TSS/g_P"}
   iTSS_XS: {value: 0.75, transform: positive_log, bounds: [0.0075, 75.0], units: "g_TSS/g_COD"}
   iTSS_XSTO: {value: 0.6, transform: positive_log, bounds: [0.006, 60.0], units: "g_TSS/g_COD"}
   kH: {value: 9.0, transform: positive_log, bounds: [0.09, 900.0], units: "1/d"}
@@ -105,7 +105,7 @@ parameters:
   muH: {value: 3.0, transform: positive_log, bounds: [0.03, 300.0], units: "1/d"}
   muPAO: {value: 1.0, transform: positive_log, bounds: [0.01, 100.0], units: "1/d"}
   qPHA: {value: 6.0, transform: positive_log, bounds: [0.06, 600.0], units: "1/d"}
-  qPP: {value: 1.5, transform: positive_log, bounds: [0.015, 150.0], units: "1/d"}
+  qPP: {value: 1.5, transform: positive_log, bounds: [0.015, 150.0], units: "g_P/(g_COD*d)"}
 
 expressions:
   Monod_XS_over_XH: "monod_ratio([XS], [XH], KX)"

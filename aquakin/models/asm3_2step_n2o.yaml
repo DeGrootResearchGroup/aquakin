@@ -52,10 +52,10 @@ parameters:
   # rates derive from the growth rate / yield; the N2O rates from HAO x reduction
   # factor. AMO and HAO carry the source growth-rate temperature dependency
   # (theta = exp(0.094) = 1.0986), ref 20 deg C.
-  q_AOB_AMO:     {value: 5.20, units: "1/d", bounds: [0.5, 50.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
-  q_AOB_HAO:     {value: 5.20, units: "1/d", bounds: [0.5, 50.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
-  q_AOB_N2O_NN:  {value: 0.0078, units: "1/d", bounds: [1.0e-4, 1.0], transform: positive_log}
-  q_AOB_N2O_ND:  {value: 1.30, units: "1/d", bounds: [0.05, 20.0], transform: positive_log}
+  q_AOB_AMO:     {value: 5.20, units: "g_N/(g_COD*d)", bounds: [0.5, 50.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
+  q_AOB_HAO:     {value: 5.20, units: "g_N/(g_COD*d)", bounds: [0.5, 50.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
+  q_AOB_N2O_NN:  {value: 0.0078, units: "g_N/(g_COD*d)", bounds: [1.0e-4, 1.0], transform: positive_log}
+  q_AOB_N2O_ND:  {value: 1.30, units: "g_N/(g_COD*d)", bounds: [0.05, 20.0], transform: positive_log}
   # Affinity / inhibition constants (mg/L unless noted).
   K_O2_AOB_1:   {value: 1.0,    units: "g_O2/m3", bounds: [0.05, 10.0],  transform: positive_log}
   K_O2_AOB_2:   {value: 0.6,    units: "g_O2/m3", bounds: [0.05, 10.0],  transform: positive_log}

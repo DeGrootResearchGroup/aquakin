@@ -759,8 +759,58 @@ def check_rate_units(
     return ctx.warnings
 
 
+def _same_quantity(a: Dimension, b: Dimension) -> bool:
+    """Whether two dimensions are the same unit, scale included, comparing the
+    chemical currencies only when both state one (as :func:`units_match`)."""
+    if not (_has_currency(a) and _has_currency(b)):
+        a, b = _drop_currency(a), _drop_currency(b)
+    (base_a, fa), (base_b, fb) = _to_base_units(a), _to_base_units(b)
+    return base_a == base_b and abs(fa - fb) <= 1e-9 * max(abs(fa), abs(fb))
+
+
+def _unit_stoichiometry_species(model) -> dict:
+    """``{reaction index: [species name, ...]}`` of the species whose
+    stoichiometric coefficient is a fixed ``+1`` or ``-1``."""
+    import numpy as np
+
+    stoich = np.asarray(model.stoich_matrix)
+    dynamic = {(i, j) for i, j, _ in getattr(model, "stoich_dynamic", [])}
+    out: dict = {}
+    for i, j in zip(*np.nonzero(np.isclose(np.abs(stoich), 1.0, rtol=0.0, atol=1e-12))):
+        if (int(i), int(j)) not in dynamic:
+            out.setdefault(int(i), []).append(model.species[int(j)])
+    return out
+
+
+def _stoichiometry_issue(root: Dimension, species: list, species_dim: dict) -> str | None:
+    """Compare a rate's concentration unit with its unit-coefficient species.
+
+    A species whose coefficient is ``+1`` or ``-1`` changes by exactly the rate,
+    so the rate must be in that species' concentration per time. A reaction may
+    have several such species in different currencies (one is enough to fix the
+    rate's unit), so this reports only when the rate matches none of them.
+    Returns a message, or ``None`` when consistent or not determinable.
+    """
+    time = [k for k, v in root.as_dict().items() if k in _TIME_TOKENS and v == -1]
+    if len(time) != 1:
+        return None
+    conc = root * Dimension({time[0]: 1})
+    known = [(sp, species_dim[sp]) for sp in species if species_dim.get(sp) is not None]
+    if not known or any(_same_quantity(conc, dim) for _, dim in known):
+        return None
+    listing = ", ".join(f"'{sp}' in {dim}" for sp, dim in known)
+    return (
+        f"the rate is in {conc} per {time[0]}, but each species with a +/-1 "
+        f"coefficient changes by exactly the rate and none is in {conc} ({listing})"
+    )
+
+
 def check_model_units(
-    model, *, check_root: bool = True, include_acknowledged: bool = False
+    model,
+    *,
+    check_root: bool = True,
+    check_stoichiometry: bool = True,
+    include_acknowledged: bool = False,
 ) -> list:
     """Run :func:`check_rate_units` over every reaction in a compiled model.
 
@@ -770,6 +820,13 @@ def check_model_units(
         The compiled model to check.
     check_root : bool, default True
         Whether to also assert each rate resolves to ``currency/volume/time``.
+    check_stoichiometry : bool, default True
+        Whether to also check each rate against the species whose
+        stoichiometric coefficient is a fixed ``+1`` or ``-1``: such a species
+        changes by exactly the rate, so the rate must be in its concentration
+        per time. A reaction is flagged only when its rate matches none of them.
+        Other coefficients are not checked (yields and conversion factors
+        legitimately carry cross-currency units).
     include_acknowledged : bool, default False
         Also return the findings of reactions whose YAML declares
         ``units_acknowledged:`` (a written reason the reaction's units are
@@ -790,7 +847,8 @@ def check_model_units(
     condition_dim = {name: parse_units(u) for name, u in model.condition_units.items()}
     warnings: list = []
     inv_time: dict = {}
-    for name, ast in zip(model.reaction_names, model.rate_asts):
+    unit_species = _unit_stoichiometry_species(model) if check_stoichiometry else {}
+    for i, (name, ast) in enumerate(zip(model.reaction_names, model.rate_asts)):
         warnings.extend(
             check_rate_units(
                 ast,
@@ -808,6 +866,10 @@ def check_model_units(
             inv = [k for k, v in root.as_dict().items() if k in _TIME_TOKENS and v < 0]
             if len(inv) == 1:
                 inv_time[name] = inv[0]
+            if i in unit_species:
+                issue = _stoichiometry_issue(root, unit_species[i], species_dim)
+                if issue is not None:
+                    warnings.append(UnitWarning(name, "stoichiometry", issue))
 
     # Cross-reaction time-unit consistency. Every rate constant drives dC/dt
     # against the *same* integration time, so all rates must share one
