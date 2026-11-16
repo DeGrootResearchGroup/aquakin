@@ -770,15 +770,18 @@ def _same_quantity(a: Dimension, b: Dimension) -> bool:
 
 def _unit_stoichiometry_species(model) -> dict:
     """``{reaction index: [species name, ...]}`` of the species whose
-    stoichiometric coefficient is a fixed ``+1`` or ``-1``."""
+    stoichiometric coefficient is a fixed ``+1`` or ``-1``.
+
+    Read from the static stoichiometry matrix, which holds the numeric
+    coefficients only: a coefficient written as an expression is a zero
+    placeholder there (it is evaluated per solve), so it never counts.
+    """
     import numpy as np
 
     stoich = np.asarray(model.stoich_matrix)
-    dynamic = {(i, j) for i, j, _ in getattr(model, "stoich_dynamic", [])}
     out: dict = {}
     for i, j in zip(*np.nonzero(np.isclose(np.abs(stoich), 1.0, rtol=0.0, atol=1e-12))):
-        if (int(i), int(j)) not in dynamic:
-            out.setdefault(int(i), []).append(model.species[int(j)])
+        out.setdefault(int(i), []).append(model.species[int(j)])
     return out
 
 

@@ -481,6 +481,14 @@ def test_rate_must_match_a_unit_coefficient_species(tmp_path):
     assert _stoich_model(tmp_path, "g_P/(g_COD*d)").check_units() == []
 
 
+def test_stoichiometry_check_skips_a_rate_without_a_time_unit(tmp_path):
+    # With k dimensionless the rate has no time unit; the root check reports
+    # that, and the stoichiometry check has nothing to compare, so it is silent.
+    ws = _stoich_model(tmp_path, "-").check_units()
+    assert any(w.location == "rate root" for w in ws)
+    assert not any(w.location == "stoichiometry" for w in ws)
+
+
 def test_stoichiometry_check_ignores_expression_coefficients(tmp_path):
     # A coefficient written as an expression is not a fixed +/-1, even when it
     # evaluates to 1, so only P anchors the rate here; P still disagrees.
