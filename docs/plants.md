@@ -226,17 +226,6 @@ It checks that:
   default (BSM) settling parameters are in m/d and per `g/m3` of solids, so
   with those it needs days and TSS species in `g/m3`. Settling parameters you
   supply are taken to be in your plant's units;
-- an influent's declared units match the plant. Declare them with
-  `units=` on `model.influent(...)`, `InfluentSeries` or `read_influent_csv`:
-
-  ```python
-  feed = model.influent({"SS": 60.0}, Q=760.0,
-                        units={"Q": "m3/h", "SS": "mg/L"})
-  ```
-
-  This feed is flagged, because a plant in days expects `Q` in `m3/d`. Nothing
-  is converted; the declaration only lets the plant check your data. The BSM
-  influent loaders declare their units for you;
 - each model passes its own `model.check_units()`; its findings are listed as
   warnings.
 
@@ -244,6 +233,25 @@ Comparisons account for scale (`mg/L` matches `g/m3`; `kg/m3` does not), and a
 unit that is not declared is not checked. `plant.check()` includes the report,
 and `plant.connect` also rejects a translator built for models other than the
 ones it connects.
+
+Influent data in other units are converted rather than checked. Declare the
+units with `units=` on `model.influent(...)`, `InfluentSeries` or
+`read_influent_csv`:
+
+```python
+feed = model.influent({"SS": 0.06}, Q=760.0, T=15.0,
+                      units={"Q": "m3/h", "T": "degC", "SS": "kgCOD/m3"})
+```
+
+For a model whose rate constants are per day this feed becomes `Q = 18240`
+m3/d, `T = 288.15` K and `SS = 60` g COD/m3. Time goes to the model's time
+unit, flow to m3 per that unit, temperature to Kelvin, and each species to the
+unit the model declares for it; `feed.units` then lists the converted units.
+Only the scale changes, so a unit that measures something else (an amount in
+moles where the model has a mass, or g COD where it has g N) raises, as does a
+unit that cannot be read. Where the model leaves a unit undeclared there is
+nothing to convert to, and the data are used as given. The BSM influent loaders
+declare their units for you.
 
 The ASM1 ↔ ADM1 translators (`ASM1toADM1`, `ADM1toASM1`) convert units
 themselves: they read the species units the two models they are built with

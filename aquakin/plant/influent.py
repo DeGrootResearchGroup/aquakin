@@ -24,7 +24,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.plant.streams import Stream, make_scalars
-from aquakin.utils.units import CELSIUS_SPELLINGS, parse_units
+from aquakin.utils.units import CELSIUS_SPELLINGS, conversion_factor, parse_units
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -110,12 +110,18 @@ class InfluentSeries:
         which the plant propagates to temperature-dependent kinetics. ``None``
         (default) leaves the influent temperature-agnostic.
     units : dict[str, str], optional
-        The units the data are in, keyed by ``"t"``, ``"Q"``, ``"T"`` or a
-        species name, e.g. ``{"t": "d", "Q": "m3/d", "SNH": "g_N/m3"}``. Nothing
-        is converted: the declaration lets :meth:`Plant.check_units` confirm the
-        data match the plant (time unit, ``m3`` per time unit for ``Q``, Kelvin
-        for ``T``) and the model's species units. Any subset may be given;
-        undeclared entries are not checked. ``None`` (default) declares nothing.
+        The units the data are given in, keyed by ``"t"``, ``"Q"``, ``"T"`` or a
+        species name, e.g. ``{"t": "h", "Q": "m3/h", "T": "degC", "SNH":
+        "mg/L"}``. The data are converted on construction to the units the plant
+        works in: ``t`` to the model's time unit, ``Q`` to m3 per that unit,
+        ``T`` to Kelvin (``degC`` is offset by 273.15), and each species to the
+        model's declared unit. Only the scale changes; a unit measuring another
+        quantity (moles where the model has grams, or another chemical currency)
+        raises. Afterwards ``units`` holds the converted units (an entry whose
+        model unit is blank or cannot be read keeps its declared unit, and its
+        data are left as given). Any subset may be given; undeclared data are
+        taken to be in the model's units already.
+        ``None`` (default) declares nothing.
     """
 
     t: jnp.ndarray
@@ -149,9 +155,9 @@ class InfluentSeries:
             bad = sorted(k for k, v in self.units.items() if not isinstance(v, str))
             if bad:
                 raise ValueError(f"units values must be strings; got non-strings for {bad}.")
-            # A declared unit must be readable, or it could not be checked. A
-            # Celsius temperature is let through so the plant audit can say to
-            # convert it to Kelvin.
+            # A declared unit must be readable, or it could not be converted. A
+            # Celsius temperature is recognized by name (``C`` alone parses as
+            # the carbon currency).
             unreadable = sorted(
                 k
                 for k, v in self.units.items()
@@ -164,6 +170,63 @@ class InfluentSeries:
                     + ", ".join(f"{k}={self.units[k]!r}" for k in unreadable)
                     + ". Use e.g. 'd', 'm3/d', 'K', 'g_N/m3' or 'mg/L'."
                 )
+            self._convert_to_model_units()
+
+    def _convert_to_model_units(self) -> None:
+        """Convert the declared data to the units the plant works in.
+
+        ``t`` goes to the model's time unit, ``Q`` to m3 per that unit, ``T`` to
+        Kelvin, and each species to the unit the model declares for it. Only
+        the scale changes (a Celsius ``T`` is also offset): a declared unit that
+        measures a different quantity -- a mass where the model has moles, or
+        g NH4 where it has g N -- raises, since converting it would need a molar
+        mass. Where the model's own unit is unknown (a blank or unreadable
+        species unit, or no inferable time unit) there is nothing to convert to,
+        and that entry is kept as declared. ``units`` then records the units the
+        data are in. A factor of exactly 1 leaves the data untouched.
+        """
+        units = dict(self.units)
+        time_unit = self.model.time_unit
+        if time_unit is not None:
+            for key, target in (("t", time_unit), ("Q", f"m3/{time_unit}")):
+                factor = self._factor(units, key, target)
+                if factor is not None and factor != 1.0:
+                    setattr(self, key, getattr(self, key) * factor)
+        if "T" in units:
+            if units["T"].strip().lower() in CELSIUS_SPELLINGS:
+                if self.T is not None:
+                    self.T = self.T + 273.15
+                units["T"] = "K"
+            else:
+                factor = self._factor(units, "T", "K")
+                if factor is not None and factor != 1.0 and self.T is not None:
+                    self.T = self.T * factor
+        scale = np.ones(self.model.n_species)
+        for species in self.model.species:
+            factor = self._factor(units, species, self.model.species_units.get(species, ""))
+            if factor is not None:
+                scale[self.model.species_index[species]] = factor
+        if np.any(scale != 1.0):
+            self.C = self.C * jnp.asarray(scale)[None, :]
+        self.units = units
+
+    def _factor(self, units: dict, key: str, target: str) -> float | None:
+        """Factor from the declared unit of ``key`` to ``target``, recording
+        ``target`` in ``units``; ``None`` when nothing is declared or ``target``
+        is unknown."""
+        unit = units.get(key)
+        if unit is None:
+            return None
+        try:
+            factor = conversion_factor(unit, target)
+        except ValueError as exc:
+            raise ValueError(
+                f"units declares '{key}' in '{unit}', which cannot be converted to "
+                f"'{target}' as model '{self.model.name}' requires: {exc}"
+            ) from None
+        if factor is not None:
+            units[key] = target
+        return factor
 
     @classmethod
     def constant(
@@ -190,8 +253,8 @@ class InfluentSeries:
         T : float, optional
             Constant feed temperature (Kelvin); ``None`` leaves it agnostic.
         units : dict[str, str], optional
-            Declared units of the feed (see :class:`InfluentSeries`), checked by
-            :meth:`Plant.check_units`.
+            The units ``Q``, ``T`` and the concentrations are given in, converted
+            to the model's units on construction (see :class:`InfluentSeries`).
         **species : float
             Convenience overrides for identifier-safe species names.
 
@@ -270,8 +333,8 @@ def read_influent_csv(
         work).
     units : dict[str, str], optional
         The units the file's data are in, keyed by ``"t"``, ``"Q"``, ``"T"`` or a
-        species name (see :class:`InfluentSeries`). Nothing is converted; the
-        declaration is checked by :meth:`Plant.check_units`.
+        species name. The data are converted to the model's units on
+        construction (see :class:`InfluentSeries`).
 
     Returns
     -------

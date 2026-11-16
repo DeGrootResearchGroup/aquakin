@@ -2,12 +2,13 @@
 
 A plant integrates every unit against **one clock** and passes streams between
 units **without converting anything**, so a unit mismatch anywhere is silent: a
-model whose rate constants are per second next to one per day, an influent file
-in ``m3/h``, or a settler whose ``g/m3`` settling parameters are fed ``kg/m3``
+model whose rate constants are per second next to one per day, or a settler whose ``g/m3`` settling parameters are fed ``kg/m3``
 solids all produce a plausible-looking but wrong solution. (The ASM1 <-> ADM1
 translators are not audited here: they convert their models' declared units
 themselves, and ``Plant.connect`` rejects a translator built for models whose
-units differ from the endpoints'.)
+units differ from the endpoints'. Influents are not audited either: an
+influent's declared ``units`` are converted to its model's units when the
+:class:`~aquakin.plant.influent.InfluentSeries` is built.)
 
 :func:`check_plant_units` (bound as :meth:`Plant.check_units`) audits the units
 the plant's parts declare, before any solve:
@@ -18,9 +19,6 @@ the plant's parts declare, before any solve:
 - **unit operations** -- a species whose concentration basis a unit's constants
   fix (e.g. a settler's ``g/m3`` settling parameters) must be declared in that
   basis by the unit's model;
-- **influents** -- an influent's declared ``units`` (``InfluentSeries.units``)
-  must match the plant's time unit, a flow in ``m3`` per that time unit, Kelvin
-  temperature, and the model's species units;
 - **models** -- each model's own rate-expression check
   (:meth:`CompiledModel.check_units`), reported as warnings.
 
@@ -37,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from aquakin.plant.units import AssumedUnits
-from aquakin.utils.units import CELSIUS_SPELLINGS, units_match
+from aquakin.utils.units import units_match
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
@@ -195,53 +193,6 @@ def _unit_species_issues(plant: Plant) -> list:
     return issues
 
 
-def _influent_issues(plant: Plant, plant_time: str | None) -> list:
-    issues = []
-    for name, series in plant.influents.items():
-        declared = series.units or {}
-        where = f"influent '{name}'"
-
-        def expect(key, expected, what, declared=declared, where=where):
-            unit = declared.get(key)
-            if unit is None or expected is None:
-                return
-            if units_match(unit, expected) is False:
-                issues.append(
-                    PlantUnitIssue(
-                        "error", where, f"declares {what} in '{unit}', expected '{expected}'."
-                    )
-                )
-
-        expect("t", plant_time, "time 't'")
-        expect("Q", None if plant_time is None else f"m3/{plant_time}", "flow 'Q'")
-        t_unit = declared.get("T")
-        if t_unit is not None and t_unit.strip().lower() in CELSIUS_SPELLINGS:
-            issues.append(
-                PlantUnitIssue(
-                    "error",
-                    where,
-                    f"declares temperature 'T' in '{t_unit}'; stream temperatures "
-                    f"are read in Kelvin, so convert it (add 273.15).",
-                )
-            )
-        else:
-            expect("T", "K", "temperature 'T'")
-        for species, unit in declared.items():
-            if species in ("t", "Q", "T"):
-                continue
-            model_unit = series.model.species_units.get(species)
-            if model_unit is not None and units_match(unit, model_unit) is False:
-                issues.append(
-                    PlantUnitIssue(
-                        "error",
-                        where,
-                        f"declares species '{species}' in '{unit}', but model "
-                        f"'{series.model.name}' declares it in '{model_unit}'.",
-                    )
-                )
-    return issues
-
-
 def _model_rate_warnings(plant: Plant) -> list:
     issues = []
     for net in plant._ordered_models():
@@ -277,7 +228,6 @@ def check_plant_units(plant: Plant, *, include_models: bool = True) -> PlantUnit
     issues = time_unit_errors(plant)
     issues += _model_time_warnings(model_units)
     issues += _unit_species_issues(plant)
-    issues += _influent_issues(plant, plant_time)
     if include_models:
         issues += _model_rate_warnings(plant)
     return PlantUnitsReport(time_unit=plant_time, issues=issues)

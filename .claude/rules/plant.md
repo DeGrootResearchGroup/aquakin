@@ -447,10 +447,8 @@ Key types:
     them — only *fixed* internal assumptions belong there (UV and primary
     clarifier: days; thickener: `g/m3` TSS species; Takács only while
     `settling_params` are the BSM defaults: days + `g/m3` for species with a
-    nonzero TSS factor), never a user-supplied number in any consistent unit; an
-    influent's declared `InfluentSeries.units` matches the
-    plant time unit, `m3` per time unit for `Q`, Kelvin `T` and the model's
-    species units (the BSM loaders declare theirs); each model's own
+    nonzero TSS factor), never a user-supplied number in any consistent unit;
+    each model's own
     `check_units()` is rolled up as warnings. All comparisons go through the
     scale-aware `aquakin.units_match` (`mg/L` = `g/m3` ≠ `kg/m3`; a currency is
     compared only when both sides state one). `plant.check()` carries the
@@ -476,9 +474,17 @@ Key types:
     from the models a translator was *built* with, `connect` also requires
     those models to declare the same units as the endpoints'
     (`_check_translator_endpoints`). A new translator should follow the same
-    pattern rather than hard-code a model's scale. Declared influent units must
-    be parseable (`InfluentSeries.__post_init__`; Celsius spellings,
-    `utils.units.CELSIUS_SPELLINGS`, pass so the audit can flag them).
+    pattern rather than hard-code a model's scale. **Influents convert too:**
+    `InfluentSeries.__post_init__` (`_convert_to_model_units`) converts declared
+    `units` to the model's — `t` to `model.time_unit`, `Q` to `m3/<time>`, `T`
+    to K (a `utils.units.CELSIUS_SPELLINGS` spelling is offset by 273.15), each
+    species to `model.species_units` — via `conversion_factor`, multiplying only
+    when a factor differs from 1 (so the BSM loaders, already in ASM1 units, stay
+    bit-identical). A different quantity or an unreadable unit raises; a target
+    the model leaves unknown (blank/unreadable species unit, no inferable time
+    unit) keeps the declared unit and the data unchanged. `units` afterwards
+    records the converted units, so `dataclasses.replace` is idempotent. The
+    audit therefore has no influent check.
   - **Operating temperature.** `plant.set_temperature(celsius)` sets the static
     `T` condition of every temperature-bearing reactor in one call (°C → K),
     leaving a heated fixed-`T` unit like the digester untouched; clears the

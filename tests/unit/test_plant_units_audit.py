@@ -8,6 +8,7 @@ integrated, so the tests stay in the fast tier.
 import dataclasses
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
@@ -15,7 +16,6 @@ from aquakin.plant import (
     ADM1toASM1,
     ASM1toADM1,
     CSTRUnit,
-    InfluentSeries,
     Plant,
     PlantUnitsReport,
     UnitsError,
@@ -108,9 +108,11 @@ reactions:
 
 
 def test_bsm_influent_loaders_declare_units(asm1):
+    # The files are already in ASM1's units, so the data are untouched and the
+    # recorded units are the model's.
     bsm1 = load_bsm1_influent("dry", asm1)
     assert bsm1.units["t"] == "d" and bsm1.units["Q"] == "m3/d"
-    assert bsm1.units["SNH"] == "g_N/m3"
+    assert bsm1.units["SNH"] == asm1.species_units["SNH"]
     bsm2 = load_bsm2_influent("dry", asm1)
     assert bsm2.units["T"] == "K"
 
@@ -203,7 +205,9 @@ def test_settler_with_own_parameters_assumes_nothing(asm1):
 
     defaults = Plant("hourly_defaults")
     defaults.add_unit(_cstr("tank", hourly))
-    defaults.add_unit(TakacsClarifier("settler", hourly, area=1500.0, height=4.0, underflow_Q=400.0))
+    defaults.add_unit(
+        TakacsClarifier("settler", hourly, area=1500.0, height=4.0, underflow_Q=400.0)
+    )
     defaults.connect("tank", "settler")
     with pytest.raises(UnitsError, match="assume time in 'd'"):
         defaults._build_state_layout()
@@ -246,7 +250,7 @@ def test_translators_convert_the_asm1_side_too(asm1, adm1):
     asm1_kg = _asm1_in_kilograms(asm1)
     to_adm = ASM1toADM1(asm1_kg, adm1)
     C_g = asm1.default_concentrations()
-    C_kg = C_g / to_adm._source_scale        # the same state, in kilograms
+    C_kg = C_g / to_adm._source_scale  # the same state, in kilograms
     assert jnp.allclose(
         to_adm.translate(C_kg, digester_pH=7.0),
         ASM1toADM1(asm1, adm1).translate(C_g, digester_pH=7.0),
@@ -283,7 +287,7 @@ def test_adm1_to_asm1_converts_from_the_source_models_units(asm1, adm1):
     adm1_g = _adm1_in_grams(adm1)
     tr_g = ADM1toASM1(adm1_g, asm1)
     C_kg = adm1.default_concentrations()
-    C_g = C_kg / tr_g._source_scale          # the same state, in grams
+    C_g = C_kg / tr_g._source_scale  # the same state, in grams
     expected = ADM1toASM1(adm1, asm1).translate(C_kg, digester_pH=7.0)
     got = tr_g.translate(C_g, digester_pH=7.0)
     assert jnp.allclose(got, expected, rtol=1e-12, atol=1e-12)
@@ -353,28 +357,93 @@ def _single_tank(asm1, influent):
     return plant
 
 
-def test_influent_declared_units_that_match_are_clean(asm1):
+def test_influent_in_model_units_is_untouched(asm1):
+    plain = asm1.influent({"SS": 60.0}, Q=18446.0, T=293.15)
     feed = asm1.influent(
         {"SS": 60.0}, Q=18446.0, T=293.15, units={"t": "d", "Q": "m3/d", "T": "K", "SS": "mg/L"}
     )
+    assert np.array_equal(feed.Q, plain.Q)
+    assert np.array_equal(feed.C, plain.C) and np.array_equal(feed.T, plain.T)
+    assert feed.units == {
+        "t": "d",
+        "Q": "m3/d",
+        "T": "K",
+        "SS": asm1.species_units["SS"],
+    }
     assert _single_tank(asm1, feed).check_units().ok
+
+
+def test_influent_converts_declared_units(asm1):
+    feed = asm1.influent(
+        {"SS": 0.06, "SNH": 2.0},
+        Q=1000.0,
+        T=20.0,
+        units={"Q": "m3/h", "T": "degC", "SS": "kgCOD/m3", "SNH": "mg/L"},
+    )
+    np.testing.assert_allclose(feed.Q, 24000.0)
+    np.testing.assert_allclose(feed.T, 293.15)
+    np.testing.assert_allclose(feed.C[:, asm1.species_index["SS"]], 60.0)
+    np.testing.assert_allclose(feed.C[:, asm1.species_index["SNH"]], 2.0)
+    assert feed.units["Q"] == "m3/d" and feed.units["T"] == "K"
+
+
+def test_influent_converts_amounts_and_times(asm1, tmp_path):
+    path = tmp_path / "feed.csv"
+    path.write_text("t,Q,SNH\n0,10,20\n24,10,30\n")
+    from aquakin.plant import read_influent_csv
+
+    series = read_influent_csv(
+        path,
+        asm1,
+        column_map={"t": "t", "Q": "Q", "SNH": "SNH"},
+        units={"t": "h", "Q": "L/s", "SNH": "kg_N/m3"},
+    )
+    np.testing.assert_allclose(series.t, [0.0, 1.0])
+    np.testing.assert_allclose(series.Q, 10 * 86.4)
+    np.testing.assert_allclose(series.C[:, asm1.species_index["SNH"]], [20000.0, 30000.0])
+    # Rebuilding a converted series changes nothing.
+    again = dataclasses.replace(series)
+    assert np.array_equal(again.Q, series.Q) and np.array_equal(again.C, series.C)
+    assert _single_tank(asm1, series).check_units().ok
 
 
 @pytest.mark.parametrize(
     "units, fragment",
     [
-        ({"Q": "m3/h"}, "flow 'Q' in 'm3/h'"),
-        ({"t": "h"}, "time 't' in 'h'"),
-        ({"T": "degC"}, "Kelvin"),
-        ({"T": "℃"}, "Kelvin"),
-        ({"SS": "kgCOD/m3"}, "species 'SS' in 'kgCOD/m3'"),
-        ({"SNH": "g_COD/m3"}, "species 'SNH'"),
+        ({"SNH": "mol/m3"}, "'SNH' in 'mol/m3'"),
+        ({"SNH": "g_COD/m3"}, "'SNH' in 'g_COD/m3'"),
+        ({"Q": "kg/d"}, "'Q' in 'kg/d'"),
+        ({"t": "m"}, "'t' in 'm'"),
+        ({"T": "kg"}, "'T' in 'kg'"),
     ],
 )
-def test_influent_declared_units_that_disagree(asm1, units, fragment):
-    feed = asm1.influent({"SS": 60.0}, Q=18446.0, units=units)
-    errs = _errors(_single_tank(asm1, feed), include_models=False)
-    assert len(errs) == 1 and fragment in errs[0], errs
+def test_influent_rejects_units_of_another_quantity(asm1, units, fragment):
+    with pytest.raises(ValueError, match=fragment):
+        asm1.influent({"SS": 60.0}, Q=18446.0, units=units)
+
+
+def test_influent_keeps_units_the_model_leaves_unknown(tmp_path):
+    path = tmp_path / "bare.yaml"
+    path.write_text(
+        """
+model:
+  name: bare
+  description: "no declared units"
+species:
+  - {name: A, units: "", default_concentration: 1.0}
+conditions: []
+reactions:
+  - name: R
+    rate: "k * [A]"
+    parameters: {k: {value: 0.1}}
+    stoichiometry: {A: -1}
+"""
+    )
+    net = aquakin.load_model_from_file(str(path))
+    feed = net.influent({"A": 5.0}, Q=2.0, units={"t": "h", "Q": "m3/h", "A": "kg/m3"})
+    assert feed.units == {"t": "h", "Q": "m3/h", "A": "kg/m3"}
+    np.testing.assert_allclose(feed.Q, 2.0)
+    np.testing.assert_allclose(feed.C[:, 0], 5.0)
 
 
 def test_influent_units_reject_unreadable_units(asm1):
@@ -387,19 +456,6 @@ def test_influent_units_reject_unknown_keys(asm1):
         asm1.influent({"SS": 60.0}, Q=1.0, units={"flow": "m3/d"})
     with pytest.raises(ValueError, match="must be strings"):
         asm1.influent({"SS": 60.0}, Q=1.0, units={"Q": 24})
-
-
-def test_read_influent_csv_declares_units(tmp_path, asm1):
-    from aquakin.plant import read_influent_csv
-
-    path = tmp_path / "feed.csv"
-    path.write_text("t,Q,SS\n0,100,60\n1,100,60\n")
-    series = read_influent_csv(
-        path, asm1, column_map={"t": "t", "Q": "Q", "SS": "SS"}, units={"Q": "L/s"}
-    )
-    assert series.units == {"Q": "L/s"}
-    errs = _errors(_single_tank(asm1, series), include_models=False)
-    assert len(errs) == 1 and "L/s" in errs[0]
 
 
 # ----- model roll-up ------------------------------------------------------------

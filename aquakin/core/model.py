@@ -479,8 +479,9 @@ class CompiledModel:
             influent temperature-agnostic.
         units : dict[str, str], optional
             The units the feed is given in, keyed by ``"t"``, ``"Q"``, ``"T"`` or
-            a species name. Nothing is converted; :meth:`Plant.check_units`
-            checks the declaration against the plant and this model.
+            a species name, e.g. ``{"Q": "m3/h", "SNH": "mg/L"}``. The feed is
+            converted to this model's units (see
+            :class:`~aquakin.plant.influent.InfluentSeries`).
         **kwargs : float
             Convenience overrides for identifier-safe species names.
 
