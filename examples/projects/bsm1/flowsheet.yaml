@@ -1,5 +1,5 @@
 format: 2
-aquakin: 0.2.0+gdb77b73.dirty
+aquakin: 0.2.0+gb611381
 name: BSM1
 options:
   recycle_passes: 3
