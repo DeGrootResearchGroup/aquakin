@@ -1,6 +1,6 @@
 # Studies: design proposal (2026-11-17)
 
-Status: proposal for the owner's review; nothing here is implemented.
+Status: agreed with the owner (answers below); being implemented in the order given.
 
 A **study** is one analysis of a flowsheet project, saved in the project with
 its results: a simulation, a calibration, a Fisher information, a profile
@@ -126,13 +126,12 @@ setting since renamed, and recomputing would then fail.
    run, cancel, open results), freeze and unfreeze, and Save's
    changed-on-disk guard.
 
-## Open questions for the owner
+## Owner's answers (2026-11-17)
 
-1. **Unfreezing.** Should unfreezing a study discard its snapshot and make it
-   follow the flowsheet again (results then possibly stale), or should it be
-   refused?
-2. **Influent tables in a frozen snapshot.** Copied like the models (proposed),
-   or referenced from `data/` by hash?
-3. **First study kinds.** Proposed: `simulate` (steady state or dynamic, chosen
-   streams saved) and `fisher`. Are those the right first two, or is
-   calibration the priority?
+1. **Unfreezing is allowed and discards the results.** The snapshot goes and
+   the study follows the flowsheet again; its results are deleted, because they
+   were computed from the snapshot. The editor says so plainly before doing it
+   and offers to save a copy of the study first. The library's `unfreeze`
+   refuses unless told `discard_results=True`.
+2. **A frozen snapshot copies the influent tables** as well as the models.
+3. **The first study kinds are `simulate` and `fisher`.**
