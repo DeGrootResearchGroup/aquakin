@@ -105,15 +105,17 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   same time unit; that unit operations with built-in constants get the units
   they assume (the UV reactor and primary clarifier need days; the thickener
   needs its TSS species in g/m3; the Takács settler, while it uses its default
-  BSM settling parameters, needs days and TSS species in g/m3); and that
-  influent data match the plant and the model. Comparisons account for scale, so `mg/L`
+  BSM settling parameters, needs days and TSS species in g/m3). Comparisons account for scale, so `mg/L`
   matches `g/m3` but `kg/m3` does not. `plant.check()` includes the report.
 - Influents can declare the units their data are in with `units=` on
   `InfluentSeries`, `model.influent(...)`, `InfluentSeries.constant` and
-  `read_influent_csv`, e.g. `{"Q": "m3/h", "SS": "mg/L"}`. Nothing is
-  converted; `Plant.check_units` checks the declaration, and a declared unit
-  that cannot be read is rejected. The BSM influent
-  loaders declare their units.
+  `read_influent_csv`, e.g. `{"t": "h", "Q": "m3/h", "T": "degC", "SS":
+  "mg/L"}`, and the data are converted to the units the plant works in: time to
+  the model's time unit, flow to m3 per that unit, temperature to Kelvin, and
+  each species to the model's declared unit. Only the scale is converted: a
+  unit that measures another quantity (moles where the model has grams, g COD
+  where it has g N) or cannot be read is rejected. The BSM influent loaders
+  declare their units.
 - A reaction can declare `units_acknowledged: "<reason>"` for a rate whose
   units are knowingly unconventional. `check_units()` then leaves its findings
   out; `check_units(include_acknowledged=True)` still shows them.
