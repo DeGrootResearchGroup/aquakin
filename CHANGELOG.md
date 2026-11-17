@@ -55,6 +55,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `T` trajectory for a stream that carries a temperature.
   `composition_table` also serves a model read from a file that `extends:` a
   shipped model with the same species, evaluated with its own parameters.
+- Plant states by name: every unit names its state entries
+  (`unit.state_names()`), and `Plant.state_names()`, `Plant.named_state(y)` and
+  `Plant.state_from_named(named)` turn a flat state into
+  `{unit: {name: value}}` and back, so a stored state survives a change of unit
+  order. **Custom units** implementing the `Unit` protocol should add
+  `state_names()`.
 - `read_influent_table` / `write_influent_table`: an influent as a headed table
   (`t`, `Q`, optional `T`, species) that reads back exactly. A flowsheet spec
   keeps a time-varying influent as such a table beside it, with a fingerprint.

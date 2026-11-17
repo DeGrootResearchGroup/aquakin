@@ -197,6 +197,10 @@ class DosingUnit:
     def state_size(self) -> int:
         return 0  # stateless; a feedback dose's integral is in the controller
 
+    def state_names(self) -> tuple[str, ...]:
+        """No state entries."""
+        return ()
+
     @property
     def input_ports(self) -> list[str]:
         return [self.input_port]

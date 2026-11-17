@@ -117,6 +117,11 @@ class PrimaryClarifier(FlowParameterized):
     def state_size(self) -> int:
         return self.model.n_species + (1 if self._filtered else 0)
 
+    def state_names(self) -> tuple[str, ...]:
+        """Names of the state entries, in order: the species concentrations, then
+        (with a flow filter) the filtered inflow ``Q_filtered``."""
+        return (*self.model.species, *(("Q_filtered",) if self._filtered else ()))
+
     def liquid_volume(self, state: jnp.ndarray):
         """The liquid volume held: the fixed tank volume.
 

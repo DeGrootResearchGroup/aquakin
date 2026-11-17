@@ -201,6 +201,11 @@ class SBRUnit(CouplingAware):
     def state_size(self) -> int:
         return self.model.n_species + 1 + self.settling.extra_state_size()
 
+    def state_names(self) -> tuple[str, ...]:
+        """Names of the state entries, in order: the species concentrations, the
+        liquid volume ``V``, then the settling model's states."""
+        return (*self.model.species, "V", *self.settling.extra_state_names())
+
     def liquid_volume(self, state: jnp.ndarray):
         """The current liquid volume (the settling-state tail carries no mass).
 

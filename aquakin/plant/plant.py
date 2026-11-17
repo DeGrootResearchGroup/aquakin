@@ -1591,6 +1591,125 @@ class Plant:
             pieces.append(self.temperature_model.initial_state(self))
         return jnp.concatenate(pieces)
 
+    def state_names(self) -> dict[str, tuple[str, ...]]:
+        """The name of every state entry, by unit, in the plant's state order.
+
+        Each unit names its own entries (:meth:`Unit.state_names`): species for
+        concentrations, short names for anything else. A unit whose temperature
+        is a state (a :class:`HeatBalanceTemperature` model) has a ``"T"`` entry
+        too, although it sits in the temperature block at the tail of the flat
+        vector. Stored states are keyed by these names, so they survive a change
+        of unit order or of the state layout.
+
+        Returns
+        -------
+        dict
+            ``{unit_name: (name, ...)}``; stateless units are left out.
+
+        Raises
+        ------
+        WiringError
+            If a unit's names do not match its state size or repeat.
+        """
+        self._build_state_layout()
+        out: dict[str, tuple[str, ...]] = {}
+        for name in self._unit_order:
+            unit = self.units[name]
+            if unit.state_size == 0:
+                continue
+            names = tuple(unit.state_names())
+            if len(names) != unit.state_size or len(set(names)) != len(names):
+                raise WiringError(
+                    f"unit '{name}' names {len(names)} state entries "
+                    f"({len(set(names))} distinct) for a state of size {unit.state_size}"
+                )
+            out[name] = names
+        for name in self._temperature_units:
+            out[name] = (*out.get(name, ()), "T")
+        return out
+
+    def _named_positions(self) -> dict[str, dict[str, int]]:
+        """``{unit: {state name: flat index}}``."""
+        names = self.state_names()
+        positions: dict[str, dict[str, int]] = {}
+        for unit, (start, size) in self._state_layout.items():
+            if size:
+                positions[unit] = {n: start + i for i, n in enumerate(names[unit][:size])}
+        t_start, _ = self._temperature_block
+        for i, unit in enumerate(self._temperature_units):
+            positions.setdefault(unit, {})["T"] = t_start + i
+        return positions
+
+    def named_state(self, state_full) -> dict[str, dict[str, float]]:
+        """A flat plant vector as ``{unit: {state name: value}}``.
+
+        The by-name form of a state (an initial state, a solution's
+        :attr:`~PlantSolution.final_state`, a fitted ``y0``) for storing it:
+        :meth:`state_from_named` reads it back into this plant, or into one
+        whose units sit in a different order.
+
+        Parameters
+        ----------
+        state_full : array-like
+            A flat plant vector, shape ``(total_state_size,)``.
+
+        Returns
+        -------
+        dict
+        """
+        import numpy as np
+
+        values = np.asarray(state_full, dtype=float)
+        positions = self._named_positions()
+        if values.shape != (self._total_state_size,):
+            raise ValueError(
+                f"a plant state has shape ({self._total_state_size},), got {values.shape}"
+            )
+        return {
+            unit: {n: float(values[i]) for n, i in entries.items()}
+            for unit, entries in positions.items()
+        }
+
+    def state_from_named(self, named: dict, *, base=None) -> jnp.ndarray:
+        """A flat plant vector from ``{unit: {state name: value}}``.
+
+        The inverse of :meth:`named_state`. Entries not given keep their value in
+        ``base``.
+
+        Parameters
+        ----------
+        named : dict
+            ``{unit: {state name: value}}``; any subset of the plant's entries.
+        base : array-like, optional
+            The vector to start from (default :meth:`initial_state`).
+
+        Returns
+        -------
+        jnp.ndarray
+            Shape ``(total_state_size,)``.
+
+        Raises
+        ------
+        UnknownUnitError
+            If a unit is not in the plant or has no state.
+        KeyError
+            If a state name is not one of the unit's.
+        """
+        import numpy as np
+
+        positions = self._named_positions()
+        values = np.array(self.initial_state() if base is None else base, dtype=float)
+        for unit, entries in named.items():
+            if unit not in positions:
+                hint = did_you_mean(unit, list(positions))
+                raise UnknownUnitError(f"no unit with a state named '{unit}'.{hint}")
+            for n, v in entries.items():
+                if n not in positions[unit]:
+                    hint = did_you_mean(n, list(positions[unit]))
+                    raise KeyError(f"unit '{unit}' has no state entry '{n}'.{hint}")
+                values[positions[unit][n]] = float(v)
+        return jnp.asarray(values)
+
     def states_by_unit(self, state_full: jnp.ndarray) -> dict[str, jnp.ndarray]:
         """Split a flat plant vector into a ``{unit_name: sub-vector}`` map.
 

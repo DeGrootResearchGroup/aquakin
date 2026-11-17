@@ -226,6 +226,14 @@ class IFASUnit(AerationUnit, CouplingAware):
     def state_size(self) -> int:
         return self._n_comp * self._n
 
+    def state_names(self) -> tuple[str, ...]:
+        """Names of the state entries, in order: the bulk concentrations (by
+        species), then each biofilm layer's, ``film1.<species>`` at the surface
+        to ``film<n_layers>.<species>`` at the carrier."""
+        species = tuple(self.model.species)
+        films = (f"film{k}.{sp}" for k in range(1, self.n_layers + 1) for sp in species)
+        return species + tuple(films)
+
     @property
     def input_ports(self) -> list[str]:
         return list(self.input_port_names)

@@ -82,6 +82,11 @@ class HydraulicDelayUnit:
     def state_size(self) -> int:
         return self.model.n_species + 1  # per-species loads + flow
 
+    def state_names(self) -> tuple[str, ...]:
+        """Names of the state entries, in order: the held species (by name), then
+        the delayed flow ``Q``."""
+        return (*self.model.species, "Q")
+
     @property
     def input_ports(self) -> list[str]:
         return [self.input_port]

@@ -332,6 +332,22 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             size += self.n_layers * self._n_sol
         return size
 
+    def state_names(self) -> tuple[str, ...]:
+        """Names of the state entries, in order, layer 1 at the bottom (underflow)
+        to layer ``n_layers`` at the top: per layer ``layer<k>.TSS``
+        (``"lumped_tss"``) or ``layer<k>.<species>`` for each particulate species
+        (``"per_species"``), then, with ``soluble_holdup``, ``layer<k>.<species>``
+        for each soluble species."""
+        layers = range(1, self.n_layers + 1)
+        if self.composition_mode == "lumped_tss":
+            names = [f"layer{k}.TSS" for k in layers]
+        else:
+            names = [f"layer{k}.{sp}" for k in layers for sp in self.particulate_species]
+        if self.soluble_holdup:
+            solubles = [self.model.species[i] for i in self._soluble_indices]
+            names += [f"layer{k}.{sp}" for k in layers for sp in solubles]
+        return tuple(names)
+
     def _unpack(self, state: jnp.ndarray):
         """Split the flat state into ``(particulate_state, soluble_layered)``.
 

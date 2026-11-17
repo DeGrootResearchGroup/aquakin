@@ -198,6 +198,10 @@ class UVUnit:
     def state_size(self) -> int:
         return 0
 
+    def state_names(self) -> tuple[str, ...]:
+        """No state entries."""
+        return ()
+
     @property
     def input_ports(self) -> list[str]:
         return [self.input_port]
@@ -312,6 +316,10 @@ class ChlorineContactUnit:
     @property
     def state_size(self) -> int:
         return 1
+
+    def state_names(self) -> tuple[str, ...]:
+        """The one state entry: the chlorine ``residual``."""
+        return ("residual",)
 
     @property
     def input_ports(self) -> list[str]:

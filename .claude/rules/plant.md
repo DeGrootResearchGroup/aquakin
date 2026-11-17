@@ -40,7 +40,12 @@ Key types:
 - `Stream(Q, C, model)` — the bulk-flow + concentration record passed
   between units.
 - `Unit` Protocol — every unit declares `state_size`, `input_ports`,
-  `output_ports`, and implements `initial_state()`, `compute_outputs()`,
+  `output_ports`, and implements `initial_state()`, `state_names()` (a unique
+  name per state entry: species for concentrations, `V` / `R_f` / `integral` /
+  `Q_filtered` / `residual` for scalars, `layer<k>.<x>` and `film<k>.<species>`
+  for repeated blocks; `Plant.state_names` / `named_state` / `state_from_named`
+  build on it, with a heat-balance temperature as the unit's `"T"` entry, and
+  stored results key states by these names), `compute_outputs()`,
   `rhs(t, state, inputs, params, signals)`, and `flow_outputs(input_flows,
   params, ctx)`. **Every unit has the *same fixed signature* for each method**
   — the plant never branches its call on a per-unit capability flag. The

@@ -142,6 +142,11 @@ class MBRUnit(AerationUnit, CouplingAware):
     def state_size(self) -> int:
         return self.model.n_species + 1  # bulk C + fouling resistance R_f
 
+    def state_names(self) -> tuple[str, ...]:
+        """Names of the state entries, in order: the species concentrations, then
+        the fouling resistance ``R_f``."""
+        return (*self.model.species, "R_f")
+
     @property
     def input_ports(self) -> list[str]:
         return [self.input_port]
