@@ -220,6 +220,50 @@ file builds: its settings, wiring and the content of its models and influent
 tables, but not its layout, labels or where its files sit. Record it beside a
 result to tell later whether the result still matches the flowsheet.
 
+## Studies
+
+A *study* is one analysis of a flowsheet saved in the project with its results:
+a simulation (a steady state, or a dynamic run) or the Fisher information of a
+sensor design. Each study is a folder under `studies/` with a `study.yaml`
+saying what to run:
+
+```yaml
+# studies/effluent/study.yaml
+study:
+  kind: simulate
+  parameters: {asm1.muH: 5.0}          # changed from the flowsheet's
+  initial_state: steady                # or default, or a named-state file
+  time: {t_span: [0, 14], t_eval: {start: 0, stop: 14, num: 337}}
+  streams: [effluent]                  # saved whole: flow, temperature, species
+  observables:
+    - stream: effluent
+      channels: [COD, TKN, NOx, TN, TSS]
+```
+
+```bash
+aquakin study run studies/effluent      # writes results/ and run.yaml
+aquakin study check studies/effluent    # fresh, stale (and why), damaged or failed
+```
+
+or `aquakin.study.run_study(path)` / `check_study(path)` from Python. Every
+result is keyed by name (parameters by `model.param`, states by unit and state
+name, trajectories as CSV columns such as `effluent.SNH`), so results stay
+readable after the flowsheet is reorganized.
+
+A study follows the flowsheet: once a setting, a connection, a model or an
+influent table it was run on changes, `check` reports it **stale** and names
+what changed. A newer aquakin is noted but does not make a result stale; read
+the changelog to decide whether to run it again. Running a study that has
+results replaces them only when asked (`--replace`); `aquakin study copy` keeps
+a copy first.
+
+`aquakin study freeze` instead pins a study to a snapshot of its plant, taken
+inside the study folder with every model flattened (shipped models too) and
+every influent table copied, so neither an edit to the project nor an aquakin
+upgrade can change what it runs. `aquakin study unfreeze --discard-results`
+makes it follow the flowsheet again and deletes its results, which were
+computed on the snapshot.
+
 ## The flowsheet editor
 
 ```bash

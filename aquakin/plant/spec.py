@@ -266,6 +266,9 @@ class _ModelRef(BaseModel):
     model_config = _STRICT
     source: str  # "shipped", or a model YAML path relative to the spec file
     sha256: str | None = None
+    # A frozen copy of a shipped model (a study's snapshot): the file holds the
+    # shipped model as it was, so it keeps the shipped name.
+    copy_of: Literal["shipped"] | None = None
 
 
 class _Unit(BaseModel):
@@ -432,7 +435,7 @@ def _load_models(doc: _Document, base_dir: Path | None) -> tuple[dict, dict]:
             raise
         except Exception as exc:
             raise SpecError(f"{where}: {type(exc).__name__}: {exc}") from None
-        if ref.source != "shipped" and name in _shipped_names():
+        if ref.source != "shipped" and ref.copy_of is None and name in _shipped_names():
             raise SpecError(
                 f"{where}: '{name}' is the name of a shipped model; give the model in "
                 f"{ref.source!r} a name of its own"
@@ -1082,6 +1085,8 @@ def write_spec(spec: dict, path, *, base_dir=None) -> dict:
         src = _located(source, base, f"models.{name}")
         relative = _plan_model(name, src, folder, writes)
         models[name] = {"source": relative, "sha256": _model_fingerprint(src)}
+        if ref.get("copy_of") is not None:
+            models[name]["copy_of"] = ref["copy_of"]
 
     files: dict[str, str] = {}
     units = {}

@@ -113,15 +113,65 @@ def serve(stdin=None, stdout=None) -> None:
         stdout.flush()
 
 
+def _study_command(args) -> int:
+    from aquakin import study as st
+
+    try:
+        if args.action == "run":
+            status = st.run_study(args.path, replace=args.replace)
+        elif args.action == "freeze":
+            st.freeze_study(args.path)
+            status = st.check_study(args.path)
+        elif args.action == "unfreeze":
+            st.unfreeze_study(args.path, discard_results=args.discard_results)
+            status = st.check_study(args.path)
+        elif args.action == "copy":
+            print(st.copy_study(args.path, args.name))
+            return 0
+        else:
+            status = st.check_study(args.path)
+    except st.StudyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    frozen = ", frozen" if status.frozen else ""
+    print(f"{status.state}{frozen}")
+    for line in status.reasons:
+        print(f"  - {line}")
+    for line in status.notes:
+        print(f"  note: {line}")
+    return 0 if status.state in ("fresh", "not run") else 1
+
+
 def main(argv=None) -> int:
     """Run the ``aquakin`` command line."""
     parser = argparse.ArgumentParser(prog="aquakin", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve", help="answer JSON-line requests from a front end")
     sub.add_parser("catalog", help="print the unit catalogue as JSON")
+    study = sub.add_parser("study", help="run, check, freeze, unfreeze or copy a study")
+    action = study.add_subparsers(dest="action", required=True)
+    run = action.add_parser("run", help="run a study and write its results")
+    run.add_argument("path", help="the study folder")
+    run.add_argument("--replace", action="store_true", help="replace results already there")
+    check = action.add_parser("check", help="say whether a study's results are up to date")
+    check.add_argument("path", help="the study folder")
+    freeze = action.add_parser("freeze", help="freeze a study on a snapshot of its plant")
+    freeze.add_argument("path", help="the study folder")
+    unfreeze = action.add_parser(
+        "unfreeze", help="make a frozen study follow the flowsheet again (deletes its results)"
+    )
+    unfreeze.add_argument("path", help="the study folder")
+    unfreeze.add_argument(
+        "--discard-results", action="store_true", help="agree to delete the study's results"
+    )
+    copy = action.add_parser("copy", help="copy a study, results included")
+    copy.add_argument("path", help="the study folder")
+    copy.add_argument("name", help="the copy's name")
     args = parser.parse_args(argv)
     if args.command == "serve":
         serve()
+    elif args.command == "study":
+        return _study_command(args)
     else:
         from aquakin.plant.catalog import catalog
 

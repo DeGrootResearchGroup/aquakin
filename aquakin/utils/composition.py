@@ -329,7 +329,9 @@ def composition_base(model: CompiledModel) -> str | None:
     species list -- a parameter variant such as a 15 degC ASM1 -- has that
     model as its base: it uses the base's composition table (evaluated with its
     own parameters) and the base's content units (ADM1 states kg COD and kmol
-    N). ``load_model_from_file`` records the file on the model.
+    N). ``load_model_from_file`` records the file on the model. A model file
+    that extends nothing (a flattened copy) has as its base a shipped model with
+    the same species list, when all such models share one table.
 
     Parameters
     ----------
@@ -362,7 +364,7 @@ def composition_base(model: CompiledModel) -> str | None:
         meta = data.get("model", {}) if isinstance(data, dict) else {}
         base = meta.get("extends", data.get("extends") if isinstance(data, dict) else None)
         if not isinstance(base, str):
-            return None
+            return _base_by_species(model)
         if "/" in base or base.endswith(".yaml"):
             source = ("file", str((path.parent / base).resolve()))
             continue
@@ -370,6 +372,17 @@ def composition_base(model: CompiledModel) -> str | None:
             return base
         return None
     return None
+
+
+def _base_by_species(model: CompiledModel) -> str | None:
+    """The shipped base of a model file that extends nothing (a study snapshot's
+    flattened copy): a shipped model with the same species list, when every such
+    model has the same table and units, so the choice cannot matter."""
+    from aquakin.schema.loader import load_model
+
+    matches = [name for name in _BUILDERS if list(load_model(name).species) == list(model.species)]
+    kinds = {(_BUILDERS[n], tuple(sorted(_CONTENT_FACTOR.get(n, {}).items()))) for n in matches}
+    return matches[0] if len(kinds) == 1 else None
 
 
 def canonical_content(

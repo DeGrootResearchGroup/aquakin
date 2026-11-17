@@ -29,6 +29,7 @@ Checklist still governs).
 | `.claude/rules/schema.md` | `aquakin/schema/**`, `**/*.yaml` | YAML model format + Pydantic schema rules (stoichiometry expressions, `extends:`, `auto`, `composition:`, `speciation:`, `precipitation:`) |
 | `.claude/rules/plant.md` | `aquakin/plant/**` | plant-wide simulation: units, recycle resolution, BSM1/BSM2/A²O builders, control, dosing, design, evaluation |
 | `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog, the schema rules, and the `_make_*` generators |
+| `.claude/rules/study.md` | `aquakin/study/**` | studies: the study folder layout, results keyed by name, staleness, freezing / unfreezing, the `aquakin study` command |
 | `.claude/rules/ui.md` | `aquakin_ui/**`, `tests/ui/**`, `ui-widget/**` | the browser flowsheet editor `aquakin-ui`: the independence rule (never imports aquakin or JAX), the `aquakin serve` worker, the document / forms / page split, the Vue Flow widget and its sync rules |
 
 **On-demand docs (read when needed):**
@@ -45,6 +46,7 @@ task needs the detail):**
 
 | Note | Contents |
 |---|---|
+| `.claude/notes/studies-design.md` | the studies design and the owner's decisions (live / frozen, replace with a warning, version notes, unfreezing discards results) |
 | `.claude/notes/plant-sensitivity-log.md` | `Plant.solve_sensitivity` corrector measurements (#654), the lean loop's stage-Newton drift diagnostic and its Anderson acceleration |
 
 **Published documentation site** (Sphinx/MyST → Read the Docs; built from

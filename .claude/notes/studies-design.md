@@ -1,6 +1,9 @@
 # Studies: design proposal (2026-11-17)
 
-Status: agreed with the owner (answers below); being implemented in the order given.
+Status: agreed with the owner (answers below). Steps 1 and 2 are implemented
+(`aquakin/study/`, see `.claude/rules/study.md`); the run record is kept in its
+own `run.yaml` and the freeze record in `frozen.yaml`, so the runner never
+rewrites the user's `study.yaml`.
 
 A **study** is one analysis of a flowsheet project, saved in the project with
 its results: a simulation, a calibration, a Fisher information, a profile

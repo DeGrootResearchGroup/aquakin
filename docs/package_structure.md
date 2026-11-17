@@ -224,13 +224,18 @@ aquakin/
 │   │   #   decays and stratifies by its own kinetics (SRB/methanogens stratify
 │   │   #   differently from heterotrophs -- Sun 2014).
 │   │
-│   └── utils/
-│       ├── latex.py                 # AST -> LaTeX rate expressions
-│       ├── balance.py               # mass / electron (COD) conservation checks
-│       ├── units.py                 # currency-aware dimensional check of rate
-│       │                            #   expressions (model.check_units); distinct
-│       │                            #   from core/units.py, which only formats units
-│       └── rtd.py                   # RTD analysis (E-curve, Morrill index)
+│   ├── utils/
+│   │   ├── latex.py                 # AST -> LaTeX rate expressions
+│   │   ├── balance.py               # mass / electron (COD) conservation checks
+│   │   ├── units.py                 # currency-aware dimensional check of rate
+│   │   │                            #   expressions (model.check_units); distinct
+│   │   │                            #   from core/units.py, which only formats units
+│   │   └── rtd.py                   # RTD analysis (E-curve, Morrill index)
+│   │
+│   └── study/                       # studies: analyses saved in a project
+│       ├── study.py                 # study.yaml schema, run / check / freeze /
+│       │                            #   unfreeze / copy (`aquakin study ...`)
+│       └── files.py                 # result files keyed by name (YAML / CSV)
 │
 ├── aquakin_ui/                         # browser flowsheet editor `aquakin-ui` (`ui` extra)
 │   ├── app.py                          # the page (Editor)
