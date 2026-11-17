@@ -423,6 +423,8 @@ class Plant:
         check_name("influent", name)
         if name in self.units:
             raise WiringError(f"influent name '{name}' is already the name of a unit")
+        if name in self.named_streams:
+            raise WiringError(f"influent name '{name}' is already the name of a stream")
         if name in self.influents:
             raise ValueError(f"Influent '{name}' already added")
         self.influents[name] = series
@@ -1893,8 +1895,9 @@ class Plant:
         endpoint = resolved if resolved is not None else endpoint
         unit, port = self._parse_endpoint(endpoint, role="source")
         params_full = self.default_parameters() if params is None else self._coerce_params(params)
-        Q, C = self._cached_streams(solution, params_full)[(unit, port)]
-        T = self._cached_stream_temperatures(solution, params_full).get((unit, port))
+        streams, temperatures = self._stream_sweep(solution, params_full)
+        Q, C = streams[(unit, port)]
+        T = temperatures.get((unit, port))
         org = self._reconstruct_stream_org(solution, (unit, port), params_full)
         return StreamSeries(t=solution.t, Q=Q, C=C, model=self.units[unit].model, org=org, T=T)
 
@@ -1929,9 +1932,10 @@ class Plant:
         chaining.
         """
         check_name("stream", name)
-        if name in self.units:
+        if name in self.units or name in self.influents:
+            what = "a unit" if name in self.units else "an influent"
             raise WiringError(
-                f"stream name '{name}' is the name of a unit; plant.stream('{name}') would be ambiguous"
+                f"stream name '{name}' is the name of {what}; plant.stream('{name}') would be ambiguous"
             )
         self.named_streams[name] = endpoint
         return self

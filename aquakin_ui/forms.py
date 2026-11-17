@@ -9,6 +9,8 @@ is listed here: every row follows from the catalogue.
 
 from __future__ import annotations
 
+import math
+
 from aquakin_ui.document import Flowsheet
 
 AERATION_MODES = ("none", "kla", "do_setpoint")
@@ -148,8 +150,17 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
     return rows
 
 
+def _finite(text: str) -> float:
+    """A finite number from a field's text; ``nan`` and overflowing values are refused."""
+    value = float(text)
+    if not math.isfinite(value):  # "nan", "inf", "1e999"
+        raise ValueError(f"{text!r} is not a finite number")
+    return value
+
+
 def _number(text: str):
-    return text if text.lower() in ("inf", "-inf") else float(text)
+    """A number setting's text: a finite number, or ``inf`` / ``-inf`` for no limit."""
+    return text.lower() if text.lower() in ("inf", "-inf") else _finite(text)
 
 
 def _parse(s: dict, text):
@@ -192,7 +203,7 @@ def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, d
         name, t = s["name"], s["type"]
         if t == "conditions":
             conds = {
-                k.split(".", 1)[1]: float(v)
+                k.split(".", 1)[1]: _finite(str(v).strip())
                 for k, v in values.items()
                 if k.startswith("conditions.") and str(v).strip()
             }
@@ -203,7 +214,7 @@ def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, d
             old = u.settings.get(name) or {}
             if mode != "none":
                 raw = str(values.get("aeration.value", "")).strip()
-                value = float(raw) if raw else (old.get(mode) or 0.0)
+                value = _finite(raw) if raw else (old.get(mode) or 0.0)
                 kept = {k: v for k, v in old.items() if k not in AERATION_MODES[1:]}
                 settings[name] = {**kept, mode: value}
             else:

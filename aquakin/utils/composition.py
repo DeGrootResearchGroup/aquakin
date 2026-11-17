@@ -323,7 +323,8 @@ def composition_table(
 def composition_base(model: CompiledModel) -> str | None:
     """The shipped model whose composition table and units ``model`` uses, or ``None``.
 
-    A shipped model with a table is its own base. A model read from a file that
+    A shipped model with a table is its own base (a model of the same name but
+    other species has none). A model read from a file that
     ``extends:`` a shipped model (directly or through other files) with the same
     species list -- a parameter variant such as a 15 degC ASM1 -- has that
     model as its base: it uses the base's composition table (evaluated with its
@@ -345,7 +346,10 @@ def composition_base(model: CompiledModel) -> str | None:
     from aquakin.schema.loader import load_model
 
     if model.name in _BUILDERS:
-        return model.name
+        # Its own base only if it is that model's species list (a file model
+        # may take a shipped name without being that model).
+        same = list(load_model(model.name).species) == list(model.species)
+        return model.name if same else None
     source = tuple(getattr(model, "_aquakin_source", ()) or ())
     for _ in range(16):
         if source[:1] != ("file",):

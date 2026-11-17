@@ -477,3 +477,170 @@ def test_yaml_1_2_reads_leading_zeros_and_dates_as_written(tmp_path):
     path = tmp_path / "s.yaml"
     path.write_text("a: 010\nb: 2026-01-01\nc: 0x1F\nd: on\n")
     assert load_spec_file(path) == {"a": 10, "b": "2026-01-01", "c": 31, "d": "on"}
+
+
+def test_nan_and_misspelled_settings_are_refused_before_anything_is_written(tmp_path):
+    from aquakin.plant.spec import write_spec
+
+    target = tmp_path / "flowsheet.yaml"
+    target.write_text("kept: true\n")
+    spec = _bsm1().to_spec()
+    for change, message in (
+        ({"volume": float("nan")}, "'volume' must be a real number, got nan"),
+        ({"volumee": 1000.0}, "'volumee' is not a setting of cstr"),
+    ):
+        bad = dict(spec, units={**spec["units"], "tank1": {**spec["units"]["tank1"], **change}})
+        with pytest.raises(SpecError, match=message):
+            write_spec(bad, target)
+        assert target.read_text() == "kept: true\n"
+    with pytest.raises(SpecError, match="units.tank1"):
+        Plant.from_spec(
+            dict(
+                spec,
+                units={
+                    **spec["units"],
+                    "tank1": {**spec["units"]["tank1"], "volume": float("nan")},
+                },
+            )
+        )
+
+
+def test_a_draft_with_a_required_setting_unset_can_be_saved(tmp_path):
+    from aquakin.plant.spec import check_spec, write_spec
+
+    spec = _bsm1().to_spec()
+    draft = dict(spec, units={**spec["units"], "tank1": {**spec["units"]["tank1"], "volume": None}})
+    written = write_spec(draft, tmp_path / "draft.yaml")
+    assert written["units"]["tank1"]["volume"] is None
+    assert not check_spec(tmp_path / "draft.yaml")["ok"]
+
+
+def test_whole_and_decimal_numbers_are_one_plant():
+    from aquakin.plant.spec import spec_fingerprint
+
+    spec = _bsm1().to_spec()
+    tank = spec["units"]["tank1"]
+    as_int = dict(
+        spec,
+        units={
+            **spec["units"],
+            "tank1": {
+                **tank,
+                "volume": int(tank["volume"]),
+                "conditions": {
+                    k: int(v) if float(v).is_integer() else v for k, v in tank["conditions"].items()
+                },
+            },
+        },
+    )
+    assert spec_fingerprint(as_int) == spec_fingerprint(spec)
+
+
+def _chain(folder: Path, top_extends: str) -> Path:
+    """A model three files deep: mine -> base1 -> base0 -> shipped asm1."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "base0.yaml").write_text(
+        "model:\n  name: base0\n  extends: asm1  # the shipped model\nparameters:\n  muH: {value: 5.0}\n"
+    )
+    (folder / "base1.yaml").write_text(
+        "model:\n  name: base1\n  extends: base0.yaml\nparameters:\n  KS: {value: 12.0}\n"
+    )
+    top = folder / "mine.yaml"
+    top.write_text(
+        f"# a variant with a comment\nmodel:\n  name: mine\n  extends: {top_extends}  # parent\n"
+        "parameters:\n  bH: {value: 0.5}\n"
+    )
+    return top
+
+
+def _plant_of(model):
+    p = Plant("p")
+    p.add_unit(CSTRUnit("tank", model, 100.0, ["in"], conditions={"T": 293.15}))
+    p.add_influent("feed", InfluentSeries.constant(model, Q=10.0, **FEED), to="tank.in")
+    return p
+
+
+def test_a_whole_extends_chain_from_outside_is_copied_in(tmp_path):
+    from aquakin.plant.spec import spec_fingerprint
+
+    top = _chain(tmp_path / "elsewhere", "base1.yaml")
+    model = aquakin.load_model_from_file(top)
+    p = _plant_of(model)
+    project = tmp_path / "project"
+    spec = p.to_spec(project / "flowsheet.yaml")
+    assert spec["models"]["mine"]["source"] == "models/mine.yaml"
+    copied = (project / "models" / "mine.yaml").read_text()
+    assert "extends: base1.yaml  # parent" in copied and "# a variant with a comment" in copied
+    assert "extends: base0.yaml" in (project / "models" / "base1.yaml").read_text()
+    assert (project / "models" / "base0.yaml").is_file()
+    # The copies build the same model, so the fingerprint is the original's.
+    q = Plant.from_spec(project / "flowsheet.yaml")
+    np.testing.assert_array_equal(
+        np.asarray(q.default_parameters()), np.asarray(p.default_parameters())
+    )
+    assert spec_fingerprint(project / "flowsheet.yaml") == spec_fingerprint(
+        p.to_spec(), base_dir=tmp_path
+    )
+
+
+def test_a_project_model_extending_a_file_outside_is_made_self_contained(tmp_path):
+    shared = tmp_path / "shared"
+    _chain(shared, "base1.yaml")
+    project = tmp_path / "project"
+    (project / "models").mkdir(parents=True)
+    (project / "models" / "mine.yaml").write_text(
+        "model:\n  name: mine\n  extends: ../../shared/base1.yaml\nparameters:\n  bH: {value: 0.5}\n"
+    )
+    p = _plant_of(aquakin.load_model_from_file(project / "models" / "mine.yaml"))
+    p.to_spec(project / "flowsheet.yaml")
+    assert "extends: base1.yaml" in (project / "models" / "mine.yaml").read_text()
+    shutil.rmtree(shared)  # the project no longer needs it
+    Plant.from_spec(project / "flowsheet.yaml")
+
+
+def test_a_broken_chain_is_refused_and_nothing_is_written(tmp_path):
+    top = _chain(tmp_path / "elsewhere", "base1.yaml")
+    model = aquakin.load_model_from_file(top)
+    p = _plant_of(model)
+    spec = p.to_spec()
+    (tmp_path / "elsewhere" / "base0.yaml").unlink()
+    project = tmp_path / "project"
+    with pytest.raises(SpecError, match="base0.yaml', which does not exist"):
+        aquakin.plant.write_spec(spec, project / "flowsheet.yaml", base_dir=tmp_path)
+    assert not project.exists()
+
+
+def test_an_in_memory_table_can_be_saved_twice(tmp_path):
+    p = _dynamic_bsm1()
+    first = p.to_spec(tmp_path / "flowsheet.yaml")
+    assert p.to_spec(tmp_path / "flowsheet.yaml")["files"] == first["files"]
+
+
+def test_a_file_model_may_not_take_a_shipped_name(tmp_path):
+    path = tmp_path / "asm1.yaml"
+    path.write_text("model:\n  name: asm1\n  extends: asm1\nparameters:\n  muH: {value: 5.0}\n")
+    p = _plant_of(aquakin.load_model_from_file(path))
+    with pytest.raises(SpecError, match="has the name of a shipped model"):
+        p.to_spec()
+    spec = {"format": 2, "models": {"asm1": {"source": str(path)}}, "units": {}}
+    with pytest.raises(SpecError, match="'asm1' is the name of a shipped model"):
+        Plant.from_spec(spec)
+
+
+def test_an_unreadable_spec_file_is_a_spec_error(tmp_path):
+    path = tmp_path / "s.yaml"
+    path.write_text("units: [unclosed\n")
+    with pytest.raises(SpecError, match="not a readable spec file"):
+        Plant.from_spec(path)
+
+
+def test_a_stream_may_not_share_an_influent_name():
+    from aquakin.plant.errors import WiringError
+
+    p = _bsm1()
+    with pytest.raises(WiringError, match="is the name of an influent"):
+        p.register_stream("feed", "clarifier.overflow")
+    q = build_bsm1()
+    q.register_stream("raw", "clarifier.overflow")
+    with pytest.raises(WiringError, match="is already the name of a stream"):
+        q.add_influent("raw", InfluentSeries.constant(_asm1(), Q=1.0), to=q.influent_endpoint)

@@ -298,3 +298,27 @@ def test_writes_to_standard_output_while_serving_do_not_reach_the_replies():
         {"id": 1, "ok": True, "result": "ok"}
     ]
     assert "noise from a compiled extension" in out.stderr and "noise from python" in out.stderr
+
+
+def test_nan_is_no_setting():
+    out = check_unit("cstr", "t", {**BUILDABLE["cstr"], "volume": float("nan")})
+    assert not out["ok"] and "'volume' must be a real number, got nan" in out["error"]
+    out = check_unit("cstr", "t", {**BUILDABLE["cstr"], "conditions": {"T": float("nan")}})
+    assert not out["ok"] and "'conditions.T' must be a number" in out["error"]
+    assert check_unit("storage", "s", {**BUILDABLE["storage"], "output_flow_max": "inf"})["ok"]
+
+
+def test_a_cached_model_file_follows_an_edit_to_its_base(tmp_path):
+    from aquakin.plant.catalog import load_model_file
+
+    (tmp_path / "base.yaml").write_text(
+        "model:\n  name: base\n  extends: asm1\nparameters:\n  muH: {value: 5.0}\n"
+    )
+    (tmp_path / "top.yaml").write_text("model:\n  name: top\n  extends: base.yaml\n")
+    first = load_model_file(tmp_path / "top.yaml")
+    assert float(first.parameter_values({})[first.param_index["muH"]]) == 5.0
+    (tmp_path / "base.yaml").write_text(
+        "model:\n  name: base\n  extends: asm1\nparameters:\n  muH: {value: 6.0}\n"
+    )
+    again = load_model_file(tmp_path / "top.yaml")
+    assert float(again.parameter_values({})[again.param_index["muH"]]) == 6.0

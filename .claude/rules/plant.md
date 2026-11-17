@@ -712,7 +712,8 @@ class or changing a unit's ports**, add or update its kind:
 `tests/unit/test_plant_catalog.py` builds every kind and compares the
 rule-derived ports with the built unit's, and fails if an exported unit class
 has no kind. `aquakin serve` (`aquakin/__main__.py`) is a JSON-lines worker
-(`catalog`, `models`, `model`, `check_unit`, `check_spec`, `fingerprint`, `ping`).
+(`catalog`, `models`, `model`, `check_unit`, `check_spec`, `fingerprint`,
+`read_spec`, `write_spec`, `ping`).
 Replies go to a private duplicate of the process's stdout and descriptor 1 is
 pointed at stderr while serving (plus a Python-level redirect per handler), so
 no other output can corrupt a reply; a failed request, or a reply that is not
@@ -730,12 +731,28 @@ unit's model (it stands for the stream arriving after any translator). A `kind:
 influent` unit is an `InfluentSeries` wired with `add_influent`: constant
 (`Q`/`T`/`composition`) or a `series` table file (`read_influent_table`, which
 records the file on the series; `write_influent_table` round-trips bit for bit)
-with its `series_sha256`. `to_spec(path)` refers to a table inside the spec's
-directory and otherwise writes `data/<name>.csv`; without a path a time-varying
-influent is refused. `spec_fingerprint(spec)` hashes what is simulated (settings
+recorded under the spec's `files:` with its sha256. `to_spec(path)` refers to a
+table inside the spec's directory and otherwise writes `data/<name>.csv`; without
+a path a time-varying influent is refused. **`write_spec`** (behind `to_spec(path)`
+and the editor's Save) plans everything before touching the disk: each unit's
+settings are checked with `validate_settings` (unset required settings are allowed,
+so a draft saves) and canonicalized (`_canonical_settings`: every number a float,
+infinities `"inf"`), the output is checked as strict JSON (no NaN), and the planned
+copies are checked for conflicts (`_check_writes`); only then are files copied and
+the spec replaced atomically. A model file whose `extends:` chain leaves the
+project folder has its **whole chain** copied into `models/` (`_plan_model`: the
+model as `<name>.yaml`, each base beside it with its `extends:` line rewritten
+textually so comments survive; a project model is rewritten in place). An
+in-memory influent table is rendered to bytes first, so saving twice is
+idempotent. `spec_fingerprint(spec)` hashes what is simulated (canonical settings
 with catalogue defaults filled in, wiring, streams, endpoints, model and table
 content fingerprints) and leaves out layout, labels, name, file locations and
-the aquakin version; results should record it to detect staleness. Every
+the aquakin version; results should record it to detect staleness. NaN is no
+setting anywhere: `catalog._is_number` and the Pydantic schema
+(`allow_inf_nan=False`) refuse it and `_plain(nan)` raises. A file model may not
+take a shipped model's name (refused on read and write), and
+`composition_base` gives a same-named model the shipped table only when the
+species match. Parse errors from `load_spec_file` are `SpecError`s. Every
 model is listed under `models:` as `shipped` or a YAML file path relative to the
 spec, with a sha256 of its content (`extends` resolved; a mismatch on read is a
 `SpecWarning`). A model is recognised by the provenance `load_model` /

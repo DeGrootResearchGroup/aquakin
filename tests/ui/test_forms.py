@@ -64,3 +64,18 @@ def test_a_value_of_the_wrong_type_is_refused(bsm1):
             r["value"] = "large"
     with pytest.raises(ValueError):
         forms.read_rows(bsm1, "tank3", rows)
+
+
+@pytest.mark.parametrize("text", ["nan", "NaN", "1e999"])
+def test_nan_and_overflowing_numbers_are_refused(bsm1, text):
+    rows = forms.rows_for(bsm1, "tank3", _info)
+    for r in rows:
+        if r["key"] in ("volume", "conditions.T"):
+            r["value"] = text
+            with pytest.raises(ValueError, match="not a finite number"):
+                forms.read_rows(bsm1, "tank3", rows)
+            r["value"] = "1000"
+    for r in rows:
+        if r["key"] == "volume":
+            r["value"] = "inf"
+    assert forms.read_rows(bsm1, "tank3", rows)[1]["volume"] == "inf"

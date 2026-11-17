@@ -272,7 +272,9 @@ def _plain(value) -> Any:
         return value
     if isinstance(value, float):
         if math.isnan(value):
-            return None
+            # Not a value a spec can hold: NaN is no setting (and reading it back
+            # as "unset" would silently swap in a default).
+            raise ValueError("a setting holds NaN")
         return value if math.isfinite(value) else ("inf" if value > 0 else "-inf")
     if isinstance(value, (list, tuple)) and all(isinstance(v, (str, int, float)) for v in value):
         return [_plain(v) for v in value]
@@ -603,7 +605,7 @@ _FILE_MODELS: dict = {}
 
 
 def load_model_file(path) -> Any:
-    """A model read from a YAML file, cached until the file changes.
+    """A model read from a YAML file, cached until it or a file it extends changes.
 
     Parameters
     ----------
@@ -616,10 +618,12 @@ def load_model_file(path) -> Any:
     """
     from pathlib import Path
 
-    from aquakin.schema.loader import load_model_from_file
+    from aquakin.schema.loader import load_model_from_file, model_fingerprint
 
     p = Path(path).resolve()
-    key = (str(p), p.stat().st_mtime_ns)
+    # Keyed by the content with the extends chain resolved, so an edit to a base
+    # file is seen too.
+    key = (str(p), model_fingerprint(p.read_text(), str(p), p.parent))
     if key not in _FILE_MODELS:
         _FILE_MODELS[key] = load_model_from_file(p)
     return _FILE_MODELS[key]
@@ -681,9 +685,10 @@ def _number(value):
 
 
 def _is_number(v) -> bool:
+    """A number a setting may hold: finite, or infinite (``"inf"``) for "no limit"; never NaN."""
     if isinstance(v, str):
         return v.strip().lower() in ("inf", "+inf", "-inf")
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and not math.isnan(v)
 
 
 def _check_map(name, value, check, what):

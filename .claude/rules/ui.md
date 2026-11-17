@@ -65,8 +65,14 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   commands): Open reads YAML 1.2 like `Plant.from_spec`; Save is
   `aquakin.plant.spec.write_spec` (settings filled in, version and hashes
   recorded, outside model and table files copied into `models/` and `data/`,
-  atomic replace), and the document is reloaded from what was written. Never
-  write the spec file from `aquakin_ui` directly.
+  atomic replace), and the document is reloaded from what was written (unless
+  it was edited while saving). Both run off the page's thread (`_off_page`, a
+  `busy` state disables the buttons meanwhile; without a served page, at start-up
+  and in tests, they run inline). Never write the spec file from `aquakin_ui`
+  directly. `_check_unit` / `_check_plant` are the synchronous versions for
+  tests and scripts; a page handler must not call them.
+- **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
+  `inf` / `-inf` remain for "no limit" number settings.
 - Icons are sent once (`icons` prop, injected into nodes); the spec text only
   while the Spec tab is open.
 - **Removing a wired port asks first:** `Editor.apply_properties` previews with

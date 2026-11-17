@@ -73,7 +73,6 @@ import json
 import math
 import os
 import re
-import shutil
 import tempfile
 import warnings
 from pathlib import Path
@@ -227,18 +226,26 @@ def load_spec_file(path) -> dict:
     Returns
     -------
     dict
+
+    Raises
+    ------
+    SpecError
+        If the file is not valid YAML (or JSON).
     """
     text = Path(path).read_text()
-    if Path(path).suffix == ".json":
-        return json.loads(text)
-    return yaml.load(text, Loader=_Yaml12Loader)  # a SafeLoader subclass
+    try:
+        if Path(path).suffix == ".json":
+            return json.loads(text)
+        return yaml.load(text, Loader=_Yaml12Loader)  # a SafeLoader subclass
+    except (yaml.YAMLError, json.JSONDecodeError) as exc:
+        raise SpecError(f"{path} is not a readable spec file: {exc}") from None
 
 
 # ---------------------------------------------------------------------------
 # The document schema
 # ---------------------------------------------------------------------------
 
-_STRICT = ConfigDict(extra="forbid", strict=True)
+_STRICT = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
 
 def _int_to_float(v):
@@ -282,7 +289,9 @@ class _Seed(BaseModel):
 
 
 class _Connection(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    model_config = ConfigDict(
+        extra="forbid", strict=True, populate_by_name=True, allow_inf_nan=False
+    )
     source: str = Field(alias="from")
     to: str
     translator: dict[str, Any] | None = None
@@ -374,6 +383,16 @@ def _shipped_fingerprint(name: str) -> str:
     return model_fingerprint((files("aquakin.models") / f"{name}.yaml").read_text(), name)
 
 
+def _shipped_names() -> set[str]:
+    from importlib.resources import files
+
+    return {
+        q.name.removesuffix(".yaml")
+        for q in files("aquakin.models").iterdir()
+        if q.name.endswith(".yaml") and not q.name.startswith("_")
+    }
+
+
 def _file_digest(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -413,6 +432,11 @@ def _load_models(doc: _Document, base_dir: Path | None) -> tuple[dict, dict]:
             raise
         except Exception as exc:
             raise SpecError(f"{where}: {type(exc).__name__}: {exc}") from None
+        if ref.source != "shipped" and name in _shipped_names():
+            raise SpecError(
+                f"{where}: '{name}' is the name of a shipped model; give the model in "
+                f"{ref.source!r} a name of its own"
+            )
         if model.name != name:
             raise SpecError(
                 f"{where}: the model in {ref.source!r} is named '{model.name}', not '{name}'"
@@ -635,6 +659,11 @@ class _ModelRefs:
             return name
         source = tuple(getattr(model, "_aquakin_source", ()) or ())
         if source[:1] == ("file",) or name in self._files:
+            if name in _shipped_names():
+                raise SpecError(
+                    f"model '{name}' is read from a file but has the name of a shipped model; "
+                    f"give it a name of its own so a spec cannot mistake one for the other"
+                )
             path = Path(source[1]) if source[:1] == ("file",) else self._files[name]
             loaded = source[2] if source[:1] == ("file",) else None
             current = _model_fingerprint(path)
@@ -840,47 +869,179 @@ def _within(path: Path, folder: Path) -> Path | None:
         return None
 
 
-def _copy_into(src: Path, dest: Path, what: str) -> None:
-    """Copy ``src`` to ``dest`` unless it is already there; refuse to overwrite other content."""
-    if dest.exists():
-        if dest.resolve() == src.resolve() or dest.read_bytes() == src.read_bytes():
-            return
+def _extends_of(text: str, where: str):
+    """The ``extends:`` value of a model file's text (``None`` without one)."""
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        raise SpecError(f"{where} is not valid YAML: {exc}") from None
+    if not isinstance(data, dict):
+        return None
+    meta = data.get("model")
+    base = meta.get("extends") if isinstance(meta, dict) else None
+    return base if base is not None else data.get("extends")
+
+
+def _is_file_base(base) -> bool:
+    """Whether an ``extends:`` value names a file (else a shipped model), as the loader reads it."""
+    return isinstance(base, str) and ("/" in base or "\\" in base or base.endswith(".yaml"))
+
+
+def _model_chain(src: Path, where: str) -> list[Path]:
+    """A model file and every file it ``extends:``, in order (shipped bases end the chain)."""
+    if not src.is_file():
+        raise SpecError(f"{where}: model file {src} does not exist")
+    chain = [src.resolve()]
+    while True:
+        base = _extends_of(chain[-1].read_text(), str(chain[-1]))
+        if not _is_file_base(base):
+            return chain
+        nxt = Path(base)
+        nxt = (nxt if nxt.is_absolute() else chain[-1].parent / nxt).resolve()
+        if nxt in chain:
+            raise SpecError(f"{where}: the extends chain of {src} returns to {nxt}")
+        if not nxt.is_file():
+            raise SpecError(f"{where}: {chain[-1]} extends {base!r}, which does not exist")
+        chain.append(nxt)
+
+
+_EXTENDS_LINE = re.compile(
+    r"^(?P<head>[ \t]*extends[ \t]*:[ \t]*)(?P<q>['\"]?)[^'\"#\n]+?(?P=q)(?P<tail>[ \t]*(#.*)?)$",
+    re.MULTILINE,
+)
+
+
+def _rewrite_extends(text: str, base: str, where: str) -> str:
+    """``text`` with its one ``extends:`` line pointing at ``base`` (comments kept)."""
+    found = _EXTENDS_LINE.findall(text)
+    if len(found) != 1:
         raise SpecError(
-            f"{what}: {dest} already exists with different content; move it or rename the "
-            f"{what.split()[0]} so its file can be written"
+            f"{where}: cannot find its one 'extends:' line to point it at the copied {base}"
         )
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dest)
+    return _EXTENDS_LINE.sub(lambda m: f"{m['head']}{base}{m['tail']}", text)
 
 
-def _copy_model(src: Path, folder: Path, name: str) -> str:
-    """Bring a model file (and any base files it ``extends:`` by path) into ``models/``."""
-    dest = folder / "models" / f"{name}.yaml"
-    data = yaml.safe_load(src.read_text()) or {}
-    meta = data.get("model", {}) if isinstance(data, dict) else {}
-    base = meta.get("extends", data.get("extends") if isinstance(data, dict) else None)
-    if isinstance(base, str) and ("/" in base or base.endswith(".yaml")):
-        if "/" in base:
-            raise SpecError(
-                f"model '{name}': {src} extends {base!r} by a path with folders; put the base "
-                f"model beside it (extends: name.yaml) so the two can be copied together"
-            )
-        base_src = src.parent / base
-        _copy_into(base_src, folder / "models" / base, f"model '{name}' (base {base})")
-    _copy_into(src, dest, f"model '{name}'")
+def _plan_model(name: str, src: Path, folder: Path, writes: list) -> str:
+    """Where model ``name`` sits relative to the spec, adding any copies it needs to ``writes``.
+
+    A model whose whole ``extends:`` chain lies inside the spec's folder stays where
+    it is. Otherwise the whole chain is brought into ``models/`` (the model as
+    ``<name>.yaml``, each base beside it, each file's ``extends:`` pointing at the
+    next copy), so the project holds everything it is built from.
+    """
+    where = f"models.{name}"
+    chain = _model_chain(src, where)
+    if all(_within(p, folder) is not None for p in chain):
+        return _within(src, folder).as_posix()
+    dests = [folder / "models" / f"{name}.yaml"]
+    used = {dests[0].name}
+    for p in chain[1:]:
+        candidate, i = f"{p.stem}.yaml", 2
+        while candidate in used:
+            candidate, i = f"{p.stem}_{i}.yaml", i + 1
+        used.add(candidate)
+        dests.append(folder / "models" / candidate)
+    for i, (p, dest) in enumerate(zip(chain, dests)):
+        text = p.read_text()
+        if i + 1 < len(chain):
+            text = _rewrite_extends(text, dests[i + 1].name, str(p))
+        writes.append((dest, text.encode(), f"model '{name}'", p))
     return f"models/{name}.yaml"
+
+
+def _check_writes(writes: list) -> None:
+    """Refuse a planned copy that would replace a different file, or two that disagree."""
+    planned: dict[Path, bytes] = {}
+    for dest, content, what, src in writes:
+        key = dest.resolve()
+        if key in planned and planned[key] != content:
+            raise SpecError(f"{what}: two different files would be written to {dest}")
+        planned[key] = content
+        if dest.exists() and dest.read_bytes() != content:
+            if src is not None and src.resolve() == key:
+                continue  # the file itself, with its extends: line updated
+            raise SpecError(
+                f"{what}: {dest} already exists with different content; move it or rename "
+                f"the {what.split()[0]} so its file can be written"
+            )
+
+
+def _do_writes(writes: list) -> None:
+    for dest, content, _, _ in writes:
+        if dest.exists() and dest.read_bytes() == content:
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+
+
+def _series_bytes(series) -> bytes:
+    """An in-memory influent series as the table file :func:`write_influent_table` writes."""
+    from aquakin.plant.influent import write_influent_table
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "series.csv"
+        write_influent_table(series, target)
+        return target.read_bytes()
+
+
+def _canonical_number(v):
+    """A number setting in one spelling: a float, or ``"inf"`` / ``"-inf"``."""
+    if isinstance(v, str):
+        return v.strip().lower().replace("+", "")
+    v = float(v)
+    return v if math.isfinite(v) else ("inf" if v > 0 else "-inf")
+
+
+def _canonical_settings(kind, settings: dict, where: str) -> dict:
+    """``settings`` checked strictly against ``kind`` and with every number a float.
+
+    So that ``1000`` and ``1000.0`` (a hand edit, a JSON writer) are one plant.
+    ``None`` values (unset; required ones too, in a draft) are kept as they are.
+    """
+    from aquakin.plant.catalog import validate_settings
+
+    try:
+        validate_settings(kind, {k: v for k, v in settings.items() if v is not None})
+    except ValueError as exc:
+        raise SpecError(f"{where}: {exc}") from None
+    types = {s.name: s.type for s in kind.settings}
+    out = {}
+    for k, v in settings.items():
+        t = types.get(k)
+        if v is None:
+            out[k] = None
+        elif t == "number":
+            out[k] = _canonical_number(v)
+        elif t in ("port_map", "number_map", "conditions", "species_values"):
+            out[k] = {key: _canonical_number(x) for key, x in v.items()}
+        elif t == "aeration":
+            out[k] = {
+                key: _canonical_number(x)
+                if isinstance(x, (int, float)) and not isinstance(x, bool)
+                else x
+                for key, x in v.items()
+            }
+        elif t == "reagent":
+            composition = {key: _canonical_number(x) for key, x in v.get("composition", {}).items()}
+            out[k] = {**v, "composition": composition}
+        else:
+            out[k] = v
+    return out
 
 
 def write_spec(spec: dict, path, *, base_dir=None) -> dict:
     """Write a spec file that holds the whole plant, and return what was written.
 
     The one writer behind :meth:`Plant.to_spec` and the flowsheet editor's
-    Save. It fills every unit's settings in from the catalogue defaults, records
-    the aquakin version and the current sha256 of every model and influent
-    table, copies a model or table from outside the spec's folder into
-    ``models/<name>.yaml`` or ``data/<unit>.csv`` (refusing to overwrite a
-    different file), writes their paths relative to the spec, and replaces the
-    file atomically (written to a temporary file, then renamed).
+    Save. It checks every unit's settings (a draft may leave required ones
+    unset), fills them in from the catalogue defaults with every number a float,
+    records the aquakin version and the current sha256 of every model and
+    influent table, copies a model (with its whole ``extends:`` chain) or a
+    table from outside the spec's folder into ``models/`` or
+    ``data/<unit>.csv``, writes their paths relative to the spec, and replaces
+    the file atomically (written to a temporary file, then renamed). Everything
+    is checked before any file is touched, so a refused spec leaves the folder
+    as it was.
 
     Parameters
     ----------
@@ -889,25 +1050,27 @@ def write_spec(spec: dict, path, *, base_dir=None) -> dict:
     path : str or pathlib.Path
         The spec file (``.json`` as JSON, anything else as YAML).
     base_dir : str or pathlib.Path, optional
-        Where ``spec``'s relative paths point from (the editor's open folder).
+        Where ``spec``'s relative paths point from (the editor's open folder);
+        by default, the folder of ``path``.
 
     Returns
     -------
     dict
-        The spec as written.
+        The spec as written (plain JSON-compatible data).
 
     Raises
     ------
     SpecError
-        If a unit kind is unknown, or a file to copy would overwrite another.
+        If a unit kind or setting is unknown or of the wrong type (NaN included),
+        a referenced file is missing, or a file to copy would overwrite another.
     """
     from aquakin.plant.catalog import unit_kind
-    from aquakin.plant.influent import write_influent_table
 
     path = Path(path)
     folder = path.parent if str(path.parent) else Path(".")
     base = Path(base_dir) if base_dir is not None else folder
     spec = dict(spec)
+    writes: list = []  # (destination, content, what, source file or None)
 
     models = {}
     for name, ref in (spec.get("models") or {}).items():
@@ -917,9 +1080,8 @@ def write_spec(spec: dict, path, *, base_dir=None) -> dict:
             models[name] = {"source": "shipped", "sha256": _shipped_fingerprint(name)}
             continue
         src = _located(source, base, f"models.{name}")
-        rel = _within(src, folder)
-        relative = rel.as_posix() if rel is not None else _copy_model(src, folder, name)
-        models[name] = {"source": relative, "sha256": _model_fingerprint(folder / relative)}
+        relative = _plan_model(name, src, folder, writes)
+        models[name] = {"source": relative, "sha256": _model_fingerprint(src)}
 
     files: dict[str, str] = {}
     units = {}
@@ -928,44 +1090,37 @@ def write_spec(spec: dict, path, *, base_dir=None) -> dict:
         kind = entry.pop("kind")
         label = entry.pop("label", None)
         series_obj = entry.pop("_series_object", None)
+        entry.pop("series_sha256", None)  # format-2 drafts kept it as a setting
         try:
-            defaults = unit_kind(kind).defaults()
+            k = unit_kind(kind)
         except KeyError as exc:
             raise SpecError(f"units.{uid}: {exc.args[0]}") from None
-        settings = {**defaults, **entry}
-        settings.pop("series_sha256", None)  # format-2 drafts kept it as a setting
+        settings = _canonical_settings(k, {**k.defaults(), **entry}, f"units.{uid}")
         if kind == "influent" and (settings.get("series") is not None or series_obj is not None):
             dest_rel = Path("data") / f"{uid}.csv"
             if series_obj is not None:
-                dest = folder / dest_rel
-                if dest.exists():
-                    raise SpecError(
-                        f"units.{uid}: {dest} already exists; move it so the influent's series "
-                        f"can be written"
-                    )
-                write_influent_table(series_obj, dest)
+                content = _series_bytes(series_obj)
+                writes.append((folder / dest_rel, content, f"influent '{uid}'", None))
                 relative = dest_rel.as_posix()
             else:
                 src = _located(settings["series"], base, f"units.{uid}.series")
+                if not src.is_file():
+                    raise SpecError(f"units.{uid}.series: {src} does not exist")
+                content = src.read_bytes()
                 rel = _within(src, folder)
                 if rel is None:
-                    _copy_into(src, folder / dest_rel, f"influent '{uid}'")
+                    writes.append((folder / dest_rel, content, f"influent '{uid}'", src))
                     rel = dest_rel
                 relative = rel.as_posix()
             settings["series"] = relative
-            files[relative] = _file_digest(folder / relative)
+            files[relative] = hashlib.sha256(content).hexdigest()
         units[uid] = {"kind": kind, **({"label": label} if label else {}), **settings}
 
     out = {
         "format": SPEC_FORMAT,
         "aquakin": aquakin_version(),
         "name": spec.get("name", "plant"),
-        "options": {
-            "recycle_passes": 3,
-            "recycle_tol": 1e-8,
-            "recycle_max_passes": 100,
-            **(spec.get("options") or {}),
-        },
+        "options": {**_Options().model_dump(), **(spec.get("options") or {})},
         "models": models,
         "files": files,
         "units": units,
@@ -976,10 +1131,17 @@ def write_spec(spec: dict, path, *, base_dir=None) -> dict:
     }
     if spec.get("layout"):
         out["layout"] = spec["layout"]
+    try:
+        json_text = json.dumps(out, indent=2, allow_nan=False) + "\n"
+    except (TypeError, ValueError) as exc:
+        raise SpecError(f"the spec holds a value a spec file cannot: {exc}") from None
     if path.suffix == ".json":
-        text = json.dumps(out, indent=2, allow_nan=False) + "\n"
+        text = json_text
     else:
         text = yaml.safe_dump(out, sort_keys=False, allow_unicode=True)
+    _check_writes(writes)
+
+    _do_writes(writes)
     folder.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=folder, prefix=f".{path.name}.", suffix=".tmp")
     try:
@@ -1051,8 +1213,9 @@ def spec_inputs(spec, *, base_dir=None) -> dict[str, str]:
             kind = unit_kind(entry.kind)
         except KeyError as exc:
             raise SpecError(f"units.{uid}: {exc.args[0]}") from None
-        settings = {**kind.defaults(), **(entry.model_extra or {})}
-        settings.pop("series_sha256", None)
+        extra = dict(entry.model_extra or {})
+        extra.pop("series_sha256", None)
+        settings = _canonical_settings(kind, {**kind.defaults(), **extra}, f"units.{uid}")
         ports[uid] = kind.ports_for(settings)
         if settings.get("series") is not None:
             table = _located(settings["series"], base_dir, f"units.{uid}.series")

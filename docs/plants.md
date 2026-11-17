@@ -232,5 +232,6 @@ units from the palette, wire their ports, and edit each unit in a form generated
 from its own documentation; aquakin builds each unit and then the whole plant as
 you edit and lists any errors. **Open** and **Save** read and write the files
 described above; Save writes exactly what `plant.to_spec(path)` would, copying a
-model or influent table from outside the project folder into it.
+model (with every file it `extends:`) or influent table from outside the project
+folder into it.
 

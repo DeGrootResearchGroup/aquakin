@@ -209,3 +209,15 @@ def test_a_free_composition_parameter_is_seen_by_the_ranking():
     # TN carries i_XB's information directly (through its weight on the biomass).
     tn = plant_fisher_information(plant, [("tank", ["TN"])], t_obs, ["asm1.i_XB"], sigma=0.1, **kw)
     assert float(tn.matrix[0, 0]) > 0.0
+
+
+def test_a_file_model_named_like_a_shipped_one_borrows_no_table(tmp_path):
+    """A model taking a shipped name gets that model's composition only if it
+    has that model's species."""
+    from aquakin.utils.composition import composition_base
+
+    path = tmp_path / "asm1.yaml"
+    path.write_text("model:\n  name: asm1\n  extends: asm3\n")
+    impostor = aquakin.load_model_from_file(path)
+    assert composition_base(impostor) is None
+    assert composition_base(aquakin.load_model("asm1")) == "asm1"

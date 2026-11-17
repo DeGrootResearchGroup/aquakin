@@ -22,7 +22,16 @@ from aquakin.plant.aeration_system import (
 from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
 from aquakin.plant.calibrate import PlantObservable, calibrate_plant
 from aquakin.plant.measures import Measure
-from aquakin.plant.spec import SpecError, SpecWarning
+from aquakin.plant.spec import (
+    SpecError,
+    SpecWarning,
+    check_spec,
+    load_spec_file,
+    spec_changes,
+    spec_fingerprint,
+    spec_inputs,
+    write_spec,
+)
 from aquakin.plant.identifiability import (
     SensorSet,
     plant_fisher_information,
@@ -232,6 +241,7 @@ __all__ = [
     "carbon_footprint",
     "carbon_mass",
     "characterize_influent",
+    "check_spec",
     "co2e_from_energy",
     "ct_log_removal",
     "ct_value",
@@ -247,6 +257,7 @@ __all__ = [
     "evaluate_bsm2",
     "fractionate",
     "heating_energy",
+    "load_spec_file",
     "mass_balance",
     "methane_to_co2e",
     "mixing_energy",
@@ -267,6 +278,9 @@ __all__ = [
     "size_activated_sludge",
     "sludge_metrics",
     "solve_steady_state",
+    "spec_changes",
+    "spec_fingerprint",
+    "spec_inputs",
     "stripped_n2o",
     "t10_from_baffling",
     "t10_from_rtd",
@@ -274,4 +288,5 @@ __all__ = [
     "uv_dose",
     "uv_log_inactivation",
     "write_influent_table",
+    "write_spec",
 ]

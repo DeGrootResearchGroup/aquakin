@@ -366,41 +366,82 @@ class Editor:
 
     # -- files --------------------------------------------------------------
 
-    def open(self, path=None, *, quiet: bool = False) -> None:
-        path = Path(path or self.state.spec_path).resolve()
+    def _off_page(self, work, done) -> None:
+        """Run ``work()`` (a worker call) off the page's thread, then ``done(result)``
+        on it; ``done`` gets the exception instead when ``work`` raised. Without a
+        served page (at start-up, in tests) both run here and now."""
         try:
-            data = self.worker.request("read_spec", path=str(path))
-            self.doc = Flowsheet.from_spec(self.catalog, data, base_dir=path.parent)
-        except Exception as exc:
-            self.say(f"could not open {path}: {type(exc).__name__}: {exc}")
+            asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                result = work()
+            except Exception as exc:
+                result = exc
+            done(result)
             return
-        self.state.spec_path = str(path)
-        self.state.selected = None
-        self.state.fit_key += 1
-        self._unit_checks.clear()
-        self._plant_check = (None, None)
-        if not quiet:
-            self.publish()
-            self.say(f"opened {path}", error=False)
+
+        async def run():
+            loop = asyncio.get_running_loop()
+            try:
+                result = await loop.run_in_executor(None, work)
+            except Exception as exc:
+                result = exc
+            with self.state:
+                self.state.busy = False
+                done(result)
+
+        self.state.busy = True
+        asynchronous.create_task(run())
+
+    def open(self, path=None, *, quiet: bool = False) -> None:
+        """Read a spec with aquakin's reader (YAML 1.2) and show it."""
+        path = Path(path or self.state.spec_path).resolve()
+
+        def done(data):
+            try:
+                if isinstance(data, Exception):
+                    raise data
+                doc = Flowsheet.from_spec(self.catalog, data, base_dir=path.parent)
+            except Exception as exc:
+                self.say(f"could not open {path}: {type(exc).__name__}: {exc}")
+                return
+            self.doc = doc
+            self.state.spec_path = str(path)
+            self.state.selected = None
+            self.state.fit_key += 1
+            self._unit_checks.clear()
+            self._plant_check = (None, None)
+            if not quiet:
+                self.publish()
+                self.say(f"opened {path}", error=False)
+
+        self._off_page(lambda: self.worker.request("read_spec", path=str(path)), done)
 
     def save(self) -> None:
-        """Save through aquakin's own spec writer: settings filled in, the aquakin
-        version and file hashes recorded, outside model and influent files copied
-        into the project, and the file replaced atomically."""
+        """Save through aquakin's own spec writer: settings checked and filled in,
+        the aquakin version and file hashes recorded, outside model and influent
+        files copied into the project, and the file replaced atomically."""
         path = Path(self.state.spec_path).resolve()
         base = str(self.doc.base_dir) if self.doc.base_dir else str(path.parent)
-        try:
-            written = self.worker.request(
-                "write_spec", spec=self.doc.to_spec(), path=str(path), base_dir=base
-            )
-            # Copied files are now referenced inside the project.
-            self.doc = Flowsheet.from_spec(self.catalog, written, base_dir=path.parent)
-        except Exception as exc:
-            self.say(f"could not save {path}: {type(exc).__name__}: {exc}")
-            return
-        self._plant_check = (None, None)
-        self.publish()
-        self.say(f"saved {path}", error=False)
+        spec = self.doc.to_spec()  # read now, on the page's thread
+        snapshot = json.dumps(spec, sort_keys=True)
+
+        def done(written):
+            if isinstance(written, Exception):
+                self.say(f"could not save {path}: {type(written).__name__}: {written}")
+                return
+            # Copied files are now referenced inside the project; an edit made
+            # while saving is kept rather than replaced by what was written.
+            if json.dumps(self.doc.to_spec(), sort_keys=True) == snapshot:
+                self.doc = Flowsheet.from_spec(self.catalog, written, base_dir=path.parent)
+            self._plant_check = (None, None)
+            self.publish()
+            self.say(f"saved {path}", error=False)
+
+        self._off_page(
+            lambda: self.worker.request("write_spec", spec=spec, path=str(path), base_dir=base),
+            done,
+        )
 
     # -- the page -----------------------------------------------------------
 
@@ -411,6 +452,7 @@ class Editor:
         s.show_message = False
         s.message = ""
         s.message_colour = "error"
+        s.busy = False
         s.panel = "properties"
         s.dark = False
         s.focus_help = ""
@@ -485,8 +527,21 @@ class Editor:
                 style="max-width: 300px;",
                 classes="mr-2",
             )
-            v3.VBtn("Open", click=lambda: self.open(), variant="tonal", classes="mr-1 text-none")
-            v3.VBtn("Save", click=self.save, variant="tonal", classes="mr-4 text-none")
+            v3.VBtn(
+                "Open",
+                click=lambda: self.open(),
+                disabled=("busy",),
+                variant="tonal",
+                classes="mr-1 text-none",
+            )
+            v3.VBtn(
+                "Save",
+                click=self.save,
+                loading=("busy",),
+                disabled=("busy",),
+                variant="tonal",
+                classes="mr-4 text-none",
+            )
             v3.VChip(
                 "{{ nodes.length }} units · {{ edges.length }} connections · {{ n_recycles }} recycles",
                 size="small",

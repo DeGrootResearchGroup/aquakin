@@ -202,6 +202,18 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         identical; on the dynamic BSM2 influent the effluent's 8-day mean
         concentrations stay within 0.1% of the Takács model's while a forward
         solve takes about a third of the steps.
+    init_underflow_Q : float, optional
+        The underflow rate (m³/d) to seed a settled sludge blanket for. When
+        given, the initial state is a settled profile (clarification layers
+        near the non-settleable floor, a thickened bottom blanket) rather than
+        a uniform fill, which avoids the startup transient of a blanket forming
+        from scratch.
+    init_feed_tss : float, optional
+        The expected feed TSS (g/m³) for that settled start; by default, from
+        the model's default particulate concentrations.
+    tss_factors : dict of str to float
+        TSS per unit of each particulate species (g TSS/g COD); a species not
+        listed counts 1.
     input_port : str
     overflow_port : str
     underflow_port : str

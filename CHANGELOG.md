@@ -34,8 +34,15 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   model that is not listed is an error naming where it is, and YAML is read with
   YAML 1.2 rules (`1e-5` is a number, `on` is text). A rebuilt BSM1 has a
   bit-identical right-hand side. What a spec cannot express yet (a heat-balance
-  temperature model, array-valued settings) raises a `SpecError` naming it. Controllers derived from a closed-loop `Aeration` or
-  feedback `DosingUnit` are not written; they are derived again.
+  temperature model, array-valued settings) raises a `SpecError` naming it.
+  Controllers derived from a closed-loop `Aeration` or feedback `DosingUnit` are
+  not written; they are derived again. Writing a spec to a path
+  (`aquakin.plant.write_spec`, also exported with `load_spec_file`, `check_spec`,
+  `spec_inputs` and `spec_changes`) checks everything before touching the disk,
+  copies a model file from outside the project into `models/` together with
+  every file it `extends:`, and replaces the spec atomically. NaN is refused as a
+  setting everywhere (`inf` stays allowed where it means "no limit"), and a model
+  file may not take the name of a shipped model.
 - Plant observables can measure more than species: `"Q"` (flow), `"T"`
   (temperature), `"COD"`, `"TKN"`, `"NOx"`, `"TN"` (`TKN + NOx`), `"TP"`,
   `"TSS"`, or a `Measure` (any weighted sum of species, flow and temperature),
@@ -52,8 +59,9 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   (`t`, `Q`, optional `T`, species) that reads back exactly. A flowsheet spec
   keeps a time-varying influent as such a table beside it, with a fingerprint.
 - `spec_fingerprint(spec)`: a hash of the plant a flowsheet file builds
-  (settings, wiring, model and influent content; not layout, labels or file
-  locations), to tell when a saved result no longer matches its flowsheet.
+  (settings, wiring, model and influent content; not layout, labels, file
+  locations or whether a number is written `1000` or `1000.0`), to tell when a
+  saved result no longer matches its flowsheet.
 - Example projects in `examples/projects/`: BSM1, and BSM2 with its 15 °C ASM1 as
   a model file that extends the shipped ASM1. The BSM2 project rebuilds the plant
   `build_bsm2` makes, run with the BSM2 parameter set, to a bit-identical
