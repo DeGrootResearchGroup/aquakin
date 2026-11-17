@@ -423,10 +423,13 @@ def _reaction_term(plant, unit_name, C, params):
     if hasattr(unit, "_liquid_mask"):  # ADM1 digester
         if getattr(unit, "_v_liq_idx", None) is not None:
             p_unit = p_unit.at[unit._v_liq_idx].set(float(unit.volume))
-        return net.dCdt(C, p_unit, unit._condition_arrays, 0)
-    stoich = net.compute_stoich(p_unit)  # aerated/anoxic CSTR
-    rates = net.rates(C, p_unit, unit._condition_arrays, 0)
-    return stoich.T @ rates
+        term = net.dCdt(C, p_unit, unit._condition_arrays, 0)
+    else:
+        stoich = net.compute_stoich(p_unit)  # aerated/anoxic CSTR
+        term = stoich.T @ net.rates(C, p_unit, unit._condition_arrays, 0)
+    # Per the plant's time unit, as the unit's rhs sees it.
+    factor = getattr(unit, "_rate_factor", 1.0)
+    return term if factor == 1.0 else term * factor
 
 
 def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps):

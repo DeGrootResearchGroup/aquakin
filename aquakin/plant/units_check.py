@@ -1,9 +1,13 @@
 """Plant-level unit audit: is the flowsheet consistent in its declared units?
 
-A plant integrates every unit against **one clock** and passes streams between
-units **without converting anything**, so a unit mismatch anywhere is silent: a
-model whose rate constants are per second next to one per day, or a settler whose ``g/m3`` settling parameters are fed ``kg/m3``
-solids all produce a plausible-looking but wrong solution. (The ASM1 <-> ADM1
+A plant integrates every unit against **one clock** (``Plant(time_unit=...)``)
+and passes streams between units **without converting their concentrations**,
+so a concentration mismatch is silent: a settler whose ``g/m3`` settling
+parameters are fed ``kg/m3`` solids produces a plausible-looking but wrong
+solution. Time units are converted rather than checked: each kinetic model's
+rates, each influent's times and flows, and the time constants built into the
+UV reactor, primary clarifier and Takács settler are put on the plant's clock
+before a solve. (The ASM1 <-> ADM1
 translators are not audited here: they convert their models' declared units
 themselves, and ``Plant.connect`` rejects a translator built for models whose
 units differ from the endpoints'. Influents are not audited either: an
@@ -13,9 +17,8 @@ influent's declared ``units`` are converted to its model's units when the
 :func:`check_plant_units` (bound as :meth:`Plant.check_units`) audits the units
 the plant's parts declare, before any solve:
 
-- **time unit** -- every kinetic model's rate-constant time unit
-  (:attr:`CompiledModel.time_unit`) must agree, and so must the time unit any
-  unit operation's internals assume (:class:`~aquakin.plant.units.AssumedUnits`);
+- **time unit** -- a plant created without ``time_unit`` (deprecated) needs
+  its kinetic models to agree on theirs (:attr:`CompiledModel.time_unit`);
 - **unit operations** -- a species whose concentration basis a unit's constants
   fix (e.g. a settler's ``g/m3`` settling parameters) must be declared in that
   basis by the unit's model;
@@ -73,7 +76,7 @@ class PlantUnitsReport:
     Attributes
     ----------
     time_unit : str or None
-        The plant's time unit (the one all models agree on), or ``None`` when
+        The plant's time unit (:attr:`Plant.time_unit`), or ``None`` when
         it cannot be determined or the models disagree.
     issues : list of PlantUnitIssue
         Every finding, errors and warnings, in discovery order.
@@ -112,48 +115,25 @@ def _model_time_units(plant: Plant) -> dict:
     return {net.name: net.time_unit for net in plant._ordered_models()}
 
 
-def _plant_time_unit(model_units: dict) -> str | None:
-    known = {u for u in model_units.values() if u is not None}
-    return next(iter(known)) if len(known) == 1 else None
-
-
 def time_unit_errors(plant: Plant) -> list:
-    """The findings that make any solve of ``plant`` meaningless: kinetic models
-    on different time units, or a unit operation whose internals assume a time
-    unit the models do not use. Used by the solve-time guard."""
-    model_units = _model_time_units(plant)
-    issues = []
-    known = {name: u for name, u in model_units.items() if u is not None}
-    if len(set(known.values())) > 1:
-        listing = ", ".join(f"'{n}' in 1/{u}" for n, u in known.items())
-        issues.append(
-            PlantUnitIssue(
-                "error",
-                "plant",
-                f"the kinetic models disagree on the time unit ({listing}); every "
-                f"model is integrated against the same clock, so the rates of all "
-                f"but one are off by the conversion factor.",
-            )
+    """The findings that make any solve of ``plant`` meaningless: a plant with
+    no declared ``time_unit`` whose kinetic models disagree on theirs, so there
+    is no clock to convert them to. Used by the solve-time guard."""
+    if plant._declared_time_unit is not None:
+        return []
+    known = {name: u for name, u in _model_time_units(plant).items() if u is not None}
+    if len(set(known.values())) <= 1:
+        return []
+    listing = ", ".join(f"'{n}' in 1/{u}" for n, u in known.items())
+    return [
+        PlantUnitIssue(
+            "error",
+            "plant",
+            f"the kinetic models disagree on the time unit ({listing}) and the "
+            f"plant declares none to convert them to; create it with "
+            f"Plant(..., time_unit=...).",
         )
-        return issues
-    plant_time = _plant_time_unit(model_units)
-    if plant_time is None:
-        return issues
-    for name in plant._insertion_order:
-        unit = plant.units[name]
-        if not isinstance(unit, AssumedUnits):
-            continue
-        assumed = unit.assumed_units().get("time")
-        if assumed is not None and units_match(assumed, plant_time) is False:
-            issues.append(
-                PlantUnitIssue(
-                    "error",
-                    f"unit '{name}'",
-                    f"its internals assume time in '{assumed}', but the plant's "
-                    f"models run in '{plant_time}'.",
-                )
-            )
-    return issues
+    ]
 
 
 def _model_time_warnings(model_units: dict) -> list:
@@ -161,9 +141,9 @@ def _model_time_warnings(model_units: dict) -> list:
         PlantUnitIssue(
             "warning",
             f"model '{name}'",
-            "its time unit cannot be inferred from its parameter units, so the "
-            "plant cannot confirm it matches the other models; declare units: "
-            "on its rate constants.",
+            "its time unit cannot be inferred from its parameter units, so its "
+            "rates are taken to be per the plant's time unit; declare units: on "
+            "its rate constants.",
         )
         for name, u in model_units.items()
         if u is None
@@ -178,7 +158,7 @@ def _unit_species_issues(plant: Plant) -> list:
         if not isinstance(unit, AssumedUnits) or model is None:
             continue
         for species, assumed in unit.assumed_units().items():
-            if species == "time" or species not in model.species_units:
+            if species not in model.species_units:
                 continue
             declared = model.species_units[species]
             if units_match(declared, assumed) is False:
@@ -224,7 +204,7 @@ def check_plant_units(plant: Plant, *, include_models: bool = True) -> PlantUnit
     >>> print(report.summary())
     """
     model_units = _model_time_units(plant)
-    plant_time = _plant_time_unit(model_units)
+    plant_time = plant.time_unit
     issues = time_unit_errors(plant)
     issues += _model_time_warnings(model_units)
     issues += _unit_species_issues(plant)

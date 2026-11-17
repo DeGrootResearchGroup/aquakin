@@ -36,7 +36,7 @@ tank = CSTRUnit(
     aeration=Aeration(kla=4.0, species="SO2"),       # low DO; SO2 is the O2 species
     output_port="out",
 )
-plant = Plant("pna_sidestream")
+plant = Plant("pna_sidestream", time_unit="d")
 plant.add_unit(tank)
 
 # High-ammonium reject water, alkalinity-limited for partial nitritation, no COD.

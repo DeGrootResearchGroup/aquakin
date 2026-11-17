@@ -69,6 +69,7 @@ from aquakin.plant._flow_split import (
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream
+from aquakin.utils.units import conversion_factor
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -356,12 +357,11 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     def assumed_units(self) -> dict[str, str]:
         """Units assumed by the default settling parameters.
 
-        The BSM1 defaults give the settling velocities in ``m/d`` and ``rh``,
-        ``rp`` and ``X_threshold`` per ``g/m3`` of solids, so a clarifier using
-        them needs a plant in days and every species that counts towards TSS on
-        a ``g/m3`` basis. Settling parameters supplied by the user are taken to
-        be in the plant's units, so nothing is assumed then (see
-        :class:`~aquakin.plant.units.AssumedUnits`).
+        The BSM1 defaults give ``rh``, ``rp`` and ``X_threshold`` per ``g/m3``
+        of solids, so a clarifier using them needs every species that counts
+        towards TSS on a ``g/m3`` basis. Settling parameters supplied by the
+        user are taken to be in the plant's units, so nothing is assumed then
+        (see :class:`~aquakin.plant.units.AssumedUnits`).
         """
         if self.settling_params != _BSM1_TAKACS_DEFAULTS:
             return {}
@@ -370,7 +370,22 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             for sp, factor in zip(self.particulate_species, self._part_tss_factors, strict=True)
             if factor != 0.0
         ]
-        return {"time": "d", **dict.fromkeys(tss_species, "g/m3")}
+        return dict.fromkeys(tss_species, "g/m3")
+
+    def set_time_unit(self, time_unit: str | None) -> None:
+        """Express the default settling velocities in the plant's time unit.
+
+        The BSM1 defaults give ``v0`` and ``vmax`` in ``m/d``; they are
+        converted to metres per ``time_unit``. Settling parameters supplied by
+        the user are taken to be in the plant's units and left alone (see
+        :class:`~aquakin.plant.units.PlantTimeUnitAware`).
+        """
+        if self.settling_params != _BSM1_TAKACS_DEFAULTS:
+            return
+        factor = None if time_unit is None else conversion_factor("m/d", f"m/{time_unit}")
+        scale = 1.0 if factor is None else float(factor)
+        self._v0 = float(self.settling_params["v0"]) * scale
+        self._vmax = float(self.settling_params["vmax"]) * scale
 
     def coupling_pattern(self):
         """Structural Jacobian sparsity, AD-derived.

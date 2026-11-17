@@ -19,7 +19,6 @@ from aquakin.plant import (
     Plant,
     PlantUnitsReport,
     UnitsError,
-    UVUnit,
     WiringError,
 )
 from aquakin.plant.bsm import build_bsm1, build_bsm2
@@ -120,7 +119,7 @@ def test_bsm_influent_loaders_declare_units(asm1):
 # ----- time unit ---------------------------------------------------------------
 
 
-def test_models_on_different_time_units_is_an_error(asm1, ozone):
+def test_models_on_different_time_units_without_a_clock_is_an_error(asm1, ozone):
     plant = Plant("mixed_clock")
     plant.add_unit(_cstr("a", asm1))
     plant.add_unit(_cstr("o", ozone, volume=10.0))
@@ -138,18 +137,6 @@ def test_models_on_different_time_units_is_an_error(asm1, ozone):
         plant.check(raise_on_error=True)
     # Solving is refused outright: no result from a mixed clock is meaningful.
     with pytest.raises(UnitsError, match="disagree on the time unit"):
-        plant.solve(t_span=(0.0, 1.0))
-
-
-def test_unit_assuming_days_in_a_seconds_plant(ozone):
-    plant = Plant("uv_seconds")
-    plant.add_unit(_cstr("o", ozone, volume=10.0))
-    plant.add_unit(UVUnit("uv", ozone, volume=1.0, intensity=10.0, d10=5.0))
-    plant.add_influent("f", ozone.influent(Q=1.0), to="o")
-    plant.connect("o", "uv")
-    assert plant.check_units().time_unit == "s"
-    assert any("unit 'uv'" in e and "'d'" in e for e in _errors(plant))
-    with pytest.raises(UnitsError, match="assume time in 'd'"):
         plant.solve(t_span=(0.0, 1.0))
 
 

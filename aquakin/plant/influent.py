@@ -277,6 +277,49 @@ class InfluentSeries:
         T_arr = None if T is None else jnp.full((2,), float(T))
         return cls(t=t, Q=Q_arr, C=C_arr, model=model, T=T_arr, units=units)
 
+    def in_time_unit(self, time_unit: str | None) -> InfluentSeries:
+        """This series with ``t`` and ``Q`` expressed in ``time_unit``.
+
+        A plant whose time unit differs from the model's uses this to put the
+        sample times and flows on its own clock. The series' current time unit
+        is the declared ``units["t"]`` (``units["Q"]`` for the flow), else the
+        model's. Returns ``self`` unchanged when ``time_unit`` is ``None``, when
+        the current unit is unknown, or when nothing needs converting.
+
+        Parameters
+        ----------
+        time_unit : str or None
+            The time unit to express the series in, e.g. ``"h"``.
+
+        Returns
+        -------
+        InfluentSeries
+            A new series (same model, concentrations and temperature), or
+            ``self``.
+        """
+        if time_unit is None:
+            return self
+        units = dict(self.units or {})
+        native = self.model.time_unit
+        t_unit = units.get("t", native)
+        q_unit = units.get("Q", None if native is None else f"m3/{native}")
+        t_factor = None if t_unit is None else conversion_factor(t_unit, time_unit)
+        q_factor = None if q_unit is None else conversion_factor(q_unit, f"m3/{time_unit}")
+        if t_factor in (None, 1.0) and q_factor in (None, 1.0):
+            return self
+        t, Q = self.t, self.Q
+        if t_factor is not None:
+            t = t * t_factor
+            units["t"] = time_unit
+        if q_factor is not None:
+            Q = Q * q_factor
+            units["Q"] = f"m3/{time_unit}"
+        # Built without ``units`` so construction does not convert back to the
+        # model's time unit; the record of what the data are in is set after.
+        series = dataclasses.replace(self, t=t, Q=Q, units=None)
+        series.units = units
+        return series
+
     def at(self, t: jnp.ndarray) -> Stream:
         """Return the influent :class:`Stream` at time ``t``.
 
