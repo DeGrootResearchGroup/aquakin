@@ -366,7 +366,7 @@ def _build_single_unit_plant(kind):
     net = aquakin.load_model("asm1")
     inf = InfluentSeries.constant(net, SS=300.0, SNH=40.0, XS=200.0, XB_H=80.0,
                                   Q=1000.0)
-    p = Plant(f"{kind}_plant")
+    p = Plant(f"{kind}_plant", time_unit="d")
     if kind == "mbr":
         p.add_unit(MBRUnit("u", net, volume=1000.0, aeration=Aeration(kla=240.0),
                            waste_flow=20.0, particulate_species=_PARTS,

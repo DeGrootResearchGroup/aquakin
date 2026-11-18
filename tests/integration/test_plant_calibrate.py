@@ -20,7 +20,7 @@ from aquakin.plant.influent import InfluentSeries
 
 def _single_cstr_plant(net):
     """A one-unit plant: a CSTR on the toy A -> B decay model, constant feed."""
-    plant = Plant("single_cstr")
+    plant = Plant("single_cstr", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="tank",
@@ -46,7 +46,7 @@ def _two_cstr_plant(net):
     Both tanks reference the same model, so the plant has one shared parameter
     block (``"simple_decay.A_to_B.k"``) and two output streams (``"tank1"`` /
     ``"tank2"``) -- a small vehicle for a multi-stream fit."""
-    plant = Plant("two_cstr")
+    plant = Plant("two_cstr", time_unit="s")
     for name in ("tank1", "tank2"):
         plant.add_unit(
             CSTRUnit(

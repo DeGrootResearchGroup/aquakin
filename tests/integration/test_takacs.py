@@ -16,7 +16,7 @@ def asm1():
 
 
 def _clarifier_plant(asm1, *, Q_inlet=56000.0, overflow_Q=18446.0, C_inlet=None):
-    plant = Plant("clarifier")
+    plant = Plant("clarifier", time_unit="d")
     plant.add_unit(
         TakacsClarifier(
             name="clar",
@@ -127,7 +127,7 @@ def test_takacs_blanket_profile_and_clarification(asm1):
                              "XI": 1100.0, "XP": 600.0, "XND": 5.0})
     Q_in, overflow = 36892.0, 18061.0   # ~BSM1 clarifier loading
 
-    plant = Plant("clar_load")
+    plant = Plant("clar_load", time_unit="d")
     clar = TakacsClarifier(name="clar", model=asm1, area=1500.0,
                            height=4.0, overflow_Q=overflow)
     plant.add_unit(clar)
@@ -165,7 +165,7 @@ def test_no_inflow_no_dynamics(asm1):
     """Initially the clarifier is at uniform default concentrations. With
     zero inflow (Q=0) and zero overflow, the clarifier should reach a
     quiescent state where particulates simply settle to the bottom."""
-    plant = Plant("quiescent_clar")
+    plant = Plant("quiescent_clar", time_unit="d")
     plant.add_unit(
         TakacsClarifier(
             name="clar", model=asm1, area=1500.0, height=4.0,
@@ -465,7 +465,7 @@ def test_lumped_tss_plant_solve(asm1, interface_flux):
     C = asm1.concentrations({"XB_H": 2200.0, "XB_A": 120.0, "XS": 80.0,
                              "XI": 1100.0, "XP": 600.0, "XND": 5.0})
     Q_in, overflow = 36892.0, 18061.0
-    plant = Plant("clar_lumped")
+    plant = Plant("clar_lumped", time_unit="d")
     clar = TakacsClarifier(name="clar", model=asm1, area=1500.0, height=4.0,
                            overflow_Q=overflow, composition_mode="lumped_tss",
                            interface_flux=interface_flux)
@@ -558,7 +558,7 @@ def test_soluble_holdup_damps_vs_passthrough(asm1):
     Q_in, overflow = 36892.0, 18446.0
     C_lo = asm1.concentrations({"XB_H": 2200.0, "XI": 1100.0, "SS": 10.0})
     C_hi = asm1.concentrations({"XB_H": 2200.0, "XI": 1100.0, "SS": 200.0})
-    plant = Plant("clar_hold")
+    plant = Plant("clar_hold", time_unit="d")
     clar = TakacsClarifier(name="clar", model=asm1, area=1500.0, height=4.0,
                            underflow_Q=overflow, soluble_holdup=True)
     plant.add_unit(clar)

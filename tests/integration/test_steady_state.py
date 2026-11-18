@@ -444,7 +444,7 @@ def _design_cstr():
     net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     inf = InfluentSeries(t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
                          C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=net)
-    plant = Plant("one")
+    plant = Plant("one", time_unit="s")
     plant.add_unit(CSTRUnit(name="tank", model=net, volume=100.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     plant.add_influent("feed", inf, to="tank.inlet")
@@ -939,7 +939,7 @@ def test_bsm2_digester_forward_scaled_residual_matches_ptc():
     }
     adm1 = aquakin.load_model("adm1")
     si = adm1.species_index
-    plant = Plant("digester")
+    plant = Plant("digester", time_unit="d")
     plant.add_unit(ADM1DigesterUnit(name="digester", model=adm1, volume=v_liq,
                                     conditions={"T": 308.15}, input_port_names=["feed"]))
     plant.add_influent("feed", InfluentSeries.constant(adm1, Q=q_feed, **feed),

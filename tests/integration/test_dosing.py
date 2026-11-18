@@ -89,7 +89,7 @@ def test_fixed_dose_flow_outputs_is_inflow_plus_dose(asm1):
 
 
 def test_fixed_dose_in_a_plant_adds_load(asm1):
-    p = Plant("fixeddose")
+    p = Plant("fixeddose", time_unit="d")
     p.add_unit(DosingUnit("carbon", Reagent.from_species(asm1, SS=4e5), flow=2.0))
     p.add_unit(_tank(asm1))
     p.add_influent("feed", InfluentSeries.constant(asm1, SS=60.0, SNH=20.0, Q=1000.0),
@@ -104,7 +104,7 @@ def test_fixed_dose_in_a_plant_adds_load(asm1):
 # --- feedback dosing -------------------------------------------------------
 
 def _feedback_plant(asm1, **dose_kw):
-    p = Plant("fbdose")
+    p = Plant("fbdose", time_unit="d")
     p.add_unit(DosingUnit(
         "carbon", Reagent.from_species(asm1, SS=4e5),
         setpoint=1.0, measured_species="SNO", sensor="tank", **dose_kw))
@@ -153,7 +153,7 @@ def test_grad_flows_through_feedback_dosing(asm1):
 
 
 def test_shared_dosing_controller_disagreement_raises(asm1):
-    p = Plant("bad")
+    p = Plant("bad", time_unit="d")
     r = Reagent.from_species(asm1, SS=4e5)
     p.add_unit(DosingUnit("dA", r, setpoint=1.0, measured_species="SNO",
                           sensor="tank", controller="co"))
@@ -169,7 +169,7 @@ def test_feedback_dose_sensor_must_be_a_reactor(asm1):
     stateless mixer) is rejected at setup with a clear error, rather than failing
     opaquely deep in the first solve (#353)."""
     from aquakin.plant import MixerUnit
-    p = Plant("bad_sensor")
+    p = Plant("bad_sensor", time_unit="d")
     r = Reagent.from_species(asm1, SS=4e5)
     p.add_unit(DosingUnit("carbon", r, setpoint=1.0, measured_species="SNO",
                           sensor="mix", flow_max=10.0))

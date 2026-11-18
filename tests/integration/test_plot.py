@@ -85,7 +85,7 @@ def test_stream_series_plot():
 
 
 def _single_cstr_plant(net):
-    plant = Plant("one")
+    plant = Plant("one", time_unit="d")
     plant.add_unit(CSTRUnit(name="tank", model=net, volume=2000.0,
                             input_port_names=["inlet"], conditions={"T": 293.15},
                             aeration=Aeration(kla=120.0, do_sat=8.0)))

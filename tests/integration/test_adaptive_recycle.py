@@ -65,7 +65,7 @@ def test_adaptive_converges_for_high_rho(rho):
     """
     theta = jnp.array([1.0, 2.0, 3.0])
     fwd = _synthetic_forward(theta, rho)
-    p = Plant("t")
+    p = Plant("t", time_unit="d")
     p.recycle_tol = 1e-12
     p.recycle_max_passes = 5000
     seed_C = {_KEY: jnp.zeros(3)}  # deliberately far from the fixed point
@@ -91,7 +91,7 @@ def test_adaptive_ift_gradient_matches_finite_difference():
     seed = {_KEY: jnp.zeros(3)}
 
     def loss(theta):
-        p = Plant("t")
+        p = Plant("t", time_unit="d")
         p.recycle_tol = 1e-13
         p.recycle_max_passes = 5000
         fwd = _synthetic_forward(theta, rho)
@@ -112,15 +112,15 @@ def test_adaptive_ift_gradient_matches_finite_difference():
 
 def test_recycle_tol_construction_validation():
     """``recycle_tol`` / ``recycle_max_passes`` are validated at construction."""
-    assert Plant("a").recycle_tol == 1e-8            # adaptive on by default
-    assert Plant("b", recycle_tol=1e-9).recycle_tol == 1e-9
-    assert Plant("f", recycle_tol=None).recycle_tol is None  # opt out -> fixed-pass
+    assert Plant("a", time_unit="d").recycle_tol == 1e-8            # adaptive on by default
+    assert Plant("b", time_unit="d", recycle_tol=1e-9).recycle_tol == 1e-9
+    assert Plant("f", time_unit="d", recycle_tol=None).recycle_tol is None  # opt out -> fixed-pass
     with pytest.raises(ValueError):
-        Plant("c", recycle_tol=0.0)
+        Plant("c", time_unit="d", recycle_tol=0.0)
     with pytest.raises(ValueError):
-        Plant("d", recycle_tol=-1e-3)
+        Plant("d", time_unit="d", recycle_tol=-1e-3)
     with pytest.raises(ValueError):
-        Plant("e", recycle_max_passes=0)
+        Plant("e", time_unit="d", recycle_max_passes=0)
 
 
 # ---------------------------------------------------------------------------

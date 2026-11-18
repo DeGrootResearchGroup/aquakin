@@ -48,7 +48,7 @@ def _sbr(asm1, settling=None, **kw):
 
 
 def _plant(asm1, sbr):
-    p = Plant("sbr_plant")
+    p = Plant("sbr_plant", time_unit="d")
     p.add_unit(sbr)
     p.add_influent("feed", InfluentSeries.constant(
         asm1, SS=200.0, SNH=40.0, XS=150.0, XB_H=50.0, Q=5000.0), to="sbr.feed")

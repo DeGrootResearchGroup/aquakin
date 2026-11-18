@@ -323,7 +323,7 @@ def _single_cstr_plant(net):
     from aquakin.plant import CSTRUnit, Plant
     from aquakin.plant.influent import InfluentSeries
 
-    plant = Plant("single_cstr")
+    plant = Plant("single_cstr", time_unit="s")
     plant.add_unit(CSTRUnit(name="tank", model=net, volume=100.0,
                             input_port_names=["inlet"], conditions={"T": 293.15}))
     influent = InfluentSeries(t=jnp.asarray([0.0, 1000.0]),
