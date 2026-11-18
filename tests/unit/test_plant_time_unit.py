@@ -124,6 +124,18 @@ def test_missing_time_unit_warns_once_and_uses_the_models(asm1):
         plant.solve(t_span=(0.0, 0.1))
 
 
+def test_missing_time_unit_warns_once_even_when_the_plant_changes(asm1):
+    plant = _tank_plant(asm1, None, 2000.0, SS=60.0)
+    with pytest.warns(FutureWarning):
+        plant._build_state_layout()
+    # A new influent changes what is put on the clock, so the work is redone,
+    # but the warning is not repeated.
+    plant.add_influent("extra", asm1.influent({"SNH": 5.0}, Q=10.0))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        plant._build_state_layout()
+
+
 def test_declared_time_unit_does_not_warn(asm1):
     plant = _tank_plant(asm1, "d", 2000.0, SS=60.0)
     with warnings.catch_warnings():
@@ -213,6 +225,11 @@ reactions:
     np.testing.assert_allclose(moved.Q, 2.0)
     np.testing.assert_array_equal(moved.t, series.t)
     assert moved.units == {"Q": "m3/h"}
+    # Declared times but no flow unit: only the times move.
+    timed = net.influent({"A": 1.0}, Q=48.0, units={"t": "h"})
+    moved = timed.in_time_unit("d")
+    np.testing.assert_array_equal(moved.Q, timed.Q)
+    assert moved.units == {"t": "d"}
     # Nothing declared and no model clock: there is nothing to convert from.
     plain = net.influent({"A": 1.0}, Q=48.0)
     assert plain.in_time_unit("h") is plain

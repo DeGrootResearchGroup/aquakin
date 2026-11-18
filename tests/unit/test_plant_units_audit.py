@@ -202,6 +202,16 @@ def test_settler_with_own_parameters_assumes_nothing(asm1):
     assert defaults.units["settler"]._v0 == pytest.approx(474.0 / 24.0)
 
 
+def test_assumption_about_a_species_the_model_lacks_is_skipped(asm1):
+    plant = Plant("settler_extra", time_unit="d")
+    plant.add_unit(_cstr("tank", asm1))
+    settler = TakacsClarifier("settler", asm1, area=1500.0, height=4.0, underflow_Q=400.0)
+    settler.assumed_units = lambda: {"NOT_A_SPECIES": "kg/m3"}
+    plant.add_unit(settler)
+    plant.connect("tank", "settler")
+    assert plant.check_units(include_models=False).ok
+
+
 def test_settler_ignores_species_outside_tss(asm1):
     # XND carries no TSS weight, so its units do not enter the settling
     # function and are not constrained.
