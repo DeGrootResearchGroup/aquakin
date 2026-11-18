@@ -322,3 +322,86 @@ def test_a_cached_model_file_follows_an_edit_to_its_base(tmp_path):
     )
     again = load_model_file(tmp_path / "top.yaml")
     assert float(again.parameter_values({})[again.param_index["muH"]]) == 6.0
+
+
+def test_settings_that_are_not_well_formed_are_refused():
+    from aquakin.plant.catalog import validate_settings
+
+    cstr, dosing, store = unit_kind("cstr"), unit_kind("dosing"), unit_kind("storage")
+    with pytest.raises(ValueError, match="settings must be a mapping"):
+        validate_settings(cstr, [("volume", 1.0)])
+    with pytest.raises(ValueError, match="'volume' is required"):
+        validate_settings(cstr, {"volume": None})
+    with pytest.raises(ValueError, match="'conditions' must be a mapping"):
+        validate_settings(cstr, {"conditions": [293.15]})
+    with pytest.raises(ValueError, match="'conditions' key 1 must be a string"):
+        validate_settings(cstr, {"conditions": {1: 293.15}})
+    with pytest.raises(ValueError, match="'reagent' must be"):
+        validate_settings(dosing, {"reagent": {"model": "asm1", "colour": "red"}})
+    with pytest.raises(ValueError, match="'reagent.composition.SS' must be a number"):
+        validate_settings(dosing, {"reagent": {"model": "asm1", "composition": {"SS": "a lot"}}})
+    with pytest.raises(ValueError, match="can only be set from Python"):
+        validate_settings(store, {"initial_concentrations": [1.0]})
+    validate_settings(store, {"output_flow_max": "inf", "initial_concentrations": None})
+
+
+def test_an_influent_series_is_read_relative_to_the_spec(tmp_path):
+    from aquakin.plant import write_influent_table
+    from aquakin.plant.bsm import load_bsm1_influent
+    from aquakin.plant.catalog import build_unit
+
+    m = aquakin.load_model("asm1")
+    write_influent_table(load_bsm1_influent("dry", m), tmp_path / "data" / "feed.csv")
+    series = build_unit(
+        "influent", "feed", {"model": "asm1", "series": "data/feed.csv"}, base_dir=tmp_path
+    )
+    assert series.Q.shape[0] > 100
+    out = check_unit(
+        "influent", "feed", {"model": "asm1", "series": "data/feed.csv", "T": 288.0}, None, tmp_path
+    )
+    assert not out["ok"] and "set none of them" in out["error"]
+
+
+def test_a_unit_that_cannot_be_written_as_settings_says_why():
+    import dataclasses
+
+    from aquakin.plant.catalog import unit_settings
+
+    m = aquakin.load_model("asm1")
+    tank = plant.CSTRUnit("t", dataclasses.replace(m), 100.0, ["in"], conditions=T)
+    with pytest.raises(ValueError, match="is not a shipped model as aquakin.load_model"):
+        unit_settings(tank)
+    store = plant.StorageTank("s", m, 10.0, initial_concentrations=m.default_concentrations())
+    with pytest.raises(ValueError, match="unit 's': 'initial_concentrations' .* has no plain form"):
+        unit_settings(store)
+
+    class Custom(plant.CSTRUnit):
+        pass
+
+    with pytest.raises(ValueError, match="no unit kind for Custom"):
+        unit_settings(Custom("c", m, 100.0, ["in"], conditions=T))
+
+
+def test_docstrings_and_plain_values():
+    import numpy as np
+
+    from aquakin.plant.catalog import _docstring_parts, _plain
+
+    class NoParameters:
+        """Summary line.
+
+        More text but no parameter list.
+        """
+
+    assert _docstring_parts(NoParameters) == ("Summary line.", {})
+    assert _plain(np.float64(2.0)) == 2.0 and _plain(-np.inf) == "-inf"
+    assert _plain([1, 2.5, "a"]) == [1, 2.5, "a"]
+    assert _plain({"a": 1.0, "b": float("inf")}) == {"a": 1.0, "b": "inf"}
+    assert _plain({"a": [1]}) is None and _plain(object()) is None
+    with pytest.raises(ValueError, match="holds NaN"):
+        _plain(float("nan"))
+
+
+def test_a_port_setting_left_empty_gives_no_ports():
+    kind = unit_kind("mixer")
+    assert kind.ports_for({"model": "asm1", "input_port_names": None})[0] == []

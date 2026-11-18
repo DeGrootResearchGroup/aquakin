@@ -649,3 +649,305 @@ def test_a_stream_may_not_share_an_influent_name():
     q.register_stream("raw", "clarifier.overflow")
     with pytest.raises(WiringError, match="is already the name of a stream"):
         q.add_influent("raw", InfluentSeries.constant(_asm1(), Q=1.0), to=q.influent_endpoint)
+
+
+def _with_translator(spec, **change):
+    import copy
+
+    out = copy.deepcopy(spec)
+    entry = next(c for c in out["connections"] if not isinstance(c, str))
+    entry["translator"].update(change)
+    return out
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"kind": "nope"}, "translator kind 'nope' is not one of"),
+        ({"bogus": 1}, "'bogus' is not a setting of translator asm1_to_adm1"),
+        ({"strict": 1}, "translator setting 'strict' has the wrong type"),
+        ({"fnaa": "x"}, "translator setting 'fnaa' has the wrong type"),
+        ({"pH_adm": [7.0]}, "translator setting 'pH_adm' has the wrong type"),
+    ],
+)
+def test_translator_settings_are_checked_by_type(change, message):
+    spec = _two_model_plant().to_spec()
+    with pytest.raises(SpecError, match=message):
+        Plant.from_spec(_with_translator(spec, **change))
+    # A whole number where a decimal is expected is the same setting.
+    q = Plant.from_spec(_with_translator(spec, pH_adm=7))
+    assert q.to_spec() == spec
+
+
+def test_specs_that_name_things_wrongly_are_refused(tmp_path):
+    with pytest.raises(SpecError, match="a spec must be a mapping"):
+        Plant.from_spec([1, 2])
+    model = tmp_path / "mine.yaml"
+    model.write_text("model:\n  name: mine\n  extends: asm1\n")
+    spec = {"format": 2, "models": {"yours": {"source": str(model)}}, "units": {}}
+    with pytest.raises(SpecError, match="is named 'mine', not 'yours'"):
+        Plant.from_spec(spec)
+    model.write_text("model: [\n")
+    spec = {"format": 2, "models": {"mine": {"source": str(model)}}, "units": {}}
+    with pytest.raises(SpecError, match="models.mine: "):
+        Plant.from_spec(spec)
+    good = _bsm1().to_spec()
+    with pytest.raises(SpecError, match="streams.bad name: WiringError"):
+        Plant.from_spec(dict(good, streams={"bad name": "clarifier.overflow"}))
+
+
+def test_seeds_a_spec_cannot_hold_are_refused():
+    import dataclasses
+
+    p = _two_model_plant()
+    last = p.connections[-1]
+    seed = last.initial_value
+    for bad, message in (
+        (
+            Stream(Q=seed.Q, C=seed.C, model=seed.model, scalars={"org": 1.0}),
+            r"seed scalars \['org'\] cannot be written",
+        ),
+        (
+            Stream(Q=seed.Q, C=_adm1().default_concentrations(), model=_adm1()),
+            "a seed in another model",
+        ),
+    ):
+        p.connections[-1] = dataclasses.replace(last, initial_value=bad)
+        with pytest.raises(SpecError, match=message):
+            p.to_spec()
+
+
+def test_influents_a_spec_cannot_hold_are_refused(tmp_path):
+    from aquakin.plant import read_influent_table, write_influent_table
+
+    p = build_bsm1()
+    p.add_influent(
+        "feed", InfluentSeries.constant(_asm1(), Q=float("inf"), **FEED), to=p.influent_endpoint
+    )
+    with pytest.raises(SpecError, match="holds a value that is not finite"):
+        p.to_spec()
+
+    table = write_influent_table(load_bsm1_influent("dry", _asm1()), tmp_path / "dry.csv")
+    q = build_bsm1()
+    q.add_influent("feed", read_influent_table(table, _asm1()), to=q.influent_endpoint)
+    table.write_text(table.read_text().replace("\n0.0", "\n0.0", 1) + "\n")
+    with pytest.raises(SpecError, match="has changed since influent 'feed' was read"):
+        q.to_spec(tmp_path / "project" / "flowsheet.yaml")
+
+
+def test_extends_chains_that_cannot_be_copied_are_refused(tmp_path):
+    from aquakin.plant.spec import write_spec
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "a.yaml").write_text("model:\n  name: a\n  extends: b.yaml\n")
+    (outside / "b.yaml").write_text("model:\n  name: b\n  extends: a.yaml\n")
+    spec = {"format": 2, "models": {"a": {"source": str(outside / "a.yaml")}}, "units": {}}
+    with pytest.raises(SpecError, match="returns to"):
+        write_spec(spec, tmp_path / "p1" / "flowsheet.yaml")
+
+    # An extends: written inline cannot be rewritten in place.
+    (outside / "c.yaml").write_text("model: {name: c, extends: d.yaml}\n")
+    (outside / "d.yaml").write_text("model:\n  name: d\n  extends: asm1\n")
+    spec = {"format": 2, "models": {"c": {"source": str(outside / "c.yaml")}}, "units": {}}
+    with pytest.raises(SpecError, match="cannot find its one 'extends:' line"):
+        write_spec(spec, tmp_path / "p2" / "flowsheet.yaml")
+
+    # Two models whose different bases would land on one file.
+    for folder, value in (("one", 4.0), ("two", 5.0)):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "base.yaml").write_text(
+            f"model:\n  name: base\n  extends: asm1\nparameters:\n  muH: {{value: {value}}}\n"
+        )
+        (tmp_path / folder / f"m{folder}.yaml").write_text(
+            f"model:\n  name: m{folder}\n  extends: base.yaml\n"
+        )
+    spec = {
+        "format": 2,
+        "models": {f"m{f}": {"source": str(tmp_path / f / f"m{f}.yaml")} for f in ("one", "two")},
+        "units": {},
+    }
+    with pytest.raises(SpecError, match="two different files would be written"):
+        write_spec(spec, tmp_path / "p3" / "flowsheet.yaml")
+    assert not (tmp_path / "p3").exists()
+
+
+def test_write_spec_refuses_what_it_cannot_write(tmp_path):
+    from aquakin.plant.spec import write_spec
+
+    spec = _bsm1().to_spec()
+    with pytest.raises(SpecError, match="units.tank1: "):
+        write_spec(
+            dict(spec, units={**spec["units"], "tank1": {"kind": "vat"}}), tmp_path / "a.yaml"
+        )
+    feed = {**spec["units"]["feed"], "Q": None, "composition": {}, "series": "missing.csv"}
+    with pytest.raises(SpecError, match=r"units.feed.series: .*missing.csv does not exist"):
+        write_spec(dict(spec, units={**spec["units"], "feed": feed}), tmp_path / "b.yaml")
+    with pytest.raises(SpecError, match="a value a spec file cannot"):
+        write_spec(dict(spec, layout={"tank1": [float("nan"), 0.0]}), tmp_path / "c.yaml")
+    assert not list(tmp_path.iterdir())
+
+
+def test_infinity_has_one_spelling_in_the_fingerprint():
+    from aquakin.plant.spec import spec_fingerprint
+
+    m = _asm1()
+    p = Plant("store", time_unit="d")
+    p.add_unit(aquakin.plant.StorageTank("store", m, 100.0))
+    p.add_influent("feed", InfluentSeries.constant(m, Q=10.0, **FEED), to="store.in")
+    spec = p.to_spec()
+    store = spec["units"]["store"]
+    assert store["output_flow_max"] == "inf"
+    prints = {
+        spec_fingerprint(
+            dict(spec, units={**spec["units"], "store": {**store, "output_flow_max": v}})
+        )
+        for v in ("inf", "+inf", " INF", float("inf"))
+    }
+    assert len(prints) == 1
+
+
+def test_tables_and_unknown_kinds_in_fingerprints_and_changes(tmp_path):
+    from aquakin.plant.spec import spec_changes, spec_fingerprint, spec_inputs
+
+    p = _dynamic_bsm1()
+    p.to_spec(tmp_path / "flowsheet.yaml")
+    inputs = spec_inputs(tmp_path / "flowsheet.yaml")
+    assert set(inputs) >= {"flowsheet", "model:asm1", "table:feed"}
+    table = tmp_path / "data" / "feed.csv"
+    table.write_text(table.read_text() + "\n")
+    assert spec_changes(tmp_path / "flowsheet.yaml") == ["data/feed.csv has changed"]
+    table.unlink()
+    assert spec_changes(tmp_path / "flowsheet.yaml") == ["data/feed.csv is missing"]
+    with pytest.raises(SpecError, match="feed.csv does not exist"):
+        spec_fingerprint(tmp_path / "flowsheet.yaml")
+    spec = load_spec_file(tmp_path / "flowsheet.yaml")
+    with pytest.raises(SpecError, match="units.tank1: "):
+        spec_fingerprint(dict(spec, units={"tank1": {"kind": "vat"}}), base_dir=tmp_path)
+
+
+def test_the_version_falls_back_to_the_release_outside_a_checkout(monkeypatch, tmp_path):
+    import subprocess
+
+    import aquakin.plant.spec as spec_module
+    from aquakin import __version__
+
+    def broken(*args, **kwargs):
+        raise subprocess.SubprocessError("no git")
+
+    monkeypatch.setattr(subprocess, "run", broken)
+    assert spec_module.aquakin_version() == __version__
+    monkeypatch.setattr(spec_module, "__file__", str(tmp_path / "a" / "b" / "spec.py"))
+    assert spec_module.aquakin_version() == __version__
+
+
+def test_model_files_that_cannot_be_found_or_read(tmp_path):
+    from aquakin.plant.spec import spec_changes, spec_fingerprint, write_spec
+
+    relative = {"format": 2, "models": {"mine": {"source": "models/mine.yaml"}}, "units": {}}
+    with pytest.raises(SpecError, match="needs the spec to be read from a file"):
+        Plant.from_spec(relative)
+    with pytest.raises(SpecError, match="model file .*mine.yaml does not exist"):
+        spec_fingerprint(relative, base_dir=tmp_path)
+    with pytest.raises(SpecError, match="models.mine: model file .*does not exist"):
+        write_spec(relative, tmp_path / "out" / "flowsheet.yaml", base_dir=tmp_path)
+    (tmp_path / "bad.yaml").write_text("model: [\n")
+    bad = {"format": 2, "models": {"bad": {"source": str(tmp_path / "bad.yaml")}}, "units": {}}
+    with pytest.raises(SpecError, match="is not valid YAML"):
+        write_spec(bad, tmp_path / "out" / "flowsheet.yaml")
+    with pytest.raises(SpecError, match="model name 'bad name'"):
+        write_spec(
+            {"format": 2, "models": {"bad name": {"source": "shipped"}}}, tmp_path / "x.yaml"
+        )
+    # A model recorded without a fingerprint is not reported as changed.
+    assert spec_changes({"format": 2, "models": {"asm1": {"source": "shipped"}}}) == []
+
+
+def test_two_bases_with_one_file_name_are_both_copied(tmp_path):
+    for folder, base in (("a", "../b/base.yaml"), ("b", "../c/base.yaml"), ("c", "asm1")):
+        (tmp_path / folder).mkdir()
+    (tmp_path / "a" / "top.yaml").write_text("model:\n  name: top\n  extends: ../b/base.yaml\n")
+    (tmp_path / "b" / "base.yaml").write_text(
+        "model:\n  name: middle\n  extends: ../c/base.yaml\nparameters:\n  KS: {value: 12.0}\n"
+    )
+    (tmp_path / "c" / "base.yaml").write_text(
+        "model:\n  name: bottom\n  extends: asm1\nparameters:\n  muH: {value: 5.0}\n"
+    )
+    p = Plant("tank", time_unit="d")
+    m = aquakin.load_model_from_file(tmp_path / "a" / "top.yaml")
+    p.add_unit(CSTRUnit("tank", m, 100.0, ["in"], conditions={"T": 293.15}))
+    p.add_influent("feed", InfluentSeries.constant(m, Q=10.0, **FEED), to="tank.in")
+    project = tmp_path / "project"
+    p.to_spec(project / "flowsheet.yaml")
+    assert "extends: base.yaml" in (project / "models" / "top.yaml").read_text()
+    assert "extends: base_2.yaml" in (project / "models" / "base.yaml").read_text()
+    q = Plant.from_spec(project / "flowsheet.yaml")
+    np.testing.assert_array_equal(
+        np.asarray(q.default_parameters()), np.asarray(p.default_parameters())
+    )
+
+
+def test_what_to_spec_cannot_write_is_refused(tmp_path):
+    from aquakin.plant import HeatBalanceTemperature
+
+    p = _bsm1()
+    p.set_temperature_model(HeatBalanceTemperature())
+    with pytest.raises(SpecError, match="temperature model HeatBalanceTemperature cannot"):
+        p.to_spec()
+
+    class MyTranslator(ASM1toADM1):
+        pass
+
+    q = Plant("custom", time_unit="d")
+    q.add_unit(ADM1DigesterUnit("digester", _adm1(), 3400.0, conditions={"T": 308.15}))
+    q.add_influent(
+        "feed",
+        InfluentSeries.constant(_asm1(), Q=100.0, **FEED),
+        to="digester",
+        translator=MyTranslator(_asm1(), _adm1()),
+    )
+    with pytest.raises(SpecError, match="translator MyTranslator cannot be written"):
+        q.to_spec()
+
+
+def test_an_influent_feeding_through_a_translator_round_trips():
+    p = Plant("fed", time_unit="d")
+    p.add_unit(ADM1DigesterUnit("digester", _adm1(), 3400.0, conditions={"T": 308.15}))
+    p.add_influent(
+        "feed",
+        InfluentSeries.constant(_asm1(), Q=100.0, **FEED),
+        to="digester",
+        translator=ASM1toADM1(_asm1(), _adm1()),
+    )
+    _assert_same_plant(p, Plant.from_spec(p.to_spec()))
+
+
+def test_translator_and_seed_helpers(monkeypatch):
+    import aquakin.plant.spec as spec_module
+    from aquakin.plant.spec import _build_seed, _build_translator, _same_kind, _Seed
+
+    class Refusing:
+        def __init__(self, source_model, target_model, rate: float = 1.0):
+            raise ValueError("these two models do not meet")
+
+    monkeypatch.setattr(spec_module, "_translators", lambda: {"refusing": Refusing})
+    with pytest.raises(SpecError, match="x: translator: ValueError: these two models"):
+        _build_translator({"kind": "refusing", "rate": 2}, _asm1(), _adm1(), "x")
+    seed = _build_seed(_Seed(), _asm1())
+    np.testing.assert_array_equal(np.asarray(seed.C), np.asarray(_asm1().default_concentrations()))
+    assert _same_kind(None, "text") and not _same_kind(None, [1])
+    assert not _same_kind(1.0, float("inf"))
+
+
+def test_a_failed_write_leaves_no_temporary_file(tmp_path, monkeypatch):
+    import os
+
+    import aquakin.plant.spec as spec_module
+
+    def broken(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(spec_module.os, "replace", broken)
+    with pytest.raises(OSError, match="disk full"):
+        _bsm1().to_spec(tmp_path / "flowsheet.yaml")
+    assert os.listdir(tmp_path) == []

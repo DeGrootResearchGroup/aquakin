@@ -132,3 +132,31 @@ def test_bsm2_with_a_heat_balance_names_every_entry():
     assert names["tank1"][-1] == "T" and "T" not in names["digester"]
     y = np.asarray(p.initial_state())
     np.testing.assert_array_equal(np.asarray(p.state_from_named(p.named_state(y))), y)
+
+
+def test_names_that_would_clash_and_states_that_do_not_fit():
+    from aquakin.plant import CSTRUnit, DosingUnit, Reagent
+    from aquakin.plant.errors import WiringError
+
+    m = aquakin.load_model("asm1")
+    p = Plant("p", time_unit="d")
+    p.add_unit(CSTRUnit("tank", m, 100.0, ["in"], conditions={"T": 293.15}))
+    p.add_influent("feed", InfluentSeries.constant(m, Q=1.0, SS=1.0), to="tank.in")
+    p.register_stream("eff", "tank.out")
+    for name, message in (("feed", "name of an influent"), ("eff", "name of a stream")):
+        with pytest.raises(WiringError, match=message):
+            p.add_unit(CSTRUnit(name, m, 100.0, ["in"], conditions={"T": 293.15}))
+    with pytest.raises(WiringError, match="is already the name of a unit"):
+        p.add_influent("tank", InfluentSeries.constant(m, Q=1.0), to="tank.in")
+    with pytest.raises(ValueError, match="a plant state has shape"):
+        p.named_state(np.zeros(3))
+    assert DosingUnit("d", Reagent(m, m.default_concentrations() * 0), flow=1.0).state_names() == ()
+
+    class Misnamed(CSTRUnit):
+        def state_names(self):
+            return ("only_one",)
+
+    q = Plant("q", time_unit="d")
+    q.add_unit(Misnamed("bad", m, 100.0, ["in"], conditions={"T": 293.15}))
+    with pytest.raises(WiringError, match="unit 'bad' names 1 state entries"):
+        q.state_names()

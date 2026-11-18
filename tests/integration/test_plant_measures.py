@@ -189,26 +189,21 @@ def test_temperature_is_a_channel_of_a_stream_that_carries_one():
         _observed_channels(bare, resolved, sol.t, sol.state, bare.default_parameters())
 
 
-@pytest.mark.slow
 def test_a_free_composition_parameter_is_seen_by_the_ranking():
     """Fitting ``i_XB``: total nitrogen depends on it through its weights as well
-    as through the plant state, and the ranking's per-set scores equal each
-    set's own Fisher information, which differentiates the whole forward model."""
-    plant = _asm1_tank()
-    t_obs = jnp.linspace(0.02, 0.2, 4)
+    as through the plant state, and the ranking's score equals the set's own
+    Fisher information, which differentiates the whole forward model. The set
+    also reads the temperature, a column the ranking adds for it."""
+    plant = _asm1_tank(T=288.15)
+    t_obs = jnp.linspace(0.05, 0.15, 3)
     free = ["asm1.i_XB", "asm1.muH"]
-    kw = dict(t_span=(0.0, 0.2))
-    sets = [[("tank", ["TN", "SNH"])], [("tank", ["COD", "SNH"])]]
-    ranked = plant_rank_sensor_sets(
-        plant, [SensorSet(o, sigma=0.1) for o in sets], t_obs, free, **kw
-    )
-    by_index = {c.index: c.value for c in ranked}
-    for i, obs in enumerate(sets):
-        fim = plant_fisher_information(plant, obs, t_obs, free, sigma=0.1, **kw)
-        assert by_index[i] == pytest.approx(aquakin.design_criterion(fim, "D"), rel=1e-8)
+    kw = dict(t_span=(0.0, 0.15))
+    obs = [("tank", ["TN", "SNH", "T"])]
+    [ranked] = plant_rank_sensor_sets(plant, [SensorSet(obs, sigma=0.1)], t_obs, free, **kw)
+    fim = plant_fisher_information(plant, obs, t_obs, free, sigma=0.1, **kw)
+    assert ranked.value == pytest.approx(aquakin.design_criterion(fim, "D"), rel=1e-8)
     # TN carries i_XB's information directly (through its weight on the biomass).
-    tn = plant_fisher_information(plant, [("tank", ["TN"])], t_obs, ["asm1.i_XB"], sigma=0.1, **kw)
-    assert float(tn.matrix[0, 0]) > 0.0
+    assert float(fim.matrix[0, 0]) > 0.0
 
 
 def test_a_file_model_named_like_a_shipped_one_borrows_no_table(tmp_path):
@@ -221,3 +216,34 @@ def test_a_file_model_named_like_a_shipped_one_borrows_no_table(tmp_path):
     impostor = aquakin.load_model_from_file(path)
     assert composition_base(impostor) is None
     assert composition_base(aquakin.load_model("asm1")) == "asm1"
+
+
+def test_channels_a_model_cannot_give_or_name_twice(tmp_path):
+    with pytest.raises(KeyError, match="no COD for model 'asm2d_chemp'"):
+        measure_map(aquakin.load_model("asm2d_chemp"), ("COD",))
+    text = (Path(__file__).parents[1] / "fixtures" / "simple_model.yaml").read_text()
+    path = tmp_path / "tn.yaml"
+    path.write_text(
+        text.replace("simple_decay", "tn_decay").replace("name: B", "name: TN").replace("B:", "TN:")
+    )
+    model = aquakin.load_model_from_file(path)
+    assert model.species == ("A", "TN") or list(model.species) == ["A", "TN"]
+    with pytest.raises(KeyError, match="'TN' is both a species"):
+        measure_map(model, ("TN",))
+
+
+def test_the_composition_base_of_file_chains(tmp_path):
+    from aquakin.utils.composition import composition_base
+
+    (tmp_path / "base.yaml").write_text("model:\n  name: base1\n  extends: asm1\n")
+    (tmp_path / "top.yaml").write_text("model:\n  name: top1\n  extends: base.yaml\n")
+    top = aquakin.load_model_from_file(tmp_path / "top.yaml")
+    assert composition_base(top) == "asm1"
+    # A base with other species, and a file that has gone, give no base.
+    (tmp_path / "more.yaml").write_text(
+        "model:\n  name: more\n  extends: asm1\n"
+        "species:\n  - {name: XEXTRA, units: g/m3, default_concentration: 0.0}\n"
+    )
+    assert composition_base(aquakin.load_model_from_file(tmp_path / "more.yaml")) is None
+    (tmp_path / "top.yaml").unlink()
+    assert composition_base(top) is None

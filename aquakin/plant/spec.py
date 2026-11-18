@@ -378,7 +378,11 @@ def _parse_connection(entry, where: str) -> _Connection:
 def _model_fingerprint(path: Path) -> str:
     from aquakin.schema.loader import model_fingerprint
 
-    return model_fingerprint(path.read_text(), str(path), path.parent)
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        raise SpecError(f"model file {path} does not exist") from None
+    return model_fingerprint(text, str(path), path.parent)
 
 
 def _shipped_fingerprint(name: str) -> str:
@@ -400,7 +404,10 @@ def _shipped_names() -> set[str]:
 
 
 def _file_digest(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except FileNotFoundError:
+        raise SpecError(f"{path} does not exist") from None
 
 
 def _located(source: str, base_dir: Path | None, where: str) -> Path:
@@ -485,6 +492,20 @@ def _check_model_names(settings: dict, models: dict, where: str) -> None:
             raise SpecError(f"{where}: model '{name}' is not listed under 'models'")
 
 
+def _same_kind(default, value) -> bool:
+    """Whether ``value`` has the type of a translator setting whose default is
+    ``default``: true/false, a finite number, or text."""
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, (int, float)):
+        return (
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        )
+    if isinstance(default, str):
+        return isinstance(value, str)
+    return isinstance(value, (bool, int, float, str))
+
+
 def _translator_settings(spec: dict, where: str) -> tuple[type, dict]:
     """The translator class and its settings, every one filled in, checked by type."""
     spec = dict(spec)
@@ -502,10 +523,9 @@ def _translator_settings(spec: dict, where: str) -> tuple[type, dict]:
     for key, value in spec.items():
         if key not in full:
             raise SpecError(f"{where}: '{key}' is not a setting of translator {kind}")
-        expect_bool = isinstance(full[key], bool)
-        if isinstance(value, bool) != expect_bool or not isinstance(value, (int, float, str)):
+        if not _same_kind(full[key], value):
             raise SpecError(f"{where}: translator setting '{key}' has the wrong type ({value!r})")
-        full[key] = value
+        full[key] = float(value) if isinstance(full[key], float) else value
     return cls, {"kind": kind, **full}
 
 
@@ -592,9 +612,6 @@ def plant_from_spec(cls, spec, *, base_dir=None):
             plant.add_unit(built)
         if entry.label is not None:
             plant.labels[uid] = entry.label
-    clash = set(influents) & set(plant.units)
-    if clash:
-        raise SpecError(f"units: {sorted(clash)} name both an influent and a unit")
 
     fed = dict.fromkeys(influents, 0)
     for i, raw in enumerate(doc.connections):

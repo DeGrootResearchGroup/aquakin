@@ -2149,12 +2149,6 @@ class Plant:
         """Every output stream's ``(Q, C)`` trajectory (see :meth:`_stream_sweep`)."""
         return self._stream_sweep(solution, params_full)[0]
 
-    def _cached_stream_temperatures(self, solution: PlantSolution, params_full) -> dict:
-        """The temperature trajectory ``(n_t,)`` of every output stream that
-        carries one, from the same single pass (and cache) as
-        :meth:`_cached_streams`; a stream with no temperature is absent."""
-        return self._stream_sweep(solution, params_full)[1]
-
     def stream(
         self,
         solution: PlantSolution,

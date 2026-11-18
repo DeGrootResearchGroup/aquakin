@@ -56,3 +56,38 @@ def test_a_matrix_keeps_its_row_and_column_names(tmp_path):
     assert m.shape == (2, 1) and cols == ["only"]
     with pytest.raises(ValueError, match="shape"):
         write_matrix(tmp_path / "bad.csv", F, ["a"])
+
+
+def test_tables_hold_numbers_text_and_empty_cells(tmp_path):
+    from aquakin.study import read_table, write_table
+
+    path = write_table(
+        tmp_path / "t.csv",
+        {"rank": [1, 2], "name": ["a", "b"], "value": [1 / 3, None], "x": [np.nan, -np.inf]},
+    )
+    back = read_table(path)
+    assert back["rank"] == [1.0, 2.0] and back["name"] == ["a", "b"]
+    assert back["value"] == [1 / 3, None]
+    assert np.isnan(back["x"][0]) and back["x"][1] == -np.inf
+    with pytest.raises(ValueError, match="same length"):
+        write_table(tmp_path / "bad.csv", {"a": [1], "b": [1, 2]})
+
+
+def test_files_that_are_not_results_are_refused(tmp_path):
+    (tmp_path / "list.yaml").write_text("- 1\n- 2\n")
+    with pytest.raises(ValueError, match="holds no named values"):
+        read_named_values(tmp_path / "list.yaml")
+    (tmp_path / "empty.csv").write_text("")
+    with pytest.raises(ValueError, match="is empty"):
+        read_trajectory(tmp_path / "empty.csv")
+    (tmp_path / "table.csv").write_text("x,y\n1,2\n")
+    with pytest.raises(ValueError, match="not a trajectory table"):
+        read_trajectory(tmp_path / "table.csv")
+
+
+def test_progress_reports_a_fraction_when_the_total_is_known():
+    from aquakin import Progress
+
+    assert Progress("profile", 1, 4).fraction == 0.25
+    assert Progress("fit", 5).fraction is None
+    assert Progress("design", 3, 2).fraction == 1.0
