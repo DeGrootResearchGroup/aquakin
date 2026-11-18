@@ -56,13 +56,19 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `composition_table` also serves a model read from a file that `extends:` a
   shipped model with the same species, evaluated with its own parameters.
 - Studies (`aquakin.study`, `aquakin study run|check|freeze|unfreeze|copy`): an
-  analysis of a flowsheet project saved in the project with its results, so far
-  a simulation (steady state or dynamic) or a Fisher information. Results are
+  analysis of a flowsheet project saved in the project with its results: a
+  simulation (steady state or dynamic), a Fisher information, a calibration
+  against a data table, a profile likelihood, or a ranking of sensor sets. Results are
   plain YAML / CSV files keyed by name. A study is reported stale when the
   flowsheet, a model or an influent table it ran on changes (saying which), and
   a newer aquakin is noted without making it stale. A frozen study runs on a
   snapshot of its plant with every model flattened (shipped models too), so
   neither project edits nor upgrades change it; unfreezing deletes its results.
+- Progress reports and cancelling: `Plant.calibrate`,
+  `plant_profile_likelihood`, `plant_rank_sensor_sets` and
+  `plant_fisher_information` take `progress=`, a callable that receives an
+  `aquakin.Progress` at each objective evaluation, profile point or run, and
+  can raise `aquakin.Cancelled` to stop the analysis.
 - Plant states by name: every unit names its state entries
   (`unit.state_names()`), and `Plant.state_names()`, `Plant.named_state(y)` and
   `Plant.state_from_named(named)` turn a flat state into

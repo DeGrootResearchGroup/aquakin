@@ -42,12 +42,27 @@ results. The design and the owner's decisions are in
   base by an unambiguous species match (`_base_by_species`); keep that working
   when changing `aquakin/utils/composition.py`, or measured channels (TN, COD)
   break in frozen studies.
-- Kinds: `simulate` (no `time` → steady state, results `streams.yaml` /
-  `measured.yaml`; with `time` → `streams.csv` / `measured.csv`; always
-  `final_state.yaml` and `parameters.yaml`) and `fisher` (`fisher.csv`,
-  `summary.yaml` with values, transforms, std (null when singular) and the four
-  design criteria, `parameters.yaml`). A new kind adds a `_run_<kind>`, its
-  required fields in `_check_kind`, and a test in
+- Kinds (`_RUNNERS`, each `_run_<kind>(plant, folder, study, params, y0, out,
+  progress)`; required fields in `_REQUIRED`):
+  - `simulate`: no `time` → steady state (`streams.yaml`, `measured.yaml`);
+    with `time` → `streams.csv` / `measured.csv`; always `final_state.yaml`
+    and `parameters.yaml`.
+  - `fisher`: `fisher.csv`, `summary.yaml` (values, transforms, std or null
+    when singular, the four design criteria), `parameters.yaml`.
+  - `calibrate`: observations from `data:` (a `write_trajectory` table, one
+    `<stream>.<channel>` column per channel, so channels must be named);
+    `fit.yaml`, `parameters.yaml` (the fitted vector), `fitted.csv` (the
+    fitted plant's channels at the data times), `covariance.csv` with
+    `laplace`. Priors are on by default (`use_priors`), as in `Plant.calibrate`.
+  - `profile`: the calibrate fields plus `profile` and `grid`; `profile.csv`
+    (`write_table`) and `profile.yaml` (MLE, interval).
+  - `rank`: `candidates` (named sensor sets) and optional `base`;
+    `ranking.csv`.
+  Data and initial-state files are part of the study's fingerprint.
+  A new kind adds a runner, its required fields, and a test in
   `tests/integration/test_study.py`.
-- Not yet: progress and cancel hooks, and the editor's job worker (steps 3–4
-  of the design note).
+- **Progress and cancel** (`aquakin/progress.py`): `run_study(progress=)` passes
+  the callable to the analysis; `Cancelled` (a `BaseException`) stops it and
+  the run is recorded with outcome `cancelled` (state `"cancelled"`).
+- The editor drives studies through the job worker (`aquakin/__main__.py`'s
+  `start_study` / `cancel_study`); see `.claude/rules/ui.md`.

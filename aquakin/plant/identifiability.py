@@ -83,6 +83,7 @@ from aquakin.plant.calibrate import (
     calibrate_plant,
     measured,
 )
+from aquakin.progress import report
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
@@ -206,6 +207,7 @@ def plant_fisher_information(
     integrator=None,
     diff: DifferentiationConfig = DifferentiationConfig(),
     sensitivity_options: dict | None = None,
+    progress=None,
 ) -> FisherInformation:
     """Fisher information of a plant design at assumed parameter values.
 
@@ -281,6 +283,9 @@ def plant_fisher_information(
         Keyword arguments for :meth:`Plant.solve_sensitivity` in
         ``mode="forward"`` (``rtol``, ``atol``, ``sens_rtol``, ``factormax``,
         ``dtmax``, ``max_steps``).
+    progress : callable, optional
+        Called with a :class:`aquakin.Progress` (stage ``"design"``) before each
+        run's sensitivity solve; raise :class:`aquakin.Cancelled` from it to stop.
 
     Returns
     -------
@@ -340,6 +345,7 @@ def plant_fisher_information(
     dphys = design.dphysical(p)
     blocks = []
     for r in range(n_runs):
+        report(progress, "design", r, n_runs, f"run {r + 1} of {n_runs}")
         resolved, _ = _resolve_observable_columns(design.plants[r], observable_specs)
         y_obs, dy = design.sensitivity(r, resolved, p)
         blocks.append(
@@ -719,6 +725,7 @@ def plant_rank_sensor_sets(
     integrator=None,
     diff: DifferentiationConfig = DifferentiationConfig(),
     sensitivity_options: dict | None = None,
+    progress=None,
 ) -> list[CandidateScore]:
     """Rank candidate sensor sets by the information they give about a plant.
 
@@ -757,6 +764,10 @@ def plant_rank_sensor_sets(
         design), one sensitivity solve per draw; ``params`` is then ignored.
     t_span, y0, transforms, priors, use_priors, mode, time_unit, integrator, diff, sensitivity_options
         As for :func:`plant_fisher_information`.
+    progress : callable, optional
+        Called with a :class:`aquakin.Progress` (stage ``"design"``) before each
+        sensitivity solve, one per run and parameter draw; raise
+        :class:`aquakin.Cancelled` from it to stop.
 
     Returns
     -------
@@ -823,6 +834,13 @@ def plant_rank_sensor_sets(
         # Each set's information summed over the runs, from one solve per run.
         info = [np.zeros((k, k)) for _ in sets]
         for r in range(design.n_runs):
+            report(
+                progress,
+                "design",
+                d * design.n_runs + r,
+                len(draws) * design.n_runs,
+                f"parameter draw {d + 1} of {len(draws)}, run {r + 1} of {design.n_runs}",
+            )
             union, maps = unions[r]
             y_all, dy_all = design.sensitivity(r, union, p)
             for i, (ss, set_map) in enumerate(zip(sets, maps)):
@@ -884,6 +902,7 @@ def plant_profile_likelihood(
     sigma=None,
     free_ic: FreeICConfig | None = None,
     optimizer: OptimizerConfig = OptimizerConfig(),
+    progress=None,
     **calibrate_kwargs,
 ) -> ProfileResult:
     """Profile-likelihood analysis of one plant parameter.
@@ -932,6 +951,11 @@ def plant_profile_likelihood(
         ``transforms``, ``time_unit``, ``priors``, ``use_priors``,
         ``check_finite``, ``integrator``, ``diff``. The inner fits force
         ``laplace=False``.
+    progress : callable, optional
+        Called with a :class:`aquakin.Progress` (stage ``"profile"``, the
+        points fitted so far of the grid) before each grid-point fit and at
+        every objective evaluation within it; raise :class:`aquakin.Cancelled`
+        from it to stop the sweep.
 
     Returns
     -------
@@ -967,7 +991,21 @@ def plant_profile_likelihood(
     # pinned value and the start, which reach it as runtime arguments.
     cache: dict = {}
 
+    fitted = [0]
+
     def _fit_point(value, warm):
+        from aquakin.progress import Progress, report
+
+        label = f"{profile_param} = {float(value):g}"
+        report(progress, "profile", fitted[0], len(grid), label)
+        inner = None
+        if progress is not None:
+            done = fitted[0]
+
+            def inner(p):
+                progress(Progress("profile", done, len(grid), f"{label}: {p.message}"))
+
+        fitted[0] += 1
         init_p = base_params if warm is None else warm.params
         ic_start = None if warm is None or not free_ic else warm.C0_fitted
         return calibrate_plant(
@@ -981,6 +1019,7 @@ def plant_profile_likelihood(
             free_ic=free_ic,
             optimizer=_point_optimizer(optimizer, warm, cold_starts),
             laplace=False,
+            progress=inner,
             _compiled_cache=cache,
             _ic_start=ic_start,
             **calibrate_kwargs,

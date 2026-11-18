@@ -245,3 +245,132 @@ def test_a_bad_study_file_says_where(project):
     shutil.rmtree(folder)
     with pytest.raises(StudyError, match="does not exist"):
         check_study(folder)
+
+
+def _synthetic_data(project, folder, muH):
+    """Effluent SNH and SS of the project plant run at ``muH``, as a data table."""
+    from aquakin.study import write_trajectory
+
+    plant = Plant.from_spec(project / "flowsheet.yaml")
+    p = plant.parameter_values({"asm1_local.muH": muH})
+    t = np.linspace(0.1, 0.5, 5)
+    sol = plant.solve((0.0, 0.5), t_eval=t, params=p)
+    s = plant.stream(sol, "effluent", p)
+    folder.mkdir(parents=True, exist_ok=True)
+    write_trajectory(
+        folder / "data.csv",
+        t,
+        {"effluent.SNH": s.C_named("SNH"), "effluent.SS": s.C_named("SS"), "other.X": t},
+    )
+
+
+FIT = {
+    "free": ["asm1_local.muH"],
+    "observables": [{"stream": "effluent", "channels": ["SNH", "SS"]}],
+    "data": "data.csv",
+    "t_span": [0, 0.5],
+    "transforms": {"asm1_local.muH": "positive_log"},
+    "max_iter": 40,
+    # ASM1's literature prior on muH (centred at 6.0) would pull the estimate.
+    "use_priors": False,
+}
+
+
+def test_a_calibration_study_recovers_a_parameter(project):
+    folder = project / "studies" / "fit"
+    _synthetic_data(project, folder, 5.0)
+    (folder / "study.yaml").write_text(
+        yaml.safe_dump({"study": {"kind": "calibrate", "parameters": {"asm1_local.muH": 3}, **FIT}})
+    )
+    seen = []
+    assert run_study(folder, progress=seen.append).state == "fresh"
+    assert seen and seen[0].stage == "fit"
+    fit = yaml.safe_load((folder / "results" / "fit.yaml").read_text())
+    assert fit["fitted"]["asm1_local.muH"] == pytest.approx(5.0, rel=1e-3)
+    assert read_named_values(folder / "results" / "parameters.yaml")["asm1_local.muH"] == (
+        pytest.approx(5.0, rel=1e-3)
+    )
+    _, fitted = read_trajectory(folder / "results" / "fitted.csv")
+    _, data = read_trajectory(folder / "data.csv")
+    np.testing.assert_allclose(fitted["effluent.SNH"], data["effluent.SNH"], rtol=1e-4)
+    # The data table is one of the study's inputs.
+    (folder / "data.csv").write_text((folder / "data.csv").read_text().replace("0.1,", "0.15,"))
+    assert "the study's settings have changed" in check_study(folder).reasons
+
+
+def test_a_study_names_the_data_columns_it_cannot_find(project):
+    folder = project / "studies" / "nodata"
+    _synthetic_data(project, folder, 4.0)
+    study = {**FIT, "observables": [{"stream": "effluent", "channels": ["SNO"]}]}
+    (folder / "study.yaml").write_text(yaml.safe_dump({"study": {"kind": "calibrate", **study}}))
+    with pytest.raises(StudyError, match="has no column effluent.SNO"):
+        run_study(folder)
+    assert check_study(folder).state == "failed"
+
+
+def test_a_cancelled_run_is_recorded(project):
+    from aquakin import Cancelled
+
+    folder = project / "studies" / "cancel"
+    _synthetic_data(project, folder, 5.0)
+    (folder / "study.yaml").write_text(
+        yaml.safe_dump({"study": {"kind": "calibrate", "parameters": {"asm1_local.muH": 3}, **FIT}})
+    )
+
+    def stop(p):
+        raise Cancelled()
+
+    with pytest.raises(Cancelled):
+        run_study(folder, progress=stop)
+    assert check_study(folder).state == "cancelled"
+    assert not (folder / "results" / "fit.yaml").exists()
+
+
+@pytest.mark.slow
+def test_profile_and_rank_studies(project):
+    from aquakin.study import read_table
+
+    folder = project / "studies" / "profile"
+    _synthetic_data(project, folder, 4.0)
+    study = {
+        "kind": "profile",
+        **FIT,
+        "free": ["asm1_local.muH", "asm1_local.KS"],
+        "transforms": {},
+        "profile": "asm1_local.muH",
+        "grid": {"start": 3.5, "stop": 4.5, "num": 3},
+        "loss": "nll",
+        "sigma": 0.1,
+    }
+    (folder / "study.yaml").write_text(yaml.safe_dump({"study": study}))
+    run_study(folder)
+    table = read_table(folder / "results" / "profile.csv")
+    assert table["asm1_local.muH"] == [3.5, 4.0, 4.5]
+    summary = yaml.safe_load((folder / "results" / "profile.yaml").read_text())
+    assert summary["mle"] == 4.0
+
+    folder = _study(
+        project,
+        "rank",
+        {
+            "kind": "rank",
+            "free": ["asm1_local.muH", "asm1_local.KS"],
+            "t_obs": [0.1, 0.2, 0.3],
+            "t_span": [0, 0.3],
+            "candidates": [
+                {
+                    "name": "ammonia",
+                    "observables": [{"stream": "effluent", "channels": ["SNH"]}],
+                    "sigma": 0.1,
+                },
+                {
+                    "name": "flow",
+                    "observables": [{"stream": "effluent", "channels": ["Q"]}],
+                    "sigma": 0.1,
+                },
+            ],
+        },
+    )
+    run_study(folder)
+    ranking = read_table(folder / "results" / "ranking.csv")
+    assert ranking["candidate"][0] == "ammonia" and ranking["rank"] == [1.0, 2.0]

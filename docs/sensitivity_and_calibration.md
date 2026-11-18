@@ -635,6 +635,11 @@ from aquakin.plant import Measure, PlantObservable, SensorSet
 SensorSet([PlantObservable("effluent", ("TKN", "NOx", "TSS", "Q"))], sigma=[1.0, 0.5, 2.0, 50.0])
 ```
 
+A long fit, profile or sensor ranking reports its progress to a `progress=`
+callable, which receives an `aquakin.Progress` (`stage`, `done`, `total`,
+`message`) at each objective evaluation, profile point or run; raising
+`aquakin.Cancelled` from it stops the analysis.
+
 Fit against several streams at once with `observables=[PlantObservable(...), ...]`,
 fit assembled-state initial conditions with `free_ic=FreeICConfig([...])`, and run
 a joint multi-batch fit by passing list-valued `observations`/`t_obs`/`y0`.

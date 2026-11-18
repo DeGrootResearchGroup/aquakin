@@ -691,6 +691,7 @@ def calibrate_plant(
     check_finite: bool = True,
     integrator=None,
     diff: DifferentiationConfig = DifferentiationConfig(),
+    progress=None,
     _compiled_cache: dict | None = None,
     _ic_start: list | None = None,
 ) -> CalibrationResult:
@@ -786,6 +787,10 @@ def calibrate_plant(
     diff : DifferentiationConfig, optional
         How the gradient flows through ``plant.solve``. Default
         ``mode='reverse', method='stable'`` -- the cap-free discrete adjoint.
+    progress : callable, optional
+        Called with a :class:`aquakin.Progress` at every objective evaluation;
+        raise :class:`aquakin.Cancelled` from it to stop the fit (see
+        :mod:`aquakin.progress`).
 
     Returns
     -------
@@ -895,5 +900,5 @@ def calibrate_plant(
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)
 
-    result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts)
+    result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts, progress=progress)
     return _fit_result(problem, fm, cfg, bundle, result, opt_bounds)

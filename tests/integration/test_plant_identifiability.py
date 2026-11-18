@@ -774,3 +774,62 @@ def test_a_measure_is_the_weighted_sum_of_its_species(plant):
     np.testing.assert_allclose(
         obs[:, 0], np.asarray(plant.stream(sol, "tank", params).C_named("A")), rtol=1e-10
     )
+
+
+def test_profile_progress_counts_points_and_a_cancel_is_not_a_gap(plant, monkeypatch):
+    """The profile reports each grid point and forwards each inner fit's reports;
+    a Cancelled raised at a point ends the sweep instead of becoming a gap."""
+    import aquakin.plant.identifiability as ident
+    from aquakin import Cancelled, Progress
+
+    idx = plant.parameter_index(K1)
+
+    def fake_calibrate(plant_, observations, t_obs, free, **kw):
+        kw["progress"](Progress("fit", 1, None, "start 1 of 1, evaluation 1"))
+        return SimpleNamespace(loss=float(kw["params"][idx]) ** 2, params=kw["params"])
+
+    monkeypatch.setattr(ident, "calibrate_plant", fake_calibrate)
+    kw = dict(
+        grid=[0.1, 0.2, 0.3],
+        profile_param=K1,
+        observables=[("tank", ["A"])],
+        polish=False,
+    )
+    seen = []
+    plant_profile_likelihood(
+        plant, jnp.zeros((T_OBS.shape[0], 1)), T_OBS, [K1, K2], progress=seen.append, **kw
+    )
+    assert [(p.stage, p.done, p.total) for p in seen[::2]] == [("profile", i, 3) for i in range(3)]
+    assert seen[1].message == f"{K1} = 0.2: start 1 of 1, evaluation 1"
+
+    def cancel_second(p):
+        if p.done == 1:
+            raise Cancelled()
+
+    with pytest.raises(Cancelled):
+        plant_profile_likelihood(
+            plant, jnp.zeros((T_OBS.shape[0], 1)), T_OBS, [K1, K2], progress=cancel_second, **kw
+        )
+
+
+def test_fisher_and_ranking_report_each_run_and_can_be_cancelled(plant):
+    from aquakin import Cancelled
+
+    seen = []
+    plant_fisher_information(
+        plant, [("tank", ["A"])], T_OBS, [K1], sigma=0.1, t_span=(0.0, 20.0), progress=seen.append
+    )
+    assert [(p.stage, p.done, p.total) for p in seen] == [("design", 0, 1)]
+
+    def cancel(p):
+        raise Cancelled()
+
+    with pytest.raises(Cancelled):
+        plant_rank_sensor_sets(
+            plant,
+            [SensorSet([("tank", ["A"])], sigma=0.1)],
+            T_OBS,
+            [K1],
+            t_span=(0.0, 20.0),
+            progress=cancel,
+        )

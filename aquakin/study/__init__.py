@@ -11,9 +11,11 @@ command line.
 from aquakin.study.files import (
     read_matrix,
     read_named_values,
+    read_table,
     read_trajectory,
     write_matrix,
     write_named_values,
+    write_table,
     write_trajectory,
 )
 from aquakin.study.study import (
@@ -36,10 +38,12 @@ __all__ = [
     "load_study",
     "read_matrix",
     "read_named_values",
+    "read_table",
     "read_trajectory",
     "run_study",
     "unfreeze_study",
     "write_matrix",
     "write_named_values",
+    "write_table",
     "write_trajectory",
 ]

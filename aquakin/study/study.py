@@ -15,9 +15,11 @@ study builds it from its snapshot, in which every model is a flattened copy
 (shipped models too), so neither an edit to the project nor an aquakin upgrade
 can change it. A change of aquakin version is noted, never counted as stale.
 
-Two kinds of study so far: ``simulate`` (a steady state, or a dynamic run from
-a chosen initial state) and ``fisher`` (the Fisher information of a sensor
-design, :func:`aquakin.plant.plant_fisher_information`).
+The kinds of study: ``simulate`` (a steady state, or a dynamic run from a
+chosen initial state), ``fisher`` (the Fisher information of a sensor design),
+``calibrate`` (a fit to observations in a data table), ``profile`` (the profile
+likelihood of one parameter) and ``rank`` (sensor sets ranked by the
+information they give).
 """
 
 from __future__ import annotations
@@ -130,9 +132,25 @@ class _Time(BaseModel):
         return [_to_float(x) for x in v] if isinstance(v, list) else v
 
 
+class _Candidate(BaseModel):
+    """One sensor set of a ``rank`` study."""
+
+    model_config = _STRICT
+    name: str
+    observables: list[_Observable]
+    sigma: float | list[float]
+    relative_sigma: bool = False
+    sigma_floor: float = 0.0
+
+    @field_validator("sigma", "sigma_floor", mode="before")
+    @classmethod
+    def _int_sigma(cls, v):
+        return [_to_float(x) for x in v] if isinstance(v, list) else _to_float(v)
+
+
 class _Study(BaseModel):
     model_config = _STRICT
-    kind: Literal["simulate", "fisher"]
+    kind: Literal["simulate", "fisher", "calibrate", "profile", "rank"]
     description: str | None = None
     # The flowsheet, relative to the study folder (a live study's plant).
     flowsheet: str = "../../flowsheet.yaml"
@@ -156,6 +174,31 @@ class _Study(BaseModel):
     sigma_floor: float = 0.0
     sensitivity: Literal["forward", "reverse"] = "forward"
     time_unit: str | None = None
+    # calibrate / profile: the observations, a CSV table relative to the study
+    # folder with a "t" column and one "<stream>.<channel>" column per channel.
+    data: str | None = None
+    loss: Literal["mse", "nll"] = "mse"
+    estimate_sigma: bool = False
+    transforms: dict[str, Literal["none", "positive_log", "logit"]] = {}
+    use_priors: bool = True
+    n_starts: int = 1
+    max_iter: int = 500
+    laplace: bool = False
+    # profile
+    profile: str | None = None
+    grid: _Grid | list[float] | None = None
+    delta: float = 1.92
+    # rank
+    candidates: list[_Candidate] = []
+    base: _Candidate | None = None
+    criterion: Literal["D", "A", "E", "modified_E"] = "D"
+
+    @field_validator("grid", mode="before")
+    @classmethod
+    def _int_grid(cls, v):
+        return [_to_float(x) for x in v] if isinstance(v, list) else v
+
+    _delta = field_validator("delta", mode="before")(_to_float)
 
     @field_validator("parameters", mode="before")
     @classmethod
@@ -178,22 +221,34 @@ class _Study(BaseModel):
         return [_to_float(x) for x in v] if isinstance(v, list) else _to_float(v)
 
 
+_REQUIRED = {
+    "fisher": ("free", "observables", "t_obs", "sigma"),
+    "calibrate": ("free", "observables", "data"),
+    "profile": ("free", "observables", "data", "profile", "grid"),
+    "rank": ("free", "candidates", "t_obs"),
+}
+
+
 def _check_kind(study: _Study, where: str) -> None:
-    if study.kind == "fisher":
-        missing = [
-            n
-            for n, v in (
-                ("free", study.free),
-                ("observables", study.observables),
-                ("t_obs", study.t_obs),
-                ("sigma", study.sigma),
+    if study.kind == "simulate":
+        if not study.streams and not study.observables:
+            raise StudyError(f"{where}: a simulate study saves at least one stream or observable")
+        return
+    missing = [
+        name
+        for name in _REQUIRED[study.kind]
+        if getattr(study, name) is None or getattr(study, name) == [] or getattr(study, name) == ""
+    ]
+    if missing:
+        raise StudyError(f"{where}: a {study.kind} study needs {', '.join(missing)}")
+    if study.kind in ("calibrate", "profile"):
+        if any(o.channels is None for o in study.observables):
+            raise StudyError(
+                f"{where}: a {study.kind} study names the channels of each observable, so "
+                f"each can be found in the data"
             )
-            if not v and v != 0.0
-        ]
-        if missing:
-            raise StudyError(f"{where}: a fisher study needs {', '.join(missing)}")
-    elif not study.streams and not study.observables:
-        raise StudyError(f"{where}: a simulate study saves at least one stream or observable")
+        if study.estimate_sigma and study.sigma is not None:
+            raise StudyError(f"{where}: give sigma or estimate_sigma, not both")
 
 
 def load_study(path) -> _Study:
@@ -243,10 +298,12 @@ def _folder(path) -> Path:
 def _study_fingerprint(folder: Path, study: _Study) -> str:
     """What the study's own inputs are: its settings, and any file they read."""
     inputs: dict[str, Any] = {"study": study.model_dump(mode="json")}
+    files = {"data": study.data}
     if study.initial_state not in ("default", "steady"):
-        state = folder / study.initial_state
-        if state.is_file():
-            inputs["initial_state"] = hashlib.sha256(state.read_bytes()).hexdigest()
+        files["initial_state"] = study.initial_state
+    for key, rel in files.items():
+        if rel is not None and (folder / rel).is_file():
+            inputs[key] = hashlib.sha256((folder / rel).read_bytes()).hexdigest()
     text = json.dumps(inputs, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -284,11 +341,12 @@ class StudyStatus:
 
     Attributes
     ----------
-    state : {"not run", "fresh", "stale", "damaged", "failed"}
+    state : {"not run", "fresh", "stale", "damaged", "failed", "cancelled"}
         ``"fresh"``: the results are those of the study's inputs and plant.
         ``"stale"``: something they were computed from has changed (see
         ``reasons``). ``"damaged"``: a result file is missing or was edited.
         ``"failed"``: the last run ended in an error (``reasons`` holds it).
+        ``"cancelled"``: the last run was stopped before it finished.
     frozen : bool
         Whether the study runs on its snapshot.
     reasons : list of str
@@ -347,6 +405,9 @@ def check_study(path) -> StudyStatus:
         status.notes.append(
             f"run with aquakin {run.get('aquakin')}; this is aquakin {aquakin_version()}"
         )
+    if run.get("outcome") == "cancelled":
+        status.state = "cancelled"
+        return status
     if run.get("outcome") != "finished":
         status.state = "failed"
         status.reasons.append(str(run.get("error", "the run did not finish")))
@@ -419,7 +480,26 @@ def _initial_state(plant, folder: Path, study: _Study, params):
     return plant.state_from_named(read_named_values(path))
 
 
-def _run_simulate(plant, folder: Path, study: _Study, params, y0, out: Path) -> list[Path]:
+def _measured_columns(plant, sol, observables, params) -> dict:
+    """``{"<stream>.<channel>": values}`` of measured channels over a solution."""
+    import numpy as np
+
+    from aquakin.plant.calibrate import _resolve_observable_columns, measured
+
+    columns = {}
+    resolved = _resolve_observable_columns(plant, observables)[0]
+    for observable, (_, m) in zip(observables, resolved):
+        s = plant.stream(sol, observable.stream, params)
+        values = np.asarray(measured(s.C, s.Q, s.T, m, params))
+        names = _channel_names(observable) or list(s.model.species)
+        for j, channel in enumerate(names):
+            columns[f"{observable.stream}.{channel}"] = values[:, j]
+    return columns
+
+
+def _run_simulate(
+    plant, folder: Path, study: _Study, params, y0, out: Path, progress
+) -> list[Path]:
     import numpy as np
 
     from aquakin.plant.calibrate import _resolve_observable_columns, measured
@@ -468,20 +548,14 @@ def _run_simulate(plant, folder: Path, study: _Study, params, y0, out: Path) -> 
     if columns:
         written.append(write_trajectory(out / "streams.csv", sol.t, columns))
     if resolved:
-        measured_columns = {}
-        for observable, (endpoint, m) in zip(observables, resolved):
-            s = plant.stream(sol, observable.stream, params)
-            values = np.asarray(measured(s.C, s.Q, s.T, m, params))
-            names = _channel_names(observable) or list(s.model.species)
-            for j, channel in enumerate(names):
-                measured_columns[f"{observable.stream}.{channel}"] = values[:, j]
+        measured_columns = _measured_columns(plant, sol, observables, params)
         written.append(write_trajectory(out / "measured.csv", sol.t, measured_columns))
     final = np.asarray(sol.state)[-1]
     written.append(write_named_values(out / "final_state.yaml", plant.named_state(final)))
     return written
 
 
-def _run_fisher(plant, folder: Path, study: _Study, params, y0, out: Path) -> list[Path]:
+def _run_fisher(plant, folder: Path, study: _Study, params, y0, out: Path, progress) -> list[Path]:
     import numpy as np
 
     from aquakin import design_criterion
@@ -501,6 +575,7 @@ def _run_fisher(plant, folder: Path, study: _Study, params, y0, out: Path) -> li
         params=params,
         mode=study.sensitivity,
         time_unit=study.time_unit,
+        progress=progress,
     )
     criteria = {}
     for c in ("D", "A", "E", "modified_E"):
@@ -528,6 +603,200 @@ def _run_fisher(plant, folder: Path, study: _Study, params, y0, out: Path) -> li
     ]
 
 
+def _observations(folder: Path, study: _Study):
+    """``(t, observations (n_t, n_channels), channel names)`` from the study's data table."""
+    import numpy as np
+
+    from aquakin.study.files import read_trajectory
+
+    path = folder / study.data
+    if not path.is_file():
+        raise StudyError(f"data: {path} does not exist")
+    try:
+        t, columns = read_trajectory(path)
+    except ValueError as exc:
+        raise StudyError(f"data: {exc}") from None
+    names = [
+        f"{o.stream}.{name}" for o in study.observables for name in _channel_names(_channels(o))
+    ]
+    missing = [n for n in names if n not in columns]
+    if missing:
+        raise StudyError(
+            f"data: {path.name} has no column {', '.join(missing)} (its columns: "
+            f"{', '.join(columns) or 'none'})"
+        )
+    return t, np.stack([columns[n] for n in names], axis=1), names
+
+
+def _fit_arguments(plant, study: _Study, params, y0, progress) -> dict:
+    from aquakin import OptimizerConfig
+
+    return dict(
+        observables=[_channels(o) for o in study.observables],
+        t_span=study.t_span,
+        y0=y0,
+        params=params,
+        transforms=dict(study.transforms) or None,
+        loss=study.loss,
+        sigma="estimate" if study.estimate_sigma else study.sigma,
+        use_priors=study.use_priors,
+        optimizer=OptimizerConfig(n_starts=study.n_starts, max_iter=study.max_iter),
+        time_unit=study.time_unit,
+        progress=progress,
+    )
+
+
+def _run_calibrate(
+    plant, folder: Path, study: _Study, params, y0, out: Path, progress
+) -> list[Path]:
+    import numpy as np
+
+    from aquakin.plant import calibrate_plant
+
+    t, observations, names = _observations(folder, study)
+    result = calibrate_plant(
+        plant,
+        observations,
+        t,
+        list(study.free),
+        laplace=study.laplace,
+        **_fit_arguments(plant, study, params, y0, progress),
+    )
+    fitted = np.asarray(result.params)
+    summary = {
+        "fitted": {n: float(result.params_named[n]) for n in study.free},
+        "std": None
+        if result.params_named_std is None
+        else {n: float(v) for n, v in result.params_named_std.items()},
+        "loss": float(result.loss),
+        "converged": bool(result.converged),
+        "message": str(result.message),
+        "iterations": int(result.n_iter),
+        "at_bound": dict(result.at_bound),
+        "sigma_estimate": None
+        if result.sigma_estimate is None
+        else dict(zip(names, (float(v) for v in np.ravel(result.sigma_estimate)))),
+    }
+    written = [write_named_values(out / "parameters.yaml", _named_parameters(plant, fitted))]
+    path = out / "fit.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_yaml(path, summary)
+    written.append(path)
+    if result.posterior_cov is not None:
+        written.append(
+            write_matrix(
+                out / "covariance.csv", np.asarray(result.posterior_cov), result.parameter_names
+            )
+        )
+    # The fitted plant's channels at the observation times, beside the data.
+    span = study.t_span or (0.0, float(t[-1]))
+    sol = plant.solve(span, t_eval=t, params=fitted, y0=y0, time_unit=study.time_unit)
+    observables = [_channels(o) for o in study.observables]
+    written.append(
+        write_trajectory(
+            out / "fitted.csv", sol.t, _measured_columns(plant, sol, observables, fitted)
+        )
+    )
+    return written
+
+
+def _run_profile(plant, folder: Path, study: _Study, params, y0, out: Path, progress) -> list[Path]:
+    import numpy as np
+
+    from aquakin.plant import plant_profile_likelihood
+    from aquakin.study.files import write_table
+
+    t, observations, _ = _observations(folder, study)
+    arguments = _fit_arguments(plant, study, params, y0, progress)
+    prof = plant_profile_likelihood(
+        plant,
+        observations,
+        t,
+        list(study.free),
+        grid=np.asarray(_times(study.grid)),
+        profile_param=study.profile,
+        delta=study.delta,
+        **arguments,
+    )
+    written = [
+        write_table(
+            out / "profile.csv",
+            {
+                study.profile: list(prof.grid),
+                "loss": [None if not np.isfinite(v) else v for v in prof.loss],
+                "delta_loss": [None if not np.isfinite(v) else v for v in prof.delta_loss],
+            },
+        )
+    ]
+    lo, hi = prof.ci
+    summary = {
+        "parameter": study.profile,
+        "mle": None if not np.isfinite(prof.mle) else float(prof.mle),
+        "ci": [None if lo is None else float(lo), None if hi is None else float(hi)],
+        "delta": study.delta,
+    }
+    path = out / "profile.yaml"
+    _write_yaml(path, summary)
+    written.append(path)
+    return written
+
+
+def _sensor_set(candidate: _Candidate):
+    from aquakin.plant import SensorSet
+
+    return SensorSet(
+        [_channels(o) for o in candidate.observables],
+        sigma=candidate.sigma,
+        relative_sigma=candidate.relative_sigma,
+        sigma_floor=candidate.sigma_floor,
+        name=candidate.name,
+    )
+
+
+def _run_rank(plant, folder: Path, study: _Study, params, y0, out: Path, progress) -> list[Path]:
+    import numpy as np
+
+    from aquakin.plant import plant_rank_sensor_sets
+    from aquakin.study.files import write_table
+
+    ranked = plant_rank_sensor_sets(
+        plant,
+        [_sensor_set(c) for c in study.candidates],
+        np.asarray(_times(study.t_obs)),
+        list(study.free),
+        base=None if study.base is None else _sensor_set(study.base),
+        criterion=study.criterion,
+        params=params,
+        t_span=study.t_span,
+        y0=y0,
+        mode=study.sensitivity,
+        time_unit=study.time_unit,
+        progress=progress,
+    )
+    written = [
+        write_table(
+            out / "ranking.csv",
+            {
+                "rank": list(range(1, len(ranked) + 1)),
+                "candidate": [study.candidates[c.index].name for c in ranked],
+                study.criterion: [c.value for c in ranked],
+                "improvement": [c.improvement for c in ranked],
+            },
+        ),
+        write_named_values(out / "parameters.yaml", _named_parameters(plant, params)),
+    ]
+    return written
+
+
+_RUNNERS = {
+    "simulate": _run_simulate,
+    "fisher": _run_fisher,
+    "calibrate": _run_calibrate,
+    "profile": _run_profile,
+    "rank": _run_rank,
+}
+
+
 def _named_parameters(plant, params) -> dict[str, float]:
     import numpy as np
 
@@ -535,7 +804,7 @@ def _named_parameters(plant, params) -> dict[str, float]:
     return {name: float(values[plant.parameter_index(name)]) for name in plant.parameter_names()}
 
 
-def run_study(path, *, replace: bool = False) -> StudyStatus:
+def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     """Run a study and write its results and the record of the run.
 
     Parameters
@@ -546,6 +815,10 @@ def run_study(path, *, replace: bool = False) -> StudyStatus:
         Replace results already there. Without it a study that has results is
         refused, so they are not lost by accident: copy the study first
         (:func:`copy_study`) to keep them.
+    progress : callable, optional
+        Passed to the analysis (see :mod:`aquakin.progress`); raising
+        :class:`aquakin.Cancelled` from it stops the run, which is then
+        recorded as cancelled.
 
     Returns
     -------
@@ -589,13 +862,16 @@ def run_study(path, *, replace: bool = False) -> StudyStatus:
         params = plant.parameter_values(study.parameters) if study.parameters else None
         params = plant.default_parameters() if params is None else params
         y0 = _initial_state(plant, folder, study, params)
-        runner = _run_fisher if study.kind == "fisher" else _run_simulate
-        written = runner(plant, folder, study, params, np.asarray(y0), out)
+        runner = _RUNNERS[study.kind]
+        written = runner(plant, folder, study, params, np.asarray(y0), out, progress)
     except BaseException as exc:
+        from aquakin.progress import Cancelled
+
+        cancelled = isinstance(exc, Cancelled)
         record |= {
             "finished": _now(),
-            "outcome": "failed",
-            "error": f"{type(exc).__name__}: {exc}",
+            "outcome": "cancelled" if cancelled else "failed",
+            "error": "cancelled" if cancelled else f"{type(exc).__name__}: {exc}",
         }
         _write_yaml(folder / RUN_FILE, record)
         raise

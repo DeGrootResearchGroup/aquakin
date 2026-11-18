@@ -245,7 +245,26 @@ aquakin study run studies/effluent      # writes results/ and run.yaml
 aquakin study check studies/effluent    # fresh, stale (and why), damaged or failed
 ```
 
-or `aquakin.study.run_study(path)` / `check_study(path)` from Python. Every
+or `aquakin.study.run_study(path)` / `check_study(path)` from Python. Besides
+`simulate`, a study can be a `fisher` information of a sensor design, a
+`calibrate` fit to observations, a `profile` likelihood of one parameter, or a
+`rank` of candidate sensor sets. A fit reads its observations from a CSV table
+in the study folder, a `t` column and one `<stream>.<channel>` column per
+measured channel:
+
+```yaml
+study:
+  kind: calibrate
+  free: [asm1.muH, asm1.KS]
+  observables:
+    - {stream: effluent, channels: [SNH, TSS]}
+  data: data.csv          # columns t, effluent.SNH, effluent.TSS
+  loss: nll
+  sigma: [0.2, 2.0]
+  laplace: true
+```
+
+Every
 result is keyed by name (parameters by `model.param`, states by unit and state
 name, trajectories as CSV columns such as `effluent.SNH`), so results stay
 readable after the flowsheet is reorganized.

@@ -21,9 +21,11 @@ import yaml
 __all__ = [
     "read_matrix",
     "read_named_values",
+    "read_table",
     "read_trajectory",
     "write_matrix",
     "write_named_values",
+    "write_table",
     "write_trajectory",
 ]
 
@@ -202,3 +204,56 @@ def read_matrix(path) -> tuple[np.ndarray, list[str], list[str]]:
         len(names), len(columns)
     )
     return m, names, columns
+
+
+def write_table(path, columns: Mapping) -> Path:
+    """Write named columns of equal length as a CSV table (a profile, a ranking).
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The file to write.
+    columns : mapping of str to sequence
+        ``{name: values}``; numbers are written exactly, text as it is, and
+        ``None`` as an empty cell.
+
+    Returns
+    -------
+    pathlib.Path
+    """
+    names = list(columns)
+    data = [list(columns[n]) for n in names]
+    if len({len(c) for c in data}) > 1:
+        raise ValueError("every column of a table has the same length")
+
+    def cell(v):
+        if v is None:
+            return ""
+        if isinstance(v, str):
+            return v
+        return _text(_number(v))
+
+    n = len(data[0]) if data else 0
+    return _write_csv(path, names, ([cell(c[i]) for c in data] for i in range(n)))
+
+
+def read_table(path) -> dict[str, list]:
+    """Read a file written by :func:`write_table`.
+
+    Returns
+    -------
+    dict of str to list
+        Each column's cells: a float where the cell reads as a number, ``None``
+        where it is empty, the text otherwise.
+    """
+
+    def value(text):
+        if text == "":
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return text
+
+    header, rows = _read_csv(path)
+    return {name: [value(row[j]) for row in rows] for j, name in enumerate(header)}
