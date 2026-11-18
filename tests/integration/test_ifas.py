@@ -104,7 +104,7 @@ def test_closed_loop_aeration_requires_signal(asm1):
 # --- the headline integration check (slow: real plant solves) ---------------
 
 def _plant(unit, asm1):
-    p = Plant("t")
+    p = Plant("t", time_unit="d")
     p.add_unit(unit)
     p.add_influent(
         "feed",

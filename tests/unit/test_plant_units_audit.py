@@ -19,7 +19,6 @@ from aquakin.plant import (
     Plant,
     PlantUnitsReport,
     UnitsError,
-    UVUnit,
     WiringError,
 )
 from aquakin.plant.bsm import build_bsm1, build_bsm2
@@ -120,7 +119,7 @@ def test_bsm_influent_loaders_declare_units(asm1):
 # ----- time unit ---------------------------------------------------------------
 
 
-def test_models_on_different_time_units_is_an_error(asm1, ozone):
+def test_models_on_different_time_units_without_a_clock_is_an_error(asm1, ozone):
     plant = Plant("mixed_clock")
     plant.add_unit(_cstr("a", asm1))
     plant.add_unit(_cstr("o", ozone, volume=10.0))
@@ -141,18 +140,6 @@ def test_models_on_different_time_units_is_an_error(asm1, ozone):
         plant.solve(t_span=(0.0, 1.0))
 
 
-def test_unit_assuming_days_in_a_seconds_plant(ozone):
-    plant = Plant("uv_seconds")
-    plant.add_unit(_cstr("o", ozone, volume=10.0))
-    plant.add_unit(UVUnit("uv", ozone, volume=1.0, intensity=10.0, d10=5.0))
-    plant.add_influent("f", ozone.influent(Q=1.0), to="o")
-    plant.connect("o", "uv")
-    assert plant.check_units().time_unit == "s"
-    assert any("unit 'uv'" in e and "'d'" in e for e in _errors(plant))
-    with pytest.raises(UnitsError, match="assume time in 'd'"):
-        plant.solve(t_span=(0.0, 1.0))
-
-
 def test_time_guard_does_not_block_a_consistent_plant(make_cstr_plant):
     # The guard runs in every solve's setup; a consistent plant passes it.
     plant = make_cstr_plant()
@@ -165,7 +152,7 @@ def test_time_guard_does_not_block_a_consistent_plant(make_cstr_plant):
 
 def test_settler_flags_particulates_in_kg_per_m3(asm1):
     kg = _with_units(asm1, XS="kgCOD/m3")
-    plant = Plant("settler")
+    plant = Plant("settler", time_unit="d")
     plant.add_unit(_cstr("tank", kg))
     plant.add_unit(TakacsClarifier("settler", kg, area=1500.0, height=4.0, underflow_Q=1.0e4))
     plant.connect("tank", "settler")
@@ -191,7 +178,7 @@ def test_settler_with_own_parameters_assumes_nothing(asm1):
     hourly = _in_hours(asm1)
     assert hourly.time_unit == "h"
     custom = dict(v0=19.75, vmax=10.4, rh=5.76e-4, rp=2.86e-3, fns=2.28e-3, X_threshold=3000.0)
-    plant = Plant("hourly")
+    plant = Plant("hourly", time_unit="h")
     plant.add_unit(_cstr("tank", hourly))
     plant.add_unit(
         TakacsClarifier(
@@ -201,23 +188,35 @@ def test_settler_with_own_parameters_assumes_nothing(asm1):
     plant.connect("tank", "settler")
     assert plant.units["settler"].assumed_units() == {}
     assert plant.check_units(include_models=False).ok
-    plant._build_state_layout()  # the solve-time guard lets it through
+    plant._build_state_layout()
+    assert plant.units["settler"]._v0 == 19.75
 
-    defaults = Plant("hourly_defaults")
+    # The BSM defaults are in m/d and are converted to the hourly clock.
+    defaults = Plant("hourly_defaults", time_unit="h")
     defaults.add_unit(_cstr("tank", hourly))
     defaults.add_unit(
         TakacsClarifier("settler", hourly, area=1500.0, height=4.0, underflow_Q=400.0)
     )
     defaults.connect("tank", "settler")
-    with pytest.raises(UnitsError, match="assume time in 'd'"):
-        defaults._build_state_layout()
+    defaults._build_state_layout()
+    assert defaults.units["settler"]._v0 == pytest.approx(474.0 / 24.0)
+
+
+def test_assumption_about_a_species_the_model_lacks_is_skipped(asm1):
+    plant = Plant("settler_extra", time_unit="d")
+    plant.add_unit(_cstr("tank", asm1))
+    settler = TakacsClarifier("settler", asm1, area=1500.0, height=4.0, underflow_Q=400.0)
+    settler.assumed_units = lambda: {"NOT_A_SPECIES": "kg/m3"}
+    plant.add_unit(settler)
+    plant.connect("tank", "settler")
+    assert plant.check_units(include_models=False).ok
 
 
 def test_settler_ignores_species_outside_tss(asm1):
     # XND carries no TSS weight, so its units do not enter the settling
     # function and are not constrained.
     model = _with_units(asm1, XND="kmolN/m3")
-    plant = Plant("settler_xnd")
+    plant = Plant("settler_xnd", time_unit="d")
     plant.add_unit(_cstr("tank", model))
     plant.add_unit(TakacsClarifier("settler", model, area=1500.0, height=4.0, underflow_Q=1.0e4))
     plant.connect("tank", "settler")
@@ -311,7 +310,7 @@ def test_translator_warns_and_assumes_working_unit_when_unreadable(asm1, adm1):
 
 def test_translated_plant_in_other_units_audits_clean(asm1, adm1):
     adm1_g = _adm1_in_grams(adm1)
-    plant = Plant("interface")
+    plant = Plant("interface", time_unit="d")
     plant.add_unit(_cstr("a", asm1))
     plant.add_unit(_cstr("d", adm1_g))
     plant.connect("a", "d", translator=ASM1toADM1(asm1, adm1_g))
@@ -319,7 +318,7 @@ def test_translated_plant_in_other_units_audits_clean(asm1, adm1):
 
 
 def test_connect_rejects_translator_built_for_other_models(asm1, adm1):
-    plant = Plant("wrong_translator")
+    plant = Plant("wrong_translator", time_unit="d")
     plant.add_unit(_cstr("a", asm1))
     plant.add_unit(_cstr("b", asm1))
     with pytest.raises(WiringError, match="translator's target model is 'adm1'"):
@@ -330,7 +329,7 @@ def test_connect_rejects_translator_built_for_models_in_other_units(asm1, adm1):
     # The translator converts from the units of the models it was built with,
     # so wiring a kg/m3 translator to a g/m3 digester would feed it values 1000x
     # too small.
-    plant = Plant("stale_translator")
+    plant = Plant("stale_translator", time_unit="d")
     plant.add_unit(_cstr("a", asm1))
     plant.add_unit(_cstr("d", _adm1_in_grams(adm1)))
     with pytest.raises(WiringError, match="built for a target model declaring 'S_su'"):
@@ -340,7 +339,7 @@ def test_connect_rejects_translator_built_for_models_in_other_units(asm1, adm1):
 def test_connect_accepts_translator_on_same_species_instance(asm1, adm1):
     # A separately loaded copy of the same model has the same species list, so
     # the translator still indexes correctly and is accepted.
-    plant = Plant("same_species")
+    plant = Plant("same_species", time_unit="d")
     plant.add_unit(_cstr("a", asm1))
     plant.add_unit(_cstr("d", adm1))
     other_asm1 = dataclasses.replace(asm1)
@@ -351,7 +350,7 @@ def test_connect_accepts_translator_on_same_species_instance(asm1, adm1):
 
 
 def _single_tank(asm1, influent):
-    plant = Plant("tank")
+    plant = Plant("tank", time_unit="d")
     plant.add_unit(_cstr("tank", asm1))
     plant.add_influent("feed", influent, to="tank")
     return plant
@@ -519,14 +518,14 @@ reactions:
     net = aquakin.load_model_from_file(str(path))
     assert net.time_unit is None
     report = _single_tank(net, net.influent(Q=1.0)).check_units()
-    assert report.ok and report.time_unit is None
+    assert report.ok and report.time_unit == "d"
     assert any("time unit cannot be inferred" in w.detail for w in report.warnings)
 
 
 def test_check_raises_for_unfed_ports_before_unit_errors(asm1):
     # An unfed port is reported first: the wiring error, a plain ValueError,
     # comes before any unit error.
-    plant = Plant("unfed")
+    plant = Plant("unfed", time_unit="d")
     plant.add_unit(_cstr("tank", asm1))
     chk = plant.check()
     assert chk.unfed_ports == ["tank.inlet"] and not chk.ok

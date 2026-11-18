@@ -161,7 +161,7 @@ def test_srt_ports_prefer_recorded_endpoints_over_unit_names():
     from aquakin.plant.design import _srt_ports
 
     asm1 = aquakin.load_model("asm1")
-    plant = Plant("custom")
+    plant = Plant("custom", time_unit="d")
     plant.add_unit(IdealClarifier(name="settler", model=asm1, underflow_Q=100.0))
     plant.add_unit(IdealClarifier(name="final", model=asm1, underflow_Q=100.0))
     # Without a record the name fallback still applies.
@@ -246,7 +246,7 @@ def test_reactor_units_autodetect_fails_without_as_reactors():
     from aquakin.plant.design import _reactor_units
 
     net = aquakin.load_model("asm1")
-    plant = Plant("no_as")
+    plant = Plant("no_as", time_unit="d")
     plant.add_unit(MixerUnit(name="mix", input_port_names=["a", "b"], model=net))
     plant._finalize_topology()  # populate _unit_order for the reactor scan
     with pytest.raises(ValueError, match="Could not auto-detect activated-sludge reactors"):

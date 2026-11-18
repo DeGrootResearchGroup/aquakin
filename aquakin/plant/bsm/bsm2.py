@@ -613,7 +613,7 @@ def build_bsm2(
         Q_settler_underflow = Q_underflow  # Qr + Qw
         Q_settler_underflow_init = Q_settler_underflow
 
-    plant = Plant("BSM2")
+    plant = Plant("BSM2", time_unit="d")
     # Recycle seeds carry a nominal temperature so a temperature-aware influent
     # ignites T propagation around the reject loop from the first pass (the value
     # is overwritten within a couple of passes by the real recycle temperature).

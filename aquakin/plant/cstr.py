@@ -25,6 +25,7 @@ from aquakin.core.temperature import T_REF_20C
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.streams import Stream, mixed_scalars
 from aquakin.plant.temperature import OPERATING_T_SIGNAL
+from aquakin.plant.units import ModelTimeScaling
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -483,7 +484,7 @@ class AerationUnit:
 
 
 @dataclass
-class CSTRUnit(AerationUnit, CouplingAware):
+class CSTRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     """A single continuous-flow stirred tank with kinetics + aeration.
 
     Parameters
@@ -661,7 +662,7 @@ class CSTRUnit(AerationUnit, CouplingAware):
         # recirculate. Convection/aeration are added on top, unlimited (the
         # reaction term is the only one the limiter guards).
         stoich = self.model.compute_stoich(params)
-        chemistry = self.model.dCdt(state, params, conditions, 0, stoich=stoich)
+        chemistry = self._scale_rates(self.model.dCdt(state, params, conditions, 0, stoich=stoich))
 
         # Aeration (mass transfer). The operating temperature for the optional
         # driving-force correction is the (flow-weighted) inlet T the kinetics use,

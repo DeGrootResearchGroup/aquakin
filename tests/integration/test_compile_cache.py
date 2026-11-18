@@ -131,7 +131,7 @@ def test_solver_cache_bypassed_under_tracing():
 # ----- Per-instance plant solve cache -------------------------------------
 
 def _one_cstr_plant(net):
-    plant = Plant("cache-test")
+    plant = Plant("cache-test", time_unit="d")
     plant.add_unit(CSTRUnit(
         name="r1", model=net, volume=1000.0, input_port_names=["inlet"],
         conditions={n: net._condition_defaults[n] for n in net.conditions_required},

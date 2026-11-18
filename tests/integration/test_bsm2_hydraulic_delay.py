@@ -139,7 +139,7 @@ def test_grad_through_delay_plant_is_finite(asm1):
     the initial state (load + flow) and check it stays finite."""
     import jax
     from aquakin.plant import Plant
-    plant = Plant("t")
+    plant = Plant("t", time_unit="d")
     plant.add_unit(HydraulicDelayUnit(
         name="d", model=asm1, tau=0.02, initial_flow=100.0,
         initial_concentrations=asm1.default_concentrations()))

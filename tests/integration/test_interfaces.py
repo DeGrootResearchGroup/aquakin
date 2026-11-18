@@ -303,7 +303,7 @@ def test_needs_src_ph_influent_edge_warns():
         def translate(self, C, digester_pH=None):
             return C
 
-    plant = Plant("defensive")
+    plant = Plant("defensive", time_unit="d")
     plant._unit_order = ["sink"]
     plant.connections = [
         Connection(from_unit=None, from_port="feed", to_unit="sink",

@@ -142,7 +142,7 @@ def test_temperature_correction_scales_gas_kla_not_gas_saturation(toy):
 
 
 def _plant(model, aeration):
-    plant = Plant("strip")
+    plant = Plant("strip", time_unit="d")
     plant.add_unit(_tank(model, aeration))
     C_in = model.concentrations({"SS": 200.0, "SO": 0.0, "SN2O": SN2O_IN, "SN2": 0.0})
     influent = InfluentSeries(
@@ -254,7 +254,7 @@ def test_mass_balance_without_any_composition_raises(tmp_path):
     path = tmp_path / "no_composition.yaml"
     path.write_text(_NO_COMPOSITION)
     model = aquakin.load_model_from_file(path)
-    plant = Plant("bare")
+    plant = Plant("bare", time_unit="d")
     plant.add_unit(_tank(model, Aeration(kla=KLA)))
     C_in = model.concentrations({"SS": 10.0, "SO": 0.0})
     influent = InfluentSeries(

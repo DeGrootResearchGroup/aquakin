@@ -33,13 +33,14 @@ import jax.numpy as jnp
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.cstr import Aeration, AerationUnit, aeration_transfer
 from aquakin.plant.streams import Stream, mixed_scalars
+from aquakin.plant.units import ModelTimeScaling
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
 
 
 @dataclass
-class MBRUnit(AerationUnit, CouplingAware):
+class MBRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     """A membrane bioreactor: high-MLSS aerated reactor with membrane separation.
 
     Parameters
@@ -264,7 +265,7 @@ class MBRUnit(AerationUnit, CouplingAware):
 
         stoich = self.model.compute_stoich(params)
         rates = self.model.rates(C, params, conditions, 0)
-        chemistry = stoich.T @ rates
+        chemistry = self._scale_rates(stoich.T @ rates)
 
         T_eff = T_in if T_in is not None else self.conditions.get("T")
         aeration = aeration_transfer(self._av, C, T_eff, signals, self.model)

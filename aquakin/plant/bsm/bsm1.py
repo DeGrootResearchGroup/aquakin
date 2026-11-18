@@ -181,7 +181,7 @@ def build_bsm1(
             "(tank1 .. tank5)."
         )
 
-    plant = Plant("BSM1")
+    plant = Plant("BSM1", time_unit="d")
 
     # ----- Influent mixer -----
     # Mixes the external influent + internal recycle + RAS into tank 1's inlet.

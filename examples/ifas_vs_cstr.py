@@ -18,7 +18,7 @@ from aquakin.plant import Aeration, CSTRUnit, IFASUnit, Plant
 
 
 def _single_tank_plant(unit, model):
-    plant = Plant("demo")
+    plant = Plant("demo", time_unit="d")
     plant.add_unit(unit)
     plant.add_influent(
         "feed",

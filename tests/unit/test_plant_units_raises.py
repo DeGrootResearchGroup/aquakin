@@ -25,7 +25,7 @@ def _decay_model():
 
 
 def _single_cstr_plant(net):
-    plant = Plant("single_cstr")
+    plant = Plant("single_cstr", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="tank",
@@ -313,7 +313,7 @@ def test_warmstart_no_as_reactors(decay_model):
 
     # A mixer-only plant: no aeration-carrying AS reactor at all (a plain CSTR
     # would be counted, since it carries the ``aeration`` attribute).
-    plant = Plant("mixer_only")
+    plant = Plant("mixer_only", time_unit="s")
     plant.add_unit(MixerUnit("mix", ["a", "b"], decay_model))
     with pytest.raises(ValueError, match="No activated-sludge reactors found"):
         bsm1_warm_start(plant)

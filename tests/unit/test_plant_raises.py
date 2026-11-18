@@ -36,7 +36,7 @@ def _constant_influent(net, *, Q=10.0, C=(1.0, 0.0), t_end=100.0):
 
 
 def _single_cstr_plant(net):
-    plant = Plant("one")
+    plant = Plant("one", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="tank",
@@ -56,12 +56,12 @@ def _single_cstr_plant(net):
 def test_recycle_passes_must_be_positive():
     """plant.py:204 -- Plant(recycle_passes=0) is rejected."""
     with pytest.raises(ValueError, match="recycle_passes must be >= 1"):
-        Plant("bad", recycle_passes=0)
+        Plant("bad", time_unit="d", recycle_passes=0)
 
 
 def test_add_unit_rejects_duplicate_name(simple_net):
     """plant.py:325 -- re-adding a unit under an existing name is rejected."""
-    plant = Plant("dup")
+    plant = Plant("dup", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="tank",
@@ -118,7 +118,7 @@ def test_aeration_controller_senses_non_concentration_unit():
     from aquakin.plant.cstr import Aeration
 
     asm1 = aquakin.load_model("asm1")
-    plant = Plant("bad_aer")
+    plant = Plant("bad_aer", time_unit="d")
     plant.add_unit(MixerUnit(name="mix", input_port_names=["a"], model=asm1))
     plant.add_unit(
         CSTRUnit(
@@ -140,7 +140,7 @@ def test_dosing_controller_senses_unknown_unit():
     from aquakin.plant.dosing import DosingUnit, Reagent
 
     asm1 = aquakin.load_model("asm1")
-    plant = Plant("bad_dose")
+    plant = Plant("bad_dose", time_unit="d")
     plant.add_unit(
         CSTRUnit(
             name="reactor",

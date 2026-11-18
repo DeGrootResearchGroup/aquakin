@@ -37,7 +37,7 @@ def _mbr(asm1, **kw):
 
 
 def _plant(asm1, mbr, Q=1000.0):
-    p = Plant("mbr_plant")
+    p = Plant("mbr_plant", time_unit="d")
     p.add_unit(mbr)
     p.add_influent("feed", InfluentSeries.constant(
         asm1, SS=300.0, SNH=40.0, XS=200.0, XB_H=80.0, Q=Q), to="mbr.feed")

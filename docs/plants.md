@@ -189,7 +189,7 @@ To assemble your own flowsheet, construct the units, add them (downstream-first
 if there is a recycle), wire influents and connections, and solve:
 
 ```python
-plant = aquakin.Plant("my_plant")
+plant = aquakin.Plant("my_plant", time_unit="d")
 tank = aquakin.CSTRUnit("aerobic", model, volume=1333.0,
                         input_port_names=["in"], conditions={"T": 293.15},
                         aeration=aquakin.Aeration(kla=240.0))
@@ -203,11 +203,34 @@ sol = plant.solve(t_span=(0.0, 10.0), t_eval=t_eval)
 Units are wired to each other with `plant.connect("aerobic.out", "clarifier.in")`;
 `add_influent(..., to=...)` attaches an external feed to a unit port.
 
+### The plant's time unit
+
+`time_unit=` sets the plant's clock. `t_span` and `t_eval` are in it, flows are
+in m3 per that unit, and so is every unit parameter that contains a time: an
+aeration `kla`, a primary clarifier's filter time constant `t_m`, an SBR's phase
+lengths, a controller's integral time. Everything that comes with its own time
+unit is converted to the clock before the solve:
+
+- each kinetic model's rates, so a model whose rate constants are per second
+  can run beside one that is per day. The model's parameters stay in their own
+  units;
+- each influent's times and flows, which `model.influent(...)` and the loaders
+  give in the model's time unit;
+- the constants built into the unit operations: the UV reactor's exposure time
+  in seconds, the primary clarifier's removal correlation in minutes, and the
+  Takács settler's default (BSM) settling velocities in m/d.
+
+The BSM1, BSM2 and A²O builders use days. A plant created without `time_unit`
+still works: it takes the time unit its models share and gives a
+`FutureWarning`, and raises `UnitsError` if the models disagree. `time_unit`
+will be required in a future release.
+
 ### Checking units before solving
 
-A plant passes streams between units without converting anything, so every
-part must use the same units. `plant.check_units()` compares the units the
-parts declare and reports any disagreement before you solve:
+The plant converts time units but passes stream concentrations between units
+unconverted, so every part must use the same concentration units.
+`plant.check_units()` compares the units the parts declare and reports any
+disagreement before you solve:
 
 ```python
 report = plant.check_units()
@@ -217,15 +240,12 @@ print(report.summary())
 
 It checks that:
 
-- every kinetic model's rate constants use the same time unit. The plant has
-  one clock, so a model in seconds next to one in days is always wrong;
-  `plant.solve` refuses to run such a plant and raises `UnitsError`;
-- units whose internals fix a unit get it. The UV reactor and the primary
-  clarifier convert their residence time from days, so they need a plant in
-  days; the thickener needs its TSS species in `g/m3`; the Takács settler's
-  default (BSM) settling parameters are in m/d and per `g/m3` of solids, so
-  with those it needs days and TSS species in `g/m3`. Settling parameters you
-  supply are taken to be in your plant's units;
+- units whose internals fix a concentration basis get it. The thickener needs
+  its TSS species in `g/m3`, and so does the Takács settler while it uses its
+  default (BSM) settling parameters, which are per `g/m3` of solids. Settling
+  parameters you supply are taken to be in your plant's units;
+- on a plant created without `time_unit`, the kinetic models agree on their
+  time unit;
 - each model passes its own `model.check_units()`; its findings are listed as
   warnings.
 
@@ -251,7 +271,8 @@ Only the scale changes, so a unit that measures something else (an amount in
 moles where the model has a mass, or g COD where it has g N) raises, as does a
 unit that cannot be read. Where the model leaves a unit undeclared there is
 nothing to convert to, and the data are used as given. The BSM influent loaders
-declare their units for you.
+declare their units for you. A plant whose clock differs from the model's then
+moves the times and flows onto its own clock when the influent is added.
 
 The ASM1 ↔ ADM1 translators (`ASM1toADM1`, `ADM1toASM1`) convert units
 themselves: they read the species units the two models they are built with

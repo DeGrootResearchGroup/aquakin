@@ -44,12 +44,19 @@ import jax.numpy as jnp
 
 from aquakin.plant._constants import EPS_Q, SECONDS_PER_DAY
 from aquakin.plant.streams import Stream
+from aquakin.utils.units import conversion_factor
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
 
 
 # --- UV credit physics ------------------------------------------------------
+
+
+def _seconds_per(time_unit: str | None) -> float:
+    """Seconds in one ``time_unit``; one day when it is ``None`` or unreadable."""
+    factor = None if time_unit is None else conversion_factor(time_unit, "s")
+    return SECONDS_PER_DAY if factor is None else float(factor)
 
 
 def uvt_intensity_factor(uvt: jnp.ndarray | None, uvt_ref: jnp.ndarray | None) -> jnp.ndarray:
@@ -206,11 +213,11 @@ class UVUnit:
     def output_ports(self) -> list[str]:
         return [self.output_port]
 
-    def assumed_units(self) -> dict[str, str]:
-        """Units fixed by this unit's internals: the exposure time converts the
-        residence ``V/Q`` to seconds with ``86400 s/d``, so the plant time unit
-        must be days (see :class:`~aquakin.plant.units.AssumedUnits`)."""
-        return {"time": "d"}
+    def set_time_unit(self, time_unit: str | None) -> None:
+        """Convert the residence time ``V/Q`` (in the plant's time unit) to
+        seconds from ``time_unit``; days when the plant has none (see
+        :class:`~aquakin.plant.units.PlantTimeUnitAware`)."""
+        self._seconds_per_time = _seconds_per(time_unit)
 
     def initial_state(self) -> jnp.ndarray:
         return jnp.zeros((0,))
@@ -220,10 +227,10 @@ class UVUnit:
 
     # ----- behaviour ------------------------------------------------------
     def exposure_seconds(self, flow) -> jnp.ndarray:
-        """Exposure time (s): the baffling-scaled residence ``V/Q`` (plant time
-        unit, days) converted to seconds."""
-        hrt_days = self.baffling_factor * self.volume / (jnp.asarray(flow) + EPS_Q)
-        return hrt_days * SECONDS_PER_DAY
+        """Exposure time (s): the baffling-scaled residence ``V/Q`` (in the
+        plant's time unit) converted to seconds."""
+        hrt = self.baffling_factor * self.volume / (jnp.asarray(flow) + EPS_Q)
+        return hrt * getattr(self, "_seconds_per_time", SECONDS_PER_DAY)
 
     def log_inactivation(self, flow) -> jnp.ndarray:
         """The UV log-inactivation at the given throughflow."""

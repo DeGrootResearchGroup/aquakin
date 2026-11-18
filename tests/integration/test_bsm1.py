@@ -96,9 +96,9 @@ def test_recycle_passes_validated_and_configurable(asm1):
     from aquakin.plant import Plant
 
     with pytest.raises(ValueError):
-        Plant("p", recycle_passes=0)
-    assert Plant("p", recycle_passes=5).recycle_passes == 5
-    assert Plant("p").recycle_passes == 3  # default
+        Plant("p", time_unit="d", recycle_passes=0)
+    assert Plant("p", time_unit="d", recycle_passes=5).recycle_passes == 5
+    assert Plant("p", time_unit="d").recycle_passes == 3  # default
 
 
 def test_bsm1_nitrification_active(asm1, constant_influent):

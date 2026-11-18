@@ -438,29 +438,52 @@ Key types:
     legitimately leaves the plant), plus the detected `.recycles`; `.ok` is true
     when nothing is unfed and `.summary()` prints it. `check(raise_on_error=True)`
     raises on an unfed port. Exported as `aquakin.PlantCheck`.
-  - **Unit audit — `plant.check_units()` (`plant/units_check.py`).** Streams
-    cross units unconverted, so a unit mismatch is silent; the audit compares
-    *declared* units on static metadata only (never the jitted solve) and
-    returns a `PlantUnitsReport` (`errors` / `warnings` of `PlantUnitIssue`).
-    Checks: every model's `time_unit` agrees; a unit implementing the
-    `AssumedUnits` hook (`assumed_units() -> {"time" | species: unit}`) gets
-    them — only *fixed* internal assumptions belong there (UV and primary
-    clarifier: days; thickener: `g/m3` TSS species; Takács only while
-    `settling_params` are the BSM defaults: days + `g/m3` for species with a
-    nonzero TSS factor), never a user-supplied number in any consistent unit;
-    each model's own
+  - **Plant clock — `Plant(name, time_unit=...)`.** The declared time unit
+    is the plant's clock (`t_span`, `m3/<unit>` flows, every user-supplied unit
+    parameter with a time in it: `kla`, `t_m`, SBR phases, PI integral times).
+    `_build_state_layout` calls `_resolve_time_unit` (keyed on the declared
+    unit + model ids + insertion order + influent ids, so it reruns only when
+    those change, and then invalidates `_solve_cache`), which calls
+    `set_time_unit(tu)` on every unit implementing the
+    `units.PlantTimeUnitAware` hook and replaces each `influents[name]` with
+    `_influents_added[name].in_time_unit(tu)`. Kinetic units (CSTR, MBR, SBR,
+    IFAS, ADM1 digester) inherit the `units.ModelTimeScaling` mixin:
+    `_rate_factor = model_rate_factor(model, tu)` (`conversion_factor("1/<model
+    tu>", "1/<tu>")`) multiplies everything the *model* computes per its own
+    time unit (`_scale_rates`: the reaction term; IFAS's whole biofilm
+    reaction + diffusion term; the digester's dCdt incl. gas transfer/outflow),
+    and `balance._reaction_term` applies the same factor. A factor of exactly
+    1 returns the term untouched, so a plant on its models' clock is
+    bit-identical. UV (`_seconds_per_time`), the primary clarifier
+    (`_minutes_per_time`) and Takács (`_v0`/`_vmax`, only while the BSM default
+    `settling_params`) convert their built-in day constants in
+    `set_time_unit`; with `tu=None` they keep days. **A missing `time_unit` is
+    deprecated**: the plant infers the models' shared unit with a one-time
+    `FutureWarning`, and `time_unit_errors` raises `UnitsError` at solve only
+    when the models disagree. The builders (`build_bsm1/2`, `build_a2o`) pass
+    `"d"`. A new unit with a built-in time constant implements
+    `set_time_unit`, not `assumed_units`.
+  - **Unit audit — `plant.check_units()` (`plant/units_check.py`).** Stream
+    concentrations cross units unconverted, so a concentration mismatch is
+    silent; the audit compares *declared* units on static metadata only (never
+    the jitted solve) and returns a `PlantUnitsReport` (`errors` / `warnings`
+    of `PlantUnitIssue`). Checks: on a plant without `time_unit`, every model's
+    `time_unit` agrees; a unit implementing the `AssumedUnits` hook
+    (`assumed_units() -> {species: unit}`) gets them — only *fixed* internal
+    concentration-basis assumptions belong there (thickener: `g/m3` TSS
+    species; Takács only while `settling_params` are the BSM defaults: `g/m3`
+    for species with a nonzero TSS factor), never a user-supplied number in
+    any consistent unit; each model's own
     `check_units()` is rolled up as warnings. All comparisons go through the
     scale-aware `aquakin.units_match` (`mg/L` = `g/m3` ≠ `kg/m3`; a currency is
     compared only when both sides state one). `plant.check()` carries the
     findings (`PlantCheck.unit_issues` / `.unit_errors`; unit errors make `.ok`
-    false and `raise_on_error` raises `UnitsError`). **Models on different time
-    units are a hard error at solve time**: `_build_state_layout` calls
-    `_guard_time_units` (cached per model/unit set) and raises `UnitsError`.
+    false and `raise_on_error` raises `UnitsError`).
     `connect` / `add_influent` also reject an explicit translator whose
     `source_model` / `target_model` species list differs from the endpoint's
     (`WiringError`; a different instance with the same species is accepted).
-    When a new unit's internals hard-code a unit (a `SECONDS_PER_DAY`, a
-    `g/m3` constant), give it `assumed_units`. **Translators convert instead of
+    When a new unit's internals hard-code a concentration basis (a `g/m3`
+    constant), give it `assumed_units`. **Translators convert instead of
     being checked:** `ASM1toADM1` / `ADM1toASM1` (`plant/interfaces.py`) keep
     their equations in fixed *working units* (`_ASM1_UNITS`: g/m3, SALK mol/m3;
     `_ADM1_UNITS`: kg/m3, kmol/m3) and `_unit_scales` derives per-species
@@ -484,7 +507,10 @@ Key types:
     the model leaves unknown (blank/unreadable species unit, no inferable time
     unit) keeps the declared unit and the data unchanged. `units` afterwards
     records the converted units, so `dataclasses.replace` is idempotent. The
-    audit therefore has no influent check.
+    audit therefore has no influent check. The plant then moves each series
+    onto its clock with `InfluentSeries.in_time_unit` (built via
+    `dataclasses.replace(..., units=None)` so construction does not convert
+    back to the model's time unit).
   - **Operating temperature.** `plant.set_temperature(celsius)` sets the static
     `T` condition of every temperature-bearing reactor in one call (°C → K),
     leaving a heated fixed-`T` unit like the digester untouched; clears the

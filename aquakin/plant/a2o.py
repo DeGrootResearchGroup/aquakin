@@ -265,7 +265,7 @@ def build_a2o(
     if conditions is None:
         conditions = reactor_conditions(model)
 
-    plant = Plant("A2O")
+    plant = Plant("A2O", time_unit="d")
 
     # Controlled recycle-pump flows (constant volumetric setpoints off the design
     # flow, like the BSM plants -- see recycle_pump_flows / the SetpointSplitter

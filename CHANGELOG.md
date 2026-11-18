@@ -100,13 +100,24 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `ProfileResult` with the likelihood-ratio interval. The sweep is the same as
   for `profile_likelihood`, and every grid point reuses one compiled
   objective.
+- `Plant(name, time_unit="d")` sets the plant's clock: `t_span`, flows (m3 per
+  that unit) and every unit parameter with a time in it are in that unit.
+  Everything that has its own time unit is converted to it before the solve:
+  each kinetic model's rates (so a model in seconds can run beside one in
+  days, with its parameters left in their own units), each influent's times
+  and flows, and the constants built into the UV reactor, the primary
+  clarifier and the Takács settler's default settling velocities, which
+  previously required a plant in days. The BSM1, BSM2 and A²O builders use
+  days, and `InfluentSeries.in_time_unit(...)` moves a series onto another
+  clock.
 - `Plant.check_units()` checks a plant's units before you solve it and
-  returns a `PlantUnitsReport`. It confirms that every kinetic model uses the
-  same time unit; that unit operations with built-in constants get the units
-  they assume (the UV reactor and primary clarifier need days; the thickener
-  needs its TSS species in g/m3; the Takács settler, while it uses its default
-  BSM settling parameters, needs days and TSS species in g/m3). Comparisons account for scale, so `mg/L`
-  matches `g/m3` but `kg/m3` does not. `plant.check()` includes the report.
+  returns a `PlantUnitsReport`. It confirms that unit operations with built-in
+  constants get the concentration basis they assume (the thickener needs its
+  TSS species in g/m3, and so does the Takács settler while it uses its
+  default BSM settling parameters) and, on a plant created without
+  `time_unit`, that its kinetic models agree on their time unit. Comparisons
+  account for scale, so `mg/L` matches `g/m3` but `kg/m3` does not.
+  `plant.check()` includes the report.
 - Influents can declare the units their data are in with `units=` on
   `InfluentSeries`, `model.influent(...)`, `InfluentSeries.constant` and
   `read_influent_csv`, e.g. `{"t": "h", "Q": "m3/h", "T": "degC", "SS":
@@ -130,10 +141,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Changed
 
-- `Plant.solve` (and every other solve) raises `UnitsError` when the plant's
-  kinetic models use different time units, for example an ozonation model in
-  seconds next to ASM1 in days. Such a plant was integrated against one clock
-  and gave wrong results without a warning.
+- A plant created without `time_unit` whose kinetic models use different time
+  units, for example an ozonation model in seconds next to ASM1 in days, now
+  raises `UnitsError` when solved; give it a `time_unit` and the models are
+  converted to it. Such a plant was integrated against one clock and gave
+  wrong results without a warning.
 - The ASM1↔ADM1 translators (`ASM1toADM1`, `ADM1toASM1`) read the species
   units the connected models declare and convert them into the units their
   equations use, instead of assuming ASM1 in g/m3 and ADM1 in kg/m3 and
@@ -213,6 +225,13 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   whose state starts with its concentrations, followed by a volume or other
   scalars. This covers the filtered primary clarifier, `StorageTank`,
   `MBRUnit` and `SBRUnit`.
+
+### Deprecated
+
+- Creating a `Plant` without `time_unit` gives a `FutureWarning`. The plant
+  then uses the time unit its models share, as before. Pass it explicitly,
+  e.g. `Plant("my_plant", time_unit="d")`; it will be required in a future
+  release.
 
 ### Fixed
 
