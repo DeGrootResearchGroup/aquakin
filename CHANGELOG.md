@@ -123,6 +123,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   so a model with its particulates in `kgCOD/m3` thickens and settles exactly
   as one in `g/m3`. A solids species declared in moles cannot be converted;
   it is used as before and `Plant.check_units()` reports it.
+- `aquakin.calibrate`, `aquakin.profile_likelihood` and `Plant.calibrate`
+  take `observation_units={"SNH": "mg/L", "XS": "kgCOD/m3"}` for data measured
+  in units other than the model's. The named columns, and an absolute `sigma`
+  in the same units, are converted to the model's units before the fit, so the
+  results are in the model's units. A unit of another quantity raises.
 - `UnitScalingTranslator` converts between two models that list the same
   species but declare some of them in different units. `Plant.connect` and
   `Plant.add_influent` insert it automatically for such a pair, and raise

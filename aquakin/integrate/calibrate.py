@@ -580,6 +580,106 @@ def _is_sigma_estimate(sigma) -> bool:
     return isinstance(sigma, str) and sigma == "estimate"
 
 
+def _observation_unit_factors(columns, units) -> np.ndarray | None:
+    """Per-column factors from declared observation units to the model's.
+
+    Parameters
+    ----------
+    columns : list of (str, str)
+        One ``(name, model unit)`` pair per observed column, in column order.
+    units : dict[str, str] or None
+        ``name -> declared unit`` for the columns given in another unit. A name
+        covers every column of that name.
+
+    Returns
+    -------
+    np.ndarray or None
+        ``x_model = factor * x_declared`` per column, or ``None`` when nothing
+        is declared or every factor is exactly 1.
+
+    Raises
+    ------
+    ValueError
+        For a name that is not an observed column, a unit that is not a
+        string or cannot be read, or one that cannot be converted to the
+        model's (another quantity, or a model unit that is blank or
+        unreadable).
+    """
+    from aquakin.utils.units import conversion_factor
+
+    if not units:
+        return None
+    names = [name for name, _ in columns]
+    unknown = sorted(set(units) - set(names))
+    if unknown:
+        raise ValueError(
+            f"observation_units names {unknown}, which are not observed columns; "
+            f"the observed columns are {sorted(set(names))}."
+        )
+    factors = np.ones(len(columns))
+    for i, (name, model_unit) in enumerate(columns):
+        if name not in units:
+            continue
+        unit = units[name]
+        if not isinstance(unit, str):
+            raise ValueError(f"observation_units['{name}'] must be a string; got {unit!r}.")
+        try:
+            factor = conversion_factor(unit, model_unit)
+        except ValueError as exc:
+            raise ValueError(f"observation_units['{name}']: {exc}") from None
+        if factor is None:
+            raise ValueError(
+                f"observation_units['{name}'] is '{unit}', and the model declares "
+                f"'{model_unit}'; one of the two cannot be read, so the "
+                f"observations cannot be converted."
+            )
+        factors[i] = factor
+    return None if np.all(factors == 1.0) else factors
+
+
+def _convert_observations(observations, sigma, factors):
+    """Observations (and an absolute ``sigma``) multiplied into model units.
+
+    ``factors`` is the per-column array of :func:`_observation_unit_factors`.
+    Works on one dataset or a list of them; a 1-D dataset is a single observed
+    column. ``sigma`` keeps its form: a scalar becomes per-column when the
+    factors differ, an array or a per-dataset list is scaled along its last
+    axis, and ``"estimate"`` / ``None`` are left alone (an estimated noise level
+    is reported in model units).
+    """
+    if factors is None:
+        return observations, sigma
+    f = jnp.asarray(factors)
+
+    def scale(arr):
+        arr = jnp.asarray(arr)
+        if arr.ndim == 1 and f.shape[0] == 1:
+            return arr * f[0]
+        return arr * f
+
+    multi = isinstance(observations, (list, tuple))
+    if multi:
+        observations = [scale(o) for o in observations]
+    else:
+        observations = scale(observations)
+
+    def scale_sigma(sig):
+        if sig is None or _is_sigma_estimate(sig):
+            return sig
+        arr = jnp.asarray(sig)
+        if arr.ndim == 0:
+            return arr * f if f.shape[0] > 1 else arr * f[0]
+        return scale(arr)
+
+    # A list of sigmas is one per dataset only in multi-batch mode; for a
+    # single dataset it is a per-column (or per-entry) array.
+    if multi and isinstance(sigma, (list, tuple)):
+        sigma = [scale_sigma(s) for s in sigma]
+    else:
+        sigma = scale_sigma(sigma)
+    return observations, sigma
+
+
 def _check_sigma_arg(sigma, loss) -> None:
     """Validate a string ``sigma``: only ``"estimate"``, and only with
     ``loss="nll"`` (the concentrated likelihood)."""
@@ -2538,6 +2638,7 @@ def calibrate(
     initial_params: jnp.ndarray | None = None,
     observed_species: list[str] | None = None,
     observation_fn=None,
+    observation_units: dict[str, str] | None = None,
     time_unit: str | None = None,
     loss: str = "mse",
     sigma: jnp.ndarray | None = None,
@@ -2602,6 +2703,16 @@ def calibrate(
         with exactly three required positional arguments is the time-aware
         form; one that can be called with two (``f(C, params=None)`` or
         ``f(C, params, scale=1.0)``, say) is the ``(C, params)`` form.
+    observation_units : dict[str, str], optional
+        The units of observed species measured in a unit other than the one
+        the model declares for them, e.g. ``{"SNH": "mg/L", "XS":
+        "kgCOD/m3"}``. Those columns of ``observations``, and of an absolute
+        ``sigma``, are converted to the model's units before the fit, so the
+        loss, residuals, ``sigma_estimate`` and the posterior are all in the
+        model's units. Only the scale changes: a unit that measures another
+        quantity (moles where the model has grams) raises. Not available with
+        ``observation_fn``, whose outputs have no declared unit. ``None``
+        (default) takes the observations to be in the model's units.
     time_unit : str, optional
         The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
         ``"d"``), matching :meth:`BatchReactor.solve`. Every dataset's ``t_obs``
@@ -2769,6 +2880,18 @@ def calibrate(
     # Unpack the config objects into the internal scalar knobs.
     laplace_on, lap = _resolve_laplace(laplace)
     ic_species, ic_bounds, ic_prior_log_std = _free_ic_fields(free_ic)
+
+    if observation_units:
+        if observation_fn is not None:
+            raise ValueError(
+                "observation_units converts observed species; an observation_fn's "
+                "outputs have no declared unit, so convert its observations yourself."
+            )
+        names = observed_species if observed_species is not None else reactor.model.species
+        columns = [(sp, reactor.model.species_units.get(sp, "")) for sp in names]
+        observations, sigma = _convert_observations(
+            observations, sigma, _observation_unit_factors(columns, observation_units)
+        )
 
     # Resolve the arguments once into the static problem + the fit config, then
     # build the compiled objective on the reactor forward-model seam.

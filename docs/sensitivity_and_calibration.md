@@ -176,6 +176,23 @@ Pass **lists** of `C0`/`observations`/`t_obs` for a joint multi-batch fit, and
 `free_ic=aquakin.FreeICConfig([...])` to fit unmeasured initial pools alongside
 the rate constants.
 
+Observations are taken to be in the units the model declares for each species.
+For data measured in another unit, say which with `observation_units=`:
+
+```python
+result = aquakin.calibrate(reactor, C0, data_mg_per_L, t_obs, free_params,
+                           observed_species=["SNH", "XS"],
+                           observation_units={"SNH": "mg/L", "XS": "kgCOD/m3"},
+                           loss="nll", sigma=jnp.array([0.5, 0.02]))
+```
+
+The named columns, and an absolute `sigma` given in the same units, are
+converted to the model's units before the fit, so the loss, `sigma_estimate`
+and the posterior are in the model's units. Only the scale changes: a unit that
+measures something else (moles where the model has grams) raises.
+`profile_likelihood` and `Plant.calibrate` take `observation_units` too; an
+`observation_fn`'s outputs have no declared unit, so convert those yourself.
+
 When a measurement is not a single species but a function of several (a UV
 absorbance from several organic pools, a probe-compound ratio), pass
 `observation_fn` instead of `observed_species`. It maps one time point's
@@ -620,6 +637,8 @@ too. The free parameters stay inside the `bounds:` their models declare, and
 `"unit.species"` (also the keys of a per-pool `FreeICConfig(bounds={...})`), and
 `fixed_total=True` fits their split of the total in `y0`. With `loss="nll"`,
 `sigma="estimate"` estimates the noise level of each observed channel.
+`observation_units={"SNH": "mg/L"}` declares channels measured in other units,
+converted to each stream's model units as for a reactor fit.
 
 ### Identifiability of plant parameters
 
