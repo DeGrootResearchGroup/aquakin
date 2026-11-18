@@ -176,7 +176,7 @@ def species_mask(
     return mask
 
 
-def grams_per_m3_factors(model: CompiledModel, names, *, what: str = "species") -> list:
+def grams_per_m3_factors(model: CompiledModel, names) -> tuple[list, list]:
     """Per-species factors turning each named species' concentration, in the
     unit ``model`` declares for it, into ``g/m3``.
 
@@ -187,27 +187,28 @@ def grams_per_m3_factors(model: CompiledModel, names, *, what: str = "species") 
     unit is ignored (``g/m3`` names none). A blank or unreadable unit is taken
     to be ``g/m3`` already (factor 1).
 
-    Raises
-    ------
-    ValueError
-        If a species is declared in a unit that is not a mass per volume (an
-        amount in moles, say), which no scale factor can turn into ``g/m3``.
+    Returns
+    -------
+    factors : list of float
+        One factor per name.
+    unconverted : list of str
+        Names whose unit is not a mass per volume (an amount in moles, say),
+        which no scale factor can turn into ``g/m3``. Their factor is 1, so the
+        unit uses them as if they were in ``g/m3``; it should report them as
+        :meth:`~aquakin.plant.units.AssumedUnits.assumed_units` so
+        :meth:`Plant.check_units` flags the mismatch.
     """
     from aquakin.utils.units import conversion_factor
 
-    factors = []
+    factors, unconverted = [], []
     for name in names:
-        unit = model.species_units.get(name, "")
         try:
-            factor = conversion_factor(unit, "g/m3")
+            factor = conversion_factor(model.species_units.get(name, ""), "g/m3")
         except ValueError:
-            raise ValueError(
-                f"{what} '{name}' is declared in '{unit}' by model '{model.name}', "
-                f"which cannot be expressed in g/m3 (a mass per volume) without a "
-                f"molar mass or composition."
-            ) from None
+            factor = None
+            unconverted.append(name)
         factors.append(1.0 if factor is None else float(factor))
-    return factors
+    return factors, unconverted
 
 
 def tss_concentration(C: jnp.ndarray, tss_vec: jnp.ndarray) -> jnp.ndarray:

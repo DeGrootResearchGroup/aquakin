@@ -24,7 +24,6 @@ from aquakin.plant import (
 from aquakin.plant.bsm import build_bsm1, build_bsm2
 from aquakin.plant.influent import load_bsm1_influent, load_bsm2_influent
 from aquakin.plant.takacs import TakacsClarifier
-from aquakin.plant.units import AssumedUnits
 
 
 @pytest.fixture(scope="module")
@@ -175,7 +174,7 @@ def test_shipped_solids_units_convert_rather_than_assume(asm1):
     plant.add_unit(TakacsClarifier("settler", kg, area=1500.0, height=4.0, underflow_Q=1.0e4))
     plant.connect("tank", "settler")
     assert plant.check_units(include_models=False).ok
-    assert not isinstance(plant.units["settler"], AssumedUnits)
+    assert plant.units["settler"].assumed_units() == {}
 
 
 def _in_hours(model):

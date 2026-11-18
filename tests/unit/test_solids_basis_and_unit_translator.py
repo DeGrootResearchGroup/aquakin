@@ -59,15 +59,23 @@ def test_thickener_reaches_the_same_target_from_kg_per_m3(asm1, asm1_kg):
     assert float(out_g["underflow"].Q) < 100.0  # it did thicken
 
 
-def test_thickener_rejects_solids_declared_in_moles(asm1):
+def test_thickener_reports_solids_declared_in_moles(asm1):
+    # Moles cannot be put on a g/m3 basis: the species is used as if in g/m3
+    # and the plant's unit audit reports it.
     molar = dataclasses.replace(asm1, species_units={**asm1.species_units, "XS": "mol/m3"})
-    with pytest.raises(ValueError, match="'XS' is declared in 'mol/m3'"):
-        IdealThickener("t", molar, target_tss_percent=7.0)
+    th = IdealThickener("t", molar, target_tss_percent=7.0)
+    assert th.assumed_units() == {"XS": "g/m3"}
+    plant = Plant("th", time_unit="d")
+    plant.add_unit(th)
+    plant.add_influent("feed", molar.influent(Q=1.0), to="t")
+    (err,) = plant.check_units(include_models=False).errors
+    assert "'XS'" in err.detail and "mol/m3" in err.detail
 
 
 def test_thickener_on_shipped_units_is_unchanged(asm1):
     th = IdealThickener("t", asm1, target_tss_percent=7.0)
     assert set(np.unique(np.asarray(th._tss_vec))) <= {0.0, 0.75}
+    assert th.assumed_units() == {}
 
 
 # ----- the Takács settler -------------------------------------------------------
@@ -139,10 +147,15 @@ def test_settler_with_own_parameters_keeps_the_model_basis(asm1_kg):
     assert converted["XS"] == pytest.approx(750.0)
 
 
-def test_settler_rejects_solids_declared_in_moles(asm1):
+def test_settler_reports_solids_declared_in_moles(asm1):
     molar = dataclasses.replace(asm1, species_units={**asm1.species_units, "XB_H": "mol/m3"})
-    with pytest.raises(ValueError, match="'XB_H' is declared in 'mol/m3'"):
-        TakacsClarifier("s", molar, area=1500.0, height=4.0, underflow_Q=1.0e4)
+    settler = TakacsClarifier("s", molar, area=1500.0, height=4.0, underflow_Q=1.0e4)
+    assert settler.assumed_units() == {"XB_H": "g/m3"}
+    own = dict(v0=474.0, vmax=250.0, rh=5.7e-4, rp=2.86e-3, fns=2.28e-3, X_threshold=3000.0)
+    mine = TakacsClarifier(
+        "m", molar, area=1500.0, height=4.0, underflow_Q=1.0e4, settling_params=own
+    )
+    assert mine.assumed_units() == {}
 
 
 # ----- the unit-scaling translator ------------------------------------------------

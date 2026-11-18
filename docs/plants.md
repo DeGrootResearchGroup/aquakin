@@ -242,8 +242,9 @@ It checks that:
 
 - on a plant created without `time_unit`, the kinetic models agree on their
   time unit;
-- a unit you write yourself that declares a fixed concentration basis
-  (`assumed_units`) gets it from its model;
+- a unit with a fixed concentration basis gets it from its model: a solids
+  species the thickener or Takács settler could not convert (see below), or
+  the basis a unit you write yourself declares with `assumed_units`;
 - each model passes its own `model.check_units()`; its findings are listed as
   warnings.
 
@@ -276,10 +277,11 @@ The thickener and the Takács settler convert their solids constants. The
 thickener's target underflow TSS and the settler's default (BSM) settling
 parameters are per `g/m3` of solids, so the TSS each species contributes is put
 on that basis from the unit the model declares for it: a model with its
-particulates in `kgCOD/m3` thickens and settles exactly as one in `g/m3`. A
-solids species declared as an amount in moles raises, since that would need a
-molar mass. Settling parameters you supply are taken to be in your model's
-units and are used as they are.
+particulates in `kgCOD/m3` thickens and settles exactly as one in `g/m3`. An
+amount in moles cannot be converted without a molar mass, so a solids species
+declared in moles is used as if it were in `g/m3` and `plant.check_units()`
+reports it. Settling parameters you
+supply are taken to be in your model's units and are used as they are.
 
 Two models that list the same species in the same order but declare some of
 them in different units (a model and a copy of it on a `kg/m3` basis) can be

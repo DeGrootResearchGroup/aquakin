@@ -110,9 +110,7 @@ class IdealThickener(StatelessUnit):
         self._tss_vec = species_mask(
             self.model, self.tss_species, weight=self.tss_factor, what="TSS species"
         )
-        to_g = grams_per_m3_factors(
-            self.model, self.tss_species, what=f"IdealThickener '{self.name}': TSS species"
-        )
+        to_g, self._unconverted_tss = grams_per_m3_factors(self.model, self.tss_species)
         if any(f != 1.0 for f in to_g):
             idx = species_indices(self.model, self.tss_species, what="TSS species")
             self._tss_vec = self._tss_vec.at[jnp.asarray(idx, dtype=int)].multiply(
@@ -128,6 +126,14 @@ class IdealThickener(StatelessUnit):
     @property
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
+
+    def assumed_units(self) -> dict[str, str]:
+        """TSS species whose declared unit could not be put on the ``g/m3``
+        basis of the target underflow TSS (an amount in moles, say); they are
+        used as if in ``g/m3``, and :meth:`Plant.check_units` flags them (see
+        :class:`~aquakin.plant.units.AssumedUnits`). Empty for any mass per
+        volume, which is converted."""
+        return dict.fromkeys(self._unconverted_tss, "g/m3")
 
     def compute_outputs(
         self,

@@ -271,6 +271,7 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             what=f"TakacsClarifier '{self.name}': particulate species",
         )
         self._part_tss_factors = [self.tss_factors.get(sp, 1.0) for sp in self.particulate_species]
+        self._unconverted_tss: list = []
         if self.settling_params == _BSM1_TAKACS_DEFAULTS:
             # The default settling parameters are per g/m3 of solids, so the TSS
             # each particulate contributes is put on that basis from the unit
@@ -283,17 +284,8 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
                 for sp, f in zip(self.particulate_species, self._part_tss_factors, strict=True)
                 if f != 0.0
             ]
-            to_g = dict(
-                zip(
-                    solids,
-                    grams_per_m3_factors(
-                        self.model,
-                        solids,
-                        what=f"TakacsClarifier '{self.name}': particulate species",
-                    ),
-                    strict=True,
-                )
-            )
+            factors, self._unconverted_tss = grams_per_m3_factors(self.model, solids)
+            to_g = dict(zip(solids, factors, strict=True))
             self._part_tss_factors = [
                 f if to_g.get(sp, 1.0) == 1.0 else f * to_g[sp]
                 for sp, f in zip(self.particulate_species, self._part_tss_factors, strict=True)
@@ -381,6 +373,15 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     @property
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
+
+    def assumed_units(self) -> dict[str, str]:
+        """Solids species whose declared unit could not be put on the ``g/m3``
+        basis of the default settling parameters (an amount in moles, say);
+        they are used as if in ``g/m3``, and :meth:`Plant.check_units` flags
+        them (see :class:`~aquakin.plant.units.AssumedUnits`). Empty when every
+        solids unit is a mass per volume (converted) or the settling parameters
+        are the user's own (in the model's units)."""
+        return dict.fromkeys(self._unconverted_tss, "g/m3")
 
     def set_time_unit(self, time_unit: str | None) -> None:
         """Express the default settling velocities in the plant's time unit.

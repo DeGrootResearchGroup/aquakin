@@ -472,9 +472,9 @@ Key types:
     `time_unit` agrees; a unit implementing the `AssumedUnits` hook
     (`assumed_units() -> {species: unit}`) gets them — only *fixed* internal
     concentration-basis assumptions belong there, never a user-supplied number
-    in any consistent unit. No shipped unit implements it any more: the
-    thickener and Takács convert instead (below), and the hook stays for
-    user-written units that cannot; each model's own
+    in any consistent unit. The thickener and Takács convert a mass-per-volume
+    solids unit (below) and list only the species they could not convert;
+    each model's own
     `check_units()` is rolled up as warnings. All comparisons go through the
     scale-aware `aquakin.units_match` (`mg/L` = `g/m3` ≠ `kg/m3`; a currency is
     compared only when both sides state one). `plant.check()` carries the
@@ -490,8 +490,11 @@ Key types:
     while `settling_params` are the BSM defaults and only for species with a
     nonzero TSS factor) do — the per-species flux split and the lumped-TSS
     inventory are ratios, so the species stay in the model's units. A factor
-    of exactly 1 is not applied (bit-identical); a molar unit raises. Use
-    `assumed_units` only where converting is impossible. **Same species,
+    of exactly 1 is not applied (bit-identical). A unit that is not a mass per
+    volume (moles; the schema default `mol/L` of a toy model) gets factor 1 and
+    is returned by the unit's `assumed_units` (its `_unconverted_tss`), so the
+    audit reports it instead of the unit refusing to build. `assumed_units` is
+    for what cannot be converted. **Same species,
     different units:** `_default_translator` (behind `connect` /
     `add_influent`) inserts a `translators.UnitScalingTranslator` (diagonal
     per-species `unit_scaling` factors, `None` when all are 1) when

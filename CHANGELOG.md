@@ -112,15 +112,17 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   clock.
 - `Plant.check_units()` checks a plant's units before you solve it and
   returns a `PlantUnitsReport`. On a plant created without `time_unit` it
-  confirms that the kinetic models agree on their time unit, and it checks the
-  concentration basis a user-written unit declares through `assumed_units`.
+  confirms that the kinetic models agree on their time unit, and it reports a
+  solids species the thickener or Takács settler could not put on their
+  `g/m3` basis (one declared in moles, say).
   Comparisons account for scale, so `mg/L` matches `g/m3` but `kg/m3` does
   not. `plant.check()` includes the report.
 - The thickener (`IdealThickener`) and the Takács settler (with its default
   BSM settling parameters) put the TSS of each solids species on the `g/m3`
   basis of their built-in constants from the unit the model declares for it,
   so a model with its particulates in `kgCOD/m3` thickens and settles exactly
-  as one in `g/m3`. A solids species declared in moles raises.
+  as one in `g/m3`. A solids species declared in moles cannot be converted;
+  it is used as before and `Plant.check_units()` reports it.
 - `UnitScalingTranslator` converts between two models that list the same
   species but declare some of them in different units. `Plant.connect` and
   `Plant.add_influent` insert it automatically for such a pair, and raise
