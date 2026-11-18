@@ -31,7 +31,8 @@ import aquakin (to build expected values).
 | `document.py` | `Flowsheet`, `Unit`, `edge_id` | **pure**: units keyed by stable id (the plant's unit name), labels as display text; `from_spec`/`to_spec` (format 2), `connect` (refuses with a reason), `dropped_by` (previews the connections new settings would remove) and `apply`, `remove` (also drops streams/endpoints naming the unit), `port_status`, `back_edges` (aquakin's recycles when known, else a DFS), `lanes`, `auto_layout` (wraps into bands of 7 ranks) |
 | `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. Lists no setting or type of its own |
 | `icons.py` | `ICONS`, `COLOURS`, `CATEGORY_LABELS`, `SVG`, `icon_name` | the only per-kind presentation table; an unlisted kind gets the tank icon |
-| `app.py` | `Editor` | the page; turns finished canvas edits into document changes |
+| `jobs.py` | `StudyRun` | one study run = one `python -m aquakin study run --json` process: JSON progress events on stdout, `cancel` on stdin (killed after `CANCEL_GRACE` if no checkpoint comes); its own temporary log |
+| `app.py` | `Editor` | the page; turns finished canvas edits into document changes; the Studies tab |
 | `widget/` | `Flowsheet` (trame element), `module.py`, `serve/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
 
 Icons (`icons/*.svg`) are original line icons (see `icons/README.md`): 24-unit
@@ -71,6 +72,18 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   and in tests, they run inline). Never write the spec file from `aquakin_ui`
   directly. `_check_unit` / `_check_plant` are the synchronous versions for
   tests and scripts; a page handler must not call them.
+- **Save refuses to overwrite work** (`_save_refusal`): each window is its own
+  document, so two may hold one file. Save refuses a file whose sha256 changed
+  since this window opened (or last saved) it, and any other existing file.
+- **Studies** (`Editor.refresh_studies` / `run_study` / `cancel_run` /
+  `freeze_study` / `unfreeze_study` / `copy_study`): listed through the worker
+  (`list_studies`, with `check_study`'s state); freeze / unfreeze / copy are
+  worker commands; a run is a `StudyRun` process, never a worker request (the
+  worker kills a request after `TIMEOUT`, and a run must not hold up checks or
+  Save). Run events arrive on a reader thread and are applied on the page's
+  loop (`call_soon_threadsafe`). **Replacing results and unfreezing ask first**
+  (`_ask` / `answer_study`) and offer "Copy first", which copies the study with
+  its results, then goes ahead (owner's decision).
 - **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
   `inf` / `-inf` remain for "no limit" number settings.
 - Icons are sent once (`icons` prop, injected into nodes); the spec text only

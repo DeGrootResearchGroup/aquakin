@@ -503,11 +503,13 @@ def _run_simulate(
     import numpy as np
 
     from aquakin.plant.calibrate import _resolve_observable_columns, measured
+    from aquakin.progress import report
 
     written = [write_named_values(out / "parameters.yaml", _named_parameters(plant, params))]
     observables = [_channels(o) for o in study.observables]
     resolved = _resolve_observable_columns(plant, observables)[0] if observables else ()
     if study.time is None:
+        report(progress, "simulate", 0, 1, "finding the steady state")
         result = plant.steady_state(params, y0=y0)
         if not bool(result.converged):
             raise StudyError("the steady state did not converge")
@@ -534,6 +536,7 @@ def _run_simulate(
         return written
 
     t_eval = None if study.time.t_eval is None else np.asarray(_times(study.time.t_eval))
+    report(progress, "simulate", 0, 1, "solving")
     sol = plant.solve(
         study.time.t_span, t_eval=t_eval, params=params, y0=y0, time_unit=study.time.time_unit
     )
@@ -545,6 +548,7 @@ def _run_simulate(
             columns[f"{name}.T"] = s.T
         for i, sp in enumerate(s.model.species):
             columns[f"{name}.{sp}"] = np.asarray(s.C)[:, i]
+    report(progress, "simulate", 1, 1, "writing the results")
     if columns:
         written.append(write_trajectory(out / "streams.csv", sol.t, columns))
     if resolved:
@@ -858,6 +862,9 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
         shutil.rmtree(out)
     (folder / RUN_FILE).unlink(missing_ok=True)
     try:
+        from aquakin.progress import report
+
+        report(progress, "setup", 0, None, "building the plant")
         plant = Plant.from_spec(spec_path)
         params = plant.parameter_values(study.parameters) if study.parameters else None
         params = plant.default_parameters() if params is None else params

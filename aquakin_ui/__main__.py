@@ -30,6 +30,7 @@ def main(argv=None) -> int:
     try:
         server.start(port=args.port, host="127.0.0.1", open_browser=not args.no_browser)
     finally:
+        editor.stop_runs()
         editor.worker.stop()
     return 0
 

@@ -284,7 +284,7 @@ def test_a_calibration_study_recovers_a_parameter(project):
     )
     seen = []
     assert run_study(folder, progress=seen.append).state == "fresh"
-    assert seen and seen[0].stage == "fit"
+    assert seen[0].stage == "setup" and seen[1].stage == "fit"
     fit = yaml.safe_load((folder / "results" / "fit.yaml").read_text())
     assert fit["fitted"]["asm1_local.muH"] == pytest.approx(5.0, rel=1e-3)
     assert read_named_values(folder / "results" / "parameters.yaml")["asm1_local.muH"] == (

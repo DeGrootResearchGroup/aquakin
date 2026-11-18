@@ -6,12 +6,15 @@ page imports neither aquakin nor JAX. The flowsheet itself is a
 :class:`~aquakin_ui.document.Flowsheet`; the page draws it and turns finished
 canvas edits into document changes. aquakin's checks (each unit built from its
 settings, then the whole plant from the spec) run in the background after an
-edit, so the canvas never waits on them.
+edit, so the canvas never waits on them. The project's studies are listed with
+where each stands, and run in processes of their own
+(:class:`~aquakin_ui.jobs.StudyRun`) with progress and cancel.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -25,6 +28,7 @@ from aquakin_ui import forms
 from aquakin_ui.catalog import Catalog
 from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
+from aquakin_ui.jobs import StudyRun
 from aquakin_ui.widget import Flowsheet as FlowsheetCanvas
 from aquakin_ui.worker import AquakinWorker, WorkerError
 
@@ -65,6 +69,10 @@ class Editor:
         self._plant_check: tuple[str | None, dict | None] = (None, None)
         self._check_task = None
         self._pending_rows = None
+        self._runs: dict[str, StudyRun] = {}
+        self._loop = None
+        self._opened: tuple[Path, str] | None = None  # the file opened, and its sha256
+        self._study_action = None
         self._init_state(path)
         if path is not None:
             self.open(path, quiet=True)
@@ -406,6 +414,7 @@ class Editor:
                 self.say(f"could not open {path}: {type(exc).__name__}: {exc}")
                 return
             self.doc = doc
+            self._opened = (path, _digest(path))
             self.state.spec_path = str(path)
             self.state.selected = None
             self.state.fit_key += 1
@@ -414,6 +423,7 @@ class Editor:
             if not quiet:
                 self.publish()
                 self.say(f"opened {path}", error=False)
+            self.refresh_studies()
 
         self._off_page(lambda: self.worker.request("read_spec", path=str(path)), done)
 
@@ -422,6 +432,10 @@ class Editor:
         the aquakin version and file hashes recorded, outside model and influent
         files copied into the project, and the file replaced atomically."""
         path = Path(self.state.spec_path).resolve()
+        refusal = self._save_refusal(path)
+        if refusal:
+            self.say(refusal)
+            return
         base = str(self.doc.base_dir) if self.doc.base_dir else str(path.parent)
         spec = self.doc.to_spec()  # read now, on the page's thread
         snapshot = json.dumps(spec, sort_keys=True)
@@ -434,6 +448,7 @@ class Editor:
             # while saving is kept rather than replaced by what was written.
             if json.dumps(self.doc.to_spec(), sort_keys=True) == snapshot:
                 self.doc = Flowsheet.from_spec(self.catalog, written, base_dir=path.parent)
+            self._opened = (path, _digest(path))
             self._plant_check = (None, None)
             self.publish()
             self.say(f"saved {path}", error=False)
@@ -442,6 +457,194 @@ class Editor:
             lambda: self.worker.request("write_spec", spec=spec, path=str(path), base_dir=base),
             done,
         )
+
+    def _save_refusal(self, path: Path) -> str | None:
+        """Why saving to ``path`` would lose someone else's work, or ``None``.
+
+        Each window is a document of its own, so two can hold the same file:
+        saving over a file that changed since this window opened it (or over
+        another existing file) would silently replace that work."""
+        if not path.exists():
+            return None
+        if self._opened is not None and self._opened[0] == path:
+            if _digest(path) != self._opened[1]:
+                return (
+                    f"{path.name} has changed on disk since it was opened here (another "
+                    f"window or program saved it); open it again, or save under another name"
+                )
+            return None
+        return f"{path} already exists; open it, or save under another name"
+
+    # -- studies ------------------------------------------------------------
+
+    def _project(self) -> Path:
+        return Path(self.state.spec_path).resolve().parent
+
+    def refresh_studies(self) -> None:
+        """List the project's studies with where each stands (off the page's thread)."""
+        project = self._project()
+
+        def done(studies):
+            if isinstance(studies, Exception):
+                self.say(f"could not list the studies: {studies}")
+                return
+            self.state.studies = [{**st, "running": st["name"] in self._runs} for st in studies]
+
+        self._off_page(lambda: self.worker.request("list_studies", project=str(project)), done)
+
+    def _study(self, name: str) -> dict | None:
+        return next((st for st in self.state.studies if st["name"] == name), None)
+
+    def run_study(self, name: str) -> None:
+        """Run a study; ask first when that would replace its results."""
+        study = self._study(name)
+        if study is None or name in self._runs:
+            return
+        if study["state"] in ("not run",):
+            self._start_run(study, replace=False)
+            return
+        self._ask(
+            "run",
+            name,
+            f"Replace the results of {name}?",
+            "Running the study again replaces its results. Copy the study first to keep them.",
+            "Replace results",
+        )
+
+    def unfreeze_study(self, name: str) -> None:
+        """Unfreeze a study; ask first when that deletes its results."""
+        study = self._study(name)
+        if study is None:
+            return
+        if study["state"] == "not run":
+            self._worker_study("unfreeze_study", study, discard_results=True)
+            return
+        self._ask(
+            "unfreeze",
+            name,
+            f"Unfreeze {name} and delete its results?",
+            "Unfreezing makes the study follow the flowsheet again. Its results were "
+            "computed on its frozen snapshot, so they are deleted. Copy the study first to "
+            "keep them.",
+            "Unfreeze and delete",
+        )
+
+    def freeze_study(self, name: str) -> None:
+        study = self._study(name)
+        if study is not None:
+            self._worker_study("freeze_study", study)
+
+    def copy_study(self, name: str, then=None) -> None:
+        """Copy a study beside it as ``<name>_copy`` (``_copy2``, ... if taken)."""
+        study = self._study(name)
+        if study is None:
+            return
+        taken = {st["name"] for st in self.state.studies}
+        new, i = f"{name}_copy", 2
+        while new in taken:
+            new, i = f"{name}_copy{i}", i + 1
+        self._worker_study("copy_study", study, then=then, name=new)
+
+    def _worker_study(self, command: str, study: dict, then=None, **fields) -> None:
+        def done(result):
+            if isinstance(result, Exception):
+                self.say(f"{command.replace('_', ' ')} failed: {result}")
+                return
+            if then is not None:
+                then()
+            self.refresh_studies()
+
+        self._off_page(lambda: self.worker.request(command, path=study["path"], **fields), done)
+
+    def _ask(self, action: str, name: str, title: str, text: str, confirm: str) -> None:
+        self._study_action = (action, name)
+        self.state.study_confirm_title = title
+        self.state.study_confirm_text = text
+        self.state.study_confirm_label = confirm
+        self.state.study_confirm_open = True
+
+    def answer_study(self, choice: str) -> None:
+        """The answer to a study question: ``"cancel"``, ``"copy"`` (copy, then go
+        ahead) or ``"go"``."""
+        self.state.study_confirm_open = False
+        action, self._study_action = self._study_action, None
+        if action is None or choice == "cancel":
+            return
+        kind, name = action
+
+        def go():
+            study = self._study(name)
+            if study is None:
+                return
+            if kind == "run":
+                self._start_run(study, replace=True)
+            else:
+                self._worker_study("unfreeze_study", study, discard_results=True)
+
+        if choice == "copy":  # keep a copy of the study and its results, then go ahead
+            self.copy_study(name, then=go)
+        else:
+            go()
+
+    def _start_run(self, study: dict, *, replace: bool) -> None:
+        name = study["name"]
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+        self.state.study_progress = {
+            **self.state.study_progress,
+            name: {"fraction": None, "message": "starting"},
+        }
+        self._runs[name] = StudyRun(
+            study["path"], lambda event: self._on_run_event(name, event), replace=replace
+        )
+        self._mark_running()
+
+    def cancel_run(self, name: str) -> None:
+        run = self._runs.get(name)
+        if run is not None:
+            run.cancel()
+            self.state.study_progress = {
+                **self.state.study_progress,
+                name: {**self.state.study_progress.get(name, {}), "message": "cancelling"},
+            }
+
+    def _on_run_event(self, name: str, event: dict) -> None:
+        # Called on the run's reader thread; the page's state is changed on its loop.
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._apply_run_event, name, event)
+        else:
+            self._apply_run_event(name, event)
+
+    def _apply_run_event(self, name: str, event: dict) -> None:
+        with self.state:
+            progress = dict(self.state.study_progress)
+            if event["event"] == "progress":
+                progress[name] = {"fraction": event["fraction"], "message": event["message"]}
+                self.state.study_progress = progress
+                return
+            progress.pop(name, None)
+            self.state.study_progress = progress
+            self._runs.pop(name, None)
+            if event["event"] == "done":
+                self.say(f"{name}: {event['state']}", error=event["state"] != "fresh")
+            elif event["event"] == "cancelled":
+                self.say(f"{name}: cancelled", error=False)
+            else:
+                self.say(f"{name} failed: {event['error']}")
+            self._mark_running()
+            self.refresh_studies()
+
+    def _mark_running(self) -> None:
+        self.state.studies = [
+            {**st, "running": st["name"] in self._runs} for st in self.state.studies
+        ]
+
+    def stop_runs(self) -> None:
+        """Cancel every run (when the editor closes)."""
+        for run in list(self._runs.values()):
+            run.cancel()
 
     # -- the page -----------------------------------------------------------
 
@@ -453,6 +656,12 @@ class Editor:
         s.message = ""
         s.message_colour = "error"
         s.busy = False
+        s.studies = []
+        s.study_progress = {}
+        s.study_confirm_open = False
+        s.study_confirm_title = ""
+        s.study_confirm_text = ""
+        s.study_confirm_label = ""
         s.panel = "properties"
         s.dark = False
         s.focus_help = ""
@@ -484,6 +693,11 @@ class Editor:
         ]
         s.change("panel")(lambda **_: self._publish_spec())
 
+        @s.change("panel")
+        def _studies_tab(panel, **_):
+            if panel == "studies":
+                self.refresh_studies()
+
     def _build(self) -> None:
         with SinglePageWithDrawerLayout(self.server, theme=("dark ? 'dark' : 'light'",)) as layout:
             layout.title.set_text("aquakin · {{ plant_name }}")
@@ -508,6 +722,7 @@ class Editor:
                         )
                     self._side_panel()
                 self._confirm_dialog()
+                self._study_dialog()
                 v3.VSnackbar(
                     "{{ message }}",
                     v_model=("show_message",),
@@ -584,8 +799,11 @@ class Editor:
                 v3.VTab(
                     "Checks ({{ errors.length }})", value="checks", classes="text-none", min_width=0
                 )
+                v3.VTab("Studies", value="studies", classes="text-none", min_width=0)
                 v3.VTab("Spec", value="spec", classes="text-none", min_width=0)
             with v3.VWindow(v_model=("panel",)):
+                with v3.VWindowItem(value="studies", classes="pa-3"):
+                    self._studies_panel()
                 with v3.VWindowItem(value="properties", classes="pa-3"):
                     self._unit_form()
                 with v3.VWindowItem(value="checks", classes="pa-3"):
@@ -620,6 +838,125 @@ class Editor:
                     html.Pre(
                         "{{ spec_text }}",
                         style="font-size: 11px; white-space: pre; overflow-x: auto;",
+                    )
+
+    def _studies_panel(self) -> None:
+        with html.Div(classes="d-flex align-center mb-2"):
+            html.Div("Studies of this project", classes="text-overline")
+            v3.VSpacer()
+            v3.VBtn(
+                icon="mdi-refresh",
+                size="small",
+                variant="text",
+                click=self.refresh_studies,
+                title="Check every study again",
+            )
+        html.Div(
+            "No studies yet: add a folder with a study.yaml under studies/.",
+            v_if="!studies.length",
+            classes="text-body-2 text-medium-emphasis",
+        )
+        with v3.VCard(v_for="st in studies", key="st.name", variant="outlined", classes="mb-2"):
+            with v3.VCardItem():
+                with html.Div(classes="d-flex align-center ga-2"):
+                    html.Span("{{ st.name }}", classes="text-subtitle-2")
+                    v3.VChip("{{ st.kind }}", size="x-small", variant="tonal")
+                    v3.VIcon("mdi-snowflake", v_if="st.frozen", size="small", title="frozen")
+                    v3.VSpacer()
+                    v3.VChip(
+                        "{{ st.running ? 'running' : st.state }}",
+                        size="x-small",
+                        color=(
+                            "st.running ? 'primary' : ({fresh: 'success', stale: 'warning', "
+                            "'not run': undefined, cancelled: undefined}[st.state] ?? 'error')",
+                        ),
+                    )
+                html.Div(
+                    "{{ st.description }}",
+                    v_if="st.description",
+                    classes="text-caption text-medium-emphasis",
+                )
+                html.Div(
+                    "{{ r }}",
+                    v_for="r in st.reasons",
+                    key="r",
+                    classes="text-caption text-warning",
+                )
+                html.Div(
+                    "{{ n }}",
+                    v_for="n in st.notes",
+                    key="n",
+                    classes="text-caption text-medium-emphasis",
+                )
+                with html.Div(v_if="st.running && study_progress[st.name]", classes="mt-1"):
+                    v3.VProgressLinear(
+                        model_value=(
+                            "study_progress[st.name].fraction == null ? 0 : "
+                            "100 * study_progress[st.name].fraction",
+                        ),
+                        indeterminate=("study_progress[st.name].fraction == null",),
+                        height=4,
+                        rounded=True,
+                    )
+                    html.Div(
+                        "{{ study_progress[st.name].message }}",
+                        classes="text-caption text-medium-emphasis",
+                    )
+            with v3.VCardActions(classes="py-0"):
+                v3.VBtn(
+                    "Run",
+                    v_if="!st.running",
+                    size="small",
+                    disabled=("st.state === 'unreadable'",),
+                    click=(self.run_study, "[st.name]"),
+                )
+                v3.VBtn(
+                    "Cancel",
+                    v_else=True,
+                    size="small",
+                    color="error",
+                    click=(self.cancel_run, "[st.name]"),
+                )
+                v3.VBtn(
+                    "Freeze",
+                    v_if="!st.frozen",
+                    size="small",
+                    disabled=("st.running",),
+                    click=(self.freeze_study, "[st.name]"),
+                )
+                v3.VBtn(
+                    "Unfreeze",
+                    v_else=True,
+                    size="small",
+                    disabled=("st.running",),
+                    click=(self.unfreeze_study, "[st.name]"),
+                )
+                v3.VBtn("Copy", size="small", click=(self.copy_study, "[st.name]"))
+
+    def _study_dialog(self) -> None:
+        with v3.VDialog(v_model=("study_confirm_open",), max_width=560, persistent=True):
+            with v3.VCard(title=("study_confirm_title",)):
+                v3.VCardText("{{ study_confirm_text }}")
+                with v3.VCardActions(classes="flex-wrap ga-1"):
+                    v3.VSpacer()
+                    v3.VBtn(
+                        "Cancel",
+                        click=(self.answer_study, "['cancel']"),
+                        variant="text",
+                        classes="text-none",
+                    )
+                    v3.VBtn(
+                        "Copy first",
+                        click=(self.answer_study, "['copy']"),
+                        variant="tonal",
+                        classes="text-none",
+                    )
+                    v3.VBtn(
+                        "{{ study_confirm_label }}",
+                        click=(self.answer_study, "['go']"),
+                        color="error",
+                        variant="flat",
+                        classes="text-none",
                     )
 
     def _confirm_dialog(self) -> None:
@@ -714,3 +1051,11 @@ class Editor:
             ):
                 html.Div("{{ focus_label }}", classes="font-weight-medium mb-1")
                 html.Div("{{ focus_help }}", classes="text-medium-emphasis")
+
+
+def _digest(path: Path) -> str | None:
+    """sha256 of a file's bytes (``None`` when it does not exist)."""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None

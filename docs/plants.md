@@ -296,5 +296,11 @@ from its own documentation; aquakin builds each unit and then the whole plant as
 you edit and lists any errors. **Open** and **Save** read and write the files
 described above; Save writes exactly what `plant.to_spec(path)` would, copying a
 model (with every file it `extends:`) or influent table from outside the project
-folder into it.
+folder into it. Save refuses to overwrite a flowsheet that changed on disk since
+the window opened it, so two windows cannot silently undo each other's work.
+
+The **Studies** tab lists the project's studies and where each stands (fresh,
+stale and why, not run, failed, cancelled). Run one to watch its progress and
+cancel it; freeze, unfreeze or copy it. Running a study that has results, or
+unfreezing one, asks first and offers to keep a copy.
 
