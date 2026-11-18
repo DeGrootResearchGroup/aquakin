@@ -168,6 +168,15 @@ Its relaxed solver is projected gradient in NumPy with an analytic gradient
 (D, Ds, A only) and reports the Frank-Wolfe gap; `auto` enumerates the
 feasible designs when there are at most `exhaustive_limit`, since exchange
 alone stops at local optima on about one random small pool in ten.
+`observation_units` (calibrate / profile, and `Plant.calibrate`) is applied
+before the problem is resolved, by the shared `_observation_unit_factors(columns,
+units)` (one factor per observed column from `conversion_factor(declared, model
+unit)`, `None` when all are 1) and `_convert_observations(observations, sigma,
+factors)` (multi-batch lists, a 1-D single column, and every `sigma` form; a
+scalar `sigma` becomes per-column when the factors differ; `"estimate"` /
+`None` pass through). Everything downstream, including `sigma_estimate` and the
+posterior, is therefore in model units; it is refused with `observation_fn`.
+The plant builds its columns from each observable's stream model.
 `observation_fn` (calibrate / profile / `Experiment`) goes through the shared
 `observe(ys, p, species_idx, fn, t=)` helper in `calibrate.py`, used by both
 `_predict` and `_FisherSetup.jacobian`; a three-argument `fn(t, C, p)`

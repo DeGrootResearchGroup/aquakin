@@ -58,6 +58,7 @@ from aquakin.integrate.calibrate import (
     _check_sigma_arg,
     _check_start_gradient,
     _coerce_sigma,
+    _convert_observations,
     _fit_result,
     _FitConfig,
     _free_ic_fields,
@@ -65,6 +66,7 @@ from aquakin.integrate.calibrate import (
     _initial_point,
     _is_sigma_estimate,
     _n_obs_per_output,
+    _observation_unit_factors,
     _observed_counts,
     _resolve_ic_coords,
     _resolve_laplace,
@@ -589,6 +591,7 @@ def calibrate_plant(
     target: str = "effluent",
     observed_channels: list | None = None,
     observables: list | None = None,
+    observation_units: dict | None = None,
     t_span: tuple | None = None,
     y0: jnp.ndarray | None = None,
     params: jnp.ndarray | None = None,
@@ -650,6 +653,14 @@ def calibrate_plant(
         ``observables=[PlantObservable("effluent", ["SNH", "SNO"]),
         PlantObservable("wastage", ["XS"])]`` expects 3 columns. Overrides
         ``target`` / ``observed_channels``.
+    observation_units : dict[str, str], optional
+        The units of observed channels measured in a unit other than the one
+        their stream's model declares, keyed by channel (species) name, e.g.
+        ``{"SNH": "mg/L", "XS": "kgCOD/m3"}``; a name applies to that channel
+        in every observed stream. The matching columns of ``observations``,
+        and of an absolute ``sigma``, are converted to the model's units before
+        the fit (see :func:`aquakin.calibrate`). ``None`` (default) takes the
+        observations to be in the models' units.
     t_span : tuple or list of tuple, optional
         ``(t0, t1)`` integration window. Defaults to ``(t_obs[0], t_obs[-1])``. A
         list of windows (one per batch) in multi-batch mode; a single window
@@ -735,6 +746,15 @@ def calibrate_plant(
     ic_species, ic_bounds, ic_prior_log_std = _free_ic_fields(free_ic)
 
     observable_specs = _normalize_observables(observables, target, observed_channels)
+    if observation_units:
+        columns = []
+        for spec in observable_specs:
+            _, stream_model = _resolve_endpoint_species(plant, spec.stream)
+            names = spec.channels if spec.channels is not None else stream_model.species
+            columns += [(ch, stream_model.species_units.get(ch, "")) for ch in names]
+        observations, sigma = _convert_observations(
+            observations, sigma, _observation_unit_factors(columns, observation_units)
+        )
     problem, resolved_observables, use_c0_as_y0 = _resolve_plant_problem(
         plant,
         observations,
