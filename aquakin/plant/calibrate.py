@@ -900,5 +900,6 @@ def calibrate_plant(
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)
 
-    result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts, progress=progress)
+    extra = {} if progress is None else {"progress": progress}
+    result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts, **extra)
     return _fit_result(problem, fm, cfg, bundle, result, opt_bounds)
