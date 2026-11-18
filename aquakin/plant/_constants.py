@@ -176,6 +176,40 @@ def species_mask(
     return mask
 
 
+def grams_per_m3_factors(model: CompiledModel, names, *, what: str = "species") -> list:
+    """Per-species factors turning each named species' concentration, in the
+    unit ``model`` declares for it, into ``g/m3``.
+
+    A unit's built-in solids constants (a thickener's target underflow TSS, the
+    Takács settling parameters) are per ``g/m3``; multiplying a species' TSS
+    weight by its factor puts the TSS it contributes on that basis whatever the
+    model declares (``kgCOD/m3`` gives 1000). A chemical currency in the model's
+    unit is ignored (``g/m3`` names none). A blank or unreadable unit is taken
+    to be ``g/m3`` already (factor 1).
+
+    Raises
+    ------
+    ValueError
+        If a species is declared in a unit that is not a mass per volume (an
+        amount in moles, say), which no scale factor can turn into ``g/m3``.
+    """
+    from aquakin.utils.units import conversion_factor
+
+    factors = []
+    for name in names:
+        unit = model.species_units.get(name, "")
+        try:
+            factor = conversion_factor(unit, "g/m3")
+        except ValueError:
+            raise ValueError(
+                f"{what} '{name}' is declared in '{unit}' by model '{model.name}', "
+                f"which cannot be expressed in g/m3 (a mass per volume) without a "
+                f"molar mass or composition."
+            ) from None
+        factors.append(1.0 if factor is None else float(factor))
+    return factors
+
+
 def tss_concentration(C: jnp.ndarray, tss_vec: jnp.ndarray) -> jnp.ndarray:
     """Total suspended solids of a composition ``C`` given a TSS-weight vector.
 

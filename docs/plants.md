@@ -227,10 +227,10 @@ will be required in a future release.
 
 ### Checking units before solving
 
-The plant converts time units but passes stream concentrations between units
-unconverted, so every part must use the same concentration units.
-`plant.check_units()` compares the units the parts declare and reports any
-disagreement before you solve:
+The plant converts what it can: time units (above), influent data,
+concentrations on connections between models that declare the same species in
+different units, and the `g/m3` constants built into the solids units (below).
+`plant.check_units()` reports what is left, before you solve:
 
 ```python
 report = plant.check_units()
@@ -240,12 +240,10 @@ print(report.summary())
 
 It checks that:
 
-- units whose internals fix a concentration basis get it. The thickener needs
-  its TSS species in `g/m3`, and so does the Takács settler while it uses its
-  default (BSM) settling parameters, which are per `g/m3` of solids. Settling
-  parameters you supply are taken to be in your plant's units;
 - on a plant created without `time_unit`, the kinetic models agree on their
   time unit;
+- a unit you write yourself that declares a fixed concentration basis
+  (`assumed_units`) gets it from its model;
 - each model passes its own `model.check_units()`; its findings are listed as
   warnings.
 
@@ -273,6 +271,23 @@ unit that cannot be read. Where the model leaves a unit undeclared there is
 nothing to convert to, and the data are used as given. The BSM influent loaders
 declare their units for you. A plant whose clock differs from the model's then
 moves the times and flows onto its own clock when the influent is added.
+
+The thickener and the Takács settler convert their solids constants. The
+thickener's target underflow TSS and the settler's default (BSM) settling
+parameters are per `g/m3` of solids, so the TSS each species contributes is put
+on that basis from the unit the model declares for it: a model with its
+particulates in `kgCOD/m3` thickens and settles exactly as one in `g/m3`. A
+solids species declared as an amount in moles raises, since that would need a
+molar mass. Settling parameters you supply are taken to be in your model's
+units and are used as they are.
+
+Two models that list the same species in the same order but declare some of
+them in different units (a model and a copy of it on a `kg/m3` basis) can be
+connected directly: `plant.connect` and `plant.add_influent` insert a
+`UnitScalingTranslator` that rescales each species. A pair of units that cannot
+be converted (moles against grams, or an unreadable unit against a readable
+one) raises `WiringError`; models with different species still need an
+explicit translator.
 
 The ASM1 ↔ ADM1 translators (`ASM1toADM1`, `ADM1toASM1`) convert units
 themselves: they read the species units the two models they are built with

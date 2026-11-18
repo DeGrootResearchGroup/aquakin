@@ -32,6 +32,8 @@ from aquakin.plant._constants import (
     ASM1_TSS_FACTOR,
     ASM1_TSS_SPECIES,
     EPS_Q,
+    grams_per_m3_factors,
+    species_indices,
     species_mask,
     tss_concentration,
 )
@@ -63,7 +65,10 @@ class IdealThickener(StatelessUnit):
     tss_species : tuple[str, ...]
         Particulates that contribute to the TSS used for the thickening factor.
     tss_factor : float
-        COD→TSS conversion factor for ``tss_species`` (Copp 2002, 0.75).
+        COD→TSS conversion factor for ``tss_species`` (Copp 2002, 0.75), in
+        g TSS per g of the species. The species' concentrations are converted
+        to ``g/m3`` from the units the model declares for them, so a model in
+        ``kgCOD/m3`` thickens to the same target.
     nominal_underflow_fraction : float
         Fixed underflow/feed flow ratio used *only* by ``flow_outputs`` to seed
         the linear recycle-flow pre-solve (which cannot see concentration). The
@@ -99,10 +104,20 @@ class IdealThickener(StatelessUnit):
         # Mask of separated particulates (1.0 where concentrated/thinned).
         self._settle_mask = species_mask(self.model, self.settling_species, what="settling species")
         self._soluble_mask = 1.0 - self._settle_mask
-        # TSS contribution vector (factor on the tss_species, 0 elsewhere).
+        # TSS contribution vector (factor on the tss_species, 0 elsewhere), in
+        # g/m3 of TSS whatever units the model declares for those species: the
+        # target underflow TSS below is in g/m3.
         self._tss_vec = species_mask(
             self.model, self.tss_species, weight=self.tss_factor, what="TSS species"
         )
+        to_g = grams_per_m3_factors(
+            self.model, self.tss_species, what=f"IdealThickener '{self.name}': TSS species"
+        )
+        if any(f != 1.0 for f in to_g):
+            idx = species_indices(self.model, self.tss_species, what="TSS species")
+            self._tss_vec = self._tss_vec.at[jnp.asarray(idx, dtype=int)].multiply(
+                jnp.asarray(to_g)
+            )
         self._target_tss = float(self.target_tss_percent) * 1.0e4  # %TSS -> mg/L
         self._removal_frac = float(self.tss_removal_percent) / 100.0
 
@@ -113,13 +128,6 @@ class IdealThickener(StatelessUnit):
     @property
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
-
-    def assumed_units(self) -> dict[str, str]:
-        """Units fixed by this unit's internals: the target underflow solids
-        ``target_tss_percent * 10000`` is in ``g/m3`` (mg/L), so every TSS species
-        must be on a ``g/m3`` basis (see
-        :class:`~aquakin.plant.units.AssumedUnits`)."""
-        return dict.fromkeys(self.tss_species, "g/m3")
 
     def compute_outputs(
         self,
