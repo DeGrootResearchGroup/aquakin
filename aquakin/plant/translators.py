@@ -111,3 +111,89 @@ class IdentityTranslator:
         import numpy as np
 
         return np.eye(self.source_model.n_species, dtype=bool)
+
+
+class UnitScalingTranslator:
+    """Translator between two models with the same species in different units.
+
+    Each species is multiplied by the factor from the unit the source model
+    declares for it to the unit the target model declares (``kgCOD/m3`` to
+    ``g_COD/m3`` is 1000). :meth:`Plant.connect` and :meth:`Plant.add_influent`
+    insert one automatically when the two ends' models list the same species in
+    the same order but declare some of them in different units; build one
+    yourself only to pass it as ``translator=``.
+
+    Parameters
+    ----------
+    source_model, target_model : CompiledModel
+        Models with identical species lists.
+
+    Raises
+    ------
+    ValueError
+        If the species lists differ, or a species' two units cannot be
+        compared: one measures another quantity (moles against grams, g N
+        against g COD), or one is unreadable while the other differs from it.
+
+    Examples
+    --------
+    >>> units = {**asm1.species_units, "XS": "kgCOD/m3"}
+    >>> asm1_kg = dataclasses.replace(asm1, species_units=units)
+    >>> C_g = UnitScalingTranslator(asm1_kg, asm1).translate(C_kg)  # XS x 1000
+    """
+
+    def __init__(self, source_model: CompiledModel, target_model: CompiledModel) -> None:
+        self.source_model = source_model
+        self.target_model = target_model
+        self._scale = unit_scaling(source_model, target_model)
+
+    def translate(self, C_source: jnp.ndarray, digester_pH=None) -> jnp.ndarray:
+        """``C_source`` in the target model's units."""
+        if self._scale is None:
+            return C_source
+        return C_source * self._scale
+
+    def coupling_pattern(self):
+        """Each species maps only to itself."""
+        import numpy as np
+
+        return np.eye(self.source_model.n_species, dtype=bool)
+
+
+def unit_scaling(source_model: CompiledModel, target_model: CompiledModel):
+    """Per-species factors from ``source_model``'s units to ``target_model``'s.
+
+    Returns ``None`` when every factor is exactly 1, else a ``(n_species,)``
+    array. Raises ``ValueError`` when the species lists differ or a pair of
+    units cannot be compared (see :class:`UnitScalingTranslator`).
+    """
+    from aquakin.utils.units import conversion_factor
+
+    species = list(source_model.species)
+    if species != list(target_model.species):
+        raise ValueError(
+            f"models '{source_model.name}' and '{target_model.name}' do not list the "
+            f"same species in the same order, so their units cannot be matched "
+            f"species by species."
+        )
+    factors = []
+    for sp in species:
+        src = source_model.species_units.get(sp, "")
+        dst = target_model.species_units.get(sp, "")
+        if src.strip() == dst.strip():
+            factors.append(1.0)
+            continue
+        try:
+            factor = conversion_factor(src, dst)
+        except ValueError as exc:
+            raise ValueError(f"species '{sp}': {exc}") from None
+        if factor is None:
+            raise ValueError(
+                f"species '{sp}' is in '{src}' in model '{source_model.name}' and "
+                f"'{dst}' in model '{target_model.name}', and one of the two cannot "
+                f"be read, so the factor between them is unknown."
+            )
+        factors.append(float(factor))
+    if all(f == 1.0 for f in factors):
+        return None
+    return jnp.asarray(factors)

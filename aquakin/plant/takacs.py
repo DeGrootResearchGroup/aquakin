@@ -60,6 +60,7 @@ from aquakin.plant._constants import (
     ASM1_TSS_FACTOR,
     ASM1_TSS_SPECIES,
     EPS_Q,
+    grams_per_m3_factors,
     species_indices,
 )
 from aquakin.plant._flow_split import (
@@ -270,6 +271,25 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
             what=f"TakacsClarifier '{self.name}': particulate species",
         )
         self._part_tss_factors = [self.tss_factors.get(sp, 1.0) for sp in self.particulate_species]
+        self._unconverted_tss: list = []
+        if self.settling_params == _BSM1_TAKACS_DEFAULTS:
+            # The default settling parameters are per g/m3 of solids, so the TSS
+            # each particulate contributes is put on that basis from the unit
+            # the model declares for it (kgCOD/m3 gives 1000). The per-species
+            # flux split is a ratio, so the species themselves stay in the
+            # model's units. User-supplied parameters are in the model's units
+            # and need no conversion.
+            solids = [
+                sp
+                for sp, f in zip(self.particulate_species, self._part_tss_factors, strict=True)
+                if f != 0.0
+            ]
+            factors, self._unconverted_tss = grams_per_m3_factors(self.model, solids)
+            to_g = dict(zip(solids, factors, strict=True))
+            self._part_tss_factors = [
+                f if to_g.get(sp, 1.0) == 1.0 else f * to_g[sp]
+                for sp, f in zip(self.particulate_species, self._part_tss_factors, strict=True)
+            ]
         self._n_part = len(self._part_indices)
         # Soluble = everything not in particulate.
         self._soluble_indices = [
@@ -355,22 +375,13 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         return [self.overflow_port, self.underflow_port]
 
     def assumed_units(self) -> dict[str, str]:
-        """Units assumed by the default settling parameters.
-
-        The BSM1 defaults give ``rh``, ``rp`` and ``X_threshold`` per ``g/m3``
-        of solids, so a clarifier using them needs every species that counts
-        towards TSS on a ``g/m3`` basis. Settling parameters supplied by the
-        user are taken to be in the plant's units, so nothing is assumed then
-        (see :class:`~aquakin.plant.units.AssumedUnits`).
-        """
-        if self.settling_params != _BSM1_TAKACS_DEFAULTS:
-            return {}
-        tss_species = [
-            sp
-            for sp, factor in zip(self.particulate_species, self._part_tss_factors, strict=True)
-            if factor != 0.0
-        ]
-        return dict.fromkeys(tss_species, "g/m3")
+        """Solids species whose declared unit could not be put on the ``g/m3``
+        basis of the default settling parameters (an amount in moles, say);
+        they are used as if in ``g/m3``, and :meth:`Plant.check_units` flags
+        them (see :class:`~aquakin.plant.units.AssumedUnits`). Empty when every
+        solids unit is a mass per volume (converted) or the settling parameters
+        are the user's own (in the model's units)."""
+        return dict.fromkeys(self._unconverted_tss, "g/m3")
 
     def set_time_unit(self, time_unit: str | None) -> None:
         """Express the default settling velocities in the plant's time unit.

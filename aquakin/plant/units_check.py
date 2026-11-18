@@ -1,18 +1,15 @@
 """Plant-level unit audit: is the flowsheet consistent in its declared units?
 
 A plant integrates every unit against **one clock** (``Plant(time_unit=...)``)
-and passes streams between units **without converting their concentrations**,
-so a concentration mismatch is silent: a settler whose ``g/m3`` settling
-parameters are fed ``kg/m3`` solids produces a plausible-looking but wrong
-solution. Time units are converted rather than checked: each kinetic model's
-rates, each influent's times and flows, and the time constants built into the
-UV reactor, primary clarifier and Takács settler are put on the plant's clock
-before a solve. (The ASM1 <-> ADM1
-translators are not audited here: they convert their models' declared units
-themselves, and ``Plant.connect`` rejects a translator built for models whose
-units differ from the endpoints'. Influents are not audited either: an
-influent's declared ``units`` are converted to its model's units when the
-:class:`~aquakin.plant.influent.InfluentSeries` is built.)
+and converts what it can before a solve: each kinetic model's rates, each
+influent's times, flows and declared concentrations, the time constants built
+into the UV reactor, primary clarifier and Takács settler, the ``g/m3`` solids
+constants of the thickener and the Takács settler's default parameters, and the
+concentrations on a connection between two models that declare the same species
+in different units. What is left is checked here. (The ASM1 <-> ADM1 translators
+are not audited: they convert their models' declared units themselves, and
+``Plant.connect`` rejects a translator built for models whose units differ from
+the endpoints'.)
 
 :func:`check_plant_units` (bound as :meth:`Plant.check_units`) audits the units
 the plant's parts declare, before any solve:
@@ -20,8 +17,8 @@ the plant's parts declare, before any solve:
 - **time unit** -- a plant created without ``time_unit`` (deprecated) needs
   its kinetic models to agree on theirs (:attr:`CompiledModel.time_unit`);
 - **unit operations** -- a species whose concentration basis a unit's constants
-  fix (e.g. a settler's ``g/m3`` settling parameters) must be declared in that
-  basis by the unit's model;
+  fix (:class:`~aquakin.plant.units.AssumedUnits`, for a user-written unit that
+  cannot convert) must be declared in that basis by the unit's model;
 - **models** -- each model's own rate-expression check
   (:meth:`CompiledModel.check_units`), reported as warnings.
 

@@ -96,7 +96,7 @@ from aquakin.plant.temperature import (
     HeatBalanceTemperature,
     TemperatureModel,
 )
-from aquakin.plant.translators import IdentityTranslator, StateTranslator
+from aquakin.plant.translators import IdentityTranslator, StateTranslator, UnitScalingTranslator
 from aquakin.plant.units import AssumedUnits, FlowContext, StatelessUnit, Unit
 from aquakin.plant.units_check import PlantUnitIssue, PlantUnitsReport
 from aquakin.plant.metrics import (
@@ -213,6 +213,7 @@ __all__ = [
     "ThresholdSplitter",
     "UVUnit",
     "Unit",
+    "UnitScalingTranslator",
     "UnitsError",
     "UnknownPortError",
     "UnknownUnitError",

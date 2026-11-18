@@ -111,13 +111,22 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   days, and `InfluentSeries.in_time_unit(...)` moves a series onto another
   clock.
 - `Plant.check_units()` checks a plant's units before you solve it and
-  returns a `PlantUnitsReport`. It confirms that unit operations with built-in
-  constants get the concentration basis they assume (the thickener needs its
-  TSS species in g/m3, and so does the Takács settler while it uses its
-  default BSM settling parameters) and, on a plant created without
-  `time_unit`, that its kinetic models agree on their time unit. Comparisons
-  account for scale, so `mg/L` matches `g/m3` but `kg/m3` does not.
-  `plant.check()` includes the report.
+  returns a `PlantUnitsReport`. On a plant created without `time_unit` it
+  confirms that the kinetic models agree on their time unit, and it reports a
+  solids species the thickener or Takács settler could not put on their
+  `g/m3` basis (one declared in moles, say).
+  Comparisons account for scale, so `mg/L` matches `g/m3` but `kg/m3` does
+  not. `plant.check()` includes the report.
+- The thickener (`IdealThickener`) and the Takács settler (with its default
+  BSM settling parameters) put the TSS of each solids species on the `g/m3`
+  basis of their built-in constants from the unit the model declares for it,
+  so a model with its particulates in `kgCOD/m3` thickens and settles exactly
+  as one in `g/m3`. A solids species declared in moles cannot be converted;
+  it is used as before and `Plant.check_units()` reports it.
+- `UnitScalingTranslator` converts between two models that list the same
+  species but declare some of them in different units. `Plant.connect` and
+  `Plant.add_influent` insert it automatically for such a pair, and raise
+  `WiringError` when a pair of units cannot be converted.
 - Influents can declare the units their data are in with `units=` on
   `InfluentSeries`, `model.influent(...)`, `InfluentSeries.constant` and
   `read_influent_csv`, e.g. `{"t": "h", "Q": "m3/h", "T": "degC", "SS":

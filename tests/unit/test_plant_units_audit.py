@@ -150,15 +150,31 @@ def test_time_guard_does_not_block_a_consistent_plant(make_cstr_plant):
 # ----- unit operations' fixed concentration basis ------------------------------
 
 
-def test_settler_flags_particulates_in_kg_per_m3(asm1):
+def test_audit_flags_an_assumed_basis_the_model_does_not_use(asm1):
+    # A unit implementing AssumedUnits (a user-written one, say) whose
+    # internals need XS in g/m3, on a model that declares it in kg/m3.
+    kg = _with_units(asm1, XS="kgCOD/m3")
+    plant = Plant("settler", time_unit="d")
+    plant.add_unit(_cstr("tank", kg))
+    settler = TakacsClarifier("settler", kg, area=1500.0, height=4.0, underflow_Q=1.0e4)
+    settler.assumed_units = lambda: {"XS": "g/m3"}
+    plant.add_unit(settler)
+    plant.connect("tank", "settler")
+    errs = _errors(plant, include_models=False)
+    assert len(errs) == 1
+    assert "unit 'settler'" in errs[0] and "'XS'" in errs[0] and "kgCOD/m3" in errs[0]
+
+
+def test_shipped_solids_units_convert_rather_than_assume(asm1):
+    # The thickener and the settler convert their g/m3 constants themselves,
+    # so a model in kg/m3 audits clean.
     kg = _with_units(asm1, XS="kgCOD/m3")
     plant = Plant("settler", time_unit="d")
     plant.add_unit(_cstr("tank", kg))
     plant.add_unit(TakacsClarifier("settler", kg, area=1500.0, height=4.0, underflow_Q=1.0e4))
     plant.connect("tank", "settler")
-    errs = _errors(plant, include_models=False)
-    assert len(errs) == 1
-    assert "unit 'settler'" in errs[0] and "'XS'" in errs[0] and "kgCOD/m3" in errs[0]
+    assert plant.check_units(include_models=False).ok
+    assert plant.units["settler"].assumed_units() == {}
 
 
 def _in_hours(model):
@@ -186,7 +202,6 @@ def test_settler_with_own_parameters_assumes_nothing(asm1):
         )
     )
     plant.connect("tank", "settler")
-    assert plant.units["settler"].assumed_units() == {}
     assert plant.check_units(include_models=False).ok
     plant._build_state_layout()
     assert plant.units["settler"]._v0 == 19.75
@@ -214,13 +229,15 @@ def test_assumption_about_a_species_the_model_lacks_is_skipped(asm1):
 
 def test_settler_ignores_species_outside_tss(asm1):
     # XND carries no TSS weight, so its units do not enter the settling
-    # function and are not constrained.
+    # function: a molar unit there needs no conversion and is accepted.
     model = _with_units(asm1, XND="kmolN/m3")
     plant = Plant("settler_xnd", time_unit="d")
     plant.add_unit(_cstr("tank", model))
-    plant.add_unit(TakacsClarifier("settler", model, area=1500.0, height=4.0, underflow_Q=1.0e4))
+    settler = TakacsClarifier("settler", model, area=1500.0, height=4.0, underflow_Q=1.0e4)
+    plant.add_unit(settler)
     plant.connect("tank", "settler")
-    assert "XND" not in plant.units["settler"].assumed_units()
+    plain = TakacsClarifier("plain", asm1, area=1500.0, height=4.0, underflow_Q=1.0e4)
+    assert settler._part_tss_factors == plain._part_tss_factors
     assert plant.check_units(include_models=False).ok
 
 

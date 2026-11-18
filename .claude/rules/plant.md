@@ -395,8 +395,9 @@ Key types:
     `plant.add_influent(name, series, to="unit.port")` — they are *not*
     valid `connect` sources (a clear error redirects you). `connect`
     resolves the default `IdentityTranslator` when the two ends share a
-    model and requires an explicit `translator=` across models (e.g.
-    the BSM2 ASM1↔ADM1 digester edges). The endpoint parsing lives in
+    model, a `UnitScalingTranslator` when their models list the same species
+    in different units, and requires an explicit `translator=` across any
+    other models (e.g. the BSM2 ASM1↔ADM1 digester edges). The endpoint parsing lives in
     `Plant._parse_endpoint`.
   - **Exception taxonomy (`plant/errors.py`).** Plant name/wiring errors use a
     uniform, exported taxonomy so a caller can tell an unknown *name* from an
@@ -464,16 +465,16 @@ Key types:
     `"d"`. A new unit with a built-in time constant implements
     `set_time_unit`, not `assumed_units`.
   - **Unit audit — `plant.check_units()` (`plant/units_check.py`).** Stream
-    concentrations cross units unconverted, so a concentration mismatch is
-    silent; the audit compares *declared* units on static metadata only (never
+    concentrations cross units unconverted (beyond the translators below), so a
+    concentration mismatch inside a unit is silent; the audit compares *declared* units on static metadata only (never
     the jitted solve) and returns a `PlantUnitsReport` (`errors` / `warnings`
     of `PlantUnitIssue`). Checks: on a plant without `time_unit`, every model's
     `time_unit` agrees; a unit implementing the `AssumedUnits` hook
     (`assumed_units() -> {species: unit}`) gets them — only *fixed* internal
-    concentration-basis assumptions belong there (thickener: `g/m3` TSS
-    species; Takács only while `settling_params` are the BSM defaults: `g/m3`
-    for species with a nonzero TSS factor), never a user-supplied number in
-    any consistent unit; each model's own
+    concentration-basis assumptions belong there, never a user-supplied number
+    in any consistent unit. The thickener and Takács convert a mass-per-volume
+    solids unit (below) and list only the species they could not convert;
+    each model's own
     `check_units()` is rolled up as warnings. All comparisons go through the
     scale-aware `aquakin.units_match` (`mg/L` = `g/m3` ≠ `kg/m3`; a currency is
     compared only when both sides state one). `plant.check()` carries the
@@ -483,7 +484,26 @@ Key types:
     `source_model` / `target_model` species list differs from the endpoint's
     (`WiringError`; a different instance with the same species is accepted).
     When a new unit's internals hard-code a concentration basis (a `g/m3`
-    constant), give it `assumed_units`. **Translators convert instead of
+    constant), prefer converting: fold `_constants.grams_per_m3_factors(model,
+    species)` into the species' weights at construction, as `IdealThickener`
+    (its `_tss_vec`) and `TakacsClarifier` (its `_part_tss_factors`, only
+    while `settling_params` are the BSM defaults and only for species with a
+    nonzero TSS factor) do — the per-species flux split and the lumped-TSS
+    inventory are ratios, so the species stay in the model's units. A factor
+    of exactly 1 is not applied (bit-identical). A unit that is not a mass per
+    volume (moles; the schema default `mol/L` of a toy model) gets factor 1 and
+    is returned by the unit's `assumed_units` (its `_unconverted_tss`), so the
+    audit reports it instead of the unit refusing to build. `assumed_units` is
+    for what cannot be converted. **Same species,
+    different units:** `_default_translator` (behind `connect` /
+    `add_influent`) inserts a `translators.UnitScalingTranslator` (diagonal
+    per-species `unit_scaling` factors, `None` when all are 1) when
+    `_same_species_other_units` holds (identical species lists, some unit
+    string differs), raising `WiringError` on an unconvertible pair; identical
+    units on two instances still hit the "different instances" error. It is
+    diagonal, so inside a recycle loop the per-model grouping of the affine
+    seed is only approximate across models and the adaptive `recycle_tol`
+    solve converges it. **Translators convert instead of
     being checked:** `ASM1toADM1` / `ADM1toASM1` (`plant/interfaces.py`) keep
     their equations in fixed *working units* (`_ASM1_UNITS`: g/m3, SALK mol/m3;
     `_ADM1_UNITS`: kg/m3, kmol/m3) and `_unit_scales` derives per-species

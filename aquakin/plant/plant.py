@@ -67,7 +67,11 @@ from aquakin.plant.temperature import (
     OPERATING_T_SIGNAL as _OPERATING_T_SIGNAL,
 )
 from aquakin.plant.temperature import AlgebraicTemperature, TemperatureModel
-from aquakin.plant.translators import IdentityTranslator, StateTranslator
+from aquakin.plant.translators import (
+    IdentityTranslator,
+    StateTranslator,
+    UnitScalingTranslator,
+)
 from aquakin.plant.units import (
     CycleEventSource,
     LiquidVolumeUnit,
@@ -154,6 +158,17 @@ def _concrete_teval_key(t_eval):
         return tuple(float(x) for x in jnp.asarray(t_eval)), True
     except (jax.errors.ConcretizationTypeError, TypeError):
         return None, False
+
+
+def _same_species_other_units(source_model, target_model) -> bool:
+    """True when two models list the same species in the same order but
+    declare at least one of them in a different unit string."""
+    species = getattr(source_model, "species", None)
+    if species is None or list(species) != list(getattr(target_model, "species", ())):
+        return False
+    src = getattr(source_model, "species_units", {})
+    dst = getattr(target_model, "species_units", {})
+    return any(src.get(sp, "").strip() != dst.get(sp, "").strip() for sp in species)
 
 
 class Plant:
@@ -726,7 +741,9 @@ class Plant:
         """Return ``translator`` if given, else the default for the endpoints.
 
         The default is :class:`IdentityTranslator` when the source and
-        destination share a model; a cross-model connection with no
+        destination share a model, and a :class:`UnitScalingTranslator` when
+        their models list the same species in the same order but declare some
+        of them in different units. Any other cross-model connection with no
         explicit translator is an error.
         """
         if translator is not None:
@@ -741,6 +758,17 @@ class Plant:
         target_model = self._unit_model(dest_unit)
         if source_model is target_model:
             return IdentityTranslator(target_model)
+        if _same_species_other_units(source_model, target_model):
+            try:
+                return UnitScalingTranslator(source_model, target_model)
+            except ValueError as exc:
+                raise WiringError(
+                    f"Connection {src_label} -> {dst_label}: models "
+                    f"'{getattr(source_model, 'name', '?')}' and "
+                    f"'{getattr(target_model, 'name', '?')}' list the same species "
+                    f"in different units that cannot be converted ({exc}); supply "
+                    f"an explicit translator."
+                ) from None
         # Two *different* model objects. Distinguish the common mistake -- two
         # separate instances of the same model (e.g. calling bsm2_asm1_model()
         # twice, so the plant and the influent carry different temperature
