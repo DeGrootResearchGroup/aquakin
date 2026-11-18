@@ -80,7 +80,7 @@ def test_required_and_published_signal_names(asm1):
 def test_closed_loop_aeration_auto_wires_controller(asm1):
     """A closed-loop-aeration tank gets its controller (and sensor tap) created
     by the plant, so the bus validates and the controller is referenceable."""
-    p = Plant(name, time_unit="d"="auto")
+    p = Plant(name="auto", time_unit="d")
     p.add_unit(CSTRUnit(name="tank", model=asm1, volume=1000.0,
                         input_port_names=["in"], conditions={"T": 293.15},
                         aeration=Aeration(do_setpoint=2.0, controller="do")))
@@ -100,7 +100,7 @@ def test_missing_publisher_raises_clearly(asm1):
 
 def test_typo_in_signal_name_raises(asm1):
     """A mismatch between the consumed and published name is caught."""
-    p = Plant(name, time_unit="d"="typo")
+    p = Plant(name="typo", time_unit="d")
     p.add_unit(_SignalConsumer("do_signl"))            # typo
     p.add_unit(_do_controller(asm1, "do_signal"))      # publishes the correct name
     with pytest.raises(ValueError, match="do_signl"):
@@ -111,7 +111,7 @@ def test_duplicate_published_signal_name_raises(asm1):
     """Two controllers publishing the SAME signal name are rejected at setup: the
     bus is gathered by name (dict.update), so a duplicate would silently overwrite
     -- one controller's output discarded while its integral keeps winding."""
-    p = Plant(name, time_unit="d"="dup")
+    p = Plant(name="dup", time_unit="d")
     p.add_unit(_do_controller(asm1, "do_kla"))         # name 'do_ctrl'
     p.add_unit(PIController(
         name="do_ctrl2", model=asm1, measured_species="SO", setpoint=2.0,

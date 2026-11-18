@@ -66,7 +66,7 @@ def test_anoxic_tank_has_no_aeration(asm1):
 # --- closed loop: per-tank auto-wiring --------------------------------------
 
 def test_per_tank_do_setpoint_auto_wires_its_own_controller(asm1):
-    p = Plant(name, time_unit="d"="pertank")
+    p = Plant(name="pertank", time_unit="d")
     p.add_unit(_tank(asm1, "reactor", Aeration(do_setpoint=2.0)))
     p._build_state_layout()                           # materialises + validates
     # a dedicated controller, named off the tank, sensing the tank itself
@@ -81,7 +81,7 @@ def test_per_tank_do_setpoint_auto_wires_its_own_controller(asm1):
 
 
 def test_materialisation_is_idempotent(asm1):
-    p = Plant(name, time_unit="d"="idem")
+    p = Plant(name="idem", time_unit="d")
     p.add_unit(_tank(asm1, "reactor", Aeration(do_setpoint=2.0)))
     p._build_state_layout()
     p._build_state_layout()                           # second solve setup
@@ -94,7 +94,7 @@ def test_controlled_rhs_without_signal_bus_raises(asm1):
     clear error rather than silently running unaerated. The plant always supplies
     the bus, so a ``None`` here is misuse -- and a controlled tank has no open-loop
     kLa to fall back on, so a silent fallback would quietly leave it anoxic."""
-    p = Plant(name, time_unit="d"="noBus")
+    p = Plant(name="noBus", time_unit="d")
     p.add_unit(_tank(asm1, "reactor", Aeration(do_setpoint=2.0)))
     p._build_state_layout()                # materialises the controlled aeration
     tank = p.units["reactor"]
@@ -109,7 +109,7 @@ def test_controlled_rhs_without_signal_bus_raises(asm1):
 # --- closed loop: shared controller -----------------------------------------
 
 def test_shared_controller_drives_several_tanks(asm1):
-    p = Plant(name, time_unit="d"="shared")
+    p = Plant(name="shared", time_unit="d")
     p.add_unit(_tank(asm1, "tankA",
                Aeration(do_setpoint=2.0, controller="do", sensor="tankA", gain=1.0)))
     p.add_unit(_tank(asm1, "tankB",

@@ -508,7 +508,7 @@ reactions:
     net = aquakin.load_model_from_file(str(path))
     assert net.time_unit is None
     report = _single_tank(net, net.influent(Q=1.0)).check_units()
-    assert report.ok and report.time_unit is None
+    assert report.ok and report.time_unit == "d"
     assert any("time unit cannot be inferred" in w.detail for w in report.warnings)
 
 
