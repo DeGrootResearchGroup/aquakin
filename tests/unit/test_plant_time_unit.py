@@ -298,3 +298,39 @@ def test_takacs_default_velocities_follow_the_clock(asm1):
     # Parameters the user supplies are already in the plant's units.
     own = dict(v0=20.0, vmax=10.0, rh=5.76e-4, rp=2.86e-3, fns=2.28e-3, X_threshold=3000.0)
     assert settler("h", settling_params=own)._v0 == 20.0
+
+
+def test_digester_reaction_term_follows_the_clock():
+    # The ADM1 digester's model term (reactions, gas transfer and outflow) is
+    # per day; on an hour clock both its rhs and the mass balance's reaction
+    # term are per hour.
+    from aquakin.plant import ADM1DigesterUnit
+    from aquakin.plant.balance import _reaction_term
+
+    adm1 = aquakin.load_model("adm1")
+
+    def digester_plant(time_unit):
+        plant = Plant("dig", time_unit=time_unit)
+        plant.add_unit(
+            ADM1DigesterUnit(
+                name="digester",
+                model=adm1,
+                volume=3400.0,
+                conditions={"T": 308.15},
+                input_port_names=["feed"],
+            )
+        )
+        plant.add_influent("feed", adm1.influent(Q=0.0), to="digester.feed")
+        return _resolved(plant)
+
+    days, hours = digester_plant("d"), digester_plant("h")
+    y0 = days.initial_state()
+    # derivative() also builds the parameter layout the balance reads.
+    np.testing.assert_allclose(
+        np.asarray(hours.derivative(y0)), np.asarray(days.derivative(y0)) / 24.0, rtol=1e-12
+    )
+    params = days.default_parameters()
+    term_d = np.asarray(_reaction_term(days, "digester", y0, params))
+    term_h = np.asarray(_reaction_term(hours, "digester", y0, params))
+    assert np.any(term_d != 0.0)
+    np.testing.assert_allclose(term_h, term_d / 24.0, rtol=1e-12)
