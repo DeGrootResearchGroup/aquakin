@@ -57,6 +57,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Assemble a flowsheet | `Plant`, and units `CSTRUnit`, `MixerUnit`, `RatioSplitter` / `SetpointSplitter` / `ThresholdSplitter`, `ChlorineContactUnit`, `UVUnit`, … (see the API reference for the full unit catalog) |
 | Move water between units | `Stream`, `InfluentSeries` |
 | Read a plant result | `PlantSolution`, `PlantCheck` |
+| Check a plant's units before solving | `Plant.check_units` → `PlantUnitsReport` (`PlantUnitIssue`); `UnitsError` |
 | Select a temperature model | `AlgebraicTemperature`, `HeatBalanceTemperature` |
 | Configure aeration | `Aeration`, `AerationSystem` |
 | Translate state between models (ASM↔ADM) | `StateTranslator`, `IdentityTranslator` |
@@ -110,6 +111,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | To… | Use |
 |---|---|
 | Dimensional consistency of rate expressions | `check_model_units`, `parse_units` |
+| Compare or convert two unit strings, scale included | `units_match`, `conversion_factor` |
 | Mass / electron balance of stoichiometry | `check_conservation`, `check_nitrogen`, `mass_balance` |
 | Composition tables | `composition_table`, `canonical_content` |
 

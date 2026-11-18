@@ -19,7 +19,9 @@ model:
     heterotrophs and the endogenous-respiration processes are inherited unchanged.
 
     New dissolved states (all g_N/m3, electrically neutral): SNH2OH, SNO, SN2O.
-    Free nitrous acid is the acid fraction of nitrite, ``[SNO2] * pH_switch(pKa)``
+    Free nitrous acid is the acid fraction of nitrite, ``[SNO2] * pH_switch(pKa)``,
+    and free ammonia (the AMO substrate) is the base fraction of ammonium,
+    ``[SNH4] * (1 - pH_switch(pKa_NH4))`` with a temperature-dependent pKa, both
     at the operating pH (a fixed condition, as in the source study). The ND
     pathway carries the source study's Haldane-type dissolved-oxygen term
     (production rises as DO falls, to a maximum, then falls toward zero DO).
@@ -36,7 +38,7 @@ model:
     - "Kaelin, D. et al. (2009). Extension of ASM3 for two-step nitrification and denitrification. Water Research 43(6), 1680-1692."
 
 conditions:
-  - {name: pH, default: 7.5, description: "Operating pH (fixed), used for the free-nitrous-acid fraction of nitrite."}
+  - {name: pH, default: 7.5, description: "Operating pH (fixed), used for the free-ammonia fraction of ammonium and the free-nitrous-acid fraction of nitrite."}
 
 species:
   - {name: SNH2OH, default_concentration: 0.0, units: "g_N/m3", description: "Hydroxylamine (NH2OH-N), AOB intermediate"}
@@ -46,14 +48,18 @@ species:
 parameters:
   # Pocquet (2016) AOB yield (overrides the asm3_2step value).
   YAOB: {value: 0.15, units: "g_COD/g_N", bounds: [0.05, 0.5], transform: logit}
-  # Maximum process rates (1/d) = source per-hour values x 24. The AMO and HAO
-  # rates derive from the growth rate / yield; the N2O rates from HAO x reduction
-  # factor. AMO and HAO carry the source growth-rate temperature dependency
+  # Pocquet (2016, Table 5) maximum AOB growth rate, 0.0325 1/h = 0.78 1/d, with
+  # the source growth-rate temperature dependency (overrides the asm3_2step
+  # value). It drives the HAO growth process (Table 3, process 2).
+  muAOB: {value: 0.78, units: "1/d", bounds: [0.1, 3.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
+  # Maximum specific process rates (g N/(g COD d)) = source per-hour values x 24.
+  # The AMO and HAO rates are the growth rate / yield (muAOB / YAOB); the N2O
+  # rates are HAO x reduction factor. AMO and HAO carry the source growth-rate temperature dependency
   # (theta = exp(0.094) = 1.0986), ref 20 deg C.
-  q_AOB_AMO:     {value: 5.20, units: "1/d", bounds: [0.5, 50.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
-  q_AOB_HAO:     {value: 5.20, units: "1/d", bounds: [0.5, 50.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
-  q_AOB_N2O_NN:  {value: 0.0078, units: "1/d", bounds: [1.0e-4, 1.0], transform: positive_log}
-  q_AOB_N2O_ND:  {value: 1.30, units: "1/d", bounds: [0.05, 20.0], transform: positive_log}
+  q_AOB_AMO:     {value: 5.20, units: "g_N/(g_COD*d)", bounds: [0.5, 50.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
+  q_AOB_HAO:     {value: 5.20, units: "g_N/(g_COD*d)", bounds: [0.5, 50.0], transform: positive_log, temperature: {theta: 1.098566, ref_T: 293.15}}
+  q_AOB_N2O_NN:  {value: 0.0078, units: "g_N/(g_COD*d)", bounds: [1.0e-4, 1.0], transform: positive_log}
+  q_AOB_N2O_ND:  {value: 1.30, units: "g_N/(g_COD*d)", bounds: [0.05, 20.0], transform: positive_log}
   # Affinity / inhibition constants (mg/L unless noted).
   K_O2_AOB_1:   {value: 1.0,    units: "g_O2/m3", bounds: [0.05, 10.0],  transform: positive_log}
   K_O2_AOB_2:   {value: 0.6,    units: "g_O2/m3", bounds: [0.05, 10.0],  transform: positive_log}
@@ -77,14 +83,19 @@ expressions:
   # Free nitrous acid = the protonated (acid) fraction of nitrite at the
   # operating pH. pH_switch(pKa) = 1 / (1 + 10^(pH - pKa)).
   S_HNO2: "[SNO2] * pH_switch(pKa_HNO2)"
+  # Free ammonia = the unprotonated (base) fraction of total ammonium, the AMO
+  # substrate. The NH4+ <-> NH3 + H+ pKa is 6344 / T (as log10, T in K).
+  pKa_NH4: "6344.0 / ({T} * 2.302585092994046)"
+  S_NH3: "[SNH4] * (1 - pH_switch(pKa_NH4))"
   # Haldane-type DO dependence of the ND-pathway N2O production (Pocquet 2016):
-  # rises as DO drops to a maximum, then falls toward zero DO.
-  f_DO_ND: "[SO2] / (K_O2_AOB_ND + (1 - 2 * (KI_O2_AOB / K_O2_AOB_ND) ** 0.5) * [SO2] + [SO2] * [SO2] / KI_O2_AOB)"
+  # rises as DO drops to a maximum, then falls toward zero DO. The maximum is
+  # exactly 1, at [SO2] = sqrt(K_O2_AOB_ND * KI_O2_AOB).
+  f_DO_ND: "[SO2] / (K_O2_AOB_ND + (1 - 2 * (K_O2_AOB_ND / KI_O2_AOB) ** 0.5) * [SO2] + [SO2] * [SO2] / KI_O2_AOB)"
 
 reactions:
   - name: AOB_NH3_oxidation_to_NH2OH
-    description: "AMO: ammonia oxidation to hydroxylamine (NH4 -> NH2OH), O2 consumed."
-    rate: "q_AOB_AMO * monod([SO2], K_O2_AOB_1) * monod([SNH4], K_NH3_AOB) * [XAOB]"
+    description: "AMO: ammonia oxidation to hydroxylamine (NH4 -> NH2OH), O2 consumed; Monod in free ammonia."
+    rate: "q_AOB_AMO * monod([SO2], K_O2_AOB_1) * monod(S_NH3, K_NH3_AOB) * [XAOB]"
     stoichiometry:
       SNH4: -1.0
       SNH2OH: 1.0
@@ -93,7 +104,7 @@ reactions:
 
   - name: AOB_NH2OH_oxidation_to_NO_growth
     description: "HAO: hydroxylamine oxidation to nitric oxide (NH2OH -> NO), AOB growth, O2 consumed."
-    rate: "q_AOB_HAO * monod([SO2], K_O2_AOB_2) * monod([SNH2OH], K_NH2OH_AOB) * monod([SNH4], K_NH3_limit) * [XAOB]"
+    rate: "muAOB * monod([SO2], K_O2_AOB_2) * monod([SNH2OH], K_NH2OH_AOB) * monod([SNH4], K_NH3_limit) * [XAOB]"
     stoichiometry:
       SNH4: "(-1) * iN_BM"
       SNH2OH: "(-1) / YAOB"

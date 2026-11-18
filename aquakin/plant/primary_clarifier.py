@@ -38,6 +38,7 @@ import jax.numpy as jnp
 from aquakin.plant._constants import ASM1_SETTLING_SPECIES, MINUTES_PER_DAY, species_mask
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
+from aquakin.utils.units import conversion_factor
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -139,6 +140,13 @@ class PrimaryClarifier(FlowParameterized):
     def output_ports(self) -> list[str]:
         return [self.effluent_port, self.sludge_port]
 
+    def set_time_unit(self, time_unit: str | None) -> None:
+        """Convert the HRT ``V/Q`` (in the plant's time unit) to the minutes the
+        removal correlation is written in; days when the plant has none (see
+        :class:`~aquakin.plant.units.PlantTimeUnitAware`)."""
+        factor = None if time_unit is None else conversion_factor(time_unit, "min")
+        self._minutes_per_time = MINUTES_PER_DAY if factor is None else float(factor)
+
     def initial_state(self) -> jnp.ndarray:
         C0 = self.model.default_concentrations()
         if not self._filtered:
@@ -152,12 +160,12 @@ class PrimaryClarifier(FlowParameterized):
     def _removal_fraction(self, Q: jnp.ndarray) -> jnp.ndarray:
         """Particulate-COD removal fraction n_X in [0, 1] from the HRT ``V/Q``."""
         # The two floors here are deliberate *physical* floors, not the shared
-        # numerical EPS_Q divide-by-zero guard: 1e-3 m3/d caps the HRT at a large
+        # numerical EPS_Q divide-by-zero guard: 1e-3 m3 per time unit caps the HRT at a large
         # but finite value as the feed vanishes (a zero-flow clarifier does not
         # retain forever), and 1e-6 min keeps the log argument in domain. Their
         # magnitudes are modelling choices, so they stay local.
-        hrt_days = self.volume / (Q + 1e-3)
-        hrt_min = hrt_days * MINUTES_PER_DAY
+        hrt = self.volume / (Q + 1e-3)
+        hrt_min = hrt * getattr(self, "_minutes_per_time", MINUTES_PER_DAY)
         n_cod = (
             self.f_corr
             * (2.88 * self.f_X - 0.118)

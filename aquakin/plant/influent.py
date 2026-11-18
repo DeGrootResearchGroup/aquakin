@@ -24,6 +24,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.plant.streams import Stream, make_scalars
+from aquakin.utils.units import CELSIUS_SPELLINGS, conversion_factor, parse_units
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -69,6 +70,25 @@ _BSM1_COLUMN_ORDER = [
 # column; load_bsm2_influent converts it to Kelvin.
 _BSM2_COLUMN_ORDER = _BSM1_COLUMN_ORDER + ["T"]
 
+# Units of the shipped BSM influent files (days, m3/d, ASM1 concentrations).
+_BSM1_INFLUENT_UNITS = {
+    "t": "d",
+    "Q": "m3/d",
+    **dict.fromkeys(("SI", "SS", "XI", "XS", "XB_H", "XB_A", "XP"), "g_COD/m3"),
+    "SO": "g_O2/m3",
+    **dict.fromkeys(("SNO", "SNH", "SND", "XND"), "g_N/m3"),
+    "SALK": "mol/m3",
+}
+_BSM2_INFLUENT_UNITS = {**_BSM1_INFLUENT_UNITS, "T": "K"}
+
+
+def _declared_for(model: CompiledModel, units: dict) -> dict:
+    """The entries of a file's ``units`` that apply to ``model``: ``t``, ``Q``,
+    ``T`` and the species the model declares (a model may use a subset of the
+    file's columns)."""
+    keep = {"t", "Q", "T", *model.species}
+    return {k: v for k, v in units.items() if k in keep}
+
 
 @dataclass
 class InfluentSeries:
@@ -89,6 +109,19 @@ class InfluentSeries:
         given, ``at(t)`` returns a stream carrying the interpolated temperature,
         which the plant propagates to temperature-dependent kinetics. ``None``
         (default) leaves the influent temperature-agnostic.
+    units : dict[str, str], optional
+        The units the data are given in, keyed by ``"t"``, ``"Q"``, ``"T"`` or a
+        species name, e.g. ``{"t": "h", "Q": "m3/h", "T": "degC", "SNH":
+        "mg/L"}``. The data are converted on construction to the units the plant
+        works in: ``t`` to the model's time unit, ``Q`` to m3 per that unit,
+        ``T`` to Kelvin (``degC`` is offset by 273.15), and each species to the
+        model's declared unit. Only the scale changes; a unit measuring another
+        quantity (moles where the model has grams, or another chemical currency)
+        raises. Afterwards ``units`` holds the converted units (an entry whose
+        model unit is blank or cannot be read keeps its declared unit, and its
+        data are left as given). Any subset may be given; undeclared data are
+        taken to be in the model's units already.
+        ``None`` (default) declares nothing.
     """
 
     t: jnp.ndarray
@@ -96,6 +129,7 @@ class InfluentSeries:
     C: jnp.ndarray
     model: CompiledModel
     T: jnp.ndarray | None = None
+    units: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if self.t.ndim != 1:
@@ -110,10 +144,93 @@ class InfluentSeries:
             )
         if self.T is not None and self.T.shape != self.t.shape:
             raise ValueError(f"T shape {self.T.shape} does not match t shape {self.t.shape}")
+        if self.units is not None:
+            allowed = {"t", "Q", "T", *self.model.species}
+            unknown = sorted(k for k in self.units if k not in allowed)
+            if unknown:
+                raise ValueError(
+                    f"units declares {unknown}, which are not 't', 'Q', 'T' or a "
+                    f"species of model '{self.model.name}'."
+                )
+            bad = sorted(k for k, v in self.units.items() if not isinstance(v, str))
+            if bad:
+                raise ValueError(f"units values must be strings; got non-strings for {bad}.")
+            # A declared unit must be readable, or it could not be converted. A
+            # Celsius temperature is recognized by name (``C`` alone parses as
+            # the carbon currency).
+            unreadable = sorted(
+                k
+                for k, v in self.units.items()
+                if parse_units(v) is None
+                and not (k == "T" and v.strip().lower() in CELSIUS_SPELLINGS)
+            )
+            if unreadable:
+                raise ValueError(
+                    f"units declares {unreadable} in units that cannot be read: "
+                    + ", ".join(f"{k}={self.units[k]!r}" for k in unreadable)
+                    + ". Use e.g. 'd', 'm3/d', 'K', 'g_N/m3' or 'mg/L'."
+                )
+            self._convert_to_model_units()
+
+    def _convert_to_model_units(self) -> None:
+        """Convert the declared data to the units the plant works in.
+
+        ``t`` goes to the model's time unit, ``Q`` to m3 per that unit, ``T`` to
+        Kelvin, and each species to the unit the model declares for it. Only
+        the scale changes (a Celsius ``T`` is also offset): a declared unit that
+        measures a different quantity -- a mass where the model has moles, or
+        g NH4 where it has g N -- raises, since converting it would need a molar
+        mass. Where the model's own unit is unknown (a blank or unreadable
+        species unit, or no inferable time unit) there is nothing to convert to,
+        and that entry is kept as declared. ``units`` then records the units the
+        data are in. A factor of exactly 1 leaves the data untouched.
+        """
+        units = dict(self.units)
+        time_unit = self.model.time_unit
+        if time_unit is not None:
+            for key, target in (("t", time_unit), ("Q", f"m3/{time_unit}")):
+                factor = self._factor(units, key, target)
+                if factor is not None and factor != 1.0:
+                    setattr(self, key, getattr(self, key) * factor)
+        if "T" in units:
+            if units["T"].strip().lower() in CELSIUS_SPELLINGS:
+                if self.T is not None:
+                    self.T = self.T + 273.15
+                units["T"] = "K"
+            else:
+                # Kelvin is the only other temperature unit that parses, so this
+                # validates and records the unit; there is no scale to apply.
+                self._factor(units, "T", "K")
+        scale = np.ones(self.model.n_species)
+        for species in self.model.species:
+            factor = self._factor(units, species, self.model.species_units.get(species, ""))
+            if factor is not None:
+                scale[self.model.species_index[species]] = factor
+        if np.any(scale != 1.0):
+            self.C = self.C * jnp.asarray(scale)[None, :]
+        self.units = units
+
+    def _factor(self, units: dict, key: str, target: str) -> float | None:
+        """Factor from the declared unit of ``key`` to ``target``, recording
+        ``target`` in ``units``; ``None`` when nothing is declared or ``target``
+        is unknown."""
+        unit = units.get(key)
+        if unit is None:
+            return None
+        try:
+            factor = conversion_factor(unit, target)
+        except ValueError as exc:
+            raise ValueError(
+                f"units declares '{key}' in '{unit}', which cannot be converted to "
+                f"'{target}' as model '{self.model.name}' requires: {exc}"
+            ) from None
+        if factor is not None:
+            units[key] = target
+        return factor
 
     @classmethod
     def constant(
-        cls, model, overrides=None, /, *, Q, base: str = "zero", T=None, **species
+        cls, model, overrides=None, /, *, Q, base: str = "zero", T=None, units=None, **species
     ) -> InfluentSeries:
         """Build a constant-in-time influent from a feed composition.
 
@@ -135,6 +252,9 @@ class InfluentSeries:
             Composition base; defaults to ``"zero"``.
         T : float, optional
             Constant feed temperature (Kelvin); ``None`` leaves it agnostic.
+        units : dict[str, str], optional
+            The units ``Q``, ``T`` and the concentrations are given in, converted
+            to the model's units on construction (see :class:`InfluentSeries`).
         **species : float
             Convenience overrides for identifier-safe species names.
 
@@ -155,7 +275,50 @@ class InfluentSeries:
         Q_arr = jnp.full((2,), float(Q))
         C_arr = jnp.tile(C, (2, 1))
         T_arr = None if T is None else jnp.full((2,), float(T))
-        return cls(t=t, Q=Q_arr, C=C_arr, model=model, T=T_arr)
+        return cls(t=t, Q=Q_arr, C=C_arr, model=model, T=T_arr, units=units)
+
+    def in_time_unit(self, time_unit: str | None) -> InfluentSeries:
+        """This series with ``t`` and ``Q`` expressed in ``time_unit``.
+
+        A plant whose time unit differs from the model's uses this to put the
+        sample times and flows on its own clock. The series' current time unit
+        is the declared ``units["t"]`` (``units["Q"]`` for the flow), else the
+        model's. Returns ``self`` unchanged when ``time_unit`` is ``None``, when
+        the current unit is unknown, or when nothing needs converting.
+
+        Parameters
+        ----------
+        time_unit : str or None
+            The time unit to express the series in, e.g. ``"h"``.
+
+        Returns
+        -------
+        InfluentSeries
+            A new series (same model, concentrations and temperature), or
+            ``self``.
+        """
+        if time_unit is None:
+            return self
+        units = dict(self.units or {})
+        native = self.model.time_unit
+        t_unit = units.get("t", native)
+        q_unit = units.get("Q", None if native is None else f"m3/{native}")
+        t_factor = None if t_unit is None else conversion_factor(t_unit, time_unit)
+        q_factor = None if q_unit is None else conversion_factor(q_unit, f"m3/{time_unit}")
+        if t_factor in (None, 1.0) and q_factor in (None, 1.0):
+            return self
+        t, Q = self.t, self.Q
+        if t_factor is not None:
+            t = t * t_factor
+            units["t"] = time_unit
+        if q_factor is not None:
+            Q = Q * q_factor
+            units["Q"] = f"m3/{time_unit}"
+        # Built without ``units`` so construction does not convert back to the
+        # model's time unit; the record of what the data are in is set after.
+        series = dataclasses.replace(self, t=t, Q=Q, units=None)
+        series.units = units
+        return series
 
     def at(self, t: jnp.ndarray) -> Stream:
         """Return the influent :class:`Stream` at time ``t``.
@@ -179,6 +342,7 @@ def read_influent_csv(
     column_map: dict | None = None,
     fractions=None,
     delimiter: str | None = None,
+    units: dict[str, str] | None = None,
 ) -> InfluentSeries:
     """Read a CSV influent file.
 
@@ -210,6 +374,10 @@ def read_influent_csv(
     delimiter : str, optional
         Field delimiter. Defaults to auto-sniffing (whitespace and comma both
         work).
+    units : dict[str, str], optional
+        The units the file's data are in, keyed by ``"t"``, ``"Q"``, ``"T"`` or a
+        species name. The data are converted to the model's units on
+        construction (see :class:`InfluentSeries`).
 
     Returns
     -------
@@ -218,7 +386,7 @@ def read_influent_csv(
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"Influent file not found: {p}")
-    return _influent_from_text(
+    series = _influent_from_text(
         p.read_text(encoding="utf-8"),
         model,
         column_order=column_order,
@@ -227,6 +395,7 @@ def read_influent_csv(
         delimiter=delimiter,
         source=str(p),
     )
+    return series if units is None else dataclasses.replace(series, units=dict(units))
 
 
 def write_influent_table(series: InfluentSeries, path: str | Path) -> Path:
@@ -539,11 +708,12 @@ def load_bsm1_influent(profile: str, model: CompiledModel) -> InfluentSeries:
             f"BSM1 influent file 'BSM1_{profile}.csv' not found in package data."
         )
     # Parse the package data directly from text -- no temporary-file round-trip.
-    return _influent_from_text(
+    series = _influent_from_text(
         resource.read_text(encoding="utf-8"),
         model,
         source=f"BSM1_{profile}.csv",
     )
+    return dataclasses.replace(series, units=_declared_for(model, _BSM1_INFLUENT_UNITS))
 
 
 def load_bsm2_influent(profile: str, model: CompiledModel) -> InfluentSeries:
@@ -585,4 +755,6 @@ def load_bsm2_influent(profile: str, model: CompiledModel) -> InfluentSeries:
         source=f"BSM2_{profile}.csv",
     )
     # The file stores temperature in degC; reactors expect Kelvin.
-    return dataclasses.replace(series, T=series.T + 273.15)
+    return dataclasses.replace(
+        series, T=series.T + 273.15, units=_declared_for(model, _BSM2_INFLUENT_UNITS)
+    )

@@ -74,7 +74,7 @@ def test_composition_table_unknown_model_hints():
 def _aerated_cstr_plant(net, *, Q=5000.0):
     """A single aerated ASM1 CSTR fed a constant influent (a minimal plant that
     exercises the inflow / outflow / aeration-O2 / inventory terms)."""
-    plant = Plant("one")
+    plant = Plant("one", time_unit="d")
     plant.add_unit(CSTRUnit(name="tank", model=net, volume=2000.0,
                             input_port_names=["inlet"], conditions={"T": 293.15},
                             aeration=Aeration(kla=240.0, do_sat=8.0)))

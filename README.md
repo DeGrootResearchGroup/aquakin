@@ -109,6 +109,8 @@ C0 = model.concentrations({
 # are absent, not silently left at their YAML reference value.
 feed = model.concentrations({"SS": 60.0, "SNH": 25.0}, base="zero")
 influent = model.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)   # InfluentSeries
+# Data in other units are converted to the model's when declared:
+influent = model.influent({"SS": 0.06}, Q=768.6, units={"Q": "m3/h", "SS": "kgCOD/m3"})
 
 # Or characterize an influent from lab measurements (total COD, TKN, ammonia,
 # alkalinity, ...): the SUMO-style fractionation splits them into the ASM1 states.
@@ -156,6 +158,11 @@ model.summary()                    # tabulates every species with its units
 # (never raises; unknown/unparseable units are skipped).
 for w in model.check_units():      # -> list of (reaction, location, detail)
     print(w)
+
+# The plant-level counterpart: every model on one time unit, and unit
+# operations fed the units their built-in constants assume. A plant whose models
+# disagree on the time unit refuses to solve (UnitsError).
+print(plant.check_units().summary())
 
 # Conservation (mass / electron balance) check. The companion to check_units:
 # each species declares its content of the conserved quantities in the YAML

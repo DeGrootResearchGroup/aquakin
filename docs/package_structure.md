@@ -228,8 +228,9 @@ aquakin/
 │   │   ├── latex.py                 # AST -> LaTeX rate expressions
 │   │   ├── balance.py               # mass / electron (COD) conservation checks
 │   │   ├── units.py                 # currency-aware dimensional check of rate
-│   │   │                            #   expressions (model.check_units); distinct
-│   │   │                            #   from core/units.py, which only formats units
+│   │   │                            #   expressions (model.check_units) and the
+│   │   │                            #   scale-aware units_match; distinct from
+│   │   │                            #   core/units.py, which only formats units
 │   │   └── rtd.py                   # RTD analysis (E-curve, Morrill index)
 │   │
 │   └── study/                       # studies: analyses saved in a project

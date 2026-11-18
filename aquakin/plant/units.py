@@ -99,6 +99,13 @@ class Unit(Protocol):
       events (an SBR's fill/react/settle/decant boundaries).
     - :class:`TemperatureSettable` (``set_temperature``) -- its operating
       temperature can be set by :meth:`Plant.set_temperature`.
+    - :class:`AssumedUnits` (``assumed_units``) -- declares the concentration
+      basis its internal constants assume for some species, checked by
+      :meth:`Plant.check_units`.
+    - :class:`PlantTimeUnitAware` (``set_time_unit``) -- told the plant's time
+      unit before a solve, so it can convert rates or built-in constants that
+      are in another time unit (a kinetic model's rates, a UV reactor's
+      seconds). :class:`ModelTimeScaling` implements it for kinetic units.
 
     A few further optional hooks are read as *values with a default* rather than
     checked for presence, so they stay plain attribute look-ups (not Protocols):
@@ -267,3 +274,72 @@ class StatelessUnit(CouplingAware):
         from aquakin.plant.coupling import CouplingPattern
 
         return CouplingPattern(self_pattern=np.zeros((0, 0), dtype=bool), inlet_pattern=None)
+
+
+@runtime_checkable
+class AssumedUnits(Protocol):
+    """A unit whose internal constants fix the units of some of its inputs, so
+    :meth:`Plant.check_units` can confirm the plant supplies them.
+
+    ``assumed_units`` returns ``{species: unit string}``: the concentration
+    basis a built-in constant assumes, e.g. a settler whose settling parameters
+    are in ``g/m3`` of solids. A species unit with no chemical currency
+    (``"g/m3"``) constrains the mass and volume scale only. Only *fixed*
+    assumptions belong here: a parameter the user supplies in any consistent
+    unit (a volume, a flow setpoint, a ``kLa``) is not listed. A built-in time
+    unit is converted instead (:class:`PlantTimeUnitAware`).
+    """
+
+    def assumed_units(self) -> dict[str, str]: ...
+
+
+@runtime_checkable
+class PlantTimeUnitAware(Protocol):
+    """A unit with rates or built-in constants in a time unit of its own.
+
+    The plant calls ``set_time_unit`` with its time unit (or ``None`` when it
+    has none) before building a solve, and the unit converts what it needs to:
+    a kinetic unit scales its model's reaction term, a UV reactor turns the
+    residence time into seconds from that unit. Every parameter the user
+    supplies to a unit (a ``kLa``, a filter time constant, a phase length) is
+    already in the plant's time unit and is not converted.
+    """
+
+    def set_time_unit(self, time_unit: str | None) -> None: ...
+
+
+class ModelTimeScaling:
+    """Mixin for units whose ``rhs`` evaluates a kinetic model's rates.
+
+    A model's rates are per its own time unit (:attr:`CompiledModel.time_unit`);
+    the plant integrates in its own. :meth:`set_time_unit` stores the factor
+    between the two and :meth:`_scale_rates` applies it to the reaction term
+    (and anything else the model computes per its time unit, such as an ADM1
+    digester's gas transfer). The factor is ``1.0`` when the units agree or
+    either is unknown, and :meth:`_scale_rates` then returns its argument
+    untouched, so a plant on its models' own time unit is unchanged.
+    """
+
+    _rate_factor: float = 1.0
+
+    def set_time_unit(self, time_unit: str | None) -> None:
+        """Set the factor from the model's time unit to the plant's."""
+        self._rate_factor = model_rate_factor(self.model, time_unit)
+
+    def _scale_rates(self, term: jnp.ndarray) -> jnp.ndarray:
+        """``term`` (per the model's time unit) per the plant's time unit."""
+        if self._rate_factor == 1.0:
+            return term
+        return term * self._rate_factor
+
+
+def model_rate_factor(model, time_unit: str | None) -> float:
+    """Factor turning ``model``'s rates (per its time unit) into rates per
+    ``time_unit``; ``1.0`` when either is unknown or they agree."""
+    from aquakin.utils.units import conversion_factor
+
+    native = getattr(model, "time_unit", None)
+    if native is None or time_unit is None or native == time_unit:
+        return 1.0
+    factor = conversion_factor(f"1/{native}", f"1/{time_unit}")
+    return 1.0 if factor is None else float(factor)

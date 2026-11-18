@@ -64,7 +64,26 @@ reactions:
   conditions (default `""`) are advisory unit strings. Species/parameter units
   feed result labelling and the opt-in `check_units` dimensional check; they are
   not otherwise used at runtime. `check_units` treats a blank/unparseable unit
-  as unknown (skipped).
+  as unknown (skipped). **Every shipped model must pass `check_units()`** (the
+  CI gate `test_shipped_models_are_unit_clean`, which also requires a
+  determinable `time_unit` for the plant audit). A reaction whose units are
+  knowingly unconventional (a bare-number molar mass, a published rate form)
+  declares `units_acknowledged: "<reason>"`; its findings then leave the
+  default result (`check_units(include_acknowledged=True)` shows them) and the
+  acknowledged set is pinned in `test_acknowledged_reactions_are_pinned`
+  (today: the three ADM1 `gas_outflow_*` reactions). Before acknowledging,
+  check the parameter units against the model's source: the ASM2d-TUD findings
+  were mislabelled units (`qPP`/`mAN` are g_P/(g_COD·d), the `iCharge_*` factors
+  kmol/g), not a property of the rates. In a SUMO-derived model put `units_acknowledged:` *before*
+  `stoichiometry:` — `scripts/verify_sumo_asm.py` reads indented lines after
+  `stoichiometry:` as species keys. The checker reads an inline `c / (c + X)`
+  (same literal, as its own subexpression) as a dimensionless inhibition term.
+  It also checks each rate against the species with a fixed `+1`/`-1`
+  stoichiometric coefficient (`check_stoichiometry=True`, `_stoichiometry_issue`
+  in `utils/units.py`): the rate must match at least one of them, since such a
+  species changes by exactly the rate. That is what catches a specific rate
+  (g X/(g biomass·d)) mislabelled `1/d`; label it from the stoichiometry, not
+  from a source table that writes it per unit biomass in its own currency.
 - Species units are **also** cross-checked against each `speciation:` /
   `precipitation:` `molar_mass` at load time (`_audit_speciation_molar_mass` in
   `schema/model_spec.py`). `molar_mass` converts the species state value to mol/L
@@ -140,6 +159,21 @@ reactions:
   15 °C/10 °C pairs in `asm1_bsm2.c`), so it slows correctly in the cold
   (nitrification — the most temperature-sensitive — drops to ~36% at 10 °C) while
   staying identical to the old behaviour at the default 20 °C.
+  `theta` may also be a **parameter name** (`temperature: {theta: theta_A, ...}`,
+  issue #662): resolved at compile time by `_resolve_theta_params` in
+  `core/model.py` (reaction-local `<rxn>.<name>` first, then model-level), which
+  validates it exists, is positive (with a positive lower bound if bounded) and
+  is not itself temperature-corrected, and defaults its bounds to `[1.0, 1.3]`
+  (when the value lies inside) and units to `"-"`. The mapping is stored as
+  `CompiledModel.temperature_theta_params = {corrected_idx: theta_idx}`; the
+  `ln_theta` slot of the 4-tuple holds `log` of the theta default, so every
+  consumer that reads/rewrites the tuples (`bsm2_asm1_model`'s ref_T shift,
+  `_warn_if_influent_T_inconsistent`) is unchanged. `_temp_groups` entries carry
+  `(theta_pos, theta_idx)` (both `None` for an all-numeric group, keeping the
+  float path identical), and `_apply_temperature` gathers `log(params[theta_idx])`
+  into those positions before the unique-index scatter-multiply, so theta is
+  calibratable, differentiable and visible to Fisher/identifiability/DGSM.
+  Several rate constants may share one theta (e.g. `muA`/`bA`).
 - Parameters can live at the model level (a single shared slot used by
   any reaction that references them by bare name) or inside a reaction's
   `parameters:` block (namespaced as `<reaction>.<name>`). Model-level

@@ -33,6 +33,7 @@ from aquakin.integrate.events import Event
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.settling import SettlingModel
 from aquakin.plant.streams import Stream
+from aquakin.plant.units import ModelTimeScaling
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -80,7 +81,7 @@ class SBRPhase:
 
 
 @dataclass
-class SBRUnit(CouplingAware):
+class SBRUnit(ModelTimeScaling, CouplingAware):
     """A sequencing batch reactor: variable-volume, time-phased single tank.
 
     Parameters
@@ -342,7 +343,7 @@ class SBRUnit(CouplingAware):
 
         stoich = self.model.compute_stoich(params)
         rates = self.model.rates(C, params, self._condition_arrays, 0)
-        chemistry = stoich.T @ rates
+        chemistry = self._scale_rates(stoich.T @ rates)
 
         aeration = kla * self._o2_mask * (self.do_sat - C)
 

@@ -1,7 +1,8 @@
 format: 2
-aquakin: 0.2.0+gb611381
+aquakin: 0.2.0+ga4caa55.dirty
 name: BSM1
 options:
+  time_unit: d
   recycle_passes: 3
   recycle_tol: 1.0e-08
   recycle_max_passes: 100

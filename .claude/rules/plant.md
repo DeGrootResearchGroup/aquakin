@@ -469,6 +469,79 @@ Key types:
     legitimately leaves the plant), plus the detected `.recycles`; `.ok` is true
     when nothing is unfed and `.summary()` prints it. `check(raise_on_error=True)`
     raises on an unfed port. Exported as `aquakin.PlantCheck`.
+  - **Plant clock — `Plant(name, time_unit=...)`.** The declared time unit
+    is the plant's clock (`t_span`, `m3/<unit>` flows, every user-supplied unit
+    parameter with a time in it: `kla`, `t_m`, SBR phases, PI integral times).
+    `_build_state_layout` calls `_resolve_time_unit` (keyed on the declared
+    unit + model ids + insertion order + influent ids, so it reruns only when
+    those change, and then invalidates `_solve_cache`), which calls
+    `set_time_unit(tu)` on every unit implementing the
+    `units.PlantTimeUnitAware` hook and replaces each `influents[name]` with
+    `_influents_added[name].in_time_unit(tu)`. Kinetic units (CSTR, MBR, SBR,
+    IFAS, ADM1 digester) inherit the `units.ModelTimeScaling` mixin:
+    `_rate_factor = model_rate_factor(model, tu)` (`conversion_factor("1/<model
+    tu>", "1/<tu>")`) multiplies everything the *model* computes per its own
+    time unit (`_scale_rates`: the reaction term; IFAS's whole biofilm
+    reaction + diffusion term; the digester's dCdt incl. gas transfer/outflow),
+    and `balance._reaction_term` applies the same factor. A factor of exactly
+    1 returns the term untouched, so a plant on its models' clock is
+    bit-identical. UV (`_seconds_per_time`), the primary clarifier
+    (`_minutes_per_time`) and Takács (`_v0`/`_vmax`, only while the BSM default
+    `settling_params`) convert their built-in day constants in
+    `set_time_unit`; with `tu=None` they keep days. **A missing `time_unit` is
+    deprecated**: the plant infers the models' shared unit with a one-time
+    `FutureWarning`, and `time_unit_errors` raises `UnitsError` at solve only
+    when the models disagree. The builders (`build_bsm1/2`, `build_a2o`) pass
+    `"d"`. A new unit with a built-in time constant implements
+    `set_time_unit`, not `assumed_units`.
+  - **Unit audit — `plant.check_units()` (`plant/units_check.py`).** Stream
+    concentrations cross units unconverted, so a concentration mismatch is
+    silent; the audit compares *declared* units on static metadata only (never
+    the jitted solve) and returns a `PlantUnitsReport` (`errors` / `warnings`
+    of `PlantUnitIssue`). Checks: on a plant without `time_unit`, every model's
+    `time_unit` agrees; a unit implementing the `AssumedUnits` hook
+    (`assumed_units() -> {species: unit}`) gets them — only *fixed* internal
+    concentration-basis assumptions belong there (thickener: `g/m3` TSS
+    species; Takács only while `settling_params` are the BSM defaults: `g/m3`
+    for species with a nonzero TSS factor), never a user-supplied number in
+    any consistent unit; each model's own
+    `check_units()` is rolled up as warnings. All comparisons go through the
+    scale-aware `aquakin.units_match` (`mg/L` = `g/m3` ≠ `kg/m3`; a currency is
+    compared only when both sides state one). `plant.check()` carries the
+    findings (`PlantCheck.unit_issues` / `.unit_errors`; unit errors make `.ok`
+    false and `raise_on_error` raises `UnitsError`).
+    `connect` / `add_influent` also reject an explicit translator whose
+    `source_model` / `target_model` species list differs from the endpoint's
+    (`WiringError`; a different instance with the same species is accepted).
+    When a new unit's internals hard-code a concentration basis (a `g/m3`
+    constant), give it `assumed_units`. **Translators convert instead of
+    being checked:** `ASM1toADM1` / `ADM1toASM1` (`plant/interfaces.py`) keep
+    their equations in fixed *working units* (`_ASM1_UNITS`: g/m3, SALK mol/m3;
+    `_ADM1_UNITS`: kg/m3, kmol/m3) and `_unit_scales` derives per-species
+    factors from the models' declared `species_units` via
+    `utils.units.conversion_factor` at construction (`x_working = f·x_model`;
+    applied on the way in, divided out on the way out). It returns `None` when
+    every factor is exactly 1 (every shipped model), so `translate` skips the
+    multiply and stays bit-identical; an unconvertible unit (mass vs moles, two
+    different currencies) raises `ValueError` at construction, an unreadable
+    one warns and is taken to be the working unit. Because the factors come
+    from the models a translator was *built* with, `connect` also requires
+    those models to declare the same units as the endpoints'
+    (`_check_translator_endpoints`). A new translator should follow the same
+    pattern rather than hard-code a model's scale. **Influents convert too:**
+    `InfluentSeries.__post_init__` (`_convert_to_model_units`) converts declared
+    `units` to the model's — `t` to `model.time_unit`, `Q` to `m3/<time>`, `T`
+    to K (a `utils.units.CELSIUS_SPELLINGS` spelling is offset by 273.15), each
+    species to `model.species_units` — via `conversion_factor`, multiplying only
+    when a factor differs from 1 (so the BSM loaders, already in ASM1 units, stay
+    bit-identical). A different quantity or an unreadable unit raises; a target
+    the model leaves unknown (blank/unreadable species unit, no inferable time
+    unit) keeps the declared unit and the data unchanged. `units` afterwards
+    records the converted units, so `dataclasses.replace` is idempotent. The
+    audit therefore has no influent check. The plant then moves each series
+    onto its clock with `InfluentSeries.in_time_unit` (built via
+    `dataclasses.replace(..., units=None)` so construction does not convert
+    back to the model's time unit).
   - **Operating temperature.** `plant.set_temperature(celsius)` sets the static
     `T` condition of every temperature-bearing reactor in one call (°C → K),
     leaving a heated fixed-`T` unit like the digester untouched; clears the
@@ -577,7 +650,9 @@ Key types:
     `aquakin.ComponentBalance` / `aquakin.mass_balance`) with, per component (COD
     / N / P), the **inflow** (influents), **outflow** (terminal/dangling material
     streams — effluent, wasted sludge, disposal cake), **gas** (O₂ transferred in
-    by aeration, the digester biogas, denitrification N₂ — computed from the
+    by aeration, the digester biogas, denitrification N₂, and any gas co-stripped
+    by `Aeration(stripped=...)` (`gas_detail["stripped_<q>"]`, the stripped
+    species' transfer dotted with their content) — computed from the
     aeration term and a reaction-production integral over the reactive units, with
     the digester deliberately excluded from the N gas term since it has no N gas
     phase) and **accumulation** (ΔInventory across every unit — reactor / clarifier
@@ -781,6 +856,44 @@ plant (translators, temperature seed, reagent, influent T) rebuild with an
 identical spec, initial state and bit-identical RHS, and the
 `examples/projects/bsm2` project (its 15 °C ASM1 a model file extending `asm1`)
 rebuilds `build_bsm2`'s plant run with the BSM2 parameters bit-identically.
+**Co-stripped gases (`Aeration(stripped=...)`).** An aerated tank strips other
+dissolved gases (N₂O, NO, ...) alongside oxygen inside the solve:
+`stripped={"SN2O": ratio}` or `{sp: (ratio, sat)}`, normalized in
+`Aeration.__post_init__` to a hashable tuple of `(species, ratio, sat)` triples.
+`build_aeration_vectors` folds each gas into the same per-species vectors as
+oxygen: open loop `kla_vec[gas] = kla·alpha·ratio`, closed loop an extra
+`controlled[gas] = (same signal, gain·ratio)` entry, `sat_vec[gas] = sat` (no
+beta/pressure fold). So `aeration_transfer` needs no gas branch, and CSTR, IFAS
+and MBR all get it. The open-loop theta factor scales the gas kLa too, but the
+`C_s(T)` saturation ratio is applied to the oxygen entry only (`o2_mask`; the
+no-gas path keeps the historic whole-vector multiply, bit-identical).
+`required_signals` de-duplicates, since the gas and oxygen read one signal.
+**Consumers of `_controlled_kla` / `_kla_vec` must not assume only `SO` is
+there**: the balance's O₂ term reads the aerated species' entry only, and
+`direct_n2o_emission` (`kla_ratio=None` default) takes each reactor's in-solve
+ratio and saturation from `unit._av.stripped`, so the post-solve emission equals
+the in-solve flux whenever the aeration temperature correction is off (its
+`_kla_history` reconstruction ignores that correction). Without in-solve
+stripping the function remains a post-solve estimate at ratio 1. The
+`plant.mass_balance` content table falls back on a model's declared species
+`composition:` when there is no shipped table. Note a closed-loop plant whose
+only effluent is a sensed tank: the DO sensor tap consumes `tank.out`, so it is
+not a dangling output and must be passed as `effluent_ports`. Covered by
+`tests/unit/test_aeration_stripping.py` (spec, vectors, transfer in both modes,
+temperature, a toy-model one-tank steady state, mass balance and emission in both
+modes, gradient) and `tests/integration/test_bsm1_asmn_n2o.py`.
+
+**BSM1 with non-ASM1 models.** `build_bsm1(model, aeration=, settling_species=,
+tss_species=)`: the clarifier solids come from `_constants.solids_species(model)`
+(the ASM1 constants unchanged when the model's X-prefixed species are exactly
+the ASM1 settling species, so ASM1 stays bit-identical; a model that adds a
+particulate to ASM1 is derived, so the extra solid settles; otherwise X-prefixed
+species settle and those with COD
+content in `model.composition()` are TSS, at `ASM1_TSS_FACTOR`, the rest weight
+0). `aeration={"tank3": Aeration(...), ...}` replaces named tanks' aeration
+(`None` = unaerated); `tss_species` must be a subset of the settling species
+(else `ValueError`). Covered by `tests/unit/test_bsm1_model_solids.py`. The BSM1 metrics (`derived_TSS`, `evaluate_bsm1`'s EQI)
+still use the ASM1 species and do not yet support such models.
 
 **Shared separator/clarifier helpers.** The separator/clarifier family resolves
 its settling / particulate / TSS species lists through the shared

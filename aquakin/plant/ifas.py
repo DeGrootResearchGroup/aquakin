@@ -40,6 +40,7 @@ from aquakin.plant.cstr import (
     aeration_transfer,
 )
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
+from aquakin.plant.units import ModelTimeScaling
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -65,7 +66,7 @@ def _default_biofilm_fixed_mask(model, soluble_mask) -> jnp.ndarray:
 
 
 @dataclass
-class IFASUnit(AerationUnit, CouplingAware):
+class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     """An IFAS / MBBR tank: a CSTR bulk coupled to a depth-resolved biofilm.
 
     Parameters
@@ -369,7 +370,8 @@ class IFASUnit(AerationUnit, CouplingAware):
         # the BiofilmReactor RHS, finite-volume face fluxes between bulk<->surface
         # <->...<->wall plus reaction in every cell. Reused, not reimplemented.
         bio_rhs = self._biofilm._make_rhs(conditions, params)
-        dydt = bio_rhs(t, y, params)  # (n_comp, n_species)
+        # Reaction and diffusion are both per the model's time unit.
+        dydt = self._scale_rates(bio_rhs(t, y, params))  # (n_comp, n_species)
 
         # Hold the mature attached biomass fixed in the LAYERS only (the suspended
         # bulk biomass stays dynamic): zero the fixed species' layer rates.

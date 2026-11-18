@@ -249,7 +249,7 @@ parameters:
     units: gCOD/m3
   k_h2s_acid:
     value: 2.5
-    units: gS/m2/d
+    units: gS/gCOD/d
   k_srb:
     value: 5.0
     units: gCOD/m3
@@ -258,7 +258,7 @@ parameters:
     units: gS/m3
   k_s0_acid:
     value: 15.5
-    units: gS/m2/d
+    units: gS/gCOD/d
   K_S0:
     value: 1.0
     units: gS/m3
@@ -267,7 +267,7 @@ parameters:
     - 5.0
   k_ch4_acid:
     value: 4.44
-    units: gCOD/m2/d
+    units: gCOD/gCOD/d
     prior:
       mean: 4.44
       std: 5.0
@@ -276,13 +276,13 @@ parameters:
     units: gCOD/m3
   k_ch4_hyd:
     value: 1.92
-    units: gCOD/m2/d
+    units: gCOD/gCOD/d
   k_h2_mb:
     value: 0.002
     units: gCOD/m3
   k_sII_anox_f:
     value: 18.45
-    units: gS/m2/d
+    units: gS/gCOD/d
     prior:
       mean: 17.1
       std: 2.3
@@ -309,7 +309,7 @@ parameters:
     - 8.0
   k_s0_anox_f:
     value: 2.64
-    units: gS/m2/d
+    units: gS/gCOD/d
     prior:
       mean: 2.2
       std: 0.4
@@ -339,10 +339,10 @@ parameters:
     units: '-'
   k_sII_ox_f:
     value: 12.0
-    units: gS/m2/d
+    units: gS/gCOD/d
   k_s0_ox_f:
     value: 0.0
-    units: gS/m2/d
+    units: gS/gCOD/d
   i_n_bio:
     value: 0.07
     units: gN/gCOD

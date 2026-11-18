@@ -171,7 +171,7 @@ def test_grad_through_storage_plant_is_finite(asm1):
     (which includes V) and check it stays finite."""
     import jax
     from aquakin.plant import Plant
-    plant = Plant("t")
+    plant = Plant("t", time_unit="d")
     plant.add_unit(StorageTank(name="store", model=asm1, volume=160.0,
                                output_flow=50.0))
     plant.add_influent("feed", asm1.influent({"SS": 60.0}, Q=100.0), to="store.in")

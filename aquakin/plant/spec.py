@@ -105,7 +105,7 @@ SPEC_FORMAT = 2
 #: Translator kinds a spec can name.
 TRANSLATORS = ("asm1_to_adm1", "adm1_to_asm1")
 
-_OPTION_KEYS = ("recycle_passes", "recycle_tol", "recycle_max_passes")
+_OPTION_KEYS = ("time_unit", "recycle_passes", "recycle_tol", "recycle_max_passes")
 
 
 class SpecError(ValueError):
@@ -255,6 +255,9 @@ def _int_to_float(v):
 
 class _Options(BaseModel):
     model_config = _STRICT
+    # The plant's clock ("d", "h", ...); a spec written before plants declared
+    # one leaves it out, and the models' common unit is used.
+    time_unit: str | None = None
     recycle_passes: int = 3
     recycle_tol: float | None = 1e-8
     recycle_max_passes: int = 100

@@ -55,7 +55,7 @@ def make_cstr_plant(simple_model):
     from aquakin.plant.influent import InfluentSeries
 
     def make():
-        plant = Plant("single_cstr")
+        plant = Plant("single_cstr", time_unit="s")
         plant.add_unit(
             CSTRUnit(
                 name="tank",

@@ -119,7 +119,7 @@ def _single_cstr_plant(net):
     finite difference in the fast gate -- the BSM2 versions of this check are
     validation-marked because the whole plant is expensive to integrate.
     """
-    plant = Plant("single_cstr")
+    plant = Plant("single_cstr", time_unit="s")
     plant.add_unit(CSTRUnit(
         name="tank", model=net, volume=100.0,
         input_port_names=["inlet"], conditions={"T": 293.15},

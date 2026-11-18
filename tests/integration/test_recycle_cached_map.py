@@ -39,7 +39,7 @@ def asm1():
 def _recycle_plant(asm1, carry_T=False):
     """Mixer (fresh + recycle) -> CSTR -> splitter, splitter.rec back to mixer.
     Fixed-ratio splitter -> fixed recycle flows -> state-invariant M."""
-    plant = Plant("recycle")
+    plant = Plant("recycle", time_unit="d")
     plant.add_unit(MixerUnit("mix", ["fresh", "rec"], asm1))
     plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
                             conditions={"T": 293.15},
@@ -123,7 +123,7 @@ def test_temperature_map_constancy_by_mode(asm1):
 def test_no_recycle_plant_trivially_constant(asm1):
     """A plant with no recycle edges: the maps are trivially constant and the
     resolver returns no seeds -- the optimization is a no-op."""
-    plant = Plant("once-through")
+    plant = Plant("once-through", time_unit="d")
     plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
                             conditions={"T": 293.15}))
     plant.add_influent("feed", InfluentSeries.constant(asm1, SS=120.0, Q=1000.0),
@@ -279,7 +279,7 @@ def test_cached_flow_steady_state_matches_probe(asm1):
 
 
 def test_no_recycle_flow_trivially_constant(asm1):
-    plant = Plant("once-through")
+    plant = Plant("once-through", time_unit="d")
     plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
                             conditions={"T": 293.15}))
     plant.add_influent("feed", InfluentSeries.constant(asm1, SS=120.0, Q=1000.0),

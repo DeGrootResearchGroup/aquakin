@@ -1,7 +1,8 @@
 format: 2
-aquakin: 0.2.0+g5099120
+aquakin: 0.2.0+ga4caa55.dirty
 name: BSM2
 options:
+  time_unit: d
   recycle_passes: 3
   recycle_tol: 1.0e-08
   recycle_max_passes: 100
@@ -11,7 +12,7 @@ models:
     sha256: 40b630c7ac85ee8b055eb6bf5753ea1947ccde05149fdc7fcca010db2e6a1133
   adm1:
     source: shipped
-    sha256: 7e2d335ca0618b6df2821480b65d981964628c4064b7045dbe37603b8a54ccad
+    sha256: 9a567d4c9658792403587ab3141392bd876189087a808ebd826d85ba5dc99004
 files: {}
 units:
   influent:
@@ -133,6 +134,7 @@ units:
       pressure_factor: 1.0
       kla_theta: 1.024
       saturation_model: benson_krause
+      stripped: []
     output_port: out
   tank4:
     kind: cstr
@@ -163,6 +165,7 @@ units:
       pressure_factor: 1.0
       kla_theta: 1.024
       saturation_model: benson_krause
+      stripped: []
     output_port: out
   tank5:
     kind: cstr
@@ -193,6 +196,7 @@ units:
       pressure_factor: 1.0
       kla_theta: 1.024
       saturation_model: benson_krause
+      stripped: []
     output_port: out
   tank5_split:
     kind: setpoint_splitter

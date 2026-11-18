@@ -25,7 +25,7 @@ def asm1():
 
 def _mini_plant(asm1):
     """A single aerated CSTR fed by a constant influent -- fast to solve."""
-    plant = Plant("solver-opt")
+    plant = Plant("solver-opt", time_unit="d")
     plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0,
                             input_port_names=["inlet"],
                             conditions={"T": 288.15},

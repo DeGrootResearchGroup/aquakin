@@ -105,6 +105,27 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `aquakin serve` answers JSON-line requests on standard input and output
   (`catalog`, `models`, `model`, `check_unit`, `check_spec`, `ping`), so a separate process
   such as a flowsheet editor can use aquakin without importing it.
+- `Aeration(stripped={"SN2O": 1.0, "SNO": 1.0})` strips dissolved gases other
+  than oxygen in an aerated tank, inside the solve. Each gas transfers at
+  `ratio × kLa_O2 × (sat − C)`, with the saturation 0 by default, and follows the
+  controller's kLa under DO control. It works in CSTR, IFAS/MBBR, and MBR tanks.
+  `direct_n2o_emission` then reports the N₂O the solve removed, using each
+  tank's own ratio, and `plant.mass_balance` counts the stripped gases in its gas
+  term. `stripped_n2o` accepts a per-reactor ratio and saturation.
+- `build_bsm1` runs activated-sludge models other than ASM1, such as an N₂O model
+  that splits the autotrophs into AOB and NOB. The clarifier's settling and TSS
+  species are derived from the model (new `settling_species=` / `tss_species=`
+  arguments override them), and the new `aeration=` argument replaces the
+  aeration of named tanks, for example with DO control and gas stripping.
+- `plant.mass_balance` falls back on a model's own declared species
+  `composition:` when there is no shipped composition table for it.
+- A rate constant's temperature correction can name a model parameter as its
+  `theta` (`temperature: {theta: theta_A, ref_T: 293.15}`) instead of a fixed
+  number. The temperature sensitivity is then part of the parameter vector, so
+  `calibrate` can estimate it and `sensitivity`, `fisher_information`,
+  `identifiability`, `dgsm` and Monte Carlo include it, with no recompile
+  needed to sweep it. Several rate constants may share one `theta` parameter.
+  Models with numeric `theta` values behave exactly as before.
 - `Plant.solve_sensitivity(corrector=...)` chooses how each implicit stage of
   the `[y; S]` sensitivity solve is solved. The new default, `"staggered"`,
   converges the plant state first and then solves the sensitivity, which is
@@ -163,9 +184,76 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `ProfileResult` with the likelihood-ratio interval. The sweep is the same as
   for `profile_likelihood`, and every grid point reuses one compiled
   objective.
+- `Plant(name, time_unit="d")` sets the plant's clock: `t_span`, flows (m3 per
+  that unit) and every unit parameter with a time in it are in that unit.
+  Everything that has its own time unit is converted to it before the solve:
+  each kinetic model's rates (so a model in seconds can run beside one in
+  days, with its parameters left in their own units), each influent's times
+  and flows, and the constants built into the UV reactor, the primary
+  clarifier and the Takács settler's default settling velocities, which
+  previously required a plant in days. The BSM1, BSM2 and A²O builders use
+  days, and `InfluentSeries.in_time_unit(...)` moves a series onto another
+  clock.
+- `Plant.check_units()` checks a plant's units before you solve it and
+  returns a `PlantUnitsReport`. It confirms that unit operations with built-in
+  constants get the concentration basis they assume (the thickener needs its
+  TSS species in g/m3, and so does the Takács settler while it uses its
+  default BSM settling parameters) and, on a plant created without
+  `time_unit`, that its kinetic models agree on their time unit. Comparisons
+  account for scale, so `mg/L` matches `g/m3` but `kg/m3` does not.
+  `plant.check()` includes the report.
+- Influents can declare the units their data are in with `units=` on
+  `InfluentSeries`, `model.influent(...)`, `InfluentSeries.constant` and
+  `read_influent_csv`, e.g. `{"t": "h", "Q": "m3/h", "T": "degC", "SS":
+  "mg/L"}`, and the data are converted to the units the plant works in: time to
+  the model's time unit, flow to m3 per that unit, temperature to Kelvin, and
+  each species to the model's declared unit. Only the scale is converted: a
+  unit that measures another quantity (moles where the model has grams, g COD
+  where it has g N) or cannot be read is rejected. The BSM influent loaders
+  declare their units.
+- A reaction can declare `units_acknowledged: "<reason>"` for a rate whose
+  units are knowingly unconventional. `check_units()` then leaves its findings
+  out; `check_units(include_acknowledged=True)` still shows them.
+- `aquakin.units_match(a, b)` compares two unit strings with scale included,
+  and `aquakin.conversion_factor(a, b)` gives the factor between them.
+- `model.check_units()` also checks each rate against the species whose
+  stoichiometric coefficient is a fixed +1 or -1: such a species changes by
+  exactly the rate, so the rate must be in its concentration per time. This
+  catches a rate constant declared in the wrong units, such as a specific
+  phosphorus uptake rate written as 1/d where the stoichiometry is per g P.
+  Turn it off with `check_units(check_stoichiometry=False)`.
 
 
 ### Changed
+
+- A plant created without `time_unit` whose kinetic models use different time
+  units, for example an ozonation model in seconds next to ASM1 in days, now
+  raises `UnitsError` when solved; give it a `time_unit` and the models are
+  converted to it. Such a plant was integrated against one clock and gave
+  wrong results without a warning.
+- The ASM1↔ADM1 translators (`ASM1toADM1`, `ADM1toASM1`) read the species
+  units the connected models declare and convert them into the units their
+  equations use, instead of assuming ASM1 in g/m3 and ADM1 in kg/m3 and
+  kmol/m3. A model declared on another basis (an ADM1 in g/m3) now translates
+  correctly. A declared unit that cannot be converted to the interface's (for
+  example inorganic N as a mass where moles are expected, or a model left at
+  the schema's default `mol/L` species units) now raises when the translator
+  is built; a unit that cannot be read gives a warning and is taken to be the
+  interface's. `Plant.connect` rejects a translator built for models that
+  declare different units from the models it connects. Results with the
+  shipped models are unchanged.
+- `plant.check()` includes the unit audit: `PlantCheck.ok` is now also false
+  when `Plant.check_units` finds an error, and `check(raise_on_error=True)`
+  raises `UnitsError` for one.
+- `Plant.connect` raises `WiringError` when an explicit `translator=` was
+  built for models whose species lists differ from the ones it connects.
+- `model.check_units()` reads an inline half-saturation constant written as
+  `c / (c + X)` as a dimensionless inhibition term, so the WATS sewer models
+  no longer report false findings. `mg` and `mmol` are now parsed as units
+  rather than as a metre times a gram or mole.
+- Every shipped model now passes `check_units()`: all ADM1 parameters declare
+  units, and the ADM1 gas-outflow terms, whose units are knowingly
+  unconventional, are acknowledged.
 
 - The layered secondary clarifier (`TakacsClarifier`, and the settler of
   `build_bsm1(use_takacs=True)` / `build_bsm2`) now settles solids between its
@@ -223,6 +311,13 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   scalars. This covers the filtered primary clarifier, `StorageTank`,
   `MBRUnit` and `SBRUnit`.
 
+### Deprecated
+
+- Creating a `Plant` without `time_unit` gives a `FutureWarning`. The plant
+  then uses the time unit its models share, as before. Pass it explicitly,
+  e.g. `Plant("my_plant", time_unit="d")`; it will be required in a future
+  release.
+
 ### Fixed
 
 - A unit can no longer be named after one of its plant's models (for example a
@@ -230,6 +325,50 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   the splitter's flow setpoint instead of the kinetic rate. Unit, port and
   influent names containing `.`, `->` or whitespace are refused too, since
   endpoints are written `unit.port`. Both raise `WiringError`.
+- `asm3_2step_n2o` grows AOB at Pocquet et al.'s maximum growth rate. The
+  hydroxylamine-oxidation growth process (Pocquet 2016, Table 3, process 2) used
+  the specific HAO rate `q_AOB_HAO` (5.2 g N/(g COD·d), which is μ/Y) as if it
+  were the growth rate, so AOB grew about 6.7 times too fast. It now uses
+  `muAOB`, set to the paper's 0.78 1/d (0.0325 1/h) with its growth-rate
+  temperature dependence. Results from this model change; recalibrate any fits
+  made with it.
+- `build_bsm1` no longer counts non-COD particulates as suspended solids for a
+  model without a composition table. `solids_species` now reads the declared
+  units: only particulates in a COD mass per volume count towards TSS, so the
+  metal precipitates (mol/m3), stored polyphosphate (g P/m3) and the lumped
+  `XTSS` state of `asm2d_chemp` no longer inflate the settler's solids (#672).
+- Unit labels of several SUMO-derived ASM models now match their stoichiometry
+  and source parameter tables. Values are unchanged:
+  - `asm2d`: `qPP` in g P/(g COD·d), `YPHA` in g COD/g P, `kRED` in
+    g P/(g TSS·d), `iTSS_XPP` in g TSS/g P, `iNO3_N2` in g COD/g N and the
+    `iCharge_*` factors in kmol per gram. These carry over to `asm2d_chemp`.
+  - `asm3_biop`: the same corrections to `qPP`, `YPHA`, `iTSS_XPP`, `iNO3_N2`
+    and `iCharge_*`.
+  - `asm3`: `iNO3_N2` and the `iCharge_*` factors.
+  - `asm3_2step_n2o`: the AOB enzyme rates `q_AOB_AMO`, `q_AOB_HAO`,
+    `q_AOB_N2O_NN` and `q_AOB_N2O_ND` in g N/(g COD·d).
+
+- `asm2d_tud` declares the units its parameters actually have rather than 1/d
+  or mol: `mAN` in g P/(g COD·d); `qPP` in (g P/g COD)²/d, since the poly-P
+  storage rate is inversely proportional to the stored fraction XPP/XPAO
+  (Murnleitner et al. 1997, which quotes it in g P/(g COD·d) by treating that
+  fraction as a pure ratio); `iTSS_PP` in g TSS/g P; `iNO3_N2` in g COD/g N; and
+  the `iCharge_*` factors in kmol per gram. The model now cites Meijer et al.
+  (2001), Murnleitner et al. (1997) and van Veldhuizen et al. (1999). Values and
+  kinetics are unchanged.
+- The rate constants of `wats_sewer_khalil_paper_balanced_biofilm_biomass`
+  that multiply the local biomass now declare biomass-specific units
+  (g/gCOD/d) instead of the areal units (g/m2/d) they carried over from the
+  lumped model. Values are unchanged.
+
+- `asm3_2step_n2o` now follows Pocquet et al. (2016) in two places, which
+  changes its N₂O and ammonia-oxidation rates. The ND-pathway dissolved-oxygen
+  factor had an inverted constant ratio and peaked near 5.3 instead of 1,
+  overstating ND-pathway N₂O; it now peaks at exactly 1 at
+  DO = sqrt(K_O2_AOB_ND * KI_O2_AOB) (about 0.63 g O₂/m³). Ammonia oxidation
+  (AMO) was Monod in total ammonium; it is now Monod in free ammonia, the base
+  fraction of ammonium at the operating pH and temperature, so it depends on pH
+  and is slower at typical pH for the same affinity constant.
 - Reusing a plant from separate jitted functions with the same closed-over
   parameter vector no longer leaks cached parameter slices between traces.
 - Stable-adjoint gradients (`DifferentiationConfig(method="stable")`) on large

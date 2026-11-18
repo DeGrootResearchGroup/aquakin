@@ -23,6 +23,7 @@ import jax.numpy as jnp
 
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
+from aquakin.plant.units import ModelTimeScaling
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -33,7 +34,7 @@ ADM1_GAS_SPECIES: tuple[str, ...] = ("S_gas_h2", "S_gas_ch4", "S_gas_co2")
 
 
 @dataclass
-class ADM1DigesterUnit(CouplingAware):
+class ADM1DigesterUnit(ModelTimeScaling, CouplingAware):
     """Continuously-fed ADM1 digester (BSM2 mesophilic, 35 °C).
 
     Parameters
@@ -247,6 +248,7 @@ class ADM1DigesterUnit(CouplingAware):
         # geometry (the model default is BSM2's 3400 m³).
         if self._v_liq_idx is not None:
             params = params.at[self._v_liq_idx].set(float(self.volume))
-        reaction = self.model.dCdt(state, params, self._condition_arrays, 0)
+        # Reactions, gas transfer and gas outflow, per the model's time unit.
+        reaction = self._scale_rates(self.model.dCdt(state, params, self._condition_arrays, 0))
         dilution = (Q_total / self.volume) * (C_in - state) * self._liquid_mask
         return reaction + dilution

@@ -23,7 +23,7 @@ def _solve_pna(t_end=400.0):
         conditions={"T": 303.15},
         aeration=Aeration(kla=4.0, species="SO2"), output_port="out",
     )
-    plant = Plant("pna")
+    plant = Plant("pna", time_unit="d")
     plant.add_unit(tank)
     feed = InfluentSeries.constant(net, {"SNH4": 500.0, "SALK": 0.065}, Q=100.0,
                                    base="zero")

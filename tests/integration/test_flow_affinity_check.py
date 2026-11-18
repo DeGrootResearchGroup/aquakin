@@ -27,7 +27,7 @@ def _recycle_plant(net, threshold):
     """A minimal recycle: influent + (split remainder) -> mixer -> threshold
     split; the remainder feeds back, so the split's inlet depends on the recycle
     flow."""
-    p = Plant("t")
+    p = Plant("t", time_unit="d")
     p.add_unit(MixerUnit("mix", ["feed_in", "recycle_in"], net))
     p.add_unit(ThresholdSplitter("split", net, threshold=threshold,
                                  threshold_port="over", remainder_port="rem"))
@@ -45,13 +45,13 @@ def _check(plant, net):
 
 
 def test_warn_helper_fires_on_inconsistency():
-    p = Plant("h")
+    p = Plant("h", time_unit="d")
     with pytest.warns(UserWarning, match="non-affine"):
         p._warn_if_flow_nonaffine(jnp.asarray([10.0]), jnp.asarray([100.0]))
 
 
 def test_warn_helper_silent_when_consistent():
-    p = Plant("h")
+    p = Plant("h", time_unit="d")
     with warnings.catch_warnings():
         warnings.simplefilter("error")             # any warning -> failure
         p._warn_if_flow_nonaffine(jnp.asarray([100.0]), jnp.asarray([100.0]))
@@ -76,7 +76,7 @@ def test_recycle_below_threshold_is_silent(net):
 
 def test_affine_recycle_plant_is_silent(net):
     """A ratio splitter (affine) in the same recycle topology never warns."""
-    p = Plant("affine")
+    p = Plant("affine", time_unit="d")
     p.add_unit(MixerUnit("mix", ["feed_in", "recycle_in"], net))
     p.add_unit(RatioSplitter("split", net, output_port_ratios={"out": 0.7, "rem": 0.3}))
     p.add_influent("feed", net.influent({}, Q=50.0), to="mix.feed_in")

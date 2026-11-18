@@ -150,7 +150,7 @@ def test_temperature_propagates_around_auto_seeded_recycle(asm1):
     balance (all-inlets-must-carry-T), and because the loop feeds back, the
     ``None`` perpetuated and temperature never propagated (build_bsm2 only
     avoided it by hand-seeding its recycles with a nominal temperature)."""
-    plant = Plant("recycle-T")
+    plant = Plant("recycle-T", time_unit="d")
     plant.add_unit(MixerUnit("mix", ["fresh", "rec"], asm1))
     plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
                             conditions={"T": 293.15}))
@@ -176,7 +176,7 @@ def test_temperature_propagates_around_auto_seeded_recycle(asm1):
 def test_agnostic_influent_keeps_plant_temperature_agnostic(asm1):
     """The mirror case: with a temperature-agnostic influent the auto-seeded
     recycle loop stays agnostic (no temperature is fabricated)."""
-    plant = Plant("recycle-noT")
+    plant = Plant("recycle-noT", time_unit="d")
     plant.add_unit(MixerUnit("mix", ["fresh", "rec"], asm1))
     plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
                             conditions={"T": 293.15}))

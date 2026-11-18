@@ -50,6 +50,7 @@ from aquakin.plant import sensitivity as _sensitivity
 from aquakin.plant import spec as _spec
 from aquakin.plant.colored import ColoredJacobianManager
 from aquakin.plant.errors import (
+    UnitsError,
     UnknownPortError,
     UnknownUnitError,
     WiringError,
@@ -73,10 +74,17 @@ from aquakin.plant.units import (
     CycleEventSource,
     LiquidVolumeUnit,
     PHOperating,
+    PlantTimeUnitAware,
     SignalProducer,
     TemperatureSettable,
     Unit,
 )
+from aquakin.plant.units_check import (
+    PlantUnitsReport,
+    check_plant_units,
+    time_unit_errors,
+)
+from aquakin.utils.units import conversion_factor, units_match
 
 # Reserved key under which :meth:`Plant._split_state` exposes the appended
 # temperature-state block in the per-unit state map (not a real unit, so it is
@@ -165,6 +173,18 @@ class Plant:
     Parameters
     ----------
     name : str
+    time_unit : str, optional
+        The plant's clock, e.g. ``"d"``, ``"h"`` or ``"s"``. ``t_span`` /
+        ``t_eval`` passed to :meth:`solve`, every flow (m3 per this unit) and
+        every unit parameter with a time in it (a ``kLa``, a filter time
+        constant, an SBR phase length) are in this unit. A kinetic model whose
+        rate constants use another time unit is converted to it, as are its
+        influents' times and flows and the built-in constants of the UV
+        reactor, the primary clarifier and the Takács settler's default
+        settling velocities. Leaving it out is deprecated: the plant then takes
+        its models' common time unit with a ``FutureWarning``, and raises
+        :class:`UnitsError` when they disagree. It will be required in a future
+        release.
     recycle_passes : int, optional
         Number of Gauss-Seidel *mop-up* passes per RHS evaluation (default 3).
         Both the recycle flows AND concentrations are first resolved **exactly**
@@ -209,11 +229,25 @@ class Plant:
         self,
         name: str,
         *,
+        time_unit: str | None = None,
         recycle_passes: int = 3,
         recycle_tol: float | None = 1e-8,
         recycle_max_passes: int = 100,
     ) -> None:
         self.name = name
+        if time_unit is not None:
+            try:
+                to_days = conversion_factor(time_unit, "d")
+            except ValueError:
+                to_days = None
+            if to_days is None:
+                raise ValueError(
+                    f"time_unit must be a unit of time such as 'd', 'h', 'min' or "
+                    f"'s'; got {time_unit!r}."
+                )
+        # The declared clock; ``None`` takes the models' common time unit
+        # (deprecated, see _resolve_time_unit).
+        self._declared_time_unit: str | None = time_unit
         if recycle_passes < 1:
             raise ValueError(f"recycle_passes must be >= 1; got {recycle_passes}")
         self.recycle_passes = int(recycle_passes)
@@ -245,7 +279,9 @@ class Plant:
         # graph back-edges, detected automatically, not by add order).
         self._unit_order: list[str] = []
         self.connections: list[Connection] = []
+        # The influents as the plant uses them (on its clock), and as added.
         self.influents: dict[str, InfluentSeries] = {}
+        self._influents_added: dict[str, InfluentSeries] = {}
         # Canonical entry / exit endpoints, set by the plant builders so callers
         # never hard-code a "unit.port". A builder whose front/effluent ports move
         # with its options (e.g. a BSM2 influent bypass relocating the entry to
@@ -288,6 +324,10 @@ class Plant:
         # Static connection adjacency, rebuilt by _build_state_layout():
         self._inputs_by_unit: dict[str, list[Connection]] = {}
         self._recycle_keys: list[tuple[str | None, str]] = []
+        # Model / unit / influent set last put on the plant's clock by
+        # _resolve_time_unit, and whether the missing-time_unit warning was given.
+        self._time_unit_key: tuple | None = None
+        self._time_unit_warned = False
         # The recycle (back-edge) connections and, for any auto-detected one with
         # no explicit ``initial_value``, a zero-flow seed stream. Set by
         # _finalize_topology().
@@ -427,7 +467,8 @@ class Plant:
             raise WiringError(f"influent name '{name}' is already the name of a stream")
         if name in self.influents:
             raise ValueError(f"Influent '{name}' already added")
-        self.influents[name] = series
+        self._influents_added[name] = series
+        self.influents[name] = series.in_time_unit(self._declared_time_unit)
         if to is None:
             to = self.influent_endpoint
         if to is not None:
@@ -599,26 +640,29 @@ class Plant:
         )
 
     def check(self, *, raise_on_error: bool = False) -> PlantCheck:
-        """Validate the wiring before solving: find unfed ports / dangling outputs.
+        """Validate the plant before solving: wiring and declared units.
 
         Every unit input port must be fed by exactly one stream (an influent or
         another unit's output); an **unfed** input port has no source, so the RHS
         sweep cannot resolve it and the solve fails. Output ports consumed by no
         connection are reported too, but as information -- a terminal stream that
         leaves the plant (final effluent, wasted sludge, disposal cake, biogas)
-        is legitimately unconsumed.
+        is legitimately unconsumed. The findings of :meth:`check_units` are
+        included as well: its errors count as errors here, its warnings do not.
 
         Parameters
         ----------
         raise_on_error : bool, optional
-            If True, raise ``ValueError`` when any input port is unfed (the
-            actionable error) instead of only reporting it. Default False.
+            If True, raise ``ValueError`` when any input port is unfed, or
+            :class:`UnitsError` (a ``ValueError``) when the unit audit finds an
+            error, instead of only reporting it. Default False.
 
         Returns
         -------
         PlantCheck
             ``unfed_ports`` (errors), ``dangling_outputs`` (info), ``recycles``
-            (the detected back-edges), with ``.ok`` and ``.summary()``.
+            (the detected back-edges), ``unit_issues`` (the unit audit), with
+            ``.ok`` (no unfed port and no unit error) and ``.summary()``.
         """
         self._finalize_topology()
         fed = {(c.to_unit, c.to_port) for c in self.connections}
@@ -636,14 +680,62 @@ class Plant:
             unfed_ports=unfed,
             dangling_outputs=dangling,
             recycles=[f"{u}.{p}" for (u, p) in self._recycle_keys],
+            unit_issues=self.check_units().issues,
         )
-        if raise_on_error and not result.ok:
+        if raise_on_error and unfed:
             raise ValueError(
                 f"Plant '{self.name}' has unfed input ports (no stream wired "
                 f"in): {unfed}. Wire them with connect()/add_influent() before "
                 f"solving."
             )
+        if raise_on_error and result.unit_errors:
+            raise UnitsError(
+                f"Plant '{self.name}' has inconsistent units:\n"
+                + "\n".join(f"  {i}" for i in result.unit_errors)
+            )
         return result
+
+    def check_units(self, *, include_models: bool = True) -> PlantUnitsReport:
+        """Audit the plant's declared units for consistency, before solving.
+
+        The plant integrates every unit against one clock (:attr:`time_unit`),
+        converting each model's rates, each influent's times and flows and the
+        unit operations' built-in time constants to it, but it passes stream
+        concentrations between units unconverted, so a concentration mismatch
+        is silent. This compares the units the plant's parts *declare*:
+
+        - on a plant created without ``time_unit`` (deprecated), every kinetic
+          model's time unit (:attr:`CompiledModel.time_unit`), which must
+          agree, and a warning for a model whose time unit cannot be inferred;
+        - species whose concentration basis a unit's constants fix (e.g. a
+          settler's ``g/m3`` settling parameters) against the model's units;
+        - each model's own rate-expression check
+          (:meth:`CompiledModel.check_units`), as warnings.
+
+        Comparisons are scale-aware (``mg/L`` matches ``g/m3``; ``kg/m3`` does
+        not). Blank or unparseable units are skipped. Models that disagree on a
+        plant without ``time_unit`` also make :meth:`solve` raise
+        :class:`UnitsError`; everything else here is reported, not raised.
+        :meth:`check` includes this report.
+
+        Parameters
+        ----------
+        include_models : bool, default True
+            Also report each model's rate-expression findings as warnings.
+
+        Returns
+        -------
+        PlantUnitsReport
+            ``errors`` / ``warnings`` lists of :class:`PlantUnitIssue`, ``ok``,
+            the plant ``time_unit`` and a ``summary()``.
+
+        Examples
+        --------
+        >>> plant = build_bsm2()
+        >>> print(plant.check_units().summary())
+        Plant units: OK (time unit: d)
+        """
+        return check_plant_units(self, include_models=include_models)
 
     def _parse_endpoint(self, spec: str, *, role: str) -> tuple[str, str]:
         """Resolve a ``"unit.port"`` / ``"unit"`` endpoint string to ``(unit, port)``.
@@ -690,6 +782,13 @@ class Plant:
         explicit translator is an error.
         """
         if translator is not None:
+            self._check_translator_endpoints(
+                translator,
+                source_model,
+                getattr(self.units[dest_unit], "model", None),
+                src_label,
+                dst_label,
+            )
             return translator
         target_model = self._unit_model(dest_unit)
         if source_model is target_model:
@@ -717,6 +816,42 @@ class Plant:
             f"'{getattr(target_model, 'name', '?')}'); supply an explicit "
             f"translator."
         )
+
+    @staticmethod
+    def _check_translator_endpoints(
+        translator, source_model, target_model, src_label, dst_label
+    ) -> None:
+        """Reject an explicit translator built for different models than the
+        ones it connects. A translator reads and writes species by index and
+        converts from the units its models declare, so a source or target model
+        with a different species list, or with a species declared in other
+        units, silently scrambles or rescales the stream. A different *instance*
+        with the same species and units is accepted."""
+        for side, declared, actual in (
+            ("source", getattr(translator, "source_model", None), source_model),
+            ("target", getattr(translator, "target_model", None), target_model),
+        ):
+            if declared is None or actual is None or declared is actual:
+                continue
+            if list(declared.species) != list(actual.species):
+                raise WiringError(
+                    f"Connection {src_label} -> {dst_label}: the translator's "
+                    f"{side} model is '{declared.name}', but the {side} of this "
+                    f"connection uses model '{actual.name}' with a different "
+                    f"species list. Build the translator with the models it "
+                    f"connects."
+                )
+            for species in actual.species:
+                built = declared.species_units.get(species, "")
+                used = actual.species_units.get(species, "")
+                if units_match(built, used) is False:
+                    raise WiringError(
+                        f"Connection {src_label} -> {dst_label}: the translator "
+                        f"was built for a {side} model declaring '{species}' in "
+                        f"'{built}', but the {side} of this connection declares "
+                        f"it in '{used}'. Build the translator with the models it "
+                        f"connects."
+                    )
 
     def _finalize_topology(self) -> None:
         """Compute the RHS evaluation order and the recycle (back-edge) set.
@@ -994,6 +1129,7 @@ class Plant:
         self._materialize_aeration()
         self._materialize_dosing()
         self._finalize_topology()
+        self._resolve_time_unit()
         layout: dict[str, tuple[int, int]] = {}
         cursor = 0
         for name in self._unit_order:
@@ -1014,6 +1150,60 @@ class Plant:
         self._total_state_size = cursor
         self._build_connection_index()
         self._validate_control_signals()
+
+    def _resolve_time_unit(self) -> None:
+        """Put every part of the plant on its clock (:attr:`time_unit`).
+
+        Tells each :class:`~aquakin.plant.units.PlantTimeUnitAware` unit the
+        time unit (a kinetic unit scales its model's rates to it; the UV reactor,
+        primary clarifier and Takács settler convert their built-in constants)
+        and expresses each influent's times and flows in it. Without a declared
+        ``time_unit`` the models' common unit is used, with a ``FutureWarning``;
+        models that disagree then raise :class:`UnitsError`. The work depends
+        only on the models, units and influents present, so it is redone only
+        when they change.
+        """
+        key = (
+            self._declared_time_unit,
+            tuple(id(net) for net in self._ordered_models()),
+            tuple(self._insertion_order),
+            tuple((n, id(s)) for n, s in self._influents_added.items()),
+        )
+        if self._time_unit_key == key:
+            return
+        if self._declared_time_unit is None:
+            errors = time_unit_errors(self)
+            if errors:
+                raise UnitsError(
+                    f"Plant '{self.name}' cannot be solved: "
+                    + " ".join(i.detail for i in errors)
+                    + " See plant.check_units() for the full report."
+                )
+            if not self._time_unit_warned and self._ordered_models():
+                inferred = self.time_unit
+                hint = (
+                    f"its models' time unit '{inferred}' is used"
+                    if inferred is not None
+                    else "no time unit could be inferred from its models"
+                )
+                warnings.warn(
+                    f"Plant '{self.name}' was created without time_unit, so "
+                    f"{hint}. Pass it explicitly, e.g. Plant('{self.name}', "
+                    f"time_unit='{inferred or 'd'}'); time_unit will be required "
+                    "in a future release.",
+                    FutureWarning,
+                    stacklevel=4,
+                )
+                self._time_unit_warned = True
+        time_unit = self.time_unit
+        for name in self._insertion_order:
+            unit = self.units[name]
+            if isinstance(unit, PlantTimeUnitAware):
+                unit.set_time_unit(time_unit)
+        for name, series in self._influents_added.items():
+            self.influents[name] = series.in_time_unit(time_unit)
+        self._solve_cache.invalidate()
+        self._time_unit_key = key
 
     def _validate_control_signals(self) -> None:
         """Cross-check the control-signal bus: every published signal name is
@@ -1128,16 +1318,20 @@ class Plant:
 
     @property
     def time_unit(self) -> str | None:
-        """The plant's native integration time unit, or ``None``.
+        """The plant's clock, or ``None``.
 
         ``t_span`` / ``t_eval`` passed to :meth:`solve` are in this unit (unless
-        a ``time_unit=`` override is given). It is the unit shared by every
-        kinetic model's rate constants (:attr:`CompiledModel.time_unit`) --
-        ``"d"`` for the BSM-family plants (ASM1 + ADM1 are both in days).
-        Returns ``None`` if the plant has no kinetic model, or its models
-        disagree on (or do not declare) a time unit -- in which case a
-        ``time_unit=`` conversion in :meth:`solve` cannot be applied.
+        a ``time_unit=`` override is given), and flows are in m3 per this unit.
+        It is the ``time_unit`` the plant was created with -- ``"d"`` for the
+        BSM-family builders. A plant created without one (deprecated) uses the
+        unit shared by every kinetic model's rate constants
+        (:attr:`CompiledModel.time_unit`), and is ``None`` when it has no
+        kinetic model or its models disagree on (or do not declare) one -- in
+        which case a ``time_unit=`` conversion in :meth:`solve` cannot be
+        applied.
         """
+        if self._declared_time_unit is not None:
+            return self._declared_time_unit
         units = {net.time_unit for net in self._ordered_models()}
         if len(units) == 1:
             return next(iter(units))

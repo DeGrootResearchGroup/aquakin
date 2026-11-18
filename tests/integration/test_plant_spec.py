@@ -118,7 +118,12 @@ def test_every_setting_is_written_with_the_aquakin_version():
     # Defaults are written too, so a later change of default cannot change the plant.
     assert clarifier["interface_flux"] == "godunov" and clarifier["n_layers"] == 10
     assert spec["units"]["tank3"]["aeration"]["Kp"] == 25.0
-    assert spec["options"] == {"recycle_passes": 3, "recycle_tol": 1e-8, "recycle_max_passes": 100}
+    assert spec["options"] == {
+        "time_unit": "d",
+        "recycle_passes": 3,
+        "recycle_tol": 1e-8,
+        "recycle_max_passes": 100,
+    }
     assert (
         spec["models"]["asm1"]["source"] == "shipped"
         and len(spec["models"]["asm1"]["sha256"]) == 64

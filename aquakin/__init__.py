@@ -130,6 +130,9 @@ from aquakin.plant import (
     MassBalance,
     NoDigesterError,
     OperatingCost,
+    PlantUnitIssue,
+    PlantUnitsReport,
+    UnitsError,
     UnknownPortError,
     UnknownUnitError,
     WiringError,
@@ -206,7 +209,9 @@ from aquakin.utils import (
     check_model_units,
     check_nitrogen,
     composition_table,
+    conversion_factor,
     parse_units,
+    units_match,
 )
 
 __all__ = [
@@ -265,6 +270,8 @@ __all__ = [
     "Plant",
     "PlantCheck",
     "PlantSolution",
+    "PlantUnitIssue",
+    "PlantUnitsReport",
     "PlugFlowReactor",
     "PredictiveBand",
     "ProfileResult",
@@ -285,6 +292,7 @@ __all__ = [
     "UVUnit",
     "Unit",
     "UnitWarning",
+    "UnitsError",
     "UnknownPortError",
     "UnknownUnitError",
     "WiringError",
@@ -306,6 +314,7 @@ __all__ = [
     "compare_scenarios",
     "compile_model",
     "composition_table",
+    "conversion_factor",
     "ct_log_removal",
     "ct_value",
     "derived_BOD",
@@ -361,6 +370,7 @@ __all__ = [
     "t10_from_baffling",
     "t10_from_rtd",
     "time_average",
+    "units_match",
     "uv_dose",
     "uv_log_inactivation",
 ]

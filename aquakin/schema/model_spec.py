@@ -139,16 +139,27 @@ class TemperatureCorrectionSpec(BaseModel):
     ``T_hi`` and ``p_lo`` at ``T_lo`` it is ``(p_hi / p_lo) ** (1 / (T_hi -
     T_lo))``. The correction is confined to the rate constants — it never
     touches stoichiometric (yield / composition) parameters.
+
+    ``theta`` may also be the **name of a model parameter** (a string). The
+    factor is then read from the parameter vector at evaluation, so ``theta`` can
+    be calibrated, differentiated, and included in the sensitivity and
+    identifiability tools like any other parameter. A reaction-local name is
+    looked up in the owning reaction first, then among the model-level
+    parameters. Several rate constants may share one ``theta`` parameter.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    theta: float
+    theta: float | str
     ref_T: float
     condition: str = "T"
 
     @model_validator(mode="after")
     def _theta_positive(self) -> TemperatureCorrectionSpec:
+        if isinstance(self.theta, str):
+            if not self.theta.strip():
+                raise ValueError("temperature.theta must be a number or a parameter name")
+            return self
         if self.theta <= 0.0:
             raise ValueError(f"temperature.theta must be > 0; got {self.theta}")
         return self
@@ -218,6 +229,11 @@ class ReactionSpec(BaseModel):
     # coefficient in this reaction. ``None`` (the default) falls back to the
     # model-level ``conserved_for``.
     conserved_for: list[str] | None = None
+    # A written reason this reaction's rate is knowingly dimensionally
+    # unconventional (e.g. a molar mass written as a bare number). A non-empty
+    # value moves the reaction's ``check_units`` findings out of the default
+    # result, keeping them visible with ``include_acknowledged=True``.
+    units_acknowledged: str = ""
 
     @model_validator(mode="after")
     def _stoichiometry_non_empty(self) -> ReactionSpec:
@@ -556,9 +572,9 @@ def _units_measure(units: str) -> str | None:
     if dim is None:
         return None
     numerator = {tok for tok, exp in dim.tokens if exp > 0}
-    if numerator & {"mol", "kmol"}:
+    if numerator & {"mol", "kmol", "mmol"}:
         return "molar"
-    if numerator & {"g", "kg"}:
+    if numerator & {"g", "kg", "mg"}:
         return "mass"
     return None
 

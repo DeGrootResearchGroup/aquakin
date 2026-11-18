@@ -47,7 +47,7 @@ def test_single_cstr_steady_state(simple_net):
         steady-state B = C_in - A = 0.5
     (with k=0.1 1/d and tau=10 d).
     """
-    plant = Plant("single_cstr")
+    plant = Plant("single_cstr", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="tank",
@@ -64,7 +64,7 @@ def test_single_cstr_steady_state(simple_net):
 
 
 def _single_cstr_plant(net):
-    plant = Plant("single_cstr")
+    plant = Plant("single_cstr", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="tank",
@@ -98,7 +98,7 @@ def test_plant_time_unit_and_conversion(simple_net):
 def test_streams_sample_influent_at_native_time_with_time_unit(simple_net):
     """A rebuilt stream after solve(time_unit=...) samples the influent at the
     native times, not at the rescaled ``solution.t`` values."""
-    plant = Plant("ramp")
+    plant = Plant("ramp", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="tank",
@@ -130,7 +130,7 @@ def test_two_cstrs_in_series(simple_net):
     first-order decay, A drops by factor 1/(1+k*tau) per tank at steady
     state. With tau=10 d, k=0.1 1/d: 1.0 -> 0.5 -> 0.25.
     """
-    plant = Plant("two_cstrs")
+    plant = Plant("two_cstrs", time_unit="s")
     for name in ("t1", "t2"):
         plant.add_unit(
             CSTRUnit(
@@ -150,7 +150,7 @@ def test_two_cstrs_in_series(simple_net):
 
 def test_mixer_mass_balance(simple_net):
     """Mixer downstream of two CSTRs: total Q and Q*C are conserved."""
-    plant = Plant("mixer_test")
+    plant = Plant("mixer_test", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="t1",
@@ -228,7 +228,7 @@ def test_splitter_flow_mode_conserves_under_low_feed(simple_net):
 
 def test_splitter_flow_ratios(simple_net):
     """Splitter routes 60/40 of its inflow to two sinks (which are CSTRs)."""
-    plant = Plant("split_test")
+    plant = Plant("split_test", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="src",
@@ -291,7 +291,7 @@ def test_recycle_with_initial_value(simple_net):
     At steady state A_in_tank ≈ A_tank since CSTR mass balance gives
     Q_in*(C_in - C_tank) = k*V*C_tank where C_in is the mixed stream.
     """
-    plant = Plant("recycle_test")
+    plant = Plant("recycle_test", time_unit="s")
     plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "recycle"], model=simple_net))
     plant.add_unit(
         CSTRUnit(
@@ -337,7 +337,7 @@ def test_connection_index_groups_inputs_and_recycle_keys(simple_net):
     """_build_state_layout precomputes the per-unit incoming-edge map and the
     recycle source keys that the RHS hot paths read instead of re-scanning all
     connections each step."""
-    plant = Plant("idx_test")
+    plant = Plant("idx_test", time_unit="s")
     plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "recycle"], model=simple_net))
     plant.add_unit(
         CSTRUnit(
@@ -381,7 +381,7 @@ def test_connection_index_groups_inputs_and_recycle_keys(simple_net):
 
 def test_ad_grad_through_plant(simple_net):
     """jax.grad through Plant.solve w.r.t. params returns a finite gradient."""
-    plant = Plant("grad_test")
+    plant = Plant("grad_test", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="t1",
@@ -417,7 +417,7 @@ def test_influent_interpolation(simple_net):
     C_const = jnp.tile(jnp.asarray([1.0, 0.0]), (n_t, 1))
     inf = InfluentSeries(t=t_grid, Q=Q_var, C=C_const, model=simple_net)
 
-    plant = Plant("varying_inf")
+    plant = Plant("varying_inf", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="tank",
@@ -441,7 +441,7 @@ def test_param_layout_and_defaults_agree_for_shared_model(simple_net):
     units share one compiled model gets exactly one parameter block and a
     default vector of matching length.
     """
-    plant = Plant("two_tanks")
+    plant = Plant("two_tanks", time_unit="s")
     for nm in ("t1", "t2"):
         plant.add_unit(
             CSTRUnit(
@@ -464,7 +464,7 @@ def test_distinct_models_sharing_a_name_rejected():
     net_a = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     net_b = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     assert net_a is not net_b and net_a.name == net_b.name
-    plant = Plant("collision")
+    plant = Plant("collision", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="a",
@@ -537,7 +537,7 @@ def test_stateless_units_expose_state_size_as_property(simple_net):
 
 def _recycle_plant(simple_net):
     """A mixer -> tank -> splitter loop, the splitter recycling to the mixer."""
-    plant = Plant("rc")
+    plant = Plant("rc", time_unit="s")
     plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "recycle"], model=simple_net))
     plant.add_unit(
         CSTRUnit(
@@ -631,7 +631,7 @@ def test_add_influent_to_creates_connection(simple_net):
 
 def _two_tank_plant(simple_net):
     """Two CSTRs in series (a -> b), each carrying the 2-species model."""
-    plant = Plant("two_tank")
+    plant = Plant("two_tank", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="a",
@@ -682,7 +682,7 @@ def test_initial_state_override_wrong_length_errors(simple_net):
 
 def _fed_cstr_plant(simple_net, *, Q=10.0, C=(1.0, 0.0)):
     """A single CSTR fed by a constant influent."""
-    plant = Plant("one")
+    plant = Plant("one", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="tank",
@@ -1044,7 +1044,7 @@ def _clarifier_recycle_loop(recycle_passes, *, capture):
 
     net = aquakin.load_model("asm1")
     infl = net.influent({"SS": 60.0, "XS": 200.0, "XB_H": 50.0, "XI": 25.0, "SNH": 25.0}, Q=1.0)
-    plant = Plant("clar_loop", recycle_passes=recycle_passes)
+    plant = Plant("clar_loop", time_unit="d", recycle_passes=recycle_passes)
     plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "ras"], model=net))
     plant.add_unit(
         IdealClarifier(name="clar", model=net, underflow_Q=2.0, capture_efficiency=capture)
@@ -1112,7 +1112,7 @@ def test_recycle_presolve_is_exact_and_gain_independent(capture):
 
 def test_recycle_presolve_skipped_without_recycle(simple_net):
     # A plant with no recycle edges has nothing to pre-solve -> no warning.
-    plant = Plant("no_recycle")
+    plant = Plant("no_recycle", time_unit="s")
     plant.add_unit(
         CSTRUnit(
             name="tank",

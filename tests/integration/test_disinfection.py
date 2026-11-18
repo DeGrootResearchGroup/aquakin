@@ -140,7 +140,7 @@ def test_disinfection_train_in_a_plant(asm1):
     """A chlorine + UV train reduces the indicator through the flowsheet, the
     chlorine residual reaches its steady state, and the effluent indicator is
     surfaced on the reconstructed stream."""
-    p = Plant("disinfect")
+    p = Plant("disinfect", time_unit="d")
     p.add_unit(ChlorineContactUnit("cl", asm1, volume=500.0, dose=5.0,
                                    ct_per_log=0.05, decay_rate=2.0,
                                    baffling_factor=0.5, inlet_density=1e6))
@@ -162,7 +162,7 @@ def test_disinfection_train_in_a_plant(asm1):
 
 
 def test_grad_through_disinfection_plant(asm1):
-    p = Plant("disinfect")
+    p = Plant("disinfect", time_unit="d")
     p.add_unit(ChlorineContactUnit("cl", asm1, volume=500.0, dose=5.0,
                                    ct_per_log=0.5, decay_rate=2.0))
     p.add_influent("feed", InfluentSeries.constant(asm1, SS=60.0, Q=1000.0),

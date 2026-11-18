@@ -123,7 +123,24 @@ DIMENSIONLESS = Dimension()
 # = m^3, ``s-1`` = s^-1, or a caret exponent ``^0.5``). Longest first so the
 # scan prefers ``mol`` over ``m`` and ``min`` over ``m``. ``M`` is molarity and
 # is normalised to ``mol/L`` after parsing.
-_UNIT_SYMBOLS = ["kmol", "mol", "min", "kg", "bar", "Pa", "g", "m", "L", "d", "s", "h", "M", "K"]
+_UNIT_SYMBOLS = [
+    "kmol",
+    "mmol",
+    "mol",
+    "min",
+    "kg",
+    "mg",
+    "bar",
+    "Pa",
+    "g",
+    "m",
+    "L",
+    "d",
+    "s",
+    "h",
+    "M",
+    "K",
+]
 # Chemical "currency" tokens. ``O2`` carries the meaning of oxygen-as-O2;
 # ``TSS`` is suspended-solids mass (a distinct currency in the ASM2d/ASM3
 # models). These are the distinct base dimensions the check exists to keep
@@ -357,6 +374,148 @@ class _ProductParser:
         return word
 
 
+# --- scale-aware comparison ---------------------------------------------------
+
+#: Spellings of a Celsius temperature unit. They are not parsed (``C`` is the
+#: carbon currency), so code reading a declared temperature unit checks this set.
+CELSIUS_SPELLINGS = frozenset(
+    {"c", "degc", "deg_c", "°c", "℃", "celsius", "degree_celsius", "degrees_celsius"}
+)
+
+# Each scaled symbol -> (base symbol, base exponent, factor), so that one unit of
+# the symbol equals ``factor * base**exponent``. Unlisted symbols (``g``, ``mol``,
+# ``m``, ``s``, ``Pa``, ``K``) are already base symbols.
+_TO_BASE = {
+    "kg": ("g", 1, 1.0e3),
+    "mg": ("g", 1, 1.0e-3),
+    "kmol": ("mol", 1, 1.0e3),
+    "mmol": ("mol", 1, 1.0e-3),
+    "L": ("m", 3, 1.0e-3),
+    "d": ("s", 1, 86400.0),
+    "h": ("s", 1, 3600.0),
+    "min": ("s", 1, 60.0),
+    "bar": ("Pa", 1, 1.0e5),
+}
+
+
+def _to_base_units(dim: Dimension) -> tuple[Dimension, float]:
+    """Express ``dim`` in base symbols, returning ``(base_dimension, factor)``.
+
+    One unit of ``dim`` equals ``factor`` units of ``base_dimension``: for
+    example ``kg/m3`` is ``(g/m3, 1000)`` and ``mg/L`` is ``(g/m3, 1)``.
+    Chemical currency tokens (``COD``, ``N``, ...) carry no scale and pass
+    through unchanged.
+    """
+    out: dict = {}
+    factor = 1.0
+    for tok, exp in dim.tokens:
+        base, base_exp, f = _TO_BASE.get(tok, (tok, 1, 1.0))
+        out[base] = out.get(base, Fraction(0)) + exp * base_exp
+        factor *= f ** float(exp)
+    return Dimension(out), factor
+
+
+def _drop_currency(dim: Dimension) -> Dimension:
+    return Dimension({k: v for k, v in dim.tokens if k not in _CURRENCY_TOKENS})
+
+
+def _has_currency(dim: Dimension) -> bool:
+    return any(k in _CURRENCY_TOKENS for k, _ in dim.tokens)
+
+
+def _comparable(a: str, b: str):
+    """Parse two unit strings into ``((base_a, factor_a), (base_b, factor_b))``
+    for comparison, dropping the chemical currencies unless both state one;
+    ``None`` when either string is blank or unparseable."""
+    da, db = parse_units(a), parse_units(b)
+    if da is None or db is None:
+        return None
+    if not (_has_currency(da) and _has_currency(db)):
+        da, db = _drop_currency(da), _drop_currency(db)
+    return _to_base_units(da), _to_base_units(db)
+
+
+def conversion_factor(from_unit: str, to_unit: str) -> float | None:
+    """Factor ``f`` with ``x_to = f * x_from`` between two units of one quantity.
+
+    Converts through base symbols, so ``kgCOD/m3`` to ``g_COD/m3`` is ``1000``
+    and ``mol/m3`` to ``kmol/m3`` is ``0.001``. Chemical currencies are compared
+    only when both strings name one, as in :func:`units_match`. No molar mass is
+    applied: a mass and an amount of substance are different quantities.
+
+    Parameters
+    ----------
+    from_unit, to_unit : str
+        Unit strings in any dialect :func:`parse_units` accepts.
+
+    Returns
+    -------
+    float or None
+        The factor, or ``None`` when either string is blank or cannot be
+        parsed.
+
+    Raises
+    ------
+    ValueError
+        If the two units measure different quantities (``g/m3`` and
+        ``mol/m3``, or ``g_N/m3`` and ``g_COD/m3``).
+
+    Examples
+    --------
+    >>> conversion_factor("kgCOD/m3", "g_COD/m3")
+    1000.0
+    """
+    pair = _comparable(from_unit, to_unit)
+    if pair is None:
+        return None
+    (base_a, fa), (base_b, fb) = pair
+    if base_a != base_b:
+        raise ValueError(
+            f"cannot convert '{from_unit}' to '{to_unit}': they measure different "
+            f"quantities ({base_a} vs {base_b})."
+        )
+    return fa / fb
+
+
+def units_match(a: str, b: str, *, rtol: float = 1e-9) -> bool | None:
+    """Whether two unit strings denote the same unit, scale included.
+
+    Unlike the rate-expression check (which compares symbols exactly), this
+    converts both sides to base symbols first, so ``mg/L`` matches ``g/m3`` and
+    ``m3/d`` matches ``m3/d`` but ``kgCOD/m3`` does not match ``g_COD/m3`` (a
+    factor of 1000) and ``1/s`` does not match ``1/d``. Chemical currencies are
+    compared only when **both** strings name one, so a bare ``g/m3`` or
+    ``mg/L`` matches ``g_COD/m3`` (the currency is simply unstated).
+
+    Parameters
+    ----------
+    a, b : str
+        Unit strings in any dialect :func:`parse_units` accepts.
+    rtol : float, optional
+        Relative tolerance on the scale factor.
+
+    Returns
+    -------
+    bool or None
+        ``True``/``False``, or ``None`` when either string is blank or cannot be
+        parsed (unknown, so not comparable).
+
+    Examples
+    --------
+    >>> units_match("mg/L", "g_COD/m3")
+    True
+    >>> units_match("kgCOD/m3", "g_COD/m3")
+    False
+    """
+    pair = _comparable(a, b)
+    if pair is None:
+        return None
+    (base_a, fa), (base_b, fb) = pair
+    if base_a != base_b:
+        return False
+    return abs(fa - fb) <= rtol * max(abs(fa), abs(fb))
+
+
 # --- unit propagation through a rate AST + the check ------------------------
 
 
@@ -400,6 +559,27 @@ def _param_dim(ctx: _Ctx, local_name: str) -> Dimension | None:
         if key in ctx.param_dim:
             return ctx.param_dim[key]
     return None
+
+
+def _additive_terms(node: ASTNode):
+    """Yield the terms of a (possibly nested) ``a + b + ...`` sum."""
+    if isinstance(node, AddNode):
+        yield from _additive_terms(node.left)
+        yield from _additive_terms(node.right)
+    else:
+        yield node
+
+
+def _is_literal_half_saturation(node: DivideNode) -> bool:
+    """True for ``c / (c + X + ...)`` with the same numeric literal ``c`` as the
+    numerator and as one term of the additive denominator -- a Monod inhibition
+    term ``K / (K + X)`` whose constant ``K`` is written inline."""
+    if not isinstance(node.left, ConstantNode) or not isinstance(node.right, AddNode):
+        return False
+    return any(
+        isinstance(t, ConstantNode) and t.value == node.left.value
+        for t in _additive_terms(node.right)
+    )
 
 
 def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
@@ -455,8 +635,14 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
         ro = _infer(node.right, ctx)
         return None if lo is None or ro is None else lo * ro
     if isinstance(node, DivideNode):
-        lo = _infer(node.left, ctx)
         ro = _infer(node.right, ctx)
+        if _is_literal_half_saturation(node):
+            # ``c / (c + X)``: an inhibition switch with its half-saturation
+            # constant written as a bare literal. The literal carries the
+            # summand's units (it is added to ``X``), so the ratio is
+            # dimensionless rather than ``1 / [X]``.
+            return None if ro is None else DIMENSIONLESS
+        lo = _infer(node.left, ctx)
         return None if lo is None or ro is None else lo / ro
     if isinstance(node, SafeDivideNode):
         # safe_div(num, denom) is num/denom dimensionally (the zero-guard only
@@ -505,7 +691,7 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
 
 # Tokens recognised in the canonical "concentration per time" root form.
 _TIME_TOKENS = {"d", "s", "h", "min"}
-_MASS_TOKENS = {"g", "kg", "mol", "kmol"}
+_MASS_TOKENS = {"g", "kg", "mg", "mol", "kmol", "mmol"}
 _VOLUME_LITRE = "L"
 _LENGTH_TOKEN = "m"
 
@@ -573,7 +759,62 @@ def check_rate_units(
     return ctx.warnings
 
 
-def check_model_units(model, *, check_root: bool = True) -> list:
+def _same_quantity(a: Dimension, b: Dimension) -> bool:
+    """Whether two dimensions are the same unit, scale included, comparing the
+    chemical currencies only when both state one (as :func:`units_match`)."""
+    if not (_has_currency(a) and _has_currency(b)):
+        a, b = _drop_currency(a), _drop_currency(b)
+    (base_a, fa), (base_b, fb) = _to_base_units(a), _to_base_units(b)
+    return base_a == base_b and abs(fa - fb) <= 1e-9 * max(abs(fa), abs(fb))
+
+
+def _unit_stoichiometry_species(model) -> dict:
+    """``{reaction index: [species name, ...]}`` of the species whose
+    stoichiometric coefficient is a fixed ``+1`` or ``-1``.
+
+    Read from the static stoichiometry matrix, which holds the numeric
+    coefficients only: a coefficient written as an expression is a zero
+    placeholder there (it is evaluated per solve), so it never counts.
+    """
+    import numpy as np
+
+    stoich = np.asarray(model.stoich_matrix)
+    out: dict = {}
+    for i, j in zip(*np.nonzero(np.isclose(np.abs(stoich), 1.0, rtol=0.0, atol=1e-12))):
+        out.setdefault(int(i), []).append(model.species[int(j)])
+    return out
+
+
+def _stoichiometry_issue(root: Dimension, species: list, species_dim: dict) -> str | None:
+    """Compare a rate's concentration unit with its unit-coefficient species.
+
+    A species whose coefficient is ``+1`` or ``-1`` changes by exactly the rate,
+    so the rate must be in that species' concentration per time. A reaction may
+    have several such species in different currencies (one is enough to fix the
+    rate's unit), so this reports only when the rate matches none of them.
+    Returns a message, or ``None`` when consistent or not determinable.
+    """
+    time = [k for k, v in root.as_dict().items() if k in _TIME_TOKENS and v == -1]
+    if len(time) != 1:
+        return None
+    conc = root * Dimension({time[0]: 1})
+    known = [(sp, species_dim[sp]) for sp in species if species_dim.get(sp) is not None]
+    if not known or any(_same_quantity(conc, dim) for _, dim in known):
+        return None
+    listing = ", ".join(f"'{sp}' in {dim}" for sp, dim in known)
+    return (
+        f"the rate is in {conc} per {time[0]}, but each species with a +/-1 "
+        f"coefficient changes by exactly the rate and none is in {conc} ({listing})"
+    )
+
+
+def check_model_units(
+    model,
+    *,
+    check_root: bool = True,
+    check_stoichiometry: bool = True,
+    include_acknowledged: bool = False,
+) -> list:
     """Run :func:`check_rate_units` over every reaction in a compiled model.
 
     Parameters
@@ -582,6 +823,19 @@ def check_model_units(model, *, check_root: bool = True) -> list:
         The compiled model to check.
     check_root : bool, default True
         Whether to also assert each rate resolves to ``currency/volume/time``.
+    check_stoichiometry : bool, default True
+        Whether to also check each rate against the species whose
+        stoichiometric coefficient is a fixed ``+1`` or ``-1``: such a species
+        changes by exactly the rate, so the rate must be in its concentration
+        per time. A reaction is flagged only when its rate matches none of them.
+        Other coefficients are not checked (yields and conversion factors
+        legitimately carry cross-currency units).
+    include_acknowledged : bool, default False
+        Also return the findings of reactions whose YAML declares
+        ``units_acknowledged:`` (a written reason the reaction's units are
+        knowingly unconventional, e.g. a molar mass written as a bare number).
+        By default they are left out, so the result lists only what still needs
+        attention; the reasons are in ``model.units_acknowledged``.
 
     Returns
     -------
@@ -596,7 +850,8 @@ def check_model_units(model, *, check_root: bool = True) -> list:
     condition_dim = {name: parse_units(u) for name, u in model.condition_units.items()}
     warnings: list = []
     inv_time: dict = {}
-    for name, ast in zip(model.reaction_names, model.rate_asts):
+    unit_species = _unit_stoichiometry_species(model) if check_stoichiometry else {}
+    for i, (name, ast) in enumerate(zip(model.reaction_names, model.rate_asts)):
         warnings.extend(
             check_rate_units(
                 ast,
@@ -614,6 +869,10 @@ def check_model_units(model, *, check_root: bool = True) -> list:
             inv = [k for k, v in root.as_dict().items() if k in _TIME_TOKENS and v < 0]
             if len(inv) == 1:
                 inv_time[name] = inv[0]
+            if i in unit_species:
+                issue = _stoichiometry_issue(root, unit_species[i], species_dim)
+                if issue is not None:
+                    warnings.append(UnitWarning(name, "stoichiometry", issue))
 
     # Cross-reaction time-unit consistency. Every rate constant drives dC/dt
     # against the *same* integration time, so all rates must share one
@@ -630,4 +889,7 @@ def check_model_units(model, *, check_root: bool = True) -> list:
             + ", ".join(f"{r} -> 1/{u}" for r, u in sorted(inv_time.items()))
         )
         warnings.append(UnitWarning("(model)", "time unit", detail))
+    if not include_acknowledged:
+        acknowledged = getattr(model, "units_acknowledged", None) or {}
+        warnings = [w for w in warnings if w.reaction not in acknowledged]
     return warnings

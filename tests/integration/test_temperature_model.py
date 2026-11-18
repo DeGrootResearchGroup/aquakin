@@ -38,7 +38,7 @@ from aquakin.plant.plant import _TEMPERATURE_KEY
 
 def _one_cstr_plant(asm1, *, volume, model, T_in_K, Q=1000.0):
     """A minimal single-CSTR plant fed one constant influent (output dangling)."""
-    plant = aquakin.Plant("one_cstr")
+    plant = aquakin.Plant("one_cstr", time_unit="d")
     tank = CSTRUnit(name="tank", model=asm1, volume=volume,
                     input_port_names=["inlet"], conditions={"T": 288.15},
                     aeration=Aeration(kla=0.0))

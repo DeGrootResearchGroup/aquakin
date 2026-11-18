@@ -27,6 +27,10 @@ parameters:             # optional: model-level (shared) parameters
     units: <str>                # optional
     bounds: [<low>, <high>]     # optional
     transform: <str>            # optional: "none" | "positive_log" | "logit"
+    temperature:                # optional: rate constant * theta**(T - ref_T)
+      theta: <float or name>    # per-degree factor, or a parameter's name
+      ref_T: <float>            # temperature at which `value` applies
+      condition: <str>          # optional: temperature condition (default "T")
 
 expressions:            # optional: named intermediate rate expressions
   <name>: "<formula>"
@@ -39,6 +43,8 @@ reactions:              # list of reactions
     reference: <str>            # optional but encouraged
     rate: "<expression>"        # may be inline OR a reference to an
                                 # entry in `expressions:`
+    units_acknowledged: <str>   # optional: why the rate's units are
+                                # knowingly unconventional (see below)
     parameters:                 # optional reaction-local parameters
       <local_name>:
         value: <float>
@@ -61,6 +67,30 @@ Reaction-local `parameters:` blocks remain available for genuinely
 reaction-specific values. A name cannot appear in both a model-level
 `parameters:` block and a reaction-local `parameters:` block — the
 loader rejects shadowing.
+
+## Temperature corrections
+
+A rate constant with a `temperature:` block is multiplied by
+`theta**(T - ref_T)` when the rates are evaluated, so its `value` is the
+value at `ref_T`. `theta` is usually a number. It can also be the name of
+another parameter, which makes the temperature sensitivity something you can
+calibrate and analyse like any other parameter:
+
+```yaml
+parameters:
+  theta_A: {value: 1.07, units: "-", bounds: [1.0, 1.15], prior: {mean: 1.07, std: 0.02}}
+  muA: {value: 0.8, units: "1/d", temperature: {theta: theta_A, ref_T: 293.15}}
+  bA:  {value: 0.05, units: "1/d", temperature: {theta: theta_A, ref_T: 293.15}}
+```
+
+Several rate constants may share one `theta` parameter. A name used in a
+reaction's own `parameters:` block is looked up in that reaction first, then
+among the model-level parameters. The `theta` parameter must be positive and
+cannot carry a temperature correction itself. Without `bounds` it gets
+`[1.0, 1.3]` when its value lies in that range, and without `units` it is
+labelled `"-"`. Its sensitivity is zero at `T = ref_T`, so estimating it needs
+data at a temperature other than `ref_T` (and data at two or more temperatures
+to estimate it together with the rate constant it scales).
 
 ## Named rate expressions
 
@@ -177,6 +207,44 @@ rate: "k_photo * {fluence_rate} * [H2O2]"            # photolysis
 rate: "k * [O3] * 10 ** ({pH} - 14)"                  # OH- catalysed
 rate: "{OH_scavenging} * [OH]"                        # lumped sink
 ```
+
+## Checking units
+
+The `units:` strings on species, parameters and conditions are not used to
+convert anything, but `model.check_units()` reads them to check every rate
+expression for dimensional consistency. It is currency-aware: `g_COD/m3` and
+`g_N/m3` are different units, so it catches a Monod term comparing two
+currencies, a sum of unlike terms, a dropped concentration factor, or rate
+constants written on different time units. A blank or unparseable unit is
+skipped, so declaring units on every parameter is what makes the check useful.
+
+It also checks each rate against the stoichiometry. A species whose
+coefficient is a fixed `+1` or `-1` changes by exactly the rate, so the rate
+must be in that species' concentration per time: a rate whose stoichiometry
+takes up 1 g P per unit (`SPO4: -1`) must come out in g P/m3/d, which means a
+specific uptake rate in g P/(g COD·d), not 1/d. A reaction is flagged only when
+its rate matches none of its unit-coefficient species; other coefficients
+(yields, conversion factors) legitimately carry mixed units and are not
+checked. `check_units(check_stoichiometry=False)` turns this part off.
+
+A literal half-saturation constant written inline, as in
+`0.1 / (0.1 + [S_NO])`, is read as an inhibition term (dimensionless) when it
+is its own subexpression, for example a named expression.
+
+Some published formulations are knowingly unconventional in their units, for
+example a molar mass written as a bare number. Give such a reaction a written
+reason:
+
+```yaml
+  - name: gas_outflow_h2
+    rate: "q_gas_norm * [S_gas_h2]"
+    units_acknowledged: "Partial pressures divide by molar masses written as bare numbers."
+    stoichiometry: {S_gas_h2: -1.0}
+```
+
+`check_units()` then leaves that reaction's findings out of its result;
+`check_units(include_acknowledged=True)` still shows them, and
+`model.units_acknowledged` lists the reasons.
 
 ## Notes
 

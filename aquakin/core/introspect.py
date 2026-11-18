@@ -22,6 +22,7 @@ at module top would form a cycle, and the whole point of the boundary is to keep
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -78,11 +79,19 @@ def format_model_summary(model: CompiledModel) -> str:
             stoich_terms.append(term)
         lines.append(f"    [{i}] {rname}: " + " ".join(stoich_terms).lstrip("+ "))
     lines.append(f"  Parameters ({model.n_params}):")
+    temp = {idx: (ln_theta, ref_T) for idx, ln_theta, ref_T, _c in model.temperature_corrections}
     for p in model.parameters:
+        idx = model.param_index[p]
         bounds = model.parameter_bounds.get(p)
         bounds_s = f" bounds={bounds}" if bounds is not None else ""
-        val = float(model._default_parameters[model.param_index[p]])
-        lines.append(f"    {p} = {val:g}{bounds_s}")
+        temp_s = ""
+        if idx in temp:
+            ln_theta, ref_T = temp[idx]
+            t_idx = model.temperature_theta_params.get(idx)
+            theta = model.parameters[t_idx] if t_idx is not None else f"{math.exp(ln_theta):g}"
+            temp_s = f" theta={theta} ref_T={ref_T:g}"
+        val = float(model._default_parameters[idx])
+        lines.append(f"    {p} = {val:g}{bounds_s}{temp_s}")
     if model.references:
         lines.append("  References:")
         for ref in model.references:
@@ -100,12 +109,23 @@ def model_to_latex(model: CompiledModel) -> dict[str, str]:
     }
 
 
-def check_units(model: CompiledModel, *, check_root: bool = True) -> list:
+def check_units(
+    model: CompiledModel,
+    *,
+    check_root: bool = True,
+    check_stoichiometry: bool = True,
+    include_acknowledged: bool = False,
+) -> list:
     """Dimensional-consistency audit of the rate expressions (body of
     ``check_units``)."""
     from aquakin.utils.units import check_model_units
 
-    return check_model_units(model, check_root=check_root)
+    return check_model_units(
+        model,
+        check_root=check_root,
+        check_stoichiometry=check_stoichiometry,
+        include_acknowledged=include_acknowledged,
+    )
 
 
 def model_composition(

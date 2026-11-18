@@ -12,7 +12,7 @@ handlers and message-matching tests keep working unchanged:
 - an **unknown name** (a unit or port that does not exist) -> ``KeyError`` family
   (:class:`UnknownUnitError`, :class:`UnknownPortError`);
 - an **invalid wiring or unsupported request** -> ``ValueError`` family
-  (:class:`WiringError`, :class:`NoDigesterError`).
+  (:class:`WiringError`, :class:`NoDigesterError`, :class:`UnitsError`).
 """
 
 import re
@@ -62,3 +62,10 @@ def check_name(what: str, name) -> None:
             f"{what} name {name!r} must start with a letter or '_' and hold only letters, "
             f"digits, '_' and '-' (endpoints are written 'unit.port')"
         )
+
+
+class UnitsError(ValueError):
+    """The plant's declared units are inconsistent in a way that makes a solve
+    meaningless -- e.g. two kinetic models on different time units (one in
+    seconds, one in days) integrated against the same clock. See
+    :meth:`Plant.check_units` for the full, non-raising report."""

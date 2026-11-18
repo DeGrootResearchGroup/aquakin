@@ -67,7 +67,7 @@ SIGMA = 0.01
 
 
 def _plant(net, a_in=1.0):
-    plant = Plant("chain_cstr")
+    plant = Plant("chain_cstr", time_unit="d")
     plant.add_unit(
         CSTRUnit(
             name="tank",
@@ -306,7 +306,7 @@ def test_reverse_mode_solves_with_the_given_integrator(plant):
 def test_runs_must_share_the_parameter_names(net, plant, decay_net):
     """A per-run plant built on another model has other parameters: rejected
     before any solve, naming the run."""
-    other = Plant("decay_tank")
+    other = Plant("decay_tank", time_unit="s")
     other.add_unit(
         CSTRUnit(
             name="tank",
@@ -669,7 +669,7 @@ def test_rank_maps_each_set_to_its_own_stream(net):
     """On a two-tank chain, sets reading different streams (and one reading
     both, in reverse order) each score as their own plant_fisher_information:
     every stream's channels sit at the right offset in the shared solve."""
-    chain = Plant("two_tanks")
+    chain = Plant("two_tanks", time_unit="d")
     for name in ("tank1", "tank2"):
         chain.add_unit(
             CSTRUnit(
