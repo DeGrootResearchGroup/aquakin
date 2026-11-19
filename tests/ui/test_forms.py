@@ -111,3 +111,20 @@ def test_conditions_are_kept_when_the_model_cannot_be_described(bsm1):
     assert not any(r["key"].startswith("conditions.") for r in rows)
     _, settings = forms.read_rows(bsm1, "tank3", rows)
     assert settings["conditions"] == {"T": 293.15}
+
+
+def test_a_bad_value_is_named_by_its_field(bsm1):
+    for key, text, message in (
+        ("volume", "0,5", "volume: '0,5' is not a number"),
+        ("conditions.T", "warm", "condition T: 'warm' is not a number"),
+        ("aeration.value", "lots", "kla: 'lots' is not a number"),
+    ):
+        rows = forms.rows_for(bsm1, "tank3", _info)
+        next(r for r in rows if r["key"] == key)["value"] = text
+        with pytest.raises(ValueError, match=message):
+            forms.read_rows(bsm1, "tank3", rows)
+    rows = forms.rows_for(bsm1, "tank5_split", _info)
+    row = next(r for r in rows if r["widget"] == "text" and ":" in str(r["value"]))
+    row["value"] = "internal_recycle 55338"
+    with pytest.raises(ValueError, match="write each entry as 'name: value'"):
+        forms.read_rows(bsm1, "tank5_split", rows)

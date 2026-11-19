@@ -157,7 +157,10 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
 
 def _finite(text: str) -> float:
     """A finite number from a field's text; ``nan`` and overflowing values are refused."""
-    value = float(text)
+    try:
+        value = float(text)
+    except ValueError:
+        raise ValueError(f"{text!r} is not a number") from None
     if not math.isfinite(value):  # "nan", "inf", "1e999"
         raise ValueError(f"{text!r} is not a finite number")
     return value
@@ -177,7 +180,10 @@ def _parse(s: dict, text):
     if t == "number":
         return _number(text)
     if t == "integer":
-        return int(text)
+        try:
+            return int(text)
+        except ValueError:
+            raise ValueError(f"{text!r} is not a whole number") from None
     if t == "boolean":
         return text == "true"
     if t in ("port_names", "species_list"):
@@ -185,8 +191,13 @@ def _parse(s: dict, text):
             return list(text)
         return [p.strip() for p in text.split(",") if p.strip()]
     if t in ("port_map", "species_values", "number_map"):
-        pairs = [p.split(":", 1) for p in text.split(",") if p.strip()]
-        return {k.strip(): _number(v.strip()) for k, v in pairs}
+        out = {}
+        for pair in (p for p in text.split(",") if p.strip()):
+            name, colon, value = pair.partition(":")
+            if not colon or not name.strip():
+                raise ValueError(f"write each entry as 'name: value' (not {pair.strip()!r})")
+            out[name.strip()] = _number(value.strip())
+        return out
     return text
 
 
@@ -199,8 +210,30 @@ def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, d
     Raises
     ------
     ValueError
-        If a field's text cannot be read as its setting's type.
+        If a field's text cannot be read as its setting's type; the message
+        starts with the field's label.
     """
+    labels = {r["key"]: r["label"].removesuffix(" *") for r in rows}
+    try:
+        return _read_rows(doc, uid, rows)
+    except _FieldError as exc:
+        raise ValueError(f"{labels.get(exc.key, exc.key)}: {exc.message}") from None
+
+
+class _FieldError(Exception):
+    def __init__(self, key: str, message: str):
+        self.key, self.message = key, message
+
+
+def _field(key: str, read, *args):
+    """``read(*args)``, a field's error naming the field."""
+    try:
+        return read(*args)
+    except ValueError as exc:
+        raise _FieldError(key, str(exc)) from None
+
+
+def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, dict]:
     u = doc.units[uid]
     values = {r["key"]: r["value"] for r in rows}
     settings: dict = {}
@@ -214,7 +247,7 @@ def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, d
                     settings[name] = u.settings[name]
                 continue
             conds = {
-                k.split(".", 1)[1]: _finite(str(v).strip())
+                k.split(".", 1)[1]: _field(k, _finite, str(v).strip())
                 for k, v in values.items()
                 if k.startswith("conditions.") and str(v).strip()
             }
@@ -228,7 +261,7 @@ def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, d
                 # a switch of mode it holds the other mode's number, so it is not read.
                 shown = next((m for m in AERATION_MODES[1:] if old.get(m) is not None), "none")
                 raw = str(values.get("aeration.value", "")).strip() if mode == shown else ""
-                value = _finite(raw) if raw else (old.get(mode) or 0.0)
+                value = _field("aeration.value", _finite, raw) if raw else (old.get(mode) or 0.0)
                 kept = {k: v for k, v in old.items() if k not in AERATION_MODES[1:]}
                 settings[name] = {**kept, mode: value}
             else:
@@ -237,7 +270,7 @@ def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, d
             if name in u.settings:
                 settings[name] = u.settings[name]
         elif name in values:
-            v = _parse(s, values[name])
+            v = _field(name, _parse, s, values[name])
             if v is not None:
                 settings[name] = v
     label = str(values.get("label", "")).strip() or None

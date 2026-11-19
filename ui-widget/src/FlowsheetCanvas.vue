@@ -191,7 +191,7 @@ function onDrop(evt) {
       :id="flowId"
       :node-types="nodeTypes"
       :edge-types="edgeTypes"
-      :delete-key-code="['Delete', 'Backspace']"
+      :delete-key-code="'Delete'"
       :snap-to-grid="true"
       :snap-grid="[10, 10]"
       :min-zoom="0.2"

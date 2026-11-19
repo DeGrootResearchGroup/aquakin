@@ -112,7 +112,9 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   user between sessions. **New study** and
   **Edit** set a study up in a dialog that offers the plant's own streams,
   parameters and channels; Save refuses to
-  overwrite a flowsheet that changed on disk since it was opened.
+  overwrite a flowsheet that changed on disk since it was opened; opening
+  another file with unsaved edits asks first, **Undo** takes back the last
+  edits, and running a study saves the drawing first.
 - A unit catalogue for front ends, `aquakin.plant.catalog`. It describes each
   plant unit type as plain JSON-compatible data: its settings, with types,
   defaults and the help text from the unit's docstring; how its ports follow
