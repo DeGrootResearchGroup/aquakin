@@ -29,6 +29,8 @@ Checklist still governs).
 | `.claude/rules/schema.md` | `aquakin/schema/**`, `**/*.yaml` | YAML model format + Pydantic schema rules (stoichiometry expressions, `extends:`, `auto`, `composition:`, `speciation:`, `precipitation:`) |
 | `.claude/rules/plant.md` | `aquakin/plant/**` | plant-wide simulation: units, recycle resolution, BSM1/BSM2/A²O builders, control, dosing, design, evaluation |
 | `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog, the schema rules, and the `_make_*` generators |
+| `.claude/rules/study.md` | `aquakin/study/**` | studies: the study folder layout, results keyed by name, staleness, freezing / unfreezing, the `aquakin study` command |
+| `.claude/rules/ui.md` | `aquakin_ui/**`, `tests/ui/**`, `ui-widget/**` | the browser flowsheet editor `aquakin-ui`: the independence rule (never imports aquakin or JAX), the `aquakin serve` worker, the document / forms / page split, the Vue Flow widget and its sync rules |
 
 **On-demand docs (read when needed):**
 
@@ -44,6 +46,7 @@ task needs the detail):**
 
 | Note | Contents |
 |---|---|
+| `.claude/notes/studies-design.md` | the studies design and the owner's decisions (live / frozen, replace with a warning, version notes, unfreezing discards results) |
 | `.claude/notes/plant-sensitivity-log.md` | `Plant.solve_sensitivity` corrector measurements (#654), the lean loop's stage-Newton drift diagnostic and its Anderson acceleration |
 
 **Published documentation site** (Sphinx/MyST → Read the Docs; built from
@@ -336,8 +339,8 @@ push only when the user asks. The convention is:
    — just push it.
 
 Before committing or pushing any code change, run the linter locally so the
-required `lint (ruff)` gate stays green — `ruff check aquakin` and `ruff format
-aquakin` (see Post-Change Checklist item 1 for details). A committed pre-push
+required `lint (ruff)` gate stays green — `ruff check aquakin aquakin_ui` and
+`ruff format aquakin aquakin_ui` (see Post-Change Checklist item 1 for details). A committed pre-push
 hook (`.githooks/pre-push`) automates this: enable it once per clone with
 `git config core.hooksPath .githooks` and it runs the same `ruff check` +
 `ruff format --check` gate before every push, blocking the push on a failure
@@ -359,14 +362,16 @@ After **every code change**, before considering the task complete, review and
 act on the following:
 
 1. **Lint & format** — Run ruff locally before committing and pushing any code
-   change. The CI `lint (ruff)` job runs `ruff check aquakin` **and** `ruff
-   format --check aquakin` on every PR and is a **required merge gate**, so an
+   change. The CI `lint (ruff)` job runs `ruff check aquakin aquakin_ui` **and**
+   `ruff format --check aquakin aquakin_ui` on every PR and is a **required merge
+   gate**, so an
    unformatted file (or a lint error) fails CI — a common way a refactor that
    only shortens lines trips the format gate. Run both, from the repo root:
-   - `ruff check aquakin` — must report no errors.
-   - `ruff format aquakin` — auto-applies formatting in place (CI runs it with
-     `--check`, which only verifies; running it without `--check` fixes the
-     files). Re-run `ruff format --check aquakin` to confirm it is clean.
+   - `ruff check aquakin aquakin_ui` — must report no errors.
+   - `ruff format aquakin aquakin_ui` — auto-applies formatting in place (CI runs
+     it with `--check`, which only verifies; running it without `--check` fixes
+     the files). Re-run `ruff format --check aquakin aquakin_ui` to confirm it is
+     clean.
 
    Ruff is pinned via the `lint` extra (`pip install -e ".[lint]"`); see the
    `[tool.ruff]` config in `pyproject.toml` for the rule set and per-file

@@ -92,10 +92,10 @@ jobs:
           pip install -e ".[lint]"
 
       - name: Run ruff check
-        run: ruff check aquakin
+        run: ruff check aquakin aquakin_ui
 
       - name: Run ruff format --check
-        run: ruff format --check aquakin
+        run: ruff format --check aquakin aquakin_ui
 
   # ---- Docs gate: strict Sphinx build + doctest (always-on) -------------------
   # Builds the docs with `-W` so a broken doc fails the PR: a page missing from

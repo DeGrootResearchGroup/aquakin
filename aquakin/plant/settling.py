@@ -72,6 +72,10 @@ class SettlingModel(ABC):
         """Initial settling state, shape ``(extra_state_size(),)``."""
 
     @abstractmethod
+    def extra_state_names(self) -> tuple[str, ...]:
+        """Names of the settling-state entries, ``extra_state_size()`` of them."""
+
+    @abstractmethod
     def extra_rhs(
         self,
         C: jnp.ndarray,
@@ -135,6 +139,9 @@ class InterfaceSettling(SettlingModel):
     def extra_state_size(self) -> int:
         return 1
 
+    def extra_state_names(self) -> tuple[str, ...]:
+        return ("clarity",)
+
     def initial_extra_state(self) -> jnp.ndarray:
         return jnp.zeros((1,))  # start fully mixed
 
@@ -195,6 +202,10 @@ class LayeredSettling(SettlingModel):
 
     def extra_state_size(self) -> int:
         return self.n_layers
+
+    def extra_state_names(self) -> tuple[str, ...]:
+        # Layer 1 is the top (the supernatant the decant draws).
+        return tuple(f"layer{k}.ratio" for k in range(1, self.n_layers + 1))
 
     def initial_extra_state(self) -> jnp.ndarray:
         return jnp.ones((self.n_layers,))  # uniform profile (ratio 1 everywhere)

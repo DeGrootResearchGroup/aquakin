@@ -54,6 +54,11 @@ class Unit(Protocol):
     And implement:
 
     - :meth:`initial_state` — the ``(state_size,)`` initial state vector.
+    - :meth:`state_names` — a name for each state entry, in order (``state_size``
+      of them, unique within the unit): the species name for a concentration,
+      a short name such as ``V`` or ``integral`` for anything else, a dotted
+      prefix for a repeated block (``layer3.XS``, ``film1.SNH``). Stored
+      results key a unit's state by these names, never by position.
     - :meth:`compute_outputs` — given the current ``t``, internal ``state``,
       input streams, and the control-signal bus, return the output streams.
       Called by the plant in topological order on every RHS evaluation. It
@@ -118,6 +123,8 @@ class Unit(Protocol):
     output_ports: list[str]
 
     def initial_state(self) -> jnp.ndarray: ...
+
+    def state_names(self) -> tuple[str, ...]: ...
 
     def compute_outputs(
         self,
@@ -242,6 +249,9 @@ class StatelessUnit(CouplingAware):
     @property
     def state_size(self) -> int:
         return 0
+
+    def state_names(self) -> tuple[str, ...]:
+        return ()
 
     def initial_state(self) -> jnp.ndarray:
         return jnp.zeros((0,))

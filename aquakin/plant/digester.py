@@ -103,6 +103,10 @@ class ADM1DigesterUnit(ModelTimeScaling, CouplingAware):
     def state_size(self) -> int:
         return self.model.n_species
 
+    def state_names(self) -> tuple[str, ...]:
+        """Names of the state entries, in order: the species concentrations."""
+        return tuple(self.model.species)
+
     @property
     def input_ports(self) -> list[str]:
         return list(self.input_port_names)

@@ -398,6 +398,94 @@ def read_influent_csv(
     return series if units is None else dataclasses.replace(series, units=dict(units))
 
 
+def write_influent_table(series: InfluentSeries, path: str | Path) -> Path:
+    """Write an influent as a table :func:`read_influent_table` reads back exactly.
+
+    The table is comma-separated with a header row: ``t``, ``Q``, ``T`` (when the
+    series carries a temperature), then every species of the series' model.
+    Numbers are written with full precision, so reading the file back gives the
+    same series bit for bit.
+
+    Parameters
+    ----------
+    series : InfluentSeries
+        The influent.
+    path : str | Path
+        The file to write (its directory is created if needed).
+
+    Returns
+    -------
+    Path
+        The file written.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    columns = ["t", "Q"] + (["T"] if series.T is not None else []) + list(series.model.species)
+    data = [np.asarray(series.t), np.asarray(series.Q)]
+    if series.T is not None:
+        data.append(np.asarray(series.T))
+    data = np.column_stack(data + [np.asarray(series.C)])
+    lines = [",".join(columns)] + [",".join(repr(float(v)) for v in row) for row in data]
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return p
+
+
+def read_influent_table(path: str | Path, model: CompiledModel) -> InfluentSeries:
+    """Read an influent table written by :func:`write_influent_table` (or by hand).
+
+    The file has a header row naming its columns: ``t`` (time, in the model's
+    time unit), ``Q`` (flow), optionally ``T`` (temperature, K), and any of the
+    model's species; species not given are zero. The series records the file it
+    was read from, so a flowsheet spec can refer to it.
+
+    Parameters
+    ----------
+    path : str | Path
+        The table.
+    model : CompiledModel
+        The model whose species the columns name.
+
+    Returns
+    -------
+    InfluentSeries
+
+    Raises
+    ------
+    ValueError
+        If ``t`` or ``Q`` is missing, or a column is neither ``T`` nor a species.
+    """
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(f"Influent table not found: {p}")
+    header, data = _parse_named_table(p.read_text(encoding="utf-8"), None)
+    for required in ("t", "Q"):
+        if required not in header:
+            raise ValueError(f"influent table {p} has no '{required}' column")
+    pos = {name: i for i, name in enumerate(header)}
+    unknown = [h for h in header if h not in ("t", "Q", "T") and h not in model.species_index]
+    if unknown:
+        raise ValueError(
+            f"influent table {p}: column(s) {unknown} are not species of model '{model.name}'"
+        )
+    C = np.zeros((data.shape[0], model.n_species))
+    for name, i in pos.items():
+        if name in model.species_index:
+            C[:, model.species_index[name]] = data[:, i]
+    series = InfluentSeries(
+        t=jnp.asarray(data[:, pos["t"]]),
+        Q=jnp.asarray(data[:, pos["Q"]]),
+        C=jnp.asarray(C),
+        model=model,
+        T=jnp.asarray(data[:, pos["T"]]) if "T" in pos else None,
+    )
+    # The file it was read from and the sha256 of the bytes it was built from.
+    import hashlib
+
+    digest = hashlib.sha256(p.read_bytes()).hexdigest()
+    series._aquakin_source = ("file", str(p.resolve()), digest)
+    return series
+
+
 def _influent_from_text(
     text: str,
     model: CompiledModel,

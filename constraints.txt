@@ -38,3 +38,11 @@ pytest-split==0.11.0
 # --- optional postprocessing extras (installed in the test env) ---------------
 pandas==3.0.3
 matplotlib==3.10.8
+
+# --- the flowsheet editor's extra (`ui`); the widget bundle is built against
+# the Vue that trame-client ships, so these move together ----------------------
+trame==4.0.0
+trame-client==4.1.4
+trame-common==1.2.9
+trame-server==4.1.2
+trame-vuetify==3.3.0

@@ -308,3 +308,139 @@ sequencing-batch and membrane-bioreactor units, IFAS/MBBR units, disinfection
 models. See the [API reference](api.md) for the full unit catalog, and
 `Plant.calibrate` in [Sensitivity & calibration](sensitivity_and_calibration.md#calibrating-a-plant)
 for fitting plant parameters to measured streams.
+
+## Saving a plant as a file
+
+A plant can be written as a YAML (or JSON) file and rebuilt from it:
+
+```python
+plant.to_spec("flowsheet.yaml")
+plant = aquakin.Plant.from_spec("flowsheet.yaml")
+```
+
+The file lists every unit by its name, with an optional display `label` and all
+of its settings (defaults included, so the file means the same plant whatever
+the defaults of a later aquakin), the connections as `unit.port -> unit.port`,
+the influents, named streams and recycle options, and the version of aquakin
+that wrote it:
+
+```yaml
+format: 2
+aquakin: 0.2.0
+name: BSM1
+models:
+  asm1: {source: shipped, sha256: ...}
+units:
+  influent: {kind: influent, model: asm1, Q: 18446.0, composition: {SS: 69.5, ...}}
+  tank3: {kind: cstr, label: Aerobic zone 1, model: asm1, volume: 1333.0, ...}
+connections:
+  - tank2.out -> tank3.inlet
+```
+
+Every model a unit uses is listed under `models:`, either a shipped model or a
+model YAML file beside the flowsheet. A model file can `extends:` a shipped
+model, so a variant is a few lines: `examples/projects/bsm2/` holds BSM2 this
+way, with its 15 °C ASM1 parameter set as `models/asm1_bsm2.yaml`. Each model
+carries a fingerprint of its content, and reading a flowsheet whose model has
+changed since it was written warns.
+
+A time-varying influent is kept as a table file beside the flowsheet (columns
+`t`, `Q`, optionally `T`, and species; see `aquakin.plant.read_influent_table`).
+`to_spec(path)` writes it to `data/<influent>.csv` unless it was already read
+from a table inside the flowsheet's folder.
+
+Reading a file checks it strictly: a misspelled setting, a value of the wrong
+type or a model that is not listed is an error that names where it is. Anything
+a file cannot express yet (array-valued settings such as initial
+concentrations, SBR phases) raises a `SpecError` that names it rather than being
+left out.
+
+`aquakin.plant.spec.spec_fingerprint(spec)` gives a fingerprint of the plant a
+file builds: its settings, wiring and the content of its models and influent
+tables, but not its layout, labels or where its files sit. Record it beside a
+result to tell later whether the result still matches the flowsheet.
+
+## Studies
+
+A *study* is one analysis of a flowsheet saved in the project with its results:
+a simulation (a steady state, or a dynamic run) or the Fisher information of a
+sensor design. Each study is a folder under `studies/` with a `study.yaml`
+saying what to run:
+
+```yaml
+# studies/effluent/study.yaml
+study:
+  kind: simulate
+  parameters: {asm1.muH: 5.0}          # changed from the flowsheet's
+  initial_state: steady                # or default, or a named-state file
+  time: {t_span: [0, 14], t_eval: {start: 0, stop: 14, num: 337}}
+  streams: [effluent]                  # saved whole: flow, temperature, species
+  observables:
+    - stream: effluent
+      channels: [COD, TKN, NOx, TN, TSS]
+```
+
+```bash
+aquakin study run studies/effluent      # writes results/ and run.yaml
+aquakin study check studies/effluent    # fresh, stale (and why), damaged or failed
+```
+
+or `aquakin.study.run_study(path)` / `check_study(path)` from Python. Besides
+`simulate`, a study can be a `fisher` information of a sensor design, a
+`calibrate` fit to observations, a `profile` likelihood of one parameter, or a
+`rank` of candidate sensor sets. A fit reads its observations from a CSV table
+in the study folder, a `t` column and one `<stream>.<channel>` column per
+measured channel:
+
+```yaml
+study:
+  kind: calibrate
+  free: [asm1.muH, asm1.KS]
+  observables:
+    - {stream: effluent, channels: [SNH, TSS]}
+  data: data.csv          # columns t, effluent.SNH, effluent.TSS
+  loss: nll
+  sigma: [0.2, 2.0]
+  laplace: true
+```
+
+Every
+result is keyed by name (parameters by `model.param`, states by unit and state
+name, trajectories as CSV columns such as `effluent.SNH`), so results stay
+readable after the flowsheet is reorganized.
+
+A study follows the flowsheet: once a setting, a connection, a model or an
+influent table it was run on changes, `check` reports it **stale** and names
+what changed. A newer aquakin is noted but does not make a result stale; read
+the changelog to decide whether to run it again. Running a study that has
+results replaces them only when asked (`--replace`); `aquakin study copy` keeps
+a copy first.
+
+`aquakin study freeze` instead pins a study to a snapshot of its plant, taken
+inside the study folder with every model flattened (shipped models too) and
+every influent table copied, so neither an edit to the project nor an aquakin
+upgrade can change what it runs. `aquakin study unfreeze --discard-results`
+makes it follow the flowsheet again and deletes its results, which were
+computed on the snapshot.
+
+## The flowsheet editor
+
+```bash
+pip install "aquakin[ui]"
+aquakin-ui examples/projects/bsm2/flowsheet.yaml
+```
+
+opens a flowsheet editor in your browser, served on this machine only. Drag
+units from the palette, wire their ports, and edit each unit in a form generated
+from its own documentation; aquakin builds each unit and then the whole plant as
+you edit and lists any errors. **Open** and **Save** read and write the files
+described above; Save writes exactly what `plant.to_spec(path)` would, copying a
+model (with every file it `extends:`) or influent table from outside the project
+folder into it. Save refuses to overwrite a flowsheet that changed on disk since
+the window opened it, so two windows cannot silently undo each other's work.
+
+The **Studies** tab lists the project's studies and where each stands (fresh,
+stale and why, not run, failed, cancelled). Run one to watch its progress and
+cancel it; freeze, unfreeze or copy it. Running a study that has results, or
+unfreezing one, asks first and offers to keep a copy.
+

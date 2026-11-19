@@ -8,6 +8,7 @@ aquakin/
 │
 ├── aquakin/
 │   ├── __init__.py                  # public API + jax x64 config
+│   ├── __main__.py                  # `aquakin` command: `catalog`, `serve` (JSON lines)
 │   │
 │   ├── core/
 │   │   ├── nodes.py                 # ASTNode base class + all node types
@@ -223,14 +224,30 @@ aquakin/
 │   │   #   decays and stratifies by its own kinetics (SRB/methanogens stratify
 │   │   #   differently from heterotrophs -- Sun 2014).
 │   │
-│   └── utils/
-│       ├── latex.py                 # AST -> LaTeX rate expressions
-│       ├── balance.py               # mass / electron (COD) conservation checks
-│       ├── units.py                 # currency-aware dimensional check of rate
-│       │                            #   expressions (model.check_units) and the
-│       │                            #   scale-aware units_match; distinct from
-│       │                            #   core/units.py, which only formats units
-│       └── rtd.py                   # RTD analysis (E-curve, Morrill index)
+│   ├── utils/
+│   │   ├── latex.py                 # AST -> LaTeX rate expressions
+│   │   ├── balance.py               # mass / electron (COD) conservation checks
+│   │   ├── units.py                 # currency-aware dimensional check of rate
+│   │   │                            #   expressions (model.check_units) and the
+│   │   │                            #   scale-aware units_match; distinct from
+│   │   │                            #   core/units.py, which only formats units
+│   │   └── rtd.py                   # RTD analysis (E-curve, Morrill index)
+│   │
+│   └── study/                       # studies: analyses saved in a project
+│       ├── study.py                 # study.yaml schema, run / check / freeze /
+│       │                            #   unfreeze / copy (`aquakin study ...`)
+│       └── files.py                 # result files keyed by name (YAML / CSV)
+│
+├── aquakin_ui/                         # browser flowsheet editor `aquakin-ui` (`ui` extra)
+│   ├── app.py                          # the page (Editor)
+│   ├── document.py                     # the flowsheet document (pure)
+│   ├── forms.py                        # unit form from the catalogue (pure)
+│   ├── catalog.py / icons.py           # catalogue reply, port rules; icons + colours
+│   ├── worker.py                       # client of the `aquakin serve` worker
+│   ├── widget/                         # Vue Flow trame widget + built bundle (serve/)
+│   └── icons/                          # line icons per unit kind
+│
+├── ui-widget/                          # Vue source of the canvas widget (npm run build)
 │
 ├── tests/
 │   ├── unit/
@@ -250,6 +267,7 @@ aquakin/
 │       └── catalysed_decay.yaml   # A -> B on a constant catalyst: only k*[X]0 identifiable
 │
 ├── examples/
+│   ├── projects/                    # flowsheet projects: bsm1/, bsm2/ (with its 15 °C ASM1 model file)
 │   ├── batch_bromate.py
 │   ├── lagrangian_demo.py
 │   ├── sensitivity_demo.py

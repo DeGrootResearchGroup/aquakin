@@ -110,6 +110,11 @@ class StorageTank:
     def state_size(self) -> int:
         return self.model.n_species + 1  # concentrations + liquid volume
 
+    def state_names(self) -> tuple[str, ...]:
+        """Names of the state entries, in order: the species concentrations, then
+        the liquid volume ``V``."""
+        return (*self.model.species, "V")
+
     def liquid_volume(self, state: jnp.ndarray):
         """The liquid volume held (the trailing state entry).
 

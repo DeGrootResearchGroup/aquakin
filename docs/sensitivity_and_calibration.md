@@ -625,6 +625,38 @@ result = plant.calibrate(
 result.params_named
 ```
 
+A channel need not be a species. The channels correspond to what a laboratory or
+an online sensor measures:
+
+| Channel | Measures |
+|---|---|
+| `"Q"`, `"T"` | the stream's flow and temperature (a stream carries a temperature when the influents upstream of it have one) |
+| `"COD"` | total COD as a COD test sees it: dissolved oxygen and nitrate count none, nor do dissolved hydrogen and methane |
+| `"TKN"` | total Kjeldahl nitrogen: ammonium and organic nitrogen |
+| `"NOx"` | nitrate plus nitrite nitrogen |
+| `"TN"` | `TKN + NOx`; dissolved N₂, N₂O and NO are in no nitrogen channel |
+| `"TP"` | total phosphorus |
+| `"TSS"` | the model's own TSS species, or 0.75 × the particulate COD for the ASM1 family |
+| `Measure(name, weights, flow, temperature)` | any other weighted sum |
+
+COD, TKN, NOx, TN and TP come from the model's composition table, so their
+weights follow the composition parameters of the run (`i_XB`, `iN_BM`, ...): a
+fit or a Fisher information with `"asm1.i_XB"` free sees total nitrogen move
+with it. A digester's headspace (`S_gas_*`) is in no channel. They work
+everywhere an observable does: calibration, Fisher information, profile
+likelihood and sensor ranking.
+
+```python
+from aquakin.plant import Measure, PlantObservable, SensorSet
+
+SensorSet([PlantObservable("effluent", ("TKN", "NOx", "TSS", "Q"))], sigma=[1.0, 0.5, 2.0, 50.0])
+```
+
+A long fit, profile or sensor ranking reports its progress to a `progress=`
+callable, which receives an `aquakin.Progress` (`stage`, `done`, `total`,
+`message`) at each objective evaluation, profile point or run; raising
+`aquakin.Cancelled` from it stops the analysis.
+
 Fit against several streams at once with `observables=[PlantObservable(...), ...]`,
 fit assembled-state initial conditions with `free_ic=FreeICConfig([...])`, and run
 a joint multi-batch fit by passing list-valued `observations`/`t_obs`/`y0`.

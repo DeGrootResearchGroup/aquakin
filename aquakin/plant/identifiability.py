@@ -75,12 +75,15 @@ from aquakin.integrate.profile import (
 )
 from aquakin.plant.calibrate import (
     _check_free_params,
+    _Measurement,
     _normalize_observables,
     _PlantForwardModel,
     _PlantParamNamespace,
     _resolve_observable_columns,
     calibrate_plant,
+    measured,
 )
+from aquakin.progress import report
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
@@ -123,12 +126,15 @@ def _observed_channels(plant: Plant, resolved_observables, ts_native, states, p)
     the plant's outputs reconstructed from ``states`` (``(n_t, ndof)``) at the
     native times ``ts_native`` and parameters ``p``, in observable order.
     Differentiable in ``states`` and ``p``."""
-    keys = [plant._parse_endpoint(endpoint, role="source") for endpoint, _ in resolved_observables]
+    keys = [plant._parse_endpoint(endpoint, role="source") for endpoint, *_ in resolved_observables]
 
     def _at(t, y):
         outputs = plant.outputs_at(t, y, p)
         return jnp.concatenate(
-            [outputs[key].C[ch] for key, (_, ch) in zip(keys, resolved_observables)]
+            [
+                measured(outputs[key].C, outputs[key].Q, outputs[key].scalars.get("T"), m, p)
+                for key, (_, m) in zip(keys, resolved_observables)
+            ]
         )
 
     return jax.vmap(_at)(ts_native, states)
@@ -201,6 +207,7 @@ def plant_fisher_information(
     integrator=None,
     diff: DifferentiationConfig = DifferentiationConfig(),
     sensitivity_options: dict | None = None,
+    progress=None,
 ) -> FisherInformation:
     """Fisher information of a plant design at assumed parameter values.
 
@@ -276,6 +283,9 @@ def plant_fisher_information(
         Keyword arguments for :meth:`Plant.solve_sensitivity` in
         ``mode="forward"`` (``rtol``, ``atol``, ``sens_rtol``, ``factormax``,
         ``dtmax``, ``max_steps``).
+    progress : callable, optional
+        Called with a :class:`aquakin.Progress` (stage ``"design"``) before each
+        run's sensitivity solve; raise :class:`aquakin.Cancelled` from it to stop.
 
     Returns
     -------
@@ -335,6 +345,7 @@ def plant_fisher_information(
     dphys = design.dphysical(p)
     blocks = []
     for r in range(n_runs):
+        report(progress, "design", r, n_runs, f"run {r + 1} of {n_runs}")
         resolved, _ = _resolve_observable_columns(design.plants[r], observable_specs)
         y_obs, dy = design.sensitivity(r, resolved, p)
         blocks.append(
@@ -593,31 +604,104 @@ class SensorSet:
 
 
 def _union_columns(plant: Plant, sensor_sets):
-    """Every stream any of ``sensor_sets`` reads, observed whole, plus where
-    each set's channels sit in it.
+    """Every stream any of ``sensor_sets`` reads, observed whole, plus how each
+    set's channels follow from it.
 
-    Returns ``(union_observables, columns)``: the ``(endpoint, all-channel
-    index)`` pairs to observe once, and per sensor set the column indices of
-    its channels in that union, in the set's observable order. Two spellings
-    of one port (a registered name and its ``"unit.port"``) share columns."""
-    offsets: dict = {}
-    union: list = []
-    width = 0
-    columns = []
+    Returns ``(union_observables, maps)``. The union observes each stream once:
+    every species, then its flow, then its temperature when some set measures
+    it. Per sensor set, a map is ``(M, idx, theta0, dM)``: the set's channels
+    are ``union_values @ M(p)`` with ``M(p) = M + Σ_i (p[idx_i] - theta0_i)
+    dM[i]`` (the weights of composition channels follow their parameters). The
+    measurements are linear in the stream, so the same ``M(p)`` maps the
+    sensitivities, and a free composition parameter adds ``union_values @ dM``.
+    Two spellings of one port (a registered name and its ``"unit.port"``) share
+    columns."""
+    sets = []
+    temperature: set = set()
     for ss in sensor_sets:
         specs = _normalize_observables(ss.observables, None, None)
         resolved, _ = _resolve_observable_columns(plant, specs)
-        cols = []
-        for endpoint, ch_idx in resolved:
+        pieces = []
+        for endpoint, m in resolved:
             key = plant._parse_endpoint(endpoint, role="source")
-            if key not in offsets:
-                n_species = plant.units[key[0]].model.n_species
-                offsets[key] = width
-                union.append((endpoint, jnp.arange(n_species)))
-                width += n_species
-            cols.append(offsets[key] + np.asarray(ch_idx))
-        columns.append(np.concatenate(cols))
-    return tuple(union), columns
+            if m.uses_temperature:
+                temperature.add(key)
+            pieces.append((key, endpoint, m))
+        sets.append(pieces)
+
+    offsets: dict = {}
+    union: list = []
+    width = 0
+    for pieces in sets:
+        for key, endpoint, m in pieces:
+            if key in offsets:
+                continue
+            n = plant.units[key[0]].model.n_species
+            extra = 2 if key in temperature else 1
+            whole = np.concatenate([np.eye(n), np.zeros((n, extra))], axis=1)
+            flow = np.zeros(n + extra)
+            flow[n] = 1.0
+            temp = np.zeros(n + extra)
+            if extra == 2:
+                temp[n + 1] = 1.0
+            offsets[key] = width
+            union.append(
+                (
+                    endpoint,
+                    _Measurement(
+                        stream=m.stream,
+                        W=jnp.asarray(whole),
+                        q=jnp.asarray(flow),
+                        t=jnp.asarray(temp),
+                        idx=np.zeros(0, int),
+                        theta0=jnp.zeros(0),
+                        dW=jnp.zeros((0, n, n + extra)),
+                        uses_temperature=extra == 2,
+                    ),
+                )
+            )
+            width += n + extra
+
+    maps = []
+    for pieces in sets:
+        k = sum(m.width for _, _, m in pieces)
+        names = sorted({int(i) for _, _, m in pieces for i in m.idx})
+        where = {i: j for j, i in enumerate(names)}
+        M = np.zeros((width, k))
+        dM = np.zeros((len(names), width, k))
+        theta0 = np.zeros(len(names))
+        col = 0
+        for key, _, m in pieces:
+            offset, n, w = offsets[key], m.W.shape[0], m.width
+            M[offset : offset + n, col : col + w] = np.asarray(m.W)
+            M[offset + n, col : col + w] = np.asarray(m.q)
+            if m.uses_temperature:
+                M[offset + n + 1, col : col + w] = np.asarray(m.t)
+            for i, flat in enumerate(m.idx):
+                j = where[int(flat)]
+                dM[j, offset : offset + n, col : col + w] = np.asarray(m.dW[i])
+                theta0[j] = float(m.theta0[i])
+            col += w
+        maps.append((M, np.asarray(names, int), theta0, dM))
+    return tuple(union), maps
+
+
+def _set_channels(y_all, dy_all, set_map, p, free_idx):
+    """A sensor set's channels and their sensitivities from the union's.
+
+    ``y_all`` is ``(n_t, width)`` and ``dy_all`` ``(n_t, width, k)``; the map is
+    one of :func:`_union_columns`'. A free parameter that the set's weights
+    depend on adds ``y_all @ dM`` to its sensitivity column."""
+    M, idx, theta0, dM = set_map
+    p = np.asarray(p)
+    Mp = M + np.tensordot(p[idx] - theta0, dM, axes=1) if idx.size else M
+    y = y_all @ Mp
+    dy = jnp.einsum("tok,os->tsk", dy_all, Mp)
+    free = [int(i) for i in np.asarray(free_idx)]
+    for j, flat in enumerate(idx):
+        if int(flat) in free:
+            dy = dy.at[:, :, free.index(int(flat))].add(y_all @ dM[j])
+    return y, dy
 
 
 def plant_rank_sensor_sets(
@@ -641,6 +725,7 @@ def plant_rank_sensor_sets(
     integrator=None,
     diff: DifferentiationConfig = DifferentiationConfig(),
     sensitivity_options: dict | None = None,
+    progress=None,
 ) -> list[CandidateScore]:
     """Rank candidate sensor sets by the information they give about a plant.
 
@@ -679,6 +764,10 @@ def plant_rank_sensor_sets(
         design), one sensitivity solve per draw; ``params`` is then ignored.
     t_span, y0, transforms, priors, use_priors, mode, time_unit, integrator, diff, sensitivity_options
         As for :func:`plant_fisher_information`.
+    progress : callable, optional
+        Called with a :class:`aquakin.Progress` (stage ``"design"``) before each
+        sensitivity solve, one per run and parameter draw; raise
+        :class:`aquakin.Cancelled` from it to stop.
 
     Returns
     -------
@@ -745,12 +834,20 @@ def plant_rank_sensor_sets(
         # Each set's information summed over the runs, from one solve per run.
         info = [np.zeros((k, k)) for _ in sets]
         for r in range(design.n_runs):
-            union, columns = unions[r]
+            report(
+                progress,
+                "design",
+                d * design.n_runs + r,
+                len(draws) * design.n_runs,
+                f"parameter draw {d + 1} of {len(draws)}, run {r + 1} of {design.n_runs}",
+            )
+            union, maps = unions[r]
             y_all, dy_all = design.sensitivity(r, union, p)
-            for i, (ss, cols) in enumerate(zip(sets, columns)):
+            for i, (ss, set_map) in enumerate(zip(sets, maps)):
+                y_set, dy_set = _set_channels(y_all, dy_all, set_map, p, design.free_idx)
                 J = _scaled_rows(
-                    y_all[:, cols],
-                    dy_all[:, cols, :],
+                    y_set,
+                    dy_set,
                     dphys,
                     ss.sigma,
                     ss.mask,
@@ -805,6 +902,7 @@ def plant_profile_likelihood(
     sigma=None,
     free_ic: FreeICConfig | None = None,
     optimizer: OptimizerConfig = OptimizerConfig(),
+    progress=None,
     **calibrate_kwargs,
 ) -> ProfileResult:
     """Profile-likelihood analysis of one plant parameter.
@@ -853,6 +951,11 @@ def plant_profile_likelihood(
         ``transforms``, ``time_unit``, ``priors``, ``use_priors``,
         ``check_finite``, ``integrator``, ``diff``. The inner fits force
         ``laplace=False``.
+    progress : callable, optional
+        Called with a :class:`aquakin.Progress` (stage ``"profile"``, the
+        points fitted so far of the grid) before each grid-point fit and at
+        every objective evaluation within it; raise :class:`aquakin.Cancelled`
+        from it to stop the sweep.
 
     Returns
     -------
@@ -888,7 +991,21 @@ def plant_profile_likelihood(
     # pinned value and the start, which reach it as runtime arguments.
     cache: dict = {}
 
+    fitted = [0]
+
     def _fit_point(value, warm):
+        from aquakin.progress import Progress, report
+
+        label = f"{profile_param} = {float(value):g}"
+        report(progress, "profile", fitted[0], len(grid), label)
+        inner = None
+        if progress is not None:
+            done = fitted[0]
+
+            def inner(p):
+                progress(Progress("profile", done, len(grid), f"{label}: {p.message}"))
+
+        fitted[0] += 1
         init_p = base_params if warm is None else warm.params
         ic_start = None if warm is None or not free_ic else warm.C0_fitted
         return calibrate_plant(
@@ -902,6 +1019,7 @@ def plant_profile_likelihood(
             free_ic=free_ic,
             optimizer=_point_optimizer(optimizer, warm, cold_starts),
             laplace=False,
+            progress=inner,
             _compiled_cache=cache,
             _ic_start=ic_start,
             **calibrate_kwargs,

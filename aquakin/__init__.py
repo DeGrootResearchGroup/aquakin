@@ -100,6 +100,7 @@ from aquakin.integrate.forward_sensitivity import (
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.sensitivity import SensitivityResult, sensitivity
 from aquakin.integrate.fit import FitResult, fit
+from aquakin.progress import Cancelled, Progress
 from aquakin.integrate.global_sensitivity import DGSMResult, dgsm
 from aquakin.integrate.events import Event, EventedResult, solve_with_events
 from aquakin.integrate.design import Constraint, OptimizeResult, optimize_design
@@ -229,6 +230,7 @@ __all__ = [
     "CFDReactor",
     "CSTRUnit",
     "CalibrationResult",
+    "Cancelled",
     "CandidateDesign",
     "CandidateScore",
     "CarbonFootprint",
@@ -274,6 +276,7 @@ __all__ = [
     "PlugFlowReactor",
     "PredictiveBand",
     "ProfileResult",
+    "Progress",
     "RatioSplitter",
     "ScenarioComparison",
     "SensitivityResult",

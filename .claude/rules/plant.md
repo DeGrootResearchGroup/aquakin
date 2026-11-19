@@ -40,7 +40,12 @@ Key types:
 - `Stream(Q, C, model)` — the bulk-flow + concentration record passed
   between units.
 - `Unit` Protocol — every unit declares `state_size`, `input_ports`,
-  `output_ports`, and implements `initial_state()`, `compute_outputs()`,
+  `output_ports`, and implements `initial_state()`, `state_names()` (a unique
+  name per state entry: species for concentrations, `V` / `R_f` / `integral` /
+  `Q_filtered` / `residual` for scalars, `layer<k>.<x>` and `film<k>.<species>`
+  for repeated blocks; `Plant.state_names` / `named_state` / `state_from_named`
+  build on it, with a heat-balance temperature as the unit's `"T"` entry, and
+  stored results key states by these names), `compute_outputs()`,
   `rhs(t, state, inputs, params, signals)`, and `flow_outputs(input_flows,
   params, ctx)`. **Every unit has the *same fixed signature* for each method**
   — the plant never branches its call on a per-unit capability flag. The
@@ -115,7 +120,31 @@ Key types:
   ([`plant/identifiability.py`](aquakin/plant/identifiability.py), exported from
   `aquakin.plant`) are the plant versions of the reactor tools. Observables are
   resolved by `plant/calibrate.py`'s `_resolve_observable_columns` (shared with
-  `_resolve_plant_problem`), free names by `_check_free_params`. The Fisher
+  `_resolve_plant_problem`), free names by `_check_free_params`. **Measured
+  channels** (`plant/measures.py`): a channel is a species, a keyword (`Q`, `T`,
+  `COD`, `TKN`, `NOx`, `TN`, `TP`, `TSS`) or a `Measure`. `measure_map(model,
+  channels)` gives a `MeasureMap` (`W`, `q`, `t`, and the composition parameters
+  the weights depend on with `theta0`/`dW`: a central-difference probe, exact for
+  the affine content fractions, linearized otherwise, e.g. ASM2d's
+  `fMeP_PO4_MW`). `_resolve_observable_columns` turns it into `(endpoint,
+  _Measurement)` with the parameters addressed in the plant flat vector, and
+  every consumer reads `measured(C, Q, T, measurement, p) = C @ W(p) + Q q + T t`
+  (`W(p)` follows the run's parameters, so a free `i_XB` is seen through TN's
+  weights as well as the state). Temperature comes from the stream's `T` scalar
+  (`StreamSeries.T`, filled by `_stream_sweep` in the same pass as `(Q, C)`); a
+  `T` channel on a stream with none raises `ValueError`. The ranking's
+  `_union_columns` observes each stream whole (species, flow, temperature when
+  any set reads it) with per-set maps `(M, idx, theta0, dM)`; `_set_channels`
+  adds `y_all @ dM` for a free composition parameter. Classification:
+  COD clips negative (electron acceptor) entries and drops `S_h2`/`S_ch4`;
+  `SN2`, `SN2O` and `SNO` when `SNO3` exists (nitric oxide) are in no nitrogen
+  channel; `S_gas_*` is in nothing. TSS is a model's `XTSS`/`XSS` species or
+  the ASM1 `0.75 × ASM1_TSS_SPECIES`; a model with neither raises. A species
+  named like a keyword raises (use a `Measure`). `composition_table` follows a
+  file model's `extends:` chain (`composition_base`, via `_aquakin_source`) to a
+  shipped table when the species match, including its unit factors (ADM1's
+  kg-based contents). Unknown-channel errors keep the historic "Unknown observed
+  channel" wording. The Fisher
   forward mode takes `S` from `Plant.solve_sensitivity` and maps it through the
   stream reconstruction (`outputs_at`, vmapped) with one `jax.linearize`, so it
   includes the reconstruction's direct `dg/dθ`; the reverse mode is `jacrev` of
@@ -129,9 +158,11 @@ Key types:
   plant problem's `data_key` fingerprints the loss, sigma, observations and
   times. `plant_rank_sensor_sets` (with `SensorSet`) is the plant
   `rank_experiments`: `_union_columns` resolves every candidate's streams to one
-  union, observed whole (all species), keyed by the parsed `(unit, port)` so two
-  spellings share columns; one `_PlantDesign.sensitivity` call per run per
-  parameter draw then serves every candidate by column selection. It reuses
+  union, observed whole (all species, then the flow), keyed by the parsed
+  `(unit, port)` so two spellings share columns; one `_PlantDesign.sensitivity`
+  call per run per parameter draw then serves every candidate through its own
+  linear map `M` (`y @ M`, `einsum("tok,os->tsk", dy, M)`), exact because every
+  measured channel is linear in the stream. It reuses
   `experiment_design.py`'s `_criterion` / `_subset_indices` /
   `_LARGER_IS_BETTER` / `CandidateScore`. `_PlantDesign` (runs, free parameters,
   transforms, priors, the forward/reverse dispatch) and `_scaled_rows` (noise,
@@ -764,6 +795,87 @@ cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic eff
 means within 0.07% of Takács, the constant-influent steady state identical (layers
 2–5 equal there, where the rules agree).
 
+**Unit catalogue (`plant/catalog.py`, the `aquakin` command).** Front ends
+(the flowsheet editor prototype) learn the unit types from
+`aquakin.plant.catalog`, never by importing unit classes. A kind's *settings* are
+read from the class: constructor signature (types mapped to front-end types
+such as `number`, `port_name`, `aeration`, `unsupported`), dataclass default
+factories, and the docstring's `Parameters` section for help. Only what the
+signature cannot say is declared per kind in `_build_kinds`: label, category,
+port rules beyond the naming convention (`input_port`/`input_port_names` are
+inputs, every other `*_port` and the port-keyed mappings are outputs, in
+constructor order; fixed ports such as the splitters' `in`, the mixer's `out`,
+the storage tank's `out`/`bypass` are `PortRule(form="fixed")`), GUI-friendly
+defaults for required port settings, and `exactly_one_of` groups.
+`check_unit` builds the real unit and is the authority. **When adding a unit
+class or changing a unit's ports**, add or update its kind:
+`tests/unit/test_plant_catalog.py` builds every kind and compares the
+rule-derived ports with the built unit's, and fails if an exported unit class
+has no kind. `aquakin serve` (`aquakin/__main__.py`) is a JSON-lines worker
+(`catalog`, `models`, `model`, `check_unit`, `check_spec`, `fingerprint`,
+`read_spec`, `write_spec`, `ping`).
+Replies go to a private duplicate of the process's stdout and descriptor 1 is
+pointed at stderr while serving (plus a Python-level redirect per handler), so
+no other output can corrupt a reply; a failed request, or a reply that is not
+strict JSON (NaN), gets `{"ok": false, "error": ...}` without stopping the worker.
+
+**Flowsheet spec (`plant/spec.py`, `Plant.to_spec` / `Plant.from_spec`).** A
+plant as a file (format 2), built on the catalogue. Units are keyed by their
+stable name (the plant's unit name; `Plant.labels` holds optional display text)
+and written with **every** setting (`catalog.unit_settings(full=True)`; unit
+attributes must mirror the constructor arguments for this to work) plus the
+aquakin version, so a later change of default cannot change a saved plant.
+Connections are `"unit.port -> unit.port"` or `{from, to, translator: {kind,
+...}, seed: {Q, T, concentrations}}`; a seed is written in the **destination**
+unit's model (it stands for the stream arriving after any translator). A `kind:
+influent` unit is an `InfluentSeries` wired with `add_influent`: constant
+(`Q`/`T`/`composition`) or a `series` table file (`read_influent_table`, which
+records the file on the series; `write_influent_table` round-trips bit for bit)
+recorded under the spec's `files:` with its sha256. `to_spec(path)` refers to a
+table inside the spec's directory and otherwise writes `data/<name>.csv`; without
+a path a time-varying influent is refused. **`write_spec`** (behind `to_spec(path)`
+and the editor's Save) plans everything before touching the disk: each unit's
+settings are checked with `validate_settings` (unset required settings are allowed,
+so a draft saves) and canonicalized (`_canonical_settings`: every number a float,
+infinities `"inf"`), the output is checked as strict JSON (no NaN), and the planned
+copies are checked for conflicts (`_check_writes`); only then are files copied and
+the spec replaced atomically. A model file whose `extends:` chain leaves the
+project folder has its **whole chain** copied into `models/` (`_plan_model`: the
+model as `<name>.yaml`, each base beside it with its `extends:` line rewritten
+textually so comments survive; a project model is rewritten in place). An
+in-memory influent table is rendered to bytes first, so saving twice is
+idempotent. `spec_fingerprint(spec)` hashes what is simulated (canonical settings
+with catalogue defaults filled in, wiring, streams, endpoints, model and table
+content fingerprints) and leaves out layout, labels, name, file locations and
+the aquakin version; results should record it to detect staleness. NaN is no
+setting anywhere: `catalog._is_number` and the Pydantic schema
+(`allow_inf_nan=False`) refuse it and `_plain(nan)` raises. A file model may not
+take a shipped model's name (refused on read and write), and
+`composition_base` gives a same-named model the shipped table only when the
+species match. Parse errors from `load_spec_file` are `SpecError`s. Every
+model is listed under `models:` as `shipped` or a YAML file path relative to the
+spec, with a sha256 of its content (`extends` resolved; a mismatch on read is a
+`SpecWarning`). A model is recognised by the provenance `load_model` /
+`load_model_from_file` record on it (`_aquakin_source`, a plain attribute, so a
+`dataclasses.replace` copy such as `bsm2_asm1_model()` does not carry it and is
+refused rather than written under the shipped name); this survives
+`clear_model_cache`. Reading validates the document with Pydantic and each
+unit's settings strictly with `catalog.validate_settings` (unknown keys with a
+did-you-mean, exact types), and reads YAML with YAML 1.2 scalars
+(`_Yaml12Loader`). Controllers derived from a closed-loop `Aeration` / feedback
+`DosingUnit` are recorded in `plant._derived_units` by `_materialize_aeration` /
+`_materialize_dosing` and left out (with their measurement taps), since they are
+derived again. Every refusal is a `SpecError` naming the unit / connection.
+`check_spec(spec, base_dir=)` builds the plant and returns `Plant.check` (the
+`aquakin serve` `check_spec` command). `Plant.add_unit` / `add_influent` refuse
+names with `.`, `->` or whitespace and a unit named after one of the plant's
+models (`_check_unit_name`; such a name made `parameter_index("asm1.muH")` return
+a flow setpoint), and `_plant_param_index` raises on any duplicate key. Pinned by
+`tests/integration/test_plant_spec.py`: BSM1 (ideal and Takács) and a two-model
+plant (translators, temperature seed, reagent, influent T) rebuild with an
+identical spec, initial state and bit-identical RHS, and the
+`examples/projects/bsm2` project (its 15 °C ASM1 a model file extending `asm1`)
+rebuilds `build_bsm2`'s plant run with the BSM2 parameters bit-identically.
 **Co-stripped gases (`Aeration(stripped=...)`).** An aerated tank strips other
 dissolved gases (N₂O, NO, ...) alongside oxygen inside the solve:
 `stripped={"SN2O": ratio}` or `{sp: (ratio, sat)}`, normalized in

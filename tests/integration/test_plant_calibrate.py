@@ -990,3 +990,34 @@ def test_plant_calibrate_ic_start_seeds_the_pool_coordinates(decay_plant, monkey
     assert cold["theta0"][-1] == pytest.approx(np.log(1.0))
     assert seeded["theta0"][-1] == pytest.approx(np.log(0.25))
     assert seeded["theta0"][0] == pytest.approx(cold["theta0"][0])
+
+
+def test_progress_reports_each_evaluation_and_cancel_stops_the_fit(decay_plant):
+    """A plant fit reports every objective evaluation, and a Cancelled raised from
+    the progress callable ends it (it is not mistaken for a failed start)."""
+    net, plant = decay_plant
+    base = plant.default_parameters()
+    gidx = plant.parameter_index(PARAM)
+    t_obs = jnp.linspace(1.0, 40.0, 8)
+    sol = plant.solve(t_span=(0.0, 40.0), t_eval=t_obs, params=base)
+    obs_B = plant.stream(sol, "tank", base).C_named("B")
+    kw = dict(
+        target="tank",
+        observed_channels=["B"],
+        params=base.at[gidx].set(float(base[gidx]) * 0.3),
+        transforms={PARAM: "positive_log"},
+        optimizer=OptimizerConfig(max_iter=60, n_starts=2),
+    )
+
+    seen = []
+    plant.calibrate(obs_B, t_obs, [PARAM], progress=seen.append, **kw)
+    assert [p.done for p in seen] == list(range(1, len(seen) + 1))
+    assert {p.stage for p in seen} == {"fit"} and seen[0].total is None
+    assert seen[0].message.startswith("start 1 of 2") and seen[-1].message.startswith("start 2")
+
+    def stop_at_third(p):
+        if p.done == 3:
+            raise aquakin.Cancelled()
+
+    with pytest.raises(aquakin.Cancelled):
+        plant.calibrate(obs_B, t_obs, [PARAM], progress=stop_at_third, **kw)

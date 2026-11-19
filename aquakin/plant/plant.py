@@ -47,12 +47,14 @@ from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.integrate.events import Event, events_to_native_time, solve_with_events
 from aquakin.plant import calibrate as _calibrate
 from aquakin.plant import sensitivity as _sensitivity
+from aquakin.plant import spec as _spec
 from aquakin.plant.colored import ColoredJacobianManager
 from aquakin.plant.errors import (
     UnitsError,
     UnknownPortError,
     UnknownUnitError,
     WiringError,
+    check_name,
 )
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.recycle import RecycleResolver
@@ -311,6 +313,10 @@ class Plant:
         # reads the right port without the user knowing it is
         # ``"tank5_split.internal_recycle"``; :meth:`list_streams` lists them.
         self.named_streams: dict[str, str] = {}
+        # Display labels by unit name (free text, e.g. "Aerobic zone 1"). The
+        # unit name stays the stable identifier every parameter, stream and
+        # result is keyed by; a label only changes how a front end shows it.
+        self.labels: dict[str, str] = {}
         # How reactor temperature is handled (see aquakin.plant.temperature). The
         # default carries no state and reproduces the historic instantaneous
         # flow-weighted behaviour exactly; a HeatBalanceTemperature gives each
@@ -357,6 +363,10 @@ class Plant:
         # One-time guard for materialising the DO controllers a CSTRUnit's
         # closed-loop Aeration spec requires (see _materialize_aeration).
         self._aeration_materialized: bool = False
+        # Units the plant derived itself (the PI controllers a closed-loop
+        # Aeration or a feedback DosingUnit requires). They follow from other
+        # units' settings, so a flowsheet spec leaves them out.
+        self._derived_units: set[str] = set()
         # Compiled-solve / kernel memoization -- the jitted forward solves, the
         # PTC steady solves, and the continuation / arclength kernels -- owning
         # one invalidate() so a condition/topology mutator cannot clear one cache
@@ -390,12 +400,49 @@ class Plant:
         """
         if unit.name in self.units:
             raise ValueError(f"Unit '{unit.name}' already added")
+        self._check_unit_name(unit)
         self.units[unit.name] = unit
         self._insertion_order.append(unit.name)
         # Seed the evaluation order with the insertion order so it is non-empty
         # before the first solve (helpers that just enumerate units read it);
         # _finalize_topology() reorders it into a valid topological order.
         self._unit_order.append(unit.name)
+
+    def _check_unit_name(self, unit) -> None:
+        """Refuse a unit name or port name the plant's addressing cannot read.
+
+        Endpoints are ``"unit.port"`` and parameters ``"<model>.<param>"`` /
+        ``"<unit>.<setpoint>"``, so a dot (or whitespace, or ``->``) in a name
+        makes an endpoint ambiguous, and a unit named like one of the plant's
+        models would share its parameter keys (``"asm1.muH"`` could then name a
+        splitter's flow setpoint instead of the kinetic rate).
+        """
+        check_name("unit", unit.name)
+        for port in [*unit.input_ports, *unit.output_ports]:
+            check_name(f"port of unit '{unit.name}': port", port)
+        model = getattr(unit, "model", None)
+        if model is not None:
+            check_name("model", model.name)
+        if unit.name in self.influents:
+            raise WiringError(f"unit name '{unit.name}' is already the name of an influent")
+        if unit.name in self.named_streams:
+            raise WiringError(f"unit name '{unit.name}' is already the name of a stream")
+        models = {
+            u.model.name
+            for u in [*self.units.values(), unit]
+            if getattr(u, "model", None) is not None
+        }
+        if unit.name in models:
+            raise WiringError(
+                f"unit name '{unit.name}' is the name of a model in this plant; parameter "
+                f"names '<model>.<param>' and '<unit>.<setpoint>' would collide. Rename the unit."
+            )
+        model = getattr(unit, "model", None)
+        if model is not None and model.name in self.units:
+            raise WiringError(
+                f"unit '{unit.name}' uses model '{model.name}', which is also a unit name in this "
+                f"plant; parameter names would collide. Rename that unit."
+            )
 
     def add_influent(
         self,
@@ -428,6 +475,11 @@ class Plant:
             Translator for the influent -> unit connection. Defaults to identity
             when the influent and destination share a model.
         """
+        check_name("influent", name)
+        if name in self.units:
+            raise WiringError(f"influent name '{name}' is already the name of a unit")
+        if name in self.named_streams:
+            raise WiringError(f"influent name '{name}' is already the name of a stream")
         if name in self.influents:
             raise ValueError(f"Influent '{name}' already added")
         self._influents_added[name] = series
@@ -1000,6 +1052,7 @@ class Plant:
             # multi-output sensor (e.g. an MBR's permeate/waste).
             sensor_port = self.units[sensor].output_ports[0]
             self.connect(f"{sensor}.{sensor_port}", f"{ctrl_name}.measured")
+            self._derived_units.add(ctrl_name)
 
     def _materialize_dosing(self) -> None:
         """Auto-wire a PI controller for every feedback :class:`DosingUnit`.
@@ -1089,6 +1142,7 @@ class Plant:
                 )
             )
             self.connect(d0.sensor, f"{cid}.measured")
+            self._derived_units.add(cid)
 
     def _build_state_layout(self) -> None:
         """Assign each unit a contiguous slice of the flat state vector.
@@ -1411,7 +1465,13 @@ class Plant:
         for name, (fstart, _) in self._parameter_layout.unit_flow_blocks.items():
             local_names = self.units[name].flow_param_local_names()
             for j, local_name in enumerate(local_names):
-                index[f"{name}.{local_name}"] = fstart + j
+                key = f"{name}.{local_name}"
+                if key in index:
+                    raise WiringError(
+                        f"plant parameter name '{key}' is both a model parameter and a flow "
+                        f"setpoint; rename unit '{name}' so it differs from every model name"
+                    )
+                index[key] = fstart + j
         return index
 
     def parameter_names(self) -> list[str]:
@@ -1753,6 +1813,125 @@ class Plant:
             pieces.append(self.temperature_model.initial_state(self))
         return jnp.concatenate(pieces)
 
+    def state_names(self) -> dict[str, tuple[str, ...]]:
+        """The name of every state entry, by unit, in the plant's state order.
+
+        Each unit names its own entries (:meth:`Unit.state_names`): species for
+        concentrations, short names for anything else. A unit whose temperature
+        is a state (a :class:`HeatBalanceTemperature` model) has a ``"T"`` entry
+        too, although it sits in the temperature block at the tail of the flat
+        vector. Stored states are keyed by these names, so they survive a change
+        of unit order or of the state layout.
+
+        Returns
+        -------
+        dict
+            ``{unit_name: (name, ...)}``; stateless units are left out.
+
+        Raises
+        ------
+        WiringError
+            If a unit's names do not match its state size or repeat.
+        """
+        self._build_state_layout()
+        out: dict[str, tuple[str, ...]] = {}
+        for name in self._unit_order:
+            unit = self.units[name]
+            if unit.state_size == 0:
+                continue
+            names = tuple(unit.state_names())
+            if len(names) != unit.state_size or len(set(names)) != len(names):
+                raise WiringError(
+                    f"unit '{name}' names {len(names)} state entries "
+                    f"({len(set(names))} distinct) for a state of size {unit.state_size}"
+                )
+            out[name] = names
+        for name in self._temperature_units:
+            out[name] = (*out.get(name, ()), "T")
+        return out
+
+    def _named_positions(self) -> dict[str, dict[str, int]]:
+        """``{unit: {state name: flat index}}``."""
+        names = self.state_names()
+        positions: dict[str, dict[str, int]] = {}
+        for unit, (start, size) in self._state_layout.items():
+            if size:
+                positions[unit] = {n: start + i for i, n in enumerate(names[unit][:size])}
+        t_start, _ = self._temperature_block
+        for i, unit in enumerate(self._temperature_units):
+            positions.setdefault(unit, {})["T"] = t_start + i
+        return positions
+
+    def named_state(self, state_full) -> dict[str, dict[str, float]]:
+        """A flat plant vector as ``{unit: {state name: value}}``.
+
+        The by-name form of a state (an initial state, a solution's
+        :attr:`~PlantSolution.final_state`, a fitted ``y0``) for storing it:
+        :meth:`state_from_named` reads it back into this plant, or into one
+        whose units sit in a different order.
+
+        Parameters
+        ----------
+        state_full : array-like
+            A flat plant vector, shape ``(total_state_size,)``.
+
+        Returns
+        -------
+        dict
+        """
+        import numpy as np
+
+        values = np.asarray(state_full, dtype=float)
+        positions = self._named_positions()
+        if values.shape != (self._total_state_size,):
+            raise ValueError(
+                f"a plant state has shape ({self._total_state_size},), got {values.shape}"
+            )
+        return {
+            unit: {n: float(values[i]) for n, i in entries.items()}
+            for unit, entries in positions.items()
+        }
+
+    def state_from_named(self, named: dict, *, base=None) -> jnp.ndarray:
+        """A flat plant vector from ``{unit: {state name: value}}``.
+
+        The inverse of :meth:`named_state`. Entries not given keep their value in
+        ``base``.
+
+        Parameters
+        ----------
+        named : dict
+            ``{unit: {state name: value}}``; any subset of the plant's entries.
+        base : array-like, optional
+            The vector to start from (default :meth:`initial_state`).
+
+        Returns
+        -------
+        jnp.ndarray
+            Shape ``(total_state_size,)``.
+
+        Raises
+        ------
+        UnknownUnitError
+            If a unit is not in the plant or has no state.
+        KeyError
+            If a state name is not one of the unit's.
+        """
+        import numpy as np
+
+        positions = self._named_positions()
+        values = np.array(self.initial_state() if base is None else base, dtype=float)
+        for unit, entries in named.items():
+            if unit not in positions:
+                hint = did_you_mean(unit, list(positions))
+                raise UnknownUnitError(f"no unit with a state named '{unit}'.{hint}")
+            for n, v in entries.items():
+                if n not in positions[unit]:
+                    hint = did_you_mean(n, list(positions[unit]))
+                    raise KeyError(f"unit '{unit}' has no state entry '{n}'.{hint}")
+                values[positions[unit][n]] = float(v)
+        return jnp.asarray(values)
+
     def states_by_unit(self, state_full: jnp.ndarray) -> dict[str, jnp.ndarray]:
         """Split a flat plant vector into a ``{unit_name: sub-vector}`` map.
 
@@ -1929,7 +2108,7 @@ class Plant:
         )
         return all_outputs
 
-    def _cached_streams(self, solution: PlantSolution, params_full):
+    def _stream_sweep(self, solution: PlantSolution, params_full):
         """Reconstruct **every** unit-output stream over a whole solution, once.
 
         The plant integrates unit *states*, not the inter-unit streams, so each
@@ -1939,7 +2118,9 @@ class Plant:
         so a sequence of ``plant.stream(sol, ...)`` calls (effluent, RAS,
         wastage, ...) costs one reconstruction, not one per stream.
 
-        Returns ``{(unit, port): (Q (n_t,), C (n_t, n_species))}``. Under tracing
+        Returns ``({(unit, port): (Q (n_t,), C (n_t, n_species))},
+        {(unit, port): T (n_t,)})``, the second holding only the streams that
+        carry a temperature. Under tracing
         (a differentiated/jitted solve) the parameter vector cannot be
         materialised into a cache key, so the pass runs uncached.
         """
@@ -1980,12 +2161,21 @@ class Plant:
             outs, _ = self._resolve_streams(
                 t_i, states, params_full, recycle_map=recycle_map, flow_map=flow_map
             )
-            return {k: (s.Q, s.C) for k, s in outs.items()}
+            return {
+                k: (s.Q, s.C, None if s.scalars.get("T") is None else jnp.asarray(s.scalars["T"]))
+                for k, s in outs.items()
+            }
 
-        result = jax.vmap(_one)(ts, states_flat)
+        swept = jax.vmap(_one)(ts, states_flat)
+        result = {k: (Q, C) for k, (Q, C, _) in swept.items()}
+        temperatures = {k: T for k, (_, _, T) in swept.items() if T is not None}
         if concrete:
-            cache[key] = result
-        return result
+            cache[key] = (result, temperatures)
+        return result, temperatures
+
+    def _cached_streams(self, solution: PlantSolution, params_full):
+        """Every output stream's ``(Q, C)`` trajectory (see :meth:`_stream_sweep`)."""
+        return self._stream_sweep(solution, params_full)[0]
 
     def stream(
         self,
@@ -2022,8 +2212,9 @@ class Plant:
         Returns
         -------
         StreamSeries
-            ``t``, ``Q``, ``C`` (shape ``(n_t, n_species)``) and ``model``,
-            with a ``C_named(species)`` accessor.
+            ``t``, ``Q``, ``C`` (shape ``(n_t, n_species)``), ``model`` and the
+            temperature ``T`` (``None`` for a stream that carries none), with a
+            ``C_named(species)`` accessor.
         """
         resolved = self.named_streams.get(endpoint)
         if resolved is None and "." not in endpoint and endpoint not in self.units:
@@ -2039,9 +2230,11 @@ class Plant:
         endpoint = resolved if resolved is not None else endpoint
         unit, port = self._parse_endpoint(endpoint, role="source")
         params_full = self.default_parameters() if params is None else self._coerce_params(params)
-        Q, C = self._cached_streams(solution, params_full)[(unit, port)]
+        streams, temperatures = self._stream_sweep(solution, params_full)
+        Q, C = streams[(unit, port)]
+        T = temperatures.get((unit, port))
         org = self._reconstruct_stream_org(solution, (unit, port), params_full)
-        return StreamSeries(t=solution.t, Q=Q, C=C, model=self.units[unit].model, org=org)
+        return StreamSeries(t=solution.t, Q=Q, C=C, model=self.units[unit].model, org=org, T=T)
 
     def _reconstruct_stream_org(self, solution, key, params_full):
         """Reconstruct an output stream's indicator-organism trajectory, or
@@ -2073,6 +2266,12 @@ class Plant:
         plant's named streams; call this to add your own. Returns ``self`` for
         chaining.
         """
+        check_name("stream", name)
+        if name in self.units or name in self.influents:
+            what = "a unit" if name in self.units else "an influent"
+            raise WiringError(
+                f"stream name '{name}' is the name of {what}; plant.stream('{name}') would be ambiguous"
+            )
         self.named_streams[name] = endpoint
         return self
 
@@ -4699,3 +4898,8 @@ class Plant:
     # ``plant.calibrate(...)`` reuses the reactor-calibration machinery through the
     # forward-model seam.
     calibrate = _calibrate.calibrate_plant
+
+    # The flowsheet spec (:mod:`aquakin.plant.spec`): a plant as plain data and
+    # back, the file format a flowsheet editor saves.
+    from_spec = classmethod(_spec.plant_from_spec)
+    to_spec = _spec.plant_to_spec

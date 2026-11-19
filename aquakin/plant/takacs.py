@@ -204,6 +204,18 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         identical; on the dynamic BSM2 influent the effluent's 8-day mean
         concentrations stay within 0.1% of the Takács model's while a forward
         solve takes about a third of the steps.
+    init_underflow_Q : float, optional
+        The underflow rate (m³/d) to seed a settled sludge blanket for. When
+        given, the initial state is a settled profile (clarification layers
+        near the non-settleable floor, a thickened bottom blanket) rather than
+        a uniform fill, which avoids the startup transient of a blanket forming
+        from scratch.
+    init_feed_tss : float, optional
+        The expected feed TSS (g/m³) for that settled start; by default, from
+        the model's default particulate concentrations.
+    tss_factors : dict of str to float
+        TSS per unit of each particulate species (g TSS/g COD); a species not
+        listed counts 1.
     input_port : str
     overflow_port : str
     underflow_port : str
@@ -340,6 +352,22 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         if self.soluble_holdup:
             size += self.n_layers * self._n_sol
         return size
+
+    def state_names(self) -> tuple[str, ...]:
+        """Names of the state entries, in order, layer 1 at the bottom (underflow)
+        to layer ``n_layers`` at the top: per layer ``layer<k>.TSS``
+        (``"lumped_tss"``) or ``layer<k>.<species>`` for each particulate species
+        (``"per_species"``), then, with ``soluble_holdup``, ``layer<k>.<species>``
+        for each soluble species."""
+        layers = range(1, self.n_layers + 1)
+        if self.composition_mode == "lumped_tss":
+            names = [f"layer{k}.TSS" for k in layers]
+        else:
+            names = [f"layer{k}.{sp}" for k in layers for sp in self.particulate_species]
+        if self.soluble_holdup:
+            solubles = [self.model.species[i] for i in self._soluble_indices]
+            names += [f"layer{k}.{sp}" for k in layers for sp in solubles]
+        return tuple(names)
 
     def _unpack(self, state: jnp.ndarray):
         """Split the flat state into ``(particulate_state, soluble_layered)``.

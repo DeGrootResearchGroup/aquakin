@@ -307,7 +307,8 @@ def composition_table(
         an explicit composition to the :mod:`aquakin.utils.balance` /
         :meth:`Plant.mass_balance` functions).
     """
-    builder = _BUILDERS.get(model.name)
+    base = composition_base(model)
+    builder = _BUILDERS.get(base) if base is not None else None
     if builder is None:
         suffix = did_you_mean(model.name, list(_BUILDERS))
         raise KeyError(
@@ -317,6 +318,71 @@ def composition_table(
     if builder is _asm_composition:
         return _asm_composition(model, electron_acceptor_cod, params)
     return builder(model, params)
+
+
+def composition_base(model: CompiledModel) -> str | None:
+    """The shipped model whose composition table and units ``model`` uses, or ``None``.
+
+    A shipped model with a table is its own base (a model of the same name but
+    other species has none). A model read from a file that
+    ``extends:`` a shipped model (directly or through other files) with the same
+    species list -- a parameter variant such as a 15 degC ASM1 -- has that
+    model as its base: it uses the base's composition table (evaluated with its
+    own parameters) and the base's content units (ADM1 states kg COD and kmol
+    N). ``load_model_from_file`` records the file on the model. A model file
+    that extends nothing (a flattened copy) has as its base a shipped model with
+    the same species list, when all such models share one table.
+
+    Parameters
+    ----------
+    model : CompiledModel
+
+    Returns
+    -------
+    str or None
+    """
+    from pathlib import Path
+
+    import yaml
+
+    from aquakin.schema.loader import load_model
+
+    if model.name in _BUILDERS:
+        # Its own base only if it is that model's species list (a file model
+        # may take a shipped name without being that model).
+        same = list(load_model(model.name).species) == list(model.species)
+        return model.name if same else None
+    source = tuple(getattr(model, "_aquakin_source", ()) or ())
+    for _ in range(16):
+        if source[:1] != ("file",):
+            return None
+        path = Path(source[1])
+        try:
+            data = yaml.safe_load(path.read_text())
+        except OSError:
+            return None
+        meta = data.get("model", {}) if isinstance(data, dict) else {}
+        base = meta.get("extends", data.get("extends") if isinstance(data, dict) else None)
+        if not isinstance(base, str):
+            return _base_by_species(model)
+        if "/" in base or base.endswith(".yaml"):
+            source = ("file", str((path.parent / base).resolve()))
+            continue
+        if base in _BUILDERS and list(load_model(base).species) == list(model.species):
+            return base
+        return None
+    return None
+
+
+def _base_by_species(model: CompiledModel) -> str | None:
+    """The shipped base of a model file that extends nothing (a study snapshot's
+    flattened copy): a shipped model with the same species list, when every such
+    model has the same table and units, so the choice cannot matter."""
+    from aquakin.schema.loader import load_model
+
+    matches = [name for name in _BUILDERS if list(load_model(name).species) == list(model.species)]
+    kinds = {(_BUILDERS[n], tuple(sorted(_CONTENT_FACTOR.get(n, {}).items()))) for n in matches}
+    return matches[0] if len(kinds) == 1 else None
 
 
 def canonical_content(
@@ -353,7 +419,9 @@ def canonical_content(
         if composition is None
         else composition
     )
-    factor = _CONTENT_FACTOR.get(model.name, _ASM_CONTENT_FACTOR).get(component, 1.0)
+    factor = _CONTENT_FACTOR.get(composition_base(model) or model.name, _ASM_CONTENT_FACTOR).get(
+        component, 1.0
+    )
     vec = np.zeros(model.n_species)
     for sp, content in comp.items():
         if sp in model.species_index and component in content:

@@ -75,6 +75,7 @@ from aquakin.integrate.calibrate import (
     _sigma_per_dataset,
 )
 from aquakin.integrate.fisher import _resolve_transforms
+from aquakin.plant.measures import measure_map
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
@@ -93,14 +94,21 @@ class PlantObservable:
 
     ``stream`` is a registered stream name (``"effluent"``, ``"ras"``, ...; see
     :meth:`Plant.list_streams`) or a ``"unit.port"`` / unit name. ``channels`` are
-    the species of that stream's model to compare against data, in order; ``None``
-    observes every stream species. Pass a list of these as ``observables=`` to
-    :meth:`Plant.calibrate` to fit against several streams at once (e.g. the
-    effluent ammonia *and* nitrate); the observation columns then run in the order
-    given, channels within a stream first."""
+    what is measured on that stream, in order: species of the stream's model,
+    the measurements ``"Q"`` (flow), ``"COD"``, ``"TN"``, ``"TP"`` and ``"TSS"``,
+    or a :class:`~aquakin.plant.measures.Measure` (any weighted sum of species and
+    flow); see :mod:`aquakin.plant.measures`. ``None`` observes every stream
+    species. Pass a list of these as ``observables=`` to :meth:`Plant.calibrate`
+    to fit against several streams at once (e.g. the effluent ammonia *and* total
+    nitrogen); the observation columns then run in the order given, channels
+    within a stream first."""
 
     stream: str
     channels: tuple | None = None
+
+    def __post_init__(self):
+        if self.channels is not None and not isinstance(self.channels, tuple):
+            object.__setattr__(self, "channels", tuple(self.channels))
 
 
 def _normalize_observables(observables, target, observed_channels) -> list[PlantObservable]:
@@ -173,7 +181,7 @@ class _PlantForwardModel:
     """
 
     plant: Plant
-    observables: tuple  # ((endpoint, channel_index_array), ...)
+    observables: tuple  # ((endpoint, _Measurement), ...)
     y0: jnp.ndarray | None
     integrator: object
     diff: DifferentiationConfig
@@ -195,10 +203,10 @@ class _PlantForwardModel:
             diff=self.diff,
             time_unit=self.time_unit,
         )
-        cols = [
-            self.plant.stream(sol, endpoint, p).C[:, ch_idx]
-            for endpoint, ch_idx in self.observables
-        ]
+        cols = []
+        for endpoint, measurement in self.observables:
+            stream = self.plant.stream(sol, endpoint, p)
+            cols.append(measured(stream.C, stream.Q, stream.T, measurement, p))
         return jnp.concatenate(cols, axis=1)  # (n_t, n_observed)
 
     def forward_capable(self) -> bool:
@@ -288,32 +296,111 @@ def _check_free_params(ns: _PlantParamNamespace, free_params) -> None:
             )
 
 
-def _resolve_observable_columns(plant: Plant, observables) -> tuple[tuple, int]:
-    """Resolve each :class:`PlantObservable` to ``(endpoint, channel_indices)``.
+@dataclass(frozen=True)
+class _Measurement:
+    """One observable's measured channels, resolved against a plant.
 
-    Returns the resolved tuple and the total number of observed columns. The
-    columns run in observable order, channels within a stream first; the
-    consumers (the calibration forward model, the plant Fisher information)
-    reconstruct and concatenate the streams in the same order."""
+    A stream with concentrations ``C``, flow ``Q`` and temperature ``T`` reads
+    ``C @ W(p) + Q * q + T * t``. The species weights follow the plant
+    parameter vector ``p``: ``W(p) = W + Σ_i (p[idx_i] - theta0_i) dW[i]``
+    over the composition parameters they depend on (an affine map, exact for
+    the shipped compositions; see :class:`aquakin.plant.measures.MeasureMap`).
+    """
+
+    stream: str
+    W: jnp.ndarray
+    q: jnp.ndarray
+    t: jnp.ndarray
+    idx: np.ndarray
+    theta0: jnp.ndarray
+    dW: jnp.ndarray
+    uses_temperature: bool
+
+    @property
+    def width(self) -> int:
+        """The number of measured channels."""
+        return int(self.W.shape[1])
+
+    def weights(self, p) -> jnp.ndarray:
+        """The species weights ``W(p)``, ``(n_species, width)``."""
+        if self.idx.size == 0:
+            return self.W
+        return self.W + jnp.tensordot(jnp.asarray(p)[self.idx] - self.theta0, self.dW, axes=1)
+
+
+def _resolve_observable_columns(plant: Plant, observables) -> tuple[tuple, int]:
+    """Resolve each :class:`PlantObservable` to ``(endpoint, measurement)``.
+
+    The measurement (:class:`_Measurement`) is the linear map from the stream
+    to its measured channels (:func:`aquakin.plant.measures.measure_map`), with
+    its parameter-dependent weights addressed in the plant's flat parameter
+    vector. Returns the resolved tuple and the total number of observed
+    columns. The columns run in observable order, channels within a stream
+    first; the consumers (the calibration forward model, the plant Fisher
+    information, the sensor ranking) reconstruct and concatenate the streams in
+    the same order."""
     resolved: list[tuple] = []
     n_observed = 0
     for observable in observables:
         endpoint, stream_model = _resolve_endpoint_species(plant, observable.stream)
-        if observable.channels is None:
-            ch_idx = jnp.arange(stream_model.n_species)
-            n_observed += int(stream_model.n_species)
-        else:
-            for s in observable.channels:
-                if s not in stream_model.species_index:
-                    suffix = did_you_mean(s, list(stream_model.species))
-                    raise KeyError(
-                        f"Unknown observed channel '{s}' in stream "
-                        f"'{observable.stream}' (model '{stream_model.name}').{suffix}"
-                    )
-            ch_idx = jnp.asarray([stream_model.species_index[s] for s in observable.channels])
-            n_observed += len(observable.channels)
-        resolved.append((endpoint, ch_idx))
+        try:
+            mm = measure_map(stream_model, observable.channels)
+        except KeyError as exc:
+            message = exc.args[0] if exc.args else str(exc)
+            raise KeyError(f"{message} (stream '{observable.stream}')") from None
+        idx = np.asarray(
+            [plant.parameter_index(f"{stream_model.name}.{name}") for name in mm.params], int
+        )
+        measurement = _Measurement(
+            stream=observable.stream,
+            W=jnp.asarray(mm.W),
+            q=jnp.asarray(mm.q),
+            t=jnp.asarray(mm.t),
+            idx=idx,
+            theta0=jnp.asarray(mm.theta0),
+            dW=jnp.asarray(mm.dW),
+            uses_temperature=mm.uses_temperature,
+        )
+        n_observed += measurement.width
+        resolved.append((endpoint, measurement))
     return tuple(resolved), n_observed
+
+
+def measured(C, Q, T, measurement: _Measurement, p):
+    """The measured channels of a stream (any leading time axes).
+
+    Parameters
+    ----------
+    C : jnp.ndarray
+        Concentrations, ``(..., n_species)``.
+    Q : jnp.ndarray
+        Flow, ``(...)``.
+    T : jnp.ndarray or None
+        Temperature, ``(...)``, or ``None`` for a stream that carries none.
+    measurement : _Measurement
+        The resolved channels.
+    p : jnp.ndarray
+        The plant parameter vector of the run.
+
+    Returns
+    -------
+    jnp.ndarray
+        ``(..., n_channels)``.
+
+    Raises
+    ------
+    ValueError
+        If a channel reads the temperature of a stream that carries none.
+    """
+    out = C @ measurement.weights(p) + jnp.asarray(Q)[..., None] * measurement.q
+    if measurement.uses_temperature:
+        if T is None:
+            raise ValueError(
+                f"stream '{measurement.stream}' carries no temperature to measure; give the "
+                f"influents upstream of it a temperature"
+            )
+        out = out + jnp.asarray(T)[..., None] * measurement.t
+    return out
 
 
 def _resolve_plant_problem(
@@ -341,7 +428,7 @@ def _resolve_plant_problem(
 ) -> tuple[_CalibrationProblem, tuple, bool]:
     """Validate + coerce the plant-calibration arguments into a
     ``_CalibrationProblem`` (one or several datasets). Returns the problem, the
-    resolved observables ``((endpoint, channel_index_array), ...)`` for the forward
+    resolved observables ``((endpoint, measurement), ...)`` for the forward
     model, and ``use_c0_as_y0`` (whether the forward model reads the per-dataset
     ``C0`` as the plant ``y0``)."""
     ns = _PlantParamNamespace(plant)
@@ -607,6 +694,7 @@ def calibrate_plant(
     check_finite: bool = True,
     integrator=None,
     diff: DifferentiationConfig = DifferentiationConfig(),
+    progress=None,
     _compiled_cache: dict | None = None,
     _ic_start: list | None = None,
 ) -> CalibrationResult:
@@ -710,6 +798,10 @@ def calibrate_plant(
     diff : DifferentiationConfig, optional
         How the gradient flows through ``plant.solve``. Default
         ``mode='reverse', method='stable'`` -- the cap-free discrete adjoint.
+    progress : callable, optional
+        Called with a :class:`aquakin.Progress` at every objective evaluation;
+        raise :class:`aquakin.Cancelled` from it to stop the fit (see
+        :mod:`aquakin.progress`).
 
     Returns
     -------
@@ -828,5 +920,6 @@ def calibrate_plant(
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)
 
-    result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts)
+    extra = {} if progress is None else {"progress": progress}
+    result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts, **extra)
     return _fit_result(problem, fm, cfg, bundle, result, opt_bounds)

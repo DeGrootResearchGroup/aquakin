@@ -57,3 +57,6 @@ Thumbs.db
 !.claude/notes/
 reference/
 figures/
+
+# Flowsheet widget build dependencies (the built bundle is committed in aquakin_ui/widget/serve)
+ui-widget/node_modules/

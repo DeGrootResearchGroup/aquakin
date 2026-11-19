@@ -544,6 +544,10 @@ class CSTRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     def state_size(self) -> int:
         return self.model.n_species
 
+    def state_names(self) -> tuple[str, ...]:
+        """Names of the state entries, in order: the species concentrations."""
+        return tuple(self.model.species)
+
     def set_temperature(self, temperature_K: float) -> None:
         """Set this reactor's static operating temperature (Kelvin).
 

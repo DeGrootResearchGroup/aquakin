@@ -21,6 +21,90 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `Plant.to_spec()` and `Plant.from_spec(spec)`: a plant as a JSON/YAML file and
+  back. A spec (format 2) writes every setting, defaults included, with the
+  aquakin version that wrote it, so a later change of default cannot change a
+  saved plant. It lists each unit by its stable name with an optional display
+  `label` (`Plant.labels`), the connections as `"unit.port -> unit.port"` (or
+  with a state translator or recycle seed), constant influents, named streams,
+  endpoints and recycle options, and every model under `models:`, either shipped
+  or a model YAML file next to the spec, each with a content fingerprint; reading
+  a spec whose model has changed since warns (`SpecWarning`). Specs are validated
+  strictly: an unknown or misspelled setting, a value of the wrong type or a
+  model that is not listed is an error naming where it is, and YAML is read with
+  YAML 1.2 rules (`1e-5` is a number, `on` is text). A rebuilt BSM1 has a
+  bit-identical right-hand side. What a spec cannot express yet (a heat-balance
+  temperature model, array-valued settings) raises a `SpecError` naming it.
+  Controllers derived from a closed-loop `Aeration` or feedback `DosingUnit` are
+  not written; they are derived again. Writing a spec to a path
+  (`aquakin.plant.write_spec`, also exported with `load_spec_file`, `check_spec`,
+  `spec_inputs` and `spec_changes`) checks everything before touching the disk,
+  copies a model file from outside the project into `models/` together with
+  every file it `extends:`, and replaces the spec atomically. NaN is refused as a
+  setting everywhere (`inf` stays allowed where it means "no limit"), and a model
+  file may not take the name of a shipped model.
+- Plant observables can measure more than species: `"Q"` (flow), `"T"`
+  (temperature), `"COD"`, `"TKN"`, `"NOx"`, `"TN"` (`TKN + NOx`), `"TP"`,
+  `"TSS"`, or a `Measure` (any weighted sum of species, flow and temperature),
+  in `PlantObservable` / `SensorSet` channels. They follow what a laboratory
+  measures: dissolved oxygen, nitrate, hydrogen and methane are not COD,
+  dissolved N₂, N₂O and NO are in no nitrogen channel, and a digester's
+  headspace is in none. The composition weights follow the run's parameters, so
+  a fit of `i_XB` sees TN move with it. Calibration, plant Fisher information,
+  profile likelihood and sensor ranking all accept them. `StreamSeries` gains a
+  `T` trajectory for a stream that carries a temperature.
+  `composition_table` also serves a model read from a file that `extends:` a
+  shipped model with the same species, evaluated with its own parameters.
+- Studies (`aquakin.study`, `aquakin study run|check|freeze|unfreeze|copy`): an
+  analysis of a flowsheet project saved in the project with its results: a
+  simulation (steady state or dynamic), a Fisher information, a calibration
+  against a data table, a profile likelihood, or a ranking of sensor sets. Results are
+  plain YAML / CSV files keyed by name. A study is reported stale when the
+  flowsheet, a model or an influent table it ran on changes (saying which), and
+  a newer aquakin is noted without making it stale. A frozen study runs on a
+  snapshot of its plant with every model flattened (shipped models too), so
+  neither project edits nor upgrades change it; unfreezing deletes its results.
+- Progress reports and cancelling: `Plant.calibrate`,
+  `plant_profile_likelihood`, `plant_rank_sensor_sets` and
+  `plant_fisher_information` take `progress=`, a callable that receives an
+  `aquakin.Progress` at each objective evaluation, profile point or run, and
+  can raise `aquakin.Cancelled` to stop the analysis.
+- Plant states by name: every unit names its state entries
+  (`unit.state_names()`), and `Plant.state_names()`, `Plant.named_state(y)` and
+  `Plant.state_from_named(named)` turn a flat state into
+  `{unit: {name: value}}` and back, so a stored state survives a change of unit
+  order. **Custom units** implementing the `Unit` protocol should add
+  `state_names()`.
+- `read_influent_table` / `write_influent_table`: an influent as a headed table
+  (`t`, `Q`, optional `T`, species) that reads back exactly. A flowsheet spec
+  keeps a time-varying influent as such a table beside it, with a fingerprint.
+- `spec_fingerprint(spec)`: a hash of the plant a flowsheet file builds
+  (settings, wiring, model and influent content; not layout, labels, file
+  locations or whether a number is written `1000` or `1000.0`), to tell when a
+  saved result no longer matches its flowsheet.
+- Example projects in `examples/projects/`: BSM1, and BSM2 with its 15 °C ASM1 as
+  a model file that extends the shipped ASM1. The BSM2 project rebuilds the plant
+  `build_bsm2` makes, run with the BSM2 parameter set, to a bit-identical
+  right-hand side.
+- `aquakin-ui` (`pip install "aquakin[ui]"`): a browser flowsheet editor. Drag
+  units from a palette, wire their ports, edit settings in a form generated from
+  each unit's own documentation, see aquakin's errors for each unit and for the
+  whole plant, and open or save flowsheet specs (saved by the same writer as
+  `Plant.to_spec`, so a model or influent file from elsewhere is copied into
+  the project). A Studies tab lists the project's studies with their status and
+  runs them in the background with progress and cancel; Save refuses to
+  overwrite a flowsheet that changed on disk since it was opened.
+- A unit catalogue for front ends, `aquakin.plant.catalog`. It describes each
+  plant unit type as plain JSON-compatible data: its settings, with types,
+  defaults and the help text from the unit's docstring; how its ports follow
+  from those settings; and which settings must be given one at a time. Settings
+  are read from each unit's constructor, so new arguments appear without
+  editing the catalogue. `check_unit(kind, name, settings)` builds the real unit
+  and reports its ports or the constructor's error.
+- An `aquakin` command. `aquakin catalog` prints the catalogue as JSON, and
+  `aquakin serve` answers JSON-line requests on standard input and output
+  (`catalog`, `models`, `model`, `check_unit`, `check_spec`, `ping`), so a separate process
+  such as a flowsheet editor can use aquakin without importing it.
 - `Aeration(stripped={"SN2O": 1.0, "SNO": 1.0})` strips dissolved gases other
   than oxygen in an aerated tank, inside the solve. Each gas transfers at
   `ratio × kLa_O2 × (sat − C)`, with the saturation 0 by default, and follows the
@@ -153,6 +237,7 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   phosphorus uptake rate written as 1/d where the stoichiometry is per g P.
   Turn it off with `check_units(check_stoichiometry=False)`.
 
+
 ### Changed
 
 - A plant created without `time_unit` whose kinetic models use different time
@@ -249,6 +334,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- A unit can no longer be named after one of its plant's models (for example a
+  splitter named `asm1`), which made `plant.parameter_index("asm1.muH")` return
+  the splitter's flow setpoint instead of the kinetic rate. Unit, port and
+  influent names containing `.`, `->` or whitespace are refused too, since
+  endpoints are written `unit.port`. Both raise `WiringError`.
 - `asm3_2step_n2o` grows AOB at Pocquet et al.'s maximum growth rate. The
   hydroxylamine-oxidation growth process (Pocquet 2016, Table 3, process 2) used
   the specific HAO rate `q_AOB_HAO` (5.2 g N/(g COD·d), which is μ/Y) as if it

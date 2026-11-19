@@ -361,6 +361,62 @@ primitives `monte_carlo`, `compare_scenarios` and `optimize_design` propagate
 input uncertainty and size designs to a permit at minimum cost. See
 `examples/bsm2_ghg_cost_report.py`.
 
+### Saving a plant as a file (`to_spec` / `from_spec`)
+
+A plant can be written as a file and rebuilt from it:
+
+```python
+plant.to_spec("bsm1.yaml")                  # or spec = plant.to_spec()
+same = aquakin.Plant.from_spec("bsm1.yaml")  # same units, wiring and streams
+```
+
+The file lists every unit by its stable name (with an optional display `label`)
+and all of its settings, defaults included, together with the aquakin version
+that wrote it; the connections as `unit.port -> unit.port`; constant influents,
+named streams and endpoints; and the models the units use, each shipped or a
+model YAML file beside the spec, with a fingerprint that warns when the model
+has changed since. `examples/projects/bsm2/` is BSM2 as such a project: its
+15 °C ASM1 is a short model file that `extends:` the shipped ASM1. A
+time-varying influent is kept as a table file beside the spec. A misspelled
+setting or a value of the wrong type is an error naming where it is, and
+anything a spec cannot express yet raises a `SpecError` that names it.
+`aquakin.plant.spec.spec_fingerprint(spec)` hashes what the spec simulates, to
+tell when a saved result no longer matches it.
+
+### The flowsheet editor (`aquakin-ui`)
+
+```bash
+pip install "aquakin[ui]"
+aquakin-ui examples/projects/bsm2/flowsheet.yaml
+```
+
+opens a flowsheet editor in your browser, served on this machine only: drag
+units from a palette, wire their ports, edit each unit in a form generated from
+its own documentation, and see aquakin's errors for each unit and for the whole
+plant as you edit. **Open** and **Save** read and write the spec files above.
+The editor never imports aquakin itself; it asks an `aquakin serve` worker.
+
+### The unit catalogue and the `aquakin` command
+
+`aquakin.plant.catalog` describes every plant unit type as plain data: its
+settings (types, defaults and help text, read from the unit's own constructor
+and docstring), how its ports follow from those settings, and which settings
+are mutually exclusive. It is meant for front ends such as a flowsheet editor.
+`check_unit(kind, name, settings)` builds the real unit and returns its ports,
+or the constructor's error message.
+
+The same information is available from the command line, for a front end
+running in another process:
+
+```bash
+aquakin catalog          # the catalogue as JSON
+aquakin serve            # answer JSON-line requests on stdin/stdout
+```
+
+`aquakin serve` reads one request per line (`{"id": 1, "command": "catalog"}`)
+and answers each with one line; the commands are `ping`, `catalog`, `models`,
+`model`, `check_unit` and `check_spec`.
+
 ## Advanced: differentiation & sensitivity
 
 Every solve — reactor or whole plant — is differentiable. The machinery below is

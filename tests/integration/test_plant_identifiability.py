@@ -723,3 +723,113 @@ def test_rank_input_validation(plant):
         plant_rank_sensor_sets(plant, [bad], T_OBS, [K1])
     with pytest.raises(KeyError, match="Unknown observed channel"):
         plant_rank_sensor_sets(plant, [SensorSet([("tank", ["Z"])], sigma=1.0)], T_OBS, [K1])
+
+
+def test_measured_channels_in_fisher_information_and_ranking(plant):
+    """A weighted sum of species (a Measure) and the flow are channels like any
+    species: each ranking score is the criterion of that set's own Fisher
+    information, and forward and reverse sensitivities agree on a measure."""
+    from aquakin.plant import Measure
+
+    total = Measure("A+B", {"A": 1.0, "B": 1.0})
+    free = [K1, K2]
+    kw = dict(t_span=(0.0, 20.0))
+    sets = [
+        [("tank", [total])],
+        [("tank", ["A", total])],
+        [("tank", ["Q", "B"])],
+    ]
+    cands = [SensorSet(obs, sigma=0.01) for obs in sets]
+    ranked = plant_rank_sensor_sets(plant, cands, T_OBS, free, **kw)
+    by_index = {c.index: c for c in ranked}
+    for i, obs in enumerate(sets):
+        assert by_index[i].value == pytest.approx(
+            _criterion_of(plant, obs, 0.01, free, **kw), rel=1e-9
+        )
+    fwd = plant_fisher_information(plant, sets[1], T_OBS, free, sigma=0.01, mode="forward", **kw)
+    rev = plant_fisher_information(plant, sets[1], T_OBS, free, sigma=0.01, mode="reverse", **kw)
+    # The two modes differentiate slightly different discretizations (as in
+    # test_forward_and_reverse_agree).
+    np.testing.assert_allclose(fwd.matrix, rev.matrix, rtol=1e-3)
+    # The flow of this fixed-flow tank carries no information about the rates.
+    flow_only = plant_fisher_information(plant, [("tank", ["Q"])], T_OBS, free, sigma=1.0, **kw)
+    np.testing.assert_allclose(flow_only.matrix, 0.0, atol=1e-12)
+
+
+def test_a_measure_is_the_weighted_sum_of_its_species(plant):
+    from aquakin.plant import Measure
+    from aquakin.plant.calibrate import _normalize_observables, _resolve_observable_columns
+    from aquakin.plant.identifiability import _observed_channels
+
+    params = plant.default_parameters()
+    sol = plant.solve(t_span=(0.0, 20.0), t_eval=T_OBS, params=params)
+    specs = _normalize_observables(
+        [("tank", ["A", "B", Measure("2A-B", {"A": 2.0, "B": -1.0}), "Q"])], None, None
+    )
+    resolved, n = _resolve_observable_columns(plant, specs)
+    obs = np.asarray(_observed_channels(plant, resolved, sol.t, sol.state, params))
+    assert n == 4 and obs.shape == (len(T_OBS), 4)
+    np.testing.assert_allclose(obs[:, 2], 2 * obs[:, 0] - obs[:, 1], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(obs[:, 3], Q, rtol=1e-12)
+    np.testing.assert_allclose(
+        obs[:, 0], np.asarray(plant.stream(sol, "tank", params).C_named("A")), rtol=1e-10
+    )
+
+
+def test_profile_progress_counts_points_and_a_cancel_is_not_a_gap(plant, monkeypatch):
+    """The profile reports each grid point and forwards each inner fit's reports;
+    a Cancelled raised at a point ends the sweep instead of becoming a gap."""
+    import aquakin.plant.identifiability as ident
+    from aquakin import Cancelled, Progress
+
+    idx = plant.parameter_index(K1)
+
+    def fake_calibrate(plant_, observations, t_obs, free, **kw):
+        kw["progress"](Progress("fit", 1, None, "start 1 of 1, evaluation 1"))
+        return SimpleNamespace(loss=float(kw["params"][idx]) ** 2, params=kw["params"])
+
+    monkeypatch.setattr(ident, "calibrate_plant", fake_calibrate)
+    kw = dict(
+        grid=[0.1, 0.2, 0.3],
+        profile_param=K1,
+        observables=[("tank", ["A"])],
+        polish=False,
+    )
+    seen = []
+    plant_profile_likelihood(
+        plant, jnp.zeros((T_OBS.shape[0], 1)), T_OBS, [K1, K2], progress=seen.append, **kw
+    )
+    assert [(p.stage, p.done, p.total) for p in seen[::2]] == [("profile", i, 3) for i in range(3)]
+    assert seen[1].message == f"{K1} = 0.2: start 1 of 1, evaluation 1"
+
+    def cancel_second(p):
+        if p.done == 1:
+            raise Cancelled()
+
+    with pytest.raises(Cancelled):
+        plant_profile_likelihood(
+            plant, jnp.zeros((T_OBS.shape[0], 1)), T_OBS, [K1, K2], progress=cancel_second, **kw
+        )
+
+
+def test_fisher_and_ranking_report_each_run_and_can_be_cancelled(plant):
+    from aquakin import Cancelled
+
+    seen = []
+    plant_fisher_information(
+        plant, [("tank", ["A"])], T_OBS, [K1], sigma=0.1, t_span=(0.0, 20.0), progress=seen.append
+    )
+    assert [(p.stage, p.done, p.total) for p in seen] == [("design", 0, 1)]
+
+    def cancel(p):
+        raise Cancelled()
+
+    with pytest.raises(Cancelled):
+        plant_rank_sensor_sets(
+            plant,
+            [SensorSet([("tank", ["A"])], sigma=0.1)],
+            T_OBS,
+            [K1],
+            t_span=(0.0, 20.0),
+            progress=cancel,
+        )

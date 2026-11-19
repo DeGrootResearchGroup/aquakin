@@ -21,6 +21,17 @@ from aquakin.plant.aeration_system import (
 )
 from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
 from aquakin.plant.calibrate import PlantObservable, calibrate_plant
+from aquakin.plant.measures import Measure
+from aquakin.plant.spec import (
+    SpecError,
+    SpecWarning,
+    check_spec,
+    load_spec_file,
+    spec_changes,
+    spec_fingerprint,
+    spec_inputs,
+    write_spec,
+)
 from aquakin.plant.identifiability import (
     SensorSet,
     plant_fisher_information,
@@ -62,7 +73,12 @@ from aquakin.plant.characterize import (
     characterize_influent,
     fractionate,
 )
-from aquakin.plant.influent import InfluentSeries, read_influent_csv
+from aquakin.plant.influent import (
+    InfluentSeries,
+    read_influent_csv,
+    read_influent_table,
+    write_influent_table,
+)
 from aquakin.plant.interfaces import ADM1toASM1, ASM1toADM1
 from aquakin.plant.mbr import MBRUnit
 from aquakin.plant.mixer import (
@@ -181,6 +197,7 @@ __all__ = [
     "MBBRUnit",
     "MBRUnit",
     "MassBalance",
+    "Measure",
     "MixerUnit",
     "NoDigesterError",
     "OperatingCost",
@@ -203,6 +220,8 @@ __all__ = [
     "SetpointSplitter",
     "SettlingModel",
     "SludgeMetrics",
+    "SpecError",
+    "SpecWarning",
     "StateTranslator",
     "StatelessUnit",
     "SteadyStateResult",
@@ -229,6 +248,7 @@ __all__ = [
     "carbon_footprint",
     "carbon_mass",
     "characterize_influent",
+    "check_spec",
     "co2e_from_energy",
     "ct_log_removal",
     "ct_value",
@@ -244,6 +264,7 @@ __all__ = [
     "evaluate_bsm2",
     "fractionate",
     "heating_energy",
+    "load_spec_file",
     "mass_balance",
     "methane_to_co2e",
     "mixing_energy",
@@ -259,14 +280,20 @@ __all__ = [
     "pumping_energy",
     "pumping_energy_bsm2",
     "read_influent_csv",
+    "read_influent_table",
     "required_airflow",
     "size_activated_sludge",
     "sludge_metrics",
     "solve_steady_state",
+    "spec_changes",
+    "spec_fingerprint",
+    "spec_inputs",
     "stripped_n2o",
     "t10_from_baffling",
     "t10_from_rtd",
     "time_average",
     "uv_dose",
     "uv_log_inactivation",
+    "write_influent_table",
+    "write_spec",
 ]

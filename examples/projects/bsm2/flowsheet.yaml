@@ -1,0 +1,462 @@
+format: 2
+aquakin: 0.2.0+gbdcf2db
+name: BSM2
+options:
+  time_unit: d
+  recycle_passes: 3
+  recycle_tol: 1.0e-08
+  recycle_max_passes: 100
+models:
+  asm1_bsm2:
+    source: models/asm1_bsm2.yaml
+    sha256: 40b630c7ac85ee8b055eb6bf5753ea1947ccde05149fdc7fcca010db2e6a1133
+  adm1:
+    source: shipped
+    sha256: 9a567d4c9658792403587ab3141392bd876189087a808ebd826d85ba5dc99004
+files: {}
+units:
+  influent:
+    kind: influent
+    model: asm1_bsm2
+    Q: 20648.0
+    T: 288.00808
+    composition:
+      SI: 27.2262
+      SS: 58.1762
+      XI: 92.499
+      XS: 363.9435
+      XB_H: 50.6833
+      SNH: 23.8595
+      SND: 5.6516
+      XND: 16.1298
+      SALK: 7.0
+    series: null
+  front_mix:
+    kind: mixer
+    input_port_names:
+    - fresh
+    - reject
+    model: asm1_bsm2
+  primary:
+    kind: primary_clarifier
+    model: asm1_bsm2
+    volume: 900.0
+    input_port_names:
+    - inlet
+    f_corr: 0.65
+    f_X: 0.85
+    f_PS: 0.007
+    t_m: 0.125
+    initial_flow: 20648.0
+    settling_species:
+    - XS
+    - XI
+    - XB_H
+    - XB_A
+    - XP
+    - XND
+    effluent_port: effluent
+    sludge_port: underflow
+  as_mix:
+    kind: mixer
+    input_port_names:
+    - primary_eff
+    - internal_recycle
+    - ras
+    model: asm1_bsm2
+  external_carbon:
+    kind: dosing
+    reagent:
+      model: asm1_bsm2
+      label: external carbon
+      composition:
+        SS: 400000.0
+    flow: 2.0
+    setpoint: null
+    measured_species: null
+    sensor: null
+    controller: null
+    gain: 1.0
+    Kp: 1.0
+    Ti: 0.05
+    Tt: 0.02
+    flow_offset: 0.0
+    flow_min: 0.0
+    flow_max: 1000000.0
+    input_port: in
+    output_port: out
+  tank1:
+    kind: cstr
+    model: asm1_bsm2
+    volume: 1500.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 288.15
+    aeration: null
+    output_port: out
+  tank2:
+    kind: cstr
+    model: asm1_bsm2
+    volume: 1500.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 288.15
+    aeration: null
+    output_port: out
+  tank3:
+    kind: cstr
+    model: asm1_bsm2
+    volume: 3000.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 288.15
+    aeration:
+      kla: 120.0
+      do_setpoint: null
+      do_sat: 8.0
+      species: SO
+      controller: null
+      sensor: null
+      gain: 1.0
+      Kp: 25.0
+      Ti: 0.002
+      Tt: 0.001
+      kla_offset: 120.0
+      kla_min: 0.0
+      kla_max: 360.0
+      temperature_correction: false
+      ref_T: 293.15
+      alpha: 1.0
+      beta: 1.0
+      pressure_factor: 1.0
+      kla_theta: 1.024
+      saturation_model: benson_krause
+      stripped: []
+    output_port: out
+  tank4:
+    kind: cstr
+    model: asm1_bsm2
+    volume: 3000.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 288.15
+    aeration:
+      kla: 120.0
+      do_setpoint: null
+      do_sat: 8.0
+      species: SO
+      controller: null
+      sensor: null
+      gain: 1.0
+      Kp: 25.0
+      Ti: 0.002
+      Tt: 0.001
+      kla_offset: 120.0
+      kla_min: 0.0
+      kla_max: 360.0
+      temperature_correction: false
+      ref_T: 293.15
+      alpha: 1.0
+      beta: 1.0
+      pressure_factor: 1.0
+      kla_theta: 1.024
+      saturation_model: benson_krause
+      stripped: []
+    output_port: out
+  tank5:
+    kind: cstr
+    model: asm1_bsm2
+    volume: 3000.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 288.15
+    aeration:
+      kla: 60.0
+      do_setpoint: null
+      do_sat: 8.0
+      species: SO
+      controller: null
+      sensor: null
+      gain: 1.0
+      Kp: 25.0
+      Ti: 0.002
+      Tt: 0.001
+      kla_offset: 120.0
+      kla_min: 0.0
+      kla_max: 360.0
+      temperature_correction: false
+      ref_T: 293.15
+      alpha: 1.0
+      beta: 1.0
+      pressure_factor: 1.0
+      kla_theta: 1.024
+      saturation_model: benson_krause
+      stripped: []
+    output_port: out
+  tank5_split:
+    kind: setpoint_splitter
+    model: asm1_bsm2
+    output_port_flows:
+      internal_recycle: 61944.0
+    remainder_port: to_settler
+  settler:
+    kind: clarifier
+    model: asm1_bsm2
+    area: 1500.0
+    height: 4.0
+    overflow_Q: null
+    underflow_Q: 20948.0
+    n_layers: 10
+    feed_layer: 5
+    init_underflow_Q: 20948.0
+    init_feed_tss: null
+    particulate_species:
+    - XS
+    - XI
+    - XB_H
+    - XB_A
+    - XP
+    - XND
+    settling_params:
+      v0: 474.0
+      vmax: 250.0
+      rh: 0.000576
+      rp: 0.00286
+      fns: 0.00228
+      X_threshold: 3000.0
+    tss_factors:
+      XS: 0.75
+      XI: 0.75
+      XB_H: 0.75
+      XB_A: 0.75
+      XP: 0.75
+      XND: 0.0
+    composition_mode: lumped_tss
+    soluble_holdup: true
+    interface_flux: godunov
+    input_port: inlet
+    overflow_port: overflow
+    underflow_port: underflow
+  underflow_split:
+    kind: setpoint_splitter
+    model: asm1_bsm2
+    output_port_flows:
+      ras: 20648.0
+    remainder_port: waste
+  thickener:
+    kind: thickener
+    model: asm1_bsm2
+    target_tss_percent: 7.0
+    tss_removal_percent: 98.0
+    settling_species:
+    - XS
+    - XI
+    - XB_H
+    - XB_A
+    - XP
+    - XND
+    tss_species:
+    - XS
+    - XI
+    - XB_H
+    - XB_A
+    - XP
+    tss_factor: 0.75
+    nominal_underflow_fraction: 0.03
+    input_port: inlet
+    overflow_port: overflow
+    underflow_port: underflow
+  sludge_mix:
+    kind: mixer
+    input_port_names:
+    - primary_sludge
+    - thickener_under
+    model: asm1_bsm2
+  digester:
+    kind: digester
+    model: adm1
+    volume: 3400.0
+    input_port_names:
+    - inlet
+    conditions:
+      T: 308.15
+    gas_species:
+    - S_gas_h2
+    - S_gas_ch4
+    - S_gas_co2
+    output_port: effluent
+  dewatering:
+    kind: thickener
+    model: asm1_bsm2
+    target_tss_percent: 28.0
+    tss_removal_percent: 98.0
+    settling_species:
+    - XS
+    - XI
+    - XB_H
+    - XB_A
+    - XP
+    - XND
+    tss_species:
+    - XS
+    - XI
+    - XB_H
+    - XB_A
+    - XP
+    tss_factor: 0.75
+    nominal_underflow_fraction: 0.02
+    input_port: inlet
+    overflow_port: overflow
+    underflow_port: underflow
+  reject_mix:
+    kind: mixer
+    input_port_names:
+    - thickener_reject
+    - dewatering_reject
+    model: asm1_bsm2
+connections:
+- front_mix.out -> primary.inlet
+- primary.effluent -> as_mix.primary_eff
+- as_mix.out -> external_carbon.in
+- external_carbon.out -> tank1.inlet
+- tank1.out -> tank2.inlet
+- tank2.out -> tank3.inlet
+- tank3.out -> tank4.inlet
+- tank4.out -> tank5.inlet
+- tank5.out -> tank5_split.in
+- tank5_split.to_settler -> settler.inlet
+- settler.underflow -> underflow_split.in
+- from: tank5_split.internal_recycle
+  to: as_mix.internal_recycle
+  seed:
+    Q: 0.0
+    T: 288.15
+    concentrations:
+      SI: 30.0
+      SS: 60.0
+      XI: 25.0
+      XS: 200.0
+      XB_H: 500.0
+      XB_A: 100.0
+      XP: 50.0
+      SO: 2.0
+      SNO: 5.0
+      SNH: 10.0
+      SND: 1.0
+      XND: 5.0
+      SALK: 4.0
+- from: underflow_split.ras
+  to: as_mix.ras
+  seed:
+    Q: 0.0
+    T: 288.15
+    concentrations:
+      SI: 30.0
+      SS: 60.0
+      XI: 25.0
+      XS: 200.0
+      XB_H: 500.0
+      XB_A: 100.0
+      XP: 50.0
+      SO: 2.0
+      SNO: 5.0
+      SNH: 10.0
+      SND: 1.0
+      XND: 5.0
+      SALK: 4.0
+- primary.underflow -> sludge_mix.primary_sludge
+- underflow_split.waste -> thickener.inlet
+- thickener.underflow -> sludge_mix.thickener_under
+- from: sludge_mix.out
+  to: digester.inlet
+  translator:
+    kind: asm1_to_adm1
+    pH_adm: 7.0
+    T_op: 308.15
+    needs_dest_pH: true
+    strict: false
+    strict_tol: 1.0e-06
+    CODequiv: 2.857142857142857
+    fnaa: 0.098
+    fnxc: 0.0376
+    fnbac: 0.08
+    fxni: 0.060000000000000005
+    fsni: 0.0
+    fsni_adm: 0.060000000000000005
+    frlixs: 0.7
+    frlibac: 0.4
+    frxs_adm: 0.68
+    fdegrade_adm: 0.0
+    R: 0.083145
+    T_base: 298.15
+    pK_w_base: 14.0
+    pK_a_va_base: 4.86
+    pK_a_bu_base: 4.82
+    pK_a_pro_base: 4.88
+    pK_a_ac_base: 4.76
+    pK_a_co2_base: 6.35
+    pK_a_IN_base: 9.25
+- from: digester.effluent
+  to: dewatering.inlet
+  translator:
+    kind: adm1_to_asm1
+    pH_adm: 7.0
+    T_op: 308.15
+    needs_src_pH: true
+    fnaa: 0.098
+    fnxc: 0.0376
+    fnbac: 0.08
+    fxni: 0.060000000000000005
+    fsni: 0.0
+    fsni_adm: 0.060000000000000005
+    frxs_as: 0.79
+    fdegrade_as: 0.0
+    R: 0.083145
+    T_base: 298.15
+    pK_w_base: 14.0
+    pK_a_va_base: 4.86
+    pK_a_bu_base: 4.82
+    pK_a_pro_base: 4.88
+    pK_a_ac_base: 4.76
+    pK_a_co2_base: 6.35
+    pK_a_IN_base: 9.25
+- thickener.overflow -> reject_mix.thickener_reject
+- dewatering.overflow -> reject_mix.dewatering_reject
+- from: reject_mix.out
+  to: front_mix.reject
+  seed:
+    Q: 0.0
+    T: 288.15
+    concentrations:
+      SI: 30.0
+      SS: 60.0
+      XI: 25.0
+      XS: 200.0
+      XB_H: 500.0
+      XB_A: 100.0
+      XP: 50.0
+      SO: 2.0
+      SNO: 5.0
+      SNH: 10.0
+      SND: 1.0
+      XND: 5.0
+      SALK: 4.0
+- influent.out -> front_mix.fresh
+streams:
+  effluent: settler.overflow
+  internal_recycle: tank5_split.internal_recycle
+  ras: underflow_split.ras
+  wastage: underflow_split.waste
+  primary_effluent: primary.effluent
+  primary_sludge: primary.underflow
+  thickener_overflow: thickener.overflow
+  reject: reject_mix.out
+  dewatering_reject: dewatering.overflow
+  disposal_sludge: dewatering.underflow
+influent_endpoint: front_mix.fresh
+effluent_endpoint: settler.overflow

@@ -95,6 +95,10 @@ class PIController:
     def state_size(self) -> int:
         return 1  # the integral state x_i
 
+    def state_names(self) -> tuple[str, ...]:
+        """The one state entry: the controller's ``integral``."""
+        return ("integral",)
+
     @property
     def signal_names(self) -> tuple[str, ...]:
         """Control-signal names this unit publishes to the bus (see

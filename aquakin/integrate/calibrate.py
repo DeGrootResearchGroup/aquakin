@@ -1909,20 +1909,39 @@ def _resolve_starts(problem: _CalibrationProblem, starts) -> list:
 
 
 def _run_multistart(
-    cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bounds, starts=None
+    cfg: _FitConfig, bundle: _ObjectiveBundle, theta0, opt_bounds, starts=None, progress=None
 ) -> _OptOut:
     """Run the optimiser from the start point, then from ``n_starts - 1``
     deterministic jittered restarts, keeping the lowest finite loss. With an
     explicit ``starts`` list (full unconstrained theta vectors), run from each
     of those instead (``theta0`` is then unused).
 
+    ``progress`` (see :mod:`aquakin.progress`) is told of every objective
+    evaluation, so a caller can follow the fit and cancel it between two.
+
     A start whose forward solve fails part-way (see :func:`_is_solve_failure`)
     is skipped with a ``RuntimeWarning``; if every start fails, a
     ``RuntimeError`` with remedies is raised, chained to the first failure.
     """
+    from aquakin.progress import report
+
     bounds, lb, ub, ls_bounds, _has = opt_bounds
+    n_planned = len(starts) if starts is not None else cfg.n_starts
+    evaluations = [0]
+    current = [0]
+
+    def _tick():
+        evaluations[0] += 1
+        report(
+            progress,
+            "fit",
+            evaluations[0],
+            None,
+            f"start {current[0] + 1} of {n_planned}, evaluation {evaluations[0]}",
+        )
 
     def _np_loss_and_grad(x_np):
+        _tick()
         x = jnp.asarray(x_np)
         val, grad = bundle.value_and_grad(x)
         return float(val), np.asarray(grad)
@@ -1942,8 +1961,12 @@ def _run_multistart(
             )
 
         def _lsq(x0):
+            def _residual(x):
+                _tick()
+                return np.asarray(bundle.res_j(jnp.asarray(x)), dtype=float)
+
             r = least_squares(
-                lambda x: np.asarray(bundle.res_j(jnp.asarray(x)), dtype=float),
+                _residual,
                 np.asarray(x0),
                 jac=lambda x: np.asarray(bundle.jac_j(jnp.asarray(x)), dtype=float),
                 method="trf",
@@ -1987,6 +2010,7 @@ def _run_multistart(
     failures = []  # (start index, exception) of starts whose solve failed
 
     def _try_from(s, x_start):
+        current[0] = s
         try:
             return _run_from(x_start)
         except Exception as exc:
