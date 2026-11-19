@@ -17,21 +17,26 @@ AERATION_MODES = ("none", "kla", "do_setpoint")
 _READ_ONLY = ("unsupported", "reagent")
 
 
+def _float_text(value: float) -> str:
+    """The shortest text that reads back as exactly ``value`` (``240``, not ``240.0``).
+
+    A field must never show a rounded value: Apply reads the text back, so a
+    rounded one would silently replace the stored number.
+    """
+    text = repr(value)
+    return text[:-2] if text.endswith(".0") else text
+
+
 def _text(value) -> str:
     """A setting value as the text a field shows."""
     if value is None:
         return ""
     if isinstance(value, dict):
-        return ", ".join(
-            f"{k}: {v:g}"
-            if isinstance(v, (int, float)) and not isinstance(v, bool)
-            else f"{k}: {v}"
-            for k, v in value.items()
-        )
+        return ", ".join(f"{k}: {_text(v)}" for k, v in value.items())
     if isinstance(value, list):
         return ", ".join(str(v) for v in value)
     if isinstance(value, float):
-        return f"{value:g}"
+        return _float_text(value)
     return str(value)
 
 
@@ -99,7 +104,7 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
                         f"condition {c['name']}",
                         value=_text(v),
                         hint=s["help"],
-                        placeholder=f"{default:g} (model default)"
+                        placeholder=f"{_text(default)} (model default)"
                         if default is not None
                         else "required",
                     )
@@ -202,6 +207,12 @@ def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, d
     for s in doc.catalog.settings(u.kind):
         name, t = s["name"], s["type"]
         if t == "conditions":
+            if not any(k.startswith("conditions.") for k in values):
+                # The model could not be described, so the form had no condition
+                # rows: the unit keeps the conditions it has.
+                if u.settings.get(name):
+                    settings[name] = u.settings[name]
+                continue
             conds = {
                 k.split(".", 1)[1]: _finite(str(v).strip())
                 for k, v in values.items()
@@ -213,7 +224,10 @@ def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, d
             mode = values.get("aeration.mode", "none")
             old = u.settings.get(name) or {}
             if mode != "none":
-                raw = str(values.get("aeration.value", "")).strip()
+                # The value field belongs to the mode the form was drawn with: after
+                # a switch of mode it holds the other mode's number, so it is not read.
+                shown = next((m for m in AERATION_MODES[1:] if old.get(m) is not None), "none")
+                raw = str(values.get("aeration.value", "")).strip() if mode == shown else ""
                 value = _finite(raw) if raw else (old.get(mode) or 0.0)
                 kept = {k: v for k, v in old.items() if k not in AERATION_MODES[1:]}
                 settings[name] = {**kept, mode: value}

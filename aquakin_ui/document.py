@@ -76,7 +76,8 @@ class Flowsheet:
         Raises
         ------
         ValueError
-            If the spec is not format 2 or a connection names an unknown unit.
+            If the spec is not format 2, a unit's kind is not in the catalogue,
+            or a connection names an unknown unit.
         """
         if data.get("format") != SPEC_FORMAT:
             raise ValueError(f"spec format {data.get('format')!r} is not {SPEC_FORMAT}")
@@ -91,6 +92,11 @@ class Flowsheet:
         doc.meta.setdefault("streams", {})
         layout = data.get("layout") or {}
         for uid, entry in (data.get("units") or {}).items():
+            if entry.get("kind") not in catalog.kinds:
+                raise ValueError(
+                    f"unit {uid!r} is of kind {entry.get('kind')!r}, which this aquakin "
+                    f"does not know"
+                )
             x, y = layout.get(uid, (0, 0))
             doc.units[uid] = Unit(
                 kind=entry["kind"],

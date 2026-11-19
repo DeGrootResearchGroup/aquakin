@@ -273,22 +273,24 @@ def test_simulate_results_and_the_dialog_say_what_went_wrong(tmp_path):
         assert ed.state.message == "could not set up the simulation: simulation_study failed"
         worker.fail = set()
         ed.simulate()
-        study = yaml.safe_load((project / "studies" / "simulation" / "study.yaml").read_text())
+        study = yaml.safe_load(
+            (project / "studies" / "simulation_plant" / "study.yaml").read_text()
+        )
         assert study["study"]["flowsheet"] == "../../plant.yaml"  # not flowsheet.yaml
         ed.state.panel = "properties"
         ed.simulate()  # already running: shows it
         assert ed.state.panel == "studies" and not ed.state.study_confirm_open
-        assert ed._runs["simulation"].wait(300)["event"] == "done"
+        assert ed._runs["simulation_plant"].wait(300)["event"] == "done"
 
         ed.show_results("nope")
         ed.show_results("short")
         assert "could not read the results of short" in ed.state.message
         assert "has no results; run it first" in ed.state.message
         ed.state.studies = [
-            {**st, "state": "stale"} if st["name"] == "simulation" else st
+            {**st, "state": "stale"} if st["name"] == "simulation_plant" else st
             for st in ed.state.studies
         ]
-        ed.show_results("simulation")
+        ed.show_results("simulation_plant")
         assert ed.state.results_note.startswith("The flowsheet has changed since this ran")
 
         ed.set_ask_replace(False)
@@ -325,6 +327,54 @@ def test_simulate_results_and_the_dialog_say_what_went_wrong(tmp_path):
         worker.fail = {"read_study"}
         ed.edit_study("short")
         assert ed.state.message.startswith("could not read study short")
+    finally:
+        ed.stop_runs()
+        ed.worker.stop()
+
+
+def test_studies_follow_the_spec_that_is_open(tmp_path):
+    project = _study_project(tmp_path)
+    (project / "second.yaml").write_text((project / "flowsheet.yaml").read_text())
+    server = get_server(name="aquakin-ui-follow-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+
+    def settings(name):
+        return yaml.safe_load((project / "studies" / name / "study.yaml").read_text())["study"]
+
+    try:
+        ed.set_ask_replace(False)
+        ed.simulate()
+        assert "flowsheet" not in settings("simulation")
+        assert ed._runs["simulation"].wait(300)["event"] == "done"
+        # A simulation pointed at another file of the folder is pointed back.
+        study = settings("simulation")
+        (project / "studies" / "simulation" / "study.yaml").write_text(
+            yaml.safe_dump({"study": {**study, "flowsheet": "../../second.yaml"}})
+        )
+        ed.simulate()
+        assert "flowsheet" not in settings("simulation")
+        assert ed._runs["simulation"].wait(300)["event"] == "done"
+
+        # Another spec in the folder has its own simulation and its own studies.
+        ed.open(project / "second.yaml")
+        ed.simulate()
+        assert settings("simulation_second")["flowsheet"] == "../../second.yaml"
+        assert ed._runs["simulation_second"].wait(300)["event"] == "done"
+        ed.freeze_study("simulation_second")
+        ed.simulate()
+        assert "simulation_second is frozen" in ed.state.message and not ed._runs
+
+        ed.new_study()
+        ed.save_study_dialog("fit", "simulate", {**ed.state.study_draft, "streams": ["tank.out"]})
+        assert settings("fit")["flowsheet"] == "../../second.yaml"
+        ed.edit_study("fit")
+        ed.save_study_dialog("fit", "simulate", {**ed.state.study_draft, "description": "kept"})
+        assert settings("fit") == {
+            "kind": "simulate",
+            "flowsheet": "../../second.yaml",
+            "description": "kept",
+            "streams": ["tank.out"],
+        }
     finally:
         ed.stop_runs()
         ed.worker.stop()

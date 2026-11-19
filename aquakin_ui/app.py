@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -63,8 +64,23 @@ PAGE_CSS = """
 """
 
 
-#: The study the Simulate button sets up and runs.
+#: The study the Simulate button sets up and runs for a project's flowsheet.yaml;
+#: another spec in the folder gets its own, ``simulation_<file name>``.
 SIMULATION = "simulation"
+#: The spec a study follows unless its ``flowsheet:`` says otherwise.
+DEFAULT_SPEC = "flowsheet.yaml"
+
+
+def simulation_name(spec: Path) -> str:
+    """The name of the Simulate study of the spec file ``spec``."""
+    if spec.name == DEFAULT_SPEC:
+        return SIMULATION
+    return SIMULATION + "_" + re.sub(r"[^A-Za-z0-9_-]", "_", spec.stem)
+
+
+def flowsheet_entry(spec: Path) -> dict:
+    """The ``flowsheet:`` setting a study of ``spec`` needs (none for flowsheet.yaml)."""
+    return {} if spec.name == DEFAULT_SPEC else {"flowsheet": f"../../{spec.name}"}
 
 
 def _plain_error(exc: Exception) -> str:
@@ -118,6 +134,7 @@ class Editor:
         self._saved: str | None = None  # the document as last opened or saved
         self._show_when_done: set[str] = set()  # runs whose results open when they finish
         self._results: dict = {}  # the results on show
+        self._study_flowsheet: str | None = None  # the spec the study being edited follows
         self._init_state(path)
         if path is not None:
             self.open(path, quiet=True)
@@ -607,7 +624,7 @@ class Editor:
         """Run the plant: save the flowsheet if it changed, set up the project's
         ``simulation`` study the first time (the plant at steady state, saving the
         streams that leave it), run it, and show its results when it finishes."""
-        if SIMULATION in self._runs:
+        if self._simulation() in self._runs:
             self.state.panel = "studies"
             return
         if self._saved is None or self._snapshot() != self._saved:
@@ -615,18 +632,37 @@ class Editor:
         else:
             self._run_simulation()
 
+    def _simulation(self) -> str:
+        """The name of the open spec's Simulate study."""
+        return simulation_name(Path(self.state.spec_path))
+
     def _run_simulation(self) -> None:
         project = self._project()
         spec = Path(self.state.spec_path).resolve()
+        name = simulation_name(spec)
+        folder = project / "studies" / name
 
         def work():
-            if not (project / "studies" / SIMULATION / "study.yaml").is_file():
+            if not (folder / "study.yaml").is_file():
                 settings = self.worker.request("simulation_study", spec=str(spec))
-                if spec.name != "flowsheet.yaml":
-                    settings["flowsheet"] = f"../../{spec.name}"
                 self.worker.request(
-                    "create_study", project=str(project), name=SIMULATION, study=settings
+                    "create_study",
+                    project=str(project),
+                    name=name,
+                    study={**settings, **flowsheet_entry(spec)},
                 )
+            else:
+                # The study must follow this spec: a copy or a hand edit may point
+                # it at another file of the folder.
+                settings = self.worker.request("read_study", path=str(folder))
+                follows = folder / settings.get("flowsheet", f"../../{DEFAULT_SPEC}")
+                if follows.resolve() != spec:
+                    settings = {k: v for k, v in settings.items() if k != "flowsheet"}
+                    self.worker.request(
+                        "update_study",
+                        path=str(folder),
+                        study={**settings, **flowsheet_entry(spec)},
+                    )
             return self.worker.request("list_studies", project=str(project))
 
         def done(studies):
@@ -635,8 +671,14 @@ class Editor:
                 return
             self.state.studies = [{**st, "running": st["name"] in self._runs} for st in studies]
             self.state.panel = "studies"
-            self._show_when_done.add(SIMULATION)
-            self.run_study(SIMULATION)
+            if (self._study(name) or {}).get("frozen"):
+                self.say(
+                    f"{name} is frozen on a snapshot of the plant, so it would not simulate "
+                    f"the flowsheet as drawn; unfreeze it (or remove it) to simulate"
+                )
+                return
+            self._show_when_done.add(name)
+            self.run_study(name)
 
         self._off_page(work, done)
 
@@ -764,6 +806,8 @@ class Editor:
                 self.say(f"could not read study {name}: {settings}")
                 return
             self.state.study_name = name
+            # The form has no flowsheet field: the study keeps the spec it follows.
+            self._study_flowsheet = settings.get("flowsheet")
             self._with_form(
                 lambda: self._open_study_dialog(
                     title=f"Edit {name}",
@@ -802,8 +846,11 @@ class Editor:
             self.state.study_error = needed
             return
         if editing:
+            if self._study_flowsheet:
+                study["flowsheet"] = self._study_flowsheet
             work = lambda: self.worker.request("update_study", path=editing, study=study)
         else:
+            study.update(flowsheet_entry(Path(self.state.spec_path)))
             project = str(self._project())
             work = lambda: self.worker.request(
                 "create_study", project=project, name=name, study=study
@@ -930,7 +977,7 @@ class Editor:
         self.state.studies = [
             {**st, "running": st["name"] in self._runs} for st in self.state.studies
         ]
-        self.state.simulating = SIMULATION in self._runs
+        self.state.simulating = self._simulation() in self._runs
 
     def stop_runs(self) -> None:
         """Cancel every run (when the editor closes)."""

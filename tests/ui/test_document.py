@@ -75,3 +75,9 @@ def test_project_models_are_listed_first(ui_catalog):
         Plant.from_spec(doc.to_spec(), base_dir=path.parent).to_spec()
         == Plant.from_spec(path).to_spec()
     )
+
+
+def test_a_unit_of_an_unknown_kind_is_refused_on_reading(ui_catalog):
+    spec = {"format": 2, "units": {"t": {"kind": "cstrr"}}, "connections": []}
+    with pytest.raises(ValueError, match="unit 't' is of kind 'cstrr'"):
+        Flowsheet.from_spec(ui_catalog, spec)
