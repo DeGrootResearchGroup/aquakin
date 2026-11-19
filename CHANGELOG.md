@@ -72,7 +72,7 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `simulation_study(spec)` gives the settings of a plain simulation (the plant
   at steady state, saving the streams that leave it with their flow, COD, TKN,
   NOx, TN and TSS), and `study_results(path)` reads a study's results back as
-  plain data with their units.
+  plain data with their units (temperature in °C; the files keep kelvin).
 - Progress reports and cancelling: `Plant.calibrate`,
   `plant_profile_likelihood`, `plant_rank_sensor_sets` and
   `plant_fisher_information` take `progress=`, a callable that receives an
@@ -105,7 +105,10 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   plant: it saves the flowsheet, sets up a `simulation` study the first time and
   shows its results, a steady state as tables of the streams leaving the plant
   and a run in time as a chart per channel (**Results** on any study shows them
-  again). **New study** and
+  again; temperature is shown in °C). Replacing a study's results asks first,
+  with a **Don't ask again** box; the Studies tab's **Ask before replacing
+  results** switch turns the question back on, and the choice is kept for the
+  user between sessions. **New study** and
   **Edit** set a study up in a dialog that offers the plant's own streams,
   parameters and channels; Save refuses to
   overwrite a flowsheet that changed on disk since it was opened.

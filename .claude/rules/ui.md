@@ -33,6 +33,7 @@ import aquakin (to build expected values).
 | `icons.py` | `ICONS`, `COLOURS`, `CATEGORY_LABELS`, `SVG`, `icon_name` | the only per-kind presentation table; an unlisted kind gets the tank icon |
 | `study_form.py` | `fields_for`, `draft_for`, `study_from`, `missing` | **pure**: the study dialog's draft from the worker's `study_form` (numbers kept as text, an even time grid as start / stop / count) and back, empty fields and defaults left out; `missing` names a kind's required fields by label. Lists no setting of its own |
 | `results.py` | `fmt`, `steady_table`, `channels_of`, `line_chart` | **pure**: the results view's tables (a column per stream, a row per channel with its unit) and SVG charts (one channel each, so never two y-axes; the dataviz palette's slot-1 blue, `#3987e5` in dark mode, set in `PAGE_CSS`; a CSS-hover crosshair and a native `<title>` tooltip per sampled time, at most `MAX_HOVER` of them, the line thinned to `MAX_POINTS`) |
+| `settings.py` | `Settings`, `DEFAULTS`, `settings_path` | the user's preferences, a JSON file in the configuration folder (`AQUAKIN_UI_CONFIG` overrides; `tests/ui/conftest.py` points it at a temporary file for every test, so tests never touch the user's); unknown keys and wrong types are ignored on read; a failed write keeps the value for the session |
 | `jobs.py` | `StudyRun` | one study run = one `python -m aquakin study run --json` process: JSON progress events on stdout, `cancel` on stdin (killed after `CANCEL_GRACE` if no checkpoint comes); its own temporary log |
 | `app.py` | `Editor` | the page; turns finished canvas edits into document changes; the Studies tab |
 | `widget/` | `Flowsheet` (trame element), `module.py`, `serve/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
@@ -85,7 +86,12 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   Save). Run events arrive on a reader thread and are applied on the page's
   loop (`call_soon_threadsafe`). **Replacing results and unfreezing ask first**
   (`_ask` / `answer_study`) and offer "Copy first", which copies the study with
-  its results, then goes ahead (owner's decision).
+  its results, then goes ahead (owner's decision). Replacing on a run carries a
+  "Don't ask again" box and the Studies tab an "Ask before replacing results"
+  switch (owner's decision); both go through `Editor.set_ask_replace`, which
+  keeps the `ask_before_replacing` preference (a state watcher does not fire
+  without a served page, so code must call the method, not set the state).
+  Unfreezing always asks.
 - **The study dialog** (`Editor.new_study` / `edit_study` / `set_study_kind` /
   `save_study_dialog`): fields come from the worker's `study_form`, choices from
   `plant_choices` (the drawn ports when the plant does not build); switching kind

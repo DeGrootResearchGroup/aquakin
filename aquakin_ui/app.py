@@ -30,6 +30,7 @@ from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
 from aquakin_ui.jobs import StudyRun
 from aquakin_ui.results import channels_of, line_chart, steady_table
+from aquakin_ui.settings import Settings
 from aquakin_ui.study_form import draft_for, fields_for, missing, study_from
 from aquakin_ui.widget import Flowsheet as FlowsheetCanvas
 from aquakin_ui.worker import AquakinWorker, WorkerError
@@ -97,8 +98,9 @@ class Editor:
         A spec file to open; the editor starts empty otherwise.
     """
 
-    def __init__(self, server, worker: AquakinWorker | None = None, path=None):
+    def __init__(self, server, worker: AquakinWorker | None = None, path=None, settings=None):
         self.server = server
+        self.settings = settings if settings is not None else Settings()
         self.state = server.state
         self.worker = worker or AquakinWorker()
         self.catalog = Catalog(self.worker.request("catalog"), self.worker.request("models"))
@@ -554,6 +556,9 @@ class Editor:
         if study["state"] in ("not run",):
             self._start_run(study, replace=False)
             return
+        if not self.state.ask_replace:
+            self._start_run(study, replace=True)
+            return
         self._ask(
             "run",
             name,
@@ -827,10 +832,20 @@ class Editor:
 
     def _ask(self, action: str, name: str, title: str, text: str, confirm: str) -> None:
         self._study_action = (action, name)
+        self.state.study_confirm_kind = action
+        self.state.study_confirm_dont_ask = False
         self.state.study_confirm_title = title
         self.state.study_confirm_text = text
         self.state.study_confirm_label = confirm
         self.state.study_confirm_open = True
+
+    def set_ask_replace(self, ask: bool) -> None:
+        """Whether a run asks before replacing a study's results; kept as the
+        user's preference (the Studies tab's switch, or "Don't ask again")."""
+        self.state.ask_replace = ask
+        if ask != self.settings["ask_before_replacing"]:
+            if not self.settings.set("ask_before_replacing", ask):
+                self.say(f"could not save the preference to {self.settings.path}")
 
     def answer_study(self, choice: str) -> None:
         """The answer to a study question: ``"cancel"``, ``"copy"`` (copy, then go
@@ -840,6 +855,8 @@ class Editor:
         if action is None or choice == "cancel":
             return
         kind, name = action
+        if kind == "run" and self.state.study_confirm_dont_ask:
+            self.set_ask_replace(False)
 
         def go():
             study = self._study(name)
@@ -947,6 +964,9 @@ class Editor:
         s.study_editing = ""
         s.study_error = ""
         s.simulating = False
+        s.ask_replace = self.settings["ask_before_replacing"]
+        s.study_confirm_kind = ""
+        s.study_confirm_dont_ask = False
         s.results_open = False
         s.results_title = ""
         s.results_folder = ""
@@ -990,6 +1010,10 @@ class Editor:
             for cat in self.catalog.categories
         ]
         s.change("panel")(lambda **_: self._publish_spec())
+
+        @s.change("ask_replace")
+        def _keep_ask_replace(ask_replace, **_):
+            self.set_ask_replace(bool(ask_replace))
 
         @s.change("panel")
         def _studies_tab(panel, **_):
@@ -1170,6 +1194,15 @@ class Editor:
             classes="text-none mb-3",
             click=self.new_study,
             disabled=("busy",),
+        )
+        v3.VSwitch(
+            v_model=("ask_replace",),
+            label="Ask before replacing results",
+            color="primary",
+            density="compact",
+            hide_details=True,
+            classes="mb-2 ml-2",
+            title="When off, running a study again replaces its results without asking",
         )
         html.Div(
             "No studies yet: set one up with New study.",
@@ -1679,7 +1712,17 @@ class Editor:
     def _study_dialog(self) -> None:
         with v3.VDialog(v_model=("study_confirm_open",), max_width=560, persistent=True):
             with v3.VCard(title=("study_confirm_title",)):
-                v3.VCardText("{{ study_confirm_text }}")
+                with v3.VCardText():
+                    html.Div("{{ study_confirm_text }}")
+                    v3.VCheckbox(
+                        v_if="study_confirm_kind === 'run'",
+                        v_model=("study_confirm_dont_ask",),
+                        label="Don't ask again before replacing results",
+                        hint="You can turn this back on in the Studies tab.",
+                        persistent_hint=True,
+                        density="compact",
+                        classes="mt-2",
+                    )
                 with v3.VCardActions(classes="flex-wrap ga-1"):
                     v3.VSpacer()
                     v3.VBtn(

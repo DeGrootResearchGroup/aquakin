@@ -5,6 +5,7 @@ import yaml
 from trame.app import get_server
 
 from aquakin_ui.app import Editor
+from aquakin_ui.settings import Settings
 
 from .conftest import PROJECTS
 
@@ -202,11 +203,25 @@ def test_simulate_saves_sets_up_runs_and_shows_the_plant(tmp_path):
         assert table["columns"] == ["tank.out"]
         assert table["rows"][0] == {"channel": "Q", "unit": "m³/d", "values": ["2,000"]}
 
-        # Again: nothing to save, and replacing the results asks first.
+        # Again: nothing to save, and replacing the results asks first, unless
+        # the user said not to ask again (kept as their preference).
         ed.state.results_open = False
         ed.simulate()
         assert ed.state.study_confirm_open and "Replace the results" in ed.state.study_confirm_title
-        ed.answer_study("cancel")
+        assert ed.state.study_confirm_kind == "run" and not ed.state.study_confirm_dont_ask
+        ed.state.study_confirm_dont_ask = True
+        ed.answer_study("cancel")  # not gone ahead: nothing is kept
+        assert ed.state.ask_replace and ed.settings["ask_before_replacing"]
+        ed.simulate()
+        ed.state.study_confirm_dont_ask = True
+        ed.answer_study("go")
+        assert not ed.state.ask_replace and not Settings()["ask_before_replacing"]
+        assert ed._runs["simulation"].wait(300)["event"] == "done"
+        ed.simulate()  # no question now
+        assert not ed.state.study_confirm_open and "simulation" in ed._runs
+        assert ed._runs["simulation"].wait(300)["event"] == "done"
+        ed.set_ask_replace(True)  # the Studies tab's switch
+        assert ed.state.ask_replace and Settings()["ask_before_replacing"]
 
         # A run in time shows a chart per channel; another kind lists its files.
         ed.run_study("short")

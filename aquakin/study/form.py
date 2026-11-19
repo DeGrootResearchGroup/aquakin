@@ -434,7 +434,7 @@ def _units(folder: Path, study, streams: list[str]) -> tuple[dict, str | None]:
             species = {sp: model.units_of(sp) for sp in model.species}
             units[stream] = {
                 "Q": f"m³/{clock}" if clock else "",
-                "T": "K",
+                "T": "°C",
                 **_measure_units(species.values()),
                 **species,
             }
@@ -476,8 +476,8 @@ def study_results(path) -> dict:
         observables' channels), each ``{stream: {channel: value}}`` at a steady
         state or ``{stream: {channel: [values]}}`` with ``"t"`` and
         ``"time_unit"`` for a run in time; ``"units"`` gives
-        ``{stream: {channel: unit}}`` where known. A value that is not finite
-        is ``None``.
+        ``{stream: {channel: unit}}`` where known. Temperature is in °C (the
+        files keep the plant's kelvin). A value that is not finite is ``None``.
 
     Raises
     ------
@@ -512,9 +512,19 @@ def study_results(path) -> dict:
                 result[key] = _by_stream(
                     {name: _finite(list(v)) for name, v in columns.items()}, streams
                 )
+    for key in ("streams", "measured"):
+        for channels in (result.get(key) or {}).values():
+            if "T" in channels:
+                channels["T"] = _celsius(channels["T"])
     if study.time is not None:
         result["time_unit"] = study.time.time_unit or clock
     return result
+
+
+def _celsius(kelvin):
+    if isinstance(kelvin, list):
+        return [_celsius(v) for v in kelvin]
+    return None if kelvin is None else kelvin - 273.15
 
 
 def _bring_in(folder: Path, study: dict, key: str, project: Path) -> None:

@@ -216,13 +216,20 @@ def test_the_results_of_a_run_in_time_read_by_stream(project):
     write_trajectory(
         out / "streams.csv",
         [0.0, 1.0],
-        {"clarifier.overflow.Q": [1.0, 2.0], "clarifier.overflow.SNH": [3.0, math.nan]},
+        {
+            "clarifier.overflow.Q": [1.0, 2.0],
+            "clarifier.overflow.SNH": [3.0, math.nan],
+            "clarifier.overflow.T": [293.15, 288.15],
+        },
     )
     write_trajectory(out / "measured.csv", [0.0, 1.0], {"effluent.TN": [5.0, 6.0]})
     results = study_results(folder)
     json.dumps(results, allow_nan=False)
     assert not results["steady"] and results["t"] == [0.0, 1.0] and results["time_unit"] == "h"
-    assert results["streams"] == {"clarifier.overflow": {"Q": [1.0, 2.0], "SNH": [3.0, None]}}
+    overflow = results["streams"]["clarifier.overflow"]
+    assert overflow["Q"] == [1.0, 2.0] and overflow["SNH"] == [3.0, None]
+    assert overflow["T"] == pytest.approx([20.0, 15.0])  # kelvin on file, shown in °C
+    assert results["units"]["clarifier.overflow"]["T"] == "°C"
     assert results["measured"] == {"effluent": {"TN": [5.0, 6.0]}}
     # Another kind gives its files only; a plant that no longer builds, no units.
     (project / "flowsheet.yaml").write_text("not a flowsheet")
