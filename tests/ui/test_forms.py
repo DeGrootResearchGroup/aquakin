@@ -111,3 +111,5 @@ def test_conditions_are_kept_when_the_model_cannot_be_described(bsm1):
     assert not any(r["key"].startswith("conditions.") for r in rows)
     _, settings = forms.read_rows(bsm1, "tank3", rows)
     assert settings["conditions"] == {"T": 293.15}
+    bsm1.units["tank3"].settings.pop("conditions")  # none to keep
+    assert "conditions" not in forms.read_rows(bsm1, "tank3", rows)[1]
