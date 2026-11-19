@@ -89,8 +89,8 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   its results, then goes ahead (owner's decision). Replacing on a run carries a
   "Don't ask again" box and the Studies tab an "Ask before replacing results"
   switch (owner's decision); both go through `Editor.set_ask_replace`, which
-  keeps the `ask_before_replacing` preference (a state watcher does not fire
-  without a served page, so code must call the method, not set the state).
+  keeps the `ask_before_replacing` preference (the switch calls it on change;
+  nothing watches the state, so code must call the method, not set the state).
   Unfreezing always asks.
 - **The study dialog** (`Editor.new_study` / `edit_study` / `set_study_kind` /
   `save_study_dialog`): fields come from the worker's `study_form`, choices from

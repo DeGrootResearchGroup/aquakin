@@ -150,6 +150,7 @@ def test_the_worker_answers_the_form_commands(project):
         },
         {"id": 4, "command": "read_study", "path": str(project / "studies" / "s")},
         {"id": 6, "command": "simulation_study", "spec": str(project / "flowsheet.yaml")},
+        {"id": 7, "command": "study_results", "path": str(project / "studies" / "s")},
         {
             "id": 5,
             "command": "update_study",
@@ -160,9 +161,11 @@ def test_the_worker_answers_the_form_commands(project):
     out = io.StringIO()
     serve(io.StringIO("".join(json.dumps(r) + "\n" for r in requests)), out)
     replies = [json.loads(line) for line in out.getvalue().splitlines()]
-    assert all(r["ok"] for r in replies), replies
-    assert replies[3]["result"] == {"kind": "simulate", "streams": ["effluent"]}
-    assert replies[4]["result"]["streams"] == ["effluent", "wastage"]
+    by_id = {r["id"]: r for r in replies}
+    assert all(r["ok"] for i, r in by_id.items() if i != 7), replies
+    assert "has no results; run it first" in by_id[7]["error"]
+    assert by_id[4]["result"] == {"kind": "simulate", "streams": ["effluent"]}
+    assert by_id[6]["result"]["streams"] == ["effluent", "wastage"]
     assert read_study(project / "studies" / "s")["streams"] == ["ras"]
 
 
@@ -195,6 +198,30 @@ def test_the_results_of_a_steady_simulation_read_with_units(project):
     units = results["units"]["effluent"]
     assert units["Q"] == "m³/d" and units["SNH"] == units["TN"] == "g_N/m³"
     assert units["COD"] == "g_COD/m³" and units["TSS"] == "g/m³"
+    (folder / "results" / "measured.yaml").unlink()  # only the streams were saved
+    assert "measured" not in study_results(folder)
+
+
+def test_a_plant_nothing_leaves_simulates_its_named_streams(tmp_path):
+    import aquakin
+    from aquakin.plant import CSTRUnit, InfluentSeries, Plant
+    from aquakin.study.form import _measure_units
+
+    m = aquakin.load_model("asm1")
+    p = Plant("loop", time_unit="d")
+    p.add_unit(CSTRUnit("a", m, 1000.0, ["in", "back"], conditions={"T": 293.15}))
+    p.add_unit(CSTRUnit("b", m, 1000.0, ["in"], conditions={"T": 293.15}))
+    p.add_influent("feed", InfluentSeries.constant(m, Q=100.0, SS=60.0), to="a.in")
+    p.connect("a.out", "b.in")
+    p.connect("b.out", "a.back")
+    p.to_spec(tmp_path / "flowsheet.yaml")
+    with pytest.raises(StudyError, match="no stream leaves the plant"):
+        simulation_study(tmp_path / "flowsheet.yaml")
+    p.register_stream("loop", "b.out")
+    p.to_spec(tmp_path / "named.yaml")
+    assert simulation_study(tmp_path / "named.yaml")["streams"] == ["loop"]
+    # Without COD species there is no COD (nor TSS) unit to give.
+    assert _measure_units(["mol/L", "g_N/m3"]) == {"TKN": "g_N/m3", "NOx": "g_N/m3", "TN": "g_N/m3"}
 
 
 def test_the_results_of_a_run_in_time_read_by_stream(project):
@@ -222,7 +249,9 @@ def test_the_results_of_a_run_in_time_read_by_stream(project):
             "clarifier.overflow.T": [293.15, 288.15],
         },
     )
-    write_trajectory(out / "measured.csv", [0.0, 1.0], {"effluent.TN": [5.0, 6.0]})
+    write_trajectory(
+        out / "measured.csv", [0.0, 1.0], {"effluent.TN": [5.0, 6.0], "gone.Q": [1.0, 1.0]}
+    )
     results = study_results(folder)
     json.dumps(results, allow_nan=False)
     assert not results["steady"] and results["t"] == [0.0, 1.0] and results["time_unit"] == "h"
@@ -230,7 +259,10 @@ def test_the_results_of_a_run_in_time_read_by_stream(project):
     assert overflow["Q"] == [1.0, 2.0] and overflow["SNH"] == [3.0, None]
     assert overflow["T"] == pytest.approx([20.0, 15.0])  # kelvin on file, shown in °C
     assert results["units"]["clarifier.overflow"]["T"] == "°C"
-    assert results["measured"] == {"effluent": {"TN": [5.0, 6.0]}}
+    # A column of a stream the study no longer names is still read by its name.
+    assert results["measured"] == {"effluent": {"TN": [5.0, 6.0]}, "gone": {"Q": [1.0, 1.0]}}
+    (out / "measured.csv").unlink()
+    assert "measured" not in study_results(folder)
     # Another kind gives its files only; a plant that no longer builds, no units.
     (project / "flowsheet.yaml").write_text("not a flowsheet")
     assert study_results(folder)["units"] == {}

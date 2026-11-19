@@ -281,7 +281,10 @@ def study_from(form: dict, kind: str, draft: dict) -> dict:
     """
     study: dict = {"kind": kind}
     for field in fields_for(form, kind):
-        value = _read(field, draft.get(field["name"], _draft_value(field, field["default"])))
+        name = field["name"]
+        value = _read(
+            field, draft[name] if name in draft else _draft_value(field, field["default"])
+        )
         if value is None or value == field["default"]:
             continue
         study[field["name"]] = value

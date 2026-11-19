@@ -90,11 +90,8 @@ def _ticks(low: float, high: float, count: int = 4) -> list[float]:
         pad = 0.05 * abs(low) or 1.0
         low, high = low - pad, high + pad
     raw = (high - low) / count
-    step = 10 ** math.floor(math.log10(raw))
-    for factor in (1, 2, 5, 10):
-        if raw <= factor * step:
-            step *= factor
-            break
+    step = 10 ** math.floor(math.log10(raw))  # so step <= raw < 10 step
+    step *= next(f for f in (1, 2, 5, 10) if raw <= f * step)
     start = math.floor(low / step) * step
     ticks = []
     value = start

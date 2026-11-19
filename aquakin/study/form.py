@@ -380,19 +380,13 @@ def simulation_study(spec, *, base_dir=None) -> dict:
         streams = list(plant.list_streams())
     if not streams:
         raise StudyError("no stream leaves the plant: connect an outlet or name a stream")
-    observables = []
-    for stream in streams:
-        channels = _measures(plant, stream)
-        if channels:
-            observables.append({"stream": stream, "channels": channels})
-    study = {
+    # Every model gives at least the flow, so each stream has a measurement.
+    return {
         "kind": "simulate",
         "description": "The plant at steady state: the streams that leave it.",
         "streams": streams,
+        "observables": [{"stream": s, "channels": _measures(plant, s)} for s in streams],
     }
-    if observables:
-        study["observables"] = observables
-    return study
 
 
 def _finite(value):

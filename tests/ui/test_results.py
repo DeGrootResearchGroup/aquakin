@@ -53,6 +53,9 @@ def test_a_run_in_time_is_a_chart_per_channel():
     # A flat series sits in the middle of its axis, labelled in full.
     flat = line_chart(RUN, "tank.out", "Q")
     assert ">2,000<" in flat and "1,900" in flat
+    # Large values on a fine step are labelled in full, not in thousands.
+    big = {"t": [0.0, 1.0], "streams": {"s": {"Q": [18061.0, 18064.0]}}}
+    assert ">18,062<" in line_chart(big, "s", "Q")
     with pytest.raises(KeyError, match="no channel 'NH4'"):
         line_chart(RUN, "tank.out", "NH4")
 

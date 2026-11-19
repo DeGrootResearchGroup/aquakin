@@ -1011,10 +1011,6 @@ class Editor:
         ]
         s.change("panel")(lambda **_: self._publish_spec())
 
-        @s.change("ask_replace")
-        def _keep_ask_replace(ask_replace, **_):
-            self.set_ask_replace(bool(ask_replace))
-
         @s.change("panel")
         def _studies_tab(panel, **_):
             if panel == "studies":
@@ -1196,7 +1192,8 @@ class Editor:
             disabled=("busy",),
         )
         v3.VSwitch(
-            v_model=("ask_replace",),
+            model_value=("ask_replace",),
+            update_modelValue=(self.set_ask_replace, "[!!$event]"),
             label="Ask before replacing results",
             color="primary",
             density="compact",

@@ -155,3 +155,20 @@ def test_what_a_study_still_needs_is_named_by_label():
     )
     for study in STUDIES:
         assert missing(FORM, study["kind"], study) is None
+
+
+def test_an_unknown_field_type_is_refused_and_an_empty_number_left_out():
+    form = {
+        "kinds": [{"kind": "k", "fields": ["x", "n"], "required": []}],
+        "fields": {
+            "x": {"type": "colour", "label": "X", "default": None, "help": "."},
+            "n": {"type": "number", "label": "N", "default": None, "help": "."},
+        },
+    }
+    with pytest.raises(ValueError, match="unknown field type 'colour'"):
+        draft_for(form, "k")
+    with pytest.raises(ValueError, match="unknown field type 'colour'"):
+        study_from(form, "k", {"x": "red", "n": " "})
+    assert study_from(
+        {**form, "kinds": [{"kind": "k", "fields": ["n"], "required": []}]}, "k", {"n": " "}
+    ) == {"kind": "k"}
