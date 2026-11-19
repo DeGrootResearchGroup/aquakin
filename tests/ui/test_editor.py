@@ -5,6 +5,7 @@ import yaml
 from trame.app import get_server
 
 from aquakin_ui.app import Editor
+from aquakin_ui.document import edge_id
 from aquakin_ui.settings import Settings
 from aquakin_ui.worker import AquakinWorker, WorkerError
 
@@ -477,6 +478,19 @@ def test_edits_can_be_undone_and_unapplied_form_edits_are_not_lost(tmp_path):
         ed.undo()
         assert "tank" in ed.doc.units and ed.doc.connections and not ed.state.can_undo
         ed.undo()  # nothing left: nothing happens
+        [wire] = ed.doc.connections
+        ed.on_remove({"nodes": [], "edges": [edge_id(wire)]})
+        ed.on_connect(
+            {"source": wire[0], "sourceHandle": wire[1], "target": wire[2], "targetHandle": wire[3]}
+        )
+        assert ed.doc.connections == [wire]
+        ed.undo()
+        assert ed.doc.connections == []
+        ed.undo()
+        assert ed.doc.connections == [wire] and not ed.state.can_undo
+        ed.state.selected = None
+        assert ed.apply_properties([]) is False
+        ed.answer_study("cancel")  # no question asked: nothing to do
 
         # A refused wire is no edit; a move and an Apply are.
         ed.on_connect(
@@ -570,7 +584,9 @@ def test_a_flowsheet_without_a_file_asks_where_to_keep_it(tmp_path):
     server = get_server(name="aquakin-ui-nofile-test", client_type="vue3")
     ed = Editor(server)
     try:
-        assert ed.state.spec_path == "" and not ed._unsaved() and ed.state.studies == []
+        assert ed.state.spec_path == "" and not ed._unsaved()
+        ed.refresh_studies()
+        assert ed.state.studies == []
         ed.on_dropped({"kind": "cstr", "position": {"x": 0, "y": 0}})
         assert ed._unsaved()
         ed.simulate()

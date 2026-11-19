@@ -111,6 +111,8 @@ def test_conditions_are_kept_when_the_model_cannot_be_described(bsm1):
     assert not any(r["key"].startswith("conditions.") for r in rows)
     _, settings = forms.read_rows(bsm1, "tank3", rows)
     assert settings["conditions"] == {"T": 293.15}
+    bsm1.units["tank3"].settings.pop("conditions")  # none to keep
+    assert "conditions" not in forms.read_rows(bsm1, "tank3", rows)[1]
 
 
 def test_a_bad_value_is_named_by_its_field(bsm1):
@@ -123,6 +125,10 @@ def test_a_bad_value_is_named_by_its_field(bsm1):
         next(r for r in rows if r["key"] == key)["value"] = text
         with pytest.raises(ValueError, match=message):
             forms.read_rows(bsm1, "tank3", rows)
+    rows = forms.rows_for(bsm1, "clarifier", _info)
+    next(r for r in rows if r["key"] == "n_layers")["value"] = "2.5"
+    with pytest.raises(ValueError, match=r"n_layers: '2\.5' is not a whole number"):
+        forms.read_rows(bsm1, "clarifier", rows)
     rows = forms.rows_for(bsm1, "tank5_split", _info)
     row = next(r for r in rows if r["widget"] == "text" and ":" in str(r["value"]))
     row["value"] = "internal_recycle 55338"
