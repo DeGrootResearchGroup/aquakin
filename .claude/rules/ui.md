@@ -31,6 +31,7 @@ import aquakin (to build expected values).
 | `document.py` | `Flowsheet`, `Unit`, `edge_id` | **pure**: units keyed by stable id (the plant's unit name), labels as display text; `from_spec`/`to_spec` (format 2), `connect` (refuses with a reason), `dropped_by` (previews the connections new settings would remove) and `apply`, `remove` (also drops streams/endpoints naming the unit), `port_status`, `back_edges` (aquakin's recycles when known, else a DFS), `lanes`, `auto_layout` (wraps into bands of 7 ranks) |
 | `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. Lists no setting or type of its own |
 | `icons.py` | `ICONS`, `COLOURS`, `CATEGORY_LABELS`, `SVG`, `icon_name` | the only per-kind presentation table; an unlisted kind gets the tank icon |
+| `study_form.py` | `fields_for`, `draft_for`, `study_from`, `missing` | **pure**: the study dialog's draft from the worker's `study_form` (numbers kept as text, an even time grid as start / stop / count) and back, empty fields and defaults left out; `missing` names a kind's required fields by label. Lists no setting of its own |
 | `jobs.py` | `StudyRun` | one study run = one `python -m aquakin study run --json` process: JSON progress events on stdout, `cancel` on stdin (killed after `CANCEL_GRACE` if no checkpoint comes); its own temporary log |
 | `app.py` | `Editor` | the page; turns finished canvas edits into document changes; the Studies tab |
 | `widget/` | `Flowsheet` (trame element), `module.py`, `serve/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
@@ -84,6 +85,18 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   loop (`call_soon_threadsafe`). **Replacing results and unfreezing ask first**
   (`_ask` / `answer_study`) and offer "Copy first", which copies the study with
   its results, then goes ahead (owner's decision).
+- **The study dialog** (`Editor.new_study` / `edit_study` / `set_study_kind` /
+  `save_study_dialog`): fields come from the worker's `study_form`, choices from
+  `plant_choices` (the drawn ports when the plant does not build); switching kind
+  keeps the fields both kinds have. The draft is edited in the browser and sent
+  whole on Create / Save, and written by the worker (`create_study` /
+  `update_study`) off the page's thread; errors show beside the buttons, not at
+  the foot of the scrolled form. **Values inside the draft are nested, and the
+  page does not redraw on a nested change**: every widget bound into it uses
+  `_bound` (which reassigns `study_draft` after each change) and every row
+  add / remove ends with `_REDRAW`, or rows do not appear and a stream's
+  channels stay empty. Each field heading carries the `<input id>-label` id
+  Vuetify's `aria-labelledby` points at.
 - **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
   `inf` / `-inf` remain for "no limit" number settings.
 - Icons are sent once (`icons` prop, injected into nodes); the spec text only

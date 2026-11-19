@@ -64,5 +64,14 @@ results. The design and the owner's decisions are in
 - **Progress and cancel** (`aquakin/progress.py`): `run_study(progress=)` passes
   the callable to the analysis; `Cancelled` (a `BaseException`) stops it and
   the run is recorded with outcome `cancelled` (state `"cancelled"`).
+- **Setting a study up** (`form.py`): `study_form()` describes every `_Study`
+  field (type, label, help, default) and each kind's fields and required ones
+  (`_REQUIRED`); a test pins that it covers every field but `kind` and
+  `flowsheet`, so a new setting needs an entry. `plant_choices(spec)` gives the
+  streams (named, then every `unit.port`), parameters and per-stream channels.
+  `create_study` / `update_study` validate exactly as a run reads (`_Study` +
+  `_check_kind`) and copy a data or initial-state file from elsewhere into the
+  study (never overwriting another file of that name); `read_study` returns the
+  settings without defaults. The worker answers all five.
 - The editor drives studies through the job worker (`aquakin/__main__.py`'s
   `start_study` / `cancel_study`); see `.claude/rules/ui.md`.

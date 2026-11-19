@@ -64,6 +64,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   a newer aquakin is noted without making it stale. A frozen study runs on a
   snapshot of its plant with every model flattened (shipped models too), so
   neither project edits nor upgrades change it; unfreezing deletes its results.
+  A study can also be set up from plain settings: `study_form()` describes
+  every setting, `plant_choices(spec)` lists the streams, parameters and
+  measurable channels a study of that flowsheet may name, and `create_study`,
+  `read_study` and `update_study` write and read `study.yaml`, checked as a run
+  reads it, with a data table or saved state copied into the study.
 - Progress reports and cancelling: `Plant.calibrate`,
   `plant_profile_likelihood`, `plant_rank_sensor_sets` and
   `plant_fisher_information` take `progress=`, a callable that receives an
@@ -92,7 +97,9 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   whole plant, and open or save flowsheet specs (saved by the same writer as
   `Plant.to_spec`, so a model or influent file from elsewhere is copied into
   the project). A Studies tab lists the project's studies with their status and
-  runs them in the background with progress and cancel; Save refuses to
+  runs them in the background with progress and cancel; **New study** and
+  **Edit** set a study up in a dialog that offers the plant's own streams,
+  parameters and channels; Save refuses to
   overwrite a flowsheet that changed on disk since it was opened.
 - A unit catalogue for front ends, `aquakin.plant.catalog`. It describes each
   plant unit type as plain JSON-compatible data: its settings, with types,

@@ -442,5 +442,14 @@ the window opened it, so two windows cannot silently undo each other's work.
 The **Studies** tab lists the project's studies and where each stands (fresh,
 stale and why, not run, failed, cancelled). Run one to watch its progress and
 cancel it; freeze, unfreeze or copy it. Running a study that has results, or
-unfreezing one, asks first and offers to keep a copy.
+unfreezing one, asks first and offers to keep a copy. **New study** sets one up
+in a dialog: pick its kind, and the fields that kind uses appear, with the
+plant's own streams, parameters and measurable channels to choose from;
+**Edit** opens a study's settings in the same dialog. The dialog writes the same
+`study.yaml` you would write by hand, and a data table or saved state chosen from
+elsewhere is copied into the study folder.
+
+From Python, `aquakin.study.create_study(project, name, settings)` and
+`update_study(path, settings)` do the same, checking the settings as a run would
+read them; `plant_choices(spec)` lists what a study of that flowsheet may name.
 

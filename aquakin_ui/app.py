@@ -29,6 +29,7 @@ from aquakin_ui.catalog import Catalog
 from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
 from aquakin_ui.jobs import StudyRun
+from aquakin_ui.study_form import draft_for, fields_for, missing, study_from
 from aquakin_ui.widget import Flowsheet as FlowsheetCanvas
 from aquakin_ui.worker import AquakinWorker, WorkerError
 
@@ -43,6 +44,19 @@ PAGE_CSS = """
 .ak-pal-icon svg { width: 20px; height: 20px; }
 .ak-sel-icon svg { width: 28px; height: 28px; }
 """
+
+
+# Rows are added to and removed from the study draft in place, which the page
+# does not see; reassigning the draft redraws them.
+_REDRAW = "; study_draft = {...study_draft}"
+
+
+def _bound(expr: str) -> dict:
+    """Bind a widget to a value inside the study draft, redrawing after each change."""
+    return {
+        "v_model": expr,
+        "update_modelValue": "$nextTick(() => { study_draft = {...study_draft} })",
+    }
 
 
 class Editor:
@@ -73,6 +87,7 @@ class Editor:
         self._loop = None
         self._opened: tuple[Path, str] | None = None  # the file opened, and its sha256
         self._study_action = None
+        self._study_form: dict | None = None  # the worker's study_form, asked once
         self._init_state(path)
         if path is not None:
             self.open(path, quiet=True)
@@ -545,6 +560,132 @@ class Editor:
             new, i = f"{name}_copy{i}", i + 1
         self._worker_study("copy_study", study, then=then, name=new)
 
+    # -- the study dialog ---------------------------------------------------
+
+    def _plant_choices(self) -> dict:
+        """What a study of the flowsheet as drawn may name; aquakin's answer when
+        the plant builds, else the drawn units' output ports (names typed into
+        the dialog are checked when the study is written)."""
+        spec = self.doc.to_spec(layout=False)
+        base = str(self.doc.base_dir) if self.doc.base_dir else str(self._project())
+        try:
+            return self.worker.request("plant_choices", spec=spec, base_dir=base)
+        except WorkerError:
+            ports = [f"{uid}.{port}" for uid in self.doc.units for port in self.doc.ports(uid)[1]]
+            return {"streams": ports, "parameters": [], "channels": {}}
+
+    def _open_study_dialog(self, *, title: str, kind: str, study: dict | None, editing: str):
+        form = self._study_form
+
+        def done(choices):
+            if isinstance(choices, Exception):
+                choices = {"streams": [], "parameters": [], "channels": {}}
+            s = self.state
+            s.study_kinds = [
+                {"title": k["label"], "value": k["kind"], "summary": k["summary"]}
+                for k in form["kinds"]
+            ]
+            s.study_choices = choices
+            s.study_kind = kind
+            s.study_fields = fields_for(form, kind)
+            s.study_draft = draft_for(form, kind, study)
+            s.study_editing = editing
+            s.study_error = ""
+            s.study_dialog_title = title
+            s.study_dialog_open = True
+
+        self._off_page(self._plant_choices, done)
+
+    def _with_form(self, then) -> None:
+        """Run ``then()`` once the worker's study form is known."""
+        if self._study_form is not None:
+            then()
+            return
+
+        def done(form):
+            if isinstance(form, Exception):
+                self.say(f"could not read the study settings: {form}")
+                return
+            self._study_form = form
+            then()
+
+        self._off_page(lambda: self.worker.request("study_form"), done)
+
+    def new_study(self) -> None:
+        """Open the dialog for a new study (a simulation to start with)."""
+        self.state.study_name = ""
+        self._with_form(
+            lambda: self._open_study_dialog(
+                title="New study", kind="simulate", study=None, editing=""
+            )
+        )
+
+    def edit_study(self, name: str) -> None:
+        """Open the dialog on a study's settings."""
+        study = self._study(name)
+        if study is None:
+            return
+
+        def opened(settings):
+            if isinstance(settings, Exception):
+                self.say(f"could not read study {name}: {settings}")
+                return
+            self.state.study_name = name
+            self._with_form(
+                lambda: self._open_study_dialog(
+                    title=f"Edit {name}",
+                    kind=settings["kind"],
+                    study=settings,
+                    editing=study["path"],
+                )
+            )
+
+        self._off_page(lambda: self.worker.request("read_study", path=study["path"]), opened)
+
+    def set_study_kind(self, kind: str, draft: dict) -> None:
+        """Change the dialog's kind, keeping the values of the fields both kinds have."""
+        fresh = draft_for(self._study_form, kind)
+        for name in fresh:
+            if name in draft:
+                fresh[name] = draft[name]
+        self.state.study_kind = kind
+        self.state.study_fields = fields_for(self._study_form, kind)
+        self.state.study_draft = fresh
+
+    def save_study_dialog(self, name: str, kind: str, draft: dict) -> None:
+        """Write the study the dialog describes (create it, or replace its settings)."""
+        try:
+            study = study_from(self._study_form, kind, draft)
+        except ValueError as exc:
+            self.state.study_error = str(exc)
+            return
+        editing = self.state.study_editing
+        name = (name or "").strip()
+        if not editing and not name:
+            self.state.study_error = "Give the study a name."
+            return
+        needed = missing(self._study_form, kind, study)
+        if needed:
+            self.state.study_error = needed
+            return
+        if editing:
+            work = lambda: self.worker.request("update_study", path=editing, study=study)
+        else:
+            project = str(self._project())
+            work = lambda: self.worker.request(
+                "create_study", project=project, name=name, study=study
+            )
+
+        def done(result):
+            if isinstance(result, Exception):
+                self.state.study_error = str(result).removeprefix("StudyError: ")
+                return
+            self.state.study_dialog_open = False
+            self.say(f"{'updated' if editing else 'created'} study {name}", error=False)
+            self.refresh_studies()
+
+        self._off_page(work, done)
+
     def _worker_study(self, command: str, study: dict, then=None, **fields) -> None:
         def done(result):
             if isinstance(result, Exception):
@@ -662,6 +803,16 @@ class Editor:
         s.study_confirm_title = ""
         s.study_confirm_text = ""
         s.study_confirm_label = ""
+        s.study_dialog_open = False
+        s.study_dialog_title = ""
+        s.study_name = ""
+        s.study_kind = "simulate"
+        s.study_kinds = []
+        s.study_fields = []
+        s.study_draft = {}
+        s.study_choices = {"streams": [], "parameters": [], "channels": {}}
+        s.study_editing = ""
+        s.study_error = ""
         s.panel = "properties"
         s.dark = False
         s.focus_help = ""
@@ -723,6 +874,7 @@ class Editor:
                     self._side_panel()
                 self._confirm_dialog()
                 self._study_dialog()
+                self._study_settings_dialog()
                 v3.VSnackbar(
                     "{{ message }}",
                     v_model=("show_message",),
@@ -841,7 +993,7 @@ class Editor:
                     )
 
     def _studies_panel(self) -> None:
-        with html.Div(classes="d-flex align-center mb-2"):
+        with html.Div(classes="d-flex align-center"):
             html.Div("Studies of this project", classes="text-overline")
             v3.VSpacer()
             v3.VBtn(
@@ -851,8 +1003,17 @@ class Editor:
                 click=self.refresh_studies,
                 title="Check every study again",
             )
+        v3.VBtn(
+            "New study",
+            prepend_icon="mdi-plus",
+            block=True,
+            variant="tonal",
+            classes="text-none mb-3",
+            click=self.new_study,
+            disabled=("busy",),
+        )
         html.Div(
-            "No studies yet: add a folder with a study.yaml under studies/.",
+            "No studies yet: set one up with New study.",
             v_if="!studies.length",
             classes="text-body-2 text-medium-emphasis",
         )
@@ -931,7 +1092,336 @@ class Editor:
                     disabled=("st.running",),
                     click=(self.unfreeze_study, "[st.name]"),
                 )
+                v3.VBtn(
+                    "Edit",
+                    size="small",
+                    disabled=("st.running || st.state === 'unreadable'",),
+                    click=(self.edit_study, "[st.name]"),
+                )
                 v3.VBtn("Copy", size="small", click=(self.copy_study, "[st.name]"))
+
+    @staticmethod
+    def _observables_editor(rows: str) -> None:
+        """Rows of ``{stream, channels}`` bound to the client expression ``rows``."""
+        with html.Div(v_for=f"(o, oi) in {rows}", key="oi", classes="d-flex ga-2 mb-1"):
+            v3.VCombobox(
+                **_bound("o.stream"),
+                items=("study_choices.streams",),
+                label="Stream",
+                density="compact",
+                variant="outlined",
+                hide_details=True,
+                style="max-width: 220px;",
+            )
+            v3.VCombobox(
+                **_bound("o.channels"),
+                items=("study_choices.channels[o.stream] || []",),
+                label="Channels (all species when empty)",
+                multiple=True,
+                chips=True,
+                closable_chips=True,
+                density="compact",
+                variant="outlined",
+                hide_details=True,
+            )
+            v3.VBtn(
+                icon="mdi-close",
+                size="small",
+                variant="text",
+                click=f"{rows}.splice(oi, 1){_REDRAW}",
+            )
+        v3.VBtn(
+            "Add a stream",
+            prepend_icon="mdi-plus",
+            size="small",
+            variant="text",
+            classes="text-none",
+            click=f"{rows}.push({{stream: '', channels: [], measures: {{}}}}){_REDRAW}",
+        )
+
+    def _candidate_fields(self, c: str) -> None:
+        with html.Div(classes="d-flex ga-2 mb-1"):
+            v3.VTextField(
+                **_bound(f"{c}.name"),
+                label="Name",
+                density="compact",
+                variant="outlined",
+                hide_details=True,
+            )
+            v3.VTextField(
+                **_bound(f"{c}.sigma"),
+                label="Measurement error (one, or one per channel)",
+                density="compact",
+                variant="outlined",
+                hide_details=True,
+            )
+        self._observables_editor(f"{c}.observables")
+
+    def _study_settings_dialog(self) -> None:
+        """The New / Edit study dialog, generated from aquakin's study form."""
+        common = dict(density="compact", variant="outlined", hide_details=True)
+        draft = "study_draft[f.name]"
+        with v3.VDialog(v_model=("study_dialog_open",), max_width=760, scrollable=True):
+            with v3.VCard(title=("study_dialog_title",)):
+                with v3.VCardText(style="max-height: 70vh;"):
+                    with html.Div(classes="d-flex ga-2 mb-1 pt-2"):
+                        v3.VTextField(
+                            v_model=("study_name",),
+                            label="Name",
+                            disabled=("!!study_editing",),
+                            **common,
+                        )
+                        v3.VSelect(
+                            model_value=("study_kind",),
+                            items=("study_kinds",),
+                            label="Kind",
+                            disabled=("!!study_editing",),
+                            update_modelValue=(self.set_study_kind, "[$event, study_draft]"),
+                            **common,
+                        )
+                    html.Div(
+                        "{{ (study_kinds.find(k => k.value === study_kind) || {}).summary }}",
+                        classes="text-caption text-medium-emphasis mb-3",
+                    )
+                    with html.Div(v_for="f in study_fields", key="f.name", classes="mb-3"):
+                        html.Div(
+                            "{{ f.label }}{{ f.required ? ' *' : '' }}",
+                            id=("'study-' + f.name + '-label'",),
+                            classes="text-subtitle-2",
+                        )
+                        html.Div("{{ f.help }}", classes="text-caption text-medium-emphasis mb-1")
+                        v3.VTextField(
+                            v_if="['text', 'file', 'number', 'integer', 'numbers'].includes(f.type)",
+                            **_bound(draft),
+                            id=("'study-' + f.name",),
+                            **common,
+                        )
+                        v3.VCheckbox(
+                            v_if="f.type === 'boolean'",
+                            **_bound(draft),
+                            id=("'study-' + f.name",),
+                            label=("f.label",),
+                            **common,
+                        )
+                        v3.VSelect(
+                            v_if="f.type === 'choice'",
+                            **_bound(draft),
+                            id=("'study-' + f.name",),
+                            items=("f.choices",),
+                            **common,
+                        )
+                        v3.VCombobox(
+                            v_if="f.type === 'parameter'",
+                            **_bound(draft),
+                            id=("'study-' + f.name",),
+                            items=("study_choices.parameters",),
+                            **common,
+                        )
+                        v3.VCombobox(
+                            v_if="['streams', 'parameters'].includes(f.type)",
+                            **_bound(draft),
+                            id=("'study-' + f.name",),
+                            items=(
+                                "f.type === 'streams' ? study_choices.streams "
+                                ": study_choices.parameters",
+                            ),
+                            multiple=True,
+                            chips=True,
+                            closable_chips=True,
+                            **common,
+                        )
+                        with html.Div(v_if="f.type === 'span'", classes="d-flex ga-2"):
+                            v3.VTextField(**_bound(f"{draft}.start"), label="From", **common)
+                            v3.VTextField(**_bound(f"{draft}.stop"), label="To", **common)
+                        with html.Div(v_if="f.type === 'times'"):
+                            with v3.VBtnToggle(
+                                **_bound(f"{draft}.mode"), density="compact", mandatory=True
+                            ):
+                                v3.VBtn("Evenly spaced", value="grid", classes="text-none")
+                                v3.VBtn("A list", value="list", classes="text-none")
+                            with html.Div(
+                                v_if=f"{draft}.mode === 'grid'", classes="d-flex ga-2 mt-1"
+                            ):
+                                v3.VTextField(**_bound(f"{draft}.start"), label="From", **common)
+                                v3.VTextField(**_bound(f"{draft}.stop"), label="To", **common)
+                                v3.VTextField(**_bound(f"{draft}.num"), label="How many", **common)
+                            v3.VTextField(
+                                v_else=True,
+                                **_bound(f"{draft}.list"),
+                                label="Values, separated by commas",
+                                classes="mt-1",
+                                **common,
+                            )
+                        with html.Div(v_if="f.type === 'run_time'"):
+                            v3.VCheckbox(
+                                **_bound(f"{draft}.dynamic"),
+                                label="A dynamic run (otherwise the steady state)",
+                                **common,
+                            )
+                            with html.Div(v_if=f"{draft}.dynamic"):
+                                with html.Div(classes="d-flex ga-2 mb-1"):
+                                    v3.VTextField(
+                                        **_bound(f"{draft}.start"), label="From", **common
+                                    )
+                                    v3.VTextField(**_bound(f"{draft}.stop"), label="To", **common)
+                                    v3.VTextField(
+                                        **_bound(f"{draft}.unit"), label="Time unit", **common
+                                    )
+                                with html.Div(classes="d-flex ga-2"):
+                                    v3.VTextField(
+                                        **_bound(f"{draft}.every.start"),
+                                        label="Save from",
+                                        **common,
+                                    )
+                                    v3.VTextField(
+                                        **_bound(f"{draft}.every.stop"), label="to", **common
+                                    )
+                                    v3.VTextField(
+                                        **_bound(f"{draft}.every.num"), label="times", **common
+                                    )
+                        with html.Div(v_if="f.type === 'initial_state'", classes="d-flex ga-2"):
+                            v3.VSelect(
+                                **_bound(f"{draft}.mode"),
+                                items=(
+                                    "[{title: 'the default of each unit', value: 'default'}, "
+                                    "{title: 'the steady state', value: 'steady'}, "
+                                    "{title: 'a saved state', value: 'file'}]",
+                                ),
+                                **common,
+                            )
+                            v3.VTextField(
+                                v_if=f"{draft}.mode === 'file'",
+                                **_bound(f"{draft}.file"),
+                                label="File (from the project folder)",
+                                **common,
+                            )
+                        with html.Div(v_if="f.type === 'parameter_values'"):
+                            with html.Div(
+                                v_for=f"(r, ri) in {draft}", key="ri", classes="d-flex ga-2 mb-1"
+                            ):
+                                v3.VCombobox(
+                                    **_bound("r.name"),
+                                    items=("study_choices.parameters",),
+                                    label="Parameter",
+                                    **common,
+                                )
+                                v3.VTextField(
+                                    **_bound("r.value"),
+                                    label="Value",
+                                    style="max-width: 160px;",
+                                    **common,
+                                )
+                                v3.VBtn(
+                                    icon="mdi-close",
+                                    size="small",
+                                    variant="text",
+                                    click=f"{draft}.splice(ri, 1){_REDRAW}",
+                                )
+                            v3.VBtn(
+                                "Add a parameter",
+                                prepend_icon="mdi-plus",
+                                size="small",
+                                variant="text",
+                                classes="text-none",
+                                click=f"{draft}.push({{name: '', value: ''}}){_REDRAW}",
+                            )
+                        with html.Div(v_if="f.type === 'transforms'"):
+                            with html.Div(
+                                v_for=f"(r, ri) in {draft}", key="ri", classes="d-flex ga-2 mb-1"
+                            ):
+                                v3.VCombobox(
+                                    **_bound("r.name"),
+                                    items=("study_choices.parameters",),
+                                    label="Parameter",
+                                    **common,
+                                )
+                                v3.VSelect(
+                                    **_bound("r.transform"),
+                                    items=("f.choices",),
+                                    style="max-width: 180px;",
+                                    **common,
+                                )
+                                v3.VBtn(
+                                    icon="mdi-close",
+                                    size="small",
+                                    variant="text",
+                                    click=f"{draft}.splice(ri, 1){_REDRAW}",
+                                )
+                            v3.VBtn(
+                                "Add a transform",
+                                prepend_icon="mdi-plus",
+                                size="small",
+                                variant="text",
+                                classes="text-none",
+                                click=f"{draft}.push({{name: '', transform: 'positive_log'}}){_REDRAW}",
+                            )
+                        with html.Div(v_if="f.type === 'observables'"):
+                            self._observables_editor(draft)
+                        with html.Div(v_if="f.type === 'candidates'"):
+                            with v3.VSheet(
+                                v_for=f"(c, ci) in {draft}",
+                                key="ci",
+                                border=True,
+                                rounded=True,
+                                classes="pa-2 mb-2",
+                            ):
+                                self._candidate_fields("c")
+                                v3.VBtn(
+                                    "Remove this set",
+                                    size="small",
+                                    variant="text",
+                                    color="error",
+                                    classes="text-none",
+                                    click=f"{draft}.splice(ci, 1){_REDRAW}",
+                                )
+                            v3.VBtn(
+                                "Add a sensor set",
+                                prepend_icon="mdi-plus",
+                                size="small",
+                                variant="tonal",
+                                classes="text-none",
+                                click=(
+                                    f"{draft}.push({{name: '', sigma: '', "
+                                    "observables: [{stream: '', channels: [], measures: {}}]})"
+                                    f"{_REDRAW}"
+                                ),
+                            )
+                        with html.Div(v_if="f.type === 'candidate'"):
+                            v3.VCheckbox(
+                                **_bound(f"{draft}.enabled"),
+                                label="There are sensors in place",
+                                **common,
+                            )
+                            with html.Div(v_if=f"{draft}.enabled"):
+                                self._candidate_fields(draft)
+                v3.VAlert(
+                    "{{ study_error }}",
+                    v_if="study_error",
+                    type="error",
+                    variant="tonal",
+                    density="compact",
+                    classes="text-caption mx-4 flex-grow-0",
+                    style="white-space: pre-wrap;",
+                )
+                with v3.VCardActions():
+                    v3.VSpacer()
+                    v3.VBtn(
+                        "Cancel",
+                        variant="text",
+                        classes="text-none",
+                        click="study_dialog_open = false",
+                    )
+                    v3.VBtn(
+                        "{{ study_editing ? 'Save' : 'Create' }}",
+                        color="primary",
+                        variant="flat",
+                        classes="text-none",
+                        loading=("busy",),
+                        click=(
+                            self.save_study_dialog,
+                            "[study_name, study_kind, study_draft]",
+                        ),
+                    )
 
     def _study_dialog(self) -> None:
         with v3.VDialog(v_model=("study_confirm_open",), max_width=560, persistent=True):

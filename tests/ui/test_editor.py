@@ -197,3 +197,65 @@ def test_save_refuses_a_file_changed_on_disk(tmp_path):
         assert "already exists" in ed.state.message
     finally:
         ed.worker.stop()
+
+
+def test_a_study_is_set_up_and_edited_in_the_dialog(tmp_path):
+    import yaml
+
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-study-dialog-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        ed.new_study()
+        s = ed.state
+        assert s.study_dialog_open and s.study_kind == "simulate" and not s.study_editing
+        assert "tank.out" in s.study_choices["streams"]
+        assert "asm1.muH" in s.study_choices["parameters"]
+        assert "TN" in s.study_choices["channels"]["tank.out"]
+
+        # Switching kinds keeps what both kinds have.
+        draft = dict(s.study_draft, description="Ammonia design")
+        ed.set_study_kind("fisher", draft)
+        assert s.study_draft["description"] == "Ammonia design"
+        names = [f["name"] for f in s.study_fields]
+        assert names[:3] == ["description", "parameters", "initial_state"]
+
+        draft = dict(s.study_draft)
+        draft["free"] = ["asm1.muH"]
+        draft["observables"] = [{"stream": "tank.out", "channels": ["SNH"], "measures": {}}]
+        draft["t_obs"] = {"mode": "list", "start": "", "stop": "", "num": "", "list": "0.1, 0.2"}
+        draft["sigma"] = "lots"
+        ed.save_study_dialog("design", "fisher", draft)
+        assert s.study_dialog_open and "Measurement error: 'lots' is not a number" in s.study_error
+        ed.save_study_dialog("design", "fisher", {**draft, "sigma": ""})
+        assert s.study_error == "Still needed: Measurement error."
+        ed.save_study_dialog("", "fisher", {**draft, "sigma": "0.1"})
+        assert s.study_error == "Give the study a name."
+        ed.save_study_dialog("design", "fisher", {**draft, "sigma": "0.1"})
+        assert not s.study_dialog_open
+        written = yaml.safe_load((project / "studies" / "design" / "study.yaml").read_text())
+        assert written["study"] == {
+            "kind": "fisher",
+            "description": "Ammonia design",
+            "free": ["asm1.muH"],
+            "observables": [{"stream": "tank.out", "channels": ["SNH"]}],
+            "t_obs": [0.1, 0.2],
+            "sigma": 0.1,
+        }
+        assert {st["name"] for st in s.studies} == {"short", "design"}
+
+        # Editing opens the study's settings; a name already taken is refused.
+        ed.edit_study("design")
+        assert s.study_editing.endswith("design") and s.study_draft["sigma"] == "0.1"
+        ed.save_study_dialog("design", "fisher", {**s.study_draft, "sigma": "0.2"})
+        assert (
+            yaml.safe_load((project / "studies" / "design" / "study.yaml").read_text())["study"][
+                "sigma"
+            ]
+            == 0.2
+        )
+        ed.new_study()
+        ed.save_study_dialog("design", "simulate", {**s.study_draft, "streams": ["tank.out"]})
+        assert s.study_error.startswith("a study named design already exists")
+    finally:
+        ed.worker.stop()
