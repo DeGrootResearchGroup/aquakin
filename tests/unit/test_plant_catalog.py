@@ -405,3 +405,60 @@ def test_docstrings_and_plain_values():
 def test_a_port_setting_left_empty_gives_no_ports():
     kind = unit_kind("mixer")
     assert kind.ports_for({"model": "asm1", "input_port_names": None})[0] == []
+
+
+def test_settings_read_from_classes_that_document_less():
+    from aquakin.plant.catalog import Setting, _docstring_parts, _generic_help, _settings_of
+
+    class Plain:
+        """A unit that is not a dataclass.
+
+        Parameters
+        ----------
+        size : float
+            How big it is.
+
+        Returns
+        -------
+        nothing
+        """
+
+        def __init__(self, name, size: float = 1.0, inlet_port: str = "in"):
+            pass
+
+    summary, helps = _docstring_parts(Plain)
+    assert summary == "A unit that is not a dataclass." and helps == {"size": "How big it is."}
+    by_name = {s.name: s for s in _settings_of(Plain)}
+    assert by_name["size"].default == 1.0
+    assert by_name["inlet_port"].help == _generic_help("inlet_port", "port_name")
+    assert _generic_help("inlet_port", "port_name") == "Name of the inlet port."
+    assert _generic_help("size", "number") == ""  # nothing generic to say
+    assert isinstance(by_name["size"], Setting)
+
+
+def test_cached_model_files_and_plain_setting_values(tmp_path):
+    from aquakin.plant.catalog import _setting_value, load_model_file, unit_settings
+
+    (tmp_path / "m.yaml").write_text("model:\n  name: m\n  extends: asm1\n")
+    assert load_model_file(tmp_path / "m.yaml") is load_model_file(tmp_path / "m.yaml")
+
+    m = aquakin.load_model("asm1")
+    tank = plant.CSTRUnit("t", m, 100.0, ["in"], conditions=T, aeration=plant.Aeration(kla=240.0))
+    # Without full, an aeration lists only the fields away from their defaults.
+    assert unit_settings(tank)[1]["aeration"] == {"kla": 240.0}
+    number = unit_kind("cstr").settings[1]
+    with pytest.raises(ValueError, match="'volume' .* has no plain form"):
+        _setting_value(number, object())
+
+
+def test_aeration_must_be_a_mapping_and_series_may_be_absolute(tmp_path):
+    from aquakin.plant import write_influent_table
+    from aquakin.plant.bsm import load_bsm1_influent
+    from aquakin.plant.catalog import build_unit, validate_settings
+
+    with pytest.raises(ValueError, match="'aeration' must be"):
+        validate_settings(unit_kind("cstr"), {"aeration": 240.0})
+    m = aquakin.load_model("asm1")
+    table = write_influent_table(load_bsm1_influent("dry", m), tmp_path / "feed.csv")
+    series = build_unit("influent", "feed", {"model": "asm1", "series": str(table)})
+    assert series.Q.shape[0] > 100

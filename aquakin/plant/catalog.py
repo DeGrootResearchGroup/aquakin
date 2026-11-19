@@ -818,9 +818,8 @@ def _arguments(kind: UnitKind, settings: dict, models: dict | None = None) -> di
                 continue
             value = s.default
         else:
+            # validate_settings has refused a given value for a Python-only setting.
             value = given[s.name]
-        if s.type == "unsupported":
-            raise ValueError(f"'{s.name}' ({s.python_type}) can only be set from Python for now")
         if value is None:
             args[s.name] = None
         elif s.type == "model":
@@ -946,8 +945,16 @@ def _setting_value(s: Setting, value, *, model_ref=None, full=False):
         out = {}
         for f in dataclasses.fields(value):
             v = _plain(getattr(value, f.name))
-            if not full and f.default is not dataclasses.MISSING and v == _plain(f.default):
-                continue
+            if not full and f.default is not dataclasses.MISSING:
+                # The default as the aeration stores it (its normalization runs
+                # on it too: stripped=None is kept as an empty tuple). A field
+                # the aeration cannot do without (kla) keeps its declared default.
+                try:
+                    default = getattr(dataclasses.replace(value, **{f.name: f.default}), f.name)
+                except ValueError:
+                    default = f.default
+                if v == _plain(default):
+                    continue
             out[f.name] = v
         return out
     if s.type == "reagent":

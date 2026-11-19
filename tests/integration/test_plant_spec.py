@@ -951,3 +951,57 @@ def test_a_failed_write_leaves_no_temporary_file(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="disk full"):
         _bsm1().to_spec(tmp_path / "flowsheet.yaml")
     assert os.listdir(tmp_path) == []
+
+
+def test_small_spec_helpers_on_their_edges(tmp_path):
+    import dataclasses
+
+    from aquakin.plant.spec import (
+        _canonical_endpoint,
+        _extends_of,
+        _same_kind,
+        _translator_spec,
+        spec_changes,
+    )
+
+    # A model file that is not a mapping extends nothing.
+    assert _extends_of("- a\n- b\n", "list.yaml") is None
+    # A bare endpoint of a unit with several ports keeps the port open.
+    ports = {"split": (["in"], ["a", "b"])}
+    assert _canonical_endpoint("split", ports, "output") == "split."
+    assert _canonical_endpoint("split", ports, "input") == "split.in"
+    assert _same_kind("text", "other") and not _same_kind("text", 1)
+
+    t = ASM1toADM1(_asm1(), _adm1())
+    odd = dataclasses.replace(t)
+    object.__setattr__(odd, "fnaa", [[0.1]])
+    with pytest.raises(SpecError, match="translator setting 'fnaa' has no plain form"):
+        _translator_spec(odd, "here")
+
+    # A label for a unit the plant no longer has is not written.
+    p = _bsm1()
+    p.labels["ghost"] = "Gone"
+    assert "ghost" not in p.to_spec()["units"]
+
+    # A table that is still as recorded is not reported.
+    q = _dynamic_bsm1()
+    q.to_spec(tmp_path / "flowsheet.yaml")
+    assert spec_changes(tmp_path / "flowsheet.yaml") == []
+
+
+def test_influent_tables_that_cannot_be_read(tmp_path):
+    from aquakin.plant import read_influent_table
+
+    with pytest.raises(FileNotFoundError, match="Influent table not found"):
+        read_influent_table(tmp_path / "missing.csv", _asm1())
+    (tmp_path / "noflow.csv").write_text("t,SS\n0,1\n1,1\n")
+    with pytest.raises(ValueError, match="has no 'Q' column"):
+        read_influent_table(tmp_path / "noflow.csv", _asm1())
+
+
+def test_a_model_file_read_with_another_activity_model_is_not_a_plain_file_model():
+    from importlib.resources import files
+
+    path = files("aquakin.models") / "adm1.yaml"
+    m = aquakin.load_model_from_file(str(path), activity_model="davies")
+    assert getattr(m, "_aquakin_source", None) is None

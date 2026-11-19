@@ -625,3 +625,85 @@ def test_a_frozen_study_run_on_another_plant_is_stale(project):
     status = check_study(folder)
     assert status.state == "stale"
     assert status.reasons == ["the study was frozen on another plant than its results'"]
+
+
+def test_a_steady_state_that_does_not_converge_fails_the_run(project, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        Plant, "steady_state", lambda self, *a, **k: SimpleNamespace(converged=False, state=None)
+    )
+    start = _study(project, "nostart", {**DYNAMIC, "initial_state": "steady"})
+    with pytest.raises(StudyError, match="steady state used as the initial state did not converge"):
+        run_study(start)
+    steady = _study(project, "nosteady", {"kind": "simulate", "streams": ["effluent"]})
+    with pytest.raises(StudyError, match="the steady state did not converge"):
+        run_study(steady)
+    assert check_study(steady).state == "failed"
+
+
+def test_simulations_that_save_only_streams_or_only_channels(project):
+    streams = _study(project, "streams_only", {**DYNAMIC, "observables": []})
+    run_study(streams)
+    assert (streams / "results" / "streams.csv").exists()
+    assert not (streams / "results" / "measured.csv").exists()
+    channels = _study(project, "channels_only", {**DYNAMIC, "streams": []})
+    run_study(channels)
+    assert (channels / "results" / "measured.csv").exists()
+    assert not (channels / "results" / "streams.csv").exists()
+
+
+def test_criteria_that_cannot_be_computed_are_left_empty(project, monkeypatch):
+    import aquakin
+
+    def refuse(fim, criterion, *a, **k):
+        raise ValueError("cannot")
+
+    monkeypatch.setattr(aquakin, "design_criterion", refuse)
+    folder = _study(
+        project,
+        "nocriteria",
+        {
+            "kind": "fisher",
+            "free": ["asm1_local.muH"],
+            "observables": [{"stream": "effluent", "channels": ["SS"]}],
+            "t_obs": [0.1, 0.2],
+            "t_span": [0, 0.2],
+            "sigma": 1.0,
+        },
+    )
+    run_study(folder)
+    summary = yaml.safe_load((folder / "results" / "summary.yaml").read_text())
+    assert summary["criteria"] == {"D": None, "A": None, "E": None, "modified_E": None}
+    assert summary["std"]["asm1_local.muH"] > 0.0
+
+
+def test_a_calibration_without_a_posterior_writes_no_covariance(project, monkeypatch):
+    """With the fit itself stubbed: no Laplace posterior, no covariance file."""
+    from types import SimpleNamespace
+
+    import aquakin.plant as plant_module
+
+    folder = project / "studies" / "nolaplace"
+    _synthetic_data(project, folder, 5.0)
+    (folder / "study.yaml").write_text(yaml.safe_dump({"study": {"kind": "calibrate", **FIT}}))
+
+    def fit(plant, observations, t, free, **kw):
+        return SimpleNamespace(
+            params=kw["params"],
+            params_named={n: float(kw["params"][plant.parameter_index(n)]) for n in free},
+            params_named_std=None,
+            loss=0.0,
+            converged=True,
+            message="stub",
+            n_iter=0,
+            at_bound={},
+            sigma_estimate=None,
+            posterior_cov=None,
+            parameter_names=list(free),
+        )
+
+    monkeypatch.setattr(plant_module, "calibrate_plant", fit)
+    run_study(folder)
+    assert not (folder / "results" / "covariance.csv").exists()
+    assert yaml.safe_load((folder / "results" / "fit.yaml").read_text())["std"] is None

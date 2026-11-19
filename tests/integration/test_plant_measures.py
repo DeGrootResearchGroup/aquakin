@@ -247,3 +247,14 @@ def test_the_composition_base_of_file_chains(tmp_path):
     assert composition_base(aquakin.load_model_from_file(tmp_path / "more.yaml")) is None
     (tmp_path / "top.yaml").unlink()
     assert composition_base(top) is None
+
+
+def test_a_file_chain_edited_into_a_loop_after_loading_has_no_base(tmp_path):
+    from aquakin.utils.composition import composition_base
+
+    (tmp_path / "a.yaml").write_text("model:\n  name: a1\n  extends: b.yaml\n")
+    (tmp_path / "b.yaml").write_text("model:\n  name: b1\n  extends: asm1\n")
+    model = aquakin.load_model_from_file(tmp_path / "a.yaml")
+    assert composition_base(model) == "asm1"
+    (tmp_path / "b.yaml").write_text("model:\n  name: b1\n  extends: a.yaml\n")
+    assert composition_base(model) is None
