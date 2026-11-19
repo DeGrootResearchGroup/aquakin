@@ -20,7 +20,11 @@ file read as YAML 1.2, see :func:`~aquakin.plant.spec.load_spec_file`) and
 :func:`~aquakin.plant.spec.write_spec`, returning what was written),
 ``list_studies`` (``project``: every study of a project folder with its
 status), ``freeze_study`` / ``unfreeze_study`` (``path``, ``discard_results``)
-and ``copy_study`` (``path``, ``name``). A study is run in a process of its
+``copy_study`` (``path``, ``name``), ``study_form`` (every study setting, for a
+form), ``plant_choices`` (``spec``, ``base_dir``: the streams, parameters and
+channels a study of it may name), ``read_study`` (``path``), ``create_study``
+(``project``, ``name``, ``study``) and ``update_study`` (``path``, ``study``). A
+study is run in a process of its
 own, ``aquakin study run --json <path>``, which streams progress events.
 A failed request is answered
 ``{"id": ..., "ok": false, "error": message}`` and the worker keeps serving.
@@ -70,6 +74,12 @@ def _list_studies(project) -> list[dict]:
     return out
 
 
+def _study_module():
+    from aquakin import study
+
+    return study
+
+
 def _study_call(function: str, req: dict, **kwargs):
     """Call ``aquakin.study.<function>`` on the request's study folder."""
     from aquakin import study as st
@@ -98,6 +108,15 @@ def _handlers():
             "unfreeze_study", req, discard_results=bool(req.get("discard_results"))
         ),
         "copy_study": lambda req: str(_study_call("copy_study", req, name=req["name"])),
+        "study_form": lambda req: _study_module().study_form(),
+        "plant_choices": lambda req: _study_module().plant_choices(
+            req["spec"], base_dir=req.get("base_dir")
+        ),
+        "read_study": lambda req: _study_module().read_study(req["path"]),
+        "create_study": lambda req: str(
+            _study_module().create_study(req["project"], req["name"], req["study"])
+        ),
+        "update_study": lambda req: str(_study_module().update_study(req["path"], req["study"])),
         "write_spec": lambda req: write_spec(
             req["spec"], req["path"], base_dir=req.get("base_dir")
         ),

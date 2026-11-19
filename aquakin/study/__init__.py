@@ -18,6 +18,13 @@ from aquakin.study.files import (
     write_table,
     write_trajectory,
 )
+from aquakin.study.form import (
+    create_study,
+    plant_choices,
+    read_study,
+    study_form,
+    update_study,
+)
 from aquakin.study.study import (
     StudyError,
     StudyStatus,
@@ -34,14 +41,19 @@ __all__ = [
     "StudyStatus",
     "check_study",
     "copy_study",
+    "create_study",
     "freeze_study",
     "load_study",
+    "plant_choices",
     "read_matrix",
     "read_named_values",
+    "read_study",
     "read_table",
     "read_trajectory",
     "run_study",
+    "study_form",
     "unfreeze_study",
+    "update_study",
     "write_matrix",
     "write_named_values",
     "write_table",
