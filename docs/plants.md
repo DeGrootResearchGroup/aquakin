@@ -439,10 +439,20 @@ model (with every file it `extends:`) or influent table from outside the project
 folder into it. Save refuses to overwrite a flowsheet that changed on disk since
 the window opened it, so two windows cannot silently undo each other's work.
 
+**Simulate** runs the plant. It saves the flowsheet if you changed it, sets up
+a study named `simulation` the first time (the plant at steady state, saving
+every stream that leaves it, with its flow, COD, TKN, NOx, TN and TSS), runs it,
+and shows the results: a table of what leaves the plant, with every species
+under *Flow and species*. To run it in time instead, or to save other streams,
+**Edit** the `simulation` study. A study that runs in time shows a chart per
+channel of the stream you pick. From Python, `aquakin.study.simulation_study(spec)`
+gives those settings and `study_results(path)` reads a study's results back.
+
 The **Studies** tab lists the project's studies and where each stands (fresh,
 stale and why, not run, failed, cancelled). Run one to watch its progress and
 cancel it; freeze, unfreeze or copy it. Running a study that has results, or
-unfreezing one, asks first and offers to keep a copy. **New study** sets one up
+unfreezing one, asks first and offers to keep a copy; **Results** shows what a
+finished study found. **New study** sets one up
 in a dialog: pick its kind, and the fields that kind uses appear, with the
 plant's own streams, parameters and measurable channels to choose from;
 **Edit** opens a study's settings in the same dialog. The dialog writes the same

@@ -12,12 +12,21 @@ inputs.
 
 from __future__ import annotations
 
+import math
 import shutil
 from pathlib import Path
 
 import yaml
 
-__all__ = ["create_study", "plant_choices", "read_study", "study_form", "update_study"]
+__all__ = [
+    "create_study",
+    "plant_choices",
+    "read_study",
+    "simulation_study",
+    "study_form",
+    "study_results",
+    "update_study",
+]
 
 _COMMON = ("description", "parameters", "initial_state")
 _FIT = ("free", "observables", "data", "t_span", "loss", "sigma", "estimate_sigma")
@@ -301,27 +310,211 @@ def plant_choices(spec, *, base_dir=None) -> dict:
         (temperature only when an influent carries one).
     """
     from aquakin.plant import Plant
-    from aquakin.plant.measures import KEYWORDS, measure_map
 
     plant = Plant.from_spec(spec, base_dir=base_dir)
     streams = [*plant.list_streams(), *plant.list_ports()]
-    # A stream carries a temperature only when an influent does.
-    warm = any(series.T is not None for series in plant.influents.values())
-    channels = {}
-    for stream in streams:
-        unit = plant.named_streams.get(stream, stream).split(".", 1)[0]
-        model = plant.units[unit].model
-        given = []
-        for keyword in KEYWORDS:
-            if keyword == "T" and not warm:
-                continue
-            try:
-                measure_map(model, (keyword,))
-            except (KeyError, ValueError):
-                continue
-            given.append(keyword)
-        channels[stream] = [*given, *model.species]
+    channels = {s: [*_measures(plant, s), *_model_of(plant, s).species] for s in streams}
     return {"streams": streams, "parameters": plant.parameter_names(), "channels": channels}
+
+
+def _model_of(plant, stream: str):
+    unit = plant.named_streams.get(stream, stream).split(".", 1)[0]
+    return plant.units[unit].model
+
+
+def _measures(plant, stream: str) -> list[str]:
+    """The measurement keywords the model of ``stream`` gives (temperature only
+    when an influent carries one)."""
+    from aquakin.plant.measures import KEYWORDS, measure_map
+
+    warm = any(series.T is not None for series in plant.influents.values())
+    model = _model_of(plant, stream)
+    given = []
+    for keyword in KEYWORDS:
+        if keyword == "T" and not warm:
+            continue
+        try:
+            measure_map(model, (keyword,))
+        except (KeyError, ValueError):
+            continue
+        given.append(keyword)
+    return given
+
+
+def simulation_study(spec, *, base_dir=None) -> dict:
+    """The settings of a plain simulation of the flowsheet ``spec``.
+
+    The plant at steady state, saving every stream that leaves it (an output
+    port nothing is connected to, by its stream name when it has one) and the
+    measurements its model gives on each (flow, COD, TKN, TN, TSS, ...).
+
+    Parameters
+    ----------
+    spec : dict or str or pathlib.Path
+        The flowsheet, or its file.
+    base_dir : str or pathlib.Path, optional
+        Where a mapping's relative paths point from.
+
+    Returns
+    -------
+    dict
+        Study settings for :func:`create_study`.
+
+    Raises
+    ------
+    StudyError
+        If no stream leaves the plant and none is named.
+    """
+    from aquakin.plant import Plant
+    from aquakin.study.study import StudyError
+
+    plant = Plant.from_spec(spec, base_dir=base_dir)
+    fed = {f"{c.from_unit}.{c.from_port}" for c in plant.connections if c.from_unit is not None}
+    named = {endpoint: name for name, endpoint in plant.list_streams().items()}
+    streams = [
+        named.get(port, port)
+        for port in plant.list_ports()
+        if port not in fed and hasattr(plant.units[port.split(".", 1)[0]], "model")
+    ]
+    if not streams:
+        streams = list(plant.list_streams())
+    if not streams:
+        raise StudyError("no stream leaves the plant: connect an outlet or name a stream")
+    observables = []
+    for stream in streams:
+        channels = _measures(plant, stream)
+        if channels:
+            observables.append({"stream": stream, "channels": channels})
+    study = {
+        "kind": "simulate",
+        "description": "The plant at steady state: the streams that leave it.",
+        "streams": streams,
+    }
+    if observables:
+        study["observables"] = observables
+    return study
+
+
+def _finite(value):
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_finite(v) for v in value]
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def _by_stream(columns: dict, streams: list[str]) -> dict:
+    """``{"<stream>.<channel>": values}`` as ``{stream: {channel: values}}`` (a
+    stream name may hold a dot, so the longest stream that prefixes a column wins)."""
+    out: dict = {}
+    longest = sorted(streams, key=len, reverse=True)
+    for column, values in columns.items():
+        stream = next((s for s in longest if column.startswith(s + ".")), None)
+        if stream is None:
+            stream, _, channel = column.rpartition(".")
+        else:
+            channel = column[len(stream) + 1 :]
+        out.setdefault(stream, {})[channel] = values
+    return out
+
+
+def _units(folder: Path, study, streams: list[str]) -> tuple[dict, str | None]:
+    """Each stream's units by channel, and the plant's clock; empty when the
+    plant no longer builds (the results are shown without units then)."""
+    from aquakin.plant import Plant
+    from aquakin.study.study import _flowsheet
+
+    try:
+        plant = Plant.from_spec(_flowsheet(folder, study))
+        clock = plant.time_unit
+        units = {}
+        for stream in streams:
+            model = _model_of(plant, stream)
+            species = {sp: model.units_of(sp) for sp in model.species}
+            units[stream] = {
+                "Q": f"m³/{clock}" if clock else "",
+                "T": "K",
+                **_measure_units(species.values()),
+                **species,
+            }
+        return units, clock
+    except Exception:  # units are a courtesy: shown without them when the plant no longer builds
+        return {}, None
+
+
+def _measure_units(species_units) -> dict:
+    """The units of the measurement keywords, read off the species' own: COD in
+    the unit of the COD species, the nitrogen and phosphorus measures in those of
+    the N and P species, TSS in the COD species' mass per volume."""
+    units = list(species_units)
+
+    def first(tag: str) -> str:
+        return next((u for u in units if tag in u), "")
+
+    cod, n, p = first("COD"), first("_N/"), first("_P/")
+    out = {"COD": cod, "TKN": n, "NOx": n, "TN": n, "TP": p}
+    if cod:
+        out["TSS"] = cod.replace("_COD", "")
+    return {k: v for k, v in out.items() if v}
+
+
+def study_results(path) -> dict:
+    """A study's results as plain data, for a front end to show.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The study folder.
+
+    Returns
+    -------
+    dict
+        ``{"kind", "files"}`` (the result file names) and, for a ``simulate``
+        study, ``"steady"`` and per stream its values by channel:
+        ``"streams"`` (flow, species, temperature) and ``"measured"`` (the
+        observables' channels), each ``{stream: {channel: value}}`` at a steady
+        state or ``{stream: {channel: [values]}}`` with ``"t"`` and
+        ``"time_unit"`` for a run in time; ``"units"`` gives
+        ``{stream: {channel: unit}}`` where known. A value that is not finite
+        is ``None``.
+
+    Raises
+    ------
+    StudyError
+        If the study has no results.
+    """
+    from aquakin.study.files import read_named_values, read_trajectory
+    from aquakin.study.study import RESULTS, StudyError, _folder, load_study
+
+    folder = _folder(path)
+    study = load_study(folder)
+    out = folder / RESULTS
+    if not out.is_dir():
+        raise StudyError(f"study {folder.name} has no results; run it first")
+    result: dict = {"kind": study.kind, "files": sorted(p.name for p in out.iterdir())}
+    if study.kind != "simulate":
+        return result
+    streams = [*study.streams, *(o.stream for o in study.observables)]
+    units, clock = _units(folder, study, list(dict.fromkeys(streams)))
+    result["units"] = units
+    result["steady"] = study.time is None
+    for key in ("streams", "measured"):
+        if study.time is None:
+            file = out / f"{key}.yaml"
+            if file.is_file():
+                result[key] = _finite(read_named_values(file))
+        else:
+            file = out / f"{key}.csv"
+            if file.is_file():
+                t, columns = read_trajectory(file)
+                result["t"] = _finite(list(t))
+                result[key] = _by_stream(
+                    {name: _finite(list(v)) for name, v in columns.items()}, streams
+                )
+    if study.time is not None:
+        result["time_unit"] = study.time.time_unit or clock
+    return result
 
 
 def _bring_in(folder: Path, study: dict, key: str, project: Path) -> None:

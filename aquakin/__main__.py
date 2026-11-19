@@ -23,8 +23,9 @@ status), ``freeze_study`` / ``unfreeze_study`` (``path``, ``discard_results``)
 ``copy_study`` (``path``, ``name``), ``study_form`` (every study setting, for a
 form), ``plant_choices`` (``spec``, ``base_dir``: the streams, parameters and
 channels a study of it may name), ``read_study`` (``path``), ``create_study``
-(``project``, ``name``, ``study``) and ``update_study`` (``path``, ``study``). A
-study is run in a process of its
+(``project``, ``name``, ``study``), ``update_study`` (``path``, ``study``),
+``simulation_study`` (``spec``, ``base_dir``: the settings of a plain simulation)
+and ``study_results`` (``path``: the results as plain data). A study is run in a process of its
 own, ``aquakin study run --json <path>``, which streams progress events.
 A failed request is answered
 ``{"id": ..., "ok": false, "error": message}`` and the worker keeps serving.
@@ -113,6 +114,10 @@ def _handlers():
             req["spec"], base_dir=req.get("base_dir")
         ),
         "read_study": lambda req: _study_module().read_study(req["path"]),
+        "simulation_study": lambda req: _study_module().simulation_study(
+            req["spec"], base_dir=req.get("base_dir")
+        ),
+        "study_results": lambda req: _study_module().study_results(req["path"]),
         "create_study": lambda req: str(
             _study_module().create_study(req["project"], req["name"], req["study"])
         ),

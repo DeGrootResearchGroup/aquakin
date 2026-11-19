@@ -1,6 +1,7 @@
 """The editor page, built and driven without a browser."""
 
 import pytest
+import yaml
 from trame.app import get_server
 
 from aquakin_ui.app import Editor
@@ -179,6 +180,47 @@ def test_a_run_can_be_cancelled(tmp_path):
         ed.worker.stop()
 
 
+def test_simulate_saves_sets_up_runs_and_shows_the_plant(tmp_path):
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-simulate-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        # A moved unit is an unsaved change: Simulate saves it first.
+        ed.on_move([{"id": "tank", "position": {"x": 300.0, "y": 40.0}}])
+        before = (project / "flowsheet.yaml").read_text()
+        ed.simulate()
+        assert (project / "flowsheet.yaml").read_text() != before
+        study = yaml.safe_load((project / "studies" / "simulation" / "study.yaml").read_text())
+        assert study["study"]["streams"] == ["tank.out"]
+        assert study["study"]["observables"][0]["channels"][:3] == ["Q", "COD", "TKN"]
+        assert ed.state.panel == "studies" and ed.state.simulating
+        assert ed._runs["simulation"].wait(300)["event"] == "done"
+        assert not ed.state.simulating
+        # The results open when the run finishes.
+        assert ed.state.results_open and ed.state.results_mode == "steady"
+        table = ed.state.results_measured
+        assert table["columns"] == ["tank.out"]
+        assert table["rows"][0] == {"channel": "Q", "unit": "m³/d", "values": ["2,000"]}
+
+        # Again: nothing to save, and replacing the results asks first.
+        ed.state.results_open = False
+        ed.simulate()
+        assert ed.state.study_confirm_open and "Replace the results" in ed.state.study_confirm_title
+        ed.answer_study("cancel")
+
+        # A run in time shows a chart per channel; another kind lists its files.
+        ed.run_study("short")
+        assert ed._runs["short"].wait(300)["event"] == "done"
+        ed.show_results("short")
+        assert ed.state.results_mode == "time" and ed.state.results_stream == "tank"
+        assert [c["channel"] for c in ed.state.results_charts] == ["Q", "SI", "SS", "XI"]
+        ed.show_charts(["SNH"])
+        assert "<polyline" in ed.state.results_charts[0]["svg"]
+    finally:
+        ed.stop_runs()
+        ed.worker.stop()
+
+
 def test_save_refuses_a_file_changed_on_disk(tmp_path):
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-guard-test", client_type="vue3")
@@ -200,8 +242,6 @@ def test_save_refuses_a_file_changed_on_disk(tmp_path):
 
 
 def test_a_study_is_set_up_and_edited_in_the_dialog(tmp_path):
-    import yaml
-
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-study-dialog-test", client_type="vue3")
     ed = Editor(server, path=project / "flowsheet.yaml")

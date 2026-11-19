@@ -14,7 +14,9 @@ from aquakin.study import (
     plant_choices,
     read_study,
     run_study,
+    simulation_study,
     study_form,
+    study_results,
     update_study,
 )
 from aquakin.study.study import _Study
@@ -147,6 +149,7 @@ def test_the_worker_answers_the_form_commands(project):
             "study": {"kind": "simulate", "streams": ["effluent"]},
         },
         {"id": 4, "command": "read_study", "path": str(project / "studies" / "s")},
+        {"id": 6, "command": "simulation_study", "spec": str(project / "flowsheet.yaml")},
         {
             "id": 5,
             "command": "update_study",
@@ -159,4 +162,77 @@ def test_the_worker_answers_the_form_commands(project):
     replies = [json.loads(line) for line in out.getvalue().splitlines()]
     assert all(r["ok"] for r in replies), replies
     assert replies[3]["result"] == {"kind": "simulate", "streams": ["effluent"]}
+    assert replies[4]["result"]["streams"] == ["effluent", "wastage"]
     assert read_study(project / "studies" / "s")["streams"] == ["ras"]
+
+
+def test_a_plain_simulation_saves_what_leaves_the_plant():
+    study = simulation_study(BSM1 / "flowsheet.yaml")
+    # The effluent and the wasted sludge leave BSM1 (by their stream names);
+    # the recycles do not.
+    assert study["kind"] == "simulate" and study["streams"] == ["effluent", "wastage"]
+    assert study["observables"][0] == {
+        "stream": "effluent",
+        "channels": ["Q", "COD", "TKN", "NOx", "TN", "TSS"],
+    }
+    _Study.model_validate(study)
+
+
+def test_the_results_of_a_steady_simulation_read_with_units(project):
+    folder = create_study(project, "simulation", simulation_study(project / "flowsheet.yaml"))
+    with pytest.raises(StudyError, match="has no results; run it first"):
+        study_results(folder)
+    run_study(folder)
+    results = study_results(folder)
+    json.dumps(results, allow_nan=False)
+    assert results["kind"] == "simulate" and results["steady"]
+    assert "measured.yaml" in results["files"]
+    effluent = results["measured"]["effluent"]
+    assert set(effluent) == {"Q", "COD", "TKN", "NOx", "TN", "TSS"}
+    assert effluent["TN"] == pytest.approx(
+        results["streams"]["effluent"]["SNO"] + effluent["TKN"], rel=1e-9
+    )
+    units = results["units"]["effluent"]
+    assert units["Q"] == "m³/d" and units["SNH"] == units["TN"] == "g_N/m³"
+    assert units["COD"] == "g_COD/m³" and units["TSS"] == "g/m³"
+
+
+def test_the_results_of_a_run_in_time_read_by_stream(project):
+    import math
+
+    from aquakin.study import write_trajectory
+
+    folder = create_study(
+        project,
+        "run",
+        {
+            "kind": "simulate",
+            "time": {"t_span": [0.0, 1.0], "time_unit": "h"},
+            "streams": ["clarifier.overflow"],
+            "observables": [{"stream": "effluent", "channels": ["TN"]}],
+        },
+    )
+    out = folder / "results"
+    write_trajectory(
+        out / "streams.csv",
+        [0.0, 1.0],
+        {"clarifier.overflow.Q": [1.0, 2.0], "clarifier.overflow.SNH": [3.0, math.nan]},
+    )
+    write_trajectory(out / "measured.csv", [0.0, 1.0], {"effluent.TN": [5.0, 6.0]})
+    results = study_results(folder)
+    json.dumps(results, allow_nan=False)
+    assert not results["steady"] and results["t"] == [0.0, 1.0] and results["time_unit"] == "h"
+    assert results["streams"] == {"clarifier.overflow": {"Q": [1.0, 2.0], "SNH": [3.0, None]}}
+    assert results["measured"] == {"effluent": {"TN": [5.0, 6.0]}}
+    # Another kind gives its files only; a plant that no longer builds, no units.
+    (project / "flowsheet.yaml").write_text("not a flowsheet")
+    assert study_results(folder)["units"] == {}
+    fisher = folder.parent / "fisher"
+    fisher.mkdir()
+    (fisher / "study.yaml").write_text(
+        "study: {kind: fisher, free: [asm1.muH], observables: [{stream: effluent}], "
+        "t_obs: [1.0], sigma: 1.0}\n"
+    )
+    (fisher / "results").mkdir()
+    (fisher / "results" / "fisher.csv").write_text("")
+    assert study_results(fisher) == {"kind": "fisher", "files": ["fisher.csv"]}

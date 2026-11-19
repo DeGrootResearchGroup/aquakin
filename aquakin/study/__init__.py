@@ -22,7 +22,9 @@ from aquakin.study.form import (
     create_study,
     plant_choices,
     read_study,
+    simulation_study,
     study_form,
+    study_results,
     update_study,
 )
 from aquakin.study.study import (
@@ -51,7 +53,9 @@ __all__ = [
     "read_table",
     "read_trajectory",
     "run_study",
+    "simulation_study",
     "study_form",
+    "study_results",
     "unfreeze_study",
     "update_study",
     "write_matrix",

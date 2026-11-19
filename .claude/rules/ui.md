@@ -32,6 +32,7 @@ import aquakin (to build expected values).
 | `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. Lists no setting or type of its own |
 | `icons.py` | `ICONS`, `COLOURS`, `CATEGORY_LABELS`, `SVG`, `icon_name` | the only per-kind presentation table; an unlisted kind gets the tank icon |
 | `study_form.py` | `fields_for`, `draft_for`, `study_from`, `missing` | **pure**: the study dialog's draft from the worker's `study_form` (numbers kept as text, an even time grid as start / stop / count) and back, empty fields and defaults left out; `missing` names a kind's required fields by label. Lists no setting of its own |
+| `results.py` | `fmt`, `steady_table`, `channels_of`, `line_chart` | **pure**: the results view's tables (a column per stream, a row per channel with its unit) and SVG charts (one channel each, so never two y-axes; the dataviz palette's slot-1 blue, `#3987e5` in dark mode, set in `PAGE_CSS`; a CSS-hover crosshair and a native `<title>` tooltip per sampled time, at most `MAX_HOVER` of them, the line thinned to `MAX_POINTS`) |
 | `jobs.py` | `StudyRun` | one study run = one `python -m aquakin study run --json` process: JSON progress events on stdout, `cancel` on stdin (killed after `CANCEL_GRACE` if no checkpoint comes); its own temporary log |
 | `app.py` | `Editor` | the page; turns finished canvas edits into document changes; the Studies tab |
 | `widget/` | `Flowsheet` (trame element), `module.py`, `serve/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
@@ -97,6 +98,15 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   add / remove ends with `_REDRAW`, or rows do not appear and a stream's
   channels stay empty. Each field heading carries the `<input id>-label` id
   Vuetify's `aria-labelledby` points at.
+- **Simulate** (`Editor.simulate`): saves first when the document differs from
+  what was last opened or saved (`_saved`, a JSON snapshot; a move counts),
+  then, off the page's thread, creates the `simulation` study from the worker's
+  `simulation_study` if the project has none (pointing at the spec when it is not
+  `flowsheet.yaml`) and runs it through `run_study`, so replacing its results
+  asks first like any study. A run started this way opens its results when it
+  finishes (`_show_when_done`). **Results** (`show_results`) asks the worker for
+  `study_results`; the charts are redrawn in Python when the stream or channels
+  change (`choose_results_stream` / `show_charts`).
 - **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
   `inf` / `-inf` remain for "no limit" number settings.
 - Icons are sent once (`icons` prop, injected into nodes); the spec text only

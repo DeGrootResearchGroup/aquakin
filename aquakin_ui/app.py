@@ -29,6 +29,7 @@ from aquakin_ui.catalog import Catalog
 from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
 from aquakin_ui.jobs import StudyRun
+from aquakin_ui.results import channels_of, line_chart, steady_table
 from aquakin_ui.study_form import draft_for, fields_for, missing, study_from
 from aquakin_ui.widget import Flowsheet as FlowsheetCanvas
 from aquakin_ui.worker import AquakinWorker, WorkerError
@@ -37,6 +38,21 @@ DRAG_TYPE = "application/x-aquakin-unit"
 CHECK_DELAY = 0.3  # seconds of quiet before aquakin's checks run
 
 PAGE_CSS = """
+.ak-chart { display: block; font: 11px Roboto, sans-serif; }
+.ak-chart-title { font-size: 13px; font-weight: 500; fill: rgba(var(--v-theme-on-surface), .87); }
+.ak-chart-axis { fill: rgba(var(--v-theme-on-surface), .62); }
+.ak-chart-grid { stroke: rgba(var(--v-theme-on-surface), .12); stroke-width: 1; }
+.ak-chart-line { fill: none; stroke: #2a78d6; stroke-width: 2; stroke-linejoin: round;
+  stroke-linecap: round; }
+.ak-chart-hit rect { fill: transparent; }
+.ak-chart-hit line, .ak-chart-hit circle { opacity: 0; }
+.ak-chart-hit line { stroke: rgba(var(--v-theme-on-surface), .35); stroke-width: 1; }
+.ak-chart-hit circle { fill: #2a78d6; stroke: rgb(var(--v-theme-surface)); stroke-width: 2; }
+.ak-chart-hit:hover line, .ak-chart-hit:hover circle { opacity: 1; }
+.v-theme--dark .ak-chart-line { stroke: #3987e5; }
+.v-theme--dark .ak-chart-hit circle { fill: #3987e5; }
+.ak-num { font-variant-numeric: tabular-nums; text-align: right !important; white-space: nowrap; }
+.ak-charts { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
 .ak-pal-item { cursor: grab; user-select: none; display: flex; align-items: center; gap: 10px;
   padding: 5px 10px; margin: 1px 8px; border-radius: 6px; font-size: 13px; }
 .ak-pal-item:hover { background: rgba(127,127,127,.12); }
@@ -44,6 +60,15 @@ PAGE_CSS = """
 .ak-pal-icon svg { width: 20px; height: 20px; }
 .ak-sel-icon svg { width: 28px; height: 28px; }
 """
+
+
+#: The study the Simulate button sets up and runs.
+SIMULATION = "simulation"
+
+
+def _plain_error(exc: Exception) -> str:
+    """A worker's error without the exception's class name in front."""
+    return str(exc).removeprefix("StudyError: ")
 
 
 # Rows are added to and removed from the study draft in place, which the page
@@ -88,6 +113,9 @@ class Editor:
         self._opened: tuple[Path, str] | None = None  # the file opened, and its sha256
         self._study_action = None
         self._study_form: dict | None = None  # the worker's study_form, asked once
+        self._saved: str | None = None  # the document as last opened or saved
+        self._show_when_done: set[str] = set()  # runs whose results open when they finish
+        self._results: dict = {}  # the results on show
         self._init_state(path)
         if path is not None:
             self.open(path, quiet=True)
@@ -430,6 +458,7 @@ class Editor:
                 return
             self.doc = doc
             self._opened = (path, _digest(path))
+            self._saved = self._snapshot()
             self.state.spec_path = str(path)
             self.state.selected = None
             self.state.fit_key += 1
@@ -442,10 +471,14 @@ class Editor:
 
         self._off_page(lambda: self.worker.request("read_spec", path=str(path)), done)
 
-    def save(self) -> None:
+    def _snapshot(self) -> str:
+        return json.dumps(self.doc.to_spec(), sort_keys=True)
+
+    def save(self, then=None) -> None:
         """Save through aquakin's own spec writer: settings checked and filled in,
         the aquakin version and file hashes recorded, outside model and influent
-        files copied into the project, and the file replaced atomically."""
+        files copied into the project, and the file replaced atomically; then
+        ``then()``, when given and the save went through."""
         path = Path(self.state.spec_path).resolve()
         refusal = self._save_refusal(path)
         if refusal:
@@ -463,10 +496,13 @@ class Editor:
             # while saving is kept rather than replaced by what was written.
             if json.dumps(self.doc.to_spec(), sort_keys=True) == snapshot:
                 self.doc = Flowsheet.from_spec(self.catalog, written, base_dir=path.parent)
+                self._saved = self._snapshot()
             self._opened = (path, _digest(path))
             self._plant_check = (None, None)
             self.publish()
             self.say(f"saved {path}", error=False)
+            if then is not None:
+                then()
 
         self._off_page(
             lambda: self.worker.request("write_spec", spec=spec, path=str(path), base_dir=base),
@@ -559,6 +595,98 @@ class Editor:
         while new in taken:
             new, i = f"{name}_copy{i}", i + 1
         self._worker_study("copy_study", study, then=then, name=new)
+
+    # -- simulating the plant -------------------------------------------------
+
+    def simulate(self) -> None:
+        """Run the plant: save the flowsheet if it changed, set up the project's
+        ``simulation`` study the first time (the plant at steady state, saving the
+        streams that leave it), run it, and show its results when it finishes."""
+        if SIMULATION in self._runs:
+            self.state.panel = "studies"
+            return
+        if self._saved is None or self._snapshot() != self._saved:
+            self.save(then=self._run_simulation)
+        else:
+            self._run_simulation()
+
+    def _run_simulation(self) -> None:
+        project = self._project()
+        spec = Path(self.state.spec_path).resolve()
+
+        def work():
+            if not (project / "studies" / SIMULATION / "study.yaml").is_file():
+                settings = self.worker.request("simulation_study", spec=str(spec))
+                if spec.name != "flowsheet.yaml":
+                    settings["flowsheet"] = f"../../{spec.name}"
+                self.worker.request(
+                    "create_study", project=str(project), name=SIMULATION, study=settings
+                )
+            return self.worker.request("list_studies", project=str(project))
+
+        def done(studies):
+            if isinstance(studies, Exception):
+                self.say(f"could not set up the simulation: {_plain_error(studies)}")
+                return
+            self.state.studies = [{**st, "running": st["name"] in self._runs} for st in studies]
+            self.state.panel = "studies"
+            self._show_when_done.add(SIMULATION)
+            self.run_study(SIMULATION)
+
+        self._off_page(work, done)
+
+    def show_results(self, name: str) -> None:
+        """Open a study's results: a steady state as tables, a run in time as a
+        chart per channel, any other kind as the list of its result files."""
+        study = self._study(name)
+        if study is None:
+            return
+
+        def done(results):
+            if isinstance(results, Exception):
+                self.say(f"could not read the results of {name}: {_plain_error(results)}")
+                return
+            s = self.state
+            self._results = results
+            s.results_title = f"Results of {name}"
+            s.results_folder = str(Path(study["path"]) / "results")
+            s.results_files = results["files"]
+            s.results_note = (
+                "The flowsheet has changed since this ran; run it again for the plant as drawn."
+                if study["state"] == "stale"
+                else ""
+            )
+            units = results.get("units") or {}
+            if results["kind"] != "simulate":
+                s.results_mode = "files"
+            elif results["steady"]:
+                s.results_mode = "steady"
+                s.results_measured = steady_table(results.get("measured") or {}, units)
+                s.results_streams = steady_table(results.get("streams") or {}, units)
+            else:
+                s.results_mode = "time"
+                streams = [*(results.get("measured") or {}), *(results.get("streams") or {})]
+                s.results_stream_choices = list(dict.fromkeys(streams))
+                self.choose_results_stream(streams[0] if streams else "")
+            s.results_open = True
+
+        self._off_page(lambda: self.worker.request("study_results", path=study["path"]), done)
+
+    def choose_results_stream(self, stream: str) -> None:
+        """Show ``stream``'s charts: its measurements, or its flow and first species."""
+        self.state.results_stream = stream
+        channels = channels_of(self._results, stream) if stream else []
+        self.state.results_channel_choices = channels
+        measured = list((self._results.get("measured") or {}).get(stream, {}))
+        self.show_charts(measured[:6] or channels[:4])
+
+    def show_charts(self, channels: list[str]) -> None:
+        """Draw a chart per channel of the chosen stream (each on its own axis)."""
+        stream = self.state.results_stream
+        self.state.results_channels = list(channels)
+        self.state.results_charts = [
+            {"channel": c, "svg": line_chart(self._results, stream, c)} for c in channels
+        ]
 
     # -- the study dialog ---------------------------------------------------
 
@@ -678,7 +806,7 @@ class Editor:
 
         def done(result):
             if isinstance(result, Exception):
-                self.state.study_error = str(result).removeprefix("StudyError: ")
+                self.state.study_error = _plain_error(result)
                 return
             self.state.study_dialog_open = False
             self.say(f"{'updated' if editing else 'created'} study {name}", error=False)
@@ -768,8 +896,12 @@ class Editor:
             progress.pop(name, None)
             self.state.study_progress = progress
             self._runs.pop(name, None)
+            show = name in self._show_when_done
+            self._show_when_done.discard(name)
             if event["event"] == "done":
                 self.say(f"{name}: {event['state']}", error=event["state"] != "fresh")
+                if show and event["state"] in ("fresh", "stale"):
+                    self.show_results(name)
             elif event["event"] == "cancelled":
                 self.say(f"{name}: cancelled", error=False)
             else:
@@ -781,6 +913,7 @@ class Editor:
         self.state.studies = [
             {**st, "running": st["name"] in self._runs} for st in self.state.studies
         ]
+        self.state.simulating = SIMULATION in self._runs
 
     def stop_runs(self) -> None:
         """Cancel every run (when the editor closes)."""
@@ -813,6 +946,20 @@ class Editor:
         s.study_choices = {"streams": [], "parameters": [], "channels": {}}
         s.study_editing = ""
         s.study_error = ""
+        s.simulating = False
+        s.results_open = False
+        s.results_title = ""
+        s.results_folder = ""
+        s.results_files = []
+        s.results_note = ""
+        s.results_mode = "steady"
+        s.results_measured = {"columns": [], "rows": []}
+        s.results_streams = {"columns": [], "rows": []}
+        s.results_stream = ""
+        s.results_stream_choices = []
+        s.results_channel_choices = []
+        s.results_channels = []
+        s.results_charts = []
         s.panel = "properties"
         s.dark = False
         s.focus_help = ""
@@ -875,6 +1022,7 @@ class Editor:
                 self._confirm_dialog()
                 self._study_dialog()
                 self._study_settings_dialog()
+                self._results_dialog()
                 v3.VSnackbar(
                     "{{ message }}",
                     v_model=("show_message",),
@@ -907,7 +1055,18 @@ class Editor:
                 loading=("busy",),
                 disabled=("busy",),
                 variant="tonal",
+                classes="mr-2 text-none",
+            )
+            v3.VBtn(
+                "Simulate",
+                prepend_icon="mdi-play",
+                click=self.simulate,
+                loading=("simulating",),
+                disabled=("busy",),
+                color="primary",
+                variant="flat",
                 classes="mr-4 text-none",
+                title="Run the plant to steady state and show what leaves it",
             )
             v3.VChip(
                 "{{ nodes.length }} units · {{ edges.length }} connections · {{ n_recycles }} recycles",
@@ -1077,6 +1236,13 @@ class Editor:
                     size="small",
                     color="error",
                     click=(self.cancel_run, "[st.name]"),
+                )
+                v3.VBtn(
+                    "Results",
+                    v_if="!st.running && ['fresh', 'stale'].includes(st.state)",
+                    size="small",
+                    color="primary",
+                    click=(self.show_results, "[st.name]"),
                 )
                 v3.VBtn(
                     "Freeze",
@@ -1421,6 +1587,93 @@ class Editor:
                             self.save_study_dialog,
                             "[study_name, study_kind, study_draft]",
                         ),
+                    )
+
+    @staticmethod
+    def _table(table: str) -> None:
+        """A results table bound to the state ``table`` (``steady_table``'s shape)."""
+        with v3.VTable(density="compact", classes="mb-2"):
+            with html.Thead():
+                with html.Tr():
+                    html.Th("")
+                    html.Th("Unit")
+                    html.Th("{{ c }}", v_for=f"c in {table}.columns", key="c", classes="ak-num")
+            with html.Tbody():
+                with html.Tr(v_for=f"r in {table}.rows", key="r.channel"):
+                    html.Td("{{ r.channel }}", classes="font-weight-medium")
+                    html.Td("{{ r.unit }}", classes="text-medium-emphasis text-caption")
+                    html.Td("{{ v }}", v_for="(v, vi) in r.values", key="vi", classes="ak-num")
+
+    def _results_dialog(self) -> None:
+        with v3.VDialog(v_model=("results_open",), max_width=980, scrollable=True):
+            with v3.VCard():
+                v3.VCardTitle("{{ results_title }}", classes="pt-4")
+                with v3.VCardText():
+                    v3.VAlert(
+                        "{{ results_note }}",
+                        v_if="results_note",
+                        type="warning",
+                        variant="tonal",
+                        density="compact",
+                        classes="mb-3 text-body-2",
+                    )
+                    with html.Div(v_if="results_mode === 'steady'"):
+                        with html.Div(v_if="results_measured.rows.length"):
+                            html.Div("Measured", classes="text-subtitle-2")
+                            self._table("results_measured")
+                            with v3.VExpansionPanels(variant="accordion", classes="mb-2"):
+                                with v3.VExpansionPanel(title="Flow and species"):
+                                    with v3.VExpansionPanelText():
+                                        self._table("results_streams")
+                        with html.Div(v_else=True):
+                            html.Div("Flow and species", classes="text-subtitle-2")
+                            self._table("results_streams")
+                    with html.Div(v_if="results_mode === 'time'"):
+                        with html.Div(classes="d-flex ga-2 mb-3"):
+                            v3.VSelect(
+                                label="Stream",
+                                model_value=("results_stream",),
+                                items=("results_stream_choices",),
+                                update_modelValue=(self.choose_results_stream, "[$event]"),
+                                density="compact",
+                                variant="outlined",
+                                hide_details=True,
+                                style="max-width: 240px;",
+                            )
+                            v3.VSelect(
+                                label="Channels",
+                                model_value=("results_channels",),
+                                items=("results_channel_choices",),
+                                update_modelValue=(self.show_charts, "[$event]"),
+                                multiple=True,
+                                chips=True,
+                                closable_chips=True,
+                                density="compact",
+                                variant="outlined",
+                                hide_details=True,
+                            )
+                        with html.Div(classes="ak-charts"):
+                            html.Div(v_for="c in results_charts", key="c.channel", v_html="c.svg")
+                    with html.Div(v_if="results_mode === 'files'"):
+                        html.Div(
+                            "This kind of study writes its results as files:",
+                            classes="text-body-2 mb-1",
+                        )
+                        with v3.VList(density="compact"):
+                            v3.VListItem(
+                                v_for="f in results_files",
+                                key="f",
+                                title=("f",),
+                                prepend_icon="mdi-file-outline",
+                            )
+                    html.Div(
+                        "Saved in {{ results_folder }}",
+                        classes="text-caption text-medium-emphasis mt-2",
+                    )
+                with v3.VCardActions():
+                    v3.VSpacer()
+                    v3.VBtn(
+                        "Close", variant="text", classes="text-none", click="results_open = false"
                     )
 
     def _study_dialog(self) -> None:

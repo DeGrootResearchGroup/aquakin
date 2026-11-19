@@ -69,6 +69,10 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   measurable channels a study of that flowsheet may name, and `create_study`,
   `read_study` and `update_study` write and read `study.yaml`, checked as a run
   reads it, with a data table or saved state copied into the study.
+  `simulation_study(spec)` gives the settings of a plain simulation (the plant
+  at steady state, saving the streams that leave it with their flow, COD, TKN,
+  NOx, TN and TSS), and `study_results(path)` reads a study's results back as
+  plain data with their units.
 - Progress reports and cancelling: `Plant.calibrate`,
   `plant_profile_likelihood`, `plant_rank_sensor_sets` and
   `plant_fisher_information` take `progress=`, a callable that receives an
@@ -97,7 +101,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   whole plant, and open or save flowsheet specs (saved by the same writer as
   `Plant.to_spec`, so a model or influent file from elsewhere is copied into
   the project). A Studies tab lists the project's studies with their status and
-  runs them in the background with progress and cancel; **New study** and
+  runs them in the background with progress and cancel. **Simulate** runs the
+  plant: it saves the flowsheet, sets up a `simulation` study the first time and
+  shows its results, a steady state as tables of the streams leaving the plant
+  and a run in time as a chart per channel (**Results** on any study shows them
+  again). **New study** and
   **Edit** set a study up in a dialog that offers the plant's own streams,
   parameters and channels; Save refuses to
   overwrite a flowsheet that changed on disk since it was opened.
