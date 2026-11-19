@@ -1,9 +1,12 @@
 """The editor page, built and driven without a browser."""
 
 import pytest
+import yaml
 from trame.app import get_server
 
 from aquakin_ui.app import Editor
+from aquakin_ui.settings import Settings
+from aquakin_ui.worker import AquakinWorker, WorkerError
 
 from .conftest import PROJECTS
 
@@ -179,6 +182,154 @@ def test_a_run_can_be_cancelled(tmp_path):
         ed.worker.stop()
 
 
+def test_simulate_saves_sets_up_runs_and_shows_the_plant(tmp_path):
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-simulate-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        # A moved unit is an unsaved change: Simulate saves it first.
+        ed.on_move([{"id": "tank", "position": {"x": 300.0, "y": 40.0}}])
+        before = (project / "flowsheet.yaml").read_text()
+        ed.simulate()
+        assert (project / "flowsheet.yaml").read_text() != before
+        study = yaml.safe_load((project / "studies" / "simulation" / "study.yaml").read_text())
+        assert study["study"]["streams"] == ["tank.out"]
+        assert study["study"]["observables"][0]["channels"][:3] == ["Q", "COD", "TKN"]
+        assert ed.state.panel == "studies" and ed.state.simulating
+        assert ed._runs["simulation"].wait(300)["event"] == "done"
+        assert not ed.state.simulating
+        # The results open when the run finishes.
+        assert ed.state.results_open and ed.state.results_mode == "steady"
+        table = ed.state.results_measured
+        assert table["columns"] == ["tank.out"]
+        assert table["rows"][0] == {"channel": "Q", "unit": "m³/d", "values": ["2,000"]}
+
+        # Again: nothing to save, and replacing the results asks first, unless
+        # the user said not to ask again (kept as their preference).
+        ed.state.results_open = False
+        ed.simulate()
+        assert ed.state.study_confirm_open and "Replace the results" in ed.state.study_confirm_title
+        assert ed.state.study_confirm_kind == "run" and not ed.state.study_confirm_dont_ask
+        ed.state.study_confirm_dont_ask = True
+        ed.answer_study("cancel")  # not gone ahead: nothing is kept
+        assert ed.state.ask_replace and ed.settings["ask_before_replacing"]
+        ed.simulate()
+        ed.state.study_confirm_dont_ask = True
+        ed.answer_study("go")
+        assert not ed.state.ask_replace and not Settings()["ask_before_replacing"]
+        assert ed._runs["simulation"].wait(300)["event"] == "done"
+        ed.simulate()  # no question now
+        assert not ed.state.study_confirm_open and "simulation" in ed._runs
+        assert ed._runs["simulation"].wait(300)["event"] == "done"
+        ed.set_ask_replace(True)  # the Studies tab's switch
+        assert ed.state.ask_replace and Settings()["ask_before_replacing"]
+
+        # A run in time shows a chart per channel; another kind lists its files.
+        ed.run_study("short")
+        assert ed._runs["short"].wait(300)["event"] == "done"
+        ed.show_results("short")
+        assert ed.state.results_mode == "time" and ed.state.results_stream == "tank"
+        assert [c["channel"] for c in ed.state.results_charts] == ["Q", "SI", "SS", "XI"]
+        ed.show_charts(["SNH"])
+        assert "<polyline" in ed.state.results_charts[0]["svg"]
+    finally:
+        ed.stop_runs()
+        ed.worker.stop()
+
+
+class _Failing:
+    """The worker, failing the commands named: ``fail`` as aquakin would (a
+    ``WorkerError``), ``crash`` with any other error."""
+
+    def __init__(self):
+        self.worker = AquakinWorker()
+        self.fail: set[str] = set()
+        self.crash: set[str] = set()
+
+    def request(self, command, **fields):
+        if command in self.fail:
+            raise WorkerError(f"StudyError: {command} failed")
+        if command in self.crash:
+            raise RuntimeError(f"{command} crashed")
+        return self.worker.request(command, **fields)
+
+    def stop(self):
+        self.worker.stop()
+
+
+def test_simulate_results_and_the_dialog_say_what_went_wrong(tmp_path):
+    project = _study_project(tmp_path)
+    (project / "flowsheet.yaml").rename(project / "plant.yaml")
+    blocked = tmp_path / "blocked"
+    blocked.write_text("")  # a file where the preferences folder would be
+    worker = _Failing()
+    server = get_server(name="aquakin-ui-failing-test", client_type="vue3")
+    ed = Editor(
+        server, worker=worker, path=project / "plant.yaml", settings=Settings(blocked / "ui.json")
+    )
+    try:
+        worker.fail = {"simulation_study"}
+        ed.simulate()
+        assert ed.state.message == "could not set up the simulation: simulation_study failed"
+        worker.fail = set()
+        ed.simulate()
+        study = yaml.safe_load((project / "studies" / "simulation" / "study.yaml").read_text())
+        assert study["study"]["flowsheet"] == "../../plant.yaml"  # not flowsheet.yaml
+        ed.state.panel = "properties"
+        ed.simulate()  # already running: shows it
+        assert ed.state.panel == "studies" and not ed.state.study_confirm_open
+        assert ed._runs["simulation"].wait(300)["event"] == "done"
+
+        ed.show_results("nope")
+        ed.show_results("short")
+        assert "could not read the results of short" in ed.state.message
+        assert "has no results; run it first" in ed.state.message
+        ed.state.studies = [
+            {**st, "state": "stale"} if st["name"] == "simulation" else st
+            for st in ed.state.studies
+        ]
+        ed.show_results("simulation")
+        assert ed.state.results_note.startswith("The flowsheet has changed since this ran")
+
+        ed.set_ask_replace(False)
+        assert not ed.state.ask_replace and "could not save the preference" in ed.state.message
+        ed.state.message = ""
+        ed.set_ask_replace(False)  # no change: nothing to keep, nothing said
+        assert ed.state.message == ""
+
+        # A kind other than a simulation lists its result files.
+        fisher = project / "studies" / "design"
+        (fisher / "results").mkdir(parents=True)
+        (fisher / "study.yaml").write_text(
+            "study: {kind: fisher, free: [asm1.muH], observables: [{stream: tank}], "
+            "t_obs: [1.0], sigma: 1.0}\n"
+        )
+        (fisher / "results" / "fisher.csv").write_text("")
+        ed.state.studies = [
+            *ed.state.studies,
+            {"name": "design", "path": str(fisher), "state": "fresh"},
+        ]
+        ed.show_results("design")
+        assert ed.state.results_mode == "files" and ed.state.results_files == ["fisher.csv"]
+
+        worker.fail = {"study_form"}
+        ed.new_study()
+        assert ed.state.message.startswith("could not read the study settings")
+        worker.fail = {"plant_choices"}  # the plant does not build: the drawn ports
+        ed.new_study()
+        assert ed.state.study_dialog_open and "tank.out" in ed.state.study_choices["streams"]
+        worker.fail, worker.crash = set(), {"plant_choices"}
+        ed.new_study()
+        assert ed.state.study_choices == {"streams": [], "parameters": [], "channels": {}}
+        ed.edit_study("nope")
+        worker.fail = {"read_study"}
+        ed.edit_study("short")
+        assert ed.state.message.startswith("could not read study short")
+    finally:
+        ed.stop_runs()
+        ed.worker.stop()
+
+
 def test_save_refuses_a_file_changed_on_disk(tmp_path):
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-guard-test", client_type="vue3")
@@ -195,5 +346,65 @@ def test_save_refuses_a_file_changed_on_disk(tmp_path):
         ed.state.spec_path = str(spec)
         ed.save()
         assert "already exists" in ed.state.message
+    finally:
+        ed.worker.stop()
+
+
+def test_a_study_is_set_up_and_edited_in_the_dialog(tmp_path):
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-study-dialog-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        ed.new_study()
+        s = ed.state
+        assert s.study_dialog_open and s.study_kind == "simulate" and not s.study_editing
+        assert "tank.out" in s.study_choices["streams"]
+        assert "asm1.muH" in s.study_choices["parameters"]
+        assert "TN" in s.study_choices["channels"]["tank.out"]
+
+        # Switching kinds keeps what both kinds have.
+        draft = dict(s.study_draft, description="Ammonia design")
+        ed.set_study_kind("fisher", draft)
+        assert s.study_draft["description"] == "Ammonia design"
+        names = [f["name"] for f in s.study_fields]
+        assert names[:3] == ["description", "parameters", "initial_state"]
+
+        draft = dict(s.study_draft)
+        draft["free"] = ["asm1.muH"]
+        draft["observables"] = [{"stream": "tank.out", "channels": ["SNH"], "measures": {}}]
+        draft["t_obs"] = {"mode": "list", "start": "", "stop": "", "num": "", "list": "0.1, 0.2"}
+        draft["sigma"] = "lots"
+        ed.save_study_dialog("design", "fisher", draft)
+        assert s.study_dialog_open and "Measurement error: 'lots' is not a number" in s.study_error
+        ed.save_study_dialog("design", "fisher", {**draft, "sigma": ""})
+        assert s.study_error == "Still needed: Measurement error."
+        ed.save_study_dialog("", "fisher", {**draft, "sigma": "0.1"})
+        assert s.study_error == "Give the study a name."
+        ed.save_study_dialog("design", "fisher", {**draft, "sigma": "0.1"})
+        assert not s.study_dialog_open
+        written = yaml.safe_load((project / "studies" / "design" / "study.yaml").read_text())
+        assert written["study"] == {
+            "kind": "fisher",
+            "description": "Ammonia design",
+            "free": ["asm1.muH"],
+            "observables": [{"stream": "tank.out", "channels": ["SNH"]}],
+            "t_obs": [0.1, 0.2],
+            "sigma": 0.1,
+        }
+        assert {st["name"] for st in s.studies} == {"short", "design"}
+
+        # Editing opens the study's settings; a name already taken is refused.
+        ed.edit_study("design")
+        assert s.study_editing.endswith("design") and s.study_draft["sigma"] == "0.1"
+        ed.save_study_dialog("design", "fisher", {**s.study_draft, "sigma": "0.2"})
+        assert (
+            yaml.safe_load((project / "studies" / "design" / "study.yaml").read_text())["study"][
+                "sigma"
+            ]
+            == 0.2
+        )
+        ed.new_study()
+        ed.save_study_dialog("design", "simulate", {**s.study_draft, "streams": ["tank.out"]})
+        assert s.study_error.startswith("a study named design already exists")
     finally:
         ed.worker.stop()

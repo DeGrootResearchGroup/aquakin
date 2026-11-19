@@ -64,5 +64,23 @@ results. The design and the owner's decisions are in
 - **Progress and cancel** (`aquakin/progress.py`): `run_study(progress=)` passes
   the callable to the analysis; `Cancelled` (a `BaseException`) stops it and
   the run is recorded with outcome `cancelled` (state `"cancelled"`).
+- **Setting a study up** (`form.py`): `study_form()` describes every `_Study`
+  field (type, label, help, default) and each kind's fields and required ones
+  (`_REQUIRED`); a test pins that it covers every field but `kind` and
+  `flowsheet`, so a new setting needs an entry. `plant_choices(spec)` gives the
+  streams (named, then every `unit.port`), parameters and per-stream channels.
+  `create_study` / `update_study` validate exactly as a run reads (`_Study` +
+  `_check_kind`) and copy a data or initial-state file from elsewhere into the
+  study (never overwriting another file of that name); `read_study` returns the
+  settings without defaults. `simulation_study(spec)` is the editor's Simulate:
+  steady state, the plant's outlets (outputs nothing is connected to, by stream
+  name when they have one, else every named stream) with their measurement
+  keywords. `study_results(path)` reads results for a front end: every kind
+  gives its file names; `simulate` also its values by stream and channel
+  (`_by_stream` splits `<stream>.<channel>` columns by the study's own stream
+  names, since a stream name may hold a dot), non-finite values as `None`, and
+  temperature converted to °C (the files keep kelvin), and
+  units built from the plant when it still builds (`_measure_units` reads the
+  measurement keywords' units off the species'). The worker answers all of them.
 - The editor drives studies through the job worker (`aquakin/__main__.py`'s
   `start_study` / `cancel_study`); see `.claude/rules/ui.md`.
