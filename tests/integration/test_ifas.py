@@ -507,3 +507,76 @@ def test_a_growing_biofilm_reports_the_inventory_of_its_current_thickness():
     # Only the biofilm term scales; the bulk contribution is unchanged.
     bulk_only = u.volume * float(np.asarray(thin).reshape(-1)[: model.n_species] @ cod)
     assert (inv_thick - bulk_only) == pytest.approx(3.0 * (inv_thin - bulk_only), rel=1e-12)
+
+
+def test_growing_biofilm_declares_the_thickness_coupling():
+    """``L_f`` must be declared coupled to everything, and everything to it.
+
+    The thickness scales every flux in the film, and its own rate integrates
+    production over the whole depth -- but those couplings run through saturated
+    Monod terms that an AD probe cannot see, so they are declared rather than
+    discovered. A gap here does not fail loudly; it silently corrupts gradients
+    through the unit, which is why the declaration is pinned.
+    """
+    model = _bm1_model()
+    unit = _growing(model, n_layers=6)
+    pattern = unit.coupling_pattern()
+
+    m, n = unit.state_size, model.n_species
+    assert pattern.self_pattern.shape == (m, m)
+    assert pattern.inlet_pattern.shape == (m, n)
+    assert pattern.output_pattern.shape == (n, m)
+    # The thickness is the final state entry: its row and column are dense.
+    assert pattern.self_pattern[-1, :].all()
+    assert pattern.self_pattern[:, -1].all()
+
+    # A fixed-thickness unit has no such entry and is not made dense by this.
+    fixed = _growing(
+        model, n_layers=6, dynamic_thickness=False, biofilm_density=None, detachment_rate=0.0
+    )
+    fixed_pattern = fixed.coupling_pattern()
+    assert fixed_pattern.self_pattern.shape == (fixed.state_size,) * 2
+    assert not fixed_pattern.self_pattern.all()
+
+
+@pytest.mark.parametrize("density", [0.0, -1.0])
+def test_dynamic_thickness_rejects_a_non_positive_density(density):
+    """Zero or negative density would divide by zero in the displacement
+    velocity, so it is refused alongside the missing case."""
+    with pytest.raises(ValueError, match="biofilm_density"):
+        _growing(_bm1_model(), biofilm_density=density)
+
+
+def test_dynamic_thickness_accepts_no_seed_without_warning():
+    """With no explicit seed there is nothing to compare against the density,
+    so the incompressibility warning must stay quiet."""
+    model = _bm1_model()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        unit = _growing(model, biofilm_initial=None)
+    assert unit.state_size == (unit.n_layers + 1) * model.n_species + 1
+
+
+def test_layer_resolution_tolerates_a_degenerate_surface_value(asm1):
+    """A species the solve left non-finite reports zero rather than a NaN ratio.
+
+    The report is a diagnostic read off a solved state; it must not itself raise
+    or propagate a NaN when one species has gone bad, since that is exactly when
+    a user reaches for it.
+    """
+    u = _ifas(asm1, n_layers=4)
+    ss = asm1.species_index["SS"]
+    state = jnp.zeros((5, asm1.n_species)).at[:, ss].set(jnp.nan)
+    assert u.layer_resolution(state)["SS"] == 0.0
+
+
+def test_unknown_state_index_is_described_by_position(asm1):
+    """``_describe_state_index`` names what it can and falls back to the index.
+
+    It runs inside a warning path, so it must never be the thing that raises.
+    """
+    plant = _plant(_ifas(asm1, n_layers=4, aeration=Aeration(kla=600.0)), asm1)
+    plant._build_state_layout()
+    assert plant._describe_state_index(0).endswith(f".{asm1.species[0]}")
+    # An index outside the layout still produces a usable label.
+    assert plant._describe_state_index(10_000) == "state[10000]"

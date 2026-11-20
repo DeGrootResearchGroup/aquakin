@@ -4167,7 +4167,7 @@ class Plant:
         return event, floor
 
     def _steady_forward_result(
-        self, state, F, t_final, *, max_time, criterion, tol, floor, ss_rtol=None, solution=None
+        self, state, F, t_final, *, max_time, criterion, tol, floor, ss_rtol, solution=None
     ) -> SteadyStateResult:
         """Package a forward steady-state solve, with its scaled ``residual``.
 
@@ -4181,7 +4181,7 @@ class Plant:
         residual = float(_scaled_resnorm(F, state, floor))
         if criterion == "norm":
             converged = bool(t_final < float(max_time))
-            if converged and ss_rtol is not None:
+            if converged:
                 self._warn_if_norm_test_overstates(state, F, floor, residual, ss_rtol)
         else:
             converged = bool(residual <= tol)
