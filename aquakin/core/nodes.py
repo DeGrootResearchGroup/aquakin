@@ -54,6 +54,43 @@ def _safe_ratio(num, denom):
     return jnp.where(nonzero, num / safe, 0.0)
 
 
+def _safe_log(x):
+    """``log(x)`` whose *gradient* stays finite at and below zero.
+
+    ``d/dx log(x) = 1/x`` is infinite at ``x == 0`` and the value is NaN below
+    it, so a reverse-mode pass through a depleted state poisons the whole
+    parameter gradient. The double-where evaluates the logarithm at a finite
+    stand-in off the domain, so the live branch is exact and the masked branch
+    contributes a zero -- not a NaN -- tangent.
+
+    Unlike :func:`_safe_ratio` the *value* off the domain is ``-inf``, not 0:
+    a logarithm has no finite limit at zero to adopt, and inventing one would
+    silently change the model. The guard therefore protects the gradient only,
+    and a model using ``log`` is responsible for keeping its argument positive
+    -- ``clip_negative_states: true`` clamps the rate inputs, or write the term
+    so the argument cannot reach zero (``log(1 + [X]/K)``).
+    """
+    positive = x > 0.0
+    safe = jnp.where(positive, x, 1.0)
+    return jnp.where(positive, jnp.log(safe), -jnp.inf)
+
+
+def _safe_sqrt(x):
+    """``sqrt(x)`` whose gradient stays finite at zero.
+
+    ``d/dx sqrt(x) = 1/(2 sqrt(x))`` is infinite at ``x == 0`` -- exactly where
+    a half-order kinetic term sits when its species depletes, which is the
+    common case rather than a corner one. The double-where keeps the value
+    exact (``sqrt(0) == 0``) while the derivative at and below zero is 0 rather
+    than ``inf``. This is the same reasoning as the constant-exponent ``powc``
+    kernel, which keeps ``[X]^0.5`` differentiable at ``X == 0``; a transiently
+    negative state returns 0 rather than NaN.
+    """
+    positive = x > 0.0
+    safe = jnp.where(positive, x, 1.0)
+    return jnp.where(positive, jnp.sqrt(safe), 0.0)
+
+
 class ASTNode(ABC):
     """
     Base class for rate-expression AST nodes.
@@ -463,6 +500,109 @@ class SafeDivideNode(_OperatorNode):
     @staticmethod
     def op(o):
         return _safe_ratio(o[0], o[1])
+
+
+# --- General math function nodes ---------------------------------------
+#
+# The nodes above encode a domain idiom (a Monod saturation, a pH switch); the
+# four below are plain mathematics, for rate laws the activated-sludge
+# vocabulary does not cover -- an exponential attenuation, a free-energy or
+# logarithmic term, half-order kinetics, a two-sided clip. ``exp`` and ``log``
+# are the only way to write those inside a model file; without them the term
+# has to be computed outside and injected as a condition field.
+
+
+@dataclass(frozen=True)
+class ExpNode(_OperatorNode):
+    """Natural exponential ``exp(x)`` -- the ``exp(x)`` rate function.
+
+    For a rate law with an exponential factor that is not an Arrhenius
+    temperature correction (:class:`ArrheniusNode` already covers that): a
+    Beer--Lambert attenuation ``exp(-a * z)``, a thermal-inactivation term, a
+    sigmoid written explicitly. The argument must be dimensionless, which
+    ``check_units`` enforces.
+
+    No guard: ``exp`` is finite and smooth on the whole real line. A large
+    argument overflows to ``inf``, which is an honest report of an
+    ill-scaled model rather than something to paper over.
+    """
+
+    x: ASTNode
+
+    KIND = "exp"
+    FUNCTION_NAME = "exp"
+
+    @staticmethod
+    def op(o):
+        return jnp.exp(o[0])
+
+
+@dataclass(frozen=True)
+class LogNode(_OperatorNode):
+    """Natural logarithm ``log(x)`` -- the ``log(x)`` rate function.
+
+    For a logarithmic driving force: a free-energy term ``R*T*log(Q/K)``, a
+    logarithmic inhibition. The argument must be dimensionless (take the ratio
+    first), which ``check_units`` enforces.
+
+    Guarded by :func:`_safe_log`, which keeps the *gradient* finite at and
+    below zero but leaves the value at ``-inf`` there -- see that function for
+    why no finite stand-in value is invented. For a base-10 logarithm divide by
+    ``log(10)``.
+    """
+
+    x: ASTNode
+
+    KIND = "log"
+    FUNCTION_NAME = "log"
+
+    @staticmethod
+    def op(o):
+        return _safe_log(o[0])
+
+
+@dataclass(frozen=True)
+class SqrtNode(_OperatorNode):
+    """Square root ``sqrt(x)`` -- the ``sqrt(x)`` rate function.
+
+    Half-order kinetics, written as what it is rather than as ``[X]^0.5``.
+    Dimensionally it halves the argument's units, so ``sqrt`` of a
+    concentration is a valid (if unusual) rate factor and ``check_units``
+    checks it as such.
+
+    Guarded by :func:`_safe_sqrt`, so the derivative at a fully depleted
+    species is 0 rather than ``inf``.
+    """
+
+    x: ASTNode
+
+    KIND = "sqrt"
+    FUNCTION_NAME = "sqrt"
+
+    @staticmethod
+    def op(o):
+        return _safe_sqrt(o[0])
+
+
+@dataclass(frozen=True)
+class MinNode(_OperatorNode):
+    """Elementwise minimum ``min(a, b)`` -- the ``min(a, b)`` rate function.
+
+    The companion to :class:`MaxNode`: a ceiling rather than a floor, e.g. a
+    transfer limited by the smaller of two driving terms, or the two-sided clip
+    ``min(hi, max(lo, x))``. AD-safe (``jnp.minimum`` carries the active-branch
+    subgradient at the kink); identity away from it.
+    """
+
+    a: ASTNode
+    b: ASTNode
+
+    KIND = "min"
+    FUNCTION_NAME = "min"
+
+    @staticmethod
+    def op(o):
+        return jnp.minimum(o[0], o[1])
 
 
 @dataclass(frozen=True)

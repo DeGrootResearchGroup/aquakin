@@ -9,6 +9,18 @@ model:
     rate constant `k_photo` is lumped: rate = k_photo * fluence_rate *
     [H2O2], where fluence_rate is in user-chosen units and k_photo is the
     matching effective constant (phi * epsilon * 2.303 * unit conversion).
+
+    Attenuation is deliberately NOT written into the rate expression, even
+    though `exp()` is available in rate expressions. The fluence rate here is
+    the *local* value at the cell, and how it falls off is a property of the
+    reactor's geometry and lamp placement rather than of the chemistry: in a
+    PFR or a CFD coupling it varies per location and is supplied through
+    `SpatialConditions`, which is the designed seam for exactly that. Writing
+    a Beer-Lambert `exp(-alpha * {z})` into the rate would hard-code a 1-D
+    slab geometry into a model that is otherwise geometry-agnostic. Write the
+    attenuation into the rate instead when it depends on the *state* -- a
+    self-absorbing species whose concentration changes during the run -- which
+    a static condition field cannot express.
   references:
     - "Glaze, W.H., Kang, J.W. & Chapin, D.H. (1987). Ozone Sci. Eng. 9, 335-352."
     - "Crittenden, J.C. et al. (2012). MWH Water Treatment: Principles and Design (3rd ed.), Ch. 18."

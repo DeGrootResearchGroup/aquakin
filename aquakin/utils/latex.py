@@ -9,7 +9,10 @@ from aquakin.core.nodes import (
     ConditionNode,
     ConstantNode,
     DivideNode,
+    ExpNode,
+    LogNode,
     MaxNode,
+    MinNode,
     MonodInhibitionNode,
     MonodInhibitionRatioNode,
     MonodNode,
@@ -20,6 +23,7 @@ from aquakin.core.nodes import (
     PowerNode,
     SafeDivideNode,
     SpeciesNode,
+    SqrtNode,
     SubtractNode,
     pHInhibitNode,
     pHSwitchNode,
@@ -87,6 +91,14 @@ def to_latex(node: ASTNode) -> str:
         return rf"\frac{{{to_latex(node.num)}}}{{{to_latex(node.denom)}}}"
     if isinstance(node, MaxNode):
         return rf"\max\!\left({to_latex(node.a)}, {to_latex(node.b)}\right)"
+    if isinstance(node, MinNode):
+        return rf"\min\!\left({to_latex(node.a)}, {to_latex(node.b)}\right)"
+    if isinstance(node, ExpNode):
+        return rf"\exp\!\left({to_latex(node.x)}\right)"
+    if isinstance(node, LogNode):
+        return rf"\ln\!\left({to_latex(node.x)}\right)"
+    if isinstance(node, SqrtNode):
+        return rf"\sqrt{{{to_latex(node.x)}}}"
     if isinstance(node, PowerNode):
         return f"{_paren_pow_base(node.left)}^{{{to_latex(node.right)}}}"
     if isinstance(node, ArrheniusNode):

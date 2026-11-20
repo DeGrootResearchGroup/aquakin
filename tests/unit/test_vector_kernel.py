@@ -255,3 +255,65 @@ def test_integer_state_does_not_truncate_constants_or_conditions():
     r_float = net.rates(Ci.astype(float), p, ca, 0)
     assert jnp.issubdtype(r_int.dtype, jnp.floating)
     assert jnp.array_equal(r_int, r_float)
+
+
+# --- General math function nodes (exp / log / sqrt / min) --------------
+
+
+def _math_model():
+    """The fixture model exercising exp / log / sqrt / min together."""
+    from pathlib import Path
+
+    return aquakin.load_model_from_file(
+        Path(__file__).parent.parent / "fixtures" / "math_functions_model.yaml"
+    )
+
+
+def test_math_functions_kernel_is_bit_identical_to_scalar():
+    """exp / log / sqrt / min go through the batched kernel with byte-for-byte
+    the same result as the scalar per-reaction stack, at randomized states and
+    at a fully depleted one (where the sqrt / log guards are live)."""
+    net = _math_model()
+    assert net._rate_kernel is not None, "the kernel must handle the new nodes"
+
+    rng = np.random.default_rng(0)
+    states = [jnp.asarray(rng.uniform(0.0, 5.0, net.n_species)) for _ in range(5)]
+    states.append(jnp.zeros(net.n_species))  # every species depleted
+
+    for C in states:
+        Cc, p, ca = _prepared_inputs(net, C)
+        kernel = net.rates(C, p, ca, 0)
+        scalar = _scalar_rates(net, Cc, p, ca, 0)
+        assert jnp.array_equal(kernel, scalar), f"kernel != scalar at C={C}"
+
+
+def test_math_functions_gradient_is_finite_and_matches_scalar():
+    """The guards hold through the kernel too: a gradient taken at a fully
+    depleted state (sqrt'(0) = inf, log'(0) = inf unguarded) stays finite and
+    equals the scalar path's."""
+    net = _math_model()
+    ca = net.default_conditions().fields
+
+    def total(C, p, rates_fn):
+        return jnp.sum(rates_fn(C, p, ca, 0))
+
+    for C in (jnp.asarray([1.0, 0.5, 0.1]), jnp.zeros(net.n_species)):
+        p = net.default_parameters()
+        g_kernel = jax.grad(total)(C, p, net.rates)
+        g_scalar = jax.grad(total)(C, p, lambda c, q, a, i: _scalar_rates(net, c, q, a, i))
+        assert jnp.all(jnp.isfinite(g_kernel)), f"non-finite kernel gradient at C={C}"
+        assert jnp.array_equal(g_kernel, g_scalar)
+
+
+def test_math_functions_parameter_gradient_is_finite_at_depletion():
+    """The gradient that actually matters for calibration: d(rates)/d(params)
+    through exp / log / sqrt at a depleted state."""
+    net = _math_model()
+    ca = net.default_conditions().fields
+    C = jnp.zeros(net.n_species)
+
+    def total(p):
+        return jnp.sum(net.rates(C, p, ca, 0))
+
+    g = jax.grad(total)(net.default_parameters())
+    assert jnp.all(jnp.isfinite(g))

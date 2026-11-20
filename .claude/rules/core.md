@@ -48,6 +48,33 @@ tree itself is not walked repeatedly.
   overpressure-driven flux only stops (never reverses) when the driving
   difference goes negative.
 
+**General math function nodes** (plain mathematics, for rate laws the
+activated-sludge vocabulary does not cover; `exp`/`log` are the only way to
+write such a term *inside* a model file rather than precomputing it and
+injecting it as a condition field)
+
+- `ExpNode(x)` — `exp(x)`. Unguarded: finite and smooth everywhere, and an
+  overflow to `inf` is an honest report of an ill-scaled model. `check_units`
+  requires a dimensionless argument.
+- `LogNode(x)` — `log(x)` (natural). Guarded by `_safe_log`: the double-where
+  keeps the **gradient** finite at and below zero, but the *value* there stays
+  `-inf` — a logarithm has no finite limit at zero to adopt, and inventing one
+  would silently change the model. So unlike `_safe_ratio` the guard protects
+  AD only, and a model using `log` must keep its argument positive
+  (`clip_negative_states`, or write `log(1 + [X]/K)`). `check_units` requires a
+  dimensionless argument.
+- `SqrtNode(x)` — `sqrt(x)`. Guarded by `_safe_sqrt`: the value is exact
+  (`sqrt(0) == 0`) and the derivative at and below zero is 0 rather than `inf`.
+  Same reasoning as the `powc` kernel — half-order kinetics sit at `x == 0`
+  whenever the species depletes, which is the common case, not a corner one.
+  Dimensionally it halves the argument's units.
+- `MinNode(a, b)` — `min(a, b)`, the ceiling counterpart of `MaxNode`; a
+  two-sided clip is `min(hi, max(lo, x))`.
+
+`_safe_log` / `_safe_sqrt` sit beside `_safe_ratio` in `core/nodes.py` and use
+the same double-where shape; the difference is what each returns off the
+domain, which is a modelling decision per function, not a mechanical one.
+
 The four Monod nodes and `SafeDivideNode` all evaluate their `num/denom` through
 `_safe_ratio` (`core/nodes.py`), a **double-where** guard returning 0 (with a
 finite gradient) where the denominator is exactly zero — for the Monod nodes the
