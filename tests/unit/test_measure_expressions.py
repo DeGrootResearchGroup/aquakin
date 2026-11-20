@@ -98,6 +98,22 @@ def test_what_is_refused(text, message):
         parse_measure(text)
 
 
+@pytest.mark.parametrize("text", ["x = 1e5*[SS]", "x = 1E5*[SS]", "x = 1e+5*[SS]"])
+def test_an_exponent_is_read_with_or_without_its_sign(text):
+    """The scanner takes the sign only when one is there, so an unsigned
+    exponent has to reach the digits just the same."""
+    assert parse_measure(text) == Measure("x", {"SS": 1e5})
+
+
+@pytest.mark.parametrize("text", ["x = 1e*[SS]", "x = 1e+*[SS]"])
+def test_an_e_with_no_digits_is_not_an_exponent(text):
+    """Deliberate: the scanner only takes an exponent when a digit follows, so
+    "1e" is the number 1 followed by the name "e" -- which reads as a parse
+    error rather than a bare float() ValueError."""
+    with pytest.raises(MeasureSyntaxError, match=re.escape("got 'e' at position 5")):
+        parse_measure(text)
+
+
 def test_a_malformed_number_is_named():
     """The scanner takes digits and dots together, so a second dot reaches
     ``float`` and must come back as a measure error, not a bare ValueError."""
