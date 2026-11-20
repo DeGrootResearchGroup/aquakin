@@ -481,6 +481,7 @@ def study_results(path) -> dict:
         raise StudyError(f"study {folder.name} has no results; run it first")
     result: dict = {"kind": study.kind, "files": sorted(p.name for p in out.iterdir())}
     if study.kind != "simulate":
+        result.update(_analysis_results(folder, study, out))
         return result
     streams = [*study.streams, *(o.stream for o in study.observables)]
     units, clock = _units(folder, study, list(dict.fromkeys(streams)))
@@ -506,6 +507,62 @@ def study_results(path) -> dict:
     if study.time is not None:
         result["time_unit"] = study.time.time_unit or clock
     return result
+
+
+def _analysis_results(folder: Path, study, out: Path) -> dict:
+    """What a Fisher, rank, calibrate or profile study found, as plain data."""
+    from aquakin.study.files import read_matrix, read_table, read_trajectory
+    from aquakin.study.study import _channel_names, _channels
+
+    def yaml_file(name):
+        path = out / name
+        return _finite_tree(yaml.safe_load(path.read_text())) if path.is_file() else None
+
+    found: dict = {}
+    if study.kind == "fisher":
+        found["summary"] = yaml_file("summary.yaml")
+        if (out / "fisher.csv").is_file():
+            matrix, rows, _ = read_matrix(out / "fisher.csv")
+            found["matrix"] = {"names": rows, "rows": _finite(matrix.tolist())}
+    elif study.kind == "rank":
+        if (out / "ranking.csv").is_file():
+            found["table"] = _finite_tree(read_table(out / "ranking.csv"))
+        found["criterion"] = study.criterion
+    elif study.kind == "calibrate":
+        found["summary"] = yaml_file("fit.yaml")
+        names = [f"{o.stream}.{n}" for o in study.observables for n in _channel_names(_channels(o))]
+        streams = [o.stream for o in study.observables]
+        if (out / "fitted.csv").is_file():
+            t, columns = read_trajectory(out / "fitted.csv")
+            found["fitted"] = {
+                "t": _finite(list(t)),
+                "values": _by_stream({n: _finite(list(v)) for n, v in columns.items()}, streams),
+            }
+        data = folder / (study.data or "")
+        if study.data and data.is_file():
+            t, columns = read_trajectory(data)
+            found["data"] = {
+                "t": _finite(list(t)),
+                "values": _by_stream(
+                    {n: _finite(list(v)) for n, v in columns.items() if n in names}, streams
+                ),
+            }
+    else:  # profile, the last kind with results to read
+        found["summary"] = yaml_file("profile.yaml")
+        if (out / "profile.csv").is_file():
+            found["table"] = _finite_tree(read_table(out / "profile.csv"))
+    return found
+
+
+def _finite_tree(value):
+    """A YAML or table value with every number finite or ``None`` (text kept)."""
+    if isinstance(value, dict):
+        return {k: _finite_tree(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_finite_tree(v) for v in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
 
 
 def _celsius(kelvin):

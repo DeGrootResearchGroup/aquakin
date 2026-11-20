@@ -30,7 +30,7 @@ from aquakin_ui.catalog import Catalog
 from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
 from aquakin_ui.jobs import StudyRun
-from aquakin_ui.results import channels_of, line_chart, steady_table
+from aquakin_ui.results import analysis_view, channels_of, line_chart, steady_table
 from aquakin_ui.settings import Settings
 from aquakin_ui.study_form import draft_for, fields_for, missing, study_from
 from aquakin_ui.widget import Flowsheet as FlowsheetCanvas
@@ -54,6 +54,9 @@ PAGE_CSS = """
 .ak-chart-hit:hover line, .ak-chart-hit:hover circle { opacity: 1; }
 .v-theme--dark .ak-chart-line { stroke: #3987e5; }
 .v-theme--dark .ak-chart-hit circle { fill: #3987e5; }
+.ak-chart-dot { fill: #eb6834; stroke: rgb(var(--v-theme-surface)); stroke-width: 2; }
+.v-theme--dark .ak-chart-dot { fill: #d95926; }
+.ak-chart-ref { stroke: rgba(var(--v-theme-on-surface), .55); stroke-width: 1; }
 .ak-num { font-variant-numeric: tabular-nums; text-align: right !important; white-space: nowrap; }
 .ak-charts { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
 .ak-pal-item { cursor: grab; user-select: none; display: flex; align-items: center; gap: 10px;
@@ -84,9 +87,20 @@ def flowsheet_entry(spec: Path) -> dict:
     return {} if spec.name == DEFAULT_SPEC else {"flowsheet": f"../../{spec.name}"}
 
 
-def _plain_error(exc: Exception) -> str:
-    """A worker's error without the exception's class name in front."""
-    return str(exc).removeprefix("StudyError: ")
+_ERROR_NAME = re.compile(r"^(?:[A-Z]\w*(?:Error|Exception|Warning): )+")
+
+
+def _needs_python(kind: dict) -> bool:
+    """Whether a kind has a required setting the form cannot edit (an SBR's
+    phases, a dosing unit's reagent)."""
+    return any(s["required"] and s["type"] in ("unsupported", "reagent") for s in kind["settings"])
+
+
+def _plain_error(exc) -> str:
+    """An error as the page says it: without the exception class names in front
+    ("ValueError: ...", "WorkerError: FileNotFoundError: ..."), which mean nothing
+    to a user."""
+    return _ERROR_NAME.sub("", str(exc))
 
 
 # Rows are added to and removed from the study draft in place, which the page
@@ -181,9 +195,9 @@ class Editor:
         try:
             out = self.worker.request("check_unit", **request)
         except WorkerError as exc:
-            return str(exc)
+            return _plain_error(exc)
         if not out["ok"]:
-            return out["error"]
+            return _plain_error(out["error"])
         if (out["inputs"], out["outputs"]) != ports:
             return f"aquakin built ports {out['inputs']} -> {out['outputs']}, not the drawn ones"
         return None
@@ -204,7 +218,7 @@ class Editor:
         try:
             return self.worker.request("check_spec", spec=spec, base_dir=base)
         except WorkerError as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": _plain_error(exc)}
 
     def _check_plant(self) -> dict | None:
         key, spec, base = self._plant_request()
@@ -298,7 +312,7 @@ class Editor:
         errors = [f"{uid}: {e}" for uid, e in unit_errors.items()]
         errors += [f"{uid}.{p} is not fed" for uid, ps in unfed.items() for p in ps]
         if plant and not plant.get("ok"):
-            errors.append(f"plant: {plant['error']}")
+            errors.append(f"plant: {_plain_error(plant['error'])}")
         self.state.errors = errors
         self.state.products = [f"{uid}.{p}" for uid, ps in dangling.items() for p in ps]
         self.state.n_recycles = len(back)
@@ -394,6 +408,12 @@ class Editor:
             if "conditions" in names and info:
                 defaults = {c["name"]: c["default"] for c in info["conditions"]}
                 settings["conditions"] = {k: v for k, v in defaults.items() if v is not None}
+            if info:
+                species = [s["name"] for s in info["species"]]
+                for s in self.catalog.settings(kind):
+                    suggested = forms.suggest_species(s, None, species)
+                    if suggested is not None:
+                        settings[s["name"]] = suggested
         self._remember()
         uid = self.doc.add(kind, d["position"], settings)
         self.state.selected = uid
@@ -409,6 +429,8 @@ class Editor:
                 self.state.dirty("nodes")  # the canvas shows the selection Python keeps
                 return
         self.state.selected = s["nodes"][0] if len(s["nodes"]) == 1 else None
+        if self.state.selected is not None:
+            self.state.panel = "properties"  # its form, from whichever tab was open
         self.refresh_selection()
 
     # -- the unit form ------------------------------------------------------
@@ -426,6 +448,7 @@ class Editor:
         self.state.sel_icon = SVG[icon_name(u.kind, u.settings)]
         self.state.sel_error = self.unit_errors().get(uid)
         self.state.sel_rows = forms.rows_for(self.doc, uid, self.model_info)
+        self.state.sel_errors = {}
         self.state.sel_dirty = False
         self.state.focus_help = ""
 
@@ -447,7 +470,11 @@ class Editor:
             label, settings = forms.read_rows(self.doc, uid, rows)
         except ValueError as exc:
             self.say(f"{uid}: {exc}")
+            # Shown under the field too, where it stays until the form is applied.
+            key = getattr(exc, "key", None)
+            self.state.sel_errors = {key: str(exc).split(": ", 1)[-1]} if key else {}
             return False
+        self.state.sel_errors = {}
         dropped = self.doc.dropped_by(uid, settings)
         if dropped and not confirmed:
             self._pending_rows = rows
@@ -537,7 +564,7 @@ class Editor:
                     raise data
                 doc = Flowsheet.from_spec(self.catalog, data, base_dir=path.parent)
             except Exception as exc:
-                self.say(f"could not open {path}: {type(exc).__name__}: {exc}")
+                self.say(f"could not open {path}: {_plain_error(exc)}")
                 return
             self.doc = doc
             self._opened = (path, _digest(path))
@@ -655,7 +682,7 @@ class Editor:
 
         def done(written):
             if isinstance(written, Exception):
-                self.say(f"could not save {path}: {type(written).__name__}: {written}")
+                self.say(f"could not save {path}: {_plain_error(written)}")
                 return
             # Copied files are now referenced inside the project; an edit made
             # while saving is kept rather than replaced by what was written.
@@ -878,7 +905,11 @@ class Editor:
             )
             units = results.get("units") or {}
             if results["kind"] != "simulate":
-                s.results_mode = "files"
+                s.results_mode = "analysis"
+                view = analysis_view(results)
+                s.results_lines = view["lines"]
+                s.results_tables = view["tables"]
+                s.results_charts = view["charts"]
             elif results["steady"]:
                 s.results_mode = "steady"
                 s.results_measured = steady_table(results.get("measured") or {}, units)
@@ -898,7 +929,7 @@ class Editor:
         channels = channels_of(self._results, stream) if stream else []
         self.state.results_channel_choices = channels
         measured = list((self._results.get("measured") or {}).get(stream, {}))
-        self.show_charts(measured[:6] or channels[:4])
+        self.show_charts(measured or channels[:4])
 
     def show_charts(self, channels: list[str]) -> None:
         """Draw a chart per channel of the chosen stream (each on its own axis)."""
@@ -1205,6 +1236,8 @@ class Editor:
         s.results_channel_choices = []
         s.results_channels = []
         s.results_charts = []
+        s.results_lines = []
+        s.results_tables = []
         s.panel = "properties"
         s.dark = False
         s.focus_help = ""
@@ -1212,6 +1245,7 @@ class Editor:
         s.spec_path = str(path) if path else ""
         s.can_undo = False
         s.sel_dirty = False
+        s.sel_errors = {}
         s.unsaved_open = False
         s.unsaved_text = ""
         s.unsaved_can_save = False
@@ -1229,7 +1263,13 @@ class Editor:
                     {
                         "kind": k["kind"],
                         "label": k["label"],
-                        "summary": k["summary"],
+                        "summary": k["summary"]
+                        + (
+                            " Some of its settings can only be set from Python or in the spec file."
+                            if _needs_python(k)
+                            else ""
+                        ),
+                        "python": _needs_python(k),
                         "icon": SVG[ICONS.get(k["kind"], "cstr")],
                         "colour": COLOURS.get(cat, "#57606a"),
                     }
@@ -1327,7 +1367,7 @@ class Editor:
                 color="primary",
                 variant="flat",
                 classes="mr-4 text-none",
-                title="Run the plant to steady state and show what leaves it",
+                title="Run the flowsheet's simulation study and show what leaves the plant",
             )
             v3.VChip(
                 "{{ nodes.length }} units · {{ edges.length }} connections · {{ n_recycles }} recycles",
@@ -1363,6 +1403,12 @@ class Editor:
                         v_html="k.icon", classes="ak-pal-icon", style=("{ color: k.colour }",)
                     )
                     html.Span("{{ k.label }}")
+                    html.Span(
+                        "Python",
+                        v_if="k.python",
+                        classes="text-caption text-medium-emphasis ms-auto",
+                        title="Some of its settings can only be set from Python or in the spec file",
+                    )
 
     def _side_panel(self) -> None:
         with v3.VSheet(width=340, border="s", style="overflow: auto; flex: none;"):
@@ -1493,7 +1539,7 @@ class Editor:
                         "{{ study_progress[st.name].message }}",
                         classes="text-caption text-medium-emphasis",
                     )
-            with v3.VCardActions(classes="py-0"):
+            with v3.VCardActions(classes="py-0 flex-wrap ga-0"):
                 v3.VBtn(
                     "Run",
                     v_if="!st.running",
@@ -1928,18 +1974,38 @@ class Editor:
                             )
                         with html.Div(classes="ak-charts"):
                             html.Div(v_for="c in results_charts", key="c.channel", v_html="c.svg")
-                    with html.Div(v_if="results_mode === 'files'"):
-                        html.Div(
-                            "This kind of study writes its results as files:",
-                            classes="text-body-2 mb-1",
+                    with html.Div(v_if="results_mode === 'analysis'"):
+                        html.P(
+                            "{{ line }}",
+                            v_for="line in results_lines",
+                            key="line",
+                            classes="text-body-2 mb-2",
                         )
-                        with v3.VList(density="compact"):
-                            v3.VListItem(
-                                v_for="f in results_files",
-                                key="f",
-                                title=("f",),
-                                prepend_icon="mdi-file-outline",
-                            )
+                        with html.Div(v_for="tb in results_tables", key="tb.title", classes="mb-3"):
+                            html.Div("{{ tb.title }}", classes="text-subtitle-2")
+                            with v3.VTable(density="compact"):
+                                with html.Thead():
+                                    with html.Tr():
+                                        html.Th(
+                                            "{{ c }}",
+                                            v_for="(c, ci) in tb.columns",
+                                            key="ci",
+                                            classes=("ci ? 'ak-num' : ''",),
+                                        )
+                                with html.Tbody():
+                                    with html.Tr(v_for="(row, ri) in tb.rows", key="ri"):
+                                        html.Td(
+                                            "{{ cell }}",
+                                            v_for="(cell, ci) in row",
+                                            key="ci",
+                                            classes=("ci ? 'ak-num' : 'font-weight-medium'",),
+                                        )
+                        with html.Div(classes="ak-charts"):
+                            html.Div(v_for="c in results_charts", key="c.channel", v_html="c.svg")
+                        html.Div(
+                            "Files: {{ results_files.join(', ') }}",
+                            classes="text-caption text-medium-emphasis mt-2",
+                        )
                     html.Div(
                         "Saved in {{ results_folder }}",
                         classes="text-caption text-medium-emphasis mt-2",
@@ -2069,7 +2135,7 @@ class Editor:
             with html.Div(v_for="(row, i) in sel_rows", key="row.key"):
                 common = dict(
                     label=("row.label",),
-                    hide_details=True,
+                    hide_details="auto",
                     update_focused="if ($event) { focus_label = row.label; focus_help = row.hint }",
                     placeholder=("row.placeholder",),
                     persistent_placeholder=True,
@@ -2108,7 +2174,12 @@ class Editor:
                     **common,
                 )
                 v3.VTextField(
-                    v_else=True, v_model="row.value", update_modelValue="sel_dirty = true", **common
+                    v_else=True,
+                    v_model="row.value",
+                    update_modelValue="sel_dirty = true",
+                    suffix=("row.suffix",),
+                    error_messages=("sel_errors[row.key] || []",),
+                    **common,
                 )
             with v3.VSheet(
                 v_if="focus_help", rounded=True, border=True, classes="pa-2 mt-1 text-caption"

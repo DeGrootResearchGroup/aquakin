@@ -68,3 +68,74 @@ def test_a_long_run_is_thinned_and_an_empty_one_says_so():
     assert "time (" not in svg  # no unit given, none shown
     empty = line_chart({"t": [0.0], "streams": {"s": {"Q": [None]}}}, "s", "Q")
     assert "no finite values" in empty and "<polyline" not in empty
+
+
+def test_each_analysis_is_shown_as_tables_and_charts():
+    from aquakin_ui.results import analysis_view
+
+    fisher = analysis_view(
+        {
+            "kind": "fisher",
+            "summary": {"values": {"m.a": 2.0}, "std": None, "criteria": {"D": None, "A": 1.5}},
+            "matrix": {"names": ["m.a"], "rows": [[0.0]]},
+        }
+    )
+    assert "singular" in fisher["lines"][0]
+    assert fisher["tables"][0]["rows"] == [["m.a", "2.000", NO_VALUE]]
+    assert fisher["tables"][2]["columns"] == ["", "m.a"]
+
+    rank = analysis_view(
+        {
+            "kind": "rank",
+            "criterion": "A",
+            "table": {"candidate": ["b", "a"], "A": [0.5, 2.0], "improvement": [None, None]},
+        }
+    )
+    assert rank["tables"][0]["rows"] == [
+        ["1", "b", "0.5000", NO_VALUE],
+        ["2", "a", "2.000", NO_VALUE],
+    ]
+
+    calibrate = analysis_view(
+        {
+            "kind": "calibrate",
+            "summary": {
+                "fitted": {"m.a": 1.004},
+                "std": {"m.a": 0.0185},
+                "converged": True,
+                "iterations": 4,
+                "message": "ok",
+                "sigma_estimate": {"eff.SNH": 0.3},
+            },
+            "fitted": {"t": [0.0, 1.0], "values": {"eff": {"SNH": [1.0, 2.0]}}},
+            "data": {"t": [0.0, 1.0], "values": {"eff": {"SNH": [1.1, None]}}},
+        }
+    )
+    assert calibrate["lines"] == ["The fit converged after 4 iterations (ok)."]
+    assert calibrate["tables"][1]["title"] == "Estimated measurement error"
+    svg = calibrate["charts"][0]["svg"]
+    assert svg.count('class="ak-chart-dot"') == 2  # one data point, and the legend's
+    assert ">data<" in svg and ">fit<" in svg
+
+    profile = analysis_view(
+        {
+            "kind": "profile",
+            "summary": {"parameter": "m.a", "mle": 1.0, "ci": [0.9, None], "delta": 1.92},
+            "table": {
+                "m.a": [0.8, 1.0, 1.2],
+                "loss": [3.0, 1.0, 1.5],
+                "delta_loss": [2.0, 0.0, 0.5],
+            },
+        }
+    )
+    assert "0.9000 to above the grid" in profile["lines"][0]
+    assert 'class="ak-chart-ref"' in profile["charts"][0]["svg"]
+    assert profile["tables"][0]["rows"][1] == ["1.000", "1.000", "0"]
+    # A study that did not converge says so; one without a summary says nothing.
+    assert (
+        "did not converge"
+        in analysis_view(
+            {"kind": "calibrate", "summary": {"converged": False, "iterations": 9, "message": "x"}}
+        )["lines"][0]
+    )
+    assert analysis_view({"kind": "calibrate"}) == {"lines": [], "tables": [], "charts": []}

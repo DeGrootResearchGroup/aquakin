@@ -10,6 +10,7 @@ is listed here: every row follows from the catalogue.
 from __future__ import annotations
 
 import math
+import re
 
 from aquakin_ui.document import Flowsheet
 
@@ -40,12 +41,48 @@ def _text(value) -> str:
     return str(value)
 
 
+#: Species-list settings that name what settles; their defaults are ASM1's.
+_SOLIDS_SETTINGS = ("particulate_species", "settling_species")
+
+
+def suggest_species(setting: dict, value, species: list[str]) -> list[str] | None:
+    """The settling species to suggest for a unit on a model with ``species``, or
+    ``None`` to keep what it has.
+
+    A setting naming what settles defaults to ASM1's particulates (or to none):
+    on another model, or once the model changed, it gets the model's own
+    particulates, the X-named species (aquakin's own rule for solids).
+    """
+    if setting["name"] not in _SOLIDS_SETTINGS:
+        return None
+    current = list(value) if value is not None else list(setting.get("default") or [])
+    if current and all(c in species for c in current):
+        return None
+    return [s for s in species if s.startswith("X")]
+
+
 def _oxygen(species: list[str]) -> str | None:
     """The model's dissolved-oxygen species, by its usual names, or ``None``."""
     for name in ("SO", "SO2", "S_O2", "S_O", "DO", "O2"):
         if name in species:
             return name
     return next((s for s in species if s.upper().startswith(("SO", "S_O"))), None)
+
+
+_UNIT_IN_HELP = re.compile(r"\(([^()]{1,14})\)|,\s*(m³/d|m³/h)\b")
+_UNIT = re.compile(
+    r"^(m³|m²|m|mm|K|°C|d|h|s|min|1/d|1/h|1/s|m³/d|m³/h|m/d|m/h|g/m³|kg/m³|mg/L|g/L|%"
+    r"|g_\w+/m³|kg_\w+/m³|mol/m³|kmol/m³)$"
+)
+
+
+def unit_in(help_text: str) -> str:
+    """The unit a setting's help names, ``(m³)`` or ``, m³/d``, or ``""``."""
+    for match in _UNIT_IN_HELP.finditer(help_text or ""):
+        text = (match.group(1) or match.group(2)).strip().replace("^3", "³").replace("^2", "²")
+        if _UNIT.match(text):
+            return text
+    return ""
 
 
 def _placeholder(s: dict) -> str:
@@ -65,6 +102,7 @@ def _row(key, label, widget="text", value="", **extra) -> dict:
         "items": [],
         "hint": "",
         "placeholder": "",
+        "suffix": "",
     } | extra
 
 
@@ -99,7 +137,7 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
     for s in doc.catalog.settings(u.kind):
         key, value, t = s["name"], u.settings.get(s["name"]), s["type"]
         label = key + (" *" if s["required"] else "")
-        common = {"hint": s["help"], "placeholder": _placeholder(s)}
+        common = {"hint": s["help"], "placeholder": _placeholder(s), "suffix": unit_in(s["help"])}
         if t == "model":
             rows.append(_row(key, label, "select", value or "", items=doc.model_names(), **common))
         elif t == "conditions":
@@ -112,6 +150,8 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
                         f"condition {c['name']}",
                         value=_text(v),
                         hint=s["help"],
+                        # aquakin's temperatures are in kelvin
+                        suffix=c.get("unit") or ("K" if c["name"] == "T" else ""),
                         placeholder=f"{_text(default)} (model default)"
                         if default is not None
                         else "required",
@@ -132,7 +172,19 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
                 )
             )
             if mode != "none":
-                rows.append(_row("aeration.value", mode, value=_text(value[mode]), hint=s["help"]))
+                clock = (doc.meta.get("options") or {}).get("time_unit") or "d"
+                oxygen = (value or {}).get("species") or _oxygen(species) or ""
+                units = {s["name"]: s.get("unit", "") for s in info["species"]} if info else {}
+                suffix = f"1/{clock}" if mode == "kla" else units.get(oxygen, "")
+                rows.append(
+                    _row(
+                        "aeration.value",
+                        mode,
+                        value=_text(value[mode]),
+                        hint=s["help"],
+                        suffix=suffix,
+                    )
+                )
             if mode != "none" and species:
                 aerated = (value or {}).get("species")
                 if aerated not in species:  # e.g. ASM1's SO on an ASM3 plant
@@ -150,7 +202,11 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
         elif t == "species" and species:
             rows.append(_row(key, label, "select", value or "", items=species, **common))
         elif t == "species_list" and species:
-            rows.append(_row(key, label, "multi", list(value or []), items=species, **common))
+            chosen = list(value or [])
+            suggested = suggest_species(s, value, species)
+            if suggested is not None:
+                chosen = suggested
+            rows.append(_row(key, label, "multi", chosen, items=species, **common))
         elif t == "boolean":
             text = "" if value is None else str(value).lower()
             rows.append(_row(key, label, "select", text, items=["true", "false"], **common))
@@ -239,7 +295,15 @@ def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, d
     try:
         return _read_rows(doc, uid, rows)
     except _FieldError as exc:
-        raise ValueError(f"{labels.get(exc.key, exc.key)}: {exc.message}") from None
+        raise FieldError(exc.key, f"{labels.get(exc.key, exc.key)}: {exc.message}") from None
+
+
+class FieldError(ValueError):
+    """A field of the form that cannot be read; ``key`` names its row."""
+
+    def __init__(self, key: str, message: str):
+        super().__init__(message)
+        self.key = key
 
 
 class _FieldError(Exception):

@@ -495,7 +495,7 @@ class CSTRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     model : CompiledModel
         Kinetic model whose rate functions provide the chemistry term.
     volume : float
-        Tank liquid volume.
+        Tank liquid volume (m³).
     input_port_names : list[str]
         Names of the incoming-stream ports. Multiple inflows are summed
         (treated as a built-in mixer) before the mass balance.

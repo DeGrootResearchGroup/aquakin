@@ -65,7 +65,13 @@ class Flowsheet:
         self.connections: list[tuple[str, str, str, str]] = []
         # Connection settings the canvas does not edit (a translator, a seed).
         self.extras: dict[str, dict] = {}
-        self.meta: dict = {"name": name, "models": {}, "streams": {}}
+        # A new flowsheet runs on a clock of days (aquakin will require one).
+        self.meta: dict = {
+            "name": name,
+            "models": {},
+            "streams": {},
+            "options": {"time_unit": "d"},
+        }
         self.base_dir: Path | None = None
 
     # -- reading and writing ------------------------------------------------
